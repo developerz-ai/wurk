@@ -5,10 +5,11 @@
 # when the host app opts in.
 
 require_relative "wurk/version"
-require_relative "wurk/configuration"
 require_relative "wurk/redis_pool"
 require_relative "wurk/middleware"
 require_relative "wurk/middleware/chain"
+require_relative "wurk/capsule"
+require_relative "wurk/configuration"
 require_relative "wurk/client"
 require_relative "wurk/client/buffered"
 require_relative "wurk/worker"

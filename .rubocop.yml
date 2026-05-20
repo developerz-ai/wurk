@@ -27,3 +27,22 @@ Metrics/MethodLength:
 
 Metrics/ClassLength:
   Max: 200
+  Exclude:
+    - "test/**/*"
+
+# Sidekiq's public API uses short names (ex, ctx, q, w, b). Wire-compat = sacred.
+Naming/MethodParameterName:
+  AllowedNames:
+    - ex
+    - ctx
+    - q
+    - w
+    - b
+    - h
+    - k
+    - v
+
+# Tests assert on Sidekiq-spec'd integer defaults (e.g. timeout: 25). Allow trailing digits.
+Naming/VariableNumber:
+  Exclude:
+    - "test/**/*"
