@@ -2,30 +2,31 @@
 
 require_relative '../test_helper'
 
+# Helpers shared between LoggerTest (parallel-safe) and LoggerEnvTest (serial).
+module LoggerTestHelpers
+  private
+
+  def format_with(formatter, severity, message)
+    formatter.call(severity, Time.utc(2026, 1, 2, 3, 4, 5), nil, message)
+  end
+
+  def with_env(pairs)
+    old = pairs.transform_values { |_| nil }
+    pairs.each_key { |k| old[k] = ENV.fetch(k, nil) }
+    pairs.each { |k, v| ENV[k] = v }
+    yield
+  ensure
+    old.each { |k, v| ENV[k] = v }
+  end
+end
+
 class LoggerTest < Wurk::Test::UnitCase
-  # This class mutates process-global ENV via with_env; keep it serial to
-  # avoid cross-test races on formatter-selection tests.
+  include LoggerTestHelpers
+
+  parallelize_me!
 
   def teardown
     Thread.current[Wurk::Context::KEY] = nil
-  end
-
-  # --- formatter selection ---------------------------------------------
-
-  def test_default_formatter_is_pretty_without_dyno_env
-    with_env('DYNO' => nil) do
-      logger = Wurk::Logger.new(IO::NULL)
-
-      assert_kind_of Wurk::Logger::Formatters::Pretty, logger.formatter
-    end
-  end
-
-  def test_default_formatter_is_without_timestamp_with_dyno_env
-    with_env('DYNO' => 'web.1') do
-      logger = Wurk::Logger.new(IO::NULL)
-
-      assert_kind_of Wurk::Logger::Formatters::WithoutTimestamp, logger.formatter
-    end
   end
 
   def test_is_a_kind_of_stdlib_logger
@@ -112,6 +113,33 @@ class LoggerTest < Wurk::Test::UnitCase
 
     refute parsed.key?('ctx')
   end
+end
+
+# Serial: mutates process-global ENV via with_env. No parallelize_me!.
+class LoggerEnvTest < Wurk::Test::UnitCase
+  include LoggerTestHelpers
+
+  def teardown
+    Thread.current[Wurk::Context::KEY] = nil
+  end
+
+  # --- formatter selection ---------------------------------------------
+
+  def test_default_formatter_is_pretty_without_dyno_env
+    with_env('DYNO' => nil) do
+      logger = Wurk::Logger.new(IO::NULL)
+
+      assert_kind_of Wurk::Logger::Formatters::Pretty, logger.formatter
+    end
+  end
+
+  def test_default_formatter_is_without_timestamp_with_dyno_env
+    with_env('DYNO' => 'web.1') do
+      logger = Wurk::Logger.new(IO::NULL)
+
+      assert_kind_of Wurk::Logger::Formatters::WithoutTimestamp, logger.formatter
+    end
+  end
 
   # --- end-to-end ------------------------------------------------------
 
@@ -122,20 +150,5 @@ class LoggerTest < Wurk::Test::UnitCase
 
     assert_match(/INFO/, io.string)
     assert_match(/booting/, io.string)
-  end
-
-  private
-
-  def format_with(formatter, severity, message)
-    formatter.call(severity, Time.utc(2026, 1, 2, 3, 4, 5), nil, message)
-  end
-
-  def with_env(pairs)
-    old = pairs.transform_values { |_| nil }
-    pairs.each_key { |k| old[k] = ENV.fetch(k, nil) }
-    pairs.each { |k, v| ENV[k] = v }
-    yield
-  ensure
-    old.each { |k, v| ENV[k] = v }
   end
 end
