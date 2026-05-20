@@ -11,7 +11,12 @@ end
 Sidekiq::IterableJob = Wurk::IterableJob
 Sidekiq::JobRecord   = Wurk::JobRecord
 Sidekiq::Keys        = Wurk::Keys
+Sidekiq::Process     = Wurk::Process
+Sidekiq::ProcessSet  = Wurk::ProcessSet
 Sidekiq::Queue       = Wurk::Queue
+Sidekiq::Work        = Wurk::Work
+Sidekiq::WorkSet     = Wurk::WorkSet
+Sidekiq::Workers     = Wurk::Workers
 
 # TODO: alias every public Wurk constant under Sidekiq, e.g.
 #   Sidekiq::Worker      = Wurk::Worker
