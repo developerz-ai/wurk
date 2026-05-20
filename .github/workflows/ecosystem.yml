@@ -7,6 +7,10 @@ on:
   schedule:
     - cron: "0 7 * * 1" # weekly
 
+concurrency:
+  group: ecosystem-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
 jobs:
   ecosystem:
     runs-on: blacksmith-4vcpu-ubuntu-2404
