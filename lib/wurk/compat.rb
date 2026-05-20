@@ -21,6 +21,7 @@ Sidekiq::JobRetry    = Wurk::JobRetry
 Sidekiq::Keys        = Wurk::Keys
 Sidekiq::Limiter     = Wurk::Limiter
 Sidekiq::Logger      = Wurk::Logger
+Sidekiq::Manager     = Wurk::Manager
 Sidekiq::Middleware  = Wurk::Middleware
 Sidekiq::ServerMiddleware = Wurk::Middleware::ServerMiddleware
 Sidekiq::ClientMiddleware = Wurk::Middleware::ClientMiddleware
