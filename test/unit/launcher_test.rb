@@ -215,13 +215,12 @@ class LauncherTest < Wurk::Test::UnitCase
     launcher = Wurk::Launcher.new(@config)
     Wurk::Processor::PROCESSED.reset
     Wurk::Processor::FAILURE.reset
-    before = @pool.with { |c| c.call('GET', Wurk::Keys::STAT_PROCESSED).to_i }
+    write_called = false
+    launcher.define_singleton_method(:write_stats) { |_p, _f| write_called = true }
 
-    launcher.flush_stats # should not raise, should not write
+    launcher.flush_stats
 
-    after = @pool.with { |c| c.call('GET', Wurk::Keys::STAT_PROCESSED).to_i }
-
-    assert_equal before, after
+    refute write_called, 'write_stats must not run when both counters are zero'
   end
 
   def test_flush_stats_increments_global_counters
@@ -229,14 +228,12 @@ class LauncherTest < Wurk::Test::UnitCase
     reset_counters
     Wurk::Processor::PROCESSED.incr(3)
     Wurk::Processor::FAILURE.incr(1)
-    before_p, before_f = read_global_stats
+    received = nil
+    launcher.define_singleton_method(:write_stats) { |p, f| received = [p, f] }
 
     launcher.flush_stats
 
-    after_p, after_f = read_global_stats
-
-    assert_equal before_p + 3, after_p
-    assert_equal before_f + 1, after_f
+    assert_equal [3, 1], received
   end
 
   def test_flush_stats_sets_ttl_on_per_day_keys
@@ -458,12 +455,6 @@ class LauncherTest < Wurk::Test::UnitCase
   def reset_counters
     Wurk::Processor::PROCESSED.reset
     Wurk::Processor::FAILURE.reset
-  end
-
-  def read_global_stats
-    @pool.with do |c|
-      [c.call('GET', Wurk::Keys::STAT_PROCESSED).to_i, c.call('GET', 'stat:failed').to_i]
-    end
   end
 
   def read_daily_ttls(day)

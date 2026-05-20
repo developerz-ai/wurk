@@ -8,9 +8,13 @@ require_relative '../test_helper'
 class FetcherReliableTest < Wurk::Test::UnitCase
   parallelize_me!
 
+  # Serializes the single test that mutates the process-global ENV['DYNO']
+  # so it can't race with a parallel sibling reading the same variable.
+  ENV_MUTEX = Mutex.new
+
   def setup
     super
-    @queue_name   = "fr-#{Process.pid}-#{object_id}"
+    @queue_name   = "fr-#{Process.pid}:#{object_id}"
     @public_queue = "#{Wurk::Keys::QUEUE_PREFIX}#{@queue_name}"
     @config       = Wurk::Configuration.new
     @capsule      = Wurk::Capsule.new('test', @config)
@@ -156,13 +160,15 @@ class FetcherReliableTest < Wurk::Test::UnitCase
   end
 
   def test_private_queue_name_honors_dyno_env_when_set
-    original = ENV.fetch('DYNO', nil)
-    ENV['DYNO'] = 'web.42'
-    name = Wurk::Fetcher::Reliable.private_queue_name(@public_queue)
+    ENV_MUTEX.synchronize do
+      original = ENV.fetch('DYNO', nil)
+      ENV['DYNO'] = 'web.42'
+      name = Wurk::Fetcher::Reliable.private_queue_name(@public_queue)
 
-    assert_equal 'web.42', name.split('|')[1]
-  ensure
-    ENV['DYNO'] = original
+      assert_equal 'web.42', name.split('|')[1]
+    ensure
+      ENV['DYNO'] = original
+    end
   end
 
   private
