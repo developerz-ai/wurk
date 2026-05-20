@@ -272,7 +272,7 @@ class MiddlewareBuiltinsTest < Wurk::Test::UnitCase
     Wurk::Middleware::CurrentAttributes.persist(FakeCurrent, cfg)
 
     assert cfg.client_middleware.exists?(Wurk::Middleware::CurrentAttributes::Save)
-    assert cfg.client_middleware.exists?(Wurk::Middleware::CurrentAttributes::Load)
+    refute cfg.client_middleware.exists?(Wurk::Middleware::CurrentAttributes::Load)
     assert cfg.server_middleware.exists?(Wurk::Middleware::CurrentAttributes::Load)
   end
 

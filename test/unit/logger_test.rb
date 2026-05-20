@@ -3,7 +3,8 @@
 require_relative '../test_helper'
 
 class LoggerTest < Wurk::Test::UnitCase
-  parallelize_me!
+  # This class mutates process-global ENV via with_env; keep it serial to
+  # avoid cross-test races on formatter-selection tests.
 
   def teardown
     Thread.current[Wurk::Context::KEY] = nil

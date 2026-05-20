@@ -84,6 +84,7 @@ module Wurk
       # advances to the next; the innermost block is the caller's `&block`,
       # whose return value is propagated back out. Empty chain: `yield`.
       def invoke(*args, &block)
+        raise ArgumentError, 'middleware chain requires a block' unless block
         return yield if @entries.empty?
 
         chain = retrieve

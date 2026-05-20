@@ -25,7 +25,6 @@ module Wurk
           raise ArgumentError, 'persist requires at least one CurrentAttributes class' if classes.empty?
 
           config.client_middleware.add(Save, classes)
-          config.client_middleware.add(Load, classes)
           config.server_middleware.add(Load, classes)
         end
 

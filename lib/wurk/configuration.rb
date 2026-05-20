@@ -52,7 +52,8 @@ module Wurk
     #
     # Spec: docs/target/sidekiq-free.md §4.3.
     ERROR_HANDLER = lambda do |ex, ctx, cfg = Wurk.configuration|
-      Wurk::Context.with(ctx) do
+      safe_ctx = ctx || {}
+      Wurk::Context.with(safe_ctx) do
         dev = $DEBUG || ENV['WURK_DEBUG'] || cfg.logger.debug?
         msg = dev ? ex.full_message : ex.detailed_message
         cfg.logger.info { msg }
