@@ -121,7 +121,8 @@ module Wurk
     end
 
     def conflicting_schedule?(items)
-      (items['at'] || items[:at]) && (items['spread_interval'] || items[:spread_interval])
+      (items.key?('at') || items.key?(:at)) &&
+        (items.key?('spread_interval') || items.key?(:spread_interval))
     end
 
     def valid_bulk_args?(args)
@@ -161,9 +162,9 @@ module Wurk
     end
 
     def expand_at(items, count)
-      at = items['at'] || items[:at]
-      return expand_spread(items, count) if at.nil?
+      return expand_spread(items, count) unless items.key?('at') || items.key?(:at)
 
+      at = items['at'] || items[:at]
       case at
       when Array
         raise ArgumentError, "'at' array size must match args" unless at.size == count
@@ -178,8 +179,9 @@ module Wurk
     end
 
     def expand_spread(items, count)
+      return nil unless items.key?('spread_interval') || items.key?(:spread_interval)
+
       spread = items['spread_interval'] || items[:spread_interval]
-      return nil if spread.nil?
       raise ArgumentError, "'spread_interval' must be positive Numeric" unless spread.is_a?(Numeric) && spread.positive?
 
       window = [spread.to_f, SPREAD_INTERVAL_FLOOR].max
