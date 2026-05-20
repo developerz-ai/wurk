@@ -18,6 +18,11 @@ $LOAD_PATH.unshift(File.expand_path("../lib", __dir__))
 
 require "wurk"
 
+# Silence the global configuration's logger so default ERROR_HANDLER doesn't
+# spam test output. Per-test logger overrides still work — they assign a
+# StringIO/NULL logger on a fresh Wurk::Configuration.
+Wurk.configuration.logger = Logger.new(IO::NULL)
+
 require "minitest/autorun"
 require "minitest/parallel_fork" rescue nil
 

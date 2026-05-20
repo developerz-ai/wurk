@@ -207,8 +207,16 @@ class ConfigurationTest < Wurk::Test::UnitCase
 
   # --- handlers ----------------------------------------------------------
 
-  def test_error_handlers_starts_empty
-    assert_empty @config.error_handlers
+  def test_error_handlers_default_includes_default_handler
+    assert_includes @config.error_handlers, Wurk::Configuration::ERROR_HANDLER
+    assert_equal 1, @config.error_handlers.size
+  end
+
+  def test_error_handlers_default_not_shared_between_instances
+    @config.error_handlers << ->(_ex, _ctx, _cfg) {}
+    other = Wurk::Configuration.new
+
+    assert_equal 1, other.error_handlers.size
   end
 
   def test_error_handlers_appends
@@ -216,6 +224,47 @@ class ConfigurationTest < Wurk::Test::UnitCase
     @config.error_handlers << handler
 
     assert_includes @config.error_handlers, handler
+  end
+
+  def test_default_error_handler_logs_full_message_in_debug
+    io = StringIO.new
+    @config.logger = ::Logger.new(io)
+    @config.logger.level = ::Logger::DEBUG
+    ex = build_exception('kaboom')
+
+    Wurk::Configuration::ERROR_HANDLER.call(ex, {}, @config)
+
+    assert_match(/kaboom/, io.string)
+    assert_match(/backtrace_marker/, io.string)
+  end
+
+  def test_default_error_handler_uses_detailed_message_in_prod
+    io = StringIO.new
+    @config.logger = ::Logger.new(io)
+    @config.logger.level = ::Logger::INFO
+    ex = build_exception('kaboom')
+
+    Wurk::Configuration::ERROR_HANDLER.call(ex, {}, @config)
+
+    assert_match(/kaboom/, io.string)
+    refute_match(/backtrace_marker/, io.string)
+  end
+
+  def test_default_error_handler_wraps_ctx_in_wurk_context
+    seen = nil
+    capturing = Class.new(::Logger) do
+      def initialize(callback)
+        @callback = callback
+        super(IO::NULL)
+      end
+
+      def info(*, &blk) = @callback.call(blk&.call)
+    end.new(->(*) { seen = Wurk::Context.current.dup })
+    @config.logger = capturing
+
+    Wurk::Configuration::ERROR_HANDLER.call(StandardError.new('x'), { jid: 'abc' }, @config)
+
+    assert_equal({ jid: 'abc' }, seen)
   end
 
   def test_death_handlers_appends
@@ -260,12 +309,22 @@ class ConfigurationTest < Wurk::Test::UnitCase
   def test_handle_exception_falls_back_to_logger_when_no_handlers
     io = StringIO.new
     @config.logger = ::Logger.new(io)
+    @config.error_handlers.clear
     @config.handle_exception(StandardError.new('boom'), { jid: '1' })
 
     assert_match(/boom/, io.string)
   end
 
+  def test_handle_exception_default_handler_logs_via_logger
+    io = StringIO.new
+    @config.logger = ::Logger.new(io)
+    @config.handle_exception(StandardError.new('boom'), {})
+
+    assert_match(/boom/, io.string)
+  end
+
   def test_handle_exception_dispatches_to_handlers
+    @config.logger = ::Logger.new(IO::NULL)
     seen = []
     @config.error_handlers << ->(ex, ctx, cfg) { seen << [ex.message, ctx, cfg] }
     ex = StandardError.new('hi')
@@ -333,5 +392,16 @@ class ConfigurationTest < Wurk::Test::UnitCase
 
   def test_freeze_returns_self
     assert_same @config, @config.freeze!
+  end
+
+  private
+
+  def build_exception(message)
+    raise StandardError, message
+  rescue StandardError => e
+    # Force a backtrace_marker entry so we can tell full_message (with bt)
+    # apart from detailed_message (no bt) without depending on tempfile names.
+    e.set_backtrace(['backtrace_marker:1:in `boom\''])
+    e
   end
 end

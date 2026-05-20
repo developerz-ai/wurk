@@ -18,11 +18,11 @@ module Wurk
   #
   # Spec: docs/target/sidekiq-free.md §6.4.
   module IterableJob
-    # Raised mid-iteration when the run loop must yield — either a swarm
-    # shutdown signal or a cooperative cancellation. The interrupt-handler
-    # middleware (PR 4) catches it and re-pushes the job so it resumes
-    # from the persisted cursor. User code must not rescue this.
-    class Interrupted < RuntimeError; end
+    # Alias to the canonical `Wurk::Job::Interrupted`. The exception lives on
+    # `Wurk::Job` so non-iterable code paths (manual `interrupted?` checks)
+    # can raise the same class; the interrupt-handler middleware rescues by
+    # the `Wurk::Job::Interrupted` name.
+    Interrupted = Wurk::Job::Interrupted
 
     # Class-level guard injected via singleton-class prepend so we can call
     # `super` cleanly and stay compatible with anything else hooking
