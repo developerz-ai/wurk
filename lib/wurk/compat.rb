@@ -8,6 +8,7 @@
 module Sidekiq
 end
 
+Sidekiq::Context     = Wurk::Context
 Sidekiq::IterableJob = Wurk::IterableJob
 Sidekiq::JobRecord   = Wurk::JobRecord
 Sidekiq::JobRetry    = Wurk::JobRetry

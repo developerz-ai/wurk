@@ -3,6 +3,7 @@
 require 'logger'
 require_relative 'middleware/chain'
 require_relative 'capsule'
+require_relative 'context'
 
 module Wurk
   # Owns runtime knobs (concurrency, queues, timeouts, lifecycle events,
@@ -44,11 +45,26 @@ module Wurk
     LIFECYCLE_EVENTS = %i[startup quiet shutdown exit heartbeat beat].freeze
     DEFAULT_THREAD_PRIORITY = -1
 
+    # Default error handler. Wraps the report in the thread-local
+    # Wurk::Context so logger formatters/JSON layouts can pick up jid/bid/tags.
+    # `full_message` (with backtrace) in dev/debug, `detailed_message` in prod —
+    # mirrors the Sidekiq behavior so log scrapers built for one work for both.
+    #
+    # Spec: docs/target/sidekiq-free.md §4.3.
+    ERROR_HANDLER = lambda do |ex, ctx, cfg = Wurk.configuration|
+      Wurk::Context.with(ctx) do
+        dev = $DEBUG || ENV['WURK_DEBUG'] || cfg.logger.debug?
+        msg = dev ? ex.full_message : ex.detailed_message
+        cfg.logger.info { msg }
+      end
+    end
+
     attr_reader :capsules, :directory, :redis_config
     attr_accessor :thread_priority
 
     def initialize(options = {})
       @options = deep_dup_defaults.merge(options)
+      @options[:error_handlers] << ERROR_HANDLER if @options[:error_handlers].empty?
       @capsules = {}
       @directory = {}
       @client_chain = Middleware::Chain.new
