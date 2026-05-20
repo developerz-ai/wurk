@@ -12,7 +12,11 @@ module Wurk
 
       def remove(klass); end
 
-      def invoke(*args, &block); end
+      # Empty-chain pass-through. Yields the block so callers (Wurk::Client) can
+      # rely on `invoke` to return the payload even before the chain has entries.
+      def invoke(*_args)
+        yield if block_given?
+      end
     end
   end
 end
