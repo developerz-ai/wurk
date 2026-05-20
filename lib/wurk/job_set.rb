@@ -73,6 +73,8 @@ module Wurk
 
     # Newest-first paged ZRANGE. Yields a SortedEntry per row.
     def each
+      return enum_for(:each) unless block_given?
+
       page  = 0
       added = 0
       loop do
@@ -174,17 +176,22 @@ module Wurk
 
     # Scan the score bracket for a jid match, ZREM the exact bytes once found.
     # Returns true on success. Aliased as `delete` for Sidekiq wire-compat.
-    def delete_by_jid(score, jid)
+    # Per-row JSON rescue so a single malformed entry can't shadow a valid
+    # match at the same score.
+    def delete_by_jid(score, jid) # rubocop:disable Naming/PredicateMethod
       Wurk.redis do |conn|
         rows = conn.call('ZRANGEBYSCORE', @name, score.to_f, score.to_f)
         rows.each do |raw|
-          next unless Wurk.load_json(raw)['jid'] == jid
+          parsed = begin
+            Wurk.load_json(raw)
+          rescue ::JSON::ParserError
+            nil
+          end
+          next unless parsed && parsed['jid'] == jid
 
           return conn.call('ZREM', @name, raw).to_i.positive?
         end
       end
-      false
-    rescue ::JSON::ParserError
       false
     end
     alias delete delete_by_jid

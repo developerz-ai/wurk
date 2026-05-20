@@ -6,6 +6,8 @@ require 'securerandom'
 # DeadSet-specific behaviors: trim (two-axis), kill (notify_failure default,
 # death-handler firing). Generic JobSet behaviors covered in job_set_test.rb.
 class DeadSetTest < Wurk::Test::UnitCase
+  parallelize_me!
+
   def setup
     super
     @ns      = "#{Process.pid}-#{object_id}"

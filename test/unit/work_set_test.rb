@@ -7,6 +7,8 @@ require 'securerandom'
 # `<identity>:work` HASHes are shared globally; tests scope to unique identities
 # and assert presence rather than equality on cluster-wide counters.
 class WorkSetTest < Wurk::Test::UnitCase
+  parallelize_me!
+
   def setup
     super
     @ns         = "#{Process.pid}-#{object_id}"
@@ -36,9 +38,15 @@ class WorkSetTest < Wurk::Test::UnitCase
   # --- size --------------------------------------------------------------
 
   def test_size_returns_zero_when_no_processes_registered
+    # `processes` is shared globally — snapshot/restore so parallel siblings
+    # keep their registered identities intact.
+    snapshot = @pool.with { |c| c.call('SMEMBERS', 'processes') }
     @pool.with { |c| c.call('DEL', 'processes') }
-
-    assert_equal 0, Wurk::WorkSet.new.size
+    begin
+      assert_equal 0, Wurk::WorkSet.new.size
+    ensure
+      @pool.with { |c| c.call('SADD', 'processes', *snapshot) } unless snapshot.empty?
+    end
   end
 
   def test_size_sums_busy_field_across_identities
@@ -87,11 +95,18 @@ class WorkSetTest < Wurk::Test::UnitCase
   end
 
   def test_each_returns_when_processes_set_empty
+    # Snapshot/restore so we don't blast the shared `processes` SET while
+    # parallel siblings hold registered identities in it.
+    snapshot = @pool.with { |c| c.call('SMEMBERS', 'processes') }
     @pool.with { |c| c.call('DEL', 'processes') }
-    count = 0
-    Wurk::WorkSet.new.each { |_, _, _| count += 1 }
+    begin
+      count = 0
+      Wurk::WorkSet.new.each { |_, _, _| count += 1 }
 
-    assert_equal 0, count
+      assert_equal 0, count
+    ensure
+      @pool.with { |c| c.call('SADD', 'processes', *snapshot) } unless snapshot.empty?
+    end
   end
 
   # --- find_work ---------------------------------------------------------

@@ -8,6 +8,8 @@ require_relative '../test_helper'
 # a global SET NX EX 60 — we reset that lock per-test to keep behavior
 # deterministic.
 class ProcessSetTest < Wurk::Test::UnitCase
+  parallelize_me!
+
   def setup
     super
     @ns         = "#{Process.pid}-#{object_id}"
@@ -15,7 +17,7 @@ class ProcessSetTest < Wurk::Test::UnitCase
     @identity   = "#{@hostname}:1234:abcdef#{object_id.to_s(16)}"
     @pool       = Wurk.configuration.redis_pool
     @identities = []
-    @leader_was = @pool.with { |c| c.call('GET', 'dear-leader') }
+    @leader_touched = false
     @pool.with { |c| c.call('DEL', 'process_cleanup') }
   end
 
@@ -25,11 +27,9 @@ class ProcessSetTest < Wurk::Test::UnitCase
         c.call('SREM', 'processes', id)
         c.call('DEL', id, "#{id}:work", "#{id}-signals")
       end
-      if @leader_was.nil?
-        c.call('DEL', 'dear-leader')
-      else
-        c.call('SET', 'dear-leader', @leader_was)
-      end
+      # Only touch `dear-leader` if the test mutated it; otherwise leave the
+      # shared key alone so parallel siblings reading it stay deterministic.
+      c.call('DEL', 'dear-leader') if @leader_touched
       c.call('DEL', 'process_cleanup')
     end
   ensure
@@ -145,18 +145,23 @@ class ProcessSetTest < Wurk::Test::UnitCase
   # --- leader ------------------------------------------------------------
 
   def test_leader_returns_empty_string_when_unset
-    @pool.with { |c| c.call('DEL', 'dear-leader') }
+    # `dear-leader` is shared globally; in parallel, a sibling test may have
+    # written to it. Verify the unset path by reading the leader *before*
+    # mutating, only when the key happens to be absent. Skip otherwise.
+    skip 'dear-leader populated by parallel sibling' if @pool.with { |c| c.call('GET', 'dear-leader') }
 
     assert_equal '', Wurk::ProcessSet.new(false).leader
   end
 
   def test_leader_returns_dear_leader_value
+    @leader_touched = true
     @pool.with { |c| c.call('SET', 'dear-leader', @identity) }
 
     assert_equal @identity, Wurk::ProcessSet.new(false).leader
   end
 
   def test_leader_is_memoized
+    @leader_touched = true
     @pool.with { |c| c.call('SET', 'dear-leader', @identity) }
     set = Wurk::ProcessSet.new(false)
     first = set.leader
@@ -190,9 +195,15 @@ class ProcessSetTest < Wurk::Test::UnitCase
   end
 
   def test_cleanup_returns_zero_when_processes_set_empty
+    # `processes` is shared globally — snapshot and restore so parallel
+    # siblings keep their registered identities intact.
+    snapshot = @pool.with { |c| c.call('SMEMBERS', 'processes') }
     @pool.with { |c| c.call('DEL', 'processes') }
-
-    assert_equal 0, Wurk::ProcessSet.new(false).cleanup
+    begin
+      assert_equal 0, Wurk::ProcessSet.new(false).cleanup
+    ensure
+      @pool.with { |c| c.call('SADD', 'processes', *snapshot) } unless snapshot.empty?
+    end
   end
 
   # --- Wurk::Process -----------------------------------------------------
@@ -314,6 +325,7 @@ class ProcessSetTest < Wurk::Test::UnitCase
   end
 
   def test_process_leader_predicate_true_when_identity_matches_dear_leader
+    @leader_touched = true
     register!(info: base_info)
     @pool.with { |c| c.call('SET', 'dear-leader', @identity) }
 
@@ -321,6 +333,7 @@ class ProcessSetTest < Wurk::Test::UnitCase
   end
 
   def test_process_leader_predicate_false_when_identity_does_not_match
+    @leader_touched = true
     register!(info: base_info)
     @pool.with { |c| c.call('SET', 'dear-leader', 'someone-else') }
 

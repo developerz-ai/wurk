@@ -15,6 +15,8 @@ module Wurk
     # (process_id, thread_id, Work). Result sorted by `run_at` so the
     # oldest in-flight job appears first — dashboards rely on this order.
     def each
+      return enum_for(:each) unless block_given?
+
       collect_rows.sort_by { |(_, _, work)| work.run_at }.each { |row| yield(*row) }
     end
 

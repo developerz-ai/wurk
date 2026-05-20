@@ -81,9 +81,13 @@ module Wurk
     # Pulls the message out of Redis, yields it for the caller's re-enqueue
     # work, and returns the parsed hash. Done with the cached value when
     # available so LREM-like ZREM matches the exact bytes.
+    # Returns nil without yielding when the parent removal fails — prevents
+    # duplicate side effects (e.g. retry pushing twice) if another caller
+    # already removed the entry.
     def remove_job
       message = item.dup
-      @parent.remove_job(self)
+      return nil unless @parent.remove_job(self)
+
       yield message
       message
     end

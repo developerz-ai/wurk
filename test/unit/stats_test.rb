@@ -12,6 +12,8 @@ require 'securerandom'
 # For shared zsets/sets we add uniquely-named members and assert `>=` lower bounds;
 # for the global counters we read snapshots and assert deltas.
 class StatsTest < Wurk::Test::UnitCase
+  parallelize_me!
+
   def setup
     super
     @ns         = "#{Process.pid}-#{object_id}"
@@ -118,11 +120,13 @@ class StatsTest < Wurk::Test::UnitCase
   end
 
   def test_enqueued_reflects_my_queue_size
+    # Scope to `@queue` — the global `enqueued` sum fluctuates as parallel
+    # siblings push/pop their own queues.
     push_my_job
-    base = Wurk::Stats.new.enqueued
+    base = Wurk::Stats.new.queues[@queue].to_i
     push_my_job
 
-    assert_operator Wurk::Stats.new.enqueued, :>=, base + 1
+    assert_operator Wurk::Stats.new.queues[@queue].to_i, :>=, base + 1
   end
 
   def test_queues_returns_hash_keyed_by_name

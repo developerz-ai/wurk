@@ -134,15 +134,16 @@ module Wurk
 
     # `enqueued_at` may be Float (epoch secs, legacy) or Integer (epoch ms,
     # current). Spec §5 calls out the dual format; handle both. Malformed
-    # JSON shouldn't crash a dashboard read — fall back to 0.
+    # JSON or non-numeric `enqueued_at` shouldn't crash a dashboard read —
+    # fall back to 0.
     def compute_latency(payload_json, now_ms)
       return 0.0 if payload_json.nil?
 
-      enq = Wurk.load_json(payload_json)['enqueued_at'] || 0
+      enq = Float(Wurk.load_json(payload_json)['enqueued_at'] || 0)
       enq_ms = enq < 10_000_000_000 ? enq * 1_000 : enq
       diff = (now_ms - enq_ms) / 1_000.0
       diff.negative? ? 0.0 : diff
-    rescue ::JSON::ParserError
+    rescue ::JSON::ParserError, ::TypeError, ::ArgumentError
       0.0
     end
 

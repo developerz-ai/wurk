@@ -70,6 +70,8 @@ module Wurk
     # gone (heartbeat expired between SMEMBERS and HMGET). Sorted by
     # identity so iteration order is stable for dashboards.
     def each
+      return enum_for(:each) unless block_given?
+
       rows = fetch_each_rows
       rows.each do |row|
         attrs = EACH_FIELDS.zip(row).to_h
