@@ -117,10 +117,11 @@ module Wurk
     def validate_bulk_shape!(items, args)
       raise ArgumentError, "Bulk arguments must be an Array of Arrays: `#{args.inspect}`" unless valid_bulk_args?(args)
       raise ArgumentError, "Job 'jid' is only allowed with a single-job bulk" if explicit_jid?(items) && args.size > 1
+      raise ArgumentError, "Cannot pass both 'at' and 'spread_interval'" if conflicting_schedule?(items)
+    end
 
-      return unless items['at'] && items['spread_interval']
-
-      raise ArgumentError, "Cannot pass both 'at' and 'spread_interval'"
+    def conflicting_schedule?(items)
+      (items['at'] || items[:at]) && (items['spread_interval'] || items[:spread_interval])
     end
 
     def valid_bulk_args?(args)
@@ -143,7 +144,8 @@ module Wurk
         offset  = slice_index * batch_size
         ats     = at_values && at_values[offset, slice.size]
         payloads = build_bulk_payloads(slice, base, ats)
-        raw_push(payloads.compact) if payloads.any?
+        compacted = payloads.compact
+        raw_push(compacted) if compacted.any?
         jids.concat(payloads.map { |p| p && p['jid'] })
       end
       jids
@@ -165,6 +167,7 @@ module Wurk
       case at
       when Array
         raise ArgumentError, "'at' array size must match args" unless at.size == count
+        raise ArgumentError, "'at' array must contain only Numeric values" unless at.all?(Numeric)
 
         at
       when Numeric

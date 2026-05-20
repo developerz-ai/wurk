@@ -3,7 +3,6 @@
 require "benchmark/ips"
 require "wurk"
 
-# push_bulk via the EVALSHA-cached Lua path: 1 000 jobs per call against real Redis.
 # Gate: >5% regression vs main blocks merge.
 
 BULK_SIZE = 1_000

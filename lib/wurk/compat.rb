@@ -8,6 +8,9 @@
 module Sidekiq
 end
 
+Sidekiq::IterableJob = Wurk::IterableJob
+Sidekiq::Keys        = Wurk::Keys
+
 # TODO: alias every public Wurk constant under Sidekiq, e.g.
 #   Sidekiq::Worker      = Wurk::Worker
 #   Sidekiq::Job         = Wurk::Job

@@ -99,6 +99,7 @@ module Wurk
     # handling. Kept here so user worker classes are runnable end-to-end
     # under `perform_inline` and the parity tests.
     def perform(*args)
+      @cancelled_at = nil
       @arguments = args
       on_start
       enum = build_enumerator(*args, cursor: @cursor)

@@ -11,12 +11,10 @@ class IterableJobTest < Wurk::Test::UnitCase
   class SimpleIterable
     include Wurk::IterableJob
 
-    @ran = []
-    @started = 0
-    @completed = 0
-    class << self
-      attr_accessor :ran, :started, :completed
-    end
+    def ran          = @ran ||= []
+    def started      = @started ||= 0
+    def completed    = @completed ||= 0
+    attr_writer :started, :completed
 
     def build_enumerator(*_args, cursor:)
       start = cursor || 0
@@ -26,15 +24,15 @@ class IterableJobTest < Wurk::Test::UnitCase
     end
 
     def each_iteration(item, *_args)
-      self.class.ran << item
+      ran << item
     end
 
     def on_start
-      self.class.started += 1
+      self.started = started + 1
     end
 
     def on_complete
-      self.class.completed += 1
+      self.completed = completed + 1
     end
   end
 
@@ -136,68 +134,60 @@ class IterableJobTest < Wurk::Test::UnitCase
   # --- run loop -------------------------------------------------------
 
   def test_perform_drives_iterations_in_order
-    SimpleIterable.ran = []
-    SimpleIterable.started = 0
-    SimpleIterable.completed = 0
+    worker = SimpleIterable.new
+    worker.perform
 
-    SimpleIterable.new.perform
-
-    assert_equal [0, 1, 2], SimpleIterable.ran
-    assert_equal 1, SimpleIterable.started
-    assert_equal 1, SimpleIterable.completed
+    assert_equal [0, 1, 2], worker.ran
+    assert_equal 1, worker.started
+    assert_equal 1, worker.completed
   end
 
   class AroundTracer
     include Wurk::IterableJob
 
-    @events = []
-    class << self
-      attr_accessor :events
-    end
+    def events = @events ||= []
 
     def build_enumerator(*, cursor:)
       Enumerator.new { |y| y << [42, 1] }
     end
 
     def each_iteration(item)
-      self.class.events << [:run, item]
+      events << [:run, item]
     end
 
     def around_iteration
-      self.class.events << :before
+      events << :before
       yield
-      self.class.events << :after
+      events << :after
     end
   end
 
   def test_around_iteration_wraps_each_call
-    AroundTracer.events = []
-    AroundTracer.new.perform
+    worker = AroundTracer.new
+    worker.perform
 
-    assert_equal [:before, [:run, 42], :after], AroundTracer.events
+    assert_equal [:before, [:run, 42], :after], worker.events
   end
 
   def test_arguments_returns_perform_args_during_iteration
     klass = Class.new do
       include Wurk::IterableJob
 
-      class << self
-        attr_accessor :sink
-      end
+      attr_accessor :sink
 
       def build_enumerator(*, cursor:)
         Enumerator.new { |y| y << [1, 1] }
       end
 
       def each_iteration(_item, *)
-        self.class.sink = arguments
+        self.sink = arguments
       end
     end
 
-    klass.sink = nil
-    klass.new.perform('a', 42)
+    worker = klass.new
+    worker.perform('a', 42)
 
-    assert_equal ['a', 42], klass.sink
+    assert_equal ['a', 42], worker.sink
   end
 
   def test_arguments_defaults_to_empty_array
@@ -208,9 +198,7 @@ class IterableJobTest < Wurk::Test::UnitCase
     klass = Class.new do
       include Wurk::IterableJob
 
-      class << self
-        attr_accessor :seen
-      end
+      def seen = @seen ||= []
 
       def build_enumerator(*, cursor:)
         Enumerator.new do |y|
@@ -220,14 +208,14 @@ class IterableJobTest < Wurk::Test::UnitCase
       end
 
       def each_iteration(_item)
-        self.class.seen << current_object
+        seen << current_object
       end
     end
 
-    klass.seen = []
-    klass.new.perform
+    worker = klass.new
+    worker.perform
 
-    assert_equal %w[x y], klass.seen
+    assert_equal %w[x y], worker.seen
   end
 
   def test_cursor_advances_to_last_yielded_value
@@ -261,13 +249,21 @@ class IterableJobTest < Wurk::Test::UnitCase
     assert_predicate worker, :cancelled?
   end
 
+  def test_perform_resets_cancellation_state_on_reuse
+    worker = SimpleIterable.new
+    worker.cancel!
+
+    assert_predicate worker, :cancelled?
+
+    worker.perform
+
+    assert_equal [0, 1, 2], worker.ran
+  end
+
   class SelfCancelling
     include Wurk::IterableJob
 
-    @seen = []
-    class << self
-      attr_accessor :seen
-    end
+    def seen = @seen ||= []
 
     def build_enumerator(*, cursor:)
       Enumerator.new do |y|
@@ -277,16 +273,16 @@ class IterableJobTest < Wurk::Test::UnitCase
     end
 
     def each_iteration(item)
-      self.class.seen << item
+      seen << item
       cancel!
     end
   end
 
   def test_cancel_during_iteration_raises_interrupted_on_next_step
-    SelfCancelling.seen = []
+    worker = SelfCancelling.new
 
-    assert_raises(Wurk::IterableJob::Interrupted) { SelfCancelling.new.perform }
-    assert_equal [1], SelfCancelling.seen
+    assert_raises(Wurk::IterableJob::Interrupted) { worker.perform }
+    assert_equal [1], worker.seen
   end
 end
 # rubocop:enable Lint/UnusedMethodArgument
