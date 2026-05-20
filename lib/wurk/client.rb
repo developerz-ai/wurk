@@ -1,12 +1,230 @@
 # frozen_string_literal: true
 
-module Wurk
-  # Enqueue interface. Lua bulk path. Redis-outage local buffer is in
-  # Wurk::Client::Buffered (Pro feature parity).
-  # Spec: docs/target/sidekiq-free.md + docs/target/sidekiq-pro.md.
-  class Client
-    def push(job_hash); end
+require_relative 'job_util'
 
-    def push_bulk(job_hash); end
+module Wurk
+  # Enqueue interface. Pipelined LPUSH / ZADD writes against the canonical
+  # Sidekiq Redis schema — never change keys, JSON shape, or score format here:
+  # wire-compat is sacred.
+  #
+  # Spec: docs/target/sidekiq-free.md §7.
+  class Client
+    include JobUtil
+
+    # Sidekiq mirrors these exactly. Tests against the upstream parity suite
+    # depend on the magic numbers, not just behavior.
+    DEFAULT_BATCH_SIZE        = 1_000
+    SCHEDULED_BATCH_SIZE      = 100
+    SPREAD_INTERVAL_FLOOR     = 5
+
+    attr_accessor :redis_pool
+
+    def initialize(pool: nil, config: nil, chain: nil)
+      @config     = config || Wurk.configuration
+      @redis_pool = pool
+      @chain      = chain || @config.client_middleware
+    end
+
+    # Returns the chain (or a duplicate when a block is given, matching Sidekiq).
+    def middleware
+      return @chain unless block_given?
+
+      copy = @chain.dup
+      yield copy
+      copy
+    end
+
+    # @return [String, nil] jid; nil when client middleware halts the push.
+    def push(item)
+      normed  = normalize_item(item)
+      payload = invoke_chain(normed)
+      return nil unless payload
+
+      verify_json(payload)
+      raw_push([payload])
+      payload['jid']
+    end
+
+    # @param items [Hash] keys: class, args (Array<Array>), at?, spread_interval?, batch_size?, jid?
+    # @return [Array<String, nil>] jids in submission order; nil entries mark middleware-halted jobs.
+    def push_bulk(items)
+      args = items['args'] || items[:args]
+      validate_bulk_shape!(items, args)
+      return [] if args.empty?
+
+      at_values = expand_at(items, args.size)
+      batch_sz  = items['batch_size'] || items[:batch_size] || (at_values ? SCHEDULED_BATCH_SIZE : DEFAULT_BATCH_SIZE)
+      base      = bulk_base(items)
+      flush_bulk(args, at_values, base, batch_sz)
+    end
+
+    # Marks an IterableJob as cancelled. Returns the Unix epoch timestamp written.
+    # Field name + epoch-second value mirror Sidekiq::IterableJob#cancel! exactly.
+    def cancel!(jid)
+      raise ArgumentError, 'jid must be a non-empty String' if jid.nil? || jid.to_s.empty?
+
+      ts = ::Process.clock_gettime(::Process::CLOCK_REALTIME).to_i
+      pool.with do |conn|
+        conn.call('HSET', "it-#{jid}", 'cancelled', ts)
+        conn.call('EXPIRE', "it-#{jid}", 86_400)
+      end
+      ts
+    end
+
+    class << self
+      def push(item)        = new.push(item)
+      def push_bulk(items)  = new.push_bulk(items)
+      def enqueue(klass, *) = klass.perform_async(*)
+
+      def enqueue_to(queue, klass, *)
+        klass.set(queue: queue.to_s).perform_async(*)
+      end
+
+      def enqueue_to_in(queue, interval, klass, *)
+        klass.set(queue: queue.to_s).perform_in(interval, *)
+      end
+
+      def enqueue_in(interval, klass, *)
+        klass.perform_in(interval, *)
+      end
+
+      # Thread-local pool override. Re-entrant calls are rejected — Sidekiq
+      # raises here too, because nested `via` would silently shadow. The
+      # begin/ensure guards the slot so a raise on entry doesn't clear the
+      # outer caller's pool.
+      def via(pool)
+        raise ArgumentError, 'pool is required' if pool.nil?
+        raise 'Wurk::Client.via is not re-entrant' if Thread.current[:wurk_via_pool]
+
+        Thread.current[:wurk_via_pool] = pool
+        begin
+          yield
+        ensure
+          Thread.current[:wurk_via_pool] = nil
+        end
+      end
+    end
+
+    private
+
+    def invoke_chain(normed)
+      @chain.invoke(normed['class'], normed, normed['queue'], pool) do
+        verify_json(normed)
+        normed
+      end
+    end
+
+    def validate_bulk_shape!(items, args)
+      raise ArgumentError, "Bulk arguments must be an Array of Arrays: `#{args.inspect}`" unless valid_bulk_args?(args)
+      raise ArgumentError, "Job 'jid' is only allowed with a single-job bulk" if explicit_jid?(items) && args.size > 1
+      raise ArgumentError, "Cannot pass both 'at' and 'spread_interval'" if conflicting_schedule?(items)
+    end
+
+    def conflicting_schedule?(items)
+      (items.key?('at') || items.key?(:at)) &&
+        (items.key?('spread_interval') || items.key?(:spread_interval))
+    end
+
+    def valid_bulk_args?(args)
+      args.is_a?(Array) && args.all?(Array)
+    end
+
+    def explicit_jid?(items)
+      items.key?('jid') || items.key?(:jid)
+    end
+
+    def bulk_base(items)
+      base = items.transform_keys(&:to_s)
+      %w[args at spread_interval batch_size].each { |k| base.delete(k) }
+      base
+    end
+
+    def flush_bulk(args, at_values, base, batch_size)
+      jids = []
+      args.each_slice(batch_size).with_index do |slice, slice_index|
+        offset  = slice_index * batch_size
+        ats     = at_values && at_values[offset, slice.size]
+        payloads = build_bulk_payloads(slice, base, ats)
+        compacted = payloads.compact
+        raw_push(compacted) if compacted.any?
+        jids.concat(payloads.map { |p| p && p['jid'] })
+      end
+      jids
+    end
+
+    def build_bulk_payloads(slice, base, ats)
+      slice.each_with_index.map do |job_args, idx|
+        item = base.merge('args' => job_args)
+        item['at'] = ats[idx] if ats
+        normed = normalize_item(item)
+        invoke_chain(normed)
+      end
+    end
+
+    def expand_at(items, count)
+      return expand_spread(items, count) unless items.key?('at') || items.key?(:at)
+
+      at = items['at'] || items[:at]
+      case at
+      when Array
+        raise ArgumentError, "'at' array size must match args" unless at.size == count
+        raise ArgumentError, "'at' array must contain only Numeric values" unless at.all?(Numeric)
+
+        at
+      when Numeric
+        Array.new(count, at)
+      else
+        raise ArgumentError, "'at' must be Numeric or Array<Numeric>"
+      end
+    end
+
+    def expand_spread(items, count)
+      return nil unless items.key?('spread_interval') || items.key?(:spread_interval)
+
+      spread = items['spread_interval'] || items[:spread_interval]
+      raise ArgumentError, "'spread_interval' must be positive Numeric" unless spread.is_a?(Numeric) && spread.positive?
+
+      window = [spread.to_f, SPREAD_INTERVAL_FLOOR].max
+      now    = ::Process.clock_gettime(::Process::CLOCK_REALTIME)
+      Array.new(count) { now + (rand * window) }
+    end
+
+    def raw_push(payloads)
+      pool.with do |conn|
+        conn.pipelined { |pipe| atomic_push(pipe, payloads) }
+      end
+    end
+
+    def atomic_push(conn, payloads)
+      if payloads.first['at']
+        push_scheduled(conn, payloads)
+      else
+        push_immediate(conn, payloads)
+      end
+    end
+
+    def push_scheduled(conn, payloads)
+      args = payloads.flat_map do |hash|
+        [hash['at'].to_s, Wurk.dump_json(hash.except('enqueued_at', 'at'))]
+      end
+      conn.call('ZADD', 'schedule', *args)
+    end
+
+    def push_immediate(conn, payloads)
+      now     = now_in_millis
+      grouped = payloads.group_by { |j| j['queue'] }
+      conn.call('SADD', 'queues', *grouped.keys)
+      grouped.each do |queue, jobs|
+        serialized = jobs.map do |j|
+          j['enqueued_at'] = now
+          Wurk.dump_json(j)
+        end
+        conn.call('LPUSH', "queue:#{queue}", *serialized)
+      end
+    end
+
+    def pool
+      @redis_pool || Thread.current[:wurk_via_pool] || @config.redis_pool
+    end
   end
 end

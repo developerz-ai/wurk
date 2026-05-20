@@ -5,6 +5,7 @@
 # when the host app opts in.
 
 require_relative 'wurk/version'
+require_relative 'wurk/keys'
 require_relative 'wurk/redis_pool'
 require_relative 'wurk/middleware'
 require_relative 'wurk/middleware/chain'
@@ -15,7 +16,9 @@ require_relative 'wurk/job_util'
 require_relative 'wurk/client'
 require_relative 'wurk/client/buffered'
 require_relative 'wurk/worker'
+require_relative 'wurk/worker/setter'
 require_relative 'wurk/job'
+require_relative 'wurk/iterable_job'
 require_relative 'wurk/queue'
 require_relative 'wurk/retry_set'
 require_relative 'wurk/scheduled_set'
