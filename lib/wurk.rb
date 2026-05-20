@@ -69,7 +69,7 @@ module Wurk
     end
 
     def redis(&)
-      configuration.redis_pool.with(&)
+      (Thread.current[:wurk_capsule] || configuration.default_capsule).redis_pool.with(&)
     end
 
     def logger
