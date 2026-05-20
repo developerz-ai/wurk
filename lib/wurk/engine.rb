@@ -1,6 +1,7 @@
 # frozen_string_literal: true
 
 require "rails/engine"
+require_relative "../active_job/queue_adapters/wurk_adapter"
 
 module Wurk
   # Rails mountable engine. Owns the dashboard mount, the asset path for
