@@ -80,6 +80,13 @@ module Wurk
       @config.logger
     end
 
+    # No-op in OSS. Reserved for Pro/Ent hooks that need to flush per-capsule
+    # state on shutdown. Manager#stop invokes this in `ensure` so the contract
+    # is honored regardless of how stop unwinds.
+    #
+    # Spec: docs/target/sidekiq-free.md §5.
+    def stop; end
+
     private
 
     def parse_queue_entry(entry)

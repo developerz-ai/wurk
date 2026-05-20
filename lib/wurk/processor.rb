@@ -1,12 +1,245 @@
 # frozen_string_literal: true
 
+require_relative 'component'
+require_relative 'context'
+require_relative 'job_logger'
+require_relative 'job_retry'
+require_relative 'keys'
+
 module Wurk
-  # Pops a job from the per-process private list, runs the server
-  # middleware chain, invokes the worker's `perform`, then ACKs by
-  # removing from the private list.
+  # Inside each Manager, N Processors run in parallel. Each owns one thread,
+  # pulls a UnitOfWork from the capsule's fetcher, parses the payload, walks
+  # the server middleware chain, invokes `perform`, then ACKs (removes the
+  # payload from the per-process private list).
+  #
+  # Shutdown is two-stage:
+  #   * `terminate` flips a flag; the run loop exits between jobs.
+  #   * `kill` additionally raises `Wurk::Shutdown` into the thread so an
+  #     in-flight perform unwinds. The current UoW is NOT acked, so the
+  #     payload survives in the private list and is reclaimed on next boot.
+  #
+  # Spec: docs/target/sidekiq-free.md §14.
   class Processor
-    def initialize(manager:); end
-    def run; end
-    def stop; end
+    include Component
+
+    attr_reader :thread, :job, :capsule
+
+    def initialize(capsule, &callback)
+      @capsule = capsule
+      @config = capsule
+      @callback = callback
+      @done = false
+      @job = nil
+      @thread = nil
+      @reloader = capsule.config[:reloader] || proc { |&b| b.call }
+      @job_logger = (capsule.config[:job_logger] || JobLogger).new(capsule.config)
+      @retrier = JobRetry.new(capsule)
+    end
+
+    # Sidekiq surface — positional boolean to match the drop-in contract.
+    def terminate(wait = false) # rubocop:disable Style/OptionalBooleanParameter
+      @done = true
+      return if @thread.nil?
+
+      @thread.value if wait
+    end
+
+    # Hard-stop: flips the flag *and* unwinds the in-flight job by raising
+    # Wurk::Shutdown into the worker thread. The UoW is intentionally not
+    # acked — the payload remains in the private list and is reclaimed on
+    # next boot via Reliable#bulk_requeue.
+    def kill(wait = false) # rubocop:disable Style/OptionalBooleanParameter
+      @done = true
+      return if @thread.nil?
+
+      @thread.raise ::Wurk::Shutdown
+      @thread.value if wait
+    end
+
+    def stopping?
+      @done
+    end
+
+    def start
+      @thread ||= safe_thread("#{@capsule.name}/processor", &method(:run)) # rubocop:disable Naming/MemoizedInstanceVariableName
+    end
+
+    # Capsule doesn't define handle_exception (it's a Configuration method);
+    # override Component's delegation so error handlers fire.
+    def handle_exception(ex, ctx = {})
+      @capsule.config.handle_exception(ex, ctx)
+    end
+
+    # Single iteration: fetch one UoW, process it. Public so tests can drive
+    # the loop step-by-step without spawning a thread.
+    def process_one
+      @job = fetch
+      process(@job) if @job
+      @job = nil
+    end
+
+    # Thread-safe global counter. Heartbeat reads + resets these every beat
+    # to publish per-process stats.
+    class Counter
+      def initialize
+        @value = 0
+        @lock = ::Mutex.new
+      end
+
+      def incr(amount = 1)
+        @lock.synchronize { @value += amount }
+      end
+
+      def reset
+        @lock.synchronize do
+          val = @value
+          @value = 0
+          val
+        end
+      end
+    end
+
+    # tid → { queue:, payload:, run_at: } for every Processor currently
+    # running a job. Read by Heartbeat each beat to publish into Redis.
+    class SharedWorkState
+      def initialize
+        @work = {}
+        @lock = ::Mutex.new
+      end
+
+      def set(tid, hash)
+        @lock.synchronize { @work[tid] = hash }
+      end
+
+      def delete(tid)
+        @lock.synchronize { @work.delete(tid) }
+      end
+
+      def dup
+        @lock.synchronize { @work.dup }
+      end
+
+      def size
+        @lock.synchronize { @work.size }
+      end
+
+      def clear
+        @lock.synchronize { @work.clear }
+      end
+    end
+
+    PROCESSED  = Counter.new
+    FAILURE    = Counter.new
+    WORK_STATE = SharedWorkState.new
+
+    private
+
+    def run
+      process_one until @done
+      @callback&.call(self)
+    rescue Wurk::Shutdown
+      @callback&.call(self)
+    rescue Exception => e # rubocop:disable Lint/RescueException
+      handle_exception(e, { context: '!shutdown' })
+      @callback&.call(self)
+      raise
+    end
+
+    def fetch
+      @capsule.fetcher.retrieve_work
+    rescue Wurk::Shutdown
+      nil
+    rescue StandardError => e
+      handle_exception(e, { context: 'Error fetching job' })
+      sleep(1)
+      nil
+    end
+
+    def process(uow)
+      jobstr = uow.job
+      queue  = uow.queue_name
+
+      job_hash = parse_or_kill(jobstr, uow)
+      return if job_hash.nil?
+
+      ack = false
+      begin
+        Thread.handle_interrupt(Wurk::Shutdown => :never) do
+          dispatch(job_hash, queue, jobstr) do |instance|
+            Thread.handle_interrupt(Wurk::Shutdown => :immediate) do
+              execute_job(instance, job_hash, queue)
+            end
+          end
+          ack = true
+        end
+      rescue Wurk::JobRetry::Handled
+        # JobRetry::Skip (subclass) or Handled — retry layer / middleware has
+        # already booked the outcome; safe to ack.
+        ack = true
+      rescue Wurk::Shutdown
+        # Don't ack — UoW stays in private list and is reclaimed on reboot.
+      ensure
+        uow.acknowledge if ack
+      end
+    end
+
+    # Parse JSON; on failure ZADD the raw payload to the dead set and ack.
+    # Returns nil to signal "no further processing".
+    def parse_or_kill(jobstr, uow)
+      Wurk.load_json(jobstr)
+    rescue ::JSON::ParserError => e
+      handle_exception(e, { context: 'Invalid JSON', jobstr: jobstr })
+      now = ::Process.clock_gettime(::Process::CLOCK_REALTIME)
+      @capsule.redis do |conn|
+        conn.call('ZADD', Keys::DEAD, now.to_s, jobstr)
+      end
+      uow.acknowledge
+      nil
+    end
+
+    # Wraps the actual perform in the dispatch onion: logger.prepare →
+    # retrier.global → logger.call → stats → reloader → instantiate
+    # → retrier.local → (yield to caller for middleware + perform).
+    def dispatch(job_hash, queue, jobstr)
+      @job_logger.prepare(job_hash) do
+        @retrier.global(jobstr, queue) do
+          @job_logger.call(job_hash, queue) do
+            stats(jobstr, queue) do
+              @reloader.call do
+                klass = Object.const_get(job_hash['class'])
+                instance = klass.new
+                instance.jid = job_hash['jid']
+                instance._context = self
+                @retrier.local(instance, jobstr, queue) do
+                  yield instance
+                end
+              end
+            end
+          end
+        end
+      end
+    end
+
+    def execute_job(instance, job_hash, queue)
+      @capsule.server_middleware.invoke(instance, job_hash, queue) do
+        instance.perform(*job_hash['args'])
+      end
+    end
+
+    # Bookkeeping wrapper. Publishes the in-flight job to WORK_STATE so the
+    # Heartbeat can mirror it into Redis (`<identity>:work`), and increments
+    # PROCESSED/FAILURE counters around the inner block.
+    def stats(jobstr, queue)
+      WORK_STATE.set(tid, queue: queue, payload: jobstr, run_at: ::Time.now.to_i)
+      begin
+        yield
+      rescue Exception # rubocop:disable Lint/RescueException
+        FAILURE.incr
+        raise
+      ensure
+        PROCESSED.incr
+        WORK_STATE.delete(tid)
+      end
+    end
   end
 end

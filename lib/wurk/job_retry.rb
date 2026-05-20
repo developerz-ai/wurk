@@ -17,5 +17,22 @@ module Wurk
     # Subclass of Handled with the same semantics — used when middleware
     # short-circuits processing (e.g. interrupt-handler re-pushed the job).
     class Skip < Handled; end
+
+    def initialize(capsule = nil)
+      @capsule = capsule
+    end
+
+    # Outermost retry guard. Stub: the full retry algorithm (attempt count,
+    # jitter, morgue handoff, death handlers) lands in a later PR; for now
+    # this just yields. Handled/Skip propagate naturally up to the processor.
+    def global(_jobstr, _queue)
+      yield
+    end
+
+    # Per-job retry guard. Same stub semantics as `global` — yields through
+    # until the retry algorithm ships.
+    def local(_jobinst, _jobstr, _queue)
+      yield
+    end
   end
 end
