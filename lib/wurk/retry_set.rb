@@ -8,8 +8,10 @@ module Wurk
   #
   # Spec: docs/target/sidekiq-free.md §19.5.
   class RetrySet < JobSet
-    def initialize
-      super('retry')
+    # Optional `name` allows tests to operate on a namespaced ZSET; production
+    # callers always use the default `'retry'` key (wire-compat with Sidekiq).
+    def initialize(name = 'retry')
+      super
     end
   end
 end

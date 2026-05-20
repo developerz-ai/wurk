@@ -3,27 +3,29 @@
 require_relative '../test_helper'
 require 'securerandom'
 
-# Drives Wurk::SortedSet + Wurk::JobSet against a real Redis `retry` zset.
-# Shared global key means tests use unique payloads per instance and clean
-# them up; assertions use lower bounds where the shared set is observed.
+# Drives Wurk::SortedSet + Wurk::JobSet against a real Redis sorted set.
+#
+# Parallel safety: every test operates on a per-instance ZSET named
+# "retry-<pid>-<object_id>". Where `kill_all` writes to the global `dead`
+# ZSET (because production `JobSet#kill_all` instantiates `DeadSet.new` with
+# the canonical key), we track those payloads in `@dead_members` and ZREM
+# them in teardown so we don't leak across runs.
 class JobSetTest < Wurk::Test::UnitCase
   parallelize_me!
 
   def setup
     super
-    @ns      = "#{Process.pid}-#{object_id}"
-    @set     = Wurk::RetrySet.new
-    @pool    = Wurk.configuration.redis_pool
-    @members = []
-    @queues  = []
+    @ns           = "#{Process.pid}-#{object_id}"
+    @set          = Wurk::RetrySet.new("retry-#{@ns}")
+    @pool         = Wurk.configuration.redis_pool
+    @dead_members = []
+    @queues       = []
   end
 
   def teardown
     @pool.with do |c|
-      @members.each do |m|
-        c.call('ZREM', @set.name, m)
-        c.call('ZREM', 'dead', m)
-      end
+      c.call('UNLINK', @set.name)
+      @dead_members.each { |m| c.call('ZREM', 'dead', m) }
       @queues.each do |q|
         c.call('DEL', "queue:#{q}")
         c.call('SREM', 'queues', q)
@@ -39,22 +41,22 @@ class JobSetTest < Wurk::Test::UnitCase
     add_member
     add_member
 
-    assert_operator @set.size, :>=, 2
+    assert_equal 2, @set.size
   end
 
   def test_clear_unlinks
     add_member
 
     assert @set.clear
-    # NB: shared key; another test may immediately re-populate. Assert our
-    # member is gone rather than the cardinality.
-    @members.each do |m|
-      assert_equal(0, @pool.with { |c| c.call('ZSCORE', @set.name, m) }.to_i)
-    end
+    assert_equal 0, @set.size
+  end
+
+  def test_default_name_is_retry
+    assert_equal 'retry', Wurk::RetrySet.new.name
   end
 
   def test_as_json_returns_name
-    assert_equal({ name: 'retry' }, @set.as_json)
+    assert_equal({ name: @set.name }, @set.as_json)
   end
 
   def test_includes_enumerable
@@ -81,7 +83,7 @@ class JobSetTest < Wurk::Test::UnitCase
 
   def test_each_yields_sorted_entries
     add_member
-    entries = @set.to_a.select { |e| @members.include?(e.value) }
+    entries = @set.to_a
 
     refute_empty entries
     assert_kind_of Wurk::SortedEntry, entries.first
@@ -91,8 +93,7 @@ class JobSetTest < Wurk::Test::UnitCase
     add_member(score: 100.0)
     add_member(score: 300.0)
     add_member(score: 200.0)
-    ours = @set.to_a.select { |e| @members.include?(e.value) }
-    scores = ours.map(&:score)
+    scores = @set.to_a.map(&:score)
 
     assert_equal scores.sort.reverse, scores
   end
@@ -103,7 +104,6 @@ class JobSetTest < Wurk::Test::UnitCase
     message = base_item
     @set.schedule(::Time.now.to_f + 60, message)
     payload = Wurk.dump_json(message)
-    @members << payload
 
     refute_nil(@pool.with { |c| c.call('ZSCORE', @set.name, payload) })
   end
@@ -137,7 +137,7 @@ class JobSetTest < Wurk::Test::UnitCase
     add_member(score: score)
     entries = @set.fetch(::Time.at(score))
 
-    assert(entries.any? { |e| @members.include?(e.value) })
+    refute_empty entries
   end
 
   def test_fetch_by_range
@@ -145,7 +145,7 @@ class JobSetTest < Wurk::Test::UnitCase
     add_member(score: score)
     entries = @set.fetch((score - 1)..(score + 1))
 
-    assert(entries.any? { |e| @members.include?(e.value) })
+    refute_empty entries
   end
 
   def test_fetch_filters_by_jid
@@ -244,7 +244,7 @@ class JobSetTest < Wurk::Test::UnitCase
     rows = (0...3).map { |i| [10 + i, "ka-#{i}-#{@ns}"] }
     payloads = seed_private(private_set, rows)
     count = private_job_set(private_set).kill_all
-    @members.concat(payloads)
+    @dead_members.concat(payloads)
 
     assert_equal 3, count
     assert_drained(private_set, into_dead: payloads)
@@ -266,7 +266,6 @@ class JobSetTest < Wurk::Test::UnitCase
     item = base_item('jid' => jid)
     payload = Wurk.dump_json(item)
     @pool.with { |c| c.call('ZADD', @set.name, score, payload) }
-    @members << payload
     payload
   end
 

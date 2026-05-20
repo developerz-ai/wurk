@@ -3,27 +3,30 @@
 require_relative '../test_helper'
 require 'securerandom'
 
-# Drives Wurk::WorkSet + Wurk::Work against real Redis. The `processes` SET +
-# `<identity>:work` HASHes are shared globally; tests scope to unique identities
-# and assert presence rather than equality on cluster-wide counters.
+# Drives Wurk::WorkSet + Wurk::Work against real Redis.
+#
+# Parallel safety: each test instantiates `Wurk::WorkSet.new(processes_key:
+# @processes_key)` against a per-instance SET named "processes-<pid>-<oid>".
+# That keeps the cluster-wide `processes` SET untouched while still
+# exercising the production code paths. Per-identity `<id>:work` HASHes get
+# UNLINKed in teardown.
 class WorkSetTest < Wurk::Test::UnitCase
   parallelize_me!
 
   def setup
     super
-    @ns         = "#{Process.pid}-#{object_id}"
-    @identity   = "host-#{@ns}:1234:abc#{object_id.to_s(16)}"
-    @other_id   = "host-#{@ns}:5678:def#{object_id.to_s(16)}"
-    @pool       = Wurk.configuration.redis_pool
-    @identities = []
+    @ns             = "#{Process.pid}-#{object_id}"
+    @processes_key  = "processes-#{@ns}"
+    @identity       = "host-#{@ns}:1234:abc#{object_id.to_s(16)}"
+    @other_id       = "host-#{@ns}:5678:def#{object_id.to_s(16)}"
+    @pool           = Wurk.configuration.redis_pool
+    @identities     = []
   end
 
   def teardown
     @pool.with do |c|
-      @identities.each do |id|
-        c.call('SREM', 'processes', id)
-        c.call('DEL', id, "#{id}:work")
-      end
+      c.call('UNLINK', @processes_key)
+      @identities.each { |id| c.call('DEL', id, "#{id}:work") }
     end
   ensure
     super
@@ -38,28 +41,20 @@ class WorkSetTest < Wurk::Test::UnitCase
   # --- size --------------------------------------------------------------
 
   def test_size_returns_zero_when_no_processes_registered
-    # `processes` is shared globally — snapshot/restore so parallel siblings
-    # keep their registered identities intact.
-    snapshot = @pool.with { |c| c.call('SMEMBERS', 'processes') }
-    @pool.with { |c| c.call('DEL', 'processes') }
-    begin
-      assert_equal 0, Wurk::WorkSet.new.size
-    ensure
-      @pool.with { |c| c.call('SADD', 'processes', *snapshot) } unless snapshot.empty?
-    end
+    assert_equal 0, work_set.size
   end
 
   def test_size_sums_busy_field_across_identities
     register!(@identity, busy: '4')
     register!(@other_id, busy: '3')
 
-    assert_operator Wurk::WorkSet.new.size, :>=, 7
+    assert_equal 7, work_set.size
   end
 
   def test_size_treats_missing_busy_field_as_zero
     register!(@identity)
 
-    assert_kind_of Integer, Wurk::WorkSet.new.size
+    assert_equal 0, work_set.size
   end
 
   # --- each --------------------------------------------------------------
@@ -68,7 +63,7 @@ class WorkSetTest < Wurk::Test::UnitCase
   # One test, one yielded shape: pid/tid/job.jid are the public contract.
   def test_each_yields_pid_tid_work_triples
     jid = push_work(@identity, 't1')
-    yielded = mine.first
+    yielded = work_set.first
 
     refute_nil yielded
     pid, tid, work = yielded
@@ -82,38 +77,30 @@ class WorkSetTest < Wurk::Test::UnitCase
   def test_each_skips_empty_work_hashes
     register!(@identity)
 
-    refute_includes(Wurk::WorkSet.new.map { |pid, _, _| pid }, @identity)
+    refute_includes(work_set.map { |pid, _, _| pid }, @identity)
   end
 
   def test_each_yields_sorted_by_run_at
     push_work(@identity, 't1', run_at: 1000.0)
     push_work(@identity, 't2', run_at: 500.0)
     push_work(@identity, 't3', run_at: 2000.0)
-    mine = Wurk::WorkSet.new.select { |pid, _, _| pid == @identity }.map { |_, _, w| w.run_at.to_f }
+    sequence = work_set.map { |_, _, w| w.run_at.to_f }
 
-    assert_equal mine.sort, mine
+    assert_equal sequence.sort, sequence
   end
 
   def test_each_returns_when_processes_set_empty
-    # Snapshot/restore so we don't blast the shared `processes` SET while
-    # parallel siblings hold registered identities in it.
-    snapshot = @pool.with { |c| c.call('SMEMBERS', 'processes') }
-    @pool.with { |c| c.call('DEL', 'processes') }
-    begin
-      count = 0
-      Wurk::WorkSet.new.each { |_, _, _| count += 1 }
+    count = 0
+    work_set.each { |_, _, _| count += 1 }
 
-      assert_equal 0, count
-    ensure
-      @pool.with { |c| c.call('SADD', 'processes', *snapshot) } unless snapshot.empty?
-    end
+    assert_equal 0, count
   end
 
   # --- find_work ---------------------------------------------------------
 
   def test_find_work_returns_matching_work
     jid = push_work(@identity, 't1')
-    work = Wurk::WorkSet.new.find_work(jid)
+    work = work_set.find_work(jid)
 
     refute_nil work
     assert_kind_of Wurk::Work, work
@@ -123,27 +110,27 @@ class WorkSetTest < Wurk::Test::UnitCase
   def test_find_work_returns_nil_for_unknown_jid
     push_work(@identity, 't1')
 
-    assert_nil Wurk::WorkSet.new.find_work('deadbeef' * 3)
+    assert_nil work_set.find_work('deadbeef' * 3)
   end
 
   def test_find_work_by_jid_is_aliased
     jid = push_work(@identity, 't1')
 
-    assert_equal jid, Wurk::WorkSet.new.find_work_by_jid(jid).job.jid
+    assert_equal jid, work_set.find_work_by_jid(jid).job.jid
   end
 
   # --- Wurk::Work --------------------------------------------------------
 
   def test_work_exposes_queue
     push_work(@identity, 't1', queue: 'mailers')
-    _, _, work = mine.first
+    _, _, work = work_set.first
 
     assert_equal 'mailers', work.queue
   end
 
   def test_work_run_at_returns_time
     push_work(@identity, 't1', run_at: 1_700_000_000.5)
-    _, _, work = mine.first
+    _, _, work = work_set.first
 
     assert_kind_of Time, work.run_at
     assert_in_delta 1_700_000_000.5, work.run_at.to_f, 0.01
@@ -151,7 +138,7 @@ class WorkSetTest < Wurk::Test::UnitCase
 
   def test_work_payload_returns_raw_json
     jid = push_work(@identity, 't1')
-    _, _, work = mine.first
+    _, _, work = work_set.first
 
     assert_kind_of String, work.payload
     assert_includes work.payload, jid
@@ -159,7 +146,7 @@ class WorkSetTest < Wurk::Test::UnitCase
 
   def test_work_job_returns_lazy_job_record
     push_work(@identity, 't1')
-    _, _, work = mine.first
+    _, _, work = work_set.first
 
     assert_kind_of Wurk::JobRecord, work.job
     assert_same work.job, work.job
@@ -185,14 +172,14 @@ class WorkSetTest < Wurk::Test::UnitCase
 
   private
 
-  def mine
-    Wurk::WorkSet.new.select { |pid, _, _| pid == @identity }
+  def work_set
+    Wurk::WorkSet.new(processes_key: @processes_key)
   end
 
   def register!(identity, fields = {})
     @identities << identity unless @identities.include?(identity)
     @pool.with do |c|
-      c.call('SADD', 'processes', identity)
+      c.call('SADD', @processes_key, identity)
       fields.each { |k, v| c.call('HSET', identity, k.to_s, v) }
     end
   end

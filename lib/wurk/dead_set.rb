@@ -10,18 +10,24 @@ module Wurk
   #
   # Spec: docs/target/sidekiq-free.md §19.5, §17.2, §31.8.
   class DeadSet < JobSet
-    def initialize
-      super('dead')
+    # Optional `name` allows tests to operate on a namespaced ZSET; production
+    # callers always use the default `'dead'` key (wire-compat with Sidekiq).
+    def initialize(name = 'dead')
+      super
     end
 
     # Two-axis trim: `ZREMRANGEBYSCORE` evicts entries older than
     # `dead_timeout_in_seconds`, `ZREMRANGEBYRANK 0 -dead_max_jobs` keeps
     # the count bounded. Pipelined — partial failure leaves at most one
     # axis applied (acceptable; trim is non-critical, runs again next kill).
-    def trim # rubocop:disable Naming/PredicateMethod
+    #
+    # `max_jobs:` / `timeout:` override the global config for this call.
+    # Lets parallel tests run trim with isolated limits without mutating
+    # `Wurk.configuration` (which is process-global and races across threads).
+    def trim(max_jobs: nil, timeout: nil) # rubocop:disable Naming/PredicateMethod
       config = Wurk.configuration
-      max_jobs = config[:dead_max_jobs] || 10_000
-      timeout = config[:dead_timeout_in_seconds] || (180 * 24 * 60 * 60)
+      max_jobs ||= config[:dead_max_jobs] || 10_000
+      timeout ||= config[:dead_timeout_in_seconds] || (180 * 24 * 60 * 60)
       cutoff = ::Process.clock_gettime(::Process::CLOCK_REALTIME) - timeout
 
       Wurk.redis do |conn|
@@ -37,7 +43,8 @@ module Wurk
     # true` (default) routes the kill through the death-handler chain;
     # UI-initiated kills pass false. `ex` is the originating exception (or
     # synthesized RuntimeError when callers don't have one) — death handlers
-    # receive `(job, ex)`.
+    # receive `(job, ex)`. `max_jobs:` / `timeout:` propagate to the auto-trim;
+    # see `#trim` for the rationale.
     def kill(message, opts = {}) # rubocop:disable Naming/PredicateMethod
       notify = opts.fetch(:notify_failure, true)
       do_trim = opts.fetch(:trim, true)
@@ -45,7 +52,7 @@ module Wurk
 
       now = ::Process.clock_gettime(::Process::CLOCK_REALTIME)
       Wurk.redis { |conn| conn.call('ZADD', @name, now.to_s, message) }
-      trim if do_trim
+      trim(max_jobs: opts[:max_jobs], timeout: opts[:timeout]) if do_trim
       fire_death_handlers(message, ex) if notify
       true
     end

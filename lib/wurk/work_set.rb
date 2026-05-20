@@ -11,6 +11,12 @@ module Wurk
   class WorkSet
     include Enumerable
 
+    # Optional `processes_key:` allows tests to operate on a namespaced
+    # SET; production callers always use `Keys::PROCESSES` (wire-compat).
+    def initialize(processes_key: Keys::PROCESSES)
+      @processes_key = processes_key
+    end
+
     # Pipelined `<identity>:work` HGETALL per known process. Yields
     # (process_id, thread_id, Work). Result sorted by `run_at` so the
     # oldest in-flight job appears first — dashboards rely on this order.
@@ -25,7 +31,7 @@ module Wurk
     # call is O(1) on the Redis side.
     def size
       Wurk.redis do |conn|
-        procs = conn.call('SMEMBERS', Keys::PROCESSES)
+        procs = conn.call('SMEMBERS', @processes_key)
         next 0 if procs.empty?
 
         conn.pipelined do |pipe|
@@ -56,7 +62,7 @@ module Wurk
 
     def fetch_work_hashes
       Wurk.redis do |conn|
-        ids = conn.call('SMEMBERS', Keys::PROCESSES).sort
+        ids = conn.call('SMEMBERS', @processes_key).sort
         next [[], []] if ids.empty?
 
         works = conn.pipelined do |pipe|

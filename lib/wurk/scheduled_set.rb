@@ -9,8 +9,10 @@ module Wurk
   #
   # Spec: docs/target/sidekiq-free.md §19.5.
   class ScheduledSet < JobSet
-    def initialize
-      super('schedule')
+    # Optional `name` allows tests to operate on a namespaced ZSET; production
+    # callers always use the default `'schedule'` key (wire-compat with Sidekiq).
+    def initialize(name = 'schedule')
+      super
     end
   end
 end

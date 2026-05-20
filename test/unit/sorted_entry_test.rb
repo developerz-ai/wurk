@@ -5,28 +5,32 @@ require 'securerandom'
 
 # Drives Wurk::SortedEntry shape (score, id, at, error?) and the
 # parent-mutation paths (delete/reschedule/add_to_queue/retry/kill) via a
-# real RetrySet against real Redis. Per-test JIDs keep the shared `retry`
-# zset safe under across-file parallelism.
+# RetrySet against real Redis.
+#
+# Parallel safety: the parent RetrySet is namespaced as "retry-<pid>-<oid>"
+# so every entry mutation is isolated. `SortedEntry#kill` always writes to
+# the global `dead` ZSET (production code uses `DeadSet.new` directly); we
+# track those payloads in `@dead_members` and ZREM them in teardown.
 class SortedEntryTest < Wurk::Test::UnitCase
   parallelize_me!
 
   def setup
     super
-    @ns      = "#{Process.pid}-#{object_id}"
-    @parent  = Wurk::RetrySet.new
-    @pool    = Wurk.configuration.redis_pool
-    @members = []
-    @queues  = []
+    @ns           = "#{Process.pid}-#{object_id}"
+    @parent       = Wurk::RetrySet.new("retry-#{@ns}")
+    @pool         = Wurk.configuration.redis_pool
+    @dead_members = []
+    @queues       = []
   end
 
   def teardown
     @pool.with do |c|
-      @members.each { |m| c.call('ZREM', @parent.name, m) }
+      c.call('UNLINK', @parent.name)
       @queues.each do |q|
         c.call('DEL', "queue:#{q}")
         c.call('SREM', 'queues', q)
       end
-      c.call('ZREM', 'dead', *@members) unless @members.empty?
+      c.call('ZREM', 'dead', *@dead_members) unless @dead_members.empty?
     end
   ensure
     super
@@ -129,6 +133,7 @@ class SortedEntryTest < Wurk::Test::UnitCase
 
   def test_kill_removes_from_parent_and_adds_to_dead
     entry = add_entry
+    @dead_members << entry.value
 
     entry.kill
 
@@ -144,7 +149,6 @@ class SortedEntryTest < Wurk::Test::UnitCase
     item['jid'] = jid
     payload = Wurk.dump_json(item)
     @pool.with { |c| c.call('ZADD', @parent.name, score, payload) }
-    @members << payload
     Wurk::SortedEntry.new(@parent, score, payload)
   end
 

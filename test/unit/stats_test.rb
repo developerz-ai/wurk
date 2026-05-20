@@ -4,17 +4,26 @@ require_relative '../test_helper'
 require 'date'
 require 'securerandom'
 
-# Drives Wurk::Stats against real Redis. Stats reads global keys (stat:processed,
-# stat:failed, schedule/retry/dead zsets, processes set). We *don't* `parallelize_me!`
-# on this class because `reset` is globally destructive — across-file parallelism
-# can still interleave, but within-class serial keeps the blast radius contained.
+# Drives Wurk::Stats against real Redis. Stats reads global keys
+# (`stat:processed`, `stat:failed`, `schedule`/`retry`/`dead` ZSETs,
+# `processes` SET) — those names are wire-compat with Sidekiq and can't be
+# namespaced.
 #
-# For shared zsets/sets we add uniquely-named members and assert `>=` lower bounds;
-# for the global counters we read snapshots and assert deltas.
+# Parallel safety:
+#   * shared ZSETs/SETs — unique members + `>=` lower-bound asserts.
+#   * `stat:processed` / `stat:failed` — snapshot in setup, restore in
+#     teardown so reset tests don't pollute the baseline siblings read.
+#   * reset/`assert_equal 0` tests acquire `COUNTER_MUTEX` so a sibling
+#     INCRBY can't race in between the reset and the read.
 class StatsTest < Wurk::Test::UnitCase
   parallelize_me!
 
-  def setup
+  # Serializes the small set of tests that both write a known value and
+  # assert on it (reset, counter snapshots) — the mutex window is just the
+  # critical assertion, not the whole test.
+  COUNTER_MUTEX = Mutex.new
+
+  def setup # rubocop:disable Metrics/AbcSize
     super
     @ns         = "#{Process.pid}-#{object_id}"
     @queue      = "stats-q-#{@ns}"
@@ -23,6 +32,8 @@ class StatsTest < Wurk::Test::UnitCase
     @pool       = Wurk.configuration.redis_pool
     @added_identity = false
     @zset_members   = Hash.new { |h, k| h[k] = [] }
+    @processed_before = @pool.with { |c| c.call('GET', 'stat:processed') }
+    @failed_before    = @pool.with { |c| c.call('GET', 'stat:failed') }
   end
 
   def teardown
@@ -34,6 +45,8 @@ class StatsTest < Wurk::Test::UnitCase
         conn.call('SREM', 'processes', @identity)
         conn.call('DEL', @identity, "#{@identity}:work")
       end
+      restore_counter(conn, 'stat:processed', @processed_before)
+      restore_counter(conn, 'stat:failed',    @failed_before)
     end
   ensure
     super
@@ -46,17 +59,21 @@ class StatsTest < Wurk::Test::UnitCase
   end
 
   def test_processed_reflects_redis_value
-    base = Wurk::Stats.new.processed
-    @pool.with { |c| c.call('INCRBY', 'stat:processed', 7) }
+    COUNTER_MUTEX.synchronize do
+      base = Wurk::Stats.new.processed
+      @pool.with { |c| c.call('INCRBY', 'stat:processed', 7) }
 
-    assert_operator Wurk::Stats.new.processed, :>=, base + 7
+      assert_operator Wurk::Stats.new.processed, :>=, base + 7
+    end
   end
 
   def test_failed_reflects_redis_value
-    base = Wurk::Stats.new.failed
-    @pool.with { |c| c.call('INCRBY', 'stat:failed', 3) }
+    COUNTER_MUTEX.synchronize do
+      base = Wurk::Stats.new.failed
+      @pool.with { |c| c.call('INCRBY', 'stat:failed', 3) }
 
-    assert_operator Wurk::Stats.new.failed, :>=, base + 3
+      assert_operator Wurk::Stats.new.failed, :>=, base + 3
+    end
   end
 
   def test_counters_are_fetched_eagerly
@@ -205,43 +222,51 @@ class StatsTest < Wurk::Test::UnitCase
   # --- reset -------------------------------------------------------------
 
   def test_reset_clears_both_counters_by_default
-    @pool.with do |c|
-      c.call('SET', 'stat:processed', 999)
-      c.call('SET', 'stat:failed', 999)
+    COUNTER_MUTEX.synchronize do
+      @pool.with do |c|
+        c.call('SET', 'stat:processed', 999)
+        c.call('SET', 'stat:failed', 999)
+      end
+      Wurk::Stats.new.reset
+
+      snap = Wurk::Stats.new
+
+      assert_equal 0, snap.processed
+      assert_equal 0, snap.failed
     end
-    Wurk::Stats.new.reset
-
-    snap = Wurk::Stats.new
-
-    assert_equal 0, snap.processed
-    assert_equal 0, snap.failed
   end
 
   def test_reset_with_explicit_stat_clears_only_that_one
-    @pool.with do |c|
-      c.call('SET', 'stat:processed', 50)
-      c.call('SET', 'stat:failed', 75)
+    COUNTER_MUTEX.synchronize do
+      @pool.with do |c|
+        c.call('SET', 'stat:processed', 50)
+        c.call('SET', 'stat:failed', 75)
+      end
+      Wurk::Stats.new.reset('processed')
+
+      snap = Wurk::Stats.new
+
+      assert_equal 0, snap.processed
+      assert_operator snap.failed, :>=, 75
     end
-    Wurk::Stats.new.reset('processed')
-
-    snap = Wurk::Stats.new
-
-    assert_equal 0, snap.processed
-    assert_operator snap.failed, :>=, 75
   end
 
   def test_reset_ignores_unknown_stats
-    @pool.with { |c| c.call('SET', 'stat:processed', 42) }
-    Wurk::Stats.new.reset('bogus')
+    COUNTER_MUTEX.synchronize do
+      @pool.with { |c| c.call('SET', 'stat:processed', 42) }
+      Wurk::Stats.new.reset('bogus')
 
-    assert_operator Wurk::Stats.new.processed, :>=, 42
+      assert_operator Wurk::Stats.new.processed, :>=, 42
+    end
   end
 
   def test_reset_accepts_symbol_stats
-    @pool.with { |c| c.call('SET', 'stat:failed', 11) }
-    Wurk::Stats.new.reset(:failed)
+    COUNTER_MUTEX.synchronize do
+      @pool.with { |c| c.call('SET', 'stat:failed', 11) }
+      Wurk::Stats.new.reset(:failed)
 
-    assert_equal 0, Wurk::Stats.new.failed
+      assert_equal 0, Wurk::Stats.new.failed
+    end
   end
 
   # --- History -----------------------------------------------------------
@@ -324,6 +349,10 @@ class StatsTest < Wurk::Test::UnitCase
   end
 
   private
+
+  def restore_counter(conn, key, prior)
+    prior.nil? ? conn.call('DEL', key) : conn.call('SET', key, prior)
+  end
 
   def push_my_job(enqueued_at: ms_now)
     payload = Wurk.dump_json(
