@@ -19,6 +19,7 @@ Sidekiq::JobLogger   = Wurk::JobLogger
 Sidekiq::JobRecord   = Wurk::JobRecord
 Sidekiq::JobRetry    = Wurk::JobRetry
 Sidekiq::Keys        = Wurk::Keys
+Sidekiq::Launcher    = Wurk::Launcher
 Sidekiq::Limiter     = Wurk::Limiter
 Sidekiq::Logger      = Wurk::Logger
 Sidekiq::Manager     = Wurk::Manager
