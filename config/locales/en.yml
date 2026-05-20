@@ -1,0 +1,15 @@
+en:
+  wurk:
+    dashboard:
+      title: "Wurk"
+    nav:
+      overview: "Overview"
+      queues: "Queues"
+      retries: "Retries"
+      scheduled: "Scheduled"
+      dead: "Dead"
+      processes: "Processes"
+      batches: "Batches"
+      limiters: "Limiters"
+      cron: "Cron"
+      metrics: "Metrics"

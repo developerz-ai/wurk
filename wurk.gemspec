@@ -1,0 +1,43 @@
+# frozen_string_literal: true
+
+require_relative "lib/wurk/version"
+
+Gem::Specification.new do |spec|
+  spec.name        = "wurk"
+  spec.version     = Wurk::VERSION
+  spec.authors     = ["sebi"]
+  spec.email       = ["gore.sebyx@yahoo.com"]
+
+  spec.summary     = "100% drop-in replacement for Sidekiq + Sidekiq Pro + Sidekiq Enterprise. Free. Faster."
+  spec.description = "Wire-compatible Ruby background job processor: same Redis schema, same job JSON, same Ruby DSL. Pro + Enterprise feature parity in the same gem, no license check. Fork-based real parallelism. Mountable Rails engine with a precompiled React dashboard."
+  spec.homepage    = "https://github.com/developerz-ai/wurk"
+  spec.license     = "MIT"
+
+  spec.required_ruby_version = ">= 3.2.0"
+
+  spec.metadata["homepage_uri"]      = spec.homepage
+  spec.metadata["source_code_uri"]   = spec.homepage
+  spec.metadata["changelog_uri"]     = "#{spec.homepage}/blob/main/CHANGELOG.md"
+  spec.metadata["bug_tracker_uri"]   = "#{spec.homepage}/issues"
+  spec.metadata["rubygems_mfa_required"] = "true"
+
+  spec.files = Dir[
+    "lib/**/*.rb",
+    "app/**/*",
+    "config/**/*",
+    "exe/*",
+    "vendor/assets/**/*",
+    "README.md",
+    "CHANGELOG.md",
+    "LICENSE"
+  ]
+
+  spec.bindir      = "exe"
+  spec.executables = ["wurk"]
+  spec.require_paths = ["lib"]
+
+  spec.add_dependency "redis-client", ">= 0.22"
+  spec.add_dependency "connection_pool", ">= 2.4"
+  spec.add_dependency "rack", ">= 2.2"
+  spec.add_dependency "concurrent-ruby", ">= 1.2"
+end

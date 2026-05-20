@@ -1,0 +1,4 @@
+# Pin the upstream Sidekiq SHA that the parity tests were lifted from.
+# Bump this only after reviewing the diff and re-running the parity suite.
+sha: TBD
+date: TBD

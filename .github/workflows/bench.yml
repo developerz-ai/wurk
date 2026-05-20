@@ -1,0 +1,34 @@
+name: bench
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+jobs:
+  bench:
+    runs-on: blacksmith-8vcpu-ubuntu-2404
+    services:
+      redis:
+        image: redis:7.4
+        ports: ["6379:6379"]
+        options: >-
+          --health-cmd "redis-cli ping"
+          --health-interval 5s
+    env:
+      REDIS_URL: redis://localhost:6379/0
+    steps:
+      - uses: actions/checkout@v4
+      - uses: useblacksmith/setup-ruby@v1
+        with:
+          ruby-version: "3.3"
+          bundler-cache: true
+      - name: run benches
+        run: bundle exec rake bench | tee bench-results.txt
+      - uses: actions/upload-artifact@v4
+        with:
+          name: bench-results
+          path: bench-results.txt
+      # TODO: a bot job that diffs against main and comments deltas;
+      # > 5% regression on enqueue / fetch+execute / bulk / swarm boot / memory
+      # flags the PR. See CLAUDE.md.

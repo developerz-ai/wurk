@@ -1,0 +1,29 @@
+AllCops:
+  TargetRubyVersion: 3.2
+  NewCops: enable
+  Exclude:
+    - "test/dummy/db/**/*"
+    - "test/dummy/tmp/**/*"
+    - "test/dummy/log/**/*"
+    - "vendor/**/*"
+    - "frontend/**/*"
+
+require:
+  - rubocop-minitest
+  - rubocop-rake
+
+# Wurk house style: short lines, no nesting drama. Bend a few defaults.
+Layout/LineLength:
+  Max: 120
+
+Style/Documentation:
+  Enabled: false
+
+Style/FrozenStringLiteralComment:
+  EnforcedStyle: always
+
+Metrics/MethodLength:
+  Max: 30
+
+Metrics/ClassLength:
+  Max: 200

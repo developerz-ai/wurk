@@ -1,0 +1,48 @@
+name: test
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  test:
+    runs-on: blacksmith-4vcpu-ubuntu-2404
+    strategy:
+      fail-fast: false
+      matrix:
+        ruby: ["3.2", "3.3", "3.4"]
+        rails: ["7.1", "7.2", "8.0"]
+        redis: ["7.0", "7.2", "7.4"]
+    services:
+      redis:
+        image: redis:${{ matrix.redis }}
+        ports: ["6379:6379"]
+        options: >-
+          --health-cmd "redis-cli ping"
+          --health-interval 5s
+          --health-timeout 3s
+          --health-retries 5
+    env:
+      BUNDLE_GEMFILE: ${{ github.workspace }}/Gemfile
+      RAILS_VERSION: ${{ matrix.rails }}
+      REDIS_URL: redis://localhost:6379/0
+    steps:
+      - uses: actions/checkout@v4
+      - uses: useblacksmith/setup-ruby@v1
+        with:
+          ruby-version: ${{ matrix.ruby }}
+          bundler-cache: true
+      - name: dummy app setup
+        run: |
+          cd test/dummy
+          bundle install
+          bin/rails db:prepare
+      - name: rake test
+        run: bundle exec rake test
+      - name: rake test:parity
+        run: bundle exec rake test:parity
+      - name: coverage gate
+        env:
+          COVERAGE: "1"
+        run: bundle exec rake test:coverage

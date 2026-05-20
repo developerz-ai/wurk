@@ -1,0 +1,21 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+cd "$(dirname "$0")/.."
+
+echo "==> bundle install"
+bundle check >/dev/null 2>&1 || bundle install
+
+if [ -d frontend ]; then
+  echo "==> frontend deps"
+  (cd frontend && npm ci)
+fi
+
+echo "==> dummy app setup"
+(
+  cd test/dummy
+  bundle check >/dev/null 2>&1 || bundle install
+  bin/rails db:prepare
+)
+
+echo "==> ready. try: bin/rake test"

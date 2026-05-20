@@ -1,0 +1,13 @@
+#!/usr/bin/env ruby
+# frozen_string_literal: true
+
+# Standalone runner. Does NOT load the Rails engine.
+# Usage: `exe/wurk -C config/wurk.yml`
+
+$LOAD_PATH.unshift(File.expand_path("../lib", __dir__))
+
+require "wurk"
+
+# TODO: parse CLI flags (-C config, -q queue, -c concurrency, -e env),
+# load config, boot the swarm, install signal handlers, supervise.
+puts "wurk #{Wurk::VERSION} — standalone runner (skeleton; implementation pending)"

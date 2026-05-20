@@ -1,0 +1,32 @@
+*.gem
+*.rbc
+.bundle/
+.yardoc
+Gemfile.lock
+pkg/
+tmp/
+log/
+coverage/
+.idea/
+.vscode/
+.DS_Store
+
+# Dummy app — never ship in the gem, never commit generated state
+test/dummy/log/*
+test/dummy/tmp/*
+test/dummy/storage/*
+test/dummy/db/*.sqlite3
+test/dummy/db/*.sqlite3-journal
+test/dummy/.bundle/
+test/dummy/Gemfile.lock
+
+# Frontend sources are gitignored from the gem file list (see gemspec),
+# but the source itself IS committed to the repo.
+frontend/node_modules/
+frontend/dist/
+frontend/.vite/
+frontend/npm-debug.log*
+
+# Precompiled assets are built at release time; do not commit the build output.
+vendor/assets/dashboard/*
+!vendor/assets/dashboard/.keep
