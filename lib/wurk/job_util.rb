@@ -60,7 +60,23 @@ module Wurk
     def valid_class?(klass) = klass.is_a?(Class) || klass.is_a?(String)
     def valid_at?(item) = !item.key?('at') || item['at'].is_a?(Numeric)
     def valid_tags?(item) = !item.key?('tags') || item['tags'].is_a?(Array)
-    def valid_retry_for?(item) = !item.key?('retry_for') || item['retry_for'].to_i <= RETRY_FOR_MAX
+    def valid_retry_for?(item)
+      return true unless item.key?('retry_for')
+
+      value = item['retry_for']
+      parsed = numeric_retry_for(value)
+      return false if parsed.nil?
+
+      parsed <= RETRY_FOR_MAX
+    end
+
+    def numeric_retry_for(value)
+      case value
+      when Integer then value
+      when Numeric then value.to_i
+      when String then (Integer(value, 10) if value.match?(/\A-?\d+\z/))
+      end
+    end
 
     def class_defaults_for(job_class)
       respondable_class?(job_class) ? job_class.get_sidekiq_options : Wurk.default_job_options
@@ -86,7 +102,7 @@ module Wurk
     def finalize(normalized)
       TRANSIENT_ATTRIBUTES.each { |k| normalized.delete(k) }
       normalized['jid'] ||= SecureRandom.hex(12)
-      normalized['retry_for'] = normalized['retry_for'].to_i if normalized.key?('retry_for')
+      normalized['retry_for'] = numeric_retry_for(normalized['retry_for']) if normalized.key?('retry_for')
       normalized['created_at'] ||= now_in_millis
       normalized
     end

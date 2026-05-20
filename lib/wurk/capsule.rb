@@ -83,8 +83,14 @@ module Wurk
     private
 
     def parse_queue_entry(entry)
-      qname, weight = entry.to_s.split(',', 2)
-      weight = weight.nil? ? 0 : Integer(weight)
+      qname, weight_str = entry.to_s.split(',', 2)
+      qname = qname.to_s.strip
+      raise ArgumentError, "queue name cannot be empty: `#{entry}`" if qname.empty?
+      return [qname, 0] if weight_str.nil?
+
+      weight = Integer(weight_str)
+      raise ArgumentError, "queue weight must be > 0: `#{entry}`" if weight <= 0
+
       [qname, weight]
     end
 
@@ -102,7 +108,7 @@ module Wurk
     def expand_by_weight(parsed, mode)
       return parsed.map(&:first) if %i[strict random].include?(mode)
 
-      parsed.flat_map { |q, w| [q] * [w, 1].max }
+      parsed.flat_map { |q, w| [q] * w }
     end
 
     def build_pool(size:, name:)

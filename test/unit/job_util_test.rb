@@ -4,12 +4,18 @@ require_relative '../test_helper'
 require 'date'
 require 'stringio'
 
+module WurkGlobalStateLock
+  # One process-wide mutex serializing every test that mutates Wurk's
+  # process-global state (`@default_job_options`, `@strict_args_mode`,
+  # `@testing_mode`, `@server`). Without this, parallel classes holding
+  # separate locks could interleave and corrupt shared state.
+  MUTEX = Mutex.new
+end
+
 class JobUtilTest < Wurk::Test::UnitCase
   parallelize_me!
 
-  # Serializes tests that mutate `Wurk.strict_args_mode` / `Wurk.default_job_options`,
-  # both of which are process-global.
-  STRICT_MUTEX = Mutex.new
+  STRICT_MUTEX = WurkGlobalStateLock::MUTEX
 
   Host = Struct.new(:placeholder) do
     include Wurk::JobUtil
@@ -61,6 +67,16 @@ class JobUtilTest < Wurk::Test::UnitCase
   def test_validate_caps_retry_for_at_one_billion
     over = { 'class' => 'X', 'args' => [], 'retry_for' => Wurk::JobUtil::RETRY_FOR_MAX + 1 }
     assert_raises(ArgumentError) { @host.validate(over) }
+  end
+
+  def test_validate_rejects_non_numeric_retry_for
+    bad = { 'class' => 'X', 'args' => [], 'retry_for' => 'abc' }
+    assert_raises(ArgumentError) { @host.validate(bad) }
+  end
+
+  def test_validate_rejects_garbage_retry_for_object
+    bad = { 'class' => 'X', 'args' => [], 'retry_for' => Object.new }
+    assert_raises(ArgumentError) { @host.validate(bad) }
   end
 
   def test_validate_accepts_valid_item
@@ -257,7 +273,7 @@ end
 class WurkTopLevelTest < Wurk::Test::UnitCase
   parallelize_me!
 
-  STATE_MUTEX = Mutex.new
+  STATE_MUTEX = WurkGlobalStateLock::MUTEX
 
   def test_shutdown_is_an_interrupt
     assert_operator Wurk::Shutdown, :<, Interrupt

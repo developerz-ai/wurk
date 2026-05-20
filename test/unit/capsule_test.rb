@@ -90,6 +90,17 @@ class CapsuleTest < Wurk::Test::UnitCase
     assert_raises(ArgumentError) { @capsule.queues = ['high,foo'] }
   end
 
+  def test_queues_setter_raises_on_blank_queue_name
+    assert_raises(ArgumentError) { @capsule.queues = [''] }
+    assert_raises(ArgumentError) { @capsule.queues = ['  '] }
+    assert_raises(ArgumentError) { @capsule.queues = [',2'] }
+  end
+
+  def test_queues_setter_raises_on_zero_or_negative_explicit_weight
+    assert_raises(ArgumentError) { @capsule.queues = ['high,0'] }
+    assert_raises(ArgumentError) { @capsule.queues = ['high,-1'] }
+  end
+
   # --- concurrency setter ------------------------------------------------
 
   def test_concurrency_is_writable
