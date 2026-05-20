@@ -2,21 +2,27 @@
 
 require_relative '../test_helper'
 
-# Helpers shared between LoggerTest (parallel-safe) and LoggerEnvTest (serial).
+# Helpers shared between LoggerTest and LoggerEnvTest. ENV mutations are
+# serialized via ENV_MUTEX so the env-touching class can still opt into the
+# parallel runner without cross-test interference.
 module LoggerTestHelpers
   private
+
+  ENV_MUTEX = Mutex.new
 
   def format_with(formatter, severity, message)
     formatter.call(severity, Time.utc(2026, 1, 2, 3, 4, 5), nil, message)
   end
 
   def with_env(pairs)
-    old = pairs.transform_values { |_| nil }
-    pairs.each_key { |k| old[k] = ENV.fetch(k, nil) }
-    pairs.each { |k, v| ENV[k] = v }
-    yield
-  ensure
-    old.each { |k, v| ENV[k] = v }
+    ENV_MUTEX.synchronize do
+      old = pairs.transform_values { |_| nil }
+      pairs.each_key { |k| old[k] = ENV.fetch(k, nil) }
+      pairs.each { |k, v| ENV[k] = v }
+      yield
+    ensure
+      old.each { |k, v| ENV[k] = v }
+    end
   end
 end
 
@@ -115,9 +121,12 @@ class LoggerTest < Wurk::Test::UnitCase
   end
 end
 
-# Serial: mutates process-global ENV via with_env. No parallelize_me!.
+# Mutates process-global ENV via with_env, which is mutex-guarded so the class
+# can still run under the parallel runner.
 class LoggerEnvTest < Wurk::Test::UnitCase
   include LoggerTestHelpers
+
+  parallelize_me!
 
   def teardown
     Thread.current[Wurk::Context::KEY] = nil
