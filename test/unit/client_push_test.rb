@@ -293,10 +293,14 @@ class ClientPushTest < Wurk::Test::UnitCase
 
   # redis-client returns ZRANGE WITHSCORES as [[member, score], ...].
   # We parse each member and keep only the ones targeting this test's class.
+  # Sibling parallel tests (e.g. StatsTest) write non-JSON probe members
+  # to the shared `schedule` zset; skip those rather than blow up.
   def mine_in_schedule
     @pool.with { |c| c.call('ZRANGE', 'schedule', 0, -1, 'WITHSCORES') }.filter_map do |member, score|
       payload = JSON.parse(member)
       [payload, score] if payload['class'] == @class_name
+    rescue JSON::ParserError
+      next
     end
   end
 
