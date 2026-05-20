@@ -19,11 +19,13 @@ class ProcessorTest < Wurk::Test::UnitCase
     @capsule.fetcher = Wurk::Fetcher::Reliable.new(@capsule)
     @pool = @capsule.redis_pool
     @processor = Wurk::Processor.new(@capsule)
+    @dead_members = []
   end
 
   def teardown
     @pool.with do |conn|
-      conn.call('DEL', @public_queue, private_queue, Wurk::Keys::DEAD)
+      conn.call('DEL', @public_queue, private_queue)
+      conn.call('ZREM', Wurk::Keys::DEAD, *@dead_members) unless @dead_members.empty?
     end
   ensure
     Wurk::Processor::PROCESSED.reset
@@ -105,18 +107,22 @@ class ProcessorTest < Wurk::Test::UnitCase
   # --- malformed JSON --------------------------------------------------
 
   def test_process_one_routes_unparseable_payload_to_dead_set
-    @pool.with { |c| c.call('LPUSH', @public_queue, '{not-json') }
+    payload = "{not-json-#{@queue_name}"
+    @dead_members << payload
+    @pool.with { |c| c.call('LPUSH', @public_queue, payload) }
 
     @processor.process_one
 
     members = @pool.with { |c| c.call('ZRANGE', Wurk::Keys::DEAD, 0, -1) }
 
-    assert_includes members, '{not-json'
+    assert_includes members, payload
     assert_equal 0, llen(private_queue), 'parse-fail must still ack'
   end
 
   def test_process_one_does_not_raise_on_parse_fail
-    @pool.with { |c| c.call('LPUSH', @public_queue, 'definitely-not-json') }
+    payload = "definitely-not-json-#{@queue_name}"
+    @dead_members << payload
+    @pool.with { |c| c.call('LPUSH', @public_queue, payload) }
 
     @processor.process_one
 
