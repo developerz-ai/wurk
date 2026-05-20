@@ -32,8 +32,13 @@ class StatsTest < Wurk::Test::UnitCase
     @pool       = Wurk.configuration.redis_pool
     @added_identity = false
     @zset_members   = Hash.new { |h, k| h[k] = [] }
-    @processed_before = @pool.with { |c| c.call('GET', 'stat:processed') }
-    @failed_before    = @pool.with { |c| c.call('GET', 'stat:failed') }
+    # Snapshot under the same mutex used by reset tests so a sibling reset
+    # can't race the GET (read 0 mid-reset → restore the wrong baseline at
+    # teardown).
+    COUNTER_MUTEX.synchronize do
+      @processed_before = @pool.with { |c| c.call('GET', 'stat:processed') }
+      @failed_before    = @pool.with { |c| c.call('GET', 'stat:failed') }
+    end
   end
 
   def teardown
@@ -45,8 +50,12 @@ class StatsTest < Wurk::Test::UnitCase
         conn.call('SREM', 'processes', @identity)
         conn.call('DEL', @identity, "#{@identity}:work")
       end
-      restore_counter(conn, 'stat:processed', @processed_before)
-      restore_counter(conn, 'stat:failed',    @failed_before)
+      # Restore under the same mutex used by reset tests so the SET can't
+      # land between a reset's reset-to-0 and its assert_equal 0.
+      COUNTER_MUTEX.synchronize do
+        restore_counter(conn, 'stat:processed', @processed_before)
+        restore_counter(conn, 'stat:failed',    @failed_before)
+      end
     end
   ensure
     super
