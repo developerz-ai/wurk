@@ -264,7 +264,7 @@ module Wurk
     end
 
     def default_logger
-      logger = ::Logger.new($stdout)
+      logger = Wurk::Logger.new($stdout)
       logger.level = ::Logger::INFO
       logger
     end

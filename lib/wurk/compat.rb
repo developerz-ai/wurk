@@ -10,9 +10,11 @@ end
 
 Sidekiq::Context     = Wurk::Context
 Sidekiq::IterableJob = Wurk::IterableJob
+Sidekiq::JobLogger   = Wurk::JobLogger
 Sidekiq::JobRecord   = Wurk::JobRecord
 Sidekiq::JobRetry    = Wurk::JobRetry
 Sidekiq::Keys        = Wurk::Keys
+Sidekiq::Logger      = Wurk::Logger
 Sidekiq::Middleware  = Wurk::Middleware
 Sidekiq::ServerMiddleware = Wurk::Middleware::ServerMiddleware
 Sidekiq::ClientMiddleware = Wurk::Middleware::ClientMiddleware
