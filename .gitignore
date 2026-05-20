@@ -10,6 +10,7 @@ coverage/
 .idea/
 .vscode/
 .DS_Store
+.claude-task-master/
 
 # Dummy app — never ship in the gem, never commit generated state
 test/dummy/log/*
