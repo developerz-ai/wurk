@@ -26,6 +26,7 @@ Sidekiq::ServerMiddleware = Wurk::Middleware::ServerMiddleware
 Sidekiq::ClientMiddleware = Wurk::Middleware::ClientMiddleware
 Sidekiq::Process     = Wurk::Process
 Sidekiq::ProcessSet  = Wurk::ProcessSet
+Sidekiq::Processor   = Wurk::Processor
 Sidekiq::Queue       = Wurk::Queue
 Sidekiq::RetrySet    = Wurk::RetrySet
 Sidekiq::ScheduledSet = Wurk::ScheduledSet
