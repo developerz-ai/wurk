@@ -45,15 +45,22 @@ class MiddlewareExpiryTest < Wurk::Test::UnitCase
     end
   end
 
+  # `Wurk::Metrics::Statsd.increment` is a process-global singleton method —
+  # serialize against every other test class that rewrites it (metrics_statsd,
+  # client_buffered, middleware_poison_pill).
   def with_statsd_recorder
-    real = Wurk::Metrics::Statsd.method(:increment)
-    Wurk::Metrics::Statsd.singleton_class.send(:define_method, :increment) do |metric, tags: nil|
-      StatsdRecorder.increment(metric, tags: tags)
+    Wurk::Test::STATSD_MUTEX.synchronize do
+      real = Wurk::Metrics::Statsd.method(:increment)
+      Wurk::Metrics::Statsd.singleton_class.send(:define_method, :increment) do |metric, tags: nil|
+        StatsdRecorder.increment(metric, tags: tags)
+      end
+      StatsdRecorder.reset!
+      begin
+        yield StatsdRecorder
+      ensure
+        Wurk::Metrics::Statsd.singleton_class.send(:define_method, :increment, real)
+      end
     end
-    StatsdRecorder.reset!
-    yield StatsdRecorder
-  ensure
-    Wurk::Metrics::Statsd.singleton_class.send(:define_method, :increment, real)
   end
 
   def build_middleware

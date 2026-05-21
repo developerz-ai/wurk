@@ -186,15 +186,21 @@ class ClientBufferedTest < Wurk::Test::UnitCase
 
   private
 
+  # Statsd singletons are process-global — serialize against every other test
+  # class that also rewrites `Wurk::Metrics::Statsd.increment`.
   def with_statsd_capture
-    calls = []
-    Wurk::Metrics::Statsd.singleton_class.alias_method(:__increment_real, :increment)
-    Wurk::Metrics::Statsd.define_singleton_method(:increment) { |metric, **| calls << metric }
-    yield
-    calls
-  ensure
-    Wurk::Metrics::Statsd.singleton_class.send(:alias_method, :increment, :__increment_real)
-    Wurk::Metrics::Statsd.singleton_class.send(:remove_method, :__increment_real)
+    Wurk::Test::STATSD_MUTEX.synchronize do
+      calls = []
+      Wurk::Metrics::Statsd.singleton_class.alias_method(:__increment_real, :increment)
+      Wurk::Metrics::Statsd.define_singleton_method(:increment) { |metric, **| calls << metric }
+      begin
+        yield
+        calls
+      ensure
+        Wurk::Metrics::Statsd.singleton_class.send(:alias_method, :increment, :__increment_real)
+        Wurk::Metrics::Statsd.singleton_class.send(:remove_method, :__increment_real)
+      end
+    end
   end
 
   def base_item(overrides = {})

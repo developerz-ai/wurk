@@ -30,6 +30,13 @@ require_relative "support/redis_namespace"
 
 module Wurk
   module Test
+    # Suite-wide mutex for tests that mutate process-global `Wurk::Metrics::Statsd`
+    # singletons (`.options`, the `increment` method itself) or
+    # `Wurk.configuration.dogstatsd`. A class-level mutex doesn't serialize
+    # across parallel test classes that touch the same globals — this one does.
+    # Pair with a `#run` override on each such class.
+    STATSD_MUTEX = Mutex.new
+
     # Base class for non-engine tests.
     class UnitCase < ::Minitest::Test
       include RedisNamespace

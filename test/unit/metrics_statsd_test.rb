@@ -7,17 +7,16 @@ require_relative '../test_helper'
 # Pro per-job `options` proc + `dd_rate` override, and acts as a clean
 # server middleware around `yield`.
 #
-# Mutates global Wurk.configuration.dogstatsd / Statsd.options, so the class
-# opts into the parallel runner per the project contract but holds a
-# class-level mutex around #run to serialize execution *within* the class.
-# Other test classes still run in parallel with this one.
+# Mutates global Wurk.configuration.dogstatsd / Statsd.options. The class opts
+# into the parallel runner per the project contract but holds the suite-wide
+# `Wurk::Test::STATSD_MUTEX` around #run — required because other test classes
+# (client_buffered, middleware_expiry, middleware_poison_pill) also rewrite
+# Statsd singletons, and a per-class mutex doesn't protect against them.
 class MetricsStatsdTest < Wurk::Test::UnitCase
   parallelize_me!
 
-  MUTEX = Mutex.new
-
   def run(*args, &)
-    MUTEX.synchronize { super }
+    Wurk::Test::STATSD_MUTEX.synchronize { super }
   end
 
   # In-memory client that records every call. Mirrors the surface

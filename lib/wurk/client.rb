@@ -193,9 +193,26 @@ module Wurk
       Array.new(count) { now + (rand * window) }
     end
 
+    # `eval_cached` recovers from `NOSCRIPT` on its own — but only when the
+    # EVALSHA is a top-level call. Inside this `pipelined` block the error
+    # surfaces from `call_pipelined` AFTER `eval_cached` has returned, so its
+    # internal rescue never sees it. We catch it here, eagerly upload every
+    # registered script on this connection (idempotent in Redis), and retry
+    # the pipeline exactly once. Outside of test boots and `SCRIPT FLUSH`
+    # this branch is dead code.
     def raw_push(payloads)
       pool.with do |conn|
-        conn.pipelined { |pipe| atomic_push(pipe, payloads) }
+        attempts = 0
+        begin
+          conn.pipelined { |pipe| atomic_push(pipe, payloads) }
+        rescue RedisClient::CommandError => e
+          raise unless e.message.to_s.start_with?('NOSCRIPT')
+          raise if attempts.positive?
+
+          attempts += 1
+          Wurk::Lua::Loader.script_load_all(conn)
+          retry
+        end
       end
     end
 
