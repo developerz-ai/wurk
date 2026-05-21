@@ -32,7 +32,8 @@ module Wurk
         shutdown: [],
         exit: [],
         heartbeat: [],
-        beat: []
+        beat: [],
+        leader: []
       },
       dead_max_jobs: 10_000,
       dead_timeout_in_seconds: 180 * 24 * 60 * 60,
@@ -42,7 +43,7 @@ module Wurk
       redis_idle_timeout: nil
     }.freeze
 
-    LIFECYCLE_EVENTS = %i[startup quiet shutdown exit heartbeat beat].freeze
+    LIFECYCLE_EVENTS = %i[startup quiet shutdown exit heartbeat beat leader].freeze
     DEFAULT_THREAD_PRIORITY = -1
 
     # Default error handler. Wraps the report in the thread-local
@@ -200,6 +201,20 @@ module Wurk
 
     def average_scheduled_poll_interval=(interval)
       @options[:average_scheduled_poll_interval] = interval
+    end
+
+    # --- Periodic (Cron) registration ------------------------------------
+
+    # Yields a Wurk::Cron::Manager so the host app can register periodic
+    # jobs at boot. Manager state is shared per-process so multiple
+    # `config.periodic` blocks accumulate (matches Sidekiq Ent §2.1).
+    #
+    # Spec: docs/target/sidekiq-ent.md §2.
+    def periodic
+      require_relative 'cron'
+      @periodic_manager ||= Wurk::Cron::Manager.new(self)
+      yield @periodic_manager if block_given?
+      @periodic_manager
     end
 
     # --- Lifecycle hooks --------------------------------------------------

@@ -19,7 +19,45 @@ module Sidekiq
   # classes under them — but `Sidekiq.pro?` / `Sidekiq.ent?` still return
   # `false` per docs/target/sidekiq-free.md §32 (Wurk advertises as free OSS).
   module Pro; end
-  module Enterprise; end
+
+  # Sidekiq Enterprise feature surface (`unique!`, `Crypto`, `Unique.locked?`).
+  # Wurk ships these free; the namespace exists for drop-in compat.
+  # Implementations live under `Wurk::*`; this module just delegates.
+  module Enterprise
+    class << self
+      # Installs the Wurk::Unique client+server middleware pair globally.
+      # Spec: docs/target/sidekiq-ent.md §3.1.
+      def unique!
+        Wurk::Unique.enable!
+      end
+
+      def unique?
+        Wurk::Unique.enabled?
+      end
+    end
+
+    # Wurk::Unique introspection: `Sidekiq::Enterprise::Unique.locked?(...)`.
+    # Spec §3.6.
+    module Unique
+      def self.locked?(*)
+        Wurk::Unique.locked?(*)
+      end
+    end
+
+    # AES-256-GCM args encryption. `Sidekiq::Enterprise::Crypto.enable(...)`
+    # delegates to `Wurk::Encryption.enable`. Spec: docs/target/sidekiq-ent.md §4.
+    module Crypto
+      class << self
+        def enable(active_version:, &)
+          Wurk::Encryption.enable(active_version: active_version, &)
+        end
+
+        def enabled?
+          Wurk::Encryption.enabled?
+        end
+      end
+    end
+  end
 
   BasicFetch       = Wurk::Fetcher::Reliable
   Batch            = Wurk::Batch
@@ -31,8 +69,11 @@ module Sidekiq
   Config           = Wurk::Configuration
   Context          = Wurk::Context
   Cron             = Wurk::Cron
+  Periodic         = Wurk::Cron
   DeadSet          = Wurk::DeadSet
+  Deploy           = Wurk::Deploy
   Embedded         = Wurk::Embedded
+  Encryption       = Wurk::Encryption
   IterableJob      = Wurk::IterableJob
   Job              = Wurk::Job
   JobLogger        = Wurk::JobLogger

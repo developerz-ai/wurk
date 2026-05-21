@@ -1,0 +1,95 @@
+# frozen_string_literal: true
+
+require_relative '../test_helper'
+
+class DeployTest < Wurk::Test::UnitCase
+  parallelize_me!
+
+  def setup
+    super
+    @suffix = "dep#{Process.pid}_#{object_id}"
+    @label = "deploy-#{@suffix}"
+    @at = ::Time.utc(2026, 5, 21, 14, 37, 12)
+  end
+
+  def teardown
+    Wurk.redis do |c|
+      c.call('DEL', "deploylock-#{@label}")
+      c.call('DEL', '20260521-marks')
+    end
+  ensure
+    super
+  end
+
+  def test_mark_writes_hash_field_at_iso8601_rounded_to_minute
+    iso = Wurk::Deploy.mark!(label: @label, at: @at)
+
+    assert_equal '2026-05-21T14:37:00Z', iso
+    val = Wurk.redis { |c| c.call('HGET', '20260521-marks', iso) }
+
+    assert_equal @label, val
+  end
+
+  def test_mark_sets_marks_ttl_to_90_days
+    Wurk::Deploy.mark!(label: @label, at: @at)
+
+    ttl = Wurk.redis { |c| c.call('TTL', '20260521-marks') }
+
+    assert_operator ttl, :>, Wurk::Deploy::MARK_TTL - 60
+    assert_operator ttl, :<=, Wurk::Deploy::MARK_TTL
+  end
+
+  def test_mark_acquires_per_label_lock_with_60s_ttl
+    Wurk::Deploy.mark!(label: @label, at: @at)
+
+    ttl = Wurk.redis { |c| c.call('TTL', "deploylock-#{@label}") }
+
+    assert_operator ttl, :>, 0
+    assert_operator ttl, :<=, Wurk::Deploy::LOCK_TTL
+  end
+
+  def test_mark_returns_nil_when_lock_already_held
+    first = Wurk::Deploy.mark!(label: @label, at: @at)
+    second = Wurk::Deploy.mark!(label: @label, at: @at)
+
+    refute_nil first
+    assert_nil second
+  end
+
+  def test_mark_with_blank_label_returns_nil_when_label_maker_fails
+    orig = Wurk::Deploy::LABEL_MAKER
+    Wurk::Deploy.send(:remove_const, :LABEL_MAKER)
+    Wurk::Deploy.const_set(:LABEL_MAKER, -> { raise 'no git' })
+
+    assert_nil Wurk::Deploy.mark!(label: nil, at: @at)
+  ensure
+    Wurk::Deploy.send(:remove_const, :LABEL_MAKER)
+    Wurk::Deploy.const_set(:LABEL_MAKER, orig)
+  end
+
+  def test_mark_rounds_seconds_off
+    iso = Wurk::Deploy.mark!(label: @label, at: ::Time.utc(2026, 5, 21, 14, 37, 59))
+
+    assert_equal '2026-05-21T14:37:00Z', iso
+  end
+
+  def test_fetch_returns_iso_to_label_hash
+    Wurk::Deploy.mark!(label: @label, at: @at)
+
+    marks = Wurk::Deploy.new.fetch(@at)
+
+    assert_equal({ '2026-05-21T14:37:00Z' => @label }, marks)
+  end
+
+  def test_fetch_empty_when_no_marks
+    assert_equal({}, Wurk::Deploy.new.fetch(@at))
+  end
+
+  def test_class_mark_delegates_to_instance
+    assert_kind_of String, Wurk::Deploy.mark!(label: @label, at: @at)
+  end
+
+  def test_sidekiq_deploy_alias_exists
+    assert_equal Wurk::Deploy, Sidekiq::Deploy
+  end
+end

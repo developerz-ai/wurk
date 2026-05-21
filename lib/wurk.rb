@@ -57,6 +57,8 @@ require_relative 'wurk/encryption'
 require_relative 'wurk/metrics'
 require_relative 'wurk/metrics/statsd'
 require_relative 'wurk/metrics/history'
+require_relative 'wurk/metrics/query'
+require_relative 'wurk/deploy'
 
 require 'json'
 
@@ -209,6 +211,13 @@ require_relative 'wurk/middleware/expiry'
 # Poison-pill detection — orphan recovery counter + dead set on threshold.
 # Spec: docs/target/sidekiq-pro.md §3.2.
 require_relative 'wurk/middleware/poison_pill'
+
+# Limiter server middleware: catches OverLimit, reschedules onto the same
+# queue with `Time.now + backoff` until `overrated` hits the reschedule cap.
+# Registered AFTER Batch::ServerMiddleware so a rescheduled OverLimit
+# unwinds back through the batch onion without ack'ing success.
+# Spec: docs/target/sidekiq-ent.md §1.4.
+Wurk.configuration.server_middleware.add(Wurk::Limiter::ServerMiddleware)
 
 # Pro Fast API: Lua-backed Queue#delete_job / #delete_by_class plus
 # SortedSet#scan { |JobRecord| … }. Mixed in via include/prepend on the

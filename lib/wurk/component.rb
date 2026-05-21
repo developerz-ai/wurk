@@ -68,6 +68,24 @@ module Wurk
       config.handle_exception(ex, ctx)
     end
 
+    # --- cluster leadership --------------------------------------------
+
+    # True iff this process currently holds the cluster `dear-leader` lock.
+    # Per spec, the check is performed at call time (Wurk does not cache);
+    # callers must not poll faster than the 60s follower cadence. Returns
+    # false unconditionally when `WURK_LEADER=false` is set on the process
+    # (opt-out hot-standby). Any Redis error is swallowed → false, so a
+    # transient partition can't propagate as an exception into user code.
+    #
+    # Spec: docs/target/sidekiq-ent.md §6.1.
+    def leader?
+      return false if ENV[Wurk::Leader::OPT_OUT_ENV].to_s.downcase == 'false'
+
+      redis { |c| c.call('GET', Wurk::Leader::DEFAULT_KEY) } == identity
+    rescue StandardError
+      false
+    end
+
     # --- thread boundaries ---------------------------------------------
 
     # Wraps a block at a thread boundary: any unhandled exception is reported
