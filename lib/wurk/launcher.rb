@@ -3,11 +3,14 @@
 require_relative 'component'
 require_relative 'manager'
 require_relative 'processor'
+require_relative 'heartbeat'
 require_relative 'keys'
 
 module Wurk
   # Top-level supervisor inside each worker process. Owns the Manager pool
   # (one per Capsule), the scheduler poller, and the heartbeat thread.
+  # The heartbeat WIRE lives in Wurk::Heartbeat — Launcher owns lifecycle,
+  # signal dispatch, and stats rollup; Heartbeat owns the Redis writes.
   #
   # Lifecycle:
   #   * `run(async_beat:)` — freeze config, start heartbeat, poller, managers.
@@ -19,13 +22,6 @@ module Wurk
   # into the global + per-day Redis strings every beat. Per-day keys carry
   # `STATS_TTL` so old days expire automatically.
   #
-  # Heartbeat writes the `<identity>` HASH (info/concurrency/busy/beat/quiet/
-  # rss/rtt_us, EXPIRE 60s), adds identity to the `processes` SET, mirrors
-  # the in-process `WORK_STATE` into the `<identity>:work` HASH, and drains
-  # any signals queued at `<identity>-signals`. First successful beat (and
-  # any beat after a network partition) fires `:heartbeat`; every beat
-  # fires `:beat`.
-  #
   # Spec: docs/target/sidekiq-free.md §12 (Sidekiq::Launcher).
   class Launcher
     include Component
@@ -35,9 +31,9 @@ module Wurk
     # without manual cleanup.
     STATS_TTL = 5 * 365 * 24 * 60 * 60
 
-    # Heartbeat cadence in seconds. Key TTL on `<identity>` is 60s — a
-    # process is treated as dead after ~6 missed beats.
-    BEAT_PAUSE = 10
+    # Re-exported for test/third-party callers that read it off Launcher
+    # (Sidekiq's drop-in surface). The single source of truth is Heartbeat.
+    BEAT_PAUSE = Heartbeat::BEAT_PAUSE
 
     attr_accessor :managers, :poller
 
@@ -47,8 +43,8 @@ module Wurk
       @done = false
       @managers = config.capsules.values.map { |cap| Manager.new(cap) }
       @poller = build_poller
-      @first_heartbeat = true
       @started_at = nil
+      @heartbeat = nil
       @heartbeat_thread = nil
     end
 
@@ -138,104 +134,34 @@ module Wurk
       end
     end
 
-    # The actual `<identity>` write. Side-effects:
-    #   * SADD `processes` (membership for dashboards).
-    #   * HSET `<identity>` info/concurrency/busy/beat/quiet/rss/rtt_us.
-    #   * EXPIRE `<identity>` 60s.
-    #   * UNLINK + repopulate `<identity>:work` from WORK_STATE (so a lost
-    #     beat momentarily empties the work hash; ProcessSet#cleanup
-    #     compensates).
-    #   * Drain `<identity>-signals` (LPOP × BEAT_PAUSE) and dispatch any
-    #     TSTP/TERM the dashboard queued.
+    # Pipelined identity write via Heartbeat, then dispatch any signals
+    # the dashboard queued at `<identity>-signals`. Lazily builds the
+    # Heartbeat the first time we beat so callers that bypass `run`
+    # (embedded mode, tests) still work.
     def beat
-      sigs = nil
-      rtt_us = 0
-      begin
-        sigs, rtt_us = beat_pipeline
-        if @first_heartbeat
-          @first_heartbeat = false
-          fire_event(:heartbeat)
-        end
-        fire_event(:beat, oneshot: false)
-      rescue StandardError => e
-        # Partition: arm :heartbeat for the next successful beat so a
-        # recovery is observable.
-        @first_heartbeat = true
-        handle_exception(e, { context: 'heartbeat' })
-        return
-      end
-
-      sigs&.compact&.each { |sig| dispatch_signal(sig) }
-      rtt_us
+      ensure_heartbeat
+      sigs = @heartbeat.beat!
+      sigs&.each { |sig| dispatch_signal(sig) }
     end
 
-    # Runs the pipelined beat + signal drain. Splits into its own method so
-    # the rtt_us measurement scopes only the network call. Returns the
-    # signals tail and the elapsed microseconds.
-    def beat_pipeline
-      work_snapshot = Processor::WORK_STATE.dup
-      lead = 4 + (work_snapshot.empty? ? 0 : 2) # SADD,HSET,EXPIRE,UNLINK[,HSET,EXPIRE]
+    def ensure_heartbeat
+      return if @heartbeat
 
-      t0 = ::Process.clock_gettime(::Process::CLOCK_MONOTONIC, :microsecond)
-      results = @config.redis { |conn| conn.pipelined { |pipe| write_beat(pipe, work_snapshot) } }
-      rtt_us = ::Process.clock_gettime(::Process::CLOCK_MONOTONIC, :microsecond) - t0
-      [results[lead, BEAT_PAUSE] || [], rtt_us]
+      @heartbeat = Heartbeat.new(
+        identity: identity,
+        config: @config,
+        started_at: @started_at || Time.now.to_f,
+        embedded: @embedded,
+        quiet: -> { @done }
+      )
     end
 
-    # All pipelined writes that compose one beat. Order matters: the
-    # extract_signals math depends on the leading-writes count.
-    def write_beat(pipe, work_snapshot)
-      pipe.call('SADD', Keys::PROCESSES, identity)
-      pipe.call('HSET', identity, *beat_hash_args(work_snapshot.size))
-      pipe.call('EXPIRE', identity, 60)
-      write_work_hash(pipe, work_snapshot)
-      drain_signals(pipe)
-    end
-
-    def beat_hash_args(busy)
-      [
-        'info', build_info_json,
-        'concurrency', total_concurrency.to_s,
-        'busy', busy.to_s,
-        'beat', Time.now.to_f.to_s,
-        'quiet', @done.to_s,
-        'rss', memory_usage_kb.to_s,
-        'rtt_us', '0'
-      ]
-    end
-
-    # UNLINK the work hash and (if any in-flight) repopulate. UNLINK is
-    # non-blocking; HSET with the whole field set is atomic enough for
-    # readers since pipelining preserves order on a single connection.
-    def write_work_hash(pipe, work_snapshot)
-      work_key = "#{identity}:work"
-      pipe.call('UNLINK', work_key)
-      return if work_snapshot.empty?
-
-      args = work_snapshot.flat_map { |tid, hash| [tid.to_s, Wurk.dump_json(hash)] }
-      pipe.call('HSET', work_key, *args)
-      pipe.call('EXPIRE', work_key, 60)
-    end
-
-    # LPOP up to BEAT_PAUSE entries (one per second of cadence) so a flood
-    # of queued signals can't stall the beat. Anything older drains on the
-    # next beat.
-    def drain_signals(pipe)
-      BEAT_PAUSE.times { pipe.call('LPOP', "#{identity}-signals") }
-    end
-
-    # Erase the live-process footprint. Best-effort: if Redis is down on
-    # shutdown the next process boot's cleanup will prune us anyway.
+    # Erase the live-process footprint. flush_stats first so we don't drop
+    # the final batch of counters; then Heartbeat#stop! removes us from the
+    # `processes` SET and UNLINK-s the identity + work hashes.
     def clear_heartbeat
       flush_stats
-      @config.redis do |conn|
-        conn.pipelined do |pipe|
-          pipe.call('SREM', Keys::PROCESSES, identity)
-          pipe.call('UNLINK', identity, "#{identity}:work")
-        end
-      end
-    rescue StandardError
-      nil
+      @heartbeat&.stop!
     end
 
     # Heartbeat thread loop. `safe_thread` already wraps exceptions; we
@@ -255,57 +181,6 @@ module Wurk
       when 'TERM' then stop
       else
         logger.warn { "Unknown signal in #{identity}-signals: #{sig.inspect}" }
-      end
-    end
-
-    def total_concurrency
-      @config.capsules.each_value.sum(&:concurrency)
-    end
-
-    # Linux: /proc/self/statm[1] is resident pages; multiply by 4 for KB.
-    # Other platforms fall through to `ps`. Zero on failure — non-fatal,
-    # the dashboard just shows "—".
-    def memory_usage_kb
-      if ::File.exist?('/proc/self/statm')
-        ::File.read('/proc/self/statm').split[1].to_i * 4
-      else
-        `ps -o rss= -p #{::Process.pid}`.to_i
-      end
-    rescue StandardError
-      0
-    end
-
-    # JSON payload stored at `<identity>` HASH info field. Read by
-    # ProcessSet#each + the dashboard's process list.
-    def build_info_json
-      Wurk.dump_json(info_hash)
-    end
-
-    def info_hash
-      caps = @config.capsules.each_value
-      {
-        'hostname' => hostname,
-        'started_at' => @started_at || Time.now.to_f,
-        'pid' => ::Process.pid,
-        'tag' => @config[:tag] || default_tag,
-        'concurrency' => total_concurrency,
-        'capsules' => capsules_info,
-        'queues' => caps.flat_map(&:queues).uniq,
-        'weights' => caps.map(&:weights),
-        'labels' => Array(@config[:labels]),
-        'identity' => identity,
-        'version' => Wurk::VERSION,
-        'embedded' => @embedded
-      }
-    end
-
-    def capsules_info
-      @config.capsules.transform_values do |cap|
-        {
-          'concurrency' => cap.concurrency,
-          'mode' => cap.mode.to_s,
-          'weights' => cap.weights
-        }
       end
     end
 
