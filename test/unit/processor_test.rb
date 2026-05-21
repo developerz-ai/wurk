@@ -78,12 +78,20 @@ class ProcessorTest < Wurk::Test::UnitCase
     assert_same @processor, captured[:ctx]
   end
 
-  def test_process_one_does_not_ack_on_perform_exception
+  def test_process_one_records_perform_exception_in_retry_set_and_acks
     klass = define_worker_raising(RuntimeError, 'boom')
-    enqueue(class: klass.name, args: [])
+    payload = enqueue(class: klass.name, args: [], retry: true)
 
-    assert_raises(RuntimeError) { @processor.process_one }
-    assert_equal 1, llen(private_queue), 'unhandled raise must NOT ack'
+    @processor.process_one
+
+    assert_equal 0, llen(private_queue), 'retrier handles → UoW must ack'
+    # JobRetry ZADDs the rewritten payload into the canonical `retry` ZSET.
+    found = @pool.with do |c|
+      c.call('ZRANGE', Wurk::Keys::RETRY, 0, -1).find { |raw| raw.include?(%("jid":"#{payload['jid']}")) }
+    end
+    @pool.with { |c| c.call('ZREM', Wurk::Keys::RETRY, found) } if found
+
+    refute_nil found, 'expected JobRetry to ZADD the failure into retry'
   end
 
   def test_process_one_acks_on_jobretry_handled
@@ -157,9 +165,15 @@ class ProcessorTest < Wurk::Test::UnitCase
   def test_failure_counter_increments_on_exception
     Wurk::Processor::FAILURE.reset
     klass = define_worker_raising(RuntimeError, 'x')
-    enqueue(class: klass.name, args: [])
+    payload = enqueue(class: klass.name, args: [], retry: true)
 
-    assert_raises(RuntimeError) { @processor.process_one }
+    @processor.process_one
+
+    found = @pool.with do |c|
+      c.call('ZRANGE', Wurk::Keys::RETRY, 0, -1).find { |raw| raw.include?(%("jid":"#{payload['jid']}")) }
+    end
+    @pool.with { |c| c.call('ZREM', Wurk::Keys::RETRY, found) } if found
+
     assert_equal 1, Wurk::Processor::FAILURE.reset
   end
 
