@@ -202,6 +202,20 @@ module Wurk
       @options[:average_scheduled_poll_interval] = interval
     end
 
+    # --- Periodic (Cron) registration ------------------------------------
+
+    # Yields a Wurk::Cron::Manager so the host app can register periodic
+    # jobs at boot. Manager state is shared per-process so multiple
+    # `config.periodic` blocks accumulate (matches Sidekiq Ent §2.1).
+    #
+    # Spec: docs/target/sidekiq-ent.md §2.
+    def periodic
+      require_relative 'cron'
+      @periodic_manager ||= Wurk::Cron::Manager.new(self)
+      yield @periodic_manager if block_given?
+      @periodic_manager
+    end
+
     # --- Lifecycle hooks --------------------------------------------------
 
     def on(event, &block)
