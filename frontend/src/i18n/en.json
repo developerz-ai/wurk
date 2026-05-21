@@ -1,0 +1,69 @@
+{
+  "nav": {
+    "dashboard": "Dashboard",
+    "queues": "Queues",
+    "retries": "Retries",
+    "scheduled": "Scheduled",
+    "dead": "Dead",
+    "busy": "Busy",
+    "batches": "Batches",
+    "limiters": "Limiters",
+    "cron": "Cron",
+    "metrics": "Metrics",
+    "search": "Search"
+  },
+  "dashboard": {
+    "processed": "Processed",
+    "failed": "Failed",
+    "busy": "Busy",
+    "enqueued": "Enqueued",
+    "retries": "Retries",
+    "scheduled": "Scheduled",
+    "dead": "Dead",
+    "processes": "Processes",
+    "latency": "Latency",
+    "live": "Live",
+    "paused": "Paused"
+  },
+  "table": {
+    "class": "Class",
+    "args": "Args",
+    "jid": "JID",
+    "queue": "Queue",
+    "error": "Error",
+    "retry_at": "Retry At",
+    "failed_at": "Failed At",
+    "scheduled_at": "Scheduled At",
+    "score": "Score",
+    "next_run": "Next Run",
+    "last_run": "Last Run",
+    "status": "Status",
+    "total": "Total",
+    "pending": "Pending",
+    "size": "Size",
+    "latency": "Latency",
+    "concurrency": "Concurrency",
+    "busy": "Busy",
+    "queues": "Queues",
+    "hostname": "Hostname"
+  },
+  "actions": {
+    "retry": "Retry",
+    "delete": "Delete",
+    "kill": "Kill",
+    "prev": "Previous",
+    "next": "Next",
+    "search": "Search",
+    "refresh": "Refresh"
+  },
+  "common": {
+    "loading": "Loading…",
+    "error": "Error loading data",
+    "empty": "No items",
+    "page": "Page",
+    "of": "of",
+    "ms": "ms",
+    "ago": "ago",
+    "in": "in"
+  }
+}

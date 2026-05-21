@@ -1,0 +1,69 @@
+{
+  "nav": {
+    "dashboard": "仪表盘",
+    "queues": "队列",
+    "retries": "重试",
+    "scheduled": "计划任务",
+    "dead": "死亡任务",
+    "busy": "繁忙",
+    "batches": "批次",
+    "limiters": "限制器",
+    "cron": "定时任务",
+    "metrics": "指标",
+    "search": "搜索"
+  },
+  "dashboard": {
+    "processed": "已处理",
+    "failed": "失败",
+    "busy": "繁忙",
+    "enqueued": "排队中",
+    "retries": "重试",
+    "scheduled": "已计划",
+    "dead": "死亡",
+    "processes": "进程",
+    "latency": "延迟",
+    "live": "实时",
+    "paused": "已暂停"
+  },
+  "table": {
+    "class": "类",
+    "args": "参数",
+    "jid": "JID",
+    "queue": "队列",
+    "error": "错误",
+    "retry_at": "重试时间",
+    "failed_at": "失败时间",
+    "scheduled_at": "计划时间",
+    "score": "分数",
+    "next_run": "下次运行",
+    "last_run": "上次运行",
+    "status": "状态",
+    "total": "总计",
+    "pending": "待处理",
+    "size": "大小",
+    "latency": "延迟",
+    "concurrency": "并发数",
+    "busy": "繁忙",
+    "queues": "队列",
+    "hostname": "主机名"
+  },
+  "actions": {
+    "retry": "重试",
+    "delete": "删除",
+    "kill": "终止",
+    "prev": "上一页",
+    "next": "下一页",
+    "search": "搜索",
+    "refresh": "刷新"
+  },
+  "common": {
+    "loading": "加载中…",
+    "error": "加载数据出错",
+    "empty": "暂无数据",
+    "page": "第",
+    "of": "共",
+    "ms": "ms",
+    "ago": "前",
+    "in": "后"
+  }
+}

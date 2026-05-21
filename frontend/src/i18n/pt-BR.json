@@ -1,0 +1,69 @@
+{
+  "nav": {
+    "dashboard": "Painel",
+    "queues": "Filas",
+    "retries": "Tentativas",
+    "scheduled": "Agendados",
+    "dead": "Mortos",
+    "busy": "Ocupados",
+    "batches": "Lotes",
+    "limiters": "Limitadores",
+    "cron": "Cron",
+    "metrics": "Métricas",
+    "search": "Buscar"
+  },
+  "dashboard": {
+    "processed": "Processados",
+    "failed": "Falhos",
+    "busy": "Ocupados",
+    "enqueued": "Na fila",
+    "retries": "Tentativas",
+    "scheduled": "Agendados",
+    "dead": "Mortos",
+    "processes": "Processos",
+    "latency": "Latência",
+    "live": "Ao vivo",
+    "paused": "Pausado"
+  },
+  "table": {
+    "class": "Classe",
+    "args": "Args",
+    "jid": "JID",
+    "queue": "Fila",
+    "error": "Erro",
+    "retry_at": "Tentar em",
+    "failed_at": "Falhou em",
+    "scheduled_at": "Agendado em",
+    "score": "Pontuação",
+    "next_run": "Próxima execução",
+    "last_run": "Última execução",
+    "status": "Status",
+    "total": "Total",
+    "pending": "Pendente",
+    "size": "Tamanho",
+    "latency": "Latência",
+    "concurrency": "Concorrência",
+    "busy": "Ocupado",
+    "queues": "Filas",
+    "hostname": "Host"
+  },
+  "actions": {
+    "retry": "Tentar novamente",
+    "delete": "Excluir",
+    "kill": "Matar",
+    "prev": "Anterior",
+    "next": "Próximo",
+    "search": "Buscar",
+    "refresh": "Atualizar"
+  },
+  "common": {
+    "loading": "Carregando…",
+    "error": "Erro ao carregar dados",
+    "empty": "Nenhum item",
+    "page": "Página",
+    "of": "de",
+    "ms": "ms",
+    "ago": "atrás",
+    "in": "em"
+  }
+}

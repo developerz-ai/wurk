@@ -1,0 +1,69 @@
+{
+  "nav": {
+    "dashboard": "ダッシュボード",
+    "queues": "キュー",
+    "retries": "リトライ",
+    "scheduled": "スケジュール済み",
+    "dead": "デッド",
+    "busy": "実行中",
+    "batches": "バッチ",
+    "limiters": "リミッター",
+    "cron": "Cron",
+    "metrics": "メトリクス",
+    "search": "検索"
+  },
+  "dashboard": {
+    "processed": "処理済み",
+    "failed": "失敗",
+    "busy": "実行中",
+    "enqueued": "キュー中",
+    "retries": "リトライ",
+    "scheduled": "スケジュール済み",
+    "dead": "デッド",
+    "processes": "プロセス",
+    "latency": "レイテンシ",
+    "live": "ライブ",
+    "paused": "一時停止"
+  },
+  "table": {
+    "class": "クラス",
+    "args": "引数",
+    "jid": "JID",
+    "queue": "キュー",
+    "error": "エラー",
+    "retry_at": "リトライ時刻",
+    "failed_at": "失敗時刻",
+    "scheduled_at": "スケジュール時刻",
+    "score": "スコア",
+    "next_run": "次回実行",
+    "last_run": "前回実行",
+    "status": "状態",
+    "total": "合計",
+    "pending": "保留中",
+    "size": "サイズ",
+    "latency": "レイテンシ",
+    "concurrency": "同時実行数",
+    "busy": "実行中",
+    "queues": "キュー",
+    "hostname": "ホスト名"
+  },
+  "actions": {
+    "retry": "リトライ",
+    "delete": "削除",
+    "kill": "強制終了",
+    "prev": "前へ",
+    "next": "次へ",
+    "search": "検索",
+    "refresh": "更新"
+  },
+  "common": {
+    "loading": "読み込み中…",
+    "error": "データの読み込みエラー",
+    "empty": "アイテムなし",
+    "page": "ページ",
+    "of": "/",
+    "ms": "ms",
+    "ago": "前",
+    "in": "後"
+  }
+}

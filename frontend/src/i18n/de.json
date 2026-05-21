@@ -1,0 +1,69 @@
+{
+  "nav": {
+    "dashboard": "Dashboard",
+    "queues": "Warteschlangen",
+    "retries": "Wiederholungen",
+    "scheduled": "Geplant",
+    "dead": "Tot",
+    "busy": "Beschäftigt",
+    "batches": "Stapel",
+    "limiters": "Begrenzer",
+    "cron": "Cron",
+    "metrics": "Metriken",
+    "search": "Suche"
+  },
+  "dashboard": {
+    "processed": "Verarbeitet",
+    "failed": "Fehlgeschlagen",
+    "busy": "Beschäftigt",
+    "enqueued": "In Warteschlange",
+    "retries": "Wiederholungen",
+    "scheduled": "Geplant",
+    "dead": "Tot",
+    "processes": "Prozesse",
+    "latency": "Latenz",
+    "live": "Live",
+    "paused": "Pausiert"
+  },
+  "table": {
+    "class": "Klasse",
+    "args": "Args",
+    "jid": "JID",
+    "queue": "Warteschlange",
+    "error": "Fehler",
+    "retry_at": "Wiederholen um",
+    "failed_at": "Fehlgeschlagen um",
+    "scheduled_at": "Geplant um",
+    "score": "Bewertung",
+    "next_run": "Nächste Ausführung",
+    "last_run": "Letzte Ausführung",
+    "status": "Status",
+    "total": "Gesamt",
+    "pending": "Ausstehend",
+    "size": "Größe",
+    "latency": "Latenz",
+    "concurrency": "Nebenläufigkeit",
+    "busy": "Beschäftigt",
+    "queues": "Warteschlangen",
+    "hostname": "Hostname"
+  },
+  "actions": {
+    "retry": "Wiederholen",
+    "delete": "Löschen",
+    "kill": "Beenden",
+    "prev": "Zurück",
+    "next": "Weiter",
+    "search": "Suchen",
+    "refresh": "Aktualisieren"
+  },
+  "common": {
+    "loading": "Lädt…",
+    "error": "Fehler beim Laden",
+    "empty": "Keine Einträge",
+    "page": "Seite",
+    "of": "von",
+    "ms": "ms",
+    "ago": "vor",
+    "in": "in"
+  }
+}
