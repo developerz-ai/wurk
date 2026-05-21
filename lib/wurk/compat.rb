@@ -6,47 +6,68 @@
 # Spec: docs/target/sidekiq-{free,pro,ent}.md.
 
 module Sidekiq
-end
+  # Version stamps mirror Sidekiq's OSS release Wurk targets for compat.
+  # Third-party gems version-gate on these; raise the MAJOR only when the
+  # upstream Sidekiq major bumps and Wurk has matching surface.
+  NAME    = 'Sidekiq'
+  LICENSE = 'See LICENSE'
+  VERSION = '8.1.5'
+  MAJOR   = 8
 
-Sidekiq::Batch       = Wurk::Batch
-Sidekiq::Client      = Wurk::Client
-Sidekiq::Context     = Wurk::Context
-Sidekiq::Cron        = Wurk::Cron
-Sidekiq::DeadSet     = Wurk::DeadSet
-Sidekiq::IterableJob = Wurk::IterableJob
-Sidekiq::Job         = Wurk::Job
-Sidekiq::JobLogger   = Wurk::JobLogger
-Sidekiq::JobRecord   = Wurk::JobRecord
-Sidekiq::JobRetry    = Wurk::JobRetry
-Sidekiq::Keys        = Wurk::Keys
-Sidekiq::Launcher    = Wurk::Launcher
-Sidekiq::Limiter     = Wurk::Limiter
-Sidekiq::Logger      = Wurk::Logger
-Sidekiq::Manager     = Wurk::Manager
-Sidekiq::Middleware  = Wurk::Middleware
-Sidekiq::ServerMiddleware = Wurk::Middleware::ServerMiddleware
-Sidekiq::ClientMiddleware = Wurk::Middleware::ClientMiddleware
-Sidekiq::Process     = Wurk::Process
-Sidekiq::ProcessSet  = Wurk::ProcessSet
-Sidekiq::Processor   = Wurk::Processor
-Sidekiq::Queue       = Wurk::Queue
-Sidekiq::RetrySet    = Wurk::RetrySet
-Sidekiq::Scheduled   = Wurk::Scheduled
-Sidekiq::ScheduledSet = Wurk::ScheduledSet
-Sidekiq::Stats       = Wurk::Stats
-Sidekiq::Work        = Wurk::Work
-Sidekiq::Worker      = Wurk::Worker
-Sidekiq::Workers     = Wurk::Workers
-Sidekiq::WorkSet     = Wurk::WorkSet
+  # Namespace sentinels for Pro/Ent feature subclasses (Sidekiq::Pro::Web,
+  # Sidekiq::Enterprise::Crypto, …). Defined so downstream code can nest
+  # classes under them — but `Sidekiq.pro?` / `Sidekiq.ent?` still return
+  # `false` per docs/target/sidekiq-free.md §32 (Wurk advertises as free OSS).
+  module Pro; end
+  module Enterprise; end
 
-# Top-level Sidekiq.configure_server / configure_client / redis / logger
-# delegate to Wurk's class methods. Third-party gems treat these as the
-# canonical entry points.
-module Sidekiq
+  BasicFetch       = Wurk::Fetcher::Reliable
+  Batch            = Wurk::Batch
+  Capsule          = Wurk::Capsule
+  Client           = Wurk::Client
+  Component        = Wurk::Component
+  Config           = Wurk::Configuration
+  Context          = Wurk::Context
+  Cron             = Wurk::Cron
+  DeadSet          = Wurk::DeadSet
+  IterableJob      = Wurk::IterableJob
+  Job              = Wurk::Job
+  JobLogger        = Wurk::JobLogger
+  JobRecord        = Wurk::JobRecord
+  JobRetry         = Wurk::JobRetry
+  JobUtil          = Wurk::JobUtil
+  Keys             = Wurk::Keys
+  Launcher         = Wurk::Launcher
+  Limiter          = Wurk::Limiter
+  Logger           = Wurk::Logger
+  Manager          = Wurk::Manager
+  Middleware       = Wurk::Middleware
+  ServerMiddleware = Wurk::Middleware::ServerMiddleware
+  ClientMiddleware = Wurk::Middleware::ClientMiddleware
+  Process          = Wurk::Process
+  ProcessSet       = Wurk::ProcessSet
+  Processor        = Wurk::Processor
+  Queue            = Wurk::Queue
+  RetrySet         = Wurk::RetrySet
+  Scheduled        = Wurk::Scheduled
+  ScheduledSet     = Wurk::ScheduledSet
+  Shutdown         = Wurk::Shutdown
+  Stats            = Wurk::Stats
+  Work             = Wurk::Work
+  Worker           = Wurk::Worker
+  Workers          = Wurk::Workers
+  WorkSet          = Wurk::WorkSet
+
+  # Top-level Sidekiq.configure_server / configure_client / redis / logger
+  # delegate to Wurk's class methods. Third-party gems treat these as the
+  # canonical entry points.
   class << self
     def configure_server(&) = Wurk.configure_server(&)
     def configure_client(&) = Wurk.configure_client(&)
+    def configure_embed(&) = Wurk.configure_embed(&)
+    def default_configuration = Wurk.default_configuration
     def redis(&) = Wurk.redis(&)
+    def redis_pool = Wurk.redis_pool
     def logger = Wurk.logger
     def server? = Wurk.server?
     def pro? = Wurk.pro?
@@ -58,6 +79,8 @@ module Sidekiq
     end
 
     def strict_args!(mode = :raise) = Wurk.strict_args!(mode)
+    def testing!(mode = :fake, &) = Wurk.testing!(mode, &)
+    def testing? = Wurk.testing?
     def load_json(str) = Wurk.load_json(str)
     def dump_json(obj) = Wurk.dump_json(obj)
   end

@@ -53,7 +53,6 @@ require_relative 'wurk/encryption'
 require_relative 'wurk/metrics'
 require_relative 'wurk/metrics/statsd'
 require_relative 'wurk/metrics/history'
-require_relative 'wurk/compat'
 
 require 'json'
 
@@ -78,12 +77,28 @@ module Wurk
       configuration.configure_client(&)
     end
 
+    # Embedded mode: caller runs Wurk inside its own process (Puma, rake task,
+    # etc.) without forking. The caller is opting in as both client and server,
+    # so the block always runs. Full Wurk::Embedded ships in task 36.
+    def configure_embed
+      yield configuration if block_given?
+      configuration
+    end
+
     def configuration
       @configuration ||= Configuration.new
     end
+    alias default_configuration configuration
 
     def redis(&)
-      (Thread.current[:wurk_capsule] || configuration.default_capsule).redis_pool.with(&)
+      redis_pool.with(&)
+    end
+
+    # Capsule-aware pool lookup. Thread-local override wins so per-capsule
+    # workers (`Thread.current[:wurk_capsule] = cap`) read from their own
+    # connections without leaking to the default capsule.
+    def redis_pool
+      (Thread.current[:wurk_capsule] || configuration.default_capsule).redis_pool
     end
 
     def logger
@@ -162,3 +177,8 @@ module Wurk
     end
   end
 end
+
+# Sidekiq aliases load last — every Wurk::* constant they reference must be
+# fully defined first. compat.rb only redefines names, it does not gate
+# behavior, so trailing the load order is safe.
+require_relative 'wurk/compat'
