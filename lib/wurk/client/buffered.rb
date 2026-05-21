@@ -14,6 +14,12 @@ module Wurk
       DEFAULT_BUFFER_CAP = 1_000
       DRAINING_KEY = :wurk_reliable_push_draining
 
+      # Eagerly initialized: `||=` inside an accessor is not atomic — two
+      # threads racing first-touch could end up holding distinct Mutex
+      # instances and lose all synchronization on the shared buffer.
+      INSTALL_MUTEX = Mutex.new
+      BUFFER_MUTEX  = Mutex.new
+
       class << self
         # Idempotent. Prepends the wrapper module into Wurk::Client so push /
         # push_bulk drain the buffer before each call and raw_push catches
@@ -92,11 +98,11 @@ module Wurk
         private
 
         def install_mutex
-          @install_mutex ||= Mutex.new
+          INSTALL_MUTEX
         end
 
         def buffer_mutex
-          @buffer_mutex ||= Mutex.new
+          BUFFER_MUTEX
         end
 
         def pop_head

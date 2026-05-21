@@ -62,6 +62,20 @@ class MiddlewareExpiryTest < Wurk::Test::UnitCase
     m
   end
 
+  # Minitest 6 dropped minitest/mock, so we hand-roll a Time.now override.
+  # Yields the pinned epoch-float; restores the original Time.now in ensure.
+  def with_time_now(epoch_f)
+    frozen = ::Time.at(epoch_f)
+    sc = ::Time.singleton_class
+    original = ::Time.method(:now)
+    sc.define_method(:now) { frozen }
+    begin
+      yield frozen.to_f
+    ensure
+      sc.define_method(:now) { |*a, &b| original.call(*a, &b) }
+    end
+  end
+
   # =====================================================================
   # Middleware behavior
   # =====================================================================
@@ -139,10 +153,14 @@ class MiddlewareExpiryTest < Wurk::Test::UnitCase
 
   def test_expiry_at_exactly_now_does_not_skip
     # Strict `>` per spec §7: equal timestamps aren't expired yet.
+    # Minitest 6 dropped `Time.stub`; hand-rolled override pins Time.now
+    # so `expiry == now` deterministically (no narrow real-clock window).
     yielded = false
-    build_middleware.call(nil, { 'class' => 'X', 'expiry' => ::Time.now.to_f - 0.0001 }, 'q') { yielded = true }
+    with_time_now(1_700_000_000.0) do |frozen|
+      build_middleware.call(nil, { 'class' => 'X', 'expiry' => frozen }, 'q') { yielded = true }
+    end
 
-    refute yielded, 'expiry just past now must skip'
+    assert yielded, 'expiry equal to now must not skip'
   end
 
   def test_coerces_string_expiry_via_to_f

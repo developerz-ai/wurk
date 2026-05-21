@@ -117,8 +117,8 @@ module Wurk
         end
       end
 
-      def call(_worker, job, queue)
-        client = self.class.client
+      def call(_worker, job, queue) # rubocop:disable Metrics/AbcSize
+        client = safe_client
         return yield if client.nil?
 
         klass = job['class']
@@ -134,11 +134,27 @@ module Wurk
           success = true
         ensure
           duration = monotonic_ms - started
-          finalize(success, duration, tags: tags, sample_rate: rate)
+          # Metrics are best-effort: an emit failure mid-finalize must not
+          # corrupt the job result the caller already produced.
+          begin
+            finalize(success, duration, tags: tags, sample_rate: rate)
+          rescue StandardError => e
+            self.class.send(:handle_error, e)
+          end
         end
       end
 
       private
+
+      # Wraps `self.class.client` so a misconfigured builder proc never turns
+      # a metrics-init failure into a job failure. Returns nil on error (the
+      # caller falls through to a plain `yield`).
+      def safe_client
+        self.class.client
+      rescue StandardError => e
+        self.class.send(:handle_error, e)
+        nil
+      end
 
       # Per-spec §9.2: caller-supplied proc may override tags / sample_rate
       # on a per-job basis. The job's own `dd_rate` field, when present,

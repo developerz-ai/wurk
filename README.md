@@ -31,6 +31,17 @@ Wire-compatible: same Redis keys, same job JSON, same Ruby DSL. Swap one gem lin
 
 ---
 
+## 📋 Requirements
+
+| Component | Minimum |
+|---|---|
+| Ruby   | `>= 3.2.0` |
+| Redis  | `>= 7.0.0` (uses `ZRANGE ... REV` introduced in 6.2 and other 7.x server features) |
+
+JRuby / TruffleRuby / Windows fall back to threads-only mode (no fork) — behaviorally equivalent to stock Sidekiq.
+
+---
+
 ## 🏃 Quick start
 
 ```sh

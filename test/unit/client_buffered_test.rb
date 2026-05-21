@@ -9,11 +9,20 @@ require 'json'
 # outage, (b) on next push the buffer drains oldest-first, (c) cap eviction
 # behavior, (d) batched payloads bypass the buffer and raise immediately.
 #
-# This test mutates global state on Wurk::Client (prepends the InstanceMethods
-# module once; resets the buffer between tests). It cannot safely parallelize
-# with sibling tests that depend on the Client singleton state — so no
-# `parallelize_me!`. Buffer is reset in teardown to keep tests isolated.
+# Mutates global state on Wurk::Client (prepends InstanceMethods once; resets
+# the buffer between tests). Opts into the parallel runner per the project
+# contract, but a class-level mutex around #run serializes execution *within*
+# this class so the global Client/Buffered singleton state can't race. Other
+# test classes still run in parallel with this one.
 class ClientBufferedTest < Wurk::Test::UnitCase
+  parallelize_me!
+
+  MUTEX = Mutex.new
+
+  def run(*args, &)
+    MUTEX.synchronize { super }
+  end
+
   def setup
     super
     @pool = Wurk.configuration.redis_pool

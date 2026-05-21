@@ -18,7 +18,11 @@ class BatchTest < Wurk::Test::UnitCase
     super
     @pool = Wurk.configuration.redis_pool
     @class_name = "BatchJob@#{Process.pid}-#{object_id}"
-    @queue     = "bq-#{Process.pid}-#{object_id}"
+    @queue = "bq-#{Process.pid}-#{object_id}"
+    # Tags must be per-test namespaced too — `tags:customer:42` is a shared
+    # Redis Set; parallel tests touching it cross-contaminate.
+    @tag_customer = "customer:42:#{Process.pid}:#{object_id}"
+    @tag_job      = "job:fulfill:#{Process.pid}:#{object_id}"
     @bids      = []
   end
 
@@ -31,6 +35,7 @@ class BatchTest < Wurk::Test::UnitCase
       end
       conn.call('DEL', "queue:#{@queue}")
       conn.call('SREM', 'queues', @queue) if @queue
+      [@tag_customer, @tag_job].each { |tag| conn.call('UNLINK', "tags:#{tag}") }
     end
   ensure
     super
@@ -98,12 +103,12 @@ class BatchTest < Wurk::Test::UnitCase
 
   def test_tags_round_trip
     batch = track(Wurk::Batch.new)
-    batch.tags = ['customer:42', 'job:fulfill']
+    batch.tags = [@tag_customer, @tag_job]
     batch.jobs { perform_one(batch) }
 
     reopened = track(Wurk::Batch.new(batch.bid))
 
-    assert_equal ['customer:42', 'job:fulfill'], reopened.tags
+    assert_equal [@tag_customer, @tag_job], reopened.tags
   end
 
   def test_tags_coerces_to_strings
@@ -157,10 +162,10 @@ class BatchTest < Wurk::Test::UnitCase
 
   def test_jobs_block_indexes_each_tag
     batch = track(Wurk::Batch.new)
-    batch.tags = ['customer:42']
+    batch.tags = [@tag_customer]
     batch.jobs { perform_one(batch) }
 
-    assert_includes @pool.with { |c| c.call('SMEMBERS', 'tags:customer:42') }, batch.bid
+    assert_includes @pool.with { |c| c.call('SMEMBERS', "tags:#{@tag_customer}") }, batch.bid
   end
 
   def test_empty_jobs_block_enqueues_marker_job
