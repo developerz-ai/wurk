@@ -17,11 +17,20 @@ class LimiterWindowTest < Wurk::Test::UnitCase
   end
 
   def teardown
+    # Scope cleanup to this test's @suffix so parallel limiter tests don't
+    # wipe each other's state mid-run (failure mode: another test's
+    # `within_limit` sees an empty counter because we DEL'd its key).
     @pool.with do |c|
       cursor = '0'
       loop do
-        cursor, keys = c.call('SCAN', cursor, 'MATCH', 'lmtr*', 'COUNT', 500)
+        cursor, keys = c.call('SCAN', cursor, 'MATCH', "*#{@suffix}*", 'COUNT', 500)
         c.call('DEL', *keys) unless keys.empty?
+        break if cursor == '0'
+      end
+      cursor = '0'
+      loop do
+        cursor, names = c.call('SSCAN', Wurk::Limiter::LIST_KEY, cursor, 'MATCH', "*#{@suffix}*", 'COUNT', 500)
+        c.call('SREM', Wurk::Limiter::LIST_KEY, *names) unless names.empty?
         break if cursor == '0'
       end
     end
