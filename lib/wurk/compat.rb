@@ -31,6 +31,7 @@ Sidekiq::ProcessSet  = Wurk::ProcessSet
 Sidekiq::Processor   = Wurk::Processor
 Sidekiq::Queue       = Wurk::Queue
 Sidekiq::RetrySet    = Wurk::RetrySet
+Sidekiq::Scheduled   = Wurk::Scheduled
 Sidekiq::ScheduledSet = Wurk::ScheduledSet
 Sidekiq::Stats       = Wurk::Stats
 Sidekiq::Work        = Wurk::Work
