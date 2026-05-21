@@ -57,6 +57,8 @@ require_relative 'wurk/encryption'
 require_relative 'wurk/metrics'
 require_relative 'wurk/metrics/statsd'
 require_relative 'wurk/metrics/history'
+require_relative 'wurk/metrics/query'
+require_relative 'wurk/deploy'
 
 require 'json'
 

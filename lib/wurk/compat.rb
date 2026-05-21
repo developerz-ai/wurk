@@ -71,6 +71,7 @@ module Sidekiq
   Cron             = Wurk::Cron
   Periodic         = Wurk::Cron
   DeadSet          = Wurk::DeadSet
+  Deploy           = Wurk::Deploy
   Embedded         = Wurk::Embedded
   Encryption       = Wurk::Encryption
   IterableJob      = Wurk::IterableJob

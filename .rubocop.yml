@@ -42,6 +42,8 @@ Naming/MethodParameterName:
     - k
     - v
     - tz
+    - at
+    - ms
 
 # Tests assert on Sidekiq-spec'd integer defaults (e.g. timeout: 25). Allow trailing digits.
 Naming/VariableNumber:
