@@ -21,8 +21,11 @@ end
 # in turn. After the cycle, every child PID must be new and the swarm
 # must still be servicing jobs (no dropped work). Real fork, real Redis.
 #
-# Not parallelized — forks a supervisor subprocess and waits on it.
+# Safe under the file-level parallel runner: the supervisor runs in a
+# forked subprocess and only specific PIDs are waited on.
 class RollingRestartTest < Wurk::Test::UnitCase
+  parallelize_me!
+
   REDIS_URL = ENV.fetch('REDIS_URL', 'redis://localhost:6379/0')
   POLL_TIMEOUT = 60.0
   POLL_INTERVAL = 0.1

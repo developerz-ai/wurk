@@ -20,10 +20,13 @@ end
 # Real forks, real Redis, real perform. Boot a 2-child swarm, push a job,
 # assert a child runs it. NEVER mock Redis here.
 #
-# Not parallelized — fork-from-thread is hazardous, and the swarm globally
-# manipulates SIGTERM/INT handlers when signal install is enabled (the
-# test opts out via `install_signals: false`).
+# `install_signals: false` so the swarm doesn't poison the test process's
+# SIGTERM/INT handlers. The supervisor thread calls Process.wait(-1, …),
+# so tests inside this class must run sequentially (parallelize_me! is a
+# file-level marker; minitest/parallel_fork forks per file, not per test).
 class SwarmBootTest < Wurk::Test::UnitCase
+  parallelize_me!
+
   REDIS_URL = ENV.fetch('REDIS_URL', 'redis://localhost:6379/0')
   POLL_TIMEOUT = 15.0
   POLL_INTERVAL = 0.1
@@ -43,6 +46,7 @@ class SwarmBootTest < Wurk::Test::UnitCase
     @observer_pool&.call('DEL', @sentinel_key, "queue:#{@queue_name}",
                          private_queue_key(@queue_name))
     @observer_pool&.close
+    @config&.reset_redis_pools!
   ensure
     super
   end

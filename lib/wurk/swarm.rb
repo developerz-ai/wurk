@@ -87,7 +87,11 @@ module Wurk
       @children.dup.each do |old_pid, meta|
         replacement = fork_child(meta[:slot], meta[:index])
         @children[replacement] = meta
-        wait_for_heartbeat(replacement)
+        unless wait_for_heartbeat(replacement)
+          logger.warn do
+            "swarm: replacement #{replacement} heartbeat not seen within #{HEARTBEAT_WAIT}s; proceeding anyway"
+          end
+        end
         safe_kill(old_pid, 'TERM')
         wait_pid(old_pid, @shutdown_timeout)
         @children.delete(old_pid)
@@ -98,7 +102,7 @@ module Wurk
 
     # Step 3.
     def close_parent_sockets
-      @config.reset_redis_pools! if @config.respond_to?(:reset_redis_pools!)
+      @config.reset_redis_pools!
       close_active_record_pool
     end
 

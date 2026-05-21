@@ -27,9 +27,13 @@ end
 # install_signals: true, enqueue an in-flight job, SIGTERM the parent,
 # assert the job finishes within shutdown_timeout.
 #
-# Not parallelized — the test forks a swarm subprocess and waits on it,
-# and child reaping is global per-process state.
+# Safe under the file-level parallel runner: the supervisor runs in a
+# forked subprocess, and the test only waits on its specific PID
+# (Process.wait(parent_pid, …)) — no global -1 reap that could steal a
+# sibling test's child.
 class GracefulShutdownTest < Wurk::Test::UnitCase
+  parallelize_me!
+
   REDIS_URL = ENV.fetch('REDIS_URL', 'redis://localhost:6379/0')
   POLL_TIMEOUT = 30.0
   POLL_INTERVAL = 0.1

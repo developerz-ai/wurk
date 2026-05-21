@@ -193,6 +193,8 @@ class ConfigurationTest < Wurk::Test::UnitCase
 
     refute_same cap_pool, @config.default_capsule.redis_pool
     refute_same local_pool, @config.local_redis_pool
+  ensure
+    @config.reset_redis_pools!
   end
 
   def test_reset_redis_pools_calls_through_to_every_capsule
@@ -204,6 +206,8 @@ class ConfigurationTest < Wurk::Test::UnitCase
 
     refute_same main_pool, @config.default_capsule.redis_pool
     refute_same extra_pool, extra.redis_pool
+  ensure
+    @config.reset_redis_pools!
   end
 
   # --- service locator ---------------------------------------------------

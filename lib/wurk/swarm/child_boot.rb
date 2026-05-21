@@ -49,7 +49,7 @@ module Wurk
       end
 
       def reconnect_after_fork
-        @config.reset_redis_pools! if @config.respond_to?(:reset_redis_pools!)
+        @config.reset_redis_pools!
         return unless defined?(::ActiveRecord::Base)
 
         begin
