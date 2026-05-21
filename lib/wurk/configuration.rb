@@ -11,7 +11,7 @@ module Wurk
   # for everything the swarm / managers / processors need to boot.
   #
   # Spec: docs/target/sidekiq-free.md §4 (Sidekiq::Config).
-  class Configuration
+  class Configuration # rubocop:disable Metrics/ClassLength
     # Mirrors Sidekiq::Config::DEFAULTS. Order and keys are part of the
     # drop-in contract — third-party gems read @options via [] / fetch / dig.
     DEFAULTS = {
@@ -149,6 +149,15 @@ module Wurk
 
     def local_redis_pool
       @local_redis_pool ||= build_redis_pool(size: 10, name: 'internal')
+    end
+
+    # Disconnect and drop every cached pool — the per-capsule mains plus
+    # the config-level internal pool. Used by Wurk::Swarm so the parent
+    # never leaks sockets into forks and each child can build fresh ones.
+    def reset_redis_pools!
+      @capsules.each_value(&:reset_redis_pools!)
+      @local_redis_pool&.disconnect!
+      @local_redis_pool = nil
     end
 
     def new_redis_pool(size, name = 'custom')

@@ -131,10 +131,13 @@ class CapsuleTest < Wurk::Test::UnitCase
 
   # --- redis pools -------------------------------------------------------
 
-  def test_redis_pool_size_matches_concurrency
+  def test_redis_pool_size_is_concurrency_plus_overhead
     @capsule.concurrency = 7
 
-    assert_equal 7, @capsule.redis_pool.size
+    # Heartbeat thread + scheduled poller each need an unstarvable slot
+    # while every worker thread can be parked in BLMOVE — see the
+    # POOL_OVERHEAD comment in Wurk::Capsule.
+    assert_equal 7 + Wurk::Capsule::POOL_OVERHEAD, @capsule.redis_pool.size
   end
 
   def test_redis_pool_is_memoized
@@ -158,6 +161,22 @@ class CapsuleTest < Wurk::Test::UnitCase
     assert_equal 'redis://127.0.0.1:6379/0', cap.redis_pool.url
   ensure
     cap&.redis_pool&.disconnect!
+  end
+
+  def test_reset_redis_pools_drops_cached_pools
+    pool = @capsule.redis_pool
+    local = @capsule.local_redis_pool
+
+    @capsule.reset_redis_pools!
+
+    refute_same pool, @capsule.redis_pool, 'main pool should be rebuilt after reset'
+    refute_same local, @capsule.local_redis_pool, 'local pool should be rebuilt after reset'
+  end
+
+  def test_reset_redis_pools_is_safe_when_pools_were_never_built
+    cap = Wurk::Capsule.new('untouched', @config)
+
+    cap.reset_redis_pools! # must not raise
   end
 
   # --- fetcher slot ------------------------------------------------------
