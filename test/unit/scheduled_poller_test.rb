@@ -23,7 +23,10 @@ class ScheduledPollerTest < Wurk::Test::UnitCase
   end
 
   def teardown
-    @pool.with { |c| c.call('UNLINK', *@cleanup_keys) }
+    @pool.with do |c|
+      c.call('UNLINK', *@cleanup_keys)
+      c.call('SREM', 'queues', @queue)
+    end
   ensure
     super
   end

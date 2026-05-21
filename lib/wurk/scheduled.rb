@@ -103,9 +103,12 @@ module Wurk
       end
 
       # Idempotent. Wakes the sleeping thread so it observes @done and exits.
+      # Also propagates the stop signal to @enq so any in-flight drain loop
+      # short-circuits instead of running to completion.
       def terminate
         @mutex.synchronize do
           @done = true
+          @enq.terminate
           @sleeper.signal
         end
       end

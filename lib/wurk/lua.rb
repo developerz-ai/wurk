@@ -40,14 +40,18 @@ module Wurk
     # KEYS = [sorted_set, queues_set]
     # ARGV = [now, queue_prefix]
     # Returns the number of jobs promoted.
+    # Order matters: decode + push BEFORE zrem. Redis Lua has no rollback,
+    # so a failed cjson.decode after a zrem would lose the job. Decode first;
+    # push first; only then remove from the sorted set. Worst case is a
+    # crash between lpush and zrem → at-least-once redelivery, never loss.
     RELIABLE_SCHEDULE_PROMOTE = <<~LUA
       local jobs = redis.call("zrangebyscore", KEYS[1], "-inf", ARGV[1])
       for i = 1, #jobs do
         local job = jobs[i]
-        redis.call("zrem", KEYS[1], job)
         local q = cjson.decode(job)["queue"]
         redis.call("sadd", KEYS[2], q)
         redis.call("lpush", ARGV[2] .. q, job)
+        redis.call("zrem", KEYS[1], job)
       end
       return #jobs
     LUA
