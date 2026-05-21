@@ -21,6 +21,7 @@ require_relative 'wurk/client/buffered'
 require_relative 'wurk/worker'
 require_relative 'wurk/worker/setter'
 require_relative 'wurk/job'
+require_relative 'wurk/job/options'
 require_relative 'wurk/iterable_job'
 require_relative 'wurk/job_retry'
 require_relative 'wurk/job_record'
@@ -41,6 +42,8 @@ require_relative 'wurk/manager'
 require_relative 'wurk/lua'
 require_relative 'wurk/scheduled'
 require_relative 'wurk/launcher'
+require_relative 'wurk/cli'
+require_relative 'wurk/embedded'
 require_relative 'wurk/swarm'
 require_relative 'wurk/topology'
 require_relative 'wurk/batch'
@@ -53,7 +56,6 @@ require_relative 'wurk/encryption'
 require_relative 'wurk/metrics'
 require_relative 'wurk/metrics/statsd'
 require_relative 'wurk/metrics/history'
-require_relative 'wurk/compat'
 
 require 'json'
 
@@ -78,12 +80,36 @@ module Wurk
       configuration.configure_client(&)
     end
 
+    # Embedded mode: caller runs Wurk inside its own process (Puma, rake task,
+    # etc.) without forking. Concurrency is defaulted to 2 — the GIL makes
+    # higher thread counts counterproductive inside a host process that has
+    # its own pool. The block can override anything before the Embedded
+    # instance is built. Returns a Wurk::Embedded the caller drives with
+    # `#run` / `#quiet` / `#stop`.
+    def configure_embed
+      if configuration.frozen?
+        raise FrozenError, 'Wurk configuration is frozen; build all embedded instances before calling run'
+      end
+
+      configuration.concurrency = 2
+      yield configuration if block_given?
+      Embedded.new(configuration)
+    end
+
     def configuration
       @configuration ||= Configuration.new
     end
+    alias default_configuration configuration
 
     def redis(&)
-      (Thread.current[:wurk_capsule] || configuration.default_capsule).redis_pool.with(&)
+      redis_pool.with(&)
+    end
+
+    # Capsule-aware pool lookup. Thread-local override wins so per-capsule
+    # workers (`Thread.current[:wurk_capsule] = cap`) read from their own
+    # connections without leaking to the default capsule.
+    def redis_pool
+      (Thread.current[:wurk_capsule] || configuration.default_capsule).redis_pool
     end
 
     def logger
@@ -162,3 +188,8 @@ module Wurk
     end
   end
 end
+
+# Sidekiq aliases load last — every Wurk::* constant they reference must be
+# fully defined first. compat.rb only redefines names, it does not gate
+# behavior, so trailing the load order is safe.
+require_relative 'wurk/compat'

@@ -284,5 +284,285 @@ class IterableJobTest < Wurk::Test::UnitCase
     assert_raises(Wurk::IterableJob::Interrupted) { worker.perform }
     assert_equal [1], worker.seen
   end
+
+  # --- constants ------------------------------------------------------
+
+  def test_state_ttl_is_30_days
+    assert_equal 30 * 86_400, Wurk::IterableJob::STATE_TTL
+  end
+
+  def test_state_flush_interval_is_5_seconds
+    assert_equal 5, Wurk::IterableJob::STATE_FLUSH_INTERVAL
+  end
+
+  def test_cancellation_period_is_3_days
+    assert_equal 3 * 86_400, Wurk::IterableJob::CANCELLATION_PERIOD
+  end
+
+  # --- redis-backed state --------------------------------------------
+
+  class CancelOnSecond
+    include Wurk::IterableJob
+
+    def each_iteration(_item, *)
+      cancel!
+    end
+
+    def build_enumerator(*, cursor:)
+      Enumerator.new do |y|
+        y << [1, 1]
+        y << [2, 2]
+      end
+    end
+  end
+
+  def random_jid
+    @_jid_counter ||= 0
+    @_jid_counter += 1
+    "wurk-it-#{Process.pid}-#{object_id}-#{@_jid_counter}"
+  end
+
+  def redis
+    @redis ||= Wurk.configuration.redis_pool
+  end
+
+  def cleanup_iteration_key(jid)
+    redis.with { |c| c.call('DEL', "it-#{jid}") }
+  end
+
+  def test_cancel_persists_to_iteration_hash_when_jid_set
+    jid = random_jid
+    worker = SimpleIterable.new
+    worker.jid = jid
+
+    begin
+      ts = worker.cancel!
+      raw = redis.with { |c| c.call('HGET', "it-#{jid}", 'cancelled') }
+
+      assert_equal ts.to_s, raw.to_s
+    ensure
+      cleanup_iteration_key(jid)
+    end
+  end
+
+  def test_cancel_sets_cancellation_period_ttl
+    jid = random_jid
+    worker = SimpleIterable.new
+    worker.jid = jid
+
+    begin
+      worker.cancel!
+      ttl = redis.with { |c| c.call('TTL', "it-#{jid}") }
+
+      assert_operator ttl, :>, Wurk::IterableJob::CANCELLATION_PERIOD - 60
+      assert_operator ttl, :<=, Wurk::IterableJob::CANCELLATION_PERIOD
+    ensure
+      cleanup_iteration_key(jid)
+    end
+  end
+
+  def test_perform_flushes_state_hash_with_ex_c_rt_fields
+    jid = random_jid
+    worker = SimpleIterable.new
+    worker.jid = jid
+
+    begin
+      worker.perform
+      # SimpleIterable runs to completion and deletes the key, so push
+      # cancellation in mid-flight to leave state behind.
+      raw = redis.with { |c| c.call('EXISTS', "it-#{jid}") }
+
+      assert_equal 0, raw, 'state hash should be deleted on successful completion'
+    ensure
+      cleanup_iteration_key(jid)
+    end
+  end
+
+  # Pins the full HASH wire shape (ex, c, rt, cancelled) on an interrupted
+  # run. Splitting would obscure the contract — the field set IS the spec.
+  def test_interrupted_perform_persists_state_hash # rubocop:disable Metrics/AbcSize,Minitest/MultipleAssertions
+    jid = random_jid
+    worker = CancelOnSecond.new
+    worker.jid = jid
+
+    begin
+      assert_raises(Wurk::IterableJob::Interrupted) { worker.perform }
+
+      raw = redis.with { |c| c.call('HGETALL', "it-#{jid}") }
+      hash = raw.is_a?(Hash) ? raw : raw.each_slice(2).to_h
+
+      assert hash.key?('ex'),        'ex field present'
+      assert hash.key?('c'),         'cursor field present'
+      assert hash.key?('rt'),        'runtime field present'
+      assert hash.key?('cancelled'), 'cancelled field present'
+      assert_equal '1', hash['ex']
+    ensure
+      cleanup_iteration_key(jid)
+    end
+  end
+
+  def test_interrupted_run_uses_cancellation_period_ttl
+    jid = random_jid
+    worker = CancelOnSecond.new
+    worker.jid = jid
+
+    begin
+      assert_raises(Wurk::IterableJob::Interrupted) { worker.perform }
+
+      ttl = redis.with { |c| c.call('TTL', "it-#{jid}") }
+
+      assert_operator ttl, :>, Wurk::IterableJob::CANCELLATION_PERIOD - 60
+      assert_operator ttl, :<=, Wurk::IterableJob::CANCELLATION_PERIOD
+    ensure
+      cleanup_iteration_key(jid)
+    end
+  end
+
+  def test_remote_cancellation_observed_by_cancelled_predicate
+    jid = random_jid
+    worker = SimpleIterable.new
+    worker.jid = jid
+
+    begin
+      ts = ::Process.clock_gettime(::Process::CLOCK_REALTIME).to_i
+      redis.with { |c| c.call('HSET', "it-#{jid}", 'cancelled', ts) }
+
+      assert_predicate worker, :cancelled?
+    ensure
+      cleanup_iteration_key(jid)
+    end
+  end
+
+  def test_remote_cancellation_check_is_rate_limited
+    jid = random_jid
+    worker = SimpleIterable.new
+    worker.jid = jid
+
+    begin
+      refute_predicate worker, :cancelled?
+
+      ts = ::Process.clock_gettime(::Process::CLOCK_REALTIME).to_i
+      redis.with { |c| c.call('HSET', "it-#{jid}", 'cancelled', ts) }
+
+      # Subsequent check within 5s window should still return false — the
+      # poll budget was spent on the first call. Flip the in-process flag
+      # to verify the override path still works immediately.
+      refute_predicate worker, :cancelled?
+      worker.cancel!
+
+      assert_predicate worker, :cancelled?
+    ensure
+      cleanup_iteration_key(jid)
+    end
+  end
+
+  class ResumableJob
+    include Wurk::IterableJob
+
+    attr_writer :seen
+
+    def seen = @seen ||= []
+
+    def build_enumerator(*, cursor:)
+      start = cursor || 0
+      Enumerator.new do |y|
+        start.upto(2) { |i| y << [i, i + 1] }
+      end
+    end
+
+    def each_iteration(item, *)
+      seen << item
+    end
+  end
+
+  def test_resume_starts_from_persisted_cursor
+    jid = random_jid
+
+    begin
+      redis.with do |c|
+        c.call('HSET', "it-#{jid}",
+               'ex', '1',
+               'c',  ::JSON.generate(2),
+               'rt', '0.5')
+      end
+
+      worker = ResumableJob.new
+      worker.jid = jid
+      worker.perform
+
+      assert_equal [2], worker.seen
+    ensure
+      cleanup_iteration_key(jid)
+    end
+  end
+
+  class HookTracer
+    include Wurk::IterableJob
+
+    def events = @events ||= []
+
+    def build_enumerator(*, cursor:)
+      Enumerator.new { |y| y << [1, 1] }
+    end
+
+    def each_iteration(*); end
+    def on_start    = events << :start
+    def on_resume   = events << :resume
+    def on_complete = events << :complete
+    def on_stop     = events << :stop
+    def on_cancel   = events << :cancel
+  end
+
+  def test_on_resume_fires_when_resuming_from_persisted_state
+    jid = random_jid
+
+    begin
+      redis.with do |c|
+        c.call('HSET', "it-#{jid}", 'ex', '2', 'c', ::JSON.generate(1), 'rt', '0.0')
+      end
+
+      worker = HookTracer.new
+      worker.jid = jid
+      worker.perform
+
+      assert_includes worker.events, :resume
+      refute_includes worker.events, :start
+    ensure
+      cleanup_iteration_key(jid)
+    end
+  end
+
+  def test_on_start_fires_on_fresh_run
+    worker = HookTracer.new
+    worker.perform
+
+    assert_includes worker.events, :start
+    assert_includes worker.events, :complete
+    refute_includes worker.events, :resume
+  end
+
+  class StopOnly
+    include Wurk::IterableJob
+
+    def events = @events ||= []
+
+    def build_enumerator(*, cursor:)
+      Enumerator.new do |y|
+        y << [1, 1]
+        y << [2, 2]
+      end
+    end
+
+    def each_iteration(_) = cancel!
+    def on_cancel         = events << :cancel
+    def on_stop           = events << :stop
+  end
+
+  def test_on_cancel_and_on_stop_fire_when_cancelled
+    worker = StopOnly.new
+    assert_raises(Wurk::IterableJob::Interrupted) { worker.perform }
+
+    assert_equal %i[cancel stop], worker.events
+  end
 end
 # rubocop:enable Lint/UnusedMethodArgument

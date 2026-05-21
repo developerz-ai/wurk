@@ -1,5 +1,6 @@
 # frozen_string_literal: true
 
+require_relative 'iterable_job'
 require_relative 'job_util'
 
 module Wurk
@@ -60,13 +61,15 @@ module Wurk
 
     # Marks an IterableJob as cancelled. Returns the Unix epoch timestamp written.
     # Field name + epoch-second value mirror Sidekiq::IterableJob#cancel! exactly.
+    # TTL = CANCELLATION_PERIOD so other workers observe the flag well after
+    # the dashboard click that issued the cancel.
     def cancel!(jid)
       raise ArgumentError, 'jid must be a non-empty String' if jid.nil? || jid.to_s.empty?
 
       ts = ::Process.clock_gettime(::Process::CLOCK_REALTIME).to_i
       pool.with do |conn|
         conn.call('HSET', "it-#{jid}", 'cancelled', ts)
-        conn.call('EXPIRE', "it-#{jid}", 86_400)
+        conn.call('EXPIRE', "it-#{jid}", Wurk::IterableJob::CANCELLATION_PERIOD)
       end
       ts
     end
