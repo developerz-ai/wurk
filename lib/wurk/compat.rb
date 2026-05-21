@@ -23,6 +23,7 @@ module Sidekiq
 
   BasicFetch       = Wurk::Fetcher::Reliable
   Batch            = Wurk::Batch
+  BatchSet         = Wurk::BatchSet
   Capsule          = Wurk::Capsule
   CLI              = Wurk::CLI
   Client           = Wurk::Client

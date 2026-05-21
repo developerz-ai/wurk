@@ -48,6 +48,7 @@ require_relative 'wurk/swarm'
 require_relative 'wurk/topology'
 require_relative 'wurk/batch'
 require_relative 'wurk/batch/status'
+require_relative 'wurk/batch_set'
 require_relative 'wurk/limiter'
 require_relative 'wurk/cron'
 require_relative 'wurk/leader'
@@ -188,6 +189,16 @@ module Wurk
     end
   end
 end
+
+# Batch worker classes (Empty, CallbackJob) and middleware load AFTER the
+# Wurk module class << self block — they instantiate workers at load time
+# via `sidekiq_options`, which reads Wurk.default_job_options.
+require_relative 'wurk/batch/empty'
+require_relative 'wurk/batch/callback_job'
+require_relative 'wurk/batch/callbacks'
+require_relative 'wurk/batch/client_middleware'
+require_relative 'wurk/batch/server_middleware'
+require_relative 'wurk/batch/death_handler'
 
 # Sidekiq aliases load last — every Wurk::* constant they reference must be
 # fully defined first. compat.rb only redefines names, it does not gate

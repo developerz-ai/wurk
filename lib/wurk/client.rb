@@ -2,6 +2,7 @@
 
 require_relative 'iterable_job'
 require_relative 'job_util'
+require_relative 'lua'
 
 module Wurk
   # Enqueue interface. Pipelined LPUSH / ZADD writes against the canonical
@@ -214,7 +215,13 @@ module Wurk
     end
 
     def push_immediate(conn, payloads)
-      now     = now_in_millis
+      now = now_in_millis
+      batched, plain = payloads.partition { |j| j['bid'] }
+      push_plain(conn, plain, now) unless plain.empty?
+      push_batched(conn, batched, now) unless batched.empty?
+    end
+
+    def push_plain(conn, payloads, now)
       grouped = payloads.group_by { |j| j['queue'] }
       conn.call('SADD', 'queues', *grouped.keys)
       grouped.each do |queue, jobs|
@@ -223,6 +230,23 @@ module Wurk
           Wurk.dump_json(j)
         end
         conn.call('LPUSH', "queue:#{queue}", *serialized)
+      end
+    end
+
+    # Batched jobs route through BATCH_PUSH: increments b-<bid> total+pending,
+    # SADDs jid into the live set, registers the queue, LPUSHes the payload —
+    # all atomically. One Redis round-trip per job (no pipeline grouping)
+    # because the lua needs per-job KEYS bound. Acceptable cost: batch
+    # enqueue is not the hot path; correctness is.
+    def push_batched(conn, payloads, now)
+      payloads.each do |j|
+        j['enqueued_at'] = now
+        Wurk::Lua::Loader.eval_cached(
+          conn,
+          :batch_push,
+          keys: ["b-#{j['bid']}", "b-#{j['bid']}-jids", "queue:#{j['queue']}", 'queues'],
+          argv: [j['queue'], j['jid'], Wurk.dump_json(j)]
+        )
       end
     end
 

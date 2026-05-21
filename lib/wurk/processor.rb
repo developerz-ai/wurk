@@ -209,6 +209,7 @@ module Wurk
                 klass = Object.const_get(job_hash['class'])
                 instance = klass.new
                 instance.jid = job_hash['jid']
+                instance.bid = job_hash['bid'] if instance.respond_to?(:bid=)
                 instance._context = self
                 @retrier.local(instance, jobstr, queue) do
                   yield instance
