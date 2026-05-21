@@ -51,13 +51,8 @@ class QueueTest < Wurk::Test::UnitCase
     assert_includes Wurk::Queue.ancestors, Enumerable
   end
 
-  def test_paused_is_always_false_in_oss
-    @pool.with { |c| c.call('SADD', 'paused', @qname) }
-    begin
-      refute_predicate Wurk::Queue.new(@qname), :paused?
-    ensure
-      @pool.with { |c| c.call('SREM', 'paused', @qname) }
-    end
+  def test_paused_is_false_by_default
+    refute_predicate Wurk::Queue.new(@qname), :paused?
   end
 
   def test_as_json_returns_name_only

@@ -17,6 +17,10 @@ module Wurk
     # Set of known queue names, without the `queue:` prefix.
     QUEUES_SET     = 'queues'
 
+    # Set of paused queue names (Pro feature; Wurk ships it free).
+    # Members are unprefixed queue names. Fetchers exclude these on each pass.
+    PAUSED_SET     = 'paused'
+
     # Sorted sets keyed by score = unix epoch float seconds.
     SCHEDULE       = 'schedule'
     RETRY          = 'retry'

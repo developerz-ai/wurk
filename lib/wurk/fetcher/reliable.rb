@@ -94,10 +94,14 @@ module Wurk
       # Prefixed queue keys (`queue:<name>`) in fetch order. Strict mode
       # preserves declaration order. Random/weighted shuffle each call —
       # @queues is pre-expanded by weight in Capsule#queues=, so uniform
-      # shuffle yields weighted fairness; .uniq trims duplicates.
+      # shuffle yields weighted fairness; .uniq trims duplicates. Paused
+      # queues are filtered after shuffle so the membership test runs on
+      # the smallest possible set.
       def queues_cmd
-        prefixed = config.queues.map { |q| "#{Keys::QUEUE_PREFIX}#{q}" }
-        config.mode == :strict ? prefixed : prefixed.shuffle.uniq
+        names = config.mode == :strict ? config.queues : config.queues.shuffle.uniq
+        paused = paused_names
+        names = names.reject { |q| paused.include?(q) } unless paused.empty?
+        names.map { |q| "#{Keys::QUEUE_PREFIX}#{q}" }
       end
 
       def terminate
@@ -105,6 +109,14 @@ module Wurk
       end
 
       private
+
+      # SMEMBERS of the `paused` SET. One round-trip per fetch pass; the
+      # set is tiny in practice (one entry per paused queue) so the cost
+      # is dominated by the BLMOVE that follows. Returns a Set for O(1)
+      # lookup against the (often weighted-expanded) queue list.
+      def paused_names
+        config.redis { |conn| conn.call('SMEMBERS', Keys::PAUSED_SET) }.to_set
+      end
 
       def lmove(public_q)
         priv = self.class.private_queue_name(public_q)

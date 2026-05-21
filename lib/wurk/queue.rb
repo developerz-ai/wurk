@@ -7,10 +7,12 @@ module Wurk
   # schema: LIST at `queue:<name>`, membership in the `queues` SET.
   # Wire-compat is sacred — every Redis call below matches OSS exactly.
   #
-  # Pause/unpause is a Pro extension; OSS `paused?` always returns false
-  # (the `paused` set exists for Pro's UI but OSS never writes to it).
+  # Pause/unpause is a Pro feature upstream; Wurk ships it free. Membership
+  # of the `paused` SET drives both `paused?` and the fetcher's queue filter
+  # (see `Wurk::Fetcher::Reliable#queues_cmd`). In-flight jobs continue to
+  # completion — pausing only stops new fetches.
   #
-  # Spec: docs/target/sidekiq-free.md §19.2.
+  # Spec: docs/target/sidekiq-free.md §19.2, sidekiq-pro.md §6.
   class Queue
     include Enumerable
 
@@ -46,11 +48,23 @@ module Wurk
       0.0
     end
 
-    # OSS does not implement queue pausing; Pro overrides. Matches
-    # docs/target/sidekiq-free.md §31.14 — `paused` set is read but
-    # never written in OSS, and this predicate is hardcoded false.
+    # True iff this queue's name is a member of the `paused` SET. Wurk
+    # implements the Pro contract for free; fetchers consult the same set.
     def paused?
-      false
+      Wurk.redis { |conn| conn.call('SISMEMBER', Keys::PAUSED_SET, @name) } == 1
+    end
+
+    # Pause new fetches against this queue. Idempotent — `SADD` returns
+    # 0 when the name was already present. In-flight jobs are untouched.
+    def pause! # rubocop:disable Naming/PredicateMethod
+      Wurk.redis { |conn| conn.call('SADD', Keys::PAUSED_SET, @name) }
+      true
+    end
+
+    # Resume fetches. Idempotent.
+    def unpause! # rubocop:disable Naming/PredicateMethod
+      Wurk.redis { |conn| conn.call('SREM', Keys::PAUSED_SET, @name) }
+      true
     end
 
     # Paged LRANGE traversal. Yields JobRecord per payload. Continues
