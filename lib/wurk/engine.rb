@@ -3,6 +3,7 @@
 require 'rails/engine'
 require_relative '../active_job/queue_adapters/wurk_adapter'
 require_relative 'dashboard_manifest'
+require_relative 'web'
 
 module Wurk
   # Rails mountable engine. Owns the dashboard mount, the asset path for
@@ -38,5 +39,11 @@ module Wurk
 
       ::Wurk::DashboardManifest.check!
     end
+
+    # Engine-scoped Rack middleware for the `Wurk::Web.configure` authorization
+    # hook (sidekiq-ent §9.2). Inserted into the engine — not the host — so
+    # the host's own controllers stay unaffected; only requests routed under
+    # the mount point pass through.
+    middleware.use ::Wurk::Web::Authorization
   end
 end

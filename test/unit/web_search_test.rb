@@ -1,0 +1,157 @@
+# frozen_string_literal: true
+
+require_relative '../test_helper'
+
+class WebSearchTest < Wurk::Test::UnitCase
+  parallelize_me!
+
+  def setup
+    super
+    @ns = "wurksrch:#{Process.pid}:#{object_id}"
+    @queue = "#{@ns}-q"
+    @class_a = "JobAlpha@#{@ns}"
+    @class_b = "JobBeta@#{@ns}"
+    @needle = "marker-#{@ns}"
+  end
+
+  def teardown
+    Wurk.redis do |c|
+      c.call('DEL', "queue:#{@queue}")
+      c.call('SREM', 'queues', @queue)
+      cleanup_zset(c, 'retry')
+      cleanup_zset(c, 'schedule')
+      cleanup_zset(c, 'dead')
+    end
+  ensure
+    super
+  end
+
+  def test_empty_substring_returns_no_hits
+    hits = Wurk::Web::Search.new('').to_a
+
+    assert_empty hits
+  end
+
+  def test_search_finds_queue_hit
+    push_to_queue(@class_a, [@needle])
+    push_to_queue(@class_b, ['no-match'])
+
+    hits = Wurk::Web::Search.new(@needle, kinds: ['queues']).to_a
+
+    assert_equal(
+      { size: 1, kind: 'queue', name: @queue, klass: @class_a },
+      { size: hits.size, kind: hits[0][:kind], name: hits[0][:name], klass: hits[0][:klass] }
+    )
+  end
+
+  def test_search_finds_retry_hit
+    jid = push_to_zset('retry', @class_a, [@needle])
+
+    hits = Wurk::Web::Search.new(@needle, kinds: ['retry']).to_a
+
+    assert_equal(
+      { kind: 'retry', name: 'retry', jid: jid, score_class: Float },
+      { kind: hits[0][:kind], name: hits[0][:name], jid: hits[0][:jid], score_class: hits[0][:score].class }
+    )
+  end
+
+  def test_search_finds_scheduled_hit
+    push_to_zset('schedule', @class_a, [@needle])
+
+    hits = Wurk::Web::Search.new(@needle, kinds: ['scheduled']).to_a
+
+    assert_equal 'scheduled', hits[0][:kind]
+    assert_equal 'schedule', hits[0][:name]
+  end
+
+  def test_search_finds_dead_hit
+    push_to_zset('dead', @class_a, [@needle])
+
+    hits = Wurk::Web::Search.new(@needle, kinds: ['dead']).to_a
+
+    assert_equal 'dead', hits[0][:kind]
+    assert_equal 'dead', hits[0][:name]
+  end
+
+  def test_search_default_covers_every_store
+    push_to_queue(@class_a, [@needle])
+    push_to_zset('retry', @class_a, [@needle])
+    push_to_zset('schedule', @class_a, [@needle])
+    push_to_zset('dead', @class_a, [@needle])
+
+    kinds = Wurk::Web::Search.new(@needle).to_a.map { |h| h[:kind] }.uniq.sort
+
+    assert_equal %w[dead queue retry scheduled], kinds
+  end
+
+  def test_search_respects_limit
+    5.times { push_to_zset('retry', @class_a, [@needle]) }
+
+    hits = Wurk::Web::Search.new(@needle, kinds: ['retry'], limit: 2).to_a
+
+    assert_equal 2, hits.size
+  end
+
+  def test_search_clamps_limit_to_max
+    s = Wurk::Web::Search.new(@needle, limit: 99_999)
+
+    assert_equal Wurk::Web::Search::MAX_LIMIT, s.limit
+  end
+
+  def test_search_invalid_kind_falls_back_to_defaults
+    s = Wurk::Web::Search.new(@needle, kinds: ['bogus'])
+
+    assert_equal Wurk::Web::Search::KINDS, s.kinds
+  end
+
+  def test_search_substring_no_match_returns_empty
+    push_to_zset('retry', @class_a, ['something-else'])
+
+    hits = Wurk::Web::Search.new('nope-not-here', kinds: ['retry']).to_a
+
+    assert_empty(hits.select { |h| h[:klass] == @class_a })
+  end
+
+  private
+
+  def push_to_queue(klass, args)
+    payload = job_payload(klass, args)
+    Wurk.redis do |c|
+      c.call('SADD', 'queues', @queue)
+      c.call('LPUSH', "queue:#{@queue}", Wurk.dump_json(payload))
+    end
+    payload['jid']
+  end
+
+  def push_to_zset(name, klass, args)
+    payload = job_payload(klass, args)
+    Wurk.redis { |c| c.call('ZADD', name, ::Time.now.to_f.to_s, Wurk.dump_json(payload)) }
+    payload['jid']
+  end
+
+  def job_payload(klass, args)
+    {
+      'class' => klass,
+      'args' => args,
+      'queue' => @queue,
+      'jid' => SecureRandom.hex(12),
+      'created_at' => ::Time.now.to_f,
+      'enqueued_at' => ::Time.now.to_f,
+      'retry_count' => 0
+    }
+  end
+
+  def cleanup_zset(conn, key)
+    conn.call('ZRANGEBYSCORE', key, '-inf', '+inf').each do |raw|
+      parsed = begin
+        Wurk.load_json(raw)
+      rescue ::JSON::ParserError
+        nil
+      end
+      next unless parsed.is_a?(Hash)
+      next unless [@class_a, @class_b].include?(parsed['class'])
+
+      conn.call('ZREM', key, raw)
+    end
+  end
+end
