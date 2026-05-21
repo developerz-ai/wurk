@@ -78,16 +78,20 @@ module Wurk
 
       def install_signal_handlers(launcher)
         CHILD_SIGNALS.each { |sig, sym| ::Signal.trap(sig) { @signal_queue << sym } }
-        Thread.new { dispatch_signals(launcher) }
+        @dispatcher = Thread.new { dispatch_signals(launcher) }
       end
 
-      # Drains the queue forever; launcher.stop is the exit condition
-      # (the wait_loop watches launcher.stopping?). TERM/INT both trigger
-      # the stop sequence; subsequent signals are no-ops once stopped.
+      # TSTP/USR2 keep looping; TERM/INT run the full launcher.stop
+      # (which blocks on manager drain) and then return — wait_loop
+      # joins this thread, so the main child thread can't `exit 0`
+      # mid-drain. Otherwise quiet would flip launcher.stopping? true
+      # and the main thread would race past the unfinished managers.
       def dispatch_signals(launcher)
         loop do
           case @signal_queue.pop
-          when :term then launcher.stop
+          when :term
+            launcher.stop
+            return
           when :tstp then launcher.quiet
           when :usr2 then reopen_logs
           end
@@ -101,8 +105,8 @@ module Wurk
         nil
       end
 
-      def wait_loop(launcher)
-        sleep 0.5 until launcher.stopping?
+      def wait_loop(_launcher)
+        @dispatcher.join
       end
     end
   end
