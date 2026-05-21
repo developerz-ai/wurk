@@ -156,6 +156,16 @@ module Wurk
       return removed
     LUA
 
+    # Limiter scripts live in `lib/wurk/lua/limiter_*.lua` — one file per
+    # type. Loaded at boot, the file's basename (minus `.lua`) becomes the
+    # SCRIPTS key as a symbol. Keeping them as separate files makes diffing
+    # individual rate-limiter changes painless and keeps each script self-
+    # contained for the `redis-cli --eval` debug workflow.
+    LUA_DIR = File.expand_path('lua', __dir__)
+    FILE_SCRIPTS = Dir.glob(File.join(LUA_DIR, '*.lua')).each_with_object({}) do |path, h|
+      h[File.basename(path, '.lua').to_sym] = File.read(path)
+    end.freeze
+
     SCRIPTS = {
       zpopbyscore: ZPOPBYSCORE,
       bulk_push: BULK_PUSH,
@@ -166,7 +176,7 @@ module Wurk
       batch_invalidate: BATCH_INVALIDATE,
       fast_delete_job: FAST_DELETE_JOB,
       fast_delete_by_class: FAST_DELETE_BY_CLASS
-    }.freeze
+    }.merge(FILE_SCRIPTS).freeze
 
     # SHA1 of each script source — matches what `SCRIPT LOAD` returns.
     # Precomputing keeps `eval_cached` allocation-free in the hot path.
