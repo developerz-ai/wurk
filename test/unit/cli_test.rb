@@ -8,10 +8,7 @@ require 'tmpdir'
 # validation, signal table. The actual `run` / `launch` paths fork the
 # process and are covered in test/integration/cli_boot_test.rb.
 class CLITest < Wurk::Test::UnitCase
-  # NOT `parallelize_me!`: tests raise Interrupt and SystemExit through
-  # `assert_raises`, which propagates fine but minitest-parallel_fork's
-  # marshal handshake races with the fork exit. The CLI surface is also
-  # a process-global singleton — parallel runs would step on each other.
+  parallelize_me!
 
   def setup
     super
@@ -75,21 +72,29 @@ class CLITest < Wurk::Test::UnitCase
   end
 
   def test_parse_environment_flag_overrides_env
+    prev = ENV.fetch('RAILS_ENV', nil)
     ENV['RAILS_ENV'] = 'staging'
     with_require_set { @cli.parse(%w[-e production -q default]) }
 
     assert_equal 'production', @cli.environment
   ensure
-    ENV.delete('RAILS_ENV')
+    prev.nil? ? ENV.delete('RAILS_ENV') : ENV['RAILS_ENV'] = prev
   end
 
   def test_environment_defaults_to_development
+    prev_app = ENV.fetch('APP_ENV', nil)
+    prev_rails = ENV.fetch('RAILS_ENV', nil)
+    prev_rack = ENV.fetch('RACK_ENV', nil)
     ENV.delete('APP_ENV')
     ENV.delete('RAILS_ENV')
     ENV.delete('RACK_ENV')
     with_require_set { @cli.parse(%w[-q default]) }
 
     assert_equal 'development', @cli.environment
+  ensure
+    ENV['APP_ENV'] = prev_app if prev_app
+    ENV['RAILS_ENV'] = prev_rails if prev_rails
+    ENV['RACK_ENV'] = prev_rack if prev_rack
   end
 
   def test_parse_tag_flag

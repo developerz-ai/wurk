@@ -9,6 +9,8 @@ require_relative '../test_helper'
 class CompatAliasesTest < Wurk::Test::UnitCase
   parallelize_me!
 
+  STATE_MUTEX = Mutex.new
+
   # --- version stamps ----------------------------------------------------
 
   def test_name
@@ -215,10 +217,12 @@ class CompatAliasesTest < Wurk::Test::UnitCase
   end
 
   def test_configure_client_yields_when_not_server
-    seen = nil
-    Sidekiq.configure_client { |c| seen = c }
+    STATE_MUTEX.synchronize do
+      seen = nil
+      Sidekiq.configure_client { |c| seen = c }
 
-    assert_same Wurk.configuration, seen
+      assert_same Wurk.configuration, seen
+    end
   end
 
   def test_configure_embed_always_yields
@@ -291,15 +295,15 @@ class CompatAliasesTest < Wurk::Test::UnitCase
   end
 
   def test_default_job_options_setter_merges
-    original = Wurk.default_job_options.dup
-    Sidekiq.default_job_options = { 'retry' => 5 }
+    STATE_MUTEX.synchronize do
+      original = Wurk.default_job_options.dup
+      Sidekiq.default_job_options = { 'retry' => 5 }
 
-    assert_equal 5, Wurk.default_job_options['retry']
-  ensure
-    Wurk.instance_variable_set(:@default_job_options, original)
+      assert_equal 5, Wurk.default_job_options['retry']
+    ensure
+      Wurk.instance_variable_set(:@default_job_options, original)
+    end
   end
-
-  STATE_MUTEX = Mutex.new
 
   def test_strict_args_setter
     STATE_MUTEX.synchronize do
