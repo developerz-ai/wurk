@@ -193,32 +193,13 @@ module Wurk
       Array.new(count) { now + (rand * window) }
     end
 
-    # `eval_cached` recovers from `NOSCRIPT` on its own — but only when the
-    # EVALSHA is a top-level call. Inside this `pipelined` block the error
-    # surfaces from `call_pipelined` AFTER `eval_cached` has returned, so its
-    # internal rescue never sees it. We catch it here, eagerly upload every
-    # registered script on this connection (idempotent in Redis), and retry
-    # the pipeline exactly once. Outside of test boots and `SCRIPT FLUSH`
-    # this branch is dead code.
     def raw_push(payloads)
-      pool.with do |conn|
-        attempts = 0
-        begin
-          conn.pipelined { |pipe| atomic_push(pipe, payloads) }
-        rescue RedisClient::CommandError => e
-          raise unless e.message.to_s.start_with?('NOSCRIPT')
-          raise if attempts.positive?
-
-          attempts += 1
-          Wurk::Lua::Loader.script_load_all(conn)
-          retry
-        end
-      end
+      pool.with { |conn| atomic_push(conn, payloads) }
     end
 
     def atomic_push(conn, payloads)
       if payloads.first['at']
-        push_scheduled(conn, payloads)
+        conn.pipelined { |pipe| push_scheduled(pipe, payloads) }
       else
         push_immediate(conn, payloads)
       end
@@ -231,11 +212,34 @@ module Wurk
       conn.call('ZADD', 'schedule', *args)
     end
 
+    # Plain SADD/LPUSH and Lua BATCH_PUSH must live in separate pipelines.
+    # A `NOSCRIPT` from EVALSHA surfaces only at pipeline finalize — never
+    # to `eval_cached`'s inline rescue — so an outer retry of a unified
+    # pipeline would replay the already-applied plain commands and
+    # duplicate non-batched enqueues. Splitting the phases means a Lua
+    # script reload only replays the batched pipeline.
     def push_immediate(conn, payloads)
       now = now_in_millis
       batched, plain = payloads.partition { |j| j['bid'] }
-      push_plain(conn, plain, now) unless plain.empty?
-      push_batched(conn, batched, now) unless batched.empty?
+      conn.pipelined { |pipe| push_plain(pipe, plain, now) } unless plain.empty?
+      push_batched_pipelined(conn, batched, now) unless batched.empty?
+    end
+
+    # Outside of test boots and `SCRIPT FLUSH` the rescue branch is dead
+    # code; the eager `script_load_all` after fork keeps the script cache
+    # hot for the life of the connection.
+    def push_batched_pipelined(conn, batched, now)
+      attempts = 0
+      begin
+        conn.pipelined { |pipe| push_batched(pipe, batched, now) }
+      rescue RedisClient::CommandError => e
+        raise unless e.message.to_s.start_with?('NOSCRIPT')
+        raise if attempts.positive?
+
+        attempts += 1
+        Wurk::Lua::Loader.script_load_all(conn)
+        retry
+      end
     end
 
     def push_plain(conn, payloads, now)
