@@ -43,6 +43,20 @@ module Sidekiq
         Wurk::Unique.locked?(*)
       end
     end
+
+    # AES-256-GCM args encryption. `Sidekiq::Enterprise::Crypto.enable(...)`
+    # delegates to `Wurk::Encryption.enable`. Spec: docs/target/sidekiq-ent.md §4.
+    module Crypto
+      class << self
+        def enable(active_version:, &)
+          Wurk::Encryption.enable(active_version: active_version, &)
+        end
+
+        def enabled?
+          Wurk::Encryption.enabled?
+        end
+      end
+    end
   end
 
   BasicFetch       = Wurk::Fetcher::Reliable
@@ -58,6 +72,7 @@ module Sidekiq
   Periodic         = Wurk::Cron
   DeadSet          = Wurk::DeadSet
   Embedded         = Wurk::Embedded
+  Encryption       = Wurk::Encryption
   IterableJob      = Wurk::IterableJob
   Job              = Wurk::Job
   JobLogger        = Wurk::JobLogger
