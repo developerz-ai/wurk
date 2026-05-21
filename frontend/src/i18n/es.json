@@ -1,0 +1,69 @@
+{
+  "nav": {
+    "dashboard": "Panel",
+    "queues": "Colas",
+    "retries": "Reintentos",
+    "scheduled": "Programados",
+    "dead": "Muertos",
+    "busy": "Ocupados",
+    "batches": "Lotes",
+    "limiters": "Limitadores",
+    "cron": "Cron",
+    "metrics": "Métricas",
+    "search": "Buscar"
+  },
+  "dashboard": {
+    "processed": "Procesados",
+    "failed": "Fallidos",
+    "busy": "Ocupados",
+    "enqueued": "En cola",
+    "retries": "Reintentos",
+    "scheduled": "Programados",
+    "dead": "Muertos",
+    "processes": "Procesos",
+    "latency": "Latencia",
+    "live": "En vivo",
+    "paused": "Pausado"
+  },
+  "table": {
+    "class": "Clase",
+    "args": "Args",
+    "jid": "JID",
+    "queue": "Cola",
+    "error": "Error",
+    "retry_at": "Reintentar en",
+    "failed_at": "Falló en",
+    "scheduled_at": "Programado en",
+    "score": "Puntuación",
+    "next_run": "Próxima ejecución",
+    "last_run": "Última ejecución",
+    "status": "Estado",
+    "total": "Total",
+    "pending": "Pendiente",
+    "size": "Tamaño",
+    "latency": "Latencia",
+    "concurrency": "Concurrencia",
+    "busy": "Ocupado",
+    "queues": "Colas",
+    "hostname": "Host"
+  },
+  "actions": {
+    "retry": "Reintentar",
+    "delete": "Eliminar",
+    "kill": "Matar",
+    "prev": "Anterior",
+    "next": "Siguiente",
+    "search": "Buscar",
+    "refresh": "Actualizar"
+  },
+  "common": {
+    "loading": "Cargando…",
+    "error": "Error al cargar datos",
+    "empty": "Sin elementos",
+    "page": "Página",
+    "of": "de",
+    "ms": "ms",
+    "ago": "hace",
+    "in": "en"
+  }
+}
