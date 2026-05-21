@@ -60,12 +60,31 @@ module Wurk
       chain
     end
 
+    # Pool size = concurrency + POOL_OVERHEAD. Every processor thread can
+    # be parked in a blocking BLMOVE (reliable fetch), holding its slot
+    # for ~3s. POOL_OVERHEAD reserves connections for the Launcher's
+    # heartbeat thread + the Scheduled::Poller so they can never be
+    # starved by busy fetchers. Without this, concurrency=1 deadlocks
+    # immediately (worker holds the only slot, heartbeat times out).
+    POOL_OVERHEAD = 2
+
     def redis_pool
-      @redis_pool ||= build_pool(size: @concurrency, name: "#{@name}-main")
+      @redis_pool ||= build_pool(size: @concurrency + POOL_OVERHEAD, name: "#{@name}-main")
     end
 
     def local_redis_pool
       @local_redis_pool ||= build_pool(size: @concurrency, name: "#{@name}-local")
+    end
+
+    # Disconnect and drop cached pools. Called by Wurk::Swarm just before
+    # fork (parent side: close inherited sockets) and just after fork
+    # (child side: rebuild lazily). Connection_pool#shutdown is terminal,
+    # so dropping the reference is required — `redis_pool` will rebuild.
+    def reset_redis_pools!
+      @redis_pool&.disconnect!
+      @redis_pool = nil
+      @local_redis_pool&.disconnect!
+      @local_redis_pool = nil
     end
 
     def redis(&)
