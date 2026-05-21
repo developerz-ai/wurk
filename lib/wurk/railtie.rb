@@ -12,7 +12,7 @@ module Wurk
       next if defined?(::Rails::Console)
       next if ::Rails.env.test?
 
-      # TODO: Wurk::Swarm.new(topology: Wurk.configuration.topology).boot
+      Wurk::Swarm.new(topology: Wurk.configuration.topology).boot
     end
   end
 end
