@@ -8,7 +8,7 @@ module Wurk
   # and JSON-verify job payloads before they hit Redis.
   #
   # Spec: docs/target/sidekiq-free.md §9 (Sidekiq::JobUtil).
-  module JobUtil
+  module JobUtil # rubocop:disable Metrics/ModuleLength
     # Top-level keys stripped from every payload before raw_push. Mutable so
     # Pro/Ent/extension code (e.g. TransactionAwareClient adding "client_class")
     # can append at load time without monkey-patching.
@@ -60,6 +60,7 @@ module Wurk
     def valid_class?(klass) = klass.is_a?(Class) || klass.is_a?(String)
     def valid_at?(item) = !item.key?('at') || item['at'].is_a?(Numeric)
     def valid_tags?(item) = !item.key?('tags') || item['tags'].is_a?(Array)
+
     def valid_retry_for?(item)
       return true unless item.key?('retry_for')
 
@@ -104,7 +105,19 @@ module Wurk
       normalized['jid'] ||= SecureRandom.hex(12)
       normalized['retry_for'] = numeric_retry_for(normalized['retry_for']) if normalized.key?('retry_for')
       normalized['created_at'] ||= now_in_millis
+      stamp_expiry(normalized)
       normalized
+    end
+
+    # Pro `expires_in:` → absolute epoch-float `expiry` resolved once at push,
+    # so the server middleware doesn't redo the math. Spec: sidekiq-pro.md §7.
+    # nil.respond_to?(:to_f) is true on modern Ruby (returns 0.0), so we must
+    # gate on a non-nil duration before coercing.
+    def stamp_expiry(item)
+      d = item['expires_in']
+      return if d.nil?
+
+      item['expiry'] ||= (item['created_at'].to_f / 1000.0) + d.to_f if d.respond_to?(:to_f)
     end
 
     def report_unsafe(item, offender, mode)

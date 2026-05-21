@@ -200,6 +200,12 @@ require_relative 'wurk/batch/client_middleware'
 require_relative 'wurk/batch/server_middleware'
 require_relative 'wurk/batch/death_handler'
 
+# Expiry must register AFTER Batch::ServerMiddleware so it sits inside that
+# middleware's onion — a skipped (expired) job then unwinds back through
+# batch's `yield` and gets counted as a batch success on the way out.
+# Spec: docs/target/sidekiq-pro.md §7.
+require_relative 'wurk/middleware/expiry'
+
 # Sidekiq aliases load last — every Wurk::* constant they reference must be
 # fully defined first. compat.rb only redefines names, it does not gate
 # behavior, so trailing the load order is safe.
