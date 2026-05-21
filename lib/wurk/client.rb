@@ -2,6 +2,7 @@
 
 require_relative 'iterable_job'
 require_relative 'job_util'
+require_relative 'lua'
 
 module Wurk
   # Enqueue interface. Pipelined LPUSH / ZADD writes against the canonical
@@ -193,14 +194,12 @@ module Wurk
     end
 
     def raw_push(payloads)
-      pool.with do |conn|
-        conn.pipelined { |pipe| atomic_push(pipe, payloads) }
-      end
+      pool.with { |conn| atomic_push(conn, payloads) }
     end
 
     def atomic_push(conn, payloads)
       if payloads.first['at']
-        push_scheduled(conn, payloads)
+        conn.pipelined { |pipe| push_scheduled(pipe, payloads) }
       else
         push_immediate(conn, payloads)
       end
@@ -213,8 +212,37 @@ module Wurk
       conn.call('ZADD', 'schedule', *args)
     end
 
+    # Plain SADD/LPUSH and Lua BATCH_PUSH must live in separate pipelines.
+    # A `NOSCRIPT` from EVALSHA surfaces only at pipeline finalize — never
+    # to `eval_cached`'s inline rescue — so an outer retry of a unified
+    # pipeline would replay the already-applied plain commands and
+    # duplicate non-batched enqueues. Splitting the phases means a Lua
+    # script reload only replays the batched pipeline.
     def push_immediate(conn, payloads)
-      now     = now_in_millis
+      now = now_in_millis
+      batched, plain = payloads.partition { |j| j['bid'] }
+      conn.pipelined { |pipe| push_plain(pipe, plain, now) } unless plain.empty?
+      push_batched_pipelined(conn, batched, now) unless batched.empty?
+    end
+
+    # Outside of test boots and `SCRIPT FLUSH` the rescue branch is dead
+    # code; the eager `script_load_all` after fork keeps the script cache
+    # hot for the life of the connection.
+    def push_batched_pipelined(conn, batched, now)
+      attempts = 0
+      begin
+        conn.pipelined { |pipe| push_batched(pipe, batched, now) }
+      rescue RedisClient::CommandError => e
+        raise unless e.message.to_s.start_with?('NOSCRIPT')
+        raise if attempts.positive?
+
+        attempts += 1
+        Wurk::Lua::Loader.script_load_all(conn)
+        retry
+      end
+    end
+
+    def push_plain(conn, payloads, now)
       grouped = payloads.group_by { |j| j['queue'] }
       conn.call('SADD', 'queues', *grouped.keys)
       grouped.each do |queue, jobs|
@@ -223,6 +251,23 @@ module Wurk
           Wurk.dump_json(j)
         end
         conn.call('LPUSH', "queue:#{queue}", *serialized)
+      end
+    end
+
+    # Batched jobs route through BATCH_PUSH: increments b-<bid> total+pending,
+    # SADDs jid into the live set, registers the queue, LPUSHes the payload —
+    # all atomically. One Redis round-trip per job (no pipeline grouping)
+    # because the lua needs per-job KEYS bound. Acceptable cost: batch
+    # enqueue is not the hot path; correctness is.
+    def push_batched(conn, payloads, now)
+      payloads.each do |j|
+        j['enqueued_at'] = now
+        Wurk::Lua::Loader.eval_cached(
+          conn,
+          :batch_push,
+          keys: ["b-#{j['bid']}", "b-#{j['bid']}-jids", "queue:#{j['queue']}", 'queues'],
+          argv: [j['queue'], j['jid'], Wurk.dump_json(j)]
+        )
       end
     end
 

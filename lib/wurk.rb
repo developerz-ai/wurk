@@ -48,6 +48,7 @@ require_relative 'wurk/swarm'
 require_relative 'wurk/topology'
 require_relative 'wurk/batch'
 require_relative 'wurk/batch/status'
+require_relative 'wurk/batch_set'
 require_relative 'wurk/limiter'
 require_relative 'wurk/cron'
 require_relative 'wurk/leader'
@@ -188,6 +189,32 @@ module Wurk
     end
   end
 end
+
+# Batch worker classes (Empty, CallbackJob) and middleware load AFTER the
+# Wurk module class << self block — they instantiate workers at load time
+# via `sidekiq_options`, which reads Wurk.default_job_options.
+require_relative 'wurk/batch/empty'
+require_relative 'wurk/batch/callback_job'
+require_relative 'wurk/batch/callbacks'
+require_relative 'wurk/batch/client_middleware'
+require_relative 'wurk/batch/server_middleware'
+require_relative 'wurk/batch/death_handler'
+
+# Expiry must register AFTER Batch::ServerMiddleware so it sits inside that
+# middleware's onion — a skipped (expired) job then unwinds back through
+# batch's `yield` and gets counted as a batch success on the way out.
+# Spec: docs/target/sidekiq-pro.md §7.
+require_relative 'wurk/middleware/expiry'
+
+# Poison-pill detection — orphan recovery counter + dead set on threshold.
+# Spec: docs/target/sidekiq-pro.md §3.2.
+require_relative 'wurk/middleware/poison_pill'
+
+# Pro Fast API: Lua-backed Queue#delete_job / #delete_by_class plus
+# SortedSet#scan { |JobRecord| … }. Mixed in via include/prepend on the
+# existing data API classes so the surface is wire-compat with Sidekiq Pro.
+# Spec: docs/target/sidekiq-pro.md §11.
+require_relative 'wurk/api/fast'
 
 # Sidekiq aliases load last — every Wurk::* constant they reference must be
 # fully defined first. compat.rb only redefines names, it does not gate

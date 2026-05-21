@@ -118,9 +118,13 @@ class StatsTest < Wurk::Test::UnitCase
   end
 
   def test_processes_size_counts_set_members
-    register_identity!
+    # Serialize against ProcessSetTest's `DEL processes` test — without
+    # this, the SCARD inside `Stats.new` can land mid-DEL and read 0.
+    Wurk::Test::PROCESSES_MUTEX.synchronize do
+      register_identity!
 
-    assert_operator Wurk::Stats.new.processes_size, :>=, 1
+      assert_operator Wurk::Stats.new.processes_size, :>=, 1
+    end
   end
 
   def test_workers_size_returns_integer
@@ -128,9 +132,14 @@ class StatsTest < Wurk::Test::UnitCase
   end
 
   def test_workers_size_sums_busy_across_identities
-    register_identity!('busy' => '4')
+    # Serialize against ProcessSetTest's `DEL processes` test — without
+    # this, our identity can be wiped between SADD and SMEMBERS, leaving
+    # workers_size at 0.
+    Wurk::Test::PROCESSES_MUTEX.synchronize do
+      register_identity!('busy' => '4')
 
-    assert_operator Wurk::Stats.new.workers_size, :>=, 4
+      assert_operator Wurk::Stats.new.workers_size, :>=, 4
+    end
   end
 
   def test_workers_size_ignores_missing_busy_field

@@ -136,10 +136,12 @@ class ProcessSetTest < Wurk::Test::UnitCase
   end
 
   def test_total_rss_aliases_total_rss_in_kb
-    register!(info: base_info, rss: '1024')
-    set = Wurk::ProcessSet.new(false)
-
-    assert_equal set.total_rss_in_kb, set.total_rss
+    # Method-identity check, not call-result comparison. Both methods iterate
+    # `each`, which re-fetches Redis on every call — under parallel siblings
+    # the two reads can return different sums even though the methods are
+    # the same. `alias` makes UnboundMethods equal.
+    assert_equal Wurk::ProcessSet.instance_method(:total_rss_in_kb),
+                 Wurk::ProcessSet.instance_method(:total_rss)
   end
 
   # --- leader ------------------------------------------------------------
@@ -196,13 +198,18 @@ class ProcessSetTest < Wurk::Test::UnitCase
 
   def test_cleanup_returns_zero_when_processes_set_empty
     # `processes` is shared globally — snapshot and restore so parallel
-    # siblings keep their registered identities intact.
-    snapshot = @pool.with { |c| c.call('SMEMBERS', 'processes') }
-    @pool.with { |c| c.call('DEL', 'processes') }
-    begin
-      assert_equal 0, Wurk::ProcessSet.new(false).cleanup
-    ensure
-      @pool.with { |c| c.call('SADD', 'processes', *snapshot) } unless snapshot.empty?
+    # siblings keep their registered identities intact. Snapshot+restore
+    # alone isn't enough: a sibling test could SADD between SMEMBERS and
+    # DEL (lost on restore) or read the empty set mid-window. The mutex
+    # serializes against any other test that asserts on `processes`.
+    Wurk::Test::PROCESSES_MUTEX.synchronize do
+      snapshot = @pool.with { |c| c.call('SMEMBERS', 'processes') }
+      @pool.with { |c| c.call('DEL', 'processes') }
+      begin
+        assert_equal 0, Wurk::ProcessSet.new(false).cleanup
+      ensure
+        @pool.with { |c| c.call('SADD', 'processes', *snapshot) } unless snapshot.empty?
+      end
     end
   end
 

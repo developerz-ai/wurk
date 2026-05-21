@@ -33,7 +33,8 @@ class LuaTest < Wurk::Test::UnitCase
   def test_scripts_registry_holds_expected_keys
     assert_equal(
       %i[zpopbyscore bulk_push reliable_schedule_promote
-         batch_push batch_complete batch_invalidate].sort,
+         batch_push batch_ack_success batch_ack_complete batch_invalidate
+         fast_delete_job fast_delete_by_class].sort,
       Wurk::Lua::SCRIPTS.keys.sort
     )
   end
@@ -160,22 +161,52 @@ class LuaTest < Wurk::Test::UnitCase
     end
   end
 
-  def test_batch_complete_decrements_pending_only_for_known_jid
+  def test_batch_ack_success_decrements_pending_only_for_known_jid
     bkey = "#{@ns}:b-y"
     jids = "#{@ns}:b-y-jids"
     @pool.with do |c|
       c.call('HSET', bkey, 'total', 2, 'pending', 2)
       c.call('SADD', jids, 'A', 'B')
 
-      remaining = Wurk::Lua::Loader.eval_cached(c, :batch_complete, keys: [bkey, jids], argv: ['A'])
+      pending, live = Wurk::Lua::Loader.eval_cached(c, :batch_ack_success, keys: [bkey, jids], argv: ['A'])
 
-      assert_equal 1, remaining
+      assert_equal 1, pending
+      assert_equal 1, live
       assert_equal '1', c.call('HGET', bkey, 'pending')
 
-      unknown = Wurk::Lua::Loader.eval_cached(c, :batch_complete, keys: [bkey, jids], argv: ['ZZZ'])
+      pending, live = Wurk::Lua::Loader.eval_cached(c, :batch_ack_success, keys: [bkey, jids], argv: ['ZZZ'])
 
-      assert_equal(-1, unknown)
+      assert_equal(-1, pending)
+      assert_equal(-1, live)
       assert_equal '1', c.call('HGET', bkey, 'pending')
+    end
+  end
+
+  def test_batch_ack_complete_records_death_and_signals_first # rubocop:disable Metrics/AbcSize
+    bkey   = "#{@ns}:b-d"
+    jids   = "#{@ns}:b-d-jids"
+    died   = "#{@ns}:b-d-died"
+    failed = "#{@ns}:b-d-failed"
+    @pool.with do |c|
+      c.call('HSET', bkey, 'total', 2, 'pending', 2, 'failures', 0)
+      c.call('SADD', jids, 'A', 'B')
+
+      live, died_n, first = Wurk::Lua::Loader.eval_cached(
+        c, :batch_ack_complete, keys: [bkey, jids, died, failed], argv: ['A']
+      )
+
+      assert_equal 1, live
+      assert_equal 1, died_n
+      assert_equal 1, first
+      assert_equal '1', c.call('HGET', bkey, 'failures')
+      assert_equal 1, c.call('SISMEMBER', died, 'A')
+      assert_equal 1, c.call('SISMEMBER', failed, 'A')
+
+      _live, _died_n, second_first = Wurk::Lua::Loader.eval_cached(
+        c, :batch_ack_complete, keys: [bkey, jids, died, failed], argv: ['B']
+      )
+
+      assert_equal 0, second_first
     end
   end
   # rubocop:enable Minitest/MultipleAssertions

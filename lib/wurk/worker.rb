@@ -33,6 +33,31 @@ module Wurk
       ctx.respond_to?(:stopping?) && ctx.stopping?
     end
 
+    # Batch helpers (Pro). Available on every worker — return nil when the
+    # current job did not originate from a batch.
+    #
+    # Spec: docs/target/sidekiq-pro.md §2.6.
+    def bid
+      @bid
+    end
+
+    # @api private — Processor sets this from job_hash['bid'] before perform.
+    attr_writer :bid
+
+    def batch
+      return nil if @bid.nil?
+
+      Wurk::Batch.new(@bid)
+    end
+
+    # False if the batch was invalidated. Workers should `return unless
+    # valid_within_batch?` to short-circuit work for cancelled batches.
+    def valid_within_batch?
+      return true if @bid.nil?
+
+      batch.valid?
+    end
+
     module ClassMethods
       def sidekiq_options(opts = {})
         merged = get_sidekiq_options.merge(opts.transform_keys(&:to_s))

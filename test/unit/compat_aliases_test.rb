@@ -62,6 +62,10 @@ class CompatAliasesTest < Wurk::Test::UnitCase
     assert_same Wurk::Batch, Sidekiq::Batch
   end
 
+  def test_batch_set_alias
+    assert_same Wurk::BatchSet, Sidekiq::BatchSet
+  end
+
   def test_capsule_alias
     assert_same Wurk::Capsule, Sidekiq::Capsule
   end

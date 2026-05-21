@@ -70,18 +70,41 @@ module Wurk
       return 1
     LUA
 
-    # Pro Batch: mark one job complete. Decrements pending iff the jid
-    # was actually a member of the batch (prevents double-decrement on
-    # retries that already succeeded).
+    # Pro Batch: ACK a job that completed successfully. SREM from the live
+    # jids set and decrement pending iff the jid was a member (idempotent
+    # against double-success on a flaky retry).
     # KEYS = [b-<bid>, b-<bid>-jids]
     # ARGV = [jid]
-    # Returns new pending count, or -1 if the jid was not in the batch.
-    BATCH_COMPLETE = <<~LUA
+    # Returns [new_pending, live_jids_remaining], or [-1, -1] when the jid
+    # was not a member (treat as already acked).
+    BATCH_ACK_SUCCESS = <<~LUA
       local removed = redis.call("srem", KEYS[2], ARGV[1])
       if removed == 1 then
-        return redis.call("hincrby", KEYS[1], "pending", -1)
+        local pending = redis.call("hincrby", KEYS[1], "pending", -1)
+        return { pending, redis.call("scard", KEYS[2]) }
       end
-      return -1
+      return { -1, -1 }
+    LUA
+
+    # Pro Batch: ACK a job that exhausted retries and died. Records death,
+    # bumps failures, and SREMs from live jids so the batch can fire
+    # `:complete` even with terminally failed jobs.
+    # KEYS = [b-<bid>, b-<bid>-jids, b-<bid>-died, b-<bid>-failed]
+    # ARGV = [jid]
+    # Returns [live_jids_remaining, died_count, first_death]. `first_death`
+    # is 1 the first time *any* jid is SADDed into the died set, 0 thereafter
+    # — caller uses it to fire `:death` exactly once per batch.
+    BATCH_ACK_COMPLETE = <<~LUA
+      local was_pre_existing_death = redis.call("scard", KEYS[3])
+      redis.call("srem", KEYS[2], ARGV[1])
+      redis.call("sadd", KEYS[4], ARGV[1])
+      local died_added = redis.call("sadd", KEYS[3], ARGV[1])
+      redis.call("hincrby", KEYS[1], "failures", 1)
+      local first_death = 0
+      if was_pre_existing_death == 0 and died_added == 1 then
+        first_death = 1
+      end
+      return { redis.call("scard", KEYS[2]), redis.call("scard", KEYS[3]), first_death }
     LUA
 
     # Pro Batch: invalidate all pending jobs. The jobs themselves stay
@@ -97,13 +120,52 @@ module Wurk
       return 1
     LUA
 
+    # Pro Fast API (§11): server-side LRANGE+LREM to delete a single job by
+    # jid from a queue list. Pure-Ruby Queue#find_job + JobRecord#delete is
+    # O(N) round-trips; this is O(1) round-trip with O(N) Lua work.
+    # KEYS = [queue:<name>]
+    # ARGV = [jid]
+    # Returns the number of payloads removed (0 or 1; can be >1 in pathological
+    # duplicate-jid corruption — caller doesn't rely on the value).
+    FAST_DELETE_JOB = <<~LUA
+      local items = redis.call("lrange", KEYS[1], 0, -1)
+      local removed = 0
+      for i = 1, #items do
+        if string.find(items[i], '"jid":"' .. ARGV[1] .. '"', 1, true) then
+          removed = removed + redis.call("lrem", KEYS[1], 1, items[i])
+        end
+      end
+      return removed
+    LUA
+
+    # Pro Fast API (§11): server-side LRANGE+LREM removing every payload whose
+    # `"class":"<klass>"` field matches. Plain-text scan (no JSON parse) so
+    # it tolerates partial corruption — caller drops only well-formed matches.
+    # KEYS = [queue:<name>]
+    # ARGV = [klass]
+    # Returns the number of payloads removed.
+    FAST_DELETE_BY_CLASS = <<~LUA
+      local items = redis.call("lrange", KEYS[1], 0, -1)
+      local removed = 0
+      local needle = '"class":"' .. ARGV[1] .. '"'
+      for i = 1, #items do
+        if string.find(items[i], needle, 1, true) then
+          removed = removed + redis.call("lrem", KEYS[1], 1, items[i])
+        end
+      end
+      return removed
+    LUA
+
     SCRIPTS = {
       zpopbyscore: ZPOPBYSCORE,
       bulk_push: BULK_PUSH,
       reliable_schedule_promote: RELIABLE_SCHEDULE_PROMOTE,
       batch_push: BATCH_PUSH,
-      batch_complete: BATCH_COMPLETE,
-      batch_invalidate: BATCH_INVALIDATE
+      batch_ack_success: BATCH_ACK_SUCCESS,
+      batch_ack_complete: BATCH_ACK_COMPLETE,
+      batch_invalidate: BATCH_INVALIDATE,
+      fast_delete_job: FAST_DELETE_JOB,
+      fast_delete_by_class: FAST_DELETE_BY_CLASS
     }.freeze
 
     # SHA1 of each script source — matches what `SCRIPT LOAD` returns.
