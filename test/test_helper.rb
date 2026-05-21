@@ -37,6 +37,13 @@ module Wurk
     # Pair with a `#run` override on each such class.
     STATSD_MUTEX = Mutex.new
 
+    # Suite-wide mutex for tests that destructively wipe the globally-shared
+    # `processes` SET (e.g. `DEL processes`) or read it back and assert a
+    # lower bound on its contents. Without this, a `DEL` in ProcessSetTest can
+    # land between another test's SADD-identity and its SCARD/SMEMBERS, making
+    # the reader see 0 instead of the identity it just registered.
+    PROCESSES_MUTEX = Mutex.new
+
     # Base class for non-engine tests.
     class UnitCase < ::Minitest::Test
       include RedisNamespace

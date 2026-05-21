@@ -33,10 +33,19 @@ class BatchSetTest < Wurk::Test::UnitCase
   # --- BatchSet ---------------------------------------------------------
 
   def test_size_returns_count_of_indexed_batches
-    pre = Wurk::BatchSet.new.size
-    seed(2)
+    # `batches` ZSET is globally shared — siblings may both add AND remove
+    # entries between our reads. A `pre + 2` snapshot-and-diff is brittle:
+    # if a sibling's teardown ZREMs between snapshot and re-read, the diff
+    # underflows. Instead: verify our 2 seeded bids are members of the set,
+    # and that `size` is at least their count.
+    bids = seed(2)
+    set  = Wurk::BatchSet.new
+    scores = @pool.with do |c|
+      bids.map { |bid| c.call('ZSCORE', 'batches', bid) }
+    end
 
-    assert_equal pre + 2, Wurk::BatchSet.new.size
+    refute_includes scores, nil, 'expected all seeded bids in `batches` ZSET'
+    assert_operator set.size, :>=, bids.size
   end
 
   def test_each_yields_status_objects
