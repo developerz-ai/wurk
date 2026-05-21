@@ -63,6 +63,15 @@ module Wurk
     attr_reader :capsules, :directory, :redis_config
     attr_accessor :thread_priority
 
+    # Pro parity: callable that builds the statsd / dogstatsd client.
+    # Invoked once per process AFTER fork; see Wurk::Metrics::Statsd.client.
+    # Assignable as a Proc, lambda, or any object responding to #call:
+    #
+    #   config.dogstatsd = -> { Datadog::Statsd.new('host', 8125) }
+    #
+    # Spec: docs/target/sidekiq-pro.md §9.1.
+    attr_accessor :dogstatsd
+
     def initialize(options = {})
       @options = deep_dup_defaults.merge(options)
       @options[:error_handlers] << ERROR_HANDLER if @options[:error_handlers].empty?

@@ -206,6 +206,16 @@ require_relative 'wurk/batch/death_handler'
 # Spec: docs/target/sidekiq-pro.md §7.
 require_relative 'wurk/middleware/expiry'
 
+# Poison-pill detection — orphan recovery counter + dead set on threshold.
+# Spec: docs/target/sidekiq-pro.md §3.2.
+require_relative 'wurk/middleware/poison_pill'
+
+# Pro Fast API: Lua-backed Queue#delete_job / #delete_by_class plus
+# SortedSet#scan { |JobRecord| … }. Mixed in via include/prepend on the
+# existing data API classes so the surface is wire-compat with Sidekiq Pro.
+# Spec: docs/target/sidekiq-pro.md §11.
+require_relative 'wurk/api/fast'
+
 # Sidekiq aliases load last — every Wurk::* constant they reference must be
 # fully defined first. compat.rb only redefines names, it does not gate
 # behavior, so trailing the load order is safe.

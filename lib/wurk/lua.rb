@@ -120,6 +120,42 @@ module Wurk
       return 1
     LUA
 
+    # Pro Fast API (§11): server-side LRANGE+LREM to delete a single job by
+    # jid from a queue list. Pure-Ruby Queue#find_job + JobRecord#delete is
+    # O(N) round-trips; this is O(1) round-trip with O(N) Lua work.
+    # KEYS = [queue:<name>]
+    # ARGV = [jid]
+    # Returns the number of payloads removed (0 or 1; can be >1 in pathological
+    # duplicate-jid corruption — caller doesn't rely on the value).
+    FAST_DELETE_JOB = <<~LUA
+      local items = redis.call("lrange", KEYS[1], 0, -1)
+      local removed = 0
+      for i = 1, #items do
+        if string.find(items[i], '"jid":"' .. ARGV[1] .. '"', 1, true) then
+          removed = removed + redis.call("lrem", KEYS[1], 1, items[i])
+        end
+      end
+      return removed
+    LUA
+
+    # Pro Fast API (§11): server-side LRANGE+LREM removing every payload whose
+    # `"class":"<klass>"` field matches. Plain-text scan (no JSON parse) so
+    # it tolerates partial corruption — caller drops only well-formed matches.
+    # KEYS = [queue:<name>]
+    # ARGV = [klass]
+    # Returns the number of payloads removed.
+    FAST_DELETE_BY_CLASS = <<~LUA
+      local items = redis.call("lrange", KEYS[1], 0, -1)
+      local removed = 0
+      local needle = '"class":"' .. ARGV[1] .. '"'
+      for i = 1, #items do
+        if string.find(items[i], needle, 1, true) then
+          removed = removed + redis.call("lrem", KEYS[1], 1, items[i])
+        end
+      end
+      return removed
+    LUA
+
     SCRIPTS = {
       zpopbyscore: ZPOPBYSCORE,
       bulk_push: BULK_PUSH,
@@ -127,7 +163,9 @@ module Wurk
       batch_push: BATCH_PUSH,
       batch_ack_success: BATCH_ACK_SUCCESS,
       batch_ack_complete: BATCH_ACK_COMPLETE,
-      batch_invalidate: BATCH_INVALIDATE
+      batch_invalidate: BATCH_INVALIDATE,
+      fast_delete_job: FAST_DELETE_JOB,
+      fast_delete_by_class: FAST_DELETE_BY_CLASS
     }.freeze
 
     # SHA1 of each script source — matches what `SCRIPT LOAD` returns.
