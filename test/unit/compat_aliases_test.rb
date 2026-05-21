@@ -222,10 +222,41 @@ class CompatAliasesTest < Wurk::Test::UnitCase
   end
 
   def test_configure_embed_always_yields
-    seen = nil
-    Sidekiq.configure_embed { |c| seen = c }
+    STATE_MUTEX.synchronize do
+      original_concurrency = Wurk.configuration.concurrency
+      seen = nil
+      Sidekiq.configure_embed { |c| seen = c }
 
-    assert_same Wurk.configuration, seen
+      assert_same Wurk.configuration, seen
+    ensure
+      Wurk.configuration.concurrency = original_concurrency
+    end
+  end
+
+  def test_configure_embed_returns_embedded_instance
+    STATE_MUTEX.synchronize do
+      original_concurrency = Wurk.configuration.concurrency
+      embedded = Sidekiq.configure_embed { |_c| nil }
+
+      assert_kind_of Wurk::Embedded, embedded
+    ensure
+      Wurk.configuration.concurrency = original_concurrency
+    end
+  end
+
+  def test_configure_embed_defaults_concurrency_to_two
+    STATE_MUTEX.synchronize do
+      original_concurrency = Wurk.configuration.concurrency
+      Sidekiq.configure_embed { |_c| nil }
+
+      assert_equal 2, Wurk.configuration.concurrency
+    ensure
+      Wurk.configuration.concurrency = original_concurrency
+    end
+  end
+
+  def test_embedded_alias
+    assert_same Wurk::Embedded, Sidekiq::Embedded
   end
 
   def test_default_configuration

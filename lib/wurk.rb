@@ -43,6 +43,7 @@ require_relative 'wurk/lua'
 require_relative 'wurk/scheduled'
 require_relative 'wurk/launcher'
 require_relative 'wurk/cli'
+require_relative 'wurk/embedded'
 require_relative 'wurk/swarm'
 require_relative 'wurk/topology'
 require_relative 'wurk/batch'
@@ -80,11 +81,19 @@ module Wurk
     end
 
     # Embedded mode: caller runs Wurk inside its own process (Puma, rake task,
-    # etc.) without forking. The caller is opting in as both client and server,
-    # so the block always runs. Full Wurk::Embedded ships in task 36.
+    # etc.) without forking. Concurrency is defaulted to 2 — the GIL makes
+    # higher thread counts counterproductive inside a host process that has
+    # its own pool. The block can override anything before the Embedded
+    # instance is built. Returns a Wurk::Embedded the caller drives with
+    # `#run` / `#quiet` / `#stop`.
     def configure_embed
+      if configuration.frozen?
+        raise FrozenError, 'Wurk configuration is frozen; build all embedded instances before calling run'
+      end
+
+      configuration.concurrency = 2
       yield configuration if block_given?
-      configuration
+      Embedded.new(configuration)
     end
 
     def configuration

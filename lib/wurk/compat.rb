@@ -31,6 +31,7 @@ module Sidekiq
   Context          = Wurk::Context
   Cron             = Wurk::Cron
   DeadSet          = Wurk::DeadSet
+  Embedded         = Wurk::Embedded
   IterableJob      = Wurk::IterableJob
   Job              = Wurk::Job
   JobLogger        = Wurk::JobLogger
