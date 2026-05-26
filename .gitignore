@@ -31,3 +31,7 @@ frontend/npm-debug.log*
 # Precompiled assets are built at release time; do not commit the build output.
 vendor/assets/dashboard/*
 !vendor/assets/dashboard/.keep
+
+# Ecosystem gem checkouts — cloned locally for `rake test:ecosystem`, never committed
+test/ecosystem/*/
+!test/ecosystem/.keep

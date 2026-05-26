@@ -25,7 +25,7 @@ jobs:
       - uses: actions/checkout@v4
       - uses: useblacksmith/setup-ruby@v1
         with:
-          ruby-version: "3.3"
+          ruby-version: "3.4"
           bundler-cache: true
       - name: run benches
         run: bundle exec rake bench | tee bench-results.txt
