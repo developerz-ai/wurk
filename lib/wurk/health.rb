@@ -85,21 +85,28 @@ module Wurk
             handle(client) if client
           rescue ::IO::WaitReadable
             next
+          rescue ::StandardError => e
+            logger&.error { "Wurk::Health accept: #{e.class}: #{e.message}" }
+            next
           end
         end
       rescue ::IOError, ::Errno::EBADF
         # Server was closed during shutdown — expected.
-      rescue ::StandardError => e
-        logger&.error { "Wurk::Health accept loop: #{e.class}: #{e.message}" }
       end
 
       def handle(client)
+        return unless ::IO.select([client], nil, nil, 1.0)
         request_line = client.gets("\r\n")
         return if request_line.nil?
 
         method, path, = request_line.strip.split(' ', 3)
         # Drain remaining headers; ignore the body (probes don't send one).
-        while (line = client.gets("\r\n")) && line != "\r\n"
+        # Wait for readability before each gets so a stalled client can't
+        # block the single accept thread mid-headers.
+        loop do
+          break unless ::IO.select([client], nil, nil, 1.0)
+          line = client.gets("\r\n")
+          break if line.nil? || line == "\r\n"
         end
 
         body, status = response_for(method, path)

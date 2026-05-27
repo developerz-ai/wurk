@@ -229,7 +229,15 @@ module Wurk
     # Spec: docs/target/sidekiq-ent.md §7.1.2.
     def health_check(port:, bind: '0.0.0.0', ready_window: 30)
       guard_frozen!
-      @options[:health_check_options] = { port: port.to_i, bind: bind.to_s, ready_window: ready_window.to_i }
+      p = Integer(port)
+      rw = Integer(ready_window)
+      raise ArgumentError, 'port must be between 0 and 65535' unless (0..65535).cover?(p)
+      raise ArgumentError, 'ready_window must be > 0' unless rw.positive?
+
+      b = bind.to_s
+      raise ArgumentError, 'bind must be a non-empty string' if b.empty?
+
+      @options[:health_check_options] = { port: p, bind: b, ready_window: rw }
     end
 
     # --- Lifecycle hooks --------------------------------------------------

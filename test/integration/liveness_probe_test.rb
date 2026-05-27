@@ -17,7 +17,7 @@ class LivenessProbeTest < Wurk::Test::UnitCase
 
   def setup
     super
-    @ns = "lp-#{Process.pid}-#{object_id}"
+    @ns = "lp:#{Process.pid}:#{object_id}"
     @config = Wurk::Configuration.new
     @config.logger = ::Logger.new(IO::NULL)
     @config[:tag] = @ns
@@ -123,7 +123,12 @@ class LivenessProbeTest < Wurk::Test::UnitCase
 
   def listener_ready?
     server = @launcher.instance_variable_get(:@health_server)
-    server&.running? == true && server.port.positive?
+    return false unless server&.running? == true && server.port.positive?
+
+    ::TCPSocket.open('127.0.0.1', server.port, &:close)
+    true
+  rescue Errno::ECONNREFUSED, IOError
+    false
   end
 
   def probe(path)
