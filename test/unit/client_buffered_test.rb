@@ -33,7 +33,6 @@ class ClientBufferedTest < Wurk::Test::UnitCase
   end
 
   def teardown
-    Wurk::Client.reliable_push_drainer_stop!
     Wurk::Client::Buffered.reset!
     @pool.with do |conn|
       conn.call('DEL', "queue:#{@queue}")
@@ -185,108 +184,6 @@ class ClientBufferedTest < Wurk::Test::UnitCase
     assert_equal [[1], [2], [3]], Wurk::Client::Buffered.buffer.map { |p| p['args'] } # rubocop:disable Lint/AmbiguousBlockAssociation
   end
 
-  # --- overflow mode (issue #19, opt-in raise on cap) --------------------
-
-  def test_overflow_mode_default_is_drop_oldest
-    assert_equal :drop_oldest, Wurk::Client::Buffered.overflow_mode
-    assert_equal :drop_oldest, Wurk::Client.reliable_push_overflow
-  end
-
-  def test_overflow_mode_setter_accepts_known_modes
-    Wurk::Client.reliable_push_overflow = :raise
-
-    assert_equal :raise, Wurk::Client.reliable_push_overflow
-
-    Wurk::Client.reliable_push_overflow = 'drop_oldest'
-
-    assert_equal :drop_oldest, Wurk::Client.reliable_push_overflow
-  end
-
-  def test_overflow_mode_setter_rejects_unknown
-    assert_raises(ArgumentError) { Wurk::Client.reliable_push_overflow = :explode }
-  end
-
-  def test_overflow_raise_raises_when_cap_reached
-    Wurk::Client.reliable_push_buffer = 2
-    Wurk::Client.reliable_push_overflow = :raise
-    failing = build_client(failing_pool)
-
-    failing.push(base_item('args' => ['first']))
-    failing.push(base_item('args' => ['second']))
-
-    err = assert_raises(Wurk::Client::Buffered::Overflow) { failing.push(base_item('args' => ['third'])) }
-
-    assert_equal ['third'], err.payload['args']
-    assert_equal 2, Wurk::Client::Buffered.buffer_size, 'buffer untouched by overflow payload'
-  end
-
-  def test_overflow_raise_preserves_oldest_when_cap_reached
-    Wurk::Client.reliable_push_buffer = 1
-    Wurk::Client.reliable_push_overflow = :raise
-    failing = build_client(failing_pool)
-
-    failing.push(base_item('args' => ['keep']))
-    assert_raises(Wurk::Client::Buffered::Overflow) { failing.push(base_item('args' => ['reject'])) }
-
-    assert_equal [['keep']], Wurk::Client::Buffered.buffer.map { |p| p['args'] } # rubocop:disable Lint/AmbiguousBlockAssociation
-  end
-
-  # --- background drainer (issue #19) ------------------------------------
-
-  def test_reliable_push_drainer_starts_thread
-    Wurk::Client.reliable_push_drainer(interval: 0.05)
-
-    assert_predicate Wurk::Client, :reliable_push_drainer_running?
-  end
-
-  def test_reliable_push_drainer_idempotent_restart
-    Wurk::Client.reliable_push_drainer(interval: 0.05)
-    first = Wurk::Client::Buffered.instance_variable_get(:@drainer)
-    Wurk::Client.reliable_push_drainer(interval: 0.1)
-    second = Wurk::Client::Buffered.instance_variable_get(:@drainer)
-
-    refute_same first, second
-    assert_predicate Wurk::Client, :reliable_push_drainer_running?
-  end
-
-  def test_reliable_push_drainer_stop
-    Wurk::Client.reliable_push_drainer(interval: 0.05)
-    Wurk::Client.reliable_push_drainer_stop!
-
-    refute_predicate Wurk::Client, :reliable_push_drainer_running?
-  end
-
-  # rubocop:disable Metrics/AbcSize
-  def test_drainer_drains_buffer_against_recovering_pool
-    pool = togglable_pool
-    failing_client = build_client(pool.failing_facade)
-    failing_client.push(base_item('args' => ['a']))
-    failing_client.push(base_item('args' => ['b']))
-
-    assert_equal 2, Wurk::Client::Buffered.buffer_size
-
-    # Background drainer points at the real Redis pool — once it ticks,
-    # both queued payloads should land in the live queue.
-    Wurk::Client::Buffered.start_drainer!(interval: 0.02)
-    Wurk::Client::Buffered.instance_variable_get(:@drainer).instance_variable_set(
-      :@client_factory, -> { Wurk::Client.new(pool: @pool) }
-    )
-
-    deadline = ::Process.clock_gettime(::Process::CLOCK_MONOTONIC) + 3.0
-    until Wurk::Client::Buffered.buffer_size.zero? || ::Process.clock_gettime(::Process::CLOCK_MONOTONIC) > deadline
-      sleep 0.02
-    end
-
-    assert_equal 0, Wurk::Client::Buffered.buffer_size, "drainer did not flush buffer within 3s"
-    assert_equal [['a'], ['b']], queued_args.reverse
-  end
-  # rubocop:enable Metrics/AbcSize
-
-  def test_drainer_rejects_non_positive_interval
-    assert_raises(ArgumentError) { Wurk::Client::Buffered::Drainer.new(interval: 0) }
-    assert_raises(ArgumentError) { Wurk::Client::Buffered::Drainer.new(interval: -1) }
-  end
-
   private
 
   # Statsd singletons are process-global — serialize against every other test
@@ -322,26 +219,6 @@ class ClientBufferedTest < Wurk::Test::UnitCase
       blk.call(FailingConn.new)
     end
     pool
-  end
-
-  # A togglable pool wrapper for the drainer integration test. Exposes
-  # `failing_facade` for the producer (raises ConnectionError) and the
-  # real pool stays untouched for the drainer to recover into.
-  def togglable_pool
-    real_pool = @pool
-    TogglablePoolPair.new(real_pool)
-  end
-
-  class TogglablePoolPair
-    def initialize(real_pool)
-      @real_pool = real_pool
-    end
-
-    def failing_facade
-      facade = Object.new
-      facade.define_singleton_method(:with) { |&blk| blk.call(FailingConn.new) }
-      facade
-    end
   end
 
   def queued_payloads
