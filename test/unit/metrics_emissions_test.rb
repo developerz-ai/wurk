@@ -92,7 +92,10 @@ class MetricsEmissionsTest < Wurk::Test::UnitCase
     refute_nil ret
     assert_equal ["worker:FailingJob", "queue:#{@ns}"], ret[2][:tags]
   ensure
-    Wurk.redis { |c| c.call('ZREMRANGEBYSCORE', Wurk::Keys::RETRY, '-inf', '+inf') if c.call('EXISTS', Wurk::Keys::RETRY) == 1 }
+    # schedule_retry doesn't mutate msg, so the ZADDed payload is exactly
+    # `dump_json(msg)`. ZREM that single entry only — wiping the whole zset
+    # would clobber any concurrently-running parallel test's retry data.
+    Wurk.redis { |c| c.call('ZREM', Wurk::Keys::RETRY, Wurk.dump_json(msg)) } if defined?(msg)
   end
 
   # --- Heartbeat#beat! ----------------------------------------------------
