@@ -41,6 +41,8 @@ module Wurk
       BUFFER_MUTEX  = Mutex.new
 
       class << self
+        attr_accessor :buffer_client_factory
+
         # Idempotent. Prepends the wrapper module into Wurk::Client so push /
         # push_bulk drain the buffer before each call and raw_push catches
         # connection errors. Safe to call from multiple threads.
@@ -78,7 +80,12 @@ module Wurk
         end
 
         def overflow_mode=(mode)
-          mode = mode.to_sym
+          begin
+            mode = mode.to_sym
+          rescue NoMethodError, TypeError
+            raise ArgumentError, "overflow_mode must be one of #{OVERFLOW_MODES.inspect}"
+          end
+
           unless OVERFLOW_MODES.include?(mode)
             raise ArgumentError, "overflow_mode must be one of #{OVERFLOW_MODES.inspect}"
           end
@@ -91,6 +98,7 @@ module Wurk
             @buffer = []
             @buffer_cap = nil
             @overflow_mode = nil
+            @buffer_client_factory = nil
           end
         end
 
@@ -103,7 +111,10 @@ module Wurk
         #                                    offending payload is attached
         #                                    to the exception.
         # Drops batched payloads — caller is expected to re-raise for those.
-        def enbuffer(payloads)
+        # If client is provided, captures its pool for drainer to use by default.
+        def enbuffer(payloads, client: nil)
+          capture_pool_from_client(client)
+
           cap = buffer_cap
           mode = overflow_mode
           buffer_mutex.synchronize do
@@ -117,6 +128,17 @@ module Wurk
             end
           end
         end
+
+        private
+
+        def capture_pool_from_client(client)
+          return unless client && !buffer_client_factory
+
+          pool = client.instance_variable_get(:@pool)
+          self.buffer_client_factory = -> { Wurk::Client.new(pool: pool) }
+        end
+
+        public
 
         # Drain payloads through `raw_push` on the given client. Stops on
         # the first ConnectionError, preserving order at the head of the
@@ -150,7 +172,7 @@ module Wurk
         def start_drainer!(interval: Drainer::DEFAULT_INTERVAL, client_factory: nil)
           INSTALL_MUTEX.synchronize do
             @drainer&.stop
-            factory = client_factory || -> { Wurk::Client.new }
+            factory = client_factory || buffer_client_factory || -> { Wurk::Client.new }
             @drainer = Drainer.new(interval: interval, client_factory: factory)
             @drainer.start
           end
@@ -287,7 +309,7 @@ module Wurk
           raise if Thread.current[Buffered::DRAINING_KEY]
 
           bidless, batched = payloads.partition { |p| !p['bid'] }
-          Buffered.enbuffer(bidless) if bidless.any?
+          Buffered.enbuffer(bidless, client: self) if bidless.any?
           raise unless batched.empty?
         end
       end
