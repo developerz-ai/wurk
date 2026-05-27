@@ -217,6 +217,21 @@ module Wurk
       @periodic_manager
     end
 
+    # --- K8s liveness/readiness probes -----------------------------------
+
+    # Opt-in thin HTTP listener inside the worker process for k8s probes.
+    # When called, the Launcher will start a TCP server on `port` bound to
+    # `bind` exposing `GET /live` (200 while not stopping) and `GET /ready`
+    # (200 only when Redis is reachable AND heartbeat fired within
+    # `ready_window` seconds).
+    #
+    # Off by default — call this in a `configure_server` block to enable.
+    # Spec: docs/target/sidekiq-ent.md §7.1.2.
+    def health_check(port:, bind: '0.0.0.0', ready_window: 30)
+      guard_frozen!
+      @options[:health_check_options] = { port: port.to_i, bind: bind.to_s, ready_window: ready_window.to_i }
+    end
+
     # --- Lifecycle hooks --------------------------------------------------
 
     def on(event, &block)

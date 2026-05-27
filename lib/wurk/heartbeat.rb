@@ -37,7 +37,7 @@ module Wurk
     BEAT_PAUSE = 10
     TTL_SECONDS = 60
 
-    attr_reader :identity, :rtt_us
+    attr_reader :identity, :rtt_us, :last_beat_at
 
     # `quiet:` is a callable so Launcher can keep ownership of its `@done`
     # flag without an awkward setter contract. `info_overrides:` lets the
@@ -58,6 +58,7 @@ module Wurk
     # `:heartbeat` so partition recovery is observable.
     def beat!
       sigs, @rtt_us = pipelined_beat
+      @last_beat_at = Time.now.to_f
       if @first_heartbeat
         @first_heartbeat = false
         fire_event(:heartbeat)
