@@ -15,6 +15,7 @@
   "dashboard": {
     "processed": "已处理",
     "failed": "失败",
+    "expired": "已过期",
     "busy": "繁忙",
     "enqueued": "排队中",
     "retries": "重试",

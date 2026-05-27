@@ -15,6 +15,7 @@
   "dashboard": {
     "processed": "Procesados",
     "failed": "Fallidos",
+    "expired": "Caducados",
     "busy": "Ocupados",
     "enqueued": "En cola",
     "retries": "Reintentos",

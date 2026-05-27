@@ -15,6 +15,7 @@
   "dashboard": {
     "processed": "処理済み",
     "failed": "失敗",
+    "expired": "期限切れ",
     "busy": "実行中",
     "enqueued": "キュー中",
     "retries": "リトライ",

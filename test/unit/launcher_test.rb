@@ -34,8 +34,10 @@ class LauncherTest < Wurk::Test::UnitCase
       c.call('UNLINK',
              "stat:processed-#{@ns}",
              "stat:failed-#{@ns}",
+             "stat:expired-#{@ns}",
              "stat:processed:#{day}-#{@ns}",
-             "stat:failed:#{day}-#{@ns}")
+             "stat:failed:#{day}-#{@ns}",
+             "stat:expired:#{day}-#{@ns}")
     end
   ensure
     super
@@ -212,54 +214,81 @@ class LauncherTest < Wurk::Test::UnitCase
   # --- flush_stats -----------------------------------------------------
 
   def test_flush_stats_noops_when_counters_zero
-    launcher = Wurk::Launcher.new(@config)
-    Wurk::Processor::PROCESSED.reset
-    Wurk::Processor::FAILURE.reset
-    write_called = false
-    launcher.define_singleton_method(:write_stats) { |_p, _f| write_called = true }
+    Wurk::Test::PROCESSOR_COUNTER_MUTEX.synchronize do
+      launcher = Wurk::Launcher.new(@config)
+      reset_counters
+      write_called = false
+      launcher.define_singleton_method(:write_stats) { |_p, _f, _e| write_called = true }
 
-    launcher.flush_stats
+      launcher.flush_stats
 
-    refute write_called, 'write_stats must not run when both counters are zero'
+      refute write_called, 'write_stats must not run when all counters are zero'
+    end
   end
 
   def test_flush_stats_increments_global_counters
-    launcher = Wurk::Launcher.new(@config)
-    reset_counters
-    Wurk::Processor::PROCESSED.incr(3)
-    Wurk::Processor::FAILURE.incr(1)
-    received = nil
-    launcher.define_singleton_method(:write_stats) { |p, f| received = [p, f] }
+    Wurk::Test::PROCESSOR_COUNTER_MUTEX.synchronize do
+      launcher = Wurk::Launcher.new(@config)
+      reset_counters
+      Wurk::Processor::PROCESSED.incr(3)
+      Wurk::Processor::FAILURE.incr(1)
+      Wurk::Processor::EXPIRED.incr(2)
+      received = nil
+      launcher.define_singleton_method(:write_stats) { |p, f, e| received = [p, f, e] }
 
-    launcher.flush_stats
+      launcher.flush_stats
 
-    assert_equal [3, 1], received
+      assert_equal [3, 1, 2], received
+    end
+  end
+
+  def test_flush_stats_fires_write_stats_when_only_expired_is_nonzero
+    Wurk::Test::PROCESSOR_COUNTER_MUTEX.synchronize do
+      launcher = Wurk::Launcher.new(@config)
+      reset_counters
+      Wurk::Processor::EXPIRED.incr(1)
+      received = nil
+      launcher.define_singleton_method(:write_stats) { |p, f, e| received = [p, f, e] }
+
+      launcher.flush_stats
+
+      assert_equal [0, 0, 1], received
+    end
   end
 
   def test_flush_stats_sets_ttl_on_per_day_keys
-    launcher = Wurk::Launcher.new(@config)
-    reset_counters
-    Wurk::Processor::PROCESSED.incr(1)
-    Wurk::Processor::FAILURE.incr(1)
+    Wurk::Test::PROCESSOR_COUNTER_MUTEX.synchronize do
+      launcher = Wurk::Launcher.new(@config)
+      reset_counters
+      Wurk::Processor::PROCESSED.incr(1)
+      Wurk::Processor::FAILURE.incr(1)
+      Wurk::Processor::EXPIRED.incr(1)
 
-    launcher.flush_stats
+      launcher.flush_stats
 
-    day = Time.now.utc.strftime('%F')
-    ttl_p, ttl_f = read_daily_ttls(day)
+      day = Time.now.utc.strftime('%F')
+      ttl_p, ttl_f, ttl_e = read_daily_ttls(day)
 
-    assert_operator ttl_p, :>, 0
-    assert_operator ttl_f, :>, 0
+      assert_operator ttl_p, :>, 0
+      assert_operator ttl_f, :>, 0
+      assert_operator ttl_e, :>, 0
+    end
   end
 
   def test_flush_stats_resets_in_process_counters
-    launcher = Wurk::Launcher.new(@config)
-    Wurk::Processor::PROCESSED.incr(5)
-    Wurk::Processor::FAILURE.incr(2)
+    Wurk::Test::PROCESSOR_COUNTER_MUTEX.synchronize do
+      launcher = Wurk::Launcher.new(@config)
+      reset_counters
+      Wurk::Processor::PROCESSED.incr(5)
+      Wurk::Processor::FAILURE.incr(2)
+      Wurk::Processor::EXPIRED.incr(3)
 
-    launcher.flush_stats
+      launcher.flush_stats
 
-    assert_equal 0, Wurk::Processor::PROCESSED.reset
-    assert_equal 0, Wurk::Processor::FAILURE.reset
+      assert_equal 0, Wurk::Processor::PROCESSED.reset
+      assert_equal 0, Wurk::Processor::FAILURE.reset
+      assert_equal 0, Wurk::Processor::EXPIRED.reset
+    end
   end
 
   # --- heartbeat -------------------------------------------------------
@@ -455,11 +484,16 @@ class LauncherTest < Wurk::Test::UnitCase
   def reset_counters
     Wurk::Processor::PROCESSED.reset
     Wurk::Processor::FAILURE.reset
+    Wurk::Processor::EXPIRED.reset
   end
 
   def read_daily_ttls(day)
     @pool.with do |c|
-      [c.call('TTL', "#{Wurk::Keys::STAT_PROCESSED}:#{day}").to_i, c.call('TTL', "stat:failed:#{day}").to_i]
+      [
+        c.call('TTL', "#{Wurk::Keys::STAT_PROCESSED}:#{day}").to_i,
+        c.call('TTL', "stat:failed:#{day}").to_i,
+        c.call('TTL', "#{Wurk::Keys::STAT_EXPIRED}:#{day}").to_i
+      ]
     end
   end
 

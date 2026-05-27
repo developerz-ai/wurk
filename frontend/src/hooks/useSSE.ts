@@ -3,6 +3,7 @@ import { useState, useEffect, useRef } from 'react';
 export interface StatsSnapshot {
   processed: number;
   failed: number;
+  expired: number;
   busy: number;
   enqueued: number;
   retries: number;

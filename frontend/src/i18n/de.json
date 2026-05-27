@@ -15,6 +15,7 @@
   "dashboard": {
     "processed": "Verarbeitet",
     "failed": "Fehlgeschlagen",
+    "expired": "Abgelaufen",
     "busy": "Beschäftigt",
     "enqueued": "In Warteschlange",
     "retries": "Wiederholungen",

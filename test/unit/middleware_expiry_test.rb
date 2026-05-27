@@ -158,6 +158,28 @@ class MiddlewareExpiryTest < Wurk::Test::UnitCase
     end
   end
 
+  # The EXPIRED counter is a process-global singleton. Serialize against
+  # LauncherTest's flush_stats tests which also reset/incr it.
+  def test_skip_bumps_processor_expired_counter
+    Wurk::Test::PROCESSOR_COUNTER_MUTEX.synchronize do
+      Wurk::Processor::EXPIRED.reset
+      past = ::Time.now.to_f - 60
+      build_middleware.call(nil, { 'class' => 'X', 'expiry' => past }, 'q') { flunk 'must not yield' }
+
+      assert_equal 1, Wurk::Processor::EXPIRED.reset
+    end
+  end
+
+  def test_does_not_bump_expired_counter_on_yield
+    Wurk::Test::PROCESSOR_COUNTER_MUTEX.synchronize do
+      Wurk::Processor::EXPIRED.reset
+      future = ::Time.now.to_f + 60
+      build_middleware.call(nil, { 'class' => 'X', 'expiry' => future }, 'q') { :ok }
+
+      assert_equal 0, Wurk::Processor::EXPIRED.reset
+    end
+  end
+
   def test_expiry_at_exactly_now_does_not_skip
     # Strict `>` per spec §7: equal timestamps aren't expired yet.
     # Minitest 6 dropped `Time.stub`; hand-rolled override pins Time.now

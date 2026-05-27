@@ -15,6 +15,7 @@
   "dashboard": {
     "processed": "Processed",
     "failed": "Failed",
+    "expired": "Expired",
     "busy": "Busy",
     "enqueued": "Enqueued",
     "retries": "Retries",

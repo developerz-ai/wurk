@@ -13,6 +13,7 @@ module Wurk
         {
           processed: stats.processed,
           failed: stats.failed,
+          expired: stats.expired,
           scheduled_size: stats.scheduled_size,
           retry_size: stats.retry_size,
           dead_size: stats.dead_size,

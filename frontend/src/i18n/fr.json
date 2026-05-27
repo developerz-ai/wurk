@@ -15,6 +15,7 @@
   "dashboard": {
     "processed": "Traités",
     "failed": "Échoués",
+    "expired": "Expirés",
     "busy": "Occupés",
     "enqueued": "En file",
     "retries": "Relances",

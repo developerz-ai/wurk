@@ -18,17 +18,17 @@ module Wurk
   #   * `stop`             — graceful drain inside `config[:timeout]`.
   #   * `heartbeat`        — one-shot beat (also driven by the heartbeat thread).
   #
-  # `flush_stats` rolls per-process Processor counters (PROCESSED / FAILURE)
-  # into the global + per-day Redis strings every beat. Per-day keys carry
-  # `STATS_TTL` so old days expire automatically.
+  # `flush_stats` rolls per-process Processor counters (PROCESSED / FAILURE
+  # / EXPIRED) into the global + per-day Redis strings every beat. Per-day
+  # keys carry `STATS_TTL` so old days expire automatically.
   #
   # Spec: docs/target/sidekiq-free.md §12 (Sidekiq::Launcher).
   class Launcher
     include Component
 
     # 5 years, in seconds. Per-day `stat:processed:YYYY-MM-DD` /
-    # `stat:failed:YYYY-MM-DD` strings carry this TTL so they roll off
-    # without manual cleanup.
+    # `stat:failed:YYYY-MM-DD` / `stat:expired:YYYY-MM-DD` strings carry
+    # this TTL so they roll off without manual cleanup.
     STATS_TTL = 5 * 365 * 24 * 60 * 60
 
     # Re-exported for test/third-party callers that read it off Launcher
@@ -99,14 +99,15 @@ module Wurk
     end
 
     # Rolls in-process Processor counters into Redis. Pipelined so a single
-    # round trip covers all six writes. Skips when both counters are zero
-    # to avoid touching keys we have nothing to add to.
+    # round trip covers all writes. Skips when all counters are zero to
+    # avoid touching keys we have nothing to add to.
     def flush_stats
       processed = Processor::PROCESSED.reset
       failed = Processor::FAILURE.reset
-      return if processed.zero? && failed.zero?
+      expired = Processor::EXPIRED.reset
+      return if processed.zero? && failed.zero? && expired.zero?
 
-      write_stats(processed, failed)
+      write_stats(processed, failed, expired)
     rescue StandardError => e
       # Replay-safety: counters were reset above, so a Redis blip would
       # otherwise drop stats. We log and accept — the per-job at-least-once
@@ -120,16 +121,25 @@ module Wurk
 
     private
 
-    def write_stats(processed, failed)
+    def write_stats(processed, failed, expired)
       day = Time.now.utc.strftime('%F')
       @config.redis do |conn|
         conn.pipelined do |pipe|
-          pipe.call('INCRBY', Keys::STAT_PROCESSED, processed)
-          pipe.call('INCRBY', "#{Keys::STAT_PROCESSED}:#{day}", processed)
-          pipe.call('EXPIRE', "#{Keys::STAT_PROCESSED}:#{day}", STATS_TTL)
-          pipe.call('INCRBY', 'stat:failed', failed)
-          pipe.call('INCRBY', "stat:failed:#{day}", failed)
-          pipe.call('EXPIRE', "stat:failed:#{day}", STATS_TTL)
+          if processed.positive?
+            pipe.call('INCRBY', Keys::STAT_PROCESSED, processed)
+            pipe.call('INCRBY', "#{Keys::STAT_PROCESSED}:#{day}", processed)
+            pipe.call('EXPIRE', "#{Keys::STAT_PROCESSED}:#{day}", STATS_TTL)
+          end
+          if failed.positive?
+            pipe.call('INCRBY', 'stat:failed', failed)
+            pipe.call('INCRBY', "stat:failed:#{day}", failed)
+            pipe.call('EXPIRE', "stat:failed:#{day}", STATS_TTL)
+          end
+          if expired.positive?
+            pipe.call('INCRBY', Keys::STAT_EXPIRED, expired)
+            pipe.call('INCRBY', "#{Keys::STAT_EXPIRED}:#{day}", expired)
+            pipe.call('EXPIRE', "#{Keys::STAT_EXPIRED}:#{day}", STATS_TTL)
+          end
         end
       end
     end
