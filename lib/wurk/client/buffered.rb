@@ -79,7 +79,9 @@ module Wurk
 
         def overflow_mode=(mode)
           mode = mode.to_sym
-          raise ArgumentError, "overflow_mode must be one of #{OVERFLOW_MODES.inspect}" unless OVERFLOW_MODES.include?(mode)
+          unless OVERFLOW_MODES.include?(mode)
+            raise ArgumentError, "overflow_mode must be one of #{OVERFLOW_MODES.inspect}"
+          end
 
           @overflow_mode = mode
         end
@@ -145,10 +147,11 @@ module Wurk
         # requirement: "Background drain thread flushes on reconnect" —
         # handles the case where push activity stops mid-outage so the
         # passive (drain-on-next-push) path never fires.
-        def start_drainer!(interval: Drainer::DEFAULT_INTERVAL)
+        def start_drainer!(interval: Drainer::DEFAULT_INTERVAL, client_factory: nil)
           INSTALL_MUTEX.synchronize do
             @drainer&.stop
-            @drainer = Drainer.new(interval: interval)
+            factory = client_factory || -> { Wurk::Client.new }
+            @drainer = Drainer.new(interval: interval, client_factory: factory)
             @drainer.start
           end
         end
@@ -203,7 +206,9 @@ module Wurk
         STOP_JOIN_TIMEOUT = 5.0
 
         def initialize(interval: DEFAULT_INTERVAL, client_factory: -> { Wurk::Client.new })
-          raise ArgumentError, 'interval must be a positive Numeric' unless interval.is_a?(Numeric) && interval.positive?
+          unless interval.is_a?(Numeric) && interval.positive?
+            raise ArgumentError, 'interval must be a positive Numeric'
+          end
 
           @interval = interval
           @client_factory = client_factory
@@ -218,8 +223,10 @@ module Wurk
             return if @thread&.alive?
 
             @done = false
-            @thread = Thread.new { run }
-            @thread.name = 'wurk-reliable_push-drainer'
+            @thread = Thread.new do
+              Thread.current.name = 'wurk-reliable_push-drainer'
+              run
+            end
           end
         end
 

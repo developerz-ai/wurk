@@ -38,7 +38,7 @@ class ClientOutageTest < Wurk::Test::UnitCase
     super
   end
 
-  # rubocop:disable Metrics/AbcSize, Minitest/MultipleAssertions
+  # rubocop:disable Metrics/AbcSize
   def test_producer_through_redis_outage_preserves_all_jobs_in_order
     pool   = TogglablePool.new(@real_pool)
     client = Wurk::Client.new(pool: pool)
@@ -60,7 +60,7 @@ class ClientOutageTest < Wurk::Test::UnitCase
 
     assert_equal %w[1 2 3 4 5], tags
   end
-  # rubocop:enable Metrics/AbcSize, Minitest/MultipleAssertions
+  # rubocop:enable Metrics/AbcSize
 
   # The producer-stops case the background drainer exists for — without it,
   # the passive drain-on-next-push path never fires.
@@ -74,11 +74,9 @@ class ClientOutageTest < Wurk::Test::UnitCase
 
     assert_equal 3, Wurk::Client::Buffered.buffer_size
 
-    Wurk::Client::Buffered.start_drainer!(interval: 0.02)
-    # Drainer's default factory uses the global config pool; redirect to
-    # @real_pool so recovery lands in the queue we assert on.
-    Wurk::Client::Buffered.instance_variable_get(:@drainer).instance_variable_set(
-      :@client_factory, -> { Wurk::Client.new(pool: @real_pool) }
+    Wurk::Client::Buffered.start_drainer!(
+      interval: 0.02,
+      client_factory: -> { Wurk::Client.new(pool: @real_pool) }
     )
     pool.recover!
 
