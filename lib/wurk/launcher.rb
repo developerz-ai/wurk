@@ -125,23 +125,19 @@ module Wurk
       day = Time.now.utc.strftime('%F')
       @config.redis do |conn|
         conn.pipelined do |pipe|
-          if processed.positive?
-            pipe.call('INCRBY', Keys::STAT_PROCESSED, processed)
-            pipe.call('INCRBY', "#{Keys::STAT_PROCESSED}:#{day}", processed)
-            pipe.call('EXPIRE', "#{Keys::STAT_PROCESSED}:#{day}", STATS_TTL)
-          end
-          if failed.positive?
-            pipe.call('INCRBY', 'stat:failed', failed)
-            pipe.call('INCRBY', "stat:failed:#{day}", failed)
-            pipe.call('EXPIRE', "stat:failed:#{day}", STATS_TTL)
-          end
-          if expired.positive?
-            pipe.call('INCRBY', Keys::STAT_EXPIRED, expired)
-            pipe.call('INCRBY', "#{Keys::STAT_EXPIRED}:#{day}", expired)
-            pipe.call('EXPIRE', "#{Keys::STAT_EXPIRED}:#{day}", STATS_TTL)
-          end
+          incr_stat_key(pipe, Keys::STAT_PROCESSED, processed, day)
+          incr_stat_key(pipe, 'stat:failed', failed, day)
+          incr_stat_key(pipe, Keys::STAT_EXPIRED, expired, day)
         end
       end
+    end
+
+    def incr_stat_key(pipe, key, value, day)
+      return unless value.positive?
+
+      pipe.call('INCRBY', key, value)
+      pipe.call('INCRBY', "#{key}:#{day}", value)
+      pipe.call('EXPIRE', "#{key}:#{day}", STATS_TTL)
     end
 
     # Pipelined identity write via Heartbeat, then dispatch any signals
