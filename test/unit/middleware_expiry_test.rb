@@ -164,6 +164,7 @@ class MiddlewareExpiryTest < Wurk::Test::UnitCase
     Wurk::Test::PROCESSOR_COUNTER_MUTEX.synchronize do
       Wurk::Processor::EXPIRED.reset
       past = ::Time.now.to_f - 60
+
       build_middleware.call(nil, { 'class' => 'X', 'expiry' => past }, 'q') { flunk 'must not yield' }
 
       assert_equal 1, Wurk::Processor::EXPIRED.reset
