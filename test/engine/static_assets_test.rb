@@ -2,10 +2,12 @@
 
 require_relative '../engine_test_helper'
 
-# Verifies that Rack::Static middleware is wired to serve precompiled SPA
+# Verifies that Wurk::Engine::AssetMount is wired to serve precompiled SPA
 # assets from vendor/assets/dashboard. Tests hashed filename serving and
 # manifest validation.
 class StaticAssetsTest < Wurk::Test::EngineCase
+  parallelize_me!
+
   ASSETS_DIR = ::Wurk::Engine.root.join('vendor', 'assets', 'dashboard')
   MANIFEST = ASSETS_DIR.join('wurk-manifest.json')
 
@@ -35,9 +37,13 @@ class StaticAssetsTest < Wurk::Test::EngineCase
   def test_asset_mount_middleware_is_configured
     middleware = Rails.application.middleware
 
-    mount = middleware.find { |m| m.klass == ::Wurk::Engine::AssetMount }
+    mount_index = middleware.each_with_index.find { |m, _i| m.klass == ::Wurk::Engine::AssetMount }&.last
+    static_index = middleware.each_with_index.find { |m, _i| m.klass == ::ActionDispatch::Static }&.last
 
-    assert mount, "Wurk::Engine::AssetMount middleware should be configured"
+    assert mount_index, "Wurk::Engine::AssetMount middleware should be configured"
+    assert static_index, "::ActionDispatch::Static middleware should be configured"
+    assert_operator mount_index, :<, static_index,
+                    "Wurk::Engine::AssetMount should be inserted before ActionDispatch::Static"
   end
 
   # Regression for #37: Rack::Static didn't strip the URL prefix before

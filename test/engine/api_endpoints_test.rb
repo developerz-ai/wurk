@@ -10,6 +10,8 @@ require_relative '../engine_test_helper'
 # so all assertions read `last_response` directly — `assert_response` relies on
 # ActionDispatch's `@response` ivar which Rack::Test does not populate.
 class ApiEndpointsTest < Wurk::Test::EngineCase
+  parallelize_me!
+
   def setup
     super
     @ns = "wurkapi:#{::Process.pid}:#{object_id}"
@@ -56,6 +58,7 @@ class ApiEndpointsTest < Wurk::Test::EngineCase
 
     assert_kind_of Array, payload[:queues]
     row = payload[:queues].find { |q| q[:name] == @queue }
+
     refute_nil row, "expected queue #{@queue} embedded in stats payload"
     assert_equal({ size: 1, paused: false }, row.slice(:size, :paused))
     assert_kind_of Numeric, row[:latency]
