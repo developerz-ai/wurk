@@ -356,12 +356,13 @@ class StatsTest < Wurk::Test::UnitCase
   end
 
   def test_history_expired_returns_hash_keyed_by_date_string
-    today = Date.today.strftime('%Y-%m-%d')
-    @pool.with { |c| c.call('SET', "stat:expired:#{today}", 7) }
+    date = Date.new(2000, 1, 1) + (object_id % 10_000)
+    day = date.strftime('%Y-%m-%d')
+    @pool.with { |c| c.call('SET', "stat:expired:#{day}", 7) }
     begin
-      assert_equal 7, Wurk::Stats::History.new(3).expired[today]
+      assert_equal 7, Wurk::Stats::History.new(1, date).expired[day]
     ensure
-      @pool.with { |c| c.call('DEL', "stat:expired:#{today}") }
+      @pool.with { |c| c.call('DEL', "stat:expired:#{day}") }
     end
   end
 
