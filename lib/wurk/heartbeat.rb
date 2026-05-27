@@ -64,6 +64,7 @@ module Wurk
         fire_event(:heartbeat)
       end
       fire_event(:beat, oneshot: false)
+      emit_statsd_gauges
       sigs.compact
     rescue StandardError => e
       @first_heartbeat = true
@@ -161,6 +162,37 @@ module Wurk
 
     def total_concurrency
       @config.capsules.each_value.sum(&:concurrency)
+    end
+
+    # Best-effort statsd snapshot per beat. Emits `sidekiq.busy` (this
+    # process's in-flight job count) and `sidekiq.queue.size` (per queue
+    # LLEN). Tagged with `process:<identity>` so multi-process emissions
+    # of the global `queue.size` are tag-distinguishable downstream — pick
+    # `max` across the process tag in your dashboard. No-op when
+    # `config.dogstatsd` is unset (Statsd.gauge short-circuits on nil
+    # client) so the LLEN pipeline is also skipped.
+    # Spec hint: docs/target/sidekiq-ent.md §5.2 names (`busy`, `queue.size`).
+    def emit_statsd_gauges
+      return unless Wurk::Metrics::Statsd.client
+
+      busy = Processor::WORK_STATE.size
+      Wurk::Metrics::Statsd.gauge('busy', busy, tags: ["process:#{@identity}"])
+      emit_queue_sizes
+    rescue StandardError => e
+      handle_exception(e, { context: 'heartbeat metrics' })
+    end
+
+    def emit_queue_sizes
+      queues = @config.capsules.each_value.flat_map(&:queues).uniq
+      return if queues.empty?
+
+      sizes = redis { |conn| conn.pipelined { |pipe| queues.each { |q| pipe.call('LLEN', "queue:#{q}") } } }
+      queues.zip(sizes).each do |queue, size|
+        Wurk::Metrics::Statsd.gauge(
+          'queue.size', size,
+          tags: ["queue:#{queue}", "process:#{@identity}"]
+        )
+      end
     end
 
     # Linux first via /proc/self/statm[1] (resident pages × 4 KB);

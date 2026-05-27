@@ -225,6 +225,14 @@ require_relative 'wurk/middleware/poison_pill'
 # Spec: docs/target/sidekiq-ent.md §1.4.
 Wurk.configuration.server_middleware.add(Wurk::Limiter::ServerMiddleware)
 
+# Statsd metrics middleware: per-job count / success / failure / perform_dist
+# emissions. No-op when `config.dogstatsd` is unset (Statsd.client returns
+# nil and the middleware yields straight through), so auto-registering here
+# has zero overhead for users who don't wire up a client. Matches Sidekiq
+# Pro's behavior of installing the middleware as soon as the gem is loaded.
+# Spec: docs/target/sidekiq-pro.md §9.
+Wurk.configuration.server_middleware.add(Wurk::Metrics::Statsd)
+
 # Pro Fast API: Lua-backed Queue#delete_job / #delete_by_class plus
 # SortedSet#scan { |JobRecord| … }. Mixed in via include/prepend on the
 # existing data API classes so the surface is wire-compat with Sidekiq Pro.

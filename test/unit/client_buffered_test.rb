@@ -126,7 +126,7 @@ class ClientBufferedTest < Wurk::Test::UnitCase
       Wurk::Client.new.push(base_item)
     end
 
-    assert_equal %w[jobs.recovered.push jobs.recovered.push], calls
+    assert_equal %w[jobs.recovered.push jobs.recovered.push], calls.grep('jobs.recovered.push')
   end
 
   # --- ring cap ----------------------------------------------------------

@@ -44,6 +44,7 @@ module Wurk
 
       verify_json(payload)
       raw_push([payload])
+      emit_enqueued([payload])
       payload['jid']
     end
 
@@ -150,7 +151,10 @@ module Wurk
         ats     = at_values && at_values[offset, slice.size]
         payloads = build_bulk_payloads(slice, base, ats)
         compacted = payloads.compact
-        raw_push(compacted) if compacted.any?
+        if compacted.any?
+          raw_push(compacted)
+          emit_enqueued(compacted)
+        end
         jids.concat(payloads.map { |p| p && p['jid'] })
       end
       jids
@@ -273,6 +277,19 @@ module Wurk
 
     def pool
       @redis_pool || Thread.current[:wurk_via_pool] || @config.redis_pool
+    end
+
+    # Best-effort `sidekiq.jobs.enqueued` counter — one increment per payload
+    # that actually made it past middleware AND Redis. Tags follow the same
+    # `worker:`/`queue:` shape as Wurk::Metrics::Statsd so dashboards built
+    # for the server-side emissions work unchanged.
+    def emit_enqueued(payloads)
+      payloads.each do |p|
+        Wurk::Metrics::Statsd.increment(
+          'jobs.enqueued',
+          tags: ["worker:#{p['class']}", "queue:#{p['queue']}"]
+        )
+      end
     end
   end
 end
