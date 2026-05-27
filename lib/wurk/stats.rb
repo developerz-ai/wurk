@@ -23,6 +23,7 @@ module Wurk
 
     def processed       = @stats.fetch(:processed)
     def failed          = @stats.fetch(:failed)
+    def expired         = @stats.fetch(:expired)
     def scheduled_size  = @stats.fetch(:scheduled_size)
     def retry_size      = @stats.fetch(:retry_size)
     def dead_size       = @stats.fetch(:dead_size)
@@ -85,11 +86,11 @@ module Wurk
       compute_latency(payload, now_ms)
     end
 
-    # Resets the named global counters. With no args, clears `processed`
-    # and `failed`. SET … 0 (not DEL — keeps the key around so reads stay
-    # `Integer` not `nil`).
+    # Resets the named global counters. With no args, clears `processed`,
+    # `failed`, and `expired`. SET … 0 (not DEL — keeps the key around so
+    # reads stay `Integer` not `nil`).
     def reset(*stats)
-      all      = %w[failed processed]
+      all      = %w[failed processed expired]
       to_clear = stats.empty? ? all : all & stats.flatten.map(&:to_s)
       Wurk.redis do |conn|
         conn.pipelined do |pipe|
@@ -105,12 +106,13 @@ module Wurk
     FAST_QUERIES = [
       ['GET',   'stat:processed'],
       ['GET',   'stat:failed'],
+      ['GET',   Keys::STAT_EXPIRED],
       ['ZCARD', Keys::SCHEDULE],
       ['ZCARD', Keys::RETRY],
       ['ZCARD', Keys::DEAD],
       ['SCARD', Keys::PROCESSES]
     ].freeze
-    FAST_KEYS = %i[processed failed scheduled_size retry_size dead_size processes_size].freeze
+    FAST_KEYS = %i[processed failed expired scheduled_size retry_size dead_size processes_size].freeze
     private_constant :FAST_QUERIES, :FAST_KEYS
 
     def fetch_stats_fast!
@@ -147,9 +149,10 @@ module Wurk
       0.0
     end
 
-    # Per-day historical processed/failed counts. Reads
-    # `stat:processed:YYYY-MM-DD` and `stat:failed:YYYY-MM-DD` strings;
-    # missing days return 0. Range 1..1825 (5 years) mirrors upstream.
+    # Per-day historical processed/failed/expired counts. Reads
+    # `stat:processed:YYYY-MM-DD`, `stat:failed:YYYY-MM-DD`, and
+    # `stat:expired:YYYY-MM-DD` strings; missing days return 0. Range
+    # 1..1825 (5 years) mirrors upstream.
     class History
       MAX_DAYS = 1_825
 
@@ -163,6 +166,7 @@ module Wurk
 
       def processed = date_stat_hash('processed')
       def failed    = date_stat_hash('failed')
+      def expired   = date_stat_hash('expired')
 
       private
 

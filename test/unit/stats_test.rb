@@ -38,6 +38,7 @@ class StatsTest < Wurk::Test::UnitCase
     COUNTER_MUTEX.synchronize do
       @processed_before = @pool.with { |c| c.call('GET', 'stat:processed') }
       @failed_before    = @pool.with { |c| c.call('GET', 'stat:failed') }
+      @expired_before   = @pool.with { |c| c.call('GET', 'stat:expired') }
     end
   end
 
@@ -55,6 +56,7 @@ class StatsTest < Wurk::Test::UnitCase
       COUNTER_MUTEX.synchronize do
         restore_counter(conn, 'stat:processed', @processed_before)
         restore_counter(conn, 'stat:failed',    @failed_before)
+        restore_counter(conn, 'stat:expired',   @expired_before)
       end
     end
   ensure
@@ -82,6 +84,19 @@ class StatsTest < Wurk::Test::UnitCase
       @pool.with { |c| c.call('INCRBY', 'stat:failed', 3) }
 
       assert_operator Wurk::Stats.new.failed, :>=, base + 3
+    end
+  end
+
+  def test_expired_returns_integer
+    assert_kind_of Integer, Wurk::Stats.new.expired
+  end
+
+  def test_expired_reflects_redis_value
+    COUNTER_MUTEX.synchronize do
+      base = Wurk::Stats.new.expired
+      @pool.with { |c| c.call('INCRBY', 'stat:expired', 5) }
+
+      assert_operator Wurk::Stats.new.expired, :>=, base + 5
     end
   end
 
@@ -239,11 +254,12 @@ class StatsTest < Wurk::Test::UnitCase
 
   # --- reset -------------------------------------------------------------
 
-  def test_reset_clears_both_counters_by_default
+  def test_reset_clears_all_counters_by_default
     COUNTER_MUTEX.synchronize do
       @pool.with do |c|
         c.call('SET', 'stat:processed', 999)
         c.call('SET', 'stat:failed', 999)
+        c.call('SET', 'stat:expired', 999)
       end
       Wurk::Stats.new.reset
 
@@ -251,6 +267,22 @@ class StatsTest < Wurk::Test::UnitCase
 
       assert_equal 0, snap.processed
       assert_equal 0, snap.failed
+      assert_equal 0, snap.expired
+    end
+  end
+
+  def test_reset_with_expired_clears_only_expired
+    COUNTER_MUTEX.synchronize do
+      @pool.with do |c|
+        c.call('SET', 'stat:processed', 30)
+        c.call('SET', 'stat:expired', 90)
+      end
+      Wurk::Stats.new.reset('expired')
+
+      snap = Wurk::Stats.new
+
+      assert_equal 0, snap.expired
+      assert_operator snap.processed, :>=, 30
     end
   end
 
@@ -320,6 +352,17 @@ class StatsTest < Wurk::Test::UnitCase
       assert_equal 4, Wurk::Stats::History.new(3).failed[today]
     ensure
       @pool.with { |c| c.call('DEL', "stat:failed:#{today}") }
+    end
+  end
+
+  def test_history_expired_returns_hash_keyed_by_date_string
+    date = Date.new(2000, 1, 1) + (object_id % 10_000)
+    day = date.strftime('%Y-%m-%d')
+    @pool.with { |c| c.call('SET', "stat:expired:#{day}", 7) }
+    begin
+      assert_equal 7, Wurk::Stats::History.new(1, date).expired[day]
+    ensure
+      @pool.with { |c| c.call('DEL', "stat:expired:#{day}") }
     end
   end
 

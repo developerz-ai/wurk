@@ -44,6 +44,12 @@ module Wurk
     # the reader see 0 instead of the identity it just registered.
     PROCESSES_MUTEX = Mutex.new
 
+    # Suite-wide mutex for tests that read/write the in-process
+    # `Wurk::Processor::{PROCESSED, FAILURE, EXPIRED}` counters and then
+    # assert on their value. Without it, the LauncherTest flush_stats
+    # tests and MiddlewareExpiryTest's EXPIRED.incr would race.
+    PROCESSOR_COUNTER_MUTEX = Mutex.new
+
     # Base class for non-engine tests.
     class UnitCase < ::Minitest::Test
       include RedisNamespace

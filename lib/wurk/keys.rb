@@ -32,8 +32,14 @@ module Wurk
     # Global processed counter; per-day variants append `:YYYY-MM-DD`.
     STAT_PROCESSED = 'stat:processed'
 
-    # TTL applied to per-day `stat:processed:*` / `stat:failed:*` strings.
-    # 5 years, in seconds. Matches Sidekiq::Launcher::STATS_TTL.
+    # Global expired counter — subset of processed: jobs the Expiry server
+    # middleware dropped before `perform` because `expiry` had already
+    # elapsed. Per-day variants append `:YYYY-MM-DD`. Spec: sidekiq-pro.md §7.
+    STAT_EXPIRED = 'stat:expired'
+
+    # TTL applied to per-day `stat:processed:*` / `stat:failed:*` /
+    # `stat:expired:*` strings. 5 years, in seconds. Matches
+    # Sidekiq::Launcher::STATS_TTL.
     STATS_TTL = 5 * 365 * 24 * 60 * 60
 
     # Build a queue list key from a queue name. Centralizing the concat keeps

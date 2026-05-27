@@ -31,7 +31,7 @@ class ApiEndpointsTest < Wurk::Test::EngineCase
   end
 
   STATS_KEYS = %i[
-    processed failed scheduled_size retry_size dead_size
+    processed failed expired scheduled_size retry_size dead_size
     processes_size enqueued default_queue_latency
   ].freeze
 

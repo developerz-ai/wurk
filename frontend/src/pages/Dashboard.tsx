@@ -8,6 +8,7 @@ import { relativeTime } from '../utils';
 interface StatsData {
   processed: number;
   failed: number;
+  expired: number;
   busy: number;
   enqueued: number;
   retries: number;
@@ -56,6 +57,7 @@ export default function Dashboard({ sse }: DashboardProps) {
   const cards = [
     { key: 'processed', label: t('dashboard.processed'), value: stats.processed, color: 'var(--success)' },
     { key: 'failed', label: t('dashboard.failed'), value: stats.failed, color: 'var(--danger)' },
+    { key: 'expired', label: t('dashboard.expired'), value: stats.expired, color: 'var(--text-muted)' },
     { key: 'busy', label: t('dashboard.busy'), value: stats.busy, color: 'var(--warning)' },
     { key: 'enqueued', label: t('dashboard.enqueued'), value: stats.enqueued },
     { key: 'retries', label: t('dashboard.retries'), value: stats.retries, color: 'var(--warning)' },

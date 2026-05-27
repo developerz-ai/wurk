@@ -130,6 +130,7 @@ module Wurk
 
     PROCESSED  = Counter.new
     FAILURE    = Counter.new
+    EXPIRED    = Counter.new
     WORK_STATE = SharedWorkState.new
 
     private
