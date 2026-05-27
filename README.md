@@ -79,6 +79,53 @@ Anything implemented here MUST match `docs/target/sidekiq-{free,pro,ent}.md` exa
 
 ---
 
+## 🩺 Kubernetes probes
+
+Opt in to a thin HTTP listener for liveness/readiness probes:
+
+```ruby
+Wurk.configure_server do |config|
+  config.health_check(port: 7433)
+end
+```
+
+Endpoints (off by default; only start when `health_check` is configured):
+
+| Path     | Meaning                                                                 |
+|----------|-------------------------------------------------------------------------|
+| `/live`  | 200 while the Launcher is running. 503 once `stop` / `quiet` is called. |
+| `/ready` | 200 only when Redis is reachable **and** the heartbeat fired within the last 30s (configurable). 503 otherwise. |
+
+Example k8s `Deployment` spec:
+
+```yaml
+spec:
+  template:
+    spec:
+      containers:
+        - name: wurk
+          image: myorg/myapp:latest
+          ports:
+            - containerPort: 7433
+              name: health
+          livenessProbe:
+            httpGet:
+              path: /live
+              port: health
+            periodSeconds: 10
+            failureThreshold: 3
+          readinessProbe:
+            httpGet:
+              path: /ready
+              port: health
+            periodSeconds: 5
+            failureThreshold: 2
+```
+
+Knobs: `health_check(port:, bind: '0.0.0.0', ready_window: 30)`. In swarm mode only the first child to call `start` binds the port; the rest log a warning and skip — drive your supervisor topology accordingly.
+
+---
+
 ## 🤝 Migration
 
 ```diff

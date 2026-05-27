@@ -4,6 +4,7 @@ require_relative 'component'
 require_relative 'manager'
 require_relative 'processor'
 require_relative 'heartbeat'
+require_relative 'health'
 require_relative 'keys'
 
 module Wurk
@@ -46,6 +47,7 @@ module Wurk
       @started_at = nil
       @heartbeat = nil
       @heartbeat_thread = nil
+      @health_server = build_health_server
     end
 
     # Boot order matters:
@@ -54,12 +56,15 @@ module Wurk
     #      sees the process the moment it can pick up jobs.
     #   3. start the poller (scheduler).
     #   4. start the managers (which start their processors).
+    #   5. start the health probe server LAST so the listener doesn't
+    #      accept k8s probes until the rest of the launcher is up.
     def run(async_beat: true)
       @started_at = Time.now.to_f
       @config.freeze!
       @heartbeat_thread = safe_thread('heartbeat', &method(:start_heartbeat)) if async_beat
       @poller&.start
       @managers.each(&:start)
+      @health_server&.start
     end
 
     # Idempotent. Flips `stopping?` true, halts fetching across every
@@ -164,10 +169,13 @@ module Wurk
 
     # Erase the live-process footprint. flush_stats first so we don't drop
     # the final batch of counters; then Heartbeat#stop! removes us from the
-    # `processes` SET and UNLINK-s the identity + work hashes.
+    # `processes` SET and UNLINK-s the identity + work hashes. The probe
+    # server is closed alongside so kubelet stops getting 200s after the
+    # process is no longer healthy.
     def clear_heartbeat
       flush_stats
       @heartbeat&.stop!
+      @health_server&.stop
     end
 
     # Heartbeat thread loop. `safe_thread` already wraps exceptions; we
@@ -196,6 +204,21 @@ module Wurk
       return nil unless defined?(Wurk::Scheduled::Poller)
 
       Wurk::Scheduled::Poller.new(@config)
+    end
+
+    # Returns a Health::Server when `config.health_check(...)` has set
+    # `:health_check_options`; nil otherwise. Off by default — the listener
+    # is opt-in to keep the worker's port surface minimal.
+    def build_health_server
+      opts = @config[:health_check_options]
+      return nil unless opts
+
+      Health::Server.new(
+        self,
+        port:         opts.fetch(:port, Health::DEFAULT_PORT),
+        bind:         opts.fetch(:bind, Health::DEFAULT_BIND),
+        ready_window: opts.fetch(:ready_window, Health::DEFAULT_READY_WINDOW)
+      )
     end
   end
 end

@@ -209,6 +209,11 @@ require_relative 'wurk/batch/death_handler'
 # Spec: docs/target/sidekiq-pro.md §7.
 require_relative 'wurk/middleware/expiry'
 
+# Health probe HTTP server — opt-in via `config.health_check(port:)`. Loaded
+# at top level so the constants resolve in Launcher#build_health_server even
+# in standalone (no-Rails) boot.
+require_relative 'wurk/health'
+
 # Poison-pill detection — orphan recovery counter + dead set on threshold.
 # Spec: docs/target/sidekiq-pro.md §3.2.
 require_relative 'wurk/middleware/poison_pill'
