@@ -184,6 +184,10 @@ module Wurk
       redis do |conn|
         conn.call('ZADD', Keys::RETRY, retry_at.to_s, payload)
       end
+      Wurk::Metrics::Statsd.increment(
+        'jobs.retried',
+        tags: ["worker:#{msg['class']}", "queue:#{msg['queue']}"]
+      )
     end
 
     def time_for(item)
