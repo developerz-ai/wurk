@@ -123,9 +123,13 @@ module Wurk
 
       private
 
+      # INITIAL_WAIT (10s) staggers the fleet's first sweep after a deploy so
+      # freshly-booted processes don't hit Redis in unison. Overridable via
+      # `config[:scheduler_initial_wait]` (tests want a near-zero first sweep).
       def initial_wait
+        wait = @config[:scheduler_initial_wait] || INITIAL_WAIT
         @mutex.synchronize do
-          @sleeper.wait(@mutex, INITIAL_WAIT) unless @done
+          @sleeper.wait(@mutex, wait) unless @done
         end
       end
 

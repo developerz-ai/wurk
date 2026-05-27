@@ -81,12 +81,10 @@ class LauncherTest < Wurk::Test::UnitCase
     assert launcher.instance_variable_get(:@embedded)
   end
 
-  def test_initialize_returns_nil_poller_when_scheduled_not_loaded
-    skip 'Poller defined; covered by PR 6 tests' if defined?(Wurk::Scheduled::Poller)
-
+  def test_initialize_builds_a_scheduler_poller
     launcher = Wurk::Launcher.new(@config)
 
-    assert_nil launcher.poller
+    assert_instance_of Wurk::Scheduled::Poller, launcher.poller
   end
 
   # --- run -------------------------------------------------------------
