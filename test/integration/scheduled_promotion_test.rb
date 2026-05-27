@@ -72,6 +72,9 @@ class ScheduledPromotionTest < Wurk::Test::UnitCase
   def teardown
     @observer_pool&.call('DEL', @sentinel_key, @schedule_set,
                          "queue:#{@queue_name}", private_queue_key(@queue_name))
+    # Client#push (via promotion) registers the queue in the global `queues`
+    # SET — drop it so it can't leak across parallel tests.
+    @observer_pool&.call('SREM', 'queues', @queue_name)
     @observer_pool&.close
     @config&.reset_redis_pools!
   ensure
@@ -130,12 +133,18 @@ class ScheduledPromotionTest < Wurk::Test::UnitCase
   def wait_for_sentinel
     deadline = monotonic_now + POLL_TIMEOUT
     while monotonic_now < deadline
-      data = @observer_pool.call('HGETALL', @sentinel_key)
-      return data unless data.nil? || data.empty?
+      raw = @observer_pool.call('HGETALL', @sentinel_key)
+      return normalize_hash(raw) unless raw.nil? || raw.empty?
 
       sleep POLL_INTERVAL
     end
     nil
+  end
+
+  # redis-client returns HGETALL as a Hash (RESP3) or a flat [k, v, …] array
+  # (RESP2); normalize so callers can index fields by name.
+  def normalize_hash(raw)
+    raw.is_a?(::Array) ? ::Hash[*raw] : raw
   end
 
   def monotonic_now
