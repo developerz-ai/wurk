@@ -1,0 +1,110 @@
+# CodeRabbit configuration — Wurk, drop-in replacement for Sidekiq + Pro + Enterprise.
+# Docs: https://docs.coderabbit.ai/reference/configuration
+
+language: en-US
+tone_instructions: >
+  Be friendly and constructive. The three load-bearing invariants are:
+  100% drop-in Sidekiq API + Redis schema, free (no tiers), and faster than
+  stock Sidekiq. Flag changes that risk any of those over style nitpicks.
+early_access: false
+enable_free_tier: true
+
+reviews:
+  profile: chill
+  request_changes_workflow: true
+  high_level_summary: true
+  high_level_summary_placeholder: '@coderabbitai summary'
+  review_status: true
+  collapse_walkthrough: true
+  changed_files_summary: true
+  sequence_diagrams: false
+  poem: false
+
+  assess_linked_issues: true
+  related_issues: true
+  related_prs: true
+  suggested_labels: true
+  suggested_reviewers: true
+
+  auto_apply_labels: false
+  auto_assign_reviewers: false
+
+  path_filters:
+    - '!coverage/**'
+    - '!node_modules/**'
+    - '!vendor/**'
+    - '!frontend/dist/**'
+    - '!**/*.lock'
+    - '!**/*.lockb'
+
+  path_instructions:
+    - path: 'lib/**/*.rb'
+      instructions: >
+        Core Wurk implementation. The Sidekiq API surface (Sidekiq.module_eval,
+        Sidekiq::Worker, Sidekiq::Client, Sidekiq::Job) must remain 100%
+        compatible — flag any rename, signature change, or behavior drift from
+        stock Sidekiq. Same for Redis key schema and job JSON shape.
+    - path: 'test/parity/**'
+      instructions: >
+        Parity tests lifted from Sidekiq's own suite. Flag any modification
+        to assertions — these are the source of truth for "drop-in." Adding
+        skips needs a justification linking to a tracked compat issue.
+    - path: 'bench/**'
+      instructions: >
+        Performance benchmarks. Flag any change that removes a bench or weakens
+        an assertion threshold. Regressions >5% on enqueue / fetch+execute /
+        bulk enqueue / swarm boot block release.
+    - path: 'frontend/**'
+      instructions: >
+        Vite-built dashboard, served from vendor/assets at runtime. Flag any
+        change that breaks the offline build (no network at gem-build time).
+
+  auto_review:
+    enabled: true
+    auto_incremental_review: true
+    ignore_title_keywords:
+      - WIP
+      - DO NOT MERGE
+      - DRAFT
+    drafts: false
+    base_branches: []
+
+  finishing_touches:
+    docstrings:
+      enabled: false
+    unit_tests:
+      enabled: false
+
+  pre_merge_checks:
+    docstrings:
+      mode: warning
+      threshold: 30
+    title:
+      mode: warning
+    description:
+      mode: warning
+    custom_checks: []
+
+  tools:
+    rubocop:
+      enabled: true
+    brakeman:
+      enabled: true
+    semgrep:
+      enabled: true
+    gitleaks:
+      enabled: true
+    yamllint:
+      enabled: true
+    markdownlint:
+      enabled: true
+    shellcheck:
+      enabled: true
+    actionlint:
+      enabled: true
+    github-checks:
+      enabled: true
+      timeout_ms: 90000
+
+chat:
+  auto_reply: true
