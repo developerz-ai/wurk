@@ -131,6 +131,9 @@ module Wurk
 
         private
 
+        # Capture the pool from the provided client and set it as the default
+        # factory for the drainer. Ensures buffered jobs are drained to the
+        # same pool they were pushed to, unless explicitly overridden.
         def capture_pool_from_client(client)
           return unless client && !buffer_client_factory
 
