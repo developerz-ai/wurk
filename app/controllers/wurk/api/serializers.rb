@@ -9,17 +9,24 @@ module Wurk
     module Serializers
       module_function
 
+      # Wire-shape consumed by the React dashboard's landing page + SSE feed.
+      # Field names match the SPA's `StatsSnapshot` interface in
+      # frontend/src/hooks/useSSE.ts — keep them in sync. The canonical
+      # Sidekiq-compatible accessors on Wurk::Stats use `_size` suffixes;
+      # this serializer renames them for the dashboard's wire shape only.
       def stats_payload(stats)
         {
           processed: stats.processed,
           failed: stats.failed,
           expired: stats.expired,
-          scheduled_size: stats.scheduled_size,
-          retry_size: stats.retry_size,
-          dead_size: stats.dead_size,
-          processes_size: stats.processes_size,
           enqueued: stats.enqueued,
-          default_queue_latency: stats.default_queue_latency
+          busy: stats.workers_size,
+          scheduled: stats.scheduled_size,
+          retries: stats.retry_size,
+          dead: stats.dead_size,
+          processes: stats.processes_size,
+          latency: stats.default_queue_latency,
+          queues: stats.queue_summaries.map { |q| queue_summary(q) }
         }
       end
 
