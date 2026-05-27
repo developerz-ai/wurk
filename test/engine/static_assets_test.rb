@@ -32,16 +32,49 @@ class StaticAssetsTest < Wurk::Test::EngineCase
     assert_match %r{\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}}, data['timestamp']
   end
 
-  def test_rack_static_middleware_is_configured
-    # The engine initializer configures Rack::Static to serve
-    # files from vendor/assets/dashboard under the /wurk-assets prefix
+  def test_asset_mount_middleware_is_configured
     middleware = Rails.application.middleware
 
-    static_middleware = middleware.find do |m|
-      m.klass == ::Rack::Static
-    end
+    mount = middleware.find { |m| m.klass == ::Wurk::Engine::AssetMount }
 
-    assert static_middleware, "Rack::Static middleware should be configured"
+    assert mount, "Wurk::Engine::AssetMount middleware should be configured"
+  end
+
+  # Regression for #37: Rack::Static didn't strip the URL prefix before
+  # file lookup, so /wurk-assets/assets/foo.js 404'd because it resolved
+  # under vendor/assets/dashboard/wurk-assets/assets/foo.js. AssetMount
+  # rewrites PATH_INFO before delegating to Rack::Files.
+  def test_hashed_asset_under_wurk_assets_returns_200
+    asset = Dir.glob(ASSETS_DIR.join('assets', '*.js')).first
+    skip "no built JS asset to probe" unless asset
+
+    name = File.basename(asset)
+    get "/wurk-assets/assets/#{name}"
+
+    assert_equal 200, last_response.status,
+                 "expected 200 for /wurk-assets/assets/#{name}, body: #{last_response.body[0, 200]}"
+    assert_equal File.binread(asset), last_response.body
+  end
+
+  def test_index_html_under_wurk_assets_returns_200
+    skip "index.html missing" unless ASSETS_DIR.join('index.html').exist?
+
+    get '/wurk-assets/index.html'
+
+    assert_equal 200, last_response.status
+  end
+
+  def test_unknown_asset_falls_through_with_404
+    get '/wurk-assets/assets/does-not-exist-xyz.js'
+
+    assert_equal 404, last_response.status
+  end
+
+  def test_non_mount_path_is_untouched_by_asset_mount
+    # Hitting a host-app path outside /wurk-assets must not be intercepted.
+    get '/__definitely_not_a_real_route__'
+
+    refute_equal 200, last_response.status
   end
 
   def test_vite_manifest_exists_for_asset_resolution

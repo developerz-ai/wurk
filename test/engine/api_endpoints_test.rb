@@ -31,8 +31,8 @@ class ApiEndpointsTest < Wurk::Test::EngineCase
   end
 
   STATS_KEYS = %i[
-    processed failed expired scheduled_size retry_size dead_size
-    processes_size enqueued default_queue_latency
+    processed failed expired enqueued busy scheduled retries dead
+    processes latency queues
   ].freeze
 
   def test_stats_payload_includes_every_documented_key
@@ -46,7 +46,19 @@ class ApiEndpointsTest < Wurk::Test::EngineCase
     get '/wurk/api/stats'
     payload = json_body
 
-    assert_kind_of Float, payload[:default_queue_latency]
+    assert_kind_of Float, payload[:latency]
+  end
+
+  def test_stats_payload_includes_queues_array
+    push_to_queue
+    get '/wurk/api/stats'
+    payload = json_body
+
+    assert_kind_of Array, payload[:queues]
+    row = payload[:queues].find { |q| q[:name] == @queue }
+    refute_nil row, "expected queue #{@queue} embedded in stats payload"
+    assert_equal({ size: 1, paused: false }, row.slice(:size, :paused))
+    assert_kind_of Numeric, row[:latency]
   end
 
   def test_queues_returns_array_of_summaries

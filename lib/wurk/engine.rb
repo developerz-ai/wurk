@@ -16,15 +16,41 @@ module Wurk
       g.test_framework :minitest, fixtures: false
     end
 
+    # Rack::Files doesn't strip the URL prefix before file lookup, so
+    # `/wurk-assets/assets/foo.js` would resolve under `vendor/assets/dashboard/
+    # wurk-assets/assets/foo.js` — a path that doesn't exist. AssetMount
+    # rewrites PATH_INFO to drop the `/wurk-assets` prefix before delegating
+    # to Rack::Files, then falls through to the next middleware on 404 so
+    # host-app routes outside the mount keep working.
+    class AssetMount
+      PREFIX = '/wurk-assets'
+
+      def initialize(app, root:)
+        @app   = app
+        @files = ::Rack::Files.new(root)
+      end
+
+      def call(env)
+        path = env[::Rack::PATH_INFO]
+        return @app.call(env) unless path == PREFIX || path.start_with?("#{PREFIX}/")
+
+        inner = env.dup
+        stripped = path.delete_prefix(PREFIX)
+        inner[::Rack::PATH_INFO] = stripped.empty? ? '/' : stripped
+        response = @files.call(inner)
+        response[0] == 404 ? @app.call(env) : response
+      end
+    end
+
     # Precompiled SPA lives in vendor/assets/dashboard; the engine serves
-    # those files as static assets under the mount point.
+    # those files as static assets under the /wurk-assets mount point via
+    # AssetMount (above).
     initializer 'wurk.assets' do |app|
       assets_path = Wurk::Engine.root.join('vendor', 'assets', 'dashboard')
       if assets_path.exist?
         app.middleware.insert_before(
           ::ActionDispatch::Static,
-          ::Rack::Static,
-          urls: ['/wurk-assets'],
+          ::Wurk::Engine::AssetMount,
           root: assets_path.to_s
         )
       end
