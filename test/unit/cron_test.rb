@@ -514,6 +514,27 @@ class CronTest < Wurk::Test::UnitCase
     assert_equal 6, fires.size
   end
 
+  def test_dst_fall_back_hourly_keeps_both_fold_hours
+    # An hourly loop must run in BOTH repeated 01:00 fall-back hours (01:00 EDT
+    # and 01:00 EST) — the fold dedup is only for fixed daily slots, never for
+    # an hourly cadence whose repeated hour is a genuine second run.
+    nyt = tz('America/New_York')
+    fires = simulate_fires('0 * * * *', nyt, Time.utc(2026, 11, 1, 4, 0), Time.utc(2026, 11, 1, 7, 0))
+    one_am = fires.count { |f| lc = nyt.utc_to_local(Time.at(f)); lc.hour == 1 && lc.min.zero? }
+
+    assert_equal 2, one_am, 'hourly 0 * * * * must fire in both fold 01:00 hours, not skip one'
+  end
+
+  def test_dst_fall_back_hourly_nonzero_minute_keeps_both_fold_hours
+    # Guards the discriminator: "hourly" means the hour field is a wildcard, NOT
+    # "minute == 0". 15 * * * * must also keep both repeated fall-back hours.
+    nyt = tz('America/New_York')
+    fires = simulate_fires('15 * * * *', nyt, Time.utc(2026, 11, 1, 4, 0), Time.utc(2026, 11, 1, 7, 0))
+    one_fifteen = fires.count { |f| lc = nyt.utc_to_local(Time.at(f)); lc.hour == 1 && lc.min == 15 }
+
+    assert_equal 2, one_fifteen
+  end
+
   # --- spring-forward gap: the missing slot is skipped to the next valid day ---
 
   def test_dst_spring_forward_skips_gap_new_york
@@ -582,6 +603,27 @@ class CronTest < Wurk::Test::UnitCase
     cleanup_queue(queue)
 
     refute_nil jid
+  end
+
+  # ---- nil next-fire marks (no resolvable future occurrence) -----------
+
+  def test_record_fire_clears_nf_when_future_is_nil
+    # A loop with no resolvable next fire (e.g. Feb 31) yields next_fire_at => nil.
+    # record_fire must NOT persist nf as "" — read_fire_marks would coerce "" to 0
+    # and every subsequent tick would treat the loop as immediately due forever.
+    poller = Wurk::Cron::Poller.new(Wurk.configuration)
+    lp = register_loop("CronTest::NoFuture#{@suffix}", queue: "cron-nf-#{@suffix}")
+    key = "#{Wurk::Cron::LOOP_PREFIX}#{lp.lid}"
+    Wurk.redis { |c| c.call('HSET', key, 'nf', '9999999999') } # pre-existing mark to clear
+
+    poller.send(:record_fire, lp, 'jid-nofuture', Time.now.to_i, nil)
+
+    raw_nf = Wurk.redis { |c| c.call('HGET', key, 'nf') }
+    marks = poller.send(:read_fire_marks, lp.lid)
+    cleanup_queue("cron-nf-#{@suffix}")
+
+    assert_nil raw_nf, 'nil future must clear the nf field, not write ""'
+    assert_nil marks[1], 'read_fire_marks must read an absent/empty nf as nil, not 0'
   end
 
   # ---- Configuration#periodic -----------------------------------------

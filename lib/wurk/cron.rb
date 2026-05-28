@@ -270,44 +270,31 @@ module Wurk
 
       # Next scheduled fire after firing at `fired_slot`. `advance_from` (the
       # poller passes `now`) is the search origin so missed ticks are not
-      # backfilled. The DST guard: on a fall-back, the clock rolls back and the
-      # same wall-clock minute recurs at a later UTC instant — a once-daily
-      # loop must not fire it twice, so we skip a successor whose local
-      # wall-clock equals the slot we just fired. A frequency loop (e.g.
-      # `*/30`) lands on a *different* minute, so its real-time cadence is kept.
-      # Spec: no DST double-fire (sidekiq-ent.md §2.6).
+      # backfilled. The DST guard: on a fall-back the clock rolls back, so the
+      # same wall-clock minute recurs at a later UTC instant. That equality
+      # alone isn't enough to skip — it would also drop a legitimate hourly run
+      # whose repeated hour is real. So we only suppress the duplicate for a
+      # FIXED daily slot; an hourly schedule (wildcard hour) keeps both fold
+      # hours. A sub-hourly schedule (e.g. `*/30`) lands on a different minute,
+      # so the equality never even triggers. Spec: no DST double-fire without
+      # skipping legitimate hourly runs (sidekiq-ent.md §2.6).
       def next_fire_after(fired_slot, advance_from = fired_slot)
         nxt = next_fire_at(advance_from)
         return nxt if nxt.nil? || local_components(nxt) != local_components(fired_slot)
+        return nxt if hourly? # repeated fall-back hour is a genuine second run
 
-        # Only suppress the fold duplicate for fixed once-per-day schedules.
-        # Cadence schedules (hourly, sub-daily step patterns) land on *different*
-        # minutes, so a second fold instant is legitimate. Detect cadence by
-        # checking if minute == 0 and hour is not fixed (hourly), or if minute
-        # field has multiple values (sub-hourly step).
-        return next_fire_at(nxt) if cadence_schedule?
-
-        next_fire_at(nxt)
+        next_fire_at(nxt) # fixed daily slot: drop the fold duplicate
       end
 
       def local_components(epoch)
         parser.local_components(epoch, @tz)
       end
 
-      # Detect cadence schedules (hourly, sub-daily steps) vs fixed daily.
-      # Hourly: minute == 0, hour is wildcard (multiple values).
-      # Sub-hourly: minute has multiple values (step pattern like */30).
-      def cadence_schedule?
-        min_field = parser.fields[0]
-        hour_field = parser.fields[1]
-
-        # Sub-hourly cadence: minute field has multiple values.
-        return true if min_field.size > 1
-
-        # Hourly cadence: minute is exactly 0 and hour is not fixed.
-        return true if min_field.size == 1 && min_field.include?(0) && hour_field.size > 1
-
-        false
+      # True when the schedule fires every hour (hour field is `*` / all 24).
+      # Only such a schedule legitimately runs in both repeated fall-back hours;
+      # a fixed-hour slot (even a multi-hour one like `0 1,2 * * *`) must dedup.
+      def hourly?
+        parser.fields[1].size == 24
       end
 
       def tz_name
