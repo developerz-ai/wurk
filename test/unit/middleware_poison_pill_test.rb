@@ -52,7 +52,8 @@ class MiddlewarePoisonPillTest < Wurk::Test::UnitCase
     2.times { Wurk::Middleware::PoisonPill.track!(payload_json, queue: @queue) }
 
     assert_equal 2, Wurk::Middleware::PoisonPill.recovery_count(@jid)
-    assert_equal 0, dead_size
+    # jid-scoped: a global ZCARD races other parallel tests / stray dead jobs.
+    assert_equal 0, dead_for_jid_count, 'a job below the poison threshold must not be in the dead set'
   end
 
   def test_third_recovery_returns_poison_and_writes_to_dead
@@ -182,10 +183,6 @@ class MiddlewarePoisonPillTest < Wurk::Test::UnitCase
         Wurk::Metrics::Statsd.singleton_class.send(:define_method, :increment, real)
       end
     end
-  end
-
-  def dead_size
-    @pool.with { |c| c.call('ZCARD', Wurk::Keys::DEAD) }.to_i
   end
 
   def dead_for_jid_count

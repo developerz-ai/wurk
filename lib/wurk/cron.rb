@@ -356,6 +356,12 @@ module Wurk
         block.call(mgr)
         mgr.loops.each { |lp| resolve_klass!(lp.klass) }
         mgr.loops
+      rescue StandardError
+        # register persists each loop immediately, so a validation failure
+        # would otherwise leave partially-applied loops in the live LoopSet —
+        # they'd fire on the next poll. Roll the whole batch back, then re-raise.
+        mgr&.loops&.each { |lp| Cron.unregister(lp.lid) }
+        raise
       end
 
       private

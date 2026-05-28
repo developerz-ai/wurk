@@ -88,7 +88,14 @@ module Wurk
           class_ms = "#{klass}|ms"
           conn.pipelined do |pipe|
             incr_bucket(pipe, buckets[:minute], [class_outcome, class_ms, ms, MID_TERM])
-            incr_bucket(pipe, buckets[:rollup], [class_outcome, class_ms, ms, SHORT_TERM])
+            # The minute key and the 10-min rollup key coincide whenever the
+            # minute ends in 0 (rollup zeroes the last digit). Writing both
+            # would double-count the shared field — the minute write above
+            # already lands on it — so skip the rollup write then. Minutes
+            # x1..x9 still accumulate into the x0 rollup key as normal.
+            unless buckets[:rollup] == buckets[:minute]
+              incr_bucket(pipe, buckets[:rollup], [class_outcome, class_ms, ms, SHORT_TERM])
+            end
             incr_bucket(pipe, buckets[:hour], [outcome, 'ms', ms, MID_TERM])
           end
         end
