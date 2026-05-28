@@ -63,17 +63,9 @@ module Wurk
         cap = @config.default_capsule
         cap.queues = @slot.queues
         cap.concurrency = @slot.concurrency
-        cap.fetcher = Wurk::Fetcher::Reliable.new(cap)
-        # Configuration#freeze! (called by Launcher#run) freezes every
-        # capsule. Capsule's `redis_pool`, `local_redis_pool`,
-        # `server_middleware`, and `client_middleware` lazy-init their
-        # ivars via `||=` — that mutation would FrozenError after
-        # freeze, the first time the processor hit them. Materialize
-        # them now so the post-freeze code paths only read.
-        cap.redis_pool
-        cap.local_redis_pool
-        cap.client_middleware
-        cap.server_middleware
+        # Fetcher defaulting + lazy-ivar materialization now happens in
+        # Configuration#freeze! (Capsule#prepare!), called by Launcher#run
+        # below — for every entry point, not just the swarm.
       end
 
       def install_signal_handlers(launcher)

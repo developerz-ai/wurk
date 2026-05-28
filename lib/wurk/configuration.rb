@@ -4,6 +4,7 @@ require 'logger'
 require_relative 'middleware/chain'
 require_relative 'capsule'
 require_relative 'context'
+require_relative 'topology'
 
 module Wurk
   # Owns runtime knobs (concurrency, queues, timeouts, lifecycle events,
@@ -257,7 +258,7 @@ module Wurk
       @logger ||= default_logger
     end
 
-    attr_writer :logger
+    attr_writer :logger, :topology
 
     def handle_exception(ex, ctx = {})
       if error_handlers.empty?
@@ -285,6 +286,14 @@ module Wurk
       @options[:server] == true
     end
 
+    # Worker topology for the swarm. When the host hasn't declared one (the
+    # railtie path), default to a single flat fork running the default
+    # capsule's queues + concurrency. Assign a custom Wurk::Topology (via
+    # `topology=`) for specialized slots.
+    def topology
+      @topology ||= default_topology
+    end
+
     def freeze!
       return self if @frozen
 
@@ -305,6 +314,14 @@ module Wurk
     end
 
     private
+
+    # One flat fork running the default capsule's queues + concurrency. The
+    # railtie boots this when a Rails host mounts the engine without declaring
+    # a topology. queue_specs (not queues) so weights survive the round-trip.
+    def default_topology
+      cap = default_capsule
+      Wurk::Topology.flat(count: 1, queues: cap.queue_specs, concurrency: cap.concurrency)
+    end
 
     def guard_frozen!
       raise FrozenError, 'Wurk::Configuration is frozen' if @frozen

@@ -33,6 +33,44 @@ class CapsuleTest < Wurk::Test::UnitCase
     assert_equal ['default'], @capsule.queues
   end
 
+  # --- prepare! / fetcher defaulting (regression #35) -------------------
+
+  def test_prepare_defaults_fetcher_to_reliable
+    assert_nil @capsule.fetcher
+
+    @capsule.prepare!
+
+    assert_instance_of Wurk::Fetcher::Reliable, @capsule.fetcher
+  end
+
+  def test_prepare_preserves_an_explicit_fetcher
+    custom = Wurk::Fetcher::Reliable.new(@capsule)
+    @capsule.fetcher = custom
+
+    @capsule.prepare!
+
+    assert_same custom, @capsule.fetcher
+  end
+
+  def test_prepare_materializes_lazy_pools
+    @capsule.prepare!
+
+    refute_nil @capsule.instance_variable_get(:@redis_pool)
+    refute_nil @capsule.instance_variable_get(:@local_redis_pool)
+  end
+
+  def test_queue_specs_round_trips_weighted_queues
+    @capsule.queues = %w[high,3 default,2]
+
+    assert_equal %w[high,3 default,2], @capsule.queue_specs
+  end
+
+  def test_queue_specs_omits_weight_for_strict_queues
+    @capsule.queues = %w[high default]
+
+    assert_equal %w[high default], @capsule.queue_specs
+  end
+
   def test_default_mode_is_strict
     assert_equal :strict, @capsule.mode
   end

@@ -61,6 +61,10 @@ module Wurk
     #      accept k8s probes until the rest of the launcher is up.
     def run(async_beat: true)
       @started_at = Time.now.to_f
+      # Default each capsule's fetcher + materialize its lazy pools/middleware
+      # before the config freezes. Every entry point (swarm child, standalone
+      # CLI, embedded) runs through here, so none boots with a nil fetcher.
+      @config.capsules.each_value(&:prepare!)
       @config.freeze!
       @heartbeat_thread = safe_thread('heartbeat', &method(:start_heartbeat)) if async_beat
       @poller&.start

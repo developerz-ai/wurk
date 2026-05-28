@@ -15,7 +15,7 @@ class EmbeddedTest < Wurk::Test::UnitCase
     @config.logger = ::Logger.new(IO::NULL)
     @config.concurrency = 2
     @config.default_capsule.queues = ['default']
-    @config.default_capsule.fetcher = Wurk::Fetcher::Reliable.new(@config.default_capsule)
+    # No manual fetcher wiring — Launcher#run defaults it now (regression #35).
     @config[:tag] = @ns
   end
 
