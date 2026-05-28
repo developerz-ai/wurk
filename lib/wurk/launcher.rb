@@ -8,6 +8,7 @@ require_relative 'health'
 require_relative 'keys'
 require_relative 'scheduled'
 require_relative 'leader'
+require_relative 'cron'
 
 module Wurk
   # Top-level supervisor inside each worker process. Owns the Manager pool
@@ -38,7 +39,7 @@ module Wurk
     # (Sidekiq's drop-in surface). The single source of truth is Heartbeat.
     BEAT_PAUSE = Heartbeat::BEAT_PAUSE
 
-    attr_accessor :managers, :poller
+    attr_accessor :managers, :poller, :cron_poller
 
     def initialize(config, embedded: false)
       @config = config
@@ -46,6 +47,7 @@ module Wurk
       @done = false
       @managers = config.capsules.values.map { |cap| Manager.new(cap) }
       @poller = build_poller
+      @cron_poller = build_cron_poller
       @leader = build_leader
       @started_at = nil
       @heartbeat = nil
@@ -57,7 +59,9 @@ module Wurk
     #   1. freeze! the config so mutations after fork are visible mistakes.
     #   2. spawn the heartbeat thread BEFORE the managers so the dashboard
     #      sees the process the moment it can pick up jobs.
-    #   3. start the poller (scheduler).
+    #   3. start the scheduler poller + the cron poller (both leader-gated for
+    #      what they enqueue; safe to start before leadership is settled since
+    #      a non-leader tick just returns early).
     #   4. start the managers (which start their processors).
     #   5. start the health probe server LAST so the listener doesn't
     #      accept k8s probes until the rest of the launcher is up.
@@ -71,6 +75,7 @@ module Wurk
       @heartbeat_thread = safe_thread('heartbeat', &method(:start_heartbeat)) if async_beat
       @poller&.start
       @leader&.start
+      @cron_poller&.start
       @managers.each(&:start)
       @health_server&.start
     end
@@ -84,6 +89,9 @@ module Wurk
       @done = true
       @managers.each(&:quiet)
       @poller&.terminate
+      # The cron poller is intentionally NOT terminated here: a USR1-quieted
+      # leader still enqueues periodic jobs — it only stops fetching for itself.
+      # Loops stop only on full shutdown (#stop). Spec: sidekiq-ent.md §2.6.
       fire_event(:quiet, reverse: true)
     end
 
@@ -96,6 +104,9 @@ module Wurk
       stoppers = @managers.map { |m| Thread.new { m.stop(deadline) } }
       fire_event(:shutdown, reverse: true)
       stoppers.each(&:join)
+      # Full shutdown stops periodic firing (it survived #quiet); do this before
+      # releasing the lock so no tick races a follower's promotion.
+      @cron_poller&.terminate
       # CAS-release the cluster lock now (planned shutdown) so a follower can
       # take over immediately instead of waiting out the TTL.
       @leader&.stop
@@ -211,6 +222,13 @@ module Wurk
 
     def build_poller
       Wurk::Scheduled::Poller.new(@config)
+    end
+
+    # Periodic (cron) tick loop. Like the scheduler poller, every process runs
+    # one, but only the elected leader enqueues — the single-leader invariant is
+    # what guarantees exactly one enqueue per (loop, tick) across the cluster.
+    def build_cron_poller
+      Wurk::Cron::Poller.new(@config)
     end
 
     # Every worker process campaigns for the single cluster lock (`dear-leader`);

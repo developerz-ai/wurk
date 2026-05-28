@@ -96,6 +96,13 @@ module Wurk
         match_components?(wall_clock(time.to_i, tz))
       end
 
+      # Local wall-clock [min, hour, day, mon, dow] for `epoch` in `tz`. Public
+      # so the Loop/Poller can detect a DST fall-back fold — two distinct UTC
+      # instants that share the same local minute — and avoid a double-fire.
+      def local_components(epoch, tz = nil)
+        wall_clock(epoch, tz)
+      end
+
       private
 
       def match_components?(components)
@@ -261,6 +268,25 @@ module Wurk
         parser.next_fire_at(from_epoch, @tz)
       end
 
+      # Next scheduled fire after firing at `fired_slot`. `advance_from` (the
+      # poller passes `now`) is the search origin so missed ticks are not
+      # backfilled. The DST guard: on a fall-back, the clock rolls back and the
+      # same wall-clock minute recurs at a later UTC instant — a once-daily
+      # loop must not fire it twice, so we skip a successor whose local
+      # wall-clock equals the slot we just fired. A frequency loop (e.g.
+      # `*/30`) lands on a *different* minute, so its real-time cadence is kept.
+      # Spec: no DST double-fire (sidekiq-ent.md §2.6).
+      def next_fire_after(fired_slot, advance_from = fired_slot)
+        nxt = next_fire_at(advance_from)
+        return nxt if nxt.nil? || local_components(nxt) != local_components(fired_slot)
+
+        next_fire_at(nxt)
+      end
+
+      def local_components(epoch)
+        parser.local_components(epoch, @tz)
+      end
+
       def tz_name
         return nil if @tz.nil?
         return @tz.name if @tz.respond_to?(:name)
@@ -314,12 +340,17 @@ module Wurk
     class LoopSet
       include ::Enumerable
 
-      def initialize(_config = nil); end
+      # `config` scopes Redis to that config's per-fork pool — the leader poller
+      # runs inside a swarm child and must not reach for the parent-inherited
+      # global socket. Dashboard/CLI callers pass nothing and get Wurk.redis.
+      def initialize(config = nil)
+        @config = config
+      end
 
       def each
         return enum_for(:each) unless block_given?
 
-        Wurk.redis do |c|
+        redis do |c|
           lids = c.call('SMEMBERS', PERIODIC_KEY)
           lids.each do |lid|
             h = c.call('HGETALL', "#{LOOP_PREFIX}#{lid}")
@@ -331,17 +362,23 @@ module Wurk
       end
 
       def size
-        Wurk.redis { |c| c.call('SCARD', PERIODIC_KEY).to_i }
+        redis { |c| c.call('SCARD', PERIODIC_KEY).to_i }
       end
 
       def fetch(lid)
-        h = Wurk.redis { |c| c.call('HGETALL', "#{LOOP_PREFIX}#{lid}") }
+        h = redis { |c| c.call('HGETALL', "#{LOOP_PREFIX}#{lid}") }
         return nil if h.nil? || h.empty?
 
         h = h.each_slice(2).to_h if h.is_a?(Array)
         return nil if h.empty?
 
         Loop.from_redis(lid, h)
+      end
+
+      private
+
+      def redis(&)
+        @config ? @config.redis(&) : Wurk.redis(&)
       end
     end
 
@@ -388,11 +425,17 @@ module Wurk
         @sleeper = ::ConditionVariable.new
         @client = Client.new(config: config)
         @thread = nil
-        @tick_interval = DEFAULT_TICK_SECONDS
+        # Operators never need to touch this; integration tests shrink it so a
+        # due loop fires within the test window instead of waiting a full minute.
+        @tick_interval = config[:cron_tick_interval] || DEFAULT_TICK_SECONDS
       end
 
       def start
         @poller_thread ||= safe_thread('cron-poller') do # rubocop:disable Naming/MemoizedInstanceVariableName
+          # Wait one interval before the first tick: don't fire a catch-up burst
+          # the instant we boot (the leader is barely settled), and let a
+          # short-lived process exit without ticking at all.
+          wait
           until @done
             tick
             wait
@@ -414,7 +457,7 @@ module Wurk
       def tick
         return unless leader?
 
-        LoopSet.new.each { |lp| enqueue_if_due(lp) }
+        LoopSet.new(@config).each { |lp| enqueue_if_due(lp) }
       rescue StandardError => e
         handle_exception(e, { context: 'cron-poller' })
       end
@@ -429,8 +472,19 @@ module Wurk
 
         warn_missed_tick(loop_obj, next_fire, now)
         jid = enqueue!(loop_obj)
-        future = loop_obj.next_fire_at(now)
+        future = loop_obj.next_fire_after(next_fire, now)
         record_fire(loop_obj, jid, now, future)
+        jid
+      end
+
+      # Fire one loop right now, bypassing both the leader gate and the
+      # schedule due-check, recording history + advancing the fire marks
+      # exactly like a real tick. Powers Cron.fire! (deterministic specs /
+      # manual "run now"); the scheduled, leader-gated path stays #tick.
+      def fire(loop_obj)
+        now = ::Time.now.to_i
+        jid = enqueue!(loop_obj)
+        record_fire(loop_obj, jid, now, loop_obj.next_fire_at(now))
         jid
       end
 
@@ -461,7 +515,7 @@ module Wurk
       end
 
       def read_fire_marks(lid)
-        Wurk.redis do |c|
+        @config.redis do |c|
           vals = c.call('HMGET', "#{LOOP_PREFIX}#{lid}", 'lf', 'nf')
           [vals[0]&.to_i, vals[1]&.to_i]
         end
@@ -469,7 +523,7 @@ module Wurk
 
       def record_fire(loop_obj, jid, fired_at, future)
         history_entry = Wurk.dump_json([fired_at, jid])
-        Wurk.redis do |c|
+        @config.redis do |c|
           c.call('HSET', "#{LOOP_PREFIX}#{loop_obj.lid}", 'lf', fired_at.to_s, 'nf', future.to_s)
           c.call('LPUSH', "#{HISTORY_PREFIX}#{loop_obj.lid}", history_entry)
           c.call('LTRIM', "#{HISTORY_PREFIX}#{loop_obj.lid}", 0, HISTORY_CAP - 1)
@@ -528,6 +582,19 @@ module Wurk
 
       def jobs
         LoopSet.new
+      end
+
+      # Test/ops helper: fire one registered loop immediately, ignoring the
+      # leader gate and the schedule due-check. Records history + advances the
+      # fire marks just like a leader tick, so specs can assert on the enqueue
+      # and history deterministically without waiting on wall-clock or
+      # stubbing leadership. Returns the enqueued jid, or nil for an unknown
+      # lid. Aliased as `Sidekiq::Periodic.fire!`.
+      def fire!(lid)
+        loop_obj = LoopSet.new.fetch(lid)
+        return nil if loop_obj.nil?
+
+        Poller.new(Wurk.configuration).fire(loop_obj)
       end
     end
   end

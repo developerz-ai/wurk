@@ -87,6 +87,12 @@ class LauncherTest < Wurk::Test::UnitCase
     assert_instance_of Wurk::Scheduled::Poller, launcher.poller
   end
 
+  def test_initialize_builds_a_cron_poller
+    launcher = Wurk::Launcher.new(@config)
+
+    assert_instance_of Wurk::Cron::Poller, launcher.cron_poller
+  end
+
   # --- run -------------------------------------------------------------
 
   def test_run_freezes_config
@@ -119,6 +125,17 @@ class LauncherTest < Wurk::Test::UnitCase
     launcher.run(async_beat: false)
 
     assert started, 'run should start the cluster leader'
+  end
+
+  def test_run_starts_the_cron_poller
+    launcher = Wurk::Launcher.new(@config)
+    stub_managers(launcher)
+    started = false
+    launcher.cron_poller.define_singleton_method(:start) { started = true }
+
+    launcher.run(async_beat: false)
+
+    assert started, 'run should start the periodic (cron) poller'
   end
 
   def test_run_starts_each_manager
@@ -175,6 +192,19 @@ class LauncherTest < Wurk::Test::UnitCase
     assert_equal launcher.managers, quieted
   end
 
+  # Spec sidekiq-ent.md §2.6: a USR1-quieted leader keeps enqueuing periodic
+  # jobs — only full shutdown stops the loops. So quiet must NOT terminate it.
+  def test_quiet_does_not_terminate_cron_poller
+    launcher = Wurk::Launcher.new(@config)
+    launcher.managers.each { |m| m.define_singleton_method(:quiet) { nil } }
+    terminated = false
+    launcher.cron_poller.define_singleton_method(:terminate) { terminated = true }
+
+    launcher.quiet
+
+    refute terminated, 'quiet must leave the cron poller running (quieted leader still enqueues)'
+  end
+
   def test_quiet_is_idempotent
     launcher = Wurk::Launcher.new(@config)
     calls = 0
@@ -226,6 +256,18 @@ class LauncherTest < Wurk::Test::UnitCase
     launcher.stop
 
     assert stopped, 'stop should release the cluster leader'
+  end
+
+  def test_stop_terminates_cron_poller
+    @config[:timeout] = 0
+    launcher = Wurk::Launcher.new(@config)
+    silence_managers(launcher)
+    terminated = false
+    launcher.cron_poller.define_singleton_method(:terminate) { terminated = true }
+
+    launcher.stop
+
+    assert terminated, 'full shutdown should stop periodic firing'
   end
 
   def test_stop_fires_shutdown_then_exit_in_reverse
@@ -497,6 +539,8 @@ class LauncherTest < Wurk::Test::UnitCase
     launcher.managers.each { |m| m.define_singleton_method(:start) { nil } }
     # Don't campaign for the global `dear-leader` lock during unit run-tests.
     launcher.instance_variable_get(:@leader).define_singleton_method(:start) { nil }
+    # Don't spawn the real cron tick thread (it would poll Redis on a timer).
+    launcher.cron_poller.define_singleton_method(:start) { nil }
   end
 
   def silence_managers(launcher)

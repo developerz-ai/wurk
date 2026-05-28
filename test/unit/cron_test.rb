@@ -1,6 +1,7 @@
 # frozen_string_literal: true
 
 require_relative '../test_helper'
+require 'tzinfo'
 
 class CronTest < Wurk::Test::UnitCase
   parallelize_me!
@@ -13,6 +14,9 @@ class CronTest < Wurk::Test::UnitCase
   end
 
   class BarWorker # rubocop:disable Lint/EmptyClass
+  end
+
+  class DSTWorker # rubocop:disable Lint/EmptyClass
   end
 
   def setup
@@ -430,6 +434,156 @@ class CronTest < Wurk::Test::UnitCase
     assert ts.is_a?(Integer) && jid.is_a?(String) && !jid.empty?
   end
 
+  def test_poller_tick_interval_defaults_to_60
+    poller = Wurk::Cron::Poller.new(Wurk.configuration)
+
+    assert_equal 60, poller.instance_variable_get(:@tick_interval)
+  end
+
+  def test_poller_tick_interval_reads_config
+    cfg = Wurk::Configuration.new
+    cfg[:cron_tick_interval] = 0.25
+
+    assert_equal 0.25, Wurk::Cron::Poller.new(cfg).instance_variable_get(:@tick_interval)
+  end
+
+  # ---- DST / timezone edge cases (US / EU / AU) -----------------------
+  #
+  # 2026 transitions (confirmed via TZInfo):
+  #   America/New_York  spring 03-08 02:00→03:00   fall 11-01 02:00→01:00
+  #   Europe/London     spring 03-29 01:00→02:00   fall 10-25 02:00→01:00
+  #   Australia/Sydney  spring 10-04 02:00→03:00   fall 04-05 03:00→02:00
+  # TZInfo objects (not IANA strings) so the parser uses #utc_to_local and we
+  # don't mutate the process-global ENV['TZ'] under the parallel runner.
+
+  # --- fall-back fold: the once-daily slot must fire exactly once ---
+
+  def test_dst_fall_back_fires_once_new_york
+    fires = simulate_fires('30 1 * * *', tz('America/New_York'),
+                           Time.utc(2026, 11, 1, 4, 0), Time.utc(2026, 11, 1, 8, 0))
+
+    assert_equal 1, fires.size, 'daily 01:30 must fire once across the US fall-back fold'
+  end
+
+  def test_dst_fall_back_fires_once_london
+    fires = simulate_fires('30 1 * * *', tz('Europe/London'),
+                           Time.utc(2026, 10, 25, 0, 0), Time.utc(2026, 10, 25, 2, 0))
+
+    assert_equal 1, fires.size, 'daily 01:30 must fire once across the EU fall-back fold'
+  end
+
+  def test_dst_fall_back_fires_once_sydney
+    fires = simulate_fires('30 2 * * *', tz('Australia/Sydney'),
+                           Time.utc(2026, 4, 4, 15, 0), Time.utc(2026, 4, 4, 17, 0))
+
+    assert_equal 1, fires.size, 'daily 02:30 must fire once across the AU fall-back fold'
+  end
+
+  # --- the parser itself enumerates the fold twice (why the dedup exists) ---
+
+  def test_dst_parser_enumerates_fall_back_fold_twice
+    tzobj = tz('America/New_York')
+    parser = Wurk::Cron::Parser.new('30 1 * * *')
+    first = parser.next_fire_at(Time.utc(2026, 11, 1, 4, 0).to_i, tzobj)
+    second = parser.next_fire_at(first, tzobj)
+
+    refute_equal first, second
+    assert_equal parser.local_components(first, tzobj), parser.local_components(second, tzobj),
+                 'both fold instants share the same local wall-clock — the source of a double-fire'
+  end
+
+  def test_dst_next_fire_after_skips_the_fold
+    loop_obj = dst_loop('30 1 * * *', tz('America/New_York'))
+    first = loop_obj.next_fire_at(Time.utc(2026, 11, 1, 4, 0).to_i)
+    fold_dup = loop_obj.next_fire_at(first)
+
+    skipped = loop_obj.next_fire_after(first, first)
+
+    refute_equal fold_dup, skipped, 'next_fire_after must not return the fold duplicate'
+    assert_operator skipped, :>, Time.utc(2026, 11, 1, 8, 0).to_i, 'should jump to the next day'
+  end
+
+  # --- a frequency loop keeps its real-time cadence across the fold ---
+
+  def test_dst_fall_back_frequency_loop_keeps_cadence
+    # */30 across the US fold spans six real half-hours (05:00..07:30 UTC) and
+    # must fire all six — the dedup only suppresses an identical wall-clock minute.
+    fires = simulate_fires('*/30 * * * *', tz('America/New_York'),
+                           Time.utc(2026, 11, 1, 4, 30), Time.utc(2026, 11, 1, 7, 30))
+
+    assert_equal 6, fires.size
+  end
+
+  # --- spring-forward gap: the missing slot is skipped to the next valid day ---
+
+  def test_dst_spring_forward_skips_gap_new_york
+    nxt = next_local_fire('30 2 * * *', tz('America/New_York'), Time.utc(2026, 3, 8, 5, 0))
+
+    assert_equal [30, 2], nxt[0, 2], 'fires at 02:30…'
+    assert_equal 9, nxt[2], '…on 03-09, having skipped the non-existent 03-08 02:30'
+  end
+
+  def test_dst_spring_forward_skips_gap_london
+    nxt = next_local_fire('30 1 * * *', tz('Europe/London'), Time.utc(2026, 3, 29, 0, 0))
+
+    assert_equal [30, 1], nxt[0, 2]
+    assert_equal 30, nxt[2], 'skips the non-existent 03-29 01:30, fires 03-30'
+  end
+
+  def test_dst_spring_forward_skips_gap_sydney
+    nxt = next_local_fire('30 2 * * *', tz('Australia/Sydney'), Time.utc(2026, 10, 3, 14, 0))
+
+    assert_equal [30, 2], nxt[0, 2]
+    assert_equal 5, nxt[2], 'skips the non-existent 10-04 02:30, fires 10-05'
+  end
+
+  # ---- Cron.fire! (deterministic test/ops helper) ---------------------
+
+  def test_fire_bang_enqueues_the_loop_job
+    queue = "cron-fire-#{@suffix}"
+    lp = register_loop("CronTest::FireOne#{@suffix}", queue: queue, schedule: '0 4 * * *')
+
+    Wurk::Cron.fire!(lp.lid)
+    raw = Wurk.redis { |c| c.call('RPOP', "queue:#{queue}") }
+    cleanup_queue(queue)
+
+    refute_nil raw, 'fire! should enqueue even when the loop is not due'
+    assert_equal "CronTest::FireOne#{@suffix}", JSON.parse(raw)['class']
+  end
+
+  def test_fire_bang_records_one_history_entry
+    lp = register_loop("CronTest::FireHist#{@suffix}", queue: "cron-fh-#{@suffix}")
+
+    Wurk::Cron.fire!(lp.lid)
+    len = Wurk.redis { |c| c.call('LLEN', "#{Wurk::Cron::HISTORY_PREFIX}#{lp.lid}") }
+    cleanup_queue("cron-fh-#{@suffix}")
+
+    assert_equal 1, len
+  end
+
+  def test_fire_bang_returns_jid
+    lp = register_loop("CronTest::FireJid#{@suffix}", queue: "cron-fj-#{@suffix}")
+
+    jid = Wurk::Cron.fire!(lp.lid)
+    cleanup_queue("cron-fj-#{@suffix}")
+
+    assert jid.is_a?(String) && !jid.empty?
+  end
+
+  def test_fire_bang_returns_nil_for_unknown_lid
+    assert_nil Wurk::Cron.fire!("no-such-lid-#{@suffix}")
+  end
+
+  def test_fire_bang_aliased_under_sidekiq_periodic
+    queue = "cron-alias-#{@suffix}"
+    lp = register_loop("CronTest::FireAlias#{@suffix}", queue: queue)
+
+    jid = Sidekiq::Periodic.fire!(lp.lid)
+    cleanup_queue(queue)
+
+    refute_nil jid
+  end
+
   # ---- Configuration#periodic -----------------------------------------
 
   def test_configure_server_periodic_block_yields_manager
@@ -465,6 +619,45 @@ class CronTest < Wurk::Test::UnitCase
       c.call('DEL', "queue:#{queue}")
       c.call('SREM', 'queues', queue)
     end
+  end
+
+  def register_loop(klass, queue:, schedule: '* * * * *', **opts)
+    mgr = Wurk::Cron::Manager.new
+    lp = mgr.register(schedule, klass, queue: queue, **opts)
+    @lids << lp.lid
+    lp
+  end
+
+  def tz(name)
+    TZInfo::Timezone.get(name)
+  end
+
+  def dst_loop(schedule, tzobj)
+    Wurk::Cron::Loop.new(schedule: schedule, klass: 'CronTest::DSTWorker', tz: tzobj)
+  end
+
+  # Replays the leader poller's fire-advance (next_fire_after) across
+  # [from_utc, to_utc], returning the fired UTC epochs. Bounded so a regression
+  # that loops can't hang the suite.
+  def simulate_fires(schedule, tzobj, from_utc, to_utc)
+    loop_obj = dst_loop(schedule, tzobj)
+    fires = []
+    slot = loop_obj.next_fire_at(from_utc.to_i)
+    500.times do
+      break if slot.nil? || slot > to_utc.to_i
+
+      fires << slot
+      slot = loop_obj.next_fire_after(slot, slot)
+    end
+    fires
+  end
+
+  # Local [min, hour, day] of the first fire at/after `from_utc`.
+  def next_local_fire(schedule, tzobj, from_utc)
+    loop_obj = dst_loop(schedule, tzobj)
+    nf = loop_obj.next_fire_at(from_utc.to_i)
+    refute_nil nf, 'next_fire_at must resolve a future fire across the spring-forward gap'
+    loop_obj.local_components(nf)[0, 3]
   end
 
   def register_for_persist_test
