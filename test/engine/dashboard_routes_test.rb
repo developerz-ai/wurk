@@ -3,34 +3,22 @@
 require_relative '../engine_test_helper'
 
 # Drives Wurk::DashboardController against the booted dummy app. The SPA
-# shell is a literal HTML file that ships in vendor/assets/dashboard at gem
-# release time (built from frontend/ via `bin/rake frontend:build`). Tests
-# stub it so we don't depend on a real frontend build running first.
+# shell (vendor/assets/dashboard/index.html) is a build artifact produced by
+# `bin/rake frontend:build` and always carries the `wurk-root` mount point.
 #
-# Not parallelized: we mutate a shared file under the gem's vendor/ dir.
+# We assert against the real shipped file rather than stubbing it. The old
+# stub-and-restore mutated that shared file, which raced StaticAssetsTest
+# (a concurrent reader, in a separate parallel-runner process where a Mutex
+# can't help) and — if a run was interrupted mid-test — could overwrite the
+# real build with the stub. Skip instead when no build is present.
 class DashboardRoutesTest < Wurk::Test::EngineCase
+  parallelize_me!
+
   INDEX = ::Wurk::Engine.root.join('vendor', 'assets', 'dashboard', 'index.html')
-  STUB = <<~HTML
-    <!doctype html>
-    <html><head><title>Wurk</title></head>
-    <body><div id="wurk-root"></div></body></html>
-  HTML
 
   def setup
     super
-    @prior_contents = INDEX.exist? ? INDEX.read : nil
-    INDEX.parent.mkpath
-    INDEX.write(STUB)
-  end
-
-  def teardown
-    if @prior_contents
-      INDEX.write(@prior_contents)
-    elsif INDEX.exist?
-      INDEX.delete
-    end
-  ensure
-    super
+    skip 'dashboard build missing (run `bin/rake frontend:build`)' unless INDEX.exist?
   end
 
   def test_get_wurk_returns_spa_shell

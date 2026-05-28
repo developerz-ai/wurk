@@ -1,6 +1,7 @@
 # frozen_string_literal: true
 
 require_relative '../test_helper'
+require 'securerandom'
 
 class MetricsHistoryTest < Wurk::Test::UnitCase
   parallelize_me!
@@ -8,7 +9,10 @@ class MetricsHistoryTest < Wurk::Test::UnitCase
   def setup
     super
     @at = ::Time.utc(2026, 5, 21, 14, 37, 12)
-    @klass = "FooJob#{Process.pid}_#{object_id}"
+    # SecureRandom, not object_id: object_ids are recycled after GC, so a
+    # later instance could inherit an earlier one's bucket field and see a
+    # doubled count. A unique-per-instance class guarantees no field collision.
+    @klass = "FooJob-#{SecureRandom.hex(8)}"
   end
 
   def teardown
@@ -19,9 +23,14 @@ class MetricsHistoryTest < Wurk::Test::UnitCase
         c.call('DEL', *keys) unless keys.empty?
         break if cursor == '0'
       end
-      # HDEL only this class's fields — minute/rollup buckets are shared
-      # with other parallel tests writing at the same UTC minute.
-      [Wurk::Metrics::History.minute_key(@at), Wurk::Metrics::History.rollup_key(@at)].each do |key|
+      # Per-class fields live in shared, non-class-named minute/rollup buckets
+      # that SCAN can't reach. HDEL our fields from every bucket this test
+      # could have written: the fixed @at bucket (record tests) AND the
+      # current-time bucket (middleware tests record at Time.now).
+      bucket_keys = [@at, ::Time.now.utc].flat_map do |t|
+        [Wurk::Metrics::History.minute_key(t), Wurk::Metrics::History.rollup_key(t)]
+      end
+      bucket_keys.uniq.each do |key|
         c.call('HDEL', key, "#{@klass}|p", "#{@klass}|f", "#{@klass}|ms")
       end
     end
