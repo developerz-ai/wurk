@@ -449,6 +449,12 @@ class ConfigurationTest < Wurk::Test::UnitCase
     assert_same custom, @config.topology
   end
 
+  def test_topology_setter_raises_once_frozen
+    @config.freeze!
+
+    assert_raises(FrozenError) { @config.topology = Wurk::Topology.new }
+  end
+
   private
 
   def build_exception(message)

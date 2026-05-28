@@ -258,7 +258,7 @@ module Wurk
       @logger ||= default_logger
     end
 
-    attr_writer :logger, :topology
+    attr_writer :logger
 
     def handle_exception(ex, ctx = {})
       if error_handlers.empty?
@@ -292,6 +292,11 @@ module Wurk
     # `topology=`) for specialized slots.
     def topology
       @topology ||= default_topology
+    end
+
+    def topology=(value)
+      guard_frozen!
+      @topology = value
     end
 
     def freeze!
