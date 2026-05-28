@@ -7,6 +7,7 @@ require_relative 'heartbeat'
 require_relative 'health'
 require_relative 'keys'
 require_relative 'scheduled'
+require_relative 'leader'
 
 module Wurk
   # Top-level supervisor inside each worker process. Owns the Manager pool
@@ -45,6 +46,7 @@ module Wurk
       @done = false
       @managers = config.capsules.values.map { |cap| Manager.new(cap) }
       @poller = build_poller
+      @leader = build_leader
       @started_at = nil
       @heartbeat = nil
       @heartbeat_thread = nil
@@ -68,6 +70,7 @@ module Wurk
       @config.freeze!
       @heartbeat_thread = safe_thread('heartbeat', &method(:start_heartbeat)) if async_beat
       @poller&.start
+      @leader&.start
       @managers.each(&:start)
       @health_server&.start
     end
@@ -93,6 +96,9 @@ module Wurk
       stoppers = @managers.map { |m| Thread.new { m.stop(deadline) } }
       fire_event(:shutdown, reverse: true)
       stoppers.each(&:join)
+      # CAS-release the cluster lock now (planned shutdown) so a follower can
+      # take over immediately instead of waiting out the TTL.
+      @leader&.stop
       clear_heartbeat
       fire_event(:exit, reverse: true)
     end
@@ -205,6 +211,19 @@ module Wurk
 
     def build_poller
       Wurk::Scheduled::Poller.new(@config)
+    end
+
+    # Every worker process campaigns for the single cluster lock (`dear-leader`);
+    # one wins and renews it, the rest follow and promote on its death. Cadence
+    # falls back to the spec defaults (TTL 30 / renew 15 / follower 60) unless
+    # the host tunes it. `Leader#start` no-ops under `WURK_LEADER=false`.
+    def build_leader
+      Wurk::Leader.new(
+        config: @config,
+        ttl: @config[:leader_ttl] || Wurk::Leader::DEFAULT_TTL,
+        renew_interval: @config[:leader_renew_interval] || Wurk::Leader::DEFAULT_RENEW_INTERVAL,
+        follower_interval: @config[:leader_follower_interval] || Wurk::Leader::DEFAULT_FOLLOWER_INTERVAL
+      )
     end
 
     # Returns a Health::Server when `config.health_check(...)` has set

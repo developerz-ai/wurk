@@ -94,6 +94,19 @@ class LeaderTest < Wurk::Test::UnitCase
     refute_predicate b, :leader?
   end
 
+  # Failover primitive: once the holder steps down, a different owner wins.
+  def test_competitor_acquires_after_holder_releases
+    a = build_leader(owner: 'a-owner')
+    b = build_leader(owner: 'b-owner')
+    a.acquire
+
+    refute b.acquire, 'competitor blocked while the lock is held'
+    a.release
+
+    assert b.acquire, 'competitor takes over once the holder releases'
+    assert_predicate b, :leader?
+  end
+
   def test_re_acquire_refreshes_ttl
     ldr = build_leader(ttl: 30)
     ldr.acquire

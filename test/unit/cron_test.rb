@@ -370,10 +370,8 @@ class CronTest < Wurk::Test::UnitCase
     @lids << lp.lid
 
     poller = Wurk::Cron::Poller.new(Wurk.configuration)
-    # Stub leader to deny acquisition.
-    leader = poller.instance_variable_get(:@leader)
-    leader.define_singleton_method(:acquire) { false }
-    leader.define_singleton_method(:leader?) { false }
+    # Not the cluster leader → never enqueues.
+    poller.define_singleton_method(:leader?) { false }
 
     poller.tick
 
@@ -409,9 +407,7 @@ class CronTest < Wurk::Test::UnitCase
     @lids << lp.lid
 
     poller = Wurk::Cron::Poller.new(Wurk.configuration)
-    leader = poller.instance_variable_get(:@leader)
-    leader.define_singleton_method(:acquire) { true }
-    leader.define_singleton_method(:leader?) { true }
+    poller.define_singleton_method(:leader?) { true }
 
     poller.tick
 
@@ -460,7 +456,6 @@ class CronTest < Wurk::Test::UnitCase
   def test_constants_match_spec_keys
     assert_equal 'periodic', Wurk::Cron::PERIODIC_KEY
     assert_equal 'loops:', Wurk::Cron::LOOP_PREFIX
-    assert_equal 'cron-leader', Wurk::Cron::LEADER_KEY
   end
 
   private
@@ -486,9 +481,8 @@ class CronTest < Wurk::Test::UnitCase
 
   def build_leader_poller
     poller = Wurk::Cron::Poller.new(Wurk.configuration)
-    leader = poller.instance_variable_get(:@leader)
-    leader.define_singleton_method(:acquire) { true }
-    leader.define_singleton_method(:leader?) { true }
+    # Pretend this process holds the cluster lock.
+    poller.define_singleton_method(:leader?) { true }
     poller
   end
 
