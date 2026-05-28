@@ -6,6 +6,7 @@ require_relative 'processor'
 require_relative 'heartbeat'
 require_relative 'health'
 require_relative 'keys'
+require_relative 'scheduled'
 
 module Wurk
   # Top-level supervisor inside each worker process. Owns the Manager pool
@@ -198,11 +199,7 @@ module Wurk
       end
     end
 
-    # PR 6 lands `Wurk::Scheduled::Poller`. Until then this returns nil
-    # and the launcher tolerates a missing poller — managers still run.
     def build_poller
-      return nil unless defined?(Wurk::Scheduled::Poller)
-
       Wurk::Scheduled::Poller.new(@config)
     end
 
