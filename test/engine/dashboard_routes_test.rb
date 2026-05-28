@@ -12,6 +12,8 @@ require_relative '../engine_test_helper'
 # can't help) and — if a run was interrupted mid-test — could overwrite the
 # real build with the stub. Skip instead when no build is present.
 class DashboardRoutesTest < Wurk::Test::EngineCase
+  parallelize_me!
+
   INDEX = ::Wurk::Engine.root.join('vendor', 'assets', 'dashboard', 'index.html')
 
   def setup
