@@ -419,6 +419,42 @@ class ConfigurationTest < Wurk::Test::UnitCase
     assert_same @config, @config.freeze!
   end
 
+  # --- topology (regression #36) -----------------------------------------
+
+  def test_topology_returns_a_topology
+    assert_instance_of Wurk::Topology, @config.topology
+  end
+
+  def test_topology_defaults_to_one_flat_fork_from_default_capsule
+    @config.queues = %w[critical default]
+    @config.concurrency = 7
+
+    slot = @config.topology.slots.first
+
+    assert_equal 1, @config.topology.total_processes
+    assert_equal %w[critical default], slot.queues
+    assert_equal 7, slot.concurrency
+  end
+
+  def test_topology_default_preserves_weighted_queue_specs
+    @config.queues = %w[high,3 default,2]
+
+    assert_equal %w[high,3 default,2], @config.topology.slots.first.queues
+  end
+
+  def test_topology_respects_a_custom_assignment
+    custom = Wurk::Topology.flat(count: 3, queues: ['bulk'], concurrency: 2)
+    @config.topology = custom
+
+    assert_same custom, @config.topology
+  end
+
+  def test_topology_setter_raises_once_frozen
+    @config.freeze!
+
+    assert_raises(FrozenError) { @config.topology = Wurk::Topology.new }
+  end
+
   private
 
   def build_exception(message)

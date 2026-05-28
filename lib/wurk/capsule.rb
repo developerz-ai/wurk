@@ -2,6 +2,7 @@
 
 require_relative 'redis_pool'
 require_relative 'middleware/chain'
+require_relative 'fetcher/reliable'
 
 module Wurk
   # One processing unit: a set of threads + queues sharing a fetcher and a
@@ -46,6 +47,28 @@ module Wurk
       @weights = parsed.to_h
       @mode = detect_mode(parsed)
       @queues = expand_by_weight(parsed, @mode)
+    end
+
+    # Lossless `name[,weight]` specs (unlike `queues`, which is the
+    # weight-expanded list). Lets Configuration#topology rebuild a slot that
+    # round-trips back through `queues=` without flattening weights.
+    def queue_specs
+      @weights.map { |q, w| w.positive? ? "#{q},#{w}" : q }
+    end
+
+    # Materialize everything that lazy-inits via `||=` and default the fetcher,
+    # BEFORE Configuration#freeze! freezes the capsule — otherwise the first
+    # post-freeze access (a fetch tick, a middleware call) hits a nil fetcher
+    # or FrozenErrors building a pool. The swarm's ChildBoot used to do this
+    # by hand; centralizing it here covers the standalone CLI and embedded
+    # paths too (the bug behind a nil `fetcher` in `exe/wurk`). Idempotent.
+    def prepare!
+      @fetcher ||= Wurk::Fetcher::Reliable.new(self)
+      redis_pool
+      local_redis_pool
+      client_middleware
+      server_middleware
+      self
     end
 
     def client_middleware

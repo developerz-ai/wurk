@@ -18,7 +18,7 @@ class LauncherTest < Wurk::Test::UnitCase
     cap = @config.default_capsule
     cap.queues = ['default']
     cap.concurrency = 2
-    cap.fetcher = Wurk::Fetcher::Reliable.new(cap)
+    # No manual fetcher wiring — Launcher#run defaults it now (regression #35).
     @config[:tag] = @ns
     @pool = cap.redis_pool
     @cleanup_keys = []
@@ -96,6 +96,18 @@ class LauncherTest < Wurk::Test::UnitCase
     launcher.run(async_beat: false)
 
     assert_predicate @config, :frozen?
+  end
+
+  # Regression #35: standalone/embedded boots go through run, which must
+  # default each capsule's fetcher (only ChildBoot used to wire it).
+  def test_run_defaults_the_capsule_fetcher
+    assert_nil @config.default_capsule.fetcher
+    launcher = Wurk::Launcher.new(@config)
+    stub_managers(launcher)
+
+    launcher.run(async_beat: false)
+
+    assert_instance_of Wurk::Fetcher::Reliable, @config.default_capsule.fetcher
   end
 
   def test_run_starts_each_manager
