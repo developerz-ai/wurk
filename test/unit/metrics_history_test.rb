@@ -99,6 +99,21 @@ class MetricsHistoryTest < Wurk::Test::UnitCase
     assert_equal '1', val
   end
 
+  # Regression: at minutes ending in 0 the minute and rollup keys coincide,
+  # so record must write the shared field once (not twice → "2").
+  def test_record_does_not_double_count_at_rollup_boundary
+    at = ::Time.utc(2026, 5, 21, 14, 30, 0)
+    minute = Wurk::Metrics::History.minute_key(at)
+    Wurk::Metrics::History.record(@klass, 5, success: true, at: at)
+
+    assert_equal minute, Wurk::Metrics::History.rollup_key(at), 'precondition: keys collide at x0 minutes'
+    val = Wurk.redis { |c| c.call('HGET', minute, "#{@klass}|p") }
+
+    assert_equal '1', val
+  ensure
+    Wurk.redis { |c| c.call('HDEL', minute, "#{@klass}|p", "#{@klass}|f", "#{@klass}|ms") } if minute
+  end
+
   def test_record_writes_hourly_bucket
     Wurk::Metrics::History.record(@klass, 20, success: true, at: @at)
     Wurk::Metrics::History.record(@klass, 30, success: false, at: @at)
