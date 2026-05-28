@@ -280,11 +280,34 @@ module Wurk
         nxt = next_fire_at(advance_from)
         return nxt if nxt.nil? || local_components(nxt) != local_components(fired_slot)
 
+        # Only suppress the fold duplicate for fixed once-per-day schedules.
+        # Cadence schedules (hourly, sub-daily step patterns) land on *different*
+        # minutes, so a second fold instant is legitimate. Detect cadence by
+        # checking if minute == 0 and hour is not fixed (hourly), or if minute
+        # field has multiple values (sub-hourly step).
+        return next_fire_at(nxt) if cadence_schedule?
+
         next_fire_at(nxt)
       end
 
       def local_components(epoch)
         parser.local_components(epoch, @tz)
+      end
+
+      # Detect cadence schedules (hourly, sub-daily steps) vs fixed daily.
+      # Hourly: minute == 0, hour is wildcard (multiple values).
+      # Sub-hourly: minute has multiple values (step pattern like */30).
+      def cadence_schedule?
+        min_field = parser.fields[0]
+        hour_field = parser.fields[1]
+
+        # Sub-hourly cadence: minute field has multiple values.
+        return true if min_field.size > 1
+
+        # Hourly cadence: minute is exactly 0 and hour is not fixed.
+        return true if min_field.size == 1 && min_field.include?(0) && hour_field.size > 1
+
+        false
       end
 
       def tz_name
@@ -517,14 +540,21 @@ module Wurk
       def read_fire_marks(lid)
         @config.redis do |c|
           vals = c.call('HMGET', "#{LOOP_PREFIX}#{lid}", 'lf', 'nf')
-          [vals[0]&.to_i, vals[1]&.to_i]
+          next_fire = vals[1]
+          # Preserve nil: treat missing or empty 'nf' as nil, not 0.
+          [vals[0]&.to_i, next_fire.nil? || next_fire.empty? ? nil : next_fire.to_i]
         end
       end
 
       def record_fire(loop_obj, jid, fired_at, future)
         history_entry = Wurk.dump_json([fired_at, jid])
         @config.redis do |c|
-          c.call('HSET', "#{LOOP_PREFIX}#{loop_obj.lid}", 'lf', fired_at.to_s, 'nf', future.to_s)
+          if future.nil?
+            c.call('HSET', "#{LOOP_PREFIX}#{loop_obj.lid}", 'lf', fired_at.to_s)
+            c.call('HDEL', "#{LOOP_PREFIX}#{loop_obj.lid}", 'nf')
+          else
+            c.call('HSET', "#{LOOP_PREFIX}#{loop_obj.lid}", 'lf', fired_at.to_s, 'nf', future.to_s)
+          end
           c.call('LPUSH', "#{HISTORY_PREFIX}#{loop_obj.lid}", history_entry)
           c.call('LTRIM', "#{HISTORY_PREFIX}#{loop_obj.lid}", 0, HISTORY_CAP - 1)
         end
