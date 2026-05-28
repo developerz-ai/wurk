@@ -87,6 +87,14 @@ class ConfigurationTest < Wurk::Test::UnitCase
     assert_kind_of Array, @config.dig(:lifecycle_events, :startup)
   end
 
+  # --- web ---------------------------------------------------------------
+
+  # Non-mutating: just asserts the delegation target, so it stays safe to run
+  # in parallel with classes that mutate the Wurk::Web.config singleton.
+  def test_web_delegates_to_web_config_singleton
+    assert_same Wurk::Web.config, @config.web
+  end
+
   # --- default capsule shortcuts ----------------------------------------
 
   def test_concurrency_reads_default_capsule

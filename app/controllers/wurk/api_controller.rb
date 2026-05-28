@@ -23,6 +23,13 @@ module Wurk
       stream reset_limiter pause_cron unpause_cron enqueue_cron
     ]
 
+    # Boot-time flags the SPA reads once to shape the UI (e.g. hide destructive
+    # actions and show the read-only banner). Always a GET, so it stays
+    # reachable while read-only mode blocks mutations.
+    def meta
+      render json: { read_only: ::Wurk::Web.config.read_only? }
+    end
+
     def stats
       render json: ::Wurk::Api::Serializers.stats_payload(::Wurk::Stats.new)
     end

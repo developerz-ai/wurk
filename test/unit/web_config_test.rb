@@ -99,7 +99,77 @@ class WebConfigTest < Wurk::Test::UnitCase
     assert_equal %w[DELETE /api/dead/123], captured
   end
 
+  # --- Read-only mode ---------------------------------------------------
+
+  def test_read_only_defaults_off
+    refute Wurk::Web.config.read_only?
+  end
+
+  def test_read_only_writer_coerces_to_boolean
+    Wurk::Web.configure { |c| c.read_only = 'yes' }
+
+    assert_equal true, Wurk::Web.config.read_only?
+  end
+
+  def test_read_only_writer_treats_falsey_strings_as_off
+    ['0', 'false', 'FALSE', 'no', 'off', ' ', ''].each do |off|
+      Wurk::Web.configure { |c| c.read_only = off }
+
+      assert_equal false, Wurk::Web.config.read_only?, "expected #{off.inspect} to be off"
+    end
+  end
+
+  def test_read_only_defaults_from_env
+    with_env('WURK_WEB_READ_ONLY', '1') do
+      Wurk::Web.reset_config!
+
+      assert Wurk::Web.config.read_only?
+    end
+  end
+
+  def test_read_only_blocks_mutating_request
+    Wurk::Web.configure { |c| c.read_only = true }
+    app = ->(_env) { [200, {}, ['should not run']] }
+    mw = Wurk::Web::Authorization.new(app)
+
+    status, headers, body = mw.call(rack_env('POST', '/api/cron/x/pause'))
+
+    assert_equal 403, status
+    assert_equal 'text/plain', headers['Content-Type']
+    assert_equal ['Read-only mode'], body
+  end
+
+  def test_read_only_allows_get_request
+    Wurk::Web.configure { |c| c.read_only = true }
+    mw = Wurk::Web::Authorization.new(->(_env) { [200, {}, ['ok']] })
+
+    status, _headers, body = mw.call(rack_env('GET', '/api/stats'))
+
+    assert_equal 200, status
+    assert_equal ['ok'], body
+  end
+
+  def test_authorization_block_runs_before_read_only_check
+    Wurk::Web.configure do |c|
+      c.authorization { |_, _, _| false }
+      c.read_only = true
+    end
+    mw = Wurk::Web::Authorization.new(->(_env) { [200, {}, []] })
+
+    _status, _headers, body = mw.call(rack_env('GET', '/api/stats'))
+
+    assert_equal ['Forbidden'], body
+  end
+
   private
+
+  def with_env(key, value)
+    previous = ENV[key]
+    ENV[key] = value
+    yield
+  ensure
+    previous.nil? ? ENV.delete(key) : ENV[key] = previous
+  end
 
   def rack_env(method, path)
     { 'REQUEST_METHOD' => method, 'PATH_INFO' => path }

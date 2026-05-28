@@ -3,6 +3,8 @@ import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { useState } from 'react';
 import { useTheme } from './hooks/useTheme';
 import { useSSE } from './hooks/useSSE';
+import { useMeta } from './hooks/useMeta';
+import { t } from './i18n';
 import Nav from './components/Nav';
 import Dashboard from './pages/Dashboard';
 import Queues from './pages/Queues';
@@ -24,6 +26,28 @@ const qc = new QueryClient({
     },
   },
 });
+
+function ReadOnlyBanner() {
+  const { data: meta } = useMeta();
+  if (!meta?.read_only) return null;
+
+  return (
+    <div
+      role="status"
+      style={{
+        background: 'var(--warning)',
+        color: '#1a1a1a',
+        textAlign: 'center',
+        padding: '0.4rem 1rem',
+        fontWeight: 600,
+        fontSize: 13,
+        letterSpacing: '0.01em',
+      }}
+    >
+      {t('readonly.banner')}
+    </div>
+  );
+}
 
 export default function App() {
   const { theme, toggle } = useTheme();
@@ -47,6 +71,7 @@ export default function App() {
             className="main-content"
             style={{ flex: 1, padding: '1.5rem', marginRight: 'var(--nav-width)' }}
           >
+            <ReadOnlyBanner />
             <Routes>
               <Route path="/" element={<Dashboard sse={sse} />} />
               <Route path="/queues" element={<Queues />} />
