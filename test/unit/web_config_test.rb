@@ -111,6 +111,14 @@ class WebConfigTest < Wurk::Test::UnitCase
     assert_equal true, Wurk::Web.config.read_only?
   end
 
+  def test_read_only_writer_treats_falsey_strings_as_off
+    ['0', 'false', 'FALSE', 'no', 'off', ' ', ''].each do |off|
+      Wurk::Web.configure { |c| c.read_only = off }
+
+      assert_equal false, Wurk::Web.config.read_only?, "expected #{off.inspect} to be off"
+    end
+  end
+
   def test_read_only_defaults_from_env
     with_env('WURK_WEB_READ_ONLY', '1') do
       Wurk::Web.reset_config!

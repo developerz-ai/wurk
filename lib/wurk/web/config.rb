@@ -22,6 +22,10 @@ module Wurk
     # When no block is registered, every request is authorized (matches
     # Sidekiq's default — no auth until the user opts in).
     class Config
+      # String forms that mean "off" — so `config.web.read_only = ENV[...]`
+      # doesn't flip on when the env var is "0"/"false"/empty.
+      FALSEY_STRINGS = ['', '0', 'false', 'no', 'off'].freeze
+
       def initialize
         @authorization = nil
         @read_only = env_read_only?
@@ -40,7 +44,7 @@ module Wurk
       # Defaults from WURK_WEB_READ_ONLY=1 so a viewer-only deploy (e.g. the
       # public demo) needs no Ruby config.
       def read_only=(value)
-        @read_only = !!value
+        @read_only = value.is_a?(String) ? !FALSEY_STRINGS.include?(value.strip.downcase) : !!value
       end
 
       def read_only?

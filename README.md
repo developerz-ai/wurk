@@ -144,7 +144,7 @@ WURK_WEB_READ_ONLY=1
 Wurk::Web.configure { |c| c.read_only = true }
 ```
 
-> The dashboard runs in your **web** process (Puma), not the worker — so set the flag there. The env var is read by every process, which is why it's the easiest option. `Wurk.configure { |c| c.web.read_only = true }` reaches the same setting (`config.web` is the `Wurk::Web` config).
+> The dashboard runs in your **web** process (Puma), not the worker — so set the flag there. The env var is read by every process, which is why it's the easiest option. `Wurk.configuration.web.read_only = true` reaches the same setting — `config.web` delegates to the `Wurk::Web` config singleton.
 
 Default is read/write — nothing changes unless you opt in.
 
