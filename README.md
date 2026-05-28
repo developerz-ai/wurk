@@ -126,6 +126,30 @@ Knobs: `health_check(port:, bind: '0.0.0.0', ready_window: 30)`. In swarm mode o
 
 ---
 
+## 🚀 Deployment
+
+### Read-only dashboard
+
+Ship a viewer-only dashboard (e.g. a public demo, or a shared read-only board) without bolting on your own auth. When read-only mode is on, every mutating request to the mounted dashboard (retry, kill, requeue, delete, pause/resume, clear) returns **403**, the SPA hides destructive actions, and a **"Read-only mode"** banner makes it unambiguous. Reads (GET) keep working.
+
+Enable it either way:
+
+```sh
+# Simplest — works in every process, including the web server.
+WURK_WEB_READ_ONLY=1
+```
+
+```ruby
+# Or in a Rails initializer (config/initializers/wurk.rb):
+Wurk::Web.configure { |c| c.read_only = true }
+```
+
+> The dashboard runs in your **web** process (Puma), not the worker — so set the flag there. The env var is read by every process, which is why it's the easiest option. `Wurk.configuration.web.read_only = true` reaches the same setting — `config.web` delegates to the `Wurk::Web` config singleton.
+
+Default is read/write — nothing changes unless you opt in.
+
+---
+
 ## 🤝 Migration
 
 ```diff

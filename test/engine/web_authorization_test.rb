@@ -67,4 +67,39 @@ class WebAuthorizationTest < Wurk::Test::EngineCase
 
     assert_equal 403, last_response.status
   end
+
+  # --- Read-only mode ---------------------------------------------------
+
+  def test_read_only_blocks_mutating_endpoint
+    Wurk::Web.configure { |c| c.read_only = true }
+
+    post '/wurk/api/cron/no-such/pause'
+
+    assert_equal 403, last_response.status
+    assert_equal 'Read-only mode', last_response.body
+  end
+
+  def test_read_only_allows_read_endpoint
+    Wurk::Web.configure { |c| c.read_only = true }
+
+    get '/wurk/api/stats'
+
+    assert_equal 200, last_response.status
+  end
+
+  def test_meta_reports_read_write_by_default
+    get '/wurk/api/meta'
+
+    assert_equal 200, last_response.status
+    assert_equal false, JSON.parse(last_response.body)['read_only']
+  end
+
+  def test_meta_reports_read_only_when_enabled
+    Wurk::Web.configure { |c| c.read_only = true }
+
+    get '/wurk/api/meta'
+
+    assert_equal 200, last_response.status
+    assert_equal true, JSON.parse(last_response.body)['read_only']
+  end
 end

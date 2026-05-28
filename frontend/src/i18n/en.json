@@ -57,6 +57,9 @@
     "search": "Search",
     "refresh": "Refresh"
   },
+  "readonly": {
+    "banner": "Read-only mode"
+  },
   "common": {
     "loading": "Loading…",
     "error": "Error loading data",

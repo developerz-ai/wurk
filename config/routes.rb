@@ -5,6 +5,7 @@ Wurk::Engine.routes.draw do
 
   # JSON APIs consumed by the SPA. Nested under whatever mount the host chose.
   scope :api, defaults: { format: :json } do
+    get  'meta',             to: 'api#meta'
     get  'stats',            to: 'api#stats'
     get  'queues',           to: 'api#queues'
     get  'queues/:name',     to: 'api#queue', as: :api_queue

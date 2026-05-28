@@ -218,6 +218,19 @@ module Wurk
       @periodic_manager
     end
 
+    # --- Web dashboard ----------------------------------------------------
+
+    # Web UI configuration: the authorization hook and read-only mode. Returns
+    # the process-wide `Wurk::Web.config` singleton so `config.web.read_only =
+    # true` and the engine middleware share one source of truth. Lazy-requires
+    # the web layer to keep standalone boot lean.
+    #
+    # Spec: docs/target/sidekiq-ent.md §9.2.
+    def web
+      require_relative 'web/config'
+      Wurk::Web.config
+    end
+
     # --- K8s liveness/readiness probes -----------------------------------
 
     # Opt-in thin HTTP listener inside the worker process for k8s probes.
