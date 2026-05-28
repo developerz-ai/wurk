@@ -28,9 +28,9 @@ module Wurk
   #   * `Cron::LoopSet` — Enumerable view (`each`/`size`/`fetch(lid)`).
   #   * `Cron::ConfigTester` — boot-time validator. Verifies cron syntax and
   #     that every worker class constant resolves.
-  #   * `Cron::Poller` — once-per-minute tick loop. The cluster leader
-  #     (`Component#leader?` / `dear-leader`) gates enqueue; non-leaders still
-  #     parse but never push.
+  #   * `Cron::Poller` — once-per-minute tick loop. Only the cluster leader
+  #     (`Component#leader?` / `dear-leader`) enqueues; non-leaders return
+  #     early without iterating loops.
   #
   # Wire-compat: `periodic`, `loops:{lid}`, `loop-history:{lid}` per
   # docs/target/sidekiq-ent.md §2.7. Periodic enqueue is gated by the single
@@ -374,10 +374,10 @@ module Wurk
       end
     end
 
-    # Once-per-minute tick driver. Leader-only enqueue per loop. Followers
-    # still iterate the LoopSet (cheap) so they're warm if leadership
-    # transfers mid-tick. Missed-tick warning when wall-clock has drifted
-    # more than `MISSED_TICK_THRESHOLD` seconds past the expected fire.
+    # Once-per-minute tick driver. Only the cluster leader iterates the LoopSet
+    # and enqueues; non-leaders return early. Missed-tick warning when
+    # wall-clock has drifted more than `MISSED_TICK_THRESHOLD` seconds past the
+    # expected fire.
     class Poller
       include Component
 
@@ -408,9 +408,9 @@ module Wurk
       end
 
       # Leader-gated by the single cluster lock (Component#leader? reads
-      # `dear-leader`); followers still warm the LoopSet so they're ready if
-      # leadership transfers. The Launcher owns the lock's renewal — the
-      # poller no longer runs (or expires) its own.
+      # `dear-leader`): non-leaders return early and never iterate the LoopSet.
+      # The Launcher owns the lock's renewal — the poller no longer runs (or
+      # expires) its own.
       def tick
         return unless leader?
 
