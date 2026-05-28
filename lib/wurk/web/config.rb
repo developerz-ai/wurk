@@ -24,6 +24,7 @@ module Wurk
     class Config
       def initialize
         @authorization = nil
+        @read_only = env_read_only?
       end
 
       # Registers a `(env, method, path) -> truthy/falsey` block. Re-calling
@@ -33,8 +34,22 @@ module Wurk
         @authorization
       end
 
+      # Read-only mode. When on, the Authorization middleware blocks every
+      # non-GET request (retry/kill/requeue/delete/pause/resume/clear) with
+      # 403, and the SPA hides destructive actions via the /api/meta flag.
+      # Defaults from WURK_WEB_READ_ONLY=1 so a viewer-only deploy (e.g. the
+      # public demo) needs no Ruby config.
+      def read_only=(value)
+        @read_only = !!value
+      end
+
+      def read_only?
+        @read_only
+      end
+
       def reset!
         @authorization = nil
+        @read_only = env_read_only?
       end
 
       # Returns true when no block is registered, otherwise the block's
@@ -45,6 +60,12 @@ module Wurk
         return true if @authorization.nil?
 
         !!@authorization.call(env, method, path)
+      end
+
+      private
+
+      def env_read_only?
+        ENV['WURK_WEB_READ_ONLY'] == '1'
       end
     end
 
@@ -69,7 +90,10 @@ module Wurk
     # is stripped via `SCRIPT_NAME` so the callback sees engine-relative paths.
     class Authorization
       FORBIDDEN_BODY = 'Forbidden'
+      READ_ONLY_BODY = 'Read-only mode'
       FORBIDDEN_HEADERS = { 'Content-Type' => 'text/plain' }.freeze
+      # Methods allowed while read-only. Anything else is a mutation and 403s.
+      SAFE_METHODS = %w[GET HEAD OPTIONS].freeze
 
       def initialize(app)
         @app = app
@@ -78,15 +102,17 @@ module Wurk
       def call(env)
         method = env['REQUEST_METHOD']
         path = env['PATH_INFO'].to_s
-        return forbidden unless Wurk::Web.config.authorized?(env, method, path)
+        config = Wurk::Web.config
+        return forbidden(FORBIDDEN_BODY) unless config.authorized?(env, method, path)
+        return forbidden(READ_ONLY_BODY) if config.read_only? && !SAFE_METHODS.include?(method)
 
         @app.call(env)
       end
 
       private
 
-      def forbidden
-        [403, FORBIDDEN_HEADERS.dup, [FORBIDDEN_BODY]]
+      def forbidden(body)
+        [403, FORBIDDEN_HEADERS.dup, [body]]
       end
     end
   end
