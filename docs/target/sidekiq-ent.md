@@ -278,7 +278,12 @@ ct.verify(&PERIODIC_JOBS)   # raises if klass constant missing or cron invalid
 | `periodic`                   | SET  | All loop IDs                                     |
 | `loops:{lid}`                | HASH | `{schedule, klass, options(json), tz, paused}`   |
 | `loop-history:{lid}`         | LIST | Recent fire records (capped)                     |
-| `cron-leader`                | STR  | Leader lock (TTL ≈ 30s, refreshed every 15s)     |
+
+> **Wurk divergence (#15):** periodic enqueue is gated by the *single* cluster
+> leader (§6, via `Component#leader?`), not a separate `cron-leader` lock.
+> Upstream's per-feature lock flaps under Wurk's cadence (60s tick vs 30s TTL);
+> the cluster leader renews every 15s and is the single source of truth for
+> "am I leader?" across periodic, metrics rollup, etc.
 
 ---
 

@@ -110,8 +110,20 @@ class LauncherTest < Wurk::Test::UnitCase
     assert_instance_of Wurk::Fetcher::Reliable, @config.default_capsule.fetcher
   end
 
+  def test_run_starts_the_cluster_leader
+    launcher = Wurk::Launcher.new(@config)
+    stub_managers(launcher)
+    started = false
+    launcher.instance_variable_get(:@leader).define_singleton_method(:start) { started = true }
+
+    launcher.run(async_beat: false)
+
+    assert started, 'run should start the cluster leader'
+  end
+
   def test_run_starts_each_manager
     launcher = Wurk::Launcher.new(@config)
+    stub_managers(launcher)
     started = []
     launcher.managers.each { |m| m.define_singleton_method(:start) { started << self } }
 
@@ -202,6 +214,18 @@ class LauncherTest < Wurk::Test::UnitCase
     assert_predicate launcher, :stopping?
     assert_equal launcher.managers.size, received.size
     received.each { |d| assert_kind_of Float, d }
+  end
+
+  def test_stop_stops_the_cluster_leader
+    @config[:timeout] = 0
+    launcher = Wurk::Launcher.new(@config)
+    silence_managers(launcher)
+    stopped = false
+    launcher.instance_variable_get(:@leader).define_singleton_method(:stop) { stopped = true }
+
+    launcher.stop
+
+    assert stopped, 'stop should release the cluster leader'
   end
 
   def test_stop_fires_shutdown_then_exit_in_reverse
@@ -471,6 +495,8 @@ class LauncherTest < Wurk::Test::UnitCase
 
   def stub_managers(launcher)
     launcher.managers.each { |m| m.define_singleton_method(:start) { nil } }
+    # Don't campaign for the global `dear-leader` lock during unit run-tests.
+    launcher.instance_variable_get(:@leader).define_singleton_method(:start) { nil }
   end
 
   def silence_managers(launcher)
@@ -478,6 +504,7 @@ class LauncherTest < Wurk::Test::UnitCase
       m.define_singleton_method(:quiet) { nil }
       m.define_singleton_method(:stop) { |_d| nil }
     end
+    launcher.instance_variable_get(:@leader).define_singleton_method(:stop) { nil }
   end
 
   def silence_beat(launcher)

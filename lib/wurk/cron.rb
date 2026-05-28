@@ -28,20 +28,21 @@ module Wurk
   #   * `Cron::LoopSet` — Enumerable view (`each`/`size`/`fetch(lid)`).
   #   * `Cron::ConfigTester` — boot-time validator. Verifies cron syntax and
   #     that every worker class constant resolves.
-  #   * `Cron::Poller` — once-per-minute tick loop. `Wurk::Leader` gates
-  #     enqueue; non-leaders still parse but never push.
+  #   * `Cron::Poller` — once-per-minute tick loop. The cluster leader
+  #     (`Component#leader?` / `dear-leader`) gates enqueue; non-leaders still
+  #     parse but never push.
   #
-  # Wire-compat: `periodic`, `loops:{lid}`, `loop-history:{lid}`, `cron-leader`
-  # — all per docs/target/sidekiq-ent.md §2.7.
+  # Wire-compat: `periodic`, `loops:{lid}`, `loop-history:{lid}` per
+  # docs/target/sidekiq-ent.md §2.7. Periodic enqueue is gated by the single
+  # cluster leader (§6, `Component#leader?`) rather than a separate
+  # `cron-leader` lock — see the §2.7 divergence note.
   module Cron
     PERIODIC_KEY = 'periodic'
     LOOP_PREFIX = 'loops:'
     HISTORY_PREFIX = 'loop-history:'
-    LEADER_KEY = 'cron-leader'
 
     HISTORY_CAP = 25
     DEFAULT_TICK_SECONDS = 60
-    DEFAULT_LEADER_TTL = 30
     MISSED_TICK_THRESHOLD = 90
 
     # 5-field crontab + `@aliases`. No seconds field, no DOW name aliases
@@ -385,7 +386,6 @@ module Wurk
         @done = false
         @mutex = ::Mutex.new
         @sleeper = ::ConditionVariable.new
-        @leader = Leader.new(key: LEADER_KEY, ttl: DEFAULT_LEADER_TTL)
         @client = Client.new(config: config)
         @thread = nil
         @tick_interval = DEFAULT_TICK_SECONDS
@@ -397,7 +397,6 @@ module Wurk
             tick
             wait
           end
-          @leader.release
         end
       end
 
@@ -408,9 +407,12 @@ module Wurk
         end
       end
 
+      # Leader-gated by the single cluster lock (Component#leader? reads
+      # `dear-leader`); followers still warm the LoopSet so they're ready if
+      # leadership transfers. The Launcher owns the lock's renewal — the
+      # poller no longer runs (or expires) its own.
       def tick
-        @leader.acquire
-        return unless @leader.leader?
+        return unless leader?
 
         LoopSet.new.each { |lp| enqueue_if_due(lp) }
       rescue StandardError => e
@@ -520,7 +522,7 @@ module Wurk
           lids.each do |lid|
             c.call('DEL', "#{LOOP_PREFIX}#{lid}", "#{HISTORY_PREFIX}#{lid}")
           end
-          c.call('DEL', PERIODIC_KEY, LEADER_KEY)
+          c.call('DEL', PERIODIC_KEY)
         end
       end
 
