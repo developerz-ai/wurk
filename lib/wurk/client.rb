@@ -210,11 +210,17 @@ module Wurk
     # accumulated in the buffer rather than written; it flushes every N jobs
     # (when autoflush is an Integer) and Batch#jobs drains the remainder at
     # block exit. Scheduled (`at`) or non-batched payloads bypass the buffer.
+    #
+    # Adds happen one payload at a time so an `autoflush = N` actually bounds
+    # the pipeline size — a bulk push of 100 with N=2 must flush 2/2/... not
+    # 100 in one shot.
     def raw_push(payloads)
       buffer = Thread.current[Wurk::Batch::BUFFER_KEY]
       if buffer && payloads.all? { |p| p['bid'] && !p['at'] }
-        buffer.add(payloads)
-        flush_batched(buffer.drain) if buffer.ready?
+        payloads.each do |payload|
+          buffer.add([payload])
+          flush_batched(buffer.drain) if buffer.ready?
+        end
         return
       end
 

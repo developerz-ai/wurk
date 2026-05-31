@@ -97,8 +97,13 @@ module Wurk
       # True once `:death` has fired for this batch — from one of its own
       # jobs dying or from a descendant's death cascading up. Suppresses
       # `:success`, which must never fire after any death in the subtree.
+      #
+      # Reads the durable `death` field on `b-<bid>` (written by `record_event`),
+      # not the `b-<bid>-death` dedup key — the dedup key has its own 30d TTL
+      # and can expire while an ancestor batch is still open, after which a
+      # late `maybe_fire` would wrongly emit `:success`.
       def death_fired?(bid)
-        Wurk.redis { |conn| conn.call('EXISTS', "b-#{bid}-death") }.to_i.positive?
+        Wurk.redis { |conn| conn.call('HGET', "b-#{bid}", 'death') } == '1'
       end
 
       # Per-callback rescue: one bad spec or a transient enqueue failure must

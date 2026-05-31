@@ -88,8 +88,15 @@ module Wurk
 
     # Per-batch post-success retention override (seconds). nil falls back to
     # POST_SUCCESS_EXPIRY_SECONDS when `:success` fires. See §2.8.
+    #
+    # After the first flush the value is persisted to `b-<bid>`; `apply_linger`
+    # reads from Redis, so a setter that only touched memory would silently
+    # ignore the override for any batch reopened by bid.
     def linger=(duration)
       @linger = duration&.to_i
+      return unless @flushed_once
+
+      Wurk.redis { |conn| conn.call('HSET', "b-#{@bid}", 'linger', @linger.to_s) }
     end
 
     def parent
@@ -201,8 +208,15 @@ module Wurk
       Buffer.new([], autoflush_threshold)
     end
 
+    # `true` → buffer the whole block (nil threshold, drained at exit);
+    # positive Integer → flush every N. Any other truthy value is a config
+    # typo (`0`, `-1`, `"5"`) — fail fast instead of silently degrading to
+    # "flush at block exit".
     def autoflush_threshold
-      @autoflush.is_a?(Integer) && @autoflush.positive? ? @autoflush : nil
+      return nil if @autoflush == true
+      return @autoflush if @autoflush.is_a?(Integer) && @autoflush.positive?
+
+      raise ArgumentError, "autoflush must be true or a positive Integer, got #{@autoflush.inspect}"
     end
 
     def flush_buffer(buffer)

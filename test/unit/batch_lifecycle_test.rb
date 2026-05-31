@@ -86,6 +86,29 @@ class BatchLifecycleTest < Wurk::Test::UnitCase
     assert_operator total(batch), :>=, 1
   end
 
+  def test_autoflush_invalid_value_raises_argument_error
+    batch = new_batch
+    [0, -1, '5', 2.5].each do |bad|
+      batch.autoflush = bad
+      err = assert_raises(ArgumentError) { batch.jobs { perform_one } }
+      assert_match(/autoflush/, err.message)
+    end
+  end
+
+  def test_autoflush_integer_bounds_bulk_push_pipeline
+    batch = new_batch
+    batch.autoflush = 2
+    totals = []
+    batch.jobs do
+      Wurk::Client.push_bulk('class' => @class_name, 'queue' => @queue, 'args' => Array.new(6) { [] })
+      totals << total(batch)
+    end
+
+    # 6 items at N=2 must flush 3 pipelines; total after the block sees them all.
+    assert_equal 6, totals.last
+    assert_equal 6, total(batch)
+  end
+
   # --- linger ------------------------------------------------------------
 
   def test_success_applies_default_linger_retention
@@ -110,6 +133,17 @@ class BatchLifecycleTest < Wurk::Test::UnitCase
     batch.jobs { perform_one }
 
     assert_equal 300, Wurk::Batch.new(batch.bid).linger
+  end
+
+  def test_linger_assigned_after_flush_persists_to_redis
+    batch = new_batch
+    batch.jobs { perform_one }
+    Wurk::Batch.new(batch.bid).linger = 240
+    ack_success(batch.bid, jid_for(@queue, batch.bid))
+    ttl = @pool.with { |c| c.call('TTL', "b-#{batch.bid}") }
+
+    assert_operator ttl, :<=, 240
+    assert_operator ttl, :>, 120
   end
 
   # --- callback lifecycle ------------------------------------------------
@@ -160,6 +194,17 @@ class BatchLifecycleTest < Wurk::Test::UnitCase
 
     assert_equal 0, callbacks_fired(event: 'success', bid: parent.bid)
     assert_equal 1, callbacks_fired(event: 'death', bid: parent.bid)
+  end
+
+  def test_parent_success_stays_suppressed_after_death_dedup_key_expires
+    parent, child = nested(parent_cbs: { success: 'ParentSuccess', death: 'ParentDeath' })
+    kill(child.bid, jid_for(@queue, child.bid))
+    # Simulate the b-<bid>-death dedup marker expiring while the parent is
+    # still open — durable `death=1` on b-<bid> must still gate :success.
+    @pool.with { |c| c.call('DEL', "b-#{parent.bid}-death") }
+    ack_success(parent.bid, jid_for(@queue, parent.bid))
+
+    assert_equal 0, callbacks_fired(event: 'success', bid: parent.bid)
   end
 
   def test_deep_death_cascades_through_every_ancestor
