@@ -79,8 +79,20 @@ module Wurk
           name: name,
           type: meta['type'].to_s,
           fingerprint: meta['fingerprint'].to_s,
-          options: parse_options(meta['options'])
+          options: parse_options(meta['options']),
+          status: limiter_status(name, meta)
         }
+      end
+
+      # Reconstruct the limiter (read-only, `register: false`) just to read
+      # its uniform `{ used, limit, reset_at, available? }` status for the
+      # Limits tab. Best-effort: a malformed meta hash yields nil rather than
+      # 500-ing the whole list.
+      def limiter_status(name, meta)
+        limiter = ::Wurk::Limiter.build(name, meta['type'], parse_options(meta['options']))
+        limiter&.status
+      rescue StandardError
+        nil
       end
 
       def cron_row(loop_obj, now_epoch)

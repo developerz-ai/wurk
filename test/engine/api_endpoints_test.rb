@@ -149,7 +149,7 @@ class ApiEndpointsTest < Wurk::Test::EngineCase
     assert_equal 0, payload[:page]
   end
 
-  def test_limiters_array
+  def test_limiters_array # rubocop:disable Minitest/MultipleAssertions
     name = seed_limiter
     get '/wurk/api/limiters'
 
@@ -157,6 +157,12 @@ class ApiEndpointsTest < Wurk::Test::EngineCase
     row = json_body.find { |r| r[:name] == name }
 
     assert_equal({ name: name, type: 'concurrent' }, row.slice(:name, :type))
+    # #16: each limiter row carries its uniform live status (concurrent
+    # additionally merges its metric counters, so assert a subset).
+    status = row[:status]
+
+    refute_nil status, 'limiter row should include a status'
+    %i[used limit reset_at available?].each { |k| assert status.key?(k), "status missing #{k}" }
   ensure
     cleanup_limiter(name)
   end
