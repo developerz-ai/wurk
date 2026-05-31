@@ -71,8 +71,9 @@ module Wurk
           return @thread if @thread
 
           @done = false
+          @thread = spawn_loop_thread
         end
-        @thread = spawn_loop_thread
+        @thread
       end
 
       def stop
