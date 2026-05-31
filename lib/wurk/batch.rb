@@ -3,6 +3,7 @@
 require 'json'
 require 'securerandom'
 require_relative 'lua'
+require_relative 'batch/buffer'
 
 module Wurk
   # Sidekiq Pro Batches. Group jobs, attach success/complete/death callbacks,
@@ -45,7 +46,12 @@ module Wurk
 
     THREAD_KEY = :wurk_current_batch
 
-    attr_reader :bid, :parent_bid
+    # Set on the current thread (to a Buffer) only inside an autoflush
+    # `#jobs` block. Client#raw_push reads it: when present, batched pushes
+    # accumulate here instead of round-tripping per job.
+    BUFFER_KEY = :wurk_batch_buffer
+
+    attr_reader :bid, :parent_bid, :linger
     attr_accessor :description, :callback_queue, :callback_class, :autoflush
 
     def self.keys_for(bid)
@@ -61,6 +67,7 @@ module Wurk
       @callback_class   = nil
       @tags             = []
       @autoflush        = nil
+      @linger           = nil
       @parent_bid       = nil
       @callbacks        = []
       @expires_in       = DEFAULT_EXPIRY_SECONDS
@@ -77,6 +84,12 @@ module Wurk
 
     def tags
       @tags.dup
+    end
+
+    # Per-batch post-success retention override (seconds). nil falls back to
+    # POST_SUCCESS_EXPIRY_SECONDS when `:success` fires. See §2.8.
+    def linger=(duration)
+      @linger = duration&.to_i
     end
 
     def parent
@@ -150,22 +163,52 @@ module Wurk
       raise ArgumentError, 'jobs requires a block' unless block
 
       ensure_first_flush!
-
-      previous = Thread.current[THREAD_KEY]
-      Thread.current[THREAD_KEY] = self
       pre_count = job_count
-      begin
-        block.call
-      ensure
-        Thread.current[THREAD_KEY] = previous
-      end
-
+      collect_jobs(&block)
+      # By the time we check, the buffer (if any) has flushed, so `total`
+      # reflects everything the block pushed — a flat count is reliable.
       enqueue_empty_marker if job_count == pre_count
       @mutable = false
       self
     end
 
     private
+
+    # Runs the block with this batch active so the client middleware stamps
+    # the bid. With autoflush on, batched pushes accumulate in a Buffer and
+    # flush once at exit; the per-N flushing happens in Client#raw_push.
+    def collect_jobs
+      previous    = Thread.current[THREAD_KEY]
+      prev_buffer = Thread.current[BUFFER_KEY]
+      buffer      = new_buffer
+      Thread.current[THREAD_KEY] = self
+      Thread.current[BUFFER_KEY] = buffer
+      begin
+        yield
+        flush_buffer(buffer) if buffer
+      ensure
+        Thread.current[THREAD_KEY] = previous
+        Thread.current[BUFFER_KEY] = prev_buffer
+      end
+    end
+
+    # Buffering is opt-in via `autoflush`: `true` buffers the whole block and
+    # flushes once at exit; a positive Integer flushes every N jobs. Anything
+    # falsy keeps the default per-job immediate push.
+    def new_buffer
+      return nil unless @autoflush
+
+      Buffer.new([], autoflush_threshold)
+    end
+
+    def autoflush_threshold
+      @autoflush.is_a?(Integer) && @autoflush.positive? ? @autoflush : nil
+    end
+
+    def flush_buffer(buffer)
+      payloads = buffer.drain
+      Wurk::Client.new.flush_batched(payloads) unless payloads.empty?
+    end
 
     # First flush writes the core hash, registers in the global `batches`
     # zset, and links tag indexes. Subsequent #jobs invocations skip this
@@ -195,6 +238,7 @@ module Wurk
         'callback_class' => @callback_class.to_s,
         'parent_bid' => current_parent_bid.to_s,
         'tags' => @tags.to_json,
+        'linger' => @linger.to_s,
         'callbacks' => @callbacks.to_json,
         'total' => '0',
         'pending' => '0',
@@ -242,12 +286,17 @@ module Wurk
 
     def load_existing!
       data = fetch_hash
+      load_meta(data)
+      @tags      = parse_json_array(data['tags'])
+      @linger    = nil_if_empty(data['linger'])&.to_i
+      @callbacks = parse_json_callbacks(data['callbacks'])
+    end
+
+    def load_meta(data)
       @description    = nil_if_empty(data['description'])
-      @callback_queue = data['callback_queue'].to_s.empty? ? 'default' : data['callback_queue']
+      @callback_queue = nil_if_empty(data['callback_queue']) || 'default'
       @callback_class = nil_if_empty(data['callback_class'])
       @parent_bid     = nil_if_empty(data['parent_bid'])
-      @tags           = parse_json_array(data['tags'])
-      @callbacks      = parse_json_callbacks(data['callbacks'])
     end
 
     def fetch_hash

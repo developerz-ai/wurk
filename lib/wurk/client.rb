@@ -76,6 +76,15 @@ module Wurk
       ts
     end
 
+    # Flush batched payloads (each carrying a `bid`) to Redis in one pipeline.
+    # Public entry point for Wurk::Batch's autoflush buffer — see #push_batched
+    # for the per-job BATCH_PUSH semantics it reuses.
+    def flush_batched(payloads)
+      return if payloads.empty?
+
+      pool.with { |conn| push_batched_pipelined(conn, payloads, now_in_millis) }
+    end
+
     class << self
       def push(item)        = new.push(item)
       def push_bulk(items)  = new.push_bulk(items)
@@ -197,7 +206,18 @@ module Wurk
       Array.new(count) { now + (rand * window) }
     end
 
+    # Inside an autoflush `Batch#jobs` block immediate batched pushes are
+    # accumulated in the buffer rather than written; it flushes every N jobs
+    # (when autoflush is an Integer) and Batch#jobs drains the remainder at
+    # block exit. Scheduled (`at`) or non-batched payloads bypass the buffer.
     def raw_push(payloads)
+      buffer = Thread.current[Wurk::Batch::BUFFER_KEY]
+      if buffer && payloads.all? { |p| p['bid'] && !p['at'] }
+        buffer.add(payloads)
+        flush_batched(buffer.drain) if buffer.ready?
+        return
+      end
+
       pool.with { |conn| atomic_push(conn, payloads) }
     end
 
