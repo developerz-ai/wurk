@@ -150,6 +150,58 @@ Default is read/write — nothing changes unless you opt in.
 
 ---
 
+## 🔐 Encryption
+
+Drop-in for Sidekiq Enterprise's `Sidekiq::Enterprise::Crypto`. Encrypts the **last** positional argument of a job with AES-256-GCM, transparently — the client middleware seals it on push, the server middleware opens it before `perform` runs. Earlier args stay plaintext so you can still triage on `user_id` / `object_id`.
+
+**Enable it** in `config/initializers/wurk.rb`, pointing at your key source (file, ENV, KMS — anything that maps an integer version to a 32-byte key):
+
+```ruby
+Sidekiq::Enterprise::Crypto.enable(active_version: 1) do |version|
+  File.binread("config/crypto/secret.#{Rails.env}.#{version}.key") # exactly 32 bytes
+end
+```
+
+**Opt a job in** — and make sure `perform` takes at least two args (pass `nil` first if there's no cleartext):
+
+```ruby
+class ChargeCardJob
+  include Sidekiq::Job
+  sidekiq_options encrypt: true
+
+  def perform(user_id, secret_bag)   # secret_bag arrives already decrypted
+    Payments.charge(user_id, secret_bag["pan"], secret_bag["cvv"])
+  end
+end
+```
+
+The dashboard renders the encrypted arg as `"<encrypted>"`; it's never written to Redis in cleartext.
+
+### Key rotation
+
+Keys rotate without downtime. The resolver block **must keep returning every still-in-flight version**, not just the active one, so jobs enqueued under the old key still decrypt:
+
+```ruby
+KEYS = {
+  1 => File.binread("config/crypto/secret.production.1.key"),
+  2 => File.binread("config/crypto/secret.production.2.key"),
+}
+
+# Step 1: ship the new key file + resolver that knows both versions, active still 1.
+Sidekiq::Enterprise::Crypto.enable(active_version: 1) { |v| KEYS.fetch(v) }
+
+# Step 2: once every process has the new key, bump active_version → 2 and redeploy.
+Sidekiq::Enterprise::Crypto.enable(active_version: 2) { |v| KEYS.fetch(v) }
+```
+
+New pushes encrypt under v2; v1 jobs already in the queue keep decrypting with the v1 key. Keep the old key around until you're sure no v1 jobs remain (queues, retries, scheduled set).
+
+### Graceful failure
+
+If a job can't be decrypted — the key was rotated away, or the ciphertext is corrupt — retrying is pointless (the key won't come back), so Wurk **does not** crash-loop it through 25 retries. Instead the job goes **straight to the dead set in under a second**, with `error_class` set to `Wurk::Encryption::DecryptionError` and `error_message` prefixed `encryption_error:` (both visible in the dashboard's Dead tab); the `jobs.encryption_error` statsd counter increments, and your death handlers fire so you can alert on a rotation gap. The still-encrypted payload is preserved on the dead record; fix the key and replay it from the dashboard.
+
+---
+
 ## 🤝 Migration
 
 ```diff
