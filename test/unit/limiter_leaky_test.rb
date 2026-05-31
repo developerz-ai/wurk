@@ -81,6 +81,21 @@ class LimiterLeakyTest < Wurk::Test::UnitCase
     assert_raises(ArgumentError) { l.within_limit {} }
   end
 
+  # Non-positive drain / bucket_size silently produces 0 or negative
+  # drain_per_sec → division-by-zero in `status` reset_at and degenerate
+  # acquire behavior. Fail fast at the boundary instead.
+  def test_zero_or_negative_drain_raises
+    [0, -1].each do |bad|
+      l = Wurk::Limiter.leaky("f0-#{@suffix}-#{bad}", 10, bad)
+      assert_raises(ArgumentError) { l.within_limit { nil } }
+    end
+  end
+
+  def test_zero_or_negative_bucket_size_raises
+    l = Wurk::Limiter.leaky("fb-#{@suffix}", 0, 60)
+    assert_raises(ArgumentError) { l.within_limit { nil } }
+  end
+
   def test_reset_clears_level
     l = Wurk::Limiter.leaky("g-#{@suffix}", 3, 60)
     l.within_limit {}
