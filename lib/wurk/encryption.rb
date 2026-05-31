@@ -257,7 +257,17 @@ module Wurk
         return unless args.is_a?(::Array) && !args.empty? && Wurk::Encryption.envelope?(args.last)
 
         job['args'] = args[0..-2] + [Wurk::Encryption.decrypt(args.last)]
-      rescue Wurk::Encryption::Error, ::OpenSSL::Cipher::CipherError => e
+      rescue Wurk::Encryption::Error,
+             ::OpenSSL::Cipher::CipherError,
+             ::ArgumentError,
+             ::TypeError,
+             ::JSON::ParserError => e
+        # Wurk::Encryption::Error covers KeyMissingError / DecryptionError.
+        # OpenSSL::Cipher::CipherError → tampered ciphertext / bad key (tag mismatch).
+        # ArgumentError → Base64.strict_decode64 / Integer() on a malformed envelope.
+        # TypeError    → Integer(nil) on a missing 'v' field.
+        # JSON::ParserError → ciphertext decrypts to non-JSON (different key, but auth tag is gone via GCM → rare,
+        # but cheap to cover so malformed payloads never re-enter the 25× retry loop).
         Wurk::Encryption.route_to_dead(job, e)
         raise Wurk::JobRetry::Skip, "#{Wurk::Encryption::DEAD_REASON}: #{e.class}"
       end

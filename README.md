@@ -198,7 +198,7 @@ New pushes encrypt under v2; v1 jobs already in the queue keep decrypting with t
 
 ### Graceful failure
 
-If a job can't be decrypted — the key was rotated away, or the ciphertext is corrupt — retrying is pointless (the key won't come back), so Wurk **does not** crash-loop it through 25 retries. Instead the job goes **straight to the dead set in under a second**, tagged `encryption_error` (visible as the `error_class` in the dashboard's Dead tab), the `jobs.encryption_error` statsd counter increments, and your death handlers fire so you can alert on a rotation gap. The still-encrypted payload is preserved on the dead record; fix the key and replay it from the dashboard.
+If a job can't be decrypted — the key was rotated away, or the ciphertext is corrupt — retrying is pointless (the key won't come back), so Wurk **does not** crash-loop it through 25 retries. Instead the job goes **straight to the dead set in under a second**, with `error_class` set to `Wurk::Encryption::DecryptionError` and `error_message` prefixed `encryption_error:` (both visible in the dashboard's Dead tab); the `jobs.encryption_error` statsd counter increments, and your death handlers fire so you can alert on a rotation gap. The still-encrypted payload is preserved on the dead record; fix the key and replay it from the dashboard.
 
 ---
 

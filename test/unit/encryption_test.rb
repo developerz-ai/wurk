@@ -532,18 +532,18 @@ class EncryptionTest < Wurk::Test::UnitCase
 
   def dead_record(target_jid)
     raw = Wurk.redis { |c| c.call('ZRANGE', Wurk::Keys::DEAD, 0, -1) }
-              .find { |m| m.include?(target_jid) }
+              .find { |m| JSON.parse(m)['jid'] == target_jid }
     raw && JSON.parse(raw)
   end
 
   def retry_count_for(target_jid)
     Wurk.redis { |c| c.call('ZRANGE', Wurk::Keys::RETRY, 0, -1) }
-        .count { |m| m.include?(target_jid) }
+        .count { |m| JSON.parse(m)['jid'] == target_jid }
   end
 
   def drain_dead(target_jid)
     Wurk.redis do |c|
-      mine = c.call('ZRANGE', Wurk::Keys::DEAD, 0, -1).select { |m| m.include?(target_jid) }
+      mine = c.call('ZRANGE', Wurk::Keys::DEAD, 0, -1).select { |m| JSON.parse(m)['jid'] == target_jid }
       c.call('ZREM', Wurk::Keys::DEAD, *mine) unless mine.empty?
     end
   end
