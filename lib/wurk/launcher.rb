@@ -9,6 +9,7 @@ require_relative 'keys'
 require_relative 'scheduled'
 require_relative 'leader'
 require_relative 'cron'
+require_relative 'fetcher/reaper'
 
 module Wurk
   # Top-level supervisor inside each worker process. Owns the Manager pool
@@ -49,6 +50,7 @@ module Wurk
       @poller = build_poller
       @cron_poller = build_cron_poller
       @leader = build_leader
+      @reaper = build_reaper
       @started_at = nil
       @heartbeat = nil
       @heartbeat_thread = nil
@@ -77,6 +79,7 @@ module Wurk
       @leader&.start
       @cron_poller&.start
       @managers.each(&:start)
+      @reaper.start
       @health_server&.start
     end
 
@@ -107,6 +110,7 @@ module Wurk
       # Full shutdown stops periodic firing (it survived #quiet); do this before
       # releasing the lock so no tick races a follower's promotion.
       @cron_poller&.terminate
+      @reaper&.stop
       # CAS-release the cluster lock now (planned shutdown) so a follower can
       # take over immediately instead of waiting out the TTL.
       @leader&.stop
@@ -244,6 +248,17 @@ module Wurk
       )
     end
 
+    # Reliable-fetch orphan reclamation. Every worker runs one; a cluster
+    # `SET NX EX` lock ensures only one actually sweeps per interval, so this
+    # is leader-independent (it keeps working if the leader dies). Tune the
+    # cadence with `config.super_fetch_reaper_interval`.
+    def build_reaper
+      Wurk::Fetcher::Reaper.new(
+        @config,
+        interval: @config[:super_fetch_reaper_interval] || Wurk::Fetcher::Reaper::DEFAULT_INTERVAL
+      )
+    end
+
     # Returns a Health::Server when `config.health_check(...)` has set
     # `:health_check_options`; nil otherwise. Off by default — the listener
     # is opt-in to keep the worker's port surface minimal.
@@ -253,8 +268,8 @@ module Wurk
 
       Health::Server.new(
         self,
-        port:         opts.fetch(:port, Health::DEFAULT_PORT),
-        bind:         opts.fetch(:bind, Health::DEFAULT_BIND),
+        port: opts.fetch(:port, Health::DEFAULT_PORT),
+        bind: opts.fetch(:bind, Health::DEFAULT_BIND),
         ready_window: opts.fetch(:ready_window, Health::DEFAULT_READY_WINDOW)
       )
     end
