@@ -22,7 +22,7 @@ module Wurk
         return unless live.zero?
 
         fire_complete(bid)
-        fire_success(bid) if pending.zero? && deaths_for(bid).zero?
+        fire_success(bid) if pending.zero? && !death_fired?(bid)
         propagate_to_parent(bid)
       end
 
@@ -35,6 +35,19 @@ module Wurk
         record_event(bid, 'death_at')
         Wurk.redis { |conn| conn.call('ZADD', 'dead-batches', Time.now.to_f.to_s, bid) }
         enqueue_callbacks(bid, 'death')
+        cascade_death(bid)
+      end
+
+      # A child's death means the parent — and every ancestor — can never
+      # fully succeed, so `:death` propagates up the parent chain. The
+      # recursion bottoms out at the root (empty parent_bid); fire_death's own
+      # dedup_set guard makes each ancestor's `:death` fire exactly once even
+      # under racing children.
+      def cascade_death(bid)
+        parent_bid = parent_bid_for(bid)
+        return if parent_bid.nil? || parent_bid.empty?
+
+        fire_death(parent_bid)
       end
 
       def fire_complete(bid)
@@ -49,6 +62,18 @@ module Wurk
 
         record_event(bid, 'success_at')
         enqueue_callbacks(bid, 'success')
+        apply_linger(bid)
+      end
+
+      # Post-success retention: a succeeded batch no longer coordinates any
+      # jobs, so its keys expire after the per-batch `linger` override (else
+      # 24h) instead of the 30d pending TTL. Mirrors Sidekiq Pro §2.8.
+      def apply_linger(bid)
+        raw     = Wurk.redis { |conn| conn.call('HGET', "b-#{bid}", 'linger') }
+        seconds = raw.nil? || raw.to_s.empty? ? Batch::POST_SUCCESS_EXPIRY_SECONDS : raw.to_i
+        Wurk.redis do |conn|
+          Batch.keys_for(bid).each { |key| conn.call('EXPIRE', key, seconds) }
+        end
       end
 
       # Atomically marks `bid` as having fired `event`. Returns true the
@@ -69,18 +94,30 @@ module Wurk
         end
       end
 
-      def deaths_for(bid)
-        Wurk.redis { |conn| conn.call('SCARD', "b-#{bid}-died") }.to_i
+      # True once `:death` has fired for this batch — from one of its own
+      # jobs dying or from a descendant's death cascading up. Suppresses
+      # `:success`, which must never fire after any death in the subtree.
+      #
+      # Reads the durable `death` field on `b-<bid>` (written by `record_event`),
+      # not the `b-<bid>-death` dedup key — the dedup key has its own 30d TTL
+      # and can expire while an ancestor batch is still open, after which a
+      # late `maybe_fire` would wrongly emit `:success`.
+      def death_fired?(bid)
+        Wurk.redis { |conn| conn.call('HGET', "b-#{bid}", 'death') } == '1'
       end
 
+      # Per-callback rescue: one bad spec or a transient enqueue failure must
+      # not strand the batch with the remaining callbacks for this event
+      # un-enqueued. Log and move on so every other callback still fires.
       def enqueue_callbacks(bid, event)
         callbacks, queue = callback_specs_for(bid)
-        return if callbacks.empty?
 
         callbacks.each do |(cb_event, target, options)|
           next unless cb_event == event
 
           enqueue_callback_job(bid, target, event, options, queue)
+        rescue StandardError => e
+          Wurk.logger.warn("batch #{bid}: #{event} callback #{target.inspect} enqueue failed: #{e.class}: #{e.message}")
         end
       end
 
