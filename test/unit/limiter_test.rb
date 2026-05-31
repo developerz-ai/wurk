@@ -90,6 +90,17 @@ class LimiterTest < Wurk::Test::UnitCase
     assert ran
   end
 
+  # Drop-in contract: Points::Handle calls `refund` on the limiter via
+  # `points_used`. Unlimited must answer that as a no-op or it raises
+  # NoMethodError the moment a worker swaps to `Wurk::Limiter.unlimited`.
+  def test_unlimited_handles_points_used_callback
+    l = Wurk::Limiter.unlimited
+    captured = nil
+    l.within_limit(estimate: 50) { |h| captured = h.points_used(10) }
+
+    assert_equal 0.0, captured
+  end
+
   # ----- OverLimit shape ------------------------------------------------
 
   def test_over_limit_exposes_limiter_and_job
@@ -182,7 +193,7 @@ class LimiterTest < Wurk::Test::UnitCase
 
   def test_bucket_status_tracks_usage_and_reset_boundary # rubocop:disable Minitest/MultipleAssertions
     l = Wurk::Limiter.bucket("sbu-#{@suffix}", 3, :minute, wait_timeout: 0)
-    2.times { l.within_limit {} }
+    2.times { l.within_limit { nil } }
     s = l.status
 
     assert_equal 2, s[:used]
@@ -193,14 +204,14 @@ class LimiterTest < Wurk::Test::UnitCase
 
   def test_bucket_status_unavailable_when_full
     l = Wurk::Limiter.bucket("sbf-#{@suffix}", 2, :minute, wait_timeout: 0)
-    2.times { l.within_limit {} }
+    2.times { l.within_limit { nil } }
 
     refute l.status[:available?], 'a saturated bucket reports unavailable'
   end
 
   def test_concurrent_status_merges_uniform_and_metrics
     l = Wurk::Limiter.concurrent("scm-#{@suffix}", 2)
-    l.within_limit {}
+    l.within_limit { nil }
     s = l.status
 
     assert_equal 2, s[:limit]
@@ -210,7 +221,7 @@ class LimiterTest < Wurk::Test::UnitCase
 
   def test_points_status_reflects_consumption
     l = Wurk::Limiter.points("spc-#{@suffix}", 100, 0)
-    l.within_limit(estimate: 30) { |_h| }
+    l.within_limit(estimate: 30) { |_h| nil }
     s = l.status
 
     assert_in_delta 30, s[:used], 1.0

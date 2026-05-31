@@ -58,15 +58,27 @@ module Wurk
         when Symbol
           Limiter.interval_seconds(@options[:drain], allow_integer: false)
         when Integer
+          raise ArgumentError, "drain must be > 0 (got #{@options[:drain]})" unless @options[:drain].positive?
+
           @options[:drain]
         else
           raise ArgumentError, "drain must be Symbol or Integer (got #{@options[:drain].class})"
         end
       end
 
-      # bucket_size / drain → ops per second.
+      # bucket_size / drain → ops per second. A zero/negative bucket_size would
+      # silently produce a non-positive rate (and a 1/0 in `status` reset_at);
+      # fail fast at the boundary so callers see the bad config, not a NaN.
       def drain_per_sec
-        @drain_per_sec ||= @options[:bucket_size].to_f / drain_interval_seconds
+        @drain_per_sec ||= begin
+          rate = @options[:bucket_size].to_f / drain_interval_seconds
+          unless rate.positive?
+            raise ArgumentError,
+                  "drain_per_sec must be > 0 (bucket_size=#{@options[:bucket_size]}, drain=#{@options[:drain]})"
+          end
+
+          rate
+        end
       end
 
       def acquire

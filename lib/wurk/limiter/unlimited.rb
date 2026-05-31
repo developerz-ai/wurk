@@ -34,6 +34,15 @@ module Wurk
           block.call(Points::Handle.new(self, 0))
         end
       end
+
+      private
+
+      # Points::Handle#points_used calls `refund` on the limiter; without this
+      # no-op an Unlimited swap-in would raise NoMethodError the moment user
+      # code records actual usage. Drop-in contract trumps purity.
+      def refund(_delta)
+        0.0
+      end
     end
   end
 end

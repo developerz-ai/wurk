@@ -15,7 +15,7 @@ class LimiterStressTest < Wurk::Test::UnitCase
 
   def setup
     super
-    @suffix = "stress#{Process.pid}#{object_id}"
+    @suffix = "stress#{Process.pid}:#{object_id}"
     # A pool wide enough that 50 threads never starve on a connection (which
     # would surface as a pool timeout, not a limiter decision).
     @pool = Wurk::RedisPool.new(size: THREADS + 8, url: REDIS_URL, timeout: 5, name: 'lstress')
