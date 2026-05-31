@@ -63,9 +63,19 @@ module Wurk
       render json: { total: set.size, page: page[:page], count: page[:count], batches: rows }
     end
 
+    def batch
+      status = ::Wurk::Batch::Status.new(params[:bid].to_s)
+      return render(json: { error: 'unknown batch' }, status: :not_found) unless status.exists?
+
+      render json: status.data.transform_keys(&:to_sym)
+    rescue ::ArgumentError
+      render json: { error: 'unknown batch' }, status: :not_found
+    end
+
     def limiters
       names = ::Wurk::Web::Enterprise::Limits.list(filter: params[:substr])
-      render json: names.map { |name| ::Wurk::Api::Serializers.limiter_row(name, limiter_meta(name)) }
+      page = ::Wurk::Api::Pagination.window(params)
+      render json: { total: names.size, page: page[:page], count: page[:count], limiters: limiter_rows(names, page) }
     end
 
     def reset_limiter
@@ -140,6 +150,15 @@ module Wurk
       total = set.size
       entries = ::Wurk::Api::Pagination.slice(set, page) { |entry| ::Wurk::Api::Serializers.sorted_entry(entry) }
       render json: { total: total, page: page[:page], count: page[:count], entries: entries }
+    end
+
+    # substr is already applied by Limits.list (matches on name), so slice the
+    # filtered names directly — only the page's rows pay the per-limiter Redis
+    # reads in limiter_row (which folds in live status).
+    def limiter_rows(names, page)
+      (names.slice(page[:page] * page[:count], page[:count]) || []).map do |name|
+        ::Wurk::Api::Serializers.limiter_row(name, limiter_meta(name))
+      end
     end
 
     def limiter_meta(name)

@@ -36,7 +36,7 @@ export default function Retries() {
   const { data, isLoading, isError } = useQuery<RetriesResponse>({
     queryKey: ['retries', page],
     queryFn: () =>
-      fetch(`/wurk/api/retries?page=${page}&count=${PAGE_SIZE}`).then(
+      fetch(`/wurk/api/retries?page=${page - 1}&count=${PAGE_SIZE}`).then(
         (r) => r.json() as Promise<RetriesResponse>
       ),
   });

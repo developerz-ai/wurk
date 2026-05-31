@@ -13,6 +13,7 @@ import Scheduled from './pages/Scheduled';
 import Dead from './pages/Dead';
 import Busy from './pages/Busy';
 import Batches from './pages/Batches';
+import BatchDetail from './pages/BatchDetail';
 import Limiters from './pages/Limiters';
 import Cron from './pages/Cron';
 import Metrics from './pages/Metrics';
@@ -80,6 +81,7 @@ export default function App() {
               <Route path="/dead" element={<Dead />} />
               <Route path="/busy" element={<Busy />} />
               <Route path="/batches" element={<Batches />} />
+              <Route path="/batches/:bid" element={<BatchDetail />} />
               <Route path="/limiters" element={<Limiters />} />
               <Route path="/cron" element={<Cron />} />
               <Route path="/metrics" element={<Metrics />} />

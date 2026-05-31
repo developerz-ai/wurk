@@ -38,7 +38,7 @@ function QueueJobs({ name }: { name: string }) {
   const { data, isLoading, isError } = useQuery<QueueDetail>({
     queryKey: ['queue', name, page],
     queryFn: () =>
-      fetch(`/wurk/api/queues/${encodeURIComponent(name)}?page=${page}&count=${PAGE_SIZE}`).then(
+      fetch(`/wurk/api/queues/${encodeURIComponent(name)}?page=${page - 1}&count=${PAGE_SIZE}`).then(
         (r) => r.json() as Promise<QueueDetail>
       ),
   });

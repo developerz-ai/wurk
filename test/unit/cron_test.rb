@@ -434,6 +434,30 @@ class CronTest < Wurk::Test::UnitCase
     assert ts.is_a?(Integer) && jid.is_a?(String) && !jid.empty?
   end
 
+  def test_last_fired_at_nil_when_never_fired
+    lp = register_loop("CronTest::LastNil#{@suffix}", queue: "cron-ln-#{@suffix}")
+
+    assert_nil lp.last_fired_at
+  end
+
+  def test_last_fired_at_returns_newest_timestamp
+    lp = register_loop("CronTest::LastTs#{@suffix}", queue: "cron-lt-#{@suffix}")
+    Wurk.redis { |c| c.call('LPUSH', "#{Wurk::Cron::HISTORY_PREFIX}#{lp.lid}", JSON.dump([1_700_000_000, 'jid-x'])) }
+
+    assert_equal 1_700_000_000, lp.last_fired_at
+  ensure
+    Wurk.redis { |c| c.call('DEL', "#{Wurk::Cron::HISTORY_PREFIX}#{lp.lid}") }
+  end
+
+  def test_last_fired_at_nil_on_non_tuple_payload
+    lp = register_loop("CronTest::LastBad#{@suffix}", queue: "cron-lb-#{@suffix}")
+    Wurk.redis { |c| c.call('LPUSH', "#{Wurk::Cron::HISTORY_PREFIX}#{lp.lid}", JSON.dump('not-an-array')) }
+
+    assert_nil lp.last_fired_at
+  ensure
+    Wurk.redis { |c| c.call('DEL', "#{Wurk::Cron::HISTORY_PREFIX}#{lp.lid}") }
+  end
+
   def test_poller_tick_interval_defaults_to_60
     poller = Wurk::Cron::Poller.new(Wurk.configuration)
 

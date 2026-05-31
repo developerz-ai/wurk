@@ -81,7 +81,7 @@ class WebExtensionsTest < Wurk::Test::EngineCase
     get "/wurk/api/limiters?substr=#{@ns.split(':').last}"
 
     assert_ok
-    row = json_body.find { |r| r[:name] == @limiter }
+    row = json_body[:limiters].find { |r| r[:name] == @limiter }
 
     refute_nil row
   end

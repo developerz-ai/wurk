@@ -254,6 +254,22 @@ module Wurk
         end
       end
 
+      # Epoch of the most recent fire, or nil if this loop has never run. The
+      # poller LPUSHes `[fired_at, jid]` tuples so index 0 is newest; we read
+      # only that one entry instead of the whole history list.
+      def last_fired_at
+        raw = Wurk.redis { |c| c.call('LINDEX', "#{HISTORY_PREFIX}#{@lid}", 0) }
+        return nil if raw.nil?
+
+        entry = JSON.parse(raw)
+        return nil unless entry.is_a?(Array)
+
+        fired_at = entry[0]
+        fired_at.is_a?(Numeric) ? fired_at.to_i : nil
+      rescue JSON::ParserError
+        nil
+      end
+
       def to_redis_hash
         {
           'schedule' => @schedule,
