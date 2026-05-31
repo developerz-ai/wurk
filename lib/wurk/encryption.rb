@@ -4,6 +4,9 @@ require 'base64'
 require 'json'
 require 'openssl'
 require_relative 'middleware'
+require_relative 'dead_set'
+require_relative 'job_retry'
+require_relative 'metrics/statsd'
 
 module Wurk
   # Sidekiq Enterprise encryption. AES-256-GCM over the **last** positional
@@ -45,15 +48,28 @@ module Wurk
   #   * Web UI redacts the last arg when `encrypt: true` is set on the job.
   #
   # Spec: docs/target/sidekiq-ent.md §4.
-  module Encryption
+  module Encryption # rubocop:disable Metrics/ModuleLength
     CIPHER_NAME = 'aes-256-gcm'
     KEY_BYTES = 32
     IV_BYTES = 12 # GCM standard: 96-bit IV.
     TAG_BYTES = 16
     ENVELOPE_MARKER = '__wurk_enc__'
 
+    # Reason tag stamped on the dead-set record when a job can't be
+    # decrypted. Surfaced as `error_class` (dashboard "Dead" column) and the
+    # `encryption_error:` prefix on `error_message`, plus the `jobs.encryption_error`
+    # statsd counter — so operators can alert on rotation gaps.
+    DEAD_REASON = 'encryption_error'
+    DECRYPTION_ERROR_CLASS = 'Wurk::Encryption::DecryptionError'
+
     class Error < StandardError; end
     class KeyMissingError < Error; end
+
+    # Marker for a terminal, non-retryable decryption failure (missing or
+    # rotated-away key, tampered ciphertext). The server middleware raises
+    # JobRetry::Skip after routing the job to the dead set, so this class
+    # is what callers see as the dead record's `error_class`.
+    class DecryptionError < Error; end
 
     class << self
       attr_reader :active_version
@@ -152,6 +168,24 @@ module Wurk
         args[0..-2] + ['<encrypted>']
       end
 
+      # A decryption failure means the key is gone (rotated away) or the
+      # ciphertext is bad — neither heals with time, so retrying 25× over
+      # ~21 days is a pointless crash loop. Instead the server middleware
+      # routes the job straight to the dead set, tagged `encryption_error`,
+      # and ACKs it (raises JobRetry::Skip). Done in <1s, death handlers fire
+      # so operators get paged. The still-encrypted envelope is kept on the
+      # record; earlier plaintext args stay visible for triage (§4.6).
+      def route_to_dead(job, cause)
+        record = job.merge(
+          'error_class' => DECRYPTION_ERROR_CLASS,
+          'error_message' => "#{DEAD_REASON}: #{cause.class}: #{cause.message}",
+          'failed_at' => ::Process.clock_gettime(::Process::CLOCK_REALTIME, :millisecond)
+        )
+        Wurk::Metrics::Statsd.increment('jobs.encryption_error', tags: ["worker:#{job['class']}"])
+        Wurk::DeadSet.new.kill(Wurk.dump_json(record), ex: cause)
+        nil
+      end
+
       private
 
       def build_decrypt_cipher(envelope, key)
@@ -200,22 +234,42 @@ module Wurk
       end
     end
 
-    # Server middleware — peels the envelope before perform runs. Decrypt
-    # failures (bad tag, missing version) raise
-    # `OpenSSL::Cipher::CipherError`; we let it bubble so the standard
-    # retry/dead pipeline handles it. Plaintext args remain visible for
-    # triage per §4.6.
+    # Server middleware — peels the envelope before perform runs. A decrypt
+    # failure (missing/rotated key, bad tag) is terminal and non-retryable,
+    # so rather than let it bubble into the 25× retry pipeline we route the
+    # job straight to the dead set tagged `encryption_error` and ACK it via
+    # JobRetry::Skip — see Wurk::Encryption.route_to_dead. Plaintext args
+    # remain visible for triage per §4.6.
     class ServerMiddleware
       include Wurk::Middleware::ServerMiddleware
 
       def call(_worker, job, _queue)
         return yield unless Wurk::Encryption.enabled? && job['encrypt']
 
-        args = job['args']
-        if args.is_a?(::Array) && !args.empty? && Wurk::Encryption.envelope?(args.last)
-          job['args'] = args[0..-2] + [Wurk::Encryption.decrypt(args.last)]
-        end
+        decrypt_last_arg!(job)
         yield
+      end
+
+      private
+
+      def decrypt_last_arg!(job)
+        args = job['args']
+        return unless args.is_a?(::Array) && !args.empty? && Wurk::Encryption.envelope?(args.last)
+
+        job['args'] = args[0..-2] + [Wurk::Encryption.decrypt(args.last)]
+      rescue Wurk::Encryption::Error,
+             ::OpenSSL::Cipher::CipherError,
+             ::ArgumentError,
+             ::TypeError,
+             ::JSON::ParserError => e
+        # Wurk::Encryption::Error covers KeyMissingError / DecryptionError.
+        # OpenSSL::Cipher::CipherError → tampered ciphertext / bad key (tag mismatch).
+        # ArgumentError → Base64.strict_decode64 / Integer() on a malformed envelope.
+        # TypeError    → Integer(nil) on a missing 'v' field.
+        # JSON::ParserError → ciphertext decrypts to non-JSON (different key, but auth tag is gone via GCM → rare,
+        # but cheap to cover so malformed payloads never re-enter the 25× retry loop).
+        Wurk::Encryption.route_to_dead(job, e)
+        raise Wurk::JobRetry::Skip, "#{Wurk::Encryption::DEAD_REASON}: #{e.class}"
       end
     end
   end

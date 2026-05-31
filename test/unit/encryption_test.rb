@@ -219,6 +219,34 @@ class EncryptionTest < Wurk::Test::UnitCase
     end
   end
 
+  # #18 "Done when": enable v1, push, rotate to v2, push, both decrypt cleanly
+  # — exercised end-to-end through the real client + server middleware pair.
+  def test_rotation_decrypts_both_versions_through_middleware # rubocop:disable Minitest/MultipleAssertions,Metrics/AbcSize
+    ENABLE_MUTEX.synchronize do
+      keys = { 1 => KEY_V1, 2 => KEY_V2 }
+
+      Wurk::Encryption.enable(active_version: 1) { |v| keys[v] }
+      v1_job = { 'class' => 'X', 'args' => ['uid', { 'pan' => '4111' }], 'encrypt' => true }
+      invoke_client(v1_job)
+
+      assert_equal 1, v1_job['args'].last['v'], 'first push encrypts under v1'
+
+      # Rotate: bump active_version, keep returning the old key for in-flight jobs.
+      Wurk::Encryption.disable!
+      Wurk::Encryption.enable(active_version: 2) { |v| keys[v] }
+      v2_job = { 'class' => 'X', 'args' => ['uid', { 'pan' => '5500' }], 'encrypt' => true }
+      invoke_client(v2_job)
+
+      assert_equal 2, v2_job['args'].last['v'], 'post-rotation push encrypts under v2'
+
+      invoke_server(v1_job) { :ok }
+      invoke_server(v2_job) { :ok }
+
+      assert_equal({ 'pan' => '4111' }, v1_job['args'].last, 'legacy v1 job decrypts')
+      assert_equal({ 'pan' => '5500' }, v2_job['args'].last, 'fresh v2 job decrypts')
+    end
+  end
+
   # ---- envelope? -------------------------------------------------------
 
   def test_envelope_predicate_recognizes_real_envelope
@@ -350,16 +378,91 @@ class EncryptionTest < Wurk::Test::UnitCase
     end
   end
 
-  def test_server_middleware_lets_cipher_error_bubble
+  # #18: a tampered/undecryptable envelope is terminal, not retryable — the
+  # server middleware routes it straight to the dead set (tagged
+  # encryption_error) and ACKs via JobRetry::Skip rather than letting the
+  # CipherError bubble into the 25× retry loop.
+  def test_server_middleware_routes_bad_tag_to_dead_set # rubocop:disable Minitest/MultipleAssertions,Metrics/AbcSize
     ENABLE_MUTEX.synchronize do
       Wurk::Encryption.enable(active_version: 1) { |_v| KEY_V1 }
       env = Wurk::Encryption.encrypt('x')
       env['tag'] = ::Base64.strict_encode64("\x00" * 16)
-      job = { 'class' => 'X', 'args' => [nil, env], 'encrypt' => true }
+      job = { 'class' => 'X', 'args' => [nil, env], 'encrypt' => true, 'jid' => jid }
 
-      assert_raises(::OpenSSL::Cipher::CipherError) do
-        invoke_server(job) { :unreached }
+      perform_ran = false
+      assert_raises(Wurk::JobRetry::Skip) do
+        invoke_server(job) { perform_ran = true }
       end
+
+      refute perform_ran, 'perform must not run on a decryption failure'
+      record = dead_record(jid)
+
+      refute_nil record, 'job should be in the dead set'
+      assert_equal Wurk::Encryption::DECRYPTION_ERROR_CLASS, record['error_class']
+      assert_includes record['error_message'], Wurk::Encryption::DEAD_REASON
+      assert_equal 0, retry_count_for(jid), 'must skip the retry pipeline entirely'
+    ensure
+      drain_dead(jid)
+    end
+  end
+
+  # #18 "Done when": missing-key job lands in dead with encryption_error in <1s.
+  def test_missing_key_routes_to_dead_under_one_second # rubocop:disable Minitest/MultipleAssertions,Metrics/AbcSize
+    ENABLE_MUTEX.synchronize do
+      Wurk::Encryption.enable(active_version: 1) { |_v| KEY_V1 }
+      env = Wurk::Encryption.encrypt('secret')
+      # Operator dropped the v1 key during rotation: resolver no longer has it.
+      Wurk::Encryption.disable!
+      Wurk::Encryption.enable(active_version: 2) { |v| v == 2 ? KEY_V2 : nil }
+      job = { 'class' => 'PrivJob', 'args' => ['uid', env], 'encrypt' => true, 'jid' => jid }
+
+      started = ::Process.clock_gettime(::Process::CLOCK_MONOTONIC)
+      assert_raises(Wurk::JobRetry::Skip) { invoke_server(job) { :unreached } }
+      elapsed = ::Process.clock_gettime(::Process::CLOCK_MONOTONIC) - started
+
+      assert_operator elapsed, :<, 1.0, 'must dead-letter in under a second'
+      record = dead_record(jid)
+
+      refute_nil record
+      assert_equal 'uid', record['args'].first, 'plaintext args stay visible for triage'
+      assert Wurk::Encryption.envelope?(record['args'].last), 'undecryptable envelope is preserved'
+    ensure
+      drain_dead(jid)
+    end
+  end
+
+  def test_decryption_failure_fires_death_handlers # rubocop:disable Metrics/AbcSize
+    ENABLE_MUTEX.synchronize do
+      fired = []
+      Wurk.configuration.death_handlers << ->(j, ex) { fired << [j['jid'], ex.class] }
+      Wurk::Encryption.enable(active_version: 1) { |_v| KEY_V1 }
+      env = Wurk::Encryption.encrypt('x')
+      Wurk::Encryption.disable!
+      Wurk::Encryption.enable(active_version: 1) { |_v| nil } # key gone
+      job = { 'class' => 'X', 'args' => [env], 'encrypt' => true, 'jid' => jid }
+
+      assert_raises(Wurk::JobRetry::Skip) { invoke_server(job) { :unreached } }
+      assert_equal [[jid, Wurk::Encryption::KeyMissingError]], fired
+    ensure
+      Wurk.configuration.death_handlers.clear
+      drain_dead(jid)
+    end
+  end
+
+  def test_decryption_failure_emits_statsd_counter
+    ENABLE_MUTEX.synchronize do
+      Wurk::Encryption.enable(active_version: 1) { |_v| KEY_V1 }
+      env = Wurk::Encryption.encrypt('x')
+      env['tag'] = ::Base64.strict_encode64("\x00" * 16)
+      job = { 'class' => 'CardJob', 'args' => [env], 'encrypt' => true, 'jid' => jid }
+
+      metrics = capture_statsd do
+        assert_raises(Wurk::JobRetry::Skip) { invoke_server(job) { :unreached } }
+      end
+
+      assert_includes metrics, ['jobs.encryption_error', ['worker:CardJob']]
+    ensure
+      drain_dead(jid)
     end
   end
 
@@ -421,5 +524,48 @@ class EncryptionTest < Wurk::Test::UnitCase
     mw = Wurk::Encryption::ServerMiddleware.new
     mw.config = Wurk.configuration
     mw.call(nil, job, job['queue'], &)
+  end
+
+  def jid
+    @jid ||= "enc-#{Process.pid}-#{object_id}-#{rand(1_000_000)}"
+  end
+
+  def dead_record(target_jid)
+    raw = Wurk.redis { |c| c.call('ZRANGE', Wurk::Keys::DEAD, 0, -1) }
+              .find { |m| JSON.parse(m)['jid'] == target_jid }
+    raw && JSON.parse(raw)
+  end
+
+  def retry_count_for(target_jid)
+    Wurk.redis { |c| c.call('ZRANGE', Wurk::Keys::RETRY, 0, -1) }
+        .count { |m| JSON.parse(m)['jid'] == target_jid }
+  end
+
+  def drain_dead(target_jid)
+    Wurk.redis do |c|
+      mine = c.call('ZRANGE', Wurk::Keys::DEAD, 0, -1).select { |m| JSON.parse(m)['jid'] == target_jid }
+      c.call('ZREM', Wurk::Keys::DEAD, *mine) unless mine.empty?
+    end
+  end
+
+  # Records jobs.* statsd increments for the duration of the block. The
+  # increment method is a process-global singleton; encryption_test runs in
+  # its own fork with no parallel threads, but we still guard with the shared
+  # mutex to match the rest of the suite's convention.
+  def capture_statsd
+    Wurk::Test::STATSD_MUTEX.synchronize do
+      calls = []
+      real = Wurk::Metrics::Statsd.method(:increment)
+      Wurk::Metrics::Statsd.singleton_class.send(:define_method, :increment) do |metric, tags: nil, **_|
+        calls << [metric, tags]
+        nil
+      end
+      begin
+        yield
+        calls
+      ensure
+        Wurk::Metrics::Statsd.singleton_class.send(:define_method, :increment, real)
+      end
+    end
   end
 end
