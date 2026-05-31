@@ -162,6 +162,61 @@ class LimiterTest < Wurk::Test::UnitCase
     assert_match(/\A[0-9a-f]{64}\z/, l.fingerprint)
   end
 
+  # ----- uniform status (#16) ------------------------------------------
+
+  def test_status_uniform_shape_for_every_type
+    limiters = {
+      concurrent: Wurk::Limiter.concurrent("sc-#{@suffix}", 3),
+      bucket: Wurk::Limiter.bucket("sb-#{@suffix}", 10, :minute),
+      window: Wurk::Limiter.window("sw-#{@suffix}", 5, :hour),
+      leaky: Wurk::Limiter.leaky("sl-#{@suffix}", 4, 2),
+      points: Wurk::Limiter.points("sp-#{@suffix}", 100, 10),
+      unlimited: Wurk::Limiter.unlimited
+    }
+    limiters.each do |type, l|
+      s = l.status
+
+      %i[used limit reset_at available?].each { |k| assert s.key?(k), "#{type} status missing #{k}" }
+    end
+  end
+
+  def test_bucket_status_tracks_usage_and_reset_boundary # rubocop:disable Minitest/MultipleAssertions
+    l = Wurk::Limiter.bucket("sbu-#{@suffix}", 3, :minute, wait_timeout: 0)
+    2.times { l.within_limit {} }
+    s = l.status
+
+    assert_equal 2, s[:used]
+    assert_equal 3, s[:limit]
+    assert s[:available?]
+    assert_operator s[:reset_at], :>, ::Time.now.to_f, 'reset_at is the next cardinal boundary'
+  end
+
+  def test_bucket_status_unavailable_when_full
+    l = Wurk::Limiter.bucket("sbf-#{@suffix}", 2, :minute, wait_timeout: 0)
+    2.times { l.within_limit {} }
+
+    refute l.status[:available?], 'a saturated bucket reports unavailable'
+  end
+
+  def test_concurrent_status_merges_uniform_and_metrics
+    l = Wurk::Limiter.concurrent("scm-#{@suffix}", 2)
+    l.within_limit {}
+    s = l.status
+
+    assert_equal 2, s[:limit]
+    assert s.key?(:available?)
+    assert s.key?('immediate'), 'concurrent status keeps its metric counters'
+  end
+
+  def test_points_status_reflects_consumption
+    l = Wurk::Limiter.points("spc-#{@suffix}", 100, 0)
+    l.within_limit(estimate: 30) { |_h| }
+    s = l.status
+
+    assert_in_delta 30, s[:used], 1.0
+    assert_in_delta(100.0, s[:limit])
+  end
+
   # ----- server middleware reschedule path -----------------------------
 
   def test_server_middleware_reschedules_on_over_limit
@@ -186,15 +241,43 @@ class LimiterTest < Wurk::Test::UnitCase
     end
   end
 
-  def test_server_middleware_reraises_after_reschedule_cap
+  # #16 poison brake: once `overrated` reaches the reschedule cap the job is
+  # rate-limit-poison — instead of re-raising into the 25× retry pipeline,
+  # the middleware drops it straight into the dead set tagged `rate_limited`.
+  def test_server_middleware_routes_to_dead_after_reschedule_cap # rubocop:disable Minitest/MultipleAssertions,Metrics/AbcSize
     l = Wurk::Limiter.bucket("cap-#{@suffix}", 1, :minute, wait_timeout: 0, reschedule: 2)
-    job = { 'class' => 'NoopWorker', 'args' => [], 'queue' => 'default', 'jid' => 'jjj', 'overrated' => 1 }
+    jid = "capj#{@suffix}"
+    job = { 'class' => 'NoopWorker', 'args' => [], 'queue' => 'default', 'jid' => jid, 'overrated' => 1 }
+    mw = Wurk::Limiter::ServerMiddleware.new
+    mw.config = Wurk.configuration
+
+    # No re-raise: the brake ACKs by returning normally.
+    mw.call(nil, job, 'default') { raise Wurk::Limiter::OverLimit.new(l, job) }
+
+    assert_equal 2, job['overrated']
+    dead = Wurk.redis { |c| c.call('ZRANGE', Wurk::Keys::DEAD, 0, -1) }.find { |p| p.include?(jid) }
+
+    refute_nil dead, 'job should be dead-lettered once the reschedule cap is hit'
+    record = JSON.parse(dead)
+
+    assert_equal 'Wurk::Limiter::OverLimit', record['error_class']
+    assert_includes record['error_message'], Wurk::Limiter::ServerMiddleware::DEAD_REASON
+  ensure
+    Wurk.redis do |c|
+      c.call('ZRANGE', Wurk::Keys::DEAD, 0, -1).each { |p| c.call('ZREM', Wurk::Keys::DEAD, p) if p.include?(jid) }
+    end
+  end
+
+  # reschedule: 0 disables limiter rescheduling entirely (§1.2) — OverLimit
+  # then re-raises into the normal retry/dead pipeline, no poison brake.
+  def test_server_middleware_reraises_when_reschedule_disabled
+    l = Wurk::Limiter.bucket("nz-#{@suffix}", 1, :minute, wait_timeout: 0, reschedule: 0)
+    job = { 'class' => 'NoopWorker', 'args' => [], 'queue' => 'default', 'jid' => "nzj#{@suffix}" }
     mw = Wurk::Limiter::ServerMiddleware.new
     mw.config = Wurk.configuration
 
     assert_raises(Wurk::Limiter::OverLimit) do
       mw.call(nil, job, 'default') { raise Wurk::Limiter::OverLimit.new(l, job) }
     end
-    assert_equal 2, job['overrated']
   end
 end
