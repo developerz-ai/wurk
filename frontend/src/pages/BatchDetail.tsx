@@ -66,9 +66,10 @@ export default function BatchDetail() {
   const { data, isLoading, isError } = useQuery<BatchDetailData>({
     queryKey: ['batch', bid],
     queryFn: () =>
-      fetch(`/wurk/api/batches/${encodeURIComponent(bid)}`).then(
-        (r) => r.json() as Promise<BatchDetailData>
-      ),
+      fetch(`/wurk/api/batches/${encodeURIComponent(bid)}`).then((r) => {
+        if (!r.ok) throw new Error(`HTTP ${r.status}`);
+        return r.json() as Promise<BatchDetailData>;
+      }),
   });
 
   if (isLoading) return <div className="empty-state"><span className="spinner" /></div>;

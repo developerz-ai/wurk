@@ -261,7 +261,11 @@ module Wurk
         raw = Wurk.redis { |c| c.call('LINDEX', "#{HISTORY_PREFIX}#{@lid}", 0) }
         return nil if raw.nil?
 
-        JSON.parse(raw)[0]
+        entry = JSON.parse(raw)
+        return nil unless entry.is_a?(Array)
+
+        fired_at = entry[0]
+        fired_at.is_a?(Numeric) ? fired_at.to_i : nil
       rescue JSON::ParserError
         nil
       end

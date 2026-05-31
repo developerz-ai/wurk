@@ -178,6 +178,13 @@ class ApiEndpointsTest < Wurk::Test::EngineCase
     cleanup_batch(bid)
   end
 
+  def test_batch_detail_unknown_bid_returns_404
+    get "/wurk/api/batches/no-such-batch-#{@ns}"
+
+    assert_equal 404, last_response.status
+    assert_equal 'unknown batch', json_body[:error]
+  end
+
   def test_limiters_envelope
     name = seed_limiter
     get '/wurk/api/limiters'

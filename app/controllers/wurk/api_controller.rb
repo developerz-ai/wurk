@@ -65,6 +65,8 @@ module Wurk
 
     def batch
       status = ::Wurk::Batch::Status.new(params[:bid].to_s)
+      return render(json: { error: 'unknown batch' }, status: :not_found) unless status.exists?
+
       render json: status.data.transform_keys(&:to_sym)
     rescue ::ArgumentError
       render json: { error: 'unknown batch' }, status: :not_found

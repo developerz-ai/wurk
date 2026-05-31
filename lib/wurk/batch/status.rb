@@ -23,6 +23,11 @@ module Wurk
         reload!
       end
 
+      # False when no `b-<bid>` hash exists — a well-formed bid that was never
+      # created (or has expired). Lets callers 404 instead of serving an
+      # all-zero phantom batch.
+      def exists? = !@data.empty?
+
       def total            = @data['total'].to_i
       def pending          = @data['pending'].to_i
       def failures         = @data['failures'].to_i
