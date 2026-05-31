@@ -14,6 +14,7 @@ Wurk::Engine.routes.draw do
     get  'dead',             to: 'api#dead'
     get  'processes',        to: 'api#processes'
     get  'batches',          to: 'api#batches'
+    get  'batches/:bid',     to: 'api#batch', as: :api_batch
     get  'limiters',         to: 'api#limiters'
     post 'limiters/:name/reset', to: 'api#reset_limiter', as: :api_reset_limiter
     get  'cron',             to: 'api#cron'

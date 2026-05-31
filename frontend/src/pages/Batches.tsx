@@ -1,17 +1,19 @@
 import { useQuery } from '@tanstack/react-query';
 import { useState, useEffect } from 'react';
+import { Link } from 'react-router-dom';
 import { Pagination } from '../components/Pagination';
 import { t } from '../i18n';
 import { relativeTime, truncate } from '../utils';
 
 interface Batch {
   bid: string;
-  description: string;
+  description: string | null;
   total: number;
   pending: number;
-  failed: number;
-  created_at: number;
-  expires_at: number;
+  failures: number;
+  complete: boolean;
+  created_at: number | null;
+  complete_at: number | null;
 }
 
 interface BatchesResponse {
@@ -33,7 +35,7 @@ export default function Batches() {
   const { data, isLoading, isError } = useQuery<BatchesResponse>({
     queryKey: ['batches', page],
     queryFn: () =>
-      fetch(`/wurk/api/batches?page=${page}&count=${PAGE_SIZE}`).then(
+      fetch(`/wurk/api/batches?page=${page - 1}&count=${PAGE_SIZE}`).then(
         (r) => r.json() as Promise<BatchesResponse>
       ),
   });
@@ -60,7 +62,7 @@ export default function Batches() {
                   <th>Description</th>
                   <th>{t('table.total')}</th>
                   <th>{t('table.pending')}</th>
-                  <th>Failed</th>
+                  <th>Failures</th>
                   <th>Progress</th>
                   <th>Created</th>
                 </tr>
@@ -71,19 +73,18 @@ export default function Batches() {
                   const pct = batch.total > 0 ? (done / batch.total) * 100 : 0;
                   return (
                     <tr key={batch.bid}>
-                      <td
-                        title={batch.bid}
-                        style={{ fontFamily: 'monospace', fontSize: 12, color: 'var(--text-muted)' }}
-                      >
-                        {truncate(batch.bid, 14)}
+                      <td style={{ fontFamily: 'monospace', fontSize: 12 }}>
+                        <Link to={`/batches/${batch.bid}`} title={batch.bid}>
+                          {truncate(batch.bid, 14)}
+                        </Link>
                       </td>
-                      <td title={batch.description}>{truncate(batch.description, 40)}</td>
+                      <td title={batch.description ?? ''}>{truncate(batch.description ?? '—', 40)}</td>
                       <td>{batch.total.toLocaleString()}</td>
                       <td style={{ color: batch.pending > 0 ? 'var(--warning)' : 'var(--success)' }}>
                         {batch.pending.toLocaleString()}
                       </td>
-                      <td style={{ color: batch.failed > 0 ? 'var(--danger)' : undefined }}>
-                        {batch.failed.toLocaleString()}
+                      <td style={{ color: batch.failures > 0 ? 'var(--danger)' : undefined }}>
+                        {batch.failures.toLocaleString()}
                       </td>
                       <td style={{ width: 100 }}>
                         <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
@@ -92,7 +93,7 @@ export default function Batches() {
                               className="progress-bar-fill"
                               style={{
                                 width: `${pct}%`,
-                                background: batch.failed > 0 ? 'var(--danger)' : 'var(--success)',
+                                background: batch.failures > 0 ? 'var(--danger)' : 'var(--success)',
                               }}
                             />
                           </div>
@@ -101,7 +102,7 @@ export default function Batches() {
                           </span>
                         </div>
                       </td>
-                      <td>{relativeTime(batch.created_at)}</td>
+                      <td>{batch.created_at ? relativeTime(batch.created_at) : '—'}</td>
                     </tr>
                   );
                 })}

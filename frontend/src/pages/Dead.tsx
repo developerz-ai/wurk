@@ -33,7 +33,7 @@ export default function Dead() {
   const { data, isLoading, isError } = useQuery<DeadResponse>({
     queryKey: ['dead', page],
     queryFn: () =>
-      fetch(`/wurk/api/dead?page=${page}&count=${PAGE_SIZE}`).then(
+      fetch(`/wurk/api/dead?page=${page - 1}&count=${PAGE_SIZE}`).then(
         (r) => r.json() as Promise<DeadResponse>
       ),
   });

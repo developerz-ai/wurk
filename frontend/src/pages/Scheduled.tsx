@@ -31,7 +31,7 @@ export default function Scheduled() {
   const { data, isLoading, isError } = useQuery<ScheduledResponse>({
     queryKey: ['scheduled', page],
     queryFn: () =>
-      fetch(`/wurk/api/scheduled?page=${page}&count=${PAGE_SIZE}`).then(
+      fetch(`/wurk/api/scheduled?page=${page - 1}&count=${PAGE_SIZE}`).then(
         (r) => r.json() as Promise<ScheduledResponse>
       ),
   });

@@ -71,7 +71,7 @@ export default function Search() {
   const { data: retries } = useQuery<RetriesResponse>({
     queryKey: ['search-retries'],
     queryFn: () =>
-      fetch('/wurk/api/retries?page=1&count=200').then(
+      fetch('/wurk/api/retries?page=0&count=200').then(
         (r) => r.json() as Promise<RetriesResponse>
       ),
     enabled: submitted.length >= 2,
@@ -80,7 +80,7 @@ export default function Search() {
   const { data: scheduled } = useQuery<ScheduledResponse>({
     queryKey: ['search-scheduled'],
     queryFn: () =>
-      fetch('/wurk/api/scheduled?page=1&count=200').then(
+      fetch('/wurk/api/scheduled?page=0&count=200').then(
         (r) => r.json() as Promise<ScheduledResponse>
       ),
     enabled: submitted.length >= 2,
@@ -89,7 +89,7 @@ export default function Search() {
   const { data: dead } = useQuery<DeadResponse>({
     queryKey: ['search-dead'],
     queryFn: () =>
-      fetch('/wurk/api/dead?page=1&count=200').then(
+      fetch('/wurk/api/dead?page=0&count=200').then(
         (r) => r.json() as Promise<DeadResponse>
       ),
     enabled: submitted.length >= 2,
