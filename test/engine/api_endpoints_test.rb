@@ -149,22 +149,75 @@ class ApiEndpointsTest < Wurk::Test::EngineCase
     assert_equal 0, payload[:page]
   end
 
-  def test_limiters_array # rubocop:disable Minitest/MultipleAssertions
+  def test_batches_row_carries_status_and_progress # rubocop:disable Minitest/MultipleAssertions
+    bid = seed_batch
+    get '/wurk/api/batches'
+
+    assert_ok
+    row = json_body[:batches].find { |b| b[:bid] == bid }
+
+    refute_nil row, 'expected seeded batch in list'
+    assert_equal({ bid: bid, total: 10, pending: 4, failures: 1 }, row.slice(:bid, :total, :pending, :failures))
+    refute row[:complete]
+  ensure
+    cleanup_batch(bid)
+  end
+
+  def test_batch_detail_by_bid # rubocop:disable Minitest/MultipleAssertions
+    bid = seed_batch
+    get "/wurk/api/batches/#{bid}"
+
+    assert_ok
+    payload = json_body
+
+    assert_equal bid, payload[:bid]
+    assert_equal 10, payload[:total]
+    assert_equal 'Nightly export', payload[:description]
+    assert_kind_of Array, payload[:failed_jids]
+  ensure
+    cleanup_batch(bid)
+  end
+
+  def test_limiters_envelope
     name = seed_limiter
     get '/wurk/api/limiters'
 
     assert_ok
-    row = json_body.find { |r| r[:name] == name }
+    row = json_body[:limiters].find { |r| r[:name] == name }
 
     assert_equal({ name: name, type: 'concurrent' }, row.slice(:name, :type))
-    # #16: each limiter row carries its uniform live status (concurrent
-    # additionally merges its metric counters, so assert a subset).
-    status = row[:status]
-
-    refute_nil status, 'limiter row should include a status'
-    %i[used limit reset_at available?].each { |k| assert status.key?(k), "status missing #{k}" }
+    # #16: each row carries the uniform live status keys (concurrent merges
+    # extra metric counters on top; asserted in the counters test).
+    assert_equal(%i[available? limit reset_at used],
+                 row[:status].slice(:used, :limit, :reset_at, :available?).keys.sort)
   ensure
     cleanup_limiter(name)
+  end
+
+  def test_limiter_row_carries_concurrent_status_counters
+    name = seed_limiter
+    ::Wurk.redis { |c| c.call('HSET', "lmtr-stats:#{name}", 'held', '3', 'immediate', '120', 'overages', '2') }
+    get '/wurk/api/limiters'
+
+    assert_ok
+    status = json_body[:limiters].find { |r| r[:name] == name }[:status]
+
+    assert_equal({ held: 3, immediate: 120, overages: 2, reclaimed: 0 },
+                 status.slice(:held, :immediate, :overages, :reclaimed))
+  ensure
+    ::Wurk.redis { |c| c.call('DEL', "lmtr-stats:#{name}") }
+    cleanup_limiter(name)
+  end
+
+  def test_limiters_pagination_second_page_offsets
+    names = (0..2).map { |i| seed_limiter(i.to_s) }
+    first = limiter_page_names(0)
+    second = limiter_page_names(1)
+
+    assert_equal 2, first.size
+    assert_empty(first & second)
+  ensure
+    names&.each { |n| cleanup_limiter(n) }
   end
 
   def test_cron_array
@@ -179,6 +232,21 @@ class ApiEndpointsTest < Wurk::Test::EngineCase
       row.slice(:schedule, :klass, :queue)
     )
   ensure
+    cleanup_cron_loop(lid)
+  end
+
+  def test_cron_row_carries_last_fire_at
+    lid = seed_cron_loop
+    fired_at = ::Time.now.to_i - 30
+    push_fire_history(lid, fired_at)
+    get '/wurk/api/cron'
+
+    assert_ok
+    row = json_body.find { |r| r[:lid] == lid }
+
+    assert_equal fired_at, row[:last_fire_at]
+  ensure
+    ::Wurk.redis { |c| c.call('DEL', "#{::Wurk::Cron::HISTORY_PREFIX}#{lid}") }
     cleanup_cron_loop(lid)
   end
 
@@ -259,8 +327,37 @@ class ApiEndpointsTest < Wurk::Test::EngineCase
     }
   end
 
-  def seed_limiter
-    name = "lmt-#{@ns}"
+  def push_fire_history(lid, fired_at)
+    ::Wurk.redis do |c|
+      c.call('LPUSH', "#{::Wurk::Cron::HISTORY_PREFIX}#{lid}", ::Wurk.dump_json([fired_at, 'abc123']))
+    end
+  end
+
+  def seed_batch
+    bid = "bid-#{@ns}"[0, 24]
+    ::Wurk.redis do |c|
+      c.call('ZADD', 'batches', ::Time.now.to_f.to_s, bid)
+      c.call(
+        'HSET', "b-#{bid}",
+        'total', '10', 'pending', '4', 'failures', '1',
+        'created_at', ::Time.now.to_f.to_s, 'description', 'Nightly export'
+      )
+      # Status#complete? recomputes from the live jids set when the `complete`
+      # field is absent; seed live jids so the batch reads as in-progress.
+      c.call('SADD', "b-#{bid}-jids", 'j1', 'j2', 'j3', 'j4')
+    end
+    bid
+  end
+
+  def cleanup_batch(bid)
+    ::Wurk.redis do |c|
+      c.call('ZREM', 'batches', bid)
+      c.call('DEL', "b-#{bid}", "b-#{bid}-jids", "b-#{bid}-failed", "b-#{bid}-died", "b-#{bid}-kids")
+    end
+  end
+
+  def seed_limiter(suffix = '')
+    name = "lmt-#{@ns}#{suffix}"
     ::Wurk.redis do |c|
       c.call('SADD', ::Wurk::Limiter::LIST_KEY, name)
       c.call('HSET', "lmtr:#{name}", 'type', 'concurrent', 'fingerprint', 'fp', 'options', '{"limit":5}')
@@ -273,6 +370,13 @@ class ApiEndpointsTest < Wurk::Test::EngineCase
       c.call('SREM', ::Wurk::Limiter::LIST_KEY, name)
       c.call('DEL', "lmtr:#{name}")
     end
+  end
+
+  def limiter_page_names(page)
+    get "/wurk/api/limiters?page=#{page}&count=2"
+
+    assert_ok
+    json_body[:limiters].map { |r| r[:name] }
   end
 
   def seed_cron_loop

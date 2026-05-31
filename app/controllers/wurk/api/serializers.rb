@@ -104,6 +104,7 @@ module Wurk
           tz: loop_obj.tz_name,
           paused: loop_obj.paused?,
           args: loop_obj.args,
+          last_fire_at: loop_obj.last_fired_at,
           next_fire_at: loop_obj.next_fire_at(now_epoch)
         }
       end
