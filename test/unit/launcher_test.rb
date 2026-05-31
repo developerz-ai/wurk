@@ -121,6 +121,17 @@ class LauncherTest < Wurk::Test::UnitCase
     assert started, 'run should start the cluster leader'
   end
 
+  def test_run_starts_the_orphan_reaper
+    launcher = Wurk::Launcher.new(@config)
+    stub_managers(launcher)
+    started = false
+    launcher.instance_variable_get(:@reaper).define_singleton_method(:start) { started = true }
+
+    launcher.run(async_beat: false)
+
+    assert started, 'run should start the reliable-fetch reaper'
+  end
+
   def test_run_starts_each_manager
     launcher = Wurk::Launcher.new(@config)
     stub_managers(launcher)
@@ -226,6 +237,18 @@ class LauncherTest < Wurk::Test::UnitCase
     launcher.stop
 
     assert stopped, 'stop should release the cluster leader'
+  end
+
+  def test_stop_stops_the_orphan_reaper
+    @config[:timeout] = 0
+    launcher = Wurk::Launcher.new(@config)
+    silence_managers(launcher)
+    stopped = false
+    launcher.instance_variable_get(:@reaper).define_singleton_method(:stop) { stopped = true }
+
+    launcher.stop
+
+    assert stopped, 'stop should halt the reaper thread'
   end
 
   def test_stop_fires_shutdown_then_exit_in_reverse
