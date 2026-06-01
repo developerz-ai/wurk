@@ -1,12 +1,22 @@
-# Wurk ⚡
+<p align="center">
+  <img src="https://raw.githubusercontent.com/developerz-ai/wurk/main/docs/assets/wurk-logo.png" alt="Wurk — an orc ready to work" width="220">
+</p>
 
-**A 100% drop-in replacement for Sidekiq + Sidekiq Pro + Sidekiq Enterprise. Free forever. Faster.**
+<h1 align="center">Wurk ⚡</h1>
+
+<p align="center"><strong>Wurk, wurk.</strong> 🪓 <em>Ready to work. Zug zug.</em></p>
+
+<p align="center"><strong>A 100% drop-in replacement for Sidekiq + Sidekiq Pro + Sidekiq Enterprise. Free forever. Faster.</strong></p>
+
+<div align="center">
 
 [![Gem Version](https://img.shields.io/gem/v/wurk.svg)](https://rubygems.org/gems/wurk)
 [![CI](https://github.com/developerz-ai/wurk/actions/workflows/test.yml/badge.svg)](https://github.com/developerz-ai/wurk/actions/workflows/test.yml)
 [![Coverage gate](https://img.shields.io/badge/coverage%20gate-line%20%E2%89%A590%25-brightgreen.svg)](https://github.com/developerz-ai/wurk/actions/workflows/test.yml)
 [![Ruby](https://img.shields.io/badge/ruby-%E2%89%A5%203.2-CC342D.svg)](https://www.ruby-lang.org)
 [![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
+
+</div>
 
 Wurk is wire-compatible with Sidekiq — same Redis keys, same job JSON, same Ruby DSL. Swap one line in your `Gemfile` and your existing jobs, batches, limiters, cron entries, and live Redis data keep working untouched. The Pro and Enterprise feature sets ship in the same free gem, with no license check and no tiers.
 
