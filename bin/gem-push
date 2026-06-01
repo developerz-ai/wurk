@@ -1,0 +1,22 @@
+#!/usr/bin/env bash
+# Push the built gem to rubygems.org. Requires `bin/gem-login` first.
+# MFA is enforced (rubygems_mfa_required), so this prompts for an OTP at push
+# time — pass one non-interactively with: bin/gem-push 123456
+set -euo pipefail
+cd "$(dirname "$0")/.."
+
+version="$(ruby -Ilib -e 'require "wurk/version"; print Wurk::VERSION')"
+gemfile="pkg/wurk-${version}.gem"
+
+if [ ! -f "$gemfile" ]; then
+  echo "✗ $gemfile not found — run bin/gem-build first." >&2
+  exit 1
+fi
+
+echo "==> Pushing ${gemfile} to rubygems.org"
+if [ "${1:-}" != "" ]; then
+  gem push "$gemfile" --otp "$1"
+else
+  gem push "$gemfile"
+fi
+echo "==> pushed — https://rubygems.org/gems/wurk/versions/${version}"

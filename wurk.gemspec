@@ -5,7 +5,7 @@ require_relative "lib/wurk/version"
 Gem::Specification.new do |spec|
   spec.name        = "wurk"
   spec.version     = Wurk::VERSION
-  spec.authors     = ["sebi"]
+  spec.authors     = ["developerz.ai"]
   spec.email       = ["gore.sebyx@yahoo.com"]
 
   spec.summary     = "100% drop-in replacement for Sidekiq + Sidekiq Pro + Sidekiq Enterprise. Free. Faster."
