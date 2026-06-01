@@ -14,9 +14,9 @@ total into three resolutions:
 
 | Bucket key        | Resolution | Retention (TTL) | Serves window |
 |-------------------|-----------:|----------------:|---------------|
-| `jr|1m|<epoch>`   | 1 minute   | 24 hours        | up to 24h     |
-| `jr|5m|<epoch>`   | 5 minutes  | 7 days          | up to 7d      |
-| `jr|1h|<epoch>`   | 1 hour     | 30 days         | up to 30d     |
+| `jr\|1m\|<epoch>` | 1 minute   | 24 hours        | up to 24h     |
+| `jr\|5m\|<epoch>` | 5 minutes  | 7 days          | up to 7d      |
+| `jr\|1h\|<epoch>` | 1 hour     | 30 days         | up to 30d     |
 
 `<epoch>` is the UTC start-of-bucket in integer seconds. Each bucket is a small
 HASH with three integer fields: `p` (processed), `f` (failed), `ms` (total
@@ -34,9 +34,9 @@ window:
 
 | Bucket | Live keys at retention      | Count |
 |--------|-----------------------------|------:|
-| `jr|1m` | 24h × 60                   | 1 440 |
-| `jr|5m` | 7d × 24 × 12               | 2 016 |
-| `jr|1h` | 30d × 24                   |   720 |
+| `jr\|1m` | 24h × 60                  | 1 440 |
+| `jr\|5m` | 7d × 24 × 12              | 2 016 |
+| `jr\|1h` | 30d × 24                 |   720 |
 | **Total** |                          | **≈ 4 176** |
 
 Each key is a 3-field integer HASH (tens of bytes), so the whole series costs on

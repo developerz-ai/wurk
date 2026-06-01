@@ -85,6 +85,7 @@ module Sidekiq
   Limiter          = Wurk::Limiter
   Logger           = Wurk::Logger
   Manager          = Wurk::Manager
+  Metrics          = Wurk::Metrics
   Middleware       = Wurk::Middleware
   ServerMiddleware = Wurk::Middleware::ServerMiddleware
   ClientMiddleware = Wurk::Middleware::ClientMiddleware
