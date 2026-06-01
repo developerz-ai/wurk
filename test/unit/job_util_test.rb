@@ -344,7 +344,7 @@ class WurkTopLevelTest < Wurk::Test::UnitCase
 
       assert_predicate Wurk, :testing?
     ensure
-      Wurk.instance_variable_set(:@testing_mode, nil)
+      Wurk::Testing.disable!
     end
   end
 
@@ -355,6 +355,8 @@ class WurkTopLevelTest < Wurk::Test::UnitCase
 
       assert seen
       refute_predicate Wurk, :testing?
+    ensure
+      Wurk::Testing.disable!
     end
   end
 

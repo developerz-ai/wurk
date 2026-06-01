@@ -23,5 +23,11 @@ module Wurk
     def self.included(base)
       base.include(Wurk::Worker)
     end
+
+    # Mirror the module-level test helpers so `Sidekiq::Job.jobs /
+    # clear_all / drain_all` work the same as `Sidekiq::Worker.*`.
+    def self.jobs       = Wurk::Worker.jobs
+    def self.clear_all  = Wurk::Worker.clear_all
+    def self.drain_all  = Wurk::Worker.drain_all
   end
 end

@@ -215,16 +215,25 @@ module Wurk
     # the pipeline size — a bulk push of 100 with N=2 must flush 2/2/... not
     # 100 in one shot.
     def raw_push(payloads)
+      # Test modes short-circuit the Redis write (and the batch buffer): :fake
+      # collects payloads in-memory, :inline runs them now. Client middleware
+      # has already run by this point, matching Sidekiq.
+      return ::Wurk::Testing.dispatch_push(payloads) if ::Wurk::Testing.enabled?
+
       buffer = Thread.current[Wurk::Batch::BUFFER_KEY]
-      if buffer && payloads.all? { |p| p['bid'] && !p['at'] }
-        payloads.each do |payload|
-          buffer.add([payload])
-          flush_batched(buffer.drain) if buffer.ready?
-        end
-        return
-      end
+      return buffer_add(buffer, payloads) if buffer && payloads.all? { |p| p['bid'] && !p['at'] }
 
       pool.with { |conn| atomic_push(conn, payloads) }
+    end
+
+    # Batch autoflush path: accumulate each non-scheduled batched payload into
+    # the active buffer, flushing every N adds (when `buffer.ready?`).
+    def buffer_add(buffer, payloads)
+      payloads.each do |payload|
+        buffer.add([payload])
+        flush_batched(buffer.drain) if buffer.ready?
+      end
+      nil
     end
 
     def atomic_push(conn, payloads)

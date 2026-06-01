@@ -22,6 +22,8 @@ require_relative 'wurk/worker'
 require_relative 'wurk/worker/setter'
 require_relative 'wurk/job'
 require_relative 'wurk/job/options'
+require_relative 'wurk/queues'
+require_relative 'wurk/testing'
 require_relative 'wurk/iterable_job'
 require_relative 'wurk/job_retry'
 require_relative 'wurk/job_record'
@@ -157,22 +159,13 @@ module Wurk
 
     # --- mode flags --------------------------------------------------
 
-    # Sets the testing mode. Real behavior (inline/fake/disable) is wired
-    # up when the test harness loads; this just records the setting.
-    def testing!(mode = :fake)
-      @testing_mode = mode
-      return @testing_mode unless block_given?
+    # Sidekiq-compatible test-mode entry point. Delegates to Wurk::Testing
+    # (the single source of truth for the mode): a block scopes the mode to the
+    # current thread; no block sets it globally. `Sidekiq.testing!` aliases here.
+    def testing!(mode = :fake, &) = Wurk::Testing.__set_test_mode(mode, &)
 
-      begin
-        yield
-      ensure
-        @testing_mode = nil
-      end
-    end
-
-    def testing?
-      !!@testing_mode
-    end
+    # True when in :fake or :inline mode (i.e. not pushing to real Redis).
+    def testing? = Wurk::Testing.enabled?
 
     # True inside the swarm/manager process (set by exe/wurk / the railtie).
     def server?
