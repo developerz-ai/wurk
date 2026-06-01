@@ -1,0 +1,79 @@
+#!/usr/bin/env ruby
+# frozen_string_literal: true
+
+# Compare two `rake bench` outputs and report the delta.
+#
+#   bin/bench-compare BASELINE.txt CURRENT.txt > comment.md
+#
+# Parses the benchmark/ips report lines ("<label>  5.70k (± 6.9%) i/s ...")
+# from each file, prints a Markdown table of the per-benchmark change, and
+# exits non-zero if any benchmark regressed by more than the threshold.
+#
+# benchmark/ips numbers on shared CI runners carry ~5-10% run-to-run variance,
+# so the regression threshold is tunable via BENCH_REGRESSION_PCT (default 5,
+# matching CLAUDE.md). Speedups are always reported, never gated.
+
+THRESHOLD = Float(ENV.fetch('BENCH_REGRESSION_PCT', '5'))
+MARKER = '<!-- bench-compare -->'
+SCALE = { '' => 1, 'k' => 1_000, 'M' => 1_000_000, 'G' => 1_000_000_000 }.freeze
+IPS_LINE = %r{^\s*(\S.*?)\s+([\d.,]+)\s*([kMG]?)\s*\(±[^)]*\)\s*i/s}i
+
+def parse(path)
+  results = {}
+  File.foreach(path) do |line|
+    m = IPS_LINE.match(line)
+    next unless m
+
+    results[m[1].strip] = m[2].delete(',').to_f * SCALE[m[3]]
+  end
+  results
+end
+
+def human(value)
+  return format('%.0f', value) if value < 1_000
+  return format('%.2fk', value / 1_000.0) if value < 1_000_000
+
+  format('%.2fM', value / 1_000_000.0)
+end
+
+baseline = File.exist?(ARGV[0]) ? parse(ARGV[0]) : {}
+current  = File.exist?(ARGV[1]) ? parse(ARGV[1]) : {}
+
+shared = (baseline.keys & current.keys).sort
+regressed = []
+
+rows = shared.map do |label|
+  was = baseline[label]
+  now = current[label]
+  pct = (now - was) / was * 100.0 # positive = faster
+  regressed << [label, pct] if pct < -THRESHOLD
+  status = if pct < -THRESHOLD then '🔴 regressed'
+           elsif pct.negative? then '🟡 slower'
+           else '🟢'
+           end
+  format('| `%s` | %s | %s | %+.1f%% | %s |', label, human(was), human(now), pct, status)
+end
+
+out = "#{MARKER}\n### 📊 Benchmark vs base\n\n"
+if shared.empty?
+  out << "_No comparable benchmarks between base and head._\n"
+else
+  out << "| benchmark | base (i/s) | head (i/s) | Δ | |\n"
+  out << "|---|---:|---:|---:|---|\n"
+  out << rows.join("\n") << "\n\n"
+  out << "Threshold: regression fails at **>#{THRESHOLD}%** "
+  out << "(tune via `BENCH_REGRESSION_PCT`). ips variance on CI is ~5–10%.\n"
+end
+
+only_head = (current.keys - baseline.keys).sort
+only_base = (baseline.keys - current.keys).sort
+out << "\n_New on head: #{only_head.join(', ')}_\n" unless only_head.empty?
+out << "\n_Gone from head: #{only_base.join(', ')}_\n" unless only_base.empty?
+
+unless regressed.empty?
+  out << "\n> [!CAUTION]\n"
+  regressed.each { |label, pct| out << "> Regression: `#{label}` #{format('%+.1f%%', pct)}\n" }
+end
+
+puts out
+exit(regressed.empty? ? 0 : 1)

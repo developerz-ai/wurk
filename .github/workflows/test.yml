@@ -11,15 +11,13 @@ concurrency:
 
 jobs:
   test:
+    name: test (ruby ${{ matrix.ruby }}, rails ${{ matrix.rails }})
     runs-on: blacksmith-4vcpu-ubuntu-2404
     strategy:
       fail-fast: false
       matrix:
-        include:
-          - ruby: "3.4"
-            rails: "7.2"
-          - ruby: "4.0"
-            rails: "8.0"
+        ruby: ["3.2", "3.3", "3.4"]
+        rails: ["7.2", "8.0"]
     services:
       redis:
         image: redis:7.4
@@ -39,6 +37,8 @@ jobs:
         with:
           ruby-version: ${{ matrix.ruby }}
           bundler-cache: true
+          # Each Rails leg resolves a different lock; isolate the gem cache.
+          cache-version: rails-${{ matrix.rails }}
       - uses: actions/setup-node@v4
         with:
           node-version: "20"
@@ -53,12 +53,75 @@ jobs:
           bin/rails db:prepare
       - name: rake test
         run: bundle exec rake test
+
+  # Oracle suite lifted from upstream Sidekiq (SHA-pinned in
+  # test/parity/.sidekiq_sha). Its own dedicated job so a parity divergence is
+  # legible at a glance, separate from the version matrix.
+  parity:
+    name: parity (oracle)
+    runs-on: blacksmith-4vcpu-ubuntu-2404
+    services:
+      redis:
+        image: redis:7.4
+        ports: ["6379:6379"]
+        options: >-
+          --health-cmd "redis-cli ping"
+          --health-interval 5s
+          --health-timeout 3s
+          --health-retries 5
+    env:
+      REDIS_URL: redis://localhost:6379/0
+    steps:
+      - uses: actions/checkout@v4
+      - uses: ruby/setup-ruby@v1
+        with:
+          ruby-version: "3.4"
+          bundler-cache: true
       - name: rake test:parity
         run: bundle exec rake test:parity
+
+  # Blocking line-coverage gate (>= 90%) on lib/. Branch coverage is measured
+  # and uploaded too, but not yet gated (ratcheting toward 90% — see #29).
+  coverage:
+    name: coverage (line >= 90%)
+    runs-on: blacksmith-4vcpu-ubuntu-2404
+    services:
+      redis:
+        image: redis:7.4
+        ports: ["6379:6379"]
+        options: >-
+          --health-cmd "redis-cli ping"
+          --health-interval 5s
+          --health-timeout 3s
+          --health-retries 5
+    env:
+      BUNDLE_GEMFILE: ${{ github.workspace }}/Gemfile
+      REDIS_URL: redis://localhost:6379/0
+      COVERAGE: "1"
+    steps:
+      - uses: actions/checkout@v4
+      - uses: ruby/setup-ruby@v1
+        with:
+          ruby-version: "3.4"
+          bundler-cache: true
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+          cache: "npm"
+          cache-dependency-path: frontend/package-lock.json
+      - name: build dashboard SPA
+        run: bundle exec rake frontend:build
+      - name: dummy app setup
+        run: |
+          cd test/dummy
+          bundle install
+          bin/rails db:prepare
       - name: coverage gate
-        # Non-blocking while lib/ is stubs. Flip continue-on-error to false
-        # once real implementations exist and the gate (>=90% branch) is hittable.
-        continue-on-error: true
-        env:
-          COVERAGE: "1"
         run: bundle exec rake test:coverage
+      - name: upload coverage report
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: coverage
+          path: coverage/coverage.xml
+          if-no-files-found: warn

@@ -33,6 +33,60 @@ jobs:
         with:
           name: bench-results
           path: bench-results.txt
-      # TODO: a bot job that diffs against main and comments deltas;
-      # > 5% regression on enqueue / fetch+execute / bulk / swarm boot / memory
-      # flags the PR. See CLAUDE.md.
+
+  # PR-only: run the benches on base and head, comment the per-benchmark delta,
+  # and fail if any regresses >5% (BENCH_REGRESSION_PCT). ips variance on CI is
+  # ~5-10%, so treat this as a signal — make it a required check in branch
+  # protection only once it proves stable.
+  compare:
+    if: github.event_name == 'pull_request'
+    runs-on: blacksmith-8vcpu-ubuntu-2404
+    permissions:
+      contents: read
+      pull-requests: write
+    services:
+      redis:
+        image: redis:7.4
+        ports: ["6379:6379"]
+        options: >-
+          --health-cmd "redis-cli ping"
+          --health-interval 5s
+    env:
+      REDIS_URL: redis://localhost:6379/0
+      GH_TOKEN: ${{ github.token }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - uses: ruby/setup-ruby@v1
+        with:
+          ruby-version: "3.4"
+          bundler-cache: true
+      # Keep the comparator from this PR available after we check out the base.
+      - name: stage comparator
+        run: cp bin/bench-compare /tmp/bench-compare
+      - name: bench head
+        run: bundle exec rake bench | tee /tmp/bench-head.txt
+      - name: bench base
+        run: |
+          git checkout --quiet ${{ github.event.pull_request.base.sha }}
+          bundle install --quiet
+          bundle exec rake bench | tee /tmp/bench-base.txt
+      - name: compare, comment, gate
+        run: |
+          set +e
+          /tmp/bench-compare /tmp/bench-base.txt /tmp/bench-head.txt > /tmp/bench-comment.md
+          code=$?
+          set -e
+          cat /tmp/bench-comment.md
+          marker='<!-- bench-compare -->'
+          existing=$(gh api "repos/${{ github.repository }}/issues/${{ github.event.pull_request.number }}/comments" \
+            --jq ".[] | select(.body | startswith(\"$marker\")) | .id" | head -1)
+          if [ -n "$existing" ]; then
+            gh api -X PATCH "repos/${{ github.repository }}/issues/comments/$existing" \
+              -F body=@/tmp/bench-comment.md >/dev/null
+          else
+            gh api -X POST "repos/${{ github.repository }}/issues/${{ github.event.pull_request.number }}/comments" \
+              -F body=@/tmp/bench-comment.md >/dev/null
+          fi
+          exit $code

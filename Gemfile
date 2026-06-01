@@ -19,7 +19,10 @@ group :development, :test do
 end
 
 group :test do
-  gem "rails", ">= 7.1"
+  # CI matrix pins a Rails series via RAILS_VERSION (e.g. "7.2", "8.0") so each
+  # leg resolves to that line; locally it floats to the newest supported Rails.
+  rails_version = ENV["RAILS_VERSION"]
+  gem "rails", rails_version ? "~> #{rails_version}.0" : ">= 7.1"
   gem "sqlite3"
   gem "rack-test"
 end
