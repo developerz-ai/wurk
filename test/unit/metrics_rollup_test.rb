@@ -15,7 +15,12 @@ class MetricsRollupTest < Wurk::Test::UnitCase
 
   def setup
     super
-    @epoch_min = ((SecureRandom.random_number(1_000_000_000) + 2_000_000_000) / 60) * 60
+    # Per-test isolation keyed to PID:object_id (the parallel-runner guideline):
+    # the pid gives each fork a disjoint minute block, object_id separates tests
+    # within a fork. Whole-key writes + the teardown DEL make object_id reuse
+    # after GC harmless here — unlike the shared-field history buckets, which
+    # need SecureRandom to avoid inheriting a recycled id's field.
+    @epoch_min = ((2_000_000_000 + ((Process.pid % 100_000) * 100_000) + (object_id % 100_000)) / 60) * 60
     @at = ::Time.at(@epoch_min).utc
     @klass = "RollupJob-#{SecureRandom.hex(6)}"
     @rollup = Wurk::Metrics::Rollup.new(Wurk.configuration)

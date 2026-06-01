@@ -40,9 +40,12 @@ module Wurk
       COARSE = %w[5m 1h].freeze
 
       DEFAULT_TICK_SECONDS = 60
-      # Re-finalize the last few completed minutes each tick so a brief leader
-      # gap or a late metric write still lands in the series.
-      LOOKBACK_MINUTES = 3
+      # Re-roll the last N completed minutes from source on every tick
+      # (idempotent). This self-heals a leadership failover / restart or a late
+      # metric write up to N minutes old — the source `j|…` buckets live 3 days,
+      # so re-reading them folds the gap back in. Only outages longer than this
+      # leave a hole that ages out with the bucket TTL (best-effort metrics).
+      LOOKBACK_MINUTES = 15
 
       def self.bucket_key(bucket, epoch)
         "#{PREFIX}|#{bucket}|#{epoch}"

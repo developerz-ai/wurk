@@ -47,7 +47,7 @@ reclaimed automatically.
 
 ## API
 
-```
+```text
 GET /wurk/api/history/:bucket?window=24h
 ```
 
@@ -67,5 +67,14 @@ Returns a Recharts-ready, gap-filled array (missing buckets read as zero):
 }
 ```
 
-History accrues from the first leader tick after boot; it is not back-filled, so
-a freshly deployed cluster fills its charts in over the retention window.
+## Gaps and self-healing
+
+Each tick re-rolls the last `LOOKBACK_MINUTES` (15) completed source minutes,
+idempotently. Because the source `j|…` minute buckets live `MID_TERM` (3 days),
+a leadership failover or restart shorter than that window self-heals on the next
+tick — the gap minutes are re-read from source and folded back into `jr|…`. Only
+an outage **longer than the 15-minute lookback** leaves a hole, which then ages
+out with the bucket's TTL (best-effort metrics).
+
+History is not back-filled on a cold start (no prior `jr|…` data): a freshly
+deployed cluster fills its charts in going forward over the retention window.
