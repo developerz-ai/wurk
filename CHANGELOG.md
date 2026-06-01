@@ -9,6 +9,9 @@ All notable changes to Wurk are recorded here. Format: [Keep a Changelog](https:
 
 ## [0.0.4] - 2026-06-01
 
+### Added
+- `docs/clean-room.md` — compatibility & legal basis: Wurk reimplements the Sidekiq API (clean-room, original implementation), the *Google v. Oracle* rationale, and trademark/nominative-use notes. Linked from the README.
+
 ### Changed
 - Dependency refresh. GitHub Actions bumped to current majors (`checkout@v6`, `setup-node@v6`, `upload-artifact@v7`) on Node 24, clearing the Node 20 deprecation. Dashboard frontend upgraded to React 19, React Router 7, Recharts 3, Vite 8, and TypeScript 6. Ruby dev/test gems refreshed to latest.
 

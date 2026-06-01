@@ -48,6 +48,7 @@ Plus Wurk extras: a worker topology DSL, a Kubernetes liveness/readiness listene
 - **[Migrating from Sidekiq](#migrating-from-sidekiq)** — the one-line swap and what to expect.
 - **API reference (parity specs):** [Sidekiq OSS](https://github.com/developerz-ai/wurk/blob/main/docs/target/sidekiq-free.md) · [Pro](https://github.com/developerz-ai/wurk/blob/main/docs/target/sidekiq-pro.md) · [Enterprise](https://github.com/developerz-ai/wurk/blob/main/docs/target/sidekiq-ent.md) — the authoritative surface Wurk matches exactly.
 - **[Securing the dashboard](https://github.com/developerz-ai/wurk/blob/main/docs/dashboard.md)** · **[Metrics history](https://github.com/developerz-ai/wurk/blob/main/docs/metrics-history.md)**
+- **[Compatibility & legal basis](https://github.com/developerz-ai/wurk/blob/main/docs/clean-room.md)** — clean-room implementation: Wurk copies the API, not the code (Google v. Oracle).
 - **Live demo:** [wurk.demo.developerz.ai](https://wurk.demo.developerz.ai)
 
 ## Requirements
@@ -135,3 +136,10 @@ Issues and pull requests are welcome — see **[CONTRIBUTING.md](https://github.
 ## License
 
 MIT. See [LICENSE](https://github.com/developerz-ai/wurk/blob/main/LICENSE).
+
+Wurk is a clean-room reimplementation of the Sidekiq **API** — it copies the
+interface (so your jobs run unchanged), not Sidekiq's implementation code. This
+is the same basis the Supreme Court upheld for Google's reuse of the Java API in
+*Google v. Oracle* (2021). "Sidekiq" is a trademark of Contributed Systems, LLC;
+Wurk is independent and not affiliated with or endorsed by them. Full reasoning:
+**[docs/clean-room.md](https://github.com/developerz-ai/wurk/blob/main/docs/clean-room.md)**.
