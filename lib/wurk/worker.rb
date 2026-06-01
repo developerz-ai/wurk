@@ -22,6 +22,13 @@ module Wurk
       end
     end
 
+    # Module-level test helpers: `Sidekiq::Worker.jobs / clear_all / drain_all`
+    # operate across every job class (spec §24.3). Resolved lazily so the
+    # testing constants need not be loaded when Worker is.
+    def self.jobs       = ::Wurk::Queues.jobs
+    def self.clear_all  = ::Wurk::Queues.clear_all
+    def self.drain_all  = ::Wurk::Testing.drain_all
+
     def logger
       Wurk.logger
     end
@@ -58,7 +65,7 @@ module Wurk
       batch.valid?
     end
 
-    module ClassMethods
+    module ClassMethods # rubocop:disable Metrics/ModuleLength
       def sidekiq_options(opts = {})
         merged = get_sidekiq_options.merge(opts.transform_keys(&:to_s))
         @sidekiq_options_hash = merged
@@ -116,6 +123,60 @@ module Wurk
       def build_client
         pool = get_sidekiq_options['pool']
         Wurk::Client.new(pool: pool)
+      end
+
+      # --- Sidekiq::Testing class-level helpers (spec §24.3) --------------
+      # Only meaningful in :fake / :inline mode; the in-memory store is empty
+      # otherwise.
+
+      def queue
+        get_sidekiq_options['queue']
+      end
+
+      # Fake jobs enqueued for this class, across every queue.
+      def jobs
+        ::Wurk::Queues.jobs_by_class[to_s] || []
+      end
+
+      def clear
+        ::Wurk::Queues.clear_class(to_s)
+      end
+
+      # Run & remove every fake job for this class — including ones it enqueues
+      # mid-drain. Returns the count processed.
+      def drain
+        count = 0
+        while (job = ::Wurk::Queues.shift_class(to_s))
+          process_job(job)
+          count += 1
+        end
+        count
+      end
+
+      # Run & remove the first fake job for this class; EmptyQueueError if none.
+      def perform_one
+        job = ::Wurk::Queues.shift_class(to_s)
+        raise ::Wurk::Testing::EmptyQueueError, "no #{self} jobs were found" if job.nil?
+
+        process_job(job)
+      end
+
+      # Execute a normalized job hash through the inline server-middleware chain
+      # (empty by default — see Wurk::Testing.server_middleware).
+      # Returns the value of the server-middleware `invoke` (i.e. the worker's
+      # `perform` return), matching Sidekiq::Testing — so `perform_one` yields
+      # the job result.
+      def process_job(job_hash)
+        instance = new
+        instance.jid = job_hash['jid']
+        instance.bid = job_hash['bid'] if instance.respond_to?(:bid=)
+        ::Wurk::Testing.server_middleware.invoke(instance, job_hash, job_hash['queue'] || queue) do
+          execute_job(instance, job_hash['args'])
+        end
+      end
+
+      def execute_job(worker, args)
+        worker.perform(*args)
       end
 
       def delay(*)

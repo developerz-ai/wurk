@@ -98,6 +98,9 @@ module Sidekiq
   ScheduledSet     = Wurk::ScheduledSet
   Shutdown         = Wurk::Shutdown
   Stats            = Wurk::Stats
+  Testing          = Wurk::Testing
+  Queues           = Wurk::Queues
+  EmptyQueueError  = Wurk::Testing::EmptyQueueError
   Work             = Wurk::Work
   Worker           = Wurk::Worker
   Workers          = Wurk::Workers
