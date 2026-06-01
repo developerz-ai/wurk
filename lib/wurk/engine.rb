@@ -66,10 +66,16 @@ module Wurk
       ::Wurk::DashboardManifest.check!
     end
 
-    # Engine-scoped Rack middleware for the `Wurk::Web.configure` authorization
-    # hook (sidekiq-ent §9.2). Inserted into the engine — not the host — so
-    # the host's own controllers stay unaffected; only requests routed under
-    # the mount point pass through.
+    # Engine-scoped Rack middleware. Inserted into the engine — not the host —
+    # so the host's own controllers stay unaffected; only requests routed
+    # under the mount point pass through.
+    #
+    #   * MiddlewareStack — host-app auth via `Wurk::Web.use` (#41). Outermost,
+    #     so Devise/Warden/Sorcery run first and their `env` is visible to the
+    #     authorization hook below.
+    #   * Authorization — the `Wurk::Web.configure` authorization + read-only
+    #     hook (sidekiq-ent §9.2), 403 on falsey.
+    middleware.use ::Wurk::Web::MiddlewareStack
     middleware.use ::Wurk::Web::Authorization
   end
 end

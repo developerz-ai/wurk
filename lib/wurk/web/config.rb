@@ -26,9 +26,16 @@ module Wurk
       # doesn't flip on when the env var is "0"/"false"/empty.
       FALSEY_STRINGS = ['', '0', 'false', 'no', 'off'].freeze
 
+      # Host-app Rack middleware stacked in front of the dashboard, newest
+      # last. Each entry is `[middleware, args, block]`. Read-only; mutate
+      # via `#use`.
+      attr_reader :middlewares
+
       def initialize
         @authorization = nil
         @read_only = env_read_only?
+        @middlewares = []
+        @rack_app = nil
       end
 
       # Registers a `(env, method, path) -> truthy/falsey` block. Re-calling
@@ -36,6 +43,30 @@ module Wurk
       def authorization(&block)
         @authorization = block if block
         @authorization
+      end
+
+      # Sidekiq-compatible (`Sidekiq::Web.use`). Registers a Rack middleware
+      # that wraps the dashboard, in front of the authorization hook, so a
+      # host app can gate the UI with Devise/Warden/Sorcery/Rack::Auth::Basic
+      # without writing its own middleware. `args` and an optional block pass
+      # straight through to the middleware's `new`. Call before the first
+      # request (i.e. from an initializer) — the chain is built once.
+      def use(middleware, *args, &block)
+        @middlewares << [middleware, args, block]
+        @rack_app = nil
+      end
+
+      # Builds (once) the host-middleware chain wrapping `inner` and memoizes
+      # it on this Config. `reset_config!` swaps in a fresh Config, so each
+      # test rebuilds cleanly; production builds exactly once at boot.
+      def rack_app(inner)
+        @rack_app ||= begin
+          stack = @middlewares
+          ::Rack::Builder.new do
+            stack.each { |middleware, args, block| use(middleware, *args, &block) }
+            run inner
+          end.to_app
+        end
       end
 
       # Read-only mode. When on, the Authorization middleware blocks every
@@ -54,6 +85,8 @@ module Wurk
       def reset!
         @authorization = nil
         @read_only = env_read_only?
+        @middlewares = []
+        @rack_app = nil
       end
 
       # Returns true when no block is registered, otherwise the block's
@@ -80,6 +113,11 @@ module Wurk
 
       def configure
         yield config
+      end
+
+      # Class-level shorthand for `config.use` — mirrors `Sidekiq::Web.use`.
+      def use(...)
+        config.use(...)
       end
 
       # Test helper — exposed for parity with `Wurk::Limiter.reset_config!`.
@@ -117,6 +155,22 @@ module Wurk
 
       def forbidden(body)
         [403, FORBIDDEN_HEADERS.dup, [body]]
+      end
+    end
+
+    # Engine Rack middleware that applies the host-registered `Wurk::Web.use`
+    # chain (Devise/Warden/Sorcery/Rack::Auth::Basic) in front of the
+    # dashboard. Inserted ahead of `Authorization` so host auth runs first and
+    # its `env` (e.g. `env['warden']`) is visible to the authorization hook.
+    # The chain is built lazily on first request — after host initializers
+    # have run — then memoized on the Config.
+    class MiddlewareStack
+      def initialize(app)
+        @app = app
+      end
+
+      def call(env)
+        Wurk::Web.config.rack_app(@app).call(env)
       end
     end
   end
