@@ -5,7 +5,7 @@ require_relative "lib/wurk/version"
 Gem::Specification.new do |spec|
   spec.name        = "wurk"
   spec.version     = Wurk::VERSION
-  spec.authors     = ["sebi"]
+  spec.authors     = ["developerz.ai"]
   spec.email       = ["gore.sebyx@yahoo.com"]
 
   spec.summary     = "100% drop-in replacement for Sidekiq + Sidekiq Pro + Sidekiq Enterprise. Free. Faster."
@@ -15,8 +15,8 @@ Gem::Specification.new do |spec|
 
   spec.required_ruby_version = ">= 3.2.0"
 
-  spec.metadata["homepage_uri"]      = spec.homepage
   spec.metadata["source_code_uri"]   = spec.homepage
+  spec.metadata["documentation_uri"] = "#{spec.homepage}/tree/main/docs"
   spec.metadata["changelog_uri"]     = "#{spec.homepage}/blob/main/CHANGELOG.md"
   spec.metadata["bug_tracker_uri"]   = "#{spec.homepage}/issues"
   spec.metadata["rubygems_mfa_required"] = "true"
@@ -29,6 +29,8 @@ Gem::Specification.new do |spec|
     "vendor/assets/**/*",
     "README.md",
     "CHANGELOG.md",
+    "CONTRIBUTING.md",
+    "SECURITY.md",
     "LICENSE"
   ]
 
@@ -36,8 +38,11 @@ Gem::Specification.new do |spec|
   spec.executables = ["wurk"]
   spec.require_paths = ["lib"]
 
-  spec.add_dependency "redis-client", ">= 0.22"
-  spec.add_dependency "connection_pool", ">= 2.4"
-  spec.add_dependency "rack", ">= 2.2"
-  spec.add_dependency "concurrent-ruby", ">= 1.2"
+  # Bounded ranges (not pessimistic `~>`) where a newer major is already in
+  # use: connection_pool 3.x and rack 3.x (Rails 7.1+/8) must both be allowed,
+  # so cap at the *next* untested major rather than the current one.
+  spec.add_dependency "redis-client", "~> 0.22"
+  spec.add_dependency "connection_pool", ">= 2.4", "< 4"
+  spec.add_dependency "rack", ">= 2.2", "< 4"
+  spec.add_dependency "concurrent-ruby", "~> 1.2"
 end

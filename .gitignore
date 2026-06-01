@@ -34,6 +34,9 @@ frontend/npm-debug.log*
 vendor/assets/dashboard/*
 !vendor/assets/dashboard/.keep
 
+# Bundler install path (ruby/setup-ruby bundler-cache installs gems here in CI).
+/vendor/bundle/
+
 # Ecosystem gem checkouts — cloned locally for `rake test:ecosystem`, never committed
 test/ecosystem/*/
 !test/ecosystem/.keep

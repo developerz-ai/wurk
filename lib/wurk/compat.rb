@@ -101,6 +101,7 @@ module Sidekiq
   Testing          = Wurk::Testing
   Queues           = Wurk::Queues
   EmptyQueueError  = Wurk::Testing::EmptyQueueError
+  Web              = Wurk::Web
   Work             = Wurk::Work
   Worker           = Wurk::Worker
   Workers          = Wurk::Workers
