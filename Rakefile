@@ -24,10 +24,13 @@ end
 
 def release_changelog_has_version!(version)
   changelog = File.read(File.join(GEM_ROOT, "CHANGELOG.md"))
-  return if changelog.match?(/^## \[#{Regexp.escape(version)}\]/)
+  # Prereleases (e.g. 1.0.0.pre.rc1) reuse the base version's section, matching
+  # the release workflow's changelog extraction.
+  base = Gem::Version.new(version).release.to_s
+  return if [version, base].uniq.any? { |v| changelog.match?(/^## \[#{Regexp.escape(v)}\]/) }
 
-  abort "release:check ✗ CHANGELOG.md has no `## [#{version}]` section " \
-        "matching Wurk::VERSION"
+  abort "release:check ✗ CHANGELOG.md has no `## [#{version}]` (or `## [#{base}]`) " \
+        "section matching Wurk::VERSION"
 end
 
 def release_tree_clean!

@@ -25,12 +25,14 @@ jobs:
     env:
       REDIS_URL: redis://localhost:6379/0
     steps:
-      - uses: actions/checkout@v4
-      - uses: ruby/setup-ruby@v1
+      # Third-party actions pinned to a commit SHA — this job holds `id-token`
+      # and publishes the gem, so a moved tag must not be able to hijack it.
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+      - uses: ruby/setup-ruby@afeafc3d1ab54a631816aba4c914a0081c12ff2f # v1
         with:
           ruby-version: "3.4"
           bundler-cache: true
-      - uses: actions/setup-node@v4
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
         with:
           node-version: "20"
           cache: "npm"
@@ -71,11 +73,11 @@ jobs:
           ls unpacked/wurk-*/vendor/assets/dashboard/assets/*.js >/dev/null
           echo "dashboard bundle present in $gem"
 
-      # 5. Push to RubyGems with the OIDC token (no GEM_HOST_API_KEY secret).
-      - name: configure trusted publishing
-        uses: rubygems/configure-trusted-publisher@v1
-      - name: push gem
-        run: gem push wurk-*.gem
+      # 5. Push to RubyGems via Trusted Publishing — this action exchanges the
+      # GitHub OIDC token for a short-lived RubyGems key, builds, and pushes
+      # (no GEM_HOST_API_KEY secret). It builds the same gem asserted above.
+      - name: publish to RubyGems (OIDC)
+        uses: rubygems/release-gem@f0d7faff26625599a847d40d9fa28ace24c2aacc # v1
 
       # 6. GitHub Release: the matching CHANGELOG section as the body + the .gem.
       - name: extract changelog section
@@ -90,7 +92,7 @@ jobs:
           ' CHANGELOG.md > RELEASE_NOTES.md
           [ -s RELEASE_NOTES.md ] || echo "Release ${version}" > RELEASE_NOTES.md
       - name: create GitHub Release
-        uses: softprops/action-gh-release@v2
+        uses: softprops/action-gh-release@3bb12739c298aeb8a4eeaf626c5b8d85266b0e65 # v2
         with:
           body_path: RELEASE_NOTES.md
           files: wurk-*.gem

@@ -63,8 +63,8 @@ is what authorizes the exchange.
    3. The full gate (`rake release:check`).
    4. `gem build wurk.gemspec`, then assert the dashboard bundle is **inside**
       the resulting `.gem` (`gem unpack` + check).
-   5. Exchange the OIDC token (`rubygems/configure-trusted-publisher`) and
-      `gem push` — no API-key secret.
+   5. Publish to RubyGems via `rubygems/release-gem` — it exchanges the GitHub
+      OIDC token for a short-lived key, builds, and pushes (no API-key secret).
    6. Create a GitHub Release with the matching `CHANGELOG.md` section as the
       body and the `.gem` attached.
 
