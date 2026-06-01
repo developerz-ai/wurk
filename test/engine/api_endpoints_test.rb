@@ -274,6 +274,25 @@ class ApiEndpointsTest < Wurk::Test::EngineCase
     assert_equal ::Wurk::Metrics::Query::MAX_MINUTES, json_body[:minutes]
   end
 
+  def test_history_returns_recharts_series
+    epoch, key = seed_history_minute(processed: 12, failed: 3, ms: 400)
+    get '/wurk/api/history/1m?window=24h'
+
+    assert_ok
+    point = json_body[:series].find { |row| row[:at] == epoch }
+
+    assert_equal({ at: epoch, processed: 12, failed: 3, runtime_ms: 400 }, point)
+  ensure
+    ::Wurk.redis { |c| c.call('DEL', key) } if key
+  end
+
+  def test_history_rejects_unknown_bucket
+    get '/wurk/api/history/2m?window=1h'
+
+    assert_equal 400, last_response.status
+    assert_match(/bucket/, json_body[:error])
+  end
+
   # The SSE stream emits one `event: stats` tick and closes when
   # `?max_duration=0` is supplied. Production callers omit the param and the
   # loop runs until `STREAM_MAX_DURATION`.
@@ -384,6 +403,17 @@ class ApiEndpointsTest < Wurk::Test::EngineCase
 
     assert_ok
     json_body[:limiters].map { |r| r[:name] }
+  end
+
+  # `jr|1m|<epoch>` is a global (non-namespaced) key, so offset the minute by
+  # this fork's pid/object_id to avoid colliding with a parallel worker; a 24h
+  # query window still covers it. Returns [epoch, key].
+  def seed_history_minute(processed:, failed:, ms:)
+    minutes_back = 1 + ((::Process.pid ^ object_id) % 1000)
+    epoch = ((::Time.now.to_i / 60) * 60) - (minutes_back * 60)
+    key = "jr|1m|#{epoch}"
+    ::Wurk.redis { |c| c.call('HSET', key, 'p', processed, 'f', failed, 'ms', ms) }
+    [epoch, key]
   end
 
   def seed_cron_loop

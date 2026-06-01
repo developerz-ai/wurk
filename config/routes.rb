@@ -24,6 +24,7 @@ Wurk::Engine.routes.draw do
     get  'cron/:lid/history', to: 'api#cron_history', as: :api_cron_history
     get  'metrics',          to: 'api#metrics'
     get  'metrics/:klass',   to: 'api#metrics_for_job', as: :api_metrics_for_job, constraints: { klass: %r{[^/]+} }
+    get  'history/:bucket',  to: 'api#history', as: :api_history
     get  'search',           to: 'api#search'
     get  'stream',           to: 'api#stream' # SSE
   end

@@ -113,6 +113,12 @@ module Wurk
         { klass: klass, processed: totals[:p], failed: totals[:f], runtime_ms: totals[:ms] }
       end
 
+      # One point in a cluster-total time-series (Wurk::Metrics::Query.history).
+      # `at` is epoch seconds at the bucket start.
+      def history_point(row)
+        { at: row[:at], processed: row[:p], failed: row[:f], runtime_ms: row[:ms] }
+      end
+
       def parse_options(raw)
         return {} if raw.nil? || raw.to_s.empty?
 

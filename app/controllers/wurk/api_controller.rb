@@ -19,6 +19,9 @@ module Wurk
     STREAM_TICK_SECONDS = 2.0
     STREAM_MAX_DURATION = 600.0
 
+    HISTORY_WINDOW_UNITS = { 's' => 1, 'm' => 60, 'h' => 3600, 'd' => 86_400 }.freeze
+    DEFAULT_HISTORY_WINDOW = 24 * 3600
+
     skip_forgery_protection only: %i[
       stream reset_limiter pause_cron unpause_cron enqueue_cron
     ]
@@ -120,6 +123,17 @@ module Wurk
       render json: { error: e.message }, status: :bad_request
     end
 
+    # Cluster-total throughput/failures time-series for the dashboard charts.
+    # `:bucket` is 1m/5m/1h; `?window=24h` (s/m/h/d suffix) is clamped to the
+    # bucket's retention. Recharts-ready array under `series`.
+    def history
+      window = parse_window(params[:window])
+      series = ::Wurk::Web::Enterprise::Historical.history(params[:bucket].to_s, window: window)
+      render json: { bucket: params[:bucket].to_s, window: window, series: series.map { |row| ::Wurk::Api::Serializers.history_point(row) } }
+    rescue ::ArgumentError => e
+      render json: { error: e.message }, status: :bad_request
+    end
+
     def search
       substr = params[:substr].to_s
       return render(json: { substr: substr, total: 0, hits: [] }) if substr.empty?
@@ -213,6 +227,16 @@ module Wurk
     # Resolves the per-class metrics window. `minutes:` wins when present;
     # `hours:` is used otherwise; default falls back to 60 minutes so callers
     # that pass neither still get a useful series.
+    # `?window=24h` → seconds. Accepts an s/m/h/d suffix (bare number = seconds).
+    # Falls back to 24h on a missing or unparseable value; the Query layer
+    # clamps the result to the bucket's retention.
+    def parse_window(raw)
+      match = raw.to_s.strip.downcase.match(/\A(\d+)([smhd]?)\z/)
+      return DEFAULT_HISTORY_WINDOW unless match
+
+      Integer(match[1]) * HISTORY_WINDOW_UNITS.fetch(match[2].empty? ? 's' : match[2])
+    end
+
     def metrics_window(params)
       pagination = ::Wurk::Api::Pagination
       minutes = pagination.clamp_int(params[:minutes], 1, ::Wurk::Metrics::Query::MAX_MINUTES, 60) if params[:minutes]

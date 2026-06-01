@@ -90,6 +90,11 @@ class CompatAliasesTest < Wurk::Test::UnitCase
     assert_same Wurk::Cron, Sidekiq::Cron
   end
 
+  def test_metrics_alias
+    assert_same Wurk::Metrics, Sidekiq::Metrics
+    assert_same Wurk::Metrics::Rollup, Sidekiq::Metrics::Rollup
+  end
+
   def test_dead_set_alias
     assert_same Wurk::DeadSet, Sidekiq::DeadSet
   end

@@ -1,6 +1,7 @@
 # frozen_string_literal: true
 
 require_relative 'history'
+require_relative 'rollup'
 
 module Wurk
   module Metrics
@@ -16,7 +17,7 @@ module Wurk
     #
     # A wider window has no data to read anyway (the buckets are TTL'd out),
     # so we fail loudly rather than silently returning sparse results.
-    module Query
+    module Query # rubocop:disable Metrics/ModuleLength
       MAX_MINUTES = 480
       MAX_HOURS = 72
       TOTAL_FIELDS = %w[p f ms].freeze
@@ -44,6 +45,38 @@ module Wurk
       def for_job(klass, minutes: nil, hours: nil, now: ::Time.now)
         validate_for_job!(klass, minutes, hours)
         minutes ? minute_series(klass, now, cap_minutes!(minutes)) : hour_series(klass, now, cap_hours!(hours))
+      end
+
+      # Cluster-total time-series for the dashboard throughput/failures charts,
+      # read from the compact buckets written by Wurk::Metrics::Rollup. `bucket`
+      # is '1m'/'5m'/'1h'; `window_seconds` is clamped to that bucket's
+      # retention. Returns `[{at:, p:, f:, ms:}, ...]` oldest→newest, gap-filled
+      # with zeros so a chart has a continuous x-axis.
+      def history(bucket, window_seconds, now: ::Time.now)
+        step, ttl = bucket_spec!(bucket)
+        starts = bucket_starts(now, step, clamp_history_window!(window_seconds, ttl))
+        rows = pipeline_hmget(starts.map { |s| Wurk::Metrics::Rollup.bucket_key(bucket, s) }, %w[p f ms])
+        starts.zip(rows).map { |at, (p, f, ms)| { at: at, p: p.to_i, f: f.to_i, ms: ms.to_i } }
+      end
+
+      def bucket_spec!(bucket)
+        Wurk::Metrics::Rollup::BUCKETS.fetch(bucket) do
+          raise ArgumentError, "bucket must be one of #{Wurk::Metrics::Rollup::BUCKETS.keys.inspect}"
+        end
+      end
+
+      def clamp_history_window!(window_seconds, ttl)
+        window = Integer(window_seconds)
+        raise ArgumentError, 'window must be positive' if window <= 0
+
+        [window, ttl].min
+      end
+
+      # The last `window/step` step-aligned bucket starts, oldest→newest, so
+      # they match the keys the rollup writes.
+      def bucket_starts(now, step, window)
+        last = (now.to_i / step) * step
+        (0...(window / step)).map { |i| last - (i * step) }.reverse
       end
 
       def validate_for_job!(klass, minutes, hours)

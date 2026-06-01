@@ -125,6 +125,13 @@ module Wurk
         def top(minutes: 60, class_filter: nil)
           Wurk::Metrics::Query.top_jobs(minutes: minutes, class_filter: class_filter)
         end
+
+        # Cluster-total time-series for the dashboard charts. `bucket` is
+        # '1m'/'5m'/'1h'; `window` is in seconds (clamped to the bucket's
+        # retention). Returns `[{at:, p:, f:, ms:}, …]` oldest→newest.
+        def history(bucket, window:, now: ::Time.now)
+          Wurk::Metrics::Query.history(bucket, window, now: now)
+        end
       end
     end
   end

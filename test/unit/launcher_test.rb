@@ -93,6 +93,12 @@ class LauncherTest < Wurk::Test::UnitCase
     assert_instance_of Wurk::Cron::Poller, launcher.cron_poller
   end
 
+  def test_initialize_builds_a_metrics_rollup
+    launcher = Wurk::Launcher.new(@config)
+
+    assert_instance_of Wurk::Metrics::Rollup, launcher.metrics_rollup
+  end
+
   # --- run -------------------------------------------------------------
 
   def test_run_freezes_config
@@ -136,6 +142,17 @@ class LauncherTest < Wurk::Test::UnitCase
     launcher.run(async_beat: false)
 
     assert started, 'run should start the periodic (cron) poller'
+  end
+
+  def test_run_starts_the_metrics_rollup
+    launcher = Wurk::Launcher.new(@config)
+    stub_managers(launcher)
+    started = false
+    launcher.metrics_rollup.define_singleton_method(:start) { started = true }
+
+    launcher.run(async_beat: false)
+
+    assert started, 'run should start the metrics rollup'
   end
 
   def test_run_starts_the_orphan_reaper
