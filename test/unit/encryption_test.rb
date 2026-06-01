@@ -532,20 +532,30 @@ class EncryptionTest < Wurk::Test::UnitCase
 
   def dead_record(target_jid)
     raw = Wurk.redis { |c| c.call('ZRANGE', Wurk::Keys::DEAD, 0, -1) }
-              .find { |m| JSON.parse(m)['jid'] == target_jid }
+              .find { |m| jid_of(m) == target_jid }
     raw && JSON.parse(raw)
   end
 
   def retry_count_for(target_jid)
     Wurk.redis { |c| c.call('ZRANGE', Wurk::Keys::RETRY, 0, -1) }
-        .count { |m| JSON.parse(m)['jid'] == target_jid }
+        .count { |m| jid_of(m) == target_jid }
   end
 
   def drain_dead(target_jid)
     Wurk.redis do |c|
-      mine = c.call('ZRANGE', Wurk::Keys::DEAD, 0, -1).select { |m| JSON.parse(m)['jid'] == target_jid }
+      mine = c.call('ZRANGE', Wurk::Keys::DEAD, 0, -1).select { |m| jid_of(m) == target_jid }
       c.call('ZREM', Wurk::Keys::DEAD, *mine) unless mine.empty?
     end
+  end
+
+  # The DEAD/RETRY sets are shared across the suite (per-test Redis namespacing
+  # is still a stub — see test/support/redis_namespace.rb), and processor_test
+  # intentionally routes malformed, non-JSON payloads to DEAD. Skip a neighbor's
+  # poison entry rather than letting JSON.parse blow up while scanning for ours.
+  def jid_of(member)
+    JSON.parse(member)['jid']
+  rescue JSON::ParserError
+    nil
   end
 
   # Records jobs.* statsd increments for the duration of the block. The

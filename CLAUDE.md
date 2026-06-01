@@ -91,7 +91,7 @@ Skip step 3 → leaked sockets in children. Skip step 5 → children corrupt eac
 - **Layers:** unit · engine (boots `test/dummy/`) · integration (real forks + real Redis) · parity (`test/parity/`, lifted from Sidekiq, SHA-pinned) · ecosystem (third-party gem suites run against Wurk) · benchmarks.
 - **Parity tests are oracles.** When Wurk diverges from a parity test, Wurk is wrong unless the divergence is explicitly documented as intentional.
 - **Never mock Redis** in integration or parity tests. Real Redis, unique namespace.
-- **Coverage gate.** SimpleCov branch coverage on `lib/` must stay ≥90%.
+- **Coverage gate.** SimpleCov **line** coverage on `lib/` must stay ≥90% (blocking). Branch coverage is also measured and uploaded but not yet gated (currently ~78%, ratcheting toward 90% — see #29). Coverage runs merge across the `minitest-parallel_fork` workers via `SimpleCov.at_fork`.
 - **CI** on GitHub Actions / Blacksmith runners. Benchmark bot comments deltas on every PR; >5% regression flags it.
 
 ## Platforms

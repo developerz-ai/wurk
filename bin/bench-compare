@@ -1,0 +1,95 @@
+#!/usr/bin/env ruby
+# frozen_string_literal: true
+
+# Compare two `rake bench` outputs and report the delta.
+#
+#   bin/bench-compare BASELINE.txt CURRENT.txt > comment.md
+#
+# Parses the benchmark/ips report lines ("<label>  5.70k (± 6.9%) i/s ...")
+# from each file and prints a Markdown table of the per-benchmark change.
+#
+# A slowdown is only *flagged as a regression* when it clears the combined
+# noise of both runs — benchmark/ips reports a relative error (the "± X%") per
+# result, and CI runners are noisy — plus a signal margin. Concretely it fails
+# when:  drop% > base_err% + head_err% + BENCH_REGRESSION_PCT  (default 5,
+# matching CLAUDE.md). This stops noise (two ~±7% samples can differ ~14% with
+# no code change) from blocking merges, while still catching real regressions.
+# Speedups are always reported, never gated.
+
+MARGIN = Float(ENV.fetch('BENCH_REGRESSION_PCT', '5'))
+MARKER = '<!-- bench-compare -->'
+SCALE = { '' => 1, 'k' => 1_000, 'M' => 1_000_000, 'G' => 1_000_000_000 }.freeze
+IPS_LINE = %r{^\s*(\S.*?)\s+([\d.,]+)\s*([kMG]?)\s*\(±\s*([\d.,]+)%\)\s*i/s}i
+
+def parse(path)
+  results = {}
+  File.foreach(path) do |line|
+    m = IPS_LINE.match(line)
+    next unless m
+
+    value = m[2].delete(',').to_f * SCALE[m[3]]
+    results[m[1].strip] = [value, m[4].delete(',').to_f] # [ips, ± error %]
+  end
+  results
+end
+
+def human(value)
+  return format('%.0f', value) if value < 1_000
+  return format('%.2fk', value / 1_000.0) if value < 1_000_000
+
+  format('%.2fM', value / 1_000_000.0)
+end
+
+baseline = File.exist?(ARGV[0]) ? parse(ARGV[0]) : {}
+current  = File.exist?(ARGV[1]) ? parse(ARGV[1]) : {}
+
+shared = (baseline.keys & current.keys).sort
+regressed = []
+
+rows = shared.map do |label|
+  was, was_err = baseline[label]
+  now, now_err = current[label]
+  pct = (now - was) / was * 100.0       # positive = faster
+  noise = was_err + now_err + MARGIN    # slowdown must clear this to count
+  significant = -pct > noise
+  regressed << [label, pct, noise] if significant
+  status = if significant then '🔴 regressed'
+           elsif pct.negative? then '🟡 slower (within noise)'
+           else '🟢'
+           end
+  format('| `%s` | %s | %s | %+.1f%% | %s |', label, human(was), human(now), pct, status)
+end
+
+out = "#{MARKER}\n### 📊 Benchmark vs base\n\n"
+if shared.empty?
+  out << "_No comparable benchmarks between base and head._\n"
+else
+  out << "| benchmark | base (i/s) | head (i/s) | Δ | |\n"
+  out << "|---|---:|---:|---:|---|\n"
+  out << rows.join("\n") << "\n\n"
+  out << "Regression is flagged when the slowdown exceeds both runs' combined "
+  out << "± noise plus **#{MARGIN}%** (tune via `BENCH_REGRESSION_PCT`).\n"
+end
+
+only_head = (current.keys - baseline.keys).sort
+only_base = (baseline.keys - current.keys).sort
+out << "\n_New on head: #{only_head.join(', ')}_\n" unless only_head.empty?
+out << "\n_Gone from head: #{only_base.join(', ')}_\n" unless only_base.empty?
+
+# A baseline benchmark missing on head fails the gate too — otherwise a
+# regression could be hidden by renaming or deleting the benchmark, and it
+# would only ever show up as a passing "Gone from head" line.
+fail_gate = !regressed.empty? || !only_base.empty?
+
+if fail_gate
+  out << "\n> [!CAUTION]\n"
+  regressed.each do |label, pct, noise|
+    out << format("> Regression: `%s` %+.1f%% (clears ±%.1f%% noise band)\n", label, pct, noise)
+  end
+  only_base.each do |label|
+    out << "> Missing on head: `#{label}` — benchmark removed or renamed; gate can't compare it.\n"
+  end
+end
+
+puts out
+exit(fail_gate ? 1 : 0)

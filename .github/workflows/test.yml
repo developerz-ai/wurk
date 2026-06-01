@@ -5,19 +5,29 @@ on:
     branches: [main]
   pull_request:
 
+# Least privilege: every job here only reads the repo (artifact upload doesn't
+# need a broader GITHUB_TOKEN scope).
+permissions:
+  contents: read
+
 concurrency:
   group: test-${{ github.workflow }}-${{ github.ref }}
   cancel-in-progress: true
 
 jobs:
   test:
+    # No explicit `name:` so GitHub's default matrix naming emits
+    # "test (<ruby>, <rails>)" — matching the contexts required by branch
+    # protection (test (3.4, 7.2) and test (4.0, 8.0)). The 4.0/8.0 leg is added
+    # via `include` to satisfy the required context while keeping the #29 matrix
+    # (Ruby 3.2/3.3/3.4 × Rails 7.2/8.0).
     runs-on: blacksmith-4vcpu-ubuntu-2404
     strategy:
       fail-fast: false
       matrix:
+        ruby: ["3.2", "3.3", "3.4"]
+        rails: ["7.2", "8.0"]
         include:
-          - ruby: "3.4"
-            rails: "7.2"
           - ruby: "4.0"
             rails: "8.0"
     services:
@@ -34,12 +44,16 @@ jobs:
       RAILS_VERSION: ${{ matrix.rails }}
       REDIS_URL: redis://localhost:6379/0
     steps:
-      - uses: actions/checkout@v6
-      - uses: ruby/setup-ruby@v1
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6
+        with:
+          persist-credentials: false
+      - uses: ruby/setup-ruby@afeafc3d1ab54a631816aba4c914a0081c12ff2f # v1
         with:
           ruby-version: ${{ matrix.ruby }}
           bundler-cache: true
-      - uses: actions/setup-node@v6
+          # Each Rails leg resolves a different lock; isolate the gem cache.
+          cache-version: rails-${{ matrix.rails }}
+      - uses: actions/setup-node@48b55a011bda9f5d6aeb4c2d9c7362e8dae4041e # v6
         with:
           node-version: "24"
           cache: "npm"
@@ -53,12 +67,86 @@ jobs:
           bin/rails db:prepare
       - name: rake test
         run: bundle exec rake test
+
+  # Oracle suite lifted from upstream Sidekiq (SHA-pinned in
+  # test/parity/.sidekiq_sha). Its own dedicated job so a parity divergence is
+  # legible at a glance, separate from the version matrix. Pin RAILS_VERSION so
+  # it tests a matrix Rails line rather than floating to newest.
+  parity:
+    name: parity (oracle)
+    runs-on: blacksmith-4vcpu-ubuntu-2404
+    services:
+      redis:
+        image: redis:7.4
+        ports: ["6379:6379"]
+        options: >-
+          --health-cmd "redis-cli ping"
+          --health-interval 5s
+          --health-timeout 3s
+          --health-retries 5
+    env:
+      BUNDLE_GEMFILE: ${{ github.workspace }}/Gemfile
+      RAILS_VERSION: "8.0"
+      REDIS_URL: redis://localhost:6379/0
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6
+        with:
+          persist-credentials: false
+      - uses: ruby/setup-ruby@afeafc3d1ab54a631816aba4c914a0081c12ff2f # v1
+        with:
+          ruby-version: "3.4"
+          bundler-cache: true
+          cache-version: rails-8.0
       - name: rake test:parity
         run: bundle exec rake test:parity
+
+  # Blocking line-coverage gate (>= 90%) on lib/. Branch coverage is measured
+  # and uploaded too, but not yet gated (ratcheting toward 90% — see #67). Pin
+  # RAILS_VERSION so the gated number stays deterministic.
+  coverage:
+    name: coverage (line >= 90%)
+    runs-on: blacksmith-4vcpu-ubuntu-2404
+    services:
+      redis:
+        image: redis:7.4
+        ports: ["6379:6379"]
+        options: >-
+          --health-cmd "redis-cli ping"
+          --health-interval 5s
+          --health-timeout 3s
+          --health-retries 5
+    env:
+      BUNDLE_GEMFILE: ${{ github.workspace }}/Gemfile
+      RAILS_VERSION: "8.0"
+      REDIS_URL: redis://localhost:6379/0
+      COVERAGE: "1"
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6
+        with:
+          persist-credentials: false
+      - uses: ruby/setup-ruby@afeafc3d1ab54a631816aba4c914a0081c12ff2f # v1
+        with:
+          ruby-version: "3.4"
+          bundler-cache: true
+          cache-version: rails-8.0
+      - uses: actions/setup-node@48b55a011bda9f5d6aeb4c2d9c7362e8dae4041e # v6
+        with:
+          node-version: "20"
+          cache: "npm"
+          cache-dependency-path: frontend/package-lock.json
+      - name: build dashboard SPA
+        run: bundle exec rake frontend:build
+      - name: dummy app setup
+        run: |
+          cd test/dummy
+          bundle install
+          bin/rails db:prepare
       - name: coverage gate
-        # Non-blocking while lib/ is stubs. Flip continue-on-error to false
-        # once real implementations exist and the gate (>=90% branch) is hittable.
-        continue-on-error: true
-        env:
-          COVERAGE: "1"
         run: bundle exec rake test:coverage
+      - name: upload coverage report
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        with:
+          name: coverage
+          path: coverage/coverage.xml
+          if-no-files-found: warn
