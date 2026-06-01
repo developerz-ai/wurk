@@ -1,0 +1,11 @@
+# frozen_string_literal: true
+
+source "https://rubygems.org"
+
+gem "rails", "~> 8.0"
+gem "sqlite3"
+gem "puma"
+
+# The whole point of the demo: run on Wurk. Uses the gem from this repo so the
+# demo always tracks the code it's demoing. Swap to `gem "wurk"` to pin a release.
+gem "wurk", path: ".."

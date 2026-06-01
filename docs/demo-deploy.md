@@ -1,10 +1,11 @@
 # Demo deployment (wurk.demo.developerz.ai)
 
-The public demo is the `test/dummy` Rails app — it mounts the Wurk dashboard and
-runs the [#33 workload generator](../test/dummy/app/workloads/demo/workload.rb)
-so every widget shows live, churning data. The dashboard runs **read-only**
-(`WURK_WEB_READ_ONLY=1`): every mutating endpoint returns 403 at the middleware
-layer, not just hidden in JS.
+The public demo is the [`demo/`](../demo) Rails 8 app — it mounts the Wurk
+dashboard and runs a [producer](../demo/app/workloads/demo_producer.rb) that
+exercises cron, unique, batch, rate-limited, and failing jobs so every widget
+shows live, churning data. The dashboard runs **read-only**
+(`WURK_WEB_READ_ONLY=1` + a `Wurk::Web.configure` guard): every mutating endpoint
+returns 403 at the middleware layer, not just hidden in JS.
 
 ## Architecture
 

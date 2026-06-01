@@ -1,9 +1,10 @@
 # syntax=docker/dockerfile:1
 #
-# Public-demo image for wurk.demo.developerz.ai. The demo app is test/dummy/ —
-# a Rails app that mounts the Wurk engine and ships the #33 workload generator.
-# One image runs either the read-only dashboard (`web`) or the swarm (`worker`),
-# selected by the argument to bin/demo-entrypoint.
+# Public-demo image for wurk.demo.developerz.ai. The demo app is demo/ — a
+# Rails 8 app that mounts the Wurk dashboard read-only and runs a producer that
+# exercises cron, unique, batch, rate-limited, and failing jobs. One image runs
+# either the read-only dashboard (`web`) or the swarm (`worker`), selected by the
+# argument to bin/demo-entrypoint.
 #
 # NOTE: this is the starting scaffold for the deploy (#32). The build still
 # needs a verification pass with infra — see docs/demo-deploy.md.
@@ -33,11 +34,10 @@ COPY . /wurk
 # Bring in the SPA bundle built in stage 1.
 COPY --from=spa /src/vendor/assets/dashboard /wurk/vendor/assets/dashboard
 
-# Install the demo app's bundle (include the puma group), prepare its DB, then
-# hand the tree to the non-root runtime user.
-WORKDIR /wurk/test/dummy
-RUN bundle config set --local without "" && \
-    bundle install --jobs 4 --retry 3 && \
+# Install the demo app's bundle, prepare its DB, then hand the tree to the
+# non-root runtime user.
+WORKDIR /wurk/demo
+RUN bundle install --jobs 4 --retry 3 && \
     SECRET_KEY_BASE=build bin/rails db:prepare && \
     chown -R wurk:wurk /wurk
 

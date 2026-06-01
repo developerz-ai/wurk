@@ -12,7 +12,7 @@ set -euo pipefail
 # WURK_DEMO=1). Redis comes from REDIS_URL.
 
 role="${1:-web}"
-cd "$(dirname "$0")/../test/dummy"
+cd "$(dirname "$0")/../demo"
 
 case "$role" in
   web)
