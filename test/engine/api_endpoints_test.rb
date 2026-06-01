@@ -274,6 +274,26 @@ class ApiEndpointsTest < Wurk::Test::EngineCase
     assert_equal ::Wurk::Metrics::Query::MAX_MINUTES, json_body[:minutes]
   end
 
+  def test_history_returns_recharts_series
+    epoch = ((::Time.now.to_i / 60) * 60) - 60
+    ::Wurk.redis { |c| c.call('HSET', "jr|1m|#{epoch}", 'p', 12, 'f', 3, 'ms', 400) }
+    get '/wurk/api/history/1m?window=10m'
+
+    assert_ok
+    point = json_body[:series].find { |row| row[:at] == epoch }
+
+    assert_equal({ at: epoch, processed: 12, failed: 3, runtime_ms: 400 }, point)
+  ensure
+    ::Wurk.redis { |c| c.call('DEL', "jr|1m|#{epoch}") }
+  end
+
+  def test_history_rejects_unknown_bucket
+    get '/wurk/api/history/2m?window=1h'
+
+    assert_equal 400, last_response.status
+    assert_match(/bucket/, json_body[:error])
+  end
+
   # The SSE stream emits one `event: stats` tick and closes when
   # `?max_duration=0` is supplied. Production callers omit the param and the
   # loop runs until `STREAM_MAX_DURATION`.
