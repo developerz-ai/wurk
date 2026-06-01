@@ -1,4 +1,10 @@
-# Wurk ⚡
+<p align="center">
+  <img src="https://raw.githubusercontent.com/developerz-ai/wurk/main/docs/assets/wurk-logo.png" alt="Wurk — an orc ready to work" width="220">
+</p>
+
+<h1 align="center">Wurk ⚡</h1>
+
+<p align="center"><strong>Wurk, wurk.</strong> 🪓 <em>Ready to work. Zug zug.</em></p>
 
 **A 100% drop-in replacement for Sidekiq + Sidekiq Pro + Sidekiq Enterprise. Free forever. Faster.**
 
