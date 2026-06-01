@@ -1,0 +1,29 @@
+name: Feature request
+description: Suggest a capability or a Sidekiq surface Wurk should cover.
+labels: ["enhancement"]
+body:
+  - type: textarea
+    id: problem
+    attributes:
+      label: What problem does this solve?
+      description: The use case, not just the feature. What can't you do today?
+    validations:
+      required: true
+  - type: textarea
+    id: proposal
+    attributes:
+      label: Proposed solution
+      description: API sketch, behavior, or the Sidekiq feature it should match.
+    validations:
+      required: true
+  - type: input
+    id: sidekiq-parity
+    attributes:
+      label: Sidekiq parity reference (if any)
+      description: Link or section in docs/target/sidekiq-{free,pro,ent}.md this maps to.
+  - type: textarea
+    id: alternatives
+    attributes:
+      label: Alternatives considered
+    validations:
+      required: false

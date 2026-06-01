@@ -1,87 +1,108 @@
 # Wurk ⚡
 
-**100% drop-in replacement for Sidekiq + Sidekiq Pro + Sidekiq Enterprise. Free forever. Faster.** 🚀
+**A 100% drop-in replacement for Sidekiq + Sidekiq Pro + Sidekiq Enterprise. Free forever. Faster.**
 
-Wire-compatible: same Redis keys, same job JSON, same Ruby DSL. Swap one gem line — existing jobs, batches, limiters, cron entries, and Redis data keep working untouched.
+[![Gem Version](https://img.shields.io/gem/v/wurk.svg)](https://rubygems.org/gems/wurk)
+[![CI](https://github.com/developerz-ai/wurk/actions/workflows/test.yml/badge.svg)](https://github.com/developerz-ai/wurk/actions/workflows/test.yml)
+[![Coverage gate](https://img.shields.io/badge/coverage%20gate-line%20%E2%89%A590%25-brightgreen.svg)](https://github.com/developerz-ai/wurk/actions/workflows/test.yml)
+[![Ruby](https://img.shields.io/badge/ruby-%E2%89%A5%203.2-CC342D.svg)](https://www.ruby-lang.org)
+[![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
 
----
+Wurk is wire-compatible with Sidekiq — same Redis keys, same job JSON, same Ruby DSL. Swap one line in your `Gemfile` and your existing jobs, batches, limiters, cron entries, and live Redis data keep working untouched. The Pro and Enterprise feature sets ship in the same free gem, with no license check and no tiers.
 
-## 🏛️ The three pillars
+## Install
 
-| Pillar | What it means |
-|---|---|
-| 🔌 **100% drop-in** | Same Redis schema, same job JSON, same Ruby DSL. Third-party Sidekiq gems work unchanged. |
-| 🆓 **Free** | Pro + Ent feature parity in the same gem. No tiers. No license check. No env-flag gates. |
-| ⚡ **Faster** | Fork-based real parallelism. Every release benchmarked vs Sidekiq. >5% regression blocks merge. |
+```ruby
+# Gemfile
+gem "wurk"
+```
 
----
+```diff
+# ...or drop in over an existing Sidekiq stack — delete these, add one line:
+- gem "sidekiq"
+- gem "sidekiq-pro", source: "https://gems.contribsys.com/"
+- gem "sidekiq-ent", source: "https://enterprise.contribsys.com/"
++ gem "wurk"
+```
 
-## ✨ What's in the box
+`bundle install && restart`. That's it — `Sidekiq::Worker`, `Sidekiq::Batch`, `Sidekiq::Limiter`, `Sidekiq.configure_server`, and friends all resolve to Wurk.
 
-- 🎁 **Sidekiq OSS parity** — `Sidekiq::Worker`, `Sidekiq::Job`, queues, retry/scheduled/dead sets, middleware chain, stats, heartbeat, web UI.
-- 💎 **Sidekiq Pro parity** — reliable BLMOVE fetch, batches + callbacks, queue pause/resume, Redis-outage client buffer, statsd, Lua bulk path, web search.
-- 🏢 **Sidekiq Enterprise parity** — rate limiters (concurrent/window/bucket), periodic jobs, leader election, unique jobs, AES-256-GCM encryption with rotation, historical metrics, multi-process swarm, rolling restarts.
-- 🛠️ **Wurk extras** — worker topology DSL, mountable Rails engine, precompiled React dashboard (no Node needed by consumers), AI dashboard panes (anomaly detection, NL queries, backlog forecasting).
+## Feature matrix
 
----
+Everything below is in the one free gem. The "Sidekiq tier" column is only there to show what you'd otherwise pay for.
 
-## 🚧 Status
+| Area | What you get | Sidekiq tier |
+|---|---|---|
+| **Runtime** | Fork-based real parallelism, reliable `BLMOVE` fetch, PID supervision, rolling restarts, graceful drain, scheduled/retry pollers | OSS + Pro |
+| **Batches** | `Sidekiq::Batch` with `on(:success/:complete/:death)` callbacks, nested batches, progress | Pro |
+| **Limiters** | Concurrent, bucket, window, leaky, and points rate limiters via `Sidekiq::Limiter` | Enterprise |
+| **Periodic** | Cron/periodic jobs, leader-elected so each tick fires exactly once across the cluster | Enterprise |
+| **Encryption** | Transparent AES-256-GCM job-argument encryption with zero-downtime key rotation | Enterprise |
+| **Dashboard** | Mountable Rails engine, precompiled React SPA (no Node needed), live SSE, charts, host-app auth hook | OSS + Pro/Ent |
 
-**Skeleton stage.** Directory layout, stub classes, scripts, dummy app, CI, frontend scaffold — all wired. Implementation lands per `docs/idea/` and `docs/target/sidekiq-{free,pro,ent}.md`.
+Plus Wurk extras: a worker topology DSL, a Kubernetes liveness/readiness listener, and opt-in AI dashboard panes (anomaly detection, NL queries, backlog forecasting).
 
----
+## Documentation
 
-## 📋 Requirements
+- **[Getting started & architecture](https://github.com/developerz-ai/wurk/blob/main/docs/idea/01-overview.md)** — how the swarm, manager, fetcher, and processor fit together.
+- **[Migrating from Sidekiq](#migrating-from-sidekiq)** — the one-line swap and what to expect.
+- **API reference (parity specs):** [Sidekiq OSS](https://github.com/developerz-ai/wurk/blob/main/docs/target/sidekiq-free.md) · [Pro](https://github.com/developerz-ai/wurk/blob/main/docs/target/sidekiq-pro.md) · [Enterprise](https://github.com/developerz-ai/wurk/blob/main/docs/target/sidekiq-ent.md) — the authoritative surface Wurk matches exactly.
+- **[Securing the dashboard](https://github.com/developerz-ai/wurk/blob/main/docs/dashboard.md)** · **[Metrics history](https://github.com/developerz-ai/wurk/blob/main/docs/metrics-history.md)**
+- **Live demo:** [wurk.demo.developerz.ai](https://wurk.demo.developerz.ai)
+
+## Requirements
 
 | Component | Minimum |
 |---|---|
-| Ruby   | `>= 3.2.0` |
-| Redis  | `>= 7.0.0` (uses `ZRANGE ... REV` introduced in 6.2 and other 7.x server features) |
+| Ruby | `>= 3.2.0` |
+| Redis | `>= 7.0.0` |
 
-JRuby / TruffleRuby / Windows fall back to threads-only mode (no fork) — behaviorally equivalent to stock Sidekiq.
+JRuby, TruffleRuby, and Windows fall back to threads-only mode (no fork) — behaviorally equivalent to stock Sidekiq.
 
----
+## The dashboard
 
-## 🏃 Quick start
+Mount the engine wherever you like:
 
-```sh
-bundle install
-bin/rake test             # expect skipped tests until implementations land
-bin/rake bench            # bench/*.rb stubs
-cd test/dummy && bin/rails s
+```ruby
+# config/routes.rb
+mount Wurk::Engine => "/wurk"
 ```
 
----
+The precompiled SPA ships inside the gem, so consumers never run Node. Gate it behind your app's auth with one line — see **[Securing the dashboard](https://github.com/developerz-ai/wurk/blob/main/docs/dashboard.md)** for Devise/Warden/Sorcery recipes:
 
-## 📁 Layout
+```ruby
+Wurk::Web.use(Rack::Auth::Basic, "Wurk") { |user, pass| user == ENV["WURK_USER"] && pass == ENV["WURK_PASS"] }
+```
 
-| Path | What lives there |
-|---|---|
-| `lib/wurk/` | 🧩 Core — swarm, manager, fetcher, processor, client, middleware, batch, limiter, cron, … |
-| `lib/wurk/engine.rb` | 🚂 Rails engine (mount point, asset path) |
-| `app/` · `config/` | 🎨 Dashboard controllers + routes + locales |
-| `exe/wurk` | 🏃 Standalone runner |
-| `vendor/assets/dashboard/` | 📦 Precompiled SPA bundle (built at release) |
-| `frontend/` | ⚛️ React + Vite source for the dashboard |
-| `test/dummy/` | 🧪 Embedded Rails app for engine tests |
-| `test/{unit,integration,engine}/` | ✅ Layered Minitest suites |
-| `test/parity/` | 🎯 Sidekiq tests lifted as oracles (SHA-pinned) |
-| `test/ecosystem/` | 🌍 Third-party Sidekiq gem suites run against Wurk |
-| `bench/` | 📊 Throughput / latency / memory benchmarks |
-| `docs/idea/` | 💡 Design notes |
-| `docs/target/` | 📜 Sidekiq surface specs — the authoritative spec |
+Ship a viewer-only board (e.g. a public demo) with no auth code at all by setting `WURK_WEB_READ_ONLY=1` — every mutating request returns 403 and the SPA hides destructive actions.
 
----
+## Encryption
 
-## 📜 Spec-driven
+A drop-in for `Sidekiq::Enterprise::Crypto`. It encrypts the **last** positional argument of a job with AES-256-GCM — the client middleware seals it on push, the server middleware opens it before `perform`. Earlier args stay plaintext so you can still triage on `user_id`.
 
-Anything implemented here MUST match `docs/target/sidekiq-{free,pro,ent}.md` exactly. Parity tests are oracles — if Wurk diverges, Wurk is wrong unless the divergence is documented.
+```ruby
+# config/initializers/wurk.rb — point at any key source (file, ENV, KMS)
+Sidekiq::Enterprise::Crypto.enable(active_version: 1) do |version|
+  File.binread("config/crypto/secret.#{Rails.env}.#{version}.key") # exactly 32 bytes
+end
+```
 
----
+```ruby
+class ChargeCardJob
+  include Sidekiq::Job
+  sidekiq_options encrypt: true
 
-## 🩺 Kubernetes probes
+  def perform(user_id, secret_bag) # secret_bag arrives already decrypted
+    Payments.charge(user_id, secret_bag["pan"], secret_bag["cvv"])
+  end
+end
+```
 
-Opt in to a thin HTTP listener for liveness/readiness probes:
+Keys rotate without downtime — keep every still-in-flight version resolvable so old jobs decrypt, then bump `active_version`. A job that can't be decrypted (key rotated away, corrupt ciphertext) goes **straight to the dead set in under a second** rather than crash-looping through 25 retries, with the still-encrypted payload preserved for replay. The dashboard renders encrypted args as `"<encrypted>"`; cleartext is never written to Redis.
+
+## Kubernetes probes
+
+Opt in to a thin HTTP listener for liveness/readiness:
 
 ```ruby
 Wurk.configure_server do |config|
@@ -89,132 +110,28 @@ Wurk.configure_server do |config|
 end
 ```
 
-Endpoints (off by default; only start when `health_check` is configured):
+| Path | Meaning |
+|---|---|
+| `/live` | 200 while the Launcher is running; 503 once `stop`/`quiet` is called. |
+| `/ready` | 200 only when Redis is reachable **and** the heartbeat fired within `ready_window` (default 30s); 503 otherwise. |
 
-| Path     | Meaning                                                                 |
-|----------|-------------------------------------------------------------------------|
-| `/live`  | 200 while the Launcher is running. 503 once `stop` / `quiet` is called. |
-| `/ready` | 200 only when Redis is reachable **and** the heartbeat fired within the last 30s (configurable). 503 otherwise. |
+Knobs: `health_check(port:, bind: "0.0.0.0", ready_window: 30)`. In swarm mode only the first child to `start` binds the port.
 
-Example k8s `Deployment` spec:
-
-```yaml
-spec:
-  template:
-    spec:
-      containers:
-        - name: wurk
-          image: myorg/myapp:latest
-          ports:
-            - containerPort: 7433
-              name: health
-          livenessProbe:
-            httpGet:
-              path: /live
-              port: health
-            periodSeconds: 10
-            failureThreshold: 3
-          readinessProbe:
-            httpGet:
-              path: /ready
-              port: health
-            periodSeconds: 5
-            failureThreshold: 2
-```
-
-Knobs: `health_check(port:, bind: '0.0.0.0', ready_window: 30)`. In swarm mode only the first child to call `start` binds the port; the rest log a warning and skip — drive your supervisor topology accordingly.
-
----
-
-## 🚀 Deployment
-
-### Read-only dashboard
-
-Ship a viewer-only dashboard (e.g. a public demo, or a shared read-only board) without bolting on your own auth. When read-only mode is on, every mutating request to the mounted dashboard (retry, kill, requeue, delete, pause/resume, clear) returns **403**, the SPA hides destructive actions, and a **"Read-only mode"** banner makes it unambiguous. Reads (GET) keep working.
-
-Enable it either way:
-
-```sh
-# Simplest — works in every process, including the web server.
-WURK_WEB_READ_ONLY=1
-```
-
-```ruby
-# Or in a Rails initializer (config/initializers/wurk.rb):
-Wurk::Web.configure { |c| c.read_only = true }
-```
-
-> The dashboard runs in your **web** process (Puma), not the worker — so set the flag there. The env var is read by every process, which is why it's the easiest option. `Wurk.configuration.web.read_only = true` reaches the same setting — `config.web` delegates to the `Wurk::Web` config singleton.
-
-Default is read/write — nothing changes unless you opt in.
-
----
-
-## 🔐 Encryption
-
-Drop-in for Sidekiq Enterprise's `Sidekiq::Enterprise::Crypto`. Encrypts the **last** positional argument of a job with AES-256-GCM, transparently — the client middleware seals it on push, the server middleware opens it before `perform` runs. Earlier args stay plaintext so you can still triage on `user_id` / `object_id`.
-
-**Enable it** in `config/initializers/wurk.rb`, pointing at your key source (file, ENV, KMS — anything that maps an integer version to a 32-byte key):
-
-```ruby
-Sidekiq::Enterprise::Crypto.enable(active_version: 1) do |version|
-  File.binread("config/crypto/secret.#{Rails.env}.#{version}.key") # exactly 32 bytes
-end
-```
-
-**Opt a job in** — and make sure `perform` takes at least two args (pass `nil` first if there's no cleartext):
-
-```ruby
-class ChargeCardJob
-  include Sidekiq::Job
-  sidekiq_options encrypt: true
-
-  def perform(user_id, secret_bag)   # secret_bag arrives already decrypted
-    Payments.charge(user_id, secret_bag["pan"], secret_bag["cvv"])
-  end
-end
-```
-
-The dashboard renders the encrypted arg as `"<encrypted>"`; it's never written to Redis in cleartext.
-
-### Key rotation
-
-Keys rotate without downtime. The resolver block **must keep returning every still-in-flight version**, not just the active one, so jobs enqueued under the old key still decrypt:
-
-```ruby
-KEYS = {
-  1 => File.binread("config/crypto/secret.production.1.key"),
-  2 => File.binread("config/crypto/secret.production.2.key"),
-}
-
-# Step 1: ship the new key file + resolver that knows both versions, active still 1.
-Sidekiq::Enterprise::Crypto.enable(active_version: 1) { |v| KEYS.fetch(v) }
-
-# Step 2: once every process has the new key, bump active_version → 2 and redeploy.
-Sidekiq::Enterprise::Crypto.enable(active_version: 2) { |v| KEYS.fetch(v) }
-```
-
-New pushes encrypt under v2; v1 jobs already in the queue keep decrypting with the v1 key. Keep the old key around until you're sure no v1 jobs remain (queues, retries, scheduled set).
-
-### Graceful failure
-
-If a job can't be decrypted — the key was rotated away, or the ciphertext is corrupt — retrying is pointless (the key won't come back), so Wurk **does not** crash-loop it through 25 retries. Instead the job goes **straight to the dead set in under a second**, with `error_class` set to `Wurk::Encryption::DecryptionError` and `error_message` prefixed `encryption_error:` (both visible in the dashboard's Dead tab); the `jobs.encryption_error` statsd counter increments, and your death handlers fire so you can alert on a rotation gap. The still-encrypted payload is preserved on the dead record; fix the key and replay it from the dashboard.
-
----
-
-## 🤝 Migration
+## Migrating from Sidekiq
 
 ```diff
 - gem "sidekiq"
-- gem "sidekiq-pro",        source: "https://gems.contribsys.com/"
-- gem "sidekiq-ent",        source: "https://enterprise.contribsys.com/"
+- gem "sidekiq-pro", source: "https://gems.contribsys.com/"
+- gem "sidekiq-ent", source: "https://enterprise.contribsys.com/"
 + gem "wurk"
 ```
 
-Then: `bundle install && restart`. That's it. ✨
+`bundle install && restart`. Wurk reads and writes the same Redis schema, so a rolling deploy can run Sidekiq and Wurk against the same Redis during the cutover. Third-party gems (sidekiq-cron, sidekiq-unique-jobs, sidekiq-scheduler, sidekiq-status, sidekiq-failures, sidekiq-throttled, …) are exercised by running their own upstream suites against Wurk in the [`ecosystem` CI job](https://github.com/developerz-ai/wurk/blob/main/.github/workflows/ecosystem.yml) (see [`test/ecosystem/`](https://github.com/developerz-ai/wurk/tree/main/test/ecosystem)).
 
----
+## Contributing
 
-## 📄 License
+Issues and pull requests are welcome — see **[CONTRIBUTING.md](https://github.com/developerz-ai/wurk/blob/main/CONTRIBUTING.md)** for the dev setup, test layers, and conventions, and **[SECURITY.md](https://github.com/developerz-ai/wurk/blob/main/SECURITY.md)** to report a vulnerability.
 
-MIT. See `LICENSE`.
+## License
+
+MIT. See [LICENSE](https://github.com/developerz-ai/wurk/blob/main/LICENSE).
