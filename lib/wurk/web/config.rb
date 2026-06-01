@@ -27,9 +27,12 @@ module Wurk
       FALSEY_STRINGS = ['', '0', 'false', 'no', 'off'].freeze
 
       # Host-app Rack middleware stacked in front of the dashboard, newest
-      # last. Each entry is `[middleware, args, block]`. Read-only; mutate
-      # via `#use`.
-      attr_reader :middlewares
+      # last. Each entry is `[middleware, args, block]`. Returns a frozen copy
+      # so the memoized chain (`#rack_app`) can only be invalidated through
+      # `#use` — direct mutation can't silently desync it.
+      def middlewares
+        @middlewares.dup.freeze
+      end
 
       def initialize
         @authorization = nil
