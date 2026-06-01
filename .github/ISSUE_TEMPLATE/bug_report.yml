@@ -1,0 +1,50 @@
+name: Bug report
+description: Something in Wurk doesn't work as expected (or differs from Sidekiq).
+labels: ["bug"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thanks for the report. For security vulnerabilities, use the
+        [private advisory form](https://github.com/developerz-ai/wurk/security/advisories/new)
+        instead of a public issue.
+  - type: textarea
+    id: what-happened
+    attributes:
+      label: What happened?
+      description: What did you observe, and what did you expect instead?
+      placeholder: Enqueuing X with Wurk did Y; with Sidekiq it does Z.
+    validations:
+      required: true
+  - type: textarea
+    id: repro
+    attributes:
+      label: Steps to reproduce
+      description: A minimal job class + the calls that trigger it, ideally runnable.
+      render: ruby
+    validations:
+      required: true
+  - type: input
+    id: wurk-version
+    attributes:
+      label: Wurk version
+      placeholder: "1.0.0"
+    validations:
+      required: true
+  - type: input
+    id: ruby-redis
+    attributes:
+      label: Ruby / Redis / Rails versions
+      placeholder: "ruby 3.4.1, redis 7.4, rails 8.0"
+    validations:
+      required: true
+  - type: dropdown
+    id: drop-in
+    attributes:
+      label: Is this a drop-in compatibility difference from Sidekiq?
+      description: i.e. the same code behaves differently on Sidekiq vs Wurk.
+      options:
+        - "No / not sure"
+        - "Yes — Sidekiq does it differently"
+    validations:
+      required: true
