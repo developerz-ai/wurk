@@ -1,0 +1,37 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+# Container entrypoint for the public demo. One image, two roles:
+#   web    — read-only dashboard (puma) + the demo workload generator. The
+#            generator runs here because WURK_DISABLED=1 keeps the swarm out of
+#            the web process (a Redis-holding thread must never be forked).
+#   worker — the job-processing swarm (railtie boots it when WURK_DISABLED is
+#            unset). Drains what the generator enqueues.
+#
+# Read-only + demo mode come from the image env (WURK_WEB_READ_ONLY=1,
+# WURK_DEMO=1). Redis comes from REDIS_URL.
+
+role="${1:-web}"
+cd "$(dirname "$0")/../demo"
+
+case "$role" in
+  web)
+    export WURK_DISABLED=1
+    exec bundle exec rails server -b 0.0.0.0 -p "${PORT:-3000}"
+    ;;
+  worker)
+    # Load the Rails app (so the demo job classes + the WURK_DEMO server
+    # middleware are present) but keep the railtie from backgrounding the swarm,
+    # then run supervise on the MAIN thread so SIGTERM drains and exits promptly
+    # instead of being stuck in a sleep until SIGKILL.
+    export WURK_DISABLED=1
+    exec bundle exec rails runner "
+      swarm = Wurk::Swarm.new(topology: Wurk.configuration.topology)
+      swarm.boot
+      swarm.supervise
+    "
+    ;;
+  *)
+    exec "$@"
+    ;;
+esac

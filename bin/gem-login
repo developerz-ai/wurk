@@ -1,0 +1,17 @@
+#!/usr/bin/env bash
+# Sign in to RubyGems and cache an API key in ~/.gem/credentials.
+# Interactive: prompts for your rubygems.org email, password, and — because
+# the gemspec sets rubygems_mfa_required — an OTP from your authenticator.
+# Run once per machine; `gem push` reuses the cached key afterward.
+set -euo pipefail
+
+if [ -f "${HOME}/.gem/credentials" ] && grep -q rubygems_api_key "${HOME}/.gem/credentials"; then
+  echo "==> ~/.gem/credentials already has a rubygems_api_key."
+  echo "    Delete that line (or the file) to sign in as a different account."
+  exit 0
+fi
+
+echo "==> gem signin (rubygems.org) — enter email, password, and OTP when asked"
+gem signin
+echo "==> signed in; key cached in ~/.gem/credentials (chmod 600)"
+chmod 600 "${HOME}/.gem/credentials"

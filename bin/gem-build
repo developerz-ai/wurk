@@ -1,0 +1,18 @@
+#!/usr/bin/env bash
+# Build the release artifact: compile the React dashboard into vendor/assets,
+# then package the gem into pkg/. No push, no network — safe to run anytime.
+set -euo pipefail
+cd "$(dirname "$0")/.."
+
+version="$(ruby -Ilib -e 'require "wurk/version"; print Wurk::VERSION')"
+echo "==> Building Wurk ${version}"
+
+echo "==> frontend:build (Vite → vendor/assets/dashboard)"
+bundle exec rake frontend:build
+
+echo "==> gem build wurk.gemspec → pkg/"
+mkdir -p pkg
+gem build wurk.gemspec --output "pkg/wurk-${version}.gem"
+
+echo "==> done: pkg/wurk-${version}.gem"
+gem spec "pkg/wurk-${version}.gem" name version | sed 's/^/    /'

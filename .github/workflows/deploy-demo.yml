@@ -1,0 +1,115 @@
+name: deploy-demo
+
+# Manual-only deploy of the public demo (wurk.demo.developerz.ai).
+#
+# WHO CAN RUN IT — three layers, only-the-org by construction:
+#   1. workflow_dispatch on a PUBLIC repo can only be triggered by users with
+#      *write* access (org members) — external forks/users cannot.
+#   2. the `authorize` job rejects anyone not in the DEMO_DEPLOYERS repo
+#      variable (comma-separated GitHub usernames).
+#   3. the `deploy` job targets the protected `demo` environment — add Required
+#      Reviewers there so a deploy waits for a named approver.
+# See docs/demo-deploy.md for the one-time setup and the infra requirements.
+
+on:
+  workflow_dispatch:
+    inputs:
+      ref:
+        description: Git ref (branch / tag / SHA) to build and deploy
+        required: false
+        default: main
+
+concurrency:
+  group: deploy-demo
+  cancel-in-progress: false # never interrupt an in-flight deploy
+
+# Least privilege at the workflow level; the build job opts into packages:write.
+permissions:
+  contents: read
+
+env:
+  IMAGE: ghcr.io/developerz-ai/wurk-demo
+
+jobs:
+  authorize:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Verify actor is an approved deployer
+        env:
+          ALLOW: ${{ vars.DEMO_DEPLOYERS }}
+          ACTOR: ${{ github.actor }}
+        run: |
+          if [ -z "$ALLOW" ]; then
+            echo "::error::DEMO_DEPLOYERS repo variable is not set — refusing to deploy."
+            exit 1
+          fi
+          if echo "$ALLOW" | tr ',' '\n' | sed 's/[[:space:]]//g' | grep -qx "$ACTOR"; then
+            echo "$ACTOR is an approved deployer."
+          else
+            echo "::error::$ACTOR is not in DEMO_DEPLOYERS."
+            exit 1
+          fi
+
+  build:
+    needs: authorize
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write # push the demo image to GHCR
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+        with:
+          ref: ${{ github.event.inputs.ref }}
+          persist-credentials: false
+      - uses: docker/setup-buildx-action@8d2750c68a42422c14e847fe6c8ac0403b4cbd6f # v3
+      - uses: docker/login-action@c94ce9fb468520275223c153574b00df6fe4bcc9 # v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+      - uses: docker/build-push-action@10e90e3645eae34f1e60eeb005ba3a3d33f178e8 # v6
+        with:
+          context: .
+          file: Dockerfile
+          push: true
+          tags: |
+            ${{ env.IMAGE }}:${{ github.sha }}
+            ${{ env.IMAGE }}:latest
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+  deploy:
+    needs: build
+    runs-on: ubuntu-latest
+    environment:
+      name: demo
+      url: https://wurk.demo.developerz.ai
+    steps:
+      # GitOps via ArgoCD: point the demo Application at the freshly-built image
+      # and sync. Requires the ARGOCD_SERVER + ARGOCD_AUTH_TOKEN secrets and an
+      # ArgoCD Application named `wurk-demo` (see docs/demo-deploy.md). If infra
+      # prefers ArgoCD Image Updater or a manifest bump in ../infrastructure,
+      # replace this step per that decision — the gating above is unchanged.
+      - name: Sync ArgoCD app
+        env:
+          ARGOCD_SERVER: ${{ secrets.ARGOCD_SERVER }}
+          ARGOCD_AUTH_TOKEN: ${{ secrets.ARGOCD_AUTH_TOKEN }}
+          # Pin to the ArgoCD server's version; the CLI is fetched from the
+          # official release (not the server) and checksum-verified.
+          ARGOCD_VERSION: v2.13.1
+          IMAGE_TAG: ${{ github.sha }}
+        run: |
+          set -euo pipefail
+          if [ -z "${ARGOCD_SERVER:-}" ] || [ -z "${ARGOCD_AUTH_TOKEN:-}" ]; then
+            echo "::error::ARGOCD_SERVER / ARGOCD_AUTH_TOKEN not set — see docs/demo-deploy.md (Infra requirements)."
+            exit 1
+          fi
+          base="https://github.com/argoproj/argo-cd/releases/download/${ARGOCD_VERSION}"
+          curl -fsSL -o argocd "${base}/argocd-linux-amd64"
+          curl -fsSL -o cli_checksums.txt "${base}/cli_checksums.txt"
+          want=$(grep ' argocd-linux-amd64$' cli_checksums.txt | awk '{print $1}')
+          echo "${want}  argocd" | sha256sum -c -
+          chmod +x argocd && sudo mv argocd /usr/local/bin/argocd
+          argocd app set wurk-demo --grpc-web -p image.tag="$IMAGE_TAG"
+          argocd app sync wurk-demo --grpc-web --timeout 300
+          argocd app wait wurk-demo --grpc-web --health --timeout 300

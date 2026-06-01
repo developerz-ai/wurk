@@ -1,0 +1,13 @@
+.git
+.github
+tmp
+log
+coverage
+*.gem
+test/dummy/tmp
+test/dummy/log
+test/dummy/storage
+test/dummy/db/*.sqlite3
+node_modules
+frontend/node_modules
+.claude
