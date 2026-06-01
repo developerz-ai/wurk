@@ -15,6 +15,15 @@ require File.join(DEMO_APP, 'workloads/demo/workload.rb')
 # retry/dead/throughput surfaces need a real worker and are covered by
 # test/qa/demo_workload_driver.rb.
 class DemoWorkloadTest < Wurk::Test::UnitCase
+  # Isolation here is by dedicated Redis DB, NOT by the per-test key namespace
+  # the rest of the suite uses. The generator and the Stats/Queue/Set classes it
+  # drives write fixed *global* keys (`queue:default`, `schedule`, `dead`,
+  # `lmtr-list`, the periodic set, …) that can't be prefixed, and the
+  # RedisNamespace helper is still a stub. So this class points the global config
+  # at its own DB (override with WURK_DEMO_TEST_DB) and FLUSHDB's it — no other
+  # suite test touches DB 15. For that reason it does NOT call `parallelize_me!`:
+  # FLUSHDB-based isolation is only safe with the tests run sequentially, which
+  # the per-class fork runner already guarantees.
   DB = ENV.fetch('WURK_DEMO_TEST_DB', '15')
 
   def setup
