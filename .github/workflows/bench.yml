@@ -5,6 +5,9 @@ on:
   push:
     branches: [main]
 
+permissions:
+  contents: read
+
 concurrency:
   group: bench-${{ github.workflow }}-${{ github.ref }}
   cancel-in-progress: true
@@ -22,14 +25,16 @@ jobs:
     env:
       REDIS_URL: redis://localhost:6379/0
     steps:
-      - uses: actions/checkout@v4
-      - uses: ruby/setup-ruby@v1
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+        with:
+          persist-credentials: false
+      - uses: ruby/setup-ruby@afeafc3d1ab54a631816aba4c914a0081c12ff2f # v1
         with:
           ruby-version: "3.4"
           bundler-cache: true
       - name: run benches
         run: bundle exec rake bench | tee bench-results.txt
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
           name: bench-results
           path: bench-results.txt
@@ -54,12 +59,12 @@ jobs:
           --health-interval 5s
     env:
       REDIS_URL: redis://localhost:6379/0
-      GH_TOKEN: ${{ github.token }}
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
         with:
           fetch-depth: 0
-      - uses: ruby/setup-ruby@v1
+          persist-credentials: false
+      - uses: ruby/setup-ruby@afeafc3d1ab54a631816aba4c914a0081c12ff2f # v1
         with:
           ruby-version: "3.4"
           bundler-cache: true
@@ -74,6 +79,8 @@ jobs:
           bundle install --quiet
           bundle exec rake bench | tee /tmp/bench-base.txt
       - name: compare, comment, gate
+        env:
+          GH_TOKEN: ${{ github.token }}
         run: |
           set +e
           /tmp/bench-compare /tmp/bench-base.txt /tmp/bench-head.txt > /tmp/bench-comment.md
@@ -81,7 +88,7 @@ jobs:
           set -e
           cat /tmp/bench-comment.md
           marker='<!-- bench-compare -->'
-          existing=$(gh api "repos/${{ github.repository }}/issues/${{ github.event.pull_request.number }}/comments" \
+          existing=$(gh api --paginate "repos/${{ github.repository }}/issues/${{ github.event.pull_request.number }}/comments" \
             --jq ".[] | select(.body | startswith(\"$marker\")) | .id" | head -1)
           if [ -n "$existing" ]; then
             gh api -X PATCH "repos/${{ github.repository }}/issues/comments/$existing" \

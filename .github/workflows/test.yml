@@ -5,6 +5,11 @@ on:
     branches: [main]
   pull_request:
 
+# Least privilege: every job here only reads the repo (artifact upload doesn't
+# need a broader GITHUB_TOKEN scope).
+permissions:
+  contents: read
+
 concurrency:
   group: test-${{ github.workflow }}-${{ github.ref }}
   cancel-in-progress: true
@@ -32,14 +37,16 @@ jobs:
       RAILS_VERSION: ${{ matrix.rails }}
       REDIS_URL: redis://localhost:6379/0
     steps:
-      - uses: actions/checkout@v4
-      - uses: ruby/setup-ruby@v1
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+        with:
+          persist-credentials: false
+      - uses: ruby/setup-ruby@afeafc3d1ab54a631816aba4c914a0081c12ff2f # v1
         with:
           ruby-version: ${{ matrix.ruby }}
           bundler-cache: true
           # Each Rails leg resolves a different lock; isolate the gem cache.
           cache-version: rails-${{ matrix.rails }}
-      - uses: actions/setup-node@v4
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
         with:
           node-version: "20"
           cache: "npm"
@@ -56,7 +63,8 @@ jobs:
 
   # Oracle suite lifted from upstream Sidekiq (SHA-pinned in
   # test/parity/.sidekiq_sha). Its own dedicated job so a parity divergence is
-  # legible at a glance, separate from the version matrix.
+  # legible at a glance, separate from the version matrix. Pin RAILS_VERSION so
+  # it tests a matrix Rails line rather than floating to newest.
   parity:
     name: parity (oracle)
     runs-on: blacksmith-4vcpu-ubuntu-2404
@@ -70,18 +78,24 @@ jobs:
           --health-timeout 3s
           --health-retries 5
     env:
+      BUNDLE_GEMFILE: ${{ github.workspace }}/Gemfile
+      RAILS_VERSION: "8.0"
       REDIS_URL: redis://localhost:6379/0
     steps:
-      - uses: actions/checkout@v4
-      - uses: ruby/setup-ruby@v1
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+        with:
+          persist-credentials: false
+      - uses: ruby/setup-ruby@afeafc3d1ab54a631816aba4c914a0081c12ff2f # v1
         with:
           ruby-version: "3.4"
           bundler-cache: true
+          cache-version: rails-8.0
       - name: rake test:parity
         run: bundle exec rake test:parity
 
   # Blocking line-coverage gate (>= 90%) on lib/. Branch coverage is measured
-  # and uploaded too, but not yet gated (ratcheting toward 90% — see #29).
+  # and uploaded too, but not yet gated (ratcheting toward 90% — see #67). Pin
+  # RAILS_VERSION so the gated number stays deterministic.
   coverage:
     name: coverage (line >= 90%)
     runs-on: blacksmith-4vcpu-ubuntu-2404
@@ -96,15 +110,19 @@ jobs:
           --health-retries 5
     env:
       BUNDLE_GEMFILE: ${{ github.workspace }}/Gemfile
+      RAILS_VERSION: "8.0"
       REDIS_URL: redis://localhost:6379/0
       COVERAGE: "1"
     steps:
-      - uses: actions/checkout@v4
-      - uses: ruby/setup-ruby@v1
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+        with:
+          persist-credentials: false
+      - uses: ruby/setup-ruby@afeafc3d1ab54a631816aba4c914a0081c12ff2f # v1
         with:
           ruby-version: "3.4"
           bundler-cache: true
-      - uses: actions/setup-node@v4
+          cache-version: rails-8.0
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
         with:
           node-version: "20"
           cache: "npm"
@@ -120,7 +138,7 @@ jobs:
         run: bundle exec rake test:coverage
       - name: upload coverage report
         if: always()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
           name: coverage
           path: coverage/coverage.xml
