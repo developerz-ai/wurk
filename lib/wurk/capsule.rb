@@ -72,13 +72,16 @@ module Wurk
     end
 
     def client_middleware
-      chain = (@client_chain ||= @config.client_middleware.dup)
+      chain = (@client_chain ||= @config.client_middleware.copy_for(self))
       yield chain if block_given?
       chain
     end
 
     def server_middleware
-      chain = (@server_chain ||= @config.server_middleware.dup)
+      # copy_for(self) — not dup — binds the chain's `@config` to this capsule,
+      # so middleware that reach for `redis_pool`/`redis`/`logger` resolve them
+      # instead of hitting `nil` (a plain dup leaves @config nil).
+      chain = (@server_chain ||= @config.server_middleware.copy_for(self))
       yield chain if block_given?
       chain
     end

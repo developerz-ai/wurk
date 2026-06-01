@@ -19,6 +19,33 @@ class CapsuleTest < Wurk::Test::UnitCase
     super
   end
 
+  # --- middleware binding (#69) ------------------------------------------
+
+  # The capsule must bind its chains via copy_for(self), not a bare dup, so
+  # middleware resolve config.redis_pool/redis/logger instead of hitting nil.
+  ProbeMiddleware = Class.new do
+    include Wurk::Middleware::ServerMiddleware
+
+    def call(*) = yield
+  end
+
+  def test_server_middleware_instances_are_bound_to_the_capsule
+    @config.server_middleware.add(ProbeMiddleware)
+
+    instance = @capsule.server_middleware.retrieve.find { |m| m.is_a?(ProbeMiddleware) }
+
+    refute_nil instance.config, 'server middleware config must not be nil'
+    assert_same @capsule, instance.config
+  end
+
+  def test_client_middleware_instances_are_bound_to_the_capsule
+    @config.client_middleware.add(ProbeMiddleware)
+
+    instance = @capsule.client_middleware.retrieve.find { |m| m.is_a?(ProbeMiddleware) }
+
+    assert_same @capsule, instance.config
+  end
+
   # --- defaults ----------------------------------------------------------
 
   def test_default_name_is_string
