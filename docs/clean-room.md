@@ -15,10 +15,13 @@ sorted-set score conventions. That interface is what makes "swap one line in
 your `Gemfile`" work.
 
 Wurk does **not** copy Sidekiq's implementation. Every line under `lib/` and
-`app/` is written by the Wurk authors. The behaviour was reconstructed from:
+`app/` is written by the Wurk authors. The API was taken from Sidekiq's own
+public documentation — primarily the **[Sidekiq wiki](https://github.com/sidekiq/sidekiq/wiki)**,
+which documents the OSS, Pro, and Enterprise surfaces. The behaviour was
+reconstructed from:
 
+- the **[public Sidekiq wiki](https://github.com/sidekiq/sidekiq/wiki)** — the documented API for OSS, Pro, and Enterprise,
 - the open-source Sidekiq API surface,
-- public documentation for Sidekiq Pro and Sidekiq Enterprise,
 - the observable wire protocol (Redis keys, payloads, scores), and
 - the public test suites of the third-party ecosystem gems.
 
