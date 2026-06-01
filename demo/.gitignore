@@ -1,0 +1,6 @@
+/db/*.sqlite3
+/log/*
+/tmp/*
+/storage/*
+/.bundle
+Gemfile.lock

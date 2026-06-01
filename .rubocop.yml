@@ -7,6 +7,8 @@ AllCops:
     - "test/dummy/log/**/*"
     - "vendor/**/*"
     - "frontend/**/*"
+    # The demo is a standalone Rails app (Rails-idiomatic style), not gem source.
+    - "demo/**/*"
 
 require:
   - rubocop-minitest
