@@ -7,6 +7,27 @@ The dashboard bundle under `vendor/assets/dashboard/` is **built, not committed*
 (it's git-ignored). It must be freshly baked before the gem is packaged so the
 precompiled SPA ships inside the gem — consumers never run Node.
 
+Publishing is fully automated via **RubyGems Trusted Publishing (OIDC)** — there
+is no long-lived `GEM_HOST_API_KEY`. A `v*` tag push runs
+`.github/workflows/release.yml`, which exchanges a GitHub Actions OIDC token for
+a short-lived RubyGems credential and pushes the gem.
+
+## One-time setup: register the trusted publisher
+
+Before the first release, a rubygems.org owner registers this repo as a trusted
+publisher (this is the only manual step, done once):
+
+1. On rubygems.org → the `wurk` gem → **Settings → Trusted Publishers → Add**
+   (for a brand-new gem, use **Create a pending trusted publisher** so the first
+   OIDC push can create the gem).
+2. Set:
+   - **Repository**: `developerz-ai/wurk`
+   - **Workflow filename**: `release.yml`
+   - **Environment**: *(leave blank unless the job sets one)*
+
+No secret is stored in GitHub; the `release` job's `permissions: id-token: write`
+is what authorizes the exchange.
+
 ## Cutting a release
 
 1. **Bump the version** in `lib/wurk/version.rb` (e.g. `1.0.0` → `1.1.0`).
@@ -36,9 +57,23 @@ precompiled SPA ships inside the gem — consumers never run Node.
    git push origin v1.1.0
    ```
    The `release` workflow (`.github/workflows/release.yml`) triggers on `v*`
-   tags: it rebuilds the dashboard, runs `rake release:check`, then builds and
-   publishes the gem to RubyGems via trusted publishing. RubyGems MFA is
-   required (`rubygems_mfa_required` is set in the gemspec).
+   tags and runs, in order:
+   1. Rebuild the dashboard SPA (`rake frontend:build`).
+   2. Assert the bundle + `wurk-manifest.json` are present and non-empty.
+   3. The full gate (`rake release:check`).
+   4. `gem build wurk.gemspec`, then assert the dashboard bundle is **inside**
+      the resulting `.gem` (`gem unpack` + check).
+   5. Exchange the OIDC token (`rubygems/configure-trusted-publisher`) and
+      `gem push` — no API-key secret.
+   6. Create a GitHub Release with the matching `CHANGELOG.md` section as the
+      body and the `.gem` attached.
+
+### Prereleases (release candidates)
+
+For an `rc`, set `Wurk::VERSION` to a Ruby prerelease (e.g. `1.0.0.pre.rc1`) and
+tag `v1.0.0-rc1`. The workflow auto-marks the GitHub Release as a prerelease
+(the tag contains `-`) and reuses the base version's CHANGELOG section
+(`## [1.0.0]`). The GA push is then just `Wurk::VERSION = "1.0.0"` + tag `v1.0.0`.
 
 ## What `rake release:check` validates
 
@@ -52,7 +87,9 @@ precompiled SPA ships inside the gem — consumers never run Node.
 The same task runs in CI on the tagged commit, so a release cannot publish unless
 the gate passes there too.
 
-## Local one-shot publish (maintainers)
+## Local one-shot publish (emergency only)
 
-`rake release:full` chains `frontend:build → build → push`. Prefer the
-tag-driven CI flow above; use this only for an out-of-band manual push.
+`rake release:full` chains `frontend:build → build → push`, but its `push` uses
+`gem push` with a personal `GEM_HOST_API_KEY` — outside the OIDC flow. Prefer the
+tag-driven CI release above; use this only for an out-of-band manual push when CI
+is unavailable.

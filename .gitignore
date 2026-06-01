@@ -4,6 +4,8 @@
 .yardoc
 Gemfile.lock
 pkg/
+/unpacked/
+/RELEASE_NOTES.md
 tmp/
 log/
 coverage/

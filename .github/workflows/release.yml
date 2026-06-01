@@ -1,5 +1,8 @@
 name: release
 
+# Publishes the gem to RubyGems via Trusted Publishing (OIDC) on a v* tag — no
+# long-lived GEM_HOST_API_KEY. See RELEASE.md for the one-time rubygems.org
+# trusted-publisher registration.
 on:
   push:
     tags: ["v*"]
@@ -8,8 +11,8 @@ jobs:
   release:
     runs-on: blacksmith-4vcpu-ubuntu-2404
     permissions:
-      contents: write
-      id-token: write
+      contents: write   # create the GitHub Release
+      id-token: write   # OIDC token exchanged for a short-lived RubyGems key
     services:
       redis:
         image: redis:7.4
@@ -32,8 +35,21 @@ jobs:
           node-version: "20"
           cache: "npm"
           cache-dependency-path: frontend/package-lock.json
-      - name: build frontend
+
+      # 1. Precompile the Vite SPA into vendor/assets/ (npm ci + vite build).
+      - name: build dashboard SPA
         run: bundle exec rake frontend:build
+
+      # 2. Assert the precompiled bundle + version manifest are present/non-empty.
+      - name: assert dashboard bundle baked
+        run: |
+          set -euo pipefail
+          test -s vendor/assets/dashboard/index.html
+          test -s vendor/assets/dashboard/wurk-manifest.json
+          ls vendor/assets/dashboard/assets/*.js >/dev/null
+          echo "manifest: $(cat vendor/assets/dashboard/wurk-manifest.json)"
+
+      # 3. Full gate: bundle present, version matches CHANGELOG, clean tree, tests green.
       - name: dummy app setup
         run: |
           cd test/dummy
@@ -41,5 +57,41 @@ jobs:
           bin/rails db:prepare
       - name: release gate
         run: bundle exec rake release:check
-      - name: build & push gem
-        uses: rubygems/release-gem@v1
+
+      # 4. Build the gem and assert the dashboard bundle actually shipped inside it.
+      - name: build gem
+        run: gem build wurk.gemspec
+      - name: assert dashboard bundle is inside the gem
+        run: |
+          set -euo pipefail
+          gem=$(ls wurk-*.gem)
+          echo "inspecting $gem"
+          gem unpack "$gem" --target unpacked
+          ls unpacked/wurk-*/vendor/assets/dashboard/index.html >/dev/null
+          ls unpacked/wurk-*/vendor/assets/dashboard/assets/*.js >/dev/null
+          echo "dashboard bundle present in $gem"
+
+      # 5. Push to RubyGems with the OIDC token (no GEM_HOST_API_KEY secret).
+      - name: configure trusted publishing
+        uses: rubygems/configure-trusted-publisher@v1
+      - name: push gem
+        run: gem push wurk-*.gem
+
+      # 6. GitHub Release: the matching CHANGELOG section as the body + the .gem.
+      - name: extract changelog section
+        run: |
+          set -euo pipefail
+          version="${GITHUB_REF_NAME#v}"   # e.g. 1.0.0 or 1.0.0-rc1
+          base="${version%%-*}"            # strip any prerelease suffix
+          awk -v v="$base" '
+            $0 ~ "^## \\[" v "\\]" {flag=1; print; next}
+            flag && /^## \[/ {exit}
+            flag {print}
+          ' CHANGELOG.md > RELEASE_NOTES.md
+          [ -s RELEASE_NOTES.md ] || echo "Release ${version}" > RELEASE_NOTES.md
+      - name: create GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          body_path: RELEASE_NOTES.md
+          files: wurk-*.gem
+          prerelease: ${{ contains(github.ref_name, '-') }}
