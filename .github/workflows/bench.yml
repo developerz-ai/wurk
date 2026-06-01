@@ -35,9 +35,10 @@ jobs:
           path: bench-results.txt
 
   # PR-only: run the benches on base and head, comment the per-benchmark delta,
-  # and fail if any regresses >5% (BENCH_REGRESSION_PCT). ips variance on CI is
-  # ~5-10%, so treat this as a signal — make it a required check in branch
-  # protection only once it proves stable.
+  # and fail only on a noise-aware regression — a slowdown that clears both
+  # runs' reported ± variance plus BENCH_REGRESSION_PCT (default 5). ips on CI
+  # is noisy (~±7%), so a flat threshold false-positives; this gates on signal.
+  # Make it a required check in branch protection only once it proves stable.
   compare:
     if: github.event_name == 'pull_request'
     runs-on: blacksmith-8vcpu-ubuntu-2404

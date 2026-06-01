@@ -6,17 +6,20 @@
 #   bin/bench-compare BASELINE.txt CURRENT.txt > comment.md
 #
 # Parses the benchmark/ips report lines ("<label>  5.70k (± 6.9%) i/s ...")
-# from each file, prints a Markdown table of the per-benchmark change, and
-# exits non-zero if any benchmark regressed by more than the threshold.
+# from each file and prints a Markdown table of the per-benchmark change.
 #
-# benchmark/ips numbers on shared CI runners carry ~5-10% run-to-run variance,
-# so the regression threshold is tunable via BENCH_REGRESSION_PCT (default 5,
-# matching CLAUDE.md). Speedups are always reported, never gated.
+# A slowdown is only *flagged as a regression* when it clears the combined
+# noise of both runs — benchmark/ips reports a relative error (the "± X%") per
+# result, and CI runners are noisy — plus a signal margin. Concretely it fails
+# when:  drop% > base_err% + head_err% + BENCH_REGRESSION_PCT  (default 5,
+# matching CLAUDE.md). This stops noise (two ~±7% samples can differ ~14% with
+# no code change) from blocking merges, while still catching real regressions.
+# Speedups are always reported, never gated.
 
-THRESHOLD = Float(ENV.fetch('BENCH_REGRESSION_PCT', '5'))
+MARGIN = Float(ENV.fetch('BENCH_REGRESSION_PCT', '5'))
 MARKER = '<!-- bench-compare -->'
 SCALE = { '' => 1, 'k' => 1_000, 'M' => 1_000_000, 'G' => 1_000_000_000 }.freeze
-IPS_LINE = %r{^\s*(\S.*?)\s+([\d.,]+)\s*([kMG]?)\s*\(±[^)]*\)\s*i/s}i
+IPS_LINE = %r{^\s*(\S.*?)\s+([\d.,]+)\s*([kMG]?)\s*\(±\s*([\d.,]+)%\)\s*i/s}i
 
 def parse(path)
   results = {}
@@ -24,7 +27,8 @@ def parse(path)
     m = IPS_LINE.match(line)
     next unless m
 
-    results[m[1].strip] = m[2].delete(',').to_f * SCALE[m[3]]
+    value = m[2].delete(',').to_f * SCALE[m[3]]
+    results[m[1].strip] = [value, m[4].delete(',').to_f] # [ips, ± error %]
   end
   results
 end
@@ -43,12 +47,14 @@ shared = (baseline.keys & current.keys).sort
 regressed = []
 
 rows = shared.map do |label|
-  was = baseline[label]
-  now = current[label]
-  pct = (now - was) / was * 100.0 # positive = faster
-  regressed << [label, pct] if pct < -THRESHOLD
-  status = if pct < -THRESHOLD then '🔴 regressed'
-           elsif pct.negative? then '🟡 slower'
+  was, was_err = baseline[label]
+  now, now_err = current[label]
+  pct = (now - was) / was * 100.0       # positive = faster
+  noise = was_err + now_err + MARGIN    # slowdown must clear this to count
+  significant = -pct > noise
+  regressed << [label, pct, noise] if significant
+  status = if significant then '🔴 regressed'
+           elsif pct.negative? then '🟡 slower (within noise)'
            else '🟢'
            end
   format('| `%s` | %s | %s | %+.1f%% | %s |', label, human(was), human(now), pct, status)
@@ -61,8 +67,8 @@ else
   out << "| benchmark | base (i/s) | head (i/s) | Δ | |\n"
   out << "|---|---:|---:|---:|---|\n"
   out << rows.join("\n") << "\n\n"
-  out << "Threshold: regression fails at **>#{THRESHOLD}%** "
-  out << "(tune via `BENCH_REGRESSION_PCT`). ips variance on CI is ~5–10%.\n"
+  out << "Regression is flagged when the slowdown exceeds both runs' combined "
+  out << "± noise plus **#{MARGIN}%** (tune via `BENCH_REGRESSION_PCT`).\n"
 end
 
 only_head = (current.keys - baseline.keys).sort
@@ -72,7 +78,9 @@ out << "\n_Gone from head: #{only_base.join(', ')}_\n" unless only_base.empty?
 
 unless regressed.empty?
   out << "\n> [!CAUTION]\n"
-  regressed.each { |label, pct| out << "> Regression: `#{label}` #{format('%+.1f%%', pct)}\n" }
+  regressed.each do |label, pct, noise|
+    out << format("> Regression: `%s` %+.1f%% (clears ±%.1f%% noise band)\n", label, pct, noise)
+  end
 end
 
 puts out
