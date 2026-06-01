@@ -21,16 +21,17 @@ Gem::Specification.new do |spec|
   spec.metadata["bug_tracker_uri"]   = "#{spec.homepage}/issues"
   spec.metadata["rubygems_mfa_required"] = "true"
 
+  # Ship only what the gem needs at runtime: Ruby, the precompiled dashboard
+  # (js/css/html + asset manifest), the engine's config, README, and LICENSE.
+  # No images, no docs/, no CHANGELOG/CONTRIBUTING/SECURITY — those live on
+  # GitHub (see the *_uri metadata above).
   spec.files = Dir[
     "lib/**/*.rb",
-    "app/**/*",
+    "app/**/*.rb",
     "config/**/*",
     "exe/*",
-    "vendor/assets/**/*",
+    "vendor/assets/dashboard/**/*",
     "README.md",
-    "CHANGELOG.md",
-    "CONTRIBUTING.md",
-    "SECURITY.md",
     "LICENSE"
   ]
 
