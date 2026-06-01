@@ -54,6 +54,7 @@ Plus Wurk extras: a worker topology DSL, a Kubernetes liveness/readiness listene
 
 ## Documentation
 
+- **[Website](https://developerz-ai.github.io/wurk/)** · **[Wiki / full docs](https://github.com/developerz-ai/wurk/wiki)** — the pitch, install, and the complete guide.
 - **[Getting started & architecture](https://github.com/developerz-ai/wurk/blob/main/docs/idea/01-overview.md)** — how the swarm, manager, fetcher, and processor fit together.
 - **[Migrating from Sidekiq](#migrating-from-sidekiq)** — the one-line swap and what to expect.
 - **API reference (parity specs):** [Sidekiq OSS](https://github.com/developerz-ai/wurk/blob/main/docs/target/sidekiq-free.md) · [Pro](https://github.com/developerz-ai/wurk/blob/main/docs/target/sidekiq-pro.md) · [Enterprise](https://github.com/developerz-ai/wurk/blob/main/docs/target/sidekiq-ent.md) — the authoritative surface Wurk matches exactly.
