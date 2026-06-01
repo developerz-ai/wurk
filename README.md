@@ -4,7 +4,7 @@
 
 [![Gem Version](https://img.shields.io/gem/v/wurk.svg)](https://rubygems.org/gems/wurk)
 [![CI](https://github.com/developerz-ai/wurk/actions/workflows/test.yml/badge.svg)](https://github.com/developerz-ai/wurk/actions/workflows/test.yml)
-[![Coverage](https://img.shields.io/badge/coverage-line%20%E2%89%A590%25-brightgreen.svg)](https://github.com/developerz-ai/wurk/actions/workflows/test.yml)
+[![Coverage gate](https://img.shields.io/badge/coverage%20gate-line%20%E2%89%A590%25-brightgreen.svg)](https://github.com/developerz-ai/wurk/actions/workflows/test.yml)
 [![Ruby](https://img.shields.io/badge/ruby-%E2%89%A5%203.2-CC342D.svg)](https://www.ruby-lang.org)
 [![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
 
@@ -126,7 +126,7 @@ Knobs: `health_check(port:, bind: "0.0.0.0", ready_window: 30)`. In swarm mode o
 + gem "wurk"
 ```
 
-`bundle install && restart`. Wurk reads and writes the same Redis schema, so a rolling deploy can run Sidekiq and Wurk against the same Redis during the cutover. Third-party gems (sidekiq-cron, sidekiq-unique-jobs, sidekiq-scheduler, sidekiq-status, sidekiq-failures, sidekiq-throttled, …) pass their own suites against Wurk.
+`bundle install && restart`. Wurk reads and writes the same Redis schema, so a rolling deploy can run Sidekiq and Wurk against the same Redis during the cutover. Third-party gems (sidekiq-cron, sidekiq-unique-jobs, sidekiq-scheduler, sidekiq-status, sidekiq-failures, sidekiq-throttled, …) are exercised by running their own upstream suites against Wurk in the [`ecosystem` CI job](https://github.com/developerz-ai/wurk/blob/main/.github/workflows/ecosystem.yml) (see [`test/ecosystem/`](https://github.com/developerz-ai/wurk/tree/main/test/ecosystem)).
 
 ## Contributing
 

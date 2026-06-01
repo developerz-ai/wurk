@@ -63,7 +63,7 @@ These are non-negotiable — they're what keep Wurk a true drop-in:
 
 1. Branch off `main`.
 2. Keep the change focused; add tests at the right layer.
-3. Run `bin/rake test`, `test:parity`, `test:ecosystem`, and `rubocop` locally.
+3. Run `bin/rake test`, `bin/rake test:parity`, `bin/rake test:ecosystem`, and `bundle exec rubocop` locally.
 4. Open the PR — CI runs the matrix (Ruby 3.2/3.3/3.4 × Rails 7.2/8.0), the
    coverage gate, the parity job, and benchmarks. The bench bot comments
    per-benchmark deltas; a real regression fails the check.
