@@ -6,7 +6,7 @@ Gem::Specification.new do |spec|
   spec.name        = "wurk"
   spec.version     = Wurk::VERSION
   spec.authors     = ["developerz.ai"]
-  spec.email       = ["gore.sebyx@yahoo.com"]
+  spec.email       = ["admin@developerz.ai"]
 
   spec.summary     = "100% drop-in replacement for Sidekiq + Sidekiq Pro + Sidekiq Enterprise. Free. Faster."
   spec.description = "Wire-compatible Ruby background job processor: same Redis schema, same job JSON, same Ruby DSL. Pro + Enterprise feature parity in the same gem, no license check. Fork-based real parallelism. Mountable Rails engine with a precompiled React dashboard."

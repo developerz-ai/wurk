@@ -111,6 +111,9 @@ namespace :frontend do
   task :build do
     sh "npm", "ci", chdir: FRONTEND_DIR
     sh "npm", "run", "build", chdir: FRONTEND_DIR
+    # Vite's --emptyOutDir wipes the tracked .keep; restore it so the dir stays
+    # in git and `rake release`'s guard_clean sees a clean tree.
+    touch File.join(VENDOR_ASSETS_DIR, "dashboard", ".keep")
   end
 
   desc "Vite dev server (set WURK_VITE_DEV=1 in the dummy to use it)"

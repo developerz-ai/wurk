@@ -198,7 +198,7 @@ export default function Metrics() {
                     borderRadius: 6,
                     fontSize: 12,
                   }}
-                  labelFormatter={(_: unknown, payload: unknown[]) => {
+                  labelFormatter={(_: unknown, payload: readonly unknown[]) => {
                     const item = payload?.[0] as { payload?: { fullName?: string } } | undefined;
                     return item?.payload?.fullName ?? '';
                   }}
