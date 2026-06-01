@@ -148,6 +148,21 @@ class TestingModesTest < Wurk::Test::UnitCase
     assert_predicate Wurk::Testing, :disabled?
   end
 
+  def test_nested_block_modes_raise
+    Wurk::Testing.fake! do
+      assert_raises(Wurk::Testing::TestModeAlreadySetError) do
+        Wurk::Testing.inline! { :never }
+      end
+    end
+  end
+
+  def test_queues_index_returns_a_live_reference
+    Wurk::Testing.fake! { FakeJob.perform_async(1) }
+    Wurk::Queues['testq'].clear
+
+    assert_empty FakeJob.jobs
+  end
+
   def test_predicate_helpers
     Wurk::Testing.inline! do
       assert_predicate Wurk::Testing, :enabled?

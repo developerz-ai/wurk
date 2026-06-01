@@ -12,16 +12,19 @@ module Wurk
     @by_queue = ::Hash.new { |h, k| h[k] = [] }
 
     class << self
+      # Live array reference (not a copy), so the Sidekiq idiom
+      # `Sidekiq::Queues["q"].clear` mutates the underlying store like stock.
       def [](queue)
-        @lock.synchronize { @by_queue[queue.to_s].dup }
+        @lock.synchronize { @by_queue[queue.to_s] }
       end
 
       def push(queue, _klass, job)
         @lock.synchronize { @by_queue[queue.to_s] << job }
       end
 
+      # Live hash of queue => [jobs], matching Sidekiq::Queues.jobs_by_queue.
       def jobs_by_queue
-        @lock.synchronize { @by_queue.transform_values(&:dup) }
+        @lock.synchronize { @by_queue }
       end
 
       def jobs_by_class

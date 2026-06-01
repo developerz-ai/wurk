@@ -163,6 +163,9 @@ module Wurk
 
       # Execute a normalized job hash through the inline server-middleware chain
       # (empty by default — see Wurk::Testing.server_middleware).
+      # Returns the value of the server-middleware `invoke` (i.e. the worker's
+      # `perform` return), matching Sidekiq::Testing — so `perform_one` yields
+      # the job result.
       def process_job(job_hash)
         instance = new
         instance.jid = job_hash['jid']
@@ -170,7 +173,6 @@ module Wurk
         ::Wurk::Testing.server_middleware.invoke(instance, job_hash, job_hash['queue'] || queue) do
           execute_job(instance, job_hash['args'])
         end
-        instance
       end
 
       def execute_job(worker, args)

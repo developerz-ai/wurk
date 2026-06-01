@@ -39,15 +39,20 @@ module Wurk
       end
 
       # Block → thread-local for the block's duration; no block → global.
+      # Nesting block forms (`fake! { inline! { ... } }`) is rejected, matching
+      # Sidekiq 8.
       def __set_test_mode(new_mode, &block)
         return @mode = new_mode unless block
 
-        prev = ::Thread.current[THREAD_KEY]
+        if ::Thread.current[THREAD_KEY]
+          raise TestModeAlreadySetError, 'Nested Sidekiq::Testing block modes are not allowed'
+        end
+
         ::Thread.current[THREAD_KEY] = new_mode
         begin
           block.call
         ensure
-          ::Thread.current[THREAD_KEY] = prev
+          ::Thread.current[THREAD_KEY] = nil
         end
       end
 
