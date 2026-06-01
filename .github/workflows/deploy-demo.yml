@@ -23,9 +23,9 @@ concurrency:
   group: deploy-demo
   cancel-in-progress: false # never interrupt an in-flight deploy
 
+# Least privilege at the workflow level; the build job opts into packages:write.
 permissions:
   contents: read
-  packages: write # push the demo image to GHCR
 
 env:
   IMAGE: ghcr.io/developerz-ai/wurk-demo
@@ -53,6 +53,9 @@ jobs:
   build:
     needs: authorize
     runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write # push the demo image to GHCR
     steps:
       - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
         with:
@@ -91,15 +94,22 @@ jobs:
         env:
           ARGOCD_SERVER: ${{ secrets.ARGOCD_SERVER }}
           ARGOCD_AUTH_TOKEN: ${{ secrets.ARGOCD_AUTH_TOKEN }}
+          # Pin to the ArgoCD server's version; the CLI is fetched from the
+          # official release (not the server) and checksum-verified.
+          ARGOCD_VERSION: v2.13.1
           IMAGE_TAG: ${{ github.sha }}
         run: |
+          set -euo pipefail
           if [ -z "${ARGOCD_SERVER:-}" ] || [ -z "${ARGOCD_AUTH_TOKEN:-}" ]; then
             echo "::error::ARGOCD_SERVER / ARGOCD_AUTH_TOKEN not set — see docs/demo-deploy.md (Infra requirements)."
             exit 1
           fi
-          curl -sSL -o /usr/local/bin/argocd \
-            "https://${ARGOCD_SERVER}/download/argocd-linux-amd64"
-          chmod +x /usr/local/bin/argocd
+          base="https://github.com/argoproj/argo-cd/releases/download/${ARGOCD_VERSION}"
+          curl -fsSL -o argocd "${base}/argocd-linux-amd64"
+          curl -fsSL -o cli_checksums.txt "${base}/cli_checksums.txt"
+          want=$(grep ' argocd-linux-amd64$' cli_checksums.txt | awk '{print $1}')
+          echo "${want}  argocd" | sha256sum -c -
+          chmod +x argocd && sudo mv argocd /usr/local/bin/argocd
           argocd app set wurk-demo --grpc-web -p image.tag="$IMAGE_TAG"
           argocd app sync wurk-demo --grpc-web --timeout 300
           argocd app wait wurk-demo --grpc-web --health --timeout 300

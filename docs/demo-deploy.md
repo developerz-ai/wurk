@@ -19,7 +19,7 @@ Both connect to Redis via `REDIS_URL`. A reset/seed (the generator self-heals on
 a Redis flush) keeps the demo from ever looking dead — a flush of the demo Redis
 is enough; the generator re-seeds within one tick.
 
-```
+```text
             ┌── web (puma)  ──► read-only dashboard + generator ──┐
 internet ──►│                                                     ├──► Redis
             └── worker (swarm) ──► drains jobs ───────────────────┘
@@ -60,6 +60,7 @@ What's needed to make `https://wurk.demo.developerz.ai` go live. Items marked
 - [x] **(app)** Gated deploy workflow (`deploy-demo.yml`).
 - [x] **(app)** Read-only dashboard (`WURK_WEB_READ_ONLY=1`) + live data generator.
 - [ ] **Redis** — a small managed/in-cluster Redis (7.x) reachable from both pods, exposed as `REDIS_URL`. Demo data only; safe to flush.
+- [ ] **`SECRET_KEY_BASE`** — a strong random value injected at runtime (k8s secret) so the Rails app boots in production. Not baked into the image.
 - [ ] **GHCR pull access** — an `imagePullSecret` (or public package) so the cluster can pull `ghcr.io/developerz-ai/wurk-demo`.
 - [ ] **ArgoCD Application `wurk-demo`** in `../infrastructure` — Deployments for `web` (cmd `web`) and `worker` (cmd `worker`), a Service, and the Redis dependency. Parameterize `image.tag` so the deploy step can set it.
 - [ ] **ArgoCD API access for CI** — `ARGOCD_SERVER` (host) + `ARGOCD_AUTH_TOKEN` (a deploy-scoped account/token that can `sync` only `wurk-demo`), added as GitHub secrets.

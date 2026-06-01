@@ -18,25 +18,30 @@ RUN cd frontend && npm run build   # → /src/vendor/assets/dashboard
 
 # ---- Stage 2: Ruby runtime ----
 FROM ruby:3.4-slim-bookworm
+# RAILS_ENV=production; the runtime must supply a real SECRET_KEY_BASE (k8s
+# secret — see docs/demo-deploy.md). Read-only + demo mode are baked in.
 ENV RAILS_ENV=production \
     WURK_DEMO=1 \
-    WURK_WEB_READ_ONLY=1 \
-    SECRET_KEY_BASE_DUMMY=1
+    WURK_WEB_READ_ONLY=1
 RUN apt-get update -qq && apt-get install -y --no-install-recommends \
       build-essential libsqlite3-dev libyaml-dev curl git && \
-    rm -rf /var/lib/apt/lists/*
+    rm -rf /var/lib/apt/lists/* && \
+    useradd --create-home --shell /bin/bash wurk
 
 WORKDIR /wurk
 COPY . /wurk
 # Bring in the SPA bundle built in stage 1.
 COPY --from=spa /src/vendor/assets/dashboard /wurk/vendor/assets/dashboard
 
-# Install the demo app's bundle (include the puma group) and prepare its DB.
+# Install the demo app's bundle (include the puma group), prepare its DB, then
+# hand the tree to the non-root runtime user.
 WORKDIR /wurk/test/dummy
 RUN bundle config set --local without "" && \
     bundle install --jobs 4 --retry 3 && \
-    SECRET_KEY_BASE=build bin/rails db:prepare
+    SECRET_KEY_BASE=build bin/rails db:prepare && \
+    chown -R wurk:wurk /wurk
 
+USER wurk
 EXPOSE 3000 7433
 ENTRYPOINT ["/wurk/bin/demo-entrypoint"]
 CMD ["web"]
