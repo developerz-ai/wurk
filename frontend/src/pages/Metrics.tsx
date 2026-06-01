@@ -14,12 +14,14 @@ import {
 import { t } from '../i18n';
 import { truncate } from '../utils';
 
+// Matches Wurk::Api::Serializers.metric_row — processed (successes), failed,
+// and total runtime ms across both. Avg latency is derived client-side; there
+// is no per-job percentile histogram, so no p99 here.
 interface TopJob {
-  class: string;
-  total: number;
+  klass: string;
+  processed: number;
   failed: number;
-  avg_ms: number;
-  p99_ms: number;
+  runtime_ms: number;
 }
 
 interface MetricsResponse {
@@ -133,9 +135,9 @@ export default function Metrics() {
   });
 
   const chartData = (data?.top_jobs ?? []).slice(0, 10).map((j) => ({
-    name: j.class.split('::').pop() ?? j.class,
-    fullName: j.class,
-    total: j.total,
+    name: j.klass.split('::').pop() ?? j.klass,
+    fullName: j.klass,
+    total: j.processed + j.failed,
     failed: j.failed,
   }));
 
@@ -216,31 +218,26 @@ export default function Metrics() {
                   <th>Failed</th>
                   <th>Error Rate</th>
                   <th>Avg {t('common.ms')}</th>
-                  <th>P99 {t('common.ms')}</th>
                 </tr>
               </thead>
               <tbody>
                 {data.top_jobs.map((job) => {
-                  const errorRate = job.total > 0 ? (job.failed / job.total) * 100 : 0;
+                  const total = job.processed + job.failed;
+                  const errorRate = total > 0 ? (job.failed / total) * 100 : 0;
+                  const avgMs = total > 0 ? job.runtime_ms / total : 0;
                   return (
-                    <tr key={job.class}>
-                      <td title={job.class} style={{ fontWeight: 500 }}>
-                        {truncate(job.class, 50)}
+                    <tr key={job.klass}>
+                      <td title={job.klass} style={{ fontWeight: 500 }}>
+                        {truncate(job.klass, 50)}
                       </td>
-                      <td style={{ fontVariantNumeric: 'tabular-nums' }}>{job.total.toLocaleString()}</td>
+                      <td style={{ fontVariantNumeric: 'tabular-nums' }}>{total.toLocaleString()}</td>
                       <td style={{ color: job.failed > 0 ? 'var(--danger)' : undefined, fontVariantNumeric: 'tabular-nums' }}>
                         {job.failed.toLocaleString()}
                       </td>
                       <td style={{ color: errorRate > 5 ? 'var(--danger)' : errorRate > 1 ? 'var(--warning)' : 'var(--success)' }}>
                         {errorRate.toFixed(1)}%
                       </td>
-                      <td style={{ fontVariantNumeric: 'tabular-nums' }}>{job.avg_ms.toFixed(1)}</td>
-                      <td style={{
-                        fontVariantNumeric: 'tabular-nums',
-                        color: job.p99_ms > 5000 ? 'var(--danger)' : job.p99_ms > 1000 ? 'var(--warning)' : undefined,
-                      }}>
-                        {job.p99_ms.toFixed(1)}
-                      </td>
+                      <td style={{ fontVariantNumeric: 'tabular-nums' }}>{avgMs.toFixed(1)}</td>
                     </tr>
                   );
                 })}
