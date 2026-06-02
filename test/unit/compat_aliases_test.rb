@@ -36,6 +36,13 @@ class CompatAliasesTest < Wurk::Test::UnitCase
     assert_kind_of Module, Sidekiq::Pro
   end
 
+  # A Pro app's `mount Sidekiq::Pro::Web` must drop in unchanged — it's the
+  # same dashboard as Sidekiq::Web here.
+  def test_pro_web_aliases_the_dashboard
+    assert_same Wurk::Web, Sidekiq::Pro::Web
+    assert_same Sidekiq::Web, Sidekiq::Pro::Web
+  end
+
   def test_enterprise_sentinel_defined
     assert(defined?(Sidekiq::Enterprise))
     assert_kind_of Module, Sidekiq::Enterprise

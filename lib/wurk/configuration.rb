@@ -204,6 +204,22 @@ module Wurk
       @options[:average_scheduled_poll_interval] = interval
     end
 
+    # --- Reliability (Sidekiq Pro drop-in no-ops) ------------------------
+
+    # Sidekiq Pro's opt-in toggles for reliable fetch and the reliable
+    # scheduler. Both are already the default in Wurk — the fetcher is always
+    # the reliable BLMOVE fetcher with orphan reclamation, and the scheduler is
+    # always atomic Lua — so these accept the call and do nothing. They exist
+    # only so a Pro initializer drops in unchanged instead of raising
+    # NoMethodError. Spec: docs/target/sidekiq-pro.md §3 (super_fetch).
+    def super_fetch!(*)
+      nil
+    end
+
+    def reliable_scheduler!(*)
+      nil
+    end
+
     # --- Periodic (Cron) registration ------------------------------------
 
     # Yields a Wurk::Cron::Manager so the host app can register periodic
