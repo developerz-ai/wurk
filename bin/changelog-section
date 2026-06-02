@@ -1,0 +1,25 @@
+#!/usr/bin/env ruby
+# frozen_string_literal: true
+
+# Print the CHANGELOG.md section body for a given version, used by the release
+# workflow to populate the GitHub Release notes. Pass the RubyGems version
+# (dot-form, e.g. "1.0.0" or "1.0.0.rc1") — it matches the `## [<version>]`
+# header. Exits non-zero with a clear message if the section is absent or empty.
+#
+#   bin/changelog-section 1.0.0
+
+version = ARGV[0].to_s
+abort 'usage: bin/changelog-section <version>' if version.empty?
+
+root = File.expand_path('..', __dir__)
+changelog = File.read(File.join(root, 'CHANGELOG.md'))
+
+# Everything between this version's "## [x.y.z]" header and the next "## ["
+# header (or end of file).
+section = changelog[/^## \[#{Regexp.escape(version)}\][^\n]*\n(.*?)(?=^## \[|\z)/m, 1]
+abort "changelog-section ✗ no `## [#{version}]` section in CHANGELOG.md" if section.nil?
+
+body = section.strip
+abort "changelog-section ✗ `## [#{version}]` section is empty" if body.empty?
+
+puts body

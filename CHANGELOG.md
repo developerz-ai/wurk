@@ -7,6 +7,9 @@ All notable changes to Wurk are recorded here. Format: [Keep a Changelog](https:
 ### Added
 - `Sidekiq::Testing` drop-in: `inline!` / `fake!` / `disable!` (global or block-scoped), the in-memory `Sidekiq::Queues` store, and the `Worker`/`Job` test helpers (`.jobs`, `.clear`, `.drain`, `.perform_one`, `.process_job`, `.drain_all`, `.clear_all`) + `Sidekiq::EmptyQueueError`.
 
+### Changed
+- Release workflow now publishes to RubyGems via **trusted publishing (OIDC)** — no long-lived `GEM_HOST_API_KEY` secret. On a `v*` tag it precompiles the dashboard, gates (`release:check` now also verifies the git tag matches `Wurk::VERSION` and the asset manifest is non-empty), builds the gem and asserts the dashboard bundle is *inside* the `.gem` (`release:package`), `gem push`es via the OIDC token, and cuts a GitHub Release with the matching CHANGELOG section as notes and the `.gem` attached.
+
 ## [0.0.5] - 2026-06-01
 
 ### Added

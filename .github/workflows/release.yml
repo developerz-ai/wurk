@@ -4,12 +4,19 @@ on:
   push:
     tags: ["v*"]
 
+# Least privilege: contents:write to cut the GitHub Release; id-token:write for
+# RubyGems trusted publishing (OIDC). No long-lived GEM_HOST_API_KEY anywhere.
+permissions:
+  contents: write
+  id-token: write
+
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: false
+
 jobs:
   release:
     runs-on: blacksmith-4vcpu-ubuntu-2404
-    permissions:
-      contents: write
-      id-token: write
     services:
       redis:
         image: redis:7.4
@@ -22,24 +29,64 @@ jobs:
     env:
       REDIS_URL: redis://localhost:6379/0
     steps:
-      - uses: actions/checkout@v6
-      - uses: ruby/setup-ruby@v1
+      # Third-party actions pinned to a commit SHA — this job holds id-token and
+      # publishes the gem, so a moved tag must not be able to hijack it.
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6
+        with:
+          persist-credentials: false
+      - uses: ruby/setup-ruby@afeafc3d1ab54a631816aba4c914a0081c12ff2f # v1
         with:
           ruby-version: "3.4"
           bundler-cache: true
-      - uses: actions/setup-node@v6
+      - uses: actions/setup-node@48b55a011bda9f5d6aeb4c2d9c7362e8dae4041e # v6
         with:
           node-version: "24"
           cache: "npm"
           cache-dependency-path: frontend/package-lock.json
-      - name: build frontend
+
+      # Precompile the React SPA into vendor/assets/ (npm ci + vite build).
+      - name: build dashboard SPA
         run: bundle exec rake frontend:build
+
       - name: dummy app setup
         run: |
           cd test/dummy
           bundle install
           bin/rails db:prepare
+
+      # Gate: tag ↔ Wurk::VERSION, dashboard bundle + manifest present, CHANGELOG
+      # section exists, clean tree, tests green.
       - name: release gate
         run: bundle exec rake release:check
-      - name: build & push gem
-        uses: rubygems/release-gem@v1
+
+      # Build the gem into pkg/ and assert the precompiled dashboard is *inside*
+      # the .gem — consumers never run Node, so a bundle-less gem is broken.
+      - name: build & verify gem
+        run: bundle exec rake release:package
+
+      # Exchange the GitHub OIDC token for a short-lived RubyGems credential.
+      - name: configure RubyGems trusted publishing
+        uses: rubygems/configure-rubygems-credentials@762a4b77c3300434bb57c7ce80b20e36231927aa # v2.0.0
+
+      - name: gem push
+        run: |
+          version="$(ruby -Ilib -e 'require "wurk/version"; print Wurk::VERSION')"
+          gem push "pkg/wurk-${version}.gem"
+
+      - name: await RubyGems propagation
+        run: |
+          version="$(ruby -Ilib -e 'require "wurk/version"; print Wurk::VERSION')"
+          gem exec rubygems-await "pkg/wurk-${version}.gem"
+
+      # GitHub Release: notes from the CHANGELOG section, the .gem attached.
+      - name: create GitHub Release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          version="$(ruby -Ilib -e 'require "wurk/version"; print Wurk::VERSION')"
+          bin/changelog-section "$version" > "${RUNNER_TEMP}/notes.md"
+          flags=(--title "wurk ${GITHUB_REF_NAME}" --notes-file "${RUNNER_TEMP}/notes.md")
+          if [ "$(ruby -e 'require "rubygems"; print Gem::Version.new(ARGV[0]).prerelease?' "$version")" = "true" ]; then
+            flags+=(--prerelease)
+          fi
+          gh release create "${GITHUB_REF_NAME}" "${flags[@]}" "pkg/wurk-${version}.gem"

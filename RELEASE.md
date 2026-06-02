@@ -7,52 +7,89 @@ The dashboard bundle under `vendor/assets/dashboard/` is **built, not committed*
 (it's git-ignored). It must be freshly baked before the gem is packaged so the
 precompiled SPA ships inside the gem — consumers never run Node.
 
+Releases publish from CI via **RubyGems Trusted Publishing (OIDC)** — there is no
+long-lived `GEM_HOST_API_KEY` secret anywhere. The release workflow exchanges
+GitHub's short-lived OIDC token for a scoped RubyGems credential at push time.
+
 ## Cutting a release
 
-1. **Bump the version** in `lib/wurk/version.rb` (e.g. `1.0.0` → `1.1.0`).
+1. **Bump the version** in `lib/wurk/version.rb` (e.g. `1.0.0` → `1.1.0`). For a
+   prerelease use RubyGems' dot form: `1.0.0.rc1` (not `1.0.0-rc1`).
 
 2. **Update `CHANGELOG.md`.** Add a dated section whose header matches the new
    version exactly — `## [1.1.0] - YYYY-MM-DD` — with changes grouped under the
    standard headings: Runtime, Batches, Limiters, Periodic, Encryption,
-   Dashboard, Compat. Update the compare/link footnotes at the bottom.
+   Dashboard, Compat. The release workflow lifts this section verbatim into the
+   GitHub Release notes (`bin/changelog-section`), so write it for readers.
 
-3. **Build the dashboard bundle:**
+3. **Build the dashboard bundle and run the gate locally:**
    ```bash
    bundle exec rake frontend:build
-   ```
-
-4. **Run the gate:**
-   ```bash
    bundle exec rake release:check
+   bundle exec rake release:package   # builds the .gem, asserts the SPA is inside it
    ```
-   It must pass before you tag (see below for what it validates).
 
-5. **Commit** the version + CHANGELOG bump on a branch, open a PR, and merge to
+4. **Commit** the version + CHANGELOG bump on a branch, open a PR, and merge to
    `main` once green.
 
-6. **Tag and push** the merge commit:
+5. **Tag and push** the merge commit:
    ```bash
-   git tag v1.1.0
+   git tag v1.1.0            # prerelease: git uses a hyphen — git tag v1.0.0-rc1
    git push origin v1.1.0
    ```
    The `release` workflow (`.github/workflows/release.yml`) triggers on `v*`
-   tags: it rebuilds the dashboard, runs `rake release:check`, then builds and
-   publishes the gem to RubyGems via trusted publishing. RubyGems MFA is
-   required (`rubygems_mfa_required` is set in the gemspec).
+   tags and does the rest, end-to-end, with no human-held secret.
+
+## What the release workflow does (on a `v*` tag)
+
+1. Checks out, sets up Ruby + Node.
+2. Precompiles the Vite SPA into `vendor/assets/` (`rake frontend:build`).
+3. **Gate** (`rake release:check`): tag ↔ `Wurk::VERSION`, dashboard bundle +
+   manifest present, `CHANGELOG.md` has the matching section, clean tree, tests
+   green.
+4. **Builds & verifies the gem** (`rake release:package`): packages into `pkg/`
+   and asserts the precompiled dashboard is *inside* the `.gem`.
+5. **Publishes** via trusted publishing: `rubygems/configure-rubygems-credentials`
+   exchanges the OIDC token, then `gem push`.
+6. **Cuts a GitHub Release** with the CHANGELOG section as notes and the `.gem`
+   attached (marked pre-release automatically for `Gem::Version#prerelease?`).
 
 ## What `rake release:check` validates
 
 | Check | Detail |
 |---|---|
-| **Dashboard bundle present** | `vendor/assets/dashboard/index.html` plus a non-empty `assets/*.js` exist. Run `rake frontend:build` if missing. |
+| **Tag ↔ version** | On a CI tag push, `GITHUB_REF_NAME` (e.g. `v1.1.0`, or `v1.0.0-rc1`) must match `Wurk::VERSION`. Git's hyphenated prerelease maps to RubyGems' dotted form. No-op for local runs. |
+| **Dashboard bundle present** | `vendor/assets/dashboard/` has `index.html`, a non-empty `wurk-manifest.json`, and a non-empty `assets/*.js`. Run `rake frontend:build` if missing. |
 | **Version ↔ CHANGELOG** | `CHANGELOG.md` contains a `## [<Wurk::VERSION>]` section header. |
 | **Clean tree** | `git status --porcelain` is empty, ignoring `vendor/assets/` (built output). |
 | **Tests green** | `rake test` (unit + integration + engine) passes. |
 
-The same task runs in CI on the tagged commit, so a release cannot publish unless
-the gate passes there too.
+(The raising assertions live in `tasks/release_helpers.rb` — testable, and not
+packaged into the gem. Covered by `test/unit/release_helpers_test.rb`.)
 
-## Local one-shot publish (maintainers)
+## Trusted publishing setup (one-time, already configured)
 
-`rake release:full` chains `frontend:build → build → push`. Prefer the
-tag-driven CI flow above; use this only for an out-of-band manual push.
+The RubyGems trusted publisher for the `wurk` gem is **already registered** to
+this repository's `release` workflow, and the gem exists on
+[rubygems.org/gems/wurk](https://rubygems.org/gems/wurk). No API key, no MFA
+prompt — publishing is gated entirely on the OIDC identity of the workflow.
+
+If it ever needs to be re-created (new gem, new repo, or rotated publisher), on
+rubygems.org → the gem's **Trusted Publishers** → add a GitHub Actions publisher
+pointing at:
+
+| Field | Value |
+|---|---|
+| Repository | `developerz-ai/wurk` |
+| Workflow filename | `release.yml` |
+| Environment | _(leave blank)_ |
+
+The workflow already requests `permissions: id-token: write`, which is what the
+OIDC exchange needs.
+
+## Local one-shot publish (maintainers, fallback only)
+
+`rake release:full` chains `frontend:build → build → push` and pushes with a
+local API key (`bin/gem-login` first; MFA enforced via `rubygems_mfa_required`).
+Prefer the tag-driven CI flow above; use this only for an out-of-band manual push
+when CI is unavailable.
