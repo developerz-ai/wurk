@@ -3,33 +3,18 @@
 require "bundler/gem_tasks"
 require "rake/testtask"
 require_relative "lib/wurk/version"
+require_relative "tasks/release_helpers"
 
 GEM_ROOT = File.expand_path(__dir__)
 FRONTEND_DIR = File.join(GEM_ROOT, "frontend")
 VENDOR_ASSETS_DIR = File.join(GEM_ROOT, "vendor", "assets")
+DASHBOARD_BUNDLE_DIR = File.join(VENDOR_ASSETS_DIR, "dashboard")
 
 # --- release:check helpers ---------------------------------------------
-# Each aborts (non-zero exit) with an actionable message so the gate fails
-# loudly in CI and locally. The dashboard bundle is built, not committed, so
-# the clean-tree check ignores vendor/assets/.
-def release_dashboard_bundle_present!
-  dir = File.join(VENDOR_ASSETS_DIR, "dashboard")
-  index = File.join(dir, "index.html")
-  scripts = Dir.glob(File.join(dir, "assets", "*.js"))
-  return if File.file?(index) && scripts.any? { |f| File.size(f).positive? }
-
-  abort "release:check ✗ dashboard bundle missing in vendor/assets/dashboard " \
-        "(run `bundle exec rake frontend:build` first)"
-end
-
-def release_changelog_has_version!(version)
-  changelog = File.read(File.join(GEM_ROOT, "CHANGELOG.md"))
-  return if changelog.match?(/^## \[#{Regexp.escape(version)}\]/)
-
-  abort "release:check ✗ CHANGELOG.md has no `## [#{version}]` section " \
-        "matching Wurk::VERSION"
-end
-
+# The raising assertions live in tasks/release_helpers.rb (testable, not
+# shipped in the gem). Only the clean-tree check stays here — it shells out to
+# git and is meaningful only from a working tree. The dashboard bundle is built,
+# not committed, so the clean-tree check ignores vendor/assets/.
 def release_tree_clean!
   dirty = `git status --porcelain`.lines.reject { |line| line.include?("vendor/assets/") }
   return if dirty.empty?
@@ -123,16 +108,28 @@ namespace :frontend do
 end
 
 namespace :release do
-  desc "Pre-release gate: dashboard bundle present, version matches CHANGELOG, clean tree, tests green"
+  desc "Pre-release gate: tag matches version, bundle present, version matches CHANGELOG, clean tree, tests green"
   task :check do
     version = Wurk::VERSION
     puts "release:check — Wurk #{version}"
-    release_dashboard_bundle_present!
-    release_changelog_has_version!(version)
+    ReleaseHelpers.tag_matches_version!(version)
+    ReleaseHelpers.dashboard_bundle_present!(DASHBOARD_BUNDLE_DIR)
+    ReleaseHelpers.changelog_has_version!(File.read(File.join(GEM_ROOT, "CHANGELOG.md")), version)
     release_tree_clean!
     puts "release:check — static checks passed; running tests…"
     Rake::Task["test"].invoke
     puts "release:check ✓ ready to release v#{version}"
+  end
+
+  desc "Build the gem into pkg/ and assert the precompiled dashboard ships inside it"
+  task :package do
+    version = Wurk::VERSION
+    ReleaseHelpers.dashboard_bundle_present!(DASHBOARD_BUNDLE_DIR)
+    mkdir_p File.join(GEM_ROOT, "pkg")
+    gem_path = File.join(GEM_ROOT, "pkg", "wurk-#{version}.gem")
+    sh "gem", "build", "wurk.gemspec", "--output", gem_path
+    ReleaseHelpers.gem_contains_dashboard!(gem_path)
+    puts "release:package ✓ #{File.basename(gem_path)} ships the dashboard bundle"
   end
 
   desc "Build frontend, bake into vendor/assets, build the gem, push to RubyGems"
