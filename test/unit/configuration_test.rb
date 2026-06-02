@@ -252,6 +252,19 @@ class ConfigurationTest < Wurk::Test::UnitCase
     assert_equal 1, other.error_handlers.size
   end
 
+  # --- Sidekiq Pro drop-in no-ops ---------------------------------------
+  # Reliable fetch + atomic scheduler are already the default, so these toggles
+  # do nothing — but a Pro initializer must drop in without NoMethodError.
+
+  def test_super_fetch_bang_is_a_noop
+    assert_nil @config.super_fetch!
+    assert_nil @config.super_fetch!(timeout: 3)
+  end
+
+  def test_reliable_scheduler_bang_is_a_noop
+    assert_nil @config.reliable_scheduler!
+  end
+
   def test_error_handlers_appends
     handler = ->(_ex, _ctx, _cfg) {}
     @config.error_handlers << handler
