@@ -18,7 +18,13 @@ module Sidekiq
   # Sidekiq::Enterprise::Crypto, …). Defined so downstream code can nest
   # classes under them — but `Sidekiq.pro?` / `Sidekiq.ent?` still return
   # `false` per docs/target/sidekiq-free.md §32 (Wurk advertises as free OSS).
-  module Pro; end
+  module Pro
+    # Sidekiq Pro mounts the dashboard at `Sidekiq::Pro::Web`; it's the same
+    # board as `Sidekiq::Web` here, so a Pro app's `mount Sidekiq::Pro::Web`
+    # drops in unchanged. `Wurk::Web` is already required by the time this file
+    # loads (lib/wurk.rb requires wurk/web before wurk/compat).
+    Web = Wurk::Web
+  end
 
   # Sidekiq Enterprise feature surface (`unique!`, `Crypto`, `Unique.locked?`).
   # Wurk ships these free; the namespace exists for drop-in compat.
