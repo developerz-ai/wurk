@@ -200,7 +200,133 @@ class FetcherReaperTest < Wurk::Test::UnitCase
     refute_predicate @reaper, :running?
   end
 
+  # stop while the loop is parked in wait_next: the CV signal wakes the thread,
+  # which then sees @done and breaks (run_loop's `break if done?` THEN side).
+  def test_stop_breaks_the_loop_once_it_is_parked_waiting
+    reaper = Wurk::Fetcher::Reaper.new(@config, interval: 60, lock_key: "#{Wurk::Fetcher::Reaper::LOCK_KEY}:#{@ns}-park")
+    thread = reaper.start
+    wait_until { thread.status == 'sleep' } # parked on the ConditionVariable
+
+    assert_equal 'sleep', thread.status, 'loop must be blocked in wait_next before we signal stop'
+
+    reaper.stop
+
+    refute_predicate reaper, :running?, 'a signalled, done loop must break and the thread join'
+  end
+
+  # A short interval lets wait_next time out while @done is still false, so the
+  # loop falls through to tick_once (run_loop's `break if done?` ELSE side, plus
+  # wait_next's `unless @done` THEN side: it actually waited).
+  def test_loop_ticks_when_the_wait_times_out_before_stop
+    reaper = Wurk::Fetcher::Reaper.new(@config, interval: 0.05, lock_key: "#{Wurk::Fetcher::Reaper::LOCK_KEY}:#{@ns}-tick")
+    ticks = Queue.new
+    reaper.define_singleton_method(:reap) { ticks << :tick }
+
+    reaper.start
+    first = ticks.pop # blocks until the loop has tick_once'd at least once
+
+    assert_equal :tick, first, 'a timed-out wait must lead to a tick_once'
+  ensure
+    reaper.stop
+  end
+
+  # --- tick_once exception forwarding ------------------------------------
+
+  # tick_once swallows a sweep error and forwards it via handle_exception when
+  # the config supports it (the real Configuration does). THEN side of the
+  # `@config.respond_to?(:handle_exception)` guard.
+  def test_tick_once_forwards_a_sweep_error_when_config_can_handle_it
+    @reaper.define_singleton_method(:reap) { raise 'sweep blew up' }
+
+    # Must not propagate; the error is reported through the (NULL-logger) config.
+    assert_nil(begin
+      @reaper.send(:tick_once)
+      nil
+    rescue StandardError => e
+      e
+    end, 'a sweep error must be swallowed, not raised out of the loop')
+  end
+
+  # ELSE side: a config object with no #handle_exception. The rescue must still
+  # swallow the error rather than blow up the loop thread. reap is stubbed to
+  # raise before it touches Redis, so the bare config is never asked for a pool.
+  def test_tick_once_swallows_a_sweep_error_when_config_cannot_handle_it
+    bare = Object.new
+
+    refute_respond_to bare, :handle_exception
+    reaper = Wurk::Fetcher::Reaper.new(bare)
+    reaper.define_singleton_method(:reap) { raise 'sweep blew up' }
+
+    assert_nil reaper.send(:tick_once)
+  end
+
+  # --- wait_next short-circuit -------------------------------------------
+
+  # When @done is already set, wait_next must return immediately without parking
+  # on the ConditionVariable for the (deliberately huge) interval. ELSE side of
+  # `@sleeper.wait(...) unless @done`.
+  def test_wait_next_returns_immediately_when_already_done
+    reaper = Wurk::Fetcher::Reaper.new(@config, interval: 3600, lock_key: "#{Wurk::Fetcher::Reaper::LOCK_KEY}:#{@ns}-done")
+    reaper.instance_variable_set(:@done, true)
+
+    started = Process.clock_gettime(Process::CLOCK_MONOTONIC)
+    reaper.send(:wait_next)
+    elapsed = Process.clock_gettime(Process::CLOCK_MONOTONIC) - started
+
+    assert_operator elapsed, :<, 1.0, 'a done reaper must not wait out the interval'
+  end
+
+  # --- multi-iteration SCAN ----------------------------------------------
+
+  # More private lists than SCAN_COUNT forces each_private_list to loop on a
+  # non-zero cursor (the `break if cursor == "0"` ELSE side). All lists belong
+  # to this live process, so none are reclaimed but every page is scanned.
+  def test_scan_pages_through_many_private_lists_without_reclaiming_live_ones
+    count = Wurk::Fetcher::Reaper::SCAN_COUNT * 3
+    seed_many_private_lists(count)
+
+    assert_equal 0, @reaper.reclaim!, 'live-owned lists survive a multi-page scan'
+    assert_equal count, scanned_private_list_count, 'every paged private list is still present'
+  ensure
+    delete_many_private_lists
+  end
+
+  # --- key parsing edge: prefix mismatch ---------------------------------
+
+  # parse_owner guards against a key that does not carry the public-queue
+  # prefix (delete_prefix returns the string unchanged → suffix == key). This
+  # cannot arise through reclaim! (SCAN MATCHes `<public_q>|*`), so it is
+  # exercised directly: the THEN side of `return [nil, nil] if suffix == key`.
+  def test_parse_owner_rejects_a_key_without_the_public_queue_prefix
+    host, pid = @reaper.send(:parse_owner, @public_queue, 'an-unrelated-key')
+
+    assert_nil host
+    assert_nil pid
+  end
+
   private
+
+  def wait_until(timeout: 5.0)
+    deadline = Process.clock_gettime(Process::CLOCK_MONOTONIC) + timeout
+    sleep(0.005) until yield || Process.clock_gettime(Process::CLOCK_MONOTONIC) > deadline
+  end
+
+  def seed_many_private_lists(count)
+    @pool.with do |c|
+      count.times { |i| c.call('RPUSH', "#{private_list(Process.pid)}:#{i}", payload("p#{i}")) }
+    end
+  end
+
+  def delete_many_private_lists
+    @pool.with do |c|
+      keys = c.call('KEYS', "#{private_list(Process.pid)}:*")
+      c.call('DEL', *keys) unless keys.empty?
+    end
+  end
+
+  def scanned_private_list_count
+    @pool.with { |c| c.call('KEYS', "#{private_list(Process.pid)}:*").size }
+  end
 
   def seed_private_list(pid, tokens, host: @host)
     key = "#{@public_queue}|#{host}|#{pid}|0"

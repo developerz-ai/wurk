@@ -8,6 +8,10 @@ require_relative '../test_helper'
 class ProcessorTest < Wurk::Test::UnitCase
   parallelize_me!
 
+  # Named (marshalable) non-StandardError so `run`'s `rescue Exception` path
+  # fires without StandardError/Shutdown swallowing it earlier in the stack.
+  class FatalBoom < Exception; end
+
   def setup
     super
     @queue_name = "pt-#{Process.pid}-#{object_id}"
@@ -51,6 +55,133 @@ class ProcessorTest < Wurk::Test::UnitCase
     @processor.kill
 
     assert_predicate @processor, :stopping?
+  end
+
+  # terminate/kill with a live thread present exercise the non-nil branch
+  # (line 42/53 else) and the wait true/false sides (line 44/56).
+
+  def test_terminate_no_wait_with_thread_returns_immediately
+    @processor.start
+    @processor.terminate(false) # @done flips; loop exits between jobs
+
+    assert_predicate @processor, :stopping?
+    # join so the thread doesn't outlive the test (loop blocks up to the
+    # fetcher's ~2s BLMOVE before noticing @done).
+    @processor.thread.join(5)
+  end
+
+  def test_terminate_wait_true_joins_thread
+    @processor.start
+    @processor.terminate(true) # wait => @thread.value
+
+    assert_predicate @processor, :stopping?
+    refute_predicate @processor.thread, :alive?
+  end
+
+  def test_kill_no_wait_with_thread_raises_shutdown
+    # Block inside perform so Wurk::Shutdown is raised within `process` (caught
+    # by its `rescue Wurk::Shutdown`) rather than after `run` returns.
+    klass = define_worker_blocking
+    enqueue(class: klass.name, args: [])
+    @processor.start
+    klass.started_latch.pop
+    @processor.kill(false) # raises Wurk::Shutdown into thread, no join
+
+    assert_predicate @processor, :stopping?
+    @processor.thread.join(2)
+  end
+
+  def test_kill_wait_true_joins_thread
+    klass = define_worker_blocking
+    enqueue(class: klass.name, args: [])
+    @processor.start
+    klass.started_latch.pop
+    @processor.kill(true) # wait => @thread.value after raising Shutdown
+
+    assert_predicate @processor, :stopping?
+    refute_predicate @processor.thread, :alive?
+  end
+
+  # --- run loop callback (line 140 / 142 / 145, then + else of &.) -------
+
+  def test_run_invokes_callback_on_clean_exit
+    called = []
+    processor = Wurk::Processor.new(@capsule) { |p| called << p }
+    processor.start
+    processor.terminate(true)
+
+    assert_equal [processor], called
+  end
+
+  def test_run_without_callback_exits_cleanly
+    processor = Wurk::Processor.new(@capsule) # nil callback => &. short-circuits
+    processor.start
+    processor.terminate(true)
+
+    refute_predicate processor.thread, :alive?
+  end
+
+  # A Shutdown raised *during perform* is caught by `process`'s inner
+  # `rescue Wurk::Shutdown` (it leaves the UoW un-acked) and `run` continues
+  # to its clean exit. To exercise `run`'s own `rescue Wurk::Shutdown`
+  # (line 141-142) the Shutdown must escape `process_one`, so stub it.
+
+  def test_run_invokes_callback_on_shutdown
+    called = []
+    processor = Wurk::Processor.new(@capsule) { |_p| called << :shutdown }
+    processor.define_singleton_method(:process_one) { raise Wurk::Shutdown }
+    processor.start
+    processor.thread.join(2)
+
+    assert_equal [:shutdown], called
+    refute_predicate processor.thread, :alive?
+  end
+
+  def test_run_without_callback_on_shutdown_exits_cleanly
+    processor = Wurk::Processor.new(@capsule) # nil callback in Shutdown rescue
+    processor.define_singleton_method(:process_one) { raise Wurk::Shutdown }
+    processor.start
+    processor.thread.join(2)
+
+    refute_predicate processor.thread, :alive?
+  end
+
+  # In-flight Shutdown: caught by `process` (line 180), UoW stays in the
+  # private list for reclaim on reboot — the documented two-stage kill.
+  def test_kill_during_perform_leaves_uow_unacked
+    klass = define_worker_blocking
+    enqueue(class: klass.name, args: [])
+    @processor.start
+    klass.started_latch.pop
+    @processor.kill(true)
+
+    assert_equal 1, llen(private_queue), 'Shutdown mid-perform must not ack the UoW'
+  end
+
+  # run's `rescue Exception` re-raises after the callback. fetch and process
+  # both swallow StandardError/Shutdown, so to hit line 143-146 we need a
+  # non-StandardError, non-Shutdown error escaping process_one. Stub fetch to
+  # raise such an error directly on the processor instance.
+
+  def test_run_invokes_callback_then_reraises_on_fatal_error
+    called = []
+    processor = Wurk::Processor.new(@capsule) { |_p| called << :fatal }
+    processor.define_singleton_method(:fetch) { raise FatalBoom, 'fatal' }
+    processor.start
+    # run re-raises (line 146); Thread#join propagates it to the caller.
+    assert_raises(FatalBoom) { processor.thread.join(2) }
+
+    assert_equal [:fatal], called
+    refute_predicate processor.thread, :alive?
+  end
+
+  def test_run_without_callback_reraises_on_fatal_error
+    processor = Wurk::Processor.new(@capsule) # nil callback in Exception rescue
+    processor.define_singleton_method(:fetch) { raise FatalBoom, 'fatal' }
+    processor.start
+    assert_raises(FatalBoom) { processor.thread.join(2) }
+
+    refute_predicate processor.thread, :alive?
   end
 
   # --- successful processing -------------------------------------------
@@ -148,6 +279,21 @@ class ProcessorTest < Wurk::Test::UnitCase
     @processor.process_one
 
     assert_equal %i[before perform after], seen
+  end
+
+  def test_process_one_skips_bid_when_instance_lacks_setter
+    # Worker mixes in `bid=`; undef it on this subclass so dispatch takes the
+    # `respond_to?(:bid=)` == false branch (line 213 else).
+    klass = define_worker_recording
+    klass.send(:undef_method, :bid=)
+
+    refute_respond_to klass.new, :bid=
+    enqueue(class: klass.name, args: ['ok'], bid: 'B123')
+
+    @processor.process_one
+
+    assert_equal ['ok'], klass.sink.first
+    assert_equal 0, llen(private_queue), 'job without bid= setter must still ack'
   end
 
   # --- counters / WORK_STATE ------------------------------------------
@@ -313,6 +459,21 @@ class ProcessorTest < Wurk::Test::UnitCase
     klass.define_singleton_method(:token) { token }
     klass.class_eval do
       define_method(:perform) { |*| self.class.external_sink << self.class.token }
+    end
+    klass
+  end
+
+  # Signals when perform starts, then blocks until Wurk::Shutdown is raised
+  # into the thread. `started_latch.pop` lets the test wait for mid-flight.
+  def define_worker_blocking
+    klass = base_worker
+    latch = Queue.new
+    klass.define_singleton_method(:started_latch) { latch }
+    klass.class_eval do
+      define_method(:perform) do |*|
+        self.class.started_latch << :started
+        sleep
+      end
     end
     klass
   end

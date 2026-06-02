@@ -139,6 +139,50 @@ class MetricsStatsdTest < Wurk::Test::UnitCase
     assert_in_delta 12.5, fake.calls.first[2], 0.0001
   end
 
+  # line 59 then: gauge returns nil with no client wired.
+  def test_gauge_no_op_when_no_client_configured
+    Wurk.configuration.dogstatsd = nil
+
+    assert_nil Wurk::Metrics::Statsd.gauge('jobs.perform', 5.0)
+  end
+
+  # line 62 else: gauge with tags:nil must not set the :tags key.
+  def test_gauge_omits_tags_when_nil
+    fake = FakeClient.new
+    Wurk.configuration.dogstatsd = fake
+
+    Wurk::Metrics::Statsd.gauge('jobs.perform', 5.0)
+
+    refute_includes fake.calls.first[3].keys, :tags
+  end
+
+  # line 75 then: distribution returns nil with no client wired.
+  def test_distribution_no_op_when_no_client_configured
+    Wurk.configuration.dogstatsd = nil
+
+    assert_nil Wurk::Metrics::Statsd.distribution('jobs.perform_dist', 5.0)
+  end
+
+  # line 78 else: distribution with tags:nil must not set the :tags key.
+  def test_distribution_omits_tags_when_nil
+    fake = FakeClient.new
+    Wurk.configuration.dogstatsd = fake
+
+    Wurk::Metrics::Statsd.distribution('jobs.perform_dist', 5.0)
+
+    refute_includes fake.calls.first[3].keys, :tags
+  end
+
+  # line 82 else: client lacks both distribution and histogram — emit nothing,
+  # still return nil cleanly.
+  def test_distribution_no_op_when_client_lacks_both_methods
+    bare = Object.new
+    bare.define_singleton_method(:respond_to?) { |_m, *| false }
+    Wurk.configuration.dogstatsd = bare
+
+    assert_nil Wurk::Metrics::Statsd.distribution('jobs.perform_dist', 5.0)
+  end
+
   def test_sample_rate_omitted_when_default
     fake = FakeClient.new
     Wurk.configuration.dogstatsd = fake
@@ -208,6 +252,32 @@ class MetricsStatsdTest < Wurk::Test::UnitCase
     assert_equal ['worker:MyJob', 'queue:critical'], count_call[2][:tags]
   end
 
+  # line 97 else: configuration object that doesn't respond to #dogstatsd
+  # yields a nil client (clean no-op), without raising.
+  def test_client_nil_when_configuration_lacks_dogstatsd
+    bare_config = Object.new
+    prev = Wurk.instance_variable_get(:@configuration)
+    Wurk.instance_variable_set(:@configuration, bare_config)
+    Wurk::Metrics::Statsd.reset!
+
+    assert_nil Wurk::Metrics::Statsd.client
+  ensure
+    Wurk.instance_variable_set(:@configuration, prev)
+    Wurk::Metrics::Statsd.reset!
+  end
+
+  # line 167 else: options proc returning a non-Hash is ignored — defaults stand.
+  def test_options_proc_non_hash_return_ignored
+    fake = FakeClient.new
+    Wurk.configuration.dogstatsd = fake
+    Wurk::Metrics::Statsd.options = ->(_k, _j, _q) { :not_a_hash }
+
+    build_middleware.call(nil, { 'class' => 'MyJob' }, 'critical') { :ok }
+    count = fake.calls.find { |c| c[1] == 'sidekiq.jobs.count' }
+
+    assert_equal ['worker:MyJob', 'queue:critical'], count[2][:tags]
+  end
+
   def test_options_proc_overrides_tags
     fake = FakeClient.new
     Wurk.configuration.dogstatsd = fake
@@ -239,6 +309,15 @@ class MetricsStatsdTest < Wurk::Test::UnitCase
     count = fake.calls.find { |c| c[1] == 'sidekiq.jobs.count' }
 
     assert_in_delta 0.1, count[2][:sample_rate], 0.0001
+  end
+
+  # line 185 else: the implicit no-match arm of `emit`'s case. Unreachable
+  # through the public API — every internal call site passes :increment,
+  # :gauge, or :distribution (finalize + call), so no input drives the
+  # fall-through. Exercising it would require calling the private #emit with a
+  # bogus kind, which doesn't reflect any real path; left uncovered by design.
+  def test_emit_case_fall_through_is_unreachable
+    skip 'emit case else is unreachable: all call sites pass a known kind'
   end
 
   def test_module_inclusion

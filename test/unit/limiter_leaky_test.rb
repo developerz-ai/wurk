@@ -5,7 +5,6 @@ require_relative '../test_helper'
 class LimiterLeakyTest < Wurk::Test::UnitCase
   parallelize_me!
 
-
   def setup
     super
     @suffix = "lk#{Process.pid}#{object_id}"
@@ -114,5 +113,37 @@ class LimiterLeakyTest < Wurk::Test::UnitCase
 
     assert_equal 7, l.options[:bucket_size]
     assert_equal :second, l.options[:drain]
+  end
+
+  # No block → ArgumentError before any Redis work (line 30 then).
+  def test_within_limit_requires_block
+    l = Wurk::Limiter.leaky("nb-#{@suffix}", 5, 60)
+
+    assert_raises(ArgumentError) { l.within_limit }
+  end
+
+  # Saturated bucket → status reports a future reset_at: the steady drip
+  # frees a slot (level >= cap, line 25 then).
+  def test_status_reset_at_when_full
+    # bucket_size 1 + a single acquire lands level at exactly the cap (the
+    # first fill is 0 - 0*drain + 1 = 1.0), so `level >= cap` is exactly true
+    # without floating-point drift from inter-acquire leak.
+    l = Wurk::Limiter.leaky("st-#{@suffix}", 1, 3600, wait_timeout: 0)
+    l.within_limit {}
+    s = l.status
+
+    assert_operator s[:reset_at], :>, ::Time.now.to_f
+    refute s[:available?]
+  end
+
+  # wait_timeout > 0: a full bucket drains while we wait, so the loop takes
+  # the no-raise side (remaining > 0, line 38 else) then succeeds on retry.
+  def test_waits_and_succeeds_when_capacity_frees_up
+    l = Wurk::Limiter.leaky("wt-#{@suffix}", 1, 1, wait_timeout: 5)
+    l.within_limit {} # fills the single slot
+    ran = false
+    l.within_limit { ran = true } # blocks until the drip frees a slot
+
+    assert ran
   end
 end

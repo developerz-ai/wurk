@@ -28,7 +28,7 @@ class MetricsQueryTest < Wurk::Test::UnitCase
       [@now, @now - 60, @now - 120].each do |t|
         [Wurk::Metrics::History.minute_key(t), Wurk::Metrics::History.rollup_key(t)].each do |key|
           [@klass_a, @klass_b].each do |kls|
-            c.call('HDEL', key, "#{kls}|p", "#{kls}|f", "#{kls}|ms")
+            c.call('HDEL', key, "#{kls}|p", "#{kls}|f", "#{kls}|ms", "#{kls}|x", "#{kls}nodelim")
           end
         end
       end
@@ -159,5 +159,67 @@ class MetricsQueryTest < Wurk::Test::UnitCase
     assert_equal 2, rows.size
     assert_equal 1, rows.last[:p]
     assert_equal 99, rows.last[:ms]
+  end
+
+  # ---- history window guard (line 70 then) --------------------------------
+
+  def test_history_rejects_non_positive_window
+    assert_raises(ArgumentError) do
+      Wurk::Metrics::Query.history('1m', 0, now: @now)
+    end
+    assert_raises(ArgumentError) do
+      Wurk::Metrics::Query.history('1m', -60, now: @now)
+    end
+  end
+
+  # ---- accumulate! field skipping (line 114 then) -------------------------
+
+  def test_top_jobs_skips_fields_without_kind_or_unknown_kind
+    key = Wurk::Metrics::History.minute_key(@now)
+    Wurk.redis do |c|
+      # Real per-class counters the query must still sum.
+      c.call('HSET', key, "#{@klass_a}|p", 3, "#{@klass_a}|ms", 120)
+      # Field with no '|' delimiter → split returns [field, nil] → kind nil.
+      c.call('HSET', key, "#{@klass_a}nodelim", 99)
+      # Field with a kind not in TOTAL_FIELDS (p/f/ms) → skipped.
+      c.call('HSET', key, "#{@klass_a}|x", 99)
+    end
+
+    rows = Wurk::Metrics::Query.top_jobs(minutes: 1, now: @now)
+    found = rows.to_h
+
+    # Only the recognized p/ms fields counted; bogus fields ignored.
+    assert_equal({ p: 3, f: 0, ms: 120 }, found[@klass_a])
+    # The malformed bare field is treated as its own class with no kind, so
+    # it must never surface as a row.
+    refute_includes found.keys, "#{@klass_a}nodelim"
+  end
+
+  # ---- floor_to :hour branch (line 154) -----------------------------------
+
+  def test_floor_to_hour_truncates_to_hour_boundary
+    floored = Wurk::Metrics::Query.floor_to(@now, :hour)
+
+    assert_equal ::Time.utc(2026, 5, 21, 14), floored
+    assert_equal 0, floored.min
+    assert_equal 0, floored.sec
+  end
+
+  # The case/when in floor_to has an implicit else (unit neither :min nor
+  # :hour) that returns nil. Unreachable through the public API — only :min
+  # and :hour are ever passed internally — but floor_to is a module_function,
+  # so we exercise the no-match fall-through directly for branch coverage.
+  def test_floor_to_unknown_unit_returns_nil
+    assert_nil Wurk::Metrics::Query.floor_to(@now, :day)
+  end
+
+  # ---- empty-key pipeline short-circuits (lines 161, 167 then) ------------
+
+  def test_pipeline_hgetall_empty_keys_returns_empty
+    assert_equal [], Wurk::Metrics::Query.pipeline_hgetall([])
+  end
+
+  def test_pipeline_hmget_empty_keys_returns_empty
+    assert_equal [], Wurk::Metrics::Query.pipeline_hmget([], %w[p f ms])
   end
 end

@@ -5,7 +5,6 @@ require_relative '../test_helper'
 class LimiterTest < Wurk::Test::UnitCase
   parallelize_me!
 
-
   def setup
     super
     @suffix = "ltest#{Process.pid}#{object_id}"
@@ -97,7 +96,7 @@ class LimiterTest < Wurk::Test::UnitCase
     captured = nil
     l.within_limit(estimate: 50) { |h| captured = h.points_used(10) }
 
-    assert_equal 0.0, captured
+    assert_in_delta(0.0, captured)
   end
 
   # ----- OverLimit shape ------------------------------------------------
@@ -169,6 +168,21 @@ class LimiterTest < Wurk::Test::UnitCase
   def test_fingerprint_is_sha256_hex
     l = Wurk::Limiter.concurrent("fp-#{@suffix}", 1)
 
+    assert_match(/\A[0-9a-f]{64}\z/, l.fingerprint)
+  end
+
+  # serializable_options renders a Proc option as the literal '<proc>'
+  # (base.rb line 100 when) and stringifies other shapes via `else v.to_s`
+  # (base.rb line 102 else). The factory signatures are fixed, so we build a
+  # Base subclass directly to thread through arbitrary option shapes.
+  def test_serializable_options_renders_proc_and_stringifies_other_values
+    name = "fpp-#{@suffix}"
+    l = Wurk::Limiter::Bucket.new(name, count: 1, interval: :minute, ttl: 86_400,
+                                        on_full: -> { :nope }, tags: %i[a b])
+    meta = @pool.with { |c| JSON.parse(c.call('HGET', "lmtr:#{name}", 'options')) }
+
+    assert_equal '<proc>', meta['on_full']
+    assert_equal %i[a b].to_s, meta['tags']
     assert_match(/\A[0-9a-f]{64}\z/, l.fingerprint)
   end
 
@@ -289,5 +303,135 @@ class LimiterTest < Wurk::Test::UnitCase
     assert_raises(Wurk::Limiter::OverLimit) do
       mw.call(nil, job, 'default') { raise Wurk::Limiter::OverLimit.new(l, job) }
     end
+  end
+
+  # An unrelated error (not OverLimit, not in config.errors) sails through
+  # untouched — the `raise unless over_limit?(e)` re-raise side.
+  def test_server_middleware_reraises_unrelated_error
+    job = { 'class' => 'NoopWorker', 'args' => [], 'queue' => 'default', 'jid' => "unr#{@suffix}" }
+    mw = Wurk::Limiter::ServerMiddleware.new
+    mw.config = Wurk.configuration
+
+    err = assert_raises(RuntimeError) do
+      mw.call(nil, job, 'default') { raise 'boom' }
+    end
+
+    assert_equal 'boom', err.message
+    refute job.key?('overrated'), 'unrelated error must not be treated as over-limit'
+  end
+
+  # A registered custom error that exposes neither #limiter nor #job= drives
+  # the else sides of `respond_to?(:limiter)` / `respond_to?(:job=)` plus the
+  # nil-limiter `reschedule_cap` short-circuit (default cap, reschedule path).
+  def test_server_middleware_handles_plain_registered_error
+    custom = Class.new(StandardError)
+    Wurk::Limiter.config.errors << custom
+    job = { 'class' => 'NoopWorker', 'args' => [], 'queue' => 'default', 'jid' => "pln#{@suffix}" }
+    mw = Wurk::Limiter::ServerMiddleware.new
+    mw.config = Wurk.configuration
+
+    begin
+      mw.call(nil, job, 'default') { raise custom, 'throttled' }
+
+      assert_equal 1, job['overrated'], 'plain registered error still counts as over-limit'
+      scored = Wurk.redis { |c| c.call('ZRANGE', 'schedule', 0, -1) }
+
+      assert(scored.any? { |p| p.include?("pln#{@suffix}") }, 'rescheduled with default cap')
+    ensure
+      Wurk.redis do |c|
+        c.call('ZRANGE', 'schedule', 0, -1).each { |p| c.call('ZREM', 'schedule', p) if p.include?("pln#{@suffix}") }
+      end
+    end
+  end
+
+  # A limiter type with no `:reschedule` option (concurrent) → reschedule_cap
+  # hits the `cap.nil? ? DEFAULT_RESCHEDULE` then-side via the default.
+  def test_server_middleware_uses_default_cap_when_limiter_has_no_reschedule_option
+    l = Wurk::Limiter.concurrent("nocap-#{@suffix}", 1, wait_timeout: 0)
+
+    refute l.options.key?(:reschedule), 'concurrent limiter carries no reschedule option'
+    job = { 'class' => 'NoopWorker', 'args' => [], 'queue' => 'default', 'jid' => "ncj#{@suffix}" }
+    mw = Wurk::Limiter::ServerMiddleware.new
+    mw.config = Wurk.configuration
+
+    begin
+      mw.call(nil, job, 'default') { raise Wurk::Limiter::OverLimit.new(l, job) }
+
+      assert_equal 1, job['overrated']
+      scored = Wurk.redis { |c| c.call('ZRANGE', 'schedule', 0, -1) }
+
+      assert(scored.any? { |p| p.include?("ncj#{@suffix}") }, 'rescheduled under default cap')
+    ensure
+      Wurk.redis do |c|
+        c.call('ZRANGE', 'schedule', 0, -1).each { |p| c.call('ZREM', 'schedule', p) if p.include?("ncj#{@suffix}") }
+      end
+    end
+  end
+
+  # ----- DEFAULT_BACKOFF non-Hash job branch ---------------------------
+
+  # The backoff proc guards `job.is_a?(Hash)`; a non-Hash job exercises the
+  # else side (overrated defaults to 0 → delay is just rand(300)+1).
+  def test_default_backoff_with_non_hash_job
+    delay = Wurk::Limiter::DEFAULT_BACKOFF.call(nil, nil, nil)
+
+    assert_operator delay, :>=, 1
+    assert_operator delay, :<=, 300
+  end
+
+  # ----- Config#pool dispatch ------------------------------------------
+
+  # `redis = { url: }` lazily materializes a RedisPool — the `when Hash` arm.
+  def test_config_pool_builds_pool_from_hash
+    Wurk::Limiter.reset_config!
+    Wurk::Limiter.config.redis = { url: Wurk::Test.redis_url, size: 1, timeout: 1 }
+    pool = Wurk::Limiter.config.pool
+
+    assert_instance_of Wurk::RedisPool, pool
+    pool.with { |c| assert_equal 'PONG', c.call('PING') }
+  ensure
+    pool&.disconnect!
+  end
+
+  # An unsupported redis value (neither Hash nor RedisPool) → the else raise.
+  def test_config_pool_rejects_unsupported_redis_value
+    Wurk::Limiter.reset_config!
+    Wurk::Limiter.config.redis = 'redis://nope'
+
+    assert_raises(ArgumentError) { Wurk::Limiter.config.pool }
+  end
+
+  # ----- build (dashboard reconstruction) ------------------------------
+
+  # `type == 'unlimited'` short-circuits to an Unlimited stub (then-side).
+  def test_build_returns_unlimited_for_unlimited_type
+    assert_instance_of Wurk::Limiter::Unlimited, Wurk::Limiter.build('whatever', 'unlimited', {})
+  end
+
+  # An unknown type has no class mapping → `return nil unless klass_name`.
+  def test_build_returns_nil_for_unknown_type
+    assert_nil Wurk::Limiter.build("bad-#{@suffix}", 'gibberish', {})
+  end
+
+  # JSON round-trip stores `interval` as a string; coerce_build_options +
+  # interval_seconds must re-symbolize it (line 210 then / line 236 then).
+  def test_build_coerces_stringified_interval
+    l = Wurk::Limiter.build("rebuilt-#{@suffix}", 'bucket',
+                            { 'count' => 3, 'interval' => 'minute' }, register: false)
+
+    assert_instance_of Wurk::Limiter::Bucket, l
+    assert_equal :minute, l.options[:interval]
+  end
+
+  # ----- interval_seconds guard ----------------------------------------
+
+  # A non-Symbol / non-Integer interval falls to the else raise.
+  def test_interval_seconds_rejects_non_symbol_non_integer
+    assert_raises(ArgumentError) { Wurk::Limiter.interval_seconds(1.5, allow_integer: true) }
+  end
+
+  # A string that names a known unit is re-symbolized then resolved (line 210).
+  def test_interval_seconds_accepts_known_string_unit
+    assert_equal 60, Wurk::Limiter.interval_seconds('minute', allow_integer: false)
   end
 end

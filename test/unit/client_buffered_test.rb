@@ -277,7 +277,7 @@ class ClientBufferedTest < Wurk::Test::UnitCase
       sleep 0.02
     end
 
-    assert_equal 0, Wurk::Client::Buffered.buffer_size, "drainer did not flush buffer within 3s"
+    assert_equal 0, Wurk::Client::Buffered.buffer_size, 'drainer did not flush buffer within 3s'
     assert_equal [['a'], ['b']], queued_args.reverse
   end
   # rubocop:enable Metrics/AbcSize
@@ -287,7 +287,83 @@ class ClientBufferedTest < Wurk::Test::UnitCase
     assert_raises(ArgumentError) { Wurk::Client::Buffered::Drainer.new(interval: -1) }
   end
 
+  # start is idempotent: a second start while the thread is alive hits the
+  # `return if @thread&.alive?` then-branch and keeps the same thread.
+  def test_drainer_start_is_idempotent_while_running
+    drainer = idle_drainer
+    drainer.start
+    first = drainer.instance_variable_get(:@thread)
+    drainer.start
+    second = drainer.instance_variable_get(:@thread)
+
+    assert_same first, second
+    assert_predicate drainer, :running?
+  ensure
+    drainer.stop
+  end
+
+  # stop with no thread ever started exercises the `@thread&.join` nil
+  # (else) side and running? `@thread&.alive?` nil (else) side.
+  def test_drainer_stop_and_running_with_no_thread
+    drainer = idle_drainer
+
+    refute_predicate drainer, :running?
+    drainer.stop # must not raise on nil @thread
+
+    refute_predicate drainer, :running?
+  end
+
+  # wait_interval's `@wake.wait(...) unless @done` else-side: when @done is
+  # already true (stop won the race before the loop parked), the wait is
+  # skipped and the method returns immediately rather than parking for the
+  # 30s interval. Driven directly so it's deterministic — no thread timing.
+  def test_wait_interval_skips_wait_when_already_done
+    drainer = Wurk::Client::Buffered::Drainer.new(
+      interval: 30.0, client_factory: -> { NoopDrainClient.new }
+    )
+    drainer.instance_variable_set(:@done, true)
+
+    t0 = ::Process.clock_gettime(::Process::CLOCK_MONOTONIC)
+    drainer.send(:wait_interval)
+    elapsed = ::Process.clock_gettime(::Process::CLOCK_MONOTONIC) - t0
+
+    assert_operator elapsed, :<, 1.0, 'wait_interval must not park when @done is set'
+  end
+
+  # Complementary then-side: @done false → wait_interval parks on the
+  # ConditionVariable, and a broadcast (what stop sends) wakes it back up.
+  def test_wait_interval_parks_until_broadcast_when_not_done
+    drainer = Wurk::Client::Buffered::Drainer.new(
+      interval: 30.0, client_factory: -> { NoopDrainClient.new }
+    )
+    waiter = Thread.new { drainer.send(:wait_interval) }
+
+    started = ::Process.clock_gettime(::Process::CLOCK_MONOTONIC)
+    sleep 0.005 until waiter.status == 'sleep' || ::Process.clock_gettime(::Process::CLOCK_MONOTONIC) - started > 1.0
+
+    assert_equal 'sleep', waiter.status, 'wait_interval should park on the condvar'
+
+    lock = drainer.instance_variable_get(:@lock)
+    wake = drainer.instance_variable_get(:@wake)
+    lock.synchronize { wake.broadcast }
+
+    assert waiter.join(5.0), 'broadcast should wake the parked wait_interval'
+  end
+
   private
+
+  # Drainer with a long interval and a no-op client so the run loop never
+  # touches Redis; lets us assert start/stop/running? control flow directly.
+  def idle_drainer
+    Wurk::Client::Buffered::Drainer.new(
+      interval: 30.0, client_factory: -> { NoopDrainClient.new }
+    )
+  end
+
+  # Stands in for a Wurk::Client in the drainer's run loop. drain! calls
+  # pop_head (empty buffer → nil → no replay), so push is never reached;
+  # this just satisfies the factory contract without hitting Redis.
+  class NoopDrainClient; end
 
   # Statsd singletons are process-global — serialize against every other test
   # class that also rewrites `Wurk::Metrics::Statsd.increment`.

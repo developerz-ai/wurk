@@ -25,6 +25,7 @@ class BatchSetTest < Wurk::Test::UnitCase
         conn.call('SREM', "tags:#{tag_for(bid)}", bid)
       end
       tag_for_each_seeded { |tag| conn.call('UNLINK', "tags:#{tag}") }
+      conn.call('UNLINK', "tags:#{@big_tag}") if @big_tag
     end
   ensure
     super
@@ -63,6 +64,17 @@ class BatchSetTest < Wurk::Test::UnitCase
     assert_kind_of Enumerator, Wurk::BatchSet.new.each
   end
 
+  # PAGE_SIZE is 100 — seeding 101 of our own bids forces `each` past the
+  # first ZRANGE page (the `bids.size < PAGE_SIZE` else side: keep looping).
+  # All 101 must come back even though they straddle the page boundary.
+  def test_each_pages_past_page_size
+    seeded = seed(Wurk::BatchSet::PAGE_SIZE + 1).to_set
+    yielded = Set.new
+    Wurk::BatchSet.new.each { |status| yielded << status.bid if seeded.include?(status.bid) }
+
+    assert_equal seeded, yielded
+  end
+
   # --- scan_tags --------------------------------------------------------
 
   def test_scan_tags_yields_bids_for_tag
@@ -83,6 +95,22 @@ class BatchSetTest < Wurk::Test::UnitCase
 
   def test_scan_tags_returns_enumerator_without_block
     assert_kind_of Enumerator, Wurk::BatchSet.new.scan_tags('x')
+  end
+
+  # A tag set big enough that SSCAN can't drain in one COUNT=100 pass forces
+  # the loop through a non-'0' cursor (the `cursor == '0'` else side: keep
+  # scanning). Every seeded member must be yielded exactly once.
+  def test_scan_tags_continues_across_cursor_pages
+    tag = "bigtag-#{@ns}"
+    @big_tag = tag
+    members = (0...1000).map { |i| "m-#{i}" }
+    @pool.with { |c| c.call('SADD', "tags:#{tag}", *members) }
+
+    found = []
+    Wurk::BatchSet.new.scan_tags(tag) { |b| found << b }
+
+    assert_equal members.sort, found.sort
+    assert_equal members.size, found.uniq.size
   end
 
   # --- DeadSet ----------------------------------------------------------

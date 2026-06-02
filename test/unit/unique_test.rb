@@ -8,7 +8,6 @@ class UniqueTest < Wurk::Test::UnitCase
   # the global config. Running in parallel would let one test's `enable!`
   # leak into another's "should be a no-op" assertion.
 
-
   ENABLE_MUTEX = ::Mutex.new
 
   def setup
@@ -69,6 +68,22 @@ class UniqueTest < Wurk::Test::UnitCase
 
     assert_equal Wurk::Unique.lock_key('FooJob', 'default', [42]),
                  Wurk::Unique.lock_key_for(job)
+  end
+
+  def test_lock_key_for_with_nil_class_resolves_to_nil_context
+    # resolve_class short-circuits on a nil/empty class name (line 82),
+    # so unique_context falls back to the raw [class, queue, args] triple.
+    job = { 'class' => nil, 'queue' => 'q', 'args' => [1] }
+    expected = "unique:#{Digest::SHA256.hexdigest(JSON.dump([nil, 'q', [1]]))}"
+
+    assert_equal expected, Wurk::Unique.lock_key_for(job)
+  end
+
+  def test_lock_key_for_with_empty_class_resolves_to_nil_context
+    job = { 'class' => '', 'queue' => 'q', 'args' => [1] }
+    expected = "unique:#{Digest::SHA256.hexdigest(JSON.dump(['', 'q', [1]]))}"
+
+    assert_equal expected, Wurk::Unique.lock_key_for(job)
   end
 
   def test_lock_key_honors_sidekiq_unique_context
@@ -142,6 +157,28 @@ class UniqueTest < Wurk::Test::UnitCase
     assert_equal 600, Wurk::Unique.coerce_ttl(duration)
   end
 
+  def test_coerce_ttl_floors_non_integer_numeric
+    # Float is Numeric but not Integer (line 103 then): truncated via to_i.
+    assert_equal 60, Wurk::Unique.coerce_ttl(60.9)
+  end
+
+  def test_coerce_ttl_rejects_non_numeric_non_duration
+    # An object that does not respond to to_i: duration_like? short-circuits
+    # to false (line 110 then) and coerce_ttl falls through to nil (line 104 else).
+    assert_nil Wurk::Unique.coerce_ttl(Object.new)
+  end
+
+  def test_coerce_ttl_rejects_to_i_responder_that_is_not_duration
+    # Responds to to_i but is neither Numeric nor Duration-like, so coerce_ttl
+    # reaches line 104, finds duration_like? false, and returns nil (line 104 else).
+    not_a_duration = Class.new do
+      def to_i = 42
+      def self.name = 'PlainThing'
+    end.new
+
+    assert_nil Wurk::Unique.coerce_ttl(not_a_duration)
+  end
+
   # ---- ClientMiddleware: SETNX --------------------------------------
 
   def test_client_middleware_skips_when_disabled
@@ -210,6 +247,38 @@ class UniqueTest < Wurk::Test::UnitCase
 
       assert_includes io.string, 'jid-A'
       assert_includes io.string, 'jid=jid-B'
+    end
+  end
+
+  def test_client_middleware_past_at_uses_base_ttl
+    ENABLE_MUTEX.synchronize do
+      Wurk::Unique.enable!
+      job = build_job(jid: 'past-1', ttl: 30)
+      job['at'] = ::Time.now.to_f - 120 # delay non-positive (line 168 else)
+      ran = invoke_client(job)
+      track_key(job)
+
+      assert ran
+      ttl = Wurk.redis { |c| c.call('TTL', Wurk::Unique.lock_key_for(job)) }
+
+      assert_operator ttl, :<=, 30
+      assert_operator ttl, :>, 0
+    end
+  end
+
+  def test_client_middleware_duplicate_without_logger_is_silent
+    ENABLE_MUTEX.synchronize do
+      Wurk::Unique.enable!
+      first = build_job(jid: 'nolog-1', ttl: 60)
+      second = build_job(jid: 'nolog-2', ttl: 60)
+      track_key(first)
+
+      without_logger do
+        assert invoke_client(first)
+        refute invoke_client(second) # log_duplicate hits `return unless logger` (line 181 then)
+      end
+
+      assert_equal('nolog-1', Wurk.redis { |c| c.call('GET', Wurk::Unique.lock_key_for(first)) })
     end
   end
 
@@ -305,6 +374,45 @@ class UniqueTest < Wurk::Test::UnitCase
     end
   end
 
+  def test_server_middleware_defaults_to_success_when_until_missing
+    ENABLE_MUTEX.synchronize do
+      Wurk::Unique.enable!
+      job = build_job(jid: 'sj-default', ttl: 30) # no unique_until → line 222 then
+      Wurk.redis { |c| c.call('SET', Wurk::Unique.lock_key_for(job), 'sj-default', 'EX', 30) }
+      track_key(job)
+
+      assert_equal :done, invoke_server(job) { :done }
+      assert_nil(Wurk.redis { |c| c.call('GET', Wurk::Unique.lock_key_for(job)) })
+    end
+  end
+
+  def test_server_middleware_release_failure_logs_warning
+    ENABLE_MUTEX.synchronize do
+      Wurk::Unique.enable!
+      job = build_job(jid: 'sj-boom', ttl: 30, until_mode: :success)
+      io = StringIO.new
+
+      with_logger(::Logger.new(io)) do
+        # release rescues the pool failure (line 236) and warns (logger present).
+        assert_equal :ok, invoke_server_with_failing_pool(job) { :ok }
+      end
+
+      assert_includes io.string, 'Wurk::Unique release failed'
+    end
+  end
+
+  def test_server_middleware_release_failure_without_logger_is_silent
+    ENABLE_MUTEX.synchronize do
+      Wurk::Unique.enable!
+      job = build_job(jid: 'sj-boom2', ttl: 30, until_mode: :success)
+
+      without_logger do
+        # rescue runs, `Wurk.logger&.warn` short-circuits (line 236 logger-nil side).
+        assert_equal :ok, invoke_server_with_failing_pool(job) { :ok }
+      end
+    end
+  end
+
   # ---- locked? introspection ------------------------------------------
 
   def test_locked_returns_jid_when_present
@@ -361,6 +469,18 @@ class UniqueTest < Wurk::Test::UnitCase
     mw.call(nil, job, job['queue'], &)
   end
 
+  # Drives the server middleware with a config whose redis_pool raises on
+  # checkout, exercising the `release` rescue path without touching Redis.
+  def invoke_server_with_failing_pool(job, &)
+    failing_pool = Object.new
+    def failing_pool.with(*) = raise('pool down')
+    config = Struct.new(:redis_pool).new(failing_pool)
+
+    mw = Wurk::Unique::ServerMiddleware.new
+    mw.config = config
+    mw.call(nil, job, job['queue'], &)
+  end
+
   def track_key(job)
     @keys << Wurk::Unique.lock_key_for(job)
   end
@@ -371,6 +491,17 @@ class UniqueTest < Wurk::Test::UnitCase
     yield
   ensure
     Wurk.configuration.logger = prior
+  end
+
+  # Force `Wurk.logger` to return nil. The config memoizes a default logger
+  # (`@logger ||= default_logger`), so assigning nil is not enough — we
+  # override the accessor on the singleton for the duration of the block.
+  def without_logger
+    config = Wurk.configuration
+    config.singleton_class.send(:define_method, :logger) { nil }
+    yield
+  ensure
+    config.singleton_class.send(:remove_method, :logger)
   end
 
   def stub_const(name, klass)

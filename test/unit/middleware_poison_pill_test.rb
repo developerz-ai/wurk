@@ -72,6 +72,13 @@ class MiddlewarePoisonPillTest < Wurk::Test::UnitCase
     assert_equal 0, Wurk::Middleware::PoisonPill.recovery_count(@jid)
   end
 
+  # Covers clear!'s early-return guard (nil / empty jid): must be a no-op
+  # and must never issue a DEL against a malformed key.
+  def test_clear_is_a_noop_for_empty_jid
+    assert_nil Wurk::Middleware::PoisonPill.clear!(nil)
+    assert_nil Wurk::Middleware::PoisonPill.clear!('')
+  end
+
   def test_recovery_count_returns_zero_for_unknown_jid
     assert_equal 0, Wurk::Middleware::PoisonPill.recovery_count(SecureRandom.hex(12))
   end
@@ -85,6 +92,13 @@ class MiddlewarePoisonPillTest < Wurk::Test::UnitCase
 
   def test_unparseable_payload_returns_recovered_without_state
     assert_equal :recovered, Wurk::Middleware::PoisonPill.track!('not-json{{')
+  end
+
+  # parse() only matches Hash / String; any other type falls through the
+  # case with no match (nil), so track! short-circuits to :recovered.
+  def test_non_hash_non_string_payload_returns_recovered
+    assert_equal :recovered, Wurk::Middleware::PoisonPill.track!(12_345)
+    assert_equal :recovered, Wurk::Middleware::PoisonPill.track!(nil)
   end
 
   def test_payload_without_jid_skips_counter
@@ -119,6 +133,33 @@ class MiddlewarePoisonPillTest < Wurk::Test::UnitCase
 
     assert_equal 1, poison.size
     assert_equal ['class:PoisonPillTestJob', "queue:#{@queue}"], poison.first[1]
+  end
+
+  # No class and no queue → tags stays empty → increment called with nil
+  # tags (covers the false sides of both `if klass` / `if queue` guards and
+  # the empty? branch in emit_recovered_fetch).
+  def test_emits_recovered_fetch_with_nil_tags_when_no_class_or_queue
+    metrics = with_statsd_recorder do
+      Wurk::Middleware::PoisonPill.track!({ 'jid' => @jid }, queue: nil)
+    end
+
+    assert_equal [['jobs.recovered.fetch', nil]], metrics
+  end
+
+  # Crossing the threshold with a Hash payload that has a jid but no class,
+  # and queue: nil. Exercises: emit_poison's empty-tags path (nil tags) and
+  # mark_poison's non-String payload branch (Wurk.dump_json(job)).
+  def test_emits_poison_with_nil_tags_and_hash_payload
+    hash = { 'jid' => @jid }
+    metrics = with_statsd_recorder do
+      3.times { Wurk::Middleware::PoisonPill.track!(hash, queue: nil) }
+    end
+
+    poison = metrics.select { |m| m[0] == 'jobs.poison' }
+
+    assert_equal 1, poison.size
+    assert_nil poison.first[1]
+    assert_equal 1, dead_for_jid_count
   end
 
   # --- callback hooks -----------------------------------------------------

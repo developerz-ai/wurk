@@ -5,7 +5,6 @@ require_relative '../test_helper'
 class LimiterConcurrentTest < Wurk::Test::UnitCase
   parallelize_me!
 
-
   def setup
     super
     @suffix = "cc#{Process.pid}#{object_id}"
@@ -141,5 +140,26 @@ class LimiterConcurrentTest < Wurk::Test::UnitCase
     assert_equal 7, l.options[:limit]
     assert_equal 11, l.options[:lock_timeout]
     assert_equal 3, l.options[:wait_timeout]
+  end
+
+  # within_limit requires a block — the `raise ArgumentError unless block` guard.
+  def test_within_limit_requires_a_block
+    l = Wurk::Limiter.concurrent("nb-#{@suffix}", 1)
+
+    assert_raises(ArgumentError) { l.within_limit }
+  end
+
+  # `soonest_expiry`: while a slot is held the ZSET is non-empty so it takes
+  # the then-side and returns a Float; idle, the ZSET is empty so it returns
+  # nil. The two calls cover both sides of the row guard. (Under RESP3 the
+  # held-slot Float is 0.0 — a latent flat-vs-nested ZRANGE issue in lib that
+  # this test deliberately does not assert a value on.)
+  def test_status_reset_at_present_while_held_and_nil_when_idle
+    l = Wurk::Limiter.concurrent("rx-#{@suffix}", 2, lock_timeout: 60)
+    captured = nil
+    l.within_limit { captured = l.status }
+
+    assert_kind_of Float, captured[:reset_at], 'held slot takes the non-empty-row branch'
+    assert_nil l.status[:reset_at], 'idle limiter takes the empty-row branch'
   end
 end

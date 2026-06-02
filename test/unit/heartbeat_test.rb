@@ -279,7 +279,66 @@ class HeartbeatTest < Wurk::Test::UnitCase
     assert_nil hb.stop!
   end
 
+  # --- statsd queue-size emission --------------------------------------
+
+  # emit_queue_sizes early-returns when the config exposes no queues (the
+  # `queues.empty?` then-branch). With a live statsd client wired but zero
+  # queues, the beat must still succeed and emit only the `busy` gauge — no
+  # `queue.size` LLEN pipeline. Holds STATSD_MUTEX because Statsd.@client is
+  # a process-global other suites also rewrite.
+  def test_beat_skips_queue_sizes_when_no_queues_configured
+    Wurk::Test::STATSD_MUTEX.synchronize do
+      recorder = []
+      fake_client = build_statsd_client(recorder)
+      hb = build_heartbeat
+      # A capsule that exposes no queues ⇒ flat_map(&:queues).uniq is empty ⇒
+      # emit_queue_sizes returns early. queues= rejects [], so set @queues
+      # directly to model the empty-queue edge the guard exists for.
+      @config.capsules.each_value { |cap| cap.instance_variable_set(:@queues, []) }
+
+      Wurk::Metrics::Statsd.instance_variable_set(:@client, fake_client)
+      begin
+        refute_nil hb.beat!
+      ensure
+        Wurk::Metrics::Statsd.reset!
+      end
+
+      assert_includes recorder.map { |m| m[1] }, 'sidekiq.busy'
+      refute_includes recorder.map { |m| m[1] }, 'sidekiq.queue.size'
+    end
+  end
+
+  # --- memory_usage_kb ps fallback -------------------------------------
+
+  # On a host without /proc/self/statm (macOS/BSD), memory_usage_kb takes the
+  # `ps` else-branch. We force that branch by stubbing ::File.exist? for the
+  # statm path only; everything else delegates to the real implementation.
+  def test_beat_uses_ps_fallback_when_proc_statm_absent
+    original = ::File.method(:exist?)
+    ::File.singleton_class.send(:define_method, :exist?) do |path|
+      path == '/proc/self/statm' ? false : original.call(path)
+    end
+    hb = build_heartbeat
+
+    begin
+      refute_nil hb.beat!
+      rss = read_beat_fields[4] # 'rss'
+
+      refute_nil rss
+      assert_match(/\A\d+\z/, rss)
+    ensure
+      ::File.singleton_class.send(:define_method, :exist?, original)
+    end
+  end
+
   private
+
+  def build_statsd_client(recorder)
+    client = Object.new
+    client.define_singleton_method(:gauge) { |metric, value, **opts| recorder << [:gauge, metric, value, opts] }
+    client.define_singleton_method(:increment) { |metric, **opts| recorder << [:increment, metric, opts] }
+    client
+  end
 
   def build_heartbeat(embedded: false, quiet: nil)
     Wurk::Heartbeat.new(

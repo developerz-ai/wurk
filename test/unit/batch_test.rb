@@ -316,6 +316,105 @@ class BatchTest < Wurk::Test::UnitCase
     assert_kind_of Wurk::Batch::Status, batch.status
   end
 
+  def test_parent_returns_batch_when_parent_bid_present
+    parent = track(Wurk::Batch.new)
+    child  = nil
+    parent.jobs do
+      child = track(Wurk::Batch.new)
+      child.jobs { perform_one(child) }
+    end
+
+    reopened = track(Wurk::Batch.new(child.bid))
+    fetched_parent = reopened.parent
+
+    assert_kind_of Wurk::Batch, fetched_parent
+    assert_equal parent.bid, fetched_parent.bid
+  end
+
+  def test_parent_returns_nil_when_no_parent_bid
+    batch = track(Wurk::Batch.new)
+    batch.jobs { perform_one(batch) }
+
+    assert_nil track(Wurk::Batch.new(batch.bid)).parent
+  end
+
+  # --- linger setter -----------------------------------------------------
+
+  def test_linger_setter_accepts_nil_before_flush
+    batch = track(Wurk::Batch.new)
+    batch.linger = nil
+
+    assert_nil batch.linger
+  end
+
+  # --- remove_jobs edge --------------------------------------------------
+
+  def test_remove_jobs_with_no_args_returns_zero
+    batch = track(Wurk::Batch.new)
+    batch.jobs { perform_one(batch) }
+
+    assert_equal 0, batch.remove_jobs
+  end
+
+  # --- callback_target type handling ------------------------------------
+
+  def test_on_rejects_target_without_name
+    batch = track(Wurk::Batch.new)
+
+    assert_raises(ArgumentError) { batch.on(:success, 42) }
+  end
+
+  def test_on_accepts_arbitrary_object_responding_to_name
+    target = Object.new
+    def target.name = 'DuckTypedCb'
+    batch = track(Wurk::Batch.new)
+    batch.on(:complete, target)
+    batch.jobs { perform_one(batch) }
+
+    persisted = JSON.parse(@pool.with { |c| c.call('HGET', "b-#{batch.bid}", 'callbacks') })
+
+    assert_equal 'DuckTypedCb', persisted.first[1]
+  end
+
+  # --- reopen parsing edges ---------------------------------------------
+
+  def test_reopen_with_empty_tags_yields_empty_array
+    batch = track(Wurk::Batch.new)
+    batch.jobs { perform_one(batch) }
+
+    assert_empty track(Wurk::Batch.new(batch.bid)).tags
+  end
+
+  def test_reopen_with_non_array_callbacks_json_does_not_raise
+    batch = track(Wurk::Batch.new)
+    batch.jobs { perform_one(batch) }
+    # Persisted callbacks as a JSON object (not an Array): load_existing! must
+    # coerce to [] rather than carrying a Hash or raising.
+    @pool.with { |c| c.call('HSET', "b-#{batch.bid}", 'callbacks', '{"not":"an array"}') }
+
+    reopened = track(Wurk::Batch.new(batch.bid))
+
+    assert_equal batch.bid, reopened.bid
+    # A coerced-empty callback registry leaves room to register a fresh one.
+    assert_same reopened, reopened.on(:success, 'X')
+  end
+
+  def test_fetch_hash_array_branch_unreachable_under_resp3
+    # fetch_hash's `else` (raw.each_slice(2).to_h) only runs when HGETALL
+    # returns an Array, i.e. under RESP2. The pool negotiates RESP3 by default
+    # (redis-client), where HGETALL always returns a Hash. Exercising the else
+    # would require downgrading the protocol or mocking Redis — both barred by
+    # the test rules (real Redis only). Documented as intentionally uncovered.
+    sample =
+      Wurk.redis do |c|
+        c.call('HSET', "b-#{track(Wurk::Batch.new).bid}", 'k', 'v')
+        c.call('HGETALL', "b-#{@bids.last}")
+      end
+
+    assert_kind_of Hash, sample
+    skip 'fetch_hash array branch is unreachable under RESP3 (no mocking allowed)'
+  end
+
   private
 
   def track(batch)

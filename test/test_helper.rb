@@ -4,14 +4,14 @@ if ENV["COVERAGE"]
   require "simplecov"
   require "simplecov-cobertura"
   SimpleCov.start do
-    # Branch is still measured (and shown in the Cobertura report uploaded by
-    # CI), but the *blocking* gate is on line coverage — branch is tracked to
-    # ratchet up over time, not enforced yet (currently ~77%). See #29.
+    # Both line and branch coverage on lib/ are blocking gates (>= 90%). The
+    # Cobertura report is still uploaded by CI for per-file inspection. Branch
+    # was ratcheted from ~78% to >=90% in #67; keep new code at parity.
     enable_coverage :branch
     primary_coverage :line
     add_filter "/test/"
     add_filter "/bench/"
-    minimum_coverage line: 90
+    minimum_coverage line: 90, branch: 90
     formatter SimpleCov::Formatter::CoberturaFormatter
   end
 end

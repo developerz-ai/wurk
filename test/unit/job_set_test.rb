@@ -79,6 +79,47 @@ class JobSetTest < Wurk::Test::UnitCase
     assert_kind_of Enumerator, @set.scan('nonexistent')
   end
 
+  # Drives the no-block Enumerator returned by scan, which re-enters the base
+  # SortedSet#scan *with* a block — covering the line 38 else-branch
+  # (block_given? true → fall through to the ZSCAN loop).
+  def test_scan_enumerator_iterates_payloads
+    jid = SecureRandom.hex(12)
+    add_member(jid: jid)
+
+    pairs = @set.scan(jid).to_a
+
+    assert_equal 1, pairs.size
+    assert_kind_of Float, pairs.first.last
+  end
+
+  # Line 38 then-branch (`return enum_for(:scan, ...)` in the base
+  # SortedSet#scan) is unreachable through the public API: Wurk prepends
+  # Wurk::API::Fast::SortedSetExt onto SortedSet, and its #scan handles the
+  # no-block case itself (its own `return enum_for unless block`), so it only
+  # ever calls `super` *with* a block. The base scan therefore always sees
+  # block_given? == true and never executes its own enum_for guard.
+  def test_base_scan_enum_for_guard_is_shadowed_by_prepended_ext
+    ancestors = Wurk::SortedSet.ancestors
+
+    assert_operator ancestors.index(Wurk::API::Fast::SortedSetExt),
+                    :<,
+                    ancestors.index(Wurk::SortedSet),
+                    'prepend order regressed; base scan no-block guard may now be reachable'
+    skip 'base SortedSet#scan no-block guard is shadowed by the prepended SortedSetExt#scan'
+  end
+
+  # Covers line 46 else-branch: ZSCAN returns a non-zero cursor (multi-page)
+  # once the ZSET exceeds Redis's listpack encoding threshold
+  # (zset-max-listpack-entries default 128), so the loop iterates without
+  # breaking on the first page.
+  def test_scan_spans_multiple_pages
+    150.times { |i| add_member(score: i.to_f, jid: format('pagescan%03d', i)) }
+
+    yielded = @set.scan('pagescan', 10).to_a
+
+    assert_equal 150, yielded.size
+  end
+
   # --- each --------------------------------------------------------------
 
   def test_each_yields_sorted_entries
@@ -96,6 +137,25 @@ class JobSetTest < Wurk::Test::UnitCase
     scores = @set.to_a.map(&:score)
 
     assert_equal scores.sort.reverse, scores
+  end
+
+  # Covers line 76 then-branch: each with no block returns an Enumerator
+  # rather than iterating.
+  def test_each_returns_enumerator_without_block
+    assert_kind_of Enumerator, @set.each
+  end
+
+  # Covers line 88 else-branch: a first page that is exactly PAGE_SIZE full
+  # forces a second ZRANGE page (slice.size < PAGE_SIZE is false), so the
+  # loop increments the page counter instead of breaking.
+  def test_each_pages_past_first_full_page
+    total = Wurk::SortedSet::PAGE_SIZE + 5
+    total.times { |i| add_member(score: i.to_f) }
+
+    count = @set.each { |_e| } # rubocop:disable Lint/EmptyBlock
+
+    assert_equal total, count
+    assert_equal total, @set.to_a.size
   end
 
   # --- schedule ----------------------------------------------------------
@@ -120,6 +180,22 @@ class JobSetTest < Wurk::Test::UnitCase
     assert_equal [100.0, 200.0, 300.0], yielded.map(&:last)
   ensure
     @pool.with { |c| c.call('DEL', private_set) }
+  end
+
+  # Line 106 else-branch (the flat `[value, score]` ZPOPMIN shape) is
+  # unreachable on the supported redis-client: ZPOPMIN ... COUNT 1 always
+  # returns the nested `[[value, score]]` form here. The else exists only as a
+  # defensive normalizer for older redis-client builds; forcing it would
+  # require mocking the connection, which the test policy forbids for Redis.
+  def test_pop_each_flat_result_shape_is_unreachable_with_current_redis_client
+    result = @pool.with do |c|
+      c.call('DEL', @set.name)
+      c.call('ZADD', @set.name, 1.0, 'x')
+      c.call('ZPOPMIN', @set.name, 1)
+    end
+
+    assert_kind_of Array, result.first, 'nested shape regressed; revisit pop_each else-branch coverage'
+    skip 'flat ZPOPMIN shape not produced by supported redis-client; else-branch is defensive only'
   end
 
   # --- fetch -------------------------------------------------------------
@@ -179,6 +255,19 @@ class JobSetTest < Wurk::Test::UnitCase
     assert_nil @set.find_job('deadbeef' * 3)
   end
 
+  # Covers line 159 else-branch: ZSCAN MATCH glob matches a payload because
+  # the search string appears as a substring (here inside args), but that
+  # entry's actual jid field differs, so the `return entry if ...` guard is
+  # false and the scan continues — ultimately returning nil.
+  def test_find_job_skips_substring_match_with_different_jid
+    needle = SecureRandom.hex(12)
+    decoy = base_item('jid' => SecureRandom.hex(12), 'args' => ["wraps-#{needle}-here"])
+    payload = Wurk.dump_json(decoy)
+    @pool.with { |c| c.call('ZADD', @set.name, 5.0, payload) }
+
+    assert_nil @set.find_job(needle)
+  end
+
   # --- delete_by_value ---------------------------------------------------
 
   def test_delete_by_value_removes_exact_payload
@@ -211,6 +300,20 @@ class JobSetTest < Wurk::Test::UnitCase
 
   def test_delete_by_jid_returns_false_when_no_match
     refute @set.delete_by_jid(0.123, 'never')
+  end
+
+  # Covers line 190 then-branch deterministically: a single row sits at the
+  # requested score, it parses cleanly, but its jid differs from the one we ask
+  # to delete — so `next unless parsed && parsed['jid'] == jid` fires `next`,
+  # the loop exhausts, and delete_by_jid returns false. (Equal-score ZREM
+  # ordering is lexical-by-member, so a two-member variant couldn't guarantee
+  # the non-matching row is visited first; one decoy row makes it certain.)
+  def test_delete_by_jid_skips_parsed_row_with_different_jid
+    score = 6161.0
+    decoy = add_member(score: score) # random jid != the one we delete
+
+    refute @set.delete_by_jid(score, SecureRandom.hex(12))
+    refute_nil(@pool.with { |c| c.call('ZSCORE', @set.name, decoy) }, 'decoy must remain — no ZREM should have fired')
   end
 
   # --- remove_job --------------------------------------------------------

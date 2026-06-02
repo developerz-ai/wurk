@@ -80,6 +80,22 @@ class SortedEntryTest < Wurk::Test::UnitCase
     assert_equal(0, @pool.with { |c| c.call('ZSCORE', @parent.name, entry.value) }.to_i)
   end
 
+  # When the entry is built from a parsed Hash (no cached `value` bytes), the
+  # `@value` else branch falls back to delete_by_jid (score-bracket + jid scan).
+  def test_delete_falls_back_to_jid_when_no_cached_value
+    jid = SecureRandom.hex(12)
+    item = base_item('jid' => jid)
+    payload = Wurk.dump_json(item)
+    @pool.with { |c| c.call('ZADD', @parent.name, 100.0, payload) }
+    # Hash item ⇒ @value is nil ⇒ delete must take the delete_by_jid branch.
+    entry = Wurk::SortedEntry.new(@parent, 100.0, item)
+
+    assert_nil entry.instance_variable_get(:@value)
+    entry.delete
+
+    assert_equal(0, @pool.with { |c| c.call('ZSCORE', @parent.name, payload) }.to_i)
+  end
+
   # --- reschedule --------------------------------------------------------
 
   def test_reschedule_shifts_score
@@ -116,7 +132,35 @@ class SortedEntryTest < Wurk::Test::UnitCase
     assert_equal 2, Wurk.load_json(raw)['retry_count']
   end
 
+  # No `retry_count` key ⇒ the decrement guard's else branch: enqueue the
+  # message unchanged, never inserting a retry_count field.
+  def test_add_to_queue_leaves_message_unchanged_without_retry_count
+    queue = unique_queue
+    entry = add_entry(item: base_item('queue' => queue))
+
+    entry.add_to_queue
+
+    raw = @pool.with { |c| c.call('LRANGE', "queue:#{queue}", 0, 0) }.first
+
+    refute Wurk.load_json(raw).key?('retry_count')
+  end
+
   # --- retry -------------------------------------------------------------
+
+  # remove_job's `return nil unless @parent.remove_job(self)` then-branch:
+  # when the entry was already removed (not in the set), the block must not
+  # run and the method returns nil — no duplicate enqueue.
+  def test_retry_is_noop_when_entry_already_gone
+    queue = unique_queue
+    jid = SecureRandom.hex(12)
+    item = base_item('retry_count' => 3, 'queue' => queue, 'jid' => jid)
+    payload = Wurk.dump_json(item)
+    # Build an entry whose payload was never added to the parent set.
+    entry = Wurk::SortedEntry.new(@parent, 100.0, payload)
+
+    assert_nil entry.retry
+    assert_equal(0, @pool.with { |c| c.call('LLEN', "queue:#{queue}") })
+  end
 
   def test_retry_removes_and_pushes_without_decrement
     queue = unique_queue

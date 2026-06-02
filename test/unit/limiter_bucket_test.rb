@@ -5,7 +5,6 @@ require_relative '../test_helper'
 class LimiterBucketTest < Wurk::Test::UnitCase
   parallelize_me!
 
-
   def setup
     super
     @suffix = "bk#{Process.pid}#{object_id}"
@@ -98,5 +97,24 @@ class LimiterBucketTest < Wurk::Test::UnitCase
     assert_equal 9, l.options[:count]
     assert_equal :hour, l.options[:interval]
     assert_equal 3, l.options[:reschedule]
+  end
+
+  # No block → ArgumentError before any Redis work (line 31 then).
+  def test_within_limit_requires_block
+    l = Wurk::Limiter.bucket("nb-#{@suffix}", 5, :minute)
+
+    assert_raises(ArgumentError) { l.within_limit }
+  end
+
+  # wait_timeout spanning a second-boundary: an exhausted bucket sleeps until
+  # the counter rolls to zero, taking the no-raise side (remaining > 0,
+  # line 39 else) then succeeding on retry.
+  def test_waits_across_boundary_then_succeeds
+    l = Wurk::Limiter.bucket("wt-#{@suffix}", 1, :second, wait_timeout: 3)
+    l.within_limit {} # exhausts the per-second bucket
+    ran = false
+    l.within_limit { ran = true } # blocks until the next cardinal second
+
+    assert ran
   end
 end

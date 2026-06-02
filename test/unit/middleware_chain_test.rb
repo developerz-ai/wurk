@@ -160,6 +160,28 @@ class MiddlewareChainTest < Wurk::Test::UnitCase
     assert_equal [NoConfig, Recorder, WithConfig], chain.entries.map(&:klass)
   end
 
+  # newklass already present: insert_after must relocate the existing entry
+  # (the `delete_at(i)` arm of the ternary) rather than create a duplicate.
+  def test_insert_after_relocates_existing_entry
+    chain = Wurk::Middleware::Chain.new
+    chain.add(Recorder)
+    chain.add(NoConfig)
+    chain.add(WithConfig)
+    chain.insert_after(NoConfig, Recorder)
+
+    assert_equal [NoConfig, Recorder, WithConfig], chain.entries.map(&:klass)
+  end
+
+  # oldklass absent: insert_after falls back to appending at the tail
+  # (`|| (@entries.size - 1)` then +1), so the new entry lands last.
+  def test_insert_after_appends_when_target_absent
+    chain = Wurk::Middleware::Chain.new
+    chain.add(NoConfig)
+    chain.insert_after(WithConfig, Recorder)
+
+    assert_equal [NoConfig, Recorder], chain.entries.map(&:klass)
+  end
+
   # --- exists? / include? / empty? ---------------------------------------
 
   def test_exists_predicate
@@ -225,6 +247,13 @@ class MiddlewareChainTest < Wurk::Test::UnitCase
   end
 
   # --- invoke ------------------------------------------------------------
+
+  def test_invoke_without_block_raises_argument_error
+    chain = Wurk::Middleware::Chain.new
+    chain.add(NoConfig)
+
+    assert_raises(ArgumentError) { chain.invoke('arg') }
+  end
 
   def test_invoke_empty_chain_yields_block
     chain = Wurk::Middleware::Chain.new

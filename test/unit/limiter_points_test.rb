@@ -5,7 +5,6 @@ require_relative '../test_helper'
 class LimiterPointsTest < Wurk::Test::UnitCase
   parallelize_me!
 
-
   def setup
     super
     @suffix = "pt#{Process.pid}#{object_id}"
@@ -112,5 +111,24 @@ class LimiterPointsTest < Wurk::Test::UnitCase
 
     assert_equal 200, l.options[:initial]
     assert_equal 3, l.options[:refill]
+  end
+
+  # No block → ArgumentError before any Redis work (line 54 then).
+  def test_within_limit_requires_block
+    l = Wurk::Limiter.points("nb-#{@suffix}", 100, 10)
+
+    assert_raises(ArgumentError) { l.within_limit(estimate: 10) }
+  end
+
+  # After consuming below the cap with a positive refill, status.reset_at is
+  # when the bucket refills to full (available < cap && refill positive,
+  # line 49 then).
+  def test_status_reset_at_when_consumed_with_positive_refill
+    l = Wurk::Limiter.points("sr-#{@suffix}", 100, 5)
+    l.within_limit(estimate: 40) { |_h| }
+    s = l.status
+
+    assert_operator s[:used], :>, 0
+    assert_operator s[:reset_at], :>, ::Time.now.to_f
   end
 end

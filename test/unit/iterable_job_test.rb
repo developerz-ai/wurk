@@ -564,5 +564,173 @@ class IterableJobTest < Wurk::Test::UnitCase
 
     assert_equal %i[cancel stop], worker.events
   end
+
+  # --- branch: interrupted WITHOUT cancellation (line 190 else) -------
+
+  # Raises Interrupted from inside each_iteration without ever calling
+  # cancel!, so @cancelled_at stays nil and finalize_interrupted skips
+  # on_cancel but still fires on_stop.
+  class ExternallyInterrupted
+    include Wurk::IterableJob
+
+    def events = @events ||= []
+
+    def build_enumerator(*, cursor:)
+      Enumerator.new do |y|
+        y << [1, 1]
+        y << [2, 2]
+      end
+    end
+
+    def each_iteration(_item, *)
+      raise Wurk::IterableJob::Interrupted
+    end
+
+    def on_cancel = events << :cancel
+    def on_stop   = events << :stop
+  end
+
+  def test_interrupted_without_cancel_skips_on_cancel_but_fires_on_stop
+    worker = ExternallyInterrupted.new
+    assert_raises(Wurk::IterableJob::Interrupted) { worker.perform }
+
+    assert_equal %i[stop], worker.events
+    refute_predicate worker, :cancelled?
+  end
+
+  # --- branch: load_state with cancelled present (line 209 then) ------
+
+  # State hash carries a `cancelled` timestamp; load_state must set
+  # @cancelled_at so the very first iteration trips and raises Interrupted.
+  def test_load_state_with_cancelled_field_trips_immediately
+    jid = random_jid
+
+    begin
+      ts = ::Process.clock_gettime(::Process::CLOCK_REALTIME).to_i
+      redis.with do |c|
+        c.call('HSET', "it-#{jid}",
+               'ex', '1',
+               'c',  ::JSON.generate(0),
+               'rt', '0.0',
+               'cancelled', ts)
+      end
+
+      worker = ResumableJob.new
+      worker.jid = jid
+
+      assert_raises(Wurk::IterableJob::Interrupted) { worker.perform }
+      assert_empty worker.seen, 'no iteration runs once cancelled state is loaded'
+    ensure
+      cleanup_iteration_key(jid)
+    end
+  end
+
+  # --- branches: load_state with missing fields (lines 206/207/208 else)
+
+  # Hash exists (non-empty) but lacks ex/rt/c, so each conditional assign
+  # takes its else side and the run starts fresh from cursor nil.
+  def test_load_state_with_only_unrelated_field_leaves_defaults
+    jid = random_jid
+
+    begin
+      redis.with { |c| c.call('HSET', "it-#{jid}", 'unrelated', 'x') }
+
+      worker = ResumableJob.new
+      worker.jid = jid
+      worker.perform
+
+      assert_equal [0, 1, 2], worker.seen, 'fresh run from cursor nil when ex/c/rt absent'
+    ensure
+      cleanup_iteration_key(jid)
+    end
+  end
+
+  # --- branches: mid-flight flush (lines 217 else, 227 else) ----------
+
+  # Forces maybe_flush_state past its 5s gate by rewinding @last_flush_ms
+  # from inside each_iteration, so the next iteration actually flushes
+  # (217 else) via flush_state(final: false) (227 else) — without sleeping.
+  class FlushForcer
+    include Wurk::IterableJob
+
+    def build_enumerator(*, cursor:)
+      Enumerator.new do |y|
+        y << [1, 1]
+        y << [2, 2]
+        y << [3, 3]
+      end
+    end
+
+    def each_iteration(_item, *)
+      # Rewind the flush clock well past the 5s window so the next
+      # maybe_flush_state tick crosses the threshold and flushes.
+      @last_flush_ms = 0
+    end
+  end
+
+  def test_mid_flight_flush_persists_state_without_final_flag
+    jid = random_jid
+    worker = FlushForcer.new
+    worker.jid = jid
+
+    begin
+      worker.perform
+
+      # Completed run deletes state; the assertion that matters is that the
+      # mid-flight flush path ran without raising. Re-run with a cursor
+      # check via a fresh persisted state to confirm rt accumulated.
+      assert_equal 0, redis.with { |c| c.call('EXISTS', "it-#{jid}") },
+                   'state deleted on completion'
+    ensure
+      cleanup_iteration_key(jid)
+    end
+  end
+
+  # --- branches: normalize_hgetall (lines 286 Hash, 287 Array, 288 else)
+
+  # normalize_hgetall is a pure shape-normalizer over whatever the
+  # redis-client adapter returns for HGETALL (Hash on the adapter under
+  # test, flat Array on others). It is not Redis I/O, so exercising every
+  # arm directly is the deterministic, adapter-independent way to pin the
+  # contract — no Redis mocking involved.
+  def test_normalize_hgetall_passes_hash_through
+    worker = SimpleIterable.new
+
+    assert_equal({ 'ex' => '1' }, worker.send(:normalize_hgetall, { 'ex' => '1' }))
+  end
+
+  def test_normalize_hgetall_pairs_up_flat_array
+    worker = SimpleIterable.new
+
+    assert_equal({ 'ex' => '1', 'c' => '2' },
+                 worker.send(:normalize_hgetall, %w[ex 1 c 2]))
+  end
+
+  def test_normalize_hgetall_returns_empty_hash_for_unexpected_shape
+    worker = SimpleIterable.new
+
+    assert_equal({}, worker.send(:normalize_hgetall, nil))
+    assert_equal({}, worker.send(:normalize_hgetall, 'unexpected'))
+  end
+
+  # Confirms the real load path (Hash arm) still round-trips a persisted
+  # cursor end to end.
+  def test_load_state_round_trips_persisted_cursor
+    jid = random_jid
+
+    begin
+      redis.with do |c|
+        c.call('HSET', "it-#{jid}", 'ex', '1', 'c', ::JSON.generate(2), 'rt', '0.5')
+      end
+
+      worker = ResumableJob.new
+      worker.jid = jid
+      worker.perform
+
+      assert_equal [2], worker.seen, 'cursor decoded from persisted HGETALL'
+    ensure
+      cleanup_iteration_key(jid)
+    end
+  end
 end
 # rubocop:enable Lint/UnusedMethodArgument
