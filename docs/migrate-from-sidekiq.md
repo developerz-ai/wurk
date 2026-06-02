@@ -168,22 +168,25 @@ Sidekiq: `count**4 + 15 + rand(10 * (count + 1))` seconds.
 
 ## 4. Known incompatibilities — what *not* to expect
 
-Wurk aims for 100% drop-in, but a few things differ. Hit any of these on a real
-migration that aren't listed here? **Please open an issue** — that feedback is part
-of the v1.0.0 acceptance gate for this guide.
+Wurk aims for 100% drop-in. A couple of Sidekiq Pro-isms simply no-op or alias
+(items 1–2 — there to reassure, not to fix); the rest are genuine differences worth
+knowing. Hit something on a real migration that isn't listed here? **Please open an
+issue** — that feedback is part of the v1.0.0 acceptance gate for this guide.
 
-1. **`config.super_fetch!` / `config.reliable_scheduler!` are not methods.** Wurk's
-   fetcher is *always* reliable (atomic `BLMOVE` to a per-process private list, with
-   orphan reclamation), and the scheduler is always atomic — there is no toggle. If
-   your Sidekiq Pro initializer calls `config.super_fetch!` or
-   `config.reliable_scheduler!`, **remove those lines** — otherwise boot raises
-   `NoMethodError`. (`reliable_push!` *does* exist: `Wurk::Client.reliable_push!`.)
-2. **No `Sidekiq::Pro::Web`.** Mount `Wurk::Engine` (or `Sidekiq::Web`), not
-   `Sidekiq::Pro::Web` — the latter isn't defined.
+1. **`config.super_fetch!` / `config.reliable_scheduler!` do nothing** (accepted
+   no-ops). Wurk's fetcher is *always* reliable (atomic `BLMOVE` to a per-process
+   private list, with orphan reclamation) and the scheduler is always atomic, so a
+   Sidekiq Pro initializer drops in unchanged — the calls just no-op rather than
+   toggling anything. (`Wurk::Client.reliable_push!` also exists for client-side
+   buffering during a Redis outage.)
+2. **`Sidekiq::Pro::Web` works** — it aliases the same dashboard as `Sidekiq::Web`,
+   so `mount Sidekiq::Pro::Web` (or `Sidekiq::Web`, or `Wurk::Engine`) all resolve to
+   the wurk dashboard.
 3. **`config.workers` / `config.shutdown_timeout` are not Configuration setters.**
-   Use `config.concurrency` for thread count and `config.timeout` for the shutdown
-   grace; process/fork count is governed by the swarm topology, not a `workers=`
-   accessor.
+   Use `config.concurrency` for threads-per-process and `config[:timeout]` for the
+   shutdown grace; process/fork count is governed by the swarm topology
+   (`config.topology = Wurk::Topology.flat(count:, queues:, concurrency:)`), not a
+   `workers=` accessor.
 4. **Unique jobs + encryption are mutually exclusive on the same worker** — each
    encryption produces different ciphertext, which defeats the uniqueness digest.
 5. **No Redis namespacing** in the free gem (same as Sidekiq OSS). One logical
@@ -207,8 +210,9 @@ by running their own upstream test suites in the [`ecosystem` CI job](../.github
 
 1. **Swap the gem** — replace `sidekiq` (+ `sidekiq-pro` / `sidekiq-ent`) with `wurk`
    in the `Gemfile`; `bundle install`.
-2. **Remove dead config** — delete any `config.super_fetch!` /
-   `config.reliable_scheduler!` calls; keep everything else.
+2. **Keep your config as-is** — Pro toggles like `config.super_fetch!` /
+   `config.reliable_scheduler!` are accepted no-ops (already the default), so there's
+   nothing to strip out.
 3. **Re-point the dashboard route** — `mount Wurk::Engine => "/wurk"` (gate it behind
    your app auth — see [`docs/dashboard.md`](dashboard.md)).
 4. **Boot a worker** — `bundle exec wurk` (standalone) or your existing Rails process
