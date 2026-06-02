@@ -5,12 +5,11 @@ require_relative '../test_helper'
 class LimiterTest < Wurk::Test::UnitCase
   parallelize_me!
 
-  REDIS_URL = ENV['REDIS_URL'] || 'redis://localhost:6379/0'
 
   def setup
     super
     @suffix = "ltest#{Process.pid}#{object_id}"
-    @pool = Wurk::RedisPool.new(size: 1, url: REDIS_URL, timeout: 2, name: 'ltop')
+    @pool = Wurk::RedisPool.new(size: 1, url: Wurk::Test.redis_url, timeout: 2, name: 'ltop')
     @pool.with { |c| Wurk::Lua::Loader.script_load_all(c) }
     Wurk::Limiter.reset_config!
     Wurk::Limiter.config.redis = @pool

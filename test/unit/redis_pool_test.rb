@@ -5,7 +5,6 @@ require_relative '../test_helper'
 class RedisPoolTest < Wurk::Test::UnitCase
   parallelize_me!
 
-  REDIS_URL = ENV['REDIS_URL'] || 'redis://localhost:6379/0'
 
   def teardown
     @pool&.disconnect!
@@ -18,15 +17,15 @@ class RedisPoolTest < Wurk::Test::UnitCase
   # --- happy path (real Redis) ---
 
   def test_initialize_stores_size
-    @pool = Wurk::RedisPool.new(size: 4, url: REDIS_URL, timeout: 2, name: 'primary')
+    @pool = Wurk::RedisPool.new(size: 4, url: Wurk::Test.redis_url, timeout: 2, name: 'primary')
 
     assert_equal 4, @pool.size
   end
 
   def test_initialize_stores_url_timeout_and_name
-    @pool = Wurk::RedisPool.new(size: 1, url: REDIS_URL, timeout: 2, name: 'primary')
+    @pool = Wurk::RedisPool.new(size: 1, url: Wurk::Test.redis_url, timeout: 2, name: 'primary')
 
-    assert_equal REDIS_URL, @pool.url
+    assert_equal Wurk::Test.redis_url, @pool.url
     assert_equal 2, @pool.timeout
     assert_equal 'primary', @pool.name
   end
@@ -147,11 +146,11 @@ class RedisPoolTest < Wurk::Test::UnitCase
   private
 
   def build_pool(size: 1, timeout: 1, name: 'test')
-    Wurk::RedisPool.new(size: size, url: REDIS_URL, timeout: timeout, name: name)
+    Wurk::RedisPool.new(size: size, url: Wurk::Test.redis_url, timeout: timeout, name: name)
   end
 
   def pool_wrapping(conn)
-    pool = Wurk::RedisPool.new(size: 1, url: REDIS_URL, timeout: 1, name: 'fake')
+    pool = Wurk::RedisPool.new(size: 1, url: Wurk::Test.redis_url, timeout: 1, name: 'fake')
     pool.instance_variable_set(:@pool, FakePool.new(conn))
     pool
   end

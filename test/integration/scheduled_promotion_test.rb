@@ -40,7 +40,6 @@ end
 class ScheduledPromotionTest < Wurk::Test::UnitCase
   parallelize_me!
 
-  REDIS_URL = ENV.fetch('REDIS_URL', 'redis://localhost:6379/0')
   POLL_TIMEOUT = 15.0
   POLL_INTERVAL = 0.1
   SCHEDULE_DELAY = 1.0
@@ -66,7 +65,7 @@ class ScheduledPromotionTest < Wurk::Test::UnitCase
     # (not a global-constant mutation) so it can't race other parallel tests'
     # pollers into draining the shared retry/schedule sets.
     @config[:scheduler_initial_wait] = 0.1
-    @observer_pool = RedisClient.config(url: REDIS_URL).new_client
+    @observer_pool = RedisClient.config(url: Wurk::Test.redis_url).new_client
   end
 
   def teardown
@@ -121,7 +120,7 @@ class ScheduledPromotionTest < Wurk::Test::UnitCase
     target_at = ::Process.clock_gettime(::Process::CLOCK_REALTIME) + delay
     job = {
       'class' => ScheduledPromotionSentinelWorker.name,
-      'args' => [REDIS_URL, @sentinel_key],
+      'args' => [Wurk::Test.redis_url, @sentinel_key],
       'queue' => @queue_name,
       'jid' => SecureRandom.hex(12),
       'retry' => true

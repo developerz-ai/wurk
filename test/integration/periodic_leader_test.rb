@@ -25,7 +25,6 @@ class PeriodicLeaderTest < Wurk::Test::UnitCase
   parallelize_me!
 
   ISOLATED_DB = 15
-  REDIS_URL = (ENV.fetch('REDIS_URL', 'redis://localhost:6379/0').sub(%r{/\d+\z}, '') + "/#{ISOLATED_DB}").freeze
   POLL_TIMEOUT = 20.0
   POLL_INTERVAL = 0.1
 
@@ -35,7 +34,7 @@ class PeriodicLeaderTest < Wurk::Test::UnitCase
     @queue = "#{@ns}-q"
     @config = Wurk::Configuration.new
     @config.logger = ::Logger.new(IO::NULL)
-    @config.redis = { url: REDIS_URL }
+    @config.redis = { url: Wurk::Test.redis_url }
     @config[:timeout] = 5
     # Tick fast so the due loop fires within the test window instead of after a
     # full minute; campaign/renew aggressively so a leader settles quickly.
@@ -43,7 +42,7 @@ class PeriodicLeaderTest < Wurk::Test::UnitCase
     @config[:leader_ttl] = 3
     @config[:leader_renew_interval] = 0.5
     @config[:leader_follower_interval] = 0.5
-    @observer = RedisClient.config(url: REDIS_URL).new_client
+    @observer = RedisClient.config(url: Wurk::Test.redis_url).new_client
     @observer.call('DEL', Wurk::Leader::DEFAULT_KEY)
     @lid = nil
   end

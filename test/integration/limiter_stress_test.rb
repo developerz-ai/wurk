@@ -9,7 +9,6 @@ require_relative '../test_helper'
 class LimiterStressTest < Wurk::Test::UnitCase
   parallelize_me!
 
-  REDIS_URL = ENV['REDIS_URL'] || 'redis://localhost:6379/0'
   THREADS = 50
   PER_THREAD = 20 # THREADS * PER_THREAD = 1000 acquires
 
@@ -18,7 +17,7 @@ class LimiterStressTest < Wurk::Test::UnitCase
     @suffix = "stress#{Process.pid}:#{object_id}"
     # A pool wide enough that 50 threads never starve on a connection (which
     # would surface as a pool timeout, not a limiter decision).
-    @pool = Wurk::RedisPool.new(size: THREADS + 8, url: REDIS_URL, timeout: 5, name: 'lstress')
+    @pool = Wurk::RedisPool.new(size: THREADS + 8, url: Wurk::Test.redis_url, timeout: 5, name: 'lstress')
     @pool.with { |c| Wurk::Lua::Loader.script_load_all(c) }
     Wurk::Limiter.reset_config!
     Wurk::Limiter.config.redis = @pool

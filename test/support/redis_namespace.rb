@@ -1,17 +1,18 @@
 # frozen_string_literal: true
 
-# Per-test Redis namespace isolation. Required for parallel test safety.
-# Each test gets a unique key prefix keyed to PID + object_id, and the
-# namespace is wiped in teardown. See docs/idea/11-testing-ci.md.
+# Per-test Redis isolation. Each minitest-parallel_fork worker runs against its
+# own Redis logical DB (assigned in test_helper's after_parallel_fork hook), so
+# concurrent test *classes* never see each other's keys. Within a worker, classes
+# run sequentially, so wiping the worker's DB after every test gives each test a
+# clean slate without affecting any other worker. Workers never touch DB 0.
 module RedisNamespace
-  def setup
-    super
-    @wurk_test_namespace = "wurktest:#{Process.pid}:#{object_id}:"
-    # TODO: scope Wurk.redis to use this prefix during the test
-  end
-
   def teardown
-    # TODO: SCAN + DEL all keys under @wurk_test_namespace
+    Wurk.redis { |conn| conn.call('FLUSHDB') }
+  rescue StandardError
+    # A test may have torn down or swapped the global pool; isolation for the
+    # *next* test is still covered by the worker-start flush + its own teardown.
+    nil
+  ensure
     super
   end
 end

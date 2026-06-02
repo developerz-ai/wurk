@@ -26,7 +26,6 @@ end
 class RollingRestartTest < Wurk::Test::UnitCase
   parallelize_me!
 
-  REDIS_URL = ENV.fetch('REDIS_URL', 'redis://localhost:6379/0')
   POLL_TIMEOUT = 60.0
   POLL_INTERVAL = 0.1
   CHILD_COUNT = 2
@@ -37,7 +36,7 @@ class RollingRestartTest < Wurk::Test::UnitCase
     @ns = "rrestart-#{::Process.pid}-#{object_id}"
     @queue_name = "#{@ns}-q"
     @sentinel_prefix = "#{@ns}-sentinel"
-    @observer = RedisClient.config(url: REDIS_URL).new_client
+    @observer = RedisClient.config(url: Wurk::Test.redis_url).new_client
   end
 
   def teardown
@@ -139,7 +138,7 @@ class RollingRestartTest < Wurk::Test::UnitCase
     config = build_config
     client = Wurk::Client.new(pool: capsule_pool(config), config: config)
     jid = client.push('class' => RollingRestartIdleWorker.name,
-                      'args' => [REDIS_URL, @sentinel_prefix, 'placeholder'],
+                      'args' => [Wurk::Test.redis_url, @sentinel_prefix, 'placeholder'],
                       'queue' => @queue_name)
     # placeholder arg must equal jid so the worker stamps the right key
     repush_with_correct_jid(client, jid)
@@ -154,7 +153,7 @@ class RollingRestartTest < Wurk::Test::UnitCase
   def repush_with_correct_jid(client, jid)
     pop_existing(jid)
     client.push('class' => RollingRestartIdleWorker.name,
-                'args' => [REDIS_URL, @sentinel_prefix, jid],
+                'args' => [Wurk::Test.redis_url, @sentinel_prefix, jid],
                 'queue' => @queue_name,
                 'jid' => jid)
   end

@@ -27,7 +27,6 @@ end
 class SwarmBootTest < Wurk::Test::UnitCase
   parallelize_me!
 
-  REDIS_URL = ENV.fetch('REDIS_URL', 'redis://localhost:6379/0')
   POLL_TIMEOUT = 15.0
   POLL_INTERVAL = 0.1
 
@@ -39,7 +38,7 @@ class SwarmBootTest < Wurk::Test::UnitCase
     @config = Wurk::Configuration.new
     @config.logger = ::Logger.new(IO::NULL)
     @config[:timeout] = 5
-    @observer_pool = RedisClient.config(url: REDIS_URL).new_client
+    @observer_pool = RedisClient.config(url: Wurk::Test.redis_url).new_client
   end
 
   def teardown
@@ -99,7 +98,7 @@ class SwarmBootTest < Wurk::Test::UnitCase
   def push_sentinel_job
     client = Wurk::Client.new(pool: capsule_pool, config: @config)
     client.push('class' => SwarmBootSentinelWorker.name,
-                'args' => [REDIS_URL, @sentinel_key],
+                'args' => [Wurk::Test.redis_url, @sentinel_key],
                 'queue' => @queue_name)
   end
 
