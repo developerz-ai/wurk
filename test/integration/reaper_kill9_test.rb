@@ -35,7 +35,6 @@ end
 class ReaperKill9Test < Wurk::Test::UnitCase
   parallelize_me!
 
-  REDIS_URL     = ENV.fetch('REDIS_URL', 'redis://localhost:6379/0')
   JOB_COUNT     = 1000
   CHILDREN      = 3
   CONCURRENCY   = 2
@@ -55,7 +54,7 @@ class ReaperKill9Test < Wurk::Test::UnitCase
     # Sweep aggressively so a kill -9 victim's stranded jobs are reclaimed
     # within ~1s instead of waiting out the 60s default.
     @config[:super_fetch_reaper_interval] = 1
-    @observer = RedisClient.config(url: REDIS_URL).new_client
+    @observer = RedisClient.config(url: Wurk::Test.redis_url).new_client
   end
 
   def teardown
@@ -102,7 +101,7 @@ class ReaperKill9Test < Wurk::Test::UnitCase
     client = Wurk::Client.new(pool: capsule_pool, config: @config)
     JOB_COUNT.times do |i|
       client.push('class' => ReaperKill9Worker.name,
-                  'args' => [REDIS_URL, @done_key, @exec_key, i.to_s],
+                  'args' => [Wurk::Test.redis_url, @done_key, @exec_key, i.to_s],
                   'queue' => @queue_name)
     end
   end

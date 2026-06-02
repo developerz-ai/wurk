@@ -34,7 +34,6 @@ end
 class GracefulShutdownTest < Wurk::Test::UnitCase
   parallelize_me!
 
-  REDIS_URL = ENV.fetch('REDIS_URL', 'redis://localhost:6379/0')
   POLL_TIMEOUT = 30.0
   POLL_INTERVAL = 0.1
   SHUTDOWN_TIMEOUT = 15
@@ -45,7 +44,7 @@ class GracefulShutdownTest < Wurk::Test::UnitCase
     @queue_name = "#{@ns}-q"
     @started_key = "#{@ns}-started"
     @done_key = "#{@ns}-done"
-    @observer = RedisClient.config(url: REDIS_URL).new_client
+    @observer = RedisClient.config(url: Wurk::Test.redis_url).new_client
   end
 
   def teardown
@@ -80,7 +79,7 @@ class GracefulShutdownTest < Wurk::Test::UnitCase
     config = build_config
     client = Wurk::Client.new(pool: capsule_pool(config), config: config)
     client.push('class' => GracefulShutdownSentinelWorker.name,
-                'args' => [REDIS_URL, @started_key, @done_key, sleep_seconds],
+                'args' => [Wurk::Test.redis_url, @started_key, @done_key, sleep_seconds],
                 'queue' => @queue_name)
   ensure
     config&.reset_redis_pools!
