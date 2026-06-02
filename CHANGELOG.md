@@ -4,6 +4,11 @@ All notable changes to Wurk are recorded here. Format: [Keep a Changelog](https:
 
 ## [Unreleased]
 
+## [1.0.0.rc1] - 2026-06-02
+
+First v1.0.0 release candidate, and the first gem published through the keyless
+(OIDC trusted publishing) release pipeline.
+
 ### Added
 - `Sidekiq::Testing` drop-in: `inline!` / `fake!` / `disable!` (global or block-scoped), the in-memory `Sidekiq::Queues` store, and the `Worker`/`Job` test helpers (`.jobs`, `.clear`, `.drain`, `.perform_one`, `.process_job`, `.drain_all`, `.clear_all`) + `Sidekiq::EmptyQueueError`.
 
@@ -71,7 +76,8 @@ First public (pre-1.0) release. Wurk is a 100% API-compatible drop-in replacemen
 - ActiveJob adapter, `IterableJob`, embedded mode, and a standalone `exe/wurk` runner.
 - Sidekiq client/server middleware contract; third-party ecosystem suites (sidekiq-cron, sidekiq-unique-jobs, sidekiq-scheduler, sidekiq-status, sidekiq-failures, sidekiq-throttled) pass against Wurk.
 
-[Unreleased]: https://github.com/developerz-ai/wurk/compare/v0.0.5...HEAD
+[Unreleased]: https://github.com/developerz-ai/wurk/compare/v1.0.0-rc1...HEAD
+[1.0.0.rc1]: https://github.com/developerz-ai/wurk/compare/v0.0.5...v1.0.0-rc1
 [0.0.5]: https://github.com/developerz-ai/wurk/compare/v0.0.4...v0.0.5
 [0.0.4]: https://github.com/developerz-ai/wurk/compare/v0.0.3...v0.0.4
 [0.0.3]: https://github.com/developerz-ai/wurk/compare/v0.0.2...v0.0.3
