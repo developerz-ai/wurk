@@ -140,14 +140,16 @@ module Wurk
         pool.with(&)
       end
 
-      # `ZRANGE key 0 0 WITHSCORES` yields a single [member, score] pair, nested
-      # as [[member, score]] under RESP3 — the protocol redis-client negotiates
-      # against Redis >= 7. Return the score as a Float, or nil when the set is
-      # empty. (Reading the old flat-RESP2 `row[1]` silently collapses to 0.0
-      # here, which is what `reset_at`/expiry used to report.)
+      # `ZRANGE key 0 0 WITHSCORES` yields a single [member, score] pair, but the
+      # shape depends on the protocol: RESP3 (redis-client's default vs Redis >= 7)
+      # nests it as [[member, score]]; RESP2 returns a flat [member, score].
+      # Return the score as a Float across both, or nil when the set is empty.
+      # (The old flat-only `row[1]` silently collapsed to 0.0 under RESP3.)
       def first_score(row)
         pair = row.first
-        pair ? pair.last.to_f : nil
+        return nil if pair.nil?
+
+        (pair.is_a?(Array) ? pair.last : row[1]).to_f
       end
 
       def concurrent(name, limit, wait_timeout: DEFAULT_WAIT_TIMEOUT, lock_timeout: DEFAULT_LOCK_TIMEOUT,

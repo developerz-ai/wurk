@@ -434,4 +434,21 @@ class LimiterTest < Wurk::Test::UnitCase
   def test_interval_seconds_accepts_known_string_unit
     assert_equal 60, Wurk::Limiter.interval_seconds('minute', allow_integer: false)
   end
+
+  # ----- first_score: protocol-agnostic ZRANGE WITHSCORES parsing -------
+  # Pure-function unit test (no Redis): covers both wire shapes and empty. The
+  # integration paths only ever hit the RESP3 nested form, so the flat branch
+  # would otherwise go unexercised.
+
+  def test_first_score_reads_resp3_nested_pair
+    assert_in_delta 12.5, Wurk::Limiter.first_score([['member', '12.5']]), 0.0001
+  end
+
+  def test_first_score_reads_resp2_flat_pair
+    assert_in_delta 12.5, Wurk::Limiter.first_score(['member', '12.5']), 0.0001
+  end
+
+  def test_first_score_nil_when_empty
+    assert_nil Wurk::Limiter.first_score([])
+  end
 end
