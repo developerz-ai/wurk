@@ -96,6 +96,20 @@ class WorkSetTest < Wurk::Test::UnitCase
     assert_equal 0, count
   end
 
+  def test_each_without_block_returns_enumerator
+    assert_kind_of Enumerator, work_set.each
+  end
+
+  # rows_for skips a thread whose work-hash value is an empty string —
+  # a heartbeat that UNLINKed-and-rewrote can momentarily leave a blank
+  # field. The empty-string entry must not yield a phantom row.
+  def test_each_skips_blank_work_hash_entry
+    register!(@identity)
+    @pool.with { |c| c.call('HSET', "#{@identity}:work", 'tblank', '') }
+
+    refute_includes(work_set.map { |pid, _, _| pid }, @identity)
+  end
+
   # --- find_work ---------------------------------------------------------
 
   def test_find_work_returns_matching_work

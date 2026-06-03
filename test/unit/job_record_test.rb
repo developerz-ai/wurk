@@ -140,6 +140,15 @@ class JobRecordTest < Wurk::Test::UnitCase
     assert_in_delta(0.0, Wurk::JobRecord.latency_from(future_ms))
   end
 
+  # Legacy float-seconds enqueued_at (< 10^10) hits the `* 1_000` then-branch
+  # of latency_from's ms/secs discriminator.
+  def test_latency_class_method_handles_legacy_float_seconds
+    now_ms = 1_700_000_000_000
+    enqueued_secs = (now_ms / 1_000.0) - 5.0
+
+    assert_in_delta(5.0, Wurk::JobRecord.latency_from(enqueued_secs, now_ms), 0.001)
+  end
+
   # --- error backtrace ---------------------------------------------------
 
   def test_error_backtrace_nil_when_missing
@@ -172,6 +181,62 @@ class JobRecordTest < Wurk::Test::UnitCase
     record = Wurk::JobRecord.new(base_item, @qname)
 
     assert_equal [1, 2], record.display_args
+  end
+
+  # Second call hits the `defined?` memoization guard (display_class line 94
+  # then-branch): same object returned without recomputing.
+  def test_display_class_memoizes_on_second_call
+    record = Wurk::JobRecord.new(base_item, @qname)
+    first = record.display_class
+
+    assert_same first, record.display_class
+  end
+
+  # Second call hits the `defined?` memoization guard (display_args line 100
+  # then-branch).
+  def test_display_args_memoizes_on_second_call
+    record = Wurk::JobRecord.new(base_item, @qname)
+    first = record.display_args
+
+    assert_same first, record.display_args
+  end
+
+  # display_class memoization must survive a nil unwrap result so the second
+  # call short-circuits even when the value is falsy-ish (here: plain klass).
+  def test_display_class_memoizes_active_job_wrapper
+    record = Wurk::JobRecord.new(active_job_payload, @qname)
+    first = record.display_class
+
+    assert_same first, record.display_class
+  end
+
+  # AJ wrapper payload with neither `wrapped` nor args[0]['job_class'] →
+  # unwrap_class falls back to klass (line 125 then-branch).
+  def test_display_class_falls_back_to_klass_when_no_wrapped_or_job_class
+    payload = {
+      'class' => 'ActiveJob::QueueAdapters::SidekiqAdapter::JobWrapper',
+      'queue' => @qname,
+      'jid' => 'aj-jid-2',
+      'args' => [{ 'foo' => 'bar' }],
+      'created_at' => ms_now,
+      'enqueued_at' => ms_now
+    }
+    record = Wurk::JobRecord.new(payload, @qname)
+
+    assert_equal 'ActiveJob::QueueAdapters::SidekiqAdapter::JobWrapper', record.display_class
+  end
+
+  # Mailer wrapper whose arguments have fewer than 2 entries → mailer_display
+  # returns nil (line 134 then-branch); unwrap_class falls back to job_class.
+  def test_display_class_mailer_with_too_few_args_falls_back_to_job_class
+    payload = active_job_payload(
+      'wrapped' => 'ActionMailer::MailDeliveryJob',
+      'args' => [{ 'job_class' => 'ActionMailer::MailDeliveryJob',
+                   'arguments' => ['UserMailer'] }]
+    )
+    record = Wurk::JobRecord.new(payload, @qname)
+
+    assert_equal 'ActionMailer::MailDeliveryJob', record.display_class
   end
 
   def test_display_class_unwraps_active_job_wrapper

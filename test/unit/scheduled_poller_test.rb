@@ -31,7 +31,7 @@ class ScheduledPollerTest < Wurk::Test::UnitCase
     super
   end
 
-  def schedule_job(set:, at:, queue: @queue, klass: 'Worker', args: ['x']) # rubocop:disable Naming/MethodParameterName
+  def schedule_job(set:, at:, queue: @queue, klass: 'Worker', args: ['x'])
     job = { 'class' => klass, 'args' => args, 'jid' => SecureRandom.hex(12), 'queue' => queue, 'retry' => true }
     @pool.with { |c| c.call('ZADD', set, at.to_s, Wurk.dump_json(job)) }
     job
@@ -192,6 +192,39 @@ class ScheduledPollerTest < Wurk::Test::UnitCase
     poller.define_singleton_method(:cleanup) { 0 }
 
     assert_equal 1, poller.send(:process_count)
+  end
+
+  # --- initial_wait / wait short-circuit on @done --------------------
+  # After `terminate` sets @done, both wait loops must skip the sleeper
+  # entirely (the `unless @done` else side) and return immediately so a
+  # shutdown can't be blocked by a pending poll interval.
+
+  def test_initial_wait_returns_immediately_when_terminated
+    poller = Wurk::Scheduled::Poller.new(@config)
+    poller.terminate
+
+    completed = false
+    thread = Thread.new do
+      poller.send(:initial_wait)
+      completed = true
+    end
+
+    assert thread.join(1), 'initial_wait must not block once @done is set'
+    assert completed
+  end
+
+  def test_wait_returns_immediately_when_terminated
+    poller = Wurk::Scheduled::Poller.new(@config)
+    poller.terminate
+
+    completed = false
+    thread = Thread.new do
+      poller.send(:wait)
+      completed = true
+    end
+
+    assert thread.join(1), 'wait must not block once @done is set'
+    assert completed
   end
 
   private

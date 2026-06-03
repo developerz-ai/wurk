@@ -1,6 +1,7 @@
 # frozen_string_literal: true
 
 require_relative '../test_helper'
+require 'date'
 
 class DeployTest < Wurk::Test::UnitCase
   parallelize_me!
@@ -83,6 +84,32 @@ class DeployTest < Wurk::Test::UnitCase
 
   def test_fetch_empty_when_no_marks
     assert_equal({}, Wurk::Deploy.new.fetch(@at))
+  end
+
+  # `fetch` with a Date (not Time): Date doesn't respond to #utc, so the
+  # `date = date.utc if ...` guard's else side leaves it untouched and we
+  # strftime the bare Date. Pins the non-Time path of the date coercion.
+  def test_fetch_accepts_a_date_object
+    Wurk::Deploy.mark!(label: @label, at: @at)
+    date = ::Date.new(2026, 5, 21)
+
+    refute_respond_to date, :utc, 'guard precondition: Date has no #utc'
+    marks = Wurk::Deploy.new.fetch(date)
+
+    assert_equal({ '2026-05-21T14:37:00Z' => @label }, marks)
+  end
+
+  # with_redis routes through an injected pool (`@pool.with(&)`, the then
+  # side) instead of the global `Wurk.redis`. Passing the configured pool
+  # exercises that branch while still hitting real Redis.
+  def test_mark_uses_injected_pool
+    pool = Wurk.configuration.redis_pool
+    iso = Wurk::Deploy.new(pool: pool).mark!(label: @label, at: @at)
+
+    assert_equal '2026-05-21T14:37:00Z', iso
+    val = pool.with { |c| c.call('HGET', '20260521-marks', iso) }
+
+    assert_equal @label, val
   end
 
   def test_class_mark_delegates_to_instance

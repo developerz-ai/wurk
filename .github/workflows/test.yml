@@ -100,11 +100,11 @@ jobs:
       - name: rake test:parity
         run: bundle exec rake test:parity
 
-  # Blocking line-coverage gate (>= 90%) on lib/. Branch coverage is measured
-  # and uploaded too, but not yet gated (ratcheting toward 90% — see #67). Pin
-  # RAILS_VERSION so the gated number stays deterministic.
+  # Blocking line + branch coverage gates (both >= 90%) on lib/. The Cobertura
+  # report is still uploaded for per-file inspection. Pin RAILS_VERSION so the
+  # gated numbers stay deterministic.
   coverage:
-    name: coverage (line >= 90%)
+    name: coverage (line + branch >= 90%)
     runs-on: blacksmith-4vcpu-ubuntu-2404
     services:
       redis:

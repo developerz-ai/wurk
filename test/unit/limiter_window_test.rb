@@ -5,7 +5,6 @@ require_relative '../test_helper'
 class LimiterWindowTest < Wurk::Test::UnitCase
   parallelize_me!
 
-
   def setup
     super
     @suffix = "wn#{Process.pid}#{object_id}"
@@ -104,5 +103,38 @@ class LimiterWindowTest < Wurk::Test::UnitCase
 
     assert_equal 4, l.options[:count]
     assert_equal :second, l.options[:interval]
+  end
+
+  # No block → ArgumentError before any Redis work (line 37 then).
+  def test_within_limit_requires_block
+    l = Wurk::Limiter.window("nb-#{@suffix}", 5, :minute)
+
+    assert_raises(ArgumentError) { l.within_limit }
+  end
+
+  # With entries inside the window, oldest_expiry takes the row-present
+  # then-side and status carries reset_at = oldest_ts + interval. The oldest
+  # entry was just added, so reset_at lands ~`interval` seconds in the future.
+  # Asserting it exceeds `now` catches the flat-vs-nested RESP3 ZRANGE bug,
+  # which would collapse oldest_ts to 0.0 and leave reset_at at a bare 60.0.
+  def test_status_reset_at_with_entries_present
+    l = Wurk::Limiter.window("se-#{@suffix}", 5, :minute)
+    before = Time.now.to_f
+    l.within_limit {}
+    s = l.status
+
+    assert_equal 1, s[:used]
+    assert_operator s[:reset_at], :>, before, 'reset_at = oldest_ts + interval, not a bare 60.0'
+  end
+
+  # wait_timeout > 0: a full short window slides clear while we wait, taking
+  # the no-raise side (remaining > 0, line 45 else) then succeeding.
+  def test_waits_and_succeeds_when_window_slides_clear
+    l = Wurk::Limiter.window("wt-#{@suffix}", 1, 1, wait_timeout: 5)
+    l.within_limit {} # fills the single slot
+    ran = false
+    l.within_limit { ran = true } # blocks until the entry leaves the window
+
+    assert ran
   end
 end
