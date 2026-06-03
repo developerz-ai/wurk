@@ -30,7 +30,8 @@ module Wurk
     # actions and show the read-only banner). Always a GET, so it stays
     # reachable while read-only mode blocks mutations.
     def meta
-      render json: { read_only: ::Wurk::Web.config.read_only? }
+      config = ::Wurk::Web.config
+      render json: { read_only: config.read_only?, read_only_message: config.read_only_message }
     end
 
     def stats

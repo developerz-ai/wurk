@@ -2,15 +2,16 @@ import { useQuery } from '@tanstack/react-query';
 import { useState, useEffect } from 'react';
 import { Pagination } from '../components/Pagination';
 import { t } from '../i18n';
-import { relativeTime, truncate, formatArgs } from '../utils';
+import { relativeTime, truncate, formatArgs, isoTime } from '../utils';
 
 interface DeadEntry {
   jid: string;
-  class: string;
+  klass: string;
   args: unknown;
   error_class: string;
   error_message: string;
-  failed_at: number;
+  // `at` is the death epoch (the sorted-set score); see api/serializers.rb#sorted_entry.
+  at: number;
   score: number;
 }
 
@@ -75,14 +76,14 @@ export default function Dead() {
                       >
                         {truncate(entry.jid, 12)}
                       </td>
-                      <td style={{ fontWeight: 500 }}>{entry.class}</td>
+                      <td style={{ fontWeight: 500 }}>{entry.klass}</td>
                       <td title={argsStr}>{truncate(argsStr, 40)}</td>
                       <td title={entry.error_class} style={{ color: 'var(--danger)' }}>
                         {truncate(entry.error_class, 25)}
                       </td>
                       <td title={entry.error_message}>{truncate(entry.error_message, 40)}</td>
-                      <td title={new Date(entry.failed_at * 1000).toISOString()}>
-                        {relativeTime(entry.failed_at)}
+                      <td title={isoTime(entry.at)}>
+                        {relativeTime(entry.at)}
                       </td>
                     </tr>
                   );

@@ -105,6 +105,23 @@ class WebConfigTest < Wurk::Test::UnitCase
     refute Wurk::Web.config.read_only?
   end
 
+  def test_read_only_message_defaults_nil
+    assert_nil Wurk::Web.config.read_only_message
+  end
+
+  def test_read_only_message_is_configurable
+    Wurk::Web.configure { |c| c.read_only_message = 'public demo — actions disabled' }
+
+    assert_equal 'public demo — actions disabled', Wurk::Web.config.read_only_message
+  end
+
+  def test_reset_clears_read_only_message
+    Wurk::Web.configure { |c| c.read_only_message = 'x' }
+    Wurk::Web.reset_config!
+
+    assert_nil Wurk::Web.config.read_only_message
+  end
+
   def test_read_only_writer_coerces_to_boolean
     Wurk::Web.configure { |c| c.read_only = 'yes' }
 

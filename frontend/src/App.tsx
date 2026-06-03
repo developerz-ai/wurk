@@ -45,7 +45,7 @@ function ReadOnlyBanner() {
         letterSpacing: '0.01em',
       }}
     >
-      {t('readonly.banner')}
+      {meta.read_only_message || t('readonly.banner')}
     </div>
   );
 }

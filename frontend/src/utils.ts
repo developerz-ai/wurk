@@ -1,4 +1,8 @@
 export function relativeTime(epochSeconds: number): string {
+  // Sorted-set entries can arrive without a usable timestamp; guard so a bad
+  // value renders a dash instead of "NaNs ago".
+  if (!Number.isFinite(epochSeconds)) return '—';
+
   const now = Date.now() / 1000;
   const diff = now - epochSeconds;
   const absDiff = Math.abs(diff);
@@ -16,6 +20,15 @@ export function relativeTime(epochSeconds: number): string {
   }
 
   return future ? `${value} from now` : `${value} ago`;
+}
+
+// ISO timestamp for hover titles. `new Date(NaN).toISOString()` throws a
+// RangeError that unmounts the whole table; returning '' keeps the cell safe
+// when the epoch is missing or non-numeric.
+export function isoTime(epochSeconds: number): string {
+  const ms = epochSeconds * 1000;
+  if (!Number.isFinite(ms)) return '';
+  return new Date(ms).toISOString();
 }
 
 export function truncate(s: string, max = 80): string {
