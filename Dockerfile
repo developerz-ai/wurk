@@ -15,6 +15,9 @@ WORKDIR /src
 COPY frontend/package.json frontend/package-lock.json ./frontend/
 RUN cd frontend && npm ci
 COPY frontend/ ./frontend/
+# vite.config.ts's wurk-manifest-generator plugin readFileSync's ../lib/wurk/version.rb
+# at build time, so the SPA stage needs it present (was missing → npm run build ENOENT).
+COPY lib/wurk/version.rb ./lib/wurk/version.rb
 RUN cd frontend && npm run build   # → /src/vendor/assets/dashboard
 
 # ---- Stage 2: Ruby runtime ----
