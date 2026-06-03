@@ -149,17 +149,19 @@ class LimiterConcurrentTest < Wurk::Test::UnitCase
     assert_raises(ArgumentError) { l.within_limit }
   end
 
-  # `soonest_expiry`: while a slot is held the ZSET is non-empty so it takes
-  # the then-side and returns a Float; idle, the ZSET is empty so it returns
-  # nil. The two calls cover both sides of the row guard. (Under RESP3 the
-  # held-slot Float is 0.0 — a latent flat-vs-nested ZRANGE issue in lib that
-  # this test deliberately does not assert a value on.)
+  # `soonest_expiry`: while a slot is held the ZSET is non-empty so it returns
+  # the slot's expiry timestamp; idle, the ZSET is empty so it returns nil. The
+  # two calls cover both sides of the guard. reset_at must be a real future
+  # epoch (lock_timeout out), not 0.0 — the latter is the flat-vs-nested RESP3
+  # ZRANGE bug this now asserts against.
   def test_status_reset_at_present_while_held_and_nil_when_idle
     l = Wurk::Limiter.concurrent("rx-#{@suffix}", 2, lock_timeout: 60)
     captured = nil
+    before = Time.now.to_f
     l.within_limit { captured = l.status }
 
     assert_kind_of Float, captured[:reset_at], 'held slot takes the non-empty-row branch'
+    assert_operator captured[:reset_at], :>, before, 'reset_at is a real future epoch, not 0.0'
     assert_nil l.status[:reset_at], 'idle limiter takes the empty-row branch'
   end
 end

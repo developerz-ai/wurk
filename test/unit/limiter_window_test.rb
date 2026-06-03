@@ -113,20 +113,18 @@ class LimiterWindowTest < Wurk::Test::UnitCase
   end
 
   # With entries inside the window, oldest_expiry takes the row-present
-  # then-side (window.rb line 66) and status carries a non-nil reset_at.
-  #
-  # NOTE: under RESP3 `ZRANGE ... WITHSCORES` returns nested [member, score]
-  # pairs, so the existing `row[1]` indexing reads nil and reset_at lands at
-  # `interval` (60.0) rather than oldest_ts + interval. That is a latent
-  # bug in lib/wurk/limiter/window.rb (filed separately); we only assert the
-  # branch is taken (reset_at non-nil), not the wall-clock semantics.
+  # then-side and status carries reset_at = oldest_ts + interval. The oldest
+  # entry was just added, so reset_at lands ~`interval` seconds in the future.
+  # Asserting it exceeds `now` catches the flat-vs-nested RESP3 ZRANGE bug,
+  # which would collapse oldest_ts to 0.0 and leave reset_at at a bare 60.0.
   def test_status_reset_at_with_entries_present
     l = Wurk::Limiter.window("se-#{@suffix}", 5, :minute)
+    before = Time.now.to_f
     l.within_limit {}
     s = l.status
 
     assert_equal 1, s[:used]
-    refute_nil s[:reset_at], 'oldest_expiry returns a value when entries are present'
+    assert_operator s[:reset_at], :>, before, 'reset_at = oldest_ts + interval, not a bare 60.0'
   end
 
   # wait_timeout > 0: a full short window slides clear while we wait, taking

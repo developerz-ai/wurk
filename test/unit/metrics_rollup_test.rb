@@ -102,6 +102,7 @@ class MetricsRollupTest < Wurk::Test::UnitCase
   # Exercises the `until @done` loop body (tick is invoked by the spawned
   # thread, not the caller). A 0.01s interval + leader stub + poll keeps it
   # deterministic without a fixed sleep.
+  # rubocop:disable Metrics/AbcSize
   def test_start_loop_ticks_until_terminated
     config = Wurk::Configuration.new
     config.logger = ::Logger.new(IO::NULL)
@@ -118,6 +119,7 @@ class MetricsRollupTest < Wurk::Test::UnitCase
 
     assert_operator rollup.instance_variable_get(:@ticks).to_i, :>, 0
   end
+  # rubocop:enable Metrics/AbcSize
 
   # `wait` short-circuits the ConditionVariable wait when @done is already
   # set (the `unless @done` else branch) so terminate-then-wait returns at once.

@@ -311,15 +311,6 @@ class MetricsStatsdTest < Wurk::Test::UnitCase
     assert_in_delta 0.1, count[2][:sample_rate], 0.0001
   end
 
-  # line 185 else: the implicit no-match arm of `emit`'s case. Unreachable
-  # through the public API — every internal call site passes :increment,
-  # :gauge, or :distribution (finalize + call), so no input drives the
-  # fall-through. Exercising it would require calling the private #emit with a
-  # bogus kind, which doesn't reflect any real path; left uncovered by design.
-  def test_emit_case_fall_through_is_unreachable
-    skip 'emit case else is unreachable: all call sites pass a known kind'
-  end
-
   def test_module_inclusion
     assert_includes Wurk::Metrics::Statsd.ancestors, Wurk::Middleware::ServerMiddleware
   end

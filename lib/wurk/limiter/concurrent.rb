@@ -87,7 +87,7 @@ module Wurk
       # Lowest slot expiry epoch (the next slot to free), or nil when empty.
       def soonest_expiry
         row = Wurk::Limiter.redis { |c| c.call('ZRANGE', state_key, 0, 0, 'WITHSCORES') }
-        row && !row.empty? ? row[1].to_f : nil
+        Wurk::Limiter.first_score(row)
       end
 
       def state_key
