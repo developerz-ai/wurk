@@ -6,7 +6,6 @@ require 'tzinfo'
 class CronTest < Wurk::Test::UnitCase
   parallelize_me!
 
-  REDIS_URL = ENV['REDIS_URL'] || 'redis://localhost:6379/0'
 
   # Workers used by ConfigTester resolution checks. Bodies stay empty —
   # the test only needs the constant to resolve, not actual perform logic.

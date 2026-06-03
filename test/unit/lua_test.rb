@@ -5,11 +5,10 @@ require_relative '../test_helper'
 class LuaTest < Wurk::Test::UnitCase
   parallelize_me!
 
-  REDIS_URL = ENV['REDIS_URL'] || 'redis://localhost:6379/0'
 
   def setup
     super
-    @pool = Wurk::RedisPool.new(size: 1, url: REDIS_URL, timeout: 2, name: 'lua-test')
+    @pool = Wurk::RedisPool.new(size: 1, url: Wurk::Test.redis_url, timeout: 2, name: 'lua-test')
     @ns   = "luatest:#{Process.pid}:#{object_id}"
     @pool.with { |c| Wurk::Lua::Loader.script_load_all(c) }
   end

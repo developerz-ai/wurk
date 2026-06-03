@@ -548,10 +548,10 @@ class EncryptionTest < Wurk::Test::UnitCase
     end
   end
 
-  # The DEAD/RETRY sets are shared across the suite (per-test Redis namespacing
-  # is still a stub — see test/support/redis_namespace.rb), and processor_test
-  # intentionally routes malformed, non-JSON payloads to DEAD. Skip a neighbor's
-  # poison entry rather than letting JSON.parse blow up while scanning for ours.
+  # Per-worker Redis DB isolation (test_helper) means this test no longer shares
+  # the DEAD/RETRY sets with other classes. Kept as belt-and-suspenders: this
+  # test still writes intentionally-malformed envelopes, so tolerate a non-JSON
+  # member rather than letting JSON.parse blow up while scanning for ours.
   def jid_of(member)
     JSON.parse(member)['jid']
   rescue JSON::ParserError

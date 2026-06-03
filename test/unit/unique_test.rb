@@ -8,7 +8,6 @@ class UniqueTest < Wurk::Test::UnitCase
   # the global config. Running in parallel would let one test's `enable!`
   # leak into another's "should be a no-op" assertion.
 
-  REDIS_URL = ENV['REDIS_URL'] || 'redis://localhost:6379/0'
 
   ENABLE_MUTEX = ::Mutex.new
 
