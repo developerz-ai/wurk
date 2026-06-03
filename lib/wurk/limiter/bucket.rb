@@ -71,19 +71,20 @@ module Wurk
       end
 
       def acquire(used)
-        base = epoch_index
-        lua(:limiter_bucket_acquire,
-            keys: candidate_epoch_keys(base),
-            argv: [@options[:count], interval_seconds, used, ttl, base])
-      end
-
-      # The three consecutive epoch keys (base ±1) the script may touch. All are
-      # passed in KEYS[] so the script never accesses an undeclared key on Redis
-      # Cluster or Dragonfly (#91); the caller can't know Redis's clock, so it
-      # brackets its own epoch and Lua picks the match. NTP-sane skew keeps
-      # Redis's epoch within ±1 of base, so one of the three always matches.
-      def candidate_epoch_keys(base)
-        [base - 1, base, base + 1].map { |e| "lmtr-b:#{@name}:#{e}" }
+        # Resolve the epoch from the Redis clock (spec §1: timing from TIME, not
+        # the client clock) and pass the single fully-qualified key. One declared
+        # key is safe on both Redis Cluster (no CROSSSLOT) and Dragonfly (no
+        # undeclared-key access) — see lua/limiter_bucket_acquire.lua (#91).
+        Wurk::Limiter.redis do |c|
+          now = c.call('TIME').first.to_i
+          epoch = now / interval_seconds
+          remaining = ((epoch + 1) * interval_seconds) - now
+          Wurk::Lua::Loader.eval_cached(
+            c, :limiter_bucket_acquire,
+            keys: ["lmtr-b:#{@name}:#{epoch}"],
+            argv: [@options[:count], used, ttl, remaining]
+          )
+        end
       end
     end
   end
