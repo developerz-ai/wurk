@@ -24,8 +24,11 @@ end
 class PeriodicLeaderTest < Wurk::Test::UnitCase
   parallelize_me!
 
-  ISOLATED_DB = 15
-  POLL_TIMEOUT = 20.0
+  # Ceiling only — wait_for_history returns the instant the loop fires, so a
+  # generous timeout costs nothing on the happy path and just absorbs the slow
+  # tail: under a loaded CI runner, forking + booting two swarm children and
+  # settling leader election can take well over 20s, which is what flaked #73.
+  POLL_TIMEOUT = 45.0
   POLL_INTERVAL = 0.1
 
   def setup
