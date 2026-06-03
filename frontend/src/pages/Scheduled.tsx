@@ -2,11 +2,11 @@ import { useQuery } from '@tanstack/react-query';
 import { useState, useEffect } from 'react';
 import { Pagination } from '../components/Pagination';
 import { t } from '../i18n';
-import { relativeTime, truncate, formatArgs } from '../utils';
+import { relativeTime, truncate, formatArgs, isoTime } from '../utils';
 
 interface ScheduledEntry {
   jid: string;
-  class: string;
+  klass: string;
   args: unknown;
   score: number;
   at: number;
@@ -71,9 +71,9 @@ export default function Scheduled() {
                       >
                         {truncate(entry.jid, 12)}
                       </td>
-                      <td style={{ fontWeight: 500 }}>{entry.class}</td>
+                      <td style={{ fontWeight: 500 }}>{entry.klass}</td>
                       <td title={argsStr}>{truncate(argsStr, 60)}</td>
-                      <td title={new Date(entry.at * 1000).toISOString()}>
+                      <td title={isoTime(entry.at)}>
                         {relativeTime(entry.at)}
                       </td>
                     </tr>

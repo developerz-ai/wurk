@@ -18,7 +18,11 @@ One image (`Dockerfile`), two roles via `bin/demo-entrypoint`:
 
 Both connect to Redis via `REDIS_URL`. A reset/seed (the generator self-heals on
 a Redis flush) keeps the demo from ever looking dead — a flush of the demo Redis
-is enough; the generator re-seeds within one tick.
+is enough; the generator re-seeds within one tick. To stop queue latency from
+creeping up over hours (the single worker can't drain everything the producer
+tops up), an hourly `CronJob` flushes the demo Redis — reference manifest at
+[`demo/k8s/demo-reset-cronjob.yaml`](../demo/k8s/demo-reset-cronjob.yaml), which
+runs the `demo:reset` rake task.
 
 ```text
             ┌── web (puma)  ──► read-only dashboard + generator ──┐
@@ -68,6 +72,7 @@ What's needed to make `https://wurk.demo.developerz.ai` go live. Items marked
 - [ ] **DNS** — `wurk.demo.developerz.ai` → the cluster ingress / Traefik.
 - [ ] **Ingress (Traefik) + TLS** — route the host to the `web` Service, Let's Encrypt cert.
 - [ ] **Public rate-limit** — a Traefik rate-limit middleware on the ingress to discourage abuse.
+- [ ] **Hourly reset `CronJob`** — apply [`demo/k8s/demo-reset-cronjob.yaml`](../demo/k8s/demo-reset-cronjob.yaml) (`demo:reset` → FLUSHDB) so queue latency doesn't creep up over hours. Without it the demo stays alive but the `high`/`low` queues accumulate a multi-hour backlog.
 - [ ] **Resource limits + restart policy** — modest CPU/mem requests; pods must recover on restart with no manual step (the generator self-heals; no persistent state outside Redis).
 
 ### Decisions to confirm with infra

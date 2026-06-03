@@ -2,17 +2,16 @@ import { useQuery } from '@tanstack/react-query';
 import { useState, useEffect } from 'react';
 import { Pagination } from '../components/Pagination';
 import { t } from '../i18n';
-import { relativeTime, truncate, formatArgs } from '../utils';
+import { relativeTime, truncate, formatArgs, isoTime } from '../utils';
 
 interface RetryEntry {
   jid: string;
-  class: string;
+  klass: string;
   args: unknown;
   error_class: string;
   error_message: string;
-  failed_at: number;
-  retry_at: number;
-  retried_at: number | null;
+  // `at` is the next-retry epoch (the sorted-set score); see api/serializers.rb#sorted_entry.
+  at: number;
   retry_count: number;
   score: number;
 }
@@ -72,15 +71,15 @@ export default function Retries() {
                   const argsStr = formatArgs(entry.args);
                   return (
                     <tr key={entry.jid}>
-                      <td style={{ fontWeight: 500 }}>{entry.class}</td>
+                      <td style={{ fontWeight: 500 }}>{entry.klass}</td>
                       <td title={argsStr}>{truncate(argsStr, 40)}</td>
                       <td title={entry.error_class} style={{ color: 'var(--danger)' }}>
                         {truncate(entry.error_class, 30)}
                       </td>
                       <td title={entry.error_message}>{truncate(entry.error_message, 50)}</td>
                       <td style={{ color: 'var(--warning)' }}>{entry.retry_count}</td>
-                      <td title={new Date(entry.retry_at * 1000).toISOString()}>
-                        {relativeTime(entry.retry_at)}
+                      <td title={isoTime(entry.at)}>
+                        {relativeTime(entry.at)}
                       </td>
                     </tr>
                   );
