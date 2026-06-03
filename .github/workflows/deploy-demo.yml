@@ -22,7 +22,7 @@ on:
   workflow_dispatch:
     inputs:
       ref:
-        description: Git ref (branch / tag / SHA) to build and deploy
+        description: Git ref (branch / tag / SHA) to build and push (Image Updater deploys it)
         required: false
         default: main
 
