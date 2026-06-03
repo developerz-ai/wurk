@@ -20,6 +20,10 @@ class CLITest < Wurk::Test::UnitCase
 
   def teardown
     Wurk::CLI.reset_instance!
+    # The `launch` path flips the process-global `Wurk.server` flag (cli.rb).
+    # Reset it so server-mode can't leak into another test class sharing this
+    # worker process (e.g. WurkTopLevelTest#test_server_defaults_false).
+    Wurk.server = false
   ensure
     super
   end
@@ -191,6 +195,55 @@ class CLITest < Wurk::Test::UnitCase
     end
   end
 
+  # lines 215 else + 216 else — a capsule block with neither :queues nor
+  # :concurrency leaves the named capsule's defaults untouched.
+  def test_yaml_capsule_without_queues_or_concurrency_keeps_defaults
+    parse_yaml(<<~YAML)
+      :concurrency: 2
+      :queues:
+        - default
+      :capsules:
+        billing:
+          :foo: bar
+    YAML
+    cap = @cli.config.capsules['billing']
+    default_cap = Wurk::Capsule.new('billing', @cli.config)
+
+    assert_equal default_cap.concurrency, cap.concurrency
+    assert_equal default_cap.queues, cap.queues
+  end
+
+  # line 239 else — `parse_config` called with no environment set skips the
+  # overlay-delete entirely.
+  def test_parse_config_without_environment_skips_overlay
+    Tempfile.create(['wurk', '.yml']) do |f|
+      f.write(<<~YAML)
+        :concurrency: 4
+        :production:
+          :concurrency: 99
+      YAML
+      f.flush
+      @cli.instance_variable_set(:@environment, nil)
+      opts = @cli.send(:parse_config, f.path)
+
+      assert_equal 4, opts[:concurrency]
+      # Overlay key is left intact because no environment was selected.
+      assert_equal 99, opts[:production][:concurrency]
+    end
+  end
+
+  # line 247 else — an Integer key does not respond to #to_sym, so
+  # symbolize_keys_deep! leaves it as-is.
+  def test_symbolize_keys_deep_leaves_non_symbolizable_keys
+    refute_respond_to(1, :to_sym)
+    hash = { 1 => 'value', 'nested' => { 2 => 'x' } }
+
+    @cli.send(:symbolize_keys_deep!, hash)
+
+    assert_equal 'value', hash[1]
+    assert_equal 'x', hash[:nested][2]
+  end
+
   def test_missing_config_file_raises
     assert_raises(ArgumentError) do
       with_require_set { @cli.parse(['-C', '/does/not/exist.yml']) }
@@ -220,6 +273,47 @@ class CLITest < Wurk::Test::UnitCase
       @cli.config[:require] = dir
       assert_raises(SystemExit) { capture_io { @cli.parse(['-q', 'default']) } }
     end
+  end
+
+  # line 199 else — when :concurrency is already set, apply_defaults! returns
+  # before consulting RAILS_MAX_THREADS.
+  def test_apply_defaults_keeps_explicit_concurrency
+    prev = ENV.fetch('RAILS_MAX_THREADS', nil)
+    ENV['RAILS_MAX_THREADS'] = '50'
+    opts = { concurrency: 8 }
+    @cli.send(:apply_defaults!, opts)
+
+    assert_equal 8, opts[:concurrency]
+    assert_equal ['default'], opts[:queues]
+  ensure
+    prev.nil? ? ENV.delete('RAILS_MAX_THREADS') : ENV['RAILS_MAX_THREADS'] = prev
+  end
+
+  # line 199 else (second arm) — no explicit concurrency and no
+  # RAILS_MAX_THREADS leaves concurrency unset.
+  def test_apply_defaults_no_rails_max_threads_leaves_concurrency_nil
+    prev = ENV.fetch('RAILS_MAX_THREADS', nil)
+    ENV.delete('RAILS_MAX_THREADS')
+    opts = {}
+    @cli.send(:apply_defaults!, opts)
+
+    assert_nil opts[:concurrency]
+  ensure
+    ENV['RAILS_MAX_THREADS'] = prev if prev
+  end
+
+  # line 182 else — validate_pool_sizes! returns cleanly when every capsule's
+  # real Redis pool is at least as large as its concurrency.
+  def test_validate_pool_sizes_passes_when_pool_large_enough
+    @cli.config.redis = { url: Wurk::Test.redis_url }
+    @cli.config.reset_redis_pools!
+    cap = @cli.config.default_capsule
+    cap.concurrency = 1
+
+    assert_operator(cap.redis_pool.size, :>=, cap.concurrency)
+    @cli.send(:validate_pool_sizes!) # does not raise
+  ensure
+    @cli.config.reset_redis_pools!
   end
 
   def test_validate_raises_on_non_positive_concurrency
@@ -266,6 +360,28 @@ class CLITest < Wurk::Test::UnitCase
     assert_match(/Thread TID-/, io.string)
   end
 
+  # line 35 else — a thread whose `backtrace` is nil hits the
+  # `<no backtrace available>` branch of BACKTRACE_DUMPER. A real thread's
+  # backtrace nilness is a transient VM state we can't pin deterministically,
+  # so we feed Thread.list a fake thread with no backtrace for the call.
+  def test_handle_signal_info_reports_missing_backtrace
+    io = StringIO.new
+    @cli.config.logger = ::Logger.new(io)
+    fake = Object.new
+    fake.define_singleton_method(:name) { 'no-bt' }
+    fake.define_singleton_method(:backtrace) { nil }
+
+    original = Thread.method(:list)
+    Thread.define_singleton_method(:list) { [fake] }
+    begin
+      @cli.handle_signal('INFO')
+    ensure
+      Thread.define_singleton_method(:list, original)
+    end
+
+    assert_match(/<no backtrace available>/, io.string)
+  end
+
   # --- run plumbing (without booting Redis/launcher) -----------------
 
   def test_run_short_circuits_when_redis_too_old
@@ -304,6 +420,67 @@ class CLITest < Wurk::Test::UnitCase
     assert_match(/Pool size too small/, err.message)
   end
 
+  # line 96 then + line 105 then — boot_app:true runs boot_application and
+  # warmup:true reaches the Process.warmup guard. We point :require at a real
+  # single .rb file and stub the Redis/launch tail so nothing actually boots.
+  def test_run_boots_app_and_warms_up
+    booted = []
+    @cli.define_singleton_method(:boot_application) { booted << :boot }
+    @cli.define_singleton_method(:redis_info) { { 'redis_version' => '7.2.0', 'maxmemory_policy' => 'noeviction' } }
+    @cli.define_singleton_method(:trap_signals) { |_| nil }
+    @cli.define_singleton_method(:validate_pool_sizes!) { nil }
+    @cli.define_singleton_method(:identity) { 'host:1:abc' }
+    @cli.define_singleton_method(:launch) { |_self_read| booted << :launch }
+
+    without_warmup_disable { @cli.run(boot_app: true, warmup: true) }
+
+    assert_equal %i[boot launch], booted
+  end
+
+  # lines 128 then/body + 129 then/else — drive launch's self-pipe loop with a
+  # real pipe: one signal line (handled), then EOF (gets returns nil → break).
+  def test_launch_loop_handles_signal_then_breaks_on_nil
+    with_require_set { @cli.parse(['-q', 'default']) }
+    seen = []
+    @cli.define_singleton_method(:handle_signal) { |sig| seen << sig }
+
+    self_read, self_write = IO.pipe
+    self_write.puts('TTIN')
+    self_write.close # EOF → next gets returns nil → break (line 129 then)
+
+    fake_launcher = Object.new
+    fake_launcher.define_singleton_method(:run) { nil }
+
+    with_stub_launcher(fake_launcher) { @cli.send(:launch, self_read) }
+
+    assert_equal ['TTIN'], seen
+  ensure
+    self_read&.close
+  end
+
+  # line 128 else / rescue path — an Interrupt inside the loop triggers the
+  # graceful-shutdown rescue, which calls launcher.stop and exits(0).
+  def test_launch_rescues_interrupt_and_exits
+    with_require_set { @cli.parse(['-q', 'default']) }
+    stopped = []
+    fake_launcher = Object.new
+    fake_launcher.define_singleton_method(:run) { nil }
+    fake_launcher.define_singleton_method(:stop) { stopped << :stop }
+    @cli.define_singleton_method(:handle_signal) { |_sig| raise Interrupt }
+
+    self_read, self_write = IO.pipe
+    self_write.puts('INT')
+
+    with_stub_launcher(fake_launcher) do
+      assert_raises(SystemExit) { @cli.send(:launch, self_read) }
+    end
+
+    assert_equal [:stop], stopped
+  ensure
+    self_read&.close
+    self_write&.close
+  end
+
   # --- boot_application paths -----------------------------------------
 
   def test_boot_application_requires_single_file
@@ -319,6 +496,23 @@ class CLITest < Wurk::Test::UnitCase
     end
   end
 
+  # line 309 then — when :require points at a directory, boot_application
+  # dispatches to boot_rails_application. We stub that tail because actually
+  # booting Rails (require 'rails' + config/environment.rb) mutates global
+  # process state irreversibly and is exercised in the engine suite instead.
+  def test_boot_application_dispatches_to_rails_for_directory
+    Dir.mktmpdir do |dir|
+      @cli.config[:require] = dir
+      @cli.instance_variable_set(:@environment, 'test')
+      dispatched = []
+      @cli.define_singleton_method(:boot_rails_application) { |path| dispatched << path }
+
+      @cli.send(:boot_application)
+
+      assert_equal [dir], dispatched
+    end
+  end
+
   private
 
   # `validate!` requires `:require` to point at a real file (or a Rails dir
@@ -331,5 +525,35 @@ class CLITest < Wurk::Test::UnitCase
     yield
   ensure
     ENV['RAILS_MAX_THREADS'] = prev if prev
+  end
+
+  # Write `body` to a temp YAML file and drive `parse -C` against it.
+  def parse_yaml(body)
+    Tempfile.create(['wurk', '.yml']) do |f|
+      f.write(body)
+      f.flush
+      with_require_set { @cli.parse(['-C', f.path]) }
+    end
+  end
+
+  # `Process.warmup` is gated on RUBY_DISABLE_WARMUP != '1'; clear it so the
+  # warmup branch is reachable, then restore.
+  def without_warmup_disable
+    prev = ENV.fetch('RUBY_DISABLE_WARMUP', nil)
+    ENV.delete('RUBY_DISABLE_WARMUP')
+    yield
+  ensure
+    prev.nil? ? ENV.delete('RUBY_DISABLE_WARMUP') : ENV['RUBY_DISABLE_WARMUP'] = prev
+  end
+
+  # minitest 6 dropped Object#stub, so swap Wurk::Launcher.new for a fake via a
+  # temporary singleton method and restore it after. parallel_fork forks per
+  # class, so this never leaks into sibling suites.
+  def with_stub_launcher(fake)
+    original = Wurk::Launcher.method(:new)
+    Wurk::Launcher.define_singleton_method(:new) { |*, **| fake }
+    yield
+  ensure
+    Wurk::Launcher.define_singleton_method(:new, original)
   end
 end

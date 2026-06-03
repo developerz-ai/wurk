@@ -63,7 +63,8 @@ module Wurk
       # Oldest timestamp + interval = the moment it leaves the window.
       def oldest_expiry
         row = Wurk::Limiter.redis { |c| c.call('ZRANGE', state_key, 0, 0, 'WITHSCORES') }
-        row && !row.empty? ? row[1].to_f + interval_seconds : nil
+        score = Wurk::Limiter.first_score(row)
+        score && (score + interval_seconds)
       end
 
       def interval_seconds

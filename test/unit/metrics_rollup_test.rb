@@ -97,6 +97,63 @@ class MetricsRollupTest < Wurk::Test::UnitCase
     assert_empty bucket_hash('1m')
   end
 
+  # --- background thread loop (start/terminate) -------------------------
+
+  # Exercises the `until @done` loop body (tick is invoked by the spawned
+  # thread, not the caller). A 0.01s interval + leader stub + poll keeps it
+  # deterministic without a fixed sleep.
+  # rubocop:disable Metrics/AbcSize
+  def test_start_loop_ticks_until_terminated
+    config = Wurk::Configuration.new
+    config.logger = ::Logger.new(IO::NULL)
+    config[:metrics_rollup_interval] = 0.01
+    rollup = Wurk::Metrics::Rollup.new(config)
+    rollup.define_singleton_method(:leader?) { true }
+    rollup.define_singleton_method(:roll) do |_now = ::Time.now|
+      @ticks = (@ticks || 0) + 1
+    end
+
+    rollup.start
+    poll_until(2.0) { rollup.instance_variable_get(:@ticks).to_i.positive? }
+    rollup.terminate
+
+    assert_operator rollup.instance_variable_get(:@ticks).to_i, :>, 0
+  end
+  # rubocop:enable Metrics/AbcSize
+
+  # `wait` short-circuits the ConditionVariable wait when @done is already
+  # set (the `unless @done` else branch) so terminate-then-wait returns at once.
+  def test_wait_returns_immediately_once_done
+    @rollup.terminate
+
+    completed = false
+    t = Thread.new do
+      @rollup.send(:wait)
+      completed = true
+    end
+    t.join(2.0)
+
+    assert completed, 'wait must return immediately when @done is set'
+  ensure
+    t&.kill
+  end
+
+  # --- minute_total field parsing ---------------------------------------
+
+  # A source field whose kind isn't p/f/ms (or has no kind) is ignored — the
+  # `total.key?` guard's else side. Seeding a `Klass|x` field must not blow up
+  # the totals or raise.
+  def test_minute_total_ignores_unknown_kind_fields
+    seed_minute(processed: 3, failed: 0, ms: 30)
+    Wurk.redis do |c|
+      c.call('HSET', Wurk::Metrics::History.minute_key(@at),
+             "#{@klass}|x", 999, 'nopipe', 7)
+    end
+    @rollup.roll(@at + 60)
+
+    assert_equal({ 'p' => 3, 'f' => 0, 'ms' => 30 }, bucket_hash('1m'))
+  end
+
   # ---- Query.history reader ------------------------------------------------
 
   def test_history_reader_returns_gap_filled_series
@@ -121,6 +178,11 @@ class MetricsRollupTest < Wurk::Test::UnitCase
   end
 
   private
+
+  def poll_until(timeout)
+    deadline = ::Process.clock_gettime(::Process::CLOCK_MONOTONIC) + timeout
+    sleep(0.005) until yield || ::Process.clock_gettime(::Process::CLOCK_MONOTONIC) > deadline
+  end
 
   def seed_minute(processed:, failed:, ms:)
     Wurk.redis do |c|

@@ -118,6 +118,17 @@ class MiddlewareBuiltinsTest < Wurk::Test::UnitCase
     Object.const_set(:I18n, real) if had_real
   end
 
+  # Ensures `::I18n` is undefined for the block, saving & restoring any
+  # real constant Rails may have loaded. Mirror image of with_fake_i18n.
+  def without_i18n
+    had_real = Object.const_defined?(:I18n)
+    real     = had_real ? Object.const_get(:I18n) : nil
+    Object.send(:remove_const, :I18n) if had_real
+    yield
+  ensure
+    Object.const_set(:I18n, real) if had_real
+  end
+
   def build_handler
     h = Wurk::Middleware::InterruptHandler.new
     h.config = FakeConfig.new
@@ -186,6 +197,25 @@ class MiddlewareBuiltinsTest < Wurk::Test::UnitCase
   def test_i18n_includes_client_middleware_module
     assert_includes Wurk::Middleware::I18n::Client.ancestors, Wurk::Middleware::ClientMiddleware
     assert_includes Wurk::Middleware::I18n::Server.ancestors, Wurk::Middleware::ServerMiddleware
+  end
+
+  # No i18n gem loaded → `defined?(::I18n)` is false. current_locale must
+  # return nil (the else side of `... if defined?(::I18n)`) so the client
+  # never introduces a `"locale"` key and changes the wire shape.
+  def test_i18n_current_locale_nil_when_not_loaded
+    without_i18n do
+      assert_nil Wurk::Middleware::I18n.current_locale
+    end
+  end
+
+  def test_i18n_client_no_locale_key_when_i18n_absent
+    without_i18n do
+      job = { 'class' => 'X', 'args' => [] }
+      result = Wurk::Middleware::I18n::Client.new.call('X', job, 'default', nil) { :body }
+
+      refute_includes job.keys, 'locale'
+      assert_equal :body, result
+    end
   end
 
   # =====================================================================

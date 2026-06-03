@@ -232,6 +232,106 @@ class BatchLifecycleTest < Wurk::Test::UnitCase
     assert_equal %w[CbA CbB], attempted, 'both callbacks attempted despite the first raising'
   end
 
+  # --- callback dedup (second fire is a no-op) ---------------------------
+
+  def test_fire_complete_is_idempotent
+    batch = new_batch(complete: 'C')
+    batch.jobs { perform_one }
+
+    Wurk::Batch::Callbacks.fire_complete(batch.bid)
+    Wurk::Batch::Callbacks.fire_complete(batch.bid)
+
+    assert_equal 1, callbacks_fired(event: 'complete', bid: batch.bid)
+  end
+
+  def test_fire_success_is_idempotent
+    batch = new_batch(success: 'S')
+    batch.jobs { perform_one }
+
+    Wurk::Batch::Callbacks.fire_success(batch.bid)
+    Wurk::Batch::Callbacks.fire_success(batch.bid)
+
+    assert_equal 1, callbacks_fired(event: 'success', bid: batch.bid)
+  end
+
+  def test_fire_death_is_idempotent
+    batch = new_batch(death: 'D')
+    batch.jobs { perform_one }
+
+    Wurk::Batch::Callbacks.fire_death(batch.bid)
+    Wurk::Batch::Callbacks.fire_death(batch.bid)
+
+    assert_equal 1, callbacks_fired(event: 'death', bid: batch.bid)
+  end
+
+  # --- callback_specs_for queue fallback ---------------------------------
+
+  # callback_specs_for falls back to the 'default' queue when callback_queue is
+  # blank (batch/callbacks.rb). Driven directly against a hand-written batch
+  # hash rather than through fire_complete → Wurk::Client.push, which would
+  # enqueue onto the process-global `queue:default` and race other classes
+  # (the cross-class isolation issue tracked in #84).
+  def test_callback_specs_fall_back_to_default_queue_when_blank
+    batch = track(Wurk::Batch.new)
+    @pool.with do |c|
+      c.call('HSET', "b-#{batch.bid}", 'callbacks', JSON.dump([['complete', 'C', {}]]))
+      c.call('HSET', "b-#{batch.bid}", 'callback_queue', '')
+    end
+
+    specs, queue = Wurk::Batch::Callbacks.send(:callback_specs_for, batch.bid)
+
+    assert_equal 'default', queue, 'blank callback_queue must fall back to the default queue'
+    assert_equal [['complete', 'C', {}]], specs
+  end
+
+  def test_callback_specs_keep_explicit_callback_queue
+    batch = track(Wurk::Batch.new)
+    @pool.with do |c|
+      c.call('HSET', "b-#{batch.bid}", 'callbacks', JSON.dump([['complete', 'C', {}]]))
+      c.call('HSET', "b-#{batch.bid}", 'callback_queue', @cbq)
+    end
+
+    _specs, queue = Wurk::Batch::Callbacks.send(:callback_specs_for, batch.bid)
+
+    assert_equal @cbq, queue, 'a present callback_queue must be preserved'
+  end
+
+  # --- parse_callbacks empty ---------------------------------------------
+
+  def test_fire_complete_with_no_registered_callbacks_enqueues_nothing
+    batch = track(Wurk::Batch.new)
+    batch.callback_queue = @cbq
+    batch.jobs { perform_one }
+    # No callbacks registered → persisted field is "[]"; force the
+    # nil/empty branch of parse_callbacks by clearing it entirely.
+    @pool.with { |c| c.call('HSET', "b-#{batch.bid}", 'callbacks', '') }
+
+    Wurk::Batch::Callbacks.fire_complete(batch.bid)
+
+    assert_equal 0, callbacks_fired(event: 'complete', bid: batch.bid)
+  end
+
+  # --- propagate_to_parent: undrained pkids ------------------------------
+
+  def test_parent_success_waits_when_sibling_pkids_remain
+    # Parent has two child batches; only one child succeeds, so the parent's
+    # pkids set is not yet drained and parent :success must not fire.
+    parent = new_batch(success: 'ParentSuccess')
+    child_a = child_b = nil
+    parent.jobs do
+      child_a = new_batch
+      child_a.jobs { perform_one }
+      child_b = new_batch
+      child_b.jobs { perform_one }
+    end
+
+    ack_success(child_a.bid, jid_for(@queue, child_a.bid))
+
+    assert_equal 0, callbacks_fired(event: 'success', bid: parent.bid),
+                 'parent :success must wait for all child batches'
+    assert_equal(1, @pool.with { |c| c.call('SCARD', "b-#{parent.bid}-pkids") })
+  end
+
   private
 
   def track(batch)

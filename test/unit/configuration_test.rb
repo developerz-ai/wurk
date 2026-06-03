@@ -45,6 +45,25 @@ class ConfigurationTest < Wurk::Test::UnitCase
     end
   end
 
+  # deep_dup_defaults' Hash branch (configuration.rb:367) dups each inner value
+  # only `if inner.respond_to?(:dup)`. The else side is unreachable: it runs
+  # solely against the frozen DEFAULTS constant, whose only Hash value is
+  # :lifecycle_events (all-Array values, every one of which responds to :dup),
+  # and in Ruby >= 3.2 every object responds to :dup anyway. There is no public
+  # seam to inject a non-dup-able inner value, so the branch can't be exercised
+  # without modifying lib/. Documented here instead of asserting it.
+  def test_deep_dup_defaults_else_branch_is_unreachable
+    skip 'configuration.rb:367 else is dead code: DEFAULTS has no non-dup-able Hash value'
+  end
+
+  def test_init_preserves_supplied_error_handlers
+    custom = ->(_ex, _ctx, _cfg) {}
+    config = Wurk::Configuration.new(error_handlers: [custom])
+
+    assert_equal [custom], config.error_handlers
+    refute_includes config.error_handlers, Wurk::Configuration::ERROR_HANDLER
+  end
+
   def test_defaults_are_not_shared_between_instances
     other = Wurk::Configuration.new
     @config[:labels] << 'foo'
@@ -167,6 +186,13 @@ class ConfigurationTest < Wurk::Test::UnitCase
 
   def test_server_middleware_returns_chain
     assert_kind_of Wurk::Middleware::Chain, @config.server_middleware
+  end
+
+  def test_server_middleware_yields_chain
+    yielded = nil
+    @config.server_middleware { |chain| yielded = chain }
+
+    assert_same @config.server_middleware, yielded
   end
 
   # --- redis -------------------------------------------------------------
@@ -318,6 +344,31 @@ class ConfigurationTest < Wurk::Test::UnitCase
     @config.death_handlers << handler
 
     assert_includes @config.death_handlers, handler
+  end
+
+  # --- health_check ------------------------------------------------------
+
+  def test_health_check_stores_options
+    @config.health_check(port: 9001, bind: '127.0.0.1', ready_window: 15)
+
+    assert_equal({ port: 9001, bind: '127.0.0.1', ready_window: 15 },
+                 @config[:health_check_options])
+  end
+
+  def test_health_check_rejects_port_above_range
+    assert_raises(ArgumentError) { @config.health_check(port: 70_000) }
+  end
+
+  def test_health_check_rejects_negative_port
+    assert_raises(ArgumentError) { @config.health_check(port: -1) }
+  end
+
+  def test_health_check_rejects_non_positive_ready_window
+    assert_raises(ArgumentError) { @config.health_check(port: 9001, ready_window: 0) }
+  end
+
+  def test_health_check_rejects_empty_bind
+    assert_raises(ArgumentError) { @config.health_check(port: 9001, bind: '') }
   end
 
   # --- lifecycle hooks ---------------------------------------------------

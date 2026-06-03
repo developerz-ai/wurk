@@ -28,15 +28,19 @@ internet ──►│                                                     ├─
 
 ## Deploy: who can trigger it
 
-`.github/workflows/deploy-demo.yml` is **manual only** (`workflow_dispatch`) and
-gated three ways so only the org can deploy:
+`.github/workflows/deploy-demo.yml` **builds and pushes the image only** — it
+holds no cluster credentials. The in-cluster **ArgoCD Image Updater** watches the
+GHCR `:latest` digest and syncs the deployment automatically; the pushed digest
+*is* the deploy trigger. The workflow is **manual only** (`workflow_dispatch`) and
+gated three ways so only the org can ship an image:
 
 1. **Public repo + `workflow_dispatch`** → only users with *write* access (org
    members) can trigger it; external forks cannot.
 2. **`DEMO_DEPLOYERS` repo variable** (comma-separated GitHub usernames) → the
    `authorize` job rejects anyone not listed.
-3. **Protected `demo` environment** → add Required Reviewers so a deploy waits
-   for a named approver.
+3. **Protected `demo` environment** → add Required Reviewers. The gate sits on the
+   `build` job (not a separate deploy job) because the digest push is what
+   triggers the deploy, so approval must pause the run *before* the image ships.
 
 ### One-time GitHub setup (repo admin)
 
@@ -44,13 +48,9 @@ gated three ways so only the org can deploy:
   `DEMO_DEPLOYERS` = e.g. `sebyx07,din-handle,ivann-handle`.
 - **Settings → Environments → `demo`:** create it, add the deployer(s) as
   *Required reviewers*, and (optionally) restrict the deployment branch to `main`.
-- **Secrets** (Environment or repo): `ARGOCD_SERVER`, `ARGOCD_AUTH_TOKEN`
-  (see below). The image push uses the built-in `GITHUB_TOKEN` (GHCR) — no extra
-  registry secret needed.
 
-The deploy step does ArgoCD `app set image.tag` + `app sync`. If infra prefers
-ArgoCD Image Updater or a manifest bump in `../infrastructure`, swap that one
-step — the gating above is independent of the deploy mechanism.
+No `ARGOCD_*` secrets are needed — CI never talks to the cluster. The image push
+uses the built-in `GITHUB_TOKEN` (GHCR), so no registry secret is required either.
 
 ## ✅ Infra requirements (for the infra team)
 
@@ -63,8 +63,8 @@ What's needed to make `https://wurk.demo.developerz.ai` go live. Items marked
 - [ ] **Redis** — a small managed/in-cluster Redis (7.x) reachable from both pods, exposed as `REDIS_URL`. Demo data only; safe to flush.
 - [ ] **`SECRET_KEY_BASE`** — a strong random value injected at runtime (k8s secret) so the Rails app boots in production. Not baked into the image.
 - [ ] **GHCR pull access** — an `imagePullSecret` (or public package) so the cluster can pull `ghcr.io/developerz-ai/wurk-demo`.
-- [ ] **ArgoCD Application `wurk-demo`** in `../infrastructure` — Deployments for `web` (cmd `web`) and `worker` (cmd `worker`), a Service, and the Redis dependency. Parameterize `image.tag` so the deploy step can set it.
-- [ ] **ArgoCD API access for CI** — `ARGOCD_SERVER` (host) + `ARGOCD_AUTH_TOKEN` (a deploy-scoped account/token that can `sync` only `wurk-demo`), added as GitHub secrets.
+- [ ] **ArgoCD Application `wurk-demo`** in `../infrastructure` — Deployments for `web` (cmd `web`) and `worker` (cmd `worker`), a Service, and the Redis dependency.
+- [ ] **ArgoCD Image Updater** watching `ghcr.io/developerz-ai/wurk-demo:latest` (digest strategy) so a pushed image auto-syncs. CI holds no cluster credentials, so there are no `ARGOCD_*` secrets.
 - [ ] **DNS** — `wurk.demo.developerz.ai` → the cluster ingress / Traefik.
 - [ ] **Ingress (Traefik) + TLS** — route the host to the `web` Service, Let's Encrypt cert.
 - [ ] **Public rate-limit** — a Traefik rate-limit middleware on the ingress to discourage abuse.
@@ -72,9 +72,6 @@ What's needed to make `https://wurk.demo.developerz.ai` go live. Items marked
 
 ### Decisions to confirm with infra
 
-- **Deploy mechanism:** ArgoCD `app sync` from CI (current scaffold) vs. ArgoCD
-  Image Updater (no CI deploy step) vs. image-tag bump committed to
-  `../infrastructure`. This determines which secrets the workflow needs.
 - **Redis sizing / persistence:** demo can run on an ephemeral Redis (a restart
   just empties it; the generator refills). Confirm whether infra wants
   persistence at all.

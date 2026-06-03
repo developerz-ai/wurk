@@ -72,6 +72,81 @@ class JobRetryTest < Wurk::Test::UnitCase
     def perform; end
   end
 
+  class FloatDelayJob
+    include Wurk::Worker
+
+    sidekiq_retry_in { 12.9 }
+
+    def perform; end
+  end
+
+  class ZeroDelayJob
+    include Wurk::Worker
+
+    sidekiq_retry_in { 0 }
+
+    def perform; end
+  end
+
+  # Stands in for an ActiveJob-style wrapper target referenced via msg["wrapped"].
+  # It exposes the per-class retry blocks the wrapped lookup prefers.
+  class WrappedTarget
+    include Wurk::Worker
+
+    @retry_in_received = []
+    @exhausted_received = []
+    class << self
+      attr_reader :retry_in_received, :exhausted_received
+    end
+
+    sidekiq_retry_in do |count, _ex, _msg|
+      retry_in_received << count
+      7
+    end
+    sidekiq_retries_exhausted do |msg, _ex|
+      exhausted_received << msg['jid']
+      nil
+    end
+
+    def perform; end
+  end
+
+  class WrappedRaisingTarget
+    include Wurk::Worker
+
+    sidekiq_retry_in { raise 'wrapped boom' }
+
+    def perform; end
+  end
+
+  # Plain class (no Worker mixin) → does not respond to the block accessors,
+  # so wrapped_block returns nil and falls back to the instance block.
+  class PlainWrapped; end
+
+  # Exception whose #backtrace is nil even after being raised — exercises the
+  # nil-backtrace guard in stamp_backtrace.
+  class NoBacktraceError < ::StandardError
+    def backtrace
+      nil
+    end
+  end
+
+  # Minimal capsule double whose #config does not respond to `[]`, exercising
+  # the inner_config_get fallback (returns nil → DEFAULT_MAX_RETRY_ATTEMPTS).
+  class NoBracketConfig
+    def initialize(logger)
+      @logger = logger
+    end
+    attr_reader :logger
+  end
+
+  class CapsuleDouble
+    def initialize(config)
+      @config = config
+    end
+    attr_reader :config
+  end
+
   def setup
     super
     @ns = "jr-#{Process.pid}-#{object_id}"
@@ -452,6 +527,182 @@ class JobRetryTest < Wurk::Test::UnitCase
     @added << payload
 
     assert payload
+  end
+
+  # --- branch coverage: local shutdown-cause (line 76) -----------------
+
+  def test_local_converts_shutdown_cause_to_shutdown
+    inst = FailingJob.new
+    assert_raises(Wurk::Shutdown) do
+      @retrier.local(inst, jobstr(retry: true), @queue) do
+        raise Wurk::Shutdown
+      rescue Wurk::Shutdown
+        raise StandardError, 'wrapped'
+      end
+    end
+  end
+
+  # --- branch coverage: nil backtrace despite backtrace flag (line 167) -
+
+  def test_global_skips_backtrace_when_exception_backtrace_nil
+    job = base_msg(retry: true, 'backtrace' => true)
+    assert_raises(Wurk::JobRetry::Handled) do
+      @retrier.global(Wurk.dump_json(job), @queue) { raise NoBacktraceError, 'no bt' }
+    end
+    payload = find_payload(Wurk::Keys::RETRY, job['jid'])
+    @added << payload
+
+    refute Wurk.load_json(payload).key?('error_backtrace'), 'nil backtrace → field omitted'
+  end
+
+  # --- branch coverage: retry_for with no failed_at (line 175 then) -----
+
+  def test_retry_for_with_missing_failed_at_continues_to_retry
+    # retry_count present (so bump_retry_count won't set failed_at) but
+    # failed_at absent → retry_for_exceeded? bails out via `unless failed_at`.
+    job = base_msg(retry: 999, 'retry_count' => 0, 'retry_for' => 60)
+    assert_raises(Wurk::JobRetry::Handled) do
+      @retrier.global(Wurk.dump_json(job), @queue) { raise 'no failed_at' }
+    end
+    payload = find_payload(Wurk::Keys::RETRY, job['jid'])
+    @added << payload
+
+    assert payload, 'no failed_at → not exhausted → scheduled for retry'
+  end
+
+  # --- branch coverage: time_for Float path (line 195 then) ------------
+
+  def test_retry_for_treats_float_failed_at_as_seconds
+    # failed_at as a Float (epoch seconds) far in the past + small retry_for
+    # → time_for takes the Float branch and the window is exceeded → morgue.
+    job = base_msg(retry: 999, 'retry_count' => 5, 'failed_at' => (::Time.now - 7200).to_f, 'retry_for' => 60)
+    assert_raises(Wurk::JobRetry::Handled) do
+      @retrier.global(Wurk.dump_json(job), @queue) { raise 'expired' }
+    end
+    refute find_payload(Wurk::Keys::RETRY, job['jid'])
+    payload = find_payload(Wurk::Keys::DEAD, job['jid'])
+    @added << payload
+
+    assert payload, 'float failed_at past retry_for → morgue'
+  end
+
+  # --- branch coverage: delay_for Float coercion (line 205 then) -------
+
+  def test_local_coerces_float_retry_in_to_integer_delay
+    inst = FloatDelayJob.new
+    job = base_msg(retry: true)
+    before = ::Time.now.to_f
+    assert_raises(Wurk::JobRetry::Handled) do
+      @retrier.local(inst, Wurk.dump_json(job), @queue) { raise 'boom' }
+    end
+    payload = find_payload(Wurk::Keys::RETRY, job['jid'])
+    @added << payload
+    score = @pool.with { |c| c.call('ZSCORE', Wurk::Keys::RETRY, payload).to_f }
+
+    # 12.9 → to_i → 12; plus 0..9 jitter (count=0).
+    assert_operator score, :>=, before + 12
+    assert_operator score, :<=, before + 12 + 10
+  end
+
+  # --- branch coverage: non-positive Integer delay → default (line 210 else)
+
+  def test_local_falls_back_to_default_when_retry_in_returns_zero
+    inst = ZeroDelayJob.new
+    job = base_msg(retry: true)
+    before = ::Time.now.to_f
+    assert_raises(Wurk::JobRetry::Handled) do
+      @retrier.local(inst, Wurk.dump_json(job), @queue) { raise 'boom' }
+    end
+    payload = find_payload(Wurk::Keys::RETRY, job['jid'])
+    @added << payload
+    score = @pool.with { |c| c.call('ZSCORE', Wurk::Keys::RETRY, payload).to_f }
+
+    # rv=0 is not positive → default_delay = 0**4 + 15 = 15 (+0..9 jitter).
+    assert_operator score, :>=, before + 15
+    assert_operator score, :<=, before + 15 + 10
+  end
+
+  # --- branch coverage: wrapped retry_in block (line 222 then, 258 then) -
+
+  def test_global_prefers_wrapped_retry_in_block
+    WrappedTarget.retry_in_received.clear
+    job = base_msg(retry: true, 'wrapped' => 'JobRetryTest::WrappedTarget')
+    before = ::Time.now.to_f
+    assert_raises(Wurk::JobRetry::Handled) do
+      @retrier.global(Wurk.dump_json(job), @queue) { raise 'boom' }
+    end
+    payload = find_payload(Wurk::Keys::RETRY, job['jid'])
+    @added << payload
+    score = @pool.with { |c| c.call('ZSCORE', Wurk::Keys::RETRY, payload).to_f }
+
+    refute_empty WrappedTarget.retry_in_received, 'wrapped block was invoked'
+    # delay 7 + 0..9 jitter
+    assert_operator score, :>=, before + 7
+    assert_operator score, :<=, before + 7 + 10
+  end
+
+  # --- branch coverage: wrapped class lacks accessor (line 258 else) ----
+
+  def test_wrapped_lookup_falls_back_when_target_not_a_worker
+    inst = CustomDelayJob.new
+    job = base_msg(retry: true, 'wrapped' => 'JobRetryTest::PlainWrapped')
+    before = ::Time.now.to_f
+    assert_raises(Wurk::JobRetry::Handled) do
+      @retrier.local(inst, Wurk.dump_json(job), @queue) { raise 'boom' }
+    end
+    payload = find_payload(Wurk::Keys::RETRY, job['jid'])
+    @added << payload
+    score = @pool.with { |c| c.call('ZSCORE', Wurk::Keys::RETRY, payload).to_f }
+
+    # PlainWrapped does not respond to the accessor → nil → fall back to the
+    # instance's CustomDelayJob block (42 + count=0 = 42).
+    assert_operator score, :>=, before + 42
+    assert_operator score, :<=, before + 42 + 11
+  end
+
+  # --- branch coverage: wrapped retry_in block raises with nil jobinst --
+  #     (line 221 else-sides, 225 else-sides — handle_exception gets a nil class)
+
+  def test_global_wrapped_retry_in_block_raising_falls_back_to_default
+    job = base_msg(retry: true, 'wrapped' => 'JobRetryTest::WrappedRaisingTarget')
+    before = ::Time.now.to_f
+    assert_raises(Wurk::JobRetry::Handled) do
+      @retrier.global(Wurk.dump_json(job), @queue) { raise 'boom' }
+    end
+    payload = find_payload(Wurk::Keys::RETRY, job['jid'])
+    @added << payload
+    score = @pool.with { |c| c.call('ZSCORE', Wurk::Keys::RETRY, payload).to_f }
+
+    # wrapped block raised → rescued → nil → default_delay 15 (+0..9 jitter).
+    assert payload, 'fell back to default schedule_retry after wrapped block raised'
+    assert_operator score, :>=, before + 15
+    assert_operator score, :<=, before + 15 + 10
+  end
+
+  # --- branch coverage: wrapped retries_exhausted block (line 247 then) -
+
+  def test_global_prefers_wrapped_exhausted_block
+    WrappedTarget.exhausted_received.clear
+    job = base_msg(retry: 0, 'retry_count' => 0, 'wrapped' => 'JobRetryTest::WrappedTarget')
+    assert_raises(Wurk::JobRetry::Handled) do
+      @retrier.global(Wurk.dump_json(job), @queue) { raise 'final' }
+    end
+    @added << find_payload(Wurk::Keys::DEAD, job['jid'])
+
+    assert_includes WrappedTarget.exhausted_received, job['jid'], 'wrapped exhausted block ran'
+  end
+
+  # --- branch coverage: inner_config_get fallback (line 317 else) ------
+
+  def test_initialize_uses_default_max_retries_when_config_lacks_bracket
+    cfg = NoBracketConfig.new(::Logger.new(IO::NULL))
+    retrier = Wurk::JobRetry.new(CapsuleDouble.new(cfg))
+
+    assert_equal(
+      Wurk::JobRetry::DEFAULT_MAX_RETRY_ATTEMPTS,
+      retrier.instance_variable_get(:@max_retries)
+    )
+    assert_nil retrier.instance_variable_get(:@backtrace_cleaner)
   end
 
   # --- helpers ---------------------------------------------------------

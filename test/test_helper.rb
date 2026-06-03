@@ -4,14 +4,14 @@ if ENV["COVERAGE"]
   require "simplecov"
   require "simplecov-cobertura"
   SimpleCov.start do
-    # Branch is still measured (and shown in the Cobertura report uploaded by
-    # CI), but the *blocking* gate is on line coverage — branch is tracked to
-    # ratchet up over time, not enforced yet (currently ~77%). See #29.
+    # Both line and branch coverage on lib/ are blocking gates (>= 90%). The
+    # Cobertura report is still uploaded by CI for per-file inspection. Branch
+    # was ratcheted from ~78% to >=90% in #67; keep new code at parity.
     enable_coverage :branch
     primary_coverage :line
     add_filter "/test/"
     add_filter "/bench/"
-    minimum_coverage line: 90
+    minimum_coverage line: 90, branch: 90
     formatter SimpleCov::Formatter::CoberturaFormatter
   end
 end
@@ -27,7 +27,14 @@ $LOAD_PATH.unshift(File.expand_path("../lib", __dir__))
 # own DB. Tests that build a pool explicitly should use `Wurk::Test.redis_url`.
 module Wurk
   module Test
+    # Redis ships 16 logical DBs (0..15). DB 0 is never used (teardown FLUSHDB
+    # would wipe a developer's real data). Parallel workers take 1..14; DB 15 is
+    # reserved for tests that need a private fixed DB and touch un-prefixable
+    # global keys (see DemoWorkloadTest), so a worker is never assigned the same
+    # DB such a test flushes.
     REDIS_DATABASES = 15
+    WORKER_DATABASES = REDIS_DATABASES - 1 # 14 → DBs 1..14 for parallel workers
+    DEDICATED_DB = REDIS_DATABASES         # 15 → fixed-DB tests only
 
     class << self
       attr_accessor :redis_url
@@ -39,8 +46,19 @@ module Wurk
 
       # Point this process at its own DB. Updates ENV so fresh Configurations and
       # RedisPools pick it up, and caches the URL for explicit-pool tests.
+      #
+      # No modulo wrap: a `worker_index % WORKER_DATABASES` would silently map
+      # worker N back onto worker 0's DB, and that worker's startup FLUSHDB then
+      # wipes worker 0's keys mid-test (the #84/#73 flake class). The worker count
+      # is capped to WORKER_DATABASES below, so this raises only if that cap is
+      # ever bypassed — loud beats silent cross-contamination.
       def assign_redis_db(worker_index)
-        self.redis_url = redis_url_for_db((worker_index % REDIS_DATABASES) + 1)
+        if worker_index >= WORKER_DATABASES
+          raise "test worker #{worker_index} has no isolated Redis DB " \
+                "(only #{WORKER_DATABASES} for parallel workers); cap NCPU at #{WORKER_DATABASES}"
+        end
+
+        self.redis_url = redis_url_for_db(worker_index + 1)
         ENV["REDIS_URL"] = redis_url
       end
     end
@@ -57,6 +75,18 @@ require "wurk"
 Wurk.configuration.logger = Logger.new(IO::NULL)
 
 require "minitest/autorun"
+
+# minitest-parallel_fork forks ENV["NCPU"] workers (default 4) — and it forks
+# that many regardless of how many suites there are, so idle extra workers run
+# their startup FLUSHDB too. Each worker is isolated on its own Redis logical DB
+# (1..14; never 0, and 15 is reserved). More workers than DBs would collide and
+# a colliding worker's FLUSHDB would wipe a peer's keys mid-test — the root cause
+# of the #84 batch-TTL and #73 periodic-leader flakes. Cap the worker count to
+# the number of worker DBs so every worker gets a unique one. (CI leaves NCPU
+# unset → 4, so this is a no-op there; it only bites machines that set a high
+# NCPU for speed.)
+ENV["NCPU"] = Wurk::Test::WORKER_DATABASES.to_s if (ENV["NCPU"] || "4").to_i > Wurk::Test::WORKER_DATABASES
+
 require "minitest/parallel_fork" rescue nil
 
 # minitest-parallel_fork runs each test class in a forked worker, so the

@@ -207,6 +207,23 @@ class LauncherTest < Wurk::Test::UnitCase
     thread&.kill
   end
 
+  # Branch coverage: every `@x&.start` in #run must tolerate a nil collaborator
+  # (e.g. a stripped-down embedded boot that never built a poller/leader/etc).
+  # Exercises the else side of lines 80–83.
+  def test_run_tolerates_nil_poller_leader_cron_and_rollup
+    launcher = Wurk::Launcher.new(@config)
+    launcher.managers.each { |m| m.define_singleton_method(:start) { nil } }
+    launcher.poller = nil
+    launcher.instance_variable_set(:@leader, nil)
+    launcher.cron_poller = nil
+    launcher.metrics_rollup = nil
+
+    launcher.run(async_beat: false)
+
+    # Reaching here without a NoMethodError proves the safe-nav nil sides ran.
+    assert_predicate @config, :frozen?
+  end
+
   # --- quiet -----------------------------------------------------------
 
   def test_quiet_flips_stopping_and_quiets_managers
@@ -231,6 +248,18 @@ class LauncherTest < Wurk::Test::UnitCase
     launcher.quiet
 
     refute terminated, 'quiet must leave the cron poller running (quieted leader still enqueues)'
+  end
+
+  # Branch coverage: #quiet's `@poller&.terminate` must tolerate a nil poller.
+  # Exercises the else side of line 97.
+  def test_quiet_tolerates_nil_poller
+    launcher = Wurk::Launcher.new(@config)
+    launcher.managers.each { |m| m.define_singleton_method(:quiet) { nil } }
+    launcher.poller = nil
+
+    launcher.quiet
+
+    assert_predicate launcher, :stopping?
   end
 
   def test_quiet_is_idempotent
@@ -310,6 +339,26 @@ class LauncherTest < Wurk::Test::UnitCase
     assert stopped, 'stop should halt the reaper thread'
   end
 
+  # Branch coverage: #stop's safe-nav teardown of the cron poller, metrics
+  # rollup, reaper, and leader must each tolerate a nil collaborator.
+  # Exercises the else side of lines 115–117 and 120.
+  def test_stop_tolerates_nil_cron_rollup_reaper_and_leader
+    @config[:timeout] = 0
+    launcher = Wurk::Launcher.new(@config)
+    launcher.managers.each do |m|
+      m.define_singleton_method(:quiet) { nil }
+      m.define_singleton_method(:stop) { |_d| nil }
+    end
+    launcher.cron_poller = nil
+    launcher.metrics_rollup = nil
+    launcher.instance_variable_set(:@reaper, nil)
+    launcher.instance_variable_set(:@leader, nil)
+
+    launcher.stop
+
+    assert_predicate launcher, :stopping?
+  end
+
   def test_stop_fires_shutdown_then_exit_in_reverse
     order = []
     @config.on(:shutdown) { order << :shutdown_first }
@@ -325,6 +374,34 @@ class LauncherTest < Wurk::Test::UnitCase
     launcher.stop
 
     assert_equal %i[shutdown_second shutdown_first exit_second exit_first], order
+  end
+
+  # Branch coverage: when a heartbeat has fired and a health server exists,
+  # #stop's clear_heartbeat must tear both down. Exercises the then side of
+  # lines 207 (@heartbeat&.stop!) and 208 (@health_server&.stop).
+  def test_stop_tears_down_live_heartbeat_and_health_server
+    @config[:timeout] = 0
+    launcher = build_isolated_launcher
+    silence_managers(launcher)
+    launcher.cron_poller.define_singleton_method(:terminate) { nil }
+    launcher.metrics_rollup.define_singleton_method(:terminate) { nil }
+    launcher.instance_variable_get(:@reaper).define_singleton_method(:stop) { nil }
+    track(launcher_identity(launcher))
+
+    hb_stopped = false
+    heartbeat = Wurk::Heartbeat.new(identity: launcher_identity(launcher), config: @config)
+    heartbeat.define_singleton_method(:stop!) { hb_stopped = true }
+    launcher.instance_variable_set(:@heartbeat, heartbeat)
+
+    health_stopped = false
+    health = Object.new
+    health.define_singleton_method(:stop) { health_stopped = true }
+    launcher.instance_variable_set(:@health_server, health)
+
+    launcher.stop
+
+    assert hb_stopped, 'clear_heartbeat must stop! a live heartbeat'
+    assert health_stopped, 'clear_heartbeat must stop a present health server'
   end
 
   # --- flush_stats -----------------------------------------------------
@@ -404,6 +481,28 @@ class LauncherTest < Wurk::Test::UnitCase
       assert_equal 0, Wurk::Processor::PROCESSED.reset
       assert_equal 0, Wurk::Processor::FAILURE.reset
       assert_equal 0, Wurk::Processor::EXPIRED.reset
+    end
+  end
+
+  # Branch coverage: incr_stat_key#171 must skip (early return) a zero-valued
+  # counter while still writing the positive ones. Drives the real write_stats
+  # (no stub) with processed > 0 but failed == 0 and expired == 0, then asserts
+  # only the processed keys were touched. Exercises the then side of line 171.
+  def test_flush_stats_skips_zero_valued_counters_in_pipeline
+    Wurk::Test::PROCESSOR_COUNTER_MUTEX.synchronize do
+      launcher = Wurk::Launcher.new(@config)
+      reset_counters
+      Wurk::Processor::PROCESSED.incr(2)
+
+      launcher.flush_stats
+
+      processed, failed, expired = @pool.with do |c|
+        c.call('MGET', Wurk::Keys::STAT_PROCESSED, 'stat:failed', Wurk::Keys::STAT_EXPIRED)
+      end
+
+      assert_equal '2', processed
+      assert_nil failed, 'zero failed counter must not write stat:failed'
+      assert_nil expired, 'zero expired counter must not write stat:expired'
     end
   end
 
@@ -495,6 +594,58 @@ class LauncherTest < Wurk::Test::UnitCase
     drained = @pool.with { |c| c.call('LPOP', sig_key) }
 
     assert_nil drained
+  end
+
+  # Branch coverage: a queued TERM signal must route to #stop.
+  # Exercises the `when 'TERM'` arm of dispatch_signal (line 225).
+  def test_heartbeat_dispatches_term_signal_to_stop
+    launcher = build_isolated_launcher
+    track(launcher_identity(launcher))
+    stopped = false
+    launcher.define_singleton_method(:stop) { stopped = true }
+    sig_key = "#{launcher_identity(launcher)}-signals"
+    @pool.with { |c| c.call('LPUSH', sig_key, 'TERM') }
+    @cleanup_keys << sig_key
+
+    launcher.heartbeat
+
+    assert stopped, 'a queued TERM must invoke #stop'
+  end
+
+  # Branch coverage: an unrecognized signal must be logged, not dispatched.
+  # Exercises the `else` arm of dispatch_signal (line 227).
+  def test_heartbeat_logs_unknown_signal
+    launcher = build_isolated_launcher
+    track(launcher_identity(launcher))
+    warned = []
+    launcher.instance_variable_get(:@config).logger.define_singleton_method(:warn) do |*_a, &blk|
+      warned << blk.call
+    end
+    sig_key = "#{launcher_identity(launcher)}-signals"
+    @pool.with { |c| c.call('LPUSH', sig_key, 'BOGUS') }
+    @cleanup_keys << sig_key
+
+    launcher.heartbeat
+
+    assert(warned.any? { |m| m.include?('BOGUS') }, 'unknown signal must be logged')
+    refute_predicate launcher, :stopping?
+  end
+
+  # Branch coverage: when beat! returns nil (Redis blip), #beat must not
+  # attempt to iterate signals. Exercises the else side of `sigs&.each`
+  # (line 185).
+  def test_beat_tolerates_nil_signals_from_failed_beat
+    launcher = build_isolated_launcher
+    track(launcher_identity(launcher))
+    launcher.send(:ensure_heartbeat)
+    hb = launcher.instance_variable_get(:@heartbeat)
+    hb.define_singleton_method(:beat!) { nil }
+    dispatched = []
+    launcher.define_singleton_method(:dispatch_signal) { |s| dispatched << s }
+
+    launcher.heartbeat
+
+    assert_empty dispatched, 'nil beat! result must skip signal dispatch'
   end
 
   def test_heartbeat_embedded_flag_round_trips

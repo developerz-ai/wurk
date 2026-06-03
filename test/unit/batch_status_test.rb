@@ -198,6 +198,41 @@ class BatchStatusTest < Wurk::Test::UnitCase
     Wurk::Batch::Status.new(@bid).join
   end
 
+  # join's incomplete path (the `break if complete?` else side): the batch
+  # is in-flight, so join sleeps one JOIN_POLL_INTERVAL and reloads. A
+  # background thread drains the live jids after the first poll; join then
+  # observes complete? and returns. Deterministic: we only assert join
+  # eventually returns, never on exact timing.
+  def test_join_polls_until_complete
+    seed_batch(total: 1, pending: 1)
+    @pool.with { |c| c.call('SADD', "b-#{@bid}-jids", 'A') }
+
+    drainer = Thread.new do
+      sleep Wurk::Batch::Status::JOIN_POLL_INTERVAL / 2.0
+      @pool.with { |c| c.call('SREM', "b-#{@bid}-jids", 'A') }
+    end
+
+    joined = false
+    waiter = Thread.new do
+      Wurk::Batch::Status.new(@bid).join
+      joined = true
+    end
+
+    assert waiter.join(5), 'join must return once the batch completes'
+    assert joined
+  ensure
+    drainer&.join
+  end
+
+  # The reload! else side (`raw.is_a?(Hash) ? raw : raw.each_slice(2).to_h`)
+  # only fires when HGETALL returns a flat array instead of a Hash — i.e.
+  # under RESP2. redis-client speaks RESP3 against Redis >= 7 here, so
+  # HGETALL always returns a Hash and the array branch is unreachable
+  # without mocking Redis (forbidden) or downgrading the wire protocol.
+  def test_reload_array_branch_unreachable_under_resp3
+    skip 'HGETALL returns a Hash under RESP3; array branch needs RESP2 (no Redis mocking allowed)'
+  end
+
   private
 
   def seed_batch(fields = {})

@@ -677,6 +677,277 @@ class CronTest < Wurk::Test::UnitCase
     assert_equal 'loops:', Wurk::Cron::LOOP_PREFIX
   end
 
+  # ---- Parser branch coverage: match_components? / match_day? ----------
+
+  # 112 then: month field restricted and the candidate month does not match,
+  # so match_components? short-circuits to false before reaching match_day?.
+  def test_match_returns_false_when_month_does_not_match
+    # Fires only in June; January wall-clock must not match.
+    p = Wurk::Cron::Parser.new('0 0 1 6 *')
+
+    refute p.match?(::Time.utc(2026, 1, 1, 0, 0, 0)), 'January must not match a June-only month field'
+    assert p.match?(::Time.utc(2026, 6, 1, 0, 0, 0)), 'June 1 00:00 must match'
+  end
+
+  # 123 then: both dom AND dow restricted → the "Friday the 13th" OR rule. The
+  # slot matches when EITHER the day-of-month OR the day-of-week matches.
+  def test_match_day_ors_dom_and_dow_when_both_restricted
+    # day-of-month 13 OR Friday(5). 2026-02-13 is a Friday (both true);
+    # 2026-03-13 is a Friday (dow true, dom true again) — use distinct dates.
+    p = Wurk::Cron::Parser.new('0 0 13 * 5')
+
+    # 2026-11-13 is a Friday → both halves true.
+    assert p.match?(::Time.utc(2026, 11, 13, 0, 0, 0)), 'the 13th that is also Friday matches'
+    # 2026-11-06 is a Friday but not the 13th → dow true, dom false → OR matches.
+    assert p.match?(::Time.utc(2026, 11, 6, 0, 0, 0)), 'a Friday that is not the 13th still matches via OR'
+    # 2026-11-13 covered; pick a 13th that is NOT Friday: 2026-01-13 is a Tuesday.
+    assert p.match?(::Time.utc(2026, 1, 13, 0, 0, 0)), 'the 13th that is not Friday still matches via OR'
+    # Neither the 13th nor a Friday → no match.
+    refute p.match?(::Time.utc(2026, 1, 14, 0, 0, 0)), 'non-13th non-Friday must not match'
+  end
+
+  # 124 then: only dom restricted (dow wild) → dom must match.
+  def test_match_day_uses_dom_only_when_dow_wild
+    p = Wurk::Cron::Parser.new('0 0 15 * *')
+
+    assert p.match?(::Time.utc(2026, 1, 15, 0, 0, 0)), 'the 15th matches a dom-only schedule'
+    refute p.match?(::Time.utc(2026, 1, 16, 0, 0, 0)), 'the 16th must not match a dom-15 schedule'
+  end
+
+  # ---- Parser branch coverage: local_time tz dispatch ------------------
+
+  # A minimal AS::TimeZone-like double: responds to #at (not a String), so
+  # local_time takes the 198-then `tz.at(epoch)` branch.
+  class AtTZ
+    def initialize(offset_hours) = @offset = offset_hours * 3600
+    def at(epoch) = ::Time.at(epoch + @offset).utc
+  end
+
+  # An object that responds to #identifier but NOT #name and NOT #at, so
+  # tz_name takes the 319-then `identifier` branch and local_time takes the
+  # 199 `utc_to_local` branch.
+  class IdentifierTZ
+    def initialize(name) = @name = name
+    def identifier = @name
+    def utc_to_local(time) = time
+  end
+
+  # 198 then: tz responds to #at → local_time returns tz.at(epoch).
+  def test_local_time_uses_at_for_as_timezone_like
+    p = Wurk::Cron::Parser.new('* * * * *')
+    # AtTZ(+1h): 00:30 UTC becomes local 01:30 → matches an "01:30" slot.
+    p_slot = Wurk::Cron::Parser.new('30 1 * * *')
+
+    assert p.match?(::Time.utc(2026, 1, 1, 0, 30, 0), AtTZ.new(1))
+    assert p_slot.match?(::Time.utc(2026, 1, 1, 0, 30, 0), AtTZ.new(1)),
+           '00:30 UTC shifted +1h must match local 01:30'
+  end
+
+  # 199 (utc_to_local path) + then via TZInfo, exercised through match?.
+  def test_local_time_uses_utc_to_local_for_tzinfo
+    p = Wurk::Cron::Parser.new('30 1 * * *')
+    # America/New_York is UTC-5 in January → 06:30 UTC == 01:30 EST.
+    assert p.match?(::Time.utc(2026, 1, 1, 6, 30, 0), tz('America/New_York'))
+  end
+
+  # 199 else: tz is a String → neither #at (it IS a String) nor #utc_to_local,
+  # so local_time falls through to the with_tz_env(tz.to_s) POSIX path. We
+  # assert the branch runs and restores ENV['TZ'] rather than the resolved
+  # wall-clock: Ruby caches the process zone after first Time use, so an
+  # in-process ENV['TZ'] flip is not reliably honoured under the parallel
+  # runner (the DST tests use TZInfo objects for exactly this reason).
+  def test_local_time_string_tz_runs_posix_path_and_restores_env
+    p = Wurk::Cron::Parser.new('* * * * *')
+    before = ENV.fetch('TZ', :unset)
+
+    components = p.local_components(::Time.utc(2026, 1, 1, 6, 30, 0).to_i, 'America/New_York')
+
+    assert_equal 5, components.size, 'string tz path must still yield [min,hour,dom,mon,dow]'
+    after = ENV.fetch('TZ', :unset)
+    assert_equal before, after, 'with_tz_env must restore the prior ENV[TZ]'
+  end
+
+  # ---- Loop#last_fired_at branch coverage ------------------------------
+
+  # 268 else: history head IS an Array but element 0 is non-Numeric → nil.
+  def test_last_fired_at_nil_when_tuple_head_not_numeric
+    lp = register_loop("CronTest::LastNonNum#{@suffix}", queue: "cron-lnn-#{@suffix}")
+    Wurk.redis { |c| c.call('LPUSH', "#{Wurk::Cron::HISTORY_PREFIX}#{lp.lid}", JSON.dump(['not-a-number', 'jid-x'])) }
+
+    assert_nil lp.last_fired_at, 'a non-Numeric timestamp in the tuple head must read as nil'
+  ensure
+    Wurk.redis { |c| c.call('DEL', "#{Wurk::Cron::HISTORY_PREFIX}#{lp.lid}") }
+  end
+
+  # ---- Loop#tz_name branch coverage ------------------------------------
+
+  # 318 then: tz responds to #name (TZInfo::Timezone) → tz_name returns #name,
+  # observed through the persisted 'tz' hash field.
+  def test_tz_name_uses_name_for_tzinfo
+    lp = Wurk::Cron::Loop.new(schedule: '* * * * *', klass: 'CronTest::FooWorker', tz: tz('Asia/Tokyo'))
+
+    assert_equal 'Asia/Tokyo', lp.to_redis_hash['tz']
+  end
+
+  # 319 then: tz responds to #identifier but NOT #name → identifier branch.
+  def test_tz_name_uses_identifier_when_no_name
+    lp = Wurk::Cron::Loop.new(schedule: '* * * * *', klass: 'CronTest::FooWorker', tz: IdentifierTZ.new('Etc/UTC'))
+
+    assert_equal 'Etc/UTC', lp.to_redis_hash['tz']
+  end
+
+  # ---- Loop.from_redis branch coverage ---------------------------------
+
+  # 325 then: from_redis receives an Array (RESP2 HGETALL shape) → pairs it up.
+  # 328 else: 'tz' is non-empty → preserved (not coerced to nil).
+  def test_from_redis_array_shape_with_tz
+    arr = ['schedule', '0 4 * * *', 'klass', 'CronTest::FooWorker', 'options', '{}', 'tz', 'Asia/Tokyo', 'paused', '0']
+    lp = Wurk::Cron::Loop.from_redis('deadbeefcafef00d', arr)
+
+    assert_equal '0 4 * * *', lp.schedule
+    assert_equal 'Asia/Tokyo', lp.tz
+  end
+
+  # 326 else: no 'options' field present → opts defaults to {}.
+  def test_from_redis_defaults_options_to_empty_hash
+    lp = Wurk::Cron::Loop.from_redis('feedface00000000',
+                                     { 'schedule' => '0 4 * * *', 'klass' => 'CronTest::FooWorker' })
+
+    assert_equal 'default', lp.queue, 'absent options hash must yield the default queue'
+    assert_empty lp.args
+  end
+
+  # ---- LoopSet branch coverage -----------------------------------------
+
+  # 377 then: each called without a block returns an Enumerator.
+  def test_loop_set_each_without_block_returns_enumerator
+    assert_kind_of Enumerator, Wurk::Cron::LoopSet.new.each
+  end
+
+  # 383 then: a lid is in the periodic SET but its loops:{lid} HASH is gone
+  # (empty) → each skips it instead of yielding a half-built Loop.
+  def test_loop_set_each_skips_lid_with_missing_hash
+    orphan = "orphan#{@suffix}deadbeef"[0, 16]
+    Wurk.redis { |c| c.call('SADD', Wurk::Cron::PERIODIC_KEY, orphan) }
+
+    lids = Wurk::Cron::LoopSet.new.to_a.map(&:lid)
+
+    refute_includes lids, orphan, 'a SET member with no backing hash must be skipped'
+  ensure
+    Wurk.redis { |c| c.call('SREM', Wurk::Cron::PERIODIC_KEY, orphan) }
+  end
+
+  # NOTE: LoopSet#fetch lines 398/399 (`h.is_a?(Array)` → each_slice / empty
+  # re-check) are unreachable here: this pool speaks RESP3, so HGETALL always
+  # returns a Hash, never an Array. Exercising them would require mocking Redis,
+  # which the integration/parity rules forbid. The equivalent Array shape IS
+  # covered for Loop.from_redis (test_from_redis_array_shape_with_tz), which
+  # accepts a raw Array directly.
+
+  # ---- Poller branch coverage ------------------------------------------
+
+  # 466 body + 521 (wait) loop: start spawns the tick thread; with a tiny tick
+  # interval and a non-leader gate, the `until @done { tick; wait }` body runs
+  # at least once. We count ticks, then terminate and join deterministically.
+  def test_poller_start_runs_tick_loop_then_terminates
+    cfg = Wurk::Configuration.new
+    cfg[:cron_tick_interval] = 0.01
+    poller = Wurk::Cron::Poller.new(cfg)
+    ticks = Queue.new
+    poller.define_singleton_method(:leader?) { false }
+    poller.define_singleton_method(:tick) { ticks << :t }
+
+    poller.start
+    first = ticks.pop # blocks until the loop body executes tick at least once
+
+    poller.terminate
+    thread = poller.instance_variable_get(:@poller_thread)
+    assert thread.join(5), 'poller thread must exit after terminate'
+    assert_equal :t, first
+  end
+
+  # 497 then: a loop whose next fire is in the future → enqueue_if_due returns
+  # early without enqueuing. We register a daily-4am loop and pre-seed its 'nf'
+  # mark far in the future, then a leader tick must enqueue nothing.
+  def test_enqueue_if_due_skips_when_next_fire_in_future
+    mgr = Wurk::Cron::Manager.new
+    queue = "cron-future-#{@suffix}"
+    lp = mgr.register('0 4 * * *', "CronTest::Future#{@suffix}", queue: queue)
+    @lids << lp.lid
+    future = ::Time.now.to_i + 86_400
+    Wurk.redis { |c| c.call('HSET', "#{Wurk::Cron::LOOP_PREFIX}#{lp.lid}", 'nf', future.to_s) }
+
+    build_leader_poller.tick
+    len = Wurk.redis { |c| c.call('LLEN', "queue:#{queue}") }
+    cleanup_queue(queue)
+
+    assert_equal 0, len, 'a loop whose next fire is in the future must not enqueue'
+  end
+
+  # 526 else: drift beyond MISSED_TICK_THRESHOLD → warn_missed_tick logs. We
+  # capture the logger output and assert the missed-tick warning is emitted.
+  def test_warn_missed_tick_logs_when_drift_exceeds_threshold
+    cfg = Wurk::Configuration.new
+    io = StringIO.new
+    cfg.logger = Logger.new(io)
+    poller = Wurk::Cron::Poller.new(cfg)
+    lp = Wurk::Cron::Loop.new(schedule: '0 4 * * *', klass: 'CronTest::Missed')
+    now = ::Time.now.to_i
+    expected = now - (Wurk::Cron::MISSED_TICK_THRESHOLD + 60)
+
+    poller.send(:warn_missed_tick, lp, expected, now)
+
+    assert_match(/missed tick/, io.string)
+  end
+
+  def test_warn_missed_tick_silent_within_threshold
+    cfg = Wurk::Configuration.new
+    io = StringIO.new
+    cfg.logger = Logger.new(io)
+    poller = Wurk::Cron::Poller.new(cfg)
+    lp = Wurk::Cron::Loop.new(schedule: '0 4 * * *', klass: 'CronTest::OnTime')
+    now = ::Time.now.to_i
+
+    poller.send(:warn_missed_tick, lp, now, now)
+
+    refute_match(/missed tick/, io.string)
+  end
+
+  # 548 else: 'nf' is present and non-empty → read_fire_marks returns its
+  # integer value, not nil.
+  def test_read_fire_marks_returns_nf_when_present
+    lp = register_loop("CronTest::Marks#{@suffix}", queue: "cron-mk-#{@suffix}")
+    Wurk.redis do |c|
+      c.call('HSET', "#{Wurk::Cron::LOOP_PREFIX}#{lp.lid}", 'lf', '111', 'nf', '222')
+    end
+    poller = Wurk::Cron::Poller.new(Wurk.configuration)
+
+    prev_fire, next_fire = poller.send(:read_fire_marks, lp.lid)
+
+    assert_equal 111, prev_fire
+    assert_equal 222, next_fire
+  end
+
+  # ---- Module-level register / lid branch coverage ---------------------
+
+  # 572 else: options is not a Hash → lid coerces to {} before hashing.
+  def test_lid_coerces_non_hash_options
+    a = Wurk::Cron.lid('* * * * *', 'A', nil)
+    b = Wurk::Cron.lid('* * * * *', 'A', {})
+
+    assert_equal b, a, 'a non-Hash options arg must hash identically to an empty Hash'
+    assert_equal 16, a.length
+  end
+
+  # 582 else: name is nil → no :label key merged into options.
+  def test_module_register_without_name_omits_label
+    lp = Wurk::Cron.register(nil, '0 4 * * *', 'CronTest::BarWorker', [1])
+    @lids << lp.lid
+
+    refute_includes lp.options.keys, 'label', 'a nil name must not add a label option'
+    assert_equal [1], lp.args
+  end
+
   private
 
   def cleanup_queue(queue)

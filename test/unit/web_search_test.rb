@@ -112,7 +112,81 @@ class WebSearchTest < Wurk::Test::UnitCase
     assert_empty(hits.select { |h| h[:klass] == @class_a })
   end
 
+  # Forces paged_lrange to iterate past the first page: with one full
+  # QUEUE_PAGE-sized page the loop must NOT break (line 86 else side) and
+  # fetch a second page before terminating.
+  def test_search_queue_pages_past_first_page
+    total = Wurk::Web::Search::QUEUE_PAGE + 5
+    total.times { push_to_queue(@class_a, [@needle]) }
+
+    hits = Wurk::Web::Search.new(@needle, kinds: ['queues'], limit: Wurk::Web::Search::MAX_LIMIT).to_a
+
+    assert_equal total, hits.select { |h| h[:klass] == @class_a }.size
+  end
+
+  # Queue payload with no enqueued_at / created_at exercises the nil sides
+  # of `record.enqueued_at&.to_f` (line 115) and `record.created_at&.to_f`
+  # (line 116) in queue_row.
+  def test_search_queue_row_handles_missing_timestamps
+    push_bare_to_queue(@class_a, [@needle])
+
+    hits = Wurk::Web::Search.new(@needle, kinds: ['queues']).to_a
+
+    assert_equal(
+      { size: 1, enqueued_at: nil, created_at: nil },
+      { size: hits.size, enqueued_at: hits[0][:enqueued_at], created_at: hits[0][:created_at] }
+    )
+  end
+
+  # Sorted-set payload with no enqueued_at / created_at exercises the nil
+  # sides of `entry.enqueued_at&.to_f` (line 128) and
+  # `entry.created_at&.to_f` (line 129) in sorted_row.
+  def test_search_sorted_row_handles_missing_timestamps
+    push_bare_to_zset('retry', @class_a, [@needle])
+
+    hits = Wurk::Web::Search.new(@needle, kinds: ['retry']).to_a
+
+    assert_equal(
+      { size: 1, enqueued_at: nil, created_at: nil },
+      { size: hits.size, enqueued_at: hits[0][:enqueued_at], created_at: hits[0][:created_at] }
+    )
+  end
+
+  # Line 100 `else` (sorted_set_for returning nil) is unreachable through
+  # the public API: `each_hit` only routes non-'queues' kinds to
+  # search_sorted_set, and @kinds is filtered to KINDS in the constructor,
+  # so `kind` is always one of retry/scheduled/dead. No way to drive nil
+  # without reaching into private internals.
+  def test_sorted_set_for_else_unreachable
+    skip 'sorted_set_for else is unreachable: kinds are filtered to KINDS'
+  end
+
   private
+
+  def push_bare_to_queue(klass, args)
+    payload = bare_payload(klass, args)
+    Wurk.redis do |c|
+      c.call('SADD', 'queues', @queue)
+      c.call('LPUSH', "queue:#{@queue}", Wurk.dump_json(payload))
+    end
+    payload['jid']
+  end
+
+  def push_bare_to_zset(name, klass, args)
+    payload = bare_payload(klass, args)
+    Wurk.redis { |c| c.call('ZADD', name, ::Time.now.to_f.to_s, Wurk.dump_json(payload)) }
+    payload['jid']
+  end
+
+  def bare_payload(klass, args)
+    {
+      'class' => klass,
+      'args' => args,
+      'queue' => @queue,
+      'jid' => SecureRandom.hex(12),
+      'retry_count' => 0
+    }
+  end
 
   def push_to_queue(klass, args)
     payload = job_payload(klass, args)

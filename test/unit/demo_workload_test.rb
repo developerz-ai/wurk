@@ -20,11 +20,12 @@ class DemoWorkloadTest < Wurk::Test::UnitCase
   # drives write fixed *global* keys (`queue:default`, `schedule`, `dead`,
   # `lmtr-list`, the periodic set, …) that can't be prefixed, and the
   # RedisNamespace helper is still a stub. So this class points the global config
-  # at its own DB (override with WURK_DEMO_TEST_DB) and FLUSHDB's it — no other
-  # suite test touches DB 15. For that reason it does NOT call `parallelize_me!`:
-  # FLUSHDB-based isolation is only safe with the tests run sequentially, which
-  # the per-class fork runner already guarantees.
-  DB = ENV.fetch('WURK_DEMO_TEST_DB', '15')
+  # at the reserved DEDICATED_DB (15) and FLUSHDB's it — parallel workers are
+  # capped to DBs 1..14 (see test_helper), so no worker is ever assigned this DB.
+  # For that reason it does NOT call `parallelize_me!`: FLUSHDB-based isolation is
+  # only safe with the tests run sequentially, which the per-class fork runner
+  # already guarantees.
+  DB = ENV.fetch('WURK_DEMO_TEST_DB', Wurk::Test::DEDICATED_DB.to_s)
 
   def setup
     super

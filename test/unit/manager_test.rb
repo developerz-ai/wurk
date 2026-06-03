@@ -153,6 +153,25 @@ class ManagerTest < Wurk::Test::UnitCase
     assert_predicate mgr, :stopped?
   end
 
+  # When wait_for drains the pool before the deadline, stop returns at the
+  # second `@workers.empty?` check (line 64 then-branch) and never reaches
+  # hard_shutdown.
+  def test_stop_returns_after_drain_without_hard_shutdown
+    mgr = Wurk::Manager.new(@capsule)
+    silence_processors(mgr)
+    # Simulate workers draining during the poll.
+    mgr.define_singleton_method(:wait_for) { |_deadline| @workers.clear }
+
+    hard_shutdown_ran = false
+    mgr.define_singleton_method(:hard_shutdown) { hard_shutdown_ran = true }
+    @capsule.define_singleton_method(:stop) { nil }
+
+    mgr.stop(::Process.clock_gettime(::Process::CLOCK_MONOTONIC) + 5)
+
+    refute hard_shutdown_ran, 'hard_shutdown must be skipped when workers drained'
+    assert_empty mgr.workers
+  end
+
   def test_stop_calls_capsule_stop_even_when_hard_shutdown_runs
     mgr = Wurk::Manager.new(@capsule)
     silence_processors(mgr)
