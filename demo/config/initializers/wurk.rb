@@ -6,7 +6,10 @@
 # pause/clear) returns 403 at the middleware layer, and the SPA hides the
 # destructive actions. WURK_WEB_READ_ONLY=1 in the image sets this too; doing it
 # here as well makes the demo read-only even if someone runs it without the env.
-Wurk::Web.configure { |c| c.read_only = true }
+Wurk::Web.configure do |c|
+  c.read_only = true
+  c.read_only_message = "This is a public demo — actions are disabled."
+end
 
 # Enterprise uniqueness — installs the client+server middleware so
 # `sidekiq_options unique_for:` (SendReceiptJob) actually de-dupes.

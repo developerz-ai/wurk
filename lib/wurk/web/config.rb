@@ -37,9 +37,16 @@ module Wurk
       def initialize
         @authorization = nil
         @read_only = env_read_only?
+        @read_only_message = nil
         @middlewares = []
         @rack_app = nil
       end
+
+      # Optional banner copy shown by the dashboard in read-only mode. Nil →
+      # the SPA falls back to its localized default ("Read-only mode"). Lets a
+      # host explain *why* it's read-only — e.g. the public demo sets
+      # "This is a public demo — actions are disabled."
+      attr_accessor :read_only_message
 
       # Registers a `(env, method, path) -> truthy/falsey` block. Re-calling
       # overwrites; the spec exposes a single hook, not a chain.
@@ -88,6 +95,7 @@ module Wurk
       def reset!
         @authorization = nil
         @read_only = env_read_only?
+        @read_only_message = nil
         @middlewares = []
         @rack_app = nil
       end

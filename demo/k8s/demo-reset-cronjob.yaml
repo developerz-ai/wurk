@@ -1,0 +1,59 @@
+# Hourly state-cycle for the public demo (issue #32 — "Reset/seed task that
+# cycles state hourly so the demo never looks dead").
+#
+# The producer self-heals every tick, so the demo never goes empty — but a
+# single worker can't drain everything the producer tops up, so queue latency
+# creeps upward over hours. This CronJob flushes the demo Redis hourly; the
+# web pod's producer re-seeds a clean slate within one tick.
+#
+# Reference manifest for ../infrastructure — adjust namespace, secret/configmap
+# names, and imagePullSecret to match the web/worker deployments. `demo:reset`
+# is the rake task in demo/lib/tasks/demo.rake (FLUSHDB on the demo Redis).
+apiVersion: batch/v1
+kind: CronJob
+metadata:
+  name: wurk-demo-reset
+  namespace: wurk-demo
+spec:
+  schedule: "0 * * * *"          # top of every hour
+  concurrencyPolicy: Forbid       # never overlap a flush with the previous one
+  successfulJobsHistoryLimit: 1
+  failedJobsHistoryLimit: 3
+  startingDeadlineSeconds: 300
+  jobTemplate:
+    spec:
+      backoffLimit: 1
+      activeDeadlineSeconds: 120
+      template:
+        spec:
+          restartPolicy: Never
+          # Same private image as the deployments; reuse the GHCR pull secret.
+          imagePullSecrets:
+            - name: ghcr-wurk-demo
+          containers:
+            - name: reset
+              image: ghcr.io/developerz-ai/wurk-demo:latest
+              # bin/demo-entrypoint's default branch execs "$@" from demo/.
+              args: ["bundle", "exec", "rails", "demo:reset"]
+              env:
+                # WURK_DISABLED keeps the railtie from forking a swarm in this
+                # one-shot pod; the task only needs Redis + a bootable Rails env.
+                - name: WURK_DISABLED
+                  value: "1"
+                - name: REDIS_URL
+                  valueFrom:
+                    secretKeyRef:
+                      name: wurk-demo
+                      key: REDIS_URL
+                - name: SECRET_KEY_BASE
+                  valueFrom:
+                    secretKeyRef:
+                      name: wurk-demo
+                      key: SECRET_KEY_BASE
+              resources:
+                requests:
+                  cpu: 50m
+                  memory: 128Mi
+                limits:
+                  cpu: 250m
+                  memory: 256Mi

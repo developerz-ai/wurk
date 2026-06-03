@@ -91,7 +91,9 @@ class WebAuthorizationTest < Wurk::Test::EngineCase
     get '/wurk/api/meta'
 
     assert_equal 200, last_response.status
-    assert_equal false, JSON.parse(last_response.body)['read_only']
+    body = JSON.parse(last_response.body)
+    assert_equal false, body['read_only']
+    assert_nil body['read_only_message']
   end
 
   def test_meta_reports_read_only_when_enabled
@@ -101,5 +103,18 @@ class WebAuthorizationTest < Wurk::Test::EngineCase
 
     assert_equal 200, last_response.status
     assert_equal true, JSON.parse(last_response.body)['read_only']
+  end
+
+  def test_meta_includes_read_only_message_when_set
+    Wurk::Web.configure do |c|
+      c.read_only = true
+      c.read_only_message = 'This is a public demo — actions are disabled.'
+    end
+
+    get '/wurk/api/meta'
+
+    assert_equal 200, last_response.status
+    assert_equal 'This is a public demo — actions are disabled.',
+                 JSON.parse(last_response.body)['read_only_message']
   end
 end

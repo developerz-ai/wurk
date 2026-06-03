@@ -2,6 +2,8 @@ import { useQuery } from '@tanstack/react-query';
 
 export interface Meta {
   read_only: boolean;
+  // Optional host-supplied banner copy; null → SPA uses its localized default.
+  read_only_message: string | null;
 }
 
 // Boot-time dashboard flags. Fetched once and cached forever — these only
