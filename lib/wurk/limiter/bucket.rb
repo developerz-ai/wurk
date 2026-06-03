@@ -71,9 +71,19 @@ module Wurk
       end
 
       def acquire(used)
+        base = epoch_index
         lua(:limiter_bucket_acquire,
-            keys: ["lmtr-b:#{@name}"],
-            argv: [@options[:count], interval_seconds, used, ttl])
+            keys: candidate_epoch_keys(base),
+            argv: [@options[:count], interval_seconds, used, ttl, base])
+      end
+
+      # The three consecutive epoch keys (base ±1) the script may touch. All are
+      # passed in KEYS[] so the script never accesses an undeclared key on Redis
+      # Cluster or Dragonfly (#91); the caller can't know Redis's clock, so it
+      # brackets its own epoch and Lua picks the match. NTP-sane skew keeps
+      # Redis's epoch within ±1 of base, so one of the three always matches.
+      def candidate_epoch_keys(base)
+        [base - 1, base, base + 1].map { |e| "lmtr-b:#{@name}:#{e}" }
       end
     end
   end
