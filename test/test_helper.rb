@@ -85,9 +85,7 @@ require "minitest/autorun"
 # the number of worker DBs so every worker gets a unique one. (CI leaves NCPU
 # unset → 4, so this is a no-op there; it only bites machines that set a high
 # NCPU for speed.)
-if (ENV["NCPU"] || "4").to_i > Wurk::Test::WORKER_DATABASES
-  ENV["NCPU"] = Wurk::Test::WORKER_DATABASES.to_s
-end
+ENV["NCPU"] = Wurk::Test::WORKER_DATABASES.to_s if (ENV["NCPU"] || "4").to_i > Wurk::Test::WORKER_DATABASES
 
 require "minitest/parallel_fork" rescue nil
 
