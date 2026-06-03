@@ -106,6 +106,26 @@ class LimiterBucketTest < Wurk::Test::UnitCase
     assert_raises(ArgumentError) { l.within_limit }
   end
 
+  # #91: acquire must write to a SINGLE fully-qualified epoch key
+  # (lmtr-b:<name>:<epoch>) declared in KEYS[1] — never a bare prefix the script
+  # suffixes itself. The old script built the key inside Lua, which Dragonfly
+  # rejects (undeclared key) and Redis Cluster would reject (cross-slot if
+  # multiple candidates). One declared key is safe on both.
+  def test_acquire_writes_a_single_fully_qualified_epoch_key
+    name = "dk-#{@suffix}"
+    l = Wurk::Limiter.bucket(name, 5, :minute)
+    l.within_limit {}
+
+    @pool.with do |c|
+      refute_equal 1, c.call('EXISTS', "lmtr-b:#{name}"),
+                   'must not write a bare-prefix key (#91)'
+      keys = c.call('KEYS', "lmtr-b:#{name}:*")
+      assert_equal 1, keys.size, "exactly one declared epoch key, got #{keys.inspect}"
+      assert_match(/\Almtr-b:#{Regexp.escape(name)}:\d+\z/, keys.first)
+      assert_equal '1', c.call('GET', keys.first)
+    end
+  end
+
   # wait_timeout spanning a second-boundary: an exhausted bucket sleeps until
   # the counter rolls to zero, taking the no-raise side (remaining > 0,
   # line 39 else) then succeeding on retry.

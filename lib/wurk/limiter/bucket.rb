@@ -71,9 +71,20 @@ module Wurk
       end
 
       def acquire(used)
-        lua(:limiter_bucket_acquire,
-            keys: ["lmtr-b:#{@name}"],
-            argv: [@options[:count], interval_seconds, used, ttl])
+        # Resolve the epoch from the Redis clock (spec §1: timing from TIME, not
+        # the client clock) and pass the single fully-qualified key. One declared
+        # key is safe on both Redis Cluster (no CROSSSLOT) and Dragonfly (no
+        # undeclared-key access) — see lua/limiter_bucket_acquire.lua (#91).
+        Wurk::Limiter.redis do |c|
+          now = c.call('TIME').first.to_i
+          epoch = now / interval_seconds
+          remaining = ((epoch + 1) * interval_seconds) - now
+          Wurk::Lua::Loader.eval_cached(
+            c, :limiter_bucket_acquire,
+            keys: ["lmtr-b:#{@name}:#{epoch}"],
+            argv: [@options[:count], used, ttl, remaining]
+          )
+        end
       end
     end
   end
