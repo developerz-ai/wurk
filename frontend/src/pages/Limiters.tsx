@@ -1,6 +1,9 @@
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
-import { useState, useEffect } from 'react';
+import { useEffect } from 'react';
 import { Pagination } from '../components/Pagination';
+import { SortableTh } from '../components/SortableTh';
+import { useSort, type Accessors } from '../hooks/useSort';
+import { usePageParam } from '../hooks/usePageParam';
 import { t } from '../i18n';
 import { PageHeader } from '../components/PageHeader';
 import { useMeta } from '../hooks/useMeta';
@@ -33,11 +36,24 @@ interface LimitersResponse {
 
 const PAGE_SIZE = 25;
 
+const SORT: Accessors<Limiter> = {
+  name: (l) => l.name,
+  type: (l) => l.type,
+  used: (l) => l.status?.used ?? 0,
+  limit: (l) => l.status?.limit ?? null,
+  usage: (l) => {
+    const used = l.status?.used ?? 0;
+    const limit = l.status?.limit ?? null;
+    return limit && limit > 0 ? used / limit : 0;
+  },
+  status: (l) => ((l.status?.['available?'] ?? true) ? 'available' : 'exhausted'),
+};
+
 export default function Limiters() {
   const qc = useQueryClient();
   const { data: meta } = useMeta();
   const readOnly = meta?.read_only ?? false;
-  const [page, setPage] = useState(1);
+  const [page, setPage] = usePageParam();
 
   useEffect(() => {
     document.title = `${t('nav.limiters')} — Wurk`;
@@ -61,6 +77,8 @@ export default function Limiters() {
     onSuccess: () => qc.invalidateQueries({ queryKey: ['limiters'] }),
   });
 
+  const { sorted, sort, toggle } = useSort(data?.limiters ?? [], SORT);
+
   if (isLoading) return <div className="empty-state"><span className="spinner" /></div>;
   if (isError || !data) return <div className="empty-state" style={{ color: 'var(--danger)' }}>{t('common.error')}</div>;
 
@@ -70,7 +88,7 @@ export default function Limiters() {
         <span className="badge badge-muted">{data.total.toLocaleString()}</span>
       </PageHeader>
 
-      {data.limiters.length === 0 ? (
+      {sorted.length === 0 ? (
         <div className="empty-state">{t('common.empty')}</div>
       ) : (
         <>
@@ -78,17 +96,17 @@ export default function Limiters() {
             <table>
               <thead>
                 <tr>
-                  <th>Name</th>
-                  <th>Type</th>
-                  <th>Used</th>
-                  <th>Limit</th>
-                  <th>Usage</th>
-                  <th>Status</th>
+                  <SortableTh label="Name" sortKey="name" sort={sort} onSort={toggle} />
+                  <SortableTh label="Type" sortKey="type" sort={sort} onSort={toggle} />
+                  <SortableTh label="Used" sortKey="used" sort={sort} onSort={toggle} />
+                  <SortableTh label="Limit" sortKey="limit" sort={sort} onSort={toggle} />
+                  <SortableTh label="Usage" sortKey="usage" sort={sort} onSort={toggle} />
+                  <SortableTh label="Status" sortKey="status" sort={sort} onSort={toggle} />
                   {!readOnly && <th />}
                 </tr>
               </thead>
               <tbody>
-                {data.limiters.map((limiter) => {
+                {sorted.map((limiter) => {
                   const s = limiter.status;
                   const used = s?.used ?? 0;
                   const limit = s?.limit ?? null;

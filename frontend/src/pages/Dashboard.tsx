@@ -4,7 +4,6 @@ import { StatCard } from '../components/StatCard';
 import { t } from '../i18n';
 import type { StatsSnapshot } from '../hooks/useSSE';
 import { relativeTime } from '../utils';
-import logoUrl from '../assets/wurk-logo.png';
 
 interface StatsData {
   processed: number;
@@ -71,9 +70,6 @@ export default function Dashboard({ sse }: DashboardProps) {
   return (
     <div>
       <div className="dash-hero">
-        <div className="dash-hero__mark">
-          <img src={logoUrl} alt="Wurk" />
-        </div>
         <div className="dash-hero__body">
           <h1 className="dash-hero__title">Wurk ⚡</h1>
           <p className="dash-hero__strapline">{t('dashboard.strapline')}</p>

@@ -1,7 +1,10 @@
 import { useQuery } from '@tanstack/react-query';
-import { useState, useEffect } from 'react';
+import { useEffect } from 'react';
 import { Link } from 'react-router-dom';
 import { Pagination } from '../components/Pagination';
+import { SortableTh } from '../components/SortableTh';
+import { useSort, type Accessors } from '../hooks/useSort';
+import { usePageParam } from '../hooks/usePageParam';
 import { t } from '../i18n';
 import { PageHeader } from '../components/PageHeader';
 import { relativeTime, truncate } from '../utils';
@@ -26,8 +29,18 @@ interface BatchesResponse {
 
 const PAGE_SIZE = 25;
 
+const SORT: Accessors<Batch> = {
+  bid: (b) => b.bid,
+  description: (b) => b.description ?? '',
+  total: (b) => b.total,
+  pending: (b) => b.pending,
+  failures: (b) => b.failures,
+  progress: (b) => (b.total > 0 ? (b.total - b.pending) / b.total : 0),
+  created: (b) => b.created_at ?? null,
+};
+
 export default function Batches() {
-  const [page, setPage] = useState(1);
+  const [page, setPage] = usePageParam();
 
   useEffect(() => {
     document.title = `${t('nav.batches')} — Wurk`;
@@ -41,6 +54,8 @@ export default function Batches() {
       ),
   });
 
+  const { sorted, sort, toggle } = useSort(data?.batches ?? [], SORT);
+
   if (isLoading) return <div className="empty-state"><span className="spinner" /></div>;
   if (isError || !data) return <div className="empty-state" style={{ color: 'var(--danger)' }}>{t('common.error')}</div>;
 
@@ -50,7 +65,7 @@ export default function Batches() {
         <span className="badge badge-accent">{data.total.toLocaleString()}</span>
       </PageHeader>
 
-      {data.batches.length === 0 ? (
+      {sorted.length === 0 ? (
         <div className="empty-state">{t('common.empty')}</div>
       ) : (
         <>
@@ -58,17 +73,17 @@ export default function Batches() {
             <table>
               <thead>
                 <tr>
-                  <th>BID</th>
-                  <th>Description</th>
-                  <th>{t('table.total')}</th>
-                  <th>{t('table.pending')}</th>
-                  <th>Failures</th>
-                  <th>Progress</th>
-                  <th>Created</th>
+                  <SortableTh label="BID" sortKey="bid" sort={sort} onSort={toggle} />
+                  <SortableTh label="Description" sortKey="description" sort={sort} onSort={toggle} />
+                  <SortableTh label={t('table.total')} sortKey="total" sort={sort} onSort={toggle} />
+                  <SortableTh label={t('table.pending')} sortKey="pending" sort={sort} onSort={toggle} />
+                  <SortableTh label="Failures" sortKey="failures" sort={sort} onSort={toggle} />
+                  <SortableTh label="Progress" sortKey="progress" sort={sort} onSort={toggle} />
+                  <SortableTh label="Created" sortKey="created" sort={sort} onSort={toggle} />
                 </tr>
               </thead>
               <tbody>
-                {data.batches.map((batch) => {
+                {sorted.map((batch) => {
                   const done = batch.total - batch.pending;
                   const pct = batch.total > 0 ? (done / batch.total) * 100 : 0;
                   return (

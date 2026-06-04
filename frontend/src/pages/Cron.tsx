@@ -4,6 +4,8 @@ import { t } from '../i18n';
 import { PageHeader } from '../components/PageHeader';
 import { relativeTime, truncate } from '../utils';
 import { useMeta } from '../hooks/useMeta';
+import { SortableTh } from '../components/SortableTh';
+import { useSort, type Accessors } from '../hooks/useSort';
 
 interface CronLoop {
   lid: string;
@@ -16,6 +18,15 @@ interface CronLoop {
   last_fire_at: number | null;
   next_fire_at: number | null;
 }
+
+const SORT: Accessors<CronLoop> = {
+  schedule: (r) => r.schedule,
+  klass: (r) => r.klass,
+  queue: (r) => r.queue,
+  last_fire: (r) => r.last_fire_at,
+  next_fire: (r) => r.next_fire_at,
+  status: (r) => (r.paused ? 'paused' : 'active'),
+};
 
 export default function Cron() {
   const qc = useQueryClient();
@@ -47,6 +58,8 @@ export default function Cron() {
     onSuccess: () => qc.invalidateQueries({ queryKey: ['cron'] }),
   });
 
+  const { sorted, sort, toggle } = useSort(data ?? [], SORT);
+
   if (isLoading) return <div className="empty-state"><span className="spinner" /></div>;
   if (isError || !data) return <div className="empty-state" style={{ color: 'var(--danger)' }}>{t('common.error')}</div>;
 
@@ -63,17 +76,17 @@ export default function Cron() {
           <table>
             <thead>
               <tr>
-                <th>Schedule</th>
-                <th>{t('table.class')}</th>
-                <th>{t('table.queue')}</th>
-                <th>Last fire</th>
-                <th>Next fire</th>
-                <th>{t('table.status')}</th>
+                <SortableTh label="Schedule" sortKey="schedule" sort={sort} onSort={toggle} />
+                <SortableTh label={t('table.class')} sortKey="klass" sort={sort} onSort={toggle} />
+                <SortableTh label={t('table.queue')} sortKey="queue" sort={sort} onSort={toggle} />
+                <SortableTh label="Last fire" sortKey="last_fire" sort={sort} onSort={toggle} />
+                <SortableTh label="Next fire" sortKey="next_fire" sort={sort} onSort={toggle} />
+                <SortableTh label={t('table.status')} sortKey="status" sort={sort} onSort={toggle} />
                 {!readOnly && <th />}
               </tr>
             </thead>
             <tbody>
-              {data.map((loop) => (
+              {sorted.map((loop) => (
                 <tr key={loop.lid}>
                   <td style={{ fontFamily: 'monospace', fontSize: 12 }} title={loop.tz ?? undefined}>
                     {loop.schedule}

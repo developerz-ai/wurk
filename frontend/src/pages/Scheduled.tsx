@@ -1,6 +1,9 @@
 import { useQuery } from '@tanstack/react-query';
 import { useState, useEffect } from 'react';
 import { Pagination } from '../components/Pagination';
+import { SortableTh } from '../components/SortableTh';
+import { useSort, type Accessors } from '../hooks/useSort';
+import { usePageParam } from '../hooks/usePageParam';
 import { t } from '../i18n';
 import { PageHeader } from '../components/PageHeader';
 import { relativeTime, truncate, formatArgs, isoTime } from '../utils';
@@ -25,8 +28,15 @@ interface ScheduledResponse {
 
 const PAGE_SIZE = 25;
 
+const SORT: Accessors<ScheduledEntry> = {
+  jid: (e) => e.jid,
+  klass: (e) => e.klass,
+  args: (e) => formatArgs(e.args),
+  at: (e) => e.at,
+};
+
 export default function Scheduled() {
-  const [page, setPage] = useState(1);
+  const [page, setPage] = usePageParam();
   const [selected, setSelected] = useState<JobEntry | null>(null);
 
   useEffect(() => {
@@ -41,6 +51,8 @@ export default function Scheduled() {
       ),
   });
 
+  const { sorted, sort, toggle } = useSort(data?.entries ?? [], SORT);
+
   if (isLoading) return <div className="empty-state"><span className="spinner" /></div>;
   if (isError || !data) return <div className="empty-state" style={{ color: 'var(--danger)' }}>{t('common.error')}</div>;
 
@@ -50,7 +62,7 @@ export default function Scheduled() {
         <span className="badge badge-accent">{data.total.toLocaleString()}</span>
       </PageHeader>
 
-      {data.entries.length === 0 ? (
+      {sorted.length === 0 ? (
         <div className="empty-state">{t('common.empty')}</div>
       ) : (
         <>
@@ -58,14 +70,14 @@ export default function Scheduled() {
             <table>
               <thead>
                 <tr>
-                  <th>{t('table.jid')}</th>
-                  <th>{t('table.class')}</th>
-                  <th>{t('table.args')}</th>
-                  <th>{t('table.scheduled_at')}</th>
+                  <SortableTh label={t('table.jid')} sortKey="jid" sort={sort} onSort={toggle} />
+                  <SortableTh label={t('table.class')} sortKey="klass" sort={sort} onSort={toggle} />
+                  <SortableTh label={t('table.args')} sortKey="args" sort={sort} onSort={toggle} />
+                  <SortableTh label={t('table.scheduled_at')} sortKey="at" sort={sort} onSort={toggle} />
                 </tr>
               </thead>
               <tbody>
-                {data.entries.map((entry) => {
+                {sorted.map((entry) => {
                   const argsStr = formatArgs(entry.args);
                   return (
                     <tr key={entry.jid} className="row-clickable" onClick={() => setSelected(entry)}>

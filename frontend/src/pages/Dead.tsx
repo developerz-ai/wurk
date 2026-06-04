@@ -1,6 +1,9 @@
 import { useQuery } from '@tanstack/react-query';
 import { useState, useEffect } from 'react';
 import { Pagination } from '../components/Pagination';
+import { SortableTh } from '../components/SortableTh';
+import { useSort, type Accessors } from '../hooks/useSort';
+import { usePageParam } from '../hooks/usePageParam';
 import { t } from '../i18n';
 import { PageHeader } from '../components/PageHeader';
 import { relativeTime, truncate, formatArgs, isoTime } from '../utils';
@@ -29,8 +32,17 @@ interface DeadResponse {
 
 const PAGE_SIZE = 25;
 
+const SORT: Accessors<DeadEntry> = {
+  jid: (e) => e.jid,
+  klass: (e) => e.klass,
+  args: (e) => formatArgs(e.args),
+  error_class: (e) => e.error_class,
+  error_message: (e) => e.error_message,
+  failed_at: (e) => e.at,
+};
+
 export default function Dead() {
-  const [page, setPage] = useState(1);
+  const [page, setPage] = usePageParam();
   const [selected, setSelected] = useState<JobEntry | null>(null);
 
   useEffect(() => {
@@ -45,6 +57,8 @@ export default function Dead() {
       ),
   });
 
+  const { sorted, sort, toggle } = useSort(data?.entries ?? [], SORT);
+
   if (isLoading) return <div className="empty-state"><span className="spinner" /></div>;
   if (isError || !data) return <div className="empty-state" style={{ color: 'var(--danger)' }}>{t('common.error')}</div>;
 
@@ -54,7 +68,7 @@ export default function Dead() {
         <span className="badge badge-danger">{data.total.toLocaleString()}</span>
       </PageHeader>
 
-      {data.entries.length === 0 ? (
+      {sorted.length === 0 ? (
         <div className="empty-state">{t('common.empty')}</div>
       ) : (
         <>
@@ -62,16 +76,16 @@ export default function Dead() {
             <table>
               <thead>
                 <tr>
-                  <th>{t('table.jid')}</th>
-                  <th>{t('table.class')}</th>
-                  <th>{t('table.args')}</th>
-                  <th>{t('table.error')}</th>
-                  <th>Message</th>
-                  <th>{t('table.failed_at')}</th>
+                  <SortableTh label={t('table.jid')} sortKey="jid" sort={sort} onSort={toggle} />
+                  <SortableTh label={t('table.class')} sortKey="klass" sort={sort} onSort={toggle} />
+                  <SortableTh label={t('table.args')} sortKey="args" sort={sort} onSort={toggle} />
+                  <SortableTh label={t('table.error')} sortKey="error_class" sort={sort} onSort={toggle} />
+                  <SortableTh label="Message" sortKey="error_message" sort={sort} onSort={toggle} />
+                  <SortableTh label={t('table.failed_at')} sortKey="failed_at" sort={sort} onSort={toggle} />
                 </tr>
               </thead>
               <tbody>
-                {data.entries.map((entry) => {
+                {sorted.map((entry) => {
                   const argsStr = formatArgs(entry.args);
                   return (
                     <tr key={entry.jid} className="row-clickable" onClick={() => setSelected(entry)}>

@@ -16,6 +16,9 @@
   <meta name="theme-color" content="#0d1117">
   <meta name="color-scheme" content="dark">
   <link rel="icon" type="image/png" href="wurk-logo.png">
+  <!-- Font Awesome — same icon family the Wurk dashboard ships with. -->
+  <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.5.1/css/all.min.css"
+        crossorigin="anonymous" referrerpolicy="no-referrer">
   <!-- Set early so scroll-reveal elements start hidden only when JS can reveal them (no-JS = visible). -->
   <script>document.documentElement.classList.add('js');</script>
   <style>
@@ -25,7 +28,7 @@
       --line: rgba(255,255,255,0.08); --line-strong: #30363d;
       --fg: #e6edf3; --muted: #8b949e;
       --accent: #ffffff; --success: #3fb950; --danger: #e5534b; --warning: #d29922;
-      --code: #0d1117; --radius: 10px;
+      --code: #0d1117; --radius: 8px;
     }
     * { box-sizing: border-box; }
     html { scroll-behavior: smooth; }
@@ -40,33 +43,46 @@
     code, pre { font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; }
     pre {
       background: var(--code); border: 1px solid var(--line-strong); border-radius: var(--radius);
-      padding: 16px 18px; overflow-x: auto; font-size: 14px; line-height: 1.6;
+      padding: 16px 18px; overflow-x: auto; font-size: 14px; line-height: 1.6; margin: 0;
     }
     .add { color: var(--success); } .del { color: var(--danger); } .cmt { color: var(--muted); }
+
+    /* ── Copy-able code block ── */
+    .codeblock { position: relative; }
+    .copy-btn {
+      position: absolute; top: 8px; right: 8px;
+      display: inline-flex; align-items: center; gap: 6px;
+      padding: 5px 10px; font-size: 12px; font-weight: 600;
+      color: var(--muted); background: var(--panel-2);
+      border: 1px solid var(--line-strong); border-radius: 7px; cursor: pointer;
+      transition: color .15s, border-color .15s, background .15s; line-height: 1;
+    }
+    .copy-btn:hover { color: var(--fg); border-color: var(--accent); }
+    .copy-btn.copied { color: var(--success); border-color: var(--success); }
 
     /* ── Header ── */
     header { border-bottom: 1px solid var(--line); position: sticky; top: 0; z-index: 10;
       background: color-mix(in oklch, var(--bg) 88%, transparent);
       -webkit-backdrop-filter: blur(8px); backdrop-filter: blur(8px); }
-    nav { display: flex; align-items: center; gap: 20px; padding: 14px 0; }
-    nav .brand { font-weight: 800; font-size: 18px; letter-spacing: -0.02em; }
+    nav { display: flex; align-items: center; gap: 20px; padding: 12px 0; }
+    nav .brand { display: inline-flex; align-items: center; gap: 10px;
+      font-weight: 800; font-size: 18px; letter-spacing: -0.02em; }
+    nav .brand img { height: 48px; width: auto; display: block;
+      filter: drop-shadow(0 2px 6px rgba(0,0,0,0.45)); }
     nav .spacer { flex: 1; }
     nav a.navlink { color: var(--muted); font-size: 14px; }
     nav a.navlink:hover { color: var(--fg); text-decoration: none; }
 
     /* ── Hero ── */
     .hero { padding: 64px 0 52px; text-align: center; animation: fade-up .5s ease both; }
-    .hero__logo {
-      height: 188px; width: auto; display: block; margin: 0 auto 18px;
-      filter: drop-shadow(0 14px 26px rgba(0,0,0,0.55));
-      animation: float 5s ease-in-out infinite;
-    }
-    .hero h1 { font-size: 60px; line-height: 1; margin: 0; letter-spacing: -0.03em; font-weight: 800; }
+    .hero h1 { font-size: 60px; line-height: 1; margin: 0; letter-spacing: -0.03em; font-weight: 800;
+      display: inline-flex; align-items: center; gap: 14px; justify-content: center; }
+    .hero h1 .bolt { color: var(--fg); font-size: 0.62em; }
     .hero .strapline { font-size: 20px; font-weight: 600; margin: 14px 0 0; }
     .hero .lede { font-size: 18px; color: var(--muted); max-width: 680px; margin: 12px auto 28px; }
     .cta { display: flex; gap: 12px; justify-content: center; flex-wrap: wrap; margin-bottom: 28px; }
     .btn {
-      display: inline-flex; align-items: center; gap: 0.45rem;
+      display: inline-flex; align-items: center; gap: 0.5rem;
       padding: 11px 20px; border-radius: var(--radius); font-weight: 600; font-size: 15px;
       border: 1px solid var(--line-strong); transition: background .15s, border-color .15s, transform .05s;
     }
@@ -80,20 +96,69 @@
 
     /* ── Sections ── */
     section { padding: 48px 0; border-top: 1px solid var(--line); }
-    h2 { font-size: 28px; margin: 0 0 24px; letter-spacing: -0.02em; font-weight: 800; }
+    h2 { font-size: 28px; margin: 0 0 8px; letter-spacing: -0.02em; font-weight: 800; }
+    .section-lede { color: var(--muted); max-width: 720px; margin: 0 0 28px; font-size: 16px; }
     .pillars { display: grid; grid-template-columns: repeat(3, 1fr); gap: 16px; }
-    .pillar { background: var(--panel); border: 1px solid var(--line); border-radius: 12px; padding: 20px;
+    .pillar { background: var(--panel); border: 1px solid var(--line); border-radius: 12px; padding: 22px 20px;
       box-shadow: 0 1px 2px rgba(0,0,0,0.4); transition: transform .15s ease, border-color .15s ease; }
     .pillar:hover { transform: translateY(-2px); border-color: var(--line-strong); }
-    .pillar h3 { margin: 0 0 8px; font-size: 17px; }
+    .pillar .ic { display: inline-flex; align-items: center; justify-content: center;
+      width: 44px; height: 44px; border-radius: 11px; margin-bottom: 12px;
+      background: var(--panel-2); border: 1px solid var(--line-strong); color: var(--fg); font-size: 18px; }
+    .pillar h3 { margin: 0 0 6px; font-size: 17px; }
     .pillar p { margin: 0; color: var(--muted); font-size: 14px; }
+
+    /* ── Feature grid (was a plain table) ── */
+    .features-grid { display: grid; grid-template-columns: repeat(2, 1fr); gap: 16px; }
+    .feature {
+      position: relative; background: var(--panel); border: 1px solid var(--line);
+      border-radius: 14px; padding: 22px 22px 20px;
+      box-shadow: 0 1px 2px rgba(0,0,0,0.4);
+      transition: transform .15s ease, border-color .15s ease, box-shadow .15s ease;
+    }
+    .feature:hover { transform: translateY(-3px); border-color: var(--line-strong);
+      box-shadow: 0 10px 28px rgba(0,0,0,0.45); }
+
+    /* Cursor-tracking spotlight: a soft brightness glow follows the pointer
+       across each card (JS sets --mx/--my). Brightness only, no chroma — keeps
+       the monochrome palette. A faint ring brightens to read as "alive". */
+    .pillar, .feature { position: relative; overflow: hidden; isolation: isolate; }
+    .pillar > *, .feature > * { position: relative; z-index: 1; }
+    .pillar::before, .feature::before {
+      content: ""; position: absolute; inset: 0; z-index: 0; border-radius: inherit;
+      background: radial-gradient(280px circle at var(--mx, 50%) var(--my, -30%),
+        rgba(255,255,255,0.11), rgba(255,255,255,0.04) 38%, transparent 62%);
+      opacity: 0; transition: opacity .3s ease; pointer-events: none;
+    }
+    .pillar::after, .feature::after {
+      content: ""; position: absolute; inset: 0; z-index: 0; border-radius: inherit;
+      padding: 1px; pointer-events: none; opacity: 0; transition: opacity .3s ease;
+      background: radial-gradient(360px circle at var(--mx, 50%) var(--my, -30%),
+        rgba(255,255,255,0.55), transparent 45%);
+      -webkit-mask: linear-gradient(#000 0 0) content-box, linear-gradient(#000 0 0);
+      -webkit-mask-composite: xor; mask: linear-gradient(#000 0 0) content-box, linear-gradient(#000 0 0);
+      mask-composite: exclude;
+    }
+    .pillar:hover::before, .feature:hover::before,
+    .pillar:hover::after, .feature:hover::after { opacity: 1; }
+    .feature__ic { display: inline-flex; align-items: center; justify-content: center;
+      width: 44px; height: 44px; border-radius: 11px; margin-bottom: 14px;
+      background: var(--panel-2); border: 1px solid var(--line-strong); color: var(--fg); font-size: 18px; }
+    .feature h3 { margin: 0 0 8px; font-size: 17px; letter-spacing: -0.01em; }
+    .feature p { margin: 0 0 14px; color: var(--muted); font-size: 14px; }
+    .feature__tier { display: inline-flex; align-items: center; gap: 7px;
+      font-size: 11.5px; font-weight: 600; color: var(--muted);
+      padding: 4px 10px; border: 1px solid var(--line-strong); border-radius: 999px; }
+    .feature__tier s { color: var(--muted); text-decoration: line-through; }
+    .feature__tier .free { color: var(--success); }
+    .freebar { margin-top: 24px; text-align: center; color: var(--muted); font-size: 15px; }
+    .freebar b { color: var(--fg); }
 
     table { width: 100%; border-collapse: collapse; font-size: 14px;
       background: var(--panel); border: 1px solid var(--line); border-radius: var(--radius); overflow: hidden; }
     th, td { text-align: left; padding: 12px 14px; border-bottom: 1px solid var(--line); vertical-align: top; }
     tr:last-child td { border-bottom: none; }
     th { color: var(--muted); font-weight: 600; text-transform: uppercase; font-size: 11px; letter-spacing: 0.05em; }
-    td .tier { color: var(--muted); white-space: nowrap; font-variant: small-caps; }
 
     .two { display: grid; grid-template-columns: 1fr 1fr; gap: 20px; }
     .two h3 { font-size: 16px; margin: 0 0 10px; }
@@ -103,21 +168,19 @@
 
     /* ── Motion ── */
     @keyframes fade-up { from { opacity: 0; transform: translateY(14px); } to { opacity: 1; transform: translateY(0); } }
-    @keyframes float { 0%, 100% { transform: translateY(0); } 50% { transform: translateY(-8px); } }
     .js .reveal { opacity: 0; transform: translateY(18px); }
     .reveal.in { opacity: 1; transform: none; transition: opacity .5s ease, transform .5s ease; }
 
     @media (max-width: 720px) {
       .hero { padding: 40px 0 36px; }
-      .hero__logo { height: 150px; }
       .hero h1 { font-size: 42px; }
-      .pillars, .two { grid-template-columns: 1fr; }
+      .pillars, .two, .features-grid { grid-template-columns: 1fr; }
       nav .navlink.hide { display: none; }
     }
     @media (prefers-reduced-motion: reduce) {
-      .hero, .hero__logo { animation: none; }
+      .hero { animation: none; }
       .js .reveal { opacity: 1; transform: none; }
-      .pillar { transition: none; }
+      .pillar, .feature { transition: none; }
     }
   </style>
 </head>
@@ -125,7 +188,7 @@
   <header>
     <div class="wrap">
       <nav>
-        <span class="brand">Wurk ⚡</span>
+        <span class="brand"><img src="wurk-logo.png" alt="Wurk — an orc ready to work"> Wurk</span>
         <span class="spacer"></span>
         <a class="navlink hide" href="#features">Features</a>
         <a class="navlink hide" href="#install">Install</a>
@@ -140,36 +203,43 @@
   <main>
     <div class="wrap">
       <section class="hero" style="border-top:none">
-        <img class="hero__logo" src="wurk-logo.png" alt="Wurk — an orc ready to work">
-        <h1>Wurk ⚡</h1>
+        <h1>Wurk <i class="fa-solid fa-bolt bolt" aria-hidden="true"></i></h1>
         <p class="strapline">Wurk, wurk. 🪓 Ready to work. Zug zug.</p>
         <p class="lede">
           A 100% drop-in replacement for Sidekiq + Sidekiq Pro + Sidekiq Enterprise.
           Free forever. Faster.
         </p>
         <div class="cta">
-          <a class="btn primary" href="https://wurk.demo.developerz.ai/wurk">View the live demo →</a>
-          <a class="btn ghost" href="https://rubygems.org/gems/wurk">Get the gem</a>
-          <a class="btn ghost" href="https://github.com/developerz-ai/wurk">GitHub</a>
+          <a class="btn primary" href="https://wurk.demo.developerz.ai/wurk"><i class="fa-solid fa-gauge-high" aria-hidden="true"></i> View the live demo</a>
+          <a class="btn ghost" href="https://rubygems.org/gems/wurk"><i class="fa-solid fa-gem" aria-hidden="true"></i> Get the gem</a>
+          <a class="btn ghost" href="https://github.com/developerz-ai/wurk"><i class="fa-brands fa-github" aria-hidden="true"></i> GitHub</a>
         </div>
         <div class="install">
+          <div class="codeblock">
+            <button class="copy-btn" type="button" data-copy='gem "wurk"' aria-label="Copy to clipboard">
+              <i class="fa-regular fa-copy" aria-hidden="true"></i> Copy
+            </button>
 <pre><span class="cmt"># Gemfile</span>
 gem <span class="add">"wurk"</span></pre>
+          </div>
         </div>
       </section>
 
       <section id="pillars" class="reveal" style="border-top:none">
         <div class="pillars">
           <div class="pillar">
-            <h3>🔌 100% drop-in</h3>
+            <span class="ic"><i class="fa-solid fa-plug" aria-hidden="true"></i></span>
+            <h3>100% drop-in</h3>
             <p>Same Redis schema, job JSON, and DSL. Third-party Sidekiq gems work unchanged.</p>
           </div>
           <div class="pillar">
-            <h3>🆓 Free</h3>
+            <span class="ic"><i class="fa-solid fa-gift" aria-hidden="true"></i></span>
+            <h3>Free</h3>
             <p>Pro + Enterprise parity in the same gem. No tiers, no license check, no flag gates.</p>
           </div>
           <div class="pillar">
-            <h3>⚡ Faster</h3>
+            <span class="ic"><i class="fa-solid fa-bolt" aria-hidden="true"></i></span>
+            <h3>Faster</h3>
             <p>Fork-based real parallelism. Every release benchmarked vs Sidekiq.</p>
           </div>
         </div>
@@ -177,28 +247,63 @@ gem <span class="add">"wurk"</span></pre>
 
       <section id="features" class="reveal">
         <h2>Everything, in one free gem</h2>
-        <table>
-          <thead><tr><th>Area</th><th>What you get</th><th>Sidekiq tier</th></tr></thead>
-          <tbody>
-            <tr><td><b>Runtime</b></td><td>Fork-based parallelism, reliable BLMOVE fetch, PID supervision, rolling restarts, graceful drain</td><td><span class="tier">OSS + Pro</span></td></tr>
-            <tr><td><b>Batches</b></td><td>Callbacks on success/complete/death, nested batches</td><td><span class="tier">Pro</span></td></tr>
-            <tr><td><b>Limiters</b></td><td>Concurrent, bucket, window, leaky, points rate limiters</td><td><span class="tier">Enterprise</span></td></tr>
-            <tr><td><b>Periodic</b></td><td>Cron jobs, leader-elected so each tick fires exactly once</td><td><span class="tier">Enterprise</span></td></tr>
-            <tr><td><b>Encryption</b></td><td>AES-256-GCM argument encryption with zero-downtime key rotation</td><td><span class="tier">Enterprise</span></td></tr>
-            <tr><td><b>Dashboard</b></td><td>Mountable Rails engine, precompiled React SPA (no Node), live charts, job-detail modals</td><td><span class="tier">OSS + Pro/Ent</span></td></tr>
-          </tbody>
-        </table>
+        <p class="section-lede">
+          The runtime, the Pro batches, the Enterprise limiters, periodic jobs, and encryption —
+          the features Sidekiq splits across three paid tiers all ship in a single MIT-licensed gem.
+          No license keys, no per-seat math, no feature flags. Just <code>bundle install</code>.
+        </p>
+        <div class="features-grid">
+          <div class="feature">
+            <span class="feature__ic"><i class="fa-solid fa-bolt" aria-hidden="true"></i></span>
+            <h3>Real parallelism, not just threads</h3>
+            <p>Fork-based workers use every core — no GIL bottleneck. Reliable BLMOVE fetch, PID supervision, zero-downtime rolling restarts, and graceful drain are built in.</p>
+            <span class="feature__tier"><i class="fa-solid fa-check free" aria-hidden="true"></i> Sidekiq OSS + Pro</span>
+          </div>
+          <div class="feature">
+            <span class="feature__ic"><i class="fa-solid fa-table-cells-large" aria-hidden="true"></i></span>
+            <h3>Batches that fan out &amp; call back</h3>
+            <p>Track thousands of jobs as one unit. Fire success / complete / death callbacks, nest batches arbitrarily deep, and watch live progress roll in.</p>
+            <span class="feature__tier"><s>Sidekiq Pro</s> · <span class="free">free</span></span>
+          </div>
+          <div class="feature">
+            <span class="feature__ic"><i class="fa-solid fa-gauge" aria-hidden="true"></i></span>
+            <h3>Rate limiting that holds the line</h3>
+            <p>Concurrent, bucket, window, leaky, and points limiters protect fragile downstreams — throttle a third-party API or a hot database without ever dropping work.</p>
+            <span class="feature__tier"><s>Sidekiq Enterprise</s> · <span class="free">free</span></span>
+          </div>
+          <div class="feature">
+            <span class="feature__ic"><i class="fa-solid fa-stopwatch" aria-hidden="true"></i></span>
+            <h3>Cron that fires exactly once</h3>
+            <p>Leader-elected periodic jobs mean every schedule tick runs once across your whole fleet — no duplicate sends, no missed ticks, no extra moving parts.</p>
+            <span class="feature__tier"><s>Sidekiq Enterprise</s> · <span class="free">free</span></span>
+          </div>
+          <div class="feature">
+            <span class="feature__ic"><i class="fa-solid fa-shield-halved" aria-hidden="true"></i></span>
+            <h3>Encrypted arguments, rotated keys</h3>
+            <p>AES-256-GCM encryption for sensitive job arguments with zero-downtime key rotation. PII and secrets never sit in Redis as plaintext.</p>
+            <span class="feature__tier"><s>Sidekiq Enterprise</s> · <span class="free">free</span></span>
+          </div>
+          <div class="feature">
+            <span class="feature__ic"><i class="fa-solid fa-gauge-high" aria-hidden="true"></i></span>
+            <h3>A dashboard you'll keep open</h3>
+            <p>A precompiled React SPA ships inside the gem — consumers never touch Node. Live queues, retries, busy workers, batches, limiters, cron, and metrics, with click-through job detail.</p>
+            <span class="feature__tier"><i class="fa-solid fa-check free" aria-hidden="true"></i> Sidekiq OSS + Pro/Ent</span>
+          </div>
+        </div>
+        <p class="freebar">
+          That's the full Sidekiq + Pro + Enterprise surface — <b>$0</b>, one gem, MIT licensed.
+        </p>
       </section>
 
       <section id="dashboard" class="reveal">
         <h2>A dashboard you'll actually want open</h2>
-        <p style="color:var(--muted);max-width:720px">
+        <p class="section-lede">
           Dark, fast, and mobile-first — a precompiled React SPA that ships inside the gem (consumers
           never run Node). Live queues, retries, scheduled, dead, busy workers, batches, limiters, cron,
           and throughput/failure metrics. Click any job for its full args, error, and backtrace.
         </p>
         <p style="margin-top:18px">
-          <a class="btn primary" href="https://wurk.demo.developerz.ai/wurk">Open the live demo →</a>
+          <a class="btn primary" href="https://wurk.demo.developerz.ai/wurk"><i class="fa-solid fa-gauge-high" aria-hidden="true"></i> Open the live demo</a>
         </p>
       </section>
 
@@ -207,31 +312,43 @@ gem <span class="add">"wurk"</span></pre>
         <div class="two">
           <div>
             <h3>Add the gem</h3>
+            <div class="codeblock">
+              <button class="copy-btn" type="button" data-copy='gem "wurk"' aria-label="Copy to clipboard">
+                <i class="fa-regular fa-copy" aria-hidden="true"></i> Copy
+              </button>
 <pre><span class="cmt"># Gemfile</span>
 gem <span class="add">"wurk"</span>
 
 <span class="cmt"># then</span>
 bundle install</pre>
+            </div>
           </div>
           <div>
             <h3>Mount the dashboard</h3>
+            <div class="codeblock">
+              <button class="copy-btn" type="button" data-copy='mount Wurk::Engine =&gt; "/wurk"' aria-label="Copy to clipboard">
+                <i class="fa-regular fa-copy" aria-hidden="true"></i> Copy
+              </button>
 <pre><span class="cmt"># config/routes.rb</span>
 mount Wurk::Engine =&gt; <span class="add">"/wurk"</span></pre>
+            </div>
           </div>
         </div>
       </section>
 
       <section id="migrate" class="reveal">
         <h2>Migrating from Sidekiq</h2>
-        <p style="color:var(--muted);max-width:720px">
+        <p class="section-lede">
           Wurk reads and writes the same Redis schema, so a rolling deploy can run Sidekiq and Wurk
           against the same Redis during cutover. Delete the paid gems, add one line:
         </p>
+        <div class="codeblock">
 <pre><span class="del">- gem "sidekiq"</span>
 <span class="del">- gem "sidekiq-pro", source: "https://gems.contribsys.com/"</span>
 <span class="del">- gem "sidekiq-ent", source: "https://enterprise.contribsys.com/"</span>
 <span class="add">+ gem "wurk"</span></pre>
-        <p style="color:var(--muted)"><code>bundle install &amp;&amp; restart</code>. That's it — see the
+        </div>
+        <p style="color:var(--muted);margin-top:14px"><code>bundle install &amp;&amp; restart</code>. That's it — see the
           <a href="https://github.com/developerz-ai/wurk/wiki/Migrating-from-Sidekiq">migration guide</a>.</p>
       </section>
     </div>
@@ -263,6 +380,46 @@ mount Wurk::Engine =&gt; <span class="add">"/wurk"</span></pre>
         });
       }, { threshold: 0.12 });
       els.forEach(function (el) { io.observe(el); });
+    })();
+
+    // Copy-to-clipboard on code blocks. Copies the button's data-copy text so the
+    // copied snippet is clean (no comments, no diff markers).
+    (function () {
+      var btns = document.querySelectorAll('.copy-btn');
+      btns.forEach(function (btn) {
+        btn.addEventListener('click', function () {
+          var text = btn.getAttribute('data-copy') || '';
+          var done = function () {
+            var original = btn.innerHTML;
+            btn.classList.add('copied');
+            btn.innerHTML = '<i class="fa-solid fa-check" aria-hidden="true"></i> Copied';
+            setTimeout(function () { btn.classList.remove('copied'); btn.innerHTML = original; }, 1600);
+          };
+          if (navigator.clipboard && navigator.clipboard.writeText) {
+            navigator.clipboard.writeText(text).then(done, done);
+          } else {
+            var ta = document.createElement('textarea');
+            ta.value = text; ta.style.position = 'fixed'; ta.style.opacity = '0';
+            document.body.appendChild(ta); ta.select();
+            try { document.execCommand('copy'); } catch (e) {}
+            document.body.removeChild(ta); done();
+          }
+        });
+      });
+    })();
+
+    // Cursor-tracking spotlight: update --mx/--my to the pointer position so the
+    // radial glow + glowing border in ::before/::after follow the mouse.
+    (function () {
+      if (window.matchMedia && window.matchMedia('(pointer: coarse)').matches) return;
+      var cards = document.querySelectorAll('.pillar, .feature');
+      cards.forEach(function (card) {
+        card.addEventListener('pointermove', function (e) {
+          var r = card.getBoundingClientRect();
+          card.style.setProperty('--mx', (e.clientX - r.left) + 'px');
+          card.style.setProperty('--my', (e.clientY - r.top) + 'px');
+        });
+      });
     })();
   </script>
 </body>

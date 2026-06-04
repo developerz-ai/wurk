@@ -1,6 +1,9 @@
 import { useQuery } from '@tanstack/react-query';
 import { useState, useEffect } from 'react';
 import { Pagination } from '../components/Pagination';
+import { SortableTh } from '../components/SortableTh';
+import { useSort, type Accessors } from '../hooks/useSort';
+import { usePageParam } from '../hooks/usePageParam';
 import { t } from '../i18n';
 import { PageHeader } from '../components/PageHeader';
 import { relativeTime, truncate, formatArgs } from '../utils';
@@ -35,8 +38,15 @@ interface QueueDetail {
 
 const PAGE_SIZE = 25;
 
+const JOB_SORT: Accessors<QueueJob> = {
+  jid: (j) => j.jid,
+  class: (j) => j.class,
+  args: (j) => formatArgs(j.args),
+  enqueued: (j) => j.enqueued_at,
+};
+
 function QueueJobs({ name }: { name: string }) {
-  const [page, setPage] = useState(1);
+  const [page, setPage] = usePageParam();
   const [selected, setSelected] = useState<JobEntry | null>(null);
 
   const { data, isLoading, isError } = useQuery<QueueDetail>({
@@ -46,6 +56,8 @@ function QueueJobs({ name }: { name: string }) {
         (r) => r.json() as Promise<QueueDetail>
       ),
   });
+
+  const { sorted, sort, toggle } = useSort(data?.jobs ?? [], JOB_SORT);
 
   if (isLoading) return <div className="empty-state"><span className="spinner" /></div>;
   if (isError || !data) return <div className="empty-state" style={{ color: 'var(--danger)' }}>{t('common.error')}</div>;
@@ -59,7 +71,7 @@ function QueueJobs({ name }: { name: string }) {
         {data.paused && <span className="badge badge-warning">{t('dashboard.paused')}</span>}
       </div>
 
-      {data.jobs.length === 0 ? (
+      {sorted.length === 0 ? (
         <div className="empty-state">{t('common.empty')}</div>
       ) : (
         <>
@@ -67,14 +79,14 @@ function QueueJobs({ name }: { name: string }) {
             <table>
               <thead>
                 <tr>
-                  <th>{t('table.jid')}</th>
-                  <th>{t('table.class')}</th>
-                  <th>{t('table.args')}</th>
-                  <th>{t('table.scheduled_at')}</th>
+                  <SortableTh label={t('table.jid')} sortKey="jid" sort={sort} onSort={toggle} />
+                  <SortableTh label={t('table.class')} sortKey="class" sort={sort} onSort={toggle} />
+                  <SortableTh label={t('table.args')} sortKey="args" sort={sort} onSort={toggle} />
+                  <SortableTh label={t('table.scheduled_at')} sortKey="enqueued" sort={sort} onSort={toggle} />
                 </tr>
               </thead>
               <tbody>
-                {data.jobs.map((job) => {
+                {sorted.map((job) => {
                   const argsStr = formatArgs(job.args);
                   return (
                     <tr
@@ -102,6 +114,13 @@ function QueueJobs({ name }: { name: string }) {
   );
 }
 
+const QUEUE_SORT: Accessors<QueueSummary> = {
+  name: (q) => q.name,
+  size: (q) => q.size,
+  latency: (q) => q.latency,
+  status: (q) => (q.paused ? 'paused' : 'active'),
+};
+
 export default function Queues() {
   const [selectedQueue, setSelectedQueue] = useState<string | null>(null);
 
@@ -115,6 +134,8 @@ export default function Queues() {
     refetchInterval: 10000,
   });
 
+  const { sorted, sort, toggle } = useSort(data ?? [], QUEUE_SORT);
+
   if (isLoading) return <div className="empty-state"><span className="spinner" /></div>;
   if (isError || !data) return <div className="empty-state" style={{ color: 'var(--danger)' }}>{t('common.error')}</div>;
 
@@ -122,21 +143,21 @@ export default function Queues() {
     <div>
       <PageHeader icon="fa-layer-group" title={t('nav.queues')} summary={t('summaries.queues')} />
 
-      {data.length === 0 ? (
+      {sorted.length === 0 ? (
         <div className="empty-state">{t('common.empty')}</div>
       ) : (
         <div className="table-wrapper">
           <table>
             <thead>
               <tr>
-                <th>Name</th>
-                <th>{t('table.size')}</th>
-                <th>{t('table.latency')}</th>
-                <th>{t('table.status')}</th>
+                <SortableTh label="Name" sortKey="name" sort={sort} onSort={toggle} />
+                <SortableTh label={t('table.size')} sortKey="size" sort={sort} onSort={toggle} />
+                <SortableTh label={t('table.latency')} sortKey="latency" sort={sort} onSort={toggle} />
+                <SortableTh label={t('table.status')} sortKey="status" sort={sort} onSort={toggle} />
               </tr>
             </thead>
             <tbody>
-              {data.map((q) => (
+              {sorted.map((q) => (
                 <tr key={q.name} className="row-clickable" onClick={() => setSelectedQueue(q.name)}>
                   <td style={{ fontWeight: 500 }}>{q.name}</td>
                   <td>{q.size.toLocaleString()}</td>

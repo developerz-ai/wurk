@@ -38,10 +38,12 @@ function ReadOnlyBanner() {
         background: 'var(--warning)',
         color: '#1a1a1a',
         textAlign: 'center',
-        padding: '0.4rem 1rem',
+        padding: '0.5rem 1rem',
         fontWeight: 600,
         fontSize: 13,
         letterSpacing: '0.01em',
+        borderRadius: 8,
+        marginBottom: '1.75rem',
       }}
     >
       {meta.read_only_message || t('readonly.banner')}

@@ -5,6 +5,9 @@ import { t } from '../i18n';
 import { PageHeader } from '../components/PageHeader';
 import { relativeTime, truncate, formatArgs, isoTime } from '../utils';
 import JobDetailModal, { type JobEntry } from '../components/JobDetailModal';
+import { SortableTh } from '../components/SortableTh';
+import { useSort, type Accessors } from '../hooks/useSort';
+import { usePageParam } from '../hooks/usePageParam';
 
 interface RetryEntry {
   jid: string;
@@ -30,8 +33,17 @@ interface RetriesResponse {
 
 const PAGE_SIZE = 25;
 
+const SORT: Accessors<RetryEntry> = {
+  klass: (e) => e.klass,
+  args: (e) => formatArgs(e.args),
+  error_class: (e) => e.error_class,
+  error_message: (e) => e.error_message,
+  retry_count: (e) => e.retry_count,
+  at: (e) => e.at,
+};
+
 export default function Retries() {
-  const [page, setPage] = useState(1);
+  const [page, setPage] = usePageParam();
   const [selected, setSelected] = useState<JobEntry | null>(null);
 
   useEffect(() => {
@@ -46,6 +58,8 @@ export default function Retries() {
       ),
   });
 
+  const { sorted, sort, toggle } = useSort(data?.entries ?? [], SORT);
+
   if (isLoading) return <div className="empty-state"><span className="spinner" /></div>;
   if (isError || !data) return <div className="empty-state" style={{ color: 'var(--danger)' }}>{t('common.error')}</div>;
 
@@ -55,7 +69,7 @@ export default function Retries() {
         <span className="badge badge-warning">{data.total.toLocaleString()}</span>
       </PageHeader>
 
-      {data.entries.length === 0 ? (
+      {sorted.length === 0 ? (
         <div className="empty-state">{t('common.empty')}</div>
       ) : (
         <>
@@ -63,16 +77,16 @@ export default function Retries() {
             <table>
               <thead>
                 <tr>
-                  <th>{t('table.class')}</th>
-                  <th>{t('table.args')}</th>
-                  <th>{t('table.error')}</th>
-                  <th>Message</th>
-                  <th>Count</th>
-                  <th>{t('table.retry_at')}</th>
+                  <SortableTh label={t('table.class')} sortKey="klass" sort={sort} onSort={toggle} />
+                  <SortableTh label={t('table.args')} sortKey="args" sort={sort} onSort={toggle} />
+                  <SortableTh label={t('table.error')} sortKey="error_class" sort={sort} onSort={toggle} />
+                  <SortableTh label="Message" sortKey="error_message" sort={sort} onSort={toggle} />
+                  <SortableTh label="Count" sortKey="retry_count" sort={sort} onSort={toggle} />
+                  <SortableTh label={t('table.retry_at')} sortKey="at" sort={sort} onSort={toggle} />
                 </tr>
               </thead>
               <tbody>
-                {data.entries.map((entry) => {
+                {sorted.map((entry) => {
                   const argsStr = formatArgs(entry.args);
                   return (
                     <tr key={entry.jid} className="row-clickable" onClick={() => setSelected(entry)}>

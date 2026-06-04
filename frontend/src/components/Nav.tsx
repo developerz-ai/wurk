@@ -1,5 +1,6 @@
 import { NavLink } from 'react-router-dom';
 import { t } from '../i18n';
+import logoUrl from '../assets/wurk-logo.png';
 
 interface NavProps {
   open: boolean;
@@ -66,7 +67,11 @@ export default function Nav({ open, onClose }: NavProps) {
               gap: '0.55rem',
             }}
           >
-            <i className="fa-solid fa-bolt" style={{ fontSize: 16, color: 'var(--accent)' }} />
+            <img
+              src={logoUrl}
+              alt="Wurk"
+              style={{ height: 48, width: 'auto', display: 'block', filter: 'drop-shadow(0 2px 6px rgba(0,0,0,0.45))' }}
+            />
             Wurk
           </span>
         </div>
