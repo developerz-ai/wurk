@@ -1,7 +1,6 @@
 import { BrowserRouter, Routes, Route } from 'react-router-dom';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { useState } from 'react';
-import { useTheme } from './hooks/useTheme';
 import { useSSE } from './hooks/useSSE';
 import { useMeta } from './hooks/useMeta';
 import { t } from './i18n';
@@ -51,7 +50,6 @@ function ReadOnlyBanner() {
 }
 
 export default function App() {
-  const { theme, toggle } = useTheme();
   const [navOpen, setNavOpen] = useState(false);
   const sse = useSSE();
 
@@ -65,7 +63,7 @@ export default function App() {
             onClick={() => setNavOpen((o) => !o)}
             aria-label="Toggle navigation"
           >
-            ☰
+            <i className="fa-solid fa-bars" />
           </button>
 
           <main
@@ -89,12 +87,7 @@ export default function App() {
             </Routes>
           </main>
 
-          <Nav
-            open={navOpen}
-            onClose={() => setNavOpen(false)}
-            theme={theme}
-            onThemeToggle={toggle}
-          />
+          <Nav open={navOpen} onClose={() => setNavOpen(false)} />
         </div>
       </BrowserRouter>
     </QueryClientProvider>

@@ -4,25 +4,23 @@ import { t } from '../i18n';
 interface NavProps {
   open: boolean;
   onClose: () => void;
-  theme: string;
-  onThemeToggle: () => void;
 }
 
 const LINKS = [
-  { to: '/', label: t('nav.dashboard'), icon: '⬡', end: true },
-  { to: '/queues', label: t('nav.queues'), icon: '⏷', end: false },
-  { to: '/retries', label: t('nav.retries'), icon: '↩', end: false },
-  { to: '/scheduled', label: t('nav.scheduled'), icon: '⏰', end: false },
-  { to: '/dead', label: t('nav.dead'), icon: '☠', end: false },
-  { to: '/busy', label: t('nav.busy'), icon: '⚙', end: false },
-  { to: '/batches', label: t('nav.batches'), icon: '⊞', end: false },
-  { to: '/limiters', label: t('nav.limiters'), icon: '⊘', end: false },
-  { to: '/cron', label: t('nav.cron'), icon: '⏱', end: false },
-  { to: '/metrics', label: t('nav.metrics'), icon: '📈', end: false },
-  { to: '/search', label: t('nav.search'), icon: '🔍', end: false },
+  { to: '/', label: t('nav.dashboard'), icon: 'fa-gauge-high', end: true },
+  { to: '/queues', label: t('nav.queues'), icon: 'fa-layer-group', end: false },
+  { to: '/retries', label: t('nav.retries'), icon: 'fa-rotate-right', end: false },
+  { to: '/scheduled', label: t('nav.scheduled'), icon: 'fa-clock', end: false },
+  { to: '/dead', label: t('nav.dead'), icon: 'fa-skull', end: false },
+  { to: '/busy', label: t('nav.busy'), icon: 'fa-gears', end: false },
+  { to: '/batches', label: t('nav.batches'), icon: 'fa-table-cells-large', end: false },
+  { to: '/limiters', label: t('nav.limiters'), icon: 'fa-gauge', end: false },
+  { to: '/cron', label: t('nav.cron'), icon: 'fa-stopwatch', end: false },
+  { to: '/metrics', label: t('nav.metrics'), icon: 'fa-chart-line', end: false },
+  { to: '/search', label: t('nav.search'), icon: 'fa-magnifying-glass', end: false },
 ];
 
-export default function Nav({ open, onClose, theme, onThemeToggle }: NavProps) {
+export default function Nav({ open, onClose }: NavProps) {
   return (
     <>
       {/* Overlay for mobile */}
@@ -63,8 +61,12 @@ export default function Nav({ open, onClose, theme, onThemeToggle }: NavProps) {
               fontWeight: 800,
               letterSpacing: '-0.03em',
               color: 'var(--accent)',
+              display: 'flex',
+              alignItems: 'center',
+              gap: '0.5rem',
             }}
           >
+            <i className="fa-solid fa-bolt" />
             Wurk
           </span>
         </div>
@@ -93,23 +95,12 @@ export default function Nav({ open, onClose, theme, onThemeToggle }: NavProps) {
                   transition: 'background 0.15s, color 0.15s',
                 })}
               >
-                <span style={{ fontSize: 16, width: 20, textAlign: 'center' }}>{icon}</span>
+                <i className={`fa-solid ${icon}`} style={{ fontSize: 14, width: 20, textAlign: 'center' }} />
                 <span>{label}</span>
               </NavLink>
             </li>
           ))}
         </ul>
-
-        <div style={{ padding: '0.75rem 1rem', borderTop: '1px solid var(--border)' }}>
-          <button
-            onClick={onThemeToggle}
-            className="btn"
-            style={{ width: '100%', textAlign: 'left', display: 'flex', alignItems: 'center', gap: '0.5rem' }}
-          >
-            <span>{theme === 'dark' ? '☀️' : '🌙'}</span>
-            <span>{theme === 'dark' ? 'Light mode' : 'Dark mode'}</span>
-          </button>
-        </div>
       </nav>
 
       <style>{`

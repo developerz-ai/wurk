@@ -1,23 +1,27 @@
-:root {
-  --bg: #0f1117;
-  --surface: #1a1d27;
-  --border: #2a2d3e;
-  --text: #e0e2f0;
-  --text-muted: #6b7280;
-  --accent: #7c6af7;
-  --accent-hover: #9580ff;
-  --danger: #ef4444;
-  --warning: #f59e0b;
-  --success: #22c55e;
-  --nav-width: 240px;
+@import "tailwindcss";
+@import "@fortawesome/fontawesome-free/css/all.min.css";
+
+/* Dark-only dashboard. daisyUI's `dark` theme is the single source of truth for
+   the palette; we force it (no light theme, no toggle). */
+@plugin "daisyui" {
+  themes: dark --default;
 }
 
-[data-theme="light"] {
-  --bg: #f5f5f5;
-  --surface: #ffffff;
-  --border: #e0e0e0;
-  --text: #1a1a2e;
-  --text-muted: #6b7280;
+/* Bridge: the SPA is driven by a handful of CSS variables (and inline styles
+   that reference them). Map them onto daisyUI's dark theme tokens so every
+   component picks up the daisyUI palette without rewriting markup. */
+:root {
+  --bg: var(--color-base-100);
+  --surface: var(--color-base-200);
+  --border: var(--color-base-300);
+  --text: var(--color-base-content);
+  --text-muted: color-mix(in oklch, var(--color-base-content) 55%, transparent);
+  --accent: var(--color-primary);
+  --accent-hover: color-mix(in oklch, var(--color-primary) 82%, white);
+  --danger: var(--color-error);
+  --warning: var(--color-warning);
+  --success: var(--color-success);
+  --nav-width: 240px;
 }
 
 * {
@@ -70,10 +74,14 @@ th {
   font-size: 12px;
   text-transform: uppercase;
   letter-spacing: 0.05em;
-  background: var(--bg);
+  background: var(--surface);
   position: sticky;
   top: 0;
   z-index: 1;
+}
+
+tbody tr:nth-child(even) td {
+  background: color-mix(in oklch, var(--surface) 45%, transparent);
 }
 
 tr:hover td {
@@ -84,9 +92,9 @@ tr:hover td {
   background: var(--surface);
   border: 1px solid var(--border);
   color: var(--text);
-  padding: 0.5rem;
-  border-radius: 4px;
-  font-size: 18px;
+  padding: 0.5rem 0.625rem;
+  border-radius: 8px;
+  font-size: 16px;
   line-height: 1;
   display: none;
 }
@@ -113,17 +121,17 @@ tr:hover td {
 }
 
 .badge-success {
-  background: rgba(34, 197, 94, 0.15);
+  background: color-mix(in oklch, var(--success) 18%, transparent);
   color: var(--success);
 }
 
 .badge-danger {
-  background: rgba(239, 68, 68, 0.15);
+  background: color-mix(in oklch, var(--danger) 18%, transparent);
   color: var(--danger);
 }
 
 .badge-warning {
-  background: rgba(245, 158, 11, 0.15);
+  background: color-mix(in oklch, var(--warning) 18%, transparent);
   color: var(--warning);
 }
 
@@ -133,15 +141,16 @@ tr:hover td {
 }
 
 .badge-accent {
-  background: rgba(124, 106, 247, 0.15);
+  background: color-mix(in oklch, var(--accent) 18%, transparent);
   color: var(--accent);
 }
 
 .card {
   background: var(--surface);
   border: 1px solid var(--border);
-  border-radius: 8px;
+  border-radius: 12px;
   padding: 1rem;
+  box-shadow: 0 1px 2px rgb(0 0 0 / 0.25);
 }
 
 .progress-bar-track {
@@ -168,7 +177,7 @@ tr:hover td {
   border: 1px solid var(--border);
   color: var(--text);
   padding: 0.375rem 0.75rem;
-  border-radius: 4px;
+  border-radius: 8px;
   font-size: 13px;
   cursor: pointer;
 }
@@ -183,7 +192,7 @@ tr:hover td {
   border: 1px solid var(--border);
   color: var(--text);
   padding: 0.5rem 0.75rem;
-  border-radius: 4px;
+  border-radius: 8px;
   font-size: 14px;
   width: 100%;
 }
@@ -198,9 +207,9 @@ tr:hover td {
   border: 1px solid var(--border);
   color: var(--text);
   padding: 0.375rem 0.875rem;
-  border-radius: 4px;
+  border-radius: 8px;
   font-size: 13px;
-  transition: background 0.15s, border-color 0.15s;
+  transition: background 0.15s, border-color 0.15s, color 0.15s;
 }
 
 .btn:hover {
@@ -211,13 +220,13 @@ tr:hover td {
 .btn-accent {
   background: var(--accent);
   border-color: var(--accent);
-  color: #fff;
+  color: var(--color-primary-content);
 }
 
 .btn-accent:hover {
   background: var(--accent-hover);
   border-color: var(--accent-hover);
-  color: #fff;
+  color: var(--color-primary-content);
 }
 
 .btn-danger {
@@ -227,7 +236,7 @@ tr:hover td {
 
 .btn-danger:hover {
   background: var(--danger);
-  color: #fff;
+  color: var(--color-error-content);
 }
 
 .section-header {
@@ -251,7 +260,7 @@ tr:hover td {
 .table-wrapper {
   overflow-x: auto;
   border: 1px solid var(--border);
-  border-radius: 8px;
+  border-radius: 12px;
 }
 
 .empty-state {

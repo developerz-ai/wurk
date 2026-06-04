@@ -1,5 +1,6 @@
 import { defineConfig } from "vite";
 import react from "@vitejs/plugin-react";
+import tailwindcss from "@tailwindcss/vite";
 import { readFileSync, writeFileSync } from "fs";
 import { resolve } from "path";
 
@@ -8,6 +9,7 @@ import { resolve } from "path";
 export default defineConfig({
   plugins: [
     react(),
+    tailwindcss(),
     {
       name: "wurk-manifest-generator",
       apply: "build",
