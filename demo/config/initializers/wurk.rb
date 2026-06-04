@@ -15,11 +15,18 @@ end
 # `sidekiq_options unique_for:` (SendReceiptJob) actually de-dupes.
 Sidekiq::Enterprise.unique!
 
-# Worker side: record per-job history so the throughput/failures charts have
-# data (the History middleware is opt-in). Only fires in a worker/server process.
+# Worker side: record per-job history so the Metrics throughput/failure charts
+# have data (the History middleware is opt-in).
+#
+# Add it DIRECTLY to the server-middleware chain, not via `Wurk.configure_server`:
+# that block only runs when `Wurk.configuration.server?` is true, but the demo
+# worker boots via `bin/rails runner 'Wurk::Swarm.new…supervise'` where the
+# initializer runs with server? == false, so the block was silently skipped and
+# Metrics stayed empty (see #100). The swarm forks AFTER this initializer, so the
+# children inherit the chain.
 if ENV["WURK_DEMO"] == "1"
-  Wurk.configure_server do |config|
-    config.server_middleware.add(Wurk::Metrics::History)
+  unless Wurk.configuration.server_middleware.exists?(Wurk::Metrics::History)
+    Wurk.configuration.server_middleware.add(Wurk::Metrics::History)
   end
 
   # Web side (non-forking process): run the traffic producer in a background
