@@ -1,6 +1,7 @@
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { useEffect } from 'react';
 import { t } from '../i18n';
+import { PageHeader } from '../components/PageHeader';
 import { relativeTime, truncate } from '../utils';
 import { useMeta } from '../hooks/useMeta';
 
@@ -51,10 +52,9 @@ export default function Cron() {
 
   return (
     <div>
-      <div className="section-header">
-        <h1 className="page-title" style={{ margin: 0 }}>{t('nav.cron')}</h1>
-        <span className="badge badge-muted" style={{ marginLeft: 'auto' }}>{data.length}</span>
-      </div>
+      <PageHeader icon="fa-stopwatch" title={t('nav.cron')} summary={t('summaries.cron')}>
+        <span className="badge badge-muted">{data.length}</span>
+      </PageHeader>
 
       {data.length === 0 ? (
         <div className="empty-state">{t('common.empty')}</div>

@@ -3,6 +3,7 @@ import { useState, useEffect } from 'react';
 import { Link } from 'react-router-dom';
 import { Pagination } from '../components/Pagination';
 import { t } from '../i18n';
+import { PageHeader } from '../components/PageHeader';
 import { relativeTime, truncate } from '../utils';
 
 interface Batch {
@@ -45,10 +46,9 @@ export default function Batches() {
 
   return (
     <div>
-      <div className="section-header">
-        <h1 className="page-title" style={{ margin: 0 }}>{t('nav.batches')}</h1>
-        <span className="badge badge-accent" style={{ marginLeft: 'auto' }}>{data.total.toLocaleString()}</span>
-      </div>
+      <PageHeader icon="fa-table-cells-large" title={t('nav.batches')} summary={t('summaries.batches')}>
+        <span className="badge badge-accent">{data.total.toLocaleString()}</span>
+      </PageHeader>
 
       {data.batches.length === 0 ? (
         <div className="empty-state">{t('common.empty')}</div>

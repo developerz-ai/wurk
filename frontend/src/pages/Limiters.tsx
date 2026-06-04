@@ -2,6 +2,7 @@ import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { useState, useEffect } from 'react';
 import { Pagination } from '../components/Pagination';
 import { t } from '../i18n';
+import { PageHeader } from '../components/PageHeader';
 import { useMeta } from '../hooks/useMeta';
 
 // Uniform live status every limiter type reports (Wurk::Limiter#status).
@@ -65,10 +66,9 @@ export default function Limiters() {
 
   return (
     <div>
-      <div className="section-header">
-        <h1 className="page-title" style={{ margin: 0 }}>{t('nav.limiters')}</h1>
-        <span className="badge badge-muted" style={{ marginLeft: 'auto' }}>{data.total.toLocaleString()}</span>
-      </div>
+      <PageHeader icon="fa-gauge" title={t('nav.limiters')} summary={t('summaries.limiters')}>
+        <span className="badge badge-muted">{data.total.toLocaleString()}</span>
+      </PageHeader>
 
       {data.limiters.length === 0 ? (
         <div className="empty-state">{t('common.empty')}</div>

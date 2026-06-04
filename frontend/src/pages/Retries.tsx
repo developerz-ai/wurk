@@ -2,6 +2,7 @@ import { useQuery } from '@tanstack/react-query';
 import { useState, useEffect } from 'react';
 import { Pagination } from '../components/Pagination';
 import { t } from '../i18n';
+import { PageHeader } from '../components/PageHeader';
 import { relativeTime, truncate, formatArgs, isoTime } from '../utils';
 import JobDetailModal, { type JobEntry } from '../components/JobDetailModal';
 
@@ -50,10 +51,9 @@ export default function Retries() {
 
   return (
     <div>
-      <div className="section-header">
-        <h1 className="page-title" style={{ margin: 0 }}>{t('nav.retries')}</h1>
-        <span className="badge badge-warning" style={{ marginLeft: 'auto' }}>{data.total.toLocaleString()}</span>
-      </div>
+      <PageHeader icon="fa-rotate-right" title={t('nav.retries')} summary={t('summaries.retries')}>
+        <span className="badge badge-warning">{data.total.toLocaleString()}</span>
+      </PageHeader>
 
       {data.entries.length === 0 ? (
         <div className="empty-state">{t('common.empty')}</div>

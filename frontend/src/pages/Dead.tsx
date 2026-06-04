@@ -2,6 +2,7 @@ import { useQuery } from '@tanstack/react-query';
 import { useState, useEffect } from 'react';
 import { Pagination } from '../components/Pagination';
 import { t } from '../i18n';
+import { PageHeader } from '../components/PageHeader';
 import { relativeTime, truncate, formatArgs, isoTime } from '../utils';
 import JobDetailModal, { type JobEntry } from '../components/JobDetailModal';
 
@@ -49,10 +50,9 @@ export default function Dead() {
 
   return (
     <div>
-      <div className="section-header">
-        <h1 className="page-title" style={{ margin: 0 }}>{t('nav.dead')}</h1>
-        <span className="badge badge-danger" style={{ marginLeft: 'auto' }}>{data.total.toLocaleString()}</span>
-      </div>
+      <PageHeader icon="fa-skull" title={t('nav.dead')} summary={t('summaries.dead')}>
+        <span className="badge badge-danger">{data.total.toLocaleString()}</span>
+      </PageHeader>
 
       {data.entries.length === 0 ? (
         <div className="empty-state">{t('common.empty')}</div>

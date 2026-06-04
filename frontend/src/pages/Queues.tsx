@@ -2,8 +2,10 @@ import { useQuery } from '@tanstack/react-query';
 import { useState, useEffect } from 'react';
 import { Pagination } from '../components/Pagination';
 import { t } from '../i18n';
+import { PageHeader } from '../components/PageHeader';
 import { relativeTime, truncate, formatArgs } from '../utils';
 import JobDetailModal, { type JobEntry } from '../components/JobDetailModal';
+import Modal from '../components/Modal';
 
 interface QueueSummary {
   name: string;
@@ -118,65 +120,49 @@ export default function Queues() {
 
   return (
     <div>
-      <h1 className="page-title">{t('nav.queues')}</h1>
+      <PageHeader icon="fa-layer-group" title={t('nav.queues')} summary={t('summaries.queues')} />
 
-      <div style={{ display: 'grid', gridTemplateColumns: selectedQueue ? '280px 1fr' : '1fr', gap: '1.5rem' }}>
-        <div>
-          {data.length === 0 ? (
-            <div className="empty-state">{t('common.empty')}</div>
-          ) : (
-            <div className="table-wrapper">
-              <table>
-                <thead>
-                  <tr>
-                    <th>Name</th>
-                    <th>{t('table.size')}</th>
-                    <th>{t('table.latency')}</th>
-                    <th>{t('table.status')}</th>
-                  </tr>
-                </thead>
-                <tbody>
-                  {data.map((q) => (
-                    <tr
-                      key={q.name}
-                      onClick={() => setSelectedQueue(q.name === selectedQueue ? null : q.name)}
-                      style={{
-                        cursor: 'pointer',
-                        background: q.name === selectedQueue ? 'rgba(124,106,247,0.08)' : undefined,
-                      }}
-                    >
-                      <td style={{ fontWeight: 500, color: q.name === selectedQueue ? 'var(--accent)' : undefined }}>
-                        {q.name}
-                      </td>
-                      <td>{q.size.toLocaleString()}</td>
-                      <td>{q.latency.toFixed(3)}s</td>
-                      <td>
-                        {q.paused ? (
-                          <span className="badge badge-warning">{t('dashboard.paused')}</span>
-                        ) : (
-                          <span className="badge badge-success">Active</span>
-                        )}
-                      </td>
-                    </tr>
-                  ))}
-                </tbody>
-              </table>
-            </div>
-          )}
+      {data.length === 0 ? (
+        <div className="empty-state">{t('common.empty')}</div>
+      ) : (
+        <div className="table-wrapper">
+          <table>
+            <thead>
+              <tr>
+                <th>Name</th>
+                <th>{t('table.size')}</th>
+                <th>{t('table.latency')}</th>
+                <th>{t('table.status')}</th>
+              </tr>
+            </thead>
+            <tbody>
+              {data.map((q) => (
+                <tr key={q.name} className="row-clickable" onClick={() => setSelectedQueue(q.name)}>
+                  <td style={{ fontWeight: 500 }}>{q.name}</td>
+                  <td>{q.size.toLocaleString()}</td>
+                  <td>{q.latency.toFixed(3)}s</td>
+                  <td>
+                    {q.paused ? (
+                      <span className="badge badge-warning">{t('dashboard.paused')}</span>
+                    ) : (
+                      <span className="badge badge-success">Active</span>
+                    )}
+                  </td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
         </div>
+      )}
 
-        {selectedQueue && (
-          <div>
-            <div className="section-header">
-              <h2 className="section-title">{selectedQueue}</h2>
-              <button className="btn" onClick={() => setSelectedQueue(null)} style={{ marginLeft: 'auto' }}>
-                ✕
-              </button>
-            </div>
-            <QueueJobs name={selectedQueue} />
-          </div>
-        )}
-      </div>
+      <Modal
+        open={selectedQueue !== null}
+        onClose={() => setSelectedQueue(null)}
+        title={selectedQueue ?? ''}
+        width={780}
+      >
+        {selectedQueue && <QueueJobs name={selectedQueue} />}
+      </Modal>
     </div>
   );
 }
