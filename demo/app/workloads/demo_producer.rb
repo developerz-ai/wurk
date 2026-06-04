@@ -17,13 +17,14 @@ class DemoProducer
   PRIMARY_QUEUE    = "default"
   SECONDARY_QUEUES = %w[high low].freeze
   DEFAULT_INTERVAL = 10.0
-  TARGET_BACKLOG   = 6
-  SECONDARY_DEPTH  = 2
-  SCHEDULED_TARGET = 5
+  TARGET_BACKLOG   = 2     # primary-queue depth — a trickle, ~1 job per tick
+  SECONDARY_DEPTH  = 1
+  SCHEDULED_TARGET = 5     # these sit in their sets (no ongoing processing) — kept for showcase
   RETRY_TARGET     = 4
-  DEAD_TARGET      = 6
-  BATCH_INTERVAL   = 60.0
-  MAX_PER_TICK     = 5
+  DEAD_TARGET      = 5
+  BATCH_INTERVAL   = 120.0
+  MAX_PER_TICK     = 1     # never enqueue more than one primary job per tick
+  EXTRAS_EVERY     = 3     # fire the unique-job + limiter samples only every Nth tick
 
   class << self
     def api_limiter = @api_limiter ||= build_api_limiter
@@ -35,6 +36,7 @@ class DemoProducer
     @interval = interval || (ENV["DEMO_PRODUCER_INTERVAL"]&.to_f&.nonzero?) || DEFAULT_INTERVAL
     @stop = false
     @last_batch_at = nil # nil → first tick always rolls a batch; BATCH_INTERVAL spaces the rest
+    @tick = 0
   end
 
   def run
@@ -53,14 +55,19 @@ class DemoProducer
 
   # One control step — public so a rake task / test can run it once.
   def tick!
+    @tick += 1
     ensure_seeded!
     top_up_primary
     top_up_secondary
     top_up_scheduled
     top_up_retries
     top_up_dead
-    SendReceiptJob.perform_async(rand(1..500)) # unique — dups within 30s drop
-    ThrottledApiJob.perform_async
+    # Keep the unique-jobs + limiter surfaces alive, but only occasionally so the
+    # steady-state load stays at roughly one job per tick.
+    if (@tick % EXTRAS_EVERY).zero?
+      SendReceiptJob.perform_async(rand(1..500)) # unique — dups within 30s drop
+      ThrottledApiJob.perform_async
+    end
     roll_export_batch
   end
 
