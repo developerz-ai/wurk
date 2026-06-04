@@ -1,34 +1,38 @@
 # frozen_string_literal: true
 
-# Generates continuous, self-healing demo traffic so every dashboard surface
-# shows live data within ~30s of a cold start — and never looks dead.
+# Generates light, self-healing demo traffic so every dashboard surface shows
+# live data — and never looks dead — without taxing the public demo server.
 #
-# It's a feedback controller: each tick tops the primary queue back up to a
-# target backlog (steady throughput as the worker drains) and keeps the
-# scheduled / retry / dead / batch / limiter / cron surfaces in a band.
-# `ensure_seeded!` runs every tick, so a Redis flush or restart self-heals
-# within one interval.
+# It's a feedback controller: each tick tops shallow target bands back up as the
+# worker drains, and keeps the scheduled / retry / dead / batch / limiter / cron
+# surfaces populated. `ensure_seeded!` runs every tick, so a Redis flush or
+# restart self-heals within one interval.
+#
+# Tuned for a public demo: a ~10s tick with shallow targets means only a trickle
+# of jobs (≈1–2 / 10s in steady state), enough to keep every widget live. Tune
+# the cadence at runtime with DEMO_PRODUCER_INTERVAL (seconds) — no rebuild.
 #
 # Run as its own process:  cd demo && WURK_DEMO=1 bin/rails demo:workload
 class DemoProducer
   PRIMARY_QUEUE    = "default"
   SECONDARY_QUEUES = %w[high low].freeze
-  TARGET_BACKLOG   = 60
-  SECONDARY_DEPTH  = 6
-  SCHEDULED_TARGET = 20
-  RETRY_TARGET     = 12
-  DEAD_TARGET      = 25
-  BATCH_INTERVAL   = 12.0
-  MAX_PER_TICK     = 200
+  DEFAULT_INTERVAL = 10.0
+  TARGET_BACKLOG   = 6
+  SECONDARY_DEPTH  = 2
+  SCHEDULED_TARGET = 5
+  RETRY_TARGET     = 4
+  DEAD_TARGET      = 6
+  BATCH_INTERVAL   = 60.0
+  MAX_PER_TICK     = 5
 
   class << self
     def api_limiter = @api_limiter ||= build_api_limiter
     def build_api_limiter = Wurk::Limiter.bucket("demo-api", 60, :minute, wait_timeout: 0)
   end
 
-  def initialize(logger: nil, interval: 1.0)
+  def initialize(logger: nil, interval: nil)
     @logger = logger
-    @interval = interval
+    @interval = interval || (ENV["DEMO_PRODUCER_INTERVAL"]&.to_f&.nonzero?) || DEFAULT_INTERVAL
     @stop = false
     @last_batch_at = 0.0
   end
