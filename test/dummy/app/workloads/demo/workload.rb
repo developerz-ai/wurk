@@ -1,29 +1,36 @@
 # frozen_string_literal: true
 
 module Demo
-  # Generates realistic, self-healing demo traffic so every dashboard widget
-  # shows non-trivial values within ~30s of a cold start (issue #33).
+  # Generates light, self-healing demo traffic so every dashboard widget shows
+  # non-trivial values within ~60s of a cold start (issue #33) — and never looks
+  # dead — without taxing the host. Kept in lockstep with the public demo's
+  # DemoProducer (#127): same shallow target bands, same ~10s tick, so the local
+  # preview and the deployed demo behave identically and Processed/Failed totals
+  # stay believable instead of ballooning.
   #
-  # It's a feedback controller, not a fire-hose: each `tick!` tops the primary
-  # queue back up to a target backlog (so throughput stays steady as the worker
-  # drains it) and keeps the scheduled/retry/dead/batch/limiter/cron surfaces in
-  # a band. `ensure_seeded!` runs every tick, so a Redis flush or app restart
+  # It's a feedback controller, not a fire-hose: each `tick!` (every ~10s) tops
+  # the primary queue back up to a small target backlog and keeps the scheduled/
+  # retry/dead/batch/limiter/cron surfaces in a band. Once a surface hits its
+  # target the controller stops adding, so steady-state is a trickle (≈1–2 jobs/
+  # 10s). `ensure_seeded!` runs every tick, so a Redis flush or app restart
   # self-heals within one interval — cron loops and limiters are re-registered
   # and the queues refill on their own.
   #
   # Run it as its own process (fork-safe — no swarm here):
   #   cd test/dummy && WURK_DEMO=1 bin/rails demo:workload
-  # The worker process drains what this enqueues.
+  # The worker process drains what this enqueues. Tune cadence at runtime with
+  # DEMO_PRODUCER_INTERVAL (seconds) — no rebuild.
   class Workload
     PRIMARY_QUEUE    = 'default'
     SECONDARY_QUEUES = %w[high low].freeze
-    TARGET_BACKLOG   = 60   # primary-queue depth the controller maintains
-    SECONDARY_DEPTH  = 6    # keep high/low shallow but non-empty for the widget
-    SCHEDULED_TARGET = 20
-    RETRY_TARGET     = 12
-    DEAD_TARGET      = 25
-    BATCH_INTERVAL   = 12.0 # seconds between new demo batches
-    MAX_PER_TICK     = 200  # cap a single top-up so a flush doesn't spike
+    DEFAULT_INTERVAL = 10.0  # seconds between top-ups (light load)
+    TARGET_BACKLOG   = 6     # primary-queue depth the controller maintains
+    SECONDARY_DEPTH  = 2     # keep high/low shallow but non-empty for the widget
+    SCHEDULED_TARGET = 5
+    RETRY_TARGET     = 4
+    DEAD_TARGET      = 6
+    BATCH_INTERVAL   = 60.0  # seconds between new demo batches
+    MAX_PER_TICK     = 5     # cap a single top-up so a flush doesn't spike
 
     class << self
       # Building a limiter registers it into `lmtr-list` (register: true by
@@ -39,11 +46,11 @@ module Demo
       def build_api_limiter   = Wurk::Limiter.concurrent('demo-api', 5)
     end
 
-    def initialize(logger: nil, interval: 1.0)
+    def initialize(logger: nil, interval: nil)
       @logger = logger
-      @interval = interval
+      @interval = interval || (ENV['DEMO_PRODUCER_INTERVAL']&.to_f&.nonzero?) || DEFAULT_INTERVAL
       @stop = false
-      @last_batch_at = 0.0
+      @last_batch_at = nil # nil → first tick always rolls a batch; BATCH_INTERVAL spaces the rest
     end
 
     def run
@@ -128,7 +135,7 @@ module Demo
 
     def roll_batch
       now = monotonic
-      return if now - @last_batch_at < BATCH_INTERVAL
+      return if @last_batch_at && now - @last_batch_at < BATCH_INTERVAL
 
       @last_batch_at = now
       batch = Wurk::Batch.new
