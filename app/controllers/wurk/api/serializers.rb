@@ -51,7 +51,8 @@ module Wurk
           at: entry.at.to_f,
           error_class: entry['error_class'],
           error_message: entry['error_message'],
-          retry_count: entry['retry_count']
+          retry_count: entry['retry_count'],
+          error_backtrace: entry.error_backtrace
         )
       end
 

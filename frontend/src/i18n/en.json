@@ -48,6 +48,18 @@
     "queues": "Queues",
     "hostname": "Hostname"
   },
+  "job": {
+    "detail": "Job detail",
+    "class": "Class",
+    "queue": "Queue",
+    "jid": "JID",
+    "retries": "Retries",
+    "enqueued": "Enqueued",
+    "at": "Scheduled",
+    "args": "Arguments",
+    "error": "Error",
+    "backtrace": "Backtrace"
+  },
   "actions": {
     "retry": "Retry",
     "delete": "Delete",

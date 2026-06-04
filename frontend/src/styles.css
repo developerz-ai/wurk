@@ -413,3 +413,99 @@ tbody tr:last-child td {
 .wurk-nav {
   border-right: 1px solid var(--border) !important;
 }
+
+/* ── Modal (native <dialog>) ───────────────────────────────────────────────*/
+.modal {
+  border: none;
+  background: transparent;
+  padding: 0;
+  max-width: 92vw;
+  max-height: 88vh;
+  color: var(--text);
+  overflow: visible;
+}
+
+.modal::backdrop {
+  background: oklch(0 0 0 / 0.55);
+  -webkit-backdrop-filter: blur(2px);
+  backdrop-filter: blur(2px);
+}
+
+.modal-panel {
+  width: 92vw;
+  background: var(--surface);
+  border: 1px solid var(--border-strong);
+  border-radius: var(--radius);
+  box-shadow: 0 20px 60px oklch(0 0 0 / 0.5);
+  display: flex;
+  flex-direction: column;
+  max-height: 88vh;
+  overflow: hidden;
+  animation: modal-in 0.14s ease;
+}
+
+@keyframes modal-in {
+  from { opacity: 0; transform: translateY(6px); }
+  to   { opacity: 1; transform: translateY(0); }
+}
+
+.modal-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 1rem;
+  padding: 0.9rem 1.1rem;
+  border-bottom: 1px solid var(--border);
+}
+
+.modal-title {
+  font-size: 15px;
+  font-weight: 600;
+  font-family: ui-monospace, monospace;
+  word-break: break-all;
+}
+
+.modal-close {
+  background: transparent;
+  border: none;
+  color: var(--text-muted);
+  font-size: 16px;
+  padding: 4px 7px;
+  border-radius: 7px;
+  transition: color 0.15s, background 0.15s;
+}
+
+.modal-close:hover {
+  color: var(--text);
+  background: var(--surface-hover);
+}
+
+.modal-body {
+  padding: 1.1rem;
+  overflow-y: auto;
+}
+
+.modal-footer {
+  display: flex;
+  justify-content: flex-end;
+  gap: 0.5rem;
+  padding: 0.8rem 1.1rem;
+  border-top: 1px solid var(--border);
+}
+
+.job-backtrace {
+  margin: 0;
+  font-size: 12px;
+  line-height: 1.5;
+  background: var(--color-base-100);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  padding: 0.7rem 0.85rem;
+  max-height: 320px;
+  overflow: auto;
+  white-space: pre;
+}
+
+/* Clickable list rows that open a detail modal. */
+.row-clickable { cursor: pointer; }
+.row-clickable:hover td { background: var(--accent-soft); }
