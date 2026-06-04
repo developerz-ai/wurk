@@ -301,12 +301,6 @@ export default function Search() {
       {submitted.length >= 2 && totalResults === 0 && (
         <div className="empty-state">{t('common.empty')}</div>
       )}
-
-      {submitted.length < 2 && (
-        <div className="empty-state" style={{ color: 'var(--text-muted)' }}>
-          Enter at least 2 characters to search across retries, scheduled, and dead jobs.
-        </div>
-      )}
     </div>
   );
 }
