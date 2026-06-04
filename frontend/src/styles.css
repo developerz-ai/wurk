@@ -141,6 +141,53 @@ tbody tr:last-child td {
   border-bottom: none;
 }
 
+/* ── Sortable column headers ─────────────────────────────────────────────── */
+/* The cell padding moves onto the inner <button> so the whole header is one
+   keyboard-focusable, clickable target. */
+.th-sortable {
+  padding: 0;
+}
+.th-sortable__btn {
+  appearance: none;
+  -webkit-appearance: none;
+  display: inline-flex;
+  align-items: center;
+  gap: 0.4rem;
+  width: 100%;
+  padding: 0.625rem 0.85rem;
+  background: none;
+  border: 0;
+  margin: 0;
+  color: inherit;
+  font: inherit;
+  letter-spacing: inherit;
+  text-transform: inherit;
+  text-align: left;
+  cursor: pointer;
+  user-select: none;
+  -webkit-user-select: none;
+  transition: color 0.12s;
+}
+.th-sortable__btn:hover {
+  color: var(--text);
+}
+.th-sortable__btn:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: -2px;
+}
+.th-sortable__icon {
+  font-size: 9px;
+  opacity: 0.35;
+  transition: opacity 0.12s, color 0.12s;
+}
+.th-sortable__btn:hover .th-sortable__icon {
+  opacity: 0.7;
+}
+.th-sortable__icon.is-active {
+  opacity: 1;
+  color: var(--accent);
+}
+
 /* ── Surfaces ─────────────────────────────────────────────────────────────*/
 .card {
   position: relative;
@@ -152,7 +199,12 @@ tbody tr:last-child td {
 }
 
 .table-wrapper {
-  overflow-x: auto;
+  /* Scrolls both axes: horizontally on narrow/mobile, vertically once a long
+     list outgrows the viewport — the sticky header stays pinned either way. */
+  overflow: auto;
+  max-height: calc(100vh - 13rem);
+  -webkit-overflow-scrolling: touch;
+  overscroll-behavior: contain;
   background: var(--surface);
   border: 1px solid var(--border);
   border-radius: var(--radius);
@@ -306,7 +358,26 @@ tbody tr:last-child td {
 
   .main-content {
     margin-left: 0 !important;
-    padding-top: 3.5rem !important;
+    /* Tighter side gutters on mobile; leave room for the fixed hamburger. */
+    padding: 3.5rem 0.85rem 1.5rem !important;
+  }
+
+  /* Denser cells so wide tables fit more before needing a horizontal scroll. */
+  th, td {
+    padding: 0.55rem 0.6rem;
+    max-width: 220px;
+  }
+  /* Sortable header padding lives on the button, so shrink that too. */
+  .th-sortable { padding: 0; }
+  .th-sortable__btn { padding: 0.55rem 0.6rem; }
+
+  .table-wrapper {
+    max-height: calc(100vh - 10rem);
+  }
+
+  /* Comfortable tap targets for pager controls. */
+  .btn {
+    min-height: 38px;
   }
 }
 
@@ -596,20 +667,6 @@ tbody tr:last-child td {
   overflow: hidden;
 }
 
-/* The mascot stands centred in the banner: full body, soft shadow. */
-.dash-hero__mark {
-  display: grid;
-  place-items: center;
-}
-
-.dash-hero__mark img {
-  height: 200px;
-  width: auto;
-  object-fit: contain;
-  display: block;
-  filter: drop-shadow(0 12px 22px oklch(0 0 0 / 0.55));
-}
-
 .dash-hero__body { min-width: 0; max-width: 640px; }
 
 /* Three clear hierarchy levels: title (largest/brightest) → strapline (medium
@@ -656,7 +713,6 @@ tbody tr:last-child td {
 
 @media (max-width: 560px) {
   .dash-hero { padding: 1.25rem 1rem 1.4rem; }
-  .dash-hero__mark img { height: 150px; }
   .dash-hero__title { font-size: 32px; }
   .dash-hero__strapline { font-size: 16px; }
   .dash-hero__tagline { font-size: 14px; }
@@ -727,18 +783,10 @@ tbody tr:last-child td {
 
 .dash-hero { animation: fade-up 0.35s ease both; }
 
-/* The mascot gently floats in its banner. */
-@keyframes float {
-  0%, 100% { transform: translateY(0); }
-  50%      { transform: translateY(-7px); }
-}
-.dash-hero__mark img { animation: float 5s ease-in-out infinite; }
-
 @media (prefers-reduced-motion: reduce) {
   .page-header,
   .dash-hero,
   .table-wrapper { animation: none; }
-  .dash-hero__mark img { animation: none; }
   .card--stat { transition: none; }
   .modal,
   .modal::backdrop { transition: none; }
