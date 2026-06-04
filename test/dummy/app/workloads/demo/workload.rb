@@ -50,7 +50,7 @@ module Demo
       @logger = logger
       @interval = interval || (ENV['DEMO_PRODUCER_INTERVAL']&.to_f&.nonzero?) || DEFAULT_INTERVAL
       @stop = false
-      @last_batch_at = 0.0
+      @last_batch_at = nil # nil → first tick always rolls a batch; BATCH_INTERVAL spaces the rest
     end
 
     def run
@@ -135,7 +135,7 @@ module Demo
 
     def roll_batch
       now = monotonic
-      return if now - @last_batch_at < BATCH_INTERVAL
+      return if @last_batch_at && now - @last_batch_at < BATCH_INTERVAL
 
       @last_batch_at = now
       batch = Wurk::Batch.new
