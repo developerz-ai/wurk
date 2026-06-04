@@ -100,7 +100,7 @@ Ruby `>= 3.2.0`, Redis `>= 7.0.0`. JRuby / TruffleRuby / Windows fall back to th
 
 ## Dashboard
 
-React + TypeScript + Vite SPA mounted under the engine. **Precompiled bundle ships in the gem** (`vendor/assets/`); consumers never run Node. SSE for live updates, TanStack Query for state, Recharts for charts, CSS variables for theming. Right-side nav, dark default, mobile-first, i18n with host-app override. AI panes (anomaly detection, NL queries, error triage, capacity advisor) are opt-in and require an Anthropic API token.
+React + TypeScript + Vite SPA mounted under the engine. **Precompiled bundle ships in the gem** (`vendor/assets/`); consumers never run Node. SSE for live updates, TanStack Query for state, Recharts for charts, CSS variables for theming. Left-rail nav (drawer on mobile), dark-only, mobile-first, i18n with host-app override. AI panes (anomaly detection, NL queries, error triage, capacity advisor) are opt-in and require an Anthropic API token.
 
 ## Never
 

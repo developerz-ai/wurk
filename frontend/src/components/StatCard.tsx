@@ -7,7 +7,7 @@ interface StatCardProps {
 export function StatCard({ label, value, color }: StatCardProps) {
   return (
     <div
-      className="card"
+      className="card card--stat"
       style={{
         display: 'flex',
         flexDirection: 'column',
