@@ -80,8 +80,8 @@ export default function Retries() {
                   <SortableTh label={t('table.class')} sortKey="klass" sort={sort} onSort={toggle} />
                   <SortableTh label={t('table.args')} sortKey="args" sort={sort} onSort={toggle} />
                   <SortableTh label={t('table.error')} sortKey="error_class" sort={sort} onSort={toggle} />
-                  <SortableTh label="Message" sortKey="error_message" sort={sort} onSort={toggle} />
-                  <SortableTh label="Count" sortKey="retry_count" sort={sort} onSort={toggle} />
+                  <SortableTh label={t('table.message')} sortKey="error_message" sort={sort} onSort={toggle} />
+                  <SortableTh label={t('table.count')} sortKey="retry_count" sort={sort} onSort={toggle} />
                   <SortableTh label={t('table.retry_at')} sortKey="at" sort={sort} onSort={toggle} />
                 </tr>
               </thead>

@@ -82,7 +82,7 @@ function QueueJobs({ name }: { name: string }) {
                   <SortableTh label={t('table.jid')} sortKey="jid" sort={sort} onSort={toggle} />
                   <SortableTh label={t('table.class')} sortKey="class" sort={sort} onSort={toggle} />
                   <SortableTh label={t('table.args')} sortKey="args" sort={sort} onSort={toggle} />
-                  <SortableTh label={t('table.scheduled_at')} sortKey="enqueued" sort={sort} onSort={toggle} />
+                  <SortableTh label={t('table.enqueued_at')} sortKey="enqueued" sort={sort} onSort={toggle} />
                 </tr>
               </thead>
               <tbody>

@@ -141,27 +141,46 @@ tbody tr:last-child td {
   border-bottom: none;
 }
 
-/* ── Sortable column headers ───────────────────────────────────────────────*/
+/* ── Sortable column headers ─────────────────────────────────────────────── */
+/* The cell padding moves onto the inner <button> so the whole header is one
+   keyboard-focusable, clickable target. */
 .th-sortable {
+  padding: 0;
+}
+.th-sortable__btn {
+  appearance: none;
+  -webkit-appearance: none;
+  display: inline-flex;
+  align-items: center;
+  gap: 0.4rem;
+  width: 100%;
+  padding: 0.625rem 0.85rem;
+  background: none;
+  border: 0;
+  margin: 0;
+  color: inherit;
+  font: inherit;
+  letter-spacing: inherit;
+  text-transform: inherit;
+  text-align: left;
   cursor: pointer;
   user-select: none;
   -webkit-user-select: none;
   transition: color 0.12s;
 }
-.th-sortable:hover {
+.th-sortable__btn:hover {
   color: var(--text);
 }
-.th-sortable__inner {
-  display: inline-flex;
-  align-items: center;
-  gap: 0.4rem;
+.th-sortable__btn:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: -2px;
 }
 .th-sortable__icon {
   font-size: 9px;
   opacity: 0.35;
   transition: opacity 0.12s, color 0.12s;
 }
-.th-sortable:hover .th-sortable__icon {
+.th-sortable__btn:hover .th-sortable__icon {
   opacity: 0.7;
 }
 .th-sortable__icon.is-active {
@@ -348,6 +367,9 @@ tbody tr:last-child td {
     padding: 0.55rem 0.6rem;
     max-width: 220px;
   }
+  /* Sortable header padding lives on the button, so shrink that too. */
+  .th-sortable { padding: 0; }
+  .th-sortable__btn { padding: 0.55rem 0.6rem; }
 
   .table-wrapper {
     max-height: calc(100vh - 10rem);

@@ -389,20 +389,24 @@ mount Wurk::Engine =&gt; <span class="add">"/wurk"</span></pre>
       btns.forEach(function (btn) {
         btn.addEventListener('click', function () {
           var text = btn.getAttribute('data-copy') || '';
-          var done = function () {
-            var original = btn.innerHTML;
-            btn.classList.add('copied');
-            btn.innerHTML = '<i class="fa-solid fa-check" aria-hidden="true"></i> Copied';
-            setTimeout(function () { btn.classList.remove('copied'); btn.innerHTML = original; }, 1600);
+          var original = btn.innerHTML;
+          var flash = function (markup, cls) {
+            if (cls) btn.classList.add(cls);
+            btn.innerHTML = markup;
+            setTimeout(function () { if (cls) btn.classList.remove(cls); btn.innerHTML = original; }, 1600);
           };
+          var done = function () { flash('<i class="fa-solid fa-check" aria-hidden="true"></i> Copied', 'copied'); };
+          var fail = function () { flash('<i class="fa-solid fa-xmark" aria-hidden="true"></i> Copy failed'); };
           if (navigator.clipboard && navigator.clipboard.writeText) {
-            navigator.clipboard.writeText(text).then(done, done);
+            navigator.clipboard.writeText(text).then(done, fail);
           } else {
+            var ok = false;
             var ta = document.createElement('textarea');
             ta.value = text; ta.style.position = 'fixed'; ta.style.opacity = '0';
             document.body.appendChild(ta); ta.select();
-            try { document.execCommand('copy'); } catch (e) {}
-            document.body.removeChild(ta); done();
+            try { ok = document.execCommand('copy'); } catch (e) { ok = false; }
+            document.body.removeChild(ta);
+            (ok ? done : fail)();
           }
         });
       });
