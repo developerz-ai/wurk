@@ -1,28 +1,27 @@
 import { NavLink } from 'react-router-dom';
 import { t } from '../i18n';
+import logoUrl from '../assets/wurk-logo.png';
 
 interface NavProps {
   open: boolean;
   onClose: () => void;
-  theme: string;
-  onThemeToggle: () => void;
 }
 
 const LINKS = [
-  { to: '/', label: t('nav.dashboard'), icon: '⬡', end: true },
-  { to: '/queues', label: t('nav.queues'), icon: '⏷', end: false },
-  { to: '/retries', label: t('nav.retries'), icon: '↩', end: false },
-  { to: '/scheduled', label: t('nav.scheduled'), icon: '⏰', end: false },
-  { to: '/dead', label: t('nav.dead'), icon: '☠', end: false },
-  { to: '/busy', label: t('nav.busy'), icon: '⚙', end: false },
-  { to: '/batches', label: t('nav.batches'), icon: '⊞', end: false },
-  { to: '/limiters', label: t('nav.limiters'), icon: '⊘', end: false },
-  { to: '/cron', label: t('nav.cron'), icon: '⏱', end: false },
-  { to: '/metrics', label: t('nav.metrics'), icon: '📈', end: false },
-  { to: '/search', label: t('nav.search'), icon: '🔍', end: false },
+  { to: '/', label: t('nav.dashboard'), icon: 'fa-gauge-high', end: true },
+  { to: '/queues', label: t('nav.queues'), icon: 'fa-layer-group', end: false },
+  { to: '/retries', label: t('nav.retries'), icon: 'fa-rotate-right', end: false },
+  { to: '/scheduled', label: t('nav.scheduled'), icon: 'fa-clock', end: false },
+  { to: '/dead', label: t('nav.dead'), icon: 'fa-skull', end: false },
+  { to: '/busy', label: t('nav.busy'), icon: 'fa-gears', end: false },
+  { to: '/batches', label: t('nav.batches'), icon: 'fa-table-cells-large', end: false },
+  { to: '/limiters', label: t('nav.limiters'), icon: 'fa-gauge', end: false },
+  { to: '/cron', label: t('nav.cron'), icon: 'fa-stopwatch', end: false },
+  { to: '/metrics', label: t('nav.metrics'), icon: 'fa-chart-line', end: false },
+  { to: '/search', label: t('nav.search'), icon: 'fa-magnifying-glass', end: false },
 ];
 
-export default function Nav({ open, onClose, theme, onThemeToggle }: NavProps) {
+export default function Nav({ open, onClose }: NavProps) {
   return (
     <>
       {/* Overlay for mobile */}
@@ -44,11 +43,11 @@ export default function Nav({ open, onClose, theme, onThemeToggle }: NavProps) {
         style={{
           position: 'fixed',
           top: 0,
-          right: 0,
+          left: 0,
           bottom: 0,
           width: 'var(--nav-width)',
           background: 'var(--surface)',
-          borderLeft: '1px solid var(--border)',
+          borderRight: '1px solid var(--border)',
           display: 'flex',
           flexDirection: 'column',
           zIndex: 100,
@@ -62,9 +61,25 @@ export default function Nav({ open, onClose, theme, onThemeToggle }: NavProps) {
               fontSize: 20,
               fontWeight: 800,
               letterSpacing: '-0.03em',
-              color: 'var(--accent)',
+              color: 'var(--text)',
+              display: 'flex',
+              alignItems: 'center',
+              gap: '0.55rem',
             }}
           >
+            <img
+              src={logoUrl}
+              alt=""
+              style={{
+                width: 68,
+                height: 68,
+                borderRadius: 12,
+                objectFit: 'cover',
+                objectPosition: 'top',
+                display: 'block',
+                border: '1px solid var(--border)',
+              }}
+            />
             Wurk
           </span>
         </div>
@@ -78,44 +93,42 @@ export default function Nav({ open, onClose, theme, onThemeToggle }: NavProps) {
                 to={to}
                 end={end}
                 onClick={onClose}
+                className="wurk-navlink"
                 style={({ isActive }) => ({
                   display: 'flex',
                   alignItems: 'center',
                   gap: '0.625rem',
-                  padding: '0.5rem 1rem',
-                  borderRadius: 6,
-                  margin: '1px 8px',
+                  padding: '0.5rem 0.85rem',
+                  borderRadius: 8,
+                  margin: '2px 8px',
                   color: isActive ? 'var(--accent)' : 'var(--text)',
-                  background: isActive ? 'rgba(124, 106, 247, 0.12)' : 'transparent',
+                  background: isActive ? 'var(--accent-soft)' : 'transparent',
+                  boxShadow: isActive
+                    ? 'inset 0 0 0 1px color-mix(in oklch, var(--accent) 30%, transparent)'
+                    : 'none',
                   fontWeight: isActive ? 600 : 400,
                   fontSize: 14,
                   textDecoration: 'none',
-                  transition: 'background 0.15s, color 0.15s',
+                  transition: 'background 0.15s, color 0.15s, box-shadow 0.15s',
                 })}
               >
-                <span style={{ fontSize: 16, width: 20, textAlign: 'center' }}>{icon}</span>
+                <i className={`fa-solid ${icon}`} style={{ fontSize: 14, width: 20, textAlign: 'center' }} />
                 <span>{label}</span>
               </NavLink>
             </li>
           ))}
         </ul>
-
-        <div style={{ padding: '0.75rem 1rem', borderTop: '1px solid var(--border)' }}>
-          <button
-            onClick={onThemeToggle}
-            className="btn"
-            style={{ width: '100%', textAlign: 'left', display: 'flex', alignItems: 'center', gap: '0.5rem' }}
-          >
-            <span>{theme === 'dark' ? '☀️' : '🌙'}</span>
-            <span>{theme === 'dark' ? 'Light mode' : 'Dark mode'}</span>
-          </button>
-        </div>
       </nav>
 
       <style>{`
+        .wurk-navlink:hover {
+          background: color-mix(in oklch, var(--color-base-content) 8%, transparent) !important;
+          color: var(--accent) !important;
+          text-decoration: none !important;
+        }
         @media (max-width: 767px) {
           .wurk-nav {
-            transform: translateX(100%);
+            transform: translateX(-100%);
           }
           .wurk-nav--open {
             transform: translateX(0);
