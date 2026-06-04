@@ -4,9 +4,9 @@ A modern, faster, easier-to-use replacement for Sidekiq Web. Same data shape and
 
 ## Look and feel
 
-- **Right-side navigation menu**, not a top navbar. More screen vertical space, better fit for dense tables, easier to scan.
-- **Mobile-first responsive design.** On narrow viewports the nav collapses into an off-canvas drawer; tables become card lists; charts shrink gracefully. The dashboard works on a phone, unlike Sidekiq Web.
-- **Dark theme by default, light theme as an opt-in toggle.** The toggle remembers the user's choice. Both themes use the same data viz palette tuned for accessibility.
+- **Left-rail navigation menu**, not a top navbar. More screen vertical space, better fit for dense tables, easier to scan.
+- **Mobile-first responsive design.** On narrow viewports the nav collapses into an off-canvas drawer (slides in from the left); tables become card lists; charts shrink gracefully. The dashboard works on a phone, unlike Sidekiq Web.
+- **Dark-only theme.** A single cohesive dark theme (no light toggle), with a data viz palette tuned for accessibility.
 - **Visual language inspired by Sidekiq Web** so existing users feel oriented, but with a modern density and typography. Familiar but clearly newer.
 
 ## i18n
