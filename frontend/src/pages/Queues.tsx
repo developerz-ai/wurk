@@ -3,6 +3,7 @@ import { useState, useEffect } from 'react';
 import { Pagination } from '../components/Pagination';
 import { t } from '../i18n';
 import { relativeTime, truncate, formatArgs } from '../utils';
+import JobDetailModal, { type JobEntry } from '../components/JobDetailModal';
 
 interface QueueSummary {
   name: string;
@@ -34,6 +35,7 @@ const PAGE_SIZE = 25;
 
 function QueueJobs({ name }: { name: string }) {
   const [page, setPage] = useState(1);
+  const [selected, setSelected] = useState<JobEntry | null>(null);
 
   const { data, isLoading, isError } = useQuery<QueueDetail>({
     queryKey: ['queue', name, page],
@@ -73,7 +75,11 @@ function QueueJobs({ name }: { name: string }) {
                 {data.jobs.map((job) => {
                   const argsStr = formatArgs(job.args);
                   return (
-                    <tr key={job.jid}>
+                    <tr
+                      key={job.jid}
+                      className="row-clickable"
+                      onClick={() => setSelected({ jid: job.jid, klass: job.class, args: job.args, queue: name, enqueued_at: job.enqueued_at })}
+                    >
                       <td title={job.jid} style={{ fontFamily: 'monospace', fontSize: 12, color: 'var(--text-muted)' }}>
                         {truncate(job.jid, 12)}
                       </td>
@@ -89,6 +95,7 @@ function QueueJobs({ name }: { name: string }) {
           <Pagination page={page} total={data.size} count={PAGE_SIZE} onChange={setPage} />
         </>
       )}
+      <JobDetailModal entry={selected} onClose={() => setSelected(null)} />
     </div>
   );
 }

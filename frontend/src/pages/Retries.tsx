@@ -3,6 +3,7 @@ import { useState, useEffect } from 'react';
 import { Pagination } from '../components/Pagination';
 import { t } from '../i18n';
 import { relativeTime, truncate, formatArgs, isoTime } from '../utils';
+import JobDetailModal, { type JobEntry } from '../components/JobDetailModal';
 
 interface RetryEntry {
   jid: string;
@@ -14,6 +15,9 @@ interface RetryEntry {
   at: number;
   retry_count: number;
   score: number;
+  queue?: string;
+  enqueued_at?: number | null;
+  error_backtrace?: string[] | null;
 }
 
 interface RetriesResponse {
@@ -27,6 +31,7 @@ const PAGE_SIZE = 25;
 
 export default function Retries() {
   const [page, setPage] = useState(1);
+  const [selected, setSelected] = useState<JobEntry | null>(null);
 
   useEffect(() => {
     document.title = `${t('nav.retries')} — Wurk`;
@@ -70,7 +75,7 @@ export default function Retries() {
                 {data.entries.map((entry) => {
                   const argsStr = formatArgs(entry.args);
                   return (
-                    <tr key={entry.jid}>
+                    <tr key={entry.jid} className="row-clickable" onClick={() => setSelected(entry)}>
                       <td style={{ fontWeight: 500 }}>{entry.klass}</td>
                       <td title={argsStr}>{truncate(argsStr, 40)}</td>
                       <td title={entry.error_class} style={{ color: 'var(--danger)' }}>
@@ -90,6 +95,7 @@ export default function Retries() {
           <Pagination page={page} total={data.total} count={PAGE_SIZE} onChange={setPage} />
         </>
       )}
+      <JobDetailModal entry={selected} atLabel={t('table.retry_at')} onClose={() => setSelected(null)} />
     </div>
   );
 }

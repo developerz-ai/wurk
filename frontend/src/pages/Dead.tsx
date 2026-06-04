@@ -3,6 +3,7 @@ import { useState, useEffect } from 'react';
 import { Pagination } from '../components/Pagination';
 import { t } from '../i18n';
 import { relativeTime, truncate, formatArgs, isoTime } from '../utils';
+import JobDetailModal, { type JobEntry } from '../components/JobDetailModal';
 
 interface DeadEntry {
   jid: string;
@@ -13,6 +14,9 @@ interface DeadEntry {
   // `at` is the death epoch (the sorted-set score); see api/serializers.rb#sorted_entry.
   at: number;
   score: number;
+  queue?: string;
+  enqueued_at?: number | null;
+  error_backtrace?: string[] | null;
 }
 
 interface DeadResponse {
@@ -26,6 +30,7 @@ const PAGE_SIZE = 25;
 
 export default function Dead() {
   const [page, setPage] = useState(1);
+  const [selected, setSelected] = useState<JobEntry | null>(null);
 
   useEffect(() => {
     document.title = `${t('nav.dead')} — Wurk`;
@@ -69,7 +74,7 @@ export default function Dead() {
                 {data.entries.map((entry) => {
                   const argsStr = formatArgs(entry.args);
                   return (
-                    <tr key={entry.jid}>
+                    <tr key={entry.jid} className="row-clickable" onClick={() => setSelected(entry)}>
                       <td
                         title={entry.jid}
                         style={{ fontFamily: 'monospace', fontSize: 12, color: 'var(--text-muted)' }}
@@ -94,6 +99,7 @@ export default function Dead() {
           <Pagination page={page} total={data.total} count={PAGE_SIZE} onChange={setPage} />
         </>
       )}
+      <JobDetailModal entry={selected} atLabel={t('table.failed_at')} onClose={() => setSelected(null)} />
     </div>
   );
 }

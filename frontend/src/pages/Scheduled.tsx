@@ -3,6 +3,7 @@ import { useState, useEffect } from 'react';
 import { Pagination } from '../components/Pagination';
 import { t } from '../i18n';
 import { relativeTime, truncate, formatArgs, isoTime } from '../utils';
+import JobDetailModal, { type JobEntry } from '../components/JobDetailModal';
 
 interface ScheduledEntry {
   jid: string;
@@ -10,6 +11,8 @@ interface ScheduledEntry {
   args: unknown;
   score: number;
   at: number;
+  queue?: string;
+  enqueued_at?: number | null;
 }
 
 interface ScheduledResponse {
@@ -23,6 +26,7 @@ const PAGE_SIZE = 25;
 
 export default function Scheduled() {
   const [page, setPage] = useState(1);
+  const [selected, setSelected] = useState<JobEntry | null>(null);
 
   useEffect(() => {
     document.title = `${t('nav.scheduled')} — Wurk`;
@@ -64,7 +68,7 @@ export default function Scheduled() {
                 {data.entries.map((entry) => {
                   const argsStr = formatArgs(entry.args);
                   return (
-                    <tr key={entry.jid}>
+                    <tr key={entry.jid} className="row-clickable" onClick={() => setSelected(entry)}>
                       <td
                         title={entry.jid}
                         style={{ fontFamily: 'monospace', fontSize: 12, color: 'var(--text-muted)' }}
@@ -85,6 +89,7 @@ export default function Scheduled() {
           <Pagination page={page} total={data.total} count={PAGE_SIZE} onChange={setPage} />
         </>
       )}
+      <JobDetailModal entry={selected} atLabel={t('table.scheduled_at')} onClose={() => setSelected(null)} />
     </div>
   );
 }
