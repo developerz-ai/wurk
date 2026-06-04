@@ -14,6 +14,7 @@
 # Verifies #135: every tab demos well at the #133 light-load cadence.
 
 require 'pathname'
+require 'uri'
 ROOT = Pathname.new(__dir__).join('..', '..').expand_path
 $LOAD_PATH.unshift(ROOT.join('lib').to_s)
 require 'wurk'
@@ -25,6 +26,15 @@ Dir[JOBS.join('*.rb').to_s].each { |f| require f }
 require ROOT.join('demo', 'app', 'workloads', 'demo_producer.rb').to_s
 
 URL = ENV.fetch('REDIS_URL', 'redis://localhost:6379/15').sub(%r{/\d+\z}, '/15')
+
+# This harness FLUSHDBs its scratch DB (15) at start and on exit. Refuse to do
+# that against a non-local host unless the caller explicitly opts in, so a stray
+# REDIS_URL can never wipe a shared/remote instance's DB 15.
+unless %w[localhost 127.0.0.1 ::1].include?(URI(URL).host) || ENV['ALLOW_FLUSHDB'] == '1'
+  abort "Refusing to FLUSHDB #{URL} — this harness flushes its scratch DB. " \
+        "Point it at a local Redis, or set ALLOW_FLUSHDB=1 to override."
+end
+
 RUN_SECONDS = Float(ENV.fetch('RUN_SECONDS', '30'))
 TICK = 2.0 # faster than prod's 10s so the check fills up quickly
 
