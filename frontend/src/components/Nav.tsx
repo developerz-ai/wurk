@@ -1,5 +1,6 @@
 import { NavLink } from 'react-router-dom';
 import { t } from '../i18n';
+import logoUrl from '../assets/wurk-logo.png';
 
 interface NavProps {
   open: boolean;
@@ -42,11 +43,11 @@ export default function Nav({ open, onClose }: NavProps) {
         style={{
           position: 'fixed',
           top: 0,
-          right: 0,
+          left: 0,
           bottom: 0,
           width: 'var(--nav-width)',
           background: 'var(--surface)',
-          borderLeft: '1px solid var(--border)',
+          borderRight: '1px solid var(--border)',
           display: 'flex',
           flexDirection: 'column',
           zIndex: 100,
@@ -60,13 +61,25 @@ export default function Nav({ open, onClose }: NavProps) {
               fontSize: 20,
               fontWeight: 800,
               letterSpacing: '-0.03em',
-              color: 'var(--accent)',
+              color: 'var(--text)',
               display: 'flex',
               alignItems: 'center',
-              gap: '0.5rem',
+              gap: '0.55rem',
             }}
           >
-            <i className="fa-solid fa-bolt" />
+            <img
+              src={logoUrl}
+              alt=""
+              style={{
+                width: 68,
+                height: 68,
+                borderRadius: 12,
+                objectFit: 'cover',
+                objectPosition: 'top',
+                display: 'block',
+                border: '1px solid var(--border)',
+              }}
+            />
             Wurk
           </span>
         </div>
@@ -80,19 +93,23 @@ export default function Nav({ open, onClose }: NavProps) {
                 to={to}
                 end={end}
                 onClick={onClose}
+                className="wurk-navlink"
                 style={({ isActive }) => ({
                   display: 'flex',
                   alignItems: 'center',
                   gap: '0.625rem',
-                  padding: '0.5rem 1rem',
-                  borderRadius: 6,
-                  margin: '1px 8px',
+                  padding: '0.5rem 0.85rem',
+                  borderRadius: 8,
+                  margin: '2px 8px',
                   color: isActive ? 'var(--accent)' : 'var(--text)',
-                  background: isActive ? 'rgba(124, 106, 247, 0.12)' : 'transparent',
+                  background: isActive ? 'var(--accent-soft)' : 'transparent',
+                  boxShadow: isActive
+                    ? 'inset 0 0 0 1px color-mix(in oklch, var(--accent) 30%, transparent)'
+                    : 'none',
                   fontWeight: isActive ? 600 : 400,
                   fontSize: 14,
                   textDecoration: 'none',
-                  transition: 'background 0.15s, color 0.15s',
+                  transition: 'background 0.15s, color 0.15s, box-shadow 0.15s',
                 })}
               >
                 <i className={`fa-solid ${icon}`} style={{ fontSize: 14, width: 20, textAlign: 'center' }} />
@@ -104,9 +121,13 @@ export default function Nav({ open, onClose }: NavProps) {
       </nav>
 
       <style>{`
+        .wurk-navlink:hover {
+          background: color-mix(in oklch, var(--color-base-content) 8%, transparent) !important;
+          color: var(--accent) !important;
+        }
         @media (max-width: 767px) {
           .wurk-nav {
-            transform: translateX(100%);
+            transform: translateX(-100%);
           }
           .wurk-nav--open {
             transform: translateX(0);
