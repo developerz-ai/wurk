@@ -4,6 +4,7 @@ import { StatCard } from '../components/StatCard';
 import { t } from '../i18n';
 import type { StatsSnapshot } from '../hooks/useSSE';
 import { relativeTime } from '../utils';
+import logoUrl from '../assets/wurk-logo.png';
 
 interface StatsData {
   processed: number;
@@ -69,19 +70,34 @@ export default function Dashboard({ sse }: DashboardProps) {
 
   return (
     <div>
-      <div className="section-header" style={{ marginBottom: '1.25rem' }}>
-        <h1 className="page-title" style={{ margin: 0 }}>{t('nav.dashboard')}</h1>
-        {sse.connected && (
-          <span style={{ display: 'flex', alignItems: 'center', gap: '0.375rem', fontSize: 12, color: 'var(--success)' }}>
-            <span className="live-dot" />
-            {t('dashboard.live')}
-          </span>
-        )}
-        {sse.stats?.at && (
-          <span style={{ fontSize: 12, color: 'var(--text-muted)', marginLeft: 'auto' }}>
-            {relativeTime(sse.stats.at)}
-          </span>
-        )}
+      <div className="dash-hero">
+        <div className="dash-hero__mark">
+          <img src={logoUrl} alt="Wurk" />
+        </div>
+        <div className="dash-hero__body">
+          <h1 className="dash-hero__title">Wurk ⚡</h1>
+          <p className="dash-hero__strapline">{t('dashboard.strapline')}</p>
+          <p className="dash-hero__tagline">{t('dashboard.tagline')}</p>
+          <div className="dash-hero__actions">
+            <a className="btn btn-accent" href="https://developerz-ai.github.io/wurk/" target="_blank" rel="noreferrer">
+              <i className="fa-solid fa-download" /> {t('dashboard.install')}
+            </a>
+            <a className="btn" href="https://github.com/developerz-ai/wurk/wiki" target="_blank" rel="noreferrer">
+              <i className="fa-solid fa-book" /> {t('dashboard.docs')}
+            </a>
+          </div>
+        </div>
+        <div className="dash-hero__status">
+          {sse.connected && (
+            <span className="dash-hero__live">
+              <span className="live-dot" />
+              {t('dashboard.live')}
+            </span>
+          )}
+          {sse.stats?.at && (
+            <span style={{ fontSize: 12, color: 'var(--text-muted)' }}>{relativeTime(sse.stats.at)}</span>
+          )}
+        </div>
       </div>
 
       <div

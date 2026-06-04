@@ -1,6 +1,7 @@
 import { useQuery } from '@tanstack/react-query';
 import { useEffect } from 'react';
 import { t } from '../i18n';
+import { PageHeader } from '../components/PageHeader';
 import { relativeTime } from '../utils';
 
 interface Process {
@@ -29,12 +30,11 @@ export default function Busy() {
 
   return (
     <div>
-      <div className="section-header">
-        <h1 className="page-title" style={{ margin: 0 }}>{t('nav.busy')}</h1>
-        <span className="badge badge-muted" style={{ marginLeft: 'auto' }}>
+      <PageHeader icon="fa-gears" title={t('nav.busy')} summary={t('summaries.busy')}>
+        <span className="badge badge-muted">
           {data.length} {t('dashboard.processes').toLowerCase()}
         </span>
-      </div>
+      </PageHeader>
 
       {data.length === 0 ? (
         <div className="empty-state">{t('common.empty')}</div>
@@ -42,7 +42,7 @@ export default function Busy() {
         <div
           style={{
             display: 'grid',
-            gridTemplateColumns: 'repeat(auto-fill, minmax(320px, 1fr))',
+            gridTemplateColumns: 'repeat(auto-fill, minmax(min(100%, 320px), 1fr))',
             gap: '1rem',
           }}
         >

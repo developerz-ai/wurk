@@ -1,11 +1,12 @@
 import { useQuery } from '@tanstack/react-query';
 import { useState, useEffect } from 'react';
 import { t } from '../i18n';
+import { PageHeader } from '../components/PageHeader';
 import { relativeTime, truncate, formatArgs } from '../utils';
 
 interface RetryEntry {
   jid: string;
-  class: string;
+  klass: string;
   args: unknown;
   error_class: string;
   error_message: string;
@@ -18,7 +19,7 @@ interface RetryEntry {
 
 interface ScheduledEntry {
   jid: string;
-  class: string;
+  klass: string;
   args: unknown;
   score: number;
   at: number;
@@ -26,7 +27,7 @@ interface ScheduledEntry {
 
 interface DeadEntry {
   jid: string;
-  class: string;
+  klass: string;
   args: unknown;
   error_class: string;
   error_message: string;
@@ -57,7 +58,7 @@ interface DeadResponse {
 
 function matches(term: string, jid: string, cls: string): boolean {
   const q = term.toLowerCase();
-  return jid.toLowerCase().includes(q) || cls.toLowerCase().includes(q);
+  return (jid ?? '').toLowerCase().includes(q) || (cls ?? '').toLowerCase().includes(q);
 }
 
 export default function Search() {
@@ -95,19 +96,42 @@ export default function Search() {
     enabled: submitted.length >= 2,
   });
 
+  // Live sample of job classes for the empty-state suggestion chips — derived
+  // from real data so it works for any app, not hardcoded to the demo.
+  const { data: sample } = useQuery<Array<{ entries?: Array<{ klass?: string }> }>>({
+    queryKey: ['search-suggest'],
+    queryFn: () =>
+      Promise.all(
+        ['/wurk/api/retries?page=0&count=10', '/wurk/api/dead?page=0&count=10'].map((u) =>
+          fetch(u).then((r) => r.json())
+        )
+      ),
+    staleTime: 30000,
+  });
+  const suggestions = Array.from(
+    new Set(
+      (sample ?? []).flatMap((s) => (s.entries ?? []).map((e) => e.klass)).filter(Boolean) as string[]
+    )
+  ).slice(0, 5);
+
+  const runSearch = (term: string) => {
+    setQuery(term);
+    setSubmitted(term);
+  };
+
   const filteredRetries =
     submitted.length >= 2
-      ? (retries?.entries ?? []).filter((e) => matches(submitted, e.jid, e.class))
+      ? (retries?.entries ?? []).filter((e) => matches(submitted, e.jid, e.klass))
       : [];
 
   const filteredScheduled =
     submitted.length >= 2
-      ? (scheduled?.entries ?? []).filter((e) => matches(submitted, e.jid, e.class))
+      ? (scheduled?.entries ?? []).filter((e) => matches(submitted, e.jid, e.klass))
       : [];
 
   const filteredDead =
     submitted.length >= 2
-      ? (dead?.entries ?? []).filter((e) => matches(submitted, e.jid, e.class))
+      ? (dead?.entries ?? []).filter((e) => matches(submitted, e.jid, e.klass))
       : [];
 
   const handleSearch = (e: React.FormEvent) => {
@@ -119,7 +143,7 @@ export default function Search() {
 
   return (
     <div>
-      <h1 className="page-title">{t('nav.search')}</h1>
+      <PageHeader icon="fa-magnifying-glass" title={t('nav.search')} summary={t('summaries.search')} />
 
       <form onSubmit={handleSearch} style={{ display: 'flex', gap: '0.75rem', marginBottom: '2rem' }}>
         <input
@@ -134,6 +158,24 @@ export default function Search() {
           {t('actions.search')}
         </button>
       </form>
+
+      {submitted.length < 2 && (
+        <div className="search-empty">
+          <div className="search-empty__icon"><i className="fa-solid fa-magnifying-glass" /></div>
+          <p className="search-empty__title">{t('search.emptyTitle')}</p>
+          <p className="search-empty__hint">{t('search.emptyHint')}</p>
+          {suggestions.length > 0 && (
+            <div className="search-empty__chips">
+              <span className="search-empty__chips-label">{t('search.try')}</span>
+              {suggestions.map((s) => (
+                <button key={s} type="button" className="chip" onClick={() => runSearch(s)}>
+                  {s}
+                </button>
+              ))}
+            </div>
+          )}
+        </div>
+      )}
 
       {submitted.length >= 2 && (
         <div style={{ marginBottom: '0.75rem', color: 'var(--text-muted)', fontSize: 13 }}>
@@ -166,7 +208,7 @@ export default function Search() {
                       <td title={entry.jid} style={{ fontFamily: 'monospace', fontSize: 12, color: 'var(--text-muted)' }}>
                         {truncate(entry.jid, 12)}
                       </td>
-                      <td style={{ fontWeight: 500 }}>{entry.class}</td>
+                      <td style={{ fontWeight: 500 }}>{entry.klass}</td>
                       <td title={argsStr}>{truncate(argsStr, 40)}</td>
                       <td title={entry.error_class} style={{ color: 'var(--danger)' }}>
                         {truncate(entry.error_class, 25)}
@@ -205,7 +247,7 @@ export default function Search() {
                       <td title={entry.jid} style={{ fontFamily: 'monospace', fontSize: 12, color: 'var(--text-muted)' }}>
                         {truncate(entry.jid, 12)}
                       </td>
-                      <td style={{ fontWeight: 500 }}>{entry.class}</td>
+                      <td style={{ fontWeight: 500 }}>{entry.klass}</td>
                       <td title={argsStr}>{truncate(argsStr, 60)}</td>
                       <td>{relativeTime(entry.at)}</td>
                     </tr>
@@ -241,7 +283,7 @@ export default function Search() {
                       <td title={entry.jid} style={{ fontFamily: 'monospace', fontSize: 12, color: 'var(--text-muted)' }}>
                         {truncate(entry.jid, 12)}
                       </td>
-                      <td style={{ fontWeight: 500 }}>{entry.class}</td>
+                      <td style={{ fontWeight: 500 }}>{entry.klass}</td>
                       <td title={argsStr}>{truncate(argsStr, 40)}</td>
                       <td title={entry.error_class} style={{ color: 'var(--danger)' }}>
                         {truncate(entry.error_class, 25)}
@@ -258,12 +300,6 @@ export default function Search() {
 
       {submitted.length >= 2 && totalResults === 0 && (
         <div className="empty-state">{t('common.empty')}</div>
-      )}
-
-      {submitted.length < 2 && (
-        <div className="empty-state" style={{ color: 'var(--text-muted)' }}>
-          Enter at least 2 characters to search across retries, scheduled, and dead jobs.
-        </div>
       )}
     </div>
   );

@@ -24,7 +24,11 @@
     "processes": "Processes",
     "latency": "Latency",
     "live": "Live",
-    "paused": "Paused"
+    "paused": "Paused",
+    "strapline": "Wurk, wurk. 🪓 Ready to work. Zug zug.",
+    "tagline": "A 100% drop-in replacement for Sidekiq + Sidekiq Pro + Sidekiq Enterprise. Free forever. Faster.",
+    "install": "Install",
+    "docs": "Documentation"
   },
   "table": {
     "class": "Class",
@@ -48,6 +52,18 @@
     "queues": "Queues",
     "hostname": "Hostname"
   },
+  "summaries": {
+    "queues": "Active queues with their depth and latency — click a queue to inspect its jobs.",
+    "retries": "Jobs that raised an error and are scheduled to run again — click one for the error and backtrace.",
+    "scheduled": "Jobs enqueued to run at a future time.",
+    "dead": "Jobs that exhausted every retry — click one to inspect the failure.",
+    "busy": "Live worker processes and the jobs they're currently running.",
+    "batches": "Batched jobs and their progress, successes, and failures.",
+    "limiters": "Rate limiters and their current usage.",
+    "cron": "Periodic (cron) jobs with their schedule and last run.",
+    "metrics": "Throughput and failure history, with per-job execution stats.",
+    "search": "Find a job across retries, scheduled, and dead by JID or class name."
+  },
   "job": {
     "detail": "Job detail",
     "class": "Class",
@@ -59,6 +75,11 @@
     "args": "Arguments",
     "error": "Error",
     "backtrace": "Backtrace"
+  },
+  "search": {
+    "emptyTitle": "Search for a job",
+    "emptyHint": "Enter a JID or class name (2+ characters) and hit Search. Results span retries, scheduled, and dead jobs.",
+    "try": "Try:"
   },
   "actions": {
     "retry": "Retry",

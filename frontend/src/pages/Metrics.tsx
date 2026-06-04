@@ -12,6 +12,7 @@ import {
   ResponsiveContainer,
 } from 'recharts';
 import { t } from '../i18n';
+import { PageHeader } from '../components/PageHeader';
 import { truncate } from '../utils';
 
 // Matches Wurk::Api::Serializers.metric_row — processed (successes), failed,
@@ -143,9 +144,8 @@ export default function Metrics() {
 
   return (
     <div>
-      <div className="section-header">
-        <h1 className="page-title" style={{ margin: 0 }}>{t('nav.metrics')}</h1>
-        <div style={{ marginLeft: 'auto', display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
+      <PageHeader icon="fa-chart-line" title={t('nav.metrics')} summary={t('summaries.metrics')}>
+        <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
           <span style={{ fontSize: 13, color: 'var(--text-muted)' }}>Last</span>
           <select
             className="select"
@@ -159,7 +159,7 @@ export default function Metrics() {
             ))}
           </select>
         </div>
-      </div>
+      </PageHeader>
 
       <HistoryCharts />
 

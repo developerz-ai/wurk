@@ -157,6 +157,10 @@ tbody tr:last-child td {
   border: 1px solid var(--border);
   border-radius: var(--radius);
   box-shadow: var(--shadow);
+  /* Gentle entrance, same fade-up as the page header (slightly delayed so the
+     header leads and the table follows). Runs once on mount, not on refetch. */
+  animation: fade-up 0.35s ease both;
+  animation-delay: 0.05s;
 }
 
 /* Interactive stat cards: a subtle border + lift on hover, no glow. */
@@ -419,16 +423,58 @@ tbody tr:last-child td {
   border: none;
   background: transparent;
   padding: 0;
+  /* The global `* { margin: 0 }` reset breaks the native dialog's auto-margin
+     centering, so centre explicitly with a fixed transform — robust in both
+     axes regardless of the reset. */
+  margin: 0;
+  position: fixed;
+  top: 50%;
+  left: 50%;
   max-width: 92vw;
   max-height: 88vh;
   color: var(--text);
   overflow: visible;
+  /* Closed/exit state — animates BOTH ways. allow-discrete keeps the dialog in
+     the top layer through the exit transition (the "animation back"). */
+  opacity: 0;
+  transform: translate(-50%, -50%) scale(0.95);
+  transition:
+    opacity 0.22s ease,
+    transform 0.24s cubic-bezier(0.16, 1, 0.3, 1),
+    overlay 0.24s ease allow-discrete,
+    display 0.24s ease allow-discrete;
+}
+
+.modal[open] {
+  opacity: 1;
+  transform: translate(-50%, -50%) scale(1);
+}
+
+/* Entry: start from the closed state when [open] first applies. */
+@starting-style {
+  .modal[open] {
+    opacity: 0;
+    transform: translate(-50%, -50%) scale(0.95);
+  }
 }
 
 .modal::backdrop {
-  background: oklch(0 0 0 / 0.55);
-  -webkit-backdrop-filter: blur(2px);
-  backdrop-filter: blur(2px);
+  /* Dim + blur the page so focus lands on the modal and its contents stay
+     readable. Fades in/out with the dialog (allow-discrete). */
+  background: oklch(0 0 0 / 0.58);
+  -webkit-backdrop-filter: blur(6px) saturate(75%);
+  backdrop-filter: blur(6px) saturate(75%);
+  opacity: 0;
+  transition:
+    opacity 0.22s ease,
+    overlay 0.22s ease allow-discrete,
+    display 0.22s ease allow-discrete;
+}
+
+.modal[open]::backdrop { opacity: 1; }
+
+@starting-style {
+  .modal[open]::backdrop { opacity: 0; }
 }
 
 .modal-panel {
@@ -441,12 +487,6 @@ tbody tr:last-child td {
   flex-direction: column;
   max-height: 88vh;
   overflow: hidden;
-  animation: modal-in 0.14s ease;
-}
-
-@keyframes modal-in {
-  from { opacity: 0; transform: translateY(6px); }
-  to   { opacity: 1; transform: translateY(0); }
 }
 
 .modal-header {
@@ -509,3 +549,267 @@ tbody tr:last-child td {
 /* Clickable list rows that open a detail modal. */
 .row-clickable { cursor: pointer; }
 .row-clickable:hover td { background: var(--accent-soft); }
+
+/* Lowkey "clickable" hint: a faint chevron at the row's end, just present enough
+   to read as interactive at rest, brightening + nudging right on hover. */
+.row-clickable td:last-child {
+  position: relative;
+  padding-right: 1.85rem;
+}
+.row-clickable td:last-child::after {
+  content: '\203A'; /* › */
+  position: absolute;
+  right: 0.8rem;
+  top: 50%;
+  transform: translateY(-50%);
+  font-size: 15px;
+  line-height: 1;
+  color: var(--text-muted);
+  opacity: 0.28;
+  transition: opacity 0.15s ease, transform 0.15s ease, color 0.15s ease;
+}
+.row-clickable:hover td:last-child::after {
+  opacity: 0.9;
+  color: var(--accent);
+  transform: translateY(-50%) translateX(3px);
+}
+@media (prefers-reduced-motion: reduce) {
+  .row-clickable td:last-child::after { transition: none; }
+}
+
+/* ── Dashboard hero (mascot banner) ────────────────────────────────────────*/
+.dash-hero {
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  text-align: center;
+  gap: 0.5rem;
+  padding: 1.6rem 1.5rem 1.7rem;
+  margin-bottom: 1.5rem;
+  background:
+    radial-gradient(70% 120% at 50% 100%, color-mix(in oklch, var(--success) 13%, transparent), transparent 60%),
+    linear-gradient(180deg, var(--surface-hover), var(--surface));
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  box-shadow: var(--shadow);
+  overflow: hidden;
+}
+
+/* The mascot stands centred in the banner: full body, soft shadow. */
+.dash-hero__mark {
+  display: grid;
+  place-items: center;
+}
+
+.dash-hero__mark img {
+  height: 200px;
+  width: auto;
+  object-fit: contain;
+  display: block;
+  filter: drop-shadow(0 12px 22px oklch(0 0 0 / 0.55));
+}
+
+.dash-hero__body { min-width: 0; max-width: 640px; }
+
+/* Three clear hierarchy levels: title (largest/brightest) → strapline (medium
+   emphasis) → tagline (smallest/muted). */
+.dash-hero__title {
+  font-size: 42px;
+  font-weight: 800;
+  letter-spacing: -0.03em;
+  line-height: 1.05;
+  color: var(--text);
+}
+
+.dash-hero__strapline {
+  margin-top: 0.55rem;
+  font-size: 18px;
+  font-weight: 600;
+  color: var(--text);
+}
+
+.dash-hero__tagline {
+  margin-top: 0.55rem;
+  font-size: 15px;
+  line-height: 1.5;
+  color: var(--text-muted);
+}
+
+/* Live/updated status floats top-right so the brand column stays centred. */
+.dash-hero__status {
+  position: absolute;
+  top: 0.9rem;
+  right: 1.1rem;
+  display: flex;
+  align-items: center;
+  gap: 0.6rem;
+}
+
+.dash-hero__live {
+  display: flex;
+  align-items: center;
+  gap: 0.4rem;
+  font-size: 12px;
+  color: var(--success);
+}
+
+@media (max-width: 560px) {
+  .dash-hero { padding: 1.25rem 1rem 1.4rem; }
+  .dash-hero__mark img { height: 150px; }
+  .dash-hero__title { font-size: 32px; }
+  .dash-hero__strapline { font-size: 16px; }
+  .dash-hero__tagline { font-size: 14px; }
+  /* The absolute status can crowd the centred title on narrow screens — drop it
+     back into the flow, centred under the brand. */
+  .dash-hero__status {
+    position: static;
+    margin-top: 0.4rem;
+    justify-content: center;
+  }
+}
+
+/* ── Page header (per-tab icon + summary) ──────────────────────────────────*/
+.page-header {
+  display: flex;
+  align-items: center;
+  gap: 0.95rem;
+  margin-bottom: 1.5rem;
+  animation: fade-up 0.3s ease both;
+}
+
+.page-header__icon {
+  flex: none;
+  width: 44px;
+  height: 44px;
+  border-radius: 11px;
+  display: grid;
+  place-items: center;
+  background: var(--surface-strong);
+  border: 1px solid var(--border-strong);
+  color: var(--accent);
+  font-size: 18px;
+  transition: transform 0.18s ease, border-color 0.18s ease;
+}
+
+.page-header:hover .page-header__icon {
+  transform: translateY(-1px);
+  border-color: color-mix(in oklch, var(--accent) 40%, var(--border-strong));
+}
+
+.page-header__text { min-width: 0; }
+
+.page-header__title {
+  font-size: 22px;
+  font-weight: 800;
+  letter-spacing: -0.02em;
+  line-height: 1.1;
+}
+
+.page-header__summary {
+  margin-top: 3px;
+  font-size: 13px;
+  color: var(--text-muted);
+}
+
+.page-header__aside { margin-left: auto; align-self: center; }
+
+@media (max-width: 560px) {
+  .page-header__summary { font-size: 12px; }
+  .page-header__icon { width: 38px; height: 38px; font-size: 16px; }
+}
+
+/* ── Motion (tasteful; honours reduced-motion) ─────────────────────────────*/
+@keyframes fade-up {
+  from { opacity: 0; transform: translateY(8px); }
+  to   { opacity: 1; transform: translateY(0); }
+}
+
+.dash-hero { animation: fade-up 0.35s ease both; }
+
+/* The mascot gently floats in its banner. */
+@keyframes float {
+  0%, 100% { transform: translateY(0); }
+  50%      { transform: translateY(-7px); }
+}
+.dash-hero__mark img { animation: float 5s ease-in-out infinite; }
+
+@media (prefers-reduced-motion: reduce) {
+  .page-header,
+  .dash-hero,
+  .table-wrapper { animation: none; }
+  .dash-hero__mark img { animation: none; }
+  .card--stat { transition: none; }
+  .modal,
+  .modal::backdrop { transition: none; }
+}
+
+/* Hero quick-link buttons (install / docs). */
+.dash-hero__actions {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: center;
+  gap: 0.6rem;
+  margin-top: 1.05rem;
+}
+.dash-hero__actions .btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.45rem;
+}
+.dash-hero__actions .btn:hover { text-decoration: none; }
+
+/* ── Search empty state (sample chips) ─────────────────────────────────────*/
+.search-empty {
+  text-align: center;
+  padding: 2.5rem 1.5rem 3rem;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  box-shadow: var(--shadow);
+  animation: fade-up 0.3s ease both;
+}
+.search-empty__icon {
+  width: 52px;
+  height: 52px;
+  margin: 0 auto 0.9rem;
+  border-radius: 14px;
+  display: grid;
+  place-items: center;
+  background: var(--surface-strong);
+  border: 1px solid var(--border-strong);
+  color: var(--text-muted);
+  font-size: 20px;
+}
+.search-empty__title { font-size: 16px; font-weight: 600; }
+.search-empty__hint {
+  margin: 0.4rem auto 0;
+  max-width: 460px;
+  font-size: 13px;
+  color: var(--text-muted);
+}
+.search-empty__chips {
+  margin-top: 1.1rem;
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: center;
+  gap: 0.5rem;
+}
+.search-empty__chips-label { font-size: 12px; color: var(--text-muted); }
+
+.chip {
+  background: var(--surface-strong);
+  border: 1px solid var(--border-strong);
+  color: var(--text);
+  font-family: ui-monospace, monospace;
+  font-size: 12px;
+  padding: 0.3rem 0.7rem;
+  border-radius: 999px;
+  transition: border-color 0.15s, background 0.15s, color 0.15s, transform 0.05s;
+}
+.chip:hover {
+  border-color: var(--accent);
+  background: var(--surface-hover);
+}
+.chip:active { transform: translateY(1px); }
