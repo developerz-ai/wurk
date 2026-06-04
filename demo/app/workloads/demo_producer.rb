@@ -67,7 +67,12 @@ class DemoProducer
   # Idempotent (re)registration of the cron schedule + limiter. Cheap; runs
   # every tick so the demo recovers within one interval of a Redis flush.
   def ensure_seeded!
-    Wurk::Cron.register("demo daily report", "* * * * *", "DailyReportJob", [], queue: "low")
+    # A few loops at different cadences so the Cron tab shows a realistic mix of
+    # "last fired" / "next run" rather than a single row. The every-minute and
+    # 5-minute loops fire during a browse; the nightly one shows a future next-run.
+    Wurk::Cron.register("demo daily report",   "* * * * *",   "DailyReportJob",  [],  queue: "low")
+    Wurk::Cron.register("demo cache warmup",   "*/5 * * * *", "ThrottledApiJob", [],  queue: "high")
+    Wurk::Cron.register("demo nightly export", "0 0 * * *",   "ExportChunkJob",  [0], queue: "default")
     self.class.build_api_limiter
   end
 
