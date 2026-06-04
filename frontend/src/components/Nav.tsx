@@ -124,6 +124,7 @@ export default function Nav({ open, onClose }: NavProps) {
         .wurk-navlink:hover {
           background: color-mix(in oklch, var(--color-base-content) 8%, transparent) !important;
           color: var(--accent) !important;
+          text-decoration: none !important;
         }
         @media (max-width: 767px) {
           .wurk-nav {
