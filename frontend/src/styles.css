@@ -351,6 +351,15 @@ tbody tr:last-child td {
   display: none;
 }
 
+/* The shell is a flex row (nav + main). A flex item defaults to min-width:auto,
+   which refuses to shrink below its content's intrinsic width — so a table wider
+   than the viewport blew the whole page out and scrolled the page horizontally.
+   min-width:0 lets `.main-content` shrink to the available space, which in turn
+   lets each `.table-wrapper`'s own `overflow:auto` take the horizontal scroll. */
+.main-content {
+  min-width: 0;
+}
+
 @media (max-width: 767px) {
   .hamburger {
     display: block;
@@ -373,6 +382,26 @@ tbody tr:last-child td {
 
   .table-wrapper {
     max-height: calc(100vh - 10rem);
+  }
+
+  /* Freeze the identifier (first) column so it stays on-screen while the rest
+     of a wide row scrolls horizontally inside the wrapper. The pinned column is
+     solid (drops the zebra stripe under it) with a hairline edge marking the
+     frozen boundary — the standard frozen-pane affordance. Header corner sits
+     on top of both the sticky header row and the sticky column. */
+  .table-wrapper th:first-child,
+  .table-wrapper td:first-child {
+    position: sticky;
+    left: 0;
+    background: var(--surface);
+    box-shadow: 1px 0 0 var(--border);
+  }
+  .table-wrapper td:first-child {
+    z-index: 2;
+  }
+  .table-wrapper th:first-child {
+    z-index: 3;
+    background: var(--surface-strong);
   }
 
   /* Comfortable tap targets for pager controls. */
