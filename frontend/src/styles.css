@@ -76,6 +76,9 @@ body {
   line-height: 1.5;
   -webkit-font-smoothing: antialiased;
   text-rendering: optimizeLegibility;
+  /* Kill the mobile tap-highlight flash (shows as a coloured box on tapped
+     links/rows — e.g. the red flash on nav items on Android). */
+  -webkit-tap-highlight-color: transparent;
 }
 
 a {

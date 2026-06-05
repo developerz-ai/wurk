@@ -1,6 +1,7 @@
 import { useQuery } from '@tanstack/react-query';
 import { useState, useEffect } from 'react';
 import { Pagination } from '../components/Pagination';
+import { ArgsValue } from '../components/ArgsValue';
 import { SortableTh } from '../components/SortableTh';
 import { useSort, type Accessors } from '../hooks/useSort';
 import { usePageParam } from '../hooks/usePageParam';
@@ -88,7 +89,7 @@ export default function Scheduled() {
                         {truncate(entry.jid, 12)}
                       </td>
                       <td style={{ fontWeight: 500 }}>{entry.klass}</td>
-                      <td title={argsStr}>{truncate(argsStr, 60)}</td>
+                      <td><ArgsValue str={argsStr} max={60} /></td>
                       <td title={isoTime(entry.at)}>
                         {relativeTime(entry.at)}
                       </td>

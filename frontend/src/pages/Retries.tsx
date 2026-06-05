@@ -1,6 +1,7 @@
 import { useQuery } from '@tanstack/react-query';
 import { useState, useEffect } from 'react';
 import { Pagination } from '../components/Pagination';
+import { ArgsValue } from '../components/ArgsValue';
 import { t } from '../i18n';
 import { PageHeader } from '../components/PageHeader';
 import { relativeTime, truncate, formatArgs, isoTime } from '../utils';
@@ -91,7 +92,7 @@ export default function Retries() {
                   return (
                     <tr key={entry.jid} className="row-clickable" onClick={() => setSelected(entry)}>
                       <td style={{ fontWeight: 500 }}>{entry.klass}</td>
-                      <td title={argsStr}>{truncate(argsStr, 40)}</td>
+                      <td><ArgsValue str={argsStr} max={40} /></td>
                       <td title={entry.error_class} style={{ color: 'var(--danger)' }}>
                         {truncate(entry.error_class, 30)}
                       </td>
