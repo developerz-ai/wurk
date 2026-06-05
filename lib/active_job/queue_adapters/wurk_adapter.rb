@@ -89,6 +89,41 @@ begin
           Sidekiq::Client.push_bulk(items).compact.size
         end
       end
+
+      # Drop-in: a migrating app's config almost always still reads
+      # `queue_adapter = :sidekiq`, and pillar 1 says it must keep working on a
+      # one-line gem swap. Rails resolves `:sidekiq` by const_get'ing
+      # `SidekiqAdapter`, whose autoload target runs `gem "sidekiq"; require
+      # "sidekiq"` (activejob .../sidekiq_adapter.rb:3-4) — that raises at boot
+      # in a wurk-only app where no real sidekiq gem exists.
+      #
+      # When sidekiq is genuinely absent we pre-empt the autoload with a
+      # Wurk-backed adapter (a bare subclass — same enqueue path, same canonical
+      # wrapper payload, shared `@@stopping`, inherited `JobWrapper`). When the
+      # real sidekiq gem IS bundled (mixed mid-migration) we leave its adapter
+      # untouched so a genuine install is never clobbered.
+      #
+      # `gem "sidekiq"` activates without requiring; Bundler raises Gem::LoadError
+      # (or Gem::MissingSpecError, a subclass) when it's not in the bundle. The
+      # inline rescue keeps that probe from escaping to the outer handler.
+      sidekiq_gem_present =
+        begin
+          gem 'sidekiq'
+          true
+        rescue Gem::LoadError
+          false
+        end
+
+      unless sidekiq_gem_present
+        # remove_const drops Rails' pending autoload without firing it, so the
+        # `class` keyword below then defines fresh and never triggers the
+        # `require "sidekiq"`. Same remove-then-define dance as WurkAdapter.
+        remove_const(:SidekiqAdapter) if const_defined?(:SidekiqAdapter, false)
+
+        # Bare subclass: inherits the whole enqueue path, the shared @@stopping
+        # flag, and the JobWrapper constant from WurkAdapter unchanged.
+        class SidekiqAdapter < WurkAdapter; end
+      end
     end
   end
 rescue Gem::LoadError

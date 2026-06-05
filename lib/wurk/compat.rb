@@ -103,6 +103,7 @@ module Sidekiq
   Scheduled        = Wurk::Scheduled
   ScheduledSet     = Wurk::ScheduledSet
   Shutdown         = Wurk::Shutdown
+  SortedEntry      = Wurk::SortedEntry
   Stats            = Wurk::Stats
   Testing          = Wurk::Testing
   Queues           = Wurk::Queues
