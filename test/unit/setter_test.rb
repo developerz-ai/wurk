@@ -22,7 +22,7 @@ class SetterTest < Wurk::Test::UnitCase
         'pushed-jid'
       end
 
-      def build_client
+      def build_client(_pool = nil)
         client = Object.new
         captured = self
         client.define_singleton_method(:push_bulk) do |hash|

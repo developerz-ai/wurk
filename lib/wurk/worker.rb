@@ -117,11 +117,14 @@ module Wurk
       def client_push(item)
         raise ArgumentError, "Job arguments to #{name || self} must have string keys" if symbol_keyed?(item)
 
-        build_client.push(item)
+        # `pool` is a transient enqueue-time attribute: a per-call `set(pool:)`
+        # overrides the class-level option, then it's deleted so it never reaches
+        # the wire (normalize_item strips any class-level pool re-merged below).
+        pool = item.delete('pool') || get_sidekiq_options['pool']
+        build_client(pool).push(item)
       end
 
-      def build_client
-        pool = get_sidekiq_options['pool']
+      def build_client(pool = get_sidekiq_options['pool'])
         Wurk::Client.new(pool: pool)
       end
 

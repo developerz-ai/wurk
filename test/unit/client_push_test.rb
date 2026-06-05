@@ -57,6 +57,14 @@ class ClientPushTest < Wurk::Test::UnitCase
   end
   # rubocop:enable Minitest/MultipleAssertions
 
+  # `pool` is a transient enqueue-time attribute (spec §2.2) — it selects the
+  # Redis pool but must never reach the wire. Issue #95.
+  def test_push_strips_transient_pool_from_payload
+    @client.push(base_item('pool' => 'some-pool'))
+
+    refute first_queued.key?('pool'), 'pool must be stripped before push'
+  end
+
   def test_push_stamps_ms_created_at_in_range
     before = ms_now
     @client.push(base_item)
