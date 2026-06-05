@@ -198,6 +198,10 @@ class CompatAliasesTest < Wurk::Test::UnitCase
     assert_same Wurk::Shutdown, Sidekiq::Shutdown
   end
 
+  def test_sorted_entry_alias
+    assert_same Wurk::SortedEntry, Sidekiq::SortedEntry
+  end
+
   def test_stats_alias
     assert_same Wurk::Stats, Sidekiq::Stats
   end

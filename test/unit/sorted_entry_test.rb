@@ -70,6 +70,25 @@ class SortedEntryTest < Wurk::Test::UnitCase
     refute_predicate entry, :error?
   end
 
+  # --- Sidekiq::SortedEntry drop-in alias --------------------------------
+
+  # The class iterated out of RetrySet/ScheduledSet/DeadSet must answer to the
+  # public Sidekiq name — third-party gems and dashboard code branch on
+  # `entry.is_a?(Sidekiq::SortedEntry)`. See issue #105.
+  def test_entries_from_each_sorted_set_are_sidekiq_sorted_entry
+    [Wurk::RetrySet, Wurk::ScheduledSet, Wurk::DeadSet].each do |klass|
+      name = "#{klass.name.split('::').last.downcase}-#{@ns}"
+      set  = klass.new(name)
+      @pool.with { |c| c.call('ZADD', name, 100.0, Wurk.dump_json(base_item)) }
+
+      entry = set.first
+
+      assert_kind_of Sidekiq::SortedEntry, entry, "#{klass} entry is not a Sidekiq::SortedEntry"
+    ensure
+      @pool.with { |c| c.call('UNLINK', name) }
+    end
+  end
+
   # --- delete ------------------------------------------------------------
 
   def test_delete_via_value_removes_from_parent
