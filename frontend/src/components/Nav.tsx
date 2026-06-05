@@ -114,6 +114,31 @@ export default function Nav({ open, onClose }: NavProps) {
             </li>
           ))}
         </ul>
+
+        {/* Footer: link out to the source repo. Pinned to the bottom because the
+            nav list above is flex:1. Muted by default; hover lifts like a nav item. */}
+        <div style={{ height: 1, background: 'var(--border)', margin: '0.5rem 1rem' }} />
+        <a
+          href="https://github.com/developerz-ai/wurk"
+          target="_blank"
+          rel="noopener noreferrer"
+          className="wurk-navlink"
+          style={{
+            display: 'flex',
+            alignItems: 'center',
+            gap: '0.625rem',
+            padding: '0.5rem 0.85rem',
+            margin: '2px 8px 0.85rem',
+            borderRadius: 8,
+            color: 'var(--text-muted)',
+            fontSize: 13,
+            textDecoration: 'none',
+            transition: 'background 0.15s, color 0.15s',
+          }}
+        >
+          <i className="fa-brands fa-github" style={{ fontSize: 16, width: 20, textAlign: 'center' }} />
+          <span>GitHub</span>
+        </a>
       </nav>
 
       <style>{`
