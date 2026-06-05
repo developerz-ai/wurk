@@ -194,7 +194,105 @@ class MiddlewarePoisonPillTest < Wurk::Test::UnitCase
     assert_raises(ArgumentError) { Wurk::Middleware::PoisonPill.on_poison }
   end
 
+  # --- super_fetch! recovery callback (Pro §3.1: |jobstr, pill|) -----------
+
+  def test_super_fetch_callback_fires_with_job_string_and_nil_pill_on_recovery
+    recorded = []
+    cfg = recovery_config { |jobstr, pill| recorded << [jobstr, pill] }
+    json = payload_json
+
+    Wurk::Middleware::PoisonPill.track!(json, queue: @queue, config: cfg)
+
+    assert_equal [[json, nil]], recorded, 'a non-poison recovery passes the raw jobstr and pill=nil'
+  end
+
+  # Even a payload that can't be parsed is still a recovery — the block fires
+  # once with the raw string and no pill (the `unless job` branch in track!).
+  def test_super_fetch_callback_fires_for_unparseable_payload
+    recorded = []
+    cfg = recovery_config { |jobstr, pill| recorded << [jobstr, pill] }
+
+    Wurk::Middleware::PoisonPill.track!('not-json{{', queue: @queue, config: cfg)
+
+    assert_equal [['not-json{{', nil]], recorded
+  end
+
+  # rubocop:disable Minitest/MultipleAssertions, Metrics/AbcSize
+  def test_super_fetch_callback_receives_pill_on_poison_kill
+    recorded = []
+    cfg = recovery_config { |jobstr, pill| recorded << [jobstr, pill] }
+    json = payload_json
+    3.times { Wurk::Middleware::PoisonPill.track!(json, queue: @queue, config: cfg) }
+
+    assert_equal 3, recorded.size, 'the block fires once per recovery'
+    assert(recorded[0..1].all? { |_, pill| pill.nil? }, 'sub-threshold recoveries carry no pill')
+
+    jobstr, pill = recorded.last
+
+    assert_equal json, jobstr
+    assert_equal @jid, pill.jid
+    assert_equal 'PoisonPillTestJob', pill.klass
+    assert_equal 3, pill.count
+    assert_equal @queue, pill.queue
+  end
+  # rubocop:enable Minitest/MultipleAssertions, Metrics/AbcSize
+
+  # The two-arg super_fetch block and the legacy on_poison Hash callback are
+  # independent registries; both must fire on a poison kill.
+  def test_super_fetch_and_on_poison_both_fire_on_poison
+    super_pill = nil
+    on_poison_hash = nil
+    cfg = recovery_config { |_jobstr, pill| super_pill = pill }
+    Wurk::Middleware::PoisonPill.on_poison { |h| on_poison_hash = h }
+    json = payload_json
+
+    3.times { Wurk::Middleware::PoisonPill.track!(json, queue: @queue, config: cfg) }
+
+    assert_equal @jid, super_pill&.jid, 'super_fetch block saw the pill'
+    assert_equal @jid, on_poison_hash&.[](:jid), 'legacy on_poison Hash still fires'
+  end
+
+  def test_super_fetch_callback_errors_are_swallowed
+    cfg = recovery_config { |_jobstr, _pill| raise 'boom' }
+
+    assert_silent do
+      Wurk::Middleware::PoisonPill.track!(payload_json, queue: @queue, config: cfg)
+    end
+  end
+
+  # A pre-parsed Hash payload is serialized back to a job string for the block,
+  # so the callback always sees a String regardless of how track! was called.
+  def test_super_fetch_callback_serializes_hash_payload_to_job_string
+    recorded = []
+    cfg = recovery_config { |jobstr, _pill| recorded << jobstr }
+    hash = { 'jid' => @jid, 'class' => 'X' }
+
+    Wurk::Middleware::PoisonPill.track!(hash, queue: @queue, config: cfg)
+
+    assert_equal [Wurk.dump_json(hash)], recorded
+  end
+
+  # A blank jid is a plain recovery — no counter bump, never poison — and still
+  # fires the block once with pill=nil.
+  def test_super_fetch_callback_treats_blank_jid_as_plain_recovery
+    recorded = []
+    cfg = recovery_config { |_jobstr, pill| recorded << pill }
+
+    Wurk::Middleware::PoisonPill.track!({ 'jid' => '', 'class' => 'X' }, queue: @queue, config: cfg)
+
+    assert_equal [nil], recorded
+  end
+
   private
+
+  # A throwaway config carrying only the recovery block + a NULL logger, so a
+  # swallowed callback error reports silently. track! still uses global Redis.
+  def recovery_config(&)
+    cfg = Wurk::Configuration.new
+    cfg.logger = ::Logger.new(IO::NULL)
+    cfg.super_fetch!(&)
+    cfg
+  end
 
   def payload_json(extra = {})
     Wurk.dump_json({
