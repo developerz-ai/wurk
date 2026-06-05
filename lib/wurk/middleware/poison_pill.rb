@@ -29,6 +29,12 @@ module Wurk
       KEY_PREFIX = 'super_fetch:recovered:'
       DEAD_RECORD_LIMIT = 100
 
+      # The `pill` handed to a Pro `super_fetch! { |jobstr, pill| }` recovery
+      # callback on the kill path. Responds to .jid/.klass/.count/.queue so a
+      # `pill.jid`-style Pro initializer drops in. `.count` shadows Struct#count
+      # by design — Pro's API names it that. Spec: sidekiq-pro.md §3.1.
+      Pill = ::Struct.new(:jid, :klass, :count, :queue, keyword_init: true) # rubocop:disable Lint/StructNewOverride
+
       module_function
 
       # Called per recovered orphan job. Returns `:poison` when the threshold
@@ -37,23 +43,34 @@ module Wurk
       # here). Emits `jobs.recovered.fetch` on every call, `jobs.poison`
       # only on the kill path.
       #
+      # Fires the Pro `super_fetch!` recovery callback (config.super_fetch_callback)
+      # exactly once per call: `(jobstr, nil)` on plain recovery, `(jobstr, pill)`
+      # on the kill path. The poison-only `on_poison` Hash callbacks fire
+      # independently inside #mark_poison.
+      #
       # @param payload [String, Hash] the job JSON or pre-parsed hash.
       # @param queue   [String, nil] the public queue name (without `queue:`).
+      # @param config  [Configuration] config that owns the super_fetch! callback;
+      #   defaults to the global so non-reaper callers (tests) need not pass it.
       # @return [Symbol] :recovered | :poison
-      def track!(payload, queue: nil)
+      def track!(payload, queue: nil, config: Wurk.configuration)
         job = parse(payload)
-        return :recovered unless job
+        unless job
+          fire_super_fetch(config, payload, nil)
+          return :recovered
+        end
 
         jid = job['jid']
         klass = job['class']
         emit_recovered_fetch(klass, queue)
-        return :recovered if jid.nil? || jid.empty?
 
-        count = bump_counter(jid)
-        if count >= RECOVERY_THRESHOLD
+        count = bump_counter(jid) if jid && !jid.empty?
+        if count && count >= RECOVERY_THRESHOLD
           mark_poison(payload, job, queue: queue, count: count)
+          fire_super_fetch(config, payload, Pill.new(jid: jid, klass: klass, count: count, queue: queue))
           :poison
         else
+          fire_super_fetch(config, payload, nil)
           :recovered
         end
       end
@@ -143,6 +160,19 @@ module Wurk
         rescue StandardError => e
           Wurk.configuration.handle_exception(e, context: 'Wurk::Middleware::PoisonPill')
         end
+      end
+
+      # Invoke the Pro recovery callback registered via config.super_fetch! { }.
+      # No-op unless one is registered. `jobstr` is the raw job JSON so a Pro
+      # `|jobstr, pill|` block sees exactly what Sidekiq Pro hands it.
+      def fire_super_fetch(config, payload, pill)
+        cb = config.super_fetch_callback
+        return unless cb
+
+        jobstr = payload.is_a?(::String) ? payload : Wurk.dump_json(payload)
+        cb.call(jobstr, pill)
+      rescue StandardError => e
+        config.handle_exception(e, context: 'Wurk::Middleware::PoisonPill')
       end
     end
   end
