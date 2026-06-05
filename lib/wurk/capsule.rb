@@ -121,6 +121,12 @@ module Wurk
       @config.lookup(name)
     end
 
+    # Empty-poll BLMOVE backoff for this capsule's reliable fetcher (Pro
+    # super_fetch §3.3). nil → the fetcher falls back to its TIMEOUT default.
+    def fetch_poll_interval
+      @config[:fetch_poll_interval]
+    end
+
     def logger
       @config.logger
     end

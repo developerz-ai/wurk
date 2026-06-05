@@ -204,6 +204,19 @@ module Wurk
       @options[:average_scheduled_poll_interval] = interval
     end
 
+    # Reliable-fetch empty-poll backoff: the BLMOVE block timeout (seconds)
+    # used when every served queue is empty. Pro super_fetch §3.3's
+    # `fetch_poll_interval` knob. Unset (nil) → the fetcher's default
+    # (Wurk::Fetcher::Reliable::TIMEOUT, 2s). Also readable as
+    # `config[:fetch_poll_interval]`.
+    def fetch_poll_interval=(seconds)
+      @options[:fetch_poll_interval] = seconds
+    end
+
+    def fetch_poll_interval
+      @options[:fetch_poll_interval]
+    end
+
     # --- Reliability (Sidekiq Pro drop-in no-ops) ------------------------
 
     # Sidekiq Pro's opt-in toggles for reliable fetch and the reliable

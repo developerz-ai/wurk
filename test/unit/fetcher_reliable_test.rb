@@ -171,7 +171,42 @@ class FetcherReliableTest < Wurk::Test::UnitCase
     end
   end
 
+  # --- fetch_poll_interval (Pro super_fetch §3.3) -----------------------
+
+  # An empty poll blocks on BLMOVE for TIMEOUT (2s) by default.
+  def test_blmove_block_timeout_defaults_to_timeout
+    args = captured_blmove_args
+    @fetcher.send(:blmove, @public_queue)
+    t = Wurk::Fetcher::Reliable::TIMEOUT
+
+    assert_equal [t + 1, 'BLMOVE', @public_queue, private_queue, 'RIGHT', 'LEFT', t], args
+  end
+
+  # config.fetch_poll_interval overrides the block timeout (and the socket
+  # read-timeout stays one second past it).
+  def test_blmove_honors_config_fetch_poll_interval
+    @config.fetch_poll_interval = 0.25
+    args = captured_blmove_args
+    @fetcher.send(:blmove, @public_queue)
+
+    assert_equal [1.25, 'BLMOVE', @public_queue, private_queue, 'RIGHT', 'LEFT', 0.25], args
+  end
+
   private
+
+  # Stub the capsule's Redis so blmove's BLMOVE timeout args can be captured
+  # without actually blocking on a real empty queue. Returns the array the
+  # recorded `blocking_call` writes its arguments into.
+  def captured_blmove_args
+    box = []
+    conn = Object.new
+    conn.define_singleton_method(:blocking_call) do |*a|
+      box.replace(a)
+      nil
+    end
+    @capsule.define_singleton_method(:redis) { |&blk| blk.call(conn) }
+    box
+  end
 
   def private_queue
     Wurk::Fetcher::Reliable.private_queue_name(@public_queue)
