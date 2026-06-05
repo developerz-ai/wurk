@@ -15,15 +15,18 @@ module Wurk
     # next boot of this process reclaims it via bulk_requeue.
     #
     # Priority handling: iterate queues_cmd in order with non-blocking
-    # LMOVE, then fall back to a 2s BLMOVE on the first queue so an
+    # LMOVE, then fall back to a blocking BLMOVE on the first queue so an
     # empty poll doesn't spin Redis. BLMOVE has no multi-key form, so
-    # blocking on a single queue is the best Redis gives us.
+    # blocking on a single queue is the best Redis gives us. The block
+    # timeout defaults to TIMEOUT (2s) and is overridable per the Pro
+    # super_fetch §3.3 `config.fetch_poll_interval` knob.
     #
-    # Spec: docs/target/sidekiq-pro.md §3 (super_fetch),
+    # Spec: docs/target/sidekiq-pro.md §3 (super_fetch, §3.3 poll interval),
     # docs/target/sidekiq-free.md §15 (TIMEOUT=2).
     class Reliable < Fetcher
       include Component
 
+      # Default BLMOVE block timeout; overridable via config.fetch_poll_interval.
       TIMEOUT = 2
 
       # Carries the public queue key, the raw (still-JSON) job payload,
@@ -126,12 +129,19 @@ module Wurk
 
       def blmove(public_q)
         priv = self.class.private_queue_name(public_q)
+        timeout = poll_interval
         # Extend the socket read-timeout past BLMOVE's own timeout so the
         # default 1s pool timeout doesn't fire before BLMOVE returns.
         job = config.redis do |conn|
-          conn.blocking_call(TIMEOUT + 1, 'BLMOVE', public_q, priv, 'RIGHT', 'LEFT', TIMEOUT)
+          conn.blocking_call(timeout + 1, 'BLMOVE', public_q, priv, 'RIGHT', 'LEFT', timeout)
         end
         job ? UnitOfWork.new(queue: public_q, job: job, config: config) : nil
+      end
+
+      # BLMOVE block timeout for an empty poll. `config.fetch_poll_interval`
+      # (Pro super_fetch §3.3) overrides the TIMEOUT default; nil → TIMEOUT.
+      def poll_interval
+        config.fetch_poll_interval || TIMEOUT
       end
     end
   end
