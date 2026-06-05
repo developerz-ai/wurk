@@ -304,6 +304,18 @@ class ConfigurationTest < Wurk::Test::UnitCase
     assert_nil @config.reliable_scheduler!
   end
 
+  # Pro super_fetch §3.3: the fetch-poll backoff knob. Unset → nil (the fetcher
+  # falls back to its TIMEOUT default); settable via the accessor and readable
+  # via the [] options hash.
+  def test_fetch_poll_interval_accessor
+    assert_nil @config.fetch_poll_interval
+
+    @config.fetch_poll_interval = 0.5
+
+    assert_in_delta 0.5, @config.fetch_poll_interval, 1e-9
+    assert_in_delta 0.5, @config[:fetch_poll_interval], 1e-9
+  end
+
   def test_error_handlers_appends
     handler = ->(_ex, _ctx, _cfg) {}
     @config.error_handlers << handler
