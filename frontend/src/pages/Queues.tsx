@@ -63,7 +63,7 @@ function QueueJobs({ name }: { name: string }) {
   if (isError || !data) return <div className="empty-state" style={{ color: 'var(--danger)' }}>{t('common.error')}</div>;
 
   return (
-    <div>
+    <div className="qjobs">
       <div style={{ display: 'flex', alignItems: 'center', gap: '0.75rem', marginBottom: '1rem' }}>
         <span style={{ color: 'var(--text-muted)', fontSize: 13 }}>
           {data.size.toLocaleString()} jobs · latency {data.latency.toFixed(3)}s

@@ -633,6 +633,45 @@ tbody tr:last-child td {
   border-top: 1px solid var(--border);
 }
 
+/* Pager shown under list tables (pages) and inside the queue-jobs modal. */
+.pagination {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 0.75rem;
+  padding: 0.75rem 0;
+  color: var(--text-muted);
+  font-size: 13px;
+}
+
+/* In a modal the whole body used to scroll, so the pager sat at the very bottom
+   and you had to scroll the entire table to reach Prev/Next. Instead, lay the
+   jobs list out as a flex column that fills the modal body: the table flexes and
+   scrolls in the middle (its own card scroll, as on a page) while the pager stays
+   a fixed footer bar — Prev/Next are always reachable. */
+.modal-body:has(.qjobs) {
+  display: flex;
+  flex-direction: column;
+}
+.qjobs {
+  display: flex;
+  flex-direction: column;
+  flex: 1;
+  min-height: 0;
+}
+.qjobs .table-wrapper {
+  flex: 1;
+  min-height: 0;
+  max-height: none;
+}
+.qjobs .pagination {
+  flex: 0 0 auto;
+  margin: 0.4rem -1.1rem -1.1rem;
+  padding: 0.65rem 1.1rem;
+  border-top: 1px solid var(--border);
+  background: var(--surface);
+}
+
 .job-backtrace {
   margin: 0;
   font-size: 12px;
