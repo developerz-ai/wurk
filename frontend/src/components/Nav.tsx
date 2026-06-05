@@ -1,4 +1,4 @@
-import { NavLink } from 'react-router-dom';
+import { NavLink, Link } from 'react-router-dom';
 import { t } from '../i18n';
 import logoUrl from '../assets/wurk-logo.png';
 
@@ -56,12 +56,16 @@ export default function Nav({ open, onClose }: NavProps) {
         }}
       >
         <div style={{ padding: '1.25rem 1rem 0.75rem' }}>
-          <span
+          <Link
+            to="/"
+            onClick={onClose}
+            aria-label="Wurk — dashboard home"
             style={{
               fontSize: 20,
               fontWeight: 800,
               letterSpacing: '-0.03em',
               color: 'var(--text)',
+              textDecoration: 'none',
               display: 'flex',
               alignItems: 'center',
               gap: '0.55rem',
@@ -73,7 +77,7 @@ export default function Nav({ open, onClose }: NavProps) {
               style={{ height: 48, width: 'auto', display: 'block', filter: 'drop-shadow(0 2px 6px rgba(0,0,0,0.45))' }}
             />
             Wurk
-          </span>
+          </Link>
         </div>
 
         <div style={{ height: 1, background: 'var(--border)', margin: '0 1rem 0.5rem' }} />
