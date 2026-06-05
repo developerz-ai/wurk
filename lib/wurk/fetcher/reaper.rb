@@ -219,7 +219,7 @@ module Wurk
       end
 
       def poison_off(public_q, job, queue_name)
-        return unless Middleware::PoisonPill.track!(job, queue: queue_name) == :poison
+        return unless Middleware::PoisonPill.track!(job, queue: queue_name, config: @config) == :poison
 
         # track! already ZADDed the payload to the dead set; pull the copy we
         # just LMOVE'd onto the public tail so it isn't also re-run.
