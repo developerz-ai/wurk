@@ -1,6 +1,7 @@
 import { useQuery } from '@tanstack/react-query';
 import { useState, useEffect } from 'react';
 import { Pagination } from '../components/Pagination';
+import { ArgsValue } from '../components/ArgsValue';
 import { SortableTh } from '../components/SortableTh';
 import { useSort, type Accessors } from '../hooks/useSort';
 import { usePageParam } from '../hooks/usePageParam';
@@ -63,7 +64,7 @@ function QueueJobs({ name }: { name: string }) {
   if (isError || !data) return <div className="empty-state" style={{ color: 'var(--danger)' }}>{t('common.error')}</div>;
 
   return (
-    <div>
+    <div className="qjobs">
       <div style={{ display: 'flex', alignItems: 'center', gap: '0.75rem', marginBottom: '1rem' }}>
         <span style={{ color: 'var(--text-muted)', fontSize: 13 }}>
           {data.size.toLocaleString()} jobs · latency {data.latency.toFixed(3)}s
@@ -98,7 +99,7 @@ function QueueJobs({ name }: { name: string }) {
                         {truncate(job.jid, 12)}
                       </td>
                       <td style={{ fontWeight: 500 }}>{job.class}</td>
-                      <td title={argsStr}>{truncate(argsStr, 60)}</td>
+                      <td><ArgsValue str={argsStr} max={60} /></td>
                       <td>{relativeTime(job.enqueued_at)}</td>
                     </tr>
                   );

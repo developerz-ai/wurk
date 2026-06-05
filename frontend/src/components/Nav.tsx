@@ -1,4 +1,4 @@
-import { NavLink } from 'react-router-dom';
+import { NavLink, Link } from 'react-router-dom';
 import { t } from '../i18n';
 import logoUrl from '../assets/wurk-logo.png';
 
@@ -56,12 +56,16 @@ export default function Nav({ open, onClose }: NavProps) {
         }}
       >
         <div style={{ padding: '1.25rem 1rem 0.75rem' }}>
-          <span
+          <Link
+            to="/"
+            onClick={onClose}
+            aria-label="Wurk — dashboard home"
             style={{
               fontSize: 20,
               fontWeight: 800,
               letterSpacing: '-0.03em',
               color: 'var(--text)',
+              textDecoration: 'none',
               display: 'flex',
               alignItems: 'center',
               gap: '0.55rem',
@@ -73,7 +77,7 @@ export default function Nav({ open, onClose }: NavProps) {
               style={{ height: 48, width: 'auto', display: 'block', filter: 'drop-shadow(0 2px 6px rgba(0,0,0,0.45))' }}
             />
             Wurk
-          </span>
+          </Link>
         </div>
 
         <div style={{ height: 1, background: 'var(--border)', margin: '0 1rem 0.5rem' }} />
@@ -93,11 +97,11 @@ export default function Nav({ open, onClose }: NavProps) {
                   padding: '0.5rem 0.85rem',
                   borderRadius: 8,
                   margin: '2px 8px',
+                  // Text stays white for every item; the active one is marked by
+                  // a subtle dark raised pill + hairline, not a bright white box.
                   color: isActive ? 'var(--accent)' : 'var(--text)',
-                  background: isActive ? 'var(--accent-soft)' : 'transparent',
-                  boxShadow: isActive
-                    ? 'inset 0 0 0 1px color-mix(in oklch, var(--accent) 30%, transparent)'
-                    : 'none',
+                  background: isActive ? 'var(--surface-strong)' : 'transparent',
+                  boxShadow: isActive ? 'inset 0 0 0 1px var(--border)' : 'none',
                   fontWeight: isActive ? 600 : 400,
                   fontSize: 14,
                   textDecoration: 'none',
@@ -114,7 +118,7 @@ export default function Nav({ open, onClose }: NavProps) {
 
       <style>{`
         .wurk-navlink:hover {
-          background: color-mix(in oklch, var(--color-base-content) 8%, transparent) !important;
+          background: var(--surface-hover) !important;
           color: var(--accent) !important;
           text-decoration: none !important;
         }

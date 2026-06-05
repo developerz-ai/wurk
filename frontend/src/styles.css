@@ -76,6 +76,9 @@ body {
   line-height: 1.5;
   -webkit-font-smoothing: antialiased;
   text-rendering: optimizeLegibility;
+  /* Kill the mobile tap-highlight flash (shows as a coloured box on tapped
+     links/rows — e.g. the red flash on nav items on Android). */
+  -webkit-tap-highlight-color: transparent;
 }
 
 a {
@@ -351,6 +354,15 @@ tbody tr:last-child td {
   display: none;
 }
 
+/* The shell is a flex row (nav + main). A flex item defaults to min-width:auto,
+   which refuses to shrink below its content's intrinsic width — so a table wider
+   than the viewport blew the whole page out and scrolled the page horizontally.
+   min-width:0 lets `.main-content` shrink to the available space, which in turn
+   lets each `.table-wrapper`'s own `overflow:auto` take the horizontal scroll. */
+.main-content {
+  min-width: 0;
+}
+
 @media (max-width: 767px) {
   .hamburger {
     display: block;
@@ -373,6 +385,26 @@ tbody tr:last-child td {
 
   .table-wrapper {
     max-height: calc(100vh - 10rem);
+  }
+
+  /* Freeze the identifier (first) column so it stays on-screen while the rest
+     of a wide row scrolls horizontally inside the wrapper. The pinned column is
+     solid (drops the zebra stripe under it) with a hairline edge marking the
+     frozen boundary — the standard frozen-pane affordance. Header corner sits
+     on top of both the sticky header row and the sticky column. */
+  .table-wrapper th:first-child,
+  .table-wrapper td:first-child {
+    position: sticky;
+    left: 0;
+    background: var(--surface);
+    box-shadow: 1px 0 0 var(--border);
+  }
+  .table-wrapper td:first-child {
+    z-index: 2;
+  }
+  .table-wrapper th:first-child {
+    z-index: 3;
+    background: var(--surface-strong);
   }
 
   /* Comfortable tap targets for pager controls. */
@@ -602,6 +634,45 @@ tbody tr:last-child td {
   gap: 0.5rem;
   padding: 0.8rem 1.1rem;
   border-top: 1px solid var(--border);
+}
+
+/* Pager shown under list tables (pages) and inside the queue-jobs modal. */
+.pagination {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 0.75rem;
+  padding: 0.75rem 0;
+  color: var(--text-muted);
+  font-size: 13px;
+}
+
+/* In a modal the whole body used to scroll, so the pager sat at the very bottom
+   and you had to scroll the entire table to reach Prev/Next. Instead, lay the
+   jobs list out as a flex column that fills the modal body: the table flexes and
+   scrolls in the middle (its own card scroll, as on a page) while the pager stays
+   a fixed footer bar — Prev/Next are always reachable. */
+.modal-body:has(.qjobs) {
+  display: flex;
+  flex-direction: column;
+}
+.qjobs {
+  display: flex;
+  flex-direction: column;
+  flex: 1;
+  min-height: 0;
+}
+.qjobs .table-wrapper {
+  flex: 1;
+  min-height: 0;
+  max-height: none;
+}
+.qjobs .pagination {
+  flex: 0 0 auto;
+  margin: 0.4rem -1.1rem -1.1rem;
+  padding: 0.65rem 1.1rem;
+  border-top: 1px solid var(--border);
+  background: var(--surface);
 }
 
 .job-backtrace {

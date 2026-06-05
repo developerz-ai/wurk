@@ -11,17 +11,7 @@ export function Pagination({ page, total, count, onChange }: PaginationProps) {
   const totalPages = Math.max(1, Math.ceil(total / count));
 
   return (
-    <div
-      style={{
-        display: 'flex',
-        alignItems: 'center',
-        gap: '0.75rem',
-        padding: '0.75rem 0',
-        justifyContent: 'flex-end',
-        color: 'var(--text-muted)',
-        fontSize: 13,
-      }}
-    >
+    <div className="pagination">
       <button
         className="btn"
         disabled={page <= 1}

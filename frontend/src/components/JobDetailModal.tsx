@@ -61,7 +61,11 @@ export default function JobDetailModal({ entry, atLabel, onClose }: JobDetailMod
           </div>
 
           <Field label={t('job.args')} mono>
-            <pre style={{ margin: 0, whiteSpace: 'pre-wrap', wordBreak: 'break-word' }}>{formatArgs(entry.args)}</pre>
+            {formatArgs(entry.args) === '[]' || formatArgs(entry.args) === '' ? (
+              <span style={{ color: 'var(--text-muted)' }}>—</span>
+            ) : (
+              <pre style={{ margin: 0, whiteSpace: 'pre-wrap', wordBreak: 'break-word' }}>{formatArgs(entry.args)}</pre>
+            )}
           </Field>
 
           {(entry.error_class || entry.error_message) && (

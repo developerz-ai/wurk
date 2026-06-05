@@ -1,6 +1,7 @@
 import { useQuery } from '@tanstack/react-query';
 import { useState, useEffect } from 'react';
 import { Pagination } from '../components/Pagination';
+import { ArgsValue } from '../components/ArgsValue';
 import { SortableTh } from '../components/SortableTh';
 import { useSort, type Accessors } from '../hooks/useSort';
 import { usePageParam } from '../hooks/usePageParam';
@@ -96,7 +97,7 @@ export default function Dead() {
                         {truncate(entry.jid, 12)}
                       </td>
                       <td style={{ fontWeight: 500 }}>{entry.klass}</td>
-                      <td title={argsStr}>{truncate(argsStr, 40)}</td>
+                      <td><ArgsValue str={argsStr} max={40} /></td>
                       <td title={entry.error_class} style={{ color: 'var(--danger)' }}>
                         {truncate(entry.error_class, 25)}
                       </td>
