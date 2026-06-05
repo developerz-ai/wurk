@@ -1,6 +1,7 @@
 # frozen_string_literal: true
 
 require_relative 'worker'
+require_relative 'worker/setter'
 
 module Wurk
   # Sidekiq 7+ alias for Wurk::Worker. `include Wurk::Job` and
@@ -19,6 +20,13 @@ module Wurk
     #
     # Spec: docs/target/sidekiq-free.md §6.4.
     class Interrupted < RuntimeError; end
+
+    # Per-call option carrier returned by `set(...)`. Sidekiq 7+ documents it
+    # under the modern mixin name `Sidekiq::Job::Setter`; since
+    # `Sidekiq::Job = Wurk::Job`, this rebind is what makes that constant
+    # resolve (without it `Sidekiq::Job::Setter` raises NameError). Same class
+    # as `Sidekiq::Worker::Setter`. Spec: docs/target/sidekiq-free.md §6.3.
+    Setter = Wurk::Worker::Setter
 
     def self.included(base)
       base.include(Wurk::Worker)
