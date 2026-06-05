@@ -61,6 +61,12 @@ class SetterTest < Wurk::Test::UnitCase
     assert_same setter, setter.set(retry: 1)
   end
 
+  # Drop-in: code that does `set(...).is_a?(Sidekiq::Job::Setter)` must work.
+  # The constant resolves through the modern `Sidekiq::Job` namespace. Issue #96.
+  def test_set_result_is_a_sidekiq_job_setter
+    assert_kind_of Sidekiq::Job::Setter, SpyWorker.set(queue: 'x')
+  end
+
   def test_set_merges_subsequent_options
     SpyWorker.set(queue: 'a').set(retry: 9).perform_async('x')
 

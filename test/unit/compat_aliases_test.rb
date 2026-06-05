@@ -114,6 +114,14 @@ class CompatAliasesTest < Wurk::Test::UnitCase
     assert_same Wurk::Job, Sidekiq::Job
   end
 
+  # Sidekiq 7+ documents the per-call option carrier under `Sidekiq::Job::Setter`.
+  # `Sidekiq::Job = Wurk::Job`, so the constant must resolve through the Job
+  # namespace too — not just `Sidekiq::Worker::Setter`. See issue #96.
+  def test_job_setter_alias
+    assert_same Wurk::Worker::Setter, Sidekiq::Job::Setter
+    assert_same Sidekiq::Worker::Setter, Sidekiq::Job::Setter
+  end
+
   def test_job_logger_alias
     assert_same Wurk::JobLogger, Sidekiq::JobLogger
   end
