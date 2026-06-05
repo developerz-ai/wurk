@@ -97,11 +97,11 @@ export default function Nav({ open, onClose }: NavProps) {
                   padding: '0.5rem 0.85rem',
                   borderRadius: 8,
                   margin: '2px 8px',
+                  // Text stays white for every item; the active one is marked by
+                  // a subtle dark raised pill + hairline, not a bright white box.
                   color: isActive ? 'var(--accent)' : 'var(--text)',
-                  background: isActive ? 'var(--accent-soft)' : 'transparent',
-                  boxShadow: isActive
-                    ? 'inset 0 0 0 1px color-mix(in oklch, var(--accent) 30%, transparent)'
-                    : 'none',
+                  background: isActive ? 'var(--surface-strong)' : 'transparent',
+                  boxShadow: isActive ? 'inset 0 0 0 1px var(--border)' : 'none',
                   fontWeight: isActive ? 600 : 400,
                   fontSize: 14,
                   textDecoration: 'none',
@@ -118,7 +118,7 @@ export default function Nav({ open, onClose }: NavProps) {
 
       <style>{`
         .wurk-navlink:hover {
-          background: color-mix(in oklch, var(--color-base-content) 8%, transparent) !important;
+          background: var(--surface-hover) !important;
           color: var(--accent) !important;
           text-decoration: none !important;
         }
