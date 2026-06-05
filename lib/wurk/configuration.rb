@@ -62,7 +62,7 @@ module Wurk
       end
     end
 
-    attr_reader :capsules, :directory, :redis_config
+    attr_reader :capsules, :directory, :redis_config, :super_fetch_callback
     attr_accessor :thread_priority
 
     # Pro parity: callable that builds the statsd / dogstatsd client.
@@ -209,10 +209,15 @@ module Wurk
     # Sidekiq Pro's opt-in toggles for reliable fetch and the reliable
     # scheduler. Both are already the default in Wurk — the fetcher is always
     # the reliable BLMOVE fetcher with orphan reclamation, and the scheduler is
-    # always atomic Lua — so these accept the call and do nothing. They exist
-    # only so a Pro initializer drops in unchanged instead of raising
-    # NoMethodError. Spec: docs/target/sidekiq-pro.md §3 (super_fetch).
-    def super_fetch!(*)
+    # always atomic Lua — so the toggle itself is a no-op. They exist only so a
+    # Pro initializer drops in unchanged instead of raising NoMethodError.
+    #
+    # The optional block is Pro's recovery callback: `|jobstr, pill|`, fired
+    # once per orphan recovery (`pill` nil) and once on a poison kill (`pill`
+    # responds to .jid/.klass/.count/.queue). The reaper drives it via
+    # Wurk::Middleware::PoisonPill.track!. Spec: docs/target/sidekiq-pro.md §3.1.
+    def super_fetch!(*, &block)
+      @super_fetch_callback = block if block
       nil
     end
 

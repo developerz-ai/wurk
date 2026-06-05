@@ -287,6 +287,19 @@ class ConfigurationTest < Wurk::Test::UnitCase
     assert_nil @config.super_fetch!(timeout: 3)
   end
 
+  def test_super_fetch_callback_nil_by_default
+    assert_nil @config.super_fetch_callback
+  end
+
+  # Pro's recovery callback: `super_fetch! { |jobstr, pill| }` stores the block
+  # (still returning nil) so the reaper can invoke it. Spec: sidekiq-pro.md §3.1.
+  def test_super_fetch_bang_stores_the_recovery_block
+    block = ->(_jobstr, _pill) {}
+
+    assert_nil @config.super_fetch!(&block)
+    assert_same block, @config.super_fetch_callback
+  end
+
   def test_reliable_scheduler_bang_is_a_noop
     assert_nil @config.reliable_scheduler!
   end

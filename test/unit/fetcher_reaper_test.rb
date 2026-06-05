@@ -99,6 +99,45 @@ class FetcherReaperTest < Wurk::Test::UnitCase
     @pool.with { |c| c.call('DEL', other_priv) }
   end
 
+  # --- super_fetch! recovery callback (Pro §3.1) -------------------------
+
+  # A recovery block registered on the reaper's config fires once per orphan
+  # reclaimed, with the raw job string and pill=nil (non-poison). This is the
+  # end-to-end path: stranded private list → reaper sweep → callback.
+  def test_recovery_callback_fires_with_job_string_on_reclaim
+    recovered = []
+    @config.super_fetch! { |jobstr, pill| recovered << [jobstr, pill] }
+    seed_private_list(DEAD_PID, %w[one two])
+
+    @reaper.reclaim!
+
+    assert_equal [payload('one'), payload('two')].sort, recovered.map(&:first).sort
+    assert(recovered.all? { |_, pill| pill.nil? }, 'a non-poison recovery passes pill=nil')
+  end
+
+  # On the poison path the same block receives a pill responding to
+  # .jid/.klass/.count/.queue, so a `pill.jid`-style Pro initializer drops in.
+  # rubocop:disable Minitest/MultipleAssertions, Metrics/AbcSize
+  def test_recovery_callback_receives_pill_on_poison_kill
+    jid = SecureRandom.hex(12)
+    pill = nil
+    @config.super_fetch! { |_jobstr, p| pill = p if p }
+    # Two prior recoveries on record; this reclaim is the 3rd → poison.
+    Wurk.redis { |c| c.call('SET', recovery_key(jid), '2') }
+    @pool.with { |c| c.call('RPUSH', private_list(DEAD_PID), payload('poison', jid: jid)) }
+
+    @reaper.reclaim!
+
+    refute_nil pill, 'a poison kill hands the recovery block a pill'
+    assert_equal jid, pill.jid
+    assert_equal 'ReaperTestJob', pill.klass
+    assert_equal 3, pill.count
+    assert_equal @queue_name, pill.queue
+  ensure
+    Wurk.redis { |c| c.call('DEL', recovery_key(jid)) }
+  end
+  # rubocop:enable Minitest/MultipleAssertions, Metrics/AbcSize
+
   # --- poison-pill cap ---------------------------------------------------
 
   # rubocop:disable Metrics/AbcSize, Minitest/MultipleAssertions
