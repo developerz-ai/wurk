@@ -168,6 +168,46 @@ class WorkerOptionsTest < Wurk::Test::UnitCase
     assert_kind_of Wurk::Client, ConfiguredWorker.build_client
   end
 
+  # --- pool: transient selection + stripping (#95) ---------------------
+
+  class PoolWorker
+    include Wurk::Worker
+
+    sidekiq_options queue: 'pooled', pool: 'class-pool'
+
+    def perform(*); end
+  end
+
+  # client_push deletes `pool` from the item so it never reaches the wire;
+  # normalize_item then strips any class-level pool re-merged into the payload.
+  def test_client_push_deletes_pool_from_item
+    captured = nil
+    fake = build_fake_client { |item| captured = item }
+    with_stub(PoolWorker, :build_client, fake) do
+      PoolWorker.client_push('class' => PoolWorker, 'args' => [1], 'pool' => 'per-call')
+    end
+
+    refute captured.key?('pool'), 'pool must be deleted from the pushed item'
+  end
+
+  # A per-call set(pool:) overrides the class-level pool option.
+  def test_set_pool_selects_the_per_call_pool
+    pools = capture_build_client_pools(PoolWorker) do
+      PoolWorker.set(pool: 'per-call').perform_async(1)
+    end
+
+    assert_equal ['per-call'], pools
+  end
+
+  # With no per-call pool, selection falls back to the class-level option.
+  def test_perform_async_uses_class_level_pool
+    pools = capture_build_client_pools(PoolWorker) do
+      PoolWorker.perform_async(1)
+    end
+
+    assert_equal ['class-pool'], pools
+  end
+
   # --- set returns Setter ---------------------------------------------
 
   def test_set_returns_setter
@@ -267,9 +307,32 @@ class WorkerOptionsTest < Wurk::Test::UnitCase
   # (not vendored on Ruby 4.x).
   def with_stub(klass, method, value)
     original = klass.singleton_class.instance_method(method)
-    klass.singleton_class.send(:define_method, method) { value }
+    klass.singleton_class.send(:define_method, method) { |*, **| value }
     yield
   ensure
     klass.singleton_class.send(:define_method, method, original)
+  end
+
+  def build_fake_client(&push)
+    fake = Object.new
+    fake.define_singleton_method(:push) { |item| push.call(item) || 'jid' }
+    fake.define_singleton_method(:push_bulk) { |_items| ['jid'] }
+    fake
+  end
+
+  # Stub `build_client(pool)` to record the pool it was handed, returning a
+  # no-op client. Returns the captured pools in call order.
+  def capture_build_client_pools(klass)
+    captured = []
+    fake = build_fake_client { nil }
+    original = klass.singleton_class.instance_method(:build_client)
+    klass.singleton_class.send(:define_method, :build_client) do |pool = nil|
+      captured << pool
+      fake
+    end
+    yield
+    captured
+  ensure
+    klass.singleton_class.send(:define_method, :build_client, original)
   end
 end

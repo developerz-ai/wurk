@@ -49,7 +49,11 @@ module Wurk
           'class' => @klass,
           'args' => args
         )
-        @klass.build_client.push_bulk(merged)
+        # Mirror client_push: a per-call `set(pool:)` selects the Redis pool and
+        # is removed so it never persists (normalize_item strips the class-level
+        # pool re-merged into each payload).
+        pool = merged.delete('pool') || @klass.get_sidekiq_options['pool']
+        @klass.build_client(pool).push_bulk(merged)
       end
 
       private
