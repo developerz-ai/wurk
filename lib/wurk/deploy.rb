@@ -24,10 +24,14 @@ module Wurk
     # Sidekiq Pro's LABEL_MAKER so existing deploy hooks keep working.
     LABEL_MAKER = -> { `git log -1 --format="%h %s"`.strip }
 
-    # Class-level shorthand `Wurk::Deploy.mark!(label: "abc")` builds a
-    # one-shot Deploy and delegates. Matches Sidekiq's `Sidekiq::Deploy.mark!`.
-    def self.mark!(label: nil, at: ::Time.now)
-      new.mark!(label: label, at: at)
+    # Class-level shorthand: builds a one-shot Deploy and delegates. Sidekiq's
+    # `Sidekiq::Deploy.mark!` takes a POSITIONAL label (spec §23,
+    # `def self.mark!(label = nil)`) — capistrano-sidekiq and custom deploy
+    # hooks call `Sidekiq::Deploy.mark!("abc123 release")` that way. The `**opts`
+    # also absorbs the `label:` keyword so Wurk's own keyword callers keep
+    # working; positional wins when both are given.
+    def self.mark!(label = nil, at: ::Time.now, **opts)
+      new.mark!(label: label.nil? ? opts[:label] : label, at: at)
     end
 
     def initialize(pool: nil)

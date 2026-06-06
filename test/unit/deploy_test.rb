@@ -116,6 +116,32 @@ class DeployTest < Wurk::Test::UnitCase
     assert_kind_of String, Wurk::Deploy.mark!(label: @label, at: @at)
   end
 
+  # Sidekiq's `Sidekiq::Deploy.mark!` takes a POSITIONAL label; capistrano-sidekiq
+  # and custom deploy hooks call it that way. Issue #110.
+  def test_mark_accepts_positional_label
+    iso = Wurk::Deploy.mark!(@label, at: @at)
+
+    assert_equal '2026-05-21T14:37:00Z', iso
+    assert_equal(@label, Wurk.redis { |c| c.call('HGET', '20260521-marks', iso) })
+  end
+
+  # Positional and keyword forms resolve to the same label: the second call for
+  # that label hits the per-label dedupe lock and returns nil.
+  def test_positional_and_keyword_label_are_equivalent
+    first  = Wurk::Deploy.mark!(@label, at: @at)
+    second = Wurk::Deploy.mark!(label: @label, at: @at)
+
+    refute_nil first
+    assert_nil second
+  end
+
+  # The real drop-in path: a Sidekiq deploy hook calls Sidekiq::Deploy.mark!("v1").
+  def test_sidekiq_alias_accepts_positional_label
+    iso = Sidekiq::Deploy.mark!(@label, at: @at)
+
+    assert_equal(@label, Wurk.redis { |c| c.call('HGET', '20260521-marks', iso) })
+  end
+
   def test_sidekiq_deploy_alias_exists
     assert_equal Wurk::Deploy, Sidekiq::Deploy
   end
