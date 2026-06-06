@@ -90,6 +90,8 @@
     "kill": "Kill",
     "add_to_queue": "Add to Queue",
     "clear": "Clear",
+    "quiet": "Quiet",
+    "stop": "Stop",
     "prev": "Previous",
     "next": "Next",
     "search": "Search",
@@ -100,6 +102,8 @@
     "scope_selected": "{n} selected job(s)",
     "scope_all": "every job in this set",
     "scope_this_job": "this job",
+    "scope_this_process": "this process",
+    "scope_all_processes": "all processes",
     "confirm": "{action} {scope}? This cannot be undone.",
     "confirm_clear_queue": "Clear all jobs from \"{name}\"? This cannot be undone."
   },

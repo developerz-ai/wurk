@@ -1,10 +1,12 @@
-import { useQuery } from '@tanstack/react-query';
+import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { useEffect } from 'react';
 import { t } from '../i18n';
 import { PageHeader } from '../components/PageHeader';
 import { relativeTime } from '../utils';
+import { useMeta } from '../hooks/useMeta';
 
 interface Process {
+  identity: string;
   pid: number;
   hostname: string;
   queues: string[];
@@ -12,9 +14,22 @@ interface Process {
   busy: number;
   quiet: boolean;
   beat_at: number;
+  embedded?: boolean;
 }
 
+type Signal = 'quiet' | 'stop';
+// Discriminated so "all" is only ever sent for an explicit all-processes click —
+// a missing/empty `proc.identity` can never silently fall back to signalling
+// every process.
+type ControlTarget =
+  | { signal: Signal; scope: 'all' }
+  | { signal: Signal; scope: 'one'; identity: string };
+
 export default function Busy() {
+  const { data: meta } = useMeta();
+  const readOnly = meta?.read_only ?? false;
+  const qc = useQueryClient();
+
   useEffect(() => {
     document.title = `${t('nav.busy')} — Wurk`;
   }, []);
@@ -25,15 +40,58 @@ export default function Busy() {
     refetchInterval: 5000,
   });
 
+  // Quiet (SIGTSTP) / stop (SIGTERM) one process by identity, or all when
+  // scope is 'all'. Both are async — the process reacts on its next
+  // heartbeat — so we just refetch rather than optimistically updating.
+  const control = useMutation({
+    mutationFn: async (target: ControlTarget) => {
+      const { signal } = target;
+      const identity = target.scope === 'all' ? 'all' : target.identity;
+      const res = await fetch(`/wurk/api/busy/${signal}`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ identity }),
+      });
+      if (!res.ok) throw new Error(`${signal} failed (${res.status})`);
+      return res;
+    },
+    onSuccess: () => qc.invalidateQueries({ queryKey: ['processes'] }),
+  });
+
+  const confirmStop = (scope: string) =>
+    window.confirm(t('actions.confirm', { action: t('actions.stop'), scope }));
+
   if (isLoading) return <div className="empty-state"><span className="spinner" /></div>;
   if (isError || !data) return <div className="empty-state" style={{ color: 'var(--danger)' }}>{t('common.error')}</div>;
+
+  const controllable = data.some((p) => !p.embedded);
 
   return (
     <div>
       <PageHeader icon="fa-gears" title={t('nav.busy')} summary={t('summaries.busy')}>
-        <span className="badge badge-muted">
-          {data.length} {t('dashboard.processes').toLowerCase()}
-        </span>
+        <div style={{ display: 'flex', alignItems: 'center', gap: '0.6rem' }}>
+          <span className="badge badge-muted">
+            {data.length} {t('dashboard.processes').toLowerCase()}
+          </span>
+          {!readOnly && controllable && (
+            <>
+              <button
+                className="btn btn-sm btn-ghost"
+                disabled={control.isPending}
+                onClick={() => control.mutate({ signal: 'quiet', scope: 'all' })}
+              >
+                {`${t('actions.quiet')} ${t('actions.all_suffix')}`}
+              </button>
+              <button
+                className="btn btn-sm btn-ghost btn-danger"
+                disabled={control.isPending}
+                onClick={() => confirmStop(t('actions.scope_all_processes')) && control.mutate({ signal: 'stop', scope: 'all' })}
+              >
+                {`${t('actions.stop')} ${t('actions.all_suffix')}`}
+              </button>
+            </>
+          )}
+        </div>
       </PageHeader>
 
       {data.length === 0 ? (
@@ -51,7 +109,7 @@ export default function Busy() {
             const isRecent = Date.now() / 1000 - proc.beat_at < 30;
 
             return (
-              <div key={`${proc.hostname}-${proc.pid}`} className="card">
+              <div key={proc.identity ?? `${proc.hostname}-${proc.pid}`} className="card">
                 <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', marginBottom: '0.75rem' }}>
                   <div>
                     <div style={{ fontWeight: 600, fontSize: 15 }}>{proc.hostname}</div>
@@ -107,6 +165,25 @@ export default function Busy() {
                     ))}
                   </div>
                 </div>
+
+                {!readOnly && !proc.embedded && (
+                  <div style={{ display: 'flex', gap: '0.4rem', marginTop: '0.85rem' }}>
+                    <button
+                      className="btn btn-sm"
+                      disabled={control.isPending}
+                      onClick={() => control.mutate({ signal: 'quiet', scope: 'one', identity: proc.identity })}
+                    >
+                      {t('actions.quiet')}
+                    </button>
+                    <button
+                      className="btn btn-sm btn-danger"
+                      disabled={control.isPending}
+                      onClick={() => confirmStop(t('actions.scope_this_process')) && control.mutate({ signal: 'stop', scope: 'one', identity: proc.identity })}
+                    >
+                      {t('actions.stop')}
+                    </button>
+                  </div>
+                )}
               </div>
             );
           })}

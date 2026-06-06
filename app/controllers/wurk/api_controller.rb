@@ -28,6 +28,7 @@ module Wurk
       retries_bulk retries_all retry_job
       scheduled_bulk scheduled_all scheduled_job
       dead_bulk dead_all dead_job
+      quiet_process stop_process
     ]
 
     # Per-set action whitelists. Maps the SPA's action name to the
@@ -128,6 +129,13 @@ module Wurk
     def processes
       render json: ::Wurk::ProcessSet.new.map { |p| ::Wurk::Api::Serializers.process_row(p) }
     end
+
+    # Busy-page controls: SIGTSTP (quiet — drop fetch, drain in-flight) and
+    # SIGTERM (stop — graceful shutdown). Both are async; the target notices on
+    # its next heartbeat (≤10s). `identity` absent or "all" signals every live
+    # process.
+    def quiet_process = signal_processes(:quiet!)
+    def stop_process  = signal_processes(:stop!)
 
     def batches
       set = ::Wurk::BatchSet.new
@@ -255,6 +263,24 @@ module Wurk
         count += 1
       end
       render json: { ok: true, count: count }
+    end
+
+    # Sends `method` (:quiet! / :stop!) to one process by identity, or to every
+    # live process when identity is blank/"all". Embedded processes are skipped
+    # (they raise on quiet!/stop! — there's no separate process to signal). 404s
+    # when a named identity isn't in the live set.
+    def signal_processes(method)
+      identity = params[:identity].to_s
+      if identity.empty? || identity == 'all'
+        count = ::Wurk::ProcessSet.new.reject(&:embedded?).each { |p| p.public_send(method) }.size
+        return render(json: { ok: true, count: count })
+      end
+
+      process = ::Wurk::ProcessSet[identity]
+      return render(json: { error: 'unknown process' }, status: :not_found) unless process
+
+      process.public_send(method) unless process.embedded?
+      render json: { ok: true, count: process.embedded? ? 0 : 1 }
     end
 
     # Maps "<score>|<jid>" keys to live SortedEntry objects via score-bracketed
