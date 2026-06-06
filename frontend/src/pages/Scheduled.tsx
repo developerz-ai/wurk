@@ -9,6 +9,10 @@ import { t } from '../i18n';
 import { PageHeader } from '../components/PageHeader';
 import { relativeTime, truncate, formatArgs, isoTime } from '../utils';
 import JobDetailModal, { type JobEntry } from '../components/JobDetailModal';
+import JobSetActionBar, { type ActionDef } from '../components/JobSetActionBar';
+import { useMeta } from '../hooks/useMeta';
+import { useSelection } from '../hooks/useSelection';
+import { useJobSetActions, entryKey } from '../hooks/useJobSetActions';
 
 interface ScheduledEntry {
   jid: string;
@@ -36,9 +40,20 @@ const SORT: Accessors<ScheduledEntry> = {
   at: (e) => e.at,
 };
 
+const ACTIONS: ActionDef[] = [
+  { cmd: 'add_to_queue', label: t('actions.add_to_queue') },
+  { cmd: 'delete', label: t('actions.delete'), danger: true },
+];
+
 export default function Scheduled() {
   const [page, setPage] = usePageParam();
   const [selected, setSelected] = useState<JobEntry | null>(null);
+  const [selectedKey, setSelectedKey] = useState<string | null>(null);
+  const { data: meta } = useMeta();
+  const readOnly = meta?.read_only ?? false;
+  const sel = useSelection();
+  const { single, bulk, all } = useJobSetActions('scheduled');
+  const pending = single.isPending || bulk.isPending || all.isPending;
 
   useEffect(() => {
     document.title = `${t('nav.scheduled')} — Wurk`;
@@ -53,9 +68,12 @@ export default function Scheduled() {
   });
 
   const { sorted, sort, toggle } = useSort(data?.entries ?? [], SORT);
+  const pageKeys = sorted.map(entryKey);
 
   if (isLoading) return <div className="empty-state"><span className="spinner" /></div>;
   if (isError || !data) return <div className="empty-state" style={{ color: 'var(--danger)' }}>{t('common.error')}</div>;
+
+  const allChecked = pageKeys.length > 0 && pageKeys.every((k) => sel.selected.has(k));
 
   return (
     <div>
@@ -67,10 +85,26 @@ export default function Scheduled() {
         <div className="empty-state">{t('common.empty')}</div>
       ) : (
         <>
+          {!readOnly && (
+            <JobSetActionBar
+              bulk={ACTIONS}
+              all={ACTIONS}
+              selectedCount={sel.count}
+              total={data.total}
+              pending={pending}
+              onBulk={(cmd) => bulk.mutate({ keys: [...sel.selected], cmd }, { onSuccess: sel.clear })}
+              onAll={(cmd) => all.mutate(cmd, { onSuccess: sel.clear })}
+            />
+          )}
           <div className="table-wrapper">
             <table>
               <thead>
                 <tr>
+                  {!readOnly && (
+                    <th className="row-action">
+                      <input type="checkbox" checked={allChecked} onChange={() => sel.toggleAll(pageKeys)} aria-label="Select all" />
+                    </th>
+                  )}
                   <SortableTh label={t('table.jid')} sortKey="jid" sort={sort} onSort={toggle} />
                   <SortableTh label={t('table.class')} sortKey="klass" sort={sort} onSort={toggle} />
                   <SortableTh label={t('table.args')} sortKey="args" sort={sort} onSort={toggle} />
@@ -80,8 +114,14 @@ export default function Scheduled() {
               <tbody>
                 {sorted.map((entry) => {
                   const argsStr = formatArgs(entry.args);
+                  const key = entryKey(entry);
                   return (
-                    <tr key={entry.jid} className="row-clickable" onClick={() => setSelected(entry)}>
+                    <tr key={entry.jid} className="row-clickable" onClick={() => { setSelected(entry); setSelectedKey(key); }}>
+                      {!readOnly && (
+                        <td className="row-action" onClick={(e) => e.stopPropagation()}>
+                          <input type="checkbox" checked={sel.selected.has(key)} onChange={() => sel.toggle(key)} aria-label="Select job" />
+                        </td>
+                      )}
                       <td
                         title={entry.jid}
                         style={{ fontFamily: 'monospace', fontSize: 12, color: 'var(--text-muted)' }}
@@ -102,7 +142,16 @@ export default function Scheduled() {
           <Pagination page={page} total={data.total} count={PAGE_SIZE} onChange={setPage} />
         </>
       )}
-      <JobDetailModal entry={selected} atLabel={t('table.scheduled_at')} onClose={() => setSelected(null)} />
+      <JobDetailModal
+        entry={selected}
+        atLabel={t('table.scheduled_at')}
+        actions={readOnly ? undefined : ACTIONS}
+        pending={single.isPending}
+        onAction={(cmd) =>
+          selectedKey && single.mutate({ key: selectedKey, cmd }, { onSuccess: () => { setSelected(null); setSelectedKey(null); } })
+        }
+        onClose={() => { setSelected(null); setSelectedKey(null); }}
+      />
     </div>
   );
 }

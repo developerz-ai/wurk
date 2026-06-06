@@ -24,7 +24,18 @@ module Wurk
 
     skip_forgery_protection only: %i[
       stream reset_limiter pause_cron unpause_cron enqueue_cron
+      clear_queue delete_queue_job
+      retries_bulk retries_all retry_job
+      scheduled_bulk scheduled_all scheduled_job
+      dead_bulk dead_all dead_job
     ]
+
+    # Per-set action whitelists. Maps the SPA's action name to the
+    # SortedEntry/JobSet method. Anything not listed 400s — keeps the bulk/
+    # single dispatchers from reaching arbitrary methods off a request param.
+    RETRY_ACTIONS     = { 'retry' => :retry, 'delete' => :delete, 'kill' => :kill }.freeze
+    SCHEDULED_ACTIONS = { 'delete' => :delete, 'add_to_queue' => :add_to_queue }.freeze
+    DEAD_ACTIONS      = { 'retry' => :retry, 'delete' => :delete }.freeze
 
     # Boot-time flags the SPA reads once to shape the UI (e.g. hide destructive
     # actions and show the read-only banner). Always a GET, so it stays
@@ -52,9 +63,67 @@ module Wurk
       }
     end
 
+    # Empties one queue (UNLINK list + drop from the `queues` set).
+    def clear_queue
+      ::Wurk::Queue.new(params[:name].to_s).clear
+      render json: { ok: true }
+    end
+
+    # Removes a single job from a queue by jid. LREM matches exact bytes, so we
+    # locate the record (Queue#find_job) and let it delete its own value.
+    def delete_queue_job
+      record = ::Wurk::Queue.new(params[:name].to_s).find_job(params[:jid].to_s)
+      return render(json: { error: 'unknown job' }, status: :not_found) unless record
+
+      render json: { ok: true, deleted: record.delete }
+    end
+
     def retries   = render_sorted_set(::Wurk::RetrySet.new)
     def scheduled = render_sorted_set(::Wurk::ScheduledSet.new)
     def dead      = render_sorted_set(::Wurk::DeadSet.new)
+
+    # --- Retry set mutations -------------------------------------------------
+    def retry_job    = single_entry_action(::Wurk::RetrySet.new, RETRY_ACTIONS, params[:cmd])
+    def retries_bulk = bulk_entry_action(::Wurk::RetrySet.new, RETRY_ACTIONS)
+
+    def retries_all
+      set = ::Wurk::RetrySet.new
+      count = case params[:cmd].to_s
+              when 'retry'  then set.retry_all
+              when 'kill'   then set.kill_all
+              when 'delete' then clear_set(set)
+              else return render(json: { error: 'unknown action' }, status: :bad_request)
+              end
+      render json: { ok: true, count: count }
+    end
+
+    # --- Scheduled set mutations ---------------------------------------------
+    def scheduled_job  = single_entry_action(::Wurk::ScheduledSet.new, SCHEDULED_ACTIONS, params[:cmd])
+    def scheduled_bulk = bulk_entry_action(::Wurk::ScheduledSet.new, SCHEDULED_ACTIONS)
+
+    def scheduled_all
+      set = ::Wurk::ScheduledSet.new
+      count = case params[:cmd].to_s
+              when 'delete'       then clear_set(set)
+              when 'add_to_queue' then drain_set(set, :add_to_queue)
+              else return render(json: { error: 'unknown action' }, status: :bad_request)
+              end
+      render json: { ok: true, count: count }
+    end
+
+    # --- Dead set mutations --------------------------------------------------
+    def dead_job  = single_entry_action(::Wurk::DeadSet.new, DEAD_ACTIONS, params[:cmd])
+    def dead_bulk = bulk_entry_action(::Wurk::DeadSet.new, DEAD_ACTIONS)
+
+    def dead_all
+      set = ::Wurk::DeadSet.new
+      count = case params[:cmd].to_s
+              when 'retry'  then set.retry_all
+              when 'delete' then clear_set(set)
+              else return render(json: { error: 'unknown action' }, status: :bad_request)
+              end
+      render json: { ok: true, count: count }
+    end
 
     def processes
       render json: ::Wurk::ProcessSet.new.map { |p| ::Wurk::Api::Serializers.process_row(p) }
@@ -159,6 +228,68 @@ module Wurk
     end
 
     private
+
+    # Resolves a single entry by "<score>|<jid>" key and applies a whitelisted
+    # action. 400 on an unknown action, 404 when the key matches nothing (e.g.
+    # the entry was already retried/deleted from another tab).
+    def single_entry_action(set, actions, cmd)
+      method = actions[cmd.to_s]
+      return render(json: { error: 'unknown action' }, status: :bad_request) unless method
+
+      entries = entries_for(set, [params[:key]])
+      return render(json: { error: 'unknown job' }, status: :not_found) if entries.empty?
+
+      entries.each { |entry| entry.public_send(method) }
+      render json: { ok: true, count: entries.size }
+    end
+
+    # Bulk variant: `keys[]` + a single `cmd` applied to every resolved entry.
+    def bulk_entry_action(set, actions)
+      method = actions[params[:cmd].to_s]
+      return render(json: { error: 'unknown action' }, status: :bad_request) unless method
+
+      count = 0
+      keys = Array(params[:keys]).map(&:to_s).uniq
+      entries_for(set, keys).each do |entry|
+        entry.public_send(method)
+        count += 1
+      end
+      render json: { ok: true, count: count }
+    end
+
+    # Maps "<score>|<jid>" keys to live SortedEntry objects via score-bracketed
+    # fetch (exact float match, narrowed by jid) — avoids depending on float→
+    # string round-tripping between JS and Ruby. Skips malformed/empty keys.
+    def entries_for(set, keys)
+      keys.flat_map do |key|
+        score, jid = key.to_s.split('|', 2)
+        next [] if jid.nil? || jid.empty?
+
+        set.fetch(score.to_f, jid)
+      end
+    end
+
+    # UNLINKs the whole set, returning the count removed (read before clearing
+    # so the response reports what was deleted).
+    def clear_set(set)
+      total = set.size
+      set.clear
+      total
+    end
+
+    # Drains a set by applying `method` to every entry until empty. Used for
+    # scheduled "add to queue all", where each call removes the entry and would
+    # otherwise shift the paged iterator's indices mid-scan.
+    def drain_set(set, method)
+      count = 0
+      until set.size.zero?
+        set.each do |entry|
+          entry.public_send(method)
+          count += 1
+        end
+      end
+      count
+    end
 
     def render_sorted_set(set)
       page = ::Wurk::Api::Pagination.window(params)
