@@ -88,10 +88,11 @@ module Wurk
 
     def retries_all
       set = ::Wurk::RetrySet.new
-      count = case params[:cmd]
+      count = case params[:cmd].to_s
               when 'retry'  then set.retry_all
               when 'kill'   then set.kill_all
-              when 'delete' then total = set.size; set.clear; total
+              when 'delete' then clear_set(set)
+              else return render(json: { error: 'unknown action' }, status: :bad_request)
               end
       render json: { ok: true, count: count }
     end
@@ -102,7 +103,11 @@ module Wurk
 
     def scheduled_all
       set = ::Wurk::ScheduledSet.new
-      count = params[:cmd] == 'delete' ? (total = set.size; set.clear; total) : drain_set(set, :add_to_queue)
+      count = case params[:cmd].to_s
+              when 'delete'       then clear_set(set)
+              when 'add_to_queue' then drain_set(set, :add_to_queue)
+              else return render(json: { error: 'unknown action' }, status: :bad_request)
+              end
       render json: { ok: true, count: count }
     end
 
@@ -112,9 +117,10 @@ module Wurk
 
     def dead_all
       set = ::Wurk::DeadSet.new
-      count = case params[:cmd]
+      count = case params[:cmd].to_s
               when 'retry'  then set.retry_all
-              when 'delete' then total = set.size; set.clear; total
+              when 'delete' then clear_set(set)
+              else return render(json: { error: 'unknown action' }, status: :bad_request)
               end
       render json: { ok: true, count: count }
     end
@@ -243,7 +249,8 @@ module Wurk
       return render(json: { error: 'unknown action' }, status: :bad_request) unless method
 
       count = 0
-      entries_for(set, Array(params[:keys])).each do |entry|
+      keys = Array(params[:keys]).map(&:to_s).uniq
+      entries_for(set, keys).each do |entry|
         entry.public_send(method)
         count += 1
       end
@@ -260,6 +267,14 @@ module Wurk
 
         set.fetch(score.to_f, jid)
       end
+    end
+
+    # UNLINKs the whole set, returning the count removed (read before clearing
+    # so the response reports what was deleted).
+    def clear_set(set)
+      total = set.size
+      set.clear
+      total
     end
 
     # Drains a set by applying `method` to every entry until empty. Used for

@@ -17,17 +17,21 @@ Wurk::Engine.routes.draw do
     # so they need no extra guard. `:key` is "<score>|<jid>" (Wurk::SortedEntry#id);
     # `all/:cmd` operates over the whole set; the bare collection POST is a bulk
     # action over `keys[]`. Spec: docs/target/sidekiq-free.md §25.4.
+    # `all/:cmd` is intentionally unconstrained: the controller validates `:cmd`
+    # against the per-set whitelist and returns a JSON 400 for an unknown action,
+    # matching the single/bulk contract. A route-level constraint would turn that
+    # into a 404 route miss instead.
     get  'retries',          to: 'api#retries'
     post 'retries',          to: 'api#retries_bulk',   as: :api_retries_bulk
-    post 'retries/all/:cmd', to: 'api#retries_all',    as: :api_retries_all, constraints: { cmd: /retry|delete|kill/ }
+    post 'retries/all/:cmd', to: 'api#retries_all',    as: :api_retries_all
     post 'retries/:key',     to: 'api#retry_job',      as: :api_retry_job,   constraints: { key: %r{[^/]+} }
     get  'scheduled',        to: 'api#scheduled'
     post 'scheduled',          to: 'api#scheduled_bulk', as: :api_scheduled_bulk
-    post 'scheduled/all/:cmd', to: 'api#scheduled_all',  as: :api_scheduled_all, constraints: { cmd: /delete|add_to_queue/ }
+    post 'scheduled/all/:cmd', to: 'api#scheduled_all',  as: :api_scheduled_all
     post 'scheduled/:key',     to: 'api#scheduled_job',  as: :api_scheduled_job, constraints: { key: %r{[^/]+} }
     get  'dead',             to: 'api#dead'
     post 'dead',             to: 'api#dead_bulk',      as: :api_dead_bulk
-    post 'dead/all/:cmd',    to: 'api#dead_all',       as: :api_dead_all, constraints: { cmd: /delete|retry/ }
+    post 'dead/all/:cmd',    to: 'api#dead_all',       as: :api_dead_all
     post 'dead/:key',        to: 'api#dead_job',       as: :api_dead_job, constraints: { key: %r{[^/]+} }
     get  'processes',        to: 'api#processes'
     get  'batches',          to: 'api#batches'

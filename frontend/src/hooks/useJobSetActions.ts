@@ -11,12 +11,17 @@ export function entryKey(e: { score: number; jid: string }): string {
   return `${e.score}|${e.jid}`;
 }
 
-function postJSON(url: string, body?: unknown): Promise<Response> {
-  return fetch(url, {
+async function postJSON(url: string, body?: unknown): Promise<Response> {
+  const res = await fetch(url, {
     method: 'POST',
     headers: body ? { 'Content-Type': 'application/json' } : {},
     body: body ? JSON.stringify(body) : undefined,
   });
+  // fetch only rejects on network failure; a 4xx/5xx still resolves. Throw so
+  // the mutation's onError fires (and onSuccess/cache-invalidation does not)
+  // when the server rejects the action (e.g. 403 in read-only, 400/404).
+  if (!res.ok) throw new Error(`Request failed (${res.status})`);
+  return res;
 }
 
 // Single/bulk/all mutations for one job set. Each invalidates both the set's

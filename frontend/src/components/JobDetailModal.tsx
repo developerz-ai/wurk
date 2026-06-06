@@ -42,10 +42,12 @@ interface JobDetailModalProps {
   actions?: ActionDef[];
   /** Fired with an action's `cmd` when its footer button is clicked. */
   onAction?: (cmd: string) => void;
+  /** Disables footer buttons while a single-job mutation is in flight (prevents duplicate dispatches). */
+  pending?: boolean;
   onClose: () => void;
 }
 
-export default function JobDetailModal({ entry, atLabel, actions, onAction, onClose }: JobDetailModalProps) {
+export default function JobDetailModal({ entry, atLabel, actions, onAction, pending = false, onClose }: JobDetailModalProps) {
   const footer =
     actions && actions.length > 0 && onAction ? (
       <div style={{ display: 'flex', gap: '0.5rem', justifyContent: 'flex-end', flexWrap: 'wrap' }}>
@@ -53,7 +55,9 @@ export default function JobDetailModal({ entry, atLabel, actions, onAction, onCl
           <button
             key={a.cmd}
             className={`btn btn-sm${a.danger ? ' btn-danger' : ''}`}
+            disabled={pending}
             onClick={() => {
+              if (pending) return;
               if (a.danger && !window.confirm(t('actions.confirm', { action: a.label, scope: t('job.detail').toLowerCase() }))) return;
               onAction(a.cmd);
             }}

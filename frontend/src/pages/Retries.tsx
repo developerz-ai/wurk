@@ -160,6 +160,7 @@ export default function Retries() {
         entry={selected}
         atLabel={t('table.retry_at')}
         actions={readOnly ? undefined : BULK}
+        pending={single.isPending}
         onAction={(cmd) =>
           selectedKey && single.mutate({ key: selectedKey, cmd }, { onSuccess: () => { setSelected(null); setSelectedKey(null); } })
         }

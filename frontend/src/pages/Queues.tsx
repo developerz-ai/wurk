@@ -64,12 +64,15 @@ function QueueJobs({ name }: { name: string }) {
 
   // Delete one job from the queue by jid (server LREMs the exact payload).
   const deleteJob = useMutation({
-    mutationFn: (jid: string) =>
-      fetch(`/wurk/api/queues/${encodeURIComponent(name)}/delete`, {
+    mutationFn: async (jid: string) => {
+      const res = await fetch(`/wurk/api/queues/${encodeURIComponent(name)}/delete`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ jid }),
-      }),
+      });
+      if (!res.ok) throw new Error(`Delete failed (${res.status})`);
+      return res;
+    },
     onSuccess: () => {
       qc.invalidateQueries({ queryKey: ['queue', name] });
       qc.invalidateQueries({ queryKey: ['queues'] });
@@ -126,7 +129,11 @@ function QueueJobs({ name }: { name: string }) {
                           <button
                             className="btn btn-sm btn-danger"
                             disabled={deleteJob.isPending}
-                            onClick={() => deleteJob.mutate(job.jid)}
+                            onClick={() => {
+                              if (window.confirm(t('actions.confirm', { action: t('actions.delete'), scope: t('actions.scope_this_job') }))) {
+                                deleteJob.mutate(job.jid);
+                              }
+                            }}
                           >
                             {t('actions.delete')}
                           </button>
@@ -170,8 +177,11 @@ export default function Queues() {
   });
 
   const clearQueue = useMutation({
-    mutationFn: (name: string) =>
-      fetch(`/wurk/api/queues/${encodeURIComponent(name)}/clear`, { method: 'POST' }),
+    mutationFn: async (name: string) => {
+      const res = await fetch(`/wurk/api/queues/${encodeURIComponent(name)}/clear`, { method: 'POST' });
+      if (!res.ok) throw new Error(`Clear failed (${res.status})`);
+      return res;
+    },
     onSuccess: (_res, name) => {
       qc.invalidateQueries({ queryKey: ['queues'] });
       qc.invalidateQueries({ queryKey: ['queue', name] });

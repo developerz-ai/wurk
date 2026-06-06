@@ -158,6 +158,7 @@ export default function Dead() {
         entry={selected}
         atLabel={t('table.failed_at')}
         actions={readOnly ? undefined : ACTIONS}
+        pending={single.isPending}
         onAction={(cmd) =>
           selectedKey && single.mutate({ key: selectedKey, cmd }, { onSuccess: () => { setSelected(null); setSelectedKey(null); } })
         }

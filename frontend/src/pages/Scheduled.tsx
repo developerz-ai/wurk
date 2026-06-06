@@ -146,6 +146,7 @@ export default function Scheduled() {
         entry={selected}
         atLabel={t('table.scheduled_at')}
         actions={readOnly ? undefined : ACTIONS}
+        pending={single.isPending}
         onAction={(cmd) =>
           selectedKey && single.mutate({ key: selectedKey, cmd }, { onSuccess: () => { setSelected(null); setSelectedKey(null); } })
         }

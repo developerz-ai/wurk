@@ -113,6 +113,32 @@ class ApiMutationsTest < Wurk::Test::EngineCase
     assert(fetch_set('dead').any? { |j| j['jid'] == jid })
   end
 
+  def test_all_unknown_action_is_400
+    push_to_zset('retry')
+    post '/wurk/api/retries/all/frobnicate'
+
+    assert_equal 400, last_response.status
+    assert_equal 1, fetch_set('retry').size, 'unknown all-action must not mutate'
+  end
+
+  def test_dead_all_kill_is_rejected
+    push_to_zset('dead')
+    post '/wurk/api/dead/all/kill'
+
+    assert_equal 400, last_response.status
+    assert_equal 1, fetch_set('dead').size
+  end
+
+  def test_bulk_deduplicates_repeated_keys
+    score, jid = push_to_zset('retry')
+    key = "#{score}|#{jid}"
+    post '/wurk/api/retries', { keys: [key, key], cmd: 'retry' }
+
+    assert_ok
+    assert_equal 1, json_body[:count], 'duplicate keys must act on the entry once'
+    assert_empty fetch_set('retry')
+  end
+
   # --- Scheduled ----------------------------------------------------------
 
   def test_scheduled_add_to_queue_single
