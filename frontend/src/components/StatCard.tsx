@@ -1,3 +1,5 @@
+import { AnimatedNumber } from './AnimatedNumber';
+
 interface StatCardProps {
   label: string;
   value: number | string;
@@ -34,7 +36,7 @@ export function StatCard({ label, value, color }: StatCardProps) {
           fontVariantNumeric: 'tabular-nums',
         }}
       >
-        {typeof value === 'number' ? value.toLocaleString() : value}
+        {typeof value === 'number' ? <AnimatedNumber value={value} /> : value}
       </span>
     </div>
   );

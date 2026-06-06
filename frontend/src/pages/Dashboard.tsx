@@ -1,6 +1,7 @@
 import { useQuery } from '@tanstack/react-query';
 import { useEffect } from 'react';
 import { StatCard } from '../components/StatCard';
+import { AnimatedNumber } from '../components/AnimatedNumber';
 import { t } from '../i18n';
 import type { StatsSnapshot } from '../hooks/useSSE';
 import { relativeTime } from '../utils';
@@ -127,7 +128,7 @@ export default function Dashboard({ sse }: DashboardProps) {
               {stats.queues.map((q) => (
                 <tr key={q.name}>
                   <td style={{ fontWeight: 500 }}>{q.name}</td>
-                  <td>{q.size.toLocaleString()}</td>
+                  <td><AnimatedNumber value={q.size} /></td>
                   <td>{q.latency.toFixed(3)}s</td>
                   <td>
                     {q.paused ? (
