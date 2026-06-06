@@ -6,9 +6,13 @@ import { t } from '../i18n';
 import { PageHeader } from '../components/PageHeader';
 import { relativeTime, truncate, formatArgs, isoTime } from '../utils';
 import JobDetailModal, { type JobEntry } from '../components/JobDetailModal';
+import JobSetActionBar, { type ActionDef } from '../components/JobSetActionBar';
 import { SortableTh } from '../components/SortableTh';
 import { useSort, type Accessors } from '../hooks/useSort';
 import { usePageParam } from '../hooks/usePageParam';
+import { useMeta } from '../hooks/useMeta';
+import { useSelection } from '../hooks/useSelection';
+import { useJobSetActions, entryKey } from '../hooks/useJobSetActions';
 
 interface RetryEntry {
   jid: string;
@@ -43,9 +47,26 @@ const SORT: Accessors<RetryEntry> = {
   at: (e) => e.at,
 };
 
+const BULK: ActionDef[] = [
+  { cmd: 'retry', label: t('actions.retry') },
+  { cmd: 'delete', label: t('actions.delete'), danger: true },
+  { cmd: 'kill', label: t('actions.kill'), danger: true },
+];
+const ALL: ActionDef[] = [
+  { cmd: 'retry', label: t('actions.retry') },
+  { cmd: 'kill', label: t('actions.kill'), danger: true },
+  { cmd: 'delete', label: t('actions.delete'), danger: true },
+];
+
 export default function Retries() {
   const [page, setPage] = usePageParam();
   const [selected, setSelected] = useState<JobEntry | null>(null);
+  const [selectedKey, setSelectedKey] = useState<string | null>(null);
+  const { data: meta } = useMeta();
+  const readOnly = meta?.read_only ?? false;
+  const sel = useSelection();
+  const { single, bulk, all } = useJobSetActions('retries');
+  const pending = single.isPending || bulk.isPending || all.isPending;
 
   useEffect(() => {
     document.title = `${t('nav.retries')} — Wurk`;
@@ -60,9 +81,12 @@ export default function Retries() {
   });
 
   const { sorted, sort, toggle } = useSort(data?.entries ?? [], SORT);
+  const pageKeys = sorted.map(entryKey);
 
   if (isLoading) return <div className="empty-state"><span className="spinner" /></div>;
   if (isError || !data) return <div className="empty-state" style={{ color: 'var(--danger)' }}>{t('common.error')}</div>;
+
+  const allChecked = pageKeys.length > 0 && pageKeys.every((k) => sel.selected.has(k));
 
   return (
     <div>
@@ -74,10 +98,26 @@ export default function Retries() {
         <div className="empty-state">{t('common.empty')}</div>
       ) : (
         <>
+          {!readOnly && (
+            <JobSetActionBar
+              bulk={BULK}
+              all={ALL}
+              selectedCount={sel.count}
+              total={data.total}
+              pending={pending}
+              onBulk={(cmd) => bulk.mutate({ keys: [...sel.selected], cmd }, { onSuccess: sel.clear })}
+              onAll={(cmd) => all.mutate(cmd, { onSuccess: sel.clear })}
+            />
+          )}
           <div className="table-wrapper">
             <table>
               <thead>
                 <tr>
+                  {!readOnly && (
+                    <th className="row-action">
+                      <input type="checkbox" checked={allChecked} onChange={() => sel.toggleAll(pageKeys)} aria-label="Select all" />
+                    </th>
+                  )}
                   <SortableTh label={t('table.class')} sortKey="klass" sort={sort} onSort={toggle} />
                   <SortableTh label={t('table.args')} sortKey="args" sort={sort} onSort={toggle} />
                   <SortableTh label={t('table.error')} sortKey="error_class" sort={sort} onSort={toggle} />
@@ -89,8 +129,14 @@ export default function Retries() {
               <tbody>
                 {sorted.map((entry) => {
                   const argsStr = formatArgs(entry.args);
+                  const key = entryKey(entry);
                   return (
-                    <tr key={entry.jid} className="row-clickable" onClick={() => setSelected(entry)}>
+                    <tr key={entry.jid} className="row-clickable" onClick={() => { setSelected(entry); setSelectedKey(key); }}>
+                      {!readOnly && (
+                        <td className="row-action" onClick={(e) => e.stopPropagation()}>
+                          <input type="checkbox" checked={sel.selected.has(key)} onChange={() => sel.toggle(key)} aria-label="Select job" />
+                        </td>
+                      )}
                       <td style={{ fontWeight: 500 }}>{entry.klass}</td>
                       <td><ArgsValue str={argsStr} max={40} /></td>
                       <td title={entry.error_class} style={{ color: 'var(--danger)' }}>
@@ -110,7 +156,15 @@ export default function Retries() {
           <Pagination page={page} total={data.total} count={PAGE_SIZE} onChange={setPage} />
         </>
       )}
-      <JobDetailModal entry={selected} atLabel={t('table.retry_at')} onClose={() => setSelected(null)} />
+      <JobDetailModal
+        entry={selected}
+        atLabel={t('table.retry_at')}
+        actions={readOnly ? undefined : BULK}
+        onAction={(cmd) =>
+          selectedKey && single.mutate({ key: selectedKey, cmd }, { onSuccess: () => { setSelected(null); setSelectedKey(null); } })
+        }
+        onClose={() => { setSelected(null); setSelectedKey(null); }}
+      />
     </div>
   );
 }

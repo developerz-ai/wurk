@@ -2,6 +2,7 @@ import { type ReactNode } from 'react';
 import Modal from './Modal';
 import { t } from '../i18n';
 import { formatArgs, isoTime, relativeTime } from '../utils';
+import type { ActionDef } from './JobSetActionBar';
 
 // Union of the fields the various list endpoints expose for a job/entry
 // (queues · retries · scheduled · dead). All optional beyond jid/klass so one
@@ -37,12 +38,34 @@ interface JobDetailModalProps {
   entry: JobEntry | null;
   /** When the entry came from a failed set (retries/dead), show the at-field as "next retry" vs "scheduled". */
   atLabel?: string;
+  /** Single-job actions for the footer (retry/delete/kill/add_to_queue). Omitted in read-only mode. */
+  actions?: ActionDef[];
+  /** Fired with an action's `cmd` when its footer button is clicked. */
+  onAction?: (cmd: string) => void;
   onClose: () => void;
 }
 
-export default function JobDetailModal({ entry, atLabel, onClose }: JobDetailModalProps) {
+export default function JobDetailModal({ entry, atLabel, actions, onAction, onClose }: JobDetailModalProps) {
+  const footer =
+    actions && actions.length > 0 && onAction ? (
+      <div style={{ display: 'flex', gap: '0.5rem', justifyContent: 'flex-end', flexWrap: 'wrap' }}>
+        {actions.map((a) => (
+          <button
+            key={a.cmd}
+            className={`btn btn-sm${a.danger ? ' btn-danger' : ''}`}
+            onClick={() => {
+              if (a.danger && !window.confirm(t('actions.confirm', { action: a.label, scope: t('job.detail').toLowerCase() }))) return;
+              onAction(a.cmd);
+            }}
+          >
+            {a.label}
+          </button>
+        ))}
+      </div>
+    ) : undefined;
+
   return (
-    <Modal open={entry !== null} onClose={onClose} title={entry?.klass ?? t('job.detail')} width={680}>
+    <Modal open={entry !== null} onClose={onClose} title={entry?.klass ?? t('job.detail')} width={680} footer={footer}>
       {entry && (
         <div style={{ display: 'flex', flexDirection: 'column', gap: '1rem' }}>
           <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(160px, 1fr))', gap: '0.9rem' }}>

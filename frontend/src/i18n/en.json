@@ -88,10 +88,19 @@
     "retry": "Retry",
     "delete": "Delete",
     "kill": "Kill",
+    "add_to_queue": "Add to Queue",
+    "clear": "Clear",
     "prev": "Previous",
     "next": "Next",
     "search": "Search",
-    "refresh": "Refresh"
+    "refresh": "Refresh",
+    "all_suffix": "All",
+    "selected": "{n} selected",
+    "select_hint": "Select jobs to act on",
+    "scope_selected": "{n} selected job(s)",
+    "scope_all": "every job in this set",
+    "confirm": "{action} {scope}? This cannot be undone.",
+    "confirm_clear_queue": "Clear all jobs from \"{name}\"? This cannot be undone."
   },
   "readonly": {
     "banner": "Read-only mode"

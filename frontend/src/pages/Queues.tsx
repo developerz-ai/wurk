@@ -1,4 +1,4 @@
-import { useQuery } from '@tanstack/react-query';
+import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { useState, useEffect } from 'react';
 import { Pagination } from '../components/Pagination';
 import { ArgsValue } from '../components/ArgsValue';
@@ -10,6 +10,7 @@ import { PageHeader } from '../components/PageHeader';
 import { relativeTime, truncate, formatArgs } from '../utils';
 import JobDetailModal, { type JobEntry } from '../components/JobDetailModal';
 import Modal from '../components/Modal';
+import { useMeta } from '../hooks/useMeta';
 
 interface QueueSummary {
   name: string;
@@ -49,6 +50,9 @@ const JOB_SORT: Accessors<QueueJob> = {
 function QueueJobs({ name }: { name: string }) {
   const [page, setPage] = usePageParam();
   const [selected, setSelected] = useState<JobEntry | null>(null);
+  const { data: meta } = useMeta();
+  const readOnly = meta?.read_only ?? false;
+  const qc = useQueryClient();
 
   const { data, isLoading, isError } = useQuery<QueueDetail>({
     queryKey: ['queue', name, page],
@@ -56,6 +60,21 @@ function QueueJobs({ name }: { name: string }) {
       fetch(`/wurk/api/queues/${encodeURIComponent(name)}?page=${page - 1}&count=${PAGE_SIZE}`).then(
         (r) => r.json() as Promise<QueueDetail>
       ),
+  });
+
+  // Delete one job from the queue by jid (server LREMs the exact payload).
+  const deleteJob = useMutation({
+    mutationFn: (jid: string) =>
+      fetch(`/wurk/api/queues/${encodeURIComponent(name)}/delete`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ jid }),
+      }),
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ['queue', name] });
+      qc.invalidateQueries({ queryKey: ['queues'] });
+      qc.invalidateQueries({ queryKey: ['stats'] });
+    },
   });
 
   const { sorted, sort, toggle } = useSort(data?.jobs ?? [], JOB_SORT);
@@ -84,6 +103,7 @@ function QueueJobs({ name }: { name: string }) {
                   <SortableTh label={t('table.class')} sortKey="class" sort={sort} onSort={toggle} />
                   <SortableTh label={t('table.args')} sortKey="args" sort={sort} onSort={toggle} />
                   <SortableTh label={t('table.enqueued_at')} sortKey="enqueued" sort={sort} onSort={toggle} />
+                  {!readOnly && <th className="row-action" />}
                 </tr>
               </thead>
               <tbody>
@@ -101,6 +121,17 @@ function QueueJobs({ name }: { name: string }) {
                       <td style={{ fontWeight: 500 }}>{job.class}</td>
                       <td><ArgsValue str={argsStr} max={60} /></td>
                       <td>{relativeTime(job.enqueued_at)}</td>
+                      {!readOnly && (
+                        <td className="row-action" onClick={(e) => e.stopPropagation()}>
+                          <button
+                            className="btn btn-sm btn-danger"
+                            disabled={deleteJob.isPending}
+                            onClick={() => deleteJob.mutate(job.jid)}
+                          >
+                            {t('actions.delete')}
+                          </button>
+                        </td>
+                      )}
                     </tr>
                   );
                 })}
@@ -124,6 +155,9 @@ const QUEUE_SORT: Accessors<QueueSummary> = {
 
 export default function Queues() {
   const [selectedQueue, setSelectedQueue] = useState<string | null>(null);
+  const { data: meta } = useMeta();
+  const readOnly = meta?.read_only ?? false;
+  const qc = useQueryClient();
 
   useEffect(() => {
     document.title = `${t('nav.queues')} — Wurk`;
@@ -133,6 +167,16 @@ export default function Queues() {
     queryKey: ['queues'],
     queryFn: () => fetch('/wurk/api/queues').then((r) => r.json() as Promise<QueueSummary[]>),
     refetchInterval: 10000,
+  });
+
+  const clearQueue = useMutation({
+    mutationFn: (name: string) =>
+      fetch(`/wurk/api/queues/${encodeURIComponent(name)}/clear`, { method: 'POST' }),
+    onSuccess: (_res, name) => {
+      qc.invalidateQueries({ queryKey: ['queues'] });
+      qc.invalidateQueries({ queryKey: ['queue', name] });
+      qc.invalidateQueries({ queryKey: ['stats'] });
+    },
   });
 
   const { sorted, sort, toggle } = useSort(data ?? [], QUEUE_SORT);
@@ -155,6 +199,7 @@ export default function Queues() {
                 <SortableTh label={t('table.size')} sortKey="size" sort={sort} onSort={toggle} />
                 <SortableTh label={t('table.latency')} sortKey="latency" sort={sort} onSort={toggle} />
                 <SortableTh label={t('table.status')} sortKey="status" sort={sort} onSort={toggle} />
+                {!readOnly && <th className="row-action" />}
               </tr>
             </thead>
             <tbody>
@@ -170,6 +215,19 @@ export default function Queues() {
                       <span className="badge badge-success">Active</span>
                     )}
                   </td>
+                  {!readOnly && (
+                    <td className="row-action" onClick={(e) => e.stopPropagation()}>
+                      <button
+                        className="btn btn-sm btn-danger"
+                        disabled={clearQueue.isPending}
+                        onClick={() => {
+                          if (window.confirm(t('actions.confirm_clear_queue', { name: q.name }))) clearQueue.mutate(q.name);
+                        }}
+                      >
+                        {t('actions.clear')}
+                      </button>
+                    </td>
+                  )}
                 </tr>
               ))}
             </tbody>

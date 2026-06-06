@@ -1,0 +1,50 @@
+import { useMutation, useQueryClient } from '@tanstack/react-query';
+
+// The three mutable sorted-set views. The string doubles as the API path
+// segment (`/wurk/api/<set>`) and the TanStack Query key the pages cache under.
+export type JobSetName = 'retries' | 'scheduled' | 'dead';
+
+// Re-targets the exact (score, jid) pair server-side. Mirrors
+// Wurk::SortedEntry#id ("<score>|<jid>"); the controller splits it back apart
+// and resolves via JobSet#fetch, so float→string round-tripping never matters.
+export function entryKey(e: { score: number; jid: string }): string {
+  return `${e.score}|${e.jid}`;
+}
+
+function postJSON(url: string, body?: unknown): Promise<Response> {
+  return fetch(url, {
+    method: 'POST',
+    headers: body ? { 'Content-Type': 'application/json' } : {},
+    body: body ? JSON.stringify(body) : undefined,
+  });
+}
+
+// Single/bulk/all mutations for one job set. Each invalidates both the set's
+// own query and `stats` (the nav badges + dashboard counts read from it) so
+// the UI reflects the change without a manual refresh.
+export function useJobSetActions(set: JobSetName) {
+  const qc = useQueryClient();
+  const invalidate = () => {
+    qc.invalidateQueries({ queryKey: [set] });
+    qc.invalidateQueries({ queryKey: ['stats'] });
+  };
+
+  const single = useMutation({
+    mutationFn: ({ key, cmd }: { key: string; cmd: string }) =>
+      postJSON(`/wurk/api/${set}/${encodeURIComponent(key)}`, { cmd }),
+    onSuccess: invalidate,
+  });
+
+  const bulk = useMutation({
+    mutationFn: ({ keys, cmd }: { keys: string[]; cmd: string }) =>
+      postJSON(`/wurk/api/${set}`, { keys, cmd }),
+    onSuccess: invalidate,
+  });
+
+  const all = useMutation({
+    mutationFn: (cmd: string) => postJSON(`/wurk/api/${set}/all/${cmd}`),
+    onSuccess: invalidate,
+  });
+
+  return { single, bulk, all };
+}
