@@ -54,6 +54,15 @@ module Wurk
         Wurk.redis { |conn| conn.call('SMEMBERS', "b-#{@bid}-failed") }
       end
 
+      # Deprecated pre-Pro8 surface (spec §2.5): an array of per-failure error
+      # detail. The Pro8 data model (§2.8) drops the `b-<bid>-failinfo` hash in
+      # favour of the `failed_jids` set, which Wurk tracks — so the per-jid
+      # error payload is intentionally not persisted and this returns []. Kept
+      # so drop-in callers referencing `#failure_info` don't NameError.
+      def failure_info
+        []
+      end
+
       def dead_jids
         Wurk.redis { |conn| conn.call('SMEMBERS', "b-#{@bid}-died") }
       end

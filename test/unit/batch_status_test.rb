@@ -134,6 +134,13 @@ class BatchStatusTest < Wurk::Test::UnitCase
     assert_empty Wurk::Batch::Status.new(@bid).failed_jids
   end
 
+  # Deprecated pre-Pro8 surface: present so drop-in callers resolve, returns [].
+  def test_failure_info_returns_empty_array
+    seed_batch
+
+    assert_equal [], Wurk::Batch::Status.new(@bid).failure_info
+  end
+
   # --- tags --------------------------------------------------------------
 
   def test_tags_round_trips_json

@@ -32,7 +32,7 @@ class LuaTest < Wurk::Test::UnitCase
   def test_scripts_registry_holds_expected_keys
     assert_equal(
       %i[zpopbyscore bulk_push reliable_schedule_promote
-         batch_push batch_ack_success batch_ack_complete batch_invalidate
+         batch_push batch_ack_success batch_ack_failed batch_ack_complete batch_invalidate
          fast_delete_job fast_delete_by_class
          limiter_concurrent_acquire limiter_concurrent_release
          limiter_bucket_acquire limiter_window_acquire limiter_leaky_acquire
@@ -166,21 +166,55 @@ class LuaTest < Wurk::Test::UnitCase
   def test_batch_ack_success_decrements_pending_only_for_known_jid
     bkey = "#{@ns}:b-y"
     jids = "#{@ns}:b-y-jids"
+    failed = "#{@ns}:b-y-failed"
     @pool.with do |c|
       c.call('HSET', bkey, 'total', 2, 'pending', 2)
       c.call('SADD', jids, 'A', 'B')
 
-      pending, live = Wurk::Lua::Loader.eval_cached(c, :batch_ack_success, keys: [bkey, jids], argv: ['A'])
+      pending, live = Wurk::Lua::Loader.eval_cached(c, :batch_ack_success, keys: [bkey, jids, failed], argv: ['A'])
 
       assert_equal 1, pending
       assert_equal 1, live
       assert_equal '1', c.call('HGET', bkey, 'pending')
 
-      pending, live = Wurk::Lua::Loader.eval_cached(c, :batch_ack_success, keys: [bkey, jids], argv: ['ZZZ'])
+      pending, live = Wurk::Lua::Loader.eval_cached(c, :batch_ack_success, keys: [bkey, jids, failed], argv: ['ZZZ'])
 
       assert_equal(-1, pending)
       assert_equal(-1, live)
       assert_equal '1', c.call('HGET', bkey, 'pending')
+    end
+  end
+
+  # A retry that finally succeeds clears the jid from the failed set and
+  # decrements failures (currently-failing count converges).
+  def test_batch_ack_success_clears_prior_failure
+    bkey = "#{@ns}:b-yf"
+    jids = "#{@ns}:b-yf-jids"
+    failed = "#{@ns}:b-yf-failed"
+    @pool.with do |c|
+      c.call('HSET', bkey, 'total', 1, 'pending', 1, 'failures', 1)
+      c.call('SADD', jids, 'A')
+      c.call('SADD', failed, 'A')
+
+      Wurk::Lua::Loader.eval_cached(c, :batch_ack_success, keys: [bkey, jids, failed], argv: ['A'])
+
+      assert_equal '0', c.call('HGET', bkey, 'failures')
+      assert_equal 0, c.call('SISMEMBER', failed, 'A')
+    end
+  end
+
+  # Transient failure: records the jid and bumps failures only on first add.
+  def test_batch_ack_failed_records_currently_failing_idempotently
+    bkey = "#{@ns}:b-fail"
+    failed = "#{@ns}:b-fail-failed"
+    @pool.with do |c|
+      c.call('HSET', bkey, 'total', 1, 'pending', 1, 'failures', 0)
+
+      Wurk::Lua::Loader.eval_cached(c, :batch_ack_failed, keys: [bkey, failed], argv: ['A'])
+      Wurk::Lua::Loader.eval_cached(c, :batch_ack_failed, keys: [bkey, failed], argv: ['A'])
+
+      assert_equal '1', c.call('HGET', bkey, 'failures')
+      assert_equal 1, c.call('SISMEMBER', failed, 'A')
     end
   end
 
@@ -200,9 +234,11 @@ class LuaTest < Wurk::Test::UnitCase
       assert_equal 1, live
       assert_equal 1, died_n
       assert_equal 1, first
-      assert_equal '1', c.call('HGET', bkey, 'failures')
+      # A job that dies without a prior transient failure leaves `failures`
+      # untouched and lands in `died` only — not `failed` (spec §2.8).
+      assert_equal '0', c.call('HGET', bkey, 'failures')
       assert_equal 1, c.call('SISMEMBER', died, 'A')
-      assert_equal 1, c.call('SISMEMBER', failed, 'A')
+      assert_equal 0, c.call('SISMEMBER', failed, 'A')
 
       _live, _died_n, second_first = Wurk::Lua::Loader.eval_cached(
         c, :batch_ack_complete, keys: [bkey, jids, died, failed], argv: ['B']
@@ -212,6 +248,26 @@ class LuaTest < Wurk::Test::UnitCase
     end
   end
   # rubocop:enable Minitest/MultipleAssertions
+
+  # A job that was failing (in the failed set) then dies moves out of
+  # currently-failing: failures decrements and the jid leaves the failed set.
+  def test_batch_ack_complete_clears_prior_failure_on_death
+    bkey   = "#{@ns}:b-df"
+    jids   = "#{@ns}:b-df-jids"
+    died   = "#{@ns}:b-df-died"
+    failed = "#{@ns}:b-df-failed"
+    @pool.with do |c|
+      c.call('HSET', bkey, 'total', 1, 'pending', 1, 'failures', 1)
+      c.call('SADD', jids, 'A')
+      c.call('SADD', failed, 'A')
+
+      Wurk::Lua::Loader.eval_cached(c, :batch_ack_complete, keys: [bkey, jids, died, failed], argv: ['A'])
+
+      assert_equal '0', c.call('HGET', bkey, 'failures')
+      assert_equal 0, c.call('SISMEMBER', failed, 'A')
+      assert_equal 1, c.call('SISMEMBER', died, 'A')
+    end
+  end
 
   def test_batch_invalidate_clears_jids_and_flags_hash
     bkey = "#{@ns}:b-z"

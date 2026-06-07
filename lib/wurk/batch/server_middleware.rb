@@ -3,6 +3,8 @@
 require 'json'
 require_relative '../middleware'
 require_relative '../lua'
+require_relative '../job'
+require_relative '../job_retry'
 
 module Wurk
   class Batch
@@ -10,6 +12,13 @@ module Wurk
     # On success → BATCH_ACK_SUCCESS → if pending hit zero and no deaths,
     # enqueue `:success` callback jobs; if live jids hit zero, enqueue
     # `:complete` callback jobs.
+    #
+    # On a job raising (and thus heading to retry), records a transient
+    # failure → BATCH_ACK_FAILED → the jid joins `b-<bid>-failed` and
+    # `failures` reflects the count of currently-failing jobs. A later
+    # successful retry clears it; a terminal death moves it to `b-<bid>-died`.
+    # Clean handled exits (JobRetry::Skip from expiry/interrupt, cooperative
+    # IterableJob interruption) are re-raised without counting as failures.
     #
     # Invalidated batches short-circuit: the job is skipped without
     # raising — counts as a "success" for batch purposes per spec §12.
@@ -29,11 +38,23 @@ module Wurk
           return
         end
 
-        yield
-        ack_success(bid, job['jid'])
+        run_and_ack(bid, job['jid']) { yield }
       end
 
       private
+
+      # A handled/skip exit or a cooperative interruption is not a failure —
+      # re-raise it untouched. Any other exception means the job failed and
+      # will retry (or eventually die): record it before re-raising.
+      def run_and_ack(bid, jid)
+        yield
+        ack_success(bid, jid)
+      rescue Wurk::JobRetry::Handled, Wurk::Job::Interrupted
+        raise
+      rescue StandardError
+        ack_failed(bid, jid)
+        raise
+      end
 
       def invalidated?(bid)
         redis_pool.with { |conn| conn.call('HGET', "b-#{bid}", 'invalidated') } == '1'
@@ -44,7 +65,7 @@ module Wurk
           Wurk::Lua::Loader.eval_cached(
             conn,
             :batch_ack_success,
-            keys: ["b-#{bid}", "b-#{bid}-jids"],
+            keys: ["b-#{bid}", "b-#{bid}-jids", "b-#{bid}-failed"],
             argv: [jid]
           )
         end
@@ -52,6 +73,17 @@ module Wurk
         return if pending.negative?
 
         Wurk::Batch::Callbacks.maybe_fire(bid, pending: pending, live: live)
+      end
+
+      def ack_failed(bid, jid)
+        redis_pool.with do |conn|
+          Wurk::Lua::Loader.eval_cached(
+            conn,
+            :batch_ack_failed,
+            keys: ["b-#{bid}", "b-#{bid}-failed"],
+            argv: [jid]
+          )
+        end
       end
     end
   end

@@ -24,6 +24,10 @@ module Sidekiq
     # drops in unchanged. `Wurk::Web` is already required by the time this file
     # loads (lib/wurk.rb requires wurk/web before wurk/compat).
     Web = Wurk::Web
+
+    # `use Sidekiq::Pro::BatchStatus` — the polling Rack middleware that serves
+    # GET /batch_status/<bid>.json. Spec: docs/target/sidekiq-pro.md §10.3.
+    BatchStatus = Wurk::Web::BatchStatus
   end
 
   # Sidekiq Enterprise feature surface (`unique!`, `Crypto`, `Unique.locked?`).
