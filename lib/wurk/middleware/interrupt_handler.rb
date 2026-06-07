@@ -43,3 +43,8 @@ module Wurk
 end
 
 Wurk.configuration.server_middleware.prepend(Wurk::Middleware::InterruptHandler)
+
+# Sidekiq exposes this middleware as `Sidekiq::Job::InterruptHandler`. Mirror
+# that name onto `Wurk::Job` (aliased to `Sidekiq::Job` in compat) so the
+# drop-in constant resolves. Spec: docs/target/sidekiq-free.md §10.3.
+Wurk::Job::InterruptHandler = Wurk::Middleware::InterruptHandler
