@@ -122,6 +122,10 @@ module Wurk
       configuration.logger
     end
 
+    def logger=(logger)
+      configuration.logger = logger
+    end
+
     # --- JSON ---------------------------------------------------------
 
     def load_json(string)

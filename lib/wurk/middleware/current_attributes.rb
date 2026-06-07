@@ -25,6 +25,7 @@ module Wurk
           raise ArgumentError, 'persist requires at least one CurrentAttributes class' if classes.empty?
 
           config.client_middleware.add(Save, classes)
+          config.client_middleware.add(Load, classes)
           config.server_middleware.add(Load, classes)
         end
 
@@ -66,6 +67,10 @@ module Wurk
       # Restores each registered CurrentAttributes class for the duration
       # of the inner block, then resets so the next job in the thread
       # starts clean. Reset runs in `ensure` to survive raises and Skip.
+      #
+      # Registered on BOTH chains (persist adds it to client + server), so
+      # `call` takes an optional 4th arg: the client chain passes a
+      # `redis_pool`, the server chain stops at `queue`.
       class Load
         include Wurk::Middleware::ServerMiddleware
 
@@ -73,7 +78,7 @@ module Wurk
           @classes = classes
         end
 
-        def call(_job_or_class, job, _queue)
+        def call(_job_or_class, job, _queue, _redis_pool = nil)
           @classes.each_with_index do |klass, idx|
             CurrentAttributes.restore(klass, job[CurrentAttributes.key_for(idx)])
           end
@@ -85,3 +90,9 @@ module Wurk
     end
   end
 end
+
+# Drop-in alias. Sidekiq documents the top-level constant
+# `Sidekiq::CurrentAttributes` (with `.persist` and `Save`/`Load` nested),
+# not the `Middleware::`-namespaced form. Set when this opt-in file is
+# required, so `Sidekiq::CurrentAttributes.persist(MyAttrs)` resolves.
+Sidekiq::CurrentAttributes = Wurk::Middleware::CurrentAttributes if defined?(Sidekiq)

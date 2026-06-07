@@ -302,7 +302,9 @@ class MiddlewareBuiltinsTest < Wurk::Test::UnitCase
     Wurk::Middleware::CurrentAttributes.persist(FakeCurrent, cfg)
 
     assert cfg.client_middleware.exists?(Wurk::Middleware::CurrentAttributes::Save)
-    refute cfg.client_middleware.exists?(Wurk::Middleware::CurrentAttributes::Load)
+    # Load registers on BOTH chains per docs/target/sidekiq-free.md §10.3:
+    # "adds Save to client_middleware, Load to client+server chains".
+    assert cfg.client_middleware.exists?(Wurk::Middleware::CurrentAttributes::Load)
     assert cfg.server_middleware.exists?(Wurk::Middleware::CurrentAttributes::Load)
   end
 
@@ -318,6 +320,25 @@ class MiddlewareBuiltinsTest < Wurk::Test::UnitCase
     assert_raises(ArgumentError) do
       Wurk::Middleware::CurrentAttributes.persist([], Wurk::Configuration.new)
     end
+  end
+
+  # Load lives on the client chain too, which invokes with a 4th `redis_pool`
+  # arg. Restore must still run when called with the client-chain arity.
+  def test_current_attributes_load_accepts_client_chain_arity
+    seen = nil
+    Wurk::Middleware::CurrentAttributes::Load
+      .new([FakeCurrent])
+      .call('X', { 'cattr' => { user: 7 } }, 'q', nil) { seen = FakeCurrent.attributes[:user] }
+
+    assert_equal 7, seen
+  end
+
+  # #98: the documented drop-in constant is the top-level
+  # `Sidekiq::CurrentAttributes`, aliased when the opt-in file is required.
+  def test_sidekiq_current_attributes_alias
+    assert_same Wurk::Middleware::CurrentAttributes, Sidekiq::CurrentAttributes
+    assert_same Wurk::Middleware::CurrentAttributes::Save, Sidekiq::CurrentAttributes::Save
+    assert_same Wurk::Middleware::CurrentAttributes::Load, Sidekiq::CurrentAttributes::Load
   end
 
   # =====================================================================
