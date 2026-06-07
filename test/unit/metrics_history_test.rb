@@ -184,6 +184,24 @@ class MetricsHistoryTest < Wurk::Test::UnitCase
     assert_equal('1', Wurk.redis { |c| c.call('HGET', minute, "#{@klass}|p") })
   end
 
+  # #100: History must be on the server chain by default — no host-app
+  # initializer required.
+  def test_auto_registered_on_server_chain
+    assert Wurk.configuration.server_middleware.exists?(Wurk::Metrics::History)
+  end
+
+  # End-to-end through the default capsule's bound chain — exactly how the
+  # Processor invokes it (lib/wurk/processor.rb:226). Running a job records the
+  # minute bucket with no host-app initializer, because History is
+  # auto-registered on boot.
+  def test_default_server_chain_records_without_initializer
+    Wurk.configuration.default_capsule.server_middleware.invoke(nil, { 'class' => @klass }, 'default') { :ok }
+
+    minute = Wurk::Metrics::History.minute_key(::Time.now.utc)
+
+    assert_equal('1', Wurk.redis { |c| c.call('HGET', minute, "#{@klass}|p") })
+  end
+
   def test_middleware_records_failure_when_perform_raises
     mw = build_middleware
     job = { 'class' => @klass }

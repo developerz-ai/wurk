@@ -230,6 +230,13 @@ Wurk.configuration.server_middleware.add(Wurk::Limiter::ServerMiddleware)
 # Spec: docs/target/sidekiq-pro.md §9.
 Wurk.configuration.server_middleware.add(Wurk::Metrics::Statsd)
 
+# Historical metrics middleware: records per-class processed/failed/ms into
+# Redis time-buckets so the dashboard history pane has data on a default boot.
+# Sidekiq auto-installs `Sidekiq::Metrics::Middleware` on the server for
+# embedded/CLI; we mirror that here at load. Runs server-side only (the chain
+# never executes in a client-only process). Spec: docs/target/sidekiq-free.md §10.3.
+Wurk.configuration.server_middleware.add(Wurk::Metrics::History)
+
 # Pro Fast API: Lua-backed Queue#delete_job / #delete_by_class plus
 # SortedSet#scan { |JobRecord| … }. Mixed in via include/prepend on the
 # existing data API classes so the surface is wire-compat with Sidekiq Pro.

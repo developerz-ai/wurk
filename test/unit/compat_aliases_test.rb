@@ -158,6 +158,12 @@ class CompatAliasesTest < Wurk::Test::UnitCase
     assert_same Wurk::Manager, Sidekiq::Manager
   end
 
+  # #100: Sidekiq exposes the historical metrics middleware as
+  # Sidekiq::Metrics::Middleware; it maps to Wurk::Metrics::History.
+  def test_metrics_middleware_alias
+    assert_same Wurk::Metrics::History, Sidekiq::Metrics::Middleware
+  end
+
   def test_middleware_module_alias
     assert_same Wurk::Middleware, Sidekiq::Middleware
   end
