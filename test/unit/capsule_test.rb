@@ -79,6 +79,56 @@ class CapsuleTest < Wurk::Test::UnitCase
     assert_same custom, @capsule.fetcher
   end
 
+  # --- fetch_class / fetch_setup pluggability (#107) --------------------
+
+  # A capsule whose config sets config[:fetch_class] uses it instead of the
+  # default reliable fetcher. Spec: sidekiq-free.md §5 (config[:fetch_class]
+  # || Sidekiq::BasicFetch).
+  StubFetcher = Class.new do
+    attr_reader :capsule
+
+    def initialize(capsule)
+      @capsule = capsule
+    end
+  end
+
+  def test_prepare_honors_config_fetch_class
+    @config[:fetch_class] = StubFetcher
+
+    @capsule.prepare!
+
+    assert_instance_of StubFetcher, @capsule.fetcher
+    assert_same @capsule, @capsule.fetcher.capsule
+  end
+
+  def test_prepare_falls_back_to_reliable_without_fetch_class
+    assert_nil @config[:fetch_class]
+
+    @capsule.prepare!
+
+    assert_instance_of Wurk::Fetcher::Reliable, @capsule.fetcher
+  end
+
+  # config[:fetch_setup] is handed the freshly built fetcher so it can
+  # configure it (spec §4.1 fetch_setup callable).
+  def test_prepare_invokes_fetch_setup_with_the_built_fetcher
+    seen = nil
+    @config[:fetch_class] = StubFetcher
+    @config[:fetch_setup] = ->(fetcher) { seen = fetcher }
+
+    @capsule.prepare!
+
+    assert_same @capsule.fetcher, seen
+  end
+
+  def test_prepare_ignores_non_callable_fetch_setup
+    @config[:fetch_setup] = 'not callable'
+
+    @capsule.prepare! # must not raise
+
+    assert_instance_of Wurk::Fetcher::Reliable, @capsule.fetcher
+  end
+
   def test_prepare_materializes_lazy_pools
     @capsule.prepare!
 

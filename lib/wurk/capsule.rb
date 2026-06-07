@@ -63,7 +63,7 @@ module Wurk
     # by hand; centralizing it here covers the standalone CLI and embedded
     # paths too (the bug behind a nil `fetcher` in `exe/wurk`). Idempotent.
     def prepare!
-      @fetcher ||= Wurk::Fetcher::Reliable.new(self)
+      @fetcher ||= build_fetcher
       redis_pool
       local_redis_pool
       client_middleware
@@ -139,6 +139,19 @@ module Wurk
     def stop; end
 
     private
+
+    # Drop-in fetch pluggability (spec §5 / §4.1): instantiate
+    # `config[:fetch_class]` when the host set one — a custom or Pro fetcher —
+    # else the default reliable BLMOVE fetcher (`Sidekiq::BasicFetch`). A
+    # `config[:fetch_setup]` callable, if present, is handed the freshly built
+    # fetcher so it can configure it before the manager starts pulling work.
+    def build_fetcher
+      klass = @config[:fetch_class] || Wurk::Fetcher::Reliable
+      fetcher = klass.new(self)
+      setup = @config[:fetch_setup]
+      setup.call(fetcher) if setup.respond_to?(:call)
+      fetcher
+    end
 
     def parse_queue_entry(entry)
       qname, weight_str = entry.to_s.split(',', 2)
