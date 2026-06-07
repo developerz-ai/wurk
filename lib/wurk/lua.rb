@@ -72,12 +72,21 @@ module Wurk
 
     # Pro Batch: ACK a job that completed successfully. SREM from the live
     # jids set and decrement pending iff the jid was a member (idempotent
-    # against double-success on a flaky retry).
-    # KEYS = [b-<bid>, b-<bid>-jids]
+    # against double-success on a flaky retry). A success also clears any
+    # outstanding "currently failing" record for the jid (a retry that finally
+    # passed), decrementing `failures` so it converges to the count of jobs
+    # *still* failing — Sidekiq Pro semantics, spec §2.5. The failed-set clear
+    # runs *before* the live-jids check so an invalidated batch (BATCH_INVALIDATE
+    # deletes the jids set) still converges failures to 0 on its short-circuited
+    # success ack, instead of stranding the jid in failed forever.
+    # KEYS = [b-<bid>, b-<bid>-jids, b-<bid>-failed]
     # ARGV = [jid]
     # Returns [new_pending, live_jids_remaining], or [-1, -1] when the jid
     # was not a member (treat as already acked).
     BATCH_ACK_SUCCESS = <<~LUA
+      if redis.call("srem", KEYS[3], ARGV[1]) == 1 then
+        redis.call("hincrby", KEYS[1], "failures", -1)
+      end
       local removed = redis.call("srem", KEYS[2], ARGV[1])
       if removed == 1 then
         local pending = redis.call("hincrby", KEYS[1], "pending", -1)
@@ -86,9 +95,28 @@ module Wurk
       return { -1, -1 }
     LUA
 
-    # Pro Batch: ACK a job that exhausted retries and died. Records death,
-    # bumps failures, and SREMs from live jids so the batch can fire
-    # `:complete` even with terminally failed jobs.
+    # Pro Batch: record a job that failed and will retry (transient failure).
+    # SADDs the jid to the `failed` set and bumps `failures` only on the first
+    # add, so `failures` == SCARD(b-<bid>-failed) == the number of jobs
+    # currently in a failing/retrying state. Re-failures of the same jid are
+    # idempotent. Cleared by BATCH_ACK_SUCCESS (retry passed) or
+    # BATCH_ACK_COMPLETE (job died). Spec §2.5, §2.8.
+    # KEYS = [b-<bid>, b-<bid>-failed]
+    # ARGV = [jid]
+    # Returns 1.
+    BATCH_ACK_FAILED = <<~LUA
+      if redis.call("sadd", KEYS[2], ARGV[1]) == 1 then
+        redis.call("hincrby", KEYS[1], "failures", 1)
+      end
+      return 1
+    LUA
+
+    # Pro Batch: ACK a job that exhausted retries and died. Moves the jid from
+    # "currently failing" to "died": SREMs from the failed set (decrementing
+    # `failures` if it was recorded as failing), SADDs to died, and SREMs from
+    # live jids so the batch can fire `:complete` even with terminally failed
+    # jobs. `b-<bid>-failed` holds only currently-retrying jids; `b-<bid>-died`
+    # holds terminally-dead ones (spec §2.8 — the two sets are distinct).
     # KEYS = [b-<bid>, b-<bid>-jids, b-<bid>-died, b-<bid>-failed]
     # ARGV = [jid]
     # Returns [live_jids_remaining, died_count, first_death]. `first_death`
@@ -97,9 +125,10 @@ module Wurk
     BATCH_ACK_COMPLETE = <<~LUA
       local was_pre_existing_death = redis.call("scard", KEYS[3])
       redis.call("srem", KEYS[2], ARGV[1])
-      redis.call("sadd", KEYS[4], ARGV[1])
+      if redis.call("srem", KEYS[4], ARGV[1]) == 1 then
+        redis.call("hincrby", KEYS[1], "failures", -1)
+      end
       local died_added = redis.call("sadd", KEYS[3], ARGV[1])
-      redis.call("hincrby", KEYS[1], "failures", 1)
       local first_death = 0
       if was_pre_existing_death == 0 and died_added == 1 then
         first_death = 1
@@ -172,6 +201,7 @@ module Wurk
       reliable_schedule_promote: RELIABLE_SCHEDULE_PROMOTE,
       batch_push: BATCH_PUSH,
       batch_ack_success: BATCH_ACK_SUCCESS,
+      batch_ack_failed: BATCH_ACK_FAILED,
       batch_ack_complete: BATCH_ACK_COMPLETE,
       batch_invalidate: BATCH_INVALIDATE,
       fast_delete_job: FAST_DELETE_JOB,

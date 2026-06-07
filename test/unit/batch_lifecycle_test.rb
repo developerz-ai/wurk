@@ -174,6 +174,89 @@ class BatchLifecycleTest < Wurk::Test::UnitCase
     assert_equal 1, callbacks_fired(event: 'death', bid: batch.bid)
   end
 
+  # --- currently-failing tracking (#112) ---------------------------------
+
+  # A job that raises (heading to retry) is recorded as currently-failing;
+  # the count converges to 0 / [] once the retry succeeds.
+  def test_failing_then_succeeding_job_converges_to_zero_failures
+    batch = new_batch
+    batch.jobs { perform_one }
+    jid = jid_for(@queue, batch.bid)
+
+    fail_job(batch.bid, jid)
+    status = Wurk::Batch::Status.new(batch.bid)
+
+    assert_equal 1, status.failures
+    assert_equal [jid], status.failed_jids
+
+    ack_success(batch.bid, jid)
+    status.reload!
+
+    assert_equal 0, status.failures
+    assert_empty status.failed_jids
+  end
+
+  # Re-failing the same jid across retries doesn't double-count.
+  def test_repeated_failures_of_same_jid_count_once
+    batch = new_batch
+    batch.jobs { perform_one }
+    jid = jid_for(@queue, batch.bid)
+
+    3.times { fail_job(batch.bid, jid) }
+
+    assert_equal 1, Wurk::Batch::Status.new(batch.bid).failures
+  end
+
+  # A job that fails then exhausts retries leaves currently-failing (it's now
+  # dead): failures returns to 0, jid moves from failed → died.
+  def test_failing_then_dying_job_moves_to_died
+    batch = new_batch(death: 'D')
+    batch.jobs { perform_one }
+    jid = jid_for(@queue, batch.bid)
+
+    fail_job(batch.bid, jid)
+    kill(batch.bid, jid)
+    status = Wurk::Batch::Status.new(batch.bid)
+
+    assert_equal 0, status.failures
+    assert_empty status.failed_jids
+    assert_equal [jid], status.dead_jids
+  end
+
+  # Invalidation deletes the live jids set, so a failing job's short-circuited
+  # success ack must still clear it from currently-failing (converge to 0).
+  def test_invalidated_batch_with_failing_job_converges_failures
+    batch = new_batch
+    batch.jobs { perform_one }
+    jid = jid_for(@queue, batch.bid)
+
+    fail_job(batch.bid, jid)
+    assert_equal 1, Wurk::Batch::Status.new(batch.bid).failures
+
+    batch.invalidate_all
+    # Invalidated → ServerMiddleware short-circuits to ack_success.
+    build_server_middleware.call(nil, { 'bid' => batch.bid, 'jid' => jid }, @queue) { :ok }
+    status = Wurk::Batch::Status.new(batch.bid)
+
+    assert_equal 0, status.failures
+    assert_empty status.failed_jids
+  end
+
+  # A clean handled exit (JobRetry::Skip — e.g. expiry/interrupt) is not a
+  # batch failure.
+  def test_handled_skip_is_not_counted_as_failure
+    batch = new_batch
+    batch.jobs { perform_one }
+    jid = jid_for(@queue, batch.bid)
+
+    mw = build_server_middleware
+    assert_raises(Wurk::JobRetry::Skip) do
+      mw.call(nil, { 'bid' => batch.bid, 'jid' => jid }, @queue) { raise Wurk::JobRetry::Skip }
+    end
+
+    assert_equal 0, Wurk::Batch::Status.new(batch.bid).failures
+  end
+
   # --- nested death cascade ----------------------------------------------
 
   def test_child_death_fires_parent_death_callback_exactly_once
@@ -400,6 +483,21 @@ class BatchLifecycleTest < Wurk::Test::UnitCase
 
   def kill(bid, jid)
     Wurk::Batch::DeathHandler.call({ 'bid' => bid, 'jid' => jid }, RuntimeError.new('boom'))
+  end
+
+  def build_server_middleware
+    mw = Wurk::Batch::ServerMiddleware.new
+    mw.config = Wurk.configuration
+    mw
+  end
+
+  # Runs the batch server middleware with a raising block — the same path a
+  # job hitting an exception (and heading to retry) takes. Only the synthetic
+  # 'boom' is swallowed; a real regression on the ack path still fails loudly.
+  def fail_job(bid, jid)
+    build_server_middleware.call(nil, { 'bid' => bid, 'jid' => jid }, @queue) { raise 'boom' }
+  rescue RuntimeError => e
+    raise unless e.message == 'boom'
   end
 
   def queued(queue)

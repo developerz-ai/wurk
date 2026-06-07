@@ -43,6 +43,11 @@ class CompatAliasesTest < Wurk::Test::UnitCase
     assert_same Sidekiq::Web, Sidekiq::Pro::Web
   end
 
+  # #116: `use Sidekiq::Pro::BatchStatus` polling middleware.
+  def test_pro_batch_status_alias
+    assert_same Wurk::Web::BatchStatus, Sidekiq::Pro::BatchStatus
+  end
+
   def test_enterprise_sentinel_defined
     assert(defined?(Sidekiq::Enterprise))
     assert_kind_of Module, Sidekiq::Enterprise
