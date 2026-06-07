@@ -234,7 +234,12 @@ module Wurk
       nil
     end
 
+    # Pro reliable scheduler (§4): promote due jobs from retry/schedule onto
+    # their target queue in a single atomic Lua (ZRANGEBYSCORE+ZREM+LPUSH),
+    # closing the pop→push job-loss window of the default poller. Swaps the
+    # pluggable `scheduled_enq` for the atomic promoter; idempotent.
     def reliable_scheduler!(*)
+      self[:scheduled_enq] = Wurk::Scheduled::ReliableEnq
       nil
     end
 

@@ -85,6 +85,30 @@ class ScheduledPollerTest < Wurk::Test::UnitCase
     assert_equal(1, @pool.with { |c| c.call('LLEN', @queue_list) })
   end
 
+  # --- ReliableEnq (#166, atomic promote, no pop→push loss window) ---------
+
+  def test_reliable_enq_atomically_promotes_due_jobs_to_their_queue
+    job = schedule_job(set: @schedule, at: Time.now.to_f - 5)
+
+    Wurk::Scheduled::ReliableEnq.new(@config).enqueue_jobs([@schedule])
+
+    @pool.with do |c|
+      assert_equal 0, c.call('ZCARD', @schedule)
+      assert_equal 1, c.call('LLEN', @queue_list)
+      assert_equal job, Wurk.load_json(c.call('LRANGE', @queue_list, 0, -1).first)
+      assert_equal 1, c.call('SISMEMBER', 'queues', @queue)
+    end
+  end
+
+  def test_reliable_enq_leaves_future_jobs_in_set
+    schedule_job(set: @schedule, at: Time.now.to_f + 600)
+
+    Wurk::Scheduled::ReliableEnq.new(@config).enqueue_jobs([@schedule])
+
+    assert_equal(1, @pool.with { |c| c.call('ZCARD', @schedule) })
+    assert_equal(0, @pool.with { |c| c.call('LLEN', @queue_list) })
+  end
+
   def test_enqueue_leaves_future_jobs_in_set
     schedule_job(set: @schedule, at: Time.now.to_f + 600)
 
