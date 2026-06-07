@@ -125,6 +125,11 @@ module Sidekiq
     def redis(&) = Wurk.redis(&)
     def redis_pool = Wurk.redis_pool
     def logger = Wurk.logger
+
+    def logger=(logger)
+      Wurk.logger = logger
+    end
+
     def server? = Wurk.server?
     def pro? = Wurk.pro?
     def ent? = Wurk.ent?

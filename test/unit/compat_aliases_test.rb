@@ -299,6 +299,25 @@ class CompatAliasesTest < Wurk::Test::UnitCase
     assert_same Wurk.logger, Sidekiq.logger
   end
 
+  # #106: `Sidekiq.logger = Rails.logger` / `Wurk.logger =` set the config logger.
+  def test_logger_setter
+    STATE_MUTEX.synchronize do
+      original = Wurk.configuration.logger
+      custom = Logger.new(IO::NULL)
+
+      Sidekiq.logger = custom
+      assert_same custom, Sidekiq.logger
+      assert_same custom, Wurk.configuration.logger
+
+      other = Logger.new(IO::NULL)
+      Wurk.logger = other
+      assert_same other, Wurk.logger
+      assert_same other, Wurk.configuration.logger
+    ensure
+      Wurk.configuration.logger = original
+    end
+  end
+
   def test_redis_pool
     assert_same Wurk.redis_pool, Sidekiq.redis_pool
   end
