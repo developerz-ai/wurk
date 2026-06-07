@@ -176,7 +176,9 @@ class InterruptHandlerAutoregisterTest < Wurk::Test::UnitCase
   def cleanup_keys
     return unless @observer
 
-    @observer.call('DEL', @armed_key, @done_key, "queue:#{@queue_name}", 'retry')
+    # Not the shared `retry` key: per-worker DB isolation + FLUSHDB teardown
+    # already wipe it, and DEL-ing a global key is a needless cross-test footgun.
+    @observer.call('DEL', @armed_key, @done_key, "queue:#{@queue_name}")
     cursor = '0'
     loop do
       cursor, keys = @observer.call('SCAN', cursor, 'MATCH', "queue:#{@queue_name}|*", 'COUNT', 100)
