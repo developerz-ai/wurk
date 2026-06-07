@@ -190,16 +190,30 @@ class MetricsHistoryTest < Wurk::Test::UnitCase
     assert Wurk.configuration.server_middleware.exists?(Wurk::Metrics::History)
   end
 
+  # An app that also registers History in an initializer must not double-count:
+  # Chain#add removes any existing entry for the klass before appending, so
+  # re-adding replaces rather than duplicates.
+  def test_re_adding_history_keeps_a_single_entry
+    chain = Wurk::Configuration.new.server_middleware
+    chain.add(Wurk::Metrics::History)
+
+    assert_equal 1, chain.entries.count { |e| e.klass == Wurk::Metrics::History }
+  end
+
   # End-to-end through the default capsule's bound chain — exactly how the
   # Processor invokes it (lib/wurk/processor.rb:226). Running a job records the
   # minute bucket with no host-app initializer, because History is
-  # auto-registered on boot.
+  # auto-registered on boot. The record uses Time.now inside the middleware, so
+  # accept either candidate minute to stay deterministic across a minute tick.
   def test_default_server_chain_records_without_initializer
+    before = ::Time.now.utc
     Wurk.configuration.default_capsule.server_middleware.invoke(nil, { 'class' => @klass }, 'default') { :ok }
+    after = ::Time.now.utc
 
-    minute = Wurk::Metrics::History.minute_key(::Time.now.utc)
+    minutes = [before, after].map { |t| Wurk::Metrics::History.minute_key(t) }.uniq
+    recorded = minutes.any? { |m| Wurk.redis { |c| c.call('HGET', m, "#{@klass}|p") } == '1' }
 
-    assert_equal('1', Wurk.redis { |c| c.call('HGET', minute, "#{@klass}|p") })
+    assert recorded, "expected processed=1 in one of #{minutes.inspect}"
   end
 
   def test_middleware_records_failure_when_perform_raises
