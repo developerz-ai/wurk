@@ -196,8 +196,9 @@ class MetricsHistoryTest < Wurk::Test::UnitCase
   def test_re_adding_history_keeps_a_single_entry
     chain = Wurk::Configuration.new.server_middleware
     chain.add(Wurk::Metrics::History)
+    chain.add(Wurk::Metrics::History) # gem auto-registered, then app re-adds
 
-    assert_equal 1, chain.entries.count { |e| e.klass == Wurk::Metrics::History }
+    assert_equal(1, chain.entries.count { |e| e.klass == Wurk::Metrics::History })
   end
 
   # End-to-end through the default capsule's bound chain — exactly how the
@@ -208,12 +209,9 @@ class MetricsHistoryTest < Wurk::Test::UnitCase
   def test_default_server_chain_records_without_initializer
     before = ::Time.now.utc
     Wurk.configuration.default_capsule.server_middleware.invoke(nil, { 'class' => @klass }, 'default') { :ok }
-    after = ::Time.now.utc
 
-    minutes = [before, after].map { |t| Wurk::Metrics::History.minute_key(t) }.uniq
-    recorded = minutes.any? { |m| Wurk.redis { |c| c.call('HGET', m, "#{@klass}|p") } == '1' }
-
-    assert recorded, "expected processed=1 in one of #{minutes.inspect}"
+    assert recorded_processed_between?(before, ::Time.now.utc),
+           'expected processed=1 in the minute bucket'
   end
 
   def test_middleware_records_failure_when_perform_raises
@@ -252,5 +250,14 @@ class MetricsHistoryTest < Wurk::Test::UnitCase
     mw = Wurk::Metrics::History.new
     mw.config = Wurk.configuration
     mw
+  end
+
+  # The middleware records at its own Time.now, so the bucket lands in the
+  # minute of either `started_at` or `ended_at` (the window around the invoke).
+  # True if the processed counter shows 1 in either candidate minute bucket.
+  def recorded_processed_between?(started_at, ended_at)
+    [started_at, ended_at].map { |t| Wurk::Metrics::History.minute_key(t) }.uniq.any? do |minute|
+      Wurk.redis { |c| c.call('HGET', minute, "#{@klass}|p") } == '1'
+    end
   end
 end
