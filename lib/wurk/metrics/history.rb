@@ -147,5 +147,10 @@ module Wurk
       end
       private_class_method :with_pool
     end
+
+    # Sidekiq exposes this as `Sidekiq::Metrics::Middleware` (via
+    # `Sidekiq::Metrics`, aliased to `Wurk::Metrics` in compat). Mirror that
+    # name so the drop-in constant resolves. Spec: docs/target/sidekiq-free.md §10.3.
+    Middleware = History
   end
 end
