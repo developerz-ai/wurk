@@ -215,6 +215,15 @@ require_relative 'wurk/health'
 # Spec: docs/target/sidekiq-pro.md §3.2.
 require_relative 'wurk/middleware/poison_pill'
 
+# InterruptHandler self-prepends to the head of the server chain so a
+# cooperatively-cancelled job (IterableJob) is re-pushed + cleanly skipped
+# instead of surfacing as a raw error. Sidekiq registers it from
+# `require "sidekiq/cli"`; we require it here at load so every server boot
+# path picks it up — standalone CLI, embedded, and swarm-forked children
+# (the swarm and embedded paths never run through Wurk::CLI#run).
+# Spec: docs/target/sidekiq-free.md §10.3.
+require_relative 'wurk/middleware/interrupt_handler'
+
 # Limiter server middleware: catches OverLimit, reschedules onto the same
 # queue with `Time.now + backoff` until `overrated` hits the reschedule cap.
 # Registered AFTER Batch::ServerMiddleware so a rescheduled OverLimit
