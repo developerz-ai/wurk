@@ -333,6 +333,18 @@ class MiddlewareBuiltinsTest < Wurk::Test::UnitCase
     assert_equal 7, seen
   end
 
+  # On the client chain an enqueue happens mid-request with attributes already
+  # set; Load must restore that caller state afterward, not wipe it to empty.
+  def test_current_attributes_load_restores_caller_state_after_enqueue
+    FakeCurrent.user = 'request-scoped'
+
+    Wurk::Middleware::CurrentAttributes::Load
+      .new([FakeCurrent])
+      .call('X', { 'cattr' => { user: 'job-snapshot' } }, 'q', nil) { :enqueued }
+
+    assert_equal 'request-scoped', FakeCurrent.attributes[:user]
+  end
+
   # #98: the documented drop-in constant is the top-level
   # `Sidekiq::CurrentAttributes`, aliased when the opt-in file is required.
   def test_sidekiq_current_attributes_alias
