@@ -223,6 +223,25 @@ class BatchLifecycleTest < Wurk::Test::UnitCase
     assert_equal [jid], status.dead_jids
   end
 
+  # Invalidation deletes the live jids set, so a failing job's short-circuited
+  # success ack must still clear it from currently-failing (converge to 0).
+  def test_invalidated_batch_with_failing_job_converges_failures
+    batch = new_batch
+    batch.jobs { perform_one }
+    jid = jid_for(@queue, batch.bid)
+
+    fail_job(batch.bid, jid)
+    assert_equal 1, Wurk::Batch::Status.new(batch.bid).failures
+
+    batch.invalidate_all
+    # Invalidated → ServerMiddleware short-circuits to ack_success.
+    build_server_middleware.call(nil, { 'bid' => batch.bid, 'jid' => jid }, @queue) { :ok }
+    status = Wurk::Batch::Status.new(batch.bid)
+
+    assert_equal 0, status.failures
+    assert_empty status.failed_jids
+  end
+
   # A clean handled exit (JobRetry::Skip — e.g. expiry/interrupt) is not a
   # batch failure.
   def test_handled_skip_is_not_counted_as_failure
@@ -473,11 +492,12 @@ class BatchLifecycleTest < Wurk::Test::UnitCase
   end
 
   # Runs the batch server middleware with a raising block — the same path a
-  # job hitting an exception (and heading to retry) takes.
+  # job hitting an exception (and heading to retry) takes. Only the synthetic
+  # 'boom' is swallowed; a real regression on the ack path still fails loudly.
   def fail_job(bid, jid)
     build_server_middleware.call(nil, { 'bid' => bid, 'jid' => jid }, @queue) { raise 'boom' }
-  rescue RuntimeError
-    nil
+  rescue RuntimeError => e
+    raise unless e.message == 'boom'
   end
 
   def queued(queue)

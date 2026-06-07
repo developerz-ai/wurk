@@ -75,17 +75,20 @@ module Wurk
     # against double-success on a flaky retry). A success also clears any
     # outstanding "currently failing" record for the jid (a retry that finally
     # passed), decrementing `failures` so it converges to the count of jobs
-    # *still* failing — Sidekiq Pro semantics, spec §2.5.
+    # *still* failing — Sidekiq Pro semantics, spec §2.5. The failed-set clear
+    # runs *before* the live-jids check so an invalidated batch (BATCH_INVALIDATE
+    # deletes the jids set) still converges failures to 0 on its short-circuited
+    # success ack, instead of stranding the jid in failed forever.
     # KEYS = [b-<bid>, b-<bid>-jids, b-<bid>-failed]
     # ARGV = [jid]
     # Returns [new_pending, live_jids_remaining], or [-1, -1] when the jid
     # was not a member (treat as already acked).
     BATCH_ACK_SUCCESS = <<~LUA
+      if redis.call("srem", KEYS[3], ARGV[1]) == 1 then
+        redis.call("hincrby", KEYS[1], "failures", -1)
+      end
       local removed = redis.call("srem", KEYS[2], ARGV[1])
       if removed == 1 then
-        if redis.call("srem", KEYS[3], ARGV[1]) == 1 then
-          redis.call("hincrby", KEYS[1], "failures", -1)
-        end
         local pending = redis.call("hincrby", KEYS[1], "pending", -1)
         return { pending, redis.call("scard", KEYS[2]) }
       end
