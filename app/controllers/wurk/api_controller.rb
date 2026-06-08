@@ -24,7 +24,7 @@ module Wurk
 
     skip_forgery_protection only: %i[
       stream reset_limiter pause_cron unpause_cron enqueue_cron
-      clear_queue delete_queue_job
+      clear_queue delete_queue_job pause_queue unpause_queue
       retries_bulk retries_all retry_job
       scheduled_bulk scheduled_all scheduled_job
       dead_bulk dead_all dead_job
@@ -77,6 +77,18 @@ module Wurk
       return render(json: { error: 'unknown job' }, status: :not_found) unless record
 
       render json: { ok: true, deleted: record.delete }
+    end
+
+    # Pause/unpause a queue (Pro §6, §10.1). Idempotent; returns the resulting
+    # state so the SPA can update its toggle without a refetch round-trip.
+    def pause_queue
+      ::Wurk::Queue.new(params[:name].to_s).pause!
+      render json: { ok: true, paused: true }
+    end
+
+    def unpause_queue
+      ::Wurk::Queue.new(params[:name].to_s).unpause!
+      render json: { ok: true, paused: false }
     end
 
     def retries   = render_sorted_set(::Wurk::RetrySet.new)

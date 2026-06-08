@@ -10,6 +10,7 @@ import { PageHeader } from '../components/PageHeader';
 import { relativeTime, truncate, formatArgs } from '../utils';
 import JobDetailModal, { type JobEntry } from '../components/JobDetailModal';
 import Modal from '../components/Modal';
+import { Tooltip } from '../components/Tooltip';
 import { useMeta } from '../hooks/useMeta';
 
 interface QueueSummary {
@@ -173,7 +174,7 @@ export default function Queues() {
   const { data, isLoading, isError } = useQuery<QueueSummary[]>({
     queryKey: ['queues'],
     queryFn: () => fetch('/wurk/api/queues').then((r) => r.json() as Promise<QueueSummary[]>),
-    refetchInterval: 10000,
+    refetchInterval: 5000,
   });
 
   const clearQueue = useMutation({
@@ -185,6 +186,24 @@ export default function Queues() {
     onSuccess: (_res, name) => {
       qc.invalidateQueries({ queryKey: ['queues'] });
       qc.invalidateQueries({ queryKey: ['queue', name] });
+      qc.invalidateQueries({ queryKey: ['stats'] });
+    },
+  });
+
+  // Toggle the queue's membership of the `paused` SET; fetchers stop pulling
+  // from a paused queue. POST skips CSRF (ApiController#skip_forgery_protection).
+  const pauseQueue = useMutation({
+    mutationFn: async ({ name, paused }: { name: string; paused: boolean }) => {
+      const action = paused ? 'unpause' : 'pause';
+      const res = await fetch(`/wurk/api/queues/${encodeURIComponent(name)}/${action}`, { method: 'POST' });
+      if (!res.ok) throw new Error(`${action} failed (${res.status})`);
+      return res;
+    },
+    onSuccess: (_res, { name }) => {
+      qc.invalidateQueries({ queryKey: ['queues'] });
+      qc.invalidateQueries({ queryKey: ['queue', name] });
+      // /api/stats carries per-queue paused flags the Dashboard renders, so a
+      // toggle must refresh it too (mirrors clearQueue).
       qc.invalidateQueries({ queryKey: ['stats'] });
     },
   });
@@ -227,15 +246,26 @@ export default function Queues() {
                   </td>
                   {!readOnly && (
                     <td className="row-action" onClick={(e) => e.stopPropagation()}>
-                      <button
-                        className="btn btn-sm btn-danger"
-                        disabled={clearQueue.isPending}
-                        onClick={() => {
-                          if (window.confirm(t('actions.confirm_clear_queue', { name: q.name }))) clearQueue.mutate(q.name);
-                        }}
-                      >
-                        {t('actions.clear')}
-                      </button>
+                      <div style={{ display: 'flex', gap: '0.4rem', justifyContent: 'flex-end' }}>
+                        <Tooltip tip={q.paused ? t('actions.unpause_hint') : t('actions.pause_hint')}>
+                          <button
+                            className="btn btn-sm"
+                            disabled={pauseQueue.isPending}
+                            onClick={() => pauseQueue.mutate({ name: q.name, paused: q.paused })}
+                          >
+                            {q.paused ? t('actions.unpause') : t('actions.pause')}
+                          </button>
+                        </Tooltip>
+                        <button
+                          className="btn btn-sm btn-danger"
+                          disabled={clearQueue.isPending}
+                          onClick={() => {
+                            if (window.confirm(t('actions.confirm_clear_queue', { name: q.name }))) clearQueue.mutate(q.name);
+                          }}
+                        >
+                          {t('actions.clear')}
+                        </button>
+                      </div>
                     </td>
                   )}
                 </tr>
