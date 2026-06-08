@@ -76,6 +76,30 @@ class ComponentTest < Wurk::Test::UnitCase
     assert_match(/\A[0-9a-f]{12}\z/, @host.process_nonce)
   end
 
+  # --- leader? opt-out (#122) ------------------------------------------
+
+  def test_leader_predicate_false_under_wurk_leader_opt_out
+    ENV_MUTEX.synchronize do
+      saved = ENV.fetch('WURK_LEADER', nil)
+      ENV['WURK_LEADER'] = 'false'
+
+      refute_predicate @host, :leader?
+    ensure
+      saved.nil? ? ENV.delete('WURK_LEADER') : ENV['WURK_LEADER'] = saved
+    end
+  end
+
+  def test_leader_predicate_false_under_sidekiq_leader_opt_out
+    ENV_MUTEX.synchronize do
+      saved = ENV.fetch('SIDEKIQ_LEADER', nil)
+      ENV['SIDEKIQ_LEADER'] = 'false'
+
+      refute_predicate @host, :leader?
+    ensure
+      saved.nil? ? ENV.delete('SIDEKIQ_LEADER') : ENV['SIDEKIQ_LEADER'] = saved
+    end
+  end
+
   def test_process_nonce_stable_within_process
     assert_equal @host.process_nonce, @host.process_nonce
   end

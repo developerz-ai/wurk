@@ -239,6 +239,45 @@ class LeaderTest < Wurk::Test::UnitCase
     end
   end
 
+  # ---- Opt-out via the SIDEKIQ_LEADER alias (#122) ----------------------
+
+  def test_sidekiq_leader_false_disables_acquire
+    with_env('SIDEKIQ_LEADER', 'false') do
+      ldr = build_leader
+
+      refute ldr.acquire
+      assert_predicate ldr, :disabled?
+    end
+  end
+
+  def test_sidekiq_leader_false_skips_redis_write
+    with_env('SIDEKIQ_LEADER', 'false') do
+      build_leader.acquire
+
+      assert_nil(Wurk.redis { |c| c.call('GET', @key) })
+    end
+  end
+
+  def test_sidekiq_leader_false_blocks_start
+    with_env('SIDEKIQ_LEADER', 'false') do
+      ldr = build_leader
+
+      assert_nil ldr.start
+      refute_predicate ldr, :running?
+    end
+  end
+
+  def test_sidekiq_leader_true_does_not_disable
+    with_env('SIDEKIQ_LEADER', 'true') do
+      refute_predicate build_leader, :disabled?
+    end
+  end
+
+  def test_opted_out_class_method_honors_either_env
+    with_env('WURK_LEADER', 'false') { assert_predicate Wurk::Leader, :opted_out? }
+    with_env('SIDEKIQ_LEADER', 'false') { assert_predicate Wurk::Leader, :opted_out? }
+  end
+
   # ---- :leader lifecycle event -----------------------------------------
 
   def test_leader_event_fires_once_on_gain
