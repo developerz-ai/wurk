@@ -1,5 +1,6 @@
 # frozen_string_literal: true
 
+require_relative '../component'
 require_relative '../launcher'
 require_relative '../fetcher/reliable'
 
@@ -16,6 +17,8 @@ module Wurk
     # Kept separate from Wurk::Swarm so the parent supervisor stays
     # focused on PID supervision (SRP).
     class ChildBoot
+      include Component
+
       CHILD_SIGNALS = { 'TERM' => :term, 'INT' => :term, 'TSTP' => :tstp, 'USR2' => :usr2 }.freeze
 
       def initialize(config, slot, index)
@@ -30,6 +33,12 @@ module Wurk
         reconnect_after_fork
         Wurk.server = true
         apply_slot_to_config
+        # :startup must fire in each worker child before its managers spin up
+        # (Sidekiq contract, reraise: true). The parent supervisor never runs
+        # jobs, so the non-swarm CLI path fires it once per process — for the
+        # swarm, each child fires it here. Its own forked copy of the bucket is
+        # cleared after, so siblings still fire their own.
+        fire_event(:startup, reraise: true)
         launcher = Wurk::Launcher.new(@config)
         install_signal_handlers(launcher)
         launcher.run
