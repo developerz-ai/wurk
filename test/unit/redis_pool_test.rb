@@ -14,6 +14,29 @@ class RedisPoolTest < Wurk::Test::UnitCase
     super
   end
 
+  # --- RedisConnection.create (#163, spec §26) ---
+
+  def test_redis_connection_create_returns_usable_pool
+    @pool = Wurk::RedisConnection.create(url: Wurk::Test.redis_url, size: 3)
+
+    assert_instance_of Wurk::RedisPool, @pool
+    assert_equal 3, @pool.size
+    assert_equal 'PONG', @pool.with { |c| c.call('PING') }
+  end
+
+  def test_redis_connection_create_accepts_string_keys
+    @pool = Wurk::RedisConnection.create('url' => Wurk::Test.redis_url, 'size' => 2, 'pool_timeout' => 3)
+
+    assert_equal 2, @pool.size
+    assert_equal 3, @pool.timeout
+  end
+
+  def test_redis_connection_create_defaults_size_when_omitted
+    @pool = Wurk::RedisConnection.create(url: Wurk::Test.redis_url)
+
+    assert_equal Wurk::RedisConnection::DEFAULT_POOL_SIZE, @pool.size
+  end
+
   # --- happy path (real Redis) ---
 
   def test_initialize_stores_size

@@ -197,6 +197,12 @@ class CompatAliasesTest < Wurk::Test::UnitCase
     assert_same Wurk::Processor, Sidekiq::Processor
   end
 
+  # #163: Sidekiq::RedisConnection.create is the documented pool constructor.
+  def test_redis_connection_alias
+    assert_same Wurk::RedisConnection, Sidekiq::RedisConnection
+    assert_respond_to Sidekiq::RedisConnection, :create
+  end
+
   def test_queue_alias
     assert_same Wurk::Queue, Sidekiq::Queue
   end
