@@ -113,6 +113,8 @@ module Wurk
         @read_only_message = nil
         @middlewares = []
         @rack_app = nil
+        @profile_view_url = nil
+        @profile_store_url = nil
       end
 
       # Returns true when no block is registered, otherwise the block's

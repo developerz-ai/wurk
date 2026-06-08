@@ -57,7 +57,12 @@ module Wurk
       req['Content-Encoding'] = 'gzip'
       req['Content-Type'] = 'application/json'
       req.body = body
-      Net::HTTP.start(uri.host, uri.port, use_ssl: uri.scheme == 'https') { |http| http.request(req) }
+      # Explicit timeouts so a slow/unreachable profiler can't tie up the Rails
+      # request thread for Ruby's ~60s defaults.
+      Net::HTTP.start(uri.host, uri.port, use_ssl: uri.scheme == 'https',
+                                          open_timeout: 5, read_timeout: 15) do |http|
+        http.request(req)
+      end
     end
   end
 end

@@ -31,12 +31,18 @@ export default function Profiles() {
 
   const { data, isLoading, isError } = useQuery<Profile[]>({
     queryKey: ['profiles'],
-    queryFn: () => fetch('/wurk/api/profiles').then((r) => r.json() as Promise<Profile[]>),
+    queryFn: async () => {
+      const r = await fetch('/wurk/api/profiles');
+      if (!r.ok) throw new Error(`profiles request failed: ${r.status}`);
+      return r.json() as Promise<Profile[]>;
+    },
     refetchInterval: 5000,
   });
 
   if (isLoading) return <div className="empty-state"><span className="spinner" /></div>;
-  if (isError || !data) {
+  // Guard against a non-array body slipping past isError — render the error
+  // state rather than crashing on .length / .map.
+  if (isError || !Array.isArray(data)) {
     return <div className="empty-state" style={{ color: 'var(--danger)' }}>{t('common.error')}</div>;
   }
 

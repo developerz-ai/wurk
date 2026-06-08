@@ -30,6 +30,16 @@ class WebConfigTest < Wurk::Test::UnitCase
     assert_equal 'https://prof.internal/store', cfg.profile_store_url
   end
 
+  # #162 CR: reset! must drop profiler URL overrides back to the defaults.
+  def test_reset_clears_profile_url_overrides
+    cfg = Wurk::Web.config
+    cfg.profile_view_url = 'https://prof.internal/%s'
+    cfg.reset!
+
+    assert_equal 'https://profiler.firefox.com/public/%s', cfg.profile_view_url
+    assert_equal 'https://api.profiler.firefox.com/compressed-store', cfg.profile_store_url
+  end
+
   def test_default_authorized_returns_true_when_block_absent
     assert Wurk::Web.config.authorized?({}, 'GET', '/api/stats')
   end
