@@ -5,6 +5,7 @@ require_relative 'context'
 require_relative 'job_logger'
 require_relative 'job_retry'
 require_relative 'keys'
+require_relative 'profiler'
 
 module Wurk
   # Inside each Manager, N Processors run in parallel. Each owns one thread,
@@ -206,20 +207,28 @@ module Wurk
         @retrier.global(jobstr, queue) do
           @job_logger.call(job_hash, queue) do
             stats(jobstr, queue) do
-              @reloader.call do
-                klass = Object.const_get(job_hash['class'])
-                instance = klass.new
-                instance.jid = job_hash['jid']
-                instance.bid = job_hash['bid'] if instance.respond_to?(:bid=)
-                instance._context = self
-                @retrier.local(instance, jobstr, queue) do
-                  yield instance
+              Wurk::Profiler.call(job_hash) do
+                @reloader.call do
+                  instance = build_instance(job_hash)
+                  @retrier.local(instance, jobstr, queue) do
+                    yield instance
+                  end
                 end
               end
             end
           end
         end
       end
+    end
+
+    # Instantiate the worker and wire its per-job context. Extracted from
+    # dispatch so the dispatch onion stays readable.
+    def build_instance(job_hash)
+      instance = Object.const_get(job_hash['class']).new
+      instance.jid = job_hash['jid']
+      instance.bid = job_hash['bid'] if instance.respond_to?(:bid=)
+      instance._context = self
+      instance
     end
 
     def execute_job(instance, job_hash, queue)

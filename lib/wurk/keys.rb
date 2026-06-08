@@ -29,6 +29,11 @@ module Wurk
     # Live process identities (heartbeat membership).
     PROCESSES      = 'processes'
 
+    # Profiles (v8.0+): ZSET of `<token>-<jid>` keys, score = expiry epoch;
+    # each member also has a `<token>-<jid>` HASH holding the profile blob.
+    # Spec: docs/target/sidekiq-free.md §1.7.
+    PROFILES       = 'profiles'
+
     # Global processed counter; per-day variants append `:YYYY-MM-DD`.
     STAT_PROCESSED = 'stat:processed'
 

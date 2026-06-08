@@ -220,6 +220,13 @@ module Wurk
       render json: { substr: substr, total: hits.size, hits: hits }
     end
 
+    # Profiles list (v8.0+). The SPA links each row to /profiles/:key (view)
+    # and /profiles/:key/data (raw blob). Newest first.
+    def profiles
+      records = ::Wurk::ProfileSet.new.map { |rec| ::Wurk::Api::Serializers.profile_record(rec) }
+      render json: records.sort_by { |r| -(r[:started_at] || 0) }
+    end
+
     # SSE: one `event: stats` per tick with a fresh Stats snapshot. Caps at
     # `STREAM_MAX_DURATION` so a stale browser tab can't tie a Rails worker
     # forever — the client reconnects automatically when the stream closes.

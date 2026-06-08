@@ -10,6 +10,7 @@
     "limiters": "Limiters",
     "cron": "Cron",
     "metrics": "Metrics",
+    "profiles": "Profiles",
     "search": "Search"
   },
   "dashboard": {
@@ -65,6 +66,7 @@
     "limiters": "Rate limiters and their current usage.",
     "cron": "Periodic (cron) jobs with their schedule and last run.",
     "metrics": "Throughput and failure history, with per-job execution stats.",
+    "profiles": "Captured job profiles — open one in the Firefox profiler to inspect its flame graph.",
     "search": "Find a job across retries, scheduled, and dead by JID or class name."
   },
   "job": {

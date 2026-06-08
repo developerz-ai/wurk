@@ -197,6 +197,13 @@ class CompatAliasesTest < Wurk::Test::UnitCase
     assert_same Wurk::Processor, Sidekiq::Processor
   end
 
+  # #162: Profiles data API (v8.0+).
+  def test_profile_aliases
+    assert_same Wurk::Profiler, Sidekiq::Profiler
+    assert_same Wurk::ProfileSet, Sidekiq::ProfileSet
+    assert_same Wurk::ProfileRecord, Sidekiq::ProfileRecord
+  end
+
   # #163: Sidekiq::RedisConnection.create is the documented pool constructor.
   def test_redis_connection_alias
     assert_same Wurk::RedisConnection, Sidekiq::RedisConnection
