@@ -53,6 +53,15 @@ module Wurk
     def args          = item['args']
     def jid           = item['jid']
     def bid           = item['bid']
+
+    # IterableJob progress for this job, or nil for a non-iterable job (no
+    # `it-<jid>` HASH). Spec §19.3. Reads via the IterableJobQuery data API.
+    def iterable_state
+      return nil if jid.nil? || jid.to_s.empty?
+
+      Wurk::IterableJobQuery.new([jid])[jid]
+    end
+
     def tags          = item['tags'] || []
     def enqueued_at   = parse_time(item['enqueued_at'])
     def created_at    = parse_time(item['created_at'])

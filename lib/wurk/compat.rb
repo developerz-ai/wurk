@@ -98,6 +98,7 @@ module Sidekiq
   Embedded         = Wurk::Embedded
   Encryption       = Wurk::Encryption
   IterableJob      = Wurk::IterableJob
+  IterableJobQuery = Wurk::IterableJobQuery
   Job              = Wurk::Job
   JobLogger        = Wurk::JobLogger
   JobRecord        = Wurk::JobRecord

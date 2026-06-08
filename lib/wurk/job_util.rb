@@ -10,11 +10,14 @@ module Wurk
   # Spec: docs/target/sidekiq-free.md §9 (Sidekiq::JobUtil).
   module JobUtil # rubocop:disable Metrics/ModuleLength
     # Top-level keys consumed at enqueue time but stripped from every payload
-    # before raw_push. `pool` selects the Redis pool (resolved in client_push /
-    # build_client) and must never reach the wire — spec §2.2 marks it transient.
-    # Mutable so Pro/Ent/extension code (e.g. TransactionAwareClient adding
-    # "client_class") can append at load time without monkey-patching.
-    TRANSIENT_ATTRIBUTES = ['pool'] # rubocop:disable Style/MutableConstant
+    # before raw_push — they must never reach the wire (spec §2.2):
+    #   `pool`         selects the Redis pool (resolved in client_push/build_client)
+    #   `client_class` swaps the enqueue client (Wurk.transactional_push!)
+    # Both carry non-JSON values (a pool / a Class). Baked into the literal rather
+    # than appended at load: a load-time `<<` is fragile under the parallel test
+    # runner (a test that add/deletes the same key clobbers it for later suites).
+    # Still mutable so other extensions can append without monkey-patching.
+    TRANSIENT_ATTRIBUTES = %w[pool client_class] # rubocop:disable Style/MutableConstant
 
     RETRY_FOR_MAX = 1_000_000_000
 
