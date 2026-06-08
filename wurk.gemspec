@@ -36,7 +36,7 @@ Gem::Specification.new do |spec|
   ]
 
   spec.bindir      = "exe"
-  spec.executables = ["wurk"]
+  spec.executables = ["wurk", "wurkswarm", "sidekiqswarm"]
   spec.require_paths = ["lib"]
 
   # Bounded ranges (not pessimistic `~>`) where a newer major is already in

@@ -1,0 +1,23 @@
+#!/usr/bin/env ruby
+# frozen_string_literal: true
+
+# Standalone multi-process runner — forks N worker children from a preloaded
+# parent (fork-based real parallelism). Does NOT load the Rails engine.
+# Usage: `exe/wurkswarm -C config/wurk.yml`. Drop-in alias: `sidekiqswarm`.
+
+$stdout.sync = true
+$LOAD_PATH.unshift(File.expand_path('../lib', __dir__))
+
+require 'wurk'
+
+begin
+  cli = Wurk::CLI.instance
+  cli.parse
+  cli.run_swarm
+rescue StandardError => e
+  raise e if $DEBUG
+
+  warn "wurkswarm: #{e.message}"
+  warn e.backtrace.join("\n")
+  exit 1
+end
