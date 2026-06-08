@@ -32,11 +32,12 @@ class SwarmCliTest < Wurk::Test::UnitCase
     @ns = "swarmcli-#{::Process.pid}-#{object_id}"
     @queue_name = "#{@ns}-q"
     @sentinel_key = "#{@ns}-sentinel"
+    @startup_key = "#{@ns}-startup"
     @observer = RedisClient.config(url: Wurk::Test.redis_url).new_client
   end
 
   def teardown
-    @observer&.call('DEL', @sentinel_key, "queue:#{@queue_name}")
+    @observer&.call('DEL', @sentinel_key, @startup_key, "queue:#{@queue_name}")
     @observer&.close
   ensure
     super
@@ -63,6 +64,27 @@ class SwarmCliTest < Wurk::Test::UnitCase
                    'the job should run in a forked child, not the swarm parent'
       refute_equal ::Process.pid.to_s, sentinel_pid,
                    'the job should not run in the test process'
+    ensure
+      stop(parent_pid)
+    end
+  end
+
+  # config.on(:startup) hooks must fire in each swarm worker child before its
+  # managers spin up (Sidekiq lifecycle contract).
+  def test_run_swarm_fires_startup_in_child
+    startup_key = @startup_key
+    redis_url = Wurk::Test.redis_url
+    parent_pid = fork_swarm_cli do |config|
+      config.on(:startup) do
+        c = RedisClient.config(url: redis_url).new_client
+        c.call('SET', startup_key, ::Process.pid.to_s)
+        c.call('EXPIRE', startup_key, 60)
+        c.close
+      end
+    end
+
+    begin
+      assert wait_for_key(@startup_key), ':startup hook never fired in a swarm child'
     ensure
       stop(parent_pid)
     end
@@ -99,6 +121,7 @@ class SwarmCliTest < Wurk::Test::UnitCase
       config = build_config
       config.default_capsule.queues = [@queue_name]
       config.topology = Wurk::Topology.flat(count: 1, queues: [@queue_name], concurrency: 1)
+      yield config if block_given?
       cli = Wurk::CLI.instance
       cli.instance_variable_set(:@config, config)
       cli.run_swarm(boot_app: false, warmup: false)
