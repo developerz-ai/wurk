@@ -300,8 +300,11 @@ class ConfigurationTest < Wurk::Test::UnitCase
     assert_same block, @config.super_fetch_callback
   end
 
-  def test_reliable_scheduler_bang_is_a_noop
+  def test_reliable_scheduler_bang_swaps_in_atomic_promoter
+    assert_nil @config[:scheduled_enq]
+
     assert_nil @config.reliable_scheduler!
+    assert_equal Wurk::Scheduled::ReliableEnq, @config[:scheduled_enq]
   end
 
   # Pro super_fetch §3.3: the fetch-poll backoff knob. Unset → nil (the fetcher

@@ -67,6 +67,48 @@ module Wurk
       end
     end
 
+    # Reliable variant of Enq (Pro §4). The default Enq pops then pushes —
+    # a crash between the ZPOPBYSCORE and the client push loses the job.
+    # ReliableEnq instead promotes every due job from each set onto its target
+    # queue in a single atomic Lua (ZRANGEBYSCORE → LPUSH queue:<q> → ZREM),
+    # so there is no window where a job exists in neither place. Swapped in by
+    # `config.reliable_scheduler!` via the `scheduled_enq` seam.
+    #
+    # Spec: docs/target/sidekiq-pro.md §4.
+    class ReliableEnq
+      include Component
+
+      def initialize(container)
+        @config = container
+        @done = false
+      end
+
+      def enqueue_jobs(sorted_sets = SETS)
+        @config.redis do |conn|
+          sorted_sets.each { |sset| promote(conn, sset) }
+        end
+      end
+
+      def terminate
+        @done = true
+      end
+
+      private
+
+      def promote(conn, sset)
+        Wurk::Lua::Loader.eval_cached(
+          conn,
+          :reliable_schedule_promote,
+          keys: [sset, Keys::QUEUES_SET],
+          argv: [real_time.to_s, Keys::QUEUE_PREFIX]
+        )
+      end
+
+      def real_time
+        ::Process.clock_gettime(::Process::CLOCK_REALTIME)
+      end
+    end
+
     # Single thread that wakes on a randomized interval, drains both ZSETs,
     # then sleeps again. Random spread prevents the cluster from dogpiling
     # Redis at the top of each cadence.
