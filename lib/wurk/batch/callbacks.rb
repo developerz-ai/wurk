@@ -61,8 +61,20 @@ module Wurk
         return unless dedup_set(bid, 'success')
 
         record_event(bid, 'success_at')
+        emit_duration_metric(bid)
         enqueue_callbacks(bid, 'success')
         apply_linger(bid)
+      end
+
+      # Pro statsd metric (spec §9.3): wall-clock seconds from batch creation to
+      # full success. `created_at` shares the CLOCK_REALTIME epoch we record it
+      # with. No-op without a dogstatsd client.
+      def emit_duration_metric(bid)
+        created = Wurk.redis { |conn| conn.call('HGET', "b-#{bid}", 'created_at') }
+        return if created.nil? || created.to_s.empty?
+
+        seconds = ::Process.clock_gettime(::Process::CLOCK_REALTIME) - created.to_f
+        Wurk::Metrics::Statsd.distribution('batch.duration_dist', seconds)
       end
 
       # Post-success retention: a succeeded batch no longer coordinates any

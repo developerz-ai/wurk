@@ -194,4 +194,15 @@ module Wurk
       end
     end
   end
+
+  module Middleware
+    # Sidekiq Pro documents the statsd server middleware as
+    # `Sidekiq::Middleware::Server::Statsd` (spec §9.1) — the drop-in snippet is
+    # `require "sidekiq/middleware/server/statsd"; chain.add Sidekiq::Middleware::Server::Statsd`.
+    # Expose that namespace pointing at our implementation. `Sidekiq::Middleware`
+    # aliases `Wurk::Middleware`, so this makes the Sidekiq constant resolve too.
+    module Server
+      Statsd = Wurk::Metrics::Statsd
+    end
+  end
 end

@@ -48,6 +48,30 @@ class CompatAliasesTest < Wurk::Test::UnitCase
     assert_same Wurk::Web::BatchStatus, Sidekiq::Pro::BatchStatus
   end
 
+  # #115: drop-in Pro statsd middleware constant.
+  def test_server_statsd_middleware_alias
+    assert_same Wurk::Metrics::Statsd, Sidekiq::Middleware::Server::Statsd
+  end
+
+  # #169: `Sidekiq::Pro.dogstatsd =` delegates to config.dogstatsd; the
+  # use_datadog_extensions flag is tolerated.
+  def test_pro_dogstatsd_accessor
+    STATE_MUTEX.synchronize do
+      previous = Wurk.configuration.dogstatsd
+      client = -> { :statsd }
+      Sidekiq::Pro.dogstatsd = client
+
+      assert_same client, Sidekiq::Pro.dogstatsd
+      assert_same client, Wurk.configuration.dogstatsd
+
+      Wurk.configuration[:use_datadog_extensions] = false
+
+      assert_equal false, Wurk.configuration[:use_datadog_extensions]
+    ensure
+      Wurk.configuration.dogstatsd = previous
+    end
+  end
+
   def test_enterprise_sentinel_defined
     assert(defined?(Sidekiq::Enterprise))
     assert_kind_of Module, Sidekiq::Enterprise

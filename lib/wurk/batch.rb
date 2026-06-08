@@ -234,6 +234,8 @@ module Wurk
       Wurk.redis { |conn| conn.pipelined { |pipe| pipelined_first_flush(pipe, now) } }
       @parent_bid = current_parent_bid
       @flushed_once = true
+      # Pro statsd metric (spec §9.3); no-op without a dogstatsd client.
+      Wurk::Metrics::Statsd.increment('batch.created')
     end
 
     def pipelined_first_flush(pipe, now)
