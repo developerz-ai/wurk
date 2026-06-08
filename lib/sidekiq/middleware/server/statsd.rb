@@ -9,4 +9,4 @@
 # Wurk::Middleware::Server::Statsd → Sidekiq::Middleware::Server::Statsd via the
 # compat layer). This file just ensures Wurk is loaded so the verbatim Pro
 # `require` resolves instead of raising LoadError. Spec: docs/target/sidekiq-pro.md §9.1.
-require 'wurk' unless defined?(Wurk::Metrics::Statsd)
+require 'wurk' unless defined?(::Sidekiq::Middleware::Server::Statsd)
