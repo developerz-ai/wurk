@@ -75,7 +75,7 @@ export default function Profiles() {
                   <td>{fmtWhen(p.started_at)}</td>
                   <td>{p.elapsed.toLocaleString()} ms</td>
                   <td>{fmtBytes(p.size)}</td>
-                  <td style={{ textAlign: 'right' }}>
+                  <td style={{ textAlign: 'end' }}>
                     {/* Full reload (not client-route): the backend POSTs the blob
                         to the Firefox profiler then 302s out to profiler.firefox.com. */}
                     <a

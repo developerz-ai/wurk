@@ -5,6 +5,7 @@ import de from './de.json';
 import ptBR from './pt-BR.json';
 import ja from './ja.json';
 import zhCN from './zh-CN.json';
+import ar from './ar.json';
 
 type Translations = typeof en;
 type DeepPartial<T> = { [K in keyof T]?: T[K] extends object ? DeepPartial<T[K]> : T[K] };
@@ -17,7 +18,18 @@ const LOCALES: Record<string, DeepPartial<Translations>> = {
   'pt-BR': ptBR,
   ja,
   'zh-CN': zhCN,
+  ar,
 };
+
+// Languages written right-to-left. The detected locale's base subtag (e.g. the
+// "ar" of "ar-EG") drives both `dir` and the matched bundle below. Bundles are
+// optional: a locale with no bundle still flips to RTL and falls back to en
+// strings, so a host can override copy without re-shipping a translation file.
+const RTL_LANGS = ['ar', 'he', 'fa'];
+
+export function directionFor(loc: string): 'rtl' | 'ltr' {
+  return RTL_LANGS.includes(loc.toLowerCase().split('-')[0]) ? 'rtl' : 'ltr';
+}
 
 function loadHostOverrides(): DeepPartial<Translations> {
   try {
@@ -54,7 +66,8 @@ function deepMerge<T extends object>(base: T, override: DeepPartial<T>): T {
   return out as T;
 }
 
-const locale = detectLocale();
+export const locale = detectLocale();
+export const dir = directionFor(locale);
 const langKey = Object.keys(LOCALES).find((k) => locale.startsWith(k)) ?? 'en';
 const base = deepMerge(en, (LOCALES[langKey] ?? {}) as DeepPartial<typeof en>);
 const merged = deepMerge(base, loadHostOverrides());

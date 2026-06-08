@@ -106,7 +106,7 @@ table {
 }
 
 th, td {
-  text-align: left;
+  text-align: start;
   padding: 0.625rem 0.85rem;
   border-bottom: 1px solid var(--border);
   white-space: nowrap;
@@ -165,7 +165,7 @@ tbody tr:last-child td {
   font: inherit;
   letter-spacing: inherit;
   text-transform: inherit;
-  text-align: left;
+  text-align: start;
   cursor: pointer;
   user-select: none;
   -webkit-user-select: none;
@@ -376,7 +376,7 @@ tbody tr:last-child td {
 .action-bar-count {
   font-size: 12px;
   color: var(--text-muted);
-  margin-right: 0.25rem;
+  margin-inline-end: 0.25rem;
 }
 
 /* Stop a row checkbox/action click from also opening the detail modal. */
@@ -413,7 +413,7 @@ tbody tr:last-child td {
   }
 
   .main-content {
-    margin-left: 0 !important;
+    margin-inline-start: 0 !important;
     /* Tighter side gutters on mobile; leave room for the fixed hamburger. */
     padding: 3.5rem 0.85rem 1.5rem !important;
   }
@@ -439,9 +439,15 @@ tbody tr:last-child td {
   .table-wrapper th:first-child,
   .table-wrapper td:first-child {
     position: sticky;
-    left: 0;
+    inset-inline-start: 0;
     background: var(--surface);
     box-shadow: 1px 0 0 var(--border);
+  }
+  /* The frozen column sits at the inline-start; its hairline boundary faces the
+     scrolling body, which is on the opposite side under RTL. */
+  [dir="rtl"] .table-wrapper th:first-child,
+  [dir="rtl"] .table-wrapper td:first-child {
+    box-shadow: -1px 0 0 var(--border);
   }
   .table-wrapper td:first-child {
     z-index: 2;
@@ -562,7 +568,7 @@ tbody tr:last-child td {
    Left rail. Nav.tsx is inline-styled; the opaque slate fill and hairline edge
    are set there. We only reinforce the right border here. */
 .wurk-nav {
-  border-right: 1px solid var(--border) !important;
+  border-inline-end: 1px solid var(--border) !important;
 }
 
 /* ── Modal (native <dialog>) ───────────────────────────────────────────────*/
@@ -740,12 +746,12 @@ tbody tr:last-child td {
    to read as interactive at rest, brightening + nudging right on hover. */
 .row-clickable td:last-child {
   position: relative;
-  padding-right: 1.85rem;
+  padding-inline-end: 1.85rem;
 }
 .row-clickable td:last-child::after {
   content: '\203A'; /* › */
   position: absolute;
-  right: 0.8rem;
+  inset-inline-end: 0.8rem;
   top: 50%;
   transform: translateY(-50%);
   font-size: 15px;
@@ -758,6 +764,14 @@ tbody tr:last-child td {
   opacity: 0.9;
   color: var(--accent);
   transform: translateY(-50%) translateX(3px);
+}
+/* Mirror the affordance under RTL: a left-pointing chevron that nudges toward
+   the inline-start on hover. */
+[dir="rtl"] .row-clickable td:last-child::after {
+  content: '\2039'; /* ‹ */
+}
+[dir="rtl"] .row-clickable:hover td:last-child::after {
+  transform: translateY(-50%) translateX(-3px);
 }
 @media (prefers-reduced-motion: reduce) {
   .row-clickable td:last-child::after { transition: none; }
@@ -812,7 +826,7 @@ tbody tr:last-child td {
 .dash-hero__status {
   position: absolute;
   top: 0.9rem;
-  right: 1.1rem;
+  inset-inline-end: 1.1rem;
   display: flex;
   align-items: center;
   gap: 0.6rem;
@@ -883,7 +897,7 @@ tbody tr:last-child td {
   color: var(--text-muted);
 }
 
-.page-header__aside { margin-left: auto; align-self: center; }
+.page-header__aside { margin-inline-start: auto; align-self: center; }
 
 @media (max-width: 560px) {
   .page-header__summary { font-size: 12px; }
