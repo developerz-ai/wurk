@@ -28,6 +28,19 @@ module Sidekiq
     # `use Sidekiq::Pro::BatchStatus` — the polling Rack middleware that serves
     # GET /batch_status/<bid>.json. Spec: docs/target/sidekiq-pro.md §10.3.
     BatchStatus = Wurk::Web::BatchStatus
+
+    # Pro module-level statsd accessor (spec §1): `Sidekiq::Pro.dogstatsd = ...`.
+    # Delegates to the canonical `config.dogstatsd=` (spec §9.1), so either form
+    # feeds the same Wurk::Metrics::Statsd client.
+    class << self
+      def dogstatsd=(builder)
+        Wurk.configuration.dogstatsd = builder
+      end
+
+      def dogstatsd
+        Wurk.configuration.dogstatsd
+      end
+    end
   end
 
   # Sidekiq Enterprise feature surface (`unique!`, `Crypto`, `Unique.locked?`).

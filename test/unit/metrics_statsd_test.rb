@@ -107,6 +107,46 @@ class MetricsStatsdTest < Wurk::Test::UnitCase
     assert_equal 1, fake.calls.size
   end
 
+  # --- #115: Pro drop-in statsd setup snippet (spec §9.1) -----------------
+
+  def test_server_statsd_alias_and_verbatim_snippet
+    require 'sidekiq/middleware/server/statsd'
+
+    assert_same Wurk::Metrics::Statsd, Sidekiq::Middleware::Server::Statsd
+
+    chain = Wurk::Middleware::Chain.new
+    chain.add Sidekiq::Middleware::Server::Statsd
+    Sidekiq::Middleware::Server::Statsd.options = ->(_w, _j, _q) { { tags: ['x'] } }
+
+    assert chain.exists?(Wurk::Metrics::Statsd)
+  end
+
+  # --- #168: Pro batch statsd metrics (spec §9.3) -------------------------
+
+  def test_batch_created_metric_emitted_on_first_flush
+    fake = FakeClient.new
+    Wurk.configuration.dogstatsd = fake
+
+    batch = Wurk::Batch.new
+    batch.jobs { Wurk::Client.push('class' => 'NoOp', 'args' => [], 'queue' => 'sq') }
+
+    assert_includes fake.calls.map { |c| c[1] }, 'sidekiq.batch.created'
+  end
+
+  def test_batch_duration_dist_metric_emitted_on_success
+    fake = FakeClient.new
+    Wurk.configuration.dogstatsd = fake
+
+    batch = Wurk::Batch.new
+    batch.jobs { Wurk::Client.push('class' => 'NoOp', 'args' => [], 'queue' => 'sq') }
+    Wurk::Batch::Callbacks.fire_success(batch.bid)
+
+    dist = fake.calls.find { |c| c[0] == :distribution && c[1] == 'sidekiq.batch.duration_dist' }
+
+    assert dist, "expected sidekiq.batch.duration_dist, got #{fake.calls.map { |c| c[1] }}"
+    assert_operator dist[2], :>=, 0.0
+  end
+
   # rubocop:disable Metrics/AbcSize
   def test_metric_names_get_sidekiq_prefix
     fake = FakeClient.new
