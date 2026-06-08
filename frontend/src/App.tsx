@@ -62,7 +62,7 @@ export default function App() {
         <div style={{ display: 'flex', minHeight: '100vh' }}>
           <button
             className="hamburger"
-            style={{ position: 'fixed', top: 12, left: 12, zIndex: 200 }}
+            style={{ position: 'fixed', top: 12, insetInlineStart: 12, zIndex: 200 }}
             onClick={() => setNavOpen((o) => !o)}
             aria-label="Toggle navigation"
           >
@@ -71,7 +71,7 @@ export default function App() {
 
           <main
             className="main-content"
-            style={{ flex: 1, padding: '1.5rem', marginLeft: 'var(--nav-width)' }}
+            style={{ flex: 1, padding: '1.5rem', marginInlineStart: 'var(--nav-width)' }}
           >
             <ReadOnlyBanner />
             <Routes>

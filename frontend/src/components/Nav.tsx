@@ -44,11 +44,11 @@ export default function Nav({ open, onClose }: NavProps) {
         style={{
           position: 'fixed',
           top: 0,
-          left: 0,
+          insetInlineStart: 0,
           bottom: 0,
           width: 'var(--nav-width)',
           background: 'var(--surface)',
-          borderRight: '1px solid var(--border)',
+          borderInlineEnd: '1px solid var(--border)',
           display: 'flex',
           flexDirection: 'column',
           zIndex: 100,
@@ -153,6 +153,14 @@ export default function Nav({ open, onClose }: NavProps) {
             transform: translateX(-100%);
           }
           .wurk-nav--open {
+            transform: translateX(0);
+          }
+          /* RTL: the rail is pinned to the right edge, so it slides off to the
+             right when closed. */
+          [dir="rtl"] .wurk-nav {
+            transform: translateX(100%);
+          }
+          [dir="rtl"] .wurk-nav--open {
             transform: translateX(0);
           }
           .nav-overlay {

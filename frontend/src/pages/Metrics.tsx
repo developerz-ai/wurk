@@ -89,7 +89,7 @@ function HistoryCharts() {
         <div className="section-title">Throughput &amp; Failures</div>
         <select
           className="select"
-          style={{ marginLeft: 'auto' }}
+          style={{ marginInlineStart: 'auto' }}
           value={range}
           onChange={(e) => setRange(Number(e.target.value))}
         >
