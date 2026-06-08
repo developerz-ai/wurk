@@ -66,9 +66,4 @@ module Wurk
       end
     end
   end
-
-  # The class-level `client_class` option carries a Class object, so it must
-  # never reach the wire. Append it to the transient list the canonical way the
-  # comment in JobUtil anticipates, rather than baking it into the base literal.
-  JobUtil::TRANSIENT_ATTRIBUTES << 'client_class' unless JobUtil::TRANSIENT_ATTRIBUTES.include?('client_class')
 end

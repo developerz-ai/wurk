@@ -234,17 +234,15 @@ class JobUtilTest < Wurk::Test::UnitCase
     assert_equal 60, item['retry_for']
   end
 
+  # `client_class` is a permanent transient attribute (baked into the literal),
+  # so we assert stripping directly — no global mutation, which previously
+  # clobbered TRANSIENT_ATTRIBUTES for other suites under the parallel runner.
   def test_normalize_item_strips_transient_attributes
-    STRICT_MUTEX.synchronize do
-      Wurk::JobUtil::TRANSIENT_ATTRIBUTES << 'client_class'
-      begin
-        item = @host.normalize_item({ 'class' => 'X', 'args' => [], 'queue' => 'q', 'client_class' => 'TX' })
+    item = @host.normalize_item({ 'class' => 'X', 'args' => [], 'queue' => 'q',
+                                  'pool' => 'p', 'client_class' => 'TX' })
 
-        refute item.key?('client_class')
-      ensure
-        Wurk::JobUtil::TRANSIENT_ATTRIBUTES.delete('client_class')
-      end
-    end
+    refute item.key?('client_class')
+    refute item.key?('pool')
   end
 
   # --- now_in_millis ---------------------------------------------------
