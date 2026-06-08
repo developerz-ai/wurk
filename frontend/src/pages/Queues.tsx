@@ -245,6 +245,7 @@ export default function Queues() {
                       <div style={{ display: 'flex', gap: '0.4rem', justifyContent: 'flex-end' }}>
                         <button
                           className="btn btn-sm"
+                          title={q.paused ? t('actions.unpause_hint') : t('actions.pause_hint')}
                           disabled={pauseQueue.isPending}
                           onClick={() => pauseQueue.mutate({ name: q.name, paused: q.paused })}
                         >

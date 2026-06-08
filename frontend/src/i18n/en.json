@@ -94,6 +94,8 @@
     "clear": "Clear",
     "pause": "Pause",
     "unpause": "Resume",
+    "pause_hint": "Stop fetching new jobs from this queue (in-flight jobs finish)",
+    "unpause_hint": "Resume fetching jobs from this queue",
     "quiet": "Quiet",
     "stop": "Stop",
     "prev": "Previous",
