@@ -173,7 +173,7 @@ export default function Queues() {
   const { data, isLoading, isError } = useQuery<QueueSummary[]>({
     queryKey: ['queues'],
     queryFn: () => fetch('/wurk/api/queues').then((r) => r.json() as Promise<QueueSummary[]>),
-    refetchInterval: 10000,
+    refetchInterval: 5000,
   });
 
   const clearQueue = useMutation({
