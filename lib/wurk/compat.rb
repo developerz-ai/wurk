@@ -103,6 +103,7 @@ module Sidekiq
   ProcessSet       = Wurk::ProcessSet
   Processor        = Wurk::Processor
   Queue            = Wurk::Queue
+  RedisConnection  = Wurk::RedisConnection
   RetrySet         = Wurk::RetrySet
   Scheduled        = Wurk::Scheduled
   ScheduledSet     = Wurk::ScheduledSet

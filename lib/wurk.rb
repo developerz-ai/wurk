@@ -7,6 +7,7 @@
 require_relative 'wurk/version'
 require_relative 'wurk/keys'
 require_relative 'wurk/redis_pool'
+require_relative 'wurk/redis_connection'
 require_relative 'wurk/middleware'
 require_relative 'wurk/middleware/chain'
 require_relative 'wurk/component'
