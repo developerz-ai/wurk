@@ -10,6 +10,7 @@ import { PageHeader } from '../components/PageHeader';
 import { relativeTime, truncate, formatArgs } from '../utils';
 import JobDetailModal, { type JobEntry } from '../components/JobDetailModal';
 import Modal from '../components/Modal';
+import { Tooltip } from '../components/Tooltip';
 import { useMeta } from '../hooks/useMeta';
 
 interface QueueSummary {
@@ -243,14 +244,15 @@ export default function Queues() {
                   {!readOnly && (
                     <td className="row-action" onClick={(e) => e.stopPropagation()}>
                       <div style={{ display: 'flex', gap: '0.4rem', justifyContent: 'flex-end' }}>
-                        <button
-                          className="btn btn-sm"
-                          title={q.paused ? t('actions.unpause_hint') : t('actions.pause_hint')}
-                          disabled={pauseQueue.isPending}
-                          onClick={() => pauseQueue.mutate({ name: q.name, paused: q.paused })}
-                        >
-                          {q.paused ? t('actions.unpause') : t('actions.pause')}
-                        </button>
+                        <Tooltip tip={q.paused ? t('actions.unpause_hint') : t('actions.pause_hint')}>
+                          <button
+                            className="btn btn-sm"
+                            disabled={pauseQueue.isPending}
+                            onClick={() => pauseQueue.mutate({ name: q.name, paused: q.paused })}
+                          >
+                            {q.paused ? t('actions.unpause') : t('actions.pause')}
+                          </button>
+                        </Tooltip>
                         <button
                           className="btn btn-sm btn-danger"
                           disabled={clearQueue.isPending}
