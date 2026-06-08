@@ -1,12 +1,23 @@
 # frozen_string_literal: true
 
 require_relative '../test_helper'
+require 'etc'
 
 class ConfigurationTest < Wurk::Test::UnitCase
   parallelize_me!
 
   def setup
     @config = Wurk::Configuration.new
+    # default_topology reads these; neutralize the ambient env so the count
+    # tests are deterministic and teardown always restores the originals.
+    @count_env = { 'WURK_COUNT' => ENV['WURK_COUNT'], 'SIDEKIQ_COUNT' => ENV['SIDEKIQ_COUNT'] }
+    ENV.delete('WURK_COUNT')
+    ENV.delete('SIDEKIQ_COUNT')
+  end
+
+  def teardown
+    @count_env.each { |k, v| v.nil? ? ENV.delete(k) : (ENV[k] = v) }
+    super
   end
 
   # --- DEFAULTS ----------------------------------------------------------
@@ -525,15 +536,53 @@ class ConfigurationTest < Wurk::Test::UnitCase
     assert_instance_of Wurk::Topology, @config.topology
   end
 
-  def test_topology_defaults_to_one_flat_fork_from_default_capsule
+  def test_topology_defaults_to_one_flat_fork_per_cpu
     @config.queues = %w[critical default]
     @config.concurrency = 7
 
     slot = @config.topology.slots.first
 
-    assert_equal 1, @config.topology.total_processes
+    assert_equal Etc.nprocessors, @config.topology.total_processes
     assert_equal %w[critical default], slot.queues
     assert_equal 7, slot.concurrency
+  end
+
+  def test_topology_count_honors_sidekiq_count
+    ENV['SIDEKIQ_COUNT'] = '4'
+
+    assert_equal 4, @config.topology.total_processes
+  end
+
+  def test_topology_count_fractional_sidekiq_count_multiplies_cpu
+    ENV['SIDEKIQ_COUNT'] = '0.5'
+
+    assert_equal [(0.5 * Etc.nprocessors).round, 1].max, @config.topology.total_processes
+  end
+
+  def test_topology_count_wurk_count_takes_precedence_over_sidekiq_count
+    ENV['WURK_COUNT'] = '3'
+    ENV['SIDEKIQ_COUNT'] = '7'
+
+    assert_equal 3, @config.topology.total_processes
+  end
+
+  def test_topology_count_invalid_value_falls_back_to_cpu
+    ENV['SIDEKIQ_COUNT'] = 'not-a-number'
+
+    assert_equal Etc.nprocessors, @config.topology.total_processes
+  end
+
+  def test_topology_count_is_floored_at_one
+    ENV['SIDEKIQ_COUNT'] = '0'
+
+    assert_equal 1, @config.topology.total_processes
+  end
+
+  def test_explicit_topology_overrides_sidekiq_count
+    ENV['SIDEKIQ_COUNT'] = '8'
+    @config.topology = Wurk::Topology.flat(count: 2, queues: ['default'], concurrency: 1)
+
+    assert_equal 2, @config.topology.total_processes
   end
 
   def test_topology_default_preserves_weighted_queue_specs
