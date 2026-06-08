@@ -83,6 +83,7 @@ module Wurk
       @metrics_rollup&.start
       @managers.each(&:start)
       @reaper.start
+      boot_reclaim
       @health_server&.start
     end
 
@@ -258,6 +259,17 @@ module Wurk
         renew_interval: @config[:leader_renew_interval] || Wurk::Leader::DEFAULT_RENEW_INTERVAL,
         follower_interval: @config[:leader_follower_interval] || Wurk::Leader::DEFAULT_FOLLOWER_INTERVAL
       )
+    end
+
+    # Deterministic boot-time orphan sweep: a SIGKILLed sibling's in-flight jobs
+    # would otherwise wait a full reaper interval before recovery. One unguarded
+    # scoped reclaim at start (no cluster lock — every booting worker helps) gets
+    # them re-queued immediately. Best-effort: a Redis hiccup here must not abort
+    # boot. Spec: docs/target/sidekiq-pro.md §3.2.
+    def boot_reclaim
+      @reaper.reclaim!
+    rescue StandardError => e
+      handle_exception(e, context: 'launcher-boot-reclaim') if respond_to?(:handle_exception)
     end
 
     # Reliable-fetch orphan reclamation. Every worker runs one; a cluster

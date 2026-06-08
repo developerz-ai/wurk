@@ -166,6 +166,27 @@ class LauncherTest < Wurk::Test::UnitCase
     assert started, 'run should start the reliable-fetch reaper'
   end
 
+  def test_run_does_a_boot_time_reclaim
+    launcher = Wurk::Launcher.new(@config)
+    stub_managers(launcher)
+    reclaimed = false
+    reaper = launcher.instance_variable_get(:@reaper)
+    reaper.define_singleton_method(:start) {} # don't spawn the loop thread
+    reaper.define_singleton_method(:reclaim!) { reclaimed = true }
+
+    launcher.run(async_beat: false)
+
+    assert reclaimed, 'run should do a deterministic boot-time orphan reclaim'
+  end
+
+  # boot_reclaim is best-effort: a Redis hiccup at boot must not abort startup.
+  def test_boot_reclaim_swallows_reaper_errors
+    launcher = Wurk::Launcher.new(@config)
+    launcher.instance_variable_get(:@reaper).define_singleton_method(:reclaim!) { raise 'redis down' }
+
+    launcher.send(:boot_reclaim) # must not raise
+  end
+
   def test_run_starts_each_manager
     launcher = Wurk::Launcher.new(@config)
     stub_managers(launcher)
