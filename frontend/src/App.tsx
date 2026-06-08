@@ -16,6 +16,7 @@ import BatchDetail from './pages/BatchDetail';
 import Limiters from './pages/Limiters';
 import Cron from './pages/Cron';
 import Metrics from './pages/Metrics';
+import Profiles from './pages/Profiles';
 import Search from './pages/Search';
 
 const qc = new QueryClient({
@@ -85,6 +86,7 @@ export default function App() {
               <Route path="/limiters" element={<Limiters />} />
               <Route path="/cron" element={<Cron />} />
               <Route path="/metrics" element={<Metrics />} />
+              <Route path="/profiles" element={<Profiles />} />
               <Route path="/search" element={<Search />} />
             </Routes>
           </main>

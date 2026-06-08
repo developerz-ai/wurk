@@ -127,6 +127,19 @@ module Wurk
       rescue ::JSON::ParserError
         {}
       end
+
+      # One profile row for the Profiles pane. `key` drives the view/data links.
+      def profile_record(rec)
+        {
+          key: rec.key,
+          jid: rec.jid,
+          token: rec.token,
+          type: rec.type,
+          size: rec.size,
+          elapsed: rec.elapsed,
+          started_at: rec.started_at&.to_i
+        }
+      end
     end
   end
 end

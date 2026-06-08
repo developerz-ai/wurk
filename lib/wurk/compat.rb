@@ -102,6 +102,9 @@ module Sidekiq
   Process          = Wurk::Process
   ProcessSet       = Wurk::ProcessSet
   Processor        = Wurk::Processor
+  Profiler         = Wurk::Profiler
+  ProfileSet       = Wurk::ProfileSet
+  ProfileRecord    = Wurk::ProfileRecord
   Queue            = Wurk::Queue
   RedisConnection  = Wurk::RedisConnection
   RetrySet         = Wurk::RetrySet

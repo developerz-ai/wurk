@@ -18,6 +18,7 @@ const LINKS = [
   { to: '/limiters', label: t('nav.limiters'), icon: 'fa-gauge', end: false },
   { to: '/cron', label: t('nav.cron'), icon: 'fa-stopwatch', end: false },
   { to: '/metrics', label: t('nav.metrics'), icon: 'fa-chart-line', end: false },
+  { to: '/profiles', label: t('nav.profiles'), icon: 'fa-fire', end: false },
   { to: '/search', label: t('nav.search'), icon: 'fa-magnifying-glass', end: false },
 ];
 

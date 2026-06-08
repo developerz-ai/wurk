@@ -26,6 +26,13 @@ module Wurk
       # doesn't flip on when the env var is "0"/"false"/empty.
       FALSEY_STRINGS = ['', '0', 'false', 'no', 'off'].freeze
 
+      # Firefox-profiler endpoints for the Profiles pane (spec §25.2). The
+      # dashboard uploads a stored profile to `profile_store_url` and redirects
+      # the operator to `profile_view_url % <returned-hash>`. Overridable for
+      # self-hosted profiler instances.
+      PROFILE_VIEW_URL  = 'https://profiler.firefox.com/public/%s'
+      PROFILE_STORE_URL = 'https://api.profiler.firefox.com/compressed-store'
+
       # Host-app Rack middleware stacked in front of the dashboard, newest
       # last. Each entry is `[middleware, args, block]`. Returns a frozen copy
       # so the memoized chain (`#rack_app`) can only be invalidated through
@@ -40,7 +47,15 @@ module Wurk
         @read_only_message = nil
         @middlewares = []
         @rack_app = nil
+        @profile_view_url = nil
+        @profile_store_url = nil
       end
+
+      # Firefox-profiler URLs, overridable; default to the public instance.
+      attr_writer :profile_view_url, :profile_store_url
+
+      def profile_view_url  = @profile_view_url || PROFILE_VIEW_URL
+      def profile_store_url = @profile_store_url || PROFILE_STORE_URL
 
       # Optional banner copy shown by the dashboard in read-only mode. Nil →
       # the SPA falls back to its localized default ("Read-only mode"). Lets a

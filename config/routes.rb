@@ -53,8 +53,17 @@ Wurk::Engine.routes.draw do
     get  'metrics/:klass',   to: 'api#metrics_for_job', as: :api_metrics_for_job, constraints: { klass: %r{[^/]+} }
     get  'history/:bucket',  to: 'api#history', as: :api_history
     get  'search',           to: 'api#search'
+    get  'profiles',         to: 'api#profiles'
     get  'stream',           to: 'api#stream' # SSE
   end
+
+  # Profiles (v8.0+) — not under /api: `:key/data` streams the gzipped gecko
+  # blob with a gzip Content-Encoding, and `:key` POST-uploads the profile to
+  # the Firefox profiler then 302s to its public view. `:key` is "<token>-<jid>".
+  # The `/data` route is declared first so it wins over the bare `:key` match.
+  # Spec: docs/target/sidekiq-free.md §25.4.
+  get 'profiles/:key/data', to: 'profiles#data', as: :profile_data, constraints: { key: %r{[^/]+} }
+  get 'profiles/:key',      to: 'profiles#show', as: :profile,      constraints: { key: %r{[^/]+} }
 
   # SPA catch-all — let React Router handle the rest.
   get '*path', to: 'dashboard#index', constraints: ->(req) { req.format == :html }

@@ -16,6 +16,20 @@ class WebConfigTest < Wurk::Test::UnitCase
     super
   end
 
+  # #162: profiler URLs default to the public Firefox profiler, overridable.
+  def test_profile_urls_default_and_override
+    cfg = Wurk::Web.config
+
+    assert_equal 'https://profiler.firefox.com/public/%s', cfg.profile_view_url
+    assert_equal 'https://api.profiler.firefox.com/compressed-store', cfg.profile_store_url
+
+    cfg.profile_view_url = 'https://prof.internal/%s'
+    cfg.profile_store_url = 'https://prof.internal/store'
+
+    assert_equal 'https://prof.internal/%s', cfg.profile_view_url
+    assert_equal 'https://prof.internal/store', cfg.profile_store_url
+  end
+
   def test_default_authorized_returns_true_when_block_absent
     assert Wurk::Web.config.authorized?({}, 'GET', '/api/stats')
   end
