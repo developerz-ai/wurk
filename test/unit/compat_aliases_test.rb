@@ -58,6 +58,7 @@ class CompatAliasesTest < Wurk::Test::UnitCase
   def test_pro_dogstatsd_accessor
     STATE_MUTEX.synchronize do
       previous = Wurk.configuration.dogstatsd
+      previous_dd = Wurk.configuration[:use_datadog_extensions]
       client = -> { :statsd }
       Sidekiq::Pro.dogstatsd = client
 
@@ -69,6 +70,7 @@ class CompatAliasesTest < Wurk::Test::UnitCase
       assert_equal false, Wurk.configuration[:use_datadog_extensions]
     ensure
       Wurk.configuration.dogstatsd = previous
+      Wurk.configuration[:use_datadog_extensions] = previous_dd
     end
   end
 
