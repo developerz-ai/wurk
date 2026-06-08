@@ -127,6 +127,7 @@ module Sidekiq
   SortedEntry      = Wurk::SortedEntry
   Stats            = Wurk::Stats
   Testing          = Wurk::Testing
+  TransactionAwareClient = Wurk::TransactionAwareClient
   Queues           = Wurk::Queues
   EmptyQueueError  = Wurk::Testing::EmptyQueueError
   Web              = Wurk::Web
@@ -161,6 +162,7 @@ module Sidekiq
     end
 
     def strict_args!(mode = :raise) = Wurk.strict_args!(mode)
+    def transactional_push! = Wurk.transactional_push!
     def testing!(mode = :fake, &) = Wurk.testing!(mode, &)
     def testing? = Wurk.testing?
     def load_json(str) = Wurk.load_json(str)
