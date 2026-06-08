@@ -73,13 +73,14 @@ module Wurk
     # True iff this process currently holds the cluster `dear-leader` lock.
     # Per spec, the check is performed at call time (Wurk does not cache);
     # callers must not poll faster than the 60s follower cadence. Returns
-    # false unconditionally when `WURK_LEADER=false` is set on the process
-    # (opt-out hot-standby). Any Redis error is swallowed → false, so a
-    # transient partition can't propagate as an exception into user code.
+    # false unconditionally when `WURK_LEADER=false` (or `SIDEKIQ_LEADER=false`)
+    # is set on the process (opt-out hot-standby). Any Redis error is swallowed →
+    # false, so a transient partition can't propagate as an exception into user
+    # code.
     #
     # Spec: docs/target/sidekiq-ent.md §6.1.
     def leader?
-      return false if ENV[Wurk::Leader::OPT_OUT_ENV].to_s.downcase == 'false'
+      return false if Wurk::Leader.opted_out?
 
       redis { |c| c.call('GET', Wurk::Leader::DEFAULT_KEY) } == identity
     rescue StandardError

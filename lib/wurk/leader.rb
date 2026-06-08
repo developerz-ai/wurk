@@ -20,7 +20,8 @@ module Wurk
   #
   # Cadence per spec: renew every 15s while leader, recheck every 60s as
   # follower, lock TTL 30s. Opt out a process from campaigning entirely
-  # with `WURK_LEADER=false` (useful for hot-standby pools).
+  # with `WURK_LEADER=false` (or its Sidekiq alias `SIDEKIQ_LEADER=false`),
+  # useful for hot-standby pools.
   #
   # Spec: docs/target/sidekiq-ent.md §6.
   class Leader
@@ -29,8 +30,16 @@ module Wurk
     DEFAULT_TTL = 30
     DEFAULT_RENEW_INTERVAL = 15
     DEFAULT_FOLLOWER_INTERVAL = 60
-    OPT_OUT_ENV = 'WURK_LEADER'
+    OPT_OUT_ENV = 'WURK_LEADER'            # native opt-out env
+    SIDEKIQ_OPT_OUT_ENV = 'SIDEKIQ_LEADER' # Sidekiq Ent drop-in alias (§6.2/§7.2)
     THREAD_NAME = 'wurk-leader'
+
+    # True when this process has opted out of campaigning via `WURK_LEADER=false`
+    # or its Sidekiq alias `SIDEKIQ_LEADER=false` (hot-standby pools that must
+    # never lead). Either env name works.
+    def self.opted_out?
+      [OPT_OUT_ENV, SIDEKIQ_OPT_OUT_ENV].any? { |k| ENV[k].to_s.downcase == 'false' }
+    end
 
     attr_reader :key, :ttl, :owner, :token, :config
 
@@ -53,11 +62,11 @@ module Wurk
       @sleeper = ::ConditionVariable.new
     end
 
-    # `WURK_LEADER=false` makes `acquire` a no-op and `leader?` permanently
-    # false; the renewal thread also refuses to start. Useful for hot-
-    # standby pools that must never campaign.
+    # `WURK_LEADER=false` (or `SIDEKIQ_LEADER=false`) makes `acquire` a no-op and
+    # `leader?` permanently false; the renewal thread also refuses to start.
+    # Useful for hot-standby pools that must never campaign.
     def disabled?
-      ENV[OPT_OUT_ENV].to_s.downcase == 'false'
+      self.class.opted_out?
     end
 
     # SET NX EX. If the key already holds *our* owner string (rare — same
