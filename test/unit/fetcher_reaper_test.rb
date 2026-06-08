@@ -30,7 +30,12 @@ class FetcherReaperTest < Wurk::Test::UnitCase
     # `super_fetch:recovered:<jid>` can't accumulate across runs and tip an
     # otherwise-recoverable job over the poison threshold.
     @salt         = SecureRandom.hex(8)
-    @reaper       = Wurk::Fetcher::Reaper.new(@config, interval: 1, lock_key: "#{Wurk::Fetcher::Reaper::LOCK_KEY}:#{@ns}")
+    @lock_key      = "#{Wurk::Fetcher::Reaper::LOCK_KEY}:#{@ns}"
+    @full_lock_key = "#{Wurk::Fetcher::Reaper::FULL_LOCK_KEY}:#{@ns}"
+    @reaper        = Wurk::Fetcher::Reaper.new(@config, interval: 1, lock_key: @lock_key, full_lock_key: @full_lock_key)
+    # Keys created outside @public_queue (full-sweep tests use foreign queues);
+    # the whole-keyspace scan would see leftovers from prior tests otherwise.
+    @extra_keys    = []
     Wurk::Middleware::PoisonPill.reset!
   end
 
@@ -39,7 +44,8 @@ class FetcherReaperTest < Wurk::Test::UnitCase
     @pool.with do |c|
       keys = c.call('KEYS', "#{@public_queue}*")
       c.call('DEL', *keys) unless keys.empty?
-      c.call('DEL', "#{Wurk::Fetcher::Reaper::LOCK_KEY}:#{@ns}")
+      c.call('DEL', @lock_key, @full_lock_key)
+      c.call('DEL', *@extra_keys) unless @extra_keys.empty?
     end
     cleanup_dead_set
     cleanup_recovery_counters
@@ -210,11 +216,14 @@ class FetcherReaperTest < Wurk::Test::UnitCase
 
   # --- cluster lock ------------------------------------------------------
 
-  def test_reap_is_a_noop_when_the_lock_is_held_elsewhere
+  def test_reap_is_a_noop_when_both_locks_are_held_elsewhere
     seed_private_list(DEAD_PID, %w[a])
-    @pool.with { |c| c.call('SET', "#{Wurk::Fetcher::Reaper::LOCK_KEY}:#{@ns}", 'other', 'EX', 30) }
+    @pool.with do |c|
+      c.call('SET', @lock_key, 'other', 'EX', 30)
+      c.call('SET', @full_lock_key, 'other', 'EX', 30)
+    end
 
-    assert_equal 0, @reaper.reap, 'a process that loses the lock does not sweep'
+    assert_equal 0, @reaper.reap, 'a process that loses both locks does not sweep'
     assert_equal 1, llen(private_list(DEAD_PID))
   end
 
@@ -222,6 +231,70 @@ class FetcherReaperTest < Wurk::Test::UnitCase
     seed_private_list(DEAD_PID, %w[a b])
 
     assert_equal 2, @reaper.reap
+  end
+
+  # Losing the scoped lock but winning the (separate) hourly lock still runs the
+  # full sweep — the two gates are independent.
+  def test_reap_runs_full_sweep_when_only_scoped_lock_is_held
+    seed_private_list(DEAD_PID, %w[a b])
+    @pool.with { |c| c.call('SET', @lock_key, 'other', 'EX', 30) }
+
+    assert_equal 2, @reaper.reap, 'full sweep reclaims even when the scoped lock is lost'
+  end
+
+  # --- full-keyspace sweep (acceptance #4) -------------------------------
+
+  # The headline gap: a private list whose public queue this process does NOT
+  # serve (renamed/decommissioned queue, or a dead host's queue no survivor
+  # consumes) is invisible to the scoped sweep but recovered by the full one.
+  # rubocop:disable Minitest/MultipleAssertions
+  # One scenario: scoped sweep misses it, full sweep recovers it onto the
+  # foreign public queue and drains the private list. Cohesive — keep together.
+  def test_reclaim_full_reclaims_orphan_in_an_unserved_queue
+    foreign_q = Wurk::Keys.queue("#{@ns}-foreign")
+    private_key = "#{foreign_q}|#{@host}|#{DEAD_PID}|0"
+    @extra_keys.push(foreign_q, private_key)
+    @pool.with { |c| c.call('RPUSH', private_key, payload('x'), payload('y')) }
+
+    # Scoped sweep can't see it (foreign_q isn't a served queue)...
+    assert_equal 0, @reaper.reclaim!, 'scoped sweep ignores unserved queues'
+    # ...but the full sweep recovers it to its own public queue.
+    assert_equal 2, @reaper.reclaim_full!
+    assert_equal 0, llen(private_key), 'orphan private list drained'
+    assert_equal 2, llen(foreign_q), 'jobs re-queued onto the foreign public queue'
+  end
+  # rubocop:enable Minitest/MultipleAssertions
+
+  def test_reclaim_full_leaves_a_live_owners_list_untouched
+    foreign_q = Wurk::Keys.queue("#{@ns}-live")
+    private_key = "#{foreign_q}|#{@host}|#{Process.pid}|0" # this very process — alive
+    @extra_keys.push(foreign_q, private_key)
+    @pool.with { |c| c.call('RPUSH', private_key, payload('z')) }
+
+    assert_equal 0, @reaper.reclaim_full!, 'a live owner is never reclaimed'
+    assert_equal 1, llen(private_key)
+  end
+
+  def test_reclaim_full_ignores_public_queues_and_malformed_keys
+    @pool.with do |c|
+      c.call('RPUSH', Wurk::Keys.queue("#{@ns}-plain"), payload('public')) # no pipe → not a private list
+      c.call('RPUSH', "#{Wurk::Keys.queue("#{@ns}-bad")}|#{@host}|notapid|0", payload('bad'))
+    end
+    @extra_keys.push(Wurk::Keys.queue("#{@ns}-plain"), "#{Wurk::Keys.queue("#{@ns}-bad")}|#{@host}|notapid|0")
+
+    assert_equal 0, @reaper.reclaim_full!
+  end
+
+  # A `|` inside the queue name must still parse: the owner triple is taken from
+  # the right, so the public queue is everything before host|pid|idx.
+  def test_reclaim_full_tolerates_a_pipe_in_the_queue_name
+    foreign_q = Wurk::Keys.queue("#{@ns}|piped")
+    private_key = "#{foreign_q}|#{@host}|#{DEAD_PID}|0"
+    @extra_keys.push(foreign_q, private_key)
+    @pool.with { |c| c.call('RPUSH', private_key, payload('p')) }
+
+    assert_equal 1, @reaper.reclaim_full!
+    assert_equal 1, llen(foreign_q), 'reclaimed onto the correctly-parsed public queue'
   end
 
   # --- thread lifecycle --------------------------------------------------

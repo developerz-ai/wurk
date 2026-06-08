@@ -33,10 +33,16 @@ module Wurk
     # is killed into the dead set instead of re-queued, so a job that crashes
     # its worker every time can't loop forever.
     #
-    # SCANs are scoped to the public queues this process serves and gated by
-    # a cluster-wide `SET NX EX` lock, so across a fleet only one process
-    # sweeps per interval ("1/min within process group" in the spec) and the
-    # keyspace touched is bounded to known queues.
+    # The reaper runs two passes, exactly as super_fetch's sweeper does:
+    #
+    #   * a *scoped* sweep every interval ("1/min within process group"): SCANs
+    #     only the public queues this process serves, gated by a cluster `SET NX
+    #     EX` lock so one process sweeps per interval. The cheap common path.
+    #   * a *full* sweep at most once an hour ("full SCAN 1/hr"): SCANs the whole
+    #     `queue:*|*` keyspace, gated by its own hourly lock, so private lists
+    #     whose public queue no live process serves — a renamed/decommissioned
+    #     queue, or a dead host's queue no survivor consumes — are recovered too,
+    #     not stranded forever.
     #
     # Spec: docs/target/sidekiq-pro.md §3.2.
     class Reaper
@@ -47,16 +53,24 @@ module Wurk
       # floor below which cross-host orphans can't be detected anyway.
       DEFAULT_INTERVAL = 60
 
+      # Full-keyspace sweep cadence + its lock TTL: at most once per hour across
+      # the fleet, since a global SCAN is far costlier than the scoped pass.
+      FULL_INTERVAL = 3600
+
       LOCK_KEY = 'super_fetch:reaper'
+      FULL_LOCK_KEY = 'super_fetch:reaper:full'
       SCAN_COUNT = 100
       THREAD_NAME = 'wurk-reaper'
 
       attr_reader :interval
 
-      def initialize(config, interval: DEFAULT_INTERVAL, lock_key: LOCK_KEY)
+      def initialize(config, interval: DEFAULT_INTERVAL, lock_key: LOCK_KEY,
+                     full_interval: FULL_INTERVAL, full_lock_key: FULL_LOCK_KEY)
         @config = config
         @interval = interval
         @lock_key = lock_key
+        @full_interval = full_interval
+        @full_lock_key = full_lock_key
         @thread = nil
         @done = false
         @mutex = ::Mutex.new
@@ -89,12 +103,13 @@ module Wurk
         !@thread.nil? && @thread.alive?
       end
 
-      # One cluster-gated sweep: a no-op (returns 0) unless this process wins
-      # the interval's lock. Used by the loop.
+      # One loop tick: the scoped sweep when this process wins the per-interval
+      # lock, plus the full-keyspace sweep when it also wins the hourly lock.
+      # Returns the total jobs reclaimed across both.
       def reap
-        return 0 unless acquire_lock?
-
-        reclaim!
+        reclaimed = acquire_lock? ? reclaim! : 0
+        reclaimed += reclaim_full! if acquire_full_lock?
+        reclaimed
       end
 
       # One unguarded sweep over every served queue. Returns the number of
@@ -103,6 +118,21 @@ module Wurk
       def reclaim!
         prefixes = live_process_prefixes
         served_queues.sum { |public_q| reclaim_queue(public_q, prefixes) }
+      end
+
+      # One unguarded full-keyspace sweep: every `queue:*|*` private list, even
+      # ones whose public queue this process doesn't serve. Returns the number
+      # of jobs reclaimed. Public so boot paths and tests can drive it without
+      # the hourly lock.
+      def reclaim_full!
+        prefixes = live_process_prefixes
+        reclaimed = 0
+        each_full_private_list do |key, public_q, host, pid|
+          next if owner_alive?(host, pid, prefixes)
+
+          reclaimed += drain(key, public_q)
+        end
+        reclaimed
       end
 
       private
@@ -141,6 +171,39 @@ module Wurk
           end
           break if cursor == '0'
         end
+      end
+
+      # Yields [private_list_key, public_q, host, pid] for every private list in
+      # the keyspace. MATCH `queue:*|*` matches only private lists (public queue
+      # keys carry no `|`); parse_full_key drops anything that isn't a
+      # well-formed `queue:<public>|<host>|<pid>|<idx>`.
+      def each_full_private_list
+        cursor = '0'
+        loop do
+          cursor, keys = redis { |c| c.call('SCAN', cursor, 'MATCH', "#{Keys::QUEUE_PREFIX}*|*", 'COUNT', SCAN_COUNT) }
+          keys.each do |key|
+            parsed = parse_full_key(key)
+            yield key, *parsed if parsed
+          end
+          break if cursor == '0'
+        end
+      end
+
+      # `queue:<public>|<host>|<pid>|<idx>` → [public_q, host, pid], parsed from
+      # the right (pid + idx are integers, host precedes them) so a `|` inside
+      # the queue name is tolerated. nil when the key isn't a well-formed
+      # private list.
+      def parse_full_key(key)
+        parts = key.split('|')
+        return nil if parts.size < 4
+
+        host, pid, idx = parts.last(3)
+        return nil unless integer?(pid) && integer?(idx)
+
+        public_q = parts[0...-3].join('|')
+        return nil unless public_q.start_with?(Keys::QUEUE_PREFIX) && public_q != Keys::QUEUE_PREFIX
+
+        [public_q, host, pid.to_i]
       end
 
       # `<public_q>|<host>|<pid>|<idx>` → [host, pid] (pid as Integer), or
@@ -228,6 +291,10 @@ module Wurk
 
       def acquire_lock?
         redis { |c| c.call('SET', @lock_key, '1', 'NX', 'EX', @interval) } == 'OK'
+      end
+
+      def acquire_full_lock?
+        redis { |c| c.call('SET', @full_lock_key, '1', 'NX', 'EX', @full_interval) } == 'OK'
       end
 
       def spawn_loop_thread
