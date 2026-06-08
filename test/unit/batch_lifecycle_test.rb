@@ -157,6 +157,23 @@ class BatchLifecycleTest < Wurk::Test::UnitCase
     assert_equal 1, callbacks_fired(event: 'complete', bid: batch.bid)
   end
 
+  # The duration statsd metric is best-effort: fire_success has already burned
+  # the `success` dedup key by the time it runs, so a raise there would strand
+  # the success callbacks + linger with no retry to re-fire them.
+  def test_success_callbacks_still_fire_when_duration_metric_raises
+    batch = new_batch(success: 'S', complete: 'C')
+    batch.jobs { perform_one }
+
+    with_raising_distribution do
+      ack_success(batch.bid, jid_for(@queue, batch.bid))
+    end
+
+    assert_equal 1, callbacks_fired(event: 'success', bid: batch.bid),
+                 'success callback must enqueue even when the duration metric raises'
+    refute_equal(-1, @pool.with { |c| c.call('TTL', "b-#{batch.bid}") },
+                 'linger must still apply when the duration metric raises')
+  end
+
   def test_complete_fires_but_success_does_not_on_death
     batch = new_batch(success: 'S', complete: 'C', death: 'D')
     batch.jobs { perform_one }
@@ -502,6 +519,17 @@ class BatchLifecycleTest < Wurk::Test::UnitCase
 
   def queued(queue)
     @pool.with { |c| c.call('LRANGE', "queue:#{queue}", 0, -1) }.map { |s| JSON.parse(s) }
+  end
+
+  # Minitest 6 dropped minitest/mock; hand-rolled stub that makes the duration
+  # metric emission blow up (the Redis-hiccup case the rescue guards against).
+  def with_raising_distribution
+    sc = Wurk::Metrics::Statsd.singleton_class
+    original = Wurk::Metrics::Statsd.method(:distribution)
+    sc.define_method(:distribution) { |*_args, **_kw| raise 'statsd down' }
+    yield
+  ensure
+    sc.define_method(:distribution) { |*a, **k| original.call(*a, **k) }
   end
 
   def jid_for(queue, bid)

@@ -69,12 +69,20 @@ module Wurk
       # Pro statsd metric (spec §9.3): wall-clock seconds from batch creation to
       # full success. `created_at` shares the CLOCK_REALTIME epoch we record it
       # with. No-op without a dogstatsd client.
+      #
+      # Strictly best-effort: `fire_success` has already burned the `success`
+      # dedup key by the time we run, so a raise here (e.g. a Redis hiccup on the
+      # HGET) would permanently strand the success callbacks and linger that
+      # follow — a retry can't re-fire them. Swallow and log instead.
       def emit_duration_metric(bid)
         created = Wurk.redis { |conn| conn.call('HGET', "b-#{bid}", 'created_at') }
         return if created.nil? || created.to_s.empty?
 
         seconds = ::Process.clock_gettime(::Process::CLOCK_REALTIME) - created.to_f
         Wurk::Metrics::Statsd.distribution('batch.duration_dist', seconds)
+      rescue StandardError => e
+        Wurk.logger.warn("batch #{bid}: duration metric emit failed: #{e.class}: #{e.message}")
+        nil
       end
 
       # Post-success retention: a succeeded batch no longer coordinates any
