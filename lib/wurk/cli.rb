@@ -107,6 +107,26 @@ module Wurk
       launch(self_read)
     end
 
+    # Standalone multi-process boot — the `sidekiqswarm` entry point (Ent §7).
+    # The parent loads the app once, forks N worker children per the configured
+    # topology, then supervises them (respawn on crash, rolling restart on
+    # SIGUSR1, memory-based recycling). The parent itself never fetches.
+    #
+    # This is the only way to get fork-based parallelism without Rails — the
+    # railtie auto-boot path is Rails-only. Boots `Process.warmup` before the
+    # fork so children share warmed pages (copy-on-write). Spec §7.
+    def run_swarm(boot_app: true, warmup: true)
+      boot_application if boot_app
+      validate_redis!
+      validate_pool_sizes!
+      @config[:identity] = identity
+      Wurk.server = true
+      ::Process.warmup if warmup && ::Process.respond_to?(:warmup) && ENV['RUBY_DISABLE_WARMUP'] != '1'
+      @swarm = Wurk::Swarm.new(topology: @config.topology, config: @config)
+      @swarm.boot(install_signals: true)
+      @swarm.supervise
+    end
+
     def handle_signal(sig)
       logger.debug { "Got #{sig} signal" }
       handler = SIGNAL_HANDLERS[sig]
