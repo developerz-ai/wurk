@@ -92,6 +92,8 @@
     "kill": "Kill",
     "add_to_queue": "Add to Queue",
     "clear": "Clear",
+    "pause": "Pause",
+    "unpause": "Resume",
     "quiet": "Quiet",
     "stop": "Stop",
     "prev": "Previous",

@@ -189,6 +189,21 @@ export default function Queues() {
     },
   });
 
+  // Toggle the queue's membership of the `paused` SET; fetchers stop pulling
+  // from a paused queue. POST skips CSRF (ApiController#skip_forgery_protection).
+  const pauseQueue = useMutation({
+    mutationFn: async ({ name, paused }: { name: string; paused: boolean }) => {
+      const action = paused ? 'unpause' : 'pause';
+      const res = await fetch(`/wurk/api/queues/${encodeURIComponent(name)}/${action}`, { method: 'POST' });
+      if (!res.ok) throw new Error(`${action} failed (${res.status})`);
+      return res;
+    },
+    onSuccess: (_res, { name }) => {
+      qc.invalidateQueries({ queryKey: ['queues'] });
+      qc.invalidateQueries({ queryKey: ['queue', name] });
+    },
+  });
+
   const { sorted, sort, toggle } = useSort(data ?? [], QUEUE_SORT);
 
   if (isLoading) return <div className="empty-state"><span className="spinner" /></div>;
@@ -227,15 +242,24 @@ export default function Queues() {
                   </td>
                   {!readOnly && (
                     <td className="row-action" onClick={(e) => e.stopPropagation()}>
-                      <button
-                        className="btn btn-sm btn-danger"
-                        disabled={clearQueue.isPending}
-                        onClick={() => {
-                          if (window.confirm(t('actions.confirm_clear_queue', { name: q.name }))) clearQueue.mutate(q.name);
-                        }}
-                      >
-                        {t('actions.clear')}
-                      </button>
+                      <div style={{ display: 'flex', gap: '0.4rem', justifyContent: 'flex-end' }}>
+                        <button
+                          className="btn btn-sm"
+                          disabled={pauseQueue.isPending}
+                          onClick={() => pauseQueue.mutate({ name: q.name, paused: q.paused })}
+                        >
+                          {q.paused ? t('actions.unpause') : t('actions.pause')}
+                        </button>
+                        <button
+                          className="btn btn-sm btn-danger"
+                          disabled={clearQueue.isPending}
+                          onClick={() => {
+                            if (window.confirm(t('actions.confirm_clear_queue', { name: q.name }))) clearQueue.mutate(q.name);
+                          }}
+                        >
+                          {t('actions.clear')}
+                        </button>
+                      </div>
                     </td>
                   )}
                 </tr>

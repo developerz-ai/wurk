@@ -22,6 +22,7 @@ class ApiMutationsTest < Wurk::Test::EngineCase
     ::Wurk.redis do |conn|
       conn.call('DEL', "queue:#{@queue}")
       conn.call('SREM', 'queues', @queue)
+      conn.call('SREM', ::Wurk::Keys::PAUSED_SET, @queue)
       cleanup_zset(conn, 'retry')
       cleanup_zset(conn, 'schedule')
       cleanup_zset(conn, 'dead')
@@ -208,6 +209,33 @@ class ApiMutationsTest < Wurk::Test::EngineCase
     post "/wurk/api/queues/#{@queue}/delete", { jid: 'no-such-jid' }
 
     assert_equal 404, last_response.status
+  end
+
+  # --- Per-queue pause / unpause (#114) -----------------------------------
+
+  def test_pause_queue_sets_paused
+    post "/wurk/api/queues/#{@queue}/pause"
+
+    assert_ok
+    assert json_body[:paused], 'response should report paused: true'
+    assert_predicate ::Wurk::Queue.new(@queue), :paused?
+  end
+
+  def test_unpause_queue_clears_paused
+    ::Wurk::Queue.new(@queue).pause!
+    post "/wurk/api/queues/#{@queue}/unpause"
+
+    assert_ok
+    refute json_body[:paused], 'response should report paused: false'
+    refute_predicate ::Wurk::Queue.new(@queue), :paused?
+  end
+
+  def test_read_only_blocks_pause
+    ::Wurk::Web.configure { |c| c.read_only = true }
+    post "/wurk/api/queues/#{@queue}/pause"
+
+    assert_equal 403, last_response.status
+    refute_predicate ::Wurk::Queue.new(@queue), :paused?, 'read-only must not mutate'
   end
 
   # --- Read-only / forgery ------------------------------------------------

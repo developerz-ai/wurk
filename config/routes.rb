@@ -11,6 +11,10 @@ Wurk::Engine.routes.draw do
     get  'queues/:name',     to: 'api#queue', as: :api_queue, constraints: { name: %r{[^/]+} }
     post 'queues/:name/clear',  to: 'api#clear_queue',     as: :api_clear_queue,     constraints: { name: %r{[^/]+} }
     post 'queues/:name/delete', to: 'api#delete_queue_job', as: :api_delete_queue_job, constraints: { name: %r{[^/]+} }
+    # Per-queue Pause/Unpause (Pro §6, §10.1): toggles membership of the `paused`
+    # SET that fetchers consult. Read-only mode 403s these via Authorization.
+    post 'queues/:name/pause',   to: 'api#pause_queue',   as: :api_pause_queue,   constraints: { name: %r{[^/]+} }
+    post 'queues/:name/unpause', to: 'api#unpause_queue', as: :api_unpause_queue, constraints: { name: %r{[^/]+} }
 
     # Job-set mutations (retry/delete/kill/requeue/clear). The SPA posts to
     # these; the Authorization middleware 403s every non-GET in read-only mode,
