@@ -1,5 +1,6 @@
 # frozen_string_literal: true
 
+require 'etc'
 require 'logger'
 require_relative 'middleware/chain'
 require_relative 'capsule'
@@ -377,7 +378,24 @@ module Wurk
     # a topology. queue_specs (not queues) so weights survive the round-trip.
     def default_topology
       cap = default_capsule
-      Wurk::Topology.flat(count: 1, queues: cap.queue_specs, concurrency: cap.concurrency)
+      Wurk::Topology.flat(count: default_child_count, queues: cap.queue_specs, concurrency: cap.concurrency)
+    end
+
+    # Number of swarm children when the host hasn't declared a topology
+    # (Sidekiq Ent §7.2). Defaults to the CPU count. A whole number is an
+    # absolute count; a fractional value is a CPU multiplier (e.g. `0.5` → half
+    # the cores, rounded), supported since Sidekiq 8.0.2. WURK_COUNT is the
+    # native name, SIDEKIQ_COUNT the drop-in alias. Unparseable input falls back
+    # to the CPU count; the result is floored at 1 so the swarm always forks.
+    def default_child_count
+      raw = ENV['WURK_COUNT'] || ENV['SIDEKIQ_COUNT']
+      return Etc.nprocessors if raw.nil? || raw.strip.empty?
+
+      value = Float(raw)
+      count = (value % 1).zero? ? value.to_i : (value * Etc.nprocessors).round
+      [count, 1].max
+    rescue ArgumentError, TypeError
+      Etc.nprocessors
     end
 
     def guard_frozen!
