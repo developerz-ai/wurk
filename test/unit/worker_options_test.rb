@@ -326,7 +326,7 @@ class WorkerOptionsTest < Wurk::Test::UnitCase
     captured = []
     fake = build_fake_client { nil }
     original = klass.singleton_class.instance_method(:build_client)
-    klass.singleton_class.send(:define_method, :build_client) do |pool = nil|
+    klass.singleton_class.send(:define_method, :build_client) do |pool = nil, **_opts|
       captured << pool
       fake
     end

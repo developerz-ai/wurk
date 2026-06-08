@@ -121,11 +121,19 @@ module Wurk
         # overrides the class-level option, then it's deleted so it never reaches
         # the wire (normalize_item strips any class-level pool re-merged below).
         pool = item.delete('pool') || get_sidekiq_options['pool']
-        build_client(pool).push(item)
+        build_client(pool, client_class: item.delete('client_class')).push(item)
       end
 
-      def build_client(pool = get_sidekiq_options['pool'])
-        Wurk::Client.new(pool: pool)
+      # `client_class` swaps the enqueue client (e.g. TransactionAwareClient via
+      # Wurk.transactional_push!). Resolution order: per-call `set(client_class:)`,
+      # then the class option, then the live process default, then Wurk::Client.
+      # The default_job_options fallback keeps a global `transactional_push!`
+      # order-independent: a class whose options memoized before the opt-in (its
+      # inherited copy is a stale dup) still routes through the new client.
+      def build_client(pool = get_sidekiq_options['pool'], client_class: nil)
+        klass = client_class || get_sidekiq_options['client_class'] ||
+                Wurk.default_job_options['client_class'] || Wurk::Client
+        klass.new(pool: pool)
       end
 
       # --- Sidekiq::Testing class-level helpers (spec §24.3) --------------

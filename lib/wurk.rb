@@ -19,6 +19,7 @@ require_relative 'wurk/configuration'
 require_relative 'wurk/job_util'
 require_relative 'wurk/client'
 require_relative 'wurk/client/buffered'
+require_relative 'wurk/transaction_aware_client'
 require_relative 'wurk/worker'
 require_relative 'wurk/worker/setter'
 require_relative 'wurk/job'
@@ -149,6 +150,13 @@ module Wurk
     # stringified so symbol-keyed callers don't shadow string keys.
     def default_job_options=(hash)
       @default_job_options = default_job_options.merge(hash.transform_keys(&:to_s))
+    end
+
+    # Opt in to enqueue-after-commit globally: every `perform_async` builds a
+    # Wurk::TransactionAwareClient that defers its push to the surrounding
+    # ActiveRecord transaction's commit. Idempotent. Spec: sidekiq-free.md §3.
+    def transactional_push!
+      default_job_options['client_class'] = Wurk::TransactionAwareClient
     end
 
     # --- strict args -------------------------------------------------
