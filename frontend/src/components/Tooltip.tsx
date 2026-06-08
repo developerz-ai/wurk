@@ -1,4 +1,4 @@
-import { useState, useRef, type ReactNode } from 'react';
+import { useState, useRef, useId, cloneElement, isValidElement, type ReactNode, type ReactElement } from 'react';
 import { createPortal } from 'react-dom';
 
 // A tooltip rendered into a body-level portal with position: fixed, so it
@@ -8,11 +8,17 @@ import { createPortal } from 'react-dom';
 export function Tooltip({ tip, children }: { tip: string; children: ReactNode }) {
   const [pos, setPos] = useState<{ x: number; y: number } | null>(null);
   const ref = useRef<HTMLSpanElement>(null);
+  const tipId = useId();
 
   const show = () => {
     const r = ref.current?.getBoundingClientRect();
     if (r) setPos({ x: r.left + r.width / 2, y: r.top });
   };
+
+  // Associate the trigger with the tooltip for screen readers.
+  const trigger = isValidElement(children)
+    ? cloneElement(children as ReactElement<{ 'aria-describedby'?: string }>, { 'aria-describedby': tipId })
+    : children;
 
   return (
     <span
@@ -21,10 +27,11 @@ export function Tooltip({ tip, children }: { tip: string; children: ReactNode })
       onMouseLeave={() => setPos(null)}
       style={{ display: 'inline-flex' }}
     >
-      {children}
+      {trigger}
       {pos &&
         createPortal(
           <div
+            id={tipId}
             role="tooltip"
             style={{
               position: 'fixed',

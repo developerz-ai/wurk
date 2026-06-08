@@ -202,6 +202,9 @@ export default function Queues() {
     onSuccess: (_res, { name }) => {
       qc.invalidateQueries({ queryKey: ['queues'] });
       qc.invalidateQueries({ queryKey: ['queue', name] });
+      // /api/stats carries per-queue paused flags the Dashboard renders, so a
+      // toggle must refresh it too (mirrors clearQueue).
+      qc.invalidateQueries({ queryKey: ['stats'] });
     },
   });
 
