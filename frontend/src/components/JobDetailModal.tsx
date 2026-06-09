@@ -117,8 +117,8 @@ export default function JobDetailModal({ entry, atLabel, actions, onAction, pend
 
           {entry.custom_rows && entry.custom_rows.length > 0 && (
             <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(160px, 1fr))', gap: '0.9rem' }}>
-              {entry.custom_rows.map(([label, value]) => (
-                <Field key={label} label={label}>{value}</Field>
+              {entry.custom_rows.map(([label, value], idx) => (
+                <Field key={`${label}-${idx}`} label={label}>{value}</Field>
               ))}
             </div>
           )}

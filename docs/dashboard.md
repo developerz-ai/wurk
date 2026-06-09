@@ -137,21 +137,25 @@ their own dashboard tabs through `Sidekiq::Web::Config#register_extension` (alia
 `register`). Wurk implements that surface under the `Sidekiq::Web` /
 `Wurk::Web` alias, so requiring those gems works unchanged:
 
+`register_extension(extclass, name:, tab:, index:, …)` mirrors Sidekiq: `tab` is
+the label, `index` the path, `name` the asset namespace (`tab`/`index` may be
+arrays, zipped). Both call styles work — class-level, or inside a configure
+block:
+
 ```ruby
-# Both styles work — class-level, or inside a configure block:
-Sidekiq::Web.register(MyGem::Web, name: "Locks", tab: "locks")
+Sidekiq::Web.register(MyGem::Web, name: "unique_jobs", tab: "Locks", index: "locks")
 
 Sidekiq::Web.configure do |c|
-  c.register_extension(MyGem::Web, name: "Locks", tab: "locks")
-  c.tabs["Expiry"] = "expiry"          # the tabs hash is directly mutable
+  c.register_extension(MyGem::Web, name: "unique_jobs", tab: "Locks", index: "locks")
+  c.tabs["Expiry"] = "expiry"          # the tabs hash (label => path) is directly mutable
   c.custom_job_info_rows << MyGem::Row # collected for job-detail rows
   c.app_url = "https://myapp.example"
 end
 ```
 
-A registered tab whose path isn't one wurk already renders natively surfaces in
+A registered tab whose path isn't one Wurk already renders natively surfaces in
 the left-nav (read from `GET /api/meta`). Clicking it opens an in-dashboard
-**Extension** page that embeds the extension's own path (`/<mount>/<tab>`) in an
+**Extension** page that embeds the extension's own path (`/<mount>/<index>`) in an
 iframe. `custom_job_info_rows` render as extra rows in the job-detail modal.
 
 **Supported subset (important).** Wurk's dashboard is a **precompiled React

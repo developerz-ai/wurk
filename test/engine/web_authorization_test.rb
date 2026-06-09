@@ -128,7 +128,7 @@ class WebAuthorizationTest < Wurk::Test::EngineCase
   # the SPA nav reads (spec §25.2). The registration is no-op-safe — requiring
   # the gem doesn't crash boot even though wurk can't render its view.
   def test_meta_exposes_registered_custom_tabs
-    Wurk::Web.configure { |c| c.register_extension(Object, name: 'Locks', tab: 'locks') }
+    Wurk::Web.configure { |c| c.register_extension(Object, name: 'locks', tab: 'Locks', index: 'locks') }
 
     get '/wurk/api/meta'
 

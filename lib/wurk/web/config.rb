@@ -97,21 +97,24 @@ module Wurk
       attr_reader :tabs, :extensions
       attr_accessor :custom_job_info_rows, :app_url, :assets_path
 
-      # Matches Sidekiq::Web::Config#register_extension (aliased `register`).
-      # Records the tab so it surfaces in the SPA nav via /api/meta. It does
-      # NOT invoke the extension's server-side routes/views: wurk's dashboard
-      # is a precompiled React SPA with no Sinatra/ERB render path, so an ext's
-      # own view can't be injected (documented divergence — the registration is
-      # accepted no-op-safe so requiring the gem never crashes boot). Returns
-      # self so chained registrations read naturally.
+      # Matches Sidekiq::Web::Config#register_extension (aliased `register`,
+      # spec §25.2): `tab` is the label(s), `index` the path(s), `name` the
+      # asset namespace. `tab`/`index` are zipped into the `tabs` hash
+      # (label => path), so the tab surfaces in the SPA nav via /api/meta. It
+      # does NOT invoke the extension's server-side routes/views: wurk's
+      # dashboard is a precompiled React SPA with no Sinatra/ERB render path, so
+      # an ext's own view can't be injected (documented divergence — registration
+      # is accepted no-op-safe so requiring the gem never crashes boot). Yields
+      # self to an optional block for further config, and returns self.
       # rubocop:disable Metrics/ParameterLists -- signature matches Sidekiq::Web::Config#register_extension (spec §25.2)
-      def register_extension(extension, name:, tab:, index: nil, root_dir: nil,
+      def register_extension(extension, name:, tab:, index:, root_dir: nil,
                              cache_for: 86_400, asset_paths: nil)
-        @tabs[name] = tab
+        Array(tab).zip(Array(index)).each { |label, path| @tabs[label] = path if label }
         @extensions << {
           extension: extension, name: name, tab: tab, index: index,
           root_dir: root_dir, cache_for: cache_for, asset_paths: asset_paths
         }
+        yield self if block_given?
         self
       end
       # rubocop:enable Metrics/ParameterLists
@@ -243,8 +246,8 @@ module Wurk
       # Class-level extension surface — gems call these straight off
       # `Sidekiq::Web` (e.g. `Sidekiq::Web.register(Ext, name:, tab:)` or
       # `Sidekiq::Web.tabs["Locks"] = "locks"`), not only inside `configure`.
-      def register(extension, **)
-        config.register_extension(extension, **)
+      def register(extension, **, &)
+        config.register_extension(extension, **, &)
       end
       alias register_extension register
 

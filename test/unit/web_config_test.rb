@@ -209,15 +209,16 @@ class WebConfigTest < Wurk::Test::UnitCase
     refute_same Wurk::Web::Config::DEFAULT_TABS, Wurk::Web.config.tabs
   end
 
+  # tab = label, index = path, name = asset namespace (spec §25.2).
   def test_register_extension_adds_a_custom_tab
-    Wurk::Web.config.register_extension(Object, name: 'Locks', tab: 'locks')
+    Wurk::Web.config.register_extension(Object, name: 'locks', tab: 'Locks', index: 'locks')
 
     assert_equal 'locks', Wurk::Web.config.tabs['Locks']
     assert_includes Wurk::Web.config.custom_tabs, { name: 'Locks', path: 'locks' }
   end
 
   def test_register_is_an_alias_for_register_extension
-    Wurk::Web.config.register(Object, name: 'Status', tab: 'status')
+    Wurk::Web.config.register(Object, name: 'status', tab: 'Status', index: 'status')
 
     assert_includes Wurk::Web.config.custom_tabs, { name: 'Status', path: 'status' }
   end
@@ -225,14 +226,30 @@ class WebConfigTest < Wurk::Test::UnitCase
   def test_register_extension_returns_self_for_chaining
     cfg = Wurk::Web.config
 
-    assert_same cfg, cfg.register_extension(Object, name: 'A', tab: 'a')
+    assert_same cfg, cfg.register_extension(Object, name: 'a', tab: 'A', index: 'a')
+  end
+
+  def test_register_extension_yields_config_to_block
+    cfg = Wurk::Web.config
+    yielded = nil
+    cfg.register_extension(Object, name: 'locks', tab: 'Locks', index: 'locks') { |c| yielded = c }
+
+    assert_same cfg, yielded
+  end
+
+  # tab/index may be arrays — zipped label => path (spec §25.2).
+  def test_register_extension_zips_array_tabs_and_indexes
+    Wurk::Web.config.register_extension(Object, name: 'uj', tab: %w[Locks Expiry], index: %w[locks expiry])
+    paths = Wurk::Web.config.custom_tabs.map { |t| t[:path] }
+
+    assert_equal %w[locks expiry], paths
   end
 
   def test_custom_tabs_excludes_native_and_default_paths
     cfg = Wurk::Web.config
-    cfg.register_extension(Object, name: 'Cron', tab: 'cron')       # wurk-native page
-    cfg.register_extension(Object, name: 'Queues', tab: 'queues')   # Sidekiq default
-    cfg.register_extension(Object, name: 'Locks', tab: 'locks')     # genuinely new
+    cfg.register_extension(Object, name: 'cron', tab: 'Cron', index: 'cron')         # wurk-native path
+    cfg.register_extension(Object, name: 'queues', tab: 'Queues', index: 'queues')   # Sidekiq default
+    cfg.register_extension(Object, name: 'locks', tab: 'Locks', index: 'locks')      # genuinely new
     paths = cfg.custom_tabs.map { |t| t[:path] }
 
     assert_equal ['locks'], paths
@@ -263,7 +280,7 @@ class WebConfigTest < Wurk::Test::UnitCase
 
   def test_reset_clears_registered_extensions
     cfg = Wurk::Web.config
-    cfg.register_extension(Object, name: 'Locks', tab: 'locks')
+    cfg.register_extension(Object, name: 'locks', tab: 'Locks', index: 'locks')
     cfg.custom_job_info_rows << :row
     cfg.app_url = 'https://app.example'
     cfg.reset!
@@ -281,7 +298,7 @@ class WebConfigTest < Wurk::Test::UnitCase
         raise 'extension code must not run at register time'
       end
     end
-    Wurk::Web.config.register_extension(ext, name: 'Safe', tab: 'safe')
+    Wurk::Web.config.register_extension(ext, name: 'safe', tab: 'Safe', index: 'safe')
     last = Wurk::Web.config.extensions.last
 
     assert_equal ext, last[:extension]
@@ -291,7 +308,7 @@ class WebConfigTest < Wurk::Test::UnitCase
   # Drop-in: gems reach this surface through the Sidekiq::Web alias.
   def test_sidekiq_web_class_level_surface
     assert_same Wurk::Web::Config, Sidekiq::Web::Config
-    Sidekiq::Web.register(Object, name: 'Locks', tab: 'locks')
+    Sidekiq::Web.register(Object, name: 'locks', tab: 'Locks', index: 'locks')
     Sidekiq::Web.tabs['Expiry'] = 'expiry'
 
     paths = Sidekiq::Web.config.custom_tabs.map { |t| t[:path] }
