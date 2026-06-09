@@ -355,6 +355,26 @@ module Wurk
       @topology = value
     end
 
+    # Memory-based child recycling (Sidekiq Ent §7.5): the swarm parent TERMs
+    # (and respawns) any child whose RSS exceeds this many MB. Set in code or
+    # via SIDEKIQ_MAXMEM_MB (WURK_MAXMEM_MB is the native alias); an explicit
+    # value wins over the env. nil/0 disables recycling (the default).
+    def memory_limit_mb
+      @memory_limit_mb || env_memory_limit_mb
+    end
+
+    def memory_limit_mb=(value)
+      guard_frozen!
+      @memory_limit_mb = value.nil? ? nil : Integer(value)
+    end
+
+    # Threshold in KB, the unit the swarm compares against /proc/<pid>/statm
+    # (pages × 4KB). nil when recycling is disabled.
+    def memory_limit_kb
+      mb = memory_limit_mb
+      mb&.positive? ? mb * 1024 : nil
+    end
+
     def freeze!
       return self if @frozen
 
@@ -399,6 +419,17 @@ module Wurk
       [count, 1].max
     rescue ArgumentError, TypeError
       Etc.nprocessors
+    end
+
+    # SIDEKIQ_MAXMEM_MB is the drop-in name; WURK_MAXMEM_MB the native alias.
+    # Unparseable / empty input disables recycling rather than raising at boot.
+    def env_memory_limit_mb
+      raw = ENV['WURK_MAXMEM_MB'] || ENV['SIDEKIQ_MAXMEM_MB']
+      return nil if raw.nil? || raw.strip.empty?
+
+      Integer(raw)
+    rescue ArgumentError, TypeError
+      nil
     end
 
     def guard_frozen!

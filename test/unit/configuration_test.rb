@@ -6,17 +6,18 @@ require 'etc'
 class ConfigurationTest < Wurk::Test::UnitCase
   parallelize_me!
 
+  ENV_KNOBS = %w[WURK_COUNT SIDEKIQ_COUNT WURK_MAXMEM_MB SIDEKIQ_MAXMEM_MB].freeze
+
   def setup
     @config = Wurk::Configuration.new
-    # default_topology reads these; neutralize the ambient env so the count
-    # tests are deterministic and teardown always restores the originals.
-    @count_env = { 'WURK_COUNT' => ENV['WURK_COUNT'], 'SIDEKIQ_COUNT' => ENV['SIDEKIQ_COUNT'] }
-    ENV.delete('WURK_COUNT')
-    ENV.delete('SIDEKIQ_COUNT')
+    # default_topology / memory_limit_mb read these; neutralize the ambient env
+    # so the tests are deterministic and teardown always restores the originals.
+    @saved_env = ENV_KNOBS.to_h { |k| [k, ENV.fetch(k, nil)] }
+    ENV_KNOBS.each { |k| ENV.delete(k) }
   end
 
   def teardown
-    @count_env.each { |k, v| v.nil? ? ENV.delete(k) : (ENV[k] = v) }
+    @saved_env.each { |k, v| v.nil? ? ENV.delete(k) : (ENV[k] = v) }
     super
   end
 
@@ -123,6 +124,47 @@ class ConfigurationTest < Wurk::Test::UnitCase
   # in parallel with classes that mutate the Wurk::Web.config singleton.
   def test_web_delegates_to_web_config_singleton
     assert_same Wurk::Web.config, @config.web
+  end
+
+  # --- memory limit (SIDEKIQ_MAXMEM_MB, Ent §7.5) -----------------------
+
+  def test_memory_limit_defaults_to_nil_when_unset
+    assert_nil @config.memory_limit_mb
+    assert_nil @config.memory_limit_kb
+  end
+
+  def test_memory_limit_reads_sidekiq_maxmem_mb_env
+    ENV['SIDEKIQ_MAXMEM_MB'] = '1500'
+
+    assert_equal 1500, @config.memory_limit_mb
+    assert_equal 1500 * 1024, @config.memory_limit_kb
+  end
+
+  def test_memory_limit_prefers_wurk_native_env_over_sidekiq
+    ENV['SIDEKIQ_MAXMEM_MB'] = '1500'
+    ENV['WURK_MAXMEM_MB'] = '2000'
+
+    assert_equal 2000, @config.memory_limit_mb
+  end
+
+  def test_memory_limit_setter_overrides_env
+    ENV['SIDEKIQ_MAXMEM_MB'] = '1500'
+    @config.memory_limit_mb = 800
+
+    assert_equal 800, @config.memory_limit_mb
+    assert_equal 800 * 1024, @config.memory_limit_kb
+  end
+
+  def test_memory_limit_kb_disabled_when_zero
+    @config.memory_limit_mb = 0
+
+    assert_nil @config.memory_limit_kb, 'zero disables recycling'
+  end
+
+  def test_memory_limit_unparseable_env_disables_rather_than_raises
+    ENV['SIDEKIQ_MAXMEM_MB'] = 'not-a-number'
+
+    assert_nil @config.memory_limit_mb
   end
 
   # --- default capsule shortcuts ----------------------------------------

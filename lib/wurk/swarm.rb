@@ -36,7 +36,7 @@ module Wurk
 
     attr_reader :topology, :children
 
-    def initialize(topology:, config: Wurk.configuration, memory_limit: nil,
+    def initialize(topology:, config: Wurk.configuration, memory_limit: config.memory_limit_kb,
                    shutdown_timeout: DEFAULT_SHUTDOWN_TIMEOUT)
       @topology = topology
       @config = config

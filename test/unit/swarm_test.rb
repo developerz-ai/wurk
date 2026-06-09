@@ -36,6 +36,22 @@ class SwarmTest < Wurk::Test::UnitCase
     assert_equal 500_000, swarm.instance_variable_get(:@memory_limit)
   end
 
+  # #119: with no explicit memory_limit, the swarm picks up the config's
+  # SIDEKIQ_MAXMEM_MB-derived threshold (in KB) so the railtie / wurkswarm /
+  # demo entry points all honor it without each passing it through.
+  def test_initialize_defaults_memory_limit_from_config
+    @config.memory_limit_mb = 750
+    swarm = Wurk::Swarm.new(topology: topology, config: @config)
+
+    assert_equal 750 * 1024, swarm.instance_variable_get(:@memory_limit)
+  end
+
+  def test_initialize_memory_limit_nil_when_config_unset
+    swarm = Wurk::Swarm.new(topology: topology, config: @config)
+
+    assert_nil swarm.instance_variable_get(:@memory_limit)
+  end
+
   # --- boot validation --------------------------------------------------
 
   def test_boot_raises_on_empty_topology
