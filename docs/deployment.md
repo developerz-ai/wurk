@@ -97,19 +97,21 @@ Or run one `wurkswarm` unit instead, which forks children itself — change
 
 ## capistrano-sidekiq
 
-[`capistrano-sidekiq`](https://github.com/seuros/capistrano-sidekiq) works against
-Wurk unchanged. It shells out to the runner and sends the signals above for
-quiet/restart/stop, and all three are drop-in:
+[`capistrano-sidekiq`](https://github.com/seuros/capistrano-sidekiq) shells out to
+the runner and sends the signals above for quiet/restart/stop. The signal handling is
+fully drop-in:
 
-- the `sidekiq` / `sidekiqswarm` binary names resolve via Wurk's aliases,
 - `Sidekiq::CLI` is aliased to `Wurk::CLI`, and
-- the `TSTP` / `TERM` / `USR1` signal semantics match.
+- the `TSTP` / `TERM` / `USR1` signal semantics match exactly.
 
-If it invokes the binary by literal name (`bundle exec sidekiq`), point it at `wurk`
-instead — either set `sidekiq_role`/`sidekiq_command` config to `wurk`/`wurkswarm`,
-or add a tiny `bin/sidekiq` shim that `exec`s `wurk`. The systemd integration mode of
-capistrano-sidekiq drops in the same way: replace the generated unit's `ExecStart`
-with `bundle exec wurk` and keep the rest.
+The one thing to map is the binary name. Wurk ships `wurk`, `wurkswarm`, and a
+`sidekiqswarm` alias — but there is **no `sidekiq` binary** (see
+[`docs/migrate-from-sidekiq.md`](migrate-from-sidekiq.md)). So an Enterprise
+`sidekiqswarm` invocation drops in unchanged, while a `bundle exec sidekiq` invocation
+needs pointing at `wurk`: set `sidekiq_role`/`sidekiq_command` config to
+`wurk`/`wurkswarm`, or add a tiny `bin/sidekiq` shim that `exec`s `wurk`. The systemd
+integration mode drops in the same way — replace the generated unit's `ExecStart` with
+`bundle exec wurk` and keep the rest.
 
 ---
 
