@@ -11,7 +11,8 @@
     "cron": "Cron",
     "metrics": "Metrics",
     "profiles": "Profiles",
-    "search": "Search"
+    "search": "Search",
+    "extensions": "Extensions"
   },
   "dashboard": {
     "processed": "Processed",
@@ -85,6 +86,11 @@
     "emptyTitle": "Search for a job",
     "emptyHint": "Enter a JID or class name (2+ characters) and hit Search. Results span retries, scheduled, and dead jobs.",
     "try": "Try:"
+  },
+  "extension": {
+    "summary": "Provided by a third-party extension.",
+    "open": "Open",
+    "notRendered": "This tab is provided by a third-party extension. wurk surfaces it in the nav but doesn't render its view inside the dashboard."
   },
   "actions": {
     "retry": "Retry",

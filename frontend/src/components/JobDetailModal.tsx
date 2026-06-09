@@ -19,6 +19,9 @@ export interface JobEntry {
   error_class?: string;
   error_message?: string;
   error_backtrace?: string[] | null;
+  // [label, value] rows contributed by third-party extensions via
+  // Sidekiq::Web.custom_job_info_rows (spec §25.2).
+  custom_rows?: [string, string][];
 }
 
 function Field({ label, children, mono }: { label: string; children: ReactNode; mono?: boolean }) {
@@ -110,6 +113,14 @@ export default function JobDetailModal({ entry, atLabel, actions, onAction, pend
             <Field label={t('job.backtrace')}>
               <pre className="job-backtrace">{entry.error_backtrace.join('\n')}</pre>
             </Field>
+          )}
+
+          {entry.custom_rows && entry.custom_rows.length > 0 && (
+            <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(160px, 1fr))', gap: '0.9rem' }}>
+              {entry.custom_rows.map(([label, value], idx) => (
+                <Field key={`${label}-${idx}`} label={label}>{value}</Field>
+              ))}
+            </div>
           )}
         </div>
       )}

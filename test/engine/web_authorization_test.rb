@@ -117,4 +117,23 @@ class WebAuthorizationTest < Wurk::Test::EngineCase
     assert_equal 'This is a public demo — actions are disabled.',
                  JSON.parse(last_response.body)['read_only_message']
   end
+
+  def test_meta_custom_tabs_empty_by_default
+    get '/wurk/api/meta'
+
+    assert_equal [], JSON.parse(last_response.body)['custom_tabs']
+  end
+
+  # A third-party extension registering a tab surfaces it in /api/meta, which
+  # the SPA nav reads (spec §25.2). The registration is no-op-safe — requiring
+  # the gem doesn't crash boot even though wurk can't render its view.
+  def test_meta_exposes_registered_custom_tabs
+    Wurk::Web.configure { |c| c.register_extension(Object, name: 'locks', tab: 'Locks', index: 'locks') }
+
+    get '/wurk/api/meta'
+
+    assert_equal 200, last_response.status
+    assert_includes JSON.parse(last_response.body)['custom_tabs'],
+                    { 'name' => 'Locks', 'path' => 'locks' }
+  end
 end

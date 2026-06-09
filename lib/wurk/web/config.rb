@@ -33,6 +33,24 @@ module Wurk
       PROFILE_VIEW_URL  = 'https://profiler.firefox.com/public/%s'
       PROFILE_STORE_URL = 'https://api.profiler.firefox.com/compressed-store'
 
+      # Sidekiq's built-in dashboard tabs (spec §25.3). The `tabs` hash starts
+      # as a copy of this; extensions add to it via `register_extension` or by
+      # mutating `tabs` directly — the same surface third-party gems use.
+      DEFAULT_TABS = {
+        'Dashboard' => '', 'Busy' => 'busy', 'Queues' => 'queues',
+        'Retries' => 'retries', 'Scheduled' => 'scheduled', 'Dead' => 'morgue',
+        'Metrics' => 'metrics', 'Profiles' => 'profiles'
+      }.freeze
+
+      # Tab paths the SPA already renders natively (Sidekiq DEFAULT_TABS plus
+      # wurk's Pro/Ent extras). A gem re-registering one of these — e.g.
+      # sidekiq-cron's "cron" — must not produce a duplicate nav item, so
+      # `custom_tabs` filters them out.
+      NATIVE_TAB_PATHS = %w[
+        busy queues retries scheduled dead morgue metrics profiles
+        batches limiters cron search
+      ].freeze
+
       # Host-app Rack middleware stacked in front of the dashboard, newest
       # last. Each entry is `[middleware, args, block]`. Returns a frozen copy
       # so the memoized chain (`#rack_app`) can only be invalidated through
@@ -49,6 +67,7 @@ module Wurk
         @rack_app = nil
         @profile_view_url = nil
         @profile_store_url = nil
+        init_extensions!
       end
 
       # Firefox-profiler URLs, overridable; default to the public instance.
@@ -68,6 +87,58 @@ module Wurk
       def authorization(&block)
         @authorization = block if block
         @authorization
+      end
+
+      # Web-extension surface (spec §25.2). Third-party gems (sidekiq-cron,
+      # sidekiq-unique-jobs, sidekiq-status, …) register dashboard tabs at load
+      # time. `tabs` is a mutable name→path hash seeded from DEFAULT_TABS;
+      # `custom_job_info_rows` collects callables that add rows to the job
+      # detail view; `app_url` / `assets_path` mirror Sidekiq's accessors.
+      attr_reader :tabs, :extensions
+      attr_accessor :custom_job_info_rows, :app_url, :assets_path
+
+      # Matches Sidekiq::Web::Config#register_extension (aliased `register`,
+      # spec §25.2): `tab` is the label(s), `index` the path(s), `name` the
+      # asset namespace. `tab`/`index` are zipped into the `tabs` hash
+      # (label => path), so the tab surfaces in the SPA nav via /api/meta. It
+      # does NOT invoke the extension's server-side routes/views: wurk's
+      # dashboard is a precompiled React SPA with no Sinatra/ERB render path, so
+      # an ext's own view can't be injected (documented divergence — registration
+      # is accepted no-op-safe so requiring the gem never crashes boot). Yields
+      # self to an optional block for further config, and returns self.
+      # rubocop:disable Metrics/ParameterLists -- signature matches Sidekiq::Web::Config#register_extension (spec §25.2)
+      def register_extension(extension, name:, tab:, index:, root_dir: nil,
+                             cache_for: 86_400, asset_paths: nil)
+        Array(tab).zip(Array(index)).each { |label, path| @tabs[label] = path if label }
+        @extensions << {
+          extension: extension, name: name, tab: tab, index: index,
+          root_dir: root_dir, cache_for: cache_for, asset_paths: asset_paths
+        }
+        yield self if block_given?
+        self
+      end
+      # rubocop:enable Metrics/ParameterLists
+      alias register register_extension
+
+      # Tabs the SPA should render in the nav: everything registered beyond the
+      # Sidekiq defaults and wurk's own native pages, as `{ name:, path: }`.
+      def custom_tabs
+        @tabs.filter_map do |name, path|
+          next if DEFAULT_TABS.key?(name) || NATIVE_TAB_PATHS.include?(path.to_s)
+
+          { name: name, path: path.to_s }
+        end
+      end
+
+      # Evaluate the registered `custom_job_info_rows` against a job (spec
+      # §25.2), returning `[[label, value], …]` for the SPA's job-detail modal.
+      # Each row is a callable (`call(job)`) or a Sidekiq-style `add_pair(job)`
+      # object; a row that raises or returns a non-pair is skipped so one bad
+      # extension can't break the job views.
+      def job_info_pairs(job)
+        return [] if @custom_job_info_rows.empty?
+
+        @custom_job_info_rows.filter_map { |row| job_info_pair(row, job) }
       end
 
       # Sidekiq-compatible (`Sidekiq::Web.use`). Registers a Rack middleware
@@ -115,6 +186,7 @@ module Wurk
         @rack_app = nil
         @profile_view_url = nil
         @profile_store_url = nil
+        init_extensions!
       end
 
       # Returns true when no block is registered, otherwise the block's
@@ -132,6 +204,29 @@ module Wurk
       def env_read_only?
         ENV['WURK_WEB_READ_ONLY'] == '1'
       end
+
+      def init_extensions!
+        @tabs = DEFAULT_TABS.dup
+        @extensions = []
+        @custom_job_info_rows = []
+        @app_url = nil
+        @assets_path = nil
+      end
+
+      def job_info_pair(row, job)
+        pair = job_info_row_value(row, job)
+        return unless pair.is_a?(::Array) && pair.size == 2
+
+        [pair[0].to_s, pair[1].to_s]
+      rescue ::StandardError
+        nil
+      end
+
+      def job_info_row_value(row, job)
+        return row.call(job) if row.respond_to?(:call)
+
+        row.add_pair(job) if row.respond_to?(:add_pair)
+      end
     end
 
     class << self
@@ -146,6 +241,38 @@ module Wurk
       # Class-level shorthand for `config.use` — mirrors `Sidekiq::Web.use`.
       def use(...)
         config.use(...)
+      end
+
+      # Class-level extension surface — gems call these straight off
+      # `Sidekiq::Web` (e.g. `Sidekiq::Web.register(Ext, name:, tab:)` or
+      # `Sidekiq::Web.tabs["Locks"] = "locks"`), not only inside `configure`.
+      def register(extension, **, &)
+        config.register_extension(extension, **, &)
+      end
+      alias register_extension register
+
+      def tabs
+        config.tabs
+      end
+
+      def custom_job_info_rows
+        config.custom_job_info_rows
+      end
+
+      def app_url
+        config.app_url
+      end
+
+      def app_url=(value)
+        config.app_url = value
+      end
+
+      def assets_path
+        config.assets_path
+      end
+
+      def assets_path=(value)
+        config.assets_path = value
       end
 
       # Test helper — exposed for parity with `Wurk::Limiter.reset_config!`.

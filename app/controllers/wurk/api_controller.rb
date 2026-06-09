@@ -43,7 +43,11 @@ module Wurk
     # reachable while read-only mode blocks mutations.
     def meta
       config = ::Wurk::Web.config
-      render json: { read_only: config.read_only?, read_only_message: config.read_only_message }
+      render json: {
+        read_only: config.read_only?,
+        read_only_message: config.read_only_message,
+        custom_tabs: config.custom_tabs
+      }
     end
 
     def stats
