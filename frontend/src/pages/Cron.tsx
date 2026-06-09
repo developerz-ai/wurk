@@ -1,11 +1,15 @@
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
-import { useEffect } from 'react';
+import { useEffect, useState } from 'react';
 import { t } from '../i18n';
 import { PageHeader } from '../components/PageHeader';
-import { relativeTime, truncate } from '../utils';
+import Modal from '../components/Modal';
+import { relativeTime, isoTime, truncate } from '../utils';
 import { useMeta } from '../hooks/useMeta';
 import { SortableTh } from '../components/SortableTh';
 import { useSort, type Accessors } from '../hooks/useSort';
+
+// Newest-first [fired_at, jid] tuples from GET /wurk/api/cron/:lid/history.
+type HistoryEntry = [number, string];
 
 interface CronLoop {
   lid: string;
@@ -32,6 +36,7 @@ export default function Cron() {
   const qc = useQueryClient();
   const { data: meta } = useMeta();
   const readOnly = meta?.read_only ?? false;
+  const [historyLoop, setHistoryLoop] = useState<CronLoop | null>(null);
 
   useEffect(() => {
     document.title = `${t('nav.cron')} — Wurk`;
@@ -56,6 +61,16 @@ export default function Cron() {
   const enqueueNow = useMutation({
     mutationFn: (lid: string) => post(lid, 'enqueue'),
     onSuccess: () => qc.invalidateQueries({ queryKey: ['cron'] }),
+  });
+
+  // Per-loop run history — fetched on demand when a row opens the modal.
+  const { data: history, isLoading: historyLoading, isError: historyError } = useQuery<HistoryEntry[]>({
+    queryKey: ['cron-history', historyLoop?.lid],
+    queryFn: () =>
+      fetch(`/wurk/api/cron/${historyLoop!.lid}/history`)
+        .then((r) => r.json() as Promise<{ history: HistoryEntry[] }>)
+        .then((d) => d.history),
+    enabled: historyLoop !== null,
   });
 
   const { sorted, sort, toggle } = useSort(data ?? [], SORT);
@@ -87,7 +102,11 @@ export default function Cron() {
             </thead>
             <tbody>
               {sorted.map((loop) => (
-                <tr key={loop.lid}>
+                <tr
+                  key={loop.lid}
+                  className="row-clickable"
+                  onClick={() => setHistoryLoop(loop)}
+                >
                   <td style={{ fontFamily: 'monospace', fontSize: 12 }} title={loop.tz ?? undefined}>
                     {loop.schedule}
                   </td>
@@ -107,7 +126,7 @@ export default function Cron() {
                     )}
                   </td>
                   {!readOnly && (
-                    <td>
+                    <td onClick={(e) => e.stopPropagation()}>
                       <div style={{ display: 'flex', gap: '0.4rem' }}>
                         <button
                           className="btn btn-sm"
@@ -132,6 +151,45 @@ export default function Cron() {
           </table>
         </div>
       )}
+
+      <Modal
+        open={historyLoop !== null}
+        onClose={() => setHistoryLoop(null)}
+        title={
+          historyLoop
+            ? `${t('cron.history_title')} — ${truncate(historyLoop.klass, 40)}`
+            : t('cron.history_title')
+        }
+      >
+        {historyLoading ? (
+          <div className="empty-state"><span className="spinner" /></div>
+        ) : historyError ? (
+          <div className="empty-state" style={{ color: 'var(--danger)' }}>{t('common.error')}</div>
+        ) : !history || history.length === 0 ? (
+          <div className="empty-state">{t('cron.no_history')}</div>
+        ) : (
+          <div className="table-wrapper">
+            <table>
+              <thead>
+                <tr>
+                  <th>{t('cron.fired')}</th>
+                  <th>{t('table.jid')}</th>
+                </tr>
+              </thead>
+              <tbody>
+                {history.map(([firedAt, jid]) => (
+                  <tr key={jid}>
+                    <td style={{ color: 'var(--text-muted)' }} title={isoTime(firedAt)}>
+                      {relativeTime(firedAt)}
+                    </td>
+                    <td style={{ fontFamily: 'monospace', fontSize: 12 }}>{jid}</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        )}
+      </Modal>
     </div>
   );
 }

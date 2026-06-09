@@ -257,6 +257,37 @@ class ApiEndpointsTest < Wurk::Test::EngineCase
     cleanup_cron_loop(lid)
   end
 
+  # #117: the Periodic page's history modal fetches this — [fired_at, jid]
+  # tuples, newest-first (LPUSH order), which the SPA renders as relative time
+  # + jid. (api_controller#cron_history)
+  def test_cron_history_returns_entries_newest_first
+    lid = seed_cron_loop
+    older = ::Time.now.to_i - 120
+    newer = ::Time.now.to_i - 10
+    push_fire_history(lid, older)
+    push_fire_history(lid, newer)
+
+    get "/wurk/api/cron/#{lid}/history"
+
+    assert_ok
+    assert_equal lid, json_body[:lid]
+    assert_equal [[newer, 'abc123'], [older, 'abc123']], json_body[:history]
+  ensure
+    ::Wurk.redis { |c| c.call('DEL', "#{::Wurk::Cron::HISTORY_PREFIX}#{lid}") }
+    cleanup_cron_loop(lid)
+  end
+
+  def test_cron_history_empty_for_loop_without_runs
+    lid = seed_cron_loop
+
+    get "/wurk/api/cron/#{lid}/history"
+
+    assert_ok
+    assert_empty json_body[:history]
+  ensure
+    cleanup_cron_loop(lid)
+  end
+
   def test_metrics_returns_top_jobs
     get '/wurk/api/metrics?minutes=5'
 

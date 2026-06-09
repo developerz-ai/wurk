@@ -65,10 +65,15 @@
     "busy": "Live worker processes and the jobs they're currently running.",
     "batches": "Batched jobs and their progress, successes, and failures.",
     "limiters": "Rate limiters and their current usage.",
-    "cron": "Periodic (cron) jobs with their schedule and last run.",
+    "cron": "Periodic (cron) jobs with their schedule and last run — click a loop to see its execution history.",
     "metrics": "Throughput and failure history, with per-job execution stats.",
     "profiles": "Captured job profiles — open one in the Firefox profiler to inspect its flame graph.",
     "search": "Find a job across retries, scheduled, and dead by JID or class name."
+  },
+  "cron": {
+    "history_title": "Execution history",
+    "fired": "Fired",
+    "no_history": "No runs recorded yet"
   },
   "job": {
     "detail": "Job detail",
