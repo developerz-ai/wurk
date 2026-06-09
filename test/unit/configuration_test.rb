@@ -51,7 +51,7 @@ class ConfigurationTest < Wurk::Test::UnitCase
   end
 
   def test_defaults_lifecycle_event_buckets_present
-    %i[startup quiet shutdown exit heartbeat beat].each do |evt|
+    %i[startup fork quiet shutdown exit heartbeat beat].each do |evt|
       assert_kind_of Array, @config[:lifecycle_events][evt], "missing bucket for #{evt}"
     end
   end
@@ -421,6 +421,14 @@ class ConfigurationTest < Wurk::Test::UnitCase
 
   def test_on_rejects_unknown_event
     assert_raises(ArgumentError) { @config.on(:bogus) { :noop } }
+  end
+
+  # :fork is the Ent §7.4 post-fork hook — must be accepted, not raise.
+  def test_on_accepts_fork_event
+    block = proc {}
+    @config.on(:fork, &block)
+
+    assert_includes @config[:lifecycle_events][:fork], block
   end
 
   def test_on_requires_block

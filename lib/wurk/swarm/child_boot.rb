@@ -32,6 +32,12 @@ module Wurk
         reset_inherited_signals
         reconnect_after_fork
         Wurk.server = true
+        # :fork runs in each child after our internal AR/Redis reconnect and
+        # before fetching, so apps can reopen sockets / restart threads /
+        # reconnect non-fork-safe libs (Ent §7.4). It never fires in the parent
+        # (which only forks + supervises). Like :startup, the child's forked
+        # copy of the bucket is cleared after dispatch, so siblings fire theirs.
+        fire_event(:fork)
         apply_slot_to_config
         # :startup must fire in each worker child before its managers spin up
         # (Sidekiq contract, reraise: true). The parent supervisor never runs
@@ -39,10 +45,7 @@ module Wurk
         # swarm, each child fires it here. Its own forked copy of the bucket is
         # cleared after, so siblings still fire their own.
         fire_event(:startup, reraise: true)
-        launcher = Wurk::Launcher.new(@config)
-        install_signal_handlers(launcher)
-        launcher.run
-        wait_loop(launcher)
+        run_launcher
         exit 0
       rescue StandardError, ::Wurk::Shutdown => e
         @config.logger.error { "swarm child ##{@index} (#{::Process.pid}) crashed: #{e.class}: #{e.message}" }
@@ -50,6 +53,16 @@ module Wurk
       end
 
       private
+
+      # Boot the launcher and block until shutdown. wait_loop joins the
+      # signal-dispatch thread, so the child can't fall through to `exit 0`
+      # mid-drain.
+      def run_launcher
+        launcher = Wurk::Launcher.new(@config)
+        install_signal_handlers(launcher)
+        launcher.run
+        wait_loop(launcher)
+      end
 
       # Parent installed traps for TERM/INT/TSTP/CONT/USR1 — the child
       # needs its own behavior, not the parent's.
