@@ -513,6 +513,153 @@ class CLITest < Wurk::Test::UnitCase
     end
   end
 
+  # --- swarm preload knobs (Ent §7.2) ---------------------------------
+
+  def test_preload_groups_defaults_to_default_group
+    with_env('WURK_PRELOAD' => nil, 'SIDEKIQ_PRELOAD' => nil) do
+      assert_equal [:default], @cli.send(:preload_groups)
+    end
+  end
+
+  def test_preload_groups_parses_comma_list_and_strips_blanks
+    with_env('WURK_PRELOAD' => ' default , assets ,', 'SIDEKIQ_PRELOAD' => nil) do
+      assert_equal %i[default assets], @cli.send(:preload_groups)
+    end
+  end
+
+  def test_preload_groups_native_env_wins_over_sidekiq_alias
+    with_env('WURK_PRELOAD' => 'web', 'SIDEKIQ_PRELOAD' => 'worker') do
+      assert_equal [:web], @cli.send(:preload_groups)
+    end
+  end
+
+  def test_preload_groups_falls_back_to_sidekiq_alias
+    with_env('WURK_PRELOAD' => nil, 'SIDEKIQ_PRELOAD' => 'worker') do
+      assert_equal [:worker], @cli.send(:preload_groups)
+    end
+  end
+
+  def test_preload_groups_empty_value_disables
+    with_env('WURK_PRELOAD' => '', 'SIDEKIQ_PRELOAD' => nil) do
+      assert_empty @cli.send(:preload_groups)
+    end
+  end
+
+  def test_preload_bundler_groups_requires_configured_groups
+    with_env('WURK_PRELOAD' => 'default,assets', 'SIDEKIQ_PRELOAD' => nil) do
+      with_stub_bundler_require do |calls|
+        @cli.send(:preload_bundler_groups)
+
+        assert_equal [%i[default assets]], calls
+      end
+    end
+  end
+
+  def test_preload_bundler_groups_empty_value_skips_require
+    with_env('WURK_PRELOAD' => '', 'SIDEKIQ_PRELOAD' => nil) do
+      with_stub_bundler_require do |calls|
+        @cli.send(:preload_bundler_groups)
+
+        assert_empty calls
+      end
+    end
+  end
+
+  def test_preload_app_true_for_native_or_alias
+    with_env('WURK_PRELOAD_APP' => '1', 'SIDEKIQ_PRELOAD_APP' => nil) do
+      assert @cli.send(:preload_app?)
+    end
+    with_env('WURK_PRELOAD_APP' => nil, 'SIDEKIQ_PRELOAD_APP' => '1') do
+      assert @cli.send(:preload_app?)
+    end
+  end
+
+  def test_preload_app_native_zero_overrides_alias_and_default_false
+    with_env('WURK_PRELOAD_APP' => '0', 'SIDEKIQ_PRELOAD_APP' => '1') do
+      refute @cli.send(:preload_app?), 'native WURK_PRELOAD_APP=0 must override the alias'
+    end
+    with_env('WURK_PRELOAD_APP' => nil, 'SIDEKIQ_PRELOAD_APP' => nil) do
+      refute @cli.send(:preload_app?)
+    end
+  end
+
+  def test_eager_load_application_eager_loads_when_enabled
+    loaded = []
+    fake_app = Object.new
+    fake_app.define_singleton_method(:eager_load!) { loaded << :loaded }
+    with_env('WURK_PRELOAD_APP' => '1', 'SIDEKIQ_PRELOAD_APP' => nil) do
+      @cli.define_singleton_method(:rails_application) { fake_app }
+      @cli.send(:eager_load_application)
+    end
+
+    assert_equal [:loaded], loaded
+  end
+
+  def test_eager_load_application_noop_when_disabled
+    loaded = []
+    fake_app = Object.new
+    fake_app.define_singleton_method(:eager_load!) { loaded << :loaded }
+    with_env('WURK_PRELOAD_APP' => nil, 'SIDEKIQ_PRELOAD_APP' => nil) do
+      @cli.define_singleton_method(:rails_application) { fake_app }
+      @cli.send(:eager_load_application)
+    end
+
+    assert_empty loaded
+  end
+
+  def test_eager_load_application_noop_without_rails_application
+    with_env('WURK_PRELOAD_APP' => '1', 'SIDEKIQ_PRELOAD_APP' => nil) do
+      @cli.define_singleton_method(:rails_application) { nil }
+
+      assert_nil @cli.send(:eager_load_application)
+    end
+  end
+
+  # rails_application reflects whether Rails is loaded in this worker; assert the
+  # branch that matches the current process rather than forcing a global ::Rails.
+  def test_rails_application_reflects_rails_presence
+    result = @cli.send(:rails_application)
+    if defined?(::Rails) && ::Rails.respond_to?(:application)
+      assert_equal ::Rails.application, result
+    else
+      assert_nil result
+    end
+  end
+
+  def test_run_swarm_preloads_then_boots_then_eager_loads
+    order = []
+    @cli.define_singleton_method(:preload_bundler_groups) { order << :preload }
+    @cli.define_singleton_method(:boot_application) { order << :boot }
+    @cli.define_singleton_method(:eager_load_application) { order << :eager }
+    @cli.define_singleton_method(:validate_redis!) { nil }
+    @cli.define_singleton_method(:validate_pool_sizes!) { nil }
+    @cli.define_singleton_method(:identity) { 'host:1:abc' }
+    fake_swarm = Object.new
+    fake_swarm.define_singleton_method(:boot) { |**| nil }
+    fake_swarm.define_singleton_method(:supervise) { order << :supervise }
+
+    with_stub_swarm(fake_swarm) { @cli.run_swarm(boot_app: true, warmup: false) }
+
+    assert_equal %i[preload boot eager supervise], order
+  end
+
+  def test_run_swarm_skips_boot_steps_when_boot_app_false
+    called = []
+    %i[preload_bundler_groups boot_application eager_load_application].each do |m|
+      @cli.define_singleton_method(m) { called << m }
+    end
+    @cli.define_singleton_method(:validate_redis!) { nil }
+    @cli.define_singleton_method(:validate_pool_sizes!) { nil }
+    @cli.define_singleton_method(:identity) { 'host:1:abc' }
+    fake_swarm = Object.new
+    fake_swarm.define_singleton_method(:boot) { |**| nil }
+    fake_swarm.define_singleton_method(:supervise) { nil }
+
+    with_stub_swarm(fake_swarm) { @cli.run_swarm(boot_app: false, warmup: false) }
+
+    assert_empty called
+  end
+
   private
 
   # `validate!` requires `:require` to point at a real file (or a Rails dir
@@ -555,5 +702,33 @@ class CLITest < Wurk::Test::UnitCase
     yield
   ensure
     Wurk::Launcher.define_singleton_method(:new, original)
+  end
+
+  def with_stub_swarm(fake)
+    original = Wurk::Swarm.method(:new)
+    Wurk::Swarm.define_singleton_method(:new) { |*, **| fake }
+    yield
+  ensure
+    Wurk::Swarm.define_singleton_method(:new, original)
+  end
+
+  # Capture the groups passed to Bundler.require without actually loading gems.
+  def with_stub_bundler_require
+    calls = []
+    original = ::Bundler.method(:require)
+    ::Bundler.define_singleton_method(:require) { |*groups| calls << groups }
+    yield calls
+  ensure
+    ::Bundler.define_singleton_method(:require, original)
+  end
+
+  # Set the given ENV vars (nil = unset) for the block, then restore the prior
+  # values. Mirrors the per-test save/restore the rest of this suite uses.
+  def with_env(vars)
+    prev = vars.keys.to_h { |k| [k, ENV.fetch(k, nil)] }
+    vars.each { |k, v| v.nil? ? ENV.delete(k) : ENV[k] = v }
+    yield
+  ensure
+    prev.each { |k, v| v.nil? ? ENV.delete(k) : ENV[k] = v }
   end
 end

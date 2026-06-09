@@ -113,10 +113,16 @@ module Wurk
     # SIGUSR1, memory-based recycling). The parent itself never fetches.
     #
     # This is the only way to get fork-based parallelism without Rails — the
-    # railtie auto-boot path is Rails-only. Boots `Process.warmup` before the
-    # fork so children share warmed pages (copy-on-write). Spec §7.
+    # railtie auto-boot path is Rails-only. Honors the swarm preload knobs
+    # (`WURK_PRELOAD`/`SIDEKIQ_PRELOAD` Bundler groups, `WURK_PRELOAD_APP`/
+    # `SIDEKIQ_PRELOAD_APP` whole-app eager-load) and boots `Process.warmup`
+    # before the fork so children share warmed pages (copy-on-write). Spec §7.
     def run_swarm(boot_app: true, warmup: true)
-      boot_application if boot_app
+      if boot_app
+        preload_bundler_groups
+        boot_application
+        eager_load_application
+      end
       validate_redis!
       validate_pool_sizes!
       @config[:identity] = identity
@@ -318,6 +324,51 @@ module Wurk
     end
 
     # --- application bootstrap --------------------------------------------
+
+    # Spec §7.2/§7.3. Before the swarm parent forks, `Bundler.require` the
+    # configured groups so their gems are resident in the parent and paged
+    # copy-on-write into every child. Comma-separated group list; the native
+    # `WURK_PRELOAD` wins over the `SIDEKIQ_PRELOAD` drop-in alias. Defaults to
+    # the `default` group; an explicit empty value (`WURK_PRELOAD=`) disables
+    # the preload. Runs before `boot_application` so groups load before the app.
+    def preload_bundler_groups
+      return unless defined?(::Bundler)
+
+      groups = preload_groups
+      ::Bundler.require(*groups) unless groups.empty?
+    end
+
+    def preload_groups
+      raw = ENV['WURK_PRELOAD'] || ENV['SIDEKIQ_PRELOAD'] || 'default'
+      raw.split(',').map(&:strip).reject(&:empty?).map(&:to_sym)
+    end
+
+    # Spec §7.2. `WURK_PRELOAD_APP=1` (alias `SIDEKIQ_PRELOAD_APP=1`) eager-loads
+    # the whole Rails app in the parent before forking, so the entire object
+    # space — not just the constants autoload happened to touch — is shared
+    # copy-on-write, trading parent boot time for child RSS savings (~20–30%).
+    #
+    # Intentional divergence from Sidekiq's default-0: wurk's swarm forks
+    # children from a preloaded parent — they inherit the app rather than
+    # re-requiring it — so the app entrypoint (`-r`) is always loaded in the
+    # parent regardless of this flag. PRELOAD_APP only toggles the extra Rails
+    # eager-load; for a non-Rails `-r` file there is nothing further to load.
+    def eager_load_application
+      return unless preload_app?
+
+      app = rails_application
+      app.eager_load! if app.respond_to?(:eager_load!)
+    end
+
+    def rails_application
+      return unless defined?(::Rails) && ::Rails.respond_to?(:application)
+
+      ::Rails.application
+    end
+
+    def preload_app?
+      (ENV['WURK_PRELOAD_APP'] || ENV.fetch('SIDEKIQ_PRELOAD_APP', nil)) == '1'
+    end
 
     # Standalone mode must NOT load wurk/rails — even when pointed at a Rails
     # app, that's the host's call to wire the railtie. The CLI only `require`s

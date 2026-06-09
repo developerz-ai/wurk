@@ -1,6 +1,8 @@
 # frozen_string_literal: true
 
 require_relative '../test_helper'
+require 'tmpdir'
+require 'fileutils'
 
 # Top-level so the constant resolves in the forked swarm child.
 class SwarmCliSentinelWorker
@@ -33,11 +35,12 @@ class SwarmCliTest < Wurk::Test::UnitCase
     @queue_name = "#{@ns}-q"
     @sentinel_key = "#{@ns}-sentinel"
     @startup_key = "#{@ns}-startup"
+    @preload_key = "#{@ns}-preload"
     @observer = RedisClient.config(url: Wurk::Test.redis_url).new_client
   end
 
   def teardown
-    @observer&.call('DEL', @sentinel_key, @startup_key, "queue:#{@queue_name}")
+    @observer&.call('DEL', @sentinel_key, @startup_key, @preload_key, "queue:#{@queue_name}")
     @observer&.close
   ensure
     super
@@ -90,7 +93,65 @@ class SwarmCliTest < Wurk::Test::UnitCase
     end
   end
 
+  # Real fork: the swarm PARENT must Bundler.require the SIDEKIQ_PRELOAD groups
+  # before forking children (Ent §7.2). Boot run_swarm with boot_app:true so the
+  # preload path runs; observe — via a Bundler.require shim that records the
+  # groups to Redis instead of loading gems — that the configured groups were
+  # required in the parent, and that it still forks a child that runs the job.
+  def test_run_swarm_parent_honors_sidekiq_preload_before_forking
+    require_file = ::File.join(::Dir.tmpdir, "#{@ns}-app.rb")
+    ::File.write(require_file, "# swarm preload boot sentinel\n")
+    push_sentinel_job
+    parent_pid = fork_swarm_parent(require_file)
+
+    begin
+      groups = wait_for_key(@preload_key)
+
+      assert groups, "swarm parent never ran the SIDEKIQ_PRELOAD require within #{POLL_TIMEOUT}s"
+      assert_equal 'default,assets', groups,
+                   'swarm parent should Bundler.require the configured preload groups before fork'
+      assert wait_for_key(@sentinel_key), 'swarm child never ran the job after preload'
+    ensure
+      stop(parent_pid)
+      ::FileUtils.rm_f(require_file)
+    end
+  end
+
   private
+
+  # Forks the real CLI#run_swarm with boot_app:true and SIDEKIQ_PRELOAD set. The
+  # Bundler.require shim is installed inside the child only (the parent test
+  # process is untouched by fork) and records the requested groups to Redis.
+  def fork_swarm_parent(require_file)
+    ::Process.fork do
+      $stdout.reopen(IO::NULL)
+      $stderr.reopen(IO::NULL)
+      ENV['SIDEKIQ_PRELOAD'] = 'default,assets'
+      record_bundler_groups_to_redis(@preload_key)
+      boot_swarm_child(require_file)
+    end
+  end
+
+  def record_bundler_groups_to_redis(preload_key)
+    redis_url = Wurk::Test.redis_url
+    ::Bundler.define_singleton_method(:require) do |*groups|
+      c = RedisClient.config(url: redis_url).new_client
+      c.call('SET', preload_key, groups.join(','))
+      c.call('EXPIRE', preload_key, 60)
+      c.close
+    end
+  end
+
+  def boot_swarm_child(require_file)
+    config = build_config
+    config[:require] = require_file
+    config.default_capsule.queues = [@queue_name]
+    config.topology = Wurk::Topology.flat(count: 1, queues: [@queue_name], concurrency: 1)
+    cli = Wurk::CLI.instance
+    cli.instance_variable_set(:@config, config)
+    cli.run_swarm(boot_app: true, warmup: false)
+    exit 0
+  end
 
   def push_sentinel_job
     config = build_config
