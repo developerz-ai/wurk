@@ -93,6 +93,12 @@ module Wurk
 
     # `boot_app:` / `warmup:` are test seams. Production always passes true.
     def run(boot_app: true, warmup: true)
+      # Mark server mode BEFORE the app loads so `configure_server` blocks in
+      # the required initializer actually fire (they gate on `config.server?`).
+      # Matches Sidekiq, which sets `Sidekiq.server = true` before requiring
+      # the app in its CLI. Skipping this silently drops server middleware,
+      # error handlers, and lifecycle hooks registered via configure_server.
+      enter_server_mode
       boot_application if boot_app
       self_read, self_write = ::IO.pipe
       trap_signals(self_write)
@@ -118,6 +124,10 @@ module Wurk
     # `SIDEKIQ_PRELOAD_APP` whole-app eager-load) and boots `Process.warmup`
     # before the fork so children share warmed pages (copy-on-write). Spec §7.
     def run_swarm(boot_app: true, warmup: true)
+      # Server mode before the app loads — see #run. The flag rides through the
+      # fork into every child (the config object is copied), so configure_server
+      # blocks registered in the parent take effect in the workers.
+      enter_server_mode
       if boot_app
         preload_bundler_groups
         boot_application
@@ -126,7 +136,6 @@ module Wurk
       validate_redis!
       validate_pool_sizes!
       @config[:identity] = identity
-      Wurk.server = true
       ::Process.warmup if warmup && ::Process.respond_to?(:warmup) && ENV['RUBY_DISABLE_WARMUP'] != '1'
       @swarm = Wurk::Swarm.new(topology: @config.topology, config: @config)
       @swarm.boot(install_signals: true)
@@ -145,8 +154,11 @@ module Wurk
 
     # --- run helpers ----------------------------------------------------
 
+    def enter_server_mode
+      Wurk.enter_server_mode(@config)
+    end
+
     def launch(self_read)
-      Wurk.server = true
       @launcher = Wurk::Launcher.new(@config)
       begin
         @launcher.run

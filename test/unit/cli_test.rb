@@ -38,6 +38,31 @@ class CLITest < Wurk::Test::UnitCase
     assert_includes Wurk::CLI.ancestors, Wurk::Component
   end
 
+  # #191: server mode must be entered so `configure_server` blocks in the
+  # booted app actually fire (they gate on `config.server?`). Asserts the
+  # per-config gate (deterministic, local to @cli.config) — the process-global
+  # `Wurk.server?` side effect is verified in the isolated worker spawned by
+  # ConfigureServerBootTest, where a sibling test's teardown can't race it.
+  def test_enter_server_mode_opens_the_configure_server_gate
+    refute_predicate @cli.config, :server?, 'precondition: not yet in server mode'
+
+    @cli.send(:enter_server_mode)
+
+    assert_predicate @cli.config, :server?, 'config.server? gates configure_server — must be true'
+
+    yielded = false
+    @cli.config.configure_server { yielded = true }
+    assert yielded, 'configure_server must fire once server mode is entered'
+  end
+
+  def test_wurk_enter_server_mode_sets_server_flag_on_given_config
+    config = Wurk::Configuration.new
+
+    Wurk.enter_server_mode(config)
+
+    assert config[:server], 'enter_server_mode must open the per-config gate'
+  end
+
   def test_instance_is_memoized_singleton
     a = Wurk::CLI.instance
     b = Wurk::CLI.instance
