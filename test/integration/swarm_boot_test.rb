@@ -35,6 +35,7 @@ class SwarmBootTest < Wurk::Test::UnitCase
     @ns = "swarmboot-#{Process.pid}-#{object_id}"
     @queue_name = "#{@ns}-q"
     @sentinel_key = "#{@ns}-sentinel"
+    @boot_log_key = "#{@ns}-boot-log"
     @config = Wurk::Configuration.new
     @config.logger = ::Logger.new(IO::NULL)
     @config[:timeout] = 5
@@ -42,7 +43,7 @@ class SwarmBootTest < Wurk::Test::UnitCase
   end
 
   def teardown
-    @observer_pool&.call('DEL', @sentinel_key, "queue:#{@queue_name}",
+    @observer_pool&.call('DEL', @sentinel_key, @boot_log_key, "queue:#{@queue_name}",
                          private_queue_key(@queue_name))
     @observer_pool&.close
     @config&.reset_redis_pools!
@@ -74,6 +75,33 @@ class SwarmBootTest < Wurk::Test::UnitCase
     end
   end
 
+  # #119 (Ent §7.5): a child whose RSS exceeds the memory limit is TERMed and
+  # respawned. A 1 MB limit guarantees every real Ruby child exceeds it. Each
+  # child logs its pid on startup; we boot, wait for the first child to be
+  # fully up (so the supervisor's immediate first memory check can't TERM it
+  # mid-boot), then start the supervisor and watch a different pid take over.
+  def test_swarm_recycles_a_child_that_exceeds_the_memory_limit # rubocop:disable Metrics/AbcSize,Minitest/MultipleAssertions
+    log_boot_pids
+    @config.memory_limit_mb = 1
+    swarm = Wurk::Swarm.new(topology: topology_n(1), config: @config, shutdown_timeout: 5)
+
+    original = swarm.boot(install_signals: false).first
+    begin
+      assert_equal original.to_s, wait_for_boot_count(1)&.first,
+                   "first child #{original} never finished booting"
+
+      supervisor = Thread.new { swarm.supervise }
+      pids = wait_for_boot_count(2)
+
+      assert pids, "child was never recycled+respawned within #{POLL_TIMEOUT}s (saw #{boot_pids.inspect})"
+      refute_equal pids[0], pids[1], 'the bloated child should be replaced by a new pid'
+      refute pid_alive?(original), 'the original (bloated) child should have been terminated'
+    ensure
+      swarm.shutdown(timeout: 5)
+      supervisor&.join(10)
+    end
+  end
+
   def test_boot_raises_when_topology_is_empty
     swarm = Wurk::Swarm.new(topology: Wurk::Topology.new, config: @config)
     assert_raises(ArgumentError) { swarm.boot(install_signals: false) }
@@ -93,6 +121,35 @@ class SwarmBootTest < Wurk::Test::UnitCase
 
   def topology_n(count)
     Wurk::Topology.flat(count: count, queues: [@queue_name], concurrency: 1)
+  end
+
+  # Each child appends its pid to a Redis list as it boots (via :startup),
+  # giving a race-free, fork-safe record of the recycle → respawn sequence.
+  def log_boot_pids
+    redis_url = Wurk::Test.redis_url
+    key = @boot_log_key
+    @config.on(:startup) do
+      c = RedisClient.config(url: redis_url).new_client
+      c.call('RPUSH', key, ::Process.pid.to_s)
+      c.call('EXPIRE', key, 60)
+    ensure
+      c&.close
+    end
+  end
+
+  def boot_pids
+    @observer_pool.call('LRANGE', @boot_log_key, 0, -1)
+  end
+
+  def wait_for_boot_count(count)
+    deadline = monotonic_now + POLL_TIMEOUT
+    while monotonic_now < deadline
+      pids = boot_pids
+      return pids if pids.size >= count
+
+      sleep POLL_INTERVAL
+    end
+    nil
   end
 
   def push_sentinel_job
