@@ -1,5 +1,6 @@
 import { NavLink, Link } from 'react-router-dom';
 import { t } from '../i18n';
+import { useMeta } from '../hooks/useMeta';
 import logoUrl from '../assets/wurk-logo.png';
 
 interface NavProps {
@@ -23,6 +24,12 @@ const LINKS = [
 ];
 
 export default function Nav({ open, onClose }: NavProps) {
+  // Tabs registered by third-party gems (sidekiq-cron, sidekiq-unique-jobs, …)
+  // via Sidekiq::Web.register_extension. They link out to the extension's own
+  // path — wurk surfaces the tab but doesn't render the gem's view in the SPA.
+  const { data: meta } = useMeta();
+  const customTabs = meta?.custom_tabs ?? [];
+
   return (
     <>
       {/* Overlay for mobile */}
@@ -111,6 +118,44 @@ export default function Nav({ open, onClose }: NavProps) {
               >
                 <i className={`fa-solid ${icon}`} style={{ fontSize: 14, width: 20, textAlign: 'center' }} />
                 <span>{label}</span>
+              </NavLink>
+            </li>
+          ))}
+
+          {customTabs.length > 0 && (
+            <li aria-hidden="true" style={{ padding: '0.5rem 0.95rem 0.2rem', marginTop: '0.4rem' }}>
+              <div style={{ height: 1, background: 'var(--border)', marginBottom: '0.45rem' }} />
+              <span style={{ fontSize: 10, fontWeight: 600, letterSpacing: '0.06em', textTransform: 'uppercase', color: 'var(--text-muted)' }}>
+                {t('nav.extensions')}
+              </span>
+            </li>
+          )}
+          {customTabs.map((tab) => (
+            <li key={tab.path}>
+              {/* In-SPA route: /ext/:tab renders an Extension page that embeds
+                  the extension's own path in an iframe. */}
+              <NavLink
+                to={`/ext/${tab.path}`}
+                onClick={onClose}
+                className="wurk-navlink"
+                style={({ isActive }) => ({
+                  display: 'flex',
+                  alignItems: 'center',
+                  gap: '0.625rem',
+                  padding: '0.5rem 0.85rem',
+                  borderRadius: 8,
+                  margin: '2px 8px',
+                  color: isActive ? 'var(--accent)' : 'var(--text)',
+                  background: isActive ? 'var(--surface-strong)' : 'transparent',
+                  boxShadow: isActive ? 'inset 0 0 0 1px var(--border)' : 'none',
+                  fontWeight: isActive ? 600 : 400,
+                  fontSize: 14,
+                  textDecoration: 'none',
+                  transition: 'background 0.15s, color 0.15s, box-shadow 0.15s',
+                })}
+              >
+                <i className="fa-solid fa-puzzle-piece" style={{ fontSize: 14, width: 20, textAlign: 'center' }} />
+                <span>{tab.name}</span>
               </NavLink>
             </li>
           ))}

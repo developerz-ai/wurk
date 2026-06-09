@@ -18,6 +18,7 @@ import Cron from './pages/Cron';
 import Metrics from './pages/Metrics';
 import Profiles from './pages/Profiles';
 import Search from './pages/Search';
+import Extension from './pages/Extension';
 
 const qc = new QueryClient({
   defaultOptions: {
@@ -88,6 +89,7 @@ export default function App() {
               <Route path="/metrics" element={<Metrics />} />
               <Route path="/profiles" element={<Profiles />} />
               <Route path="/search" element={<Search />} />
+              <Route path="/ext/:tab" element={<Extension />} />
             </Routes>
           </main>
 

@@ -34,8 +34,13 @@ module Wurk
         { name: summary.name, size: summary.size, latency: summary.latency, paused: summary.paused? }
       end
 
+      # Host-registered custom job-info rows (spec §25.2) ride along as
+      # `custom_rows` for the SPA's job-detail modal (see Config#job_info_pairs,
+      # which gates on registration so the common no-extension case is free).
+      # Divergence: wurk evaluates these during job-list serialization — the SPA
+      # renders job detail client-side — not in a dedicated server detail view.
       def job_record(record)
-        {
+        base = {
           jid: record.jid,
           klass: record.display_class,
           args: record.display_args,
@@ -43,6 +48,8 @@ module Wurk
           enqueued_at: record.enqueued_at&.to_f,
           created_at: record.created_at&.to_f
         }
+        rows = ::Wurk::Web.config.job_info_pairs(record)
+        rows.empty? ? base : base.merge(custom_rows: rows)
       end
 
       def sorted_entry(entry)
