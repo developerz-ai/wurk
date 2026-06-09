@@ -81,15 +81,14 @@ Config options verified identical (`lib/wurk/configuration.rb`):
 | `timeout` | job + shutdown grace seconds (default `25`) |
 | `error_handlers`, `death_handlers` | arrays of callables |
 | `client_middleware` / `server_middleware` | same `Chain#add/remove/insert_before` API |
-| `on(:startup\|quiet\|shutdown\|exit\|heartbeat\|beat\|leader)` | lifecycle hooks |
+| `on(:startup\|fork\|quiet\|shutdown\|exit\|heartbeat\|beat\|leader)` | lifecycle hooks |
 | `capsule(name) { … }` | multi-queue capsules (Sidekiq 7+) |
 | `periodic { \|mgr\| mgr.register(...) }` | cron jobs (Enterprise parity, free) |
 
-> ⚠️ **`config.on(:fork)` does not exist** — Wurk's valid lifecycle events are
-> `startup, quiet, shutdown, exit, heartbeat, beat, leader`, and `on` raises on
-> anything else. Post-fork reconnection is handled automatically by the swarm (it
-> closes parent DB/Redis connections before forking and each child opens a fresh
-> pool), so you don't register a fork hook yourself.
+> ℹ️ **`config.on(:fork)`** fires in each swarm child after fork — Wurk already
+> reconnects DB/Redis for you (it closes parent connections before forking and each
+> child opens a fresh pool), so you only need a fork hook for *your own* non-fork-safe
+> libraries (sockets, threads). It does not fire in single-process (non-swarm) mode.
 
 ### Config file
 

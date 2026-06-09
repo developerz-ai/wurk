@@ -30,6 +30,7 @@ module Wurk
       death_handlers: [],
       lifecycle_events: {
         startup: [],
+        fork: [],
         quiet: [],
         shutdown: [],
         exit: [],
@@ -45,7 +46,9 @@ module Wurk
       redis_idle_timeout: nil
     }.freeze
 
-    LIFECYCLE_EVENTS = %i[startup quiet shutdown exit heartbeat beat leader].freeze
+    # :fork fires only inside swarm children, after fork + internal AR/Redis
+    # reconnect — apps reopen sockets / non-fork-safe libs there (Ent §7.4).
+    LIFECYCLE_EVENTS = %i[startup fork quiet shutdown exit heartbeat beat leader].freeze
     DEFAULT_THREAD_PRIORITY = -1
 
     # Default error handler. Wraps the report in the thread-local

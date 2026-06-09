@@ -35,12 +35,13 @@ class SwarmCliTest < Wurk::Test::UnitCase
     @queue_name = "#{@ns}-q"
     @sentinel_key = "#{@ns}-sentinel"
     @startup_key = "#{@ns}-startup"
+    @fork_key = "#{@ns}-fork"
     @preload_key = "#{@ns}-preload"
     @observer = RedisClient.config(url: Wurk::Test.redis_url).new_client
   end
 
   def teardown
-    @observer&.call('DEL', @sentinel_key, @startup_key, @preload_key, "queue:#{@queue_name}")
+    @observer&.call('DEL', @sentinel_key, @startup_key, @fork_key, @preload_key, "queue:#{@queue_name}")
     @observer&.close
   ensure
     super
@@ -93,6 +94,28 @@ class SwarmCliTest < Wurk::Test::UnitCase
     end
   end
 
+  # config.on(:fork) must fire inside each forked child (after the swarm's
+  # internal AR/Redis reconnect, before fetching) and NEVER in the parent
+  # (Ent §7.4). The hook records the running pid; we assert it ran in a child,
+  # not the supervising parent or the test process.
+  def test_run_swarm_fires_fork_in_child
+    fork_key = @fork_key
+    redis_url = Wurk::Test.redis_url
+    parent_pid = fork_swarm_cli do |config|
+      config.on(:fork) { record_pid_to_redis(redis_url, fork_key) }
+    end
+
+    begin
+      hook_pid = wait_for_key(@fork_key)
+
+      assert hook_pid, ':fork hook never fired in a swarm child'
+      refute_equal parent_pid.to_s, hook_pid, ':fork must not fire in the swarm parent'
+      refute_equal ::Process.pid.to_s, hook_pid, ':fork must not fire in the test process'
+    ensure
+      stop(parent_pid)
+    end
+  end
+
   # Real fork: the swarm PARENT must Bundler.require the SIDEKIQ_PRELOAD groups
   # before forking children (Ent §7.2). Boot run_swarm with boot_app:true so the
   # preload path runs; observe — via a Bundler.require shim that records the
@@ -140,6 +163,17 @@ class SwarmCliTest < Wurk::Test::UnitCase
       c.call('EXPIRE', preload_key, 60)
       c.close
     end
+  end
+
+  # Records the running pid to Redis from inside a forked child (used by the
+  # :fork hook assertion). A fresh client because the parent's pool must not
+  # cross the fork.
+  def record_pid_to_redis(url, key)
+    c = RedisClient.config(url: url).new_client
+    c.call('SET', key, ::Process.pid.to_s)
+    c.call('EXPIRE', key, 60)
+  ensure
+    c&.close
   end
 
   def boot_swarm_child(require_file)
