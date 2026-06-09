@@ -105,10 +105,16 @@ module Wurk
       @display_class = active_job_wrapper? ? unwrap_class : klass
     end
 
+    # UI-facing args. Encrypted jobs (§4.7) get their envelope last arg
+    # masked as "<encrypted>" so ciphertext never reaches the dashboard;
+    # redaction keys off the envelope shape, so it fires whether or not the
+    # stored hash carried the `encrypt` flag. Cleartext preceding args stay
+    # visible for triage. Display-only — the stored payload is untouched.
     def display_args
       return @display_args if defined?(@display_args)
 
-      @display_args = active_job_wrapper? ? unwrap_args : args
+      base = active_job_wrapper? ? unwrap_args : args
+      @display_args = Wurk::Encryption.redact_args('args' => base, 'encrypt' => item['encrypt'])
     end
 
     # @api internal

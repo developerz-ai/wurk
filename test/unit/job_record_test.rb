@@ -201,6 +201,24 @@ class JobRecordTest < Wurk::Test::UnitCase
     assert_same first, record.display_args
   end
 
+  # §4.7: an encryption envelope as the last arg renders as "<encrypted>" so
+  # ciphertext never reaches the dashboard. Keyed on envelope shape, so it
+  # fires even when the stored hash lacks the `encrypt` flag (as here).
+  def test_display_args_masks_encrypted_envelope_last_arg
+    item = base_item.merge('args' => [7, encryption_envelope])
+    record = Wurk::JobRecord.new(item, @qname)
+
+    assert_equal [7, '<encrypted>'], record.display_args
+  end
+
+  # Cleartext preceding args stay visible for triage; only the envelope hides.
+  def test_display_args_keeps_cleartext_preceding_encrypted_arg
+    item = base_item.merge('args' => ['user-42', 'order-7', encryption_envelope])
+    record = Wurk::JobRecord.new(item, @qname)
+
+    assert_equal ['user-42', 'order-7', '<encrypted>'], record.display_args
+  end
+
   # display_class memoization must survive a nil unwrap result so the second
   # call short-circuits even when the value is falsy-ish (here: plain klass).
   def test_display_class_memoizes_active_job_wrapper
@@ -317,5 +335,16 @@ class JobRecordTest < Wurk::Test::UnitCase
 
   def ms_now
     ::Process.clock_gettime(::Process::CLOCK_REALTIME, :millisecond)
+  end
+
+  # A crypto envelope shaped like Wurk::Encryption.encrypt's output.
+  def encryption_envelope
+    {
+      ::Wurk::Encryption::ENVELOPE_MARKER => true,
+      'v' => 1,
+      'iv' => 'aXY=',
+      'ct' => 'Y3Q=',
+      'tag' => 'dGFn'
+    }
   end
 end

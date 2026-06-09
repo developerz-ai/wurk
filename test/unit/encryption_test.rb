@@ -510,6 +510,25 @@ class EncryptionTest < Wurk::Test::UnitCase
     assert_equal [1, '<encrypted>'], Wurk::Encryption.redact_args(job)
   end
 
+  # The stored job hash doesn't always carry `encrypt` (it's a sidekiq_option,
+  # not persisted on every record), so an envelope-shaped last arg is masked
+  # on shape alone via envelope? — otherwise ciphertext leaks into the Web UI.
+  def test_redact_args_masks_envelope_when_encrypt_flag_absent
+    job = { 'args' => [1, {
+      Wurk::Encryption::ENVELOPE_MARKER => true, 'v' => 1, 'iv' => 'aXY=', 'ct' => 'Y3Q=', 'tag' => 'dGFn'
+    }] }
+
+    assert_equal [1, '<encrypted>'], Wurk::Encryption.redact_args(job)
+  end
+
+  # A non-envelope Hash as the last arg (no flag) is left untouched — masking
+  # must not over-trigger on arbitrary hashes.
+  def test_redact_args_leaves_plain_hash_last_arg_untouched
+    job = { 'args' => [1, { 'user' => 'alice' }] }
+
+    assert_equal [1, { 'user' => 'alice' }], Wurk::Encryption.redact_args(job)
+  end
+
   # ---- helpers ---------------------------------------------------------
 
   private

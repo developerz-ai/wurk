@@ -99,6 +99,52 @@ class ApiEndpointsTest < Wurk::Test::EngineCase
     assert_empty json_body[:jobs]
   end
 
+  # --- §4.7 encrypted-arg redaction in the Web UI --------------------------
+  # The serializer/search paths funnel through JobRecord#display_args; these
+  # assert the rendered payload masks the envelope (not just redact_args in
+  # isolation) and never leaks ciphertext. Masking keys off the envelope
+  # SHAPE, so the pushed jobs deliberately omit the `encrypt` flag.
+
+  def test_queue_masks_encrypted_last_arg
+    push_encrypted_to_queue
+    get "/wurk/api/queues/#{@queue}"
+
+    assert_ok
+    job = json_body[:jobs].find { |j| j[:klass] == @class_name }
+    assert_equal [99, '<encrypted>'], job[:args]
+    assert_no_envelope_leak
+  end
+
+  def test_dead_masks_encrypted_last_arg
+    push_encrypted_to_zset('dead')
+    get '/wurk/api/dead'
+
+    assert_ok
+    entry = json_body[:entries].find { |e| e[:klass] == @class_name }
+    assert_equal [99, '<encrypted>'], entry[:args]
+    assert_no_envelope_leak
+  end
+
+  def test_search_masks_encrypted_last_arg
+    jid = push_encrypted_to_queue
+    get "/wurk/api/search?substr=#{jid}"
+
+    assert_ok
+    hit = json_body[:hits].find { |h| h[:jid] == jid }
+    refute_nil hit
+    assert_equal [99, '<encrypted>'], hit[:args]
+    assert_no_envelope_leak
+  end
+
+  def test_non_encrypted_args_render_unchanged
+    push_to_queue
+    get "/wurk/api/queues/#{@queue}"
+
+    assert_ok
+    job = json_body[:jobs].find { |j| j[:klass] == @class_name }
+    assert_equal [1, 2], job[:args]
+  end
+
   def test_retries_returns_paged_envelope
     push_to_zset('retry')
     get '/wurk/api/retries?count=5'
@@ -382,6 +428,42 @@ class ApiEndpointsTest < Wurk::Test::EngineCase
       'error_class' => 'RuntimeError',
       'error_message' => 'boom'
     }
+  end
+
+  # A crypto envelope shaped like Wurk::Encryption.encrypt's output. The
+  # ct/iv/tag base64 below double as canaries in assert_no_envelope_leak.
+  def encrypted_envelope
+    {
+      ::Wurk::Encryption::ENVELOPE_MARKER => true,
+      'v' => 1,
+      'iv' => 'aXYtY2FuYXJ5',
+      'ct' => 'Y3QtY2FuYXJ5',
+      'tag' => 'dGFnLWNhbmFyeQ=='
+    }
+  end
+
+  def push_encrypted_to_queue
+    payload = job_payload.merge('args' => [99, encrypted_envelope])
+    ::Wurk.redis do |c|
+      c.call('SADD', 'queues', @queue)
+      c.call('LPUSH', "queue:#{@queue}", ::Wurk.dump_json(payload))
+    end
+    payload['jid']
+  end
+
+  def push_encrypted_to_zset(name)
+    payload = job_payload.merge('args' => [99, encrypted_envelope])
+    ::Wurk.redis { |c| c.call('ZADD', name, ::Time.now.to_f.to_s, ::Wurk.dump_json(payload)) }
+    payload['jid']
+  end
+
+  # No part of the envelope — marker or any base64 field — may survive into
+  # a rendered Web UI payload.
+  def assert_no_envelope_leak
+    body = last_response.body
+    [::Wurk::Encryption::ENVELOPE_MARKER, 'aXYtY2FuYXJ5', 'Y3QtY2FuYXJ5', 'dGFnLWNhbmFyeQ=='].each do |marker|
+      refute_includes body, marker, "envelope fragment #{marker.inspect} leaked into Web UI payload"
+    end
   end
 
   def push_fire_history(lid, fired_at)

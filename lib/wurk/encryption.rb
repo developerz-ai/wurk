@@ -160,10 +160,15 @@ module Wurk
       # array with the last element replaced by the literal `"<encrypted>"`
       # when the job opted in. Cleartext preceding args are untouched so
       # operators can still triage on user_id / object_id / etc.
+      #
+      # Masks on the `encrypt` flag *or* an envelope-shaped last arg: a stored
+      # job hash doesn't always carry `encrypt` (it's a `sidekiq_options`, not
+      # persisted on every record), so envelope detection is the real guard —
+      # it keeps ciphertext out of the dashboard regardless of the flag.
       def redact_args(job)
         args = job['args'] || job[:args] || []
-        return args unless job['encrypt'] || job[:encrypt]
         return args if args.empty?
+        return args unless job['encrypt'] || job[:encrypt] || envelope?(args.last)
 
         args[0..-2] + ['<encrypted>']
       end
