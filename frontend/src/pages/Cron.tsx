@@ -64,7 +64,7 @@ export default function Cron() {
   });
 
   // Per-loop run history — fetched on demand when a row opens the modal.
-  const { data: history, isLoading: historyLoading } = useQuery<HistoryEntry[]>({
+  const { data: history, isLoading: historyLoading, isError: historyError } = useQuery<HistoryEntry[]>({
     queryKey: ['cron-history', historyLoop?.lid],
     queryFn: () =>
       fetch(`/wurk/api/cron/${historyLoop!.lid}/history`)
@@ -163,6 +163,8 @@ export default function Cron() {
       >
         {historyLoading ? (
           <div className="empty-state"><span className="spinner" /></div>
+        ) : historyError ? (
+          <div className="empty-state" style={{ color: 'var(--danger)' }}>{t('common.error')}</div>
         ) : !history || history.length === 0 ? (
           <div className="empty-state">{t('cron.no_history')}</div>
         ) : (
@@ -175,8 +177,8 @@ export default function Cron() {
                 </tr>
               </thead>
               <tbody>
-                {history.map(([firedAt, jid], i) => (
-                  <tr key={`${jid}-${i}`}>
+                {history.map(([firedAt, jid]) => (
+                  <tr key={jid}>
                     <td style={{ color: 'var(--text-muted)' }} title={isoTime(firedAt)}>
                       {relativeTime(firedAt)}
                     </td>
