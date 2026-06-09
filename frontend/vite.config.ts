@@ -31,6 +31,9 @@ export default defineConfig({
       },
     },
   ],
+  // Must match Wurk::Engine::AssetMount::PREFIX (lib/wurk/engine.rb): the engine
+  // serves the built bundle under this path and the dev controller fetches the
+  // HMR shell from <vite>/wurk-assets/.
   base: "/wurk-assets/",
   build: {
     manifest: true,
@@ -41,5 +44,13 @@ export default defineConfig({
   server: {
     port: 5173,
     strictPort: true,
+    // HMR dev: the Rails dummy serves the page at :3000/wurk and fetches the
+    // shell from this server (WURK_VITE_DEV=1). `origin` makes Vite emit
+    // absolute asset/HMR URLs (http://localhost:5173/wurk-assets/…) so the
+    // browser loads modules + the HMR client straight from Vite instead of
+    // hitting :3000/wurk-assets (which the engine only serves from the built
+    // bundle). `cors` lets that cross-origin fetch through. See issue #181.
+    origin: "http://localhost:5173",
+    cors: true,
   },
 });
