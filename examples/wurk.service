@@ -1,0 +1,67 @@
+# examples/wurk.service
+#
+# Drop-in systemd unit for running Wurk as a background worker, modeled on
+# Sidekiq's examples/systemd/sidekiq.service and adapted to Wurk's signals.
+#
+# Install:
+#   sudo cp examples/wurk.service /etc/systemd/system/wurk.service
+#   sudo systemctl daemon-reload
+#   sudo systemctl enable --now wurk
+#
+# Reload (quiet — stop fetching, let in-flight jobs finish):
+#   sudo systemctl reload wurk
+#
+# Stop (graceful drain up to the shutdown timeout):
+#   sudo systemctl stop wurk
+#
+# Multiple workers on one host: copy this file to /etc/systemd/system/wurk@.service,
+# replace the fixed paths with %i where it helps, and start instances with
+# `systemctl enable --now wurk@1 wurk@2`. See docs/deployment.md.
+
+[Unit]
+Description=wurk background worker
+# Start after Redis (and your DB) are reachable. Adjust to match your units —
+# e.g. `After=redis.service` if Redis runs on the same host via systemd.
+After=syslog.target network.target
+
+[Service]
+# Type=simple, NOT notify: Wurk does not emit sd_notify readiness/watchdog
+# pings, so there is no WatchdogSec here. systemd treats the process as ready
+# as soon as it forks ExecStart.
+Type=simple
+
+WorkingDirectory=/opt/myapp/current
+
+# Plain bundler install. For rbenv/rvm/chruby, wrap with the version manager,
+# e.g. ExecStart=/home/deploy/.rbenv/shims/bundle exec wurk -e production
+# For fork-based multi-process parallelism, swap `wurk` for `wurkswarm`
+# (the `sidekiqswarm` entry point) — see docs/deployment.md.
+ExecStart=/usr/local/bin/bundle exec wurk -e production
+
+# `systemctl reload` → SIGTSTP: Wurk stops accepting new work and lets
+# in-flight jobs finish. There is no resume in standalone mode — quiet, then
+# stop. (Under wurkswarm, SIGUSR1 does a zero-downtime rolling restart; use
+# ExecReload=/bin/kill -USR1 $MAINPID there instead.)
+ExecReload=/bin/kill -TSTP $MAINPID
+
+# Graceful shutdown: SIGTERM drains in-flight jobs up to Wurk's shutdown
+# timeout (`-t`, default 25s). Keep TimeoutStopSec a few seconds longer so a
+# clean drain always beats systemd's follow-up SIGKILL.
+KillSignal=SIGTERM
+TimeoutStopSec=30
+
+# Restart on crash, never on a clean SIGTERM stop.
+Restart=on-failure
+RestartSec=1
+
+User=deploy
+Group=deploy
+UMask=0002
+
+# Send stdout/stderr to journald: `journalctl -u wurk -f`.
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=wurk
+
+[Install]
+WantedBy=multi-user.target

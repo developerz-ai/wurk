@@ -100,6 +100,9 @@ lines, and systemd units to `wurk`). It takes the familiar flags (`-c` concurren
 config with `-C path`, and auto-discovers `config/wurk.yml` then `config/sidekiq.yml`
 (`.erb` supported). The YAML structure matches Sidekiq's `sidekiq.yml`.
 
+For running the worker under systemd or capistrano-sidekiq — including an example
+unit file and the deploy signal dance — see [`docs/deployment.md`](deployment.md).
+
 ---
 
 ## 2. Redis key layout: identical, no namespace
@@ -216,7 +219,8 @@ by running their own upstream test suites in the [`ecosystem` CI job](../.github
 3. **Re-point the dashboard route** — `mount Wurk::Engine => "/wurk"` (gate it behind
    your app auth — see [`docs/dashboard.md`](dashboard.md)).
 4. **Boot a worker** — `bundle exec wurk` (standalone) or your existing Rails process
-   (the engine auto-starts the swarm unless `WURK_DISABLED=1`).
+   (the engine auto-starts the swarm unless `WURK_DISABLED=1`). Deploying under
+   systemd/capistrano? See [`docs/deployment.md`](deployment.md).
 5. **Verify on the same Redis** — enqueue a test job, watch it run, and confirm the
    dashboard + your existing `redis-cli` checks look normal. Because the schema is
    shared, you can roll one process at a time.
