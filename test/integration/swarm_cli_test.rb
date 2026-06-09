@@ -172,7 +172,8 @@ class SwarmCliTest < Wurk::Test::UnitCase
     c = RedisClient.config(url: url).new_client
     c.call('SET', key, ::Process.pid.to_s)
     c.call('EXPIRE', key, 60)
-    c.close
+  ensure
+    c&.close
   end
 
   def boot_swarm_child(require_file)
