@@ -14,7 +14,10 @@ import { t } from '../i18n';
 export default function Extension() {
   const { tab = '' } = useParams();
   const { data: meta } = useMeta();
-  const entry = meta?.custom_tabs?.find((tab_) => tab_.path === tab);
+  // Registered index paths keep Sidekiq's trailing slash ("locks/") but the
+  // route param never has one — compare them normalized.
+  const norm = (p: string) => p.replace(/\/+$/, '');
+  const entry = meta?.custom_tabs?.find((tab_) => norm(tab_.path) === norm(tab));
   const name = entry?.name ?? tab;
 
   if (entry?.ext_name) {
