@@ -23,6 +23,7 @@ class UniqueTest < Wurk::Test::UnitCase
     Wurk::Unique.disable!
     Wurk.configuration.client_middleware.remove(Wurk::Unique::ClientMiddleware)
     Wurk.configuration.server_middleware.remove(Wurk::Unique::ServerMiddleware)
+    Wurk.configuration.death_handlers.delete(Wurk::Unique::DEATH_HANDLER)
   ensure
     super
   end
@@ -297,6 +298,167 @@ class UniqueTest < Wurk::Test::UnitCase
     end
   end
 
+  # ---- ClientMiddleware: own-jid re-push (#205) -----------------------
+
+  def test_client_middleware_own_jid_repush_proceeds
+    ENABLE_MUTEX.synchronize do
+      Wurk::Unique.enable!
+      job = build_job(jid: 'repush-1', ttl: 600)
+      track_key(job)
+
+      assert invoke_client(job)
+      assert invoke_client(job), 'promotion re-push of the lock holder must not be dropped'
+      assert_equal('repush-1', Wurk.redis { |c| c.call('GET', Wurk::Unique.lock_key_for(job)) })
+    end
+  end
+
+  def test_unique_scheduled_job_survives_promotion
+    ENABLE_MUTEX.synchronize do
+      Wurk::Unique.enable!
+      queue = "promo#{@suffix}"
+      jid = Wurk::Client.push('class' => 'PromoJob', 'args' => [1], 'queue' => queue,
+                              'unique_for' => 3600, 'at' => ::Time.now.to_f - 1)
+      track_key('class' => 'PromoJob', 'queue' => queue, 'args' => [1])
+
+      refute_nil jid
+      drain_sorted_set(Wurk::Keys::SCHEDULE)
+
+      assert_equal 1, redis_call('LLEN', "queue:#{queue}")
+      assert_equal 0, redis_call('ZCARD', Wurk::Keys::SCHEDULE)
+    end
+  end
+
+  def test_unique_retry_job_survives_promotion
+    ENABLE_MUTEX.synchronize do
+      Wurk::Unique.enable!
+      queue = "rpromo#{@suffix}"
+      job = build_job(jid: 'retry-promo-1', ttl: 3600, queue: queue)
+      seed_locked_retry_entry(job)
+
+      drain_sorted_set(Wurk::Keys::RETRY)
+
+      assert_equal 1, redis_call('LLEN', "queue:#{queue}")
+      assert_equal 0, redis_call('ZCARD', Wurk::Keys::RETRY)
+    end
+  end
+
+  def test_client_middleware_reacquires_when_lock_expires_mid_check
+    ENABLE_MUTEX.synchronize do
+      Wurk::Unique.enable!
+      # First SET NX loses, GET sees the lock already expired (nil), the
+      # retried SET NX wins — the push must proceed, not drop.
+      pool = stub_pool(set_results: [nil, 'OK'], get_result: nil)
+      job = build_job(jid: 'race-1', ttl: 60)
+
+      assert Wurk::Unique::ClientMiddleware.new.call(nil, job, job['queue'], pool) { true }
+    end
+  end
+
+  def test_client_middleware_drops_when_reacquire_also_loses
+    ENABLE_MUTEX.synchronize do
+      Wurk::Unique.enable!
+      # Lock expired before GET but a competitor re-took it before our
+      # retried SET NX — duplicate semantics apply.
+      pool = stub_pool(set_results: [nil, nil], get_result: nil)
+      job = build_job(jid: 'race-2', ttl: 60)
+
+      refute Wurk::Unique::ClientMiddleware.new.call(nil, job, job['queue'], pool) { true }
+    end
+  end
+
+  # ---- Death handler: lock release on automatic death (#211) ----------
+
+  def test_enable_registers_death_handler_once
+    ENABLE_MUTEX.synchronize do
+      Wurk::Unique.enable!
+      Wurk::Unique.enable!
+
+      count = Wurk.configuration.death_handlers.count(Wurk::Unique::DEATH_HANDLER)
+
+      assert_equal 1, count
+    end
+  end
+
+  def test_automatic_death_releases_lock
+    ENABLE_MUTEX.synchronize do
+      Wurk::Unique.enable!
+      job = build_job(jid: 'dead-1', ttl: 600)
+      track_key(job)
+
+      assert invoke_client(job)
+      die_unretryable(job)
+
+      assert_nil redis_call('GET', Wurk::Unique.lock_key_for(job))
+    end
+  end
+
+  def test_automatic_death_allows_fresh_duplicate
+    ENABLE_MUTEX.synchronize do
+      Wurk::Unique.enable!
+      job = build_job(jid: 'dead-a', ttl: 600)
+      track_key(job)
+
+      assert invoke_client(job)
+      die_unretryable(job)
+
+      assert invoke_client(build_job(jid: 'dead-b', ttl: 600)),
+             'a fresh duplicate must enqueue immediately after the holder dies'
+    end
+  end
+
+  def test_death_handler_retains_foreign_lock
+    ENABLE_MUTEX.synchronize do
+      Wurk::Unique.enable!
+      job = build_job(jid: 'dh-cas', ttl: 600)
+      key = Wurk::Unique.lock_key_for(job)
+      Wurk.redis { |c| c.call('SET', key, 'someone-else', 'EX', 600) }
+      track_key(job)
+
+      Wurk::Unique::DEATH_HANDLER.call(job, RuntimeError.new('boom'))
+
+      assert_equal('someone-else', Wurk.redis { |c| c.call('GET', key) })
+    end
+  end
+
+  def test_death_handler_noop_without_unique_for
+    ENABLE_MUTEX.synchronize do
+      Wurk::Unique.enable!
+      job = { 'class' => 'X', 'queue' => 'q', 'args' => [], 'jid' => 'nfu-1' }
+      key = Wurk::Unique.lock_key_for(job)
+      Wurk.redis { |c| c.call('SET', key, 'nfu-1', 'EX', 60) }
+      @keys << key
+
+      Wurk::Unique::DEATH_HANDLER.call(job, RuntimeError.new('boom'))
+
+      assert_equal('nfu-1', redis_call('GET', key))
+    end
+  end
+
+  def test_death_handler_noop_when_disabled
+    job = build_job(jid: 'dh-off', ttl: 600)
+    key = Wurk::Unique.lock_key_for(job)
+    Wurk.redis { |c| c.call('SET', key, 'dh-off', 'EX', 600) }
+    track_key(job)
+
+    Wurk::Unique::DEATH_HANDLER.call(job, RuntimeError.new('boom'))
+
+    assert_equal('dh-off', Wurk.redis { |c| c.call('GET', key) })
+  end
+
+  def test_manual_ui_kill_retains_lock
+    ENABLE_MUTEX.synchronize do
+      Wurk::Unique.enable!
+      job = build_job(jid: 'kill-1', ttl: 600, queue: "kill#{@suffix}")
+      key = seed_locked_retry_entry(job)
+
+      Wurk::RetrySet.new.find_job('kill-1').kill
+
+      assert_equal('kill-1', redis_call('GET', key),
+                   'a user-initiated UI kill must keep the unique lock (Ent parity)')
+      assert_equal 1, redis_call('ZCARD', Wurk::Keys::DEAD)
+    end
+  end
+
   # ---- ServerMiddleware: lock release strategy -----------------------
 
   def test_server_middleware_no_op_when_disabled
@@ -483,6 +645,50 @@ class UniqueTest < Wurk::Test::UnitCase
 
   def track_key(job)
     @keys << Wurk::Unique.lock_key_for(job)
+  end
+
+  def redis_call(*args)
+    Wurk.redis { |c| c.call(*args) }
+  end
+
+  # Scripted fake connection for racing the SET NX / GET / SET NX sequence
+  # deterministically — a real lock expiry between those calls can't be
+  # forced against live Redis.
+  def stub_pool(set_results:, get_result:)
+    conn = Object.new
+    conn.define_singleton_method(:call) do |*args|
+      args.first == 'SET' ? set_results.shift : get_result
+    end
+    pool = Object.new
+    pool.define_singleton_method(:with) { |&blk| blk.call(conn) }
+    pool
+  end
+
+  def drain_sorted_set(sset)
+    Wurk::Scheduled::Enq.new(Wurk.configuration).enqueue_jobs([sset])
+  end
+
+  # Simulate a failed `unique_until: :success` job: the enqueue-time lock is
+  # still held by its own jid while the payload waits in `retry`. Returns the
+  # lock key (tracked for teardown).
+  def seed_locked_retry_entry(job)
+    key = Wurk::Unique.lock_key_for(job)
+    @keys << key
+    Wurk.redis do |c|
+      c.call('SET', key, job['jid'], 'EX', 3600)
+      c.call('ZADD', Wurk::Keys::RETRY, (::Time.now.to_f - 1).to_s, Wurk.dump_json(job))
+    end
+    key
+  end
+
+  # Drive a no-retry failure through JobRetry#global so the job dies
+  # automatically (death handlers fire, as in retries-exhausted).
+  def die_unretryable(job)
+    job['retry'] = false
+    retrier = Wurk::JobRetry.new(Wurk.configuration)
+    assert_raises(Wurk::JobRetry::Handled) do
+      retrier.global(Wurk.dump_json(job), job['queue']) { raise 'boom' }
+    end
   end
 
   def with_logger(logger)

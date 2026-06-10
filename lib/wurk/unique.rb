@@ -16,6 +16,10 @@ module Wurk
   #     *before* invoking perform; a duplicate can be enqueued while the
   #     first is running.
   #
+  # A job that dies *automatically* (retries exhausted / discarded) releases
+  # its lock via a death handler; manual UI kills keep the lock until TTL
+  # expiry (Ent wiki, Ent-Unique-Jobs).
+  #
   # Wire-compat (§3.9): single-key Redis layout — `unique:<sha256>` STRING
   # holding the owning JID. Scheduled jobs extend the TTL by the delay so
   # the lock covers the entire wait+execution window (§3.4).
@@ -25,6 +29,21 @@ module Wurk
     KEY_PREFIX = 'unique:'
     DEFAULT_UNTIL = :success
     VALID_UNTIL = %i[success start].freeze
+
+    # Ent parity: a job that dies automatically releases its lock so a
+    # duplicate can enqueue immediately. Manual UI kills route through
+    # `DeadSet#kill(notify_failure: false)`, which skips death handlers —
+    # those keep the lock (Ent wiki, Ent-Unique-Jobs). CAS on the owning
+    # jid mirrors ServerMiddleware#release.
+    DEATH_HANDLER = lambda do |job, _exception|
+      next unless Wurk::Unique.enabled?
+      next unless Wurk::Unique.coerce_ttl(job['unique_for'])
+
+      key = Wurk::Unique.lock_key_for(job)
+      Wurk.redis do |conn|
+        conn.call('DEL', key) if conn.call('GET', key) == job['jid']
+      end
+    end
 
     # `Sidekiq::Enterprise.unique!` flips this on. The middleware pair is
     # always loaded (so worker `sidekiq_options unique_for:` is a no-op
@@ -91,6 +110,8 @@ module Wurk
           unless Wurk.configuration.client_middleware.exists?(ClientMiddleware)
         Wurk.configuration.server_middleware.add(ServerMiddleware) \
           unless Wurk.configuration.server_middleware.exists?(ServerMiddleware)
+        handlers = Wurk.configuration.death_handlers
+        handlers << DEATH_HANDLER unless handlers.include?(DEATH_HANDLER)
       end
     end
 
@@ -172,7 +193,17 @@ module Wurk
         pool.with do |conn|
           return yield if conn.call('SET', key, job['jid'], 'NX', 'EX', ttl) == 'OK'
 
-          log_duplicate(job, conn.call('GET', key))
+          holder = conn.call('GET', key)
+          # The job's own jid holding the lock is a re-push, not a duplicate:
+          # scheduled/retry promotion re-runs this chain while the
+          # enqueue-time lock is still live (§3.4/§3.7) — dropping here would
+          # silently lose the job.
+          return yield if holder == job['jid']
+          # nil holder: the lock expired between the failed SET NX and the
+          # GET — re-acquire instead of dropping.
+          return yield if holder.nil? && conn.call('SET', key, job['jid'], 'NX', 'EX', ttl) == 'OK'
+
+          log_duplicate(job, holder)
         end
         nil
       end
