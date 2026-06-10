@@ -69,5 +69,22 @@
     "ms": "ms",
     "ago": "il y a",
     "in": "dans"
+  },
+  "busy": {
+    "hosts": "{n} hôtes",
+    "cores": "{n} cœurs",
+    "of_total_ram": "de la RAM totale",
+    "heartbeat": "Battement",
+    "rss": "RSS",
+    "rtt": "RTT Redis",
+    "version": "Version",
+    "tag": "Tag",
+    "labels": "Labels",
+    "identity": "Identité",
+    "started": "Démarré",
+    "up_for": "depuis",
+    "running_jobs": "Tâches en cours",
+    "running_since": "En cours depuis",
+    "no_running": "Aucune tâche en cours sur ce processus"
   }
 }

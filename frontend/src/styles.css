@@ -456,6 +456,12 @@ tbody tr:last-child td {
     z-index: 3;
     background: var(--surface-strong);
   }
+  /* Row-hover paints a translucent tint; on the frozen first column that would
+     let the sideways-scrolled cells bleed through behind the pinned text. Stack
+     the same tint over an opaque surface so the column stays solid on hover. */
+  .table-wrapper tbody tr:hover td:first-child {
+    background: linear-gradient(var(--accent-soft), var(--accent-soft)), var(--surface);
+  }
 
   /* Comfortable tap targets for pager controls. */
   .btn {

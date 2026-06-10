@@ -75,10 +75,28 @@ module Wurk
           quiet: process.stopping?,
           rss: process['rss'],
           rtt_us: process['rtt_us'],
+          started_at: process['started_at'],
+          cpu_model: process['cpu_model'],
+          cores: process['cores'],
+          memory_total_kb: process['memory_total_kb'],
           labels: process.labels,
           queues: process.queues,
           version: process.version,
           embedded: process.embedded?
+        }
+      end
+
+      # One in-flight job (WorkSet row) for the Busy page's process detail.
+      def work_row(process_id, thread_id, work)
+        record = work.job
+        {
+          process_id: process_id,
+          thread_id: thread_id,
+          queue: work.queue,
+          klass: record.display_class,
+          args: record.display_args,
+          jid: record.jid,
+          run_at: work.run_at.to_f
         }
       end
 

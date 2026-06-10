@@ -1,5 +1,7 @@
 # frozen_string_literal: true
 
+require 'etc'
+
 require_relative 'component'
 require_relative 'keys'
 require_relative 'processor'
@@ -151,7 +153,50 @@ module Wurk
         'identity' => @identity,
         'version' => Wurk::VERSION,
         'embedded' => @embedded
+      }.merge(host_facts)
+    end
+
+    # Static hardware facts for the Busy page's per-host grouping. Additive
+    # `info` fields only — Sidekiq Web ignores keys it doesn't know, so the
+    # drop-in wire contract holds. Best-effort: nil/0 when the platform has
+    # no readable source (the dashboard renders a dash).
+    def host_facts
+      @host_facts ||= {
+        'cpu_model' => cpu_model,
+        'cores' => cores,
+        'memory_total_kb' => memory_total_kb
       }
+    end
+
+    def cores(etc = Etc)
+      etc.nprocessors
+    # NotImplementedError is a ScriptError, outside StandardError — and it's
+    # exactly what Etc raises on platforms without sysconf.
+    rescue StandardError, NotImplementedError
+      nil
+    end
+
+    def cpu_model
+      if ::File.exist?('/proc/cpuinfo')
+        line = ::File.foreach('/proc/cpuinfo').find { |l| l.start_with?('model name') }
+        line&.split(':', 2)&.last&.strip
+      else
+        model = `sysctl -n machdep.cpu.brand_string 2>/dev/null`.strip
+        model.empty? ? nil : model
+      end
+    rescue StandardError
+      nil
+    end
+
+    def memory_total_kb
+      if ::File.exist?('/proc/meminfo')
+        line = ::File.foreach('/proc/meminfo').find { |l| l.start_with?('MemTotal') }
+        line.to_s[/\d+/].to_i
+      else
+        `sysctl -n hw.memsize 2>/dev/null`.to_i / 1024
+      end
+    rescue StandardError
+      0
     end
 
     def capsules_info

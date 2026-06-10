@@ -146,6 +146,12 @@ module Wurk
       render json: ::Wurk::ProcessSet.new.map { |p| ::Wurk::Api::Serializers.process_row(p) }
     end
 
+    # Currently-executing jobs across the cluster (WorkSet), oldest first.
+    # The Busy page's process-detail modal filters client-side by process_id.
+    def workers
+      render json: ::Wurk::WorkSet.new.map { |pid, tid, work| ::Wurk::Api::Serializers.work_row(pid, tid, work) }
+    end
+
     # Busy-page controls: SIGTSTP (quiet — drop fetch, drain in-flight) and
     # SIGTERM (stop — graceful shutdown). Both are async; the target notices on
     # its next heartbeat (≤10s). `identity` absent or "all" signals every live

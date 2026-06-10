@@ -69,5 +69,22 @@
     "ms": "ms",
     "ago": "hace",
     "in": "en"
+  },
+  "busy": {
+    "hosts": "{n} hosts",
+    "cores": "{n} núcleos",
+    "of_total_ram": "de la RAM total",
+    "heartbeat": "Latido",
+    "rss": "RSS",
+    "rtt": "RTT de Redis",
+    "version": "Versión",
+    "tag": "Etiqueta",
+    "labels": "Etiquetas",
+    "identity": "Identidad",
+    "started": "Iniciado",
+    "up_for": "activo",
+    "running_jobs": "Trabajos en ejecución",
+    "running_since": "En ejecución desde",
+    "no_running": "No hay trabajos en ejecución en este proceso"
   }
 }

@@ -69,5 +69,22 @@
     "ms": "ms",
     "ago": "vor",
     "in": "in"
+  },
+  "busy": {
+    "hosts": "{n} Hosts",
+    "cores": "{n} Kerne",
+    "of_total_ram": "des gesamten RAM",
+    "heartbeat": "Heartbeat",
+    "rss": "RSS",
+    "rtt": "Redis-RTT",
+    "version": "Version",
+    "tag": "Tag",
+    "labels": "Labels",
+    "identity": "Identität",
+    "started": "Gestartet",
+    "up_for": "seit",
+    "running_jobs": "Laufende Jobs",
+    "running_since": "Läuft seit",
+    "no_running": "Auf diesem Prozess laufen derzeit keine Jobs"
   }
 }

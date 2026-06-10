@@ -69,5 +69,22 @@
     "ms": "ms",
     "ago": "前",
     "in": "后"
+  },
+  "busy": {
+    "hosts": "{n} 台主机",
+    "cores": "{n} 核",
+    "of_total_ram": "占总内存",
+    "heartbeat": "心跳",
+    "rss": "RSS",
+    "rtt": "Redis 往返延迟",
+    "version": "版本",
+    "tag": "标签",
+    "labels": "标签",
+    "identity": "标识",
+    "started": "启动时间",
+    "up_for": "已运行",
+    "running_jobs": "运行中的任务",
+    "running_since": "开始运行于",
+    "no_running": "此进程当前没有运行中的任务"
   }
 }
