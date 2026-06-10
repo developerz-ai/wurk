@@ -228,6 +228,17 @@ module Wurk
       render json: { error: e.message }, status: :bad_request
     end
 
+    # Ent §5.3 Historical snapshots from the capped `history:metrics` stream.
+    # `?limit=N` (default 1000) most-recent points, oldest→newest, each
+    # `{at:, processed:, failures:, …}`. Fields are read generically so a
+    # migrated Sidekiq Ent stream renders as-is.
+    def history_snapshots
+      limit = ::Wurk::Api::Pagination.clamp_int(
+        params[:limit], 1, ::Wurk::History::STREAM_CAP, ::Wurk::History::STREAM_DEFAULT_LIMIT
+      )
+      render json: { snapshots: ::Wurk::Web::Enterprise::Historical.snapshots(limit: limit) }
+    end
+
     # Per-queue size/latency gauge time-series for the Metrics/Historical tab.
     # `:bucket` is 1m/5m/1h; `?window=24h` (s/m/h/d) is clamped to the bucket's
     # retention; optional `?queue=<name>` narrows to one queue. Each queue's

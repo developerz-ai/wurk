@@ -164,6 +164,71 @@ function HistoryCharts() {
   );
 }
 
+// Ent §5.3 Historical snapshots from the capped `history:metrics` stream. One
+// point per periodic snapshot; a line per numeric field. The two cumulative
+// counters (processed/failures) are charted by HistoryCharts already, so this
+// "backlog over time" view hides them — but any other numeric field (incl. a
+// migrated Ent install's own fields) renders generically.
+interface Snapshot {
+  at: number;
+  [field: string]: number;
+}
+
+const CUMULATIVE_FIELDS = new Set(['processed', 'failures']);
+
+function HistoricalSnapshots() {
+  const { data, isLoading, isError } = useQuery<{ snapshots: Snapshot[] }>({
+    queryKey: ['history-snapshots'],
+    queryFn: async () => {
+      const r = await fetch('/wurk/api/history/snapshots?limit=1000');
+      if (!r.ok) throw new Error(`history snapshots request failed (${r.status})`);
+      return r.json() as Promise<{ snapshots: Snapshot[] }>;
+    },
+    refetchInterval: 30000,
+  });
+
+  const snapshots = data?.snapshots ?? [];
+  const fields = Array.from(
+    new Set(
+      snapshots.flatMap((s) =>
+        Object.keys(s).filter((k) => k !== 'at' && !CUMULATIVE_FIELDS.has(k) && typeof s[k] === 'number')
+      )
+    )
+  );
+  const rows = snapshots.map((s) => {
+    const d = new Date(s.at * 1000);
+    return { ...s, label: `${String(d.getHours()).padStart(2, '0')}:${String(d.getMinutes()).padStart(2, '0')}` };
+  });
+  const hasData = snapshots.length > 0 && fields.length > 0;
+
+  return (
+    <div className="card" style={{ marginBottom: '1.5rem' }}>
+      <div className="section-title" style={{ marginBottom: '1rem' }}>Historical Snapshots</div>
+
+      {isLoading && <div className="empty-state"><span className="spinner" /></div>}
+      {isError && <div className="empty-state" style={{ color: 'var(--danger)' }}>{t('common.error')}</div>}
+      {data && !hasData && (
+        <div className="empty-state">No snapshots yet — enable <code>config.retain_history</code> to record history.</div>
+      )}
+
+      {data && hasData && (
+        <ResponsiveContainer width="100%" height={260}>
+          <LineChart data={rows} margin={{ top: 4, right: 16, left: 0, bottom: 4 }}>
+            <CartesianGrid strokeDasharray="3 3" stroke="var(--border)" />
+            <XAxis dataKey="label" tick={{ fill: 'var(--text-muted)', fontSize: 11 }} minTickGap={48} />
+            <YAxis tick={{ fill: 'var(--text-muted)', fontSize: 11 }} allowDecimals={false} />
+            <Tooltip contentStyle={tooltipStyle} />
+            <Legend wrapperStyle={{ fontSize: 12 }} />
+            {fields.map((f, i) => (
+              <Line key={f} type="monotone" dataKey={f} stroke={queueColor(i)} strokeWidth={2} dot={false} />
+            ))}
+          </LineChart>
+        </ResponsiveContainer>
+      )}
+    </div>
+  );
+}
+
 // Per-queue size + head-of-line latency gauges over the selected window
 // (Sidekiq Ent Historical tab, §5.2). One line per queue in each of the two
 // charts; the range selector mirrors the throughput chart's buckets.
@@ -302,6 +367,8 @@ export default function Metrics() {
       </PageHeader>
 
       <HistoryCharts />
+
+      <HistoricalSnapshots />
 
       <QueueGaugeCharts />
 

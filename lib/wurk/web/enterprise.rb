@@ -140,6 +140,12 @@ module Wurk
         def queue_history(bucket, window:, queues: nil, now: ::Time.now)
           Wurk::Metrics::Query.queue_history(bucket, window, queues: queues, now: now)
         end
+
+        # Ent §5.3 Historical snapshots from the `history:metrics` stream,
+        # oldest→newest. Returns `[{at:, processed:, failures:, …}, …]`.
+        def snapshots(limit: Wurk::History::STREAM_DEFAULT_LIMIT)
+          Wurk::History.recent(limit: limit)
+        end
       end
     end
   end

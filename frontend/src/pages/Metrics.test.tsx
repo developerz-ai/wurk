@@ -37,11 +37,13 @@ function renderMetrics() {
 // Route the component's three fetches by URL; the queue-history payload is the
 // one under test, the others return empty so the page renders. `queueOk: false`
 // drives the queue-history error path.
-function mockFetch(queueHistory: unknown, queueOk = true) {
+function mockFetch(queueHistory: unknown, queueOk = true, snapshots: unknown[] = []) {
   return vi.fn((url: string) => {
     let body: unknown = {};
     let ok = true;
-    if (url.includes('/queue-history/')) {
+    // /history/snapshots must be matched before the /history/ rollup route.
+    if (url.includes('/history/snapshots')) body = { snapshots };
+    else if (url.includes('/queue-history/')) {
       body = queueHistory;
       ok = queueOk;
     } else if (url.includes('/history/')) body = { bucket: '1m', window: 86400, series: [] };
@@ -109,5 +111,35 @@ describe('QueueGaugeCharts', () => {
     await waitFor(() => expect(screen.getByText('Error loading data')).toBeDefined());
     expect(screen.queryByText(/No queue history yet/i)).toBeNull();
     expect(screen.queryByText('Depth (jobs)')).toBeNull();
+  });
+});
+
+describe('HistoricalSnapshots', () => {
+  afterEach(() => {
+    cleanup();
+    vi.unstubAllGlobals();
+  });
+
+  it('shows the empty state when the history:metrics stream is empty', async () => {
+    vi.stubGlobal('fetch', mockFetch({ bucket: '1m', window: 86400, queues: [] }, true, []));
+    renderMetrics();
+
+    expect(await screen.findByText('Historical Snapshots')).toBeDefined();
+    await waitFor(() => expect(screen.getByText(/No snapshots yet/i)).toBeDefined());
+  });
+
+  it('charts the backlog gauge fields and hides the cumulative counters', async () => {
+    const snapshots = [{ at: 1_781_000_000, processed: 100, failures: 2, enqueued: 5, dead: 1 }];
+    vi.stubGlobal('fetch', mockFetch({ bucket: '1m', window: 86400, queues: [] }, true, snapshots));
+    renderMetrics();
+
+    const lines = (await screen.findAllByTestId('line')).map((n) => n.textContent);
+
+    // backlog gauges charted…
+    expect(lines).toContain('enqueued');
+    expect(lines).toContain('dead');
+    // …cumulative counters are not (HistoryCharts shows throughput instead).
+    expect(lines).not.toContain('processed');
+    expect(lines).not.toContain('failures');
   });
 });

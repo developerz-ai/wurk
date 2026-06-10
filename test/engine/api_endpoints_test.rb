@@ -374,6 +374,18 @@ class ApiEndpointsTest < Wurk::Test::EngineCase
     assert_match(/bucket/, json_body[:error])
   end
 
+  def test_history_snapshots_returns_stream_points
+    ::Wurk.redis { |c| c.call('XADD', 'history:metrics', '*', 'processed', '5', 'enqueued', '3') }
+    get '/wurk/api/history/snapshots?limit=10'
+
+    assert_ok
+    point = json_body[:snapshots].last
+
+    assert_equal({ processed: 5, enqueued: 3 }, point.slice(:processed, :enqueued))
+  ensure
+    ::Wurk.redis { |c| c.call('DEL', 'history:metrics') }
+  end
+
   def test_queue_history_returns_per_queue_gauge_series
     name = "qmqh-#{@ns}"
     epoch, key = seed_queue_metric(name, size: 8, latency: 4.5)
@@ -381,6 +393,7 @@ class ApiEndpointsTest < Wurk::Test::EngineCase
 
     assert_ok
     row = json_body[:queues].find { |q| q[:name] == name }
+
     refute_nil row, 'seeded queue should appear in the series'
 
     point = row[:points].find { |p| p[:at] == epoch }

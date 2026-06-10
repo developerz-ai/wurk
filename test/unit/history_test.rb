@@ -36,6 +36,9 @@ class HistoryTest < Wurk::Test::UnitCase
     sidekiq.dead sidekiq.scheduled sidekiq.busy
   ].freeze
 
+  # The same metrics as stream fields (no `sidekiq.` prefix), as symbols.
+  STREAM_FIELDS = Wurk::History::SNAPSHOT_FIELDS.keys.map(&:to_sym).freeze
+
   def setup
     super
     @prev_builder = Wurk.configuration.dogstatsd
@@ -109,10 +112,12 @@ class HistoryTest < Wurk::Test::UnitCase
     assert_equal [['sidekiq.custom', 7]], fake.gauges
   end
 
-  def test_snapshot_is_a_noop_without_a_dogstatsd_client
+  def test_snapshot_skips_statsd_but_still_records_the_stream_without_a_client
     Wurk.configuration.dogstatsd = nil
 
-    assert_nil history.snapshot
+    history.snapshot
+
+    assert_equal(1, Wurk.redis { |c| c.call('XLEN', Wurk::Keys::HISTORY_METRICS) })
   end
 
   # --- leader gate ------------------------------------------------------
@@ -153,12 +158,64 @@ class HistoryTest < Wurk::Test::UnitCase
     assert_operator snapshotter.instance_variable_get(:@snaps).to_i, :>, 0
   end
 
+  # --- history:metrics stream (§5.3) -----------------------------------
+
+  def test_snapshot_appends_the_section_5_2_fields_to_the_stream
+    seed_queue('hq', 4)
+
+    history.snapshot
+    point = Wurk::History.recent.last
+
+    assert_equal STREAM_FIELDS.sort, (point.keys - [:at]).sort
+    assert_equal 4, point[:enqueued]
+  end
+
+  def test_recent_returns_points_oldest_to_newest
+    3.times do |i|
+      seed_queue("hq#{i}", i + 1)
+      history.snapshot
+    end
+    points = Wurk::History.recent
+
+    assert_equal 3, points.size
+    assert_equal(points.map { |p| p[:at] }.sort, points.map { |p| p[:at] })
+  end
+
+  def test_recent_clamps_to_the_requested_count
+    5.times { history.snapshot }
+
+    assert_equal 2, Wurk::History.recent(limit: 2).size
+  end
+
+  # AC: a migrated Ent install's entries render without rewrite — fields are
+  # read generically (numeric coerced, non-numeric kept).
+  def test_recent_tolerates_foreign_ent_stream_fields
+    Wurk.redis { |c| c.call('XADD', Wurk::Keys::HISTORY_METRICS, '*', 'processed', '999', 'odd_field', '12', 'label', 'x') }
+    point = Wurk::History.recent.last
+
+    assert_equal 999, point[:processed]
+    assert_equal 12, point[:odd_field]
+    assert_equal 'x', point[:label]
+  end
+
+  def test_stream_is_capped_by_maxlen
+    snapshotter = history(cap: 10)
+    200.times { snapshotter.snapshot }
+    xlen = Wurk.redis { |c| c.call('XLEN', Wurk::Keys::HISTORY_METRICS) }
+
+    assert_operator xlen, :<, 200, 'MAXLEN ~ should trim the stream'
+  end
+
   private
 
   # A History built on a throwaway config so retain_history never mutates the
-  # process-global Wurk.configuration.
-  def history(interval: 30, &collector)
+  # process-global Wurk.configuration. The config's Redis is pinned to this
+  # worker's test DB (a fresh Configuration would otherwise default to DB 0,
+  # which tests must never touch) so the stream write lands where recent() reads.
+  def history(interval: 30, cap: nil, &collector)
     config = Wurk::Configuration.new
+    config.redis = { url: Wurk::Test.redis_url }
+    config[:history_stream_cap] = cap if cap
     config.retain_history(interval, &collector)
     Wurk::History.new(config)
   end
