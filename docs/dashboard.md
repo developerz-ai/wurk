@@ -155,24 +155,39 @@ end
 
 A registered tab whose path isn't one Wurk already renders natively surfaces in
 the left-nav (read from `GET /api/meta`). Clicking it opens an in-dashboard
-**Extension** page that embeds the extension's own path (`/<mount>/<index>`) in an
-iframe. `custom_job_info_rows` render as extra rows in the job-detail modal.
+**Extension** page that renders the extension's view **natively**: the
+extension's Sinatra-style routes and ERB views are executed server-side and the
+resulting HTML is embedded in the page. `custom_job_info_rows` render as extra
+rows in the job-detail modal.
 
-**Supported subset (important).** Wurk's dashboard is a **precompiled React
-SPA**, not Sidekiq's server-rendered ERB UI. So:
+**How native rendering works.** Sidekiq extensions declare routes in
+`registered(app)` (`app.get "/locks" do … erb :index end`) and ship ERB
+templates under `root_dir/views`. Wurk captures those routes at registration
+and serves them Sidekiq-Web-compatibly — no Sinatra involved:
 
-- **Registration is accepted and no-op-safe** — requiring a gem that calls
-  `register`/`register_extension` (or mutates `tabs`) never crashes boot.
-- **Tabs surface in the nav** and open an Extension page that iframes the
-  extension's path. If the host mounts the gem's own Rack app reachable at that
-  path, its view renders in the frame; otherwise the frame shows a short
-  "not rendered here" note (no recursive dashboard nesting).
-- **`custom_job_info_rows` render** in the job-detail modal — each registered
-  callable (`call(job)`) or `add_pair(job)` object contributes a `label/value`
-  row.
-- **Sidekiq's ERB extension views are _not_ rendered natively.** Sidekiq
-  extensions ship ERB templates rendered by a Sinatra app; wurk has no such
-  render path, so the gem's own templates aren't compiled into the SPA bundle.
+- `GET/POST /<mount>/ext/<name>/<subpath>` matches the extension's route
+  (route params like `/locks/:digest` included), runs the block in a
+  `WebHelpers`-compatible context (`h`, `t`, `truncate`, `root_path`,
+  `asset_path`, `redis`, `params`, `redirect`, `erb`, …), and returns the
+  rendered HTML. Links and forms inside the view are intercepted by the SPA so
+  navigation stays in-page; `redirect` (e.g. delete → list) is followed
+  transparently.
+- `GET /<mount>/ext-assets/<name>/<file>` serves files from the extension's
+  `asset_paths` (with `Cache-Control` from `cache_for`, path-traversal
+  rejected), so a view's `<link href="<%= asset_path('app.css') %>">` works.
+- Locale strings load from `root_dir/locales/en.yml` and resolve through the
+  `t` helper; missing keys degrade to the humanized key, never raise.
+- CSRF matches Sidekiq's model: non-`GET` extension requests must be
+  same-origin per `Sec-Fetch-Site`; cross-site requests are denied.
+- Tabs added by bare `tabs["Label"] = "path"` mutation have no extension to
+  render; those fall back to an Extension page that iframes the tab's own path
+  (if the host mounts something reachable there, it renders in the frame).
+- Registration stays no-op-safe — a gem calling `register`/`register_extension`
+  (or mutating `tabs`) never crashes boot.
 
-Rendering Sidekiq's ERB extension views natively in the dashboard is tracked as
-a follow-up (#187).
+**Scope note.** This renders extensions registered against wurk's
+`Sidekiq::Web` alias. Gems that literally `require "sidekiq"` still can't load
+against wurk (wurk intentionally does not depend on — or install — the sidekiq
+gem; the consumer app shouldn't either, since wurk's native unique-jobs / cron /
+batches / limiter replace the common ecosystem gems). A `require "sidekiq"`
+compatibility shim is tracked, deliberately deferred, in #204.
