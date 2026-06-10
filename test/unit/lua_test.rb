@@ -33,7 +33,7 @@ class LuaTest < Wurk::Test::UnitCase
     assert_equal(
       %i[zpopbyscore bulk_push reliable_schedule_promote
          batch_push batch_ack_success batch_ack_failed batch_ack_complete batch_invalidate
-         fast_delete_job fast_delete_by_class
+         fast_delete_job fast_delete_by_class release_if_owner
          limiter_concurrent_acquire limiter_concurrent_release
          limiter_bucket_acquire limiter_window_acquire limiter_leaky_acquire
          limiter_points_acquire limiter_points_refund].sort,
