@@ -29,6 +29,11 @@ module Wurk
     # Live process identities (heartbeat membership).
     PROCESSES      = 'processes'
 
+    # Ent Historical Metrics: capped Redis stream of periodic snapshots written
+    # by Wurk::History (§5.3). Same key a migrated Sidekiq Ent install uses, so
+    # its existing data renders without rewrite. Spec: sidekiq-ent.md §5.3, §10.
+    HISTORY_METRICS = 'history:metrics'
+
     # Profiles (v8.0+): ZSET of `<token>-<jid>` keys, score = expiry epoch;
     # each member also has a `<token>-<jid>` HASH holding the profile blob.
     # Spec: docs/target/sidekiq-free.md §1.7.
