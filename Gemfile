@@ -25,4 +25,7 @@ group :test do
   gem "rails", rails_version ? "~> #{rails_version}.0" : ">= 7.1"
   gem "sqlite3"
   gem "rack-test"
+  # Exercises Wurk::IterableJob::CsvEnumerator. Not a runtime dep — the gem
+  # only touches CSV when the host has loaded it (`defined?(::CSV)` guard).
+  gem "csv"
 end
