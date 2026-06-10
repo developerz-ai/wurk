@@ -97,6 +97,7 @@ module Sidekiq
   Deploy           = Wurk::Deploy
   Embedded         = Wurk::Embedded
   Encryption       = Wurk::Encryption
+  History          = Wurk::History
   IterableJob      = Wurk::IterableJob
   IterableJobQuery = Wurk::IterableJobQuery
   Job              = Wurk::Job

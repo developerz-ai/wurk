@@ -99,6 +99,20 @@ class LauncherTest < Wurk::Test::UnitCase
     assert_instance_of Wurk::Metrics::Rollup, launcher.metrics_rollup
   end
 
+  def test_initialize_builds_history_when_retain_history_configured
+    @config.retain_history(30)
+
+    launcher = Wurk::Launcher.new(@config)
+
+    assert_instance_of Wurk::History, launcher.history
+  end
+
+  def test_initialize_skips_history_when_not_configured
+    launcher = Wurk::Launcher.new(@config)
+
+    assert_nil launcher.history
+  end
+
   # --- run -------------------------------------------------------------
 
   def test_run_freezes_config

@@ -11,6 +11,7 @@ require_relative 'leader'
 require_relative 'cron'
 require_relative 'metrics/rollup'
 require_relative 'metrics/queue_rollup'
+require_relative 'history'
 require_relative 'fetcher/reaper'
 
 module Wurk
@@ -42,7 +43,7 @@ module Wurk
     # (Sidekiq's drop-in surface). The single source of truth is Heartbeat.
     BEAT_PAUSE = Heartbeat::BEAT_PAUSE
 
-    attr_accessor :managers, :poller, :cron_poller, :metrics_rollup, :queue_rollup
+    attr_accessor :managers, :poller, :cron_poller, :metrics_rollup, :queue_rollup, :history
 
     def initialize(config, embedded: false)
       @config = config
@@ -53,6 +54,7 @@ module Wurk
       @cron_poller = build_cron_poller
       @metrics_rollup = build_metrics_rollup
       @queue_rollup = build_queue_rollup
+      @history = build_history
       @leader = build_leader
       @reaper = build_reaper
       @started_at = nil
@@ -84,6 +86,7 @@ module Wurk
       @cron_poller&.start
       @metrics_rollup&.start
       @queue_rollup&.start
+      @history&.start
       @managers.each(&:start)
       @reaper.start
       boot_reclaim
@@ -119,6 +122,7 @@ module Wurk
       @cron_poller&.terminate
       @metrics_rollup&.terminate
       @queue_rollup&.terminate
+      @history&.terminate
       @reaper&.stop
       # CAS-release the cluster lock now (planned shutdown) so a follower can
       # take over immediately instead of waiting out the TTL.
@@ -257,6 +261,13 @@ module Wurk
     # buckets the Historical tab's per-queue charts read.
     def build_queue_rollup
       Wurk::Metrics::QueueRollup.new(@config)
+    end
+
+    # Ent §5 Historical Metrics snapshotter — only when the host opted in via
+    # `config.retain_history`. Leader-gated like the rollups, so just one
+    # process emits the cluster-wide snapshot per interval.
+    def build_history
+      Wurk::History.new(@config) if @config.history_enabled?
     end
 
     # Every worker process campaigns for the single cluster lock (`dear-leader`);

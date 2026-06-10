@@ -261,6 +261,32 @@ module Wurk
       @periodic_manager
     end
 
+    # --- Historical metrics snapshotter (Ent §5) -------------------------
+
+    HISTORY_DEFAULT_INTERVAL = 30
+
+    # Enables the Ent Historical Metrics snapshotter: every `seconds` the
+    # cluster leader emits a statsd-shaped snapshot to the configured
+    # `dogstatsd` client. With no block the default §5.2 gauge set is
+    # published; a block receives the dogstatsd client `s` and collects
+    # custom metrics instead. The Launcher starts the snapshotter only when
+    # this has been called.
+    #
+    # Spec: docs/target/sidekiq-ent.md §5.1.
+    def retain_history(seconds = HISTORY_DEFAULT_INTERVAL, &block)
+      guard_frozen!
+      interval = Float(seconds)
+      raise ArgumentError, 'retain_history interval must be > 0' unless interval.positive?
+
+      @options[:history_interval] = interval
+      @options[:history_collector] = block
+      nil
+    end
+
+    def history_enabled? = @options.key?(:history_interval)
+    def history_interval = @options.fetch(:history_interval, HISTORY_DEFAULT_INTERVAL)
+    def history_collector = @options[:history_collector]
+
     # --- Web dashboard ----------------------------------------------------
 
     # Web UI configuration: the authorization hook and read-only mode. Returns
