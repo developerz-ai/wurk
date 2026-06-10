@@ -29,12 +29,6 @@ if ENV["WURK_DEMO"] == "1"
     Wurk.configuration.server_middleware.add(Wurk::Metrics::History)
   end
 
-  # Historical snapshotter (Ent §5): leader-gated thread that appends a gauge
-  # snapshot to the history:metrics stream every 30s. Feeds the Metrics page's
-  # Historical and per-queue charts. Set directly (not via configure_server)
-  # for the same server?==false reason as the middleware above.
-  Wurk.configuration.retain_history(30)
-
   # Web side (non-forking process): run the traffic producer in a background
   # thread. Gated off the swarm so its Redis connection can't be inherited
   # across a fork (CLAUDE.md boot order). The worker process drains the traffic.
