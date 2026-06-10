@@ -1,0 +1,11 @@
+en:
+  title: Locks
+  subtitle: "A third-party Sidekiq Web extension (the shape sidekiq-unique-jobs uses) rendered natively inside the dashboard — its routes, views, translations, and CSS all ship with the extension, not with wurk."
+  digest: Digest
+  job: Held by
+  release: Release
+  empty: No locks held.
+  lock: Lock
+  held_by: Held by
+  not_found: This lock no longer exists (already released?).
+  back: All locks

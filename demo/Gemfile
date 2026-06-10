@@ -9,3 +9,7 @@ gem "puma"
 # The whole point of the demo: run on Wurk. Uses the gem from this repo so the
 # demo always tracks the code it's demoing. Swap to `gem "wurk"` to pin a release.
 gem "wurk", path: ".."
+
+# Profiling capture for the Profiles tab — wurk's Profiler only records when a
+# job carries `profile:` AND vernier is loaded (optional dependency).
+gem "vernier"
