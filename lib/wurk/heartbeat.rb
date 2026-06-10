@@ -163,9 +163,17 @@ module Wurk
     def host_facts
       @host_facts ||= {
         'cpu_model' => cpu_model,
-        'cores' => Etc.nprocessors,
+        'cores' => cores,
         'memory_total_kb' => memory_total_kb
       }
+    end
+
+    def cores(etc = Etc)
+      etc.nprocessors
+    # NotImplementedError is a ScriptError, outside StandardError — and it's
+    # exactly what Etc raises on platforms without sysconf.
+    rescue StandardError, NotImplementedError
+      nil
     end
 
     def cpu_model

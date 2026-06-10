@@ -95,6 +95,18 @@ class HeartbeatTest < Wurk::Test::UnitCase
     assert_same first, hb.send(:host_facts)
   end
 
+  # Etc raises NotImplementedError (a ScriptError, not StandardError) on
+  # platforms without sysconf — a heartbeat must degrade to nil, never die.
+  # Injected seam instead of patching ::Etc: parallelize_me! runs the other
+  # host-facts tests concurrently in this process.
+  def test_cores_is_nil_when_etc_raises
+    hb = build_heartbeat
+    raising_etc = Object.new
+    raising_etc.define_singleton_method(:nprocessors) { raise NotImplementedError }
+
+    assert_nil hb.send(:cores, raising_etc)
+  end
+
   def test_beat_writes_info_tag_and_embedded_default
     hb = build_heartbeat
 
