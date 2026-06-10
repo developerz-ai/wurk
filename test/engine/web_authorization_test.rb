@@ -125,8 +125,8 @@ class WebAuthorizationTest < Wurk::Test::EngineCase
   end
 
   # A third-party extension registering a tab surfaces it in /api/meta, which
-  # the SPA nav reads (spec §25.2). The registration is no-op-safe — requiring
-  # the gem doesn't crash boot even though wurk can't render its view.
+  # the SPA nav reads (spec §25.2), including the ext_name the Extension page
+  # uses to fetch the server-rendered view (#187).
   def test_meta_exposes_registered_custom_tabs
     Wurk::Web.configure { |c| c.register_extension(Object, name: 'locks', tab: 'Locks', index: 'locks') }
 
@@ -134,6 +134,6 @@ class WebAuthorizationTest < Wurk::Test::EngineCase
 
     assert_equal 200, last_response.status
     assert_includes JSON.parse(last_response.body)['custom_tabs'],
-                    { 'name' => 'Locks', 'path' => 'locks' }
+                    { 'name' => 'Locks', 'path' => 'locks', 'ext_name' => 'locks' }
   end
 end

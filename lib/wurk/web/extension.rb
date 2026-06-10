@@ -29,7 +29,7 @@ module Wurk
         HTTP_METHODS = %i[get post put patch delete head].freeze
 
         def initialize
-          @routes = []          # [[method_string, Route, block], …]
+          @routes = [] # [[method_string, Route, block], …]
           @helper_modules = []
           @helper_blocks = []
         end
@@ -77,7 +77,7 @@ module Wurk
         private
 
         def compile(path)
-          return %r{\A#{Regexp.escape(path[0..-2])}.*\z} if path.end_with?('*')
+          return /\A#{Regexp.escape(path[0..-2])}.*\z/ if path.end_with?('*')
 
           pattern = path.gsub(NAMED) do
             @keys << ::Regexp.last_match(2).to_sym
@@ -223,7 +223,9 @@ module Wurk
 
             Array(ext[:asset_paths]).each do |dir|
               path = ::File.expand_path(::File.join(dir, file.to_s))
-              return [path, ext[:cache_for] || 86_400] if path.start_with?("#{::File.expand_path(dir)}/") && ::File.file?(path)
+              next unless path.start_with?("#{::File.expand_path(dir)}/") && ::File.file?(path)
+
+              return [path, ext[:cache_for] || 86_400]
             end
             nil
           end
@@ -235,13 +237,7 @@ module Wurk
           end
 
           def render(ext, route_params, block, env, mount)
-            app = captured_app(ext)
-            action = Action.new(
-              env: env, route_params: route_params, mount: mount,
-              ext: ext.merge(helpers: { modules: app.helper_modules, blocks: app.helper_blocks },
-                             strings: strings_for(ext))
-            )
-            result = action.run(block)
+            result = action_for(ext, route_params, env, mount).run(block)
             if result.is_a?(Action::Redirect)
               [302, { 'Location' => redirect_target(result.location, ext, mount) }, '']
             else
@@ -250,6 +246,15 @@ module Wurk
           rescue ::StandardError => e
             ::Wurk.configuration.handle_exception(e, context: 'web-extension-render')
             [500, html_headers, "Extension render error: #{::CGI.escapeHTML(e.message)}"]
+          end
+
+          def action_for(ext, route_params, env, mount)
+            app = captured_app(ext)
+            Action.new(
+              env: env, route_params: route_params, mount: mount,
+              ext: ext.merge(helpers: { modules: app.helper_modules, blocks: app.helper_blocks },
+                             strings: strings_for(ext))
+            )
           end
 
           def match_route(ext, verb, subpath)

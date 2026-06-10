@@ -43,7 +43,7 @@ module Wurk
 
       # Extension output is host-registered server code, same trust model as
       # Sidekiq::Web rendering its extensions — not user input.
-      render html: body.html_safe, layout: false, status: status # rubocop:disable Rails/OutputSafety
+      render html: body.html_safe, layout: false, status: status
     end
 
     def verify_same_origin!

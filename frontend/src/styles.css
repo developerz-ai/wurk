@@ -990,3 +990,38 @@ tbody tr:last-child td {
   background: var(--surface-hover);
 }
 .chip:active { transform: translateY(1px); }
+
+/* Server-rendered Web-extension views (#187). Extension ERB ships its own
+   plain markup (tables/forms/links), so give the common elements just enough
+   theme styling to sit in the dashboard without shipping Sidekiq's CSS. */
+.ext-view { overflow-x: auto; }
+.ext-view table { width: 100%; border-collapse: collapse; font-size: 13px; }
+.ext-view th,
+.ext-view td { padding: 0.5rem 0.75rem; border-bottom: 1px solid var(--border); text-align: start; }
+.ext-view th { color: var(--text-muted); font-size: 11px; text-transform: uppercase; letter-spacing: 0.04em; }
+.ext-view a { color: var(--accent); }
+.ext-view h1, .ext-view h2, .ext-view h3 { margin: 0.5rem 0; }
+.ext-view form { display: inline-flex; gap: 0.5rem; align-items: center; margin: 0.5rem 0; }
+.ext-view input[type='text'],
+.ext-view input[type='search'],
+.ext-view input[type='number'],
+.ext-view select {
+  background: var(--surface-strong);
+  border: 1px solid var(--border-strong);
+  color: var(--text);
+  border-radius: 6px;
+  padding: 0.35rem 0.6rem;
+  font-size: 13px;
+}
+.ext-view input[type='submit'],
+.ext-view button {
+  background: var(--surface-strong);
+  border: 1px solid var(--border-strong);
+  color: var(--text);
+  border-radius: 6px;
+  padding: 0.35rem 0.75rem;
+  font-size: 13px;
+  cursor: pointer;
+}
+.ext-view input[type='submit']:hover,
+.ext-view button:hover { border-color: var(--accent); }
