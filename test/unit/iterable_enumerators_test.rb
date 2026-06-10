@@ -34,11 +34,13 @@ class IterableEnumeratorsTest < Wurk::Test::UnitCase
       from(start).each_slice(batch_size) { |slice| yield slice.map { |i| Record.new(i) } }
     end
 
-    # `of:` is ActiveRecord's in_batches keyword — must keep the name to match.
-    # Deliberately NO `**` splat (like real AR), so a leaked `:batch_size`
-    # keyword raises ArgumentError instead of being silently swallowed.
-    def in_batches(start: nil, of: 100) # rubocop:disable Naming/MethodParameterName
-      from(start).each_slice(of) { |slice| yield FakeRelation.new(slice) }
+    # Strict like ActiveRecord's in_batches: only `of:` (+ start:) is allowed,
+    # so a leaked `:batch_size` keyword raises instead of being swallowed.
+    def in_batches(start: nil, **opts)
+      extra = opts.keys - [:of]
+      raise ArgumentError, "unexpected keyword(s): #{extra.join(', ')}" unless extra.empty?
+
+      from(start).each_slice(opts.fetch(:of, 100)) { |slice| yield FakeRelation.new(slice) }
     end
   end
 
