@@ -100,12 +100,11 @@ module Wurk
       # Matches Sidekiq::Web::Config#register_extension (aliased `register`,
       # spec §25.2): `tab` is the label(s), `index` the path(s), `name` the
       # asset namespace. `tab`/`index` are zipped into the `tabs` hash
-      # (label => path), so the tab surfaces in the SPA nav via /api/meta. It
-      # does NOT invoke the extension's server-side routes/views: wurk's
-      # dashboard is a precompiled React SPA with no Sinatra/ERB render path, so
-      # an ext's own view can't be injected (documented divergence — registration
-      # is accepted no-op-safe so requiring the gem never crashes boot). Yields
-      # self to an optional block for further config, and returns self.
+      # (label => path) so the tab surfaces in the SPA nav via /api/meta, and
+      # the extension's `registered(app)` routes/ERB views are served by
+      # Wurk::Web::Extension::Renderer under `ext/:name/*` (#187) — the SPA's
+      # Extension page embeds the rendered HTML. Yields self to an optional
+      # block for further config, and returns self.
       # rubocop:disable Metrics/ParameterLists -- signature matches Sidekiq::Web::Config#register_extension (spec §25.2)
       def register_extension(extension, name:, tab:, index:, root_dir: nil,
                              cache_for: 86_400, asset_paths: nil)
@@ -121,13 +120,24 @@ module Wurk
       alias register register_extension
 
       # Tabs the SPA should render in the nav: everything registered beyond the
-      # Sidekiq defaults and wurk's own native pages, as `{ name:, path: }`.
+      # Sidekiq defaults and wurk's own native pages, as `{ name:, path:,
+      # ext_name: }`. `ext_name` ties the tab back to a registered extension so
+      # the Extension page can fetch its server-rendered view from
+      # `ext/:ext_name/*`; nil for tabs added by bare `tabs[]=` mutation (the
+      # SPA falls back to the iframe embed for those).
       def custom_tabs
         @tabs.filter_map do |name, path|
           next if DEFAULT_TABS.key?(name) || NATIVE_TAB_PATHS.include?(path.to_s)
 
-          { name: name, path: path.to_s }
+          { name: name, path: path.to_s, ext_name: extension_for_index(path)&.dig(:name)&.to_s }
         end
+      end
+
+      # The registered extension whose `index` covers `path` ("locks/" and
+      # "locks" are the same index).
+      def extension_for_index(path)
+        norm = path.to_s.delete_suffix('/')
+        @extensions.find { |e| Array(e[:index]).any? { |i| i.to_s.delete_suffix('/') == norm } }
       end
 
       # Evaluate the registered `custom_job_info_rows` against a job (spec

@@ -71,6 +71,16 @@ Wurk::Engine.routes.draw do
   get 'profiles/:key/data', to: 'profiles#data', as: :profile_data, constraints: { key: %r{[^/]+} }
   get 'profiles/:key',      to: 'profiles#show', as: :profile,      constraints: { key: %r{[^/]+} }
 
+  # Third-party Web extensions (#187): server-rendered route + assets. The SPA's
+  # Extension page fetches `ext/:name/<subpath>` and embeds the returned HTML;
+  # `format: false` keeps dots in subpaths/filenames out of Rails' format logic.
+  # An /ext URL with no matching registered extension falls through to the SPA
+  # shell inside the controller (it's the SPA's own /ext/:tab client route).
+  match 'ext/:name(/*subpath)', to: 'extensions#show', via: %i[get post], as: :extension,
+                                format: false, defaults: { subpath: '' }, constraints: { name: %r{[^/]+} }
+  get 'ext-assets/:name/*file', to: 'extensions#asset', as: :extension_asset,
+                                format: false, constraints: { name: %r{[^/]+} }
+
   # SPA catch-all — let React Router handle the rest.
   get '*path', to: 'dashboard#index', constraints: ->(req) { req.format == :html }
 end
