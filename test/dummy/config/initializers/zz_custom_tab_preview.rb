@@ -18,18 +18,12 @@ if ENV['WURK_DEMO'] == '1'
 
     def self.registered(app)
       app.get '/locks' do
-        @locks = redis { |c| c.call('HGETALL', KEY) }
-        if @locks.empty?
-          redis { |c| c.call('HSET', KEY, *SEED.flatten) }
-          @locks = SEED.dup
-        end
+        @locks = DemoLocksExt.seeded_locks
         erb :index
       end
 
       app.get '/locks/:digest' do
-        @digest = route_params(:digest)
-        @job = redis { |c| c.call('HGET', KEY, @digest) }
-        @since = Time.at(Time.now.to_i - (@digest.sum % 3600))
+        @digest, @job, @since = DemoLocksExt.lock_detail(route_params(:digest))
         erb :show
       end
 
@@ -37,6 +31,19 @@ if ENV['WURK_DEMO'] == '1'
         redis { |c| c.call('HDEL', KEY, route_params(:digest)) }
         redirect 'locks'
       end
+    end
+
+    def self.lock_detail(digest)
+      job = Wurk.redis { |c| c.call('HGET', KEY, digest) }
+      [digest, job, Time.at(Time.now.to_i - (digest.sum % 3600))]
+    end
+
+    def self.seeded_locks
+      locks = Wurk.redis { |c| c.call('HGETALL', KEY) }
+      return locks unless locks.empty?
+
+      Wurk.redis { |c| c.call('HSET', KEY, *SEED.flatten) }
+      SEED.dup
     end
   end
 
