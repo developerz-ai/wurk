@@ -70,6 +70,23 @@
     "profiles": "Captured job profiles — open one in the Firefox profiler to inspect its flame graph.",
     "search": "Find a job across retries, scheduled, and dead by JID or class name."
   },
+  "busy": {
+    "hosts": "{n} hosts",
+    "cores": "{n} cores",
+    "of_total_ram": "of total RAM",
+    "heartbeat": "Heartbeat",
+    "rss": "RSS",
+    "rtt": "Redis RTT",
+    "version": "Version",
+    "tag": "Tag",
+    "labels": "Labels",
+    "identity": "Identity",
+    "started": "Started",
+    "up_for": "up",
+    "running_jobs": "Running jobs",
+    "running_since": "Running Since",
+    "no_running": "No jobs currently running on this process"
+  },
   "cron": {
     "history_title": "Execution history",
     "fired": "Fired",

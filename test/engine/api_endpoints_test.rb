@@ -189,6 +189,40 @@ class ApiEndpointsTest < Wurk::Test::EngineCase
     assert_kind_of Array, json_body
   end
 
+  def test_process_row_carries_host_facts_and_beat # rubocop:disable Minitest/MultipleAssertions
+    identity = seed_process
+    get '/wurk/api/processes'
+
+    assert_ok
+    row = json_body.find { |p| p[:identity] == identity }
+
+    refute_nil row, 'expected seeded process in list'
+    assert_equal 'api-host', row[:hostname]
+    assert_equal 'AMD EPYC 7702P', row[:cpu_model]
+    assert_equal 64, row[:cores]
+    assert_equal 16_777_216, row[:memory_total_kb]
+    assert_in_delta Time.now.to_f, row[:beat], 5
+    assert_equal({ busy: 2, concurrency: 10, rss: 262_144 }, row.slice(:busy, :concurrency, :rss))
+  ensure
+    cleanup_process(identity)
+  end
+
+  def test_workers_lists_in_flight_jobs_per_process # rubocop:disable Minitest/MultipleAssertions
+    identity = seed_process(work: true)
+    get '/wurk/api/workers'
+
+    assert_ok
+    row = json_body.find { |w| w[:process_id] == identity }
+
+    refute_nil row, 'expected seeded work row'
+    assert_equal 'tid-1', row[:thread_id]
+    assert_equal @class_name, row[:klass]
+    assert_equal @queue, row[:queue]
+    assert_in_delta Time.now.to_f, row[:run_at], 10
+  ensure
+    cleanup_process(identity)
+  end
+
   def test_batches_envelope
     get '/wurk/api/batches'
 
@@ -521,6 +555,45 @@ class ApiEndpointsTest < Wurk::Test::EngineCase
   def push_fire_history(lid, fired_at)
     ::Wurk.redis do |c|
       c.call('LPUSH', "#{::Wurk::Cron::HISTORY_PREFIX}#{lid}", ::Wurk.dump_json([fired_at, 'abc123']))
+    end
+  end
+
+  # Mirrors a real heartbeat's wire shape: identity in the `processes` SET,
+  # info JSON + per-beat fields in the identity HASH, and (optionally) one
+  # in-flight job in the `:work` mirror exactly as Processor publishes it
+  # (payload is the raw job JSON string, run_at an epoch int).
+  def seed_process(work: false)
+    identity = "api-host:99:#{@ns}"
+    info = {
+      'hostname' => 'api-host', 'started_at' => ::Time.now.to_f - 120, 'pid' => 99,
+      'tag' => @ns, 'concurrency' => 10, 'queues' => [@queue], 'labels' => [],
+      'identity' => identity, 'version' => ::Wurk::VERSION, 'embedded' => false,
+      'cpu_model' => 'AMD EPYC 7702P', 'cores' => 64, 'memory_total_kb' => 16_777_216
+    }
+    ::Wurk.redis do |c|
+      c.call('SADD', ::Wurk::Keys::PROCESSES, identity)
+      c.call(
+        'HSET', identity,
+        'info', ::Wurk.dump_json(info), 'concurrency', '10', 'busy', '2',
+        'beat', ::Time.now.to_f.to_s, 'quiet', 'false', 'rss', '262144', 'rtt_us', '150'
+      )
+      seed_work(c, identity) if work
+    end
+    identity
+  end
+
+  def seed_work(conn, identity)
+    payload = ::Wurk.dump_json('class' => @class_name, 'args' => [1], 'queue' => @queue, 'jid' => "jid-#{@ns}")
+    entry = ::Wurk.dump_json('queue' => @queue, 'payload' => payload, 'run_at' => ::Time.now.to_i)
+    conn.call('HSET', "#{identity}:work", 'tid-1', entry)
+  end
+
+  def cleanup_process(identity)
+    return if identity.nil?
+
+    ::Wurk.redis do |c|
+      c.call('SREM', ::Wurk::Keys::PROCESSES, identity)
+      c.call('DEL', identity, "#{identity}:work")
     end
   end
 

@@ -4,7 +4,7 @@ import { StatCard } from '../components/StatCard';
 import { AnimatedNumber } from '../components/AnimatedNumber';
 import { t } from '../i18n';
 import type { StatsSnapshot } from '../hooks/useSSE';
-import { relativeTime } from '../utils';
+import { relativeTime, formatDuration } from '../utils';
 
 interface StatsData {
   processed: number;
@@ -65,7 +65,7 @@ export default function Dashboard({ sse }: DashboardProps) {
     { key: 'scheduled', label: t('dashboard.scheduled'), value: stats.scheduled },
     { key: 'dead', label: t('dashboard.dead'), value: stats.dead, color: 'var(--danger)' },
     { key: 'processes', label: t('dashboard.processes'), value: stats.processes },
-    { key: 'latency', label: t('dashboard.latency'), value: `${stats.latency.toFixed(2)}s` },
+    { key: 'latency', label: t('dashboard.latency'), value: formatDuration(stats.latency) },
   ];
 
   return (
@@ -129,7 +129,7 @@ export default function Dashboard({ sse }: DashboardProps) {
                 <tr key={q.name}>
                   <td style={{ fontWeight: 500 }}>{q.name}</td>
                   <td><AnimatedNumber value={q.size} /></td>
-                  <td>{q.latency.toFixed(3)}s</td>
+                  <td title={`${q.latency.toFixed(3)}s`}>{formatDuration(q.latency)}</td>
                   <td>
                     {q.paused ? (
                       <span className="badge badge-warning">{t('dashboard.paused')}</span>

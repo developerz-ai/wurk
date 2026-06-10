@@ -38,6 +38,7 @@ Wurk::Engine.routes.draw do
     post 'dead/all/:cmd',    to: 'api#dead_all',       as: :api_dead_all
     post 'dead/:key',        to: 'api#dead_job',       as: :api_dead_job, constraints: { key: %r{[^/]+} }
     get  'processes',        to: 'api#processes'
+    get  'workers',          to: 'api#workers'
     # Busy-page process control (quiet/stop). `identity` rides in the body (it
     # contains ':' and '.', awkward as a path segment); absent or "all" signals
     # every live process. Read-only mode 403s these via the Authorization

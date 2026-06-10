@@ -69,5 +69,22 @@
     "ms": "ms",
     "ago": "前",
     "in": "後"
+  },
+  "busy": {
+    "hosts": "{n} ホスト",
+    "cores": "{n} コア",
+    "of_total_ram": "全RAM中",
+    "heartbeat": "ハートビート",
+    "rss": "RSS",
+    "rtt": "Redis RTT",
+    "version": "バージョン",
+    "tag": "タグ",
+    "labels": "ラベル",
+    "identity": "識別子",
+    "started": "開始",
+    "up_for": "稼働",
+    "running_jobs": "実行中のジョブ",
+    "running_since": "実行開始",
+    "no_running": "このプロセスで実行中のジョブはありません"
   }
 }

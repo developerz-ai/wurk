@@ -7,7 +7,7 @@ import { useSort, type Accessors } from '../hooks/useSort';
 import { usePageParam } from '../hooks/usePageParam';
 import { t } from '../i18n';
 import { PageHeader } from '../components/PageHeader';
-import { relativeTime, truncate, formatArgs } from '../utils';
+import { relativeTime, truncate, formatArgs, formatDuration } from '../utils';
 import JobDetailModal, { type JobEntry } from '../components/JobDetailModal';
 import Modal from '../components/Modal';
 import { Tooltip } from '../components/Tooltip';
@@ -90,7 +90,7 @@ function QueueJobs({ name }: { name: string }) {
     <div className="qjobs">
       <div style={{ display: 'flex', alignItems: 'center', gap: '0.75rem', marginBottom: '1rem' }}>
         <span style={{ color: 'var(--text-muted)', fontSize: 13 }}>
-          {data.size.toLocaleString()} jobs · latency {data.latency.toFixed(3)}s
+          {data.size.toLocaleString()} jobs · <span title={`${data.latency.toFixed(3)}s`}>latency {formatDuration(data.latency)}</span>
         </span>
         {data.paused && <span className="badge badge-warning">{t('dashboard.paused')}</span>}
       </div>
@@ -236,7 +236,7 @@ export default function Queues() {
                 <tr key={q.name} className="row-clickable" onClick={() => setSelectedQueue(q.name)}>
                   <td style={{ fontWeight: 500 }}>{q.name}</td>
                   <td>{q.size.toLocaleString()}</td>
-                  <td>{q.latency.toFixed(3)}s</td>
+                  <td title={`${q.latency.toFixed(3)}s`}>{formatDuration(q.latency)}</td>
                   <td>
                     {q.paused ? (
                       <span className="badge badge-warning">{t('dashboard.paused')}</span>

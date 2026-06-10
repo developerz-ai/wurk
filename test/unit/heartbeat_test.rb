@@ -73,6 +73,28 @@ class HeartbeatTest < Wurk::Test::UnitCase
     assert_equal @identity, info['identity']
   end
 
+  # Additive host facts ride the info JSON so the dashboard can group the
+  # Busy page by machine. cpu_model may legitimately be nil on exotic
+  # platforms; cores and total memory must be positive on any CI box.
+  def test_beat_writes_host_hardware_facts
+    hb = build_heartbeat
+
+    hb.beat!
+    info = read_info
+
+    assert_operator info['cores'], :>, 0
+    assert_operator info['memory_total_kb'], :>, 0
+    assert_kind_of String, info['cpu_model'] if info['cpu_model']
+  end
+
+  def test_host_facts_are_memoized_per_instance
+    hb = build_heartbeat
+
+    first = hb.send(:host_facts)
+
+    assert_same first, hb.send(:host_facts)
+  end
+
   def test_beat_writes_info_tag_and_embedded_default
     hb = build_heartbeat
 

@@ -31,6 +31,29 @@ export function isoTime(epochSeconds: number): string {
   return new Date(ms).toISOString();
 }
 
+// Human-readable duration from float seconds: "850ms", "4.2s", "21m 49s",
+// "2h 5m", "3d 4h". Used for queue latency, which the API reports in seconds.
+export function formatDuration(seconds: number): string {
+  if (!Number.isFinite(seconds)) return '—';
+  const s = Math.abs(seconds);
+  if (s < 1) return `${Math.round(s * 1000)}ms`;
+  if (s < 10) return `${s.toFixed(1)}s`;
+  const total = Math.round(s);
+  if (total < 60) return `${total}s`;
+  if (total < 3600) return `${Math.floor(total / 60)}m ${total % 60}s`;
+  if (total < 86400) return `${Math.floor(total / 3600)}h ${Math.floor((total % 3600) / 60)}m`;
+  return `${Math.floor(total / 86400)}d ${Math.floor((total % 86400) / 3600)}h`;
+}
+
+// RSS and total memory arrive from the heartbeat as kilobytes.
+export function formatKb(kb: number): string {
+  if (!Number.isFinite(kb) || kb <= 0) return '—';
+  if (kb < 1024) return `${Math.round(kb)} KB`;
+  const mb = kb / 1024;
+  if (mb < 1024) return `${Math.round(mb)} MB`;
+  return `${(mb / 1024).toFixed(1)} GB`;
+}
+
 export function truncate(s: string, max = 80): string {
   if (s.length <= max) return s;
   return s.slice(0, max) + '…';
