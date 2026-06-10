@@ -22,6 +22,12 @@ class ExtensionsTest < Wurk::Test::EngineCase
       app.post '/list' do
         erb '<p>posted</p>'
       end
+      app.put '/list' do
+        erb '<p>put</p>'
+      end
+      app.delete '/list' do
+        erb '<p>deleted</p>'
+      end
     end
   end
 
@@ -81,6 +87,26 @@ class ExtensionsTest < Wurk::Test::EngineCase
     post "/wurk/ext/#{@name}/list", {}, { 'HTTP_SEC_FETCH_SITE' => 'cross-site' }
 
     assert_equal 403, last_response.status
+  end
+
+  def test_post_without_fetch_metadata_is_forbidden
+    post "/wurk/ext/#{@name}/list"
+
+    assert_equal 403, last_response.status
+  end
+
+  def test_put_routes_dispatch_same_origin
+    put "/wurk/ext/#{@name}/list", {}, { 'HTTP_SEC_FETCH_SITE' => 'same-origin' }
+
+    assert_ok
+    assert_includes last_response.body, 'put'
+  end
+
+  def test_delete_routes_dispatch_same_origin
+    delete "/wurk/ext/#{@name}/list", {}, { 'HTTP_SEC_FETCH_SITE' => 'same-origin' }
+
+    assert_ok
+    assert_includes last_response.body, 'deleted'
   end
 
   def test_serves_extension_assets_with_cache_control

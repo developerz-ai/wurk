@@ -155,7 +155,32 @@ class WebExtensionTest < Wurk::Test::UnitCase
     assert_nil Wurk::Web::Extension::Renderer.asset_file(@name, 'nope.css')
   end
 
+  # --- route compilation ---------------------------------------------------
+
+  def test_route_literals_with_regex_metacharacters_match_literally
+    route = Wurk::Web::Extension::Route.new('/jobs/:jid.json')
+
+    assert_equal({ jid: 'abc' }, route.match('/jobs/abc.json'))
+    assert_nil route.match('/jobs/abcXjson')
+  end
+
+  def test_route_plus_sign_is_literal_not_a_quantifier
+    route = Wurk::Web::Extension::Route.new('/foo+bar')
+
+    refute_nil route.match('/foo+bar')
+    assert_nil route.match('/foooo+bar')
+  end
+
   # --- custom_tabs wiring ------------------------------------------------------
+
+  def test_native_tab_path_with_trailing_slash_stays_out_of_custom_tabs
+    label = "Native #{@name}"
+    Wurk::Web.config.tabs[label] = 'cron/'
+
+    assert_nil(Wurk::Web.config.custom_tabs.find { |t| t[:name] == label })
+  ensure
+    Wurk::Web.config.tabs.delete(label)
+  end
 
   def test_custom_tabs_carry_the_extension_name
     tab = Wurk::Web.config.custom_tabs.find { |t| t[:name] == "Demo #{@name}" }

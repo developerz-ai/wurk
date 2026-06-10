@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useState } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 import { useParams } from 'react-router-dom';
 import { PageHeader } from '../components/PageHeader';
 import { useMeta } from '../hooks/useMeta';
@@ -30,15 +30,21 @@ function NativeExtension({ extName, indexPath, title }: { extName: string; index
   const base = `/wurk/ext/${extName}/`;
   const [html, setHtml] = useState<string | null>(null);
   const [error, setError] = useState(false);
+  // Monotonic request id: a response only lands if it's still the latest, so
+  // rapid link clicks can't resolve out of order and show stale HTML.
+  const seq = useRef(0);
 
   const load = useCallback(
     async (path: string, init?: RequestInit) => {
+      const id = ++seq.current;
       try {
         const res = await fetch(base + path, init);
+        const text = await res.text();
+        if (id !== seq.current) return;
         setError(!res.ok && res.status !== 404);
-        setHtml(await res.text());
+        setHtml(text);
       } catch {
-        setError(true);
+        if (id === seq.current) setError(true);
       }
     },
     [base]
@@ -68,7 +74,7 @@ function NativeExtension({ extName, indexPath, title }: { extName: string; index
     e.preventDefault();
     const data = new FormData(form);
     if ((form.method || 'get').toUpperCase() === 'GET') {
-      const qs = new URLSearchParams(data as unknown as Record<string, string>).toString();
+      const qs = new URLSearchParams(Array.from(data.entries()) as [string, string][]).toString();
       void load(`${url.pathname.slice(base.length)}${qs ? `?${qs}` : ''}`);
     } else {
       void load(url.pathname.slice(base.length) + url.search, { method: 'POST', body: data });

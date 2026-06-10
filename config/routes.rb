@@ -76,7 +76,7 @@ Wurk::Engine.routes.draw do
   # `format: false` keeps dots in subpaths/filenames out of Rails' format logic.
   # An /ext URL with no matching registered extension falls through to the SPA
   # shell inside the controller (it's the SPA's own /ext/:tab client route).
-  match 'ext/:name(/*subpath)', to: 'extensions#show', via: %i[get post], as: :extension,
+  match 'ext/:name(/*subpath)', to: 'extensions#show', via: %i[get post put patch delete], as: :extension,
                                 format: false, defaults: { subpath: '' }, constraints: { name: %r{[^/]+} }
   get 'ext-assets/:name/*file', to: 'extensions#asset', as: :extension_asset,
                                 format: false, constraints: { name: %r{[^/]+} }

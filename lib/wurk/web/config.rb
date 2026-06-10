@@ -127,7 +127,9 @@ module Wurk
       # SPA falls back to the iframe embed for those).
       def custom_tabs
         @tabs.filter_map do |name, path|
-          next if DEFAULT_TABS.key?(name) || NATIVE_TAB_PATHS.include?(path.to_s)
+          # Same trailing-slash normalization as extension_for_index, so a
+          # native path registered as "cron/" doesn't duplicate the native tab.
+          next if DEFAULT_TABS.key?(name) || NATIVE_TAB_PATHS.include?(path.to_s.delete_suffix('/'))
 
           { name: name, path: path.to_s, ext_name: extension_for_index(path)&.dig(:name)&.to_s }
         end

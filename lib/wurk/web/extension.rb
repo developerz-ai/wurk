@@ -77,13 +77,24 @@ module Wurk
         private
 
         def compile(path)
-          return /\A#{Regexp.escape(path[0..-2])}.*\z/ if path.end_with?('*')
+          return /\A#{::Regexp.escape(path[0..-2])}.*\z/ if path.end_with?('*')
 
-          pattern = path.gsub(NAMED) do
-            @keys << ::Regexp.last_match(2).to_sym
-            "/#{::Regexp.last_match(1)}([^/?#]+)"
-          end
-          %r{\A#{pattern}/?\z}
+          %r{\A#{escaped_pattern(path)}/?\z}
+        end
+
+        # Escape every literal fragment so route text like ".json" or "+"
+        # matches itself instead of acting as a regex metacharacter.
+        def escaped_pattern(path)
+          pattern = +''
+          pos = 0
+          path.scan(NAMED) { pos = append_param(pattern, path, pos, ::Regexp.last_match) }
+          pattern << ::Regexp.escape(path[pos..])
+        end
+
+        def append_param(pattern, path, pos, match)
+          @keys << match[2].to_sym
+          pattern << ::Regexp.escape(path[pos...match.begin(0)]) << "/#{::Regexp.escape(match[1])}([^/?#]+)"
+          match.end(0)
         end
       end
 

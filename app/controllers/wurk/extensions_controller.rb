@@ -46,9 +46,11 @@ module Wurk
       render html: body.html_safe, layout: false, status: status
     end
 
+    # Spec §25.1: unsafe methods require `Sec-Fetch-Site: same-origin` — a
+    # missing header is denied too, like stock Sidekiq (a non-browser client
+    # must spoof the header deliberately; a cookie-carrying browser can't).
     def verify_same_origin!
-      site = request.headers['Sec-Fetch-Site']
-      head :forbidden unless site.nil? || site == 'same-origin'
+      head :forbidden unless request.headers['Sec-Fetch-Site'] == 'same-origin'
     end
   end
 end
