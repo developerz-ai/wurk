@@ -1,7 +1,9 @@
 # frozen_string_literal: true
 
+require_relative '../keys'
 require_relative 'history'
 require_relative 'rollup'
+require_relative 'queue_rollup'
 
 module Wurk
   module Metrics
@@ -57,6 +59,43 @@ module Wurk
         starts = bucket_starts(now, step, clamp_history_window!(window_seconds, ttl))
         rows = pipeline_hmget(starts.map { |s| Wurk::Metrics::Rollup.bucket_key(bucket, s) }, %w[p f ms])
         starts.zip(rows).map { |at, (p, f, ms)| { at: at, p: p.to_i, f: f.to_i, ms: ms.to_i } }
+      end
+
+      # Per-queue size/latency gauge time-series written by
+      # Metrics::QueueRollup. `bucket` is '1m'/'5m'/'1h'; `window_seconds` is
+      # clamped to the bucket's retention. Returns one entry per live queue
+      # (or the explicit `queues:` list) — `[{name:, points: [{at:, size:,
+      # latency:}, …]}, …]` — oldest→newest, gap-filled with zeros so a chart
+      # has a continuous x-axis. Capped at MAX_QUEUE_SERIES queues to bound the
+      # payload; the cap is logged-free because queue cardinality is small.
+      def queue_history(bucket, window_seconds, queues: nil, now: ::Time.now)
+        step, ttl = bucket_spec!(bucket)
+        starts = bucket_starts(now, step, clamp_history_window!(window_seconds, ttl))
+        names = queue_names(queues)
+        return [] if names.empty?
+
+        hashes = queue_bucket_hashes(bucket, starts)
+        names.map { |name| { name: name, points: queue_points(name, starts, hashes) } }
+      end
+
+      def queue_bucket_hashes(bucket, starts)
+        pipeline_hgetall(starts.map { |s| Wurk::Metrics::QueueRollup.bucket_key(bucket, s) })
+          .map { |h| h.is_a?(::Array) ? h.each_slice(2).to_h : (h || {}) }
+      end
+
+      MAX_QUEUE_SERIES = 25
+
+      def queue_names(queues)
+        names = queues || Wurk.redis { |c| c.call('SMEMBERS', Wurk::Keys::QUEUES_SET) }
+        names.sort.first(MAX_QUEUE_SERIES)
+      end
+
+      def queue_points(name, starts, hashes)
+        size_field = "#{name}|#{Wurk::Metrics::QueueRollup::SIZE_KIND}"
+        lat_field  = "#{name}|#{Wurk::Metrics::QueueRollup::LAT_KIND}"
+        starts.zip(hashes).map do |at, hash|
+          { at: at, size: hash[size_field].to_i, latency: (hash[lat_field] || 0).to_f }
+        end
       end
 
       def bucket_spec!(bucket)

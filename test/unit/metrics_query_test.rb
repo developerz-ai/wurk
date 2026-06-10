@@ -23,18 +23,26 @@ class MetricsQueryTest < Wurk::Test::UnitCase
         c.call('DEL', *keys) unless keys.empty?
         break if cursor == '0'
       end
-      # Per-class fields only — never DEL the shared minute/rollup buckets,
-      # other parallel tests for the same minute will lose their writes.
-      [@now, @now - 60, @now - 120].each do |t|
-        [Wurk::Metrics::History.minute_key(t), Wurk::Metrics::History.rollup_key(t)].each do |key|
-          [@klass_a, @klass_b].each do |kls|
-            c.call('HDEL', key, "#{kls}|p", "#{kls}|f", "#{kls}|ms", "#{kls}|x", "#{kls}nodelim")
-          end
-        end
-      end
+      delete_class_fields(c)
+      # The queue_history tests SADD this suite's queues to the shared `queues`
+      # set; remove them so queue_history(queues: nil) can't read a leftover.
+      mine = c.call('SMEMBERS', 'queues').select { |q| q.include?(@suffix) }
+      c.call('SREM', 'queues', *mine) unless mine.empty?
     end
   ensure
     super
+  end
+
+  # Per-class fields only — never DEL the shared minute/rollup buckets, or
+  # other parallel tests for the same minute will lose their writes.
+  def delete_class_fields(conn)
+    [@now, @now - 60, @now - 120].each do |t|
+      [Wurk::Metrics::History.minute_key(t), Wurk::Metrics::History.rollup_key(t)].each do |key|
+        [@klass_a, @klass_b].each do |kls|
+          conn.call('HDEL', key, "#{kls}|p", "#{kls}|f", "#{kls}|ms", "#{kls}|x", "#{kls}nodelim")
+        end
+      end
+    end
   end
 
   # ---- caps ---------------------------------------------------------------
@@ -221,5 +229,68 @@ class MetricsQueryTest < Wurk::Test::UnitCase
 
   def test_pipeline_hmget_empty_keys_returns_empty
     assert_equal [], Wurk::Metrics::Query.pipeline_hmget([], %w[p f ms])
+  end
+
+  # ---- queue_history reader (per-queue size/latency gauges) ----------------
+
+  def test_queue_history_returns_per_queue_size_and_latency_series
+    q1 = "Qa#{@suffix}"
+    q2 = "Qb#{@suffix}"
+    write_qm('1m', @now, "#{q1}|sz" => 5, "#{q1}|lt" => 12.5, "#{q2}|sz" => 2, "#{q2}|lt" => 0)
+
+    series = Wurk::Metrics::Query.queue_history('1m', 300, queues: [q1, q2], now: @now)
+    points = series.find { |s| s[:name] == q1 }[:points]
+
+    assert_equal 5, points.size # window 300 / 60 = 5 points, gap-filled
+    assert_equal({ at: (@now.to_i / 60) * 60, size: 5, latency: 12.5 }, points.last)
+  end
+
+  def test_queue_history_gap_fills_missing_buckets_with_zeros
+    series = Wurk::Metrics::Query.queue_history('1m', 300, queues: ["Qz#{@suffix}"], now: @now)
+    points = series.first[:points]
+
+    assert_equal 5, points.size
+    assert(points.all? { |p| p[:size].zero? && p[:latency].zero? })
+  end
+
+  def test_queue_history_rejects_unknown_bucket
+    assert_raises(ArgumentError) { Wurk::Metrics::Query.queue_history('2m', 300, queues: ['x'], now: @now) }
+  end
+
+  def test_queue_history_clamps_window_to_bucket_retention
+    series = Wurk::Metrics::Query.queue_history('1m', 48 * 3600, queues: ["Qc#{@suffix}"], now: @now)
+
+    assert_operator series.first[:points].size, :<=, 24 * 60
+  end
+
+  def test_queue_history_reads_live_queue_set_when_queues_nil
+    q1 = "Qlive#{@suffix}"
+    Wurk.redis { |c| c.call('SADD', 'queues', q1) }
+    write_qm('1m', @now, "#{q1}|sz" => 7, "#{q1}|lt" => 3.0)
+
+    series = Wurk::Metrics::Query.queue_history('1m', 120, now: @now)
+    row = series.find { |s| s[:name] == q1 }
+
+    refute_nil row, 'queue from the live `queues` set should be charted'
+    assert_equal 7, row[:points].last[:size]
+  end
+
+  def test_queue_history_caps_queue_count
+    names = (0...30).map { |i| format('Qcap%<s>s_%<i>02d', s: @suffix, i: i) }
+    Wurk.redis { |c| c.call('SADD', 'queues', *names) }
+
+    series = Wurk::Metrics::Query.queue_history('1m', 120, now: @now)
+
+    assert_operator series.size, :<=, Wurk::Metrics::Query::MAX_QUEUE_SERIES
+  end
+
+  private
+
+  # Write a per-queue gauge bucket directly so the reader tests don't depend on
+  # the sampler's wall-clock latency math.
+  def write_qm(bucket, at, fields)
+    step = Wurk::Metrics::QueueRollup::BUCKETS[bucket][0]
+    key = Wurk::Metrics::QueueRollup.bucket_key(bucket, (at.to_i / step) * step)
+    Wurk.redis { |c| c.call('HSET', key, *fields.flatten) }
   end
 end

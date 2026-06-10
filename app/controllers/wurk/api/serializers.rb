@@ -127,6 +127,13 @@ module Wurk
         { at: row[:at], processed: row[:p], failed: row[:f], runtime_ms: row[:ms] }
       end
 
+      # One queue's size/latency gauge series (Wurk::Metrics::Query.queue_history).
+      # `points` are oldest→newest; `at` is epoch seconds at the bucket start,
+      # `size` is queue depth, `latency` is head-of-line wait in seconds.
+      def queue_history_series(row)
+        { name: row[:name], points: row[:points].map { |p| { at: p[:at], size: p[:size], latency: p[:latency] } } }
+      end
+
       def parse_options(raw)
         return {} if raw.nil? || raw.to_s.empty?
 

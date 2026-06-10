@@ -10,6 +10,7 @@ require_relative 'scheduled'
 require_relative 'leader'
 require_relative 'cron'
 require_relative 'metrics/rollup'
+require_relative 'metrics/queue_rollup'
 require_relative 'fetcher/reaper'
 
 module Wurk
@@ -41,7 +42,7 @@ module Wurk
     # (Sidekiq's drop-in surface). The single source of truth is Heartbeat.
     BEAT_PAUSE = Heartbeat::BEAT_PAUSE
 
-    attr_accessor :managers, :poller, :cron_poller, :metrics_rollup
+    attr_accessor :managers, :poller, :cron_poller, :metrics_rollup, :queue_rollup
 
     def initialize(config, embedded: false)
       @config = config
@@ -51,6 +52,7 @@ module Wurk
       @poller = build_poller
       @cron_poller = build_cron_poller
       @metrics_rollup = build_metrics_rollup
+      @queue_rollup = build_queue_rollup
       @leader = build_leader
       @reaper = build_reaper
       @started_at = nil
@@ -81,6 +83,7 @@ module Wurk
       @leader&.start
       @cron_poller&.start
       @metrics_rollup&.start
+      @queue_rollup&.start
       @managers.each(&:start)
       @reaper.start
       boot_reclaim
@@ -115,6 +118,7 @@ module Wurk
       # releasing the lock so no tick races a follower's promotion.
       @cron_poller&.terminate
       @metrics_rollup&.terminate
+      @queue_rollup&.terminate
       @reaper&.stop
       # CAS-release the cluster lock now (planned shutdown) so a follower can
       # take over immediately instead of waiting out the TTL.
@@ -246,6 +250,13 @@ module Wurk
     # with `config.metrics_rollup_interval`.
     def build_metrics_rollup
       Wurk::Metrics::Rollup.new(@config)
+    end
+
+    # Leader-only per-queue gauge sampler. Like the metrics rollup, every
+    # process runs one but only the leader writes the `qm|…` size/latency
+    # buckets the Historical tab's per-queue charts read.
+    def build_queue_rollup
+      Wurk::Metrics::QueueRollup.new(@config)
     end
 
     # Every worker process campaigns for the single cluster lock (`dear-leader`);

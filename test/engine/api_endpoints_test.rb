@@ -111,6 +111,7 @@ class ApiEndpointsTest < Wurk::Test::EngineCase
 
     assert_ok
     job = json_body[:jobs].find { |j| j[:klass] == @class_name }
+
     assert_equal [99, '<encrypted>'], job[:args]
     assert_no_envelope_leak
   end
@@ -121,6 +122,7 @@ class ApiEndpointsTest < Wurk::Test::EngineCase
 
     assert_ok
     entry = json_body[:entries].find { |e| e[:klass] == @class_name }
+
     assert_equal [99, '<encrypted>'], entry[:args]
     assert_no_envelope_leak
   end
@@ -131,6 +133,7 @@ class ApiEndpointsTest < Wurk::Test::EngineCase
 
     assert_ok
     hit = json_body[:hits].find { |h| h[:jid] == jid }
+
     refute_nil hit
     assert_equal [99, '<encrypted>'], hit[:args]
     assert_no_envelope_leak
@@ -142,6 +145,7 @@ class ApiEndpointsTest < Wurk::Test::EngineCase
 
     assert_ok
     job = json_body[:jobs].find { |j| j[:klass] == @class_name }
+
     assert_equal [1, 2], job[:args]
   end
 
@@ -370,6 +374,40 @@ class ApiEndpointsTest < Wurk::Test::EngineCase
     assert_match(/bucket/, json_body[:error])
   end
 
+  def test_queue_history_returns_per_queue_gauge_series
+    name = "qmqh-#{@ns}"
+    epoch, key = seed_queue_metric(name, size: 8, latency: 4.5)
+    get '/wurk/api/queue-history/1m?window=24h'
+
+    assert_ok
+    row = json_body[:queues].find { |q| q[:name] == name }
+    refute_nil row, 'seeded queue should appear in the series'
+
+    point = row[:points].find { |p| p[:at] == epoch }
+
+    assert_equal({ at: epoch, size: 8, latency: 4.5 }, point)
+  ensure
+    cleanup_queue_metric(name, key)
+  end
+
+  def test_queue_history_supports_single_queue_filter
+    name = "qmqf-#{@ns}"
+    _epoch, key = seed_queue_metric(name, size: 3, latency: 1.0)
+    get "/wurk/api/queue-history/1m?window=1h&queue=#{name}"
+
+    assert_ok
+    assert_equal([name], json_body[:queues].map { |q| q[:name] })
+  ensure
+    cleanup_queue_metric(name, key)
+  end
+
+  def test_queue_history_rejects_unknown_bucket
+    get '/wurk/api/queue-history/9z?window=1h'
+
+    assert_equal 400, last_response.status
+    assert_match(/bucket/, json_body[:error])
+  end
+
   # The SSE stream emits one `event: stats` tick and closes when
   # `?max_duration=0` is supplied. Production callers omit the param and the
   # loop runs until `STREAM_MAX_DURATION`.
@@ -461,6 +499,7 @@ class ApiEndpointsTest < Wurk::Test::EngineCase
   # a rendered Web UI payload.
   def assert_no_envelope_leak
     body = last_response.body
+
     [::Wurk::Encryption::ENVELOPE_MARKER, 'aXYtY2FuYXJ5', 'Y3QtY2FuYXJ5', 'dGFnLWNhbmFyeQ=='].each do |marker|
       refute_includes body, marker, "envelope fragment #{marker.inspect} leaked into Web UI payload"
     end
@@ -527,6 +566,26 @@ class ApiEndpointsTest < Wurk::Test::EngineCase
     key = "jr|1m|#{epoch}"
     ::Wurk.redis { |c| c.call('HSET', key, 'p', processed, 'f', failed, 'ms', ms) }
     [epoch, key]
+  end
+
+  def seed_queue_metric(name, size:, latency:)
+    minutes_back = 1 + ((::Process.pid ^ object_id) % 1000)
+    epoch = ((::Time.now.to_i / 60) * 60) - (minutes_back * 60)
+    key = "qm|1m|#{epoch}"
+    ::Wurk.redis do |c|
+      c.call('SADD', 'queues', name)
+      c.call('HSET', key, "#{name}|sz", size, "#{name}|lt", latency)
+    end
+    [epoch, key]
+  end
+
+  def cleanup_queue_metric(name, key)
+    return unless key
+
+    ::Wurk.redis do |c|
+      c.call('DEL', key)
+      c.call('SREM', 'queues', name)
+    end
   end
 
   def seed_cron_loop
