@@ -35,7 +35,9 @@ class IterableEnumeratorsTest < Wurk::Test::UnitCase
     end
 
     # `of:` is ActiveRecord's in_batches keyword — must keep the name to match.
-    def in_batches(start: nil, of: 100, **) # rubocop:disable Naming/MethodParameterName
+    # Deliberately NO `**` splat (like real AR), so a leaked `:batch_size`
+    # keyword raises ArgumentError instead of being silently swallowed.
+    def in_batches(start: nil, of: 100) # rubocop:disable Naming/MethodParameterName
       from(start).each_slice(of) { |slice| yield FakeRelation.new(slice) }
     end
   end
@@ -108,6 +110,14 @@ class IterableEnumeratorsTest < Wurk::Test::UnitCase
 
     assert_equal([FakeRelation, FakeRelation], pairs.map { |rel, _| rel.class })
     assert_equal([10, 30], pairs.map { |_, cur| cur })
+  end
+
+  # `:batch_size` must be normalized to `:of` and never leak into in_batches
+  # (which has no such keyword), even when the caller also passes `:of`.
+  def test_ar_relations_enumerator_never_leaks_batch_size_to_in_batches
+    pairs = @job.active_record_relations_enumerator(FakeRelation.new([1, 2, 3]), cursor: nil, of: 5, batch_size: 2).to_a
+
+    assert_equal 1, pairs.size # of: 5 wins, all 3 in one batch — no ArgumentError
   end
 
   # --- drop-in alias ----------------------------------------------------

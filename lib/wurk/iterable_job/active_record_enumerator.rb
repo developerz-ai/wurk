@@ -29,7 +29,11 @@ module Wurk
         end
       end
 
-      # `[records_batch, batch.first.id]` pairs.
+      # `[records_batch, batch.first.id]` pairs. The size lambda is the record
+      # count, NOT the batch count — byte-for-byte with upstream Sidekiq's
+      # `ActiveRecordEnumerator#batches`, so `enum.size` returns the same value
+      # a drop-in app gets from Sidekiq. (Only the lazy `#size` differs from
+      # `relations`; the run loop never calls it.)
       def batches
         ::Enumerator.new(-> { @relation.count }) do |yielder|
           @relation.find_in_batches(**@options, start: @cursor) do |batch|
@@ -39,11 +43,16 @@ module Wurk
       end
 
       # `[relation, first_record.id]` pairs. `:batch_size` is normalized to
-      # `:of` so callers use one option name across all three helpers.
+      # `:of` so callers use one option name across all three helpers. Delete
+      # `:batch_size` unconditionally before the `||=` so a caller passing both
+      # `:of` and `:batch_size` can't leak `:batch_size` into `in_batches`
+      # (which has no such keyword) — upstream's `||=` short-circuits and
+      # raises ArgumentError there; valid single-option calls are unaffected.
       def relations
         ::Enumerator.new(-> { relations_size }) do |yielder|
           options = @options.dup
-          options[:of] ||= options.delete(:batch_size)
+          batch_size = options.delete(:batch_size)
+          options[:of] ||= batch_size
 
           @relation.in_batches(**options, start: @cursor) do |relation|
             yielder.yield(relation, relation.first.id)
