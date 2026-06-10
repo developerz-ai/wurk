@@ -450,12 +450,15 @@ class UniqueTest < Wurk::Test::UnitCase
       Wurk::Unique.enable!
       job = build_job(jid: 'kill-1', ttl: 600, queue: "kill#{@suffix}")
       key = seed_locked_retry_entry(job)
+      # FLUSHDB only runs per test class, so the DEAD zset can already hold
+      # entries from earlier `die_unretryable` tests — assert the delta.
+      before = redis_call('ZCARD', Wurk::Keys::DEAD)
 
       Wurk::RetrySet.new.find_job('kill-1').kill
 
       assert_equal('kill-1', redis_call('GET', key),
                    'a user-initiated UI kill must keep the unique lock (Ent parity)')
-      assert_equal 1, redis_call('ZCARD', Wurk::Keys::DEAD)
+      assert_equal before + 1, redis_call('ZCARD', Wurk::Keys::DEAD)
     end
   end
 

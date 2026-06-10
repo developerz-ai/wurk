@@ -3,6 +3,7 @@
 require 'json'
 require 'digest'
 require_relative 'middleware'
+require_relative 'lua'
 
 module Wurk
   # Sidekiq Enterprise unique jobs. Best-effort dedup at enqueue time keyed
@@ -33,16 +34,24 @@ module Wurk
     # Ent parity: a job that dies automatically releases its lock so a
     # duplicate can enqueue immediately. Manual UI kills route through
     # `DeadSet#kill(notify_failure: false)`, which skips death handlers —
-    # those keep the lock (Ent wiki, Ent-Unique-Jobs). CAS on the owning
-    # jid mirrors ServerMiddleware#release.
+    # those keep the lock (Ent wiki, Ent-Unique-Jobs). Atomic CAS-DEL via
+    # the shared Lua script mirrors ServerMiddleware#release.
     DEATH_HANDLER = lambda do |job, _exception|
       next unless Wurk::Unique.enabled?
       next unless Wurk::Unique.coerce_ttl(job['unique_for'])
 
-      key = Wurk::Unique.lock_key_for(job)
-      Wurk.redis do |conn|
-        conn.call('DEL', key) if conn.call('GET', key) == job['jid']
-      end
+      Wurk.redis { |conn| Wurk::Unique.release_if_owner(conn, Wurk::Unique.lock_key_for(job), job['jid']) }
+    end
+
+    # Atomic compare-and-delete of a unique lock key. Two-command
+    # GET-then-DEL is not a real CAS — the key can expire between the GET
+    # and DEL, letting a fresh enqueue grab it, and the bare DEL would
+    # then drop the new owner's lock. Routed through a single Lua script
+    # (`Wurk::Lua::RELEASE_IF_OWNER`) shared by `ServerMiddleware#release`
+    # (normal success/start release) and `DEATH_HANDLER` (automatic-death
+    # release) so the two paths cannot drift.
+    def self.release_if_owner(conn, key, jid)
+      Wurk::Lua::Loader.eval_cached(conn, :release_if_owner, keys: [key], argv: [jid])
     end
 
     # `Sidekiq::Enterprise.unique!` flips this on. The middleware pair is
@@ -256,13 +265,13 @@ module Wurk
         VALID_UNTIL.include?(sym) ? sym : DEFAULT_UNTIL
       end
 
-      # CAS DEL: only drop the key if the owning JID still matches ours.
-      # Prevents a long-overdue retry from releasing a fresh lock held by
-      # a re-enqueued duplicate after the original TTL expired.
+      # Atomic CAS-DEL: only drop the key if the owning JID still matches
+      # ours. Prevents a long-overdue retry from releasing a fresh lock
+      # held by a re-enqueued duplicate after the original TTL expired.
+      # Shares the Lua script with `DEATH_HANDLER` so both release paths
+      # have identical semantics.
       def release(key, jid)
-        redis_pool.with do |conn|
-          conn.call('DEL', key) if conn.call('GET', key) == jid
-        end
+        redis_pool.with { |conn| Wurk::Unique.release_if_owner(conn, key, jid) }
       rescue StandardError => e
         Wurk.logger&.warn { "Wurk::Unique release failed: #{e.class}: #{e.message}" }
       end

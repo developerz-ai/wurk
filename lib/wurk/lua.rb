@@ -12,7 +12,7 @@ module Wurk
   #
   # `:zpopbyscore` is reproduced verbatim from sidekiq-free.md §1.8 and
   # MUST NOT diverge — parity tests will fail on a single byte change.
-  module Lua
+  module Lua # rubocop:disable Metrics/ModuleLength
     ZPOPBYSCORE = <<~LUA
       local key, now = KEYS[1], ARGV[1]
       local jobs = redis.call("zrange", key, "-inf", now, "byscore", "limit", 0, 1)
@@ -149,6 +149,22 @@ module Wurk
       return 1
     LUA
 
+    # Ent Unique (§3): atomic compare-and-delete of a lock key. Replaces the
+    # two-command GET-then-DEL — between those calls the key can expire and a
+    # fresh enqueue can grab it, and the bare DEL would then drop the new
+    # owner's lock. Shared by `Unique::ServerMiddleware#release` (normal
+    # success/start release) and `Unique::DEATH_HANDLER` (automatic-death
+    # release) so the two paths cannot drift.
+    # KEYS = [unique:<sha256>]
+    # ARGV = [owning jid]
+    # Returns 1 when the key was deleted, 0 otherwise.
+    RELEASE_IF_OWNER = <<~LUA
+      if redis.call("get", KEYS[1]) == ARGV[1] then
+        return redis.call("del", KEYS[1])
+      end
+      return 0
+    LUA
+
     # Pro Fast API (§11): server-side LRANGE+LREM to delete a single job by
     # jid from a queue list. Pure-Ruby Queue#find_job + JobRecord#delete is
     # O(N) round-trips; this is O(1) round-trip with O(N) Lua work.
@@ -205,7 +221,8 @@ module Wurk
       batch_ack_complete: BATCH_ACK_COMPLETE,
       batch_invalidate: BATCH_INVALIDATE,
       fast_delete_job: FAST_DELETE_JOB,
-      fast_delete_by_class: FAST_DELETE_BY_CLASS
+      fast_delete_by_class: FAST_DELETE_BY_CLASS,
+      release_if_owner: RELEASE_IF_OWNER
     }.merge(FILE_SCRIPTS).freeze
 
     # SHA1 of each script source — matches what `SCRIPT LOAD` returns.
