@@ -111,6 +111,7 @@ class ApiEndpointsTest < Wurk::Test::EngineCase
 
     assert_ok
     job = json_body[:jobs].find { |j| j[:klass] == @class_name }
+
     assert_equal [99, '<encrypted>'], job[:args]
     assert_no_envelope_leak
   end
@@ -121,6 +122,7 @@ class ApiEndpointsTest < Wurk::Test::EngineCase
 
     assert_ok
     entry = json_body[:entries].find { |e| e[:klass] == @class_name }
+
     assert_equal [99, '<encrypted>'], entry[:args]
     assert_no_envelope_leak
   end
@@ -131,6 +133,7 @@ class ApiEndpointsTest < Wurk::Test::EngineCase
 
     assert_ok
     hit = json_body[:hits].find { |h| h[:jid] == jid }
+
     refute_nil hit
     assert_equal [99, '<encrypted>'], hit[:args]
     assert_no_envelope_leak
@@ -142,6 +145,7 @@ class ApiEndpointsTest < Wurk::Test::EngineCase
 
     assert_ok
     job = json_body[:jobs].find { |j| j[:klass] == @class_name }
+
     assert_equal [1, 2], job[:args]
   end
 
@@ -378,10 +382,10 @@ class ApiEndpointsTest < Wurk::Test::EngineCase
     assert_ok
     row = json_body[:queues].find { |q| q[:name] == name }
     refute_nil row, 'seeded queue should appear in the series'
+
     point = row[:points].find { |p| p[:at] == epoch }
 
-    assert_equal 8, point[:size]
-    assert_in_delta 4.5, point[:latency], 0.001
+    assert_equal({ at: epoch, size: 8, latency: 4.5 }, point)
   ensure
     cleanup_queue_metric(name, key)
   end
@@ -392,7 +396,7 @@ class ApiEndpointsTest < Wurk::Test::EngineCase
     get "/wurk/api/queue-history/1m?window=1h&queue=#{name}"
 
     assert_ok
-    assert_equal [name], json_body[:queues].map { |q| q[:name] }
+    assert_equal([name], json_body[:queues].map { |q| q[:name] })
   ensure
     cleanup_queue_metric(name, key)
   end
@@ -495,6 +499,7 @@ class ApiEndpointsTest < Wurk::Test::EngineCase
   # a rendered Web UI payload.
   def assert_no_envelope_leak
     body = last_response.body
+
     [::Wurk::Encryption::ENVELOPE_MARKER, 'aXYtY2FuYXJ5', 'Y3QtY2FuYXJ5', 'dGFnLWNhbmFyeQ=='].each do |marker|
       refute_includes body, marker, "envelope fragment #{marker.inspect} leaked into Web UI payload"
     end
@@ -575,7 +580,12 @@ class ApiEndpointsTest < Wurk::Test::EngineCase
   end
 
   def cleanup_queue_metric(name, key)
-    ::Wurk.redis { |c| c.call('DEL', key); c.call('SREM', 'queues', name) } if key
+    return unless key
+
+    ::Wurk.redis do |c|
+      c.call('DEL', key)
+      c.call('SREM', 'queues', name)
+    end
   end
 
   def seed_cron_loop

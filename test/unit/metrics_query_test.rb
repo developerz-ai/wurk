@@ -23,15 +23,7 @@ class MetricsQueryTest < Wurk::Test::UnitCase
         c.call('DEL', *keys) unless keys.empty?
         break if cursor == '0'
       end
-      # Per-class fields only — never DEL the shared minute/rollup buckets,
-      # other parallel tests for the same minute will lose their writes.
-      [@now, @now - 60, @now - 120].each do |t|
-        [Wurk::Metrics::History.minute_key(t), Wurk::Metrics::History.rollup_key(t)].each do |key|
-          [@klass_a, @klass_b].each do |kls|
-            c.call('HDEL', key, "#{kls}|p", "#{kls}|f", "#{kls}|ms", "#{kls}|x", "#{kls}nodelim")
-          end
-        end
-      end
+      delete_class_fields(c)
       # The queue_history tests SADD this suite's queues to the shared `queues`
       # set; remove them so queue_history(queues: nil) can't read a leftover.
       mine = c.call('SMEMBERS', 'queues').select { |q| q.include?(@suffix) }
@@ -39,6 +31,18 @@ class MetricsQueryTest < Wurk::Test::UnitCase
     end
   ensure
     super
+  end
+
+  # Per-class fields only — never DEL the shared minute/rollup buckets, or
+  # other parallel tests for the same minute will lose their writes.
+  def delete_class_fields(conn)
+    [@now, @now - 60, @now - 120].each do |t|
+      [Wurk::Metrics::History.minute_key(t), Wurk::Metrics::History.rollup_key(t)].each do |key|
+        [@klass_a, @klass_b].each do |kls|
+          conn.call('HDEL', key, "#{kls}|p", "#{kls}|f", "#{kls}|ms", "#{kls}|x", "#{kls}nodelim")
+        end
+      end
+    end
   end
 
   # ---- caps ---------------------------------------------------------------
@@ -235,14 +239,10 @@ class MetricsQueryTest < Wurk::Test::UnitCase
     write_qm('1m', @now, "#{q1}|sz" => 5, "#{q1}|lt" => 12.5, "#{q2}|sz" => 2, "#{q2}|lt" => 0)
 
     series = Wurk::Metrics::Query.queue_history('1m', 300, queues: [q1, q2], now: @now)
-    a = series.find { |s| s[:name] == q1 }
+    points = series.find { |s| s[:name] == q1 }[:points]
 
-    assert_equal 5, a[:points].size # window 300 / 60 = 5 points, gap-filled
-    last = a[:points].last
-
-    assert_equal((@now.to_i / 60) * 60, last[:at])
-    assert_equal 5, last[:size]
-    assert_in_delta 12.5, last[:latency], 0.001
+    assert_equal 5, points.size # window 300 / 60 = 5 points, gap-filled
+    assert_equal({ at: (@now.to_i / 60) * 60, size: 5, latency: 12.5 }, points.last)
   end
 
   def test_queue_history_gap_fills_missing_buckets_with_zeros

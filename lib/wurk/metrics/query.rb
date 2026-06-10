@@ -74,9 +74,13 @@ module Wurk
         names = queue_names(queues)
         return [] if names.empty?
 
-        hashes = pipeline_hgetall(starts.map { |s| Wurk::Metrics::QueueRollup.bucket_key(bucket, s) })
-                 .map { |h| h.is_a?(::Array) ? h.each_slice(2).to_h : (h || {}) }
+        hashes = queue_bucket_hashes(bucket, starts)
         names.map { |name| { name: name, points: queue_points(name, starts, hashes) } }
+      end
+
+      def queue_bucket_hashes(bucket, starts)
+        pipeline_hgetall(starts.map { |s| Wurk::Metrics::QueueRollup.bucket_key(bucket, s) })
+          .map { |h| h.is_a?(::Array) ? h.each_slice(2).to_h : (h || {}) }
       end
 
       MAX_QUEUE_SERIES = 25

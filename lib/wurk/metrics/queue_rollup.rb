@@ -109,14 +109,20 @@ module Wurk
           names = c.call('SMEMBERS', Keys::QUEUES_SET)
           next [] if names.empty?
 
-          raw = c.pipelined do |p|
-            names.each do |q|
-              p.call('LLEN', Keys.queue(q))
-              p.call('LRANGE', Keys.queue(q), -1, -1)
-            end
-          end
+          raw = pipelined_queue_reads(c, names)
           names.each_with_index.map do |name, i|
             [name, [raw[i * 2].to_i, head_latency(raw[(i * 2) + 1], now_ms)]]
+          end
+        end
+      end
+
+      # Per queue: LLEN (depth) then LRANGE tail (head-of-line job), in one
+      # round trip. Results interleave [len, [tail], len, [tail], …].
+      def pipelined_queue_reads(conn, names)
+        conn.pipelined do |p|
+          names.each do |q|
+            p.call('LLEN', Keys.queue(q))
+            p.call('LRANGE', Keys.queue(q), -1, -1)
           end
         end
       end

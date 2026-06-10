@@ -81,16 +81,15 @@ class MetricsQueueRollupTest < Wurk::Test::UnitCase
   def test_sample_tolerates_a_malformed_queue_payload
     Wurk.redis do |c|
       c.call('SADD', 'queues', @q1, @q2)
-      c.call('LPUSH', "queue:#{@q1}", 'not-json{')         # bad JSON
+      c.call('LPUSH', "queue:#{@q1}", 'not-json{') # bad JSON
       c.call('LPUSH', "queue:#{@q2}", Wurk.dump_json([1, 2])) # valid JSON, wrong shape
     end
     @qr.sample(@at)
     h = bucket_hash('1m')
+    fields = ["#{@q1}|sz", "#{@q1}|lt", "#{@q2}|sz", "#{@q2}|lt"]
 
-    assert_equal '1', h["#{@q1}|sz"]
-    assert_equal '0.0', h["#{@q1}|lt"]
-    assert_equal '1', h["#{@q2}|sz"]
-    assert_equal '0.0', h["#{@q2}|lt"]
+    assert_equal({ "#{@q1}|sz" => '1', "#{@q1}|lt" => '0.0', "#{@q2}|sz" => '1', "#{@q2}|lt" => '0.0' },
+                 h.slice(*fields))
   end
 
   def test_tick_samples_when_leader
@@ -142,7 +141,8 @@ class MetricsQueueRollupTest < Wurk::Test::UnitCase
       c.call('SADD', 'queues', name)
       depth.times do |i|
         age = i.zero? ? head_age_s : 0
-        c.call('LPUSH', "queue:#{name}", Wurk.dump_json('class' => 'J', 'args' => [], 'enqueued_at' => ::Time.now.to_f - age))
+        c.call('LPUSH', "queue:#{name}",
+               Wurk.dump_json('class' => 'J', 'args' => [], 'enqueued_at' => ::Time.now.to_f - age))
       end
     end
   end
