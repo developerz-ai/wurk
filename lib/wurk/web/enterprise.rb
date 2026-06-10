@@ -132,6 +132,14 @@ module Wurk
         def history(bucket, window:, now: ::Time.now)
           Wurk::Metrics::Query.history(bucket, window, now: now)
         end
+
+        # Per-queue size/latency gauge time-series for the Historical tab.
+        # `bucket` is '1m'/'5m'/'1h'; `window` is in seconds (clamped to the
+        # bucket's retention). `queues:` narrows to one queue (else every live
+        # queue). Returns `[{name:, points: [{at:, size:, latency:}, …]}, …]`.
+        def queue_history(bucket, window:, queues: nil, now: ::Time.now)
+          Wurk::Metrics::Query.queue_history(bucket, window, queues: queues, now: now)
+        end
       end
     end
   end

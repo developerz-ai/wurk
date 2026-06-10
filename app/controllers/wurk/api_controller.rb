@@ -228,6 +228,23 @@ module Wurk
       render json: { error: e.message }, status: :bad_request
     end
 
+    # Per-queue size/latency gauge time-series for the Metrics/Historical tab.
+    # `:bucket` is 1m/5m/1h; `?window=24h` (s/m/h/d) is clamped to the bucket's
+    # retention; optional `?queue=<name>` narrows to one queue. Each queue's
+    # `points` are Recharts-ready.
+    def queue_history
+      window = parse_window(params[:window])
+      queues = params[:queue].present? ? [params[:queue].to_s] : nil
+      series = ::Wurk::Web::Enterprise::Historical.queue_history(params[:bucket].to_s, window: window, queues: queues)
+      render json: {
+        bucket: params[:bucket].to_s,
+        window: window,
+        queues: series.map { |row| ::Wurk::Api::Serializers.queue_history_series(row) }
+      }
+    rescue ::ArgumentError => e
+      render json: { error: e.message }, status: :bad_request
+    end
+
     def search
       substr = params[:substr].to_s
       return render(json: { substr: substr, total: 0, hits: [] }) if substr.empty?

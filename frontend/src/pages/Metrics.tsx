@@ -9,6 +9,7 @@ import {
   YAxis,
   CartesianGrid,
   Tooltip,
+  Legend,
   ResponsiveContainer,
 } from 'recharts';
 import { t } from '../i18n';
@@ -41,6 +42,50 @@ interface HistoryResponse {
   bucket: string;
   window: number;
   series: HistoryPoint[];
+}
+
+// Matches Wurk::Api::Serializers.queue_history_series — one entry per queue,
+// each with a size/latency gauge sampled into the same time buckets as the
+// throughput chart (see Metrics::QueueRollup).
+interface QueueGaugePoint {
+  at: number;
+  size: number;
+  latency: number;
+}
+
+interface QueueSeries {
+  name: string;
+  points: QueueGaugePoint[];
+}
+
+interface QueueHistoryResponse {
+  bucket: string;
+  window: number;
+  queues: QueueSeries[];
+}
+
+// Distinct line colors per queue; the first reuses the accent so a
+// single-queue cluster matches the throughput chart's palette.
+const QUEUE_COLORS = [
+  'var(--accent)',
+  '#e0b341',
+  '#46b3a8',
+  '#d4737e',
+  '#8a7fd1',
+  '#5fa8d3',
+  '#c08457',
+  '#7bb274',
+] as const;
+
+const queueColor = (i: number) => QUEUE_COLORS[i % QUEUE_COLORS.length];
+
+// Hourly buckets span days, so show a date; sub-hour buckets show the clock.
+function bucketLabel(at: number, bucket: string): string {
+  const d = new Date(at * 1000);
+  const hh = String(d.getHours()).padStart(2, '0');
+  return bucket === '1h'
+    ? `${d.getMonth() + 1}/${d.getDate()} ${hh}:00`
+    : `${hh}:${String(d.getMinutes()).padStart(2, '0')}`;
 }
 
 const MINUTE_OPTIONS = [15, 30, 60, 120, 480] as const;
@@ -119,6 +164,95 @@ function HistoryCharts() {
   );
 }
 
+// Per-queue size + head-of-line latency gauges over the selected window
+// (Sidekiq Ent Historical tab, §5.2). One line per queue in each of the two
+// charts; the range selector mirrors the throughput chart's buckets.
+function QueueGaugeCharts() {
+  const [range, setRange] = useState(0);
+  const { bucket, window } = HISTORY_RANGES[range];
+
+  const { data, isLoading, isError } = useQuery<QueueHistoryResponse>({
+    queryKey: ['queue-history', bucket, window],
+    queryFn: () =>
+      fetch(`/wurk/api/queue-history/${bucket}?window=${window}`).then(
+        (r) => r.json() as Promise<QueueHistoryResponse>
+      ),
+    refetchInterval: 30000,
+  });
+
+  const queues = data?.queues ?? [];
+  // Every queue shares the same gap-filled bucket timestamps, so pivot to wide
+  // rows keyed by timestamp with one column per queue for Recharts.
+  const ats = queues[0]?.points.map((p) => p.at) ?? [];
+  const rowsFor = (field: 'size' | 'latency') =>
+    ats.map((at, i) => {
+      const row: Record<string, number | string> = { label: bucketLabel(at, bucket) };
+      queues.forEach((q) => {
+        row[q.name] = q.points[i]?.[field] ?? 0;
+      });
+      return row;
+    });
+  const hasData = queues.some((q) => q.points.some((p) => p.size > 0 || p.latency > 0));
+
+  const chart = (rows: ReturnType<typeof rowsFor>, decimals: boolean) => (
+    <ResponsiveContainer width="100%" height={240}>
+      <LineChart data={rows} margin={{ top: 4, right: 16, left: 0, bottom: 4 }}>
+        <CartesianGrid strokeDasharray="3 3" stroke="var(--border)" />
+        <XAxis dataKey="label" tick={{ fill: 'var(--text-muted)', fontSize: 11 }} minTickGap={48} />
+        <YAxis tick={{ fill: 'var(--text-muted)', fontSize: 11 }} allowDecimals={decimals} />
+        <Tooltip contentStyle={tooltipStyle} />
+        <Legend wrapperStyle={{ fontSize: 12 }} />
+        {queues.map((q, i) => (
+          <Line
+            key={q.name}
+            type="monotone"
+            dataKey={q.name}
+            stroke={queueColor(i)}
+            strokeWidth={2}
+            dot={false}
+          />
+        ))}
+      </LineChart>
+    </ResponsiveContainer>
+  );
+
+  return (
+    <div className="card" style={{ marginBottom: '1.5rem' }}>
+      <div style={{ display: 'flex', alignItems: 'center', marginBottom: '1rem' }}>
+        <div className="section-title">Queue Size &amp; Latency</div>
+        <select
+          className="select"
+          style={{ marginInlineStart: 'auto' }}
+          value={range}
+          onChange={(e) => setRange(Number(e.target.value))}
+          aria-label="Queue history range"
+        >
+          {HISTORY_RANGES.map((r, i) => (
+            <option key={r.label} value={i}>{r.label}</option>
+          ))}
+        </select>
+      </div>
+
+      {isLoading && <div className="empty-state"><span className="spinner" /></div>}
+      {isError && <div className="empty-state" style={{ color: 'var(--danger)' }}>{t('common.error')}</div>}
+      {data && !hasData && <div className="empty-state">No queue history yet — charts fill in as queues build up.</div>}
+
+      {data && hasData && (
+        <>
+          <div className="section-subtitle" style={{ fontSize: 12, color: 'var(--text-muted)', marginBottom: 4 }}>
+            Depth (jobs)
+          </div>
+          {chart(rowsFor('size'), false)}
+          <div className="section-subtitle" style={{ fontSize: 12, color: 'var(--text-muted)', margin: '1rem 0 4px' }}>
+            Latency (seconds)
+          </div>
+          {chart(rowsFor('latency'), true)}
+        </>
+      )}
+    </div>
+  );
+}
+
 export default function Metrics() {
   const [minutes, setMinutes] = useState(60);
 
@@ -162,6 +296,8 @@ export default function Metrics() {
       </PageHeader>
 
       <HistoryCharts />
+
+      <QueueGaugeCharts />
 
       {isLoading && (
         <div className="empty-state"><span className="spinner" /></div>

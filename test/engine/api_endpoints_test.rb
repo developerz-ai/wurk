@@ -370,6 +370,40 @@ class ApiEndpointsTest < Wurk::Test::EngineCase
     assert_match(/bucket/, json_body[:error])
   end
 
+  def test_queue_history_returns_per_queue_gauge_series
+    name = "qmqh-#{@ns}"
+    epoch, key = seed_queue_metric(name, size: 8, latency: 4.5)
+    get '/wurk/api/queue-history/1m?window=24h'
+
+    assert_ok
+    row = json_body[:queues].find { |q| q[:name] == name }
+    refute_nil row, 'seeded queue should appear in the series'
+    point = row[:points].find { |p| p[:at] == epoch }
+
+    assert_equal 8, point[:size]
+    assert_in_delta 4.5, point[:latency], 0.001
+  ensure
+    cleanup_queue_metric(name, key)
+  end
+
+  def test_queue_history_supports_single_queue_filter
+    name = "qmqf-#{@ns}"
+    _epoch, key = seed_queue_metric(name, size: 3, latency: 1.0)
+    get "/wurk/api/queue-history/1m?window=1h&queue=#{name}"
+
+    assert_ok
+    assert_equal [name], json_body[:queues].map { |q| q[:name] }
+  ensure
+    cleanup_queue_metric(name, key)
+  end
+
+  def test_queue_history_rejects_unknown_bucket
+    get '/wurk/api/queue-history/9z?window=1h'
+
+    assert_equal 400, last_response.status
+    assert_match(/bucket/, json_body[:error])
+  end
+
   # The SSE stream emits one `event: stats` tick and closes when
   # `?max_duration=0` is supplied. Production callers omit the param and the
   # loop runs until `STREAM_MAX_DURATION`.
@@ -527,6 +561,21 @@ class ApiEndpointsTest < Wurk::Test::EngineCase
     key = "jr|1m|#{epoch}"
     ::Wurk.redis { |c| c.call('HSET', key, 'p', processed, 'f', failed, 'ms', ms) }
     [epoch, key]
+  end
+
+  def seed_queue_metric(name, size:, latency:)
+    minutes_back = 1 + ((::Process.pid ^ object_id) % 1000)
+    epoch = ((::Time.now.to_i / 60) * 60) - (minutes_back * 60)
+    key = "qm|1m|#{epoch}"
+    ::Wurk.redis do |c|
+      c.call('SADD', 'queues', name)
+      c.call('HSET', key, "#{name}|sz", size, "#{name}|lt", latency)
+    end
+    [epoch, key]
+  end
+
+  def cleanup_queue_metric(name, key)
+    ::Wurk.redis { |c| c.call('DEL', key); c.call('SREM', 'queues', name) } if key
   end
 
   def seed_cron_loop
