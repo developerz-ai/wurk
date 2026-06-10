@@ -173,10 +173,16 @@ function QueueGaugeCharts() {
 
   const { data, isLoading, isError } = useQuery<QueueHistoryResponse>({
     queryKey: ['queue-history', bucket, window],
-    queryFn: () =>
-      fetch(`/wurk/api/queue-history/${bucket}?window=${window}`).then(
-        (r) => r.json() as Promise<QueueHistoryResponse>
-      ),
+    // Throw on a non-OK response so react-query's `isError` fires instead of an
+    // error payload (which has no `queues`) falling through to the empty state.
+    queryFn: async () => {
+      const r = await fetch(`/wurk/api/queue-history/${bucket}?window=${window}`);
+      if (!r.ok) {
+        const err = (await r.json().catch(() => null)) as { error?: string } | null;
+        throw new Error(err?.error ?? `queue-history request failed (${r.status})`);
+      }
+      return r.json() as Promise<QueueHistoryResponse>;
+    },
     refetchInterval: 30000,
   });
 

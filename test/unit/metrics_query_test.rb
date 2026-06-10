@@ -32,6 +32,10 @@ class MetricsQueryTest < Wurk::Test::UnitCase
           end
         end
       end
+      # The queue_history tests SADD this suite's queues to the shared `queues`
+      # set; remove them so queue_history(queues: nil) can't read a leftover.
+      mine = c.call('SMEMBERS', 'queues').select { |q| q.include?(@suffix) }
+      c.call('SREM', 'queues', *mine) unless mine.empty?
     end
   ensure
     super

@@ -35,14 +35,18 @@ function renderMetrics() {
 }
 
 // Route the component's three fetches by URL; the queue-history payload is the
-// one under test, the others return empty so the page renders.
-function mockFetch(queueHistory: unknown) {
+// one under test, the others return empty so the page renders. `queueOk: false`
+// drives the queue-history error path.
+function mockFetch(queueHistory: unknown, queueOk = true) {
   return vi.fn((url: string) => {
     let body: unknown = {};
-    if (url.includes('/queue-history/')) body = queueHistory;
-    else if (url.includes('/history/')) body = { bucket: '1m', window: 86400, series: [] };
+    let ok = true;
+    if (url.includes('/queue-history/')) {
+      body = queueHistory;
+      ok = queueOk;
+    } else if (url.includes('/history/')) body = { bucket: '1m', window: 86400, series: [] };
     else if (url.includes('/metrics')) body = { minutes: 60, top_jobs: [] };
-    return Promise.resolve({ json: () => Promise.resolve(body) } as Response);
+    return Promise.resolve({ ok, status: ok ? 200 : 400, json: () => Promise.resolve(body) } as Response);
   });
 }
 
@@ -95,5 +99,15 @@ describe('QueueGaugeCharts', () => {
 
     // Empty state is gone once there's data.
     expect(screen.queryByText(/No queue history yet/i)).toBeNull();
+  });
+
+  it('shows an error state (not the empty state) when the API fails', async () => {
+    vi.stubGlobal('fetch', mockFetch({ error: 'bucket must be one of …' }, false));
+
+    renderMetrics();
+
+    await waitFor(() => expect(screen.getByText('Error loading data')).toBeDefined());
+    expect(screen.queryByText(/No queue history yet/i)).toBeNull();
+    expect(screen.queryByText('Depth (jobs)')).toBeNull();
   });
 });

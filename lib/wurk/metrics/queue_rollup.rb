@@ -121,12 +121,17 @@ module Wurk
         end
       end
 
+      # A single malformed tail payload (bad JSON, or valid JSON of the wrong
+      # shape) yields 0.0 for that queue rather than bubbling up and skipping
+      # the whole sampling pass for every queue.
       def head_latency(lrange_result, now_ms)
         payload = lrange_result.is_a?(::Array) ? lrange_result.first : lrange_result
         return 0.0 if payload.nil?
 
-        Wurk::JobRecord.latency_from(Wurk.load_json(payload)['enqueued_at'], now_ms).round(2)
-      rescue ::JSON::ParserError
+        parsed = Wurk.load_json(payload)
+        enqueued_at = parsed.is_a?(::Hash) ? parsed['enqueued_at'] : nil
+        Wurk::JobRecord.latency_from(enqueued_at, now_ms).round(2)
+      rescue ::JSON::ParserError, ::TypeError, ::ArgumentError
         0.0
       end
 

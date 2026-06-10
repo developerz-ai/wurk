@@ -76,6 +76,23 @@ class MetricsQueueRollupTest < Wurk::Test::UnitCase
     assert_empty bucket_hash('1m')
   end
 
+  # A malformed tail payload on one queue must not abort the whole pass: that
+  # queue records latency 0.0 and the healthy queue is still sampled.
+  def test_sample_tolerates_a_malformed_queue_payload
+    Wurk.redis do |c|
+      c.call('SADD', 'queues', @q1, @q2)
+      c.call('LPUSH', "queue:#{@q1}", 'not-json{')         # bad JSON
+      c.call('LPUSH', "queue:#{@q2}", Wurk.dump_json([1, 2])) # valid JSON, wrong shape
+    end
+    @qr.sample(@at)
+    h = bucket_hash('1m')
+
+    assert_equal '1', h["#{@q1}|sz"]
+    assert_equal '0.0', h["#{@q1}|lt"]
+    assert_equal '1', h["#{@q2}|sz"]
+    assert_equal '0.0', h["#{@q2}|lt"]
+  end
+
   def test_tick_samples_when_leader
     seed_queue(@q1, depth: 2)
     @qr.define_singleton_method(:leader?) { true }
