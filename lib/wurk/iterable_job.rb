@@ -2,6 +2,8 @@
 
 require 'json'
 require_relative 'job'
+require_relative 'iterable_job/csv_enumerator'
+require_relative 'iterable_job/active_record_enumerator'
 
 module Wurk
   # Iterable jobs split long-running work into small, idempotent chunks.
@@ -68,6 +70,39 @@ module Wurk
 
     def each_iteration(*)
       raise NotImplementedError, "#{self.class} must override #each_iteration"
+    end
+
+    # --- enumerator builders (§6.4) -------------------------------------
+    # Helpers user code calls from `#build_enumerator` to get a resumable
+    # enumerator of `[item, cursor]` pairs. Cursor parity with Sidekiq:
+    # array/CSV use the integer index; ActiveRecord uses the record's
+    # primary key.
+
+    def array_enumerator(array, cursor:)
+      raise ArgumentError, 'array must be an Array' unless array.is_a?(::Array)
+
+      x = array.each_with_index.drop(cursor || 0)
+      x.to_enum { x.size }
+    end
+
+    def csv_enumerator(csv, cursor:)
+      CsvEnumerator.new(csv).rows(cursor: cursor)
+    end
+
+    def csv_batches_enumerator(csv, cursor:, **)
+      CsvEnumerator.new(csv).batches(cursor: cursor, **)
+    end
+
+    def active_record_records_enumerator(relation, cursor:, **)
+      ActiveRecordEnumerator.new(relation, cursor: cursor, **).records
+    end
+
+    def active_record_batches_enumerator(relation, cursor:, **)
+      ActiveRecordEnumerator.new(relation, cursor: cursor, **).batches
+    end
+
+    def active_record_relations_enumerator(relation, cursor:, **)
+      ActiveRecordEnumerator.new(relation, cursor: cursor, **).relations
     end
 
     # --- lifecycle hooks (no-op defaults; users override as needed) -----
@@ -289,4 +324,10 @@ module Wurk
       end
     end
   end
+
+  # Sidekiq drop-in: upstream homes the iterable module (and its enumerator
+  # classes) under `Sidekiq::Job::Iterable`. Since `Sidekiq::Job == Wurk::Job`,
+  # mirror that so `Sidekiq::Job::Iterable::CsvEnumerator` /
+  # `…::ActiveRecordEnumerator` resolve for ported code.
+  Job::Iterable = IterableJob unless Job.const_defined?(:Iterable, false)
 end

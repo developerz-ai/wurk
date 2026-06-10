@@ -477,8 +477,20 @@ module Sidekiq::IterableJob
   def cancel!         # sets hash field, async
   def cancelled?
   def iteration_key   # "it-#{jid}"
+
+  # enumerator builders — call from #build_enumerator (cursor parity: array/CSV
+  # use the integer index, ActiveRecord uses the record's primary key)
+  def array_enumerator(array, cursor:)                       # [item, index]
+  def csv_enumerator(csv, cursor:)                           # [row, index]; CSV obj
+  def csv_batches_enumerator(csv, cursor:, batch_size: 100)  # [rows_batch, index]
+  def active_record_records_enumerator(relation, cursor:, **opts)   # [record, pk]
+  def active_record_batches_enumerator(relation, cursor:, **opts)   # [batch, first_pk]
+  def active_record_relations_enumerator(relation, cursor:, **opts) # [relation, first_pk]
 end
 
+# Enumerator classes also reachable as Sidekiq::Job::Iterable::{CsvEnumerator,
+# ActiveRecordEnumerator}. CSV requires the host to have loaded `csv`; the AR
+# helpers require ActiveRecord.
 class Sidekiq::Job::Interrupted < RuntimeError; end
 ```
 
