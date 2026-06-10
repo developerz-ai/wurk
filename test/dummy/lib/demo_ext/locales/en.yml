@@ -1,0 +1,11 @@
+en:
+  title: Demo Locks
+  subtitle: "A Sidekiq-style Web extension rendered natively by the dashboard (issue #187). ERB views, locale strings, and this page's CSS all come from the extension itself."
+  digest: Digest
+  job: Held by
+  release: Release
+  empty: No locks held.
+  lock: Lock
+  held_by: Held by
+  not_found: This lock no longer exists (already released?).
+  back: All locks
