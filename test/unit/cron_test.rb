@@ -948,6 +948,38 @@ class CronTest < Wurk::Test::UnitCase
     assert_equal [1], lp.args
   end
 
+  # --- public Sidekiq::CronParser surface (#201) ------------------------
+
+  def test_sidekiq_cron_parser_aliases_the_in_tree_parser
+    assert_same Wurk::Cron::Parser, Sidekiq::CronParser
+  end
+
+  def test_cron_parser_next_returns_the_next_fire_time
+    nxt = Sidekiq::CronParser.new('0 4 * * *').next(Time.utc(2026, 6, 10, 1, 0, 0))
+
+    assert_equal Time.utc(2026, 6, 10, 4, 0, 0), nxt.utc
+  end
+
+  def test_cron_parser_next_honors_aliases
+    nxt = Sidekiq::CronParser.new('@daily').next(Time.utc(2026, 6, 10, 1, 0, 0))
+
+    assert_equal Time.utc(2026, 6, 11, 0, 0, 0), nxt.utc
+  end
+
+  # 0 9 * * * in Asia/Tokyo (UTC+9) = 09:00 JST = 00:00 UTC; the 06-10 instant
+  # (00:00 UTC) is before `from` (01:00 UTC), so the next is 06-11 00:00 UTC.
+  def test_cron_parser_next_is_timezone_aware
+    nxt = Sidekiq::CronParser.new('0 9 * * *').next(Time.utc(2026, 6, 10, 1, 0, 0), tz('Asia/Tokyo'))
+
+    assert_equal Time.utc(2026, 6, 11, 0, 0, 0), nxt.utc
+  end
+
+  def test_cron_parser_next_defaults_to_now_and_returns_a_future_time
+    nxt = Sidekiq::CronParser.new('* * * * *').next
+
+    assert_operator nxt, :>, Time.now - 1
+  end
+
   private
 
   def cleanup_queue(queue)

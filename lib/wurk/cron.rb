@@ -92,6 +92,16 @@ module Wurk
         nil
       end
 
+      # Sidekiq Ent `Sidekiq::CronParser#next`: the next fire Time strictly
+      # after `from` (default now), or nil if the schedule never matches within
+      # the lookahead window. `tz` evaluates the schedule in a timezone (an
+      # AS::TimeZone / TZInfo::Tz / IANA String); default is UTC. Thin wrapper
+      # over `next_fire_at` so there's a single crontab parser.
+      def next(from = ::Time.now, tz = nil)
+        epoch = next_fire_at(from.to_i, tz)
+        epoch && ::Time.at(epoch)
+      end
+
       def match?(time, tz = nil)
         match_components?(wall_clock(time.to_i, tz))
       end
