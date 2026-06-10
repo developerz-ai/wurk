@@ -92,6 +92,7 @@ module Sidekiq
   Config           = Wurk::Configuration
   Context          = Wurk::Context
   Cron             = Wurk::Cron
+  CronParser       = Wurk::Cron::Parser
   Periodic         = Wurk::Cron
   DeadSet          = Wurk::DeadSet
   Deploy           = Wurk::Deploy
