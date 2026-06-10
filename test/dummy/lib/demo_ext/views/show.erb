@@ -1,0 +1,8 @@
+<link rel="stylesheet" href="<%= asset_path('demo_ext.css') %>">
+<h2><%= t('lock') %> <code><%= h @digest %></code></h2>
+<% if @job %>
+  <p><%= t('held_by') %> <strong><%= h @job %></strong> · <%= relative_time(@since) %></p>
+<% else %>
+  <p><%= t('not_found') %></p>
+<% end %>
+<p><a href="<%= root_path %>locks">&larr; <%= t('back') %></a></p>

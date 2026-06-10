@@ -132,10 +132,12 @@ export default function Nav({ open, onClose }: NavProps) {
           )}
           {customTabs.map((tab) => (
             <li key={tab.path}>
-              {/* In-SPA route: /ext/:tab renders an Extension page that embeds
-                  the extension's own path in an iframe. */}
+              {/* In-SPA route: /ext/:tab renders an Extension page (native
+                  server-rendered view, or an iframe for bare tabs[]= tabs).
+                  Registered index paths end in "/" ("locks/"); strip it so the
+                  route param round-trips to the same tab. */}
               <NavLink
-                to={`/ext/${tab.path}`}
+                to={`/ext/${tab.path.replace(/\/+$/, '')}`}
                 onClick={onClose}
                 className="wurk-navlink"
                 style={({ isActive }) => ({

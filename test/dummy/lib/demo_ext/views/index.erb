@@ -1,0 +1,25 @@
+<link rel="stylesheet" href="<%= asset_path('demo_ext.css') %>">
+<h2><%= t('title') %></h2>
+<p class="demo-locks-subtitle"><%= t('subtitle') %></p>
+<table class="demo-locks">
+  <thead>
+    <tr><th><%= t('digest') %></th><th><%= t('job') %></th><th></th></tr>
+  </thead>
+  <tbody>
+    <% @locks.each do |digest, job| %>
+      <tr>
+        <td><a href="<%= root_path %>locks/<%= h digest %>"><code><%= h digest %></code></a></td>
+        <td><%= h job %></td>
+        <td>
+          <form method="post" action="<%= root_path %>locks/<%= h digest %>/delete">
+            <%= csrf_tag %>
+            <button type="submit" class="demo-locks-release"><%= t('release') %></button>
+          </form>
+        </td>
+      </tr>
+    <% end %>
+    <% if @locks.empty? %>
+      <tr><td colspan="3"><%= t('empty') %></td></tr>
+    <% end %>
+  </tbody>
+</table>

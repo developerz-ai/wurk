@@ -214,13 +214,13 @@ class WebConfigTest < Wurk::Test::UnitCase
     Wurk::Web.config.register_extension(Object, name: 'locks', tab: 'Locks', index: 'locks')
 
     assert_equal 'locks', Wurk::Web.config.tabs['Locks']
-    assert_includes Wurk::Web.config.custom_tabs, { name: 'Locks', path: 'locks' }
+    assert_includes Wurk::Web.config.custom_tabs, { name: 'Locks', path: 'locks', ext_name: 'locks' }
   end
 
   def test_register_is_an_alias_for_register_extension
     Wurk::Web.config.register(Object, name: 'status', tab: 'Status', index: 'status')
 
-    assert_includes Wurk::Web.config.custom_tabs, { name: 'Status', path: 'status' }
+    assert_includes Wurk::Web.config.custom_tabs, { name: 'Status', path: 'status', ext_name: 'status' }
   end
 
   def test_register_extension_returns_self_for_chaining
@@ -258,7 +258,8 @@ class WebConfigTest < Wurk::Test::UnitCase
   def test_tabs_hash_is_directly_mutable
     Wurk::Web.config.tabs['Expiry'] = 'expiry'
 
-    assert_includes Wurk::Web.config.custom_tabs, { name: 'Expiry', path: 'expiry' }
+    # Bare tabs[]= mutation registers no extension, so there's nothing to render (ext_name nil).
+    assert_includes Wurk::Web.config.custom_tabs, { name: 'Expiry', path: 'expiry', ext_name: nil }
   end
 
   def test_custom_job_info_rows_is_a_mutable_array
