@@ -46,6 +46,10 @@ class StatsTest < Wurk::Test::UnitCase
     @pool.with do |conn|
       conn.call('DEL', "queue:#{@queue}")
       conn.call('SREM', 'queues', @queue)
+      (@probe_queues || []).each do |q|
+        conn.call('DEL', "queue:#{q}")
+        conn.call('SREM', 'queues', q)
+      end
       @zset_members.each { |set, members| members.each { |m| conn.call('ZREM', set, m) } }
       if @added_identity
         conn.call('SREM', 'processes', @identity)
@@ -244,6 +248,28 @@ class StatsTest < Wurk::Test::UnitCase
     assert_kind_of Array, Wurk::Stats.new.queue_summaries
   end
 
+  # --- #214: largest-queue-first ordering (Sidekiq parity) ----------------
+
+  # SMEMBERS order is arbitrary; Sidekiq's Stats#queues sorts by size
+  # descending. Push three of my own queues in non-monotonic size order and
+  # assert that, among just my queues (siblings push their own concurrently),
+  # the result lists them largest-first.
+  def test_queues_ordered_by_size_descending
+    sizes = order_probe_queues # { name => size }, sizes 1/3/2
+
+    ordered = Wurk::Stats.new.queues.keys & sizes.keys # & keeps result order
+
+    assert_equal sizes.keys.sort_by { |q| -sizes[q] }, ordered
+  end
+
+  def test_queue_summaries_ordered_by_size_descending
+    sizes = order_probe_queues
+
+    ordered = Wurk::Stats.new.queue_summaries.map(&:name) & sizes.keys
+
+    assert_equal sizes.keys.sort_by { |q| -sizes[q] }, ordered
+  end
+
   def test_default_queue_latency_returns_float
     assert_kind_of Float, Wurk::Stats.new.default_queue_latency
   end
@@ -427,6 +453,26 @@ class StatsTest < Wurk::Test::UnitCase
       c.call('SADD', 'queues', @queue)
       c.call('LPUSH', "queue:#{@queue}", payload)
     end
+  end
+
+  # Three of my own queues with distinct, non-monotonic sizes (1, 3, 2) so the
+  # descending sort is observable and not accidentally satisfied by insertion
+  # order. Returns { name => size }; teardown drops them via @probe_queues.
+  def order_probe_queues
+    @probe_queues ||= []
+    spec = { "stats-q-a-#{@ns}" => 1, "stats-q-b-#{@ns}" => 3, "stats-q-c-#{@ns}" => 2 }
+    spec.each do |name, count|
+      @probe_queues << name
+      @pool.with do |c|
+        c.call('SADD', 'queues', name)
+        count.times do
+          c.call('LPUSH', "queue:#{name}",
+                 Wurk.dump_json('class' => @class_name, 'args' => [], 'queue' => name,
+                                'jid' => SecureRandom.hex(12), 'enqueued_at' => ms_now))
+        end
+      end
+    end
+    spec
   end
 
   def add_zset_member(set, suffix)
