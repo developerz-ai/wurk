@@ -41,15 +41,29 @@ end
 class InterruptHandlerAutoregisterTest < Wurk::Test::UnitCase
   parallelize_me!
 
-  # Two separate clocks (#216): fork + child boot + first BLMOVE is the
-  # load-sensitive part — under the full parallel suite (NCPU parallel_fork
-  # workers, each integration test forking its own swarm) it alone can exceed
-  # 30s on a loaded machine. It gets its own generous budget, observed as the
-  # pushed job leaving the public queue. The completion clock then only times
-  # the interrupt → re-push → resume round trip, which is fast once the child
-  # is up — so it stays tight enough to catch a true wiring regression.
-  BOOT_TIMEOUT = 60.0
-  POLL_TIMEOUT = 30.0
+  # Two separate clocks (#216): boot (fork + child boot + first BLMOVE),
+  # observed as the pushed job leaving the public queue, and completion (the
+  # interrupt → re-push → re-fetch → resume round trip), observed as @done_key.
+  # Both are load-sensitive: under the full parallel suite (NCPU parallel_fork
+  # workers, each integration test forking its own swarm) a single process's
+  # threads can be CPU-starved for tens of seconds. The completion round trip
+  # was originally budgeted tight (30s) on the assumption it's "fast once the
+  # child is up" — but it still needs the saturated child to get scheduled for
+  # a second fetch+execute, which on a loaded CI box can exceed 30s (#216
+  # recurrence). Give it the same generous budget as boot. This does NOT weaken
+  # the regression check: a true wiring break (interrupt not re-pushed, or not
+  # resumed) never writes @done_key, so the test still fails — just later — at
+  # any timeout. The budget only absorbs scheduling latency, it can't mask a bug.
+  #
+  # Under the dedicated `coverage (line+branch >= 90%)` CI gate, SimpleCov's
+  # per-line trace roughly doubles the wall-clock of every code path through
+  # lib/ — fork, child boot, BLMOVE, the interrupt re-push, the second fetch.
+  # 60s was hit on the dot on the coverage leg (recurrence of #216 there). Same
+  # scheduling-latency reasoning applies, just with a heavier multiplier; widen
+  # to 2× under COVERAGE so the budget tracks the actual load.
+  COVERAGE_LOAD = !ENV['COVERAGE'].nil?
+  BOOT_TIMEOUT = COVERAGE_LOAD ? 120.0 : 60.0
+  POLL_TIMEOUT = COVERAGE_LOAD ? 120.0 : 60.0
   POLL_INTERVAL = 0.1
   SHUTDOWN_TIMEOUT = 15
 
