@@ -53,9 +53,17 @@ for harness in "$ECOSYSTEM_DIR"/*/; do
 
   echo "==> $name @ $sha"
   ran=$((ran + 1))
+  # CI's setup-ruby bundler-cache writes `deployment: true` to .bundle/config,
+  # which forbids creating a fresh lockfile and restricts gem resolution to
+  # what's already in vendor/bundle. Harness Gemfiles ship without a lockfile
+  # and pull in dev deps the parent wurk Gemfile doesn't have (sidekiq-cron
+  # wants `minitest ~> 5.15`; wurk's bundle has 6.x), so the harness install
+  # must resolve fresh against rubygems. Env vars override the local config.
   if ! (
     cd "$checkout" &&
     export BUNDLE_GEMFILE="$ROOT/$harness/Gemfile" \
+           BUNDLE_DEPLOYMENT=false \
+           BUNDLE_FROZEN=false \
            ECOSYSTEM_CHECKOUT="$checkout" \
            REDIS_URL="$REDIS_URL" \
            TESTOPTS="$testopts" &&
