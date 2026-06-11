@@ -40,6 +40,7 @@ env:
 jobs:
   authorize:
     runs-on: ubuntu-latest
+    timeout-minutes: 10
     steps:
       - name: Verify actor is an approved deployer
         env:
@@ -60,6 +61,7 @@ jobs:
   build:
     needs: authorize
     runs-on: ubuntu-latest
+    timeout-minutes: 30
     # The required-reviewer gate lives here: under the Image Updater model the
     # pushed digest is the deploy trigger, so approval must pause the run BEFORE
     # the image ships, not after.
