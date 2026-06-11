@@ -152,7 +152,9 @@ class LuaTest < Wurk::Test::UnitCase
     qset  = "#{@ns}:queues"
     @pool.with do |c|
       Wurk::Lua::Loader.eval_cached(
-        c, :batch_push, keys: [bkey, jids, list, qset], argv: ['default', 'JID1', '{"jid":"JID1"}']
+        c, :batch_push,
+        keys: [bkey, jids, list, qset, "#{@ns}:b-x-died", "#{@ns}:dead-batches"],
+        argv: ['default', 'JID1', '{"jid":"JID1"}', 'x']
       )
 
       assert_equal '1', c.call('HGET', bkey, 'total')
@@ -160,6 +162,62 @@ class LuaTest < Wurk::Test::UnitCase
       assert_equal 1, c.call('SISMEMBER', jids, 'JID1')
       assert_equal 1, c.call('LLEN', list)
       assert_equal 1, c.call('SISMEMBER', qset, 'default')
+      c.call('DEL', list)
+    end
+  end
+
+  # #212: pushing a jid found in the died set is a manual retry of a dead
+  # job — it rejoins the live set without recounting (total/pending already
+  # include it), and draining the died set clears the death mark so a later
+  # full drain can fire :success.
+  def test_batch_push_dead_jid_rejoins_live_set_without_recount # rubocop:disable Minitest/MultipleAssertions
+    bkey = "#{@ns}:b-dr"
+    jids = "#{@ns}:b-dr-jids"
+    died = "#{@ns}:b-dr-died"
+    dead = "#{@ns}:dead-batches"
+    list = "#{@ns}:queue:default"
+    @pool.with do |c|
+      c.call('HSET', bkey, 'total', 1, 'pending', 1, 'death', 1)
+      c.call('SADD', died, 'JID1')
+      c.call('ZADD', dead, 1, 'dr')
+
+      Wurk::Lua::Loader.eval_cached(
+        c, :batch_push,
+        keys: [bkey, jids, list, "#{@ns}:queues", died, dead],
+        argv: ['default', 'JID1', '{"jid":"JID1"}', 'dr']
+      )
+
+      assert_equal '1', c.call('HGET', bkey, 'total')
+      assert_equal '1', c.call('HGET', bkey, 'pending')
+      assert_equal 1, c.call('SISMEMBER', jids, 'JID1')
+      assert_equal 0, c.call('SCARD', died)
+      assert_nil c.call('HGET', bkey, 'death'), 'death suppression must clear when died drains'
+      assert_nil c.call('ZSCORE', dead, 'dr'), 'bid must leave dead-batches'
+      assert_equal 1, c.call('LLEN', list)
+      c.call('DEL', list)
+    end
+  end
+
+  def test_batch_push_dead_jid_keeps_death_mark_while_other_dead_jids_remain
+    bkey = "#{@ns}:b-dp"
+    jids = "#{@ns}:b-dp-jids"
+    died = "#{@ns}:b-dp-died"
+    dead = "#{@ns}:dead-batches"
+    list = "#{@ns}:queue:default"
+    @pool.with do |c|
+      c.call('HSET', bkey, 'total', 2, 'pending', 2, 'death', 1)
+      c.call('SADD', died, 'JID1', 'JID2')
+      c.call('ZADD', dead, 1, 'dp')
+
+      Wurk::Lua::Loader.eval_cached(
+        c, :batch_push,
+        keys: [bkey, jids, list, "#{@ns}:queues", died, dead],
+        argv: ['default', 'JID1', '{"jid":"JID1"}', 'dp']
+      )
+
+      assert_equal %w[JID2], c.call('SMEMBERS', died)
+      assert_equal '1', c.call('HGET', bkey, 'death'), 'death mark must persist while a dead jid remains'
+      refute_nil c.call('ZSCORE', dead, 'dp'), 'bid must stay in dead-batches'
       c.call('DEL', list)
     end
   end

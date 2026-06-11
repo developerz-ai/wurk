@@ -58,13 +58,31 @@ module Wurk
 
     # Pro Batch: register a job into a batch and push it to its queue
     # atomically. Keeps total/pending in sync with the jids set.
-    # KEYS = [b-<bid>, b-<bid>-jids, queue_list, queues_set]
-    # ARGV = [queue_name, jid, job_json]
+    #
+    # A jid found in `b-<bid>-died` is a manual retry of a dead job (morgue
+    # "retry" / "add to queue") — it rejoins the live set without recounting:
+    # total and pending already include it, because a death never decrements
+    # pending. When that drains the died set the batch is no longer dead, so
+    # the durable `death` success-suppression flag clears and the bid leaves
+    # `dead-batches` — a later full drain can then fire `:success` (spec §2.4:
+    # success after the dead job is manually retried to success). The
+    # `b-<bid>-death` notify dedup key is untouched, so `:death` cannot
+    # re-fire.
+    # KEYS = [b-<bid>, b-<bid>-jids, queue_list, queues_set, b-<bid>-died, dead-batches]
+    # ARGV = [queue_name, jid, job_json, bid]
     # Returns 1.
     BATCH_PUSH = <<~LUA
-      redis.call("hincrby", KEYS[1], "total", 1)
-      redis.call("hincrby", KEYS[1], "pending", 1)
-      redis.call("sadd", KEYS[2], ARGV[2])
+      if redis.call("srem", KEYS[5], ARGV[2]) == 1 then
+        redis.call("sadd", KEYS[2], ARGV[2])
+        if redis.call("scard", KEYS[5]) == 0 then
+          redis.call("hdel", KEYS[1], "death")
+          redis.call("zrem", KEYS[6], ARGV[4])
+        end
+      else
+        redis.call("hincrby", KEYS[1], "total", 1)
+        redis.call("hincrby", KEYS[1], "pending", 1)
+        redis.call("sadd", KEYS[2], ARGV[2])
+      end
       redis.call("sadd", KEYS[4], ARGV[1])
       redis.call("lpush", KEYS[3], ARGV[3])
       return 1
