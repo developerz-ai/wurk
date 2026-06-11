@@ -149,6 +149,32 @@ module Wurk
       return 1
     LUA
 
+    # Pro Batch (§2.4): atomically append one callback triple to the
+    # `callbacks` JSON array on the batch hash. Server-side append (vs a
+    # Ruby read-modify-write) so two processes registering callbacks on the
+    # same reopened batch cannot lose each other's writes. Refuses to write
+    # when the batch hash is gone — resurrecting a bare hash would create a
+    # batch that can never fire anything.
+    # KEYS = [b-<bid>]
+    # ARGV = [callback triple JSON, event name]
+    # Returns -1 when the batch hash does not exist; otherwise the event's
+    # fired flag ("1", or nil when it has not fired yet).
+    BATCH_APPEND_CALLBACK = <<~LUA
+      if redis.call("exists", KEYS[1]) == 0 then
+        return -1
+      end
+      local raw = redis.call("hget", KEYS[1], "callbacks")
+      local list
+      if raw and raw ~= "" then
+        list = cjson.decode(raw)
+      else
+        list = {}
+      end
+      list[#list + 1] = cjson.decode(ARGV[1])
+      redis.call("hset", KEYS[1], "callbacks", cjson.encode(list))
+      return redis.call("hget", KEYS[1], ARGV[2])
+    LUA
+
     # Ent Unique (§3): atomic compare-and-delete of a lock key. Replaces the
     # two-command GET-then-DEL — between those calls the key can expire and a
     # fresh enqueue can grab it, and the bare DEL would then drop the new
@@ -220,6 +246,7 @@ module Wurk
       batch_ack_failed: BATCH_ACK_FAILED,
       batch_ack_complete: BATCH_ACK_COMPLETE,
       batch_invalidate: BATCH_INVALIDATE,
+      batch_append_callback: BATCH_APPEND_CALLBACK,
       fast_delete_job: FAST_DELETE_JOB,
       fast_delete_by_class: FAST_DELETE_BY_CLASS,
       release_if_owner: RELEASE_IF_OWNER

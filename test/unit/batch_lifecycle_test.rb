@@ -432,6 +432,74 @@ class BatchLifecycleTest < Wurk::Test::UnitCase
     assert_equal(1, @pool.with { |c| c.call('SCARD', "b-#{parent.bid}-pkids") })
   end
 
+  # --- #213: on() after first flush must persist --------------------------
+
+  def test_on_after_jobs_flush_persists_and_fires
+    batch = new_batch
+    batch.jobs { perform_one }
+    batch.on(:success, 'LateSuccess')
+
+    ack_success(batch.bid, jid_for(@queue, batch.bid))
+
+    assert_equal 1, callbacks_fired(event: 'success', bid: batch.bid),
+                 'callback registered after the first flush must persist and fire (#213)'
+  end
+
+  def test_on_reopened_batch_persists_and_fires
+    batch = new_batch
+    batch.jobs { perform_one }
+
+    Wurk::Batch.new(batch.bid).on(:complete, 'ReopenedComplete')
+    ack_success(batch.bid, jid_for(@queue, batch.bid))
+
+    assert_equal 1, callbacks_fired(event: 'complete', bid: batch.bid),
+                 'callback registered on a reopened batch must persist and fire (#213)'
+  end
+
+  def test_on_after_flush_preserves_earlier_callbacks
+    batch = new_batch(success: 'EarlySuccess')
+    batch.jobs { perform_one }
+    batch.on(:success, 'LateSuccess')
+
+    ack_success(batch.bid, jid_for(@queue, batch.bid))
+
+    assert_equal 2, callbacks_fired(event: 'success', bid: batch.bid)
+  end
+
+  def test_concurrent_reopeners_do_not_lose_each_others_callbacks
+    batch = new_batch
+    batch.jobs { perform_one }
+    # Both handles load the persisted spec list BEFORE either appends — a
+    # client-side read-modify-write would lose the first registration here.
+    reopen_a = Wurk::Batch.new(batch.bid)
+    reopen_b = Wurk::Batch.new(batch.bid)
+    reopen_a.on(:success, 'ReopenA')
+    reopen_b.on(:success, 'ReopenB')
+
+    ack_success(batch.bid, jid_for(@queue, batch.bid))
+
+    assert_equal 2, callbacks_fired(event: 'success', bid: batch.bid)
+  end
+
+  def test_on_unknown_batch_raises
+    ghost = Wurk::Batch.new('no-such-bid-213')
+
+    err = assert_raises(ArgumentError) { ghost.on(:success, 'Nope') }
+
+    assert_match(/no longer exists/, err.message)
+  end
+
+  def test_on_after_event_already_fired_does_not_enqueue_again
+    batch = new_batch(success: 'EarlySuccess')
+    batch.jobs { perform_one }
+    ack_success(batch.bid, jid_for(@queue, batch.bid))
+
+    batch.on(:success, 'TooLate')
+
+    assert_equal 1, callbacks_fired(event: 'success', bid: batch.bid),
+                 'registration after the event fired must not re-fire, only warn'
+  end
+
   private
 
   def track(batch)

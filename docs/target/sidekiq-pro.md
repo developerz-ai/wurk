@@ -105,6 +105,7 @@ Rules:
 - Callbacks run as ordinary Sidekiq jobs on `callback_queue`; retry on failure like any job.
 - `:success` and `:death` are **not mutually exclusive** — death fires first, success never fires unless the dead job is manually retried to success.
 - Child `:success` fires before parent `:success`. Child `:complete` fires before parent `:complete`. No ordering between child `:success` and parent `:complete`.
+- **Wurk (#213):** `#on` after the first flush — following a `#jobs` call or on a batch reopened by bid — persists the callback to `b-<bid>` immediately (atomic server-side append), so it is never silently dropped. Registering on a batch whose Redis hash no longer exists raises `ArgumentError`; registering for an event that already fired logs a warning (the callback will never run).
 
 ### 2.5 `Sidekiq::Batch::Status`
 

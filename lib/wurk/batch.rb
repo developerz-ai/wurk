@@ -157,7 +157,9 @@ module Wurk
       raise ArgumentError, "invalid event #{event.inspect}" unless VALID_EVENTS.include?(sym)
       raise ArgumentError, 'callback options must be a Hash' unless options.is_a?(Hash)
 
-      @callbacks << [sym.to_s, callback_target(callback), options]
+      entry = [sym.to_s, callback_target(callback), options]
+      @callbacks << entry
+      persist_callback!(entry) if @flushed_once
       self
     end
 
@@ -222,6 +224,24 @@ module Wurk
     def flush_buffer(buffer)
       payloads = buffer.drain
       Wurk::Client.new.flush_batched(payloads) unless payloads.empty?
+    end
+
+    # Like `linger=`, anything registered after the first flush must reach
+    # Redis — `Callbacks.enqueue_callbacks` reads specs from the hash, so an
+    # in-memory-only append would silently never fire (#213). Covers both
+    # `on` after `#jobs` and batches reopened by bid. The append runs
+    # server-side (Lua) so concurrent registrations from different processes
+    # can't lose each other to a read-modify-write race.
+    def persist_callback!(entry)
+      event = entry[0]
+      fired = Wurk.redis do |conn|
+        Wurk::Lua::Loader.eval_cached(conn, :batch_append_callback,
+                                      keys: ["b-#{@bid}"], argv: [entry.to_json, event])
+      end
+      raise ArgumentError, "cannot register #{event} callback: batch #{@bid} no longer exists" if fired == -1
+      return unless fired == '1'
+
+      Wurk.logger.warn("batch #{@bid}: #{event} callback registered after #{event} already fired — it will never run")
     end
 
     # First flush writes the core hash, registers in the global `batches`
