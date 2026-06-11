@@ -116,13 +116,17 @@ module Wurk
 
     # Pro `expires_in:` → absolute epoch-float `expiry` resolved once at push,
     # so the server middleware doesn't redo the math. Spec: sidekiq-pro.md §7.
+    # For scheduled jobs the clock origin is `at` (epoch seconds), not
+    # `created_at` (epoch millis) — otherwise any delay > expires_in makes the
+    # job born-expired: perform_in(2h) + expires_in: 1h must expire at 3h.
     # nil.respond_to?(:to_f) is true on modern Ruby (returns 0.0), so we must
     # gate on a non-nil duration before coercing.
     def stamp_expiry(item)
       d = item['expires_in']
-      return if d.nil?
+      return if d.nil? || !d.respond_to?(:to_f)
 
-      item['expiry'] ||= (item['created_at'].to_f / 1000.0) + d.to_f if d.respond_to?(:to_f)
+      origin = item['at'] ? item['at'].to_f : (item['created_at'].to_f / 1000.0)
+      item['expiry'] ||= origin + d.to_f
     end
 
     def report_unsafe(item, offender, mode)
