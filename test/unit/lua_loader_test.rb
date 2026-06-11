@@ -93,6 +93,52 @@ class LuaLoaderTest < Wurk::Test::UnitCase
     assert_equal 1, conn.call_count
   end
 
+  # --- eval_with_source ----------------------------------------------
+  #
+  # Source-embedded EVAL is the recovery path used by `push_batched_pipelined`
+  # when an EVALSHA-in-pipeline races a freshly-loaded script and re-raises
+  # NOSCRIPT (observed in CI on test (3.4, 7.2)). Because EVAL ships the
+  # script body, it cannot fail with NOSCRIPT no matter what the cache state
+  # is — that's exactly the invariant the retry depends on.
+  #
+  # We can't `SCRIPT FLUSH` against the real Redis because the script cache
+  # is global across the parallel_fork workers' isolated DBs, so a flush would
+  # destabilize peer tests. End-to-end EVAL semantics against real Redis are
+  # already covered by the existing eval_cached happy-path test (post-load
+  # EVALSHA hits the same code path as EVAL on the server).
+
+  def test_eval_with_source_uses_eval_not_evalsha
+    set_key = "#{@ns}:s2"
+    @pool.with do |c|
+      c.call('ZADD', set_key, 1, 'job-two')
+      result = Wurk::Lua::Loader.eval_with_source(c, :zpopbyscore, keys: [set_key], argv: [10])
+
+      assert_equal 'job-two', result
+    end
+  end
+
+  def test_eval_with_source_raises_argument_error_for_unknown_script
+    @pool.with do |c|
+      err = assert_raises(ArgumentError) do
+        Wurk::Lua::Loader.eval_with_source(c, :nope, keys: [], argv: [])
+      end
+
+      assert_match(/unknown Lua script/, err.message)
+    end
+  end
+
+  def test_eval_with_source_sends_eval_command_with_full_script_body
+    conn = FakeEvalConn.new(eventual_result: 'OK')
+    Wurk::Lua::Loader.eval_with_source(conn, :zpopbyscore, keys: ['k'], argv: ['0'])
+
+    # Single composite assertion: command shape AND script body in one place
+    # so reviewers see the EVAL-vs-EVALSHA invariant at a glance.
+    assert_equal(
+      { commands: ['EVAL'], source: Wurk::Lua::SCRIPTS[:zpopbyscore] },
+      { commands: conn.command_log, source: conn.last_script_source }
+    )
+  end
+
   # Stand-in connection that simulates Redis returning NOSCRIPT on the
   # first N EVALSHA calls, then succeeds. Records command names so the
   # test can assert the SCRIPT LOAD + retry sequence happened.
@@ -135,6 +181,24 @@ class LuaLoaderTest < Wurk::Test::UnitCase
     def call(*_args)
       @call_count += 1
       raise RedisClient::CommandError, @message
+    end
+  end
+
+  # Stand-in connection that captures the EVAL command shape so we can
+  # assert eval_with_source ships the full script body (never EVALSHA).
+  class FakeEvalConn
+    attr_reader :command_log, :last_script_source
+
+    def initialize(eventual_result:)
+      @eventual_result = eventual_result
+      @command_log = []
+      @last_script_source = nil
+    end
+
+    def call(*args)
+      @command_log << args[0]
+      @last_script_source = args[1] if args[0] == 'EVAL'
+      @eventual_result
     end
   end
 end

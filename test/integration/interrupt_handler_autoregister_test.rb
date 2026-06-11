@@ -41,11 +41,15 @@ end
 class InterruptHandlerAutoregisterTest < Wurk::Test::UnitCase
   parallelize_me!
 
-  # 60s, not 30: under the full parallel suite (NCPU parallel_fork workers, each
-  # integration test forking its own swarm) child boot + fetch + interrupt →
-  # re-push → resume can exceed 30s on loaded CI runners (#216). Tight enough
-  # to still catch a true wiring regression, loose enough not to flake.
-  POLL_TIMEOUT = 60.0
+  # Two separate clocks (#216): fork + child boot + first BLMOVE is the
+  # load-sensitive part — under the full parallel suite (NCPU parallel_fork
+  # workers, each integration test forking its own swarm) it alone can exceed
+  # 30s on a loaded machine. It gets its own generous budget, observed as the
+  # pushed job leaving the public queue. The completion clock then only times
+  # the interrupt → re-push → resume round trip, which is fast once the child
+  # is up — so it stays tight enough to catch a true wiring regression.
+  BOOT_TIMEOUT = 60.0
+  POLL_TIMEOUT = 30.0
   POLL_INTERVAL = 0.1
   SHUTDOWN_TIMEOUT = 15
 
@@ -78,12 +82,14 @@ class InterruptHandlerAutoregisterTest < Wurk::Test::UnitCase
     assert_same Wurk::Middleware::InterruptHandler, Sidekiq::Job::InterruptHandler
   end
 
-  def test_interrupted_iterable_job_is_repushed_and_resumes_without_retry # rubocop:disable Minitest/MultipleAssertions
+  def test_interrupted_iterable_job_is_repushed_and_resumes_without_retry
     @observer.call('SET', @armed_key, '1')
     push_job
     parent_pid = fork_swarm_supervisor(count: 1)
 
     begin
+      assert wait_for_fetch,
+             'swarm child never fetched the job — fork/boot/BLMOVE timed out (boot clock, not interrupt wiring)'
       assert wait_for_key(@done_key),
              'job never completed — interrupt should re-push to the queue head and resume'
       assert_equal 0, @observer.call('ZCARD', 'retry').to_i,
@@ -135,6 +141,19 @@ class InterruptHandlerAutoregisterTest < Wurk::Test::UnitCase
     deadline = monotonic_now + POLL_TIMEOUT
     while monotonic_now < deadline
       return true if @observer.call('GET', key)
+
+      sleep POLL_INTERVAL
+    end
+    false
+  end
+
+  # The job is pushed before the fork, so the public queue draining to zero is
+  # the first observable proof the child booted and its fetcher ran a BLMOVE.
+  # (A completed job also leaves the queue empty, so a fast run passes trivially.)
+  def wait_for_fetch # rubocop:disable Naming/PredicateMethod
+    deadline = monotonic_now + BOOT_TIMEOUT
+    while monotonic_now < deadline
+      return true if @observer.call('LLEN', "queue:#{@queue_name}").to_i.zero?
 
       sleep POLL_INTERVAL
     end

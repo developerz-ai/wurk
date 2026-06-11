@@ -266,19 +266,18 @@ module Wurk
 
     # Outside of test boots and `SCRIPT FLUSH` the rescue branch is dead
     # code; the eager `script_load_all` after fork keeps the script cache
-    # hot for the life of the connection.
+    # hot for the life of the connection. The retry uses EVAL (source-embedded)
+    # instead of EVALSHA so a freshly-loaded script can't race the retry and
+    # NOSCRIPT a second time under heavy CI load (WorkerTest 3.4/7.2 flake).
+    # `script_load_all` still primes the cache so the *next* pipeline returns
+    # to the EVALSHA fast path.
     def push_batched_pipelined(conn, batched, now)
-      attempts = 0
-      begin
-        conn.pipelined { |pipe| push_batched(pipe, batched, now) }
-      rescue RedisClient::CommandError => e
-        raise unless e.message.to_s.start_with?('NOSCRIPT')
-        raise if attempts.positive?
+      conn.pipelined { |pipe| push_batched(pipe, batched, now) }
+    rescue RedisClient::CommandError => e
+      raise unless e.message.to_s.start_with?('NOSCRIPT')
 
-        attempts += 1
-        Wurk::Lua::Loader.script_load_all(conn)
-        retry
-      end
+      Wurk::Lua::Loader.script_load_all(conn)
+      conn.pipelined { |pipe| push_batched(pipe, batched, now, eval_method: :eval_with_source) }
     end
 
     def push_plain(conn, payloads, now)
@@ -297,11 +296,14 @@ module Wurk
     # SADDs jid into the live set, registers the queue, LPUSHes the payload —
     # all atomically. One Redis round-trip per job (no pipeline grouping)
     # because the lua needs per-job KEYS bound. Acceptable cost: batch
-    # enqueue is not the hot path; correctness is.
-    def push_batched(conn, payloads, now)
+    # enqueue is not the hot path; correctness is. `eval_method` is the
+    # Wurk::Lua::Loader entry point (`:eval_cached` for the hot EVALSHA path,
+    # `:eval_with_source` for the EVAL-source retry).
+    def push_batched(conn, payloads, now, eval_method: :eval_cached)
       payloads.each do |j|
         j['enqueued_at'] = now
-        Wurk::Lua::Loader.eval_cached(
+        Wurk::Lua::Loader.public_send(
+          eval_method,
           conn,
           :batch_push,
           keys: ["b-#{j['bid']}", "b-#{j['bid']}-jids", "queue:#{j['queue']}", 'queues'],

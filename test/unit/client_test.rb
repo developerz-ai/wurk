@@ -89,7 +89,7 @@ class ClientTest < Wurk::Test::UnitCase
     cleanup_batch
   end
 
-  # --- push_batched_pipelined NOSCRIPT recovery: line 275 else / 276 else --
+  # --- push_batched_pipelined NOSCRIPT recovery (else branch) --------------
 
   def test_flush_batched_reloads_lua_after_script_flush
     @pool.with { |c| c.call('SCRIPT', 'FLUSH') }
@@ -97,12 +97,12 @@ class ClientTest < Wurk::Test::UnitCase
     @client.flush_batched([batched_payload(jid: 'b2' + ('0' * 22))])
 
     assert_equal 1, @pool.with { |c| c.call('LLEN', "queue:#{@queue}") },
-                 'NOSCRIPT must trigger one reload + retry, then succeed'
+                 'NOSCRIPT must trigger script_load_all + EVAL-source retry, then succeed'
   ensure
     cleanup_batch
   end
 
-  # --- push_batched_pipelined re-raise on non-NOSCRIPT: line 275 then -----
+  # --- push_batched_pipelined re-raise on non-NOSCRIPT (then branch) -------
 
   def test_flush_batched_reraises_non_noscript_command_error
     # b-<bid> as a String makes the BATCH_PUSH Lua's HINCRBY raise WRONGTYPE
@@ -113,12 +113,6 @@ class ClientTest < Wurk::Test::UnitCase
     assert_raises(RedisClient::CommandError) { @client.flush_batched([payload]) }
   ensure
     cleanup_batch
-  end
-
-  def test_flush_batched_second_noscript_reraises_unreachable
-    skip 'L276 then (re-raise on a *second* NOSCRIPT) is unreachable with real ' \
-         'Redis: SCRIPT LOAD always makes the SHA available, so the retry can ' \
-         'never see NOSCRIPT again. Reaching it would require mocking Redis.'
   end
 
   # --- push_bulk all-halted: line 163 else (compacted empty) --------------
