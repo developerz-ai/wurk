@@ -462,6 +462,24 @@ class UniqueTest < Wurk::Test::UnitCase
     end
   end
 
+  # #207 × #211: API kills DO reach death handlers (OSS parity) while the
+  # unique lock is still retained — DEATH_HANDLER recognizes the synthesized
+  # "Job killed by API" exception and skips the release.
+  def test_api_kill_fires_other_death_handlers_but_keeps_lock
+    ENABLE_MUTEX.synchronize do
+      Wurk::Unique.enable!
+      job = build_job(jid: 'kill-2', ttl: 600, queue: "kill2#{@suffix}")
+      key = seed_locked_retry_entry(job)
+
+      observe_death_handlers do |observed|
+        Wurk::RetrySet.new.find_job('kill-2').kill
+
+        assert_includes observed, ['kill-2', Wurk::DeadSet::API_KILL_MESSAGE]
+        assert_equal('kill-2', redis_call('GET', key))
+      end
+    end
+  end
+
   # ---- ServerMiddleware: lock release strategy -----------------------
 
   def test_server_middleware_no_op_when_disabled
@@ -652,6 +670,15 @@ class UniqueTest < Wurk::Test::UnitCase
 
   def redis_call(*args)
     Wurk.redis { |c| c.call(*args) }
+  end
+
+  def observe_death_handlers
+    observed = []
+    handler = ->(job, ex) { observed << [job['jid'], ex.message] }
+    Wurk.configuration.death_handlers << handler
+    yield observed
+  ensure
+    Wurk.configuration.death_handlers.delete(handler)
   end
 
   # Scripted fake connection for racing the SET NX / GET / SET NX sequence

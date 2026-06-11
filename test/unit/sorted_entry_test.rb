@@ -140,7 +140,9 @@ class SortedEntryTest < Wurk::Test::UnitCase
     assert_equal(1, @pool.with { |c| c.call('LLEN', "queue:#{queue}") })
   end
 
-  def test_add_to_queue_decrements_retry_count
+  # Sidekiq's add_to_queue pushes the payload untouched — the decrement
+  # belongs to #retry (see #206).
+  def test_add_to_queue_keeps_retry_count
     queue = unique_queue
     entry = add_entry(item: base_item('retry_count' => 3, 'queue' => queue))
 
@@ -148,11 +150,11 @@ class SortedEntryTest < Wurk::Test::UnitCase
 
     raw = @pool.with { |c| c.call('LRANGE', "queue:#{queue}", 0, 0) }.first
 
-    assert_equal 2, Wurk.load_json(raw)['retry_count']
+    assert_equal 3, Wurk.load_json(raw)['retry_count']
   end
 
-  # No `retry_count` key ⇒ the decrement guard's else branch: enqueue the
-  # message unchanged, never inserting a retry_count field.
+  # No `retry_count` key ⇒ enqueue the message unchanged, never inserting
+  # a retry_count field.
   def test_add_to_queue_leaves_message_unchanged_without_retry_count
     queue = unique_queue
     entry = add_entry(item: base_item('queue' => queue))
@@ -181,7 +183,10 @@ class SortedEntryTest < Wurk::Test::UnitCase
     assert_equal(0, @pool.with { |c| c.call('LLEN', "queue:#{queue}") })
   end
 
-  def test_retry_removes_and_pushes_without_decrement
+  # The count was bumped when the job entered the retry set and the next
+  # failure bumps it again — Sidekiq decrements here so a manual "Retry now"
+  # doesn't consume an attempt (#206).
+  def test_retry_decrements_retry_count
     queue = unique_queue
     entry = add_entry(item: base_item('retry_count' => 3, 'queue' => queue))
 
@@ -189,7 +194,19 @@ class SortedEntryTest < Wurk::Test::UnitCase
 
     raw = @pool.with { |c| c.call('LRANGE', "queue:#{queue}", 0, 0) }.first
 
-    assert_equal 3, Wurk.load_json(raw)['retry_count']
+    assert_equal 2, Wurk.load_json(raw)['retry_count']
+  end
+
+  # No `retry_count` key ⇒ the decrement guard's else branch: push unchanged.
+  def test_retry_without_retry_count_pushes_unchanged
+    queue = unique_queue
+    entry = add_entry(item: base_item('queue' => queue))
+
+    entry.retry
+
+    raw = @pool.with { |c| c.call('LRANGE', "queue:#{queue}", 0, 0) }.first
+
+    refute Wurk.load_json(raw).key?('retry_count')
   end
 
   # --- kill --------------------------------------------------------------
@@ -204,7 +221,35 @@ class SortedEntryTest < Wurk::Test::UnitCase
     refute_nil(@pool.with { |c| c.call('ZSCORE', 'dead', entry.value) })
   end
 
+  # Sidekiq fires death handlers on API/UI kills by default, synthesizing
+  # RuntimeError("Job killed by API") with a backtrace (#207).
+  def test_kill_fires_death_handlers_by_default
+    entry = add_entry
+    @dead_members << entry.value
+
+    with_death_handler do |received|
+      entry.kill
+
+      ex = received[entry.jid]
+
+      assert_instance_of RuntimeError, ex
+      assert_equal Wurk::DeadSet::API_KILL_MESSAGE, ex.message
+      refute_nil ex.backtrace
+    end
+  end
+
   private
+
+  # Registers a jid-keyed capture handler for the block — keyed by jid
+  # because the handler list is process-global and this class is parallel.
+  def with_death_handler
+    received = {}
+    handler = ->(job, ex) { received[job['jid']] = ex }
+    Wurk.configuration.death_handlers << handler
+    yield received
+  ensure
+    Wurk.configuration.death_handlers.delete(handler)
+  end
 
   def add_entry(score: 100.0, jid: nil, item: nil)
     jid ||= SecureRandom.hex(12)

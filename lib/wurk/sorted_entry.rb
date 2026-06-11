@@ -42,35 +42,37 @@ module Wurk
     # ZINCRBY to shift the score; positive deltas reschedule into the future.
     # Sidekiq passes the absolute target time; we compute the delta here so
     # the call survives clock skew between caller and Redis.
-    def reschedule(at) # rubocop:disable Naming/MethodParameterName
+    def reschedule(at)
       Wurk.redis { |conn| conn.call('ZINCRBY', @parent.name, at.to_f - @score, value) }
     end
 
-    # Removes this entry, decrements `retry_count` by one (so the worker treats
-    # the next attempt as a re-do, not a fresh retry), and re-enqueues via the
-    # client. Wire-compat with Sidekiq's "Retry now" UI action.
+    # Removes this entry and re-enqueues it via the client with the payload
+    # untouched. Backs the scheduled/dead "add to queue" actions — Sidekiq's
+    # add_to_queue does not touch `retry_count`.
     def add_to_queue
+      remove_job do |message|
+        Client.new.push(message)
+      end
+    end
+
+    # Same flow but decrements `retry_count` first: the count was already
+    # incremented when the job entered the retry set, and the next failure
+    # bumps it again — without the decrement a manual "Retry now" would
+    # consume an attempt. Wire-compat with Sidekiq's SortedEntry#retry.
+    def retry
       remove_job do |message|
         message['retry_count'] = message['retry_count'].to_i - 1 if message['retry_count']
         Client.new.push(message)
       end
     end
 
-    # Same flow as add_to_queue but keeps `retry_count` intact. Used for the
-    # "retry" action from the retry set (count was already incremented when
-    # the job entered retry; don't double-bump).
-    def retry
-      remove_job do |message|
-        Client.new.push(message)
-      end
-    end
-
     # Removes this entry from its parent set and writes it to the dead set.
-    # `notify_failure: false` because the kill is user-initiated (UI action),
-    # not a retry-exhausted event — death_handlers don't fire.
+    # Death handlers fire with the synthesized "Job killed by API" exception
+    # (Sidekiq's default) so error trackers and the batch death path observe
+    # API/UI kills.
     def kill
       remove_job do |message|
-        DeadSet.new.kill(Wurk.dump_json(message), notify_failure: false)
+        DeadSet.new.kill(Wurk.dump_json(message))
       end
     end
 
