@@ -4,16 +4,37 @@ All notable changes to Wurk are recorded here. Format: [Keep a Changelog](https:
 
 ## [Unreleased]
 
-## [1.0.0.rc1] - 2026-06-02
+## [1.0.0] - 2026-06-11
 
-First v1.0.0 release candidate, and the first gem published through the keyless
-(OIDC trusted publishing) release pipeline.
+First stable release. Wurk is a 100% drop-in replacement for Sidekiq, Sidekiq
+Pro, and Sidekiq Enterprise — same Redis schema, same job JSON, same Ruby DSL —
+with fork-based parallelism and a precompiled React dashboard, all free in one
+gem. This release completes OSS + Pro + Ent feature parity (roadmap #147) and
+adds a `require "sidekiq"` compatibility entrypoint so existing apps and
+third-party gems swap in with a one-line `gem "sidekiq"` → `gem "wurk"` change.
 
 ### Added
-- `Sidekiq::Testing` drop-in: `inline!` / `fake!` / `disable!` (global or block-scoped), the in-memory `Sidekiq::Queues` store, and the `Worker`/`Job` test helpers (`.jobs`, `.clear`, `.drain`, `.perform_one`, `.process_job`, `.drain_all`, `.clear_all`) + `Sidekiq::EmptyQueueError`.
+- **`require "sidekiq"` drop-in** — a `sidekiq` compatibility shim gem + entrypoint so existing apps and ecosystem gems load Wurk transparently; validated by a real third-party ecosystem suite (sidekiq-cron green on Wurk). (#204)
+- **`Sidekiq::Testing`** — `inline!` / `fake!` / `disable!` (global or block-scoped), the in-memory `Sidekiq::Queues` store, and the `Worker`/`Job` test helpers (`.jobs`, `.clear`, `.drain`, `.perform_one`, `.process_job`, `.drain_all`, `.clear_all`) + `Sidekiq::EmptyQueueError`.
+- **IterableJob enumerator helpers** — `array_enumerator`, `csv_enumerator` / `csv_batches_enumerator`, and the `active_record_*_enumerator` family, with Sidekiq cursor parity. (#200)
+- **Periodic / cron** — public `Sidekiq::CronParser` with `#next` for cron-expression introspection (#201); per-loop execution history in the dashboard (#117).
+- **Enterprise historical metrics** — `Sidekiq::History` snapshotter + `config.retain_history` DSL (#123), the `history:metrics` capped Redis stream for migration parity (#125), and per-queue size/latency historical gauges in the dashboard (#124, #126).
+- **Swarm lifecycle** — honor `SIDEKIQ_MAXMEM_MB` for memory-based child recycling (#119) and fire an `on(:fork)` lifecycle event in each child after fork (#121).
+- **Dashboard** — render third-party Web-extension views/assets natively in the SPA (#187); design follow-ups: human-readable latency, host-grouped Busy page, count-up stats (#217).
 
 ### Changed
-- Release workflow now publishes to RubyGems via **trusted publishing (OIDC)** — no long-lived `GEM_HOST_API_KEY` secret. On a `v*` tag it precompiles the dashboard, gates (`release:check` now also verifies the git tag matches `Wurk::VERSION` and the asset manifest is non-empty), builds the gem and asserts the dashboard bundle is *inside* the `.gem` (`release:package`), `gem push`es via the OIDC token, and cuts a GitHub Release with the matching CHANGELOG section as notes and the `.gem` attached.
+- **Keyless releases** — the release workflow publishes to RubyGems via **trusted publishing (OIDC)**, no long-lived `GEM_HOST_API_KEY`. On a `v*` tag it precompiles the dashboard, gates (`release:check` verifies the git tag matches `Wurk::VERSION` and the asset manifest is non-empty), builds the gem and asserts the dashboard bundle ships *inside* the `.gem` (`release:package`), `gem push`es via the OIDC token, and cuts a GitHub Release with the matching CHANGELOG section as notes and the `.gem` attached.
+- CI standardized on Blacksmith runners with consistent concurrency + job timeouts. (#230)
+
+### Fixed
+- **Boot** — enter server mode before the host app loads so `Sidekiq.configure_server` blocks fire in real workers. (#191)
+- **Batches (Pro)** — gate a parent batch's `:complete`/`:success` on still-running child batches (#209); fire `:success` correctly after a dead job is manually retried to success, including the ancestor-batch case (#212, #226); persist `Batch#on` callbacks registered after the first `#jobs` flush instead of dropping them (#213).
+- **Unique jobs (Ent)** — re-push the job's own jid at schedule/retry promotion instead of losing it to its own lock, and release the lock when a job dies automatically. (#205, #211)
+- **Cron (Ent)** — resolve IANA timezone strings via TZInfo instead of mutating process-global `ENV['TZ']`, so concurrent jobs never observe the wrong zone. (#210)
+- **Scheduling (Pro)** — compute `expires_in` for a scheduled job from its schedule time, not enqueue time, so a delay longer than `expires_in` no longer makes the job born-expired. (#208)
+- **Data API (OSS)** — `Sidekiq::Stats#queues` / `#queue_summaries` sort by size descending to match Sidekiq (#214); fix `SortedEntry#retry` / `#add_to_queue` retry_count handling and fire death handlers on API kill (#206, #207).
+- **Dashboard** — redact encrypted job arguments as `"<encrypted>"`. (#118)
+- **Test reliability** — give the interrupt-repush integration test's completion clock the same load budget as its boot clock, and 2× that under the coverage CI leg, so it no longer flakes under full-suite CPU saturation. (#216)
 
 ## [0.0.5] - 2026-06-01
 
