@@ -15,15 +15,30 @@ module Wurk
     module Callbacks
       module_function
 
-      # Called from the server middleware after BATCH_ACK_SUCCESS. Fires
-      # `:complete` when live jids hit 0; fires `:success` when pending
-      # also hits 0 and there have been no deaths.
+      # Called from the server middleware after BATCH_ACK_SUCCESS (and from
+      # DeathHandler when a death drains the last live jid). Fires `:complete`
+      # when live jids hit 0; fires `:success` when pending also hits 0 and
+      # there have been no deaths.
+      #
+      # Both fires are additionally gated on `b-<bid>-pkids` being empty —
+      # children whose own subtree hasn't finished yet (#209). Spec §2.4:
+      # child `:complete`/`:success` fire before the parent's, so when the
+      # parent's *own* last job acks while a child batch is still running,
+      # nothing fires here; the last child's propagate_to_parent re-invokes
+      # this and fires then. The SREM in pkids_drained? happens before that
+      # re-invocation, so exactly one of the racing paths fires (dedup_set
+      # absorbs the overlap).
       def maybe_fire(bid, pending:, live:)
         return unless live.zero?
+        return unless kids_finished?(bid)
 
         fire_complete(bid)
         fire_success(bid) if pending.zero? && !death_fired?(bid)
         propagate_to_parent(bid)
+      end
+
+      def kids_finished?(bid)
+        Wurk.redis { |conn| conn.call('SCARD', "b-#{bid}-pkids") }.to_i.zero?
       end
 
       # Fired from Wurk::Batch::DeathHandler on the FIRST permanent death
@@ -166,10 +181,11 @@ module Wurk
         )
       end
 
-      # When a child batch's `:success` fires, decrement the parent's pkids
-      # set so the parent's own `:success` waits on the full subtree. When
-      # parent's pkids hits 0 *and* its own pending is 0, parent's success
-      # fires too.
+      # When a child batch finishes (its live jids hit 0 — by success or
+      # death), remove it from the parent's pkids set so the parent's own
+      # callbacks wait on the full subtree. When the parent's pkids hits 0,
+      # re-run the parent's maybe_fire: if its own counts are already at
+      # zero (the parent-acks-first race), this is what finally fires it.
       def propagate_to_parent(bid)
         parent_bid = parent_bid_for(bid)
         return if parent_bid.nil? || parent_bid.empty?
