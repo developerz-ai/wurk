@@ -516,6 +516,42 @@ class BatchLifecycleTest < Wurk::Test::UnitCase
                  'a second recovery still fires parent :success'
   end
 
+  # Retry window race (raised in PR #227 review): after a child's dead job has
+  # been retried (BATCH_PUSH cleared the *child's* death mark and re-added the
+  # jid to child.live) but BEFORE the worker actually runs it, the parent's
+  # own job acks. The original death cascade already SREM'd the child from the
+  # parent's pkids set and BATCH_PUSH doesn't re-add it — so kids_finished?
+  # is true. But the parent's own cascaded death mark is untouched (BATCH_PUSH
+  # operates on the child bid only; clear_death_on_recovery only runs from a
+  # *successful* child drain via propagate_to_parent), so subtree_dead? is
+  # still true and :success must stay suppressed until the retried job
+  # actually succeeds.
+  def test_parent_own_ack_in_retry_window_keeps_success_suppressed # rubocop:disable Minitest/MultipleAssertions
+    parent, child = nested(parent_cbs: { success: 'ParentSuccess', death: 'ParentDeath' },
+                           child_cbs: { success: 'ChildSuccess' })
+    parent_jid = jid_for(@queue, parent.bid)
+    child_jid  = jid_for(@queue, child.bid)
+    kill(child.bid, child_jid)
+    retry_dead_job(child.bid, child_jid)
+
+    assert_nil(@pool.with { |c| c.call('HGET', "b-#{child.bid}", 'death') },
+               'BATCH_PUSH cleared the child mark — retry window has opened')
+    assert_equal('1', @pool.with { |c| c.call('HGET', "b-#{parent.bid}", 'death') },
+                 'BATCH_PUSH must not touch the parent — its cascaded mark stays set')
+
+    ack_success(parent.bid, parent_jid)
+
+    assert_equal 0, callbacks_fired(event: 'success', bid: parent.bid),
+                 ':success must not fire before the retried descendant job has actually succeeded'
+
+    ack_success(child.bid, child_jid)
+
+    assert_equal 1, callbacks_fired(event: 'success', bid: child.bid)
+    assert_equal 1, callbacks_fired(event: 'success', bid: parent.bid),
+                 ':success fires once the retried job acks and lifts the parent mark via propagate_to_parent'
+    assert_equal 1, callbacks_fired(event: 'death', bid: parent.bid), 'parent :death must not re-fire'
+  end
+
   # Mixed shape: a batch with BOTH its own dead job and a dead child. Retrying
   # only its own job (which drains its own died set and clears its own mark via
   # BATCH_PUSH) must not let :success fire while the child subtree is still
