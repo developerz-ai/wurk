@@ -22,6 +22,7 @@ jobs:
     # via `include` to satisfy the required context while keeping the #29 matrix
     # (Ruby 3.2/3.3/3.4 × Rails 7.2/8.0).
     runs-on: blacksmith-4vcpu-ubuntu-2404
+    timeout-minutes: 10
     strategy:
       fail-fast: false
       matrix:
@@ -75,6 +76,7 @@ jobs:
   parity:
     name: parity (oracle)
     runs-on: blacksmith-4vcpu-ubuntu-2404
+    timeout-minutes: 10
     services:
       redis:
         image: redis:7.4
@@ -106,6 +108,7 @@ jobs:
   coverage:
     name: coverage (line + branch >= 90%)
     runs-on: blacksmith-4vcpu-ubuntu-2404
+    timeout-minutes: 10
     services:
       redis:
         image: redis:7.4
