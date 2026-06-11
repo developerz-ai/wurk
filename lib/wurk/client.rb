@@ -306,8 +306,9 @@ module Wurk
           eval_method,
           conn,
           :batch_push,
-          keys: ["b-#{j['bid']}", "b-#{j['bid']}-jids", "queue:#{j['queue']}", 'queues'],
-          argv: [j['queue'], j['jid'], Wurk.dump_json(j)]
+          keys: ["b-#{j['bid']}", "b-#{j['bid']}-jids", "queue:#{j['queue']}", 'queues',
+                 "b-#{j['bid']}-died", 'dead-batches'],
+          argv: [j['queue'], j['jid'], Wurk.dump_json(j), j['bid']]
         )
       end
     end

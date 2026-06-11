@@ -41,14 +41,19 @@ module Wurk
         Wurk.redis { |conn| conn.call('SCARD', "b-#{bid}-pkids") }.to_i.zero?
       end
 
-      # Fired from Wurk::Batch::DeathHandler on the FIRST permanent death
-      # in the batch only. Subsequent deaths bump the counter but do not
-      # re-enqueue the callback.
+      # Fired from Wurk::Batch::DeathHandler whenever a death makes the died
+      # set go non-empty: the first death, or the first re-death after every
+      # dead jid was manually retried back into the live set (#212 — that
+      # retry's BATCH_PUSH cleared the death mark). The mark — durable `death`
+      # flag, `death_at`, `dead-batches` membership — is (re-)applied before
+      # the dedup guard so it is restored on re-death; the callback enqueue
+      # and parent cascade stay behind the guard so `:death` is enqueued at
+      # most once per batch.
       def fire_death(bid)
-        return unless dedup_set(bid, 'death')
-
         record_event(bid, 'death_at')
         Wurk.redis { |conn| conn.call('ZADD', 'dead-batches', Time.now.to_f.to_s, bid) }
+        return unless dedup_set(bid, 'death')
+
         enqueue_callbacks(bid, 'death')
         cascade_death(bid)
       end

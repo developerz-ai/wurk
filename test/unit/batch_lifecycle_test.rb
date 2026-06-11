@@ -22,6 +22,7 @@ class BatchLifecycleTest < Wurk::Test::UnitCase
     @class_name = "BatchLifeJob@#{Process.pid}-#{object_id}"
     @queue      = "blq-#{Process.pid}-#{object_id}"
     @cbq        = "blcb-#{Process.pid}-#{object_id}"
+    @morgue     = "bldead-#{Process.pid}-#{object_id}"
     @bids       = []
   end
 
@@ -38,6 +39,7 @@ class BatchLifecycleTest < Wurk::Test::UnitCase
         conn.call('DEL', "queue:#{q}")
         conn.call('SREM', 'queues', q)
       end
+      conn.call('DEL', @morgue)
     end
   ensure
     super
@@ -272,6 +274,82 @@ class BatchLifecycleTest < Wurk::Test::UnitCase
     end
 
     assert_equal 0, Wurk::Batch::Status.new(batch.bid).failures
+  end
+
+  # --- #212: dead job manually retried to success ------------------------
+
+  # Spec §2.4: ":success never fires unless the dead job is manually retried
+  # to success." Full morgue round-trip: the job dies into the dead set, the
+  # operator hits "retry" (SortedEntry#retry → Client push → BATCH_PUSH), the
+  # retry succeeds, and the batch fires :success.
+  def test_dead_job_retried_from_morgue_to_success_fires_success # rubocop:disable Minitest/MultipleAssertions
+    batch = new_batch(success: 'S', complete: 'C', death: 'D')
+    batch.jobs { perform_one }
+    payload = queued(@queue).find { |j| j['bid'] == batch.bid }
+    jid = payload.fetch('jid')
+
+    morgue = Wurk::DeadSet.new(@morgue)
+    morgue.kill(JSON.dump(payload))
+
+    assert_equal 1, callbacks_fired(event: 'death', bid: batch.bid)
+    assert_equal 0, callbacks_fired(event: 'success', bid: batch.bid)
+
+    morgue.find_job(jid).retry
+    status = Wurk::Batch::Status.new(batch.bid)
+
+    assert_equal 1, status.total, 'manual retry must not recount total'
+    assert_equal 1, status.pending, 'manual retry must not recount pending'
+    assert_empty status.dead_jids
+    assert_nil(@pool.with { |c| c.call('ZSCORE', 'dead-batches', batch.bid) },
+               'recovered batch must leave dead-batches')
+
+    ack_success(batch.bid, jid)
+
+    assert_equal 1, callbacks_fired(event: 'success', bid: batch.bid)
+    assert_equal 1, callbacks_fired(event: 'death', bid: batch.bid), ':death must not re-fire'
+    assert_equal 0, Wurk::Batch::Status.new(batch.bid).pending
+  end
+
+  # With two dead jobs, retrying only one must keep :success suppressed —
+  # the death mark clears only when the died set fully drains.
+  def test_success_stays_suppressed_while_another_dead_jid_remains
+    batch = new_batch(success: 'S', death: 'D')
+    batch.jobs { 2.times { perform_one } }
+    jid_a, jid_b = jids_for(@queue, batch.bid)
+    kill(batch.bid, jid_a)
+    kill(batch.bid, jid_b)
+
+    retry_dead_job(batch.bid, jid_a)
+    ack_success(batch.bid, jid_a)
+
+    assert_equal 0, callbacks_fired(event: 'success', bid: batch.bid)
+    assert_equal('1', @pool.with { |c| c.call('HGET', "b-#{batch.bid}", 'death') })
+    refute_nil(@pool.with { |c| c.call('ZSCORE', 'dead-batches', batch.bid) })
+  end
+
+  # A retried dead job that dies again re-marks the batch dead (durable flag
+  # + dead-batches) without re-enqueuing :death; a second retry that finally
+  # succeeds still fires :success.
+  def test_re_death_after_recovery_re_marks_dead_without_refiring_death # rubocop:disable Minitest/MultipleAssertions
+    batch = new_batch(success: 'S', death: 'D')
+    batch.jobs { perform_one }
+    jid = jid_for(@queue, batch.bid)
+    kill(batch.bid, jid)
+
+    retry_dead_job(batch.bid, jid)
+    kill(batch.bid, jid)
+
+    assert_equal 1, callbacks_fired(event: 'death', bid: batch.bid), ':death enqueues at most once'
+    assert_equal('1', @pool.with { |c| c.call('HGET', "b-#{batch.bid}", 'death') },
+                 're-death must restore the durable death mark')
+    refute_nil(@pool.with { |c| c.call('ZSCORE', 'dead-batches', batch.bid) },
+               're-death must restore dead-batches membership')
+    assert_equal 0, callbacks_fired(event: 'success', bid: batch.bid)
+
+    retry_dead_job(batch.bid, jid)
+    ack_success(batch.bid, jid)
+
+    assert_equal 1, callbacks_fired(event: 'success', bid: batch.bid)
   end
 
   # --- nested death cascade ----------------------------------------------
@@ -628,6 +706,13 @@ class BatchLifecycleTest < Wurk::Test::UnitCase
 
   def kill(bid, jid)
     Wurk::Batch::DeathHandler.call({ 'bid' => bid, 'jid' => jid }, RuntimeError.new('boom'))
+  end
+
+  # The morgue "retry" path without the morgue: re-push the dead job's
+  # payload through Wurk::Client, exactly what SortedEntry#retry does after
+  # removing the entry from the dead zset.
+  def retry_dead_job(bid, jid)
+    Wurk::Client.push('class' => @class_name, 'args' => [], 'queue' => @queue, 'bid' => bid, 'jid' => jid)
   end
 
   def build_server_middleware
