@@ -1,33 +1,78 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-# Run third-party Sidekiq ecosystem gem test suites against Wurk.
-# Each entry in test/ecosystem/ is a checked-out gem with its Gemfile
-# rewritten to point Sidekiq → Wurk (the alias layer in lib/wurk/compat.rb
-# makes this transparent).
+# Run third-party Sidekiq ecosystem gem test suites against Wurk (#204).
+#
+# Each test/ecosystem/<gem>/ directory is a thin harness:
+#   PIN     — upstream repo + SHA the suite runs from
+#   Gemfile — overlay mirroring the gem's own Gemfile, with `sidekiq`
+#             resolved to wurk's shim gem (ecosystem/sidekiq-shim) so the
+#             suite installs NO real sidekiq and runs entirely on wurk.
+#
+# Checkouts are cloned (cached) into test/ecosystem/.checkouts/ (gitignored).
+# The gem's suite hits real Redis; default DB 15 — override with
+# ECOSYSTEM_REDIS_URL. The DB is the suite's to trash; don't point it at
+# data you care about.
 
 cd "$(dirname "$0")/.."
+ROOT=$(pwd)
 
 ECOSYSTEM_DIR="test/ecosystem"
+CHECKOUTS="$ROOT/$ECOSYSTEM_DIR/.checkouts"
+REDIS_URL="${ECOSYSTEM_REDIS_URL:-redis://127.0.0.1:6379/15}"
 
-if [ ! -d "$ECOSYSTEM_DIR" ]; then
-  echo "no $ECOSYSTEM_DIR; nothing to run"
-  exit 0
-fi
-
+ran=0
 failures=0
-for gem_dir in "$ECOSYSTEM_DIR"/*/; do
-  [ -d "$gem_dir" ] || continue
-  name=$(basename "$gem_dir")
-  echo "==> $name"
-  if ! ( cd "$gem_dir" && bundle install --quiet && bundle exec rake test 2>&1 ); then
+for harness in "$ECOSYSTEM_DIR"/*/; do
+  [ -f "$harness/PIN" ] || continue
+  name=$(basename "$harness")
+  repo=$(awk '/^repo:/ {print $2}' "$harness/PIN")
+  sha=$(awk '/^sha:/ {print $2}' "$harness/PIN")
+  checkout="$CHECKOUTS/$name"
+
+  if [ ! -d "$checkout/.git" ]; then
+    git clone --quiet "$repo" "$checkout"
+  fi
+  if ! git -C "$checkout" cat-file -e "$sha^{commit}" 2>/dev/null; then
+    git -C "$checkout" fetch --quiet origin
+  fi
+  git -C "$checkout" checkout --quiet --force "$sha"
+
+  # Optional per-harness EXCLUDE: minitest --exclude patterns (one per line,
+  # comments allowed). Each exclusion documents WHY next to the pattern —
+  # e.g. a hardware-bound perf budget that fails identically on real sidekiq.
+  testopts=""
+  if [ -f "$harness/EXCLUDE" ]; then
+    while IFS= read -r pattern; do
+      case "$pattern" in ''|'#'*) continue ;; esac
+      # --exclude=… (one arg, leading dash) so rake_test_loader skips it
+      # instead of treating the pattern value as a test file.
+      testopts="$testopts --exclude=\"$pattern\""
+    done < "$harness/EXCLUDE"
+  fi
+
+  echo "==> $name @ $sha"
+  ran=$((ran + 1))
+  if ! (
+    cd "$checkout" &&
+    export BUNDLE_GEMFILE="$ROOT/$harness/Gemfile" \
+           ECOSYSTEM_CHECKOUT="$checkout" \
+           REDIS_URL="$REDIS_URL" \
+           TESTOPTS="$testopts" &&
+    bundle install --quiet &&
+    bundle exec rake test
+  ); then
     echo "FAIL: $name"
     failures=$((failures + 1))
   fi
 done
 
+if [ "$ran" -eq 0 ]; then
+  echo "no ecosystem harnesses found under $ECOSYSTEM_DIR (expected <gem>/PIN)"
+  exit 1
+fi
 if [ "$failures" -gt 0 ]; then
   echo "$failures ecosystem suite(s) failed"
   exit 1
 fi
-echo "all ecosystem suites passed"
+echo "all $ran ecosystem suite(s) passed"

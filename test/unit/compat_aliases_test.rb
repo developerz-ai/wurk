@@ -124,8 +124,11 @@ class CompatAliasesTest < Wurk::Test::UnitCase
     assert_same Wurk::Context, Sidekiq::Context
   end
 
-  def test_cron_alias
-    assert_same Wurk::Cron, Sidekiq::Cron
+  def test_cron_namespace_not_squatted
+    # #204: Sidekiq::Cron is the sidekiq-cron gem's namespace, not Sidekiq
+    # surface — aliasing it broke the gem's load. Periodic is the real alias.
+    refute Sidekiq.const_defined?(:Cron, false)
+    assert_same Wurk::Cron, Sidekiq::Periodic
   end
 
   def test_metrics_alias

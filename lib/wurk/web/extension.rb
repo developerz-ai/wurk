@@ -125,11 +125,17 @@ module Wurk
           str
         end
 
-        # Engine-absolute base path for this extension, trailing slash, so an
-        # ext's `root_path + "locks"` links land back on our embed endpoint.
-        def root_path = "#{@mount}/ext/#{@ext_name}/"
+        # Base path for this extension, trailing slash. Embedded in the
+        # engine, ext links must land back on the embed endpoint
+        # (`/wurk/ext/<name>/…`); standalone (`run Sidekiq::Web`, #204) the
+        # ext's routes ARE the URL space, so it's the app root — upstream's
+        # `"#{env['SCRIPT_NAME']}/"` semantics.
+        def root_path = @embed ? "#{@mount}/ext/#{@ext_name}/" : "#{@mount}/"
         def current_path = @subpath.to_s.sub(%r{\A/}, '')
-        def asset_path(file) = "#{@mount}/ext-assets/#{@ext_name}/#{file}"
+
+        def asset_path(file)
+          @embed ? "#{@mount}/ext-assets/#{@ext_name}/#{file}" : "#{@mount}/#{@ext_name}/#{file}"
+        end
 
         # GET-form embeds don't need CSRF; return an empty, benign tag.
         def csrf_tag = ''
@@ -155,7 +161,7 @@ module Wurk
         # Internal-redirect signal carried out of a route block via throw/catch.
         Redirect = ::Struct.new(:location)
 
-        def initialize(env:, route_params:, ext:, mount:)
+        def initialize(env:, route_params:, ext:, mount:, embed: true)
           @env = env
           @request = ::Rack::Request.new(env)
           @route_params = route_params
@@ -163,6 +169,7 @@ module Wurk
           @root_dir = ext[:root_dir]
           @ext_strings = ext[:strings]
           @mount = mount.to_s
+          @embed = embed
           @subpath = env['wurk.ext.subpath']
           extend_helpers(ext[:helpers])
         end
@@ -213,7 +220,12 @@ module Wurk
           # @return [Array(Integer, Hash, String)] Rack-ish [status, headers,
           #   body] — 200 HTML, 302 redirect, or 404 — or nil when no extension
           #   with `name` is registered (so the engine can fall through).
-          def call(name:, method:, subpath:, env:, mount:)
+          # `embed: true` (the engine's ext/:name/* endpoint) rewrites links
+          # and redirects into the embed URL space; `embed: false` (the
+          # standalone `run Sidekiq::Web` Rack app, #204) leaves the
+          # extension's own route paths as the URL space, like upstream.
+          # rubocop:disable Metrics/ParameterLists -- request facts (name/verb/path/env) + URL-space (mount/embed); bundling them would just rename the list
+          def call(name:, method:, subpath:, env:, mount:, embed: true)
             ext = registered_extension(name)
             return nil unless ext
 
@@ -222,8 +234,9 @@ module Wurk
             return [404, html_headers, "No #{verb} route #{subpath} in extension #{name}"] unless route
 
             env['wurk.ext.subpath'] = subpath
-            render(ext, route_params, block, env, mount)
+            render(ext, route_params, block, env, { mount: mount, embed: embed })
           end
+          # rubocop:enable Metrics/ParameterLists
 
           # `[absolute_path, cache_for_seconds]` of an asset under the
           # extension's asset_paths, or nil if the extension/file isn't found.
@@ -247,10 +260,12 @@ module Wurk
             ::Wurk::Web.config.extensions.find { |e| e[:name].to_s == name.to_s }
           end
 
-          def render(ext, route_params, block, env, mount)
-            result = action_for(ext, route_params, env, mount).run(block)
+          # `ctx` is `{ mount:, embed: }` — the URL-space the response renders
+          # into (engine embed vs standalone root).
+          def render(ext, route_params, block, env, ctx)
+            result = action_for(ext, route_params, env, ctx).run(block)
             if result.is_a?(Action::Redirect)
-              [302, { 'Location' => redirect_target(result.location, ext, mount) }, '']
+              [302, { 'Location' => redirect_target(result.location, ext, ctx) }, '']
             else
               [200, html_headers, result.to_s]
             end
@@ -259,10 +274,10 @@ module Wurk
             [500, html_headers, "Extension render error: #{::CGI.escapeHTML(e.message)}"]
           end
 
-          def action_for(ext, route_params, env, mount)
+          def action_for(ext, route_params, env, ctx)
             app = captured_app(ext)
             Action.new(
-              env: env, route_params: route_params, mount: mount,
+              env: env, route_params: route_params, mount: ctx[:mount], embed: ctx[:embed],
               ext: ext.merge(helpers: { modules: app.helper_modules, blocks: app.helper_blocks },
                              strings: strings_for(ext))
             )
@@ -286,20 +301,35 @@ module Wurk
           end
 
           # An ext's redirect target is relative to its mount ("locks" → the
-          # embed endpoint). Absolute URLs pass through unchanged.
-          def redirect_target(location, ext, mount)
+          # embed endpoint; standalone → the app root, where root_path-built
+          # targets already carry the mount). Absolute URLs pass through.
+          def redirect_target(location, ext, ctx)
             loc = location.to_s
             return loc if loc.match?(%r{\A[a-z]+://}i)
+            return "#{ctx[:mount]}/ext/#{ext[:name]}/#{loc.sub(%r{\A/}, '')}" if ctx[:embed]
 
-            "#{mount}/ext/#{ext[:name]}/#{loc.sub(%r{\A/}, '')}"
+            loc.start_with?('/') ? loc : "#{ctx[:mount]}/#{loc}"
           end
 
+          # The ext's own root_dir/locales plus every dir appended to
+          # `config.locales` (the upstream protocol for extensions without a
+          # root_dir — sidekiq-cron does `Sidekiq::Web.configure.locales <<
+          # dir` inside `registered`, which `captured_app` has already run by
+          # the time we land here).
           def strings_for(ext)
             ext.fetch(:_strings) do
-              dir = ext[:root_dir]
-              file = dir && ::File.join(dir, 'locales', 'en.yml')
-              ext[:_strings] = (file && ::File.exist?(file) ? load_yaml(file) : {})
+              ext[:_strings] = locale_dirs(ext).each_with_object({}) do |dir, acc|
+                file = ::File.join(dir.to_s, 'en.yml')
+                acc.merge!(load_yaml(file)) if ::File.exist?(file)
+              end
             end
+          end
+
+          def locale_dirs(ext)
+            dirs = []
+            dirs << ::File.join(ext[:root_dir], 'locales') if ext[:root_dir]
+            dirs.concat(::Wurk::Web.config.locales)
+            dirs.uniq
           end
 
           def load_yaml(file)
