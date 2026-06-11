@@ -8,9 +8,16 @@ require_relative '../engine_test_helper'
 #
 # Like ApiEndpointsTest we talk to the engine via Rack::Test and read
 # `last_response` directly.
+#
+# Intra-class serial: many tests POST `/wurk/api/<set>/all/<cmd>`, and those
+# endpoints drain the *global* retry/scheduled/dead zsets (wire-compat with
+# Sidekiq — we can't namespace them per test). A parallel `test_all_retry_*`
+# can therefore re-enqueue another test's pushed jid before that test's
+# `test_all_kill_*` calls kill, so kill drains an empty zset and the jid lands
+# in a queue instead of dead. Exposed by COVERAGE-mode timing (CI failure on
+# #209) but pre-existing. Cross-class parallelism via minitest-parallel_fork
+# is unaffected — each worker still gets its own Redis DB.
 class ApiMutationsTest < Wurk::Test::EngineCase
-  parallelize_me!
-
   def setup
     super
     @ns = "wurkmut:#{::Process.pid}:#{object_id}"
