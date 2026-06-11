@@ -49,7 +49,11 @@ module Wurk
       end
     end
 
-    # @return [Hash{String=>Integer}] queue name → LLEN.
+    # @return [Hash{String=>Integer}] queue name → LLEN, largest queue first.
+    # `SMEMBERS` order is arbitrary; Sidekiq sorts the name/size pairs by size
+    # descending before building the hash (Stats#queues, spec §19.1) — gems
+    # and dashboards reading this rely on that order. Match it exactly with
+    # `sort_by { |_, size| -size }`.
     def queues
       Wurk.redis do |conn|
         names = conn.call('SMEMBERS', Keys::QUEUES_SET)
@@ -58,11 +62,14 @@ module Wurk
         sizes = conn.pipelined do |pipe|
           names.each { |q| pipe.call('LLEN', Keys.queue(q)) }
         end
-        names.zip(sizes.map(&:to_i)).to_h
+        names.zip(sizes.map(&:to_i)).sort_by { |_, size| -size }.to_h
       end
     end
 
-    # @return [Array<QueueSummary>] one per known queue.
+    # @return [Array<QueueSummary>] one per known queue, largest first.
+    # Same size-descending order as Sidekiq's detailed queue list
+    # (`queue_summaries.sort_by { |qd| -qd.size }`) — this feeds the
+    # dashboard's queue table (api_controller#queues).
     def queue_summaries
       Wurk.redis do |conn|
         names = conn.call('SMEMBERS', Keys::QUEUES_SET)
@@ -75,7 +82,7 @@ module Wurk
             pipe.call('LRANGE', Keys.queue(q), -1, -1)
           end
         end
-        build_summaries(names, results, paused_set)
+        build_summaries(names, results, paused_set).sort_by { |qd| -qd.size }
       end
     end
 
