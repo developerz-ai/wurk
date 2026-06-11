@@ -32,13 +32,15 @@ module Wurk
     VALID_UNTIL = %i[success start].freeze
 
     # Ent parity: a job that dies automatically releases its lock so a
-    # duplicate can enqueue immediately. Manual UI kills route through
-    # `DeadSet#kill(notify_failure: false)`, which skips death handlers —
-    # those keep the lock (Ent wiki, Ent-Unique-Jobs). Atomic CAS-DEL via
-    # the shared Lua script mirrors ServerMiddleware#release.
-    DEATH_HANDLER = lambda do |job, _exception|
+    # duplicate can enqueue immediately. Manual API/UI kills keep the lock
+    # until TTL expiry (Ent wiki, Ent-Unique-Jobs) — they reach death
+    # handlers too (Sidekiq fires them on API kills), so we recognize the
+    # synthesized kill exception and skip the release for it. Atomic
+    # CAS-DEL via the shared Lua script mirrors ServerMiddleware#release.
+    DEATH_HANDLER = lambda do |job, exception|
       next unless Wurk::Unique.enabled?
       next unless Wurk::Unique.coerce_ttl(job['unique_for'])
+      next if exception.instance_of?(::RuntimeError) && exception.message == DeadSet::API_KILL_MESSAGE
 
       Wurk.redis { |conn| Wurk::Unique.release_if_owner(conn, Wurk::Unique.lock_key_for(job), job['jid']) }
     end

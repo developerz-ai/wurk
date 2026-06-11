@@ -5,11 +5,16 @@ require_relative 'job_set'
 module Wurk
   # Capped ZSET of jobs that exhausted retries (the "morgue"). Bounded by
   # `dead_max_jobs` and `dead_timeout_in_seconds` config knobs — every
-  # `kill` trims both axes. Death handlers fire on retry-exhausted kills
-  # (notify_failure: true), not on user-initiated UI kills.
+  # `kill` trims both axes. Death handlers fire by default — including on
+  # API/UI kills, matching Sidekiq — unless `notify_failure: false`.
   #
   # Spec: docs/target/sidekiq-free.md §19.5, §17.2, §31.8.
   class DeadSet < JobSet
+    # Synthesized as the death-handler exception for kills without a real
+    # error. Byte-for-byte Sidekiq's message — Wurk::Unique::DEATH_HANDLER
+    # matches on it to keep the lock on manual kills (Ent parity), and
+    # ecosystem handlers may pattern-match it too.
+    API_KILL_MESSAGE = 'Job killed by API'
     # Optional `name` allows tests to operate on a namespaced ZSET; production
     # callers always use the default `'dead'` key (wire-compat with Sidekiq).
     def initialize(name = 'dead')
@@ -48,7 +53,7 @@ module Wurk
     def kill(message, opts = {}) # rubocop:disable Naming/PredicateMethod
       notify = opts.fetch(:notify_failure, true)
       do_trim = opts.fetch(:trim, true)
-      ex = opts[:ex] || RuntimeError.new('Job killed')
+      ex = opts[:ex] || RuntimeError.new(API_KILL_MESSAGE).tap { |e| e.set_backtrace(caller) }
 
       now = ::Process.clock_gettime(::Process::CLOCK_REALTIME)
       Wurk.redis { |conn| conn.call('ZADD', @name, now.to_s, message) }

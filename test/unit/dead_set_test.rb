@@ -73,6 +73,23 @@ class DeadSetTest < Wurk::Test::UnitCase
     assert_empty received
   end
 
+  # Sidekiq synthesizes RuntimeError("Job killed by API") with a backtrace
+  # when no `ex:` is given (#207). Keyed by jid — handlers are process-global
+  # and this class runs parallel.
+  def test_kill_synthesizes_api_kill_exception
+    received = {}
+    jid = "apim-#{@ns}"
+    Wurk.configuration.death_handlers << ->(job, ex) { received[job['jid']] = ex }
+
+    kill_payload(base_item('jid' => jid))
+
+    ex = received[jid]
+
+    assert_instance_of RuntimeError, ex
+    assert_equal Wurk::DeadSet::API_KILL_MESSAGE, ex.message
+    refute_nil ex.backtrace
+  end
+
   def test_kill_uses_provided_exception
     received_ex = nil
     Wurk.configuration.death_handlers << ->(_job, ex) { received_ex = ex }

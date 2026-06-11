@@ -122,10 +122,10 @@ module Wurk
       count
     end
 
-    # Moves every job in this set to the dead set. `notify_failure: false`
-    # because this is a UI-initiated bulk action, not a retry-exhausted
-    # event. Returns the count of jobs moved.
-    def kill_all(notify_failure: false, ex: nil)
+    # Moves every job in this set to the dead set. Death handlers fire per
+    # entry by default — `each(&:kill)` equivalence with Sidekiq; pass
+    # `notify_failure: false` to suppress. Returns the count of jobs moved.
+    def kill_all(notify_failure: true, ex: nil)
       count = 0
       dead = DeadSet.new
       until size.zero?

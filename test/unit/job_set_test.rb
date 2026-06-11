@@ -355,6 +355,35 @@ class JobSetTest < Wurk::Test::UnitCase
     @pool.with { |c| c.call('DEL', private_set) }
   end
 
+  # `each(&:kill)` equivalence with Sidekiq (#207): one death-handler call
+  # per entry by default.
+  def test_kill_all_fires_death_handlers_per_entry
+    private_set = seed_killable_set('kadh')
+
+    with_death_handler do |received|
+      private_job_set(private_set).kill_all
+
+      mine = received.select { |jid, _| jid.end_with?(@ns) }
+
+      assert_equal 2, mine.size
+      assert(mine.values.all? { |ex| ex.message == Wurk::DeadSet::API_KILL_MESSAGE })
+    end
+  ensure
+    @pool.with { |c| c.call('DEL', private_set) } if private_set
+  end
+
+  def test_kill_all_notify_false_skips_death_handlers
+    private_set = seed_killable_set('kanf')
+
+    with_death_handler do |received|
+      private_job_set(private_set).kill_all(notify_failure: false)
+
+      assert_empty(received.select { |jid, _| jid.end_with?(@ns) })
+    end
+  ensure
+    @pool.with { |c| c.call('DEL', private_set) } if private_set
+  end
+
   private
 
   def assert_drained(set_name, into_queue: nil, expected: nil, into_dead: nil)
@@ -401,6 +430,26 @@ class JobSetTest < Wurk::Test::UnitCase
 
   def test_private_set
     "wurktest-jobset-#{@ns}-#{rand(1_000_000)}"
+  end
+
+  # Two-entry private set whose jids end with @ns so handler captures can be
+  # filtered. Returns the set name; payloads are tracked for dead cleanup.
+  def seed_killable_set(prefix)
+    private_set = test_private_set
+    rows = (0...2).map { |i| [10 + i, "#{prefix}-#{i}-#{@ns}"] }
+    @dead_members.concat(seed_private(private_set, rows))
+    private_set
+  end
+
+  # Registers a jid-keyed capture handler for the block — keyed by jid
+  # because the handler list is process-global and this class is parallel.
+  def with_death_handler
+    received = {}
+    handler = ->(job, ex) { received[job['jid']] = ex }
+    Wurk.configuration.death_handlers << handler
+    yield received
+  ensure
+    Wurk.configuration.death_handlers.delete(handler)
   end
 
   def unique_queue
