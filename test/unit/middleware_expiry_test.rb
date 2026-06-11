@@ -257,6 +257,28 @@ class MiddlewareExpiryTest < Wurk::Test::UnitCase
     assert_in_delta((created_at_ms / 1000.0) + 3600, item['expiry'], 0.001)
   end
 
+  # Spec §7: "perform_in(2.hours) + expires_in: 1.hour ⇒ expires 3h after
+  # enqueue" — for scheduled jobs the clock origin is `at`, not `created_at`.
+  def test_client_stamps_expiry_from_at_for_scheduled_jobs
+    created_at_ms = 1_700_000_000_000
+    at = (created_at_ms / 1000.0) + 7200
+    item = { 'created_at' => created_at_ms, 'expires_in' => 3600, 'at' => at, 'class' => 'X', 'args' => [] }
+    Stamper.new.stamp(item)
+
+    assert_in_delta(at + 3600, item['expiry'], 0.001)
+  end
+
+  def test_scheduled_job_is_not_born_expired
+    # The #208 regression: delay (2h) > expires_in (1h) used to stamp an
+    # expiry 1h *before* the job's own run time, so promotion always dropped it.
+    created_at_ms = 1_700_000_000_000
+    at = (created_at_ms / 1000.0) + 7200
+    item = { 'created_at' => created_at_ms, 'expires_in' => 3600, 'at' => at, 'class' => 'X', 'args' => [] }
+    Stamper.new.stamp(item)
+
+    assert_operator item['expiry'], :>, at, 'scheduled job must not expire before its own run time'
+  end
+
   def test_client_does_not_overwrite_caller_supplied_expiry
     item = {
       'created_at' => 1_700_000_000_000,
@@ -320,7 +342,27 @@ class MiddlewareExpiryTest < Wurk::Test::UnitCase
     end
   end
 
+  def test_client_push_scheduled_job_stamps_expiry_from_at
+    with_expiry_job(3600) do |klass, queue, pool|
+      at = ::Process.clock_gettime(::Process::CLOCK_REALTIME) + 7200
+      jid = Wurk::Client.new.push('class' => klass, 'args' => [], 'queue' => queue, 'at' => at)
+
+      expiry = fetch_scheduled_expiry(pool, jid)
+
+      assert_in_delta at + 3600, expiry, 0.01
+    end
+  end
+
   private
+
+  def fetch_scheduled_expiry(pool, jid)
+    raw = pool.with { |c| c.call('ZRANGE', 'schedule', 0, -1) }
+              .find { |m| JSON.parse(m)['jid'] == jid }
+
+    refute_nil raw, 'expected the scheduled payload in the schedule set'
+    pool.with { |c| c.call('ZREM', 'schedule', raw) }
+    JSON.parse(raw)['expiry']
+  end
 
   def with_expiry_job(duration)
     klass_name = "ExpiryJob_#{Process.pid}_#{object_id}"
