@@ -242,11 +242,11 @@ module Wurk
           require 'tzinfo' unless defined?(::TZInfo)
           ::TZInfo::Timezone.get(name)
         rescue ::LoadError
-          Wurk.logger.warn("[cron] tzinfo gem unavailable — evaluating timezone #{name.inspect} as UTC. " \
-                           'Add `gem "tzinfo"` for timezone-aware cron.')
+          Wurk.logger&.warn("[cron] tzinfo gem unavailable — evaluating timezone #{name.inspect} as UTC. " \
+                            'Add `gem "tzinfo"` for timezone-aware cron.')
           false
         rescue ::StandardError => e
-          Wurk.logger.warn("[cron] unknown timezone #{name.inspect} (#{e.class}: #{e.message}) — evaluating as UTC")
+          Wurk.logger&.warn("[cron] unknown timezone #{name.inspect} (#{e.class}: #{e.message}) — evaluating as UTC")
           false
         end
       end
