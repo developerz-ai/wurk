@@ -393,6 +393,189 @@ class BatchLifecycleTest < Wurk::Test::UnitCase
     assert_dead grand.bid, parent.bid
   end
 
+  # --- #226: descendant dead job retried to success lifts ancestor suppression
+
+  # Spec §2.4 across the parent chain: a child's job dies (cascading :death up
+  # to the parent), the operator retries it to success, the child fires
+  # :success, and the parent fires :success once its own work is done too.
+  def test_nested_descendant_recovery_fires_ancestor_success # rubocop:disable Minitest/MultipleAssertions
+    parent, child = nested(parent_cbs: { success: 'ParentSuccess', death: 'ParentDeath' },
+                           child_cbs: { success: 'ChildSuccess', death: 'ChildDeath' })
+    child_jid = jid_for(@queue, child.bid)
+    kill(child.bid, child_jid)
+
+    assert_equal 1, callbacks_fired(event: 'death', bid: parent.bid), 'child death cascades :death to the parent'
+    assert_dead parent.bid, child.bid
+
+    retry_dead_job(child.bid, child_jid)
+    ack_success(child.bid, child_jid)
+
+    assert_equal 1, callbacks_fired(event: 'success', bid: child.bid)
+    assert_equal 0, callbacks_fired(event: 'success', bid: parent.bid),
+                 'parent :success still waits on its own pending job'
+
+    ack_success(parent.bid, jid_for(@queue, parent.bid))
+
+    assert_equal 1, callbacks_fired(event: 'success', bid: parent.bid),
+                 'parent :success fires once the recovered subtree and its own work are done'
+    assert_equal 1, callbacks_fired(event: 'death', bid: parent.bid), 'parent :death must not re-fire'
+    assert_nil(@pool.with { |c| c.call('ZSCORE', 'dead-batches', parent.bid) }, 'recovered parent leaves dead-batches')
+  end
+
+  # A parent with two dead children must keep :success suppressed until BOTH
+  # recover — recovering only one leaves the parent's subtree still dead.
+  def test_ancestor_stays_suppressed_while_other_descendant_dead # rubocop:disable Minitest/MultipleAssertions
+    parent = new_batch(success: 'ParentSuccess', death: 'ParentDeath')
+    child_a = child_b = nil
+    parent.jobs do
+      perform_one # parent's own job — without it the parent gets an Empty marker
+      child_a = new_batch
+      child_a.jobs { perform_one }
+      child_b = new_batch
+      child_b.jobs { perform_one }
+    end
+    parent_jid = jid_for(@queue, parent.bid)
+    a_jid = jid_for(@queue, child_a.bid)
+    b_jid = jid_for(@queue, child_b.bid)
+    kill(child_a.bid, a_jid)
+    kill(child_b.bid, b_jid)
+
+    assert_equal 1, callbacks_fired(event: 'death', bid: parent.bid)
+
+    retry_dead_job(child_a.bid, a_jid)
+    ack_success(child_a.bid, a_jid)
+    ack_success(parent.bid, parent_jid)
+
+    assert_equal 0, callbacks_fired(event: 'success', bid: parent.bid),
+                 'parent stays suppressed while child_b is still dead'
+    assert_equal('1', @pool.with { |c| c.call('HGET', "b-#{parent.bid}", 'death') },
+                 'parent keeps its death mark while a descendant is dead')
+
+    retry_dead_job(child_b.bid, b_jid)
+    ack_success(child_b.bid, b_jid)
+
+    assert_equal 1, callbacks_fired(event: 'success', bid: parent.bid),
+                 'parent :success fires once every descendant has recovered'
+    assert_equal 1, callbacks_fired(event: 'death', bid: parent.bid)
+  end
+
+  # The clear walks the full chain: a leaf recovery must lift suppression on
+  # every ancestor up to the root.
+  def test_deep_recovery_fires_success_through_every_ancestor # rubocop:disable Minitest/MultipleAssertions
+    grand = new_batch(success: 'GrandSuccess', death: 'GrandDeath')
+    parent = child = nil
+    grand.jobs do
+      perform_one
+      parent = new_batch(success: 'ParentSuccess')
+      parent.jobs do
+        perform_one
+        child = new_batch(success: 'ChildSuccess')
+        child.jobs { perform_one }
+      end
+    end
+    child_jid = jid_for(@queue, child.bid)
+    kill(child.bid, child_jid)
+
+    assert_equal 1, callbacks_fired(event: 'death', bid: grand.bid), 'death cascades to the root'
+
+    retry_dead_job(child.bid, child_jid)
+    ack_success(child.bid, child_jid)
+    ack_success(parent.bid, jid_for(@queue, parent.bid))
+    ack_success(grand.bid, jid_for(@queue, grand.bid))
+
+    assert_equal 1, callbacks_fired(event: 'success', bid: child.bid)
+    assert_equal 1, callbacks_fired(event: 'success', bid: parent.bid)
+    assert_equal 1, callbacks_fired(event: 'success', bid: grand.bid),
+                 'leaf recovery lifts suppression all the way to the root'
+    assert_nil(@pool.with { |c| c.call('ZSCORE', 'dead-batches', grand.bid) })
+  end
+
+  # A descendant that dies again after recovery must re-mark every ancestor
+  # dead (durable flag + dead-batches) without re-enqueuing :death anywhere.
+  def test_descendant_re_death_re_marks_ancestors_without_refiring_death # rubocop:disable Minitest/MultipleAssertions
+    parent, child = nested(parent_cbs: { success: 'ParentSuccess', death: 'ParentDeath' },
+                           child_cbs: { death: 'ChildDeath' })
+    child_jid = jid_for(@queue, child.bid)
+
+    kill(child.bid, child_jid)
+    retry_dead_job(child.bid, child_jid)
+    kill(child.bid, child_jid)
+
+    assert_equal 1, callbacks_fired(event: 'death', bid: child.bid), 'child :death enqueues at most once'
+    assert_equal 1, callbacks_fired(event: 'death', bid: parent.bid), 'parent :death enqueues at most once'
+    assert_equal('1', @pool.with { |c| c.call('HGET', "b-#{parent.bid}", 'death') },
+                 're-death restores the parent death mark')
+    refute_nil(@pool.with { |c| c.call('ZSCORE', 'dead-batches', parent.bid) },
+               're-death restores parent dead-batches membership')
+
+    retry_dead_job(child.bid, child_jid)
+    ack_success(child.bid, child_jid)
+    ack_success(parent.bid, jid_for(@queue, parent.bid))
+
+    assert_equal 1, callbacks_fired(event: 'success', bid: parent.bid),
+                 'a second recovery still fires parent :success'
+  end
+
+  # Retry window race (raised in PR #227 review): after a child's dead job has
+  # been retried (BATCH_PUSH cleared the *child's* death mark and re-added the
+  # jid to child.live) but BEFORE the worker actually runs it, the parent's
+  # own job acks. The original death cascade already SREM'd the child from the
+  # parent's pkids set and BATCH_PUSH doesn't re-add it — so kids_finished?
+  # is true. But the parent's own cascaded death mark is untouched (BATCH_PUSH
+  # operates on the child bid only; clear_death_on_recovery only runs from a
+  # *successful* child drain via propagate_to_parent), so subtree_dead? is
+  # still true and :success must stay suppressed until the retried job
+  # actually succeeds.
+  def test_parent_own_ack_in_retry_window_keeps_success_suppressed # rubocop:disable Minitest/MultipleAssertions
+    parent, child = nested(parent_cbs: { success: 'ParentSuccess', death: 'ParentDeath' },
+                           child_cbs: { success: 'ChildSuccess' })
+    parent_jid = jid_for(@queue, parent.bid)
+    child_jid  = jid_for(@queue, child.bid)
+    kill(child.bid, child_jid)
+    retry_dead_job(child.bid, child_jid)
+
+    assert_nil(@pool.with { |c| c.call('HGET', "b-#{child.bid}", 'death') },
+               'BATCH_PUSH cleared the child mark — retry window has opened')
+    assert_equal('1', @pool.with { |c| c.call('HGET', "b-#{parent.bid}", 'death') },
+                 'BATCH_PUSH must not touch the parent — its cascaded mark stays set')
+
+    ack_success(parent.bid, parent_jid)
+
+    assert_equal 0, callbacks_fired(event: 'success', bid: parent.bid),
+                 ':success must not fire before the retried descendant job has actually succeeded'
+
+    ack_success(child.bid, child_jid)
+
+    assert_equal 1, callbacks_fired(event: 'success', bid: child.bid)
+    assert_equal 1, callbacks_fired(event: 'success', bid: parent.bid),
+                 ':success fires once the retried job acks and lifts the parent mark via propagate_to_parent'
+    assert_equal 1, callbacks_fired(event: 'death', bid: parent.bid), 'parent :death must not re-fire'
+  end
+
+  # Mixed shape: a batch with BOTH its own dead job and a dead child. Retrying
+  # only its own job (which drains its own died set and clears its own mark via
+  # BATCH_PUSH) must not let :success fire while the child subtree is still
+  # dead — subtree_dead? catches the still-dead child.
+  def test_own_recovery_stays_suppressed_while_child_subtree_dead
+    parent, child = nested(parent_cbs: { success: 'ParentSuccess', death: 'ParentDeath' })
+    parent_jid = jid_for(@queue, parent.bid)
+    child_jid  = jid_for(@queue, child.bid)
+    kill(child.bid, child_jid)
+    kill(parent.bid, parent_jid)
+
+    retry_dead_job(parent.bid, parent_jid)
+    ack_success(parent.bid, parent_jid)
+
+    assert_equal 0, callbacks_fired(event: 'success', bid: parent.bid),
+                 "parent's own recovery must not fire :success while the child is dead"
+
+    retry_dead_job(child.bid, child_jid)
+    ack_success(child.bid, child_jid)
+
+    assert_equal 1, callbacks_fired(event: 'success', bid: parent.bid),
+                 'parent :success fires once the child subtree also recovers'
+  end
+
   # --- per-callback rescue ----------------------------------------------
 
   def test_failing_callback_enqueue_does_not_strand_remaining_callbacks
