@@ -2,6 +2,8 @@
 
 require_relative '../test_helper'
 require 'tzinfo'
+require 'active_job'
+require 'active_job/queue_adapters/wurk_adapter'
 
 class CronTest < Wurk::Test::UnitCase
   parallelize_me!
@@ -388,6 +390,22 @@ class CronTest < Wurk::Test::UnitCase
     job = enqueue_via_leader_tick(klass: "CronTest::Pollee#{@suffix}", queue: "cron-q-#{@suffix}", args: [1, 2])
 
     assert_equal "CronTest::Pollee#{@suffix}", job['class']
+  end
+
+  # A cron loop targeting an ActiveJob class must enqueue through the AJ wrapper
+  # (perform_later → Sidekiq::ActiveJob::Wrapper), NOT as a bare worker — a raw
+  # `client.push('class' => AJClass)` would make the processor call
+  # `AJClass.new.perform` and skip all of ActiveJob. sidekiq-cron parity.
+  def test_poller_enqueues_active_job_via_wrapper_when_leader
+    queue = "cron-aj-#{@suffix}"
+    klass = build_cron_active_job(queue)
+    job = enqueue_via_leader_tick(klass: klass.name, queue: queue, args: [])
+
+    assert_equal 'Sidekiq::ActiveJob::Wrapper', job['class'],
+                 'ActiveJob cron target must enqueue through the AJ wrapper, not as a bare worker'
+    assert_equal klass.name, job['wrapped']
+  ensure
+    Object.send(:remove_const, klass.name.to_sym) if klass.respond_to?(:name) && klass.name
   end
 
   def test_poller_enqueues_args_when_leader
@@ -1096,6 +1114,20 @@ class CronTest < Wurk::Test::UnitCase
     # Pretend this process holds the cluster lock.
     poller.define_singleton_method(:leader?) { true }
     poller
+  end
+
+  # Named ActiveJob subclass wired to the wurk adapter. AJ serialization needs
+  # a real (non-anonymous) constant, so const_set a unique name; the test's
+  # ensure-block removes it.
+  def build_cron_active_job(queue)
+    klass = Class.new(::ActiveJob::Base) do
+      def perform(*); end
+    end
+    klass.queue_as(queue)
+    klass.queue_adapter = :wurk
+    name = "CronAJ_#{Process.pid}_#{object_id}_#{rand(1 << 32)}"
+    Object.const_set(name, klass)
+    klass
   end
 
   def enqueue_via_leader_tick(klass:, queue:, args:)

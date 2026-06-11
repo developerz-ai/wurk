@@ -4,6 +4,11 @@ All notable changes to Wurk are recorded here. Format: [Keep a Changelog](https:
 
 ## [Unreleased]
 
+## [1.0.1] - 2026-06-11
+
+### Fixed
+- **Cron / Periodic** — a cron loop targeting an `ActiveJob` class now enqueues it through the ActiveJob adapter (`perform_later` → `Sidekiq::ActiveJob::Wrapper`) instead of pushing it as a bare Sidekiq worker. Previously the poller did a raw `client.push('class' => "MyActiveJob")`, so the processor would call `MyActiveJob.new.perform` and skip all of ActiveJob (callbacks, argument deserialization, retries). Matches sidekiq-cron behavior. An explicit cron `queue:` still overrides; otherwise the job's own `queue_as` is respected.
+
 ## [1.0.0] - 2026-06-11
 
 First stable release. Wurk is a 100% drop-in replacement for Sidekiq, Sidekiq

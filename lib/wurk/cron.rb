@@ -574,12 +574,41 @@ module Wurk
       end
 
       def enqueue!(loop_obj)
+        aj = active_job_class(loop_obj.klass)
+        return enqueue_active_job(aj, loop_obj) if aj
+
         @client.push(
           'class' => loop_obj.klass,
           'args' => loop_obj.args,
           'queue' => loop_obj.queue,
           'retry' => loop_obj.retry_value
         )
+      end
+
+      # Resolve a loop's class name to an ActiveJob::Base subclass, or nil when
+      # ActiveJob isn't loaded (standalone wurk) or the class isn't one.
+      # sidekiq-cron parity: a cron loop targeting an ActiveJob must enqueue
+      # through the AJ adapter so the job runs via Sidekiq::ActiveJob::Wrapper
+      # with full callbacks/serialization — a bare `client.push('class' => …)`
+      # would make the processor call `Klass.new.perform`, skipping all of AJ.
+      def active_job_class(name)
+        return nil unless defined?(::ActiveJob::Base)
+
+        const = name.split('::').inject(::Object) { |mod, c| mod.const_get(c) }
+        const if const.is_a?(::Class) && const < ::ActiveJob::Base
+      rescue ::NameError
+        nil
+      end
+
+      # Enqueue via the AJ adapter (→ wurk). Only override the queue when the
+      # loop set one explicitly; otherwise the job's own `queue_as` wins. AJ's
+      # `retry_on`/`discard_on` govern retries, so the Sidekiq `retry` option
+      # doesn't apply here. Returns the wurk jid (provider_job_id) so the fire
+      # history records it; nil if a before_enqueue callback halted the push.
+      def enqueue_active_job(klass, loop_obj)
+        target = loop_obj.queue == 'default' ? klass : klass.set(queue: loop_obj.queue)
+        job = target.perform_later(*loop_obj.args)
+        job.provider_job_id if job.respond_to?(:provider_job_id)
       end
 
       def read_fire_marks(lid)
