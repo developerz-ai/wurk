@@ -434,7 +434,8 @@ class EncryptionTest < Wurk::Test::UnitCase
   def test_decryption_failure_fires_death_handlers # rubocop:disable Metrics/AbcSize
     ENABLE_MUTEX.synchronize do
       fired = []
-      Wurk.configuration.death_handlers << ->(j, ex) { fired << [j['jid'], ex.class] }
+      handler = ->(j, ex) { fired << [j['jid'], ex.class] }
+      Wurk.configuration.death_handlers << handler
       Wurk::Encryption.enable(active_version: 1) { |_v| KEY_V1 }
       env = Wurk::Encryption.encrypt('x')
       Wurk::Encryption.disable!
@@ -444,7 +445,11 @@ class EncryptionTest < Wurk::Test::UnitCase
       assert_raises(Wurk::JobRetry::Skip) { invoke_server(job) { :unreached } }
       assert_equal [[jid, Wurk::Encryption::KeyMissingError]], fired
     ensure
-      Wurk.configuration.death_handlers.clear
+      # Drop only the handler this test added; `.clear` would wipe
+      # Wurk::Batch::DeathHandler and Wurk::Unique::DEATH_HANDLER (registered
+      # at load time on the process-global config), leaking emptiness into
+      # whatever test the parallel-fork worker runs next.
+      Wurk.configuration.death_handlers.delete(handler) if handler
       drain_dead(jid)
     end
   end
