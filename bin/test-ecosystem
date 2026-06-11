@@ -53,18 +53,27 @@ for harness in "$ECOSYSTEM_DIR"/*/; do
 
   echo "==> $name @ $sha"
   ran=$((ran + 1))
-  # Isolate the harness bundle from the parent wurk one. CI's setup-ruby
-  # bundler-cache leaves the parent's gems in vendor/bundle and its bundler
-  # config active (deployment/path); a harness install that inherits either is
-  # stranded on the parent's already-installed gem set and can't fetch a
-  # conflicting version. The conflict is real: wurk's Gemfile pins
-  # `minitest >= 5.20` (resolves to 6.x) while sidekiq-cron needs `~> 5.15`
-  # (< 6). BUNDLE_IGNORE_CONFIG drops all inherited config files and a
-  # harness-local BUNDLE_PATH (under the gitignored .checkouts/) keeps the
-  # parent's gems out of scope, so each harness resolves+installs fresh against
-  # rubygems. Overriding BUNDLE_DEPLOYMENT/FROZEN alone did not suffice.
+  # Run each harness in its own bundle, fully detached from the parent wurk
+  # one. Two things have to be true:
+  #
+  # 1. Detach from the OUTER `bundle exec rake test:ecosystem` we're running
+  #    inside. That export RUBYOPT=-r.../bundler/setup, BUNDLER_SETUP, and
+  #    GEM_HOME/GEM_PATH into our env, so a bare `bundle install` here is
+  #    hijacked: ruby auto-requires bundler/setup against the HARNESS Gemfile
+  #    before install runs, then can't find the (not-yet-installed) gems in the
+  #    parent's GEM_PATH and dies instantly with GemNotFound. Unset those vars
+  #    so the nested bundle starts clean — the shell-script equivalent of
+  #    Bundler.with_unbundled_env.
+  # 2. Don't inherit the parent's gem set or config. wurk's Gemfile pins
+  #    `minitest >= 5.20` (resolves to 6.x) while sidekiq-cron needs `~> 5.15`
+  #    (< 6) — a real conflict. A harness-local BUNDLE_PATH (under the
+  #    gitignored .checkouts/) and BUNDLE_IGNORE_CONFIG (drops inherited config
+  #    files) keep the parent's gems out of scope, so each harness
+  #    resolves+installs fresh against rubygems.
   if ! (
     cd "$checkout" &&
+    unset RUBYOPT RUBYLIB BUNDLER_SETUP BUNDLER_VERSION BUNDLE_BIN_PATH \
+          GEM_HOME GEM_PATH BUNDLE_GEMFILE BUNDLE_PATH &&
     export BUNDLE_GEMFILE="$ROOT/$harness/Gemfile" \
            BUNDLE_IGNORE_CONFIG=true \
            BUNDLE_PATH="$checkout/.bundle/gems" \
