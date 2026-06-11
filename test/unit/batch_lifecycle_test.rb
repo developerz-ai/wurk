@@ -432,6 +432,66 @@ class BatchLifecycleTest < Wurk::Test::UnitCase
     assert_equal(1, @pool.with { |c| c.call('SCARD', "b-#{parent.bid}-pkids") })
   end
 
+  # --- #209: parent gated on running child batches ------------------------
+
+  def test_parent_callbacks_wait_when_parent_acks_before_child # rubocop:disable Minitest/MultipleAssertions
+    parent, child = nested(parent_cbs: { success: 'ParentSuccess', complete: 'ParentComplete' },
+                           child_cbs: { success: 'ChildSuccess' })
+
+    # The #209 race: the parent's own last job acks while the child batch
+    # still has a pending job — nothing may fire on the parent yet.
+    ack_success(parent.bid, jid_for(@queue, parent.bid))
+
+    assert_equal 0, callbacks_fired(event: 'complete', bid: parent.bid),
+                 'parent :complete must wait for running child batches'
+    assert_equal 0, callbacks_fired(event: 'success', bid: parent.bid),
+                 'parent :success must wait for running child batches'
+
+    ack_success(child.bid, jid_for(@queue, child.bid))
+
+    assert_equal 1, callbacks_fired(event: 'success', bid: child.bid)
+    assert_equal 1, callbacks_fired(event: 'complete', bid: parent.bid)
+    assert_equal 1, callbacks_fired(event: 'success', bid: parent.bid)
+  end
+
+  def test_parent_fires_when_child_acks_first_then_parent
+    parent, child = nested(parent_cbs: { success: 'ParentSuccess', complete: 'ParentComplete' })
+    ack_success(child.bid, jid_for(@queue, child.bid))
+
+    assert_equal 0, callbacks_fired(event: 'success', bid: parent.bid),
+                 'parent must still wait for its own job'
+
+    ack_success(parent.bid, jid_for(@queue, parent.bid))
+
+    assert_equal 1, callbacks_fired(event: 'complete', bid: parent.bid)
+    assert_equal 1, callbacks_fired(event: 'success', bid: parent.bid)
+  end
+
+  def test_child_events_recorded_before_parent_under_parent_first_ack_order
+    parent, child = nested(parent_cbs: { success: 'ParentSuccess' }, child_cbs: { success: 'ChildSuccess' })
+    ack_success(parent.bid, jid_for(@queue, parent.bid))
+    ack_success(child.bid, jid_for(@queue, child.bid))
+
+    child_at  = @pool.with { |c| c.call('HGET', "b-#{child.bid}", 'success_at') }.to_f
+    parent_at = @pool.with { |c| c.call('HGET', "b-#{parent.bid}", 'success_at') }.to_f
+
+    assert_operator child_at, :<=, parent_at, 'child :success must precede parent :success (spec §2.4)'
+  end
+
+  def test_parent_complete_after_own_job_death_waits_for_running_child
+    parent, child = nested(parent_cbs: { complete: 'ParentComplete', success: 'ParentSuccess' })
+    kill(parent.bid, jid_for(@queue, parent.bid))
+
+    assert_equal 0, callbacks_fired(event: 'complete', bid: parent.bid),
+                 'parent :complete must wait for the running child even on the death path'
+
+    ack_success(child.bid, jid_for(@queue, child.bid))
+
+    assert_equal 1, callbacks_fired(event: 'complete', bid: parent.bid)
+    assert_equal 0, callbacks_fired(event: 'success', bid: parent.bid),
+                 'death must keep suppressing parent :success'
+  end
+
   # --- #213: on() after first flush must persist --------------------------
 
   def test_on_after_jobs_flush_persists_and_fires

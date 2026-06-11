@@ -29,8 +29,11 @@ module Wurk
         Wurk::Batch::Callbacks.fire_death(bid) if first_death == 1
         return unless live.zero?
 
-        Wurk::Batch::Callbacks.fire_complete(bid)
-        Wurk::Batch::Callbacks.propagate_to_parent(bid)
+        # Through the gated maybe_fire, not a direct fire_complete: this batch
+        # may still have running child batches, and spec §2.4 ordering says
+        # its `:complete` must wait for theirs (#209). `:success` stays
+        # suppressed regardless — the death above set the durable death flag.
+        Wurk::Batch::Callbacks.maybe_fire(bid, pending: Wurk::Batch::Callbacks.pending_for(bid), live: 0)
       end
     end
   end
