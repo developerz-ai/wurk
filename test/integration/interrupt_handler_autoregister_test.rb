@@ -41,7 +41,11 @@ end
 class InterruptHandlerAutoregisterTest < Wurk::Test::UnitCase
   parallelize_me!
 
-  POLL_TIMEOUT = 30.0
+  # 60s, not 30: under the full parallel suite (NCPU parallel_fork workers, each
+  # integration test forking its own swarm) child boot + fetch + interrupt →
+  # re-push → resume can exceed 30s on loaded CI runners (#216). Tight enough
+  # to still catch a true wiring regression, loose enough not to flake.
+  POLL_TIMEOUT = 60.0
   POLL_INTERVAL = 0.1
   SHUTDOWN_TIMEOUT = 15
 

@@ -194,7 +194,7 @@ module Wurk
       #   * nil          → UTC
       #   * AS::TimeZone → responds to #at
       #   * TZInfo::Tz   → responds to #utc_to_local
-      #   * IANA String  → parsed via ENV TZ override (POSIX `tzset(3)`)
+      #   * IANA String  → resolved via TZInfo (cached; UTC fallback + warning)
       def wall_clock(epoch, tz)
         t = case tz
             when nil then ::Time.at(epoch).utc
@@ -208,15 +208,47 @@ module Wurk
         return tz.at(epoch) if tz.respond_to?(:at) && !tz.is_a?(String)
         return tz.utc_to_local(::Time.at(epoch).utc) if tz.respond_to?(:utc_to_local)
 
-        with_tz_env(tz.to_s) { ::Time.at(epoch) }
+        zone = self.class.resolve_zone(tz.to_s)
+        zone ? zone.utc_to_local(::Time.at(epoch).utc) : ::Time.at(epoch).utc
       end
 
-      def with_tz_env(name)
-        old = ENV.fetch('TZ', nil)
-        ENV['TZ'] = name
-        yield
-      ensure
-        ENV['TZ'] = old
+      # IANA String → TZInfo::Timezone, memoized process-wide. Never mutates
+      # ENV['TZ']: ENV is process-global, so the old tzset(3) override leaked
+      # the cron loop's zone into every other thread — processors running user
+      # perform code observed the wrong timezone mid-evaluation (#210). It was
+      # also unreliable: Ruby caches the process zone after first Time use, so
+      # the flip wasn't honored consistently anyway.
+      #
+      # tzinfo is a soft dependency (always present under Rails via
+      # activesupport). A missing gem or unknown identifier caches `false` so
+      # the warning logs once, not once per evaluated minute, and the loop
+      # degrades to UTC instead of crashing the poller.
+      @tz_cache = {}
+      @tz_cache_mutex = ::Mutex.new
+
+      class << self
+        def resolve_zone(name)
+          cached = @tz_cache[name]
+          return cached || nil unless cached.nil?
+
+          @tz_cache_mutex.synchronize do
+            @tz_cache.fetch(name) { @tz_cache[name] = load_zone(name) } || nil
+          end
+        end
+
+        private
+
+        def load_zone(name)
+          require 'tzinfo' unless defined?(::TZInfo)
+          ::TZInfo::Timezone.get(name)
+        rescue ::LoadError
+          Wurk.logger&.warn("[cron] tzinfo gem unavailable — evaluating timezone #{name.inspect} as UTC. " \
+                            'Add `gem "tzinfo"` for timezone-aware cron.')
+          false
+        rescue ::StandardError => e
+          Wurk.logger&.warn("[cron] unknown timezone #{name.inspect} (#{e.class}: #{e.message}) — evaluating as UTC")
+          false
+        end
       end
     end
 

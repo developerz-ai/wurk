@@ -751,20 +751,64 @@ class CronTest < Wurk::Test::UnitCase
   end
 
   # 199 else: tz is a String → neither #at (it IS a String) nor #utc_to_local,
-  # so local_time falls through to the with_tz_env(tz.to_s) POSIX path. We
-  # assert the branch runs and restores ENV['TZ'] rather than the resolved
-  # wall-clock: Ruby caches the process zone after first Time use, so an
-  # in-process ENV['TZ'] flip is not reliably honoured under the parallel
-  # runner (the DST tests use TZInfo objects for exactly this reason).
-  def test_local_time_string_tz_runs_posix_path_and_restores_env
+  # so local_time resolves it through TZInfo (#210 replaced the old ENV['TZ']
+  # tzset(3) override, which was process-global and thread-unsafe). A String
+  # must now produce the exact same wall clock as the equivalent TZInfo object.
+  def test_local_time_string_tz_resolves_via_tzinfo
     p = Wurk::Cron::Parser.new('* * * * *')
+    epoch = ::Time.utc(2026, 1, 1, 6, 30, 0).to_i
+
+    assert_equal p.local_components(epoch, tz('America/New_York')),
+                 p.local_components(epoch, 'America/New_York'),
+                 'String tz must resolve to the same wall clock as the TZInfo object'
+  end
+
+  def test_string_tz_matches_dst_local_time
+    # America/New_York is UTC-4 in July (EDT): 05:30 UTC == 01:30 local.
+    p = Wurk::Cron::Parser.new('30 1 * * *')
+
+    assert p.match?(::Time.utc(2026, 7, 1, 5, 30, 0), 'America/New_York')
+    refute p.match?(::Time.utc(2026, 7, 1, 6, 30, 0), 'America/New_York'),
+           'EST offset must not match during EDT — String tz must be DST-aware'
+  end
+
+  # #210 regression: evaluating a String tz must never write ENV['TZ'] — ENV
+  # is process-global, so any write leaks the loop's zone into every other
+  # thread. A sampling watcher thread is a probabilistic tripwire (the old
+  # set/restore window was microseconds wide), so instead intercept ENV.[]=
+  # itself for the duration of a minute-walk: deterministic both ways. The
+  # walk crosses a leap-day boundary (~40k minutes), which flapped ENV ~80k
+  # times under the old tzset(3) path.
+  def test_string_tz_evaluation_never_writes_env_tz
     before = ENV.fetch('TZ', :unset)
+    writes = []
+    original = ENV.method(:[]=)
+    ENV.singleton_class.send(:define_method, :[]=) do |k, v|
+      writes << k
+      original.call(k, v)
+    end
+    begin
+      Wurk::Cron::Parser.new('0 12 29 2 *').next_fire_at(::Time.utc(2028, 2, 1).to_i, 'Pacific/Auckland')
+    ensure
+      ENV.singleton_class.send(:define_method, :[]=, original)
+    end
 
-    components = p.local_components(::Time.utc(2026, 1, 1, 6, 30, 0).to_i, 'America/New_York')
+    refute_includes writes, 'TZ', 'cron tz evaluation must never write the process-global ENV[TZ]'
+    assert_equal before, ENV.fetch('TZ', :unset), 'ENV[TZ] must be untouched after evaluation'
+  end
 
-    assert_equal 5, components.size, 'string tz path must still yield [min,hour,dom,mon,dow]'
-    after = ENV.fetch('TZ', :unset)
-    assert_equal before, after, 'with_tz_env must restore the prior ENV[TZ]'
+  def test_unknown_string_tz_falls_back_to_utc_with_warning
+    p = Wurk::Cron::Parser.new('* * * * *')
+    epoch = ::Time.utc(2026, 1, 1, 6, 30, 0).to_i
+
+    assert_equal p.local_components(epoch, nil),
+                 p.local_components(epoch, 'Not/AZone'),
+                 'unresolvable tz must degrade to UTC, not raise'
+  end
+
+  def test_resolve_zone_caches_per_name
+    assert_same Wurk::Cron::Parser.resolve_zone('Asia/Tokyo'),
+                Wurk::Cron::Parser.resolve_zone('Asia/Tokyo')
   end
 
   # ---- Loop#last_fired_at branch coverage ------------------------------
