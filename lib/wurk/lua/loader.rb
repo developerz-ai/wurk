@@ -38,6 +38,16 @@ module Wurk
           evalsha(redis, sha, keys, argv)
         end
 
+        # Source-embedded EVAL — the slow but cache-independent counterpart to
+        # `eval_cached`. Used on retry from a pipelined NOSCRIPT recovery where
+        # EVALSHA can still race a freshly-loaded script under heavy CI load
+        # (cf. WorkerTest NOSCRIPT flake on test (3.4, 7.2)). EVAL ships the
+        # full source every call, so it never raises NOSCRIPT.
+        def eval_with_source(redis, name, keys:, argv:)
+          src = SCRIPTS.fetch(name) { raise ArgumentError, "unknown Lua script: #{name.inspect}" }
+          redis.call('EVAL', src, keys.size, *keys, *argv)
+        end
+
         private
 
         def evalsha(redis, sha, keys, argv)
