@@ -33,7 +33,7 @@ module Wurk
         return unless kids_finished?(bid)
 
         fire_complete(bid)
-        fire_success(bid) if pending.zero? && !death_fired?(bid)
+        fire_success(bid) if pending.zero? && !subtree_dead?(bid)
         propagate_to_parent(bid)
       end
 
@@ -146,6 +146,50 @@ module Wurk
         Wurk.redis { |conn| conn.call('HGET', "b-#{bid}", 'death') } == '1'
       end
 
+      # A batch's subtree is still dead while it carries the durable death
+      # mark OR any direct child does — deaths cascade up the parent chain,
+      # so a dead descendant keeps every ancestor's child marked. This gates
+      # `:success`, which must never fire while a job in the subtree is
+      # terminally dead (spec §2.4). The child check matters for the brief
+      # window where a batch with both its own dead job and a dead child has
+      # its OWN dead job retried to success: BATCH_PUSH (#212) clears that
+      # batch's own mark when its died set drains, but the child subtree is
+      # still dead, so `death_fired?` alone would wrongly let `:success` fire.
+      def subtree_dead?(bid)
+        death_fired?(bid) || any_child_dead?(bid)
+      end
+
+      # Recovery counterpart to cascade_death (#226). When a descendant's
+      # last dead job is manually retried back to success, the descendant
+      # clears its OWN death mark (#212, in BATCH_PUSH) — but every ancestor
+      # was marked by the death *cascade*, not by a jid in its own died set,
+      # so nothing here ever cleared them and the ancestor's `:success`
+      # stayed suppressed forever. Re-evaluate this batch: drop its durable
+      # death mark and `dead-batches` membership once its own died set is
+      # empty AND no child still carries a death mark. The `b-<bid>-death`
+      # notify dedup key is deliberately left intact, so a later re-death
+      # re-marks the batch (fire_death restores the flag before its own
+      # dedup guard) without ever re-enqueuing `:death`.
+      def clear_death_on_recovery(bid)
+        return unless death_fired?(bid)
+        return if own_died_remaining?(bid)
+        return if any_child_dead?(bid)
+
+        Wurk.redis do |conn|
+          conn.call('HDEL', "b-#{bid}", 'death')
+          conn.call('ZREM', 'dead-batches', bid)
+        end
+      end
+
+      def own_died_remaining?(bid)
+        Wurk.redis { |conn| conn.call('SCARD', "b-#{bid}-died") }.to_i.positive?
+      end
+
+      def any_child_dead?(bid)
+        kids = Wurk.redis { |conn| conn.call('SMEMBERS', "b-#{bid}-kids") }
+        kids.any? { |kid| death_fired?(kid) }
+      end
+
       # Per-callback rescue: one bad spec or a transient enqueue failure must
       # not strand the batch with the remaining callbacks for this event
       # un-enqueued. Log and move on so every other callback still fires.
@@ -196,6 +240,11 @@ module Wurk
         return if parent_bid.nil? || parent_bid.empty?
         return unless pkids_drained?(parent_bid, bid)
 
+        # A recovered child may have lifted the last death from the parent's
+        # subtree — clear the parent's cascaded mark before its gate runs, so
+        # `:success` can fire. Harmless on the death path: the dying child
+        # still carries its mark, so any_child_dead? keeps the parent dead.
+        clear_death_on_recovery(parent_bid)
         maybe_fire(parent_bid, pending: pending_for(parent_bid), live: live_for(parent_bid))
       end
 
