@@ -420,11 +420,21 @@ Key sources: file, `ENV`, KMS — any callback that maps `Integer version → 32
 
 ### 4.4 On-wire format
 
-In Redis the job's last arg becomes a base64-encoded envelope, conceptually:
+In Redis the job's last arg becomes a JSON Hash envelope (not a base64 blob of a
+binary envelope — the args array stays valid JSON for inspectors):
 
 ```
-{ "v" => active_version, "iv" => b64(iv), "ct" => b64(ciphertext), "tag" => b64(gcm_tag) }
+{ "__wurk_enc__" => true, "v" => active_version, "iv" => b64(iv), "ct" => b64(ciphertext), "tag" => b64(gcm_tag) }
 ```
+
+The leading `__wurk_enc__ => true` marker is the authoritative envelope
+discriminator: detection (`Wurk::Encryption.envelope?`, used by both the server
+middleware and the Web UI redactor) keys off it, so a plain user Hash that
+happens to carry `v`/`iv`/`ct`/`tag` keys is never mistaken for ciphertext and
+fed to the cipher. wurk both writes and reads this format, so it is
+self-consistent; it is *not* wire-compatible with real Sidekiq Enterprise's
+crypto format (a base64 binary blob), which is a documented divergence — encrypted
+payloads do not round-trip Ent↔wurk regardless.
 
 Overhead: ~150 bytes + ~30% size growth from base64.
 
