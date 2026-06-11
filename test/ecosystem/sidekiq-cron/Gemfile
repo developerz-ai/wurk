@@ -1,0 +1,17 @@
+# frozen_string_literal: true
+
+# Overlay Gemfile for the pinned sidekiq-cron checkout (see PIN). Mirrors the
+# gem's own Gemfile, except `sidekiq` resolves to wurk's shim gem instead of
+# real Sidekiq — the whole point of the ecosystem suite (#204). bin/test-ecosystem
+# sets ECOSYSTEM_CHECKOUT and runs the suite with BUNDLE_GEMFILE pointing here.
+
+source 'https://rubygems.org'
+
+gemspec path: ENV.fetch('ECOSYSTEM_CHECKOUT')
+
+wurk_root = File.expand_path('../../..', __dir__)
+gem 'sidekiq', path: File.join(wurk_root, 'ecosystem/sidekiq-shim')
+gem 'wurk', path: wurk_root
+
+# Upstream's Gemfile pins rails for its railtie/schedule-loader tests.
+gem 'rails', ENV.fetch('RAILS_VERSION', '~> 8.0')

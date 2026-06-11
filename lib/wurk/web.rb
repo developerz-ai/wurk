@@ -4,6 +4,7 @@ require_relative 'web/config'
 require_relative 'web/search'
 require_relative 'web/enterprise'
 require_relative 'web/batch_status'
+require_relative 'web/rack_app'
 
 module Wurk
   # Web UI namespace. Holds three sibling concerns:

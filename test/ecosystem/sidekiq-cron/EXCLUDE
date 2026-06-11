@@ -1,0 +1,7 @@
+# Minitest --exclude pattern(s), one per line, applied via TESTOPTS.
+#
+# Performance Poller: hardware-bound wall-clock budget (10k enqueues < 30s).
+# Fails identically with REAL sidekiq 8.1.6 on the same machine that fails
+# it with wurk (measured 2026-06-11: sidekiq 32.96s, wurk 33.40s — wurk
+# within 1.3% of upstream), so it measures the host, not drop-in parity.
+/Performance Poller/

@@ -1,5 +1,8 @@
 # frozen_string_literal: true
 
+require 'forwardable'
+require 'rack/builder'
+
 module Wurk
   class Web
     # Web UI configuration. Holds the authorization callback documented in
@@ -22,6 +25,8 @@ module Wurk
     # When no block is registered, every request is authorized (matches
     # Sidekiq's default — no auth until the user opts in).
     class Config
+      extend Forwardable
+
       # String forms that mean "off" — so `config.web.read_only = ENV[...]`
       # doesn't flip on when the env var is "0"/"false"/empty.
       FALSEY_STRINGS = ['', '0', 'false', 'no', 'off'].freeze
@@ -32,6 +37,17 @@ module Wurk
       # self-hosted profiler instances.
       PROFILE_VIEW_URL  = 'https://profiler.firefox.com/public/%s'
       PROFILE_STORE_URL = 'https://api.profiler.firefox.com/compressed-store'
+
+      # Hash-style settings, same surface as Sidekiq::Web::Config (#204):
+      # gems and apps write `Sidekiq::Web.configure { |c| c[:csrf] = false }`.
+      # Seeded like upstream's OPTIONS; unknown keys are stored verbatim so a
+      # setting wurk doesn't consume still round-trips (e.g. :csrf — wurk's
+      # extension POST guard is the Sec-Fetch-Site check in
+      # ExtensionsController, spec §25.1, not a token).
+      OPTIONS = {
+        profile_view_url: PROFILE_VIEW_URL,
+        profile_store_url: PROFILE_STORE_URL
+      }.freeze
 
       # Sidekiq's built-in dashboard tabs (spec §25.3). The `tabs` hash starts
       # as a copy of this; extensions add to it via `register_extension` or by
@@ -52,29 +68,37 @@ module Wurk
       ].freeze
 
       # Host-app Rack middleware stacked in front of the dashboard, newest
-      # last. Each entry is `[middleware, args, block]`. Returns a frozen copy
-      # so the memoized chain (`#rack_app`) can only be invalidated through
-      # `#use` — direct mutation can't silently desync it.
-      def middlewares
-        @middlewares.dup.freeze
-      end
+      # last. Each entry is `[middleware, args, block]`. The LIVE array, like
+      # Sidekiq::Web::Config#middlewares — callers mutate it directly
+      # (sidekiq-cron's tests do `c.middlewares.clear`), so `#rack_app`
+      # detects drift instead of this returning a frozen copy.
+      attr_reader :middlewares
 
       def initialize
+        @options = OPTIONS.dup
         @authorization = nil
         @read_only = env_read_only?
         @read_only_message = nil
         @middlewares = []
         @rack_app = nil
-        @profile_view_url = nil
-        @profile_store_url = nil
         init_extensions!
       end
 
-      # Firefox-profiler URLs, overridable; default to the public instance.
-      attr_writer :profile_view_url, :profile_store_url
+      def_delegators :@options, :[], :[]=, :fetch, :key?, :has_key?, :merge!, :dig
 
-      def profile_view_url  = @profile_view_url || PROFILE_VIEW_URL
-      def profile_store_url = @profile_store_url || PROFILE_STORE_URL
+      # Firefox-profiler URLs — named views over the same @options keys the
+      # bracket surface exposes, so `c[:profile_view_url] = …` and
+      # `c.profile_view_url = …` can't drift apart.
+      def profile_view_url  = @options[:profile_view_url]
+      def profile_store_url = @options[:profile_store_url]
+
+      def profile_view_url=(value)
+        @options[:profile_view_url] = value
+      end
+
+      def profile_store_url=(value)
+        @options[:profile_store_url] = value
+      end
 
       # Optional banner copy shown by the dashboard in read-only mode. Nil →
       # the SPA falls back to its localized default ("Read-only mode"). Lets a
@@ -94,7 +118,11 @@ module Wurk
       # time. `tabs` is a mutable name→path hash seeded from DEFAULT_TABS;
       # `custom_job_info_rows` collects callables that add rows to the job
       # detail view; `app_url` / `assets_path` mirror Sidekiq's accessors.
-      attr_reader :tabs, :extensions
+      # `locales` is the mutable locale-directory list extensions append to
+      # (`Sidekiq::Web.configure.locales << dir`) — the Extension renderer's
+      # `t()` reads en.yml from every listed dir. Wurk's own SPA i18n is
+      # separate, so it starts empty.
+      attr_reader :tabs, :extensions, :locales
       attr_accessor :custom_job_info_rows, :app_url, :assets_path
 
       # Matches Sidekiq::Web::Config#register_extension (aliased `register`,
@@ -109,6 +137,9 @@ module Wurk
       def register_extension(extension, name:, tab:, index:, root_dir: nil,
                              cache_for: 86_400, asset_paths: nil)
         Array(tab).zip(Array(index)).each { |label, path| @tabs[label] = path if label }
+        # Upstream registers root_dir/locales automatically; extensions
+        # without a root_dir append their dir to `locales` themselves.
+        @locales << ::File.join(root_dir, 'locales') if root_dir
         @extensions << {
           extension: extension, name: name, tab: tab, index: index,
           root_dir: root_dir, cache_for: cache_for, asset_paths: asset_paths
@@ -164,17 +195,21 @@ module Wurk
         @rack_app = nil
       end
 
-      # Builds (once) the host-middleware chain wrapping `inner` and memoizes
-      # it on this Config. `reset_config!` swaps in a fresh Config, so each
-      # test rebuilds cleanly; production builds exactly once at boot.
+      # Builds the host-middleware chain wrapping `inner`, memoized against
+      # the middleware list it was built from — `middlewares` is the live
+      # array (upstream surface), so direct mutation after the first request
+      # triggers a rebuild instead of silently serving the stale chain.
+      # Production builds exactly once at boot; the per-request comparison is
+      # an == over a handful of entries.
       def rack_app(inner)
-        @rack_app ||= begin
-          stack = @middlewares
-          ::Rack::Builder.new do
-            stack.each { |middleware, args, block| use(middleware, *args, &block) }
-            run inner
-          end.to_app
-        end
+        return @rack_app if @rack_app && @rack_app_stack == @middlewares
+
+        @rack_app_stack = @middlewares.dup
+        stack = @middlewares
+        @rack_app = ::Rack::Builder.new do
+          stack.each { |middleware, args, block| use(middleware, *args, &block) }
+          run inner
+        end.to_app
       end
 
       # Read-only mode. When on, the Authorization middleware blocks every
@@ -191,13 +226,12 @@ module Wurk
       end
 
       def reset!
+        @options = OPTIONS.dup
         @authorization = nil
         @read_only = env_read_only?
         @read_only_message = nil
         @middlewares = []
         @rack_app = nil
-        @profile_view_url = nil
-        @profile_store_url = nil
         init_extensions!
       end
 
@@ -220,6 +254,7 @@ module Wurk
       def init_extensions!
         @tabs = DEFAULT_TABS.dup
         @extensions = []
+        @locales = []
         @custom_job_info_rows = []
         @app_url = nil
         @assets_path = nil
@@ -246,8 +281,11 @@ module Wurk
         @config ||= Config.new
       end
 
+      # With a block: yields the config (the documented configure form).
+      # Without: returns it — upstream's blockless-getter form, which gems
+      # use as `Sidekiq::Web.configure.tabs` (#204).
       def configure
-        yield config
+        block_given? ? yield(config) : config
       end
 
       # Class-level shorthand for `config.use` — mirrors `Sidekiq::Web.use`.

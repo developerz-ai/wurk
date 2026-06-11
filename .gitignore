@@ -35,6 +35,7 @@ vendor/assets/dashboard/*
 # Bundler install path (ruby/setup-ruby bundler-cache installs gems here in CI).
 /vendor/bundle/
 
-# Ecosystem gem checkouts — cloned locally for `rake test:ecosystem`, never committed
-test/ecosystem/*/
-!test/ecosystem/.keep
+# Ecosystem harnesses (PIN + overlay Gemfile) are committed; the cloned gem
+# checkouts and per-harness lockfiles they produce are not.
+test/ecosystem/.checkouts/
+test/ecosystem/*/Gemfile.lock

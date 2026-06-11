@@ -1,0 +1,5 @@
+# Upstream checkout this suite runs from. Bump sha only after re-running
+# `bin/rake test:ecosystem` green against the new tag.
+repo: https://github.com/sidekiq-cron/sidekiq-cron
+ref: v2.4.0
+sha: 3af55a8f29c99d1c5ea1452fe4595635c3ddf938

@@ -91,7 +91,10 @@ module Sidekiq
   Component        = Wurk::Component
   Config           = Wurk::Configuration
   Context          = Wurk::Context
-  Cron             = Wurk::Cron
+  # No `Sidekiq::Cron` alias on purpose (#204): real Sidekiq never defines it
+  # — that namespace belongs to the third-party sidekiq-cron gem, and squatting
+  # it made the gem's own classes (Poller, Job) collide at load. Wurk's native
+  # periodic surface is `Sidekiq::Periodic` (Ent parity) / `Wurk::Cron`.
   CronParser       = Wurk::Cron::Parser
   Periodic         = Wurk::Cron
   DeadSet          = Wurk::DeadSet
@@ -122,6 +125,7 @@ module Sidekiq
   ProfileSet       = Wurk::ProfileSet
   ProfileRecord    = Wurk::ProfileRecord
   Queue            = Wurk::Queue
+  RedisClientAdapter = Wurk::RedisClientAdapter
   RedisConnection  = Wurk::RedisConnection
   RetrySet         = Wurk::RetrySet
   Scheduled        = Wurk::Scheduled

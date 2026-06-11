@@ -668,8 +668,15 @@ class CronTest < Wurk::Test::UnitCase
   # ---- Sidekiq aliases ------------------------------------------------
 
   def test_aliased_under_sidekiq_namespace
-    assert_same Wurk::Cron, Sidekiq::Cron
     assert_same Wurk::Cron, Sidekiq::Periodic
+  end
+
+  # #204: `Sidekiq::Cron` belongs to the third-party sidekiq-cron gem — real
+  # Sidekiq never defines it. Wurk must leave the namespace free so the gem's
+  # own classes (Poller, Job) can load against wurk without colliding.
+  def test_sidekiq_cron_namespace_left_free_for_the_ecosystem_gem
+    refute Sidekiq.const_defined?(:Cron, false),
+           'Sidekiq::Cron must stay undefined — it is sidekiq-cron the gem, not Sidekiq surface'
   end
 
   def test_constants_match_spec_keys

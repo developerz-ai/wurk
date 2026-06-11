@@ -2,6 +2,7 @@
 
 require 'redis-client'
 require 'connection_pool'
+require_relative 'redis_client_adapter'
 
 module Wurk
   # Per-process pool over redis-client + connection_pool. Never share a socket
@@ -56,8 +57,11 @@ module Wurk
 
     private
 
+    # Wrapped in the CompatClient decorator so `Sidekiq.redis { |c| c.smembers }`
+    # method-style commands work like Sidekiq 7+ (#204). Wurk's own code paths
+    # use #call, which the decorator forwards.
     def build_client
-      RedisClient.config(url: @url, timeout: @timeout).new_client
+      RedisClientAdapter::CompatClient.new(RedisClient.config(url: @url, timeout: @timeout).new_client)
     end
 
     def safe_close(conn)
