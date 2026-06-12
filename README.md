@@ -57,6 +57,8 @@ Plus Wurk extras: a worker topology DSL, a Kubernetes liveness/readiness listene
 
 - **[Website](https://developerz-ai.github.io/wurk/)** · **[Wiki / full docs](https://github.com/developerz-ai/wurk/wiki)** — the pitch, install, and the complete guide.
 - **[Getting started & architecture](https://github.com/developerz-ai/wurk/blob/main/docs/idea/01-overview.md)** — how the swarm, manager, fetcher, and processor fit together.
+- **[Starting the worker](https://github.com/developerz-ai/wurk/blob/main/docs/running.md)** — Rails auto-start, the `wurk`/`wurkswarm` runners, and running standalone without Rails.
+- **[Active Job adapter](https://github.com/developerz-ai/wurk/blob/main/docs/active-job.md)** — run `ActiveJob`/`deliver_later` on Wurk with `queue_adapter = :wurk`.
 - **[Migrating from Sidekiq](#migrating-from-sidekiq)** — the one-line swap and what to expect.
 - **API reference (parity specs):** [Sidekiq OSS](https://github.com/developerz-ai/wurk/blob/main/docs/target/sidekiq-free.md) · [Pro](https://github.com/developerz-ai/wurk/blob/main/docs/target/sidekiq-pro.md) · [Enterprise](https://github.com/developerz-ai/wurk/blob/main/docs/target/sidekiq-ent.md) — the authoritative surface Wurk matches exactly.
 - **[Securing the dashboard](https://github.com/developerz-ai/wurk/blob/main/docs/dashboard.md)** · **[Metrics history](https://github.com/developerz-ai/wurk/blob/main/docs/metrics-history.md)**
