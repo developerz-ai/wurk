@@ -7,6 +7,7 @@ change is the binary name (`sidekiq` → `wurk`) — the signals, flags, and con
 file are identical.
 
 > Authoritative signal reference: [`docs/target/sidekiq-free.md`](target/sidekiq-free.md) §21 (CLI).
+> Just getting a worker running (incl. standalone, no Rails)? See [`docs/running.md`](running.md).
 > Migrating an existing app? Start with [`docs/migrate-from-sidekiq.md`](migrate-from-sidekiq.md).
 
 ---
