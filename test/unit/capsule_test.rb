@@ -234,6 +234,12 @@ class CapsuleTest < Wurk::Test::UnitCase
     assert_raises(ArgumentError) { @capsule.queues = [%w[high foo]] }
   end
 
+  # A nested array with a stray third element is a config mistake, not a
+  # [name, weight] pair — reject it instead of silently truncating to entry[0..1].
+  def test_queues_setter_raises_on_oversized_array_entry
+    assert_raises(ArgumentError) { @capsule.queues = [['high', 2, 'x']] }
+  end
+
   def test_queues_setter_raises_on_blank_queue_name
     assert_raises(ArgumentError) { @capsule.queues = [''] }
     assert_raises(ArgumentError) { @capsule.queues = ['  '] }
