@@ -44,7 +44,7 @@ module Wurk
     def meta
       config = ::Wurk::Web.config
       render json: {
-        read_only: config.read_only?,
+        read_only: config.read_only? || !mutations_authorized?(config),
         read_only_message: config.read_only_message,
         custom_tabs: config.custom_tabs
       }
@@ -293,6 +293,19 @@ module Wurk
     end
 
     private
+
+    # Per-request read-only signal for the SPA. When a registered authorization
+    # hook would reject a *mutating* request for this user (e.g. a viewer role
+    # that may GET but not retry/kill), report `read_only` so the SPA hides the
+    # destructive actions — the Authorization middleware already 403s the
+    # mutation itself, this just stops the buttons from showing. With no hook
+    # registered, `authorized?` is always true, so this is a no-op and the flag
+    # keeps reflecting the global read-only mode. Probes with POST as a
+    # representative mutating method (SAFE_METHODS are GET/HEAD/OPTIONS); a
+    # path-independent role hook resolves the same regardless of path.
+    def mutations_authorized?(config)
+      config.authorized?(request.env, 'POST', request.path_info)
+    end
 
     # Resolves a single entry by "<score>|<jid>" key and applies a whitelisted
     # action. 400 on an unknown action, 404 when the key matches nothing (e.g.
