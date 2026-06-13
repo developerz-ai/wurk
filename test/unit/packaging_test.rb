@@ -5,17 +5,19 @@ require_relative '../test_helper'
 # Guards the gemspec against the "works under Rails, explodes standalone" trap.
 #
 # wurk requires a few libraries that Ruby has moved OUT of the default gems
-# (base64 in 3.4, logger in 4.0). A Rails app pulls them in transitively, so a
+# (base64 in 3.4, logger in 3.5). A Rails app pulls them in transitively, so a
 # missing runtime dep is invisible in-suite and only blows up for a non-Rails
 # consumer at `require "wurk"`. This test pins those deps so a future cleanup
 # can't silently drop them again (#237).
 class PackagingTest < Wurk::Test::UnitCase
+  parallelize_me!
+
   GEMSPEC = Gem::Specification.load(File.expand_path('../../wurk.gemspec', __dir__))
 
   # require '<name>' in lib/ → the gem that ships it once it leaves stdlib.
   EXTRACTED_STDLIB = {
     'base64' => 'base64', # left default gems in Ruby 3.4
-    'logger' => 'logger'  # leaves default gems in Ruby 4.0
+    'logger' => 'logger'  # bundled gem in Ruby 3.5 (deprecation warnings in 3.4)
   }.freeze
 
   def runtime_dep_names
