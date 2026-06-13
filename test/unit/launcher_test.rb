@@ -320,6 +320,52 @@ class LauncherTest < Wurk::Test::UnitCase
     assert_equal %i[second first], order
   end
 
+  # Regression #236: quiet must NOT stop the heartbeat. A quieted process keeps
+  # beating so it publishes `quiet=true` and stays in the live `processes` SET —
+  # before the fix, quiet flipped the same @done the heartbeat loop ran `until`,
+  # so the process never reported quiet and expired out of the dashboard.
+  def test_quieted_process_publishes_quiet_true_and_stays_listed
+    launcher = build_isolated_launcher
+    silence_managers(launcher)
+    id = launcher_identity(launcher)
+    track(id)
+
+    launcher.send(:beat) # register; writes quiet=false
+    launcher.quiet
+    launcher.send(:beat) # the post-quiet beat must publish the quieted state
+
+    assert_equal 'true', published(id, 'quiet'), 'a quieted process must publish quiet=true (#236)'
+    assert_equal 1, listed?(id), 'a quieted process must stay in the live set (#236)'
+  end
+
+  # Regression #236: the heartbeat survives quiet, so #stop is now what tears the
+  # thread down — via stop_heartbeat (flip @stopped + wake the sleeping loop).
+  def test_stop_terminates_the_heartbeat_thread
+    @config[:timeout] = 0
+    launcher = build_isolated_launcher
+    launcher.managers.each do |m|
+      m.define_singleton_method(:start) { nil }
+      m.define_singleton_method(:quiet) { nil }
+      m.define_singleton_method(:stop) { |_d| nil }
+    end
+    silence_beat(launcher)
+    launcher.poller = launcher.cron_poller = launcher.metrics_rollup = launcher.queue_rollup = launcher.history = nil
+    launcher.instance_variable_set(:@leader, nil)
+    reaper = launcher.instance_variable_get(:@reaper)
+    reaper.define_singleton_method(:start) { nil }
+    reaper.define_singleton_method(:stop) { nil }
+    track(launcher_identity(launcher))
+
+    launcher.run(async_beat: true)
+    thread = launcher.heartbeat_thread
+
+    assert_predicate thread, :alive?, 'heartbeat thread should be running after boot'
+
+    launcher.stop
+
+    refute_predicate thread, :alive?, 'stop must terminate the heartbeat thread (#236)'
+  end
+
   # --- stop ------------------------------------------------------------
 
   def test_stop_invokes_quiet_then_manager_stop_with_deadline
@@ -755,6 +801,14 @@ class LauncherTest < Wurk::Test::UnitCase
 
   def launcher_identity(launcher)
     launcher.identity
+  end
+
+  def published(identity, field)
+    @pool.with { |c| c.call('HGET', identity, field) }
+  end
+
+  def listed?(identity)
+    @pool.with { |c| c.call('SISMEMBER', Wurk::Keys::PROCESSES, identity) }
   end
 
   def track(key)
