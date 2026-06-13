@@ -4,6 +4,12 @@ All notable changes to Wurk are recorded here. Format: [Keep a Changelog](https:
 
 ## [Unreleased]
 
+## [1.0.2] - 2026-06-13
+
+### Fixed
+- **Packaging / standalone** — `require "wurk"` raised `LoadError: cannot load such file -- base64` on Ruby 3.4+ in any non-Rails app. The code requires `base64` and `logger`, which Ruby moved out of the default gems (base64 in 3.4, logger in 3.5); a Rails app pulled them in transitively, masking the gap, but a standalone consumer had neither. Both are now declared runtime dependencies, so the "run without Rails" path works on current Ruby. (#237)
+- **Dashboard — Quiet/Stop** — clicking **Quiet** (or **Stop**) on a worker in the Busy page made it silently vanish from the dashboard instead of reporting as quieted. `Launcher#@done` was overloaded: the heartbeat loop ran `until @done`, and `#quiet` set that same flag, so quieting terminated the heartbeat thread — the process never published `quiet=true` and then expired out of the live `processes` set. The quiet ("stop fetching, stay alive") and shutdown ("stop heartbeating") concerns are now split, so a quieted worker keeps beating and stays visible as quiet; `#stop` still drains and removes it. Affected every `wurkswarm` worker. (#236)
+
 ## [1.0.1] - 2026-06-11
 
 ### Fixed
