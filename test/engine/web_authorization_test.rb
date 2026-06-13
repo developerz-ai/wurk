@@ -105,6 +105,44 @@ class WebAuthorizationTest < Wurk::Test::EngineCase
     assert_equal true, JSON.parse(last_response.body)['read_only']
   end
 
+  # Per-request read-only: a viewer role (authorization hook permits GET but
+  # denies mutations) must surface read_only=true so the SPA hides destructive
+  # actions — even with the global read-only mode off.
+  def test_meta_reports_read_only_for_a_view_only_authorization
+    Wurk::Web.configure { |c| c.authorization { |_, method, _| method == 'GET' } }
+
+    get '/wurk/api/meta'
+
+    assert_equal 200, last_response.status
+    assert_equal true, JSON.parse(last_response.body)['read_only']
+  end
+
+  # An authorization hook that permits mutations (e.g. an admin role) keeps
+  # read_only false so the SPA shows the actions.
+  def test_meta_reports_read_write_for_a_mutating_authorization
+    Wurk::Web.configure { |c| c.authorization { |_, _, _| true } }
+
+    get '/wurk/api/meta'
+
+    assert_equal 200, last_response.status
+    assert_equal false, JSON.parse(last_response.body)['read_only']
+  end
+
+  # A path-sensitive hook (permits the current /api/meta path but denies real
+  # mutating routes) must still report read_only=true. The probe has to ask
+  # about a canonical mutating path, not the GET request's own /api/meta path —
+  # otherwise the SPA shows actions that the Authorization middleware then 403s.
+  def test_meta_reports_read_only_for_a_path_sensitive_authorization
+    Wurk::Web.configure do |c|
+      c.authorization { |_, _, path| path == '/api/meta' }
+    end
+
+    get '/wurk/api/meta'
+
+    assert_equal 200, last_response.status
+    assert_equal true, JSON.parse(last_response.body)['read_only']
+  end
+
   def test_meta_includes_read_only_message_when_set
     Wurk::Web.configure do |c|
       c.read_only = true
