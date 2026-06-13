@@ -126,11 +126,21 @@ queue/concurrency topology). Per-environment overlays work like Sidekiq's:
 # config/wurk.yml
 :concurrency: 10
 :queues:
+  - critical            # plain list = strict priority (first wins)
   - default
-  - [critical, 2]      # weighted
 
 :production:
   :concurrency: 25
+```
+
+For weighted fetch, give every queue a weight (Sidekiq's nested-array form). Mixing
+weighted and unweighted entries puts the unweighted ones at weight 0, so weight them
+all:
+
+```yaml
+:queues:
+  - [critical, 2]
+  - [default, 1]
 ```
 
 ```bash
