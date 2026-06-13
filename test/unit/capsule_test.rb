@@ -205,6 +205,41 @@ class CapsuleTest < Wurk::Test::UnitCase
     assert_raises(ArgumentError) { @capsule.queues = ['high,foo'] }
   end
 
+  # #241: Sidekiq's weighted-queue YAML (`:queues: - [high, 3]`) parses to nested
+  # arrays, which used to crash `parse_queue_entry` with `Integer(): " 3]"`.
+  def test_queues_setter_accepts_nested_array_weight_pairs
+    @capsule.queues = [['high', 3], ['default', 2], ['low', 1]]
+
+    assert_equal :weighted, @capsule.mode
+    assert_equal({ 'high' => 3, 'default' => 2, 'low' => 1 }, @capsule.weights)
+    assert_equal %w[high high high default default low], @capsule.queues
+  end
+
+  # A bare array entry (no weight) is a plain/strict queue, same as a plain string.
+  def test_queues_setter_accepts_nested_array_without_weight
+    @capsule.queues = [['high'], ['low']]
+
+    assert_equal :strict, @capsule.mode
+    assert_equal({ 'high' => 0, 'low' => 0 }, @capsule.weights)
+  end
+
+  # Mixed string + array entries (as a hand-written YAML might combine them).
+  def test_queues_setter_accepts_mixed_string_and_array_entries
+    @capsule.queues = ['high,3', ['default', 2], 'low,1']
+
+    assert_equal({ 'high' => 3, 'default' => 2, 'low' => 1 }, @capsule.weights)
+  end
+
+  def test_queues_setter_raises_on_non_integer_array_weight
+    assert_raises(ArgumentError) { @capsule.queues = [%w[high foo]] }
+  end
+
+  # A nested array with a stray third element is a config mistake, not a
+  # [name, weight] pair — reject it instead of silently truncating to entry[0..1].
+  def test_queues_setter_raises_on_oversized_array_entry
+    assert_raises(ArgumentError) { @capsule.queues = [['high', 2, 'x']] }
+  end
+
   def test_queues_setter_raises_on_blank_queue_name
     assert_raises(ArgumentError) { @capsule.queues = [''] }
     assert_raises(ArgumentError) { @capsule.queues = ['  '] }

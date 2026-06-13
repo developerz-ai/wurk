@@ -153,13 +153,27 @@ module Wurk
       fetcher
     end
 
+    # Accepts both the CLI/string form (`"name"` / `"name,weight"`) and the
+    # nested-array form Sidekiq's YAML produces for weighted queues
+    # (`:queues: - [critical, 2]` parses to `["critical", 2]`). Without the Array
+    # branch a real sidekiq.yml crashes at boot with `Integer(): " 2]"` (#241).
     def parse_queue_entry(entry)
-      qname, weight_str = entry.to_s.split(',', 2)
-      qname = qname.to_s.strip
-      raise ArgumentError, "queue name cannot be empty: `#{entry}`" if qname.empty?
-      return [qname, 0] if weight_str.nil?
+      if entry.is_a?(::Array)
+        raise ArgumentError, "queue entry must be `[name]` or `[name, weight]`: `#{entry}`" if entry.size > 2
 
-      weight = Integer(weight_str)
+        return parse_pair_queue_entry(entry[0], entry[1], entry)
+      end
+
+      qname, weight_str = entry.to_s.split(',', 2)
+      parse_pair_queue_entry(qname, weight_str, entry)
+    end
+
+    def parse_pair_queue_entry(name, weight, entry)
+      qname = name.to_s.strip
+      raise ArgumentError, "queue name cannot be empty: `#{entry}`" if qname.empty?
+      return [qname, 0] if weight.nil?
+
+      weight = Integer(weight)
       raise ArgumentError, "queue weight must be > 0: `#{entry}`" if weight <= 0
 
       [qname, weight]

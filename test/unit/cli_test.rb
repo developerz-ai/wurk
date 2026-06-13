@@ -52,6 +52,7 @@ class CLITest < Wurk::Test::UnitCase
 
     yielded = false
     @cli.config.configure_server { yielded = true }
+
     assert yielded, 'configure_server must fire once server mode is entered'
   end
 
@@ -169,6 +170,24 @@ class CLITest < Wurk::Test::UnitCase
 
       assert_equal 7, @cli.config[:concurrency]
       assert_includes @cli.config.default_capsule.weights.keys, 'critical'
+    end
+  end
+
+  # #241: a real sidekiq.yml writes weighted queues as nested arrays
+  # (`- [critical, 2]`). YAML parses those to `["critical", 2]`, which used to
+  # crash the CLI at boot with `invalid value for Integer(): " 2]"`.
+  def test_loads_yaml_with_sidekiq_weighted_queue_arrays
+    Tempfile.create(['wurk', '.yml']) do |f|
+      f.write(<<~YAML)
+        :concurrency: 5
+        :queues:
+          - [critical, 2]
+          - [default, 1]
+      YAML
+      f.flush
+      with_require_set { @cli.parse(['-C', f.path]) }
+
+      assert_equal({ 'critical' => 2, 'default' => 1 }, @cli.config.default_capsule.weights)
     end
   end
 
