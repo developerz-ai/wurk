@@ -46,4 +46,10 @@ Gem::Specification.new do |spec|
   spec.add_dependency "connection_pool", ">= 2.4", "< 4"
   spec.add_dependency "rack", ">= 2.2", "< 4"
   spec.add_dependency "concurrent-ruby", "~> 1.2"
+  # Bundled-gem extractions: base64 left default gems in Ruby 3.4, logger became
+  # a bundled gem in Ruby 3.5 (with deprecation warnings starting in Ruby 3.4).
+  # A Rails app pulls them in transitively, but a standalone (non-Rails) consumer
+  # has neither — without these, `require "wurk"` raises LoadError on Ruby 3.4+.
+  spec.add_dependency "base64", ">= 0.1", "< 1"
+  spec.add_dependency "logger", ">= 1.5", "< 2"
 end
