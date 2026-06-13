@@ -48,7 +48,12 @@ module Wurk
     def initialize(config, embedded: false)
       @config = config
       @embedded = embedded
+      # Two separate flags, deliberately. @done = "quieted" (stop fetching, stay
+      # alive, report quiet=true). @stopped = "shutting down" (terminate the
+      # heartbeat loop). Quiet must NOT stop the heartbeat — otherwise a quieted
+      # process never publishes quiet=true and expires out of the live set (#236).
       @done = false
+      @stopped = false
       @managers = config.capsules.values.map { |cap| Manager.new(cap) }
       @poller = build_poller
       @cron_poller = build_cron_poller
@@ -127,6 +132,7 @@ module Wurk
       # CAS-release the cluster lock now (planned shutdown) so a follower can
       # take over immediately instead of waiting out the TTL.
       @leader&.stop
+      stop_heartbeat
       clear_heartbeat
       fire_event(:exit, reverse: true)
     end
@@ -217,11 +223,30 @@ module Wurk
       @health_server&.stop
     end
 
-    # Heartbeat thread loop. `safe_thread` already wraps exceptions; we
-    # exit the loop the moment `stop` flips @done so the thread doesn't
-    # outlive the shutdown.
+    # Terminate the heartbeat loop and wait for it to exit before clear_heartbeat
+    # removes us from the `processes` SET — otherwise a final in-flight beat could
+    # SADD us back right after the SREM. Wakes the thread out of its BEAT_PAUSE
+    # sleep so shutdown isn't delayed up to a full interval.
+    def stop_heartbeat
+      @stopped = true
+      thread = @heartbeat_thread
+      return unless thread
+
+      begin
+        thread.wakeup
+      rescue ThreadError
+        nil
+      end
+      thread.join(BEAT_PAUSE)
+    end
+
+    # Heartbeat thread loop. `safe_thread` already wraps exceptions. Loops on
+    # @stopped — NOT @done — so a *quieted* process keeps beating and publishes
+    # `quiet=true` instead of vanishing from the live set (#236). Only `#stop`
+    # flips @stopped; its `Thread#wakeup` breaks the sleep so the loop re-checks
+    # @stopped and exits without waiting out the interval.
     def start_heartbeat
-      until @done
+      until @stopped
         heartbeat
         sleep BEAT_PAUSE
       end

@@ -73,6 +73,35 @@ class SwarmCliTest < Wurk::Test::UnitCase
     end
   end
 
+  # Regression #236 (real fork): the dashboard "Quiet" button does
+  # `Sidekiq::ProcessSet#quiet!`, which LPUSHes `TSTP` to `<identity>-signals`.
+  # A swarm child must apply that quiet WITHOUT killing its heartbeat — it has to
+  # keep beating, publish `quiet=true`, and stay in the live `processes` SET.
+  # Before the fix the heartbeat loop ran `until @done` and quiet flipped @done,
+  # so the child stopped beating, never reported quiet, and expired off the
+  # dashboard's Busy page.
+  def test_dashboard_quiet_keeps_child_beating_and_reports_quiet
+    parent_pid = fork_swarm_cli
+
+    begin
+      child_id = wait_for_child_identity
+
+      refute_nil child_id, "swarm child never registered within #{POLL_TIMEOUT}s"
+      assert_equal 'false', @observer.call('HGET', child_id, 'quiet'),
+                   'precondition: a fresh child is not quieted'
+
+      # Exactly what the dashboard does.
+      @observer.call('LPUSH', "#{child_id}-signals", 'TSTP')
+
+      assert_equal 'true', wait_for_quiet_flag(child_id),
+                   'quieted swarm child never published quiet=true — heartbeat died on quiet (#236)'
+      assert_equal 1, @observer.call('SISMEMBER', Wurk::Keys::PROCESSES, child_id),
+                   'a quieted child must stay in the live process set, not vanish (#236)'
+    ensure
+      stop(parent_pid)
+    end
+  end
+
   # config.on(:startup) hooks must fire in each swarm worker child before its
   # managers spin up (Sidekiq lifecycle contract).
   def test_run_swarm_fires_startup_in_child
@@ -233,6 +262,41 @@ class SwarmCliTest < Wurk::Test::UnitCase
       sleep POLL_INTERVAL
     end
     nil
+  end
+
+  # Poll the child's published `quiet` field until it reads "true" (or timeout),
+  # returning whatever it last read so the caller asserts on the value.
+  def wait_for_quiet_flag(identity)
+    deadline = monotonic_now + POLL_TIMEOUT
+    loop do
+      val = @observer.call('HGET', identity, 'quiet')
+      return val if val == 'true' || monotonic_now >= deadline
+
+      sleep POLL_INTERVAL
+    end
+  end
+
+  # Poll the live `processes` SET for *this* test's child, identified by the
+  # unique queue it fetches (parallel test methods share one Redis DB, so match
+  # on queue rather than assuming a single registrant).
+  def wait_for_child_identity
+    deadline = monotonic_now + POLL_TIMEOUT
+    while monotonic_now < deadline
+      id = child_identity
+      return id if id
+
+      sleep POLL_INTERVAL
+    end
+    nil
+  end
+
+  def child_identity
+    @observer.call('SMEMBERS', Wurk::Keys::PROCESSES).find do |id|
+      info = @observer.call('HGET', id, 'info')
+      info && Array(Wurk.load_json(info)['queues']).include?(@queue_name)
+    rescue ::JSON::ParserError
+      false
+    end
   end
 
   def stop(pid)
