@@ -294,17 +294,25 @@ module Wurk
 
     private
 
+    # Engine-relative path probed as a representative mutation. Must be a real
+    # mutating route (POST /api/retries — bulk retry/delete/kill) so that a
+    # path-sensitive hook resolves it the same way the Authorization middleware
+    # will resolve the actual mutation. Probing `request.path_info` (which here
+    # is the GET /api/meta path) would let such a hook allow the probe while
+    # still 403ing real mutations, reviving the "button shows, then 403s" gap.
+    MUTATION_PROBE_PATH = '/api/retries'
+
     # Per-request read-only signal for the SPA. When a registered authorization
     # hook would reject a *mutating* request for this user (e.g. a viewer role
     # that may GET but not retry/kill), report `read_only` so the SPA hides the
     # destructive actions — the Authorization middleware already 403s the
     # mutation itself, this just stops the buttons from showing. With no hook
     # registered, `authorized?` is always true, so this is a no-op and the flag
-    # keeps reflecting the global read-only mode. Probes with POST as a
-    # representative mutating method (SAFE_METHODS are GET/HEAD/OPTIONS); a
-    # path-independent role hook resolves the same regardless of path.
+    # keeps reflecting the global read-only mode. Probes POST on a canonical
+    # mutating path (SAFE_METHODS are GET/HEAD/OPTIONS) so a path-sensitive hook
+    # answers for a real mutation, not the GET /api/meta request carrying it.
     def mutations_authorized?(config)
-      config.authorized?(request.env, 'POST', request.path_info)
+      config.authorized?(request.env, 'POST', MUTATION_PROBE_PATH)
     end
 
     # Resolves a single entry by "<score>|<jid>" key and applies a whitelisted
