@@ -6,7 +6,11 @@ All notable changes to Wurk are recorded here. Format: [Keep a Changelog](https:
 
 ## [1.0.2] - 2026-06-13
 
+### Added
+- **Dashboard — per-request read-only** — `/api/meta` now reports a per-request `read_only` flag derived from the registered authorization hook, so a viewer-role user (a hook that permits `GET` but denies mutations) sees the SPA hide destructive actions instead of showing buttons that then 403. The probe asks the hook about `POST` on a canonical mutating route (`/api/retries`) so a path-sensitive hook resolves it the same way the Authorization middleware resolves the real mutation. With no hook registered the flag still reflects global read-only mode. (#244)
+
 ### Fixed
+- **Config — weighted-queue YAML** — loading a real `sidekiq.yml` with weighted queues in the nested-array form (`queues:` → `- [critical, 2]`, which YAML parses to `["critical", 2]`) crashed at boot with `Integer(): " 2]"` because the queue parser only handled the `"name,weight"` string form. The capsule parser now accepts both the string and nested-array forms; a malformed array entry with extra elements is rejected with an `ArgumentError` rather than silently truncated. (#242)
 - **Packaging / standalone** — `require "wurk"` raised `LoadError: cannot load such file -- base64` on Ruby 3.4+ in any non-Rails app. The code requires `base64` and `logger`, which Ruby moved out of the default gems (base64 in 3.4, logger in 3.5); a Rails app pulled them in transitively, masking the gap, but a standalone consumer had neither. Both are now declared runtime dependencies, so the "run without Rails" path works on current Ruby. (#237)
 - **Dashboard — Quiet/Stop** — clicking **Quiet** (or **Stop**) on a worker in the Busy page made it silently vanish from the dashboard instead of reporting as quieted. `Launcher#@done` was overloaded: the heartbeat loop ran `until @done`, and `#quiet` set that same flag, so quieting terminated the heartbeat thread — the process never published `quiet=true` and then expired out of the live `processes` set. The quiet ("stop fetching, stay alive") and shutdown ("stop heartbeating") concerns are now split, so a quieted worker keeps beating and stays visible as quiet; `#stop` still drains and removes it. Affected every `wurkswarm` worker. (#236)
 
