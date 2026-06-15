@@ -41,6 +41,30 @@ class RailsAutoloadTest < Wurk::Test::UnitCase
     assert ok, 'standalone `require "wurk"` (no Rails) must not load the engine/railtie'
   end
 
+  # Mirrors how sidekiq-cron's test_helper loads things (rails/engine/railties
+  # for the railtie API, NO action_dispatch, then `require "sidekiq"`). The
+  # auto-load must skip the engine here — `isolate_namespace Wurk` would crash
+  # the require chain looking up ActionDispatch::Routing::RouteSet (#249 CI).
+  def test_require_wurk_with_partial_rails_skips_engine
+    # Mirrors sidekiq-cron's test/test_helper.rb load order (active_job pulls
+    # active_support in so rails/railtie can resolve `delegate_missing_to`, then
+    # rails/engine/railties defines Rails::Engine — but action_dispatch is never
+    # loaded). The auto-load must skip the engine here: `isolate_namespace Wurk`
+    # would crash the require chain looking up ActionDispatch::Routing::RouteSet
+    # (#249 CI).
+    ok = run_ruby(<<~RUBY)
+      require "active_job"
+      require "rails/railtie"
+      require "rails/engine/railties"
+      exit 1 if !defined?(::Rails::Engine)
+      exit 1 if  defined?(::ActionDispatch::Routing::RouteSet)
+      require "wurk"
+      exit(defined?(Wurk::Engine) ? 1 : 0)
+    RUBY
+
+    assert ok, 'partial Rails (rails/engine/railties without action_dispatch) must not crash `require "wurk"` (#249)'
+  end
+
   private
 
   def run_ruby(code)

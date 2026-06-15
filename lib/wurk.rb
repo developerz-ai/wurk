@@ -291,4 +291,14 @@ require_relative 'wurk/compat'
 # :wurk` raises NameError during the railtie phase. Loading the engine here
 # (idempotent with an explicit `require "wurk/rails"`) closes that gap while
 # keeping standalone, no-Rails boot fully Rails-free.
-require_relative 'wurk/rails' if defined?(Rails::Engine)
+#
+# Also gate on ActionDispatch::Routing::RouteSet: the engine's class body calls
+# `isolate_namespace Wurk`, which under railties >= 8.1 eager-reads
+# `ActionDispatch::Routing::RouteSet` to set the engine's @route_set_class.
+# Ecosystem test helpers (sidekiq-cron, …) load `rails/engine/railties` for the
+# railtie API alone — Rails::Engine is defined but ActionDispatch isn't — so a
+# bare `defined?(Rails::Engine)` check would crash with `uninitialized constant
+# Rails::Engine::Configuration::ActionDispatch` mid-`require "sidekiq"`. In a
+# real Rails host both are loaded by `rails/all` before Bundler.require, so the
+# stricter gate is invisible there.
+require_relative 'wurk/rails' if defined?(Rails::Engine) && defined?(::ActionDispatch::Routing::RouteSet)
