@@ -36,7 +36,25 @@ module Wurk
     # and the swarm boot. Console mode is detected reliably here — the console
     # command file defines ::Rails::Console before initializers run.
     def self.skip_boot?
-      ENV['WURK_DISABLED'] == '1' || defined?(::Rails::Console) || ::Rails.env.test?
+      ENV['WURK_DISABLED'] == '1' ||
+        building? ||
+        defined?(::Rails::Console) ||
+        ::Rails.env.test?
+    end
+
+    # A build/precompile step must never fork the swarm (#247). The default
+    # Rails Dockerfile runs `SECRET_KEY_BASE_DUMMY=1 ./bin/rails
+    # assets:precompile`; that loads `:environment` → fires after_initialize,
+    # but there's no Redis during `docker build`, so a fork would hang/fail the
+    # build. Same for other env-loading rake tasks (db:prepare, db:migrate).
+    # The real server path is unaffected: `rails server` / `puma` boot through
+    # Rails::Command, not Rake, and don't set the dummy secret.
+    def self.building?
+      return true if ENV.key?('SECRET_KEY_BASE_DUMMY')
+
+      defined?(::Rake) && ::Rake.application.top_level_tasks.any?
+    rescue StandardError
+      false
     end
   end
 end
