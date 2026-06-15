@@ -1,3 +1,5 @@
+# frozen_string_literal: true
+
 # Seed a handful of demo job profiles so the Profiles page has content to show.
 # Uses the real Wurk::Profiler.store path (same wire schema the worker writes).
 require 'securerandom'

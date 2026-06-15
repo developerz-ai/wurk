@@ -29,7 +29,20 @@
     "strapline": "وُرك، وُرك. جاهز للعمل. زوغ زوغ.",
     "tagline": "بديل متوافق 100% مع Sidekiq + Sidekiq Pro + Sidekiq Enterprise. مجاني للأبد. أسرع.",
     "install": "التثبيت",
-    "docs": "التوثيق"
+    "docs": "التوثيق",
+    "active": "نشط",
+    "vs_last_hour": "مقارنة بآخر ساعة",
+    "stable_threshold": "ضمن العتبة",
+    "above_threshold": "فوق العتبة",
+    "system_idle": "النظام خامل",
+    "processing": "قيد المعالجة",
+    "performance_insight": "رؤية الأداء",
+    "perf_subtitle": "المهام المُعالَجة مقابل الفاشلة على مدى {range}",
+    "no_history": "لا توجد بيانات بعد — يمتلئ الرسم البياني مع تشغيل المهام.",
+    "range_1h_desc": "آخر ساعة",
+    "range_24h_desc": "آخر 24 ساعة",
+    "range_7d_desc": "آخر 7 أيام",
+    "range_30d_desc": "آخر 30 يومًا"
   },
   "table": {
     "class": "الفئة",

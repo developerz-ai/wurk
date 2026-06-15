@@ -13,7 +13,11 @@ vi.mock('recharts', () => {
   return {
     ResponsiveContainer: Pass,
     LineChart: ({ children }: { children?: React.ReactNode }) => <div data-testid="linechart">{children}</div>,
-    Line: ({ dataKey }: { dataKey: string }) => <span data-testid="line">{dataKey}</span>,
+    // Show `name` when it's set (per-queue charts, where the synthetic
+    // `queue_<i>` dataKey carries no human-readable info) and fall back to
+    // `dataKey` for the Historical Snapshots panel, which uses field names
+    // directly as the series key.
+    Line: ({ dataKey, name }: { dataKey: string; name?: string }) => <span data-testid="line">{name ?? dataKey}</span>,
     AreaChart: ({ children }: { children?: React.ReactNode }) => <div data-testid="areachart">{children}</div>,
     Area: ({ dataKey }: { dataKey: string }) => <span data-testid="area">{dataKey}</span>,
     BarChart: ({ children }: { children?: React.ReactNode }) => <div data-testid="barchart">{children}</div>,

@@ -66,7 +66,7 @@
 
   /* Obsidian typography */
   --font-sans: 'Geist', system-ui, -apple-system, sans-serif;
-  --font-mono: 'JetBrains Mono', ui-monospace, SFMono-Regular, Menlo, monospace;
+  --font-mono: 'JetBrains Mono', ui-monospace, 'SFMono-Regular', 'Menlo', monospace;
 
   --nav-width: 248px;   /* expanded (hover / mobile drawer) */
   --nav-rail: 64px;     /* collapsed icon rail (desktop default) */
@@ -1067,7 +1067,8 @@ tbody tr:last-child td {
   --obs-radius: 8px;
   --obs-radius-sm: 4px;
   --font-sans: 'Geist', system-ui, -apple-system, sans-serif;
-  --font-mono: 'JetBrains Mono', ui-monospace, SFMono-Regular, monospace;
+  --font-mono: 'JetBrains Mono', ui-monospace, 'SFMono-Regular', monospace;
+
   font-family: var(--font-sans);
   color: var(--obs-text-2);
 }

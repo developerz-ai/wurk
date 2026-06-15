@@ -79,11 +79,13 @@ const JOB_DOTS = ['#fafafa', '#d4d4d8', '#a1a1aa', '#71717a', '#52525b', '#3f3f4
 
 // Range buttons → rollup bucket + retention window. "1h" reuses the 1m/24h
 // rollup and slices client-side; the rest map 1:1 to a stored window.
+// `minutes` is the corresponding /api/metrics window so Top Job Types tracks
+// the toolbar instead of being permanently pinned to the last hour.
 const RANGES = [
-  { key: '1h', bucket: '1m', window: '24h', slice: 60 },
-  { key: '24h', bucket: '1m', window: '24h' },
-  { key: '7d', bucket: '5m', window: '7d' },
-  { key: '30d', bucket: '1h', window: '30d' },
+  { key: '1h', bucket: '1m', window: '24h', slice: 60, minutes: 60 },
+  { key: '24h', bucket: '1m', window: '24h', minutes: 24 * 60 },
+  { key: '7d', bucket: '5m', window: '7d', minutes: 7 * 24 * 60 },
+  { key: '30d', bucket: '1h', window: '30d', minutes: 30 * 24 * 60 },
 ] as const;
 
 const fmtBucket = (at: number, bucket: string) => {
@@ -118,10 +120,16 @@ function Delta({ pct, goodWhenUp }: { pct: number | null; goodWhenUp: boolean })
   );
 }
 
+// Even downsample that anchors both endpoints — Math.floor with step =
+// arr.length/n never lands on the last index, so the highlighted peak could
+// silently drop the newest bucket. Math.round across (n-1) intervals keeps
+// the latest sample.
 const sample = <T,>(arr: T[], n: number): T[] => {
+  if (n <= 0) return [];
   if (arr.length <= n) return arr;
-  const step = arr.length / n;
-  return Array.from({ length: n }, (_, i) => arr[Math.floor(i * step)]);
+  if (n === 1) return [arr[arr.length - 1]];
+  const step = (arr.length - 1) / (n - 1);
+  return Array.from({ length: n }, (_, i) => arr[Math.round(i * step)]);
 };
 
 const tooltipStyle = {
@@ -167,8 +175,8 @@ export default function Metrics() {
   });
 
   const { data: metrics, isPending: metricsPending } = useQuery<MetricsResponse>({
-    queryKey: ['metrics', 60],
-    queryFn: () => fetch('/wurk/api/metrics?minutes=60').then((r) => r.json() as Promise<MetricsResponse>),
+    queryKey: ['metrics', range.minutes],
+    queryFn: () => fetch(`/wurk/api/metrics?minutes=${range.minutes}`).then((r) => r.json() as Promise<MetricsResponse>),
     refetchInterval: 30000,
   });
 
@@ -182,9 +190,11 @@ export default function Metrics() {
     refetchInterval: 30000,
   });
 
-  let series = (history?.series ?? []).map((p) => ({ ...p, label: fmtBucket(p.at, range.bucket) }));
+  // Keep the full history for deltaPct() — slicing first would drop the
+  // previous-hour comparison window and force the 100% fallback on the 1h tab.
+  const fullSeries = (history?.series ?? []).map((p) => ({ ...p, label: fmtBucket(p.at, range.bucket) }));
   const sliceN = 'slice' in range ? range.slice : undefined;
-  if (sliceN) series = series.slice(-sliceN);
+  const series = sliceN ? fullSeries.slice(-sliceN) : fullSeries;
   const hasThroughput = series.some((p) => p.processed > 0 || p.failed > 0);
 
   // Queue depth = total jobs enqueued across all queues per bucket, downsampled
@@ -200,11 +210,14 @@ export default function Metrics() {
   );
   const maxDepth = Math.max(0, ...depthRows.map((r) => r.depth));
 
-  const jobs = (metrics?.top_jobs ?? [])
+  // % Total compares each top job against the full returned volume — the
+  // jobs.slice(0, 6) trims the displayed rows only; computing the total off
+  // the slice would let three jobs at 30/30/30 each report 33%.
+  const allJobs = (metrics?.top_jobs ?? [])
     .map((j) => ({ klass: j.klass, count: j.processed + j.failed }))
-    .sort((a, b) => b.count - a.count)
-    .slice(0, 6);
-  const jobsTotal = jobs.reduce((s, j) => s + j.count, 0);
+    .sort((a, b) => b.count - a.count);
+  const jobsTotal = allJobs.reduce((s, j) => s + j.count, 0);
+  const jobs = allJobs.slice(0, 6);
 
   return (
     <div className="obs">
@@ -233,7 +246,7 @@ export default function Metrics() {
           </div>
           <span className="obs-metric__value">
             {(stats?.processed ?? 0).toLocaleString()}
-            <Delta pct={deltaPct(series, 'processed')} goodWhenUp />
+            <Delta pct={deltaPct(fullSeries, 'processed')} goodWhenUp />
           </span>
           <span className="obs-metric__sub">across all queues</span>
         </div>
@@ -244,7 +257,7 @@ export default function Metrics() {
           </div>
           <span className="obs-metric__value">
             {(stats?.failed ?? 0).toLocaleString()}
-            <Delta pct={deltaPct(series, 'failed')} goodWhenUp={false} />
+            <Delta pct={deltaPct(fullSeries, 'failed')} goodWhenUp={false} />
           </span>
           <span className="obs-metric__sub">total failures</span>
         </div>
@@ -394,10 +407,15 @@ function QueueLatencyHistory({ range }: { range: (typeof RANGES)[number] }) {
   });
 
   const queues = data?.queues ?? [];
+  // Recharts 3.x interprets dots in `dataKey` as nested-object accessors, so
+  // a Sidekiq-compatible queue name like `emails.critical` would silently
+  // fail to render. Pivot through synthetic `queue_<i>` keys and pass the
+  // real queue name via Recharts' `name` prop (legend + tooltip label).
+  const queueKeys = queues.map((q, i) => ({ key: `queue_${i}`, name: q.name }));
   const ats = queues[0]?.points.map((p) => p.at) ?? [];
   const rows = ats.map((at, i) => {
     const row: Record<string, number | string> = { label: fmtBucket(at, range.bucket) };
-    queues.forEach((q) => { row[q.name] = q.points[i]?.latency ?? 0; });
+    queues.forEach((q, qi) => { row[queueKeys[qi].key] = q.points[i]?.latency ?? 0; });
     return row;
   });
   const hasData = queues.some((q) => q.points.some((p) => p.latency > 0));
@@ -416,8 +434,8 @@ function QueueLatencyHistory({ range }: { range: (typeof RANGES)[number] }) {
             <YAxis tick={{ fill: '#71717a', fontSize: 11, fontFamily: 'JetBrains Mono, monospace' }} axisLine={false} tickLine={false} width={40} />
             <Tooltip contentStyle={tooltipStyle} labelStyle={{ color: '#a1a1aa' }} />
             <Legend wrapperStyle={{ fontSize: 11, fontFamily: 'JetBrains Mono, monospace' }} />
-            {queues.map((q, i) => (
-              <Line key={q.name} type="monotone" dataKey={q.name} stroke={queueColor(i)} strokeWidth={2} dot={false} />
+            {queueKeys.map((q, i) => (
+              <Line key={q.key} type="monotone" dataKey={q.key} name={q.name} stroke={queueColor(i)} strokeWidth={2} dot={false} />
             ))}
           </LineChart>
         </ResponsiveContainer>

@@ -61,12 +61,13 @@ function hourlyDeltaPct(series: HistoryPoint[], key: 'processed' | 'failed'): nu
 
 // Range buttons → rollup bucket + retention window, matching the Metrics page.
 // "1h" reuses the 1m/24h rollup and slices client-side; the rest map 1:1 to a
-// stored window. `desc` feeds the panel subtitle.
+// stored window. `desc_key` is an i18n path (resolved via t()) so the panel
+// subtitle localizes alongside the rest of the dashboard copy.
 const RANGES = [
-  { key: '1h', bucket: '1m', window: '24h', slice: 60, desc: 'the last hour' },
-  { key: '24h', bucket: '1m', window: '24h', desc: 'the last 24 hours' },
-  { key: '7d', bucket: '5m', window: '7d', desc: 'the last 7 days' },
-  { key: '30d', bucket: '1h', window: '30d', desc: 'the last 30 days' },
+  { key: '1h', bucket: '1m', window: '24h', slice: 60, desc_key: 'dashboard.range_1h_desc' },
+  { key: '24h', bucket: '1m', window: '24h', desc_key: 'dashboard.range_24h_desc' },
+  { key: '7d', bucket: '5m', window: '7d', desc_key: 'dashboard.range_7d_desc' },
+  { key: '30d', bucket: '1h', window: '30d', desc_key: 'dashboard.range_30d_desc' },
 ] as const;
 
 const fmtBucket = (at: number, bucket: string) => {
@@ -78,7 +79,7 @@ const fmtBucket = (at: number, bucket: string) => {
 };
 
 function DeltaSub({ pct, goodWhenUp }: { pct: number | null; goodWhenUp: boolean }) {
-  if (pct === null) return <span className="obs-metric__sub">vs last hour</span>;
+  if (pct === null) return <span className="obs-metric__sub">{t('dashboard.vs_last_hour')}</span>;
   const up = pct >= 0;
   const good = up === goodWhenUp;
   return (
@@ -86,7 +87,7 @@ function DeltaSub({ pct, goodWhenUp }: { pct: number | null; goodWhenUp: boolean
       <span className={good ? 'up' : 'down'}>
         {up ? '▲' : '▼'} {up ? '+' : ''}{pct}%
       </span>{' '}
-      vs last hour
+      {t('dashboard.vs_last_hour')}
     </span>
   );
 }
@@ -116,9 +117,12 @@ export default function Dashboard({ sse }: DashboardProps) {
   });
 
   const stats: StatsData | null = sse.stats ?? fetched ?? null;
-  let series = (history?.series ?? []).map((p) => ({ ...p, label: fmtBucket(p.at, range.bucket) }));
+  // Delta math needs the prior-hour buckets, so keep the full history for
+  // hourlyDeltaPct() and slice only for chart rendering. Slicing first would
+  // drop the comparison window on the 1h tab and force the 100% fallback.
+  const fullSeries = (history?.series ?? []).map((p) => ({ ...p, label: fmtBucket(p.at, range.bucket) }));
   const sliceN = 'slice' in range ? range.slice : undefined;
-  if (sliceN) series = series.slice(-sliceN);
+  const series = sliceN ? fullSeries.slice(-sliceN) : fullSeries;
   const hasHistory = series.some((p) => p.processed > 0 || p.failed > 0);
 
   if (isLoading && !stats) {
@@ -143,7 +147,7 @@ export default function Dashboard({ sse }: DashboardProps) {
       value: stats.processed,
       icon: 'fa-circle-check',
       to: '/metrics',
-      sub: <DeltaSub pct={hourlyDeltaPct(series, 'processed')} goodWhenUp />,
+      sub: <DeltaSub pct={hourlyDeltaPct(fullSeries, 'processed')} goodWhenUp />,
     },
     {
       key: 'failed',
@@ -151,7 +155,7 @@ export default function Dashboard({ sse }: DashboardProps) {
       value: stats.failed,
       icon: 'fa-triangle-exclamation',
       to: '/retries',
-      sub: <DeltaSub pct={hourlyDeltaPct(series, 'failed')} goodWhenUp={false} />,
+      sub: <DeltaSub pct={hourlyDeltaPct(fullSeries, 'failed')} goodWhenUp={false} />,
     },
     {
       key: 'expired',
@@ -159,7 +163,7 @@ export default function Dashboard({ sse }: DashboardProps) {
       value: stats.expired,
       icon: 'fa-ban',
       to: '/dead',
-      sub: <span className="obs-metric__sub">{stats.expired === 0 ? 'Stable threshold' : 'Above threshold'}</span>,
+      sub: <span className="obs-metric__sub">{stats.expired === 0 ? t('dashboard.stable_threshold') : t('dashboard.above_threshold')}</span>,
     },
     {
       key: 'busy',
@@ -167,7 +171,7 @@ export default function Dashboard({ sse }: DashboardProps) {
       value: stats.busy,
       icon: 'fa-spinner',
       to: '/busy',
-      sub: <span className="obs-metric__sub">{stats.busy === 0 ? 'System idle' : 'Processing'}</span>,
+      sub: <span className="obs-metric__sub">{stats.busy === 0 ? t('dashboard.system_idle') : t('dashboard.processing')}</span>,
     },
   ];
 
@@ -199,8 +203,8 @@ export default function Dashboard({ sse }: DashboardProps) {
       <div className="obs-card obs-panel">
         <div className="obs-panel__head">
           <div>
-            <h2 className="obs-panel__title">Performance Insight</h2>
-            <p className="obs-panel__sub">Jobs Processed vs Failed over {range.desc}</p>
+            <h2 className="obs-panel__title">{t('dashboard.performance_insight')}</h2>
+            <p className="obs-panel__sub">{t('dashboard.perf_subtitle', { range: t(range.desc_key) })}</p>
           </div>
           <div className="obs-panel__controls">
             <div className="obs-seg" role="tablist" aria-label="Time range">
@@ -286,7 +290,7 @@ export default function Dashboard({ sse }: DashboardProps) {
             </ResponsiveContainer>
           ) : (
             <div className="empty-state" style={{ height: 320, display: 'grid', placeItems: 'center' }}>
-              No history yet — the chart fills in as jobs run.
+              {t('dashboard.no_history')}
             </div>
           )}
         </div>
@@ -334,7 +338,7 @@ export default function Dashboard({ sse }: DashboardProps) {
                     {q.paused ? (
                       <span className="obs-chip obs-chip--paused">{t('dashboard.paused')}</span>
                     ) : (
-                      <span className="obs-chip obs-chip--active">Active</span>
+                      <span className="obs-chip obs-chip--active">{t('dashboard.active')}</span>
                     )}
                   </td>
                 </tr>

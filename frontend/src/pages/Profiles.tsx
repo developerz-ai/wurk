@@ -28,7 +28,7 @@ export default function Profiles() {
     document.title = `${t('nav.profiles')} — Wurk`;
   }, []);
 
-  const { data, isLoading, isError } = useQuery<Profile[]>({
+  const { data, isLoading } = useQuery<Profile[]>({
     queryKey: ['profiles'],
     queryFn: async () => {
       const r = await fetch('/wurk/api/profiles');
@@ -39,9 +39,11 @@ export default function Profiles() {
   });
 
   if (isLoading) return <div className="obs"><div className="empty-state"><span className="spinner" /></div></div>;
-  // Guard against a non-array body slipping past isError — render the error
-  // state rather than crashing on .length / .map.
-  if (isError || !Array.isArray(data)) {
+  // Only gate on shape, not isError — with refetchInterval polling, a transient
+  // background refetch failure flips isError true while the last good payload
+  // is still cached. Showing the error state then would blank the page on
+  // every blip; falling through keeps stale data visible until the next poll.
+  if (!Array.isArray(data)) {
     return <div className="obs"><div className="empty-state" style={{ color: 'var(--danger)' }}>{t('common.error')}</div></div>;
   }
 
