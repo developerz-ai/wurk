@@ -12,6 +12,11 @@ require "action_dispatch/railtie"
 
 Bundler.require(*Rails.groups)
 
+# Explicit require keeps the dummy order-independent under the shared test
+# loader (a prior unit test may `require "wurk"` before Rails is loaded, which
+# would make wurk.rb's auto-load guard a no-op). The plain-`require "wurk"`
+# drop-in path from #246 is proven order-faithfully in
+# test/unit/rails_autoload_test.rb (fresh subprocess, Rails present).
 require "wurk/rails"
 
 module Dummy

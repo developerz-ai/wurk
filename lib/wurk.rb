@@ -1,8 +1,9 @@
 # frozen_string_literal: true
 
 # Standalone entry point. Loading "wurk" must work without Rails.
-# The engine and railtie live under "wurk/rails" and are only loaded
-# when the host app opts in.
+# The engine and railtie live under "wurk/rails"; they're auto-loaded at the
+# end of this file when Rails is present (drop-in parity, #246), and stay
+# unloaded otherwise so a no-Rails boot pulls in zero Rails code.
 
 require_relative 'wurk/version'
 require_relative 'wurk/keys'
@@ -280,3 +281,24 @@ require_relative 'wurk/api/fast'
 # fully defined first. compat.rb only redefines names, it does not gate
 # behavior, so trailing the load order is safe.
 require_relative 'wurk/compat'
+
+# Drop-in parity (#246): stock Sidekiq auto-loads its Rails integration when
+# Rails is present (`lib/sidekiq.rb`: `require "sidekiq/rails" if
+# defined?(Rails::Engine)`). Without the equivalent here, a host that follows
+# the README/migration guide with a plain `gem "wurk"` (no `require:`) boots
+# with the engine/railtie unloaded, so the `:wurk` / `:sidekiq` ActiveJob
+# adapter constant is never defined and `config.active_job.queue_adapter =
+# :wurk` raises NameError during the railtie phase. Loading the engine here
+# (idempotent with an explicit `require "wurk/rails"`) closes that gap while
+# keeping standalone, no-Rails boot fully Rails-free.
+#
+# Also gate on ActionDispatch::Routing::RouteSet: the engine's class body calls
+# `isolate_namespace Wurk`, which under railties >= 8.1 eager-reads
+# `ActionDispatch::Routing::RouteSet` to set the engine's @route_set_class.
+# Ecosystem test helpers (sidekiq-cron, …) load `rails/engine/railties` for the
+# railtie API alone — Rails::Engine is defined but ActionDispatch isn't — so a
+# bare `defined?(Rails::Engine)` check would crash with `uninitialized constant
+# Rails::Engine::Configuration::ActionDispatch` mid-`require "sidekiq"`. In a
+# real Rails host both are loaded by `rails/all` before Bundler.require, so the
+# stricter gate is invisible there.
+require_relative 'wurk/rails' if defined?(Rails::Engine) && defined?(::ActionDispatch::Routing::RouteSet)
