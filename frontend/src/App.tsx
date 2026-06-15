@@ -72,7 +72,7 @@ export default function App() {
 
           <main
             className="main-content"
-            style={{ flex: 1, padding: '1.5rem', marginInlineStart: 'var(--nav-width)' }}
+            style={{ flex: 1, padding: '1.5rem', marginInlineStart: 'var(--nav-rail)' }}
           >
             <ReadOnlyBanner />
             <Routes>

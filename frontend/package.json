@@ -11,6 +11,8 @@
     "test": "vitest run"
   },
   "dependencies": {
+    "@fontsource/geist-sans": "^5.2.5",
+    "@fontsource/jetbrains-mono": "^5.2.8",
     "@fortawesome/fontawesome-free": "^7.2.0",
     "@tanstack/react-query": "^5.100.0",
     "react": "^19.2.0",
