@@ -1,5 +1,12 @@
 import React from 'react';
 import ReactDOM from 'react-dom/client';
+// Obsidian design system fonts, self-hosted in the bundle (no CDN / Node at
+// runtime). Geist for UI text + metrics, JetBrains Mono for labels/metadata.
+import '@fontsource/geist-sans/400.css';
+import '@fontsource/geist-sans/500.css';
+import '@fontsource/geist-sans/600.css';
+import '@fontsource/geist-sans/700.css';
+import '@fontsource/jetbrains-mono/500.css';
 import './styles.css';
 import App from './App';
 import { dir, locale, t } from './i18n';

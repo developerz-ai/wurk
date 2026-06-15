@@ -122,15 +122,15 @@
     /* Cursor-tracking spotlight: a soft brightness glow follows the pointer
        across each card (JS sets --mx/--my). Brightness only, no chroma — keeps
        the monochrome palette. A faint ring brightens to read as "alive". */
-    .pillar, .feature { position: relative; overflow: hidden; isolation: isolate; }
+    .pillar { position: relative; overflow: hidden; isolation: isolate; }
     .pillar > *, .feature > * { position: relative; z-index: 1; }
-    .pillar::before, .feature::before {
+    .pillar::before {
       content: ""; position: absolute; inset: 0; z-index: 0; border-radius: inherit;
       background: radial-gradient(280px circle at var(--mx, 50%) var(--my, -30%),
         rgba(255,255,255,0.11), rgba(255,255,255,0.04) 38%, transparent 62%);
       opacity: 0; transition: opacity .3s ease; pointer-events: none;
     }
-    .pillar::after, .feature::after {
+    .pillar::after {
       content: ""; position: absolute; inset: 0; z-index: 0; border-radius: inherit;
       padding: 1px; pointer-events: none; opacity: 0; transition: opacity .3s ease;
       background: radial-gradient(360px circle at var(--mx, 50%) var(--my, -30%),
@@ -139,8 +139,74 @@
       -webkit-mask-composite: xor; mask: linear-gradient(#000 0 0) content-box, linear-gradient(#000 0 0);
       mask-composite: exclude;
     }
-    .pillar:hover::before, .feature:hover::before,
-    .pillar:hover::after, .feature:hover::after { opacity: 1; }
+    .pillar:hover::before, .pillar:hover::after { opacity: 1; }
+
+    /* ── Per-tier BorderGlow on the feature (tier) cards ──
+       Ported from the React Bits <BorderGlow/> to vanilla CSS/JS. A colored 1px
+       border and an outer bloom track the cursor and brighten as it nears an
+       edge; the hue is the Sidekiq tier each feature replaces — OSS green, Pro
+       blue, Enterprise purple — so each card shows which paid tier Wurk frees.
+       The three hues are GitHub-dark accents, so they sit on the existing
+       palette (OSS green == --success). JS sets --edge-proximity (0–100) and
+       --cursor-angle; both stay 0/45deg without JS, so the cards degrade to the
+       plain bordered panels. */
+    :root { --tier-oss: 63 185 80; --tier-pro: 88 166 255; --tier-ent: 188 140 255; }
+    .feature {
+      isolation: isolate; overflow: visible;
+      --edge-proximity: 0; --cursor-angle: 45deg;
+      --edge-sensitivity: 26; --color-sensitivity: 46;
+      --glow: var(--tier-oss);
+    }
+    .feature--oss { --glow: var(--tier-oss); }
+    .feature--pro { --glow: var(--tier-pro); }
+    .feature--ent { --glow: var(--tier-ent); }
+
+    /* Soft inner colour wash that follows the pointer (under the text). */
+    .feature::before {
+      content: ""; position: absolute; inset: 0; z-index: 0; border-radius: inherit;
+      pointer-events: none; opacity: 0; transition: opacity .35s ease;
+      background: radial-gradient(360px circle at var(--mx, 50%) var(--my, -30%),
+        rgb(var(--glow) / 0.16), rgb(var(--glow) / 0.05) 40%, transparent 64%);
+    }
+    .feature:hover::before { opacity: 1; }
+
+    /* Colored 1px border, masked to a cone around the cursor, opacity driven by
+       edge proximity — the BorderGlow signature. */
+    .feature::after {
+      content: ""; position: absolute; inset: 0; z-index: 0; border-radius: inherit;
+      padding: 1px; pointer-events: none;
+      background: conic-gradient(from var(--cursor-angle) at center,
+        rgb(var(--glow) / 0.95), rgb(var(--glow) / 0) 24%,
+        rgb(var(--glow) / 0) 76%, rgb(var(--glow) / 0.95));
+      -webkit-mask: linear-gradient(#000 0 0) content-box, linear-gradient(#000 0 0);
+      -webkit-mask-composite: xor; mask: linear-gradient(#000 0 0) content-box, linear-gradient(#000 0 0);
+      mask-composite: exclude;
+      opacity: calc((var(--edge-proximity) - var(--color-sensitivity)) / (100 - var(--color-sensitivity)));
+      transition: opacity .12s linear;
+    }
+
+    /* Outer + inner bloom in the tier colour (BorderGlow's edge-light layer). */
+    .feature > .edge-light {
+      position: absolute; inset: -18px; z-index: 0; border-radius: 22px;
+      pointer-events: none; mix-blend-mode: plus-lighter;
+      opacity: calc((var(--edge-proximity) - var(--edge-sensitivity)) / (100 - var(--edge-sensitivity)));
+      transition: opacity .12s linear;
+      -webkit-mask: conic-gradient(from var(--cursor-angle) at center,
+        #000 3%, transparent 12%, transparent 88%, #000 97%);
+      mask: conic-gradient(from var(--cursor-angle) at center,
+        #000 3%, transparent 12%, transparent 88%, #000 97%);
+    }
+    .feature > .edge-light::before {
+      content: ""; position: absolute; inset: 18px; border-radius: inherit;
+      box-shadow:
+        inset 0 0 0 1px rgb(var(--glow) / 1),
+        inset 0 0 6px 0 rgb(var(--glow) / 0.40),
+        inset 0 0 16px 0 rgb(var(--glow) / 0.26),
+        0 0 6px 0 rgb(var(--glow) / 0.45),
+        0 0 16px 0 rgb(var(--glow) / 0.30),
+        0 0 30px 2px rgb(var(--glow) / 0.15);
+    }
+    .feature:not(:hover) > .edge-light { opacity: 0; transition: opacity .6s ease; }
     .feature__ic { display: inline-flex; align-items: center; justify-content: center;
       width: 44px; height: 44px; border-radius: 11px; margin-bottom: 14px;
       background: var(--panel-2); border: 1px solid var(--line-strong); color: var(--fg); font-size: 18px; }
@@ -253,37 +319,43 @@ gem <span class="add">"wurk"</span></pre>
           No license keys, no per-seat math, no feature flags. Just <code>bundle install</code>.
         </p>
         <div class="features-grid">
-          <div class="feature">
+          <div class="feature feature--oss">
+            <span class="edge-light" aria-hidden="true"></span>
             <span class="feature__ic"><i class="fa-solid fa-bolt" aria-hidden="true"></i></span>
             <h3>Real parallelism, not just threads</h3>
             <p>Fork-based workers use every core — no GIL bottleneck. Reliable BLMOVE fetch, PID supervision, zero-downtime rolling restarts, and graceful drain are built in.</p>
             <span class="feature__tier"><i class="fa-solid fa-check free" aria-hidden="true"></i> Sidekiq OSS + Pro</span>
           </div>
-          <div class="feature">
+          <div class="feature feature--pro">
+            <span class="edge-light" aria-hidden="true"></span>
             <span class="feature__ic"><i class="fa-solid fa-table-cells-large" aria-hidden="true"></i></span>
             <h3>Batches that fan out &amp; call back</h3>
             <p>Track thousands of jobs as one unit. Fire success / complete / death callbacks, nest batches arbitrarily deep, and watch live progress roll in.</p>
             <span class="feature__tier"><s>Sidekiq Pro</s> · <span class="free">free</span></span>
           </div>
-          <div class="feature">
+          <div class="feature feature--ent">
+            <span class="edge-light" aria-hidden="true"></span>
             <span class="feature__ic"><i class="fa-solid fa-gauge" aria-hidden="true"></i></span>
             <h3>Rate limiting that holds the line</h3>
             <p>Concurrent, bucket, window, leaky, and points limiters protect fragile downstreams — throttle a third-party API or a hot database without ever dropping work.</p>
             <span class="feature__tier"><s>Sidekiq Enterprise</s> · <span class="free">free</span></span>
           </div>
-          <div class="feature">
+          <div class="feature feature--ent">
+            <span class="edge-light" aria-hidden="true"></span>
             <span class="feature__ic"><i class="fa-solid fa-stopwatch" aria-hidden="true"></i></span>
             <h3>Cron that fires exactly once</h3>
             <p>Leader-elected periodic jobs mean every schedule tick runs once across your whole fleet — no duplicate sends, no missed ticks, no extra moving parts.</p>
             <span class="feature__tier"><s>Sidekiq Enterprise</s> · <span class="free">free</span></span>
           </div>
-          <div class="feature">
+          <div class="feature feature--ent">
+            <span class="edge-light" aria-hidden="true"></span>
             <span class="feature__ic"><i class="fa-solid fa-shield-halved" aria-hidden="true"></i></span>
             <h3>Encrypted arguments, rotated keys</h3>
             <p>AES-256-GCM encryption for sensitive job arguments with zero-downtime key rotation. PII and secrets never sit in Redis as plaintext.</p>
             <span class="feature__tier"><s>Sidekiq Enterprise</s> · <span class="free">free</span></span>
           </div>
-          <div class="feature">
+          <div class="feature feature--oss">
+            <span class="edge-light" aria-hidden="true"></span>
             <span class="feature__ic"><i class="fa-solid fa-gauge-high" aria-hidden="true"></i></span>
             <h3>A dashboard you'll keep open</h3>
             <p>A precompiled React SPA ships inside the gem — consumers never touch Node. Live queues, retries, busy workers, batches, limiters, cron, and metrics, with click-through job detail.</p>
@@ -412,17 +484,40 @@ mount Wurk::Engine =&gt; <span class="add">"/wurk"</span></pre>
       });
     })();
 
-    // Cursor-tracking spotlight: update --mx/--my to the pointer position so the
-    // radial glow + glowing border in ::before/::after follow the mouse.
+    // Cursor-tracking glow. For every card --mx/--my follow the pointer (the
+    // monochrome pillar spotlight). Feature/tier cards additionally get the
+    // BorderGlow inputs: --edge-proximity (0–100, 100 == on an edge) and
+    // --cursor-angle (deg from centre, 0 == up), which drive the per-tier
+    // colored border + bloom. Math mirrors the React Bits <BorderGlow/>.
     (function () {
       if (window.matchMedia && window.matchMedia('(pointer: coarse)').matches) return;
       var cards = document.querySelectorAll('.pillar, .feature');
       cards.forEach(function (card) {
+        var isFeature = card.classList.contains('feature');
         card.addEventListener('pointermove', function (e) {
           var r = card.getBoundingClientRect();
-          card.style.setProperty('--mx', (e.clientX - r.left) + 'px');
-          card.style.setProperty('--my', (e.clientY - r.top) + 'px');
+          var x = e.clientX - r.left, y = e.clientY - r.top;
+          card.style.setProperty('--mx', x + 'px');
+          card.style.setProperty('--my', y + 'px');
+          if (!isFeature) return;
+          var cx = r.width / 2, cy = r.height / 2;
+          var dx = x - cx, dy = y - cy;
+          var kx = dx === 0 ? Infinity : cx / Math.abs(dx);
+          var ky = dy === 0 ? Infinity : cy / Math.abs(dy);
+          var edge = Math.min(Math.max(1 / Math.min(kx, ky), 0), 1);
+          var angle = 0;
+          if (dx !== 0 || dy !== 0) {
+            angle = Math.atan2(dy, dx) * 180 / Math.PI + 90;
+            if (angle < 0) angle += 360;
+          }
+          card.style.setProperty('--edge-proximity', (edge * 100).toFixed(2));
+          card.style.setProperty('--cursor-angle', angle.toFixed(2) + 'deg');
         });
+        if (isFeature) {
+          card.addEventListener('pointerleave', function () {
+            card.style.setProperty('--edge-proximity', '0');
+          });
+        }
       });
     })();
   </script>
