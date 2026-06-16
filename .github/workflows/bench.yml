@@ -73,13 +73,31 @@ jobs:
       # Keep the comparator from this PR available after we check out the base.
       - name: stage comparator
         run: cp bin/bench-compare /tmp/bench-compare
+      # Best-of-N: run the suite BENCH_RUNS times per side and concatenate; the
+      # comparator keeps the fastest run per benchmark, which damps the
+      # cross-process noise that false-positives low-throughput benches (#250).
       - name: bench head
-        run: bundle exec rake bench | tee /tmp/bench-head.txt
+        env:
+          BENCH_RUNS: 3
+        run: |
+          : > /tmp/bench-head.txt
+          for i in $(seq 1 "$BENCH_RUNS"); do
+            echo "::group::bench head run $i"
+            bundle exec rake bench | tee -a /tmp/bench-head.txt
+            echo "::endgroup::"
+          done
       - name: bench base
+        env:
+          BENCH_RUNS: 3
         run: |
           git checkout --quiet ${{ github.event.pull_request.base.sha }}
           bundle install --quiet
-          bundle exec rake bench | tee /tmp/bench-base.txt
+          : > /tmp/bench-base.txt
+          for i in $(seq 1 "$BENCH_RUNS"); do
+            echo "::group::bench base run $i"
+            bundle exec rake bench | tee -a /tmp/bench-base.txt
+            echo "::endgroup::"
+          done
       - name: compare, comment, gate
         env:
           GH_TOKEN: ${{ github.token }}

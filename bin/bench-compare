@@ -8,6 +8,13 @@
 # Parses the benchmark/ips report lines ("<label>  5.70k (± 6.9%) i/s ...")
 # from each file and prints a Markdown table of the per-benchmark change.
 #
+# Each side's file may concatenate SEVERAL `rake bench` runs (best-of-N): when a
+# label appears more than once we keep the fastest run. The least-contended run
+# is the truest measure of throughput, so taking the max per label damps the
+# cross-process tail (GC, runner CPU contention) that makes low-throughput
+# benches like `push_bulk(1000)` false-positive (#250). It can't hide a real
+# regression — best-of-N is applied symmetrically to base and head.
+#
 # A slowdown is only *flagged as a regression* when it clears the combined
 # noise of both runs — benchmark/ips reports a relative error (the "± X%") per
 # result, and CI runners are noisy — plus a signal margin. Concretely it fails
@@ -21,6 +28,13 @@ MARKER = '<!-- bench-compare -->'
 SCALE = { '' => 1, 'k' => 1_000, 'M' => 1_000_000, 'G' => 1_000_000_000 }.freeze
 IPS_LINE = %r{^\s*(\S.*?)\s+([\d.,]+)\s*([kMG]?)\s*\(±\s*([\d.,]+)%\)\s*i/s}i
 
+# Best-of-N: keep the fastest run for this label across repeated bench runs.
+def keep_fastest(results, label, value, err)
+  return if results[label] && results[label][0] >= value
+
+  results[label] = [value, err] # [ips, ± error %]
+end
+
 def parse(path)
   results = {}
   File.foreach(path) do |line|
@@ -28,7 +42,7 @@ def parse(path)
     next unless m
 
     value = m[2].delete(',').to_f * SCALE[m[3]]
-    results[m[1].strip] = [value, m[4].delete(',').to_f] # [ips, ± error %]
+    keep_fastest(results, m[1].strip, value, m[4].delete(',').to_f)
   end
   results
 end
