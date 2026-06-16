@@ -23,8 +23,11 @@ class BenchCompareTest < Wurk::Test::UnitCase
     path
   end
 
+  # Pin BENCH_REGRESSION_PCT to the script's documented default so the gate's
+  # threshold is decoupled from whatever the parent test process (or CI) has
+  # in its environment — otherwise these assertions drift on env coupling.
   def compare(base, head)
-    out = `#{SCRIPT} #{base} #{head} 2>&1`
+    out = IO.popen({ 'BENCH_REGRESSION_PCT' => '5' }, [SCRIPT, base, head], err: %i[child out], &:read)
     [out, $CHILD_STATUS.exitstatus]
   end
 
