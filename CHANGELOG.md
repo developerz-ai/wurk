@@ -4,8 +4,17 @@ All notable changes to Wurk are recorded here. Format: [Keep a Changelog](https:
 
 ## [Unreleased]
 
+## [1.0.3] - 2026-06-16
+
+### Fixed
+- **Rails drop-in — engine auto-load** — a host following the README/migration guide (`gem "wurk"`, no `require:`) only loaded the standalone entry point, so the engine/railtie never loaded and `ActiveJob::QueueAdapters::WurkAdapter` was undefined; `config.active_job.queue_adapter = :wurk` then raised `NameError` at boot. `lib/wurk.rb` now mirrors stock Sidekiq and auto-loads `wurk/rails` when Rails is present (idempotent with an explicit `require "wurk/rails"`; the no-Rails/standalone path stays fully Rails-free). (#246, #249)
+- **Rails drop-in — build-safe boot** — `Railtie.skip_boot?` didn't cover the build context, so the default Rails Dockerfile's `SECRET_KEY_BASE_DUMMY=1 ./bin/rails assets:precompile` fired `after_initialize`, forked the swarm, and tried to connect to Redis during `docker build` (no Redis there → hang/fail). A new `Railtie.building?` skips boot when `SECRET_KEY_BASE_DUMMY` is set or any rake task is running; `rails server` / `puma` boot via `Rails::Command`, not Rake, so the real server path is unaffected. (#247, #249)
+
 ### Changed
+- **Dashboard — obsidian redesign** — the dashboard adopts the monochromatic "obsidian" design system (collapsible left rail, range filters, loading states) and the landing page gains per-tier `BorderGlow` on the tier cards. (#248)
 - **CI — bench gate de-noised (best-of-N)** — the PR `compare` job intermittently flagged the low-throughput `push_bulk(1000)` bench (~250 i/s) as a regression on pure runner noise: at that iteration count a single noisy base-vs-head pair could clear even the noise-aware ± band (e.g. #249 saw a spurious -18.2% over a ±13.3% band; the re-run passed). The job now runs the bench suite three times per side and `bin/bench-compare` keeps the fastest run per benchmark, so the cross-process tail (GC, runner CPU contention) is damped. Best-of-N is applied symmetrically to base and head, so a real regression — slower on every run — still fails the gate. (#250)
+
+## [1.0.2] - 2026-06-13
 
 ### Added
 - **Dashboard — per-request read-only** — `/api/meta` now reports a per-request `read_only` flag derived from the registered authorization hook, so a viewer-role user (a hook that permits `GET` but denies mutations) sees the SPA hide destructive actions instead of showing buttons that then 403. The probe asks the hook about `POST` on a canonical mutating route (`/api/retries`) so a path-sensitive hook resolves it the same way the Authorization middleware resolves the real mutation. With no hook registered the flag still reflects global read-only mode. (#244)
