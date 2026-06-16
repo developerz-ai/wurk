@@ -4,7 +4,8 @@ All notable changes to Wurk are recorded here. Format: [Keep a Changelog](https:
 
 ## [Unreleased]
 
-## [1.0.2] - 2026-06-13
+### Changed
+- **CI — bench gate de-noised (best-of-N)** — the PR `compare` job intermittently flagged the low-throughput `push_bulk(1000)` bench (~250 i/s) as a regression on pure runner noise: at that iteration count a single noisy base-vs-head pair could clear even the noise-aware ± band (e.g. #249 saw a spurious -18.2% over a ±13.3% band; the re-run passed). The job now runs the bench suite three times per side and `bin/bench-compare` keeps the fastest run per benchmark, so the cross-process tail (GC, runner CPU contention) is damped. Best-of-N is applied symmetrically to base and head, so a real regression — slower on every run — still fails the gate. (#250)
 
 ### Added
 - **Dashboard — per-request read-only** — `/api/meta` now reports a per-request `read_only` flag derived from the registered authorization hook, so a viewer-role user (a hook that permits `GET` but denies mutations) sees the SPA hide destructive actions instead of showing buttons that then 403. The probe asks the hook about `POST` on a canonical mutating route (`/api/retries`) so a path-sensitive hook resolves it the same way the Authorization middleware resolves the real mutation. With no hook registered the flag still reflects global read-only mode. (#244)
