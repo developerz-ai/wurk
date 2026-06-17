@@ -158,6 +158,23 @@ class UniqueTest < Wurk::Test::UnitCase
     assert_equal 600, Wurk::Unique.coerce_ttl(duration)
   end
 
+  # Regression #253: a real ActiveSupport::Duration overrides `is_a?(Integer)`
+  # to return true, so `unique_for: 1.hour` slipped past the Integer fast-path
+  # and the raw Duration reached redis-client as the EX arg (TypeError). Must
+  # coerce to Integer seconds. The duration_double above can't catch this — it
+  # doesn't lie about is_a?(Integer) the way the real class does.
+  def test_coerce_ttl_coerces_real_activesupport_duration_to_integer
+    require 'active_support/duration'
+    duration = ActiveSupport::Duration.build(3600)
+
+    assert_kind_of Integer, duration, 'precondition: AS Duration reports is_a?(Integer)'
+
+    ttl = Wurk::Unique.coerce_ttl(duration)
+
+    assert_instance_of Integer, ttl
+    assert_equal 3600, ttl
+  end
+
   def test_coerce_ttl_floors_non_integer_numeric
     # Float is Numeric but not Integer (line 103 then): truncated via to_i.
     assert_equal 60, Wurk::Unique.coerce_ttl(60.9)

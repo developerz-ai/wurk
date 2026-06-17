@@ -16,9 +16,10 @@ Wurk.configure_server do |config|
   # Seconds to let in-flight jobs finish on shutdown (Sidekiq-compatible key):
   # config[:timeout] = 25
 
-  # The default is a single worker process (fork). To run several, declare a
-  # topology — `flat` spawns N identical forks; use `slot`s for dedicated
-  # queues. See docs/idea/03-process-model.md.
+  # By default Wurk forks one worker process per CPU core (set WURK_COUNT, or
+  # SIDEKIQ_COUNT, to override). For full control declare a topology — `flat`
+  # spawns N identical forks; use `slot`s for dedicated queues. Total in-flight
+  # jobs = forks × concurrency. See docs/idea/03-process-model.md.
   # config.topology = Wurk::Topology.flat(count: 2, queues: %w[critical default low], concurrency: 10)
 end
 

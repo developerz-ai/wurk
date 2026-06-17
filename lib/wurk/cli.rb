@@ -398,8 +398,20 @@ module Wurk
 
     def boot_rails_application(require_path)
       require 'rails'
+      define_active_job_adapter
       require ::File.expand_path("#{require_path}/config/environment.rb")
       @config[:tag] ||= default_tag(::Rails.root) if defined?(::Rails) && ::Rails.respond_to?(:root)
+    end
+
+    # Standalone mode never loads the engine, so the ActiveJob `:wurk` /
+    # `:sidekiq` adapters it normally defines are absent. Define them BEFORE the
+    # app boots — an app with `config.active_job.queue_adapter = :wurk` resolves
+    # the adapter during environment boot, which otherwise raises `uninitialized
+    # constant WurkAdapter` (#253). `require` no-ops for a mounted-engine app
+    # that already loaded it, and the adapter file itself rescues a missing
+    # ActiveJob gem, so a non-ActiveJob app is unaffected.
+    def define_active_job_adapter
+      require_relative '../active_job/queue_adapters/wurk_adapter'
     end
 
     def initialize_logger
