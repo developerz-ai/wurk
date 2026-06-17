@@ -557,6 +557,31 @@ class CLITest < Wurk::Test::UnitCase
     end
   end
 
+  # Regression #253: standalone mode never loads the engine, so the ActiveJob
+  # `:wurk` adapter it normally defines is absent and a `queue_adapter = :wurk`
+  # app crashes with `uninitialized constant WurkAdapter` while booting. The CLI
+  # must define the adapter itself. Forked so removing the already-loaded
+  # constant + its $LOADED_FEATURES entry (to simulate the engine-absent state)
+  # can't leak into sibling suites; the child exits 0 only if the adapter is
+  # (re)defined.
+  def test_define_active_job_adapter_defines_wurk_adapter_standalone
+    adapter_path = ::File.expand_path('../../lib/active_job/queue_adapters/wurk_adapter.rb', __dir__)
+    pid = ::Process.fork do
+      require 'active_job'
+      $LOADED_FEATURES.delete(adapter_path)
+      qa = ActiveJob::QueueAdapters
+      qa.send(:remove_const, :WurkAdapter) if qa.const_defined?(:WurkAdapter, false)
+
+      @cli.send(:define_active_job_adapter)
+
+      exit(qa.const_defined?(:WurkAdapter, false) ? 0 : 1)
+    end
+    _, status = ::Process.wait2(pid)
+
+    assert_predicate status, :success?,
+                     'standalone CLI must define ActiveJob::QueueAdapters::WurkAdapter (#253)'
+  end
+
   # --- swarm preload knobs (Ent §7.2) ---------------------------------
 
   def test_preload_groups_defaults_to_default_group

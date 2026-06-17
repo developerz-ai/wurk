@@ -131,7 +131,11 @@ module Wurk
     # (skip). Returns nil when uniqueness should be skipped.
     def self.coerce_ttl(value)
       return nil if value.nil? || value == false
-      return value if value.is_a?(Integer) && value.positive?
+      # `.to_i`, not `value`: ActiveSupport::Duration overrides `is_a?(Integer)`
+      # to return true (it delegates to its underlying value), so `1.hour` passes
+      # this guard — returning the raw Duration handed redis-client a non-Integer
+      # EX arg and raised TypeError at enqueue (#253).
+      return value.to_i if value.is_a?(Integer) && value.positive?
       return value.to_i if value.is_a?(Numeric)
       return value.to_i if duration_like?(value)
 
