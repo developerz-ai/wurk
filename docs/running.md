@@ -56,7 +56,7 @@ Identical to Sidekiq:
 
 | Flag | Meaning |
 |---|---|
-| `-c INT` | Processor threads (concurrency). Defaults to `RAILS_MAX_THREADS` or 10. |
+| `-c INT` | Processor threads (concurrency). Defaults to `RAILS_MAX_THREADS`, else `5`. |
 | `-q queue[,weight]` | Queue to process, optionally weighted. Repeatable. Defaults to `default`. |
 | `-r PATH` | App to load — a Rails app **directory**, or a single `.rb` file (see below). |
 | `-t NUM` | Shutdown timeout in seconds (default 25). |

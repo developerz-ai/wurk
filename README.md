@@ -56,6 +56,7 @@ Plus Wurk extras: a worker topology DSL, a Kubernetes liveness/readiness listene
 ## Documentation
 
 - **[Website](https://developerz-ai.github.io/wurk/)** · **[Wiki / full docs](https://github.com/developerz-ai/wurk/wiki)** — the pitch, install, and the complete guide.
+- **[API reference (YARD)](https://developerz-ai.github.io/wurk/api/)** — generated docs for the public classes (`Wurk::Worker`, `Wurk::Client`, `Wurk::Configuration`, `Wurk::Batch`, `Wurk::Limiter`, `Wurk::Unique`, and the `Sidekiq::*` aliases). Machine-readable map for AI agents: **[llms.txt](https://developerz-ai.github.io/wurk/llms.txt)**.
 - **[Getting started & architecture](https://github.com/developerz-ai/wurk/blob/main/docs/idea/01-overview.md)** — how the swarm, manager, fetcher, and processor fit together.
 - **[Starting the worker](https://github.com/developerz-ai/wurk/blob/main/docs/running.md)** — Rails auto-start, the `wurk`/`wurkswarm` runners, and running standalone without Rails.
 - **[Active Job adapter](https://github.com/developerz-ai/wurk/blob/main/docs/active-job.md)** — run `ActiveJob`/`deliver_later` on Wurk with `queue_adapter = :wurk`.

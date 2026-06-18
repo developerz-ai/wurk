@@ -120,6 +120,12 @@ Two independent knobs:
 > / `-c` / `RAILS_MAX_THREADS` (the same env knob Sidekiq honors). `WURK_COUNT` is the
 > *new* knob — it has no Sidekiq equivalent because Sidekiq never forks.
 
+> ⚠️ **`WURK_COUNT` only applies to the forking runners** — the Rails engine's
+> auto-boot swarm and the standalone `bundle exec wurkswarm` (alias `sidekiqswarm`).
+> Plain `bundle exec wurk` is a **single process** (one thread pool, like `sidekiq`);
+> it ignores `WURK_COUNT`. Use `wurkswarm` when you want multi-process parallelism
+> outside Rails. See [§3](#3-running-a-worker-process).
+
 ### Total in-flight jobs = `WURK_COUNT × concurrency`
 
 A whole-number `WURK_COUNT` is an absolute process count; a fractional value is a CPU
@@ -147,11 +153,16 @@ end
 ```
 
 ```bash
-# Pick the process count to land near your old in-flight number:
-WURK_COUNT=2  bundle exec wurk   # 2 × 5  = 10 jobs in flight (matches Sidekiq, now on 2 cores)
-WURK_COUNT=1  bundle exec wurk   # 1 × 10 if you also set concurrency: 10 — single-process, Sidekiq-like
-WURK_COUNT=4  bundle exec wurk   # 4 × 5  = 20 in flight — 2× the throughput, 4× the CPU parallelism
+# Pick the process count to land near your old in-flight number. WURK_COUNT
+# drives the forking runner (wurkswarm), or the Rails engine's auto-boot swarm:
+WURK_COUNT=2  bundle exec wurkswarm   # 2 × 5  = 10 jobs in flight (matches Sidekiq, now on 2 cores)
+WURK_COUNT=4  bundle exec wurkswarm   # 4 × 5  = 20 in flight — 2× the throughput, 4× the CPU parallelism
+
+bundle exec wurk -c 10                # or stay single-process (no fork) with 10 threads, Sidekiq-like
 ```
+
+In a Rails app you don't run either binary — the engine auto-boots the swarm and
+reads `WURK_COUNT` itself; set the env var on the worker role.
 
 **Size your database pool for the per-process thread count, then check the total.**
 Each process needs `pool >= concurrency` in `database.yml`:
@@ -175,27 +186,37 @@ On the 16-core default that's 16 × 5 = 80 connections from one host — size
 
 ## 3. Running a worker process
 
-### Dedicated worker: `bundle exec wurk`
+### Dedicated worker: `wurk` vs `wurkswarm`
 
-The standalone runner is `bundle exec wurk`. The gem ships a `wurk` executable (and
-`wurkswarm`) — there is **no `sidekiq` binary**, so update any `bundle exec sidekiq`
-invocations, Procfile lines, and systemd/Capistrano units to `wurk`. It takes the
-familiar flags (`-c` concurrency, `-q` queue, `-r` require, `-t` timeout, `-e`
-environment, `-C` config), reads a YAML config with `-C path`, and auto-discovers
-`config/wurk.yml` then `config/sidekiq.yml` (`.erb` supported). The YAML structure
-matches Sidekiq's `sidekiq.yml`.
+The gem ships two standalone runners (and an alias) — there is **no `sidekiq`
+binary**, so update any `bundle exec sidekiq` invocation, Procfile line, and
+systemd/Capistrano unit:
+
+| Binary | What it does | Sidekiq equivalent |
+|---|---|---|
+| `bundle exec wurk` | One process, one thread pool | `sidekiq` |
+| `bundle exec wurkswarm` | Forks `WURK_COUNT` worker children from one preloaded parent — fork-based real parallelism | `sidekiqswarm` |
+
+`sidekiqswarm` is shipped as an alias for `wurkswarm`, so an existing Enterprise
+invocation drops in unchanged. **Use `wurkswarm` for a multi-process worker host**
+(it's the only way to get fork-based parallelism without Rails); use `wurk` for a
+single-process worker. Both take the familiar flags (`-c` concurrency, `-q` queue,
+`-r` require, `-t` timeout, `-e` environment, `-C` config), read a YAML config with
+`-C path`, and auto-discover `config/wurk.yml` then `config/sidekiq.yml` (`.erb`
+supported). The YAML structure matches Sidekiq's `sidekiq.yml`.
 
 ```bash
-bundle exec wurk -C config/wurk.yml -e production
+bundle exec wurkswarm -C config/wurk.yml -e production   # forked swarm (real parallelism)
+bundle exec wurk      -C config/wurk.yml -e production    # single process
 ```
 
-The standalone runner does **not** load the Rails engine (the dashboard) — that's by
-design, so a worker host stays lean. It does fully boot your Rails app (`-r`/the
-environment) so your jobs and models are available.
+Neither runner loads the Rails engine (the dashboard) — by design, so a worker host
+stays lean. They do fully boot your Rails app (`-r`/the environment) so your jobs and
+models are available.
 
 > ✅ **ActiveJob works standalone.** If your app uses
 > `config.active_job.queue_adapter = :wurk` (or `:sidekiq`), the standalone CLI now
-> defines the adapter *before* the Rails environment loads, so a dedicated `wurk`
+> defines the adapter *before* the Rails environment loads, so a dedicated worker
 > process boots cleanly. (Earlier builds raised `uninitialized constant WurkAdapter`
 > in standalone mode — fixed in [#253](https://github.com/developerz-ai/wurk/issues/253).)
 
@@ -204,7 +225,7 @@ For an example systemd unit and the Capistrano / deploy signal dance (replacing
 worker line is simply:
 
 ```procfile
-worker: bundle exec wurk -e production
+worker: bundle exec wurkswarm -e production
 ```
 
 ### Clustered Puma + the embedded swarm (important)
@@ -222,8 +243,8 @@ web role.**
 # Web dyno / Puma role — serve HTTP only, no jobs:
 WURK_DISABLED=1 bundle exec puma -C config/puma.rb
 
-# Worker dyno / role — run the jobs:
-bundle exec wurk -e production
+# Worker dyno / role — run the jobs (wurkswarm for multi-process parallelism):
+bundle exec wurkswarm -e production
 ```
 
 This mirrors the standard Sidekiq topology (Puma for web, a separate `sidekiq`
@@ -418,7 +439,7 @@ issue** — that feedback is part of the v1.0.0 acceptance gate for this guide.
    nothing to strip out.
 4. **Re-point the dashboard route** — `mount Wurk::Engine => "/wurk"` (gate it behind
    your app auth — see [`docs/dashboard.md`](dashboard.md)).
-5. **Split web from workers** — run a dedicated `bundle exec wurk` process and set
+5. **Split web from workers** — run a dedicated `bundle exec wurkswarm` process and set
    `WURK_DISABLED=1` on the web role so clustered Puma doesn't fork duplicate swarms.
    See [§3](#3-running-a-worker-process). Deploying under systemd/Capistrano? See
    [`docs/deployment.md`](deployment.md).
