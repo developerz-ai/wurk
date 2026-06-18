@@ -6,14 +6,18 @@ the common case the migration is a one-line `Gemfile` change — your existing j
 batches, limiters, cron entries, and live Redis data keep working untouched, and the
 Pro/Enterprise features ship in the same free gem with no license check.
 
-This guide covers what stays the same, what to watch for, and a one-page cutover.
+This guide covers what stays the same, the two knobs that surprise people
+(parallelism vs concurrency), how to run a dedicated worker, the third-party gem
+mappings, and a one-page cutover.
 
 - **Authoritative API surface:** [`docs/target/sidekiq-free.md`](target/sidekiq-free.md) ·
   [`sidekiq-pro.md`](target/sidekiq-pro.md) · [`sidekiq-ent.md`](target/sidekiq-ent.md)
 - **Why this is legal:** [`docs/clean-room.md`](clean-room.md)
 
 > Verified against Wurk's Sidekiq-compat layer (`lib/wurk/compat.rb`), which mirrors
-> Sidekiq **8.1.x**. Requires **Ruby ≥ 3.2** and **Redis ≥ 7.0**.
+> Sidekiq **8.1.x**. Requires **Ruby ≥ 3.2** and **Redis ≥ 7.0**. On JRuby /
+> TruffleRuby / Windows, Wurk falls back to threads-only mode (no fork),
+> behaviorally equivalent to stock Sidekiq.
 
 ---
 
@@ -53,6 +57,11 @@ bin/rails g wurk:install          # writes config/initializers/wurk.rb
 processes can run against the same Redis during cutover, each picking up the other's
 enqueued jobs. Roll back by reverting the `Gemfile` line; no data migration either way.
 
+> ⚠️ **The one thing to size before you ship:** Wurk forks one worker process *per CPU
+> core* by default, each running its own thread pool — so a single Sidekiq process
+> becomes N processes on the same box. Read [§2](#2-concurrency-vs-parallelism-read-this)
+> before the first production deploy; it's the only behavioral surprise in the swap.
+
 ---
 
 ## 1. Configuration: `Sidekiq.configure_server` ↔ `Wurk.configure_server`
@@ -74,7 +83,7 @@ Config options verified identical (`lib/wurk/configuration.rb`):
 
 | Option | Notes |
 |---|---|
-| `concurrency` | threads per worker (default `5`) |
+| `concurrency` | threads per worker process (default `5`) |
 | `queues` | ordered/weighted queue list |
 | `redis = { url:, … }` | defaults to `ENV["REDIS_URL"]` → `redis://localhost:6379/0` |
 | `logger`, `logger =` | standard `Logger` |
@@ -90,21 +99,140 @@ Config options verified identical (`lib/wurk/configuration.rb`):
 > child opens a fresh pool), so you only need a fork hook for *your own* non-fork-safe
 > libraries (sockets, threads). It does not fire in single-process (non-swarm) mode.
 
-### Config file
+---
 
-The standalone runner is `bundle exec wurk` (the gem ships a `wurk` executable — there
-is **no `sidekiq` binary**, so update any `bundle exec sidekiq` invocations, Procfile
-lines, and systemd units to `wurk`). It takes the familiar flags (`-c` concurrency,
-`-q` queue, `-r` require, `-t` timeout, `-e` environment, `-C` config), reads a YAML
-config with `-C path`, and auto-discovers `config/wurk.yml` then `config/sidekiq.yml`
-(`.erb` supported). The YAML structure matches Sidekiq's `sidekiq.yml`.
+## 2. Concurrency vs parallelism (read this)
 
-For running the worker under systemd or capistrano-sidekiq — including an example
-unit file and the deploy signal dance — see [`docs/deployment.md`](deployment.md).
+This is the **single biggest difference** from Sidekiq, and the #1 source of
+migration surprises. Sidekiq runs one process with a thread pool. Wurk runs **a swarm
+of forked processes, each with its own thread pool**, for real CPU parallelism on
+MRI (the GIL means threads alone can't parallelize Ruby CPU work).
+
+Two independent knobs:
+
+| Knob | What it controls | How to set it | Default |
+|---|---|---|---|
+| **Parallelism** | Number of forked **worker processes** (real OS processes, true CPU parallelism) | `WURK_COUNT` (or the `SIDEKIQ_COUNT` alias) env var | **CPU core count** (`Etc.nprocessors`) |
+| **Concurrency** | **Threads per process** (Sidekiq-style; great for IO-bound, GIL-bound for CPU) | `config.concurrency`, CLI `-c`, YAML `:concurrency`, or `RAILS_MAX_THREADS` | `5` |
+
+> There is **no `WURK_CONCURRENCY` env var.** Threads-per-process is `config.concurrency`
+> / `-c` / `RAILS_MAX_THREADS` (the same env knob Sidekiq honors). `WURK_COUNT` is the
+> *new* knob — it has no Sidekiq equivalent because Sidekiq never forks.
+
+### Total in-flight jobs = `WURK_COUNT × concurrency`
+
+A whole-number `WURK_COUNT` is an absolute process count; a fractional value is a CPU
+multiplier (`WURK_COUNT=0.5` → half the cores, rounded). The result is floored at 1.
+
+```text
+16-core box, defaults:   16 processes × 5 threads  = 80 jobs in flight at once
+                                                     + 16 separate DB connection pools
+```
+
+**That last line is the foot-gun.** Each forked process opens its own DB pool, its
+own Redis pool, and carries its own memory footprint. A Sidekiq box that comfortably
+ran `concurrency: 25` in one process can exhaust your Postgres `max_connections` or
+your RAM the moment it becomes 16 processes × 25 threads = 400 connections.
+
+### Worked example: mapping a Sidekiq `concurrency: 10` app
+
+Your Sidekiq process ran 10 threads = 10 jobs in flight, 10 DB connections.
+
+```ruby
+# config/initializers/wurk.rb
+Wurk.configure_server do |config|
+  config.concurrency = 5        # threads per process
+end
+```
+
+```bash
+# Pick the process count to land near your old in-flight number:
+WURK_COUNT=2  bundle exec wurk   # 2 × 5  = 10 jobs in flight (matches Sidekiq, now on 2 cores)
+WURK_COUNT=1  bundle exec wurk   # 1 × 10 if you also set concurrency: 10 — single-process, Sidekiq-like
+WURK_COUNT=4  bundle exec wurk   # 4 × 5  = 20 in flight — 2× the throughput, 4× the CPU parallelism
+```
+
+**Size your database pool for the per-process thread count, then check the total.**
+Each process needs `pool >= concurrency` in `database.yml`:
+
+```yaml
+# config/database.yml
+production:
+  pool: <%= ENV.fetch("RAILS_MAX_THREADS", 5).to_i %>   # per-process; must cover concurrency
+```
+
+Then verify the whole box fits: **`WURK_COUNT × pool ≤ your DB's spare connections`**.
+On the 16-core default that's 16 × 5 = 80 connections from one host — size
+`max_connections` (or PgBouncer) accordingly, or cap `WURK_COUNT`.
+
+> **Rule of thumb:** start with `WURK_COUNT` = cores you want to dedicate to jobs and
+> `concurrency` = 5 for IO-bound work. Raise `concurrency` for IO-heavy jobs (HTTP,
+> Redis, slow SQL); raise `WURK_COUNT` for CPU-heavy jobs. Always re-check the DB-pool
+> and memory math after either change.
 
 ---
 
-## 2. Redis key layout: identical, no namespace
+## 3. Running a worker process
+
+### Dedicated worker: `bundle exec wurk`
+
+The standalone runner is `bundle exec wurk`. The gem ships a `wurk` executable (and
+`wurkswarm`) — there is **no `sidekiq` binary**, so update any `bundle exec sidekiq`
+invocations, Procfile lines, and systemd/Capistrano units to `wurk`. It takes the
+familiar flags (`-c` concurrency, `-q` queue, `-r` require, `-t` timeout, `-e`
+environment, `-C` config), reads a YAML config with `-C path`, and auto-discovers
+`config/wurk.yml` then `config/sidekiq.yml` (`.erb` supported). The YAML structure
+matches Sidekiq's `sidekiq.yml`.
+
+```bash
+bundle exec wurk -C config/wurk.yml -e production
+```
+
+The standalone runner does **not** load the Rails engine (the dashboard) — that's by
+design, so a worker host stays lean. It does fully boot your Rails app (`-r`/the
+environment) so your jobs and models are available.
+
+> ✅ **ActiveJob works standalone.** If your app uses
+> `config.active_job.queue_adapter = :wurk` (or `:sidekiq`), the standalone CLI now
+> defines the adapter *before* the Rails environment loads, so a dedicated `wurk`
+> process boots cleanly. (Earlier builds raised `uninitialized constant WurkAdapter`
+> in standalone mode — fixed in [#253](https://github.com/developerz-ai/wurk/issues/253).)
+
+For an example systemd unit and the Capistrano / deploy signal dance (replacing
+`capistrano-sidekiq`), see [`docs/deployment.md`](deployment.md). A `Procfile`
+worker line is simply:
+
+```procfile
+worker: bundle exec wurk -e production
+```
+
+### Clustered Puma + the embedded swarm (important)
+
+When you mount the engine, the railtie **auto-starts an embedded swarm inside every
+non-console Rails process** (unless `WURK_DISABLED=1`, Rails console, or the Rails
+test env). Under **clustered Puma** (`workers > 0`) that means **every Puma worker
+forks its own Wurk swarm** — N Puma workers × `WURK_COUNT` children = a lot of
+duplicate worker processes you didn't intend, all fetching the same queues.
+
+**The fix: run workers in a dedicated process and disable the embedded swarm on the
+web role.**
+
+```bash
+# Web dyno / Puma role — serve HTTP only, no jobs:
+WURK_DISABLED=1 bundle exec puma -C config/puma.rb
+
+# Worker dyno / role — run the jobs:
+bundle exec wurk -e production
+```
+
+This mirrors the standard Sidekiq topology (Puma for web, a separate `sidekiq`
+process for jobs) — you just set `WURK_DISABLED=1` on web so the engine mount keeps
+serving the dashboard without also forking workers. Leave the embedded swarm on only
+if you intentionally want web processes to also run jobs (single-dyno / hobby setups).
+
+---
+
+## 4. Redis key layout: identical, no namespace
 
 Wurk reads and writes the **exact same keys** as Sidekiq OSS (`lib/wurk/keys.rb`),
 with **no global namespace/prefix** (matching Sidekiq OSS). Job payloads are **JSON**
@@ -132,7 +260,7 @@ the Sidekiq web UI / `redis-cli` introspection you already use keeps working.
 
 ---
 
-## 3. `sidekiq_options` mapping
+## 5. `sidekiq_options` mapping
 
 Define jobs exactly as before — `include Sidekiq::Job` (or `Sidekiq::Worker`) and
 `sidekiq_options`. Enqueue with `perform_async` / `perform_in` / `perform_at` /
@@ -149,7 +277,7 @@ Define jobs exactly as before — `include Sidekiq::Job` (or `Sidekiq::Worker`) 
 | `tags:` | ✅ | array of strings; surfaced in the dashboard + logs |
 | `batch` | ✅ (Pro, free) | not a `sidekiq_options` key — `bid` is stamped automatically inside `Sidekiq::Batch#jobs { … }`; access via `#bid` / `#batch` |
 | `pool:` | ✅ | selects the client Redis pool; stripped from the stored payload |
-| `lock:` | ⚠️ not native | Wurk's native uniqueness uses `unique_for:` / `unique_until:` (below). The `sidekiq-unique-jobs` gem and its `lock:` option run against Wurk in the ecosystem CI suite if you prefer that gem |
+| `lock:` | ⚠️ not native | Wurk's native uniqueness uses `unique_for:` / `unique_until:` (see [§6](#6-third-party-gem-mappings)). The `sidekiq-unique-jobs` gem and its `lock:` option also run against Wurk in the ecosystem CI suite |
 
 Custom retry hooks are unchanged: `sidekiq_retry_in { |count, ex, msg| … }` and
 `sidekiq_retries_exhausted { |msg, ex| … }`. The retry backoff formula matches
@@ -159,7 +287,8 @@ Sidekiq: `count**4 + 15 + rand(10 * (count + 1))` seconds.
 
 - **Unique jobs:** enable with `Sidekiq::Enterprise.unique!`, then
   `sidekiq_options unique_for: 10.minutes, unique_until: :success` (or `:start`).
-  *(This is Enterprise's API — not the `sidekiq-unique-jobs` gem's `lock:` DSL.)*
+  *(This is Enterprise's API — not the `sidekiq-unique-jobs` gem's `lock:` DSL; see
+  [§6](#6-third-party-gem-mappings) for the gem mapping.)*
 - **Encryption:** `Sidekiq::Enterprise::Crypto.enable(active_version: 1) { |v| key }`,
   then `sidekiq_options encrypt: true` (the last arg is encrypted).
 - **Batches:** `Sidekiq::Batch.new` with `on(:success/:complete/:death)`, nesting,
@@ -168,7 +297,78 @@ Sidekiq: `count**4 + 15 + rand(10 * (count + 1))` seconds.
 
 ---
 
-## 4. Known incompatibilities — what *not* to expect
+## 6. Third-party gem mappings
+
+Wurk ships native replacements for the most common add-on gems, so you can **drop the
+gem** and use the built-in feature — or keep the gem, since its upstream test suite is
+run against Wurk in the [`ecosystem` CI job](../.github/workflows/ecosystem.yml). The
+native path is recommended (fewer dependencies, first-class dashboard support).
+
+### `sidekiq-cron` → native periodic jobs
+
+Wurk has Enterprise-grade periodic jobs built in. Register them in a `config.periodic`
+block at boot. By design there is **no `Sidekiq::Cron::Job` shim** ([#204](https://github.com/developerz-ai/wurk/issues/204));
+real Sidekiq never defined that constant, and faking it would break the drop-in
+contract.
+
+```ruby
+# sidekiq-cron (old):                       # Wurk (native):
+# config/schedule.yml + Sidekiq::Cron::Job   Wurk.configure_server do |config|
+#                                              config.periodic do |mgr|
+#                                                mgr.register("*/5 * * * *", ReportJob)
+#                                                mgr.register("0 0 * * *", NightlyJob, tz: "UTC")
+#                                              end
+#                                            end
+```
+
+`mgr.register(cron, JobClass, **opts)` takes a standard 5-field cron string and the
+worker class; `tz:` sets the timezone. Periodic state lives in the `periodic` / `loops:<lid>`
+Redis keys and is visible in the dashboard.
+
+### `sidekiq-unique-jobs` → native `unique_for:` / `unique_until:`
+
+Activate Enterprise uniqueness once, then declare it per worker:
+
+```ruby
+# config/initializers/wurk.rb
+Sidekiq::Enterprise.unique!   # required to activate the unique middleware
+
+class ChargeJob
+  include Sidekiq::Job
+  sidekiq_options unique_for: 600,            # seconds (or 10.minutes); the lock TTL
+                  unique_until: :success      # :success (default) | :start
+end
+```
+
+Mapping from `sidekiq-unique-jobs`:
+
+| `sidekiq-unique-jobs` | Wurk native |
+|---|---|
+| `lock: :until_executed` | `unique_until: :success` (lock held through retries, released on success) |
+| `lock: :until_executing` / `:while_executing` | `unique_until: :start` (server middleware releases the lock when the job starts) |
+| `lock_ttl` / `lock_timeout` | `unique_for: <int seconds>` (also accepts an `ActiveSupport::Duration`) |
+| `lock_args_method` / custom uniqueness args | define `self.sidekiq_unique_context(job)` on the worker, returning any JSON-serializable value |
+
+> ⚠️ Unique jobs and encryption are **mutually exclusive on the same worker** — each
+> encryption produces different ciphertext, which defeats the uniqueness digest.
+
+### Quick reference — other ecosystem gems
+
+These run their own upstream suites against Wurk in CI; most work unchanged because
+they only touch the Sidekiq API surface and Redis keys Wurk already mirrors.
+
+| Gem | Status on Wurk | Notes |
+|---|---|---|
+| `sidekiq-scheduler` | ✅ works unchanged | uses the standard schedule ZSET |
+| `sidekiq-status` | ✅ works unchanged | rides the standard job lifecycle + middleware |
+| `sidekiq-failures` | ✅ works unchanged | reads the standard `retry`/`dead` sets |
+| `sidekiq-throttled` | ✅ works unchanged | client/server middleware contract is identical |
+| `sidekiq-cron` | ⚠️ prefer native | works in CI, but native `config.periodic` is recommended (no `Sidekiq::Cron::Job` constant) |
+| `sidekiq-unique-jobs` | ⚠️ prefer native | works in CI, but native `unique_for:` is recommended |
+
+---
+
+## 7. Known incompatibilities — what *not* to expect
 
 Wurk aims for 100% drop-in. A couple of Sidekiq Pro-isms simply no-op or alias
 (items 1–2 — there to reassure, not to fix); the rest are genuine differences worth
@@ -186,9 +386,9 @@ issue** — that feedback is part of the v1.0.0 acceptance gate for this guide.
    the wurk dashboard.
 3. **`config.workers` / `config.shutdown_timeout` are not Configuration setters.**
    Use `config.concurrency` for threads-per-process and `config[:timeout]` for the
-   shutdown grace; process/fork count is governed by the swarm topology
-   (`config.topology = Wurk::Topology.flat(count:, queues:, concurrency:)`), not a
-   `workers=` accessor.
+   shutdown grace; process/fork count is governed by `WURK_COUNT` and the swarm
+   topology (`config.topology = Wurk::Topology.flat(count:, queues:, concurrency:)`),
+   not a `workers=` accessor. See [§2](#2-concurrency-vs-parallelism-read-this).
 4. **Unique jobs + encryption are mutually exclusive on the same worker** — each
    encryption produces different ciphertext, which defeats the uniqueness digest.
 5. **No Redis namespacing** in the free gem (same as Sidekiq OSS). One logical
@@ -202,28 +402,32 @@ issue** — that feedback is part of the v1.0.0 acceptance gate for this guide.
    itself as OSS, even though the Pro/Ent features are present. Don't gate behavior on
    these predicates.
 
-Third-party gems (`sidekiq-cron`, `sidekiq-unique-jobs`, `sidekiq-scheduler`,
-`sidekiq-status`, `sidekiq-failures`, `sidekiq-throttled`) are exercised against Wurk
-by running their own upstream test suites in the [`ecosystem` CI job](../.github/workflows/ecosystem.yml).
-
 ---
 
-## 5. Cutover checklist
+## 8. Cutover checklist
 
 1. **Swap the gem** — replace `sidekiq` (+ `sidekiq-pro` / `sidekiq-ent`) with `wurk`
    in the `Gemfile`; `bundle install`.
-2. **Keep your config as-is** — Pro toggles like `config.super_fetch!` /
+2. **Size parallelism × concurrency** — decide `WURK_COUNT` (processes) and
+   `concurrency` (threads), then check your DB pool and memory against
+   `WURK_COUNT × concurrency`. See [§2](#2-concurrency-vs-parallelism-read-this). This
+   is the only step that needs real thought.
+3. **Keep your config as-is** — Pro toggles like `config.super_fetch!` /
    `config.reliable_scheduler!` are accepted no-ops (already the default), so there's
    nothing to strip out.
-3. **Re-point the dashboard route** — `mount Wurk::Engine => "/wurk"` (gate it behind
+4. **Re-point the dashboard route** — `mount Wurk::Engine => "/wurk"` (gate it behind
    your app auth — see [`docs/dashboard.md`](dashboard.md)).
-4. **Boot a worker** — `bundle exec wurk` (standalone) or your existing Rails process
-   (the engine auto-starts the swarm unless `WURK_DISABLED=1`). Deploying under
-   systemd/capistrano? See [`docs/deployment.md`](deployment.md).
-5. **Verify on the same Redis** — enqueue a test job, watch it run, and confirm the
+5. **Split web from workers** — run a dedicated `bundle exec wurk` process and set
+   `WURK_DISABLED=1` on the web role so clustered Puma doesn't fork duplicate swarms.
+   See [§3](#3-running-a-worker-process). Deploying under systemd/Capistrano? See
+   [`docs/deployment.md`](deployment.md).
+6. **Map any add-on gems** — swap `sidekiq-cron` → `config.periodic` and
+   `sidekiq-unique-jobs` → `unique_for:` if you want the native path. See
+   [§6](#6-third-party-gem-mappings).
+7. **Verify on the same Redis** — enqueue a test job, watch it run, and confirm the
    dashboard + your existing `redis-cli` checks look normal. Because the schema is
    shared, you can roll one process at a time.
-6. **Roll back anytime** — revert the `Gemfile` line. No schema changes were made.
+8. **Roll back anytime** — revert the `Gemfile` line. No schema changes were made.
 
 ---
 
