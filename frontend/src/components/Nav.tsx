@@ -194,7 +194,7 @@ export default function Nav({ open, onClose, collapsed, onToggleCollapse }: NavP
         <button
           type="button"
           onClick={onToggleCollapse}
-          className="wurk-navlink nav-collapse-toggle"
+          className="nav-collapse-toggle"
           aria-label={collapsed ? t('nav.expand') : t('nav.collapse')}
           aria-expanded={!collapsed}
           title={collapsed ? t('nav.expand') : t('nav.collapse')}
@@ -249,14 +249,22 @@ export default function Nav({ open, onClose, collapsed, onToggleCollapse }: NavP
 
       <style>{`
         .wurk-nav { width: var(--nav-width); transition: width 0.2s ease; }
-        .wurk-navlink:hover,
-        .nav-collapse-toggle:hover {
+        .wurk-navlink:hover {
           background: var(--surface-hover) !important;
           color: var(--accent) !important;
           text-decoration: none !important;
         }
+        /* The collapse toggle is a control, not a nav item — it only shifts
+           colour on hover, no filled pill/active box. */
+        .nav-collapse-toggle:hover { color: var(--text) !important; }
         .nav-label { white-space: nowrap; }
-        .wurk-navlink__icon { width: 24px; font-size: 18px; text-align: center; flex: none; }
+        .wurk-navlink__icon { width: 24px; font-size: 18px; text-align: center; flex: none; transition: background 0.15s ease, color 0.15s ease, transform 0.18s ease; }
+        /* Subtle lift on hover so the nav feels reactive. */
+        .wurk-navlink:hover .wurk-navlink__icon { transform: scale(1.12); }
+        @media (prefers-reduced-motion: reduce) {
+          .wurk-navlink__icon { transition: background 0.15s ease, color 0.15s ease; }
+          .wurk-navlink:hover .wurk-navlink__icon { transform: none; }
+        }
         @media (max-width: 767px) {
           .wurk-nav {
             transform: translateX(-100%);
@@ -290,24 +298,37 @@ export default function Nav({ open, onClose, collapsed, onToggleCollapse }: NavP
              which a plain class rule can't beat — without this the "Wurk /
              System Status" text stays rendered in the 64px rail and gets clipped. */
           .wurk-nav--collapsed .nav-label { display: none !important; }
-          /* Collapsed: center each icon. Icon size stays the SAME as the expanded
-             state — only the surrounding space changes, so glyphs don't resize. */
+          /* Collapsed: center each icon. The glyph lives in a FIXED 38px round
+             container at all times, so idle → hover → active only swaps its
+             background colour, never its size — the icon never shifts when you
+             click it, and the highlight is always a circle, never a square link
+             box. Tight link padding keeps the icons from drifting apart. */
+          /* !important: the NavLink carries an inline padding (0.5rem 0.85rem)
+             that outranks any class rule. Zero it in the rail so the fixed-size
+             round glyph container — not link padding — defines the footprint;
+             the horizontal inline padding would otherwise cramp the circle in
+             the 64px rail and make it shift when the active background appears. */
           .wurk-nav--collapsed .wurk-navlink,
-          .wurk-nav--collapsed .nav-collapse-toggle { justify-content: center; padding: 0.7rem 0; }
-          .wurk-nav--collapsed .wurk-navlink__icon { width: auto; }
-          /* Collapsed active item: the rectangular pill (set via inline styles)
-             would look boxy in the narrow rail, so flatten the link and draw a
-             round highlight around just the glyph instead. */
+          .wurk-nav--collapsed .nav-collapse-toggle { justify-content: center; padding: 0 !important; }
+          .wurk-nav--collapsed .wurk-navlink__icon {
+            display: grid;
+            place-items: center;
+            width: 36px;
+            height: 36px;
+            border-radius: 50%;
+          }
+          /* The link/button never fills — the round glyph container carries the
+             highlight instead of a boxy pill. */
+          .wurk-nav--collapsed .wurk-navlink:hover,
           .wurk-nav--collapsed .wurk-navlink.active {
             background: transparent !important;
             box-shadow: none !important;
           }
+          .wurk-nav--collapsed .wurk-navlink:hover .wurk-navlink__icon {
+            background: var(--surface-hover);
+            color: var(--accent);
+          }
           .wurk-nav--collapsed .wurk-navlink.active .wurk-navlink__icon {
-            display: grid;
-            place-items: center;
-            width: 38px;
-            height: 38px;
-            border-radius: 50%;
             background: var(--surface-strong);
             box-shadow: inset 0 0 0 1px var(--border);
             color: var(--accent);
