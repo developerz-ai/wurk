@@ -241,10 +241,10 @@ module Wurk
     end
 
     # Heartbeat thread loop. `safe_thread` already wraps exceptions. Loops on
-    # @stopped — NOT @done — so a *quieted* process keeps beating and publishes
+    # `@stopped` — NOT `@done` — so a *quieted* process keeps beating and publishes
     # `quiet=true` instead of vanishing from the live set (#236). Only `#stop`
-    # flips @stopped; its `Thread#wakeup` breaks the sleep so the loop re-checks
-    # @stopped and exits without waiting out the interval.
+    # flips `@stopped`; its `Thread#wakeup` breaks the sleep so the loop re-checks
+    # `@stopped` and exits without waiting out the interval.
     def start_heartbeat
       until @stopped
         heartbeat

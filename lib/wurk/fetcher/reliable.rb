@@ -96,7 +96,7 @@ module Wurk
 
       # Prefixed queue keys (`queue:<name>`) in fetch order. Strict mode
       # preserves declaration order. Random/weighted shuffle each call —
-      # @queues is pre-expanded by weight in Capsule#queues=, so uniform
+      # `@queues` is pre-expanded by weight in Capsule#queues=, so uniform
       # shuffle yields weighted fairness; .uniq trims duplicates. Paused
       # queues are filtered after shuffle so the membership test runs on
       # the smallest possible set.

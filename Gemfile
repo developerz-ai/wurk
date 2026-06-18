@@ -16,6 +16,7 @@ group :development, :test do
   gem "benchmark-ips"
   gem "memory_profiler"
   gem "pry"
+  gem "yard", require: false
 end
 
 group :test do

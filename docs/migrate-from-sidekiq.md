@@ -12,6 +12,7 @@ mappings, and a one-page cutover.
 
 - **Authoritative API surface:** [`docs/target/sidekiq-free.md`](target/sidekiq-free.md) ·
   [`sidekiq-pro.md`](target/sidekiq-pro.md) · [`sidekiq-ent.md`](target/sidekiq-ent.md)
+- **Generated API reference (YARD):** <https://developerz-ai.github.io/wurk/api/>
 - **Why this is legal:** [`docs/clean-room.md`](clean-room.md)
 
 > Verified against Wurk's Sidekiq-compat layer (`lib/wurk/compat.rb`), which mirrors

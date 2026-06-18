@@ -38,7 +38,7 @@ module Wurk
     #   %w[high default low]        → mode :strict,   weights all 0
     #   %w[high,3 default,2 low,1]  → mode :weighted, weights {q=>w}
     #   %w[a,1 b,1 c,1]             → mode :random,   weights all 1
-    # @queues is expanded by weight so a uniform shuffle gives weighted
+    # `@queues` is expanded by weight so a uniform shuffle gives weighted
     # fairness (e.g. ["high","high","high","default","default","low"]).
     def queues=(val)
       parsed = Array(val).map { |entry| parse_queue_entry(entry) }

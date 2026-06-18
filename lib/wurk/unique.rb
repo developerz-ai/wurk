@@ -25,6 +25,22 @@ module Wurk
   # holding the owning JID. Scheduled jobs extend the TTL by the delay so
   # the lock covers the entire wait+execution window (§3.4).
   #
+  # This is the native replacement for the `sidekiq-unique-jobs` gem; see the
+  # migration guide for the `lock:` → `unique_until:` translation table.
+  #
+  # @example Enable globally, then declare per worker
+  #   Sidekiq::Enterprise.unique!   # activate the middleware once, at boot
+  #
+  #   class ChargeJob
+  #     include Sidekiq::Job
+  #     sidekiq_options unique_for: 10.minutes, unique_until: :success
+  #
+  #     # optional: customize the dedup key
+  #     def self.sidekiq_unique_context(job)
+  #       job["args"].first   # dedup on the first arg only
+  #     end
+  #   end
+  #
   # Spec: docs/target/sidekiq-ent.md §3.
   module Unique
     KEY_PREFIX = 'unique:'

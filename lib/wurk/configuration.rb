@@ -112,8 +112,12 @@ module Wurk
 
     # --- Default capsule shortcuts ---------------------------------------
 
+    # @return [Integer] threads per worker process (default 5). The *process*
+    #   count is separate — see {#default_child_count} / `WURK_COUNT`. Total
+    #   in-flight jobs = `WURK_COUNT × concurrency`.
     def concurrency = default_capsule.concurrency
 
+    # @param val [Integer] threads per worker process
     def concurrency=(val)
       default_capsule.concurrency = val
     end
@@ -251,7 +255,18 @@ module Wurk
 
     # Yields a Wurk::Cron::Manager so the host app can register periodic
     # jobs at boot. Manager state is shared per-process so multiple
-    # `config.periodic` blocks accumulate (matches Sidekiq Ent §2.1).
+    # `config.periodic` blocks accumulate (matches Sidekiq Ent §2.1). This is
+    # the native replacement for the `sidekiq-cron` gem.
+    #
+    # @example Register cron jobs at boot
+    #   Wurk.configure_server do |config|
+    #     config.periodic do |mgr|
+    #       mgr.register("*/5 * * * *", ReportJob)
+    #       mgr.register("0 0 * * *", NightlyJob, tz: "UTC")
+    #     end
+    #   end
+    # @yieldparam mgr [Wurk::Cron::Manager] call `mgr.register(cron, JobClass, **opts)`
+    # @return [Wurk::Cron::Manager]
     #
     # Spec: docs/target/sidekiq-ent.md §2.
     def periodic
