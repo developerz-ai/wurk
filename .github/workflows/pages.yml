@@ -11,6 +11,9 @@ on:
       - "lib/**"
       - ".yardopts"
       - "README.md"
+      - "Rakefile"
+      - "Gemfile"
+      - "Gemfile.lock"
       - ".github/workflows/pages.yml"
   workflow_dispatch:
 

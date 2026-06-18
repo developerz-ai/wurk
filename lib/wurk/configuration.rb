@@ -112,9 +112,11 @@ module Wurk
 
     # --- Default capsule shortcuts ---------------------------------------
 
-    # @return [Integer] threads per worker process (default 5). The *process*
-    #   count is separate — see {#default_child_count} / `WURK_COUNT`. Total
-    #   in-flight jobs = `WURK_COUNT × concurrency`.
+    # @return [Integer] threads per worker process for the default capsule
+    #   (default 5). The *process* count is separate — set via `WURK_COUNT`
+    #   (defaults to the CPU count). With a single capsule, total in-flight
+    #   jobs = `WURK_COUNT × concurrency`; with multiple capsules see
+    #   {#total_concurrency} for the cluster aggregate.
     def concurrency = default_capsule.concurrency
 
     # @param val [Integer] threads per worker process
