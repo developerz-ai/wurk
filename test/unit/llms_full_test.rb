@@ -8,6 +8,8 @@ require_relative '../../tasks/llms_full'
 # in the pages workflow), so this tests the builder: a renamed/removed source
 # doc, or a dropped map section, fails CI instead of silently shrinking the dump.
 class LlmsFullTest < Minitest::Test
+  parallelize_me!
+
   ROOT = File.expand_path('../..', __dir__)
 
   def setup
