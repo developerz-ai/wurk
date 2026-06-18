@@ -7,11 +7,12 @@ on:
   push:
     branches: [main]
     paths:
-      - "docs/site/**"
+      - "docs/**"
       - "lib/**"
       - ".yardopts"
       - "README.md"
       - "Rakefile"
+      - "tasks/llms_full.rb"
       - "Gemfile"
       - "Gemfile.lock"
       - ".github/workflows/pages.yml"
@@ -43,9 +44,9 @@ jobs:
         with:
           ruby-version: "3.4"
           bundler-cache: true
-      # Generate the YARD API docs into docs/site/api/ (per .yardopts) so the
-      # upload step ships them with the static site.
-      - run: bundle exec rake yard
+      # Generate the YARD API docs into docs/site/api/ (per .yardopts) and the
+      # single-fetch llms-full.txt, so the upload step ships both with the site.
+      - run: bundle exec rake yard docs:llms_full
       - uses: actions/configure-pages@983d7736d9b0ae728b81ab479565c72886d7745b # v5
       - uses: actions/upload-pages-artifact@56afc609e74202658d3ffba0e8f6dda462b719fa # v3
         with:

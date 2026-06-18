@@ -84,6 +84,15 @@ namespace :yard do
   end
 end
 
+namespace :docs do
+  desc "Generate docs/site/llms-full.txt (single-fetch full docs for AI agents)"
+  task :llms_full do
+    require_relative "tasks/llms_full"
+    out = WurkDocs::LlmsFull.write(GEM_ROOT)
+    puts "wrote #{out}"
+  end
+end
+
 desc "Run all benchmarks (enqueue, fetch+execute, bulk enqueue, swarm boot, memory)"
 task :bench do
   Dir.glob(File.join(GEM_ROOT, "bench", "*.rb")).sort.each do |script|
