@@ -1,4 +1,3 @@
-import type { MouseEvent } from 'react';
 import { NavLink, Link } from 'react-router-dom';
 import { t } from '../i18n';
 import { useMeta } from '../hooks/useMeta';
@@ -7,6 +6,10 @@ import logoUrl from '../assets/wurk-logo.png';
 interface NavProps {
   open: boolean;
   onClose: () => void;
+  /** Desktop: pinned to the icon-only rail. */
+  collapsed: boolean;
+  /** Desktop: flip between the icon rail and the full-width nav. */
+  onToggleCollapse: () => void;
 }
 
 const LINKS = [
@@ -24,20 +27,16 @@ const LINKS = [
   { to: '/search', label: t('nav.search'), icon: 'fa-magnifying-glass', end: false },
 ];
 
-export default function Nav({ open, onClose }: NavProps) {
+export default function Nav({ open, onClose, collapsed, onToggleCollapse }: NavProps) {
   // Tabs registered by third-party gems (sidekiq-cron, sidekiq-unique-jobs, …)
   // via Sidekiq::Web.register_extension. They link out to the extension's own
   // path — wurk surfaces the tab but doesn't render the gem's view in the SPA.
   const { data: meta } = useMeta();
   const customTabs = meta?.custom_tabs ?? [];
 
-  // Close the mobile drawer AND drop focus so the desktop rail collapses back
-  // after a click — otherwise :focus-within keeps it expanded until you click
-  // elsewhere.
-  const handleNavClick = (e: MouseEvent<HTMLElement>) => {
-    onClose();
-    e.currentTarget.blur();
-  };
+  // Close the mobile drawer on navigation. The desktop rail no longer expands on
+  // hover/focus, so there's nothing to blur back.
+  const handleNavClick = () => onClose();
 
   return (
     <>
@@ -56,7 +55,7 @@ export default function Nav({ open, onClose }: NavProps) {
         />
       )}
       <nav
-        className={`wurk-nav${open ? ' wurk-nav--open' : ''}`}
+        className={`wurk-nav${open ? ' wurk-nav--open' : ''}${collapsed ? ' wurk-nav--collapsed' : ''}`}
         style={{
           position: 'fixed',
           top: 0,
@@ -121,6 +120,7 @@ export default function Nav({ open, onClose }: NavProps) {
                 to={to}
                 end={end}
                 onClick={handleNavClick}
+                title={label}
                 className="wurk-navlink"
                 style={({ isActive }) => ({
                   display: 'flex',
@@ -163,6 +163,7 @@ export default function Nav({ open, onClose }: NavProps) {
               <NavLink
                 to={`/ext/${tab.path.replace(/\/+$/, '')}`}
                 onClick={handleNavClick}
+                title={tab.name}
                 className="wurk-navlink"
                 style={({ isActive }) => ({
                   display: 'flex',
@@ -186,6 +187,39 @@ export default function Nav({ open, onClose }: NavProps) {
             </li>
           ))}
         </ul>
+
+        {/* Desktop-only: pin the rail collapsed (icons) or expanded (full).
+            Hidden on mobile, where the nav is a full-width drawer. */}
+        <div style={{ height: 1, background: 'var(--border)', margin: '0.5rem 1rem 0' }} />
+        <button
+          type="button"
+          onClick={onToggleCollapse}
+          className="wurk-navlink nav-collapse-toggle"
+          aria-label={collapsed ? t('nav.expand') : t('nav.collapse')}
+          aria-expanded={!collapsed}
+          title={collapsed ? t('nav.expand') : t('nav.collapse')}
+          style={{
+            display: 'flex',
+            alignItems: 'center',
+            gap: '0.625rem',
+            width: 'calc(100% - 16px)',
+            padding: '0.5rem 0.85rem',
+            margin: '4px 8px',
+            borderRadius: 8,
+            border: 'none',
+            background: 'transparent',
+            color: 'var(--text-muted)',
+            fontSize: 13,
+            cursor: 'pointer',
+            font: 'inherit',
+          }}
+        >
+          <i
+            className={`fa-solid ${collapsed ? 'fa-angles-right' : 'fa-angles-left'} wurk-navlink__icon`}
+            aria-hidden="true"
+          />
+          <span className="nav-label">{t('nav.collapse')}</span>
+        </button>
 
         {/* Footer: link out to the source repo. Pinned to the bottom because the
             nav list above is flex:1. Muted by default; hover lifts like a nav item. */}
@@ -214,8 +248,9 @@ export default function Nav({ open, onClose }: NavProps) {
       </nav>
 
       <style>{`
-        .wurk-nav { width: var(--nav-width); }
-        .wurk-navlink:hover {
+        .wurk-nav { width: var(--nav-width); transition: width 0.2s ease; }
+        .wurk-navlink:hover,
+        .nav-collapse-toggle:hover {
           background: var(--surface-hover) !important;
           color: var(--accent) !important;
           text-decoration: none !important;
@@ -241,38 +276,33 @@ export default function Nav({ open, onClose }: NavProps) {
           .nav-overlay {
             display: block !important;
           }
+          /* The collapse control is desktop-only; on mobile the nav is a
+             full-width drawer toggled by the hamburger. */
+          .nav-collapse-toggle { display: none !important; }
         }
-        /* Desktop: a collapsed icon rail that expands to the full width on hover
-           or keyboard focus, overlaying the content (which reserves only the rail
-           width). prefers-reduced-motion drops the width animation. */
+        /* Desktop: a fixed-width rail the user pins open or collapsed (icons only)
+           via the toggle button — no hover-driven movement. The width change
+           animates; prefers-reduced-motion drops the animation. */
         @media (min-width: 768px) {
-          .wurk-nav {
-            transform: none !important;
-            width: var(--nav-rail);
-            transition: width 0.2s ease;
-          }
-          .wurk-nav:hover,
-          .wurk-nav:focus-within {
-            width: var(--nav-width);
-            box-shadow: 10px 0 28px rgba(0, 0, 0, 0.5);
-          }
+          .wurk-nav { transform: none !important; }
+          .wurk-nav--collapsed { width: var(--nav-rail); }
           /* !important: the brand wordmark span carries an inline display:flex,
              which a plain class rule can't beat — without this the "Wurk /
              System Status" text stays rendered in the 64px rail and gets clipped. */
-          .wurk-nav:not(:hover):not(:focus-within) .nav-label { display: none !important; }
-          /* Collapsed: center each icon and give it roomy, even padding so the
-             rail breathes. Icon size stays the SAME as the expanded state — only
-             the surrounding space changes, so glyphs don't jump/resize on hover. */
-          .wurk-nav:not(:hover):not(:focus-within) .wurk-navlink { justify-content: center; padding: 0.7rem 0; }
-          .wurk-nav:not(:hover):not(:focus-within) .wurk-navlink__icon { width: auto; }
+          .wurk-nav--collapsed .nav-label { display: none !important; }
+          /* Collapsed: center each icon. Icon size stays the SAME as the expanded
+             state — only the surrounding space changes, so glyphs don't resize. */
+          .wurk-nav--collapsed .wurk-navlink,
+          .wurk-nav--collapsed .nav-collapse-toggle { justify-content: center; padding: 0.7rem 0; }
+          .wurk-nav--collapsed .wurk-navlink__icon { width: auto; }
           /* Collapsed active item: the rectangular pill (set via inline styles)
              would look boxy in the narrow rail, so flatten the link and draw a
              round highlight around just the glyph instead. */
-          .wurk-nav:not(:hover):not(:focus-within) .wurk-navlink.active {
+          .wurk-nav--collapsed .wurk-navlink.active {
             background: transparent !important;
             box-shadow: none !important;
           }
-          .wurk-nav:not(:hover):not(:focus-within) .wurk-navlink.active .wurk-navlink__icon {
+          .wurk-nav--collapsed .wurk-navlink.active .wurk-navlink__icon {
             display: grid;
             place-items: center;
             width: 38px;
@@ -285,9 +315,9 @@ export default function Nav({ open, onClose }: NavProps) {
           /* Collapsed: drop the wordmark and show just the logo mark, centered
              with balanced padding so it sits squarely in the rail instead of
              hugging the top-left. */
-          .wurk-nav:not(:hover):not(:focus-within) .nav-brand-wrap { padding: 0.9rem 0; }
-          .wurk-nav:not(:hover):not(:focus-within) .nav-brand-wrap a { justify-content: center; gap: 0; }
-          .wurk-nav:not(:hover):not(:focus-within) .nav-brand-wrap img { height: 38px !important; }
+          .wurk-nav--collapsed .nav-brand-wrap { padding: 0.9rem 0; }
+          .wurk-nav--collapsed .nav-brand-wrap a { justify-content: center; gap: 0; }
+          .wurk-nav--collapsed .nav-brand-wrap img { height: 38px !important; }
         }
         @media (min-width: 768px) and (prefers-reduced-motion: reduce) {
           .wurk-nav { transition: none; }
