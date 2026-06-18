@@ -119,8 +119,11 @@ integration mode drops in the same way — replace the generated unit's `ExecSta
 ## Heroku / Procfile
 
 ```procfile
-worker: bundle exec wurk -e production
+worker: bundle exec wurkswarm -e production
 ```
 
-Heroku sends `SIGTERM` on dyno cycle, which triggers Wurk's graceful drain — set the
-shutdown timeout (`-t`) below Heroku's 30s kill window so jobs finish cleanly.
+Use `wurkswarm` for fork-based parallelism inside the dyno (set `WURK_COUNT` to the
+dyno's core count), or `bundle exec wurk` for a single process if you'd rather scale
+out by adding worker dynos. Heroku sends `SIGTERM` on dyno cycle, which triggers
+Wurk's graceful drain — set the shutdown timeout (`-t`) below Heroku's 30s kill window
+so jobs finish cleanly.
