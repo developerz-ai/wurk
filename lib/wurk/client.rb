@@ -43,6 +43,7 @@ module Wurk
       copy
     end
 
+    # @param item [Hash] job payload; must carry `class` and `args`, may carry `at`, `queue`, `jid`, etc.
     # @return [String, nil] jid; nil when client middleware halts the push.
     def push(item)
       normed  = normalize_item(item)

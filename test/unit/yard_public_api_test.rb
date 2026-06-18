@@ -13,6 +13,8 @@ require 'yard'
 # Scoped to the public surface on purpose: a global "% documented" number would
 # be dominated by internal/private methods and is not what the contract is about.
 class YardPublicApiTest < Minitest::Test
+  parallelize_me!
+
   # Parse once for the whole class — YARD's registry is process-global, and
   # minitest-parallel_fork gives each worker its own process, so this is safe.
   def self.registry
@@ -76,6 +78,7 @@ class YardPublicApiTest < Minitest::Test
       obj = self.class.registry.at(name)
 
       refute_nil obj, "#{name} not found in YARD registry"
+      assert_predicate obj.tags(:param), :any?, "#{name} must document its @param tags"
       assert_predicate obj.tags(:return), :any?, "#{name} must document its @return"
     end
   end
