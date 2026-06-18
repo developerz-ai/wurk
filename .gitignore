@@ -8,6 +8,7 @@ tmp/
 log/
 coverage/
 docs/site/api/
+docs/site/llms-full.txt
 .idea/
 .vscode/
 .DS_Store
