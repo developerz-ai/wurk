@@ -20,7 +20,7 @@ Sidekiq runs one process with a thread pool. Wurk runs a swarm of forked process
 
 - **Rails engine (default).** Mount `Wurk::Engine => "/wurk"` for the dashboard. The railtie auto-starts an embedded swarm in every non-console Rails process unless `WURK_DISABLED=1`.
 - **Clustered Puma gotcha.** Under clustered Puma (`workers > 0`) every Puma worker would fork its own swarm. Run a dedicated worker process and set `WURK_DISABLED=1` on the web role so it serves HTTP (and the dashboard) without forking workers.
-- **Standalone worker.** `bundle exec wurk -C config/wurk.yml -e production`. There is no `sidekiq` binary; the gem ships `wurk` / `wurkswarm`. The standalone runner does not load the dashboard engine but does boot your app, and defines the ActiveJob `:wurk` / `:sidekiq` adapters before the environment loads.
+- **Standalone worker.** There is no `sidekiq` binary; the gem ships `wurk` (single process, like `sidekiq`) and `wurkswarm` (alias `sidekiqswarm`; forks `WURK_COUNT` children for real parallelism — the only way to get multi-process parallelism without Rails). `WURK_COUNT` only affects `wurkswarm` and the Rails engine swarm, not plain `wurk`. Neither runner loads the dashboard engine but both boot your app and define the ActiveJob `:wurk` / `:sidekiq` adapters before the environment loads. Example: `bundle exec wurkswarm -C config/wurk.yml -e production`.
 
 ## Third-party gem mappings
 
