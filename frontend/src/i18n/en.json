@@ -12,7 +12,9 @@
     "metrics": "Metrics",
     "profiles": "Profiles",
     "search": "Search",
-    "extensions": "Extensions"
+    "extensions": "Extensions",
+    "collapse": "Collapse",
+    "expand": "Expand"
   },
   "dashboard": {
     "processed": "Processed",

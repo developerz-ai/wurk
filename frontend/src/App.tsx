@@ -53,8 +53,39 @@ function ReadOnlyBanner() {
   );
 }
 
+const NAV_COLLAPSED_KEY = 'wurk-nav-collapsed';
+
+function prefersReducedMotion() {
+  return (
+    typeof window !== 'undefined' &&
+    window.matchMedia?.('(prefers-reduced-motion: reduce)').matches === true
+  );
+}
+
 export default function App() {
   const [navOpen, setNavOpen] = useState(false);
+  // Desktop-only: pin the rail collapsed (icons) or expanded (full), persisted
+  // so the choice survives reloads. Replaces the old hover-to-expand rail that
+  // moved on its own as the pointer crossed it.
+  const [collapsed, setCollapsed] = useState(() => {
+    // localStorage can throw SecurityError / QuotaExceededError in private mode
+    // or cross-origin iframes — same guard the write path uses.
+    try {
+      return typeof localStorage !== 'undefined' && localStorage.getItem(NAV_COLLAPSED_KEY) === '1';
+    } catch {
+      return false;
+    }
+  });
+  const toggleCollapsed = () =>
+    setCollapsed((c) => {
+      const next = !c;
+      try {
+        localStorage.setItem(NAV_COLLAPSED_KEY, next ? '1' : '0');
+      } catch {
+        /* storage disabled (private mode) — keep the in-memory state */
+      }
+      return next;
+    });
   const sse = useSSE();
 
   return (
@@ -72,7 +103,17 @@ export default function App() {
 
           <main
             className="main-content"
-            style={{ flex: 1, padding: '1.5rem', marginInlineStart: 'var(--nav-rail)' }}
+            style={{
+              flex: 1,
+              padding: '1.5rem',
+              // Reserve the rail or full nav width depending on the pinned state;
+              // the mobile media query overrides this to 0 (drawer overlay).
+              marginInlineStart: collapsed ? 'var(--nav-rail)' : 'var(--nav-width)',
+              // Match the nav rail: drop the slide for users who asked for
+              // less motion, so toggling collapse doesn't shove the content
+              // sideways for them.
+              transition: prefersReducedMotion() ? 'none' : 'margin 0.2s ease',
+            }}
           >
             <ReadOnlyBanner />
             <Routes>
@@ -93,7 +134,12 @@ export default function App() {
             </Routes>
           </main>
 
-          <Nav open={navOpen} onClose={() => setNavOpen(false)} />
+          <Nav
+            open={navOpen}
+            onClose={() => setNavOpen(false)}
+            collapsed={collapsed}
+            onToggleCollapse={toggleCollapsed}
+          />
         </div>
       </BrowserRouter>
     </QueryClientProvider>
