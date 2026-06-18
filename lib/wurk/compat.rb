@@ -5,6 +5,25 @@
 #
 # Spec: docs/target/sidekiq-{free,pro,ent}.md.
 
+# The `Sidekiq::*` compatibility namespace. Every public Wurk class is exposed
+# here under its Sidekiq name so an existing Sidekiq/Pro/Enterprise app runs on
+# Wurk after a one-line gem swap. `Sidekiq::Job` / `Sidekiq::Worker` are
+# {Wurk::Job} / {Wurk::Worker}; `Sidekiq.configure_server` is
+# {Wurk.configure_server}; `Sidekiq::Batch`, `Sidekiq::Limiter`,
+# `Sidekiq::Client`, `Sidekiq::Pro::Web`, `Sidekiq::Enterprise` all resolve to
+# their Wurk implementations. This alias surface is the drop-in contract and is
+# never broken.
+#
+# @example The same code targets Sidekiq or Wurk unchanged
+#   class MyJob
+#     include Sidekiq::Job
+#     def perform(id); end
+#   end
+#   Sidekiq.configure_server { |c| c.concurrency = 10 }
+#
+# @note `Sidekiq.pro?` and `Sidekiq.ent?` return `false` — Wurk ships the Pro/Ent
+#   features for free but advertises as OSS. Don't gate behavior on them.
+# @see https://github.com/developerz-ai/wurk/blob/main/docs/migrate-from-sidekiq.md Migration guide
 module Sidekiq
   # Version stamps mirror Sidekiq's OSS release Wurk targets for compat.
   # Third-party gems version-gate on these; raise the MAJOR only when the

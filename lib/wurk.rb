@@ -72,6 +72,18 @@ require_relative 'wurk/deploy'
 
 require 'json'
 
+# Wurk — a 100% API-compatible, free, faster drop-in for Sidekiq + Sidekiq Pro
+# + Sidekiq Enterprise. Same Redis key schema, same job JSON, same Ruby DSL;
+# real parallelism via a fork-based swarm. Every public class is also exposed
+# under its `Sidekiq::*` name (see {Sidekiq}).
+#
+# Start here:
+#   * {Wurk::Worker} / `Sidekiq::Job` — define and enqueue jobs.
+#   * {Wurk::Configuration} — `Wurk.configure_server { |config| ... }`; note
+#     `WURK_COUNT` (forked processes) × `concurrency` (threads) = total in-flight.
+#   * {Wurk::Batch}, {Wurk::Limiter}, {Wurk::Unique} — Pro/Enterprise features, free.
+#
+# @see https://github.com/developerz-ai/wurk/blob/main/docs/migrate-from-sidekiq.md Migration guide
 module Wurk
   class Error < StandardError; end
 

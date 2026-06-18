@@ -9,6 +9,15 @@ module Wurk
   # Sidekiq Pro Batches. Group jobs, attach success/complete/death callbacks,
   # track progress. Spec: docs/target/sidekiq-pro.md §2.
   #
+  # @example Define a batch with a success callback
+  #   batch = Sidekiq::Batch.new
+  #   batch.description = "Nightly import"
+  #   batch.on(:success, ImportCallback, "user_id" => user.id)
+  #   batch.jobs do
+  #     rows.each { |r| ImportRowJob.perform_async(r.id) }
+  #   end
+  #   batch.bid   # => the batch id, persisted in Redis
+  #
   # Lifecycle:
   #   1. `Batch.new` allocates a fresh BID; the batch is `mutable?` until the
   #      first `#jobs` block flushes — that flush HSETs the core hash, ZADDs

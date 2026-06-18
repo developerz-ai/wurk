@@ -7,7 +7,14 @@ require_relative 'lua'
 module Wurk
   # Enqueue interface. Pipelined LPUSH / ZADD writes against the canonical
   # Sidekiq Redis schema — never change keys, JSON shape, or score format here:
-  # wire-compat is sacred.
+  # wire-compat is sacred. Most apps enqueue through the {Wurk::Worker} DSL
+  # (`MyJob.perform_async`), which routes here; reach for Client directly only to
+  # push a raw job hash or to drive the bulk/scheduled path explicitly.
+  #
+  # @example Push a raw job hash
+  #   Wurk::Client.new.push("class" => "MyJob", "args" => [1, 2], "queue" => "default")
+  # @example Bulk enqueue in one round-trip
+  #   Wurk::Client.new.push_bulk("class" => "MyJob", "args" => [[1], [2], [3]])
   #
   # Spec: docs/target/sidekiq-free.md §7.
   class Client

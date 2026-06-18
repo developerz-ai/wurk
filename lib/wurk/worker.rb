@@ -3,9 +3,27 @@
 require_relative 'worker/setter'
 
 module Wurk
-  # The user-facing DSL: `include Wurk::Worker` (aliased to Sidekiq::Worker).
-  # Owns `sidekiq_options`, `perform_async`, `perform_in`, `perform_at`,
-  # `set`, `sidekiq_retry_in`, etc.
+  # The user-facing job DSL. `include Wurk::Worker` — or its modern alias
+  # `Sidekiq::Job` / `Sidekiq::Worker` — onto a class to make it a background
+  # job. The class gains `sidekiq_options`, the `perform_*` enqueue methods,
+  # `set`, and the retry-hook DSL; each instance gains `jid`, `logger`,
+  # `interrupted?`, and the batch helpers.
+  #
+  # @example A minimal job
+  #   class HardJob
+  #     include Sidekiq::Job
+  #     sidekiq_options queue: "critical", retry: 5
+  #
+  #     def perform(user_id, opts = {})
+  #       # ... your work ...
+  #     end
+  #   end
+  #
+  #   HardJob.perform_async(42, "fast" => true)   # enqueue now
+  #   HardJob.perform_in(5.minutes, 42)           # enqueue later
+  #
+  # @see Wurk::Worker::ClassMethods the enqueue + options DSL added to the class
+  # @see https://github.com/developerz-ai/wurk/blob/main/docs/migrate-from-sidekiq.md Migration guide
   #
   # Spec: docs/target/sidekiq-free.md §6 (Sidekiq::Job).
   module Worker
@@ -65,7 +83,17 @@ module Wurk
       batch.valid?
     end
 
+    # Class-level DSL mixed into every job class by {Wurk::Worker}. These are
+    # the public enqueue and configuration entry points.
     module ClassMethods # rubocop:disable Metrics/ModuleLength
+      # Set per-class job options (merged over any inherited options).
+      #
+      # @example
+      #   sidekiq_options queue: "mailers", retry: 3, unique_for: 10.minutes
+      # @param opts [Hash] any of `queue:`, `retry:`, `dead:`, `backtrace:`,
+      #   `expires_in:`, `tags:`, `pool:`, `unique_for:`, … (see the migration
+      #   guide's sidekiq_options table for the full set)
+      # @return [Hash] the merged, string-keyed options hash
       def sidekiq_options(opts = {})
         merged = get_sidekiq_options.merge(opts.transform_keys(&:to_s))
         @sidekiq_options_hash = merged
@@ -92,24 +120,57 @@ module Wurk
         self.sidekiq_retries_exhausted_block = block
       end
 
+      # Enqueue the job to run as soon as a worker is free. Arguments are
+      # forwarded to `#perform` and must be JSON-serializable
+      # (string/number/bool/nil/array/hash).
+      #
+      # @example
+      #   EmailJob.perform_async(user.id, "welcome")
+      # @return [String, nil] the job id (jid), or nil if a client middleware
+      #   halted the push
       def perform_async(*)
         Wurk::Worker::Setter.new(self, {}).perform_async(*)
       end
 
+      # Run `#perform` synchronously in the current thread (no Redis). Useful in
+      # tests and for inline execution.
+      #
+      # @return [Object] the return value of `#perform`
       def perform_inline(*)
         new.perform(*)
       end
       alias perform_sync perform_inline
 
+      # Schedule the job for later. `perform_at` is an alias taking an absolute
+      # time; `perform_in` takes a relative interval.
+      #
+      # @example
+      #   ReminderJob.perform_in(1.hour, lead.id)
+      #   ReminderJob.perform_at(Time.now + 3600, lead.id)
+      # @param interval [Numeric, Time] seconds-from-now, or an absolute Time
+      # @return [String, nil] the job id (jid)
       def perform_in(interval, *)
         Wurk::Worker::Setter.new(self, {}).perform_in(interval, *)
       end
       alias perform_at perform_in
 
+      # Enqueue many jobs in one round-trip via the Lua bulk path.
+      #
+      # @example
+      #   ImportJob.perform_bulk([[1], [2], [3]])
+      # @param items [Array<Array>] one args array per job
+      # @return [Array<String>] the job ids, in order
       def perform_bulk(items, **)
         Wurk::Worker::Setter.new(self, {}).perform_bulk(items, **)
       end
 
+      # Return a per-call option carrier so a single enqueue can override
+      # class-level options (queue, scheduling, pool, …).
+      #
+      # @example
+      #   ReportJob.set(queue: "low").perform_async(account.id)
+      # @param opts [Hash] per-call overrides
+      # @return [Wurk::Worker::Setter]
       def set(opts)
         Wurk::Worker::Setter.new(self, opts)
       end

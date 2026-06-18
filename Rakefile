@@ -68,6 +68,22 @@ namespace :test do
   end
 end
 
+# YARD API docs. Generates into docs/site/api (gitignored) so the pages
+# workflow can publish them alongside the static landing page. The whole config
+# lives in .yardopts; this task just shells out so `bin/rake yard` works without
+# requiring yard/rake/yardoctask at load time (yard is a dev-only dep).
+desc "Generate YARD API docs into docs/site/api (config in .yardopts)"
+task :yard do
+  sh "yard", "doc"
+end
+
+namespace :yard do
+  desc "Report public-API doc coverage (undocumented objects)"
+  task :stats do
+    sh "yard", "stats", "--list-undoc"
+  end
+end
+
 desc "Run all benchmarks (enqueue, fetch+execute, bulk enqueue, swarm boot, memory)"
 task :bench do
   Dir.glob(File.join(GEM_ROOT, "bench", "*.rb")).sort.each do |script|

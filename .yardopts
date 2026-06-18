@@ -1,0 +1,14 @@
+--output-dir docs/site/api
+--markup markdown
+--readme README.md
+--title "Wurk API Documentation"
+--no-private
+--protected
+--embed-mixins
+lib/**/*.rb
+-
+docs/migrate-from-sidekiq.md
+docs/dashboard.md
+docs/deployment.md
+docs/active-job.md
+LICENSE

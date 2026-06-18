@@ -420,8 +420,11 @@ mount Wurk::Engine =&gt; <span class="add">"/wurk"</span></pre>
 <span class="del">- gem "sidekiq-ent", source: "https://enterprise.contribsys.com/"</span>
 <span class="add">+ gem "wurk"</span></pre>
         </div>
-        <p style="color:var(--muted);margin-top:14px"><code>bundle install &amp;&amp; restart</code>. That's it — see the
-          <a href="https://github.com/developerz-ai/wurk/wiki/Migrating-from-Sidekiq">migration guide</a>.</p>
+        <p style="color:var(--muted);margin-top:14px"><code>bundle install &amp;&amp; restart</code>. One thing to size first:
+          Wurk forks one worker process per CPU core, so total in-flight jobs =
+          <code>WURK_COUNT × concurrency</code> — check your DB pool before the first deploy. The
+          <a href="https://github.com/developerz-ai/wurk/blob/main/docs/migrate-from-sidekiq.md">migration guide</a>
+          walks through parallelism, clustered Puma, and the gem mappings (cron, unique-jobs).</p>
       </section>
     </div>
   </main>
@@ -432,6 +435,8 @@ mount Wurk::Engine =&gt; <span class="add">"/wurk"</span></pre>
         <a href="https://github.com/developerz-ai/wurk">GitHub</a> ·
         <a href="https://rubygems.org/gems/wurk">RubyGems</a> ·
         <a href="https://github.com/developerz-ai/wurk/wiki">Docs</a> ·
+        <a href="api/">API</a> ·
+        <a href="llms.txt">llms.txt</a> ·
         <a href="https://wurk.demo.developerz.ai/wurk">Live demo</a>
       </p>
       <p>Wurk is a clean-room reimplementation of the Sidekiq <b>API</b> — MIT licensed. Sidekiq is a trademark of Contributed Systems LLC; Wurk is not affiliated with or endorsed by it.</p>

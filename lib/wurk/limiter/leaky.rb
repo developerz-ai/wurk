@@ -5,7 +5,7 @@ require_relative 'base'
 module Wurk
   module Limiter
     # Leaky bucket: drain rate = bucket_size / drain ops/sec. Stored as a
-    # HASH of {level, last} — Lua compares level vs bucket_size after
+    # HASH of `{level, last}` — Lua compares level vs bucket_size after
     # leaking elapsed * drain_per_sec.
     class Leaky < Base
       WAIT_SLEEP = 0.05

@@ -11,6 +11,16 @@ module Wurk
   # clock skew across hosts doesn't matter inside one Redis. Spec:
   # docs/target/sidekiq-ent.md §1.
   #
+  # @example Throttle to 50 concurrent uses, waiting up to the default timeout
+  #   STRIPE = Sidekiq::Limiter.concurrent("stripe", 50)
+  #
+  #   class ChargeJob
+  #     include Sidekiq::Job
+  #     def perform(id)
+  #       STRIPE.within_limit { Stripe::Charge.create(...) }
+  #     end
+  #   end
+  #
   # Layout (one file per type under `lib/wurk/limiter/`):
   #   * `Limiter::Base` owns the metadata write (lmtr:{name}) + the global
   #     `lmtr-list` registration so the Web UI can list every limiter, and

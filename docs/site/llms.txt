@@ -1,0 +1,44 @@
+# Wurk
+
+> Wurk is a 100% API-compatible, free, faster drop-in replacement for Sidekiq, Sidekiq Pro, and Sidekiq Enterprise. It uses the same Redis key schema, the same job JSON, and the same Ruby DSL, so an existing Sidekiq app migrates with a one-line Gemfile change. Pro and Enterprise features (batches, rate limiters, unique jobs, periodic/cron, encryption) ship in the same gem with no license check. It is faster than Sidekiq via a fork-based swarm that gives real multi-core parallelism. Requires Ruby >= 3.2 and Redis >= 7.0; on JRuby/TruffleRuby/Windows it falls back to threads-only mode, behaviorally equivalent to stock Sidekiq.
+
+## Three pillars
+
+- **Drop-in.** Same Redis key schema, job JSON, and Ruby DSL. Every public `Wurk::*` class is also exposed under its `Sidekiq::*` name (`Sidekiq::Job`, `Sidekiq::Worker`, `Sidekiq::Batch`, `Sidekiq::Limiter`, `Sidekiq.configure_server`, `Sidekiq::Client`, `Sidekiq::Pro::Web`, `Sidekiq::Enterprise`). Existing jobs, initializers, `sidekiq_options`, and live Redis data keep working. `Sidekiq.pro?` / `Sidekiq.ent?` return `false` (Wurk advertises as free OSS) — never gate behavior on them.
+- **Free.** Pro + Enterprise feature parity in one gem. No tiers, no flags, no license check.
+- **Faster.** Every release is benchmarked against stock Sidekiq on enqueue, fetch+execute, bulk enqueue, swarm boot, and memory.
+
+## Concurrency vs parallelism (the #1 migration gotcha)
+
+Sidekiq runs one process with a thread pool. Wurk runs a swarm of forked processes, each with its own thread pool, for real CPU parallelism on MRI. Two independent knobs:
+
+- **Parallelism** = number of forked worker processes. Set with the `WURK_COUNT` env var (alias `SIDEKIQ_COUNT`). Defaults to the CPU core count. There is **no Sidekiq equivalent** — Sidekiq never forks.
+- **Concurrency** = threads per process. Set with `config.concurrency`, the CLI `-c` flag, YAML `:concurrency`, or the `RAILS_MAX_THREADS` env var. Defaults to 5. There is **no `WURK_CONCURRENCY` env var.**
+- **Total in-flight jobs = `WURK_COUNT × concurrency`.** Each forked process opens its own DB pool and Redis pool, so on a 16-core box the default is 16 processes — size your database `max_connections` and memory before the first deploy.
+
+## Running it
+
+- **Rails engine (default).** Mount `Wurk::Engine => "/wurk"` for the dashboard. The railtie auto-starts an embedded swarm in every non-console Rails process unless `WURK_DISABLED=1`.
+- **Clustered Puma gotcha.** Under clustered Puma (`workers > 0`) every Puma worker would fork its own swarm. Run a dedicated worker process and set `WURK_DISABLED=1` on the web role so it serves HTTP (and the dashboard) without forking workers.
+- **Standalone worker.** `bundle exec wurk -C config/wurk.yml -e production`. There is no `sidekiq` binary; the gem ships `wurk` / `wurkswarm`. The standalone runner does not load the dashboard engine but does boot your app, and defines the ActiveJob `:wurk` / `:sidekiq` adapters before the environment loads.
+
+## Third-party gem mappings
+
+- `sidekiq-cron` → native `config.periodic { |mgr| mgr.register("*/5 * * * *", MyJob) }`. There is no `Sidekiq::Cron::Job` shim by design.
+- `sidekiq-unique-jobs` → native uniqueness: call `Sidekiq::Enterprise.unique!` once, then `sidekiq_options unique_for: 600, unique_until: :success` (`:start` releases the lock at perform start). Customize the dedup key with `self.sidekiq_unique_context(job)`.
+- `sidekiq-scheduler`, `sidekiq-status`, `sidekiq-failures`, `sidekiq-throttled` work unchanged; their upstream suites run against Wurk in CI.
+
+## Docs
+
+- [Migration guide (Sidekiq → Wurk)](https://github.com/developerz-ai/wurk/blob/main/docs/migrate-from-sidekiq.md): the comprehensive cutover — parallelism, clustered Puma, dedicated worker, gem mappings, known incompatibilities, cutover checklist.
+- [Generated API reference (YARD)](https://developerz-ai.github.io/wurk/api/): params, return types, and examples for the public classes (`Wurk::Worker`, `Wurk::Client`, `Wurk::Configuration`, `Wurk::Batch`, `Wurk::Limiter`, `Wurk::Unique`, the `Sidekiq::*` aliases).
+- [README](https://github.com/developerz-ai/wurk/blob/main/README.md): overview, install, dashboard.
+- [Deployment](https://github.com/developerz-ai/wurk/blob/main/docs/deployment.md): systemd unit, Capistrano, Heroku/Procfile, signal handling.
+- [Active Job adapter](https://github.com/developerz-ai/wurk/blob/main/docs/active-job.md): `queue_adapter = :wurk`.
+- [Securing the dashboard](https://github.com/developerz-ai/wurk/blob/main/docs/dashboard.md): auth recipes for the mounted engine.
+
+## Authoritative API specs
+
+- [Sidekiq OSS surface](https://github.com/developerz-ai/wurk/blob/main/docs/target/sidekiq-free.md): the exact free API Wurk matches.
+- [Sidekiq Pro surface](https://github.com/developerz-ai/wurk/blob/main/docs/target/sidekiq-pro.md): batches and reliability.
+- [Sidekiq Enterprise surface](https://github.com/developerz-ai/wurk/blob/main/docs/target/sidekiq-ent.md): rate limiters, unique jobs, periodic, encryption.
