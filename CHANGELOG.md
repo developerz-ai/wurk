@@ -4,6 +4,14 @@ All notable changes to Wurk are recorded here. Format: [Keep a Changelog](https:
 
 ## [Unreleased]
 
+## [1.0.4] - 2026-06-22
+
+### Changed
+- **Benchmarks — real critical-path drivers** — the `fetch+execute`, `swarm boot`, and `memory` benches were `TODO` stubs, so the CLAUDE.md "Faster" pillar's >5%-regression gate could not verify three of its critical paths. All three now drive the real code against real Redis (isolated logical DBs, mirroring the test layer) and emit `benchmark/ips`-compatible lines the PR `compare` gate picks up: `fetch+execute` runs the reliable fetcher + processor middleware chain + ack in a closed loop (#259); `swarm boot` boots a real fork-based swarm and measures fork→reconnect→first-heartbeat latency as boots/sec (#265); `memory` counts hot-path allocations via `GC.stat` and reports jobs-per-1k-allocations so an allocation regression trips the same gate (#266). (#259, #265, #266)
+
+### Fixed
+- **Tests — stale local dashboard manifest** — the dashboard bundle under `vendor/assets/dashboard` is a gitignored build artifact, so after a version bump a developer's locally-built `wurk-manifest.json` lagged `Wurk::VERSION` and `StaticAssetsTest` failed a clean `rake test` until `rake frontend:build` was rerun. The manifest/asset-presence assertions now enforce strictly in CI (which rebuilds the SPA first) but skip a missing-or-stale bundle locally, so a clean checkout runs green without Node. (#257)
+
 ## [1.0.3] - 2026-06-16
 
 ### Fixed
