@@ -346,7 +346,12 @@ export default function Nav({ open, onClose, collapsed, onToggleCollapse }: NavP
           /* Collapsed: drop the wordmark and show just the logo mark, centered
              with balanced padding so it sits squarely in the rail instead of
              hugging the top-left. */
-          .wurk-nav--collapsed .nav-brand-wrap { padding: 0.9rem 0; }
+          /* !important: the wrap carries an inline padding (1.25rem 1rem 0.75rem)
+             whose 1rem sides a plain class rule can't beat — leaving it in place
+             offsets the fixed-width brand box below by 16px, so the centred logo
+             lands right-of-centre in the rail. Zero the sides so the box anchors
+             at the nav's start edge and the logo sits on the rail mid-line. */
+          .wurk-nav--collapsed .nav-brand-wrap { padding: 0.9rem 0 !important; }
           /* Same fixed rail-width box as the nav controls above, so the logo
              centres on the constant rail mid-line instead of leaping right
              against the animating nav width on collapse. */
