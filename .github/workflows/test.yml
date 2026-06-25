@@ -153,3 +153,28 @@ jobs:
           name: coverage
           path: coverage/coverage.xml
           if-no-files-found: warn
+
+  # The matrix `test` and `coverage` jobs only *build* the SPA (tsc + vite) via
+  # `rake frontend:build`; hand-written frontend types can typecheck clean yet
+  # null-render at runtime (#272), so the build alone is not a regression gate.
+  # This dedicated Node-only job runs the dashboard's Vitest suite on every PR
+  # (no Ruby/Redis needed; the suite is fast). Closes #273.
+  frontend:
+    name: frontend (vitest)
+    runs-on: blacksmith-4vcpu-ubuntu-2404
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@48b55a011bda9f5d6aeb4c2d9c7362e8dae4041e # v6
+        with:
+          node-version: "24"
+          cache: "npm"
+          cache-dependency-path: frontend/package-lock.json
+      - name: install dashboard deps
+        run: npm ci
+        working-directory: frontend
+      - name: vitest
+        run: npm run test
+        working-directory: frontend
