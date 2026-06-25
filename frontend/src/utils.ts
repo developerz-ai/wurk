@@ -54,7 +54,8 @@ export function formatKb(kb: number): string {
   return `${(mb / 1024).toFixed(1)} GB`;
 }
 
-export function truncate(s: string, max = 80): string {
+export function truncate(s: string | null | undefined, max = 80): string {
+  if (s == null) return '';
   if (s.length <= max) return s;
   return s.slice(0, max) + '…';
 }

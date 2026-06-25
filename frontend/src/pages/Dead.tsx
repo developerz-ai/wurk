@@ -18,8 +18,8 @@ interface DeadEntry {
   jid: string;
   klass: string;
   args: unknown;
-  error_class: string;
-  error_message: string;
+  error_class: string | null;
+  error_message: string | null;
   // `at` is the death epoch (the sorted-set score); see api/serializers.rb#sorted_entry.
   at: number;
   score: number;
@@ -138,10 +138,10 @@ export default function Dead() {
                       </td>
                       <td style={{ fontWeight: 500 }}>{entry.klass}</td>
                       <td><ArgsValue str={argsStr} max={40} /></td>
-                      <td title={entry.error_class} style={{ color: 'var(--danger)' }}>
+                      <td title={entry.error_class ?? ''} style={{ color: 'var(--danger)' }}>
                         {truncate(entry.error_class, 25)}
                       </td>
-                      <td title={entry.error_message}>{truncate(entry.error_message, 40)}</td>
+                      <td title={entry.error_message ?? ''}>{truncate(entry.error_message, 40)}</td>
                       <td title={isoTime(entry.at)}>
                         {relativeTime(entry.at)}
                       </td>

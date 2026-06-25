@@ -16,8 +16,8 @@ export interface JobEntry {
   created_at?: number | null;
   at?: number;
   retry_count?: number;
-  error_class?: string;
-  error_message?: string;
+  error_class?: string | null;
+  error_message?: string | null;
   error_backtrace?: string[] | null;
   // [label, value] rows contributed by third-party extensions via
   // Sidekiq::Web.custom_job_info_rows (spec §25.2).

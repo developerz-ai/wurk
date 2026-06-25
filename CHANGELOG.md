@@ -4,6 +4,11 @@ All notable changes to Wurk are recorded here. Format: [Keep a Changelog](https:
 
 ## [Unreleased]
 
+## [1.0.5] - 2026-06-25
+
+### Fixed
+- **Dashboard — null `error_class`/`error_message` white-screen** — `/wurk/dead`, `/wurk/search`, and `/wurk/retries` crashed to a blank page when a dead/retry entry had no error fields. Only `JobRetry#stamp_error` stamps those fields, so any job that reached the dead set via `DeadSet#kill`, "kill all", encryption route-to-dead, or a direct Sidekiq migration carried `null` — and the SPA fed it straight into `truncate(s: string)`, throwing `null.length`. `truncate` is now null-safe and the dead-set serializer coerces both fields to `""` (the `DeadSet#kill` stored payload stays raw/Sidekiq-wire-compatible). The `error_class`/`error_message` TS types are corrected to `string | null` so `tsc` enforces the contract. (#272)
+
 ## [1.0.4] - 2026-06-22
 
 ### Changed
