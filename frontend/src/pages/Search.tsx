@@ -8,8 +8,8 @@ interface RetryEntry {
   jid: string;
   klass: string;
   args: unknown;
-  error_class: string;
-  error_message: string;
+  error_class: string | null;
+  error_message: string | null;
   failed_at: number;
   retry_at: number;
   retried_at: number | null;
@@ -29,8 +29,8 @@ interface DeadEntry {
   jid: string;
   klass: string;
   args: unknown;
-  error_class: string;
-  error_message: string;
+  error_class: string | null;
+  error_message: string | null;
   failed_at: number;
   score: number;
 }
@@ -210,7 +210,7 @@ export default function Search() {
                       </td>
                       <td style={{ fontWeight: 500 }}>{entry.klass}</td>
                       <td title={argsStr}>{truncate(argsStr, 40)}</td>
-                      <td title={entry.error_class} style={{ color: 'var(--danger)' }}>
+                      <td title={entry.error_class ?? ''} style={{ color: 'var(--danger)' }}>
                         {truncate(entry.error_class, 25)}
                       </td>
                       <td>{entry.retry_count}</td>
@@ -285,7 +285,7 @@ export default function Search() {
                       </td>
                       <td style={{ fontWeight: 500 }}>{entry.klass}</td>
                       <td title={argsStr}>{truncate(argsStr, 40)}</td>
-                      <td title={entry.error_class} style={{ color: 'var(--danger)' }}>
+                      <td title={entry.error_class ?? ''} style={{ color: 'var(--danger)' }}>
                         {truncate(entry.error_class, 25)}
                       </td>
                       <td>{relativeTime(entry.failed_at)}</td>

@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { formatDuration, formatKb } from './utils';
+import { formatDuration, formatKb, truncate } from './utils';
 
 describe('formatDuration', () => {
   it('guards non-finite input', () => {
@@ -47,5 +47,19 @@ describe('formatKb', () => {
     expect(formatKb(500)).toBe('500 KB');
     expect(formatKb(524288)).toBe('512 MB');
     expect(formatKb(16777216)).toBe('16.0 GB');
+  });
+});
+
+describe('truncate', () => {
+  // Killed/migrated dead jobs carry null error_class/error_message; the dead-row
+  // map fed those straight in and null.length white-screened /dead (issue #272).
+  it('renders null/undefined as empty string instead of throwing', () => {
+    expect(truncate(null)).toBe('');
+    expect(truncate(undefined)).toBe('');
+  });
+
+  it('passes short strings through and ellipsizes long ones', () => {
+    expect(truncate('short', 25)).toBe('short');
+    expect(truncate('x'.repeat(30), 25)).toBe(`${'x'.repeat(25)}…`);
   });
 });

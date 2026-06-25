@@ -18,8 +18,8 @@ interface RetryEntry {
   jid: string;
   klass: string;
   args: unknown;
-  error_class: string;
-  error_message: string;
+  error_class: string | null;
+  error_message: string | null;
   // `at` is the next-retry epoch (the sorted-set score); see api/serializers.rb#sorted_entry.
   at: number;
   retry_count: number;
@@ -139,10 +139,10 @@ export default function Retries() {
                       )}
                       <td style={{ fontWeight: 500 }}>{entry.klass}</td>
                       <td><ArgsValue str={argsStr} max={40} /></td>
-                      <td title={entry.error_class} style={{ color: 'var(--danger)' }}>
+                      <td title={entry.error_class ?? ''} style={{ color: 'var(--danger)' }}>
                         {truncate(entry.error_class, 30)}
                       </td>
-                      <td title={entry.error_message}>{truncate(entry.error_message, 50)}</td>
+                      <td title={entry.error_message ?? ''}>{truncate(entry.error_message, 50)}</td>
                       <td style={{ color: 'var(--warning)' }}>{entry.retry_count}</td>
                       <td title={isoTime(entry.at)}>
                         {relativeTime(entry.at)}

@@ -56,8 +56,8 @@ module Wurk
         job_record(entry).merge(
           score: entry.score,
           at: entry.at.to_f,
-          error_class: entry['error_class'],
-          error_message: entry['error_message'],
+          error_class: entry['error_class'].to_s,
+          error_message: entry['error_message'].to_s,
           retry_count: entry['retry_count'],
           error_backtrace: entry.error_backtrace
         )
