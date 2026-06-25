@@ -14,9 +14,13 @@ DASHBOARD_BUNDLE_DIR = File.join(VENDOR_ASSETS_DIR, "dashboard")
 # The raising assertions live in tasks/release_helpers.rb (testable, not
 # shipped in the gem). Only the clean-tree check stays here — it shells out to
 # git and is meaningful only from a working tree. The dashboard bundle is built,
-# not committed, so the clean-tree check ignores vendor/assets/.
+# not committed, so the clean-tree check ignores vendor/. We match "vendor/"
+# (not "vendor/assets/") on purpose: if the tracked vendor/assets/dashboard/.keep
+# placeholder ever goes missing, vendor/ holds no tracked file and git collapses
+# the whole built bundle to a single "?? vendor/" line — which "vendor/assets/"
+# wouldn't catch, failing the release on its own build output (see #272 fallout).
 def release_tree_clean!
-  dirty = `git status --porcelain`.lines.reject { |line| line.include?("vendor/assets/") }
+  dirty = `git status --porcelain`.lines.reject { |line| line.include?("vendor/") }
   return if dirty.empty?
 
   abort "release:check ✗ working tree has uncommitted changes:\n#{dirty.join}"
