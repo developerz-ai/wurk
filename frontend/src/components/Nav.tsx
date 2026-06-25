@@ -307,9 +307,19 @@ export default function Nav({ open, onClose, collapsed, onToggleCollapse }: NavP
              that outranks any class rule. Zero it in the rail so the fixed-size
              round glyph container — not link padding — defines the footprint;
              the horizontal inline padding would otherwise cramp the circle in
-             the 64px rail and make it shift when the active background appears. */
+             the 64px rail and make it shift when the active background appears.
+             width/margin pin each control to a fixed rail-width box anchored at
+             the nav's start edge, so the centred glyph sits on a constant x
+             (rail/2). Without this, justify-content:center re-centres against the
+             *animating* nav width (248→64px), so the icons leap right on collapse
+             and glide back — a visible jump (#272 follow-up). */
           .wurk-nav--collapsed .wurk-navlink,
-          .wurk-nav--collapsed .nav-collapse-toggle { justify-content: center; padding: 0 !important; }
+          .wurk-nav--collapsed .nav-collapse-toggle {
+            justify-content: center;
+            width: var(--nav-rail) !important;
+            margin-inline: 0 !important;
+            padding: 0 !important;
+          }
           .wurk-nav--collapsed .wurk-navlink__icon {
             display: grid;
             place-items: center;
@@ -337,7 +347,10 @@ export default function Nav({ open, onClose, collapsed, onToggleCollapse }: NavP
              with balanced padding so it sits squarely in the rail instead of
              hugging the top-left. */
           .wurk-nav--collapsed .nav-brand-wrap { padding: 0.9rem 0; }
-          .wurk-nav--collapsed .nav-brand-wrap a { justify-content: center; gap: 0; }
+          /* Same fixed rail-width box as the nav controls above, so the logo
+             centres on the constant rail mid-line instead of leaping right
+             against the animating nav width on collapse. */
+          .wurk-nav--collapsed .nav-brand-wrap a { justify-content: center; gap: 0; width: var(--nav-rail); }
           .wurk-nav--collapsed .nav-brand-wrap img { height: 38px !important; }
         }
         @media (min-width: 768px) and (prefers-reduced-motion: reduce) {
