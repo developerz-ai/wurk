@@ -1,0 +1,31 @@
+# yaml-language-server: $schema=https://developerz.ai/schemas/maintainer.v1.json
+# developerz.ai maintainer policy — developerz-ai/wurk
+#
+# First dogfood pass: triage-only. The bot qualifies, labels, comments, and
+# asks reporters for missing repro detail. No coding handoff and no auto-merge
+# yet — flip handoff.mode to `webhook` (with a webhook_ref) once a coding-agent
+# hook is wired. Everything not set here uses the schema defaults.
+version: 1
+
+tone:
+  voice: friendly
+  language: en
+
+triage:
+  ask_for_repro: true
+  required_fields: [steps, expected, actual, version]
+  qualify_into: [bug, feature, dupe, question]
+
+handoff:
+  mode: none
+
+pr:
+  wait_for_other_bots: [coderabbit, copilot, dependabot]
+  auto_merge: false
+
+escalate:
+  always: [security, license, cla]
+  ask_before_acting: [breaking_change, major_dep_bump, first_time_contributor, large_pr]
+
+limits:
+  max_comments_per_issue_per_day: 10
