@@ -11,7 +11,7 @@ module Wurk
     # Sidekiq extensions register Sinatra-style routes + ERB views via
     # `Sidekiq::Web.register(Ext, name:, tab:, index:, root_dir:, asset_paths:)`,
     # where `Ext.registered(app)` calls `app.get "/path" do … end` and
-    # `app.helpers SomeModule`. wurk's dashboard is a React SPA with no Sinatra
+    # `app.helpers SomeModule`. wurk's dashboard is a SolidJS SPA with no Sinatra
     # render path, so this module provides a minimal, Sidekiq-Web-compatible
     # renderer: it captures the routes, runs the matched block in an `Action`
     # context (a `WebHelpers` subset + the ext's own helpers + `erb`), and

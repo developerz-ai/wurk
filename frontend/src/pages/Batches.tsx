@@ -1,6 +1,6 @@
-import { useQuery } from '@tanstack/react-query';
-import { useEffect } from 'react';
-import { Link } from 'react-router-dom';
+import { useQuery } from '@tanstack/solid-query';
+import { onMount, For, Switch, Match, Show } from 'solid-js';
+import { A } from '@solidjs/router';
 import { Pagination } from '../components/Pagination';
 import { SortableTh } from '../components/SortableTh';
 import { useSort, type Accessors } from '../hooks/useSort';
@@ -43,97 +43,101 @@ const SORT: Accessors<Batch> = {
 export default function Batches() {
   const [page, setPage] = usePageParam();
 
-  useEffect(() => {
+  onMount(() => {
     document.title = `${t('nav.batches')} — Wurk`;
-  }, []);
-
-  const { data, isLoading, isError } = useQuery<BatchesResponse>({
-    queryKey: ['batches', page],
-    queryFn: () =>
-      fetch(`/wurk/api/batches?page=${page - 1}&count=${PAGE_SIZE}`).then(
-        (r) => r.json() as Promise<BatchesResponse>
-      ),
   });
 
-  const { sorted, sort, toggle } = useSort(data?.batches ?? [], SORT);
+  const q = useQuery<BatchesResponse>(() => ({
+    queryKey: ['batches', page()],
+    queryFn: () =>
+      fetch(`/wurk/api/batches?page=${page() - 1}&count=${PAGE_SIZE}`).then(
+        (r) => r.json() as Promise<BatchesResponse>
+      ),
+  }));
 
-  if (isLoading)
-    return (
-      <div>
-        <PageHeader icon="fa-table-cells-large" title={t('nav.batches')} summary={t('summaries.batches')} />
-        <SkeletonTable rows={8} cols={7} />
-      </div>
-    );
-  if (isError || !data) return <div className="empty-state" style={{ color: 'var(--danger)' }}>{t('common.error')}</div>;
+  const { sorted, sort, toggle } = useSort(() => q.data?.batches ?? [], SORT);
 
   return (
-    <div>
-      <PageHeader icon="fa-table-cells-large" title={t('nav.batches')} summary={t('summaries.batches')}>
-        <span className="badge badge-accent">{data.total.toLocaleString()}</span>
-      </PageHeader>
+    <Switch>
+      <Match when={q.isPending}>
+        <div>
+          <PageHeader icon="fa-table-cells-large" title={t('nav.batches')} summary={t('summaries.batches')} />
+          <SkeletonTable rows={8} cols={7} />
+        </div>
+      </Match>
+      <Match when={q.isError || !q.data}>
+        <div class="empty-state" style={{ color: 'var(--danger)' }}>{t('common.error')}</div>
+      </Match>
+      <Match when={q.data}>
+        {(data) => (
+          <div>
+            <PageHeader icon="fa-table-cells-large" title={t('nav.batches')} summary={t('summaries.batches')}>
+              <span class="badge badge-accent">{data().total.toLocaleString()}</span>
+            </PageHeader>
 
-      {sorted.length === 0 ? (
-        <div className="empty-state">{t('common.empty')}</div>
-      ) : (
-        <>
-          <div className="table-wrapper">
-            <table>
-              <thead>
-                <tr>
-                  <SortableTh label="BID" sortKey="bid" sort={sort} onSort={toggle} />
-                  <SortableTh label="Description" sortKey="description" sort={sort} onSort={toggle} />
-                  <SortableTh label={t('table.total')} sortKey="total" sort={sort} onSort={toggle} />
-                  <SortableTh label={t('table.pending')} sortKey="pending" sort={sort} onSort={toggle} />
-                  <SortableTh label="Failures" sortKey="failures" sort={sort} onSort={toggle} />
-                  <SortableTh label="Progress" sortKey="progress" sort={sort} onSort={toggle} />
-                  <SortableTh label="Created" sortKey="created" sort={sort} onSort={toggle} />
-                </tr>
-              </thead>
-              <tbody>
-                {sorted.map((batch) => {
-                  const done = batch.total - batch.pending;
-                  const pct = batch.total > 0 ? (done / batch.total) * 100 : 0;
-                  return (
-                    <tr key={batch.bid}>
-                      <td style={{ fontFamily: 'monospace', fontSize: 12 }}>
-                        <Link to={`/batches/${batch.bid}`} title={batch.bid}>
-                          {truncate(batch.bid, 14)}
-                        </Link>
-                      </td>
-                      <td title={batch.description ?? ''}>{truncate(batch.description ?? '—', 40)}</td>
-                      <td>{batch.total.toLocaleString()}</td>
-                      <td style={{ color: batch.pending > 0 ? 'var(--warning)' : 'var(--success)' }}>
-                        {batch.pending.toLocaleString()}
-                      </td>
-                      <td style={{ color: batch.failures > 0 ? 'var(--danger)' : undefined }}>
-                        {batch.failures.toLocaleString()}
-                      </td>
-                      <td style={{ width: 100 }}>
-                        <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
-                          <div className="progress-bar-track" style={{ flex: 1 }}>
-                            <div
-                              className="progress-bar-fill"
-                              style={{
-                                width: `${pct}%`,
-                                background: batch.failures > 0 ? 'var(--danger)' : 'var(--success)',
-                              }}
-                            />
-                          </div>
-                          <span style={{ fontSize: 11, color: 'var(--text-muted)', minWidth: 32 }}>
-                            {Math.round(pct)}%
-                          </span>
-                        </div>
-                      </td>
-                      <td>{batch.created_at ? relativeTime(batch.created_at) : '—'}</td>
+            <Show when={sorted().length > 0} fallback={<div class="empty-state">{t('common.empty')}</div>}>
+              <div class="table-wrapper">
+                <table>
+                  <thead>
+                    <tr>
+                      <SortableTh label="BID" sortKey="bid" sort={sort()} onSort={toggle} />
+                      <SortableTh label="Description" sortKey="description" sort={sort()} onSort={toggle} />
+                      <SortableTh label={t('table.total')} sortKey="total" sort={sort()} onSort={toggle} />
+                      <SortableTh label={t('table.pending')} sortKey="pending" sort={sort()} onSort={toggle} />
+                      <SortableTh label="Failures" sortKey="failures" sort={sort()} onSort={toggle} />
+                      <SortableTh label="Progress" sortKey="progress" sort={sort()} onSort={toggle} />
+                      <SortableTh label="Created" sortKey="created" sort={sort()} onSort={toggle} />
                     </tr>
-                  );
-                })}
-              </tbody>
-            </table>
+                  </thead>
+                  <tbody>
+                    <For each={sorted()}>
+                      {(batch) => {
+                        const done = batch.total - batch.pending;
+                        const pct = batch.total > 0 ? (done / batch.total) * 100 : 0;
+                        return (
+                          <tr>
+                            <td style={{ 'font-family': 'monospace', 'font-size': '12px' }}>
+                              <A href={`/batches/${batch.bid}`} title={batch.bid}>
+                                {truncate(batch.bid, 14)}
+                              </A>
+                            </td>
+                            <td title={batch.description ?? ''}>{truncate(batch.description ?? '—', 40)}</td>
+                            <td>{batch.total.toLocaleString()}</td>
+                            <td style={{ color: batch.pending > 0 ? 'var(--warning)' : 'var(--success)' }}>
+                              {batch.pending.toLocaleString()}
+                            </td>
+                            <td style={{ color: batch.failures > 0 ? 'var(--danger)' : undefined }}>
+                              {batch.failures.toLocaleString()}
+                            </td>
+                            <td style={{ width: '100px' }}>
+                              <div style={{ display: 'flex', 'align-items': 'center', gap: '0.5rem' }}>
+                                <div class="progress-bar-track" style={{ flex: 1 }}>
+                                  <div
+                                    class="progress-bar-fill"
+                                    style={{
+                                      width: `${pct}%`,
+                                      background: batch.failures > 0 ? 'var(--danger)' : 'var(--success)',
+                                    }}
+                                  />
+                                </div>
+                                <span style={{ 'font-size': '11px', color: 'var(--text-muted)', 'min-width': '32px' }}>
+                                  {Math.round(pct)}%
+                                </span>
+                              </div>
+                            </td>
+                            <td>{batch.created_at ? relativeTime(batch.created_at) : '—'}</td>
+                          </tr>
+                        );
+                      }}
+                    </For>
+                  </tbody>
+                </table>
+              </div>
+              <Pagination page={page()} total={data().total} count={PAGE_SIZE} onChange={setPage} />
+            </Show>
           </div>
-          <Pagination page={page} total={data.total} count={PAGE_SIZE} onChange={setPage} />
-        </>
-      )}
-    </div>
+        )}
+      </Match>
+    </Switch>
   );
 }

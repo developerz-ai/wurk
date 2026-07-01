@@ -82,6 +82,6 @@ Wurk::Engine.routes.draw do
   get 'ext-assets/:name/*file', to: 'extensions#asset', as: :extension_asset,
                                 format: false, constraints: { name: %r{[^/]+} }
 
-  # SPA catch-all — let React Router handle the rest.
+  # SPA catch-all — let the SolidJS router handle the rest.
   get '*path', to: 'dashboard#index', constraints: ->(req) { req.format == :html }
 end

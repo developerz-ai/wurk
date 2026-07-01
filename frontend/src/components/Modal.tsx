@@ -1,12 +1,12 @@
-import { useEffect, useRef, type ReactNode } from 'react';
+import { createEffect, createSignal, onCleanup, onMount, Show, type JSX } from 'solid-js';
 
 interface ModalProps {
   open: boolean;
   onClose: () => void;
-  title: ReactNode;
-  children: ReactNode;
+  title: JSX.Element;
+  children: JSX.Element;
   /** Optional footer (e.g. action buttons). */
-  footer?: ReactNode;
+  footer?: JSX.Element;
   /** Max width of the dialog; defaults to a roomy detail width. */
   width?: number;
 }
@@ -16,56 +16,59 @@ interface ModalProps {
 // stays mounted (not conditionally rendered) and is driven by showModal()/close(),
 // so enter AND exit animate via CSS (@starting-style + allow-discrete in
 // styles/components/_modal.scss).
-export default function Modal({ open, onClose, title, children, footer, width = 640 }: ModalProps) {
-  const ref = useRef<HTMLDialogElement>(null);
-  const titleId = useRef(`modal-title-${Math.random().toString(36).slice(2)}`).current;
+export default function Modal(props: ModalProps) {
+  let dlg!: HTMLDialogElement;
+  const titleId = `modal-title-${Math.random().toString(36).slice(2)}`;
 
   // Hold the last content + title so the panel isn't blank while it animates out
   // (consumers typically clear their data the moment `open` flips false).
-  const held = useRef<{ title: ReactNode; children: ReactNode }>({ title, children });
-  if (open) held.current = { title, children };
-  const shown = open ? { title, children } : held.current;
+  const [held, setHeld] = createSignal<{ title: JSX.Element; children: JSX.Element }>({
+    title: props.title,
+    children: props.children,
+  });
+  createEffect(() => {
+    if (props.open) setHeld({ title: props.title, children: props.children });
+  });
+  const shown = () => (props.open ? { title: props.title, children: props.children } : held());
 
-  useEffect(() => {
-    const dlg = ref.current;
-    if (!dlg) return;
-    if (open && !dlg.open) dlg.showModal();
-    else if (!open && dlg.open) dlg.close();
-  }, [open]);
+  createEffect(() => {
+    if (props.open && !dlg.open) dlg.showModal();
+    else if (!props.open && dlg.open) dlg.close();
+  });
 
-  // Esc fires the native `cancel`; route it through onClose so React state stays
+  // Esc fires the native `cancel`; route it through onClose so app state stays
   // the source of truth.
-  useEffect(() => {
-    const dlg = ref.current;
-    if (!dlg) return;
+  onMount(() => {
     const onCancel = (e: Event) => {
       e.preventDefault();
-      onClose();
+      props.onClose();
     };
     dlg.addEventListener('cancel', onCancel);
-    return () => dlg.removeEventListener('cancel', onCancel);
-  }, [onClose]);
+    onCleanup(() => dlg.removeEventListener('cancel', onCancel));
+  });
 
   return (
     <dialog
-      ref={ref}
-      className="modal"
+      ref={dlg}
+      class="modal"
       aria-labelledby={titleId}
       // Close only when the click lands on the <dialog> itself (the backdrop area),
       // not the panel inside it.
       onClick={(e) => {
-        if (e.target === ref.current) onClose();
+        if (e.target === dlg) props.onClose();
       }}
     >
-      <div className="modal-panel" style={{ maxWidth: width }}>
-        <div className="modal-header">
-          <h2 id={titleId} className="modal-title">{shown.title}</h2>
-          <button className="modal-close" onClick={onClose} aria-label="Close">
-            <i className="fa-solid fa-xmark" />
+      <div class="modal-panel" style={{ 'max-width': `${props.width ?? 640}px` }}>
+        <div class="modal-header">
+          <h2 id={titleId} class="modal-title">{shown().title}</h2>
+          <button class="modal-close" onClick={() => props.onClose()} aria-label="Close">
+            <i class="fa-solid fa-xmark" />
           </button>
         </div>
-        <div className="modal-body">{shown.children}</div>
-        {footer && <div className="modal-footer">{footer}</div>}
+        <div class="modal-body">{shown().children}</div>
+        <Show when={props.footer}>
+          <div class="modal-footer">{props.footer}</div>
+        </Show>
       </div>
     </dialog>
   );

@@ -1,24 +1,26 @@
-import { useState, useRef, useId, cloneElement, isValidElement, type ReactNode, type ReactElement } from 'react';
-import { createPortal } from 'react-dom';
+import { createSignal, createUniqueId, createEffect, children, Show, type JSX } from 'solid-js';
+import { Portal } from 'solid-js/web';
 
 // A tooltip rendered into a body-level portal with position: fixed, so it
 // escapes the `overflow: auto` clipping of scroll containers (e.g. the table
 // wrapper) that swallows an absolutely-positioned CSS tooltip. Positioned above
 // the trigger and horizontally centered on it.
-export function Tooltip({ tip, children }: { tip: string; children: ReactNode }) {
-  const [pos, setPos] = useState<{ x: number; y: number } | null>(null);
-  const ref = useRef<HTMLSpanElement>(null);
-  const tipId = useId();
+export function Tooltip(props: { tip: string; children: JSX.Element }) {
+  const [pos, setPos] = createSignal<{ x: number; y: number } | null>(null);
+  let ref!: HTMLSpanElement;
+  const tipId = createUniqueId();
 
   const show = () => {
-    const r = ref.current?.getBoundingClientRect();
+    const r = ref?.getBoundingClientRect();
     if (r) setPos({ x: r.left + r.width / 2, y: r.top });
   };
 
   // Associate the trigger with the tooltip for screen readers.
-  const trigger = isValidElement(children)
-    ? cloneElement(children as ReactElement<{ 'aria-describedby'?: string }>, { 'aria-describedby': tipId })
-    : children;
+  const trigger = children(() => props.children);
+  createEffect(() => {
+    const el = trigger();
+    if (el instanceof HTMLElement) el.setAttribute('aria-describedby', tipId);
+  });
 
   return (
     <span
@@ -27,34 +29,36 @@ export function Tooltip({ tip, children }: { tip: string; children: ReactNode })
       onMouseLeave={() => setPos(null)}
       style={{ display: 'inline-flex' }}
     >
-      {trigger}
-      {pos &&
-        createPortal(
-          <div
-            id={tipId}
-            role="tooltip"
-            style={{
-              position: 'fixed',
-              left: pos.x,
-              top: pos.y - 8,
-              transform: 'translate(-50%, -100%)',
-              maxWidth: 260,
-              background: 'var(--surface-strong)',
-              color: 'var(--text)',
-              border: '1px solid var(--border-strong)',
-              padding: '0.4rem 0.6rem',
-              borderRadius: 6,
-              fontSize: 12,
-              lineHeight: 1.35,
-              zIndex: 9999,
-              pointerEvents: 'none',
-              boxShadow: '0 4px 14px rgba(0, 0, 0, 0.45)',
-            }}
-          >
-            {tip}
-          </div>,
-          document.body
+      {trigger()}
+      <Show when={pos()}>
+        {(p) => (
+          <Portal>
+            <div
+              id={tipId}
+              role="tooltip"
+              style={{
+                position: 'fixed',
+                left: `${p().x}px`,
+                top: `${p().y - 8}px`,
+                transform: 'translate(-50%, -100%)',
+                'max-width': '260px',
+                background: 'var(--surface-strong)',
+                color: 'var(--text)',
+                border: '1px solid var(--border-strong)',
+                padding: '0.4rem 0.6rem',
+                'border-radius': '6px',
+                'font-size': '12px',
+                'line-height': 1.35,
+                'z-index': 9999,
+                'pointer-events': 'none',
+                'box-shadow': '0 4px 14px rgba(0, 0, 0, 0.45)',
+              }}
+            >
+              {props.tip}
+            </div>
+          </Portal>
         )}
+      </Show>
     </span>
   );
 }

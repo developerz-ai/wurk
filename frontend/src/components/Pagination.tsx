@@ -7,27 +7,27 @@ interface PaginationProps {
   onChange: (p: number) => void;
 }
 
-export function Pagination({ page, total, count, onChange }: PaginationProps) {
-  const totalPages = Math.max(1, Math.ceil(total / count));
+export function Pagination(props: PaginationProps) {
+  const totalPages = () => Math.max(1, Math.ceil(props.total / props.count));
 
   return (
-    <div className="pagination">
+    <div class="pagination">
       <button
-        className="btn"
-        disabled={page <= 1}
-        onClick={() => onChange(page - 1)}
-        style={{ opacity: page <= 1 ? 0.4 : 1 }}
+        class="btn"
+        disabled={props.page <= 1}
+        onClick={() => props.onChange(props.page - 1)}
+        style={{ opacity: props.page <= 1 ? 0.4 : 1 }}
       >
         {t('actions.prev')}
       </button>
       <span>
-        {t('common.page')} {page} {t('common.of')} {totalPages}
+        {t('common.page')} {props.page} {t('common.of')} {totalPages()}
       </span>
       <button
-        className="btn"
-        disabled={page >= totalPages}
-        onClick={() => onChange(page + 1)}
-        style={{ opacity: page >= totalPages ? 0.4 : 1 }}
+        class="btn"
+        disabled={props.page >= totalPages()}
+        onClick={() => props.onChange(props.page + 1)}
+        style={{ opacity: props.page >= totalPages() ? 0.4 : 1 }}
       >
         {t('actions.next')}
       </button>

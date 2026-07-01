@@ -3,7 +3,7 @@
 Wurk is packaged as a mountable Rails engine. That gives us:
 
 - A dashboard mount point with no host-app boilerplate.
-- Asset path for the precompiled React SPA.
+- Asset path for the precompiled SolidJS SPA.
 - A railtie hook for post-init forking.
 - Generators for the install flow.
 

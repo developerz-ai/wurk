@@ -35,7 +35,7 @@ Speed is a pillar, not a side effect. Wurk must beat stock Sidekiq on every benc
 
 ## Asset path
 
-Precompiled dashboard assets ship inside the gem — see 09-precompiled-assets.md. No runtime asset compilation, no Sprockets reach for the React bundle. The dashboard loads as a static file from the gem's path.
+Precompiled dashboard assets ship inside the gem — see 09-precompiled-assets.md. No runtime asset compilation, no Sprockets reach for the SolidJS bundle. The dashboard loads as a static file from the gem's path.
 
 ## Things explicitly NOT done
 

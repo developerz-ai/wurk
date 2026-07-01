@@ -121,7 +121,7 @@ namespace :frontend do
     sh "bun", "install", "--frozen-lockfile", chdir: FRONTEND_DIR
   end
 
-  desc "Build the React SPA into vendor/assets/"
+  desc "Build the SolidJS SPA into vendor/assets/"
   task :build do
     sh "bun", "install", "--frozen-lockfile", chdir: FRONTEND_DIR
     sh "bun", "run", "build", chdir: FRONTEND_DIR

@@ -23,7 +23,7 @@ Ship parity incrementally. Every milestone produces a usable gem.
 ## M2 — Web dashboard parity
 
 - Engine mounted at `/wurk`.
-- Precompiled React SPA bundle baked into the gem.
+- Precompiled SolidJS SPA bundle baked into the gem.
 - Parity panes: dashboard, queues, retries, scheduled, dead, busy.
 - SSE live updates.
 

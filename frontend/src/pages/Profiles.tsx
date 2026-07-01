@@ -1,5 +1,5 @@
-import { useQuery } from '@tanstack/react-query';
-import { useEffect } from 'react';
+import { useQuery } from '@tanstack/solid-query';
+import { onMount, For, Switch, Match, Show } from 'solid-js';
 import { SkeletonTable } from '../components/Skeleton';
 import { t } from '../i18n';
 
@@ -25,11 +25,11 @@ function fmtWhen(ts: number | null): string {
 }
 
 export default function Profiles() {
-  useEffect(() => {
+  onMount(() => {
     document.title = `${t('nav.profiles')} — Wurk`;
-  }, []);
+  });
 
-  const { data, isLoading } = useQuery<Profile[]>({
+  const q = useQuery<Profile[]>(() => ({
     queryKey: ['profiles'],
     queryFn: async () => {
       const r = await fetch('/wurk/api/profiles');
@@ -37,70 +37,80 @@ export default function Profiles() {
       return r.json() as Promise<Profile[]>;
     },
     refetchInterval: 5000,
-  });
-
-  if (isLoading) return <div className="obs"><SkeletonTable rows={8} cols={6} /></div>;
-  // Only gate on shape, not isError — with refetchInterval polling, a transient
-  // background refetch failure flips isError true while the last good payload
-  // is still cached. Showing the error state then would blank the page on
-  // every blip; falling through keeps stale data visible until the next poll.
-  if (!Array.isArray(data)) {
-    return <div className="obs"><div className="empty-state" style={{ color: 'var(--danger)' }}>{t('common.error')}</div></div>;
-  }
+  }));
 
   return (
-    <div className="obs">
-      <div className="obs-pagehead">
-        <div>
-          <h1>{t('nav.profiles')}</h1>
-          <p className="obs-panel__sub">{t('summaries.profiles')}</p>
-        </div>
-        <span className="obs-chip obs-chip--active">{data.length.toLocaleString()}</span>
-      </div>
+    <Switch>
+      <Match when={q.isPending}>
+        <div class="obs"><SkeletonTable rows={8} cols={6} /></div>
+      </Match>
+      {/* Only gate on shape, not isError — with refetchInterval polling, a transient
+          background refetch failure flips isError true while the last good payload
+          is still cached. Showing the error state then would blank the page on
+          every blip; falling through keeps stale data visible until the next poll. */}
+      <Match when={!Array.isArray(q.data)}>
+        <div class="obs"><div class="empty-state" style={{ color: 'var(--danger)' }}>{t('common.error')}</div></div>
+      </Match>
+      <Match when={Array.isArray(q.data) && q.data}>
+        {(data) => (
+          <div class="obs">
+            <div class="obs-pagehead">
+              <div>
+                <h1>{t('nav.profiles')}</h1>
+                <p class="obs-panel__sub">{t('summaries.profiles')}</p>
+              </div>
+              <span class="obs-chip obs-chip--active">{data().length.toLocaleString()}</span>
+            </div>
 
-      {data.length === 0 ? (
-        <div className="obs-card obs-empty">{t('common.empty')}</div>
-      ) : (
-        <div className="obs-card obs-table">
-          <div className="obs-tablescroll">
-            <table>
-              <thead>
-                <tr>
-                  <th>Type</th>
-                  <th>JID</th>
-                  <th>Started</th>
-                  <th>Elapsed</th>
-                  <th>Size</th>
-                  <th />
-                </tr>
-              </thead>
-              <tbody>
-                {data.map((p) => (
-                  <tr key={p.key}>
-                    <td style={{ fontWeight: 500, color: 'var(--obs-text)' }}>{p.type}</td>
-                    <td><span className="obs-mono-cell">{p.jid}</span></td>
-                    <td>{fmtWhen(p.started_at)}</td>
-                    <td>{p.elapsed.toLocaleString()} ms</td>
-                    <td>{fmtBytes(p.size)}</td>
-                    <td style={{ textAlign: 'end' }}>
-                      {/* Full reload (not client-route): the backend POSTs the blob
-                          to the Firefox profiler then 302s out to profiler.firefox.com. */}
-                      <a
-                        className="obs-btn obs-btn--ghost obs-btn--sm"
-                        href={`/wurk/profiles/${encodeURIComponent(p.key)}`}
-                        target="_blank"
-                        rel="noopener noreferrer"
-                      >
-                        <i className="fa-solid fa-up-right-from-square" aria-hidden="true" /> Open
-                      </a>
-                    </td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
+            <Show
+              when={data().length > 0}
+              fallback={<div class="obs-card obs-empty">{t('common.empty')}</div>}
+            >
+              <div class="obs-card obs-table">
+                <div class="obs-tablescroll">
+                  <table>
+                    <thead>
+                      <tr>
+                        <th>Type</th>
+                        <th>JID</th>
+                        <th>Started</th>
+                        <th>Elapsed</th>
+                        <th>Size</th>
+                        <th />
+                      </tr>
+                    </thead>
+                    <tbody>
+                      <For each={data()}>
+                        {(p) => (
+                          <tr>
+                            <td style={{ 'font-weight': 500, color: 'var(--obs-text)' }}>{p.type}</td>
+                            <td><span class="obs-mono-cell">{p.jid}</span></td>
+                            <td>{fmtWhen(p.started_at)}</td>
+                            <td>{p.elapsed.toLocaleString()} ms</td>
+                            <td>{fmtBytes(p.size)}</td>
+                            <td style={{ 'text-align': 'end' }}>
+                              {/* Full reload (not client-route): the backend POSTs the blob
+                                  to the Firefox profiler then 302s out to profiler.firefox.com. */}
+                              <a
+                                class="obs-btn obs-btn--ghost obs-btn--sm"
+                                href={`/wurk/profiles/${encodeURIComponent(p.key)}`}
+                                target="_blank"
+                                rel="noopener noreferrer"
+                              >
+                                <i class="fa-solid fa-up-right-from-square" aria-hidden="true" /> Open
+                              </a>
+                            </td>
+                          </tr>
+                        )}
+                      </For>
+                    </tbody>
+                  </table>
+                </div>
+              </div>
+            </Show>
           </div>
-        </div>
-      )}
-    </div>
+        )}
+      </Match>
+    </Switch>
   );
 }

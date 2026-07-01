@@ -5,7 +5,7 @@ require_relative 'api/pagination'
 require 'wurk/web'
 
 module Wurk
-  # JSON APIs consumed by the React SPA. Action methods stay thin; mapping to
+  # JSON APIs consumed by the SolidJS SPA. Action methods stay thin; mapping to
   # the wire shape lives in `Wurk::Api::Serializers`, and pagination lives in
   # `Wurk::Api::Pagination`. SSE lives in #stream.
   #

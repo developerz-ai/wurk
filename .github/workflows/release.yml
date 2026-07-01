@@ -43,7 +43,7 @@ jobs:
         with:
           bun-version: "1.3.14"
 
-      # Precompile the React SPA into vendor/assets/ (bun install + vite build).
+      # Precompile the SolidJS SPA into vendor/assets/ (bun install + vite build).
       - name: build dashboard SPA
         run: bundle exec rake frontend:build
 

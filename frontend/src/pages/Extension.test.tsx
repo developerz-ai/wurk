@@ -1,7 +1,7 @@
 import { describe, it, expect, vi, afterEach } from 'vitest';
-import { render, screen, waitFor, cleanup } from '@testing-library/react';
-import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
-import { MemoryRouter, Route, Routes } from 'react-router-dom';
+import { render, screen, waitFor } from '@solidjs/testing-library';
+import { QueryClient, QueryClientProvider } from '@tanstack/solid-query';
+import { MemoryRouter, Route, createMemoryHistory } from '@solidjs/router';
 import Extension from './Extension';
 
 // Regression for the trailing-slash mismatch: registered index paths keep
@@ -21,33 +21,36 @@ function mockFetch(meta: unknown, extHtml: string) {
 
 function renderAt(path: string) {
   const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
-  return render(
+  const history = createMemoryHistory();
+  history.set({ value: path, replace: true });
+  return render(() => (
     <QueryClientProvider client={client}>
-      <MemoryRouter initialEntries={[path]}>
-        <Routes>
-          <Route path="/ext/:tab" element={<Extension />} />
-        </Routes>
+      <MemoryRouter history={history}>
+        <Route path="/ext/:tab" component={Extension} />
       </MemoryRouter>
     </QueryClientProvider>
-  );
+  ));
 }
 
 describe('Extension', () => {
   afterEach(() => {
-    cleanup();
     vi.unstubAllGlobals();
   });
 
   it('matches a registered tab whose index path has a trailing slash', async () => {
     const fetchMock = mockFetch(
-      { read_only: false, read_only_message: null, custom_tabs: [{ name: 'Demo Locks', path: 'locks/', ext_name: 'demo_locks' }] },
-      '<h2>Demo Locks</h2><td>WelcomeEmailJob</td>'
+      {
+        read_only: false,
+        read_only_message: null,
+        custom_tabs: [{ name: 'Demo Locks', path: 'locks/', ext_name: 'demo_locks' }],
+      },
+      '<h2>Demo Locks</h2><td>WelcomeEmailJob</td>',
     );
     vi.stubGlobal('fetch', fetchMock);
 
     renderAt('/ext/locks');
 
-    await waitFor(() => expect(screen.getByText('WelcomeEmailJob')).toBeTruthy());
+    await waitFor(() => expect(screen.getByText('WelcomeEmailJob')).toBeInTheDocument());
     const extCalls = fetchMock.mock.calls.map((c) => String(c[0])).filter((u) => u.includes('/ext/'));
     expect(extCalls).toContain('/wurk/ext/demo_locks/locks');
   });
@@ -55,7 +58,10 @@ describe('Extension', () => {
   it('falls back to the iframe embed for a bare tabs[]= tab (no ext_name)', async () => {
     vi.stubGlobal(
       'fetch',
-      mockFetch({ read_only: false, read_only_message: null, custom_tabs: [{ name: 'Legacy', path: 'legacy', ext_name: null }] }, '')
+      mockFetch(
+        { read_only: false, read_only_message: null, custom_tabs: [{ name: 'Legacy', path: 'legacy', ext_name: null }] },
+        '',
+      ),
     );
 
     renderAt('/ext/legacy');

@@ -49,7 +49,7 @@ Everything below is in the one free gem. The "Sidekiq tier" column is only there
 | **Limiters** | Concurrent, bucket, window, leaky, and points rate limiters via `Sidekiq::Limiter` | Enterprise |
 | **Periodic** | Cron/periodic jobs, leader-elected so each tick fires exactly once across the cluster | Enterprise |
 | **Encryption** | Transparent AES-256-GCM job-argument encryption with zero-downtime key rotation | Enterprise |
-| **Dashboard** | Mountable Rails engine, precompiled React SPA (no Node needed), live SSE, charts, host-app auth hook | OSS + Pro/Ent |
+| **Dashboard** | Mountable Rails engine, precompiled SolidJS SPA (no Node needed), live SSE, charts, host-app auth hook | OSS + Pro/Ent |
 
 Plus Wurk extras: a worker topology DSL, a Kubernetes liveness/readiness listener, and opt-in AI dashboard panes (anomaly detection, NL queries, backlog forecasting).
 

@@ -1,5 +1,6 @@
-import { useQuery } from '@tanstack/react-query';
-import { useState, useEffect } from 'react';
+import { useQuery } from '@tanstack/solid-query';
+import { onMount, createSignal, For, Show } from 'solid-js';
+import { useSearchParams } from '@solidjs/router';
 import { t } from '../i18n';
 import { PageHeader } from '../components/PageHeader';
 import { relativeTime, truncate, formatArgs } from '../utils';
@@ -62,43 +63,44 @@ function matches(term: string, jid: string, cls: string): boolean {
 }
 
 export default function Search() {
-  const [query, setQuery] = useState('');
-  const [submitted, setSubmitted] = useState('');
+  const [sp, setSp] = useSearchParams();
+  const [query, setQuery] = createSignal((sp.q as string) ?? '');
+  const submitted = () => (sp.q as string) ?? '';
 
-  useEffect(() => {
+  onMount(() => {
     document.title = `${t('nav.search')} — Wurk`;
-  }, []);
+  });
 
-  const { data: retries } = useQuery<RetriesResponse>({
+  const retries = useQuery<RetriesResponse>(() => ({
     queryKey: ['search-retries'],
     queryFn: () =>
       fetch('/wurk/api/retries?page=0&count=200').then(
         (r) => r.json() as Promise<RetriesResponse>
       ),
-    enabled: submitted.length >= 2,
-  });
+    enabled: submitted().length >= 2,
+  }));
 
-  const { data: scheduled } = useQuery<ScheduledResponse>({
+  const scheduled = useQuery<ScheduledResponse>(() => ({
     queryKey: ['search-scheduled'],
     queryFn: () =>
       fetch('/wurk/api/scheduled?page=0&count=200').then(
         (r) => r.json() as Promise<ScheduledResponse>
       ),
-    enabled: submitted.length >= 2,
-  });
+    enabled: submitted().length >= 2,
+  }));
 
-  const { data: dead } = useQuery<DeadResponse>({
+  const dead = useQuery<DeadResponse>(() => ({
     queryKey: ['search-dead'],
     queryFn: () =>
       fetch('/wurk/api/dead?page=0&count=200').then(
         (r) => r.json() as Promise<DeadResponse>
       ),
-    enabled: submitted.length >= 2,
-  });
+    enabled: submitted().length >= 2,
+  }));
 
   // Live sample of job classes for the empty-state suggestion chips — derived
   // from real data so it works for any app, not hardcoded to the demo.
-  const { data: sample } = useQuery<Array<{ entries?: Array<{ klass?: string }> }>>({
+  const sample = useQuery<Array<{ entries?: Array<{ klass?: string }> }>>(() => ({
     queryKey: ['search-suggest'],
     queryFn: () =>
       Promise.all(
@@ -107,88 +109,91 @@ export default function Search() {
         )
       ),
     staleTime: 30000,
-  });
-  const suggestions = Array.from(
-    new Set(
-      (sample ?? []).flatMap((s) => (s.entries ?? []).map((e) => e.klass)).filter(Boolean) as string[]
-    )
-  ).slice(0, 5);
+  }));
+  const suggestions = () =>
+    Array.from(
+      new Set(
+        (sample.data ?? []).flatMap((s) => (s.entries ?? []).map((e) => e.klass)).filter(Boolean) as string[]
+      )
+    ).slice(0, 5);
 
   const runSearch = (term: string) => {
     setQuery(term);
-    setSubmitted(term);
+    setSp({ q: term || undefined });
   };
 
-  const filteredRetries =
-    submitted.length >= 2
-      ? (retries?.entries ?? []).filter((e) => matches(submitted, e.jid, e.klass))
+  const filteredRetries = () =>
+    submitted().length >= 2
+      ? (retries.data?.entries ?? []).filter((e) => matches(submitted(), e.jid, e.klass))
       : [];
 
-  const filteredScheduled =
-    submitted.length >= 2
-      ? (scheduled?.entries ?? []).filter((e) => matches(submitted, e.jid, e.klass))
+  const filteredScheduled = () =>
+    submitted().length >= 2
+      ? (scheduled.data?.entries ?? []).filter((e) => matches(submitted(), e.jid, e.klass))
       : [];
 
-  const filteredDead =
-    submitted.length >= 2
-      ? (dead?.entries ?? []).filter((e) => matches(submitted, e.jid, e.klass))
+  const filteredDead = () =>
+    submitted().length >= 2
+      ? (dead.data?.entries ?? []).filter((e) => matches(submitted(), e.jid, e.klass))
       : [];
 
-  const handleSearch = (e: React.FormEvent) => {
+  const handleSearch = (e: Event) => {
     e.preventDefault();
-    setSubmitted(query);
+    setSp({ q: query() || undefined });
   };
 
-  const totalResults = filteredRetries.length + filteredScheduled.length + filteredDead.length;
+  const totalResults = () => filteredRetries().length + filteredScheduled().length + filteredDead().length;
 
   return (
     <div>
       <PageHeader icon="fa-magnifying-glass" title={t('nav.search')} summary={t('summaries.search')} />
 
-      <form onSubmit={handleSearch} style={{ display: 'flex', gap: '0.75rem', marginBottom: '2rem' }}>
+      <form onSubmit={handleSearch} style={{ display: 'flex', gap: '0.75rem', 'margin-bottom': '2rem' }}>
         <input
-          className="input"
+          class="input"
           type="text"
           placeholder="Search by JID or class name…"
-          value={query}
-          onChange={(e) => setQuery(e.target.value)}
-          style={{ flex: 1, maxWidth: 480 }}
+          value={query()}
+          onInput={(e) => setQuery(e.currentTarget.value)}
+          style={{ flex: 1, 'max-width': '480px' }}
         />
-        <button type="submit" className="btn btn-accent">
+        <button type="submit" class="btn btn-accent">
           {t('actions.search')}
         </button>
       </form>
 
-      {submitted.length < 2 && (
-        <div className="search-empty">
-          <div className="search-empty__icon"><i className="fa-solid fa-magnifying-glass" /></div>
-          <p className="search-empty__title">{t('search.emptyTitle')}</p>
-          <p className="search-empty__hint">{t('search.emptyHint')}</p>
-          {suggestions.length > 0 && (
-            <div className="search-empty__chips">
-              <span className="search-empty__chips-label">{t('search.try')}</span>
-              {suggestions.map((s) => (
-                <button key={s} type="button" className="chip" onClick={() => runSearch(s)}>
-                  {s}
-                </button>
-              ))}
+      <Show when={submitted().length < 2}>
+        <div class="search-empty">
+          <div class="search-empty__icon"><i class="fa-solid fa-magnifying-glass" /></div>
+          <p class="search-empty__title">{t('search.emptyTitle')}</p>
+          <p class="search-empty__hint">{t('search.emptyHint')}</p>
+          <Show when={suggestions().length > 0}>
+            <div class="search-empty__chips">
+              <span class="search-empty__chips-label">{t('search.try')}</span>
+              <For each={suggestions()}>
+                {(s) => (
+                  <button type="button" class="chip" onClick={() => runSearch(s)}>
+                    {s}
+                  </button>
+                )}
+              </For>
             </div>
-          )}
+          </Show>
         </div>
-      )}
+      </Show>
 
-      {submitted.length >= 2 && (
-        <div style={{ marginBottom: '0.75rem', color: 'var(--text-muted)', fontSize: 13 }}>
-          {totalResults} result{totalResults !== 1 ? 's' : ''} for "{submitted}"
+      <Show when={submitted().length >= 2}>
+        <div style={{ 'margin-bottom': '0.75rem', color: 'var(--text-muted)', 'font-size': '13px' }}>
+          {totalResults()} result{totalResults() !== 1 ? 's' : ''} for "{submitted()}"
         </div>
-      )}
+      </Show>
 
-      {filteredRetries.length > 0 && (
-        <div style={{ marginBottom: '2rem' }}>
-          <h2 className="section-title" style={{ marginBottom: '0.75rem' }}>
-            Retries <span className="badge badge-warning">{filteredRetries.length}</span>
+      <Show when={filteredRetries().length > 0}>
+        <div style={{ 'margin-bottom': '2rem' }}>
+          <h2 class="section-title" style={{ 'margin-bottom': '0.75rem' }}>
+            Retries <span class="badge badge-warning">{filteredRetries().length}</span>
           </h2>
-          <div className="table-wrapper">
+          <div class="table-wrapper">
             <table>
               <thead>
                 <tr>
@@ -201,35 +206,37 @@ export default function Search() {
                 </tr>
               </thead>
               <tbody>
-                {filteredRetries.map((entry) => {
-                  const argsStr = formatArgs(entry.args);
-                  return (
-                    <tr key={entry.jid}>
-                      <td title={entry.jid} style={{ fontFamily: 'monospace', fontSize: 12, color: 'var(--text-muted)' }}>
-                        {truncate(entry.jid, 12)}
-                      </td>
-                      <td style={{ fontWeight: 500 }}>{entry.klass}</td>
-                      <td title={argsStr}>{truncate(argsStr, 40)}</td>
-                      <td title={entry.error_class ?? ''} style={{ color: 'var(--danger)' }}>
-                        {truncate(entry.error_class, 25)}
-                      </td>
-                      <td>{entry.retry_count}</td>
-                      <td>{relativeTime(entry.retry_at)}</td>
-                    </tr>
-                  );
-                })}
+                <For each={filteredRetries()}>
+                  {(entry) => {
+                    const argsStr = formatArgs(entry.args);
+                    return (
+                      <tr>
+                        <td title={entry.jid} style={{ 'font-family': 'monospace', 'font-size': '12px', color: 'var(--text-muted)' }}>
+                          {truncate(entry.jid, 12)}
+                        </td>
+                        <td style={{ 'font-weight': 500 }}>{entry.klass}</td>
+                        <td title={argsStr}>{truncate(argsStr, 40)}</td>
+                        <td title={entry.error_class ?? ''} style={{ color: 'var(--danger)' }}>
+                          {truncate(entry.error_class, 25)}
+                        </td>
+                        <td>{entry.retry_count}</td>
+                        <td>{relativeTime(entry.retry_at)}</td>
+                      </tr>
+                    );
+                  }}
+                </For>
               </tbody>
             </table>
           </div>
         </div>
-      )}
+      </Show>
 
-      {filteredScheduled.length > 0 && (
-        <div style={{ marginBottom: '2rem' }}>
-          <h2 className="section-title" style={{ marginBottom: '0.75rem' }}>
-            Scheduled <span className="badge badge-accent">{filteredScheduled.length}</span>
+      <Show when={filteredScheduled().length > 0}>
+        <div style={{ 'margin-bottom': '2rem' }}>
+          <h2 class="section-title" style={{ 'margin-bottom': '0.75rem' }}>
+            Scheduled <span class="badge badge-accent">{filteredScheduled().length}</span>
           </h2>
-          <div className="table-wrapper">
+          <div class="table-wrapper">
             <table>
               <thead>
                 <tr>
@@ -240,31 +247,33 @@ export default function Search() {
                 </tr>
               </thead>
               <tbody>
-                {filteredScheduled.map((entry) => {
-                  const argsStr = formatArgs(entry.args);
-                  return (
-                    <tr key={entry.jid}>
-                      <td title={entry.jid} style={{ fontFamily: 'monospace', fontSize: 12, color: 'var(--text-muted)' }}>
-                        {truncate(entry.jid, 12)}
-                      </td>
-                      <td style={{ fontWeight: 500 }}>{entry.klass}</td>
-                      <td title={argsStr}>{truncate(argsStr, 60)}</td>
-                      <td>{relativeTime(entry.at)}</td>
-                    </tr>
-                  );
-                })}
+                <For each={filteredScheduled()}>
+                  {(entry) => {
+                    const argsStr = formatArgs(entry.args);
+                    return (
+                      <tr>
+                        <td title={entry.jid} style={{ 'font-family': 'monospace', 'font-size': '12px', color: 'var(--text-muted)' }}>
+                          {truncate(entry.jid, 12)}
+                        </td>
+                        <td style={{ 'font-weight': 500 }}>{entry.klass}</td>
+                        <td title={argsStr}>{truncate(argsStr, 60)}</td>
+                        <td>{relativeTime(entry.at)}</td>
+                      </tr>
+                    );
+                  }}
+                </For>
               </tbody>
             </table>
           </div>
         </div>
-      )}
+      </Show>
 
-      {filteredDead.length > 0 && (
-        <div style={{ marginBottom: '2rem' }}>
-          <h2 className="section-title" style={{ marginBottom: '0.75rem' }}>
-            Dead <span className="badge badge-danger">{filteredDead.length}</span>
+      <Show when={filteredDead().length > 0}>
+        <div style={{ 'margin-bottom': '2rem' }}>
+          <h2 class="section-title" style={{ 'margin-bottom': '0.75rem' }}>
+            Dead <span class="badge badge-danger">{filteredDead().length}</span>
           </h2>
-          <div className="table-wrapper">
+          <div class="table-wrapper">
             <table>
               <thead>
                 <tr>
@@ -276,31 +285,33 @@ export default function Search() {
                 </tr>
               </thead>
               <tbody>
-                {filteredDead.map((entry) => {
-                  const argsStr = formatArgs(entry.args);
-                  return (
-                    <tr key={entry.jid}>
-                      <td title={entry.jid} style={{ fontFamily: 'monospace', fontSize: 12, color: 'var(--text-muted)' }}>
-                        {truncate(entry.jid, 12)}
-                      </td>
-                      <td style={{ fontWeight: 500 }}>{entry.klass}</td>
-                      <td title={argsStr}>{truncate(argsStr, 40)}</td>
-                      <td title={entry.error_class ?? ''} style={{ color: 'var(--danger)' }}>
-                        {truncate(entry.error_class, 25)}
-                      </td>
-                      <td>{relativeTime(entry.failed_at)}</td>
-                    </tr>
-                  );
-                })}
+                <For each={filteredDead()}>
+                  {(entry) => {
+                    const argsStr = formatArgs(entry.args);
+                    return (
+                      <tr>
+                        <td title={entry.jid} style={{ 'font-family': 'monospace', 'font-size': '12px', color: 'var(--text-muted)' }}>
+                          {truncate(entry.jid, 12)}
+                        </td>
+                        <td style={{ 'font-weight': 500 }}>{entry.klass}</td>
+                        <td title={argsStr}>{truncate(argsStr, 40)}</td>
+                        <td title={entry.error_class ?? ''} style={{ color: 'var(--danger)' }}>
+                          {truncate(entry.error_class, 25)}
+                        </td>
+                        <td>{relativeTime(entry.failed_at)}</td>
+                      </tr>
+                    );
+                  }}
+                </For>
               </tbody>
             </table>
           </div>
         </div>
-      )}
+      </Show>
 
-      {submitted.length >= 2 && totalResults === 0 && (
-        <div className="empty-state">{t('common.empty')}</div>
-      )}
+      <Show when={submitted().length >= 2 && totalResults() === 0}>
+        <div class="empty-state">{t('common.empty')}</div>
+      </Show>
     </div>
   );
 }

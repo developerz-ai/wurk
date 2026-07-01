@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Build the release artifact: compile the React dashboard into vendor/assets,
+# Build the release artifact: compile the SolidJS dashboard into vendor/assets,
 # then package the gem into pkg/. No push, no network — safe to run anytime.
 set -euo pipefail
 cd "$(dirname "$0")/.."

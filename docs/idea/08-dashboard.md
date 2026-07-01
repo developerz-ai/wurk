@@ -21,10 +21,10 @@ A modern, faster, easier-to-use replacement for Sidekiq Web. Same data shape and
 
 | Layer | Choice | Why |
 |---|---|---|
-| Frontend | React + TypeScript + Vite | Faster than Sidekiq's ERB+jQuery, modern DX |
-| State | TanStack Query | Cache + revalidate, pairs well with SSE |
+| Frontend | SolidJS + TypeScript + Vite | Faster than Sidekiq's ERB+jQuery, modern DX |
+| State | TanStack Query (`@tanstack/solid-query`) | Cache + revalidate, pairs well with SSE |
 | Realtime | Server-Sent Events | One-way push, simpler than WebSocket |
-| Charts | Recharts | Good defaults, small bundle, themeable |
+| Charts | Hand-rolled dependency-free SolidJS SVG charts | No chart-lib dependency, themeable, tiny bundle |
 | Styling | CSS variables + container queries | Themeable, mobile-friendly without a heavy CSS framework |
 | i18n runtime | A small, dependency-free translator that reads the bundled JSON locale files | Avoid pulling i18next-size deps for what is mostly key lookup |
 | Server | Rack app inside the engine | No Node runtime in production — see precompiled assets |

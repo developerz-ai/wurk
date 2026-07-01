@@ -1,7 +1,7 @@
-import { useMutation, useQueryClient } from '@tanstack/react-query';
+import { useMutation, useQueryClient } from '@tanstack/solid-query';
 
 // The three mutable sorted-set views. The string doubles as the API path
-// segment (`/wurk/api/<set>`) and the TanStack Query key the pages cache under.
+// segment (`/wurk/api/<set>`) and the query key the pages cache under.
 export type JobSetName = 'retries' | 'scheduled' | 'dead';
 
 // Re-targets the exact (score, jid) pair server-side. Mirrors
@@ -26,7 +26,8 @@ async function postJSON(url: string, body?: unknown): Promise<Response> {
 
 // Single/bulk/all mutations for one job set. Each invalidates both the set's
 // own query and `stats` (the nav badges + dashboard counts read from it) so
-// the UI reflects the change without a manual refresh.
+// the UI reflects the change without a manual refresh. solid-query's
+// useMutation takes an options accessor; call `single.mutate({ key, cmd })`.
 export function useJobSetActions(set: JobSetName) {
   const qc = useQueryClient();
   const invalidate = () => {
@@ -34,22 +35,22 @@ export function useJobSetActions(set: JobSetName) {
     qc.invalidateQueries({ queryKey: ['stats'] });
   };
 
-  const single = useMutation({
+  const single = useMutation(() => ({
     mutationFn: ({ key, cmd }: { key: string; cmd: string }) =>
       postJSON(`/wurk/api/${set}/${encodeURIComponent(key)}`, { cmd }),
     onSuccess: invalidate,
-  });
+  }));
 
-  const bulk = useMutation({
+  const bulk = useMutation(() => ({
     mutationFn: ({ keys, cmd }: { keys: string[]; cmd: string }) =>
       postJSON(`/wurk/api/${set}`, { keys, cmd }),
     onSuccess: invalidate,
-  });
+  }));
 
-  const all = useMutation({
+  const all = useMutation(() => ({
     mutationFn: (cmd: string) => postJSON(`/wurk/api/${set}/all/${cmd}`),
     onSuccess: invalidate,
-  });
+  }));
 
   return { single, bulk, all };
 }

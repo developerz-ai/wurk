@@ -12,7 +12,7 @@
 | Processor | Pops from private list, runs middleware chain, invokes the user's perform |
 | Client | Enqueue interface. Bulk enqueue via Lua. Redis-outage local buffer |
 | Middleware | Server and client chains, same contract as Sidekiq |
-| Web | Rack app mounted under the engine. Serves the React SPA (precompiled) and JSON APIs |
+| Web | Rack app mounted under the engine. Serves the SolidJS SPA (precompiled) and JSON APIs |
 | RedisPool | Per-process connection pool using redis-client |
 
 ## Process tree at runtime
