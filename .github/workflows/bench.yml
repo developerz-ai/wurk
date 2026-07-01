@@ -1,9 +1,35 @@
 name: bench
 
+# Cost control: `rake bench` measures Ruby throughput only, so it can only be
+# affected by Ruby/bench inputs. Gate the whole workflow (incl. the expensive
+# 8vcpu best-of-3 `compare` job) on those paths so frontend-, docs-, test-, and
+# unrelated-CI-only PRs don't spin up bench runners for nothing. Keep this list
+# in sync with whatever `rake bench` loads. (bench/compare are not required
+# checks — a skipped run leaves no pending status to block merges.)
 on:
   pull_request:
+    paths:
+      - 'lib/**'
+      - 'exe/**'
+      - 'bench/**'
+      - 'bin/bench-compare'
+      - 'Rakefile'
+      - 'Gemfile'
+      - 'Gemfile.lock'
+      - '*.gemspec'
+      - '.github/workflows/bench.yml'
   push:
     branches: [main]
+    paths:
+      - 'lib/**'
+      - 'exe/**'
+      - 'bench/**'
+      - 'bin/bench-compare'
+      - 'Rakefile'
+      - 'Gemfile'
+      - 'Gemfile.lock'
+      - '*.gemspec'
+      - '.github/workflows/bench.yml'
 
 permissions:
   contents: read
