@@ -7,8 +7,15 @@ echo "==> bundle install (gem)"
 bundle check >/dev/null 2>&1 || bundle install
 
 if [ -d frontend ]; then
-  echo "==> frontend deps (bun)"
-  (cd frontend && bun install)
+  # bun is only needed to touch the dashboard frontend (CONTRIBUTING.md); the
+  # precompiled bundle ships in vendor/assets/. Skip gracefully rather than
+  # hard-fail under `set -e` for contributors without bun.
+  if command -v bun >/dev/null 2>&1; then
+    echo "==> frontend deps (bun)"
+    (cd frontend && bun install)
+  else
+    echo "==> skipping frontend deps (bun not installed; only needed if you touch frontend/)"
+  fi
 fi
 
 echo "==> dummy app setup"

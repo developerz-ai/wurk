@@ -14,7 +14,7 @@
 #
 # Env knobs:
 #   PORT        Rails port           (default 3000)
-#   VITE_PORT   Vite dev port        (default 5173, must match vite.config.ts)
+#   VITE_PORT   Vite dev port        (default 5173; wired into vite.config.ts)
 #   NO_VITE=1   skip Vite/HMR and serve the prebuilt bundle instead
 #               (run `bin/rake frontend:build` first)
 set -euo pipefail
@@ -22,7 +22,9 @@ set -euo pipefail
 cd "$(dirname "$0")/.."
 ROOT="$PWD"
 PORT="${PORT:-3000}"
-VITE_PORT="${VITE_PORT:-5173}"
+# Exported so the Vite subprocess (vite.config.ts) reads the same port bin/dev
+# logs — otherwise the log line and the real server could disagree.
+export VITE_PORT="${VITE_PORT:-5173}"
 
 pids=()
 redis_cid=""
@@ -41,7 +43,12 @@ if redis_up; then
 elif command -v docker >/dev/null 2>&1; then
   redis_cid="$(docker run -d --rm -p 6379:6379 redis:7-alpine)"
   echo "    started Docker Redis ($redis_cid)"
-  for _ in $(seq 1 30); do redis_up && break; sleep 0.5; done
+  ready=0
+  for _ in $(seq 1 30); do redis_up && { ready=1; break; }; sleep 0.5; done
+  if [ "$ready" != "1" ]; then
+    echo "    ERROR: Redis container didn't become ready in time." >&2
+    exit 1
+  fi
 else
   echo "    ERROR: no Redis on :6379 and Docker is unavailable." >&2
   echo "    Start a Redis (e.g. \`docker run -p 6379:6379 redis:7\`) and retry." >&2
@@ -74,4 +81,7 @@ echo "==> Rails on http://localhost:$PORT/wurk  (Ctrl-C to stop everything)"
 echo
 cd test/dummy
 if [ "$vite_dev" = "1" ]; then export WURK_VITE_DEV=1; fi
-exec bin/rails server -p "$PORT"
+# Not `exec`: the shell must stay alive so the EXIT trap runs cleanup() on
+# Ctrl-C — exec would replace this process and leak the Vite job + Redis
+# container.
+bin/rails server -p "$PORT"

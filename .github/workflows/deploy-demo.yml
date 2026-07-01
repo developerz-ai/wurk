@@ -109,3 +109,18 @@ jobs:
           package-type: container
           min-versions-to-keep: 5
           token: ${{ secrets.GITHUB_TOKEN }}
+
+      # Guard against a "successful but destructive" prune. min-versions-to-keep
+      # is version-based, not digest-aware, so it can orphan a child manifest
+      # still referenced by a tag we meant to keep — a failure continue-on-error
+      # above would silently hide. imagetools inspect resolves the full manifest
+      # (and children) from GHCR without pulling layers, so this fails the run
+      # loudly if the deploy-critical :latest or the just-pushed :sha stopped
+      # resolving. Not continue-on-error: a broken :latest breaks the Image
+      # Updater deploy, so it must surface.
+      - name: verify retained images still resolve
+        run: |
+          for ref in "${IMAGE}:latest" "${IMAGE}:${{ github.sha }}"; do
+            echo "==> inspecting $ref"
+            docker buildx imagetools inspect "$ref" >/dev/null
+          done
