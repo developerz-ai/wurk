@@ -4,6 +4,11 @@ All notable changes to Wurk are recorded here. Format: [Keep a Changelog](https:
 
 ## [Unreleased]
 
+## [1.0.7] - 2026-07-01
+
+### Changed
+- **Dashboard — sidebar collapse motion unified + smoothed** — the collapsible left rail was the last piece of UI still using hardcoded transition durations (the component is inline-styled). Its transitions — and the `App.tsx` content-margin that must move with the rail — now run off the shared `--dur-*` / `--ease-*` scale, so the rail width and the content shift animate in exact lockstep instead of at two independently-hardcoded rates. The collapse/expand glide is retuned to `var(--dur-page)` (350 ms) with the emphasized decelerate curve (`var(--ease-emphasized)`) for a noticeably smoother feel; nav-link/icon hovers use `var(--dur-base)`. Reduced-motion carve-outs preserved. (#282, #283)
+
 ## [1.0.6] - 2026-07-01
 
 ### Added
