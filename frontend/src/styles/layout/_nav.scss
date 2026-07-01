@@ -1,0 +1,7 @@
+// ── Nav rail ─────────────────────────────────────────────────────────────────
+// Nav.tsx is inline-styled (opaque slate fill, hairline edge set there); we only
+// reinforce the right border so the rail reads as a distinct column.
+
+.wurk-nav {
+  border-inline-end: 1px solid var(--border) !important;
+}

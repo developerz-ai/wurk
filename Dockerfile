@@ -9,16 +9,16 @@
 # NOTE: this is the starting scaffold for the deploy (#32). The build still
 # needs a verification pass with infra — see docs/demo-deploy.md.
 
-# ---- Stage 1: build the dashboard SPA (no Node at runtime) ----
-FROM node:20-bookworm-slim AS spa
+# ---- Stage 1: build the dashboard SPA (no Node/bun at runtime) ----
+FROM oven/bun:1.3.14-slim AS spa
 WORKDIR /src
-COPY frontend/package.json frontend/package-lock.json ./frontend/
-RUN cd frontend && npm ci
+COPY frontend/package.json frontend/bun.lock ./frontend/
+RUN cd frontend && bun install --frozen-lockfile
 COPY frontend/ ./frontend/
 # vite.config.ts's wurk-manifest-generator plugin readFileSync's ../lib/wurk/version.rb
-# at build time, so the SPA stage needs it present (was missing → npm run build ENOENT).
+# at build time, so the SPA stage needs it present (was missing → build ENOENT).
 COPY lib/wurk/version.rb ./lib/wurk/version.rb
-RUN cd frontend && npm run build   # → /src/vendor/assets/dashboard
+RUN cd frontend && bun run build   # → /src/vendor/assets/dashboard
 
 # ---- Stage 2: Ruby runtime ----
 FROM ruby:3.4-slim-bookworm

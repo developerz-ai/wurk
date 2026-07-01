@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { useParams } from 'react-router-dom';
 import { PageHeader } from '../components/PageHeader';
+import { Skeleton, SkeletonTable } from '../components/Skeleton';
 import { useMeta } from '../hooks/useMeta';
 import { t } from '../i18n';
 
@@ -85,7 +86,12 @@ function NativeExtension({ extName, indexPath, title }: { extName: string; index
     <>
       <PageHeader icon="fa-puzzle-piece" title={title} summary={t('extension.summary')} />
       {error && <div className="empty-state" style={{ color: 'var(--danger)' }}>{t('common.error')}</div>}
-      {html === null && !error && <div className="empty-state"><span className="spinner" /></div>}
+      {html === null && !error && (
+        <div className="skeleton-stack">
+          <Skeleton height="1.5rem" width="40%" />
+          <SkeletonTable rows={6} cols={4} />
+        </div>
+      )}
       {html !== null && !error && (
         <div
           className="card ext-view"

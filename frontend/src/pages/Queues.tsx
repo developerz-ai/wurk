@@ -12,6 +12,7 @@ import JobDetailModal, { type JobEntry } from '../components/JobDetailModal';
 import Modal from '../components/Modal';
 import { Tooltip } from '../components/Tooltip';
 import { useMeta } from '../hooks/useMeta';
+import { SkeletonTable } from '../components/Skeleton';
 
 interface QueueSummary {
   name: string;
@@ -83,7 +84,7 @@ function QueueJobs({ name }: { name: string }) {
 
   const { sorted, sort, toggle } = useSort(data?.jobs ?? [], JOB_SORT);
 
-  if (isLoading) return <div className="empty-state"><span className="spinner" /></div>;
+  if (isLoading) return <SkeletonTable rows={6} cols={5} />;
   if (isError || !data) return <div className="empty-state" style={{ color: 'var(--danger)' }}>{t('common.error')}</div>;
 
   return (
@@ -210,7 +211,13 @@ export default function Queues() {
 
   const { sorted, sort, toggle } = useSort(data ?? [], QUEUE_SORT);
 
-  if (isLoading) return <div className="empty-state"><span className="spinner" /></div>;
+  if (isLoading)
+    return (
+      <div>
+        <PageHeader icon="fa-layer-group" title={t('nav.queues')} summary={t('summaries.queues')} />
+        <SkeletonTable rows={8} cols={5} />
+      </div>
+    );
   if (isError || !data) return <div className="empty-state" style={{ color: 'var(--danger)' }}>{t('common.error')}</div>;
 
   return (

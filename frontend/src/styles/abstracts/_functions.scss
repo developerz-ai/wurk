@@ -1,0 +1,46 @@
+// ── Typed accessors over the design maps ─────────────────────────────────────
+// One job: fail loudly at compile time when a caller asks for a token that
+// doesn't exist, instead of silently emitting `null`. Every consumer goes
+// through these rather than indexing the maps directly.
+
+@use 'sass:map';
+@use 'sass:math';
+@use 'variables' as v;
+
+// px → rem against a 16px root. Accessibility: sizes scale with the user's
+// browser font-size instead of being frozen in device pixels. Unitless input
+// (e.g. `to-rem(14)`) reads cleanly at call sites; `to-rem(0)` stays `0`.
+@function to-rem($px) {
+  @if $px == 0 {
+    @return 0;
+  }
+  @return math.div($px, 16) * 1rem;
+}
+
+@function breakpoint($key) {
+  @if not map.has-key(v.$breakpoints, $key) {
+    @error 'Unknown breakpoint `#{$key}`. Known: #{map.keys(v.$breakpoints)}.';
+  }
+  @return map.get(v.$breakpoints, $key);
+}
+
+@function duration($key) {
+  @if not map.has-key(v.$durations, $key) {
+    @error 'Unknown duration `#{$key}`. Known: #{map.keys(v.$durations)}.';
+  }
+  @return map.get(v.$durations, $key);
+}
+
+@function easing($key) {
+  @if not map.has-key(v.$easings, $key) {
+    @error 'Unknown easing `#{$key}`. Known: #{map.keys(v.$easings)}.';
+  }
+  @return map.get(v.$easings, $key);
+}
+
+@function z($key) {
+  @if not map.has-key(v.$z-layers, $key) {
+    @error 'Unknown z-layer `#{$key}`. Known: #{map.keys(v.$z-layers)}.';
+  }
+  @return map.get(v.$z-layers, $key);
+}

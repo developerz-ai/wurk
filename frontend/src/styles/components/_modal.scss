@@ -1,0 +1,122 @@
+// ── Modal (native <dialog>) ──────────────────────────────────────────────────
+// Enter AND exit animate via CSS: @starting-style seeds the entry, allow-discrete
+// keeps the dialog in the top layer through the exit. Reduced-motion policy in
+// `base/_motion.scss`.
+
+@use '../abstracts' as *;
+
+.modal {
+  border: none;
+  background: transparent;
+  padding: 0;
+  // The global `* { margin: 0 }` reset breaks native <dialog> auto-margin
+  // centering, so centre explicitly with a fixed transform — robust in both
+  // axes regardless of the reset.
+  margin: 0;
+  position: fixed;
+  top: 50%;
+  left: 50%;
+  max-width: 92vw;
+  max-height: 88vh;
+  color: var(--text);
+  overflow: visible;
+  // Closed/exit state — animates BOTH ways.
+  opacity: 0;
+  transform: translate(-50%, -50%) scale(0.95);
+  transition:
+    opacity var(--dur-slow) var(--ease-standard),
+    transform var(--dur-slow) var(--ease-emphasized),
+    overlay var(--dur-slow) var(--ease-standard) allow-discrete,
+    display var(--dur-slow) var(--ease-standard) allow-discrete;
+
+  &[open] {
+    opacity: 1;
+    transform: translate(-50%, -50%) scale(1);
+  }
+
+  // Entry: start from the closed state when [open] first applies.
+  @starting-style {
+    &[open] {
+      opacity: 0;
+      transform: translate(-50%, -50%) scale(0.95);
+    }
+  }
+
+  &::backdrop {
+    // Dim + blur the page so focus lands on the modal. Fades with the dialog.
+    background: oklch(0 0 0 / 0.58);
+    -webkit-backdrop-filter: blur(to-rem(6)) saturate(75%);
+    backdrop-filter: blur(to-rem(6)) saturate(75%);
+    opacity: 0;
+    transition:
+      opacity var(--dur-slow) var(--ease-standard),
+      overlay var(--dur-slow) var(--ease-standard) allow-discrete,
+      display var(--dur-slow) var(--ease-standard) allow-discrete;
+  }
+
+  &[open]::backdrop {
+    opacity: 1;
+  }
+
+  @starting-style {
+    &[open]::backdrop {
+      opacity: 0;
+    }
+  }
+}
+
+.modal-panel {
+  width: 92vw;
+  background: var(--surface);
+  border: to-rem(1) solid var(--border-strong);
+  border-radius: var(--radius);
+  box-shadow: 0 to-rem(20) to-rem(60) oklch(0 0 0 / 0.5);
+  display: flex;
+  flex-direction: column;
+  max-height: 88vh;
+  overflow: hidden;
+}
+
+.modal-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: to-rem(16);
+  padding: to-rem(14.4) to-rem(17.6);
+  border-bottom: to-rem(1) solid var(--border);
+}
+
+.modal-title {
+  font-size: to-rem(15);
+  font-weight: 600;
+  font-family: ui-monospace, monospace;
+  word-break: break-all;
+}
+
+.modal-close {
+  background: transparent;
+  border: none;
+  color: var(--text-muted);
+  font-size: to-rem(16);
+  padding: to-rem(4) to-rem(7);
+  border-radius: to-rem(7);
+  @include transition((color, background), 'base');
+
+  &:hover {
+    color: var(--text);
+    background: var(--surface-hover);
+  }
+}
+
+.modal-body {
+  padding: to-rem(17.6);
+  overflow-y: auto;
+}
+
+.modal-footer {
+  display: flex;
+  justify-content: flex-end;
+  gap: to-rem(8);
+  padding: to-rem(12.8) to-rem(17.6);
+  border-top: to-rem(1) solid var(--border);
+}

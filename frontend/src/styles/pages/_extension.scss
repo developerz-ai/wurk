@@ -1,0 +1,75 @@
+// ── Server-rendered extension views (#187) ───────────────────────────────────
+// Third-party Web-extension ERB ships plain markup (tables/forms/links); give
+// the common elements just enough theme to sit in the dashboard without
+// importing Sidekiq's CSS.
+
+@use '../abstracts' as *;
+
+.ext-view {
+  overflow-x: auto;
+
+  table {
+    width: 100%;
+    border-collapse: collapse;
+    font-size: to-rem(13);
+  }
+
+  th,
+  td {
+    padding: to-rem(8) to-rem(12);
+    border-bottom: to-rem(1) solid var(--border);
+    text-align: start;
+  }
+
+  th {
+    color: var(--text-muted);
+    font-size: to-rem(11);
+    text-transform: uppercase;
+    letter-spacing: 0.04em;
+  }
+
+  a {
+    color: var(--accent);
+  }
+
+  h1,
+  h2,
+  h3 {
+    margin: to-rem(8) 0;
+  }
+
+  form {
+    display: inline-flex;
+    gap: to-rem(8);
+    align-items: center;
+    margin: to-rem(8) 0;
+  }
+
+  input[type='text'],
+  input[type='search'],
+  input[type='number'],
+  select {
+    background: var(--surface-strong);
+    border: to-rem(1) solid var(--border-strong);
+    color: var(--text);
+    border-radius: to-rem(6);
+    padding: to-rem(5.6) to-rem(9.6);
+    font-size: to-rem(13);
+  }
+
+  input[type='submit'],
+  button {
+    background: var(--surface-strong);
+    border: to-rem(1) solid var(--border-strong);
+    color: var(--text);
+    border-radius: to-rem(6);
+    padding: to-rem(5.6) to-rem(12);
+    font-size: to-rem(13);
+    cursor: pointer;
+  }
+
+  input[type='submit']:hover,
+  button:hover {
+    border-color: var(--accent);
+  }
+}

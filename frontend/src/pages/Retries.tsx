@@ -13,6 +13,7 @@ import { usePageParam } from '../hooks/usePageParam';
 import { useMeta } from '../hooks/useMeta';
 import { useSelection } from '../hooks/useSelection';
 import { useJobSetActions, entryKey } from '../hooks/useJobSetActions';
+import { SkeletonTable } from '../components/Skeleton';
 
 interface RetryEntry {
   jid: string;
@@ -83,7 +84,13 @@ export default function Retries() {
   const { sorted, sort, toggle } = useSort(data?.entries ?? [], SORT);
   const pageKeys = sorted.map(entryKey);
 
-  if (isLoading) return <div className="empty-state"><span className="spinner" /></div>;
+  if (isLoading)
+    return (
+      <div>
+        <PageHeader icon="fa-rotate-right" title={t('nav.retries')} summary={t('summaries.retries')} />
+        <SkeletonTable rows={8} cols={7} />
+      </div>
+    );
   if (isError || !data) return <div className="empty-state" style={{ color: 'var(--danger)' }}>{t('common.error')}</div>;
 
   const allChecked = pageKeys.length > 0 && pageKeys.every((k) => sel.selected.has(k));

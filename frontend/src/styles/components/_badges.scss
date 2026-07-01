@@ -1,0 +1,32 @@
+// ── Badges ───────────────────────────────────────────────────────────────────
+// Pill status markers. Status colour is signal only, mixed low over the surface
+// so it reads without shouting.
+
+@use '../abstracts' as *;
+
+.badge {
+  display: inline-block;
+  padding: to-rem(3) to-rem(10);
+  border-radius: 999px;
+  font-family: var(--font-mono);
+  font-size: to-rem(10.5);
+  font-weight: 500;
+  text-transform: uppercase;
+  letter-spacing: 0.07em;
+  border: to-rem(1) solid transparent;
+}
+
+// Each variant tints fill + text + edge from one status token.
+@each $name, $token in ('success': --success, 'danger': --danger, 'warning': --warning, 'accent': --accent) {
+  .badge-#{$name} {
+    background: color-mix(in oklch, var($token) 16%, transparent);
+    color: var($token);
+    border-color: color-mix(in oklch, var($token) 30%, transparent);
+  }
+}
+
+.badge-muted {
+  background: var(--surface-strong);
+  color: var(--text-muted);
+  border-color: var(--border);
+}

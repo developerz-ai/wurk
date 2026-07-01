@@ -1,0 +1,526 @@
+// ── Obsidian Engineering System ──────────────────────────────────────────────
+// Self-contained sub-system scoped under `.obs` (dashboard + metrics + profiles).
+// Monochromatic, engineered/HUD: Geist + JetBrains Mono, tonal surfaces, 1px
+// borders (no shadows), luminance over hue. Local `--obs-*` tokens keep it
+// portable; the reduced-motion carve-out lives at the bottom.
+
+@use '../abstracts' as *;
+
+.obs {
+  --obs-bg: #09090b;
+  --obs-surface: #161618;
+  --obs-surface-2: #1e1e21;
+  --obs-border: #272729;
+  --obs-border-hover: #3a3a3d;
+  --obs-text: #fafafa;
+  --obs-text-2: #e4e4e7;
+  --obs-muted: #a1a1aa;
+  --obs-faint: #3f3f46;
+  --obs-success: #3fb950;
+  --obs-danger: #f0786f;
+  --obs-radius: 8px;
+  --obs-radius-sm: 4px;
+  --font-sans: 'Geist', system-ui, -apple-system, sans-serif;
+  --font-mono: 'JetBrains Mono', ui-monospace, 'SFMono-Regular', monospace;
+
+  font-family: var(--font-sans);
+  color: var(--obs-text-2);
+}
+
+.obs .obs-mono {
+  font-family: var(--font-mono);
+  font-size: to-rem(11);
+  font-weight: 500;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--obs-muted);
+}
+
+.obs-card {
+  background: var(--obs-surface);
+  border: to-rem(1) solid var(--obs-border);
+  border-radius: var(--obs-radius);
+  transition: border-color var(--dur-base) var(--ease-standard);
+}
+.obs-card:hover {
+  border-color: var(--obs-border-hover);
+}
+
+// ── Metric cards (Processed / Failed / Expired / Busy) ──
+.obs-metrics,
+.obs-stats {
+  display: grid;
+  grid-template-columns: repeat(4, 1fr);
+  gap: to-rem(12);
+  margin-bottom: to-rem(12);
+}
+@include respond-down('md') {
+  .obs-metrics,
+  .obs-stats {
+    grid-template-columns: repeat(2, 1fr);
+  }
+}
+@include respond-down('xs') {
+  .obs-metrics,
+  .obs-stats {
+    grid-template-columns: 1fr;
+  }
+}
+.obs-metric {
+  padding: to-rem(18) to-rem(18) to-rem(16);
+  display: flex;
+  flex-direction: column;
+  gap: to-rem(12);
+}
+.obs-metric__head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+}
+.obs-metric__icon {
+  color: var(--obs-muted);
+  font-size: to-rem(13);
+}
+.obs-metric__value {
+  font-size: to-rem(40);
+  font-weight: 600;
+  line-height: 1;
+  letter-spacing: -0.02em;
+  color: var(--obs-text);
+  font-variant-numeric: tabular-nums;
+}
+.obs-metric__sub {
+  font-family: var(--font-mono);
+  font-size: to-rem(11);
+  letter-spacing: 0.02em;
+  color: var(--obs-muted);
+}
+.obs-metric__sub .up {
+  color: var(--obs-success);
+}
+.obs-metric__sub .down {
+  color: var(--obs-danger);
+}
+
+// ── Performance Insight panel ──
+.obs-panel {
+  padding: to-rem(22) to-rem(22) to-rem(14);
+  margin-bottom: to-rem(12);
+}
+.obs-panel__head {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: to-rem(16);
+}
+.obs-panel__title {
+  font-size: to-rem(20);
+  font-weight: 600;
+  letter-spacing: -0.01em;
+  color: var(--obs-text);
+  margin: 0;
+}
+.obs-panel__sub {
+  font-size: to-rem(13);
+  color: var(--obs-muted);
+  margin: to-rem(4) 0 0;
+}
+.obs-panel__controls {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-end;
+  gap: to-rem(12);
+  flex-shrink: 0;
+}
+.obs-legend {
+  display: flex;
+  gap: to-rem(18);
+  flex-shrink: 0;
+}
+.obs-legend span {
+  font-family: var(--font-mono);
+  font-size: to-rem(11);
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: var(--obs-muted);
+  display: inline-flex;
+  align-items: center;
+  gap: to-rem(7);
+}
+.obs-legend .dot {
+  width: to-rem(9);
+  height: to-rem(9);
+  border-radius: to-rem(2);
+  display: inline-block;
+}
+.obs-legend .dot--processed {
+  background: #fafafa;
+}
+.obs-legend .dot--failed {
+  border: to-rem(1) solid var(--obs-muted);
+}
+.obs-chartbox {
+  margin-top: to-rem(16);
+}
+
+// ── Secondary stat cards ──
+.obs-stat {
+  padding: to-rem(16) to-rem(18);
+  display: flex;
+  flex-direction: column;
+  gap: to-rem(10);
+}
+.obs-stat__value {
+  font-size: to-rem(26);
+  font-weight: 600;
+  line-height: 1;
+  color: var(--obs-text);
+  font-variant-numeric: tabular-nums;
+}
+
+// ── Queues table ──
+.obs-table {
+  overflow: hidden;
+  margin-bottom: to-rem(12);
+}
+.obs-table__head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: to-rem(18) to-rem(20) to-rem(14);
+}
+.obs-table__title {
+  font-size: to-rem(18);
+  font-weight: 600;
+  color: var(--obs-text);
+  margin: 0;
+}
+.obs-table__link {
+  font-size: to-rem(13);
+  color: var(--obs-muted);
+  display: inline-flex;
+  align-items: center;
+  gap: to-rem(6);
+}
+.obs-table__link:hover {
+  color: var(--obs-text);
+  text-decoration: none;
+}
+.obs-table table {
+  width: 100%;
+  border-collapse: collapse;
+  background: transparent;
+  border: none;
+  border-radius: 0;
+}
+.obs-table thead th {
+  font-family: var(--font-mono);
+  font-size: to-rem(11);
+  font-weight: 500;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--obs-muted);
+  text-align: left;
+  padding: to-rem(10) to-rem(20);
+  border-bottom: to-rem(1) solid var(--obs-border);
+  background: transparent;
+}
+.obs-table tbody td {
+  padding: to-rem(16) to-rem(20);
+  border-bottom: to-rem(1) solid var(--obs-border);
+  color: var(--obs-text-2);
+  font-size: to-rem(14);
+  vertical-align: middle;
+}
+.obs-table tbody tr:last-child td {
+  border-bottom: none;
+}
+.obs-table tbody tr:hover td {
+  background: var(--obs-surface-2);
+}
+.obs-table th:last-child,
+.obs-table td:last-child {
+  text-align: right;
+}
+.obs-chip {
+  display: inline-block;
+  font-family: var(--font-mono);
+  font-size: to-rem(10.5);
+  font-weight: 500;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--obs-muted);
+  border: to-rem(1) solid var(--obs-border);
+  border-radius: 999px;
+  padding: to-rem(4) to-rem(11);
+  background: var(--obs-surface-2);
+}
+.obs-chip--active {
+  color: var(--obs-text-2);
+}
+.obs-chip--paused {
+  color: #d8b34a;
+  border-color: #4a3f1e;
+}
+
+// ── Footer CTA ──
+.obs-cta {
+  padding: to-rem(56) to-rem(24) to-rem(60);
+  text-align: center;
+  margin-bottom: to-rem(8);
+  background: radial-gradient(130% 120% at 50% 0%, #1b1b1f 0%, var(--obs-surface) 55%);
+}
+.obs-cta__icon {
+  width: to-rem(56);
+  height: to-rem(56);
+  border-radius: to-rem(12);
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  background: var(--obs-surface-2);
+  border: to-rem(1) solid var(--obs-border);
+  color: var(--obs-text);
+  font-size: to-rem(22);
+  margin-bottom: to-rem(22);
+}
+.obs-cta__title {
+  font-size: to-rem(26);
+  font-weight: 600;
+  letter-spacing: -0.01em;
+  margin: 0 0 to-rem(10);
+  color: var(--obs-text);
+}
+.obs-cta__text {
+  color: var(--obs-muted);
+  max-width: to-rem(540);
+  margin: 0 auto to-rem(26);
+  font-size: to-rem(15);
+  line-height: 1.6;
+}
+.obs-cta__actions {
+  display: flex;
+  gap: to-rem(12);
+  justify-content: center;
+  flex-wrap: wrap;
+}
+.obs-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: to-rem(8);
+  padding: to-rem(11) to-rem(18);
+  border-radius: var(--obs-radius-sm);
+  font-family: var(--font-mono);
+  font-size: to-rem(12);
+  font-weight: 500;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  border: to-rem(1) solid var(--obs-border);
+  transition:
+    border-color var(--dur-base) var(--ease-standard),
+    background var(--dur-base) var(--ease-standard),
+    filter var(--dur-base) var(--ease-standard);
+  cursor: pointer;
+}
+.obs-btn--primary {
+  background: #fafafa;
+  color: #09090b;
+  border-color: #fafafa;
+}
+.obs-btn--primary:hover {
+  filter: brightness(0.92);
+  text-decoration: none;
+}
+.obs-btn--ghost {
+  background: transparent;
+  color: var(--obs-text-2);
+}
+.obs-btn--ghost:hover {
+  border-color: var(--obs-muted);
+  background: var(--obs-surface-2);
+  text-decoration: none;
+}
+
+// ── Clickable tiles (dashboard shortcuts to tabs) ──
+.obs-card--link {
+  position: relative;
+  cursor: pointer;
+  color: inherit;
+  text-decoration: none;
+}
+.obs-card--link:hover {
+  text-decoration: none;
+  border-color: var(--obs-border-hover);
+  background: var(--obs-surface-2);
+}
+.obs-card--link:focus-visible {
+  outline: to-rem(2) solid var(--obs-muted);
+  outline-offset: to-rem(2);
+}
+.obs-card__go {
+  position: absolute;
+  right: to-rem(16);
+  bottom: to-rem(16);
+  font-size: to-rem(11);
+  color: var(--obs-muted);
+  opacity: 0;
+  transform: translateX(to-rem(-4));
+  transition:
+    opacity var(--dur-base) var(--ease-standard),
+    transform var(--dur-base) var(--ease-standard);
+}
+.obs-card--link:hover .obs-card__go {
+  opacity: 1;
+  transform: translateX(0);
+}
+
+// ── Horizontal scroll for wide tables on small screens ──
+.obs-tablescroll {
+  overflow-x: auto;
+}
+
+// ── Page header (for inner pages like Profiles) ──
+.obs-pagehead {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: to-rem(16);
+  margin-bottom: to-rem(18);
+}
+.obs-pagehead h1 {
+  font-size: to-rem(24);
+  font-weight: 600;
+  letter-spacing: -0.01em;
+  margin: 0;
+  color: var(--obs-text);
+}
+.obs-pagehead .obs-panel__sub {
+  margin-top: to-rem(4);
+}
+.obs-mono-cell {
+  font-family: var(--font-mono);
+  font-size: to-rem(12.5);
+  color: var(--obs-text-2);
+}
+.obs-empty {
+  padding: to-rem(48) to-rem(24);
+  text-align: center;
+  color: var(--obs-muted);
+}
+.obs-btn--sm {
+  padding: to-rem(7) to-rem(12);
+  font-size: to-rem(11);
+}
+
+// ── Metrics page: toolbar, segmented range control, 2-col grid ──
+.obs-toolbar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: to-rem(16);
+  margin-bottom: to-rem(18);
+  padding-bottom: to-rem(18);
+  border-bottom: to-rem(1) solid var(--obs-border);
+}
+.obs-toolbar__label {
+  font-family: var(--font-mono);
+  font-size: to-rem(12);
+  letter-spacing: 0.04em;
+  color: var(--obs-muted);
+  display: inline-flex;
+  align-items: center;
+  gap: to-rem(9);
+}
+.obs-seg {
+  display: inline-flex;
+  background: var(--obs-surface);
+  border: to-rem(1) solid var(--obs-border);
+  border-radius: var(--obs-radius-sm);
+  padding: to-rem(3);
+  gap: to-rem(2);
+}
+.obs-seg button {
+  font-family: var(--font-mono);
+  font-size: to-rem(12);
+  padding: to-rem(6) to-rem(16);
+  border: none;
+  background: transparent;
+  color: var(--obs-muted);
+  border-radius: to-rem(3);
+  cursor: pointer;
+  transition:
+    background var(--dur-fast) var(--ease-standard),
+    color var(--dur-fast) var(--ease-standard);
+}
+.obs-seg button:hover {
+  color: var(--obs-text-2);
+}
+.obs-seg button.is-active {
+  background: var(--obs-surface-2);
+  color: var(--obs-text);
+}
+.obs-grid2 {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: to-rem(12);
+  margin-bottom: to-rem(12);
+}
+@include respond-down('tablet') {
+  .obs-grid2 {
+    grid-template-columns: 1fr;
+  }
+}
+.obs-panel__menu {
+  background: none;
+  border: none;
+  color: var(--obs-muted);
+  cursor: pointer;
+  font-size: to-rem(16);
+  padding: to-rem(2) to-rem(8);
+  border-radius: to-rem(4);
+  line-height: 1;
+}
+.obs-panel__menu:hover {
+  color: var(--obs-text);
+  background: var(--obs-surface-2);
+}
+.obs-jobdot {
+  width: to-rem(8);
+  height: to-rem(8);
+  border-radius: 50%;
+  display: inline-block;
+  margin-inline-end: to-rem(10);
+  flex: none;
+  vertical-align: middle;
+}
+.obs-pct {
+  color: var(--obs-muted);
+  font-variant-numeric: tabular-nums;
+}
+
+// ── Mobile polish ──
+@include respond-down('sm') {
+  .obs-panel {
+    padding: to-rem(18) to-rem(16) to-rem(12);
+  }
+  .obs-panel__head {
+    flex-direction: column;
+    gap: to-rem(10);
+  }
+  .obs-legend {
+    gap: to-rem(14);
+  }
+  .obs-metric__value {
+    font-size: to-rem(34);
+  }
+  .obs-cta {
+    padding: to-rem(44) to-rem(18) to-rem(48);
+  }
+  .obs-table thead th,
+  .obs-table tbody td {
+    padding-left: to-rem(16);
+    padding-right: to-rem(16);
+  }
+}
+
+// Reduced-motion carve-out for `.obs-card` lives in `base/_motion.scss` — the
+// single authority for the whole SPA (see main.scss). Don't reintroduce it here.

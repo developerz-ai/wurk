@@ -1,0 +1,57 @@
+// ── Reusable style fragments ─────────────────────────────────────────────────
+// Behaviour composed by components. Each mixin owns exactly one concern so a
+// component reads as a list of intentions, not a wall of declarations.
+
+@use 'functions' as fn;
+
+// Responsive: everything is a max-width shell, so a single down-scoped helper
+// covers every query in the app. `@include respond-down('mobile') { … }`.
+@mixin respond-down($key) {
+  @media (max-width: fn.breakpoint($key)) {
+    @content;
+  }
+}
+
+// Opt content out of motion for users who requested reduced motion.
+@mixin reduced-motion {
+  @media (prefers-reduced-motion: reduce) {
+    @content;
+  }
+}
+
+@mixin flex-center {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+// Single-line ellipsis truncation.
+@mixin truncate {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+// The canonical flat surface: opaque fill, hairline edge, soft radius, no glow.
+@mixin surface($fill: var(--surface), $border: var(--border)) {
+  background: $fill;
+  border: 1px solid $border;
+  border-radius: var(--radius);
+}
+
+// Keyboard focus affordance. Inset by default so it reads inside table cells and
+// buttons without clipping.
+@mixin focus-ring($color: var(--accent), $offset: -2px) {
+  outline: 2px solid $color;
+  outline-offset: $offset;
+}
+
+// A shorthand for the common `transition: <props> <dur> <ease>` pattern using
+// the motion scale. `@include transition(color border-color, 'fast')`.
+@mixin transition($props, $speed: 'base', $ease: 'standard') {
+  $out: ();
+  @each $p in $props {
+    $out: append($out, #{$p} var(--dur-#{$speed}) var(--ease-#{$ease}), comma);
+  }
+  transition: $out;
+}

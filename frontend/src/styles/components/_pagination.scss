@@ -1,0 +1,57 @@
+// ── Pagination + in-modal jobs list ──────────────────────────────────────────
+// The pager under list tables, and the flex layout that keeps Prev/Next pinned
+// as a footer inside the queue-jobs modal instead of scrolling away.
+
+@use '../abstracts' as *;
+
+.pagination {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: to-rem(12);
+  padding: to-rem(12) 0;
+  color: var(--text-muted);
+  font-size: to-rem(13);
+}
+
+// In a modal the whole body used to scroll, burying the pager. Instead the jobs
+// list is a flex column filling the body: the table flexes and scrolls in the
+// middle while the pager stays a fixed footer — Prev/Next always reachable.
+.modal-body:has(.qjobs) {
+  display: flex;
+  flex-direction: column;
+}
+
+.qjobs {
+  display: flex;
+  flex-direction: column;
+  flex: 1;
+  min-height: 0;
+
+  .table-wrapper {
+    flex: 1;
+    min-height: 0;
+    max-height: none;
+  }
+
+  .pagination {
+    flex: 0 0 auto;
+    margin: to-rem(6.4) to-rem(-17.6) to-rem(-17.6);
+    padding: to-rem(10.4) to-rem(17.6);
+    border-top: to-rem(1) solid var(--border);
+    background: var(--surface);
+  }
+}
+
+.job-backtrace {
+  margin: 0;
+  font-size: to-rem(12);
+  line-height: 1.5;
+  background: var(--color-base-100);
+  border: to-rem(1) solid var(--border);
+  border-radius: var(--radius);
+  padding: to-rem(11.2) to-rem(13.6);
+  max-height: to-rem(320);
+  overflow: auto;
+  white-space: pre;
+}

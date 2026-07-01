@@ -1,0 +1,65 @@
+// ── Page header ──────────────────────────────────────────────────────────────
+// Per-tab icon + title + summary, with a subtle icon lift on hover. Fades up
+// once on mount (reduced-motion policy in `base/_motion.scss`).
+
+@use '../abstracts' as *;
+
+.page-header {
+  display: flex;
+  align-items: center;
+  gap: to-rem(15.2);
+  margin-bottom: to-rem(24);
+  animation: fade-up var(--dur-page) var(--ease-standard) both;
+
+  &:hover .page-header__icon {
+    transform: translateY(to-rem(-1));
+    border-color: color-mix(in oklch, var(--accent) 40%, var(--border-strong));
+  }
+
+  &__icon {
+    flex: none;
+    width: to-rem(44);
+    height: to-rem(44);
+    border-radius: var(--radius);
+    display: grid;
+    place-items: center;
+    background: var(--surface-strong);
+    border: to-rem(1) solid var(--border);
+    color: var(--accent);
+    font-size: to-rem(18);
+    @include transition((transform, border-color), 'base');
+  }
+
+  &__text {
+    min-width: 0;
+  }
+
+  &__title {
+    font-size: to-rem(24);
+    font-weight: 600;
+    letter-spacing: -0.01em;
+    line-height: 1.1;
+  }
+
+  &__summary {
+    margin-top: to-rem(3);
+    font-size: to-rem(13);
+    color: var(--text-muted);
+  }
+
+  &__aside {
+    margin-inline-start: auto;
+    align-self: center;
+  }
+}
+
+@include respond-down('sm') {
+  .page-header__summary {
+    font-size: to-rem(12);
+  }
+  .page-header__icon {
+    width: to-rem(38);
+    height: to-rem(38);
+    font-size: to-rem(16);
+  }
+}

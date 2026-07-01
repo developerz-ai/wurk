@@ -1,0 +1,28 @@
+// ── Chips ────────────────────────────────────────────────────────────────────
+// Mono, pill-shaped quick actions (e.g. sample search queries).
+
+@use '../abstracts' as *;
+
+.chip {
+  background: var(--surface-strong);
+  border: to-rem(1) solid var(--border-strong);
+  color: var(--text);
+  font-family: ui-monospace, monospace;
+  font-size: to-rem(12);
+  padding: to-rem(4.8) to-rem(11.2);
+  border-radius: 999px;
+  transition:
+    border-color var(--dur-base) var(--ease-standard),
+    background var(--dur-base) var(--ease-standard),
+    color var(--dur-base) var(--ease-standard),
+    transform var(--dur-press) var(--ease-standard);
+
+  &:hover {
+    border-color: var(--accent);
+    background: var(--surface-hover);
+  }
+
+  &:active {
+    transform: translateY(to-rem(1));
+  }
+}

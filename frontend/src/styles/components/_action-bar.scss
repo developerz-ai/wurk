@@ -1,0 +1,32 @@
+// ── Bulk action toolbar ──────────────────────────────────────────────────────
+// Sits above mutable job-set tables (retries / scheduled / dead).
+
+@use '../abstracts' as *;
+
+.action-bar {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: to-rem(9.6);
+  margin-bottom: to-rem(13.6);
+}
+
+.action-bar-group {
+  display: flex;
+  align-items: center;
+  gap: to-rem(6.4);
+  flex-wrap: wrap;
+}
+
+.action-bar-count {
+  font-size: to-rem(12);
+  color: var(--text-muted);
+  margin-inline-end: to-rem(4);
+}
+
+// Stop a row checkbox/action click from also opening the detail modal.
+.row-action {
+  width: 1%;
+  white-space: nowrap;
+}

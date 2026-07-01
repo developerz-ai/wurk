@@ -1,24 +1,31 @@
 import { BrowserRouter, Routes, Route } from 'react-router-dom';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
+import { Suspense, lazy } from 'react';
 import { useState } from 'react';
 import { useSSE } from './hooks/useSSE';
 import { useMeta } from './hooks/useMeta';
 import { t } from './i18n';
 import Nav from './components/Nav';
-import Dashboard from './pages/Dashboard';
-import Queues from './pages/Queues';
-import Retries from './pages/Retries';
-import Scheduled from './pages/Scheduled';
-import Dead from './pages/Dead';
-import Busy from './pages/Busy';
-import Batches from './pages/Batches';
-import BatchDetail from './pages/BatchDetail';
-import Limiters from './pages/Limiters';
-import Cron from './pages/Cron';
-import Metrics from './pages/Metrics';
-import Profiles from './pages/Profiles';
-import Search from './pages/Search';
-import Extension from './pages/Extension';
+import { PageSkeleton } from './components/Skeleton';
+import ErrorBoundary from './components/ErrorBoundary';
+
+// Each page is a lazy chunk: the initial load ships only the shell + landing
+// page, and every other tab streams in on navigation behind a Suspense skeleton
+// (see the <Suspense> boundary below). Keeps first paint small and fast.
+const Dashboard = lazy(() => import('./pages/Dashboard'));
+const Queues = lazy(() => import('./pages/Queues'));
+const Retries = lazy(() => import('./pages/Retries'));
+const Scheduled = lazy(() => import('./pages/Scheduled'));
+const Dead = lazy(() => import('./pages/Dead'));
+const Busy = lazy(() => import('./pages/Busy'));
+const Batches = lazy(() => import('./pages/Batches'));
+const BatchDetail = lazy(() => import('./pages/BatchDetail'));
+const Limiters = lazy(() => import('./pages/Limiters'));
+const Cron = lazy(() => import('./pages/Cron'));
+const Metrics = lazy(() => import('./pages/Metrics'));
+const Profiles = lazy(() => import('./pages/Profiles'));
+const Search = lazy(() => import('./pages/Search'));
+const Extension = lazy(() => import('./pages/Extension'));
 
 const qc = new QueryClient({
   defaultOptions: {
@@ -116,22 +123,26 @@ export default function App() {
             }}
           >
             <ReadOnlyBanner />
-            <Routes>
-              <Route path="/" element={<Dashboard sse={sse} />} />
-              <Route path="/queues" element={<Queues />} />
-              <Route path="/retries" element={<Retries />} />
-              <Route path="/scheduled" element={<Scheduled />} />
-              <Route path="/dead" element={<Dead />} />
-              <Route path="/busy" element={<Busy />} />
-              <Route path="/batches" element={<Batches />} />
-              <Route path="/batches/:bid" element={<BatchDetail />} />
-              <Route path="/limiters" element={<Limiters />} />
-              <Route path="/cron" element={<Cron />} />
-              <Route path="/metrics" element={<Metrics />} />
-              <Route path="/profiles" element={<Profiles />} />
-              <Route path="/search" element={<Search />} />
-              <Route path="/ext/:tab" element={<Extension />} />
-            </Routes>
+            <ErrorBoundary>
+              <Suspense fallback={<PageSkeleton />}>
+                <Routes>
+                <Route path="/" element={<Dashboard sse={sse} />} />
+                <Route path="/queues" element={<Queues />} />
+                <Route path="/retries" element={<Retries />} />
+                <Route path="/scheduled" element={<Scheduled />} />
+                <Route path="/dead" element={<Dead />} />
+                <Route path="/busy" element={<Busy />} />
+                <Route path="/batches" element={<Batches />} />
+                <Route path="/batches/:bid" element={<BatchDetail />} />
+                <Route path="/limiters" element={<Limiters />} />
+                <Route path="/cron" element={<Cron />} />
+                <Route path="/metrics" element={<Metrics />} />
+                <Route path="/profiles" element={<Profiles />} />
+                <Route path="/search" element={<Search />} />
+                <Route path="/ext/:tab" element={<Extension />} />
+              </Routes>
+              </Suspense>
+            </ErrorBoundary>
           </main>
 
           <Nav

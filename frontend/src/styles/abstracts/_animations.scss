@@ -1,0 +1,58 @@
+// ── Keyframes ────────────────────────────────────────────────────────────────
+// Every named animation in the app, in one place. Components reference these by
+// name; they never redeclare a @keyframes. Emitted once, globally.
+
+// Gentle entrance for page headers, tables, empty states.
+@keyframes fade-up {
+  from {
+    opacity: 0;
+    transform: translateY(8px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+// Indeterminate spinner.
+@keyframes spin {
+  to {
+    transform: rotate(360deg);
+  }
+}
+
+// Live "pulse" ring on the connection dot.
+@keyframes pulse {
+  0% {
+    box-shadow: 0 0 0 0 color-mix(in oklch, var(--success) 55%, transparent);
+  }
+  70% {
+    box-shadow: 0 0 0 5px color-mix(in oklch, var(--success) 0%, transparent);
+  }
+  100% {
+    box-shadow: 0 0 0 0 color-mix(in oklch, var(--success) 0%, transparent);
+  }
+}
+
+// Skeleton shimmer: a highlight band sweeping across a masked placeholder while
+// data loads. Paired with `--skeleton-*` tokens in the skeleton component.
+@keyframes shimmer {
+  from {
+    background-position: -150% 0;
+  }
+  to {
+    background-position: 250% 0;
+  }
+}
+
+// Fallback breathing pulse for skeletons where a sweeping gradient is overkill
+// (small chips, single cells) and for reduced-motion-tolerant subtle life.
+@keyframes skeleton-pulse {
+  0%,
+  100% {
+    opacity: 1;
+  }
+  50% {
+    opacity: 0.55;
+  }
+}

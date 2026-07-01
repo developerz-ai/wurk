@@ -10,6 +10,7 @@ import {
   ResponsiveContainer,
 } from 'recharts';
 import { AnimatedNumber } from '../components/AnimatedNumber';
+import { Skeleton, SkeletonCards, SkeletonTable } from '../components/Skeleton';
 import { t } from '../i18n';
 import type { StatsSnapshot } from '../hooks/useSSE';
 import { formatDuration } from '../utils';
@@ -127,9 +128,9 @@ export default function Dashboard({ sse }: DashboardProps) {
 
   if (isLoading && !stats) {
     return (
-      <div className="empty-state">
-        <span className="spinner" />
-        <p style={{ marginTop: '1rem' }}>{t('common.loading')}</p>
+      <div className="obs">
+        <SkeletonCards count={4} />
+        <SkeletonTable rows={6} cols={4} />
       </div>
     );
   }
@@ -228,9 +229,7 @@ export default function Dashboard({ sse }: DashboardProps) {
         </div>
         <div className="obs-chartbox">
           {historyPending ? (
-            <div style={{ height: 320, display: 'grid', placeItems: 'center' }}>
-              <span className="spinner" role="status" aria-label={t('common.loading')} />
-            </div>
+            <Skeleton height={320} />
           ) : hasHistory ? (
             <ResponsiveContainer width="100%" height={320}>
               <AreaChart data={series} margin={{ top: 8, right: 8, left: 0, bottom: 0 }}>

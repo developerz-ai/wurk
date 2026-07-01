@@ -4,6 +4,13 @@ All notable changes to Wurk are recorded here. Format: [Keep a Changelog](https:
 
 ## [Unreleased]
 
+### Changed
+- **Dashboard — SCSS architecture (SOLID/SRP) + bun** — the single 1,200-line `styles.css` is refactored into a modular SCSS system under `frontend/src/styles/` (`abstracts/` maps·functions·mixins·CSS-var tokens·keyframes → `base/` → `components/` → `layout/` → `pages/`, composed by `main.scss`), one responsibility per partial. Tailwind + daisyUI directives move to a sibling `tailwind.css`; the SCSS `:root` tokens (unlayered) still override daisyUI's theme, so the rendered look is unchanged. All lengths are `to-rem()` (accessibility: sizes scale with the user's browser font-size), and every transition runs off a shared duration/easing scale (`--dur-*` / `--ease-*`) for consistent, smooth motion. The frontend toolchain moves from npm to **bun** (`bun install` + `bun run build`) across the Rakefile, CI workflows, and the demo Dockerfile; consumers still run neither Node nor bun. (#TBD)
+
+### Added
+- **Dashboard — skeleton loaders + route-level Suspense** — every page is now a lazy-loaded code-split chunk behind a single `<Suspense>` boundary, shrinking the initial bundle and streaming each tab in on navigation. Spinner loading states are replaced with content-shaped **skeleton** placeholders (`components/Skeleton.tsx` — `SkeletonTable`/`SkeletonCards`/`Skeleton`) that mirror the incoming layout, so data arrival no longer shifts the page. Skeletons shimmer via CSS and freeze to a static tint under `prefers-reduced-motion`. (#TBD)
+- **Dashboard — SEO, social + icons** — the SPA shell gains a meta description, `theme-color`/`color-scheme`, Open Graph + Twitter card tags with a 1200×630 share image, and a full favicon/apple-touch-icon set. The source logo is re-optimized (~41% smaller WebP). (#TBD)
+
 ## [1.0.5] - 2026-06-25
 
 ### Fixed

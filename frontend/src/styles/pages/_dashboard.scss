@@ -1,0 +1,114 @@
+// ── Dashboard hero (mascot banner) ───────────────────────────────────────────
+// Centred brand banner with a soft success-tinted radial glow rising from the
+// base. Fluid title so it scales smoothly from phone to desktop.
+
+@use '../abstracts' as *;
+
+.dash-hero {
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  text-align: center;
+  gap: to-rem(8);
+  padding: to-rem(25.6) to-rem(24) to-rem(27.2);
+  margin-bottom: to-rem(24);
+  background:
+    radial-gradient(
+      70% 120% at 50% 100%,
+      color-mix(in oklch, var(--success) 13%, transparent),
+      transparent 60%
+    ),
+    linear-gradient(180deg, var(--surface-hover), var(--surface));
+  border: to-rem(1) solid var(--border);
+  border-radius: var(--radius);
+  box-shadow: var(--shadow);
+  overflow: hidden;
+  animation: fade-up var(--dur-page) var(--ease-standard) both;
+
+  &__body {
+    min-width: 0;
+    max-width: to-rem(640);
+  }
+
+  // Three hierarchy levels: title (largest/brightest) → strapline → tagline.
+  // Fluid title collapses the old desktop/mobile step into one smooth curve.
+  &__title {
+    font-size: clamp(#{to-rem(32)}, 4vw + #{to-rem(18)}, #{to-rem(42)});
+    font-weight: 800;
+    letter-spacing: -0.03em;
+    line-height: 1.05;
+    color: var(--text);
+  }
+
+  &__strapline {
+    margin-top: to-rem(8.8);
+    font-size: to-rem(18);
+    font-weight: 600;
+    color: var(--text);
+  }
+
+  &__tagline {
+    margin-top: to-rem(8.8);
+    font-size: to-rem(15);
+    line-height: 1.5;
+    color: var(--text-muted);
+  }
+
+  // Live/updated status floats top-right so the brand column stays centred.
+  &__status {
+    position: absolute;
+    top: to-rem(14.4);
+    inset-inline-end: to-rem(17.6);
+    display: flex;
+    align-items: center;
+    gap: to-rem(9.6);
+  }
+
+  &__live {
+    display: flex;
+    align-items: center;
+    gap: to-rem(6.4);
+    font-size: to-rem(12);
+    color: var(--success);
+  }
+
+  // Hero quick-link buttons (install / docs).
+  &__actions {
+    display: flex;
+    flex-wrap: wrap;
+    justify-content: center;
+    gap: to-rem(9.6);
+    margin-top: to-rem(16.8);
+
+    .btn {
+      display: inline-flex;
+      align-items: center;
+      gap: to-rem(7.2);
+
+      &:hover {
+        text-decoration: none;
+      }
+    }
+  }
+}
+
+@include respond-down('sm') {
+  .dash-hero {
+    padding: to-rem(20) to-rem(16) to-rem(22.4);
+
+    &__strapline {
+      font-size: to-rem(16);
+    }
+    &__tagline {
+      font-size: to-rem(14);
+    }
+    // The absolute status crowds the centred title on narrow screens — drop it
+    // back into the flow, centred under the brand.
+    &__status {
+      position: static;
+      margin-top: to-rem(6.4);
+      justify-content: center;
+    }
+  }
+}

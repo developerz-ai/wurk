@@ -6,6 +6,7 @@ import Modal from '../components/Modal';
 import { ArgsValue } from '../components/ArgsValue';
 import { relativeTime, isoTime, formatKb, formatDuration, formatArgs, truncate } from '../utils';
 import { useMeta } from '../hooks/useMeta';
+import { SkeletonCards } from '../components/Skeleton';
 
 interface Process {
   identity: string;
@@ -241,7 +242,13 @@ export default function Busy() {
   const confirmStop = (scope: string) =>
     window.confirm(t('actions.confirm', { action: t('actions.stop'), scope }));
 
-  if (isLoading) return <div className="empty-state"><span className="spinner" /></div>;
+  if (isLoading)
+    return (
+      <div>
+        <PageHeader icon="fa-gears" title={t('nav.busy')} summary={t('summaries.busy')} />
+        <SkeletonCards count={6} />
+      </div>
+    );
   if (isError || !data) return <div className="empty-state" style={{ color: 'var(--danger)' }}>{t('common.error')}</div>;
 
   const controllable = data.some((p) => !p.embedded);

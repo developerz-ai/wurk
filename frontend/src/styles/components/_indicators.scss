@@ -1,0 +1,38 @@
+// ── Live indicators ──────────────────────────────────────────────────────────
+// Progress bar, connection dot, and the indeterminate spinner. Keyframes live
+// in `abstracts/_animations.scss`; these only wire elements to them.
+
+@use '../abstracts' as *;
+
+.progress-bar-track {
+  background: var(--surface-strong);
+  border: to-rem(1) solid var(--border);
+  border-radius: 999px;
+  height: to-rem(7);
+  overflow: hidden;
+}
+
+.progress-bar-fill {
+  height: 100%;
+  border-radius: 999px;
+  transition: width var(--dur-page) var(--ease-standard);
+}
+
+.live-dot {
+  width: to-rem(8);
+  height: to-rem(8);
+  border-radius: 50%;
+  background: var(--success);
+  display: inline-block;
+  animation: pulse 2s infinite;
+}
+
+.spinner {
+  display: inline-block;
+  width: to-rem(22);
+  height: to-rem(22);
+  border: to-rem(2) solid var(--border-strong);
+  border-top-color: var(--accent);
+  border-radius: 50%;
+  animation: spin 0.7s var(--ease-linear) infinite;
+}

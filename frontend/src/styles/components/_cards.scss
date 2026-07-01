@@ -1,0 +1,38 @@
+// ── Surfaces ─────────────────────────────────────────────────────────────────
+// Cards and the scrolling table wrapper. Elevation is border + tone, never blur.
+
+@use '../abstracts' as *;
+
+.card {
+  position: relative;
+  @include surface;
+  padding: to-rem(17.6) to-rem(19.2);
+  box-shadow: var(--shadow);
+}
+
+.table-wrapper {
+  // Scrolls both axes: horizontally on narrow/mobile, vertically once a long
+  // list outgrows the viewport — the sticky header stays pinned either way.
+  overflow: auto;
+  max-height: calc(100vh - #{to-rem(208)});
+  -webkit-overflow-scrolling: touch;
+  overscroll-behavior: contain;
+  @include surface;
+  box-shadow: var(--shadow);
+  // Gentle entrance, same fade-up as the page header (slightly delayed so the
+  // header leads and the table follows). Runs once on mount, not on refetch.
+  animation: fade-up var(--dur-page) var(--ease-standard) both;
+  animation-delay: 50ms;
+}
+
+// Interactive stat cards: a subtle border + lift on hover, no glow.
+.card--stat {
+  overflow: hidden;
+  @include transition((transform, border-color, background), 'base');
+
+  &:hover {
+    transform: translateY(to-rem(-1));
+    border-color: var(--border-strong);
+    background: var(--surface-hover);
+  }
+}

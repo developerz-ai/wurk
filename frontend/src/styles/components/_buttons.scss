@@ -1,0 +1,63 @@
+// ── Buttons ──────────────────────────────────────────────────────────────────
+// Variants over the shared control base in `_forms.scss`. Uppercase mono labels,
+// a fast press nudge, and status-tinted danger/accent treatments.
+
+@use '../abstracts' as *;
+
+.btn {
+  padding: to-rem(8) to-rem(14.4);
+  font-family: var(--font-mono);
+  font-size: to-rem(11.5);
+  font-weight: 500;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  border-radius: var(--radius-sm);
+
+  &:hover {
+    border-color: var(--border-strong);
+    background: var(--surface-hover);
+    color: var(--text);
+  }
+
+  &:active {
+    transform: translateY(to-rem(1));
+  }
+
+  &:disabled {
+    opacity: 0.45;
+    cursor: not-allowed;
+  }
+}
+
+.btn-accent {
+  background: var(--accent);
+  border-color: var(--accent);
+  color: var(--color-primary-content);
+
+  &:hover {
+    background: var(--accent-hover);
+    border-color: var(--accent-hover);
+    color: var(--color-primary-content);
+  }
+}
+
+.btn-danger {
+  color: var(--danger);
+  border-color: color-mix(in oklch, var(--danger) 45%, var(--border-strong));
+
+  &:hover {
+    background: var(--danger);
+    color: var(--color-error-content);
+    border-color: var(--danger);
+  }
+}
+
+.btn-sm {
+  padding: to-rem(4.8) to-rem(11.2);
+  font-size: to-rem(12);
+}
+
+.btn-ghost {
+  background: transparent;
+  border-color: var(--border);
+}

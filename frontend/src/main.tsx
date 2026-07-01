@@ -7,7 +7,10 @@ import '@fontsource/geist-sans/500.css';
 import '@fontsource/geist-sans/600.css';
 import '@fontsource/geist-sans/700.css';
 import '@fontsource/jetbrains-mono/500.css';
-import './styles.css';
+// Tailwind/daisyUI directives first, then the hand-authored SCSS system whose
+// unlayered `:root` tokens override daisyUI's theme (see styles/main.scss).
+import './tailwind.css';
+import './styles/main.scss';
 import App from './App';
 import { dir, locale, t } from './i18n';
 

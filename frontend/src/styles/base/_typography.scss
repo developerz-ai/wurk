@@ -1,0 +1,33 @@
+// ── Typographic + text utilities ─────────────────────────────────────────────
+// Headings, section chrome, and the shared truncation / empty-state helpers.
+
+@use '../abstracts' as *;
+
+.truncate {
+  @include truncate;
+}
+
+.section-header {
+  display: flex;
+  align-items: center;
+  gap: to-rem(12);
+  margin-bottom: to-rem(16);
+}
+
+.section-title {
+  font-size: to-rem(16);
+  font-weight: 600;
+}
+
+.page-title {
+  font-size: to-rem(24);
+  font-weight: 800;
+  letter-spacing: -0.02em;
+  margin-bottom: to-rem(24);
+}
+
+.empty-state {
+  text-align: center;
+  padding: to-rem(48);
+  color: var(--text-muted);
+}
