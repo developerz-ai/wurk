@@ -1,0 +1,87 @@
+#!/usr/bin/env bash
+# Run the Wurk dashboard locally with hot-reload.
+#
+# One command boots the whole dev loop:
+#   • Redis          — reuses one already on :6379, else starts a throwaway
+#                      Docker container (removed on exit).
+#   • Vite dev server — SolidJS HMR for the dashboard SPA (frontend/, bun).
+#   • test/dummy      — the Rails host app that mounts the engine at /wurk,
+#                      run with WURK_VITE_DEV=1 so its shell pulls modules +
+#                      the HMR client straight from Vite.
+#
+# Edit anything under frontend/src and the browser updates instantly — no
+# rebuild, no gem repackage. Open http://localhost:3000/wurk.
+#
+# Env knobs:
+#   PORT        Rails port           (default 3000)
+#   VITE_PORT   Vite dev port        (default 5173; wired into vite.config.ts)
+#   NO_VITE=1   skip Vite/HMR and serve the prebuilt bundle instead
+#               (run `bin/rake frontend:build` first)
+set -euo pipefail
+
+cd "$(dirname "$0")/.."
+ROOT="$PWD"
+PORT="${PORT:-3000}"
+# Exported so the Vite subprocess (vite.config.ts) reads the same port bin/dev
+# logs — otherwise the log line and the real server could disagree.
+export VITE_PORT="${VITE_PORT:-5173}"
+
+pids=()
+redis_cid=""
+cleanup() {
+  trap - INT TERM EXIT
+  for pid in "${pids[@]}"; do kill "$pid" 2>/dev/null || true; done
+  [ -n "$redis_cid" ] && docker rm -f "$redis_cid" >/dev/null 2>&1 || true
+}
+trap cleanup INT TERM EXIT
+
+redis_up() { (exec 3<>/dev/tcp/127.0.0.1/6379) 2>/dev/null; }
+
+echo "==> Redis"
+if redis_up; then
+  echo "    reusing Redis already on :6379"
+elif command -v docker >/dev/null 2>&1; then
+  redis_cid="$(docker run -d --rm -p 6379:6379 redis:7-alpine)"
+  echo "    started Docker Redis ($redis_cid)"
+  ready=0
+  for _ in $(seq 1 30); do redis_up && { ready=1; break; }; sleep 0.5; done
+  if [ "$ready" != "1" ]; then
+    echo "    ERROR: Redis container didn't become ready in time." >&2
+    exit 1
+  fi
+else
+  echo "    ERROR: no Redis on :6379 and Docker is unavailable." >&2
+  echo "    Start a Redis (e.g. \`docker run -p 6379:6379 redis:7\`) and retry." >&2
+  exit 1
+fi
+
+echo "==> frontend deps (bun)"
+(cd frontend && bun install >/dev/null)
+
+echo "==> dummy app (gems → project-local path, then db:prepare)"
+(
+  cd test/dummy
+  bundle config set --local path vendor/bundle
+  bundle check >/dev/null 2>&1 || bundle install
+  bin/rails db:prepare >/dev/null
+)
+
+vite_dev=0
+if [ "${NO_VITE:-0}" != "1" ]; then
+  echo "==> Vite dev server (SolidJS HMR) on :$VITE_PORT"
+  (cd frontend && bun run dev) &
+  pids+=("$!")
+  vite_dev=1
+else
+  echo "==> NO_VITE=1 — serving the prebuilt bundle (run bin/rake frontend:build if stale)"
+fi
+
+echo
+echo "==> Rails on http://localhost:$PORT/wurk  (Ctrl-C to stop everything)"
+echo
+cd test/dummy
+if [ "$vite_dev" = "1" ]; then export WURK_VITE_DEV=1; fi
+# Not `exec`: the shell must stay alive so the EXIT trap runs cleanup() on
+# Ctrl-C — exec would replace this process and leak the Vite job + Redis
+# container.
+bin/rails server -p "$PORT"

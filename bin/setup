@@ -3,19 +3,32 @@ set -euo pipefail
 
 cd "$(dirname "$0")/.."
 
-echo "==> bundle install"
+echo "==> bundle install (gem)"
 bundle check >/dev/null 2>&1 || bundle install
 
 if [ -d frontend ]; then
-  echo "==> frontend deps"
-  (cd frontend && npm ci)
+  # bun is only needed to touch the dashboard frontend (CONTRIBUTING.md); the
+  # precompiled bundle ships in vendor/assets/. Skip gracefully rather than
+  # hard-fail under `set -e` for contributors without bun.
+  if command -v bun >/dev/null 2>&1; then
+    echo "==> frontend deps (bun)"
+    (cd frontend && bun install)
+  else
+    echo "==> skipping frontend deps (bun not installed; only needed if you touch frontend/)"
+  fi
 fi
 
 echo "==> dummy app setup"
 (
   cd test/dummy
+  # Install the dummy app's gems into a project-local path (test/dummy/.bundle
+  # points bundler at vendor/bundle). A read-only or permission-locked global
+  # gem home would otherwise fail the install with Bundler::PermissionError;
+  # a local path keeps `bin/setup` working on any machine. Both dirs are
+  # gitignored.
+  bundle config set --local path vendor/bundle
   bundle check >/dev/null 2>&1 || bundle install
   bin/rails db:prepare
 )
 
-echo "==> ready. try: bin/rake test"
+echo "==> ready. try: bin/rake test   (or bin/dev for the live dashboard)"

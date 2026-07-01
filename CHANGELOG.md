@@ -4,6 +4,10 @@ All notable changes to Wurk are recorded here. Format: [Keep a Changelog](https:
 
 ## [Unreleased]
 
+### Changed
+- **Dev — one-command local dashboard loop** — `bin/dev` boots Redis (reused or a throwaway Docker container), the Vite dev server (SolidJS HMR), and the `test/dummy` Rails host wired with `WURK_VITE_DEV=1`, so editing `frontend/src` hot-reloads the dashboard at `/wurk` with no rebuild. `bin/setup` now uses **bun** (not the removed `npm ci`) and installs the dummy app's gems into a project-local path so a permission-locked global gem home no longer fails setup with `Bundler::PermissionError`. Contributor docs updated. (#286)
+- **CI — prune old demo images from GHCR** — `deploy-demo` now deletes stale `wurk-demo` container versions after each push (keeps the newest 5 for rollback; non-blocking), so the registry doesn't grow unbounded across demo deploys. `.playwright-mcp/` and the dummy's local bundle path are gitignored. (#286)
+
 ## [1.1.0] - 2026-07-01
 
 ### Added

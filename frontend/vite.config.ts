@@ -6,6 +6,11 @@ import { resolve } from "path";
 
 // Built artifacts land in ../vendor/assets/dashboard at gem release time.
 // See docs/idea/09-precompiled-assets.md.
+//
+// Dev-server port comes from VITE_PORT (exported by bin/dev) so the logged port
+// and the real server never disagree; defaults to 5173.
+const devPort = Number(process.env.VITE_PORT) || 5173;
+
 export default defineConfig({
   plugins: [
     solid(),
@@ -42,15 +47,15 @@ export default defineConfig({
     emptyOutDir: true,
   },
   server: {
-    port: 5173,
+    port: devPort,
     strictPort: true,
     // HMR dev: the Rails dummy serves the page at :3000/wurk and fetches the
     // shell from this server (WURK_VITE_DEV=1). `origin` makes Vite emit
-    // absolute asset/HMR URLs (http://localhost:5173/wurk-assets/…) so the
+    // absolute asset/HMR URLs (http://localhost:<devPort>/wurk-assets/…) so the
     // browser loads modules + the HMR client straight from Vite instead of
     // hitting :3000/wurk-assets (which the engine only serves from the built
     // bundle). `cors` lets that cross-origin fetch through. See issue #181.
-    origin: "http://localhost:5173",
+    origin: `http://localhost:${devPort}`,
     cors: true,
   },
 });
