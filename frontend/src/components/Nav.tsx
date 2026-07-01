@@ -250,7 +250,7 @@ export default function Nav({ open, onClose, collapsed, onToggleCollapse }: NavP
       </nav>
 
       <style>{`
-        .wurk-nav { width: var(--nav-width); transition: width var(--dur-slow) var(--ease-standard); }
+        .wurk-nav { width: var(--nav-width); transition: width var(--dur-page) var(--ease-emphasized); }
         .wurk-navlink:hover {
           background: var(--surface-hover) !important;
           color: var(--accent) !important;
