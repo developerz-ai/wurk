@@ -8,12 +8,36 @@ layers, and the conventions a change has to follow to merge.
 ```sh
 git clone https://github.com/developerz-ai/wurk
 cd wurk
-bundle install
+bin/setup          # gem + frontend (bun) deps + dummy app db:prepare
 ```
 
 You'll need a local **Redis ≥ 7.0** running (tests use real Redis, never a mock).
-Node is only needed if you touch the dashboard frontend (`frontend/`); the
-precompiled bundle is committed under `vendor/assets/`.
+[**bun**](https://bun.sh) is only needed if you touch the dashboard frontend
+(`frontend/`, a SolidJS SPA); the precompiled bundle is committed under
+`vendor/assets/`, so consumers run neither Node nor bun.
+
+`bin/setup` installs the dummy app's gems into a **project-local** path
+(`test/dummy/vendor/bundle`) so a read-only or permission-locked global gem home
+never blocks setup with `Bundler::PermissionError`.
+
+## Dashboard development (live reload)
+
+```sh
+bin/dev            # Redis + Vite (SolidJS HMR) + the dummy Rails host
+```
+
+Open <http://localhost:3000/wurk>. `bin/dev` reuses a Redis already on `:6379`
+or starts a throwaway Docker one, runs the Vite dev server, and boots
+`test/dummy` with `WURK_VITE_DEV=1` so the dashboard shell pulls modules and the
+HMR client straight from Vite. Edit anything under `frontend/src` and the browser
+updates instantly — no rebuild, no gem repackage.
+
+- `NO_VITE=1 bin/dev` serves the prebuilt bundle instead (run
+  `bin/rake frontend:build` first) — useful to sanity-check the shipped artifact.
+- `PORT` / `VITE_PORT` override the defaults (3000 / 5173).
+
+Frontend unit + integration tests (Vitest, SolidJS Testing Library) run with
+`bun run test` in `frontend/`.
 
 ## Running the tests
 

@@ -92,3 +92,20 @@ jobs:
             ${{ env.IMAGE }}:latest
           cache-from: type=gha
           cache-to: type=gha,mode=max
+
+      # Prune old wurk-demo images so GHCR storage doesn't grow unbounded — each
+      # deploy pushes a fresh digest (tagged :sha + :latest) and every prior
+      # build keeps its :sha tag forever otherwise. Keep the newest few (current
+      # + a rollback window; the Image Updater serves the demo by digest, and the
+      # newest version is the one :latest points at, so it is always retained).
+      # Non-blocking: a cleanup hiccup (e.g. GITHUB_TOKEN lacking package-delete
+      # on the org package — then provision a PAT) must never fail a deploy.
+      - name: prune old GHCR images
+        continue-on-error: true
+        uses: actions/delete-package-versions@e5bc658cc4c965c472efe991f8beea3981499c55 # v5
+        with:
+          owner: developerz-ai
+          package-name: wurk-demo
+          package-type: container
+          min-versions-to-keep: 5
+          token: ${{ secrets.GITHUB_TOKEN }}
