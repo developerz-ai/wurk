@@ -137,7 +137,8 @@ export default function Nav({ open, onClose, collapsed, onToggleCollapse }: NavP
                   fontWeight: isActive ? 600 : 400,
                   fontSize: 14,
                   textDecoration: 'none',
-                  transition: 'background 0.15s, color 0.15s, box-shadow 0.15s',
+                  transition:
+                    'background var(--dur-base) var(--ease-standard), color var(--dur-base) var(--ease-standard), box-shadow var(--dur-base) var(--ease-standard)',
                 })}
               >
                 <i className={`fa-solid ${icon} wurk-navlink__icon`} aria-hidden="true" />
@@ -178,7 +179,8 @@ export default function Nav({ open, onClose, collapsed, onToggleCollapse }: NavP
                   fontWeight: isActive ? 600 : 400,
                   fontSize: 14,
                   textDecoration: 'none',
-                  transition: 'background 0.15s, color 0.15s, box-shadow 0.15s',
+                  transition:
+                    'background var(--dur-base) var(--ease-standard), color var(--dur-base) var(--ease-standard), box-shadow var(--dur-base) var(--ease-standard)',
                 })}
               >
                 <i className="fa-solid fa-puzzle-piece wurk-navlink__icon" aria-hidden="true" />
@@ -239,7 +241,7 @@ export default function Nav({ open, onClose, collapsed, onToggleCollapse }: NavP
             color: 'var(--text-muted)',
             fontSize: 13,
             textDecoration: 'none',
-            transition: 'background 0.15s, color 0.15s',
+            transition: 'background var(--dur-base) var(--ease-standard), color var(--dur-base) var(--ease-standard)',
           }}
         >
           <i className="fa-brands fa-github" style={{ fontSize: 16, width: 20, textAlign: 'center', flex: 'none' }} />
@@ -248,7 +250,7 @@ export default function Nav({ open, onClose, collapsed, onToggleCollapse }: NavP
       </nav>
 
       <style>{`
-        .wurk-nav { width: var(--nav-width); transition: width 0.2s ease; }
+        .wurk-nav { width: var(--nav-width); transition: width var(--dur-slow) var(--ease-standard); }
         .wurk-navlink:hover {
           background: var(--surface-hover) !important;
           color: var(--accent) !important;
@@ -258,17 +260,17 @@ export default function Nav({ open, onClose, collapsed, onToggleCollapse }: NavP
            colour on hover, no filled pill/active box. */
         .nav-collapse-toggle:hover { color: var(--text) !important; }
         .nav-label { white-space: nowrap; }
-        .wurk-navlink__icon { width: 24px; font-size: 18px; text-align: center; flex: none; transition: background 0.15s ease, color 0.15s ease, transform 0.18s ease; }
+        .wurk-navlink__icon { width: 24px; font-size: 18px; text-align: center; flex: none; transition: background var(--dur-base) var(--ease-standard), color var(--dur-base) var(--ease-standard), transform var(--dur-base) var(--ease-standard); }
         /* Subtle lift on hover so the nav feels reactive. */
         .wurk-navlink:hover .wurk-navlink__icon { transform: scale(1.12); }
         @media (prefers-reduced-motion: reduce) {
-          .wurk-navlink__icon { transition: background 0.15s ease, color 0.15s ease; }
+          .wurk-navlink__icon { transition: background var(--dur-base) var(--ease-standard), color var(--dur-base) var(--ease-standard); }
           .wurk-navlink:hover .wurk-navlink__icon { transform: none; }
         }
         @media (max-width: 767px) {
           .wurk-nav {
             transform: translateX(-100%);
-            transition: transform 0.25s ease;
+            transition: transform var(--dur-slow) var(--ease-standard);
           }
           .wurk-nav--open {
             transform: translateX(0);

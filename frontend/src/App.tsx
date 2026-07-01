@@ -116,10 +116,12 @@ export default function App() {
               // Reserve the rail or full nav width depending on the pinned state;
               // the mobile media query overrides this to 0 (drawer overlay).
               marginInlineStart: collapsed ? 'var(--nav-rail)' : 'var(--nav-width)',
-              // Match the nav rail: drop the slide for users who asked for
-              // less motion, so toggling collapse doesn't shove the content
-              // sideways for them.
-              transition: prefersReducedMotion() ? 'none' : 'margin 0.2s ease',
+              // Match the nav rail exactly (same --dur-slow / --ease-standard)
+              // so the content glides in lockstep with the width change; drop it
+              // for users who asked for less motion.
+              transition: prefersReducedMotion()
+                ? 'none'
+                : 'margin var(--dur-slow) var(--ease-standard)',
             }}
           >
             <ReadOnlyBanner />
