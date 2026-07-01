@@ -6,6 +6,9 @@ All notable changes to Wurk are recorded here. Format: [Keep a Changelog](https:
 
 ## [1.1.0] - 2026-07-01
 
+### Added
+- **Dashboard — gem version in the nav** — the running Wurk version now renders as a small monospace chip next to the "Wurk" wordmark in the sidebar (above the System Status line), sourced from a new `version` field on `/wurk/api/meta`. The field is optional, so a dashboard talking to an older server just hides the chip. (#285)
+
 ### Changed
 - **Dashboard — full rewrite from React to SolidJS** — the entire dashboard SPA was migrated off React 19 onto **SolidJS 1.9** with `@solidjs/router`, `@tanstack/solid-query`, and a hand-rolled dependency-free SVG chart module replacing Recharts. Solid's fine-grained reactivity compiles the JSX to direct DOM updates (no virtual DOM / re-render), so the shipped bundle is dramatically smaller and faster: the initial entry chunk drops from ~305 kB to **~35 kB (12.6 kB gzip)**, every page stays a lazy-loaded code-split chunk behind the route-level `<Suspense>` skeleton, and the charts split into their own ~13 kB chunk loaded only on the Dashboard/Metrics tabs. This is an **internal rewrite only** — the dashboard is visually and behaviorally identical (same routes, SSE live updates, i18n, RTL, dark-only Obsidian design system, read-only mode, extension tabs, skeleton loaders), the Redis/JSON/SSE wire contracts are untouched, and the precompiled bundle still ships in the gem (contributors need bun; consumers run neither Node nor bun). Recharts is replaced by a small internal `components/charts/` module (responsive SVG area/line/bar charts with gradient fills, monospace axes, hover crosshair + tooltip) so no charting dependency ships at all. The Vitest suite is rebuilt on `@solidjs/testing-library` with expanded unit (utils, i18n, hooks, charts) and integration (routing, read-only banner, bulk-action flows, page rendering) coverage, running fast in parallel across a worker-thread pool. (#285)
 
