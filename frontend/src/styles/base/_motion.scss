@@ -6,13 +6,18 @@
 @use '../abstracts' as *;
 
 @include reduced-motion {
+  // Decorative entrances + the live-dot's continuous pulse are stilled; the
+  // elements stay fully visible, just without the motion.
   .page-header,
   .dash-hero,
-  .table-wrapper {
+  .table-wrapper,
+  .search-empty,
+  .live-dot {
     animation: none;
   }
 
-  .card--stat {
+  .card--stat,
+  .obs-card {
     transition: none;
   }
 
@@ -30,4 +35,8 @@
   .skeleton::after {
     animation: none;
   }
+
+  // Note: `.spinner` is deliberately NOT stilled — it's the sole feedback that
+  // work is in flight (an unmoving spinner reads as a broken glyph), and
+  // reduced-motion permits motion that conveys essential state.
 }

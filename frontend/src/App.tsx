@@ -7,6 +7,7 @@ import { useMeta } from './hooks/useMeta';
 import { t } from './i18n';
 import Nav from './components/Nav';
 import { PageSkeleton } from './components/Skeleton';
+import ErrorBoundary from './components/ErrorBoundary';
 
 // Each page is a lazy chunk: the initial load ships only the shell + landing
 // page, and every other tab streams in on navigation behind a Suspense skeleton
@@ -122,8 +123,9 @@ export default function App() {
             }}
           >
             <ReadOnlyBanner />
-            <Suspense fallback={<PageSkeleton />}>
-              <Routes>
+            <ErrorBoundary>
+              <Suspense fallback={<PageSkeleton />}>
+                <Routes>
                 <Route path="/" element={<Dashboard sse={sse} />} />
                 <Route path="/queues" element={<Queues />} />
                 <Route path="/retries" element={<Retries />} />
@@ -139,7 +141,8 @@ export default function App() {
                 <Route path="/search" element={<Search />} />
                 <Route path="/ext/:tab" element={<Extension />} />
               </Routes>
-            </Suspense>
+              </Suspense>
+            </ErrorBoundary>
           </main>
 
           <Nav

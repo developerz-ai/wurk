@@ -167,6 +167,9 @@
     "of": "of",
     "ms": "ms",
     "ago": "ago",
-    "in": "in"
+    "in": "in",
+    "load_failed": "Couldn't load this page",
+    "load_failed_hint": "The app may have updated since you opened it. Reloading will fetch the latest version.",
+    "reload": "Reload"
   }
 }

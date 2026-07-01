@@ -522,8 +522,5 @@
   }
 }
 
-@include reduced-motion {
-  .obs-card {
-    transition: none;
-  }
-}
+// Reduced-motion carve-out for `.obs-card` lives in `base/_motion.scss` — the
+// single authority for the whole SPA (see main.scss). Don't reintroduce it here.
