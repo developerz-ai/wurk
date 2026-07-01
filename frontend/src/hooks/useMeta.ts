@@ -12,6 +12,8 @@ export interface CustomTab {
 }
 
 export interface Meta {
+  // Gem version (e.g. "1.1.0"), shown next to the wordmark in the nav.
+  version?: string;
   read_only: boolean;
   // Optional host-supplied banner copy; null → SPA uses its localized default.
   read_only_message: string | null;

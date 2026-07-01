@@ -101,8 +101,28 @@ export default function Nav(props: NavProps) {
               }}
             />
             <span class="nav-label" style={{ display: 'flex', 'flex-direction': 'column', 'line-height': 1.15 }}>
-              <span style={{ 'font-size': '18px', 'font-weight': 700, 'letter-spacing': '-0.02em', color: 'var(--text-bright)' }}>
-                Wurk
+              <span style={{ display: 'inline-flex', 'align-items': 'baseline', gap: '0.4rem' }}>
+                <span style={{ 'font-size': '18px', 'font-weight': 700, 'letter-spacing': '-0.02em', color: 'var(--text-bright)' }}>
+                  Wurk
+                </span>
+                {/* Gem version from /wurk/api/meta, next to the wordmark. */}
+                <Show when={meta.data?.version}>
+                  <span
+                    style={{
+                      'font-family': 'var(--font-mono)',
+                      'font-size': '10px',
+                      'font-weight': 500,
+                      'letter-spacing': '0.02em',
+                      color: 'var(--text-muted)',
+                      background: 'var(--surface-strong)',
+                      border: '1px solid var(--border)',
+                      'border-radius': '5px',
+                      padding: '0.05rem 0.3rem',
+                    }}
+                  >
+                    v{meta.data?.version}
+                  </span>
+                </Show>
               </span>
               <span
                 style={{

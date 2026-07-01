@@ -44,6 +44,7 @@ module Wurk
     def meta
       config = ::Wurk::Web.config
       render json: {
+        version: ::Wurk::VERSION,
         read_only: config.read_only? || !mutations_authorized?(config),
         read_only_message: config.read_only_message,
         custom_tabs: config.custom_tabs

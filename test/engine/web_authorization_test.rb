@@ -96,6 +96,15 @@ class WebAuthorizationTest < Wurk::Test::EngineCase
     assert_nil body['read_only_message']
   end
 
+  # The SPA shows the running gem version next to the nav wordmark; meta carries
+  # it so the dashboard never has to guess from the asset manifest.
+  def test_meta_reports_the_gem_version
+    get '/wurk/api/meta'
+
+    assert_equal 200, last_response.status
+    assert_equal Wurk::VERSION, JSON.parse(last_response.body)['version']
+  end
+
   def test_meta_reports_read_only_when_enabled
     Wurk::Web.configure { |c| c.read_only = true }
 
