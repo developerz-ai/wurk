@@ -1,6 +1,6 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
-import { render, screen, fireEvent, cleanup } from '@testing-library/react';
-import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
+import { render, screen, fireEvent } from '@solidjs/testing-library';
+import { QueryClient, QueryClientProvider } from '@tanstack/solid-query';
 import Busy from './Busy';
 
 const NOW = Date.now() / 1000;
@@ -98,41 +98,40 @@ function mockFetch() {
 
 function renderBusy() {
   const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
-  return render(
+  return render(() => (
     <QueryClientProvider client={client}>
       <Busy />
     </QueryClientProvider>
-  );
+  ));
 }
 
 describe('Busy', () => {
   beforeEach(() => {
     vi.stubGlobal('fetch', mockFetch());
     // jsdom has no <dialog> top-layer support; the modal's content visibility
-    // is React-state driven, so stubbing these is enough.
+    // is signal-driven, so stubbing these is enough for showModal()/close().
     HTMLDialogElement.prototype.showModal = vi.fn();
     HTMLDialogElement.prototype.close = vi.fn();
   });
   afterEach(() => {
-    cleanup();
     vi.unstubAllGlobals();
   });
 
   it('groups processes into one section per host', async () => {
     renderBusy();
-    expect(await screen.findByText('host-a')).toBeDefined();
-    expect(screen.getByText('host-b')).toBeDefined();
+    expect(await screen.findByText('host-a')).toBeInTheDocument();
+    expect(screen.getByText('host-b')).toBeInTheDocument();
     // Host badge: total processes; host-a folds two processes into one header.
-    expect(screen.getByText('2 hosts')).toBeDefined();
-    expect(screen.getByText('3 processes')).toBeDefined();
+    expect(screen.getByText('2 hosts')).toBeInTheDocument();
+    expect(screen.getByText('3 processes')).toBeInTheDocument();
   });
 
   it('shows host hardware facts: CPU model, cores and RAM usage', async () => {
     renderBusy();
-    expect(await screen.findByText(/AMD EPYC 7702P/)).toBeDefined();
-    expect(screen.getByText('64 cores')).toBeDefined();
+    expect(await screen.findByText(/AMD EPYC 7702P/)).toBeInTheDocument();
+    expect(screen.getByText('64 cores')).toBeInTheDocument();
     // host-a: 2 × 256 MB RSS of 16 GB total.
-    expect(screen.getByText(/512 MB \/ 16\.0 GB/)).toBeDefined();
+    expect(screen.getByText(/512 MB \/ 16\.0 GB/)).toBeInTheDocument();
   });
 
   it('renders a live heartbeat from the API `beat` field', async () => {
@@ -148,8 +147,8 @@ describe('Busy', () => {
     expect(card).not.toBeNull();
     fireEvent.click(card!);
 
-    expect(await screen.findByText('HardJob')).toBeDefined();
-    expect(screen.getByText('host-a:100:aaaa')).toBeDefined();
+    expect(await screen.findByText('HardJob')).toBeInTheDocument();
+    expect(screen.getByText('host-a:100:aaaa')).toBeInTheDocument();
     // Only this process's in-flight jobs — host-b's job stays out.
     expect(screen.queryByText('OtherJob')).toBeNull();
   });

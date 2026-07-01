@@ -1,4 +1,4 @@
-import { useMemo, useState } from 'react';
+import { createMemo, createSignal, type Accessor } from 'solid-js';
 
 export type SortDir = 'asc' | 'desc';
 export interface SortState {
@@ -11,16 +11,23 @@ export type Accessors<T> = Record<string, (row: T) => SortValue>;
 
 // Client-side column sorting for a table's currently-loaded rows.
 //
-// Define `accessors` as a module-level constant (one entry per sortable column)
-// so its identity is stable across renders. For server-paginated tables this
-// sorts the visible page only — which matches how the dashboard's job lists load.
-export function useSort<T>(rows: T[], accessors: Accessors<T>, initial?: SortState) {
-  const [sort, setSort] = useState<SortState>(initial ?? { key: null, dir: 'asc' });
+// `rows` is an accessor (e.g. `() => query.data ?? []`) so the sort tracks the
+// live data. Define `accessors` as a module-level constant (one entry per
+// sortable column). For server-paginated tables this sorts the visible page
+// only — which matches how the dashboard's job lists load.
+export function useSort<T>(
+  rows: Accessor<T[]>,
+  accessors: Accessors<T>,
+  initial?: SortState,
+): { sorted: Accessor<T[]>; sort: Accessor<SortState>; toggle: (key: string) => void } {
+  const [sort, setSort] = createSignal<SortState>(initial ?? { key: null, dir: 'asc' });
 
-  const sorted = useMemo(() => {
-    const acc = sort.key ? accessors[sort.key] : undefined;
-    if (!acc) return rows;
-    const copy = [...rows];
+  const sorted = createMemo(() => {
+    const s = sort();
+    const acc = s.key ? accessors[s.key] : undefined;
+    const data = rows();
+    if (!acc) return data;
+    const copy = [...data];
     copy.sort((a, b) => {
       const va = acc(a);
       const vb = acc(b);
@@ -32,10 +39,10 @@ export function useSort<T>(rows: T[], accessors: Accessors<T>, initial?: SortSta
         typeof va === 'number' && typeof vb === 'number'
           ? va - vb
           : String(va).localeCompare(String(vb), undefined, { numeric: true, sensitivity: 'base' });
-      return sort.dir === 'asc' ? cmp : -cmp;
+      return s.dir === 'asc' ? cmp : -cmp;
     });
     return copy;
-  }, [rows, sort, accessors]);
+  });
 
   // First click on a column sorts ascending; clicking the active column flips direction.
   const toggle = (key: string) =>

@@ -4,7 +4,8 @@
     "lib": ["ES2022", "DOM", "DOM.Iterable"],
     "module": "ESNext",
     "moduleResolution": "Bundler",
-    "jsx": "react-jsx",
+    "jsx": "preserve",
+    "jsxImportSource": "solid-js",
     "strict": true,
     "noUnusedLocals": true,
     "noUnusedParameters": true,
@@ -15,6 +16,7 @@
     "isolatedModules": true,
     "useDefineForClassFields": true,
     "allowSyntheticDefaultImports": true,
+    "types": ["vite/client", "@testing-library/jest-dom"],
     "noEmit": true
   },
   "include": ["src"]

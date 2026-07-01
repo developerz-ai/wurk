@@ -1,4 +1,4 @@
-import { useState, useEffect, useRef } from 'react';
+import { createSignal, onCleanup, onMount, type Accessor } from 'solid-js';
 
 export interface StatsSnapshot {
   processed: number;
@@ -15,15 +15,19 @@ export interface StatsSnapshot {
   at: number;
 }
 
-export function useSSE(enabled = true) {
-  const [stats, setStats] = useState<StatsSnapshot | null>(null);
-  const [connected, setConnected] = useState(false);
-  const esRef = useRef<EventSource | null>(null);
+// Live stats over Server-Sent Events. Returns signal accessors — read them as
+// `stats()` / `connected()` inside JSX or a memo so they track reactively.
+// The EventSource is opened on mount and closed on cleanup (component dispose),
+// so exactly one connection lives per mounted consumer.
+export function useSSE(
+  enabled = true,
+): { stats: Accessor<StatsSnapshot | null>; connected: Accessor<boolean> } {
+  const [stats, setStats] = createSignal<StatsSnapshot | null>(null);
+  const [connected, setConnected] = createSignal(false);
 
-  useEffect(() => {
+  onMount(() => {
     if (!enabled) return;
     const es = new EventSource('/wurk/api/stream');
-    esRef.current = es;
     es.addEventListener('stats', (e) => {
       try {
         setStats(JSON.parse((e as MessageEvent).data) as StatsSnapshot);
@@ -33,11 +37,11 @@ export function useSSE(enabled = true) {
     });
     es.onopen = () => setConnected(true);
     es.onerror = () => setConnected(false);
-    return () => {
+    onCleanup(() => {
       es.close();
       setConnected(false);
-    };
-  }, [enabled]);
+    });
+  });
 
   return { stats, connected };
 }

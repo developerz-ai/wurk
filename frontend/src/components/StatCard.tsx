@@ -1,3 +1,4 @@
+import { Show } from 'solid-js';
 import { AnimatedNumber } from './AnimatedNumber';
 
 interface StatCardProps {
@@ -6,37 +7,39 @@ interface StatCardProps {
   color?: string;
 }
 
-export function StatCard({ label, value, color }: StatCardProps) {
+export function StatCard(props: StatCardProps) {
   return (
     <div
-      className="card card--stat"
+      class="card card--stat"
       style={{
         display: 'flex',
-        flexDirection: 'column',
+        'flex-direction': 'column',
         gap: '0.25rem',
       }}
     >
       <span
         style={{
-          fontSize: 12,
-          fontWeight: 500,
-          textTransform: 'uppercase',
-          letterSpacing: '0.05em',
+          'font-size': '12px',
+          'font-weight': 500,
+          'text-transform': 'uppercase',
+          'letter-spacing': '0.05em',
           color: 'var(--text-muted)',
         }}
       >
-        {label}
+        {props.label}
       </span>
       <span
         style={{
-          fontSize: 28,
-          fontWeight: 700,
-          lineHeight: 1.1,
-          color: color ?? 'var(--text)',
-          fontVariantNumeric: 'tabular-nums',
+          'font-size': '28px',
+          'font-weight': 700,
+          'line-height': 1.1,
+          color: props.color ?? 'var(--text)',
+          'font-variant-numeric': 'tabular-nums',
         }}
       >
-        {typeof value === 'number' ? <AnimatedNumber value={value} /> : value}
+        <Show when={typeof props.value === 'number'} fallback={props.value}>
+          <AnimatedNumber value={props.value as number} />
+        </Show>
       </span>
     </div>
   );

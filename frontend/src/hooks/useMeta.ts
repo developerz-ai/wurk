@@ -1,4 +1,4 @@
-import { useQuery } from '@tanstack/react-query';
+import { useQuery } from '@tanstack/solid-query';
 
 // A dashboard tab registered by a third-party gem via
 // Sidekiq::Web.register_extension. When ext_name is present, the Extension page
@@ -12,6 +12,8 @@ export interface CustomTab {
 }
 
 export interface Meta {
+  // Gem version (e.g. "1.1.0"), shown next to the wordmark in the nav.
+  version?: string;
   read_only: boolean;
   // Optional host-supplied banner copy; null → SPA uses its localized default.
   read_only_message: string | null;
@@ -20,11 +22,13 @@ export interface Meta {
 }
 
 // Boot-time dashboard flags. Fetched once and cached forever — these only
-// change on a server restart, so there's no point re-polling.
+// change on a server restart, so there's no point re-polling. Returns the
+// solid-query result store; read `query.data?.read_only` reactively (never
+// destructure it — that severs the store's reactivity).
 export function useMeta() {
-  return useQuery<Meta>({
+  return useQuery<Meta>(() => ({
     queryKey: ['meta'],
     queryFn: () => fetch('/wurk/api/meta').then((r) => r.json() as Promise<Meta>),
     staleTime: Infinity,
-  });
+  }));
 }

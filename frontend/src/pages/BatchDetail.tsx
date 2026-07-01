@@ -1,6 +1,6 @@
-import { useQuery } from '@tanstack/react-query';
-import { useEffect, type ReactNode } from 'react';
-import { Link, useParams } from 'react-router-dom';
+import { useQuery } from '@tanstack/solid-query';
+import { onMount, For, Show, Switch, Match, type JSX } from 'solid-js';
+import { A, useParams } from '@solidjs/router';
 import { t } from '../i18n';
 import { relativeTime } from '../utils';
 import { SkeletonCards } from '../components/Skeleton';
@@ -24,108 +24,123 @@ interface BatchDetailData {
   dead_jids: string[];
 }
 
-function Field({ label, children }: { label: string; children: ReactNode }) {
+function Field(props: { label: string; children: JSX.Element }) {
   return (
-    <div style={{ display: 'flex', flexDirection: 'column', gap: 2 }}>
-      <span style={{ fontSize: 11, color: 'var(--text-muted)', textTransform: 'uppercase', letterSpacing: '0.04em' }}>
-        {label}
+    <div style={{ display: 'flex', 'flex-direction': 'column', gap: '2px' }}>
+      <span style={{ 'font-size': '11px', color: 'var(--text-muted)', 'text-transform': 'uppercase', 'letter-spacing': '0.04em' }}>
+        {props.label}
       </span>
-      <span style={{ fontVariantNumeric: 'tabular-nums' }}>{children}</span>
+      <span style={{ 'font-variant-numeric': 'tabular-nums' }}>{props.children}</span>
     </div>
   );
 }
 
-function JidList({ label, jids }: { label: string; jids: string[] }) {
-  if (jids.length === 0) return null;
+function JidList(props: { label: string; jids: string[] }) {
   return (
-    <div style={{ marginTop: '1.5rem' }}>
-      <h2 style={{ fontSize: 14, margin: '0 0 0.5rem' }}>
-        {label} <span className="badge badge-muted">{jids.length}</span>
-      </h2>
-      <div className="table-wrapper">
-        <table>
-          <tbody>
-            {jids.map((jid) => (
-              <tr key={jid}>
-                <td style={{ fontFamily: 'monospace', fontSize: 12 }}>{jid}</td>
-              </tr>
-            ))}
-          </tbody>
-        </table>
+    <Show when={props.jids.length > 0}>
+      <div style={{ 'margin-top': '1.5rem' }}>
+        <h2 style={{ 'font-size': '14px', margin: '0 0 0.5rem' }}>
+          {props.label} <span class="badge badge-muted">{props.jids.length}</span>
+        </h2>
+        <div class="table-wrapper">
+          <table>
+            <tbody>
+              <For each={props.jids}>
+                {(jid) => (
+                  <tr>
+                    <td style={{ 'font-family': 'monospace', 'font-size': '12px' }}>{jid}</td>
+                  </tr>
+                )}
+              </For>
+            </tbody>
+          </table>
+        </div>
       </div>
-    </div>
+    </Show>
   );
 }
 
 export default function BatchDetail() {
-  const { bid = '' } = useParams();
+  const params = useParams();
+  const bid = () => params.bid ?? '';
 
-  useEffect(() => {
+  onMount(() => {
     document.title = `${t('nav.batches')} — Wurk`;
-  }, []);
+  });
 
-  const { data, isLoading, isError } = useQuery<BatchDetailData>({
-    queryKey: ['batch', bid],
+  const q = useQuery<BatchDetailData>(() => ({
+    queryKey: ['batch', bid()],
     queryFn: () =>
-      fetch(`/wurk/api/batches/${encodeURIComponent(bid)}`).then((r) => {
+      fetch(`/wurk/api/batches/${encodeURIComponent(bid())}`).then((r) => {
         if (!r.ok) throw new Error(`HTTP ${r.status}`);
         return r.json() as Promise<BatchDetailData>;
       }),
-  });
-
-  if (isLoading)
-    return (
-      <div>
-        <div className="section-header" style={{ gap: '0.75rem' }}>
-          <Link to="/batches" className="btn btn-sm">← {t('nav.batches')}</Link>
-        </div>
-        <div style={{ marginTop: '1rem' }}>
-          <SkeletonCards count={8} />
-        </div>
-      </div>
-    );
-  if (isError || !data) return <div className="empty-state" style={{ color: 'var(--danger)' }}>{t('common.error')}</div>;
-
-  const done = data.total - data.pending;
-  const pct = data.total > 0 ? Math.round((done / data.total) * 100) : 0;
+  }));
 
   return (
-    <div>
-      <div className="section-header" style={{ gap: '0.75rem' }}>
-        <Link to="/batches" className="btn btn-sm">← {t('nav.batches')}</Link>
-        <h1 className="page-title" style={{ margin: 0, fontFamily: 'monospace', fontSize: 16 }}>{data.bid}</h1>
-        {data.complete ? (
-          <span className="badge badge-success">complete</span>
-        ) : (
-          <span className="badge badge-accent">{pct}%</span>
-        )}
-        {data.invalidated && <span className="badge badge-danger">invalidated</span>}
-      </div>
+    <Switch>
+      <Match when={q.isPending}>
+        <div>
+          <div class="section-header" style={{ gap: '0.75rem' }}>
+            <A href="/batches" class="btn btn-sm">← {t('nav.batches')}</A>
+          </div>
+          <div style={{ 'margin-top': '1rem' }}>
+            <SkeletonCards count={8} />
+          </div>
+        </div>
+      </Match>
+      <Match when={q.isError || !q.data}>
+        <div class="empty-state" style={{ color: 'var(--danger)' }}>{t('common.error')}</div>
+      </Match>
+      <Match when={q.data}>
+        {(data) => {
+          const done = () => data().total - data().pending;
+          const pct = () => (data().total > 0 ? Math.round((done() / data().total) * 100) : 0);
+          return (
+            <div>
+              <div class="section-header" style={{ gap: '0.75rem' }}>
+                <A href="/batches" class="btn btn-sm">← {t('nav.batches')}</A>
+                <h1 class="page-title" style={{ margin: 0, 'font-family': 'monospace', 'font-size': '16px' }}>{data().bid}</h1>
+                <Show when={data().complete} fallback={<span class="badge badge-accent">{pct()}%</span>}>
+                  <span class="badge badge-success">complete</span>
+                </Show>
+                <Show when={data().invalidated}>
+                  <span class="badge badge-danger">invalidated</span>
+                </Show>
+              </div>
 
-      {data.description && (
-        <p style={{ color: 'var(--text-muted)', marginTop: 0 }}>{data.description}</p>
-      )}
+              <Show when={data().description}>
+                <p style={{ color: 'var(--text-muted)', 'margin-top': 0 }}>{data().description}</p>
+              </Show>
 
-      <div
-        style={{
-          display: 'grid',
-          gridTemplateColumns: 'repeat(auto-fill, minmax(140px, 1fr))',
-          gap: '1rem',
-          marginTop: '1rem',
+              <div
+                style={{
+                  display: 'grid',
+                  'grid-template-columns': 'repeat(auto-fill, minmax(140px, 1fr))',
+                  gap: '1rem',
+                  'margin-top': '1rem',
+                }}
+              >
+                <Field label="Total">{data().total.toLocaleString()}</Field>
+                <Field label="Pending">{data().pending.toLocaleString()}</Field>
+                <Field label="Failures">{data().failures.toLocaleString()}</Field>
+                <Field label="Children">{data().child_count.toLocaleString()}</Field>
+                <Field label="Created">{data().created_at ? relativeTime(data().created_at!) : '—'}</Field>
+                <Field label="Completed">{data().complete_at ? relativeTime(data().complete_at!) : '—'}</Field>
+                <Show when={data().parent_bid}>
+                  <Field label="Parent">{data().parent_bid}</Field>
+                </Show>
+                <Show when={data().tags.length > 0}>
+                  <Field label="Tags">{data().tags.join(', ')}</Field>
+                </Show>
+              </div>
+
+              <JidList label="Failed jobs" jids={data().failed_jids} />
+              <JidList label="Dead jobs" jids={data().dead_jids} />
+            </div>
+          );
         }}
-      >
-        <Field label="Total">{data.total.toLocaleString()}</Field>
-        <Field label="Pending">{data.pending.toLocaleString()}</Field>
-        <Field label="Failures">{data.failures.toLocaleString()}</Field>
-        <Field label="Children">{data.child_count.toLocaleString()}</Field>
-        <Field label="Created">{data.created_at ? relativeTime(data.created_at) : '—'}</Field>
-        <Field label="Completed">{data.complete_at ? relativeTime(data.complete_at) : '—'}</Field>
-        {data.parent_bid && <Field label="Parent">{data.parent_bid}</Field>}
-        {data.tags.length > 0 && <Field label="Tags">{data.tags.join(', ')}</Field>}
-      </div>
-
-      <JidList label="Failed jobs" jids={data.failed_jids} />
-      <JidList label="Dead jobs" jids={data.dead_jids} />
-    </div>
+      </Match>
+    </Switch>
   );
 }

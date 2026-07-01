@@ -46,7 +46,7 @@ Layers and ownership — one reason to change per class. Don't blur these.
 | Processor | Pops private list, runs middleware chain, invokes perform | `lib/wurk/processor.rb` |
 | Client | Enqueue, Lua bulk path, Redis-outage local buffer | `lib/wurk/client.rb` |
 | Middleware | Client + server chains (Sidekiq contract) | `lib/wurk/middleware/` |
-| Web | Rack app serving the precompiled React SPA + JSON APIs | `lib/wurk/web.rb`, `app/` |
+| Web | Rack app serving the precompiled SolidJS SPA + JSON APIs | `lib/wurk/web.rb`, `app/` |
 | RedisPool | Per-process pool over redis-client | `lib/wurk/redis_pool.rb` |
 
 User-facing code (mount, controllers, views, generators, assets) lives in the engine. Non-user-facing (swarm, fetcher, processor, client, middleware) lives in plain Ruby under `lib/`. **Standalone mode must run without loading the engine.**
@@ -103,7 +103,7 @@ Ruby `>= 3.2.0`, Redis `>= 7.0.0`. JRuby / TruffleRuby / Windows fall back to th
 
 ## Dashboard
 
-React + TypeScript + Vite SPA mounted under the engine, built with **bun** (`bun install` + `vite build`; contributors need bun, consumers never run Node or bun). **Precompiled bundle ships in the gem** (`vendor/assets/`). SSE for live updates, TanStack Query for state, Recharts for charts. Pages are **lazy-loaded behind a route-level `<Suspense>`** (code-split chunks) with **skeleton loaders** (`components/Skeleton.tsx`) as the fallback. Left-rail nav (drawer on mobile), dark-only, mobile-first, i18n with host-app override. AI panes (anomaly detection, NL queries, error triage, capacity advisor) are opt-in and require an Anthropic API token.
+SolidJS + TypeScript + Vite SPA mounted under the engine, built with **bun** (`bun install` + `vite build`; contributors need bun, consumers never run Node or bun). **Precompiled bundle ships in the gem** (`vendor/assets/`). SSE for live updates, TanStack Query (`@tanstack/solid-query`) for state, `@solidjs/router` for routing, and a hand-rolled dependency-free SolidJS SVG chart module for charts. Pages are **lazy-loaded behind a route-level `<Suspense>`** (code-split chunks) with **skeleton loaders** (`components/Skeleton.tsx`) as the fallback. Left-rail nav (drawer on mobile), dark-only, mobile-first, i18n with host-app override. AI panes (anomaly detection, NL queries, error triage, capacity advisor) are opt-in and require an Anthropic API token.
 
 **Styles** are a SOLID/SRP **SCSS** architecture under `frontend/src/styles/` — `abstracts/` (Sass maps, `to-rem()`/`breakpoint()`/`z()` functions, `respond-down()`/`transition()`/`surface()` mixins, CSS-var `:root` tokens, keyframes) → `base/` (reset, typography, scrollbar, reduced-motion policy) → `components/` (one file per atom: button, badge, card, table, modal, skeleton…) → `layout/` (shell, nav, page-header) → `pages/` (dashboard hero, Obsidian system, search, extension), composed by `main.scss`. Tailwind + daisyUI directives stay in the sibling `tailwind.css`; the SCSS `:root` tokens (unlayered) override daisyUI's theme. All lengths are `to-rem()`; motion runs off a shared duration/easing scale (`--dur-*` / `--ease-*`). `rem` is a reserved Sass calc name — the px→rem helper is `to-rem()`, not `rem()`.
 

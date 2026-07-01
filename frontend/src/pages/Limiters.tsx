@@ -1,5 +1,5 @@
-import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
-import { useEffect } from 'react';
+import { useQuery, useMutation, useQueryClient } from '@tanstack/solid-query';
+import { onMount, For, Switch, Match, Show } from 'solid-js';
 import { Pagination } from '../components/Pagination';
 import { SortableTh } from '../components/SortableTh';
 import { useSort, type Accessors } from '../hooks/useSort';
@@ -52,133 +52,138 @@ const SORT: Accessors<Limiter> = {
 
 export default function Limiters() {
   const qc = useQueryClient();
-  const { data: meta } = useMeta();
-  const readOnly = meta?.read_only ?? false;
+  const meta = useMeta();
+  const readOnly = () => meta.data?.read_only ?? false;
   const [page, setPage] = usePageParam();
 
-  useEffect(() => {
+  onMount(() => {
     document.title = `${t('nav.limiters')} — Wurk`;
-  }, []);
+  });
 
   // UI is 1-indexed for humans; the API is 0-indexed, so send page - 1.
-  const { data, isLoading, isError } = useQuery<LimitersResponse>({
-    queryKey: ['limiters', page],
+  const q = useQuery<LimitersResponse>(() => ({
+    queryKey: ['limiters', page()],
     queryFn: () =>
-      fetch(`/wurk/api/limiters?page=${page - 1}&count=${PAGE_SIZE}`).then(
+      fetch(`/wurk/api/limiters?page=${page() - 1}&count=${PAGE_SIZE}`).then(
         (r) => r.json() as Promise<LimitersResponse>
       ),
     refetchInterval: 5000,
-  });
+  }));
 
   // Drops the limiter's stats/state keys (counters → 0); skips CSRF, see
   // ApiController#skip_forgery_protection.
-  const reset = useMutation({
+  const reset = useMutation(() => ({
     mutationFn: (name: string) =>
       fetch(`/wurk/api/limiters/${encodeURIComponent(name)}/reset`, { method: 'POST' }),
     onSuccess: () => qc.invalidateQueries({ queryKey: ['limiters'] }),
-  });
+  }));
 
-  const { sorted, sort, toggle } = useSort(data?.limiters ?? [], SORT);
-
-  if (isLoading) {
-    return (
-      <div>
-        <PageHeader icon="fa-gauge" title={t('nav.limiters')} summary={t('summaries.limiters')} />
-        <SkeletonTable rows={8} cols={readOnly ? 6 : 7} />
-      </div>
-    );
-  }
-  if (isError || !data) return <div className="empty-state" style={{ color: 'var(--danger)' }}>{t('common.error')}</div>;
+  const { sorted, sort, toggle } = useSort(() => q.data?.limiters ?? [], SORT);
 
   return (
-    <div>
-      <PageHeader icon="fa-gauge" title={t('nav.limiters')} summary={t('summaries.limiters')}>
-        <span className="badge badge-muted">{data.total.toLocaleString()}</span>
-      </PageHeader>
+    <Switch>
+      <Match when={q.isPending}>
+        <div>
+          <PageHeader icon="fa-gauge" title={t('nav.limiters')} summary={t('summaries.limiters')} />
+          <SkeletonTable rows={8} cols={readOnly() ? 6 : 7} />
+        </div>
+      </Match>
+      <Match when={q.isError || !q.data}>
+        <div class="empty-state" style={{ color: 'var(--danger)' }}>{t('common.error')}</div>
+      </Match>
+      <Match when={q.data}>
+        {(data) => (
+          <div>
+            <PageHeader icon="fa-gauge" title={t('nav.limiters')} summary={t('summaries.limiters')}>
+              <span class="badge badge-muted">{data().total.toLocaleString()}</span>
+            </PageHeader>
 
-      {sorted.length === 0 ? (
-        <div className="empty-state">{t('common.empty')}</div>
-      ) : (
-        <>
-          <div className="table-wrapper">
-            <table>
-              <thead>
-                <tr>
-                  <SortableTh label="Name" sortKey="name" sort={sort} onSort={toggle} />
-                  <SortableTh label="Type" sortKey="type" sort={sort} onSort={toggle} />
-                  <SortableTh label="Used" sortKey="used" sort={sort} onSort={toggle} />
-                  <SortableTh label="Limit" sortKey="limit" sort={sort} onSort={toggle} />
-                  <SortableTh label="Usage" sortKey="usage" sort={sort} onSort={toggle} />
-                  <SortableTh label="Status" sortKey="status" sort={sort} onSort={toggle} />
-                  {!readOnly && <th />}
-                </tr>
-              </thead>
-              <tbody>
-                {sorted.map((limiter) => {
-                  const s = limiter.status;
-                  const used = s?.used ?? 0;
-                  const limit = s?.limit ?? null;
-                  const pct = limit && limit > 0 ? Math.min((used / limit) * 100, 100) : 0;
-                  const color = pct > 90 ? 'var(--danger)' : pct > 70 ? 'var(--warning)' : 'var(--success)';
-                  const available = s?.['available?'] ?? true;
-                  // Concurrent rows carry extra metric counters — show them on hover.
-                  const metricTitle = s
-                    ? Object.entries(s)
-                        .filter(([k]) => !['used', 'limit', 'reset_at', 'available?'].includes(k))
-                        .map(([k, v]) => `${k}=${v}`)
-                        .join('  ')
-                    : '';
-                  return (
-                    <tr key={limiter.name}>
-                      <td style={{ fontWeight: 500 }} title={limiter.name}>{limiter.name}</td>
-                      <td><span className="badge badge-accent">{limiter.type}</span></td>
-                      <td style={{ fontVariantNumeric: 'tabular-nums' }} title={metricTitle}>
-                        {used.toLocaleString()}
-                      </td>
-                      <td style={{ fontVariantNumeric: 'tabular-nums' }}>
-                        {limit == null ? '∞' : limit.toLocaleString()}
-                      </td>
-                      <td style={{ width: 160 }}>
-                        {limit == null ? (
-                          <span style={{ color: 'var(--text-muted)' }}>—</span>
-                        ) : (
-                          <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
-                            <div className="progress-bar-track" style={{ flex: 1 }}>
-                              <div className="progress-bar-fill" style={{ width: `${pct}%`, background: color }} />
-                            </div>
-                            <span style={{ fontSize: 12, color: 'var(--text-muted)', minWidth: 36 }}>
-                              {Math.round(pct)}%
-                            </span>
-                          </div>
-                        )}
-                      </td>
-                      <td>
-                        {available ? (
-                          <span className="badge badge-success">available</span>
-                        ) : (
-                          <span className="badge badge-danger">exhausted</span>
-                        )}
-                      </td>
-                      {!readOnly && (
-                        <td>
-                          <button
-                            className="btn btn-sm"
-                            disabled={reset.isPending}
-                            onClick={() => reset.mutate(limiter.name)}
-                          >
-                            Reset
-                          </button>
-                        </td>
-                      )}
+            <Show when={sorted().length > 0} fallback={<div class="empty-state">{t('common.empty')}</div>}>
+              <div class="table-wrapper">
+                <table>
+                  <thead>
+                    <tr>
+                      <SortableTh label="Name" sortKey="name" sort={sort()} onSort={toggle} />
+                      <SortableTh label="Type" sortKey="type" sort={sort()} onSort={toggle} />
+                      <SortableTh label="Used" sortKey="used" sort={sort()} onSort={toggle} />
+                      <SortableTh label="Limit" sortKey="limit" sort={sort()} onSort={toggle} />
+                      <SortableTh label="Usage" sortKey="usage" sort={sort()} onSort={toggle} />
+                      <SortableTh label="Status" sortKey="status" sort={sort()} onSort={toggle} />
+                      <Show when={!readOnly()}><th /></Show>
                     </tr>
-                  );
-                })}
-              </tbody>
-            </table>
+                  </thead>
+                  <tbody>
+                    <For each={sorted()}>
+                      {(limiter) => {
+                        const s = limiter.status;
+                        const used = s?.used ?? 0;
+                        const limit = s?.limit ?? null;
+                        const pct = limit && limit > 0 ? Math.min((used / limit) * 100, 100) : 0;
+                        const color = pct > 90 ? 'var(--danger)' : pct > 70 ? 'var(--warning)' : 'var(--success)';
+                        const available = s?.['available?'] ?? true;
+                        // Concurrent rows carry extra metric counters — show them on hover.
+                        const metricTitle = s
+                          ? Object.entries(s)
+                              .filter(([k]) => !['used', 'limit', 'reset_at', 'available?'].includes(k))
+                              .map(([k, v]) => `${k}=${v}`)
+                              .join('  ')
+                          : '';
+                        return (
+                          <tr>
+                            <td style={{ 'font-weight': 500 }} title={limiter.name}>{limiter.name}</td>
+                            <td><span class="badge badge-accent">{limiter.type}</span></td>
+                            <td style={{ 'font-variant-numeric': 'tabular-nums' }} title={metricTitle}>
+                              {used.toLocaleString()}
+                            </td>
+                            <td style={{ 'font-variant-numeric': 'tabular-nums' }}>
+                              {limit == null ? '∞' : limit.toLocaleString()}
+                            </td>
+                            <td style={{ width: '160px' }}>
+                              <Show
+                                when={limit != null}
+                                fallback={<span style={{ color: 'var(--text-muted)' }}>—</span>}
+                              >
+                                <div style={{ display: 'flex', 'align-items': 'center', gap: '0.5rem' }}>
+                                  <div class="progress-bar-track" style={{ flex: 1 }}>
+                                    <div class="progress-bar-fill" style={{ width: `${pct}%`, background: color }} />
+                                  </div>
+                                  <span style={{ 'font-size': '12px', color: 'var(--text-muted)', 'min-width': '36px' }}>
+                                    {Math.round(pct)}%
+                                  </span>
+                                </div>
+                              </Show>
+                            </td>
+                            <td>
+                              <Show
+                                when={available}
+                                fallback={<span class="badge badge-danger">exhausted</span>}
+                              >
+                                <span class="badge badge-success">available</span>
+                              </Show>
+                            </td>
+                            <Show when={!readOnly()}>
+                              <td>
+                                <button
+                                  class="btn btn-sm"
+                                  disabled={reset.isPending}
+                                  onClick={() => reset.mutate(limiter.name)}
+                                >
+                                  Reset
+                                </button>
+                              </td>
+                            </Show>
+                          </tr>
+                        );
+                      }}
+                    </For>
+                  </tbody>
+                </table>
+              </div>
+              <Pagination page={page()} total={data().total} count={PAGE_SIZE} onChange={setPage} />
+            </Show>
           </div>
-          <Pagination page={page} total={data.total} count={PAGE_SIZE} onChange={setPage} />
-        </>
-      )}
-    </div>
+        )}
+      </Match>
+    </Switch>
   );
 }

@@ -23,7 +23,7 @@ module Wurk
         name: params[:name], method: request.request_method,
         subpath: "/#{params[:subpath]}", env: request.env, mount: request.script_name
       )
-      return index unless result # not an extension → SPA client route; let React handle it
+      return index unless result # not an extension → SPA client route; let the SolidJS router handle it
 
       respond_with(result)
     end

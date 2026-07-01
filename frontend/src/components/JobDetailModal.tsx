@@ -1,4 +1,4 @@
-import { type ReactNode } from 'react';
+import { For, Show, type JSX } from 'solid-js';
 import Modal from './Modal';
 import { t } from '../i18n';
 import { formatArgs, isoTime, relativeTime } from '../utils';
@@ -24,14 +24,14 @@ export interface JobEntry {
   custom_rows?: [string, string][];
 }
 
-function Field({ label, children, mono }: { label: string; children: ReactNode; mono?: boolean }) {
+function Field(props: { label: string; children: JSX.Element; mono?: boolean }) {
   return (
-    <div style={{ display: 'flex', flexDirection: 'column', gap: 3 }}>
-      <span style={{ fontSize: 11, color: 'var(--text-muted)', textTransform: 'uppercase', letterSpacing: '0.04em' }}>
-        {label}
+    <div style={{ display: 'flex', 'flex-direction': 'column', gap: '3px' }}>
+      <span style={{ 'font-size': '11px', color: 'var(--text-muted)', 'text-transform': 'uppercase', 'letter-spacing': '0.04em' }}>
+        {props.label}
       </span>
-      <span style={{ fontSize: 13, fontFamily: mono ? 'ui-monospace, monospace' : undefined, wordBreak: 'break-word' }}>
-        {children}
+      <span style={{ 'font-size': '13px', 'font-family': props.mono ? 'ui-monospace, monospace' : undefined, 'word-break': 'break-word' }}>
+        {props.children}
       </span>
     </div>
   );
@@ -50,80 +50,86 @@ interface JobDetailModalProps {
   onClose: () => void;
 }
 
-export default function JobDetailModal({ entry, atLabel, actions, onAction, pending = false, onClose }: JobDetailModalProps) {
+export default function JobDetailModal(props: JobDetailModalProps) {
   const footer =
-    actions && actions.length > 0 && onAction ? (
-      <div style={{ display: 'flex', gap: '0.5rem', justifyContent: 'flex-end', flexWrap: 'wrap' }}>
-        {actions.map((a) => (
-          <button
-            key={a.cmd}
-            className={`btn btn-sm${a.danger ? ' btn-danger' : ''}`}
-            disabled={pending}
-            onClick={() => {
-              if (pending) return;
-              if (a.danger && !window.confirm(t('actions.confirm', { action: a.label, scope: t('job.detail').toLowerCase() }))) return;
-              onAction(a.cmd);
-            }}
-          >
-            {a.label}
-          </button>
-        ))}
+    props.actions && props.actions.length > 0 && props.onAction ? (
+      <div style={{ display: 'flex', gap: '0.5rem', 'justify-content': 'flex-end', 'flex-wrap': 'wrap' }}>
+        <For each={props.actions}>
+          {(a) => (
+            <button
+              class={`btn btn-sm${a.danger ? ' btn-danger' : ''}`}
+              disabled={props.pending}
+              onClick={() => {
+                if (props.pending) return;
+                if (a.danger && !window.confirm(t('actions.confirm', { action: a.label, scope: t('job.detail').toLowerCase() }))) return;
+                props.onAction?.(a.cmd);
+              }}
+            >
+              {a.label}
+            </button>
+          )}
+        </For>
       </div>
     ) : undefined;
 
   return (
-    <Modal open={entry !== null} onClose={onClose} title={entry?.klass ?? t('job.detail')} width={680} footer={footer}>
-      {entry && (
-        <div style={{ display: 'flex', flexDirection: 'column', gap: '1rem' }}>
-          <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(160px, 1fr))', gap: '0.9rem' }}>
-            <Field label={t('job.class')}>{entry.klass}</Field>
-            {entry.queue && <Field label={t('job.queue')}>{entry.queue}</Field>}
-            <Field label={t('job.jid')} mono>{entry.jid}</Field>
-            {typeof entry.retry_count === 'number' && (
-              <Field label={t('job.retries')}>{entry.retry_count}</Field>
-            )}
-            {entry.enqueued_at != null && (
-              <Field label={t('job.enqueued')} mono>{isoTime(entry.enqueued_at)} ({relativeTime(entry.enqueued_at)})</Field>
-            )}
-            {entry.at != null && (
-              <Field label={atLabel ?? t('job.at')} mono>{isoTime(entry.at)} ({relativeTime(entry.at)})</Field>
-            )}
-          </div>
-
-          <Field label={t('job.args')} mono>
-            {formatArgs(entry.args) === '[]' || formatArgs(entry.args) === '' ? (
-              <span style={{ color: 'var(--text-muted)' }}>—</span>
-            ) : (
-              <pre style={{ margin: 0, whiteSpace: 'pre-wrap', wordBreak: 'break-word' }}>{formatArgs(entry.args)}</pre>
-            )}
-          </Field>
-
-          {(entry.error_class || entry.error_message) && (
-            <div style={{ display: 'flex', flexDirection: 'column', gap: 3 }}>
-              <span style={{ fontSize: 11, color: 'var(--text-muted)', textTransform: 'uppercase', letterSpacing: '0.04em' }}>
-                {t('job.error')}
-              </span>
-              <span style={{ fontSize: 13, color: 'var(--danger)', wordBreak: 'break-word' }}>
-                {entry.error_class}{entry.error_message ? `: ${entry.error_message}` : ''}
-              </span>
+    <Modal open={props.entry !== null} onClose={props.onClose} title={props.entry?.klass ?? t('job.detail')} width={680} footer={footer}>
+      <Show when={props.entry}>
+        {(entry) => (
+          <div style={{ display: 'flex', 'flex-direction': 'column', gap: '1rem' }}>
+            <div style={{ display: 'grid', 'grid-template-columns': 'repeat(auto-fit, minmax(160px, 1fr))', gap: '0.9rem' }}>
+              <Field label={t('job.class')}>{entry().klass}</Field>
+              <Show when={entry().queue}>
+                <Field label={t('job.queue')}>{entry().queue}</Field>
+              </Show>
+              <Field label={t('job.jid')} mono>{entry().jid}</Field>
+              <Show when={typeof entry().retry_count === 'number'}>
+                <Field label={t('job.retries')}>{entry().retry_count}</Field>
+              </Show>
+              <Show when={entry().enqueued_at != null}>
+                <Field label={t('job.enqueued')} mono>{isoTime(entry().enqueued_at!)} ({relativeTime(entry().enqueued_at!)})</Field>
+              </Show>
+              <Show when={entry().at != null}>
+                <Field label={props.atLabel ?? t('job.at')} mono>{isoTime(entry().at!)} ({relativeTime(entry().at!)})</Field>
+              </Show>
             </div>
-          )}
 
-          {entry.error_backtrace && entry.error_backtrace.length > 0 && (
-            <Field label={t('job.backtrace')}>
-              <pre className="job-backtrace">{entry.error_backtrace.join('\n')}</pre>
+            <Field label={t('job.args')} mono>
+              <Show
+                when={formatArgs(entry().args) === '[]' || formatArgs(entry().args) === ''}
+                fallback={<pre style={{ margin: 0, 'white-space': 'pre-wrap', 'word-break': 'break-word' }}>{formatArgs(entry().args)}</pre>}
+              >
+                <span style={{ color: 'var(--text-muted)' }}>—</span>
+              </Show>
             </Field>
-          )}
 
-          {entry.custom_rows && entry.custom_rows.length > 0 && (
-            <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(160px, 1fr))', gap: '0.9rem' }}>
-              {entry.custom_rows.map(([label, value], idx) => (
-                <Field key={`${label}-${idx}`} label={label}>{value}</Field>
-              ))}
-            </div>
-          )}
-        </div>
-      )}
+            <Show when={entry().error_class || entry().error_message}>
+              <div style={{ display: 'flex', 'flex-direction': 'column', gap: '3px' }}>
+                <span style={{ 'font-size': '11px', color: 'var(--text-muted)', 'text-transform': 'uppercase', 'letter-spacing': '0.04em' }}>
+                  {t('job.error')}
+                </span>
+                <span style={{ 'font-size': '13px', color: 'var(--danger)', 'word-break': 'break-word' }}>
+                  {entry().error_class}{entry().error_message ? `: ${entry().error_message}` : ''}
+                </span>
+              </div>
+            </Show>
+
+            <Show when={entry().error_backtrace && entry().error_backtrace!.length > 0}>
+              <Field label={t('job.backtrace')}>
+                <pre class="job-backtrace">{entry().error_backtrace!.join('\n')}</pre>
+              </Field>
+            </Show>
+
+            <Show when={entry().custom_rows && entry().custom_rows!.length > 0}>
+              <div style={{ display: 'grid', 'grid-template-columns': 'repeat(auto-fit, minmax(160px, 1fr))', gap: '0.9rem' }}>
+                <For each={entry().custom_rows}>
+                  {([label, value]) => <Field label={label}>{value}</Field>}
+                </For>
+              </div>
+            </Show>
+          </div>
+        )}
+      </Show>
     </Modal>
   );
 }

@@ -1,6 +1,6 @@
 # Precompiled Assets
 
-The dashboard is a React SPA. Building it requires bun, Vite. **Consumers of the gem must never need any of that.**
+The dashboard is a SolidJS SPA. Building it requires bun, Vite. **Consumers of the gem must never need any of that.**
 
 ## Policy
 
@@ -8,7 +8,7 @@ Assets are built once, at gem release time, and shipped inside the gem. Installi
 
 ## What ships in the gem
 
-- A minified production bundle of the React SPA (one JS file, one CSS file, plus any static images and fonts).
+- A minified production bundle of the SolidJS SPA (one JS file, one CSS file, plus any static images and fonts).
 - Source maps, optional, gated by a build flag.
 - A simple manifest mapping logical names to digested filenames.
 

@@ -1,5 +1,4 @@
-import React from 'react';
-import ReactDOM from 'react-dom/client';
+import { render } from 'solid-js/web';
 // Obsidian design system fonts, self-hosted in the bundle (no CDN / Node at
 // runtime). Geist for UI text + metrics, JetBrains Mono for labels/metadata.
 import '@fontsource/geist-sans/400.css';
@@ -30,15 +29,25 @@ const embedded =
 const root = document.getElementById('wurk-root');
 if (root) {
   root.dir = dir;
-  ReactDOM.createRoot(root).render(
-    embedded ? (
-      <div style={{ padding: '2rem', textAlign: 'center', color: 'var(--text-muted)', fontSize: 14, lineHeight: 1.6 }}>
-        {t('extension.notRendered')}
-      </div>
-    ) : (
-      <React.StrictMode>
+  // Solid's render takes a component factory (a function returning JSX), not an
+  // element — it establishes the reactive root that owns the whole app.
+  render(
+    () =>
+      embedded ? (
+        <div
+          style={{
+            padding: '2rem',
+            'text-align': 'center',
+            color: 'var(--text-muted)',
+            'font-size': '14px',
+            'line-height': 1.6,
+          }}
+        >
+          {t('extension.notRendered')}
+        </div>
+      ) : (
         <App />
-      </React.StrictMode>
-    )
+      ),
+    root,
   );
 }

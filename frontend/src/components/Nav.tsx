@@ -1,4 +1,5 @@
-import { NavLink, Link } from 'react-router-dom';
+import { A } from '@solidjs/router';
+import { For, Show } from 'solid-js';
 import { t } from '../i18n';
 import { useMeta } from '../hooks/useMeta';
 import logoUrl from '../assets/wurk-logo.png';
@@ -27,230 +28,263 @@ const LINKS = [
   { to: '/search', label: t('nav.search'), icon: 'fa-magnifying-glass', end: false },
 ];
 
-export default function Nav({ open, onClose, collapsed, onToggleCollapse }: NavProps) {
+export default function Nav(props: NavProps) {
   // Tabs registered by third-party gems (sidekiq-cron, sidekiq-unique-jobs, …)
   // via Sidekiq::Web.register_extension. They link out to the extension's own
   // path — wurk surfaces the tab but doesn't render the gem's view in the SPA.
-  const { data: meta } = useMeta();
-  const customTabs = meta?.custom_tabs ?? [];
+  const meta = useMeta();
+  const customTabs = () => meta.data?.custom_tabs ?? [];
 
   // Close the mobile drawer on navigation. The desktop rail no longer expands on
   // hover/focus, so there's nothing to blur back.
-  const handleNavClick = () => onClose();
+  const handleNavClick = () => props.onClose();
 
   return (
     <>
       {/* Overlay for mobile */}
-      {open && (
+      <Show when={props.open}>
         <div
           onClick={handleNavClick}
           style={{
             position: 'fixed',
             inset: 0,
             background: 'rgba(0,0,0,0.5)',
-            zIndex: 99,
+            'z-index': 99,
             display: 'none',
           }}
-          className="nav-overlay"
+          class="nav-overlay"
         />
-      )}
+      </Show>
       <nav
-        className={`wurk-nav${open ? ' wurk-nav--open' : ''}${collapsed ? ' wurk-nav--collapsed' : ''}`}
+        classList={{
+          'wurk-nav': true,
+          'wurk-nav--open': props.open,
+          'wurk-nav--collapsed': props.collapsed,
+        }}
         style={{
           position: 'fixed',
           top: 0,
-          insetInlineStart: 0,
+          'inset-inline-start': 0,
           bottom: 0,
           background: 'var(--surface)',
-          borderInlineEnd: '1px solid var(--border)',
+          'border-inline-end': '1px solid var(--border)',
           display: 'flex',
-          flexDirection: 'column',
-          zIndex: 100,
-          overflowY: 'auto',
-          overflowX: 'hidden',
+          'flex-direction': 'column',
+          'z-index': 100,
+          'overflow-y': 'auto',
+          'overflow-x': 'hidden',
         }}
       >
-        <div className="nav-brand-wrap" style={{ padding: '1.25rem 1rem 0.75rem' }}>
-          <Link
-            to="/"
+        <div class="nav-brand-wrap" style={{ padding: '1.25rem 1rem 0.75rem' }}>
+          <A
+            href="/"
+            end
             onClick={handleNavClick}
             aria-label="Wurk — dashboard home"
             style={{
               color: 'var(--text)',
-              textDecoration: 'none',
+              'text-decoration': 'none',
               display: 'flex',
-              alignItems: 'center',
+              'align-items': 'center',
               gap: '0.6rem',
             }}
           >
             <img
               src={logoUrl}
               alt="Wurk"
-              style={{ height: 36, width: 'auto', display: 'block', flex: 'none', filter: 'drop-shadow(0 2px 6px rgba(0,0,0,0.45))' }}
+              style={{
+                height: '36px',
+                width: 'auto',
+                display: 'block',
+                flex: 'none',
+                filter: 'drop-shadow(0 2px 6px rgba(0,0,0,0.45))',
+              }}
             />
-            <span className="nav-label" style={{ display: 'flex', flexDirection: 'column', lineHeight: 1.15 }}>
-              <span style={{ fontSize: 18, fontWeight: 700, letterSpacing: '-0.02em', color: 'var(--text-bright)' }}>Wurk</span>
+            <span class="nav-label" style={{ display: 'flex', 'flex-direction': 'column', 'line-height': 1.15 }}>
+              <span style={{ display: 'inline-flex', 'align-items': 'baseline', gap: '0.4rem' }}>
+                <span style={{ 'font-size': '18px', 'font-weight': 700, 'letter-spacing': '-0.02em', color: 'var(--text-bright)' }}>
+                  Wurk
+                </span>
+                {/* Gem version from /wurk/api/meta, next to the wordmark. */}
+                <Show when={meta.data?.version}>
+                  <span
+                    style={{
+                      'font-family': 'var(--font-mono)',
+                      'font-size': '10px',
+                      'font-weight': 500,
+                      'letter-spacing': '0.02em',
+                      color: 'var(--text-muted)',
+                      background: 'var(--surface-strong)',
+                      border: '1px solid var(--border)',
+                      'border-radius': '5px',
+                      padding: '0.05rem 0.3rem',
+                    }}
+                  >
+                    v{meta.data?.version}
+                  </span>
+                </Show>
+              </span>
               <span
                 style={{
-                  fontFamily: 'var(--font-mono)',
-                  fontSize: 9,
-                  fontWeight: 500,
-                  letterSpacing: '0.1em',
-                  textTransform: 'uppercase',
+                  'font-family': 'var(--font-mono)',
+                  'font-size': '9px',
+                  'font-weight': 500,
+                  'letter-spacing': '0.1em',
+                  'text-transform': 'uppercase',
                   color: 'var(--text-muted)',
-                  marginTop: 2,
+                  'margin-top': '2px',
                   display: 'inline-flex',
-                  alignItems: 'center',
-                  gap: 5,
+                  'align-items': 'center',
+                  gap: '5px',
                 }}
               >
-                <span className="live-dot" style={{ width: 6, height: 6 }} />
+                <span class="live-dot" style={{ width: '6px', height: '6px' }} />
                 System Status: Active
               </span>
             </span>
-          </Link>
+          </A>
         </div>
 
-        <div style={{ height: 1, background: 'var(--border)', margin: '0 1rem 0.5rem' }} />
+        <div style={{ height: '1px', background: 'var(--border)', margin: '0 1rem 0.5rem' }} />
 
-        <ul style={{ listStyle: 'none', flex: 1 }}>
-          {LINKS.map(({ to, label, icon, end }) => (
-            <li key={to}>
-              <NavLink
-                to={to}
-                end={end}
-                onClick={handleNavClick}
-                title={label}
-                className="wurk-navlink"
-                style={({ isActive }) => ({
-                  display: 'flex',
-                  alignItems: 'center',
-                  gap: '0.625rem',
-                  padding: '0.5rem 0.85rem',
-                  borderRadius: 8,
-                  margin: '2px 8px',
-                  // Text stays white for every item; the active one is marked by
-                  // a subtle dark raised pill + hairline, not a bright white box.
-                  color: isActive ? 'var(--accent)' : 'var(--text)',
-                  background: isActive ? 'var(--surface-strong)' : 'transparent',
-                  boxShadow: isActive ? 'inset 0 0 0 1px var(--border)' : 'none',
-                  fontWeight: isActive ? 600 : 400,
-                  fontSize: 14,
-                  textDecoration: 'none',
-                  transition:
-                    'background var(--dur-base) var(--ease-standard), color var(--dur-base) var(--ease-standard), box-shadow var(--dur-base) var(--ease-standard)',
-                })}
+        <ul style={{ 'list-style': 'none', flex: 1 }}>
+          <For each={LINKS}>
+            {(link) => (
+              <li>
+                <A
+                  href={link.to}
+                  end={link.end}
+                  onClick={handleNavClick}
+                  title={link.label}
+                  class="wurk-navlink"
+                  activeClass="active"
+                >
+                  <i class={`fa-solid ${link.icon} wurk-navlink__icon`} aria-hidden="true" />
+                  <span class="nav-label">{link.label}</span>
+                </A>
+              </li>
+            )}
+          </For>
+
+          <Show when={customTabs().length > 0}>
+            <li aria-hidden="true" style={{ padding: '0.5rem 0.95rem 0.2rem', 'margin-top': '0.4rem' }}>
+              <div style={{ height: '1px', background: 'var(--border)', 'margin-bottom': '0.45rem' }} />
+              <span
+                class="nav-label"
+                style={{ 'font-size': '10px', 'font-weight': 600, 'letter-spacing': '0.06em', 'text-transform': 'uppercase', color: 'var(--text-muted)' }}
               >
-                <i className={`fa-solid ${icon} wurk-navlink__icon`} aria-hidden="true" />
-                <span className="nav-label">{label}</span>
-              </NavLink>
-            </li>
-          ))}
-
-          {customTabs.length > 0 && (
-            <li aria-hidden="true" style={{ padding: '0.5rem 0.95rem 0.2rem', marginTop: '0.4rem' }}>
-              <div style={{ height: 1, background: 'var(--border)', marginBottom: '0.45rem' }} />
-              <span className="nav-label" style={{ fontSize: 10, fontWeight: 600, letterSpacing: '0.06em', textTransform: 'uppercase', color: 'var(--text-muted)' }}>
                 {t('nav.extensions')}
               </span>
             </li>
-          )}
-          {customTabs.map((tab) => (
-            <li key={tab.path}>
-              {/* In-SPA route: /ext/:tab renders an Extension page (native
-                  server-rendered view, or an iframe for bare tabs[]= tabs).
-                  Registered index paths end in "/" ("locks/"); strip it so the
-                  route param round-trips to the same tab. */}
-              <NavLink
-                to={`/ext/${tab.path.replace(/\/+$/, '')}`}
-                onClick={handleNavClick}
-                title={tab.name}
-                className="wurk-navlink"
-                style={({ isActive }) => ({
-                  display: 'flex',
-                  alignItems: 'center',
-                  gap: '0.625rem',
-                  padding: '0.5rem 0.85rem',
-                  borderRadius: 8,
-                  margin: '2px 8px',
-                  color: isActive ? 'var(--accent)' : 'var(--text)',
-                  background: isActive ? 'var(--surface-strong)' : 'transparent',
-                  boxShadow: isActive ? 'inset 0 0 0 1px var(--border)' : 'none',
-                  fontWeight: isActive ? 600 : 400,
-                  fontSize: 14,
-                  textDecoration: 'none',
-                  transition:
-                    'background var(--dur-base) var(--ease-standard), color var(--dur-base) var(--ease-standard), box-shadow var(--dur-base) var(--ease-standard)',
-                })}
-              >
-                <i className="fa-solid fa-puzzle-piece wurk-navlink__icon" aria-hidden="true" />
-                <span className="nav-label">{tab.name}</span>
-              </NavLink>
-            </li>
-          ))}
+          </Show>
+          <For each={customTabs()}>
+            {(tab) => (
+              <li>
+                {/* In-SPA route: /ext/:tab renders an Extension page (native
+                    server-rendered view, or an iframe for bare tabs[]= tabs).
+                    Registered index paths end in "/" ("locks/"); strip it so the
+                    route param round-trips to the same tab. */}
+                <A
+                  href={`/ext/${tab.path.replace(/\/+$/, '')}`}
+                  onClick={handleNavClick}
+                  title={tab.name}
+                  class="wurk-navlink"
+                  activeClass="active"
+                >
+                  <i class="fa-solid fa-puzzle-piece wurk-navlink__icon" aria-hidden="true" />
+                  <span class="nav-label">{tab.name}</span>
+                </A>
+              </li>
+            )}
+          </For>
         </ul>
 
         {/* Desktop-only: pin the rail collapsed (icons) or expanded (full).
             Hidden on mobile, where the nav is a full-width drawer. */}
-        <div style={{ height: 1, background: 'var(--border)', margin: '0.5rem 1rem 0' }} />
+        <div style={{ height: '1px', background: 'var(--border)', margin: '0.5rem 1rem 0' }} />
         <button
           type="button"
-          onClick={onToggleCollapse}
-          className="nav-collapse-toggle"
-          aria-label={collapsed ? t('nav.expand') : t('nav.collapse')}
-          aria-expanded={!collapsed}
-          title={collapsed ? t('nav.expand') : t('nav.collapse')}
+          onClick={() => props.onToggleCollapse()}
+          class="nav-collapse-toggle"
+          aria-label={props.collapsed ? t('nav.expand') : t('nav.collapse')}
+          aria-expanded={!props.collapsed}
+          title={props.collapsed ? t('nav.expand') : t('nav.collapse')}
           style={{
             display: 'flex',
-            alignItems: 'center',
+            'align-items': 'center',
             gap: '0.625rem',
             width: 'calc(100% - 16px)',
             padding: '0.5rem 0.85rem',
             margin: '4px 8px',
-            borderRadius: 8,
+            'border-radius': '8px',
             border: 'none',
             background: 'transparent',
             color: 'var(--text-muted)',
-            fontSize: 13,
+            'font-size': '13px',
             cursor: 'pointer',
             font: 'inherit',
           }}
         >
           <i
-            className={`fa-solid ${collapsed ? 'fa-angles-right' : 'fa-angles-left'} wurk-navlink__icon`}
+            class={`fa-solid ${props.collapsed ? 'fa-angles-right' : 'fa-angles-left'} wurk-navlink__icon`}
             aria-hidden="true"
           />
-          <span className="nav-label">{t('nav.collapse')}</span>
+          <span class="nav-label">{t('nav.collapse')}</span>
         </button>
 
         {/* Footer: link out to the source repo. Pinned to the bottom because the
             nav list above is flex:1. Muted by default; hover lifts like a nav item. */}
-        <div style={{ height: 1, background: 'var(--border)', margin: '0.5rem 1rem' }} />
+        <div style={{ height: '1px', background: 'var(--border)', margin: '0.5rem 1rem' }} />
         <a
           href="https://github.com/developerz-ai/wurk"
           target="_blank"
           rel="noopener noreferrer"
-          className="wurk-navlink"
+          class="wurk-navlink"
           style={{
             display: 'flex',
-            alignItems: 'center',
+            'align-items': 'center',
             gap: '0.625rem',
             padding: '0.5rem 0.85rem',
             margin: '2px 8px 0.85rem',
-            borderRadius: 8,
+            'border-radius': '8px',
             color: 'var(--text-muted)',
-            fontSize: 13,
-            textDecoration: 'none',
+            'font-size': '13px',
+            'text-decoration': 'none',
             transition: 'background var(--dur-base) var(--ease-standard), color var(--dur-base) var(--ease-standard)',
           }}
         >
-          <i className="fa-brands fa-github" style={{ fontSize: 16, width: 20, textAlign: 'center', flex: 'none' }} />
-          <span className="nav-label">GitHub</span>
+          <i class="fa-brands fa-github" style={{ 'font-size': '16px', width: '20px', 'text-align': 'center', flex: 'none' }} />
+          <span class="nav-label">GitHub</span>
         </a>
       </nav>
 
       <style>{`
         .wurk-nav { width: var(--nav-width); transition: width var(--dur-page) var(--ease-emphasized); }
+        /* Base nav-item chrome (was an inline style function under React; Solid's
+           <A> toggles the .active class, so the active look lives in CSS now). */
+        .wurk-navlink {
+          display: flex;
+          align-items: center;
+          gap: 0.625rem;
+          padding: 0.5rem 0.85rem;
+          border-radius: 8px;
+          margin: 2px 8px;
+          color: var(--text);
+          background: transparent;
+          box-shadow: none;
+          font-weight: 400;
+          font-size: 14px;
+          text-decoration: none;
+          transition: background var(--dur-base) var(--ease-standard), color var(--dur-base) var(--ease-standard), box-shadow var(--dur-base) var(--ease-standard);
+        }
+        /* Text stays white for every item; the active one is marked by a subtle
+           dark raised pill + hairline, not a bright white box. */
+        .wurk-navlink.active {
+          color: var(--accent);
+          background: var(--surface-strong);
+          box-shadow: inset 0 0 0 1px var(--border);
+          font-weight: 600;
+        }
         .wurk-navlink:hover {
           background: var(--surface-hover) !important;
           color: var(--accent) !important;
@@ -305,7 +339,7 @@ export default function Nav({ open, onClose, collapsed, onToggleCollapse }: NavP
              background colour, never its size — the icon never shifts when you
              click it, and the highlight is always a circle, never a square link
              box. Tight link padding keeps the icons from drifting apart. */
-          /* !important: the NavLink carries an inline padding (0.5rem 0.85rem)
+          /* !important: the <A> carries an inline padding (0.5rem 0.85rem)
              that outranks any class rule. Zero it in the rail so the fixed-size
              round glyph container — not link padding — defines the footprint;
              the horizontal inline padding would otherwise cramp the circle in

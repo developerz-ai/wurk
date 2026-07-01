@@ -20,7 +20,7 @@ cd test/dummy && WURK_DEMO=1 WURK_DISABLED=1 bin/rails runner \
 A third terminal for a console is handy: `cd test/dummy && bin/rails console`
 
 - [x] Both processes boot with no errors
-- [x] http://localhost:3000/wurk loads the React dashboard
+- [x] http://localhost:3000/wurk loads the SolidJS dashboard
 
 ---
 

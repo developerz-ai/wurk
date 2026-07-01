@@ -9,7 +9,7 @@ module Wurk
     module Serializers
       module_function
 
-      # Wire-shape consumed by the React dashboard's landing page + SSE feed.
+      # Wire-shape consumed by the SolidJS dashboard's landing page + SSE feed.
       # Field names match the SPA's `StatsSnapshot` interface in
       # frontend/src/hooks/useSSE.ts — keep them in sync. The canonical
       # Sidekiq-compatible accessors on Wurk::Stats use `_size` suffixes;

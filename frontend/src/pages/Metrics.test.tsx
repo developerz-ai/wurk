@@ -1,54 +1,54 @@
-import React from 'react';
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
-import { render, screen, waitFor, cleanup, fireEvent } from '@testing-library/react';
-import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
+import { render, screen, waitFor, fireEvent } from '@solidjs/testing-library';
+import { QueryClient, QueryClientProvider } from '@tanstack/solid-query';
 import Metrics from './Metrics';
 
-// Stub Recharts so chart logic (one series per queue/field, pivoted rows) is
-// observable without a real layout — ResponsiveContainer renders nothing under
-// jsdom otherwise. Line/Area expose their dataKey via distinct testids so the
-// per-queue line charts and the throughput area chart can be told apart.
-vi.mock('recharts', () => {
-  const Pass = ({ children }: { children?: React.ReactNode }) => <div>{children}</div>;
+// Stub the hand-rolled SVG charts so chart logic (one series per queue/field,
+// pivoted rows) is observable without a real layout — the charts need a measured
+// container width to render under jsdom. Each series' `name ?? key` is rendered
+// into a distinct testid so the per-queue latency lines and the throughput area
+// series can be told apart, mirroring the old recharts <Line>/<Area> mock.
+vi.mock('../components/charts', () => {
+  type Series = { key: string; name?: string };
   return {
-    ResponsiveContainer: Pass,
-    LineChart: ({ children }: { children?: React.ReactNode }) => <div data-testid="linechart">{children}</div>,
-    // Show `name` when it's set (per-queue charts, where the synthetic
-    // `queue_<i>` dataKey carries no human-readable info) and fall back to
-    // `dataKey` for the Historical Snapshots panel, which uses field names
-    // directly as the series key.
-    Line: ({ dataKey, name }: { dataKey: string; name?: string }) => <span data-testid="line">{name ?? dataKey}</span>,
-    AreaChart: ({ children }: { children?: React.ReactNode }) => <div data-testid="areachart">{children}</div>,
-    Area: ({ dataKey }: { dataKey: string }) => <span data-testid="area">{dataKey}</span>,
-    BarChart: ({ children }: { children?: React.ReactNode }) => <div data-testid="barchart">{children}</div>,
-    Bar: ({ children }: { children?: React.ReactNode }) => <div>{children}</div>,
-    Cell: () => null,
-    XAxis: () => null,
-    YAxis: () => null,
-    CartesianGrid: () => null,
-    Tooltip: () => null,
-    Legend: () => null,
+    AreaChart: (props: { series: Series[] }) => (
+      <div data-testid="areachart">
+        {props.series.map((s) => (
+          <span data-testid="area">{s.name ?? s.key}</span>
+        ))}
+      </div>
+    ),
+    LineChart: (props: { series: Series[] }) => (
+      <div data-testid="linechart">
+        {props.series.map((s) => (
+          <span data-testid="line">{s.name ?? s.key}</span>
+        ))}
+      </div>
+    ),
+    BarChart: () => <div data-testid="barchart" />,
   };
 });
 
 function renderMetrics() {
   const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
-  return render(
+  return render(() => (
     <QueryClientProvider client={client}>
       <Metrics />
     </QueryClientProvider>
-  );
+  ));
 }
 
 // Route the component's fetches by URL. Defaults render an empty-but-valid page;
 // each test overrides the payload it cares about.
-function mockFetch(opts: {
-  queueHistory?: unknown;
-  snapshots?: unknown[];
-  topJobs?: unknown[];
-  series?: unknown[];
-  stats?: unknown;
-} = {}) {
+function mockFetch(
+  opts: {
+    queueHistory?: unknown;
+    snapshots?: unknown[];
+    topJobs?: unknown[];
+    series?: unknown[];
+    stats?: unknown;
+  } = {},
+) {
   const { queueHistory = { bucket: '1m', window: 86400, queues: [] }, snapshots = [], topJobs = [], series = [], stats = {} } = opts;
   return vi.fn((url: string) => {
     let body: unknown = {};
@@ -67,43 +67,45 @@ describe('Metrics page', () => {
     vi.stubGlobal('fetch', mockFetch({ stats: { processed: 100, failed: 5, latency: 1.2, processes: 4 } }));
   });
   afterEach(() => {
-    cleanup();
     vi.unstubAllGlobals();
   });
 
   it('renders the four metric cards', async () => {
     renderMetrics();
-    expect(await screen.findByText('Total Processed')).toBeDefined();
-    expect(screen.getByText('Failed Jobs')).toBeDefined();
-    expect(screen.getByText('Avg Latency')).toBeDefined();
-    expect(screen.getByText('Active Workers')).toBeDefined();
+    expect(await screen.findByText('Total Processed')).toBeInTheDocument();
+    expect(screen.getByText('Failed Jobs')).toBeInTheDocument();
+    expect(screen.getByText('Avg Latency')).toBeInTheDocument();
+    expect(screen.getByText('Active Workers')).toBeInTheDocument();
   });
 
   it('renders the throughput, queue depth, and top-job sections', async () => {
     renderMetrics();
-    expect(await screen.findByText('Throughput & Failures')).toBeDefined();
-    expect(screen.getByText('Queue Depth')).toBeDefined();
-    expect(screen.getByText('Top Job Types (Volume)')).toBeDefined();
+    expect(await screen.findByText('Throughput & Failures')).toBeInTheDocument();
+    expect(screen.getByText('Queue Depth')).toBeInTheDocument();
+    expect(screen.getByText('Top Job Types (Volume)')).toBeInTheDocument();
   });
 
   it('lists top job types with their share of total volume', async () => {
-    vi.stubGlobal('fetch', mockFetch({
-      stats: { processed: 100, failed: 5, latency: 1.2, processes: 4 },
-      topJobs: [
-        { klass: 'App::FooJob', processed: 80, failed: 20, runtime_ms: 0 },
-        { klass: 'BarJob', processed: 50, failed: 0, runtime_ms: 0 },
-      ],
-    }));
+    vi.stubGlobal(
+      'fetch',
+      mockFetch({
+        stats: { processed: 100, failed: 5, latency: 1.2, processes: 4 },
+        topJobs: [
+          { klass: 'App::FooJob', processed: 80, failed: 20, runtime_ms: 0 },
+          { klass: 'BarJob', processed: 50, failed: 0, runtime_ms: 0 },
+        ],
+      }),
+    );
     renderMetrics();
     // foo = 100, bar = 50, total = 150 → 67% / 33%.
-    expect(await screen.findByText('FooJob')).toBeDefined();
-    expect(screen.getByText('67%')).toBeDefined();
-    expect(screen.getByText('33%')).toBeDefined();
+    expect(await screen.findByText('FooJob')).toBeInTheDocument();
+    expect(screen.getByText('67%')).toBeInTheDocument();
+    expect(screen.getByText('33%')).toBeInTheDocument();
   });
 
   it('shows the throughput empty state when there is no history', async () => {
     renderMetrics();
-    await waitFor(() => expect(screen.getByText(/No history yet/i)).toBeDefined());
+    await waitFor(() => expect(screen.getByText(/No history yet/i)).toBeInTheDocument());
   });
 
   it('switches the time range when a segment is clicked', async () => {
@@ -116,24 +118,27 @@ describe('Metrics page', () => {
 
 describe('Metrics — queue latency history', () => {
   afterEach(() => {
-    cleanup();
     vi.unstubAllGlobals();
   });
 
   it('renders one latency line per queue when data exists', async () => {
     const at = 1_781_000_000;
-    vi.stubGlobal('fetch', mockFetch({
-      stats: { processed: 1, failed: 0, latency: 0, processes: 1 },
-      queueHistory: {
-        bucket: '1m', window: 86400,
-        queues: [
-          { name: 'default', points: [{ at, size: 5, latency: 1.2 }] },
-          { name: 'critical', points: [{ at, size: 2, latency: 0.4 }] },
-        ],
-      },
-    }));
+    vi.stubGlobal(
+      'fetch',
+      mockFetch({
+        stats: { processed: 1, failed: 0, latency: 0, processes: 1 },
+        queueHistory: {
+          bucket: '1m',
+          window: 86400,
+          queues: [
+            { name: 'default', points: [{ at, size: 5, latency: 1.2 }] },
+            { name: 'critical', points: [{ at, size: 2, latency: 0.4 }] },
+          ],
+        },
+      }),
+    );
     renderMetrics();
-    expect(await screen.findByText('Queue Latency (seconds)')).toBeDefined();
+    expect(await screen.findByText('Queue Latency (seconds)')).toBeInTheDocument();
     const lines = screen.getAllByTestId('line').map((n) => n.textContent);
     expect(lines).toContain('default');
     expect(lines).toContain('critical');
@@ -149,7 +154,6 @@ describe('Metrics — queue latency history', () => {
 
 describe('Metrics — historical snapshots', () => {
   afterEach(() => {
-    cleanup();
     vi.unstubAllGlobals();
   });
 
@@ -164,7 +168,7 @@ describe('Metrics — historical snapshots', () => {
     const snapshots = [{ at: 1_781_000_000, processed: 100, failures: 2, enqueued: 5, dead: 1 }];
     vi.stubGlobal('fetch', mockFetch({ stats: { processed: 1, failed: 0, latency: 0, processes: 1 }, snapshots }));
     renderMetrics();
-    expect(await screen.findByText('Historical Snapshots')).toBeDefined();
+    expect(await screen.findByText('Historical Snapshots')).toBeInTheDocument();
     const lines = screen.getAllByTestId('line').map((n) => n.textContent);
     expect(lines).toContain('enqueued');
     expect(lines).toContain('dead');
