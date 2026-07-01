@@ -8,6 +8,7 @@ import { usePageParam } from '../hooks/usePageParam';
 import { t } from '../i18n';
 import { PageHeader } from '../components/PageHeader';
 import { relativeTime, truncate } from '../utils';
+import { SkeletonTable } from '../components/Skeleton';
 
 interface Batch {
   bid: string;
@@ -56,7 +57,13 @@ export default function Batches() {
 
   const { sorted, sort, toggle } = useSort(data?.batches ?? [], SORT);
 
-  if (isLoading) return <div className="empty-state"><span className="spinner" /></div>;
+  if (isLoading)
+    return (
+      <div>
+        <PageHeader icon="fa-table-cells-large" title={t('nav.batches')} summary={t('summaries.batches')} />
+        <SkeletonTable rows={8} cols={7} />
+      </div>
+    );
   if (isError || !data) return <div className="empty-state" style={{ color: 'var(--danger)' }}>{t('common.error')}</div>;
 
   return (

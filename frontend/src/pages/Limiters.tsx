@@ -6,6 +6,7 @@ import { useSort, type Accessors } from '../hooks/useSort';
 import { usePageParam } from '../hooks/usePageParam';
 import { t } from '../i18n';
 import { PageHeader } from '../components/PageHeader';
+import { SkeletonTable } from '../components/Skeleton';
 import { useMeta } from '../hooks/useMeta';
 
 // Uniform live status every limiter type reports (Wurk::Limiter#status).
@@ -79,7 +80,14 @@ export default function Limiters() {
 
   const { sorted, sort, toggle } = useSort(data?.limiters ?? [], SORT);
 
-  if (isLoading) return <div className="empty-state"><span className="spinner" /></div>;
+  if (isLoading) {
+    return (
+      <div>
+        <PageHeader icon="fa-gauge" title={t('nav.limiters')} summary={t('summaries.limiters')} />
+        <SkeletonTable rows={8} cols={readOnly ? 6 : 7} />
+      </div>
+    );
+  }
   if (isError || !data) return <div className="empty-state" style={{ color: 'var(--danger)' }}>{t('common.error')}</div>;
 
   return (

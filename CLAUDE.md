@@ -25,6 +25,8 @@ Three pillars, all must stay true:
 | Benchmarks | `bin/rake bench` |
 | Dummy app | `cd test/dummy && bin/rails s` |
 | Standalone runner | `exe/wurk` |
+| Dashboard build | `bin/rake frontend:build` (`bun install` + `vite build` → `vendor/assets/`) |
+| Dashboard tests | `bun run test` in `frontend/` (vitest) |
 | Dashboard HMR dev | `WURK_VITE_DEV=1` then boot dummy |
 | Release | `bin/rake release` (Vite build → `vendor/assets/` → gem build → push) |
 
@@ -101,7 +103,9 @@ Ruby `>= 3.2.0`, Redis `>= 7.0.0`. JRuby / TruffleRuby / Windows fall back to th
 
 ## Dashboard
 
-React + TypeScript + Vite SPA mounted under the engine. **Precompiled bundle ships in the gem** (`vendor/assets/`); consumers never run Node. SSE for live updates, TanStack Query for state, Recharts for charts, CSS variables for theming. Left-rail nav (drawer on mobile), dark-only, mobile-first, i18n with host-app override. AI panes (anomaly detection, NL queries, error triage, capacity advisor) are opt-in and require an Anthropic API token.
+React + TypeScript + Vite SPA mounted under the engine, built with **bun** (`bun install` + `vite build`; contributors need bun, consumers never run Node or bun). **Precompiled bundle ships in the gem** (`vendor/assets/`). SSE for live updates, TanStack Query for state, Recharts for charts. Pages are **lazy-loaded behind a route-level `<Suspense>`** (code-split chunks) with **skeleton loaders** (`components/Skeleton.tsx`) as the fallback. Left-rail nav (drawer on mobile), dark-only, mobile-first, i18n with host-app override. AI panes (anomaly detection, NL queries, error triage, capacity advisor) are opt-in and require an Anthropic API token.
+
+**Styles** are a SOLID/SRP **SCSS** architecture under `frontend/src/styles/` — `abstracts/` (Sass maps, `to-rem()`/`breakpoint()`/`z()` functions, `respond-down()`/`transition()`/`surface()` mixins, CSS-var `:root` tokens, keyframes) → `base/` (reset, typography, scrollbar, reduced-motion policy) → `components/` (one file per atom: button, badge, card, table, modal, skeleton…) → `layout/` (shell, nav, page-header) → `pages/` (dashboard hero, Obsidian system, search, extension), composed by `main.scss`. Tailwind + daisyUI directives stay in the sibling `tailwind.css`; the SCSS `:root` tokens (unlayered) override daisyUI's theme. All lengths are `to-rem()`; motion runs off a shared duration/easing scale (`--dur-*` / `--ease-*`). `rem` is a reserved Sass calc name — the px→rem helper is `to-rem()`, not `rem()`.
 
 ## Never
 

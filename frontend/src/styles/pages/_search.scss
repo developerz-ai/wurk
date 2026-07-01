@@ -1,0 +1,52 @@
+// ── Search empty state ───────────────────────────────────────────────────────
+// The pre-query landing: icon, hint, and sample-query chips. `.chip` itself
+// lives in `components/_chips.scss`; this owns only the surrounding layout.
+
+@use '../abstracts' as *;
+
+.search-empty {
+  text-align: center;
+  padding: to-rem(40) to-rem(24) to-rem(48);
+  @include surface;
+  box-shadow: var(--shadow);
+  animation: fade-up var(--dur-page) var(--ease-standard) both;
+
+  &__icon {
+    width: to-rem(52);
+    height: to-rem(52);
+    margin: 0 auto to-rem(14.4);
+    border-radius: to-rem(14);
+    display: grid;
+    place-items: center;
+    background: var(--surface-strong);
+    border: to-rem(1) solid var(--border-strong);
+    color: var(--text-muted);
+    font-size: to-rem(20);
+  }
+
+  &__title {
+    font-size: to-rem(16);
+    font-weight: 600;
+  }
+
+  &__hint {
+    margin: to-rem(6.4) auto 0;
+    max-width: to-rem(460);
+    font-size: to-rem(13);
+    color: var(--text-muted);
+  }
+
+  &__chips {
+    margin-top: to-rem(17.6);
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    justify-content: center;
+    gap: to-rem(8);
+  }
+
+  &__chips-label {
+    font-size: to-rem(12);
+    color: var(--text-muted);
+  }
+}

@@ -1,0 +1,33 @@
+// ── Motion accessibility policy ──────────────────────────────────────────────
+// Single global honouring of `prefers-reduced-motion`. Individual components
+// declare their own transitions; this is the one place that revokes them for
+// users who asked for stillness, so the policy lives in exactly one file.
+
+@use '../abstracts' as *;
+
+@include reduced-motion {
+  .page-header,
+  .dash-hero,
+  .table-wrapper {
+    animation: none;
+  }
+
+  .card--stat {
+    transition: none;
+  }
+
+  .modal,
+  .modal::backdrop {
+    transition: none;
+  }
+
+  .row-clickable td:last-child::after {
+    transition: none;
+  }
+
+  // Skeletons stop shimmering but stay visible as static placeholders.
+  .skeleton,
+  .skeleton::after {
+    animation: none;
+  }
+}

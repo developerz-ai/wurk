@@ -1,0 +1,98 @@
+// ── Tables ───────────────────────────────────────────────────────────────────
+// Obsidian tables: row borders only, no zebra striping. Sticky header floats
+// over scrolling rows on an opaque fill. Sortable headers move padding onto the
+// inner button so the whole cell is one keyboard-focusable target.
+
+@use '../abstracts' as *;
+
+table {
+  border-collapse: collapse;
+  width: 100%;
+}
+
+th,
+td {
+  text-align: start;
+  padding: to-rem(10) to-rem(13.6);
+  border-bottom: to-rem(1) solid var(--border);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  max-width: to-rem(300);
+}
+
+th {
+  color: var(--text-muted);
+  font-family: var(--font-mono);
+  font-weight: 500;
+  font-size: to-rem(11);
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+  // Sticky header floats over scrolling rows, so it gets an opaque fill.
+  background: var(--surface-strong);
+  position: sticky;
+  top: 0;
+  z-index: z('base');
+}
+
+tbody tr {
+  @include transition(background, 'fast');
+
+  &:hover td {
+    background: var(--surface-hover);
+  }
+
+  &:last-child td {
+    border-bottom: none;
+  }
+}
+
+// ── Sortable column headers ──────────────────────────────────────────────────
+.th-sortable {
+  padding: 0;
+
+  &__btn {
+    appearance: none;
+    -webkit-appearance: none;
+    display: inline-flex;
+    align-items: center;
+    gap: to-rem(6.4);
+    width: 100%;
+    padding: to-rem(10) to-rem(13.6);
+    background: none;
+    border: 0;
+    margin: 0;
+    color: inherit;
+    font: inherit;
+    letter-spacing: inherit;
+    text-transform: inherit;
+    text-align: start;
+    cursor: pointer;
+    user-select: none;
+    -webkit-user-select: none;
+    @include transition(color, 'fast');
+
+    &:hover {
+      color: var(--text);
+    }
+
+    &:focus-visible {
+      @include focus-ring;
+    }
+  }
+
+  &__icon {
+    font-size: to-rem(9);
+    opacity: 0.35;
+    @include transition((opacity, color), 'fast');
+
+    &.is-active {
+      opacity: 1;
+      color: var(--accent);
+    }
+  }
+
+  &__btn:hover &__icon {
+    opacity: 0.7;
+  }
+}

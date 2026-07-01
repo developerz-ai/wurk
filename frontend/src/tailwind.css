@@ -1,0 +1,12 @@
+/* Tailwind + daisyUI entry (processed by @tailwindcss/vite). Kept as plain CSS
+   because these at-rules are Tailwind directives, not Sass. Loaded before
+   styles/main.scss in main.tsx; the SCSS `:root` token block (unlayered) then
+   overrides daisyUI's layered `dark` theme to the Obsidian zinc palette. */
+@import "tailwindcss";
+@import "@fortawesome/fontawesome-free/css/all.min.css";
+
+/* Dark-only dashboard. daisyUI's `dark` theme provides the component scheme;
+   the palette itself is overridden in styles/abstracts/_tokens.scss. */
+@plugin "daisyui" {
+  themes: dark --default;
+}

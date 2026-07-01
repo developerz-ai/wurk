@@ -1,10 +1,10 @@
 # Precompiled Assets
 
-The dashboard is a React SPA. Building it requires Node, npm, Vite. **Consumers of the gem must never need any of that.**
+The dashboard is a React SPA. Building it requires bun, Vite. **Consumers of the gem must never need any of that.**
 
 ## Policy
 
-Assets are built once, at gem release time, and shipped inside the gem. Installing wurk into a Rails app pulls in the prebuilt bundle. No npm install, no asset pipeline integration on the consumer side, no Sprockets configuration needed.
+Assets are built once, at gem release time, and shipped inside the gem. Installing wurk into a Rails app pulls in the prebuilt bundle. No bun install, no asset pipeline integration on the consumer side, no Sprockets configuration needed.
 
 ## What ships in the gem
 
@@ -18,8 +18,8 @@ The gem's load path includes the precompiled bundle directory. The engine serves
 
 The release process (a Rake task or GitHub Action) does:
 
-1. Install Node deps in the gem's frontend source directory.
-2. Run Vite production build.
+1. Install JS deps in the gem's frontend source directory (`bun install`).
+2. Run Vite production build (SCSS + TS compiled to one CSS + JS bundle).
 3. Copy the bundle output into the gem's vendored asset directory.
 4. Run gem build.
 5. Push the gem to RubyGems.

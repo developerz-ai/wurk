@@ -118,13 +118,13 @@ end
 namespace :frontend do
   desc "Install JS deps for the dashboard"
   task :install do
-    sh "npm", "ci", chdir: FRONTEND_DIR
+    sh "bun", "install", "--frozen-lockfile", chdir: FRONTEND_DIR
   end
 
   desc "Build the React SPA into vendor/assets/"
   task :build do
-    sh "npm", "ci", chdir: FRONTEND_DIR
-    sh "npm", "run", "build", chdir: FRONTEND_DIR
+    sh "bun", "install", "--frozen-lockfile", chdir: FRONTEND_DIR
+    sh "bun", "run", "build", chdir: FRONTEND_DIR
     # Vite's --emptyOutDir wipes the tracked .keep; restore it so the dir stays
     # in git and `rake release`'s guard_clean sees a clean tree.
     touch File.join(VENDOR_ASSETS_DIR, "dashboard", ".keep")
@@ -132,7 +132,7 @@ namespace :frontend do
 
   desc "Vite dev server (set WURK_VITE_DEV=1 in the dummy to use it)"
   task :dev do
-    sh "npm", "run", "dev", chdir: FRONTEND_DIR
+    sh "bun", "run", "dev", chdir: FRONTEND_DIR
   end
 end
 

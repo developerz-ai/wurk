@@ -1,0 +1,41 @@
+// ── Form controls ────────────────────────────────────────────────────────────
+// The shared control foundation (select · input · button) plus text-field
+// specifics. Button variants live in `_buttons.scss`; both build on this base.
+
+@use '../abstracts' as *;
+
+.select,
+.input,
+.btn {
+  background: var(--surface-strong);
+  border: to-rem(1) solid var(--border-strong);
+  color: var(--text);
+  border-radius: var(--radius);
+  // Most properties settle at the base pace; the press feedback (transform)
+  // snaps back fast so buttons feel physical, not floaty.
+  transition:
+    border-color var(--dur-base) var(--ease-standard),
+    color var(--dur-base) var(--ease-standard),
+    background var(--dur-base) var(--ease-standard),
+    box-shadow var(--dur-base) var(--ease-standard),
+    transform var(--dur-press) var(--ease-standard);
+}
+
+.select {
+  padding: to-rem(6.4) to-rem(12);
+  font-size: to-rem(13);
+  cursor: pointer;
+}
+
+.input {
+  padding: to-rem(8) to-rem(12.8);
+  font-size: to-rem(14);
+  width: 100%;
+}
+
+.select:focus,
+.input:focus {
+  outline: none;
+  border-color: var(--accent);
+  box-shadow: 0 0 0 to-rem(3) var(--accent-ring);
+}

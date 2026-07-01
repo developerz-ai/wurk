@@ -15,6 +15,7 @@ import {
   Legend,
   ResponsiveContainer,
 } from 'recharts';
+import { Skeleton } from '../components/Skeleton';
 import { t } from '../i18n';
 import { formatDuration, truncate } from '../utils';
 
@@ -147,8 +148,8 @@ const tooltipStyle = {
 // a beat before the data lands.
 function ChartLoader({ height }: { height: number }) {
   return (
-    <div style={{ height, display: 'grid', placeItems: 'center' }}>
-      <span className="spinner" role="status" aria-label={t('common.loading')} />
+    <div style={{ height }} role="status" aria-label={t('common.loading')}>
+      <Skeleton height="100%" />
     </div>
   );
 }

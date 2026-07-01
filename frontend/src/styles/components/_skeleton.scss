@@ -1,0 +1,106 @@
+// ── Skeleton loaders ─────────────────────────────────────────────────────────
+// Content-shaped placeholders shown while data loads — a calmer first paint than
+// a lone spinner, and no layout shift when real content arrives. A highlight
+// band sweeps across each block (keyframe in `abstracts/_animations.scss`);
+// reduced-motion freezes it to a static tint (`base/_motion.scss`).
+
+@use '../abstracts' as *;
+
+.skeleton {
+  // Two tones mixed off the surface so the shimmer reads on any background.
+  --skeleton-base: color-mix(in oklch, var(--color-base-content) 7%, var(--surface));
+  --skeleton-highlight: color-mix(in oklch, var(--color-base-content) 15%, var(--surface));
+
+  display: block;
+  border-radius: var(--radius-sm);
+  background-color: var(--skeleton-base);
+  background-image: linear-gradient(
+    90deg,
+    transparent 0%,
+    var(--skeleton-highlight) 50%,
+    transparent 100%
+  );
+  background-size: 200% 100%;
+  background-repeat: no-repeat;
+  animation: shimmer 1.4s var(--ease-standard) infinite;
+  // Placeholders convey no text — keep them out of the a11y tree.
+  user-select: none;
+}
+
+// Text-line placeholder: full width by default, rounded, sized like a line of
+// body copy. Callers vary `width` inline for a natural ragged edge.
+.skeleton--text {
+  height: to-rem(12);
+  border-radius: 999px;
+}
+
+.skeleton--heading {
+  height: to-rem(22);
+  border-radius: var(--radius-sm);
+}
+
+.skeleton--circle {
+  border-radius: 50%;
+}
+
+// A vertical stack of shimmering lines — the default fallback body.
+.skeleton-stack {
+  display: flex;
+  flex-direction: column;
+  gap: to-rem(12);
+}
+
+// Table placeholder: mirrors the real `.table-wrapper` chrome so the swap to
+// live rows is seamless.
+.skeleton-table {
+  @include surface;
+  padding: to-rem(8) 0;
+
+  &__row {
+    display: flex;
+    align-items: center;
+    gap: to-rem(16);
+    padding: to-rem(12) to-rem(16);
+    border-bottom: to-rem(1) solid var(--border);
+
+    &:last-child {
+      border-bottom: none;
+    }
+  }
+
+  &__cell {
+    height: to-rem(12);
+    flex: 1;
+
+    // Stagger cell widths so a placeholder row reads like data, not a grid.
+    &:first-child {
+      flex: 0 0 22%;
+    }
+    &:last-child {
+      flex: 0 0 12%;
+    }
+  }
+}
+
+// Metric-card placeholder grid for dashboard-style stat rows.
+.skeleton-cards {
+  display: grid;
+  grid-template-columns: repeat(4, 1fr);
+  gap: to-rem(12);
+  margin-bottom: to-rem(12);
+
+  @include respond-down('md') {
+    grid-template-columns: repeat(2, 1fr);
+  }
+  @include respond-down('xs') {
+    grid-template-columns: 1fr;
+  }
+}
+
+.skeleton-card {
+  @include surface;
+  padding: to-rem(18);
+  display: flex;
+  flex-direction: column;
+  gap: to-rem(14);
+}

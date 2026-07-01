@@ -1,0 +1,42 @@
+// ── Sass-level design variables ──────────────────────────────────────────────
+// Compile-time constants consumed by functions/mixins. These emit NO CSS on
+// their own; runtime-themeable values live as CSS custom properties in
+// `_tokens.scss`. Single responsibility: hold the maps, nothing else.
+
+// Responsive breakpoints (max-width, mobile-first shell). Keys are named after
+// the surface they gate, values preserved verbatim from the original stylesheet
+// so behaviour is byte-identical after the split.
+$breakpoints: (
+  'xs': 520px,
+  'sm': 560px,
+  'mobile': 767px,
+  'tablet': 820px,
+  'md': 900px,
+);
+
+// Motion scale. A small, deliberate set of durations — hover micro-interactions
+// stay snappy, overlays feel considered. Mirrored into CSS vars in `_tokens`.
+$durations: (
+  'press': 80ms,
+  'fast': 120ms,
+  'base': 160ms,
+  'slow': 240ms,
+  'page': 350ms,
+);
+
+// Easing curves. `standard` for most state changes, `emphasized` for entrances
+// (the expressive decelerate used by the modal), `linear` for spinners.
+$easings: (
+  'standard': cubic-bezier(0.4, 0, 0.2, 1),
+  'emphasized': cubic-bezier(0.16, 1, 0.3, 1),
+  'linear': linear,
+);
+
+// Stacking order. Named layers beat scattered magic z-index literals.
+$z-layers: (
+  'base': 1,
+  'sticky-col': 2,
+  'sticky-corner': 3,
+  'nav': 100,
+  'hamburger': 200,
+);

@@ -3,6 +3,7 @@ import { useEffect, type ReactNode } from 'react';
 import { Link, useParams } from 'react-router-dom';
 import { t } from '../i18n';
 import { relativeTime } from '../utils';
+import { SkeletonCards } from '../components/Skeleton';
 
 interface BatchDetailData {
   bid: string;
@@ -72,7 +73,17 @@ export default function BatchDetail() {
       }),
   });
 
-  if (isLoading) return <div className="empty-state"><span className="spinner" /></div>;
+  if (isLoading)
+    return (
+      <div>
+        <div className="section-header" style={{ gap: '0.75rem' }}>
+          <Link to="/batches" className="btn btn-sm">← {t('nav.batches')}</Link>
+        </div>
+        <div style={{ marginTop: '1rem' }}>
+          <SkeletonCards count={8} />
+        </div>
+      </div>
+    );
   if (isError || !data) return <div className="empty-state" style={{ color: 'var(--danger)' }}>{t('common.error')}</div>;
 
   const done = data.total - data.pending;

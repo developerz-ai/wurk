@@ -14,7 +14,8 @@ interface ModalProps {
 // Reusable accessible dialog on the native <dialog> element — focus trapping,
 // Esc-to-close, and the top-layer/backdrop come from the platform. The dialog
 // stays mounted (not conditionally rendered) and is driven by showModal()/close(),
-// so enter AND exit animate via CSS (@starting-style + allow-discrete in styles.css).
+// so enter AND exit animate via CSS (@starting-style + allow-discrete in
+// styles/components/_modal.scss).
 export default function Modal({ open, onClose, title, children, footer, width = 640 }: ModalProps) {
   const ref = useRef<HTMLDialogElement>(null);
   const titleId = useRef(`modal-title-${Math.random().toString(36).slice(2)}`).current;

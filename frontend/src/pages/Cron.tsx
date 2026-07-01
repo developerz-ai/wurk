@@ -2,6 +2,7 @@ import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { useEffect, useState } from 'react';
 import { t } from '../i18n';
 import { PageHeader } from '../components/PageHeader';
+import { SkeletonTable } from '../components/Skeleton';
 import Modal from '../components/Modal';
 import { relativeTime, isoTime, truncate } from '../utils';
 import { useMeta } from '../hooks/useMeta';
@@ -75,7 +76,14 @@ export default function Cron() {
 
   const { sorted, sort, toggle } = useSort(data ?? [], SORT);
 
-  if (isLoading) return <div className="empty-state"><span className="spinner" /></div>;
+  if (isLoading) {
+    return (
+      <div>
+        <PageHeader icon="fa-stopwatch" title={t('nav.cron')} summary={t('summaries.cron')} />
+        <SkeletonTable rows={8} cols={readOnly ? 6 : 7} />
+      </div>
+    );
+  }
   if (isError || !data) return <div className="empty-state" style={{ color: 'var(--danger)' }}>{t('common.error')}</div>;
 
   return (
@@ -162,7 +170,7 @@ export default function Cron() {
         }
       >
         {historyLoading ? (
-          <div className="empty-state"><span className="spinner" /></div>
+          <SkeletonTable rows={6} cols={2} />
         ) : historyError ? (
           <div className="empty-state" style={{ color: 'var(--danger)' }}>{t('common.error')}</div>
         ) : !history || history.length === 0 ? (

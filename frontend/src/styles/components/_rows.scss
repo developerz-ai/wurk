@@ -1,0 +1,49 @@
+// ── Clickable list rows ──────────────────────────────────────────────────────
+// Rows that open a detail modal. A low-key chevron at the row's end reads as
+// interactive at rest and brightens + nudges on hover. Mirrored under RTL.
+
+@use '../abstracts' as *;
+
+.row-clickable {
+  cursor: pointer;
+
+  &:hover td {
+    background: var(--accent-soft);
+  }
+
+  td:last-child {
+    position: relative;
+    padding-inline-end: to-rem(29.6);
+
+    &::after {
+      content: '\203A'; // ›
+      position: absolute;
+      inset-inline-end: to-rem(12.8);
+      top: 50%;
+      transform: translateY(-50%);
+      font-size: to-rem(15);
+      line-height: 1;
+      color: var(--text-muted);
+      opacity: 0.28;
+      @include transition((opacity, transform, color), 'base');
+    }
+  }
+
+  &:hover td:last-child::after {
+    opacity: 0.9;
+    color: var(--accent);
+    transform: translateY(-50%) translateX(to-rem(3));
+  }
+}
+
+// Mirror the affordance under RTL: a left-pointing chevron that nudges toward
+// the inline-start on hover.
+[dir='rtl'] .row-clickable {
+  td:last-child::after {
+    content: '\2039'; // ‹
+  }
+
+  &:hover td:last-child::after {
+    transform: translateY(-50%) translateX(to-rem(-3));
+  }
+}

@@ -1,0 +1,28 @@
+// ── Custom scrollbars ────────────────────────────────────────────────────────
+// Thin, low-contrast thumbs that read as part of the surface, not chrome.
+
+* {
+  scrollbar-width: thin;
+  scrollbar-color: color-mix(in oklch, var(--color-base-content) 22%, transparent) transparent;
+}
+
+*::-webkit-scrollbar {
+  width: to-rem(10);
+  height: to-rem(10);
+}
+
+*::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+*::-webkit-scrollbar-thumb {
+  background: color-mix(in oklch, var(--color-base-content) 16%, transparent);
+  border-radius: 999px;
+  border: to-rem(2) solid transparent;
+  background-clip: padding-box;
+
+  &:hover {
+    background: color-mix(in oklch, var(--color-base-content) 28%, transparent);
+    background-clip: padding-box;
+  }
+}

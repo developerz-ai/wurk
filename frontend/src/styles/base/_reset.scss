@@ -1,0 +1,45 @@
+// ── Reset ────────────────────────────────────────────────────────────────────
+// Minimal, opinionated. Owns box-sizing, margin/padding zeroing, and the global
+// interaction defaults (links, buttons, tap highlight).
+
+@use '../abstracts' as *;
+
+*,
+*::before,
+*::after {
+  box-sizing: border-box;
+  margin: 0;
+  padding: 0;
+}
+
+body {
+  min-height: 100vh;
+  min-height: 100dvh; // account for mobile browser chrome (dynamic viewport)
+  background: var(--bg);
+  color: var(--text);
+  font-family: var(--font-sans);
+  font-size: to-rem(14);
+  line-height: 1.5;
+  -webkit-font-smoothing: antialiased;
+  text-rendering: optimizeLegibility;
+  // Kill the mobile tap-highlight flash (a coloured box on tapped links/rows).
+  -webkit-tap-highlight-color: transparent;
+}
+
+a {
+  color: var(--accent);
+  text-decoration: none;
+  @include transition(color, 'base');
+
+  &:hover {
+    color: var(--accent-hover);
+    text-decoration: underline;
+    text-underline-offset: to-rem(2);
+  }
+}
+
+button {
+  cursor: pointer;
+  font-family: inherit;
+  font-size: inherit;
+}

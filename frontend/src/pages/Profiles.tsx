@@ -1,5 +1,6 @@
 import { useQuery } from '@tanstack/react-query';
 import { useEffect } from 'react';
+import { SkeletonTable } from '../components/Skeleton';
 import { t } from '../i18n';
 
 // One row from GET /wurk/api/profiles (Wurk::Api::Serializers.profile_record).
@@ -38,7 +39,7 @@ export default function Profiles() {
     refetchInterval: 5000,
   });
 
-  if (isLoading) return <div className="obs"><div className="empty-state"><span className="spinner" /></div></div>;
+  if (isLoading) return <div className="obs"><SkeletonTable rows={8} cols={6} /></div>;
   // Only gate on shape, not isError — with refetchInterval polling, a transient
   // background refetch failure flips isError true while the last good payload
   // is still cached. Showing the error state then would blank the page on

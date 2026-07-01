@@ -1,0 +1,93 @@
+// ── App shell ────────────────────────────────────────────────────────────────
+// The nav + main flex frame and its mobile adaptations: hamburger, drawer
+// gutters, denser cells, and the frozen identifier column on wide tables.
+
+@use '../abstracts' as *;
+
+.hamburger {
+  background: var(--surface-strong);
+  border: to-rem(1) solid var(--border-strong);
+  color: var(--text);
+  padding: to-rem(8) to-rem(10.4);
+  border-radius: var(--radius);
+  font-size: to-rem(16);
+  line-height: 1;
+  box-shadow: var(--shadow);
+  display: none;
+}
+
+// A flex item defaults to min-width:auto and refuses to shrink below its
+// content — so a table wider than the viewport blew the page out. min-width:0
+// lets `.main-content` shrink, handing horizontal scroll to each table wrapper.
+.main-content {
+  min-width: 0;
+}
+
+@include respond-down('mobile') {
+  .hamburger {
+    display: block;
+  }
+
+  .main-content {
+    margin-inline-start: 0 !important;
+    // Tighter side gutters on mobile; leave room for the fixed hamburger.
+    padding: to-rem(56) to-rem(13.6) to-rem(24) !important;
+  }
+
+  // Denser cells so wide tables fit more before needing a horizontal scroll.
+  th,
+  td {
+    padding: to-rem(8.8) to-rem(9.6);
+    max-width: to-rem(220);
+  }
+
+  // Sortable header padding lives on the button, so shrink that too.
+  .th-sortable {
+    padding: 0;
+
+    &__btn {
+      padding: to-rem(8.8) to-rem(9.6);
+    }
+  }
+
+  .table-wrapper {
+    max-height: calc(100vh - #{to-rem(160)});
+  }
+
+  // Freeze the identifier (first) column so it stays on-screen while the rest of
+  // a wide row scrolls horizontally. Solid fill + hairline edge marks the frozen
+  // boundary. Header corner sits above both sticky header and sticky column.
+  .table-wrapper th:first-child,
+  .table-wrapper td:first-child {
+    position: sticky;
+    inset-inline-start: 0;
+    background: var(--surface);
+    box-shadow: to-rem(1) 0 0 var(--border);
+  }
+
+  // The frozen column's hairline faces the scrolling body, opposite side in RTL.
+  [dir='rtl'] .table-wrapper th:first-child,
+  [dir='rtl'] .table-wrapper td:first-child {
+    box-shadow: to-rem(-1) 0 0 var(--border);
+  }
+
+  .table-wrapper td:first-child {
+    z-index: z('sticky-col');
+  }
+
+  .table-wrapper th:first-child {
+    z-index: z('sticky-corner');
+    background: var(--surface-strong);
+  }
+
+  // Row-hover tint would let sideways-scrolled cells bleed through the pinned
+  // column; stack the tint over an opaque surface so it stays solid.
+  .table-wrapper tbody tr:hover td:first-child {
+    background: linear-gradient(var(--accent-soft), var(--accent-soft)), var(--surface);
+  }
+
+  // Comfortable tap targets for pager controls.
+  .btn {
+    min-height: to-rem(38);
+  }
+}

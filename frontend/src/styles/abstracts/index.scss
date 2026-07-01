@@ -1,0 +1,9 @@
+// ── Abstracts barrel ─────────────────────────────────────────────────────────
+// The one import a component needs: `@use '../abstracts' as *;` exposes every
+// function and mixin. Only CSS-free helpers are forwarded here — token and
+// keyframe partials emit real CSS and are `@use`d once from `main.scss` so they
+// aren't duplicated per component.
+
+@forward 'variables';
+@forward 'functions';
+@forward 'mixins';
