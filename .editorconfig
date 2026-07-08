@@ -8,9 +8,17 @@ trim_trailing_whitespace = true
 indent_style = space
 indent_size = 2
 
-[*.md]
-trim_trailing_whitespace = false
+[*.{rb,gemspec}]
+indent_style = space
+indent_size = 2
 
 [{Rakefile,Gemfile}]
 indent_style = space
 indent_size = 2
+
+[*.{yml,yaml,json}]
+indent_style = space
+indent_size = 2
+
+[*.md]
+trim_trailing_whitespace = false
