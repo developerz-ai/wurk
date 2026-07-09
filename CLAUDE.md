@@ -94,7 +94,7 @@ Skip step 3 → leaked sockets in children. Skip step 5 → children corrupt eac
 - **Parity tests are oracles.** When Wurk diverges from a parity test, Wurk is wrong unless the divergence is explicitly documented as intentional.
 - **Never mock Redis** in integration or parity tests. Real Redis, unique namespace.
 - **Coverage gate.** SimpleCov **line** and **branch** coverage on `lib/` must both stay ≥90% (blocking; `minimum_coverage line: 90, branch: 90`). Branch was ratcheted from ~78% to ≥90% in #67 — keep new code at parity. The Cobertura report is still uploaded for per-file inspection. Coverage runs merge across the `minitest-parallel_fork` workers via `SimpleCov.at_fork`.
-- **CI** on GitHub Actions / Blacksmith runners. Benchmark bot comments deltas on every PR; >5% regression flags it.
+- **CI** on GitHub Actions / Blacksmith runners. Bench suite runs nightly against main (plus `workflow_dispatch` for pre-merge spot checks) and uploads results as artifacts; compare against `bin/bench-compare` locally when chasing a regression.
 - **CI standard.** Runners are Blacksmith (`blacksmith-4vcpu-ubuntu-2404`; 8vcpu for bench — larger SKUs are deliberate, don't downsize). Every workflow declares a `concurrency` group with cancel-in-progress, and every job sets `timeout-minutes`. Deploy/publish workflows (deploy-demo, pages, release) never auto-cancel: `cancel-in-progress: false`.
 
 ## Platforms
