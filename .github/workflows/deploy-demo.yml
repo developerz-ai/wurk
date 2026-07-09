@@ -27,8 +27,8 @@ on:
         default: main
 
 concurrency:
-  group: deploy-demo
-  cancel-in-progress: false # never interrupt an in-flight build
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
 
 # Least privilege at the workflow level; the build job opts into packages:write.
 permissions:

@@ -1,10 +1,11 @@
 # yaml-language-server: $schema=https://developerz.ai/schemas/maintainer.v1.json
 # developerz.ai maintainer policy — developerz-ai/wurk
 #
-# First dogfood pass: triage-only. The bot qualifies, labels, comments, and
-# asks reporters for missing repro detail. No coding handoff and no auto-merge
-# yet — flip handoff.mode to `webhook` (with a webhook_ref) once a coding-agent
-# hook is wired. Everything not set here uses the schema defaults.
+# Dogfood pass with coding handoff live. The bot triages (qualifies, labels,
+# asks reporters for repro) and, once a task is ready, dispatches coding to the
+# fleet over the webhook handoff. Auto-merge stays off, and we defer to other
+# bots (coderabbit/copilot/dependabot) before acting on PRs. Everything not set
+# here uses the schema defaults.
 version: 1
 
 tone:
@@ -17,7 +18,8 @@ triage:
   qualify_into: [bug, feature, dupe, question]
 
 handoff:
-  mode: none
+  mode: webhook
+  ask_reporter_first: false
 
 pr:
   wait_for_other_bots: [coderabbit, copilot, dependabot]
