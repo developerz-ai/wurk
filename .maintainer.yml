@@ -17,7 +17,8 @@ triage:
   qualify_into: [bug, feature, dupe, question]
 
 handoff:
-  mode: none
+  mode: webhook
+  ask_reporter_first: false
 
 pr:
   wait_for_other_bots: [coderabbit, copilot, dependabot]
