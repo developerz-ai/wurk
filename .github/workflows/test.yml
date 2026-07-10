@@ -11,24 +11,26 @@ permissions:
   contents: read
 
 concurrency:
-  group: test-${{ github.workflow }}-${{ github.ref }}
+  group: ${{ github.workflow }}-${{ github.ref }}
   cancel-in-progress: true
 
 jobs:
   test:
-    # No explicit `name:` so GitHub's default matrix naming emits
-    # "test (<ruby>, <rails>)" — matching the contexts required by branch
-    # protection (test (3.4, 7.2) and test (4.0, 8.0)). The 4.0/8.0 leg is added
-    # via `include` to satisfy the required context while keeping the #29 matrix
-    # (Ruby 3.2/3.3/3.4 × Rails 7.2/8.0).
+    # No explicit `name:` — GitHub's default matrix naming emits
+    # "test (<ruby>, <rails>)", which branch protection (strict: true) requires
+    # byte-identical for "test (3.4, 7.2)" and "test (4.0, 8.0)" (merge-gated).
+    # Trimmed from the 7-leg 3.2/3.3/3.4 × 7.2/8.0 matrix (#290): the two
+    # required legs plus one non-edge middle combo (3.3/8.0) for coverage.
     runs-on: blacksmith-4vcpu-ubuntu-2404
     timeout-minutes: 10
     strategy:
       fail-fast: false
       matrix:
-        ruby: ["3.2", "3.3", "3.4"]
-        rails: ["7.2", "8.0"]
         include:
+          - ruby: "3.3"
+            rails: "8.0"
+          - ruby: "3.4"
+            rails: "7.2"
           - ruby: "4.0"
             rails: "8.0"
     services:
