@@ -48,3 +48,6 @@ vendor/assets/dashboard/*
 # checkouts and per-harness lockfiles they produce are not.
 test/ecosystem/.checkouts/
 test/ecosystem/*/Gemfile.lock
+
+# CodeGraph index — local per-machine SQLite DB (.codegraph/); never committed
+.codegraph/
