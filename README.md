@@ -160,3 +160,4 @@ is the same basis the Supreme Court upheld for Google's reuse of the Java API in
 *Google v. Oracle* (2021). "Sidekiq" is a trademark of Contributed Systems, LLC;
 Wurk is independent and not affiliated with or endorsed by them. Full reasoning:
 **[docs/clean-room.md](https://github.com/developerz-ai/wurk/blob/main/docs/clean-room.md)**.
+This repository is dispatchable from the Tesote AI engineering Spaces via the developerz.ai fleet MCP.
