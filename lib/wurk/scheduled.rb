@@ -39,9 +39,7 @@ module Wurk
       # client. `now` is captured once per set so a slow loop on one ZSET
       # can't keep grabbing newly-scheduled jobs from a moving window.
       def enqueue_jobs(sorted_sets = SETS)
-        @config.redis do |conn|
-          sorted_sets.each { |sset| drain_set(conn, sset) }
-        end
+        sorted_sets.each { |sset| drain_set(sset) }
       end
 
       def terminate
@@ -50,12 +48,16 @@ module Wurk
 
       private
 
-      def drain_set(conn, sset)
+      # Pop under one checkout (the pooled EVALSHA loop), push outside it —
+      # `@client.push` checks out its own connection, so nesting it inside
+      # `@config.redis` would hold two checkouts from the same pool at once
+      # per job, halving effective pool concurrency under load.
+      def drain_set(sset)
         now = real_time.to_s
         loop do
           break if @done
 
-          jobstr = Wurk::Lua::Loader.eval_cached(conn, :zpopbyscore, keys: [sset], argv: [now])
+          jobstr = @config.redis { |conn| Wurk::Lua::Loader.eval_cached(conn, :zpopbyscore, keys: [sset], argv: [now]) }
           break unless jobstr
 
           @client.push(Wurk.load_json(jobstr))
