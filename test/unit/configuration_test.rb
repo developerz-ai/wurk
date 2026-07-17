@@ -413,6 +413,37 @@ class ConfigurationTest < Wurk::Test::UnitCase
     refute_match(/backtrace_marker/, io.string)
   end
 
+  def test_default_error_handler_logs_redis_errors_at_warn
+    io = StringIO.new
+    @config.logger = ::Logger.new(io)
+    @config.logger.level = ::Logger::INFO
+
+    Wurk::Configuration::ERROR_HANDLER.call(RedisClient::ConnectionError.new('down'), {}, @config)
+
+    assert_match(/WARN/, io.string)
+    assert_match(/down/, io.string)
+  end
+
+  def test_default_error_handler_logs_pool_timeouts_at_warn
+    io = StringIO.new
+    @config.logger = ::Logger.new(io)
+
+    Wurk::Configuration::ERROR_HANDLER.call(ConnectionPool::TimeoutError.new('waited'), {}, @config)
+
+    assert_match(/WARN/, io.string)
+  end
+
+  def test_default_error_handler_logs_non_redis_errors_at_info
+    io = StringIO.new
+    @config.logger = ::Logger.new(io)
+    @config.logger.level = ::Logger::INFO
+
+    Wurk::Configuration::ERROR_HANDLER.call(StandardError.new('plain'), {}, @config)
+
+    assert_match(/INFO/, io.string)
+    assert_match(/plain/, io.string)
+  end
+
   def test_default_error_handler_wraps_ctx_in_wurk_context
     seen = nil
     capturing = Class.new(::Logger) do
@@ -435,6 +466,59 @@ class ConfigurationTest < Wurk::Test::UnitCase
     @config.death_handlers << handler
 
     assert_includes @config.death_handlers, handler
+  end
+
+  # --- redis-error telemetry (#101) --------------------------------------
+
+  def test_redis_error_handlers_default_empty
+    assert_empty @config.redis_error_handlers
+  end
+
+  def test_on_redis_error_registers_a_handler
+    block = ->(_info) {}
+    @config.on_redis_error(&block)
+
+    assert_includes @config.redis_error_handlers, block
+  end
+
+  def test_on_redis_error_requires_a_block
+    assert_raises(ArgumentError) { @config.on_redis_error }
+  end
+
+  def test_redis_error_handlers_not_shared_between_instances
+    @config.on_redis_error { :noop }
+
+    assert_empty Wurk::Configuration.new.redis_error_handlers
+  end
+
+  def test_dispatch_redis_error_invokes_handlers_with_payload
+    seen = []
+    @config.on_redis_error { |info| seen << info }
+    payload = { error: RuntimeError.new('x'), attempt: 2, retried: false, pool: 'p' }
+
+    @config.send(:dispatch_redis_error, payload)
+
+    assert_equal [payload], seen
+  end
+
+  def test_dispatch_redis_error_swallows_and_logs_handler_errors
+    io = StringIO.new
+    @config.logger = ::Logger.new(io)
+    @config.on_redis_error { raise 'handler boom' }
+
+    @config.send(:dispatch_redis_error, { error: 'e', attempt: 1, retried: true, pool: 'p' })
+
+    assert_match(/redis_error_handler raised/, io.string)
+    assert_match(/handler boom/, io.string)
+  end
+
+  def test_built_pools_are_wired_to_the_redis_error_dispatcher
+    @config.redis = { url: Wurk::Test.redis_url }
+    pool = @config.new_redis_pool(1, 'wired')
+
+    assert pool.instance_variable_get(:@on_error), 'pool must receive an on_error dispatcher'
+  ensure
+    pool&.disconnect!
   end
 
   # --- health_check ------------------------------------------------------

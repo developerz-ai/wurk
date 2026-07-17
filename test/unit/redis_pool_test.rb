@@ -179,12 +179,127 @@ class RedisPoolTest < Wurk::Test::UnitCase
     assert_equal 0, conn.closes
   end
 
-  def test_does_not_retry_connection_errors_without_retryable_message
+  # --- connection-error backoff (#101) ---
+
+  def test_retries_connection_error_with_backoff_then_succeeds
     conn = FlakyConn.new(kind: :timeout, raises: 1)
     pool = pool_wrapping(conn)
-    assert_raises(RedisClient::ConnectionError) { pool.with(&:exec) }
-    assert_equal 1, conn.calls
-    assert_equal 0, conn.closes
+
+    no_sleep(pool) { assert_equal(:ok, pool.with(&:exec)) }
+    assert_equal 2, conn.calls
+    assert_equal 1, conn.closes, 'connection is closed before the backoff retry'
+  end
+
+  def test_retries_cannot_connect_error
+    conn = FlakyConn.new(kind: :cannot_connect, raises: 1)
+    pool = pool_wrapping(conn)
+
+    no_sleep(pool) { assert_equal(:ok, pool.with(&:exec)) }
+    assert_equal 2, conn.calls
+  end
+
+  def test_connection_error_retries_to_the_cap_then_raises
+    conn = FlakyConn.new(kind: :timeout, raises: 99)
+    pool = pool_wrapping(conn)
+
+    no_sleep(pool) { assert_raises(RedisClient::ConnectionError) { pool.with(&:exec) } }
+    assert_equal Wurk::RedisPool::CONN_MAX_ATTEMPTS, conn.calls
+    assert_equal Wurk::RedisPool::CONN_MAX_ATTEMPTS - 1, conn.closes
+  end
+
+  # --- telemetry hook ---
+
+  def test_notifies_on_each_retry_and_the_final_give_up
+    events = []
+    conn = FlakyConn.new(kind: :timeout, raises: 99)
+    pool = pool_wrapping(conn, on_error: ->(info) { events << info })
+
+    no_sleep(pool) { assert_raises(RedisClient::ConnectionError) { pool.with(&:exec) } }
+
+    summary = events.map { |e| [e[:attempt], e[:retried], e[:pool], e[:error].class] }
+
+    assert_equal([[1, true, 'fake', RedisClient::ConnectionError],
+                  [2, true, 'fake', RedisClient::ConnectionError],
+                  [3, false, 'fake', RedisClient::ConnectionError]], summary)
+  end
+
+  def test_notifies_on_failover_retry
+    events = []
+    conn = FlakyConn.new(kind: :readonly, raises: 1)
+    pool = pool_wrapping(conn, on_error: ->(info) { events << info })
+
+    assert_equal(:ok, pool.with(&:exec))
+    assert_equal([{ attempt: 1, retried: true }], events.map { |e| e.slice(:attempt, :retried) })
+  end
+
+  def test_does_not_notify_on_non_transient_errors
+    events = []
+    conn = FlakyConn.new(kind: :other, raises: 1)
+    pool = pool_wrapping(conn, on_error: ->(info) { events << info })
+
+    assert_raises(RedisClient::CommandError) { pool.with(&:exec) }
+    assert_empty events
+  end
+
+  def test_a_raising_telemetry_hook_never_breaks_the_retry_path
+    conn = FlakyConn.new(kind: :timeout, raises: 1)
+    pool = pool_wrapping(conn, on_error: ->(_info) { raise 'telemetry boom' })
+
+    no_sleep(pool) { assert_equal(:ok, pool.with(&:exec)) }
+  end
+
+  # --- pool checkout-timeout retry ---
+
+  def test_retries_checkout_timeout_once_then_succeeds
+    fake = FlakyCheckoutPool.new(FlakyConn.new(kind: :readonly, raises: 0), timeouts: 1)
+    pool = pool_over(fake)
+
+    no_checkout_sleep(pool) { assert_equal(:ok, pool.with(&:exec)) }
+    assert_equal 2, fake.calls, 'one retry → two checkout attempts'
+  end
+
+  def test_checkout_timeout_retries_exactly_once_then_raises
+    events = []
+    fake = FlakyCheckoutPool.new(FlakyConn.new(kind: :readonly, raises: 0), timeouts: 99)
+    pool = pool_over(fake, on_error: ->(info) { events << info })
+
+    no_checkout_sleep(pool) { assert_raises(ConnectionPool::TimeoutError) { pool.with { :never } } }
+    assert_equal 2, fake.calls, 'no loop: one retry only'
+    assert_equal([true, false], events.map { |e| e[:retried] })
+  end
+
+  # --- backoff timing formulas ---
+
+  def test_backoff_delay_grows_exponentially_within_jitter
+    pool = build_pool
+
+    assert_includes(1.0...1.25, pool.send(:backoff_delay, 1))
+    assert_includes(2.0...2.25, pool.send(:backoff_delay, 2))
+  end
+
+  def test_checkout_delay_within_documented_window
+    pool = build_pool
+
+    assert_includes(0.1...0.3, pool.send(:checkout_delay))
+  end
+
+  # --- pool stats for heartbeat ---
+
+  def test_available_reports_free_slots
+    @pool = build_pool(size: 3)
+
+    assert_equal 3, @pool.available
+    @pool.with { assert_equal 2, @pool.available }
+    assert_equal 3, @pool.available
+  end
+
+  def test_info_exposes_pool_stats
+    @pool = build_pool(size: 2)
+    info = @pool.info
+
+    assert_equal 2, info['size']
+    assert_equal 2, info['available']
+    assert info.key?('redis_version'), 'still carries Redis INFO'
   end
 
   def test_reraises_after_a_single_retry
@@ -217,10 +332,30 @@ class RedisPoolTest < Wurk::Test::UnitCase
     Wurk::RedisPool.new(size: size, url: Wurk::Test.redis_url, pool_timeout: pool_timeout, name: name)
   end
 
-  def pool_wrapping(conn)
-    pool = Wurk::RedisPool.new(size: 1, url: Wurk::Test.redis_url, pool_timeout: 1, name: 'fake')
-    pool.instance_variable_set(:@pool, FakePool.new(conn))
+  def pool_wrapping(conn, on_error: nil)
+    pool_over(FakePool.new(conn), on_error: on_error)
+  end
+
+  # Swap in a fake @pool so retry tests never open a real socket → deterministic
+  # and fast. A real socket is still built (and immediately shadowed) so
+  # client_config etc. stay populated.
+  def pool_over(fake_pool, on_error: nil)
+    pool = Wurk::RedisPool.new(size: 1, url: Wurk::Test.redis_url, pool_timeout: 1, name: 'fake', on_error: on_error)
+    pool.instance_variable_set(:@pool, fake_pool)
     pool
+  end
+
+  # Neutralize the retry sleeps so tests stay instant. Minitest 6 dropped
+  # minitest/mock, so shadow the (private) delay methods on the throwaway pool
+  # instance directly — no restore needed, the instance dies with the test.
+  def no_sleep(pool)
+    pool.define_singleton_method(:backoff_delay) { |_attempt| 0 }
+    yield
+  end
+
+  def no_checkout_sleep(pool)
+    pool.define_singleton_method(:checkout_delay) { 0 }
+    yield
   end
 
   # Stand-in for a ConnectionPool that always yields the same fake conn.
@@ -239,6 +374,27 @@ class RedisPoolTest < Wurk::Test::UnitCase
     end
   end
 
+  # Raises ConnectionPool::TimeoutError on the first `timeouts` checkouts, then
+  # yields the conn — exercises the out-of-block checkout-timeout retry.
+  class FlakyCheckoutPool
+    attr_reader :calls
+
+    def initialize(conn, timeouts:)
+      @conn = conn
+      @timeouts = timeouts
+      @calls = 0
+    end
+
+    def with
+      @calls += 1
+      raise ConnectionPool::TimeoutError, 'Waited 1 sec' if @calls <= @timeouts
+
+      yield @conn
+    end
+
+    def shutdown(&); end
+  end
+
   class FlakyConn
     ERRORS = {
       readonly: [RedisClient::ReadOnlyError, "READONLY You can't write against a read only replica."],
@@ -246,7 +402,8 @@ class RedisPoolTest < Wurk::Test::UnitCase
       unblocked: [RedisClient::CommandError,
                   'UNBLOCKED force unblock from blocking operation, instance state changed (master -> replica?)'],
       other: [RedisClient::CommandError, 'ERR wrong number of arguments'],
-      timeout: [RedisClient::ConnectionError, 'Connection timed out']
+      timeout: [RedisClient::ConnectionError, 'Connection timed out'],
+      cannot_connect: [RedisClient::CannotConnectError, 'Errno::ECONNREFUSED']
     }.freeze
 
     attr_reader :calls, :closes
