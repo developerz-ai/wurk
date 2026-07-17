@@ -12,7 +12,7 @@ class CapsuleTest < Wurk::Test::UnitCase
 
   def teardown
     @capsule.instance_variable_get(:@redis_pool)&.disconnect!
-    @capsule.instance_variable_get(:@local_redis_pool)&.disconnect!
+    @capsule.instance_variable_get(:@fetch_redis_pool)&.disconnect!
   rescue ConnectionPool::PoolShuttingDownError
     # already torn down
   ensure
@@ -133,7 +133,7 @@ class CapsuleTest < Wurk::Test::UnitCase
     @capsule.prepare!
 
     refute_nil @capsule.instance_variable_get(:@redis_pool)
-    refute_nil @capsule.instance_variable_get(:@local_redis_pool)
+    refute_nil @capsule.instance_variable_get(:@fetch_redis_pool)
   end
 
   def test_queue_specs_round_trips_weighted_queues
@@ -281,27 +281,43 @@ class CapsuleTest < Wurk::Test::UnitCase
 
   # --- redis pools -------------------------------------------------------
 
-  def test_redis_pool_size_is_concurrency_plus_overhead
+  # Main pool = concurrency + POOL_HEADROOM once past the MIN_POOL_SIZE floor.
+  # Blocking fetch draws from the separate fetch pool, so this pool only serves
+  # the background loops + job-code checkouts.
+  def test_redis_pool_size_is_concurrency_plus_headroom
     @capsule.concurrency = 7
 
-    # Heartbeat thread + scheduled poller each need an unstarvable slot
-    # while every worker thread can be parked in BLMOVE — see the
-    # POOL_OVERHEAD comment in Wurk::Capsule.
-    assert_equal 7 + Wurk::Capsule::POOL_OVERHEAD, @capsule.redis_pool.size
+    assert_equal 7 + Wurk::Capsule::POOL_HEADROOM, @capsule.redis_pool.size
+  end
+
+  def test_redis_pool_size_is_floored_at_minimum
+    @capsule.concurrency = 1
+
+    assert_equal Wurk::Capsule::MIN_POOL_SIZE, @capsule.redis_pool.size
+  end
+
+  # config.redis = { size: N } pins the main pool at N, overriding the formula.
+  def test_redis_pool_size_honors_config_size_override
+    @config.redis = { size: 42 }
+    cap = Wurk::Capsule.new('override', @config)
+
+    assert_equal 42, cap.redis_pool.size
+  ensure
+    cap&.redis_pool&.disconnect!
   end
 
   def test_redis_pool_is_memoized
     assert_same @capsule.redis_pool, @capsule.redis_pool
   end
 
-  def test_local_redis_pool_size_matches_concurrency
+  def test_fetch_redis_pool_size_matches_concurrency
     @capsule.concurrency = 4
 
-    assert_equal 4, @capsule.local_redis_pool.size
+    assert_equal 4, @capsule.fetch_redis_pool.size
   end
 
-  def test_redis_pool_and_local_pool_are_distinct
-    refute_same @capsule.redis_pool, @capsule.local_redis_pool
+  def test_redis_pool_and_fetch_pool_are_distinct
+    refute_same @capsule.redis_pool, @capsule.fetch_redis_pool
   end
 
   def test_redis_pool_url_from_config
@@ -315,12 +331,12 @@ class CapsuleTest < Wurk::Test::UnitCase
 
   def test_reset_redis_pools_drops_cached_pools
     pool = @capsule.redis_pool
-    local = @capsule.local_redis_pool
+    fetch = @capsule.fetch_redis_pool
 
     @capsule.reset_redis_pools!
 
     refute_same pool, @capsule.redis_pool, 'main pool should be rebuilt after reset'
-    refute_same local, @capsule.local_redis_pool, 'local pool should be rebuilt after reset'
+    refute_same fetch, @capsule.fetch_redis_pool, 'fetch pool should be rebuilt after reset'
   end
 
   def test_reset_redis_pools_is_safe_when_pools_were_never_built

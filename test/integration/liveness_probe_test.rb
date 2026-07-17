@@ -29,7 +29,7 @@ class LivenessProbeTest < Wurk::Test::UnitCase
     # otherwise Heartbeat#beat! and the health server's Redis ping hit
     # FrozenError on first call. Mirrors Swarm::ChildBoot#apply_slot_to_config.
     cap.redis_pool
-    cap.local_redis_pool
+    cap.fetch_redis_pool
     cap.client_middleware
     cap.server_middleware
     # Bind on 127.0.0.1:0 so each test gets a unique OS-assigned port.

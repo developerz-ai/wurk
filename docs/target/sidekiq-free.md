@@ -314,8 +314,7 @@ class Sidekiq::Config
   # redis
   def redis=(hash)                  # merge into @redis_config
   def reap_idle_redis_connections(timeout = 60)
-  def redis_pool
-  def local_redis_pool              # internal/housekeeping pool size=10
+  def redis_pool                    # default_capsule's main pool
   def new_redis_pool(size, name)    # via Sidekiq::RedisConnection.create
   def redis_info                    # parses INFO command
   def redis { |conn| ... }          # yield connection with READONLY/NOREPLICAS/UNBLOCKED retry
@@ -371,9 +370,10 @@ class Sidekiq::Capsule
 
   def client_middleware { |chain| } # copy_for(self)
   def server_middleware { |chain| }
-  def redis_pool
-  def local_redis_pool              # size = @concurrency
+  def redis_pool                    # main pool: max(@concurrency + 5, 10)
+  def fetch_redis_pool              # blocking-BLMOVE fetch pool, size = @concurrency
   def redis { |conn| ... }
+  def fetch_redis { |conn| ... }    # checkout from the fetch pool
   def lookup(name)
   def logger
 end

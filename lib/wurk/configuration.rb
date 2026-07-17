@@ -177,17 +177,11 @@ module Wurk
       default_capsule.redis_pool
     end
 
-    def local_redis_pool
-      @local_redis_pool ||= build_redis_pool(size: 10, name: 'internal')
-    end
-
-    # Disconnect and drop every cached pool — the per-capsule mains plus
-    # the config-level internal pool. Used by Wurk::Swarm so the parent
-    # never leaks sockets into forks and each child can build fresh ones.
+    # Disconnect and drop every capsule's cached pools (main + fetch). Used by
+    # Wurk::Swarm so the parent never leaks sockets into forks and each child
+    # can build fresh ones.
     def reset_redis_pools!
       @capsules.each_value(&:reset_redis_pools!)
-      @local_redis_pool&.disconnect!
-      @local_redis_pool = nil
     end
 
     def new_redis_pool(size, name = 'custom')

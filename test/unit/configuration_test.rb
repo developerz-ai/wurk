@@ -276,24 +276,6 @@ class ConfigurationTest < Wurk::Test::UnitCase
     pool&.disconnect!
   end
 
-  def test_local_redis_pool_is_size_10
-    assert_equal 10, @config.local_redis_pool.size
-  ensure
-    @config.local_redis_pool&.disconnect!
-  end
-
-  def test_reset_redis_pools_resets_capsules_and_local_pool
-    cap_pool = @config.default_capsule.redis_pool
-    local_pool = @config.local_redis_pool
-
-    @config.reset_redis_pools!
-
-    refute_same cap_pool, @config.default_capsule.redis_pool
-    refute_same local_pool, @config.local_redis_pool
-  ensure
-    @config.reset_redis_pools!
-  end
-
   def test_reset_redis_pools_calls_through_to_every_capsule
     extra = @config.capsule('extra') { |c| c.concurrency = 1 }
     main_pool = @config.default_capsule.redis_pool

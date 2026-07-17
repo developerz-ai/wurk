@@ -192,11 +192,25 @@ class FetcherReliableTest < Wurk::Test::UnitCase
     assert_equal [1.25, 'BLMOVE', @public_queue, private_queue, 'RIGHT', 'LEFT', 0.25], args
   end
 
+  # blmove must draw from the dedicated fetch pool, never the main pool, so a
+  # parked BLMOVE can't starve the background loops that share the main pool (#101).
+  def test_blmove_checks_out_from_the_fetch_pool_not_the_main_pool
+    used = nil
+    conn = Object.new
+    conn.define_singleton_method(:blocking_call) { |*_| nil }
+    @capsule.define_singleton_method(:fetch_redis) { |&blk| used = :fetch; blk.call(conn) }
+    @capsule.define_singleton_method(:redis) { |&blk| used = :main; blk.call(conn) }
+
+    @fetcher.send(:blmove, @public_queue)
+
+    assert_equal :fetch, used
+  end
+
   private
 
-  # Stub the capsule's Redis so blmove's BLMOVE timeout args can be captured
-  # without actually blocking on a real empty queue. Returns the array the
-  # recorded `blocking_call` writes its arguments into.
+  # Stub the capsule's fetch pool so blmove's BLMOVE timeout args can be
+  # captured without actually blocking on a real empty queue. Returns the array
+  # the recorded `blocking_call` writes its arguments into.
   def captured_blmove_args
     box = []
     conn = Object.new
@@ -204,7 +218,7 @@ class FetcherReliableTest < Wurk::Test::UnitCase
       box.replace(a)
       nil
     end
-    @capsule.define_singleton_method(:redis) { |&blk| blk.call(conn) }
+    @capsule.define_singleton_method(:fetch_redis) { |&blk| blk.call(conn) }
     box
   end
 
