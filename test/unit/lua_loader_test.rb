@@ -5,7 +5,6 @@ require_relative '../test_helper'
 class LuaLoaderTest < Wurk::Test::UnitCase
   parallelize_me!
 
-
   def setup
     super
     @pool = Wurk::RedisPool.new(size: 1, url: Wurk::Test.redis_url, timeout: 2, name: 'loader-test')
@@ -36,6 +35,19 @@ class LuaLoaderTest < Wurk::Test::UnitCase
 
       assert(present.all? { |v| v == 1 }, "all SHAs must be cached after script_load_all, got #{present.inspect}")
     end
+  end
+
+  # The eager post-fork load must cost one round-trip, not one per script —
+  # a regression to N separate SCRIPT LOADs would re-open the boot-latency
+  # hole the #101 fix closed.
+  def test_script_load_all_batches_into_a_single_pipeline
+    conn = FakePipelineConn.new
+    Wurk::Lua::Loader.script_load_all(conn)
+
+    assert_equal 1, conn.pipeline_count, 'script_load_all must batch into exactly one pipeline'
+    assert_equal Wurk::Lua::SCRIPTS.size, conn.loaded.size, 'every registered script must be loaded'
+    assert(conn.loaded.all? { |cmd| cmd.first(2) == %w[SCRIPT LOAD] },
+           "expected only SCRIPT LOADs, got #{conn.loaded.inspect}")
   end
 
   # --- eval_cached happy path ----------------------------------------
@@ -137,6 +149,28 @@ class LuaLoaderTest < Wurk::Test::UnitCase
       { commands: ['EVAL'], source: Wurk::Lua::SCRIPTS[:zpopbyscore] },
       { commands: conn.command_log, source: conn.last_script_source }
     )
+  end
+
+  # Stand-in connection that records the pipelined SCRIPT LOADs so the test
+  # can assert script_load_all uses one pipeline (not a call-per-script loop).
+  class FakePipelineConn
+    attr_reader :pipeline_count, :loaded
+
+    def initialize
+      @pipeline_count = 0
+      @loaded = []
+    end
+
+    def pipelined
+      @pipeline_count += 1
+      yield Pipe.new(@loaded)
+      []
+    end
+
+    class Pipe
+      def initialize(sink) = @sink = sink
+      def call(*args) = @sink << args
+    end
   end
 
   # Stand-in connection that simulates Redis returning NOSCRIPT on the
