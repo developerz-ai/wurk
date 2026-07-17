@@ -495,13 +495,11 @@ module Wurk
       logger
     end
 
+    # `size`/`name` are pool-structural (the caller owns them); every other
+    # key the host set via `config.redis = {...}` — url, the split timeouts,
+    # reconnect_attempts, driver, … — flows through to RedisPool verbatim.
     def build_redis_pool(size:, name:)
-      RedisPool.new(
-        size: size,
-        url: @redis_config[:url] || RedisPool::DEFAULT_URL,
-        timeout: @redis_config[:timeout] || RedisPool::DEFAULT_TIMEOUT,
-        name: name
-      )
+      RedisPool.new(size: size, name: name, **@redis_config.except(:size, :name))
     end
   end
 end

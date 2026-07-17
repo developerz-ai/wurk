@@ -266,6 +266,16 @@ class ConfigurationTest < Wurk::Test::UnitCase
     assert_same @config.default_capsule.redis_pool, @config.redis_pool
   end
 
+  def test_redis_config_passes_socket_timeouts_through_to_pool
+    @config.redis = { url: Wurk::Test.redis_url, read_timeout: 5.0, reconnect_attempts: 2 }
+    pool = @config.new_redis_pool(3, 'passthrough')
+
+    assert_equal({ read_timeout: 5.0, reconnect_attempts: 2 },
+                 pool.client_config.slice(:read_timeout, :reconnect_attempts))
+  ensure
+    pool&.disconnect!
+  end
+
   def test_local_redis_pool_is_size_10
     assert_equal 10, @config.local_redis_pool.size
   ensure

@@ -5,7 +5,6 @@ require_relative '../test_helper'
 class RedisPoolTest < Wurk::Test::UnitCase
   parallelize_me!
 
-
   def teardown
     @pool&.disconnect!
   rescue ConnectionPool::PoolShuttingDownError
@@ -21,14 +20,14 @@ class RedisPoolTest < Wurk::Test::UnitCase
 
     assert_instance_of Wurk::RedisPool, @pool
     assert_equal 3, @pool.size
-    assert_equal 'PONG', @pool.with { |c| c.call('PING') }
+    assert_equal('PONG', @pool.with { |c| c.call('PING') })
   end
 
   def test_redis_connection_create_accepts_string_keys
     @pool = Wurk::RedisConnection.create('url' => Wurk::Test.redis_url, 'size' => 2, 'pool_timeout' => 3)
 
     assert_equal 2, @pool.size
-    assert_equal 3, @pool.timeout
+    assert_equal 3, @pool.pool_timeout
   end
 
   def test_redis_connection_create_defaults_size_when_omitted
@@ -40,16 +39,16 @@ class RedisPoolTest < Wurk::Test::UnitCase
   # --- happy path (real Redis) ---
 
   def test_initialize_stores_size
-    @pool = Wurk::RedisPool.new(size: 4, url: Wurk::Test.redis_url, timeout: 2, name: 'primary')
+    @pool = Wurk::RedisPool.new(size: 4, url: Wurk::Test.redis_url, pool_timeout: 2, name: 'primary')
 
     assert_equal 4, @pool.size
   end
 
   def test_initialize_stores_url_timeout_and_name
-    @pool = Wurk::RedisPool.new(size: 1, url: Wurk::Test.redis_url, timeout: 2, name: 'primary')
+    @pool = Wurk::RedisPool.new(size: 1, url: Wurk::Test.redis_url, pool_timeout: 2, name: 'primary')
 
     assert_equal Wurk::Test.redis_url, @pool.url
-    assert_equal 2, @pool.timeout
+    assert_equal 2, @pool.pool_timeout
     assert_equal 'primary', @pool.name
   end
 
@@ -57,8 +56,54 @@ class RedisPoolTest < Wurk::Test::UnitCase
     @pool = Wurk::RedisPool.new(size: 1)
 
     assert_equal Wurk::RedisPool::DEFAULT_URL, @pool.url
-    assert_equal Wurk::RedisPool::DEFAULT_TIMEOUT, @pool.timeout
+    assert_equal Wurk::RedisPool::DEFAULT_POOL_TIMEOUT, @pool.pool_timeout
     assert_equal Wurk::RedisPool::DEFAULT_NAME, @pool.name
+  end
+
+  # --- split checkout vs socket timeouts (#101) ---
+
+  SOCKET_KEYS = %i[connect_timeout read_timeout write_timeout reconnect_attempts].freeze
+
+  def test_socket_timeouts_default_to_documented_split
+    @pool = build_pool
+    expected = {
+      connect_timeout: Wurk::RedisPool::DEFAULT_CONNECT_TIMEOUT,
+      read_timeout: Wurk::RedisPool::DEFAULT_READ_TIMEOUT,
+      write_timeout: Wurk::RedisPool::DEFAULT_WRITE_TIMEOUT,
+      reconnect_attempts: Wurk::RedisPool::DEFAULT_RECONNECT_ATTEMPTS
+    }
+
+    assert_equal expected, @pool.client_config.slice(*SOCKET_KEYS)
+  end
+
+  def test_read_write_defaults_are_wider_than_connect_and_checkout
+    assert_operator Wurk::RedisPool::DEFAULT_READ_TIMEOUT, :>, Wurk::RedisPool::DEFAULT_CONNECT_TIMEOUT
+    assert_operator Wurk::RedisPool::DEFAULT_WRITE_TIMEOUT, :>, Wurk::RedisPool::DEFAULT_POOL_TIMEOUT
+  end
+
+  def test_split_timeouts_are_configured_independently
+    @pool = Wurk::RedisPool.new(
+      size: 1, url: Wurk::Test.redis_url, name: 'split',
+      pool_timeout: 0.5, connect_timeout: 0.7, read_timeout: 5.0, write_timeout: 3.0, reconnect_attempts: 2
+    )
+
+    assert_in_delta 0.5, @pool.pool_timeout
+    assert_equal({ connect_timeout: 0.7, read_timeout: 5.0, write_timeout: 3.0, reconnect_attempts: 2 },
+                 @pool.client_config.slice(*SOCKET_KEYS))
+  end
+
+  def test_pool_timeout_is_not_forwarded_to_the_client_config
+    @pool = build_pool(pool_timeout: 0.25)
+
+    assert_in_delta 0.25, @pool.pool_timeout
+    refute @pool.client_config.key?(:pool_timeout), 'pool_timeout is a checkout knob, not a socket one'
+  end
+
+  def test_forwards_unknown_keys_to_redis_client_verbatim
+    @pool = Wurk::RedisPool.new(size: 1, url: Wurk::Test.redis_url, name: 'drv', driver: :ruby)
+
+    assert_equal :ruby, @pool.client_config[:driver]
+    assert_equal('PONG', @pool.with { |c| c.call('PING') })
   end
 
   def test_with_yields_a_usable_redis_connection
@@ -168,12 +213,12 @@ class RedisPoolTest < Wurk::Test::UnitCase
 
   private
 
-  def build_pool(size: 1, timeout: 1, name: 'test')
-    Wurk::RedisPool.new(size: size, url: Wurk::Test.redis_url, timeout: timeout, name: name)
+  def build_pool(size: 1, pool_timeout: 1, name: 'test')
+    Wurk::RedisPool.new(size: size, url: Wurk::Test.redis_url, pool_timeout: pool_timeout, name: name)
   end
 
   def pool_wrapping(conn)
-    pool = Wurk::RedisPool.new(size: 1, url: Wurk::Test.redis_url, timeout: 1, name: 'fake')
+    pool = Wurk::RedisPool.new(size: 1, url: Wurk::Test.redis_url, pool_timeout: 1, name: 'fake')
     pool.instance_variable_set(:@pool, FakePool.new(conn))
     pool
   end

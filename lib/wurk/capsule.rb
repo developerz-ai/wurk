@@ -197,13 +197,7 @@ module Wurk
     end
 
     def build_pool(size:, name:)
-      cfg = @config.redis_config
-      RedisPool.new(
-        size: size,
-        url: cfg[:url] || RedisPool::DEFAULT_URL,
-        timeout: cfg[:timeout] || RedisPool::DEFAULT_TIMEOUT,
-        name: name
-      )
+      @config.new_redis_pool(size, name)
     end
   end
 end
