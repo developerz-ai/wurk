@@ -289,6 +289,82 @@ class ConfigurationTest < Wurk::Test::UnitCase
     @config.reset_redis_pools!
   end
 
+  # --- Web dashboard pool (#101) -----------------------------------------
+
+  def test_web_redis_pool_defaults_to_size_five
+    assert_equal 5, Wurk::Configuration::WEB_POOL_DEFAULT_SIZE
+    assert_equal Wurk::Configuration::WEB_POOL_DEFAULT_SIZE, @config.web_redis_pool.size
+  ensure
+    @config.reset_redis_pools!
+  end
+
+  def test_web_redis_pool_pins_short_pool_timeout
+    assert_in_delta 1.0, Wurk::Configuration::WEB_POOL_TIMEOUT
+    assert_equal Wurk::Configuration::WEB_POOL_TIMEOUT, @config.web_redis_pool.pool_timeout
+  ensure
+    @config.reset_redis_pools!
+  end
+
+  # A host tuning the worker pools' checkout wait must not lengthen the web
+  # pool's — it stays 1.0 so a saturated dashboard fails fast.
+  def test_web_redis_pool_timeout_overrides_host_config
+    @config.redis = { url: Wurk::Test.redis_url, pool_timeout: 9.0 }
+
+    assert_in_delta 1.0, @config.web_redis_pool.pool_timeout
+    assert_in_delta 9.0, @config.default_capsule.redis_pool.pool_timeout
+  ensure
+    @config.reset_redis_pools!
+  end
+
+  def test_web_pool_size_is_configurable
+    @config.web_pool_size = 12
+
+    assert_equal 12, @config.web_pool_size
+    assert_equal 12, @config.web_redis_pool.size
+  ensure
+    @config.reset_redis_pools!
+  end
+
+  def test_web_pool_size_is_disjoint_from_redis_size_override
+    @config.redis = { size: 42 }
+
+    assert_equal 42, @config.default_capsule.redis_pool.size
+    assert_equal Wurk::Configuration::WEB_POOL_DEFAULT_SIZE, @config.web_redis_pool.size
+  ensure
+    @config.reset_redis_pools!
+  end
+
+  def test_web_redis_pool_is_memoized
+    assert_same @config.web_redis_pool, @config.web_redis_pool
+  ensure
+    @config.reset_redis_pools!
+  end
+
+  def test_web_redis_pool_is_distinct_from_worker_pool
+    refute_same @config.web_redis_pool, @config.default_capsule.redis_pool
+  ensure
+    @config.reset_redis_pools!
+  end
+
+  def test_reset_redis_pools_rebuilds_web_pool
+    before = @config.web_redis_pool
+    @config.reset_redis_pools!
+
+    refute_same before, @config.web_redis_pool
+  ensure
+    @config.reset_redis_pools!
+  end
+
+  def test_reset_redis_pools_is_safe_when_web_pool_never_built
+    @config.reset_redis_pools! # must not raise on the nil web pool
+  end
+
+  def test_web_pool_size_setter_raises_when_frozen
+    @config.freeze!
+
+    assert_raises(FrozenError) { @config.web_pool_size = 3 }
+  end
+
   # --- service locator ---------------------------------------------------
 
   def test_register_and_lookup

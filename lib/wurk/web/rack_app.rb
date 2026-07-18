@@ -1,6 +1,7 @@
 # frozen_string_literal: true
 
 require_relative 'extension'
+require_relative 'pool_scope'
 
 module Wurk
   class Web
@@ -29,7 +30,7 @@ module Wurk
       # auth here would break `run Sidekiq::Web` / rack-test parity with
       # upstream Sidekiq, which also doesn't auth-gate `Sidekiq::Web.call`.
       def call(env)
-        config.rack_app(method(:dispatch)).call(env)
+        PoolScope.scope { config.rack_app(method(:dispatch)).call(env) }
       end
 
       private

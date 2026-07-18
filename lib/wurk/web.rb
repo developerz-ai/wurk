@@ -1,6 +1,7 @@
 # frozen_string_literal: true
 
 require_relative 'web/config'
+require_relative 'web/pool_scope'
 require_relative 'web/search'
 require_relative 'web/enterprise'
 require_relative 'web/batch_status'

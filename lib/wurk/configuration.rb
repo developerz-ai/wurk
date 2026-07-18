@@ -95,6 +95,7 @@ module Wurk
       @client_chain = Middleware::Chain.new
       @server_chain = Middleware::Chain.new
       @redis_config = { url: ENV.fetch('REDIS_URL', 'redis://localhost:6379/0') }
+      @web_redis_pool = nil
       @logger = nil
       @thread_priority = DEFAULT_THREAD_PRIORITY
       @frozen = false
@@ -177,11 +178,13 @@ module Wurk
       default_capsule.redis_pool
     end
 
-    # Disconnect and drop every capsule's cached pools (main + fetch). Used by
-    # Wurk::Swarm so the parent never leaks sockets into forks and each child
-    # can build fresh ones.
+    # Disconnect and drop every capsule's cached pools (main + fetch) plus the
+    # web pool. Used by Wurk::Swarm so the parent never leaks sockets into forks
+    # and each child can build fresh ones.
     def reset_redis_pools!
       @capsules.each_value(&:reset_redis_pools!)
+      @web_redis_pool&.disconnect!
+      @web_redis_pool = nil
     end
 
     def new_redis_pool(size, name = 'custom')
@@ -190,6 +193,39 @@ module Wurk
 
     def redis(&)
       redis_pool.with(&)
+    end
+
+    # --- Web dashboard Redis pool ----------------------------------------
+
+    # Default connection count for the dedicated web pool (#web_redis_pool).
+    WEB_POOL_DEFAULT_SIZE = 5
+
+    # Deliberately short checkout wait for the web pool: a saturated dashboard
+    # should fail fast rather than tie up a web-server thread queuing for a slot.
+    WEB_POOL_TIMEOUT = 1.0
+
+    # Connections in the dedicated web pool. `config.web_pool_size = N` overrides
+    # the default; independent of `config.redis[:size]`, which sizes the worker
+    # capsules — the two pools are deliberately disjoint (#101).
+    def web_pool_size
+      @options[:web_pool_size] || WEB_POOL_DEFAULT_SIZE
+    end
+
+    def web_pool_size=(size)
+      guard_frozen!
+      @options[:web_pool_size] = Integer(size)
+    end
+
+    # Dedicated Redis pool for the dashboard / JSON API / SSE, disjoint from
+    # every worker capsule's pool. Dashboard load — an API burst, a long-lived
+    # SSE stream — can no longer drain the connections a co-located (embedded)
+    # worker needs to fetch and heartbeat, and vice versa: the #101 `0/N`
+    # pool-exhaustion incident. Lazy, so a headless worker that never serves the
+    # dashboard builds nothing; web entry points route `Wurk.redis` here through
+    # Wurk::Web::PoolScope. The Configuration instance is never frozen (only its
+    # @options/@capsules are), so this `||=` is safe to fire post-boot.
+    def web_redis_pool
+      @web_redis_pool ||= build_redis_pool(size: web_pool_size, name: 'web', pool_timeout: WEB_POOL_TIMEOUT)
     end
 
     # --- Service locator (extension registry) ----------------------------
@@ -514,10 +550,12 @@ module Wurk
     # `size`/`name` are pool-structural (the caller owns them); every other
     # key the host set via `config.redis = {...}` — url, the split timeouts,
     # reconnect_attempts, driver, … — flows through to RedisPool verbatim.
-    # Every pool built here is wired to the redis-error telemetry dispatcher.
-    def build_redis_pool(size:, name:)
+    # `overrides` win over the host config (the web pool pins its own
+    # pool_timeout this way). Every pool built here is wired to the redis-error
+    # telemetry dispatcher.
+    def build_redis_pool(size:, name:, **overrides)
       RedisPool.new(size: size, name: name, on_error: method(:dispatch_redis_error),
-                    **@redis_config.except(:size, :name))
+                    **@redis_config.except(:size, :name), **overrides)
     end
 
     # Fan a RedisPool retry/give-up event out to the registered handlers. A
