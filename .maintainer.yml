@@ -3,9 +3,12 @@
 #
 # Dogfood pass with coding handoff live. The bot triages (qualifies, labels,
 # asks reporters for repro) and, once a task is ready, dispatches coding to the
-# fleet over the webhook handoff. Auto-merge stays off, and we defer to other
-# bots (coderabbit/copilot/dependabot) before acting on PRs. Everything not set
-# here uses the schema defaults.
+# fleet over the webhook handoff. Auto-merge is ON (dz#789 dependency-PR lane
+# dogfood): green routine PRs — including Dependabot minors — merge on CI +
+# gates; majors still stop on ask_before_acting (major_dep_bump). We still wait
+# for reviewer bots (coderabbit/copilot) to settle before acting. Everything
+# not set here uses the schema defaults (release: release-please, so merged
+# waves cut a batched release).
 version: 1
 
 tone:
@@ -22,8 +25,8 @@ handoff:
   ask_reporter_first: false
 
 pr:
-  wait_for_other_bots: [coderabbit, copilot, dependabot]
-  auto_merge: false
+  wait_for_other_bots: [coderabbit, copilot]
+  auto_merge: true
 
 escalate:
   always: [security, license, cla]
