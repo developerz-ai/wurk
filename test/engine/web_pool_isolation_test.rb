@@ -18,8 +18,7 @@ class WebPoolIsolationTest < Wurk::Test::EngineCase
   end
 
   def test_api_request_resolves_redis_through_the_web_pool
-    web = ::Wurk.configuration.web_redis_pool
-    spy_handle_resolutions(web)
+    spy_handle_resolutions
 
     get '/wurk/api/stats'
 
@@ -41,21 +40,38 @@ class WebPoolIsolationTest < Wurk::Test::EngineCase
 
   private
 
-  # Records each time the handle resolves its pool (i.e. each in-action
-  # `Wurk.redis` call) while still returning the real pool so the request works.
-  def spy_handle_resolutions(web)
+  # Counts pool resolutions WITHOUT redefining the shared PoolScope.handle
+  # singleton (which every concurrent request would see): swaps in a double that
+  # tallies only resolutions on this test's own thread — Rack::Test runs the
+  # action inline — and delegates live to the real web pool, so a sibling
+  # request resolves the correct, never-stale pool and can't inflate the count.
+  # teardown#restore_handle puts the untouched original back.
+  def spy_handle_resolutions
     @resolutions = 0
-    @handle = ::Wurk::Web::PoolScope.handle
-    counter = -> { @resolutions += 1 }
-    @handle.define_singleton_method(:redis_pool) do
-      counter.call
-      web
-    end
+    @original_handle = ::Wurk::Web::PoolScope.handle
+    spy = ResolutionCountingHandle.new(::Thread.current) { @resolutions += 1 }
+    ::Wurk::Web::PoolScope.instance_variable_set(:@handle, spy)
   end
 
   def restore_handle
-    return unless @handle&.singleton_methods&.include?(:redis_pool)
+    return unless defined?(@original_handle) && @original_handle
 
-    @handle.singleton_class.send(:remove_method, :redis_pool)
+    ::Wurk::Web::PoolScope.instance_variable_set(:@handle, @original_handle)
+  end
+
+  # Web-pool handle double: increments the counter only when the resolving
+  # thread is the test's own, then returns the live web pool exactly as the real
+  # PoolScope::Handle would — no captured (staleable) pool, no global mutation
+  # of the shared handle.
+  class ResolutionCountingHandle
+    def initialize(test_thread, &counter)
+      @test_thread = test_thread
+      @counter = counter
+    end
+
+    def redis_pool
+      @counter.call if ::Thread.current == @test_thread
+      ::Wurk.configuration.web_redis_pool
+    end
   end
 end

@@ -24,6 +24,10 @@ class TimerLoopTest < Wurk::Test::UnitCase
     thread.join(2.0)
 
     assert_equal [:tick], ticks
+  ensure
+    timer&.terminate
+    thread&.join(2.0)
+    thread&.kill if thread&.alive?
   end
 
   def test_run_ticks_repeatedly_until_terminated

@@ -17,6 +17,8 @@ require_relative '../engine_test_helper'
 # same un-namespaced keys — draining them here would flake sibling tests for
 # a property those suites already cover directly (ApiMutationsTest).
 class CsrfSameOriginTest < Wurk::Test::EngineCase
+  parallelize_me!
+
   def setup
     super
     @ns = "wurkcsrf:#{::Process.pid}:#{object_id}"

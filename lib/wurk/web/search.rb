@@ -12,9 +12,12 @@ module Wurk
     # on Retry/Scheduled/Dead pages, substring across job payload via ZSCAN").
     # Wurk ships it free, extended to also cover the queue LIST.
     #
-    # ZSET stores use `ZSCAN MATCH *needle*` (the substring is literal,
-    # wrapped in glob stars — Redis matches the raw JSON payload). The queue
-    # LIST falls back to a paged LRANGE filter since LIST has no SCAN.
+    # ZSET stores are ZSCAN-paged and filtered client-side against the literal
+    # substring — the same shape as the queue LIST's paged LRANGE filter —
+    # rather than `ZSCAN MATCH`: MATCH returns only matches, never the count of
+    # elements Redis walked, so a no-match keystroke couldn't be metered and
+    # could round-trip an enormous ZSET. Both paths charge the shared scan
+    # budget so a keystroke never full-walks a multi-million-entry store.
     #
     # Result shape mirrors `Wurk::Api::Serializers#sorted_entry` so the SPA
     # renders search hits with the same component as a sorted-set row.
@@ -42,9 +45,10 @@ module Wurk
         @scanned = 0
       end
 
-      # True when a queue scan stopped at a bound (per-queue cap or per-request
-      # budget) with elements left unexamined — the hit list may be incomplete.
-      # Meaningful only after `each`/`to_a` has driven the scan.
+      # True when a scan stopped at a bound (a queue's per-queue cap, a sorted
+      # set's page loop, or the shared per-request budget) with elements left
+      # unexamined — the hit list may be incomplete. Meaningful only after
+      # `each`/`to_a` has driven the scan.
       def truncated? = @truncated
 
       # Streams matching hits across every selected store. Stops at `limit`.
@@ -121,10 +125,33 @@ module Wurk
         [size, cap].min
       end
 
+      # ZSCAN-pages a sorted set, filtering client-side and metering the
+      # elements Redis returns against the shared budget so a rare/no-match
+      # keystroke can't round-trip an arbitrarily large ZSET. Flags @truncated
+      # when the budget stops the scan with entries still unexamined (cursor not
+      # yet wrapped back to 0).
       def search_sorted_set(kind, &)
         set = sorted_set_for(kind)
-        set.scan(@substring, ZSCAN_PAGE) do |value, score|
-          yield sorted_row(kind, set.name, SortedEntry.new(set, score, value))
+        cursor = '0'
+        loop do
+          cursor, page = Wurk.redis { |c| c.call('ZSCAN', set.name, cursor, 'COUNT', ZSCAN_PAGE) }
+          emit_sorted_hits(kind, set, page, &)
+          @scanned += page.size / 2
+          break if cursor == '0'
+          next if @scanned < SCAN_BUDGET
+
+          @truncated = true
+          break
+        end
+      end
+
+      # Yields a sorted_row for each element on this ZSCAN page whose raw JSON
+      # contains the literal substring (client-side filter — see the class note).
+      def emit_sorted_hits(kind, set, page)
+        page.each_slice(2) do |value, score|
+          next unless value.include?(@substring)
+
+          yield sorted_row(kind, set.name, SortedEntry.new(set, score.to_f, value))
         end
       end
 

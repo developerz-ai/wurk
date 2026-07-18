@@ -7,6 +7,8 @@ require_relative '../engine_test_helper'
 # The wire shape here is what the SPA's Limits / Periodic / Historical
 # tabs render against.
 class WebExtensionsTest < Wurk::Test::EngineCase
+  parallelize_me!
+
   def setup
     super
     # SameOriginGuard 403s unsafe methods lacking this header; a same-origin SPA

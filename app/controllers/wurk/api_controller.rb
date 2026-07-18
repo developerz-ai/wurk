@@ -27,6 +27,10 @@ module Wurk
 
     STREAM_TICK_SECONDS = 2.0
     STREAM_MAX_DURATION = 120.0
+    # Positive floor for `?tick=`: a zero/negative tick would `sleep 0` the SSE
+    # loop into a tight Redis-read/write spin (Live runs it in a spawned thread)
+    # for up to STREAM_MAX_DURATION. Clamp before it reaches drive_stream.
+    STREAM_MIN_TICK_SECONDS = 0.1
 
     HISTORY_WINDOW_UNITS = { 's' => 1, 'm' => 60, 'h' => 3600, 'd' => 86_400 }.freeze
     DEFAULT_HISTORY_WINDOW = 24 * 3600
@@ -291,7 +295,7 @@ module Wurk
       with_stream_slot do
         stream_headers!
         clamp = ::Wurk::Api::Pagination.method(:clamp_float)
-        tick = clamp.call(params[:tick], 0.0, STREAM_TICK_SECONDS, STREAM_TICK_SECONDS)
+        tick = clamp.call(params[:tick], STREAM_MIN_TICK_SECONDS, STREAM_TICK_SECONDS, STREAM_TICK_SECONDS)
         max_dur = clamp.call(params[:max_duration], 0.0, STREAM_MAX_DURATION, STREAM_MAX_DURATION)
         sse = ::ActionController::Live::SSE.new(response.stream, retry: (STREAM_TICK_SECONDS * 1000).to_i)
         drive_stream(sse, tick, max_dur)

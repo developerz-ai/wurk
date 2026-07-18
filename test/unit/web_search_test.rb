@@ -169,6 +169,33 @@ class WebSearchTest < Wurk::Test::UnitCase
     Thread.current[:wurk_capsule] = nil
   end
 
+  # A no-match keystroke against a sorted set larger than the shared request
+  # budget must stop at SCAN_BUDGET rather than ZSCAN the whole ZSET. Binds a
+  # round-trip-counting capsule to this thread (not a global monkeypatch) so
+  # counting is safe under this class's parallelize_me!. ZSCAN's COUNT is only a
+  # hint, so the assertion bounds round trips below a full walk rather than at an
+  # exact page count.
+  def test_search_bounds_scan_on_a_huge_no_match_sorted_set
+    seed_size = 2 * Wurk::Web::Search::SCAN_BUDGET
+    seed_zset('retry', seed_size)
+    counter = RoundTripCounter.new(Wurk.redis_pool)
+    Thread.current[:wurk_capsule] = counter
+
+    search = Wurk::Web::Search.new("absent-#{@ns}", kinds: ['retry'])
+    hits = search.to_a
+
+    assert_empty hits
+    assert_predicate search, :truncated?
+    # A full walk would need seed_size / ZSCAN_PAGE ZSCANs; the budget caps the
+    # scan near SCAN_BUDGET / ZSCAN_PAGE — strictly fewer, proving it stops at
+    # the request budget, not the ZSET's real size.
+    full_walk = seed_size / Wurk::Web::Search::ZSCAN_PAGE
+
+    assert_operator counter.count, :<, full_walk
+  ensure
+    Thread.current[:wurk_capsule] = nil
+  end
+
   # Queue payload with no enqueued_at / created_at exercises the nil sides
   # of `record.enqueued_at&.to_f` (line 115) and `record.created_at&.to_f`
   # (line 116) in queue_row.
@@ -235,6 +262,17 @@ class WebSearchTest < Wurk::Test::UnitCase
       c.call('SADD', 'queues', @queue)
       c.call('RPUSH', "queue:#{@queue}", *Array.new(count, payload))
     end
+  end
+
+  # Bulk-seed a sorted set with `count` distinct non-matching members in one
+  # ZADD so the scan-budget test can exceed SCAN_BUDGET without thousands of
+  # calls. A filler class (not @class_a/@class_b) keeps teardown's cleanup_zset
+  # from ZREMing them one-by-one; the worker's FLUSHDB clears them. Each payload
+  # carries a unique jid, so no two members collide.
+  def seed_zset(name, count)
+    filler = "SearchFiller@#{@ns}"
+    args = Array.new(count) { |i| [i, Wurk.dump_json(bare_payload(filler, ['filler']))] }.flatten
+    Wurk.redis { |c| c.call('ZADD', name, *args) }
   end
 
   def push_bare_to_queue(klass, args)
