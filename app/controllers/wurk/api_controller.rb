@@ -15,21 +15,16 @@ module Wurk
   # in `docs/target/sidekiq-{free,pro,ent}.md`.
   class ApiController < ApplicationController
     include ActionController::Live
+    # The SPA is a token-less JSON client; SameOriginGuard supplies Sidekiq's
+    # same-origin CSRF defense (spec §25.1) so every mutating endpoint is
+    # protected — GET reads (incl. #stream SSE) stay reachable.
+    include SameOriginGuard
 
     STREAM_TICK_SECONDS = 2.0
     STREAM_MAX_DURATION = 600.0
 
     HISTORY_WINDOW_UNITS = { 's' => 1, 'm' => 60, 'h' => 3600, 'd' => 86_400 }.freeze
     DEFAULT_HISTORY_WINDOW = 24 * 3600
-
-    skip_forgery_protection only: %i[
-      stream reset_limiter pause_cron unpause_cron enqueue_cron
-      clear_queue delete_queue_job pause_queue unpause_queue
-      retries_bulk retries_all retry_job
-      scheduled_bulk scheduled_all scheduled_job
-      dead_bulk dead_all dead_job
-      quiet_process stop_process
-    ]
 
     # Per-set action whitelists. Maps the SPA's action name to the
     # SortedEntry/JobSet method. Anything not listed 400s — keeps the bulk/

@@ -11,6 +11,9 @@ class BusyControlTest < Wurk::Test::EngineCase
 
   def setup
     super
+    # SameOriginGuard 403s unsafe methods lacking this header; a same-origin SPA
+    # fetch always sends it, so default it for every mutation in this suite.
+    header 'Sec-Fetch-Site', 'same-origin'
     @ns = "wurkbusy:#{::Process.pid}:#{object_id.to_s(16)}"
     @identity = "host-#{@ns}:1234:abcd"
   end

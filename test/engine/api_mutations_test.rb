@@ -20,6 +20,9 @@ require_relative '../engine_test_helper'
 class ApiMutationsTest < Wurk::Test::EngineCase
   def setup
     super
+    # SameOriginGuard 403s unsafe methods lacking this header; a same-origin SPA
+    # fetch always sends it, so default it for every mutation in this suite.
+    header 'Sec-Fetch-Site', 'same-origin'
     @ns = "wurkmut:#{::Process.pid}:#{object_id}"
     @queue = "#{@ns}-q"
     @class_name = "ApiMutationJob@#{@ns}"
