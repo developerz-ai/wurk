@@ -107,9 +107,8 @@ cancelled : timestamp (int) if cancelled
 
 | Key | Type | Purpose |
 |---|---|---|
-| `j\|<YYMMDD>\|<H>:<M>` | HASH | per-minute job execution metrics, TTL = `MID_TERM` (3 days) |
-| `j\|<YYMMDD>\|<H>:<m0>` | HASH | 10-minute bucket (last digit of minute stripped), TTL = `SHORT_TERM` (8 hours) |
-| `<klass>-<YYMMDD>-<H>` | HASH | hourly histogram per class |
+| `j\|<YYYYMMDD>\|<H>:<M>` | HASH | per-minute job execution metrics, TTL = `MID_TERM` (3 days). Same key Sidekiq writes, so migrated data resolves unchanged |
+| `<klass>-<YYYYMMDD>-<H>` | HASH | hourly histogram per class |
 | `<YYYYMMDD>-marks` | HASH | deploy marks for day, field=iso8601 ts, value=label, TTL = 90 days |
 | `deploylock-<label>` | STRING | per-label deploy mark lock, EX 60 NX |
 

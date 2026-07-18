@@ -23,12 +23,12 @@ class MetricsHistoryTest < Wurk::Test::UnitCase
         c.call('DEL', *keys) unless keys.empty?
         break if cursor == '0'
       end
-      # Per-class fields live in shared, non-class-named minute/rollup buckets
-      # that SCAN can't reach. HDEL our fields from every bucket this test
-      # could have written: the fixed @at bucket (record tests) AND the
-      # current-time bucket (middleware tests record at Time.now).
-      bucket_keys = [@at, ::Time.now.utc].flat_map do |t|
-        [Wurk::Metrics::History.minute_key(t), Wurk::Metrics::History.rollup_key(t)]
+      # Per-class fields live in shared, non-class-named minute buckets that
+      # SCAN can't reach. HDEL our fields from every bucket this test could
+      # have written: the fixed @at bucket (record tests) AND the current-time
+      # bucket (middleware tests record at Time.now).
+      bucket_keys = [@at, ::Time.now.utc].map do |t|
+        Wurk::Metrics::History.minute_key(t)
       end
       bucket_keys.uniq.each do |key|
         c.call('HDEL', key, "#{@klass}|p", "#{@klass}|f", "#{@klass}|ms")
@@ -41,26 +41,20 @@ class MetricsHistoryTest < Wurk::Test::UnitCase
   # ---- bucket key formatting -----------------------------------------------
 
   def test_minute_key_format
-    assert_equal 'j|260521|14:37', Wurk::Metrics::History.minute_key(@at)
-  end
-
-  def test_rollup_key_zeroes_last_digit_of_minute
-    assert_equal 'j|260521|14:30', Wurk::Metrics::History.rollup_key(@at)
-    assert_equal 'j|260521|14:30', Wurk::Metrics::History.rollup_key(::Time.utc(2026, 5, 21, 14, 39))
-    assert_equal 'j|260521|14:40', Wurk::Metrics::History.rollup_key(::Time.utc(2026, 5, 21, 14, 40))
+    assert_equal 'j|20260521|14:37', Wurk::Metrics::History.minute_key(@at)
   end
 
   def test_hour_key_format
-    assert_equal 'FooJob-260521-14', Wurk::Metrics::History.hour_key('FooJob', @at)
+    assert_equal 'FooJob-20260521-14', Wurk::Metrics::History.hour_key('FooJob', @at)
   end
 
   def test_minute_key_uses_utc
     local_time = ::Time.utc(2026, 5, 21, 23, 30) + 60
 
-    assert_equal 'j|260521|23:31', Wurk::Metrics::History.minute_key(local_time)
+    assert_equal 'j|20260521|23:31', Wurk::Metrics::History.minute_key(local_time)
   end
 
-  # ---- record() writes to all three buckets --------------------------------
+  # ---- record() writes to both buckets -------------------------------------
 
   def test_record_writes_processed_counter_in_minute_bucket
     Wurk::Metrics::History.record(@klass, 42, success: true, at: @at)
@@ -90,28 +84,21 @@ class MetricsHistoryTest < Wurk::Test::UnitCase
     assert_equal '35', val
   end
 
-  def test_record_writes_rollup_bucket
-    Wurk::Metrics::History.record(@klass, 15, success: true, at: @at)
-
-    rollup = Wurk::Metrics::History.rollup_key(@at)
-    val = Wurk.redis { |c| c.call('HGET', rollup, "#{@klass}|p") }
-
-    assert_equal '1', val
-  end
-
-  # Regression: at minutes ending in 0 the minute and rollup keys coincide,
-  # so record must write the shared field once (not twice → "2").
-  def test_record_does_not_double_count_at_rollup_boundary
-    at = ::Time.utc(2026, 5, 21, 14, 30, 0)
-    minute = Wurk::Metrics::History.minute_key(at)
+  # Regression (#metrics-double-count): we must NOT write a `H:m0` 10-minute
+  # rollup. Its key would coincide with the minute-0 bucket, so a write at any
+  # minute x1..x9 would inflate the minute-0 value into a decade total — which
+  # the read side then sums alongside x1..x9 and double-counts. A minute x1..x9
+  # write must touch its own minute key and nothing in that decade's x0 key.
+  def test_record_does_not_write_a_ten_minute_rollup_bucket
+    at = ::Time.utc(2026, 5, 21, 14, 37, 0)
+    x0 = ::Time.utc(2026, 5, 21, 14, 30, 0)
     Wurk::Metrics::History.record(@klass, 5, success: true, at: at)
 
-    assert_equal minute, Wurk::Metrics::History.rollup_key(at), 'precondition: keys collide at x0 minutes'
-    val = Wurk.redis { |c| c.call('HGET', minute, "#{@klass}|p") }
+    x0_val = Wurk.redis { |c| c.call('HGET', Wurk::Metrics::History.minute_key(x0), "#{@klass}|p") }
 
-    assert_equal '1', val
+    assert_nil x0_val, 'x1..x9 write must not bleed into the decade x0 bucket'
   ensure
-    Wurk.redis { |c| c.call('HDEL', minute, "#{@klass}|p", "#{@klass}|f", "#{@klass}|ms") } if minute
+    Wurk.redis { |c| c.call('HDEL', Wurk::Metrics::History.minute_key(x0), "#{@klass}|p") }
   end
 
   def test_record_writes_hourly_bucket
@@ -133,15 +120,6 @@ class MetricsHistoryTest < Wurk::Test::UnitCase
 
     assert_operator ttl, :>, Wurk::Metrics::History::MID_TERM - 60
     assert_operator ttl, :<=, Wurk::Metrics::History::MID_TERM
-  end
-
-  def test_record_sets_rollup_ttl_to_short_term
-    Wurk::Metrics::History.record(@klass, 1, success: true, at: @at)
-
-    ttl = Wurk.redis { |c| c.call('TTL', Wurk::Metrics::History.rollup_key(@at)) }
-
-    assert_operator ttl, :>, Wurk::Metrics::History::SHORT_TERM - 60
-    assert_operator ttl, :<=, Wurk::Metrics::History::SHORT_TERM
   end
 
   def test_record_sets_hourly_ttl_to_mid_term

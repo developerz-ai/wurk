@@ -4,6 +4,15 @@ All notable changes to Wurk are recorded here. Format: [Keep a Changelog](https:
 
 ## [Unreleased]
 
+## [1.1.2] - 2026-07-18
+
+### Fixed
+- **Metrics — `top_jobs` double-counted throughput and the per-job series had false 10× spikes** — the writer kept a `j|<date>|H:m0` 10-minute rollup whose key format collides with the real minute-0 bucket, so every job at a minute ending 1–9 was also folded into that decade's `x0` key, turning it into a decade total. `Metrics::Query` then summed the `x0` bucket alongside the individual minutes, roughly doubling every count in the Metrics "top jobs" table and putting a ~10× spike at every `:00/:10/:20…` point on the per-job chart. The rollup is removed (stock Sidekiq never persisted it — its daily/hourly rollups are commented out — and reads the last N per-minute keys), which fixes the count with no read-side change and drops ~⅓ of the per-job metric-write commands on the hot path.
+- **Metrics — per-minute key now uses a 4-digit year (`j|YYYYMMDD|…`)** — the bucket key used a 2-digit year (`j|YYMMDD|…`) while stock Sidekiq (and Wurk's own deploy-marks key) use `YYYYMMDD`, so a Sidekiq→Wurk drop-in swap silently orphaned the existing metrics history. Keys now match Sidekiq, so migrated data resolves unchanged.
+
+### Changed
+- **Profiler — profile persist is one round-trip** — `Profiler.store` pipelines its `HSET` + `EXPIRE` + `ZADD` (was three sequential calls). Same keys/TTL; off the hot path (opt-in profiling).
+
 ## [1.1.1] - 2026-07-18
 
 ### Fixed

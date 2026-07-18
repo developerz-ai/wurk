@@ -6,42 +6,42 @@ module Wurk
   module Metrics
     # Ent feature parity (§5): server middleware that records per-job-class
     # execution metrics into Redis time-buckets. The on-the-wire schema is
-    # wire-compat with Sidekiq 8.x's history pane so dashboards built against
-    # `j|YYMMDD|H:M` HASH keys keep working unchanged.
+    # wire-compat with Sidekiq's history pane — Sidekiq keys the per-minute
+    # HASH as `j|<YYYYMMDD>|<H>:<M>`, so dashboards (and Sidekiq data migrated
+    # in place) keep resolving against the same key after a drop-in swap.
     #
     # Bucket layout (spec: docs/target/sidekiq-free.md §1.6):
     #
-    #   j|YYMMDD|H:M    HASH   per-minute bucket, TTL = MID_TERM (3 days)
-    #     <klass>|p     INT    processed count
-    #     <klass>|f     INT    failed count
-    #     <klass>|ms    INT    total ms spent
+    #   j|YYYYMMDD|H:M    HASH   per-minute bucket, TTL = MID_TERM (3 days)
+    #     <klass>|p       INT    processed count
+    #     <klass>|f       INT    failed count
+    #     <klass>|ms      INT    total ms spent
     #
-    #   j|YYMMDD|H:m0   HASH   10-minute rollup (last digit zeroed),
-    #                          TTL = SHORT_TERM (8 hours) — short window for
-    #                          quick aggregate queries without scanning 600 minute keys.
+    #   <klass>-YYYYMMDD-H  HASH per-class hourly histogram, TTL = MID_TERM
     #
-    #   <klass>-YYMMDD-H  HASH per-class hourly histogram, TTL = MID_TERM
+    # We deliberately do NOT write a `H:m0` 10-minute rollup. Its key format
+    # collides with the real minute-0 bucket, so rolling x1..x9 into it turns
+    # that minute's value into a decade total — and the read side (Query) then
+    # sums the minute-0 bucket alongside x1..x9 and double-counts. Sidekiq
+    # itself doesn't keep that rollup (the daily/hourly rollups are commented
+    # out in its ExecutionTracker); Query reads the last N per-minute keys.
     #
-    # Every bucket TTL is set on first write (EXPIRE NX-equivalent: only when
-    # the HASH was newly created in this call) — re-asserting TTL on every
-    # write would keep the bucket alive indefinitely while traffic continues,
-    # but that's the desired behavior here: as long as a class keeps running,
-    # we keep the minute bucket around for the retention window measured from
+    # Every bucket TTL is set on every write (not NX): as long as a class keeps
+    # running we keep its bucket around for the retention window measured from
     # *last write*, not from first write. So we EXPIRE unconditionally.
     #
-    # The middleware is hot-path — every successful job pays for it. Writes
-    # are pipelined in a single round-trip per job (1 HINCRBY × 3 + 1 EXPIRE
-    # per bucket × 3 buckets = 12 commands, batched).
+    # The middleware is hot-path — every successful job pays for it. Writes are
+    # pipelined in a single round-trip per job (1 HINCRBY × 2 + 1 EXPIRE per
+    # bucket × 2 buckets = 6 commands, batched).
     class History
       include Wurk::Middleware::ServerMiddleware
 
       # Per spec §1.6 — naming mirrors the upstream constants so anyone
       # grepping the Sidekiq source for `MID_TERM` lands here.
       MID_TERM = 3 * 24 * 60 * 60      # 3 days, in seconds
-      SHORT_TERM = 8 * 60 * 60         # 8 hours, in seconds
 
       MINUTE_KEY_PREFIX = 'j|'
-      DATE_FORMAT = '%y%m%d'           # YYMMDD — two-digit year per spec
+      DATE_FORMAT = '%Y%m%d'           # YYYYMMDD — matches Sidekiq's j| key
 
       def call(_worker, job, _queue)
         klass = job['class']
@@ -74,28 +74,20 @@ module Wurk
 
           ms = duration_ms.to_i
           ms = 0 if ms.negative?
-          buckets = { minute: minute_key(at), rollup: rollup_key(at), hour: hour_key(klass, at) }
+          buckets = { minute: minute_key(at), hour: hour_key(klass, at) }
           with_pool(redis_pool) { |conn| pipeline_write(conn, klass, ms, success, buckets) }
           nil
         end
 
-        # Minute + 10-min rollup share a per-class `|p|f|ms` field layout;
-        # the hourly bucket is already class-scoped so its fields are bare
-        # `p|f|ms`. Pipeline all 9 commands in one round-trip.
+        # The minute bucket carries per-class `<klass>|p|f|ms` fields; the
+        # hourly bucket is already class-scoped so its fields are bare
+        # `p|f|ms`. Pipeline all 6 commands in one round-trip.
         def pipeline_write(conn, klass, ms, success, buckets)
           outcome = success ? 'p' : 'f'
           class_outcome = "#{klass}|#{outcome}"
           class_ms = "#{klass}|ms"
           conn.pipelined do |pipe|
             incr_bucket(pipe, buckets[:minute], [class_outcome, class_ms, ms, MID_TERM])
-            # The minute key and the 10-min rollup key coincide whenever the
-            # minute ends in 0 (rollup zeroes the last digit). Writing both
-            # would double-count the shared field — the minute write above
-            # already lands on it — so skip the rollup write then. Minutes
-            # x1..x9 still accumulate into the x0 rollup key as normal.
-            unless buckets[:rollup] == buckets[:minute]
-              incr_bucket(pipe, buckets[:rollup], [class_outcome, class_ms, ms, SHORT_TERM])
-            end
             incr_bucket(pipe, buckets[:hour], [outcome, 'ms', ms, MID_TERM])
           end
         end
@@ -113,12 +105,6 @@ module Wurk
           t = time.utc
           format("#{MINUTE_KEY_PREFIX}%<date>s|%<hr>d:%<min>d",
                  date: t.strftime(DATE_FORMAT), hr: t.hour, min: t.min)
-        end
-
-        def rollup_key(time)
-          t = time.utc
-          format("#{MINUTE_KEY_PREFIX}%<date>s|%<hr>d:%<min>d",
-                 date: t.strftime(DATE_FORMAT), hr: t.hour, min: (t.min / 10) * 10)
         end
 
         def hour_key(klass, time)
