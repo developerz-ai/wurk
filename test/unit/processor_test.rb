@@ -268,6 +268,25 @@ class ProcessorTest < Wurk::Test::UnitCase
     assert_equal 0, llen(private_queue)
   end
 
+  # The malformed-JSON path routes through DeadSet#kill_raw, so it trims like
+  # send_to_morgue does (spec §31.8: trim on every kill). A 1970-epoch entry is
+  # far older than the default dead_timeout (180d) and must be evicted.
+  def test_process_one_trims_dead_set_on_parse_fail
+    ancient = "ancient-#{@queue_name}"
+    @dead_members << ancient
+    @pool.with { |c| c.call('ZADD', Wurk::Keys::DEAD, 1.0, ancient) }
+
+    payload = "{still-not-json-#{@queue_name}"
+    @dead_members << payload
+    @pool.with { |c| c.call('LPUSH', @public_queue, payload) }
+
+    @processor.process_one
+
+    assert_includes @pool.with { |c| c.call('ZRANGE', Wurk::Keys::DEAD, 0, -1) }, payload
+    assert_nil @pool.with { |c| c.call('ZSCORE', Wurk::Keys::DEAD, ancient) },
+               'malformed-JSON path must trim expired dead entries'
+  end
+
   # --- middleware integration -----------------------------------------
 
   def test_server_middleware_runs_around_perform

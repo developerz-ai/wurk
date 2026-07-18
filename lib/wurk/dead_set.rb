@@ -38,9 +38,24 @@ module Wurk
       Wurk.redis do |conn|
         conn.pipelined do |pipe|
           pipe.call('ZREMRANGEBYSCORE', @name, '-inf', "(#{cutoff}")
-          pipe.call('ZREMRANGEBYRANK', @name, 0, -(max_jobs + 1))
+          pipe.call('ZREMRANGEBYRANK', @name, 0, -max_jobs)
         end
       end
+      true
+    end
+
+    # ZADD the raw JSON payload (score = now) then apply the two-axis #trim.
+    # Shared primitive behind both morgue entry points so the trim runs on
+    # EVERY kill (spec §31.8), including the malformed-JSON path:
+    #   * JobRetry#send_to_morgue — exhausted retries
+    #   * Processor#parse_or_kill — unparseable payloads
+    # No death handlers: JobRetry fires its own via #run_death_handlers and the
+    # malformed path has no parseable job to hand a handler. `max_jobs:` /
+    # `timeout:` propagate to #trim (see there for the override rationale).
+    def kill_raw(payload, max_jobs: nil, timeout: nil) # rubocop:disable Naming/PredicateMethod
+      now = ::Process.clock_gettime(::Process::CLOCK_REALTIME)
+      Wurk.redis { |conn| conn.call('ZADD', @name, now.to_s, payload) }
+      trim(max_jobs: max_jobs, timeout: timeout)
       true
     end
 

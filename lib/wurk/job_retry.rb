@@ -2,6 +2,7 @@
 
 require 'zlib'
 require_relative 'component'
+require_relative 'dead_set'
 
 module Wurk
   # Owns the retry pipeline. When perform raises, JobRetry decides whether to
@@ -262,10 +263,7 @@ module Wurk
 
     def send_to_morgue(msg)
       logger.info { "Adding dead #{msg['class']} job #{msg['jid']}" }
-      payload = Wurk.dump_json(msg)
-      now = ::Time.now.to_f
-      redis { |conn| conn.call('ZADD', Keys::DEAD, now.to_s, payload) }
-      DeadSet.new.trim
+      DeadSet.new.kill_raw(Wurk.dump_json(msg))
     end
 
     def run_death_handlers(job, exception)
