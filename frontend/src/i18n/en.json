@@ -83,7 +83,7 @@
     "cron": "Periodic (cron) jobs with their schedule and last run — click a loop to see its execution history.",
     "metrics": "Throughput and failure history, with per-job execution stats.",
     "profiles": "Captured job profiles — open one in the Firefox profiler to inspect its flame graph.",
-    "search": "Find a job across retries, scheduled, and dead by JID or class name."
+    "search": "Find a job across queues, retries, scheduled, and dead by JID, class name, or argument."
   },
   "busy": {
     "hosts": "{n} hosts",
@@ -121,8 +121,20 @@
   },
   "search": {
     "emptyTitle": "Search for a job",
-    "emptyHint": "Enter a JID or class name (2+ characters) and hit Search. Results span retries, scheduled, and dead jobs.",
-    "try": "Try:"
+    "emptyHint": "Enter a JID, class name, or argument (2+ characters). Results span queues, retries, scheduled, and dead jobs.",
+    "placeholder": "Search by JID, class name, or argument…",
+    "try": "Try:",
+    "source": "Source",
+    "when": "When",
+    "truncated": "Showing partial results — refine your search to narrow it down.",
+    "result": "{n} result for “{term}”",
+    "results": "{n} results for “{term}”",
+    "kind": {
+      "queue": "Queue",
+      "retry": "Retry",
+      "scheduled": "Scheduled",
+      "dead": "Dead"
+    }
   },
   "extension": {
     "summary": "Provided by a third-party extension.",
@@ -158,6 +170,14 @@
   },
   "readonly": {
     "banner": "Read-only mode"
+  },
+  "toast": {
+    "failed": "Action failed. Please try again.",
+    "readonly": "This dashboard is read-only — the action was rejected.",
+    "gone": "That job was already gone — it may have run or been removed.",
+    "unavailable": "Redis is unavailable right now. Try again in a moment.",
+    "dismiss": "Dismiss",
+    "region": "Notifications"
   },
   "common": {
     "loading": "Loading…",

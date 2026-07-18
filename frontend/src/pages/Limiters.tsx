@@ -9,6 +9,8 @@ import { PageHeader } from '../components/PageHeader';
 import { SkeletonTable } from '../components/Skeleton';
 import { useMeta } from '../hooks/useMeta';
 import { basePath } from '../basePath';
+import { post } from '../http';
+import { notifyError } from '../toast';
 
 // Uniform live status every limiter type reports (Wurk::Limiter#status).
 // `concurrent` additionally merges its metric counters (held/immediate/…),
@@ -74,9 +76,9 @@ export default function Limiters() {
   // Drops the limiter's stats/state keys (counters → 0); skips CSRF, see
   // ApiController#skip_forgery_protection.
   const reset = useMutation(() => ({
-    mutationFn: (name: string) =>
-      fetch(`${basePath()}/api/limiters/${encodeURIComponent(name)}/reset`, { method: 'POST' }),
+    mutationFn: (name: string) => post(`${basePath()}/api/limiters/${encodeURIComponent(name)}/reset`),
     onSuccess: () => qc.invalidateQueries({ queryKey: ['limiters'] }),
+    onError: notifyError,
   }));
 
   const { sorted, sort, toggle } = useSort(() => q.data?.limiters ?? [], SORT);

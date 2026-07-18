@@ -8,6 +8,8 @@ import { relativeTime, isoTime, formatKb, formatDuration, formatArgs, truncate }
 import { useMeta } from '../hooks/useMeta';
 import { SkeletonCards } from '../components/Skeleton';
 import { basePath } from '../basePath';
+import { post } from '../http';
+import { notifyError } from '../toast';
 
 interface Process {
   identity: string;
@@ -228,18 +230,12 @@ export default function Busy() {
   // scope is 'all'. Both are async — the process reacts on its next
   // heartbeat — so we just refetch rather than optimistically updating.
   const control = useMutation(() => ({
-    mutationFn: async (target: ControlTarget) => {
-      const { signal } = target;
-      const identity = target.scope === 'all' ? 'all' : target.identity;
-      const res = await fetch(`${basePath()}/api/busy/${signal}`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ identity }),
-      });
-      if (!res.ok) throw new Error(`${signal} failed (${res.status})`);
-      return res;
-    },
+    mutationFn: (target: ControlTarget) =>
+      post(`${basePath()}/api/busy/${target.signal}`, {
+        identity: target.scope === 'all' ? 'all' : target.identity,
+      }),
     onSuccess: () => qc.invalidateQueries({ queryKey: ['processes'] }),
+    onError: notifyError,
   }));
 
   const confirmStop = (scope: string) =>

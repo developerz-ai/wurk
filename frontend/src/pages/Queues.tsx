@@ -14,6 +14,8 @@ import { Tooltip } from '../components/Tooltip';
 import { useMeta } from '../hooks/useMeta';
 import { SkeletonTable } from '../components/Skeleton';
 import { basePath } from '../basePath';
+import { post } from '../http';
+import { notifyError } from '../toast';
 
 interface QueueSummary {
   name: string;
@@ -67,20 +69,14 @@ function QueueJobs(props: { name: string }) {
 
   // Delete one job from the queue by jid (server LREMs the exact payload).
   const deleteJob = useMutation(() => ({
-    mutationFn: async (jid: string) => {
-      const res = await fetch(`${basePath()}/api/queues/${encodeURIComponent(props.name)}/delete`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ jid }),
-      });
-      if (!res.ok) throw new Error(`Delete failed (${res.status})`);
-      return res;
-    },
+    mutationFn: (jid: string) =>
+      post(`${basePath()}/api/queues/${encodeURIComponent(props.name)}/delete`, { jid }),
     onSuccess: () => {
       qc.invalidateQueries({ queryKey: ['queue', props.name] });
       qc.invalidateQueries({ queryKey: ['queues'] });
       qc.invalidateQueries({ queryKey: ['stats'] });
     },
+    onError: notifyError,
   }));
 
   const { sorted, sort, toggle } = useSort(() => query.data?.jobs ?? [], JOB_SORT);
@@ -192,27 +188,20 @@ export default function Queues() {
   }));
 
   const clearQueue = useMutation(() => ({
-    mutationFn: async (name: string) => {
-      const res = await fetch(`${basePath()}/api/queues/${encodeURIComponent(name)}/clear`, { method: 'POST' });
-      if (!res.ok) throw new Error(`Clear failed (${res.status})`);
-      return res;
-    },
+    mutationFn: (name: string) => post(`${basePath()}/api/queues/${encodeURIComponent(name)}/clear`),
     onSuccess: (_res, name) => {
       qc.invalidateQueries({ queryKey: ['queues'] });
       qc.invalidateQueries({ queryKey: ['queue', name] });
       qc.invalidateQueries({ queryKey: ['stats'] });
     },
+    onError: notifyError,
   }));
 
   // Toggle the queue's membership of the `paused` SET; fetchers stop pulling
   // from a paused queue. POST skips CSRF (ApiController#skip_forgery_protection).
   const pauseQueue = useMutation(() => ({
-    mutationFn: async ({ name, paused }: { name: string; paused: boolean }) => {
-      const action = paused ? 'unpause' : 'pause';
-      const res = await fetch(`${basePath()}/api/queues/${encodeURIComponent(name)}/${action}`, { method: 'POST' });
-      if (!res.ok) throw new Error(`${action} failed (${res.status})`);
-      return res;
-    },
+    mutationFn: ({ name, paused }: { name: string; paused: boolean }) =>
+      post(`${basePath()}/api/queues/${encodeURIComponent(name)}/${paused ? 'unpause' : 'pause'}`),
     onSuccess: (_res, { name }) => {
       qc.invalidateQueries({ queryKey: ['queues'] });
       qc.invalidateQueries({ queryKey: ['queue', name] });
@@ -220,6 +209,7 @@ export default function Queues() {
       // toggle must refresh it too (mirrors clearQueue).
       qc.invalidateQueries({ queryKey: ['stats'] });
     },
+    onError: notifyError,
   }));
 
   const { sorted, sort, toggle } = useSort(() => query.data ?? [], QUEUE_SORT);

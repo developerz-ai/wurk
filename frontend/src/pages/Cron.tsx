@@ -9,6 +9,8 @@ import { useMeta } from '../hooks/useMeta';
 import { SortableTh } from '../components/SortableTh';
 import { useSort, type Accessors } from '../hooks/useSort';
 import { basePath } from '../basePath';
+import { post } from '../http';
+import { notifyError } from '../toast';
 
 // Newest-first [fired_at, jid] tuples from GET <mount>/api/cron/:lid/history.
 type HistoryEntry = [number, string];
@@ -51,18 +53,19 @@ export default function Cron() {
   }));
 
   // pause/unpause/enqueue skip CSRF (see ApiController#skip_forgery_protection).
-  const post = (lid: string, action: string) =>
-    fetch(`${basePath()}/api/cron/${lid}/${action}`, { method: 'POST' });
+  const call = (lid: string, action: string) => post(`${basePath()}/api/cron/${lid}/${action}`);
 
   const setPaused = useMutation(() => ({
     mutationFn: ({ lid, paused }: { lid: string; paused: boolean }) =>
-      post(lid, paused ? 'unpause' : 'pause'),
+      call(lid, paused ? 'unpause' : 'pause'),
     onSuccess: () => qc.invalidateQueries({ queryKey: ['cron'] }),
+    onError: notifyError,
   }));
 
   const enqueueNow = useMutation(() => ({
-    mutationFn: (lid: string) => post(lid, 'enqueue'),
+    mutationFn: (lid: string) => call(lid, 'enqueue'),
     onSuccess: () => qc.invalidateQueries({ queryKey: ['cron'] }),
+    onError: notifyError,
   }));
 
   // Per-loop run history — fetched on demand when a row opens the modal.

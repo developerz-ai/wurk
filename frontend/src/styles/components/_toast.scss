@@ -1,0 +1,83 @@
+// ── Toasts ───────────────────────────────────────────────────────────────────
+// Fixed, bottom-anchored stack of transient action feedback — a failed mutation
+// raises one (see src/toast.tsx). The stack itself is click-through; only the
+// cards and their dismiss buttons take pointer events.
+
+@use '../abstracts' as *;
+
+.toasts {
+  position: fixed;
+  inset-block-end: to-rem(20);
+  inset-inline-end: to-rem(20);
+  z-index: z('toast');
+  display: flex;
+  flex-direction: column;
+  gap: to-rem(10);
+  max-width: min(to-rem(400), calc(100vw - #{to-rem(32)}));
+  pointer-events: none;
+
+  @include respond-down('mobile') {
+    inset-block-end: to-rem(12);
+    inset-inline: to-rem(12);
+    max-width: none;
+  }
+}
+
+.toast {
+  pointer-events: auto;
+  display: flex;
+  align-items: flex-start;
+  gap: to-rem(10);
+  padding: to-rem(12) to-rem(14);
+  border-radius: var(--radius);
+  background: var(--surface-strong);
+  border: to-rem(1) solid var(--border-strong);
+  border-inline-start: to-rem(3) solid var(--text-muted);
+  box-shadow: 0 to-rem(8) to-rem(24) oklch(0 0 0 / 0.4);
+  color: var(--text);
+  font-size: to-rem(13);
+  line-height: 1.4;
+  animation: fade-up var(--dur-page) var(--ease-standard) both;
+
+  &--error {
+    border-inline-start-color: var(--danger);
+
+    .toast__icon {
+      color: var(--danger);
+    }
+  }
+
+  &--success {
+    border-inline-start-color: var(--success);
+
+    .toast__icon {
+      color: var(--success);
+    }
+  }
+
+  &__icon {
+    margin-top: to-rem(2);
+    font-size: to-rem(14);
+    flex-shrink: 0;
+  }
+
+  &__msg {
+    flex: 1;
+  }
+
+  &__close {
+    flex-shrink: 0;
+    background: none;
+    border: none;
+    padding: to-rem(2);
+    color: var(--text-muted);
+    font-size: to-rem(13);
+    line-height: 1;
+    cursor: pointer;
+    @include transition(color);
+
+    &:hover {
+      color: var(--text);
+    }
+  }
+}

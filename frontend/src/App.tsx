@@ -8,6 +8,7 @@ import { t } from './i18n';
 import Nav from './components/Nav';
 import { PageSkeleton } from './components/Skeleton';
 import ErrorBoundary from './components/ErrorBoundary';
+import { Toasts } from './toast';
 
 // Each page is a lazy chunk: the initial load ships only the shell + landing
 // page, and every other tab streams in on navigation behind the Suspense
@@ -137,6 +138,8 @@ function Layout(props: ParentProps) {
           collapsed={collapsed()}
           onToggleCollapse={toggleCollapsed}
         />
+
+        <Toasts />
       </div>
     </QueryClientProvider>
   );
