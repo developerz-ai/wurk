@@ -133,7 +133,7 @@ class LuaTest < Wurk::Test::UnitCase
       c.call('ZADD', sset, 100, '{"queue":"alpha","jid":"a"}', 150, '{"queue":"beta","jid":"b"}',
              900, '{"queue":"alpha","jid":"future"}')
       count = Wurk::Lua::Loader.eval_cached(
-        c, :reliable_schedule_promote, keys: [sset, qset], argv: [500, "#{@ns}:queue:", 1_700_000_000_000]
+        c, :reliable_schedule_promote, keys: [sset, qset], argv: [500, "#{@ns}:queue:", 1_700_000_000_000, 500]
       )
 
       assert_equal 2, count
@@ -157,7 +157,7 @@ class LuaTest < Wurk::Test::UnitCase
     @pool.with do |c|
       c.call('ZADD', sset, 100, '{"queue":"alpha","jid":"a"}')
       Wurk::Lua::Loader.eval_cached(
-        c, :reliable_schedule_promote, keys: [sset, qset], argv: [500, "#{@ns}:queue:", now_ms]
+        c, :reliable_schedule_promote, keys: [sset, qset], argv: [500, "#{@ns}:queue:", now_ms, 500]
       )
       promoted = Wurk.load_json(c.call('LRANGE', "#{@ns}:queue:alpha", 0, -1).first)
 
@@ -490,7 +490,7 @@ class LuaTest < Wurk::Test::UnitCase
 
   def promote(conn, sset, now_ms = 1_700_000_000_000)
     Wurk::Lua::Loader.eval_cached(
-      conn, :reliable_schedule_promote, keys: [sset, "#{@ns}:queues"], argv: [500, "#{@ns}:queue:", now_ms]
+      conn, :reliable_schedule_promote, keys: [sset, "#{@ns}:queues"], argv: [500, "#{@ns}:queue:", now_ms, 500]
     )
   end
 end

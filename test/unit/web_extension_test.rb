@@ -135,7 +135,8 @@ class WebExtensionTest < Wurk::Test::UnitCase
     status, _headers, body = render_call('GET', '/boom')
 
     assert_equal 500, status
-    assert_includes body, 'kaboom'
+    assert_includes body, 'Extension render error'
+    refute_includes body, 'kaboom', 'exception messages must stay server-side'
   end
 
   # --- assets ----------------------------------------------------------------

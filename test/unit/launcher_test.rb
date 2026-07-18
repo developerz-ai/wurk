@@ -667,8 +667,46 @@ class LauncherTest < Wurk::Test::UnitCase
     assert_equal 2, fires
   end
 
-  def test_heartbeat_drains_signal_list_and_dispatches
+  # A standalone process re-delivers dashboard-queued signals to itself so the
+  # real trap path runs (waking the main thread); it must NOT call quiet/stop
+  # directly. Stubbed — really sending TSTP/TERM would suspend/kill the test.
+  def test_heartbeat_drains_signal_list_and_redelivers_standalone
     launcher = build_isolated_launcher
+    track(launcher_identity(launcher))
+    redelivered = []
+    launcher.define_singleton_method(:redeliver) { |s| redelivered << s }
+    sig_key = "#{launcher_identity(launcher)}-signals"
+    @pool.with { |c| c.call('LPUSH', sig_key, 'TSTP') }
+    @cleanup_keys << sig_key
+
+    launcher.heartbeat
+
+    assert_equal ['TSTP'], redelivered
+    refute_predicate launcher, :stopping?, 'the trap, not the beat, owns the state change'
+    drained = @pool.with { |c| c.call('LPOP', sig_key) }
+
+    assert_nil drained
+  end
+
+  def test_heartbeat_redelivers_term_signal_standalone
+    launcher = build_isolated_launcher
+    track(launcher_identity(launcher))
+    redelivered = []
+    launcher.define_singleton_method(:redeliver) { |s| redelivered << s }
+    sig_key = "#{launcher_identity(launcher)}-signals"
+    @pool.with { |c| c.call('LPUSH', sig_key, 'TERM') }
+    @cleanup_keys << sig_key
+
+    launcher.heartbeat
+
+    assert_equal ['TERM'], redelivered
+  end
+
+  # Embedded mode owns no traps (self-kill would hit the host app), so TSTP
+  # quiets directly and TERM runs #stop on its own thread (never the heartbeat
+  # thread — #stop joins it).
+  def test_heartbeat_dispatches_tstp_directly_when_embedded
+    launcher = build_isolated_launcher(embedded: true)
     track(launcher_identity(launcher))
     sig_key = "#{launcher_identity(launcher)}-signals"
     @pool.with { |c| c.call('LPUSH', sig_key, 'TSTP') }
@@ -677,25 +715,20 @@ class LauncherTest < Wurk::Test::UnitCase
     launcher.heartbeat
 
     assert_predicate launcher, :stopping?
-    drained = @pool.with { |c| c.call('LPOP', sig_key) }
-
-    assert_nil drained
   end
 
-  # Branch coverage: a queued TERM signal must route to #stop.
-  # Exercises the `when 'TERM'` arm of dispatch_signal (line 225).
-  def test_heartbeat_dispatches_term_signal_to_stop
-    launcher = build_isolated_launcher
+  def test_heartbeat_dispatches_term_signal_to_stop_when_embedded
+    launcher = build_isolated_launcher(embedded: true)
     track(launcher_identity(launcher))
-    stopped = false
-    launcher.define_singleton_method(:stop) { stopped = true }
+    stopped = Queue.new
+    launcher.define_singleton_method(:stop) { stopped << true }
     sig_key = "#{launcher_identity(launcher)}-signals"
     @pool.with { |c| c.call('LPUSH', sig_key, 'TERM') }
     @cleanup_keys << sig_key
 
     launcher.heartbeat
 
-    assert stopped, 'a queued TERM must invoke #stop'
+    assert stopped.pop(timeout: 5), 'a queued TERM must invoke #stop (async thread)'
   end
 
   # Branch coverage: an unrecognized signal must be logged, not dispatched.

@@ -272,11 +272,17 @@ module Wurk
         if @embedded
           sig == 'TSTP' ? quiet : Thread.new { stop }
         else
-          ::Process.kill(sig, ::Process.pid)
+          redeliver(sig)
         end
       else
         logger.warn { "Unknown signal in #{identity}-signals: #{sig.inspect}" }
       end
+    end
+
+    # Separate method so tests can stub it — really sending TERM/TSTP would
+    # kill or suspend the test process.
+    def redeliver(sig)
+      ::Process.kill(sig, ::Process.pid)
     end
 
     def build_poller
