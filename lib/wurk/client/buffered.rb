@@ -144,8 +144,9 @@ module Wurk
         public
 
         # Drain payloads through `raw_push` on the given client. Stops on
-        # the first ConnectionError, preserving order at the head of the
-        # buffer so the next push retries the same payload. Emits statsd
+        # the first transient failure (ConnectionError past the pool's own
+        # retries, or a starved checkout), preserving order at the head of
+        # the buffer so the next push retries the same payload. Emits statsd
         # `jobs.recovered.push` per drained payload.
         def drain!(client)
           drained = 0
@@ -206,14 +207,14 @@ module Wurk
           buffer_mutex.synchronize { buffer.shift }
         end
 
-        # Drain marks the thread so our prepended raw_push re-raises
-        # ConnectionError back here instead of swallowing it into the buffer
+        # Drain marks the thread so our prepended raw_push re-raises the
+        # transient error back here instead of swallowing it into the buffer
         # (which would spin forever).
         def attempt_replay(client, payload)
           Thread.current[DRAINING_KEY] = true
           client.send(:raw_push, [payload])
           true
-        rescue RedisClient::ConnectionError
+        rescue RedisClient::ConnectionError, ConnectionPool::TimeoutError
           false
         ensure
           Thread.current[DRAINING_KEY] = false
@@ -222,7 +223,7 @@ module Wurk
 
       # Background drain thread. Wakes every `interval` seconds and tries
       # `Buffered.drain!` against a fresh Wurk::Client. drain! already
-      # short-circuits on the first ConnectionError, so a still-down Redis
+      # short-circuits on the first transient failure, so a still-down Redis
       # just leaves the buffer alone for this tick — no exponential
       # backoff or explicit "reconnect detection" needed; the inner
       # connection retry already lives inside `client.raw_push`.
@@ -292,7 +293,9 @@ module Wurk
       end
 
       # Wraps Wurk::Client. push / push_bulk drain the buffer first;
-      # raw_push catches ConnectionError and buffers non-batched payloads.
+      # raw_push catches transient failures — RedisClient::ConnectionError
+      # past RedisPool's own retries, or a starved checkout
+      # (ConnectionPool::TimeoutError) — and buffers non-batched payloads.
       module InstanceMethods
         def push(item)
           Buffered.drain!(self)
@@ -308,7 +311,7 @@ module Wurk
 
         def raw_push(payloads)
           super
-        rescue RedisClient::ConnectionError
+        rescue RedisClient::ConnectionError, ConnectionPool::TimeoutError
           raise if Thread.current[Buffered::DRAINING_KEY]
 
           bidless, batched = payloads.partition { |p| !p['bid'] }

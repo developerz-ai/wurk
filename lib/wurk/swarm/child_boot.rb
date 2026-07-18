@@ -3,6 +3,7 @@
 require_relative '../component'
 require_relative '../launcher'
 require_relative '../fetcher/reliable'
+require_relative '../lua'
 
 module Wurk
   class Swarm
@@ -72,12 +73,35 @@ module Wurk
 
       def reconnect_after_fork
         @config.reset_redis_pools!
+        validate_redis!
+        reconnect_active_record
+      end
+
+      # Prove the child's fresh Redis socket reaches a live server before it
+      # starts fetching: one PING through RedisPool#with, which owns the
+      # retry+backoff (production incident #101), so a transient blip during
+      # boot rides out instead of racing straight into a dead pool. A PING that
+      # still fails past the wrapper's retries propagates and crashes the child
+      # (the swarm respawns it) rather than booting a worker that can't reach
+      # Redis. The same checkout eagerly primes every Lua script in one
+      # pipelined round-trip so the first EVALSHA hits a warm cache.
+      def validate_redis!
+        @config.redis_pool.with do |conn|
+          conn.call('PING')
+          Wurk::Lua::Loader.script_load_all(conn)
+        end
+      end
+
+      # AR reconnect is best-effort — a Redis-only worker with no database still
+      # runs — but the silent `rescue nil` here hid a real misconfiguration
+      # during the #101 audit, so warn loudly instead of swallowing.
+      def reconnect_active_record
         return unless defined?(::ActiveRecord::Base)
 
-        begin
-          ::ActiveRecord::Base.establish_connection
-        rescue StandardError
-          nil
+        ::ActiveRecord::Base.establish_connection
+      rescue StandardError => e
+        @config.logger.warn do
+          "swarm child ##{@index} (#{::Process.pid}) ActiveRecord reconnect failed: #{e.class}: #{e.message}"
         end
       end
 

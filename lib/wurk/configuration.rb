@@ -43,13 +43,21 @@ module Wurk
       reloader: proc { |&b| b.call },
       backtrace_cleaner: ->(bt) { bt },
       logged_job_attributes: %w[bid tags],
-      redis_idle_timeout: nil
+      redis_idle_timeout: nil,
+      redis_error_handlers: []
     }.freeze
 
     # :fork fires only inside swarm children, after fork + internal AR/Redis
     # reconnect — apps reopen sockets / non-fork-safe libs there (Ent §7.4).
     LIFECYCLE_EVENTS = %i[startup fork quiet shutdown exit heartbeat beat leader].freeze
     DEFAULT_THREAD_PRIORITY = -1
+
+    # Redis client / pool errors that the pool wrapper already retried before
+    # re-raising. Logged one level up (WARN, not INFO) so a transient blip
+    # surfaces in ops dashboards without drowning steady-state noise (#101).
+    # RedisClient + ConnectionPool are always loaded before this file (capsule
+    # → redis_pool requires both), so referencing them here is safe.
+    REDIS_ERROR_CLASSES = [RedisClient::Error, ConnectionPool::TimeoutError].freeze
 
     # Default error handler. Wraps the report in the thread-local
     # Wurk::Context so logger formatters/JSON layouts can pick up jid/bid/tags.
@@ -62,7 +70,8 @@ module Wurk
       Wurk::Context.with(safe_ctx) do
         dev = $DEBUG || ENV['WURK_DEBUG'] || cfg.logger.debug?
         msg = dev ? ex.full_message : ex.detailed_message
-        cfg.logger.info { msg }
+        level = REDIS_ERROR_CLASSES.any? { |k| ex.is_a?(k) } ? :warn : :info
+        cfg.logger.public_send(level) { msg }
       end
     end
 
@@ -168,17 +177,11 @@ module Wurk
       default_capsule.redis_pool
     end
 
-    def local_redis_pool
-      @local_redis_pool ||= build_redis_pool(size: 10, name: 'internal')
-    end
-
-    # Disconnect and drop every cached pool — the per-capsule mains plus
-    # the config-level internal pool. Used by Wurk::Swarm so the parent
-    # never leaks sockets into forks and each child can build fresh ones.
+    # Disconnect and drop every capsule's cached pools (main + fetch). Used by
+    # Wurk::Swarm so the parent never leaks sockets into forks and each child
+    # can build fresh ones.
     def reset_redis_pools!
       @capsules.each_value(&:reset_redis_pools!)
-      @local_redis_pool&.disconnect!
-      @local_redis_pool = nil
     end
 
     def new_redis_pool(size, name = 'custom')
@@ -208,6 +211,19 @@ module Wurk
 
     def death_handlers
       @options[:death_handlers]
+    end
+
+    # Telemetry hook fired by RedisPool on every transient-error retry and
+    # final give-up. The block receives one Hash: { error:, attempt:, retried:,
+    # pool: }. Opt-in — pools stay silent until a handler is registered.
+    def on_redis_error(&block)
+      raise ArgumentError, 'block required for on_redis_error' unless block
+
+      @options[:redis_error_handlers] << block
+    end
+
+    def redis_error_handlers
+      @options[:redis_error_handlers]
     end
 
     def average_scheduled_poll_interval=(interval)
@@ -495,13 +511,24 @@ module Wurk
       logger
     end
 
+    # `size`/`name` are pool-structural (the caller owns them); every other
+    # key the host set via `config.redis = {...}` — url, the split timeouts,
+    # reconnect_attempts, driver, … — flows through to RedisPool verbatim.
+    # Every pool built here is wired to the redis-error telemetry dispatcher.
     def build_redis_pool(size:, name:)
-      RedisPool.new(
-        size: size,
-        url: @redis_config[:url] || RedisPool::DEFAULT_URL,
-        timeout: @redis_config[:timeout] || RedisPool::DEFAULT_TIMEOUT,
-        name: name
-      )
+      RedisPool.new(size: size, name: name, on_error: method(:dispatch_redis_error),
+                    **@redis_config.except(:size, :name))
+    end
+
+    # Fan a RedisPool retry/give-up event out to the registered handlers. A
+    # raising handler is logged and skipped so one bad hook can't break the
+    # pool's retry path (mirrors #handle_exception).
+    def dispatch_redis_error(info)
+      redis_error_handlers.each do |handler|
+        handler.call(info)
+      rescue StandardError => e
+        logger.error("redis_error_handler raised: #{e.class}: #{e.message}")
+      end
     end
   end
 end

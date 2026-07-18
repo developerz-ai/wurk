@@ -130,9 +130,12 @@ module Wurk
       def blmove(public_q)
         priv = self.class.private_queue_name(public_q)
         timeout = poll_interval
-        # Extend the socket read-timeout past BLMOVE's own timeout so the
-        # default 1s pool timeout doesn't fire before BLMOVE returns.
-        job = config.redis do |conn|
+        # Dedicated fetch pool, not the main one: a parked BLMOVE holds its slot
+        # for the whole block window, so routing it here keeps idle fetchers from
+        # starving the main pool's background loops (#101). Extend the socket
+        # read-timeout one second past BLMOVE's own server-side timeout so the
+        # connection's read timeout can't fire while BLMOVE is legitimately blocked.
+        job = config.fetch_redis do |conn|
           conn.blocking_call(timeout + 1, 'BLMOVE', public_q, priv, 'RIGHT', 'LEFT', timeout)
         end
         job ? UnitOfWork.new(queue: public_q, job: job, config: config) : nil

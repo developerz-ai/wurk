@@ -25,7 +25,7 @@ module Wurk
       @weights = { 'default' => 0 }
       @fetcher = nil
       @redis_pool = nil
-      @local_redis_pool = nil
+      @fetch_redis_pool = nil
       @client_chain = nil
       @server_chain = nil
     end
@@ -65,7 +65,7 @@ module Wurk
     def prepare!
       @fetcher ||= build_fetcher
       redis_pool
-      local_redis_pool
+      fetch_redis_pool
       client_middleware
       server_middleware
       self
@@ -86,20 +86,27 @@ module Wurk
       chain
     end
 
-    # Pool size = concurrency + POOL_OVERHEAD. Every processor thread can
-    # be parked in a blocking BLMOVE (reliable fetch), holding its slot
-    # for ~3s. POOL_OVERHEAD reserves connections for the Launcher's
-    # heartbeat thread + the Scheduled::Poller so they can never be
-    # starved by busy fetchers. Without this, concurrency=1 deadlocks
-    # immediately (worker holds the only slot, heartbeat times out).
-    POOL_OVERHEAD = 2
+    # Headroom above `concurrency` for the main pool; the whole pool is then
+    # floored at MIN_POOL_SIZE. Blocking BLMOVE fetch has its own pool
+    # (#fetch_redis_pool), so the main pool serves only the background loops —
+    # heartbeat, scheduled poller, leader election, cron, the two metrics
+    # rollups, reaper, history, health probe — plus the host's own job-code
+    # checkouts. `concurrency + 5` (floor 10) gives each an unstarvable slot;
+    # the old `concurrency + 2` starved them once fetch also drew from here —
+    # the #101 `0/N` pool-exhaustion incident. Override via `config.redis[:size]`.
+    POOL_HEADROOM = 5
+    MIN_POOL_SIZE = 10
 
     def redis_pool
-      @redis_pool ||= build_pool(size: @concurrency + POOL_OVERHEAD, name: "#{@name}-main")
+      @redis_pool ||= build_pool(size: main_pool_size, name: "#{@name}-main")
     end
 
-    def local_redis_pool
-      @local_redis_pool ||= build_pool(size: @concurrency, name: "#{@name}-local")
+    # Dedicated pool for the reliable fetcher's blocking BLMOVE: one slot per
+    # processor thread (`concurrency`), since at most that many threads park in
+    # fetch at once. Keeping fetch off the main pool is what lets an idle worker
+    # hold zero main-pool connections again.
+    def fetch_redis_pool
+      @fetch_redis_pool ||= build_pool(size: @concurrency, name: "#{@name}-fetch")
     end
 
     # Disconnect and drop cached pools. Called by Wurk::Swarm just before
@@ -109,12 +116,18 @@ module Wurk
     def reset_redis_pools!
       @redis_pool&.disconnect!
       @redis_pool = nil
-      @local_redis_pool&.disconnect!
-      @local_redis_pool = nil
+      @fetch_redis_pool&.disconnect!
+      @fetch_redis_pool = nil
     end
 
     def redis(&)
       redis_pool.with(&)
+    end
+
+    # Checkout from the dedicated fetch pool. Only the reliable fetcher's
+    # blocking BLMOVE uses this, so a parked fetch never holds a main-pool slot.
+    def fetch_redis(&)
+      fetch_redis_pool.with(&)
     end
 
     def lookup(name)
@@ -196,14 +209,14 @@ module Wurk
       parsed.flat_map { |q, w| [q] * w }
     end
 
+    # `config.redis = { size: N }` pins the main pool at N; otherwise
+    # `concurrency + POOL_HEADROOM`, floored at MIN_POOL_SIZE.
+    def main_pool_size
+      @config.redis_config[:size] || [@concurrency + POOL_HEADROOM, MIN_POOL_SIZE].max
+    end
+
     def build_pool(size:, name:)
-      cfg = @config.redis_config
-      RedisPool.new(
-        size: size,
-        url: cfg[:url] || RedisPool::DEFAULT_URL,
-        timeout: cfg[:timeout] || RedisPool::DEFAULT_TIMEOUT,
-        name: name
-      )
+      @config.new_redis_pool(size, name)
     end
   end
 end

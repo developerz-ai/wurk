@@ -14,12 +14,18 @@ module Wurk
       NOSCRIPT_PREFIX = 'NOSCRIPT'
 
       class << self
-        # Eagerly upload every registered script to the given connection.
-        # Idempotent on the Redis side: `SCRIPT LOAD` of the same source
-        # returns the same SHA regardless of how often it's called.
-        # Manager calls this once per child after the post-fork reconnect.
+        # Eagerly upload every registered script to the given connection in a
+        # single pipelined round-trip (all SCRIPT LOADs, one RTT — not one per
+        # script). Idempotent on the Redis side: `SCRIPT LOAD` of the same source
+        # returns the same SHA no matter how often it runs. ChildBoot calls this
+        # once per child right after the post-fork reconnect so the first real
+        # EVALSHA hits a warm cache instead of paying a NOSCRIPT reload. Transient
+        # connection errors are the pool wrapper's job (Wurk::RedisPool#with);
+        # this only ships the loads.
         def script_load_all(redis)
-          SCRIPTS.each_value { |src| redis.call('SCRIPT', 'LOAD', src) }
+          redis.pipelined do |pipe|
+            SCRIPTS.each_value { |src| pipe.call('SCRIPT', 'LOAD', src) }
+          end
         end
 
         # @param redis [RedisClient] a single connection (not a pool)

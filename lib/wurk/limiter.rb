@@ -97,9 +97,8 @@ module Wurk
                   when Hash
                     Wurk::RedisPool.new(
                       size: @redis[:size] || 10,
-                      url: @redis[:url] || Wurk::RedisPool::DEFAULT_URL,
-                      timeout: @redis[:timeout] || Wurk::RedisPool::DEFAULT_TIMEOUT,
-                      name: 'limiter'
+                      name: 'limiter',
+                      **@redis.except(:size, :name)
                     )
                   else
                     raise ArgumentError, "Limiter.config.redis must be Hash or RedisPool, got #{@redis.class}"

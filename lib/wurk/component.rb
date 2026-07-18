@@ -22,6 +22,9 @@ module Wurk
 
     attr_reader :config
 
+    # `leader?` cache TTL — see the method doc below.
+    LEADER_CACHE_TTL_MS = 5_000
+
     # --- clocks ---------------------------------------------------------
 
     def real_ms
@@ -71,20 +74,25 @@ module Wurk
     # --- cluster leadership --------------------------------------------
 
     # True iff this process currently holds the cluster `dear-leader` lock.
-    # Per spec, the check is performed at call time (Wurk does not cache);
-    # callers must not poll faster than the 60s follower cadence. Returns
-    # false unconditionally when `WURK_LEADER=false` (or `SIDEKIQ_LEADER=false`)
-    # is set on the process (opt-out hot-standby). Any Redis error is swallowed →
-    # false, so a transient partition can't propagate as an exception into user
-    # code.
+    # Cached per Component instance for `LEADER_CACHE_TTL_MS` (~5s): cron and
+    # the metrics rollups call this every tick, and an uncached GET would
+    # double their Redis traffic at short intervals for no benefit — the
+    # lock's own renewal cadence (60s+, spec §6.1) easily tolerates a
+    # few-second-stale read. Returns false unconditionally when
+    # `WURK_LEADER=false` (or `SIDEKIQ_LEADER=false`) is set on the process
+    # (opt-out hot-standby). Any Redis error is swallowed → false, so a
+    # transient partition can't propagate as an exception into user code.
     #
     # Spec: docs/target/sidekiq-ent.md §6.1.
     def leader?
       return false if Wurk::Leader.opted_out?
 
-      redis { |c| c.call('GET', Wurk::Leader::DEFAULT_KEY) } == identity
-    rescue StandardError
-      false
+      now = mono_ms
+      if @leader_checked_at.nil? || (now - @leader_checked_at) >= LEADER_CACHE_TTL_MS
+        @leader_checked_at = now
+        @leader_cached = fetch_leader?
+      end
+      @leader_cached
     end
 
     # --- thread boundaries ---------------------------------------------
@@ -126,6 +134,12 @@ module Wurk
     end
 
     private
+
+    def fetch_leader?
+      redis { |c| c.call('GET', Wurk::Leader::DEFAULT_KEY) } == identity
+    rescue StandardError
+      false
+    end
 
     def run_lifecycle_hook(hook, event, reraise)
       hook.call
