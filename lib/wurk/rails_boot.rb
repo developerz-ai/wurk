@@ -104,10 +104,16 @@ module Wurk
 
     def boot_swarm
       swarm = Wurk::Swarm.new(topology: Wurk.configuration.topology)
-      swarm.boot
-      # Embedded in the Rails process: supervise must run somewhere or queued
-      # signals never drain, crashed children never respawn, and memory checks
-      # never fire. A background thread keeps the host's main thread free.
+      # Co-hosted in the web process (e.g. Puma single mode): the host owns the
+      # process-wide TERM/INT traps. Installing the swarm's own would hijack
+      # them — a deploy TERM would drain the swarm but never stop the HTTP
+      # server. Let the host keep signal ownership and drain the swarm on its
+      # graceful exit (same contract as boot_embedded).
+      swarm.boot(install_signals: false)
+      at_exit { swarm.shutdown }
+      # supervise must still run somewhere or crashed children never respawn and
+      # memory checks never fire. A background thread keeps the host's main
+      # thread free to serve HTTP.
       Thread.new do
         swarm.supervise
       rescue StandardError => e
