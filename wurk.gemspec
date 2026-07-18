@@ -52,4 +52,10 @@ Gem::Specification.new do |spec|
   # has neither — without these, `require "wurk"` raises LoadError on Ruby 3.4+.
   spec.add_dependency "base64", ">= 0.1", "< 1"
   spec.add_dependency "logger", ">= 1.5", "< 2"
+  # fiddle left the default gems in Ruby 4.0. The swarm's Linux PR_SET_PDEATHSIG
+  # orphan-guard fast-path (lib/wurk/swarm/orphan_guard.rb) requires it; without
+  # the dep it silently degrades to the getppid watchdog on Ruby 4.0 (and the
+  # orphan-guard test errors on LoadError). Declaring it keeps the kernel-level
+  # path working there, exactly as base64/logger keep `require "wurk"` working.
+  spec.add_dependency "fiddle", ">= 1.0", "< 2"
 end

@@ -75,11 +75,14 @@ class SwarmBootTest < Wurk::Test::UnitCase
     end
   end
 
-  # #119 (Ent §7.5): a child whose RSS exceeds the memory limit is TERMed and
-  # respawned. A 1 MB limit guarantees every real Ruby child exceeds it. Each
-  # child logs its pid on startup; we boot, wait for the first child to be
-  # fully up (so the supervisor's immediate first memory check can't TERM it
-  # mid-boot), then start the supervisor and watch a different pid take over.
+  # #119 (Ent §7.5): a child whose RSS exceeds the memory limit is recycled
+  # through the rolling-restart state machine — a healthy replacement is spawned
+  # first, and only once it takes over is the bloated child TERMed. A 1 MB limit
+  # guarantees every real Ruby child exceeds it. Each child logs its pid on
+  # startup; we boot, wait for the first child to be fully up (so the
+  # supervisor's immediate first memory check can't recycle it mid-boot), then
+  # start the supervisor and watch a different pid take over AND the original
+  # drain out (it lives on briefly past the replacement's boot).
   def test_swarm_recycles_a_child_that_exceeds_the_memory_limit # rubocop:disable Metrics/AbcSize,Minitest/MultipleAssertions
     log_boot_pids
     @config.memory_limit_mb = 1
@@ -95,7 +98,8 @@ class SwarmBootTest < Wurk::Test::UnitCase
 
       assert pids, "child was never recycled+respawned within #{POLL_TIMEOUT}s (saw #{boot_pids.inspect})"
       refute_equal pids[0], pids[1], 'the bloated child should be replaced by a new pid'
-      refute pid_alive?(original), 'the original (bloated) child should have been terminated'
+      assert wait_until_dead(original),
+             'the original (bloated) child should be TERMed once its replacement took over'
     ensure
       swarm.shutdown(timeout: 5)
       supervisor&.join(10)
@@ -181,6 +185,16 @@ class SwarmBootTest < Wurk::Test::UnitCase
     true
   rescue Errno::ESRCH, Errno::EPERM
     false
+  end
+
+  def wait_until_dead(pid) # rubocop:disable Naming/PredicateMethod
+    deadline = monotonic_now + POLL_TIMEOUT
+    while monotonic_now < deadline
+      return true unless pid_alive?(pid)
+
+      sleep POLL_INTERVAL
+    end
+    !pid_alive?(pid)
   end
 
   def monotonic_now

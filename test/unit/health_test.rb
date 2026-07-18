@@ -155,17 +155,60 @@ class HealthTest < Wurk::Test::UnitCase
 
   # --- lifecycle ----------------------------------------------------------
 
-  def test_start_idempotency_via_address_in_use
+  def test_second_bind_on_busy_port_polls_instead_of_serving
     launcher = FakeLauncher.new(config: FakeConfig.new)
     @server = build_server(launcher)
     @server.start
     port = @server.port
 
-    # Second server on the same explicit port must not raise — logs and skips.
-    second = Wurk::Health::Server.new(launcher, port: port, bind: '127.0.0.1')
+    # Second server on the same explicit port must not raise; it polls to take
+    # the port over rather than serving or giving up.
+    second = Wurk::Health::Server.new(launcher, port: port, bind: '127.0.0.1', retry_interval: 0.05)
     second.start
+    begin
+      refute_predicate second, :running?, 'second bind on busy port must not serve yet'
+      assert_predicate second, :retrying?, 'second must poll to take the port over'
+    ensure
+      second.stop
+    end
 
-    refute_predicate second, :running?, 'second bind on busy port must skip cleanly'
+    refute_predicate second, :retrying?, 'stop cancels the retry poll'
+  end
+
+  # A second start on a live instance must be a no-op. Without the guard it
+  # re-binds the same port, hits EADDRINUSE, nulls @server/@thread, and leaks
+  # the original listener so stop can never close it.
+  def test_start_is_idempotent
+    launcher = FakeLauncher.new(config: FakeConfig.new)
+    @server = build_server(launcher)
+    @server.start
+    thread = @server.instance_variable_get(:@thread)
+    listener = @server.instance_variable_get(:@server)
+
+    @server.start
+
+    assert_predicate @server, :running?
+    assert_same thread, @server.instance_variable_get(:@thread), 'accept thread must not be replaced'
+    assert_same listener, @server.instance_variable_get(:@server), 'listener must not be rebound/leaked'
+  end
+
+  def test_second_child_takes_over_port_after_owner_stops
+    launcher = FakeLauncher.new(config: FakeConfig.new)
+    first = build_server(launcher)
+    first.start
+    port = first.port
+
+    @server = Wurk::Health::Server.new(launcher, port: port, bind: '127.0.0.1', retry_interval: 0.05)
+    @server.start
+
+    refute_predicate @server, :running?, 'the non-owner must not serve while the owner holds the port'
+
+    first.stop # frees the port
+
+    assert wait_until { @server.running? },
+           'the survivor must bind the shared port within a retry interval of the owner exiting'
+  ensure
+    first&.stop
   end
 
   def test_stop_terminates_thread_and_unbinds
@@ -205,16 +248,19 @@ class HealthTest < Wurk::Test::UnitCase
 
   def test_address_in_use_with_nil_config_logger_does_not_raise
     # @config is nil → logger returns nil (the else side of `@config&.logger`)
-    # → logger&.warn in the EADDRINUSE rescue short-circuits without raising.
+    # → logger&.warn in start_retry_loop short-circuits without raising.
     launcher = FakeLauncher.new(config: nil)
     @server = build_server(launcher)
     @server.start
     port = @server.port
 
-    second = Wurk::Health::Server.new(launcher, port: port, bind: '127.0.0.1')
+    second = Wurk::Health::Server.new(launcher, port: port, bind: '127.0.0.1', retry_interval: 0.05)
     second.start
-
-    refute_predicate second, :running?
+    begin
+      refute_predicate second, :running?
+    ensure
+      second.stop
+    end
   end
 
   def test_address_in_use_with_present_config_but_nil_logger_does_not_raise
@@ -226,10 +272,13 @@ class HealthTest < Wurk::Test::UnitCase
     @server.start
     port = @server.port
 
-    second = Wurk::Health::Server.new(launcher, port: port, bind: '127.0.0.1')
+    second = Wurk::Health::Server.new(launcher, port: port, bind: '127.0.0.1', retry_interval: 0.05)
     second.start
-
-    refute_predicate second, :running?
+    begin
+      refute_predicate second, :running?
+    ensure
+      second.stop
+    end
   end
 
   # --- write_response default reason branch ------------------------------
@@ -318,6 +367,14 @@ class HealthTest < Wurk::Test::UnitCase
   def sleep_until_quiet
     deadline = ::Time.now + 0.7
     Kernel.sleep(0.05) while ::Time.now < deadline
+  end
+
+  # Polls the block until it returns truthy or the timeout elapses; returns the
+  # block's final value so callers can assert on it.
+  def wait_until(timeout = 2)
+    deadline = ::Time.now + timeout
+    sleep 0.02 until yield || ::Time.now > deadline
+    yield
   end
 
   # Builds a server bound on 127.0.0.1:0 (OS-assigned port) so parallel

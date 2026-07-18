@@ -75,6 +75,25 @@ Plus Wurk extras: a worker topology DSL, a Kubernetes liveness/readiness listene
 
 JRuby, TruffleRuby, and Windows fall back to threads-only mode (no fork) — behaviorally equivalent to stock Sidekiq.
 
+## Running the workers
+
+Under Rails the engine **auto-starts** the swarm on boot — a plain `rails server` already forks workers and fetches. Set `WURK_DISABLED=1` on any process that shouldn't (e.g. the web tier when you run workers on their own dyno).
+
+**One exception — preforking web servers.** A clustered Puma, Unicorn, or Passenger forks its own web workers, so Wurk **refuses** to also fork the swarm there — it would multiply the swarm by the web-worker count, or entangle its supervisor with the server's own fork/signal handling — and logs how to proceed. Either run the swarm as its own process (recommended):
+
+```bash
+bundle exec wurkswarm   # forked swarm, real parallelism
+```
+
+…or run it inside the web process as threads only, no fork (like Sidekiq embedded):
+
+```ruby
+# config/application.rb  (here, not an initializer — server mode is decided before initializers load)
+config.wurk.embed_in_web = true
+```
+
+Single-mode Puma (the `rails server` default) isn't preforking, so auto-start is unaffected. Full details, flags, and the standalone runners: **[Starting the worker](https://github.com/developerz-ai/wurk/blob/main/docs/running.md)**.
+
 ## The dashboard
 
 Mount the engine wherever you like:

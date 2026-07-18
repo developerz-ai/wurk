@@ -21,6 +21,15 @@ Anything still sitting in the per-process private list at the moment of exit is 
 
 Reliable fetch atomically moves a job ID from the main queue into a per-process private list. The job ID is in two lists for the duration of the work, then removed from the private list on success. If the process disappears (SIGKILL, OOM, hardware failure), the job ID stays in the private list. A janitor — or simply the next boot of a process with the same hostname/PID lineage — moves it back. No job is lost.
 
+## Orphan protection (SIGKILL'd supervisor)
+
+If the supervisor itself is SIGKILLed (or OOM-killed, or crashes), its children would otherwise keep fetching with no parent — and the next redeploy that boots a fresh supervisor would then run doubled concurrency against the same queues. Each child arms two independent mechanisms so it self-terminates the moment it is orphaned, both routed through its own SIGTERM handler (an ordinary graceful drain, not a hard kill):
+
+- **Linux:** `PR_SET_PDEATHSIG=SIGTERM`, set right after fork so the kernel delivers SIGTERM the instant the parent dies (zero latency). The fork race — the parent dying in the window before the syscall lands — is closed by the watchdog's first check.
+- **Every platform:** a watchdog thread compares `getppid` (against the parent PID captured *before* the fork, so it's never fooled by the reparent PID) every 5 seconds; a mismatch means the parent is gone. This is the sole mechanism on non-fork/non-Linux platforms and a backstop elsewhere.
+
+A cleanly-shutting-down supervisor drains its children the normal way (SIGTERM relay) long before either mechanism trips, so orphan protection only fires on an *unclean* supervisor death.
+
 ## Rolling restart semantics
 
 Triggered by SIGUSR1 to the parent. The parent walks its child list one at a time:

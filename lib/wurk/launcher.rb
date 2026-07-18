@@ -65,6 +65,7 @@ module Wurk
       @started_at = nil
       @heartbeat = nil
       @heartbeat_thread = nil
+      @boot_reclaim_thread = nil
       @health_server = build_health_server
     end
 
@@ -94,7 +95,9 @@ module Wurk
       @history&.start
       @managers.each(&:start)
       @reaper.start
-      boot_reclaim
+      # Run on a background thread so /ready probe isn't delayed by a large
+      # orphan sweep (reaper.reclaim! is atomic, but can scan many entries).
+      @boot_reclaim_thread = safe_thread('boot-reclaim', &method(:boot_reclaim))
       @health_server&.start
     end
 

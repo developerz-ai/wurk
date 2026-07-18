@@ -1,60 +1,32 @@
 # frozen_string_literal: true
 
 require 'rails/railtie'
+require 'active_support/ordered_options'
+require_relative 'rails_boot'
 
 module Wurk
-  # Boot the swarm after the host app has fully initialized.
-  # Skip when: WURK_DISABLED=1, Rails console mode, or Rails test env.
+  # Rails integration surface only: register the host-facing `config.wurk`
+  # namespace and wire the two boot hooks to Wurk::RailsBoot. All boot policy
+  # (skip/fork/embed/refuse, prefork detection) and execution lives there — this
+  # class exists solely to invoke the coordinator from the Rails lifecycle.
   # See docs/idea/03-process-model.md for the exact ordering.
   class Railtie < ::Rails::Railtie
-    # This Rails process forks the workers, so it IS the server. Enter server
-    # mode BEFORE config/initializers load — otherwise the app's
+    # Host-facing config namespace. Pre-created so a host can write
+    # `config.wurk.embed_in_web = true` in config/application.rb without a
+    # NoMethodError — the setter needs the OrderedOptions to already exist.
+    # Shared with the application config via Rails' Railtie::Configuration
+    # @@options, so `Rails.application.config.wurk` reads back the same object.
+    config.wurk = ::ActiveSupport::OrderedOptions.new
+
+    # Enter server mode BEFORE config/initializers load — otherwise the app's
     # `Sidekiq.configure_server` blocks gate on `config.server?` (still false)
-    # and are silently dropped. Gated identically to the swarm boot: a process
-    # that won't run workers (disabled / console / test) is not a server.
-    initializer 'wurk.server_mode', before: :load_config_initializers do
-      Wurk.enter_server_mode unless Wurk::Railtie.skip_boot?
+    # and are silently dropped. RailsBoot decides whether this process serves.
+    initializer 'wurk.server_mode', before: :load_config_initializers do |app|
+      Wurk::RailsBoot.enter_server_mode_if_serving(app)
     end
 
-    config.after_initialize do |_app|
-      next if Wurk::Railtie.skip_boot?
-
-      swarm = Wurk::Swarm.new(topology: Wurk.configuration.topology)
-      swarm.boot
-      # Embedded mode keeps the Rails process serving HTTP; supervise must
-      # run somewhere or signal_queue never drains, crashed children never
-      # respawn, and memory pressure checks never fire. Background thread
-      # leaves the host's main thread free for Rails.
-      Thread.new do
-        swarm.supervise
-      rescue StandardError => e
-        Wurk.configuration.logger.error { "wurk supervisor thread died: #{e.class}: #{e.message}" }
-      end
-    end
-
-    # A process that won't run workers isn't a server: skip both server mode
-    # and the swarm boot. Console mode is detected reliably here — the console
-    # command file defines ::Rails::Console before initializers run.
-    def self.skip_boot?
-      ENV['WURK_DISABLED'] == '1' ||
-        building? ||
-        defined?(::Rails::Console) ||
-        ::Rails.env.test?
-    end
-
-    # A build/precompile step must never fork the swarm (#247). The default
-    # Rails Dockerfile runs `SECRET_KEY_BASE_DUMMY=1 ./bin/rails
-    # assets:precompile`; that loads `:environment` → fires after_initialize,
-    # but there's no Redis during `docker build`, so a fork would hang/fail the
-    # build. Same for other env-loading rake tasks (db:prepare, db:migrate).
-    # The real server path is unaffected: `rails server` / `puma` boot through
-    # Rails::Command, not Rake, and don't set the dummy secret.
-    def self.building?
-      return true if ENV.key?('SECRET_KEY_BASE_DUMMY')
-
-      defined?(::Rake) && ::Rake.application.top_level_tasks.any?
-    rescue StandardError
-      false
+    config.after_initialize do |app|
+      Wurk::RailsBoot.boot(app)
     end
   end
 end

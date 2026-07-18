@@ -80,7 +80,7 @@ class CLITest < Wurk::Test::UnitCase
   end
 
   def test_signal_handlers_table
-    assert_equal %w[INT TERM TSTP TTIN INFO].sort, Wurk::CLI::SIGNAL_HANDLERS.keys.sort
+    assert_equal %w[INT TERM TSTP TTIN INFO USR2].sort, Wurk::CLI::SIGNAL_HANDLERS.keys.sort
   end
 
   def test_min_redis_version
@@ -424,6 +424,20 @@ class CLITest < Wurk::Test::UnitCase
     end
 
     assert_match(/<no backtrace available>/, io.string)
+  end
+
+  # USR2 reopens the logs for logrotate. reopen_logs is private, so the handler
+  # must reach it via __send__ — a plain `cli.reopen_logs` raises NoMethodError
+  # and log rotation silently breaks.
+  def test_handle_signal_usr2_reopens_logs
+    reopened = false
+    logger = ::Logger.new(IO::NULL)
+    logger.define_singleton_method(:reopen) { reopened = true }
+    @cli.config.logger = logger
+
+    @cli.handle_signal('USR2')
+
+    assert reopened, 'USR2 must reopen the logs despite reopen_logs being private'
   end
 
   # --- run plumbing (without booting Redis/launcher) -----------------

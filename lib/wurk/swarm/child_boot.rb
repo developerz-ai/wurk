@@ -4,6 +4,7 @@ require_relative '../component'
 require_relative '../launcher'
 require_relative '../fetcher/reliable'
 require_relative '../lua'
+require_relative 'orphan_guard'
 
 module Wurk
   class Swarm
@@ -22,11 +23,17 @@ module Wurk
 
       CHILD_SIGNALS = { 'TERM' => :term, 'INT' => :term, 'TSTP' => :tstp, 'USR2' => :usr2 }.freeze
 
-      def initialize(config, slot, index)
+      # `parent_pid` is captured by the swarm before it forks (race-free) and
+      # threaded through so OrphanGuard can tell "still supervised" from
+      # "reparented after the supervisor died". Defaults to the live parent for
+      # the non-swarm callers (tests) that construct a ChildBoot directly.
+      def initialize(config, slot, index, parent_pid: ::Process.ppid)
         @config = config
         @slot = slot
         @index = index
-        @signal_queue = ::Thread::Queue.new
+        @parent_pid = parent_pid
+        @signal_read = nil
+        @signal_write = nil
       end
 
       def run
@@ -57,18 +64,37 @@ module Wurk
 
       # Boot the launcher and block until shutdown. wait_loop joins the
       # signal-dispatch thread, so the child can't fall through to `exit 0`
-      # mid-drain.
+      # mid-drain. Orphan protection is armed right AFTER launcher.run — the
+      # TERM handler is in place (so pdeathsig / the watchdog drain gracefully)
+      # and the managers are up (so a self-TERM can't race launcher.run). A
+      # parent that died during boot is still caught immediately: the watchdog's
+      # first getppid check sees the reparent and drains at once.
       def run_launcher
         launcher = Wurk::Launcher.new(@config)
         install_signal_handlers(launcher)
         launcher.run
+        arm_orphan_guard
         wait_loop(launcher)
       end
 
-      # Parent installed traps for TERM/INT/TSTP/USR1 — the child needs its own
+      def arm_orphan_guard
+        @orphan_guard = OrphanGuard.new(@parent_pid, logger: @config.logger)
+        @watchdog = @orphan_guard.arm
+      end
+
+      # Parent installed traps for TERM/INT/TSTP — the child needs its own
       # behavior, not the parent's. USR2 too: the child owns log-reopen.
+      # USR1 (rolling restart) is a no-op in the child — trap it with a log
+      # so stray USR1s don't trigger default termination.
       def reset_inherited_signals
-        %w[TERM INT TSTP USR1 USR2].each { |s| ::Signal.trap(s, 'DEFAULT') }
+        %w[TERM INT TSTP USR2].each { |s| ::Signal.trap(s, 'DEFAULT') }
+        # A genuine no-op in the child (rolling restart is the parent's job) —
+        # trap it empty so a stray USR1 can't fall through to default
+        # termination. Must NOT log: Logger synchronizes writes and would
+        # deadlock if the trap fired mid-write.
+        ::Signal.trap('USR1') { nil }
+      rescue ArgumentError
+        nil
       end
 
       def reconnect_after_fork
@@ -114,9 +140,27 @@ module Wurk
         # below — for every entry point, not just the swarm.
       end
 
+      # Self-pipe pattern (same as Wurk::CLI / Wurk::Swarm): the trap only
+      # writes the signal name to a pipe — never Thread::Queue#push, whose
+      # mutex a trap can deadlock against.
       def install_signal_handlers(launcher)
-        CHILD_SIGNALS.each { |sig, sym| ::Signal.trap(sig) { @signal_queue << sym } }
+        @signal_read, @signal_write = ::IO.pipe
+        CHILD_SIGNALS.each_key do |sig|
+          ::Signal.trap(sig) { emit_signal(sig) }
+        rescue ArgumentError
+          nil
+        end
         @dispatcher = Thread.new { dispatch_signals(launcher) }
+      end
+
+      # Non-blocking self-pipe write from trap context: a blocking `puts` could
+      # stall the TERM drain if the pipe ever filled. `exception: false` returns
+      # :wait_writable instead of raising when full (the queued duplicate
+      # coalesces); a closed pipe during shutdown is ignored too.
+      def emit_signal(sig)
+        @signal_write.write_nonblock("#{sig}\n", exception: false)
+      rescue ::IOError, ::Errno::EPIPE, ::Errno::EBADF
+        nil
       end
 
       # TSTP/USR2 keep looping; TERM/INT run the full launcher.stop
@@ -126,10 +170,14 @@ module Wurk
       # and the main thread would race past the unfinished managers.
       def dispatch_signals(launcher)
         loop do
-          case @signal_queue.pop
+          @signal_read.wait_readable
+          sig = @signal_read.gets&.strip
+          break if sig.nil?
+
+          case CHILD_SIGNALS[sig]
           when :term
             launcher.stop
-            return
+            break
           when :tstp then launcher.quiet
           when :usr2 then reopen_logs
           end
