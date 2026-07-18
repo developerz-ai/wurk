@@ -29,6 +29,51 @@ If you'd rather run the worker as its own process even under Rails, disable the
 auto-fork as above and use one of the standalone runners below pointed at your
 app directory.
 
+### Under a preforking web server (Puma cluster, Unicorn, Passenger)
+
+Auto-fork is only safe from a process that **won't fork itself.** A clustered
+Puma, Unicorn, or Passenger already forks its own web workers. Forking the swarm
+from one of them is unsafe two ways:
+
+- **No app preloading** — every web worker re-runs the railtie hook and forks
+  its own full swarm, multiplying your worker count by the web concurrency.
+- **With app preloading** — the swarm boots in the server master, and its
+  supervisor thread ends up tangled with the server's own fork and signal
+  handling.
+
+So Wurk **refuses** to fork there and logs an actionable notice instead:
+
+```
+wurk: preforking web server detected (Puma cluster / Unicorn / Passenger).
+Refusing to fork the worker swarm from a process that forks its own workers.
+...
+```
+
+Pick one:
+
+- **Run the swarm as its own process — recommended.** `bundle exec wurkswarm`
+  (or `wurk`) on its own dyno/unit, the standard production topology. Set
+  `WURK_DISABLED=1` on the web process to silence the notice.
+- **Run workers inside the web process — threads only, no fork.** Opt into
+  embedded mode (the same model as Sidekiq embedded — worker threads share the
+  web process, no swarm):
+
+  ```ruby
+  # config/application.rb
+  config.wurk.embed_in_web = true
+  ```
+
+  Set this in `config/application.rb`, **not** an initializer — server mode is
+  decided before `config/initializers/*` load, so a later flag would arrive too
+  late and your `Sidekiq.configure_server` blocks would be skipped.
+
+Single-mode Puma (`workers 0`, the `rails server` default) is threaded, not
+preforking, so auto-fork stays on there — nothing to change for local dev.
+
+Detection is best-effort: a cluster it misses falls back to the normal fork path,
+and an over-eager match is always escapable via `embed_in_web`, `WURK_DISABLED=1`,
+or simply running `wurkswarm` separately.
+
 ---
 
 ## The two runners

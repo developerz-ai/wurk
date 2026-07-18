@@ -2,6 +2,7 @@
 
 require_relative '../engine_test_helper'
 require 'rake' # `::Rake` for the application doubles below
+require 'stringio' # capture the refuse-boot log line
 
 # The railtie owns two boot decisions, both gated by Railtie.skip_boot?:
 #   * entering server mode before config/initializers load (#191), and
@@ -67,7 +68,122 @@ class RailtieTest < Wurk::Test::EngineCase
     end
   end
 
+  # --- preforking web-server guard (Task #11) ---
+  #
+  # Auto-forking the swarm from a process that itself preforks web workers is
+  # the highest-risk boot path (N× oversubscription / entangled supervision).
+  # The railtie detects the common three servers and refuses to fork unless the
+  # host opts into embedded threads-only mode.
+
+  def test_preforking_web_server_is_false_in_a_plain_boot
+    with_env('WEB_CONCURRENCY' => nil) do
+      refute_predicate Wurk::Railtie, :preforking_web_server?,
+                       'a non-clustered boot must keep the swarm-fork path enabled'
+    end
+  end
+
+  def test_unicorn_is_always_preforking
+    with_const(:Unicorn, Module.new) do
+      assert_predicate Wurk::Railtie, :preforking_web_server?
+    end
+  end
+
+  def test_passenger_is_always_preforking
+    with_const(:PhusionPassenger, Module.new) do
+      assert_predicate Wurk::Railtie, :preforking_web_server?
+    end
+  end
+
+  def test_puma_cluster_detected_via_web_concurrency
+    with_puma do
+      with_env('WEB_CONCURRENCY' => '3') do
+        assert_predicate Wurk::Railtie, :preforking_web_server?, 'Puma + WEB_CONCURRENCY>0 is cluster mode'
+      end
+    end
+  end
+
+  def test_puma_single_mode_is_not_preforking
+    with_puma do
+      with_env('WEB_CONCURRENCY' => '0') do
+        refute_predicate Wurk::Railtie, :puma_cluster?, 'WEB_CONCURRENCY=0 is single (threaded) mode'
+      end
+    end
+  end
+
+  def test_boot_action_forks_when_not_preforking
+    with_env('WEB_CONCURRENCY' => nil) do
+      assert_equal :fork, Wurk::Railtie.boot_action(fake_app(embed: nil))
+    end
+  end
+
+  def test_boot_action_refuses_under_preforking_without_opt_in
+    with_const(:Unicorn, Module.new) do
+      assert_equal :refuse, Wurk::Railtie.boot_action(fake_app(embed: nil))
+    end
+  end
+
+  def test_boot_action_embeds_under_preforking_with_opt_in
+    with_const(:Unicorn, Module.new) do
+      assert_equal :embed, Wurk::Railtie.boot_action(fake_app(embed: true))
+    end
+  end
+
+  def test_embed_in_web_defaults_to_false
+    refute Wurk::Railtie.embed_in_web?(fake_app(embed: nil))
+  end
+
+  def test_embed_in_web_reads_the_host_flag
+    assert Wurk::Railtie.embed_in_web?(fake_app(embed: true))
+  end
+
+  # Hosts write `config.wurk.embed_in_web = true`; the namespace must already
+  # exist on the application config or that assignment raises NoMethodError.
+  def test_config_wurk_namespace_is_available_to_hosts
+    assert_respond_to ::Rails.application.config.wurk, :embed_in_web
+  end
+
+  def test_refuse_logs_actionable_guidance
+    io = StringIO.new
+    with_logger(::Logger.new(io)) { Wurk::Railtie.refuse_preforking_boot }
+
+    assert_match(/wurkswarm/, io.string, 'must point the host at the standalone runner')
+    assert_match(/embed_in_web/, io.string, 'must mention the embedded opt-in')
+    assert_match(/WURK_DISABLED/, io.string, 'must mention the silence switch')
+  end
+
   private
+
+  def fake_app(embed:)
+    wurk = ::ActiveSupport::OrderedOptions.new
+    wurk.embed_in_web = embed
+    config = Struct.new(:wurk).new(wurk)
+    Struct.new(:config).new(config)
+  end
+
+  # Define a top-level constant for the block, restoring prior state. Tests in
+  # this file run serially within one parallel_fork worker (no parallelize_me!),
+  # so the global mutation is contained; an already-defined constant is left be.
+  def with_const(name, value)
+    existed = Object.const_defined?(name, false)
+    Object.const_set(name, value) unless existed
+    yield
+  ensure
+    Object.send(:remove_const, name) if !existed && Object.const_defined?(name, false)
+  end
+
+  def with_puma(&)
+    return yield if defined?(::Puma)
+
+    with_const(:Puma, Module.new, &)
+  end
+
+  def with_logger(logger)
+    original = Wurk.configuration.logger
+    Wurk.configuration.logger = logger
+    yield
+  ensure
+    Wurk.configuration.logger = original
+  end
 
   def fake_rake(tasks)
     Struct.new(:top_level_tasks).new(tasks)
