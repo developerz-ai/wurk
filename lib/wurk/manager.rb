@@ -38,15 +38,25 @@ module Wurk
     end
 
     def start
-      @workers.each(&:start)
+      workers_snapshot.each(&:start)
     end
 
     def quiet
       return if @done
 
-      @done = true
+      snapshot = @plock.synchronize do
+        @done = true
+        @workers.dup
+      end
+      # Halt fetching for the whole capsule up front: the shared fetcher's drain
+      # flag makes retrieve_work return nil immediately, so a processor can't pull
+      # a fresh job between quiet and its own terminate taking effect. Safe-nav
+      # covers a quiet that lands before Capsule#prepare! materializes the fetcher
+      # (e.g. a signal-driven quiet on a partially-booted launcher) — nothing is
+      # fetching yet, so there is nothing to halt.
+      capsule.fetcher&.terminate
       logger.info { "Terminating quiet threads for #{capsule.name} capsule" }
-      @workers.each(&:terminate)
+      snapshot.each(&:terminate)
     end
 
     # Graceful shutdown: quiet first, then poll for workers to clear.
@@ -57,11 +67,11 @@ module Wurk
       # Lifecycle hooks (e.g. :quiet) can be async; give them a tick to settle
       # before we start polling. Matches Sidekiq's PAUSE_TIME behavior.
       sleep PAUSE_TIME
-      return if @workers.empty?
+      return if workers_empty?
 
       logger.info { 'Pausing to allow jobs to finish...' }
-      wait_for(deadline) { @workers.empty? }
-      return if @workers.empty?
+      wait_for(deadline) { workers_empty? }
+      return if workers_empty?
 
       hard_shutdown
     ensure
@@ -75,27 +85,38 @@ module Wurk
     # Processor#run callback: invoked when a Processor thread exits, whether
     # cleanly or via raised exception. Removes the dead processor from the
     # pool and (unless we're already stopping) spawns a replacement so the
-    # capsule's concurrency stays constant.
+    # capsule's concurrency stays constant. If the replacement itself can't be
+    # spawned, crash the child (the swarm respawns it) rather than silently
+    # dropping concurrency. Snapshot under @plock; start the replacement — a
+    # side effect — outside the lock.
     def processor_result(processor, _reason = nil)
-      @plock.synchronize do
+      replacement = @plock.synchronize do
         @workers.delete(processor)
         unless @done
           p = Processor.new(@capsule, &method(:processor_result))
           @workers << p
-          p.start
+          p
         end
       end
+      replacement&.start
+    rescue StandardError => e
+      # Replacement spawn failed (e.g. ThreadError at the OS thread limit).
+      # Silently running one Processor short for the life of the process is
+      # invisible degradation; instead report and crash the child on the main
+      # thread so the swarm respawns it at full concurrency (plan 02 §6).
+      @capsule.config.handle_exception(e, { context: 'Manager could not replace a dead Processor' })
+      main_thread.raise(e)
     end
 
-    # Reached when the deadline expired with workers still busy. We must
-    # push their in-flight UoWs back to the public queues BEFORE raising
-    # Wurk::Shutdown into the threads — losing a job is worse than running
-    # it twice (Sidekiq's at-least-once contract).
+    # Reached when the deadline expired with workers still busy. Atomically
+    # move their in-flight UoWs private→public (Reliable#bulk_requeue) BEFORE
+    # raising Wurk::Shutdown into the threads, so a job killed mid-perform is
+    # re-run once (Sidekiq's at-least-once contract). `job` is read off another
+    # thread, so a Processor can ACK between this map and the requeue — but
+    # bulk_requeue's LREM guard skips the RPUSH on a miss, so a job that
+    # finished in that window is not resurrected onto the public queue.
     def hard_shutdown # rubocop:disable Metrics/AbcSize
-      cleanup = nil
-      @plock.synchronize do
-        cleanup = @workers.dup
-      end
+      cleanup = workers_snapshot
 
       if cleanup.any?
         jobs = cleanup.map(&:job).compact
@@ -111,10 +132,27 @@ module Wurk
       # The caller typically `exit`s immediately after we return; give
       # threads a brief window to run their `ensure` blocks.
       deadline = ::Process.clock_gettime(::Process::CLOCK_MONOTONIC) + 3
-      wait_for(deadline) { @workers.empty? }
+      wait_for(deadline) { workers_empty? }
     end
 
     private
+
+    # The @workers Set is mutated from Processor threads (processor_result)
+    # while the lifecycle methods read/iterate it from the manager thread.
+    # Snapshot under @plock, then act on the copy outside the lock.
+    def workers_snapshot
+      @plock.synchronize { @workers.dup }
+    end
+
+    def workers_empty?
+      @plock.synchronize { @workers.empty? }
+    end
+
+    # Seam over Thread.main: lets processor_result's replacement-failure crash
+    # be unit-tested against a controlled thread instead of the live runner.
+    def main_thread
+      Thread.main
+    end
 
     # Polls `condblock` until it returns true or the monotonic deadline
     # passes. The PAUSE_TIME floor stops us from spinning when only a few

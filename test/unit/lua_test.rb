@@ -31,7 +31,7 @@ class LuaTest < Wurk::Test::UnitCase
 
   def test_scripts_registry_holds_expected_keys
     assert_equal(
-      %i[zpopbyscore bulk_push reliable_schedule_promote
+      %i[zpopbyscore bulk_push reliable_schedule_promote reliable_requeue
          batch_push batch_ack_success batch_ack_failed batch_ack_complete batch_invalidate
          batch_append_callback
          fast_delete_job fast_delete_by_class release_if_owner

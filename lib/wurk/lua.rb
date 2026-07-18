@@ -56,6 +56,26 @@ module Wurk
       return #jobs
     LUA
 
+    # Reliable fetch (Pro super_fetch §3) shutdown requeue: atomically move
+    # one in-flight job from a per-process private list back to its public
+    # queue. The LREM guard is the whole point — RPUSH runs only when the job
+    # was still in the private list (LREM removed exactly 1). A job the
+    # Processor ACKed in the window between hard_shutdown's cross-thread `job`
+    # read and this move (LREM removes 0) is NOT re-pushed, so the job lands in
+    # exactly one place and can't double-execute. RPUSH (public tail) not LPUSH
+    # so the reclaimed job is fetched next — LMOVE pops the tail — ahead of
+    # fresh LPUSH'd enqueues.
+    # KEYS = [private_list, public_queue]
+    # ARGV = [job_json]
+    # Returns 1 when the job was moved, 0 when it was already acked.
+    RELIABLE_REQUEUE = <<~LUA
+      if redis.call("lrem", KEYS[1], 1, ARGV[1]) == 1 then
+        redis.call("rpush", KEYS[2], ARGV[1])
+        return 1
+      end
+      return 0
+    LUA
+
     # Pro Batch: register a job into a batch and push it to its queue
     # atomically. Keeps total/pending in sync with the jids set.
     #
@@ -259,6 +279,7 @@ module Wurk
       zpopbyscore: ZPOPBYSCORE,
       bulk_push: BULK_PUSH,
       reliable_schedule_promote: RELIABLE_SCHEDULE_PROMOTE,
+      reliable_requeue: RELIABLE_REQUEUE,
       batch_push: BATCH_PUSH,
       batch_ack_success: BATCH_ACK_SUCCESS,
       batch_ack_failed: BATCH_ACK_FAILED,

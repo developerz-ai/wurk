@@ -74,6 +74,22 @@ class ManagerTest < Wurk::Test::UnitCase
     assert_equal mgr.workers.to_a, started
   end
 
+  # start iterates a @plock snapshot, not the live Set, so a Processor that
+  # dies (mutating @workers via processor_result) while its siblings are still
+  # being started can't trigger "can't add a new key into hash during
+  # iteration". Deterministic stand-in for real replace-on-die churn.
+  def test_start_iterates_a_snapshot_so_mid_iteration_churn_is_safe
+    mgr = Wurk::Manager.new(@capsule)
+    workers = mgr.workers.to_a
+    workers.each { |w| w.define_singleton_method(:start) { nil } }
+    victim = workers.last
+    workers.first.define_singleton_method(:start) { mgr.processor_result(victim) }
+
+    with_processor_new(fake_processor) { mgr.start }
+
+    refute_includes mgr.workers, victim
+  end
+
   # --- quiet -----------------------------------------------------------
 
   def test_quiet_flips_stopped_and_terminates_each_processor
@@ -96,6 +112,56 @@ class ManagerTest < Wurk::Test::UnitCase
     mgr.quiet
 
     assert_equal mgr.workers.size, calls
+  end
+
+  def test_quiet_terminates_the_capsule_fetcher
+    mgr = Wurk::Manager.new(@capsule)
+    silence_processors(mgr)
+    @pool.with { |c| c.call('RPUSH', @public_queue, '{"jid":"halt"}') }
+
+    mgr.quiet
+
+    # Drained fetcher short-circuits retrieve_work even with a job waiting, so a
+    # processor can't pull fresh work between quiet and its own terminate.
+    assert_nil @capsule.fetcher.retrieve_work
+  end
+
+  # `quiet` (manager thread) and `processor_result` (replace-on-die, called from
+  # each dying Processor's own thread) both read/mutate @workers. Whichever wins
+  # the @plock race is a legitimate outcome — quiet-then-churn skips the
+  # replacement (test_processor_result_does_not_replace_after_quiet), churn-then-quiet
+  # spawns one first — but neither ordering may raise or corrupt @workers. Looped
+  # under this file's parallelize_me! to shake out ordering-dependent bugs.
+  def test_quiet_races_processor_churn_without_exceptions_or_leaks # rubocop:disable Metrics/AbcSize
+    25.times do
+      mgr = Wurk::Manager.new(@capsule)
+      silence_processors(mgr)
+      victims = mgr.workers.to_a
+      errors = Queue.new
+
+      with_processor_new(fake_processor) do
+        threads = victims.map do |victim|
+          Thread.new do
+            mgr.processor_result(victim)
+          rescue StandardError => e
+            errors << e
+          end
+        end
+        threads << Thread.new do
+          mgr.quiet
+        rescue StandardError => e
+          errors << e
+        end
+        threads.each(&:join)
+      end
+
+      collected = []
+      collected << errors.pop until errors.empty?
+
+      assert_empty collected, 'concurrent quiet + processor_result churn must not raise'
+      assert_predicate mgr, :stopped?
+      assert_operator mgr.workers.size, :<=, @capsule.concurrency, 'no duplicate/leaked worker entries from the race'
+    end
   end
 
   # --- processor_result ------------------------------------------------
@@ -135,6 +201,51 @@ class ManagerTest < Wurk::Test::UnitCase
     mgr.processor_result(victim, RuntimeError.new('boom'))
 
     refute_includes mgr.workers, victim
+  end
+
+  # A replacement that can't be spawned (Processor.new raising) must escalate
+  # to a visible crash on the main thread — not silently drop concurrency.
+  def test_processor_result_crashes_child_when_replacement_cannot_spawn # rubocop:disable Minitest/MultipleAssertions,Metrics/AbcSize
+    mgr = Wurk::Manager.new(@capsule)
+    silence_processors(mgr)
+    victim = mgr.workers.first
+    target, crashes = crash_target
+    mgr.define_singleton_method(:main_thread) { target }
+    reported = capture_error_handler
+
+    boom = ThreadError.new('cannot create thread')
+    with_processor_new_raising(boom) { mgr.processor_result(victim) }
+
+    assert_same boom, crashes.pop, 'must escalate to a crash on the main thread'
+    assert_equal [boom], reported.map(&:first), 'must report via handle_exception'
+    refute_includes mgr.workers, victim
+    assert_equal 2, mgr.workers.size, 'no silent replacement on failure'
+  ensure
+    target&.kill
+  end
+
+  # Same escalation when the replacement is built but its thread won't start.
+  def test_processor_result_crashes_child_when_replacement_start_raises # rubocop:disable Metrics/AbcSize
+    mgr = Wurk::Manager.new(@capsule)
+    silence_processors(mgr)
+    victim = mgr.workers.first
+    target, crashes = crash_target
+    mgr.define_singleton_method(:main_thread) { target }
+
+    boom = ThreadError.new('start failed')
+    exploding = Object.new.tap { |p| p.define_singleton_method(:start) { raise boom } }
+    with_processor_new(exploding) { mgr.processor_result(victim) }
+
+    assert_same boom, crashes.pop
+    refute_includes mgr.workers, victim
+  ensure
+    target&.kill
+  end
+
+  def test_main_thread_seam_targets_the_process_main_thread
+    mgr = Wurk::Manager.new(@capsule)
+
+    assert_same Thread.main, mgr.send(:main_thread)
   end
 
   # --- stop / hard_shutdown -------------------------------------------
@@ -243,12 +354,16 @@ class ManagerTest < Wurk::Test::UnitCase
   end
 
   # Stand-in for a Processor that satisfies the Manager's interface without
-  # spawning a real thread. Records #start so tests can assert wiring.
+  # spawning a real thread. Records #start so tests can assert wiring. Also
+  # answers #terminate as a no-op — a churn race can hand this replacement to
+  # `quiet`'s snapshot before it's ever started, and quiet always terminates
+  # every worker it captures.
   def fake_processor
     Object.new.tap do |p|
       started = [false]
-      p.define_singleton_method(:start)    { started[0] = true }
-      p.define_singleton_method(:started?) { started[0] }
+      p.define_singleton_method(:start)     { started[0] = true }
+      p.define_singleton_method(:started?)  { started[0] }
+      p.define_singleton_method(:terminate) { nil }
     end
   end
 
@@ -268,5 +383,38 @@ class ManagerTest < Wurk::Test::UnitCase
     yield
   ensure
     sc.define_method(:new) { |*a, &b| original.call(*a, &b) }
+  end
+
+  # Same stub, but `Wurk::Processor.new` raises — simulates OS thread/memory
+  # exhaustion during replace-on-die.
+  def with_processor_new_raising(error)
+    sc = Wurk::Processor.singleton_class
+    original = Wurk::Processor.method(:new)
+    sc.define_method(:new) { |*_args, &_blk| raise error }
+    yield
+  ensure
+    sc.define_method(:new) { |*a, &b| original.call(*a, &b) }
+  end
+
+  # A parked thread standing in for the process main thread, so a crash
+  # escalation (`main_thread.raise`) can be observed instead of taking down
+  # the test runner. Returns [thread, queue-of-caught-exceptions].
+  def crash_target
+    caught = Queue.new
+    t = Thread.new do
+      Thread.current.report_on_exception = false
+      sleep 5
+    rescue StandardError => e
+      caught << e
+    end
+    Thread.pass until t.status == 'sleep'
+    [t, caught]
+  end
+
+  # Register a recording error handler and return the array it appends to.
+  def capture_error_handler
+    seen = []
+    @config.error_handlers << ->(ex, ctx, _cfg) { seen << [ex, ctx] }
+    seen
   end
 end

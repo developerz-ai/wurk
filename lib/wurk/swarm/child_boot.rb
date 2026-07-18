@@ -65,10 +65,10 @@ module Wurk
         wait_loop(launcher)
       end
 
-      # Parent installed traps for TERM/INT/TSTP/CONT/USR1 — the child
-      # needs its own behavior, not the parent's.
+      # Parent installed traps for TERM/INT/TSTP/USR1 — the child needs its own
+      # behavior, not the parent's. USR2 too: the child owns log-reopen.
       def reset_inherited_signals
-        %w[TERM INT TSTP CONT USR1 USR2].each { |s| ::Signal.trap(s, 'DEFAULT') }
+        %w[TERM INT TSTP USR1 USR2].each { |s| ::Signal.trap(s, 'DEFAULT') }
       end
 
       def reconnect_after_fork

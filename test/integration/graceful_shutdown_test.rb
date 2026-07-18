@@ -23,6 +23,26 @@ class GracefulShutdownSentinelWorker
   end
 end
 
+# Top-level for the same fork/Marshal reason as the sentinel above. Increments
+# a shared counter every time perform is *invoked*, whether or not the run
+# completes — the assertion that matters is how many times this fires across
+# a hard-killed attempt plus a post-reboot retry, not just whether it
+# eventually finishes.
+class TimeoutRequeueSentinelWorker
+  include Wurk::Job
+
+  def perform(redis_url, attempt_key, done_key, sleep_seconds)
+    client = RedisClient.config(url: redis_url).new_client
+    client.call('INCR', attempt_key)
+    client.call('EXPIRE', attempt_key, 60)
+    sleep sleep_seconds
+    client.call('SET', done_key, ::Process.pid.to_s)
+    client.call('EXPIRE', done_key, 60)
+  ensure
+    client&.close
+  end
+end
+
 # Real fork, real signal, real Redis. Boot a swarm in a subprocess with
 # install_signals: true, enqueue an in-flight job, SIGTERM the parent,
 # assert the job finishes within shutdown_timeout.
@@ -38,12 +58,24 @@ class GracefulShutdownTest < Wurk::Test::UnitCase
   POLL_INTERVAL = 0.1
   SHUTDOWN_TIMEOUT = 15
 
+  # Second scenario: a job whose sleep outlasts a short shutdown_timeout, so
+  # hard_shutdown fires for real. Job sleep must clear FAST_DRAIN_TIMEOUT by a
+  # wide margin so the kill is deterministic; swarm-level timeouts must clear
+  # the worst-case drain time (quiet settle + poll-to-deadline + hard_shutdown's
+  # own 3s grace window) with room to spare.
+  FAST_DRAIN_TIMEOUT = 2
+  FAST_SWARM_TIMEOUT = 12
+  TIMEOUT_JOB_SLEEP_SECONDS = 6
+  REBOOT_DRAIN_TIMEOUT = 15
+  REBOOT_SWARM_TIMEOUT = 20
+
   def setup
     super
     @ns = "gshut-#{::Process.pid}-#{object_id}"
     @queue_name = "#{@ns}-q"
     @started_key = "#{@ns}-started"
     @done_key = "#{@ns}-done"
+    @attempt_key = "#{@ns}-attempts"
     @observer = RedisClient.config(url: Wurk::Test.redis_url).new_client
   end
 
@@ -73,10 +105,55 @@ class GracefulShutdownTest < Wurk::Test::UnitCase
     end
   end
 
+  # The bug this closes: before the LREM-guarded bulk_requeue (fetcher/reliable.rb),
+  # a job still in-flight when shutdown_timeout elapsed could end up duplicated
+  # across the private and public lists, so a reboot could execute it a second
+  # time *concurrently* with the about-to-be-killed original. Proves the fix
+  # end to end: a job that sleeps past a short shutdown_timeout gets hard-killed
+  # and requeued exactly once (private list empty, public queue holds one copy),
+  # and a reboot that picks it back up runs it exactly once more — not twice.
+  def test_job_killed_past_shutdown_timeout_is_requeued_and_runs_exactly_once_more # rubocop:disable Minitest/MultipleAssertions,Metrics/AbcSize
+    push_timeout_job(sleep_seconds: TIMEOUT_JOB_SLEEP_SECONDS)
+
+    first_pid = fork_swarm_supervisor(config_timeout: FAST_DRAIN_TIMEOUT, swarm_timeout: FAST_SWARM_TIMEOUT)
+    begin
+      assert wait_for_key(@attempt_key), 'job never started within poll timeout'
+
+      ::Process.kill('TERM', first_pid)
+
+      assert wait_for_pid_exit(first_pid, timeout: FAST_SWARM_TIMEOUT + 5),
+             "supervisor pid #{first_pid} did not exit within its shutdown window"
+    ensure
+      reap_supervisor(first_pid)
+    end
+
+    refute @observer.call('GET', @done_key), 'job must not have completed before the hard kill'
+    assert_equal '1', @observer.call('GET', @attempt_key), 'exactly one attempt before the timeout kill'
+    assert_empty private_list_keys, 'bulk_requeue must leave no residual private-list entries'
+    assert_equal 1, @observer.call('LLEN', public_queue_key), 'timed-out job must be requeued to the public queue'
+
+    second_pid = fork_swarm_supervisor(config_timeout: REBOOT_DRAIN_TIMEOUT, swarm_timeout: REBOOT_SWARM_TIMEOUT)
+    begin
+      assert wait_for_key(@done_key), 'requeued job never completed after reboot'
+
+      ::Process.kill('TERM', second_pid)
+
+      assert wait_for_pid_exit(second_pid, timeout: REBOOT_SWARM_TIMEOUT + 5),
+             "supervisor pid #{second_pid} did not exit within its shutdown window"
+    ensure
+      reap_supervisor(second_pid)
+    end
+
+    assert_equal '2', @observer.call('GET', @attempt_key),
+                 'the reboot must run the requeued job exactly once more, not twice'
+    assert_equal 0, @observer.call('LLEN', public_queue_key), 'completed job must not remain on the public queue'
+    assert_empty private_list_keys, 'ack after completion must leave no residual private-list entries'
+  end
+
   private
 
   def push_job(sleep_seconds:)
-    config = build_config
+    config = build_config(SHUTDOWN_TIMEOUT)
     client = Wurk::Client.new(pool: capsule_pool(config), config: config)
     client.push('class' => GracefulShutdownSentinelWorker.name,
                 'args' => [Wurk::Test.redis_url, @started_key, @done_key, sleep_seconds],
@@ -85,10 +162,20 @@ class GracefulShutdownTest < Wurk::Test::UnitCase
     config&.reset_redis_pools!
   end
 
-  def build_config
+  def push_timeout_job(sleep_seconds:)
+    config = build_config(SHUTDOWN_TIMEOUT)
+    client = Wurk::Client.new(pool: capsule_pool(config), config: config)
+    client.push('class' => TimeoutRequeueSentinelWorker.name,
+                'args' => [Wurk::Test.redis_url, @attempt_key, @done_key, sleep_seconds],
+                'queue' => @queue_name)
+  ensure
+    config&.reset_redis_pools!
+  end
+
+  def build_config(timeout)
     config = Wurk::Configuration.new
     config.logger = ::Logger.new(IO::NULL)
-    config[:timeout] = SHUTDOWN_TIMEOUT
+    config[:timeout] = timeout
     config
   end
 
@@ -100,13 +187,13 @@ class GracefulShutdownTest < Wurk::Test::UnitCase
 
   # Boots the swarm inside a subprocess so SIGTERM exercises the real
   # signal handler. install_signals: true is what we want to test.
-  def fork_swarm_supervisor(count:)
+  def fork_swarm_supervisor(count: 1, config_timeout: SHUTDOWN_TIMEOUT, swarm_timeout: SHUTDOWN_TIMEOUT)
     ::Process.fork do
       $stdout.reopen(IO::NULL)
       $stderr.reopen(IO::NULL)
-      config = build_config
+      config = build_config(config_timeout)
       topology = Wurk::Topology.flat(count: count, queues: [@queue_name], concurrency: 1)
-      swarm = Wurk::Swarm.new(topology: topology, config: config, shutdown_timeout: SHUTDOWN_TIMEOUT)
+      swarm = Wurk::Swarm.new(topology: topology, config: config, shutdown_timeout: swarm_timeout)
       swarm.boot(install_signals: true)
       swarm.supervise
       exit 0
@@ -156,15 +243,30 @@ class GracefulShutdownTest < Wurk::Test::UnitCase
   def cleanup_observer_keys
     return unless @observer
 
-    @observer.call('DEL', @started_key, @done_key, "queue:#{@queue_name}")
-    cursor = '0'
-    loop do
-      cursor, keys = @observer.call('SCAN', cursor, 'MATCH', "queue:#{@queue_name}|*", 'COUNT', 100)
-      @observer.call('DEL', *keys) unless keys.empty?
-      break if cursor == '0'
-    end
+    @observer.call('DEL', @started_key, @done_key, @attempt_key, public_queue_key)
+    private_list_keys.each { |k| @observer.call('DEL', k) }
   rescue StandardError
     nil
+  end
+
+  def public_queue_key
+    "#{Wurk::Keys::QUEUE_PREFIX}#{@queue_name}"
+  end
+
+  # Private lists are named `<public_queue>|<host>|<pid>|<idx>` (Reliable
+  # .private_queue_name) — the pid belongs to the forked swarm child, which the
+  # test never learns directly, so SCAN by prefix instead. Redis deletes a list
+  # key outright once its last element is LREM'd/ACK'd, so "no matching keys"
+  # is equivalent to "every private list is empty".
+  def private_list_keys
+    keys = []
+    cursor = '0'
+    loop do
+      cursor, batch = @observer.call('SCAN', cursor, 'MATCH', "#{public_queue_key}|*", 'COUNT', 100)
+      keys.concat(batch)
+      break if cursor == '0'
+    end
+    keys
   end
 
   def monotonic_now

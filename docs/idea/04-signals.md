@@ -6,7 +6,7 @@
 |---|---|---|
 | SIGTERM | parent | Graceful drain. Parent relays to all children. Each child stops fetching, lets in-flight jobs finish up to the shutdown timeout, then exits. Parent waits for all children, then exits |
 | SIGINT | parent | Same as SIGTERM (Ctrl-C in standalone) |
-| SIGTSTP | parent | Pause fetching globally. In-flight jobs continue. Resume via SIGCONT |
+| SIGTSTP | parent | Quiet globally: relayed to children, each stops fetching new jobs. In-flight jobs continue. One-way — no resume signal (matches Sidekiq TSTP); send SIGTERM to shut down |
 | SIGUSR1 | parent | Rolling restart. Forks a replacement child before terminating the old one — zero dropped jobs even for long-running work |
 | SIGUSR2 | child | Reopen log files (logrotate-friendly) |
 | SIGKILL | any | Hard stop. Jobs already moved into the per-process private list survive in Redis and are reclaimed on next boot |

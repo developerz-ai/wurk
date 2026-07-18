@@ -69,7 +69,7 @@ Skip step 3 → leaked sockets in children. Skip step 5 → children corrupt eac
 | Signal | Target | Effect |
 |---|---|---|
 | SIGTERM / SIGINT | parent | Graceful drain. Relayed to children; in-flight finishes to `shutdown_timeout`; exit |
-| SIGTSTP | parent | Pause fetch globally; in-flight continues; SIGCONT resumes |
+| SIGTSTP | parent | Quiet globally: relayed to children, each stops fetching; in-flight continues. One-way (matches Sidekiq TSTP, spec §21.3) — no resume; TERM to shut down |
 | SIGUSR1 | parent | Rolling restart: fork replacement → wait for heartbeat → SIGTERM old slot → next |
 | SIGUSR2 | child | Reopen log files (logrotate) |
 | SIGKILL | any | Safe — private-list entries stay in Redis and are reclaimed on next boot |
