@@ -263,8 +263,12 @@ require_relative 'wurk/middleware/interrupt_handler'
 
 # Limiter server middleware: catches OverLimit, reschedules onto the same
 # queue with `Time.now + backoff` until `overrated` hits the reschedule cap.
-# Registered AFTER Batch::ServerMiddleware so a rescheduled OverLimit
-# unwinds back through the batch onion without ack'ing success.
+# Registered AFTER Batch::ServerMiddleware, so in the chain Batch is OUTER
+# and Limiter is INNER (`add` appends; entry 0 is outermost). A reschedule
+# therefore unwinds *outward through* the batch onion — which is why it
+# raises `Limiter::Rescheduled` (a JobRetry::Skip) rather than returning: a
+# normal return would make the outer Batch middleware ack success for a job
+# that never ran. The Skip signal makes Batch skip both acks instead.
 # Spec: docs/target/sidekiq-ent.md §1.4.
 Wurk.configuration.server_middleware.add(Wurk::Limiter::ServerMiddleware)
 

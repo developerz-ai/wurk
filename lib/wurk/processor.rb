@@ -175,8 +175,9 @@ module Wurk
           ack = true
         end
       rescue Wurk::JobRetry::Handled
-        # JobRetry::Skip (subclass) or Handled — retry layer / middleware has
-        # already booked the outcome; safe to ack.
+        # Handled / JobRetry::Skip (incl. Limiter::Rescheduled, where the
+        # limiter middleware already re-enqueued the job) — the retry layer or
+        # a middleware booked the outcome and recorded no retry; ack the UoW.
         ack = true
       rescue Wurk::Shutdown
         # Don't ack — UoW stays in private list and is reclaimed on reboot.

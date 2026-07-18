@@ -1,14 +1,28 @@
 # frozen_string_literal: true
 
+require_relative '../job_retry'
+
 module Wurk
   module Limiter
+    # Control signal raised after a job has been rescheduled: the limiter has
+    # already re-enqueued it (via `Client.push` at `Time.now + backoff`), so
+    # the run is *neither* a success nor a failure. Subclassing
+    # `JobRetry::Skip` routes it through the existing "middleware re-pushed the
+    # job — ack cleanly, book no retry" contract: the retrier re-raises it
+    # untouched, the outer Batch middleware skips both acks (its `rescue
+    # Handled` re-raises), and the Processor acks the UnitOfWork. Returning
+    # normally instead would let the outer Batch onion ack success for a job
+    # that never ran. Internal only — not part of the Sidekiq drop-in surface.
+    class Rescheduled < Wurk::JobRetry::Skip; end
+
     # Catches OverLimit (and any class registered in `Limiter.config.errors`),
     # bumps `job['overrated']`, and decides what to do next:
     #
     #   * reschedule disabled (`reschedule: 0`) → re-raise so the normal
     #     retry/dead pipeline handles it (spec §1.2/§1.4 behaviour).
     #   * still under the cap → reschedule onto the same queue at
-    #     `Time.now + backoff` via `Client.push`.
+    #     `Time.now + backoff` via `Client.push`, then raise `Rescheduled` so
+    #     the outcome is neither success nor failure (batch onion skips acks).
     #   * cap reached (`overrated >= reschedule`, default 20) → **poison
     #     brake** (#16): a job that's still rate-limited after N reschedules
     #     is saturating the limiter, so instead of dumping it into another
@@ -58,6 +72,7 @@ module Wurk
         backoff_proc = (limiter && limiter.options[:backoff]) || Wurk::Limiter.config.backoff
         delay = backoff_proc.call(limiter, job, exc).to_f
         Wurk::Client.new.push(job.merge('at' => ::Time.now.to_f + delay))
+        raise Rescheduled
       end
 
       # Poison brake: stamp a clear reason, drop the job in the dead set, and

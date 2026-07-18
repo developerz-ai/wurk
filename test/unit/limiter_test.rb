@@ -243,7 +243,11 @@ class LimiterTest < Wurk::Test::UnitCase
 
   # ----- server middleware reschedule path -----------------------------
 
-  def test_server_middleware_reschedules_on_over_limit
+  # A reschedule raises Wurk::Limiter::Rescheduled (a JobRetry::Skip) so the
+  # run is neither success nor failure — the outer Batch onion skips both acks
+  # and the Processor acks the UoW with no retry record. The push to `schedule`
+  # happens before the raise. (#18)
+  def test_server_middleware_reschedules_on_over_limit # rubocop:disable Metrics/AbcSize
     l = Wurk::Limiter.bucket("mw-#{@suffix}", 1, :minute, wait_timeout: 0, reschedule: 5)
     jid = "mwj#{@suffix}"
     job = { 'class' => 'NoopWorker', 'args' => [1], 'queue' => 'default', 'jid' => jid }
@@ -251,7 +255,9 @@ class LimiterTest < Wurk::Test::UnitCase
     mw.config = Wurk.configuration
 
     begin
-      mw.call(nil, job, 'default') { raise Wurk::Limiter::OverLimit.new(l, job) }
+      assert_raises(Wurk::Limiter::Rescheduled) do
+        mw.call(nil, job, 'default') { raise Wurk::Limiter::OverLimit.new(l, job) }
+      end
 
       assert_equal 1, job['overrated']
       # Scheduled push lands in the global `schedule` ZSET with score = at.
@@ -323,7 +329,7 @@ class LimiterTest < Wurk::Test::UnitCase
   # A registered custom error that exposes neither #limiter nor #job= drives
   # the else sides of `respond_to?(:limiter)` / `respond_to?(:job=)` plus the
   # nil-limiter `reschedule_cap` short-circuit (default cap, reschedule path).
-  def test_server_middleware_handles_plain_registered_error
+  def test_server_middleware_handles_plain_registered_error # rubocop:disable Metrics/AbcSize
     custom = Class.new(StandardError)
     Wurk::Limiter.config.errors << custom
     job = { 'class' => 'NoopWorker', 'args' => [], 'queue' => 'default', 'jid' => "pln#{@suffix}" }
@@ -331,7 +337,9 @@ class LimiterTest < Wurk::Test::UnitCase
     mw.config = Wurk.configuration
 
     begin
-      mw.call(nil, job, 'default') { raise custom, 'throttled' }
+      assert_raises(Wurk::Limiter::Rescheduled) do
+        mw.call(nil, job, 'default') { raise custom, 'throttled' }
+      end
 
       assert_equal 1, job['overrated'], 'plain registered error still counts as over-limit'
       scored = Wurk.redis { |c| c.call('ZRANGE', 'schedule', 0, -1) }
@@ -346,7 +354,7 @@ class LimiterTest < Wurk::Test::UnitCase
 
   # A limiter type with no `:reschedule` option (concurrent) → reschedule_cap
   # hits the `cap.nil? ? DEFAULT_RESCHEDULE` then-side via the default.
-  def test_server_middleware_uses_default_cap_when_limiter_has_no_reschedule_option
+  def test_server_middleware_uses_default_cap_when_limiter_has_no_reschedule_option # rubocop:disable Minitest/MultipleAssertions,Metrics/AbcSize
     l = Wurk::Limiter.concurrent("nocap-#{@suffix}", 1, wait_timeout: 0)
 
     refute l.options.key?(:reschedule), 'concurrent limiter carries no reschedule option'
@@ -355,7 +363,9 @@ class LimiterTest < Wurk::Test::UnitCase
     mw.config = Wurk.configuration
 
     begin
-      mw.call(nil, job, 'default') { raise Wurk::Limiter::OverLimit.new(l, job) }
+      assert_raises(Wurk::Limiter::Rescheduled) do
+        mw.call(nil, job, 'default') { raise Wurk::Limiter::OverLimit.new(l, job) }
+      end
 
       assert_equal 1, job['overrated']
       scored = Wurk.redis { |c| c.call('ZRANGE', 'schedule', 0, -1) }
@@ -366,6 +376,20 @@ class LimiterTest < Wurk::Test::UnitCase
         c.call('ZRANGE', 'schedule', 0, -1).each { |p| c.call('ZREM', 'schedule', p) if p.include?("ncj#{@suffix}") }
       end
     end
+  end
+
+  # The whole reschedule mechanism depends on Batch being OUTER of Limiter in
+  # the server chain (`add` appends; entry 0 is outermost). If Limiter were
+  # outer, a Rescheduled would unwind before Batch saw it and the batch onion
+  # would never learn the job didn't run. Guard the invariant. (#18)
+  def test_batch_middleware_is_registered_outer_of_limiter
+    klasses = Wurk.configuration.server_middleware.map(&:klass)
+    batch_i = klasses.index(Wurk::Batch::ServerMiddleware)
+    limiter_i = klasses.index(Wurk::Limiter::ServerMiddleware)
+
+    refute_nil batch_i, 'Batch::ServerMiddleware must be registered'
+    refute_nil limiter_i, 'Limiter::ServerMiddleware must be registered'
+    assert_operator batch_i, :<, limiter_i, 'Batch must be OUTER (registered before) Limiter'
   end
 
   # ----- DEFAULT_BACKOFF non-Hash job branch ---------------------------
