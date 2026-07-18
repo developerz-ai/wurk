@@ -108,9 +108,9 @@ module Wurk
     def self.boot_swarm
       swarm = Wurk::Swarm.new(topology: Wurk.configuration.topology)
       swarm.boot
-      # Embedded in the Rails process: supervise must run somewhere or the
-      # signal_queue never drains, crashed children never respawn, and memory
-      # checks never fire. A background thread keeps the host's main thread free.
+      # Embedded in the Rails process: supervise must run somewhere or queued
+      # signals never drain, crashed children never respawn, and memory checks
+      # never fire. A background thread keeps the host's main thread free.
       Thread.new do
         swarm.supervise
       rescue StandardError => e

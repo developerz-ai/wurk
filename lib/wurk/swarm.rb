@@ -7,6 +7,7 @@ require_relative 'keys'
 require_relative 'swarm/child_boot'
 require_relative 'swarm/backoff'
 require_relative 'swarm/restart'
+require_relative 'swarm/orphan_guard'
 
 module Wurk
   # Parent supervisor. Forks N children per the worker topology, monitors
@@ -41,6 +42,8 @@ module Wurk
     MEMORY_CHECK_INTERVAL = 10
     DEFAULT_SHUTDOWN_TIMEOUT = 25
 
+    SWARM_SIGNALS = { 'TERM' => :term, 'INT' => :term, 'TSTP' => :tstp, 'USR1' => :usr1 }.freeze
+
     attr_reader :topology, :children
 
     def initialize(topology:, config: Wurk.configuration, memory_limit: config.memory_limit_kb,
@@ -53,7 +56,8 @@ module Wurk
       @assignments = []
       @stopping = false
       @last_memory_check = 0
-      @signal_queue = ::Thread::Queue.new
+      @signal_read = nil
+      @signal_write = nil
       @respawn_backoff = Backoff.new(base: RESPAWN_BACKOFF)
       @restart = build_restart
     end
@@ -61,14 +65,20 @@ module Wurk
     # `install_signals:` is false in tests so the integration suite can
     # drive `shutdown` / `rolling_restart` directly without poisoning the
     # test process's signal handlers.
+    #
+    # Traps go in BEFORE fork_children: a TERM landing in the (previously
+    # post-fork) window between fork and trap installation left the parent on
+    # its default disposition — it died instantly and orphaned live, fetching
+    # children. Installed first, the trap queues the TERM and the supervise
+    # loop drains it (relaying to children) even if it arrives mid-boot.
     def boot(install_signals: true)
       raise 'Wurk::Swarm already booted' unless @assignments.empty?
       raise ArgumentError, 'Topology has no slots' if @topology.empty?
 
       @assignments = @topology.assignments.freeze
+      install_signal_handlers if install_signals
       close_parent_sockets
       fork_children
-      install_signal_handlers if install_signals
       @children.keys
     end
 
@@ -144,27 +154,37 @@ module Wurk
       pid
     end
 
+    # Capture the parent PID BEFORE forking and hand it to the child: read
+    # from the parent, it is race-free even if the parent dies the instant
+    # after fork (getppid in the child could already return the reaper). The
+    # child's OrphanGuard compares live getppid against it.
     def fork_child(slot, idx)
+      parent_pid = ::Process.pid
       pid = ::Process.fork
       return pid if pid
 
-      ChildBoot.new(@config, slot, idx).run
+      ChildBoot.new(@config, slot, idx, parent_pid: parent_pid).run
       exit 0 # unreachable; ChildBoot exits explicitly
     end
 
+    # Self-pipe pattern (same as Wurk::CLI): the trap only writes the signal
+    # name to a pipe — no Thread::Queue#push, which takes a mutex a trap can
+    # deadlock against. The supervise loop polls the read end each tick.
     def install_signal_handlers
-      { 'TERM' => :term, 'INT' => :term, 'TSTP' => :tstp,
-        'USR1' => :usr1 }.each do |sig, sym|
-        ::Signal.trap(sig) { @signal_queue << sym }
+      @signal_read, @signal_write = ::IO.pipe
+      SWARM_SIGNALS.each_key do |sig|
+        ::Signal.trap(sig) { @signal_write.puts(sig) }
+      rescue ArgumentError
+        # Platform without this signal (e.g. some JRuby builds) — skip it.
+        nil
       end
     end
 
     def drain_signals
-      until @signal_queue.empty?
-        sym = next_signal_symbol
-        next if sym.nil?
+      return unless @signal_read
 
-        case sym
+      while (sig = read_pending_signal)
+        case SWARM_SIGNALS[sig]
         when :term then shutdown
         when :tstp then relay_signal('TSTP')
         when :usr1 then rolling_restart
@@ -172,10 +192,12 @@ module Wurk
       end
     end
 
-    def next_signal_symbol
-      @signal_queue.pop(true)
-    rescue ThreadError
-      nil
+    # One buffered line per pending signal, non-blocking (wait_readable(0)).
+    # nil once the pipe is drained, ending the loop for this tick.
+    def read_pending_signal
+      return nil unless @signal_read.wait_readable(0)
+
+      @signal_read.gets&.strip
     end
 
     # Reap every exited child this tick (not one), so a fleet-wide death
