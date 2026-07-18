@@ -126,6 +126,44 @@ class ManagerTest < Wurk::Test::UnitCase
     assert_nil @capsule.fetcher.retrieve_work
   end
 
+  # `quiet` (manager thread) and `processor_result` (replace-on-die, called from
+  # each dying Processor's own thread) both read/mutate @workers. Whichever wins
+  # the @plock race is a legitimate outcome — quiet-then-churn skips the
+  # replacement (test_processor_result_does_not_replace_after_quiet), churn-then-quiet
+  # spawns one first — but neither ordering may raise or corrupt @workers. Looped
+  # under this file's parallelize_me! to shake out ordering-dependent bugs.
+  def test_quiet_races_processor_churn_without_exceptions_or_leaks # rubocop:disable Metrics/AbcSize
+    25.times do
+      mgr = Wurk::Manager.new(@capsule)
+      silence_processors(mgr)
+      victims = mgr.workers.to_a
+      errors = Queue.new
+
+      with_processor_new(fake_processor) do
+        threads = victims.map do |victim|
+          Thread.new do
+            mgr.processor_result(victim)
+          rescue StandardError => e
+            errors << e
+          end
+        end
+        threads << Thread.new do
+          mgr.quiet
+        rescue StandardError => e
+          errors << e
+        end
+        threads.each(&:join)
+      end
+
+      collected = []
+      collected << errors.pop until errors.empty?
+
+      assert_empty collected, 'concurrent quiet + processor_result churn must not raise'
+      assert_predicate mgr, :stopped?
+      assert_operator mgr.workers.size, :<=, @capsule.concurrency, 'no duplicate/leaked worker entries from the race'
+    end
+  end
+
   # --- processor_result ------------------------------------------------
 
   def test_processor_result_removes_processor_and_spawns_replacement # rubocop:disable Minitest/MultipleAssertions
@@ -316,12 +354,16 @@ class ManagerTest < Wurk::Test::UnitCase
   end
 
   # Stand-in for a Processor that satisfies the Manager's interface without
-  # spawning a real thread. Records #start so tests can assert wiring.
+  # spawning a real thread. Records #start so tests can assert wiring. Also
+  # answers #terminate as a no-op — a churn race can hand this replacement to
+  # `quiet`'s snapshot before it's ever started, and quiet always terminates
+  # every worker it captures.
   def fake_processor
     Object.new.tap do |p|
       started = [false]
-      p.define_singleton_method(:start)    { started[0] = true }
-      p.define_singleton_method(:started?) { started[0] }
+      p.define_singleton_method(:start)     { started[0] = true }
+      p.define_singleton_method(:started?)  { started[0] }
+      p.define_singleton_method(:terminate) { nil }
     end
   end
 
