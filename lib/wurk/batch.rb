@@ -185,6 +185,9 @@ module Wurk
       collect_jobs(&block)
       # By the time we check, the buffer (if any) has flushed, so `total`
       # reflects everything the block pushed — a flat count is reliable.
+      # Scheduled (`perform_in`) jobs count here too: BATCH_SCHEDULE moves
+      # `total` at creation, so a scheduled-only block does not misfire the
+      # marker as if it were empty.
       enqueue_empty_marker if job_count == pre_count
       @mutable = false
       self

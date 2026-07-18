@@ -115,6 +115,34 @@ class ClientTest < Wurk::Test::UnitCase
     cleanup_batch
   end
 
+  # --- push_batched_scheduled_pipelined NOSCRIPT recovery -----------------
+  # Scheduled-in-batch jobs (`bid` + `at`) route through BATCH_SCHEDULE; mirror
+  # the immediate-path recovery tests so the scheduled path's rescue/re-raise
+  # branches stay covered.
+
+  def test_scheduled_batched_push_reloads_lua_after_script_flush
+    @bid = "BS-#{Process.pid}-#{object_id}"
+    @pool.with { |c| c.call('SCRIPT', 'FLUSH') }
+
+    @client.push(scheduled_batched_item)
+
+    assert_equal('1', @pool.with { |c| c.call('HGET', "b-#{@bid}", 'total') },
+                 'NOSCRIPT on BATCH_SCHEDULE must reload + EVAL-source retry, then register')
+  ensure
+    cleanup_scheduled_batch
+  end
+
+  def test_scheduled_batched_push_reraises_non_noscript_command_error
+    @bid = "BS2-#{Process.pid}-#{object_id}"
+    # b-<bid> as a String makes BATCH_SCHEDULE's HINCRBY raise WRONGTYPE — a
+    # CommandError that is not NOSCRIPT, so it must propagate, not retry.
+    @pool.with { |c| c.call('SET', "b-#{@bid}", 'not-a-hash') }
+
+    assert_raises(RedisClient::CommandError) { @client.push(scheduled_batched_item) }
+  ensure
+    cleanup_scheduled_batch
+  end
+
   # --- push_bulk all-halted: line 163 else (compacted empty) --------------
 
   def test_push_bulk_with_halting_middleware_pushes_nothing
@@ -199,10 +227,20 @@ class ClientTest < Wurk::Test::UnitCase
     { 'class' => @class_name, 'args' => [1], 'queue' => @queue, 'jid' => jid, 'bid' => @bid }
   end
 
+  # A `bid` + future `at` payload — the scheduled sibling of batched_payload.
+  def scheduled_batched_item
+    { 'class' => @class_name, 'args' => [1], 'queue' => @queue, 'bid' => @bid, 'at' => future_seconds(600) }
+  end
+
   def cleanup_batch
     @pool.with do |c|
       c.call('DEL', "queue:#{@queue}", "b-#{@bid}", "b-#{@bid}-jids")
     end
+  end
+
+  def cleanup_scheduled_batch
+    cleanup_schedule
+    @pool.with { |c| c.call('DEL', "b-#{@bid}", "b-#{@bid}-jids") }
   end
 
   def mine_in_schedule
