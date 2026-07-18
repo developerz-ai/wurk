@@ -166,6 +166,52 @@ class LuaTest < Wurk::Test::UnitCase
     end
   end
 
+  # SADD-guard idempotency: re-pushing a jid already in the live set (a retry
+  # or scheduled promotion re-enqueueing a job that never left the batch) must
+  # re-LPUSH the payload but must NOT recount total/pending — else pending
+  # inflates past the acks and :success never fires (spec §2.3/§2.5).
+  def test_batch_push_repush_of_live_jid_does_not_recount # rubocop:disable Minitest/MultipleAssertions
+    bkey = "#{@ns}:b-rp"
+    jids = "#{@ns}:b-rp-jids"
+    list = "#{@ns}:queue:default"
+    qset = "#{@ns}:queues"
+    keys = [bkey, jids, list, qset, "#{@ns}:b-rp-died", "#{@ns}:dead-batches"]
+    argv = ['default', 'JID1', '{"jid":"JID1"}', 'rp']
+    @pool.with do |c|
+      2.times { Wurk::Lua::Loader.eval_cached(c, :batch_push, keys: keys, argv: argv) }
+
+      assert_equal '1', c.call('HGET', bkey, 'total'), 're-push must not recount total'
+      assert_equal '1', c.call('HGET', bkey, 'pending'), 're-push must not recount pending'
+      assert_equal 1, c.call('SCARD', jids)
+      assert_equal 2, c.call('LLEN', list), 're-push must still re-enqueue the payload'
+      c.call('DEL', list)
+    end
+  end
+
+  # The guard must not over-suppress: distinct jids each register once. Guards
+  # §2.3 re-entrancy — `batch.jobs { ... }` adding siblings grows total.
+  def test_batch_push_counts_each_distinct_jid
+    bkey = "#{@ns}:b-dj"
+    jids = "#{@ns}:b-dj-jids"
+    list = "#{@ns}:queue:default"
+    qset = "#{@ns}:queues"
+    died = "#{@ns}:b-dj-died"
+    dead = "#{@ns}:dead-batches"
+    @pool.with do |c|
+      %w[A B].each do |jid|
+        Wurk::Lua::Loader.eval_cached(
+          c, :batch_push, keys: [bkey, jids, list, qset, died, dead],
+                          argv: ['default', jid, %({"jid":"#{jid}"}), 'dj']
+        )
+      end
+
+      assert_equal '2', c.call('HGET', bkey, 'total')
+      assert_equal '2', c.call('HGET', bkey, 'pending')
+      assert_equal 2, c.call('SCARD', jids)
+      c.call('DEL', list)
+    end
+  end
+
   # #212: pushing a jid found in the died set is a manual retry of a dead
   # job — it rejoins the live set without recounting (total/pending already
   # include it), and draining the died set clears the death mark so a later

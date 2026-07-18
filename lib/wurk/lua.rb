@@ -79,6 +79,13 @@ module Wurk
     # Pro Batch: register a job into a batch and push it to its queue
     # atomically. Keeps total/pending in sync with the jids set.
     #
+    # SADD into the live jids set is the registration guard: total/pending
+    # increment only when the jid is genuinely new (SADD == 1). A jid already
+    # live is a re-push — a retry or scheduled promotion re-enqueueing a job
+    # that never left the batch — so it re-LPUSHes the payload but must NOT
+    # recount, or pending inflates past the acks and `:success` never fires
+    # (spec §2.3/§2.5: total = distinct jobs added, pending = not-yet-succeeded).
+    #
     # A jid found in `b-<bid>-died` is a manual retry of a dead job (morgue
     # "retry" / "add to queue") — it rejoins the live set without recounting:
     # total and pending already include it, because a death never decrements
@@ -99,9 +106,10 @@ module Wurk
           redis.call("zrem", KEYS[6], ARGV[4])
         end
       else
-        redis.call("hincrby", KEYS[1], "total", 1)
-        redis.call("hincrby", KEYS[1], "pending", 1)
-        redis.call("sadd", KEYS[2], ARGV[2])
+        if redis.call("sadd", KEYS[2], ARGV[2]) == 1 then
+          redis.call("hincrby", KEYS[1], "total", 1)
+          redis.call("hincrby", KEYS[1], "pending", 1)
+        end
       end
       redis.call("sadd", KEYS[4], ARGV[1])
       redis.call("lpush", KEYS[3], ARGV[3])
