@@ -4,6 +4,7 @@ import { useSearchParams } from '@solidjs/router';
 import { t } from '../i18n';
 import { PageHeader } from '../components/PageHeader';
 import { relativeTime, truncate, formatArgs } from '../utils';
+import { basePath } from '../basePath';
 
 interface RetryEntry {
   jid: string;
@@ -74,7 +75,7 @@ export default function Search() {
   const retries = useQuery<RetriesResponse>(() => ({
     queryKey: ['search-retries'],
     queryFn: () =>
-      fetch('/wurk/api/retries?page=0&count=200').then(
+      fetch(`${basePath()}/api/retries?page=0&count=200`).then(
         (r) => r.json() as Promise<RetriesResponse>
       ),
     enabled: submitted().length >= 2,
@@ -83,7 +84,7 @@ export default function Search() {
   const scheduled = useQuery<ScheduledResponse>(() => ({
     queryKey: ['search-scheduled'],
     queryFn: () =>
-      fetch('/wurk/api/scheduled?page=0&count=200').then(
+      fetch(`${basePath()}/api/scheduled?page=0&count=200`).then(
         (r) => r.json() as Promise<ScheduledResponse>
       ),
     enabled: submitted().length >= 2,
@@ -92,7 +93,7 @@ export default function Search() {
   const dead = useQuery<DeadResponse>(() => ({
     queryKey: ['search-dead'],
     queryFn: () =>
-      fetch('/wurk/api/dead?page=0&count=200').then(
+      fetch(`${basePath()}/api/dead?page=0&count=200`).then(
         (r) => r.json() as Promise<DeadResponse>
       ),
     enabled: submitted().length >= 2,
@@ -104,7 +105,7 @@ export default function Search() {
     queryKey: ['search-suggest'],
     queryFn: () =>
       Promise.all(
-        ['/wurk/api/retries?page=0&count=10', '/wurk/api/dead?page=0&count=10'].map((u) =>
+        [`${basePath()}/api/retries?page=0&count=10`, `${basePath()}/api/dead?page=0&count=10`].map((u) =>
           fetch(u).then((r) => r.json())
         )
       ),

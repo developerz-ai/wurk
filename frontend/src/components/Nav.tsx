@@ -105,7 +105,7 @@ export default function Nav(props: NavProps) {
                 <span style={{ 'font-size': '18px', 'font-weight': 700, 'letter-spacing': '-0.02em', color: 'var(--text-bright)' }}>
                   Wurk
                 </span>
-                {/* Gem version from /wurk/api/meta, next to the wordmark. */}
+                {/* Gem version from <mount>/api/meta, next to the wordmark. */}
                 <Show when={meta.data?.version}>
                   <span
                     style={{

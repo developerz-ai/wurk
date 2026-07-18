@@ -9,6 +9,7 @@ import { t } from '../i18n';
 import { PageHeader } from '../components/PageHeader';
 import { relativeTime, truncate } from '../utils';
 import { SkeletonTable } from '../components/Skeleton';
+import { basePath } from '../basePath';
 
 interface Batch {
   bid: string;
@@ -50,7 +51,7 @@ export default function Batches() {
   const q = useQuery<BatchesResponse>(() => ({
     queryKey: ['batches', page()],
     queryFn: () =>
-      fetch(`/wurk/api/batches?page=${page() - 1}&count=${PAGE_SIZE}`).then(
+      fetch(`${basePath()}/api/batches?page=${page() - 1}&count=${PAGE_SIZE}`).then(
         (r) => r.json() as Promise<BatchesResponse>
       ),
   }));

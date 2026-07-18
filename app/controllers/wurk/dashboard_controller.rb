@@ -1,5 +1,6 @@
 # frozen_string_literal: true
 
+require 'json'
 require 'net/http'
 require 'uri'
 
@@ -26,13 +27,34 @@ module Wurk
     INDEX_REL_PATH = ['vendor', 'assets', 'dashboard', 'index.html'].freeze
 
     def index
-      render layout: false, html: spa_html.html_safe
+      render layout: false, html: inject_mount_base(spa_html).html_safe
     end
 
     private
 
     def spa_html
       ENV['WURK_VITE_DEV'] == '1' ? fetch_vite_dev_shell : read_built_index
+    end
+
+    # The SPA is mount-agnostic: it reads window.__WURK_BASE__ to build every API
+    # URL and its client-router base, so the same precompiled bundle works whether
+    # the host mounts the engine at /wurk, /sidekiq, or /admin/jobs. script_name
+    # is the mount prefix ("/sidekiq"), or "" at the app root. Injected into every
+    # served shell (built and Vite-dev) so a non-/wurk mount needs no rebuild.
+    def inject_mount_base(html)
+      html.sub('</head>', "#{mount_base_script}</head>")
+    end
+
+    def mount_base_script
+      base = request.script_name.to_s.chomp('/')
+      %(<script>window.__WURK_BASE__ = #{js_string(base)};</script>\n  )
+    end
+
+    # JSON-quote the mount prefix as a literal inside <script>, escaping the
+    # sequences that could otherwise break out of the tag. The mount is
+    # host-configured, not request input, but the injection stays safe regardless.
+    def js_string(str)
+      str.to_json.gsub(/[<>&]/) { |c| format('\u%04x', c.ord) }
     end
 
     def fetch_vite_dev_shell

@@ -1,7 +1,8 @@
 import { useMutation, useQueryClient } from '@tanstack/solid-query';
+import { basePath } from '../basePath';
 
 // The three mutable sorted-set views. The string doubles as the API path
-// segment (`/wurk/api/<set>`) and the query key the pages cache under.
+// segment (`<mount>/api/<set>`) and the query key the pages cache under.
 export type JobSetName = 'retries' | 'scheduled' | 'dead';
 
 // Re-targets the exact (score, jid) pair server-side. Mirrors
@@ -37,18 +38,18 @@ export function useJobSetActions(set: JobSetName) {
 
   const single = useMutation(() => ({
     mutationFn: ({ key, cmd }: { key: string; cmd: string }) =>
-      postJSON(`/wurk/api/${set}/${encodeURIComponent(key)}`, { cmd }),
+      postJSON(`${basePath()}/api/${set}/${encodeURIComponent(key)}`, { cmd }),
     onSuccess: invalidate,
   }));
 
   const bulk = useMutation(() => ({
     mutationFn: ({ keys, cmd }: { keys: string[]; cmd: string }) =>
-      postJSON(`/wurk/api/${set}`, { keys, cmd }),
+      postJSON(`${basePath()}/api/${set}`, { keys, cmd }),
     onSuccess: invalidate,
   }));
 
   const all = useMutation(() => ({
-    mutationFn: (cmd: string) => postJSON(`/wurk/api/${set}/all/${cmd}`),
+    mutationFn: (cmd: string) => postJSON(`${basePath()}/api/${set}/all/${cmd}`),
     onSuccess: invalidate,
   }));
 

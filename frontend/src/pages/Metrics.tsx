@@ -4,6 +4,7 @@ import { AreaChart, BarChart, LineChart, type Datum } from '../components/charts
 import { Skeleton } from '../components/Skeleton';
 import { t } from '../i18n';
 import { formatDuration, truncate } from '../utils';
+import { basePath } from '../basePath';
 
 // Matches Wurk::Api::Serializers.metric_row — processed (successes), failed,
 // and total runtime ms across both.
@@ -146,27 +147,27 @@ export default function Metrics() {
 
   const statsQuery = useQuery(() => ({
     queryKey: ['stats'],
-    queryFn: () => fetch('/wurk/api/stats').then((r) => r.json() as Promise<StatsData>),
+    queryFn: () => fetch(`${basePath()}/api/stats`).then((r) => r.json() as Promise<StatsData>),
     refetchInterval: 5000,
   }));
 
   const historyQuery = useQuery(() => ({
     queryKey: ['history', range().bucket, range().window],
     queryFn: () =>
-      fetch(`/wurk/api/history/${range().bucket}?window=${range().window}`).then((r) => r.json() as Promise<HistoryResponse>),
+      fetch(`${basePath()}/api/history/${range().bucket}?window=${range().window}`).then((r) => r.json() as Promise<HistoryResponse>),
     refetchInterval: 30000,
   }));
 
   const metricsQuery = useQuery(() => ({
     queryKey: ['metrics', range().minutes],
-    queryFn: () => fetch(`/wurk/api/metrics?minutes=${range().minutes}`).then((r) => r.json() as Promise<MetricsResponse>),
+    queryFn: () => fetch(`${basePath()}/api/metrics?minutes=${range().minutes}`).then((r) => r.json() as Promise<MetricsResponse>),
     refetchInterval: 30000,
   }));
 
   const queueQuery = useQuery(() => ({
     queryKey: ['queue-history', range().bucket, range().window],
     queryFn: async () => {
-      const r = await fetch(`/wurk/api/queue-history/${range().bucket}?window=${range().window}`);
+      const r = await fetch(`${basePath()}/api/queue-history/${range().bucket}?window=${range().window}`);
       if (!r.ok) throw new Error(`queue-history failed (${r.status})`);
       return r.json() as Promise<QueueHistoryResponse>;
     },
@@ -392,7 +393,7 @@ function QueueLatencyHistory(props: { range: (typeof RANGES)[number] }) {
   const data = useQuery(() => ({
     queryKey: ['queue-history-lat', props.range.bucket, props.range.window],
     queryFn: async () => {
-      const r = await fetch(`/wurk/api/queue-history/${props.range.bucket}?window=${props.range.window}`);
+      const r = await fetch(`${basePath()}/api/queue-history/${props.range.bucket}?window=${props.range.window}`);
       if (!r.ok) throw new Error(`queue-history failed (${r.status})`);
       return r.json() as Promise<QueueHistoryResponse>;
     },
@@ -441,7 +442,7 @@ function HistoricalSnapshots() {
   const data = useQuery(() => ({
     queryKey: ['history-snapshots'],
     queryFn: async () => {
-      const r = await fetch('/wurk/api/history/snapshots?limit=1000');
+      const r = await fetch(`${basePath()}/api/history/snapshots?limit=1000`);
       if (!r.ok) throw new Error(`history snapshots request failed (${r.status})`);
       return r.json() as Promise<{ snapshots: Snapshot[] }>;
     },

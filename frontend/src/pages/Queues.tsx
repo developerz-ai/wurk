@@ -13,6 +13,7 @@ import Modal from '../components/Modal';
 import { Tooltip } from '../components/Tooltip';
 import { useMeta } from '../hooks/useMeta';
 import { SkeletonTable } from '../components/Skeleton';
+import { basePath } from '../basePath';
 
 interface QueueSummary {
   name: string;
@@ -59,7 +60,7 @@ function QueueJobs(props: { name: string }) {
   const query = useQuery<QueueDetail>(() => ({
     queryKey: ['queue', props.name, page()],
     queryFn: () =>
-      fetch(`/wurk/api/queues/${encodeURIComponent(props.name)}?page=${page() - 1}&count=${PAGE_SIZE}`).then(
+      fetch(`${basePath()}/api/queues/${encodeURIComponent(props.name)}?page=${page() - 1}&count=${PAGE_SIZE}`).then(
         (r) => r.json() as Promise<QueueDetail>
       ),
   }));
@@ -67,7 +68,7 @@ function QueueJobs(props: { name: string }) {
   // Delete one job from the queue by jid (server LREMs the exact payload).
   const deleteJob = useMutation(() => ({
     mutationFn: async (jid: string) => {
-      const res = await fetch(`/wurk/api/queues/${encodeURIComponent(props.name)}/delete`, {
+      const res = await fetch(`${basePath()}/api/queues/${encodeURIComponent(props.name)}/delete`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ jid }),
@@ -186,13 +187,13 @@ export default function Queues() {
 
   const query = useQuery<QueueSummary[]>(() => ({
     queryKey: ['queues'],
-    queryFn: () => fetch('/wurk/api/queues').then((r) => r.json() as Promise<QueueSummary[]>),
+    queryFn: () => fetch(`${basePath()}/api/queues`).then((r) => r.json() as Promise<QueueSummary[]>),
     refetchInterval: 5000,
   }));
 
   const clearQueue = useMutation(() => ({
     mutationFn: async (name: string) => {
-      const res = await fetch(`/wurk/api/queues/${encodeURIComponent(name)}/clear`, { method: 'POST' });
+      const res = await fetch(`${basePath()}/api/queues/${encodeURIComponent(name)}/clear`, { method: 'POST' });
       if (!res.ok) throw new Error(`Clear failed (${res.status})`);
       return res;
     },
@@ -208,7 +209,7 @@ export default function Queues() {
   const pauseQueue = useMutation(() => ({
     mutationFn: async ({ name, paused }: { name: string; paused: boolean }) => {
       const action = paused ? 'unpause' : 'pause';
-      const res = await fetch(`/wurk/api/queues/${encodeURIComponent(name)}/${action}`, { method: 'POST' });
+      const res = await fetch(`${basePath()}/api/queues/${encodeURIComponent(name)}/${action}`, { method: 'POST' });
       if (!res.ok) throw new Error(`${action} failed (${res.status})`);
       return res;
     },

@@ -8,8 +8,9 @@ import { relativeTime, isoTime, truncate } from '../utils';
 import { useMeta } from '../hooks/useMeta';
 import { SortableTh } from '../components/SortableTh';
 import { useSort, type Accessors } from '../hooks/useSort';
+import { basePath } from '../basePath';
 
-// Newest-first [fired_at, jid] tuples from GET /wurk/api/cron/:lid/history.
+// Newest-first [fired_at, jid] tuples from GET <mount>/api/cron/:lid/history.
 type HistoryEntry = [number, string];
 
 interface CronLoop {
@@ -45,13 +46,13 @@ export default function Cron() {
 
   const q = useQuery<CronLoop[]>(() => ({
     queryKey: ['cron'],
-    queryFn: () => fetch('/wurk/api/cron').then((r) => r.json() as Promise<CronLoop[]>),
+    queryFn: () => fetch(`${basePath()}/api/cron`).then((r) => r.json() as Promise<CronLoop[]>),
     refetchInterval: 15000,
   }));
 
   // pause/unpause/enqueue skip CSRF (see ApiController#skip_forgery_protection).
   const post = (lid: string, action: string) =>
-    fetch(`/wurk/api/cron/${lid}/${action}`, { method: 'POST' });
+    fetch(`${basePath()}/api/cron/${lid}/${action}`, { method: 'POST' });
 
   const setPaused = useMutation(() => ({
     mutationFn: ({ lid, paused }: { lid: string; paused: boolean }) =>
@@ -68,7 +69,7 @@ export default function Cron() {
   const historyQ = useQuery<HistoryEntry[]>(() => ({
     queryKey: ['cron-history', historyLoop()?.lid],
     queryFn: () =>
-      fetch(`/wurk/api/cron/${historyLoop()!.lid}/history`)
+      fetch(`${basePath()}/api/cron/${historyLoop()!.lid}/history`)
         .then((r) => r.json() as Promise<{ history: HistoryEntry[] }>)
         .then((d) => d.history),
     enabled: historyLoop() !== null,

@@ -4,6 +4,7 @@ import { A, useParams } from '@solidjs/router';
 import { t } from '../i18n';
 import { relativeTime } from '../utils';
 import { SkeletonCards } from '../components/Skeleton';
+import { basePath } from '../basePath';
 
 interface BatchDetailData {
   bid: string;
@@ -71,7 +72,7 @@ export default function BatchDetail() {
   const q = useQuery<BatchDetailData>(() => ({
     queryKey: ['batch', bid()],
     queryFn: () =>
-      fetch(`/wurk/api/batches/${encodeURIComponent(bid())}`).then((r) => {
+      fetch(`${basePath()}/api/batches/${encodeURIComponent(bid())}`).then((r) => {
         if (!r.ok) throw new Error(`HTTP ${r.status}`);
         return r.json() as Promise<BatchDetailData>;
       }),

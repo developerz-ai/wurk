@@ -2,8 +2,9 @@ import { useQuery } from '@tanstack/solid-query';
 import { onMount, For, Switch, Match, Show } from 'solid-js';
 import { SkeletonTable } from '../components/Skeleton';
 import { t } from '../i18n';
+import { basePath } from '../basePath';
 
-// One row from GET /wurk/api/profiles (Wurk::Api::Serializers.profile_record).
+// One row from GET <mount>/api/profiles (Wurk::Api::Serializers.profile_record).
 interface Profile {
   key: string;
   jid: string;
@@ -32,7 +33,7 @@ export default function Profiles() {
   const q = useQuery<Profile[]>(() => ({
     queryKey: ['profiles'],
     queryFn: async () => {
-      const r = await fetch('/wurk/api/profiles');
+      const r = await fetch(`${basePath()}/api/profiles`);
       if (!r.ok) throw new Error(`profiles request failed: ${r.status}`);
       return r.json() as Promise<Profile[]>;
     },
@@ -93,7 +94,7 @@ export default function Profiles() {
                                   to the Firefox profiler then 302s out to profiler.firefox.com. */}
                               <a
                                 class="obs-btn obs-btn--ghost obs-btn--sm"
-                                href={`/wurk/profiles/${encodeURIComponent(p.key)}`}
+                                href={`${basePath()}/profiles/${encodeURIComponent(p.key)}`}
                                 target="_blank"
                                 rel="noopener noreferrer"
                               >

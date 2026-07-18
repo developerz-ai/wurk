@@ -14,6 +14,7 @@ import { useMeta } from '../hooks/useMeta';
 import { useSelection } from '../hooks/useSelection';
 import { useJobSetActions, entryKey } from '../hooks/useJobSetActions';
 import { SkeletonTable } from '../components/Skeleton';
+import { basePath } from '../basePath';
 
 interface DeadEntry {
   jid: string;
@@ -69,7 +70,7 @@ export default function Dead() {
   const query = useQuery<DeadResponse>(() => ({
     queryKey: ['dead', page()],
     queryFn: () =>
-      fetch(`/wurk/api/dead?page=${page() - 1}&count=${PAGE_SIZE}`).then(
+      fetch(`${basePath()}/api/dead?page=${page() - 1}&count=${PAGE_SIZE}`).then(
         (r) => r.json() as Promise<DeadResponse>
       ),
   }));

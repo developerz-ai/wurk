@@ -14,6 +14,7 @@ import { useMeta } from '../hooks/useMeta';
 import { useSelection } from '../hooks/useSelection';
 import { useJobSetActions, entryKey } from '../hooks/useJobSetActions';
 import { SkeletonTable } from '../components/Skeleton';
+import { basePath } from '../basePath';
 
 interface RetryEntry {
   jid: string;
@@ -76,7 +77,7 @@ export default function Retries() {
   const query = useQuery<RetriesResponse>(() => ({
     queryKey: ['retries', page()],
     queryFn: () =>
-      fetch(`/wurk/api/retries?page=${page() - 1}&count=${PAGE_SIZE}`).then(
+      fetch(`${basePath()}/api/retries?page=${page() - 1}&count=${PAGE_SIZE}`).then(
         (r) => r.json() as Promise<RetriesResponse>
       ),
   }));

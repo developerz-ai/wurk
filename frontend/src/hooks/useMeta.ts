@@ -1,8 +1,9 @@
 import { useQuery } from '@tanstack/solid-query';
+import { basePath } from '../basePath';
 
 // A dashboard tab registered by a third-party gem via
 // Sidekiq::Web.register_extension. When ext_name is present, the Extension page
-// fetches the extension's server-rendered view from /wurk/ext/<ext_name>/* and
+// fetches the extension's server-rendered view from <mount>/ext/<ext_name>/* and
 // embeds it natively; tabs added by bare `tabs[]=` mutation have no extension
 // to render (ext_name null) and fall back to an iframe of their own path.
 export interface CustomTab {
@@ -28,7 +29,7 @@ export interface Meta {
 export function useMeta() {
   return useQuery<Meta>(() => ({
     queryKey: ['meta'],
-    queryFn: () => fetch('/wurk/api/meta').then((r) => r.json() as Promise<Meta>),
+    queryFn: () => fetch(`${basePath()}/api/meta`).then((r) => r.json() as Promise<Meta>),
     staleTime: Infinity,
   }));
 }

@@ -7,6 +7,7 @@ import { Skeleton, SkeletonCards, SkeletonTable } from '../components/Skeleton';
 import { t } from '../i18n';
 import { useSSE } from '../hooks/useSSE';
 import { formatDuration } from '../utils';
+import { basePath } from '../basePath';
 
 interface StatsData {
   processed: number;
@@ -98,7 +99,7 @@ export default function Dashboard() {
 
   const statsQuery = useQuery(() => ({
     queryKey: ['stats'],
-    queryFn: () => fetch('/wurk/api/stats').then((r) => r.json() as Promise<StatsData>),
+    queryFn: () => fetch(`${basePath()}/api/stats`).then((r) => r.json() as Promise<StatsData>),
     enabled: !sse.connected(),
     refetchInterval: sse.connected() ? false : 5000,
   }));
@@ -108,7 +109,7 @@ export default function Dashboard() {
   const historyQuery = useQuery(() => ({
     queryKey: ['history', range().bucket, range().window],
     queryFn: () =>
-      fetch(`/wurk/api/history/${range().bucket}?window=${range().window}`).then((r) => r.json() as Promise<HistoryResponse>),
+      fetch(`${basePath()}/api/history/${range().bucket}?window=${range().window}`).then((r) => r.json() as Promise<HistoryResponse>),
     refetchInterval: 30000,
   }));
 

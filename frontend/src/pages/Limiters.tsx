@@ -8,6 +8,7 @@ import { t } from '../i18n';
 import { PageHeader } from '../components/PageHeader';
 import { SkeletonTable } from '../components/Skeleton';
 import { useMeta } from '../hooks/useMeta';
+import { basePath } from '../basePath';
 
 // Uniform live status every limiter type reports (Wurk::Limiter#status).
 // `concurrent` additionally merges its metric counters (held/immediate/…),
@@ -64,7 +65,7 @@ export default function Limiters() {
   const q = useQuery<LimitersResponse>(() => ({
     queryKey: ['limiters', page()],
     queryFn: () =>
-      fetch(`/wurk/api/limiters?page=${page() - 1}&count=${PAGE_SIZE}`).then(
+      fetch(`${basePath()}/api/limiters?page=${page() - 1}&count=${PAGE_SIZE}`).then(
         (r) => r.json() as Promise<LimitersResponse>
       ),
     refetchInterval: 5000,
@@ -74,7 +75,7 @@ export default function Limiters() {
   // ApiController#skip_forgery_protection.
   const reset = useMutation(() => ({
     mutationFn: (name: string) =>
-      fetch(`/wurk/api/limiters/${encodeURIComponent(name)}/reset`, { method: 'POST' }),
+      fetch(`${basePath()}/api/limiters/${encodeURIComponent(name)}/reset`, { method: 'POST' }),
     onSuccess: () => qc.invalidateQueries({ queryKey: ['limiters'] }),
   }));
 

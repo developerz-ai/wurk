@@ -7,6 +7,7 @@ import { ArgsValue } from '../components/ArgsValue';
 import { relativeTime, isoTime, formatKb, formatDuration, formatArgs, truncate } from '../utils';
 import { useMeta } from '../hooks/useMeta';
 import { SkeletonCards } from '../components/Skeleton';
+import { basePath } from '../basePath';
 
 interface Process {
   identity: string;
@@ -94,7 +95,7 @@ const statLabelStyle = {
 function ProcessDetail(props: { proc: Process }) {
   const work = useQuery<WorkRow[]>(() => ({
     queryKey: ['workers'],
-    queryFn: () => fetch('/wurk/api/workers').then((r) => r.json() as Promise<WorkRow[]>),
+    queryFn: () => fetch(`${basePath()}/api/workers`).then((r) => r.json() as Promise<WorkRow[]>),
     refetchInterval: 5000,
   }));
   const rows = () => (work.data ?? []).filter((w) => w.process_id === props.proc.identity);
@@ -219,7 +220,7 @@ export default function Busy() {
 
   const query = useQuery<Process[]>(() => ({
     queryKey: ['processes'],
-    queryFn: () => fetch('/wurk/api/processes').then((r) => r.json() as Promise<Process[]>),
+    queryFn: () => fetch(`${basePath()}/api/processes`).then((r) => r.json() as Promise<Process[]>),
     refetchInterval: 5000,
   }));
 
@@ -230,7 +231,7 @@ export default function Busy() {
     mutationFn: async (target: ControlTarget) => {
       const { signal } = target;
       const identity = target.scope === 'all' ? 'all' : target.identity;
-      const res = await fetch(`/wurk/api/busy/${signal}`, {
+      const res = await fetch(`${basePath()}/api/busy/${signal}`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ identity }),

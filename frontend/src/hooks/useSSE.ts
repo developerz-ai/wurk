@@ -1,4 +1,5 @@
 import { createSignal, onCleanup, onMount, type Accessor } from 'solid-js';
+import { basePath } from '../basePath';
 
 export interface StatsSnapshot {
   processed: number;
@@ -27,7 +28,7 @@ export function useSSE(
 
   onMount(() => {
     if (!enabled) return;
-    const es = new EventSource('/wurk/api/stream');
+    const es = new EventSource(`${basePath()}/api/stream`);
     es.addEventListener('stats', (e) => {
       try {
         setStats(JSON.parse((e as MessageEvent).data) as StatsSnapshot);

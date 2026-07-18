@@ -14,6 +14,7 @@ import { useMeta } from '../hooks/useMeta';
 import { useSelection } from '../hooks/useSelection';
 import { useJobSetActions, entryKey } from '../hooks/useJobSetActions';
 import { SkeletonTable } from '../components/Skeleton';
+import { basePath } from '../basePath';
 
 interface ScheduledEntry {
   jid: string;
@@ -63,7 +64,7 @@ export default function Scheduled() {
   const query = useQuery<ScheduledResponse>(() => ({
     queryKey: ['scheduled', page()],
     queryFn: () =>
-      fetch(`/wurk/api/scheduled?page=${page() - 1}&count=${PAGE_SIZE}`).then(
+      fetch(`${basePath()}/api/scheduled?page=${page() - 1}&count=${PAGE_SIZE}`).then(
         (r) => r.json() as Promise<ScheduledResponse>
       ),
   }));
