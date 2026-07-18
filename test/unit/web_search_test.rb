@@ -145,6 +145,30 @@ class WebSearchTest < Wurk::Test::UnitCase
     assert_predicate search, :truncated?
   end
 
+  # A keystroke against a queue with thousands of non-matching jobs must never
+  # full-walk the LIST: round trips stay bounded by the scan cap, not the
+  # queue's real size. Thread-local Thread.current[:wurk_capsule] override (not
+  # a global monkeypatch) so counting is safe under this class's parallelize_me!.
+  def test_search_bounds_round_trips_on_a_huge_no_match_queue
+    seed_queue(10_000)
+    counter = RoundTripCounter.new(Wurk.redis_pool)
+    Thread.current[:wurk_capsule] = counter
+
+    search = Wurk::Web::Search.new("absent-#{@ns}", kinds: ['queues'])
+    hits = search.to_a
+
+    assert_empty hits
+    assert_predicate search, :truncated?
+    # Queue.all (1 SMEMBERS) + LLEN (1) + one LRANGE per QUEUE_PAGE up to
+    # SCAN_LIMIT_PER_QUEUE — never proportional to the queue's real size (10k
+    # would need ~200 LRANGE calls to full-walk instead of the capped ~100).
+    max_round_trips = 2 + (Wurk::Web::Search::SCAN_LIMIT_PER_QUEUE / Wurk::Web::Search::QUEUE_PAGE)
+
+    assert_operator counter.count, :<=, max_round_trips
+  ensure
+    Thread.current[:wurk_capsule] = nil
+  end
+
   # Queue payload with no enqueued_at / created_at exercises the nil sides
   # of `record.enqueued_at&.to_f` (line 115) and `record.created_at&.to_f`
   # (line 116) in queue_row.
@@ -183,6 +207,25 @@ class WebSearchTest < Wurk::Test::UnitCase
   end
 
   private
+
+  # Delegating pool that counts checkouts (one per `Wurk.redis` block). Doubles
+  # as its own `Thread.current[:wurk_capsule]` binding (`#redis_pool` returns
+  # self) so a test can measure round trips without a global monkeypatch.
+  class RoundTripCounter
+    attr_reader :count
+
+    def initialize(pool)
+      @pool = pool
+      @count = 0
+    end
+
+    def with(&)
+      @count += 1
+      @pool.with(&)
+    end
+
+    def redis_pool = self
+  end
 
   # Bulk-seed a queue with `count` non-matching payloads in one RPUSH so the
   # scan-cap tests can exceed SCAN_LIMIT_PER_QUEUE without thousands of calls.
