@@ -561,7 +561,7 @@ class CronTest < Wurk::Test::UnitCase
     # an hourly cadence whose repeated hour is a genuine second run.
     nyt = tz('America/New_York')
     fires = simulate_fires('0 * * * *', nyt, Time.utc(2026, 11, 1, 4, 0), Time.utc(2026, 11, 1, 7, 0))
-    one_am = fires.count { |f| lc = nyt.utc_to_local(Time.at(f)); lc.hour == 1 && lc.min.zero? }
+    one_am = fires.count { |f| lc = nyt.utc_to_local(Time.at(f).utc); lc.hour == 1 && lc.min.zero? }
 
     assert_equal 2, one_am, 'hourly 0 * * * * must fire in both fold 01:00 hours, not skip one'
   end
@@ -571,7 +571,7 @@ class CronTest < Wurk::Test::UnitCase
     # "minute == 0". 15 * * * * must also keep both repeated fall-back hours.
     nyt = tz('America/New_York')
     fires = simulate_fires('15 * * * *', nyt, Time.utc(2026, 11, 1, 4, 0), Time.utc(2026, 11, 1, 7, 0))
-    one_fifteen = fires.count { |f| lc = nyt.utc_to_local(Time.at(f)); lc.hour == 1 && lc.min == 15 }
+    one_fifteen = fires.count { |f| lc = nyt.utc_to_local(Time.at(f).utc); lc.hour == 1 && lc.min == 15 }
 
     assert_equal 2, one_fifteen
   end
