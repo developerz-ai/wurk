@@ -82,10 +82,17 @@ module Wurk
         @watchdog = @orphan_guard.arm
       end
 
-      # Parent installed traps for TERM/INT/TSTP/USR1 — the child needs its own
+      # Parent installed traps for TERM/INT/TSTP — the child needs its own
       # behavior, not the parent's. USR2 too: the child owns log-reopen.
+      # USR1 (rolling restart) is a no-op in the child — trap it with a log
+      # so stray USR1s don't trigger default termination.
       def reset_inherited_signals
-        %w[TERM INT TSTP USR1 USR2].each { |s| ::Signal.trap(s, 'DEFAULT') }
+        %w[TERM INT TSTP USR2].each { |s| ::Signal.trap(s, 'DEFAULT') }
+        ::Signal.trap('USR1') do
+          @config.logger.debug { 'Received USR1 (rolling restart); no-op in child' }
+        end
+      rescue ArgumentError
+        nil
       end
 
       def reconnect_after_fork

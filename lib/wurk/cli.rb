@@ -45,7 +45,11 @@ module Wurk
         cli.launcher.quiet
       end,
       'TTIN' => BACKTRACE_DUMPER,
-      'INFO' => BACKTRACE_DUMPER
+      'INFO' => BACKTRACE_DUMPER,
+      'USR2' => lambda do |cli|
+        cli.logger.info 'Received USR2, reopening logs'
+        cli.reopen_logs
+      end
     }.freeze
 
     # Table-driven so adding a flag doesn't grow `define_value_flags`'s ABC
@@ -189,7 +193,14 @@ module Wurk
     end
 
     def signal_names
-      %w[INT TERM TSTP TTIN INFO]
+      %w[INT TERM TSTP TTIN INFO USR2]
+    end
+
+    def reopen_logs
+      log = logger
+      log.reopen if log.respond_to?(:reopen)
+    rescue StandardError
+      nil
     end
 
     def validate_redis!

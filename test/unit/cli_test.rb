@@ -80,7 +80,7 @@ class CLITest < Wurk::Test::UnitCase
   end
 
   def test_signal_handlers_table
-    assert_equal %w[INT TERM TSTP TTIN INFO].sort, Wurk::CLI::SIGNAL_HANDLERS.keys.sort
+    assert_equal %w[INT TERM TSTP TTIN INFO USR2].sort, Wurk::CLI::SIGNAL_HANDLERS.keys.sort
   end
 
   def test_min_redis_version
