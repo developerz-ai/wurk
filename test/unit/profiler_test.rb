@@ -41,6 +41,22 @@ class ProfilerTest < Wurk::Test::UnitCase
     end
   end
 
+  # Forked workers persist through their own capsule pool, so `store` accepts an
+  # explicit `pool:` — exercise that path (not just the default `Wurk.redis`).
+  def test_store_writes_through_an_explicit_pool
+    pool = Wurk::RedisPool.new(size: 1, url: Wurk::Test.redis_url)
+    key = Wurk::Profiler.store(jid: 'jp', type: 'vernier', gecko_json: GECKO,
+                               started_at: ::Time.at(1_700_000_000), elapsed_ms: 7, token: 'tp', pool: pool)
+
+    assert_equal 'tp-jp', key
+    Wurk.redis do |c|
+      assert_equal 'jp', c.call('HGET', key, 'jid')
+      assert_operator c.call('ZSCORE', Wurk::Keys::PROFILES, key).to_i, :>, 0
+    end
+  ensure
+    pool&.disconnect!
+  end
+
   def test_store_score_is_future_expiry
     key = Wurk::Profiler.store(jid: 'j2', type: 'vernier', gecko_json: GECKO,
                                started_at: ::Time.now, elapsed_ms: 1, token: 't2')

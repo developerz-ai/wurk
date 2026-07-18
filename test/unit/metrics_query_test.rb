@@ -33,14 +33,13 @@ class MetricsQueryTest < Wurk::Test::UnitCase
     super
   end
 
-  # Per-class fields only — never DEL the shared minute/rollup buckets, or
-  # other parallel tests for the same minute will lose their writes.
+  # Per-class fields only — never DEL the shared minute buckets, or other
+  # parallel tests for the same minute will lose their writes.
   def delete_class_fields(conn)
-    [@now, @now - 60, @now - 120].each do |t|
-      [Wurk::Metrics::History.minute_key(t), Wurk::Metrics::History.rollup_key(t)].each do |key|
-        [@klass_a, @klass_b].each do |kls|
-          conn.call('HDEL', key, "#{kls}|p", "#{kls}|f", "#{kls}|ms", "#{kls}|x", "#{kls}nodelim")
-        end
+    [@now, @now - 60, @now - 120, @now - 180, @now - 240, @now - 300, @now - 360, @now - 420].each do |t|
+      key = Wurk::Metrics::History.minute_key(t)
+      [@klass_a, @klass_b].each do |kls|
+        conn.call('HDEL', key, "#{kls}|p", "#{kls}|f", "#{kls}|ms", "#{kls}|x", "#{kls}nodelim")
       end
     end
   end
@@ -107,6 +106,21 @@ class MetricsQueryTest < Wurk::Test::UnitCase
 
     assert_equal({ p: 1, f: 1, ms: 300 }, found[@klass_a])
     assert_equal({ p: 1, f: 0, ms: 50 }, found[@klass_b])
+  end
+
+  # Regression (#metrics-double-count): before the fix, a job at minute x1..x9
+  # was also written into that decade's x0 key (the old 10-min rollup), so a
+  # window spanning the x0 minute summed each job twice. @now is 14:37; these
+  # three land at 14:31/32/33 (all in decade 14:30), and a 10-minute window
+  # reaches back over 14:30. The total must be 3, not 6.
+  def test_top_jobs_does_not_double_count_across_the_rollup_boundary
+    [31, 32, 33].each do |m|
+      Wurk::Metrics::History.record(@klass_a, 100, success: true, at: ::Time.utc(2026, 5, 21, 14, m, 0))
+    end
+
+    found = Wurk::Metrics::Query.top_jobs(minutes: 10, now: @now).to_h
+
+    assert_equal({ p: 3, f: 0, ms: 300 }, found[@klass_a])
   end
 
   def test_top_jobs_sorted_descending_by_volume
@@ -251,6 +265,10 @@ class MetricsQueryTest < Wurk::Test::UnitCase
 
     assert_equal 5, points.size
     assert(points.all? { |p| p[:size].zero? && p[:latency].zero? })
+  end
+
+  def test_queue_history_returns_empty_when_no_queues
+    assert_equal [], Wurk::Metrics::Query.queue_history('1m', 300, queues: [], now: @now)
   end
 
   def test_queue_history_rejects_unknown_bucket

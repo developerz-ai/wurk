@@ -50,11 +50,13 @@ module Wurk
         key = profile_key(token, jid)
         gz = gzip(gecko_json)
         with_pool(pool) do |conn|
-          conn.call('HSET', key, 'jid', jid, 'type', type, 'token', token,
-                    'started_at', started_at.to_i, 'elapsed', elapsed_ms.to_i,
-                    'size', gz.bytesize, 'sid', sid.to_s, 'data', gz)
-          conn.call('EXPIRE', key, TTL)
-          conn.call('ZADD', Keys::PROFILES, (now + TTL).to_i, key)
+          conn.pipelined do |pipe|
+            pipe.call('HSET', key, 'jid', jid, 'type', type, 'token', token,
+                      'started_at', started_at.to_i, 'elapsed', elapsed_ms.to_i,
+                      'size', gz.bytesize, 'sid', sid.to_s, 'data', gz)
+            pipe.call('EXPIRE', key, TTL)
+            pipe.call('ZADD', Keys::PROFILES, (now + TTL).to_i, key)
+          end
         end
         key
       end
