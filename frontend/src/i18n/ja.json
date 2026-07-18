@@ -10,7 +10,13 @@
     "limiters": "リミッター",
     "cron": "Cron",
     "metrics": "メトリクス",
-    "search": "検索"
+    "profiles": "プロファイル",
+    "search": "検索",
+    "extensions": "拡張機能",
+    "collapse": "折りたたむ",
+    "expand": "展開",
+    "status_active": "システム状態: 稼働中",
+    "status_inactive": "システム状態: 切断"
   },
   "dashboard": {
     "processed": "処理済み",
@@ -24,7 +30,24 @@
     "processes": "プロセス",
     "latency": "レイテンシ",
     "live": "ライブ",
-    "paused": "一時停止"
+    "paused": "一時停止",
+    "strapline": "Wurk, wurk. 準備完了。Zug zug.",
+    "tagline": "Sidekiq + Sidekiq Pro + Sidekiq Enterpriseと100%互換の代替品。永久無料。より高速。",
+    "install": "インストール",
+    "docs": "ドキュメント",
+    "active": "稼働中",
+    "vs_last_hour": "前の1時間との比較",
+    "stable_threshold": "安定しきい値",
+    "above_threshold": "しきい値超過",
+    "system_idle": "システムはアイドル状態",
+    "processing": "処理中",
+    "performance_insight": "パフォーマンス分析",
+    "perf_subtitle": "{range}における処理済みジョブ対失敗ジョブ",
+    "no_history": "まだ履歴がありません — ジョブが実行されるとグラフが埋まります。",
+    "range_1h_desc": "直近1時間",
+    "range_24h_desc": "直近24時間",
+    "range_7d_desc": "直近7日間",
+    "range_30d_desc": "直近30日間"
   },
   "table": {
     "class": "クラス",
@@ -49,26 +72,34 @@
     "concurrency": "同時実行数",
     "busy": "実行中",
     "queues": "キュー",
-    "hostname": "ホスト名"
+    "hostname": "ホスト名",
+    "name": "名前",
+    "type": "種類",
+    "used": "使用中",
+    "limit": "上限",
+    "usage": "使用率",
+    "bid": "BID",
+    "description": "説明",
+    "failures": "失敗数",
+    "progress": "進捗",
+    "created": "作成日時",
+    "elapsed": "経過時間",
+    "schedule": "スケジュール",
+    "select_all": "すべて選択",
+    "select_row": "ジョブを選択"
   },
-  "actions": {
-    "retry": "リトライ",
-    "delete": "削除",
-    "kill": "強制終了",
-    "prev": "前へ",
-    "next": "次へ",
-    "search": "検索",
-    "refresh": "更新"
-  },
-  "common": {
-    "loading": "読み込み中…",
-    "error": "データの読み込みエラー",
-    "empty": "アイテムなし",
-    "page": "ページ",
-    "of": "/",
-    "ms": "ms",
-    "ago": "前",
-    "in": "後"
+  "summaries": {
+    "queues": "アクティブなキューとその深さおよびレイテンシ — キューをクリックしてジョブを確認します。",
+    "retries": "エラーが発生し再実行が予定されているジョブ — クリックするとエラーとバックトレースを確認できます。",
+    "scheduled": "将来の時刻に実行予定のジョブ。",
+    "dead": "すべてのリトライを使い果たしたジョブ — クリックすると失敗内容を確認できます。",
+    "busy": "稼働中のワーカープロセスと現在実行中のジョブ。",
+    "batches": "バッチ化されたジョブとその進捗、成功、失敗。",
+    "limiters": "レートリミッターと現在の使用状況。",
+    "cron": "スケジュールと前回実行を持つ定期(cron)ジョブ — ループをクリックすると実行履歴を確認できます。",
+    "metrics": "スループットと失敗の履歴、およびジョブごとの実行統計。",
+    "profiles": "取得済みのジョブプロファイル — Firefoxプロファイラーで開いてフレームグラフを確認できます。",
+    "search": "JID、クラス名、または引数でキュー・リトライ・スケジュール済み・デッドジョブを横断検索します。"
   },
   "busy": {
     "hosts": "{n} ホスト",
@@ -85,6 +116,144 @@
     "up_for": "稼働",
     "running_jobs": "実行中のジョブ",
     "running_since": "実行開始",
-    "no_running": "このプロセスで実行中のジョブはありません"
+    "no_running": "このプロセスで実行中のジョブはありません",
+    "leader": "リーダー",
+    "leader_title": "このプロセスはクラスターリーダーロックを保持しています"
+  },
+  "cron": {
+    "history_title": "実行履歴",
+    "fired": "発火",
+    "no_history": "実行履歴はまだありません",
+    "last_fire": "前回の発火",
+    "next_fire": "次回の発火"
+  },
+  "job": {
+    "detail": "ジョブ詳細",
+    "class": "クラス",
+    "queue": "キュー",
+    "jid": "JID",
+    "retries": "リトライ",
+    "enqueued": "投入",
+    "at": "スケジュール",
+    "args": "引数",
+    "error": "エラー",
+    "backtrace": "バックトレース"
+  },
+  "search": {
+    "emptyTitle": "ジョブを検索",
+    "emptyHint": "JID、クラス名、または引数を入力してください(2文字以上)。結果はキュー・リトライ・スケジュール済み・デッドジョブにまたがります。",
+    "placeholder": "JID、クラス名、または引数で検索…",
+    "try": "例:",
+    "source": "ソース",
+    "when": "日時",
+    "truncated": "部分的な結果を表示しています — 検索を絞り込んでください。",
+    "result": "“{term}”に{n}件の結果",
+    "results": "“{term}”に{n}件の結果",
+    "kind": {
+      "queue": "キュー",
+      "retry": "リトライ",
+      "scheduled": "スケジュール済み",
+      "dead": "デッド"
+    }
+  },
+  "extension": {
+    "summary": "サードパーティ拡張機能によって提供されています。",
+    "open": "開く",
+    "notRendered": "このタブはサードパーティ拡張機能によって提供されています。wurkはナビゲーションに表示しますが、ダッシュボード内でその画面は描画されません。"
+  },
+  "actions": {
+    "retry": "リトライ",
+    "delete": "削除",
+    "kill": "強制終了",
+    "add_to_queue": "キューに追加",
+    "clear": "クリア",
+    "pause": "一時停止",
+    "unpause": "再開",
+    "pause_hint": "このキューからの新規ジョブの取得を停止します(実行中のジョブは完了します)",
+    "unpause_hint": "このキューからのジョブ取得を再開します",
+    "quiet": "静音化",
+    "stop": "停止",
+    "prev": "前へ",
+    "next": "次へ",
+    "search": "検索",
+    "refresh": "更新",
+    "all_suffix": "すべて",
+    "selected": "{n} 件選択中",
+    "select_hint": "操作するジョブを選択してください",
+    "scope_selected": "選択された{n}件のジョブ",
+    "scope_all": "このセット内のすべてのジョブ",
+    "scope_this_job": "このジョブ",
+    "scope_this_process": "このプロセス",
+    "scope_all_processes": "すべてのプロセス",
+    "confirm": "{action} {scope}? この操作は取り消せません。",
+    "confirm_clear_queue": "\"{name}\"のすべてのジョブをクリアしますか?この操作は取り消せません。",
+    "reset": "リセット",
+    "enqueue": "エンキュー"
+  },
+  "readonly": {
+    "banner": "読み取り専用モード"
+  },
+  "toast": {
+    "failed": "操作に失敗しました。もう一度お試しください。",
+    "readonly": "このダッシュボードは読み取り専用です — 操作は拒否されました。",
+    "gone": "そのジョブはすでに存在しませんでした — 実行済みか削除された可能性があります。",
+    "unavailable": "現在Redisが利用できません。しばらくしてから再度お試しください。",
+    "dismiss": "閉じる",
+    "region": "通知"
+  },
+  "common": {
+    "loading": "読み込み中…",
+    "error": "データの読み込みエラー",
+    "empty": "アイテムなし",
+    "page": "ページ",
+    "of": "/",
+    "ms": "ms",
+    "ago": "前",
+    "in": "後",
+    "load_failed": "このページを読み込めませんでした",
+    "load_failed_hint": "アプリを開いてから更新された可能性があります。再読み込みすると最新版を取得します。",
+    "reload": "再読み込み",
+    "filter_placeholder": "クラスまたはJIDで絞り込み…"
+  },
+  "limiters": {
+    "exhausted": "枯渇",
+    "available": "利用可能"
+  },
+  "queues": {
+    "job_count": "{n} 件のジョブ",
+    "latency_label": "レイテンシ"
+  },
+  "batches": {
+    "children": "子バッチ",
+    "completed": "完了日時",
+    "parent": "親バッチ",
+    "tags": "タグ",
+    "failed_jobs": "失敗したジョブ",
+    "dead_jobs": "デッドジョブ",
+    "complete": "完了",
+    "invalidated": "無効化済み"
+  },
+  "metrics": {
+    "time_range": "期間:",
+    "total_processed": "処理済み合計",
+    "across_all_queues": "全キュー合計",
+    "failed_jobs": "失敗ジョブ数",
+    "total_failures": "失敗合計",
+    "avg_latency": "平均レイテンシ",
+    "head_of_line": "先頭待機時間",
+    "active_workers": "稼働中ワーカー",
+    "stable": "安定",
+    "no_workers": "ワーカーなし",
+    "throughput_failures": "スループットと失敗",
+    "throughput_sub": "{range}のバケットごとの処理済みジョブ",
+    "no_queue_history": "キュー履歴はまだありません。",
+    "queue_depth": "キューの深さ",
+    "peak": "ピーク {n}",
+    "top_job_types": "上位ジョブタイプ(件数)",
+    "job_class": "ジョブクラス",
+    "pct_total": "割合",
+    "queue_latency_seconds": "キューレイテンシ(秒)",
+    "historical_snapshots": "過去のスナップショット",
+    "view_job_detail": "ジョブクラスの詳細を表示"
   }
 }

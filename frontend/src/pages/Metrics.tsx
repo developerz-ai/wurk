@@ -2,8 +2,10 @@ import { useQuery } from '@tanstack/solid-query';
 import { createSignal, createMemo, onMount, For, Show } from 'solid-js';
 import { AreaChart, BarChart, LineChart, type Datum } from '../components/charts';
 import { Skeleton } from '../components/Skeleton';
+import Modal from '../components/Modal';
 import { t } from '../i18n';
 import { formatDuration, truncate } from '../utils';
+import { basePath } from '../basePath';
 
 // Matches Wurk::Api::Serializers.metric_row — processed (successes), failed,
 // and total runtime ms across both.
@@ -17,6 +19,24 @@ interface TopJob {
 interface MetricsResponse {
   minutes: number;
   top_jobs: TopJob[];
+}
+
+// GET /api/metrics/:klass (Wurk::Api::ApiController#metrics_for_job). Wire
+// field names differ from the cluster-wide history endpoints — `p`/`f`/`ms`
+// ride straight off Wurk::Metrics::Query.for_job's rows rather than through
+// the history_point serializer.
+interface JobMetricPoint {
+  at: number;
+  p: number;
+  f: number;
+  ms: number;
+}
+
+interface JobMetricsResponse {
+  klass: string;
+  minutes: number | null;
+  hours: number | null;
+  series: JobMetricPoint[];
 }
 
 interface HistoryPoint {
@@ -138,6 +158,7 @@ function ChartLoader(props: { height: number }) {
 
 export default function Metrics() {
   const [rangeIdx, setRangeIdx] = createSignal(2); // default 7d, matching the mock
+  const [drilldownKlass, setDrilldownKlass] = createSignal<string | null>(null);
   const range = () => RANGES[rangeIdx()];
 
   onMount(() => {
@@ -146,27 +167,27 @@ export default function Metrics() {
 
   const statsQuery = useQuery(() => ({
     queryKey: ['stats'],
-    queryFn: () => fetch('/wurk/api/stats').then((r) => r.json() as Promise<StatsData>),
+    queryFn: () => fetch(`${basePath()}/api/stats`).then((r) => r.json() as Promise<StatsData>),
     refetchInterval: 5000,
   }));
 
   const historyQuery = useQuery(() => ({
     queryKey: ['history', range().bucket, range().window],
     queryFn: () =>
-      fetch(`/wurk/api/history/${range().bucket}?window=${range().window}`).then((r) => r.json() as Promise<HistoryResponse>),
+      fetch(`${basePath()}/api/history/${range().bucket}?window=${range().window}`).then((r) => r.json() as Promise<HistoryResponse>),
     refetchInterval: 30000,
   }));
 
   const metricsQuery = useQuery(() => ({
     queryKey: ['metrics', range().minutes],
-    queryFn: () => fetch(`/wurk/api/metrics?minutes=${range().minutes}`).then((r) => r.json() as Promise<MetricsResponse>),
+    queryFn: () => fetch(`${basePath()}/api/metrics?minutes=${range().minutes}`).then((r) => r.json() as Promise<MetricsResponse>),
     refetchInterval: 30000,
   }));
 
   const queueQuery = useQuery(() => ({
     queryKey: ['queue-history', range().bucket, range().window],
     queryFn: async () => {
-      const r = await fetch(`/wurk/api/queue-history/${range().bucket}?window=${range().window}`);
+      const r = await fetch(`${basePath()}/api/queue-history/${range().bucket}?window=${range().window}`);
       if (!r.ok) throw new Error(`queue-history failed (${r.status})`);
       return r.json() as Promise<QueueHistoryResponse>;
     },
@@ -214,8 +235,8 @@ export default function Metrics() {
   return (
     <div class="obs">
       <div class="obs-toolbar">
-        <span class="obs-toolbar__label"><i class="fa-regular fa-calendar" aria-hidden="true" /> Time Range:</span>
-        <div class="obs-seg" role="tablist" aria-label="Time range">
+        <span class="obs-toolbar__label"><i class="fa-regular fa-calendar" aria-hidden="true" /> {t('metrics.time_range')}</span>
+        <div class="obs-seg" role="tablist" aria-label={t('metrics.time_range')}>
           <For each={RANGES}>
             {(r, i) => (
               <button
@@ -234,53 +255,53 @@ export default function Metrics() {
       <div class="obs-metrics">
         <div class="obs-card obs-metric">
           <div class="obs-metric__head">
-            <span class="obs-mono">Total Processed</span>
+            <span class="obs-mono">{t('metrics.total_processed')}</span>
             <i class="fa-solid fa-circle-check obs-metric__icon" aria-hidden="true" />
           </div>
           <span class="obs-metric__value">
             {(statsQuery.data?.processed ?? 0).toLocaleString()}
             <Delta pct={deltaPct(fullSeries(), 'processed')} goodWhenUp />
           </span>
-          <span class="obs-metric__sub">across all queues</span>
+          <span class="obs-metric__sub">{t('metrics.across_all_queues')}</span>
         </div>
         <div class="obs-card obs-metric">
           <div class="obs-metric__head">
-            <span class="obs-mono">Failed Jobs</span>
+            <span class="obs-mono">{t('metrics.failed_jobs')}</span>
             <i class="fa-solid fa-triangle-exclamation obs-metric__icon" aria-hidden="true" />
           </div>
           <span class="obs-metric__value">
             {(statsQuery.data?.failed ?? 0).toLocaleString()}
             <Delta pct={deltaPct(fullSeries(), 'failed')} goodWhenUp={false} />
           </span>
-          <span class="obs-metric__sub">total failures</span>
+          <span class="obs-metric__sub">{t('metrics.total_failures')}</span>
         </div>
         <div class="obs-card obs-metric">
           <div class="obs-metric__head">
-            <span class="obs-mono">Avg Latency</span>
+            <span class="obs-mono">{t('metrics.avg_latency')}</span>
             <i class="fa-solid fa-stopwatch obs-metric__icon" aria-hidden="true" />
           </div>
           <span class="obs-metric__value">{statsQuery.data ? formatDuration(statsQuery.data.latency) : '—'}</span>
-          <span class="obs-metric__sub">head-of-line</span>
+          <span class="obs-metric__sub">{t('metrics.head_of_line')}</span>
         </div>
         <div class="obs-card obs-metric">
           <div class="obs-metric__head">
-            <span class="obs-mono">Active Workers</span>
+            <span class="obs-mono">{t('metrics.active_workers')}</span>
             <i class="fa-solid fa-gears obs-metric__icon" aria-hidden="true" />
           </div>
           <span class="obs-metric__value">{(statsQuery.data?.processes ?? 0).toLocaleString()}</span>
-          <span class="obs-metric__sub">{(statsQuery.data?.processes ?? 0) > 0 ? 'Stable' : 'No workers'}</span>
+          <span class="obs-metric__sub">{(statsQuery.data?.processes ?? 0) > 0 ? t('metrics.stable') : t('metrics.no_workers')}</span>
         </div>
       </div>
 
       <div class="obs-card obs-panel">
         <div class="obs-panel__head">
           <div>
-            <h2 class="obs-panel__title">Throughput &amp; Failures</h2>
-            <p class="obs-panel__sub">Jobs processed per bucket over the last {range().key}</p>
+            <h2 class="obs-panel__title">{t('metrics.throughput_failures')}</h2>
+            <p class="obs-panel__sub">{t('metrics.throughput_sub', { range: range().key })}</p>
           </div>
           <div class="obs-legend">
-            <span><i class="dot dot--processed" /> Processed</span>
-            <span><i class="dot dot--failed" /> Failed</span>
+            <span><i class="dot dot--processed" /> {t('dashboard.processed')}</span>
+            <span><i class="dot dot--failed" /> {t('dashboard.failed')}</span>
           </div>
         </div>
         <div class="obs-chartbox">
@@ -289,7 +310,7 @@ export default function Metrics() {
               when={hasThroughput()}
               fallback={
                 <div class="empty-state" style={{ height: '300px', display: 'grid', 'place-items': 'center' }}>
-                  No history yet — the chart fills in as jobs run.
+                  {t('dashboard.no_history')}
                 </div>
               }
             >
@@ -300,8 +321,8 @@ export default function Metrics() {
                 yDecimals={false}
                 xMinTickGap={56}
                 series={[
-                  { key: 'processed', name: 'Processed', stroke: '#fafafa', strokeWidth: 2, fill: 'gradient' },
-                  { key: 'failed', name: 'Failed', stroke: '#a1a1aa', strokeWidth: 1.5, strokeDasharray: '5 4', fill: 'none' },
+                  { key: 'processed', name: t('dashboard.processed'), stroke: '#fafafa', strokeWidth: 2, fill: 'gradient' },
+                  { key: 'failed', name: t('dashboard.failed'), stroke: '#a1a1aa', strokeWidth: 1.5, strokeDasharray: '5 4', fill: 'none' },
                 ]}
               />
             </Show>
@@ -312,8 +333,8 @@ export default function Metrics() {
       <div class="obs-grid2">
         <div class="obs-card obs-panel">
           <div class="obs-panel__head">
-            <h2 class="obs-panel__title" style={{ 'font-size': '18px' }}>Queue Depth</h2>
-            <span class="obs-mono">{maxDepth() > 0 ? `peak ${maxDepth().toLocaleString()}` : ''}</span>
+            <h2 class="obs-panel__title" style={{ 'font-size': '18px' }}>{t('metrics.queue_depth')}</h2>
+            <span class="obs-mono">{maxDepth() > 0 ? t('metrics.peak', { n: maxDepth().toLocaleString() }) : ''}</span>
           </div>
           <div class="obs-chartbox">
             <Show when={!queueQuery.isPending} fallback={<ChartLoader height={240} />}>
@@ -321,7 +342,7 @@ export default function Metrics() {
                 when={depthRows().length > 0}
                 fallback={
                   <div class="empty-state" style={{ height: '240px', display: 'grid', 'place-items': 'center' }}>
-                    No queue history yet.
+                    {t('metrics.no_queue_history')}
                   </div>
                 }
               >
@@ -332,7 +353,7 @@ export default function Metrics() {
                     color: r.depth === maxDepth() && maxDepth() > 0 ? '#fafafa' : '#3f3f46',
                   }))}
                   height={240}
-                  name="Depth"
+                  name={t('metrics.queue_depth')}
                   yAxisWidth={36}
                   yDecimals={false}
                   xMinTickGap={40}
@@ -344,7 +365,7 @@ export default function Metrics() {
 
         <div class="obs-card obs-table">
           <div class="obs-table__head">
-            <h2 class="obs-table__title" style={{ 'font-size': '18px' }}>Top Job Types (Volume)</h2>
+            <h2 class="obs-table__title" style={{ 'font-size': '18px' }}>{t('metrics.top_job_types')}</h2>
           </div>
           <Show when={!metricsQuery.isPending} fallback={<ChartLoader height={240} />}>
             <Show when={jobs().length > 0} fallback={<div class="obs-empty">{t('common.empty')}</div>}>
@@ -352,9 +373,9 @@ export default function Metrics() {
                 <table>
                   <thead>
                     <tr>
-                      <th>Job Class</th>
-                      <th style={{ 'text-align': 'end' }}>Count</th>
-                      <th style={{ 'text-align': 'end' }}>% Total</th>
+                      <th>{t('metrics.job_class')}</th>
+                      <th style={{ 'text-align': 'end' }}>{t('table.count')}</th>
+                      <th style={{ 'text-align': 'end' }}>{t('metrics.pct_total')}</th>
                     </tr>
                   </thead>
                   <tbody>
@@ -362,8 +383,15 @@ export default function Metrics() {
                       {(j, i) => (
                         <tr>
                           <td style={{ color: 'var(--obs-text)' }} title={j.klass}>
-                            <span class="obs-jobdot" style={{ background: JOB_DOTS[i() % JOB_DOTS.length] }} />
-                            {truncate(j.klass.split('::').pop() ?? j.klass, 36)}
+                            <button
+                              type="button"
+                              class="obs-jobbtn"
+                              onClick={() => setDrilldownKlass(j.klass)}
+                              title={t('metrics.view_job_detail')}
+                            >
+                              <span class="obs-jobdot" style={{ background: JOB_DOTS[i() % JOB_DOTS.length] }} />
+                              {truncate(j.klass.split('::').pop() ?? j.klass, 36)}
+                            </button>
                           </td>
                           <td style={{ 'text-align': 'end', 'font-variant-numeric': 'tabular-nums' }}>{j.count.toLocaleString()}</td>
                           <td class="obs-pct" style={{ 'text-align': 'end' }}>
@@ -382,7 +410,71 @@ export default function Metrics() {
 
       <QueueLatencyHistory range={range()} />
       <HistoricalSnapshots />
+
+      <JobMetricsModal klass={drilldownKlass()} minutes={range().minutes} onClose={() => setDrilldownKlass(null)} />
     </div>
+  );
+}
+
+// Per-job-class drill-down (#29): clicking a Top Job Types row opens this
+// modal, which hits the previously-unused GET /api/metrics/:klass with the
+// same window as the toolbar range so the chart matches what's on screen.
+function JobMetricsModal(props: { klass: string | null; minutes: number; onClose: () => void }) {
+  const data = useQuery(() => ({
+    queryKey: ['metrics-job', props.klass, props.minutes],
+    queryFn: async () => {
+      const r = await fetch(`${basePath()}/api/metrics/${encodeURIComponent(props.klass!)}?minutes=${props.minutes}`);
+      if (!r.ok) throw new Error(`metrics-job failed (${r.status})`);
+      return r.json() as Promise<JobMetricsResponse>;
+    },
+    enabled: props.klass !== null,
+  }));
+
+  const rows = createMemo(() =>
+    (data.data?.series ?? []).map((p) => ({ label: fmtBucket(p.at, '1m'), processed: p.p, failed: p.f, runtime_ms: p.ms })),
+  );
+  const hasData = createMemo(() => rows().some((r) => r.processed > 0 || r.failed > 0));
+  const totals = createMemo(() => rows().reduce((acc, r) => ({ processed: acc.processed + r.processed, failed: acc.failed + r.failed }), { processed: 0, failed: 0 }));
+
+  return (
+    <Modal open={props.klass !== null} onClose={props.onClose} title={props.klass ?? ''} width={720}>
+      <Show when={props.klass}>
+        <div style={{ display: 'flex', gap: '1.5rem', 'margin-bottom': '1rem' }}>
+          <div>
+            <div class="obs-mono">{t('dashboard.processed')}</div>
+            <div style={{ 'font-size': '18px', 'font-weight': 600 }}>{totals().processed.toLocaleString()}</div>
+          </div>
+          <div>
+            <div class="obs-mono">{t('dashboard.failed')}</div>
+            <div style={{ 'font-size': '18px', 'font-weight': 600, color: 'var(--danger)' }}>{totals().failed.toLocaleString()}</div>
+          </div>
+        </div>
+        <Show when={!data.isPending} fallback={<ChartLoader height={240} />}>
+          <Show
+            when={!data.isError}
+            fallback={<div class="empty-state" style={{ height: '240px', display: 'grid', 'place-items': 'center' }}>{t('common.error')}</div>}
+          >
+            <Show
+              when={hasData()}
+              fallback={<div class="empty-state" style={{ height: '240px', display: 'grid', 'place-items': 'center' }}>{t('dashboard.no_history')}</div>}
+            >
+              <LineChart
+                data={rows()}
+                height={240}
+                yAxisWidth={36}
+                yDecimals={false}
+                xMinTickGap={48}
+                legend
+                series={[
+                  { key: 'processed', name: t('dashboard.processed'), stroke: '#fafafa', strokeWidth: 2 },
+                  { key: 'failed', name: t('dashboard.failed'), stroke: '#a1a1aa', strokeWidth: 1.5 },
+                ]}
+              />
+            </Show>
+          </Show>
+        </Show>
+      </Show>
+    </Modal>
   );
 }
 
@@ -392,7 +484,7 @@ function QueueLatencyHistory(props: { range: (typeof RANGES)[number] }) {
   const data = useQuery(() => ({
     queryKey: ['queue-history-lat', props.range.bucket, props.range.window],
     queryFn: async () => {
-      const r = await fetch(`/wurk/api/queue-history/${props.range.bucket}?window=${props.range.window}`);
+      const r = await fetch(`${basePath()}/api/queue-history/${props.range.bucket}?window=${props.range.window}`);
       if (!r.ok) throw new Error(`queue-history failed (${r.status})`);
       return r.json() as Promise<QueueHistoryResponse>;
     },
@@ -421,7 +513,7 @@ function QueueLatencyHistory(props: { range: (typeof RANGES)[number] }) {
     <Show when={hasData()}>
       <div class="obs-card obs-panel">
         <div class="obs-panel__head">
-          <h2 class="obs-panel__title" style={{ 'font-size': '18px' }}>Queue Latency (seconds)</h2>
+          <h2 class="obs-panel__title" style={{ 'font-size': '18px' }}>{t('metrics.queue_latency_seconds')}</h2>
         </div>
         <div class="obs-chartbox">
           <LineChart data={rows()} series={lineSeries()} height={240} legend yAxisWidth={40} xMinTickGap={48} />
@@ -441,7 +533,7 @@ function HistoricalSnapshots() {
   const data = useQuery(() => ({
     queryKey: ['history-snapshots'],
     queryFn: async () => {
-      const r = await fetch('/wurk/api/history/snapshots?limit=1000');
+      const r = await fetch(`${basePath()}/api/history/snapshots?limit=1000`);
       if (!r.ok) throw new Error(`history snapshots request failed (${r.status})`);
       return r.json() as Promise<{ snapshots: Snapshot[] }>;
     },
@@ -474,7 +566,7 @@ function HistoricalSnapshots() {
     <Show when={snapshots().length > 0 && fields().length > 0}>
       <div class="obs-card obs-panel">
         <div class="obs-panel__head">
-          <h2 class="obs-panel__title" style={{ 'font-size': '18px' }}>Historical Snapshots</h2>
+          <h2 class="obs-panel__title" style={{ 'font-size': '18px' }}>{t('metrics.historical_snapshots')}</h2>
         </div>
         <div class="obs-chartbox">
           <LineChart data={rows()} series={lineSeries()} height={240} legend yAxisWidth={40} yDecimals={false} xMinTickGap={48} />

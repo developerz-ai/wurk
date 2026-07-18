@@ -10,7 +10,13 @@
     "limiters": "限制器",
     "cron": "定时任务",
     "metrics": "指标",
-    "search": "搜索"
+    "profiles": "性能分析",
+    "search": "搜索",
+    "extensions": "扩展",
+    "collapse": "折叠",
+    "expand": "展开",
+    "status_active": "系统状态：运行中",
+    "status_inactive": "系统状态：已断开"
   },
   "dashboard": {
     "processed": "已处理",
@@ -24,7 +30,24 @@
     "processes": "进程",
     "latency": "延迟",
     "live": "实时",
-    "paused": "已暂停"
+    "paused": "已暂停",
+    "strapline": "Wurk, wurk. 准备就绪。Zug zug.",
+    "tagline": "与Sidekiq + Sidekiq Pro + Sidekiq Enterprise 100%兼容的替代品。永久免费，更快。",
+    "install": "安装",
+    "docs": "文档",
+    "active": "活跃",
+    "vs_last_hour": "与上一小时相比",
+    "stable_threshold": "稳定阈值",
+    "above_threshold": "超过阈值",
+    "system_idle": "系统空闲",
+    "processing": "处理中",
+    "performance_insight": "性能洞察",
+    "perf_subtitle": "{range}内已处理与失败的任务",
+    "no_history": "暂无历史数据 — 图表将随任务运行逐渐填充。",
+    "range_1h_desc": "过去1小时",
+    "range_24h_desc": "过去24小时",
+    "range_7d_desc": "过去7天",
+    "range_30d_desc": "过去30天"
   },
   "table": {
     "class": "类",
@@ -49,26 +72,34 @@
     "concurrency": "并发数",
     "busy": "繁忙",
     "queues": "队列",
-    "hostname": "主机名"
+    "hostname": "主机名",
+    "name": "名称",
+    "type": "类型",
+    "used": "已用",
+    "limit": "上限",
+    "usage": "用量",
+    "bid": "BID",
+    "description": "描述",
+    "failures": "失败数",
+    "progress": "进度",
+    "created": "创建时间",
+    "elapsed": "耗时",
+    "schedule": "调度计划",
+    "select_all": "全选",
+    "select_row": "选择任务"
   },
-  "actions": {
-    "retry": "重试",
-    "delete": "删除",
-    "kill": "终止",
-    "prev": "上一页",
-    "next": "下一页",
-    "search": "搜索",
-    "refresh": "刷新"
-  },
-  "common": {
-    "loading": "加载中…",
-    "error": "加载数据出错",
-    "empty": "暂无数据",
-    "page": "第",
-    "of": "共",
-    "ms": "ms",
-    "ago": "前",
-    "in": "后"
+  "summaries": {
+    "queues": "活跃队列及其深度和延迟 — 点击队列可查看其任务。",
+    "retries": "引发错误并计划重试的任务 — 点击可查看错误和调用栈。",
+    "scheduled": "计划在未来某时间运行的任务。",
+    "dead": "已用尽所有重试次数的任务 — 点击可查看失败详情。",
+    "busy": "实时工作进程及其当前运行的任务。",
+    "batches": "批处理任务及其进度、成功和失败情况。",
+    "limiters": "速率限制器及其当前使用情况。",
+    "cron": "带有调度计划和上次运行时间的定期(cron)任务 — 点击某个循环可查看其执行历史。",
+    "metrics": "吞吐量与失败历史，以及各任务的执行统计。",
+    "profiles": "已捕获的任务性能分析 — 在Firefox性能分析器中打开以查看火焰图。",
+    "search": "按JID、类名或参数跨队列、重试、计划任务和死亡任务查找某个任务。"
   },
   "busy": {
     "hosts": "{n} 台主机",
@@ -85,6 +116,144 @@
     "up_for": "已运行",
     "running_jobs": "运行中的任务",
     "running_since": "开始运行于",
-    "no_running": "此进程当前没有运行中的任务"
+    "no_running": "此进程当前没有运行中的任务",
+    "leader": "领导者",
+    "leader_title": "该进程持有集群领导者锁"
+  },
+  "cron": {
+    "history_title": "执行历史",
+    "fired": "已触发",
+    "no_history": "暂无执行记录",
+    "last_fire": "上次触发",
+    "next_fire": "下次触发"
+  },
+  "job": {
+    "detail": "任务详情",
+    "class": "类",
+    "queue": "队列",
+    "jid": "JID",
+    "retries": "重试",
+    "enqueued": "已入队",
+    "at": "计划时间",
+    "args": "参数",
+    "error": "错误",
+    "backtrace": "调用栈"
+  },
+  "search": {
+    "emptyTitle": "搜索任务",
+    "emptyHint": "输入JID、类名或参数（2个字符以上）。结果涵盖队列、重试、计划任务和死亡任务。",
+    "placeholder": "按JID、类名或参数搜索…",
+    "try": "试试：",
+    "source": "来源",
+    "when": "时间",
+    "truncated": "当前显示部分结果 — 请缩小搜索范围。",
+    "result": "“{term}”的{n}条结果",
+    "results": "“{term}”的{n}条结果",
+    "kind": {
+      "queue": "队列",
+      "retry": "重试",
+      "scheduled": "计划任务",
+      "dead": "死亡任务"
+    }
+  },
+  "extension": {
+    "summary": "由第三方扩展提供。",
+    "open": "打开",
+    "notRendered": "此标签页由第三方扩展提供。wurk会在导航中显示它，但不会在仪表盘内渲染其视图。"
+  },
+  "actions": {
+    "retry": "重试",
+    "delete": "删除",
+    "kill": "终止",
+    "add_to_queue": "添加到队列",
+    "clear": "清空",
+    "pause": "暂停",
+    "unpause": "恢复",
+    "pause_hint": "停止从此队列获取新任务（进行中的任务会完成）",
+    "unpause_hint": "恢复从此队列获取任务",
+    "quiet": "静默",
+    "stop": "停止",
+    "prev": "上一页",
+    "next": "下一页",
+    "search": "搜索",
+    "refresh": "刷新",
+    "all_suffix": "全部",
+    "selected": "已选 {n} 项",
+    "select_hint": "选择要操作的任务",
+    "scope_selected": "已选 {n} 个任务",
+    "scope_all": "此集合中的所有任务",
+    "scope_this_job": "此任务",
+    "scope_this_process": "此进程",
+    "scope_all_processes": "所有进程",
+    "confirm": "{action}{scope}？此操作无法撤销。",
+    "confirm_clear_queue": "清空\"{name}\"中的所有任务？此操作无法撤销。",
+    "reset": "重置",
+    "enqueue": "入队"
+  },
+  "readonly": {
+    "banner": "只读模式"
+  },
+  "toast": {
+    "failed": "操作失败，请重试。",
+    "readonly": "此仪表盘为只读模式 — 操作已被拒绝。",
+    "gone": "该任务已不存在 — 可能已运行或被移除。",
+    "unavailable": "Redis当前不可用，请稍后重试。",
+    "dismiss": "关闭",
+    "region": "通知"
+  },
+  "common": {
+    "loading": "加载中…",
+    "error": "加载数据出错",
+    "empty": "暂无数据",
+    "page": "第",
+    "of": "共",
+    "ms": "ms",
+    "ago": "前",
+    "in": "后",
+    "load_failed": "无法加载此页面",
+    "load_failed_hint": "应用自打开后可能已更新。重新加载将获取最新版本。",
+    "reload": "重新加载",
+    "filter_placeholder": "按类名或 JID 筛选…"
+  },
+  "limiters": {
+    "exhausted": "已耗尽",
+    "available": "可用"
+  },
+  "queues": {
+    "job_count": "{n} 个任务",
+    "latency_label": "延迟"
+  },
+  "batches": {
+    "children": "子批次",
+    "completed": "完成时间",
+    "parent": "父批次",
+    "tags": "标签",
+    "failed_jobs": "失败任务",
+    "dead_jobs": "死亡任务",
+    "complete": "已完成",
+    "invalidated": "已失效"
+  },
+  "metrics": {
+    "time_range": "时间范围：",
+    "total_processed": "处理总数",
+    "across_all_queues": "覆盖所有队列",
+    "failed_jobs": "失败任务数",
+    "total_failures": "失败总数",
+    "avg_latency": "平均延迟",
+    "head_of_line": "队首延迟",
+    "active_workers": "活跃工作进程",
+    "stable": "稳定",
+    "no_workers": "无工作进程",
+    "throughput_failures": "吞吐量与失败",
+    "throughput_sub": "{range}内每个时间段处理的任务",
+    "no_queue_history": "暂无队列历史。",
+    "queue_depth": "队列深度",
+    "peak": "峰值 {n}",
+    "top_job_types": "热门任务类型（数量）",
+    "job_class": "任务类",
+    "pct_total": "占比",
+    "queue_latency_seconds": "队列延迟（秒）",
+    "historical_snapshots": "历史快照",
+    "view_job_detail": "查看任务类详情"
   }
 }

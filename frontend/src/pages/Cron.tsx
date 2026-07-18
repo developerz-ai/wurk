@@ -8,8 +8,11 @@ import { relativeTime, isoTime, truncate } from '../utils';
 import { useMeta } from '../hooks/useMeta';
 import { SortableTh } from '../components/SortableTh';
 import { useSort, type Accessors } from '../hooks/useSort';
+import { basePath } from '../basePath';
+import { post } from '../http';
+import { notifyError } from '../toast';
 
-// Newest-first [fired_at, jid] tuples from GET /wurk/api/cron/:lid/history.
+// Newest-first [fired_at, jid] tuples from GET <mount>/api/cron/:lid/history.
 type HistoryEntry = [number, string];
 
 interface CronLoop {
@@ -45,30 +48,31 @@ export default function Cron() {
 
   const q = useQuery<CronLoop[]>(() => ({
     queryKey: ['cron'],
-    queryFn: () => fetch('/wurk/api/cron').then((r) => r.json() as Promise<CronLoop[]>),
+    queryFn: () => fetch(`${basePath()}/api/cron`).then((r) => r.json() as Promise<CronLoop[]>),
     refetchInterval: 15000,
   }));
 
   // pause/unpause/enqueue skip CSRF (see ApiController#skip_forgery_protection).
-  const post = (lid: string, action: string) =>
-    fetch(`/wurk/api/cron/${lid}/${action}`, { method: 'POST' });
+  const call = (lid: string, action: string) => post(`${basePath()}/api/cron/${lid}/${action}`);
 
   const setPaused = useMutation(() => ({
     mutationFn: ({ lid, paused }: { lid: string; paused: boolean }) =>
-      post(lid, paused ? 'unpause' : 'pause'),
+      call(lid, paused ? 'unpause' : 'pause'),
     onSuccess: () => qc.invalidateQueries({ queryKey: ['cron'] }),
+    onError: notifyError,
   }));
 
   const enqueueNow = useMutation(() => ({
-    mutationFn: (lid: string) => post(lid, 'enqueue'),
+    mutationFn: (lid: string) => call(lid, 'enqueue'),
     onSuccess: () => qc.invalidateQueries({ queryKey: ['cron'] }),
+    onError: notifyError,
   }));
 
   // Per-loop run history — fetched on demand when a row opens the modal.
   const historyQ = useQuery<HistoryEntry[]>(() => ({
     queryKey: ['cron-history', historyLoop()?.lid],
     queryFn: () =>
-      fetch(`/wurk/api/cron/${historyLoop()!.lid}/history`)
+      fetch(`${basePath()}/api/cron/${historyLoop()!.lid}/history`)
         .then((r) => r.json() as Promise<{ history: HistoryEntry[] }>)
         .then((d) => d.history),
     enabled: historyLoop() !== null,
@@ -99,11 +103,11 @@ export default function Cron() {
                 <table>
                   <thead>
                     <tr>
-                      <SortableTh label="Schedule" sortKey="schedule" sort={sort()} onSort={toggle} />
+                      <SortableTh label={t('table.schedule')} sortKey="schedule" sort={sort()} onSort={toggle} />
                       <SortableTh label={t('table.class')} sortKey="klass" sort={sort()} onSort={toggle} />
                       <SortableTh label={t('table.queue')} sortKey="queue" sort={sort()} onSort={toggle} />
-                      <SortableTh label="Last fire" sortKey="last_fire" sort={sort()} onSort={toggle} />
-                      <SortableTh label="Next fire" sortKey="next_fire" sort={sort()} onSort={toggle} />
+                      <SortableTh label={t('cron.last_fire')} sortKey="last_fire" sort={sort()} onSort={toggle} />
+                      <SortableTh label={t('cron.next_fire')} sortKey="next_fire" sort={sort()} onSort={toggle} />
                       <SortableTh label={t('table.status')} sortKey="status" sort={sort()} onSort={toggle} />
                       <Show when={!readOnly()}><th /></Show>
                     </tr>
@@ -127,8 +131,8 @@ export default function Cron() {
                             {loop.paused ? '—' : loop.next_fire_at ? relativeTime(loop.next_fire_at) : '—'}
                           </td>
                           <td>
-                            <Show when={loop.paused} fallback={<span class="badge badge-success">active</span>}>
-                              <span class="badge badge-muted">paused</span>
+                            <Show when={loop.paused} fallback={<span class="badge badge-success">{t('dashboard.active')}</span>}>
+                              <span class="badge badge-muted">{t('dashboard.paused')}</span>
                             </Show>
                           </td>
                           <Show when={!readOnly()}>
@@ -139,14 +143,14 @@ export default function Cron() {
                                   disabled={setPaused.isPending}
                                   onClick={() => setPaused.mutate({ lid: loop.lid, paused: loop.paused })}
                                 >
-                                  {loop.paused ? 'Resume' : 'Pause'}
+                                  {loop.paused ? t('actions.unpause') : t('actions.pause')}
                                 </button>
                                 <button
                                   class="btn btn-sm"
                                   disabled={enqueueNow.isPending}
                                   onClick={() => enqueueNow.mutate(loop.lid)}
                                 >
-                                  Enqueue
+                                  {t('actions.enqueue')}
                                 </button>
                               </div>
                             </td>

@@ -10,7 +10,13 @@
     "limiters": "Limitadores",
     "cron": "Cron",
     "metrics": "Métricas",
-    "search": "Buscar"
+    "profiles": "Perfiles",
+    "search": "Buscar",
+    "extensions": "Extensiones",
+    "collapse": "Contraer",
+    "expand": "Expandir",
+    "status_active": "Estado del sistema: Activo",
+    "status_inactive": "Estado del sistema: Desconectado"
   },
   "dashboard": {
     "processed": "Procesados",
@@ -24,7 +30,24 @@
     "processes": "Procesos",
     "latency": "Latencia",
     "live": "En vivo",
-    "paused": "Pausado"
+    "paused": "Pausado",
+    "strapline": "Wurk, wurk. Listo para trabajar. Zug zug.",
+    "tagline": "Un reemplazo 100% compatible con Sidekiq + Sidekiq Pro + Sidekiq Enterprise. Gratis para siempre. Más rápido.",
+    "install": "Instalar",
+    "docs": "Documentación",
+    "active": "Activo",
+    "vs_last_hour": "vs. la última hora",
+    "stable_threshold": "Umbral estable",
+    "above_threshold": "Sobre el umbral",
+    "system_idle": "Sistema inactivo",
+    "processing": "Procesando",
+    "performance_insight": "Análisis de rendimiento",
+    "perf_subtitle": "Trabajos procesados frente a fallidos durante {range}",
+    "no_history": "Aún no hay historial — el gráfico se completa a medida que se ejecutan los trabajos.",
+    "range_1h_desc": "la última hora",
+    "range_24h_desc": "las últimas 24 horas",
+    "range_7d_desc": "los últimos 7 días",
+    "range_30d_desc": "los últimos 30 días"
   },
   "table": {
     "class": "Clase",
@@ -49,26 +72,34 @@
     "concurrency": "Concurrencia",
     "busy": "Ocupado",
     "queues": "Colas",
-    "hostname": "Host"
+    "hostname": "Host",
+    "name": "Nombre",
+    "type": "Tipo",
+    "used": "Usado",
+    "limit": "Límite",
+    "usage": "Uso",
+    "bid": "BID",
+    "description": "Descripción",
+    "failures": "Fallos",
+    "progress": "Progreso",
+    "created": "Creado",
+    "elapsed": "Transcurrido",
+    "schedule": "Programación",
+    "select_all": "Seleccionar todo",
+    "select_row": "Seleccionar trabajo"
   },
-  "actions": {
-    "retry": "Reintentar",
-    "delete": "Eliminar",
-    "kill": "Matar",
-    "prev": "Anterior",
-    "next": "Siguiente",
-    "search": "Buscar",
-    "refresh": "Actualizar"
-  },
-  "common": {
-    "loading": "Cargando…",
-    "error": "Error al cargar datos",
-    "empty": "Sin elementos",
-    "page": "Página",
-    "of": "de",
-    "ms": "ms",
-    "ago": "hace",
-    "in": "en"
+  "summaries": {
+    "queues": "Colas activas con su profundidad y latencia — haz clic en una cola para inspeccionar sus trabajos.",
+    "retries": "Trabajos que generaron un error y están programados para reintentarse — haz clic en uno para ver el error y el backtrace.",
+    "scheduled": "Trabajos encolados para ejecutarse en un momento futuro.",
+    "dead": "Trabajos que agotaron todos los reintentos — haz clic en uno para inspeccionar el fallo.",
+    "busy": "Procesos de trabajo en vivo y los trabajos que están ejecutando actualmente.",
+    "batches": "Trabajos en lote y su progreso, éxitos y fallos.",
+    "limiters": "Limitadores de tasa y su uso actual.",
+    "cron": "Trabajos periódicos (cron) con su programación y última ejecución — haz clic en un loop para ver su historial de ejecución.",
+    "metrics": "Historial de rendimiento y fallos, con estadísticas de ejecución por trabajo.",
+    "profiles": "Perfiles de trabajos capturados — abre uno en el profiler de Firefox para inspeccionar su flame graph.",
+    "search": "Busca un trabajo en colas, reintentos, programados y muertos por JID, nombre de clase o argumento."
   },
   "busy": {
     "hosts": "{n} hosts",
@@ -85,6 +116,144 @@
     "up_for": "activo",
     "running_jobs": "Trabajos en ejecución",
     "running_since": "En ejecución desde",
-    "no_running": "No hay trabajos en ejecución en este proceso"
+    "no_running": "No hay trabajos en ejecución en este proceso",
+    "leader": "Líder",
+    "leader_title": "Este proceso mantiene el bloqueo de líder del clúster"
+  },
+  "cron": {
+    "history_title": "Historial de ejecución",
+    "fired": "Disparado",
+    "no_history": "Aún no hay ejecuciones registradas",
+    "last_fire": "Última ejecución",
+    "next_fire": "Próxima ejecución"
+  },
+  "job": {
+    "detail": "Detalle del trabajo",
+    "class": "Clase",
+    "queue": "Cola",
+    "jid": "JID",
+    "retries": "Reintentos",
+    "enqueued": "Encolado",
+    "at": "Programado",
+    "args": "Argumentos",
+    "error": "Error",
+    "backtrace": "Backtrace"
+  },
+  "search": {
+    "emptyTitle": "Buscar un trabajo",
+    "emptyHint": "Introduce un JID, nombre de clase o argumento (2+ caracteres). Los resultados abarcan colas, reintentos, programados y muertos.",
+    "placeholder": "Buscar por JID, nombre de clase o argumento…",
+    "try": "Prueba:",
+    "source": "Origen",
+    "when": "Cuándo",
+    "truncated": "Mostrando resultados parciales — refina tu búsqueda para acotarla.",
+    "result": "{n} resultado para “{term}”",
+    "results": "{n} resultados para “{term}”",
+    "kind": {
+      "queue": "Cola",
+      "retry": "Reintento",
+      "scheduled": "Programado",
+      "dead": "Muerto"
+    }
+  },
+  "extension": {
+    "summary": "Proporcionado por una extensión de terceros.",
+    "open": "Abrir",
+    "notRendered": "Esta pestaña es proporcionada por una extensión de terceros. wurk la muestra en la navegación pero no renderiza su vista dentro del panel."
+  },
+  "actions": {
+    "retry": "Reintentar",
+    "delete": "Eliminar",
+    "kill": "Matar",
+    "add_to_queue": "Añadir a la cola",
+    "clear": "Vaciar",
+    "pause": "Pausar",
+    "unpause": "Reanudar",
+    "pause_hint": "Detener la obtención de nuevos trabajos de esta cola (los trabajos en curso terminan)",
+    "unpause_hint": "Reanudar la obtención de trabajos de esta cola",
+    "quiet": "Silenciar",
+    "stop": "Detener",
+    "prev": "Anterior",
+    "next": "Siguiente",
+    "search": "Buscar",
+    "refresh": "Actualizar",
+    "all_suffix": "Todo",
+    "selected": "{n} seleccionados",
+    "select_hint": "Selecciona trabajos para actuar sobre ellos",
+    "scope_selected": "{n} trabajo(s) seleccionados",
+    "scope_all": "todos los trabajos de este conjunto",
+    "scope_this_job": "este trabajo",
+    "scope_this_process": "este proceso",
+    "scope_all_processes": "todos los procesos",
+    "confirm": "¿{action} {scope}? Esto no se puede deshacer.",
+    "confirm_clear_queue": "¿Vaciar todos los trabajos de \"{name}\"? Esto no se puede deshacer.",
+    "reset": "Reiniciar",
+    "enqueue": "Encolar"
+  },
+  "readonly": {
+    "banner": "Modo de solo lectura"
+  },
+  "toast": {
+    "failed": "La acción falló. Inténtalo de nuevo.",
+    "readonly": "Este panel es de solo lectura — la acción fue rechazada.",
+    "gone": "Ese trabajo ya no estaba — puede que se haya ejecutado o eliminado.",
+    "unavailable": "Redis no está disponible ahora mismo. Inténtalo de nuevo en un momento.",
+    "dismiss": "Descartar",
+    "region": "Notificaciones"
+  },
+  "common": {
+    "loading": "Cargando…",
+    "error": "Error al cargar datos",
+    "empty": "Sin elementos",
+    "page": "Página",
+    "of": "de",
+    "ms": "ms",
+    "ago": "hace",
+    "in": "en",
+    "load_failed": "No se pudo cargar esta página",
+    "load_failed_hint": "La aplicación puede haberse actualizado desde que la abriste. Recargar obtendrá la última versión.",
+    "reload": "Recargar",
+    "filter_placeholder": "Filtrar por clase o JID…"
+  },
+  "limiters": {
+    "exhausted": "agotado",
+    "available": "disponible"
+  },
+  "queues": {
+    "job_count": "{n} trabajos",
+    "latency_label": "latencia"
+  },
+  "batches": {
+    "children": "Hijos",
+    "completed": "Completado",
+    "parent": "Padre",
+    "tags": "Etiquetas",
+    "failed_jobs": "Trabajos fallidos",
+    "dead_jobs": "Trabajos muertos",
+    "complete": "completo",
+    "invalidated": "invalidado"
+  },
+  "metrics": {
+    "time_range": "Rango de tiempo:",
+    "total_processed": "Total procesados",
+    "across_all_queues": "en todas las colas",
+    "failed_jobs": "Trabajos fallidos",
+    "total_failures": "fallos totales",
+    "avg_latency": "Latencia media",
+    "head_of_line": "cabeza de línea",
+    "active_workers": "Workers activos",
+    "stable": "Estable",
+    "no_workers": "Sin workers",
+    "throughput_failures": "Rendimiento y fallos",
+    "throughput_sub": "Trabajos procesados por intervalo durante {range}",
+    "no_queue_history": "Aún no hay historial de colas.",
+    "queue_depth": "Profundidad de cola",
+    "peak": "pico {n}",
+    "top_job_types": "Principales tipos de trabajo (volumen)",
+    "job_class": "Clase de trabajo",
+    "pct_total": "% del total",
+    "queue_latency_seconds": "Latencia de cola (segundos)",
+    "historical_snapshots": "Instantáneas históricas",
+    "view_job_detail": "Ver detalle de la clase de trabajo"
   }
 }

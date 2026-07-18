@@ -14,7 +14,9 @@
     "search": "Search",
     "extensions": "Extensions",
     "collapse": "Collapse",
-    "expand": "Expand"
+    "expand": "Expand",
+    "status_active": "System Status: Active",
+    "status_inactive": "System Status: Disconnected"
   },
   "dashboard": {
     "processed": "Processed",
@@ -70,7 +72,21 @@
     "concurrency": "Concurrency",
     "busy": "Busy",
     "queues": "Queues",
-    "hostname": "Hostname"
+    "hostname": "Hostname",
+    "name": "Name",
+    "type": "Type",
+    "used": "Used",
+    "limit": "Limit",
+    "usage": "Usage",
+    "bid": "BID",
+    "description": "Description",
+    "failures": "Failures",
+    "progress": "Progress",
+    "created": "Created",
+    "elapsed": "Elapsed",
+    "schedule": "Schedule",
+    "select_all": "Select all",
+    "select_row": "Select job"
   },
   "summaries": {
     "queues": "Active queues with their depth and latency — click a queue to inspect its jobs.",
@@ -83,7 +99,7 @@
     "cron": "Periodic (cron) jobs with their schedule and last run — click a loop to see its execution history.",
     "metrics": "Throughput and failure history, with per-job execution stats.",
     "profiles": "Captured job profiles — open one in the Firefox profiler to inspect its flame graph.",
-    "search": "Find a job across retries, scheduled, and dead by JID or class name."
+    "search": "Find a job across queues, retries, scheduled, and dead by JID, class name, or argument."
   },
   "busy": {
     "hosts": "{n} hosts",
@@ -100,12 +116,16 @@
     "up_for": "up",
     "running_jobs": "Running jobs",
     "running_since": "Running Since",
-    "no_running": "No jobs currently running on this process"
+    "no_running": "No jobs currently running on this process",
+    "leader": "Leader",
+    "leader_title": "This process holds the cluster leader lock"
   },
   "cron": {
     "history_title": "Execution history",
     "fired": "Fired",
-    "no_history": "No runs recorded yet"
+    "no_history": "No runs recorded yet",
+    "last_fire": "Last fire",
+    "next_fire": "Next fire"
   },
   "job": {
     "detail": "Job detail",
@@ -121,8 +141,20 @@
   },
   "search": {
     "emptyTitle": "Search for a job",
-    "emptyHint": "Enter a JID or class name (2+ characters) and hit Search. Results span retries, scheduled, and dead jobs.",
-    "try": "Try:"
+    "emptyHint": "Enter a JID, class name, or argument (2+ characters). Results span queues, retries, scheduled, and dead jobs.",
+    "placeholder": "Search by JID, class name, or argument…",
+    "try": "Try:",
+    "source": "Source",
+    "when": "When",
+    "truncated": "Showing partial results — refine your search to narrow it down.",
+    "result": "{n} result for “{term}”",
+    "results": "{n} results for “{term}”",
+    "kind": {
+      "queue": "Queue",
+      "retry": "Retry",
+      "scheduled": "Scheduled",
+      "dead": "Dead"
+    }
   },
   "extension": {
     "summary": "Provided by a third-party extension.",
@@ -154,10 +186,20 @@
     "scope_this_process": "this process",
     "scope_all_processes": "all processes",
     "confirm": "{action} {scope}? This cannot be undone.",
-    "confirm_clear_queue": "Clear all jobs from \"{name}\"? This cannot be undone."
+    "confirm_clear_queue": "Clear all jobs from \"{name}\"? This cannot be undone.",
+    "reset": "Reset",
+    "enqueue": "Enqueue"
   },
   "readonly": {
     "banner": "Read-only mode"
+  },
+  "toast": {
+    "failed": "Action failed. Please try again.",
+    "readonly": "This dashboard is read-only — the action was rejected.",
+    "gone": "That job was already gone — it may have run or been removed.",
+    "unavailable": "Redis is unavailable right now. Try again in a moment.",
+    "dismiss": "Dismiss",
+    "region": "Notifications"
   },
   "common": {
     "loading": "Loading…",
@@ -170,6 +212,48 @@
     "in": "in",
     "load_failed": "Couldn't load this page",
     "load_failed_hint": "The app may have updated since you opened it. Reloading will fetch the latest version.",
-    "reload": "Reload"
+    "reload": "Reload",
+    "filter_placeholder": "Filter by class or JID…"
+  },
+  "limiters": {
+    "exhausted": "exhausted",
+    "available": "available"
+  },
+  "queues": {
+    "job_count": "{n} jobs",
+    "latency_label": "latency"
+  },
+  "batches": {
+    "children": "Children",
+    "completed": "Completed",
+    "parent": "Parent",
+    "tags": "Tags",
+    "failed_jobs": "Failed jobs",
+    "dead_jobs": "Dead jobs",
+    "complete": "complete",
+    "invalidated": "invalidated"
+  },
+  "metrics": {
+    "time_range": "Time Range:",
+    "total_processed": "Total Processed",
+    "across_all_queues": "across all queues",
+    "failed_jobs": "Failed Jobs",
+    "total_failures": "total failures",
+    "avg_latency": "Avg Latency",
+    "head_of_line": "head-of-line",
+    "active_workers": "Active Workers",
+    "stable": "Stable",
+    "no_workers": "No workers",
+    "throughput_failures": "Throughput & Failures",
+    "throughput_sub": "Jobs processed per bucket over the last {range}",
+    "no_queue_history": "No queue history yet.",
+    "queue_depth": "Queue Depth",
+    "peak": "peak {n}",
+    "top_job_types": "Top Job Types (Volume)",
+    "job_class": "Job Class",
+    "pct_total": "% Total",
+    "queue_latency_seconds": "Queue Latency (seconds)",
+    "historical_snapshots": "Historical Snapshots",
+    "view_job_detail": "View job class detail"
   }
 }

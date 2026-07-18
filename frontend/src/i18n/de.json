@@ -10,7 +10,13 @@
     "limiters": "Begrenzer",
     "cron": "Cron",
     "metrics": "Metriken",
-    "search": "Suche"
+    "profiles": "Profile",
+    "search": "Suche",
+    "extensions": "Erweiterungen",
+    "collapse": "Einklappen",
+    "expand": "Ausklappen",
+    "status_active": "Systemstatus: Aktiv",
+    "status_inactive": "Systemstatus: Getrennt"
   },
   "dashboard": {
     "processed": "Verarbeitet",
@@ -24,7 +30,24 @@
     "processes": "Prozesse",
     "latency": "Latenz",
     "live": "Live",
-    "paused": "Pausiert"
+    "paused": "Pausiert",
+    "strapline": "Wurk, wurk. Bereit zur Arbeit. Zug zug.",
+    "tagline": "Ein 100% kompatibler Ersatz für Sidekiq + Sidekiq Pro + Sidekiq Enterprise. Für immer kostenlos. Schneller.",
+    "install": "Installieren",
+    "docs": "Dokumentation",
+    "active": "Aktiv",
+    "vs_last_hour": "vs. letzte Stunde",
+    "stable_threshold": "Stabiler Schwellenwert",
+    "above_threshold": "Über Schwellenwert",
+    "system_idle": "System inaktiv",
+    "processing": "Verarbeitung",
+    "performance_insight": "Leistungsanalyse",
+    "perf_subtitle": "Verarbeitete vs. fehlgeschlagene Jobs über {range}",
+    "no_history": "Noch kein Verlauf — das Diagramm füllt sich, sobald Jobs laufen.",
+    "range_1h_desc": "die letzte Stunde",
+    "range_24h_desc": "die letzten 24 Stunden",
+    "range_7d_desc": "die letzten 7 Tage",
+    "range_30d_desc": "die letzten 30 Tage"
   },
   "table": {
     "class": "Klasse",
@@ -49,26 +72,34 @@
     "concurrency": "Nebenläufigkeit",
     "busy": "Beschäftigt",
     "queues": "Warteschlangen",
-    "hostname": "Hostname"
+    "hostname": "Hostname",
+    "name": "Name",
+    "type": "Typ",
+    "used": "Verwendet",
+    "limit": "Limit",
+    "usage": "Nutzung",
+    "bid": "BID",
+    "description": "Beschreibung",
+    "failures": "Fehlschläge",
+    "progress": "Fortschritt",
+    "created": "Erstellt",
+    "elapsed": "Verstrichen",
+    "schedule": "Zeitplan",
+    "select_all": "Alle auswählen",
+    "select_row": "Job auswählen"
   },
-  "actions": {
-    "retry": "Wiederholen",
-    "delete": "Löschen",
-    "kill": "Beenden",
-    "prev": "Zurück",
-    "next": "Weiter",
-    "search": "Suchen",
-    "refresh": "Aktualisieren"
-  },
-  "common": {
-    "loading": "Lädt…",
-    "error": "Fehler beim Laden",
-    "empty": "Keine Einträge",
-    "page": "Seite",
-    "of": "von",
-    "ms": "ms",
-    "ago": "vor",
-    "in": "in"
+  "summaries": {
+    "queues": "Aktive Warteschlangen mit Tiefe und Latenz — klicke auf eine Warteschlange, um ihre Jobs zu prüfen.",
+    "retries": "Jobs, die einen Fehler ausgelöst haben und erneut ausgeführt werden — klicke auf einen für Fehler und Backtrace.",
+    "scheduled": "Jobs, die zu einem zukünftigen Zeitpunkt ausgeführt werden sollen.",
+    "dead": "Jobs, die alle Wiederholungen ausgeschöpft haben — klicke auf einen, um den Fehler zu prüfen.",
+    "busy": "Live-Worker-Prozesse und die Jobs, die sie gerade ausführen.",
+    "batches": "Stapelverarbeitete Jobs mit Fortschritt, Erfolgen und Fehlschlägen.",
+    "limiters": "Ratenbegrenzer und ihre aktuelle Nutzung.",
+    "cron": "Periodische (Cron-)Jobs mit Zeitplan und letzter Ausführung — klicke auf eine Loop für den Ausführungsverlauf.",
+    "metrics": "Durchsatz- und Fehlerverlauf mit Ausführungsstatistiken pro Job.",
+    "profiles": "Erfasste Job-Profile — öffne eines im Firefox-Profiler, um den Flame-Graph zu untersuchen.",
+    "search": "Suche einen Job über Warteschlangen, Wiederholungen, geplante und tote Jobs nach JID, Klassenname oder Argument."
   },
   "busy": {
     "hosts": "{n} Hosts",
@@ -85,6 +116,144 @@
     "up_for": "seit",
     "running_jobs": "Laufende Jobs",
     "running_since": "Läuft seit",
-    "no_running": "Auf diesem Prozess laufen derzeit keine Jobs"
+    "no_running": "Auf diesem Prozess laufen derzeit keine Jobs",
+    "leader": "Leader",
+    "leader_title": "Dieser Prozess hält die Cluster-Leader-Sperre"
+  },
+  "cron": {
+    "history_title": "Ausführungsverlauf",
+    "fired": "Ausgelöst",
+    "no_history": "Noch keine Ausführungen aufgezeichnet",
+    "last_fire": "Letzte Auslösung",
+    "next_fire": "Nächste Auslösung"
+  },
+  "job": {
+    "detail": "Job-Detail",
+    "class": "Klasse",
+    "queue": "Warteschlange",
+    "jid": "JID",
+    "retries": "Wiederholungen",
+    "enqueued": "Eingereiht",
+    "at": "Geplant",
+    "args": "Argumente",
+    "error": "Fehler",
+    "backtrace": "Backtrace"
+  },
+  "search": {
+    "emptyTitle": "Nach einem Job suchen",
+    "emptyHint": "Gib eine JID, einen Klassennamen oder ein Argument ein (2+ Zeichen). Die Ergebnisse umfassen Warteschlangen, Wiederholungen, geplante und tote Jobs.",
+    "placeholder": "Suche nach JID, Klassenname oder Argument…",
+    "try": "Versuche:",
+    "source": "Quelle",
+    "when": "Wann",
+    "truncated": "Teilweise Ergebnisse angezeigt — grenze deine Suche weiter ein.",
+    "result": "{n} Ergebnis für „{term}“",
+    "results": "{n} Ergebnisse für „{term}“",
+    "kind": {
+      "queue": "Warteschlange",
+      "retry": "Wiederholung",
+      "scheduled": "Geplant",
+      "dead": "Tot"
+    }
+  },
+  "extension": {
+    "summary": "Bereitgestellt von einer Drittanbieter-Erweiterung.",
+    "open": "Öffnen",
+    "notRendered": "Dieser Tab wird von einer Drittanbieter-Erweiterung bereitgestellt. wurk zeigt ihn in der Navigation an, rendert seine Ansicht aber nicht im Dashboard."
+  },
+  "actions": {
+    "retry": "Wiederholen",
+    "delete": "Löschen",
+    "kill": "Beenden",
+    "add_to_queue": "Zur Warteschlange hinzufügen",
+    "clear": "Leeren",
+    "pause": "Pausieren",
+    "unpause": "Fortsetzen",
+    "pause_hint": "Keine neuen Jobs mehr aus dieser Warteschlange abrufen (laufende Jobs werden beendet)",
+    "unpause_hint": "Abruf von Jobs aus dieser Warteschlange fortsetzen",
+    "quiet": "Ruhig",
+    "stop": "Stoppen",
+    "prev": "Zurück",
+    "next": "Weiter",
+    "search": "Suchen",
+    "refresh": "Aktualisieren",
+    "all_suffix": "Alle",
+    "selected": "{n} ausgewählt",
+    "select_hint": "Jobs auswählen, um sie zu bearbeiten",
+    "scope_selected": "{n} ausgewählte(r) Job(s)",
+    "scope_all": "jeden Job in dieser Menge",
+    "scope_this_job": "diesen Job",
+    "scope_this_process": "diesen Prozess",
+    "scope_all_processes": "alle Prozesse",
+    "confirm": "{action} {scope}? Dies kann nicht rückgängig gemacht werden.",
+    "confirm_clear_queue": "Alle Jobs aus \"{name}\" löschen? Dies kann nicht rückgängig gemacht werden.",
+    "reset": "Zurücksetzen",
+    "enqueue": "Einreihen"
+  },
+  "readonly": {
+    "banner": "Nur-Lese-Modus"
+  },
+  "toast": {
+    "failed": "Aktion fehlgeschlagen. Bitte erneut versuchen.",
+    "readonly": "Dieses Dashboard ist schreibgeschützt — die Aktion wurde abgelehnt.",
+    "gone": "Dieser Job war bereits weg — er wurde möglicherweise ausgeführt oder entfernt.",
+    "unavailable": "Redis ist derzeit nicht verfügbar. Versuche es gleich noch einmal.",
+    "dismiss": "Verwerfen",
+    "region": "Benachrichtigungen"
+  },
+  "common": {
+    "loading": "Lädt…",
+    "error": "Fehler beim Laden",
+    "empty": "Keine Einträge",
+    "page": "Seite",
+    "of": "von",
+    "ms": "ms",
+    "ago": "vor",
+    "in": "in",
+    "load_failed": "Diese Seite konnte nicht geladen werden",
+    "load_failed_hint": "Die App wurde möglicherweise seit dem Öffnen aktualisiert. Neu laden holt die neueste Version.",
+    "reload": "Neu laden",
+    "filter_placeholder": "Nach Klasse oder JID filtern…"
+  },
+  "limiters": {
+    "exhausted": "erschöpft",
+    "available": "verfügbar"
+  },
+  "queues": {
+    "job_count": "{n} Jobs",
+    "latency_label": "Latenz"
+  },
+  "batches": {
+    "children": "Kinder",
+    "completed": "Abgeschlossen",
+    "parent": "Übergeordnet",
+    "tags": "Tags",
+    "failed_jobs": "Fehlgeschlagene Jobs",
+    "dead_jobs": "Tote Jobs",
+    "complete": "abgeschlossen",
+    "invalidated": "ungültig"
+  },
+  "metrics": {
+    "time_range": "Zeitraum:",
+    "total_processed": "Gesamt verarbeitet",
+    "across_all_queues": "über alle Warteschlangen",
+    "failed_jobs": "Fehlgeschlagene Jobs",
+    "total_failures": "Fehlschläge gesamt",
+    "avg_latency": "Durchschn. Latenz",
+    "head_of_line": "Head-of-Line",
+    "active_workers": "Aktive Worker",
+    "stable": "Stabil",
+    "no_workers": "Keine Worker",
+    "throughput_failures": "Durchsatz & Fehlschläge",
+    "throughput_sub": "Verarbeitete Jobs pro Intervall über {range}",
+    "no_queue_history": "Noch kein Warteschlangenverlauf.",
+    "queue_depth": "Warteschlangentiefe",
+    "peak": "Spitze {n}",
+    "top_job_types": "Top-Job-Typen (Volumen)",
+    "job_class": "Job-Klasse",
+    "pct_total": "% Gesamt",
+    "queue_latency_seconds": "Warteschlangen-Latenz (Sekunden)",
+    "historical_snapshots": "Historische Snapshots",
+    "view_job_detail": "Job-Klassendetail anzeigen"
   }
 }

@@ -10,7 +10,13 @@
     "limiters": "Limitadores",
     "cron": "Cron",
     "metrics": "Métricas",
-    "search": "Buscar"
+    "profiles": "Perfis",
+    "search": "Buscar",
+    "extensions": "Extensões",
+    "collapse": "Recolher",
+    "expand": "Expandir",
+    "status_active": "Status do sistema: Ativo",
+    "status_inactive": "Status do sistema: Desconectado"
   },
   "dashboard": {
     "processed": "Processados",
@@ -24,7 +30,24 @@
     "processes": "Processos",
     "latency": "Latência",
     "live": "Ao vivo",
-    "paused": "Pausado"
+    "paused": "Pausado",
+    "strapline": "Wurk, wurk. Pronto para trabalhar. Zug zug.",
+    "tagline": "Um substituto 100% compatível com Sidekiq + Sidekiq Pro + Sidekiq Enterprise. Grátis para sempre. Mais rápido.",
+    "install": "Instalar",
+    "docs": "Documentação",
+    "active": "Ativo",
+    "vs_last_hour": "vs última hora",
+    "stable_threshold": "Limite estável",
+    "above_threshold": "Acima do limite",
+    "system_idle": "Sistema ocioso",
+    "processing": "Processando",
+    "performance_insight": "Análise de desempenho",
+    "perf_subtitle": "Jobs processados vs. falhos em {range}",
+    "no_history": "Ainda sem histórico — o gráfico se preenche conforme os jobs são executados.",
+    "range_1h_desc": "a última hora",
+    "range_24h_desc": "as últimas 24 horas",
+    "range_7d_desc": "os últimos 7 dias",
+    "range_30d_desc": "os últimos 30 dias"
   },
   "table": {
     "class": "Classe",
@@ -49,26 +72,34 @@
     "concurrency": "Concorrência",
     "busy": "Ocupado",
     "queues": "Filas",
-    "hostname": "Host"
+    "hostname": "Host",
+    "name": "Nome",
+    "type": "Tipo",
+    "used": "Usado",
+    "limit": "Limite",
+    "usage": "Uso",
+    "bid": "BID",
+    "description": "Descrição",
+    "failures": "Falhas",
+    "progress": "Progresso",
+    "created": "Criado",
+    "elapsed": "Decorrido",
+    "schedule": "Agendamento",
+    "select_all": "Selecionar tudo",
+    "select_row": "Selecionar job"
   },
-  "actions": {
-    "retry": "Tentar novamente",
-    "delete": "Excluir",
-    "kill": "Matar",
-    "prev": "Anterior",
-    "next": "Próximo",
-    "search": "Buscar",
-    "refresh": "Atualizar"
-  },
-  "common": {
-    "loading": "Carregando…",
-    "error": "Erro ao carregar dados",
-    "empty": "Nenhum item",
-    "page": "Página",
-    "of": "de",
-    "ms": "ms",
-    "ago": "atrás",
-    "in": "em"
+  "summaries": {
+    "queues": "Filas ativas com sua profundidade e latência — clique em uma fila para inspecionar seus jobs.",
+    "retries": "Jobs que geraram um erro e estão agendados para nova tentativa — clique em um para ver o erro e o backtrace.",
+    "scheduled": "Jobs enfileirados para execução em um horário futuro.",
+    "dead": "Jobs que esgotaram todas as tentativas — clique em um para inspecionar a falha.",
+    "busy": "Processos de worker ao vivo e os jobs que estão executando no momento.",
+    "batches": "Jobs em lote e seu progresso, sucessos e falhas.",
+    "limiters": "Limitadores de taxa e seu uso atual.",
+    "cron": "Jobs periódicos (cron) com seu agendamento e última execução — clique em um loop para ver seu histórico de execução.",
+    "metrics": "Histórico de throughput e falhas, com estatísticas de execução por job.",
+    "profiles": "Perfis de jobs capturados — abra um no profiler do Firefox para inspecionar seu flame graph.",
+    "search": "Encontre um job em filas, tentativas, agendados e mortos por JID, nome de classe ou argumento."
   },
   "busy": {
     "hosts": "{n} hosts",
@@ -85,6 +116,144 @@
     "up_for": "ativo há",
     "running_jobs": "Jobs em execução",
     "running_since": "Em execução desde",
-    "no_running": "Nenhum job em execução neste processo"
+    "no_running": "Nenhum job em execução neste processo",
+    "leader": "Líder",
+    "leader_title": "Este processo mantém o bloqueio de líder do cluster"
+  },
+  "cron": {
+    "history_title": "Histórico de execução",
+    "fired": "Disparado",
+    "no_history": "Nenhuma execução registrada ainda",
+    "last_fire": "Último disparo",
+    "next_fire": "Próximo disparo"
+  },
+  "job": {
+    "detail": "Detalhe do job",
+    "class": "Classe",
+    "queue": "Fila",
+    "jid": "JID",
+    "retries": "Tentativas",
+    "enqueued": "Enfileirado",
+    "at": "Agendado",
+    "args": "Argumentos",
+    "error": "Erro",
+    "backtrace": "Backtrace"
+  },
+  "search": {
+    "emptyTitle": "Buscar um job",
+    "emptyHint": "Digite um JID, nome de classe ou argumento (2+ caracteres). Os resultados abrangem filas, tentativas, agendados e mortos.",
+    "placeholder": "Buscar por JID, nome de classe ou argumento…",
+    "try": "Tente:",
+    "source": "Origem",
+    "when": "Quando",
+    "truncated": "Mostrando resultados parciais — refine sua busca para restringi-la.",
+    "result": "{n} resultado para “{term}”",
+    "results": "{n} resultados para “{term}”",
+    "kind": {
+      "queue": "Fila",
+      "retry": "Tentativa",
+      "scheduled": "Agendado",
+      "dead": "Morto"
+    }
+  },
+  "extension": {
+    "summary": "Fornecido por uma extensão de terceiros.",
+    "open": "Abrir",
+    "notRendered": "Esta aba é fornecida por uma extensão de terceiros. wurk a exibe na navegação, mas não renderiza sua visualização dentro do painel."
+  },
+  "actions": {
+    "retry": "Tentar novamente",
+    "delete": "Excluir",
+    "kill": "Matar",
+    "add_to_queue": "Adicionar à fila",
+    "clear": "Limpar",
+    "pause": "Pausar",
+    "unpause": "Retomar",
+    "pause_hint": "Parar de buscar novos jobs desta fila (jobs em andamento são concluídos)",
+    "unpause_hint": "Retomar a busca de jobs desta fila",
+    "quiet": "Silenciar",
+    "stop": "Parar",
+    "prev": "Anterior",
+    "next": "Próximo",
+    "search": "Buscar",
+    "refresh": "Atualizar",
+    "all_suffix": "Tudo",
+    "selected": "{n} selecionados",
+    "select_hint": "Selecione jobs para agir sobre eles",
+    "scope_selected": "{n} job(s) selecionado(s)",
+    "scope_all": "todos os jobs deste conjunto",
+    "scope_this_job": "este job",
+    "scope_this_process": "este processo",
+    "scope_all_processes": "todos os processos",
+    "confirm": "{action} {scope}? Isso não pode ser desfeito.",
+    "confirm_clear_queue": "Limpar todos os jobs de \"{name}\"? Isso não pode ser desfeito.",
+    "reset": "Redefinir",
+    "enqueue": "Enfileirar"
+  },
+  "readonly": {
+    "banner": "Modo somente leitura"
+  },
+  "toast": {
+    "failed": "A ação falhou. Tente novamente.",
+    "readonly": "Este painel é somente leitura — a ação foi rejeitada.",
+    "gone": "Esse job já não existia — pode ter sido executado ou removido.",
+    "unavailable": "O Redis está indisponível no momento. Tente novamente em instantes.",
+    "dismiss": "Dispensar",
+    "region": "Notificações"
+  },
+  "common": {
+    "loading": "Carregando…",
+    "error": "Erro ao carregar dados",
+    "empty": "Nenhum item",
+    "page": "Página",
+    "of": "de",
+    "ms": "ms",
+    "ago": "atrás",
+    "in": "em",
+    "load_failed": "Não foi possível carregar esta página",
+    "load_failed_hint": "O app pode ter sido atualizado desde que você o abriu. Recarregar buscará a versão mais recente.",
+    "reload": "Recarregar",
+    "filter_placeholder": "Filtrar por classe ou JID…"
+  },
+  "limiters": {
+    "exhausted": "esgotado",
+    "available": "disponível"
+  },
+  "queues": {
+    "job_count": "{n} jobs",
+    "latency_label": "latência"
+  },
+  "batches": {
+    "children": "Filhos",
+    "completed": "Concluído",
+    "parent": "Pai",
+    "tags": "Tags",
+    "failed_jobs": "Jobs com falha",
+    "dead_jobs": "Jobs mortos",
+    "complete": "completo",
+    "invalidated": "invalidado"
+  },
+  "metrics": {
+    "time_range": "Intervalo de tempo:",
+    "total_processed": "Total processado",
+    "across_all_queues": "em todas as filas",
+    "failed_jobs": "Jobs com falha",
+    "total_failures": "total de falhas",
+    "avg_latency": "Latência média",
+    "head_of_line": "head-of-line",
+    "active_workers": "Workers ativos",
+    "stable": "Estável",
+    "no_workers": "Sem workers",
+    "throughput_failures": "Throughput e falhas",
+    "throughput_sub": "Jobs processados por intervalo em {range}",
+    "no_queue_history": "Ainda sem histórico de filas.",
+    "queue_depth": "Profundidade da fila",
+    "peak": "pico {n}",
+    "top_job_types": "Principais tipos de job (volume)",
+    "job_class": "Classe do job",
+    "pct_total": "% do total",
+    "queue_latency_seconds": "Latência da fila (segundos)",
+    "historical_snapshots": "Snapshots históricos",
+    "view_job_detail": "Ver detalhe da classe de job"
   }
 }

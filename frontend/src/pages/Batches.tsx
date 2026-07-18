@@ -5,10 +5,13 @@ import { Pagination } from '../components/Pagination';
 import { SortableTh } from '../components/SortableTh';
 import { useSort, type Accessors } from '../hooks/useSort';
 import { usePageParam } from '../hooks/usePageParam';
+import { useResetPageOnEmpty } from '../hooks/useResetPageOnEmpty';
 import { t } from '../i18n';
 import { PageHeader } from '../components/PageHeader';
 import { relativeTime, truncate } from '../utils';
 import { SkeletonTable } from '../components/Skeleton';
+import { basePath } from '../basePath';
+import { getJSON } from '../http';
 
 interface Batch {
   bid: string;
@@ -50,10 +53,10 @@ export default function Batches() {
   const q = useQuery<BatchesResponse>(() => ({
     queryKey: ['batches', page()],
     queryFn: () =>
-      fetch(`/wurk/api/batches?page=${page() - 1}&count=${PAGE_SIZE}`).then(
-        (r) => r.json() as Promise<BatchesResponse>
-      ),
+      getJSON<BatchesResponse>(`${basePath()}/api/batches?page=${page() - 1}&count=${PAGE_SIZE}`),
   }));
+
+  useResetPageOnEmpty(page, setPage, () => !q.isPending && !!q.data, () => (q.data?.batches.length ?? 0) === 0);
 
   const { sorted, sort, toggle } = useSort(() => q.data?.batches ?? [], SORT);
 
@@ -80,13 +83,13 @@ export default function Batches() {
                 <table>
                   <thead>
                     <tr>
-                      <SortableTh label="BID" sortKey="bid" sort={sort()} onSort={toggle} />
-                      <SortableTh label="Description" sortKey="description" sort={sort()} onSort={toggle} />
+                      <SortableTh label={t('table.bid')} sortKey="bid" sort={sort()} onSort={toggle} />
+                      <SortableTh label={t('table.description')} sortKey="description" sort={sort()} onSort={toggle} />
                       <SortableTh label={t('table.total')} sortKey="total" sort={sort()} onSort={toggle} />
                       <SortableTh label={t('table.pending')} sortKey="pending" sort={sort()} onSort={toggle} />
-                      <SortableTh label="Failures" sortKey="failures" sort={sort()} onSort={toggle} />
-                      <SortableTh label="Progress" sortKey="progress" sort={sort()} onSort={toggle} />
-                      <SortableTh label="Created" sortKey="created" sort={sort()} onSort={toggle} />
+                      <SortableTh label={t('table.failures')} sortKey="failures" sort={sort()} onSort={toggle} />
+                      <SortableTh label={t('table.progress')} sortKey="progress" sort={sort()} onSort={toggle} />
+                      <SortableTh label={t('table.created')} sortKey="created" sort={sort()} onSort={toggle} />
                     </tr>
                   </thead>
                   <tbody>

@@ -50,3 +50,25 @@
     color: var(--text-muted);
   }
 }
+
+// ── Search results ───────────────────────────────────────────────────────────
+// The post-query summary line and the partial-results warning banner.
+
+.search-count {
+  margin-bottom: to-rem(12);
+  color: var(--text-muted);
+  font-size: to-rem(13);
+}
+
+.search-truncated {
+  display: flex;
+  align-items: center;
+  gap: to-rem(8);
+  margin-bottom: to-rem(16);
+  padding: to-rem(10) to-rem(14);
+  border-radius: var(--radius);
+  background: color-mix(in oklch, var(--warning) 12%, transparent);
+  border: to-rem(1) solid color-mix(in oklch, var(--warning) 30%, transparent);
+  color: var(--warning);
+  font-size: to-rem(13);
+}

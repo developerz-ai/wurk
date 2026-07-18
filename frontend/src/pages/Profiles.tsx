@@ -2,8 +2,9 @@ import { useQuery } from '@tanstack/solid-query';
 import { onMount, For, Switch, Match, Show } from 'solid-js';
 import { SkeletonTable } from '../components/Skeleton';
 import { t } from '../i18n';
+import { basePath } from '../basePath';
 
-// One row from GET /wurk/api/profiles (Wurk::Api::Serializers.profile_record).
+// One row from GET <mount>/api/profiles (Wurk::Api::Serializers.profile_record).
 interface Profile {
   key: string;
   jid: string;
@@ -32,7 +33,7 @@ export default function Profiles() {
   const q = useQuery<Profile[]>(() => ({
     queryKey: ['profiles'],
     queryFn: async () => {
-      const r = await fetch('/wurk/api/profiles');
+      const r = await fetch(`${basePath()}/api/profiles`);
       if (!r.ok) throw new Error(`profiles request failed: ${r.status}`);
       return r.json() as Promise<Profile[]>;
     },
@@ -71,11 +72,11 @@ export default function Profiles() {
                   <table>
                     <thead>
                       <tr>
-                        <th>Type</th>
-                        <th>JID</th>
-                        <th>Started</th>
-                        <th>Elapsed</th>
-                        <th>Size</th>
+                        <th>{t('table.type')}</th>
+                        <th>{t('table.jid')}</th>
+                        <th>{t('busy.started')}</th>
+                        <th>{t('table.elapsed')}</th>
+                        <th>{t('table.size')}</th>
                         <th />
                       </tr>
                     </thead>
@@ -86,18 +87,18 @@ export default function Profiles() {
                             <td style={{ 'font-weight': 500, color: 'var(--obs-text)' }}>{p.type}</td>
                             <td><span class="obs-mono-cell">{p.jid}</span></td>
                             <td>{fmtWhen(p.started_at)}</td>
-                            <td>{p.elapsed.toLocaleString()} ms</td>
+                            <td>{p.elapsed.toLocaleString()} {t('common.ms')}</td>
                             <td>{fmtBytes(p.size)}</td>
                             <td style={{ 'text-align': 'end' }}>
                               {/* Full reload (not client-route): the backend POSTs the blob
                                   to the Firefox profiler then 302s out to profiler.firefox.com. */}
                               <a
                                 class="obs-btn obs-btn--ghost obs-btn--sm"
-                                href={`/wurk/profiles/${encodeURIComponent(p.key)}`}
+                                href={`${basePath()}/profiles/${encodeURIComponent(p.key)}`}
                                 target="_blank"
                                 rel="noopener noreferrer"
                               >
-                                <i class="fa-solid fa-up-right-from-square" aria-hidden="true" /> Open
+                                <i class="fa-solid fa-up-right-from-square" aria-hidden="true" /> {t('extension.open')}
                               </a>
                             </td>
                           </tr>

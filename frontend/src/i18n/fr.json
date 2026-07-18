@@ -10,7 +10,13 @@
     "limiters": "Limiteurs",
     "cron": "Cron",
     "metrics": "Métriques",
-    "search": "Rechercher"
+    "profiles": "Profils",
+    "search": "Rechercher",
+    "extensions": "Extensions",
+    "collapse": "Réduire",
+    "expand": "Développer",
+    "status_active": "État du système : Actif",
+    "status_inactive": "État du système : Déconnecté"
   },
   "dashboard": {
     "processed": "Traités",
@@ -24,7 +30,24 @@
     "processes": "Processus",
     "latency": "Latence",
     "live": "En direct",
-    "paused": "En pause"
+    "paused": "En pause",
+    "strapline": "Wurk, wurk. Prêt à travailler. Zug zug.",
+    "tagline": "Un remplacement 100% compatible avec Sidekiq + Sidekiq Pro + Sidekiq Enterprise. Gratuit pour toujours. Plus rapide.",
+    "install": "Installer",
+    "docs": "Documentation",
+    "active": "Actif",
+    "vs_last_hour": "vs dernière heure",
+    "stable_threshold": "Seuil stable",
+    "above_threshold": "Au-dessus du seuil",
+    "system_idle": "Système inactif",
+    "processing": "Traitement",
+    "performance_insight": "Analyse de performance",
+    "perf_subtitle": "Tâches traitées vs échouées sur {range}",
+    "no_history": "Pas encore d'historique — le graphique se remplit au fur et à mesure de l'exécution des tâches.",
+    "range_1h_desc": "la dernière heure",
+    "range_24h_desc": "les dernières 24 heures",
+    "range_7d_desc": "les 7 derniers jours",
+    "range_30d_desc": "les 30 derniers jours"
   },
   "table": {
     "class": "Classe",
@@ -49,26 +72,34 @@
     "concurrency": "Concurrence",
     "busy": "Occupé",
     "queues": "Files",
-    "hostname": "Hôte"
+    "hostname": "Hôte",
+    "name": "Nom",
+    "type": "Type",
+    "used": "Utilisé",
+    "limit": "Limite",
+    "usage": "Utilisation",
+    "bid": "BID",
+    "description": "Description",
+    "failures": "Échecs",
+    "progress": "Progression",
+    "created": "Créé",
+    "elapsed": "Écoulé",
+    "schedule": "Planification",
+    "select_all": "Tout sélectionner",
+    "select_row": "Sélectionner la tâche"
   },
-  "actions": {
-    "retry": "Relancer",
-    "delete": "Supprimer",
-    "kill": "Tuer",
-    "prev": "Précédent",
-    "next": "Suivant",
-    "search": "Rechercher",
-    "refresh": "Actualiser"
-  },
-  "common": {
-    "loading": "Chargement…",
-    "error": "Erreur de chargement",
-    "empty": "Aucun élément",
-    "page": "Page",
-    "of": "sur",
-    "ms": "ms",
-    "ago": "il y a",
-    "in": "dans"
+  "summaries": {
+    "queues": "Files actives avec leur profondeur et latence — cliquez sur une file pour inspecter ses tâches.",
+    "retries": "Tâches ayant levé une erreur et programmées pour être relancées — cliquez sur l'une d'elles pour voir l'erreur et la trace.",
+    "scheduled": "Tâches mises en file pour s'exécuter à une heure future.",
+    "dead": "Tâches ayant épuisé toutes les relances — cliquez sur l'une d'elles pour inspecter l'échec.",
+    "busy": "Processus de travail en direct et les tâches qu'ils exécutent actuellement.",
+    "batches": "Tâches groupées et leur progression, succès et échecs.",
+    "limiters": "Limiteurs de débit et leur utilisation actuelle.",
+    "cron": "Tâches périodiques (cron) avec leur planification et dernière exécution — cliquez sur une boucle pour voir son historique d'exécution.",
+    "metrics": "Historique de débit et d'échecs, avec des statistiques d'exécution par tâche.",
+    "profiles": "Profils de tâches capturés — ouvrez-en un dans le profiler Firefox pour inspecter son flame graph.",
+    "search": "Recherchez une tâche dans les files, relances, planifiées et mortes par JID, nom de classe ou argument."
   },
   "busy": {
     "hosts": "{n} hôtes",
@@ -85,6 +116,144 @@
     "up_for": "depuis",
     "running_jobs": "Tâches en cours",
     "running_since": "En cours depuis",
-    "no_running": "Aucune tâche en cours sur ce processus"
+    "no_running": "Aucune tâche en cours sur ce processus",
+    "leader": "Leader",
+    "leader_title": "Ce processus détient le verrou de leader du cluster"
+  },
+  "cron": {
+    "history_title": "Historique d'exécution",
+    "fired": "Déclenché",
+    "no_history": "Aucune exécution enregistrée pour le moment",
+    "last_fire": "Dernier déclenchement",
+    "next_fire": "Prochain déclenchement"
+  },
+  "job": {
+    "detail": "Détail de la tâche",
+    "class": "Classe",
+    "queue": "File",
+    "jid": "JID",
+    "retries": "Relances",
+    "enqueued": "Mis en file",
+    "at": "Planifié",
+    "args": "Arguments",
+    "error": "Erreur",
+    "backtrace": "Trace"
+  },
+  "search": {
+    "emptyTitle": "Rechercher une tâche",
+    "emptyHint": "Entrez un JID, un nom de classe ou un argument (2+ caractères). Les résultats couvrent les files, relances, planifiées et mortes.",
+    "placeholder": "Rechercher par JID, nom de classe ou argument…",
+    "try": "Essayez :",
+    "source": "Source",
+    "when": "Quand",
+    "truncated": "Résultats partiels affichés — affinez votre recherche pour la restreindre.",
+    "result": "{n} résultat pour « {term} »",
+    "results": "{n} résultats pour « {term} »",
+    "kind": {
+      "queue": "File",
+      "retry": "Relance",
+      "scheduled": "Planifié",
+      "dead": "Mort"
+    }
+  },
+  "extension": {
+    "summary": "Fourni par une extension tierce.",
+    "open": "Ouvrir",
+    "notRendered": "Cet onglet est fourni par une extension tierce. wurk l'affiche dans la navigation mais ne rend pas sa vue dans le tableau de bord."
+  },
+  "actions": {
+    "retry": "Relancer",
+    "delete": "Supprimer",
+    "kill": "Tuer",
+    "add_to_queue": "Ajouter à la file",
+    "clear": "Vider",
+    "pause": "Suspendre",
+    "unpause": "Reprendre",
+    "pause_hint": "Arrêter de récupérer de nouvelles tâches de cette file (les tâches en cours se terminent)",
+    "unpause_hint": "Reprendre la récupération des tâches de cette file",
+    "quiet": "Silencieux",
+    "stop": "Arrêter",
+    "prev": "Précédent",
+    "next": "Suivant",
+    "search": "Rechercher",
+    "refresh": "Actualiser",
+    "all_suffix": "Tout",
+    "selected": "{n} sélectionnés",
+    "select_hint": "Sélectionnez des tâches sur lesquelles agir",
+    "scope_selected": "{n} tâche(s) sélectionnée(s)",
+    "scope_all": "toutes les tâches de cet ensemble",
+    "scope_this_job": "cette tâche",
+    "scope_this_process": "ce processus",
+    "scope_all_processes": "tous les processus",
+    "confirm": "{action} {scope} ? Cette action est irréversible.",
+    "confirm_clear_queue": "Vider toutes les tâches de « {name} » ? Cette action est irréversible.",
+    "reset": "Réinitialiser",
+    "enqueue": "Mettre en file"
+  },
+  "readonly": {
+    "banner": "Mode lecture seule"
+  },
+  "toast": {
+    "failed": "L'action a échoué. Veuillez réessayer.",
+    "readonly": "Ce tableau de bord est en lecture seule — l'action a été rejetée.",
+    "gone": "Cette tâche avait déjà disparu — elle a peut-être été exécutée ou supprimée.",
+    "unavailable": "Redis est indisponible pour le moment. Réessayez dans un instant.",
+    "dismiss": "Ignorer",
+    "region": "Notifications"
+  },
+  "common": {
+    "loading": "Chargement…",
+    "error": "Erreur de chargement",
+    "empty": "Aucun élément",
+    "page": "Page",
+    "of": "sur",
+    "ms": "ms",
+    "ago": "il y a",
+    "in": "dans",
+    "load_failed": "Impossible de charger cette page",
+    "load_failed_hint": "L'application a peut-être été mise à jour depuis son ouverture. Recharger récupérera la dernière version.",
+    "reload": "Recharger",
+    "filter_placeholder": "Filtrer par classe ou JID…"
+  },
+  "limiters": {
+    "exhausted": "épuisé",
+    "available": "disponible"
+  },
+  "queues": {
+    "job_count": "{n} tâches",
+    "latency_label": "latence"
+  },
+  "batches": {
+    "children": "Enfants",
+    "completed": "Terminé",
+    "parent": "Parent",
+    "tags": "Tags",
+    "failed_jobs": "Tâches échouées",
+    "dead_jobs": "Tâches mortes",
+    "complete": "terminé",
+    "invalidated": "invalidé"
+  },
+  "metrics": {
+    "time_range": "Plage horaire :",
+    "total_processed": "Total traité",
+    "across_all_queues": "toutes files confondues",
+    "failed_jobs": "Tâches échouées",
+    "total_failures": "total des échecs",
+    "avg_latency": "Latence moyenne",
+    "head_of_line": "tête de ligne",
+    "active_workers": "Workers actifs",
+    "stable": "Stable",
+    "no_workers": "Aucun worker",
+    "throughput_failures": "Débit et échecs",
+    "throughput_sub": "Tâches traitées par intervalle sur {range}",
+    "no_queue_history": "Pas encore d'historique de file.",
+    "queue_depth": "Profondeur de file",
+    "peak": "pic {n}",
+    "top_job_types": "Principaux types de tâches (volume)",
+    "job_class": "Classe de tâche",
+    "pct_total": "% du total",
+    "queue_latency_seconds": "Latence de file (secondes)",
+    "historical_snapshots": "Instantanés historiques",
+    "view_job_detail": "Voir le détail de la classe de tâche"
   }
 }

@@ -4,10 +4,14 @@ import { Pagination } from '../components/Pagination';
 import { SortableTh } from '../components/SortableTh';
 import { useSort, type Accessors } from '../hooks/useSort';
 import { usePageParam } from '../hooks/usePageParam';
+import { useResetPageOnEmpty } from '../hooks/useResetPageOnEmpty';
 import { t } from '../i18n';
 import { PageHeader } from '../components/PageHeader';
 import { SkeletonTable } from '../components/Skeleton';
 import { useMeta } from '../hooks/useMeta';
+import { basePath } from '../basePath';
+import { getJSON, post } from '../http';
+import { notifyError } from '../toast';
 
 // Uniform live status every limiter type reports (Wurk::Limiter#status).
 // `concurrent` additionally merges its metric counters (held/immediate/…),
@@ -64,21 +68,24 @@ export default function Limiters() {
   const q = useQuery<LimitersResponse>(() => ({
     queryKey: ['limiters', page()],
     queryFn: () =>
-      fetch(`/wurk/api/limiters?page=${page() - 1}&count=${PAGE_SIZE}`).then(
-        (r) => r.json() as Promise<LimitersResponse>
-      ),
+      getJSON<LimitersResponse>(`${basePath()}/api/limiters?page=${page() - 1}&count=${PAGE_SIZE}`),
     refetchInterval: 5000,
   }));
 
   // Drops the limiter's stats/state keys (counters → 0); skips CSRF, see
   // ApiController#skip_forgery_protection.
   const reset = useMutation(() => ({
-    mutationFn: (name: string) =>
-      fetch(`/wurk/api/limiters/${encodeURIComponent(name)}/reset`, { method: 'POST' }),
+    mutationFn: (name: string) => post(`${basePath()}/api/limiters/${encodeURIComponent(name)}/reset`),
     onSuccess: () => qc.invalidateQueries({ queryKey: ['limiters'] }),
+    onError: notifyError,
   }));
 
+  useResetPageOnEmpty(page, setPage, () => !q.isPending && !!q.data, () => (q.data?.limiters.length ?? 0) === 0);
+
   const { sorted, sort, toggle } = useSort(() => q.data?.limiters ?? [], SORT);
+
+  const confirmReset = (name: string) =>
+    window.confirm(t('actions.confirm', { action: t('actions.reset'), scope: name })) && reset.mutate(name);
 
   return (
     <Switch>
@@ -103,12 +110,12 @@ export default function Limiters() {
                 <table>
                   <thead>
                     <tr>
-                      <SortableTh label="Name" sortKey="name" sort={sort()} onSort={toggle} />
-                      <SortableTh label="Type" sortKey="type" sort={sort()} onSort={toggle} />
-                      <SortableTh label="Used" sortKey="used" sort={sort()} onSort={toggle} />
-                      <SortableTh label="Limit" sortKey="limit" sort={sort()} onSort={toggle} />
-                      <SortableTh label="Usage" sortKey="usage" sort={sort()} onSort={toggle} />
-                      <SortableTh label="Status" sortKey="status" sort={sort()} onSort={toggle} />
+                      <SortableTh label={t('table.name')} sortKey="name" sort={sort()} onSort={toggle} />
+                      <SortableTh label={t('table.type')} sortKey="type" sort={sort()} onSort={toggle} />
+                      <SortableTh label={t('table.used')} sortKey="used" sort={sort()} onSort={toggle} />
+                      <SortableTh label={t('table.limit')} sortKey="limit" sort={sort()} onSort={toggle} />
+                      <SortableTh label={t('table.usage')} sortKey="usage" sort={sort()} onSort={toggle} />
+                      <SortableTh label={t('table.status')} sortKey="status" sort={sort()} onSort={toggle} />
                       <Show when={!readOnly()}><th /></Show>
                     </tr>
                   </thead>
@@ -156,9 +163,9 @@ export default function Limiters() {
                             <td>
                               <Show
                                 when={available}
-                                fallback={<span class="badge badge-danger">exhausted</span>}
+                                fallback={<span class="badge badge-danger">{t('limiters.exhausted')}</span>}
                               >
-                                <span class="badge badge-success">available</span>
+                                <span class="badge badge-success">{t('limiters.available')}</span>
                               </Show>
                             </td>
                             <Show when={!readOnly()}>
@@ -166,9 +173,9 @@ export default function Limiters() {
                                 <button
                                   class="btn btn-sm"
                                   disabled={reset.isPending}
-                                  onClick={() => reset.mutate(limiter.name)}
+                                  onClick={() => confirmReset(limiter.name)}
                                 >
-                                  Reset
+                                  {t('actions.reset')}
                                 </button>
                               </td>
                             </Show>

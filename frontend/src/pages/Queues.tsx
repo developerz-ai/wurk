@@ -5,6 +5,7 @@ import { ArgsValue } from '../components/ArgsValue';
 import { SortableTh } from '../components/SortableTh';
 import { useSort, type Accessors } from '../hooks/useSort';
 import { usePageParam } from '../hooks/usePageParam';
+import { useResetPageOnEmpty } from '../hooks/useResetPageOnEmpty';
 import { t } from '../i18n';
 import { PageHeader } from '../components/PageHeader';
 import { relativeTime, truncate, formatArgs, formatDuration } from '../utils';
@@ -13,6 +14,9 @@ import Modal from '../components/Modal';
 import { Tooltip } from '../components/Tooltip';
 import { useMeta } from '../hooks/useMeta';
 import { SkeletonTable } from '../components/Skeleton';
+import { basePath } from '../basePath';
+import { getJSON, post } from '../http';
+import { notifyError } from '../toast';
 
 interface QueueSummary {
   name: string;
@@ -59,28 +63,24 @@ function QueueJobs(props: { name: string }) {
   const query = useQuery<QueueDetail>(() => ({
     queryKey: ['queue', props.name, page()],
     queryFn: () =>
-      fetch(`/wurk/api/queues/${encodeURIComponent(props.name)}?page=${page() - 1}&count=${PAGE_SIZE}`).then(
-        (r) => r.json() as Promise<QueueDetail>
+      getJSON<QueueDetail>(
+        `${basePath()}/api/queues/${encodeURIComponent(props.name)}?page=${page() - 1}&count=${PAGE_SIZE}`,
       ),
   }));
 
   // Delete one job from the queue by jid (server LREMs the exact payload).
   const deleteJob = useMutation(() => ({
-    mutationFn: async (jid: string) => {
-      const res = await fetch(`/wurk/api/queues/${encodeURIComponent(props.name)}/delete`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ jid }),
-      });
-      if (!res.ok) throw new Error(`Delete failed (${res.status})`);
-      return res;
-    },
+    mutationFn: (jid: string) =>
+      post(`${basePath()}/api/queues/${encodeURIComponent(props.name)}/delete`, { jid }),
     onSuccess: () => {
       qc.invalidateQueries({ queryKey: ['queue', props.name] });
       qc.invalidateQueries({ queryKey: ['queues'] });
       qc.invalidateQueries({ queryKey: ['stats'] });
     },
+    onError: notifyError,
   }));
+
+  useResetPageOnEmpty(page, setPage, () => !query.isPending && !!query.data, () => (query.data?.jobs.length ?? 0) === 0);
 
   const { sorted, sort, toggle } = useSort(() => query.data?.jobs ?? [], JOB_SORT);
 
@@ -97,7 +97,8 @@ function QueueJobs(props: { name: string }) {
           <div class="qjobs">
             <div style={{ display: 'flex', 'align-items': 'center', gap: '0.75rem', 'margin-bottom': '1rem' }}>
               <span style={{ color: 'var(--text-muted)', 'font-size': '13px' }}>
-                {data().size.toLocaleString()} jobs · <span title={`${data().latency.toFixed(3)}s`}>latency {formatDuration(data().latency)}</span>
+                {t('queues.job_count', { n: data().size.toLocaleString() })} ·{' '}
+                <span title={`${data().latency.toFixed(3)}s`}>{t('queues.latency_label')} {formatDuration(data().latency)}</span>
               </span>
               <Show when={data().paused}>
                 <span class="badge badge-warning">{t('dashboard.paused')}</span>
@@ -186,32 +187,25 @@ export default function Queues() {
 
   const query = useQuery<QueueSummary[]>(() => ({
     queryKey: ['queues'],
-    queryFn: () => fetch('/wurk/api/queues').then((r) => r.json() as Promise<QueueSummary[]>),
+    queryFn: () => getJSON<QueueSummary[]>(`${basePath()}/api/queues`),
     refetchInterval: 5000,
   }));
 
   const clearQueue = useMutation(() => ({
-    mutationFn: async (name: string) => {
-      const res = await fetch(`/wurk/api/queues/${encodeURIComponent(name)}/clear`, { method: 'POST' });
-      if (!res.ok) throw new Error(`Clear failed (${res.status})`);
-      return res;
-    },
+    mutationFn: (name: string) => post(`${basePath()}/api/queues/${encodeURIComponent(name)}/clear`),
     onSuccess: (_res, name) => {
       qc.invalidateQueries({ queryKey: ['queues'] });
       qc.invalidateQueries({ queryKey: ['queue', name] });
       qc.invalidateQueries({ queryKey: ['stats'] });
     },
+    onError: notifyError,
   }));
 
   // Toggle the queue's membership of the `paused` SET; fetchers stop pulling
   // from a paused queue. POST skips CSRF (ApiController#skip_forgery_protection).
   const pauseQueue = useMutation(() => ({
-    mutationFn: async ({ name, paused }: { name: string; paused: boolean }) => {
-      const action = paused ? 'unpause' : 'pause';
-      const res = await fetch(`/wurk/api/queues/${encodeURIComponent(name)}/${action}`, { method: 'POST' });
-      if (!res.ok) throw new Error(`${action} failed (${res.status})`);
-      return res;
-    },
+    mutationFn: ({ name, paused }: { name: string; paused: boolean }) =>
+      post(`${basePath()}/api/queues/${encodeURIComponent(name)}/${paused ? 'unpause' : 'pause'}`),
     onSuccess: (_res, { name }) => {
       qc.invalidateQueries({ queryKey: ['queues'] });
       qc.invalidateQueries({ queryKey: ['queue', name] });
@@ -219,6 +213,7 @@ export default function Queues() {
       // toggle must refresh it too (mirrors clearQueue).
       qc.invalidateQueries({ queryKey: ['stats'] });
     },
+    onError: notifyError,
   }));
 
   const { sorted, sort, toggle } = useSort(() => query.data ?? [], QUEUE_SORT);
@@ -244,7 +239,7 @@ export default function Queues() {
                 <table>
                   <thead>
                     <tr>
-                      <SortableTh label="Name" sortKey="name" sort={sort()} onSort={toggle} />
+                      <SortableTh label={t('table.name')} sortKey="name" sort={sort()} onSort={toggle} />
                       <SortableTh label={t('table.size')} sortKey="size" sort={sort()} onSort={toggle} />
                       <SortableTh label={t('table.latency')} sortKey="latency" sort={sort()} onSort={toggle} />
                       <SortableTh label={t('table.status')} sortKey="status" sort={sort()} onSort={toggle} />
@@ -261,7 +256,7 @@ export default function Queues() {
                           <td>{q.size.toLocaleString()}</td>
                           <td title={`${q.latency.toFixed(3)}s`}>{formatDuration(q.latency)}</td>
                           <td>
-                            <Show when={q.paused} fallback={<span class="badge badge-success">Active</span>}>
+                            <Show when={q.paused} fallback={<span class="badge badge-success">{t('dashboard.active')}</span>}>
                               <span class="badge badge-warning">{t('dashboard.paused')}</span>
                             </Show>
                           </td>

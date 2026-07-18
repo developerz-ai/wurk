@@ -3,10 +3,12 @@ import { QueryClient, QueryClientProvider } from '@tanstack/solid-query';
 import { Suspense, lazy, createSignal, type ParentProps } from 'solid-js';
 import { Show } from 'solid-js';
 import { useMeta } from './hooks/useMeta';
+import { basePath } from './basePath';
 import { t } from './i18n';
 import Nav from './components/Nav';
 import { PageSkeleton } from './components/Skeleton';
 import ErrorBoundary from './components/ErrorBoundary';
+import { Toasts } from './toast';
 
 // Each page is a lazy chunk: the initial load ships only the shell + landing
 // page, and every other tab streams in on navigation behind the Suspense
@@ -136,6 +138,8 @@ function Layout(props: ParentProps) {
           collapsed={collapsed()}
           onToggleCollapse={toggleCollapsed}
         />
+
+        <Toasts />
       </div>
     </QueryClientProvider>
   );
@@ -143,7 +147,7 @@ function Layout(props: ParentProps) {
 
 export default function App() {
   return (
-    <Router root={Layout} base="/wurk">
+    <Router root={Layout} base={basePath()}>
       <Route path="/" component={Dashboard} />
       <Route path="/queues" component={Queues} />
       <Route path="/retries" component={Retries} />

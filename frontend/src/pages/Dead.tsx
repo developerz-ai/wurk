@@ -13,7 +13,11 @@ import JobSetActionBar, { type ActionDef } from '../components/JobSetActionBar';
 import { useMeta } from '../hooks/useMeta';
 import { useSelection } from '../hooks/useSelection';
 import { useJobSetActions, entryKey } from '../hooks/useJobSetActions';
+import { useResetPageOnEmpty } from '../hooks/useResetPageOnEmpty';
 import { SkeletonTable } from '../components/Skeleton';
+import { FilterBox } from '../components/FilterBox';
+import { basePath } from '../basePath';
+import { getJSON } from '../http';
 
 interface DeadEntry {
   jid: string;
@@ -54,6 +58,7 @@ const ACTIONS: ActionDef[] = [
 
 export default function Dead() {
   const [page, setPage] = usePageParam();
+  const [filter, setFilter] = createSignal('');
   const [selected, setSelected] = createSignal<JobEntry | null>(null);
   const [selectedKey, setSelectedKey] = createSignal<string | null>(null);
   const meta = useMeta();
@@ -66,13 +71,20 @@ export default function Dead() {
     document.title = `${t('nav.dead')} — Wurk`;
   });
 
+  const onFilterChange = (v: string) => {
+    setFilter(v);
+    setPage(1);
+  };
+
   const query = useQuery<DeadResponse>(() => ({
-    queryKey: ['dead', page()],
+    queryKey: ['dead', page(), filter()],
     queryFn: () =>
-      fetch(`/wurk/api/dead?page=${page() - 1}&count=${PAGE_SIZE}`).then(
-        (r) => r.json() as Promise<DeadResponse>
+      getJSON<DeadResponse>(
+        `${basePath()}/api/dead?page=${page() - 1}&count=${PAGE_SIZE}&substr=${encodeURIComponent(filter())}`,
       ),
   }));
+
+  useResetPageOnEmpty(page, setPage, () => !query.isPending && !!query.data, () => (query.data?.entries.length ?? 0) === 0);
 
   const { sorted, sort, toggle } = useSort(() => query.data?.entries ?? [], SORT);
   const pageKeys = () => sorted().map(entryKey);
@@ -96,6 +108,8 @@ export default function Dead() {
               <span class="badge badge-danger">{data().total.toLocaleString()}</span>
             </PageHeader>
 
+            <FilterBox value={filter()} onChange={onFilterChange} placeholder={t('common.filter_placeholder')} />
+
             <Show when={sorted().length > 0} fallback={<div class="empty-state">{t('common.empty')}</div>}>
               <>
                 <Show when={!readOnly()}>
@@ -115,14 +129,14 @@ export default function Dead() {
                       <tr>
                         <Show when={!readOnly()}>
                           <th class="row-action">
-                            <input type="checkbox" checked={allChecked()} onChange={() => sel.toggleAll(pageKeys())} aria-label="Select all" />
+                            <input type="checkbox" checked={allChecked()} onChange={() => sel.toggleAll(pageKeys())} aria-label={t('table.select_all')} />
                           </th>
                         </Show>
                         <SortableTh label={t('table.jid')} sortKey="jid" sort={sort()} onSort={toggle} />
                         <SortableTh label={t('table.class')} sortKey="klass" sort={sort()} onSort={toggle} />
                         <SortableTh label={t('table.args')} sortKey="args" sort={sort()} onSort={toggle} />
                         <SortableTh label={t('table.error')} sortKey="error_class" sort={sort()} onSort={toggle} />
-                        <SortableTh label="Message" sortKey="error_message" sort={sort()} onSort={toggle} />
+                        <SortableTh label={t('table.message')} sortKey="error_message" sort={sort()} onSort={toggle} />
                         <SortableTh label={t('table.failed_at')} sortKey="failed_at" sort={sort()} onSort={toggle} />
                       </tr>
                     </thead>
@@ -135,7 +149,7 @@ export default function Dead() {
                             <tr class="row-clickable" onClick={() => { setSelected(entry); setSelectedKey(key); }}>
                               <Show when={!readOnly()}>
                                 <td class="row-action" onClick={(e) => e.stopPropagation()}>
-                                  <input type="checkbox" checked={sel.selected().has(key)} onChange={() => sel.toggle(key)} aria-label="Select job" />
+                                  <input type="checkbox" checked={sel.selected().has(key)} onChange={() => sel.toggle(key)} aria-label={t('table.select_row')} />
                                 </td>
                               </Show>
                               <td

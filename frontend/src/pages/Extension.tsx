@@ -3,12 +3,13 @@ import { useParams } from '@solidjs/router';
 import { PageHeader } from '../components/PageHeader';
 import { Skeleton, SkeletonTable } from '../components/Skeleton';
 import { useMeta } from '../hooks/useMeta';
+import { basePath } from '../basePath';
 import { t } from '../i18n';
 
 // Renders a third-party extension tab registered via
 // Sidekiq::Web.register_extension. When the tab maps to a registered extension
 // (ext_name from /api/meta), its routes/ERB views are server-rendered by
-// Wurk::Web::Extension::Renderer at /wurk/ext/<name>/* and embedded here
+// Wurk::Web::Extension::Renderer at <mount>/ext/<name>/* and embedded here
 // natively — links and forms inside the view are intercepted so navigation
 // stays on this page (#187). Tabs without an extension (bare `tabs[]=`
 // mutation) keep the old iframe embed of their own path.
@@ -34,7 +35,7 @@ export default function Extension() {
 }
 
 function NativeExtension(props: { extName: string; indexPath: string; title: string }) {
-  const base = `/wurk/ext/${props.extName}/`;
+  const base = `${basePath()}/ext/${props.extName}/`;
   const [html, setHtml] = createSignal<string | null>(null);
   const [error, setError] = createSignal(false);
   // Monotonic request id: a response only lands if it's still the latest, so
@@ -112,11 +113,11 @@ function NativeExtension(props: { extName: string; indexPath: string; title: str
 }
 
 function IframeExtension(props: { tab: string; title: string }) {
-  const src = () => `/wurk/${props.tab}?wurk_ext_embed=1`;
+  const src = () => `${basePath()}/${props.tab}?wurk_ext_embed=1`;
   return (
     <>
       <PageHeader icon="fa-puzzle-piece" title={props.title} summary={t('extension.summary')}>
-        <a class="btn btn-sm" href={`/wurk/${props.tab}`} target="_blank" rel="noopener noreferrer">
+        <a class="btn btn-sm" href={`${basePath()}/${props.tab}`} target="_blank" rel="noopener noreferrer">
           <i class="fa-solid fa-arrow-up-right-from-square" style={{ 'margin-inline-end': '0.4rem' }} />
           {t('extension.open')}
         </a>

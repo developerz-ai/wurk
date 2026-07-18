@@ -35,4 +35,22 @@ class DashboardRoutesTest < Wurk::Test::EngineCase
     assert_equal 200, last_response.status
     assert_includes last_response.body, '<div id="wurk-root">'
   end
+
+  # The SPA builds every API URL and its router base from window.__WURK_BASE__,
+  # injected from the engine's mount prefix (request.script_name). Proves the
+  # dashboard is mount-agnostic: the /sidekiq mount (test/dummy routes) serves
+  # the same bundle with its own base, no rebuild.
+  def test_spa_shell_injects_the_mount_base
+    get '/wurk'
+
+    assert_includes last_response.body, '<script>window.__WURK_BASE__ = "/wurk";</script>'
+  end
+
+  def test_spa_shell_injects_a_non_default_mount_base
+    get '/sidekiq'
+
+    assert_equal 200, last_response.status
+    assert_includes last_response.body, '<script>window.__WURK_BASE__ = "/sidekiq";</script>'
+    refute_includes last_response.body, 'window.__WURK_BASE__ = "/wurk"'
+  end
 end

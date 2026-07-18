@@ -13,7 +13,11 @@ import JobSetActionBar, { type ActionDef } from '../components/JobSetActionBar';
 import { useMeta } from '../hooks/useMeta';
 import { useSelection } from '../hooks/useSelection';
 import { useJobSetActions, entryKey } from '../hooks/useJobSetActions';
+import { useResetPageOnEmpty } from '../hooks/useResetPageOnEmpty';
 import { SkeletonTable } from '../components/Skeleton';
+import { FilterBox } from '../components/FilterBox';
+import { basePath } from '../basePath';
+import { getJSON } from '../http';
 
 interface ScheduledEntry {
   jid: string;
@@ -48,6 +52,7 @@ const ACTIONS: ActionDef[] = [
 
 export default function Scheduled() {
   const [page, setPage] = usePageParam();
+  const [filter, setFilter] = createSignal('');
   const [selected, setSelected] = createSignal<JobEntry | null>(null);
   const [selectedKey, setSelectedKey] = createSignal<string | null>(null);
   const meta = useMeta();
@@ -60,13 +65,20 @@ export default function Scheduled() {
     document.title = `${t('nav.scheduled')} — Wurk`;
   });
 
+  const onFilterChange = (v: string) => {
+    setFilter(v);
+    setPage(1);
+  };
+
   const query = useQuery<ScheduledResponse>(() => ({
-    queryKey: ['scheduled', page()],
+    queryKey: ['scheduled', page(), filter()],
     queryFn: () =>
-      fetch(`/wurk/api/scheduled?page=${page() - 1}&count=${PAGE_SIZE}`).then(
-        (r) => r.json() as Promise<ScheduledResponse>
+      getJSON<ScheduledResponse>(
+        `${basePath()}/api/scheduled?page=${page() - 1}&count=${PAGE_SIZE}&substr=${encodeURIComponent(filter())}`,
       ),
   }));
+
+  useResetPageOnEmpty(page, setPage, () => !query.isPending && !!query.data, () => (query.data?.entries.length ?? 0) === 0);
 
   const { sorted, sort, toggle } = useSort(() => query.data?.entries ?? [], SORT);
   const pageKeys = () => sorted().map(entryKey);
@@ -89,6 +101,8 @@ export default function Scheduled() {
             <PageHeader icon="fa-clock" title={t('nav.scheduled')} summary={t('summaries.scheduled')}>
               <span class="badge badge-accent">{data().total.toLocaleString()}</span>
             </PageHeader>
+
+            <FilterBox value={filter()} onChange={onFilterChange} placeholder={t('common.filter_placeholder')} />
 
             <Show when={sorted().length > 0} fallback={<div class="empty-state">{t('common.empty')}</div>}>
               <>

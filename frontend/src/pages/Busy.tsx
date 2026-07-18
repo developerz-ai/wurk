@@ -7,6 +7,9 @@ import { ArgsValue } from '../components/ArgsValue';
 import { relativeTime, isoTime, formatKb, formatDuration, formatArgs, truncate } from '../utils';
 import { useMeta } from '../hooks/useMeta';
 import { SkeletonCards } from '../components/Skeleton';
+import { basePath } from '../basePath';
+import { post } from '../http';
+import { notifyError } from '../toast';
 
 interface Process {
   identity: string;
@@ -27,6 +30,7 @@ interface Process {
   memory_total_kb?: number;
   version?: string;
   embedded?: boolean;
+  leader?: boolean;
 }
 
 interface WorkRow {
@@ -94,13 +98,14 @@ const statLabelStyle = {
 function ProcessDetail(props: { proc: Process }) {
   const work = useQuery<WorkRow[]>(() => ({
     queryKey: ['workers'],
-    queryFn: () => fetch('/wurk/api/workers').then((r) => r.json() as Promise<WorkRow[]>),
+    queryFn: () => fetch(`${basePath()}/api/workers`).then((r) => r.json() as Promise<WorkRow[]>),
     refetchInterval: 5000,
   }));
   const rows = () => (work.data ?? []).filter((w) => w.process_id === props.proc.identity);
 
   const facts = (): Array<[string, JSX.Element]> => [
     [t('busy.identity'), <code style={{ 'font-size': '12px' }}>{props.proc.identity}</code>],
+    [t('busy.leader'), props.proc.leader ? <span class="badge badge-accent">{t('busy.leader')}</span> : '—'],
     ['PID', props.proc.pid],
     [t('busy.started'), props.proc.started_at ? <span title={isoTime(props.proc.started_at)}>{relativeTime(props.proc.started_at)}</span> : '—'],
     [t('busy.heartbeat'), <span title={isoTime(props.proc.beat)}>{relativeTime(props.proc.beat)}</span>],
@@ -219,7 +224,7 @@ export default function Busy() {
 
   const query = useQuery<Process[]>(() => ({
     queryKey: ['processes'],
-    queryFn: () => fetch('/wurk/api/processes').then((r) => r.json() as Promise<Process[]>),
+    queryFn: () => fetch(`${basePath()}/api/processes`).then((r) => r.json() as Promise<Process[]>),
     refetchInterval: 5000,
   }));
 
@@ -227,18 +232,12 @@ export default function Busy() {
   // scope is 'all'. Both are async — the process reacts on its next
   // heartbeat — so we just refetch rather than optimistically updating.
   const control = useMutation(() => ({
-    mutationFn: async (target: ControlTarget) => {
-      const { signal } = target;
-      const identity = target.scope === 'all' ? 'all' : target.identity;
-      const res = await fetch(`/wurk/api/busy/${signal}`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ identity }),
-      });
-      if (!res.ok) throw new Error(`${signal} failed (${res.status})`);
-      return res;
-    },
+    mutationFn: (target: ControlTarget) =>
+      post(`${basePath()}/api/busy/${target.signal}`, {
+        identity: target.scope === 'all' ? 'all' : target.identity,
+      }),
     onSuccess: () => qc.invalidateQueries({ queryKey: ['processes'] }),
+    onError: notifyError,
   }));
 
   const confirmStop = (scope: string) =>
@@ -323,6 +322,12 @@ export default function Busy() {
                                 </div>
                                 <div style={{ display: 'flex', gap: '0.375rem' }}>
                                   <Show when={isRecent}><span class="live-dot" title="Heartbeat OK" /></Show>
+                                  <Show when={proc.leader}>
+                                    <span class="badge badge-accent" title={t('busy.leader_title')}>
+                                      <i class="fa-solid fa-crown" style={{ 'margin-right': '0.3rem' }} />
+                                      {t('busy.leader')}
+                                    </span>
+                                  </Show>
                                   <Show when={proc.quiet}><span class="badge badge-warning">Quiet</span></Show>
                                   <Show when={proc.embedded}><span class="badge badge-muted">embedded</span></Show>
                                 </div>
