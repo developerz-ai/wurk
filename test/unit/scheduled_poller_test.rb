@@ -95,9 +95,29 @@ class ScheduledPollerTest < Wurk::Test::UnitCase
     @pool.with do |c|
       assert_equal 0, c.call('ZCARD', @schedule)
       assert_equal 1, c.call('LLEN', @queue_list)
-      assert_equal job, Wurk.load_json(c.call('LRANGE', @queue_list, 0, -1).first)
+      promoted = Wurk.load_json(c.call('LRANGE', @queue_list, 0, -1).first)
+      # Promotion restamps enqueued_at (immediate-queue arrival); strip it so the
+      # rest equals the scheduled payload. Freshness has its own test below.
+      promoted.delete('enqueued_at')
+
+      assert_equal job, promoted
       assert_equal 1, c.call('SISMEMBER', 'queues', @queue)
     end
+  end
+
+  # Reliable promotion stamps a fresh integer enqueued_at, matching the default
+  # Enq path (whose client push restamps it). Both schedulers emit wire-identical
+  # promoted payloads (spec §7.1).
+  def test_reliable_enq_stamps_fresh_enqueued_at_on_promotion
+    schedule_job(set: @schedule, at: Time.now.to_f - 5)
+    before = ::Process.clock_gettime(::Process::CLOCK_REALTIME, :millisecond)
+
+    Wurk::Scheduled::ReliableEnq.new(@config).enqueue_jobs([@schedule])
+
+    promoted = Wurk.load_json(@pool.with { |c| c.call('LRANGE', @queue_list, 0, -1).first })
+
+    assert_kind_of Integer, promoted['enqueued_at']
+    assert_operator promoted['enqueued_at'], :>=, before
   end
 
   def test_reliable_enq_leaves_future_jobs_in_set
@@ -152,6 +172,38 @@ class ScheduledPollerTest < Wurk::Test::UnitCase
     assert_equal(1, @pool.with { |c| c.call('ZCARD', @schedule) })
     assert_equal(0, @pool.with { |c| c.call('LLEN', @queue_list) })
   end
+
+  # A raising push on one due job must not abort the drain: the remaining due
+  # jobs still get promoted, and the failure is reported to the error handlers.
+  # (The popped-then-failed job is lost — the default scheduler's known pop→push
+  # tradeoff; ReliableEnq is the loss-free path.)
+  # rubocop:disable Metrics/AbcSize, Minitest/MultipleAssertions
+  def test_drain_continues_after_a_failing_push_and_reports_it
+    2.times { |i| schedule_job(set: @schedule, at: Time.now.to_f - 10 + i) }
+    captured = []
+    @config.error_handlers.clear
+    @config.error_handlers << ->(ex, _ctx, _cfg) { captured << ex }
+
+    enq = Wurk::Scheduled::Enq.new(@config)
+    pushed = []
+    calls = 0
+    client = Object.new
+    client.define_singleton_method(:push) do |job|
+      calls += 1
+      raise 'push blew up' if calls == 1
+
+      pushed << job
+    end
+    enq.instance_variable_set(:@client, client)
+
+    enq.enqueue_jobs([@schedule])
+
+    assert_equal 0, @pool.with { |c| c.call('ZCARD', @schedule) }, 'both due jobs must be popped despite the raise'
+    assert_equal 1, pushed.size, 'the second job must still be pushed after the first raises'
+    assert_equal 1, captured.size
+    assert_equal 'push blew up', captured.first.message
+  end
+  # rubocop:enable Metrics/AbcSize, Minitest/MultipleAssertions
 
   # --- Poller#enqueue -----------------------------------------------
 

@@ -2,9 +2,9 @@
 
 require_relative 'component'
 require_relative 'context'
+require_relative 'dead_set'
 require_relative 'job_logger'
 require_relative 'job_retry'
-require_relative 'keys'
 require_relative 'profiler'
 
 module Wurk
@@ -175,8 +175,9 @@ module Wurk
           ack = true
         end
       rescue Wurk::JobRetry::Handled
-        # JobRetry::Skip (subclass) or Handled — retry layer / middleware has
-        # already booked the outcome; safe to ack.
+        # Handled / JobRetry::Skip (incl. Limiter::Rescheduled, where the
+        # limiter middleware already re-enqueued the job) — the retry layer or
+        # a middleware booked the outcome and recorded no retry; ack the UoW.
         ack = true
       rescue Wurk::Shutdown
         # Don't ack — UoW stays in private list and is reclaimed on reboot.
@@ -185,16 +186,15 @@ module Wurk
       end
     end
 
-    # Parse JSON; on failure ZADD the raw payload to the dead set and ack.
+    # Parse JSON; on failure send the raw payload to the dead set (ZADD +
+    # trim, via the shared DeadSet#kill_raw so the malformed path caps the
+    # morgue exactly like send_to_morgue does — spec §31.8/§31.9) and ack.
     # Returns nil to signal "no further processing".
     def parse_or_kill(jobstr, uow)
       Wurk.load_json(jobstr)
     rescue ::JSON::ParserError => e
       handle_exception(e, { context: 'Invalid JSON', jobstr: jobstr })
-      now = ::Process.clock_gettime(::Process::CLOCK_REALTIME)
-      @capsule.redis do |conn|
-        conn.call('ZADD', Keys::DEAD, now.to_s, jobstr)
-      end
+      DeadSet.new.kill_raw(jobstr)
       uow.acknowledge
       nil
     end

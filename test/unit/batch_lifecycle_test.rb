@@ -276,6 +276,33 @@ class BatchLifecycleTest < Wurk::Test::UnitCase
     assert_equal 0, Wurk::Batch::Status.new(batch.bid).failures
   end
 
+  # #18: a Limiter reschedule inside a batch is *neither* success nor failure.
+  # The Limiter middleware (INNER of Batch) re-enqueues the job and raises
+  # Limiter::Rescheduled (a JobRetry::Skip); the Batch middleware must skip
+  # both acks — pending stays put, no failure recorded, no :success. :success
+  # fires only once the rescheduled job later runs to success.
+  def test_limiter_reschedule_inside_batch_is_neither_success_nor_failure # rubocop:disable Minitest/MultipleAssertions,Metrics/AbcSize
+    batch = new_batch(success: 'S')
+    batch.jobs { perform_one }
+    jid = jid_for(@queue, batch.bid)
+
+    mw = build_server_middleware
+    assert_raises(Wurk::Limiter::Rescheduled) do
+      mw.call(nil, { 'bid' => batch.bid, 'jid' => jid }, @queue) { raise Wurk::Limiter::Rescheduled }
+    end
+
+    status = Wurk::Batch::Status.new(batch.bid)
+
+    assert_equal 1, status.pending, 'a rescheduled job must not ack success'
+    assert_equal 0, status.failures, 'a rescheduled job must not ack failure'
+    assert_equal 0, callbacks_fired(event: 'success', bid: batch.bid), ':success must not fire on reschedule'
+
+    ack_success(batch.bid, jid) # the rescheduled job later runs to success
+
+    assert_equal 0, Wurk::Batch::Status.new(batch.bid).pending
+    assert_equal 1, callbacks_fired(event: 'success', bid: batch.bid)
+  end
+
   # --- #212: dead job manually retried to success ------------------------
 
   # Spec §2.4: ":success never fires unless the dead job is manually retried

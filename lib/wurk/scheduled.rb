@@ -60,8 +60,20 @@ module Wurk
           jobstr = @config.redis { |conn| Wurk::Lua::Loader.eval_cached(conn, :zpopbyscore, keys: [sset], argv: [now]) }
           break unless jobstr
 
-          @client.push(Wurk.load_json(jobstr))
+          push_promoted(jobstr, sset)
         end
+      end
+
+      # A raising `@client.push` (bad payload, transient Redis error) must not
+      # abort the drain and strand the remaining due jobs until the next poll —
+      # rescue per-job, report, continue. The already-popped job IS lost here
+      # (ZPOPBYSCORE removed it); that pop→push loss window is the default
+      # scheduler's known tradeoff — `reliable_scheduler!` (ReliableEnq) is the
+      # loss-free fix, so we don't re-engineer around it here.
+      def push_promoted(jobstr, sset)
+        @client.push(Wurk.load_json(jobstr))
+      rescue StandardError => e
+        handle_exception(e, { context: 'scheduler_promote', set: sset })
       end
 
       def real_time
@@ -102,7 +114,7 @@ module Wurk
           conn,
           :reliable_schedule_promote,
           keys: [sset, Keys::QUEUES_SET],
-          argv: [real_time.to_s, Keys::QUEUE_PREFIX]
+          argv: [real_time.to_s, Keys::QUEUE_PREFIX, real_ms.to_s]
         )
       end
 

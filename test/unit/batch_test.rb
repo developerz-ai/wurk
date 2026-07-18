@@ -175,6 +175,43 @@ class BatchTest < Wurk::Test::UnitCase
     assert_operator Wurk::Batch::Status.new(batch.bid).total, :>=, 1
   end
 
+  # A scheduled (`at`) job inside #jobs registers into the batch at creation via
+  # BATCH_SCHEDULE: total/pending move now, the jid joins the live set, and the
+  # payload waits in `schedule` (not the queue). Promotion later re-pushes it
+  # through BATCH_PUSH's guard — jid already live → no double count.
+  def test_scheduled_job_in_jobs_block_counts_and_registers # rubocop:disable Minitest/MultipleAssertions,Metrics/AbcSize
+    at    = future_at
+    batch = track(Wurk::Batch.new)
+    batch.jobs { perform_one_scheduled(at) }
+
+    assert_equal 1, Wurk::Batch::Status.new(batch.bid).total
+    assert_equal 1, Wurk::Batch::Status.new(batch.bid).pending
+
+    member, score = mine_in_schedule(batch.bid)
+
+    refute_nil member, 'scheduled batched job must land in the `schedule` zset'
+    assert_equal batch.bid, member['bid']
+    assert_in_delta at, score.to_f, 0.01
+    assert_equal(1, @pool.with { |c| c.call('SISMEMBER', "b-#{batch.bid}-jids", member['jid']) })
+  end
+
+  def test_scheduled_job_in_jobs_block_is_not_pushed_to_queue
+    batch = track(Wurk::Batch.new)
+    batch.jobs { perform_one_scheduled(future_at) }
+
+    assert_equal(0, @pool.with { |c| c.call('LLEN', "queue:#{@queue}") })
+  end
+
+  # The empty-marker check keys off `total`; because BATCH_SCHEDULE moves it, a
+  # scheduled-only block is NOT mistaken for empty. A misfire would BATCH_PUSH a
+  # Batch::Empty marker → total would be 2.
+  def test_scheduled_only_block_does_not_enqueue_empty_marker
+    batch = track(Wurk::Batch.new)
+    batch.jobs { perform_one_scheduled(future_at) }
+
+    assert_equal 1, Wurk::Batch::Status.new(batch.bid).total
+  end
+
   def test_jobs_block_raises_without_block
     batch = track(Wurk::Batch.new)
 
@@ -427,6 +464,28 @@ class BatchTest < Wurk::Test::UnitCase
   # active Thread.current[Wurk::Batch::THREAD_KEY] (set inside #jobs).
   def perform_one(_batch)
     Wurk::Client.push('class' => @class_name, 'args' => [], 'queue' => @queue)
+  end
+
+  # Scheduled sibling of perform_one — a future `at` routes through the batched
+  # scheduled path (BATCH_SCHEDULE). `bid` is stamped by the client middleware
+  # from the active Thread.current[Wurk::Batch::THREAD_KEY].
+  def perform_one_scheduled(at)
+    Wurk::Client.push('class' => @class_name, 'args' => [], 'queue' => @queue, 'at' => at)
+  end
+
+  def future_at
+    ::Process.clock_gettime(::Process::CLOCK_REALTIME) + 600
+  end
+
+  # redis-client returns ZRANGE WITHSCORES as [[member, score], ...]. FLUSHDB
+  # teardown + serial-within-class means `schedule` holds only this test's jobs.
+  def mine_in_schedule(bid)
+    @pool.with { |c| c.call('ZRANGE', 'schedule', 0, -1, 'WITHSCORES') }.filter_map do |member, score|
+      payload = JSON.parse(member)
+      [payload, score] if payload['bid'] == bid
+    rescue JSON::ParserError
+      next
+    end.first
   end
 
   def queued_jids

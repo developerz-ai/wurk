@@ -112,12 +112,40 @@ class DeadSetTest < Wurk::Test::UnitCase
 
   # --- trim --------------------------------------------------------------
 
+  # Sidekiq's rank trim is `ZREMRANGEBYRANK dead 0 -max_jobs` (spec §31.8),
+  # which keeps max_jobs-1 of a full set — NOT max_jobs. Drop-in contract:
+  # match it byte-for-byte. Seeding 5 recent entries (scores dodge the
+  # timeout axis) and trimming to max_jobs:3 must leave exactly the 2
+  # highest-scored survivors; the old `-(max_jobs+1)` would leave 3.
   def test_trim_caps_to_dead_max_jobs
-    payloads = seed_dead((0...5).map { |i| [i.to_f, "tm-#{@ns}-#{i}"] })
-    dead_set.trim(max_jobs: 2, timeout: 60_000)
-    survivors = payloads.count { |p| @pool.with { |c| c.call('ZSCORE', @dead, p) } }
+    now = ::Process.clock_gettime(::Process::CLOCK_REALTIME)
+    payloads = seed_dead((0...5).map { |i| [now + i, "tm-#{@ns}-#{i}"] })
+    dead_set.trim(max_jobs: 3, timeout: 60_000)
 
-    assert_operator survivors, :<=, 2
+    survivors = payloads.select { |p| @pool.with { |c| c.call('ZSCORE', @dead, p) } }
+
+    assert_equal payloads.last(2), survivors
+  end
+
+  # kill_raw is the shared morgue primitive behind JobRetry#send_to_morgue and
+  # Processor#parse_or_kill: ZADD the raw payload (score=now) then #trim, no
+  # death handlers. Recent seed scores isolate the rank axis from the timeout
+  # axis so only the -max_jobs cap decides survivors.
+  def test_kill_raw_adds_raw_payload_and_trims
+    now = ::Process.clock_gettime(::Process::CLOCK_REALTIME)
+    seed_dead((0...4).map { |i| [now - 4 + i, "kr-seed-#{@ns}-#{i}"] })
+    raw = "raw-#{@ns}"
+
+    dead_set.kill_raw(raw, max_jobs: 2, timeout: 60_000)
+
+    score = @pool.with { |c| c.call('ZSCORE', @dead, raw) }
+
+    refute_nil score, 'raw payload must be ZADDed'
+    assert_operator score.to_f, :>=, now
+    # 4 seeded + raw = 5, capped to max_jobs-1 = 1 survivor: the newest (raw).
+    survivors = @pool.with { |c| c.call('ZRANGE', @dead, 0, -1) }
+
+    assert_equal [raw], survivors
   end
 
   def test_trim_evicts_expired_by_score

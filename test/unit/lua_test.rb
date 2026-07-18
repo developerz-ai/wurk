@@ -32,7 +32,7 @@ class LuaTest < Wurk::Test::UnitCase
   def test_scripts_registry_holds_expected_keys
     assert_equal(
       %i[zpopbyscore bulk_push reliable_schedule_promote reliable_requeue
-         batch_push batch_ack_success batch_ack_failed batch_ack_complete batch_invalidate
+         batch_push batch_schedule batch_ack_success batch_ack_failed batch_ack_complete batch_invalidate
          batch_append_callback
          fast_delete_job fast_delete_by_class release_if_owner
          limiter_concurrent_acquire limiter_concurrent_release
@@ -133,7 +133,7 @@ class LuaTest < Wurk::Test::UnitCase
       c.call('ZADD', sset, 100, '{"queue":"alpha","jid":"a"}', 150, '{"queue":"beta","jid":"b"}',
              900, '{"queue":"alpha","jid":"future"}')
       count = Wurk::Lua::Loader.eval_cached(
-        c, :reliable_schedule_promote, keys: [sset, qset], argv: [500, "#{@ns}:queue:"]
+        c, :reliable_schedule_promote, keys: [sset, qset], argv: [500, "#{@ns}:queue:", 1_700_000_000_000]
       )
 
       assert_equal 2, count
@@ -142,6 +142,65 @@ class LuaTest < Wurk::Test::UnitCase
       assert_equal 1, c.call('ZCARD', sset)
       assert_equal 2, c.call('SCARD', qset)
       c.call('DEL', "#{@ns}:queue:alpha", "#{@ns}:queue:beta")
+    end
+  end
+
+  # Promotion stamps a fresh integer `enqueued_at` (ARGV[3]) — a scheduled job
+  # arriving on an immediate queue must carry the promotion instant, matching
+  # the default Ruby scheduler's push restamp (spec §7.1). The original stored
+  # member is ZREM'd verbatim; the pushed copy keeps its original bytes and only
+  # has its top-level `enqueued_at` string-patched in (never a full cjson re-encode).
+  def test_reliable_schedule_promote_stamps_fresh_enqueued_at
+    sset = "#{@ns}:schedule"
+    qset = "#{@ns}:queues"
+    now_ms = 1_700_000_000_000
+    @pool.with do |c|
+      c.call('ZADD', sset, 100, '{"queue":"alpha","jid":"a"}')
+      Wurk::Lua::Loader.eval_cached(
+        c, :reliable_schedule_promote, keys: [sset, qset], argv: [500, "#{@ns}:queue:", now_ms]
+      )
+      promoted = Wurk.load_json(c.call('LRANGE', "#{@ns}:queue:alpha", 0, -1).first)
+
+      assert_equal now_ms, promoted['enqueued_at']
+      assert_kind_of Integer, promoted['enqueued_at']
+      assert_equal 'a', promoted['jid']
+      c.call('DEL', "#{@ns}:queue:alpha")
+    end
+  end
+
+  # Regression: promotion patches only `enqueued_at`, never a cjson round-trip —
+  # cjson maps args to Lua doubles, dropping precision past 2^53 and reformatting
+  # 15+ digit ints to scientific notation. Insert branch: schedule members are
+  # stored with no `enqueued_at`, so it is inserted while args stay byte-for-byte.
+  def test_reliable_schedule_promote_preserves_large_int_args_on_insert
+    sset = "#{@ns}:schedule"
+    big  = 9_007_199_254_740_993     # 2^53 + 1: not representable as an IEEE double
+    snow = 1_533_231_640_038_055_945 # 19-digit snowflake id
+    @pool.with do |c|
+      c.call('ZADD', sset, 100, %({"class":"J","args":[#{big},#{snow}],"queue":"alpha","jid":"a"}))
+      promote(c, sset)
+      raw = c.call('LRANGE', "#{@ns}:queue:alpha", 0, -1).first
+
+      assert_includes raw, snow.to_s, 'snowflake id must not reformat to scientific notation'
+      assert_equal [big, snow], Wurk.load_json(raw)['args'], 'big int args must survive verbatim'
+      c.call('DEL', "#{@ns}:queue:alpha")
+    end
+  end
+
+  # Replace branch: retry members carry an `enqueued_at`; promotion swaps a fresh
+  # stamp in place (exactly one key, no duplicate) while a large int arg stays exact.
+  def test_reliable_schedule_promote_preserves_large_int_args_on_replace
+    sset = "#{@ns}:schedule"
+    big  = 9_007_199_254_740_993
+    @pool.with do |c|
+      c.call('ZADD', sset, 100, %({"class":"R","args":[#{big}],"queue":"beta","jid":"b","enqueued_at":1600000000000}))
+      promote(c, sset)
+      raw = c.call('LRANGE', "#{@ns}:queue:beta", 0, -1).first
+
+      assert_equal [big], Wurk.load_json(raw)['args'], 'big int arg must survive verbatim'
+      assert_equal 1_700_000_000_000, Wurk.load_json(raw)['enqueued_at'], 'stamp must be replaced in place'
+      assert_equal 1, raw.scan('"enqueued_at"').size, 'replace must not leave a duplicate key'
+      c.call('DEL', "#{@ns}:queue:beta")
     end
   end
 
@@ -163,6 +222,91 @@ class LuaTest < Wurk::Test::UnitCase
       assert_equal 1, c.call('LLEN', list)
       assert_equal 1, c.call('SISMEMBER', qset, 'default')
       c.call('DEL', list)
+    end
+  end
+
+  # SADD-guard idempotency: re-pushing a jid already in the live set (a retry
+  # or scheduled promotion re-enqueueing a job that never left the batch) must
+  # re-LPUSH the payload but must NOT recount total/pending — else pending
+  # inflates past the acks and :success never fires (spec §2.3/§2.5).
+  def test_batch_push_repush_of_live_jid_does_not_recount # rubocop:disable Minitest/MultipleAssertions
+    bkey = "#{@ns}:b-rp"
+    jids = "#{@ns}:b-rp-jids"
+    list = "#{@ns}:queue:default"
+    qset = "#{@ns}:queues"
+    keys = [bkey, jids, list, qset, "#{@ns}:b-rp-died", "#{@ns}:dead-batches"]
+    argv = ['default', 'JID1', '{"jid":"JID1"}', 'rp']
+    @pool.with do |c|
+      2.times { Wurk::Lua::Loader.eval_cached(c, :batch_push, keys: keys, argv: argv) }
+
+      assert_equal '1', c.call('HGET', bkey, 'total'), 're-push must not recount total'
+      assert_equal '1', c.call('HGET', bkey, 'pending'), 're-push must not recount pending'
+      assert_equal 1, c.call('SCARD', jids)
+      assert_equal 2, c.call('LLEN', list), 're-push must still re-enqueue the payload'
+      c.call('DEL', list)
+    end
+  end
+
+  # The guard must not over-suppress: distinct jids each register once. Guards
+  # §2.3 re-entrancy — `batch.jobs { ... }` adding siblings grows total.
+  def test_batch_push_counts_each_distinct_jid
+    bkey = "#{@ns}:b-dj"
+    jids = "#{@ns}:b-dj-jids"
+    list = "#{@ns}:queue:default"
+    qset = "#{@ns}:queues"
+    died = "#{@ns}:b-dj-died"
+    dead = "#{@ns}:dead-batches"
+    @pool.with do |c|
+      %w[A B].each do |jid|
+        Wurk::Lua::Loader.eval_cached(
+          c, :batch_push, keys: [bkey, jids, list, qset, died, dead],
+                          argv: ['default', jid, %({"jid":"#{jid}"}), 'dj']
+        )
+      end
+
+      assert_equal '2', c.call('HGET', bkey, 'total')
+      assert_equal '2', c.call('HGET', bkey, 'pending')
+      assert_equal 2, c.call('SCARD', jids)
+      c.call('DEL', list)
+    end
+  end
+
+  # BATCH_SCHEDULE registers a scheduled-in-batch job at creation: counts
+  # total/pending (SADD guard), SADDs the jid live, and ZADDs the payload onto
+  # `schedule` — so `total` moves even though nothing hits a queue yet.
+  def test_batch_schedule_registers_counts_jid_and_zadds # rubocop:disable Minitest/MultipleAssertions
+    sched = "#{@ns}:schedule"
+    bkey  = "#{@ns}:b-s"
+    jids  = "#{@ns}:b-s-jids"
+    @pool.with do |c|
+      Wurk::Lua::Loader.eval_cached(
+        c, :batch_schedule, keys: [sched, bkey, jids], argv: ['1700000000.5', '{"jid":"JID1"}', 'JID1']
+      )
+
+      assert_equal '1', c.call('HGET', bkey, 'total')
+      assert_equal '1', c.call('HGET', bkey, 'pending')
+      assert_equal 1, c.call('SISMEMBER', jids, 'JID1')
+      assert_equal '{"jid":"JID1"}', c.call('ZRANGE', sched, 0, -1).first
+      assert_in_delta 1_700_000_000.5, c.call('ZSCORE', sched, '{"jid":"JID1"}').to_f, 0.001
+      c.call('DEL', sched)
+    end
+  end
+
+  # Same SADD-guard idempotency as batch_push: a jid already live re-ZADDs the
+  # payload (a promotion that rescheduled, say) but must not recount.
+  def test_batch_schedule_repush_of_live_jid_does_not_recount # rubocop:disable Minitest/MultipleAssertions
+    sched = "#{@ns}:schedule"
+    bkey  = "#{@ns}:b-sr"
+    jids  = "#{@ns}:b-sr-jids"
+    argv  = ['1700000000', '{"jid":"JID1"}', 'JID1']
+    @pool.with do |c|
+      2.times { Wurk::Lua::Loader.eval_cached(c, :batch_schedule, keys: [sched, bkey, jids], argv: argv) }
+
+      assert_equal '1', c.call('HGET', bkey, 'total'), 're-schedule must not recount total'
+      assert_equal '1', c.call('HGET', bkey, 'pending'), 're-schedule must not recount pending'
+      assert_equal 1, c.call('SCARD', jids)
+      assert_equal 1, c.call('ZCARD', sched)
+      c.call('DEL', sched)
     end
   end
 
@@ -340,5 +484,13 @@ class LuaTest < Wurk::Test::UnitCase
       assert_equal 0, c.call('EXISTS', jids)
       assert_equal '1', c.call('HGET', bkey, 'invalidated')
     end
+  end
+
+  private
+
+  def promote(conn, sset, now_ms = 1_700_000_000_000)
+    Wurk::Lua::Loader.eval_cached(
+      conn, :reliable_schedule_promote, keys: [sset, "#{@ns}:queues"], argv: [500, "#{@ns}:queue:", now_ms]
+    )
   end
 end

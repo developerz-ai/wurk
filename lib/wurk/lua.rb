@@ -37,20 +37,52 @@ module Wurk
     # Pro reliable scheduler: atomically promote all due jobs in a sorted
     # set to their target queues. Pure-Ruby promotion does ZRANGE → ZREM →
     # LPUSH non-atomically and can lose jobs on a mid-step crash.
+    #
+    # Each promoted payload is restamped with a fresh `enqueued_at` (ARGV[3],
+    # epoch ms): that field marks arrival on an *immediate* queue, so a job
+    # leaving `schedule`/`retry` must get a new one at promotion rather than
+    # keep its stale scheduled-origin value (or none). This matches the default
+    # Ruby scheduler, whose push path restamps `enqueued_at` too
+    # (Client#push_plain / #push_batched) — so both schedulers emit
+    # wire-identical promoted payloads (spec §7.1).
+    #
+    # The restamp is a surgical string patch, NOT a cjson.decode -> cjson.encode
+    # round-trip: cjson maps every JSON number to a Lua double, so re-encoding
+    # would silently corrupt integer args past 2^53 (snowflake IDs, 64-bit
+    # counters) and reformat 15+ digit numbers into scientific notation --
+    # breaking wire-compat AND diverging from the loss-free Ruby scheduler,
+    # whose Ruby-side JSON keeps big integers exact. So the stored member is
+    # preserved byte-for-byte and only its top-level `enqueued_at` is rewritten:
+    # replaced in place when present (retry members keep theirs), inserted after
+    # the opening brace when absent (schedule members are stored stripped of it,
+    # via Client#push_scheduled). cjson.decode is still called -- but only to
+    # read the `queue` string and test for a top-level `enqueued_at`, never to
+    # re-serialize, so a lossy decode never reaches the payload. (Residual: a
+    # retry member whose user args embed a numeric key literally named
+    # `enqueued_at` ahead of the top-level one patches the arg instead --
+    # vanishingly rare, and still strictly safer than round-tripping every arg.)
     # KEYS = [sorted_set, queues_set]
-    # ARGV = [now, queue_prefix]
+    # ARGV = [now, queue_prefix, now_ms]
     # Returns the number of jobs promoted.
     # Order matters: decode + push BEFORE zrem. Redis Lua has no rollback,
     # so a failed cjson.decode after a zrem would lose the job. Decode first;
-    # push first; only then remove from the sorted set. Worst case is a
-    # crash between lpush and zrem → at-least-once redelivery, never loss.
+    # push first; only then remove from the sorted set — and zrem the ORIGINAL
+    # member, not the restamped copy. Worst case is a crash between lpush and
+    # zrem → at-least-once redelivery, never loss.
     RELIABLE_SCHEDULE_PROMOTE = <<~LUA
       local jobs = redis.call("zrangebyscore", KEYS[1], "-inf", ARGV[1])
       for i = 1, #jobs do
         local job = jobs[i]
-        local q = cjson.decode(job)["queue"]
+        local decoded = cjson.decode(job)
+        local q = decoded["queue"]
+        local stamped
+        if decoded["enqueued_at"] == nil then
+          stamped = string.gsub(job, "^{", '{"enqueued_at":' .. ARGV[3] .. ",", 1)
+        else
+          stamped = string.gsub(job, '"enqueued_at":%-?%d[%d.eE+-]*', '"enqueued_at":' .. ARGV[3], 1)
+        end
         redis.call("sadd", KEYS[2], q)
-        redis.call("lpush", ARGV[2] .. q, job)
+        redis.call("lpush", ARGV[2] .. q, stamped)
         redis.call("zrem", KEYS[1], job)
       end
       return #jobs
@@ -79,6 +111,13 @@ module Wurk
     # Pro Batch: register a job into a batch and push it to its queue
     # atomically. Keeps total/pending in sync with the jids set.
     #
+    # SADD into the live jids set is the registration guard: total/pending
+    # increment only when the jid is genuinely new (SADD == 1). A jid already
+    # live is a re-push — a retry or scheduled promotion re-enqueueing a job
+    # that never left the batch — so it re-LPUSHes the payload but must NOT
+    # recount, or pending inflates past the acks and `:success` never fires
+    # (spec §2.3/§2.5: total = distinct jobs added, pending = not-yet-succeeded).
+    #
     # A jid found in `b-<bid>-died` is a manual retry of a dead job (morgue
     # "retry" / "add to queue") — it rejoins the live set without recounting:
     # total and pending already include it, because a death never decrements
@@ -99,12 +138,38 @@ module Wurk
           redis.call("zrem", KEYS[6], ARGV[4])
         end
       else
-        redis.call("hincrby", KEYS[1], "total", 1)
-        redis.call("hincrby", KEYS[1], "pending", 1)
-        redis.call("sadd", KEYS[2], ARGV[2])
+        if redis.call("sadd", KEYS[2], ARGV[2]) == 1 then
+          redis.call("hincrby", KEYS[1], "total", 1)
+          redis.call("hincrby", KEYS[1], "pending", 1)
+        end
       end
       redis.call("sadd", KEYS[4], ARGV[1])
       redis.call("lpush", KEYS[3], ARGV[3])
+      return 1
+    LUA
+
+    # Pro Batch: register a scheduled (`at`) job into a batch AND ZADD it onto
+    # the `schedule` set, atomically. This is the deferred sibling of BATCH_PUSH:
+    # same SADD-guarded total/pending counting, but the enqueue action is a ZADD
+    # (schedule for later) instead of an LPUSH (queue now). A `perform_in` inside
+    # `batch.jobs` must move `total`/`pending` at *creation* — otherwise the
+    # empty-marker check (batch.rb) sees no counter movement and fires
+    # `:complete`/`:success` while real jobs still sit in `schedule`.
+    #
+    # No died / dead-batches handling (unlike BATCH_PUSH): a job scheduled at
+    # creation time is always new to the batch. When the scheduler later promotes
+    # it, the re-push routes through BATCH_PUSH, whose guard finds the jid already
+    # live (SADD == 0) → pure LPUSH, no recount. So registration happens exactly
+    # once, here, at enqueue.
+    # KEYS = [schedule, b-<bid>, b-<bid>-jids]
+    # ARGV = [at_score, job_json, jid]
+    # Returns 1.
+    BATCH_SCHEDULE = <<~LUA
+      if redis.call("sadd", KEYS[3], ARGV[3]) == 1 then
+        redis.call("hincrby", KEYS[2], "total", 1)
+        redis.call("hincrby", KEYS[2], "pending", 1)
+      end
+      redis.call("zadd", KEYS[1], ARGV[1], ARGV[2])
       return 1
     LUA
 
@@ -281,6 +346,7 @@ module Wurk
       reliable_schedule_promote: RELIABLE_SCHEDULE_PROMOTE,
       reliable_requeue: RELIABLE_REQUEUE,
       batch_push: BATCH_PUSH,
+      batch_schedule: BATCH_SCHEDULE,
       batch_ack_success: BATCH_ACK_SUCCESS,
       batch_ack_failed: BATCH_ACK_FAILED,
       batch_ack_complete: BATCH_ACK_COMPLETE,

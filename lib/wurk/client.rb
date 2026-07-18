@@ -246,10 +246,24 @@ module Wurk
 
     def atomic_push(conn, payloads)
       if payloads.first['at']
-        conn.pipelined { |pipe| push_scheduled(pipe, payloads) }
+        push_scheduled_split(conn, payloads)
       else
         push_immediate(conn, payloads)
       end
+    end
+
+    # Scheduled payloads split like push_immediate: a `bid`-carrying job (a
+    # `perform_in` inside `batch.jobs`) must register into its batch at creation
+    # via BATCH_SCHEDULE so `total`/`pending` move now — a bare ZADD would leave
+    # the batch counters at zero and the empty-marker check would misfire. Plain
+    # scheduled jobs take the bare ZADD. Separate pipelines for the same
+    # NOSCRIPT-replay reason as push_immediate: a Lua NOSCRIPT surfaces only at
+    # pipeline finalize, so a unified retry would replay the plain ZADD and
+    # duplicate the scheduled entry.
+    def push_scheduled_split(conn, payloads)
+      batched, plain = payloads.partition { |j| j['bid'] }
+      conn.pipelined { |pipe| push_scheduled(pipe, plain) } unless plain.empty?
+      push_batched_scheduled_pipelined(conn, batched) unless batched.empty?
     end
 
     def push_scheduled(conn, payloads)
@@ -288,6 +302,17 @@ module Wurk
       conn.pipelined { |pipe| push_batched(pipe, batched, now, eval_method: :eval_with_source) }
     end
 
+    # Same NOSCRIPT-recovery shape as push_batched_pipelined, for the scheduled
+    # batched path (BATCH_SCHEDULE instead of BATCH_PUSH).
+    def push_batched_scheduled_pipelined(conn, batched)
+      conn.pipelined { |pipe| push_batched_scheduled(pipe, batched) }
+    rescue RedisClient::CommandError => e
+      raise unless e.message.to_s.start_with?('NOSCRIPT')
+
+      Wurk::Lua::Loader.script_load_all(conn)
+      conn.pipelined { |pipe| push_batched_scheduled(pipe, batched, eval_method: :eval_with_source) }
+    end
+
     def push_plain(conn, payloads, now)
       grouped = payloads.group_by { |j| j['queue'] }
       conn.call('SADD', 'queues', *grouped.keys)
@@ -317,6 +342,25 @@ module Wurk
           keys: ["b-#{j['bid']}", "b-#{j['bid']}-jids", "queue:#{j['queue']}", 'queues',
                  "b-#{j['bid']}-died", 'dead-batches'],
           argv: [j['queue'], j['jid'], Wurk.dump_json(j), j['bid']]
+        )
+      end
+    end
+
+    # Scheduled batched jobs route through BATCH_SCHEDULE: the SADD-guarded
+    # total/pending increment registers the job in its batch at creation, and
+    # the ZADD defers it onto `schedule`. Payload is stripped of `at`/
+    # `enqueued_at` exactly like push_scheduled — `enqueued_at` is stamped fresh
+    # at promotion, never while the job sits scheduled (spec §7.1). One Redis
+    # round-trip per job because the Lua binds per-job KEYS; scheduled batch
+    # enqueue is not the hot path.
+    def push_batched_scheduled(conn, payloads, eval_method: :eval_cached)
+      payloads.each do |j|
+        Wurk::Lua::Loader.public_send(
+          eval_method,
+          conn,
+          :batch_schedule,
+          keys: ['schedule', "b-#{j['bid']}", "b-#{j['bid']}-jids"],
+          argv: [j['at'].to_s, Wurk.dump_json(j.except('enqueued_at', 'at')), j['jid']]
         )
       end
     end

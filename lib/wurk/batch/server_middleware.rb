@@ -17,8 +17,9 @@ module Wurk
     # failure → BATCH_ACK_FAILED → the jid joins `b-<bid>-failed` and
     # `failures` reflects the count of currently-failing jobs. A later
     # successful retry clears it; a terminal death moves it to `b-<bid>-died`.
-    # Clean handled exits (JobRetry::Skip from expiry/interrupt, cooperative
-    # IterableJob interruption) are re-raised without counting as failures.
+    # Clean handled exits (JobRetry::Skip — from the interrupt handler or a
+    # Limiter::Rescheduled re-enqueue — and cooperative IterableJob
+    # interruption) are re-raised as neither success nor failure.
     #
     # Invalidated batches short-circuit: the job is skipped without
     # raising — counts as a "success" for batch purposes per spec §12.
@@ -43,9 +44,12 @@ module Wurk
 
       private
 
-      # A handled/skip exit or a cooperative interruption is not a failure —
-      # re-raise it untouched. Any other exception means the job failed and
-      # will retry (or eventually die): record it before re-raising.
+      # A handled/skip exit — including a Limiter::Rescheduled, where the
+      # limiter already re-enqueued the job (Rescheduled < JobRetry::Skip <
+      # Handled) — or a cooperative interruption is *neither* success nor
+      # failure: re-raise it untouched, acking neither. Any other exception
+      # means the job failed and will retry (or eventually die): record it
+      # before re-raising.
       def run_and_ack(bid, jid)
         yield
         ack_success(bid, jid)
