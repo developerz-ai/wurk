@@ -48,6 +48,13 @@ module Wurk
         @done = true
         @workers.dup
       end
+      # Halt fetching for the whole capsule up front: the shared fetcher's drain
+      # flag makes retrieve_work return nil immediately, so a processor can't pull
+      # a fresh job between quiet and its own terminate taking effect. Safe-nav
+      # covers a quiet that lands before Capsule#prepare! materializes the fetcher
+      # (e.g. a signal-driven quiet on a partially-booted launcher) — nothing is
+      # fetching yet, so there is nothing to halt.
+      capsule.fetcher&.terminate
       logger.info { "Terminating quiet threads for #{capsule.name} capsule" }
       snapshot.each(&:terminate)
     end

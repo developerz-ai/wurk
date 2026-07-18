@@ -114,6 +114,18 @@ class ManagerTest < Wurk::Test::UnitCase
     assert_equal mgr.workers.size, calls
   end
 
+  def test_quiet_terminates_the_capsule_fetcher
+    mgr = Wurk::Manager.new(@capsule)
+    silence_processors(mgr)
+    @pool.with { |c| c.call('RPUSH', @public_queue, '{"jid":"halt"}') }
+
+    mgr.quiet
+
+    # Drained fetcher short-circuits retrieve_work even with a job waiting, so a
+    # processor can't pull fresh work between quiet and its own terminate.
+    assert_nil @capsule.fetcher.retrieve_work
+  end
+
   # --- processor_result ------------------------------------------------
 
   def test_processor_result_removes_processor_and_spawns_replacement # rubocop:disable Minitest/MultipleAssertions

@@ -109,6 +109,11 @@ module Wurk
         names.map { |q| "#{Keys::QUEUE_PREFIX}#{q}" }
       end
 
+      # Quiet hook (Manager#quiet). Flips the drain flag so retrieve_work
+      # short-circuits: once quieted, no processor can pull a fresh UoW, even
+      # one sitting in the between-jobs window (Processor#run only re-checks its
+      # own @done between iterations). Quiet is one-way — matches Sidekiq TSTP
+      # (spec §21.3), there is no un-terminate.
       def terminate
         @done = true
       end

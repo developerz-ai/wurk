@@ -22,8 +22,7 @@ module Wurk
   #
   # Signals (see docs/idea/04-signals.md):
   #   TERM/INT  → `shutdown`           (graceful drain)
-  #   TSTP      → relay TSTP           (pause fetch)
-  #   CONT      → relay CONT           (resume fetch)
+  #   TSTP      → relay TSTP           (quiet — stop fetching; one-way, no resume)
   #   USR1      → `rolling_restart`    (zero-downtime cycle)
   class Swarm
     include Component
@@ -132,7 +131,7 @@ module Wurk
 
     def install_signal_handlers
       { 'TERM' => :term, 'INT' => :term, 'TSTP' => :tstp,
-        'CONT' => :cont, 'USR1' => :usr1 }.each do |sig, sym|
+        'USR1' => :usr1 }.each do |sig, sym|
         ::Signal.trap(sig) { @signal_queue << sym }
       end
     end
@@ -145,7 +144,6 @@ module Wurk
         case sym
         when :term then shutdown
         when :tstp then relay_signal('TSTP')
-        when :cont then relay_signal('CONT')
         when :usr1 then rolling_restart
         end
       end
