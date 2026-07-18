@@ -96,11 +96,43 @@ class FetcherReliableTest < Wurk::Test::UnitCase
     assert_equal payload, lindex(@public_queue, 0)
   end
 
-  # --- bulk_requeue --------------------------------------------------
+  # --- bulk_requeue (atomic private→public move) ---------------------
 
-  def test_bulk_requeue_rpushes_grouped_by_queue
+  # The reliable-fetch recovery path: a job still in the private list at
+  # shutdown is LREM'd out and RPUSH'd to its public queue in one atomic hop,
+  # so it lands in exactly one place — no private+public double copy that
+  # would double-execute (once from the RPUSH, once from the boot reaper).
+  def test_bulk_requeue_moves_job_from_private_to_public
+    payload = enqueue('bq1')
+    uow = @fetcher.retrieve_work
+
+    @fetcher.bulk_requeue([uow])
+
+    assert_equal 0, llen(private_queue), 'LREM must clear the private copy'
+    assert_equal [payload], lrange(@public_queue)
+  end
+
+  # hard_shutdown reads `job` off another thread, so a Processor can ACK
+  # (LREM the private copy) between that read and the requeue. The LREM guard
+  # then removes nothing and skips the RPUSH — a job that already finished is
+  # not resurrected onto the public queue.
+  def test_bulk_requeue_skips_rpush_when_job_already_acked
+    enqueue('bq-acked')
+    uow = @fetcher.retrieve_work
+    uow.acknowledge
+
+    @fetcher.bulk_requeue([uow])
+
+    assert_equal 0, llen(private_queue)
+    assert_equal 0, llen(@public_queue), 'acked job must not be re-pushed'
+  end
+
+  def test_bulk_requeue_moves_each_uow_to_its_own_queue
     other_queue_name   = "#{@queue_name}-other"
     other_public_queue = "#{Wurk::Keys::QUEUE_PREFIX}#{other_queue_name}"
+    other_private      = Wurk::Fetcher::Reliable.private_queue_name(other_public_queue)
+    seed_private(private_queue, 'j1', 'j2')
+    seed_private(other_private, 'k1')
     uows = [
       uow_for(@public_queue, 'j1'),
       uow_for(@public_queue, 'j2'),
@@ -112,7 +144,7 @@ class FetcherReliableTest < Wurk::Test::UnitCase
     assert_equal %w[j1 j2], lrange(@public_queue)
     assert_equal %w[k1], lrange(other_public_queue)
   ensure
-    @pool.with { |c| c.call('DEL', other_public_queue) } if other_public_queue
+    @pool.with { |c| c.call('DEL', other_public_queue, other_private) } if other_public_queue
   end
 
   def test_bulk_requeue_noop_on_nil
@@ -121,6 +153,30 @@ class FetcherReliableTest < Wurk::Test::UnitCase
 
   def test_bulk_requeue_noop_on_empty
     assert_nil @fetcher.bulk_requeue([])
+  end
+
+  # NOSCRIPT recovery (rescue branch): a pipelined EVALSHA surfaces NOSCRIPT
+  # only at finalize, so requeue_pipelined reloads all scripts and replays via
+  # source-embedded EVAL. SCRIPT FLUSH forces that path; the move must still land.
+  def test_bulk_requeue_reloads_lua_after_script_flush
+    payload = enqueue('bq-flush')
+    uow = @fetcher.retrieve_work
+    @pool.with { |c| c.call('SCRIPT', 'FLUSH') }
+
+    @fetcher.bulk_requeue([uow])
+
+    assert_equal [payload], lrange(@public_queue),
+                 'NOSCRIPT must trigger script_load_all + EVAL-source retry, then move the job'
+  end
+
+  # Re-raise branch: a string at the private-list key makes the RELIABLE_REQUEUE
+  # Lua's LREM raise WRONGTYPE — a CommandError that is *not* NOSCRIPT, so it
+  # must propagate rather than trigger the script-reload retry.
+  def test_bulk_requeue_reraises_non_noscript_command_error
+    @pool.with { |c| c.call('SET', private_queue, 'not-a-list') }
+    uow = uow_for(@public_queue, 'x1')
+
+    assert_raises(RedisClient::CommandError) { @fetcher.bulk_requeue([uow]) }
   end
 
   # --- queues_cmd ----------------------------------------------------
@@ -229,6 +285,12 @@ class FetcherReliableTest < Wurk::Test::UnitCase
   def enqueue(payload)
     @pool.with { |c| c.call('LPUSH', @public_queue, payload) }
     payload
+  end
+
+  # Place payloads into a private list exactly as a real fetch's LMOVE would,
+  # so bulk_requeue's LREM guard has a copy to remove.
+  def seed_private(key, *payloads)
+    @pool.with { |c| c.call('RPUSH', key, *payloads) }
   end
 
   def llen(key)

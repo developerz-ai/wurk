@@ -3,6 +3,7 @@
 require 'socket'
 require_relative '../component'
 require_relative '../keys'
+require_relative '../lua'
 require_relative '../fetcher'
 
 module Wurk
@@ -79,19 +80,20 @@ module Wurk
       end
 
       # Called on shutdown for jobs the Processor couldn't finish in time.
-      # One pipelined RPUSH per public queue (head insert) so on next boot
-      # they're picked again ahead of fresh enqueues.
+      # Atomically moves each still-private UoW back to its public queue via
+      # the RELIABLE_REQUEUE Lua (LREM-guarded RPUSH): the job leaves the
+      # per-process private list and reappears on the public queue in one hop,
+      # so it's visible immediately after a deploy instead of waiting for the
+      # next boot's reaper. The guard makes the move idempotent against the
+      # cross-thread `job`-read race in Manager#hard_shutdown — a Processor
+      # that ACKed in that window is a no-op (LREM misses, RPUSH skipped), so a
+      # finished job is never resurrected. Sidekiq Pro super_fetch §3 retains
+      # in-flight in the private list until the next boot; we prefer the
+      # immediate move so a rolling deploy recovers work without a restart.
       def bulk_requeue(in_progress)
         return if in_progress.nil? || in_progress.empty?
 
-        grouped = in_progress.group_by(&:queue)
-        config.redis do |conn|
-          conn.pipelined do |pipe|
-            grouped.each do |public_q, uows|
-              pipe.call('RPUSH', public_q, *uows.map(&:job))
-            end
-          end
-        end
+        config.redis { |conn| requeue_pipelined(conn, in_progress) }
       end
 
       # Prefixed queue keys (`queue:<name>`) in fetch order. Strict mode
@@ -112,6 +114,29 @@ module Wurk
       end
 
       private
+
+      # One pipelined RELIABLE_REQUEUE EVALSHA per UoW. Mirrors
+      # Client#push_batched_pipelined: a pipelined EVALSHA surfaces NOSCRIPT
+      # only at finalize (never to eval_cached's inline rescue). Every command
+      # here is the same script, so a flushed cache fails all of them and
+      # applies none — recover by reloading once and replaying the whole
+      # pipeline via source-embedded EVAL.
+      def requeue_pipelined(conn, in_progress, eval_method: :eval_cached)
+        conn.pipelined do |pipe|
+          in_progress.each do |uow|
+            Wurk::Lua::Loader.public_send(
+              eval_method, pipe, :reliable_requeue,
+              keys: [self.class.private_queue_name(uow.queue), uow.queue],
+              argv: [uow.job]
+            )
+          end
+        end
+      rescue RedisClient::CommandError => e
+        raise unless e.message.to_s.start_with?('NOSCRIPT')
+
+        Wurk::Lua::Loader.script_load_all(conn)
+        requeue_pipelined(conn, in_progress, eval_method: :eval_with_source)
+      end
 
       # SMEMBERS of the `paused` SET. One round-trip per fetch pass; the
       # set is tiny in practice (one entry per paused queue) so the cost

@@ -87,10 +87,13 @@ module Wurk
       end
     end
 
-    # Reached when the deadline expired with workers still busy. We must
-    # push their in-flight UoWs back to the public queues BEFORE raising
-    # Wurk::Shutdown into the threads — losing a job is worse than running
-    # it twice (Sidekiq's at-least-once contract).
+    # Reached when the deadline expired with workers still busy. Atomically
+    # move their in-flight UoWs private→public (Reliable#bulk_requeue) BEFORE
+    # raising Wurk::Shutdown into the threads, so a job killed mid-perform is
+    # re-run once (Sidekiq's at-least-once contract). `job` is read off another
+    # thread, so a Processor can ACK between this map and the requeue — but
+    # bulk_requeue's LREM guard skips the RPUSH on a miss, so a job that
+    # finished in that window is not resurrected onto the public queue.
     def hard_shutdown # rubocop:disable Metrics/AbcSize
       cleanup = nil
       @plock.synchronize do
