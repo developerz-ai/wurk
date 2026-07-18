@@ -15,7 +15,8 @@
     "extensions": "الإضافات",
     "collapse": "طيّ",
     "expand": "توسيع",
-    "status_active": "حالة النظام: نشط"
+    "status_active": "حالة النظام: نشط",
+    "status_inactive": "حالة النظام: غير متصل"
   },
   "dashboard": {
     "processed": "تمت المعالجة",
@@ -172,7 +173,8 @@
     "in": "خلال",
     "load_failed": "تعذّر تحميل هذه الصفحة",
     "load_failed_hint": "ربما تم تحديث التطبيق منذ فتحه. ستؤدي إعادة التحميل إلى جلب أحدث إصدار.",
-    "reload": "إعادة التحميل"
+    "reload": "إعادة التحميل",
+    "filter_placeholder": "تصفية حسب الفئة أو JID…"
   },
   "busy": {
     "hosts": "{n} مضيفًا",
@@ -189,7 +191,9 @@
     "up_for": "يعمل منذ",
     "running_jobs": "المهام قيد التنفيذ",
     "running_since": "قيد التنفيذ منذ",
-    "no_running": "لا توجد مهام قيد التنفيذ في هذه العملية"
+    "no_running": "لا توجد مهام قيد التنفيذ في هذه العملية",
+    "leader": "القائد",
+    "leader_title": "تحتفظ هذه العملية بقفل قائد المجموعة"
   },
   "cron": {
     "history_title": "سجل التنفيذ",
@@ -249,6 +253,7 @@
     "job_class": "فئة المهمة",
     "pct_total": "% من الإجمالي",
     "queue_latency_seconds": "زمن استجابة الطابور (ثوانٍ)",
-    "historical_snapshots": "اللقطات التاريخية"
+    "historical_snapshots": "اللقطات التاريخية",
+    "view_job_detail": "عرض تفاصيل فئة المهمة"
   }
 }

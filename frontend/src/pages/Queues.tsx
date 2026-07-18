@@ -5,6 +5,7 @@ import { ArgsValue } from '../components/ArgsValue';
 import { SortableTh } from '../components/SortableTh';
 import { useSort, type Accessors } from '../hooks/useSort';
 import { usePageParam } from '../hooks/usePageParam';
+import { useResetPageOnEmpty } from '../hooks/useResetPageOnEmpty';
 import { t } from '../i18n';
 import { PageHeader } from '../components/PageHeader';
 import { relativeTime, truncate, formatArgs, formatDuration } from '../utils';
@@ -78,6 +79,8 @@ function QueueJobs(props: { name: string }) {
     },
     onError: notifyError,
   }));
+
+  useResetPageOnEmpty(page, setPage, () => !query.isPending && !!query.data, () => (query.data?.jobs.length ?? 0) === 0);
 
   const { sorted, sort, toggle } = useSort(() => query.data?.jobs ?? [], JOB_SORT);
 

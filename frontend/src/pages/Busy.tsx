@@ -30,6 +30,7 @@ interface Process {
   memory_total_kb?: number;
   version?: string;
   embedded?: boolean;
+  leader?: boolean;
 }
 
 interface WorkRow {
@@ -104,6 +105,7 @@ function ProcessDetail(props: { proc: Process }) {
 
   const facts = (): Array<[string, JSX.Element]> => [
     [t('busy.identity'), <code style={{ 'font-size': '12px' }}>{props.proc.identity}</code>],
+    [t('busy.leader'), props.proc.leader ? <span class="badge badge-accent">{t('busy.leader')}</span> : '—'],
     ['PID', props.proc.pid],
     [t('busy.started'), props.proc.started_at ? <span title={isoTime(props.proc.started_at)}>{relativeTime(props.proc.started_at)}</span> : '—'],
     [t('busy.heartbeat'), <span title={isoTime(props.proc.beat)}>{relativeTime(props.proc.beat)}</span>],
@@ -320,6 +322,12 @@ export default function Busy() {
                                 </div>
                                 <div style={{ display: 'flex', gap: '0.375rem' }}>
                                   <Show when={isRecent}><span class="live-dot" title="Heartbeat OK" /></Show>
+                                  <Show when={proc.leader}>
+                                    <span class="badge badge-accent" title={t('busy.leader_title')}>
+                                      <i class="fa-solid fa-crown" style={{ 'margin-right': '0.3rem' }} />
+                                      {t('busy.leader')}
+                                    </span>
+                                  </Show>
                                   <Show when={proc.quiet}><span class="badge badge-warning">Quiet</span></Show>
                                   <Show when={proc.embedded}><span class="badge badge-muted">embedded</span></Show>
                                 </div>

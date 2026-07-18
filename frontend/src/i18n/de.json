@@ -15,7 +15,8 @@
     "extensions": "Erweiterungen",
     "collapse": "Einklappen",
     "expand": "Ausklappen",
-    "status_active": "Systemstatus: Aktiv"
+    "status_active": "Systemstatus: Aktiv",
+    "status_inactive": "Systemstatus: Getrennt"
   },
   "dashboard": {
     "processed": "Verarbeitet",
@@ -115,7 +116,9 @@
     "up_for": "seit",
     "running_jobs": "Laufende Jobs",
     "running_since": "Läuft seit",
-    "no_running": "Auf diesem Prozess laufen derzeit keine Jobs"
+    "no_running": "Auf diesem Prozess laufen derzeit keine Jobs",
+    "leader": "Leader",
+    "leader_title": "Dieser Prozess hält die Cluster-Leader-Sperre"
   },
   "cron": {
     "history_title": "Ausführungsverlauf",
@@ -209,7 +212,8 @@
     "in": "in",
     "load_failed": "Diese Seite konnte nicht geladen werden",
     "load_failed_hint": "Die App wurde möglicherweise seit dem Öffnen aktualisiert. Neu laden holt die neueste Version.",
-    "reload": "Neu laden"
+    "reload": "Neu laden",
+    "filter_placeholder": "Nach Klasse oder JID filtern…"
   },
   "limiters": {
     "exhausted": "erschöpft",
@@ -249,6 +253,7 @@
     "job_class": "Job-Klasse",
     "pct_total": "% Gesamt",
     "queue_latency_seconds": "Warteschlangen-Latenz (Sekunden)",
-    "historical_snapshots": "Historische Snapshots"
+    "historical_snapshots": "Historische Snapshots",
+    "view_job_detail": "Job-Klassendetail anzeigen"
   }
 }

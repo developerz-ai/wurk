@@ -60,9 +60,35 @@ class ApiSerializersTest < Wurk::Test::UnitCase
     assert_equal '', out[:error_message]
   end
 
+  # Busy page leader badge (#29): the `leader` flag is a plain identity
+  # comparison against ProcessSet#leader — passed in so the serializer never
+  # issues its own per-row `dear-leader` GET (that would be an N+1 across the
+  # process list).
+  def test_process_row_marks_leader_by_identity_match
+    leader = process_row_fixture('host:1:abc')
+    follower = process_row_fixture('host:2:def')
+
+    assert Wurk::Api::Serializers.process_row(leader, leader_identity: 'host:1:abc')[:leader]
+    refute Wurk::Api::Serializers.process_row(follower, leader_identity: 'host:1:abc')[:leader]
+  end
+
+  def test_process_row_leader_false_when_no_leader_elected
+    proc = process_row_fixture('host:1:abc')
+
+    refute Wurk::Api::Serializers.process_row(proc, leader_identity: '')[:leader]
+    refute Wurk::Api::Serializers.process_row(proc)[:leader]
+  end
+
   private
 
   def record
     Wurk::JobRecord.new({ 'class' => 'MyJob', 'args' => [1], 'jid' => 'abc', 'queue' => 'default' })
+  end
+
+  def process_row_fixture(identity)
+    Wurk::Process.new(
+      'identity' => identity, 'hostname' => 'api-host', 'pid' => 1, 'concurrency' => 10,
+      'busy' => 0, 'beat' => Time.now.to_f, 'quiet' => 'false', 'labels' => [], 'queues' => []
+    )
   end
 end

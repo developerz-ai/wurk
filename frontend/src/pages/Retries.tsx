@@ -13,7 +13,9 @@ import { usePageParam } from '../hooks/usePageParam';
 import { useMeta } from '../hooks/useMeta';
 import { useSelection } from '../hooks/useSelection';
 import { useJobSetActions, entryKey } from '../hooks/useJobSetActions';
+import { useResetPageOnEmpty } from '../hooks/useResetPageOnEmpty';
 import { SkeletonTable } from '../components/Skeleton';
+import { FilterBox } from '../components/FilterBox';
 import { basePath } from '../basePath';
 
 interface RetryEntry {
@@ -62,6 +64,7 @@ const ALL: ActionDef[] = [
 
 export default function Retries() {
   const [page, setPage] = usePageParam();
+  const [filter, setFilter] = createSignal('');
   const [selected, setSelected] = createSignal<JobEntry | null>(null);
   const [selectedKey, setSelectedKey] = createSignal<string | null>(null);
   const meta = useMeta();
@@ -74,13 +77,23 @@ export default function Retries() {
     document.title = `${t('nav.retries')} — Wurk`;
   });
 
+  // Filter narrows the server-side substr scan (klass/jid), so a new term can
+  // easily leave the current page past the end of the filtered set — reset to
+  // page 1 whenever it changes, same as any other query-key-changing filter.
+  const onFilterChange = (v: string) => {
+    setFilter(v);
+    setPage(1);
+  };
+
   const query = useQuery<RetriesResponse>(() => ({
-    queryKey: ['retries', page()],
+    queryKey: ['retries', page(), filter()],
     queryFn: () =>
-      fetch(`${basePath()}/api/retries?page=${page() - 1}&count=${PAGE_SIZE}`).then(
+      fetch(`${basePath()}/api/retries?page=${page() - 1}&count=${PAGE_SIZE}&substr=${encodeURIComponent(filter())}`).then(
         (r) => r.json() as Promise<RetriesResponse>
       ),
   }));
+
+  useResetPageOnEmpty(page, setPage, () => !query.isPending && !!query.data, () => (query.data?.entries.length ?? 0) === 0);
 
   const { sorted, sort, toggle } = useSort(() => query.data?.entries ?? [], SORT);
   const pageKeys = () => sorted().map(entryKey);
@@ -103,6 +116,8 @@ export default function Retries() {
             <PageHeader icon="fa-rotate-right" title={t('nav.retries')} summary={t('summaries.retries')}>
               <span class="badge badge-warning">{data().total.toLocaleString()}</span>
             </PageHeader>
+
+            <FilterBox value={filter()} onChange={onFilterChange} placeholder={t('common.filter_placeholder')} />
 
             <Show when={sorted().length > 0} fallback={<div class="empty-state">{t('common.empty')}</div>}>
               <>

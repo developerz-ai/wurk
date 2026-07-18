@@ -4,6 +4,7 @@ import { Pagination } from '../components/Pagination';
 import { SortableTh } from '../components/SortableTh';
 import { useSort, type Accessors } from '../hooks/useSort';
 import { usePageParam } from '../hooks/usePageParam';
+import { useResetPageOnEmpty } from '../hooks/useResetPageOnEmpty';
 import { t } from '../i18n';
 import { PageHeader } from '../components/PageHeader';
 import { SkeletonTable } from '../components/Skeleton';
@@ -81,7 +82,12 @@ export default function Limiters() {
     onError: notifyError,
   }));
 
+  useResetPageOnEmpty(page, setPage, () => !q.isPending && !!q.data, () => (q.data?.limiters.length ?? 0) === 0);
+
   const { sorted, sort, toggle } = useSort(() => q.data?.limiters ?? [], SORT);
+
+  const confirmReset = (name: string) =>
+    window.confirm(t('actions.confirm', { action: t('actions.reset'), scope: name })) && reset.mutate(name);
 
   return (
     <Switch>
@@ -169,7 +175,7 @@ export default function Limiters() {
                                 <button
                                   class="btn btn-sm"
                                   disabled={reset.isPending}
-                                  onClick={() => reset.mutate(limiter.name)}
+                                  onClick={() => confirmReset(limiter.name)}
                                 >
                                   {t('actions.reset')}
                                 </button>

@@ -148,7 +148,9 @@ module Wurk
     end
 
     def processes
-      render json: ::Wurk::ProcessSet.new.map { |p| ::Wurk::Api::Serializers.process_row(p) }
+      set = ::Wurk::ProcessSet.new
+      leader_identity = set.leader
+      render json: set.map { |p| ::Wurk::Api::Serializers.process_row(p, leader_identity: leader_identity) }
     end
 
     # Currently-executing jobs across the cluster (WorkSet), oldest first.

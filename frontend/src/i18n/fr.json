@@ -15,7 +15,8 @@
     "extensions": "Extensions",
     "collapse": "Réduire",
     "expand": "Développer",
-    "status_active": "État du système : Actif"
+    "status_active": "État du système : Actif",
+    "status_inactive": "État du système : Déconnecté"
   },
   "dashboard": {
     "processed": "Traités",
@@ -115,7 +116,9 @@
     "up_for": "depuis",
     "running_jobs": "Tâches en cours",
     "running_since": "En cours depuis",
-    "no_running": "Aucune tâche en cours sur ce processus"
+    "no_running": "Aucune tâche en cours sur ce processus",
+    "leader": "Leader",
+    "leader_title": "Ce processus détient le verrou de leader du cluster"
   },
   "cron": {
     "history_title": "Historique d'exécution",
@@ -209,7 +212,8 @@
     "in": "dans",
     "load_failed": "Impossible de charger cette page",
     "load_failed_hint": "L'application a peut-être été mise à jour depuis son ouverture. Recharger récupérera la dernière version.",
-    "reload": "Recharger"
+    "reload": "Recharger",
+    "filter_placeholder": "Filtrer par classe ou JID…"
   },
   "limiters": {
     "exhausted": "épuisé",
@@ -249,6 +253,7 @@
     "job_class": "Classe de tâche",
     "pct_total": "% du total",
     "queue_latency_seconds": "Latence de file (secondes)",
-    "historical_snapshots": "Instantanés historiques"
+    "historical_snapshots": "Instantanés historiques",
+    "view_job_detail": "Voir le détail de la classe de tâche"
   }
 }

@@ -2,6 +2,7 @@ import { useQuery } from '@tanstack/solid-query';
 import { createSignal, createMemo, onMount, For, Show } from 'solid-js';
 import { AreaChart, BarChart, LineChart, type Datum } from '../components/charts';
 import { Skeleton } from '../components/Skeleton';
+import Modal from '../components/Modal';
 import { t } from '../i18n';
 import { formatDuration, truncate } from '../utils';
 import { basePath } from '../basePath';
@@ -18,6 +19,24 @@ interface TopJob {
 interface MetricsResponse {
   minutes: number;
   top_jobs: TopJob[];
+}
+
+// GET /api/metrics/:klass (Wurk::Api::ApiController#metrics_for_job). Wire
+// field names differ from the cluster-wide history endpoints — `p`/`f`/`ms`
+// ride straight off Wurk::Metrics::Query.for_job's rows rather than through
+// the history_point serializer.
+interface JobMetricPoint {
+  at: number;
+  p: number;
+  f: number;
+  ms: number;
+}
+
+interface JobMetricsResponse {
+  klass: string;
+  minutes: number | null;
+  hours: number | null;
+  series: JobMetricPoint[];
 }
 
 interface HistoryPoint {
@@ -139,6 +158,7 @@ function ChartLoader(props: { height: number }) {
 
 export default function Metrics() {
   const [rangeIdx, setRangeIdx] = createSignal(2); // default 7d, matching the mock
+  const [drilldownKlass, setDrilldownKlass] = createSignal<string | null>(null);
   const range = () => RANGES[rangeIdx()];
 
   onMount(() => {
@@ -361,7 +381,7 @@ export default function Metrics() {
                   <tbody>
                     <For each={jobs()}>
                       {(j, i) => (
-                        <tr>
+                        <tr class="row-clickable" onClick={() => setDrilldownKlass(j.klass)} title={t('metrics.view_job_detail')}>
                           <td style={{ color: 'var(--obs-text)' }} title={j.klass}>
                             <span class="obs-jobdot" style={{ background: JOB_DOTS[i() % JOB_DOTS.length] }} />
                             {truncate(j.klass.split('::').pop() ?? j.klass, 36)}
@@ -383,7 +403,66 @@ export default function Metrics() {
 
       <QueueLatencyHistory range={range()} />
       <HistoricalSnapshots />
+
+      <JobMetricsModal klass={drilldownKlass()} minutes={range().minutes} onClose={() => setDrilldownKlass(null)} />
     </div>
+  );
+}
+
+// Per-job-class drill-down (#29): clicking a Top Job Types row opens this
+// modal, which hits the previously-unused GET /api/metrics/:klass with the
+// same window as the toolbar range so the chart matches what's on screen.
+function JobMetricsModal(props: { klass: string | null; minutes: number; onClose: () => void }) {
+  const data = useQuery(() => ({
+    queryKey: ['metrics-job', props.klass, props.minutes],
+    queryFn: async () => {
+      const r = await fetch(`${basePath()}/api/metrics/${encodeURIComponent(props.klass!)}?minutes=${props.minutes}`);
+      if (!r.ok) throw new Error(`metrics-job failed (${r.status})`);
+      return r.json() as Promise<JobMetricsResponse>;
+    },
+    enabled: props.klass !== null,
+  }));
+
+  const rows = createMemo(() =>
+    (data.data?.series ?? []).map((p) => ({ label: fmtBucket(p.at, '1m'), processed: p.p, failed: p.f, runtime_ms: p.ms })),
+  );
+  const hasData = createMemo(() => rows().some((r) => r.processed > 0 || r.failed > 0));
+  const totals = createMemo(() => rows().reduce((acc, r) => ({ processed: acc.processed + r.processed, failed: acc.failed + r.failed }), { processed: 0, failed: 0 }));
+
+  return (
+    <Modal open={props.klass !== null} onClose={props.onClose} title={props.klass ?? ''} width={720}>
+      <Show when={props.klass}>
+        <div style={{ display: 'flex', gap: '1.5rem', 'margin-bottom': '1rem' }}>
+          <div>
+            <div class="obs-mono">{t('dashboard.processed')}</div>
+            <div style={{ 'font-size': '18px', 'font-weight': 600 }}>{totals().processed.toLocaleString()}</div>
+          </div>
+          <div>
+            <div class="obs-mono">{t('dashboard.failed')}</div>
+            <div style={{ 'font-size': '18px', 'font-weight': 600, color: 'var(--danger)' }}>{totals().failed.toLocaleString()}</div>
+          </div>
+        </div>
+        <Show when={!data.isPending} fallback={<ChartLoader height={240} />}>
+          <Show
+            when={!data.isError && hasData()}
+            fallback={<div class="empty-state" style={{ height: '240px', display: 'grid', 'place-items': 'center' }}>{t('metrics.no_queue_history')}</div>}
+          >
+            <LineChart
+              data={rows()}
+              height={240}
+              yAxisWidth={36}
+              yDecimals={false}
+              xMinTickGap={48}
+              legend
+              series={[
+                { key: 'processed', name: t('dashboard.processed'), stroke: '#fafafa', strokeWidth: 2 },
+                { key: 'failed', name: t('dashboard.failed'), stroke: '#a1a1aa', strokeWidth: 1.5 },
+              ]}
+            />
+          </Show>
+        </Show>
+      </Show>
+    </Modal>
   );
 }
 

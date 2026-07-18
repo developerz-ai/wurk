@@ -15,7 +15,8 @@
     "extensions": "拡張機能",
     "collapse": "折りたたむ",
     "expand": "展開",
-    "status_active": "システム状態: 稼働中"
+    "status_active": "システム状態: 稼働中",
+    "status_inactive": "システム状態: 切断"
   },
   "dashboard": {
     "processed": "処理済み",
@@ -115,7 +116,9 @@
     "up_for": "稼働",
     "running_jobs": "実行中のジョブ",
     "running_since": "実行開始",
-    "no_running": "このプロセスで実行中のジョブはありません"
+    "no_running": "このプロセスで実行中のジョブはありません",
+    "leader": "リーダー",
+    "leader_title": "このプロセスはクラスターリーダーロックを保持しています"
   },
   "cron": {
     "history_title": "実行履歴",
@@ -209,7 +212,8 @@
     "in": "後",
     "load_failed": "このページを読み込めませんでした",
     "load_failed_hint": "アプリを開いてから更新された可能性があります。再読み込みすると最新版を取得します。",
-    "reload": "再読み込み"
+    "reload": "再読み込み",
+    "filter_placeholder": "クラスまたはJIDで絞り込み…"
   },
   "limiters": {
     "exhausted": "枯渇",
@@ -249,6 +253,7 @@
     "job_class": "ジョブクラス",
     "pct_total": "割合",
     "queue_latency_seconds": "キューレイテンシ(秒)",
-    "historical_snapshots": "過去のスナップショット"
+    "historical_snapshots": "過去のスナップショット",
+    "view_job_detail": "ジョブクラスの詳細を表示"
   }
 }

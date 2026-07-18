@@ -2,6 +2,7 @@ import { A } from '@solidjs/router';
 import { For, Show } from 'solid-js';
 import { t } from '../i18n';
 import { useMeta } from '../hooks/useMeta';
+import { useSSE } from '../hooks/useSSE';
 import logoUrl from '../assets/wurk-logo.png';
 
 interface NavProps {
@@ -34,6 +35,12 @@ export default function Nav(props: NavProps) {
   // path — wurk surfaces the tab but doesn't render the gem's view in the SPA.
   const meta = useMeta();
   const customTabs = () => meta.data?.custom_tabs ?? [];
+  // Live SSE connection state (#29): the status chip previously always read
+  // "Active" — it now reflects whether the dashboard's realtime stream is
+  // actually up. Nav is mounted once for the app's lifetime (inside Layout),
+  // so this is the one persistent EventSource, independent of whichever
+  // route is on screen.
+  const { connected } = useSSE();
 
   // Close the mobile drawer on navigation. The desktop rail no longer expands on
   // hover/focus, so there's nothing to blur back.
@@ -138,8 +145,11 @@ export default function Nav(props: NavProps) {
                   gap: '5px',
                 }}
               >
-                <span class="live-dot" style={{ width: '6px', height: '6px' }} />
-                {t('nav.status_active')}
+                <span
+                  class="live-dot"
+                  style={{ width: '6px', height: '6px', background: connected() ? undefined : 'var(--text-muted)' }}
+                />
+                {connected() ? t('nav.status_active') : t('nav.status_inactive')}
               </span>
             </span>
           </A>

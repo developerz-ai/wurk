@@ -15,7 +15,8 @@
     "extensions": "Extensões",
     "collapse": "Recolher",
     "expand": "Expandir",
-    "status_active": "Status do sistema: Ativo"
+    "status_active": "Status do sistema: Ativo",
+    "status_inactive": "Status do sistema: Desconectado"
   },
   "dashboard": {
     "processed": "Processados",
@@ -115,7 +116,9 @@
     "up_for": "ativo há",
     "running_jobs": "Jobs em execução",
     "running_since": "Em execução desde",
-    "no_running": "Nenhum job em execução neste processo"
+    "no_running": "Nenhum job em execução neste processo",
+    "leader": "Líder",
+    "leader_title": "Este processo mantém o bloqueio de líder do cluster"
   },
   "cron": {
     "history_title": "Histórico de execução",
@@ -209,7 +212,8 @@
     "in": "em",
     "load_failed": "Não foi possível carregar esta página",
     "load_failed_hint": "O app pode ter sido atualizado desde que você o abriu. Recarregar buscará a versão mais recente.",
-    "reload": "Recarregar"
+    "reload": "Recarregar",
+    "filter_placeholder": "Filtrar por classe ou JID…"
   },
   "limiters": {
     "exhausted": "esgotado",
@@ -249,6 +253,7 @@
     "job_class": "Classe do job",
     "pct_total": "% do total",
     "queue_latency_seconds": "Latência da fila (segundos)",
-    "historical_snapshots": "Snapshots históricos"
+    "historical_snapshots": "Snapshots históricos",
+    "view_job_detail": "Ver detalhe da classe de job"
   }
 }

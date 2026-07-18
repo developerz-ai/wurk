@@ -15,7 +15,8 @@
     "extensions": "Extensions",
     "collapse": "Collapse",
     "expand": "Expand",
-    "status_active": "System Status: Active"
+    "status_active": "System Status: Active",
+    "status_inactive": "System Status: Disconnected"
   },
   "dashboard": {
     "processed": "Processed",
@@ -115,7 +116,9 @@
     "up_for": "up",
     "running_jobs": "Running jobs",
     "running_since": "Running Since",
-    "no_running": "No jobs currently running on this process"
+    "no_running": "No jobs currently running on this process",
+    "leader": "Leader",
+    "leader_title": "This process holds the cluster leader lock"
   },
   "cron": {
     "history_title": "Execution history",
@@ -209,7 +212,8 @@
     "in": "in",
     "load_failed": "Couldn't load this page",
     "load_failed_hint": "The app may have updated since you opened it. Reloading will fetch the latest version.",
-    "reload": "Reload"
+    "reload": "Reload",
+    "filter_placeholder": "Filter by class or JID…"
   },
   "limiters": {
     "exhausted": "exhausted",
@@ -249,6 +253,7 @@
     "job_class": "Job Class",
     "pct_total": "% Total",
     "queue_latency_seconds": "Queue Latency (seconds)",
-    "historical_snapshots": "Historical Snapshots"
+    "historical_snapshots": "Historical Snapshots",
+    "view_job_detail": "View job class detail"
   }
 }

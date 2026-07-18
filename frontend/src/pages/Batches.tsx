@@ -5,6 +5,7 @@ import { Pagination } from '../components/Pagination';
 import { SortableTh } from '../components/SortableTh';
 import { useSort, type Accessors } from '../hooks/useSort';
 import { usePageParam } from '../hooks/usePageParam';
+import { useResetPageOnEmpty } from '../hooks/useResetPageOnEmpty';
 import { t } from '../i18n';
 import { PageHeader } from '../components/PageHeader';
 import { relativeTime, truncate } from '../utils';
@@ -55,6 +56,8 @@ export default function Batches() {
         (r) => r.json() as Promise<BatchesResponse>
       ),
   }));
+
+  useResetPageOnEmpty(page, setPage, () => !q.isPending && !!q.data, () => (q.data?.batches.length ?? 0) === 0);
 
   const { sorted, sort, toggle } = useSort(() => q.data?.batches ?? [], SORT);
 

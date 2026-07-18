@@ -207,6 +207,36 @@ class ApiEndpointsTest < Wurk::Test::EngineCase
     cleanup_process(identity)
   end
 
+  def test_process_row_leader_flag_matches_dear_leader_key
+    identity = seed_process
+    ::Wurk.redis { |c| c.call('SET', 'dear-leader', identity) }
+    get '/wurk/api/processes'
+
+    assert_ok
+    row = json_body.find { |p| p[:identity] == identity }
+
+    refute_nil row
+    assert row[:leader]
+  ensure
+    ::Wurk.redis { |c| c.call('DEL', 'dear-leader') }
+    cleanup_process(identity)
+  end
+
+  def test_process_row_leader_false_for_non_leader_process
+    identity = seed_process
+    ::Wurk.redis { |c| c.call('SET', 'dear-leader', 'someone-else') }
+    get '/wurk/api/processes'
+
+    assert_ok
+    row = json_body.find { |p| p[:identity] == identity }
+
+    refute_nil row
+    refute row[:leader]
+  ensure
+    ::Wurk.redis { |c| c.call('DEL', 'dear-leader') }
+    cleanup_process(identity)
+  end
+
   def test_workers_lists_in_flight_jobs_per_process # rubocop:disable Minitest/MultipleAssertions
     identity = seed_process(work: true)
     get '/wurk/api/workers'
