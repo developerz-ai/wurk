@@ -10,7 +10,7 @@ import { PageHeader } from '../components/PageHeader';
 import { SkeletonTable } from '../components/Skeleton';
 import { useMeta } from '../hooks/useMeta';
 import { basePath } from '../basePath';
-import { post } from '../http';
+import { getJSON, post } from '../http';
 import { notifyError } from '../toast';
 
 // Uniform live status every limiter type reports (Wurk::Limiter#status).
@@ -68,9 +68,7 @@ export default function Limiters() {
   const q = useQuery<LimitersResponse>(() => ({
     queryKey: ['limiters', page()],
     queryFn: () =>
-      fetch(`${basePath()}/api/limiters?page=${page() - 1}&count=${PAGE_SIZE}`).then(
-        (r) => r.json() as Promise<LimitersResponse>
-      ),
+      getJSON<LimitersResponse>(`${basePath()}/api/limiters?page=${page() - 1}&count=${PAGE_SIZE}`),
     refetchInterval: 5000,
   }));
 

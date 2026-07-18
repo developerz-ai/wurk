@@ -381,10 +381,17 @@ export default function Metrics() {
                   <tbody>
                     <For each={jobs()}>
                       {(j, i) => (
-                        <tr class="row-clickable" onClick={() => setDrilldownKlass(j.klass)} title={t('metrics.view_job_detail')}>
+                        <tr>
                           <td style={{ color: 'var(--obs-text)' }} title={j.klass}>
-                            <span class="obs-jobdot" style={{ background: JOB_DOTS[i() % JOB_DOTS.length] }} />
-                            {truncate(j.klass.split('::').pop() ?? j.klass, 36)}
+                            <button
+                              type="button"
+                              class="obs-jobbtn"
+                              onClick={() => setDrilldownKlass(j.klass)}
+                              title={t('metrics.view_job_detail')}
+                            >
+                              <span class="obs-jobdot" style={{ background: JOB_DOTS[i() % JOB_DOTS.length] }} />
+                              {truncate(j.klass.split('::').pop() ?? j.klass, 36)}
+                            </button>
                           </td>
                           <td style={{ 'text-align': 'end', 'font-variant-numeric': 'tabular-nums' }}>{j.count.toLocaleString()}</td>
                           <td class="obs-pct" style={{ 'text-align': 'end' }}>
@@ -444,21 +451,26 @@ function JobMetricsModal(props: { klass: string | null; minutes: number; onClose
         </div>
         <Show when={!data.isPending} fallback={<ChartLoader height={240} />}>
           <Show
-            when={!data.isError && hasData()}
-            fallback={<div class="empty-state" style={{ height: '240px', display: 'grid', 'place-items': 'center' }}>{t('metrics.no_queue_history')}</div>}
+            when={!data.isError}
+            fallback={<div class="empty-state" style={{ height: '240px', display: 'grid', 'place-items': 'center' }}>{t('common.error')}</div>}
           >
-            <LineChart
-              data={rows()}
-              height={240}
-              yAxisWidth={36}
-              yDecimals={false}
-              xMinTickGap={48}
-              legend
-              series={[
-                { key: 'processed', name: t('dashboard.processed'), stroke: '#fafafa', strokeWidth: 2 },
-                { key: 'failed', name: t('dashboard.failed'), stroke: '#a1a1aa', strokeWidth: 1.5 },
-              ]}
-            />
+            <Show
+              when={hasData()}
+              fallback={<div class="empty-state" style={{ height: '240px', display: 'grid', 'place-items': 'center' }}>{t('dashboard.no_history')}</div>}
+            >
+              <LineChart
+                data={rows()}
+                height={240}
+                yAxisWidth={36}
+                yDecimals={false}
+                xMinTickGap={48}
+                legend
+                series={[
+                  { key: 'processed', name: t('dashboard.processed'), stroke: '#fafafa', strokeWidth: 2 },
+                  { key: 'failed', name: t('dashboard.failed'), stroke: '#a1a1aa', strokeWidth: 1.5 },
+                ]}
+              />
+            </Show>
           </Show>
         </Show>
       </Show>

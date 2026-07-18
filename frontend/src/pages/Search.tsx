@@ -1,5 +1,5 @@
 import { useQuery } from '@tanstack/solid-query';
-import { createEffect, createSignal, onCleanup, onMount, For, Show } from 'solid-js';
+import { createEffect, createSignal, onCleanup, onMount, untrack, For, Show } from 'solid-js';
 import { useSearchParams } from '@solidjs/router';
 import { t } from '../i18n';
 import { PageHeader } from '../components/PageHeader';
@@ -7,6 +7,7 @@ import { ArgsValue } from '../components/ArgsValue';
 import { SkeletonTable } from '../components/Skeleton';
 import { relativeTime, truncate, isoTime, formatArgs } from '../utils';
 import { basePath } from '../basePath';
+import { getJSON } from '../http';
 
 type HitKind = 'queue' | 'retry' | 'scheduled' | 'dead';
 
@@ -94,16 +95,27 @@ export default function Search() {
     onCleanup(() => clearTimeout(id));
   });
 
+  // Resync the field + results when the URL query changes on its own — back/
+  // forward navigation or an external link drops a new ?q= that must drive the
+  // page without waiting for the user to type. The debounce above keeps sp.q ===
+  // input().trim() for our own writes, so compare (input untracked, so this only
+  // reacts to sp.q) and adopt the URL value only when it actually diverges —
+  // otherwise we'd clobber mid-typing text with its own trimmed form.
+  createEffect(() => {
+    const q = (sp.q as string) ?? '';
+    if (q !== untrack(() => input().trim())) {
+      setInput(q);
+      setTerm(q.trim());
+    }
+  });
+
   const active = () => term().length >= MIN_CHARS;
 
   // Server-side substring scan (budget-bounded). The term is in the query key so
   // each search caches independently and returning to a prior term is instant.
   const results = useQuery<SearchResponse>(() => ({
     queryKey: ['search', term()],
-    queryFn: () =>
-      fetch(`${basePath()}/api/search?substr=${encodeURIComponent(term())}`).then(
-        (r) => r.json() as Promise<SearchResponse>,
-      ),
+    queryFn: () => getJSON<SearchResponse>(`${basePath()}/api/search?substr=${encodeURIComponent(term())}`),
     enabled: active(),
     staleTime: 10_000,
   }));
@@ -115,7 +127,7 @@ export default function Search() {
     queryFn: () =>
       Promise.all(
         [`${basePath()}/api/retries?page=0&count=10`, `${basePath()}/api/dead?page=0&count=10`].map((u) =>
-          fetch(u).then((r) => r.json()),
+          getJSON<{ entries?: Array<{ klass?: string }> }>(u),
         ),
       ),
     enabled: !active(),
@@ -147,6 +159,7 @@ export default function Search() {
         <input
           class="input"
           type="search"
+          aria-label={t('search.placeholder')}
           placeholder={t('search.placeholder')}
           value={input()}
           onInput={(e) => setInput(e.currentTarget.value)}

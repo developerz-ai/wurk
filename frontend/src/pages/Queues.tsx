@@ -15,7 +15,7 @@ import { Tooltip } from '../components/Tooltip';
 import { useMeta } from '../hooks/useMeta';
 import { SkeletonTable } from '../components/Skeleton';
 import { basePath } from '../basePath';
-import { post } from '../http';
+import { getJSON, post } from '../http';
 import { notifyError } from '../toast';
 
 interface QueueSummary {
@@ -63,8 +63,8 @@ function QueueJobs(props: { name: string }) {
   const query = useQuery<QueueDetail>(() => ({
     queryKey: ['queue', props.name, page()],
     queryFn: () =>
-      fetch(`${basePath()}/api/queues/${encodeURIComponent(props.name)}?page=${page() - 1}&count=${PAGE_SIZE}`).then(
-        (r) => r.json() as Promise<QueueDetail>
+      getJSON<QueueDetail>(
+        `${basePath()}/api/queues/${encodeURIComponent(props.name)}?page=${page() - 1}&count=${PAGE_SIZE}`,
       ),
   }));
 
@@ -187,7 +187,7 @@ export default function Queues() {
 
   const query = useQuery<QueueSummary[]>(() => ({
     queryKey: ['queues'],
-    queryFn: () => fetch(`${basePath()}/api/queues`).then((r) => r.json() as Promise<QueueSummary[]>),
+    queryFn: () => getJSON<QueueSummary[]>(`${basePath()}/api/queues`),
     refetchInterval: 5000,
   }));
 

@@ -24,3 +24,13 @@ export async function post(url: string, body?: unknown): Promise<Response> {
   if (!res.ok) throw new RequestError(res.status);
   return res;
 }
+
+// GET `url` and parse the JSON body as `T`. Throws RequestError on a non-2xx
+// response so solid-query routes it to the error state — otherwise a 4xx/5xx
+// error payload is cast to the success shape and the render path dereferences
+// fields that aren't there.
+export async function getJSON<T>(url: string): Promise<T> {
+  const res = await fetch(url);
+  if (!res.ok) throw new RequestError(res.status);
+  return res.json() as Promise<T>;
+}

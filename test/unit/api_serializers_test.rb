@@ -5,9 +5,12 @@ require_relative '../../app/controllers/wurk/api/serializers'
 
 # Custom job-info rows (spec §25.2) flow from the host-registered
 # Wurk::Web.config.custom_job_info_rows into the job-record JSON the SPA renders
-# in its detail modal. Mutates the global Wurk::Web.config singleton, so this
-# class is intentionally not parallelized.
+# in its detail modal. Each test mutates the global Wurk::Web.config singleton;
+# setup/teardown reset it, and minitest-parallel_fork isolates the class in its
+# own process and runs its tests serially, so the shared config is safe.
 class ApiSerializersTest < Wurk::Test::UnitCase
+  parallelize_me!
+
   def setup
     super
     Wurk::Web.reset_config!

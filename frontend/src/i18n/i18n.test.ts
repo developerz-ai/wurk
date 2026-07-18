@@ -97,7 +97,6 @@ describe('locale parity', () => {
         const mismatched = Object.keys(baseline).filter((k) => {
           if (!(k in flat)) return false;
           const enVars = placeholders(baseline[k]);
-          if (enVars.length === 0) return false;
           return JSON.stringify(placeholders(flat[k])) !== JSON.stringify(enVars);
         });
         expect(mismatched).toEqual([]);

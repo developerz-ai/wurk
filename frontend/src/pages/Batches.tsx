@@ -11,6 +11,7 @@ import { PageHeader } from '../components/PageHeader';
 import { relativeTime, truncate } from '../utils';
 import { SkeletonTable } from '../components/Skeleton';
 import { basePath } from '../basePath';
+import { getJSON } from '../http';
 
 interface Batch {
   bid: string;
@@ -52,9 +53,7 @@ export default function Batches() {
   const q = useQuery<BatchesResponse>(() => ({
     queryKey: ['batches', page()],
     queryFn: () =>
-      fetch(`${basePath()}/api/batches?page=${page() - 1}&count=${PAGE_SIZE}`).then(
-        (r) => r.json() as Promise<BatchesResponse>
-      ),
+      getJSON<BatchesResponse>(`${basePath()}/api/batches?page=${page() - 1}&count=${PAGE_SIZE}`),
   }));
 
   useResetPageOnEmpty(page, setPage, () => !q.isPending && !!q.data, () => (q.data?.batches.length ?? 0) === 0);

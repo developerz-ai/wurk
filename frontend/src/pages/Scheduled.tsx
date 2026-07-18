@@ -17,6 +17,7 @@ import { useResetPageOnEmpty } from '../hooks/useResetPageOnEmpty';
 import { SkeletonTable } from '../components/Skeleton';
 import { FilterBox } from '../components/FilterBox';
 import { basePath } from '../basePath';
+import { getJSON } from '../http';
 
 interface ScheduledEntry {
   jid: string;
@@ -72,8 +73,8 @@ export default function Scheduled() {
   const query = useQuery<ScheduledResponse>(() => ({
     queryKey: ['scheduled', page(), filter()],
     queryFn: () =>
-      fetch(`${basePath()}/api/scheduled?page=${page() - 1}&count=${PAGE_SIZE}&substr=${encodeURIComponent(filter())}`).then(
-        (r) => r.json() as Promise<ScheduledResponse>
+      getJSON<ScheduledResponse>(
+        `${basePath()}/api/scheduled?page=${page() - 1}&count=${PAGE_SIZE}&substr=${encodeURIComponent(filter())}`,
       ),
   }));
 

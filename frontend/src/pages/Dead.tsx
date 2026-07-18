@@ -17,6 +17,7 @@ import { useResetPageOnEmpty } from '../hooks/useResetPageOnEmpty';
 import { SkeletonTable } from '../components/Skeleton';
 import { FilterBox } from '../components/FilterBox';
 import { basePath } from '../basePath';
+import { getJSON } from '../http';
 
 interface DeadEntry {
   jid: string;
@@ -78,8 +79,8 @@ export default function Dead() {
   const query = useQuery<DeadResponse>(() => ({
     queryKey: ['dead', page(), filter()],
     queryFn: () =>
-      fetch(`${basePath()}/api/dead?page=${page() - 1}&count=${PAGE_SIZE}&substr=${encodeURIComponent(filter())}`).then(
-        (r) => r.json() as Promise<DeadResponse>
+      getJSON<DeadResponse>(
+        `${basePath()}/api/dead?page=${page() - 1}&count=${PAGE_SIZE}&substr=${encodeURIComponent(filter())}`,
       ),
   }));
 

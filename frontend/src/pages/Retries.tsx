@@ -17,6 +17,7 @@ import { useResetPageOnEmpty } from '../hooks/useResetPageOnEmpty';
 import { SkeletonTable } from '../components/Skeleton';
 import { FilterBox } from '../components/FilterBox';
 import { basePath } from '../basePath';
+import { getJSON } from '../http';
 
 interface RetryEntry {
   jid: string;
@@ -88,8 +89,8 @@ export default function Retries() {
   const query = useQuery<RetriesResponse>(() => ({
     queryKey: ['retries', page(), filter()],
     queryFn: () =>
-      fetch(`${basePath()}/api/retries?page=${page() - 1}&count=${PAGE_SIZE}&substr=${encodeURIComponent(filter())}`).then(
-        (r) => r.json() as Promise<RetriesResponse>
+      getJSON<RetriesResponse>(
+        `${basePath()}/api/retries?page=${page() - 1}&count=${PAGE_SIZE}&substr=${encodeURIComponent(filter())}`,
       ),
   }));
 

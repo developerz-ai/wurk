@@ -46,13 +46,14 @@ function renderSearch(path = '/search') {
   const history = createMemoryHistory();
   history.set({ value: path, replace: true });
   const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
-  return render(() => (
+  const result = render(() => (
     <QueryClientProvider client={client}>
       <MemoryRouter history={history}>
         <Route path="/search" component={Search} />
       </MemoryRouter>
     </QueryClientProvider>
   ));
+  return { ...result, history };
 }
 
 describe('Search', () => {
@@ -103,5 +104,30 @@ describe('Search', () => {
     await waitFor(() =>
       expect(fetchMock.mock.calls.some(([u]) => String(u).includes('/api/search?substr=Xyz'))).toBe(true),
     );
+  });
+
+  it('resyncs the field and results when the URL query changes (history navigation)', async () => {
+    const fetchMock = vi.fn((url: string) => {
+      let body: unknown = { entries: [] };
+      if (url.includes('/api/search?substr=Boom')) body = { substr: 'Boom', total: 1, hits: [RETRY_HIT], truncated: false };
+      else if (url.includes('/api/search?substr=Other')) body = { substr: 'Other', total: 1, hits: [QUEUE_HIT], truncated: false };
+      return Promise.resolve({ ok: true, status: 200, json: () => Promise.resolve(body) } as Response);
+    });
+    vi.stubGlobal('fetch', fetchMock);
+    const { history } = renderSearch('/search?q=Boom');
+
+    const input = (await screen.findByPlaceholderText(t('search.placeholder'))) as HTMLInputElement;
+    await waitFor(() => expect(input.value).toBe('Boom'));
+    expect(await screen.findByText('RuntimeError')).toBeInTheDocument();
+
+    // Back/forward navigation (or any same-route ?q= change) must drive the
+    // field + results without the user re-typing.
+    history.set({ value: '/search?q=Other' });
+
+    await waitFor(() => expect(input.value).toBe('Other'));
+    await waitFor(() =>
+      expect(fetchMock.mock.calls.some(([u]) => String(u).includes('/api/search?substr=Other'))).toBe(true),
+    );
+    expect(await screen.findByText(t('search.kind.queue'))).toBeInTheDocument();
   });
 });
