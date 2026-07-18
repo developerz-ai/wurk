@@ -45,6 +45,18 @@ module Wurk
     # Precompiled SPA lives in vendor/assets/dashboard; the engine serves
     # those files as static assets under the /wurk-assets mount point via
     # AssetMount (above).
+    #
+    # Deliberately unauthenticated: this middleware is inserted straight into
+    # the *host app's* middleware stack (`app.middleware`), not the engine's
+    # own (`middleware.use` in this class, below) — so it runs before
+    # anything wired via `Wurk::Web.use`/`Authorization` even sees the
+    # request, and `/wurk-assets/*` is reachable without passing either
+    # check. That's intentional, not an oversight: the bundle is the
+    # compiled JS/CSS/font shell only (no job payloads, no Redis reads, no
+    # per-user state — every data-bearing byte comes from the JSON API,
+    # which *does* sit behind the engine's Authorization middleware). It's
+    # the same trust model as serving `public/assets` from any other Rails
+    # app. See README "Security notes" for the full reasoning.
     initializer 'wurk.assets' do |app|
       assets_path = Wurk::Engine.root.join('vendor', 'assets', 'dashboard')
       if assets_path.exist?

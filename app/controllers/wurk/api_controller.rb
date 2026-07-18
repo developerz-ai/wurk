@@ -22,6 +22,8 @@ module Wurk
     # Bounds concurrent SSE streams per process (503 past the cap) so stale
     # dashboard tabs can't pin every Puma thread. Provides #with_stream_slot.
     include StreamConcurrencyGuard
+    # Owns the #stream action's tick loop (headers, cadence, tear-down).
+    include SseStreaming
 
     STREAM_TICK_SECONDS = 2.0
     STREAM_MAX_DURATION = 120.0
@@ -413,34 +415,6 @@ module Wurk
       (names.slice(page[:page] * page[:count], page[:count]) || []).map do |name|
         ::Wurk::Api::Serializers.limiter_row(name, ::Wurk::Web::Enterprise::Limits.metadata(name))
       end
-    end
-
-    def stream_headers!
-      response.headers['Content-Type'] = 'text/event-stream'
-      response.headers['Cache-Control'] = 'no-cache'
-      response.headers['X-Accel-Buffering'] = 'no'
-    end
-
-    def drive_stream(sse, tick, max_dur)
-      deadline = monotime + max_dur
-      loop do
-        sse.write(stream_tick_payload, event: 'stats')
-        break if monotime >= deadline
-
-        sleep tick
-      end
-    rescue ::IOError, ::ActionController::Live::ClientDisconnected
-      # client closed; nothing to clean up.
-    ensure
-      sse.close
-    end
-
-    def monotime
-      ::Process.clock_gettime(::Process::CLOCK_MONOTONIC)
-    end
-
-    def stream_tick_payload
-      ::Wurk::Api::Serializers.stats_payload(::Wurk::Stats.new).merge(at: ::Time.now.to_f)
     end
 
     def render_cron_action(success)

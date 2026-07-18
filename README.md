@@ -111,6 +111,12 @@ Wurk::Web.use(Rack::Auth::Basic, "Wurk") { |user, pass| user == ENV["WURK_USER"]
 
 Ship a viewer-only board (e.g. a public demo) with no auth code at all by setting `WURK_WEB_READ_ONLY=1` — every mutating request returns 403 and the SPA hides destructive actions.
 
+### Security notes
+
+- **`Wurk::Web.use` and the `authorization` hook gate the dashboard's routes and JSON API** — every controller under the engine mount goes through them.
+- **`/wurk-assets/*` (the precompiled SPA's JS/CSS/font bundle) is served unauthenticated, by design.** It's inserted into the host app's own middleware stack ahead of the engine's routes, so it never reaches `Wurk::Web.use`/`authorization`. This is safe because the bundle carries no data — no job payloads, no Redis reads, nothing per-user — it's a static shell, same trust model as any Rails app's `public/assets`. Everything data-bearing (stats, queues, jobs) is served by the JSON API, which *is* gated. If you need to hide even the existence of the bundle (e.g. compliance requires the mount path itself stay secret), put a reverse-proxy rule in front of `/wurk-assets` rather than relying on the engine.
+- Redis being unreachable surfaces to the SPA as a structured `503 {"error": "redis_unavailable"}` (JSON endpoints) or an SSE `error` event (the live stream), never a raw 500 — the client can branch on it instead of parsing an HTML error page.
+
 ## Encryption
 
 A drop-in for `Sidekiq::Enterprise::Crypto`. It encrypts the **last** positional argument of a job with AES-256-GCM — the client middleware seals it on push, the server middleware opens it before `perform`. Earlier args stay plaintext so you can still triage on `user_id`.

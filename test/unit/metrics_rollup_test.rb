@@ -121,19 +121,21 @@ class MetricsRollupTest < Wurk::Test::UnitCase
   end
   # rubocop:enable Metrics/AbcSize
 
-  # `wait` short-circuits the ConditionVariable wait when @done is already
-  # set (the `unless @done` else branch) so terminate-then-wait returns at once.
-  def test_wait_returns_immediately_once_done
+  # `TimerLoop#wait` short-circuits the ConditionVariable wait once terminated
+  # (the `unless @done` else branch) so terminate-then-wait returns at once.
+  # Mutex/CV mechanics live in Wurk::TimerLoop now (test/unit/timer_loop_test.rb);
+  # this just confirms Rollup wires #terminate through to its @timer.
+  def test_terminate_makes_timer_wait_return_immediately
     @rollup.terminate
 
     completed = false
     t = Thread.new do
-      @rollup.send(:wait)
+      @rollup.instance_variable_get(:@timer).wait
       completed = true
     end
     t.join(2.0)
 
-    assert completed, 'wait must return immediately when @done is set'
+    assert completed, 'wait must return immediately once terminated'
   ensure
     t&.kill
   end

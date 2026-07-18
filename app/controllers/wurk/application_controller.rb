@@ -14,8 +14,20 @@ module Wurk
     # checkout.
     around_action :scope_web_redis_pool
 
+    # A blip/outage surfacing here is the *same* condition RedisPool already
+    # retried and gave up on (its `on_error` hook already fired — #101).
+    # Report it to the SPA as a structured, retryable 503 instead of letting
+    # it fall through to Rails' generic 500 error page, which would leak a
+    # backtrace and give the client nothing to branch on.
+    rescue_from(*::Wurk::Configuration::REDIS_ERROR_CLASSES) { |ex| render_redis_unavailable(ex) }
+
     private
 
     def scope_web_redis_pool(&) = ::Wurk::Web::PoolScope.scope(&)
+
+    def render_redis_unavailable(ex)
+      logger.warn("wurk web: redis unavailable (#{ex.class}: #{ex.message})")
+      render json: { error: 'redis_unavailable' }, status: :service_unavailable
+    end
   end
 end
