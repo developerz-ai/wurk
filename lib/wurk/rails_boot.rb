@@ -103,7 +103,8 @@ module Wurk
     end
 
     def boot_swarm
-      swarm = Wurk::Swarm.new(topology: Wurk.configuration.topology)
+      swarm = Wurk::Swarm.new(topology: Wurk.configuration.topology,
+                              shutdown_timeout: Wurk.configuration[:timeout] || Swarm::DEFAULT_SHUTDOWN_TIMEOUT)
       # Co-hosted in the web process (e.g. Puma single mode): the host owns the
       # process-wide TERM/INT traps. Installing the swarm's own would hijack
       # them — a deploy TERM would drain the swarm but never stop the HTTP

@@ -142,7 +142,8 @@ module Wurk
       validate_pool_sizes!
       @config[:identity] = identity
       ::Process.warmup if warmup && ::Process.respond_to?(:warmup) && ENV['RUBY_DISABLE_WARMUP'] != '1'
-      @swarm = Wurk::Swarm.new(topology: @config.topology, config: @config)
+      @swarm = Wurk::Swarm.new(topology: @config.topology, config: @config,
+                               shutdown_timeout: @config[:timeout] || Swarm::DEFAULT_SHUTDOWN_TIMEOUT)
       @swarm.boot(install_signals: true)
       @swarm.supervise
     end

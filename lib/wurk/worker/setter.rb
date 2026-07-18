@@ -78,7 +78,12 @@ module Wurk
         opts.each do |k, v|
           key = k.to_s
           case key
-          when 'wait', 'wait_until' then result['at'] = wait_to_seconds(v)
+          when 'wait', 'wait_until'
+            # Sidekiq drops `at` when the target is not in the future, so
+            # set(wait: 0) / an elapsed wait_until enqueues immediately
+            # instead of parking in the schedule ZSET for up to a poll tick.
+            ts = wait_to_seconds(v)
+            result['at'] = ts if ts > now_seconds
           else result[key] = v
           end
         end

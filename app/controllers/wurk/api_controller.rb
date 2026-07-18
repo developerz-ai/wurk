@@ -79,13 +79,13 @@ module Wurk
       render json: { ok: true }
     end
 
-    # Removes a single job from a queue by jid. LREM matches exact bytes, so we
-    # locate the record (Queue#find_job) and let it delete its own value.
+    # Removes a single job from a queue by jid — one Lua round-trip
+    # (Fast::QueueExt#delete_job) instead of a paged find_job walk.
     def delete_queue_job
-      record = ::Wurk::Queue.new(params[:name].to_s).find_job(params[:jid].to_s)
-      return render(json: { error: 'unknown job' }, status: :not_found) unless record
+      removed = ::Wurk::Queue.new(params[:name].to_s).delete_job(params[:jid].to_s)
+      return render(json: { error: 'unknown job' }, status: :not_found) if removed.zero?
 
-      render json: { ok: true, deleted: record.delete }
+      render json: { ok: true, deleted: true }
     end
 
     # Pause/unpause a queue (Pro §6, §10.1). Idempotent; returns the resulting
@@ -348,6 +348,11 @@ module Wurk
 
       count = 0
       keys = Array(params[:keys]).map(&:to_s).uniq
+      # Each key costs a ZRANGEBYSCORE plus per-entry mutations; an uncapped
+      # list lets one POST issue tens of thousands of round-trips. The UI
+      # selects at most a page (200).
+      return render(json: { error: 'too many keys (max 1000)' }, status: :bad_request) if keys.size > 1000
+
       entries_for(set, keys).each do |entry|
         entry.public_send(method)
         count += 1
@@ -393,18 +398,16 @@ module Wurk
       total
     end
 
-    # Drains a set by applying `method` to every entry until empty. Used for
-    # scheduled "add to queue all", where each call removes the entry and would
-    # otherwise shift the paged iterator's indices mid-scan.
+    # Drains a set by applying `method` to every entry. Snapshot first, then
+    # apply: mutating while the paged iterator scans would shift ZRANGE
+    # offsets mid-scan, and the old "loop until empty" alternative never
+    # terminates on a busy app (concurrent perform_in keeps the set non-empty)
+    # while wrongly enqueueing jobs scheduled *after* the operator clicked.
+    # Entries removed concurrently no-op their apply.
     def drain_set(set, method)
-      count = 0
-      until set.size.zero?
-        set.each do |entry|
-          entry.public_send(method)
-          count += 1
-        end
-      end
-      count
+      entries = set.to_a
+      entries.each { |entry| entry.public_send(method) }
+      entries.size
     end
 
     def render_sorted_set(set)

@@ -60,8 +60,12 @@ module Wurk
     initializer 'wurk.assets' do |app|
       assets_path = Wurk::Engine.root.join('vendor', 'assets', 'dashboard')
       if assets_path.exist?
+        # Index 0, not insert_before(ActionDispatch::Static): Static is only
+        # in the stack when public_file_server is enabled, and a stock
+        # production deploy behind nginx (RAILS_SERVE_STATIC_FILES unset)
+        # omits it — insert_before(Static) would crash the host app's boot.
         app.middleware.insert_before(
-          ::ActionDispatch::Static,
+          0,
           ::Wurk::Engine::AssetMount,
           root: assets_path.to_s
         )

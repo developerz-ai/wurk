@@ -124,7 +124,9 @@ module Wurk
         logger.warn { "Terminating #{cleanup.size} busy threads" }
         logger.debug { "Jobs still in progress #{jobs.inspect}" }
 
-        capsule.fetcher.bulk_requeue(jobs)
+        # `&.` like #quiet: a TERM in the pre-prepare! window (traps install
+        # before launcher.run) reaches here with no fetcher built yet.
+        capsule.fetcher&.bulk_requeue(jobs)
       end
 
       cleanup.each(&:kill)

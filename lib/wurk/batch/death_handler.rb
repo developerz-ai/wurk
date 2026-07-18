@@ -26,6 +26,8 @@ module Wurk
         end
         live, _died, first_death = Array(result).map(&:to_i)
 
+        restamp_ttls(bid)
+
         Wurk::Batch::Callbacks.fire_death(bid) if first_death == 1
         return unless live.zero?
 
@@ -34,6 +36,17 @@ module Wurk
         # its `:complete` must wait for theirs (#209). `:success` stays
         # suppressed regardless — the death above set the durable death flag.
         Wurk::Batch::Callbacks.maybe_fire(bid, pending: Wurk::Batch::Callbacks.pending_for(bid), live: 0)
+      end
+
+      # A stale job can die AFTER its batch keys expired; the ack writes
+      # recreate them with no TTL — permanent key leakage. EXPIRE NX stamps
+      # only keys that lost their TTL, leaving live batches' clocks alone.
+      def self.restamp_ttls(bid)
+        Wurk.redis do |conn|
+          conn.pipelined do |pipe|
+            Batch.keys_for(bid).each { |key| pipe.call('EXPIRE', key, Batch::DEFAULT_EXPIRY_SECONDS, 'NX') }
+          end
+        end
       end
     end
   end

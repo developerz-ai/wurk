@@ -170,9 +170,21 @@ module Wurk
         step_i = Integer(step)
         raise ArgumentError, "cron step must be >= 1 (got #{step_i})" if step_i < 1
 
-        base_values = base == '*' ? (min..max).to_a : parse_chunk(base, min, max)
+        base_values = step_base_values(base, min, max)
         start = base_values.first
         base_values.select { |v| ((v - start) % step_i).zero? }
+      end
+
+      # Vixie cron: a single-value step base means "start..max" (`5/15` in the
+      # minute field = 5,20,35,50), not the single value alone — fugit and
+      # Sidekiq Ent agree.
+      def step_base_values(base, min, max)
+        return (min..max).to_a if base == '*'
+        return parse_range(base, min, max) if base.include?('-')
+
+        v = Integer(base)
+        validate_value!(v, min, max)
+        (v..max).to_a
       end
 
       def parse_range(chunk, min, max)

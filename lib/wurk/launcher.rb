@@ -234,6 +234,9 @@ module Wurk
       @stopped = true
       thread = @heartbeat_thread
       return unless thread
+      # Embedded dashboard-TERM runs `stop` from the beat itself; a self-join
+      # raises ThreadError. @stopped is set, so the loop exits after this beat.
+      return if thread == Thread.current
 
       begin
         thread.wakeup
@@ -256,10 +259,21 @@ module Wurk
       logger.info('Heartbeat stopping...')
     end
 
+    # Dashboard-queued signals must behave exactly like OS signals, so a
+    # standalone process re-delivers to itself and lets the installed trap
+    # run — that wakes the main thread (CLI self-pipe / child dispatcher)
+    # so the process actually exits instead of stopping its managers and
+    # then parking forever. Embedded mode owns no traps (and self-TERM
+    # would kill the host app), so it calls quiet/stop directly — stop on
+    # its own thread because `stop` joins the heartbeat thread we're on.
     def dispatch_signal(sig)
       case sig
-      when 'TSTP' then quiet
-      when 'TERM' then stop
+      when 'TSTP', 'TERM'
+        if @embedded
+          sig == 'TSTP' ? quiet : Thread.new { stop }
+        else
+          ::Process.kill(sig, ::Process.pid)
+        end
       else
         logger.warn { "Unknown signal in #{identity}-signals: #{sig.inspect}" }
       end

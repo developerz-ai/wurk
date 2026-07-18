@@ -271,7 +271,10 @@ module Wurk
             end
           rescue ::StandardError => e
             ::Wurk.configuration.handle_exception(e, context: 'web-extension-render')
-            [500, html_headers, "Extension render error: #{::CGI.escapeHTML(e.message)}"]
+            # Message stays server-side (handle_exception logs it): exception
+            # text can carry file paths or Redis connection details, and every
+            # dashboard viewer sees this body.
+            [500, html_headers, 'Extension render error (see server logs)']
           end
 
           def action_for(ext, route_params, env, ctx)

@@ -21,15 +21,22 @@ module Wurk
 
     def size = @keys.size
 
+    # HMGET of the metadata fields only, pipelined into one round-trip:
+    # HGETALL would also pull each profile's `data` field — the multi-MB
+    # gzipped blob — through Redis for every list render.
+    METADATA_FIELDS = %w[jid type token size elapsed started_at].freeze
+
     def each
       return enum_for(:each) unless block_given?
 
-      Wurk.redis do |conn|
-        @keys.each do |key|
-          raw = conn.call('HGETALL', key)
-          hash = raw.is_a?(Hash) ? raw : raw.each_slice(2).to_h
-          yield ProfileRecord.new(hash) unless hash.empty?
+      rows = Wurk.redis do |conn|
+        conn.pipelined do |pipe|
+          @keys.each { |key| pipe.call('HMGET', key, *METADATA_FIELDS) }
         end
+      end
+      rows.each do |values|
+        hash = METADATA_FIELDS.zip(Array(values)).to_h
+        yield ProfileRecord.new(hash) unless hash['jid'].nil?
       end
     end
   end

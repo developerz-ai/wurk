@@ -195,7 +195,7 @@ module Wurk
       if item.is_a?(::Float)
         ::Time.at(item)
       else
-        ::Time.at(item / 1000, item % 1000)
+        ::Time.at(item / 1000, item % 1000, :millisecond)
       end
     end
 

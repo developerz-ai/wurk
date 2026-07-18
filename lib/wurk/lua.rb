@@ -69,8 +69,12 @@ module Wurk
     # push first; only then remove from the sorted set — and zrem the ORIGINAL
     # member, not the restamped copy. Worst case is a crash between lpush and
     # zrem → at-least-once redelivery, never loss.
+    # ARGV[4] caps members per call: Lua is atomic and single-threaded in
+    # Redis, so an unbatched promote of a post-outage backlog (100k+ due
+    # members) would block every client for the whole sweep. The Ruby caller
+    # loops until a short batch comes back.
     RELIABLE_SCHEDULE_PROMOTE = <<~LUA
-      local jobs = redis.call("zrangebyscore", KEYS[1], "-inf", ARGV[1])
+      local jobs = redis.call("zrangebyscore", KEYS[1], "-inf", ARGV[1], "LIMIT", 0, tonumber(ARGV[4]))
       for i = 1, #jobs do
         local job = jobs[i]
         local decoded = cjson.decode(job)

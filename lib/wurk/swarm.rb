@@ -42,7 +42,15 @@ module Wurk
     MEMORY_CHECK_INTERVAL = 10
     DEFAULT_SHUTDOWN_TIMEOUT = 25
 
-    SWARM_SIGNALS = { 'TERM' => :term, 'INT' => :term, 'TSTP' => :tstp, 'USR1' => :usr1 }.freeze
+    # Children each hard_shutdown after their own drain deadline (bulk_requeue
+    # + a 3s ensure window + heartbeat cleanup); the parent must not SIGKILL
+    # them mid-tail, so its own wait always extends past theirs by this much.
+    SHUTDOWN_GRACE = 5
+
+    # USR2 is relayed (log reopen) — without a trap, a logrotate config that
+    # signals the master pid would hit USR2's default disposition and kill the
+    # whole swarm.
+    SWARM_SIGNALS = { 'TERM' => :term, 'INT' => :term, 'TSTP' => :tstp, 'USR1' => :usr1, 'USR2' => :usr2 }.freeze
 
     attr_reader :topology, :children
 
@@ -55,6 +63,7 @@ module Wurk
       @children = {}
       @assignments = []
       @stopping = false
+      @quieted = false
       @last_memory_check = 0
       @signal_read = nil
       @signal_write = nil
@@ -97,8 +106,17 @@ module Wurk
       @stopping = true
       @restart.abort
       relay_signal('TERM')
-      wait_for_children(timeout)
+      wait_for_children(timeout + SHUTDOWN_GRACE)
       hard_kill_stragglers
+    end
+
+    # TSTP quiet is one-way and GLOBAL (spec §21.3): it must survive respawns
+    # and memory recycles, or a quieted-but-crashed child's replacement would
+    # resume fetching mid-maintenance. The flag makes every future fork boot
+    # already-quieted (see ChildBoot start_quiet).
+    def quiet_swarm
+      @quieted = true
+      relay_signal('TSTP')
     end
 
     # SIGUSR1: queue every live child for the rolling-restart state machine,
@@ -120,7 +138,7 @@ module Wurk
                     now: method(:monotonic),
                     logger: logger,
                     heartbeat_wait: HEARTBEAT_WAIT,
-                    drain_timeout: @shutdown_timeout,
+                    drain_timeout: @shutdown_timeout + SHUTDOWN_GRACE,
                     backoff: Backoff.new(base: RESPAWN_BACKOFF)
                   ))
     end
@@ -163,7 +181,13 @@ module Wurk
       pid = ::Process.fork
       return pid if pid
 
-      ChildBoot.new(@config, slot, idx, parent_pid: parent_pid).run
+      # Drop the parent's self-pipe first: the inherited traps still write to
+      # it, so a signal landing in the window before ChildBoot resets them
+      # would surface in the PARENT's supervise loop (an operator TERMing one
+      # child pid would drain the whole swarm). Closed, the trap write no-ops.
+      @signal_read&.close
+      @signal_write&.close
+      ChildBoot.new(@config, slot, idx, parent_pid: parent_pid, start_quiet: @quieted).run
       exit 0 # unreachable; ChildBoot exits explicitly
     end
 
@@ -196,8 +220,9 @@ module Wurk
       while (sig = read_pending_signal)
         case SWARM_SIGNALS[sig]
         when :term then shutdown
-        when :tstp then relay_signal('TSTP')
+        when :tstp then quiet_swarm
         when :usr1 then rolling_restart
+        when :usr2 then relay_signal('USR2')
         end
       end
     end

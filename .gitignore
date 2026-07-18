@@ -20,6 +20,8 @@ test/dummy/tmp/*
 test/dummy/storage/*
 test/dummy/db/*.sqlite3
 test/dummy/db/*.sqlite3-journal
+test/dummy/db/*.sqlite3-wal
+test/dummy/db/*.sqlite3-shm
 test/dummy/.bundle/
 test/dummy/Gemfile.lock
 # `bin/dev` installs the dummy app's gems into a project-local path so a

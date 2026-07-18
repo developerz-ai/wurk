@@ -26,6 +26,11 @@ module Wurk
     end
 
     def show
+      # GET-shaped for Sidekiq parity, but uploading the profile to the public
+      # Firefox profiler store is a side effect — read-only deploys (e.g. the
+      # public demo) must not let any visitor exfiltrate profiling data.
+      return head(:forbidden) if ::Wurk::Web.config.read_only?
+
       blob = profile_blob(params[:key])
       return head(:not_found) unless blob
 

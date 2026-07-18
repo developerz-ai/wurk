@@ -137,7 +137,13 @@ module Wurk
         def capture_pool_from_client(client)
           return unless client && !buffer_client_factory
 
-          pool = client.instance_variable_get(:@pool)
+          pool = client.instance_variable_get(:@redis_pool)
+          # A nil capture must not install a factory: it would pin the drainer
+          # to the DEFAULT pool forever (the `!buffer_client_factory` guard
+          # blocks any later, correct capture) — wrong Redis for jobs pushed
+          # through an explicit-pool client.
+          return unless pool
+
           self.buffer_client_factory = -> { Wurk::Client.new(pool: pool) }
         end
 
@@ -151,7 +157,18 @@ module Wurk
         def drain!(client)
           drained = 0
           while (payload = pop_head)
-            unless attempt_replay(client, payload)
+            begin
+              replayed = attempt_replay(client, payload)
+            rescue StandardError
+              # Non-connection failures (OOM, LOADING, READONLY…) must not
+              # drop the popped payload — restore it before propagating, or
+              # a recovering-but-not-ready Redis silently eats one buffered
+              # job per drain tick.
+              buffer_mutex.synchronize { buffer.unshift(payload) }
+              raise
+            end
+
+            unless replayed
               buffer_mutex.synchronize { buffer.unshift(payload) }
               break
             end

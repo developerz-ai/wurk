@@ -92,6 +92,12 @@ module Wurk
     class ReliableEnq
       include Component
 
+      # Batched: each Lua call promotes at most this many members (the script
+      # runs atomically, so one giant sweep would stall Redis for every
+      # client). `promote` loops until a short batch signals the backlog is
+      # dry, stopping early on terminate.
+      PROMOTE_BATCH = 500
+
       def initialize(container)
         @config = container
         @done = false
@@ -110,12 +116,15 @@ module Wurk
       private
 
       def promote(conn, sset)
-        Wurk::Lua::Loader.eval_cached(
-          conn,
-          :reliable_schedule_promote,
-          keys: [sset, Keys::QUEUES_SET],
-          argv: [real_time.to_s, Keys::QUEUE_PREFIX, real_ms.to_s]
-        )
+        loop do
+          promoted = Wurk::Lua::Loader.eval_cached(
+            conn,
+            :reliable_schedule_promote,
+            keys: [sset, Keys::QUEUES_SET],
+            argv: [real_time.to_s, Keys::QUEUE_PREFIX, real_ms.to_s, PROMOTE_BATCH.to_s]
+          ).to_i
+          break if promoted < PROMOTE_BATCH || @done
+        end
       end
 
       def real_time

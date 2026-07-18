@@ -27,11 +27,17 @@ module Wurk
       # threaded through so OrphanGuard can tell "still supervised" from
       # "reparented after the supervisor died". Defaults to the live parent for
       # the non-swarm callers (tests) that construct a ChildBoot directly.
-      def initialize(config, slot, index, parent_pid: ::Process.ppid)
+      # `start_quiet:` — the swarm was TSTP-quieted before this child was
+      # forked (respawn/recycle during maintenance); boot the launcher already
+      # quieted so the replacement doesn't resume fetching. Delivered as a
+      # constructor flag, not a post-fork TSTP, because the signal would race
+      # the trap-reset window (default TSTP disposition suspends the child).
+      def initialize(config, slot, index, parent_pid: ::Process.ppid, start_quiet: false)
         @config = config
         @slot = slot
         @index = index
         @parent_pid = parent_pid
+        @start_quiet = start_quiet
         @signal_read = nil
         @signal_write = nil
       end
@@ -73,6 +79,7 @@ module Wurk
         launcher = Wurk::Launcher.new(@config)
         install_signal_handlers(launcher)
         launcher.run
+        launcher.quiet if @start_quiet
         arm_orphan_guard
         wait_loop(launcher)
       end

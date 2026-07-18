@@ -77,7 +77,7 @@ module Wurk
         @backoff = DEFAULT_BACKOFF
         @errors = [OverLimit]
         @redis = nil
-        @redis_pool = nil
+        @pool = nil
       end
 
       # Accept either a Hash (the documented Sidekiq Ent shape — `{ size:,
@@ -86,7 +86,9 @@ module Wurk
       # responsibility (same contract as Wurk.redis_pool).
       def redis=(value)
         @redis = value
-        @redis_pool = nil
+        # Reset the memo `pool` actually reads — resetting a different ivar
+        # left the old pool pinned after `config.redis = {...}`.
+        @pool = nil
       end
 
       def pool
