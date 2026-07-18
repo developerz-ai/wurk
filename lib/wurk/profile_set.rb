@@ -39,6 +39,14 @@ module Wurk
   class ProfileRecord
     attr_reader :jid, :type, :token, :size, :elapsed
 
+    # Fetch the stored gzipped blob for a profile storage key ("<token>-<jid>")
+    # straight from Redis, without materializing the whole record — the Profiles
+    # data endpoint streams it to the browser as-is. nil if the HASH is gone.
+    # Owns the `data` HASH-field name so web callers don't hardcode the schema.
+    def self.data_for(key)
+      Wurk.redis { |conn| conn.call('HGET', key, 'data') }
+    end
+
     def initialize(hash)
       @hash = hash
       @jid = hash['jid']
@@ -59,7 +67,7 @@ module Wurk
     # bytes — the web layer streams them straight to the browser with a gzip
     # Content-Encoding. Returns nil if the HASH expired between list and read.
     def data
-      Wurk.redis { |conn| conn.call('HGET', key, 'data') }
+      self.class.data_for(key)
     end
   end
 end

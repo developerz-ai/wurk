@@ -124,6 +124,27 @@ class WebSearchTest < Wurk::Test::UnitCase
     assert_equal total, hits.select { |h| h[:klass] == @class_a }.size
   end
 
+  def test_search_small_queue_is_not_truncated
+    push_to_queue(@class_a, [@needle])
+
+    search = Wurk::Web::Search.new(@needle, kinds: ['queues'])
+    search.to_a
+
+    refute_predicate search, :truncated?
+  end
+
+  # A queue longer than the per-queue scan cap must stop early and flag
+  # truncation rather than full-walk the LIST from a single keystroke.
+  def test_search_truncates_queue_past_scan_cap
+    seed_queue(Wurk::Web::Search::SCAN_LIMIT_PER_QUEUE + 1)
+
+    search = Wurk::Web::Search.new("absent-#{@ns}", kinds: ['queues'])
+    hits = search.to_a
+
+    assert_empty(hits.select { |h| h[:name] == @queue })
+    assert_predicate search, :truncated?
+  end
+
   # Queue payload with no enqueued_at / created_at exercises the nil sides
   # of `record.enqueued_at&.to_f` (line 115) and `record.created_at&.to_f`
   # (line 116) in queue_row.
@@ -162,6 +183,16 @@ class WebSearchTest < Wurk::Test::UnitCase
   end
 
   private
+
+  # Bulk-seed a queue with `count` non-matching payloads in one RPUSH so the
+  # scan-cap tests can exceed SCAN_LIMIT_PER_QUEUE without thousands of calls.
+  def seed_queue(count)
+    payload = Wurk.dump_json(bare_payload(@class_a, ['filler']))
+    Wurk.redis do |c|
+      c.call('SADD', 'queues', @queue)
+      c.call('RPUSH', "queue:#{@queue}", *Array.new(count, payload))
+    end
+  end
 
   def push_bare_to_queue(klass, args)
     payload = bare_payload(klass, args)
