@@ -124,6 +124,78 @@ class WebSearchTest < Wurk::Test::UnitCase
     assert_equal total, hits.select { |h| h[:klass] == @class_a }.size
   end
 
+  def test_search_small_queue_is_not_truncated
+    push_to_queue(@class_a, [@needle])
+
+    search = Wurk::Web::Search.new(@needle, kinds: ['queues'])
+    search.to_a
+
+    refute_predicate search, :truncated?
+  end
+
+  # A queue longer than the per-queue scan cap must stop early and flag
+  # truncation rather than full-walk the LIST from a single keystroke.
+  def test_search_truncates_queue_past_scan_cap
+    seed_queue(Wurk::Web::Search::SCAN_LIMIT_PER_QUEUE + 1)
+
+    search = Wurk::Web::Search.new("absent-#{@ns}", kinds: ['queues'])
+    hits = search.to_a
+
+    assert_empty(hits.select { |h| h[:name] == @queue })
+    assert_predicate search, :truncated?
+  end
+
+  # A keystroke against a queue with thousands of non-matching jobs must never
+  # full-walk the LIST: round trips stay bounded by the scan cap, not the
+  # queue's real size. Thread-local Thread.current[:wurk_capsule] override (not
+  # a global monkeypatch) so counting is safe under this class's parallelize_me!.
+  def test_search_bounds_round_trips_on_a_huge_no_match_queue
+    seed_queue(10_000)
+    counter = RoundTripCounter.new(Wurk.redis_pool)
+    Thread.current[:wurk_capsule] = counter
+
+    search = Wurk::Web::Search.new("absent-#{@ns}", kinds: ['queues'])
+    hits = search.to_a
+
+    assert_empty hits
+    assert_predicate search, :truncated?
+    # Queue.all (1 SMEMBERS) + LLEN (1) + one LRANGE per QUEUE_PAGE up to
+    # SCAN_LIMIT_PER_QUEUE — never proportional to the queue's real size (10k
+    # would need ~200 LRANGE calls to full-walk instead of the capped ~100).
+    max_round_trips = 2 + (Wurk::Web::Search::SCAN_LIMIT_PER_QUEUE / Wurk::Web::Search::QUEUE_PAGE)
+
+    assert_operator counter.count, :<=, max_round_trips
+  ensure
+    Thread.current[:wurk_capsule] = nil
+  end
+
+  # A no-match keystroke against a sorted set larger than the shared request
+  # budget must stop at SCAN_BUDGET rather than ZSCAN the whole ZSET. Binds a
+  # round-trip-counting capsule to this thread (not a global monkeypatch) so
+  # counting is safe under this class's parallelize_me!. ZSCAN's COUNT is only a
+  # hint, so the assertion bounds round trips below a full walk rather than at an
+  # exact page count.
+  def test_search_bounds_scan_on_a_huge_no_match_sorted_set
+    seed_size = 2 * Wurk::Web::Search::SCAN_BUDGET
+    seed_zset('retry', seed_size)
+    counter = RoundTripCounter.new(Wurk.redis_pool)
+    Thread.current[:wurk_capsule] = counter
+
+    search = Wurk::Web::Search.new("absent-#{@ns}", kinds: ['retry'])
+    hits = search.to_a
+
+    assert_empty hits
+    assert_predicate search, :truncated?
+    # A full walk would need seed_size / ZSCAN_PAGE ZSCANs; the budget caps the
+    # scan near SCAN_BUDGET / ZSCAN_PAGE — strictly fewer, proving it stops at
+    # the request budget, not the ZSET's real size.
+    full_walk = seed_size / Wurk::Web::Search::ZSCAN_PAGE
+
+    assert_operator counter.count, :<, full_walk
+  ensure
+    Thread.current[:wurk_capsule] = nil
+  end
+
   # Queue payload with no enqueued_at / created_at exercises the nil sides
   # of `record.enqueued_at&.to_f` (line 115) and `record.created_at&.to_f`
   # (line 116) in queue_row.
@@ -162,6 +234,46 @@ class WebSearchTest < Wurk::Test::UnitCase
   end
 
   private
+
+  # Delegating pool that counts checkouts (one per `Wurk.redis` block). Doubles
+  # as its own `Thread.current[:wurk_capsule]` binding (`#redis_pool` returns
+  # self) so a test can measure round trips without a global monkeypatch.
+  class RoundTripCounter
+    attr_reader :count
+
+    def initialize(pool)
+      @pool = pool
+      @count = 0
+    end
+
+    def with(&)
+      @count += 1
+      @pool.with(&)
+    end
+
+    def redis_pool = self
+  end
+
+  # Bulk-seed a queue with `count` non-matching payloads in one RPUSH so the
+  # scan-cap tests can exceed SCAN_LIMIT_PER_QUEUE without thousands of calls.
+  def seed_queue(count)
+    payload = Wurk.dump_json(bare_payload(@class_a, ['filler']))
+    Wurk.redis do |c|
+      c.call('SADD', 'queues', @queue)
+      c.call('RPUSH', "queue:#{@queue}", *Array.new(count, payload))
+    end
+  end
+
+  # Bulk-seed a sorted set with `count` distinct non-matching members in one
+  # ZADD so the scan-budget test can exceed SCAN_BUDGET without thousands of
+  # calls. A filler class (not @class_a/@class_b) keeps teardown's cleanup_zset
+  # from ZREMing them one-by-one; the worker's FLUSHDB clears them. Each payload
+  # carries a unique jid, so no two members collide.
+  def seed_zset(name, count)
+    filler = "SearchFiller@#{@ns}"
+    args = Array.new(count) { |i| [i, Wurk.dump_json(bare_payload(filler, ['filler']))] }.flatten
+    Wurk.redis { |c| c.call('ZADD', name, *args) }
+  end
 
   def push_bare_to_queue(klass, args)
     payload = bare_payload(klass, args)

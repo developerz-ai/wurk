@@ -1,6 +1,7 @@
 # frozen_string_literal: true
 
 require_relative '../component'
+require_relative '../timer_loop'
 require_relative 'history'
 
 module Wurk
@@ -53,28 +54,16 @@ module Wurk
 
       def initialize(config)
         @config = config
-        @done = false
-        @mutex = ::Mutex.new
-        @sleeper = ::ConditionVariable.new
-        @tick_interval = config[:metrics_rollup_interval] || DEFAULT_TICK_SECONDS
+        @timer = TimerLoop.new(config[:metrics_rollup_interval] || DEFAULT_TICK_SECONDS)
         @thread = nil
       end
 
       def start
-        @thread ||= safe_thread('metrics-rollup') do # rubocop:disable Naming/MemoizedInstanceVariableName
-          wait
-          until @done
-            tick
-            wait
-          end
-        end
+        @thread ||= safe_thread('metrics-rollup') { @timer.run { tick } } # rubocop:disable Naming/MemoizedInstanceVariableName
       end
 
       def terminate
-        @mutex.synchronize do
-          @done = true
-          @sleeper.signal
-        end
+        @timer.terminate
       end
 
       # Leader-gated: only the elected leader writes the cluster-total series,
@@ -157,12 +146,6 @@ module Wurk
 
       def floor_min(time)
         (time.to_i / 60) * 60
-      end
-
-      def wait
-        @mutex.synchronize do
-          @sleeper.wait(@mutex, @tick_interval) unless @done
-        end
       end
     end
   end

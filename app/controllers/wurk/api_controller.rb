@@ -15,21 +15,25 @@ module Wurk
   # in `docs/target/sidekiq-{free,pro,ent}.md`.
   class ApiController < ApplicationController
     include ActionController::Live
+    # The SPA is a token-less JSON client; SameOriginGuard supplies Sidekiq's
+    # same-origin CSRF defense (spec §25.1) so every mutating endpoint is
+    # protected — GET reads (incl. #stream SSE) stay reachable.
+    include SameOriginGuard
+    # Bounds concurrent SSE streams per process (503 past the cap) so stale
+    # dashboard tabs can't pin every Puma thread. Provides #with_stream_slot.
+    include StreamConcurrencyGuard
+    # Owns the #stream action's tick loop (headers, cadence, tear-down).
+    include SseStreaming
 
     STREAM_TICK_SECONDS = 2.0
-    STREAM_MAX_DURATION = 600.0
+    STREAM_MAX_DURATION = 120.0
+    # Positive floor for `?tick=`: a zero/negative tick would `sleep 0` the SSE
+    # loop into a tight Redis-read/write spin (Live runs it in a spawned thread)
+    # for up to STREAM_MAX_DURATION. Clamp before it reaches drive_stream.
+    STREAM_MIN_TICK_SECONDS = 0.1
 
     HISTORY_WINDOW_UNITS = { 's' => 1, 'm' => 60, 'h' => 3600, 'd' => 86_400 }.freeze
     DEFAULT_HISTORY_WINDOW = 24 * 3600
-
-    skip_forgery_protection only: %i[
-      stream reset_limiter pause_cron unpause_cron enqueue_cron
-      clear_queue delete_queue_job pause_queue unpause_queue
-      retries_bulk retries_all retry_job
-      scheduled_bulk scheduled_all scheduled_job
-      dead_bulk dead_all dead_job
-      quiet_process stop_process
-    ]
 
     # Per-set action whitelists. Maps the SPA's action name to the
     # SortedEntry/JobSet method. Anything not listed 400s — keeps the bulk/
@@ -265,10 +269,11 @@ module Wurk
 
     def search
       substr = params[:substr].to_s
-      return render(json: { substr: substr, total: 0, hits: [] }) if substr.empty?
+      return render(json: { substr: substr, total: 0, hits: [], truncated: false }) if substr.empty?
 
-      hits = ::Wurk::Web::Search.new(substr, kinds: parse_search_kinds(params), limit: parse_search_limit(params)).to_a
-      render json: { substr: substr, total: hits.size, hits: hits }
+      search = ::Wurk::Web::Search.new(substr, kinds: parse_search_kinds(params), limit: parse_search_limit(params))
+      hits = search.to_a
+      render json: { substr: substr, total: hits.size, hits: hits, truncated: search.truncated? }
     end
 
     # Profiles list (v8.0+). The SPA links each row to /profiles/:key (view)
@@ -281,16 +286,20 @@ module Wurk
     # SSE: one `event: stats` per tick with a fresh Stats snapshot. Caps at
     # `STREAM_MAX_DURATION` so a stale browser tab can't tie a Rails worker
     # forever — the client reconnects automatically when the stream closes.
+    # Bounded per process by StreamConcurrencyGuard (503 + Retry-After past the
+    # cap) so a burst of tabs can't pin every Puma thread.
     #
     # `?max_duration=` and `?tick=` are test/debug knobs; the SPA never sets
     # them. `?max_duration=0` emits one tick and closes.
     def stream
-      stream_headers!
-      clamp = ::Wurk::Api::Pagination.method(:clamp_float)
-      tick = clamp.call(params[:tick], 0.0, STREAM_TICK_SECONDS, STREAM_TICK_SECONDS)
-      max_dur = clamp.call(params[:max_duration], 0.0, STREAM_MAX_DURATION, STREAM_MAX_DURATION)
-      sse = ::ActionController::Live::SSE.new(response.stream, retry: (STREAM_TICK_SECONDS * 1000).to_i)
-      drive_stream(sse, tick, max_dur)
+      with_stream_slot do
+        stream_headers!
+        clamp = ::Wurk::Api::Pagination.method(:clamp_float)
+        tick = clamp.call(params[:tick], STREAM_MIN_TICK_SECONDS, STREAM_TICK_SECONDS, STREAM_TICK_SECONDS)
+        max_dur = clamp.call(params[:max_duration], 0.0, STREAM_MAX_DURATION, STREAM_MAX_DURATION)
+        sse = ::ActionController::Live::SSE.new(response.stream, retry: (STREAM_TICK_SECONDS * 1000).to_i)
+        drive_stream(sse, tick, max_dur)
+      end
     end
 
     private
@@ -408,41 +417,8 @@ module Wurk
     # reads in limiter_row (which folds in live status).
     def limiter_rows(names, page)
       (names.slice(page[:page] * page[:count], page[:count]) || []).map do |name|
-        ::Wurk::Api::Serializers.limiter_row(name, limiter_meta(name))
+        ::Wurk::Api::Serializers.limiter_row(name, ::Wurk::Web::Enterprise::Limits.metadata(name))
       end
-    end
-
-    def limiter_meta(name)
-      raw = ::Wurk.redis { |c| c.call('HGETALL', "lmtr:#{name}") }
-      raw.is_a?(Array) ? raw.each_slice(2).to_h : raw
-    end
-
-    def stream_headers!
-      response.headers['Content-Type'] = 'text/event-stream'
-      response.headers['Cache-Control'] = 'no-cache'
-      response.headers['X-Accel-Buffering'] = 'no'
-    end
-
-    def drive_stream(sse, tick, max_dur)
-      deadline = monotime + max_dur
-      loop do
-        sse.write(stream_tick_payload, event: 'stats')
-        break if monotime >= deadline
-
-        sleep tick
-      end
-    rescue ::IOError, ::ActionController::Live::ClientDisconnected
-      # client closed; nothing to clean up.
-    ensure
-      sse.close
-    end
-
-    def monotime
-      ::Process.clock_gettime(::Process::CLOCK_MONOTONIC)
-    end
-
-    def stream_tick_payload
-      ::Wurk::Api::Serializers.stats_payload(::Wurk::Stats.new).merge(at: ::Time.now.to_f)
     end
 
     def render_cron_action(success)

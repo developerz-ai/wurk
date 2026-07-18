@@ -12,11 +12,9 @@ module Wurk
   # client-side route (no extension registered under that name — e.g. a browser
   # refresh on /wurk/ext/<tab>/) falls through to the SPA shell instead of 404.
   class ExtensionsController < DashboardController
-    # Extension forms carry no Rails CSRF token. Parity with Sidekiq's own
-    # CSRF model instead (spec §25.1): unsafe methods must be same-origin per
-    # Sec-Fetch-Site; cross-site requests are denied. GETs are unaffected.
-    skip_forgery_protection
-    before_action :verify_same_origin!, unless: -> { request.get? || request.head? }
+    # Extension forms carry no Rails CSRF token — SameOriginGuard supplies
+    # Sidekiq's same-origin CSRF defense (spec §25.1) in its place.
+    include SameOriginGuard
 
     def show
       result = Web::Extension::Renderer.call(
@@ -44,13 +42,6 @@ module Wurk
       # Extension output is host-registered server code, same trust model as
       # Sidekiq::Web rendering its extensions — not user input.
       render html: body.html_safe, layout: false, status: status
-    end
-
-    # Spec §25.1: unsafe methods require `Sec-Fetch-Site: same-origin` — a
-    # missing header is denied too, like stock Sidekiq (a non-browser client
-    # must spoof the header deliberately; a cookie-carrying browser can't).
-    def verify_same_origin!
-      head :forbidden unless request.headers['Sec-Fetch-Site'] == 'same-origin'
     end
   end
 end

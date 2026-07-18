@@ -4,6 +4,7 @@ require_relative 'component'
 require_relative 'keys'
 require_relative 'stats'
 require_relative 'metrics/statsd'
+require_relative 'timer_loop'
 
 module Wurk
   # Sidekiq Enterprise §5 Historical Metrics snapshotter. A leader-gated
@@ -63,30 +64,18 @@ module Wurk
 
     def initialize(config)
       @config = config
-      @interval = config.history_interval
       @collector = config.history_collector
       @stream_cap = config[:history_stream_cap] || STREAM_CAP
-      @done = false
-      @mutex = ::Mutex.new
-      @sleeper = ::ConditionVariable.new
+      @timer = TimerLoop.new(config.history_interval)
       @thread = nil
     end
 
     def start
-      @thread ||= safe_thread('history-snapshot') do # rubocop:disable Naming/MemoizedInstanceVariableName
-        wait
-        until @done
-          tick
-          wait
-        end
-      end
+      @thread ||= safe_thread('history-snapshot') { @timer.run { tick } } # rubocop:disable Naming/MemoizedInstanceVariableName
     end
 
     def terminate
-      @mutex.synchronize do
-        @done = true
-        @sleeper.signal
-      end
+      @timer.terminate
     end
 
     # Leader-gated: only the elected leader emits, so N workers don't each
@@ -163,12 +152,6 @@ module Wurk
       return @collector.call(client) if @collector
 
       values.each { |field, value| client.gauge("sidekiq.#{field}", value) }
-    end
-
-    def wait
-      @mutex.synchronize do
-        @sleeper.wait(@mutex, @interval) unless @done
-      end
     end
   end
 end

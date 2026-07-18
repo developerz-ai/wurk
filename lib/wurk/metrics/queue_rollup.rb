@@ -3,6 +3,7 @@
 require_relative '../component'
 require_relative '../keys'
 require_relative '../job_record'
+require_relative '../timer_loop'
 require_relative 'rollup'
 
 module Wurk
@@ -45,28 +46,16 @@ module Wurk
 
       def initialize(config)
         @config = config
-        @done = false
-        @mutex = ::Mutex.new
-        @sleeper = ::ConditionVariable.new
-        @tick_interval = config[:metrics_rollup_interval] || DEFAULT_TICK_SECONDS
+        @timer = TimerLoop.new(config[:metrics_rollup_interval] || DEFAULT_TICK_SECONDS)
         @thread = nil
       end
 
       def start
-        @thread ||= safe_thread('queue-metrics') do # rubocop:disable Naming/MemoizedInstanceVariableName
-          wait
-          until @done
-            tick
-            wait
-          end
-        end
+        @thread ||= safe_thread('queue-metrics') { @timer.run { tick } } # rubocop:disable Naming/MemoizedInstanceVariableName
       end
 
       def terminate
-        @mutex.synchronize do
-          @done = true
-          @sleeper.signal
-        end
+        @timer.terminate
       end
 
       # Leader-gated: only the elected leader samples, so N workers don't each
@@ -139,12 +128,6 @@ module Wurk
         Wurk::JobRecord.latency_from(enqueued_at, now_ms).round(2)
       rescue ::JSON::ParserError, ::TypeError, ::ArgumentError
         0.0
-      end
-
-      def wait
-        @mutex.synchronize do
-          @sleeper.wait(@mutex, @tick_interval) unless @done
-        end
       end
     end
   end

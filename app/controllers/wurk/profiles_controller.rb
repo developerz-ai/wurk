@@ -38,7 +38,7 @@ module Wurk
     private
 
     def profile_blob(key)
-      Wurk.redis { |conn| conn.call('HGET', key, 'data') }
+      ::Wurk::ProfileRecord.data_for(key)
     end
 
     # POSTs the gzipped profile to the Firefox profiler's compressed-store.

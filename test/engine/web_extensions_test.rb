@@ -7,8 +7,13 @@ require_relative '../engine_test_helper'
 # The wire shape here is what the SPA's Limits / Periodic / Historical
 # tabs render against.
 class WebExtensionsTest < Wurk::Test::EngineCase
+  parallelize_me!
+
   def setup
     super
+    # SameOriginGuard 403s unsafe methods lacking this header; a same-origin SPA
+    # fetch always sends it, so default it for every mutation in this suite.
+    header 'Sec-Fetch-Site', 'same-origin'
     @ns = "wurkwebx:#{Process.pid}:#{object_id}"
     @queue = "#{@ns}-q"
     @class_name = "WebExtJob@#{@ns}"
