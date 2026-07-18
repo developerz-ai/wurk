@@ -34,6 +34,17 @@ class MetricsQueueRollupTest < Wurk::Test::UnitCase
     super
   end
 
+  # A missing or malformed head-of-line payload must yield 0.0 latency for that
+  # queue, never bubble up and abort the whole sampling pass.
+  def test_head_latency_is_zero_for_missing_or_malformed_payloads
+    now_ms = @epoch_min * 1000
+
+    assert_in_delta 0.0, @qr.send(:head_latency, [], now_ms)          # empty LRANGE → nil
+    assert_in_delta 0.0, @qr.send(:head_latency, nil, now_ms)         # non-array nil
+    assert_in_delta 0.0, @qr.send(:head_latency, ['not json'], now_ms) # unparseable
+    assert_in_delta 0.0, @qr.send(:head_latency, ['[1,2,3]'], now_ms)  # valid JSON, wrong shape
+  end
+
   def test_sample_writes_size_for_each_queue_at_every_resolution
     seed_queue(@q1, depth: 3)
     seed_queue(@q2, depth: 1)

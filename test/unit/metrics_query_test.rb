@@ -267,6 +267,10 @@ class MetricsQueryTest < Wurk::Test::UnitCase
     assert(points.all? { |p| p[:size].zero? && p[:latency].zero? })
   end
 
+  def test_queue_history_returns_empty_when_no_queues
+    assert_equal [], Wurk::Metrics::Query.queue_history('1m', 300, queues: [], now: @now)
+  end
+
   def test_queue_history_rejects_unknown_bucket
     assert_raises(ArgumentError) { Wurk::Metrics::Query.queue_history('2m', 300, queues: ['x'], now: @now) }
   end
