@@ -25,6 +25,20 @@ class RailtieTest < Wurk::Test::EngineCase
     original.nil? ? ENV.delete('WURK_DISABLED') : (ENV['WURK_DISABLED'] = original)
   end
 
+  # `rails console` defines ::Rails::Console before initializers run — a console
+  # session is not a server and must never fork the swarm.
+  def test_skip_boot_is_true_in_rails_console
+    skip '::Rails::Console already defined outside this test' if defined?(::Rails::Console)
+
+    begin
+      ::Rails.const_set(:Console, Class.new)
+
+      assert_predicate Wurk::Railtie, :skip_boot?, 'console mode must never auto-boot the swarm'
+    ensure
+      ::Rails.send(:remove_const, :Console) if ::Rails.const_defined?(:Console, false)
+    end
+  end
+
   # #247 build-context guard. skip_boot? short-circuits on Rails.env.test? in
   # this suite, so the new logic is asserted through `building?` directly.
 
