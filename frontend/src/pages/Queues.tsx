@@ -94,7 +94,8 @@ function QueueJobs(props: { name: string }) {
           <div class="qjobs">
             <div style={{ display: 'flex', 'align-items': 'center', gap: '0.75rem', 'margin-bottom': '1rem' }}>
               <span style={{ color: 'var(--text-muted)', 'font-size': '13px' }}>
-                {data().size.toLocaleString()} jobs · <span title={`${data().latency.toFixed(3)}s`}>latency {formatDuration(data().latency)}</span>
+                {t('queues.job_count', { n: data().size.toLocaleString() })} ·{' '}
+                <span title={`${data().latency.toFixed(3)}s`}>{t('queues.latency_label')} {formatDuration(data().latency)}</span>
               </span>
               <Show when={data().paused}>
                 <span class="badge badge-warning">{t('dashboard.paused')}</span>
@@ -235,7 +236,7 @@ export default function Queues() {
                 <table>
                   <thead>
                     <tr>
-                      <SortableTh label="Name" sortKey="name" sort={sort()} onSort={toggle} />
+                      <SortableTh label={t('table.name')} sortKey="name" sort={sort()} onSort={toggle} />
                       <SortableTh label={t('table.size')} sortKey="size" sort={sort()} onSort={toggle} />
                       <SortableTh label={t('table.latency')} sortKey="latency" sort={sort()} onSort={toggle} />
                       <SortableTh label={t('table.status')} sortKey="status" sort={sort()} onSort={toggle} />
@@ -252,7 +253,7 @@ export default function Queues() {
                           <td>{q.size.toLocaleString()}</td>
                           <td title={`${q.latency.toFixed(3)}s`}>{formatDuration(q.latency)}</td>
                           <td>
-                            <Show when={q.paused} fallback={<span class="badge badge-success">Active</span>}>
+                            <Show when={q.paused} fallback={<span class="badge badge-success">{t('dashboard.active')}</span>}>
                               <span class="badge badge-warning">{t('dashboard.paused')}</span>
                             </Show>
                           </td>

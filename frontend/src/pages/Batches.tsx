@@ -81,13 +81,13 @@ export default function Batches() {
                 <table>
                   <thead>
                     <tr>
-                      <SortableTh label="BID" sortKey="bid" sort={sort()} onSort={toggle} />
-                      <SortableTh label="Description" sortKey="description" sort={sort()} onSort={toggle} />
+                      <SortableTh label={t('table.bid')} sortKey="bid" sort={sort()} onSort={toggle} />
+                      <SortableTh label={t('table.description')} sortKey="description" sort={sort()} onSort={toggle} />
                       <SortableTh label={t('table.total')} sortKey="total" sort={sort()} onSort={toggle} />
                       <SortableTh label={t('table.pending')} sortKey="pending" sort={sort()} onSort={toggle} />
-                      <SortableTh label="Failures" sortKey="failures" sort={sort()} onSort={toggle} />
-                      <SortableTh label="Progress" sortKey="progress" sort={sort()} onSort={toggle} />
-                      <SortableTh label="Created" sortKey="created" sort={sort()} onSort={toggle} />
+                      <SortableTh label={t('table.failures')} sortKey="failures" sort={sort()} onSort={toggle} />
+                      <SortableTh label={t('table.progress')} sortKey="progress" sort={sort()} onSort={toggle} />
+                      <SortableTh label={t('table.created')} sortKey="created" sort={sort()} onSort={toggle} />
                     </tr>
                   </thead>
                   <tbody>

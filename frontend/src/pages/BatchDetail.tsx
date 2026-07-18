@@ -103,10 +103,10 @@ export default function BatchDetail() {
                 <A href="/batches" class="btn btn-sm">← {t('nav.batches')}</A>
                 <h1 class="page-title" style={{ margin: 0, 'font-family': 'monospace', 'font-size': '16px' }}>{data().bid}</h1>
                 <Show when={data().complete} fallback={<span class="badge badge-accent">{pct()}%</span>}>
-                  <span class="badge badge-success">complete</span>
+                  <span class="badge badge-success">{t('batches.complete')}</span>
                 </Show>
                 <Show when={data().invalidated}>
-                  <span class="badge badge-danger">invalidated</span>
+                  <span class="badge badge-danger">{t('batches.invalidated')}</span>
                 </Show>
               </div>
 
@@ -122,22 +122,22 @@ export default function BatchDetail() {
                   'margin-top': '1rem',
                 }}
               >
-                <Field label="Total">{data().total.toLocaleString()}</Field>
-                <Field label="Pending">{data().pending.toLocaleString()}</Field>
-                <Field label="Failures">{data().failures.toLocaleString()}</Field>
-                <Field label="Children">{data().child_count.toLocaleString()}</Field>
-                <Field label="Created">{data().created_at ? relativeTime(data().created_at!) : '—'}</Field>
-                <Field label="Completed">{data().complete_at ? relativeTime(data().complete_at!) : '—'}</Field>
+                <Field label={t('table.total')}>{data().total.toLocaleString()}</Field>
+                <Field label={t('table.pending')}>{data().pending.toLocaleString()}</Field>
+                <Field label={t('table.failures')}>{data().failures.toLocaleString()}</Field>
+                <Field label={t('batches.children')}>{data().child_count.toLocaleString()}</Field>
+                <Field label={t('table.created')}>{data().created_at ? relativeTime(data().created_at!) : '—'}</Field>
+                <Field label={t('batches.completed')}>{data().complete_at ? relativeTime(data().complete_at!) : '—'}</Field>
                 <Show when={data().parent_bid}>
-                  <Field label="Parent">{data().parent_bid}</Field>
+                  <Field label={t('batches.parent')}>{data().parent_bid}</Field>
                 </Show>
                 <Show when={data().tags.length > 0}>
-                  <Field label="Tags">{data().tags.join(', ')}</Field>
+                  <Field label={t('batches.tags')}>{data().tags.join(', ')}</Field>
                 </Show>
               </div>
 
-              <JidList label="Failed jobs" jids={data().failed_jids} />
-              <JidList label="Dead jobs" jids={data().dead_jids} />
+              <JidList label={t('batches.failed_jobs')} jids={data().failed_jids} />
+              <JidList label={t('batches.dead_jobs')} jids={data().dead_jids} />
             </div>
           );
         }}

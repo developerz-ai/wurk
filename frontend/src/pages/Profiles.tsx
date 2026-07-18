@@ -72,11 +72,11 @@ export default function Profiles() {
                   <table>
                     <thead>
                       <tr>
-                        <th>Type</th>
-                        <th>JID</th>
-                        <th>Started</th>
-                        <th>Elapsed</th>
-                        <th>Size</th>
+                        <th>{t('table.type')}</th>
+                        <th>{t('table.jid')}</th>
+                        <th>{t('busy.started')}</th>
+                        <th>{t('table.elapsed')}</th>
+                        <th>{t('table.size')}</th>
                         <th />
                       </tr>
                     </thead>
@@ -87,7 +87,7 @@ export default function Profiles() {
                             <td style={{ 'font-weight': 500, color: 'var(--obs-text)' }}>{p.type}</td>
                             <td><span class="obs-mono-cell">{p.jid}</span></td>
                             <td>{fmtWhen(p.started_at)}</td>
-                            <td>{p.elapsed.toLocaleString()} ms</td>
+                            <td>{p.elapsed.toLocaleString()} {t('common.ms')}</td>
                             <td>{fmtBytes(p.size)}</td>
                             <td style={{ 'text-align': 'end' }}>
                               {/* Full reload (not client-route): the backend POSTs the blob
@@ -98,7 +98,7 @@ export default function Profiles() {
                                 target="_blank"
                                 rel="noopener noreferrer"
                               >
-                                <i class="fa-solid fa-up-right-from-square" aria-hidden="true" /> Open
+                                <i class="fa-solid fa-up-right-from-square" aria-hidden="true" /> {t('extension.open')}
                               </a>
                             </td>
                           </tr>

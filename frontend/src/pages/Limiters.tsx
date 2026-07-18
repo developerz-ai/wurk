@@ -106,12 +106,12 @@ export default function Limiters() {
                 <table>
                   <thead>
                     <tr>
-                      <SortableTh label="Name" sortKey="name" sort={sort()} onSort={toggle} />
-                      <SortableTh label="Type" sortKey="type" sort={sort()} onSort={toggle} />
-                      <SortableTh label="Used" sortKey="used" sort={sort()} onSort={toggle} />
-                      <SortableTh label="Limit" sortKey="limit" sort={sort()} onSort={toggle} />
-                      <SortableTh label="Usage" sortKey="usage" sort={sort()} onSort={toggle} />
-                      <SortableTh label="Status" sortKey="status" sort={sort()} onSort={toggle} />
+                      <SortableTh label={t('table.name')} sortKey="name" sort={sort()} onSort={toggle} />
+                      <SortableTh label={t('table.type')} sortKey="type" sort={sort()} onSort={toggle} />
+                      <SortableTh label={t('table.used')} sortKey="used" sort={sort()} onSort={toggle} />
+                      <SortableTh label={t('table.limit')} sortKey="limit" sort={sort()} onSort={toggle} />
+                      <SortableTh label={t('table.usage')} sortKey="usage" sort={sort()} onSort={toggle} />
+                      <SortableTh label={t('table.status')} sortKey="status" sort={sort()} onSort={toggle} />
                       <Show when={!readOnly()}><th /></Show>
                     </tr>
                   </thead>
@@ -159,9 +159,9 @@ export default function Limiters() {
                             <td>
                               <Show
                                 when={available}
-                                fallback={<span class="badge badge-danger">exhausted</span>}
+                                fallback={<span class="badge badge-danger">{t('limiters.exhausted')}</span>}
                               >
-                                <span class="badge badge-success">available</span>
+                                <span class="badge badge-success">{t('limiters.available')}</span>
                               </Show>
                             </td>
                             <Show when={!readOnly()}>
@@ -171,7 +171,7 @@ export default function Limiters() {
                                   disabled={reset.isPending}
                                   onClick={() => reset.mutate(limiter.name)}
                                 >
-                                  Reset
+                                  {t('actions.reset')}
                                 </button>
                               </td>
                             </Show>

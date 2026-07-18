@@ -103,11 +103,11 @@ export default function Cron() {
                 <table>
                   <thead>
                     <tr>
-                      <SortableTh label="Schedule" sortKey="schedule" sort={sort()} onSort={toggle} />
+                      <SortableTh label={t('table.schedule')} sortKey="schedule" sort={sort()} onSort={toggle} />
                       <SortableTh label={t('table.class')} sortKey="klass" sort={sort()} onSort={toggle} />
                       <SortableTh label={t('table.queue')} sortKey="queue" sort={sort()} onSort={toggle} />
-                      <SortableTh label="Last fire" sortKey="last_fire" sort={sort()} onSort={toggle} />
-                      <SortableTh label="Next fire" sortKey="next_fire" sort={sort()} onSort={toggle} />
+                      <SortableTh label={t('cron.last_fire')} sortKey="last_fire" sort={sort()} onSort={toggle} />
+                      <SortableTh label={t('cron.next_fire')} sortKey="next_fire" sort={sort()} onSort={toggle} />
                       <SortableTh label={t('table.status')} sortKey="status" sort={sort()} onSort={toggle} />
                       <Show when={!readOnly()}><th /></Show>
                     </tr>
@@ -131,8 +131,8 @@ export default function Cron() {
                             {loop.paused ? '—' : loop.next_fire_at ? relativeTime(loop.next_fire_at) : '—'}
                           </td>
                           <td>
-                            <Show when={loop.paused} fallback={<span class="badge badge-success">active</span>}>
-                              <span class="badge badge-muted">paused</span>
+                            <Show when={loop.paused} fallback={<span class="badge badge-success">{t('dashboard.active')}</span>}>
+                              <span class="badge badge-muted">{t('dashboard.paused')}</span>
                             </Show>
                           </td>
                           <Show when={!readOnly()}>
@@ -143,14 +143,14 @@ export default function Cron() {
                                   disabled={setPaused.isPending}
                                   onClick={() => setPaused.mutate({ lid: loop.lid, paused: loop.paused })}
                                 >
-                                  {loop.paused ? 'Resume' : 'Pause'}
+                                  {loop.paused ? t('actions.unpause') : t('actions.pause')}
                                 </button>
                                 <button
                                   class="btn btn-sm"
                                   disabled={enqueueNow.isPending}
                                   onClick={() => enqueueNow.mutate(loop.lid)}
                                 >
-                                  Enqueue
+                                  {t('actions.enqueue')}
                                 </button>
                               </div>
                             </td>

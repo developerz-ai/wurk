@@ -116,14 +116,14 @@ export default function Dead() {
                       <tr>
                         <Show when={!readOnly()}>
                           <th class="row-action">
-                            <input type="checkbox" checked={allChecked()} onChange={() => sel.toggleAll(pageKeys())} aria-label="Select all" />
+                            <input type="checkbox" checked={allChecked()} onChange={() => sel.toggleAll(pageKeys())} aria-label={t('table.select_all')} />
                           </th>
                         </Show>
                         <SortableTh label={t('table.jid')} sortKey="jid" sort={sort()} onSort={toggle} />
                         <SortableTh label={t('table.class')} sortKey="klass" sort={sort()} onSort={toggle} />
                         <SortableTh label={t('table.args')} sortKey="args" sort={sort()} onSort={toggle} />
                         <SortableTh label={t('table.error')} sortKey="error_class" sort={sort()} onSort={toggle} />
-                        <SortableTh label="Message" sortKey="error_message" sort={sort()} onSort={toggle} />
+                        <SortableTh label={t('table.message')} sortKey="error_message" sort={sort()} onSort={toggle} />
                         <SortableTh label={t('table.failed_at')} sortKey="failed_at" sort={sort()} onSort={toggle} />
                       </tr>
                     </thead>
@@ -136,7 +136,7 @@ export default function Dead() {
                             <tr class="row-clickable" onClick={() => { setSelected(entry); setSelectedKey(key); }}>
                               <Show when={!readOnly()}>
                                 <td class="row-action" onClick={(e) => e.stopPropagation()}>
-                                  <input type="checkbox" checked={sel.selected().has(key)} onChange={() => sel.toggle(key)} aria-label="Select job" />
+                                  <input type="checkbox" checked={sel.selected().has(key)} onChange={() => sel.toggle(key)} aria-label={t('table.select_row')} />
                                 </td>
                               </Show>
                               <td

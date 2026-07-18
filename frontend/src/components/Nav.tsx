@@ -139,7 +139,7 @@ export default function Nav(props: NavProps) {
                 }}
               >
                 <span class="live-dot" style={{ width: '6px', height: '6px' }} />
-                System Status: Active
+                {t('nav.status_active')}
               </span>
             </span>
           </A>
