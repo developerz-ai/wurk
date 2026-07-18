@@ -562,9 +562,9 @@ No corresponding `:follower` event; check `leader?` from within long-running thr
 
 ### 6.4 Redis keys
 
-| Key       | Type | Purpose                                       |
-| --------- | ---- | --------------------------------------------- |
-| `leader`  | STR  | Holds `<pid>@<hostname>:<process_nonce>`, EX=30 |
+| Key           | Type | Purpose                                       |
+| ------------- | ---- | --------------------------------------------- |
+| `dear-leader` | STR  | Holds `<hostname>:<pid>:<6-byte-hex-nonce>`, EX=30; migrating from an Ent install with a live `leader` key will cause one re-election (harmless) |
 
 ### 6.5 Fencing
 
@@ -815,6 +815,6 @@ To claim "Enterprise drop-in", Wurk must expose, identically signed and Redis-ke
 - [ ] `sidekiqswarm` binary honoring `SIDEKIQ_COUNT`, `SIDEKIQ_MAXMEM_MB`, `SIDEKIQ_PRELOAD`, `SIDEKIQ_PRELOAD_APP`; `on(:fork)` hook
 - [ ] Rolling-restart compatibility with einhorn (or document Wurk-native equivalent in `docs/idea/`)
 - [ ] `require "sidekiq-ent/web"` → Limits, Periodic, Historical tabs + authorization block
-- [ ] Same Redis key prefixes (`lmtr:`, `loops:`, `periodic`, `unique:`, `leader`, `history:metrics`) for migration parity
+- [ ] Same Redis key prefixes (`lmtr:`, `loops:`, `periodic`, `unique:`, `dear-leader`, `history:metrics`) for migration parity
 
 End of public API surface.
