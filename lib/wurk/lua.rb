@@ -45,6 +45,22 @@ module Wurk
     # Ruby scheduler, whose push path restamps `enqueued_at` too
     # (Client#push_plain / #push_batched) — so both schedulers emit
     # wire-identical promoted payloads (spec §7.1).
+    #
+    # The restamp is a surgical string patch, NOT a cjson.decode -> cjson.encode
+    # round-trip: cjson maps every JSON number to a Lua double, so re-encoding
+    # would silently corrupt integer args past 2^53 (snowflake IDs, 64-bit
+    # counters) and reformat 15+ digit numbers into scientific notation --
+    # breaking wire-compat AND diverging from the loss-free Ruby scheduler,
+    # whose Ruby-side JSON keeps big integers exact. So the stored member is
+    # preserved byte-for-byte and only its top-level `enqueued_at` is rewritten:
+    # replaced in place when present (retry members keep theirs), inserted after
+    # the opening brace when absent (schedule members are stored stripped of it,
+    # via Client#push_scheduled). cjson.decode is still called -- but only to
+    # read the `queue` string and test for a top-level `enqueued_at`, never to
+    # re-serialize, so a lossy decode never reaches the payload. (Residual: a
+    # retry member whose user args embed a numeric key literally named
+    # `enqueued_at` ahead of the top-level one patches the arg instead --
+    # vanishingly rare, and still strictly safer than round-tripping every arg.)
     # KEYS = [sorted_set, queues_set]
     # ARGV = [now, queue_prefix, now_ms]
     # Returns the number of jobs promoted.
@@ -58,10 +74,15 @@ module Wurk
       for i = 1, #jobs do
         local job = jobs[i]
         local decoded = cjson.decode(job)
-        decoded["enqueued_at"] = tonumber(ARGV[3])
         local q = decoded["queue"]
+        local stamped
+        if decoded["enqueued_at"] == nil then
+          stamped = string.gsub(job, "^{", '{"enqueued_at":' .. ARGV[3] .. ",", 1)
+        else
+          stamped = string.gsub(job, '"enqueued_at":%-?%d[%d.eE+-]*', '"enqueued_at":' .. ARGV[3], 1)
+        end
         redis.call("sadd", KEYS[2], q)
-        redis.call("lpush", ARGV[2] .. q, cjson.encode(decoded))
+        redis.call("lpush", ARGV[2] .. q, stamped)
         redis.call("zrem", KEYS[1], job)
       end
       return #jobs

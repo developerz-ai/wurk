@@ -10,8 +10,11 @@ require 'json'
 # the expand_at / expand_spread validation matrix.
 #
 # Real Redis only (Wurk::Test.redis_url); teardown's worker-DB FLUSHDB gives
-# each test a clean slate, so SCRIPT FLUSH / crafted WRONGTYPE keys here can't
-# bleed into siblings (classes run sequentially within a worker).
+# each test a clean slate. NOSCRIPT recovery is driven by an injected once-firing
+# fake (NoscriptOncePool), never a real SCRIPT FLUSH — a global flush clears the
+# server-wide Lua cache and would race peer parallel_fork workers (the EVALSHA
+# cache is shared across their isolated DBs). Crafted WRONGTYPE keys are
+# DB-scoped, so they can't bleed into siblings either.
 class ClientTest < Wurk::Test::UnitCase
   parallelize_me!
 
@@ -91,13 +94,13 @@ class ClientTest < Wurk::Test::UnitCase
 
   # --- push_batched_pipelined NOSCRIPT recovery (else branch) --------------
 
-  def test_flush_batched_reloads_lua_after_script_flush
-    @pool.with { |c| c.call('SCRIPT', 'FLUSH') }
+  def test_flush_batched_reloads_lua_after_noscript
+    client = Wurk::Client.new(pool: NoscriptOncePool.new(@pool))
 
-    @client.flush_batched([batched_payload(jid: 'b2' + ('0' * 22))])
+    client.flush_batched([batched_payload(jid: 'b2' + ('0' * 22))])
 
     assert_equal 1, @pool.with { |c| c.call('LLEN', "queue:#{@queue}") },
-                 'NOSCRIPT must trigger script_load_all + EVAL-source retry, then succeed'
+                 'a simulated NOSCRIPT must trigger script_load_all + EVAL-source retry, then succeed'
   ensure
     cleanup_batch
   end
@@ -120,14 +123,14 @@ class ClientTest < Wurk::Test::UnitCase
   # the immediate-path recovery tests so the scheduled path's rescue/re-raise
   # branches stay covered.
 
-  def test_scheduled_batched_push_reloads_lua_after_script_flush
+  def test_scheduled_batched_push_reloads_lua_after_noscript
     @bid = "BS-#{Process.pid}-#{object_id}"
-    @pool.with { |c| c.call('SCRIPT', 'FLUSH') }
+    client = Wurk::Client.new(pool: NoscriptOncePool.new(@pool))
 
-    @client.push(scheduled_batched_item)
+    client.push(scheduled_batched_item)
 
     assert_equal('1', @pool.with { |c| c.call('HGET', "b-#{@bid}", 'total') },
-                 'NOSCRIPT on BATCH_SCHEDULE must reload + EVAL-source retry, then register')
+                 'a simulated NOSCRIPT on BATCH_SCHEDULE must reload + EVAL-source retry, then register')
   ensure
     cleanup_scheduled_batch
   end
@@ -261,6 +264,46 @@ class ClientTest < Wurk::Test::UnitCase
   class HaltMiddleware
     def call(_worker, _job, _queue, _redis)
       nil
+    end
+  end
+
+  # Wraps a pool so the first #pipelined on a checked-out connection raises a
+  # simulated NOSCRIPT once, then forwards to the real connection. Exercises the
+  # client's pipeline reload/retry branch WITHOUT a real SCRIPT FLUSH — a global
+  # flush clears the server-wide Lua cache and would race peer parallel_fork
+  # workers whose EVALSHA cache is shared across the isolated DBs. The
+  # EVAL-source retry still runs against real Redis, so the batch is genuinely
+  # registered — the same fake-NOSCRIPT seam lua_loader_test.rb uses.
+  class NoscriptOncePool
+    def initialize(real)
+      @real = real
+      @fired = false
+    end
+
+    def with
+      @real.with { |conn| yield NoscriptGate.new(conn, self) }
+    end
+
+    def fire!
+      @fired = true
+    end
+
+    def fired? = @fired
+
+    # The client only ever calls #pipelined on the fetched connection on these
+    # batched paths; the first call raises a one-shot NOSCRIPT, the rest forward.
+    class NoscriptGate
+      def initialize(conn, gate)
+        @conn = conn
+        @gate = gate
+      end
+
+      def pipelined(&)
+        return @conn.pipelined(&) if @gate.fired?
+
+        @gate.fire!
+        raise RedisClient::CommandError, 'NOSCRIPT No matching script. Use EVAL.'
+      end
     end
   end
 end

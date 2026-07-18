@@ -148,7 +148,8 @@ class LuaTest < Wurk::Test::UnitCase
   # Promotion stamps a fresh integer `enqueued_at` (ARGV[3]) — a scheduled job
   # arriving on an immediate queue must carry the promotion instant, matching
   # the default Ruby scheduler's push restamp (spec §7.1). The original stored
-  # member is ZREM'd verbatim; the pushed copy is re-encoded with the stamp.
+  # member is ZREM'd verbatim; the pushed copy keeps its original bytes and only
+  # has its top-level `enqueued_at` string-patched in (never a full cjson re-encode).
   def test_reliable_schedule_promote_stamps_fresh_enqueued_at
     sset = "#{@ns}:schedule"
     qset = "#{@ns}:queues"
@@ -164,6 +165,42 @@ class LuaTest < Wurk::Test::UnitCase
       assert_kind_of Integer, promoted['enqueued_at']
       assert_equal 'a', promoted['jid']
       c.call('DEL', "#{@ns}:queue:alpha")
+    end
+  end
+
+  # Regression: promotion patches only `enqueued_at`, never a cjson round-trip —
+  # cjson maps args to Lua doubles, dropping precision past 2^53 and reformatting
+  # 15+ digit ints to scientific notation. Insert branch: schedule members are
+  # stored with no `enqueued_at`, so it is inserted while args stay byte-for-byte.
+  def test_reliable_schedule_promote_preserves_large_int_args_on_insert
+    sset = "#{@ns}:schedule"
+    big  = 9_007_199_254_740_993     # 2^53 + 1: not representable as an IEEE double
+    snow = 1_533_231_640_038_055_945 # 19-digit snowflake id
+    @pool.with do |c|
+      c.call('ZADD', sset, 100, %({"class":"J","args":[#{big},#{snow}],"queue":"alpha","jid":"a"}))
+      promote(c, sset)
+      raw = c.call('LRANGE', "#{@ns}:queue:alpha", 0, -1).first
+
+      assert_includes raw, snow.to_s, 'snowflake id must not reformat to scientific notation'
+      assert_equal [big, snow], Wurk.load_json(raw)['args'], 'big int args must survive verbatim'
+      c.call('DEL', "#{@ns}:queue:alpha")
+    end
+  end
+
+  # Replace branch: retry members carry an `enqueued_at`; promotion swaps a fresh
+  # stamp in place (exactly one key, no duplicate) while a large int arg stays exact.
+  def test_reliable_schedule_promote_preserves_large_int_args_on_replace
+    sset = "#{@ns}:schedule"
+    big  = 9_007_199_254_740_993
+    @pool.with do |c|
+      c.call('ZADD', sset, 100, %({"class":"R","args":[#{big}],"queue":"beta","jid":"b","enqueued_at":1600000000000}))
+      promote(c, sset)
+      raw = c.call('LRANGE', "#{@ns}:queue:beta", 0, -1).first
+
+      assert_equal [big], Wurk.load_json(raw)['args'], 'big int arg must survive verbatim'
+      assert_equal 1_700_000_000_000, Wurk.load_json(raw)['enqueued_at'], 'stamp must be replaced in place'
+      assert_equal 1, raw.scan('"enqueued_at"').size, 'replace must not leave a duplicate key'
+      c.call('DEL', "#{@ns}:queue:beta")
     end
   end
 
@@ -447,5 +484,13 @@ class LuaTest < Wurk::Test::UnitCase
       assert_equal 0, c.call('EXISTS', jids)
       assert_equal '1', c.call('HGET', bkey, 'invalidated')
     end
+  end
+
+  private
+
+  def promote(conn, sset, now_ms = 1_700_000_000_000)
+    Wurk::Lua::Loader.eval_cached(
+      conn, :reliable_schedule_promote, keys: [sset, "#{@ns}:queues"], argv: [500, "#{@ns}:queue:", now_ms]
+    )
   end
 end

@@ -159,9 +159,9 @@ class BatchRetryRoundtripTest < Wurk::Test::UnitCase
     assert_equal '2', batch_field(batch, 'total'), 'total must count both jobs at registration'
 
     with_swarm(topology(concurrency: 2)) do
-      assert wait_until { @observer.call('EXISTS', marker_a) == 1 },
+      assert wait_until? { @observer.call('EXISTS', marker_a) == 1 },
              "simple job's marker never appeared — batch job never ran"
-      assert wait_until { @observer.call('GET', attempts_key).to_i >= 1 },
+      assert wait_until? { @observer.call('GET', attempts_key).to_i >= 1 },
              'flaky job never made its first (failing) attempt'
 
       # Observation window: the simple job succeeded (pending 2→1) and the
@@ -177,9 +177,9 @@ class BatchRetryRoundtripTest < Wurk::Test::UnitCase
 
       force_due_now!('retry', attempts_key)
 
-      assert wait_until { @observer.call('EXISTS', marker_b) == 1 },
+      assert wait_until? { @observer.call('EXISTS', marker_b) == 1 },
              'flaky job never succeeded on retry'
-      assert wait_until { batch_field(batch, 'success') == '1' },
+      assert wait_until? { batch_field(batch, 'success') == '1' },
              "batch :success never fired within #{POLL_TIMEOUT}s"
     end
 
@@ -211,9 +211,9 @@ class BatchRetryRoundtripTest < Wurk::Test::UnitCase
                ':complete must not fire while the scheduled job still sits in `schedule`'
 
     with_swarm(topology(concurrency: 1)) do
-      assert wait_until { @observer.call('EXISTS', marker) == 1 },
+      assert wait_until? { @observer.call('EXISTS', marker) == 1 },
              'scheduled job was never promoted + run'
-      assert wait_until { batch_field(batch, 'complete') == '1' },
+      assert wait_until? { batch_field(batch, 'complete') == '1' },
              "batch :complete never fired within #{POLL_TIMEOUT}s"
     end
 
@@ -246,9 +246,9 @@ class BatchRetryRoundtripTest < Wurk::Test::UnitCase
     assert_equal '2', batch_field(batch, 'total')
 
     with_swarm(topology(concurrency: 2)) do
-      assert wait_until { @observer.call('EXISTS', running_key) == 1 },
+      assert wait_until? { @observer.call('EXISTS', running_key) == 1 },
              'gate job never acquired the limiter slot'
-      assert wait_until { @observer.call('GET', attempts_key).to_i >= 1 },
+      assert wait_until? { @observer.call('GET', attempts_key).to_i >= 1 },
              'contender job never attempted to acquire the (held) limiter slot'
 
       # The contender's first attempt must OverLimit → reschedule → neither
@@ -264,9 +264,9 @@ class BatchRetryRoundtripTest < Wurk::Test::UnitCase
 
       @observer.call('SET', release_key, '1', 'EX', 60)
 
-      assert wait_until { @observer.call('EXISTS', marker) == 1 },
+      assert wait_until? { @observer.call('EXISTS', marker) == 1 },
              'contender job never succeeded after the gate released'
-      assert wait_until { batch_field(batch, 'success') == '1' },
+      assert wait_until? { batch_field(batch, 'success') == '1' },
              "batch :success never fired within #{POLL_TIMEOUT}s"
     ensure
       @observer.call('SET', release_key, '1', 'EX', 60) # never strand the gated worker
@@ -355,7 +355,7 @@ class BatchRetryRoundtripTest < Wurk::Test::UnitCase
     @observer.call('HGET', "b-#{batch.bid}", field)
   end
 
-  def wait_until # rubocop:disable Naming/PredicateMethod
+  def wait_until?
     deadline = monotonic_now + POLL_TIMEOUT
     until monotonic_now > deadline
       return true if yield
