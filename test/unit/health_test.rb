@@ -175,6 +175,23 @@ class HealthTest < Wurk::Test::UnitCase
     refute_predicate second, :retrying?, 'stop cancels the retry poll'
   end
 
+  # A second start on a live instance must be a no-op. Without the guard it
+  # re-binds the same port, hits EADDRINUSE, nulls @server/@thread, and leaks
+  # the original listener so stop can never close it.
+  def test_start_is_idempotent
+    launcher = FakeLauncher.new(config: FakeConfig.new)
+    @server = build_server(launcher)
+    @server.start
+    thread = @server.instance_variable_get(:@thread)
+    listener = @server.instance_variable_get(:@server)
+
+    @server.start
+
+    assert_predicate @server, :running?
+    assert_same thread, @server.instance_variable_get(:@thread), 'accept thread must not be replaced'
+    assert_same listener, @server.instance_variable_get(:@server), 'listener must not be rebound/leaked'
+  end
+
   def test_second_child_takes_over_port_after_owner_stops
     launcher = FakeLauncher.new(config: FakeConfig.new)
     first = build_server(launcher)

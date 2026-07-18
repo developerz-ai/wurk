@@ -50,6 +50,11 @@ module Wurk
       end
 
       def start
+        # Idempotent (see class doc): a second start on a live instance would
+        # re-bind the same port, hit EADDRINUSE, and null out @server/@thread —
+        # leaking the original listener so stop could never close it.
+        return self if running? || retrying?
+
         @done = false
         bind_and_serve || start_retry_loop
         self

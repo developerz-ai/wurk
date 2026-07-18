@@ -88,9 +88,11 @@ module Wurk
       # so stray USR1s don't trigger default termination.
       def reset_inherited_signals
         %w[TERM INT TSTP USR2].each { |s| ::Signal.trap(s, 'DEFAULT') }
-        ::Signal.trap('USR1') do
-          @config.logger.debug { 'Received USR1 (rolling restart); no-op in child' }
-        end
+        # A genuine no-op in the child (rolling restart is the parent's job) —
+        # trap it empty so a stray USR1 can't fall through to default
+        # termination. Must NOT log: Logger synchronizes writes and would
+        # deadlock if the trap fired mid-write.
+        ::Signal.trap('USR1') { nil }
       rescue ArgumentError
         nil
       end
@@ -144,11 +146,21 @@ module Wurk
       def install_signal_handlers(launcher)
         @signal_read, @signal_write = ::IO.pipe
         CHILD_SIGNALS.each_key do |sig|
-          ::Signal.trap(sig) { @signal_write.puts(sig) }
+          ::Signal.trap(sig) { emit_signal(sig) }
         rescue ArgumentError
           nil
         end
         @dispatcher = Thread.new { dispatch_signals(launcher) }
+      end
+
+      # Non-blocking self-pipe write from trap context: a blocking `puts` could
+      # stall the TERM drain if the pipe ever filled. `exception: false` returns
+      # :wait_writable instead of raising when full (the queued duplicate
+      # coalesces); a closed pipe during shutdown is ignored too.
+      def emit_signal(sig)
+        @signal_write.write_nonblock("#{sig}\n", exception: false)
+      rescue ::IOError, ::Errno::EPIPE, ::Errno::EBADF
+        nil
       end
 
       # TSTP/USR2 keep looping; TERM/INT run the full launcher.stop

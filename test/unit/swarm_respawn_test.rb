@@ -82,6 +82,38 @@ class SwarmRespawnTest < Wurk::Test::UnitCase
            'a clean exit during drain must not schedule a respawn'
   end
 
+  # A fork/resource failure while respawning must neither escape the supervise
+  # loop nor drop the pending slot — it stays armed and retries once fork
+  # recovers.
+  def test_failed_fork_keeps_slot_pending_and_retries
+    clock = [1000.0]
+    swarm = new_swarm
+    inject_respawn_clock(swarm, -> { clock[0] })
+    swarm.boot(install_signals: false)
+    idx = crash_first_child(swarm)
+
+    fork_ok = [false]
+    next_pid = [20_000]
+    swarm.define_singleton_method(:fork_child) do |_slot, _index|
+      raise Errno::EAGAIN, 'resource temporarily unavailable' unless fork_ok[0]
+
+      next_pid[0] += 1
+    end
+
+    clock[0] += Wurk::Swarm::RESPAWN_BACKOFF
+    swarm.send(:spawn_due_respawns) # a failed fork must not raise out of supervise
+
+    assert_equal 0, slot_count(swarm, idx), 'a failed fork must not add a child'
+    assert swarm.instance_variable_get(:@respawn_backoff).pending?(idx),
+           'a failed respawn stays pending for retry instead of being dropped'
+
+    fork_ok[0] = true
+    clock[0] += Wurk::Swarm::Backoff::CAP
+    swarm.send(:spawn_due_respawns)
+
+    assert_equal 1, slot_count(swarm, idx), 'the slot refills once fork succeeds after backoff'
+  end
+
   private
 
   def topology

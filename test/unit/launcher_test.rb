@@ -189,9 +189,12 @@ class LauncherTest < Wurk::Test::UnitCase
     reaper.define_singleton_method(:reclaim!) { reclaimed = true }
 
     launcher.run(async_beat: false)
-    # boot_reclaim runs on a background thread, so join to ensure it completes.
-    launcher.instance_variable_get(:@boot_reclaim_thread)&.join(1.0)
+    # boot_reclaim runs on a background thread; assert the join actually
+    # returns (a bare join(1.0) whose result is ignored could time out under a
+    # slow scheduler and check `reclaimed` before reclaim! ran).
+    reclaim_thread = launcher.instance_variable_get(:@boot_reclaim_thread)
 
+    assert reclaim_thread.join(5.0), 'boot-reclaim thread did not finish in time'
     assert reclaimed, 'run should do a deterministic boot-time orphan reclaim'
   end
 

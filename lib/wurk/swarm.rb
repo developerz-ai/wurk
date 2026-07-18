@@ -33,7 +33,7 @@ module Wurk
   #   TERM/INT  → `shutdown`           (graceful drain; aborts any restart)
   #   TSTP      → relay TSTP           (quiet — stop fetching; one-way, no resume)
   #   USR1      → `rolling_restart`    (zero-downtime cycle)
-  class Swarm
+  class Swarm # rubocop:disable Metrics/ClassLength
     include Component
 
     SUPERVISE_TICK = 0.2
@@ -173,11 +173,21 @@ module Wurk
     def install_signal_handlers
       @signal_read, @signal_write = ::IO.pipe
       SWARM_SIGNALS.each_key do |sig|
-        ::Signal.trap(sig) { @signal_write.puts(sig) }
+        ::Signal.trap(sig) { emit_signal(sig) }
       rescue ArgumentError
         # Platform without this signal (e.g. some JRuby builds) — skip it.
         nil
       end
+    end
+
+    # Non-blocking self-pipe write from trap context: a blocking `puts` could
+    # stall signal delivery if the pipe fills. `exception: false` returns
+    # :wait_writable instead of raising when full (drop the coalescible
+    # duplicate); a closed pipe during shutdown is ignored too.
+    def emit_signal(sig)
+      @signal_write.write_nonblock("#{sig}\n", exception: false)
+    rescue ::IOError, ::Errno::EPIPE, ::Errno::EBADF
+      nil
     end
 
     def drain_signals
@@ -247,9 +257,20 @@ module Wurk
       @assignments.each_index do |idx|
         next unless @respawn_backoff.pending?(idx) && @respawn_backoff.ready?(idx)
 
-        @respawn_backoff.consume(idx)
-        spawn_child(@assignments[idx], idx)
+        respawn_slot(idx)
       end
+    end
+
+    # Consume the backoff only after the fork lands. A fork/resource failure
+    # (EAGAIN, ENOMEM) must neither drop the pending respawn nor escape the
+    # supervise loop: on failure we re-arm the backoff and leave the slot
+    # pending so the next due tick retries instead of hot-looping.
+    def respawn_slot(idx)
+      spawn_child(@assignments[idx], idx)
+      @respawn_backoff.consume(idx)
+    rescue StandardError => e
+      delay = @respawn_backoff.fail(idx)
+      logger.warn { "swarm: respawn of slot #{idx} failed (#{e.class}: #{e.message}); retrying in #{delay}s" }
     end
 
     def check_memory_pressure

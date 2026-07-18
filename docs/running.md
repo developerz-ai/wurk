@@ -43,7 +43,7 @@ from one of them is unsafe two ways:
 
 So Wurk **refuses** to fork there and logs an actionable notice instead:
 
-```
+```text
 wurk: preforking web server detected (Puma cluster / Unicorn / Passenger).
 Refusing to fork the worker swarm from a process that forks its own workers.
 ...

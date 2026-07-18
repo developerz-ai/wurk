@@ -48,7 +48,8 @@ module Wurk
       'INFO' => BACKTRACE_DUMPER,
       'USR2' => lambda do |cli|
         cli.logger.info 'Received USR2, reopening logs'
-        cli.reopen_logs
+        # reopen_logs is private — an explicit receiver needs __send__.
+        cli.__send__(:reopen_logs)
       end
     }.freeze
 

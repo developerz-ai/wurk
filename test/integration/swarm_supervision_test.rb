@@ -22,6 +22,7 @@ class SwarmSupervisionTest < Wurk::Test::UnitCase
     @queue_name = "#{@ns}-q"
     @config = Wurk::Configuration.new
     @config.logger = ::Logger.new(IO::NULL)
+    @config.redis = { url: Wurk::Test.redis_url }
     @config[:timeout] = SHUTDOWN_TIMEOUT
     @observer = RedisClient.config(url: Wurk::Test.redis_url).new_client
   end
@@ -51,6 +52,9 @@ class SwarmSupervisionTest < Wurk::Test::UnitCase
       assert_growing_backoff(key)
       assert_drains_promptly_while_backoff_pending(swarm)
     ensure
+      # A failed assertion must not leave the crash-loop respawning forever;
+      # shutdown is idempotent so the happy path's drain isn't double-counted.
+      swarm.shutdown(timeout: SHUTDOWN_TIMEOUT)
       supervisor&.join(10)
     end
   end
@@ -130,6 +134,9 @@ class SwarmSupervisionTest < Wurk::Test::UnitCase
              "orphaned child #{child_pid} was still alive #{watchdog_timeout}s after its parent was SIGKILL'd"
     ensure
       pipe_read&.close
+      # An early assertion failure (before the parent is KILL'd) would otherwise
+      # leave the parent supervisor alive; it's a no-op once already reaped.
+      shutdown_supervisor_if_alive(parent_pid)
       ::Process.kill('KILL', child_pid) if child_pid && pid_alive?(child_pid)
     end
   end
@@ -250,6 +257,7 @@ class SwarmSupervisionTest < Wurk::Test::UnitCase
   def build_config
     config = Wurk::Configuration.new
     config.logger = ::Logger.new(IO::NULL)
+    config.redis = { url: Wurk::Test.redis_url }
     config[:timeout] = SHUTDOWN_TIMEOUT
     config
   end

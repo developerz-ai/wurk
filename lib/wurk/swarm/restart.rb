@@ -97,10 +97,27 @@ module Wurk
         return unless pid
 
         meta = @describe.call(pid)
-        replacement = @spawn.call(meta[:slot], meta[:index])
+        replacement = spawn_replacement(pid, meta)
+        return unless replacement
+
         @current = { old_pid: pid, index: meta[:index], replacement: replacement,
                      phase: :await_heartbeat, deadline: now + @heartbeat_wait }
         @logger.info { "swarm: restarting slot #{meta[:index]} (old #{pid} -> new #{replacement})" }
+      end
+
+      # Spawn the replacement, requeuing the slot on a fork/resource failure so
+      # the restart work item isn't lost (and the error can't escape the
+      # supervise loop). A per-slot backoff paces the retry — next_ready_pid
+      # leaves the head queued until it elapses.
+      def spawn_replacement(pid, meta)
+        @spawn.call(meta[:slot], meta[:index])
+      rescue StandardError => e
+        delay = @backoff.fail(meta[:index], lifetime: 0.0)
+        @queue.unshift(pid)
+        @logger.warn do
+          "swarm: replacement spawn for slot #{meta[:index]} failed (#{e.class}: #{e.message}); retry in #{delay}s"
+        end
+        nil
       end
 
       # Head of the queue if its old child still exists and its retry backoff
