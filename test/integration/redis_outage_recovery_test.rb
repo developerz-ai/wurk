@@ -87,7 +87,14 @@ class RedisOutageRecoveryTest < Wurk::Test::UnitCase
     assert_equal 0, @observer.call('ZCARD', Wurk::Keys::RETRY).to_i, 'no job should have failed into the retry set'
     assert_equal 0, @observer.call('ZCARD', Wurk::Keys::DEAD).to_i, 'no job should have failed into the dead set'
     assert_equal 0, @observer.call('LLEN', "queue:#{@queue_name}").to_i, 'public queue must fully drain'
-    assert_equal 0, @observer.call('LLEN', private_queue_key).to_i, 'private list must fully drain (every job acked)'
+
+    # The ack (LREM) runs in Processor#process's ensure, *after* perform
+    # returns, and goes through the blipped pool's retry+backoff — while the
+    # sentinel records its execution over a direct connection that bypasses the
+    # proxy. So "all jobs executed" strictly precedes "all jobs acked"; poll for
+    # the drain rather than sampling it the instant the last job runs.
+    assert wait_until?(timeout: POLL_TIMEOUT) { private_queue_depth.zero? },
+           "private list must fully drain (every job acked), still holding #{private_queue_depth}"
 
     refute_predicate @manager, :stopped?, 'the manager must self-heal in place — no restart'
 
@@ -150,6 +157,10 @@ class RedisOutageRecoveryTest < Wurk::Test::UnitCase
 
   def private_queue_key
     Wurk::Fetcher::Reliable.private_queue_name("queue:#{@queue_name}")
+  end
+
+  def private_queue_depth
+    @observer.call('LLEN', private_queue_key).to_i
   end
 
   def wait_until?(timeout: 5.0)
