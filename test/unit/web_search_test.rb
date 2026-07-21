@@ -5,6 +5,13 @@ require_relative '../test_helper'
 class WebSearchTest < Wurk::Test::UnitCase
   parallelize_me!
 
+  # Members per seeding command (see #seed_queue / #seed_zset). The seed sizes
+  # track production constants — SCAN_BUDGET is 20k, so the ZSET seed is 40k
+  # members of ~250B — and one command carrying all of them is ~10MB of
+  # protocol, enough for a server to drop the connection mid-write with EPIPE.
+  # Batching keeps every command small at a cost of a few dozen round trips.
+  SEED_CHUNK = 1_000
+
   def setup
     super
     @ns = "wurksrch:#{Process.pid}:#{object_id}"
@@ -183,12 +190,14 @@ class WebSearchTest < Wurk::Test::UnitCase
   # A no-match keystroke against a sorted set larger than the shared request
   # budget must stop at SCAN_BUDGET rather than ZSCAN the whole ZSET. Binds a
   # round-trip-counting capsule to this thread (not a global monkeypatch) so
-  # counting is safe under this class's parallelize_me!. ZSCAN's COUNT is only a
-  # hint, so the assertion bounds round trips below a full walk rather than at an
-  # exact page count.
+  # counting is safe under this class's parallelize_me!.
   def test_search_bounds_scan_on_a_huge_no_match_sorted_set
     seed_size = 2 * Wurk::Web::Search::SCAN_BUDGET
     seed_zset('retry', seed_size)
+    # Measured, not computed: ZSCAN's COUNT is a bucket hint, so a page carries
+    # an arbitrary number of elements (Redis returns ~100 for COUNT 200 at this
+    # size) and seed_size / ZSCAN_PAGE understates a real walk by ~2x.
+    full_walk = count_zscan_pages('retry')
     counter = RoundTripCounter.new(Wurk.redis_pool)
     Thread.current[:wurk_capsule] = counter
 
@@ -197,11 +206,8 @@ class WebSearchTest < Wurk::Test::UnitCase
 
     assert_empty hits
     assert_predicate search, :truncated?
-    # A full walk would need seed_size / ZSCAN_PAGE ZSCANs; the budget caps the
-    # scan near SCAN_BUDGET / ZSCAN_PAGE — strictly fewer, proving it stops at
-    # the request budget, not the ZSET's real size.
-    full_walk = seed_size / Wurk::Web::Search::ZSCAN_PAGE
-
+    # Strictly fewer round trips than walking the whole ZSET proves the scan
+    # stops at the request budget, not at the set's real size.
     assert_operator counter.count, :<, full_walk
   ensure
     Thread.current[:wurk_capsule] = nil
@@ -265,25 +271,43 @@ class WebSearchTest < Wurk::Test::UnitCase
     def redis_pool = self
   end
 
-  # Bulk-seed a queue with `count` non-matching payloads in one RPUSH so the
-  # scan-cap tests can exceed SCAN_LIMIT_PER_QUEUE without thousands of calls.
+  # Bulk-seed a queue with `count` non-matching payloads so the scan-cap tests
+  # can exceed SCAN_LIMIT_PER_QUEUE without thousands of calls.
   def seed_queue(count)
     payload = Wurk.dump_json(bare_payload(@class_a, ['filler']))
     Wurk.redis do |c|
       c.call('SADD', 'queues', @queue)
-      c.call('RPUSH', "queue:#{@queue}", *Array.new(count, payload))
+      Array.new(count, payload).each_slice(SEED_CHUNK) { |batch| c.call('RPUSH', "queue:#{@queue}", *batch) }
     end
   end
 
-  # Bulk-seed a sorted set with `count` distinct non-matching members in one
-  # ZADD so the scan-budget test can exceed SCAN_BUDGET without thousands of
-  # calls. A filler class (not @class_a/@class_b) keeps teardown's cleanup_zset
-  # from ZREMing them one-by-one; the worker's FLUSHDB clears them. Each payload
-  # carries a unique jid, so no two members collide.
+  # Bulk-seed a sorted set with `count` distinct non-matching members so the
+  # scan-budget test can exceed SCAN_BUDGET without thousands of calls. A filler
+  # class (not @class_a/@class_b) keeps teardown's cleanup_zset from ZREMing
+  # them one-by-one; the worker's FLUSHDB clears them. Each payload carries a
+  # unique jid, so no two members collide.
   def seed_zset(name, count)
     filler = "SearchFiller@#{@ns}"
-    args = Array.new(count) { |i| [i, Wurk.dump_json(bare_payload(filler, ['filler']))] }.flatten
-    Wurk.redis { |c| c.call('ZADD', name, *args) }
+    members = Array.new(count) { |i| [i, Wurk.dump_json(bare_payload(filler, ['filler']))] }
+    Wurk.redis do |c|
+      members.each_slice(SEED_CHUNK) { |batch| c.call('ZADD', name, *batch.flatten) }
+    end
+  end
+
+  # ZSCAN pages needed to walk `name` end to end, at the page size the search
+  # itself uses. Call before installing the RoundTripCounter — these round trips
+  # are the baseline, not part of what's being measured.
+  def count_zscan_pages(name)
+    cursor = '0'
+    pages = 0
+    Wurk.redis do |c|
+      loop do
+        cursor, = c.call('ZSCAN', name, cursor, 'COUNT', Wurk::Web::Search::ZSCAN_PAGE)
+        pages += 1
+        break if cursor == '0'
+      end
+    end
+    pages
   end
 
   def push_bare_to_queue(klass, args)
