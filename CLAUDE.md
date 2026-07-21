@@ -117,3 +117,7 @@ SolidJS + TypeScript + Vite SPA mounted under the engine, built with **bun** (`b
 - `--no-verify` on commits when hooks fail — fix the hook.
 - Share a Redis socket across forks.
 - Force-push to `main`.
+
+## Note
+
+Do not use git worktrees — work directly in this checkout. If a task is big enough to need subagents, run them as a team in this same checkout: split the work into disjoint pieces so no two agents touch the same files.
