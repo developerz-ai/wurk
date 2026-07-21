@@ -173,9 +173,11 @@ module Wurk
       fire_lifecycle_start
       @executions += 1
 
-      run_iterations(args)
-
-      finalize_complete
+      if run_iterations(args) == :cancelled
+        finalize_cancelled
+      else
+        finalize_complete
+      end
     rescue Interrupted
       finalize_interrupted
       raise
@@ -205,17 +207,37 @@ module Wurk
     def run_iterations(args)
       enum = build_enumerator(*args, cursor: @cursor)
       enum.each do |item, new_cursor|
-        raise Interrupted if cancelled?
+        return :cancelled if cancelled?
+
+        # Cooperative shutdown. `interrupted?` (Wurk::Worker) is true once the
+        # owning Processor is stopping — quiet, TERM, or a rolling restart.
+        # Without this the loop would run until hard_shutdown raises
+        # Wurk::Shutdown (an Interrupt, not a RuntimeError), which skips the
+        # rescue below and loses everything since the last periodic flush.
+        raise Interrupted if interrupted?
 
         @current_object = item
         around_iteration { each_iteration(item, *args) }
         @cursor = new_cursor
         maybe_flush_state
       end
+      :completed
     end
 
     def finalize_complete
       flush_state(final: true)
+      on_complete
+      delete_state
+    end
+
+    # Cancellation is terminal, not an interruption: the job must NOT be
+    # re-pushed, and the state HASH — `cancelled` field included — must go,
+    # otherwise the resumed run would trip on its own flag and re-push again
+    # every cycle until CANCELLATION_PERIOD expires. Callback order matches
+    # upstream Sidekiq, which treats a cancelled run as completed.
+    def finalize_cancelled
+      on_cancel
+      on_stop
       on_complete
       delete_state
     end

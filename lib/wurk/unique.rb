@@ -8,7 +8,9 @@ require_relative 'lua'
 module Wurk
   # Sidekiq Enterprise unique jobs. Best-effort dedup at enqueue time keyed
   # by a SHA256 digest of `[class, queue, args]` (overridable via
-  # `sidekiq_unique_context`). Three lock-release strategies:
+  # `sidekiq_unique_context`; ActiveJob-wrapped payloads narrow to the wrapped
+  # class + its arguments — see `active_job_context`). Three lock-release
+  # strategies:
   #
   #   * `unique_until: :success` (default) — lock retained through retries;
   #     server middleware DELs it on successful perform. Surviving across
@@ -46,6 +48,21 @@ module Wurk
     KEY_PREFIX = 'unique:'
     DEFAULT_UNTIL = :success
     VALID_UNTIL = %i[success start].freeze
+
+    # Class names that carry an ActiveJob payload as their single arg. The
+    # canonical one Wurk writes is `Sidekiq::ActiveJob::Wrapper`; the others
+    # appear in payloads enqueued by older Sidekiq/Rails versions still sitting
+    # in Redis at gem-swap time.
+    ACTIVE_JOB_WRAPPERS = [
+      'Sidekiq::ActiveJob::Wrapper',
+      'Wurk::ActiveJob::Wrapper',
+      'ActiveJob::QueueAdapters::SidekiqAdapter::JobWrapper',
+      'ActiveJob::QueueAdapters::WurkAdapter::JobWrapper'
+    ].freeze
+
+    # Raised at enqueue when a worker opts into both `unique_for:` and
+    # `encrypt: true` (§3.8: mutually exclusive).
+    class ConfigurationError < StandardError; end
 
     # Ent parity: a job that dies automatically releases its lock so a
     # duplicate can enqueue immediately. Manual API/UI kills keep the lock
@@ -94,9 +111,9 @@ module Wurk
         nil
       end
 
-      # Compute the lock key for an arbitrary `(queue, klass, args)` triple.
-      # Used by both the client middleware and the public `locked?` probe so
-      # they cannot drift.
+      # Compute the lock key for an arbitrary `(queue, klass, args)` triple,
+      # bypassing `sidekiq_unique_context`. Public so operators can compute
+      # the key of a worker that uses the default context (docs §8).
       def lock_key(klass, queue, args)
         context = [klass.to_s, queue.to_s, args]
         "#{KEY_PREFIX}#{Digest::SHA256.hexdigest(JSON.dump(context))}"
@@ -112,17 +129,48 @@ module Wurk
 
       # Default: `[class, queue, args]`. Workers may override by defining
       # `self.sidekiq_unique_context(job)` returning any JSON-serializable
-      # value (e.g. a subset of args). Spec §3.5.
+      # value (e.g. a subset of args). Spec §3.5. ActiveJob-wrapped payloads
+      # get a narrowed default (see `active_job_context`) because their raw
+      # args can never repeat.
       def unique_context(job)
         klass = resolve_class(job['class'])
-        if klass.respond_to?(:sidekiq_unique_context)
-          klass.sidekiq_unique_context(job)
-        else
-          [job['class'], job['queue'], job['args']]
-        end
+        return klass.sidekiq_unique_context(job) if klass.respond_to?(:sidekiq_unique_context)
+
+        active_job_context(job) || [job['class'], job['queue'], job['args']]
       end
 
       private
+
+      # An ActiveJob payload's args are `[job.serialize]`, and that hash
+      # carries a fresh `job_id` plus an `enqueued_at` timestamp on every
+      # push — digesting it verbatim produces a new key every time, so
+      # nothing is ever deduped. Identity is therefore narrowed to the two
+      # fields that describe *which* job this is:
+      #
+      #   * `job_class`  — the real worker; the wire `class` is only the wrapper.
+      #   * `arguments`  — the serialized perform args.
+      #
+      # Everything else in the serialized hash is per-push state, not
+      # identity: `job_id`/`provider_job_id` (fresh per push), `enqueued_at`
+      # and `scheduled_at` (timestamps), `executions`/`exception_executions`
+      # (retry counters, so a retry re-push would otherwise miss its own
+      # lock), `priority`, `locale` and `timezone` (ambient request state —
+      # the same logical job enqueued from a different locale is still the
+      # same job). `queue_name` is dropped as redundant: the wire-level
+      # `job["queue"]` it was copied into is already in the context, keeping
+      # the "queue is part of the key" rule identical to the plain path.
+      #
+      # The wrapper class name stays in the context so an ActiveJob and a
+      # plain worker of the same name and args can't collide on one lock.
+      def active_job_context(job)
+        return nil unless ACTIVE_JOB_WRAPPERS.include?(job['class'].to_s)
+
+        data = job['args']
+        data = data.first if data.is_a?(::Array) && data.size == 1
+        return nil unless data.is_a?(::Hash) && data.key?('job_class') && data.key?('arguments')
+
+        [job['class'], job['queue'], data['job_class'], data['arguments']]
+      end
 
       def resolve_class(name)
         return nil if name.nil? || name.to_s.empty?
@@ -171,7 +219,10 @@ module Wurk
     # @return [String, nil] owning jid, or nil when the lock is free.
     def self.locked?(queue_or_klass, klass_or_args = nil, args = nil)
       queue, klass, payload = normalize_locked_args(queue_or_klass, klass_or_args, args)
-      key = lock_key(klass, queue, payload)
+      # Routed through lock_key_for, not lock_key: the probe must honor
+      # `sidekiq_unique_context` (and the ActiveJob default) or it reports
+      # "free" for every worker that customizes its digest.
+      key = lock_key_for('class' => klass.to_s, 'queue' => queue.to_s, 'args' => payload)
       Wurk.redis { |c| c.call('GET', key) }
     end
 
@@ -203,10 +254,28 @@ module Wurk
         ttl = effective_ttl(job)
         return yield if ttl.nil?
 
+        reject_encrypted!(job)
         acquire_or_drop(redis_pool, job, Wurk::Unique.lock_key_for(job), ttl, &)
       end
 
       private
+
+      # §3.8: unique + encryption are mutually exclusive. Both features append
+      # to the same client chain, so whether the digest sees plaintext args or
+      # a random-IV envelope depended purely on which initializer ran first —
+      # and in the envelope case uniqueness silently never matched again.
+      # Failing the push is the only outcome that is identical in both
+      # orderings and impossible to miss. The check is per job, so the two
+      # features still coexist fine on *different* workers.
+      def reject_encrypted!(job)
+        return unless job['encrypt']
+        return unless defined?(Wurk::Encryption) && Wurk::Encryption.enabled?
+
+        raise Wurk::Unique::ConfigurationError,
+              "#{job['class']} sets both `unique_for` and `encrypt: true`, which cannot work: " \
+              'encryption rewrites the last argument with a fresh IV on every push, so the ' \
+              'unique digest never repeats. Drop one of the two options on this worker.'
+      end
 
       # Add `at - now` delay to the base TTL so a scheduled job's lock
       # spans the wait + execution window (§3.4). Returns nil when the

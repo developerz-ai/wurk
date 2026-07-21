@@ -68,7 +68,7 @@ registered into the batch at *creation* time (not at promotion), so `total` and
 | `#bid` | String | Batch id, generated at `new` |
 | `#description` / `#description=` | String | Shown in the dashboard |
 | `#callback_queue` / `#callback_queue=` | String | Queue for callback jobs (default `"default"`) |
-| `#callback_class` / `#callback_class=` | String | Stored and round-tripped; **not** used to resolve callbacks (see [Divergences](#divergences-from-sidekiq-pro)) |
+| `#callback_class` / `#callback_class=` | String or Class | The class a bare `"#method"` callback spec resolves against. A `Class` is normalized to its name; set it **before the first `#jobs` call** |
 | `#tags` / `#tags=` | Array&lt;String&gt; | Coerced to strings; indexed at `tags:<tag>` |
 | `#autoflush` / `#autoflush=` | `true` or positive Integer | Buffer pushes inside `#jobs` |
 | `#linger` / `#linger=` | Integer seconds | Post-success retention override |
@@ -113,9 +113,29 @@ batch.on(:complete, "ImportCallback#finished", "account_id" => 42)
 batch.on(:death,    PagerCallback)
 ```
 
-The target may be a Class, a `"Klass"` string, a `"Klass#method"` string, or
-anything responding to `name`. Anything else raises `ArgumentError`, as does an
-unknown event or a non-Hash `options`.
+The target may be a Class, a `"Klass"` string, a `"Klass#method"` string, or a
+class-less `"#method"` string that resolves against the batch's
+`callback_class`. Anything else raises `ArgumentError`, as does an unknown
+event or a non-Hash `options`.
+
+| Target | Invokes |
+|---|---|
+| `ImportCallback` | `ImportCallback.new.on_success(status, options)` |
+| `"ImportCallback"` | `ImportCallback.new.on_success(status, options)` |
+| `"ImportCallback#finished"` | `ImportCallback.new.finished(status, options)` |
+| `"#finished"` | `<callback_class>.new.finished(status, options)` |
+
+Set `callback_class` **before the first `#jobs` call** if you use the
+class-less form — like `description` and `tags`, it is only persisted at first
+flush, and a `"#method"` target can't resolve without it.
+
+A target that can't be resolved at run time — unknown constant, a module rather
+than a class, a missing or private method, or a class-less form with no
+`callback_class` — raises `Wurk::Batch::CallbackJob::UnresolvableTarget` and
+goes **straight to the dead set on the first attempt** rather than retrying for
+25 attempts. A `NameError` doesn't heal with time, so you see it in the Dead
+tab immediately; fix the class and retry the entry from there. Errors raised by
+the callback body itself keep the normal retry backoff.
 
 The contract is a **class with a no-argument constructor**:
 
@@ -436,13 +456,9 @@ whole feature is Lua-script atomicity.
 
 ## Divergences from Sidekiq Pro
 
-Wurk implements the batch surface in `docs/target/sidekiq-pro.md` §2. Three
+Wurk implements the batch surface in `docs/target/sidekiq-pro.md` §2. Two
 deliberate differences:
 
-- **`#callback_class` is inert.** Pro documents it as the class used to resolve
-  a bare `"#method"` callback spec. Wurk stores and round-trips the field for
-  wire compatibility but never reads it — a string target must name a resolvable
-  constant (`"ImportCallback"` or `"ImportCallback#finished"`).
 - **`Status#failure_info` always returns `[]`.** The Pro 8 data model drops the
   `b-<bid>-failinfo` hash in favour of the `failed_jids` set, which Wurk tracks;
   per-jid error payloads are intentionally not persisted. The method exists so

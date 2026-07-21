@@ -101,6 +101,38 @@ class BatchTest < Wurk::Test::UnitCase
     assert_equal 'cb-q', reopened.callback_queue
   end
 
+  def test_callback_class_round_trips
+    batch = track(Wurk::Batch.new)
+    batch.callback_class = 'MyCallbacks'
+    batch.jobs { perform_one(batch) }
+
+    reopened = track(Wurk::Batch.new(batch.bid))
+
+    assert_equal 'MyCallbacks', reopened.callback_class
+  end
+
+  def test_callback_class_accepts_a_class_and_stores_its_name
+    klass = Class.new { def self.name = 'BatchTestCbClass' }
+    batch = track(Wurk::Batch.new)
+    batch.callback_class = klass
+
+    assert_equal 'BatchTestCbClass', batch.callback_class
+  end
+
+  def test_callback_class_accepts_nil
+    batch = track(Wurk::Batch.new)
+    batch.callback_class = 'MyCallbacks'
+    batch.callback_class = nil
+
+    assert_nil batch.callback_class
+  end
+
+  def test_callback_class_rejects_a_value_that_names_nothing
+    batch = track(Wurk::Batch.new)
+
+    assert_raises(ArgumentError) { batch.callback_class = 42 }
+  end
+
   def test_tags_round_trip
     batch = track(Wurk::Batch.new)
     batch.tags = [@tag_customer, @tag_job]

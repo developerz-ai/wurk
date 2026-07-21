@@ -228,9 +228,10 @@ Sidekiq::Enterprise::Unique.locked?("ChargeJob", [1, 2_500])
 # two-arg form: assumes the default queue from Wurk.default_job_options
 ```
 
-The probe computes the key from `[class, queue, args]`. It does **not** run
-`sidekiq_unique_context`, so for a worker with a custom context use
-`Wurk::Unique.lock_key_for(job_hash)` to get the real key.
+The probe routes through the same derivation as the push path, so it honors
+`sidekiq_unique_context` and the ActiveJob narrowing below.
+`Wurk::Unique.lock_key(klass, queue, args)` stays available if you want the
+verbatim triple digest without any context hook applied.
 
 There is no built-in "unlock" API and **no dashboard view of unique locks** —
 the dashboard shows queues, retries, and dead jobs, not lock keys. To clear a
@@ -255,12 +256,15 @@ every push (new IV each time), so no two pushes of the "same" job ever produce
 the same args — and therefore never the same digest. Dedup silently stops
 working.
 
-This is a documented invariant, **not enforced in code**: nothing raises, and
-the behavior additionally depends on which middleware was registered first,
-since both `Sidekiq::Enterprise.unique!` and `Crypto.enable` append to the same
-client chain. Don't rely on the ordering — keep the two features on different
-workers. If you need both, encrypt a payload stored elsewhere and pass an
-opaque, stable id as the job argument.
+Wurk **enforces this**: pushing a worker that sets both `unique_for:` and
+`encrypt: true` while encryption is enabled raises
+`Wurk::Unique::ConfigurationError` naming the worker and both options. The
+check runs per push in the client middleware, so it fires the same way in
+either initializer order.
+
+This is stricter than Sidekiq Enterprise, which documents the incompatibility
+but lets the silent mis-dedup through. If you need both, encrypt a payload
+stored elsewhere and pass an opaque, stable id as the job argument.
 
 ---
 
@@ -278,10 +282,8 @@ opaque, stable id as the job argument.
   Sidekiq::Testing.server_middleware { |c| c.add(Wurk::Unique::ServerMiddleware) }
   ```
 
-- **`perform_inline` / `perform_sync`** call `perform` directly, bypassing both
-  chains entirely — no lock is taken and none is released. (Sidekiq Enterprise
-  7.3.2+ runs its unique server middleware in client mode so `perform_inline`
-  honors locks; Wurk does not. Divergence.)
+- **`perform_inline` / `perform_sync`** run the real client and server chains
+  (matching Sidekiq 8), so a lock is taken and released around the run.
 - Tests that enqueue the same job repeatedly will see `nil` JIDs unless each
   test clears the `unique:*` keys or uses distinct args. The usual fix is to
   skip activation in the test env: `Sidekiq::Enterprise.unique! unless Rails.env.test?`.
@@ -291,11 +293,28 @@ opaque, stable id as the job argument.
 ## 11. ActiveJob
 
 `sidekiq_options unique_for:` works on an ActiveJob class — the adapter merges
-the wrapped class's options into the payload. **But the default digest never
-matches**, because every ActiveJob payload's args are `[job.serialize]`, and
-that hash carries a fresh `job_id` (and `enqueued_at`) on every push.
+the wrapped class's options into the payload, and Wurk narrows the digest for
+you. An ActiveJob payload's args are `[job.serialize]`, a hash carrying a fresh
+`job_id` and `enqueued_at` on every push; digesting it verbatim would never
+match. So when the wire class is an ActiveJob wrapper and the single arg
+carries `job_class` + `arguments`, the context becomes:
 
-To dedup ActiveJob work, define the context hook on the wrapper class, which is
+```ruby
+[job["class"], job["queue"], data["job_class"], data["arguments"]]
+```
+
+Per-push fields are dropped: `job_id`, `provider_job_id`, `enqueued_at`,
+`scheduled_at`, `executions`, `exception_executions`, `priority`, `locale`,
+`timezone`. Retry counters are excluded deliberately — keeping them would make
+a retry re-push compute a different key and miss its own lock. The wrapper
+class name stays in the context so an ActiveJob `Foo` and a plain worker `Foo`
+with the same args can't collide.
+
+Matching is by wire class name, so it works in an enqueue-only process that has
+never loaded the job class. An app that subclasses the wrapper under its own
+name won't be matched — use the hook below for that.
+
+To override the default, define the context hook on the wrapper class, which is
 what `job["class"]` names on the wire:
 
 ```ruby

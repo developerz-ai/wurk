@@ -132,12 +132,12 @@ module Wurk
         Wurk::Worker::Setter.new(self, {}).perform_async(*)
       end
 
-      # Run `#perform` synchronously in the current thread (no Redis). Useful in
-      # tests and for inline execution.
+      # Run the job synchronously in the current thread, through both middleware
+      # chains (see {Wurk::Worker::Setter#perform_inline}). Useful in tests.
       #
-      # @return [Object] the return value of `#perform`
+      # @return [true, nil] nil when middleware halted the job, true otherwise
       def perform_inline(*)
-        new.perform(*)
+        Wurk::Worker::Setter.new(self, {}).perform_inline(*)
       end
       alias perform_sync perform_inline
 

@@ -60,8 +60,8 @@ module Wurk
     # accumulate here instead of round-tripping per job.
     BUFFER_KEY = :wurk_batch_buffer
 
-    attr_reader :bid, :parent_bid, :linger
-    attr_accessor :description, :callback_queue, :callback_class, :autoflush
+    attr_reader :bid, :parent_bid, :linger, :callback_class
+    attr_accessor :description, :callback_queue, :autoflush
 
     def self.keys_for(bid)
       base = "b-#{bid}"
@@ -106,6 +106,14 @@ module Wurk
       return unless @flushed_once
 
       Wurk.redis { |conn| conn.call('HSET', "b-#{@bid}", 'linger', @linger.to_s) }
+    end
+
+    # Supplies the class for a class-less `"#method"` callback spec (§2.2).
+    # Accepts a Class or a String and stores a String either way, so the
+    # in-memory value matches what a batch reopened by bid reads back — and so
+    # `CallbackJob` never has to care which form the caller used.
+    def callback_class=(value)
+      @callback_class = value.nil? ? nil : callback_target(value)
     end
 
     def parent

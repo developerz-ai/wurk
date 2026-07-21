@@ -24,7 +24,7 @@ module Wurk
   #     so a re-registration of the same loop is idempotent.
   #   * `Cron::Manager` — registration DSL. `mgr.register(cron, klass, **opts)`
   #     with `tz=` mass-setter. Writes to Redis (`periodic` SET + `loops:{lid}`
-  #     HASH).
+  #     HASH) and prunes superseded loops for the classes it registers.
   #   * `Cron::LoopSet` — Enumerable view (`each`/`size`/`fetch(lid)`).
   #   * `Cron::ConfigTester` — boot-time validator. Verifies cron syntax and
   #     that every worker class constant resolves.
@@ -397,10 +397,14 @@ module Wurk
       attr_accessor :tz
       attr_reader :loops
 
-      def initialize(config = nil)
+      # `prune: false` registers without superseding — ConfigTester uses it so
+      # validating a config never deletes a live loop.
+      def initialize(config = nil, prune: true)
         @config = config
         @loops = []
         @tz = nil
+        @prune = prune
+        @pruned_klasses = {}
       end
 
       def register(cron, klass, **opts)
@@ -410,7 +414,23 @@ module Wurk
         loop_obj = Loop.new(schedule: cron, klass: klass_name, options: normalized, tz: tz)
         @loops << loop_obj
         Cron.persist(loop_obj)
+        prune_superseded(klass_name)
         loop_obj
+      end
+
+      private
+
+      # Once per class per boot: everything else registered for that class is
+      # a leftover from a previous deploy (the lid hashes schedule+options, so
+      # an edited `register` line yields a new loop and orphans the old one).
+      # Registering the same class twice in one block is fine — the second
+      # register re-persists its loop right after the first one's prune.
+      def prune_superseded(klass_name)
+        return unless @prune
+        return if @pruned_klasses[klass_name]
+
+        @pruned_klasses[klass_name] = true
+        Cron.prune_superseded(klass_name, @loops.map(&:lid))
       end
     end
 
@@ -470,7 +490,7 @@ module Wurk
       def verify(&block)
         raise ArgumentError, 'block required' unless block
 
-        mgr = Manager.new
+        mgr = Manager.new(prune: false)
         block.call(mgr)
         mgr.loops.each { |lp| resolve_klass!(lp.klass) }
         mgr.loops
@@ -666,17 +686,46 @@ module Wurk
         Loop.new(schedule: cron, klass: worker_class.to_s, options: merged).tap { |lp| persist(lp) }
       end
 
+      # `paused` is written with HSETNX, not HSET: a code-declared `paused:`
+      # option is only the *initial* value at first registration, after which
+      # the field belongs to the runtime (Web UI pause/unpause). Writing it
+      # unconditionally un-paused a dashboard-paused loop on the next boot.
       def persist(loop_obj)
+        fields = loop_obj.to_redis_hash
+        paused = fields.delete('paused')
+        key = "#{LOOP_PREFIX}#{loop_obj.lid}"
         Wurk.redis do |c|
           c.call('SADD', PERIODIC_KEY, loop_obj.lid)
-          c.call('HSET', "#{LOOP_PREFIX}#{loop_obj.lid}", *loop_obj.to_redis_hash.flatten)
+          c.call('HSET', key, *fields.flatten)
+          c.call('HSETNX', key, 'paused', paused)
         end
         loop_obj
       end
 
-      # Drop a loop entirely. Used by the Web UI delete action and by the
-      # config-reload path so a removed `register(...)` line vanishes from
-      # Redis on next boot.
+      # Drop every registered loop for `klass` except `keep_lids` — the loops a
+      # booting process just registered for that class. Editing a schedule or
+      # any option changes the lid, so without this the pre-edit loop stays in
+      # `periodic` and keeps firing next to its replacement, forever.
+      #
+      # Scoped to one class deliberately: the registry is fleet-wide, so a
+      # process that registers a subset of the fleet's loops (or none at all,
+      # e.g. a client-only app) must never delete loops for classes it doesn't
+      # register. Idempotent and safe to race — two processes booting the same
+      # code compute the same candidate set, and SREM/DEL repeat harmlessly.
+      def prune_superseded(klass, keep_lids)
+        keep = Array(keep_lids)
+        stale = Wurk.redis do |c|
+          candidates = c.call('SMEMBERS', PERIODIC_KEY) - keep
+          candidates.select { |lid| c.call('HGET', "#{LOOP_PREFIX}#{lid}", 'klass') == klass }
+        end
+        stale.each { |lid| unregister(lid) }
+        stale
+      end
+
+      # Drop a loop entirely: registry membership, hash, and fire history.
+      # Public API for retiring a loop whose `register(...)` line is gone (no
+      # process registers its class any more, so `prune_superseded` cannot see
+      # it); also the primitive behind pruning and ConfigTester rollback.
       def unregister(lid)
         Wurk.redis do |c|
           c.call('SREM', PERIODIC_KEY, lid)

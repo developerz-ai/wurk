@@ -259,29 +259,42 @@ This is the part that surprises people, so read it before you ship your first
 schedule change.
 
 The `lid` is derived from schedule + class + options. Change any of them and you
-get a **different loop**, registered alongside the old one:
+get a **different loop** — so registration prunes the ones it supersedes.
 
-- **Edited a schedule** (`"0 4 * * *"` → `"0 5 * * *"`)? The new loop is
-  registered; the old one stays in Redis and keeps firing on the old schedule.
-- **Deleted a `register` line?** Nothing removes it. It keeps firing.
-- **Renamed the job class or changed `args`/`queue`/`retry`?** Same story.
+After a `config.periodic` block registers, Wurk removes every loop in the
+registry whose `klass` matches a class that block registered and whose `lid`
+isn't one it just wrote. So:
 
-Nothing prunes orphans automatically. Clean up explicitly — either from a
-console after the deploy, or from the same initializer before you register:
+- **Edited a schedule** (`"0 4 * * *"` → `"0 5 * * *"`)? The old loop is pruned
+  on the next worker boot. Only the new schedule fires.
+- **Changed `args`/`queue`/`retry`?** Same — superseded, pruned.
+- **Deleted the `register` line entirely?** **Not** pruned. Nothing in the
+  surviving code mentions that class, so no scope can see it. It keeps firing.
+  Remove it explicitly.
+
+Pruning is scoped by class precisely so it stays safe: a process that registers
+only some of your loops never touches the others, and a process that registers
+none — a client-only or web process — deletes nothing.
 
 ```ruby
-# one-off, from `rails runner`, once the new workers have booted and registered
+# a deleted register line still needs a manual removal, once, after deploy
 Wurk::Cron::LoopSet.new.each do |lp|
-  next unless lp.klass == "NightlyJob" && lp.schedule == "0 4 * * *" # the stale one
+  next unless lp.klass == "RetiredJob"
   Wurk::Cron.unregister(lp.lid)
 end
 ```
 
-The second surprise: **registration resets the paused flag.** `register` writes
-the whole loop hash, including `paused => "0"`, so a loop you paused in the
-dashboard un-pauses on the next worker boot unless you registered it with
-`paused: true`. Treat the dashboard pause as an incident tool, not a
-configuration mechanism.
+> **Two registrars that disagree about one class will flap.** If process A
+> registers `K` on one schedule and process B registers `K` on another, each
+> boot prunes the other's loop. This includes the window in a rolling deploy
+> where an old-code process boots after a new-code one; it converges once only
+> one code version is booting. Don't register the same class from two different
+> configs.
+
+Pause state belongs to the runtime, not to the code: `paused` is written with
+`HSETNX`, so a code-declared `paused: true` is the **initial** value at first
+registration, and a pause or unpause from the dashboard survives every
+subsequent boot.
 
 ---
 
@@ -352,10 +365,11 @@ crontab (`*/5 * * * *`). `sidekiq-scheduler`'s `enabled: false` maps to
   freezes the date of the deploy, forever.
 - **Registration happens in server processes only.** If no worker has booted
   since you added a loop, it isn't in Redis and the dashboard won't show it.
-- **Loops persist across deploys** and outlive the code that registered them.
+- **Loops persist across deploys.** Superseded ones are pruned by class on the
+  next registration; a loop whose `register` line was deleted outright is not.
   See the deploy section above.
-- **A dashboard pause is undone by the next boot** unless the loop is registered
-  with `paused: true`.
+- **A dashboard pause survives deploys** — `paused` is only initialized from
+  code, never overwritten by it.
 - **Enqueue-now doesn't move the schedule.** The next scheduled fire happens as
   planned.
 - **History is capped at 25 fires** per loop and holds only `[fired_at, jid]`.
