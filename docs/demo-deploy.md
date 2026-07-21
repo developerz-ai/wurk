@@ -34,12 +34,14 @@ internet ──►│                                                     ├─
 
 `.github/workflows/deploy-demo.yml` **builds and pushes the image only** — it
 holds no cluster credentials. The in-cluster **ArgoCD Image Updater** watches the
-GHCR `:latest` digest and syncs the deployment automatically; the pushed digest
-*is* the deploy trigger. The workflow is **manual only** (`workflow_dispatch`) and
-gated three ways so only the org can ship an image:
+DOCR `:latest` digest and syncs the deployment automatically; the pushed digest
+*is* the deploy trigger. It runs two ways — `workflow_dispatch` by hand, or
+called by `release.yml` after a `v*` tag publishes — and is gated three ways so
+only the org can ship an image:
 
 1. **Public repo + `workflow_dispatch`** → only users with *write* access (org
-   members) can trigger it; external forks cannot.
+   members) can trigger it; external forks cannot. A release-triggered run is
+   attributed to whoever pushed the tag, so gate 2 still applies to it.
 2. **`DEMO_DEPLOYERS` repo variable** (comma-separated GitHub usernames) → the
    `authorize` job rejects anyone not listed.
 3. **Protected `demo` environment** → add Required Reviewers. The gate sits on the
@@ -53,30 +55,49 @@ gated three ways so only the org can ship an image:
 - **Settings → Environments → `demo`:** create it, add the deployer(s) as
   *Required reviewers*, and (optionally) restrict the deployment branch to `main`.
 
-No `ARGOCD_*` secrets are needed — CI never talks to the cluster. The image push
-uses the built-in `GITHUB_TOKEN` (GHCR), so no registry secret is required either.
+- **Settings → Environments → `demo` → Environment secrets:** add `DOCR_TOKEN`
+  (a DigitalOcean token with registry write). It lives on the environment, not
+  the repo, so only the reviewer-gated `build` job can read it — this repo is
+  public.
 
-## ✅ Infra requirements (for the infra team)
+No `ARGOCD_*` secrets are needed — CI never talks to the cluster.
 
-What's needed to make `https://wurk.demo.developerz.ai` go live. Items marked
-**(app)** are in this repo / done; the rest are infra.
+### Registries
 
-- [x] **(app)** Containerized demo (`Dockerfile`, `bin/demo-entrypoint`) — web + worker roles. *Build still needs one verification pass.*
+The image is pushed to **two** registries from one build:
+
+| Registry | Tag | Role |
+|---|---|---|
+| `registry.digitalocean.com/developerz-ai/wurk-demo` | `latest` + `<sha>` | **Deploy-critical.** Image Updater watches this digest. |
+| `ghcr.io/developerz-ai/wurk-demo` | `latest` + `<sha>` | Mirror, so the manifests' literal `ghcr.io` image ref still resolves. |
+
+Infra moved the demo to DOCR on 2026-07-12 (infra #803) after a dead GHCR org
+token broke fresh pulls; `stacks/apps/wurk-demo/manifests/kustomization.yml`
+rewrites the `ghcr.io` name onto DOCR. **Pushing only to GHCR is a silent
+no-op** — the build succeeds and the demo never changes.
+
+## ✅ Infra requirements
+
+All live as of 2026-07-21 — the stack is at
+`../infrastructure/stacks/apps/wurk-demo/`. Kept as a checklist because it is
+also the rebuild recipe. Items marked **(app)** live in this repo.
+
+- [x] **(app)** Containerized demo (`Dockerfile`, `bin/demo-entrypoint`) — web + worker roles.
 - [x] **(app)** Gated deploy workflow (`deploy-demo.yml`).
 - [x] **(app)** Read-only dashboard (`WURK_WEB_READ_ONLY=1`) + live data generator.
-- [ ] **Redis** — a small managed/in-cluster Redis (7.x) reachable from both pods, exposed as `REDIS_URL`. Demo data only; safe to flush.
-- [ ] **`SECRET_KEY_BASE`** — a strong random value injected at runtime (k8s secret) so the Rails app boots in production. Not baked into the image.
-- [ ] **GHCR pull access** — an `imagePullSecret` (or public package) so the cluster can pull `ghcr.io/developerz-ai/wurk-demo`.
-- [ ] **ArgoCD Application `wurk-demo`** in `../infrastructure` — Deployments for `web` (cmd `web`) and `worker` (cmd `worker`), a Service, and the Redis dependency.
-- [ ] **ArgoCD Image Updater** watching `ghcr.io/developerz-ai/wurk-demo:latest` (digest strategy) so a pushed image auto-syncs. CI holds no cluster credentials, so there are no `ARGOCD_*` secrets.
-- [ ] **DNS** — `wurk.demo.developerz.ai` → the cluster ingress / Traefik.
-- [ ] **Ingress (Traefik) + TLS** — route the host to the `web` Service, Let's Encrypt cert.
-- [ ] **Public rate-limit** — a Traefik rate-limit middleware on the ingress to discourage abuse.
-- [ ] **Hourly reset `CronJob`** — apply [`demo/k8s/demo-reset-cronjob.yaml`](../demo/k8s/demo-reset-cronjob.yaml) (`demo:reset` → FLUSHDB) so queue latency doesn't creep up over hours. Without it the demo stays alive but the `high`/`low` queues accumulate a multi-hour backlog.
-- [ ] **Resource limits + restart policy** — modest CPU/mem requests; pods must recover on restart with no manual step (the generator self-heals; no persistent state outside Redis).
+- [x] **Redis** — a small managed/in-cluster Redis (7.x) reachable from both pods, exposed as `REDIS_URL`. Demo data only; safe to flush.
+- [x] **`SECRET_KEY_BASE`** — a strong random value injected at runtime (k8s secret) so the Rails app boots in production. Not baked into the image.
+- [x] **Registry pull access** — sealed `docr-pull` / `ghcr-pull` imagePullSecrets in ns `wurk-demo`.
+- [x] **ArgoCD Application `wurk-demo`** in `../infrastructure` — Deployments for `web` (cmd `web`) and `worker` (cmd `worker`), a Service, and the Redis dependency.
+- [x] **ArgoCD Image Updater** watching `registry.digitalocean.com/developerz-ai/wurk-demo:latest` (digest strategy) so a pushed image auto-syncs. CI holds no cluster credentials, so there are no `ARGOCD_*` secrets.
+- [x] **DNS** — `wurk.demo.developerz.ai` → the cluster ingress / Traefik.
+- [x] **Ingress (Traefik) + TLS** — route the host to the `web` Service, Let's Encrypt cert.
+- [x] **Public rate-limit** — a Traefik rate-limit middleware on the ingress to discourage abuse.
+- [x] **Hourly reset `CronJob`** — apply [`demo/k8s/demo-reset-cronjob.yaml`](../demo/k8s/demo-reset-cronjob.yaml) (`demo:reset` → FLUSHDB) so queue latency doesn't creep up over hours. Without it the demo stays alive but the `high`/`low` queues accumulate a multi-hour backlog.
+- [x] **Resource limits + restart policy** — modest CPU/mem requests; pods must recover on restart with no manual step (the generator self-heals; no persistent state outside Redis).
 
-### Decisions to confirm with infra
+### Settled decisions
 
-- **Redis sizing / persistence:** demo can run on an ephemeral Redis (a restart
-  just empties it; the generator refills). Confirm whether infra wants
-  persistence at all.
+- **Redis sizing / persistence:** ephemeral, no persistence — an in-cluster
+  Dragonfly (`manifests/dragonfly.yml`). A restart just empties it and the
+  generator refills within a tick, which is also what the hourly reset relies on.

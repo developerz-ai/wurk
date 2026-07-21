@@ -27,8 +27,11 @@ FROM ruby:3.4-slim-bookworm
 ENV RAILS_ENV=production \
     WURK_DEMO=1 \
     WURK_WEB_READ_ONLY=1
+# libffi-dev is for the `fiddle` gem: it left Ruby's default gems in 4.0, so
+# wurk depends on it explicitly (swarm PR_SET_PDEATHSIG) and it builds a native
+# extension here — without the headers `bundle install` dies in extconf.
 RUN apt-get update -qq && apt-get install -y --no-install-recommends \
-      build-essential libsqlite3-dev libyaml-dev curl git && \
+      build-essential libsqlite3-dev libyaml-dev libffi-dev curl git && \
     rm -rf /var/lib/apt/lists/* && \
     useradd --create-home --shell /bin/bash wurk
 

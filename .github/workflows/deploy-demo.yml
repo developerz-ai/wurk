@@ -1,9 +1,10 @@
 name: deploy-demo
 
-# Manual-only deploy of the public demo (wurk.demo.developerz.ai).
+# Deploy of the public demo (wurk.demo.developerz.ai) — run it by hand, or let
+# release.yml call it after publishing a `v*` tag.
 #
 # DEPLOY MODEL: this workflow only BUILDS + PUSHES the image. Infra deploys it
-# via the in-cluster ArgoCD Image Updater, which watches the GHCR `:latest` tag
+# via the in-cluster ArgoCD Image Updater, which watches the DOCR `:latest` tag
 # (digest strategy) and syncs automatically — CI holds NO cluster credentials
 # (infra repo rule). There is no ArgoCD step here, and no ARGOCD_* secrets.
 #
@@ -25,17 +26,34 @@ on:
         description: Git ref (branch / tag / SHA) to build and push (Image Updater deploys it)
         required: false
         default: main
+  # release.yml calls this after a successful `v*` publish so a new gem version
+  # reaches the demo without a second manual step. Both gates still apply: the
+  # caller's actor must be in DEMO_DEPLOYERS, and `build` still enters the
+  # protected `demo` environment.
+  workflow_call:
+    inputs:
+      ref:
+        description: Git ref (branch / tag / SHA) to build and push
+        required: false
+        default: main
+        type: string
 
 concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}
-  cancel-in-progress: true
+  cancel-in-progress: false
 
 # Least privilege at the workflow level; the build job opts into packages:write.
 permissions:
   contents: read
 
 env:
-  IMAGE: ghcr.io/developerz-ai/wurk-demo
+  # DOCR is the deploy-critical registry: infra's Image Updater watches
+  # `registry.digitalocean.com/developerz-ai/wurk-demo:latest` and the demo's
+  # kustomization rewrites the manifests' ghcr.io ref onto it (infra #803 —
+  # moved off GHCR 2026-07-12 when a dead org token broke fresh pulls). GHCR
+  # stays a mirror so the manifests' literal image ref keeps resolving.
+  IMAGE: registry.digitalocean.com/developerz-ai/wurk-demo
+  MIRROR: ghcr.io/developerz-ai/wurk-demo
 
 jobs:
   authorize:
@@ -74,9 +92,22 @@ jobs:
     steps:
       - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
         with:
-          ref: ${{ github.event.inputs.ref }}
+          ref: ${{ inputs.ref }}
           persist-credentials: false
+
+      # github.sha is the SHA of the ref the WORKFLOW was loaded from (the
+      # default branch on a dispatch), not of `inputs.ref` — tagging with it
+      # mislabels the image whenever the two differ, e.g. deploying a tag.
+      - name: resolve built commit
+        id: built
+        run: echo "sha=$(git rev-parse HEAD)" >> "$GITHUB_OUTPUT"
+
       - uses: docker/setup-buildx-action@8d2750c68a42422c14e847fe6c8ac0403b4cbd6f # v3
+      - uses: docker/login-action@c94ce9fb468520275223c153574b00df6fe4bcc9 # v3
+        with:
+          registry: registry.digitalocean.com
+          username: ${{ secrets.DOCR_TOKEN }}
+          password: ${{ secrets.DOCR_TOKEN }}
       - uses: docker/login-action@c94ce9fb468520275223c153574b00df6fe4bcc9 # v3
         with:
           registry: ghcr.io
@@ -88,8 +119,10 @@ jobs:
           file: Dockerfile
           push: true
           tags: |
-            ${{ env.IMAGE }}:${{ github.sha }}
+            ${{ env.IMAGE }}:${{ steps.built.outputs.sha }}
             ${{ env.IMAGE }}:latest
+            ${{ env.MIRROR }}:${{ steps.built.outputs.sha }}
+            ${{ env.MIRROR }}:latest
           cache-from: type=gha
           cache-to: type=gha,mode=max
 
@@ -117,10 +150,14 @@ jobs:
       # (and children) from GHCR without pulling layers, so this fails the run
       # loudly if the deploy-critical :latest or the just-pushed :sha stopped
       # resolving. Not continue-on-error: a broken :latest breaks the Image
-      # Updater deploy, so it must surface.
+      # Updater deploy, so it must surface. DOCR is checked first and for the
+      # same reason — it is the registry Image Updater actually watches.
       - name: verify retained images still resolve
+        env:
+          SHA: ${{ steps.built.outputs.sha }}
         run: |
-          for ref in "${IMAGE}:latest" "${IMAGE}:${{ github.sha }}"; do
+          for ref in "${IMAGE}:latest" "${IMAGE}:${SHA}" \
+                     "${MIRROR}:latest" "${MIRROR}:${SHA}"; do
             echo "==> inspecting $ref"
             docker buildx imagetools inspect "$ref" >/dev/null
           done

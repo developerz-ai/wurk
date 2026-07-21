@@ -6,13 +6,17 @@ on:
 
 # Least privilege: contents:write to cut the GitHub Release; id-token:write for
 # RubyGems trusted publishing (OIDC). No long-lived GEM_HOST_API_KEY anywhere.
+# packages:write is for the called deploy-demo workflow — a reusable workflow's
+# job permissions are capped by the caller's, so without it the demo's GHCR
+# mirror push is denied.
 permissions:
   contents: write
   id-token: write
+  packages: write
 
 concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}
-  cancel-in-progress: true
+  cancel-in-progress: false
 
 jobs:
   release:
@@ -89,3 +93,16 @@ jobs:
             flags+=(--prerelease)
           fi
           gh release create "${GITHUB_REF_NAME}" "${flags[@]}" "pkg/wurk-${version}.gem"
+
+  # Ship the released tag to wurk.demo.developerz.ai. Runs only after the gem is
+  # published, so the demo never advertises a version RubyGems does not have.
+  # deploy-demo keeps both of its gates (DEMO_DEPLOYERS actor allowlist + the
+  # protected `demo` environment), so this queues the deploy rather than forcing
+  # it — an unapproved release still publishes the gem and just leaves the demo
+  # on the previous image.
+  demo:
+    needs: release
+    uses: ./.github/workflows/deploy-demo.yml
+    with:
+      ref: ${{ github.ref_name }}
+    secrets: inherit
