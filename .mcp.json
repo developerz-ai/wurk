@@ -3,7 +3,17 @@
     "codegraph": {
       "type": "stdio",
       "command": "codegraph",
-      "args": ["serve", "--mcp"]
+      "args": [
+        "serve",
+        "--mcp"
+      ]
+    },
+    "developerz": {
+      "type": "http",
+      "url": "https://mcp.developerz.ai/v1/mcp",
+      "headers": {
+        "Authorization": "Bearer ${DEVELOPERZ_API_KEY}"
+      }
     }
   }
 }
