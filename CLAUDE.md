@@ -80,7 +80,7 @@ Skip step 3 → leaked sockets in children. Skip step 5 → children corrupt eac
 - **Wire-compat is sacred.** Never change a Redis key, JSON field, or sorted-set score format. If a perf optimization would break compat, drop the optimization.
 - **Frozen string literals everywhere.** Hot-loop allocations matter.
 - **Per-fork Redis pool.** Never share a socket across forks. Close parent sockets before fork, reconnect inside the child.
-- **Lazy `JSON.parse` of args.** Only deserialize when middleware demands it.
+- **Parse the payload once, carry the raw string.** `Processor` parses the job JSON a single time, then threads the original string through the retry and stats layers so nothing re-dumps it; the retriers re-parse only on the failure path.
 - **EVALSHA-cache Lua scripts.** Loaded once per pool, never re-uploaded.
 - **Default fetcher is reliable.** BLMOVE atomic move from main queue to per-process private list. No "basic fetch" mode.
 - **Authoritative spec** for any Sidekiq surface lives in `docs/target/sidekiq-{free,pro,ent}.md`. Match it exactly when implementing or modifying public API.
