@@ -197,28 +197,31 @@ Redis writes.
 | Event | What the run loop sees | Result |
 |---|---|---|
 | `TERM` / `INT`, in-flight finishes before `shutdown_timeout` | nothing — the loop runs to completion | job completes normally |
-| `TERM` / `INT`, still running at the deadline | `Wurk::Shutdown` (a subclass of `Interrupt`) raised into the thread | the unit of work is bulk-requeued; the job re-runs later and resumes from the **last periodic checkpoint** |
-| `TSTP` (quiet) | nothing | in-flight iteration continues to completion; no new jobs are fetched |
+| `TERM` / `INT` | the loop sees `interrupted?` at the next iteration boundary | **final** flush, `on_stop`, then a head-of-queue re-push; resumes from the exact cursor |
+| `TSTP` (quiet) | same as `TERM` — quiet sets the same processor flag | same as `TERM`; matches upstream Sidekiq |
 | `USR1` (rolling restart) | same as `TERM` on the old slot | same as `TERM` |
+| Still inside one long iteration at the deadline | `Wurk::Shutdown` (a subclass of `Interrupt`) raised into the thread | the unit of work is bulk-requeued; resumes from the **last periodic checkpoint** |
 | `SIGKILL` | nothing | the payload is still in the process's private list and is reclaimed on next boot; resumes from the last checkpoint |
-| `Wurk::Job::Interrupted` raised | `rescue Interrupted` in `perform` | **final** flush, `on_stop`, re-raise → `InterruptHandler` re-pushes at the head of the queue |
+| `Wurk::Job::Interrupted` raised by your code | `rescue Interrupted` in `perform` | same as `TERM` |
 
-Only the last row gets a final flush and an immediate head-of-queue re-push.
-The `Wurk::Shutdown` path is a hard kill: the last periodic checkpoint is what
-survives, and redelivery comes from reliable fetch reclaiming the private list.
+The loop polls the processor's shutdown flag at the top of every iteration, so
+a graceful stop checkpoints and re-pushes exactly where it left off. Only a
+single iteration that outlives `shutdown_timeout` falls back to the hard-kill
+path, where the last periodic checkpoint is what survives.
 
 ### Interrupting cooperatively
 
-The run loop raises `Interrupted` on its own **only for cancellation** (§5). It
-does not poll the processor's shutdown flag. If you want a long single iteration
-to bail out early on shutdown, check it yourself — `interrupted?` comes from
-`Wurk::Worker` and is true once the processor is stopping:
+You no longer need to poll the flag yourself for the common case. If one
+iteration is long enough that you want to bail out *inside* it, `interrupted?`
+comes from `Wurk::Worker` and is true once the processor is stopping:
 
 ```ruby
 def each_iteration(batch)
-  raise Wurk::Job::Interrupted if interrupted?
+  batch.each do |row|
+    raise Wurk::Job::Interrupted if interrupted?
 
-  batch.each { |row| process(row) }
+    process(row)
+  end
 end
 ```
 
@@ -282,12 +285,14 @@ Ordering on the two terminal paths:
 
 ```
 completion:    … → flush(final) → on_complete → DEL it-<jid>
-interruption:  … → flush(final) → on_cancel (if cancelled) → on_stop → re-raise
+interruption:  … → flush(final) → on_stop → re-raise
+cancellation:  … → on_cancel → on_stop → on_complete → DEL it-<jid>
 ```
 
 `on_stop` fires for a cancellation too — it is "the loop stopped early", not
-"the loop stopped without being cancelled". `on_complete` and `on_stop` are
-mutually exclusive.
+"the loop stopped without being cancelled". A cancelled run is treated as
+*completed* (matching upstream Sidekiq 8.1), so it fires `on_complete` as well
+and deletes its state; an interrupted run does not.
 
 `around_iteration` is the hook for per-item instrumentation, timeouts, or
 transactions:
@@ -410,9 +415,11 @@ the gem swap and vice versa.
   fixed at 5 seconds for both flushing and cancellation polling. Iterations
   should be short enough that a five-second granularity is meaningful; a single
   iteration that takes ten minutes checkpoints once, at its end.
-- **A cancelled job that gets re-pushed stays cancelled.** The `cancelled` field
-  outlives the run, so the resumed execution trips on its very first check and
-  interrupts again. That flag lives for `CANCELLATION_PERIOD` (3 days).
+- **A cancelled job terminates instead of re-cycling.** Cancellation returns
+  rather than raising `Interrupted`, so `InterruptHandler` never re-pushes it,
+  and the `it-<jid>` state — `cancelled` field included — is deleted. The
+  3-day `CANCELLATION_PERIOD` TTL now only bounds a cancel marker set for a job
+  that has not started yet.
 - **Define `include Wurk::IterableJob` before any `perform`.** The
   `method_added` guard is installed by the include and cannot see methods
   defined above it.

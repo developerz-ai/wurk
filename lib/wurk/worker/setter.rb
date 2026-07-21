@@ -31,8 +31,24 @@ module Wurk
         @klass.client_push(@opts.merge('class' => @klass, 'args' => args))
       end
 
-      def perform_inline(*)
-        @klass.new.perform(*)
+      # Explicit synchronous execution. Runs the payload through the real client
+      # AND server middleware chains rather than calling `perform` directly:
+      # unique-job locks are taken by the client chain and released only by the
+      # server chain (bypassing both leaked every lock until its TTL), and batch
+      # callbacks fire from server middleware. Mirrors Sidekiq's Setter#perform_inline,
+      # including its return contract — nil when middleware halts the job, else true.
+      def perform_inline(*args)
+        config = Wurk.configuration
+        item = normalize_item(@opts.merge('class' => @klass, 'args' => args))
+        pushed = config.client_middleware.invoke(item['class'], item, item['queue'], config.redis_pool) do
+          verify_json(item)
+          item
+        end
+        return nil unless pushed
+
+        # Round-trip through JSON so the job sees exactly the arguments a real
+        # worker would after the payload has crossed Redis.
+        run_job(Wurk.load_json(Wurk.dump_json(item)), config)
       end
       alias perform_sync perform_inline
 
@@ -57,6 +73,17 @@ module Wurk
       end
 
       private
+
+      def run_job(msg, config)
+        instance = @klass.new
+        instance.jid = msg['jid']
+        instance.bid = msg['bid'] if instance.respond_to?(:bid=)
+        ran = config.server_middleware.invoke(instance, msg, msg['queue']) do
+          instance.perform(*msg['args'])
+          true
+        end
+        ran ? true : nil
+      end
 
       def absolute_at(interval)
         unless interval.is_a?(Numeric) || interval.is_a?(Time)

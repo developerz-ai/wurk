@@ -149,6 +149,22 @@ class LimiterTest < Wurk::Test::UnitCase
     end
   end
 
+  # Regression: the dashboard's Reset DEL'd a bare `lmtr-b:<name>` key, but a
+  # bucket's counter lives at `lmtr-b:<name>:<epoch>` — so Reset reported
+  # success and left the limiter exhausted.
+  def test_web_reset_clears_bucket_epoch_counter
+    name = "bkweb-#{@suffix}"
+    l = Wurk::Limiter.bucket(name, 5, :minute)
+    l.within_limit {} # consumes one of the period's 5
+
+    assert_equal 1, l.size
+
+    Wurk::Web::Enterprise::Limits.reset(name)
+
+    assert_equal 0, l.size
+    @pool.with { |c| assert_empty c.call('KEYS', "lmtr-b:#{name}:*") }
+  end
+
   # ----- configure --------------------------------------------------
 
   def test_configure_sets_backoff

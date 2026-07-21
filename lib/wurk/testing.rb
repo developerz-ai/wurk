@@ -56,12 +56,31 @@ module Wurk
         end
       end
 
-      # In-process server-middleware chain used for inline execution. Empty by
+      # In-process server-middleware chain used by `:inline` mode. Empty by
       # default — configure with `Sidekiq::Testing.server_middleware { |c| ... }`.
+      # Deliberately NOT the globally configured chain: Sidekiq builds a fresh
+      # empty chain here too, and inline tests that suddenly ran batch/limiter/
+      # metrics middleware would diverge from a migrated suite's expectations.
+      # `perform_inline` is the explicit-execution path and does use the real
+      # chains (see Wurk::Worker::Setter#perform_inline).
       def server_middleware
         @server_middleware ||= ::Wurk::Middleware::Chain.new(::Wurk.configuration)
         yield @server_middleware if block_given?
         @server_middleware
+      end
+
+      # `require "sidekiq/testing"` flips Sidekiq into fake mode as a side
+      # effect; a migrated suite that never calls `fake!` would otherwise push
+      # into real Redis while every `MyJob.jobs` assertion came back empty.
+      # Deprecated in Sidekiq 8 in favour of `Sidekiq.testing!` — hence the
+      # warning. A mode already chosen (globally or for this thread) means the
+      # suite is explicit: don't override it, and don't warn again.
+      def deprecated_require!
+        return if ::Thread.current[THREAD_KEY] || @mode
+
+        ::Kernel.warn '⛔️ `require "sidekiq/testing"` is deprecated and will be removed in Sidekiq 9.0. ' \
+                      'Use `Sidekiq.testing!(:fake)` instead.'
+        fake!
       end
 
       # --- push hooks invoked by Wurk::Client#raw_push -------------------

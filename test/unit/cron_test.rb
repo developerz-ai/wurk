@@ -20,6 +20,10 @@ class CronTest < Wurk::Test::UnitCase
   class DSTWorker # rubocop:disable Lint/EmptyClass
   end
 
+  # Resolvable constant for the ConfigTester pruning checks.
+  class PruneWorker # rubocop:disable Lint/EmptyClass
+  end
+
   def setup
     super
     @suffix = "cron#{Process.pid}#{object_id}"
@@ -245,13 +249,14 @@ class CronTest < Wurk::Test::UnitCase
   def test_register_writes_klass_to_loop_hash
     lp = register_for_persist_test
 
-    assert_equal 'CronTest::FooWorker', loop_hash(lp.lid)['klass']
+    assert_equal persist_klass, loop_hash(lp.lid)['klass']
   end
 
   def test_register_idempotent_for_same_inputs
     mgr = Wurk::Cron::Manager.new
-    a = mgr.register('*/5 * * * *', 'CronTest::FooWorker')
-    b = mgr.register('*/5 * * * *', 'CronTest::FooWorker')
+    klass = "CronTest::Idem#{@suffix}"
+    a = mgr.register('*/5 * * * *', klass)
+    b = mgr.register('*/5 * * * *', klass)
     @lids << a.lid
     membership = Wurk.redis { |c| c.call('SISMEMBER', Wurk::Cron::PERIODIC_KEY, a.lid) }
 
@@ -262,7 +267,7 @@ class CronTest < Wurk::Test::UnitCase
   def test_manager_tz_default_applies_to_subsequent_registers
     mgr = Wurk::Cron::Manager.new
     mgr.tz = 'America/Chicago'
-    lp = mgr.register('0 4 * * *', 'CronTest::FooWorker')
+    lp = mgr.register('0 4 * * *', "CronTest::TzDefault#{@suffix}")
     @lids << lp.lid
 
     assert_equal 'America/Chicago', lp.tz
@@ -271,7 +276,7 @@ class CronTest < Wurk::Test::UnitCase
   def test_manager_per_call_tz_overrides_default
     mgr = Wurk::Cron::Manager.new
     mgr.tz = 'America/Chicago'
-    lp = mgr.register('0 4 * * *', 'CronTest::FooWorker', tz: 'Asia/Tokyo')
+    lp = mgr.register('0 4 * * *', "CronTest::TzOverride#{@suffix}", tz: 'Asia/Tokyo')
     @lids << lp.lid
 
     assert_equal 'Asia/Tokyo', lp.tz
@@ -283,6 +288,111 @@ class CronTest < Wurk::Test::UnitCase
     @lids << lp.lid
 
     assert_equal 'CronTest::FooWorker', lp.klass
+  end
+
+  # ---- Superseded-loop pruning ----------------------------------------
+
+  def test_register_prunes_superseded_loop_for_same_class
+    klass = "CronTest::Edited#{@suffix}"
+    old = Wurk::Cron::Manager.new.register('0 4 * * *', klass)
+    fresh = Wurk::Cron::Manager.new.register('0 5 * * *', klass)
+    @lids << old.lid << fresh.lid
+    lids = Wurk::Cron::LoopSet.new.map(&:lid)
+
+    refute_includes lids, old.lid, 'the pre-edit loop must not keep firing'
+    assert_includes lids, fresh.lid
+  end
+
+  def test_pruned_loop_hash_and_history_are_deleted
+    klass = "CronTest::EditedKeys#{@suffix}"
+    old = Wurk::Cron::Manager.new.register('0 4 * * *', klass)
+    @lids << old.lid
+    seed_history(old.lid)
+    @lids << Wurk::Cron::Manager.new.register('0 5 * * *', klass).lid
+
+    assert_empty loop_hash(old.lid)
+    assert_empty history_entries(old.lid)
+  end
+
+  # The registry is fleet-wide: a process registering only part of it (or an
+  # app that registers nothing at all) must not wipe another process's loops.
+  def test_register_of_a_subset_leaves_other_classes_alone
+    kept = Wurk::Cron::Manager.new.register('0 4 * * *', "CronTest::SubsetKept#{@suffix}")
+    other = Wurk::Cron::Manager.new.register('0 6 * * *', "CronTest::SubsetOther#{@suffix}")
+    @lids << kept.lid << other.lid
+    lids = Wurk::Cron::LoopSet.new.map(&:lid)
+
+    assert_includes lids, kept.lid
+    assert_includes lids, other.lid
+  end
+
+  def test_manager_that_registers_nothing_prunes_nothing
+    lp = Wurk::Cron::Manager.new.register('0 4 * * *', "CronTest::ClientOnly#{@suffix}")
+    @lids << lp.lid
+
+    Wurk::Cron::Manager.new # a client-only process: config.periodic never called
+
+    assert_includes Wurk::Cron::LoopSet.new.map(&:lid), lp.lid
+  end
+
+  # Two schedules for one class in a single block: the second register must
+  # survive the first one's prune (and re-registering the whole set is a no-op).
+  def test_register_keeps_every_loop_declared_for_the_same_class
+    klass = "CronTest::Twice#{@suffix}"
+    first_boot = register_pair(klass)
+    second_boot = register_pair(klass)
+    @lids.concat(first_boot)
+
+    assert_equal first_boot, second_boot, 'the same block must produce the same lids on every boot'
+    assert_equal first_boot.sort, (Wurk::Cron::LoopSet.new.map(&:lid) & first_boot).sort
+  end
+
+  def test_config_tester_does_not_prune_live_loops
+    live = Wurk::Cron::Manager.new.register('7 3 * * *', 'CronTest::PruneWorker')
+    @lids << live.lid
+    block = ->(mgr) { mgr.register('9 3 * * *', 'CronTest::PruneWorker') }
+    @lids.concat(Wurk::Cron::ConfigTester.new.verify(&block).map(&:lid))
+
+    assert_includes Wurk::Cron::LoopSet.new.map(&:lid), live.lid
+  end
+
+  # ---- Pause survives re-registration ---------------------------------
+
+  def test_runtime_pause_survives_re_registration
+    klass = "CronTest::Paused#{@suffix}"
+    lp = Wurk::Cron::Manager.new.register('0 4 * * *', klass)
+    @lids << lp.lid
+    Wurk::Web::Enterprise::Periodic.pause(lp.lid)
+
+    Wurk::Cron::Manager.new.register('0 4 * * *', klass)
+
+    assert_equal '1', loop_hash(lp.lid)['paused']
+    assert_predicate Wurk::Cron::LoopSet.new.fetch(lp.lid), :paused?
+  end
+
+  def test_runtime_unpause_survives_re_registration_of_a_paused_loop
+    klass = "CronTest::Unpaused#{@suffix}"
+    lp = Wurk::Cron::Manager.new.register('0 4 * * *', klass, paused: true)
+    @lids << lp.lid
+    Wurk::Web::Enterprise::Periodic.unpause(lp.lid)
+
+    Wurk::Cron::Manager.new.register('0 4 * * *', klass, paused: true)
+
+    assert_equal '0', loop_hash(lp.lid)['paused']
+  end
+
+  def test_paused_option_is_the_initial_state_at_first_registration
+    lp = Wurk::Cron::Manager.new.register('0 4 * * *', "CronTest::BornPaused#{@suffix}", paused: true)
+    @lids << lp.lid
+
+    assert_equal '1', loop_hash(lp.lid)['paused']
+  end
+
+  def test_register_defaults_to_unpaused
+    lp = Wurk::Cron::Manager.new.register('0 4 * * *', "CronTest::BornRunning#{@suffix}")
+    @lids << lp.lid
+
+    assert_equal '0', loop_hash(lp.lid)['paused']
   end
 
   # ---- Top-level register(name, cron, klass, args) --------------------
@@ -1097,11 +1207,30 @@ class CronTest < Wurk::Test::UnitCase
     loop_obj.local_components(nf)[0, 3]
   end
 
+  # Registration now prunes superseded loops for the class it registers, so a
+  # test must own its class name or it deletes a concurrent test's loop.
   def register_for_persist_test
     mgr = Wurk::Cron::Manager.new
-    lp = mgr.register('*/5 * * * *', 'CronTest::FooWorker', queue: 'low')
+    lp = mgr.register('*/5 * * * *', persist_klass, queue: 'low')
     @lids << lp.lid
     lp
+  end
+
+  def persist_klass
+    "CronTest::Persist#{@suffix}"
+  end
+
+  def register_pair(klass)
+    mgr = Wurk::Cron::Manager.new
+    [mgr.register('0 4 * * *', klass).lid, mgr.register('0 16 * * *', klass).lid]
+  end
+
+  def seed_history(lid)
+    Wurk.redis { |c| c.call('LPUSH', "#{Wurk::Cron::HISTORY_PREFIX}#{lid}", '[1,"jid"]') }
+  end
+
+  def history_entries(lid)
+    Wurk.redis { |c| c.call('LRANGE', "#{Wurk::Cron::HISTORY_PREFIX}#{lid}", 0, -1) }
   end
 
   def loop_hash(lid)

@@ -1,6 +1,10 @@
 # frozen_string_literal: true
 
 require_relative '../test_helper'
+# The wrapper class is only autoloaded by the ActiveJob adapter; the unique
+# tests need the real constant so `sidekiq_unique_context` resolution can be
+# exercised on it. It has no ActiveJob load-time dependency.
+require_relative '../../lib/wurk/active_job/wrapper'
 
 class UniqueTest < Wurk::Test::UnitCase
   # NOT parallelize_me! — these tests flip the process-wide
@@ -100,6 +104,142 @@ class UniqueTest < Wurk::Test::UnitCase
       b = Wurk::Unique.lock_key_for({ 'class' => 'CustomContextJob', 'queue' => 'q', 'args' => [1, 'other'] })
 
       assert_equal a, b
+    end
+  end
+
+  # ---- ActiveJob-wrapped payloads (#317 audit) -------------------------
+
+  def test_active_job_digest_ignores_per_push_identifiers
+    a = Wurk::Unique.lock_key_for(active_job_payload)
+    b = Wurk::Unique.lock_key_for(active_job_payload)
+
+    assert_equal a, b, 'job_id/enqueued_at churn must not change the digest'
+  end
+
+  def test_active_job_digest_differs_by_arguments
+    a = Wurk::Unique.lock_key_for(active_job_payload(arguments: [1]))
+    b = Wurk::Unique.lock_key_for(active_job_payload(arguments: [2]))
+
+    refute_equal a, b
+  end
+
+  def test_active_job_digest_differs_by_wrapped_class
+    a = Wurk::Unique.lock_key_for(active_job_payload(job_class: 'AJobA'))
+    b = Wurk::Unique.lock_key_for(active_job_payload(job_class: 'AJobB'))
+
+    refute_equal a, b
+  end
+
+  def test_active_job_digest_differs_by_queue
+    a = Wurk::Unique.lock_key_for(active_job_payload(queue: 'q1'))
+    b = Wurk::Unique.lock_key_for(active_job_payload(queue: 'q2'))
+
+    refute_equal a, b
+  end
+
+  def test_active_job_digest_recognizes_legacy_wrapper_names
+    canonical = Wurk::Unique.lock_key_for(active_job_payload)
+    legacy = Wurk::Unique.lock_key_for(
+      active_job_payload(wrapper: 'ActiveJob::QueueAdapters::SidekiqAdapter::JobWrapper')
+    )
+
+    # Different wrapper names are still distinct keys, but both must be
+    # narrowed (i.e. stable across pushes) rather than falling back to args.
+    refute_equal canonical, legacy
+    assert_equal legacy, Wurk::Unique.lock_key_for(
+      active_job_payload(wrapper: 'ActiveJob::QueueAdapters::SidekiqAdapter::JobWrapper')
+    )
+  end
+
+  def test_active_job_dedup_drops_second_push
+    ENABLE_MUTEX.synchronize do
+      Wurk::Unique.enable!
+      first = active_job_payload(jid: 'aj-1', job_class: "AJ#{@suffix}").merge('unique_for' => 600)
+      second = active_job_payload(jid: 'aj-2', job_class: "AJ#{@suffix}").merge('unique_for' => 600)
+      track_key(first)
+
+      assert invoke_client(first)
+      refute invoke_client(second), 'a second ActiveJob push of the same job must be deduped'
+      assert_equal('aj-1', redis_call('GET', Wurk::Unique.lock_key_for(first)))
+    end
+  end
+
+  def test_active_job_wrapper_honors_sidekiq_unique_context
+    hook = ->(job) { ['custom', job['args'].first['arguments'].first] }
+    with_wrapper_context(hook) do
+      a = Wurk::Unique.lock_key_for(active_job_payload(arguments: [7, 'noise']))
+      b = Wurk::Unique.lock_key_for(active_job_payload(arguments: [7, 'other']))
+
+      assert_equal a, b
+      assert_equal "unique:#{Digest::SHA256.hexdigest(JSON.dump(['custom', 7]))}", a
+    end
+  end
+
+  def test_plain_job_with_activejob_shaped_arg_is_not_narrowed
+    # Only the known wrapper class names opt into the narrowed context; a
+    # plain worker whose arg happens to look like a serialized AJ keeps the
+    # verbatim [class, queue, args] digest.
+    job = { 'class' => 'PlainJob', 'queue' => 'q',
+            'args' => [{ 'job_class' => 'X', 'arguments' => [1], 'job_id' => 'a' }] }
+    expected = "unique:#{Digest::SHA256.hexdigest(JSON.dump(['PlainJob', 'q', job['args']]))}"
+
+    assert_equal expected, Wurk::Unique.lock_key_for(job)
+  end
+
+  def test_wrapper_with_non_activejob_args_falls_back_to_default_context
+    job = { 'class' => 'Sidekiq::ActiveJob::Wrapper', 'queue' => 'q', 'args' => [1, 2] }
+    expected = "unique:#{Digest::SHA256.hexdigest(JSON.dump(['Sidekiq::ActiveJob::Wrapper', 'q', [1, 2]]))}"
+
+    assert_equal expected, Wurk::Unique.lock_key_for(job)
+  end
+
+  # ---- unique + encryption are rejected, in either order ---------------
+
+  def test_encrypted_unique_job_raises_configuration_error
+    ENABLE_MUTEX.synchronize do
+      Wurk::Unique.enable!
+      with_crypto do
+        job = build_job(jid: 'enc-1', ttl: 60).merge('encrypt' => true)
+
+        error = assert_raises(Wurk::Unique::ConfigurationError) { invoke_client(job) }
+
+        assert_match(/unique_for/, error.message)
+        assert_match(/encrypt/, error.message)
+      end
+    end
+  end
+
+  def test_encrypted_job_without_unique_for_is_untouched
+    ENABLE_MUTEX.synchronize do
+      Wurk::Unique.enable!
+      with_crypto do
+        job = { 'class' => 'X', 'queue' => 'q', 'args' => ['s'], 'jid' => 'enc-2', 'encrypt' => true }
+
+        assert invoke_client(job)
+      end
+    end
+  end
+
+  def test_unique_job_without_encrypt_is_untouched_while_crypto_enabled
+    ENABLE_MUTEX.synchronize do
+      Wurk::Unique.enable!
+      with_crypto do
+        job = build_job(jid: 'enc-3', ttl: 60)
+        track_key(job)
+
+        assert invoke_client(job)
+      end
+    end
+  end
+
+  def test_encrypted_unique_job_raises_when_crypto_disabled_is_false
+    # Crypto not enabled: `encrypt: true` is inert, so uniqueness proceeds.
+    ENABLE_MUTEX.synchronize do
+      Wurk::Unique.enable!
+      job = build_job(jid: 'enc-4', ttl: 60).merge('encrypt' => true)
+      track_key(job)
+
+      assert invoke_client(job)
     end
   end
 
@@ -644,7 +784,78 @@ class UniqueTest < Wurk::Test::UnitCase
     end
   end
 
+  def test_locked_honors_sidekiq_unique_context
+    klass = Class.new do
+      def self.name = 'LockedContextJob'
+
+      def self.sidekiq_unique_context(job)
+        ['LockedContextJob', [job['args'].first]]
+      end
+    end
+    stub_const('LockedContextJob', klass) do
+      job = { 'class' => 'LockedContextJob', 'queue' => 'q', 'args' => [5, 'noise'] }
+      key = Wurk::Unique.lock_key_for(job)
+      Wurk.redis { |c| c.call('SET', key, 'ctx-holder', 'EX', 60) }
+      @keys << key
+
+      assert_equal 'ctx-holder', Wurk::Unique.locked?('q', 'LockedContextJob', [5, 'noise']),
+                   'locked? must agree with lock_key_for for a custom context'
+    end
+  end
+
+  def test_locked_agrees_with_lock_key_for_on_active_job
+    job = active_job_payload(job_class: "AJLocked#{@suffix}")
+    key = Wurk::Unique.lock_key_for(job)
+    Wurk.redis { |c| c.call('SET', key, 'aj-holder', 'EX', 60) }
+    @keys << key
+
+    assert_equal 'aj-holder',
+                 Wurk::Unique.locked?(job['queue'], job['class'], job['args'])
+  end
+
   private
+
+  # Mimics a real ActiveJob push: `args` is `[job.serialize]`, and `job_id` /
+  # `enqueued_at` are fresh on every call.
+  def active_job_payload(job_class: 'AJDemoJob', arguments: [1, 'x'], queue: 'q',
+                         jid: 'aj-jid', wrapper: 'Sidekiq::ActiveJob::Wrapper')
+    @aj_seq = (@aj_seq || 0) + 1
+    data = {
+      'job_class' => job_class,
+      'job_id' => "id-#{@aj_seq}-#{rand(1 << 32)}",
+      'provider_job_id' => nil,
+      'queue_name' => queue,
+      'priority' => nil,
+      'arguments' => arguments,
+      'executions' => 0,
+      'exception_executions' => {},
+      'locale' => 'en',
+      'timezone' => 'UTC',
+      'enqueued_at' => ::Time.now.to_f.to_s,
+      'scheduled_at' => nil
+    }
+    { 'class' => wrapper, 'wrapped' => job_class, 'queue' => queue,
+      'args' => [data], 'jid' => jid }
+  end
+
+  # Install a `sidekiq_unique_context` hook on the real wrapper class for the
+  # duration of the block (that class is what `job["class"]` names on the wire).
+  def with_wrapper_context(hook)
+    wrapper = ::Sidekiq::ActiveJob::Wrapper
+    wrapper.define_singleton_method(:sidekiq_unique_context) { |job| hook.call(job) }
+    yield
+  ensure
+    wrapper.singleton_class.send(:remove_method, :sidekiq_unique_context)
+  end
+
+  def with_crypto
+    Wurk::Encryption.enable(active_version: 1) { |_v| 'k' * 32 }
+    yield
+  ensure
+    Wurk::Encryption.disable!
+    Wurk.configuration.client_middleware.remove(Wurk::Encryption::ClientMiddleware)
+    Wurk.configuration.server_middleware.remove(Wurk::Encryption::ServerMiddleware)
+  end
 
   def build_job(jid:, ttl:, until_mode: nil, klass: "UniqJob#{@suffix}", queue: 'q')
     {

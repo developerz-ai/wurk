@@ -12,10 +12,14 @@ module Wurk
     # external dashboarding code; both rely on the same HGETALL fan-out
     # over a contiguous range of minute / hour keys.
     #
-    # Window caps are spec-enforced:
+    # Window caps are spec-enforced (§20 "DoS caps"), one per argument:
     #
-    #   minutes ≤ 480  (8h — same as the 10-minute rollup retention)
+    #   minutes ≤ 480  (8h)
     #   hours   ≤ 72   (3d — same as MID_TERM retention)
+    #
+    # `hours:` is validated against MAX_HOURS only, never re-checked against
+    # MAX_MINUTES after the ×60 conversion: the minute buckets it reads live
+    # for MID_TERM (3 days), so the whole 72h window is backed by real data.
     #
     # A wider window has no data to read anyway (the buckets are TTL'd out),
     # so we fail loudly rather than silently returning sparse results.
@@ -34,9 +38,8 @@ module Wurk
       # sorted by volume (p + f) descending so the UI's "top jobs" table
       # renders without a second sort pass.
       def top_jobs(class_filter: nil, minutes: 60, hours: nil, now: ::Time.now)
-        minutes = hours * 60 if hours
-        cap_hours!(hours) if hours
-        rows = aggregate_minutes(now, cap_minutes!(minutes)).to_a
+        window = hours ? cap_hours!(hours) * 60 : cap_minutes!(minutes)
+        rows = aggregate_minutes(now, window).to_a
         rows = rows.select { |(k, _)| k.start_with?(class_filter) } if class_filter && !class_filter.empty?
         rows.sort_by { |(_k, s)| -(s[:p] + s[:f]) }
       end

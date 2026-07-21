@@ -55,6 +55,17 @@ class WebSearchTest < Wurk::Test::UnitCase
     )
   end
 
+  # Regression: SortedEntry is built from the raw JSON string, and JobRecord
+  # only derived @queue from a pre-parsed Hash — so every retry/scheduled/dead
+  # search hit reported `queue: nil` to the dashboard.
+  def test_search_sorted_hit_carries_the_queue
+    %w[retry schedule dead].each { |set| push_to_zset(set, @class_a, [@needle]) }
+
+    queues = Wurk::Web::Search.new(@needle, kinds: %w[retry scheduled dead]).to_a.map { |h| h[:queue] }
+
+    assert_equal [@queue] * 3, queues
+  end
+
   def test_search_finds_scheduled_hit
     push_to_zset('schedule', @class_a, [@needle])
 

@@ -371,19 +371,20 @@ The whole `Sidekiq::Testing` / `Sidekiq::Queues` / `Sidekiq::Job` test surface i
 implemented, under the same names, with the same semantics. In practice a suite
 moves over untouched. Two things to check:
 
-**1. `require "sidekiq/testing"` no longer implies `fake!`.** The path still
-resolves (it loads Wurk), but Wurk's default mode is `:disable`. Under Sidekiq,
-requiring that file switched you into fake mode as a side effect; here a suite
-that relied on it will start writing to real Redis and every `MyJob.jobs`
-assertion will come back empty. Add one explicit line to your test helper:
+**1. `require "sidekiq/testing"` switches you into fake mode**, exactly as it
+does under Sidekiq — so a suite that relied on that side effect keeps working
+untouched. It prints a deprecation warning once per process, matching upstream,
+and it never overrides a mode you chose explicitly, so this is safe:
 
 ```ruby
 # test/test_helper.rb
-Sidekiq::Testing.fake!
+require "sidekiq/testing"
+Sidekiq::Testing.disable!   # respected — the require does not fight you
 ```
 
-There is no deprecation warning on the require — the file is a plain
-`require "wurk"`.
+Prefer setting the mode explicitly and dropping the require. Note the side
+effect is process-global: don't `require "sidekiq/testing"` from a file that a
+non-testing process loads.
 
 **2. `Sidekiq::Testing` is a module, not a class.** Wurk implements it as a
 module with singleton methods. Every documented call (`fake!`, `inline!`,

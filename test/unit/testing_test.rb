@@ -44,6 +44,18 @@ class TestingModesTest < Wurk::Test::UnitCase
     super
   end
 
+  # The flip side — that the require DOES warn and enable fake mode from a
+  # clean process — is process-global and one-way, so it lives in
+  # test/unit/testing_require_test.rb as a subprocess test.
+  def test_deprecated_require_respects_an_explicit_mode
+    Wurk::Testing.disable!
+
+    out = capture_io { Wurk::Testing.deprecated_require! }.last
+
+    assert_empty out, 'must not warn once the suite has chosen a mode'
+    assert_predicate Wurk::Testing, :disabled?, 'must not override an explicit disable!'
+  end
+
   # --- fake mode ----------------------------------------------------------
 
   def test_fake_collects_jobs_without_running
@@ -169,6 +181,85 @@ class TestingModesTest < Wurk::Test::UnitCase
       refute_predicate Wurk::Testing, :disabled?
       assert_predicate Wurk::Testing, :inline?
     end
+  end
+
+  # --- perform_inline middleware ------------------------------------------
+  # perform_inline used to call `perform` directly, so a unique-jobs lock taken
+  # by client middleware was never released by its server counterpart and batch
+  # callbacks never fired. It now runs both real chains, like Sidekiq.
+
+  class RecordingClientMiddleware
+    def self.calls = @calls ||= []
+
+    def call(job_class, item, queue, _pool)
+      self.class.calls << [job_class, item['args'], queue]
+      yield
+    end
+  end
+
+  class RecordingServerMiddleware
+    def self.calls = @calls ||= []
+
+    def call(worker, job, queue)
+      self.class.calls << [worker.jid, job['args'], queue]
+      yield
+    end
+  end
+
+  class HaltingClientMiddleware
+    def call(*)
+      nil
+    end
+  end
+
+  def with_middleware(client: nil, server: nil)
+    config = Wurk.configuration
+    config.client_middleware.add(client) if client
+    config.server_middleware.add(server) if server
+    yield
+  ensure
+    config.client_middleware.remove(client) if client
+    config.server_middleware.remove(server) if server
+  end
+
+  def test_perform_inline_runs_client_middleware
+    RecordingClientMiddleware.calls.clear
+
+    with_middleware(client: RecordingClientMiddleware) { FakeJob.perform_inline(11) }
+
+    assert_equal [['TestingModesTest::FakeJob', [11], 'testq']], RecordingClientMiddleware.calls
+  end
+
+  def test_perform_inline_runs_server_middleware_around_a_jid_bearing_instance
+    RecordingServerMiddleware.calls.clear
+
+    with_middleware(server: RecordingServerMiddleware) { FakeJob.perform_inline(11) }
+    jid, args, queue = RecordingServerMiddleware.calls.fetch(0)
+
+    assert_equal [String, [11], 'testq'], [jid.class, args, queue]
+    assert_equal [11], FakeJob.ran
+  end
+
+  def test_perform_inline_returns_true_when_the_job_runs
+    assert FakeJob.perform_inline(14)
+  end
+
+  def test_setter_perform_inline_runs_server_middleware_with_its_queue
+    RecordingServerMiddleware.calls.clear
+
+    with_middleware(server: RecordingServerMiddleware) do
+      FakeJob.set(queue: 'override').perform_inline(12)
+    end
+
+    assert_equal [12], FakeJob.ran
+    assert_equal 'override', RecordingServerMiddleware.calls.fetch(0).last
+  end
+
+  def test_perform_inline_halted_by_client_middleware_does_not_run
+    result = with_middleware(client: HaltingClientMiddleware) { FakeJob.perform_inline(13) }
+
+    assert_nil result
+    assert_empty FakeJob.ran
   end
 
   # --- Sidekiq drop-in aliases -------------------------------------------

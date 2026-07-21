@@ -2,3 +2,5 @@
 
 # Drop-in require path (see lib/sidekiq.rb). Wurk loads this surface whole.
 require 'wurk'
+
+Wurk::Testing.deprecated_require!

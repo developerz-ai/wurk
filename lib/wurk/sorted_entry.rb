@@ -24,6 +24,12 @@ module Wurk
       @parent = parent
     end
 
+    # JobRecord resolves the queue eagerly and only from a pre-parsed Hash;
+    # a sorted-set entry is almost always built from the raw JSON string, so
+    # read it off the payload instead. Lazy on purpose — a scan over a large
+    # set must not pay JSON cost for entries nobody inspects.
+    def queue = @queue ||= item['queue']
+
     def id = "#{score}|#{jid}"
 
     def at = ::Time.at(score).utc

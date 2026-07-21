@@ -88,7 +88,7 @@ Window caps (`WindowTooWide < ArgumentError` when exceeded):
 | Call | Cap | Reads |
 |------|-----|-------|
 | `top_jobs(minutes:)` | `MAX_MINUTES` = 480 (8h) | per-minute `j\|…` buckets |
-| `top_jobs(hours:)` | `MAX_HOURS` = 72, but converted to `hours * 60` minutes and re-capped at 480 — so **8 hours is the real ceiling** | per-minute buckets |
+| `top_jobs(hours:)` | `MAX_HOURS` = 72 (3d), matching the per-minute bucket retention | per-minute buckets |
 | `for_job(minutes:)` | 480 | per-minute buckets |
 | `for_job(hours:)` | 72 (3d) | per-class hourly buckets |
 | `history` / `queue_history` | window clamped to the bucket's TTL (24h / 7d / 30d) | `jr\|…` / `qm\|…` |

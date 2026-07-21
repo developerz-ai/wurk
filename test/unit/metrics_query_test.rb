@@ -144,6 +144,20 @@ class MetricsQueryTest < Wurk::Test::UnitCase
     assert_includes klasses, @klass_a
   end
 
+  # Regression: `hours:` used to be re-validated against MAX_MINUTES after the
+  # ×60 conversion, so anything above 8h raised WindowTooWide and the
+  # documented 72h ceiling was unreachable. The minute buckets it reads live
+  # for MID_TERM (3 days), so the whole range is backed by data.
+  def test_top_jobs_hours_reaches_the_documented_ceiling
+    Wurk::Metrics::History.record(@klass_a, 5, success: true, at: @now)
+
+    [9, Wurk::Metrics::Query::MAX_HOURS].each do |hours|
+      rows = Wurk::Metrics::Query.top_jobs(hours: hours, now: @now)
+
+      assert_includes rows.map(&:first), @klass_a, "hours: #{hours}"
+    end
+  end
+
   def test_top_jobs_hours_arg_converts_to_minutes
     Wurk::Metrics::History.record(@klass_a, 7, success: true, at: @now)
 

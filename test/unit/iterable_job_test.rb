@@ -278,10 +278,10 @@ class IterableJobTest < Wurk::Test::UnitCase
     end
   end
 
-  def test_cancel_during_iteration_raises_interrupted_on_next_step
+  def test_cancel_during_iteration_stops_the_loop_without_interrupting
     worker = SelfCancelling.new
+    worker.perform
 
-    assert_raises(Wurk::IterableJob::Interrupted) { worker.perform }
     assert_equal [1], worker.seen
   end
 
@@ -316,6 +316,22 @@ class IterableJobTest < Wurk::Test::UnitCase
     end
   end
 
+  # Cancels and then raises Interrupted from the same iteration — the only
+  # way a run reaches the interrupt path with @cancelled_at set now that
+  # cancellation terminates the loop on its own.
+  class CancelThenInterrupt
+    include Wurk::IterableJob
+
+    def build_enumerator(*, cursor:)
+      Enumerator.new { |y| y << [1, 1] }
+    end
+
+    def each_iteration(_item, *)
+      cancel!
+      raise Wurk::IterableJob::Interrupted
+    end
+  end
+
   def random_jid
     @_jid_counter ||= 0
     @_jid_counter += 1
@@ -328,6 +344,10 @@ class IterableJobTest < Wurk::Test::UnitCase
 
   def cleanup_iteration_key(jid)
     redis.with { |c| c.call('DEL', "it-#{jid}") }
+  end
+
+  def state_exists?(jid)
+    redis.with { |c| c.call('EXISTS', "it-#{jid}") } == 1
   end
 
   def test_cancel_persists_to_iteration_hash_when_jid_set
@@ -382,7 +402,7 @@ class IterableJobTest < Wurk::Test::UnitCase
   # run. Splitting would obscure the contract — the field set IS the spec.
   def test_interrupted_perform_persists_state_hash # rubocop:disable Metrics/AbcSize,Minitest/MultipleAssertions
     jid = random_jid
-    worker = CancelOnSecond.new
+    worker = CancelThenInterrupt.new
     worker.jid = jid
 
     begin
@@ -403,7 +423,7 @@ class IterableJobTest < Wurk::Test::UnitCase
 
   def test_interrupted_run_uses_cancellation_period_ttl
     jid = random_jid
-    worker = CancelOnSecond.new
+    worker = CancelThenInterrupt.new
     worker.jid = jid
 
     begin
@@ -556,13 +576,14 @@ class IterableJobTest < Wurk::Test::UnitCase
     def each_iteration(_) = cancel!
     def on_cancel         = events << :cancel
     def on_stop           = events << :stop
+    def on_complete       = events << :complete
   end
 
-  def test_on_cancel_and_on_stop_fire_when_cancelled
+  def test_cancelled_run_fires_cancel_stop_complete_in_order
     worker = StopOnly.new
-    assert_raises(Wurk::IterableJob::Interrupted) { worker.perform }
+    worker.perform
 
-    assert_equal %i[cancel stop], worker.events
+    assert_equal %i[cancel stop complete], worker.events
   end
 
   # --- branch: interrupted WITHOUT cancellation (line 190 else) -------
@@ -598,10 +619,10 @@ class IterableJobTest < Wurk::Test::UnitCase
     refute_predicate worker, :cancelled?
   end
 
-  # --- branch: load_state with cancelled present (line 209 then) ------
+  # --- branch: load_state with cancelled present ----------------------
 
   # State hash carries a `cancelled` timestamp; load_state must set
-  # @cancelled_at so the very first iteration trips and raises Interrupted.
+  # @cancelled_at so the very first iteration trips and the run terminates.
   def test_load_state_with_cancelled_field_trips_immediately
     jid = random_jid
 
@@ -617,9 +638,123 @@ class IterableJobTest < Wurk::Test::UnitCase
 
       worker = ResumableJob.new
       worker.jid = jid
+      worker.perform
 
-      assert_raises(Wurk::IterableJob::Interrupted) { worker.perform }
       assert_empty worker.seen, 'no iteration runs once cancelled state is loaded'
+    ensure
+      cleanup_iteration_key(jid)
+    end
+  end
+
+  # A resumed cancelled job must not raise Interrupted — raising would send it
+  # back through InterruptHandler, which LPUSHes it to the head of the queue,
+  # and the reloaded `cancelled` field would spin that cycle for three days.
+  # The state HASH must be gone so nothing can trip on it again.
+  def test_cancelled_run_deletes_state_instead_of_re_enqueueing
+    jid = random_jid
+
+    begin
+      ts = ::Process.clock_gettime(::Process::CLOCK_REALTIME).to_i
+      redis.with { |c| c.call('HSET', "it-#{jid}", 'ex', '1', 'c', ::JSON.generate(0), 'cancelled', ts) }
+
+      worker = ResumableJob.new
+      worker.jid = jid
+      worker.perform
+
+      refute state_exists?(jid), 'cancelled state hash deleted so the resumed job cannot re-cancel'
+    ensure
+      cleanup_iteration_key(jid)
+    end
+  end
+
+  def test_self_cancelled_run_deletes_state
+    jid = random_jid
+    worker = CancelOnSecond.new
+    worker.jid = jid
+
+    begin
+      worker.perform
+
+      refute state_exists?(jid), 'state deleted when the job cancels itself mid-run'
+    ensure
+      cleanup_iteration_key(jid)
+    end
+  end
+
+  # --- cooperative shutdown -------------------------------------------
+
+  # Stands in for Wurk::Processor: `interrupted?` (Wurk::Worker) asks the
+  # attached context whether it is stopping.
+  class StoppingContext
+    def initialize(stop_after:)
+      @stop_after = stop_after
+      @calls = 0
+    end
+
+    def stopping?
+      @calls += 1
+      @calls > @stop_after
+    end
+  end
+
+  def test_shutdown_flushes_cursor_and_raises_interrupted
+    jid = random_jid
+    worker = ResumableJob.new
+    worker.jid = jid
+    # Not stopping for the first check, stopping from the second on: one item
+    # is processed, then the loop bails before touching the next.
+    worker._context = StoppingContext.new(stop_after: 1)
+
+    begin
+      assert_raises(Wurk::IterableJob::Interrupted) { worker.perform }
+      assert_equal [0], worker.seen
+
+      cursor = redis.with { |c| c.call('HGET', "it-#{jid}", 'c') }
+
+      assert_equal 1, ::JSON.parse(cursor), 'cursor of the last completed iteration is flushed'
+    ensure
+      cleanup_iteration_key(jid)
+    end
+  end
+
+  def test_job_resumes_from_flushed_cursor_after_shutdown
+    jid = random_jid
+    stopped = ResumableJob.new
+    stopped.jid = jid
+    stopped._context = StoppingContext.new(stop_after: 2)
+
+    begin
+      assert_raises(Wurk::IterableJob::Interrupted) { stopped.perform }
+
+      resumed = ResumableJob.new
+      resumed.jid = jid
+      resumed.perform
+
+      assert_equal [2], resumed.seen, 'resumed run picks up exactly where the flush left off'
+    ensure
+      cleanup_iteration_key(jid)
+    end
+  end
+
+  def test_shutdown_fires_on_stop_without_on_cancel
+    worker = HookTracer.new
+    worker._context = StoppingContext.new(stop_after: 0)
+
+    assert_raises(Wurk::IterableJob::Interrupted) { worker.perform }
+    assert_equal %i[start stop], worker.events
+  end
+
+  def test_cancellation_wins_over_shutdown
+    jid = random_jid
+    worker = StopOnly.new
+    worker.jid = jid
+    worker._context = StoppingContext.new(stop_after: 0)
+
+    begin
+      worker.cancel!
+      worker.perform
+
+      assert_equal %i[cancel stop complete], worker.events
     ensure
       cleanup_iteration_key(jid)
     end

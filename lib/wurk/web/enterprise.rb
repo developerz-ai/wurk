@@ -42,11 +42,33 @@ module Wurk
         # row remains in the UI. Mirrors the §1.5 `#reset` surface — the
         # name is wire-compat, so the trailing-? rule doesn't apply here.
         def reset(name) # rubocop:disable Naming/PredicateMethod
+          limiter = rebuild(name)
+          # Reconstruct the limiter and delegate: only the type itself knows
+          # its state keys. A bucket's counter lives at `lmtr-b:<name>:<epoch>`,
+          # so the bare-prefix DEL below never touched it.
+          limiter ? limiter.reset : reset_by_prefix(name)
+          true
+        end
+
+        # Read-only reconstruction (`register: false`) from the persisted
+        # metadata. Returns nil when the meta HASH is gone or malformed —
+        # LIST membership has no TTL, so a name can outlive its metadata.
+        def rebuild(name)
+          meta = metadata(name)
+          return nil if meta.nil? || meta.empty?
+
+          options = meta['options'] ? ::JSON.parse(meta['options']) : {}
+          Wurk::Limiter.build(name, meta['type'], options)
+        rescue StandardError
+          nil
+        end
+
+        # Metadata-less fallback: wipe every type's un-suffixed state key.
+        def reset_by_prefix(name)
           Wurk.redis do |c|
-            %W[lmtr-cs:#{name} lmtr-b:#{name} lmtr-w:#{name} lmtr-l:#{name}
+            %W[lmtr-cs:#{name} lmtr-w:#{name} lmtr-l:#{name}
                lmtr-p:#{name} lmtr-stats:#{name}].each { |k| c.call('DEL', k) }
           end
-          true
         end
       end
 

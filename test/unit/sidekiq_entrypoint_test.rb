@@ -9,9 +9,12 @@ class SidekiqEntrypointTest < Wurk::Test::UnitCase
   parallelize_me!
 
   # Every passthrough except sidekiq/rails (needs Rails — loading it here
-  # would leak `defined?(Rails)` into every other parallel test) and
-  # sidekiq/cli (flips this process into server mode — same leak problem).
-  # Both are covered by dedicated cold-load subprocess tests below.
+  # would leak `defined?(Rails)` into every other parallel test), sidekiq/cli
+  # (flips this process into server mode — same leak problem) and
+  # sidekiq/testing (flips the process into :fake, which breaks every test
+  # class that later shares this fork). All three are covered by dedicated
+  # cold-load subprocess tests — see test/unit/testing_require_test.rb for the
+  # sidekiq/testing side effect.
   PASSTHROUGHS = %w[
     sidekiq
     sidekiq/api
@@ -21,7 +24,6 @@ class SidekiqEntrypointTest < Wurk::Test::UnitCase
     sidekiq/middleware/chain
     sidekiq/redis_connection
     sidekiq/scheduled
-    sidekiq/testing
     sidekiq/version
     sidekiq/web
     sidekiq/worker
