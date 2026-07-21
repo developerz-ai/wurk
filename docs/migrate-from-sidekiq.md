@@ -397,12 +397,17 @@ Wurk aims for 100% drop-in. A couple of Sidekiq Pro-isms simply no-op or alias
 knowing. Hit something on a real migration that isn't listed here? **Please open an
 issue** — that feedback is part of the v1.0.0 acceptance gate for this guide.
 
-1. **`config.super_fetch!` / `config.reliable_scheduler!` do nothing** (accepted
-   no-ops). Wurk's fetcher is *always* reliable (atomic `BLMOVE` to a per-process
-   private list, with orphan reclamation) and the scheduler is always atomic, so a
-   Sidekiq Pro initializer drops in unchanged — the calls just no-op rather than
-   toggling anything. (`Wurk::Client.reliable_push!` also exists for client-side
-   buffering during a Redis outage.)
+1. **`config.super_fetch!` does nothing** (accepted no-op). Wurk's fetcher is
+   *always* reliable (atomic `BLMOVE` to a per-process private list, with orphan
+   reclamation), so a Sidekiq Pro initializer drops in unchanged — the call just
+   no-ops rather than toggling anything.
+
+   **`config.reliable_scheduler!` is not a no-op — keep it.** The default
+   `scheduled_enq` pops due jobs then pushes them, which has a job-loss window if
+   the process dies in between; `reliable_scheduler!` swaps in the atomic
+   promoter that closes it. See [`docs/reliability.md`](reliability.md).
+   (`Wurk::Client.reliable_push!` also exists for client-side buffering during a
+   Redis outage.)
 2. **`Sidekiq::Pro::Web` works** — it aliases the same dashboard as `Sidekiq::Web`,
    so `mount Sidekiq::Pro::Web` (or `Sidekiq::Web`, or `Wurk::Engine`) all resolve to
    the wurk dashboard.
@@ -434,11 +439,11 @@ issue** — that feedback is part of the v1.0.0 acceptance gate for this guide.
    `concurrency` (threads), then check your DB pool and memory against
    `WURK_COUNT × concurrency`. See [§2](#2-concurrency-vs-parallelism-read-this). This
    is the only step that needs real thought.
-3. **Keep your config as-is** — Pro toggles like `config.super_fetch!` /
-   `config.reliable_scheduler!` are accepted no-ops (already the default), so there's
-   nothing to strip out.
+3. **Keep your config as-is** — `config.super_fetch!` is an accepted no-op
+   (already the default) and `config.reliable_scheduler!` still does real work, so
+   there's nothing to strip out either way.
 4. **Re-point the dashboard route** — `mount Wurk::Engine => "/wurk"` (gate it behind
-   your app auth — see [`docs/dashboard.md`](dashboard.md)).
+   your app auth — see [`docs/authentication.md`](authentication.md)).
 5. **Split web from workers** — run a dedicated `bundle exec wurkswarm` process and set
    `WURK_DISABLED=1` on the web role so clustered Puma doesn't fork duplicate swarms.
    See [§3](#3-running-a-worker-process). Deploying under systemd/Capistrano? See

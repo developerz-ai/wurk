@@ -7,7 +7,7 @@ require_relative 'history'
 module Wurk
   module Metrics
     # Leader-only background thread that rolls the per-class minute buckets
-    # written by Wurk::Metrics::History (`j|YYMMDD|H:M`) up into compact,
+    # written by Wurk::Metrics::History (`j|YYYYMMDD|H:M`) up into compact,
     # cluster-total time-series buckets the dashboard "throughput" / "failures"
     # charts read directly:
     #

@@ -20,8 +20,22 @@ module WurkDocs
     DOCS = %w[
       docs/migrate-from-sidekiq.md
       docs/running.md
+      docs/configuration.md
       docs/deployment.md
       docs/active-job.md
+      docs/testing.md
+      docs/retries.md
+      docs/batches.md
+      docs/rate-limiting.md
+      docs/periodic-jobs.md
+      docs/unique-jobs.md
+      docs/iterable-jobs.md
+      docs/reliability.md
+      docs/middleware.md
+      docs/api.md
+      docs/metrics.md
+      docs/encryption.md
+      docs/profiling.md
       docs/dashboard.md
       docs/authentication.md
       docs/metrics-history.md

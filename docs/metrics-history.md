@@ -8,7 +8,7 @@ resulting Redis footprint, which is **bounded entirely by TTL**.
 ## How it works
 
 Every job execution already writes a per-class minute bucket
-(`j|YYMMDD|H:M`, see `Wurk::Metrics::History`). Once per minute the elected
+(`j|YYYYMMDD|H:M`, see `Wurk::Metrics::History`). Once per minute the elected
 cluster leader sums the just-completed minute across all classes and folds the
 total into three resolutions:
 
@@ -55,7 +55,8 @@ GET /wurk/api/history/:bucket?window=24h
 - `?window=` — `s`/`m`/`h`/`d` suffix (e.g. `24h`, `7d`, `30d`); a bare number is
   seconds. Defaults to `24h`; clamped to the bucket's retention.
 
-Returns a Recharts-ready, gap-filled array (missing buckets read as zero):
+Returns a gap-filled array ready for the chart module (missing buckets read as
+zero):
 
 ```json
 {

@@ -35,8 +35,23 @@ Sidekiq runs one process with a thread pool. Wurk runs a swarm of forked process
 - [Migration guide (Sidekiq → Wurk)](https://github.com/developerz-ai/wurk/blob/main/docs/migrate-from-sidekiq.md): the comprehensive cutover — parallelism, clustered Puma, dedicated worker, gem mappings, known incompatibilities, cutover checklist.
 - [Generated API reference (YARD)](https://developerz-ai.github.io/wurk/api/): params, return types, and examples for the public classes (`Wurk::Worker`, `Wurk::Client`, `Wurk::Configuration`, `Wurk::Batch`, `Wurk::Limiter`, `Wurk::Unique`, the `Sidekiq::*` aliases).
 - [README](https://github.com/developerz-ai/wurk/blob/main/README.md): overview, install, dashboard.
-- [Deployment](https://github.com/developerz-ai/wurk/blob/main/docs/deployment.md): systemd unit, Capistrano, Heroku/Procfile, signal handling.
+- [Configuration reference](https://github.com/developerz-ai/wurk/blob/main/docs/configuration.md): every option, env var, YAML key and CLI flag, with precedence, pool sizing, capsules, lifecycle events, error handlers, logging.
+- [Deployment](https://github.com/developerz-ai/wurk/blob/main/docs/deployment.md): systemd unit, Capistrano, Heroku/Procfile, signals, rolling restarts, `SIDEKIQ_MAXMEM_MB`, Docker, Kubernetes probes, leader election, sizing.
 - [Active Job adapter](https://github.com/developerz-ai/wurk/blob/main/docs/active-job.md): `queue_adapter = :wurk`.
+- [Testing jobs](https://github.com/developerz-ai/wurk/blob/main/docs/testing.md): fake/inline/disable modes, the jobs array, Minitest + RSpec setup. NOTE: `require "sidekiq/testing"` does NOT imply fake mode in Wurk — set the mode explicitly.
+- [Retries, backoff & the dead set](https://github.com/developerz-ai/wurk/blob/main/docs/retries.md): the failure lifecycle, `retry:` values, the `(count ** 4) + 15` backoff, `sidekiq_retry_in`, exhaustion, death handlers, dead-set limits.
+- [Batches](https://github.com/developerz-ai/wurk/blob/main/docs/batches.md): `Sidekiq::Batch`, success/complete/death callbacks, `Batch::Status`, nesting, expiry.
+- [Rate limiting](https://github.com/developerz-ai/wurk/blob/main/docs/rate-limiting.md): concurrent/bucket/window/leaky/points limiters, `within_limit`, `OverLimit` handling.
+- [Periodic (cron) jobs](https://github.com/developerz-ai/wurk/blob/main/docs/periodic-jobs.md): `config.periodic`, cron syntax, timezones, leader-gated single fire, missed windows.
+- [Unique jobs](https://github.com/developerz-ai/wurk/blob/main/docs/unique-jobs.md): `unique_for`/`unique_until`, lock-key derivation, `sidekiq_unique_context`, what it does not guarantee.
+- [Iterable jobs](https://github.com/developerz-ai/wurk/blob/main/docs/iterable-jobs.md): `build_enumerator`/`each_iteration`, cursors, interruption and resumption, cancellation.
+- [Reliability](https://github.com/developerz-ai/wurk/blob/main/docs/reliability.md): the delivery guarantee and its limits, reliable fetch, the orphan reaper, `reliable_scheduler!` (NOT a no-op), client-side outage buffering, transaction-aware client.
+- [Middleware](https://github.com/developerz-ai/wurk/blob/main/docs/middleware.md): client vs server chains, `call` signatures, registration and ordering, the built-ins.
+- [Data API](https://github.com/developerz-ai/wurk/blob/main/docs/api.md): `Stats`, `Queue` (incl. pause/unpause), `JobRecord`, the sorted sets, `ProcessSet`/`WorkSet`, the fast Lua paths, leader election.
+- [Metrics](https://github.com/developerz-ai/wurk/blob/main/docs/metrics.md): job-execution metrics, the `Metrics::Query` API, Statsd/DogStatsD, custom historical metrics.
+- [Metrics history](https://github.com/developerz-ai/wurk/blob/main/docs/metrics-history.md): the rollup buckets and retention behind the dashboard charts.
+- [Encryption](https://github.com/developerz-ai/wurk/blob/main/docs/encryption.md): AES-256-GCM on the last argument, key sources, rotation, decryption failures.
+- [Profiling](https://github.com/developerz-ai/wurk/blob/main/docs/profiling.md): per-job Vernier profiles, storage and retention, viewing them.
 - [Securing the dashboard](https://github.com/developerz-ai/wurk/blob/main/docs/dashboard.md): auth quick reference and web-extension registration for the mounted engine.
 - [Authentication & authorization](https://github.com/developerz-ai/wurk/blob/main/docs/authentication.md): full auth guide — Devise/Warden, Sorcery, Basic auth, API tokens, route gates, role-based read/write, read-only mode, CSRF.
 

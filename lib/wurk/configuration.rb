@@ -279,13 +279,17 @@ module Wurk
       @options[:fetch_poll_interval]
     end
 
-    # --- Reliability (Sidekiq Pro drop-in no-ops) ------------------------
+    # --- Reliability (Sidekiq Pro drop-in toggles) -----------------------
 
-    # Sidekiq Pro's opt-in toggles for reliable fetch and the reliable
-    # scheduler. Both are already the default in Wurk — the fetcher is always
-    # the reliable BLMOVE fetcher with orphan reclamation, and the scheduler is
-    # always atomic Lua — so the toggle itself is a no-op. They exist only so a
-    # Pro initializer drops in unchanged instead of raising NoMethodError.
+    # Sidekiq Pro's opt-in toggle for reliable fetch. Already the default in
+    # Wurk — the fetcher is always the reliable BLMOVE fetcher with orphan
+    # reclamation — so the toggle is a no-op beyond capturing the recovery
+    # callback. It exists so a Pro initializer drops in unchanged instead of
+    # raising NoMethodError.
+    #
+    # NOTE: `reliable_scheduler!` below is NOT a no-op. The default
+    # `scheduled_enq` pops then pushes and has a job-loss window
+    # (Wurk::Scheduled::Enq); only the toggle swaps in the atomic promoter.
     #
     # The optional block is Pro's recovery callback: `|jobstr, pill|`, fired
     # once per orphan recovery (`pill` nil) and once on a poison kill (`pill`

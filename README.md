@@ -59,8 +59,18 @@ Plus Wurk extras: a worker topology DSL, a Kubernetes liveness/readiness listene
 - **[API reference (YARD)](https://developerz-ai.github.io/wurk/api/)** — generated docs for the public classes (`Wurk::Worker`, `Wurk::Client`, `Wurk::Configuration`, `Wurk::Batch`, `Wurk::Limiter`, `Wurk::Unique`, and the `Sidekiq::*` aliases). Machine-readable map for AI agents: **[llms.txt](https://developerz-ai.github.io/wurk/llms.txt)**.
 - **[Getting started & architecture](https://github.com/developerz-ai/wurk/blob/main/docs/idea/01-overview.md)** — how the swarm, manager, fetcher, and processor fit together.
 - **[Starting the worker](https://github.com/developerz-ai/wurk/blob/main/docs/running.md)** — Rails auto-start, the `wurk`/`wurkswarm` runners, and running standalone without Rails.
+- **[Configuration reference](https://github.com/developerz-ai/wurk/blob/main/docs/configuration.md)** — every option, env var, YAML key, and CLI flag, with precedence and pool sizing.
+- **[Deploying](https://github.com/developerz-ai/wurk/blob/main/docs/deployment.md)** — systemd, Capistrano, Heroku, Docker, Kubernetes, rolling restarts, memory limits.
 - **[Active Job adapter](https://github.com/developerz-ai/wurk/blob/main/docs/active-job.md)** — run `ActiveJob`/`deliver_later` on Wurk with `queue_adapter = :wurk`.
+- **[Testing jobs](https://github.com/developerz-ai/wurk/blob/main/docs/testing.md)** — fake/inline modes, the jobs array, Minitest and RSpec setup.
 - **[Migrating from Sidekiq](#migrating-from-sidekiq)** — the one-line swap and what to expect.
+
+**Features:**
+
+- **[Retries, backoff & the dead set](https://github.com/developerz-ai/wurk/blob/main/docs/retries.md)** · **[Reliability](https://github.com/developerz-ai/wurk/blob/main/docs/reliability.md)** — the failure lifecycle, and the delivery guarantee with its limits.
+- **[Batches](https://github.com/developerz-ai/wurk/blob/main/docs/batches.md)** · **[Rate limiting](https://github.com/developerz-ai/wurk/blob/main/docs/rate-limiting.md)** · **[Periodic (cron) jobs](https://github.com/developerz-ai/wurk/blob/main/docs/periodic-jobs.md)** · **[Unique jobs](https://github.com/developerz-ai/wurk/blob/main/docs/unique-jobs.md)** — the Pro/Ent features, free.
+- **[Iterable jobs](https://github.com/developerz-ai/wurk/blob/main/docs/iterable-jobs.md)** · **[Middleware](https://github.com/developerz-ai/wurk/blob/main/docs/middleware.md)** · **[Encryption](https://github.com/developerz-ai/wurk/blob/main/docs/encryption.md)** · **[Profiling](https://github.com/developerz-ai/wurk/blob/main/docs/profiling.md)**
+- **[Data API](https://github.com/developerz-ai/wurk/blob/main/docs/api.md)** · **[Metrics](https://github.com/developerz-ai/wurk/blob/main/docs/metrics.md)** — inspect queues and jobs from Ruby; job metrics, Statsd/DogStatsD, custom history.
 - **API reference (parity specs):** [Sidekiq OSS](https://github.com/developerz-ai/wurk/blob/main/docs/target/sidekiq-free.md) · [Pro](https://github.com/developerz-ai/wurk/blob/main/docs/target/sidekiq-pro.md) · [Enterprise](https://github.com/developerz-ai/wurk/blob/main/docs/target/sidekiq-ent.md) — the authoritative surface Wurk matches exactly.
 - **[Authentication & authorization](https://github.com/developerz-ai/wurk/blob/main/docs/authentication.md)** — gate the dashboard behind Devise/Warden, Sorcery, Basic auth, or a token; role-based read/write; CSRF.
 - **[Securing the dashboard](https://github.com/developerz-ai/wurk/blob/main/docs/dashboard.md)** · **[Metrics history](https://github.com/developerz-ai/wurk/blob/main/docs/metrics-history.md)**
@@ -166,7 +176,7 @@ end
 | `/live` | 200 while the Launcher is running; 503 once `stop`/`quiet` is called. |
 | `/ready` | 200 only when Redis is reachable **and** the heartbeat fired within `ready_window` (default 30s); 503 otherwise. |
 
-Knobs: `health_check(port:, bind: "0.0.0.0", ready_window: 30)`. In swarm mode only the first child to `start` binds the port.
+Knobs: `health_check(port:, bind: "0.0.0.0", ready_window: 30)`. In swarm mode one child owns the port; the others poll every 5s and take it over if the owner dies, so probes survive a child restart.
 
 ## Migrating from Sidekiq
 

@@ -232,7 +232,7 @@ module Wurk
 
     # Cluster-total throughput/failures time-series for the dashboard charts.
     # `:bucket` is 1m/5m/1h; `?window=24h` (s/m/h/d suffix) is clamped to the
-    # bucket's retention. Recharts-ready array under `series`.
+    # bucket's retention. Chart-ready array under `series`.
     def history
       window = parse_window(params[:window])
       series = ::Wurk::Web::Enterprise::Historical.history(params[:bucket].to_s, window: window)
@@ -255,7 +255,7 @@ module Wurk
     # Per-queue size/latency gauge time-series for the Metrics/Historical tab.
     # `:bucket` is 1m/5m/1h; `?window=24h` (s/m/h/d) is clamped to the bucket's
     # retention; optional `?queue=<name>` narrows to one queue. Each queue's
-    # `points` are Recharts-ready.
+    # `points` are chart-ready.
     def queue_history
       window = parse_window(params[:window])
       queues = params[:queue].present? ? [params[:queue].to_s] : nil
