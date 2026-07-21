@@ -1,5 +1,10 @@
 # Securing the dashboard
 
+> **Full guide: [Authentication & authorization](authentication.md)** — Devise,
+> Warden, Sorcery, Basic auth, API tokens, route gates, role-based read/write
+> splits, the CSRF model, and what isn't gated. This page is the quick
+> reference plus the web-extension surface.
+
 The Wurk dashboard is a mountable Rails engine. It ships **no session layer of
 its own** — the first thing every production deploy does is gate it behind the
 host app's existing authentication, and Wurk gives you two hooks to do that

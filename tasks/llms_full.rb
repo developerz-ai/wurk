@@ -23,6 +23,7 @@ module WurkDocs
       docs/deployment.md
       docs/active-job.md
       docs/dashboard.md
+      docs/authentication.md
       docs/metrics-history.md
     ].freeze
 

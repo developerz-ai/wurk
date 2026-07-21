@@ -62,6 +62,7 @@ Plus Wurk extras: a worker topology DSL, a Kubernetes liveness/readiness listene
 - **[Active Job adapter](https://github.com/developerz-ai/wurk/blob/main/docs/active-job.md)** — run `ActiveJob`/`deliver_later` on Wurk with `queue_adapter = :wurk`.
 - **[Migrating from Sidekiq](#migrating-from-sidekiq)** — the one-line swap and what to expect.
 - **API reference (parity specs):** [Sidekiq OSS](https://github.com/developerz-ai/wurk/blob/main/docs/target/sidekiq-free.md) · [Pro](https://github.com/developerz-ai/wurk/blob/main/docs/target/sidekiq-pro.md) · [Enterprise](https://github.com/developerz-ai/wurk/blob/main/docs/target/sidekiq-ent.md) — the authoritative surface Wurk matches exactly.
+- **[Authentication & authorization](https://github.com/developerz-ai/wurk/blob/main/docs/authentication.md)** — gate the dashboard behind Devise/Warden, Sorcery, Basic auth, or a token; role-based read/write; CSRF.
 - **[Securing the dashboard](https://github.com/developerz-ai/wurk/blob/main/docs/dashboard.md)** · **[Metrics history](https://github.com/developerz-ai/wurk/blob/main/docs/metrics-history.md)**
 - **[Compatibility & legal basis](https://github.com/developerz-ai/wurk/blob/main/docs/clean-room.md)** — clean-room implementation: Wurk copies the API, not the code (Google v. Oracle).
 - **Live demo:** [wurk.demo.developerz.ai](https://wurk.demo.developerz.ai)
@@ -103,7 +104,16 @@ Mount the engine wherever you like:
 mount Wurk::Engine => "/wurk"
 ```
 
-The precompiled SPA ships inside the gem, so consumers never run Node. Gate it behind your app's auth with one line — see **[Securing the dashboard](https://github.com/developerz-ai/wurk/blob/main/docs/dashboard.md)** for Devise/Warden/Sorcery recipes:
+On Devise, wrap it in `authenticate` so only signed-in admins reach it — unauthenticated visitors get bounced to your login page:
+
+```ruby
+# config/routes.rb
+authenticate :user, ->(u) { u.admin? } do
+  mount Wurk::Engine => "/wurk"
+end
+```
+
+The precompiled SPA ships inside the gem, so consumers never run Node. Outside Rails routing — or when you'd rather keep auth next to the rest of your Wurk config — gate it with any Rack middleware; see **[Authentication & authorization](https://github.com/developerz-ai/wurk/blob/main/docs/authentication.md)** for Devise/Warden/Sorcery/token recipes, role-based read/write splits, and the CSRF model:
 
 ```ruby
 Wurk::Web.use(Rack::Auth::Basic, "Wurk") { |user, pass| user == ENV["WURK_USER"] && pass == ENV["WURK_PASS"] }

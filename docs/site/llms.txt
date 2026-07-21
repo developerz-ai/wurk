@@ -37,7 +37,8 @@ Sidekiq runs one process with a thread pool. Wurk runs a swarm of forked process
 - [README](https://github.com/developerz-ai/wurk/blob/main/README.md): overview, install, dashboard.
 - [Deployment](https://github.com/developerz-ai/wurk/blob/main/docs/deployment.md): systemd unit, Capistrano, Heroku/Procfile, signal handling.
 - [Active Job adapter](https://github.com/developerz-ai/wurk/blob/main/docs/active-job.md): `queue_adapter = :wurk`.
-- [Securing the dashboard](https://github.com/developerz-ai/wurk/blob/main/docs/dashboard.md): auth recipes for the mounted engine.
+- [Securing the dashboard](https://github.com/developerz-ai/wurk/blob/main/docs/dashboard.md): auth quick reference and web-extension registration for the mounted engine.
+- [Authentication & authorization](https://github.com/developerz-ai/wurk/blob/main/docs/authentication.md): full auth guide — Devise/Warden, Sorcery, Basic auth, API tokens, route gates, role-based read/write, read-only mode, CSRF.
 
 ## Authoritative API specs
 
