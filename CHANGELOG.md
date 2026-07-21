@@ -4,6 +4,38 @@ All notable changes to Wurk are recorded here. Format: [Keep a Changelog](https:
 
 ## [Unreleased]
 
+## [1.2.0] - 2026-07-21
+
+Writing the feature documentation against the implementation — rather than against the parity specs — surfaced a cluster of features that looked enabled but quietly did nothing. This release fixes them. Every fix carries a regression test that fails without it.
+
+### Fixed
+- **Testing — `require "sidekiq/testing"` did not enable fake mode** — under Sidekiq that require flips testing into `:fake` as a side effect; Wurk's file was a bare `require "wurk"` and the default mode is `:disable`. A migrated suite therefore pushed into **real Redis** while every `MyJob.jobs` assertion came back empty, often without failing. The require now warns once per process (deprecated in Sidekiq 8 in favour of `Sidekiq.testing!`) and enables `:fake`, and it never overrides a mode the suite already chose explicitly.
+- **`perform_inline` / `perform_sync` bypassed both middleware chains** — they called `#perform` directly, so unique-job locks were taken at push and never released (leaking until TTL), batch callbacks never fired, and no retry or logging middleware ran. Inline execution now mirrors Sidekiq 8: client chain → JSON round trip → server chain.
+- **Unique jobs — ActiveJob dedup was a silent no-op** — an ActiveJob payload's args are `[job.serialize]`, a hash carrying a fresh `job_id` and `enqueued_at` on every push, so the default digest never repeated and nothing was ever deduplicated. ActiveJob-wrapped payloads now narrow the digest to the wrapped `job_class` and its `arguments`. Retry counters are deliberately excluded so a retry re-push still matches its own lock.
+- **Unique jobs — `unique_for:` + `encrypt: true` silently depended on initializer order** — both features append to the same client chain, so whether the digest saw plaintext args or a random-IV encryption envelope depended on which ran first; in the envelope case uniqueness never matched again. Pushing a worker that sets both now raises `Wurk::Unique::ConfigurationError`. This is stricter than Sidekiq Enterprise, which documents the incompatibility but lets the silent mis-dedup through.
+- **`Wurk::Unique.locked?` ignored `sidekiq_unique_context`** — the probe always digested `[class, queue, args]` while the push path honoured the hook, so it reported "free" for every worker with a custom context. It now routes through the same derivation as the push path.
+- **Batches — `callback_class` was inert** — the field was stored and round-tripped but never read, so a class-less `"#method"` callback target silently never fired (a drop-in break for Sidekiq Pro apps using that form). All four documented target forms now resolve. An unresolvable target raises `Wurk::Batch::CallbackJob::UnresolvableTarget` and goes straight to the dead set on the first attempt rather than crash-looping through 25 retries for ~21 days — a `NameError` does not heal with time, so the failure is made visible immediately.
+- **Periodic — editing or removing a schedule left the old loop firing forever** — `Cron.unregister` had zero callers despite a comment claiming a Web UI delete action and a config-reload path drove it, so a changed schedule left both the old and new loop running. Registration now prunes loops it supersedes, scoped by class so a process registering a subset never touches another's loops and a client-only process deletes nothing. A `register` line deleted outright still needs manual removal — nothing in the surviving code names that class.
+- **Periodic — a dashboard pause was undone by the next deploy** — `register` rewrote the whole loop hash including `paused => "0"`. `paused` is now written with `HSETNX`: code declares the initial value at first registration, and the runtime owns it thereafter.
+- **Iterable jobs — no cursor checkpoint on graceful shutdown** — the run loop never consulted the processor's stopping flag, so on TERM/TSTP/USR1 it kept iterating until the deadline, where `Wurk::Shutdown` (an `Interrupt`) escaped the `rescue Interrupted` (a `RuntimeError`). Everything since the last periodic checkpoint was redone on resume. The loop now polls `interrupted?` at each iteration boundary and takes the existing flush-and-re-push path.
+- **Iterable jobs — cancelled jobs re-cycled at the head of the queue for three days** — `finalize_interrupted` never deleted the `cancelled` field, so each resume tripped its first check and re-pushed, burning a fetch slot per cycle until the `CANCELLATION_PERIOD` TTL expired. A cancelled job now terminates and deletes its state.
+- **Metrics — `top_jobs(hours:)` raised above 8 hours** — the argument was validated against `MAX_HOURS` (72), converted to `hours * 60`, then re-validated against `MAX_MINUTES` (480), so the documented 72-hour ceiling was unreachable. Each argument is now checked against its own cap; 72h is backed by the 3-day minute-bucket retention.
+- **Search and the job APIs emitted a null queue** — `SortedEntry` passed the raw JSON string to `JobRecord`, which only derives `@queue` from a pre-parsed Hash, so `#queue` was `nil` for every entry from `each`/`scan`/`fetch`. Dashboard search and the retry/scheduled/dead endpoints all reported `queue: nil`.
+- **Dashboard — limiter Reset did nothing for bucket limiters** — the web path deleted a bare `lmtr-b:{name}` while the counter lives at `lmtr-b:{name}:{epoch}`. It now rebuilds the limiter from its persisted metadata and delegates to the type's own `reset`.
+
+### Changed
+- **`perform_inline` returns `true`/`nil`** (nil when middleware halts the job) instead of `#perform`'s return value, matching Sidekiq's contract. It now also touches Redis, since it runs the real chains.
+- **SIGTSTP (quiet) interrupts an in-flight iterable job** at the next iteration boundary instead of letting it run to completion. Quiet sets the same processor flag as TERM, which is how upstream Sidekiq behaves.
+
+### Documentation
+- Fifteen new guides covering features that previously had no user-facing page: authentication, configuration, testing, retries and the dead set, batches, rate limiting, periodic jobs, unique jobs, iterable jobs, reliability, middleware, the Data API, metrics, encryption, and profiling. `deployment.md` gains rolling restarts, `SIDEKIQ_MAXMEM_MB`, Docker, Kubernetes probes, leader election, and sizing.
+- **`config.reliable_scheduler!` was wrongly documented as an accepted no-op** in the source comment, the configuration reference, and the migration guide. It is not: the default `scheduled_enq` pops then pushes and has a job-loss window, and the toggle swaps in the atomic promoter. A Sidekiq Pro user following the old migration guide would have dropped a call that was protecting them. Only `super_fetch!` is a genuine no-op.
+- Corrected a documented `CONT` signal that has no handler (quiet is one-way), and a README claim that only the first swarm child binds the health port (non-owner children poll and take it over when the owner dies).
+
+### Upgrading
+- **ActiveJob unique digests change derivation.** Nothing can become permanently stuck — `unique_for` is mandatory and every lock key carries an `EX` — but during a rolling deploy old and new processes compute different keys for ActiveJob payloads, so dedup is split across two namespaces for the length of the deploy. Locks written by the old code were write-only garbage that never matched anything and simply expire. Apps using the documented `sidekiq_unique_context` workaround on the wrapper are unaffected; the hook still takes precedence.
+- If any worker sets both `unique_for:` and `encrypt: true`, enqueuing it now raises. Drop one of the two options.
+
 ## [1.1.2] - 2026-07-18
 
 ### Fixed
