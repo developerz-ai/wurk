@@ -19,6 +19,9 @@ triage:
   ask_for_repro: true
   required_fields: [steps, expected, actual, version]
   qualify_into: [bug, feature, dupe, question]
+  # Dogfood: lower than the 0.6 default so a moderately-scoped plan hands off to
+  # the coding fleet instead of escalating for review (exercises the handoff loop).
+  confidence_threshold: 0.4
 
 handoff:
   mode: webhook
