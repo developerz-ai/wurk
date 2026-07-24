@@ -5,6 +5,9 @@ AllCops:
     - "test/dummy/db/**/*"
     - "test/dummy/tmp/**/*"
     - "test/dummy/log/**/*"
+    # The dummy app's own vendored bundle: gems ship .rubocop.ymls that
+    # inherit_gem configs we don't install, crashing config resolution.
+    - "test/dummy/vendor/**/*"
     - "vendor/**/*"
     - "frontend/**/*"
     # The demo is a standalone Rails app (Rails-idiomatic style), not gem source.
