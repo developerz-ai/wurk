@@ -4,6 +4,18 @@ All notable changes to Wurk are recorded here. Format: [Keep a Changelog](https:
 
 ## [Unreleased]
 
+## [1.2.1] - 2026-07-24
+
+Dependency and tooling refresh; no behavior changes to job processing.
+
+### Changed
+- **Dashboard dependencies updated to latest** — solid-js 1.9.14, @tanstack/solid-query 5.101.4, vite 8.1.5, tailwindcss/daisyui 4.3.3/5.7.0, sass 1.101.7, vitest 4.1.10, @testing-library/jest-dom 7.0.0. The precompiled bundle shipped in the gem is rebuilt against them.
+- **CI actions bumped to latest majors** — checkout v7, configure-pages v6, deploy-pages v5, docker login/buildx v4, plus grouped minor updates.
+
+### Infrastructure
+- Dependabot PRs for minor/patch updates now auto-approve and auto-merge once required checks pass; majors still get manual review. Gem (bundler) updates observe a 14-day cooldown after upstream release before a bump PR opens.
+- Fixed `rubocop` crashing on config resolution when `test/dummy/vendor/bundle` exists locally (vendored gems ship `.rubocop.yml`s inheriting configs we don't install).
+
 ## [1.2.0] - 2026-07-21
 
 Writing the feature documentation against the implementation — rather than against the parity specs — surfaced a cluster of features that looked enabled but quietly did nothing. This release fixes them. Every fix carries a regression test that fails without it.
