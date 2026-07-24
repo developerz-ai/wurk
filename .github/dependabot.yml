@@ -2,6 +2,8 @@
 # PR noise low (majors still open individually — they need their own review).
 # Bundler is scoped to the root Gemfile (the shipped gem via the gemspec);
 # test/dummy, demo, and test/ecosystem Gemfiles are fixtures, not shipped deps.
+# Gem bumps wait 14 days after a version is published (cooldown) so brand-new
+# releases can be yanked/fixed upstream before we pick them up.
 version: 2
 updates:
   - package-ecosystem: bundler
@@ -9,6 +11,8 @@ updates:
     schedule:
       interval: weekly
     open-pull-requests-limit: 5
+    cooldown:
+      default-days: 14
     groups:
       minor-and-patch:
         update-types:
