@@ -38,8 +38,12 @@ on:
         default: main
         type: string
 
+# Hardcoded group: under workflow_call `github.workflow` is the CALLER's name,
+# which put this job in the caller's own group — GitHub detects that as a
+# deadlock and cancels the run. A fixed name also serializes every demo deploy,
+# so two builds can't race pushing the `:latest` digest Image Updater watches.
 concurrency:
-  group: ${{ github.workflow }}-${{ github.ref }}
+  group: deploy-demo
   cancel-in-progress: false
 
 # Least privilege at the workflow level; the build job opts into packages:write.
