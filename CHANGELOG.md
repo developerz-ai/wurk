@@ -4,6 +4,23 @@ All notable changes to Wurk are recorded here. Format: [Keep a Changelog](https:
 
 ## [Unreleased]
 
+## [1.3.1] - 2026-07-26
+
+Two drop-in gaps found in one production deploy, both of which only bite the worker process — so the web app looks healthy while nothing gets done. Each fix carries a regression test that fails without it.
+
+### Fixed
+- **`mount Wurk::Engine` in `config/routes.rb` crashed `wurk` / `wurkswarm` on boot** — with `uninitialized constant Wurk::Engine`, from the exact routes line the README and the migration guide tell you to write. `lib/wurk.rb` loads the engine behind a `defined?(Rails::Engine)` guard evaluated once at require time; the standalone runners require `wurk` *before* Rails exists, then boot the host app themselves, by which point `wurk` is in `$LOADED_FEATURES` and the app's own `Bundler.require` can't re-evaluate the guard. Web processes were unaffected (there `Bundler.require` runs after railties), so this reached production looking like a worker-only mystery. `Wurk::Engine` now resolves on demand behind the same guard. No `require "wurk/rails"` in routes.rb needed, and a genuinely non-Rails standalone boot still loads zero Rails code — nothing references the constant, so nothing loads.
+- **Sidekiq's `network_timeout` (and friends) killed every swarm child on boot** — `config.redis = { url:, driver:, network_timeout: 5, pool_timeout: 5 }`, an ordinary Sidekiq initializer, raised `ArgumentError: unknown keyword: :network_timeout` from redis-client. Sidekiq normalized its `config.redis` hash internally before handing it over; Wurk splatted it straight through. Because the swarm parent closes its connections *before* forking and only the children build pools, the parent stayed up and healthy — Running pod, passing liveness probe, respawn-backoff loop churning forever, zero jobs processed. `Wurk::RedisOptions` now performs Sidekiq's translation for every pool-building path:
+  - `network_timeout` / `timeout` fan out to `connect_timeout` / `read_timeout` / `write_timeout`. Not forwarded verbatim: Wurk sets all three explicitly (the split-timeout fix in 1.0.x), and redis-client lets an explicit `read_timeout` beat `timeout`, so passing the umbrella through would have silently dropped the host's value. A host-supplied split timeout still wins over the fan-out.
+  - `sentinels:` now builds the pool through `RedisClient.sentinel` — `RedisClient.config` rejects the key outright, so Sentinel deployments hit the same crash. `master_name` maps to `name`; `driver` and `role` are symbolized.
+  - `logger`, `cluster_safe` and `pool_name` are accepted and dropped, as Sidekiq did.
+  - `namespace` and `nodes` raise naming the key and its replacement, and any other key redis-client would reject raises listing the supported set — read off redis-client's own signatures, so it can't drift from the installed version.
+  - `config.redis =` validates on assignment, so a bad hash fails in the process running your initializer instead of inside a forked child nobody is watching.
+
+### Documentation
+- `docs/running.md`, `docs/configuration.md` and `docs/migrate-from-sidekiq.md` §3 promised the standalone runners "do fully boot your Rails app" while not loading the engine — true of the engine's *Rails lifecycle* (no initializers, routes or assets), but read as a guarantee that mounting the dashboard was safe, which it wasn't. The claim is now split: the engine doesn't start, but the constant resolves.
+- `docs/migrate-from-sidekiq.md` §1 implied `config.redis = {...}` was verbatim-compatible. It gains a per-key table (pass through / translated / rejected) and an upgrade note.
+
 ## [1.3.0] - 2026-07-26
 
 Error reporting. `sentry-sidekiq` is the one common add-on that cannot be installed alongside Wurk at all, and the obvious workaround — hanging a reporter off `config.error_handlers` — silently reports nothing from your jobs, because job failures never reach that hook. This release ships the integration Wurk should have had, and documents the trap for anyone rolling their own.
