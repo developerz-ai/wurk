@@ -374,6 +374,36 @@ Mapping from `sidekiq-unique-jobs`:
 > ⚠️ Unique jobs and encryption are **mutually exclusive on the same worker** — each
 > encryption produces different ciphertext, which defeats the uniqueness digest.
 
+### `sentry-sidekiq` → native `Wurk::Sentry`
+
+`sentry-sidekiq` is the one common add-on that **cannot be installed alongside
+Wurk at all**: its gemspec declares `add_dependency "sidekiq"`, so `bundle
+install` pulls real Sidekiq back in and `require "sidekiq"` loads a hybrid of
+the two. Use the built-in integration instead — no extra gem:
+
+```ruby
+# Gemfile: keep sentry-ruby, drop sentry-sidekiq
+
+# config/initializers/wurk.rb
+require "wurk/sentry"
+
+Wurk.configure_server do |config|
+  Wurk::Sentry.install!(config)
+end
+```
+
+It reports job failures **and** the worker-process errors that never become a
+job failure — both halves are required on Wurk, because `JobRetry` swallows job
+exceptions before `config.error_handlers` ever sees them. A hand-rolled
+`config.error_handlers << ->(ex, ctx, cfg) { Sentry.capture_exception(ex) }`
+therefore silently reports *no job errors at all*; this is the single most
+common Sidekiq-era error-reporting trap on Wurk.
+
+Only the terminal failure is reported (not all 25 retry attempts), job `args`
+are never sent, and self-healing Redis/pool blips are filtered out of the fetch
+loop. Full setup, options, and a `sentry-sidekiq` migration table:
+[**docs/sentry.md**](sentry.md).
+
 ### Quick reference — other ecosystem gems
 
 These run their own upstream suites against Wurk in CI; most work unchanged because
@@ -387,6 +417,7 @@ they only touch the Sidekiq API surface and Redis keys Wurk already mirrors.
 | `sidekiq-throttled` | ✅ works unchanged | client/server middleware contract is identical |
 | `sidekiq-cron` | ⚠️ prefer native | works in CI, but native `config.periodic` is recommended (no `Sidekiq::Cron::Job` constant) |
 | `sidekiq-unique-jobs` | ⚠️ prefer native | works in CI, but native `unique_for:` is recommended |
+| `sentry-sidekiq` | ❌ incompatible | its gemspec depends on `sidekiq`, so bundling it reinstalls real Sidekiq. Use [`Wurk::Sentry`](sentry.md) |
 
 ---
 
@@ -428,6 +459,20 @@ issue** — that feedback is part of the v1.0.0 acceptance gate for this guide.
 8. **`Sidekiq.pro?` and `Sidekiq.ent?` return `false`** — Wurk is free and reports
    itself as OSS, even though the Pro/Ent features are present. Don't gate behavior on
    these predicates.
+9. **`sentry-sidekiq` cannot be installed** — its gemspec declares
+   `add_dependency "sidekiq"`, so Bundler installs real Sidekiq alongside Wurk and
+   `require "sidekiq"` loads a broken hybrid. Wurk ships its own integration:
+   `require "wurk/sentry"` + `Wurk::Sentry.install!(config)`. See
+   [`docs/sentry.md`](sentry.md).
+10. **Job failures do not reach `config.error_handlers`.** `JobRetry#local`
+    rescues the exception, books the retry, and raises `Wurk::JobRetry::Handled`,
+    which the processor swallows. Error handlers see fetch-loop errors, shutdown
+    errors, invalid JSON, and retry-machinery meta-errors — never a job
+    exception. Any error reporter wired only into `error_handlers` (Sentry,
+    Honeybadger, Bugsnag, a custom Slack notifier) will report nothing from your
+    jobs; it needs a **server middleware** as well. `Wurk::Sentry` registers both;
+    model a custom reporter on
+    [`lib/wurk/sentry/middleware.rb`](../lib/wurk/sentry/middleware.rb).
 
 ---
 

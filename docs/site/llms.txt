@@ -29,6 +29,11 @@ Sidekiq runs one process with a thread pool. Wurk runs a swarm of forked process
 - `sidekiq-cron` → native `config.periodic { |mgr| mgr.register("*/5 * * * *", MyJob) }`. There is no `Sidekiq::Cron::Job` shim by design.
 - `sidekiq-unique-jobs` → native uniqueness: call `Sidekiq::Enterprise.unique!` once, then `sidekiq_options unique_for: 600, unique_until: :success` (`:start` releases the lock at perform start). Customize the dedup key with `self.sidekiq_unique_context(job)`.
 - `sidekiq-scheduler`, `sidekiq-status`, `sidekiq-failures`, `sidekiq-throttled` work unchanged; their upstream suites run against Wurk in CI.
+- `sentry-sidekiq` is **incompatible** — its gemspec declares `add_dependency "sidekiq"`, so bundling it reinstalls real Sidekiq alongside Wurk and `require "sidekiq"` loads a broken hybrid. Use the built-in integration: `require "wurk/sentry"` then `Wurk.configure_server { |config| Wurk::Sentry.install!(config) }`.
+
+## Error reporting (the trap)
+
+Job failures do NOT reach `config.error_handlers`. `Wurk::JobRetry#local` rescues the exception, books the retry, and raises `Wurk::JobRetry::Handled`, which `Wurk::Processor#process` swallows. Error handlers only see fetch-loop errors (`context: "Error fetching job"`), shutdown errors (`"!shutdown"`), invalid JSON, and retry-machinery meta-errors. Any error reporter wired only into `error_handlers` reports nothing from your jobs — it also needs a **server middleware**. `Wurk::Sentry` registers both, reports only the terminal failure (not all 25 retry attempts), never sends job `args`, and filters self-healing Redis/connection-pool blips out of the fetch loop.
 
 ## Docs
 
@@ -50,6 +55,7 @@ Sidekiq runs one process with a thread pool. Wurk runs a swarm of forked process
 - [Data API](https://github.com/developerz-ai/wurk/blob/main/docs/api.md): `Stats`, `Queue` (incl. pause/unpause), `JobRecord`, the sorted sets, `ProcessSet`/`WorkSet`, the fast Lua paths, leader election.
 - [Metrics](https://github.com/developerz-ai/wurk/blob/main/docs/metrics.md): job-execution metrics, the `Metrics::Query` API, Statsd/DogStatsD, custom historical metrics.
 - [Metrics history](https://github.com/developerz-ai/wurk/blob/main/docs/metrics-history.md): the rollup buckets and retention behind the dashboard charts.
+- [Sentry](https://github.com/developerz-ai/wurk/blob/main/docs/sentry.md): `Wurk::Sentry.install!`, why `sentry-sidekiq` cannot be used, terminal-failure-only reporting, transport-noise filtering, migrating off `sentry-sidekiq`.
 - [Encryption](https://github.com/developerz-ai/wurk/blob/main/docs/encryption.md): AES-256-GCM on the last argument, key sources, rotation, decryption failures.
 - [Profiling](https://github.com/developerz-ai/wurk/blob/main/docs/profiling.md): per-job Vernier profiles, storage and retention, viewing them.
 - [Securing the dashboard](https://github.com/developerz-ai/wurk/blob/main/docs/dashboard.md): auth quick reference and web-extension registration for the mounted engine.

@@ -34,6 +34,7 @@ module WurkDocs
       docs/middleware.md
       docs/api.md
       docs/metrics.md
+      docs/sentry.md
       docs/encryption.md
       docs/profiling.md
       docs/dashboard.md
