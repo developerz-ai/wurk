@@ -106,6 +106,32 @@ class RedisPoolTest < Wurk::Test::UnitCase
     assert_equal('PONG', @pool.with { |c| c.call('PING') })
   end
 
+  # --- Sidekiq-shaped option hashes (#283) ---
+
+  # The exact initializer from the production report:
+  # `config.redis = { url:, driver:, network_timeout: 5, pool_timeout: 5 }`.
+  def test_sidekiq_shaped_options_build_a_working_pool
+    @pool = Wurk::RedisConnection.create(url: Wurk::Test.redis_url, driver: :ruby,
+                                         network_timeout: 5, pool_timeout: 5)
+
+    assert_equal 5, @pool.client_config[:read_timeout]
+    assert_in_delta 5, @pool.pool_timeout
+    assert_equal('PONG', @pool.with { |c| c.call('PING') })
+  end
+
+  def test_sentinel_options_route_through_redis_client_sentinel
+    @pool = Wurk::RedisPool.new(size: 1, sentinels: [{ host: '127.0.0.1', port: 26_379 }],
+                                master_name: 'mymaster')
+
+    assert_instance_of RedisClient::SentinelConfig, @pool.send(:redis_client_config)
+  end
+
+  def test_unsupported_option_raises_naming_the_key
+    error = assert_raises(ArgumentError) { Wurk::RedisPool.new(size: 1, namespace: 'app') }
+
+    assert_includes error.message, 'config.redis[:namespace]'
+  end
+
   def test_with_yields_a_usable_redis_connection
     @pool = build_pool
 

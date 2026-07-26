@@ -224,6 +224,22 @@ module Wurk
     def ent?
       false
     end
+
+    # Lazily loads the Rails engine the first time something asks for
+    # `Wurk::Engine`. See the note above the `require "wurk/rails"` guard at the
+    # bottom of this file for why the guard alone isn't enough (#282), and why
+    # this loads the engine and not the railtie.
+    def const_missing(name)
+      return super unless name == :Engine
+      return super unless defined?(::Rails::Engine) && defined?(::ActionDispatch::Routing::RouteSet)
+
+      require_relative 'wurk/engine'
+      # If engine.rb somehow didn't define it, fall through to the real NameError
+      # rather than recursing back into here.
+      return super unless const_defined?(:Engine, false)
+
+      const_get(:Engine, false)
+    end
   end
 end
 
@@ -330,30 +346,18 @@ require_relative 'wurk/rails' if defined?(Rails::Engine) && defined?(::ActionDis
 # Wurk::Engine`, from the worker process only. Web processes are unaffected:
 # there Bundler.require runs after railties, so the gate passes.
 #
-# const_missing closes that window without giving up the lean standalone boot:
-# nothing loads until something actually asks for Wurk::Engine, and even then
-# only when Rails is really present. The gate is the same two-part condition as
-# above, so the ecosystem carve-out (rails/engine/railties without ActionDispatch,
-# per sidekiq-cron's test helper) still falls through to a plain NameError
-# instead of crashing on `isolate_namespace`.
+# `Wurk.const_missing` (defined in the class << self block above) closes that
+# window without giving up the lean standalone boot: nothing loads until
+# something actually asks for Wurk::Engine, and even then only when Rails is
+# really present. It reuses the same two-part condition as the guard above, so
+# the ecosystem carve-out (rails/engine/railties without ActionDispatch, per
+# sidekiq-cron's test helper) still falls through to a plain NameError instead of
+# crashing on `isolate_namespace`.
 #
-# Deliberately `wurk/engine` and not `wurk/rails`: the railtie's
+# It deliberately loads `wurk/engine`, not `wurk/rails`: the railtie's
 # `config.after_initialize` is a *global* ActiveSupport load hook registered at
 # require time, and routes are drawn before those hooks run — so dragging the
-# railtie in here would fork a swarm inside a `wurkswarm` parent that is about to
-# fork its own. The runner owns the swarm; the routes file only needs the
-# constant. `defined?(Wurk::Engine)` stays nil until then, which is what the
+# railtie in there would fork a swarm inside a `wurkswarm` parent that is about
+# to fork its own. The runner owns the swarm; the routes file only needs the
+# constant. `defined?(Wurk::Engine)` stays nil until first use, which is what the
 # "standalone stays Rails-free" tests assert.
-module Wurk
-  def self.const_missing(name)
-    return super unless name == :Engine
-    return super unless defined?(::Rails::Engine) && defined?(::ActionDispatch::Routing::RouteSet)
-
-    require_relative 'wurk/engine'
-    # Guard against recursing back into const_missing if the require somehow
-    # didn't define it (a partially-loaded engine.rb) — raise the real NameError.
-    return super unless const_defined?(:Engine, false)
-
-    const_get(:Engine, false)
-  end
-end
