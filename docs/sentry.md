@@ -17,7 +17,7 @@ Because it cannot be installed alongside Wurk. `sentry-sidekiq`'s gemspec
 declares:
 
 ```ruby
-spec.add_dependency "sidekiq", ">= 3.0"
+spec.add_dependency "sidekiq", ">= 5.0"   # sentry-sidekiq 6.6.2
 ```
 
 Wurk is a drop-in *replacement*, not a plugin: you remove the `sidekiq` gem and
