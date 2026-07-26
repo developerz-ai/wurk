@@ -21,6 +21,11 @@ group :development, :test do
   gem "rubocop", require: false
   gem "rubocop-minitest", require: false
   gem "rubocop-rake", require: false
+  # Development-only, and deliberately never a gemspec runtime dependency:
+  # `lib/wurk/sentry.rb` guards every call site on `defined?(::Sentry)`, so the
+  # integration is inert without it. Present here so SentrySdkSurfaceTest can
+  # assert the real SDK objects still respond to the methods Wurk calls.
+  gem "sentry-ruby", require: false
   gem "benchmark-ips"
   gem "memory_profiler"
   gem "pry"
