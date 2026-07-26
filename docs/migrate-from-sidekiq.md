@@ -86,7 +86,7 @@ Config options verified identical (`lib/wurk/configuration.rb`):
 |---|---|
 | `concurrency` | threads per worker process (default `5`) |
 | `queues` | ordered/weighted queue list |
-| `redis = { url:, … }` | defaults to `ENV["REDIS_URL"]` → `redis://localhost:6379/0` |
+| `redis = { url:, … }` | defaults to `ENV["REDIS_URL"]` → `redis://localhost:6379/0`; see the key notes below |
 | `logger`, `logger =` | standard `Logger` |
 | `timeout` | job + shutdown grace seconds (default `25`) |
 | `error_handlers`, `death_handlers` | arrays of callables |
@@ -94,6 +94,30 @@ Config options verified identical (`lib/wurk/configuration.rb`):
 | `on(:startup\|fork\|quiet\|shutdown\|exit\|heartbeat\|beat\|leader)` | lifecycle hooks |
 | `capsule(name) { … }` | multi-queue capsules (Sidekiq 7+) |
 | `periodic { \|mgr\| mgr.register(...) }` | cron jobs (Enterprise parity, free) |
+
+### `config.redis` keys
+
+The hash is Sidekiq's, but it isn't verbatim redis-client: Sidekiq normalized it
+internally before handing it over, and Wurk does the same translation so your existing
+initializer needs no edit.
+
+| Sidekiq key | Wurk |
+|---|---|
+| `url`, `db`, `username`, `password`, `ssl`, `ssl_params`, `driver`, `sentinels`, … | ✅ pass through |
+| `size`, `pool_timeout`, `pool_name` | ✅ pool-structural, consumed by Wurk |
+| `network_timeout` / `timeout` | ✅ fanned out to `connect_timeout` / `read_timeout` / `write_timeout` — Wurk splits them by default, and an explicitly-set one wins |
+| `master_name` | ✅ → `name`; with `sentinels:` the pool is built via `RedisClient.sentinel` |
+| `logger`, `cluster_safe` | ✅ accepted and dropped (as Sidekiq does) |
+| `namespace` | ❌ raises — Wurk has no namespacing (§4). Give it its own Redis database or instance |
+| `nodes` | ❌ raises — Redis Cluster is unsupported |
+
+Anything else redis-client would reject raises on assignment, naming the key.
+
+> ⚠️ **Upgrade note (1.3.1).** Through 1.3.0 the hash was splatted straight into
+> redis-client, so `network_timeout` (and the other Sidekiq-only spellings) raised
+> `ArgumentError: unknown keyword`. The swarm parent doesn't build a pool, so this only
+> killed the forked children — a Running pod with a passing liveness probe processing
+> zero jobs. Fixed in 1.3.1 ([#283](https://github.com/developerz-ai/wurk/issues/283)).
 
 > ℹ️ **`config.on(:fork)`** fires in each swarm child after fork — Wurk already
 > reconnects DB/Redis for you (it closes parent connections before forking and each
@@ -210,9 +234,18 @@ bundle exec wurkswarm -C config/wurk.yml -e production   # forked swarm (real pa
 bundle exec wurk      -C config/wurk.yml -e production    # single process
 ```
 
-Neither runner loads the Rails engine (the dashboard) — by design, so a worker host
-stays lean. They do fully boot your Rails app (`-r`/the environment) so your jobs and
-models are available.
+Neither runner *starts* the Rails engine (the dashboard) — by design, so a worker host
+stays lean: no engine initializers, no dashboard routes, no assets. They do fully boot
+your Rails app (`-r`/the environment) so your jobs and models are available — and that
+includes a `config/routes.rb` that mounts the dashboard, since `Wurk::Engine` resolves
+on demand.
+
+> ⚠️ **Upgrade note (1.3.1).** Through 1.3.0 that last part wasn't true: an app with
+> `mount Wurk::Engine => "/wurk"` in its routes booted fine under `rails server` but
+> died under `wurk` / `wurkswarm` with `uninitialized constant Wurk::Engine`, because
+> the runners require `wurk` before Rails exists. Fixed in 1.3.1
+> ([#282](https://github.com/developerz-ai/wurk/issues/282)) — no `require "wurk/rails"`
+> in routes.rb needed.
 
 > ✅ **ActiveJob works standalone.** If your app uses
 > `config.active_job.queue_adapter = :wurk` (or `:sidekiq`), the standalone CLI now

@@ -113,13 +113,26 @@ Identical to Sidekiq:
 With no `-C`, Wurk auto-discovers `config/wurk.yml`, then `config/sidekiq.yml`
 (`.erb` variants too), relative to the required path.
 
+### Pointed at a Rails app (`-r .`)
+
+Both runners fully boot your app via `config/environment.rb`, but neither
+*starts* the engine: no engine initializers, no dashboard routes, no assets,
+nothing serving HTTP. A worker host stays lean.
+
+That's about the engine's Rails lifecycle, not the constant. `Wurk::Engine`
+resolves on demand, so an app whose `config/routes.rb` does
+`mount Wurk::Engine => "/wurk"` boots cleanly under `wurk` and `wurkswarm`
+exactly as it does under `rails server`. (Through 1.3.0 it did not — the worker
+died on boot with `uninitialized constant Wurk::Engine` while the web process was
+fine. Fixed in 1.3.1; no `require "wurk/rails"` in routes.rb needed.)
+
 ---
 
 ## Running without Rails
 
-Wurk's standalone runners never load the engine, so they work in any Ruby app —
-a Sinatra service, a plain Rack app, a CLI daemon, whatever. You point `-r` at a
-single Ruby file that loads your code and defines your jobs.
+Wurk's standalone runners pull in no Rails code of their own, so they work in any
+Ruby app — a Sinatra service, a plain Rack app, a CLI daemon, whatever. You point
+`-r` at a single Ruby file that loads your code and defines your jobs.
 
 **1. A boot file that requires your app and defines jobs:**
 
