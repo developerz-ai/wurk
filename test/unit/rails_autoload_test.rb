@@ -65,6 +65,72 @@ class RailsAutoloadTest < Wurk::Test::UnitCase
     assert ok, 'partial Rails (rails/engine/railties without action_dispatch) must not crash `require "wurk"` (#249)'
   end
 
+  # #282: the standalone runners require "wurk" *before* Rails exists, so the
+  # load-time guard above is false and stays false — `wurk` is already in
+  # $LOADED_FEATURES by the time Wurk::CLI#boot_rails_application runs, so the
+  # host app's own Bundler.require can't re-evaluate it. Wurk::Engine must still
+  # resolve once Rails is up, or every app that follows the README and mounts the
+  # dashboard dies on boot under `wurk` / `wurkswarm`.
+  def test_engine_resolves_when_rails_arrives_after_require_wurk
+    ok = run_ruby(<<~RUBY)
+      require "wurk"
+      exit 1 if defined?(Wurk::Engine)
+
+      # ...what Wurk::CLI#boot_rails_application does next.
+      require "rails"
+      require "action_controller/railtie"
+
+      exit 1 unless Wurk::Engine < ::Rails::Engine
+      # Engine only: the runner owns the swarm, so the railtie (whose
+      # after_initialize hook forks one) must not come along for the ride.
+      exit(defined?(Wurk::Railtie) ? 1 : 0)
+    RUBY
+
+    assert ok, 'Wurk::Engine must resolve on demand once Rails is loaded, even if `require "wurk"` came first (#282)'
+  end
+
+  # The same thing end to end: a real Rails app whose config/routes.rb mounts the
+  # engine, booted in the order the standalone runners produce. Without the
+  # const_missing hook this dies exactly as production did —
+  # `config/routes.rb:2:in 'block in <top (required)>': uninitialized constant
+  # Wurk::Engine (NameError)`.
+  def test_rails_app_mounting_the_engine_boots_in_the_standalone_runner_order
+    ok = run_ruby(<<~RUBY)
+      require "tmpdir"
+      require "fileutils"
+
+      require "wurk"
+      exit 1 if defined?(Wurk::Engine)
+
+      require "rails"
+      require "action_controller/railtie"
+
+      root = Dir.mktmpdir
+      FileUtils.mkdir_p(File.join(root, "config"))
+      File.write(File.join(root, "config.ru"), "")
+      File.write(File.join(root, "config/routes.rb"), <<~ROUTES)
+        Rails.application.routes.draw do
+          mount Wurk::Engine => "/wurk"
+        end
+      ROUTES
+      Dir.chdir(root)
+
+      class HostApp < Rails::Application
+        config.load_defaults 7.1
+        config.eager_load = false
+        config.secret_key_base = "x" * 32
+        config.logger = Logger.new(IO::NULL)
+      end
+
+      HostApp.initialize!
+
+      mounted = HostApp.routes.routes.map { |r| r.path.spec.to_s }.any? { |p| p.start_with?("/wurk") }
+      exit(mounted ? 0 : 1)
+    RUBY
+
+    assert ok, '`mount Wurk::Engine` in config/routes.rb must not break app boot under wurk/wurkswarm (#282)'
+  end
+
   private
 
   def run_ruby(code)

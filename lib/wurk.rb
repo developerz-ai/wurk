@@ -318,3 +318,42 @@ require_relative 'wurk/compat'
 # real Rails host both are loaded by `rails/all` before Bundler.require, so the
 # stricter gate is invisible there.
 require_relative 'wurk/rails' if defined?(Rails::Engine) && defined?(::ActionDispatch::Routing::RouteSet)
+
+# The gate above is evaluated exactly once, when this file is first required —
+# which is too early for the standalone runners (#282). `exe/wurk` and
+# `exe/wurkswarm` require "wurk" before Rails exists (the gate is false, nothing
+# Rails-y loads), then boot the host app themselves via
+# Wurk::CLI#boot_rails_application. By then "wurk" is in $LOADED_FEATURES, so the
+# app's own `Bundler.require` is a no-op and the gate never gets a second look. A
+# host that did exactly what the README says — `mount Wurk::Engine => "/wurk"` in
+# config/routes.rb — then dies during boot with `uninitialized constant
+# Wurk::Engine`, from the worker process only. Web processes are unaffected:
+# there Bundler.require runs after railties, so the gate passes.
+#
+# const_missing closes that window without giving up the lean standalone boot:
+# nothing loads until something actually asks for Wurk::Engine, and even then
+# only when Rails is really present. The gate is the same two-part condition as
+# above, so the ecosystem carve-out (rails/engine/railties without ActionDispatch,
+# per sidekiq-cron's test helper) still falls through to a plain NameError
+# instead of crashing on `isolate_namespace`.
+#
+# Deliberately `wurk/engine` and not `wurk/rails`: the railtie's
+# `config.after_initialize` is a *global* ActiveSupport load hook registered at
+# require time, and routes are drawn before those hooks run — so dragging the
+# railtie in here would fork a swarm inside a `wurkswarm` parent that is about to
+# fork its own. The runner owns the swarm; the routes file only needs the
+# constant. `defined?(Wurk::Engine)` stays nil until then, which is what the
+# "standalone stays Rails-free" tests assert.
+module Wurk
+  def self.const_missing(name)
+    return super unless name == :Engine
+    return super unless defined?(::Rails::Engine) && defined?(::ActionDispatch::Routing::RouteSet)
+
+    require_relative 'wurk/engine'
+    # Guard against recursing back into const_missing if the require somehow
+    # didn't define it (a partially-loaded engine.rb) — raise the real NameError.
+    return super unless const_defined?(:Engine, false)
+
+    const_get(:Engine, false)
+  end
+end
