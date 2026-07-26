@@ -325,8 +325,12 @@ contain `config/application.rb`); `concurrency` and `timeout` must both be
 logs a warning; and every capsule's pool size must be `>= its concurrency`
 (`Pool size too small for <capsule>` otherwise).
 
-Neither runner loads the Rails engine — a worker host stays lean and serves no
-dashboard — but both fully boot your app.
+Neither runner *starts* the Rails engine — no engine initializers, no dashboard
+routes, no assets, so a worker host stays lean and serves no dashboard — but both
+fully boot your app. The `Wurk::Engine` constant itself still resolves on demand,
+so an app whose `config/routes.rb` mounts the dashboard boots cleanly under
+`wurk` / `wurkswarm` too (before 1.3.1 it died there with `uninitialized constant
+Wurk::Engine`).
 
 ---
 
@@ -346,10 +350,26 @@ Wurk.configure_server do |config|
 end
 ```
 
-`config.redis =` **merges** into the existing hash. `:size` and `:name` are
-pool-structural and consumed by Wurk; everything else forwards verbatim to
-`RedisClient.config` (so `driver:`, `ssl_params:`, `username:`, `password:`,
-sentinel options, … pass through).
+`config.redis =` **merges** into the existing hash. `:size`, `:name`,
+`:pool_timeout` and `:pool_name` are pool-structural and consumed by Wurk;
+everything else forwards to redis-client (so `driver:`, `ssl_params:`,
+`username:`, `password:`, `sentinels:`, … pass through).
+
+Sidekiq-era spellings are translated rather than forwarded, so an existing
+initializer needs no edit:
+
+| You wrote | Wurk does |
+|---|---|
+| `network_timeout: 5` / `timeout: 5` | fans out to `connect_timeout` / `read_timeout` / `write_timeout` (an explicit one of those wins) |
+| `master_name: "mymaster"` | → `name:`, and `sentinels:` routes the pool through `RedisClient.sentinel` |
+| `driver: "hiredis"`, `role: "master"` | symbolized |
+| `logger:`, `cluster_safe:`, `pool_name:` | accepted and dropped, as Sidekiq does |
+| `namespace:` | raises — Wurk has no namespacing; give it its own Redis db or instance |
+| `nodes:` | raises — Redis Cluster is unsupported |
+
+Anything redis-client would reject raises on assignment, naming the key and
+listing the supported set, so a typo fails in the process running your
+initializer instead of inside a forked worker child.
 
 | Key | Default | Source |
 |---|---|---|

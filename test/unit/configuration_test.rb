@@ -262,6 +262,20 @@ class ConfigurationTest < Wurk::Test::UnitCase
     assert_equal 'redis://example.com:6380/2', @config.redis_config[:url]
   end
 
+  def test_redis_setter_accepts_sidekiq_only_keys
+    @config.redis = { url: 'redis://example.com:6380/2', network_timeout: 5, pool_timeout: 5 }
+
+    assert_equal 5, @config.redis_config[:network_timeout]
+  end
+
+  # #283: the swarm parent never builds a pool, so an unusable key used to
+  # surface only inside the forked children. Validate where the initializer runs.
+  def test_redis_setter_rejects_an_unusable_key_in_the_calling_process
+    error = assert_raises(ArgumentError) { @config.redis = { url: 'redis://x', namespace: 'app' } }
+
+    assert_includes error.message, 'config.redis[:namespace]'
+  end
+
   def test_redis_pool_delegates_to_default_capsule
     assert_same @config.default_capsule.redis_pool, @config.redis_pool
   end

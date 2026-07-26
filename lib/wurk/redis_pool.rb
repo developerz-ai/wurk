@@ -3,6 +3,7 @@
 require 'redis-client'
 require 'connection_pool'
 require_relative 'redis_client_adapter'
+require_relative 'redis_options'
 
 module Wurk
   # Per-process pool over redis-client + connection_pool. Never share a socket
@@ -37,6 +38,15 @@ module Wurk
     DEFAULT_WRITE_TIMEOUT      = 2.5
     DEFAULT_RECONNECT_ATTEMPTS = 1
 
+    # The floor every pool starts from; any key the host passed wins over it.
+    DEFAULT_CLIENT_CONFIG = {
+      url: DEFAULT_URL,
+      connect_timeout: DEFAULT_CONNECT_TIMEOUT,
+      read_timeout: DEFAULT_READ_TIMEOUT,
+      write_timeout: DEFAULT_WRITE_TIMEOUT,
+      reconnect_attempts: DEFAULT_RECONNECT_ATTEMPTS
+    }.freeze
+
     # Server-side messages where the connection is closed and the block retried
     # exactly once. READONLY is itself a RedisClient::ConnectionError subclass,
     # so this message match must be tested BEFORE the generic ConnectionError
@@ -60,9 +70,12 @@ module Wurk
 
     # Takes the standard Sidekiq `config.redis` hash: `pool_timeout` tunes the
     # ConnectionPool checkout; `connect_timeout`/`read_timeout`/`write_timeout`/
-    # `reconnect_attempts` plus any other key (driver, ssl_params, …) forward
-    # verbatim to RedisClient.config. `on_error` is an optional callable fired
-    # per retry / final give-up with { error:, attempt:, retried:, pool: }.
+    # `reconnect_attempts` plus any other redis-client key (driver, ssl_params,
+    # sentinels, …) reach the client. Sidekiq-only spellings (`network_timeout`,
+    # `master_name`, `logger`, …) are translated or dropped by {RedisOptions};
+    # a key redis-client would reject raises there with the key named.
+    # `on_error` is an optional callable fired per retry / final give-up with
+    # { error:, attempt:, retried:, pool: }.
     def initialize(size:, name: DEFAULT_NAME, on_error: nil, **options)
       @size          = size
       @name          = name
@@ -112,24 +125,29 @@ module Wurk
 
     private
 
-    # Socket config forwarded to RedisClient.config. Host-supplied keys win over
-    # the defaults; `pool_timeout` is dropped (it's a pool concern, not a socket
-    # one) and unknown keys pass straight through.
+    # Socket config forwarded to redis-client. RedisOptions owns the translation
+    # of the Sidekiq-shaped hash (network_timeout, master_name, pool-only keys,
+    # …) so this class stays about pooling; host-supplied keys win over the
+    # defaults.
     def build_client_config(options)
-      {
-        url: DEFAULT_URL,
-        connect_timeout: DEFAULT_CONNECT_TIMEOUT,
-        read_timeout: DEFAULT_READ_TIMEOUT,
-        write_timeout: DEFAULT_WRITE_TIMEOUT,
-        reconnect_attempts: DEFAULT_RECONNECT_ATTEMPTS
-      }.merge(options.except(:pool_timeout)).freeze
+      RedisOptions.normalize(options, defaults: DEFAULT_CLIENT_CONFIG).freeze
     end
 
     # Wrapped in the CompatClient decorator so `Sidekiq.redis { |c| c.smembers }`
     # method-style commands work like Sidekiq 7+ (#204). Wurk's own code paths
     # use #call, which the decorator forwards.
     def build_client
-      RedisClientAdapter::CompatClient.new(RedisClient.config(**@client_config).new_client)
+      RedisClientAdapter::CompatClient.new(redis_client_config.new_client)
+    end
+
+    # A Sentinel set is a different constructor, not a different keyword:
+    # `RedisClient.config(sentinels: [...])` raises. Sidekiq routes the same way.
+    def redis_client_config
+      if RedisOptions.sentinel?(@client_config)
+        RedisClient.sentinel(**@client_config)
+      else
+        RedisClient.config(**@client_config)
+      end
     end
 
     def safe_close(conn)

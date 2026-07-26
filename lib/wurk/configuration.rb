@@ -6,6 +6,7 @@ require_relative 'middleware/chain'
 require_relative 'capsule'
 require_relative 'context'
 require_relative 'topology'
+require_relative 'redis_options'
 
 module Wurk
   # Owns runtime knobs (concurrency, queues, timeouts, lifecycle events,
@@ -169,8 +170,14 @@ module Wurk
 
     # --- Redis ------------------------------------------------------------
 
+    # Validated here, in the process running the initializer, rather than later
+    # in whichever process first builds a pool. The swarm's children are the ones
+    # that construct pools, so a bad key used to kill every child on boot while
+    # the parent stayed up and healthy — Running pod, passing probe, zero jobs
+    # processed (#283).
     def redis=(hash)
       guard_frozen!
+      RedisOptions.validate!(hash)
       @redis_config = @redis_config.merge(hash.transform_keys(&:to_sym))
     end
 
