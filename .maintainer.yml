@@ -29,7 +29,13 @@ handoff:
 
 pr:
   wait_for_other_bots: [coderabbit, copilot]
-  auto_merge: true
+  # TEMPORARY pin (2026-07-26, developerz.ai#1074): the global babysit hard driver
+  # (DZ_BABYSIT_DRIVER=1) is being enabled for the #295 dogfood on developerz.ai.
+  # This repo has no branch-protection ruleset, so until the review-absence gate
+  # (developerz-ai/developerz.ai#1080) ships, auto-merge is pinned OFF to keep the
+  # 120s review-absence hole from merging unreviewed PRs here. RESTORE auto_merge:
+  # true (this repo's deliberate dz#789 posture) once #1080 is merged.
+  auto_merge: false
 
 escalate:
   always: [security, license, cla]
