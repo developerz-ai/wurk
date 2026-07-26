@@ -4,6 +4,23 @@ All notable changes to Wurk are recorded here. Format: [Keep a Changelog](https:
 
 ## [Unreleased]
 
+## [1.3.0] - 2026-07-26
+
+Error reporting. `sentry-sidekiq` is the one common add-on that cannot be installed alongside Wurk at all, and the obvious workaround — hanging a reporter off `config.error_handlers` — silently reports nothing from your jobs, because job failures never reach that hook. This release ships the integration Wurk should have had, and documents the trap for anyone rolling their own.
+
+### Added
+- **First-class Sentry integration (`Wurk::Sentry`)** — opt-in, and the replacement for `sentry-sidekiq`, which **cannot be installed alongside Wurk**: its gemspec declares `add_dependency "sidekiq"`, so Bundler pulls real Sidekiq back into the app and `require "sidekiq"` resolves to a hybrid of the two. Enable with `require "wurk/sentry"` and `Wurk::Sentry.install!(config)` inside `Wurk.configure_server`.
+  - Registers **both** a server middleware and a `config.error_handlers` entry, because either alone is blind. A job failure never reaches `error_handlers` on Wurk — `JobRetry#local` rescues it, books the retry, and raises `Wurk::JobRetry::Handled`, which the processor swallows — so error handlers see only fetch-loop errors, `!shutdown`, invalid JSON, and retry-machinery meta-errors. Any reporter wired only into `error_handlers` (Sentry, Honeybadger, a custom notifier) silently reports nothing from your jobs.
+  - **Reports the terminal failure only**, not all 25 retry attempts. `Wurk::Sentry::RetryPolicy` predicts what `JobRetry` is about to conclude, honouring `retry: false`, `retry: <Integer>`, `retry_for:`, and `config[:max_retries]`.
+  - **Never sends job `args`** — not in the per-job context, and stripped from any job hash in the error handler's `extra:` (payloads carry PII and `encrypt: true` ciphertext). The raw `jobstr` of an unparseable payload is dropped wholesale.
+  - **Filters self-healing transport noise** (`RedisClient::Error`, `ConnectionPool::TimeoutError`) out of the error handler by default — the fetch loop's `rescue → sleep(1)` cycle turns a backend blip into a report per thread per second; one production Dragonfly deployment accumulated ~136,000 events on a single issue while the job pipeline was healthy. Still logged at WARN by the default handler. Opt out with `filter_transport_errors: false`, or replace the list with `filtered_error_classes:`.
+  - Transactions are named `Wurk/<JobClass>`, mirroring `sentry-sidekiq`'s `Sidekiq/<JobClass>` so a migrating app's issue history stays legible. Tags: `queue`, `jid`.
+  - `sentry-ruby` is **not** a runtime dependency. Every call site is guarded on `defined?(::Sentry) && Sentry.initialized?`, so the code is inert without it. `install!` is idempotent.
+
+### Documentation
+- New [`docs/sentry.md`](docs/sentry.md) — why `sentry-sidekiq` is incompatible (and the `ecosystem/sidekiq-shim/` escape hatch), setup, options, the retry and noise-filtering semantics, and a migration section for apps coming off `sentry-sidekiq`.
+- `docs/migrate-from-sidekiq.md` gains `sentry-sidekiq` in the third-party gem mappings (§6) and two new known incompatibilities (§7): the gem itself, and the fact that job failures never reach `config.error_handlers` — which breaks *any* error reporter wired only into that hook.
+
 ## [1.2.1] - 2026-07-24
 
 Dependency and tooling refresh; no behavior changes to job processing.
