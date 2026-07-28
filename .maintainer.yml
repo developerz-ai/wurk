@@ -29,13 +29,19 @@ handoff:
 
 pr:
   wait_for_other_bots: [coderabbit, copilot]
-  # TEMPORARY pin (2026-07-26, developerz.ai#1074): the global babysit hard driver
-  # (DZ_BABYSIT_DRIVER=1) is being enabled for the #295 dogfood on developerz.ai.
-  # This repo has no branch-protection ruleset, so until the review-absence gate
-  # (developerz-ai/developerz.ai#1080) ships, auto-merge is pinned OFF to keep the
-  # 120s review-absence hole from merging unreviewed PRs here. RESTORE auto_merge:
-  # true (this repo's deliberate dz#789 posture) once #1080 is merged.
-  auto_merge: false
+  # Restored 2026-07-28: the pin below has been lifted because the condition it
+  # named is met. It read "RESTORE auto_merge: true once #1080 is merged" —
+  # developerz-ai/developerz.ai#1080 (the 120s review-absence hole, where a PR
+  # whose COMMIT was older than two minutes merged with zero review from anyone)
+  # closed COMPLETED on 2026-07-27 via #1113 and #1127. This repo still has no
+  # branch-protection ruleset, so that gate was the whole protection — which is
+  # exactly why the pin was written with a precondition instead of a date.
+  #
+  # Back to this repo's deliberate dz#789 posture: green routine PRs — Dependabot
+  # minors included — merge on CI + gates; majors still stop on
+  # ask_before_acting (major_dep_bump), and we still wait for the reviewer bots
+  # above to settle first.
+  auto_merge: true
 
 escalate:
   always: [security, license, cla]
