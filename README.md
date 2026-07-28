@@ -61,6 +61,7 @@ Plus Wurk extras: a worker topology DSL, a Kubernetes liveness/readiness listene
 - **[Starting the worker](https://github.com/developerz-ai/wurk/blob/main/docs/running.md)** — Rails auto-start, the `wurk`/`wurkswarm` runners, and running standalone without Rails.
 - **[Configuration reference](https://github.com/developerz-ai/wurk/blob/main/docs/configuration.md)** — every option, env var, YAML key, and CLI flag, with precedence and pool sizing.
 - **[Deploying](https://github.com/developerz-ai/wurk/blob/main/docs/deployment.md)** — systemd, Capistrano, Heroku, Docker, Kubernetes, rolling restarts, memory limits.
+- **[Secrets & credentials](https://github.com/developerz-ai/wurk/blob/main/docs/secrets.md)** — which values are secret vs config, how to supply them (ENV, Rails credentials, an init file), precedence, and what to never commit.
 - **[Active Job adapter](https://github.com/developerz-ai/wurk/blob/main/docs/active-job.md)** — run `ActiveJob`/`deliver_later` on Wurk with `queue_adapter = :wurk`.
 - **[Testing jobs](https://github.com/developerz-ai/wurk/blob/main/docs/testing.md)** — fake/inline modes, the jobs array, Minitest and RSpec setup.
 - **[Migrating from Sidekiq](#migrating-from-sidekiq)** — the one-line swap and what to expect.
