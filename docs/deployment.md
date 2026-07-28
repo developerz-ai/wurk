@@ -9,6 +9,7 @@ file are identical.
 > Authoritative signal reference: [`docs/target/sidekiq-free.md`](target/sidekiq-free.md) §21 (CLI).
 > Just getting a worker running (incl. standalone, no Rails)? See [`docs/running.md`](running.md).
 > Migrating an existing app? Start with [`docs/migrate-from-sidekiq.md`](migrate-from-sidekiq.md).
+> Supplying the secrets a deploy needs (`REDIS_URL` with a password, the encryption key, dashboard credentials, the Sentry DSN)? See [`docs/secrets.md`](secrets.md).
 
 ---
 
@@ -429,7 +430,7 @@ spec:
               value: "4"
             - name: SIDEKIQ_MAXMEM_MB   # graceful child recycle above 1.5GB RSS
               value: "1500"
-            - name: REDIS_URL
+            - name: REDIS_URL          # secret when it embeds a password — see secrets.md
               valueFrom:
                 secretKeyRef: { name: wurk, key: redis-url }
           ports:

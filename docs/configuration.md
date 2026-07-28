@@ -355,6 +355,12 @@ end
 everything else forwards to redis-client (so `driver:`, `ssl_params:`,
 `username:`, `password:`, `sentinels:`, … pass through).
 
+> **`REDIS_URL` / `password:` are secret** when they embed credentials, and
+> `REDIS_URL` is the only secret-bearing value Wurk reads from the environment
+> itself. For where it (and the encryption key, dashboard credentials, and
+> Sentry DSN) should live and what must never be committed, see
+> [secrets.md](secrets.md).
+
 Sidekiq-era spellings are translated rather than forwarded, so an existing
 initializer needs no edit:
 
