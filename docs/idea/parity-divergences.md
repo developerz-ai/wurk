@@ -123,3 +123,37 @@ cycling, which the in-process state machine does (verified by
 
 **Anchor:** `lib/wurk/swarm.rb:104-108`, PR3 (`fix/swarm-supervision`), Ent
 §8.
+
+## Reaper liveness has a residual local pid-reuse blind spot — shared with `super_fetch`, not fixed
+
+**Wurk:** `Fetcher::Reaper#owner_alive?` fast-paths same-boot-generation
+private lists (host **and** `Component::PROCESS_NONCE` match) straight to
+`Process.kill(0, pid)` (`lib/wurk/fetcher/reaper.rb:270-284`). The nonce is
+minted once per process image and inherited unchanged across `fork`
+(`lib/wurk/component.rb:19-21`), so this group is every process forked from
+the current swarm boot, not a single pid. If the OS hands a *replacement*
+child, forked from that same boot, the exact pid a just-reaped sibling held,
+`kill(0)` reads the new occupant as the old one — alive. Every other owner
+(different nonce, pre-nonce key, or different host) is checked against the
+namespace-blind heartbeat instead, which doesn't have this gap.
+
+**Spec:** Pro §3.2's `super_fetch` decides local liveness the same way —
+`Process.kill(0, pid)` against the owning pid, with no generation counter to
+distinguish a reused pid from its original holder. The spec neither claims
+nor tests a stronger guarantee here.
+
+**Why:** closing this would require tracking pid *generation* — something
+the OS doesn't expose (Linux pid reuse is opaque past `/proc` disappearing;
+there is no monotonic "this is generation N of pid 4711" primitive to key
+against). Doing it via Redis bookkeeping (e.g. a per-pid generation counter
+written at fork time) would add a write on every child spawn to close a gap
+that, per the swarm's own respawn ordering, doesn't arise in practice: a
+replacement child is forked and reaches its own boot heartbeat before its
+predecessor's pid becomes eligible for OS reuse, so the collision window is
+theoretical, not observed. Since Sidekiq Pro's `super_fetch` — the spec this
+component is bug-compatible with — carries the identical limitation, this is
+recorded as a deliberate, matched-parity gap rather than an intentional
+"improvement" left undone.
+
+**Anchor:** `lib/wurk/fetcher/reaper.rb:270-284`, `lib/wurk/component.rb:19-21`,
+`docs/reliability.md` (Reliable fetch → How "dead" is decided), Pro §3.2.
