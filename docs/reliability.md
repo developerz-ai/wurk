@@ -354,11 +354,69 @@ batch-context pushes. Those re-raise, because the batch Lua has atomic counter
 side effects that can't be safely replayed. In a mixed `push_bulk`, the bidless
 payloads buffer and the batched ones raise.
 
+Also not buffered: payloads Redis already accepted. A push is more than one
+round trip — one pipeline per destination queue, then the batched `BATCH_PUSH`
+pipeline — so a connection that drops partway leaves some of the payload set
+written. Wurk buffers only the groups it has no reply for; a job already in
+`queue:<name>` is never replayed on top of itself. The one group in flight when
+the socket dropped *is* buffered, because a lost reply is indistinguishable from
+a lost command — so that group is at-least-once and may produce a duplicate
+job. Sidekiq's own contract is at-least-once and `JobRetry` re-runs jobs anyway;
+make jobs idempotent.
+
 ### The durability caveat
 
 **The buffer is in-memory and per-process. If the process dies, every buffered
 job is gone.** Not written to Redis, not written to disk, not recoverable, not
 logged as a payload you can replay.
+
+### Fork semantics
+
+The buffer, its mutexes, and its background drainer are process-global state.
+A `fork()` — the Swarm booting children, or a preloading app server like Puma
+or Unicorn spawning workers — copies all of it into the child by value: the
+same buffered payloads, a drainer thread that did not survive the fork, and
+mutexes that could still be held mid-critical-section at the moment of fork.
+
+Wurk resets that state on every fork path it can see, via
+`Wurk::Client::Buffered.reset_after_fork!`:
+
+- A `Process._fork` hook (`lib/wurk/client/buffered.rb`), registered at
+  require time, fires in every child regardless of how the fork happened —
+  this is what catches a preloading app server's own fork, which Wurk's swarm
+  code never runs through.
+- `Swarm::ChildBoot#reconnect_after_fork` (`lib/wurk/swarm/child_boot.rb`)
+  also calls it explicitly, right after `@config.reset_redis_pools!` and
+  before `validate_redis!`. Whichever of the two runs first wins; a pid guard
+  makes the second call a no-op.
+
+What the reset does, in a child:
+
+- **Drops the inherited buffer.** The child does not replay the payloads it
+  woke up holding. The parent still has the same buffer and will replay it on
+  its own next push — if the child replayed too, every buffered job would
+  enqueue `(children + 1)×` times. Only the parent that originally buffered a
+  job ever replays it.
+- **Rebuilds both mutexes** (`@install_mutex`, `@buffer_mutex`) as fresh
+  objects rather than reusing the inherited ones. MRI abandons a mutex whose
+  owning thread didn't survive the fork, but that's an implementation detail,
+  not a documented guarantee, and it does not cover a fork taken while a
+  *different* thread's critical section was still open — the child would
+  inherit that mutex still locked, and its first buffered `push` (which drains
+  under the lock before pushing) would hang forever. Fresh allocations are
+  immune regardless.
+- **Drops the drainer without stopping it.** `Drainer#stop` synchronizes on
+  the drainer's own lock, which carries the same inherited-mutex hazard as
+  above, so the inherited drainer is discarded rather than shut down. If the
+  parent had one running (`interval` was set), the child gets an equivalent
+  fresh drainer on its own interval, so a child that keeps buffering jobs
+  still flushes them. The captured `buffer_client_factory` is cleared with it,
+  since it closes over the parent's pre-fork Redis pool — the next buffered
+  push in the child recaptures a factory scoped to its own pool.
+
+Net effect: after a fork, each process — parent and every child — owns an
+independent buffer, drainer, and pair of mutexes, and only ever replays jobs
+it buffered itself.
 
 `reliable_push` buys you a bounded window over a *short* Redis blip in a
 *surviving* process. It is not a durable outbox. If losing an enqueue is
@@ -373,11 +431,17 @@ evicts your **oldest** jobs. Use `:raise` if you'd rather decide yourself:
 Wurk::Client.reliable_push_overflow = :raise
 
 begin
-  MyJob.perform_async(id)
+  MyJob.perform_bulk(ids.map { |id| [id] })
 rescue Wurk::Client::Buffered::Overflow => e
-  Outbox.create!(payload: e.payload)   # the offending payload rides along
+  Outbox.insert_all(e.payloads.map { |p| { payload: p } })   # every undelivered job
 end
 ```
+
+`:raise` fills the remaining capacity first, then raises **once**. `e.payloads`
+carries everything that push failed to deliver — the tail of a bulk push that
+didn't fit, plus any batched payloads in the same call (those never buffer). The
+payloads that *did* fit stay in the buffer and replay normally, so no job is
+both buffered and reported. `e.cause` is the underlying connection error.
 
 ---
 

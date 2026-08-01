@@ -26,6 +26,15 @@ module Wurk
     SCHEDULED_BATCH_SIZE      = 100
     SPREAD_INTERVAL_FLOOR     = 5
 
+    # Thread-local slot holding the payloads of the current push whose Redis
+    # write is confirmed applied. {Client::Buffered} subtracts them from the set
+    # it re-buffers when a *later* phase of the same push loses the connection,
+    # so an already-written job is never replayed into a second copy.
+    # Thread-local because one Client instance serves every producer thread;
+    # opened and closed by Buffered, the only reader, so an un-prepended Client
+    # pays a single nil check per write phase.
+    DELIVERED_KEY = :wurk_client_delivered
+
     attr_accessor :redis_pool
 
     def initialize(pool: nil, config: nil, chain: nil)
@@ -51,8 +60,8 @@ module Wurk
       return nil unless payload
 
       verify_json(payload)
-      raw_push([payload])
-      emit_enqueued([payload])
+      buffered = raw_push([payload])
+      emit_enqueued([payload], buffered)
       payload['jid']
     end
 
@@ -169,8 +178,8 @@ module Wurk
         payloads = build_bulk_payloads(slice, base, ats)
         compacted = payloads.compact
         if compacted.any?
-          raw_push(compacted)
-          emit_enqueued(compacted)
+          buffered = raw_push(compacted)
+          emit_enqueued(compacted, buffered)
         end
         jids.concat(payloads.map { |p| p && p['jid'] })
       end
@@ -222,16 +231,25 @@ module Wurk
     # Adds happen one payload at a time so an `autoflush = N` actually bounds
     # the pipeline size — a bulk push of 100 with N=2 must flush 2/2/... not
     # 100 in one shot.
+    #
+    # Returns the payloads it did NOT get to Redis: always nil here, since a
+    # plain Client either writes them all or raises. {Client::Buffered}
+    # overrides the contract — the payloads it diverted into the outage buffer
+    # come back so #push can keep them out of the enqueued metric.
     def raw_push(payloads)
       # Test modes short-circuit the Redis write (and the batch buffer): :fake
       # collects payloads in-memory, :inline runs them now. Client middleware
       # has already run by this point, matching Sidekiq.
-      return ::Wurk::Testing.dispatch_push(payloads) if ::Wurk::Testing.enabled?
+      if ::Wurk::Testing.enabled?
+        ::Wurk::Testing.dispatch_push(payloads)
+        return nil
+      end
 
       buffer = Thread.current[Wurk::Batch::BUFFER_KEY]
       return buffer_add(buffer, payloads) if buffer && payloads.all? { |p| p['bid'] && !p['at'] }
 
       pool.with { |conn| atomic_push(conn, payloads) }
+      nil
     end
 
     # Batch autoflush path: accumulate each non-scheduled batched payload into
@@ -262,7 +280,10 @@ module Wurk
     # duplicate the scheduled entry.
     def push_scheduled_split(conn, payloads)
       batched, plain = payloads.partition { |j| j['bid'] }
-      conn.pipelined { |pipe| push_scheduled(pipe, plain) } unless plain.empty?
+      unless plain.empty?
+        conn.pipelined { |pipe| push_scheduled(pipe, plain) }
+        mark_delivered(plain)
+      end
       push_batched_scheduled_pipelined(conn, batched) unless batched.empty?
     end
 
@@ -282,7 +303,7 @@ module Wurk
     def push_immediate(conn, payloads)
       now = now_in_millis
       batched, plain = payloads.partition { |j| j['bid'] }
-      conn.pipelined { |pipe| push_plain(pipe, plain, now) } unless plain.empty?
+      push_plain(conn, plain, now) unless plain.empty?
       push_batched_pipelined(conn, batched, now) unless batched.empty?
     end
 
@@ -313,15 +334,31 @@ module Wurk
       conn.pipelined { |pipe| push_batched_scheduled(pipe, batched, eval_method: :eval_with_source) }
     end
 
+    # One pipeline per queue, marked delivered the moment its reply is in.
+    # A push can die between groups — or land its whole plain phase and then
+    # lose the connection in the batched phase above — and whatever Redis
+    # already accepted must stay out of the reliable_push buffer; replaying it
+    # would enqueue a second copy of a job that ran fine.
+    #
+    # The group in flight when the socket drops stays unmarked and so is
+    # replayed: a lost reply is indistinguishable from a lost command, so that
+    # residual is at-least-once by construction. The split bounds it to one
+    # queue group per failed push instead of the entire payload set.
+    #
+    # Cost is a round trip per distinct queue. The single-queue push — every
+    # `perform_async`, every same-class `push_bulk` — still writes exactly the
+    # one SADD + LPUSH pipeline it did before.
     def push_plain(conn, payloads, now)
-      grouped = payloads.group_by { |j| j['queue'] }
-      conn.call('SADD', 'queues', *grouped.keys)
-      grouped.each do |queue, jobs|
+      payloads.group_by { |j| j['queue'] }.each do |queue, jobs|
         serialized = jobs.map do |j|
           j['enqueued_at'] = now
           Wurk.dump_json(j)
         end
-        conn.call('LPUSH', "queue:#{queue}", *serialized)
+        conn.pipelined do |pipe|
+          pipe.call('SADD', 'queues', queue)
+          pipe.call('LPUSH', "queue:#{queue}", *serialized)
+        end
+        mark_delivered(jobs)
       end
     end
 
@@ -369,17 +406,43 @@ module Wurk
       @redis_pool || Thread.current[:wurk_via_pool] || @config.redis_pool
     end
 
+    # Record a write Redis has acknowledged, for {Client::Buffered} to subtract
+    # from what it re-buffers. RedisPool#with replays the caller block on a
+    # transient error, so the ledger accumulates across attempts and is never
+    # pruned: a group applied on an earlier attempt stays marked, and the
+    # payload can't end up both retried by the pool and replayed from the
+    # buffer.
+    def mark_delivered(payloads)
+      Thread.current[DELIVERED_KEY]&.concat(payloads)
+    end
+
     # Best-effort `sidekiq.jobs.enqueued` counter — one increment per payload
     # that actually made it past middleware AND Redis. Tags follow the same
     # `worker:`/`queue:` shape as Wurk::Metrics::Statsd so dashboards built
     # for the server-side emissions work unchanged.
-    def emit_enqueued(payloads)
+    #
+    # `buffered` is what reliable_push swallowed into its outage buffer (see
+    # #raw_push). Those payloads are not enqueued: the ring buffer may still
+    # evict them, and the drain that does land one counts it then — so booking
+    # them here would inflate the counter on an outage and double-count every
+    # payload that later replays.
+    def emit_enqueued(payloads, buffered = nil)
+      payloads = reject_by_identity(payloads, buffered) if buffered && !buffered.empty?
       payloads.each do |p|
         Wurk::Metrics::Statsd.increment(
           'jobs.enqueued',
           tags: ["worker:#{p['class']}", "queue:#{p['queue']}"]
         )
       end
+    end
+
+    # Set difference by object identity — `==` would fold two jobs carrying the
+    # same fields into one. Both sides are always the very Hash objects this
+    # push built, so identity is both exact and cheaper than hashing them.
+    def reject_by_identity(payloads, excluded)
+      seen = {}.compare_by_identity
+      excluded.each { |p| seen[p] = true }
+      payloads.reject { |p| seen.key?(p) }
     end
   end
 end

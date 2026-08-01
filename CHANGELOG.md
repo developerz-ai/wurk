@@ -4,6 +4,13 @@ All notable changes to Wurk are recorded here. Format: [Keep a Changelog](https:
 
 ## [Unreleased]
 
+### Fixed
+- **`reliable_push!` replayed jobs Redis had already accepted.** A push is several round trips — one pipeline per destination queue, then the batched `BATCH_PUSH` pipeline — but the outage buffer took the whole payload set whenever any of them raised. A `push_bulk` spanning two queues that lost the connection after the first `LPUSH` landed, or any mixed plain + batched push whose batch phase failed, re-buffered payloads that were already enqueued and ran them a second time on the next drain. `Wurk::Client` now records each queue group as its reply comes in and `Buffered` re-buffers only the residual. The group in flight when the socket drops stays at-least-once (a lost reply is indistinguishable from a lost command); everything confirmed before it is not replayed. See [`docs/reliability.md`](docs/reliability.md#client-side-redis-outage-buffering).
+- **`reliable_push_overflow = :raise` silently dropped payloads.** `Buffered.enbuffer` raised from *inside* its append loop, so a bulk push that crossed the cap buffered the payloads before the offending one, raised carrying only that one — and left every payload after it neither buffered, nor enqueued, nor referenced anywhere. A 1000-job `perform_bulk` against a nearly-full buffer lost up to 998 jobs with no error naming them. The split is now decided against remaining capacity before anything is appended: the buffer takes what fits and one `Overflow` carries the rest. The same raise also pre-empted the `bid`-carrying re-raise, stranding batched payloads (which never buffer) in a mixed push; they are now folded into the same exception, with `cause` still the connection error.
+
+### Changed
+- **`Wurk::Client::Buffered::Overflow#payload` → `#payloads`** (Array). The exception now carries *every* undelivered payload rather than the single one that tripped the cap. Callers doing `rescue Overflow => e; Outbox.create!(payload: e.payload)` become `e.payloads.each { … }`. See [`docs/reliability.md`](docs/reliability.md#the-durability-caveat).
+
 ## [1.3.1] - 2026-07-26
 
 Two drop-in gaps found in one production deploy, both of which only bite the worker process — so the web app looks healthy while nothing gets done. Each fix carries a regression test that fails without it.
