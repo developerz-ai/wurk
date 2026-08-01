@@ -112,6 +112,28 @@ class QueuePauseTest < Wurk::Test::UnitCase
     capsule&.stop
   end
 
+  # F1 regression: with every queue paused, retrieve_work has nothing to
+  # BLMOVE on, so it must back off a full poll interval per pass rather than
+  # returning nil instantly. A caller that drives retrieve_work in a bare loop
+  # (Processor#run has no pause of its own) would otherwise turn this into a
+  # hot spin issuing one SMEMBERS per iteration as fast as the CPU allows —
+  # thousands of Redis round trips per second instead of a handful.
+  def test_fetcher_backs_off_with_bounded_redis_commands_when_all_paused
+    fetcher, capsule, counter = build_paused_fetcher_with_counter
+
+    results = drain_for_one_second(fetcher)
+
+    # Backed off at 0.05s/pass, ~1s of wall clock caps this well under 40
+    # passes; a hot spin (no backoff) would blow past this by orders of
+    # magnitude. One SMEMBERS per retrieve_work pass, so the Redis command
+    # count tracks 1:1 with the loop iteration count.
+    assert(results.all?(&:nil?))
+    assert_operator results.size, :<=, 40
+    assert_operator counter.count, :<=, 40
+  ensure
+    capsule&.stop
+  end
+
   def test_fetcher_skips_paused_queue_on_retrieve_work
     fetcher, capsule = build_fetcher(%W[#{@qname} #{@other}])
     @pool.with do |c|
@@ -164,6 +186,44 @@ class QueuePauseTest < Wurk::Test::UnitCase
       private_q = Wurk::Fetcher::Reliable.private_queue_name(@rqname)
       private_other = Wurk::Fetcher::Reliable.private_queue_name(@rotherq)
       c.call('DEL', private_q, private_other)
+    end
+  end
+
+  def monotonic_now
+    ::Process.clock_gettime(::Process::CLOCK_MONOTONIC)
+  end
+
+  def drain_for_one_second(fetcher)
+    deadline = monotonic_now + 1.0
+    results = []
+    results << fetcher.retrieve_work while monotonic_now < deadline
+    results
+  end
+
+  def build_paused_fetcher_with_counter
+    fetcher, capsule = build_fetcher(%W[#{@qname} #{@other}])
+    capsule.config.fetch_poll_interval = 0.05
+    Wurk::Queue.new(@qname).pause!
+    Wurk::Queue.new(@other).pause!
+    counter = RedisCallCounter.new(capsule.redis_pool)
+    capsule.instance_variable_set(:@redis_pool, counter)
+    [fetcher, capsule, counter]
+  end
+
+  # Delegating pool that counts checkouts (one per `config.redis` block),
+  # swapped in for the capsule's real pool so a test can measure Redis round
+  # trips without a global monkeypatch. Mirrors WebSearchTest::RoundTripCounter.
+  class RedisCallCounter
+    attr_reader :count
+
+    def initialize(pool)
+      @pool = pool
+      @count = 0
+    end
+
+    def with(&)
+      @count += 1
+      @pool.with(&)
     end
   end
 end
