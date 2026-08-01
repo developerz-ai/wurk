@@ -211,6 +211,36 @@ class RedisIdempotentCallSitesTest < Wurk::Test::UnitCase
     assert_equal [false], @main.claims_for('SET')
   end
 
+  # --- web ----------------------------------------------------------------
+
+  # A dashboard keystroke pages a queue LIST. Both round trips are reads, and
+  # the scan budget is counted in Ruby, so a replayed page double-counts nothing.
+  def test_web_search_queue_scan_claims_apply_safety
+    on_default_pool do
+      register_queue(%({"jid":"#{@ns}","class":"SearchHit"}))
+      Wurk::Web::Search.new('SearchHit', kinds: %w[queues]).to_a
+    end
+
+    assert_equal [true], @main.claims_for('LLEN')
+    assert_equal [true], @main.claims_for('LRANGE')
+  end
+
+  def test_web_search_sorted_set_scan_claims_apply_safety
+    on_default_pool { Wurk::Web::Search.new('SearchHit', kinds: %w[retry]).to_a }
+
+    assert_equal [true], @main.claims_for('ZSCAN')
+  end
+
+  def test_web_limits_read_paths_claim_apply_safety
+    on_default_pool do
+      Wurk::Web::Enterprise::Limits.list
+      Wurk::Web::Enterprise::Limits.metadata("#{@ns}-lmtr")
+    end
+
+    assert_equal [true], @main.claims_for('SMEMBERS')
+    assert_equal [true], @main.claims_for('HGETALL')
+  end
+
   private
 
   def on_default_pool
@@ -247,6 +277,15 @@ class RedisIdempotentCallSitesTest < Wurk::Test::UnitCase
 
   def enqueue(payload)
     @main.with { |conn| conn.call('LPUSH', @public_queue, payload) }
+  end
+
+  # Search walks `Queue.all`, so the queue has to be a `queues` SET member too,
+  # not just a non-empty LIST.
+  def register_queue(payload)
+    @main.with do |conn|
+      conn.call('SADD', Wurk::Keys::QUEUES_SET, @queue_name)
+      conn.call('LPUSH', @public_queue, payload)
+    end
   end
 
   # A private list owned by a dead pid in this process's own namespace, which the

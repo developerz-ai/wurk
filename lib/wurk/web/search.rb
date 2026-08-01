@@ -103,10 +103,12 @@ module Wurk
       # we scan a bounded prefix and never full-walk the LIST from a keystroke.
       def scan_queue_list(queue_name, &)
         key = Keys.queue(queue_name)
-        stop_at = queue_scan_stop(Wurk.redis { |c| c.call('LLEN', key) })
+        stop_at = queue_scan_stop(Wurk.redis(idempotent: true) { |c| c.call('LLEN', key) })
         start = 0
         while start < stop_at
-          slice = Wurk.redis { |c| c.call('LRANGE', key, start, [start + QUEUE_PAGE, stop_at].min - 1) }
+          slice = Wurk.redis(idempotent: true) do |c|
+            c.call('LRANGE', key, start, [start + QUEUE_PAGE, stop_at].min - 1)
+          end
           break if slice.empty?
 
           slice.each(&)
@@ -134,7 +136,7 @@ module Wurk
         set = sorted_set_for(kind)
         cursor = '0'
         loop do
-          cursor, page = Wurk.redis { |c| c.call('ZSCAN', set.name, cursor, 'COUNT', ZSCAN_PAGE) }
+          cursor, page = Wurk.redis(idempotent: true) { |c| c.call('ZSCAN', set.name, cursor, 'COUNT', ZSCAN_PAGE) }
           emit_sorted_hits(kind, set, page, &)
           @scanned += page.size / 2
           break if cursor == '0'
