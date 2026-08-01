@@ -354,6 +354,16 @@ batch-context pushes. Those re-raise, because the batch Lua has atomic counter
 side effects that can't be safely replayed. In a mixed `push_bulk`, the bidless
 payloads buffer and the batched ones raise.
 
+Also not buffered: payloads Redis already accepted. A push is more than one
+round trip — one pipeline per destination queue, then the batched `BATCH_PUSH`
+pipeline — so a connection that drops partway leaves some of the payload set
+written. Wurk buffers only the groups it has no reply for; a job already in
+`queue:<name>` is never replayed on top of itself. The one group in flight when
+the socket dropped *is* buffered, because a lost reply is indistinguishable from
+a lost command — so that group is at-least-once and may produce a duplicate
+job. Sidekiq's own contract is at-least-once and `JobRetry` re-runs jobs anyway;
+make jobs idempotent.
+
 ### The durability caveat
 
 **The buffer is in-memory and per-process. If the process dies, every buffered

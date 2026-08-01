@@ -400,14 +400,34 @@ module Wurk
 
         private
 
+        # Opens the delivery ledger Client writes into. It lives here rather
+        # than in Client because this rescue is its only reader: a Client
+        # without reliable_push! never allocates it.
         def raw_push(payloads)
+          Thread.current[DELIVERED_KEY] = []
           super
         rescue RedisClient::ConnectionError, ConnectionPool::TimeoutError
           raise if Thread.current[Buffered::DRAINING_KEY]
 
-          bidless, batched = payloads.partition { |p| !p['bid'] }
+          bidless, batched = undelivered(payloads).partition { |p| !p['bid'] }
           enbuffer_bidless(bidless, batched)
           raise unless batched.empty?
+        ensure
+          Thread.current[DELIVERED_KEY] = nil
+        end
+
+        # The payloads this push is not known to have written. A push spanning
+        # several queues, or one mixing plain and batched jobs, fails after
+        # some of its groups already landed; buffering those would replay them
+        # into duplicate jobs once the outage clears. Compared by identity, not
+        # `==`: these are the very Hash objects Client just handed to Redis.
+        def undelivered(payloads)
+          delivered = Thread.current[DELIVERED_KEY]
+          return payloads if delivered.empty?
+
+          seen = {}.compare_by_identity
+          delivered.each { |p| seen[p] = true }
+          payloads.reject { |p| seen.key?(p) }
         end
 
         # Bare `raise` re-raises whatever `$!` holds: the connection error from

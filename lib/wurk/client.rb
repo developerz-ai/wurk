@@ -26,6 +26,15 @@ module Wurk
     SCHEDULED_BATCH_SIZE      = 100
     SPREAD_INTERVAL_FLOOR     = 5
 
+    # Thread-local slot holding the payloads of the current push whose Redis
+    # write is confirmed applied. {Client::Buffered} subtracts them from the set
+    # it re-buffers when a *later* phase of the same push loses the connection,
+    # so an already-written job is never replayed into a second copy.
+    # Thread-local because one Client instance serves every producer thread;
+    # opened and closed by Buffered, the only reader, so an un-prepended Client
+    # pays a single nil check per write phase.
+    DELIVERED_KEY = :wurk_client_delivered
+
     attr_accessor :redis_pool
 
     def initialize(pool: nil, config: nil, chain: nil)
@@ -262,7 +271,10 @@ module Wurk
     # duplicate the scheduled entry.
     def push_scheduled_split(conn, payloads)
       batched, plain = payloads.partition { |j| j['bid'] }
-      conn.pipelined { |pipe| push_scheduled(pipe, plain) } unless plain.empty?
+      unless plain.empty?
+        conn.pipelined { |pipe| push_scheduled(pipe, plain) }
+        mark_delivered(plain)
+      end
       push_batched_scheduled_pipelined(conn, batched) unless batched.empty?
     end
 
@@ -282,7 +294,7 @@ module Wurk
     def push_immediate(conn, payloads)
       now = now_in_millis
       batched, plain = payloads.partition { |j| j['bid'] }
-      conn.pipelined { |pipe| push_plain(pipe, plain, now) } unless plain.empty?
+      push_plain(conn, plain, now) unless plain.empty?
       push_batched_pipelined(conn, batched, now) unless batched.empty?
     end
 
@@ -313,15 +325,31 @@ module Wurk
       conn.pipelined { |pipe| push_batched_scheduled(pipe, batched, eval_method: :eval_with_source) }
     end
 
+    # One pipeline per queue, marked delivered the moment its reply is in.
+    # A push can die between groups — or land its whole plain phase and then
+    # lose the connection in the batched phase above — and whatever Redis
+    # already accepted must stay out of the reliable_push buffer; replaying it
+    # would enqueue a second copy of a job that ran fine.
+    #
+    # The group in flight when the socket drops stays unmarked and so is
+    # replayed: a lost reply is indistinguishable from a lost command, so that
+    # residual is at-least-once by construction. The split bounds it to one
+    # queue group per failed push instead of the entire payload set.
+    #
+    # Cost is a round trip per distinct queue. The single-queue push — every
+    # `perform_async`, every same-class `push_bulk` — still writes exactly the
+    # one SADD + LPUSH pipeline it did before.
     def push_plain(conn, payloads, now)
-      grouped = payloads.group_by { |j| j['queue'] }
-      conn.call('SADD', 'queues', *grouped.keys)
-      grouped.each do |queue, jobs|
+      payloads.group_by { |j| j['queue'] }.each do |queue, jobs|
         serialized = jobs.map do |j|
           j['enqueued_at'] = now
           Wurk.dump_json(j)
         end
-        conn.call('LPUSH', "queue:#{queue}", *serialized)
+        conn.pipelined do |pipe|
+          pipe.call('SADD', 'queues', queue)
+          pipe.call('LPUSH', "queue:#{queue}", *serialized)
+        end
+        mark_delivered(jobs)
       end
     end
 
@@ -367,6 +395,16 @@ module Wurk
 
     def pool
       @redis_pool || Thread.current[:wurk_via_pool] || @config.redis_pool
+    end
+
+    # Record a write Redis has acknowledged, for {Client::Buffered} to subtract
+    # from what it re-buffers. RedisPool#with replays the caller block on a
+    # transient error, so the ledger accumulates across attempts and is never
+    # pruned: a group applied on an earlier attempt stays marked, and the
+    # payload can't end up both retried by the pool and replayed from the
+    # buffer.
+    def mark_delivered(payloads)
+      Thread.current[DELIVERED_KEY]&.concat(payloads)
     end
 
     # Best-effort `sidekiq.jobs.enqueued` counter — one increment per payload
