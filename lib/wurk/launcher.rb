@@ -118,26 +118,18 @@ module Wurk
 
     # Graceful shutdown. Deadline is monotonic so wall-clock skew can't
     # extend it. Managers stop in parallel threads so a slow capsule
-    # doesn't block its siblings.
+    # doesn't block its siblings — and each drain is guarded, because a
+    # capsule that blows up mid-drain (Redis down during bulk_requeue) used
+    # to surface out of `join` and skip the whole teardown tail, leaving the
+    # leader lock held, the process listed as live, and its port open.
     def stop
       deadline = ::Process.clock_gettime(::Process::CLOCK_MONOTONIC) + (@config[:timeout] || 25)
       quiet
-      stoppers = @managers.map { |m| Thread.new { m.stop(deadline) } }
+      stoppers = @managers.map { |m| Thread.new { teardown_step('manager') { m.stop(deadline) } } }
       fire_event(:shutdown, reverse: true)
       stoppers.each(&:join)
-      # Full shutdown stops periodic firing (it survived #quiet); do this before
-      # releasing the lock so no tick races a follower's promotion.
-      @cron_poller&.terminate
-      @metrics_rollup&.terminate
-      @queue_rollup&.terminate
-      @history&.terminate
-      @reaper&.stop
-      # CAS-release the cluster lock now (planned shutdown) so a follower can
-      # take over immediately instead of waiting out the TTL.
-      @leader&.stop
-      stop_heartbeat
-      clear_heartbeat
-      fire_event(:exit, reverse: true)
+    ensure
+      release_components
     end
 
     def stopping?
@@ -173,6 +165,35 @@ module Wurk
     attr_reader :heartbeat_thread
 
     private
+
+    # Teardown tail, driven from #stop's ensure. Every release is guarded on
+    # its own because they are independent: a Redis blip in one (leader CAS
+    # release, heartbeat clear) must not strand the ones after it — the process
+    # is exiting either way, so the only thing worse than a failed release is a
+    # skipped one. Order matters twice over: full shutdown stops the periodic
+    # loops (they survived #quiet) before the cluster lock is CAS-released, so
+    # no tick races a follower's promotion, and the release itself happens on a
+    # planned shutdown rather than waiting out the lock TTL.
+    def release_components
+      [@cron_poller, @metrics_rollup, @queue_rollup, @history].each { |t| teardown_step(t.class) { t&.terminate } }
+      teardown_step('reaper') { @reaper&.stop }
+      teardown_step('leader') { @leader&.stop }
+      %i[stop_heartbeat clear_heartbeat].each { |step| teardown_step(step) { send(step) } }
+      # Unguarded: fire_event already reports and skips past a raising hook.
+      fire_event(:exit, reverse: true)
+    ensure
+      # In an ensure of its own, not merely a guarded step: a leaked TCPServer
+      # FD survives even a non-StandardError unwind (a second TERM landing
+      # mid-teardown), and kubelet would keep getting 200s from a process that
+      # is already gone.
+      teardown_step('health-server') { @health_server&.stop }
+    end
+
+    def teardown_step(label)
+      yield
+    rescue StandardError => e
+      handle_exception(e, { context: "launcher-stop-#{label}" })
+    end
 
     def write_stats(processed, failed, expired)
       day = Time.now.utc.strftime('%F')
@@ -217,13 +238,10 @@ module Wurk
 
     # Erase the live-process footprint. flush_stats first so we don't drop
     # the final batch of counters; then Heartbeat#stop! removes us from the
-    # `processes` SET and UNLINK-s the identity + work hashes. The probe
-    # server is closed alongside so kubelet stops getting 200s after the
-    # process is no longer healthy.
+    # `processes` SET and UNLINK-s the identity + work hashes.
     def clear_heartbeat
       flush_stats
       @heartbeat&.stop!
-      @health_server&.stop
     end
 
     # Terminate the heartbeat loop and wait for it to exit before clear_heartbeat

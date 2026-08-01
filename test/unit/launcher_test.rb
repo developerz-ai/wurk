@@ -445,6 +445,63 @@ class LauncherTest < Wurk::Test::UnitCase
     assert_predicate launcher, :stopping?
   end
 
+  # A2: a Manager that raised mid-drain surfaced out of `stoppers.each(&:join)`
+  # and skipped the whole teardown tail — leader lock still held, process still
+  # listed as live, health-server socket still open. The tail now runs from
+  # #stop's ensure, and each stopper thread swallows (and reports) its own
+  # failure so one bad capsule can't cancel its siblings' joins either.
+  def test_stop_completes_teardown_when_a_manager_stop_raises
+    @config[:timeout] = 0
+    launcher = Wurk::Launcher.new(@config)
+    managers_raising_on_stop(launcher, 'redis down mid-drain')
+    seen = record_teardown(launcher)
+
+    launcher.stop
+
+    assert_equal %i[cron_poller metrics_rollup queue_rollup reaper leader heartbeat exit health], seen
+  end
+
+  def test_stop_reports_a_manager_that_raises_mid_drain
+    @config[:timeout] = 0
+    reported = []
+    @config.error_handlers << ->(ex, ctx, _cfg) { reported << [ex.message, ctx[:context]] }
+    launcher = Wurk::Launcher.new(@config)
+    managers_raising_on_stop(launcher, 'redis down mid-drain')
+    record_teardown(launcher)
+
+    launcher.stop
+
+    assert_includes reported, ['redis down mid-drain', 'launcher-stop-manager']
+  end
+
+  # A Redis blip in one release must not strand the ones after it: the leader
+  # CAS release is the likeliest to fail, and it sits right before the heartbeat
+  # clear that takes us out of the live `processes` SET.
+  def test_stop_releases_heartbeat_and_health_server_when_leader_release_raises
+    @config[:timeout] = 0
+    launcher = Wurk::Launcher.new(@config)
+    silence_managers(launcher)
+    seen = record_teardown(launcher)
+    launcher.instance_variable_get(:@leader).define_singleton_method(:stop) { raise 'CAS release failed' }
+
+    launcher.stop
+
+    assert_equal %i[cron_poller metrics_rollup queue_rollup reaper heartbeat exit health], seen
+  end
+
+  def test_stop_closes_the_health_server_when_clearing_the_heartbeat_raises
+    @config[:timeout] = 0
+    launcher = Wurk::Launcher.new(@config)
+    silence_managers(launcher)
+    seen = record_teardown(launcher)
+    launcher.instance_variable_get(:@heartbeat).define_singleton_method(:stop!) { raise 'redis down' }
+
+    launcher.stop
+
+    assert_includes seen, :health, 'a failed heartbeat clear must not leak the probe listener'
+    assert_includes seen, :exit
+  end
+
   def test_stop_fires_shutdown_then_exit_in_reverse
     order = []
     @config.on(:shutdown) { order << :shutdown_first }
@@ -487,7 +544,7 @@ class LauncherTest < Wurk::Test::UnitCase
     launcher.stop
 
     assert hb_stopped, 'clear_heartbeat must stop! a live heartbeat'
-    assert health_stopped, 'clear_heartbeat must stop a present health server'
+    assert health_stopped, 'stop must close a present health server'
   end
 
   # --- flush_stats -----------------------------------------------------
@@ -859,6 +916,40 @@ class LauncherTest < Wurk::Test::UnitCase
     launcher.instance_variable_get(:@leader).define_singleton_method(:start) { nil }
     # Don't spawn the real cron tick thread (it would poll Redis on a timer).
     launcher.cron_poller.define_singleton_method(:start) { nil }
+  end
+
+  # Stubs every collaborator #stop's teardown tail touches and records, in
+  # order, the ones that actually ran — so a test can assert the tail completed
+  # end to end under an injected failure. @history stays nil (history is opt-in),
+  # which also covers the safe-nav else branch in the timer-loop sweep.
+  def record_teardown(launcher)
+    seen = []
+    %i[cron_poller metrics_rollup queue_rollup].each do |name|
+      record_stop(launcher.public_send(name), :terminate, seen, name)
+    end
+    record_stop(launcher.instance_variable_get(:@reaper), :stop, seen, :reaper)
+    record_stop(launcher.instance_variable_get(:@leader), :stop, seen, :leader)
+    record_heartbeat_and_health(launcher, seen)
+    @config.on(:exit) { seen << :exit }
+    seen
+  end
+
+  def record_heartbeat_and_health(launcher, seen)
+    launcher.define_singleton_method(:flush_stats) { nil }
+    launcher.instance_variable_set(:@heartbeat, record_stop(Object.new, :stop!, seen, :heartbeat))
+    launcher.instance_variable_set(:@health_server, record_stop(Object.new, :stop, seen, :health))
+  end
+
+  def record_stop(target, message, seen, label)
+    target.define_singleton_method(message) { seen << label }
+    target
+  end
+
+  def managers_raising_on_stop(launcher, message)
+    launcher.managers.each do |m|
+      m.define_singleton_method(:quiet) { nil }
+      m.define_singleton_method(:stop) { |_d| raise message }
+    end
   end
 
   def silence_managers(launcher)
