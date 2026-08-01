@@ -105,6 +105,11 @@ if Minitest.respond_to?(:after_parallel_fork)
     Wurk.configuration.redis = { url: Wurk::Test.redis_url }
     Wurk.configuration.reset_redis_pools!
     Wurk.redis { |c| c.call("FLUSHDB") }
+    # engine_test_helper boots the dummy app (opening test/dummy/db/test.sqlite3)
+    # in the parent before this fork; each worker inherits that connection and
+    # must drop it, mirroring Swarm#close_parent_sockets, or workers corrupt
+    # each other's queries on the shared SQLite handle.
+    ActiveRecord::Base.connection_handler.clear_all_connections! if defined?(ActiveRecord::Base)
     SimpleCov.at_fork.call("worker-#{worker}") if ENV["COVERAGE"] && defined?(SimpleCov)
   end
   Minitest.after_run { Process.waitall } if ENV["COVERAGE"] && defined?(SimpleCov)
