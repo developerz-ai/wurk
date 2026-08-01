@@ -67,10 +67,10 @@ class PeriodicLeaderTest < Wurk::Test::UnitCase
     @lid = register_loop
 
     swarm = Wurk::Swarm.new(topology: topology_n(2), config: @config, shutdown_timeout: 5)
-    swarm.boot(install_signals: false)
     supervisor = nil
 
     begin
+      swarm.boot(install_signals: false)
       supervisor = Thread.new { swarm.supervise }
 
       assert wait_for_history, "loop #{@lid} never fired within #{POLL_TIMEOUT}s — " \
@@ -78,8 +78,12 @@ class PeriodicLeaderTest < Wurk::Test::UnitCase
       assert_equal 1, history_len,
                    'two workers + one loop must enqueue exactly once per tick (no follower double-fire)'
     ensure
-      swarm.shutdown(timeout: 5)
-      supervisor&.join(10)
+      begin
+        swarm.shutdown(timeout: 5)
+      rescue StandardError
+        nil
+      end
+      supervisor&.join(10) || supervisor&.kill
     end
   end
 

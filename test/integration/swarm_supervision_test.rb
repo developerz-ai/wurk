@@ -45,17 +45,23 @@ class SwarmSupervisionTest < Wurk::Test::UnitCase
     key = "#{@ns}-crash-log"
     install_crash_on_startup(key)
     swarm = Wurk::Swarm.new(topology: topology_n(1), config: @config, shutdown_timeout: SHUTDOWN_TIMEOUT)
-    swarm.boot(install_signals: false)
-    supervisor = Thread.new { swarm.supervise }
+    supervisor = nil
 
     begin
+      swarm.boot(install_signals: false)
+      supervisor = Thread.new { swarm.supervise }
+
       assert_growing_backoff(key)
       assert_drains_promptly_while_backoff_pending(swarm)
     ensure
       # A failed assertion must not leave the crash-loop respawning forever;
       # shutdown is idempotent so the happy path's drain isn't double-counted.
-      swarm.shutdown(timeout: SHUTDOWN_TIMEOUT)
-      supervisor&.join(10)
+      begin
+        swarm.shutdown(timeout: SHUTDOWN_TIMEOUT)
+      rescue StandardError
+        nil
+      end
+      supervisor&.join(10) || supervisor&.kill
     end
   end
 
@@ -66,10 +72,12 @@ class SwarmSupervisionTest < Wurk::Test::UnitCase
   # (a fresh replacement spawned) once the restart's own backoff elapses.
   def test_kill_replacement_mid_restart_keeps_old_child_and_retries_slot
     swarm = Wurk::Swarm.new(topology: topology_n(1), config: @config, shutdown_timeout: SHUTDOWN_TIMEOUT)
-    original = swarm.boot(install_signals: false).first
-    supervisor = Thread.new { swarm.supervise }
+    supervisor = nil
 
     begin
+      original = swarm.boot(install_signals: false).first
+      supervisor = Thread.new { swarm.supervise }
+
       swarm.rolling_restart
       replacement = kill_the_replacement(swarm, original)
 
@@ -79,8 +87,12 @@ class SwarmSupervisionTest < Wurk::Test::UnitCase
 
       assert retried, 'the slot must be retried with a fresh replacement after backoff'
     ensure
-      swarm.shutdown(timeout: SHUTDOWN_TIMEOUT)
-      supervisor&.join(10)
+      begin
+        swarm.shutdown(timeout: SHUTDOWN_TIMEOUT)
+      rescue StandardError
+        nil
+      end
+      supervisor&.join(10) || supervisor&.kill
     end
   end
 
