@@ -30,6 +30,13 @@ module Wurk
       # Default BLMOVE block timeout; overridable via config.fetch_poll_interval.
       TIMEOUT = 2
 
+      # Backoff for the quieted short-circuit. Manager#quiet terminates the
+      # shared fetcher before it terminates the processors, and Processor#run
+      # loops on its *own* flag — so in that window every processor would spin
+      # on an instant nil. Kept below Manager::PAUSE_TIME, which #stop sleeps
+      # immediately after #quiet, so this pause adds no drain latency.
+      QUIET_PAUSE = 0.05
+
       # Carries the public queue key, the raw (still-JSON) job payload,
       # and the capsule we use to reach Redis. ACK removes from the private
       # list; requeue pushes back to the public queue head so the job is
@@ -66,11 +73,26 @@ module Wurk
         @done = false
       end
 
+      # Every pass that yields no job has to cost wall-clock time: Processor#run
+      # drives `process_one` in a bare `until @done` loop with no pause of its
+      # own, so any nil returned instantly turns N processor threads into a hot
+      # loop. The blocking BLMOVE pays that cost on the normal empty-queue path;
+      # the two short-circuits below have to pay it themselves.
       def retrieve_work
-        return nil if @done
+        if @done
+          sleep QUIET_PAUSE
+          return nil
+        end
 
         queues = queues_cmd
-        return nil if queues.empty?
+        # Nothing fetchable — every queue paused, or none configured. Back off a
+        # full poll interval rather than re-running queues_cmd (an SMEMBERS per
+        # pass, on the main pool) as fast as the CPU allows. Mirrors Sidekiq's
+        # BasicFetch guard, upstream #4825.
+        if queues.empty?
+          sleep poll_interval
+          return nil
+        end
 
         queues.each do |public_q|
           uow = lmove(public_q)

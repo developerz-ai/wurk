@@ -64,6 +64,31 @@ class FetcherReliableTest < Wurk::Test::UnitCase
     assert_nil @fetcher.retrieve_work
   end
 
+  # Manager#quiet terminates the shared fetcher before it terminates the
+  # processors; Processor#run loops on its own flag, so the short-circuit has to
+  # pause or every processor spins for the width of that window.
+  def test_retrieve_work_pauses_on_the_quieted_short_circuit
+    @fetcher.terminate
+
+    took = elapsed { assert_nil @fetcher.retrieve_work }
+
+    assert_operator took, :>=, Wurk::Fetcher::Reliable::QUIET_PAUSE * 0.9
+  end
+
+  # Every queue paused → nothing to block on, so retrieve_work must back off a
+  # poll interval itself. Returning instantly hot-loops Processor#run and pays
+  # an SMEMBERS of the paused set on every pass (upstream Sidekiq #4825).
+  def test_retrieve_work_backs_off_a_poll_interval_when_no_queue_is_fetchable
+    @config.fetch_poll_interval = 0.2
+    Wurk::Queue.new(@queue_name).pause!
+
+    assert_empty @fetcher.queues_cmd
+
+    took = elapsed { assert_nil @fetcher.retrieve_work }
+
+    assert_operator took, :>=, 0.18
+  end
+
   # --- acknowledge / SIGKILL behavior ---------------------------------
 
   def test_acknowledge_removes_job_from_private_list
@@ -276,6 +301,13 @@ class FetcherReliableTest < Wurk::Test::UnitCase
     end
     @capsule.define_singleton_method(:fetch_redis) { |&blk| blk.call(conn) }
     box
+  end
+
+  # Monotonic wall-clock cost of the block, in seconds.
+  def elapsed
+    started = ::Process.clock_gettime(::Process::CLOCK_MONOTONIC)
+    yield
+    ::Process.clock_gettime(::Process::CLOCK_MONOTONIC) - started
   end
 
   def private_queue
