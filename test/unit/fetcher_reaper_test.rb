@@ -235,6 +235,17 @@ class FetcherReaperTest < Wurk::Test::UnitCase
     assert_equal 1, llen(key), 'in-flight job left alone'
   end
 
+  # A bare Docker hostname is 12 hex chars, so ~1 in 175 hosts is all digits.
+  # The scoped sweep splits the tail off a known public-queue prefix, so the
+  # pre-nonce shape stays unambiguous even then.
+  def test_reclaims_a_pre_nonce_private_list_from_an_all_digit_host
+    key = "#{@public_queue}|123456789012|#{DEAD_PID}|0"
+    @pool.with { |c| c.call('RPUSH', key, payload('legacy')) }
+
+    assert_equal 1, @reaper.reclaim!, 'a pre-nonce orphan is reclaimable during the upgrade window'
+    assert_equal 1, llen(@public_queue)
+  end
+
   # --- cluster lock ------------------------------------------------------
 
   def test_reap_is_a_noop_when_both_locks_are_held_elsewhere
@@ -316,6 +327,32 @@ class FetcherReaperTest < Wurk::Test::UnitCase
 
     assert_equal 1, @reaper.reclaim_full!
     assert_equal 1, llen(foreign_q), 'reclaimed onto the correctly-parsed public queue'
+  end
+
+  # The full sweep has no prefix to split on, so an all-digit host makes the
+  # pre-nonce shape look like the nonce shape: read wide, `123456789012` is the
+  # queue name's last segment and the queue name itself is gone. Such a list
+  # holds a pre-upgrade process's in-flight jobs — it has to stay reclaimable.
+  def test_reclaim_full_reclaims_a_pre_nonce_orphan_from_an_all_digit_host
+    foreign_q = Wurk::Keys.queue("#{@ns}-legacy")
+    private_key = "#{foreign_q}|123456789012|#{DEAD_PID}|0"
+    @extra_keys.push(foreign_q, private_key)
+    @pool.with { |c| c.call('RPUSH', private_key, payload('legacy')) }
+
+    assert_equal 1, @reaper.reclaim_full!
+    assert_equal 1, llen(foreign_q), 'reclaimed onto the queue the narrow reading recovers'
+  end
+
+  # Same host, current shape: the wide reading is the right one and must stay
+  # preferred — read narrow, the job lands on `<queue>|123456789012`.
+  def test_reclaim_full_reclaims_a_nonce_keyed_orphan_from_an_all_digit_host
+    foreign_q = Wurk::Keys.queue("#{@ns}-digits")
+    private_key = "#{foreign_q}|123456789012|#{DEAD_PID}|#{Wurk::Component::PROCESS_NONCE}|0"
+    @extra_keys.push(foreign_q, private_key, "#{foreign_q}|123456789012")
+    @pool.with { |c| c.call('RPUSH', private_key, payload('nonced')) }
+
+    assert_equal 1, @reaper.reclaim_full!
+    assert_equal 1, llen(foreign_q), 'reclaimed onto the queue the wide reading recovers'
   end
 
   # A `|` inside the queue name must still parse: the owner segments are taken
