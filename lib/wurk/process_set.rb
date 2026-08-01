@@ -32,7 +32,7 @@ module Wurk
     # absence (process never registered) and expiry (heartbeat lapsed,
     # info field gone) both return nil.
     def self.[](identity)
-      exists, fields = Wurk.redis do |conn|
+      exists, fields = Wurk.redis(idempotent: true) do |conn|
         conn.pipelined do |pipe|
           pipe.call('SISMEMBER', Keys::PROCESSES, identity)
           pipe.call('HMGET', identity, *LOOKUP_FIELDS)
@@ -47,6 +47,11 @@ module Wurk
     # globally to 1/min via SET NX EX so concurrent dashboards / API calls
     # don't dogpile the prune. Returns the number of identities removed
     # (or 0 when the lock was held by someone else).
+    #
+    # No apply-safety claim, unlike the reads around it: a replay re-decides
+    # which identities are dead, so it could prune one that registered in
+    # between and hasn't written `info` yet. A blip here just skips one prune —
+    # the next caller a minute later does it.
     #
     # Spec: docs/target/sidekiq-free.md §31.17.
     def cleanup
@@ -84,7 +89,7 @@ module Wurk
     # SCARD over `processes`. Not pruned — may include identities whose
     # heartbeat has lapsed. Use `each` for the accurate count.
     def size
-      Wurk.redis { |conn| conn.call('SCARD', Keys::PROCESSES) }
+      Wurk.redis(idempotent: true) { |conn| conn.call('SCARD', Keys::PROCESSES) }
     end
 
     # Sum of `concurrency` across live processes. Iterates `each` so dead
@@ -104,7 +109,7 @@ module Wurk
     # `||=` with empty-string fallback distinguishes "leader is unset" from
     # "memoization not yet computed".
     def leader
-      @leader ||= Wurk.redis { |c| c.call('GET', 'dear-leader') } || ''
+      @leader ||= Wurk.redis(idempotent: true) { |c| c.call('GET', 'dear-leader') } || ''
     end
 
     class << self
@@ -134,7 +139,7 @@ module Wurk
     private
 
     def fetch_each_rows
-      Wurk.redis do |conn|
+      Wurk.redis(idempotent: true) do |conn|
         procs = conn.call('SMEMBERS', Keys::PROCESSES).sort
         next [] if procs.empty?
 
@@ -223,7 +228,7 @@ module Wurk
     # Compares identity against the `dear-leader` STRING. Ent-only;
     # always false in OSS/free.
     def leader?
-      Wurk.redis { |c| c.call('GET', 'dear-leader') == identity }
+      Wurk.redis(idempotent: true) { |c| c.call('GET', 'dear-leader') == identity }
     end
 
     private

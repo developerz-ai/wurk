@@ -20,6 +20,10 @@ class RedisIdempotentCallSitesTest < Wurk::Test::UnitCase
   # its block actually issued.
   Checkout = Struct.new(:idempotent, :commands)
 
+  # The capsule duck type `Wurk.redis_pool` resolves through, so a class that
+  # reaches for the process-wide pool lands on the recorder instead.
+  Handle = Struct.new(:redis_pool)
+
   # Pairs each checkout's claim with the commands issued inside it, so a test can
   # say "the SCAN claimed, the LMOVE didn't" instead of asserting a positional
   # sequence that any unrelated new round trip would break.
@@ -166,7 +170,56 @@ class RedisIdempotentCallSitesTest < Wurk::Test::UnitCase
     assert_equal [false], @main.claims_for('LMOVE').uniq
   end
 
+  # --- data API (Stats / Queue / ProcessSet) ------------------------------
+
+  # Everything the dashboard and third-party gems poll: counters, queue sizes,
+  # latency, the process list. All pure reads, so all replayable.
+  def test_data_api_read_paths_claim_apply_safety
+    on_default_pool do
+      Wurk::Stats.new.queues
+      Wurk::Queue.new(@queue_name).size
+      Wurk::ProcessSet.new(false).size
+    end
+
+    assert_equal [true], @main.claims_for('GET').uniq
+    assert_equal [true], @main.claims_for('LLEN').uniq
+    assert_equal [true], @main.claims_for('SCARD').uniq
+  end
+
+  # Pause/unpause converge on the membership the caller asked for, so a replay
+  # after a lost reply lands on the same state — the claim documented on both.
+  def test_queue_pause_and_unpause_claim_apply_safety
+    queue = Wurk::Queue.new(@queue_name)
+    on_default_pool do
+      queue.pause!
+      queue.unpause!
+    end
+
+    assert_equal [true], @main.claims_for('SADD')
+    assert_equal [true], @main.claims_for('SREM')
+  end
+
+  # The writes among those reads: clearing a queue and zeroing the global
+  # counters both wipe a container other writers append to.
+  def test_data_api_writes_do_not_claim_apply_safety
+    on_default_pool do
+      Wurk::Queue.new(@queue_name).clear
+      Wurk::Stats.new.reset
+    end
+
+    assert_equal [false], @main.claims_for('UNLINK')
+    assert_equal [false], @main.claims_for('SET')
+  end
+
   private
+
+  def on_default_pool
+    prev = Thread.current[:wurk_capsule]
+    Thread.current[:wurk_capsule] = Handle.new(@main)
+    yield
+  ensure
+    Thread.current[:wurk_capsule] = prev
+  end
 
   # Points every pool a subsystem can reach at a recorder: the default capsule's
   # main + fetch pools (Capsule#redis / #fetch_redis) and, through
