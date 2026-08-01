@@ -25,7 +25,7 @@ module Wurk
         # @return [Array<String>] limiter names, optionally filtered to those
         #   whose name contains the case-insensitive substring `filter`.
         def list(filter: nil)
-          names = Wurk.redis { |c| c.call('SMEMBERS', Wurk::Limiter::LIST_KEY) }.sort
+          names = Wurk.redis(idempotent: true) { |c| c.call('SMEMBERS', Wurk::Limiter::LIST_KEY) }.sort
           return names if filter.nil? || filter.to_s.empty?
 
           needle = filter.to_s.downcase
@@ -33,7 +33,7 @@ module Wurk
         end
 
         def metadata(name)
-          raw = Wurk.redis { |c| c.call('HGETALL', "lmtr:#{name}") }
+          raw = Wurk.redis(idempotent: true) { |c| c.call('HGETALL', "lmtr:#{name}") }
           raw.is_a?(Array) ? raw.each_slice(2).to_h : raw
         end
 

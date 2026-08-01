@@ -58,11 +58,28 @@ module Wurk
         loop do
           break if @done
 
-          jobstr = @config.redis { |conn| Wurk::Lua::Loader.eval_cached(conn, :zpopbyscore, keys: [sset], argv: [now]) }
+          jobstr = pop_due(sset, now)
           break unless jobstr
 
           push_promoted(jobstr, sset)
         end
+      end
+
+      # ZPOPBYSCORE is destructive and carries its result in the reply, so this
+      # block never claims apply-safety: a replay discards whatever the lost
+      # reply already removed. The pool therefore raises on a Read-/WriteTimeout,
+      # which leaves the outcome of *this* pop unknown — a due job may or may not
+      # have come off the ZSET. Report it and end this set's drain (the nil makes
+      # #drain_set break) rather than pop again blind; a job caught in that window
+      # falls into the same pop→push loss the default scheduler already documents
+      # on #push_promoted, and `reliable_scheduler!` (ReliableEnq) is the loss-free
+      # fix. Rescuing here rather than around #drain_set keeps the sibling set
+      # draining on this tick.
+      def pop_due(sset, now)
+        @config.redis { |conn| Wurk::Lua::Loader.eval_cached(conn, :zpopbyscore, keys: [sset], argv: [now]) }
+      rescue RedisClient::ConnectionError => e
+        handle_exception(e, { context: 'scheduler_pop', set: sset })
+        nil
       end
 
       # A raising `@client.push` (bad payload, transient Redis error) must not

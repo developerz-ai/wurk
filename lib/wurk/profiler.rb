@@ -5,6 +5,7 @@ require 'zlib'
 require 'stringio'
 require 'tempfile'
 require_relative 'keys'
+require_relative 'pool_checkout'
 
 module Wurk
   # Job profiling (Sidekiq 8.0+, OSS). When a job is pushed with a `profile`
@@ -113,8 +114,8 @@ module Wurk
         end
       end
 
-      def with_pool(pool, &)
-        pool ? pool.with(&) : Wurk.redis(&)
+      def with_pool(pool, idempotent: false, &)
+        pool ? PoolCheckout.with(pool, idempotent, &) : Wurk.redis(idempotent:, &)
       end
 
       def now

@@ -124,6 +124,11 @@ module Wurk
         end
       end
 
+      # No apply-safety claim: INCR is additive, so a block replayed after a
+      # lost reply bumps twice and can carry a healthy job past
+      # RECOVERY_THRESHOLD into the dead set. Raising instead only leaves the
+      # count short — Reaper#drain rescues, and the job is already back on its
+      # public queue, so it just misses one poison check.
       def bump_counter(jid)
         key = "#{KEY_PREFIX}#{jid}"
         Wurk.redis do |conn|

@@ -118,6 +118,20 @@ class ClientPartialDeliveryTest < Wurk::Test::UnitCase
     assert_empty queued_args(@queue)
   end
 
+  # Plan 04/F5 follow-up, through a real RedisPool this time. CannotConnectError
+  # is the pool's "provably nothing applied" case — true of the command that
+  # raised, false of the pipeline before it. Replaying the block would put the
+  # delivered group in `queue:` a second time.
+  def test_the_pool_does_not_replay_a_push_that_already_delivered_a_queue_group
+    client = Wurk::Client.new(pool: retrying_pool(deliver: 1, kind: RedisClient::CannotConnectError))
+
+    client.send(:raw_push, [item(args: ['a'], jid: 'j-a'),
+                            item(args: ['b'], jid: 'j-b', queue: @other_queue)])
+
+    assert_equal [['a']], queued_args(@queue), 'the delivered group must not be re-pushed'
+    assert_equal [['b']], buffered_args
+  end
+
   # Plan 03/S14. raw_push hands back exactly what it diverted into the buffer,
   # and Client#push subtracts that from the enqueued metric. The delivered
   # group must not be in the set — it reached Redis and has to keep counting.
@@ -178,14 +192,36 @@ class ClientPartialDeliveryTest < Wurk::Test::UnitCase
   # like a dropped socket. Reproduces the only failure mode that matters here:
   # writes Redis already applied, followed by a ConnectionError.
   #
-  # Deliberately not a RedisPool: #with there replays the block up to
-  # CONN_MAX_ATTEMPTS with backoff, which would both re-apply the delivered
-  # group (plan 04's F5, fixed separately) and add seconds of sleep per test.
+  # Deliberately not a RedisPool: these cases are about the delivery ledger, not
+  # the retry policy, and a bare pool keeps them free of both.
   def dropping_pool(deliver:)
     conn = MidPushDropConn.new(raw_conn, deliver: deliver)
     pool = Object.new
     pool.define_singleton_method(:with) { |&blk| blk.call(conn) }
     pool
+  end
+
+  # The same connection behind a real RedisPool, so the block runs under the
+  # actual retry policy. Its own ConnectionPool is swapped out rather than
+  # opened, exactly like the pool unit tests do.
+  def retrying_pool(deliver:, kind:)
+    conn = MidPushDropConn.new(raw_conn, deliver: deliver, kind: kind)
+    pool = Wurk::RedisPool.new(size: 1, url: Wurk::Test.redis_url, name: 'partial')
+    pool.instance_variable_set(:@pool, SingleConnPool.new(conn))
+    pool
+  end
+
+  # Stand-in ConnectionPool that always yields the one faulted connection.
+  class SingleConnPool
+    def initialize(conn)
+      @conn = conn
+    end
+
+    def with
+      yield @conn
+    end
+
+    def shutdown(&); end
   end
 
   # Bare connection, built the way RedisPool#build_client builds one, against
@@ -196,22 +232,33 @@ class ClientPartialDeliveryTest < Wurk::Test::UnitCase
     )
   end
 
+  # Lands `deliver` pipelines for real, drops the socket on the next one, then
+  # recovers — what redis-client's mid-block re-dial looks like from above. A
+  # block that replays after the drop therefore re-applies what it already sent,
+  # which is the duplicate the pool has to refuse.
   class MidPushDropConn
-    def initialize(real, deliver:)
+    def initialize(real, deliver:, kind: RedisClient::ConnectionError)
       @real = real
       @deliver = deliver
+      @kind = kind
       @seen = 0
     end
 
     def pipelined(&)
       @seen += 1
-      raise RedisClient::ConnectionError, 'simulated mid-push drop' if @seen > @deliver
+      raise @kind, 'simulated mid-push drop' if @seen == @deliver + 1
 
       @real.pipelined(&)
     end
 
     def call(*, &)
       @real.call(*, &)
+    end
+
+    # Pass-through, so the odometer RedisPool's replay guard reads is the real
+    # connection's count of what actually landed.
+    def round_trips
+      @real.round_trips
     end
   end
 end

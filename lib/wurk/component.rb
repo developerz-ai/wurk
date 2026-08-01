@@ -63,8 +63,8 @@ module Wurk
       config.logger
     end
 
-    def redis(&)
-      config.redis(&)
+    def redis(idempotent: false, &)
+      config.redis(idempotent:, &)
     end
 
     def handle_exception(ex, ctx = {})

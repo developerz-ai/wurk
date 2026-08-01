@@ -1,6 +1,7 @@
 # frozen_string_literal: true
 
 require 'date'
+require_relative 'pool_checkout'
 
 module Wurk
   # Read-only inspector for cluster state in Redis. The cheap counters are
@@ -38,7 +39,7 @@ module Wurk
     # Sum of the `busy` HASH field across every live process identity.
     # Pipelined but unbounded by process count.
     def workers_size
-      Wurk.redis do |conn|
+      Wurk.redis(idempotent: true) do |conn|
         identities = conn.call('SMEMBERS', Keys::PROCESSES)
         next 0 if identities.empty?
 
@@ -55,7 +56,7 @@ module Wurk
     # and dashboards reading this rely on that order. Match it exactly with
     # `sort_by { |_, size| -size }`.
     def queues
-      Wurk.redis do |conn|
+      Wurk.redis(idempotent: true) do |conn|
         names = conn.call('SMEMBERS', Keys::QUEUES_SET)
         next {} if names.empty?
 
@@ -71,7 +72,7 @@ module Wurk
     # (`queue_summaries.sort_by { |qd| -qd.size }`) — this feeds the
     # dashboard's queue table (api_controller#queues).
     def queue_summaries
-      Wurk.redis do |conn|
+      Wurk.redis(idempotent: true) do |conn|
         names = conn.call('SMEMBERS', Keys::QUEUES_SET)
         next [] if names.empty?
 
@@ -89,13 +90,17 @@ module Wurk
     # Latency (secs) of the `default` queue — the most-asked-about gauge.
     def default_queue_latency
       now_ms = ::Process.clock_gettime(::Process::CLOCK_REALTIME, :millisecond)
-      payload = Wurk.redis { |c| c.call('LRANGE', Keys.queue('default'), -1, -1) }.first
+      payload = Wurk.redis(idempotent: true) { |c| c.call('LRANGE', Keys.queue('default'), -1, -1) }.first
       compute_latency(payload, now_ms)
     end
 
     # Resets the named global counters. With no args, clears `processed`,
     # `failed`, and `expired`. SET … 0 (not DEL — keeps the key around so
     # reads stay `Integer` not `nil`).
+    #
+    # The only write here, and the only block in this class that can't claim
+    # apply-safety: a replay after a lost reply would re-zero the counters,
+    # discarding whatever the fleet counted in between.
     def reset(*stats)
       all      = %w[failed processed expired]
       to_clear = stats.empty? ? all : all & stats.flatten.map(&:to_s)
@@ -123,7 +128,7 @@ module Wurk
     private_constant :FAST_QUERIES, :FAST_KEYS
 
     def fetch_stats_fast!
-      raw = Wurk.redis do |conn|
+      raw = Wurk.redis(idempotent: true) do |conn|
         conn.pipelined { |pipe| FAST_QUERIES.each { |args| pipe.call(*args) } }
       end
       @stats = FAST_KEYS.zip(raw.map(&:to_i)).to_h
@@ -179,17 +184,17 @@ module Wurk
 
       def date_stat_hash(stat)
         keys = (0...@days_previous).map { |i| (@start_date - i).strftime('%Y-%m-%d') }
-        values = with_redis do |conn|
+        values = with_redis(idempotent: true) do |conn|
           conn.pipelined { |pipe| keys.each { |d| pipe.call('GET', "stat:#{stat}:#{d}") } }
         end
         keys.zip(values.map(&:to_i)).to_h
       end
 
-      def with_redis(&)
+      def with_redis(idempotent: false, &)
         if @pool
-          @pool.with(&)
+          PoolCheckout.with(@pool, idempotent, &)
         else
-          Wurk.redis(&)
+          Wurk.redis(idempotent:, &)
         end
       end
     end

@@ -8,6 +8,7 @@
 require_relative 'wurk/version'
 require_relative 'wurk/keys'
 require_relative 'wurk/redis_pool'
+require_relative 'wurk/pool_checkout'
 require_relative 'wurk/redis_connection'
 require_relative 'wurk/middleware'
 require_relative 'wurk/middleware/chain'
@@ -126,8 +127,15 @@ module Wurk
     end
     alias default_configuration configuration
 
-    def redis(&)
-      redis_pool.with(&)
+    # `idempotent: true` asserts the block is safe to re-run after a command may
+    # already have applied server-side, buying back the full connection backoff
+    # (see RedisPool#with). Every wrapper down the chain — Capsule,
+    # Configuration, Component, middleware, Sidekiq.redis — forwards it, so a
+    # caller can claim apply-safety wherever it holds; PoolCheckout drops the
+    # claim for a host-supplied pool that wouldn't understand it. The zero-arg
+    # shape is the drop-in contract: `Sidekiq.redis { |c| ... }` never changes.
+    def redis(idempotent: false, &)
+      PoolCheckout.with(redis_pool, idempotent, &)
     end
 
     # Capsule-aware pool lookup. Thread-local override wins so per-capsule

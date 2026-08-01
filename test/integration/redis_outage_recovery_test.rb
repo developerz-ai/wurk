@@ -107,6 +107,37 @@ class RedisOutageRecoveryTest < Wurk::Test::UnitCase
   end
   # rubocop:enable Metrics/AbcSize, Minitest/MultipleAssertions
 
+  # 04-redis-retry-idempotency, F5 regression: Heartbeat#drain_signals is
+  # deliberately excluded from `idempotent: true` (LPOP is destructive — see
+  # heartbeat.rb's comment above the method) so it never replays a reply lost
+  # to a blip. That is only safe because the retry that lets a heartbeat
+  # survive the blip at all comes from RedisPool's always-retryable
+  # PRE_APPLY_ERRORS (CannotConnectError et al.) — errors raised before any
+  # command reached the wire — which is exactly what a real TCP outage in
+  # front of a fresh connection attempt produces. Seed a signal directly
+  # against real Redis (bypassing the proxy, same as the sentinel worker
+  # above), blip the pool the heartbeat itself is behind, and assert the
+  # signal comes back exactly once: not dropped by the outage, not
+  # duplicated by the retry.
+  def test_heartbeat_retry_survives_a_blip_without_dropping_a_seeded_signal
+    identity = "#{@ns}-hb"
+    signals_key = "#{identity}-signals"
+    @observer.call('LPUSH', signals_key, 'TERM')
+    heartbeat = Wurk::Heartbeat.new(identity: identity, config: @config)
+
+    blip = Thread.new { @proxy.blip!(BLIP_SECONDS) }
+    sleep 0.2 # let the outage start before the beat's first connection attempt hits it
+
+    sigs = heartbeat.beat!
+    blip.join
+
+    assert_equal ['TERM'], sigs, 'the seeded signal must survive the blip exactly once'
+    assert_equal 0, @observer.call('LLEN', signals_key).to_i, 'the signal must be drained, not left behind'
+  ensure
+    @observer.call('DEL', identity, "#{identity}:work", signals_key)
+    @observer.call('SREM', Wurk::Keys::PROCESSES, identity)
+  end
+
   private
 
   def build_config

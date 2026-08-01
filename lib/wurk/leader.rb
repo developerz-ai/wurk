@@ -3,6 +3,7 @@
 require 'securerandom'
 require 'socket'
 require_relative 'component'
+require_relative 'pool_checkout'
 
 module Wurk
   # Cluster leader election via Redis `SET NX EX`. Single-leader-per-cluster
@@ -175,13 +176,13 @@ module Wurk
       @config.handle_exception(e, event: :leader) if @config.respond_to?(:handle_exception)
     end
 
-    def redis_call(&)
+    def redis_call(idempotent: false, &)
       if @pool
-        @pool.with(&)
+        PoolCheckout.with(@pool, idempotent, &)
       elsif @config
-        @config.redis(&)
+        @config.redis(idempotent:, &)
       else
-        Wurk.redis(&)
+        Wurk.redis(idempotent:, &)
       end
     end
 

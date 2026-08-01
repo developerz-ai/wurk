@@ -248,6 +248,13 @@ module Wurk
       buffer = Thread.current[Wurk::Batch::BUFFER_KEY]
       return buffer_add(buffer, payloads) if buffer && payloads.all? { |p| p['bid'] && !p['at'] }
 
+      # No apply-safety claim: every command below appends (LPUSH, ZADD, the
+      # batch Lua's counters), so a block replayed after a lost reply is a
+      # second copy of the job. A post-write timeout raises out of here instead
+      # — {Client::Buffered} turns that into an outage-buffer entry, and a plain
+      # Client hands it to whoever called `perform_async`. The pool's pre-apply
+      # retry only fires while this block has landed nothing, so a queue group
+      # that already went out is never re-pushed by a replay.
       pool.with { |conn| atomic_push(conn, payloads) }
       nil
     end
@@ -407,11 +414,13 @@ module Wurk
     end
 
     # Record a write Redis has acknowledged, for {Client::Buffered} to subtract
-    # from what it re-buffers. RedisPool#with replays the caller block on a
-    # transient error, so the ledger accumulates across attempts and is never
-    # pruned: a group applied on an earlier attempt stays marked, and the
-    # payload can't end up both retried by the pool and replayed from the
-    # buffer.
+    # from what it re-buffers: one push spans several pipelines (plain vs
+    # batched, immediate vs scheduled), and the ledger is what keeps a group
+    # that already landed out of the buffer when a later group fails. It
+    # accumulates across pool attempts and is never pruned — #raw_push claims no
+    # apply-safety, and RedisPool refuses to replay such a block once one of its
+    # round trips has completed, so the only replay left starts from an empty
+    # ledger.
     def mark_delivered(payloads)
       Thread.current[DELIVERED_KEY]&.concat(payloads)
     end
