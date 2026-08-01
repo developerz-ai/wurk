@@ -328,7 +328,7 @@ class BatchRetryRoundtripTest < Wurk::Test::UnitCase
       rescue StandardError
         nil
       end
-      supervisor&.join(10) || supervisor&.kill
+      stop_supervisor_thread(supervisor, 10)
     end
   end
 

@@ -112,37 +112,37 @@ if Minitest.respond_to?(:after_parallel_fork)
     ActiveRecord::Base.connection_handler.clear_all_connections! if defined?(ActiveRecord::Base)
     SimpleCov.at_fork.call("worker-#{worker}") if ENV["COVERAGE"] && defined?(SimpleCov)
   end
+  # Reap every worker before the parent's at-exit SimpleCov merge, without the
+  # unbounded Process.waitall that would hang the suite on a stuck child.
+  # waitpid2(-1, WNOHANG) returns nil while a child is still running and raises
+  # ECHILD once none remain, so nil means "poll again", not "done" — only ECHILD
+  # ends the loop, and only a blown deadline is an error.
   Minitest.after_run do
     if ENV["COVERAGE"] && defined?(SimpleCov)
-      deadline = ::Process.clock_gettime(::Process::CLOCK_MONOTONIC) + 10.0
-      orphans = []
+      deadline = Process.clock_gettime(Process::CLOCK_MONOTONIC) + 10.0
       loop do
-        pid, status = ::Process.waitpid2(-1, ::Process::WNOHANG)
-        break if pid.nil?
-
-        raise "Unexpected child status: #{status.inspect} pid=#{pid}" unless status&.success?
-      end
-      loop do
-        if ::Process.clock_gettime(::Process::CLOCK_MONOTONIC) >= deadline
-          break
-        end
-
         begin
-          pid, _status = ::Process.waitpid2(-1, ::Process::WNOHANG)
-          break if pid.nil?
-
-          orphans.push(pid)
+          pid, status = Process.waitpid2(-1, Process::WNOHANG)
         rescue Errno::ECHILD
           break
         end
+
+        if pid
+          raise "Unexpected child status: #{status.inspect} pid=#{pid}" unless status.success?
+
+          next
+        end
+
+        raise "Children still running after 10s deadline" if Process.clock_gettime(Process::CLOCK_MONOTONIC) >= deadline
+
         sleep 0.01
       end
-      raise "Unreapable children after 10s deadline: #{orphans.inspect}" if orphans.any?
     end
   end
 end
 
 require_relative "support/redis_namespace"
+require_relative "support/swarm_teardown"
 
 module Wurk
   module Test
@@ -169,6 +169,7 @@ module Wurk
     # Base class for non-engine tests.
     class UnitCase < ::Minitest::Test
       include RedisNamespace
+      include SwarmTeardown
 
       def self.parallelize_me!
         # Hook for Minitest's parallel runner.

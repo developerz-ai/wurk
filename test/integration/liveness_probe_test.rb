@@ -48,9 +48,15 @@ class LivenessProbeTest < Wurk::Test::UnitCase
     rescue StandardError
       nil
     end
-    @launcher&.instance_variable_get(:@boot_reclaim_thread)&.join(2)
+    # Launcher#stop doesn't own the boot-reclaim thread and offers no kill
+    # fallback, so teardown has to confirm the join actually landed — a
+    # surviving thread keeps sweeping Redis into the next test.
+    reclaim = @launcher&.instance_variable_get(:@boot_reclaim_thread)
+    stuck = !reclaim.nil? && reclaim.join(2).nil?
+    reclaim.kill if stuck
   ensure
     super
+    raise 'boot-reclaim thread still alive 2s after Launcher#stop' if stuck
   end
 
   def test_live_returns_200_when_launcher_running

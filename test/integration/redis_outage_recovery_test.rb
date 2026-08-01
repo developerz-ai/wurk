@@ -201,6 +201,7 @@ class RedisOutageRecoveryTest < Wurk::Test::UnitCase
       @server = TCPServer.new('127.0.0.1', 0)
       @port = @server.addr(false)[1]
       @outage = false
+      @stopped = false
       @mutex = ::Mutex.new
       @sockets = []
       @pump_threads = []
@@ -227,12 +228,22 @@ class RedisOutageRecoveryTest < Wurk::Test::UnitCase
     rescue IOError, Errno::EBADF
       nil
     ensure
-      @mutex.synchronize do
-        drop_tracked_sockets
-        @pump_threads.each(&:kill)
-        @pump_threads.each { |t| t.join(1) }
+      # Flip `@stopped` in the same critical section that takes the snapshot, so
+      # a relay racing this shutdown either lands in the snapshot or is refused
+      # outright — never registers into a list nobody will drain again.
+      sockets, pumps = @mutex.synchronize do
+        @stopped = true
+        snapshot = [@sockets.dup, @pump_threads.dup]
+        @sockets.clear
         @pump_threads.clear
+        snapshot
       end
+      # Outside the mutex: a killed pump's `ensure` calls untrack, which wants
+      # the same mutex, so holding it here would make every join burn its
+      # full 1s timeout and then leave the thread alive anyway.
+      sockets.each { |s| close_quietly(s) }
+      pumps.each(&:kill)
+      pumps.each { |t| t.join(1) }
     end
 
     private
@@ -255,24 +266,41 @@ class RedisOutageRecoveryTest < Wurk::Test::UnitCase
     end
 
     def relay(client)
-      @mutex.synchronize { @sockets.push(client) }
+      return close_quietly(client) unless track(client)
+
       upstream = TCPSocket.new(@upstream_host, @upstream_port)
-      @mutex.synchronize { @sockets.push(upstream) }
+      return close_quietly(upstream) unless track(upstream)
+
       pump(client, upstream)
       pump(upstream, client)
     end
 
-    def pump(from, dest)
-      thread = Thread.new do
-        IO.copy_stream(from, dest)
-      rescue StandardError
-        nil
-      ensure
-        untrack(from)
-        untrack(dest)
+    def track(sock)
+      @mutex.synchronize do
+        return false if @stopped
+
+        @sockets.push(sock)
+        true
       end
-      @mutex.synchronize { @pump_threads.push(thread) }
-      thread
+    end
+
+    # Spawn under the mutex so creation and registration are one step: a thread
+    # created after stop! took its snapshot would never be killed or joined.
+    def pump(from, dest)
+      @mutex.synchronize do
+        return nil if @stopped
+
+        thread = Thread.new do
+          IO.copy_stream(from, dest)
+        rescue StandardError
+          nil
+        ensure
+          untrack(from)
+          untrack(dest)
+        end
+        @pump_threads.push(thread)
+        thread
+      end
     end
 
     def untrack(sock)

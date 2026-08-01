@@ -93,7 +93,7 @@ class ReaperKill9Test < Wurk::Test::UnitCase
       rescue StandardError
         nil
       end
-      supervisor&.join(15) || supervisor&.kill
+      stop_supervisor_thread(supervisor, 15)
     end
   end
 

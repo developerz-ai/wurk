@@ -434,20 +434,27 @@ class ProcessorTest < Wurk::Test::UnitCase
     Wurk::Processor.new(@capsule, &block).tap { |p| @processors << p }
   end
 
-  # A few tests deliberately drive their processor's thread to die with
-  # FatalBoom (a non-StandardError); #kill's `@thread.value` — and any later
-  # #join — re-raises that stored exception every time it's called on the
-  # already-dead thread, so both calls here must rescue broadly.
+  # `kill(true)` would block in `@thread.value` with no timeout, so teardown
+  # asks for the raise only and does its own bounded wait below.
   def stop_processor(processor)
-    processor.kill(true)
+    processor.kill(false)
   rescue Exception # rubocop:disable Lint/RescueException
     nil
   ensure
     join_quietly(processor.thread)
   end
 
+  # A few tests deliberately drive their processor's thread to die with
+  # FatalBoom (a non-StandardError); #join re-raises that stored exception
+  # every time it's called on the already-dead thread, so this rescues broadly
+  # — a raising join still means the thread is gone. Only a join that times out
+  # needs the Thread#kill fallback.
   def join_quietly(thread)
-    thread&.join(2)
+    return if thread.nil?
+    return if thread.join(2)
+
+    thread.kill
+    thread.join(1)
   rescue Exception # rubocop:disable Lint/RescueException
     nil
   end
