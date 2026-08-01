@@ -205,16 +205,7 @@ class RedisPoolTest < Wurk::Test::UnitCase
     assert_equal 0, conn.closes
   end
 
-  # --- connection-error backoff (#101) ---
-
-  def test_retries_connection_error_with_backoff_then_succeeds
-    conn = FlakyConn.new(kind: :timeout, raises: 1)
-    pool = pool_wrapping(conn)
-
-    no_sleep(pool) { assert_equal(:ok, pool.with(&:exec)) }
-    assert_equal 2, conn.calls
-    assert_equal 1, conn.closes, 'connection is closed before the backoff retry'
-  end
+  # --- connect-phase errors: replayed whatever the block does (F5) ---
 
   def test_retries_cannot_connect_error
     conn = FlakyConn.new(kind: :cannot_connect, raises: 1)
@@ -222,15 +213,77 @@ class RedisPoolTest < Wurk::Test::UnitCase
 
     no_sleep(pool) { assert_equal(:ok, pool.with(&:exec)) }
     assert_equal 2, conn.calls
+    assert_equal 1, conn.closes, 'connection is closed before the backoff retry'
   end
 
-  def test_connection_error_retries_to_the_cap_then_raises
-    conn = FlakyConn.new(kind: :timeout, raises: 99)
+  def test_retries_failover_error
+    conn = FlakyConn.new(kind: :failover, raises: 1)
+    pool = pool_wrapping(conn)
+
+    no_sleep(pool) { assert_equal(:ok, pool.with(&:exec)) }
+    assert_equal 2, conn.calls
+  end
+
+  def test_connect_phase_error_retries_to_the_cap_then_raises
+    conn = FlakyConn.new(kind: :cannot_connect, raises: 99)
+    pool = pool_wrapping(conn)
+
+    no_sleep(pool) { assert_raises(RedisClient::CannotConnectError) { pool.with(&:exec) } }
+    assert_equal Wurk::RedisPool::CONN_MAX_ATTEMPTS, conn.calls
+    assert_equal Wurk::RedisPool::CONN_MAX_ATTEMPTS - 1, conn.closes
+  end
+
+  # --- post-write errors: never replayed unless the caller opts in (F5) ---
+
+  def test_read_timeout_is_not_replayed_by_default
+    conn = FlakyConn.new(kind: :read_timeout, raises: 1)
+    pool = pool_wrapping(conn)
+
+    no_sleep(pool) { assert_raises(RedisClient::ReadTimeoutError) { pool.with(&:exec) } }
+    assert_equal 1, conn.calls, 'the command may have applied; replaying would duplicate it'
+    assert_equal 0, conn.closes
+  end
+
+  def test_write_timeout_is_not_replayed_by_default
+    conn = FlakyConn.new(kind: :write_timeout, raises: 1)
+    pool = pool_wrapping(conn)
+
+    no_sleep(pool) { assert_raises(RedisClient::WriteTimeoutError) { pool.with(&:exec) } }
+    assert_equal 1, conn.calls
+  end
+
+  def test_bare_connection_error_is_not_replayed_by_default
+    conn = FlakyConn.new(kind: :timeout, raises: 1)
     pool = pool_wrapping(conn)
 
     no_sleep(pool) { assert_raises(RedisClient::ConnectionError) { pool.with(&:exec) } }
+    assert_equal 1, conn.calls
+  end
+
+  def test_idempotent_blocks_replay_a_read_timeout_with_backoff
+    conn = FlakyConn.new(kind: :read_timeout, raises: 1)
+    pool = pool_wrapping(conn)
+
+    no_sleep(pool) { assert_equal(:ok, pool.with(idempotent: true, &:exec)) }
+    assert_equal 2, conn.calls
+    assert_equal 1, conn.closes, 'connection is closed before the backoff retry'
+  end
+
+  def test_idempotent_connection_error_retries_to_the_cap_then_raises
+    conn = FlakyConn.new(kind: :timeout, raises: 99)
+    pool = pool_wrapping(conn)
+
+    no_sleep(pool) { assert_raises(RedisClient::ConnectionError) { pool.with(idempotent: true, &:exec) } }
     assert_equal Wurk::RedisPool::CONN_MAX_ATTEMPTS, conn.calls
     assert_equal Wurk::RedisPool::CONN_MAX_ATTEMPTS - 1, conn.closes
+  end
+
+  def test_failover_message_retry_ignores_the_idempotent_flag
+    conn = FlakyConn.new(kind: :readonly, raises: 1)
+    pool = pool_wrapping(conn)
+
+    assert_equal(:ok, pool.with(&:exec))
+    assert_equal 2, conn.calls, 'a READONLY reply proves the write went to a replica, never applied'
   end
 
   # --- telemetry hook ---
@@ -240,7 +293,7 @@ class RedisPoolTest < Wurk::Test::UnitCase
     conn = FlakyConn.new(kind: :timeout, raises: 99)
     pool = pool_wrapping(conn, on_error: ->(info) { events << info })
 
-    no_sleep(pool) { assert_raises(RedisClient::ConnectionError) { pool.with(&:exec) } }
+    no_sleep(pool) { assert_raises(RedisClient::ConnectionError) { pool.with(idempotent: true, &:exec) } }
 
     summary = events.map { |e| [e[:attempt], e[:retried], e[:pool], e[:error].class] }
 
@@ -267,8 +320,17 @@ class RedisPoolTest < Wurk::Test::UnitCase
     assert_empty events
   end
 
+  def test_notifies_once_when_a_replay_is_refused
+    events = []
+    conn = FlakyConn.new(kind: :read_timeout, raises: 1)
+    pool = pool_wrapping(conn, on_error: ->(info) { events << info })
+
+    assert_raises(RedisClient::ReadTimeoutError) { pool.with(&:exec) }
+    assert_equal([{ attempt: 1, retried: false }], events.map { |e| e.slice(:attempt, :retried) })
+  end
+
   def test_a_raising_telemetry_hook_never_breaks_the_retry_path
-    conn = FlakyConn.new(kind: :timeout, raises: 1)
+    conn = FlakyConn.new(kind: :cannot_connect, raises: 1)
     pool = pool_wrapping(conn, on_error: ->(_info) { raise 'telemetry boom' })
 
     no_sleep(pool) { assert_equal(:ok, pool.with(&:exec)) }
@@ -429,7 +491,10 @@ class RedisPoolTest < Wurk::Test::UnitCase
                   'UNBLOCKED force unblock from blocking operation, instance state changed (master -> replica?)'],
       other: [RedisClient::CommandError, 'ERR wrong number of arguments'],
       timeout: [RedisClient::ConnectionError, 'Connection timed out'],
-      cannot_connect: [RedisClient::CannotConnectError, 'Errno::ECONNREFUSED']
+      read_timeout: [RedisClient::ReadTimeoutError, 'Waited 2.5 seconds'],
+      write_timeout: [RedisClient::WriteTimeoutError, 'Waited 2.5 seconds'],
+      cannot_connect: [RedisClient::CannotConnectError, 'Errno::ECONNREFUSED'],
+      failover: [RedisClient::FailoverError, 'Expected to connect to a master, but the server is a replica']
     }.freeze
 
     attr_reader :calls, :closes
