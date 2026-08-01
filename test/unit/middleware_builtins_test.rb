@@ -385,7 +385,7 @@ class MiddlewareBuiltinsTest < Wurk::Test::UnitCase
     assert_equal 1, calls.size
     cmd, key, payload = calls.first
 
-    assert_equal 'LPUSH', cmd
+    assert_equal 'RPUSH', cmd
     assert_equal 'queue:mine', key
     assert_equal job, ::JSON.parse(payload)
   end
