@@ -54,7 +54,7 @@ module Wurk
       # process never publishes quiet=true and expires out of the live set (#236).
       @done = false
       @stopped = false
-      @managers = config.capsules.values.map { |cap| Manager.new(cap) }
+      @managers = build_managers
       @poller = build_poller
       @cron_poller = build_cron_poller
       @metrics_rollup = build_metrics_rollup
@@ -281,29 +281,40 @@ module Wurk
     end
 
     # Dashboard-queued signals must behave exactly like OS signals, so a
-    # standalone process re-delivers to itself and lets the installed trap
-    # run — that wakes the main thread (CLI self-pipe / child dispatcher)
-    # so the process actually exits instead of stopping its managers and
-    # then parking forever. Embedded mode owns no traps (and self-TERM
-    # would kill the host app), so it calls quiet/stop directly — stop on
-    # its own thread because `stop` joins the heartbeat thread we're on.
+    # standalone process re-delivers to itself and lets the installed trap run —
+    # that wakes the main thread (CLI self-pipe / child dispatcher) so the
+    # process actually exits instead of stopping its managers and then parking
+    # forever. Embedded mode owns no traps (and self-TERM would kill the host
+    # app), so quiet applies directly.
     def dispatch_signal(sig)
       case sig
-      when 'TSTP', 'TERM'
-        if @embedded
-          sig == 'TSTP' ? quiet : Thread.new { stop }
-        else
-          redeliver(sig)
-        end
+      when 'TSTP' then @embedded ? quiet : redeliver(sig)
+      when 'TERM' then request_shutdown
       else
         logger.warn { "Unknown signal in #{identity}-signals: #{sig.inspect}" }
       end
+    end
+
+    # The one way anything inside this process asks it to shut down gracefully:
+    # dashboard-queued TERM, or a Manager that can no longer hold its
+    # concurrency. Standalone hands off to the installed TERM trap; embedded
+    # owns no traps, so it drains in place — on its own thread, because callers
+    # may be a thread `stop` itself joins (the heartbeat) or kills (a Processor).
+    def request_shutdown
+      @embedded ? Thread.new { stop } : redeliver('TERM')
     end
 
     # Separate method so tests can stub it — really sending TERM/TSTP would
     # kill or suspend the test process.
     def redeliver(sig)
       ::Process.kill(sig, ::Process.pid)
+    end
+
+    # One Manager per capsule, each holding our shutdown request: a Manager
+    # that can no longer replace a dead Processor has to take the process
+    # down, and only the Launcher knows how this process exits.
+    def build_managers
+      @config.capsules.values.map { |cap| Manager.new(cap, shutdown: method(:request_shutdown)) }
     end
 
     def build_poller

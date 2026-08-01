@@ -24,12 +24,21 @@ module Wurk
 
     attr_reader :workers, :capsule
 
-    def initialize(capsule)
+    # `shutdown:` is the owning Launcher's process-wide shutdown request,
+    # invoked when concurrency can no longer be held (see #processor_result).
+    # Injected rather than reached for: only the entry point knows how this
+    # process exits — a swarm child / standalone CLI re-delivers TERM to itself
+    # so the installed trap drives the normal drain, while embedded mode owns
+    # no traps and must stop the launcher in place. A Manager built without an
+    # owner (Sidekiq's `Manager.new(capsule)` arity, kept for the alias) has no
+    # route to take, so it only reports.
+    def initialize(capsule, shutdown: nil)
       @config = @capsule = capsule
       @count = capsule.concurrency
       raise ArgumentError, "Concurrency of #{@count} is not supported" if @count < 1
 
       @done = false
+      @shutdown = shutdown
       @workers = Set.new
       @plock = ::Mutex.new
       @count.times do
@@ -86,8 +95,9 @@ module Wurk
     # cleanly or via raised exception. Removes the dead processor from the
     # pool and (unless we're already stopping) spawns a replacement so the
     # capsule's concurrency stays constant. If the replacement itself can't be
-    # spawned, crash the child (the swarm respawns it) rather than silently
-    # dropping concurrency. Snapshot under @plock; start the replacement — a
+    # spawned, ask the owner to shut this process down (the swarm respawns it at
+    # full concurrency) rather than silently dropping a worker for the life of
+    # the process. Snapshot under @plock; start the replacement — a
     # side effect — outside the lock.
     def processor_result(processor, _reason = nil)
       replacement = @plock.synchronize do
@@ -102,10 +112,15 @@ module Wurk
     rescue StandardError => e
       # Replacement spawn failed (e.g. ThreadError at the OS thread limit).
       # Silently running one Processor short for the life of the process is
-      # invisible degradation; instead report and crash the child on the main
-      # thread so the swarm respawns it at full concurrency (plan 02 §6).
+      # invisible degradation, so take the process down (the swarm respawns it
+      # at full concurrency) — but through the owner's TERM path, never
+      # `Thread.main.raise`: that raise unwound straight past Manager#stop, so
+      # the in-flight UnitsOfWork were never bulk_requeued and each one waited
+      # out a full reaper interval, and in embedded mode it killed the host's
+      # main thread instead of just the worker. Non-blocking by contract — we
+      # are on the dying Processor's own thread, which the drain will kill.
       @capsule.config.handle_exception(e, { context: 'Manager could not replace a dead Processor' })
-      main_thread.raise(e)
+      @shutdown&.call
     end
 
     # Reached when the deadline expired with workers still busy. Atomically
@@ -155,12 +170,6 @@ module Wurk
     # never ran.
     def workers_empty?
       @plock.synchronize { @workers.none? { |w| w.thread&.alive? } }
-    end
-
-    # Seam over Thread.main: lets processor_result's replacement-failure crash
-    # be unit-tested against a controlled thread instead of the live runner.
-    def main_thread
-      Thread.main
     end
 
     # Polls `condblock` until it returns true or the monotonic deadline

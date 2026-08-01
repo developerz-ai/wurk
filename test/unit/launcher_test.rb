@@ -820,6 +820,44 @@ class LauncherTest < Wurk::Test::UnitCase
     assert stopped.pop(timeout: 5), 'a queued TERM must invoke #stop (async thread)'
   end
 
+  # --- shutdown request (A7) -------------------------------------------
+
+  # A Manager that can no longer replace a dead Processor has to take the
+  # process down. It holds the Launcher's request rather than raising into
+  # Thread.main, which skipped the drain (no bulk_requeue) and, embedded, took
+  # the host's main thread with it.
+  def test_managers_hold_the_launcher_shutdown_request
+    launcher = Wurk::Launcher.new(@config)
+
+    routes = launcher.managers.map { |m| m.instance_variable_get(:@shutdown) }
+
+    assert_equal [launcher], routes.map(&:receiver).uniq
+    assert_equal [:request_shutdown], routes.map(&:name).uniq
+  end
+
+  def test_manager_shutdown_request_redelivers_term_standalone
+    launcher = build_isolated_launcher
+    redelivered = []
+    launcher.define_singleton_method(:redeliver) { |s| redelivered << s }
+
+    launcher.managers.first.instance_variable_get(:@shutdown).call
+
+    assert_equal ['TERM'], redelivered
+    refute_predicate launcher, :stopping?, 'the trap, not the request, owns the state change'
+  end
+
+  # Embedded owns no traps, so it drains in place — off the caller's thread,
+  # which is the dying Processor's and gets killed by that very drain.
+  def test_manager_shutdown_request_drains_off_thread_when_embedded
+    launcher = build_isolated_launcher(embedded: true)
+    stopped = Queue.new
+    launcher.define_singleton_method(:stop) { stopped << Thread.current }
+
+    launcher.managers.first.instance_variable_get(:@shutdown).call
+
+    refute_same Thread.current, stopped.pop(timeout: 5)
+  end
+
   # Branch coverage: an unrecognized signal must be logged, not dispatched.
   # Exercises the `else` arm of dispatch_signal (line 227).
   def test_heartbeat_logs_unknown_signal
