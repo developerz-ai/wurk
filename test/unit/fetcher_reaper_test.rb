@@ -181,8 +181,8 @@ class FetcherReaperTest < Wurk::Test::UnitCase
 
   def test_cross_host_owner_with_live_heartbeat_is_skipped
     other_host = 'other-host.example'
-    register_process(other_host, DEAD_PID, info: true)
-    seed_private_list(DEAD_PID, %w[remote], host: other_host)
+    nonce = register_process(other_host, DEAD_PID, info: true)
+    seed_private_list(DEAD_PID, %w[remote], host: other_host, nonce: nonce)
 
     reclaimed = @reaper.reclaim!
 
@@ -193,14 +193,87 @@ class FetcherReaperTest < Wurk::Test::UnitCase
 
   def test_cross_host_owner_without_info_hash_is_reclaimed
     other_host = 'other-host.example'
-    register_process(other_host, DEAD_PID, info: false) # SET member, expired hash
-    seed_private_list(DEAD_PID, %w[remote], host: other_host)
+    nonce = register_process(other_host, DEAD_PID, info: false) # SET member, expired hash
+    seed_private_list(DEAD_PID, %w[remote], host: other_host, nonce: nonce)
 
     reclaimed = @reaper.reclaim!
 
     assert_equal 1, reclaimed, 'a SET member whose heartbeat lapsed is dead'
   ensure
     unregister_process(other_host, DEAD_PID)
+  end
+
+  # A heartbeat under the same host:pid but a *different* incarnation is not
+  # this list's owner: that process died, and its successor happens to occupy
+  # the pid it used to hold.
+  def test_cross_host_owner_with_a_heartbeat_from_another_incarnation_is_reclaimed
+    other_host = 'other-host.example'
+    register_process(other_host, DEAD_PID, info: true)
+    seed_private_list(DEAD_PID, %w[remote], host: other_host, nonce: SecureRandom.hex(6))
+
+    assert_equal 1, @reaper.reclaim!, 'the heartbeat has to match the full identity, not just host:pid'
+  ensure
+    unregister_process(other_host, DEAD_PID)
+  end
+
+  # --- liveness: same host, foreign PID namespace ------------------------
+
+  # F2(a): a container restarting under a fixed hostname comes back in a fresh
+  # pid namespace, where the dead owner's pid is likely taken again — here by
+  # this very process. Trusting kill(0) on a hostname match alone strands those
+  # jobs forever; the incarnation nonce is what tells the two apart.
+  def test_same_host_dead_incarnation_is_reclaimed_even_when_its_pid_is_live
+    seed_private_list(Process.pid, %w[stranded], nonce: SecureRandom.hex(6))
+
+    assert_equal 1, @reaper.reclaim!, 'a foreign incarnation is not vouched for by a live local pid'
+    assert_equal 1, llen(@public_queue)
+  end
+
+  # F2(b): two containers share the host's network namespace but not its pid
+  # namespace, so the live owner's pid does not exist here. kill(0) would call
+  # it dead and drain the list out from under a job that is still running.
+  def test_same_host_foreign_incarnation_with_a_live_heartbeat_is_left_alone
+    nonce = register_process(@host, unowned_pid, info: true)
+    key = seed_private_list(unowned_pid, %w[in-flight], nonce: nonce)
+
+    assert_equal 0, @reaper.reclaim!, 'a beating owner keeps its jobs whatever our pid namespace says'
+    assert_equal 1, llen(key)
+  ensure
+    unregister_process(@host, unowned_pid)
+  end
+
+  # The fast path earns its keep: for our own incarnation the OS is
+  # authoritative and outranks the heartbeat, so a SIGKILLed sibling is
+  # reclaimed the moment the supervisor reaps it instead of 60s later when its
+  # `info` hash finally lapses.
+  def test_own_incarnation_is_reclaimed_on_a_dead_pid_despite_a_live_heartbeat
+    register_process(@host, unowned_pid, info: true, nonce: Wurk::Component::PROCESS_NONCE)
+    seed_private_list(unowned_pid, %w[sibling])
+
+    assert_equal 1, @reaper.reclaim!, 'kill(0) decides for our own process tree'
+  ensure
+    unregister_process(@host, unowned_pid)
+  end
+
+  # Our nonce under someone else's host segment: whatever wrote that key, our
+  # pid table has no standing to vouch for it, so the heartbeat decides — and
+  # with none on record the list is an orphan however live the pid looks here.
+  def test_own_nonce_under_a_foreign_host_still_goes_through_the_heartbeat
+    seed_private_list(Process.pid, %w[elsewhere], host: 'other-host.example')
+
+    assert_equal 1, @reaper.reclaim!, 'the fast path needs the host to match too, not just the nonce'
+  end
+
+  # A pre-nonce key names no incarnation, so the heartbeat is all there is to
+  # go on and it can only be matched on the host:pid prefix of an identity.
+  def test_pre_nonce_key_with_a_live_heartbeat_is_skipped
+    register_process(@host, unowned_pid, info: true)
+    key = seed_private_list(unowned_pid, %w[legacy], nonce: nil)
+
+    assert_equal 0, @reaper.reclaim!, 'a beating pre-upgrade owner keeps its jobs'
+    assert_equal 1, llen(key)
+  ensure
+    unregister_process(@host, unowned_pid)
   end
 
   # --- key parsing -------------------------------------------------------
@@ -225,14 +298,17 @@ class FetcherReaperTest < Wurk::Test::UnitCase
   end
 
   # SecureRandom.hex can emit an all-digit nonce. Read as the pre-nonce shape
-  # such a key yields the pid as the host and the nonce as the pid, so a *live*
-  # owner looks remote-and-dead and gets drained out from under itself.
+  # such a key yields the pid as the host and the nonce as the pid, so its
+  # owner's heartbeat is looked up under an identity nobody registered and a
+  # *live* owner gets drained out from under itself.
   def test_all_digit_nonce_still_resolves_the_live_owner
-    key = "#{@public_queue}|#{@host}|#{Process.pid}|123456789012|0"
-    @pool.with { |c| c.call('RPUSH', key, payload('live')) }
+    register_process(@host, unowned_pid, info: true, nonce: '123456789012')
+    key = seed_private_list(unowned_pid, %w[live], nonce: '123456789012')
 
     assert_equal 0, @reaper.reclaim!, 'a live owner is never reclaimed'
     assert_equal 1, llen(key), 'in-flight job left alone'
+  ensure
+    unregister_process(@host, unowned_pid)
   end
 
   # A bare Docker hostname is 12 hex chars, so ~1 in 175 hosts is all digits.
@@ -299,7 +375,8 @@ class FetcherReaperTest < Wurk::Test::UnitCase
 
   def test_reclaim_full_leaves_a_live_owners_list_untouched
     foreign_q = Wurk::Keys.queue("#{@ns}-live")
-    private_key = "#{foreign_q}|#{@host}|#{Process.pid}|0" # this very process — alive
+    # This very process — same incarnation, alive.
+    private_key = "#{foreign_q}|#{@host}|#{Process.pid}|#{Wurk::Component::PROCESS_NONCE}|0"
     @extra_keys.push(foreign_q, private_key)
     @pool.with { |c| c.call('RPUSH', private_key, payload('z')) }
 
@@ -488,6 +565,13 @@ class FetcherReaperTest < Wurk::Test::UnitCase
 
   private
 
+  # A pid this process can be sure is not running, distinct per test so the
+  # heartbeat one test registers under it can never make a peer's orphan read
+  # as live (the `processes` SET is global to the worker's Redis DB).
+  def unowned_pid
+    @unowned_pid ||= 990_000 + (object_id % 9_000)
+  end
+
   def wait_until(timeout: 5.0)
     deadline = Process.clock_gettime(Process::CLOCK_MONOTONIC) + timeout
     sleep(0.005) until yield || Process.clock_gettime(Process::CLOCK_MONOTONIC) > deadline
@@ -510,14 +594,18 @@ class FetcherReaperTest < Wurk::Test::UnitCase
     @pool.with { |c| c.call('KEYS', "#{private_list(Process.pid)}:*").size }
   end
 
-  def seed_private_list(pid, tokens, host: @host)
-    key = "#{@public_queue}|#{host}|#{pid}|0"
+  def seed_private_list(pid, tokens, host: @host, nonce: Wurk::Component::PROCESS_NONCE)
+    key = private_list(pid, host: host, nonce: nonce)
     @pool.with { |c| tokens.each { |t| c.call('RPUSH', key, payload(t)) } }
     key
   end
 
-  def private_list(pid, host: @host)
-    "#{@public_queue}|#{host}|#{pid}|0"
+  # `nonce: nil` yields the pre-nonce shape a process running the previous
+  # release would have written.
+  def private_list(pid, host: @host, nonce: Wurk::Component::PROCESS_NONCE)
+    return "#{@public_queue}|#{host}|#{pid}|0" if nonce.nil?
+
+    "#{@public_queue}|#{host}|#{pid}|#{nonce}|0"
   end
 
   def payload(token, jid: nil)
@@ -529,14 +617,17 @@ class FetcherReaperTest < Wurk::Test::UnitCase
     "#{Wurk::Middleware::PoisonPill::KEY_PREFIX}#{jid}"
   end
 
-  def register_process(host, pid, info:)
-    identity = "#{host}:#{pid}:#{SecureRandom.hex(6)}"
+  # Returns the nonce of the registered identity so a caller can key a private
+  # list to the very process it just gave a heartbeat to.
+  def register_process(host, pid, info:, nonce: SecureRandom.hex(6))
+    identity = "#{host}:#{pid}:#{nonce}"
     @registered ||= {}
     @registered[[host, pid]] = identity
     Wurk.redis do |c|
       c.call('SADD', Wurk::Keys::PROCESSES, identity)
       c.call('HSET', identity, 'info', '{}') if info
     end
+    nonce
   end
 
   def unregister_process(host, pid)
