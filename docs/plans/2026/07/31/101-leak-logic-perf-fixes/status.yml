@@ -1,18 +1,18 @@
 plan: 101-leak-logic-perf-fixes
 title: Leak, logic-bug & perf audit fixes
-status: not_started        # not_started | in_progress | blocked | complete | superseded
+status: in_progress        # not_started | in_progress | blocked | complete | superseded
 created_by: sebi
 worked_by: ""              # executor fills with their git user.name on pickup
 owner: sebi
-percent: 0
+percent: 30
 current_focus: ""
 slices:
   - file: 01-swarm-launcher-teardown.md
-    status: not_started
-    percent: 0
+    status: complete
+    percent: 100
   - file: 02-fetch-pause-reaper.md
-    status: not_started
-    percent: 0
+    status: complete
+    percent: 100
   - file: 03-client-buffer-fork-safety.md
     status: not_started
     percent: 0
@@ -35,8 +35,18 @@ slices:
     status: not_started
     percent: 0
   - file: 10-test-bench-hygiene.md
-    status: not_started
-    percent: 0
-evidence: []
-notes: "Findings from five-agent audit 2026-07-31 (lifecycle / execution+web / frontend+tests / logic / perf). Critical: child-inherited at_exit SIGKILL cascade (01/A1). Job-loss class: reaper PID-namespace liveness (02/F2), poison-pill never cleared (07/F6), scheduled pop replay (04/F5). Prior plan 2026/07/17 slice 01 appears landed despite stale tracker — verify before executing overlaps."
-last_updated: 2026-07-31
+    status: complete
+    percent: 100
+evidence:
+  - commit: 2940703
+    slices: [01, 03, 05, 10, 11, 13]
+  - commit: 9c582b7
+    slices: [02, 04, 06, 07, 08, 09, 12, 11]
+  - commit: c131f3c
+    slices: [01, 07]
+  - commit: c14694b
+    slices: [02]
+  - commit: 15070e7
+    slices: [01, 02, 03, 04, 05, 09, 11, 12]
+notes: "Findings from five-agent audit 2026-07-31 (lifecycle / execution+web / frontend+tests / logic / perf). Critical: child-inherited at_exit SIGKILL cascade (01/A1). Job-loss class: reaper PID-namespace liveness (02/F2), poison-pill never cleared (07/F6), scheduled pop replay (04/F5). Slices 03–09 remain."
+last_updated: 2026-08-01
