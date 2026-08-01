@@ -22,7 +22,9 @@ class LivenessProbeTest < Wurk::Test::UnitCase
     @config.logger = ::Logger.new(IO::NULL)
     @config[:tag] = @ns
     cap = @config.default_capsule
-    cap.queues = ['default']
+    # Unique per-test queue: a leaked Launcher from a prior run/test must
+    # never be able to steal work off the shared `queue:default` list.
+    cap.queues = [@ns]
     cap.concurrency = 1
     cap.fetcher = Wurk::Fetcher::Reliable.new(cap)
     # Materialize lazy ivars before Launcher.run freezes the capsule —
@@ -38,11 +40,15 @@ class LivenessProbeTest < Wurk::Test::UnitCase
   end
 
   def teardown
-    if @launcher
-      @launcher.instance_variable_set(:@done, true)
-      @launcher.instance_variable_get(:@health_server)&.stop
-      @launcher.instance_variable_get(:@heartbeat)&.stop! rescue nil
+    # Full teardown (not just health-server/heartbeat) so managers, poller,
+    # reaper and leader threads don't outlive the test — a leaked Launcher
+    # here would otherwise keep fetching from later tests' queues.
+    begin
+      @launcher&.stop
+    rescue StandardError
+      nil
     end
+    @launcher&.instance_variable_get(:@boot_reclaim_thread)&.join(2)
   ensure
     super
   end
