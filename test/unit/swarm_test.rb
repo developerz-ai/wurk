@@ -95,6 +95,20 @@ class SwarmTest < Wurk::Test::UnitCase
     assert_nil non_owner_swarm.send(:safe_kill, ::Process.pid, 0)
   end
 
+  # rails_boot's `at_exit` fires on the host's main thread while the supervise
+  # thread is reaping / respawning / restarting through the same child table, so
+  # the request may only raise a flag — the drain itself belongs to the
+  # supervise loop. Real-fork proof that it observes it:
+  # test/integration/swarm_supervision_test.rb.
+  def test_request_shutdown_never_drains_on_the_calling_thread
+    swarm = owner_swarm
+
+    swarm.request_shutdown
+
+    refute swarm.instance_variable_get(:@stopping), 'request_shutdown must not drain inline'
+    refute_empty swarm.children, 'the fleet must be left to the supervise thread'
+  end
+
   def test_supervise_returns_at_once_off_the_owning_process
     swarm = non_owner_swarm
     thread = Thread.new { swarm.supervise }

@@ -158,6 +158,74 @@ class RailtieTest < Wurk::Test::EngineCase
     assert_respond_to ::Rails.application.config.wurk, :embed_in_web
   end
 
+  # --- at_exit drain contract ---
+  #
+  # `boot_swarm` registers its at_exit hook BEFORE the fork, so a boot that
+  # raises partway still drains the children it already spawned. The hook then
+  # fires on the host's main thread while the supervise thread owns the child
+  # table; `stop_swarm` is its body — ask, wait, and take over only when no
+  # live supervisor will.
+
+  def test_stop_swarm_leaves_the_drain_to_a_live_supervisor
+    swarm = FakeSwarm.new
+    supervisor = Thread.new do
+      sleep 0.01 until swarm.requests.positive?
+      swarm.shutdown
+    end
+
+    Wurk::RailsBoot.stop_swarm(swarm, supervisor, 5)
+
+    assert_equal 1, swarm.requests, 'the hook must ask the supervisor to drain'
+    assert_equal supervisor, swarm.drains.first, 'the drain must run on the thread that owns the child table'
+  ensure
+    supervisor&.kill
+  end
+
+  # boot raised before the supervise thread existed: nobody else will drain the
+  # children it managed to fork.
+  def test_stop_swarm_drains_inline_without_a_supervisor
+    swarm = FakeSwarm.new
+
+    Wurk::RailsBoot.stop_swarm(swarm, nil, 5)
+
+    assert_equal [Thread.current], swarm.drains
+  end
+
+  def test_stop_swarm_drains_inline_when_the_supervisor_died
+    swarm = FakeSwarm.new
+    supervisor = Thread.new { nil }
+    supervisor.join
+
+    Wurk::RailsBoot.stop_swarm(swarm, supervisor, 5)
+
+    assert_equal [Thread.current], swarm.drains
+  end
+
+  # A supervisor still alive after the join is wedged mid-drain; draining from
+  # here too would walk the child table it is already mutating.
+  def test_stop_swarm_never_races_a_wedged_supervisor
+    swarm = FakeSwarm.new
+    supervisor = Thread.new { sleep }
+
+    Wurk::RailsBoot.stop_swarm(swarm, supervisor, 0.05)
+
+    assert_equal 1, swarm.requests
+    assert_empty swarm.drains, 'must never drain alongside a live supervisor'
+  ensure
+    supervisor&.kill
+  end
+
+  # Every forked child inherits the hook, and there `@children` lists that
+  # child's siblings — only the process that forked the fleet may act on it.
+  def test_stop_swarm_is_a_no_op_off_the_owning_process
+    swarm = FakeSwarm.new(owner: false)
+
+    Wurk::RailsBoot.stop_swarm(swarm, nil, 5)
+
+    assert_equal 0, swarm.requests
+    assert_empty swarm.drains
+  end
+
   def test_refuse_logs_actionable_guidance
     io = StringIO.new
     with_logger(::Logger.new(io)) { Wurk::RailsBoot.refuse_preforking_boot }
@@ -165,6 +233,25 @@ class RailtieTest < Wurk::Test::EngineCase
     assert_match(/wurkswarm/, io.string, 'must point the host at the standalone runner')
     assert_match(/embed_in_web/, io.string, 'must mention the embedded opt-in')
     assert_match(/WURK_DISABLED/, io.string, 'must mention the silence switch')
+  end
+
+  # Stand-in for the swarm that records which thread ran each drain, so the
+  # at_exit contract (never `shutdown` alongside a live supervisor) is
+  # assertable without forking a real fleet.
+  class FakeSwarm
+    attr_reader :requests, :drains
+
+    def initialize(owner: true)
+      @owner = owner
+      @requests = 0
+      @drains = []
+    end
+
+    def owner? = @owner
+
+    def request_shutdown = @requests += 1
+
+    def shutdown = @drains << Thread.current
   end
 
   private

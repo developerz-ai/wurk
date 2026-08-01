@@ -64,6 +64,7 @@ module Wurk
       @assignments = []
       @owner_pid = nil
       @stopping = false
+      @shutdown_requested = false
       @quieted = false
       @last_memory_check = 0
       @signal_read = nil
@@ -98,6 +99,7 @@ module Wurk
 
       until done?
         drain_signals
+        shutdown if @shutdown_requested && !@stopping
         reap_children
         spawn_due_respawns
         @restart.advance unless @stopping
@@ -114,6 +116,27 @@ module Wurk
       relay_signal('TERM')
       wait_for_children(timeout + SHUTDOWN_GRACE)
       hard_kill_stragglers
+    end
+
+    # Cross-thread drain request: raise a flag the supervise loop observes on
+    # its next tick instead of draining on the caller's thread. `shutdown`
+    # walks and clears the child table that the supervise thread is
+    # concurrently mutating (reap, respawn, restart), so two threads inside it
+    # race. Every caller that isn't the supervise thread — rails_boot's
+    # `at_exit`, which fires on the host's main thread — comes through here.
+    def request_shutdown
+      @shutdown_requested = true
+    end
+
+    # Only the process that forked the children may supervise or signal them.
+    # A forked child inherits this object along with the host's `at_exit` hooks
+    # — and rails_boot registers one that drains the swarm — so ChildBoot's
+    # `exit` reaches a full drain inside the child. There `@children` holds the
+    # child's SIBLINGS, not its own children: unguarded, that TERMs them, stalls
+    # the whole shutdown timeout waiting on PIDs it can never reap, then SIGKILLs
+    # whatever survived.
+    def owner?
+      ::Process.pid == @owner_pid
     end
 
     # TSTP quiet is one-way and GLOBAL (spec §21.3): it must survive respawns
@@ -134,16 +157,6 @@ module Wurk
     end
 
     private
-
-    # A forked child inherits this object along with the host's `at_exit` hooks
-    # — and rails_boot registers `at_exit { swarm.shutdown }`, so ChildBoot's
-    # `exit` runs a full drain inside the child. There `@children` holds the
-    # child's SIBLINGS, not its own children: unguarded, that TERMs them, stalls
-    # the whole shutdown timeout waiting on PIDs it can never reap, then SIGKILLs
-    # whatever survived. Only the process that forked them may supervise them.
-    def owner?
-      ::Process.pid == @owner_pid
-    end
 
     def build_restart
       Restart.new(Restart::Config.new(

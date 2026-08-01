@@ -152,6 +152,33 @@ class SwarmSupervisionTest < Wurk::Test::UnitCase
     end
   end
 
+  # --- at_exit drain request ------------------------------------------------
+
+  # A Rails host's `at_exit` (rails_boot) can't drain the fleet itself: it runs
+  # on the host's main thread while the supervise thread walks the same child
+  # table. It raises a flag instead — the supervise loop must observe it on its
+  # next tick, drain the real children, and return.
+  def test_requested_shutdown_is_drained_by_the_supervise_thread
+    swarm = Wurk::Swarm.new(topology: topology_n(1), config: @config, shutdown_timeout: SHUTDOWN_TIMEOUT)
+    supervisor = nil
+
+    begin
+      children = swarm.boot(install_signals: false)
+      supervisor = Thread.new { swarm.supervise }
+
+      swarm.request_shutdown
+
+      assert_request_drained(swarm, supervisor, children)
+    ensure
+      begin
+        swarm.shutdown(timeout: SHUTDOWN_TIMEOUT)
+      rescue StandardError
+        nil
+      end
+      stop_supervisor_thread(supervisor, 10)
+    end
+  end
+
   # --- orphan self-termination ---------------------------------------------
 
   # SIGKILL'ing the supervisor must not leave the children fetching forever:
@@ -217,6 +244,12 @@ class SwarmSupervisionTest < Wurk::Test::UnitCase
     ::Process.kill('KILL', replacement)
     sleep POLL_INTERVAL * 3 # let the reaper observe the death before asserting survival
     replacement
+  end
+
+  def assert_request_drained(swarm, supervisor, children)
+    assert supervisor.join(SHUTDOWN_TIMEOUT + 5), 'supervise must return once it observes the drain request'
+    assert_empty swarm.children, 'the supervise thread must have drained the fleet'
+    assert(children.all? { |pid| wait_until_dead(pid, 5) }, "children #{children.inspect} survived the drain")
   end
 
   def assert_old_child_survives(swarm, original)
