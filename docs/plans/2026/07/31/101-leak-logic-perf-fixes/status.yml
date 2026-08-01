@@ -48,5 +48,5 @@ evidence:
     slices: [02]
   - commit: 15070e7
     slices: [01, 02, 03, 04, 05, 09, 11, 12]
-notes: "Findings from five-agent audit 2026-07-31 (lifecycle / execution+web / frontend+tests / logic / perf). Critical: child-inherited at_exit SIGKILL cascade (01/A1). Job-loss class: reaper PID-namespace liveness (02/F2), poison-pill never cleared (07/F6), scheduled pop replay (04/F5). Slices 03–09 remain."
+notes: "Findings from five-agent audit 2026-07-31 (lifecycle / execution+web / frontend+tests / logic / perf). Critical: child-inherited at_exit SIGKILL cascade (01/A1). Job-loss class: reaper PID-namespace liveness (02/F2), poison-pill never cleared (07/F6), scheduled pop replay (04/F5). Slices 03–09 remain. Slice 10: all six commits already merged via PR #343; origin/test/liveness-probe-teardown is pre-slice-01/02 and would revert landed work — do not merge."
 last_updated: 2026-08-01
