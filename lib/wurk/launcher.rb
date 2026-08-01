@@ -87,18 +87,21 @@ module Wurk
       @config.capsules.each_value(&:prepare!)
       @config.freeze!
       @heartbeat_thread = safe_thread('heartbeat', &method(:start_heartbeat)) if async_beat
-      @poller&.start
-      @leader&.start
-      @cron_poller&.start
-      @metrics_rollup&.start
-      @queue_rollup&.start
-      @history&.start
+      [@poller, @leader, @cron_poller, @metrics_rollup, @queue_rollup, @history].compact.each(&:start)
       @managers.each(&:start)
       @reaper.start
       # Run on a background thread so /ready probe isn't delayed by a large
       # orphan sweep (reaper.reclaim! is atomic, but can scan many entries).
       @boot_reclaim_thread = safe_thread('boot-reclaim', &method(:boot_reclaim))
       @health_server&.start
+    rescue StandardError
+      # Boot is not atomic: whatever raised (a health-check port already bound,
+      # ThreadError at the OS thread limit) leaves the steps before it holding
+      # threads, sockets and a leader campaign — and the caller is about to drop
+      # its only reference to us, so nothing else can ever release them. Guarded,
+      # because the caller must see the boot failure, not a rollback failure.
+      teardown_step('boot-rollback') { stop }
+      raise
     end
 
     # Idempotent. Flips `stopping?` true, halts fetching across every

@@ -41,6 +41,12 @@ module Wurk
       sleep 0.2
       logger.info { "Wurk running embedded, total process thread count: #{Thread.list.size}" }
       logger.debug { Thread.list.map(&:name).to_s }
+    rescue StandardError
+      # The host is left believing Wurk never started, so anything the launcher
+      # did get up would keep fetching, beating and campaigning for the leader
+      # lock unowned for the life of the process.
+      roll_back_partial_boot
+      raise
     end
 
     # Stop fetching new work; in-flight jobs continue.
@@ -55,6 +61,13 @@ module Wurk
     end
 
     private
+
+    # Guarded so the caller sees why the boot failed, not why the rollback did.
+    def roll_back_partial_boot
+      stop
+    rescue StandardError => e
+      handle_exception(e, { context: 'embedded-boot-rollback' })
+    end
 
     # Extracted so tests can swap in a fake launcher without monkey-patching
     # Wurk::Launcher.new globally (which races other parallel tests).

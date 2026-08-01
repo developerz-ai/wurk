@@ -146,8 +146,15 @@ module Wurk
       @plock.synchronize { @workers.dup }
     end
 
+    # Drained means "no processor thread is still running", not "the Set is
+    # empty": a processor removes itself from @workers from inside its own
+    # thread, so the two agree — except for a processor that was never started
+    # (a launcher that raised mid-boot and rolled back). That one holds no
+    # thread and nothing will ever remove it, so an emptiness test would make
+    # #stop poll out the entire shutdown deadline waiting on a worker that
+    # never ran.
     def workers_empty?
-      @plock.synchronize { @workers.empty? }
+      @plock.synchronize { @workers.none? { |w| w.thread&.alive? } }
     end
 
     # Seam over Thread.main: lets processor_result's replacement-failure crash

@@ -264,6 +264,38 @@ class LauncherTest < Wurk::Test::UnitCase
     assert_predicate @config, :frozen?
   end
 
+  # A4: boot is not atomic. A step that raises leaves everything before it
+  # holding threads, sockets and a leader campaign — and the caller is about to
+  # drop its only reference to the launcher, so #run unwinds on the way out.
+  def test_run_rolls_back_the_partial_boot_when_a_component_start_raises
+    @config[:timeout] = 0
+    launcher = Wurk::Launcher.new(@config)
+    silence_managers(launcher)
+    silence_beat(launcher)
+    seen = record_teardown(launcher)
+    fail_first_boot_step(launcher, 'redis down at boot')
+
+    err = assert_raises(RuntimeError) { launcher.run(async_beat: false) }
+
+    assert_equal 'redis down at boot', err.message, 'the boot failure must still reach the caller'
+    assert_equal %i[cron_poller metrics_rollup queue_rollup reaper leader heartbeat exit health], seen
+  end
+
+  # The rollback is guarded: a launcher that cannot tear itself down must still
+  # raise why the boot failed, not why the cleanup did.
+  def test_run_reports_a_failing_rollback_and_raises_the_boot_error
+    @config[:timeout] = 0
+    launcher = Wurk::Launcher.new(@config)
+    reported = capture_reported_errors
+    fail_first_boot_step(launcher, 'redis down at boot')
+    launcher.define_singleton_method(:stop) { raise 'rollback exploded' }
+
+    err = assert_raises(RuntimeError) { launcher.run(async_beat: false) }
+
+    assert_equal 'redis down at boot', err.message
+    assert_includes reported, ['rollback exploded', 'launcher-stop-boot-rollback']
+  end
+
   # --- quiet -----------------------------------------------------------
 
   def test_quiet_flips_stopping_and_quiets_managers
@@ -962,6 +994,18 @@ class LauncherTest < Wurk::Test::UnitCase
 
   def silence_beat(launcher)
     launcher.define_singleton_method(:heartbeat) { nil }
+  end
+
+  # The poller is the first thing #run starts, so nothing else comes up before
+  # the boot fails — the rollback is asserted against a known-small partial boot.
+  def fail_first_boot_step(launcher, message)
+    launcher.poller.define_singleton_method(:start) { raise message }
+  end
+
+  def capture_reported_errors
+    reported = []
+    @config.error_handlers << ->(ex, ctx, _cfg) { reported << [ex.message, ctx[:context]] }
+    reported
   end
 
   # redis-client returns HGETALL as either a Hash or a flat Array
