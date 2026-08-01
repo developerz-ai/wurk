@@ -284,7 +284,9 @@ module Wurk
         when :term then shutdown
         when :tstp then quiet_swarm
         when :usr1 then rolling_restart
-        when :usr2 then relay_signal('USR2')
+        when :usr2
+          reopen_logs
+          relay_signal('USR2')
         end
       end
     end
@@ -295,6 +297,13 @@ module Wurk
       return nil unless @signal_read.wait_readable(0)
 
       @signal_read.gets&.strip
+    end
+
+    def reopen_logs
+      log = @config.logger
+      log.reopen if log.respond_to?(:reopen)
+    rescue StandardError
+      nil
     end
 
     # Reap every exited child this tick (not one), so a fleet-wide death
