@@ -11,6 +11,8 @@ require_relative '../test_helper'
 class ReaperFullSweepTest < Wurk::Test::UnitCase
   parallelize_me!
 
+  DEAD_PID = 999_999 # never a running pid in CI/dev
+
   def setup
     super
     @ns        = "reapfull-#{Process.pid}-#{object_id}"
@@ -50,6 +52,22 @@ class ReaperFullSweepTest < Wurk::Test::UnitCase
     assert_equal 1, @observer.call('LLEN', @orphan_q), 'job re-queued onto its public queue'
   end
   # rubocop:enable Minitest/MultipleAssertions, Metrics/AbcSize
+
+  # Migration window: a private list written before the PROCESS_NONCE upgrade
+  # (`<host>|<pid>|<idx>`, no nonce segment) must stay reclaimable by the full
+  # sweep. No fork needed here — the owner pid is simply gone, exactly like a
+  # pre-upgrade process that crashed and was never replaced under that pid.
+  # rubocop:disable Minitest/MultipleAssertions
+  def test_full_sweep_reclaims_a_legacy_pre_nonce_orphan_in_an_unserved_queue
+    legacy_priv = "#{@orphan_q}|#{Socket.gethostname}|#{DEAD_PID}|0"
+    @observer.call('RPUSH', legacy_priv, payload('job-legacy'))
+
+    assert_equal 0, @reaper.reclaim!, 'scoped sweep ignores an unserved queue'
+    assert_equal 1, @reaper.reclaim_full!, 'full sweep recovers the pre-nonce orphan'
+    assert_equal 0, @observer.call('LLEN', legacy_priv), 'private list drained'
+    assert_equal 1, @observer.call('LLEN', @orphan_q), 'job re-queued onto its public queue'
+  end
+  # rubocop:enable Minitest/MultipleAssertions
 
   private
 

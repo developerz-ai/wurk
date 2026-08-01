@@ -9,7 +9,7 @@ require_relative '../fetcher'
 module Wurk
   class Fetcher
     # Default fetcher. Each public queue is paired with a per-process
-    # private list (`queue:<name>|<host>|<pid>|<idx>`); a job is moved
+    # private list (`queue:<name>|<host>|<pid>|<nonce>|<idx>`); a job is moved
     # atomically from the public tail to the private head via LMOVE, and
     # stays there until the Processor explicitly ACKs (LREM). SIGKILL
     # between fetch and ack leaves the job in the private list, where the
@@ -62,9 +62,16 @@ module Wurk
       # carrying a back-reference to its parent fetcher. Index defaults to
       # 0 — we run one fetcher per capsule today. Multi-processor topology
       # (one private list per processor slot) is a future Manager concern.
+      #
+      # The nonce marks the incarnation. host+pid alone is ambiguous once PID
+      # namespaces are in play: a restarted container reuses both, so the
+      # reaper's `kill(0)` liveness check would read a dead owner's list as
+      # live (jobs stranded) or a live owner's as dead (job run twice). Keys
+      # written before the nonce existed stay reclaimable — Reaper#parse_owner
+      # accepts both shapes.
       def self.private_queue_name(public_queue, index = 0)
         host = ENV['DYNO'] || Socket.gethostname
-        "#{public_queue}|#{host}|#{::Process.pid}|#{index}"
+        "#{public_queue}|#{host}|#{::Process.pid}|#{Component::PROCESS_NONCE}|#{index}"
       end
 
       def initialize(capsule)

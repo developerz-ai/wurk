@@ -55,13 +55,32 @@ LMOVE  queue:default  queue:default|web-1|4711|0  RIGHT LEFT
 The destination is the **private list** — one per (public queue, process):
 
 ```
-queue:<public queue name>|<host>|<pid>|<index>
+queue:<public queue name>|<host>|<pid>|<nonce>|<index>
 ```
 
 - `<host>` is `ENV["DYNO"]` when set, otherwise `Socket.gethostname`.
+- `<nonce>` is `Wurk::Component::PROCESS_NONCE` — 12 hex chars
+  (`SecureRandom.hex(6)`), minted once when the process image loads and
+  inherited unchanged across `fork`. It disambiguates two process
+  *generations* that land on the same `<host>|<pid>` — a quick restart that
+  gets pid-recycled by the OS, or a container that restarts under a fixed
+  hostname into a fresh pid namespace. Without it, a reaper could match the
+  new process's private list against the old (dead) process's identity, or
+  vice versa.
 - `<index>` is currently always `0` — one fetcher per capsule.
 - Pipe separators, matching Sidekiq Pro's `super_fetch` naming byte-for-byte, so
   third-party tooling that parses these keys keeps working.
+
+> **Migration window.** Keys written before the nonce existed have the
+> 3-segment tail `<host>|<pid>|<index>` (no nonce). The reaper's parser
+> (`Fetcher::Reaper#parse_owner`/`#parse_full_key`, right-anchored via
+> `owner_tails`) accepts both the 4-segment and 3-segment tail shapes, trying
+> the wider (nonce-bearing) reading first and falling back to the narrow one.
+> A pre-nonce key stays reclaimable indefinitely — nothing writes that shape
+> anymore, but a list created by a not-yet-upgraded process can still hold
+> in-flight jobs across a rolling upgrade, and dropping the narrow parse
+> would strand it. See [How "dead" is decided](#how-dead-is-decided) for how
+> liveness is checked differently for nonce-bearing vs. pre-nonce keys.
 
 The job stays in that private list for the entire duration of `perform`. Only
 when the Processor finishes does it ACK:
@@ -157,21 +176,39 @@ end
 
 ### How "dead" is decided
 
-Per private-list owner, and the answer differs by host:
+Per private-list owner, and the answer now turns on nonce, not just host:
 
-- **Same host** — the OS is authoritative: `Process.kill(0, pid)`. Instant. A
-  `kill -9`ed sibling is reclaimed the moment the supervisor reaps it, without
-  waiting out any TTL. (`EPERM` is treated as alive.)
-- **Other host** — we can't ping the pid, so we trust the heartbeat: the owner
-  is alive iff some member of the `processes` set whose `info` hash still exists
-  shares its `<host>:<pid>` prefix. The heartbeat hash has a **60s TTL**, so
-  **cross-host reclaim can lag up to ~60 seconds.** Bare set membership isn't
-  enough — a member lingers after its hash expires, and that window must count
-  as dead.
+- **Our own host *and* nonce** — a key's `<host>|<pid>|<nonce>` tail matches
+  this process's own `hostname` and `Component::PROCESS_NONCE`. Because the
+  nonce is minted once per process image and inherited unchanged across
+  `fork` (`component.rb:19-21`), this group is every process forked from the
+  same swarm boot — the pid was minted in *our* pid namespace, so the OS is
+  authoritative: `Process.kill(0, pid)`. Instant. It ignores a stale
+  `processes` SET entry whose 60s TTL hasn't lapsed yet, so a `kill -9`ed
+  sibling is reclaimed the moment the supervisor reaps it, not up to 60s
+  later. (`EPERM` is treated as alive.)
+- **Any other incarnation** — different nonce (a different boot generation),
+  a pre-nonce key, or a different host — its pid means nothing in our
+  namespace, so we trust the heartbeat instead: the owner is alive iff its
+  identity is a live `processes` member (one whose `info` hash still
+  exists). Match is on the full `<host>:<pid>:<nonce>` for a nonce-bearing
+  key, or just the `<host>:<pid>` prefix for a pre-nonce one — see the
+  [migration window](#reliable-fetch) note above. The heartbeat hash has a
+  **60s TTL**, so **this path can lag reclaim up to ~60 seconds.** Bare set
+  membership isn't enough — a member lingers after its hash expires, and that
+  window must count as dead.
 
-The one blind spot is local pid reuse: if an unrelated process grabs the dead
-worker's pid, the private list looks alive. In practice the supervisor respawns
-with a fresh pid, so it doesn't arise.
+**The remaining blind spot, unchanged by the nonce:** pid reuse *within* the
+same boot generation. If the swarm respawns a replacement and the OS hands it
+the exact pid a just-reaped sibling held — same host, same inherited
+nonce — the new occupant reads as the old one, alive. In practice the
+supervisor's own bookkeeping means this doesn't arise (a respawned child
+gets a fresh pid before its predecessor's is even eligible for reuse), so it
+stays a theoretical gap rather than an operational one. This is the same
+class of weakness Sidekiq Pro's `super_fetch` has never closed — see
+[Parity Divergences](idea/parity-divergences.md) — recorded there as
+deliberate rather than fixed, since eliminating it would mean tracking pid
+generation numbers the OS doesn't expose.
 
 ### What reclaim actually does
 

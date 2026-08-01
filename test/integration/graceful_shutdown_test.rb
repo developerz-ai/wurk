@@ -253,7 +253,7 @@ class GracefulShutdownTest < Wurk::Test::UnitCase
     "#{Wurk::Keys::QUEUE_PREFIX}#{@queue_name}"
   end
 
-  # Private lists are named `<public_queue>|<host>|<pid>|<idx>` (Reliable
+  # Private lists are named `<public_queue>|<host>|<pid>|<nonce>|<idx>` (Reliable
   # .private_queue_name) — the pid belongs to the forked swarm child, which the
   # test never learns directly, so SCAN by prefix instead. Redis deletes a list
   # key outright once its last element is LREM'd/ACK'd, so "no matching keys"
