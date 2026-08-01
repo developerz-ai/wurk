@@ -1,4 +1,4 @@
-import { createSignal, createEffect, Show } from 'solid-js';
+import { createSignal, createEffect, onCleanup, Show } from 'solid-js';
 import { useParams } from '@solidjs/router';
 import { PageHeader } from '../components/PageHeader';
 import { Skeleton, SkeletonTable } from '../components/Skeleton';
@@ -41,19 +41,26 @@ function NativeExtension(props: { extName: string; indexPath: string; title: str
   // Monotonic request id: a response only lands if it's still the latest, so
   // rapid link clicks can't resolve out of order and show stale HTML.
   let seq = 0;
+  // Aborts the in-flight fetch on unmount so a slow response can't call
+  // setHtml/setError after the component is gone.
+  let controller: AbortController | undefined;
 
   const load = async (path: string, init?: RequestInit) => {
     const id = ++seq;
+    controller = new AbortController();
     try {
-      const res = await fetch(base + path, init);
+      const res = await fetch(base + path, { ...init, signal: controller.signal });
       const text = await res.text();
       if (id !== seq) return;
       setError(!res.ok && res.status !== 404);
       setHtml(text);
-    } catch {
+    } catch (err) {
+      if (err instanceof DOMException && err.name === 'AbortError') return;
       if (id === seq) setError(true);
     }
   };
+
+  onCleanup(() => controller?.abort());
 
   createEffect(() => {
     void load(props.indexPath.replace(/\/+$/, ''));

@@ -1,4 +1,7 @@
-import { createEffect, createSignal, onCleanup, onMount, Show, type JSX } from 'solid-js';
+import { children, createEffect, createSignal, onCleanup, onMount, Show, type JSX } from 'solid-js';
+
+// Matches --dur-slow (styles/abstracts/_variables.scss) — the modal's exit transition.
+const EXIT_DURATION_MS = 240;
 
 interface ModalProps {
   open: boolean;
@@ -20,16 +23,30 @@ export default function Modal(props: ModalProps) {
   let dlg!: HTMLDialogElement;
   const titleId = `modal-title-${Math.random().toString(36).slice(2)}`;
 
+  // Resolve once via the `children` helper so repeated reads (below, and in the
+  // `held` effect) don't re-run the consumer's JSX-producing function on every
+  // reactive read — without it, a parent that re-renders on a poll interval
+  // would rebuild (and remount) the whole subtree each tick even though `open`
+  // never changed.
+  const resolvedChildren = children(() => props.children);
+
   // Hold the last content + title so the panel isn't blank while it animates out
-  // (consumers typically clear their data the moment `open` flips false).
-  const [held, setHeld] = createSignal<{ title: JSX.Element; children: JSX.Element }>({
+  // (consumers typically clear their data the moment `open` flips false), then
+  // release it once the exit transition finishes so the held subtree doesn't
+  // stay mounted (and subscribed) forever.
+  const [held, setHeld] = createSignal<{ title: JSX.Element; children: JSX.Element } | null>({
     title: props.title,
-    children: props.children,
+    children: resolvedChildren(),
   });
   createEffect(() => {
-    if (props.open) setHeld({ title: props.title, children: props.children });
+    if (props.open) {
+      setHeld({ title: props.title, children: resolvedChildren() });
+    } else {
+      const timer = setTimeout(() => setHeld(null), EXIT_DURATION_MS);
+      onCleanup(() => clearTimeout(timer));
+    }
   });
-  const shown = () => (props.open ? { title: props.title, children: props.children } : held());
+  const shown = () => (props.open ? { title: props.title, children: resolvedChildren() } : held());
 
   createEffect(() => {
     if (props.open && !dlg.open) dlg.showModal();
@@ -60,12 +77,12 @@ export default function Modal(props: ModalProps) {
     >
       <div class="modal-panel" style={{ 'max-width': `${props.width ?? 640}px` }}>
         <div class="modal-header">
-          <h2 id={titleId} class="modal-title">{shown().title}</h2>
+          <h2 id={titleId} class="modal-title">{shown()?.title}</h2>
           <button class="modal-close" onClick={() => props.onClose()} aria-label="Close">
             <i class="fa-solid fa-xmark" />
           </button>
         </div>
-        <div class="modal-body">{shown().children}</div>
+        <div class="modal-body">{shown()?.children}</div>
         <Show when={props.footer}>
           <div class="modal-footer">{props.footer}</div>
         </Show>
