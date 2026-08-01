@@ -86,6 +86,43 @@ class RedisClientAdapterTest < Wurk::Test::UnitCase
     end
   end
 
+  # --- round-trip odometer (RedisPool's replay guard reads this) ---
+
+  def test_round_trips_counts_call_and_pipelined
+    @pool.with do |conn|
+      before = conn.round_trips
+      conn.call('PING')
+      conn.pipelined { |pipe| pipe.call('PING') }
+
+      assert_equal before + 2, conn.round_trips, 'a pipeline is one round trip'
+    end
+  end
+
+  # Method-style commands route through CompatMethods, which would otherwise
+  # dispatch straight at the wrapped client and slip past the odometer.
+  def test_round_trips_counts_method_style_commands
+    @pool.with do |conn|
+      before = conn.round_trips
+      conn.set(@key, 'v')
+      conn.echo('hi')
+      conn.info
+
+      assert_equal before + 3, conn.round_trips
+    end
+  end
+
+  # The odometer only moves for a command that came back clean: a raise means
+  # nothing applied — rejected by the server or never sent — which is the state
+  # the pool's pre-apply backoff stays available for.
+  def test_round_trips_holds_when_a_command_raises
+    @pool.with do |conn|
+      before = conn.round_trips
+
+      assert_raises(RedisClient::CommandError) { conn.call('NOSUCHCOMMAND') }
+      assert_equal before, conn.round_trips
+    end
+  end
+
   def test_pipelined_yields_compat_pipeline
     @pool.with do |conn|
       conn.pipelined do |pipe|

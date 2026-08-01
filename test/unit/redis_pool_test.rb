@@ -233,6 +233,49 @@ class RedisPoolTest < Wurk::Test::UnitCase
     assert_equal Wurk::RedisPool::CONN_MAX_ATTEMPTS - 1, conn.closes
   end
 
+  # --- partially-applied blocks: no replay, whatever the error proves (F5) ---
+
+  # A block is several round trips and redis-client re-dials mid-block, so
+  # CannotConnect can land on the second pipeline of a push whose first already
+  # wrote. Replaying it would double-enqueue that first group.
+  def test_pre_apply_error_after_a_completed_round_trip_is_not_replayed
+    conn = PartialBlockConn.new(kind: :cannot_connect)
+    pool = pool_wrapping(conn)
+
+    no_sleep(pool) { assert_raises(RedisClient::CannotConnectError) { pool.with(&:exec) } }
+    assert_equal 1, conn.blocks, 'the round trip that already applied would be re-issued'
+    assert_equal 0, conn.closes
+  end
+
+  # Same hole on the failover branch: READONLY proves the *rejected* write went
+  # to a replica, not that the pipeline before it did.
+  def test_failover_reply_after_a_completed_round_trip_is_not_replayed
+    conn = PartialBlockConn.new(kind: :readonly)
+    pool = pool_wrapping(conn)
+
+    assert_raises(RedisClient::ReadOnlyError) { pool.with(&:exec) }
+    assert_equal 1, conn.blocks
+  end
+
+  def test_refused_replay_after_partial_progress_is_reported_once
+    events = []
+    conn = PartialBlockConn.new(kind: :cannot_connect)
+    pool = pool_wrapping(conn, on_error: ->(info) { events << info })
+
+    assert_raises(RedisClient::CannotConnectError) { pool.with(&:exec) }
+    assert_equal([{ attempt: 1, retried: false }], events.map { |e| e.slice(:attempt, :retried) })
+  end
+
+  # The claim is exactly "re-running my block is a no-op", so partial progress
+  # changes nothing for a caller that made it.
+  def test_idempotent_block_still_replays_after_a_completed_round_trip
+    conn = PartialBlockConn.new(kind: :cannot_connect, raises: 1)
+    pool = pool_wrapping(conn)
+
+    no_sleep(pool) { assert_equal(:ok, pool.with(idempotent: true, &:exec)) }
+    assert_equal 2, conn.blocks
+  end
+
   # --- post-write errors: never replayed unless the caller opts in (F5) ---
 
   def test_read_timeout_is_not_replayed_by_default
@@ -497,7 +540,7 @@ class RedisPoolTest < Wurk::Test::UnitCase
       failover: [RedisClient::FailoverError, 'Expected to connect to a master, but the server is a replica']
     }.freeze
 
-    attr_reader :calls, :closes
+    attr_reader :calls, :closes, :round_trips
 
     def initialize(kind:, raises:, close_raises: false)
       @kind = kind
@@ -505,12 +548,47 @@ class RedisPoolTest < Wurk::Test::UnitCase
       @close_raises = close_raises
       @calls = 0
       @closes = 0
+      @round_trips = 0
     end
 
+    # Fails outright before anything reaches the server, so the odometer the
+    # pool's replay guard reads only moves on the attempt that succeeds.
     def exec
       @calls += 1
       if @calls <= @raises
         klass, msg = ERRORS.fetch(@kind)
+        raise klass, msg
+      end
+      @round_trips += 1
+      :ok
+    end
+
+    def close
+      @closes += 1
+      raise 'boom' if @close_raises
+    end
+  end
+
+  # A connection whose block lands `deliver` round trips and *then* fails —
+  # the mid-block re-dial shape, where a connect-phase error says nothing about
+  # the pipelines already acknowledged.
+  class PartialBlockConn
+    attr_reader :blocks, :closes, :round_trips
+
+    def initialize(kind:, raises: 99, deliver: 1)
+      @kind = kind
+      @raises = raises
+      @deliver = deliver
+      @blocks = 0
+      @closes = 0
+      @round_trips = 0
+    end
+
+    def exec
+      @blocks += 1
+      @round_trips += @deliver
+      if @blocks <= @raises
+        klass, msg = FlakyConn::ERRORS.fetch(@kind)
         raise klass, msg
       end
       :ok
@@ -518,7 +596,6 @@ class RedisPoolTest < Wurk::Test::UnitCase
 
     def close
       @closes += 1
-      raise 'boom' if @close_raises
     end
   end
 end

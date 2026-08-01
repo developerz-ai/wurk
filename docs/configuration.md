@@ -411,14 +411,21 @@ Ruby, so a retry re-issues every command in it:
 
 - `READONLY` / `NOREPLICAS` / `UNBLOCKED` — a failover; close and retry once
   immediately.
-- `CannotConnectError` / `FailoverError` — raised while dialing, before any byte
-  reached a server, so nothing can have applied: close, sleep
+- `CannotConnectError` / `FailoverError` — raised while dialing, so the command
+  that hit one never reached a server and cannot have applied: close, sleep
   `(0.5 × 2ⁿ) + rand×0.25`, retry up to 3 attempts total, then raise.
 - `ReadTimeoutError` / `WriteTimeoutError` / bare `ConnectionError` — the command
   may already have applied server-side, so these raise rather than double-push a
   job or double-count a stat.
 - `ConnectionPool::TimeoutError` — one retry after `0.1–0.3s`, then raise.
   Sustained checkout starvation is a sizing bug; fix the size.
+
+Those proofs cover the command that raised, not the block around it. A block is
+several round trips and redis-client re-dials mid-block, so a
+`CannotConnectError` can surface on the second pipeline of a push whose first
+one already landed. The pool counts completed round trips per connection and
+refuses to replay a block that has any, so a write Redis already took is never
+re-applied — however provably the failing command missed the server.
 
 A block that is safe to re-run opts back into the full backoff with
 `idempotent: true`, forwarded by every wrapper (`Wurk.redis`, `Sidekiq.redis`,

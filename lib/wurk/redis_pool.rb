@@ -15,8 +15,8 @@ module Wurk
   # did — the block is arbitrary Ruby, so a replay re-issues every command in it:
   #   * READONLY / NOREPLICAS / UNBLOCKED — a failover happened; close and retry
   #     once immediately so redis-client redials the new primary (spec §26).
-  #   * CannotConnect / Failover — raised while dialing, before any byte of the
-  #     block reached a server, so nothing can have applied; close and retry with
+  #   * CannotConnect / Failover — raised while dialing, so the command that hit
+  #     one never reached a server and cannot have applied; close and retry with
   #     exponential backoff up to CONN_MAX_ATTEMPTS, then raise.
   #   * Read-/WriteTimeout and bare ConnectionError — the command may already
   #     have applied server-side, so these raise. Replaying would double-push a
@@ -25,6 +25,12 @@ module Wurk
   #     owner-CAS scripts) opt back into the backoff with `with(idempotent: true)`.
   #   * ConnectionPool::TimeoutError — checkout starved; retry once after a
   #     short jittered pause, then raise (sizing is the fix, not queuing).
+  # Those proofs are about the command that raised, not the block around it: a
+  # block is several round trips, and redis-client re-dials mid-block, so a
+  # CannotConnect can surface on the second pipeline of a block whose first one
+  # already landed. So the pool also watches the connection's round-trip
+  # odometer (RedisClientAdapter::CompatClient#round_trips) and refuses to
+  # replay a non-idempotent block that has already completed one.
   # Every retry, refused replay, and final give-up is reported through the
   # injected `on_error` telemetry hook (Wurk::Configuration#on_redis_error).
   class RedisPool
@@ -186,9 +192,10 @@ module Wurk
       attempts = 0
       begin
         attempts += 1
+        odometer = conn.round_trips
         yield conn
       rescue RedisClient::Error => e
-        plan = retry_plan(e, attempts, idempotent)
+        plan = retry_plan(e, attempts, idempotent, conn.round_trips != odometer)
         raise if plan == :propagate
 
         replaying = REPLAY_PLANS.include?(plan)
@@ -201,27 +208,33 @@ module Wurk
       end
     end
 
-    # Pure classification of a RedisClient error against the attempt count and
-    # the caller's apply-safety claim:
+    # Pure classification of a RedisClient error against the attempt count, the
+    # caller's apply-safety claim, and whether this attempt already completed a
+    # round trip (`dirty`):
     #   :failover  → close + immediate retry (a primary swap)
     #   :backoff   → close + sleep + retry (a connection blip)
-    #   :unsafe    → the command may have applied; report the blip, then raise
+    #   :unsafe    → something may have applied; report the blip, then raise
     #   :exhausted → replayable ConnectionError past the cap; report and give up
     #   :propagate → not transient (or a spent failover); raise as-is
-    def retry_plan(err, attempts, idempotent)
-      if RETRYABLE_MSG.match?(err.message.to_s)
-        attempts > 1 ? :propagate : :failover
-      elsif !err.is_a?(RedisClient::ConnectionError)
-        :propagate
-      elsif !replayable?(err, idempotent)
-        :unsafe
-      else
-        attempts >= CONN_MAX_ATTEMPTS ? :exhausted : :backoff
-      end
+    def retry_plan(err, attempts, idempotent, dirty)
+      failover = RETRYABLE_MSG.match?(err.message.to_s)
+      return :propagate unless failover || err.is_a?(RedisClient::ConnectionError)
+      return :unsafe unless replayable?(err, idempotent, dirty, failover)
+      return attempts > 1 ? :propagate : :failover if failover
+
+      attempts >= CONN_MAX_ATTEMPTS ? :exhausted : :backoff
     end
 
-    def replayable?(err, idempotent)
-      idempotent || PRE_APPLY_ERRORS.any? { |klass| err.is_a?(klass) }
+    # A replay re-issues the whole block, so one completed round trip voids
+    # every pre-apply proof: however provably the *failing* command missed the
+    # server, the ones ahead of it in the block did not. On a still-clean block
+    # a failover reply is proof enough by itself (the command was rejected
+    # outright); a bare ConnectionError needs one of the connect-phase classes.
+    def replayable?(err, idempotent, dirty, failover)
+      return true if idempotent
+      return false if dirty
+
+      failover || PRE_APPLY_ERRORS.any? { |klass| err.is_a?(klass) }
     end
 
     def notify_error(error, attempt:, retried:)

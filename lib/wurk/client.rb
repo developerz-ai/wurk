@@ -252,7 +252,9 @@ module Wurk
       # batch Lua's counters), so a block replayed after a lost reply is a
       # second copy of the job. A post-write timeout raises out of here instead
       # — {Client::Buffered} turns that into an outage-buffer entry, and a plain
-      # Client hands it to whoever called `perform_async`.
+      # Client hands it to whoever called `perform_async`. The pool's pre-apply
+      # retry only fires while this block has landed nothing, so a queue group
+      # that already went out is never re-pushed by a replay.
       pool.with { |conn| atomic_push(conn, payloads) }
       nil
     end
@@ -416,8 +418,9 @@ module Wurk
     # batched, immediate vs scheduled), and the ledger is what keeps a group
     # that already landed out of the buffer when a later group fails. It
     # accumulates across pool attempts and is never pruned — #raw_push claims no
-    # apply-safety, so the only replay left is a pre-apply one, where nothing
-    # was acknowledged and the ledger is still empty anyway.
+    # apply-safety, and RedisPool refuses to replay such a block once one of its
+    # round trips has completed, so the only replay left starts from an empty
+    # ledger.
     def mark_delivered(payloads)
       Thread.current[DELIVERED_KEY]&.concat(payloads)
     end

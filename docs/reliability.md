@@ -333,7 +333,10 @@ first, but only where a replay is provably safe: a connect-phase failure
 (`CannotConnectError` / `FailoverError`) gets 3 attempts with exponential
 backoff, while a read/write timeout — where the push may already have applied —
 raises on the first error rather than risk a duplicate job, and lands in the
-buffer straight away.
+buffer straight away. That backoff only runs while the push has landed nothing:
+once a queue group is acknowledged the pool stops replaying the block whatever
+the error, so a push that dies partway can never double the group it already
+delivered.
 
 **Flush behavior.** Every subsequent `push` / `push_bulk` drains the buffer
 oldest-first *before* pushing the new job. Draining stops at the first transient
