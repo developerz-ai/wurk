@@ -316,12 +316,20 @@ class BatchRetryRoundtripTest < Wurk::Test::UnitCase
 
   def with_swarm(topo)
     swarm = Wurk::Swarm.new(topology: topo, config: @config, shutdown_timeout: 5)
-    swarm.boot(install_signals: false)
-    supervisor = Thread.new { swarm.supervise }
-    yield
-  ensure
-    swarm&.shutdown(timeout: 5)
-    supervisor&.join(10)
+    supervisor = nil
+
+    begin
+      swarm.boot(install_signals: false)
+      supervisor = Thread.new { swarm.supervise }
+      yield
+    ensure
+      begin
+        swarm.shutdown(timeout: 5)
+      rescue StandardError
+        nil
+      end
+      stop_supervisor_thread(supervisor, 10)
+    end
   end
 
   # Finds the due-set member belonging to `needle` (a Redis key baked into

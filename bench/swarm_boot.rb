@@ -2,6 +2,7 @@
 
 require "logger"
 require "wurk"
+require_relative "support"
 
 # Swarm boot — one of the "Faster" pillar critical paths (CLAUDE.md). Measures
 # the REAL fork + reconnect + first-heartbeat latency: each sample boots a small
@@ -22,15 +23,9 @@ require "wurk"
 # isolated-DB approach from #259) so a stray worker on the default DB can't
 # perturb the boot. DB 0 is never touched.
 
-def bench_redis_url(default_db = "14")
-  base = ENV["REDIS_URL"] || "redis://localhost:6379/0"
-  db = ENV.fetch("WURK_BENCH_DB", default_db)
-  base.match?(%r{/\d+\z}) ? base.sub(%r{/\d+\z}, "/#{db}") : "#{base}/#{db}"
-end
-
 def monotonic = ::Process.clock_gettime(::Process::CLOCK_MONOTONIC)
 
-REDIS_URL    = bench_redis_url
+REDIS_URL    = bench_redis_url("14")
 CHILDREN     = Integer(ENV.fetch("WURK_BENCH_SWARM_CHILDREN", "2"))
 SAMPLES      = Integer(ENV.fetch("WURK_BENCH_SWARM_SAMPLES", "8"))
 BOOT_MARKER  = "wurk-bench:swarm-boot-log"

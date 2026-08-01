@@ -100,6 +100,8 @@ end
 desc "Run all benchmarks (enqueue, fetch+execute, bulk enqueue, swarm boot, memory)"
 task :bench do
   Dir.glob(File.join(GEM_ROOT, "bench", "*.rb")).sort.each do |script|
+    next if File.basename(script) == "support.rb"
+
     puts "\n=== #{File.basename(script)} ==="
     sh "ruby", "-Ilib", script
   end
@@ -107,6 +109,8 @@ end
 
 namespace :bench do
   Dir.glob(File.join(GEM_ROOT, "bench", "*.rb")).sort.each do |script|
+    next if File.basename(script) == "support.rb"
+
     name = File.basename(script, ".rb")
     desc "Run bench/#{name}.rb"
     task name do

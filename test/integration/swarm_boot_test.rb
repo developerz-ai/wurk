@@ -54,10 +54,11 @@ class SwarmBootTest < Wurk::Test::UnitCase
   def test_swarm_boots_forks_and_runs_a_job_in_a_child # rubocop:disable Metrics/AbcSize,Minitest/MultipleAssertions
     push_sentinel_job
     swarm = Wurk::Swarm.new(topology: topology_n(2), config: @config, shutdown_timeout: 5)
-
-    pids = swarm.boot(install_signals: false)
+    supervisor = nil
 
     begin
+      pids = swarm.boot(install_signals: false)
+
       assert_equal 2, pids.size, 'boot should return one PID per slot assignment'
       pids.each { |pid| assert pid_alive?(pid), "expected child #{pid} to be alive after boot" }
 
@@ -70,8 +71,12 @@ class SwarmBootTest < Wurk::Test::UnitCase
       assert_includes pids.map(&:to_s), sentinel_pid,
                       "sentinel writer #{sentinel_pid} should be one of the spawned children #{pids}"
     ensure
-      swarm.shutdown(timeout: 5)
-      supervisor&.join(10)
+      begin
+        swarm.shutdown(timeout: 5)
+      rescue StandardError
+        nil
+      end
+      stop_supervisor_thread(supervisor, 10)
     end
   end
 
@@ -87,9 +92,11 @@ class SwarmBootTest < Wurk::Test::UnitCase
     log_boot_pids
     @config.memory_limit_mb = 1
     swarm = Wurk::Swarm.new(topology: topology_n(1), config: @config, shutdown_timeout: 5)
+    supervisor = nil
 
-    original = swarm.boot(install_signals: false).first
     begin
+      original = swarm.boot(install_signals: false).first
+
       assert_equal original.to_s, wait_for_boot_count(1)&.first,
                    "first child #{original} never finished booting"
 
@@ -101,8 +108,12 @@ class SwarmBootTest < Wurk::Test::UnitCase
       assert wait_until_dead(original),
              'the original (bloated) child should be TERMed once its replacement took over'
     ensure
-      swarm.shutdown(timeout: 5)
-      supervisor&.join(10)
+      begin
+        swarm.shutdown(timeout: 5)
+      rescue StandardError
+        nil
+      end
+      stop_supervisor_thread(supervisor, 10)
     end
   end
 
@@ -113,11 +124,16 @@ class SwarmBootTest < Wurk::Test::UnitCase
 
   def test_boot_is_not_re_entrant
     swarm = Wurk::Swarm.new(topology: topology_n(1), config: @config, shutdown_timeout: 5)
-    swarm.boot(install_signals: false)
+
     begin
+      swarm.boot(install_signals: false)
       assert_raises(RuntimeError) { swarm.boot(install_signals: false) }
     ensure
-      swarm.shutdown(timeout: 5)
+      begin
+        swarm.shutdown(timeout: 5)
+      rescue StandardError
+        nil
+      end
     end
   end
 

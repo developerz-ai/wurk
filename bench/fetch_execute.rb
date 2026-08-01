@@ -3,6 +3,7 @@
 require "benchmark/ips"
 require "logger"
 require "wurk"
+require_relative "support"
 
 # End-to-end fetch+execute — one of the four "Faster" pillar critical paths
 # (CLAUDE.md). Each iteration enqueues one job, then drives the REAL reliable
@@ -23,12 +24,6 @@ require "wurk"
 #
 # Gate: >5% regression vs main blocks merge.
 
-def bench_redis_url
-  base = ENV["REDIS_URL"] || "redis://localhost:6379/0"
-  db = ENV.fetch("WURK_BENCH_DB", "15")
-  base.match?(%r{/\d+\z}) ? base.sub(%r{/\d+\z}, "/#{db}") : "#{base}/#{db}"
-end
-
 class BenchJob
   include Wurk::Job
 
@@ -37,7 +32,7 @@ end
 
 config = Wurk::Configuration.new
 config.logger = Logger.new(IO::NULL)
-config.redis = { url: bench_redis_url }
+config.redis = { url: bench_redis_url("15") }
 config.queues = %w[default]
 capsule = config.default_capsule
 capsule.prepare!

@@ -22,11 +22,13 @@ class ProcessorTest < Wurk::Test::UnitCase
     @capsule.queues = [@queue_name]
     @capsule.fetcher = Wurk::Fetcher::Reliable.new(@capsule)
     @pool = @capsule.redis_pool
-    @processor = Wurk::Processor.new(@capsule)
+    @processors = []
+    @processor = new_processor
     @dead_members = []
   end
 
   def teardown
+    @processors.each { |p| stop_processor(p) }
     @pool.with do |conn|
       conn.call('DEL', @public_queue, private_queue)
       conn.call('ZREM', Wurk::Keys::DEAD, *@dead_members) unless @dead_members.empty?
@@ -106,7 +108,7 @@ class ProcessorTest < Wurk::Test::UnitCase
 
   def test_run_invokes_callback_on_clean_exit
     called = []
-    processor = Wurk::Processor.new(@capsule) { |p| called << p }
+    processor = new_processor { |p| called << p }
     processor.start
     processor.terminate(true)
 
@@ -114,7 +116,7 @@ class ProcessorTest < Wurk::Test::UnitCase
   end
 
   def test_run_without_callback_exits_cleanly
-    processor = Wurk::Processor.new(@capsule) # nil callback => &. short-circuits
+    processor = new_processor # nil callback => &. short-circuits
     processor.start
     processor.terminate(true)
 
@@ -128,7 +130,7 @@ class ProcessorTest < Wurk::Test::UnitCase
 
   def test_run_invokes_callback_on_shutdown
     called = []
-    processor = Wurk::Processor.new(@capsule) { |_p| called << :shutdown }
+    processor = new_processor { |_p| called << :shutdown }
     processor.define_singleton_method(:process_one) { raise Wurk::Shutdown }
     processor.start
     processor.thread.join(2)
@@ -138,7 +140,7 @@ class ProcessorTest < Wurk::Test::UnitCase
   end
 
   def test_run_without_callback_on_shutdown_exits_cleanly
-    processor = Wurk::Processor.new(@capsule) # nil callback in Shutdown rescue
+    processor = new_processor # nil callback in Shutdown rescue
     processor.define_singleton_method(:process_one) { raise Wurk::Shutdown }
     processor.start
     processor.thread.join(2)
@@ -165,7 +167,7 @@ class ProcessorTest < Wurk::Test::UnitCase
 
   def test_run_invokes_callback_then_reraises_on_fatal_error
     called = []
-    processor = Wurk::Processor.new(@capsule) { |_p| called << :fatal }
+    processor = new_processor { |_p| called << :fatal }
     processor.define_singleton_method(:fetch) { raise FatalBoom, 'fatal' }
     processor.start
     # run re-raises (line 146); Thread#join propagates it to the caller.
@@ -176,7 +178,7 @@ class ProcessorTest < Wurk::Test::UnitCase
   end
 
   def test_run_without_callback_reraises_on_fatal_error
-    processor = Wurk::Processor.new(@capsule) # nil callback in Exception rescue
+    processor = new_processor # nil callback in Exception rescue
     processor.define_singleton_method(:fetch) { raise FatalBoom, 'fatal' }
     processor.start
     assert_raises(FatalBoom) { processor.thread.join(2) }
@@ -427,6 +429,35 @@ class ProcessorTest < Wurk::Test::UnitCase
   end
 
   private
+
+  def new_processor(&block)
+    Wurk::Processor.new(@capsule, &block).tap { |p| @processors << p }
+  end
+
+  # `kill(true)` would block in `@thread.value` with no timeout, so teardown
+  # asks for the raise only and does its own bounded wait below.
+  def stop_processor(processor)
+    processor.kill(false)
+  rescue Exception # rubocop:disable Lint/RescueException
+    nil
+  ensure
+    join_quietly(processor.thread)
+  end
+
+  # A few tests deliberately drive their processor's thread to die with
+  # FatalBoom (a non-StandardError); #join re-raises that stored exception
+  # every time it's called on the already-dead thread, so this rescues broadly
+  # — a raising join still means the thread is gone. Only a join that times out
+  # needs the Thread#kill fallback.
+  def join_quietly(thread)
+    return if thread.nil?
+    return if thread.join(2)
+
+    thread.kill
+    thread.join(1)
+  rescue Exception # rubocop:disable Lint/RescueException
+    nil
+  end
 
   def private_queue
     Wurk::Fetcher::Reliable.private_queue_name(@public_queue)

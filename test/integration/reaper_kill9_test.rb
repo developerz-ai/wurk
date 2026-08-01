@@ -69,10 +69,12 @@ class ReaperKill9Test < Wurk::Test::UnitCase
   def test_kill_9_storm_loses_no_jobs_and_never_loops_forever # rubocop:disable Metrics/AbcSize
     enqueue_jobs
     swarm = Wurk::Swarm.new(topology: topology, config: @config, shutdown_timeout: 5)
-    swarm.boot(install_signals: false)
-    supervisor = Thread.new { swarm.supervise }
+    supervisor = nil
 
     begin
+      swarm.boot(install_signals: false)
+      supervisor = Thread.new { swarm.supervise }
+
       kill_random_children(swarm)
       completed = wait_for_drain
 
@@ -86,8 +88,12 @@ class ReaperKill9Test < Wurk::Test::UnitCase
 
       assert_operator exec_count, :<=, ceiling, 'executions unbounded — reclaim is looping'
     ensure
-      swarm.shutdown(timeout: 5)
-      supervisor&.join(15)
+      begin
+        swarm.shutdown(timeout: 5)
+      rescue StandardError
+        nil
+      end
+      stop_supervisor_thread(supervisor, 15)
     end
   end
 

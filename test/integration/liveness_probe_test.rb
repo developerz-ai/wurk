@@ -22,7 +22,9 @@ class LivenessProbeTest < Wurk::Test::UnitCase
     @config.logger = ::Logger.new(IO::NULL)
     @config[:tag] = @ns
     cap = @config.default_capsule
-    cap.queues = ['default']
+    # Unique per-test queue: a leaked Launcher from a prior run/test must
+    # never be able to steal work off the shared `queue:default` list.
+    cap.queues = [@ns]
     cap.concurrency = 1
     cap.fetcher = Wurk::Fetcher::Reliable.new(cap)
     # Materialize lazy ivars before Launcher.run freezes the capsule —
@@ -38,13 +40,23 @@ class LivenessProbeTest < Wurk::Test::UnitCase
   end
 
   def teardown
-    if @launcher
-      @launcher.instance_variable_set(:@done, true)
-      @launcher.instance_variable_get(:@health_server)&.stop
-      @launcher.instance_variable_get(:@heartbeat)&.stop! rescue nil
+    # Full teardown (not just health-server/heartbeat) so managers, poller,
+    # reaper and leader threads don't outlive the test — a leaked Launcher
+    # here would otherwise keep fetching from later tests' queues.
+    begin
+      @launcher&.stop
+    rescue StandardError
+      nil
     end
+    # Launcher#stop doesn't own the boot-reclaim thread and offers no kill
+    # fallback, so teardown has to confirm the join actually landed — a
+    # surviving thread keeps sweeping Redis into the next test.
+    reclaim = @launcher&.instance_variable_get(:@boot_reclaim_thread)
+    stuck = !reclaim.nil? && reclaim.join(2).nil?
+    reclaim.kill if stuck
   ensure
     super
+    raise 'boot-reclaim thread still alive 2s after Launcher#stop' if stuck
   end
 
   def test_live_returns_200_when_launcher_running

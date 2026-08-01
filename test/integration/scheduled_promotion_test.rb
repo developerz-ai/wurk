@@ -83,10 +83,10 @@ class ScheduledPromotionTest < Wurk::Test::UnitCase
   def test_due_scheduled_job_is_promoted_and_runs # rubocop:disable Metrics/AbcSize,Minitest/MultipleAssertions
     target_at = schedule_sentinel_job(SCHEDULE_DELAY)
     swarm = Wurk::Swarm.new(topology: topology_n(1), config: @config, shutdown_timeout: 5)
-    swarm.boot(install_signals: false)
     supervisor = nil
 
     begin
+      swarm.boot(install_signals: false)
       supervisor = Thread.new { swarm.supervise }
       result = wait_for_sentinel
 
@@ -102,8 +102,12 @@ class ScheduledPromotionTest < Wurk::Test::UnitCase
       assert_operator lateness, :<=, MAX_LATENESS,
                       "job ran #{lateness.round(2)}s after target; expected within #{MAX_LATENESS}s"
     ensure
-      swarm.shutdown(timeout: 5)
-      supervisor&.join(10)
+      begin
+        swarm.shutdown(timeout: 5)
+      rescue StandardError
+        nil
+      end
+      stop_supervisor_thread(supervisor, 10)
     end
   end
 

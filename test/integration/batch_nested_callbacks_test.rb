@@ -76,10 +76,10 @@ class BatchNestedCallbacksTest < Wurk::Test::UnitCase
   def test_parent_callbacks_wait_for_running_child_batch_under_real_forks # rubocop:disable Metrics/AbcSize,Metrics/MethodLength,Minitest/MultipleAssertions
     parent, child = enqueue_nested_batches
     swarm = Wurk::Swarm.new(topology: topology, config: @config, shutdown_timeout: 5)
-    swarm.boot(install_signals: false)
     supervisor = nil
 
     begin
+      swarm.boot(install_signals: false)
       supervisor = Thread.new { swarm.supervise }
 
       assert wait_until { window_open?(parent, child) },
@@ -110,8 +110,12 @@ class BatchNestedCallbacksTest < Wurk::Test::UnitCase
                       'child :success must precede parent :success (spec §2.4)'
     ensure
       @observer.call('SET', @release_key, '1', 'EX', 60) # never strand the gated worker
-      swarm.shutdown(timeout: 5)
-      supervisor&.join(10)
+      begin
+        swarm.shutdown(timeout: 5)
+      rescue StandardError
+        nil
+      end
+      stop_supervisor_thread(supervisor, 10)
     end
   end
 
