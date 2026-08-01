@@ -498,6 +498,85 @@ class LauncherTest < Wurk::Test::UnitCase
     assert stopped, 'stop should halt the reaper thread'
   end
 
+  # A9: the boot-time reclaim sweep started as a fire-and-forget thread in
+  # #run — #stop must join it before returning so a straggling scan doesn't
+  # keep running (and touching Redis) after the launcher is torn down.
+  def test_stop_joins_the_boot_reclaim_thread
+    @config[:timeout] = 0
+    launcher = Wurk::Launcher.new(@config)
+    silence_managers(launcher)
+    finished = false
+    launcher.instance_variable_set(:@boot_reclaim_thread, Thread.new do
+      sleep 0.05
+      finished = true
+    end)
+
+    launcher.stop
+
+    assert finished, '#stop must join the boot-reclaim thread before returning'
+  end
+
+  # A9: bounded so a still-scanning full-keyspace sweep can't hang shutdown
+  # forever — the join gives up after BOOT_RECLAIM_JOIN_TIMEOUT and lets
+  # teardown continue.
+  def test_stop_does_not_hang_when_boot_reclaim_outlives_the_join_timeout
+    @config[:timeout] = 0
+    launcher = Wurk::Launcher.new(@config)
+    silence_managers(launcher)
+    gate = Queue.new
+    thread = Thread.new { gate.pop }
+    launcher.instance_variable_set(:@boot_reclaim_thread, thread)
+    original = Wurk::Launcher::BOOT_RECLAIM_JOIN_TIMEOUT
+    with_warnings(nil) { Wurk::Launcher.const_set(:BOOT_RECLAIM_JOIN_TIMEOUT, 0.05) }
+
+    launcher.stop
+
+    assert_predicate launcher, :stopping?
+  ensure
+    gate << true
+    thread&.join(1)
+    with_warnings(nil) { Wurk::Launcher.const_set(:BOOT_RECLAIM_JOIN_TIMEOUT, original) } if original
+  end
+
+  def with_warnings(level)
+    prev = $VERBOSE
+    $VERBOSE = level
+    yield
+  ensure
+    $VERBOSE = prev
+  end
+
+  # A8: an embedded host (Puma, a rake task) keeps running after #stop and may
+  # `run` again later — without disconnecting here a stop-then-run cycle
+  # doubles the live socket set.
+  def test_stop_disconnects_redis_pools_when_embedded
+    @config[:timeout] = 0
+    launcher = build_isolated_launcher(embedded: true)
+    silence_managers(launcher)
+    track(launcher_identity(launcher))
+    reset = false
+    @config.define_singleton_method(:reset_redis_pools!) { reset = true }
+
+    launcher.stop
+
+    assert reset, 'embedded #stop must disconnect the Redis pools'
+  end
+
+  # A8: a swarm child or standalone process exits right after #stop anyway —
+  # disconnecting here would just force every subsequent Redis touch (this
+  # test's own teardown included) to silently rebuild a pool for nothing.
+  def test_stop_leaves_redis_pools_connected_when_not_embedded
+    @config[:timeout] = 0
+    launcher = Wurk::Launcher.new(@config)
+    silence_managers(launcher)
+    reset = false
+    @config.define_singleton_method(:reset_redis_pools!) { reset = true }
+
+    launcher.stop
+
+    refute reset, 'non-embedded #stop must not disconnect the Redis pools'
+  end
+
   # Branch coverage: #stop's safe-nav teardown of the cron poller, metrics
   # rollup, reaper, and leader must each tolerate a nil collaborator.
   # Exercises the else side of lines 115–117 and 120.

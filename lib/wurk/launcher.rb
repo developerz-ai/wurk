@@ -44,6 +44,11 @@ module Wurk
     # (Sidekiq's drop-in surface). The single source of truth is Heartbeat.
     BEAT_PAUSE = Heartbeat::BEAT_PAUSE
 
+    # Bound on how long #stop waits for the boot-time reclaim sweep before
+    # moving on — it can still be scanning a large keyspace when a fast
+    # shutdown lands right after boot; teardown must not hang on it.
+    BOOT_RECLAIM_JOIN_TIMEOUT = 5
+
     attr_accessor :managers, :poller, :cron_poller, :metrics_rollup, :queue_rollup, :history
 
     def initialize(config, embedded: false)
@@ -179,18 +184,40 @@ module Wurk
     # no tick races a follower's promotion, and the release itself happens on a
     # planned shutdown rather than waiting out the lock TTL.
     def release_components
-      [@cron_poller, @metrics_rollup, @queue_rollup, @history].each { |t| teardown_step(t.class) { t&.terminate } }
-      teardown_step('reaper') { @reaper&.stop }
-      teardown_step('leader') { @leader&.stop }
+      # Joined first, before anything below tears down the Redis pool it's
+      # still reading from: it started as a fire-and-forget thread in #run
+      # and a shutdown landing right after boot could otherwise race a
+      # pool disconnect mid-scan. Bounded: a full-keyspace scan can outlast
+      # the timeout, in which case the thread is left running rather than
+      # blocking shutdown on it — #boot_reclaim already rescues and logs on
+      # its own, so a straggler racing #reset_redis_pools! below just means
+      # a noisy log line, not a hang.
+      teardown_step('boot-reclaim-join') { @boot_reclaim_thread&.join(BOOT_RECLAIM_JOIN_TIMEOUT) }
+      stop_periodic_components
       %i[stop_heartbeat clear_heartbeat].each { |step| teardown_step(step) { send(step) } }
       # Unguarded: fire_event already reports and skips past a raising hook.
       fire_event(:exit, reverse: true)
+      # Embedded only: a swarm child or standalone process exits right after
+      # #stop anyway, so disconnecting here would just make every unit test
+      # that inspects Redis post-stop rebuild a pool for no reason. Embedded
+      # hosts (Puma, a rake task) keep running and can `run` again later —
+      # without this a stop-then-run cycle doubles the live socket set.
+      teardown_step('redis-pools') { @config.reset_redis_pools! } if @embedded
     ensure
       # In an ensure of its own, not merely a guarded step: a leaked TCPServer
       # FD survives even a non-StandardError unwind (a second TERM landing
       # mid-teardown), and kubelet would keep getting 200s from a process that
       # is already gone.
       teardown_step('health-server') { @health_server&.stop }
+    end
+
+    # Split out of #release_components to keep it under the AbcSize/
+    # CyclomaticComplexity ceilings — these three are the "periodic loop"
+    # releases, independently guarded like everything else in the tail.
+    def stop_periodic_components
+      [@cron_poller, @metrics_rollup, @queue_rollup, @history].each { |t| teardown_step(t.class) { t&.terminate } }
+      teardown_step('reaper') { @reaper&.stop }
+      teardown_step('leader') { @leader&.stop }
     end
 
     def teardown_step(label)

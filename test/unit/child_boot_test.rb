@@ -93,6 +93,19 @@ class ChildBootTest < Wurk::Test::UnitCase
     assert(present.all? { |v| v == 1 }, "post-fork boot must leave every script cached, got #{present.inspect}")
   end
 
+  # A6: the dogstatsd client is memoized at the class level, so a forked
+  # child that skipped this reset would share the parent's UDP socket and
+  # thread-locals instead of building its own after fork.
+  def test_reconnect_after_fork_resets_the_statsd_client
+    Wurk::Metrics::Statsd.instance_variable_set(:@client, :parent_client)
+
+    @boot.send(:reconnect_after_fork)
+
+    assert_nil Wurk::Metrics::Statsd.client
+  ensure
+    Wurk::Metrics::Statsd.reset!
+  end
+
   def test_validate_redis_pings_then_pipelines_every_script_load
     result = @boot.send(:validate_redis!)
 
