@@ -47,6 +47,19 @@ function closeStream() {
   setStats(null);
 }
 
+// Test-only: module state (source/refs/signals) survives across test cases
+// since the SSE stream is a singleton, not per-component. A test that throws
+// mid-run can skip its onCleanup and leak refs/source into the next test —
+// call this in afterEach to force a clean slate regardless of how the
+// previous test exited.
+export function __resetSSE(): void {
+  source?.close();
+  source = null;
+  refs = 0;
+  setConnected(false);
+  setStats(null);
+}
+
 // Live stats over Server-Sent Events. Returns signal accessors — read them as
 // `stats()` / `connected()` inside JSX or a memo so they track reactively.
 export function useSSE(

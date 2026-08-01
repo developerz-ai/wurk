@@ -1,6 +1,6 @@
 import { describe, it, expect, vi, afterEach } from 'vitest';
-import { renderHook, waitFor } from '@solidjs/testing-library';
-import { useSSE, type StatsSnapshot } from './useSSE';
+import { renderHook, waitFor, cleanup } from '@solidjs/testing-library';
+import { useSSE, __resetSSE, type StatsSnapshot } from './useSSE';
 
 // Minimal EventSource stand-in that records every instance opened so tests can
 // reach in and fire onopen/onerror/message the way a real SSE stream would.
@@ -49,6 +49,14 @@ const SNAPSHOT: StatsSnapshot = {
 
 describe('useSSE', () => {
   afterEach(() => {
+    // cleanup() disposes any still-mounted reactive root first (running
+    // useSSE's onCleanup, which decrements refs the normal way); __resetSSE()
+    // then forces module state to zero regardless of whether that dispose
+    // ran at all — belt-and-braces for a test that threw before reaching its
+    // own cleanup() call. Order matters: resetting first would let a
+    // still-pending onCleanup decrement refs to -1 instead of 0.
+    cleanup();
+    __resetSSE();
     vi.unstubAllGlobals();
     StubEventSource.instances = [];
   });
@@ -114,5 +122,28 @@ describe('useSSE', () => {
     renderHook(() => useSSE(false));
     await new Promise((r) => setTimeout(r, 0));
     expect(StubEventSource.instances).toHaveLength(0);
+  });
+
+  it('does not leak refs/source into the next test when a mid-test assertion throws', async () => {
+    vi.stubGlobal('EventSource', StubEventSource);
+    renderHook(() => useSSE());
+    await waitFor(() => expect(StubEventSource.instances).toHaveLength(1));
+
+    // Simulates a failing assertion (or any thrown error) partway through a
+    // test, before its cleanup() would normally run and decrement refs.
+    // __resetSSE() in afterEach must still bring module state back to zero.
+    expect(() => {
+      throw new Error('simulated mid-test failure before cleanup() runs');
+    }).toThrow();
+    // Deliberately no cleanup() call here — mirrors a real thrown failure.
+  });
+
+  it('opens exactly one fresh connection after a prior test threw without cleanup', async () => {
+    vi.stubGlobal('EventSource', StubEventSource);
+    const { result } = renderHook(() => useSSE());
+
+    await waitFor(() => expect(StubEventSource.instances).toHaveLength(1));
+    expect(result.connected()).toBe(false);
+    expect(result.stats()).toBeNull();
   });
 });
