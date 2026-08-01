@@ -2,6 +2,7 @@
 
 require "logger"
 require "wurk"
+require_relative "support"
 
 # Memory / allocation profile of the fetch+execute hot path — the "memory blocks
 # merge" critical path in CLAUDE.md's "Faster" pillar. Drives the REAL
@@ -20,12 +21,6 @@ require "wurk"
 # Real Redis, dedicated logical DB (default 13, mirroring fetch_execute's
 # isolation from #259). DB 0 is never touched.
 
-def bench_redis_url(default_db = "13")
-  base = ENV["REDIS_URL"] || "redis://localhost:6379/0"
-  db = ENV.fetch("WURK_BENCH_DB", default_db)
-  base.match?(%r{/\d+\z}) ? base.sub(%r{/\d+\z}, "/#{db}") : "#{base}/#{db}"
-end
-
 JOBS    = Integer(ENV.fetch("WURK_BENCH_MEM_JOBS", "2000"))
 SAMPLES = Integer(ENV.fetch("WURK_BENCH_MEM_SAMPLES", "5"))
 
@@ -37,7 +32,7 @@ end
 
 config = Wurk::Configuration.new
 config.logger = Logger.new(IO::NULL)
-config.redis = { url: bench_redis_url }
+config.redis = { url: bench_redis_url("13") }
 config.queues = %w[default]
 capsule = config.default_capsule
 capsule.prepare!
