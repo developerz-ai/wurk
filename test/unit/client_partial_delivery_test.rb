@@ -118,6 +118,26 @@ class ClientPartialDeliveryTest < Wurk::Test::UnitCase
     assert_empty queued_args(@queue)
   end
 
+  # Plan 03/S14. raw_push hands back exactly what it diverted into the buffer,
+  # and Client#push subtracts that from the enqueued metric. The delivered
+  # group must not be in the set — it reached Redis and has to keep counting.
+  def test_raw_push_returns_only_the_payloads_it_buffered
+    client = Wurk::Client.new(pool: dropping_pool(deliver: 1))
+    delivered = item(args: ['a'], jid: 'j-a')
+    lost      = item(args: ['b'], jid: 'j-b', queue: @other_queue)
+
+    buffered = client.send(:raw_push, [delivered, lost])
+
+    assert_same lost, buffered.first
+    assert_equal 1, buffered.size
+  end
+
+  # A push that lost nothing reports nothing, so the metric path stays on its
+  # allocation-free branch.
+  def test_raw_push_returns_nil_when_everything_lands
+    assert_nil Wurk::Client.new(pool: @pool).send(:raw_push, [item(args: ['a'], jid: 'j-a')])
+  end
+
   # The ledger must not outlive its push: a later failure that delivered
   # nothing has to buffer in full, not read the previous call's confirmations.
   def test_delivery_ledger_does_not_leak_into_the_next_push

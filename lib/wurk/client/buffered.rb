@@ -179,9 +179,9 @@ module Wurk
 
         private
 
-        # Capture the pool from the provided client and set it as the default
-        # factory for the drainer. Ensures buffered jobs are drained to the
-        # same pool they were pushed to, unless explicitly overridden.
+        # Remember how the buffering client reaches Redis, so the drainer
+        # replays into the same server it was pushed to unless explicitly
+        # overridden.
         def capture_pool_from_client(client)
           return unless client && !buffer_client_factory
 
@@ -189,10 +189,28 @@ module Wurk
           # A nil capture must not install a factory: it would pin the drainer
           # to the DEFAULT pool forever (the `!buffer_client_factory` guard
           # blocks any later, correct capture) — wrong Redis for jobs pushed
-          # through an explicit-pool client.
+          # through an explicit-pool client. A pool-less client already resolves
+          # its config at push time, and so does the fallback factory.
           return unless pool
 
-          self.buffer_client_factory = -> { Wurk::Client.new(pool: pool) }
+          resolver = pool_resolver(client, pool)
+          self.buffer_client_factory = -> { Wurk::Client.new(pool: resolver.call) }
+        end
+
+        # What must NOT be captured is the pool object. `reset_redis_pools!` —
+        # every fork, every embedded teardown — disconnects a pool and drops it
+        # for a lazily rebuilt one, and ConnectionPool#shutdown is terminal, so
+        # a pinned instance leaves the drainer replaying into dead sockets for
+        # the rest of the process's life. The config (a Configuration or a
+        # Capsule) is what survives that rebuild, so ask it again at drain time
+        # whenever the client's pool is the one it hands out. A pool the config
+        # does not own is a second Redis nothing else can produce — that one
+        # stays pinned, stale or not, because replaying it anywhere else writes
+        # to the wrong server.
+        def pool_resolver(client, pool)
+          config = client.instance_variable_get(:@config)
+          config_owns = config.respond_to?(:redis_pool) && config.redis_pool.equal?(pool)
+          config_owns ? -> { config.redis_pool } : -> { pool }
         end
 
         # Both append helpers run with buffer_mutex held and return the payloads
@@ -229,7 +247,10 @@ module Wurk
         # the first transient failure (ConnectionError past the pool's own
         # retries, or a starved checkout), preserving order at the head of
         # the buffer so the next push retries the same payload. Emits statsd
-        # `jobs.recovered.push` per drained payload.
+        # `jobs.recovered.push` per drained payload, plus the `jobs.enqueued`
+        # the buffering push deliberately did not emit — the replay is where
+        # the job actually reaches Redis, so a buffered-then-drained job counts
+        # once as enqueued and once as recovered.
         def drain!(client)
           drained = 0
           while (payload = pop_head)
@@ -249,6 +270,7 @@ module Wurk
               break
             end
 
+            client.send(:emit_enqueued, [payload])
             Wurk::Metrics::Statsd.increment('jobs.recovered.push')
             drained += 1
           end
@@ -412,6 +434,11 @@ module Wurk
           bidless, batched = undelivered(payloads).partition { |p| !p['bid'] }
           enbuffer_bidless(bidless, batched)
           raise unless batched.empty?
+
+          # Client#push subtracts these from the enqueued metric: they are in
+          # the buffer, not in Redis. Whatever the group did deliver stays out
+          # of the set and still counts.
+          bidless
         ensure
           Thread.current[DELIVERED_KEY] = nil
         end
@@ -419,15 +446,13 @@ module Wurk
         # The payloads this push is not known to have written. A push spanning
         # several queues, or one mixing plain and batched jobs, fails after
         # some of its groups already landed; buffering those would replay them
-        # into duplicate jobs once the outage clears. Compared by identity, not
-        # `==`: these are the very Hash objects Client just handed to Redis.
+        # into duplicate jobs once the outage clears. The ledger holds the very
+        # Hash objects Client just handed to Redis, hence the identity subtract.
         def undelivered(payloads)
           delivered = Thread.current[DELIVERED_KEY]
           return payloads if delivered.empty?
 
-          seen = {}.compare_by_identity
-          delivered.each { |p| seen[p] = true }
-          payloads.reject { |p| seen.key?(p) }
+          reject_by_identity(payloads, delivered)
         end
 
         # Bare `raise` re-raises whatever `$!` holds: the connection error from

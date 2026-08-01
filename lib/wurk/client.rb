@@ -60,8 +60,8 @@ module Wurk
       return nil unless payload
 
       verify_json(payload)
-      raw_push([payload])
-      emit_enqueued([payload])
+      buffered = raw_push([payload])
+      emit_enqueued([payload], buffered)
       payload['jid']
     end
 
@@ -178,8 +178,8 @@ module Wurk
         payloads = build_bulk_payloads(slice, base, ats)
         compacted = payloads.compact
         if compacted.any?
-          raw_push(compacted)
-          emit_enqueued(compacted)
+          buffered = raw_push(compacted)
+          emit_enqueued(compacted, buffered)
         end
         jids.concat(payloads.map { |p| p && p['jid'] })
       end
@@ -231,16 +231,25 @@ module Wurk
     # Adds happen one payload at a time so an `autoflush = N` actually bounds
     # the pipeline size — a bulk push of 100 with N=2 must flush 2/2/... not
     # 100 in one shot.
+    #
+    # Returns the payloads it did NOT get to Redis: always nil here, since a
+    # plain Client either writes them all or raises. {Client::Buffered}
+    # overrides the contract — the payloads it diverted into the outage buffer
+    # come back so #push can keep them out of the enqueued metric.
     def raw_push(payloads)
       # Test modes short-circuit the Redis write (and the batch buffer): :fake
       # collects payloads in-memory, :inline runs them now. Client middleware
       # has already run by this point, matching Sidekiq.
-      return ::Wurk::Testing.dispatch_push(payloads) if ::Wurk::Testing.enabled?
+      if ::Wurk::Testing.enabled?
+        ::Wurk::Testing.dispatch_push(payloads)
+        return nil
+      end
 
       buffer = Thread.current[Wurk::Batch::BUFFER_KEY]
       return buffer_add(buffer, payloads) if buffer && payloads.all? { |p| p['bid'] && !p['at'] }
 
       pool.with { |conn| atomic_push(conn, payloads) }
+      nil
     end
 
     # Batch autoflush path: accumulate each non-scheduled batched payload into
@@ -411,13 +420,29 @@ module Wurk
     # that actually made it past middleware AND Redis. Tags follow the same
     # `worker:`/`queue:` shape as Wurk::Metrics::Statsd so dashboards built
     # for the server-side emissions work unchanged.
-    def emit_enqueued(payloads)
+    #
+    # `buffered` is what reliable_push swallowed into its outage buffer (see
+    # #raw_push). Those payloads are not enqueued: the ring buffer may still
+    # evict them, and the drain that does land one counts it then — so booking
+    # them here would inflate the counter on an outage and double-count every
+    # payload that later replays.
+    def emit_enqueued(payloads, buffered = nil)
+      payloads = reject_by_identity(payloads, buffered) if buffered && !buffered.empty?
       payloads.each do |p|
         Wurk::Metrics::Statsd.increment(
           'jobs.enqueued',
           tags: ["worker:#{p['class']}", "queue:#{p['queue']}"]
         )
       end
+    end
+
+    # Set difference by object identity — `==` would fold two jobs carrying the
+    # same fields into one. Both sides are always the very Hash objects this
+    # push built, so identity is both exact and cheaper than hashing them.
+    def reject_by_identity(payloads, excluded)
+      seen = {}.compare_by_identity
+      excluded.each { |p| seen[p] = true }
+      payloads.reject { |p| seen.key?(p) }
     end
   end
 end
