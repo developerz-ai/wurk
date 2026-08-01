@@ -62,6 +62,7 @@ module Wurk
       @shutdown_timeout = shutdown_timeout
       @children = {}
       @assignments = []
+      @owner_pid = nil
       @stopping = false
       @quieted = false
       @last_memory_check = 0
@@ -85,6 +86,7 @@ module Wurk
       raise ArgumentError, 'Topology has no slots' if @topology.empty?
 
       @assignments = @topology.assignments.freeze
+      @owner_pid = ::Process.pid
       install_signal_handlers if install_signals
       close_parent_sockets
       fork_children
@@ -92,6 +94,8 @@ module Wurk
     end
 
     def supervise
+      return unless owner?
+
       until done?
         drain_signals
         reap_children
@@ -103,6 +107,8 @@ module Wurk
     end
 
     def shutdown(timeout: @shutdown_timeout)
+      return unless owner?
+
       @stopping = true
       @restart.abort
       relay_signal('TERM')
@@ -128,6 +134,16 @@ module Wurk
     end
 
     private
+
+    # A forked child inherits this object along with the host's `at_exit` hooks
+    # — and rails_boot registers `at_exit { swarm.shutdown }`, so ChildBoot's
+    # `exit` runs a full drain inside the child. There `@children` holds the
+    # child's SIBLINGS, not its own children: unguarded, that TERMs them, stalls
+    # the whole shutdown timeout waiting on PIDs it can never reap, then SIGKILLs
+    # whatever survived. Only the process that forked them may supervise them.
+    def owner?
+      ::Process.pid == @owner_pid
+    end
 
     def build_restart
       Restart.new(Restart::Config.new(
@@ -332,7 +348,12 @@ module Wurk
       @children.each_key { |pid| safe_kill(pid, sig) }
     end
 
+    # The one place the supervisor signals a child: relay_signal,
+    # hard_kill_stragglers and the restart machine's `kill:` callback all funnel
+    # through here, so the owner check covers every path at a single choke point.
     def safe_kill(pid, sig)
+      return unless owner?
+
       ::Process.kill(sig, pid)
     rescue Errno::ESRCH, Errno::EPERM
       nil

@@ -8,6 +8,16 @@ require_relative '../test_helper'
 class SwarmTest < Wurk::Test::UnitCase
   parallelize_me!
 
+  # Fork-free swarm: `fork_child` hands back a fake PID so `boot` fills
+  # `@children` for real without spawning processes.
+  class FakeForkSwarm < Wurk::Swarm
+    private
+
+    def fork_child(_slot, _idx)
+      @fake_pid = (@fake_pid || 9000) + 1
+    end
+  end
+
   def setup
     super
     @config = Wurk::Configuration.new
@@ -60,6 +70,40 @@ class SwarmTest < Wurk::Test::UnitCase
     assert_raises(ArgumentError) { swarm.boot(install_signals: false) }
   end
 
+  # --- owner-pid guard --------------------------------------------------
+
+  # A forked child inherits the swarm object *and* the host's `at_exit` hooks —
+  # and rails_boot registers `at_exit { swarm.shutdown }` — so ChildBoot's
+  # `exit` runs a full drain inside the child, where `@children` lists the
+  # child's SIBLINGS. Every supervisory action must no-op off the process that
+  # forked them. Real-fork proof: test/integration/swarm_supervision_test.rb.
+  def test_shutdown_off_the_owning_process_never_drains
+    swarm = non_owner_swarm
+
+    swarm.shutdown(timeout: 0)
+
+    refute swarm.instance_variable_get(:@stopping), 'a non-owner must never start a drain'
+    refute_empty swarm.children, 'a non-owner reached hard_kill_stragglers and cleared the fleet'
+  end
+
+  # relay_signal, hard_kill_stragglers and the restart machine's `kill:`
+  # callback all signal through safe_kill, so that is where the owner check
+  # lives. Signal 0 sends nothing but reports delivery — 1 when the kill would
+  # have gone out, nil once the guard swallowed it.
+  def test_safe_kill_delivers_only_from_the_owning_process
+    assert_equal 1, owner_swarm.send(:safe_kill, ::Process.pid, 0)
+    assert_nil non_owner_swarm.send(:safe_kill, ::Process.pid, 0)
+  end
+
+  def test_supervise_returns_at_once_off_the_owning_process
+    swarm = non_owner_swarm
+    thread = Thread.new { swarm.supervise }
+    returned = thread.join(5)
+    thread.kill
+
+    assert returned, 'supervise must return immediately off the owning process'
+  end
+
   # --- includes -----------------------------------------------------
 
   def test_includes_component
@@ -83,5 +127,17 @@ class SwarmTest < Wurk::Test::UnitCase
 
   def topology
     Wurk::Topology.flat(count: 1, queues: ['default'], concurrency: 1)
+  end
+
+  def owner_swarm
+    swarm = FakeForkSwarm.new(topology: topology, config: @config)
+    swarm.boot(install_signals: false)
+    swarm
+  end
+
+  # A booted swarm exactly as one of its own forked children holds it: the same
+  # `@children` map, a different PID.
+  def non_owner_swarm
+    owner_swarm.tap { |swarm| swarm.instance_variable_set(:@owner_pid, ::Process.pid + 1) }
   end
 end
