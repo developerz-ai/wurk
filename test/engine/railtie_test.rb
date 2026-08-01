@@ -226,6 +226,50 @@ class RailtieTest < Wurk::Test::EngineCase
     assert_empty swarm.drains
   end
 
+  # --- embedded boot contract ---
+  #
+  # Same shape one layer up from the swarm: the drain hook is registered before
+  # `run` — which brings the heartbeat, pollers, managers and health listener up
+  # one at a time — so a boot that raises partway still has something to stop
+  # what it started. The rescue that keeps the host serving HTTP rolls that
+  # partial boot back rather than leaking it for the life of the web process.
+
+  def test_boot_embedded_registers_the_drain_hook_before_run
+    hooks = []
+    instance = FakeEmbedded.new(hooks)
+
+    with_at_exit(hooks) { boot_embedded_with(instance) }
+
+    assert_equal 1, instance.hooks_at_run, 'the drain hook must be registered before run'
+  end
+
+  def test_boot_embedded_returns_the_running_instance
+    hooks = []
+    instance = FakeEmbedded.new(hooks)
+
+    assert_same instance, with_at_exit(hooks) { boot_embedded_with(instance) }
+  end
+
+  def test_boot_embedded_drain_hook_stops_the_instance
+    hooks = []
+    instance = FakeEmbedded.new(hooks)
+
+    with_at_exit(hooks) { boot_embedded_with(instance) }
+    hooks.first.call
+
+    assert_equal 1, instance.stops, 'the at_exit hook must drain the embedded workers'
+  end
+
+  def test_boot_embedded_rolls_back_a_run_that_raised
+    hooks = []
+    instance = FakeEmbedded.new(hooks, boom: 'redis down at boot')
+
+    result = with_at_exit(hooks) { boot_embedded_with(instance) }
+
+    assert_nil result, 'a failed embedded boot must keep the host serving HTTP'
+    assert_equal 1, instance.stops, 'a partial boot must not outlive the boot attempt'
+  end
+
   def test_refuse_logs_actionable_guidance
     io = StringIO.new
     with_logger(::Logger.new(io)) { Wurk::RailsBoot.refuse_preforking_boot }
@@ -254,7 +298,43 @@ class RailtieTest < Wurk::Test::EngineCase
     def shutdown = @drains << Thread.current
   end
 
+  # Stand-in for Wurk::Embedded: records how many at_exit hooks were already
+  # registered when `run` ran (the ordering contract) and how often it was
+  # asked to stop.
+  class FakeEmbedded
+    attr_reader :hooks_at_run, :stops
+
+    def initialize(hooks, boom: nil)
+      @hooks = hooks
+      @boom = boom
+      @stops = 0
+    end
+
+    def run
+      @hooks_at_run = @hooks.size
+      raise @boom if @boom
+    end
+
+    def stop = @stops += 1
+  end
+
   private
+
+  # `at_exit` inside boot_embedded resolves against the module, so a singleton
+  # method intercepts it — the hook is captured instead of being registered on
+  # the test process, where it would fire long after the assertions.
+  def with_at_exit(hooks)
+    Wurk::RailsBoot.define_singleton_method(:at_exit) { |&blk| hooks << blk }
+    yield
+  ensure
+    Wurk::RailsBoot.singleton_class.send(:remove_method, :at_exit)
+  end
+
+  def boot_embedded_with(instance)
+    klass = Object.new
+    klass.define_singleton_method(:new) { |_config| instance }
+    with_logger(::Logger.new(IO::NULL)) { Wurk::RailsBoot.boot_embedded(klass) }
+  end
 
   def fake_app(embed:)
     wurk = ::ActiveSupport::OrderedOptions.new

@@ -303,6 +303,45 @@ class ScheduledPollerTest < Wurk::Test::UnitCase
     assert completed
   end
 
+  # terminate is a barrier: Launcher#stop clears the heartbeat right after, so
+  # a sweep still in flight would promote jobs for a process that is gone.
+  def test_terminate_joins_and_clears_the_thread
+    @config[:scheduler_initial_wait] = 0.01
+    poller = Wurk::Scheduled::Poller.new(@config)
+    sweeps = Queue.new
+    poller.define_singleton_method(:enqueue) { sweeps << :s }
+
+    thread = poller.start
+    sweeps.pop(timeout: 5)
+    poller.terminate
+
+    refute_predicate thread, :alive?, 'terminate must join the scheduler thread'
+    assert_nil poller.instance_variable_get(:@thread)
+  ensure
+    thread&.kill
+  end
+
+  # A sweep wedged past JOIN_TIMEOUT (Thread#join returns nil) must keep @thread
+  # set, so the next #start returns it rather than spawning a second scheduler
+  # thread alongside the one still promoting.
+  def test_terminate_keeps_a_thread_that_outlives_the_join
+    @config[:scheduler_initial_wait] = 0.01
+    poller = Wurk::Scheduled::Poller.new(@config)
+    sweeps = Queue.new
+    poller.define_singleton_method(:enqueue) { sweeps << :s }
+
+    thread = poller.start
+    sweeps.pop(timeout: 5)
+    thread.define_singleton_method(:join) { |_timeout = nil| nil }
+    poller.terminate
+
+    assert_same thread, poller.instance_variable_get(:@thread), 'a wedged thread must stay tracked'
+    assert_same thread, poller.start, 'start must not spawn a second thread alongside it'
+  ensure
+    poller&.instance_variable_set(:@thread, nil)
+    thread&.kill
+  end
+
   private
 
   def build_poller_with_rng_and_count(rand_value:, process_count:)

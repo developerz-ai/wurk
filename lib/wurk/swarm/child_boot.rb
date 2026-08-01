@@ -108,6 +108,10 @@ module Wurk
         @config.reset_redis_pools!
         validate_redis!
         reconnect_active_record
+        # The dogstatsd client is memoized at the class level (Statsd.client),
+        # so without a reset every child would share the parent's UDP socket
+        # and thread-locals instead of building its own after fork.
+        Wurk::Metrics::Statsd.reset!
       end
 
       # Prove the child's fresh Redis socket reaches a live server before it

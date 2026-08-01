@@ -151,14 +151,19 @@ module Wurk
     # Sidekiq-embedded parity: a threads-only worker inside the web process, no
     # fork. Redis validation failure keeps the host serving HTTP (log + carry
     # on). at_exit drains on the graceful shutdown the web server runs on TERM.
-    def boot_embedded
-      instance = Wurk::Embedded.new(Wurk.configuration)
-      instance.run
+    def boot_embedded(embedded = Wurk::Embedded)
+      instance = embedded.new(Wurk.configuration)
+      # Registered BEFORE run, for the reason boot_swarm registers before the
+      # fork: run brings the heartbeat, pollers, managers and health listener up
+      # one at a time, and a raise partway through would otherwise leave the ones
+      # already running with nothing to drain them on host exit.
       at_exit { instance.stop }
+      instance.run
       logger.info { 'wurk: running embedded in the web process (config.wurk.embed_in_web) — threads only, no fork' }
       instance
     rescue StandardError => e
       logger.error { "wurk: embedded boot failed: #{e.class}: #{e.message}" }
+      instance&.stop
       nil
     end
 

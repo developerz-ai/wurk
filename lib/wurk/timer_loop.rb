@@ -15,6 +15,13 @@ module Wurk
   #   @thread ||= safe_thread('my-loop') { @timer.run { tick } }
   #   def terminate = @timer.terminate
   class TimerLoop
+    # Deadline every periodic component gives its loop thread when stopping.
+    # Bounded rather than an open-ended join: a tick blocked on a wedged Redis
+    # must not hold the process's whole shutdown open. Also used by
+    # Scheduled::Poller, which hand-rolls its wait (the interval is randomized
+    # per iteration) but stops on the same terms.
+    JOIN_TIMEOUT = 5
+
     def initialize(interval)
       @interval = interval
       @done = false
@@ -38,6 +45,13 @@ module Wurk
         @done = true
         @sleeper.signal
       end
+    end
+
+    # Clears a previous #terminate. Hosts call this before respawning, so a
+    # start-after-stop cycle spawns a thread that ticks instead of one that
+    # sees the stale done flag and exits immediately.
+    def reset
+      @mutex.synchronize { @done = false }
     end
 
     def wait

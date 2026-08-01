@@ -6,6 +6,7 @@ require 'time'
 require_relative 'component'
 require_relative 'client'
 require_relative 'leader'
+require_relative 'timer_loop'
 
 module Wurk
   # Sidekiq Enterprise periodic jobs. Pure leader-driven cron — only the
@@ -520,34 +521,35 @@ module Wurk
 
       def initialize(config)
         @config = config
-        @done = false
-        @mutex = ::Mutex.new
-        @sleeper = ::ConditionVariable.new
         @client = Client.new(config: config)
         @thread = nil
         # Operators never need to touch this; integration tests shrink it so a
         # due loop fires within the test window instead of waiting a full minute.
         @tick_interval = config[:cron_tick_interval] || DEFAULT_TICK_SECONDS
+        @timer = TimerLoop.new(@tick_interval)
       end
 
+      # TimerLoop waits one interval before the first tick: don't fire a
+      # catch-up burst the instant we boot (the leader is barely settled), and
+      # let a short-lived process exit without ticking at all.
       def start
-        @poller_thread ||= safe_thread('cron-poller') do # rubocop:disable Naming/MemoizedInstanceVariableName
-          # Wait one interval before the first tick: don't fire a catch-up burst
-          # the instant we boot (the leader is barely settled), and let a
-          # short-lived process exit without ticking at all.
-          wait
-          until @done
-            tick
-            wait
-          end
-        end
+        return @thread if @thread
+
+        @timer.reset
+        @thread = safe_thread('cron-poller') { @timer.run { tick } }
       end
 
+      # Blocks until the thread is really gone: the launcher releases the
+      # cluster lock immediately after this returns, and a tick still in flight
+      # would enqueue loops the next leader is about to fire itself.
+      #
+      # Cleared only on a confirmed join (Thread#join returns nil on timeout):
+      # a wedged thread must stay tracked so #start's guard returns it instead
+      # of calling @timer.reset, which would un-terminate the loop it is still
+      # inside and leave two tick threads double-enqueuing the same loops.
       def terminate
-        @mutex.synchronize do
-          @done = true
-          @sleeper.signal
-        end
+        @timer.terminate
+        @thread = nil if @thread&.join(TimerLoop::JOIN_TIMEOUT)
       end
 
       # Leader-gated by the single cluster lock (Component#leader? reads
@@ -589,12 +591,6 @@ module Wurk
       end
 
       private
-
-      def wait
-        @mutex.synchronize do
-          @sleeper.wait(@mutex, @tick_interval) unless @done
-        end
-      end
 
       def warn_missed_tick(loop_obj, expected, now)
         return if now - expected <= MISSED_TICK_THRESHOLD

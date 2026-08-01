@@ -204,48 +204,63 @@ class ManagerTest < Wurk::Test::UnitCase
   end
 
   # A replacement that can't be spawned (Processor.new raising) must escalate
-  # to a visible crash on the main thread — not silently drop concurrency.
-  def test_processor_result_crashes_child_when_replacement_cannot_spawn # rubocop:disable Minitest/MultipleAssertions,Metrics/AbcSize
-    mgr = Wurk::Manager.new(@capsule)
+  # through the owner's shutdown request — not silently drop concurrency.
+  def test_processor_result_requests_shutdown_when_replacement_cannot_spawn # rubocop:disable Minitest/MultipleAssertions,Metrics/AbcSize
+    requested = 0
+    mgr = Wurk::Manager.new(@capsule, shutdown: -> { requested += 1 })
     silence_processors(mgr)
     victim = mgr.workers.first
-    target, crashes = crash_target
-    mgr.define_singleton_method(:main_thread) { target }
     reported = capture_error_handler
 
     boom = ThreadError.new('cannot create thread')
     with_processor_new_raising(boom) { mgr.processor_result(victim) }
 
-    assert_same boom, crashes.pop, 'must escalate to a crash on the main thread'
+    assert_equal 1, requested, 'must ask the owner to shut the process down'
     assert_equal [boom], reported.map(&:first), 'must report via handle_exception'
     refute_includes mgr.workers, victim
     assert_equal 2, mgr.workers.size, 'no silent replacement on failure'
-  ensure
-    target&.kill
   end
 
   # Same escalation when the replacement is built but its thread won't start.
-  def test_processor_result_crashes_child_when_replacement_start_raises # rubocop:disable Metrics/AbcSize
-    mgr = Wurk::Manager.new(@capsule)
+  def test_processor_result_requests_shutdown_when_replacement_start_raises
+    requested = 0
+    mgr = Wurk::Manager.new(@capsule, shutdown: -> { requested += 1 })
     silence_processors(mgr)
     victim = mgr.workers.first
-    target, crashes = crash_target
-    mgr.define_singleton_method(:main_thread) { target }
 
     boom = ThreadError.new('start failed')
     exploding = Object.new.tap { |p| p.define_singleton_method(:start) { raise boom } }
     with_processor_new(exploding) { mgr.processor_result(victim) }
 
-    assert_same boom, crashes.pop
+    assert_equal 1, requested
     refute_includes mgr.workers, victim
-  ensure
-    target&.kill
   end
 
-  def test_main_thread_seam_targets_the_process_main_thread
-    mgr = Wurk::Manager.new(@capsule)
+  # A7: the escalation used to be `Thread.main.raise`, which unwound past #stop
+  # (nothing bulk_requeued) and killed the host's main thread when embedded. It
+  # must stay a plain call on the dying Processor's own thread.
+  def test_processor_result_escalation_does_not_raise_to_the_caller
+    mgr = Wurk::Manager.new(@capsule, shutdown: -> {})
+    silence_processors(mgr)
+    victim = mgr.workers.first
 
-    assert_same Thread.main, mgr.send(:main_thread)
+    with_processor_new_raising(ThreadError.new('nope')) do
+      assert_nil mgr.processor_result(victim)
+    end
+  end
+
+  # Sidekiq's `Manager.new(capsule)` arity stays valid (the Sidekiq::Manager
+  # alias). With no owner there is no route to take — report and carry on.
+  def test_processor_result_without_a_shutdown_route_only_reports
+    mgr = Wurk::Manager.new(@capsule)
+    silence_processors(mgr)
+    victim = mgr.workers.first
+    reported = capture_error_handler
+
+    boom = ThreadError.new('cannot create thread')
+    with_processor_new_raising(boom) { mgr.processor_result(victim) }
+
+    assert_equal [boom], reported.map(&:first)
   end
 
   # --- stop / hard_shutdown -------------------------------------------
@@ -270,6 +285,7 @@ class ManagerTest < Wurk::Test::UnitCase
   def test_stop_returns_after_drain_without_hard_shutdown
     mgr = Wurk::Manager.new(@capsule)
     silence_processors(mgr)
+    live = pretend_running(mgr)
     # Simulate workers draining during the poll.
     mgr.define_singleton_method(:wait_for) { |_deadline| @workers.clear }
 
@@ -281,13 +297,18 @@ class ManagerTest < Wurk::Test::UnitCase
 
     refute hard_shutdown_ran, 'hard_shutdown must be skipped when workers drained'
     assert_empty mgr.workers
+  ensure
+    live&.kill
   end
 
+  # The workers have to look *running* to reach hard_shutdown: a processor with
+  # no thread was never started, and #stop no longer waits on those at all.
   def test_stop_calls_capsule_stop_even_when_hard_shutdown_runs
     mgr = Wurk::Manager.new(@capsule)
     silence_processors(mgr)
+    live = pretend_running(mgr)
     mgr.workers.each do |w|
-      w.define_singleton_method(:kill) { nil }
+      w.define_singleton_method(:kill) { live.kill }
       w.define_singleton_method(:job) { nil }
     end
     capsule_stopped = false
@@ -296,6 +317,24 @@ class ManagerTest < Wurk::Test::UnitCase
     mgr.stop(::Process.clock_gettime(::Process::CLOCK_MONOTONIC) - 5)
 
     assert capsule_stopped
+  ensure
+    live&.kill
+  end
+
+  # A4: a launcher that raises mid-boot rolls back before Manager#start ever
+  # ran. Those processors hold no thread, so they never run the callback that
+  # removes them from @workers — polling for the Set to empty would burn the
+  # whole shutdown deadline inside a web process's after_initialize.
+  def test_stop_does_not_wait_out_the_deadline_for_processors_that_never_started
+    mgr = Wurk::Manager.new(@capsule)
+    silence_processors(mgr)
+    @capsule.define_singleton_method(:stop) { nil }
+    started = ::Process.clock_gettime(::Process::CLOCK_MONOTONIC)
+
+    mgr.stop(started + 10)
+    elapsed = ::Process.clock_gettime(::Process::CLOCK_MONOTONIC) - started
+
+    assert_operator elapsed, :<, 5, "stop waited #{elapsed.round(1)}s on processors that were never started"
   end
 
   def test_hard_shutdown_bulk_requeues_inflight_jobs_then_kills_threads # rubocop:disable Metrics/AbcSize
@@ -373,6 +412,15 @@ class ManagerTest < Wurk::Test::UnitCase
     mgr.workers.each { |w| w.define_singleton_method(:terminate) { nil } }
   end
 
+  # #stop only waits on processors that hold a live thread — a never-started
+  # one is nothing to drain. Hand every worker the same stand-in so the drain
+  # poll behaves as if the manager really booted; returns it for the teardown.
+  def pretend_running(mgr)
+    live = Thread.new { sleep }
+    mgr.workers.each { |w| w.define_singleton_method(:thread) { live } }
+    live
+  end
+
   # Minitest 6 dropped minitest/mock; this hand-rolled stub temporarily
   # makes `Wurk::Processor.new` return `value` so we can verify the
   # replace-on-die wiring without spawning real processor threads.
@@ -394,21 +442,6 @@ class ManagerTest < Wurk::Test::UnitCase
     yield
   ensure
     sc.define_method(:new) { |*a, &b| original.call(*a, &b) }
-  end
-
-  # A parked thread standing in for the process main thread, so a crash
-  # escalation (`main_thread.raise`) can be observed instead of taking down
-  # the test runner. Returns [thread, queue-of-caught-exceptions].
-  def crash_target
-    caught = Queue.new
-    t = Thread.new do
-      Thread.current.report_on_exception = false
-      sleep 5
-    rescue StandardError => e
-      caught << e
-    end
-    Thread.pass until t.status == 'sleep'
-    [t, caught]
   end
 
   # Register a recording error handler and return the array it appends to.

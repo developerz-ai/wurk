@@ -106,6 +106,34 @@ class EmbeddedTest < Wurk::Test::UnitCase
     assert ran
   end
 
+  # --- partial boot rollback -------------------------------------------
+
+  # A4: `run` raising leaves the host believing Wurk never started, so a
+  # launcher that came up halfway would keep fetching, beating and campaigning
+  # for the leader lock with nobody holding a reference to it.
+  def test_run_stops_a_launcher_that_raised_mid_boot
+    stopped = 0
+    embedded = embedded_with_launcher(run: -> { raise 'health port already bound' }, stop: -> { stopped += 1 })
+
+    err = assert_raises(RuntimeError) { embedded.run }
+
+    assert_equal 'health port already bound', err.message
+    assert_equal 1, stopped, 'a partial boot must be rolled back'
+  end
+
+  # The rollback is guarded so the caller sees why the boot failed.
+  def test_run_reports_a_failing_rollback_and_raises_the_boot_error
+    reported = []
+    @config.error_handlers << ->(ex, ctx, _cfg) { reported << [ex.message, ctx[:context]] }
+    embedded = embedded_with_launcher(run: -> { raise 'health port already bound' },
+                                      stop: -> { raise 'rollback exploded' })
+
+    err = assert_raises(RuntimeError) { embedded.run }
+
+    assert_equal 'health port already bound', err.message
+    assert_includes reported, ['rollback exploded', 'embedded-boot-rollback']
+  end
+
   # --- redis validation -----------------------------------------------
 
   def test_run_raises_when_redis_too_old
@@ -207,6 +235,20 @@ class EmbeddedTest < Wurk::Test::UnitCase
   end
 
   private
+
+  # Embedded over a launcher whose run/stop are the given lambdas — enough to
+  # drive the boot-failure paths without spawning manager threads.
+  def embedded_with_launcher(run:, stop:)
+    embedded = Wurk::Embedded.new(@config)
+    stub_redis!(embedded)
+    embedded.define_singleton_method(:build_launcher) do
+      fake = Object.new
+      fake.define_singleton_method(:run) { run.call }
+      fake.define_singleton_method(:stop) { stop.call }
+      fake
+    end
+    embedded
+  end
 
   # Skip redis validation AND replace the launcher build with a no-op so
   # we exercise housekeeping/startup/sleep without spawning manager threads.

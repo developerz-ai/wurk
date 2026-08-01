@@ -13,6 +13,7 @@ require_relative 'metrics/rollup'
 require_relative 'metrics/queue_rollup'
 require_relative 'history'
 require_relative 'fetcher/reaper'
+require_relative 'timer_loop'
 
 module Wurk
   # Top-level supervisor inside each worker process. Owns the Manager pool
@@ -43,18 +44,23 @@ module Wurk
     # (Sidekiq's drop-in surface). The single source of truth is Heartbeat.
     BEAT_PAUSE = Heartbeat::BEAT_PAUSE
 
+    # Bound on how long #stop waits for the boot-time reclaim sweep before
+    # moving on — it can still be scanning a large keyspace when a fast
+    # shutdown lands right after boot; teardown must not hang on it.
+    BOOT_RECLAIM_JOIN_TIMEOUT = 5
+
     attr_accessor :managers, :poller, :cron_poller, :metrics_rollup, :queue_rollup, :history
 
     def initialize(config, embedded: false)
       @config = config
       @embedded = embedded
-      # Two separate flags, deliberately. @done = "quieted" (stop fetching, stay
-      # alive, report quiet=true). @stopped = "shutting down" (terminate the
-      # heartbeat loop). Quiet must NOT stop the heartbeat — otherwise a quieted
-      # process never publishes quiet=true and expires out of the live set (#236).
+      # @done is "quieted": stop fetching, stay alive, report quiet=true. It
+      # deliberately does NOT stop the heartbeat — a quieted process that stopped
+      # beating would never publish quiet=true and would expire out of the live
+      # set (#236). Only #stop ends the beat, by terminating @beat_timer.
       @done = false
-      @stopped = false
-      @managers = config.capsules.values.map { |cap| Manager.new(cap) }
+      @beat_timer = TimerLoop.new(BEAT_PAUSE)
+      @managers = build_managers
       @poller = build_poller
       @cron_poller = build_cron_poller
       @metrics_rollup = build_metrics_rollup
@@ -87,18 +93,21 @@ module Wurk
       @config.capsules.each_value(&:prepare!)
       @config.freeze!
       @heartbeat_thread = safe_thread('heartbeat', &method(:start_heartbeat)) if async_beat
-      @poller&.start
-      @leader&.start
-      @cron_poller&.start
-      @metrics_rollup&.start
-      @queue_rollup&.start
-      @history&.start
+      [@poller, @leader, @cron_poller, @metrics_rollup, @queue_rollup, @history].compact.each(&:start)
       @managers.each(&:start)
       @reaper.start
       # Run on a background thread so /ready probe isn't delayed by a large
       # orphan sweep (reaper.reclaim! is atomic, but can scan many entries).
       @boot_reclaim_thread = safe_thread('boot-reclaim', &method(:boot_reclaim))
       @health_server&.start
+    rescue StandardError
+      # Boot is not atomic: whatever raised (a health-check port already bound,
+      # ThreadError at the OS thread limit) leaves the steps before it holding
+      # threads, sockets and a leader campaign — and the caller is about to drop
+      # its only reference to us, so nothing else can ever release them. Guarded,
+      # because the caller must see the boot failure, not a rollback failure.
+      teardown_step('boot-rollback') { stop }
+      raise
     end
 
     # Idempotent. Flips `stopping?` true, halts fetching across every
@@ -118,26 +127,18 @@ module Wurk
 
     # Graceful shutdown. Deadline is monotonic so wall-clock skew can't
     # extend it. Managers stop in parallel threads so a slow capsule
-    # doesn't block its siblings.
+    # doesn't block its siblings — and each drain is guarded, because a
+    # capsule that blows up mid-drain (Redis down during bulk_requeue) used
+    # to surface out of `join` and skip the whole teardown tail, leaving the
+    # leader lock held, the process listed as live, and its port open.
     def stop
       deadline = ::Process.clock_gettime(::Process::CLOCK_MONOTONIC) + (@config[:timeout] || 25)
       quiet
-      stoppers = @managers.map { |m| Thread.new { m.stop(deadline) } }
+      stoppers = @managers.map { |m| Thread.new { teardown_step('manager') { m.stop(deadline) } } }
       fire_event(:shutdown, reverse: true)
       stoppers.each(&:join)
-      # Full shutdown stops periodic firing (it survived #quiet); do this before
-      # releasing the lock so no tick races a follower's promotion.
-      @cron_poller&.terminate
-      @metrics_rollup&.terminate
-      @queue_rollup&.terminate
-      @history&.terminate
-      @reaper&.stop
-      # CAS-release the cluster lock now (planned shutdown) so a follower can
-      # take over immediately instead of waiting out the TTL.
-      @leader&.stop
-      stop_heartbeat
-      clear_heartbeat
-      fire_event(:exit, reverse: true)
+    ensure
+      release_components
     end
 
     def stopping?
@@ -173,6 +174,57 @@ module Wurk
     attr_reader :heartbeat_thread
 
     private
+
+    # Teardown tail, driven from #stop's ensure. Every release is guarded on
+    # its own because they are independent: a Redis blip in one (leader CAS
+    # release, heartbeat clear) must not strand the ones after it — the process
+    # is exiting either way, so the only thing worse than a failed release is a
+    # skipped one. Order matters twice over: full shutdown stops the periodic
+    # loops (they survived #quiet) before the cluster lock is CAS-released, so
+    # no tick races a follower's promotion, and the release itself happens on a
+    # planned shutdown rather than waiting out the lock TTL.
+    def release_components
+      # Joined first, before anything below tears down the Redis pool it's
+      # still reading from: it started as a fire-and-forget thread in #run
+      # and a shutdown landing right after boot could otherwise race a
+      # pool disconnect mid-scan. Bounded: a full-keyspace scan can outlast
+      # the timeout, in which case the thread is left running rather than
+      # blocking shutdown on it — #boot_reclaim already rescues and logs on
+      # its own, so a straggler racing #reset_redis_pools! below just means
+      # a noisy log line, not a hang.
+      teardown_step('boot-reclaim-join') { @boot_reclaim_thread&.join(BOOT_RECLAIM_JOIN_TIMEOUT) }
+      stop_periodic_components
+      %i[stop_heartbeat clear_heartbeat].each { |step| teardown_step(step) { send(step) } }
+      # Unguarded: fire_event already reports and skips past a raising hook.
+      fire_event(:exit, reverse: true)
+      # Embedded only: a swarm child or standalone process exits right after
+      # #stop anyway, so disconnecting here would just make every unit test
+      # that inspects Redis post-stop rebuild a pool for no reason. Embedded
+      # hosts (Puma, a rake task) keep running and can `run` again later —
+      # without this a stop-then-run cycle doubles the live socket set.
+      teardown_step('redis-pools') { @config.reset_redis_pools! } if @embedded
+    ensure
+      # In an ensure of its own, not merely a guarded step: a leaked TCPServer
+      # FD survives even a non-StandardError unwind (a second TERM landing
+      # mid-teardown), and kubelet would keep getting 200s from a process that
+      # is already gone.
+      teardown_step('health-server') { @health_server&.stop }
+    end
+
+    # Split out of #release_components to keep it under the AbcSize/
+    # CyclomaticComplexity ceilings — these three are the "periodic loop"
+    # releases, independently guarded like everything else in the tail.
+    def stop_periodic_components
+      [@cron_poller, @metrics_rollup, @queue_rollup, @history].each { |t| teardown_step(t.class) { t&.terminate } }
+      teardown_step('reaper') { @reaper&.stop }
+      teardown_step('leader') { @leader&.stop }
+    end
+
+    def teardown_step(label)
+      yield
+    rescue StandardError => e
+      handle_exception(e, { context: "launcher-stop-#{label}" })
+    end
 
     def write_stats(processed, failed, expired)
       day = Time.now.utc.strftime('%F')
@@ -217,72 +269,81 @@ module Wurk
 
     # Erase the live-process footprint. flush_stats first so we don't drop
     # the final batch of counters; then Heartbeat#stop! removes us from the
-    # `processes` SET and UNLINK-s the identity + work hashes. The probe
-    # server is closed alongside so kubelet stops getting 200s after the
-    # process is no longer healthy.
+    # `processes` SET and UNLINK-s the identity + work hashes.
     def clear_heartbeat
       flush_stats
       @heartbeat&.stop!
-      @health_server&.stop
     end
 
     # Terminate the heartbeat loop and wait for it to exit before clear_heartbeat
     # removes us from the `processes` SET — otherwise a final in-flight beat could
-    # SADD us back right after the SREM. Wakes the thread out of its BEAT_PAUSE
-    # sleep so shutdown isn't delayed up to a full interval.
+    # SADD us back right after the SREM and the identity would linger for a full
+    # 60s TTL.
+    #
+    # The join is unbounded on purpose. This used to be `wakeup` + `join(BEAT_PAUSE)`,
+    # which lost the race whenever the beat was mid-Redis-call: `wakeup` does nothing
+    # to a thread that isn't sleeping, so the loop then slept a full interval and the
+    # bounded join returned with the thread still live — exactly the resurrect-after-
+    # SREM this ordering exists to prevent. A condvar can't be missed (terminate flips
+    # the flag inside the critical section the loop re-checks it in), so all that is
+    # left to wait out is one in-flight beat, whose Redis calls are timeout-bounded.
     def stop_heartbeat
-      @stopped = true
+      @beat_timer.terminate
       thread = @heartbeat_thread
       return unless thread
-      # Embedded dashboard-TERM runs `stop` from the beat itself; a self-join
-      # raises ThreadError. @stopped is set, so the loop exits after this beat.
+      # Embedded dashboard-TERM can run `stop` from the beat itself; a self-join
+      # raises ThreadError. The timer is terminated, so the loop exits after this beat.
       return if thread == Thread.current
 
-      begin
-        thread.wakeup
-      rescue ThreadError
-        nil
-      end
-      thread.join(BEAT_PAUSE)
+      thread.join
     end
 
-    # Heartbeat thread loop. `safe_thread` already wraps exceptions. Loops on
-    # `@stopped` — NOT `@done` — so a *quieted* process keeps beating and publishes
-    # `quiet=true` instead of vanishing from the live set (#236). Only `#stop`
-    # flips `@stopped`; its `Thread#wakeup` breaks the sleep so the loop re-checks
-    # `@stopped` and exits without waiting out the interval.
+    # Heartbeat thread loop. `safe_thread` already wraps exceptions. Beats once up
+    # front — TimerLoop#run waits before its first yield, and the dashboard has to
+    # see this process the moment it can pick up jobs — then ticks until #stop
+    # terminates the timer. Note it does NOT stop on `@done`: a *quieted* process
+    # keeps beating so it publishes `quiet=true` instead of vanishing (#236).
     def start_heartbeat
-      until @stopped
-        heartbeat
-        sleep BEAT_PAUSE
-      end
+      heartbeat
+      @beat_timer.run { heartbeat }
       logger.info('Heartbeat stopping...')
     end
 
     # Dashboard-queued signals must behave exactly like OS signals, so a
-    # standalone process re-delivers to itself and lets the installed trap
-    # run — that wakes the main thread (CLI self-pipe / child dispatcher)
-    # so the process actually exits instead of stopping its managers and
-    # then parking forever. Embedded mode owns no traps (and self-TERM
-    # would kill the host app), so it calls quiet/stop directly — stop on
-    # its own thread because `stop` joins the heartbeat thread we're on.
+    # standalone process re-delivers to itself and lets the installed trap run —
+    # that wakes the main thread (CLI self-pipe / child dispatcher) so the
+    # process actually exits instead of stopping its managers and then parking
+    # forever. Embedded mode owns no traps (and self-TERM would kill the host
+    # app), so quiet applies directly.
     def dispatch_signal(sig)
       case sig
-      when 'TSTP', 'TERM'
-        if @embedded
-          sig == 'TSTP' ? quiet : Thread.new { stop }
-        else
-          redeliver(sig)
-        end
+      when 'TSTP' then @embedded ? quiet : redeliver(sig)
+      when 'TERM' then request_shutdown
       else
         logger.warn { "Unknown signal in #{identity}-signals: #{sig.inspect}" }
       end
+    end
+
+    # The one way anything inside this process asks it to shut down gracefully:
+    # dashboard-queued TERM, or a Manager that can no longer hold its
+    # concurrency. Standalone hands off to the installed TERM trap; embedded
+    # owns no traps, so it drains in place — on its own thread, because callers
+    # may be a thread `stop` itself joins (the heartbeat) or kills (a Processor).
+    def request_shutdown
+      @embedded ? Thread.new { stop } : redeliver('TERM')
     end
 
     # Separate method so tests can stub it — really sending TERM/TSTP would
     # kill or suspend the test process.
     def redeliver(sig)
       ::Process.kill(sig, ::Process.pid)
+    end
+
+    # One Manager per capsule, each holding our shutdown request: a Manager
+    # that can no longer replace a dead Processor has to take the process
+    # down, and only the Launcher knows how this process exits.
+    def build_managers
+      @config.capsules.values.map { |cap| Manager.new(cap, shutdown: method(:request_shutdown)) }
     end
 
     def build_poller

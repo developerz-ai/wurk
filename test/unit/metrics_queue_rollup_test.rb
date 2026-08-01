@@ -137,7 +137,66 @@ class MetricsQueueRollupTest < Wurk::Test::UnitCase
   end
   # rubocop:enable Metrics/AbcSize
 
+  # terminate is a barrier: the launcher releases the cluster lock right after
+  # it returns, so a sample still in flight would write the same buckets as the
+  # next leader's first one.
+  def test_terminate_joins_and_clears_the_thread
+    qr = loop_queue_rollup
+    qr.define_singleton_method(:leader?) { false }
+
+    thread = qr.start
+    qr.terminate
+
+    refute_predicate thread, :alive?, 'terminate must join the sampling thread'
+    assert_nil qr.instance_variable_get(:@thread)
+  end
+
+  # A cleared @thread would be pointless if the timer stayed terminated —
+  # start has to re-arm it, not spawn a thread that exits immediately.
+  def test_start_after_terminate_samples_again
+    qr = loop_queue_rollup
+    qr.define_singleton_method(:leader?) { true }
+    qr.define_singleton_method(:sample) { |_now = ::Time.now| @ticks = (@ticks || 0) + 1 }
+
+    qr.start
+    qr.terminate
+    qr.instance_variable_set(:@ticks, 0)
+    qr.start
+    poll_until(2.0) { qr.instance_variable_get(:@ticks).positive? }
+
+    assert_operator qr.instance_variable_get(:@ticks), :>, 0
+  ensure
+    qr&.terminate
+  end
+
+  # The flip side of re-arming: a sample wedged past JOIN_TIMEOUT (Thread#join
+  # returns nil) must keep @thread set, so the next #start returns it instead of
+  # resetting the shared timer under it and double-writing the same buckets.
+  def test_terminate_keeps_a_thread_that_outlives_the_join
+    qr = loop_queue_rollup
+    qr.define_singleton_method(:leader?) { false }
+
+    thread = qr.start
+    thread.define_singleton_method(:join) { |_timeout = nil| nil }
+    qr.terminate
+
+    assert_same thread, qr.instance_variable_get(:@thread), 'a wedged thread must stay tracked'
+    assert_same thread, qr.start, 'start must not spawn a second thread alongside it'
+  ensure
+    qr&.instance_variable_set(:@thread, nil)
+    thread&.kill
+  end
+
   private
+
+  # A QueueRollup on a throwaway config with a tick interval short enough that
+  # the spawned loop body runs within the test window.
+  def loop_queue_rollup
+    config = Wurk::Configuration.new
+    config.logger = ::Logger.new(IO::NULL)
+    config[:metrics_rollup_interval] = 0.01
+    Wurk::Metrics::QueueRollup.new(config)
+  end
 
   def poll_until(timeout)
     deadline = ::Process.clock_gettime(::Process::CLOCK_MONOTONIC) + timeout

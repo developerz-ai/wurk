@@ -88,6 +88,24 @@ class TimerLoopTest < Wurk::Test::UnitCase
     refute ticked, 'run must not tick if already terminated before the first wait'
   end
 
+  # Without #reset a host that stops then starts again would spawn a thread
+  # that sees the stale done flag and exits without ever ticking.
+  def test_reset_re_arms_a_terminated_loop
+    timer = Wurk::TimerLoop.new(0.01)
+    timer.terminate
+    timer.reset
+
+    ticks = 0
+    thread = Thread.new { timer.run { ticks += 1 } }
+    poll_until(2.0) { ticks.positive? }
+    timer.terminate
+    thread.join(2.0)
+
+    assert_operator ticks, :>, 0, 'reset must let run tick again'
+  ensure
+    thread&.kill
+  end
+
   private
 
   def poll_until(timeout)

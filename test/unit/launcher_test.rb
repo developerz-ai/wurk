@@ -10,6 +10,10 @@ require_relative '../test_helper'
 class LauncherTest < Wurk::Test::UnitCase
   parallelize_me!
 
+  # BOOT_RECLAIM_JOIN_TIMEOUT is process-global; the two tests that depend on
+  # its value (one shortens it) must not overlap under the parallel runner.
+  BOOT_RECLAIM_TIMEOUT_LOCK = ::Mutex.new
+
   def setup
     super
     @ns = "lt-#{Process.pid}-#{object_id}"
@@ -22,9 +26,13 @@ class LauncherTest < Wurk::Test::UnitCase
     @config[:tag] = @ns
     @pool = cap.redis_pool
     @cleanup_keys = []
+    @threads = []
   end
 
   def teardown
+    # Before the key sweep, not after: a heartbeat thread left running would
+    # SADD its identity back in behind us.
+    @threads.each(&:kill)
     @pool.with do |c|
       @cleanup_keys.each do |k|
         c.call('SREM', Wurk::Keys::PROCESSES, k) if k.start_with?("host-#{@ns}")
@@ -243,7 +251,6 @@ class LauncherTest < Wurk::Test::UnitCase
     assert_kind_of Thread, thread
     assert_equal 'heartbeat', thread.name
   ensure
-    launcher.instance_variable_set(:@done, true)
     thread&.kill
   end
 
@@ -262,6 +269,38 @@ class LauncherTest < Wurk::Test::UnitCase
 
     # Reaching here without a NoMethodError proves the safe-nav nil sides ran.
     assert_predicate @config, :frozen?
+  end
+
+  # A4: boot is not atomic. A step that raises leaves everything before it
+  # holding threads, sockets and a leader campaign — and the caller is about to
+  # drop its only reference to the launcher, so #run unwinds on the way out.
+  def test_run_rolls_back_the_partial_boot_when_a_component_start_raises
+    @config[:timeout] = 0
+    launcher = Wurk::Launcher.new(@config)
+    silence_managers(launcher)
+    silence_beat(launcher)
+    seen = record_teardown(launcher)
+    fail_first_boot_step(launcher, 'redis down at boot')
+
+    err = assert_raises(RuntimeError) { launcher.run(async_beat: false) }
+
+    assert_equal 'redis down at boot', err.message, 'the boot failure must still reach the caller'
+    assert_equal %i[cron_poller metrics_rollup queue_rollup reaper leader heartbeat exit health], seen
+  end
+
+  # The rollback is guarded: a launcher that cannot tear itself down must still
+  # raise why the boot failed, not why the cleanup did.
+  def test_run_reports_a_failing_rollback_and_raises_the_boot_error
+    @config[:timeout] = 0
+    launcher = Wurk::Launcher.new(@config)
+    reported = capture_reported_errors
+    fail_first_boot_step(launcher, 'redis down at boot')
+    launcher.define_singleton_method(:stop) { raise 'rollback exploded' }
+
+    err = assert_raises(RuntimeError) { launcher.run(async_beat: false) }
+
+    assert_equal 'redis down at boot', err.message
+    assert_includes reported, ['rollback exploded', 'launcher-stop-boot-rollback']
   end
 
   # --- quiet -----------------------------------------------------------
@@ -344,21 +383,12 @@ class LauncherTest < Wurk::Test::UnitCase
   end
 
   # Regression #236: the heartbeat survives quiet, so #stop is now what tears the
-  # thread down — via stop_heartbeat (flip @stopped + wake the sleeping loop).
+  # thread down — via stop_heartbeat (terminate the beat timer, then join).
   def test_stop_terminates_the_heartbeat_thread
     @config[:timeout] = 0
     launcher = build_isolated_launcher
-    launcher.managers.each do |m|
-      m.define_singleton_method(:start) { nil }
-      m.define_singleton_method(:quiet) { nil }
-      m.define_singleton_method(:stop) { |_d| nil }
-    end
+    silence_boot(launcher)
     silence_beat(launcher)
-    launcher.poller = launcher.cron_poller = launcher.metrics_rollup = launcher.queue_rollup = launcher.history = nil
-    launcher.instance_variable_set(:@leader, nil)
-    reaper = launcher.instance_variable_get(:@reaper)
-    reaper.define_singleton_method(:start) { nil }
-    reaper.define_singleton_method(:stop) { nil }
     track(launcher_identity(launcher))
 
     launcher.run(async_beat: true)
@@ -369,6 +399,53 @@ class LauncherTest < Wurk::Test::UnitCase
     launcher.stop
 
     refute_predicate thread, :alive?, 'stop must terminate the heartbeat thread (#236)'
+  end
+
+  # TimerLoop#run waits before its first yield; the heartbeat deliberately does
+  # not inherit that. A process the dashboard cannot see for a whole BEAT_PAUSE
+  # after boot is a process that looks dead while it is already taking jobs.
+  def test_first_beat_does_not_wait_out_the_interval
+    launcher = build_isolated_launcher
+    silence_boot(launcher)
+    beats = Queue.new
+    launcher.define_singleton_method(:heartbeat) { beats << true }
+    track(launcher_identity(launcher))
+
+    launcher.run(async_beat: true)
+
+    assert beats.pop(timeout: 5), "the first beat must not wait out BEAT_PAUSE (#{Wurk::Launcher::BEAT_PAUSE}s)"
+  ensure
+    launcher&.send(:stop_heartbeat)
+  end
+
+  # F11: `Thread#wakeup` does nothing to a thread that isn't sleeping, so a beat
+  # caught mid-Redis-call swallowed the wake, slept a full interval, and outlived
+  # the bounded join. stop_heartbeat must not return while the loop is still live.
+  def test_stop_heartbeat_waits_out_a_beat_that_is_already_running
+    launcher, thread, gate = boot_with_a_beat_in_flight
+
+    stopper = track_thread(Thread.new { launcher.send(:stop_heartbeat) })
+    sleep 0.1 # the stop signal now lands on a beat in flight, not on a sleeping thread
+    gate << true
+
+    assert stopper.join(2), 'stop_heartbeat must not wait out a whole beat interval'
+    refute_predicate thread, :alive?, 'stop_heartbeat must not return with the beat loop still live'
+  end
+
+  # The reason the ordering exists: a beat that lands mid-shutdown must finish
+  # before clear_heartbeat SREMs us, or the SADD wins and the dead process haunts
+  # the `processes` SET until its 60s TTL expires.
+  def test_stop_does_not_let_an_in_flight_beat_resurrect_the_identity
+    @config[:timeout] = 0
+    launcher, _thread, gate = boot_with_a_beat_in_flight
+
+    stopper = track_thread(Thread.new { launcher.stop })
+    sleep 0.1
+    gate << true # the released beat SADDs the identity while #stop is tearing down
+
+    assert stopper.join(5), 'stop must not outlive the heartbeat thread'
+    assert_equal 0, listed?(launcher_identity(launcher)),
+                 'a beat landing during shutdown must not resurrect the identity'
   end
 
   # --- stop ------------------------------------------------------------
@@ -425,6 +502,83 @@ class LauncherTest < Wurk::Test::UnitCase
     assert stopped, 'stop should halt the reaper thread'
   end
 
+  # A9: the boot-time reclaim sweep started as a fire-and-forget thread in
+  # #run — #stop must join it before returning so a straggling scan doesn't
+  # keep running (and touching Redis) after the launcher is torn down.
+  #
+  # Serialized against the test below: this class is parallelize_me!, and that
+  # test shortens the process-global BOOT_RECLAIM_JOIN_TIMEOUT — under which
+  # this test's 0.05s reclaim thread would race its own join bound.
+  def test_stop_joins_the_boot_reclaim_thread
+    with_boot_reclaim_join_timeout do
+      @config[:timeout] = 0
+      launcher = Wurk::Launcher.new(@config)
+      silence_managers(launcher)
+      finished = false
+      launcher.instance_variable_set(:@boot_reclaim_thread, Thread.new do
+        sleep 0.05
+        finished = true
+      end)
+
+      launcher.stop
+
+      assert finished, '#stop must join the boot-reclaim thread before returning'
+    end
+  end
+
+  # A9: bounded so a still-scanning full-keyspace sweep can't hang shutdown
+  # forever — the join gives up after BOOT_RECLAIM_JOIN_TIMEOUT and lets
+  # teardown continue.
+  def test_stop_does_not_hang_when_boot_reclaim_outlives_the_join_timeout
+    thread = nil
+    gate = Queue.new
+    with_boot_reclaim_join_timeout(0.05) do
+      @config[:timeout] = 0
+      launcher = Wurk::Launcher.new(@config)
+      silence_managers(launcher)
+      thread = Thread.new { gate.pop }
+      launcher.instance_variable_set(:@boot_reclaim_thread, thread)
+
+      launcher.stop
+
+      assert_predicate launcher, :stopping?
+    end
+  ensure
+    gate << true
+    thread&.join(1)
+  end
+
+  # A8: an embedded host (Puma, a rake task) keeps running after #stop and may
+  # `run` again later — without disconnecting here a stop-then-run cycle
+  # doubles the live socket set.
+  def test_stop_disconnects_redis_pools_when_embedded
+    @config[:timeout] = 0
+    launcher = build_isolated_launcher(embedded: true)
+    silence_managers(launcher)
+    track(launcher_identity(launcher))
+    reset = false
+    @config.define_singleton_method(:reset_redis_pools!) { reset = true }
+
+    launcher.stop
+
+    assert reset, 'embedded #stop must disconnect the Redis pools'
+  end
+
+  # A8: a swarm child or standalone process exits right after #stop anyway —
+  # disconnecting here would just force every subsequent Redis touch (this
+  # test's own teardown included) to silently rebuild a pool for nothing.
+  def test_stop_leaves_redis_pools_connected_when_not_embedded
+    @config[:timeout] = 0
+    launcher = Wurk::Launcher.new(@config)
+    silence_managers(launcher)
+    reset = false
+    @config.define_singleton_method(:reset_redis_pools!) { reset = true }
+
+    launcher.stop
+
+    refute reset, 'non-embedded #stop must not disconnect the Redis pools'
+  end
+
   # Branch coverage: #stop's safe-nav teardown of the cron poller, metrics
   # rollup, reaper, and leader must each tolerate a nil collaborator.
   # Exercises the else side of lines 115–117 and 120.
@@ -443,6 +597,63 @@ class LauncherTest < Wurk::Test::UnitCase
     launcher.stop
 
     assert_predicate launcher, :stopping?
+  end
+
+  # A2: a Manager that raised mid-drain surfaced out of `stoppers.each(&:join)`
+  # and skipped the whole teardown tail — leader lock still held, process still
+  # listed as live, health-server socket still open. The tail now runs from
+  # #stop's ensure, and each stopper thread swallows (and reports) its own
+  # failure so one bad capsule can't cancel its siblings' joins either.
+  def test_stop_completes_teardown_when_a_manager_stop_raises
+    @config[:timeout] = 0
+    launcher = Wurk::Launcher.new(@config)
+    managers_raising_on_stop(launcher, 'redis down mid-drain')
+    seen = record_teardown(launcher)
+
+    launcher.stop
+
+    assert_equal %i[cron_poller metrics_rollup queue_rollup reaper leader heartbeat exit health], seen
+  end
+
+  def test_stop_reports_a_manager_that_raises_mid_drain
+    @config[:timeout] = 0
+    reported = []
+    @config.error_handlers << ->(ex, ctx, _cfg) { reported << [ex.message, ctx[:context]] }
+    launcher = Wurk::Launcher.new(@config)
+    managers_raising_on_stop(launcher, 'redis down mid-drain')
+    record_teardown(launcher)
+
+    launcher.stop
+
+    assert_includes reported, ['redis down mid-drain', 'launcher-stop-manager']
+  end
+
+  # A Redis blip in one release must not strand the ones after it: the leader
+  # CAS release is the likeliest to fail, and it sits right before the heartbeat
+  # clear that takes us out of the live `processes` SET.
+  def test_stop_releases_heartbeat_and_health_server_when_leader_release_raises
+    @config[:timeout] = 0
+    launcher = Wurk::Launcher.new(@config)
+    silence_managers(launcher)
+    seen = record_teardown(launcher)
+    launcher.instance_variable_get(:@leader).define_singleton_method(:stop) { raise 'CAS release failed' }
+
+    launcher.stop
+
+    assert_equal %i[cron_poller metrics_rollup queue_rollup reaper heartbeat exit health], seen
+  end
+
+  def test_stop_closes_the_health_server_when_clearing_the_heartbeat_raises
+    @config[:timeout] = 0
+    launcher = Wurk::Launcher.new(@config)
+    silence_managers(launcher)
+    seen = record_teardown(launcher)
+    launcher.instance_variable_get(:@heartbeat).define_singleton_method(:stop!) { raise 'redis down' }
+
+    launcher.stop
+
+    assert_includes seen, :health, 'a failed heartbeat clear must not leak the probe listener'
+    assert_includes seen, :exit
   end
 
   def test_stop_fires_shutdown_then_exit_in_reverse
@@ -487,7 +698,7 @@ class LauncherTest < Wurk::Test::UnitCase
     launcher.stop
 
     assert hb_stopped, 'clear_heartbeat must stop! a live heartbeat'
-    assert health_stopped, 'clear_heartbeat must stop a present health server'
+    assert health_stopped, 'stop must close a present health server'
   end
 
   # --- flush_stats -----------------------------------------------------
@@ -731,6 +942,44 @@ class LauncherTest < Wurk::Test::UnitCase
     assert stopped.pop(timeout: 5), 'a queued TERM must invoke #stop (async thread)'
   end
 
+  # --- shutdown request (A7) -------------------------------------------
+
+  # A Manager that can no longer replace a dead Processor has to take the
+  # process down. It holds the Launcher's request rather than raising into
+  # Thread.main, which skipped the drain (no bulk_requeue) and, embedded, took
+  # the host's main thread with it.
+  def test_managers_hold_the_launcher_shutdown_request
+    launcher = Wurk::Launcher.new(@config)
+
+    routes = launcher.managers.map { |m| m.instance_variable_get(:@shutdown) }
+
+    assert_equal [launcher], routes.map(&:receiver).uniq
+    assert_equal [:request_shutdown], routes.map(&:name).uniq
+  end
+
+  def test_manager_shutdown_request_redelivers_term_standalone
+    launcher = build_isolated_launcher
+    redelivered = []
+    launcher.define_singleton_method(:redeliver) { |s| redelivered << s }
+
+    launcher.managers.first.instance_variable_get(:@shutdown).call
+
+    assert_equal ['TERM'], redelivered
+    refute_predicate launcher, :stopping?, 'the trap, not the request, owns the state change'
+  end
+
+  # Embedded owns no traps, so it drains in place — off the caller's thread,
+  # which is the dying Processor's and gets killed by that very drain.
+  def test_manager_shutdown_request_drains_off_thread_when_embedded
+    launcher = build_isolated_launcher(embedded: true)
+    stopped = Queue.new
+    launcher.define_singleton_method(:stop) { stopped << Thread.current }
+
+    launcher.managers.first.instance_variable_get(:@shutdown).call
+
+    refute_same Thread.current, stopped.pop(timeout: 5)
+  end
+
   # Branch coverage: an unrecognized signal must be logged, not dispatched.
   # Exercises the `else` arm of dispatch_signal (line 227).
   def test_heartbeat_logs_unknown_signal
@@ -827,6 +1076,36 @@ class LauncherTest < Wurk::Test::UnitCase
 
   private
 
+  # Takes the lock for every test whose outcome depends on the process-global
+  # BOOT_RECLAIM_JOIN_TIMEOUT, and (when `seconds` is given) shortens it for
+  # the duration of the block. Without the lock a shortened bound would leak
+  # into the sibling test running concurrently under parallelize_me!.
+  def with_boot_reclaim_join_timeout(seconds = nil)
+    BOOT_RECLAIM_TIMEOUT_LOCK.synchronize do
+      return yield unless seconds
+
+      original = Wurk::Launcher::BOOT_RECLAIM_JOIN_TIMEOUT
+      begin
+        swap_boot_reclaim_join_timeout(seconds)
+        yield
+      ensure
+        swap_boot_reclaim_join_timeout(original)
+      end
+    end
+  end
+
+  def swap_boot_reclaim_join_timeout(seconds)
+    with_warnings(nil) { Wurk::Launcher.const_set(:BOOT_RECLAIM_JOIN_TIMEOUT, seconds) }
+  end
+
+  def with_warnings(level)
+    prev = $VERBOSE
+    $VERBOSE = level
+    yield
+  ensure
+    $VERBOSE = prev
+  end
+
   # Builds a Launcher with an identity unique to this test, so parallel
   # tests can't collide on the global `processes` SET.
   def build_isolated_launcher(embedded: false)
@@ -853,12 +1132,51 @@ class LauncherTest < Wurk::Test::UnitCase
     @cleanup_keys << key
   end
 
+  def track_thread(thread)
+    @threads << thread
+    thread
+  end
+
   def stub_managers(launcher)
     launcher.managers.each { |m| m.define_singleton_method(:start) { nil } }
     # Don't campaign for the global `dear-leader` lock during unit run-tests.
     launcher.instance_variable_get(:@leader).define_singleton_method(:start) { nil }
     # Don't spawn the real cron tick thread (it would poll Redis on a timer).
     launcher.cron_poller.define_singleton_method(:start) { nil }
+  end
+
+  # Stubs every collaborator #stop's teardown tail touches and records, in
+  # order, the ones that actually ran — so a test can assert the tail completed
+  # end to end under an injected failure. @history stays nil (history is opt-in),
+  # which also covers the safe-nav else branch in the timer-loop sweep.
+  def record_teardown(launcher)
+    seen = []
+    %i[cron_poller metrics_rollup queue_rollup].each do |name|
+      record_stop(launcher.public_send(name), :terminate, seen, name)
+    end
+    record_stop(launcher.instance_variable_get(:@reaper), :stop, seen, :reaper)
+    record_stop(launcher.instance_variable_get(:@leader), :stop, seen, :leader)
+    record_heartbeat_and_health(launcher, seen)
+    @config.on(:exit) { seen << :exit }
+    seen
+  end
+
+  def record_heartbeat_and_health(launcher, seen)
+    launcher.define_singleton_method(:flush_stats) { nil }
+    launcher.instance_variable_set(:@heartbeat, record_stop(Object.new, :stop!, seen, :heartbeat))
+    launcher.instance_variable_set(:@health_server, record_stop(Object.new, :stop, seen, :health))
+  end
+
+  def record_stop(target, message, seen, label)
+    target.define_singleton_method(message) { seen << label }
+    target
+  end
+
+  def managers_raising_on_stop(launcher, message)
+    launcher.managers.each do |m|
+      m.define_singleton_method(:quiet) { nil }
+      m.define_singleton_method(:stop) { |_d| raise message }
+    end
   end
 
   def silence_managers(launcher)
@@ -871,6 +1189,58 @@ class LauncherTest < Wurk::Test::UnitCase
 
   def silence_beat(launcher)
     launcher.define_singleton_method(:heartbeat) { nil }
+  end
+
+  # Boots an isolated launcher whose first beat blocks partway through, and
+  # returns it with its live heartbeat thread and the gate that releases the
+  # beat. This is the state `Thread#wakeup` was lost in: the thread sits inside
+  # a beat rather than sleeping between two of them.
+  def boot_with_a_beat_in_flight
+    launcher = build_isolated_launcher
+    silence_boot(launcher)
+    track(launcher_identity(launcher))
+    entered = Queue.new
+    gate = Queue.new
+    beat = launcher.method(:heartbeat)
+    launcher.define_singleton_method(:heartbeat) do
+      entered << true
+      gate.pop
+      beat.call
+    end
+    launcher.run(async_beat: true)
+
+    assert entered.pop(timeout: 5), 'the heartbeat thread should have entered its first beat'
+
+    [launcher, track_thread(launcher.heartbeat_thread), gate]
+  end
+
+  # Neuters every collaborator #run starts and #stop tears down, so a test can
+  # drive the real boot/shutdown path with the heartbeat thread as the only
+  # live moving part.
+  def silence_boot(launcher)
+    launcher.managers.each do |m|
+      m.define_singleton_method(:start) { nil }
+      m.define_singleton_method(:quiet) { nil }
+      m.define_singleton_method(:stop) { |_d| nil }
+    end
+    launcher.poller = launcher.cron_poller = launcher.metrics_rollup = launcher.queue_rollup = launcher.history = nil
+    launcher.instance_variable_set(:@leader, nil)
+    reaper = launcher.instance_variable_get(:@reaper)
+    reaper.define_singleton_method(:start) { nil }
+    reaper.define_singleton_method(:stop) { nil }
+    reaper.define_singleton_method(:reclaim!) { nil }
+  end
+
+  # The poller is the first thing #run starts, so nothing else comes up before
+  # the boot fails — the rollback is asserted against a known-small partial boot.
+  def fail_first_boot_step(launcher, message)
+    launcher.poller.define_singleton_method(:start) { raise message }
+  end
+
+  def capture_reported_errors
+    reported = []
+    @config.error_handlers << ->(ex, ctx, _cfg) { reported << [ex.message, ctx[:context]] }
+    reported
   end
 
   # redis-client returns HGETALL as either a Hash or a flat Array

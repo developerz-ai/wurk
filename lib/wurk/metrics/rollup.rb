@@ -59,11 +59,23 @@ module Wurk
       end
 
       def start
-        @thread ||= safe_thread('metrics-rollup') { @timer.run { tick } } # rubocop:disable Naming/MemoizedInstanceVariableName
+        return @thread if @thread
+
+        @timer.reset
+        @thread = safe_thread('metrics-rollup') { @timer.run { tick } }
       end
 
+      # Blocks until the thread is really gone: the launcher releases the
+      # cluster lock immediately after this returns, and a roll still in flight
+      # would write the same buckets as the next leader's first one.
+      #
+      # Cleared only on a confirmed join (Thread#join returns nil on timeout):
+      # a wedged thread must stay tracked so #start's guard returns it instead
+      # of calling @timer.reset, which would un-terminate the loop it is still
+      # inside and leave two threads HSETting the same buckets.
       def terminate
         @timer.terminate
+        @thread = nil if @thread&.join(TimerLoop::JOIN_TIMEOUT)
       end
 
       # Leader-gated: only the elected leader writes the cluster-total series,
