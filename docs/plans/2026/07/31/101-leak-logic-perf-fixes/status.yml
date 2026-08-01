@@ -1,18 +1,18 @@
 plan: 101-leak-logic-perf-fixes
 title: Leak, logic-bug & perf audit fixes
-status: not_started        # not_started | in_progress | blocked | complete | superseded
+status: in_progress        # not_started | in_progress | blocked | complete | superseded
 created_by: sebi
 worked_by: ""              # executor fills with their git user.name on pickup
 owner: sebi
-percent: 0
+percent: 30
 current_focus: ""
 slices:
   - file: 01-swarm-launcher-teardown.md
-    status: not_started
-    percent: 0
+    status: complete
+    percent: 100
   - file: 02-fetch-pause-reaper.md
-    status: not_started
-    percent: 0
+    status: complete
+    percent: 100
   - file: 03-client-buffer-fork-safety.md
     status: not_started
     percent: 0
@@ -35,8 +35,23 @@ slices:
     status: not_started
     percent: 0
   - file: 10-test-bench-hygiene.md
-    status: not_started
-    percent: 0
-evidence: []
-notes: "Findings from five-agent audit 2026-07-31 (lifecycle / execution+web / frontend+tests / logic / perf). Critical: child-inherited at_exit SIGKILL cascade (01/A1). Job-loss class: reaper PID-namespace liveness (02/F2), poison-pill never cleared (07/F6), scheduled pop replay (04/F5). Prior plan 2026/07/17 slice 01 appears landed despite stale tracker — verify before executing overlaps."
-last_updated: 2026-07-31
+    status: complete
+    percent: 100
+evidence:
+  - commit: 2940703
+    slices: [01]
+    notes: "PR #344 — A1 at_exit SIGKILL cascade, A3 @children monitor, A5/A10/A11 USR2 self-reopen + self-pipe teardown, A13 heartbeat pool disconnect before fork"
+  - commit: 9c582b7
+    slices: [01]
+    notes: "PR #346 — A2 stop-tail under ensure, A4 embedded rollback, A6 dogstatsd reset after fork, A7 manager spawn failure, A8 embedded pool disconnect, A9 reclaim-thread join, A12 TimerLoop joins, F11 heartbeat CV"
+  - commit: c131f3c
+    slices: [02]
+    notes: "PR #348 — F1 pause backoff, F7 interrupt re-push to tail"
+  - commit: c14694b
+    slices: [02]
+    notes: "PR #349 — F2 reaper liveness across PID namespaces (private-list nonce)"
+  - commit: 15070e7
+    slices: [10]
+    notes: "PR #343 merge — T1 liveness-probe Launcher, T2 AR handle across parallel fork, T3 processor teardown, T4/T5 supervisor join-kill + boot inside begin, T9 bench DB isolation, T11 bounded waitall, T12 BlipProxy pump threads"
+notes: "Findings from five-agent audit 2026-07-31 (lifecycle / execution+web / frontend+tests / logic / perf). Critical: child-inherited at_exit SIGKILL cascade (01/A1). Job-loss class: reaper PID-namespace liveness (02/F2), poison-pill never cleared (07/F6), scheduled pop replay (04/F5). Slices 03–09 remain. Slice 10 landed whole via PR #343 (seven commits, T1–T5/T9/T11/T12); its source branch test/liveness-probe-teardown is deleted upstream — nothing to cherry-pick, and any resurrected copy predates slices 01/02 and would revert landed work."
+last_updated: 2026-08-01
