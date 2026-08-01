@@ -21,18 +21,24 @@ module Wurk
       OVERFLOW_MODES        = %i[drop_oldest raise].freeze
       DEFAULT_OVERFLOW_MODE = :drop_oldest
 
-      # Raised by `enbuffer` when the cap would be exceeded under
-      # `overflow_mode == :raise`. Inherits from RuntimeError so callers
-      # can rescue narrowly. The payload that triggered the overflow rides
-      # along so the caller can persist/log/forward it.
+      # Raised when the cap would be exceeded under `overflow_mode == :raise`.
+      # Inherits from RuntimeError so callers can rescue narrowly. Carries
+      # EVERY payload the call failed to deliver — the tail that did not fit,
+      # plus, on a mixed push, the batched payloads that never buffer — so a
+      # caller can persist/log/forward the lot. `cause` is the connection error
+      # that sent the push to the buffer in the first place.
       class Overflow < RuntimeError
-        attr_reader :payload
+        attr_reader :payloads
 
-        def initialize(payload)
-          @payload = payload
-          super("reliable_push buffer is full (cap=#{Buffered.buffer_cap})")
+        def initialize(payloads)
+          @payloads = payloads
+          super("reliable_push buffer is full (cap=#{Buffered.buffer_cap}), " \
+                "#{payloads.size} payload(s) undelivered")
         end
       end
+
+      # Returned by the append helpers when everything fit.
+      NOTHING_UNDELIVERED = [].freeze
 
       # Eagerly initialized: `||=` inside an accessor is not atomic — two
       # threads racing first-touch could end up holding distinct Mutex
@@ -154,28 +160,21 @@ module Wurk
         # Append payloads to the buffer. Behavior on cap exhaustion depends
         # on `overflow_mode`:
         #   * :drop_oldest (default, spec) — ring buffer, oldest evicted.
-        #   * :raise                       — Overflow raised, buffer left
-        #                                    unchanged for already-appended
-        #                                    siblings in the same call; the
-        #                                    offending payload is attached
-        #                                    to the exception.
+        #   * :raise                       — fills the remaining capacity, then
+        #                                    raises one Overflow carrying every
+        #                                    payload that did not fit.
         # Drops batched payloads — caller is expected to re-raise for those.
         # If client is provided, captures its pool for drainer to use by default.
         def enbuffer(payloads, client: nil)
           capture_pool_from_client(client)
 
-          cap = buffer_cap
+          cap  = buffer_cap
           mode = overflow_mode
-          buffer_mutex.synchronize do
-            payloads.each do |p|
-              if buffer.size >= cap
-                raise Overflow, p if mode == :raise
-
-                buffer.shift # :drop_oldest
-              end
-              buffer << p
-            end
+          undelivered = buffer_mutex.synchronize do
+            mode == :raise ? append_within_capacity(payloads, cap) : append_dropping_oldest(payloads, cap)
           end
+
+          raise Overflow, undelivered unless undelivered.empty?
         end
 
         private
@@ -194,6 +193,34 @@ module Wurk
           return unless pool
 
           self.buffer_client_factory = -> { Wurk::Client.new(pool: pool) }
+        end
+
+        # Both append helpers run with buffer_mutex held and return the payloads
+        # they could not take.
+
+        def append_dropping_oldest(payloads, cap)
+          payloads.each do |p|
+            buffer.shift if buffer.size >= cap
+            buffer << p
+          end
+          NOTHING_UNDELIVERED
+        end
+
+        # The split has to be decided before any mutation: raising from inside
+        # the append loop leaves every payload after the rejected one neither
+        # buffered, nor enqueued, nor attached to the exception. `room` goes
+        # negative when the cap was lowered after the buffer filled — clamped,
+        # so an over-full buffer rejects the whole call instead of raising on
+        # `first`/`drop`.
+        def append_within_capacity(payloads, cap)
+          room = (cap - buffer.size).clamp(0, payloads.size)
+          if room == payloads.size
+            buffer.concat(payloads)
+            return NOTHING_UNDELIVERED
+          end
+
+          buffer.concat(payloads.first(room))
+          payloads.drop(room)
         end
 
         public
@@ -379,8 +406,22 @@ module Wurk
           raise if Thread.current[Buffered::DRAINING_KEY]
 
           bidless, batched = payloads.partition { |p| !p['bid'] }
-          Buffered.enbuffer(bidless, client: self) if bidless.any?
+          enbuffer_bidless(bidless, batched)
           raise unless batched.empty?
+        end
+
+        # Bare `raise` re-raises whatever `$!` holds: the connection error from
+        # the caller's rescue, or the Overflow once we're inside this one.
+        def enbuffer_bidless(bidless, batched)
+          Buffered.enbuffer(bidless, client: self) if bidless.any?
+        rescue Buffered::Overflow => e
+          # An overflow pre-empts the caller's connection-error re-raise, which
+          # would strand the batched payloads silently — they never buffer. One
+          # exception, every payload that failed to get through; `cause` stays
+          # the connection error rather than the folded-in Overflow.
+          raise if batched.empty?
+
+          raise Buffered::Overflow, e.payloads + batched, cause: e.cause
         end
       end
 

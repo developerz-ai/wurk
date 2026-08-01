@@ -373,11 +373,17 @@ evicts your **oldest** jobs. Use `:raise` if you'd rather decide yourself:
 Wurk::Client.reliable_push_overflow = :raise
 
 begin
-  MyJob.perform_async(id)
+  MyJob.perform_bulk(ids.map { |id| [id] })
 rescue Wurk::Client::Buffered::Overflow => e
-  Outbox.create!(payload: e.payload)   # the offending payload rides along
+  Outbox.insert_all(e.payloads.map { |p| { payload: p } })   # every undelivered job
 end
 ```
+
+`:raise` fills the remaining capacity first, then raises **once**. `e.payloads`
+carries everything that push failed to deliver — the tail of a bulk push that
+didn't fit, plus any batched payloads in the same call (those never buffer). The
+payloads that *did* fit stay in the buffer and replay normally, so no job is
+both buffered and reported. `e.cause` is the underlying connection error.
 
 ---
 

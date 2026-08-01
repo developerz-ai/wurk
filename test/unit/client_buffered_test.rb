@@ -216,7 +216,7 @@ class ClientBufferedTest < Wurk::Test::UnitCase
 
     err = assert_raises(Wurk::Client::Buffered::Overflow) { failing.push(base_item('args' => ['third'])) }
 
-    assert_equal ['third'], err.payload['args']
+    assert_equal [['third']], payload_args(err.payloads)
     assert_equal 2, Wurk::Client::Buffered.buffer_size, 'buffer untouched by overflow payload'
   end
 
@@ -229,6 +229,107 @@ class ClientBufferedTest < Wurk::Test::UnitCase
     assert_raises(Wurk::Client::Buffered::Overflow) { failing.push(base_item('args' => ['reject'])) }
 
     assert_equal [['keep']], Wurk::Client::Buffered.buffer.map { |p| p['args'] } # rubocop:disable Lint/AmbiguousBlockAssociation
+  end
+
+  # The cap splits a single bulk push: what fits is buffered, the rest rides on
+  # the exception. Nothing may fall between the two.
+  # rubocop:disable Minitest/MultipleAssertions
+  def test_overflow_raise_fills_remaining_capacity_and_reports_the_rest
+    Wurk::Client.reliable_push_buffer = 3
+    Wurk::Client.reliable_push_overflow = :raise
+    failing = build_client(failing_pool)
+
+    failing.push(base_item('args' => [0]))
+    err = assert_raises(Wurk::Client::Buffered::Overflow) do
+      failing.push_bulk(base_item('args' => [[1], [2], [3], [4], [5]]))
+    end
+
+    assert_equal 3, Wurk::Client::Buffered.buffer_size
+    assert_equal [[0], [1], [2]], buffered_args
+    assert_equal [[3], [4], [5]], payload_args(err.payloads)
+  end
+  # rubocop:enable Minitest/MultipleAssertions
+
+  # Plan 03/S2's stated case: a 1000-payload bulk push against a buffer one slot
+  # short of the cap used to buffer that one payload, raise on the second and
+  # drop the other 998 on the floor — no buffer slot, no Redis write, no
+  # reference on the exception.
+  # rubocop:disable Metrics/AbcSize
+  def test_overflow_raise_loses_no_payload_from_a_large_bulk_push
+    cap = 1_000
+    Wurk::Client.reliable_push_buffer = cap
+    failing = build_client(failing_pool)
+    failing.push_bulk(base_item('args' => Array.new(cap - 1) { |i| [i] }))
+    Wurk::Client.reliable_push_overflow = :raise
+
+    fresh = Array.new(cap) { |i| [cap + i] }
+    err = assert_raises(Wurk::Client::Buffered::Overflow) do
+      failing.push_bulk(base_item('args' => fresh))
+    end
+
+    assert_equal cap, Wurk::Client::Buffered.buffer_size
+    # One fresh payload took the last slot, the other 999 ride on the
+    # exception: every one accounted for exactly once, in submission order.
+    assert_equal fresh, buffered_args.last(1) + payload_args(err.payloads)
+  end
+  # rubocop:enable Metrics/AbcSize
+
+  # Lowering the cap below the current buffer size makes remaining capacity
+  # negative; the whole call must be reported, not clamped into a partial take.
+  def test_overflow_raise_rejects_whole_call_when_cap_dropped_below_buffer_size
+    Wurk::Client.reliable_push_buffer = 3
+    failing = build_client(failing_pool)
+    failing.push_bulk(base_item('args' => [[1], [2], [3]]))
+
+    Wurk::Client.reliable_push_buffer = 1
+    Wurk::Client.reliable_push_overflow = :raise
+    err = assert_raises(Wurk::Client::Buffered::Overflow) do
+      failing.push_bulk(base_item('args' => [[4], [5]]))
+    end
+
+    assert_equal [[4], [5]], payload_args(err.payloads)
+    assert_equal [[1], [2], [3]], buffered_args
+  end
+
+  def test_overflow_message_reports_cap_and_undelivered_count
+    Wurk::Client.reliable_push_buffer = 1
+    Wurk::Client.reliable_push_overflow = :raise
+    failing = build_client(failing_pool)
+    failing.push(base_item('args' => ['keep']))
+
+    err = assert_raises(Wurk::Client::Buffered::Overflow) do
+      failing.push_bulk(base_item('args' => [[1], [2]]))
+    end
+
+    assert_equal 'reliable_push buffer is full (cap=1), 2 payload(s) undelivered', err.message
+  end
+
+  # Batched payloads never buffer, so an overflow that pre-empts their
+  # connection-error re-raise would strand them without a trace.
+  # rubocop:disable Minitest/MultipleAssertions
+  def test_overflow_carries_batched_payloads_from_a_mixed_push
+    Wurk::Client.reliable_push_buffer = 1
+    Wurk::Client.reliable_push_overflow = :raise
+    failing = build_client(failing_pool)
+    failing.push(base_item('args' => ['keep']))
+
+    err = assert_raises(Wurk::Client::Buffered::Overflow) { failing.send(:raw_push, mixed_payloads) }
+
+    assert_equal [['plain'], ['batched']], payload_args(err.payloads)
+    assert_equal [['keep']], buffered_args, 'batched payload must not reach the buffer'
+    assert_instance_of RedisClient::ConnectionError, err.cause
+  end
+  # rubocop:enable Minitest/MultipleAssertions
+
+  # With room left, the mixed push keeps the documented split: bidless buffers,
+  # batched re-raises the connection error.
+  def test_mixed_push_re_raises_connection_error_when_buffer_has_room
+    Wurk::Client.reliable_push_buffer = 10
+    Wurk::Client.reliable_push_overflow = :raise
+    failing = build_client(failing_pool)
+
+    assert_raises(RedisClient::ConnectionError) { failing.send(:raw_push, mixed_payloads) }
+    assert_equal [['plain']], buffered_args
   end
 
   # --- background drainer (issue #19) ------------------------------------
@@ -384,6 +485,21 @@ class ClientBufferedTest < Wurk::Test::UnitCase
 
   def base_item(overrides = {})
     { 'class' => @class_name, 'args' => [], 'queue' => @queue }.merge(overrides)
+  end
+
+  def buffered_args
+    payload_args(Wurk::Client::Buffered.buffer)
+  end
+
+  def payload_args(payloads)
+    payloads.map { |p| p['args'] }
+  end
+
+  # A push raw_push has to split: one bidless payload (buffers) and one
+  # carrying a bid (never buffers, re-raises).
+  def mixed_payloads
+    [base_item('args' => ['plain'], 'jid' => 'j1'),
+     base_item('args' => ['batched'], 'jid' => 'j2', 'bid' => 'B1')]
   end
 
   def build_client(pool)
