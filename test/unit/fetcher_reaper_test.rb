@@ -214,6 +214,27 @@ class FetcherReaperTest < Wurk::Test::UnitCase
     assert_equal 0, @reaper.reclaim!, 'non-numeric pid/idx suffixes are not reclaimable'
   end
 
+  # The shape every current process writes. The pre-nonce shape the other
+  # cases seed must keep reclaiming too — that is the rolling-upgrade window.
+  def test_reclaims_a_nonce_keyed_private_list
+    key = "#{@public_queue}|#{@host}|#{DEAD_PID}|#{Wurk::Component::PROCESS_NONCE}|0"
+    @pool.with { |c| c.call('RPUSH', key, payload('n1'), payload('n2')) }
+
+    assert_equal 2, @reaper.reclaim!, 'a nonce-keyed orphan is reclaimed'
+    assert_equal 0, llen(key), 'private list drained'
+  end
+
+  # SecureRandom.hex can emit an all-digit nonce. Read as the pre-nonce shape
+  # such a key yields the pid as the host and the nonce as the pid, so a *live*
+  # owner looks remote-and-dead and gets drained out from under itself.
+  def test_all_digit_nonce_still_resolves_the_live_owner
+    key = "#{@public_queue}|#{@host}|#{Process.pid}|123456789012|0"
+    @pool.with { |c| c.call('RPUSH', key, payload('live')) }
+
+    assert_equal 0, @reaper.reclaim!, 'a live owner is never reclaimed'
+    assert_equal 1, llen(key), 'in-flight job left alone'
+  end
+
   # --- cluster lock ------------------------------------------------------
 
   def test_reap_is_a_noop_when_both_locks_are_held_elsewhere
@@ -285,8 +306,20 @@ class FetcherReaperTest < Wurk::Test::UnitCase
     assert_equal 0, @reaper.reclaim_full!
   end
 
-  # A `|` inside the queue name must still parse: the owner triple is taken from
-  # the right, so the public queue is everything before host|pid|idx.
+  # The full sweep has its own parser (no known public-queue prefix to split
+  # on), so the nonce shape needs its own case there.
+  def test_reclaim_full_reclaims_a_nonce_keyed_orphan
+    foreign_q = Wurk::Keys.queue("#{@ns}-nonced")
+    private_key = "#{foreign_q}|#{@host}|#{DEAD_PID}|#{Wurk::Component::PROCESS_NONCE}|0"
+    @extra_keys.push(foreign_q, private_key)
+    @pool.with { |c| c.call('RPUSH', private_key, payload('x')) }
+
+    assert_equal 1, @reaper.reclaim_full!
+    assert_equal 1, llen(foreign_q), 'reclaimed onto the correctly-parsed public queue'
+  end
+
+  # A `|` inside the queue name must still parse: the owner segments are taken
+  # from the right, so the public queue is everything before host|pid|nonce|idx.
   def test_reclaim_full_tolerates_a_pipe_in_the_queue_name
     foreign_q = Wurk::Keys.queue("#{@ns}|piped")
     private_key = "#{foreign_q}|#{@host}|#{DEAD_PID}|0"

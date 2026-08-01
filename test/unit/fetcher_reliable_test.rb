@@ -235,9 +235,20 @@ class FetcherReliableTest < Wurk::Test::UnitCase
   def test_private_queue_name_uses_pipe_separators_and_encodes_identity
     parts = Wurk::Fetcher::Reliable.private_queue_name(@public_queue).split('|')
 
-    # [public_queue, hostname, pid, index] — assert as a single tuple so the
-    # whole shape is one expectation rather than four.
-    assert_equal [@public_queue, parts[1], Process.pid.to_s, '0'], parts
+    # [public_queue, hostname, pid, nonce, index] — assert as a single tuple so
+    # the whole shape is one expectation rather than five.
+    assert_equal [@public_queue, parts[1], Process.pid.to_s, Wurk::Component::PROCESS_NONCE, '0'], parts
+  end
+
+  # The nonce is what distinguishes two incarnations that share host+pid (a
+  # container restarted into a fresh PID namespace), so it must be the
+  # process-wide one the heartbeat publishes in `identity`, not a fresh value
+  # per call.
+  def test_private_queue_name_carries_the_process_nonce_from_identity
+    nonce = Wurk::Fetcher::Reliable.private_queue_name(@public_queue).split('|')[3]
+
+    assert_equal @fetcher.identity.split(':').last, nonce
+    assert_equal nonce, Wurk::Fetcher::Reliable.private_queue_name(@public_queue).split('|')[3]
   end
 
   def test_private_queue_name_honors_dyno_env_when_set

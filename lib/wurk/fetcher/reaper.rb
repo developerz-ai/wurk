@@ -9,7 +9,7 @@ module Wurk
     # Orphan reclamation for the reliable fetcher (Pro super_fetch §3.2).
     #
     # The Reliable fetcher moves each job from a public queue into a
-    # per-process private list (`queue:<public>|<host>|<pid>|<idx>`) and
+    # per-process private list (`queue:<public>|<host>|<pid>|<nonce>|<idx>`) and
     # leaves it there until the Processor ACKs. A SIGKILLed or crashed
     # worker therefore strands its in-flight jobs in private lists that
     # nobody will ever ACK. The Reaper is the recovery half: it periodically
@@ -176,7 +176,7 @@ module Wurk
       # Yields [private_list_key, public_q, host, pid] for every private list in
       # the keyspace. MATCH `queue:*|*` matches only private lists (public queue
       # keys carry no `|`); parse_full_key drops anything that isn't a
-      # well-formed `queue:<public>|<host>|<pid>|<idx>`.
+      # well-formed `queue:<public>|<host>|<pid>|<nonce>|<idx>`.
       def each_full_private_list
         cursor = '0'
         loop do
@@ -189,35 +189,48 @@ module Wurk
         end
       end
 
-      # `queue:<public>|<host>|<pid>|<idx>` → [public_q, host, pid], parsed from
-      # the right (pid + idx are integers, host precedes them) so a `|` inside
-      # the queue name is tolerated. nil when the key isn't a well-formed
-      # private list.
+      # `queue:<public>|<host>|<pid>|<nonce>|<idx>` → [public_q, host, pid],
+      # parsed from the right so a `|` inside the queue name is tolerated. nil
+      # when the key isn't a well-formed private list.
       def parse_full_key(key)
         parts = key.split('|')
-        return nil if parts.size < 4
+        host, pid, width = parse_owner_tail(parts)
+        return nil unless host
 
-        host, pid, idx = parts.last(3)
-        return nil unless integer?(pid) && integer?(idx)
-
-        public_q = parts[0...-3].join('|')
+        public_q = parts[0...-width].join('|')
         return nil unless public_q.start_with?(Keys::QUEUE_PREFIX) && public_q != Keys::QUEUE_PREFIX
 
-        [public_q, host, pid.to_i]
+        [public_q, host, pid]
       end
 
-      # `<public_q>|<host>|<pid>|<idx>` → [host, pid] (pid as Integer), or
-      # [nil, nil] when the suffix isn't a well-formed `host|pid|idx` triple.
-      # Splitting the suffix off the known public-queue prefix tolerates a
-      # `|` inside the queue name itself.
+      # `<public_q>|<host>|<pid>|<nonce>|<idx>` → [host, pid] (pid as Integer),
+      # or [nil, nil] when the suffix isn't a well-formed owner tail. Splitting
+      # the suffix off the known public-queue prefix tolerates a `|` inside the
+      # queue name itself.
       def parse_owner(public_q, key)
         suffix = key.delete_prefix("#{public_q}|")
         return [nil, nil] if suffix == key
 
-        host, pid, idx = suffix.split('|')
-        return [nil, nil] unless host && integer?(pid) && integer?(idx)
+        host, pid = parse_owner_tail(suffix.split('|'))
+        [host, pid]
+      end
 
-        [host, pid.to_i]
+      # Owner segments of a private-list key, taken from the right:
+      # [host, pid, segment_count], or nil when they don't parse. Two shapes
+      # are accepted — `<host>|<pid>|<nonce>|<idx>` (current) and
+      # `<host>|<pid>|<idx>` (written before the nonce existed; such lists can
+      # still hold in-flight jobs across a rolling upgrade, so they must stay
+      # reclaimable). The 4-segment shape is tried first: an all-digit nonce is
+      # rare but reachable, and reading such a key as the 3-segment shape would
+      # take the pid for the host and the nonce for the pid.
+      def parse_owner_tail(parts)
+        return nil unless parts.size >= 3 && integer?(parts[-1])
+
+        if parts.size >= 4 && integer?(parts[-3])
+          [parts[-4], parts[-3].to_i, 4]
+        elsif integer?(parts[-2])
+          [parts[-3], parts[-2].to_i, 3]
+        end
       end
 
       def integer?(str)
