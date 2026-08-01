@@ -36,6 +36,25 @@ class SwarmSignalsTest < Wurk::Test::UnitCase
     end
   end
 
+  # Runs the REAL `shutdown` (SignalSpySwarm stubs it out) while staying
+  # fork-free: children are fake PIDs that are never signalled and never waited
+  # on, so the drain reaches the self-pipe teardown immediately.
+  class DrainingSwarm < Wurk::Swarm
+    private
+
+    def fork_child(_slot, _idx)
+      99_001
+    end
+
+    def safe_kill(_pid, _sig)
+      nil
+    end
+
+    def wait_for_children(_timeout)
+      nil
+    end
+  end
+
   def setup
     super
     @config = Wurk::Configuration.new
@@ -114,6 +133,49 @@ class SwarmSignalsTest < Wurk::Test::UnitCase
     end
   end
 
+  # --- self-pipe lifecycle -----------------------------------------------
+
+  def test_shutdown_closes_both_ends_of_the_self_pipe
+    swarm = draining
+    read, write = inject_pipe(swarm)
+
+    swarm.shutdown
+
+    assert_predicate read, :closed?
+    assert_predicate write, :closed?
+  end
+
+  def test_shutdown_is_idempotent_once_the_pipe_is_gone
+    swarm = draining
+    inject_pipe(swarm)
+    swarm.shutdown
+
+    swarm.shutdown
+
+    assert_nil swarm.instance_variable_get(:@signal_read)
+  end
+
+  # A TERM handled mid-drain closes the pipe under the loop, which then asks for
+  # the next buffered signal — it must stop rather than read a dead FD.
+  def test_term_mid_drain_stops_reading_the_closed_pipe
+    swarm = draining
+    feed(swarm, 'TERM', 'TSTP')
+
+    swarm.send(:drain_signals)
+
+    assert_nil swarm.instance_variable_get(:@signal_read)
+  end
+
+  # The traps stay installed after a drain; a late signal must not raise out of
+  # trap context into the supervise thread.
+  def test_emit_signal_after_shutdown_is_a_noop
+    swarm = draining
+    inject_pipe(swarm)
+    swarm.shutdown
+
+    assert_nil swarm.send(:emit_signal, 'TERM')
+  end
+
   private
 
   def topology
@@ -122,6 +184,12 @@ class SwarmSignalsTest < Wurk::Test::UnitCase
 
   def booted
     swarm = SignalSpySwarm.new(topology: topology, config: @config)
+    swarm.boot(install_signals: false)
+    swarm
+  end
+
+  def draining
+    swarm = DrainingSwarm.new(topology: topology, config: @config)
     swarm.boot(install_signals: false)
     swarm
   end

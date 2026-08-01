@@ -133,6 +133,7 @@ module Wurk
       relay_signal('TERM')
       wait_for_children(timeout + SHUTDOWN_GRACE)
       hard_kill_stragglers
+      close_signal_pipe
     end
 
     # Cross-thread drain request: raise a flag the supervise loop observes on
@@ -246,9 +247,8 @@ module Wurk
       # Drop the parent's self-pipe first: the inherited traps still write to
       # it, so a signal landing in the window before ChildBoot resets them
       # would surface in the PARENT's supervise loop (an operator TERMing one
-      # child pid would drain the whole swarm). Closed, the trap write no-ops.
-      @signal_read&.close
-      @signal_write&.close
+      # child pid would drain the whole swarm). Dropped, the trap write no-ops.
+      close_signal_pipe
       ChildBoot.new(@config, slot, idx, parent_pid: parent_pid, start_quiet: @quieted).run
       exit 0 # unreachable; ChildBoot exits explicitly
     end
@@ -266,12 +266,25 @@ module Wurk
       end
     end
 
+    # Both FDs, once. The traps stay installed and keep firing after a drain, so
+    # clear the ivars BEFORE closing: `emit_signal` then writes to nothing
+    # instead of a dead FD, and a `drain_signals` loop mid-tick (TERM handled,
+    # asking for the next buffered signal) stops instead of reading a closed
+    # pipe. Called on shutdown and, in the child, immediately after fork.
+    def close_signal_pipe
+      read = @signal_read
+      write = @signal_write
+      @signal_read = @signal_write = nil
+      read&.close
+      write&.close
+    end
+
     # Non-blocking self-pipe write from trap context: a blocking `puts` could
     # stall signal delivery if the pipe fills. `exception: false` returns
     # :wait_writable instead of raising when full (drop the coalescible
     # duplicate); a closed pipe during shutdown is ignored too.
     def emit_signal(sig)
-      @signal_write.write_nonblock("#{sig}\n", exception: false)
+      @signal_write&.write_nonblock("#{sig}\n", exception: false)
     rescue ::IOError, ::Errno::EPIPE, ::Errno::EBADF
       nil
     end
@@ -292,11 +305,14 @@ module Wurk
     end
 
     # One buffered line per pending signal, non-blocking (wait_readable(0)).
-    # nil once the pipe is drained, ending the loop for this tick.
+    # nil once the pipe is drained, ending the loop for this tick. Reads through
+    # a local because the pipe can vanish mid-drain: a buffered TERM runs
+    # `shutdown`, which closes it, and the loop then asks for the next signal.
     def read_pending_signal
-      return nil unless @signal_read.wait_readable(0)
+      read = @signal_read
+      return nil unless read&.wait_readable(0)
 
-      @signal_read.gets&.strip
+      read.gets&.strip
     end
 
     def reopen_logs

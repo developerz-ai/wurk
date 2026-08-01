@@ -539,6 +539,64 @@ class CLITest < Wurk::Test::UnitCase
     self_write&.close
   end
 
+  # --- self-pipe lifecycle ---------------------------------------------
+
+  # `run` owns the pipe, so every exit path must close it: embedded and test
+  # callers outlive the call, and a leaked pair is two leaked FDs per boot.
+  def test_run_closes_the_self_pipe_on_the_normal_path
+    with_require_set { @cli.parse(['-q', 'default']) }
+    ends = capture_self_pipe
+
+    @cli.run(boot_app: false, warmup: false)
+
+    assert_predicate ends[:read], :closed?
+    assert_predicate ends[:write], :closed?
+  end
+
+  def test_run_closes_the_self_pipe_when_the_run_loop_raises
+    with_require_set { @cli.parse(['-q', 'default']) }
+    ends = capture_self_pipe { raise Interrupt }
+
+    assert_raises(Interrupt) { @cli.run(boot_app: false, warmup: false) }
+
+    assert_predicate ends[:read], :closed?
+    assert_predicate ends[:write], :closed?
+  end
+
+  # A step before `launch` raising still unwinds through the ensure — only the
+  # write end has been handed out by then.
+  def test_run_closes_the_self_pipe_when_a_boot_step_raises
+    with_require_set { @cli.parse(['-q', 'default']) }
+    ends = capture_self_pipe
+    @cli.define_singleton_method(:redis_info) { { 'redis_version' => '6.2.0', 'maxmemory_policy' => 'noeviction' } }
+
+    assert_raises(RuntimeError) { @cli.run(boot_app: false, warmup: false) }
+
+    assert_predicate ends[:write], :closed?
+  end
+
+  def test_emit_signal_writes_the_signal_name_to_the_pipe
+    read, write = IO.pipe
+
+    @cli.send(:emit_signal, write, 'TSTP')
+
+    assert_equal 'TSTP', read.gets.strip
+  ensure
+    read&.close
+    write&.close
+  end
+
+  # Traps outlive `run`'s ensure — a signal landing on the closed pipe must be
+  # swallowed, not raised out of trap context into the main thread.
+  def test_emit_signal_swallows_a_closed_pipe
+    read, write = IO.pipe
+    write.close
+
+    assert_nil @cli.send(:emit_signal, write, 'TERM')
+  ensure
+    read&.close
+  end
+
   # --- boot_application paths -----------------------------------------
 
   def test_boot_application_requires_single_file
@@ -711,32 +769,40 @@ class CLITest < Wurk::Test::UnitCase
 
   def test_run_swarm_preloads_then_boots_then_eager_loads
     order = []
-    @cli.define_singleton_method(:preload_bundler_groups) { order << :preload }
-    @cli.define_singleton_method(:boot_application) { order << :boot }
-    @cli.define_singleton_method(:eager_load_application) { order << :eager }
-    @cli.define_singleton_method(:validate_redis!) { nil }
-    @cli.define_singleton_method(:validate_pool_sizes!) { nil }
-    @cli.define_singleton_method(:identity) { 'host:1:abc' }
-    fake_swarm = Object.new
-    fake_swarm.define_singleton_method(:boot) { |**| nil }
-    fake_swarm.define_singleton_method(:supervise) { order << :supervise }
+    stub_swarm_preamble
+    %i[preload_bundler_groups boot_application eager_load_application].each do |m|
+      @cli.define_singleton_method(m) { order << m }
+    end
+    fake_swarm = swarm_double(boot: ->(**) {}, supervise: -> { order << :supervise },
+                              shutdown: -> { order << :shutdown })
 
     with_stub_swarm(fake_swarm) { @cli.run_swarm(boot_app: true, warmup: false) }
 
-    assert_equal %i[preload boot eager supervise], order
+    assert_equal %i[preload_bundler_groups boot_application eager_load_application supervise shutdown], order
+  end
+
+  # A11 — a fork failure partway through `boot` leaves live children with no
+  # supervisor unless the CLI drains them on the way out.
+  def test_run_swarm_drains_the_swarm_when_boot_raises
+    called = []
+    stub_swarm_preamble
+    fake_swarm = swarm_double(boot: ->(**) { raise Errno::EAGAIN },
+                              shutdown: -> { called << :shutdown })
+
+    with_stub_swarm(fake_swarm) do
+      assert_raises(Errno::EAGAIN) { @cli.run_swarm(boot_app: false, warmup: false) }
+    end
+
+    assert_equal [:shutdown], called
   end
 
   def test_run_swarm_skips_boot_steps_when_boot_app_false
     called = []
+    stub_swarm_preamble
     %i[preload_bundler_groups boot_application eager_load_application].each do |m|
       @cli.define_singleton_method(m) { called << m }
     end
-    @cli.define_singleton_method(:validate_redis!) { nil }
-    @cli.define_singleton_method(:validate_pool_sizes!) { nil }
-    @cli.define_singleton_method(:identity) { 'host:1:abc' }
-    fake_swarm = Object.new
-    fake_swarm.define_singleton_method(:boot) { |**| nil }
-    fake_swarm.define_singleton_method(:supervise) { nil }
+    fake_swarm = swarm_double(boot: ->(**) {}, supervise: -> {}, shutdown: -> {})
 
     with_stub_swarm(fake_swarm) { @cli.run_swarm(boot_app: false, warmup: false) }
 
@@ -766,6 +832,22 @@ class CLITest < Wurk::Test::UnitCase
     end
   end
 
+  # Stub `run`'s Redis/launch tail and collect the pipe ends it hands out:
+  # `trap_signals` gets the write end, `launch` the read end (never reached when
+  # an earlier step raises). The block, if given, runs in place of `launch`.
+  def capture_self_pipe(&on_launch)
+    ends = {}
+    @cli.define_singleton_method(:redis_info) { { 'redis_version' => '7.2.0', 'maxmemory_policy' => 'noeviction' } }
+    @cli.define_singleton_method(:validate_pool_sizes!) { nil }
+    @cli.define_singleton_method(:identity) { 'host:1:abc' }
+    @cli.define_singleton_method(:trap_signals) { |write| ends[:write] = write }
+    @cli.define_singleton_method(:launch) do |read|
+      ends[:read] = read
+      on_launch&.call
+    end
+    ends
+  end
+
   # `Process.warmup` is gated on RUBY_DISABLE_WARMUP != '1'; clear it so the
   # warmup branch is reachable, then restore.
   def without_warmup_disable
@@ -785,6 +867,21 @@ class CLITest < Wurk::Test::UnitCase
     yield
   ensure
     Wurk::Launcher.define_singleton_method(:new, original)
+  end
+
+  # The Redis/identity checks `run_swarm` performs before it builds the Swarm —
+  # stubbed out so the tests below only exercise the boot/supervise/drain order.
+  def stub_swarm_preamble
+    %i[validate_redis! validate_pool_sizes!].each { |m| @cli.define_singleton_method(m) { nil } }
+    @cli.define_singleton_method(:identity) { 'host:1:abc' }
+  end
+
+  # Minimal Swarm stand-in for the run_swarm tests: one entry per method the
+  # CLI calls on it.
+  def swarm_double(**bodies)
+    fake = Object.new
+    bodies.each { |name, body| fake.define_singleton_method(name, &body) }
+    fake
   end
 
   def with_stub_swarm(fake)
