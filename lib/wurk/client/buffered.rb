@@ -37,8 +37,21 @@ module Wurk
       # Eagerly initialized: `||=` inside an accessor is not atomic — two
       # threads racing first-touch could end up holding distinct Mutex
       # instances and lose all synchronization on the shared buffer.
-      INSTALL_MUTEX = Mutex.new
-      BUFFER_MUTEX  = Mutex.new
+      #
+      # Module ivars rather than constants so `reset_after_fork!` can replace
+      # them outright. MRI abandons a mutex whose owner thread didn't survive
+      # the fork (rb_thread_atfork), but that's an implementation detail rather
+      # than a documented guarantee, and it does NOT cover a fork taken from
+      # inside either critical section — there the child inherits the lock
+      # still owned, and its first `Client#push` (which drains, so it
+      # synchronizes, before pushing) blocks forever. Two allocations per fork
+      # buys immunity from both.
+      @install_mutex = Mutex.new
+      @buffer_mutex  = Mutex.new
+
+      # Process that owns the state above; a mismatch means we're running in a
+      # fork and the inherited copy has to go.
+      @owner_pid = ::Process.pid
 
       class << self
         attr_accessor :buffer_client_factory
@@ -100,6 +113,42 @@ module Wurk
             @overflow_mode = nil
             @buffer_client_factory = nil
           end
+        end
+
+        # Fork hook, called from the `Process._fork` prepend below and from
+        # `Swarm::ChildBoot#reconnect_after_fork`. Whichever runs first wins;
+        # the pid guard makes the other a no-op.
+        #
+        # A child inherits a copy of every ivar here: the buffered payloads,
+        # the Drainer (whose thread did not survive the fork), and both mutexes
+        # (see their definition for why replacing them matters).
+        #
+        # The child DROPS its inherited payloads rather than replaying them:
+        # the parent still holds the same buffer and replays it on its own next
+        # push, so a child that also drained would enqueue every buffered job
+        # once per fork — `(children + 1) x N` duplicates. Only the parent
+        # replays.
+        #
+        # `@drainer` is dropped, never `stop`ped — its `@lock` carries the same
+        # inherited-mutex hazard. A parent-configured drainer is replaced by an
+        # equivalent fresh one so an opted-in child keeps flushing the buffer it
+        # fills itself; the captured client factory goes with it, since it
+        # closes over the parent's pre-fork Redis pool.
+        #
+        # Deliberately unsynchronized: the child has exactly one thread here,
+        # and waiting on the very mutex being replaced is what would hang it.
+        def reset_after_fork! # rubocop:disable Naming/PredicateMethod
+          return false if @owner_pid == ::Process.pid
+
+          @owner_pid             = ::Process.pid
+          @install_mutex         = Mutex.new
+          @buffer_mutex          = Mutex.new
+          @buffer                = []
+          @buffer_client_factory = nil
+          interval               = @drainer&.interval
+          @drainer               = nil
+          start_drainer!(interval: interval) if interval
+          true
         end
 
         # Append payloads to the buffer. Behavior on cap exhaustion depends
@@ -191,7 +240,7 @@ module Wurk
         # handles the case where push activity stops mid-outage so the
         # passive (drain-on-next-push) path never fires.
         def start_drainer!(interval: Drainer::DEFAULT_INTERVAL, client_factory: nil)
-          INSTALL_MUTEX.synchronize do
+          install_mutex.synchronize do
             @drainer&.stop
             factory = client_factory || buffer_client_factory || -> { Wurk::Client.new }
             @drainer = Drainer.new(interval: interval, client_factory: factory)
@@ -200,25 +249,19 @@ module Wurk
         end
 
         def stop_drainer!
-          INSTALL_MUTEX.synchronize do
+          install_mutex.synchronize do
             @drainer&.stop
             @drainer = nil
           end
         end
 
         def drainer_running?
-          INSTALL_MUTEX.synchronize { @drainer&.running? == true }
+          install_mutex.synchronize { @drainer&.running? == true }
         end
 
         private
 
-        def install_mutex
-          INSTALL_MUTEX
-        end
-
-        def buffer_mutex
-          BUFFER_MUTEX
-        end
+        attr_reader :install_mutex, :buffer_mutex
 
         def pop_head
           buffer_mutex.synchronize { buffer.shift }
@@ -247,6 +290,10 @@ module Wurk
       class Drainer
         DEFAULT_INTERVAL = 2.0
         STOP_JOIN_TIMEOUT = 5.0
+
+        # Read by `Buffered.reset_after_fork!` off the *inherited* drainer, to
+        # rebuild an equivalent one in the child without touching its lock.
+        attr_reader :interval
 
         def initialize(interval: DEFAULT_INTERVAL, client_factory: -> { Wurk::Client.new })
           unless interval.is_a?(Numeric) && interval.positive?
@@ -336,6 +383,22 @@ module Wurk
           raise unless batched.empty?
         end
       end
+
+      # Ruby >= 3.1 routes every `fork` / `Process.fork` through
+      # `Process._fork`, which is the only way to catch the forks Wurk never
+      # sees: a Puma or Unicorn parent that preloaded the app — and may already
+      # be holding buffered payloads — spawning its workers. Registered at
+      # require time because `reliable_push!` can be installed after the fork
+      # that copied the state. Guarded on the fork-less runtimes (JRuby), where
+      # there is no `super` to call.
+      module ForkHook
+        def _fork
+          pid = super
+          Buffered.reset_after_fork! if pid.zero?
+          pid
+        end
+      end
+      ::Process.singleton_class.prepend(ForkHook) if ::Process.respond_to?(:_fork)
     end
 
     class << self
