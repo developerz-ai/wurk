@@ -3,10 +3,13 @@
 #
 # Dogfood pass with coding handoff live. The bot triages (qualifies, labels,
 # asks reporters for repro) and, once a task is ready, dispatches coding to the
-# fleet over the webhook handoff. Auto-merge is ON (dz#789 dependency-PR lane
-# dogfood): green routine PRs — including Dependabot minors — merge on CI +
-# gates; majors still stop on ask_before_acting (major_dep_bump). We still wait
-# for reviewer bots (coderabbit/copilot) to settle before acting. Everything
+# fleet over the webhook handoff. Auto-merge is OFF (pinned 2026-08-01 — see
+# the pr: block): this file was schema-invalid until now, so the platform ran
+# defaultPolicy (auto_merge false), and making the file valid must not change
+# the merge posture on a repo with no branch-protection ruleset. We still wait
+# for reviewer bots (coderabbit/copilot) to settle before acting. The native
+# review: block below activates the developerz review lane alongside CodeRabbit
+# (force: true, advisory — never requests changes, never approves). Everything
 # not set here uses the schema defaults (release: release-please, so merged
 # waves cut a batched release).
 version: 1
@@ -25,23 +28,49 @@ triage:
 
 handoff:
   mode: webhook
+  # Validation placeholder only — the fleet `direct` sink claims the durable
+  # tasks row and never fires an external webhook (developerz-ai/developerz.ai#1026).
+  # Same pattern as developerz-ai/developerz.ai's own live policy. Without this
+  # line the WHOLE file fails semantic validation and is silently discarded.
+  webhook_ref: wh_fleet_placeholder
   ask_reporter_first: false
 
 pr:
   wait_for_other_bots: [coderabbit, copilot]
-  # Restored 2026-07-28: the pin below has been lifted because the condition it
-  # named is met. It read "RESTORE auto_merge: true once #1080 is merged" —
-  # developerz-ai/developerz.ai#1080 (the 120s review-absence hole, where a PR
-  # whose COMMIT was older than two minutes merged with zero review from anyone)
-  # closed COMPLETED on 2026-07-27 via #1113 and #1127. This repo still has no
-  # branch-protection ruleset, so that gate was the whole protection — which is
-  # exactly why the pin was written with a precondition instead of a date.
-  #
-  # Back to this repo's deliberate dz#789 posture: green routine PRs — Dependabot
-  # minors included — merge on CI + gates; majors still stop on
-  # ask_before_acting (major_dep_bump), and we still wait for the reviewer bots
-  # above to settle first.
-  auto_merge: true
+  # PINNED OFF 2026-08-01 (operator decision, developerz-ai/wurk#345). Until
+  # this PR the file was schema-invalid (handoff.mode=webhook without
+  # webhook_ref), so the platform discarded it whole and ran defaultPolicy —
+  # whose pr.auto_merge is false. Activating the file with the previously
+  # declared `true` would have flipped auto-merge ON on a repo with NO
+  # branch-protection ruleset: a bot review comment plus green CI would have
+  # been the entire merge gate. Activation must be behavior-preserving on the
+  # merge posture; every other declared value activates as written. The dz#789
+  # dependency-PR lane posture (green routine PRs merge on CI + gates) is
+  # restored only behind a ruleset or a fresh explicit operator decision.
+  auto_merge: false
+
+review:
+  enabled: true
+  force: true                 # CodeRabbit is active on wurk; without this we defer forever
+  depth: inline               # not deep — no checkout guarantee, avoids review.depth_unservable
+  profile: chill
+  request_changes: false      # first live pass must not block a merge
+  approval: false             # first live pass must not APPROVE
+  high_level_summary: true
+  learnings: false            # no KB write-back on a public repo yet
+  chat_auto_reply: true       # keep on — the reply lane is the positive control
+  auto_review:
+    enabled: true
+    incremental: true
+    drafts: false
+    base_branches: [main]     # verified: wurk's default branch is main
+    ignore_title_keywords: [WIP, "DO NOT MERGE"]
+  anti_noise:
+    severity_floor: minor
+    max_comments: 10          # DELIBERATE — pins defaultAntiNoise's 10, defeats the schema's 30
+    dedupe: true
+  path_filters: []
+  path_instructions: []
 
 escalate:
   always: [security, license, cla]
