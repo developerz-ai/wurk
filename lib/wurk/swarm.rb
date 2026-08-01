@@ -1,5 +1,7 @@
 # frozen_string_literal: true
 
+require 'monitor'
+
 require_relative 'component'
 require_relative 'launcher'
 require_relative 'fetcher/reliable'
@@ -52,7 +54,7 @@ module Wurk
     # whole swarm.
     SWARM_SIGNALS = { 'TERM' => :term, 'INT' => :term, 'TSTP' => :tstp, 'USR1' => :usr1, 'USR2' => :usr2 }.freeze
 
-    attr_reader :topology, :children
+    attr_reader :topology
 
     def initialize(topology:, config: Wurk.configuration, memory_limit: config.memory_limit_kb,
                    shutdown_timeout: DEFAULT_SHUTDOWN_TIMEOUT)
@@ -60,6 +62,14 @@ module Wurk
       @config = config
       @memory_limit = memory_limit
       @shutdown_timeout = shutdown_timeout
+      # One reentrant lock covers the child table AND the restart machine: they
+      # are mutually recursive (Restart#advance calls back into `describe` and
+      # `spawn`, which read and write `@children`), so separate locks would be
+      # taken in opposite orders — enqueue holds children→restart, advance holds
+      # restart→children — and deadlock. Monitor's reentrancy is what lets those
+      # callbacks re-enter. Never held across a sleep: `wait_for_children` and
+      # the supervise tick sleep outside it.
+      @lock = ::Monitor.new
       @children = {}
       @assignments = []
       @owner_pid = nil
@@ -91,7 +101,14 @@ module Wurk
       install_signal_handlers if install_signals
       close_parent_sockets
       fork_children
-      @children.keys
+      child_pids
+    end
+
+    # A snapshot, not the live table. Callers read this off the supervise
+    # thread, which inserts (respawn, restart) and deletes (reap) on every tick;
+    # handing out the live Hash lets them iterate it mid-mutation.
+    def children
+      @lock.synchronize { @children.dup }
     end
 
     def supervise
@@ -102,7 +119,7 @@ module Wurk
         shutdown if @shutdown_requested && !@stopping
         reap_children
         spawn_due_respawns
-        @restart.advance unless @stopping
+        advance_restart unless @stopping
         check_memory_pressure
         sleep SUPERVISE_TICK
       end
@@ -112,7 +129,7 @@ module Wurk
       return unless owner?
 
       @stopping = true
-      @restart.abort
+      @lock.synchronize { @restart.abort }
       relay_signal('TERM')
       wait_for_children(timeout + SHUTDOWN_GRACE)
       hard_kill_stragglers
@@ -153,17 +170,33 @@ module Wurk
     # heartbeat → TERM the old child → await its drain) without blocking the
     # supervise thread, so TERM stays responsive throughout the cycle.
     def rolling_restart
-      @restart.enqueue(@children.keys)
+      @lock.synchronize { @restart.enqueue(@children.keys) }
     end
 
     private
+
+    def advance_restart
+      @lock.synchronize { @restart.advance }
+    end
+
+    def child_pids
+      @lock.synchronize { @children.keys }
+    end
+
+    def child_meta(pid)
+      @lock.synchronize { @children[pid] }
+    end
+
+    def any_children?
+      @lock.synchronize { !@children.empty? }
+    end
 
     def build_restart
       Restart.new(Restart::Config.new(
                     spawn: method(:spawn_child),
                     kill: method(:safe_kill),
                     heartbeat: method(:heartbeat_seen?),
-                    describe: ->(pid) { @children[pid] },
+                    describe: ->(pid) { child_meta(pid) },
                     now: method(:monotonic),
                     logger: logger,
                     heartbeat_wait: HEARTBEAT_WAIT,
@@ -197,7 +230,7 @@ module Wurk
     # Returns the child PID; never returns in the child (ChildBoot exits).
     def spawn_child(slot, idx)
       pid = fork_child(slot, idx)
-      @children[pid] = { slot: slot, index: idx, spawned_at: monotonic }
+      @lock.synchronize { @children[pid] = { slot: slot, index: idx, spawned_at: monotonic } }
       pid
     end
 
@@ -280,14 +313,16 @@ module Wurk
     end
 
     def on_child_exit(pid, status)
-      meta = @children.delete(pid)
-      return unless meta
-      return if @restart.claim_exit(pid)
+      @lock.synchronize do
+        meta = @children.delete(pid)
+        return unless meta
+        return if @restart.claim_exit(pid)
 
-      if @stopping
-        logger.info { "swarm: child #{pid} exited (status=#{status.exitstatus})" }
-      else
-        schedule_respawn(pid, status, meta)
+        if @stopping
+          logger.info { "swarm: child #{pid} exited (status=#{status.exitstatus})" }
+        else
+          schedule_respawn(pid, status, meta)
+        end
       end
     end
 
@@ -334,7 +369,7 @@ module Wurk
       return if now - @last_memory_check < MEMORY_CHECK_INTERVAL
 
       @last_memory_check = now
-      @children.dup.each_key { |pid| recycle_if_bloated(pid) }
+      child_pids.each { |pid| recycle_if_bloated(pid) }
     end
 
     # Route a bloated child through the restart state machine (same path as a
@@ -346,7 +381,7 @@ module Wurk
       return if rss.nil? || rss < @memory_limit
 
       logger.warn { "swarm: child #{pid} RSS #{rss}KB >= #{@memory_limit}KB; recycling" }
-      @restart.enqueue([pid])
+      @lock.synchronize { @restart.enqueue([pid]) }
     end
 
     def pid_rss_kb(pid)
@@ -358,7 +393,7 @@ module Wurk
     end
 
     def relay_signal(sig)
-      @children.each_key { |pid| safe_kill(pid, sig) }
+      child_pids.each { |pid| safe_kill(pid, sig) }
     end
 
     # The one place the supervisor signals a child: relay_signal,
@@ -374,15 +409,20 @@ module Wurk
 
     def wait_for_children(timeout)
       deadline = monotonic + timeout
-      while monotonic < deadline && @children.any?
+      while monotonic < deadline && any_children?
         reap_children
         sleep 0.1
       end
     end
 
+    # Kill and forget atomically: a child landing in the table between the walk
+    # and the clear would be dropped from it without ever being signalled —
+    # untracked and still alive.
     def hard_kill_stragglers
-      @children.each_key { |pid| safe_kill(pid, 'KILL') }
-      @children.clear
+      @lock.synchronize do
+        @children.each_key { |pid| safe_kill(pid, 'KILL') }
+        @children.clear
+      end
     end
 
     # Has the child written its first heartbeat yet? One non-blocking SISMEMBER,
@@ -404,7 +444,7 @@ module Wurk
     end
 
     def done?
-      @stopping && @children.empty?
+      @stopping && !any_children?
     end
   end
 end
