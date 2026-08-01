@@ -13,6 +13,7 @@ require_relative 'metrics/rollup'
 require_relative 'metrics/queue_rollup'
 require_relative 'history'
 require_relative 'fetcher/reaper'
+require_relative 'timer_loop'
 
 module Wurk
   # Top-level supervisor inside each worker process. Owns the Manager pool
@@ -48,12 +49,12 @@ module Wurk
     def initialize(config, embedded: false)
       @config = config
       @embedded = embedded
-      # Two separate flags, deliberately. @done = "quieted" (stop fetching, stay
-      # alive, report quiet=true). @stopped = "shutting down" (terminate the
-      # heartbeat loop). Quiet must NOT stop the heartbeat — otherwise a quieted
-      # process never publishes quiet=true and expires out of the live set (#236).
+      # @done is "quieted": stop fetching, stay alive, report quiet=true. It
+      # deliberately does NOT stop the heartbeat — a quieted process that stopped
+      # beating would never publish quiet=true and would expire out of the live
+      # set (#236). Only #stop ends the beat, by terminating @beat_timer.
       @done = false
-      @stopped = false
+      @beat_timer = TimerLoop.new(BEAT_PAUSE)
       @managers = build_managers
       @poller = build_poller
       @cron_poller = build_cron_poller
@@ -249,34 +250,35 @@ module Wurk
 
     # Terminate the heartbeat loop and wait for it to exit before clear_heartbeat
     # removes us from the `processes` SET — otherwise a final in-flight beat could
-    # SADD us back right after the SREM. Wakes the thread out of its BEAT_PAUSE
-    # sleep so shutdown isn't delayed up to a full interval.
+    # SADD us back right after the SREM and the identity would linger for a full
+    # 60s TTL.
+    #
+    # The join is unbounded on purpose. This used to be `wakeup` + `join(BEAT_PAUSE)`,
+    # which lost the race whenever the beat was mid-Redis-call: `wakeup` does nothing
+    # to a thread that isn't sleeping, so the loop then slept a full interval and the
+    # bounded join returned with the thread still live — exactly the resurrect-after-
+    # SREM this ordering exists to prevent. A condvar can't be missed (terminate flips
+    # the flag inside the critical section the loop re-checks it in), so all that is
+    # left to wait out is one in-flight beat, whose Redis calls are timeout-bounded.
     def stop_heartbeat
-      @stopped = true
+      @beat_timer.terminate
       thread = @heartbeat_thread
       return unless thread
-      # Embedded dashboard-TERM runs `stop` from the beat itself; a self-join
-      # raises ThreadError. @stopped is set, so the loop exits after this beat.
+      # Embedded dashboard-TERM can run `stop` from the beat itself; a self-join
+      # raises ThreadError. The timer is terminated, so the loop exits after this beat.
       return if thread == Thread.current
 
-      begin
-        thread.wakeup
-      rescue ThreadError
-        nil
-      end
-      thread.join(BEAT_PAUSE)
+      thread.join
     end
 
-    # Heartbeat thread loop. `safe_thread` already wraps exceptions. Loops on
-    # `@stopped` — NOT `@done` — so a *quieted* process keeps beating and publishes
-    # `quiet=true` instead of vanishing from the live set (#236). Only `#stop`
-    # flips `@stopped`; its `Thread#wakeup` breaks the sleep so the loop re-checks
-    # `@stopped` and exits without waiting out the interval.
+    # Heartbeat thread loop. `safe_thread` already wraps exceptions. Beats once up
+    # front — TimerLoop#run waits before its first yield, and the dashboard has to
+    # see this process the moment it can pick up jobs — then ticks until #stop
+    # terminates the timer. Note it does NOT stop on `@done`: a *quieted* process
+    # keeps beating so it publishes `quiet=true` instead of vanishing (#236).
     def start_heartbeat
-      until @stopped
-        heartbeat
-        sleep BEAT_PAUSE
-      end
+      heartbeat
+      @beat_timer.run { heartbeat }
       logger.info('Heartbeat stopping...')
     end
 
