@@ -8,6 +8,7 @@ export interface Toast {
   id: number;
   kind: ToastKind;
   message: string;
+  timer?: number;
 }
 
 // Module-level signal: a toast can be raised by any mutation on any page, so
@@ -18,18 +19,33 @@ const [toasts, setToasts] = createSignal<Toast[]>([]);
 export { toasts };
 
 const TTL_MS = 6000;
+const MAX_TOASTS = 5;
 let seq = 0;
 
 export function pushToast(message: string, kind: ToastKind = 'error'): number {
   const id = (seq += 1);
-  setToasts((list) => [...list, { id, kind, message }]);
   // Auto-dismiss after the TTL; guarded for the non-DOM (unit) path with no timer.
-  if (typeof window !== 'undefined') window.setTimeout(() => dismissToast(id), TTL_MS);
+  const timer = typeof window !== 'undefined' ? window.setTimeout(() => dismissToast(id), TTL_MS) : undefined;
+  setToasts((list) => {
+    const next = [...list, { id, kind, message, timer }];
+    // Cap the visible/pending list so a burst of failures can't grow it unbounded;
+    // dropped toasts' timers are cleared since dismissToast will never see them.
+    if (next.length <= MAX_TOASTS) return next;
+    const overflow = next.slice(0, next.length - MAX_TOASTS);
+    for (const toast of overflow) {
+      if (toast.timer !== undefined) window.clearTimeout(toast.timer);
+    }
+    return next.slice(next.length - MAX_TOASTS);
+  });
   return id;
 }
 
 export function dismissToast(id: number): void {
-  setToasts((list) => list.filter((toast) => toast.id !== id));
+  setToasts((list) => {
+    const toast = list.find((item) => item.id === id);
+    if (toast?.timer !== undefined) window.clearTimeout(toast.timer);
+    return list.filter((item) => item.id !== id);
+  });
 }
 
 // Maps a failed mutation to a status-aware toast: 403 = read-only mode, 404 =

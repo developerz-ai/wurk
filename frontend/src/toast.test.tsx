@@ -1,4 +1,4 @@
-import { describe, it, expect, afterEach } from 'vitest';
+import { describe, it, expect, afterEach, vi } from 'vitest';
 import { render, screen, fireEvent } from '@solidjs/testing-library';
 import { Toasts, notifyError, pushToast, dismissToast, toasts } from './toast';
 import { RequestError } from './http';
@@ -47,5 +47,34 @@ describe('Toasts', () => {
 
     fireEvent.click(screen.getByRole('button', { name: t('toast.dismiss') }));
     expect(screen.queryByText('boom happened')).toBeNull();
+  });
+});
+
+describe('toast timers', () => {
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
+  it('clears the auto-dismiss timer when dismissed early', () => {
+    vi.useFakeTimers();
+    const clearSpy = vi.spyOn(window, 'clearTimeout');
+
+    const id = pushToast('early dismiss', 'error');
+    dismissToast(id);
+
+    expect(clearSpy).toHaveBeenCalled();
+    // Advancing past the TTL must not re-dismiss (list stays empty, no throw).
+    vi.advanceTimersByTime(10_000);
+    expect(toasts()).toHaveLength(0);
+  });
+
+  it('caps the visible list at 5, dropping the oldest', () => {
+    vi.useFakeTimers();
+
+    for (let i = 0; i < 20; i += 1) pushToast(`toast ${i}`, 'error');
+
+    const current = toasts();
+    expect(current).toHaveLength(5);
+    expect(current.map((toast) => toast.message)).toEqual(['toast 15', 'toast 16', 'toast 17', 'toast 18', 'toast 19']);
   });
 });
