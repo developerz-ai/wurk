@@ -189,6 +189,24 @@ class HistoryTest < Wurk::Test::UnitCase
     snapshotter&.terminate
   end
 
+  # The flip side of re-arming: a snapshot wedged past JOIN_TIMEOUT (Thread#join
+  # returns nil) must keep @thread set, so the next #start returns it instead of
+  # resetting the shared timer under it and double-writing the stream.
+  def test_terminate_keeps_a_thread_that_outlives_the_join
+    snapshotter = history(interval: 0.01)
+    snapshotter.define_singleton_method(:leader?) { false }
+
+    thread = snapshotter.start
+    thread.define_singleton_method(:join) { |_timeout = nil| nil }
+    snapshotter.terminate
+
+    assert_same thread, snapshotter.instance_variable_get(:@thread), 'a wedged thread must stay tracked'
+    assert_same thread, snapshotter.start, 'start must not spawn a second thread alongside it'
+  ensure
+    snapshotter&.instance_variable_set(:@thread, nil)
+    thread&.kill
+  end
+
   # --- history:metrics stream (§5.3) -----------------------------------
 
   def test_snapshot_appends_the_section_5_2_fields_to_the_stream

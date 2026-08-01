@@ -176,14 +176,17 @@ module Wurk
       # Joins before returning — the caller (Launcher#quiet, then #stop) clears
       # the heartbeat right after, and a sweep still in flight would promote
       # jobs on behalf of a process that no longer exists.
+      #
+      # Cleared only on a confirmed join (Thread#join returns nil on timeout):
+      # a wedged sweep must stay tracked so #start's ||= guard returns it
+      # rather than spawning a second scheduler thread alongside it.
       def terminate
         @mutex.synchronize do
           @done = true
           @enq.terminate
           @sleeper.signal
         end
-        @thread&.join(TimerLoop::JOIN_TIMEOUT)
-        @thread = nil
+        @thread = nil if @thread&.join(TimerLoop::JOIN_TIMEOUT)
       end
 
       # Called on every wake. Any raise inside the Enq is reported and the

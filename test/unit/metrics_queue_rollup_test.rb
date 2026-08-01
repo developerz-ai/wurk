@@ -169,6 +169,24 @@ class MetricsQueueRollupTest < Wurk::Test::UnitCase
     qr&.terminate
   end
 
+  # The flip side of re-arming: a sample wedged past JOIN_TIMEOUT (Thread#join
+  # returns nil) must keep @thread set, so the next #start returns it instead of
+  # resetting the shared timer under it and double-writing the same buckets.
+  def test_terminate_keeps_a_thread_that_outlives_the_join
+    qr = loop_queue_rollup
+    qr.define_singleton_method(:leader?) { false }
+
+    thread = qr.start
+    thread.define_singleton_method(:join) { |_timeout = nil| nil }
+    qr.terminate
+
+    assert_same thread, qr.instance_variable_get(:@thread), 'a wedged thread must stay tracked'
+    assert_same thread, qr.start, 'start must not spawn a second thread alongside it'
+  ensure
+    qr&.instance_variable_set(:@thread, nil)
+    thread&.kill
+  end
+
   private
 
   # A QueueRollup on a throwaway config with a tick interval short enough that

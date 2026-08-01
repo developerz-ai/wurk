@@ -10,6 +10,10 @@ require_relative '../test_helper'
 class LauncherTest < Wurk::Test::UnitCase
   parallelize_me!
 
+  # BOOT_RECLAIM_JOIN_TIMEOUT is process-global; the two tests that depend on
+  # its value (one shortens it) must not overlap under the parallel runner.
+  BOOT_RECLAIM_TIMEOUT_LOCK = ::Mutex.new
+
   def setup
     super
     @ns = "lt-#{Process.pid}-#{object_id}"
@@ -501,49 +505,47 @@ class LauncherTest < Wurk::Test::UnitCase
   # A9: the boot-time reclaim sweep started as a fire-and-forget thread in
   # #run — #stop must join it before returning so a straggling scan doesn't
   # keep running (and touching Redis) after the launcher is torn down.
+  #
+  # Serialized against the test below: this class is parallelize_me!, and that
+  # test shortens the process-global BOOT_RECLAIM_JOIN_TIMEOUT — under which
+  # this test's 0.05s reclaim thread would race its own join bound.
   def test_stop_joins_the_boot_reclaim_thread
-    @config[:timeout] = 0
-    launcher = Wurk::Launcher.new(@config)
-    silence_managers(launcher)
-    finished = false
-    launcher.instance_variable_set(:@boot_reclaim_thread, Thread.new do
-      sleep 0.05
-      finished = true
-    end)
+    with_boot_reclaim_join_timeout do
+      @config[:timeout] = 0
+      launcher = Wurk::Launcher.new(@config)
+      silence_managers(launcher)
+      finished = false
+      launcher.instance_variable_set(:@boot_reclaim_thread, Thread.new do
+        sleep 0.05
+        finished = true
+      end)
 
-    launcher.stop
+      launcher.stop
 
-    assert finished, '#stop must join the boot-reclaim thread before returning'
+      assert finished, '#stop must join the boot-reclaim thread before returning'
+    end
   end
 
   # A9: bounded so a still-scanning full-keyspace sweep can't hang shutdown
   # forever — the join gives up after BOOT_RECLAIM_JOIN_TIMEOUT and lets
   # teardown continue.
   def test_stop_does_not_hang_when_boot_reclaim_outlives_the_join_timeout
-    @config[:timeout] = 0
-    launcher = Wurk::Launcher.new(@config)
-    silence_managers(launcher)
+    thread = nil
     gate = Queue.new
-    thread = Thread.new { gate.pop }
-    launcher.instance_variable_set(:@boot_reclaim_thread, thread)
-    original = Wurk::Launcher::BOOT_RECLAIM_JOIN_TIMEOUT
-    with_warnings(nil) { Wurk::Launcher.const_set(:BOOT_RECLAIM_JOIN_TIMEOUT, 0.05) }
+    with_boot_reclaim_join_timeout(0.05) do
+      @config[:timeout] = 0
+      launcher = Wurk::Launcher.new(@config)
+      silence_managers(launcher)
+      thread = Thread.new { gate.pop }
+      launcher.instance_variable_set(:@boot_reclaim_thread, thread)
 
-    launcher.stop
+      launcher.stop
 
-    assert_predicate launcher, :stopping?
+      assert_predicate launcher, :stopping?
+    end
   ensure
     gate << true
     thread&.join(1)
-    with_warnings(nil) { Wurk::Launcher.const_set(:BOOT_RECLAIM_JOIN_TIMEOUT, original) } if original
-  end
-
-  def with_warnings(level)
-    prev = $VERBOSE
-    $VERBOSE = level
-    yield
-  ensure
-    $VERBOSE = prev
   end
 
   # A8: an embedded host (Puma, a rake task) keeps running after #stop and may
@@ -1073,6 +1075,36 @@ class LauncherTest < Wurk::Test::UnitCase
   end
 
   private
+
+  # Takes the lock for every test whose outcome depends on the process-global
+  # BOOT_RECLAIM_JOIN_TIMEOUT, and (when `seconds` is given) shortens it for
+  # the duration of the block. Without the lock a shortened bound would leak
+  # into the sibling test running concurrently under parallelize_me!.
+  def with_boot_reclaim_join_timeout(seconds = nil)
+    BOOT_RECLAIM_TIMEOUT_LOCK.synchronize do
+      return yield unless seconds
+
+      original = Wurk::Launcher::BOOT_RECLAIM_JOIN_TIMEOUT
+      begin
+        swap_boot_reclaim_join_timeout(seconds)
+        yield
+      ensure
+        swap_boot_reclaim_join_timeout(original)
+      end
+    end
+  end
+
+  def swap_boot_reclaim_join_timeout(seconds)
+    with_warnings(nil) { Wurk::Launcher.const_set(:BOOT_RECLAIM_JOIN_TIMEOUT, seconds) }
+  end
+
+  def with_warnings(level)
+    prev = $VERBOSE
+    $VERBOSE = level
+    yield
+  ensure
+    $VERBOSE = prev
+  end
 
   # Builds a Launcher with an identity unique to this test, so parallel
   # tests can't collide on the global `processes` SET.

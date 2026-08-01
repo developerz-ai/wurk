@@ -153,6 +153,24 @@ class MetricsRollupTest < Wurk::Test::UnitCase
     rollup&.terminate
   end
 
+  # The flip side of re-arming: a roll wedged past JOIN_TIMEOUT (Thread#join
+  # returns nil) must keep @thread set, so the next #start returns it instead of
+  # resetting the shared timer under it and double-writing the same buckets.
+  def test_terminate_keeps_a_thread_that_outlives_the_join
+    rollup = loop_rollup
+    rollup.define_singleton_method(:leader?) { false }
+
+    thread = rollup.start
+    thread.define_singleton_method(:join) { |_timeout = nil| nil }
+    rollup.terminate
+
+    assert_same thread, rollup.instance_variable_get(:@thread), 'a wedged thread must stay tracked'
+    assert_same thread, rollup.start, 'start must not spawn a second thread alongside it'
+  ensure
+    rollup&.instance_variable_set(:@thread, nil)
+    thread&.kill
+  end
+
   # `TimerLoop#wait` short-circuits the ConditionVariable wait once terminated
   # (the `unless @done` else branch) so terminate-then-wait returns at once.
   # Mutex/CV mechanics live in Wurk::TimerLoop now (test/unit/timer_loop_test.rb);

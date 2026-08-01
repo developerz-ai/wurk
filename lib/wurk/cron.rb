@@ -542,10 +542,14 @@ module Wurk
       # Blocks until the thread is really gone: the launcher releases the
       # cluster lock immediately after this returns, and a tick still in flight
       # would enqueue loops the next leader is about to fire itself.
+      #
+      # Cleared only on a confirmed join (Thread#join returns nil on timeout):
+      # a wedged thread must stay tracked so #start's guard returns it instead
+      # of calling @timer.reset, which would un-terminate the loop it is still
+      # inside and leave two tick threads double-enqueuing the same loops.
       def terminate
         @timer.terminate
-        @thread&.join(TimerLoop::JOIN_TIMEOUT)
-        @thread = nil
+        @thread = nil if @thread&.join(TimerLoop::JOIN_TIMEOUT)
       end
 
       # Leader-gated by the single cluster lock (Component#leader? reads
