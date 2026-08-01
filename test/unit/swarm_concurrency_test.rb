@@ -22,14 +22,20 @@ class SwarmConcurrencyTest < Wurk::Test::UnitCase
   # A restart tick that stays in flight long enough for another thread to try
   # to enqueue behind it.
   class SlowRestart
-    def initialize(entered, hold)
+    def initialize(entered, hold, order)
       @entered = entered
       @hold = hold
+      @order = order
     end
 
+    # `:supervise` is recorded here, still inside the swarm's monitor, so the
+    # lock orders the two events. Recording it after `advance_restart` returns
+    # would leave a window where the restarter is scheduled first and the
+    # assertion flips on scheduler luck rather than on the guarantee under test.
     def advance
       @entered << true
       sleep @hold
+      @order << :supervise
     end
 
     def enqueue(_pids); end
@@ -111,7 +117,7 @@ class SwarmConcurrencyTest < Wurk::Test::UnitCase
   def test_rolling_restart_waits_for_the_supervise_tick
     swarm = boot_swarm
     order = ::Queue.new
-    ticker = start_slow_tick(swarm) { order << :supervise }
+    ticker = start_slow_tick(swarm, order)
     restarter = ::Thread.new do
       swarm.rolling_restart
       order << :rolling_restart
@@ -173,13 +179,10 @@ class SwarmConcurrencyTest < Wurk::Test::UnitCase
   end
 
   # Pin a thread inside a restart tick and return once it is in there.
-  def start_slow_tick(swarm)
+  def start_slow_tick(swarm, order)
     entered = ::Queue.new
-    swarm.instance_variable_set(:@restart, SlowRestart.new(entered, LOCK_HOLD))
-    thread = ::Thread.new do
-      swarm.send(:advance_restart)
-      yield
-    end
+    swarm.instance_variable_set(:@restart, SlowRestart.new(entered, LOCK_HOLD, order))
+    thread = ::Thread.new { swarm.send(:advance_restart) }
     entered.pop(timeout: JOIN_WAIT)
     thread
   end

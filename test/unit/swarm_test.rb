@@ -21,12 +21,20 @@ class SwarmTest < Wurk::Test::UnitCase
   def setup
     super
     @config = Wurk::Configuration.new
+    # The supervisor-pool tests open real sockets off this config, so pin it to
+    # the worker's isolated logical DB rather than inheriting whatever
+    # REDIS_URL happens to hold — the class runs under parallelize_me!.
+    @config.redis = { url: Wurk::Test.redis_url }
     @config.logger = ::Logger.new(IO::NULL)
     @swarms = []
   end
 
+  # The supervisor pool is the swarm's own; `redis_pool` assertions build a
+  # capsule pool on top of it. Both are returned here or the class leaks a
+  # connection per test.
   def teardown
     @swarms.each { |swarm| swarm.send(:close_supervisor_pool) }
+    @config.reset_redis_pools!
   ensure
     super
   end
