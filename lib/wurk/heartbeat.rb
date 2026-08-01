@@ -11,14 +11,17 @@ module Wurk
   # Wurk::Launcher so the launcher can stay focused on lifecycle and so the
   # heartbeat schema lives in one place readers can grep for.
   #
-  # Each beat is one pipelined round-trip:
+  # Each beat is two pipelined round-trips. The identity write:
   #   SADD   processes <identity>
   #   HSET   <identity>          info concurrency busy beat quiet rss rtt_us
   #   EXPIRE <identity>          60
   #   UNLINK <identity>:work
   #   HSET   <identity>:work     <tid> <json> ...    (only if WORK_STATE non-empty)
   #   EXPIRE <identity>:work     60                  (only if WORK_STATE non-empty)
+  # then the signal drain:
   #   LPOP   <identity>-signals  × BEAT_PAUSE
+  # Two rather than one because only the first is safe to replay — see
+  # #pipelined_beat and #drain_signals.
   #
   # The work hash is UNLINK-then-rewritten on every beat — a dropped beat
   # momentarily empties it, and ProcessSet#cleanup compensates by SREM-ing
@@ -90,16 +93,17 @@ module Wurk
 
     private
 
-    # Two extra writes (HSET + EXPIRE for the work mirror) when WORK_STATE
-    # has entries, so `lead` shifts to skip them when slicing signals out
-    # of the pipeline result.
+    # Every command in #write_beat converges on the state this snapshot
+    # describes however many times it lands, so the beat claims apply-safety and
+    # rides out a blip the way it did before the pool started splitting replay
+    # by it. `rtt_us` measures this write alone — the signal drain that follows
+    # is a separate checkout and deliberately not part of the gauge.
     def pipelined_beat
       work_snapshot = Processor::WORK_STATE.dup
-      lead = 4 + (work_snapshot.empty? ? 0 : 2)
       t0 = ::Process.clock_gettime(::Process::CLOCK_MONOTONIC, :microsecond)
-      results = redis { |conn| conn.pipelined { |pipe| write_beat(pipe, work_snapshot) } }
+      redis(idempotent: true) { |conn| conn.pipelined { |pipe| write_beat(pipe, work_snapshot) } }
       rtt = ::Process.clock_gettime(::Process::CLOCK_MONOTONIC, :microsecond) - t0
-      [results[lead, BEAT_PAUSE] || [], rtt]
+      [drain_signals, rtt]
     end
 
     def write_beat(pipe, work_snapshot)
@@ -107,7 +111,6 @@ module Wurk
       pipe.call('HSET', @identity, *beat_hash_args(work_snapshot.size))
       pipe.call('EXPIRE', @identity, TTL_SECONDS)
       write_work_hash(pipe, work_snapshot)
-      drain_signals(pipe)
     end
 
     def beat_hash_args(busy)
@@ -132,10 +135,19 @@ module Wurk
       pipe.call('EXPIRE', work_key, TTL_SECONDS)
     end
 
+    # Its own checkout, and never an idempotent one: LPOP is destructive and
+    # carries its result in the reply, so a replay after a lost reply discards
+    # whatever the first attempt already popped — and a discarded entry is a
+    # dashboard TERM or TSTP this process never acts on. Fused into the beat
+    # pipeline it would have dragged those writes down to the same no-replay
+    # default, or worse, invited a later sweep to claim the LPOPs alongside
+    # them. Runs after the beat so a signal only leaves Redis once the write
+    # that reports us alive has landed.
+    #
     # LPOP one entry per second of cadence so a flood of queued signals
     # can't stall the beat; anything older drains on the next beat.
-    def drain_signals(pipe)
-      BEAT_PAUSE.times { pipe.call('LPOP', "#{@identity}-signals") }
+    def drain_signals
+      redis { |conn| conn.pipelined { |pipe| BEAT_PAUSE.times { pipe.call('LPOP', "#{@identity}-signals") } } }
     end
 
     def info_hash

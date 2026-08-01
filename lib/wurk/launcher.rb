@@ -163,9 +163,12 @@ module Wurk
 
       write_stats(processed, failed, expired)
     rescue StandardError => e
-      # Replay-safety: counters were reset above, so a Redis blip would
-      # otherwise drop stats. We log and accept — the per-job at-least-once
-      # semantics don't apply to *counters*, and the next beat resets again.
+      # The counters were reset above, so a raise here drops this window's stats
+      # for good: #write_stats cannot claim apply-safety and the pool no longer
+      # replays it through a blip. Accepted deliberately — adding them back
+      # would double-count the case where the INCRBYs did land and only the
+      # reply was lost, and the per-job at-least-once semantics don't apply to
+      # *counters*. The next beat resets again.
       handle_exception(e, { context: 'flush_stats' })
     end
 
@@ -226,6 +229,9 @@ module Wurk
       handle_exception(e, { context: "launcher-stop-#{label}" })
     end
 
+    # INCRBY is additive, so a pipeline replayed after a lost reply counts this
+    # window twice on every `stat:` key it touches — no apply-safety claim. (The
+    # EXPIREs riding along are harmless to repeat; the INCRBYs pin the block.)
     def write_stats(processed, failed, expired)
       day = Time.now.utc.strftime('%F')
       @config.redis do |conn|

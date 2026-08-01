@@ -280,6 +280,24 @@ class HeartbeatTest < Wurk::Test::UnitCase
     assert_equal [], sigs
   end
 
+  # The drain is a second checkout that runs only after the identity write
+  # returns, so a failed beat leaves every queued signal in Redis for the next
+  # one. Popping first would swallow a dashboard TERM into the beat! rescue.
+  def test_failed_identity_write_leaves_signals_queued
+    sig_key = "#{@identity}-signals"
+    @pool.with { |c| c.call('LPUSH', sig_key, 'TERM') }
+    hb = build_heartbeat
+
+    # Minitest 6 dropped minitest/mock; a singleton override is the stub.
+    hb.define_singleton_method(:write_beat) { |*| raise 'beat write failed' }
+
+    sigs = hb.beat!
+    remaining = @pool.with { |c| c.call('LLEN', sig_key) }
+
+    assert_nil sigs
+    assert_equal 1, remaining.to_i
+  end
+
   # --- stop! -----------------------------------------------------------
 
   def test_stop_removes_identity_from_processes_set

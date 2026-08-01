@@ -101,8 +101,9 @@ class RedisIdempotentCallSitesTest < Wurk::Test::UnitCase
 
   def teardown
     @main.with do |conn|
-      keys = conn.call('KEYS', "#{@public_queue}*")
+      keys = conn.call('KEYS', "*#{@ns}*")
       conn.call('DEL', *keys) unless keys.empty?
+      conn.call('SREM', Wurk::Keys::PROCESSES, "#{@ns}:1:x")
     end
     @main.disconnect!
     @fetch&.disconnect!
@@ -239,6 +240,56 @@ class RedisIdempotentCallSitesTest < Wurk::Test::UnitCase
 
     assert_equal [true], @main.claims_for('SMEMBERS')
     assert_equal [true], @main.claims_for('HGETALL')
+  end
+
+  # --- the five the audit named ------------------------------------------
+
+  # Enqueue. Every command the push issues appends, so a replay is a second
+  # copy of the job — the outage buffer, not the pool, is what retries here.
+  def test_client_push_does_not_claim_apply_safety
+    Wurk::Client.new(config: @config).push('class' => 'HardJob', 'args' => [], 'queue' => @queue_name)
+
+    assert_equal [false], @main.claims_for('LPUSH')
+  end
+
+  # Scheduler promotion, both halves: the destructive ZPOPBYSCORE and the LPUSH
+  # that re-queues what it popped.
+  def test_scheduler_pop_and_promote_do_not_claim_apply_safety
+    sset = "#{@ns}-schedule"
+    @main.with { |c| c.call('ZADD', sset, '0', %({"class":"HardJob","args":[],"queue":"#{@queue_name}"})) }
+
+    Wurk::Scheduled::Enq.new(@config).enqueue_jobs([sset])
+
+    assert_equal [false], @main.claims_for('EVALSHA').uniq
+    assert_equal [false], @main.claims_for('LPUSH').uniq
+    assert_equal 1, @main.with { |c| c.call('LLEN', @public_queue) }.to_i
+  end
+
+  # Stats flush. INCRBY is additive, so a replayed pipeline counts the window
+  # twice on every `stat:` key it touches. Driven straight at #write_stats: the
+  # public #flush_stats would drain the process-wide Processor counters other
+  # tests in this worker are also reading.
+  def test_stats_flush_does_not_claim_apply_safety
+    Wurk::Launcher.new(@config).send(:write_stats, 3, 1, 0)
+
+    assert_equal [false], @main.claims_for('INCRBY')
+  end
+
+  # The beat is the one split call site: its writes converge on the same
+  # identity hash and keep the backoff, while the signal LPOPs — a dashboard
+  # TERM/TSTP each — get their own checkout that must never replay.
+  def test_heartbeat_write_claims_apply_safety_but_the_signal_drain_does_not
+    Wurk::Heartbeat.new(identity: "#{@ns}:1:x", config: @config).beat!
+
+    assert_equal [true], @main.claims_for('HSET')
+    assert_equal [false], @main.claims_for('LPOP')
+  end
+
+  # Poison-pill recovery counter: an over-count kills a healthy job.
+  def test_poison_pill_counter_does_not_claim_apply_safety
+    on_default_pool { Wurk::Middleware::PoisonPill.track!({ 'jid' => @ns, 'class' => 'HardJob' }, queue: @queue_name) }
+
+    assert_equal [false], @main.claims_for('INCR')
   end
 
   private
