@@ -203,6 +203,7 @@ class RedisOutageRecoveryTest < Wurk::Test::UnitCase
       @outage = false
       @mutex = ::Mutex.new
       @sockets = []
+      @pump_threads = []
       @accept_thread = Thread.new { accept_loop }
     end
 
@@ -226,7 +227,12 @@ class RedisOutageRecoveryTest < Wurk::Test::UnitCase
     rescue IOError, Errno::EBADF
       nil
     ensure
-      @mutex.synchronize { drop_tracked_sockets }
+      @mutex.synchronize do
+        drop_tracked_sockets
+        @pump_threads.each(&:kill)
+        @pump_threads.each { |t| t.join(1) }
+        @pump_threads.clear
+      end
     end
 
     private
@@ -249,14 +255,15 @@ class RedisOutageRecoveryTest < Wurk::Test::UnitCase
     end
 
     def relay(client)
+      @mutex.synchronize { @sockets.push(client) }
       upstream = TCPSocket.new(@upstream_host, @upstream_port)
-      @mutex.synchronize { @sockets.push(client, upstream) }
+      @mutex.synchronize { @sockets.push(upstream) }
       pump(client, upstream)
       pump(upstream, client)
     end
 
     def pump(from, dest)
-      Thread.new do
+      thread = Thread.new do
         IO.copy_stream(from, dest)
       rescue StandardError
         nil
@@ -264,6 +271,8 @@ class RedisOutageRecoveryTest < Wurk::Test::UnitCase
         untrack(from)
         untrack(dest)
       end
+      @mutex.synchronize { @pump_threads.push(thread) }
+      thread
     end
 
     def untrack(sock)
