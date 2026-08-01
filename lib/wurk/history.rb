@@ -71,11 +71,19 @@ module Wurk
     end
 
     def start
-      @thread ||= safe_thread('history-snapshot') { @timer.run { tick } } # rubocop:disable Naming/MemoizedInstanceVariableName
+      return @thread if @thread
+
+      @timer.reset
+      @thread = safe_thread('history-snapshot') { @timer.run { tick } }
     end
 
+    # Blocks until the thread is really gone: the launcher releases the cluster
+    # lock immediately after this returns, and a snapshot still in flight would
+    # race the next leader's first one.
     def terminate
       @timer.terminate
+      @thread&.join(TimerLoop::JOIN_TIMEOUT)
+      @thread = nil
     end
 
     # Leader-gated: only the elected leader emits, so N workers don't each

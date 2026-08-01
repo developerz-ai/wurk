@@ -1025,9 +1025,9 @@ class CronTest < Wurk::Test::UnitCase
 
   # ---- Poller branch coverage ------------------------------------------
 
-  # 466 body + 521 (wait) loop: start spawns the tick thread; with a tiny tick
-  # interval and a non-leader gate, the `until @done { tick; wait }` body runs
-  # at least once. We count ticks, then terminate and join deterministically.
+  # start spawns the tick thread; with a tiny tick interval and a non-leader
+  # gate the loop body runs at least once. terminate joins, so the thread is
+  # already dead by the time it returns — no post-hoc join needed.
   def test_poller_start_runs_tick_loop_then_terminates
     cfg = Wurk::Configuration.new
     cfg[:cron_tick_interval] = 0.01
@@ -1036,13 +1036,34 @@ class CronTest < Wurk::Test::UnitCase
     poller.define_singleton_method(:leader?) { false }
     poller.define_singleton_method(:tick) { ticks << :t }
 
-    poller.start
-    first = ticks.pop # blocks until the loop body executes tick at least once
+    thread = poller.start
+    first = ticks.pop(timeout: 5) # waits until the loop body executes tick at least once
 
     poller.terminate
-    thread = poller.instance_variable_get(:@poller_thread)
-    assert thread.join(5), 'poller thread must exit after terminate'
+
+    refute_predicate thread, :alive?, 'terminate must join the poller thread'
+    assert_nil poller.instance_variable_get(:@thread)
     assert_equal :t, first
+  end
+
+  # A cleared @thread would be pointless if the timer stayed terminated —
+  # start has to re-arm it, not spawn a thread that exits immediately.
+  def test_poller_start_after_terminate_ticks_again
+    cfg = Wurk::Configuration.new
+    cfg[:cron_tick_interval] = 0.01
+    poller = Wurk::Cron::Poller.new(cfg)
+    ticks = Queue.new
+    poller.define_singleton_method(:leader?) { false }
+    poller.define_singleton_method(:tick) { ticks << :t }
+
+    poller.start
+    ticks.pop(timeout: 5)
+    poller.terminate
+    poller.start
+
+    assert_equal :t, ticks.pop(timeout: 5), 'start after terminate must resume ticking'
+  ensure
+    poller&.terminate
   end
 
   # 497 then: a loop whose next fire is in the future → enqueue_if_due returns

@@ -121,6 +121,38 @@ class MetricsRollupTest < Wurk::Test::UnitCase
   end
   # rubocop:enable Metrics/AbcSize
 
+  # terminate is a barrier: the launcher releases the cluster lock right after
+  # it returns, so a roll still in flight would write the same buckets as the
+  # next leader's first one.
+  def test_terminate_joins_and_clears_the_thread
+    rollup = loop_rollup
+    rollup.define_singleton_method(:leader?) { false }
+
+    thread = rollup.start
+    rollup.terminate
+
+    refute_predicate thread, :alive?, 'terminate must join the rollup thread'
+    assert_nil rollup.instance_variable_get(:@thread)
+  end
+
+  # A cleared @thread would be pointless if the timer stayed terminated —
+  # start has to re-arm it, not spawn a thread that exits immediately.
+  def test_start_after_terminate_rolls_again
+    rollup = loop_rollup
+    rollup.define_singleton_method(:leader?) { true }
+    rollup.define_singleton_method(:roll) { |_now = ::Time.now| @ticks = (@ticks || 0) + 1 }
+
+    rollup.start
+    rollup.terminate
+    rollup.instance_variable_set(:@ticks, 0)
+    rollup.start
+    poll_until(2.0) { rollup.instance_variable_get(:@ticks).positive? }
+
+    assert_operator rollup.instance_variable_get(:@ticks), :>, 0
+  ensure
+    rollup&.terminate
+  end
+
   # `TimerLoop#wait` short-circuits the ConditionVariable wait once terminated
   # (the `unless @done` else branch) so terminate-then-wait returns at once.
   # Mutex/CV mechanics live in Wurk::TimerLoop now (test/unit/timer_loop_test.rb);
@@ -180,6 +212,15 @@ class MetricsRollupTest < Wurk::Test::UnitCase
   end
 
   private
+
+  # A Rollup on a throwaway config with a tick interval short enough that the
+  # spawned loop body runs within the test window.
+  def loop_rollup
+    config = Wurk::Configuration.new
+    config.logger = ::Logger.new(IO::NULL)
+    config[:metrics_rollup_interval] = 0.01
+    Wurk::Metrics::Rollup.new(config)
+  end
 
   def poll_until(timeout)
     deadline = ::Process.clock_gettime(::Process::CLOCK_MONOTONIC) + timeout

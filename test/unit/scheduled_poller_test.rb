@@ -303,6 +303,24 @@ class ScheduledPollerTest < Wurk::Test::UnitCase
     assert completed
   end
 
+  # terminate is a barrier: Launcher#stop clears the heartbeat right after, so
+  # a sweep still in flight would promote jobs for a process that is gone.
+  def test_terminate_joins_and_clears_the_thread
+    @config[:scheduler_initial_wait] = 0.01
+    poller = Wurk::Scheduled::Poller.new(@config)
+    sweeps = Queue.new
+    poller.define_singleton_method(:enqueue) { sweeps << :s }
+
+    thread = poller.start
+    sweeps.pop(timeout: 5)
+    poller.terminate
+
+    refute_predicate thread, :alive?, 'terminate must join the scheduler thread'
+    assert_nil poller.instance_variable_get(:@thread)
+  ensure
+    thread&.kill
+  end
+
   private
 
   def build_poller_with_rng_and_count(rand_value:, process_count:)

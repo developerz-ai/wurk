@@ -59,11 +59,19 @@ module Wurk
       end
 
       def start
-        @thread ||= safe_thread('metrics-rollup') { @timer.run { tick } } # rubocop:disable Naming/MemoizedInstanceVariableName
+        return @thread if @thread
+
+        @timer.reset
+        @thread = safe_thread('metrics-rollup') { @timer.run { tick } }
       end
 
+      # Blocks until the thread is really gone: the launcher releases the
+      # cluster lock immediately after this returns, and a roll still in flight
+      # would write the same buckets as the next leader's first one.
       def terminate
         @timer.terminate
+        @thread&.join(TimerLoop::JOIN_TIMEOUT)
+        @thread = nil
       end
 
       # Leader-gated: only the elected leader writes the cluster-total series,

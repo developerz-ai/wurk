@@ -6,6 +6,7 @@ require_relative 'lua'
 require_relative 'lua/loader'
 require_relative 'client'
 require_relative 'process_set'
+require_relative 'timer_loop'
 
 module Wurk
   # Promotes due jobs from the `retry` and `schedule` sorted sets back onto
@@ -169,13 +170,20 @@ module Wurk
 
       # Idempotent. Wakes the sleeping thread so it observes @done and exits.
       # Also propagates the stop signal to @enq so any in-flight drain loop
-      # short-circuits instead of running to completion.
+      # short-circuits instead of running to completion. Terminal, not a pause:
+      # @enq's stop flag is one-way, so this poller never polls again.
+      #
+      # Joins before returning — the caller (Launcher#quiet, then #stop) clears
+      # the heartbeat right after, and a sweep still in flight would promote
+      # jobs on behalf of a process that no longer exists.
       def terminate
         @mutex.synchronize do
           @done = true
           @enq.terminate
           @sleeper.signal
         end
+        @thread&.join(TimerLoop::JOIN_TIMEOUT)
+        @thread = nil
       end
 
       # Called on every wake. Any raise inside the Enq is reported and the

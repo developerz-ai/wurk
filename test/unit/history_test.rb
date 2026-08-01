@@ -158,6 +158,37 @@ class HistoryTest < Wurk::Test::UnitCase
     assert_operator snapshotter.instance_variable_get(:@snaps).to_i, :>, 0
   end
 
+  # terminate is a barrier: the launcher releases the cluster lock right after
+  # it returns, so a snapshot still in flight would race the next leader.
+  def test_terminate_joins_and_clears_the_thread
+    snapshotter = history(interval: 0.01)
+    snapshotter.define_singleton_method(:leader?) { false }
+
+    thread = snapshotter.start
+    snapshotter.terminate
+
+    refute_predicate thread, :alive?, 'terminate must join the snapshot thread'
+    assert_nil snapshotter.instance_variable_get(:@thread)
+  end
+
+  # A cleared @thread would be pointless if the timer stayed terminated —
+  # start has to re-arm it, not spawn a thread that exits immediately.
+  def test_start_after_terminate_snapshots_again
+    snapshotter = history(interval: 0.01)
+    snapshotter.define_singleton_method(:leader?) { true }
+    snapshotter.define_singleton_method(:snapshot) { @snaps = (@snaps || 0) + 1 }
+
+    snapshotter.start
+    snapshotter.terminate
+    snapshotter.instance_variable_set(:@snaps, 0)
+    snapshotter.start
+    poll_until(2.0) { snapshotter.instance_variable_get(:@snaps).positive? }
+
+    assert_operator snapshotter.instance_variable_get(:@snaps), :>, 0
+  ensure
+    snapshotter&.terminate
+  end
+
   # --- history:metrics stream (§5.3) -----------------------------------
 
   def test_snapshot_appends_the_section_5_2_fields_to_the_stream
