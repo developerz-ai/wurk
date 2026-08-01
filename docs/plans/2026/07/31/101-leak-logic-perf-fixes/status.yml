@@ -1,0 +1,42 @@
+plan: 101-leak-logic-perf-fixes
+title: Leak, logic-bug & perf audit fixes
+status: not_started        # not_started | in_progress | blocked | complete | superseded
+created_by: sebi
+worked_by: ""              # executor fills with their git user.name on pickup
+owner: sebi
+percent: 0
+current_focus: ""
+slices:
+  - file: 01-swarm-launcher-teardown.md
+    status: not_started
+    percent: 0
+  - file: 02-fetch-pause-reaper.md
+    status: not_started
+    percent: 0
+  - file: 03-client-buffer-fork-safety.md
+    status: not_started
+    percent: 0
+  - file: 04-redis-retry-idempotency.md
+    status: not_started
+    percent: 0
+  - file: 05-leader-cron-limiter-logic.md
+    status: not_started
+    percent: 0
+  - file: 06-batch-limiter-key-hygiene.md
+    status: not_started
+    percent: 0
+  - file: 07-stats-web-misc.md
+    status: not_started
+    percent: 0
+  - file: 08-perf-quick-wins.md
+    status: not_started
+    percent: 0
+  - file: 09-frontend-fixes.md
+    status: not_started
+    percent: 0
+  - file: 10-test-bench-hygiene.md
+    status: not_started
+    percent: 0
+evidence: []
+notes: "Findings from five-agent audit 2026-07-31 (lifecycle / execution+web / frontend+tests / logic / perf). Critical: child-inherited at_exit SIGKILL cascade (01/A1). Job-loss class: reaper PID-namespace liveness (02/F2), poison-pill never cleared (07/F6), scheduled pop replay (04/F5). Prior plan 2026/07/17 slice 01 appears landed despite stale tracker — verify before executing overlaps."
+last_updated: 2026-07-31
