@@ -290,8 +290,14 @@ class FetcherReliableTest < Wurk::Test::UnitCase
     used = nil
     conn = Object.new
     conn.define_singleton_method(:blocking_call) { |*_| nil }
-    @capsule.define_singleton_method(:fetch_redis) { |&blk| used = :fetch; blk.call(conn) }
-    @capsule.define_singleton_method(:redis) { |&blk| used = :main; blk.call(conn) }
+    @capsule.define_singleton_method(:fetch_redis) do |**_opts, &blk|
+      used = :fetch
+      blk.call(conn)
+    end
+    @capsule.define_singleton_method(:redis) do |**_opts, &blk|
+      used = :main
+      blk.call(conn)
+    end
 
     @fetcher.send(:blmove, @public_queue)
 
@@ -310,7 +316,7 @@ class FetcherReliableTest < Wurk::Test::UnitCase
       box.replace(a)
       nil
     end
-    @capsule.define_singleton_method(:fetch_redis) { |&blk| blk.call(conn) }
+    @capsule.define_singleton_method(:fetch_redis) { |**_opts, &blk| blk.call(conn) }
     box
   end
 

@@ -177,12 +177,19 @@ module Wurk
       # is dominated by the BLMOVE that follows. Returns a Set for O(1)
       # lookup against the (often weighted-expanded) queue list.
       def paused_names
-        config.redis { |conn| conn.call('SMEMBERS', Keys::PAUSED_SET) }.to_set
+        config.redis(idempotent: true) { |conn| conn.call('SMEMBERS', Keys::PAUSED_SET) }.to_set
       end
 
+      # Both LMOVE forms claim apply-safety, so fetch keeps the full
+      # connection-blip backoff the F5 split otherwise takes away: a move that
+      # applied but whose reply was lost leaves the job in *this* process's
+      # private list, un-ACKed — byte-for-byte the state a SIGKILL between fetch
+      # and ack leaves behind, which the next boot's Reaper already reclaims. The
+      # replay then pulls a different job; nothing duplicates and nothing is
+      # lost, at worst one job waits out this process's lifetime.
       def lmove(public_q)
         priv = self.class.private_queue_name(public_q)
-        job = config.redis { |conn| conn.call('LMOVE', public_q, priv, 'RIGHT', 'LEFT') }
+        job = config.redis(idempotent: true) { |conn| conn.call('LMOVE', public_q, priv, 'RIGHT', 'LEFT') }
         job ? UnitOfWork.new(queue: public_q, job: job, config: config) : nil
       end
 
@@ -194,7 +201,7 @@ module Wurk
         # starving the main pool's background loops (#101). Extend the socket
         # read-timeout one second past BLMOVE's own server-side timeout so the
         # connection's read timeout can't fire while BLMOVE is legitimately blocked.
-        job = config.fetch_redis do |conn|
+        job = config.fetch_redis(idempotent: true) do |conn|
           conn.blocking_call(timeout + 1, 'BLMOVE', public_q, priv, 'RIGHT', 'LEFT', timeout)
         end
         job ? UnitOfWork.new(queue: public_q, job: job, config: config) : nil

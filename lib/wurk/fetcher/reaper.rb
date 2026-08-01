@@ -165,7 +165,9 @@ module Wurk
       def each_private_list(public_q)
         cursor = '0'
         loop do
-          cursor, keys = redis { |c| c.call('SCAN', cursor, 'MATCH', "#{public_q}|*", 'COUNT', SCAN_COUNT) }
+          cursor, keys = redis(idempotent: true) do |c|
+            c.call('SCAN', cursor, 'MATCH', "#{public_q}|*", 'COUNT', SCAN_COUNT)
+          end
           keys.each do |key|
             host, pid, nonce = parse_owner(public_q, key)
             yield key, host, pid, nonce if pid
@@ -181,7 +183,9 @@ module Wurk
       def each_full_private_list
         cursor = '0'
         loop do
-          cursor, keys = redis { |c| c.call('SCAN', cursor, 'MATCH', "#{Keys::QUEUE_PREFIX}*|*", 'COUNT', SCAN_COUNT) }
+          cursor, keys = redis(idempotent: true) do |c|
+            c.call('SCAN', cursor, 'MATCH', "#{Keys::QUEUE_PREFIX}*|*", 'COUNT', SCAN_COUNT)
+          end
           keys.each do |key|
             parsed = parse_full_key(key)
             yield key, *parsed if parsed
@@ -291,7 +295,7 @@ module Wurk
       # TTL until ProcessSet#cleanup prunes it and that window must read as
       # dead or the owner's jobs are never reclaimed.
       def live_owners
-        redis do |conn|
+        redis(idempotent: true) do |conn|
           members = conn.call('SMEMBERS', Keys::PROCESSES)
           next ::Set.new if members.empty?
 
@@ -312,6 +316,12 @@ module Wurk
       # poison check, so a crash mid-drain leaves the job safely in the public
       # queue (at-least-once), never lost. Poison jobs are killed to the dead
       # set by PoisonPill.track! and then LREM'd out of the public queue.
+      #
+      # Unlike the fetcher's LMOVE, this one does *not* claim apply-safety: a
+      # replay after a lost reply moves the next job and never poison-checks the
+      # one already on the public tail, so a job that kills its worker every time
+      # would get a free recovery past the cap. A raise instead lands in the
+      # rescue below, and the next sweep re-drains what's left.
       def drain(private_list, public_q)
         queue_name = public_q.delete_prefix(Keys::QUEUE_PREFIX)
         count = 0
