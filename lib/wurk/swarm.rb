@@ -44,6 +44,16 @@ module Wurk
     MEMORY_CHECK_INTERVAL = 10
     DEFAULT_SHUTDOWN_TIMEOUT = 25
 
+    # The supervisor's own Redis pool: one connection, disjoint from every
+    # capsule pool. Post-boot the parent's only Redis use is the heartbeat probe
+    # (`heartbeat_seen?`) — one SISMEMBER per restart tick — and routing it
+    # through the capsule main pool reopened, at capsule size (>= 10), the very
+    # sockets step 3 had just closed; the next respawn/restart fork then
+    # inherited them. Dedicated and torn down before every fork, so no child
+    # ever sees a parent socket.
+    SUPERVISOR_POOL_SIZE = 1
+    SUPERVISOR_POOL_NAME = 'swarm-supervisor'
+
     # Children each hard_shutdown after their own drain deadline (bulk_requeue
     # + a 3s ensure window + heartbeat cleanup); the parent must not SIGKILL
     # them mid-tail, so its own wait always extends past theirs by this much.
@@ -77,10 +87,9 @@ module Wurk
       @shutdown_requested = false
       @quieted = false
       @last_memory_check = 0
-      @signal_read = nil
-      @signal_write = nil
       @respawn_backoff = Backoff.new(base: RESPAWN_BACKOFF)
       @restart = build_restart
+      init_fork_unsafe_handles
     end
 
     # `install_signals:` is false in tests so the integration suite can
@@ -133,6 +142,7 @@ module Wurk
       relay_signal('TERM')
       wait_for_children(timeout + SHUTDOWN_GRACE)
       hard_kill_stragglers
+      close_supervisor_pool
       close_signal_pipe
     end
 
@@ -175,6 +185,17 @@ module Wurk
     end
 
     private
+
+    # The handles the parent must never let cross a fork: the signal self-pipe
+    # (an inherited trap would write into the PARENT's supervise loop) and the
+    # supervisor's Redis socket. Grouped because they share one rule — opened in
+    # the parent, dropped before or at every fork by `close_supervisor_pool` and
+    # `close_signal_pipe`.
+    def init_fork_unsafe_handles
+      @signal_read = nil
+      @signal_write = nil
+      @supervisor_pool = nil
+    end
 
     def advance_restart
       @lock.synchronize { @restart.advance }
@@ -239,8 +260,13 @@ module Wurk
     # from the parent, it is race-free even if the parent dies the instant
     # after fork (getppid in the child could already return the reaper). The
     # child's OrphanGuard compares live getppid against it.
+    #
+    # The supervisor pool closes here rather than in `close_parent_sockets`
+    # because that runs once, at boot: every later respawn / rolling-restart
+    # fork happens after the heartbeat probe has reopened it.
     def fork_child(slot, idx)
       parent_pid = ::Process.pid
+      close_supervisor_pool
       pid = ::Process.fork
       return pid if pid
 
@@ -459,9 +485,25 @@ module Wurk
     # forces progress.
     def heartbeat_seen?(pid)
       identity = "#{hostname}:#{pid}:#{Component::PROCESS_NONCE}"
-      @config.redis { |c| c.call('SISMEMBER', Keys::PROCESSES, identity) } == 1
+      supervisor_pool.with { |c| c.call('SISMEMBER', Keys::PROCESSES, identity) } == 1
     rescue StandardError
       false
+    end
+
+    def supervisor_pool
+      @supervisor_pool ||= @config.new_redis_pool(SUPERVISOR_POOL_SIZE, SUPERVISOR_POOL_NAME)
+    end
+
+    # ConnectionPool#shutdown is terminal, so the reference has to go with the
+    # socket — the next probe rebuilds. Cleared before disconnecting so a raise
+    # mid-teardown can't leave a shut-down pool wired up, which would make every
+    # later probe raise PoolShuttingDownError instead of reconnecting.
+    def close_supervisor_pool
+      pool = @supervisor_pool
+      @supervisor_pool = nil
+      pool&.disconnect!
+    rescue StandardError => e
+      logger.warn { "swarm: supervisor pool close failed: #{e.class}: #{e.message}" }
     end
 
     def monotonic

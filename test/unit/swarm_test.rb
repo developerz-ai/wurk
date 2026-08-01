@@ -22,6 +22,13 @@ class SwarmTest < Wurk::Test::UnitCase
     super
     @config = Wurk::Configuration.new
     @config.logger = ::Logger.new(IO::NULL)
+    @swarms = []
+  end
+
+  def teardown
+    @swarms.each { |swarm| swarm.send(:close_supervisor_pool) }
+  ensure
+    super
   end
 
   # --- initialization --------------------------------------------------
@@ -118,6 +125,81 @@ class SwarmTest < Wurk::Test::UnitCase
     assert returned, 'supervise must return immediately off the owning process'
   end
 
+  # --- supervisor Redis pool (boot-ordering steps 3/5) ------------------
+
+  # `boot` closes every parent-side socket before forking (step 3) and each
+  # child opens its own (step 5). The restart machine polls `heartbeat_seen?`
+  # for the life of the swarm, so running that probe on the capsule main pool
+  # reopened it — in the parent, at capsule size — right after step 3 closed it.
+  def test_heartbeat_probe_never_reopens_the_capsule_pool
+    swarm = owner_swarm
+
+    swarm.send(:heartbeat_seen?, 999_999)
+
+    assert_nil @config.default_capsule.instance_variable_get(:@redis_pool),
+               'the heartbeat probe reopened the parent capsule pool that boot had closed'
+  end
+
+  def test_supervisor_pool_is_a_dedicated_single_connection
+    swarm = bare_swarm
+    pool = swarm.send(:supervisor_pool)
+
+    assert_equal 1, pool.size, 'one SISMEMBER per tick needs exactly one connection'
+    assert_same pool, swarm.send(:supervisor_pool), 'the pool must be built once, not per probe'
+    refute_same @config.redis_pool, pool, 'the supervisor must not draw on a capsule pool'
+  end
+
+  # Every fork — boot, crash respawn, rolling restart, memory recycle — runs
+  # through `fork_child`, and the probe reopens the pool between them, so the
+  # close belongs immediately before Process.fork rather than only at boot.
+  def test_fork_closes_the_supervisor_pool_before_forking
+    swarm = bare_swarm
+    pool = swarm.send(:supervisor_pool)
+    inherited = :never_forked
+    fake_fork = lambda {
+      inherited = swarm.instance_variable_get(:@supervisor_pool)
+      9001 # a pid, so fork_child takes the parent branch and never boots a child
+    }
+
+    with_stubbed_fork(fake_fork) { swarm.send(:spawn_child, topology.assignments.first, 0) }
+
+    assert_nil inherited, 'the child inherited the parent supervisor socket'
+    assert_raises(ConnectionPool::PoolShuttingDownError) { pool.with { |c| c.call('PING') } }
+  end
+
+  # ConnectionPool#shutdown is terminal: without dropping the reference too, the
+  # first probe after a respawn would raise PoolShuttingDownError forever and
+  # every rolling restart would fall back to its heartbeat timeout.
+  def test_supervisor_pool_rebuilds_after_a_fork_closed_it
+    swarm = bare_swarm
+    closed = swarm.send(:supervisor_pool)
+    swarm.send(:close_supervisor_pool)
+    rebuilt = swarm.send(:supervisor_pool)
+
+    pong = rebuilt.with { |c| c.call('PING') }
+
+    refute_same closed, rebuilt
+    assert_equal 'PONG', pong
+  end
+
+  def test_closing_an_unbuilt_supervisor_pool_is_a_no_op
+    swarm = bare_swarm
+
+    assert_nil swarm.send(:close_supervisor_pool)
+    refute_nil swarm.send(:supervisor_pool)
+  end
+
+  def test_shutdown_closes_the_supervisor_pool
+    swarm = bare_swarm
+    swarm.instance_variable_set(:@owner_pid, ::Process.pid)
+    pool = swarm.send(:supervisor_pool)
+
+    swarm.shutdown(timeout: 0)
+
+    assert_nil swarm.instance_variable_get(:@supervisor_pool), 'the parent kept a Redis socket past the drain'
+    assert_raises(ConnectionPool::PoolShuttingDownError) { pool.with { |c| c.call('PING') } }
+  end
+
   # --- includes -----------------------------------------------------
 
   def test_includes_component
@@ -143,15 +225,31 @@ class SwarmTest < Wurk::Test::UnitCase
     Wurk::Topology.flat(count: 1, queues: ['default'], concurrency: 1)
   end
 
+  # Tracked so teardown returns the one supervisor connection a probe opens.
+  def bare_swarm(klass = Wurk::Swarm)
+    klass.new(topology: topology, config: @config).tap { |swarm| @swarms << swarm }
+  end
+
   def owner_swarm
-    swarm = FakeForkSwarm.new(topology: topology, config: @config)
-    swarm.boot(install_signals: false)
-    swarm
+    bare_swarm(FakeForkSwarm).tap { |swarm| swarm.boot(install_signals: false) }
   end
 
   # A booted swarm exactly as one of its own forked children holds it: the same
   # `@children` map, a different PID.
   def non_owner_swarm
     owner_swarm.tap { |swarm| swarm.instance_variable_set(:@owner_pid, ::Process.pid + 1) }
+  end
+
+  # Minitest 6 dropped minitest/mock; this hand-rolled stub swaps Process.fork
+  # for `replacement` so `fork_child` runs its real pre-fork work without
+  # spawning anything. Test classes get their own worker process and tests run
+  # serially inside it, so nothing else forks while this is installed.
+  def with_stubbed_fork(replacement)
+    sc = ::Process.singleton_class
+    original = ::Process.method(:fork)
+    sc.define_method(:fork) { |*args, &blk| replacement.call(*args, &blk) }
+    yield
+  ensure
+    sc.define_method(:fork) { |*a, &b| original.call(*a, &b) }
   end
 end
