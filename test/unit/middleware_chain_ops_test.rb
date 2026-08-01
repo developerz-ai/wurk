@@ -13,15 +13,19 @@ class MiddlewareChainOpsTest < Wurk::Test::UnitCase
   # care about. Returning sentinel objects lets the assertions identity-check
   # to prove the delegation is unwrapped (no caching/copying).
   class FakeConfig
-    attr_reader :redis_pool, :logger, :redis_block
+    attr_reader :redis_pool, :logger, :redis_block, :idempotent
 
     def initialize(redis_pool: Object.new, logger: Object.new)
       @redis_pool = redis_pool
       @logger = logger
     end
 
-    def redis
+    # `config` is always a Wurk::Configuration or Wurk::Capsule, both of which
+    # take the apply-safety claim, so the double takes it too — a middleware
+    # that opts a read back into retry must reach the pool with the claim intact.
+    def redis(idempotent: false)
       @redis_block = true
+      @idempotent = idempotent
       yield :conn
     end
   end

@@ -1,6 +1,7 @@
 # frozen_string_literal: true
 
 require_relative '../middleware'
+require_relative '../pool_checkout'
 
 module Wurk
   module Metrics
@@ -124,11 +125,11 @@ module Wurk
         cfg.handle_exception(err, context: 'Wurk::Metrics::History')
       end
 
-      def self.with_pool(pool, &)
+      def self.with_pool(pool, idempotent: false, &)
         if pool
-          pool.with(&)
+          PoolCheckout.with(pool, idempotent, &)
         else
-          Wurk.redis(&)
+          Wurk.redis(idempotent:, &)
         end
       end
       private_class_method :with_pool

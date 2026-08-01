@@ -24,8 +24,8 @@ module Wurk
         config.logger
       end
 
-      def redis(&)
-        config.redis(&)
+      def redis(idempotent: false, &)
+        config.redis(idempotent:, &)
       end
     end
 

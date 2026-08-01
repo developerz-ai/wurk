@@ -170,7 +170,7 @@ module Sidekiq
     def configure_client(&) = Wurk.configure_client(&)
     def configure_embed(&) = Wurk.configure_embed(&)
     def default_configuration = Wurk.default_configuration
-    def redis(&) = Wurk.redis(&)
+    def redis(idempotent: false, &) = Wurk.redis(idempotent:, &)
     def redis_pool = Wurk.redis_pool
     def logger = Wurk.logger
 

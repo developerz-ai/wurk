@@ -1,5 +1,7 @@
 # frozen_string_literal: true
 
+require_relative 'pool_checkout'
+
 module Wurk
   # Records deploy markers into Redis so the history pane can overlay
   # "deployed at" lines onto job-throughput charts. Wire-compatible with
@@ -84,11 +86,11 @@ module Wurk
       nil
     end
 
-    def with_redis(&)
+    def with_redis(idempotent: false, &)
       if @pool
-        @pool.with(&)
+        PoolCheckout.with(@pool, idempotent, &)
       else
-        Wurk.redis(&)
+        Wurk.redis(idempotent:, &)
       end
     end
   end

@@ -4,6 +4,7 @@ require 'json'
 require 'digest'
 require 'securerandom'
 require_relative 'lua'
+require_relative 'pool_checkout'
 
 module Wurk
   # Sidekiq Enterprise rate limiters: concurrent, bucket, window, leaky,
@@ -146,9 +147,8 @@ module Wurk
       # Redis access: caller-supplied pool (Limiter.configure.redis = …) wins,
       # else fall back to the default Wurk pool. This is the same hierarchy
       # Sidekiq Ent documents — dedicated rate-limiter pool is opt-in.
-      def redis(&)
-        pool = config.pool || Wurk.redis_pool
-        pool.with(&)
+      def redis(idempotent: false, &)
+        PoolCheckout.with(config.pool || Wurk.redis_pool, idempotent, &)
       end
 
       # `ZRANGE key 0 0 WITHSCORES` yields a single [member, score] pair, but the

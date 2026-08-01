@@ -1,6 +1,7 @@
 # frozen_string_literal: true
 
 require 'date'
+require_relative 'pool_checkout'
 
 module Wurk
   # Read-only inspector for cluster state in Redis. The cheap counters are
@@ -185,11 +186,11 @@ module Wurk
         keys.zip(values.map(&:to_i)).to_h
       end
 
-      def with_redis(&)
+      def with_redis(idempotent: false, &)
         if @pool
-          @pool.with(&)
+          PoolCheckout.with(@pool, idempotent, &)
         else
-          Wurk.redis(&)
+          Wurk.redis(idempotent:, &)
         end
       end
     end

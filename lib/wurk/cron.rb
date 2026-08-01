@@ -478,8 +478,8 @@ module Wurk
 
       private
 
-      def redis(&)
-        @config ? @config.redis(&) : Wurk.redis(&)
+      def redis(idempotent: false, &)
+        @config ? @config.redis(idempotent:, &) : Wurk.redis(idempotent:, &)
       end
     end
 
