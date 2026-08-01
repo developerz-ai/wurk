@@ -1,6 +1,6 @@
 import { Router, Route } from '@solidjs/router';
 import { QueryClient, QueryClientProvider } from '@tanstack/solid-query';
-import { Suspense, lazy, createSignal, type ParentProps } from 'solid-js';
+import { Suspense, lazy, createSignal, createEffect, onCleanup, type ParentProps } from 'solid-js';
 import { Show } from 'solid-js';
 import { useMeta } from './hooks/useMeta';
 import { basePath } from './basePath';
@@ -64,13 +64,6 @@ export function ReadOnlyBanner() {
 
 const NAV_COLLAPSED_KEY = 'wurk-nav-collapsed';
 
-function prefersReducedMotion() {
-  return (
-    typeof window !== 'undefined' &&
-    window.matchMedia?.('(prefers-reduced-motion: reduce)').matches === true
-  );
-}
-
 // Root layout: the persistent shell (hamburger, main content, nav) that wraps
 // every route. Solid Router renders the matched route into `props.children`,
 // which lives inside the <Suspense> so lazy chunks fall back to the skeleton.
@@ -89,6 +82,22 @@ function Layout(props: ParentProps) {
       }
     })(),
   );
+
+  // Track prefers-reduced-motion reactively; subscribe to changes and clean up
+  // on unmount to avoid a dangling listener.
+  const [prefersReducedMotion, setPrefersReducedMotion] = createSignal(
+    typeof window !== 'undefined' &&
+      window.matchMedia?.('(prefers-reduced-motion: reduce)').matches === true,
+  );
+
+  createEffect(() => {
+    if (typeof window === 'undefined') return;
+    const mq = window.matchMedia?.('(prefers-reduced-motion: reduce)');
+    if (!mq) return;
+    const handler = () => setPrefersReducedMotion(mq.matches);
+    mq.addEventListener('change', handler);
+    onCleanup(() => mq.removeEventListener('change', handler));
+  });
   const toggleCollapsed = () =>
     setCollapsed((c) => {
       const next = !c;
