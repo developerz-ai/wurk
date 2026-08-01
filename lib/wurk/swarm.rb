@@ -1,5 +1,7 @@
 # frozen_string_literal: true
 
+require 'monitor'
+
 require_relative 'component'
 require_relative 'launcher'
 require_relative 'fetcher/reliable'
@@ -42,6 +44,16 @@ module Wurk
     MEMORY_CHECK_INTERVAL = 10
     DEFAULT_SHUTDOWN_TIMEOUT = 25
 
+    # The supervisor's own Redis pool: one connection, disjoint from every
+    # capsule pool. Post-boot the parent's only Redis use is the heartbeat probe
+    # (`heartbeat_seen?`) — one SISMEMBER per restart tick — and routing it
+    # through the capsule main pool reopened, at capsule size (>= 10), the very
+    # sockets step 3 had just closed; the next respawn/restart fork then
+    # inherited them. Dedicated and torn down before every fork, so no child
+    # ever sees a parent socket.
+    SUPERVISOR_POOL_SIZE = 1
+    SUPERVISOR_POOL_NAME = 'swarm-supervisor'
+
     # Children each hard_shutdown after their own drain deadline (bulk_requeue
     # + a 3s ensure window + heartbeat cleanup); the parent must not SIGKILL
     # them mid-tail, so its own wait always extends past theirs by this much.
@@ -52,7 +64,7 @@ module Wurk
     # whole swarm.
     SWARM_SIGNALS = { 'TERM' => :term, 'INT' => :term, 'TSTP' => :tstp, 'USR1' => :usr1, 'USR2' => :usr2 }.freeze
 
-    attr_reader :topology, :children
+    attr_reader :topology
 
     def initialize(topology:, config: Wurk.configuration, memory_limit: config.memory_limit_kb,
                    shutdown_timeout: DEFAULT_SHUTDOWN_TIMEOUT)
@@ -60,15 +72,24 @@ module Wurk
       @config = config
       @memory_limit = memory_limit
       @shutdown_timeout = shutdown_timeout
+      # One reentrant lock covers the child table AND the restart machine: they
+      # are mutually recursive (Restart#advance calls back into `describe` and
+      # `spawn`, which read and write `@children`), so separate locks would be
+      # taken in opposite orders — enqueue holds children→restart, advance holds
+      # restart→children — and deadlock. Monitor's reentrancy is what lets those
+      # callbacks re-enter. Never held across a sleep: `wait_for_children` and
+      # the supervise tick sleep outside it.
+      @lock = ::Monitor.new
       @children = {}
       @assignments = []
+      @owner_pid = nil
       @stopping = false
+      @shutdown_requested = false
       @quieted = false
       @last_memory_check = 0
-      @signal_read = nil
-      @signal_write = nil
       @respawn_backoff = Backoff.new(base: RESPAWN_BACKOFF)
       @restart = build_restart
+      init_fork_unsafe_handles
     end
 
     # `install_signals:` is false in tests so the integration suite can
@@ -85,29 +106,65 @@ module Wurk
       raise ArgumentError, 'Topology has no slots' if @topology.empty?
 
       @assignments = @topology.assignments.freeze
+      @owner_pid = ::Process.pid
       install_signal_handlers if install_signals
       close_parent_sockets
       fork_children
-      @children.keys
+      child_pids
+    end
+
+    # A snapshot, not the live table. Callers read this off the supervise
+    # thread, which inserts (respawn, restart) and deletes (reap) on every tick;
+    # handing out the live Hash lets them iterate it mid-mutation.
+    def children
+      @lock.synchronize { @children.dup }
     end
 
     def supervise
+      return unless owner?
+
       until done?
         drain_signals
+        shutdown if @shutdown_requested && !@stopping
         reap_children
         spawn_due_respawns
-        @restart.advance unless @stopping
+        advance_restart unless @stopping
         check_memory_pressure
         sleep SUPERVISE_TICK
       end
     end
 
     def shutdown(timeout: @shutdown_timeout)
+      return unless owner?
+
       @stopping = true
-      @restart.abort
+      @lock.synchronize { @restart.abort }
       relay_signal('TERM')
       wait_for_children(timeout + SHUTDOWN_GRACE)
       hard_kill_stragglers
+      close_supervisor_pool
+      close_signal_pipe
+    end
+
+    # Cross-thread drain request: raise a flag the supervise loop observes on
+    # its next tick instead of draining on the caller's thread. `shutdown`
+    # walks and clears the child table that the supervise thread is
+    # concurrently mutating (reap, respawn, restart), so two threads inside it
+    # race. Every caller that isn't the supervise thread — rails_boot's
+    # `at_exit`, which fires on the host's main thread — comes through here.
+    def request_shutdown
+      @shutdown_requested = true
+    end
+
+    # Only the process that forked the children may supervise or signal them.
+    # A forked child inherits this object along with the host's `at_exit` hooks
+    # — and rails_boot registers one that drains the swarm — so ChildBoot's
+    # `exit` reaches a full drain inside the child. There `@children` holds the
+    # child's SIBLINGS, not its own children: unguarded, that TERMs them, stalls
+    # the whole shutdown timeout waiting on PIDs it can never reap, then SIGKILLs
+    # whatever survived.
+    def owner?
+      ::Process.pid == @owner_pid
     end
 
     # TSTP quiet is one-way and GLOBAL (spec §21.3): it must survive respawns
@@ -124,17 +181,44 @@ module Wurk
     # heartbeat → TERM the old child → await its drain) without blocking the
     # supervise thread, so TERM stays responsive throughout the cycle.
     def rolling_restart
-      @restart.enqueue(@children.keys)
+      @lock.synchronize { @restart.enqueue(@children.keys) }
     end
 
     private
+
+    # The handles the parent must never let cross a fork: the signal self-pipe
+    # (an inherited trap would write into the PARENT's supervise loop) and the
+    # supervisor's Redis socket. Grouped because they share one rule — opened in
+    # the parent, dropped before or at every fork by `close_supervisor_pool` and
+    # `close_signal_pipe`.
+    def init_fork_unsafe_handles
+      @signal_read = nil
+      @signal_write = nil
+      @supervisor_pool = nil
+    end
+
+    def advance_restart
+      @lock.synchronize { @restart.advance }
+    end
+
+    def child_pids
+      @lock.synchronize { @children.keys }
+    end
+
+    def child_meta(pid)
+      @lock.synchronize { @children[pid] }
+    end
+
+    def any_children?
+      @lock.synchronize { !@children.empty? }
+    end
 
     def build_restart
       Restart.new(Restart::Config.new(
                     spawn: method(:spawn_child),
                     kill: method(:safe_kill),
                     heartbeat: method(:heartbeat_seen?),
-                    describe: ->(pid) { @children[pid] },
+                    describe: ->(pid) { child_meta(pid) },
                     now: method(:monotonic),
                     logger: logger,
                     heartbeat_wait: HEARTBEAT_WAIT,
@@ -168,7 +252,7 @@ module Wurk
     # Returns the child PID; never returns in the child (ChildBoot exits).
     def spawn_child(slot, idx)
       pid = fork_child(slot, idx)
-      @children[pid] = { slot: slot, index: idx, spawned_at: monotonic }
+      @lock.synchronize { @children[pid] = { slot: slot, index: idx, spawned_at: monotonic } }
       pid
     end
 
@@ -176,17 +260,21 @@ module Wurk
     # from the parent, it is race-free even if the parent dies the instant
     # after fork (getppid in the child could already return the reaper). The
     # child's OrphanGuard compares live getppid against it.
+    #
+    # The supervisor pool closes here rather than in `close_parent_sockets`
+    # because that runs once, at boot: every later respawn / rolling-restart
+    # fork happens after the heartbeat probe has reopened it.
     def fork_child(slot, idx)
       parent_pid = ::Process.pid
+      close_supervisor_pool
       pid = ::Process.fork
       return pid if pid
 
       # Drop the parent's self-pipe first: the inherited traps still write to
       # it, so a signal landing in the window before ChildBoot resets them
       # would surface in the PARENT's supervise loop (an operator TERMing one
-      # child pid would drain the whole swarm). Closed, the trap write no-ops.
-      @signal_read&.close
-      @signal_write&.close
+      # child pid would drain the whole swarm). Dropped, the trap write no-ops.
+      close_signal_pipe
       ChildBoot.new(@config, slot, idx, parent_pid: parent_pid, start_quiet: @quieted).run
       exit 0 # unreachable; ChildBoot exits explicitly
     end
@@ -204,12 +292,25 @@ module Wurk
       end
     end
 
+    # Both FDs, once. The traps stay installed and keep firing after a drain, so
+    # clear the ivars BEFORE closing: `emit_signal` then writes to nothing
+    # instead of a dead FD, and a `drain_signals` loop mid-tick (TERM handled,
+    # asking for the next buffered signal) stops instead of reading a closed
+    # pipe. Called on shutdown and, in the child, immediately after fork.
+    def close_signal_pipe
+      read = @signal_read
+      write = @signal_write
+      @signal_read = @signal_write = nil
+      read&.close
+      write&.close
+    end
+
     # Non-blocking self-pipe write from trap context: a blocking `puts` could
     # stall signal delivery if the pipe fills. `exception: false` returns
     # :wait_writable instead of raising when full (drop the coalescible
     # duplicate); a closed pipe during shutdown is ignored too.
     def emit_signal(sig)
-      @signal_write.write_nonblock("#{sig}\n", exception: false)
+      @signal_write&.write_nonblock("#{sig}\n", exception: false)
     rescue ::IOError, ::Errno::EPIPE, ::Errno::EBADF
       nil
     end
@@ -222,17 +323,29 @@ module Wurk
         when :term then shutdown
         when :tstp then quiet_swarm
         when :usr1 then rolling_restart
-        when :usr2 then relay_signal('USR2')
+        when :usr2
+          reopen_logs
+          relay_signal('USR2')
         end
       end
     end
 
     # One buffered line per pending signal, non-blocking (wait_readable(0)).
-    # nil once the pipe is drained, ending the loop for this tick.
+    # nil once the pipe is drained, ending the loop for this tick. Reads through
+    # a local because the pipe can vanish mid-drain: a buffered TERM runs
+    # `shutdown`, which closes it, and the loop then asks for the next signal.
     def read_pending_signal
-      return nil unless @signal_read.wait_readable(0)
+      read = @signal_read
+      return nil unless read&.wait_readable(0)
 
-      @signal_read.gets&.strip
+      read.gets&.strip
+    end
+
+    def reopen_logs
+      log = @config.logger
+      log.reopen if log.respond_to?(:reopen)
+    rescue StandardError
+      nil
     end
 
     # Reap every exited child this tick (not one), so a fleet-wide death
@@ -251,14 +364,16 @@ module Wurk
     end
 
     def on_child_exit(pid, status)
-      meta = @children.delete(pid)
-      return unless meta
-      return if @restart.claim_exit(pid)
+      @lock.synchronize do
+        meta = @children.delete(pid)
+        return unless meta
+        return if @restart.claim_exit(pid)
 
-      if @stopping
-        logger.info { "swarm: child #{pid} exited (status=#{status.exitstatus})" }
-      else
-        schedule_respawn(pid, status, meta)
+        if @stopping
+          logger.info { "swarm: child #{pid} exited (status=#{status.exitstatus})" }
+        else
+          schedule_respawn(pid, status, meta)
+        end
       end
     end
 
@@ -305,7 +420,7 @@ module Wurk
       return if now - @last_memory_check < MEMORY_CHECK_INTERVAL
 
       @last_memory_check = now
-      @children.dup.each_key { |pid| recycle_if_bloated(pid) }
+      child_pids.each { |pid| recycle_if_bloated(pid) }
     end
 
     # Route a bloated child through the restart state machine (same path as a
@@ -317,7 +432,7 @@ module Wurk
       return if rss.nil? || rss < @memory_limit
 
       logger.warn { "swarm: child #{pid} RSS #{rss}KB >= #{@memory_limit}KB; recycling" }
-      @restart.enqueue([pid])
+      @lock.synchronize { @restart.enqueue([pid]) }
     end
 
     def pid_rss_kb(pid)
@@ -329,10 +444,15 @@ module Wurk
     end
 
     def relay_signal(sig)
-      @children.each_key { |pid| safe_kill(pid, sig) }
+      child_pids.each { |pid| safe_kill(pid, sig) }
     end
 
+    # The one place the supervisor signals a child: relay_signal,
+    # hard_kill_stragglers and the restart machine's `kill:` callback all funnel
+    # through here, so the owner check covers every path at a single choke point.
     def safe_kill(pid, sig)
+      return unless owner?
+
       ::Process.kill(sig, pid)
     rescue Errno::ESRCH, Errno::EPERM
       nil
@@ -340,15 +460,20 @@ module Wurk
 
     def wait_for_children(timeout)
       deadline = monotonic + timeout
-      while monotonic < deadline && @children.any?
+      while monotonic < deadline && any_children?
         reap_children
         sleep 0.1
       end
     end
 
+    # Kill and forget atomically: a child landing in the table between the walk
+    # and the clear would be dropped from it without ever being signalled —
+    # untracked and still alive.
     def hard_kill_stragglers
-      @children.each_key { |pid| safe_kill(pid, 'KILL') }
-      @children.clear
+      @lock.synchronize do
+        @children.each_key { |pid| safe_kill(pid, 'KILL') }
+        @children.clear
+      end
     end
 
     # Has the child written its first heartbeat yet? One non-blocking SISMEMBER,
@@ -360,9 +485,25 @@ module Wurk
     # forces progress.
     def heartbeat_seen?(pid)
       identity = "#{hostname}:#{pid}:#{Component::PROCESS_NONCE}"
-      @config.redis { |c| c.call('SISMEMBER', Keys::PROCESSES, identity) } == 1
+      supervisor_pool.with { |c| c.call('SISMEMBER', Keys::PROCESSES, identity) } == 1
     rescue StandardError
       false
+    end
+
+    def supervisor_pool
+      @supervisor_pool ||= @config.new_redis_pool(SUPERVISOR_POOL_SIZE, SUPERVISOR_POOL_NAME)
+    end
+
+    # ConnectionPool#shutdown is terminal, so the reference has to go with the
+    # socket — the next probe rebuilds. Cleared before disconnecting so a raise
+    # mid-teardown can't leave a shut-down pool wired up, which would make every
+    # later probe raise PoolShuttingDownError instead of reconnecting.
+    def close_supervisor_pool
+      pool = @supervisor_pool
+      @supervisor_pool = nil
+      pool&.disconnect!
+    rescue StandardError => e
+      logger.warn { "swarm: supervisor pool close failed: #{e.class}: #{e.message}" }
     end
 
     def monotonic
@@ -370,7 +511,7 @@ module Wurk
     end
 
     def done?
-      @stopping && @children.empty?
+      @stopping && !any_children?
     end
   end
 end

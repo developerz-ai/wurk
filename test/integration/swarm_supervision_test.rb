@@ -122,6 +122,63 @@ class SwarmSupervisionTest < Wurk::Test::UnitCase
     end
   end
 
+  # --- fork safety: an exiting child must not drain the fleet ---------------
+
+  # A Rails host registers `at_exit { swarm.shutdown }` (rails_boot.rb) and
+  # every forked child inherits it, so ChildBoot's `exit` runs a full drain
+  # inside the child — where `@children` lists that child's SIBLINGS. Unguarded
+  # it TERMs them, then stalls the entire shutdown timeout on PIDs it can never
+  # reap, then SIGKILLs whatever survived. Forking the supervisor reproduces
+  # that inherited object graph exactly. No supervise thread here: its
+  # `Process.wait(-1, …)` would race us for the drainer's exit status.
+  def test_shutdown_from_a_forked_child_leaves_the_fleet_alone
+    swarm = Wurk::Swarm.new(topology: topology_n(2), config: @config, shutdown_timeout: SHUTDOWN_TIMEOUT)
+
+    begin
+      children = swarm.boot(install_signals: false)
+      elapsed = time_drain_in_a_fork(swarm)
+
+      assert_operator elapsed, :<, SHUTDOWN_TIMEOUT,
+                      "a non-owner drain must return at once, took #{elapsed.round(1)}s"
+      children.each do |pid|
+        assert pid_alive?(pid), "sibling #{pid} was killed by a forked child's inherited shutdown"
+      end
+    ensure
+      begin
+        swarm.shutdown(timeout: SHUTDOWN_TIMEOUT)
+      rescue StandardError
+        nil
+      end
+    end
+  end
+
+  # --- at_exit drain request ------------------------------------------------
+
+  # A Rails host's `at_exit` (rails_boot) can't drain the fleet itself: it runs
+  # on the host's main thread while the supervise thread walks the same child
+  # table. It raises a flag instead — the supervise loop must observe it on its
+  # next tick, drain the real children, and return.
+  def test_requested_shutdown_is_drained_by_the_supervise_thread
+    swarm = Wurk::Swarm.new(topology: topology_n(1), config: @config, shutdown_timeout: SHUTDOWN_TIMEOUT)
+    supervisor = nil
+
+    begin
+      children = swarm.boot(install_signals: false)
+      supervisor = Thread.new { swarm.supervise }
+
+      swarm.request_shutdown
+
+      assert_request_drained(swarm, supervisor, children)
+    ensure
+      begin
+        swarm.shutdown(timeout: SHUTDOWN_TIMEOUT)
+      rescue StandardError
+        nil
+      end
+      stop_supervisor_thread(supervisor, 10)
+    end
+  end
+
   # --- orphan self-termination ---------------------------------------------
 
   # SIGKILL'ing the supervisor must not leave the children fetching forever:
@@ -189,6 +246,12 @@ class SwarmSupervisionTest < Wurk::Test::UnitCase
     replacement
   end
 
+  def assert_request_drained(swarm, supervisor, children)
+    assert supervisor.join(SHUTDOWN_TIMEOUT + 5), 'supervise must return once it observes the drain request'
+    assert_empty swarm.children, 'the supervise thread must have drained the fleet'
+    assert(children.all? { |pid| wait_until_dead(pid, 5) }, "children #{children.inspect} survived the drain")
+  end
+
   def assert_old_child_survives(swarm, original)
     assert pid_alive?(original), 'old child must survive a replacement that dies before heartbeat'
     assert_includes swarm.children.keys, original, 'old child must still be tracked by the swarm'
@@ -241,6 +304,18 @@ class SwarmSupervisionTest < Wurk::Test::UnitCase
       sleep POLL_INTERVAL
     end
     nil
+  end
+
+  # `exit!` so the drainer skips this suite's at_exit hooks (Minitest reporting,
+  # SimpleCov) — the same abrupt teardown a real child gets.
+  def time_drain_in_a_fork(swarm)
+    started = monotonic_now
+    pid = ::Process.fork do
+      swarm.shutdown(timeout: SHUTDOWN_TIMEOUT)
+      exit!(0)
+    end
+    ::Process.wait(pid)
+    monotonic_now - started
   end
 
   # --- subprocess supervisor plumbing (real SIGTERM/SIGKILL delivery) ------

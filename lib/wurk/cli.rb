@@ -106,16 +106,24 @@ module Wurk
       enter_server_mode
       boot_application if boot_app
       self_read, self_write = ::IO.pipe
-      trap_signals(self_write)
-      validate_redis!
-      validate_pool_sizes!
-      @config[:identity] = identity
-      # Force lazy server-middleware chain so worker threads don't race
-      # against each other constructing it. Spec: Sidekiq::CLI line 104.
-      @config.server_middleware
-      ::Process.warmup if warmup && ::Process.respond_to?(:warmup) && ENV['RUBY_DISABLE_WARMUP'] != '1'
-      fire_event(:startup, reverse: false, reraise: true)
-      launch(self_read)
+      begin
+        trap_signals(self_write)
+        validate_redis!
+        validate_pool_sizes!
+        @config[:identity] = identity
+        # Force lazy server-middleware chain so worker threads don't race
+        # against each other constructing it. Spec: Sidekiq::CLI line 104.
+        @config.server_middleware
+        warm_up_process if warmup
+        fire_event(:startup, reverse: false, reraise: true)
+        launch(self_read)
+      ensure
+        # Every exit path — clean return, a raise out of validate/startup, and
+        # the SystemExit that `launch` unwinds on Interrupt. Embedded and test
+        # callers survive `run`, so a leaked pair is a real FD leak.
+        self_read.close
+        self_write.close
+      end
     end
 
     # Standalone multi-process boot — the `sidekiqswarm` entry point (Ent §7).
@@ -141,11 +149,18 @@ module Wurk
       validate_redis!
       validate_pool_sizes!
       @config[:identity] = identity
-      ::Process.warmup if warmup && ::Process.respond_to?(:warmup) && ENV['RUBY_DISABLE_WARMUP'] != '1'
+      warm_up_process if warmup
       @swarm = Wurk::Swarm.new(topology: @config.topology, config: @config,
                                shutdown_timeout: @config[:timeout] || Swarm::DEFAULT_SHUTDOWN_TIMEOUT)
-      @swarm.boot(install_signals: true)
-      @swarm.supervise
+      begin
+        @swarm.boot(install_signals: true)
+        @swarm.supervise
+      ensure
+        # A fork failure part-way through `boot`, or anything raising out of
+        # `supervise`, otherwise leaves live children behind with no supervisor.
+        # A no-op once the loop already drained (no children, pipe closed).
+        @swarm.shutdown
+      end
     end
 
     def handle_signal(sig)
@@ -162,6 +177,15 @@ module Wurk
 
     def enter_server_mode
       Wurk.enter_server_mode(@config)
+    end
+
+    # Pre-fault and compact the heap before workers start — in `run_swarm` that
+    # happens before the fork, so children share the warmed pages copy-on-write.
+    # RUBY_DISABLE_WARMUP=1 is the escape hatch for hosts that already warmed up.
+    def warm_up_process
+      return unless ::Process.respond_to?(:warmup) && ENV['RUBY_DISABLE_WARMUP'] != '1'
+
+      ::Process.warmup
     end
 
     def launch(self_read)
@@ -187,11 +211,21 @@ module Wurk
     # over `self_read` in `launch`. Same approach as Sidekiq.
     def trap_signals(self_write)
       signal_names.each do |sig|
-        ::Signal.trap(sig) { self_write.puts(sig) }
+        ::Signal.trap(sig) { emit_signal(self_write, sig) }
       rescue ArgumentError
         # JRuby and platforms without certain signals — log and move on.
         warn("Signal #{sig} not supported")
       end
+    end
+
+    # Non-blocking write from trap context (same shape as Swarm#emit_signal): a
+    # blocking `puts` can stall signal delivery once the pipe fills, and the
+    # traps outlive `run`'s ensure — a signal landing after the pipe is closed
+    # would otherwise raise IOError out of a trap and into the main thread.
+    def emit_signal(pipe, sig)
+      pipe.write_nonblock("#{sig}\n", exception: false)
+    rescue ::IOError, ::Errno::EPIPE, ::Errno::EBADF
+      nil
     end
 
     def signal_names

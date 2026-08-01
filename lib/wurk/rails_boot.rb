@@ -8,6 +8,11 @@ module Wurk
   # boot policy stays pure and unit-testable without the Railtie DSL.
   # See docs/idea/03-process-model.md for the exact ordering.
   module RailsBoot
+    # What `at_exit` waits for the supervise thread on top of the swarm's own
+    # drain budget: one supervise tick to notice the request, plus slack for
+    # the final reap.
+    DRAIN_JOIN_SLACK = 1
+
     module_function
 
     # Invoked from the `wurk.server_mode` initializer, before config/initializers
@@ -103,23 +108,44 @@ module Wurk
     end
 
     def boot_swarm
-      swarm = Wurk::Swarm.new(topology: Wurk.configuration.topology,
-                              shutdown_timeout: Wurk.configuration[:timeout] || Swarm::DEFAULT_SHUTDOWN_TIMEOUT)
+      timeout = Wurk.configuration[:timeout] || Swarm::DEFAULT_SHUTDOWN_TIMEOUT
+      swarm = Wurk::Swarm.new(topology: Wurk.configuration.topology, shutdown_timeout: timeout)
+      supervisor = nil
+      # Registered BEFORE boot, which forks the children one slot at a time: a
+      # fork that raises partway through would otherwise leave the children it
+      # already spawned with nothing to drain them on host exit. Children
+      # inherit the hook — stop_swarm no-ops off the process that forked them.
+      at_exit { stop_swarm(swarm, supervisor, timeout + Swarm::SHUTDOWN_GRACE + DRAIN_JOIN_SLACK) }
       # Co-hosted in the web process (e.g. Puma single mode): the host owns the
       # process-wide TERM/INT traps. Installing the swarm's own would hijack
       # them — a deploy TERM would drain the swarm but never stop the HTTP
       # server. Let the host keep signal ownership and drain the swarm on its
       # graceful exit (same contract as boot_embedded).
       swarm.boot(install_signals: false)
-      at_exit { swarm.shutdown }
       # supervise must still run somewhere or crashed children never respawn and
       # memory checks never fire. A background thread keeps the host's main
       # thread free to serve HTTP.
-      Thread.new do
+      supervisor = Thread.new do
         swarm.supervise
       rescue StandardError => e
         logger.error { "wurk supervisor thread died: #{e.class}: #{e.message}" }
       end
+    end
+
+    # at_exit fires on the host's main thread, but the supervise thread owns the
+    # child table and two threads inside `shutdown` race on it — so request the
+    # drain and wait for the supervisor to run it. Draining here is the fallback
+    # for when no live supervisor will: it never started (boot raised) or it
+    # died early; after one that drained it finds no children and no-ops. A
+    # supervisor still alive past the join is wedged mid-drain — leave it be
+    # rather than race it; its children self-terminate (OrphanGuard) once this
+    # process is gone.
+    def stop_swarm(swarm, supervisor, drain_wait)
+      return unless swarm.owner?
+
+      swarm.request_shutdown
+      supervisor&.join(drain_wait)
+      swarm.shutdown unless supervisor&.alive?
     end
 
     # Sidekiq-embedded parity: a threads-only worker inside the web process, no
