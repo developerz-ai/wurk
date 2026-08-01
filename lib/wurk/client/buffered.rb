@@ -122,8 +122,9 @@ module Wurk
         end
 
         # Fork hook, called from the `Process._fork` prepend below and from
-        # `Swarm::ChildBoot#reconnect_after_fork`. Whichever runs first wins;
-        # the pid guard makes the other a no-op.
+        # `Swarm::ChildBoot#reconnect_after_fork`. Whichever runs first wins
+        # and returns true; the pid guard makes the other a no-op returning
+        # false, so a caller can tell which one rebuilt the state.
         #
         # A child inherits a copy of every ivar here: the buffered payloads,
         # the Drainer (whose thread did not survive the fork), and both mutexes
