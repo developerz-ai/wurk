@@ -51,11 +51,25 @@ module Wurk
       # most once per batch.
       def fire_death(bid)
         record_event(bid, 'death_at')
-        Wurk.redis { |conn| conn.call('ZADD', 'dead-batches', Time.now.to_f.to_s, bid) }
+        index_dead(bid)
         return unless dedup_set(bid, 'death')
 
         enqueue_callbacks(bid, 'death')
         cascade_death(bid)
+      end
+
+      # Index the batch as dead and bound the set in the same round trip. The
+      # score stays `Time.now.to_f` (wire format, spec §2.8); `Batch.trim_index`
+      # reads it as the epoch seconds it is. See there for why the set needs a
+      # trim at all — only `Status#delete` and the death-recovery ZREM ever
+      # remove a member, and neither runs for a batch left to expire.
+      def index_dead(bid)
+        Wurk.redis do |conn|
+          conn.pipelined do |pipe|
+            pipe.call('ZADD', 'dead-batches', Time.now.to_f.to_s, bid)
+            Batch.trim_index(pipe, 'dead-batches')
+          end
+        end
       end
 
       # A child's death means the parent — and every ancestor — can never

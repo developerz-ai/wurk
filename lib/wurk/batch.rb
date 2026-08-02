@@ -41,6 +41,14 @@ module Wurk
     POST_SUCCESS_EXPIRY_SECONDS = 24 * 60 * 60
     CALLBACK_NOTIFY_TTL = 30 * 24 * 60 * 60
 
+    # Member ceiling for the two batch index ZSETs (`batches`, `dead-batches`).
+    # The score axis in `.trim_index` retires entries in step with the batch data
+    # itself, so this is only the backstop for a workload creating batches faster
+    # than that window retires them. Deliberately generous: a cap that bites drops
+    # batches whose data is still live out of `BatchSet`, and at this scale the
+    # per-batch hashes dwarf the index anyway.
+    INDEX_MAX = 1_000_000
+
     # Bid is URL-safe base64 of 10 random bytes — matches Sidekiq Pro's BID
     # generator. Length matters: third-party gems that key off bid prefix
     # (sharded batches in Pro 8) inspect the first character.
@@ -77,6 +85,33 @@ module Wurk
     def self.keys_for(bid)
       base = "b-#{bid}"
       [base, *KEY_SUFFIXES.map { |s| "#{base}-#{s}" }]
+    end
+
+    # Two-axis trim of a batch index ZSET (`batches`, `dead-batches`), in the
+    # shape of the morgue trim (`DeadSet#trim`): `ZREMRANGEBYSCORE` evicts
+    # entries older than `timeout`, `ZREMRANGEBYRANK 0 -max` caps the member
+    # count — and, like the morgue, that bound keeps `max - 1` of a full set.
+    # Appended to the caller's pipeline so bounding the index costs neither
+    # writer an extra round trip.
+    #
+    # Nothing else ever shrinks either set: `Status#delete` and the
+    # death-recovery `ZREM` are manual, so an index entry outlives the batch it
+    # points at and both sets grow for the life of the Redis without this.
+    #
+    # Both index in epoch seconds — `batches` from CLOCK_REALTIME,
+    # `dead-batches` from `Time.now.to_f` — so one cutoff serves both. The
+    # default window is the batch hash TTL: past it `b-<bid>` is gone and the
+    # entry only yields an empty Status. A batch that overrode `expires_in`
+    # beyond that window outlives its index entry — still reachable by bid,
+    # just no longer enumerated by `BatchSet`.
+    #
+    # `max:` / `timeout:` override the defaults for one call, so parallel tests
+    # can drive the trim on isolated limits without mutating the process-global
+    # `Wurk.configuration`.
+    def self.trim_index(pipe, key, max: nil, timeout: nil)
+      cutoff = ::Process.clock_gettime(::Process::CLOCK_REALTIME) - (timeout || DEFAULT_EXPIRY_SECONDS)
+      pipe.call('ZREMRANGEBYSCORE', key, '-inf', "(#{cutoff}")
+      pipe.call('ZREMRANGEBYRANK', key, 0, -(max || INDEX_MAX))
     end
 
     def initialize(bid = nil)
@@ -297,6 +332,7 @@ module Wurk
       pipe.call('HSET', "b-#{@bid}", *first_flush_hash(now).flatten)
       pipe.call('EXPIRE', "b-#{@bid}", @expires_in)
       pipe.call('ZADD', 'batches', now.to_s, @bid)
+      Batch.trim_index(pipe, 'batches')
       @tags.each { |t| pipe.call('SADD', "tags:#{t}", @bid) }
       link_to_parent(pipe) if current_parent_bid
     end
