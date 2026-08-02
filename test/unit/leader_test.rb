@@ -11,6 +11,53 @@ class LeaderTest < Wurk::Test::UnitCase
   ENV_MUTEX = Mutex.new
   CLUSTER_KEY_MUTEX = Mutex.new
 
+  # A real pool over real Redis that records what each block claims and every
+  # command it issues, and can splice a competing writer between two of those
+  # commands. Subclasses the pool rather than doubling it because PoolCheckout
+  # dispatches on the RedisPool type — a bare double takes the foreign-pool
+  # branch and never sees the `idempotent:` claim.
+  class ProbePool < Wurk::RedisPool
+    attr_reader :claims, :commands
+
+    def initialize(name)
+      super(size: 1, name: name, url: Wurk::Test.redis_url, timeout: 2)
+      @claims = []
+      @commands = []
+      @splice = nil
+    end
+
+    # Run `blk` (handed a live connection) right after the next command any
+    # block issues, then disarm.
+    def after_next_command(&blk)
+      @splice = blk
+    end
+
+    def with(idempotent: false, &block)
+      @claims << idempotent
+      super { |conn| block.call(Probe.new(conn, self)) }
+    end
+
+    def observe(args, conn)
+      @commands << args
+      splice = @splice
+      @splice = nil
+      splice&.call(conn)
+    end
+  end
+
+  # Connection decorator: hands every command to the real connection, then to
+  # the pool that owns it.
+  class Probe
+    def initialize(conn, pool)
+      @conn = conn
+      @pool = pool
+    end
+
+    def call(*args)
+      @conn.call(*args).tap { @pool.observe(args, @conn) }
+    end
+  end
+
   def setup
     super
     @suffix = "leader-#{Process.pid}-#{object_id}"
@@ -135,6 +182,56 @@ class LeaderTest < Wurk::Test::UnitCase
     a.release
 
     assert_equal('someone-else', Wurk.redis { |c| c.call('GET', @key) })
+  end
+
+  # GET-then-DEL is not a CAS: a follower that won the key between the two
+  # commands had its fresh lock deleted by our DEL — leaderless until the next
+  # tick, then two leaders once the ex-leader re-campaigned. Splice exactly
+  # that writer in right after the first command release issues; the compare
+  # and the delete resolve in one server-side step, so the competitor's lock
+  # survives whichever side of it the steal lands on.
+  def test_release_cannot_delete_a_competitor_that_wins_mid_release
+    pool = ProbePool.new('leader-steal')
+    ldr = Wurk::Leader.new(key: @key, pool: pool)
+    ldr.acquire
+    pool.after_next_command { |c| c.call('SET', @key, 'competitor', 'EX', 30) }
+    ldr.release
+
+    assert_equal('competitor', pool.with { |c| c.call('GET', @key) })
+  ensure
+    pool&.disconnect!
+  end
+
+  # The property the race above rests on: one round trip, and specifically the
+  # `release_if_owner` CAS shared with Wurk::Unique.
+  def test_release_is_a_single_atomic_command
+    pool = ProbePool.new('leader-probe')
+    ldr = Wurk::Leader.new(key: @key, pool: pool)
+    ldr.acquire
+    warm_script_cache(pool) # a NOSCRIPT reload would add round trips
+    pool.commands.clear
+    ldr.release
+
+    assert_equal 1, pool.commands.size, 'release must not be GET-then-DEL'
+    assert_equal(['EVALSHA', Wurk::Lua::SHAS.fetch(:release_if_owner), 1, @key, ldr.owner],
+                 pool.commands.first)
+  ensure
+    pool&.disconnect!
+  end
+
+  # A replay after a lost reply finds the key either already gone or no longer
+  # ours, so release claims the pool's idempotent budget — a blip mid-release
+  # must not leave the lock behind for the TTL to reap.
+  def test_release_claims_idempotent_replay
+    pool = ProbePool.new('leader-idem')
+    ldr = Wurk::Leader.new(key: @key, pool: pool)
+    ldr.acquire
+    pool.claims.clear
+    ldr.release
+
+    assert_equal [true], pool.claims
+  ensure
+    pool&.disconnect!
   end
 
   # ---- Fencing token ----------------------------------------------------
@@ -389,6 +486,24 @@ class LeaderTest < Wurk::Test::UnitCase
     assert_same t1, t2
   end
 
+  # F12: the spawn must happen under the lock. Widen the window by parking
+  # inside `spawn_loop_thread` — with the spawn outside `synchronize` both
+  # racers clear the nil check and start a loop, and the one that loses the
+  # `@thread=` assignment is unreachable: `stop` never joins it.
+  def test_concurrent_start_spawns_a_single_loop
+    ldr = build_leader(renew_interval: 0.05, follower_interval: 0.05)
+    spawned = Queue.new
+    ldr.define_singleton_method(:spawn_loop_thread) do
+      sleep 0.1
+      super().tap { |t| spawned << t }
+    end
+
+    t1, t2 = race(2) { ldr.start }
+
+    assert_equal 1, spawned.size, 'a second start must not leak an unjoinable loop'
+    assert_same t1, t2
+  end
+
   def test_periodic_loop_acquires_when_available
     ldr = build_leader(renew_interval: 0.05, follower_interval: 0.05)
     ldr.start
@@ -607,6 +722,29 @@ class LeaderTest < Wurk::Test::UnitCase
     ldr = Wurk::Leader.new(key: @key, **)
     @leaders << ldr
     ldr
+  end
+
+  # Run the block in `count` threads released from a common barrier, so they
+  # contend rather than run in spawn order. Returns their values.
+  def race(count)
+    ready = Queue.new
+    go = Queue.new
+    racers = Array.new(count) do
+      Thread.new do
+        ready << true
+        go.pop
+        yield
+      end
+    end
+    count.times { ready.pop }
+    count.times { go << :go }
+    racers.map(&:value)
+  end
+
+  # Run the CAS once against a throwaway key so its SHA is server-side cached
+  # and the measured release is a single EVALSHA.
+  def warm_script_cache(pool)
+    pool.with { |c| Wurk::Lua::Loader.eval_cached(c, :release_if_owner, keys: ["#{@key}-warm"], argv: ['nobody']) }
   end
 
   def build_config

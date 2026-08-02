@@ -3,6 +3,7 @@
 require 'securerandom'
 require 'socket'
 require_relative 'component'
+require_relative 'lua'
 require_relative 'pool_checkout'
 
 module Wurk
@@ -90,9 +91,19 @@ module Wurk
 
     # CAS DEL — only drop the key if we still own it, otherwise a stale
     # release would yank leadership from whichever follower took over.
+    # GET-then-DEL is not that CAS: our key can lapse between the two
+    # commands and a follower can win the election in the gap, whereupon
+    # the bare DEL deletes *its* lock and leaves the cluster leaderless
+    # (or, once the ex-leader re-campaigns, doubly led) for up to one
+    # renew interval — double cron fires, double rollups. The compare and
+    # the delete happen in one server-side step instead, via the script
+    # `Unique.release_if_owner` already shares.
+    #
+    # `idempotent:` — a replay after a lost reply finds the key either
+    # already gone or no longer ours, so it can only be a no-op.
     def release
-      redis_call do |c|
-        c.call('DEL', @key) if c.call('GET', @key) == @owner
+      redis_call(idempotent: true) do |c|
+        Wurk::Lua::Loader.eval_cached(c, :release_if_owner, keys: [@key], argv: [@owner])
       end
       @held = false
       @token = nil
@@ -108,6 +119,11 @@ module Wurk
     # follower, it polls every `follower_interval`. Caller must invoke
     # `stop` for orderly shutdown — the thread also releases its lock on
     # exit.
+    #
+    # The spawn happens *inside* the lock: with it outside, two callers
+    # racing into `start` both clear the nil check and both spawn, and the
+    # loser's loop is never recorded — an unjoinable second campaigner that
+    # outlives `stop` and keeps renewing the cluster lock.
     def start
       return nil if disabled?
 
@@ -115,17 +131,19 @@ module Wurk
         return @thread if @thread
 
         @done = false
+        @thread = spawn_loop_thread
       end
-      @thread = spawn_loop_thread
+      @thread
     end
 
     def stop
-      @mutex.synchronize do
+      thread = @mutex.synchronize do
         @done = true
         @sleeper.signal
+        @thread
       end
-      @thread&.join
-      @thread = nil
+      thread&.join
+      @mutex.synchronize { @thread = nil }
       release
     end
 

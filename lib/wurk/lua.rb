@@ -284,12 +284,13 @@ module Wurk
 
     # Ent Unique (§3): atomic compare-and-delete of a lock key. Replaces the
     # two-command GET-then-DEL — between those calls the key can expire and a
-    # fresh enqueue can grab it, and the bare DEL would then drop the new
+    # fresh owner can grab it, and the bare DEL would then drop the new
     # owner's lock. Shared by `Unique::ServerMiddleware#release` (normal
-    # success/start release) and `Unique::DEATH_HANDLER` (automatic-death
-    # release) so the two paths cannot drift.
-    # KEYS = [unique:<sha256>]
-    # ARGV = [owning jid]
+    # success/start release), `Unique::DEATH_HANDLER` (automatic-death
+    # release) and `Leader#release` (stepping down from the cluster lock)
+    # so those paths cannot drift.
+    # KEYS = [the lock key — unique:<sha256> | dear-leader]
+    # ARGV = [the owner that must still hold it — jid | <host>:<pid>:<nonce>]
     # Returns 1 when the key was deleted, 0 otherwise.
     RELEASE_IF_OWNER = <<~LUA
       if redis.call("get", KEYS[1]) == ARGV[1] then
@@ -334,6 +335,41 @@ module Wurk
       return removed
     LUA
 
+    # Ent Periodic (§2): compare-and-swap the fire marks of `loops:<lid>`.
+    # The cron poller's leader gate is a cached read (`Component#leader?`,
+    # LEADER_CACHE_TTL_MS), so for a few seconds after a handover two
+    # processes both believe they lead and both reach the same due loop —
+    # HMGET → decide → enqueue → HSET then fires it twice. Claiming the slot
+    # atomically is what makes a tick fire exactly once; the loser gets 0 and
+    # enqueues nothing. Values written are the same decimal-epoch strings the
+    # Ruby path wrote, byte for byte — the dashboard reads these fields.
+    #
+    # `nf` present: the caller must still be looking at the mark it read
+    # (byte compare, so no parse can drift the token).
+    # `nf` absent: the caller derived the slot from `lf`, so refuse once `lf`
+    # has reached it — that is the exhausted-schedule case, where the winner
+    # cleared `nf` and a loser would otherwise re-fire the very same slot.
+    # KEYS = [loops:<lid>]
+    # ARGV = [expected `nf` (or the derived slot), new `lf`, new `nf` ('' → HDEL)]
+    # Returns 1 when this caller claimed the slot, 0 otherwise.
+    CRON_CLAIM_FIRE = <<~LUA
+      local key = KEYS[1]
+      local cur = redis.call("hget", key, "nf")
+      if cur and cur ~= "" then
+        if cur ~= ARGV[1] then return 0 end
+      else
+        local lf = tonumber(redis.call("hget", key, "lf") or "")
+        if lf and lf >= tonumber(ARGV[1]) then return 0 end
+      end
+      redis.call("hset", key, "lf", ARGV[2])
+      if ARGV[3] == "" then
+        redis.call("hdel", key, "nf")
+      else
+        redis.call("hset", key, "nf", ARGV[3])
+      end
+      return 1
+    LUA
+
     # Limiter scripts live in `lib/wurk/lua/limiter_*.lua` — one file per
     # type. Loaded at boot, the file's basename (minus `.lua`) becomes the
     # SCRIPTS key as a symbol. Keeping them as separate files makes diffing
@@ -358,7 +394,8 @@ module Wurk
       batch_append_callback: BATCH_APPEND_CALLBACK,
       fast_delete_job: FAST_DELETE_JOB,
       fast_delete_by_class: FAST_DELETE_BY_CLASS,
-      release_if_owner: RELEASE_IF_OWNER
+      release_if_owner: RELEASE_IF_OWNER,
+      cron_claim_fire: CRON_CLAIM_FIRE
     }.merge(FILE_SCRIPTS).freeze
 
     # SHA1 of each script source — matches what `SCRIPT LOAD` returns.
