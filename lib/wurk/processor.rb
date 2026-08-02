@@ -164,6 +164,12 @@ module Wurk
       job_hash = parse_or_kill(jobstr, uow)
       return if job_hash.nil?
 
+      # The fetcher never parses, so hand it the jid we just read: the ACK
+      # retires this job's poison-pill recovery counter inside the round trip
+      # it already makes. A fetcher plugged in via `config[:fetch_class]` has
+      # no jid slot and simply ACKs — the counter then ages out on its 72h TTL.
+      uow.jid = job_hash['jid'] if uow.respond_to?(:jid=)
+
       ack = false
       begin
         Thread.handle_interrupt(Wurk::Shutdown => :never) do

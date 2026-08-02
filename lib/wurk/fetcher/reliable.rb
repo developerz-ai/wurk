@@ -5,6 +5,7 @@ require_relative '../component'
 require_relative '../keys'
 require_relative '../lua'
 require_relative '../fetcher'
+require_relative '../middleware/poison_pill'
 
 module Wurk
   class Fetcher
@@ -42,10 +43,26 @@ module Wurk
       # list; requeue pushes back to the public queue head so the job is
       # next pulled. LREM count=1 is idempotent for our payloads since
       # each job's JSON contains a unique `jid`.
-      UnitOfWork = Struct.new(:queue, :job, :config, keyword_init: true) do
+      #
+      # `jid` is filled in by the Processor once it has parsed the payload —
+      # the fetcher never parses. It is only used to retire the job's
+      # poison-pill recovery counter, so an ACK without one is still a
+      # complete ACK.
+      UnitOfWork = Struct.new(:queue, :job, :config, :jid, keyword_init: true) do
+        # The counter DEL rides this round trip rather than taking one of its
+        # own: the ACK is the only Redis call the success path makes, and a
+        # per-job call would be a fetch+execute regression for the sake of a
+        # key that exists for roughly no jobs. See Middleware::PoisonPill.
         def acknowledge
+          private_list = Reliable.private_queue_name(queue)
+          job_jid = jid.to_s
+          return config.redis { |conn| conn.call('LREM', private_list, 1, job) } if job_jid.empty?
+
           config.redis do |conn|
-            conn.call('LREM', Reliable.private_queue_name(queue), 1, job)
+            conn.pipelined do |pipe|
+              pipe.call('LREM', private_list, 1, job)
+              Middleware::PoisonPill.clear_in(pipe, job_jid)
+            end
           end
         end
 

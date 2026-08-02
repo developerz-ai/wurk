@@ -110,6 +110,49 @@ class FetcherReliableTest < Wurk::Test::UnitCase
     assert_equal payload, lindex(private_queue, 0)
   end
 
+  # The Processor fills in `jid` after parsing; the ACK then retires the job's
+  # poison-pill recovery counter in the same round trip as the LREM, so a job
+  # that completed can't be dead-set by a later reclaim (F6).
+  def test_acknowledge_clears_the_poison_pill_counter_for_its_jid
+    jid = "frj-#{Process.pid}-#{object_id}"
+    counter = Wurk::Middleware::PoisonPill.counter_key(jid)
+    @pool.with { |c| c.call('SET', counter, '2') }
+    enqueue('ack-recovered')
+    uow = @fetcher.retrieve_work
+    uow.jid = jid
+    uow.acknowledge
+
+    assert_equal 0, llen(private_queue), 'the ACK still removes the job from the private list'
+    assert_equal 0, Wurk::Middleware::PoisonPill.recovery_count(jid)
+  end
+
+  # No jid (a payload the Processor could not parse, or a fetcher that never
+  # sets one) → plain LREM, no DEL riding along.
+  def test_acknowledge_without_a_jid_only_lrems
+    enqueue('ack-plain')
+    uow = @fetcher.retrieve_work
+
+    assert_nil uow.jid
+
+    uow.acknowledge
+
+    assert_equal 0, llen(private_queue)
+  end
+
+  # A blank jid must not DEL the bare `super_fetch:recovered:` prefix — that
+  # key belongs to no job and deleting it would be a silent wrong-key write.
+  def test_acknowledge_with_blank_jid_leaves_the_prefix_key_alone
+    prefix = Wurk::Middleware::PoisonPill::KEY_PREFIX
+    @pool.with { |c| c.call('SET', prefix, 'sentinel') }
+    enqueue('ack-blank-jid')
+    uow = @fetcher.retrieve_work
+    uow.jid = ''
+    uow.acknowledge
+
+    assert_equal 0, llen(private_queue)
+    assert_equal('sentinel', @pool.with { |c| c.call('GET', prefix) })
+  end
+
   # --- requeue (single) ----------------------------------------------
 
   def test_requeue_pushes_back_to_public_queue
