@@ -284,12 +284,13 @@ module Wurk
 
     # Ent Unique (§3): atomic compare-and-delete of a lock key. Replaces the
     # two-command GET-then-DEL — between those calls the key can expire and a
-    # fresh enqueue can grab it, and the bare DEL would then drop the new
+    # fresh owner can grab it, and the bare DEL would then drop the new
     # owner's lock. Shared by `Unique::ServerMiddleware#release` (normal
-    # success/start release) and `Unique::DEATH_HANDLER` (automatic-death
-    # release) so the two paths cannot drift.
-    # KEYS = [unique:<sha256>]
-    # ARGV = [owning jid]
+    # success/start release), `Unique::DEATH_HANDLER` (automatic-death
+    # release) and `Leader#release` (stepping down from the cluster lock)
+    # so those paths cannot drift.
+    # KEYS = [the lock key — unique:<sha256> | dear-leader]
+    # ARGV = [the owner that must still hold it — jid | <host>:<pid>:<nonce>]
     # Returns 1 when the key was deleted, 0 otherwise.
     RELEASE_IF_OWNER = <<~LUA
       if redis.call("get", KEYS[1]) == ARGV[1] then
