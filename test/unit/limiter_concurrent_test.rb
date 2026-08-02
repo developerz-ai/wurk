@@ -149,6 +149,75 @@ class LimiterConcurrentTest < Wurk::Test::UnitCase
     assert_raises(ArgumentError) { l.within_limit }
   end
 
+  # F10: `held` is the lifetime acquire counter, bumped inside the acquire Lua.
+  # It partitions exactly into `immediate` + `waited`.
+  def test_held_counts_every_successful_acquire
+    l = Wurk::Limiter.concurrent("hd-#{@suffix}", 2)
+    runs = 0
+    3.times { l.within_limit { runs += 1 } }
+    s = l.status
+
+    assert_equal 3, runs
+    assert_equal 3, s['held']
+    assert_equal s['held'], s['immediate'] + s['waited']
+  end
+
+  # A rejected acquire must not count as held — the bump lives in the ZADD
+  # branch of the acquire script, not on every call.
+  def test_held_not_counted_for_rejected_acquire
+    name = "hr-#{@suffix}"
+    l = Wurk::Limiter.concurrent(name, 1, wait_timeout: 0, policy: :ignore)
+    entered = false
+    l.within_limit do
+      other = Wurk::Limiter.concurrent(name, 1, wait_timeout: 0, policy: :ignore)
+      other.within_limit { entered = true }
+    end
+
+    refute entered, 'the second acquire was rejected'
+    assert_equal 1, l.status['held']
+  end
+
+  # F10: an overage is a holder that outran `lock_timeout` — another acquirer's
+  # ZREMRANGEBYSCORE evicted its slot, so its own release ZREMs nothing. Backdate
+  # the live slot and let a second acquirer reclaim it: same path, no sleeping.
+  def test_overage_counted_when_slot_reclaimed_before_release
+    name = "ov-#{@suffix}"
+    key = "lmtr-cs:#{name}"
+    l = Wurk::Limiter.concurrent(name, 1, lock_timeout: 60)
+    stolen = false
+    l.within_limit do
+      @pool.with { |c| c.call('ZADD', key, 'XX', 1, c.call('ZRANGE', key, 0, 0).first) }
+      Wurk::Limiter.concurrent(name, 1, wait_timeout: 0).within_limit { stolen = true }
+    end
+
+    assert stolen, 'the second acquirer reclaimed the backdated slot'
+    assert_equal 1, l.status['overages'], 'evicted holder counts one overage on release'
+  end
+
+  # The clean path releases its own slot, so ZREM returns 1 — no overage.
+  def test_no_overage_when_slot_released_normally
+    l = Wurk::Limiter.concurrent("ok-#{@suffix}", 1)
+    ran = false
+    l.within_limit { ran = true }
+
+    assert ran
+    assert_equal 0, l.status['overages']
+  end
+
+  # Exhausting `wait_timeout` raises OverLimit; that is the middleware's
+  # `overrated` counter's job, not `overages`.
+  def test_wait_timeout_is_not_an_overage
+    name = "wo-#{@suffix}"
+    l = Wurk::Limiter.concurrent(name, 1, wait_timeout: 0)
+    assert_raises(Wurk::Limiter::OverLimit) do
+      l.within_limit do
+        Wurk::Limiter.concurrent(name, 1, wait_timeout: 0).within_limit { flunk 'should not enter' }
+      end
+    end
+
+    assert_equal 0, l.status['overages']
+  end
+
   # `soonest_expiry`: while a slot is held the ZSET is non-empty so it returns
   # the slot's expiry timestamp; idle, the ZSET is empty so it returns nil. The
   # two calls cover both sides of the guard. reset_at must be a real future
