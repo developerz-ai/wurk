@@ -19,18 +19,15 @@ module Wurk
       end
 
       def size
-        cutoff = ::Time.now.to_f - interval_seconds
-        Wurk::Limiter.redis do |c|
-          c.call('ZREMRANGEBYSCORE', state_key, '-inf', "(#{cutoff}")
-          c.call('ZCARD', state_key).to_i
-        end
+        window_state.first
       end
 
       # used = entries still inside the window; limit = count; reset_at =
       # when the oldest entry slides out (freeing a slot), or nil when
       # idle (#16).
       def status
-        build_status(used: size, limit: @options[:count], reset_at: oldest_expiry)
+        used, oldest = window_state
+        build_status(used: used, limit: @options[:count], reset_at: oldest && (oldest + interval_seconds))
       end
 
       def within_limit(used: 1, &block)
@@ -60,11 +57,16 @@ module Wurk
         "lmtr-w:#{@name}"
       end
 
-      # Oldest timestamp + interval = the moment it leaves the window.
-      def oldest_expiry
-        row = Wurk::Limiter.redis { |c| c.call('ZRANGE', state_key, 0, 0, 'WITHSCORES') }
-        score = Wurk::Limiter.first_score(row)
-        score && (score + interval_seconds)
+      # Count + oldest in-window score, both scoped by the Redis clock, in one
+      # read-only round trip. Reads never trim (the acquire script owns that):
+      # a dashboard host whose clock ran ahead used to evict live entries just
+      # by rendering `status`, freeing the window for a second full charge.
+      # Oldest timestamp + interval = the moment it leaves the window; -1 =
+      # nothing in window.
+      def window_state
+        count, oldest = lua(:limiter_window_status, keys: [state_key], argv: [interval_seconds])
+        score = oldest.to_f
+        [count.to_i, score.negative? ? nil : score]
       end
 
       def interval_seconds

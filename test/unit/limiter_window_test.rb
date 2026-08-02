@@ -137,4 +137,85 @@ class LimiterWindowTest < Wurk::Test::UnitCase
 
     assert ran
   end
+
+  # ----- read-only introspection ---------------------------------------
+
+  # Reads are scoped by the Redis clock: an entry that has already slid out of
+  # the window is invisible to `size`, and `reset_at` tracks the oldest entry
+  # still *inside* it (a bare `ZRANGE 0 0` would report the stale one and put
+  # reset_at in the past).
+  def test_read_ignores_stale_entries
+    l = window_with_stale_entry('ro')
+    s = l.status
+
+    assert_equal 1, s[:used]
+    assert_operator s[:reset_at], :>, ::Time.now.to_f, 'reset_at must come from the live entry, not the stale one'
+  end
+
+  # Trimming belongs to the acquire script alone — a status read leaves the
+  # ZSET byte-for-byte as it found it.
+  def test_read_never_trims_the_window
+    l = window_with_stale_entry('rt')
+    l.status
+
+    assert_equal 1, l.size
+    assert_equal 2, zcard('rt'), 'a read must not evict anything'
+  end
+
+  # F8: the read path takes its cutoff from Redis TIME, so a dashboard host
+  # whose clock runs an hour ahead still sees a full window. The old
+  # client-clock trim wiped every entry here.
+  def test_read_is_immune_to_client_clock_skew
+    l = Wurk::Limiter.window("sk-#{@suffix}", 2, 60, wait_timeout: 0)
+    2.times { l.within_limit {} }
+    s = with_time_now(::Time.now.to_f + 3600) { l.status }
+
+    assert_equal 2, s[:used]
+    refute s[:available?]
+    assert_equal 2, zcard('sk'), 'a skewed client must not evict live entries'
+  end
+
+  # ...and the window it did not evict still holds the limit closed.
+  def test_acquire_still_enforces_limit_after_a_skewed_read
+    l = Wurk::Limiter.window("se2-#{@suffix}", 2, 60, wait_timeout: 0)
+    2.times { l.within_limit {} }
+    with_time_now(::Time.now.to_f + 3600) { l.size }
+
+    assert_raises(Wurk::Limiter::OverLimit) { l.within_limit {} }
+  end
+
+  private
+
+  # One live entry (just charged) plus one that left the window two intervals
+  # ago, written straight to Redis so the acquire script never sees it.
+  def window_with_stale_entry(prefix)
+    l = Wurk::Limiter.window("#{prefix}-#{@suffix}", 5, 60)
+    l.within_limit {}
+    @pool.with { |c| c.call('ZADD', window_key(prefix), c.call('TIME').first.to_i - 120, 'stale') }
+    l
+  end
+
+  def window_key(prefix)
+    "lmtr-w:#{prefix}-#{@suffix}"
+  end
+
+  def zcard(prefix)
+    @pool.with { |c| c.call('ZCARD', window_key(prefix)).to_i }
+  end
+
+  # Minitest 6 dropped `Time.stub`; hand-rolled override pins Time.now for the
+  # block. Process-wide, which is safe because minitest-parallel_fork gives each
+  # test class its own worker process (UnitCase.parallelize_me! is a marker for
+  # that runner, not Minitest's in-process thread pool).
+  def with_time_now(epoch_f)
+    frozen = ::Time.at(epoch_f)
+    sc = ::Time.singleton_class
+    original = ::Time.method(:now)
+    sc.define_method(:now) { frozen }
+    begin
+      yield
+    ensure
+      sc.define_method(:now) { |*a, &b| original.call(*a, &b) }
+    end
+  end
 end

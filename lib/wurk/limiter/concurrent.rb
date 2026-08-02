@@ -6,7 +6,7 @@ module Wurk
   module Limiter
     # Atomic slot acquisition in a ZSET. Score = expiry epoch; the acquire
     # script first evicts expired slots (bumping the `reclaimed` metric)
-    # then ZADDs if there's headroom.
+    # then ZADDs if there's headroom (bumping the `held` metric).
     #
     # On exhaustion: spin loop with backoff. The spec says "blocks via
     # Redis stream XREAD" — that's a perf optimization; the visible
@@ -38,33 +38,15 @@ module Wurk
         raise ArgumentError, 'block required' unless block
 
         started = monotime
-        deadline = started + @options[:wait_timeout]
         slot = random_id
-        acquired_at = nil
-        loop do
-          result = acquire(slot)
-          if result[0].to_i == 1
-            acquired_at = monotime
-            break
-          end
-
-          return if @options[:policy] == :ignore
-
-          remaining = deadline - monotime
-          if remaining <= 0
-            bump_counter('overages')
-            raise OverLimit, self
-          end
-
-          sleep [remaining, WAIT_SLEEP].min
-        end
+        acquired_at = wait_for_slot(slot, started + @options[:wait_timeout])
+        return unless acquired_at
 
         begin
           incr_immediate_or_waited(acquired_at - started)
           block.call
         ensure
-          release(slot)
-          bump_counter('held_time', (monotime - acquired_at).to_i) if acquired_at
+          record_release(slot, acquired_at)
         end
       end
 
@@ -96,6 +78,29 @@ module Wurk
 
       def stats_key
         "lmtr-stats:#{@name}"
+      end
+
+      # A ZREM that removes nothing means an acquirer already evicted our slot:
+      # we outran `lock_timeout`, which is what `overages` counts. Exhausting
+      # `wait_timeout` is a different event — it raises OverLimit and the server
+      # middleware counts it in the job's `overrated` field.
+      def record_release(slot, acquired_at)
+        bump_counter('overages') if release(slot).to_i.zero?
+        bump_counter('held_time', (monotime - acquired_at).to_i)
+      end
+
+      # Spins until a slot frees up. Returns the monotonic acquire time, nil
+      # when `policy: :ignore` gives up; raises OverLimit past `wait_timeout`.
+      def wait_for_slot(slot, deadline)
+        loop do
+          return monotime if acquire(slot)[0].to_i == 1
+          return if @options[:policy] == :ignore
+
+          remaining = deadline - monotime
+          raise OverLimit, self if remaining <= 0
+
+          sleep [remaining, WAIT_SLEEP].min
+        end
       end
 
       def acquire(slot)
