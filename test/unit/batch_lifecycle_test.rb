@@ -2,6 +2,7 @@
 
 require_relative '../test_helper'
 require 'json'
+require 'stringio'
 
 # Drives the batch lifecycle end-to-end against real Redis: autoflush
 # buffering, per-batch linger retention, the callback lifecycle
@@ -15,6 +16,11 @@ require 'json'
 # torn down. No test touches another's keys.
 class BatchLifecycleTest < Wurk::Test::UnitCase
   parallelize_me!
+
+  # Guards the one test that swaps the process-global `Wurk.logger` (there is
+  # no thread-local override point) so it can't race another thread's test
+  # method within this same parallelized class.
+  LOGGER_MUTEX = Mutex.new
 
   def setup
     super
@@ -912,6 +918,112 @@ class BatchLifecycleTest < Wurk::Test::UnitCase
     assert_match(/no longer exists/, err.message)
   end
 
+  # Reopening a batch inside every job to register its callback is a common
+  # shape; without dedup that persists one entry per job and fires the
+  # callback that many times.
+  def test_reopening_to_register_an_identical_callback_persists_one_entry
+    batch = new_batch
+    batch.jobs { perform_one }
+    bid = batch.bid
+    100.times { Wurk::Batch.new(bid).on(:success, 'RepeatSuccess') }
+
+    ack_success(bid, jid_for(@queue, bid))
+
+    assert_equal 1, persisted_callbacks(bid).size
+    assert_equal 1, callbacks_fired(event: 'success', bid: bid)
+  end
+
+  # Dedup keys on the whole triple: same target, different options stays two
+  # registrations and fires twice.
+  def test_reopening_with_different_callback_options_keeps_both
+    batch = new_batch
+    batch.jobs { perform_one }
+    Wurk::Batch.new(batch.bid).on(:success, 'ShardSuccess', 'shard' => 1)
+    Wurk::Batch.new(batch.bid).on(:success, 'ShardSuccess', 'shard' => 2)
+
+    ack_success(batch.bid, jid_for(@queue, batch.bid))
+
+    assert_equal 2, callbacks_fired(event: 'success', bid: batch.bid)
+  end
+
+  def test_on_past_the_callback_cap_is_dropped
+    batch = new_batch
+    batch.jobs { perform_one }
+    fill_callbacks(batch.bid)
+
+    batch.on(:success, 'Overflow')
+
+    assert_equal Wurk::Batch::CALLBACKS_MAX, persisted_callbacks(batch.bid).size
+    refute_includes persisted_callbacks(batch.bid).map { |c| c[1] }, 'Overflow'
+  end
+
+  def test_on_past_the_callback_cap_logs_the_drop
+    batch = new_batch
+    batch.jobs { perform_one }
+    fill_callbacks(batch.bid)
+
+    log = capture_log { batch.on(:success, 'Overflow') }
+
+    assert_match(/#{Wurk::Batch::CALLBACKS_MAX} callback limit reached/, log)
+  end
+
+  # Pre-flush registrations never reach BATCH_APPEND_CALLBACK — they stage in
+  # memory and land in one HSET — so the dedup and the cap have to hold on
+  # that path too, or the first write already violates the contract.
+  def test_duplicate_callback_before_flush_persists_one_entry
+    batch = new_batch
+    100.times { batch.on(:success, 'RepeatSuccess') }
+
+    batch.jobs { perform_one }
+    ack_success(batch.bid, jid_for(@queue, batch.bid))
+
+    assert_equal 1, persisted_callbacks(batch.bid).size
+    assert_equal 1, callbacks_fired(event: 'success', bid: batch.bid)
+  end
+
+  # Options are compared as persisted: symbol and string keys serialise to the
+  # same entry, so registering both must not double-fire.
+  def test_duplicate_callback_before_flush_ignores_option_key_type
+    batch = new_batch
+    batch.on(:success, 'NormalizedSuccess', shard: 1)
+    batch.on(:success, 'NormalizedSuccess', 'shard' => 1)
+
+    batch.jobs { perform_one }
+
+    assert_equal 1, persisted_callbacks(batch.bid).size
+  end
+
+  def test_distinct_callback_options_before_flush_keep_both
+    batch = new_batch
+    batch.on(:success, 'ShardSuccess', 'shard' => 1)
+    batch.on(:success, 'ShardSuccess', 'shard' => 2)
+
+    batch.jobs { perform_one }
+    ack_success(batch.bid, jid_for(@queue, batch.bid))
+
+    assert_equal 2, callbacks_fired(event: 'success', bid: batch.bid)
+  end
+
+  def test_on_before_flush_past_the_callback_cap_is_dropped
+    batch = new_batch
+    fill_staged_callbacks(batch)
+
+    batch.on(:success, 'Overflow')
+    batch.jobs { perform_one }
+
+    assert_equal Wurk::Batch::CALLBACKS_MAX, persisted_callbacks(batch.bid).size
+    refute_includes persisted_callbacks(batch.bid).map { |c| c[1] }, 'Overflow'
+  end
+
+  def test_on_before_flush_past_the_callback_cap_logs_the_drop
+    batch = new_batch
+    fill_staged_callbacks(batch)
+
+    log = capture_log { batch.on(:success, 'Overflow') }
+
+    assert_match(/#{Wurk::Batch::CALLBACKS_MAX} callback limit reached/, log)
+  end
+
   def test_on_after_event_already_fired_does_not_enqueue_again
     batch = new_batch(success: 'EarlySuccess')
     batch.jobs { perform_one }
@@ -1047,9 +1159,42 @@ class BatchLifecycleTest < Wurk::Test::UnitCase
     queued(queue).select { |j| j['bid'] == bid }.map { |j| j['jid'] }
   end
 
+  def persisted_callbacks(bid)
+    JSON.parse(@pool.with { |c| c.call('HGET', "b-#{bid}", 'callbacks') })
+  end
+
+  # Saturate the in-memory staging array — the pre-flush twin of
+  # `fill_callbacks`, which saturates the persisted one.
+  def fill_staged_callbacks(batch)
+    Wurk::Batch::CALLBACKS_MAX.times { |i| batch.on(:success, "Filler#{i}") }
+  end
+
+  # Saturate the callback array without paying CALLBACKS_MAX round trips.
+  def fill_callbacks(bid)
+    full = Array.new(Wurk::Batch::CALLBACKS_MAX) { |i| ['success', "Filler#{i}", {}] }
+    @pool.with { |c| c.call('HSET', "b-#{bid}", 'callbacks', JSON.generate(full)) }
+  end
+
   def callbacks_fired(event:, bid:)
     queued(@cbq).count do |j|
       j['class'] == 'Wurk::Batch::CallbackJob' && j['args'][0] == bid && j['args'][2] == event
+    end
+  end
+
+  # Swap in a StringIO logger for the duration of the block and return
+  # what it captured — used to assert the cap/duplicate-registration
+  # warnings without disturbing the global IO::NULL logger other tests rely on.
+  def capture_log
+    LOGGER_MUTEX.synchronize do
+      io = StringIO.new
+      previous = Wurk.logger
+      Wurk.logger = Logger.new(io)
+      begin
+        yield
+        io.string
+      ensure
+        Wurk.logger = previous
+      end
     end
   end
 

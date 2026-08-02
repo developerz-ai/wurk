@@ -25,7 +25,10 @@ module Wurk
   # Layout (one file per type under `lib/wurk/limiter/`):
   #   * `Limiter::Base` owns the metadata write (lmtr:{name}) + the global
   #     `lmtr-list` registration so the Web UI can list every limiter, and
-  #     the uniform `status` shape.
+  #     the uniform `status` shape. Membership is added once per metadata
+  #     write and swept back out by `Web::Enterprise::Limits.list` once the
+  #     metadata expires — the two halves of keeping `lmtr-list` bounded
+  #     under interpolated names.
   #   * Per-type subclasses (Concurrent / Bucket / Window / Leaky / Points)
   #     own their acquire/wait loop. Each delegates the atomic step to a
   #     Lua script in `lib/wurk/lua/limiter_*.lua`.

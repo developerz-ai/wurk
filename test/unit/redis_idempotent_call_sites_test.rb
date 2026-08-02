@@ -232,13 +232,27 @@ class RedisIdempotentCallSitesTest < Wurk::Test::UnitCase
     assert_equal [true], @main.claims_for('ZSCAN')
   end
 
+  # Listing limiters reads the SET, probes each name's metadata, and sweeps the
+  # names whose metadata is gone. The sweep is the one write here, and it claims
+  # too: its script re-decides liveness inside the atomic step, so a replay can
+  # only drop names that are still dead.
   def test_web_limits_read_paths_claim_apply_safety
-    on_default_pool do
-      Wurk::Web::Enterprise::Limits.list
-      Wurk::Web::Enterprise::Limits.metadata("#{@ns}-lmtr")
+    @main.with do |c|
+      c.call('SADD', Wurk::Limiter::LIST_KEY, "#{@ns}-lmtr")
+      c.call('HSET', "lmtr:#{@ns}-lmtr", 'type', 'concurrent', 'options', '{}', 'fingerprint', 'fp')
+      c.call('SADD', Wurk::Limiter::LIST_KEY, "#{@ns}-ghost")
     end
 
+    on_default_pool { Wurk::Web::Enterprise::Limits.list }
+
     assert_equal [true], @main.claims_for('SMEMBERS')
+    assert_equal [true], @main.claims_for('EXISTS')
+    assert_equal [true], @main.claims_for('EVALSHA')
+  end
+
+  def test_web_limits_metadata_claims_apply_safety
+    on_default_pool { Wurk::Web::Enterprise::Limits.metadata("#{@ns}-lmtr") }
+
     assert_equal [true], @main.claims_for('HGETALL')
   end
 

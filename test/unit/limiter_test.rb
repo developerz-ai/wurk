@@ -135,6 +135,52 @@ class LimiterTest < Wurk::Test::UnitCase
     end
   end
 
+  # A limiter whose metadata ttl lapsed — and whose name the Web sweep then
+  # dropped — has to come back on its next construction. The registration gate
+  # keys off the metadata write, so re-creating the HASH re-adds the membership.
+  def test_constructor_reregisters_after_metadata_expiry
+    name = "rereg-#{@suffix}"
+    Wurk::Limiter.concurrent(name, 5)
+    @pool.with do |c|
+      c.call('DEL', "lmtr:#{name}")
+      c.call('SREM', Wurk::Limiter::LIST_KEY, name)
+    end
+
+    Wurk::Limiter.concurrent(name, 5)
+
+    @pool.with do |c|
+      assert_equal 1, c.call('SISMEMBER', Wurk::Limiter::LIST_KEY, name)
+      assert_equal 1, c.call('EXISTS', "lmtr:#{name}")
+    end
+  end
+
+  # Re-registering an already-registered limiter skips the SET write: with the
+  # interpolated names the spec blesses, construction runs once per job against
+  # a set that can hold millions of members. Only the Web sweep removes a name,
+  # and it re-checks the metadata atomically — so "metadata live, membership
+  # gone" is not a state Wurk itself can reach.
+  def test_repeat_construction_skips_the_list_write
+    name = "regskip-#{@suffix}"
+    Wurk::Limiter.concurrent(name, 5)
+    @pool.with { |c| c.call('SREM', Wurk::Limiter::LIST_KEY, name) }
+
+    Wurk::Limiter.concurrent(name, 5)
+
+    @pool.with { |c| assert_equal 0, c.call('SISMEMBER', Wurk::Limiter::LIST_KEY, name) }
+  end
+
+  # The ttl refresh is not part of that gate: an actively-used limiter must
+  # never let its metadata lapse under it (and take its membership with it).
+  def test_repeat_construction_refreshes_metadata_ttl
+    name = "regttl-#{@suffix}"
+    Wurk::Limiter.concurrent(name, 5)
+    @pool.with { |c| c.call('EXPIRE', "lmtr:#{name}", 100) }
+
+    Wurk::Limiter.concurrent(name, 5)
+
+    assert_operator @pool.with { |c| c.call('TTL', "lmtr:#{name}").to_i }, :>, 100
+  end
+
   # ----- delete + reset cleanup ----------------------------------------
 
   def test_delete_removes_state_keys_and_list_membership
