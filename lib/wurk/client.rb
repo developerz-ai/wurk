@@ -385,7 +385,7 @@ module Wurk
           :batch_push,
           keys: ["b-#{j['bid']}", "b-#{j['bid']}-jids", "queue:#{j['queue']}", 'queues',
                  "b-#{j['bid']}-died", 'dead-batches'],
-          argv: [j['queue'], j['jid'], Wurk.dump_json(j), j['bid']]
+          argv: [j['queue'], j['jid'], Wurk.dump_json(j), j['bid'], Wurk::Batch::DEFAULT_EXPIRY_SECONDS]
         )
       end
     end
@@ -404,7 +404,8 @@ module Wurk
           conn,
           :batch_schedule,
           keys: ['schedule', "b-#{j['bid']}", "b-#{j['bid']}-jids"],
-          argv: [j['at'].to_s, Wurk.dump_json(j.except('enqueued_at', 'at')), j['jid']]
+          argv: [j['at'].to_s, Wurk.dump_json(j.except('enqueued_at', 'at')), j['jid'],
+                 Wurk::Batch::DEFAULT_EXPIRY_SECONDS]
         )
       end
     end

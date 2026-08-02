@@ -48,10 +48,21 @@ module Wurk
 
     VALID_EVENTS = %i[success complete death].freeze
 
+    # Every key a batch owns, for the sweep paths: `Status#delete` (UNLINK),
+    # `Callbacks#apply_linger` and `DeathHandler.restamp_ttls` (EXPIRE).
+    #
     # The 'live' set tracks jobs that have not yet reached a terminal state.
     # When it's empty, every job has either succeeded or died → `:complete`
     # is allowed to fire.
-    KEY_SUFFIXES = %w[jids failed died notify cbsucc kids pkids tags].freeze
+    #
+    # `complete`/`success`/`death` are the callback dedup markers written by
+    # `Callbacks#dedup_set`; they belong to the batch and must die with it.
+    # `notify`/`cbsucc`/`tags` are Sidekiq Pro's own key layout (spec §2.8) that
+    # Wurk never writes — Wurk dedups on the three markers above and indexes
+    # tags at `tags:<tag>`. They stay listed so a Redis dataset carried over
+    # from Sidekiq Pro on the gem swap gets swept too; EXPIRE/UNLINK of a
+    # missing key is a no-op for batches Wurk created itself.
+    KEY_SUFFIXES = %w[jids failed died complete success death notify cbsucc kids pkids tags].freeze
 
     THREAD_KEY = :wurk_current_batch
 
@@ -278,6 +289,10 @@ module Wurk
       Wurk::Metrics::Statsd.increment('batch.created')
     end
 
+    # Only `b-#{@bid}` is stamped here — none of the sub-keys exist yet at first
+    # flush (BATCH_PUSH/BATCH_SCHEDULE create `-jids`, the acks create
+    # `-failed`/`-died`), and EXPIRE on a missing key is a no-op. Each key is
+    # stamped `NX` where it is created instead; see BATCH_PUSH in lua.rb.
     def pipelined_first_flush(pipe, now)
       pipe.call('HSET', "b-#{@bid}", *first_flush_hash(now).flatten)
       pipe.call('EXPIRE', "b-#{@bid}", @expires_in)
@@ -312,9 +327,16 @@ module Wurk
       outer.bid
     end
 
+    # The only place `-kids`/`-pkids` are created, so this is where they get
+    # their clock. TTL is the default, not this batch's `@expires_in`: the keys
+    # belong to the *parent*, and NX means the first link sets the retention for
+    # every sibling that follows.
     def link_to_parent(pipe)
-      pipe.call('SADD', "b-#{current_parent_bid}-kids", @bid)
-      pipe.call('SADD', "b-#{current_parent_bid}-pkids", @bid)
+      parent_key = "b-#{current_parent_bid}"
+      pipe.call('SADD', "#{parent_key}-kids", @bid)
+      pipe.call('SADD', "#{parent_key}-pkids", @bid)
+      pipe.call('EXPIRE', "#{parent_key}-kids", DEFAULT_EXPIRY_SECONDS, 'NX')
+      pipe.call('EXPIRE', "#{parent_key}-pkids", DEFAULT_EXPIRY_SECONDS, 'NX')
     end
 
     def job_count

@@ -131,8 +131,16 @@ module Wurk
     # success after the dead job is manually retried to success). The
     # `b-<bid>-death` notify dedup key is untouched, so `:death` cannot
     # re-fire.
+    #
+    # The two EXPIRE NX calls are what keep the batch bounded: `b-<bid>-jids` is
+    # born here, and only `Batch#ensure_first_flush!` ever stamped a TTL — on the
+    # hash alone — so an abandoned or invalidated batch leaked its live-jid set
+    # forever. A late re-push (retry, scheduled promotion) can also resurrect an
+    # already-expired `b-<bid>` through the HINCRBYs above, again TTL-less. NX
+    # stamps only keys that currently have no TTL, so a running batch's clock and
+    # the shorter post-success `linger` window (Callbacks#apply_linger) both win.
     # KEYS = [b-<bid>, b-<bid>-jids, queue_list, queues_set, b-<bid>-died, dead-batches]
-    # ARGV = [queue_name, jid, job_json, bid]
+    # ARGV = [queue_name, jid, job_json, bid, expiry_seconds]
     # Returns 1.
     BATCH_PUSH = <<~LUA
       if redis.call("srem", KEYS[5], ARGV[2]) == 1 then
@@ -147,6 +155,8 @@ module Wurk
           redis.call("hincrby", KEYS[1], "pending", 1)
         end
       end
+      redis.call("expire", KEYS[1], ARGV[5], "NX")
+      redis.call("expire", KEYS[2], ARGV[5], "NX")
       redis.call("sadd", KEYS[4], ARGV[1])
       redis.call("lpush", KEYS[3], ARGV[3])
       return 1
@@ -165,14 +175,19 @@ module Wurk
     # it, the re-push routes through BATCH_PUSH, whose guard finds the jid already
     # live (SADD == 0) → pure LPUSH, no recount. So registration happens exactly
     # once, here, at enqueue.
+    #
+    # The other path that can create `b-<bid>-jids`, so it carries the same NX
+    # expiry stamp as BATCH_PUSH.
     # KEYS = [schedule, b-<bid>, b-<bid>-jids]
-    # ARGV = [at_score, job_json, jid]
+    # ARGV = [at_score, job_json, jid, expiry_seconds]
     # Returns 1.
     BATCH_SCHEDULE = <<~LUA
       if redis.call("sadd", KEYS[3], ARGV[3]) == 1 then
         redis.call("hincrby", KEYS[2], "total", 1)
         redis.call("hincrby", KEYS[2], "pending", 1)
       end
+      redis.call("expire", KEYS[2], ARGV[4], "NX")
+      redis.call("expire", KEYS[3], ARGV[4], "NX")
       redis.call("zadd", KEYS[1], ARGV[1], ARGV[2])
       return 1
     LUA
@@ -208,13 +223,18 @@ module Wurk
     # currently in a failing/retrying state. Re-failures of the same jid are
     # idempotent. Cleared by BATCH_ACK_SUCCESS (retry passed) or
     # BATCH_ACK_COMPLETE (job died). Spec §2.5, §2.8.
+    #
+    # `b-<bid>-failed` is born here, so it carries the same NX expiry stamp as
+    # BATCH_PUSH.
     # KEYS = [b-<bid>, b-<bid>-failed]
-    # ARGV = [jid]
+    # ARGV = [jid, expiry_seconds]
     # Returns 1.
     BATCH_ACK_FAILED = <<~LUA
       if redis.call("sadd", KEYS[2], ARGV[1]) == 1 then
         redis.call("hincrby", KEYS[1], "failures", 1)
       end
+      redis.call("expire", KEYS[1], ARGV[2], "NX")
+      redis.call("expire", KEYS[2], ARGV[2], "NX")
       return 1
     LUA
 
@@ -224,8 +244,11 @@ module Wurk
     # live jids so the batch can fire `:complete` even with terminally failed
     # jobs. `b-<bid>-failed` holds only currently-retrying jids; `b-<bid>-died`
     # holds terminally-dead ones (spec §2.8 — the two sets are distinct).
+    #
+    # `b-<bid>-died` is born here, so it carries the same NX expiry stamp as
+    # BATCH_PUSH.
     # KEYS = [b-<bid>, b-<bid>-jids, b-<bid>-died, b-<bid>-failed]
-    # ARGV = [jid]
+    # ARGV = [jid, expiry_seconds]
     # Returns [live_jids_remaining, died_count, first_death]. `first_death`
     # is 1 the first time *any* jid is SADDed into the died set, 0 thereafter
     # — caller uses it to fire `:death` exactly once per batch.
@@ -236,6 +259,8 @@ module Wurk
         redis.call("hincrby", KEYS[1], "failures", -1)
       end
       local died_added = redis.call("sadd", KEYS[3], ARGV[1])
+      redis.call("expire", KEYS[1], ARGV[2], "NX")
+      redis.call("expire", KEYS[3], ARGV[2], "NX")
       local first_death = 0
       if was_pre_existing_death == 0 and died_added == 1 then
         first_death = 1

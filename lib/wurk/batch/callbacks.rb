@@ -126,11 +126,17 @@ module Wurk
         end
       end
 
+      # The HSETs resurrect the hash when a callback fires for a batch whose keys
+      # already expired (a child batch outliving its parent's 30d window), so the
+      # write is followed by an NX stamp — without it the resurrected hash would
+      # have no clock at all. NX leaves a live batch's expiry, and the shorter
+      # post-success `linger` window, untouched.
       def record_event(bid, field)
         now = ::Process.clock_gettime(::Process::CLOCK_REALTIME)
         Wurk.redis do |conn|
           conn.call('HSET', "b-#{bid}", field, now.to_s)
           conn.call('HSET', "b-#{bid}", field.to_s.sub('_at', ''), '1')
+          conn.call('EXPIRE', "b-#{bid}", Batch::DEFAULT_EXPIRY_SECONDS, 'NX')
         end
       end
 

@@ -21,7 +21,7 @@ module Wurk
             conn,
             :batch_ack_complete,
             keys: ["b-#{bid}", "b-#{bid}-jids", "b-#{bid}-died", "b-#{bid}-failed"],
-            argv: [job['jid']]
+            argv: [job['jid'], Batch::DEFAULT_EXPIRY_SECONDS]
           )
         end
         live, _died, first_death = Array(result).map(&:to_i)
@@ -38,9 +38,12 @@ module Wurk
         Wurk::Batch::Callbacks.maybe_fire(bid, pending: Wurk::Batch::Callbacks.pending_for(bid), live: 0)
       end
 
-      # A stale job can die AFTER its batch keys expired; the ack writes
-      # recreate them with no TTL — permanent key leakage. EXPIRE NX stamps
-      # only keys that lost their TTL, leaving live batches' clocks alone.
+      # BATCH_ACK_COMPLETE stamps the two keys it can itself resurrect; this
+      # sweeps the rest of the batch (`-jids`, `-failed`, `-kids`, `-pkids`,
+      # callback markers). A death is the one moment we know the batch is
+      # winding down, so it is worth a round trip to leave nothing without a
+      # clock. EXPIRE NX touches only keys that have none, so a live batch's
+      # clock and a post-success `linger` window both survive.
       def self.restamp_ttls(bid)
         Wurk.redis do |conn|
           conn.pipelined do |pipe|
