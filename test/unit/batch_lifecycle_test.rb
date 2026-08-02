@@ -159,9 +159,10 @@ class BatchLifecycleTest < Wurk::Test::UnitCase
     assert_equal 1, callbacks_fired(event: 'complete', bid: batch.bid)
   end
 
-  # The duration statsd metric is best-effort: fire_success has already burned
-  # the `success` dedup key by the time it runs, so a raise there would strand
-  # the success callbacks + linger with no retry to re-fire them.
+  # The duration statsd metric is best-effort: it runs ahead of the enqueue on
+  # the acking job's thread, and that ack already removed the jid, so a raise
+  # there would abort fire_success with nothing left to re-drive it — the
+  # success callbacks + linger would be stranded for good.
   def test_success_callbacks_still_fire_when_duration_metric_raises
     batch = new_batch(success: 'S', complete: 'C')
     batch.jobs { perform_one }
@@ -652,6 +653,80 @@ class BatchLifecycleTest < Wurk::Test::UnitCase
     assert_equal 1, callbacks_fired(event: 'death', bid: batch.bid)
   end
 
+  # --- F16: the dedup marker is written after the enqueue, not before -----
+
+  # Regression guard for the loss window: with the marker claimed first, a
+  # crash between the SET and the push loses the callback for good (nothing
+  # re-drives maybe_fire once the ack SREM'd the jid). The marker must not
+  # exist yet at the moment Wurk::Client.push runs.
+  def test_complete_callback_is_enqueued_before_its_dedup_marker
+    batch = new_batch(complete: 'C')
+    batch.jobs { perform_one }
+
+    assert_equal 0, marker_state_at_push(batch.bid, 'complete') { ack_success(batch.bid, jid_for(@queue, batch.bid)) }
+    assert_equal 1, exists("b-#{batch.bid}-complete"), 'marker must be written once the enqueue pass completes'
+  end
+
+  def test_success_callback_is_enqueued_before_its_dedup_marker
+    batch = new_batch(success: 'S')
+    batch.jobs { perform_one }
+
+    assert_equal 0, marker_state_at_push(batch.bid, 'success') { ack_success(batch.bid, jid_for(@queue, batch.bid)) }
+    assert_equal 1, exists("b-#{batch.bid}-success"), 'marker must be written once the enqueue pass completes'
+  end
+
+  # `:death` deliberately keeps claim-before-enqueue — its durable mark and
+  # `dead-batches` membership are persisted before the guard, so the crash
+  # window costs the notification, not the batch's death state. Pinned so a
+  # consistency-driven reorder has to argue with this test first.
+  def test_death_callback_keeps_its_claim_before_the_enqueue
+    batch = new_batch(death: 'D')
+    batch.jobs { perform_one }
+
+    assert_equal 1, marker_state_at_push(batch.bid, 'death') { kill(batch.bid, jid_for(@queue, batch.bid)) }
+  end
+
+  # The crash the reorder closes: process dies between the push and the mark.
+  # The callback is already durably queued, and the batch is left re-fireable
+  # rather than silently stranded.
+  def test_crash_between_enqueue_and_marker_leaves_the_callback_queued
+    batch = new_batch(complete: 'C')
+    batch.jobs { perform_one }
+
+    assert_raises(RuntimeError) do
+      with_failing_dedup_set(batch.bid) { Wurk::Batch::Callbacks.fire_complete(batch.bid) }
+    end
+
+    assert_equal 1, callbacks_fired(event: 'complete', bid: batch.bid),
+                 'the callback must already be enqueued when the marker write dies'
+    assert_equal 0, exists("b-#{batch.bid}-complete")
+  end
+
+  # The accepted direction: the re-drive after such a crash duplicates rather
+  # than loses. Callback jobs retry anyway and must be idempotent (spec §12).
+  def test_redrive_after_a_lost_marker_duplicates_rather_than_loses
+    batch = new_batch(complete: 'C')
+    batch.jobs { perform_one }
+
+    assert_raises(RuntimeError) do
+      with_failing_dedup_set(batch.bid) { Wurk::Batch::Callbacks.fire_complete(batch.bid) }
+    end
+    Wurk::Batch::Callbacks.fire_complete(batch.bid)
+
+    assert_equal 2, callbacks_fired(event: 'complete', bid: batch.bid)
+  end
+
+  # A reclaimed child re-running propagate_to_parent re-enters the parent's
+  # maybe_fire with its counts still at zero — the marker read must absorb it.
+  def test_reclaimed_child_repropagating_does_not_refire_parent_callbacks
+    parent, child = nested_fully_acked(success: 'ParentSuccess', complete: 'ParentComplete')
+
+    Wurk::Batch::Callbacks.propagate_to_parent(child.bid)
+
+    assert_equal 1, callbacks_fired(event: 'complete', bid: parent.bid)
+    assert_equal 1, callbacks_fired(event: 'success', bid: parent.bid)
+  end
+
   # --- callback_specs_for queue fallback ---------------------------------
 
   # callback_specs_for falls back to the 'default' queue when callback_queue is
@@ -876,6 +951,15 @@ class BatchLifecycleTest < Wurk::Test::UnitCase
     [parent, child]
   end
 
+  # Parent + child both acked to success, i.e. the parent's callbacks have
+  # already fired through the child's propagate_to_parent.
+  def nested_fully_acked(**parent_cbs)
+    parent, child = nested(parent_cbs: parent_cbs)
+    ack_success(parent.bid, jid_for(@queue, parent.bid))
+    ack_success(child.bid, jid_for(@queue, child.bid))
+    [parent, child]
+  end
+
   def three_deep
     grand = new_batch(death: 'GrandDeath')
     parent = child = nil
@@ -992,5 +1076,59 @@ class BatchLifecycleTest < Wurk::Test::UnitCase
     Wurk::Client.singleton_class.send(:define_method, :push, impl)
   ensure
     $VERBOSE = verbose
+  end
+
+  # EXISTS b-<bid>-<event> sampled from inside Wurk::Client.push, i.e. exactly
+  # when a callback job is being enqueued — 0 means the marker is written after
+  # the enqueue (F16), 1 means it was claimed before. Every other push is
+  # delegated untouched so a concurrent test in this process is unaffected.
+  # The override runs with `self` rebound to Wurk::Client (define_method), so
+  # everything it needs is captured as a closure local — no test helpers.
+  def marker_state_at_push(bid, event, &)
+    observed = nil
+    pool     = @pool
+    key      = "b-#{bid}-#{event}"
+    ours     = callback_matcher(bid, event)
+    original = Wurk::Client.singleton_method(:push)
+    sampling = lambda do |item|
+      observed = pool.with { |c| c.call('EXISTS', key) }.to_i if ours.call(item)
+      original.call(item)
+    end
+    with_push_override(sampling, &)
+    observed
+  end
+
+  def callback_matcher(bid, event)
+    lambda do |item|
+      item['class'] == 'Wurk::Batch::CallbackJob' && Array(item['args']).values_at(0, 2) == [bid, event]
+    end
+  end
+
+  # Simulates the process dying between the callback enqueue and the dedup
+  # marker write. Scoped to one bid so concurrently running tests in this
+  # process keep the real implementation.
+  def with_failing_dedup_set(bid)
+    original = Wurk::Batch::Callbacks.method(:dedup_set)
+    crashing = lambda do |b, event|
+      raise 'crash' if b == bid
+
+      original.call(b, event)
+    end
+    redefine_dedup_set(crashing)
+    yield
+  ensure
+    redefine_dedup_set(->(b, event) { original.call(b, event) })
+  end
+
+  def redefine_dedup_set(impl)
+    verbose = $VERBOSE
+    $VERBOSE = nil
+    Wurk::Batch::Callbacks.singleton_class.send(:define_method, :dedup_set, impl)
+  ensure
+    $VERBOSE = verbose
+  end
+
+  def exists(key)
+    @pool.with { |c| c.call('EXISTS', key) }.to_i
   end
 end
