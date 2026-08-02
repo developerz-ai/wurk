@@ -119,6 +119,11 @@ module Wurk
     # follower, it polls every `follower_interval`. Caller must invoke
     # `stop` for orderly shutdown — the thread also releases its lock on
     # exit.
+    #
+    # The spawn happens *inside* the lock: with it outside, two callers
+    # racing into `start` both clear the nil check and both spawn, and the
+    # loser's loop is never recorded — an unjoinable second campaigner that
+    # outlives `stop` and keeps renewing the cluster lock.
     def start
       return nil if disabled?
 
@@ -126,17 +131,19 @@ module Wurk
         return @thread if @thread
 
         @done = false
+        @thread = spawn_loop_thread
       end
-      @thread = spawn_loop_thread
+      @thread
     end
 
     def stop
-      @mutex.synchronize do
+      thread = @mutex.synchronize do
         @done = true
         @sleeper.signal
+        @thread
       end
-      @thread&.join
-      @thread = nil
+      thread&.join
+      @mutex.synchronize { @thread = nil }
       release
     end
 

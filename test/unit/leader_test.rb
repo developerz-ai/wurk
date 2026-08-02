@@ -486,6 +486,24 @@ class LeaderTest < Wurk::Test::UnitCase
     assert_same t1, t2
   end
 
+  # F12: the spawn must happen under the lock. Widen the window by parking
+  # inside `spawn_loop_thread` — with the spawn outside `synchronize` both
+  # racers clear the nil check and start a loop, and the one that loses the
+  # `@thread=` assignment is unreachable: `stop` never joins it.
+  def test_concurrent_start_spawns_a_single_loop
+    ldr = build_leader(renew_interval: 0.05, follower_interval: 0.05)
+    spawned = Queue.new
+    ldr.define_singleton_method(:spawn_loop_thread) do
+      sleep 0.1
+      super().tap { |t| spawned << t }
+    end
+
+    t1, t2 = race(2) { ldr.start }
+
+    assert_equal 1, spawned.size, 'a second start must not leak an unjoinable loop'
+    assert_same t1, t2
+  end
+
   def test_periodic_loop_acquires_when_available
     ldr = build_leader(renew_interval: 0.05, follower_interval: 0.05)
     ldr.start
@@ -704,6 +722,23 @@ class LeaderTest < Wurk::Test::UnitCase
     ldr = Wurk::Leader.new(key: @key, **)
     @leaders << ldr
     ldr
+  end
+
+  # Run the block in `count` threads released from a common barrier, so they
+  # contend rather than run in spawn order. Returns their values.
+  def race(count)
+    ready = Queue.new
+    go = Queue.new
+    racers = Array.new(count) do
+      Thread.new do
+        ready << true
+        go.pop
+        yield
+      end
+    end
+    count.times { ready.pop }
+    count.times { go << :go }
+    racers.map(&:value)
   end
 
   # Run the CAS once against a throwaway key so its SHA is server-side cached
