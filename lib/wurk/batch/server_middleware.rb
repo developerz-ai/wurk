@@ -85,7 +85,7 @@ module Wurk
             conn,
             :batch_ack_failed,
             keys: ["b-#{bid}", "b-#{bid}-failed"],
-            argv: [jid]
+            argv: [jid, Batch::DEFAULT_EXPIRY_SECONDS]
           )
         end
       end

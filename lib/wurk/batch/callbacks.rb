@@ -26,8 +26,9 @@ module Wurk
       # parent's *own* last job acks while a child batch is still running,
       # nothing fires here; the last child's propagate_to_parent re-invokes
       # this and fires then. The SREM in pkids_drained? happens before that
-      # re-invocation, so exactly one of the racing paths fires (dedup_set
-      # absorbs the overlap).
+      # re-invocation, so at most one of the racing paths reaches a fire and
+      # the callback markers absorb the rest (see `fire_complete` for the one
+      # window that can still duplicate).
       def maybe_fire(bid, pending:, live:)
         return unless live.zero?
         return unless kids_finished?(bid)
@@ -49,13 +50,36 @@ module Wurk
       # the dedup guard so it is restored on re-death; the callback enqueue
       # and parent cascade stay behind the guard so `:death` is enqueued at
       # most once per batch.
+      #
+      # That claim-before-enqueue ordering is kept deliberately, against the
+      # enqueue-before-mark rule `fire_complete` explains: everything that
+      # makes the batch *look* dead is already persisted above the guard, so a
+      # crash in the window costs the notification while `Status`, the
+      # dashboard and `subtree_dead?` all still see a dead batch. `:complete`
+      # and `:success` have no such fallback — the callback is their whole
+      # signal — and this claim additionally gates `cascade_death`, which
+      # would otherwise re-walk the ancestor chain on every re-invocation.
       def fire_death(bid)
         record_event(bid, 'death_at')
-        Wurk.redis { |conn| conn.call('ZADD', 'dead-batches', Time.now.to_f.to_s, bid) }
+        index_dead(bid)
         return unless dedup_set(bid, 'death')
 
         enqueue_callbacks(bid, 'death')
         cascade_death(bid)
+      end
+
+      # Index the batch as dead and bound the set in the same round trip. The
+      # score stays `Time.now.to_f` (wire format, spec §2.8); `Batch.trim_index`
+      # reads it as the epoch seconds it is. See there for why the set needs a
+      # trim at all — only `Status#delete` and the death-recovery ZREM ever
+      # remove a member, and neither runs for a batch left to expire.
+      def index_dead(bid)
+        Wurk.redis do |conn|
+          conn.pipelined do |pipe|
+            pipe.call('ZADD', 'dead-batches', Time.now.to_f.to_s, bid)
+            Batch.trim_index(pipe, 'dead-batches')
+          end
+        end
       end
 
       # A child's death means the parent — and every ancestor — can never
@@ -70,19 +94,45 @@ module Wurk
         fire_death(parent_bid)
       end
 
+      # `:complete` and `:success` mark their dedup key *after* the enqueue,
+      # never before (F16). Nothing re-drives a fire once the acking job's
+      # BATCH_ACK_SUCCESS has SREM'd its jid — that job's retry gets
+      # `pending == -1` and returns before maybe_fire — so a claim-then-enqueue
+      # ordering turns a crash in between into callbacks that are never
+      # enqueued by anyone, ever. Enqueuing first makes the durable side effect
+      # happen before the marker that suppresses it.
+      #
+      # The accepted direction is a duplicate over a lost callback: callback
+      # jobs retry like any other job and must already be idempotent (spec
+      # §2.4, §12 "Callback retries"), so firing one twice is a cost the app
+      # is required to absorb, while losing one silently strands the batch.
+      #
+      # `dedup_marked?` still collapses every *sequential* re-invocation — a
+      # reclaimed child re-running propagate_to_parent, a second DeathHandler
+      # pass — so the duplicate window is only two genuinely concurrent acks
+      # interleaving between each other's check and mark.
+      #
+      # `record_event` stays ahead of the enqueue: the callback job reads a
+      # Status snapshot and must see `complete_at`/`success_at` already set.
       def fire_complete(bid)
-        return unless dedup_set(bid, 'complete')
+        return if dedup_marked?(bid, 'complete')
 
         record_event(bid, 'complete_at')
         enqueue_callbacks(bid, 'complete')
+        dedup_set(bid, 'complete')
       end
 
+      # Same enqueue-then-mark ordering as fire_complete. `apply_linger` runs
+      # last of all: it EXPIREs `b-<bid>-success` down to the linger window,
+      # which only holds if the marker already exists — `dedup_set`'s 30d
+      # `EX` would otherwise re-create it outside that window.
       def fire_success(bid)
-        return unless dedup_set(bid, 'success')
+        return if dedup_marked?(bid, 'success')
 
         record_event(bid, 'success_at')
         emit_duration_metric(bid)
         enqueue_callbacks(bid, 'success')
+        dedup_set(bid, 'success')
         apply_linger(bid)
       end
 
@@ -90,10 +140,11 @@ module Wurk
       # full success. `created_at` shares the CLOCK_REALTIME epoch we record it
       # with. No-op without a dogstatsd client.
       #
-      # Strictly best-effort: `fire_success` has already burned the `success`
-      # dedup key by the time we run, so a raise here (e.g. a Redis hiccup on the
-      # HGET) would permanently strand the success callbacks and linger that
-      # follow — a retry can't re-fire them. Swallow and log instead.
+      # Strictly best-effort: this runs on the acking job's thread ahead of the
+      # enqueue, and that ack already removed the jid, so a raise here (e.g. a
+      # Redis hiccup on the HGET) would abort `fire_success` with nothing left
+      # to re-drive it — the success callbacks and linger would be stranded for
+      # good. Swallow and log instead.
       def emit_duration_metric(bid)
         created = Wurk.redis { |conn| conn.call('HGET', "b-#{bid}", 'created_at') }
         return if created.nil? || created.to_s.empty?
@@ -116,9 +167,22 @@ module Wurk
         end
       end
 
-      # Atomically marks `bid` as having fired `event`. Returns true the
-      # first time, false thereafter — caller skips the enqueue when false.
-      # SET NX makes this safe under racing acks.
+      # True once `b-<bid>-<event>` exists, i.e. an enqueue pass for `event`
+      # has completed. The read-side half of the enqueue-then-mark ordering in
+      # `fire_complete`/`fire_success`; `fire_death` needs no equivalent
+      # because its `dedup_set` still doubles as the claim.
+      def dedup_marked?(bid, event)
+        Wurk.redis { |conn| conn.call('EXISTS', "b-#{bid}-#{event}") }.to_i == 1
+      end
+
+      # Writes `b-<bid>-<event>`, the marker that `event`'s callbacks have been
+      # enqueued. Returns true when this call created it, false when it was
+      # already there.
+      #
+      # Two usages, deliberately different: `fire_death` calls it *before* its
+      # enqueue and treats the return as a claim (at most once); `fire_complete`
+      # and `fire_success` call it *after* theirs and ignore the return, gating
+      # on `dedup_marked?` instead. SET NX keeps both safe under racing acks.
       def dedup_set(bid, event)
         Wurk.redis do |conn|
           ok = conn.call('SET', "b-#{bid}-#{event}", '1', 'NX', 'EX', Batch::CALLBACK_NOTIFY_TTL)
@@ -126,11 +190,17 @@ module Wurk
         end
       end
 
+      # The HSETs resurrect the hash when a callback fires for a batch whose keys
+      # already expired (a child batch outliving its parent's 30d window), so the
+      # write is followed by an NX stamp — without it the resurrected hash would
+      # have no clock at all. NX leaves a live batch's expiry, and the shorter
+      # post-success `linger` window, untouched.
       def record_event(bid, field)
         now = ::Process.clock_gettime(::Process::CLOCK_REALTIME)
         Wurk.redis do |conn|
           conn.call('HSET', "b-#{bid}", field, now.to_s)
           conn.call('HSET', "b-#{bid}", field.to_s.sub('_at', ''), '1')
+          conn.call('EXPIRE', "b-#{bid}", Batch::DEFAULT_EXPIRY_SECONDS, 'NX')
         end
       end
 

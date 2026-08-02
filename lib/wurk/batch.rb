@@ -41,6 +41,14 @@ module Wurk
     POST_SUCCESS_EXPIRY_SECONDS = 24 * 60 * 60
     CALLBACK_NOTIFY_TTL = 30 * 24 * 60 * 60
 
+    # Member ceiling for the two batch index ZSETs (`batches`, `dead-batches`).
+    # The score axis in `.trim_index` retires entries in step with the batch data
+    # itself, so this is only the backstop for a workload creating batches faster
+    # than that window retires them. Deliberately generous: a cap that bites drops
+    # batches whose data is still live out of `BatchSet`, and at this scale the
+    # per-batch hashes dwarf the index anyway.
+    INDEX_MAX = 1_000_000
+
     # Bid is URL-safe base64 of 10 random bytes — matches Sidekiq Pro's BID
     # generator. Length matters: third-party gems that key off bid prefix
     # (sharded batches in Pro 8) inspect the first character.
@@ -48,10 +56,21 @@ module Wurk
 
     VALID_EVENTS = %i[success complete death].freeze
 
+    # Every key a batch owns, for the sweep paths: `Status#delete` (UNLINK),
+    # `Callbacks#apply_linger` and `DeathHandler.restamp_ttls` (EXPIRE).
+    #
     # The 'live' set tracks jobs that have not yet reached a terminal state.
     # When it's empty, every job has either succeeded or died → `:complete`
     # is allowed to fire.
-    KEY_SUFFIXES = %w[jids failed died notify cbsucc kids pkids tags].freeze
+    #
+    # `complete`/`success`/`death` are the callback dedup markers written by
+    # `Callbacks#dedup_set`; they belong to the batch and must die with it.
+    # `notify`/`cbsucc`/`tags` are Sidekiq Pro's own key layout (spec §2.8) that
+    # Wurk never writes — Wurk dedups on the three markers above and indexes
+    # tags at `tags:<tag>`. They stay listed so a Redis dataset carried over
+    # from Sidekiq Pro on the gem swap gets swept too; EXPIRE/UNLINK of a
+    # missing key is a no-op for batches Wurk created itself.
+    KEY_SUFFIXES = %w[jids failed died complete success death notify cbsucc kids pkids tags].freeze
 
     THREAD_KEY = :wurk_current_batch
 
@@ -66,6 +85,33 @@ module Wurk
     def self.keys_for(bid)
       base = "b-#{bid}"
       [base, *KEY_SUFFIXES.map { |s| "#{base}-#{s}" }]
+    end
+
+    # Two-axis trim of a batch index ZSET (`batches`, `dead-batches`), in the
+    # shape of the morgue trim (`DeadSet#trim`): `ZREMRANGEBYSCORE` evicts
+    # entries older than `timeout`, `ZREMRANGEBYRANK 0 -max` caps the member
+    # count — and, like the morgue, that bound keeps `max - 1` of a full set.
+    # Appended to the caller's pipeline so bounding the index costs neither
+    # writer an extra round trip.
+    #
+    # Nothing else ever shrinks either set: `Status#delete` and the
+    # death-recovery `ZREM` are manual, so an index entry outlives the batch it
+    # points at and both sets grow for the life of the Redis without this.
+    #
+    # Both index in epoch seconds — `batches` from CLOCK_REALTIME,
+    # `dead-batches` from `Time.now.to_f` — so one cutoff serves both. The
+    # default window is the batch hash TTL: past it `b-<bid>` is gone and the
+    # entry only yields an empty Status. A batch that overrode `expires_in`
+    # beyond that window outlives its index entry — still reachable by bid,
+    # just no longer enumerated by `BatchSet`.
+    #
+    # `max:` / `timeout:` override the defaults for one call, so parallel tests
+    # can drive the trim on isolated limits without mutating the process-global
+    # `Wurk.configuration`.
+    def self.trim_index(pipe, key, max: nil, timeout: nil)
+      cutoff = ::Process.clock_gettime(::Process::CLOCK_REALTIME) - (timeout || DEFAULT_EXPIRY_SECONDS)
+      pipe.call('ZREMRANGEBYSCORE', key, '-inf', "(#{cutoff}")
+      pipe.call('ZREMRANGEBYRANK', key, 0, -(max || INDEX_MAX))
     end
 
     def initialize(bid = nil)
@@ -278,10 +324,15 @@ module Wurk
       Wurk::Metrics::Statsd.increment('batch.created')
     end
 
+    # Only `b-#{@bid}` is stamped here — none of the sub-keys exist yet at first
+    # flush (BATCH_PUSH/BATCH_SCHEDULE create `-jids`, the acks create
+    # `-failed`/`-died`), and EXPIRE on a missing key is a no-op. Each key is
+    # stamped `NX` where it is created instead; see BATCH_PUSH in lua.rb.
     def pipelined_first_flush(pipe, now)
       pipe.call('HSET', "b-#{@bid}", *first_flush_hash(now).flatten)
       pipe.call('EXPIRE', "b-#{@bid}", @expires_in)
       pipe.call('ZADD', 'batches', now.to_s, @bid)
+      Batch.trim_index(pipe, 'batches')
       @tags.each { |t| pipe.call('SADD', "tags:#{t}", @bid) }
       link_to_parent(pipe) if current_parent_bid
     end
@@ -312,9 +363,16 @@ module Wurk
       outer.bid
     end
 
+    # The only place `-kids`/`-pkids` are created, so this is where they get
+    # their clock. TTL is the default, not this batch's `@expires_in`: the keys
+    # belong to the *parent*, and NX means the first link sets the retention for
+    # every sibling that follows.
     def link_to_parent(pipe)
-      pipe.call('SADD', "b-#{current_parent_bid}-kids", @bid)
-      pipe.call('SADD', "b-#{current_parent_bid}-pkids", @bid)
+      parent_key = "b-#{current_parent_bid}"
+      pipe.call('SADD', "#{parent_key}-kids", @bid)
+      pipe.call('SADD', "#{parent_key}-pkids", @bid)
+      pipe.call('EXPIRE', "#{parent_key}-kids", DEFAULT_EXPIRY_SECONDS, 'NX')
+      pipe.call('EXPIRE', "#{parent_key}-pkids", DEFAULT_EXPIRY_SECONDS, 'NX')
     end
 
     def job_count

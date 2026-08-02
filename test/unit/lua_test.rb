@@ -5,6 +5,9 @@ require_relative '../test_helper'
 class LuaTest < Wurk::Test::UnitCase
   parallelize_me!
 
+  # Last ARGV of every batch script: the `EXPIRE ... NX` seconds each one
+  # stamps on the keys it can create.
+  TTL = Wurk::Batch::DEFAULT_EXPIRY_SECONDS
 
   def setup
     super
@@ -213,7 +216,7 @@ class LuaTest < Wurk::Test::UnitCase
       Wurk::Lua::Loader.eval_cached(
         c, :batch_push,
         keys: [bkey, jids, list, qset, "#{@ns}:b-x-died", "#{@ns}:dead-batches"],
-        argv: ['default', 'JID1', '{"jid":"JID1"}', 'x']
+        argv: ['default', 'JID1', '{"jid":"JID1"}', 'x', TTL]
       )
 
       assert_equal '1', c.call('HGET', bkey, 'total')
@@ -235,7 +238,7 @@ class LuaTest < Wurk::Test::UnitCase
     list = "#{@ns}:queue:default"
     qset = "#{@ns}:queues"
     keys = [bkey, jids, list, qset, "#{@ns}:b-rp-died", "#{@ns}:dead-batches"]
-    argv = ['default', 'JID1', '{"jid":"JID1"}', 'rp']
+    argv = ['default', 'JID1', '{"jid":"JID1"}', 'rp', TTL]
     @pool.with do |c|
       2.times { Wurk::Lua::Loader.eval_cached(c, :batch_push, keys: keys, argv: argv) }
 
@@ -260,7 +263,7 @@ class LuaTest < Wurk::Test::UnitCase
       %w[A B].each do |jid|
         Wurk::Lua::Loader.eval_cached(
           c, :batch_push, keys: [bkey, jids, list, qset, died, dead],
-                          argv: ['default', jid, %({"jid":"#{jid}"}), 'dj']
+                          argv: ['default', jid, %({"jid":"#{jid}"}), 'dj', TTL]
         )
       end
 
@@ -280,7 +283,7 @@ class LuaTest < Wurk::Test::UnitCase
     jids  = "#{@ns}:b-s-jids"
     @pool.with do |c|
       Wurk::Lua::Loader.eval_cached(
-        c, :batch_schedule, keys: [sched, bkey, jids], argv: ['1700000000.5', '{"jid":"JID1"}', 'JID1']
+        c, :batch_schedule, keys: [sched, bkey, jids], argv: ['1700000000.5', '{"jid":"JID1"}', 'JID1', TTL]
       )
 
       assert_equal '1', c.call('HGET', bkey, 'total')
@@ -298,7 +301,7 @@ class LuaTest < Wurk::Test::UnitCase
     sched = "#{@ns}:schedule"
     bkey  = "#{@ns}:b-sr"
     jids  = "#{@ns}:b-sr-jids"
-    argv  = ['1700000000', '{"jid":"JID1"}', 'JID1']
+    argv  = ['1700000000', '{"jid":"JID1"}', 'JID1', TTL]
     @pool.with do |c|
       2.times { Wurk::Lua::Loader.eval_cached(c, :batch_schedule, keys: [sched, bkey, jids], argv: argv) }
 
@@ -328,7 +331,7 @@ class LuaTest < Wurk::Test::UnitCase
       Wurk::Lua::Loader.eval_cached(
         c, :batch_push,
         keys: [bkey, jids, list, "#{@ns}:queues", died, dead],
-        argv: ['default', 'JID1', '{"jid":"JID1"}', 'dr']
+        argv: ['default', 'JID1', '{"jid":"JID1"}', 'dr', TTL]
       )
 
       assert_equal '1', c.call('HGET', bkey, 'total')
@@ -356,7 +359,7 @@ class LuaTest < Wurk::Test::UnitCase
       Wurk::Lua::Loader.eval_cached(
         c, :batch_push,
         keys: [bkey, jids, list, "#{@ns}:queues", died, dead],
-        argv: ['default', 'JID1', '{"jid":"JID1"}', 'dp']
+        argv: ['default', 'JID1', '{"jid":"JID1"}', 'dp', TTL]
       )
 
       assert_equal %w[JID2], c.call('SMEMBERS', died)
@@ -413,8 +416,8 @@ class LuaTest < Wurk::Test::UnitCase
     @pool.with do |c|
       c.call('HSET', bkey, 'total', 1, 'pending', 1, 'failures', 0)
 
-      Wurk::Lua::Loader.eval_cached(c, :batch_ack_failed, keys: [bkey, failed], argv: ['A'])
-      Wurk::Lua::Loader.eval_cached(c, :batch_ack_failed, keys: [bkey, failed], argv: ['A'])
+      Wurk::Lua::Loader.eval_cached(c, :batch_ack_failed, keys: [bkey, failed], argv: ['A', TTL])
+      Wurk::Lua::Loader.eval_cached(c, :batch_ack_failed, keys: [bkey, failed], argv: ['A', TTL])
 
       assert_equal '1', c.call('HGET', bkey, 'failures')
       assert_equal 1, c.call('SISMEMBER', failed, 'A')
@@ -431,7 +434,7 @@ class LuaTest < Wurk::Test::UnitCase
       c.call('SADD', jids, 'A', 'B')
 
       live, died_n, first = Wurk::Lua::Loader.eval_cached(
-        c, :batch_ack_complete, keys: [bkey, jids, died, failed], argv: ['A']
+        c, :batch_ack_complete, keys: [bkey, jids, died, failed], argv: ['A', TTL]
       )
 
       assert_equal 1, live
@@ -444,7 +447,7 @@ class LuaTest < Wurk::Test::UnitCase
       assert_equal 0, c.call('SISMEMBER', failed, 'A')
 
       _live, _died_n, second_first = Wurk::Lua::Loader.eval_cached(
-        c, :batch_ack_complete, keys: [bkey, jids, died, failed], argv: ['B']
+        c, :batch_ack_complete, keys: [bkey, jids, died, failed], argv: ['B', TTL]
       )
 
       assert_equal 0, second_first
@@ -464,7 +467,7 @@ class LuaTest < Wurk::Test::UnitCase
       c.call('SADD', jids, 'A')
       c.call('SADD', failed, 'A')
 
-      Wurk::Lua::Loader.eval_cached(c, :batch_ack_complete, keys: [bkey, jids, died, failed], argv: ['A'])
+      Wurk::Lua::Loader.eval_cached(c, :batch_ack_complete, keys: [bkey, jids, died, failed], argv: ['A', TTL])
 
       assert_equal '0', c.call('HGET', bkey, 'failures')
       assert_equal 0, c.call('SISMEMBER', failed, 'A')
