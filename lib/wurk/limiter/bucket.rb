@@ -38,7 +38,7 @@ module Wurk
           remaining = deadline - ::Time.now.to_f
           raise OverLimit, self if remaining <= 0
 
-          sleep [remaining, secs_to_next.to_f, 0.05].compact.min.clamp(0.0, remaining)
+          sleep [0.05, secs_to_next.to_f].max.clamp(0.0, remaining)
         end
       end
 
