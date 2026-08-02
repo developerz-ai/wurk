@@ -49,6 +49,14 @@ module Wurk
     # per-batch hashes dwarf the index anyway.
     INDEX_MAX = 1_000_000
 
+    # Ceiling on the `callbacks` array of one batch hash, enforced by
+    # BATCH_APPEND_CALLBACK. Every registration re-encodes the whole array,
+    # and every entry becomes a callback job when the event fires, so an
+    # unbounded array is both a hot-path cost and a fan-out. Far above any
+    # legitimate batch — real ones register a handful — so hitting it means a
+    # loop is registering callbacks it should have registered once.
+    CALLBACKS_MAX = 1_000
+
     # Bid is URL-safe base64 of 10 random bytes — matches Sidekiq Pro's BID
     # generator. Length matters: third-party gems that key off bid prefix
     # (sharded batches in Pro 8) inspect the first character.
@@ -297,17 +305,25 @@ module Wurk
     # in-memory-only append would silently never fire (#213). Covers both
     # `on` after `#jobs` and batches reopened by bid. The append runs
     # server-side (Lua) so concurrent registrations from different processes
-    # can't lose each other to a read-modify-write race.
+    # can't lose each other to a read-modify-write race, and it dedups
+    # identical triples so the reopen-per-job shape stops growing the array.
     def persist_callback!(entry)
       event = entry[0]
-      fired = Wurk.redis do |conn|
+      status = Wurk.redis do |conn|
         Wurk::Lua::Loader.eval_cached(conn, :batch_append_callback,
-                                      keys: ["b-#{@bid}"], argv: [entry.to_json, event])
+                                      keys: ["b-#{@bid}"], argv: [entry.to_json, event, CALLBACKS_MAX])
       end
-      raise ArgumentError, "cannot register #{event} callback: batch #{@bid} no longer exists" if fired == -1
-      return unless fired == '1'
+      raise ArgumentError, "cannot register #{event} callback: batch #{@bid} no longer exists" if status == -1
 
-      Wurk.logger.warn("batch #{@bid}: #{event} callback registered after #{event} already fired — it will never run")
+      # Sentinels are Integers, the fired flag is the String the `<event>`
+      # hash field holds — asymmetric on purpose, so a sentinel can never be
+      # read as a fired event.
+      case status
+      when -2
+        Wurk.logger.warn("batch #{@bid}: #{event} callback dropped — #{CALLBACKS_MAX} callback limit reached")
+      when '1'
+        Wurk.logger.warn("batch #{@bid}: #{event} callback registered after #{event} already fired — it will never run")
+      end
     end
 
     # First flush writes the core hash, registers in the global `batches`

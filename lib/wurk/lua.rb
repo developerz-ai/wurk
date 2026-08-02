@@ -287,10 +287,21 @@ module Wurk
     # same reopened batch cannot lose each other's writes. Refuses to write
     # when the batch hash is gone — resurrecting a bare hash would create a
     # batch that can never fire anything.
+    #
+    # Appends are deduped and capped. Reopening the same batch inside every
+    # job and re-registering its callback is a common shape, and each append
+    # pays a decode + encode of the whole array: unbounded that is O(N^2) Lua
+    # work on the way in and N identical callback jobs at fire time. An
+    # identical triple is therefore a no-op — the registration is already
+    # satisfied by the entry that is there — and past the cap the append is
+    # refused rather than allowed to grow the hash field without limit.
+    # Both sides of the comparison are normalised through cjson so an entry
+    # written by Ruby's `to_json` at first flush matches one appended here.
     # KEYS = [b-<bid>]
-    # ARGV = [callback triple JSON, event name]
-    # Returns -1 when the batch hash does not exist; otherwise the event's
-    # fired flag ("1", or nil when it has not fired yet).
+    # ARGV = [callback triple JSON, event name, max callbacks]
+    # Returns -1 when the batch hash does not exist and -2 when the cap
+    # refused the append; otherwise the event's fired flag ("1", or nil when
+    # it has not fired yet).
     BATCH_APPEND_CALLBACK = <<~LUA
       if redis.call("exists", KEYS[1]) == 0 then
         return -1
@@ -302,7 +313,17 @@ module Wurk
       else
         list = {}
       end
-      list[#list + 1] = cjson.decode(ARGV[1])
+      local entry = cjson.decode(ARGV[1])
+      local encoded = cjson.encode(entry)
+      for i = 1, #list do
+        if cjson.encode(list[i]) == encoded then
+          return redis.call("hget", KEYS[1], ARGV[2])
+        end
+      end
+      if #list >= tonumber(ARGV[3]) then
+        return -2
+      end
+      list[#list + 1] = entry
       redis.call("hset", KEYS[1], "callbacks", cjson.encode(list))
       return redis.call("hget", KEYS[1], ARGV[2])
     LUA

@@ -489,7 +489,89 @@ class LuaTest < Wurk::Test::UnitCase
     end
   end
 
+  # Same event, same target, different options are three different callbacks —
+  # dedup must key on the whole triple or it swallows legitimate registrations.
+  def test_batch_append_callback_appends_distinct_triples
+    bkey = "#{@ns}:b-cb1"
+    @pool.with do |c|
+      c.call('HSET', bkey, 'total', 0)
+
+      [['success', 'A', {}], ['success', 'B', {}], ['success', 'A', { 'shard' => 1 }]].each do |entry|
+        append_callback(c, bkey, entry)
+      end
+
+      assert_equal [['success', 'A', {}], ['success', 'B', {}], ['success', 'A', { 'shard' => 1 }]],
+                   callbacks(c, bkey)
+    end
+  end
+
+  # The seeded list is Ruby's `to_json` (what first flush writes), the appends
+  # go through cjson — the dedup only holds because both sides are normalised
+  # through the same encoder before comparison.
+  def test_batch_append_callback_skips_an_identical_triple
+    bkey = "#{@ns}:b-cb2"
+    entry = ['success', 'A', { 'shard' => 1 }]
+    @pool.with do |c|
+      c.call('HSET', bkey, 'callbacks', JSON.generate([entry]))
+
+      50.times { append_callback(c, bkey, entry) }
+
+      assert_equal [entry], callbacks(c, bkey)
+    end
+  end
+
+  def test_batch_append_callback_returns_the_fired_flag_for_a_skipped_triple
+    bkey = "#{@ns}:b-cb3"
+    entry = ['success', 'A', {}]
+    @pool.with do |c|
+      c.call('HSET', bkey, 'callbacks', JSON.generate([entry]), 'success', '1')
+
+      assert_equal '1', append_callback(c, bkey, entry)
+    end
+  end
+
+  def test_batch_append_callback_refuses_a_new_triple_past_the_cap
+    bkey = "#{@ns}:b-cb4"
+    full = Array.new(Wurk::Batch::CALLBACKS_MAX) { |i| ['success', "C#{i}", {}] }
+    @pool.with do |c|
+      c.call('HSET', bkey, 'callbacks', JSON.generate(full))
+
+      assert_equal(-2, append_callback(c, bkey, ['success', 'OVERFLOW', {}]))
+      assert_equal full, callbacks(c, bkey)
+    end
+  end
+
+  # The cap counts entries, not calls: a triple already in the list needs no
+  # room, so a full list still answers it with the fired flag rather than -2.
+  def test_batch_append_callback_still_dedups_at_the_cap
+    bkey = "#{@ns}:b-cb5"
+    full = Array.new(Wurk::Batch::CALLBACKS_MAX) { |i| ['success', "C#{i}", {}] }
+    @pool.with do |c|
+      c.call('HSET', bkey, 'callbacks', JSON.generate(full))
+
+      assert_nil append_callback(c, bkey, full.last)
+      assert_equal Wurk::Batch::CALLBACKS_MAX, callbacks(c, bkey).size
+    end
+  end
+
+  # -1 (gone) and -2 (capped) are distinct sentinels; the caller raises on one
+  # and logs on the other.
+  def test_batch_append_callback_refuses_a_missing_batch_hash
+    @pool.with do |c|
+      assert_equal(-1, append_callback(c, "#{@ns}:b-cb-gone", ['success', 'A', {}]))
+    end
+  end
+
   private
+
+  def append_callback(conn, bkey, entry, max: Wurk::Batch::CALLBACKS_MAX)
+    Wurk::Lua::Loader.eval_cached(conn, :batch_append_callback,
+                                  keys: [bkey], argv: [JSON.generate(entry), entry[0], max])
+  end
+
+  def callbacks(conn, bkey)
+    JSON.parse(conn.call('HGET', bkey, 'callbacks'))
+  end
 
   def promote(conn, sset, now_ms = 1_700_000_000_000)
     Wurk::Lua::Loader.eval_cached(

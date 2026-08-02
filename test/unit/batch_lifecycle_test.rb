@@ -912,6 +912,45 @@ class BatchLifecycleTest < Wurk::Test::UnitCase
     assert_match(/no longer exists/, err.message)
   end
 
+  # Reopening a batch inside every job to register its callback is a common
+  # shape; without dedup that persists one entry per job and fires the
+  # callback that many times.
+  def test_reopening_to_register_an_identical_callback_persists_one_entry
+    batch = new_batch
+    batch.jobs { perform_one }
+    bid = batch.bid
+    100.times { Wurk::Batch.new(bid).on(:success, 'RepeatSuccess') }
+
+    ack_success(bid, jid_for(@queue, bid))
+
+    assert_equal 1, persisted_callbacks(bid).size
+    assert_equal 1, callbacks_fired(event: 'success', bid: bid)
+  end
+
+  # Dedup keys on the whole triple: same target, different options stays two
+  # registrations and fires twice.
+  def test_reopening_with_different_callback_options_keeps_both
+    batch = new_batch
+    batch.jobs { perform_one }
+    Wurk::Batch.new(batch.bid).on(:success, 'ShardSuccess', 'shard' => 1)
+    Wurk::Batch.new(batch.bid).on(:success, 'ShardSuccess', 'shard' => 2)
+
+    ack_success(batch.bid, jid_for(@queue, batch.bid))
+
+    assert_equal 2, callbacks_fired(event: 'success', bid: batch.bid)
+  end
+
+  def test_on_past_the_callback_cap_is_dropped
+    batch = new_batch
+    batch.jobs { perform_one }
+    fill_callbacks(batch.bid)
+
+    batch.on(:success, 'Overflow')
+
+    assert_equal Wurk::Batch::CALLBACKS_MAX, persisted_callbacks(batch.bid).size
+    refute_includes persisted_callbacks(batch.bid).map { |c| c[1] }, 'Overflow'
+  end
+
   def test_on_after_event_already_fired_does_not_enqueue_again
     batch = new_batch(success: 'EarlySuccess')
     batch.jobs { perform_one }
@@ -1045,6 +1084,16 @@ class BatchLifecycleTest < Wurk::Test::UnitCase
 
   def jids_for(queue, bid)
     queued(queue).select { |j| j['bid'] == bid }.map { |j| j['jid'] }
+  end
+
+  def persisted_callbacks(bid)
+    JSON.parse(@pool.with { |c| c.call('HGET', "b-#{bid}", 'callbacks') })
+  end
+
+  # Saturate the callback array without paying CALLBACKS_MAX round trips.
+  def fill_callbacks(bid)
+    full = Array.new(Wurk::Batch::CALLBACKS_MAX) { |i| ['success', "Filler#{i}", {}] }
+    @pool.with { |c| c.call('HSET', "b-#{bid}", 'callbacks', JSON.generate(full)) }
   end
 
   def callbacks_fired(event:, bid:)
