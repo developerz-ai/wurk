@@ -30,6 +30,10 @@
 - Unit: `Limits.list` after meta-hash expiry → dead name removed from `lmtr-list`.
 - Parity: batch suite (`bin/rake test:parity`) — TTL additions must not break Sidekiq Pro batch semantics (keys still live ≥ linger windows).
 
+## Deferred
+
+**Limiter read-side pagination rewrite:** Step 7 mentions `SSCAN`-based pagination as an optional optimization for `Limits.list` (`app/controllers/wurk/api_controller.rb:185-189`). After S6 lands and the `lmtr-list` SADD/SREM sweep runs, the read path self-heals — the set no longer leaks indefinitely. The current `SMEMBERS` + sort + slice approach (`web/enterprise.rb:28-33`) remains acceptable for small-to-moderate limiter counts and defers the pagination rewrite. Revisit only if observed deployment with 1000+ limiters shows latency concern on the dashboard's limiter list page.
+
 ## Done when
 
 - No TTL-less batch sub-key reachable from any creation path.
