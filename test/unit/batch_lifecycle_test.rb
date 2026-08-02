@@ -967,6 +967,63 @@ class BatchLifecycleTest < Wurk::Test::UnitCase
     assert_match(/#{Wurk::Batch::CALLBACKS_MAX} callback limit reached/, log)
   end
 
+  # Pre-flush registrations never reach BATCH_APPEND_CALLBACK — they stage in
+  # memory and land in one HSET — so the dedup and the cap have to hold on
+  # that path too, or the first write already violates the contract.
+  def test_duplicate_callback_before_flush_persists_one_entry
+    batch = new_batch
+    100.times { batch.on(:success, 'RepeatSuccess') }
+
+    batch.jobs { perform_one }
+    ack_success(batch.bid, jid_for(@queue, batch.bid))
+
+    assert_equal 1, persisted_callbacks(batch.bid).size
+    assert_equal 1, callbacks_fired(event: 'success', bid: batch.bid)
+  end
+
+  # Options are compared as persisted: symbol and string keys serialise to the
+  # same entry, so registering both must not double-fire.
+  def test_duplicate_callback_before_flush_ignores_option_key_type
+    batch = new_batch
+    batch.on(:success, 'NormalizedSuccess', shard: 1)
+    batch.on(:success, 'NormalizedSuccess', 'shard' => 1)
+
+    batch.jobs { perform_one }
+
+    assert_equal 1, persisted_callbacks(batch.bid).size
+  end
+
+  def test_distinct_callback_options_before_flush_keep_both
+    batch = new_batch
+    batch.on(:success, 'ShardSuccess', 'shard' => 1)
+    batch.on(:success, 'ShardSuccess', 'shard' => 2)
+
+    batch.jobs { perform_one }
+    ack_success(batch.bid, jid_for(@queue, batch.bid))
+
+    assert_equal 2, callbacks_fired(event: 'success', bid: batch.bid)
+  end
+
+  def test_on_before_flush_past_the_callback_cap_is_dropped
+    batch = new_batch
+    fill_staged_callbacks(batch)
+
+    batch.on(:success, 'Overflow')
+    batch.jobs { perform_one }
+
+    assert_equal Wurk::Batch::CALLBACKS_MAX, persisted_callbacks(batch.bid).size
+    refute_includes persisted_callbacks(batch.bid).map { |c| c[1] }, 'Overflow'
+  end
+
+  def test_on_before_flush_past_the_callback_cap_logs_the_drop
+    batch = new_batch
+    fill_staged_callbacks(batch)
+
+    log = capture_log { batch.on(:success, 'Overflow') }
+
+    assert_match(/#{Wurk::Batch::CALLBACKS_MAX} callback limit reached/, log)
+  end
+
   def test_on_after_event_already_fired_does_not_enqueue_again
     batch = new_batch(success: 'EarlySuccess')
     batch.jobs { perform_one }
@@ -1104,6 +1161,12 @@ class BatchLifecycleTest < Wurk::Test::UnitCase
 
   def persisted_callbacks(bid)
     JSON.parse(@pool.with { |c| c.call('HGET', "b-#{bid}", 'callbacks') })
+  end
+
+  # Saturate the in-memory staging array — the pre-flush twin of
+  # `fill_callbacks`, which saturates the persisted one.
+  def fill_staged_callbacks(batch)
+    Wurk::Batch::CALLBACKS_MAX.times { |i| batch.on(:success, "Filler#{i}") }
   end
 
   # Saturate the callback array without paying CALLBACKS_MAX round trips.

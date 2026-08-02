@@ -133,6 +133,11 @@ module Wurk
       @linger           = nil
       @parent_bid       = nil
       @callbacks        = []
+      # Dedup index over `@callbacks`, keyed on the encoded entry. Only the
+      # pre-flush staging path feeds it — once flushed, Redis holds the array
+      # and BATCH_APPEND_CALLBACK does the deduping — so a batch reopened by
+      # bid never pays to build it.
+      @callback_index   = Set.new
       @expires_in       = DEFAULT_EXPIRY_SECONDS
       @mutable          = !@existing
       @flushed_once     = @existing
@@ -220,17 +225,22 @@ module Wurk
       self
     end
 
-    # Register a callback. Multiple callbacks of the same event are allowed.
-    # The callback target may be a Class, "Foo#bar" string spec, or anything
-    # responding to `name`. `options` must be JSON-serializable.
+    # Register a callback. Any number of *distinct* callbacks may be attached
+    # to one event; re-registering an identical `[event, target, options]`
+    # triple is a no-op, and past `CALLBACKS_MAX` entries the registration is
+    # dropped with a warning. The callback target may be a Class, "Foo#bar"
+    # string spec, or anything responding to `name`. `options` must be
+    # JSON-serializable.
     def on(event, callback, options = {})
       sym = event.to_sym
       raise ArgumentError, "invalid event #{event.inspect}" unless VALID_EVENTS.include?(sym)
       raise ArgumentError, 'callback options must be a Hash' unless options.is_a?(Hash)
 
       entry = [sym.to_s, callback_target(callback), options]
-      @callbacks << entry
-      persist_callback!(entry) if @flushed_once
+      # Before the first flush the array lives only in memory; after it, Redis
+      # is authoritative and `@callbacks` is a stale mirror nothing reads —
+      # appending to it there would just leak one entry per registration.
+      @flushed_once ? persist_callback!(entry) : stage_callback(entry)
       self
     end
 
@@ -298,6 +308,28 @@ module Wurk
     def flush_buffer(buffer)
       payloads = buffer.drain
       Wurk::Client.new.flush_batched(payloads) unless payloads.empty?
+    end
+
+    # Pre-flush counterpart to `persist_callback!`. Entries registered before
+    # the first flush only exist in memory until `first_flush_hash` writes the
+    # whole array in one HSET, so BATCH_APPEND_CALLBACK never sees them — the
+    # same dedup and cap have to be applied here or the very first write can
+    # already ship duplicates and an unbounded array.
+    #
+    # Keyed on the encoded entry, which is what actually lands in the hash:
+    # `{a: 1}` and `{'a' => 1}` are one callback once persisted, so they must
+    # be one entry here too.
+    def stage_callback(entry)
+      json = entry.to_json
+      return if @callback_index.include?(json)
+
+      if @callbacks.size >= CALLBACKS_MAX
+        Wurk.logger.warn("batch #{@bid}: #{entry[0]} callback dropped — #{CALLBACKS_MAX} callback limit reached")
+        return
+      end
+
+      @callbacks << entry
+      @callback_index << json
     end
 
     # Like `linger=`, anything registered after the first flush must reach

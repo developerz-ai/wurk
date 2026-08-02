@@ -106,7 +106,7 @@ Rules:
 - `:success` and `:death` are **not mutually exclusive** — death fires first, success never fires unless the dead job is manually retried to success.
 - Child `:success` fires before parent `:success`. Child `:complete` fires before parent `:complete`. No ordering between child `:success` and parent `:complete`.
 - **Wurk (#213):** `#on` after the first flush — following a `#jobs` call or on a batch reopened by bid — persists the callback to `b-<bid>` immediately (atomic server-side append), so it is never silently dropped. Registering on a batch whose Redis hash no longer exists raises `ArgumentError`; registering for an event that already fired logs a warning (the callback will never run).
-- **Wurk:** that append is deduped and capped. Re-registering an identical `[event, target, options]` triple is a no-op (one entry, one callback job), so reopening a batch per job to register its callback costs O(1) instead of growing the array; past 1000 entries (`Batch::CALLBACKS_MAX`) the append is refused and logged. Distinct callbacks for the same event are unaffected — any number may be registered.
+- **Wurk:** every `#on` is deduped and capped, before the first flush (in memory) and after it (in the Lua append) alike. Re-registering an identical `[event, target, options]` triple is a no-op (one entry, one callback job), so reopening a batch per job to register its callback costs O(1) instead of growing the array; past 1000 entries (`Batch::CALLBACKS_MAX`) the registration is refused and logged. Options are compared as persisted, so `a: 1` and `'a' => 1` are the same callback. Distinct callbacks for the same event are unaffected — any number may be registered.
 
 ### 2.5 `Sidekiq::Batch::Status`
 
