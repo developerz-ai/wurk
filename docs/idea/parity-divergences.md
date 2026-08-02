@@ -157,3 +157,42 @@ recorded as a deliberate, matched-parity gap rather than an intentional
 
 **Anchor:** `lib/wurk/fetcher/reaper.rb:270-284`, `lib/wurk/component.rb:19-21`,
 `docs/reliability.md` (Reliable fetch → How "dead" is decided), Pro §3.2.
+
+## Poison-pill counter resets on ACK, and a poison kill fires death handlers
+
+**Wurk:** the recovery counter at `super_fetch:recovered:<jid>` is deleted the
+moment the job acks — `Fetcher::Reliable::UnitOfWork#acknowledge` pipelines the
+`DEL` next to its `LREM`, so an attempt that finished (returned, or raised and
+booked a retry) resets the count. Only reclaims of an attempt that never acked
+accumulate toward `RECOVERY_THRESHOLD`. When the threshold is crossed, the
+kill goes through the death-handler chain (`notify_failure` left at its
+default `true`) with a `Wurk::Middleware::PoisonPill::Poisoned` exception.
+
+**Spec:** Pro §12 pins only the mechanism — key name, 72h TTL, threshold 3. It
+says nothing about when the counter is cleared, and nothing about whether a
+poison kill is a "death" for the purposes of `:death` callbacks or
+`death_handlers`.
+
+**Why:** both gaps lose work if answered the other way.
+
+*The reset:* jids come back — a UI or API retry re-pushes the same one, and so
+does any client that supplies its own. A counter that only decays on its 72h
+TTL therefore accumulates across *different* runs of the same jid, so three
+unrelated worker crashes (a deploy `SIGKILL`, an OOM kill, a node eviction)
+inside one window dead-set a job that completed every single time it ran. The
+ACK is the sharpest available "this job does not take its worker down" signal,
+and it is the one Redis round trip the success path already makes — so the
+correctness costs no extra call for the jobs, effectively all of them, that
+were never reclaimed.
+
+*The notification:* `Batch::DeathHandler` is registered as a death handler.
+Suppressing the notification (Wurk's original `notify_failure: false`) meant a
+poison-killed job never decremented its batch's pending count: `:death` never
+fired, `:complete` never fired, and the batch hung forever with no error
+anywhere. Every other terminal path in Wurk — retry exhaustion, `:discard`,
+the limiter's reschedule cap — notifies, and a poison kill is the same kind of
+event: the job is dead and is not coming back.
+
+**Anchor:** `lib/wurk/middleware/poison_pill.rb` (`clear_in`, `mark_poison`),
+`lib/wurk/fetcher/reliable.rb` (`UnitOfWork#acknowledge`),
+`lib/wurk/processor.rb` (`process`), Pro §12.

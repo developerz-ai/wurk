@@ -2,10 +2,10 @@ plan: 101-leak-logic-perf-fixes
 title: Leak, logic-bug & perf audit fixes
 status: in_progress        # not_started | in_progress | blocked | complete | superseded
 created_by: sebi
-worked_by: ""              # executor fills with their git user.name on pickup
+worked_by: "sebi"          # executor fills with their git user.name on pickup
 owner: sebi
-percent: 30
-current_focus: ""
+percent: 82
+current_focus: "07 — F6 (poison-pill counter cleared on ACK + death handlers on kill) landed in PR #359 alongside the 1.4.0 release notes; steps 2-8 of slice 07 and all of slice 08 remain"
 slices:
   - file: 01-swarm-launcher-teardown.md
     status: complete
@@ -14,26 +14,26 @@ slices:
     status: complete
     percent: 100
   - file: 03-client-buffer-fork-safety.md
-    status: not_started
-    percent: 0
+    status: complete
+    percent: 100
   - file: 04-redis-retry-idempotency.md
-    status: not_started
-    percent: 0
+    status: complete
+    percent: 100
   - file: 05-leader-cron-limiter-logic.md
-    status: not_started
-    percent: 0
+    status: complete
+    percent: 100
   - file: 06-batch-limiter-key-hygiene.md
-    status: not_started
-    percent: 0
+    status: complete
+    percent: 100
   - file: 07-stats-web-misc.md
-    status: not_started
-    percent: 0
+    status: in_progress
+    percent: 15
   - file: 08-perf-quick-wins.md
     status: not_started
     percent: 0
   - file: 09-frontend-fixes.md
-    status: not_started
-    percent: 0
+    status: complete
+    percent: 100
   - file: 10-test-bench-hygiene.md
     status: complete
     percent: 100
@@ -50,8 +50,29 @@ evidence:
   - commit: c14694b
     slices: [02]
     notes: "PR #349 — F2 reaper liveness across PID namespaces (private-list nonce)"
+  - commit: 1c4049a
+    slices: [03]
+    notes: "PR #352 — Buffered.reset_after_fork! on both fork paths, Overflow#payloads carries every undelivered payload, residual-only re-buffering after a partial push, late-resolved drain pool, emit_enqueued no longer double-counts"
+  - commit: 09387e4
+    slices: [04]
+    notes: "PR #353 — retry split by apply-safety (CannotConnect/Failover replay, Read/WriteTimeout raise), round-trip odometer bars replay of a dirty block, idempotent: forwarded through every pool wrapper, five non-idempotent call sites fixed incl. F5 Scheduled#zpopbyscore"
+  - commit: a1aac75
+    slices: [05]
+    notes: "PR #354 (05a) — F3 leader release via release_if_owner CAS, F12 re-election spawn inside the mutex, F4 cron fire marks advance through cron_claim_fire CAS"
+  - commit: e90cf69
+    slices: [05]
+    notes: "PR #355 (05b) — F8 read-only Window#status/#size via limiter_window_status.lua, F9 Bucket sleeps to the next boundary, F10 Concurrent held on acquire / overages on reclaimed-slot release"
+  - commit: 1b8754f
+    slices: [06]
+    notes: "PR #356 — S4 EXPIRE NX at every batch sub-key creation site + restamp on death, S5/S7 two-axis trim of batches/dead-batches, F16 enqueue-before-mark for :complete/:success"
+  - commit: d00be0d
+    slices: [06]
+    notes: "PR #357 — S8 BATCH_APPEND_CALLBACK dedup + CALLBACKS_MAX cap, S6 limiter_register gates the SADD and Limits.list sweeps dead names. Limiter read-side SSCAN pagination deliberately deferred (self-healed by the sweep; out of scope unless 1000+ limiters show latency)"
+  - commit: aae742e
+    slices: [09]
+    notes: "PR #351 — FE6 abort in-flight Extension fetches on dispose, FE7 toast timers cleared + list capped, FE8 Modal children memoized, FE9 prefersReducedMotion reactive, FE10 test-only SSE reset"
   - commit: 15070e7
     slices: [10]
     notes: "PR #343 merge — T1 liveness-probe Launcher, T2 AR handle across parallel fork, T3 processor teardown, T4/T5 supervisor join-kill + boot inside begin, T9 bench DB isolation, T11 bounded waitall, T12 BlipProxy pump threads"
-notes: "Findings from five-agent audit 2026-07-31 (lifecycle / execution+web / frontend+tests / logic / perf). Critical: child-inherited at_exit SIGKILL cascade (01/A1). Job-loss class: reaper PID-namespace liveness (02/F2), poison-pill never cleared (07/F6), scheduled pop replay (04/F5). Slices 03–09 remain. Slice 10 landed whole via PR #343 (seven commits, T1–T5/T9/T11/T12); its source branch test/liveness-probe-teardown is deleted upstream — nothing to cherry-pick, and any resurrected copy predates slices 01/02 and would revert landed work."
-last_updated: 2026-08-01
+notes: "Findings from five-agent audit 2026-07-31 (lifecycle / execution+web / frontend+tests / logic / perf). Slices 01-06, 09 and 10 have landed; everything through d00be0d ships in Wurk 1.4.0. Slice 07 step 1 (F6 — poison-pill counter retired by the ACK, and the kill now fires death handlers with PoisonPill::Poisoned) landed in PR #359, which also carries the 1.4.0 release notes for the whole campaign; steps 2-8 (F13 Metrics::History counting Handled/Skip as failures, F14 local-vs-UTC daily stats date, F15 stale JobSet comment, S9 WORK_STATE outside begin, S10 Web::Config#rack_app memo, S11 on_poison append-only registry, S13 StreamConcurrencyGuard self-heal) are untouched, as is slice 08 in full. Slice 10 landed whole via PR #343 (seven commits, T1-T5/T9/T11/T12); its source branch test/liveness-probe-teardown is deleted upstream — nothing to cherry-pick, and any resurrected copy predates slices 01/02 and would revert landed work."
+last_updated: 2026-08-02

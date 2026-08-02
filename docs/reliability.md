@@ -238,8 +238,24 @@ job runs through `Wurk::Middleware::PoisonPill`:
 
 - `INCR super_fetch:recovered:<jid>` with a **72h TTL** (wire-compatible with
   Sidekiq Pro — tooling that watches those keys expects 72h).
+- The counter is dropped the moment the job **acks** — the round trip that
+  removes it from its private list carries the `DEL`. Anything that finishes an
+  attempt counts (a clean run, or a raise that booked a retry): the job proved
+  it does not take its worker down. Only reclaims of an attempt that never
+  finished accumulate, so unrelated crashes spread across the 72h window can't
+  dead-set a job that has been completing all along.
+  The reset needs the jid, which the ACK path takes from the payload it has
+  already parsed. A unit of work carrying no jid — a blank one, or a custom
+  `config[:fetch_class]` whose unit of work has no jid slot at all — still acks
+  normally, it just leaves its counter to expire on the 72h TTL rather than
+  clearing it early. Nothing is deleted on a blank jid: the key it would build
+  is the bare prefix, which is shared rather than per-job.
 - At `RECOVERY_THRESHOLD` (**3**) the job is killed into the dead set and
   `LREM`'d back off the public queue so it isn't also re-run.
+- The kill fires **death handlers** (`ex` is a
+  `Wurk::Middleware::PoisonPill::Poisoned`), so `:death` batch callbacks and
+  error services see it like any other exhaustion. Sidekiq Pro doesn't specify
+  this either way — see [parity divergences](idea/parity-divergences.md).
 - Statsd `sidekiq.jobs.recovered.fetch` fires on every recovery;
   `sidekiq.jobs.poison` on the kill.
 
@@ -260,7 +276,7 @@ end
 ```
 
 `Wurk::Middleware::PoisonPill.recovery_count(jid)` reads the counter without
-bumping it.
+bumping it; `.clear!(jid)` resets one by hand.
 
 ---
 

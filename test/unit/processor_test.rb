@@ -199,6 +199,82 @@ class ProcessorTest < Wurk::Test::UnitCase
     assert_equal 0, llen(@public_queue)
   end
 
+  # --- poison-pill counter (F6) -----------------------------------------
+
+  # A job that runs to completion must leave no recovery counter behind: the
+  # ACK drops `super_fetch:recovered:<jid>` so the next reclaim of that jid
+  # starts from one.
+  def test_process_one_clears_the_poison_pill_recovery_counter
+    klass = define_worker_recording
+    payload = enqueue(class: klass.name, args: [])
+    Wurk::Middleware::PoisonPill.track!(Wurk.dump_json(payload), queue: @queue_name)
+
+    assert_equal 1, Wurk::Middleware::PoisonPill.recovery_count(payload['jid'])
+
+    @processor.process_one
+
+    assert_equal 0, Wurk::Middleware::PoisonPill.recovery_count(payload['jid'])
+  end
+
+  # The F6 loss scenario end to end: two reclaims, one healthy run, a third
+  # reclaim. Without the clear the third crosses RECOVERY_THRESHOLD and the
+  # job is silently dead-set even though it has never failed.
+  def test_reclaims_around_a_successful_run_do_not_reach_the_poison_threshold
+    klass = define_worker_recording
+    payload = enqueue(class: klass.name, args: [])
+    json = Wurk.dump_json(payload)
+    2.times { Wurk::Middleware::PoisonPill.track!(json, queue: @queue_name) }
+
+    @processor.process_one
+
+    assert_equal :recovered, Wurk::Middleware::PoisonPill.track!(json, queue: @queue_name)
+    assert_equal 1, Wurk::Middleware::PoisonPill.recovery_count(payload['jid'])
+    assert_equal 0, dead_count_for(payload['jid']), 'a job that completed must not be killed as a poison pill'
+  end
+
+  # The counter is retired by the ACK, not by `perform` returning: a job that
+  # raised and booked a retry still proved it does not take the process down,
+  # which is the only thing the poison pill is looking for.
+  def test_failed_job_that_books_a_retry_also_clears_the_counter
+    klass = define_worker_raising(RuntimeError, 'boom')
+    payload = enqueue(class: klass.name, args: [], retry: true)
+    Wurk::Middleware::PoisonPill.track!(Wurk.dump_json(payload), queue: @queue_name)
+
+    @processor.process_one
+
+    assert_equal 0, Wurk::Middleware::PoisonPill.recovery_count(payload['jid'])
+  end
+
+  # The other side of that line: an interrupted job is never acked, so its
+  # counter survives to be bumped again by the reclaim — a job that keeps
+  # taking its worker down still reaches the threshold.
+  def test_job_interrupted_mid_perform_keeps_its_poison_pill_counter
+    klass = define_worker_blocking
+    payload = enqueue(class: klass.name, args: [])
+    Wurk::Middleware::PoisonPill.track!(Wurk.dump_json(payload), queue: @queue_name)
+    @processor.start
+    klass.started_latch.pop
+    @processor.kill(true)
+
+    assert_equal 1, llen(private_queue), 'precondition: an interrupted job is not acked'
+    assert_equal 1, Wurk::Middleware::PoisonPill.recovery_count(payload['jid'])
+  end
+
+  # Fetchers plugged in via config[:fetch_class] hand back their own UnitOfWork
+  # with no jid slot; the Processor must still run and ACK the job.
+  def test_process_one_acks_a_unit_of_work_that_carries_no_jid_slot
+    klass = define_worker_recording
+    acked = []
+    uow = Struct.new(:job, :queue_name).new(json_for(klass), @queue_name)
+    uow.define_singleton_method(:acknowledge) { acked << :ack }
+    @processor.define_singleton_method(:fetch) { uow }
+
+    @processor.process_one
+
+    assert_equal [[]], klass.sink
+    assert_equal [:ack], acked
+  end
+
   def test_process_one_assigns_jid_and_context_on_instance
     klass = define_worker_capturing_self
     enqueue(class: klass.name, args: [], jid: 'abc123')
@@ -471,6 +547,17 @@ class ProcessorTest < Wurk::Test::UnitCase
 
   def llen(key)
     @pool.with { |c| c.call('LLEN', key) }
+  end
+
+  # A job payload that is never pushed to Redis — for the stubbed-fetch tests.
+  def json_for(klass)
+    Wurk.dump_json('class' => klass.name, 'args' => [], 'queue' => @queue_name, 'jid' => SecureRandom.hex(6))
+  end
+
+  def dead_count_for(jid)
+    @pool.with do |c|
+      c.call('ZRANGE', Wurk::Keys::DEAD, 0, -1).count { |raw| raw.include?(jid) }
+    end
   end
 
   # --- worker fixtures ------------------------------------------------
