@@ -110,7 +110,15 @@ module Wurk
       # client that supplies its own). Riding a round trip the ACK already
       # makes is what keeps that free for the jobs — nearly all of them — that
       # were never reclaimed at all.
+      # Guards the blank jid for the same reason {clear!} and {recovery_count}
+      # do, rather than relying on the one caller to do it: `counter_key(nil)`
+      # is the bare KEY_PREFIX, so an unguarded DEL here would delete a key
+      # that is shared rather than per-job. The caller's own check stays --
+      # it also skips queueing the command at all -- but the invariant belongs
+      # on the method that builds the key.
       def clear_in(pipe, jid)
+        return if jid.nil? || jid.to_s.empty?
+
         pipe.call('DEL', counter_key(jid))
       end
 

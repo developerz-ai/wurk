@@ -91,6 +91,21 @@ class MiddlewarePoisonPillTest < Wurk::Test::UnitCase
     assert_equal 0, Wurk::Middleware::PoisonPill.recovery_count(@jid)
   end
 
+  # clear_in guards the blank jid itself rather than trusting its caller:
+  # counter_key(nil) is the bare KEY_PREFIX, so an unguarded DEL would drop a
+  # shared key instead of a per-job one. Queue nothing, and leave a real
+  # counter parked under the bare prefix untouched.
+  def test_clear_in_is_a_noop_for_empty_jid
+    prefix = Wurk::Middleware::PoisonPill.counter_key(nil)
+    @pool.with { |c| c.call('SET', prefix, '7') }
+
+    [nil, ''].each do |blank|
+      @pool.with { |c| c.pipelined { |pipe| Wurk::Middleware::PoisonPill.clear_in(pipe, blank) } }
+    end
+
+    assert_equal('7', @pool.with { |c| c.call('GET', prefix) })
+  end
+
   def test_counter_key_is_the_pro_wire_key
     assert_equal @key, Wurk::Middleware::PoisonPill.counter_key(@jid)
   end

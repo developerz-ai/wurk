@@ -5,7 +5,7 @@ created_by: sebi
 worked_by: "sebi"          # executor fills with their git user.name on pickup
 owner: sebi
 percent: 82
-current_focus: "07 — F6 (poison-pill counter cleared on ACK + death handlers on kill) implemented and green, not yet committed; steps 2-8 of slice 07 and all of slice 08 remain"
+current_focus: "07 — F6 (poison-pill counter cleared on ACK + death handlers on kill) landed in PR #359 alongside the 1.4.0 release notes; steps 2-8 of slice 07 and all of slice 08 remain"
 slices:
   - file: 01-swarm-launcher-teardown.md
     status: complete
@@ -74,5 +74,5 @@ evidence:
   - commit: 15070e7
     slices: [10]
     notes: "PR #343 merge — T1 liveness-probe Launcher, T2 AR handle across parallel fork, T3 processor teardown, T4/T5 supervisor join-kill + boot inside begin, T9 bench DB isolation, T11 bounded waitall, T12 BlipProxy pump threads"
-notes: "Findings from five-agent audit 2026-07-31 (lifecycle / execution+web / frontend+tests / logic / perf). Slices 01-06, 09 and 10 have landed; everything through d00be0d ships in Wurk 1.4.0. Slice 07 step 1 (F6 — poison-pill counter retired by the ACK, and the kill now fires death handlers with PoisonPill::Poisoned) is implemented, tested and green but sits uncommitted in the working tree; steps 2-8 (F13 Metrics::History counting Handled/Skip as failures, F14 local-vs-UTC daily stats date, F15 stale JobSet comment, S9 WORK_STATE outside begin, S10 Web::Config#rack_app memo, S11 on_poison append-only registry, S13 StreamConcurrencyGuard self-heal) are untouched, as is slice 08 in full. Slice 10 landed whole via PR #343 (seven commits, T1-T5/T9/T11/T12); its source branch test/liveness-probe-teardown is deleted upstream — nothing to cherry-pick, and any resurrected copy predates slices 01/02 and would revert landed work."
+notes: "Findings from five-agent audit 2026-07-31 (lifecycle / execution+web / frontend+tests / logic / perf). Slices 01-06, 09 and 10 have landed; everything through d00be0d ships in Wurk 1.4.0. Slice 07 step 1 (F6 — poison-pill counter retired by the ACK, and the kill now fires death handlers with PoisonPill::Poisoned) landed in PR #359, which also carries the 1.4.0 release notes for the whole campaign; steps 2-8 (F13 Metrics::History counting Handled/Skip as failures, F14 local-vs-UTC daily stats date, F15 stale JobSet comment, S9 WORK_STATE outside begin, S10 Web::Config#rack_app memo, S11 on_poison append-only registry, S13 StreamConcurrencyGuard self-heal) are untouched, as is slice 08 in full. Slice 10 landed whole via PR #343 (seven commits, T1-T5/T9/T11/T12); its source branch test/liveness-probe-teardown is deleted upstream — nothing to cherry-pick, and any resurrected copy predates slices 01/02 and would revert landed work."
 last_updated: 2026-08-02
