@@ -137,4 +137,44 @@ class LimiterBucketTest < Wurk::Test::UnitCase
 
     assert ran
   end
+
+  # F9: `[remaining, secs_to_next, 0.05].min` always picked the 0.05 floor
+  # (remaining and secs_to_next are both bigger almost always), so the old
+  # code busy-polled every 50ms instead of sleeping to the boundary. Assert
+  # bounds on the sleep *duration* itself — the clock value the retry loop
+  # actually waits on — rather than how many times it looped or called Redis,
+  # which is an implementation detail that would still pass under the bug.
+  def test_wait_sleeps_toward_the_boundary_not_a_fixed_poll_floor
+    align_to_top_of_second
+    l = Wurk::Limiter.bucket("pb-#{@suffix}", 1, :second, wait_timeout: 3)
+    l.within_limit {} # exhausts the current second right after it started
+
+    slept = []
+    l.define_singleton_method(:sleep) do |secs|
+      slept << secs
+      Kernel.sleep(secs)
+    end
+    ran = false
+    l.within_limit { ran = true }
+
+    assert ran
+    refute_empty slept
+    assert slept.first.between?(0.051, 1.0),
+           "first sleep (#{slept.first}) must target the boundary distance, not the 0.05 poll floor"
+  end
+
+  private
+
+  # Busy-wait until just past a whole second so the bucket we exhaust next has
+  # close to a full second of runway before its boundary — otherwise the test
+  # would flake on runs that happen to start near the tail of a second, where
+  # even the fixed sleep-to-boundary logic legitimately returns ~0.05s.
+  def align_to_top_of_second
+    loop do
+      now = Time.now.to_f
+      break if (now - now.floor) < 0.3
+
+      sleep 0.01
+    end
+  end
 end
