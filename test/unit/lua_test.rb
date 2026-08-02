@@ -38,6 +38,7 @@ class LuaTest < Wurk::Test::UnitCase
          batch_push batch_schedule batch_ack_success batch_ack_failed batch_ack_complete batch_invalidate
          batch_append_callback
          fast_delete_job fast_delete_by_class release_if_owner cron_claim_fire
+         limiter_register limiter_list_sweep
          limiter_concurrent_acquire limiter_concurrent_release
          limiter_bucket_acquire limiter_window_acquire limiter_window_status limiter_leaky_acquire
          limiter_points_acquire limiter_points_refund].sort,
