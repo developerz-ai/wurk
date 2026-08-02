@@ -564,18 +564,23 @@ module Wurk
         handle_exception(e, { context: 'cron-poller' })
       end
 
+      # The marks advance *before* the push, via CAS: the leader gate is a
+      # cached read, so a second poller can reach the same due loop for a few
+      # seconds after a handover. Losing the CAS means another tick owns this
+      # slot — enqueue nothing.
       def enqueue_if_due(loop_obj)
         return if loop_obj.paused?
 
         now = ::Time.now.to_i
-        prev_fire, next_fire = read_fire_marks(loop_obj.lid)
-        next_fire ||= loop_obj.next_fire_at(prev_fire || (now - @tick_interval))
-        return if next_fire.nil? || next_fire > now
+        slot, mark = due_slot(loop_obj, now)
+        return if slot.nil?
 
-        warn_missed_tick(loop_obj, next_fire, now)
-        jid = enqueue!(loop_obj)
-        future = loop_obj.next_fire_after(next_fire, now)
-        record_fire(loop_obj, jid, now, future)
+        future = loop_obj.next_fire_after(slot, now)
+        return unless claim_fire?(loop_obj, mark, now, future)
+
+        warn_missed_tick(loop_obj, slot, now)
+        jid = enqueue_claimed!(loop_obj)
+        record_history(loop_obj, jid, now)
         jid
       end
 
@@ -592,6 +597,18 @@ module Wurk
 
       private
 
+      # The slot this tick would fire and the token that claims it, or nil when
+      # the loop has no resolvable occurrence or none is due yet. The token is
+      # the stored `nf` when there is one, otherwise the slot we derived — see
+      # the `cron_claim_fire` script for how the two cases differ.
+      def due_slot(loop_obj, now)
+        prev_fire, next_fire, mark = read_fire_marks(loop_obj.lid)
+        next_fire ||= loop_obj.next_fire_at(prev_fire || (now - @tick_interval))
+        return if next_fire.nil? || next_fire > now
+
+        [next_fire, mark || next_fire.to_s]
+      end
+
       def warn_missed_tick(loop_obj, expected, now)
         return if now - expected <= MISSED_TICK_THRESHOLD
 
@@ -599,6 +616,34 @@ module Wurk
           "[cron] missed tick lid=#{loop_obj.lid} klass=#{loop_obj.klass} " \
           "expected_at=#{expected} fired_at=#{now} drift=#{now - expected}s"
         )
+      end
+
+      # Compare-and-swap the fire marks: only the tick still looking at the
+      # mark it read wins the slot. Manual `#fire` deliberately skips this —
+      # an operator-requested run contends with no schedule slot.
+      def claim_fire?(loop_obj, mark, fired_at, future)
+        @config.redis do |c|
+          Wurk::Lua::Loader.eval_cached(
+            c, :cron_claim_fire,
+            keys: ["#{LOOP_PREFIX}#{loop_obj.lid}"],
+            argv: [mark, fired_at.to_s, future.nil? ? '' : future.to_s]
+          )
+        end == 1
+      end
+
+      # The slot is already claimed, so a failed push loses this occurrence
+      # instead of leaving the next tick to fire it again. Ent leader election
+      # is explicitly best-effort coordination (sidekiq-ent.md §6), so a missed
+      # occurrence is tolerable where a duplicate one is not — log the gap so it
+      # stays attributable.
+      def enqueue_claimed!(loop_obj)
+        enqueue!(loop_obj)
+      rescue StandardError => e
+        logger.warn(
+          "[cron] fire lost lid=#{loop_obj.lid} klass=#{loop_obj.klass} " \
+          "mark already advanced, occurrence skipped: #{e.class}: #{e.message}"
+        )
+        raise
       end
 
       def enqueue!(loop_obj)
@@ -639,24 +684,40 @@ module Wurk
         job.provider_job_id if job.respond_to?(:provider_job_id)
       end
 
+      # Third element is the raw `nf` string — the CAS token for #claim_fire.
+      # Comparing the bytes Redis holds, not the parsed integer, keeps the
+      # token exact regardless of how the value was written.
       def read_fire_marks(lid)
         @config.redis do |c|
-          vals = c.call('HMGET', "#{LOOP_PREFIX}#{lid}", 'lf', 'nf')
-          next_fire = vals[1]
+          prev_fire, next_fire = c.call('HMGET', "#{LOOP_PREFIX}#{lid}", 'lf', 'nf')
           # Preserve nil: treat missing or empty 'nf' as nil, not 0.
-          [vals[0]&.to_i, next_fire.nil? || next_fire.empty? ? nil : next_fire.to_i]
+          next_fire = nil if next_fire.nil? || next_fire.empty?
+          [prev_fire&.to_i, next_fire&.to_i, next_fire]
         end
       end
 
       def record_fire(loop_obj, jid, fired_at, future)
-        history_entry = Wurk.dump_json([fired_at, jid])
+        write_fire_marks(loop_obj.lid, fired_at, future)
+        record_history(loop_obj, jid, fired_at)
+      end
+
+      # Unconditional mark write, for the manual `#fire` path only. The
+      # scheduled path advances the marks through #claim_fire instead.
+      def write_fire_marks(lid, fired_at, future)
+        key = "#{LOOP_PREFIX}#{lid}"
         @config.redis do |c|
           if future.nil?
-            c.call('HSET', "#{LOOP_PREFIX}#{loop_obj.lid}", 'lf', fired_at.to_s)
-            c.call('HDEL', "#{LOOP_PREFIX}#{loop_obj.lid}", 'nf')
+            c.call('HSET', key, 'lf', fired_at.to_s)
+            c.call('HDEL', key, 'nf')
           else
-            c.call('HSET', "#{LOOP_PREFIX}#{loop_obj.lid}", 'lf', fired_at.to_s, 'nf', future.to_s)
+            c.call('HSET', key, 'lf', fired_at.to_s, 'nf', future.to_s)
           end
+        end
+      end
+
+      def record_history(loop_obj, jid, fired_at)
+        history_entry = Wurk.dump_json([fired_at, jid])
+        @config.redis do |c|
           c.call('LPUSH', "#{HISTORY_PREFIX}#{loop_obj.lid}", history_entry)
           c.call('LTRIM', "#{HISTORY_PREFIX}#{loop_obj.lid}", 0, HISTORY_CAP - 1)
         end
