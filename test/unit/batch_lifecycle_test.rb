@@ -2,6 +2,7 @@
 
 require_relative '../test_helper'
 require 'json'
+require 'stringio'
 
 # Drives the batch lifecycle end-to-end against real Redis: autoflush
 # buffering, per-batch linger retention, the callback lifecycle
@@ -15,6 +16,11 @@ require 'json'
 # torn down. No test touches another's keys.
 class BatchLifecycleTest < Wurk::Test::UnitCase
   parallelize_me!
+
+  # Guards the one test that swaps the process-global `Wurk.logger` (there is
+  # no thread-local override point) so it can't race another thread's test
+  # method within this same parallelized class.
+  LOGGER_MUTEX = Mutex.new
 
   def setup
     super
@@ -951,6 +957,16 @@ class BatchLifecycleTest < Wurk::Test::UnitCase
     refute_includes persisted_callbacks(batch.bid).map { |c| c[1] }, 'Overflow'
   end
 
+  def test_on_past_the_callback_cap_logs_the_drop
+    batch = new_batch
+    batch.jobs { perform_one }
+    fill_callbacks(batch.bid)
+
+    log = capture_log { batch.on(:success, 'Overflow') }
+
+    assert_match(/#{Wurk::Batch::CALLBACKS_MAX} callback limit reached/, log)
+  end
+
   def test_on_after_event_already_fired_does_not_enqueue_again
     batch = new_batch(success: 'EarlySuccess')
     batch.jobs { perform_one }
@@ -1099,6 +1115,23 @@ class BatchLifecycleTest < Wurk::Test::UnitCase
   def callbacks_fired(event:, bid:)
     queued(@cbq).count do |j|
       j['class'] == 'Wurk::Batch::CallbackJob' && j['args'][0] == bid && j['args'][2] == event
+    end
+  end
+
+  # Swap in a StringIO logger for the duration of the block and return
+  # what it captured — used to assert the cap/duplicate-registration
+  # warnings without disturbing the global IO::NULL logger other tests rely on.
+  def capture_log
+    LOGGER_MUTEX.synchronize do
+      io = StringIO.new
+      previous = Wurk.logger
+      Wurk.logger = Logger.new(io)
+      begin
+        yield
+        io.string
+      ensure
+        Wurk.logger = previous
+      end
     end
   end
 
