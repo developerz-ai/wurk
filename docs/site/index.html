@@ -288,7 +288,11 @@
     </div>
   </header>
 
-  <main id="main">
+  <!-- tabindex="-1" so the skip link MOVES FOCUS rather than only scrolling.
+       Without it the browser jumps the viewport but leaves focus on the link,
+       so the next Tab goes back into the header nav — the very thing the link
+       exists to skip. (Same treatment YARD already gives api/ #main.) -->
+  <main id="main" tabindex="-1">
     <div class="wrap">
       <section class="hero" style="border-top:none">
         <h1>Wurk <i class="fa-solid fa-bolt bolt" aria-hidden="true"></i></h1>
