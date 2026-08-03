@@ -47,6 +47,12 @@ pr:
   # merge posture; every other declared value activates as written. The dz#789
   # dependency-PR lane posture (green routine PRs merge on CI + gates) is
   # restored only behind a ruleset or a fresh explicit operator decision.
+  # NOTE (wurk#347): this governs the platform BOT only. Non-major Dependabot
+  # updates are also targeted by a separate GitHub-native GHA lane
+  # (.github/workflows/dependabot-automerge.yml, dz#789) that is independent
+  # of this policy — and inert today: wurk has no branch-protection ruleset,
+  # so `gh pr merge --auto` cannot arm and all merges stay manual (Dependabot
+  # PRs #299-304 were hand-merged). Net: nothing auto-merges on this repo.
   auto_merge: false
 
 review:
