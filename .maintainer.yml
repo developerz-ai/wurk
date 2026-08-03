@@ -6,7 +6,10 @@
 # fleet over the webhook handoff. Auto-merge is OFF (pinned 2026-08-01 — see
 # the pr: block): this file was schema-invalid until now, so the platform ran
 # defaultPolicy (auto_merge false), and making the file valid must not change
-# the merge posture on a repo with no branch-protection ruleset. We still wait
+# the merge posture: legacy branch protection exists (1 required review + the
+# test matrix), but an approving bot review satisfies the required review, so
+# auto_merge:true would merge routine PRs on bot-approval + green CI with no
+# human. We still wait
 # for reviewer bots (coderabbit/copilot) to settle before acting. The native
 # review: block below activates the developerz review lane alongside CodeRabbit
 # (force: true, advisory — never requests changes, never approves). Everything
@@ -41,18 +44,21 @@ pr:
   # this PR the file was schema-invalid (handoff.mode=webhook without
   # webhook_ref), so the platform discarded it whole and ran defaultPolicy —
   # whose pr.auto_merge is false. Activating the file with the previously
-  # declared `true` would have flipped auto-merge ON on a repo with NO
-  # branch-protection ruleset: a bot review comment plus green CI would have
-  # been the entire merge gate. Activation must be behavior-preserving on the
+  # declared `true` would have flipped auto-merge ON: legacy branch protection
+  # is in place (1 required approving review + the test matrix, strict), but an
+  # approving bot review satisfies the required review, so a bot approval plus
+  # green CI would merge a routine PR with no human in the loop. Activation must
+  # be behavior-preserving on the
   # merge posture; every other declared value activates as written. The dz#789
   # dependency-PR lane posture (green routine PRs merge on CI + gates) is
   # restored only behind a ruleset or a fresh explicit operator decision.
   # NOTE (wurk#347): this governs the platform BOT only. Non-major Dependabot
   # updates are also targeted by a separate GitHub-native GHA lane
-  # (.github/workflows/dependabot-automerge.yml, dz#789) that is independent
-  # of this policy — and inert today: wurk has no branch-protection ruleset,
-  # so `gh pr merge --auto` cannot arm and all merges stay manual (Dependabot
-  # PRs #299-304 were hand-merged). Net: nothing auto-merges on this repo.
+  # (.github/workflows/dependabot-automerge.yml, dz#789) that this policy does
+  # not govern. Repo auto-merge is enabled, so that lane is not inert by config
+  # — yet every Dependabot PR so far (#299-304) was merged by hand, so in
+  # practice a human still gates merges on this repo. auto_merge: false scopes
+  # the platform bot; it does not control the GHA lane.
   auto_merge: false
 
 review:
