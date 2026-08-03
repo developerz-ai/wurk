@@ -400,16 +400,53 @@ by `GET /api/batches` and `GET /api/batches/:bid`.
 | After `:success` fires | 24 hours | `Batch::POST_SUCCESS_EXPIRY_SECONDS`, override per batch with `linger=` |
 | Callback dedup markers | 30 days | `Batch::CALLBACK_NOTIFY_TTL` |
 
-A batch costs one hash (`b-<bid>`) plus the sets it actually needs — `-jids`,
-`-failed`, `-died`, `-kids`, `-pkids` — each holding at most one entry per job or
-child, plus one small marker key per callback event that fired. The footprint is
-bounded entirely by TTL: Wurk never sweeps batches, Redis expires them.
+A batch costs one hash (`b-<bid>`) plus the sub-keys it actually needs —
+`-jids`, `-failed`, `-died`, `-kids`, `-pkids`, plus the three callback dedup
+markers (`-complete`, `-success`, `-death`) — each holding at most one entry
+per job, child, or fired event. **Every sub-key is TTL'd at the site that
+creates it**, not swept later:
+
+- `BATCH_PUSH`, `BATCH_SCHEDULE`, `BATCH_ACK_FAILED` and `BATCH_ACK_COMPLETE`
+  (the Lua scripts in `lib/wurk/lua.rb`) each `EXPIRE … NX` the sub-key(s) they
+  create, using `Batch::DEFAULT_EXPIRY_SECONDS`.
+- `link_to_parent` stamps `-kids`/`-pkids` the same way when a child batch first
+  links to its parent.
+- `Callbacks#record_event` stamps `b-<bid>` itself `NX` when a callback fires,
+  since a child batch outliving its parent's window can resurrect that hash
+  with an `HSET`.
+- `Callbacks#dedup_set` writes the dedup markers with `SET … EX` directly
+  (`CALLBACK_NOTIFY_TTL`), so they never need a separate stamp.
+
+`NX` everywhere means only a key with *no* TTL gets one — a live batch's clock,
+and the shorter post-success `linger` window, are never overwritten. The
+footprint is bounded entirely by TTL: Wurk never sweeps a whole batch, Redis
+expires the pieces individually as they age out.
+
+The two index ZSETs — `batches` (all batches, scored by creation time) and
+`dead-batches` (batches that fired `:death`, scored by death time) — are
+bounded on a second axis: member count, not just TTL. `Batch.trim_index`
+(`lib/wurk/batch.rb`) runs in the same pipeline as the `ZADD` that grows each
+set:
+
+- `ZREMRANGEBYSCORE key -inf (cutoff` evicts entries older than the trim
+  window (`DEFAULT_EXPIRY_SECONDS` by default — the same window as the batch
+  hash TTL, so an index entry retires in step with the data it points at).
+- `ZREMRANGEBYRANK key 0 -max` caps the member count at `Batch::INDEX_MAX`
+  (1,000,000) as a backstop, same shape as `DeadSet#trim`'s rank-based cap.
+
+Without this, nothing ever shrinks either set — `Status#delete` and the
+death-recovery `ZREM` are the only other removals, both manual — so `batches`
+and `dead-batches` grew for the life of the Redis instance regardless of TTL
+on the underlying hashes. A batch that overrides `expires_in` beyond the trim
+window outlives its index entry: still reachable by bid, just no longer
+enumerated by `BatchSet` or `DeadSet`.
 
 Two behaviours worth knowing:
 
 - A job that dies **after** its batch keys expired would recreate them with no
-  TTL. The death handler re-stamps with `EXPIRE … NX`, so resurrected keys get a
-  clock and live batches keep theirs.
+  TTL. The death handler (`DeathHandler.restamp_ttls`) re-stamps every sub-key
+  with `EXPIRE … NX` on death — the one moment the batch is known to be
+  winding down — so resurrected keys get a clock and live batches keep theirs.
 - `linger=` on an already-flushed batch writes straight to Redis, so it works on
   a batch reopened by bid. `description=`, `callback_queue=`, `callback_class=`,
   `tags=` and `expires_in` do **not** — they are only persisted by the first

@@ -5,6 +5,9 @@ require_relative '../test_helper'
 class LuaTest < Wurk::Test::UnitCase
   parallelize_me!
 
+  # Last ARGV of every batch script: the `EXPIRE ... NX` seconds each one
+  # stamps on the keys it can create.
+  TTL = Wurk::Batch::DEFAULT_EXPIRY_SECONDS
 
   def setup
     super
@@ -34,9 +37,10 @@ class LuaTest < Wurk::Test::UnitCase
       %i[zpopbyscore bulk_push reliable_schedule_promote reliable_requeue
          batch_push batch_schedule batch_ack_success batch_ack_failed batch_ack_complete batch_invalidate
          batch_append_callback
-         fast_delete_job fast_delete_by_class release_if_owner
+         fast_delete_job fast_delete_by_class release_if_owner cron_claim_fire
+         limiter_register limiter_list_sweep
          limiter_concurrent_acquire limiter_concurrent_release
-         limiter_bucket_acquire limiter_window_acquire limiter_leaky_acquire
+         limiter_bucket_acquire limiter_window_acquire limiter_window_status limiter_leaky_acquire
          limiter_points_acquire limiter_points_refund].sort,
       Wurk::Lua::SCRIPTS.keys.sort
     )
@@ -213,7 +217,7 @@ class LuaTest < Wurk::Test::UnitCase
       Wurk::Lua::Loader.eval_cached(
         c, :batch_push,
         keys: [bkey, jids, list, qset, "#{@ns}:b-x-died", "#{@ns}:dead-batches"],
-        argv: ['default', 'JID1', '{"jid":"JID1"}', 'x']
+        argv: ['default', 'JID1', '{"jid":"JID1"}', 'x', TTL]
       )
 
       assert_equal '1', c.call('HGET', bkey, 'total')
@@ -235,7 +239,7 @@ class LuaTest < Wurk::Test::UnitCase
     list = "#{@ns}:queue:default"
     qset = "#{@ns}:queues"
     keys = [bkey, jids, list, qset, "#{@ns}:b-rp-died", "#{@ns}:dead-batches"]
-    argv = ['default', 'JID1', '{"jid":"JID1"}', 'rp']
+    argv = ['default', 'JID1', '{"jid":"JID1"}', 'rp', TTL]
     @pool.with do |c|
       2.times { Wurk::Lua::Loader.eval_cached(c, :batch_push, keys: keys, argv: argv) }
 
@@ -260,7 +264,7 @@ class LuaTest < Wurk::Test::UnitCase
       %w[A B].each do |jid|
         Wurk::Lua::Loader.eval_cached(
           c, :batch_push, keys: [bkey, jids, list, qset, died, dead],
-                          argv: ['default', jid, %({"jid":"#{jid}"}), 'dj']
+                          argv: ['default', jid, %({"jid":"#{jid}"}), 'dj', TTL]
         )
       end
 
@@ -280,7 +284,7 @@ class LuaTest < Wurk::Test::UnitCase
     jids  = "#{@ns}:b-s-jids"
     @pool.with do |c|
       Wurk::Lua::Loader.eval_cached(
-        c, :batch_schedule, keys: [sched, bkey, jids], argv: ['1700000000.5', '{"jid":"JID1"}', 'JID1']
+        c, :batch_schedule, keys: [sched, bkey, jids], argv: ['1700000000.5', '{"jid":"JID1"}', 'JID1', TTL]
       )
 
       assert_equal '1', c.call('HGET', bkey, 'total')
@@ -298,7 +302,7 @@ class LuaTest < Wurk::Test::UnitCase
     sched = "#{@ns}:schedule"
     bkey  = "#{@ns}:b-sr"
     jids  = "#{@ns}:b-sr-jids"
-    argv  = ['1700000000', '{"jid":"JID1"}', 'JID1']
+    argv  = ['1700000000', '{"jid":"JID1"}', 'JID1', TTL]
     @pool.with do |c|
       2.times { Wurk::Lua::Loader.eval_cached(c, :batch_schedule, keys: [sched, bkey, jids], argv: argv) }
 
@@ -328,7 +332,7 @@ class LuaTest < Wurk::Test::UnitCase
       Wurk::Lua::Loader.eval_cached(
         c, :batch_push,
         keys: [bkey, jids, list, "#{@ns}:queues", died, dead],
-        argv: ['default', 'JID1', '{"jid":"JID1"}', 'dr']
+        argv: ['default', 'JID1', '{"jid":"JID1"}', 'dr', TTL]
       )
 
       assert_equal '1', c.call('HGET', bkey, 'total')
@@ -356,7 +360,7 @@ class LuaTest < Wurk::Test::UnitCase
       Wurk::Lua::Loader.eval_cached(
         c, :batch_push,
         keys: [bkey, jids, list, "#{@ns}:queues", died, dead],
-        argv: ['default', 'JID1', '{"jid":"JID1"}', 'dp']
+        argv: ['default', 'JID1', '{"jid":"JID1"}', 'dp', TTL]
       )
 
       assert_equal %w[JID2], c.call('SMEMBERS', died)
@@ -413,8 +417,8 @@ class LuaTest < Wurk::Test::UnitCase
     @pool.with do |c|
       c.call('HSET', bkey, 'total', 1, 'pending', 1, 'failures', 0)
 
-      Wurk::Lua::Loader.eval_cached(c, :batch_ack_failed, keys: [bkey, failed], argv: ['A'])
-      Wurk::Lua::Loader.eval_cached(c, :batch_ack_failed, keys: [bkey, failed], argv: ['A'])
+      Wurk::Lua::Loader.eval_cached(c, :batch_ack_failed, keys: [bkey, failed], argv: ['A', TTL])
+      Wurk::Lua::Loader.eval_cached(c, :batch_ack_failed, keys: [bkey, failed], argv: ['A', TTL])
 
       assert_equal '1', c.call('HGET', bkey, 'failures')
       assert_equal 1, c.call('SISMEMBER', failed, 'A')
@@ -431,7 +435,7 @@ class LuaTest < Wurk::Test::UnitCase
       c.call('SADD', jids, 'A', 'B')
 
       live, died_n, first = Wurk::Lua::Loader.eval_cached(
-        c, :batch_ack_complete, keys: [bkey, jids, died, failed], argv: ['A']
+        c, :batch_ack_complete, keys: [bkey, jids, died, failed], argv: ['A', TTL]
       )
 
       assert_equal 1, live
@@ -444,7 +448,7 @@ class LuaTest < Wurk::Test::UnitCase
       assert_equal 0, c.call('SISMEMBER', failed, 'A')
 
       _live, _died_n, second_first = Wurk::Lua::Loader.eval_cached(
-        c, :batch_ack_complete, keys: [bkey, jids, died, failed], argv: ['B']
+        c, :batch_ack_complete, keys: [bkey, jids, died, failed], argv: ['B', TTL]
       )
 
       assert_equal 0, second_first
@@ -464,7 +468,7 @@ class LuaTest < Wurk::Test::UnitCase
       c.call('SADD', jids, 'A')
       c.call('SADD', failed, 'A')
 
-      Wurk::Lua::Loader.eval_cached(c, :batch_ack_complete, keys: [bkey, jids, died, failed], argv: ['A'])
+      Wurk::Lua::Loader.eval_cached(c, :batch_ack_complete, keys: [bkey, jids, died, failed], argv: ['A', TTL])
 
       assert_equal '0', c.call('HGET', bkey, 'failures')
       assert_equal 0, c.call('SISMEMBER', failed, 'A')
@@ -486,7 +490,89 @@ class LuaTest < Wurk::Test::UnitCase
     end
   end
 
+  # Same event, same target, different options are three different callbacks —
+  # dedup must key on the whole triple or it swallows legitimate registrations.
+  def test_batch_append_callback_appends_distinct_triples
+    bkey = "#{@ns}:b-cb1"
+    @pool.with do |c|
+      c.call('HSET', bkey, 'total', 0)
+
+      [['success', 'A', {}], ['success', 'B', {}], ['success', 'A', { 'shard' => 1 }]].each do |entry|
+        append_callback(c, bkey, entry)
+      end
+
+      assert_equal [['success', 'A', {}], ['success', 'B', {}], ['success', 'A', { 'shard' => 1 }]],
+                   callbacks(c, bkey)
+    end
+  end
+
+  # The seeded list is Ruby's `to_json` (what first flush writes), the appends
+  # go through cjson — the dedup only holds because both sides are normalised
+  # through the same encoder before comparison.
+  def test_batch_append_callback_skips_an_identical_triple
+    bkey = "#{@ns}:b-cb2"
+    entry = ['success', 'A', { 'shard' => 1 }]
+    @pool.with do |c|
+      c.call('HSET', bkey, 'callbacks', JSON.generate([entry]))
+
+      50.times { append_callback(c, bkey, entry) }
+
+      assert_equal [entry], callbacks(c, bkey)
+    end
+  end
+
+  def test_batch_append_callback_returns_the_fired_flag_for_a_skipped_triple
+    bkey = "#{@ns}:b-cb3"
+    entry = ['success', 'A', {}]
+    @pool.with do |c|
+      c.call('HSET', bkey, 'callbacks', JSON.generate([entry]), 'success', '1')
+
+      assert_equal '1', append_callback(c, bkey, entry)
+    end
+  end
+
+  def test_batch_append_callback_refuses_a_new_triple_past_the_cap
+    bkey = "#{@ns}:b-cb4"
+    full = Array.new(Wurk::Batch::CALLBACKS_MAX) { |i| ['success', "C#{i}", {}] }
+    @pool.with do |c|
+      c.call('HSET', bkey, 'callbacks', JSON.generate(full))
+
+      assert_equal(-2, append_callback(c, bkey, ['success', 'OVERFLOW', {}]))
+      assert_equal full, callbacks(c, bkey)
+    end
+  end
+
+  # The cap counts entries, not calls: a triple already in the list needs no
+  # room, so a full list still answers it with the fired flag rather than -2.
+  def test_batch_append_callback_still_dedups_at_the_cap
+    bkey = "#{@ns}:b-cb5"
+    full = Array.new(Wurk::Batch::CALLBACKS_MAX) { |i| ['success', "C#{i}", {}] }
+    @pool.with do |c|
+      c.call('HSET', bkey, 'callbacks', JSON.generate(full))
+
+      assert_nil append_callback(c, bkey, full.last)
+      assert_equal Wurk::Batch::CALLBACKS_MAX, callbacks(c, bkey).size
+    end
+  end
+
+  # -1 (gone) and -2 (capped) are distinct sentinels; the caller raises on one
+  # and logs on the other.
+  def test_batch_append_callback_refuses_a_missing_batch_hash
+    @pool.with do |c|
+      assert_equal(-1, append_callback(c, "#{@ns}:b-cb-gone", ['success', 'A', {}]))
+    end
+  end
+
   private
+
+  def append_callback(conn, bkey, entry, max: Wurk::Batch::CALLBACKS_MAX)
+    Wurk::Lua::Loader.eval_cached(conn, :batch_append_callback,
+                                  keys: [bkey], argv: [JSON.generate(entry), entry[0], max])
+  end
+
+  def callbacks(conn, bkey)
+    JSON.parse(conn.call('HGET', bkey, 'callbacks'))
+  end
 
   def promote(conn, sset, now_ms = 1_700_000_000_000)
     Wurk::Lua::Loader.eval_cached(

@@ -67,12 +67,13 @@ class LimiterStressTest < Wurk::Test::UnitCase
     assert_equal 0, limiter.size, 'every slot released at the end'
   end
 
-  # All limiter acquire/release scripts ship as files, get a precomputed SHA,
-  # and run via EVALSHA (with NOSCRIPT recovery) — never re-uploaded per call.
+  # Every limiter script — acquire, release and the read-only window probe —
+  # ships as a file, gets a precomputed SHA, and runs via EVALSHA (with NOSCRIPT
+  # recovery) — never re-uploaded per call.
   def test_all_limiter_lua_scripts_are_evalsha_cached
     %i[limiter_concurrent_acquire limiter_concurrent_release limiter_bucket_acquire
-       limiter_window_acquire limiter_leaky_acquire limiter_points_acquire
-       limiter_points_refund].each do |name|
+       limiter_window_acquire limiter_window_status limiter_leaky_acquire
+       limiter_points_acquire limiter_points_refund].each do |name|
       assert Wurk::Lua::SCRIPTS.key?(name), "missing Lua script #{name}"
       assert_match(/\A[0-9a-f]{40}\z/, Wurk::Lua::SHAS[name], "no precomputed SHA for #{name}")
     end

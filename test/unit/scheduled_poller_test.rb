@@ -205,6 +205,69 @@ class ScheduledPollerTest < Wurk::Test::UnitCase
   end
   # rubocop:enable Metrics/AbcSize, Minitest/MultipleAssertions
 
+  # ZPOPBYSCORE claims no apply-safety, so a read timeout reaches #drain_set
+  # instead of being replayed. The outcome of that pop is unknown, so the set's
+  # drain ends there while its sibling still drains on the same tick.
+  def test_pop_read_timeout_ends_the_set_and_leaves_the_sibling_draining
+    drain_with_failing_pop
+
+    assert_equal 1, @pool.with { |c| c.call('ZCARD', @schedule) }, 'the timed-out set must be left alone'
+    assert_equal 0, @pool.with { |c| c.call('ZCARD', @retry) }, 'the sibling set must still drain'
+  end
+
+  # Unknown outcome, not "nothing due": a pop that may have taken a job down
+  # with it is reported rather than swallowed.
+  def test_pop_read_timeout_is_reported_with_the_set_it_hit
+    captured = drain_with_failing_pop
+    sets = captured.map { |(_, ctx)| ctx[:set] }
+
+    assert_equal [@schedule], sets
+    assert_instance_of RedisClient::ReadTimeoutError, captured.dig(0, 0)
+  end
+
+  # Drains both sets through an Enq whose first pop raises; returns the
+  # [exception, context] pairs the error handlers captured.
+  def drain_with_failing_pop
+    sets = [@schedule, @retry]
+    sets.each { |set| schedule_job(set: set, at: Time.now.to_f - 10) }
+    captured = capture_errors
+    enq = Wurk::Scheduled::Enq.new(@config)
+    enq.instance_variable_set(:@config, PopFailingConfig.new(@config))
+    enq.enqueue_jobs(sets)
+    captured
+  end
+
+  # Swaps the error handlers for one that records [exception, context].
+  def capture_errors
+    captured = []
+    @config.error_handlers.replace([->(ex, ctx, _cfg) { captured << [ex, ctx] }])
+    captured
+  end
+
+  # Fails the first pop, then is the real config — the shape of a read timeout
+  # landing on ZPOPBYSCORE after the pool has refused to replay it.
+  class PopFailingConfig
+    def initialize(real)
+      @real = real
+      @calls = 0
+    end
+
+    def redis(**, &)
+      @calls += 1
+      raise RedisClient::ReadTimeoutError, 'pop timed out' if @calls == 1
+
+      @real.redis(**, &)
+    end
+
+    def respond_to_missing?(name, include_private = false)
+      @real.respond_to?(name, include_private) || super
+    end
+
+    def method_missing(name, ...)
+      @real.public_send(name, ...)
+    end
+  end
+
   # --- Poller#enqueue -----------------------------------------------
 
   def test_poller_enqueue_delegates_to_configured_enq

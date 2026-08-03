@@ -8,14 +8,15 @@ module Wurk
   module Middleware
     # Server middleware. Catches `Wurk::Job::Interrupted` raised by an
     # IterableJob mid-iteration (or any cooperatively-cancelled job),
-    # re-pushes the job to the head of its queue so it resumes from the
+    # re-pushes the job to the tail of its queue so it resumes from the
     # persisted cursor, and raises `Wurk::JobRetry::Skip` so the retry
     # layer treats this as a clean exit rather than an error.
     #
-    # The re-push uses LPUSH (head of queue) so the same job is the next
-    # one to be fetched after restart. The job JSON is unchanged: cursor
-    # state lives in the `it-<jid>` HASH (see IterableJob persistence),
-    # not in the payload.
+    # The re-push uses RPUSH (tail of queue) so the same job is the next
+    # one to be fetched: the fetcher's LMOVE pops from the RIGHT (tail),
+    # so this job is fetched ahead of fresh LPUSH'd enqueues. The job
+    # JSON is unchanged: cursor state lives in the `it-<jid>` HASH (see
+    # IterableJob persistence), not in the payload.
     #
     # Auto-registered at the top of the server chain when this file is
     # required. Top-of-chain is important: a downstream middleware must
@@ -36,7 +37,7 @@ module Wurk
 
       def repush(job, queue)
         payload = Wurk.dump_json(job)
-        redis_pool.with { |conn| conn.call('LPUSH', "queue:#{queue}", payload) }
+        redis_pool.with { |conn| conn.call('RPUSH', "queue:#{queue}", payload) }
       end
     end
   end

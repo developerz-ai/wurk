@@ -123,3 +123,76 @@ cycling, which the in-process state machine does (verified by
 
 **Anchor:** `lib/wurk/swarm.rb:104-108`, PR3 (`fix/swarm-supervision`), Ent
 §8.
+
+## Reaper liveness has a residual local pid-reuse blind spot — shared with `super_fetch`, not fixed
+
+**Wurk:** `Fetcher::Reaper#owner_alive?` fast-paths same-boot-generation
+private lists (host **and** `Component::PROCESS_NONCE` match) straight to
+`Process.kill(0, pid)` (`lib/wurk/fetcher/reaper.rb:270-284`). The nonce is
+minted once per process image and inherited unchanged across `fork`
+(`lib/wurk/component.rb:19-21`), so this group is every process forked from
+the current swarm boot, not a single pid. If the OS hands a *replacement*
+child, forked from that same boot, the exact pid a just-reaped sibling held,
+`kill(0)` reads the new occupant as the old one — alive. Every other owner
+(different nonce, pre-nonce key, or different host) is checked against the
+namespace-blind heartbeat instead, which doesn't have this gap.
+
+**Spec:** Pro §3.2's `super_fetch` decides local liveness the same way —
+`Process.kill(0, pid)` against the owning pid, with no generation counter to
+distinguish a reused pid from its original holder. The spec neither claims
+nor tests a stronger guarantee here.
+
+**Why:** closing this would require tracking pid *generation* — something
+the OS doesn't expose (Linux pid reuse is opaque past `/proc` disappearing;
+there is no monotonic "this is generation N of pid 4711" primitive to key
+against). Doing it via Redis bookkeeping (e.g. a per-pid generation counter
+written at fork time) would add a write on every child spawn to close a gap
+that, per the swarm's own respawn ordering, doesn't arise in practice: a
+replacement child is forked and reaches its own boot heartbeat before its
+predecessor's pid becomes eligible for OS reuse, so the collision window is
+theoretical, not observed. Since Sidekiq Pro's `super_fetch` — the spec this
+component is bug-compatible with — carries the identical limitation, this is
+recorded as a deliberate, matched-parity gap rather than an intentional
+"improvement" left undone.
+
+**Anchor:** `lib/wurk/fetcher/reaper.rb:270-284`, `lib/wurk/component.rb:19-21`,
+`docs/reliability.md` (Reliable fetch → How "dead" is decided), Pro §3.2.
+
+## Poison-pill counter resets on ACK, and a poison kill fires death handlers
+
+**Wurk:** the recovery counter at `super_fetch:recovered:<jid>` is deleted the
+moment the job acks — `Fetcher::Reliable::UnitOfWork#acknowledge` pipelines the
+`DEL` next to its `LREM`, so an attempt that finished (returned, or raised and
+booked a retry) resets the count. Only reclaims of an attempt that never acked
+accumulate toward `RECOVERY_THRESHOLD`. When the threshold is crossed, the
+kill goes through the death-handler chain (`notify_failure` left at its
+default `true`) with a `Wurk::Middleware::PoisonPill::Poisoned` exception.
+
+**Spec:** Pro §12 pins only the mechanism — key name, 72h TTL, threshold 3. It
+says nothing about when the counter is cleared, and nothing about whether a
+poison kill is a "death" for the purposes of `:death` callbacks or
+`death_handlers`.
+
+**Why:** both gaps lose work if answered the other way.
+
+*The reset:* jids come back — a UI or API retry re-pushes the same one, and so
+does any client that supplies its own. A counter that only decays on its 72h
+TTL therefore accumulates across *different* runs of the same jid, so three
+unrelated worker crashes (a deploy `SIGKILL`, an OOM kill, a node eviction)
+inside one window dead-set a job that completed every single time it ran. The
+ACK is the sharpest available "this job does not take its worker down" signal,
+and it is the one Redis round trip the success path already makes — so the
+correctness costs no extra call for the jobs, effectively all of them, that
+were never reclaimed.
+
+*The notification:* `Batch::DeathHandler` is registered as a death handler.
+Suppressing the notification (Wurk's original `notify_failure: false`) meant a
+poison-killed job never decremented its batch's pending count: `:death` never
+fired, `:complete` never fired, and the batch hung forever with no error
+anywhere. Every other terminal path in Wurk — retry exhaustion, `:discard`,
+the limiter's reschedule cap — notifies, and a poison kill is the same kind of
+event: the job is dead and is not coming back.
+
+**Anchor:** `lib/wurk/middleware/poison_pill.rb` (`clear_in`, `mark_poison`),
+`lib/wurk/fetcher/reliable.rb` (`UnitOfWork#acknowledge`),
+`lib/wurk/processor.rb` (`process`), Pro §12.

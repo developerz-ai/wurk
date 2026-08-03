@@ -41,6 +41,22 @@ module Wurk
     POST_SUCCESS_EXPIRY_SECONDS = 24 * 60 * 60
     CALLBACK_NOTIFY_TTL = 30 * 24 * 60 * 60
 
+    # Member ceiling for the two batch index ZSETs (`batches`, `dead-batches`).
+    # The score axis in `.trim_index` retires entries in step with the batch data
+    # itself, so this is only the backstop for a workload creating batches faster
+    # than that window retires them. Deliberately generous: a cap that bites drops
+    # batches whose data is still live out of `BatchSet`, and at this scale the
+    # per-batch hashes dwarf the index anyway.
+    INDEX_MAX = 1_000_000
+
+    # Ceiling on the `callbacks` array of one batch hash, enforced by
+    # BATCH_APPEND_CALLBACK. Every registration re-encodes the whole array,
+    # and every entry becomes a callback job when the event fires, so an
+    # unbounded array is both a hot-path cost and a fan-out. Far above any
+    # legitimate batch — real ones register a handful — so hitting it means a
+    # loop is registering callbacks it should have registered once.
+    CALLBACKS_MAX = 1_000
+
     # Bid is URL-safe base64 of 10 random bytes — matches Sidekiq Pro's BID
     # generator. Length matters: third-party gems that key off bid prefix
     # (sharded batches in Pro 8) inspect the first character.
@@ -48,10 +64,21 @@ module Wurk
 
     VALID_EVENTS = %i[success complete death].freeze
 
+    # Every key a batch owns, for the sweep paths: `Status#delete` (UNLINK),
+    # `Callbacks#apply_linger` and `DeathHandler.restamp_ttls` (EXPIRE).
+    #
     # The 'live' set tracks jobs that have not yet reached a terminal state.
     # When it's empty, every job has either succeeded or died → `:complete`
     # is allowed to fire.
-    KEY_SUFFIXES = %w[jids failed died notify cbsucc kids pkids tags].freeze
+    #
+    # `complete`/`success`/`death` are the callback dedup markers written by
+    # `Callbacks#dedup_set`; they belong to the batch and must die with it.
+    # `notify`/`cbsucc`/`tags` are Sidekiq Pro's own key layout (spec §2.8) that
+    # Wurk never writes — Wurk dedups on the three markers above and indexes
+    # tags at `tags:<tag>`. They stay listed so a Redis dataset carried over
+    # from Sidekiq Pro on the gem swap gets swept too; EXPIRE/UNLINK of a
+    # missing key is a no-op for batches Wurk created itself.
+    KEY_SUFFIXES = %w[jids failed died complete success death notify cbsucc kids pkids tags].freeze
 
     THREAD_KEY = :wurk_current_batch
 
@@ -68,6 +95,33 @@ module Wurk
       [base, *KEY_SUFFIXES.map { |s| "#{base}-#{s}" }]
     end
 
+    # Two-axis trim of a batch index ZSET (`batches`, `dead-batches`), in the
+    # shape of the morgue trim (`DeadSet#trim`): `ZREMRANGEBYSCORE` evicts
+    # entries older than `timeout`, `ZREMRANGEBYRANK 0 -max` caps the member
+    # count — and, like the morgue, that bound keeps `max - 1` of a full set.
+    # Appended to the caller's pipeline so bounding the index costs neither
+    # writer an extra round trip.
+    #
+    # Nothing else ever shrinks either set: `Status#delete` and the
+    # death-recovery `ZREM` are manual, so an index entry outlives the batch it
+    # points at and both sets grow for the life of the Redis without this.
+    #
+    # Both index in epoch seconds — `batches` from CLOCK_REALTIME,
+    # `dead-batches` from `Time.now.to_f` — so one cutoff serves both. The
+    # default window is the batch hash TTL: past it `b-<bid>` is gone and the
+    # entry only yields an empty Status. A batch that overrode `expires_in`
+    # beyond that window outlives its index entry — still reachable by bid,
+    # just no longer enumerated by `BatchSet`.
+    #
+    # `max:` / `timeout:` override the defaults for one call, so parallel tests
+    # can drive the trim on isolated limits without mutating the process-global
+    # `Wurk.configuration`.
+    def self.trim_index(pipe, key, max: nil, timeout: nil)
+      cutoff = ::Process.clock_gettime(::Process::CLOCK_REALTIME) - (timeout || DEFAULT_EXPIRY_SECONDS)
+      pipe.call('ZREMRANGEBYSCORE', key, '-inf', "(#{cutoff}")
+      pipe.call('ZREMRANGEBYRANK', key, 0, -(max || INDEX_MAX))
+    end
+
     def initialize(bid = nil)
       @bid              = bid || SecureRandom.urlsafe_base64(BID_BYTES)
       @existing         = !bid.nil?
@@ -79,6 +133,11 @@ module Wurk
       @linger           = nil
       @parent_bid       = nil
       @callbacks        = []
+      # Dedup index over `@callbacks`, keyed on the encoded entry. Only the
+      # pre-flush staging path feeds it — once flushed, Redis holds the array
+      # and BATCH_APPEND_CALLBACK does the deduping — so a batch reopened by
+      # bid never pays to build it.
+      @callback_index   = Set.new
       @expires_in       = DEFAULT_EXPIRY_SECONDS
       @mutable          = !@existing
       @flushed_once     = @existing
@@ -166,17 +225,22 @@ module Wurk
       self
     end
 
-    # Register a callback. Multiple callbacks of the same event are allowed.
-    # The callback target may be a Class, "Foo#bar" string spec, or anything
-    # responding to `name`. `options` must be JSON-serializable.
+    # Register a callback. Any number of *distinct* callbacks may be attached
+    # to one event; re-registering an identical `[event, target, options]`
+    # triple is a no-op, and past `CALLBACKS_MAX` entries the registration is
+    # dropped with a warning. The callback target may be a Class, "Foo#bar"
+    # string spec, or anything responding to `name`. `options` must be
+    # JSON-serializable.
     def on(event, callback, options = {})
       sym = event.to_sym
       raise ArgumentError, "invalid event #{event.inspect}" unless VALID_EVENTS.include?(sym)
       raise ArgumentError, 'callback options must be a Hash' unless options.is_a?(Hash)
 
       entry = [sym.to_s, callback_target(callback), options]
-      @callbacks << entry
-      persist_callback!(entry) if @flushed_once
+      # Before the first flush the array lives only in memory; after it, Redis
+      # is authoritative and `@callbacks` is a stale mirror nothing reads —
+      # appending to it there would just leak one entry per registration.
+      @flushed_once ? persist_callback!(entry) : stage_callback(entry)
       self
     end
 
@@ -246,22 +310,52 @@ module Wurk
       Wurk::Client.new.flush_batched(payloads) unless payloads.empty?
     end
 
+    # Pre-flush counterpart to `persist_callback!`. Entries registered before
+    # the first flush only exist in memory until `first_flush_hash` writes the
+    # whole array in one HSET, so BATCH_APPEND_CALLBACK never sees them — the
+    # same dedup and cap have to be applied here or the very first write can
+    # already ship duplicates and an unbounded array.
+    #
+    # Keyed on the encoded entry, which is what actually lands in the hash:
+    # `{a: 1}` and `{'a' => 1}` are one callback once persisted, so they must
+    # be one entry here too.
+    def stage_callback(entry)
+      json = entry.to_json
+      return if @callback_index.include?(json)
+
+      if @callbacks.size >= CALLBACKS_MAX
+        Wurk.logger.warn("batch #{@bid}: #{entry[0]} callback dropped — #{CALLBACKS_MAX} callback limit reached")
+        return
+      end
+
+      @callbacks << entry
+      @callback_index << json
+    end
+
     # Like `linger=`, anything registered after the first flush must reach
     # Redis — `Callbacks.enqueue_callbacks` reads specs from the hash, so an
     # in-memory-only append would silently never fire (#213). Covers both
     # `on` after `#jobs` and batches reopened by bid. The append runs
     # server-side (Lua) so concurrent registrations from different processes
-    # can't lose each other to a read-modify-write race.
+    # can't lose each other to a read-modify-write race, and it dedups
+    # identical triples so the reopen-per-job shape stops growing the array.
     def persist_callback!(entry)
       event = entry[0]
-      fired = Wurk.redis do |conn|
+      status = Wurk.redis do |conn|
         Wurk::Lua::Loader.eval_cached(conn, :batch_append_callback,
-                                      keys: ["b-#{@bid}"], argv: [entry.to_json, event])
+                                      keys: ["b-#{@bid}"], argv: [entry.to_json, event, CALLBACKS_MAX])
       end
-      raise ArgumentError, "cannot register #{event} callback: batch #{@bid} no longer exists" if fired == -1
-      return unless fired == '1'
+      raise ArgumentError, "cannot register #{event} callback: batch #{@bid} no longer exists" if status == -1
 
-      Wurk.logger.warn("batch #{@bid}: #{event} callback registered after #{event} already fired — it will never run")
+      # Sentinels are Integers, the fired flag is the String the `<event>`
+      # hash field holds — asymmetric on purpose, so a sentinel can never be
+      # read as a fired event.
+      case status
+      when -2
+        Wurk.logger.warn("batch #{@bid}: #{event} callback dropped — #{CALLBACKS_MAX} callback limit reached")
+      when '1'
+        Wurk.logger.warn("batch #{@bid}: #{event} callback registered after #{event} already fired — it will never run")
+      end
     end
 
     # First flush writes the core hash, registers in the global `batches`
@@ -278,10 +372,15 @@ module Wurk
       Wurk::Metrics::Statsd.increment('batch.created')
     end
 
+    # Only `b-#{@bid}` is stamped here — none of the sub-keys exist yet at first
+    # flush (BATCH_PUSH/BATCH_SCHEDULE create `-jids`, the acks create
+    # `-failed`/`-died`), and EXPIRE on a missing key is a no-op. Each key is
+    # stamped `NX` where it is created instead; see BATCH_PUSH in lua.rb.
     def pipelined_first_flush(pipe, now)
       pipe.call('HSET', "b-#{@bid}", *first_flush_hash(now).flatten)
       pipe.call('EXPIRE', "b-#{@bid}", @expires_in)
       pipe.call('ZADD', 'batches', now.to_s, @bid)
+      Batch.trim_index(pipe, 'batches')
       @tags.each { |t| pipe.call('SADD', "tags:#{t}", @bid) }
       link_to_parent(pipe) if current_parent_bid
     end
@@ -312,9 +411,16 @@ module Wurk
       outer.bid
     end
 
+    # The only place `-kids`/`-pkids` are created, so this is where they get
+    # their clock. TTL is the default, not this batch's `@expires_in`: the keys
+    # belong to the *parent*, and NX means the first link sets the retention for
+    # every sibling that follows.
     def link_to_parent(pipe)
-      pipe.call('SADD', "b-#{current_parent_bid}-kids", @bid)
-      pipe.call('SADD', "b-#{current_parent_bid}-pkids", @bid)
+      parent_key = "b-#{current_parent_bid}"
+      pipe.call('SADD', "#{parent_key}-kids", @bid)
+      pipe.call('SADD', "#{parent_key}-pkids", @bid)
+      pipe.call('EXPIRE', "#{parent_key}-kids", DEFAULT_EXPIRY_SECONDS, 'NX')
+      pipe.call('EXPIRE', "#{parent_key}-pkids", DEFAULT_EXPIRY_SECONDS, 'NX')
     end
 
     def job_count

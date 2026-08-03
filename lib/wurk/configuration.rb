@@ -4,6 +4,7 @@ require 'etc'
 require 'logger'
 require_relative 'middleware/chain'
 require_relative 'capsule'
+require_relative 'pool_checkout'
 require_relative 'context'
 require_relative 'topology'
 require_relative 'redis_options'
@@ -198,8 +199,8 @@ module Wurk
       build_redis_pool(size: size, name: name)
     end
 
-    def redis(&)
-      redis_pool.with(&)
+    def redis(idempotent: false, &)
+      PoolCheckout.with(redis_pool, idempotent, &)
     end
 
     # --- Web dashboard Redis pool ----------------------------------------

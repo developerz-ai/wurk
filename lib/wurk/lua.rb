@@ -131,8 +131,16 @@ module Wurk
     # success after the dead job is manually retried to success). The
     # `b-<bid>-death` notify dedup key is untouched, so `:death` cannot
     # re-fire.
+    #
+    # The two EXPIRE NX calls are what keep the batch bounded: `b-<bid>-jids` is
+    # born here, and only `Batch#ensure_first_flush!` ever stamped a TTL — on the
+    # hash alone — so an abandoned or invalidated batch leaked its live-jid set
+    # forever. A late re-push (retry, scheduled promotion) can also resurrect an
+    # already-expired `b-<bid>` through the HINCRBYs above, again TTL-less. NX
+    # stamps only keys that currently have no TTL, so a running batch's clock and
+    # the shorter post-success `linger` window (Callbacks#apply_linger) both win.
     # KEYS = [b-<bid>, b-<bid>-jids, queue_list, queues_set, b-<bid>-died, dead-batches]
-    # ARGV = [queue_name, jid, job_json, bid]
+    # ARGV = [queue_name, jid, job_json, bid, expiry_seconds]
     # Returns 1.
     BATCH_PUSH = <<~LUA
       if redis.call("srem", KEYS[5], ARGV[2]) == 1 then
@@ -147,6 +155,8 @@ module Wurk
           redis.call("hincrby", KEYS[1], "pending", 1)
         end
       end
+      redis.call("expire", KEYS[1], ARGV[5], "NX")
+      redis.call("expire", KEYS[2], ARGV[5], "NX")
       redis.call("sadd", KEYS[4], ARGV[1])
       redis.call("lpush", KEYS[3], ARGV[3])
       return 1
@@ -165,14 +175,19 @@ module Wurk
     # it, the re-push routes through BATCH_PUSH, whose guard finds the jid already
     # live (SADD == 0) → pure LPUSH, no recount. So registration happens exactly
     # once, here, at enqueue.
+    #
+    # The other path that can create `b-<bid>-jids`, so it carries the same NX
+    # expiry stamp as BATCH_PUSH.
     # KEYS = [schedule, b-<bid>, b-<bid>-jids]
-    # ARGV = [at_score, job_json, jid]
+    # ARGV = [at_score, job_json, jid, expiry_seconds]
     # Returns 1.
     BATCH_SCHEDULE = <<~LUA
       if redis.call("sadd", KEYS[3], ARGV[3]) == 1 then
         redis.call("hincrby", KEYS[2], "total", 1)
         redis.call("hincrby", KEYS[2], "pending", 1)
       end
+      redis.call("expire", KEYS[2], ARGV[4], "NX")
+      redis.call("expire", KEYS[3], ARGV[4], "NX")
       redis.call("zadd", KEYS[1], ARGV[1], ARGV[2])
       return 1
     LUA
@@ -208,13 +223,18 @@ module Wurk
     # currently in a failing/retrying state. Re-failures of the same jid are
     # idempotent. Cleared by BATCH_ACK_SUCCESS (retry passed) or
     # BATCH_ACK_COMPLETE (job died). Spec §2.5, §2.8.
+    #
+    # `b-<bid>-failed` is born here, so it carries the same NX expiry stamp as
+    # BATCH_PUSH.
     # KEYS = [b-<bid>, b-<bid>-failed]
-    # ARGV = [jid]
+    # ARGV = [jid, expiry_seconds]
     # Returns 1.
     BATCH_ACK_FAILED = <<~LUA
       if redis.call("sadd", KEYS[2], ARGV[1]) == 1 then
         redis.call("hincrby", KEYS[1], "failures", 1)
       end
+      redis.call("expire", KEYS[1], ARGV[2], "NX")
+      redis.call("expire", KEYS[2], ARGV[2], "NX")
       return 1
     LUA
 
@@ -224,8 +244,11 @@ module Wurk
     # live jids so the batch can fire `:complete` even with terminally failed
     # jobs. `b-<bid>-failed` holds only currently-retrying jids; `b-<bid>-died`
     # holds terminally-dead ones (spec §2.8 — the two sets are distinct).
+    #
+    # `b-<bid>-died` is born here, so it carries the same NX expiry stamp as
+    # BATCH_PUSH.
     # KEYS = [b-<bid>, b-<bid>-jids, b-<bid>-died, b-<bid>-failed]
-    # ARGV = [jid]
+    # ARGV = [jid, expiry_seconds]
     # Returns [live_jids_remaining, died_count, first_death]. `first_death`
     # is 1 the first time *any* jid is SADDed into the died set, 0 thereafter
     # — caller uses it to fire `:death` exactly once per batch.
@@ -236,6 +259,8 @@ module Wurk
         redis.call("hincrby", KEYS[1], "failures", -1)
       end
       local died_added = redis.call("sadd", KEYS[3], ARGV[1])
+      redis.call("expire", KEYS[1], ARGV[2], "NX")
+      redis.call("expire", KEYS[3], ARGV[2], "NX")
       local first_death = 0
       if was_pre_existing_death == 0 and died_added == 1 then
         first_death = 1
@@ -262,10 +287,21 @@ module Wurk
     # same reopened batch cannot lose each other's writes. Refuses to write
     # when the batch hash is gone — resurrecting a bare hash would create a
     # batch that can never fire anything.
+    #
+    # Appends are deduped and capped. Reopening the same batch inside every
+    # job and re-registering its callback is a common shape, and each append
+    # pays a decode + encode of the whole array: unbounded that is O(N^2) Lua
+    # work on the way in and N identical callback jobs at fire time. An
+    # identical triple is therefore a no-op — the registration is already
+    # satisfied by the entry that is there — and past the cap the append is
+    # refused rather than allowed to grow the hash field without limit.
+    # Both sides of the comparison are normalised through cjson so an entry
+    # written by Ruby's `to_json` at first flush matches one appended here.
     # KEYS = [b-<bid>]
-    # ARGV = [callback triple JSON, event name]
-    # Returns -1 when the batch hash does not exist; otherwise the event's
-    # fired flag ("1", or nil when it has not fired yet).
+    # ARGV = [callback triple JSON, event name, max callbacks]
+    # Returns -1 when the batch hash does not exist and -2 when the cap
+    # refused the append; otherwise the event's fired flag ("1", or nil when
+    # it has not fired yet).
     BATCH_APPEND_CALLBACK = <<~LUA
       if redis.call("exists", KEYS[1]) == 0 then
         return -1
@@ -277,19 +313,30 @@ module Wurk
       else
         list = {}
       end
-      list[#list + 1] = cjson.decode(ARGV[1])
+      local entry = cjson.decode(ARGV[1])
+      local encoded = cjson.encode(entry)
+      for i = 1, #list do
+        if cjson.encode(list[i]) == encoded then
+          return redis.call("hget", KEYS[1], ARGV[2])
+        end
+      end
+      if #list >= tonumber(ARGV[3]) then
+        return -2
+      end
+      list[#list + 1] = entry
       redis.call("hset", KEYS[1], "callbacks", cjson.encode(list))
       return redis.call("hget", KEYS[1], ARGV[2])
     LUA
 
     # Ent Unique (§3): atomic compare-and-delete of a lock key. Replaces the
     # two-command GET-then-DEL — between those calls the key can expire and a
-    # fresh enqueue can grab it, and the bare DEL would then drop the new
+    # fresh owner can grab it, and the bare DEL would then drop the new
     # owner's lock. Shared by `Unique::ServerMiddleware#release` (normal
-    # success/start release) and `Unique::DEATH_HANDLER` (automatic-death
-    # release) so the two paths cannot drift.
-    # KEYS = [unique:<sha256>]
-    # ARGV = [owning jid]
+    # success/start release), `Unique::DEATH_HANDLER` (automatic-death
+    # release) and `Leader#release` (stepping down from the cluster lock)
+    # so those paths cannot drift.
+    # KEYS = [the lock key — unique:<sha256> | dear-leader]
+    # ARGV = [the owner that must still hold it — jid | <host>:<pid>:<nonce>]
     # Returns 1 when the key was deleted, 0 otherwise.
     RELEASE_IF_OWNER = <<~LUA
       if redis.call("get", KEYS[1]) == ARGV[1] then
@@ -334,6 +381,41 @@ module Wurk
       return removed
     LUA
 
+    # Ent Periodic (§2): compare-and-swap the fire marks of `loops:<lid>`.
+    # The cron poller's leader gate is a cached read (`Component#leader?`,
+    # LEADER_CACHE_TTL_MS), so for a few seconds after a handover two
+    # processes both believe they lead and both reach the same due loop —
+    # HMGET → decide → enqueue → HSET then fires it twice. Claiming the slot
+    # atomically is what makes a tick fire exactly once; the loser gets 0 and
+    # enqueues nothing. Values written are the same decimal-epoch strings the
+    # Ruby path wrote, byte for byte — the dashboard reads these fields.
+    #
+    # `nf` present: the caller must still be looking at the mark it read
+    # (byte compare, so no parse can drift the token).
+    # `nf` absent: the caller derived the slot from `lf`, so refuse once `lf`
+    # has reached it — that is the exhausted-schedule case, where the winner
+    # cleared `nf` and a loser would otherwise re-fire the very same slot.
+    # KEYS = [loops:<lid>]
+    # ARGV = [expected `nf` (or the derived slot), new `lf`, new `nf` ('' → HDEL)]
+    # Returns 1 when this caller claimed the slot, 0 otherwise.
+    CRON_CLAIM_FIRE = <<~LUA
+      local key = KEYS[1]
+      local cur = redis.call("hget", key, "nf")
+      if cur and cur ~= "" then
+        if cur ~= ARGV[1] then return 0 end
+      else
+        local lf = tonumber(redis.call("hget", key, "lf") or "")
+        if lf and lf >= tonumber(ARGV[1]) then return 0 end
+      end
+      redis.call("hset", key, "lf", ARGV[2])
+      if ARGV[3] == "" then
+        redis.call("hdel", key, "nf")
+      else
+        redis.call("hset", key, "nf", ARGV[3])
+      end
+      return 1
+    LUA
+
     # Limiter scripts live in `lib/wurk/lua/limiter_*.lua` — one file per
     # type. Loaded at boot, the file's basename (minus `.lua`) becomes the
     # SCRIPTS key as a symbol. Keeping them as separate files makes diffing
@@ -358,7 +440,8 @@ module Wurk
       batch_append_callback: BATCH_APPEND_CALLBACK,
       fast_delete_job: FAST_DELETE_JOB,
       fast_delete_by_class: FAST_DELETE_BY_CLASS,
-      release_if_owner: RELEASE_IF_OWNER
+      release_if_owner: RELEASE_IF_OWNER,
+      cron_claim_fire: CRON_CLAIM_FIRE
     }.merge(FILE_SCRIPTS).freeze
 
     # SHA1 of each script source — matches what `SCRIPT LOAD` returns.

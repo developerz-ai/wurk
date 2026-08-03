@@ -1,15 +1,15 @@
 plan: 101-redis-resilience-audit-fixes
 title: Redis resilience + full-codebase audit fixes
-status: not_started        # not_started | in_progress | blocked | complete | superseded
+status: in_progress        # not_started | in_progress | blocked | complete | superseded
 created_by: sebi
 worked_by: ""              # executor fills with their git user.name on pickup
 owner: sebi
-percent: 0
+percent: 15
 current_focus: ""
 slices:
   - file: 01-redis-resilience.md
-    status: not_started
-    percent: 0
+    status: complete
+    percent: 100
   - file: 02-shutdown-requeue-safety.md
     status: not_started
     percent: 0
@@ -28,6 +28,9 @@ slices:
   - file: 07-parity-spec-alignment.md
     status: not_started
     percent: 0
-evidence: []
-notes: "Findings from six-agent audit 2026-07-17. Production incident (ReadTimeoutError/CannotConnectError/pool 0/7) root-caused in overview.md; 01 is the urgent slice."
-last_updated: 2026-07-17
+evidence:
+  - commit: cf81393
+    slices: [01]
+    notes: "redis_pool.rb:29,36-39 connection timeouts; :89-106/:159-193 retry wrapper; capsule.rb:97-98,214-216 POOL_HEADROOM; capsule.rb:108-110 fetch pool"
+notes: "Findings from six-agent audit 2026-07-17. Production incident (ReadTimeoutError/CannotConnectError/pool 0/7) root-caused in overview.md; 01 is the urgent slice. Slice 01 fixed in cf81393."
+last_updated: 2026-08-01

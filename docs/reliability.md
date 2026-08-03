@@ -55,13 +55,32 @@ LMOVE  queue:default  queue:default|web-1|4711|0  RIGHT LEFT
 The destination is the **private list** — one per (public queue, process):
 
 ```
-queue:<public queue name>|<host>|<pid>|<index>
+queue:<public queue name>|<host>|<pid>|<nonce>|<index>
 ```
 
 - `<host>` is `ENV["DYNO"]` when set, otherwise `Socket.gethostname`.
+- `<nonce>` is `Wurk::Component::PROCESS_NONCE` — 12 hex chars
+  (`SecureRandom.hex(6)`), minted once when the process image loads and
+  inherited unchanged across `fork`. It disambiguates two process
+  *generations* that land on the same `<host>|<pid>` — a quick restart that
+  gets pid-recycled by the OS, or a container that restarts under a fixed
+  hostname into a fresh pid namespace. Without it, a reaper could match the
+  new process's private list against the old (dead) process's identity, or
+  vice versa.
 - `<index>` is currently always `0` — one fetcher per capsule.
 - Pipe separators, matching Sidekiq Pro's `super_fetch` naming byte-for-byte, so
   third-party tooling that parses these keys keeps working.
+
+> **Migration window.** Keys written before the nonce existed have the
+> 3-segment tail `<host>|<pid>|<index>` (no nonce). The reaper's parser
+> (`Fetcher::Reaper#parse_owner`/`#parse_full_key`, right-anchored via
+> `owner_tails`) accepts both the 4-segment and 3-segment tail shapes, trying
+> the wider (nonce-bearing) reading first and falling back to the narrow one.
+> A pre-nonce key stays reclaimable indefinitely — nothing writes that shape
+> anymore, but a list created by a not-yet-upgraded process can still hold
+> in-flight jobs across a rolling upgrade, and dropping the narrow parse
+> would strand it. See [How "dead" is decided](#how-dead-is-decided) for how
+> liveness is checked differently for nonce-bearing vs. pre-nonce keys.
 
 The job stays in that private list for the entire duration of `perform`. Only
 when the Processor finishes does it ACK:
@@ -157,21 +176,39 @@ end
 
 ### How "dead" is decided
 
-Per private-list owner, and the answer differs by host:
+Per private-list owner, and the answer now turns on nonce, not just host:
 
-- **Same host** — the OS is authoritative: `Process.kill(0, pid)`. Instant. A
-  `kill -9`ed sibling is reclaimed the moment the supervisor reaps it, without
-  waiting out any TTL. (`EPERM` is treated as alive.)
-- **Other host** — we can't ping the pid, so we trust the heartbeat: the owner
-  is alive iff some member of the `processes` set whose `info` hash still exists
-  shares its `<host>:<pid>` prefix. The heartbeat hash has a **60s TTL**, so
-  **cross-host reclaim can lag up to ~60 seconds.** Bare set membership isn't
-  enough — a member lingers after its hash expires, and that window must count
-  as dead.
+- **Our own host *and* nonce** — a key's `<host>|<pid>|<nonce>` tail matches
+  this process's own `hostname` and `Component::PROCESS_NONCE`. Because the
+  nonce is minted once per process image and inherited unchanged across
+  `fork` (`component.rb:19-21`), this group is every process forked from the
+  same swarm boot — the pid was minted in *our* pid namespace, so the OS is
+  authoritative: `Process.kill(0, pid)`. Instant. It ignores a stale
+  `processes` SET entry whose 60s TTL hasn't lapsed yet, so a `kill -9`ed
+  sibling is reclaimed the moment the supervisor reaps it, not up to 60s
+  later. (`EPERM` is treated as alive.)
+- **Any other incarnation** — different nonce (a different boot generation),
+  a pre-nonce key, or a different host — its pid means nothing in our
+  namespace, so we trust the heartbeat instead: the owner is alive iff its
+  identity is a live `processes` member (one whose `info` hash still
+  exists). Match is on the full `<host>:<pid>:<nonce>` for a nonce-bearing
+  key, or just the `<host>:<pid>` prefix for a pre-nonce one — see the
+  [migration window](#reliable-fetch) note above. The heartbeat hash has a
+  **60s TTL**, so **this path can lag reclaim up to ~60 seconds.** Bare set
+  membership isn't enough — a member lingers after its hash expires, and that
+  window must count as dead.
 
-The one blind spot is local pid reuse: if an unrelated process grabs the dead
-worker's pid, the private list looks alive. In practice the supervisor respawns
-with a fresh pid, so it doesn't arise.
+**The remaining blind spot, unchanged by the nonce:** pid reuse *within* the
+same boot generation. If the swarm respawns a replacement and the OS hands it
+the exact pid a just-reaped sibling held — same host, same inherited
+nonce — the new occupant reads as the old one, alive. In practice the
+supervisor's own bookkeeping means this doesn't arise (a respawned child
+gets a fresh pid before its predecessor's is even eligible for reuse), so it
+stays a theoretical gap rather than an operational one. This is the same
+class of weakness Sidekiq Pro's `super_fetch` has never closed — see
+[Parity Divergences](idea/parity-divergences.md) — recorded there as
+deliberate rather than fixed, since eliminating it would mean tracking pid
+generation numbers the OS doesn't expose.
 
 ### What reclaim actually does
 
@@ -201,8 +238,24 @@ job runs through `Wurk::Middleware::PoisonPill`:
 
 - `INCR super_fetch:recovered:<jid>` with a **72h TTL** (wire-compatible with
   Sidekiq Pro — tooling that watches those keys expects 72h).
+- The counter is dropped the moment the job **acks** — the round trip that
+  removes it from its private list carries the `DEL`. Anything that finishes an
+  attempt counts (a clean run, or a raise that booked a retry): the job proved
+  it does not take its worker down. Only reclaims of an attempt that never
+  finished accumulate, so unrelated crashes spread across the 72h window can't
+  dead-set a job that has been completing all along.
+  The reset needs the jid, which the ACK path takes from the payload it has
+  already parsed. A unit of work carrying no jid — a blank one, or a custom
+  `config[:fetch_class]` whose unit of work has no jid slot at all — still acks
+  normally, it just leaves its counter to expire on the 72h TTL rather than
+  clearing it early. Nothing is deleted on a blank jid: the key it would build
+  is the bare prefix, which is shared rather than per-job.
 - At `RECOVERY_THRESHOLD` (**3**) the job is killed into the dead set and
   `LREM`'d back off the public queue so it isn't also re-run.
+- The kill fires **death handlers** (`ex` is a
+  `Wurk::Middleware::PoisonPill::Poisoned`), so `:death` batch callbacks and
+  error services see it like any other exhaustion. Sidekiq Pro doesn't specify
+  this either way — see [parity divergences](idea/parity-divergences.md).
 - Statsd `sidekiq.jobs.recovered.fetch` fires on every recovery;
   `sidekiq.jobs.poison` on the kill.
 
@@ -223,7 +276,7 @@ end
 ```
 
 `Wurk::Middleware::PoisonPill.recovery_count(jid)` reads the counter without
-bumping it.
+bumping it; `.clear!(jid)` resets one by hand.
 
 ---
 
@@ -290,9 +343,16 @@ Wurk::Client.reliable_push! unless Rails.env.test?
 | `Wurk::Client.reliable_push?` | — | Is it installed |
 | `Wurk::Client::Buffered.buffer_size` | — | Current depth |
 
-What gets caught: `RedisClient::ConnectionError` (after `Wurk::RedisPool`'s own
-retries — 3 attempts with exponential backoff) and `ConnectionPool::TimeoutError`
-(checkout starvation).
+What gets caught: `RedisClient::ConnectionError` and
+`ConnectionPool::TimeoutError` (checkout starvation). `Wurk::RedisPool` retries
+first, but only where a replay is provably safe: a connect-phase failure
+(`CannotConnectError` / `FailoverError`) gets 3 attempts with exponential
+backoff, while a read/write timeout — where the push may already have applied —
+raises on the first error rather than risk a duplicate job, and lands in the
+buffer straight away. That backoff only runs while the push has landed nothing:
+once a queue group is acknowledged the pool stops replaying the block whatever
+the error, so a push that dies partway can never double the group it already
+delivered.
 
 **Flush behavior.** Every subsequent `push` / `push_bulk` drains the buffer
 oldest-first *before* pushing the new job. Draining stops at the first transient
@@ -317,11 +377,69 @@ batch-context pushes. Those re-raise, because the batch Lua has atomic counter
 side effects that can't be safely replayed. In a mixed `push_bulk`, the bidless
 payloads buffer and the batched ones raise.
 
+Also not buffered: payloads Redis already accepted. A push is more than one
+round trip — one pipeline per destination queue, then the batched `BATCH_PUSH`
+pipeline — so a connection that drops partway leaves some of the payload set
+written. Wurk buffers only the groups it has no reply for; a job already in
+`queue:<name>` is never replayed on top of itself. The one group in flight when
+the socket dropped *is* buffered, because a lost reply is indistinguishable from
+a lost command — so that group is at-least-once and may produce a duplicate
+job. Sidekiq's own contract is at-least-once and `JobRetry` re-runs jobs anyway;
+make jobs idempotent.
+
 ### The durability caveat
 
 **The buffer is in-memory and per-process. If the process dies, every buffered
 job is gone.** Not written to Redis, not written to disk, not recoverable, not
 logged as a payload you can replay.
+
+### Fork semantics
+
+The buffer, its mutexes, and its background drainer are process-global state.
+A `fork()` — the Swarm booting children, or a preloading app server like Puma
+or Unicorn spawning workers — copies all of it into the child by value: the
+same buffered payloads, a drainer thread that did not survive the fork, and
+mutexes that could still be held mid-critical-section at the moment of fork.
+
+Wurk resets that state on every fork path it can see, via
+`Wurk::Client::Buffered.reset_after_fork!`:
+
+- A `Process._fork` hook (`lib/wurk/client/buffered.rb`), registered at
+  require time, fires in every child regardless of how the fork happened —
+  this is what catches a preloading app server's own fork, which Wurk's swarm
+  code never runs through.
+- `Swarm::ChildBoot#reconnect_after_fork` (`lib/wurk/swarm/child_boot.rb`)
+  also calls it explicitly, right after `@config.reset_redis_pools!` and
+  before `validate_redis!`. Whichever of the two runs first wins; a pid guard
+  makes the second call a no-op.
+
+What the reset does, in a child:
+
+- **Drops the inherited buffer.** The child does not replay the payloads it
+  woke up holding. The parent still has the same buffer and will replay it on
+  its own next push — if the child replayed too, every buffered job would
+  enqueue `(children + 1)×` times. Only the parent that originally buffered a
+  job ever replays it.
+- **Rebuilds both mutexes** (`@install_mutex`, `@buffer_mutex`) as fresh
+  objects rather than reusing the inherited ones. MRI abandons a mutex whose
+  owning thread didn't survive the fork, but that's an implementation detail,
+  not a documented guarantee, and it does not cover a fork taken while a
+  *different* thread's critical section was still open — the child would
+  inherit that mutex still locked, and its first buffered `push` (which drains
+  under the lock before pushing) would hang forever. Fresh allocations are
+  immune regardless.
+- **Drops the drainer without stopping it.** `Drainer#stop` synchronizes on
+  the drainer's own lock, which carries the same inherited-mutex hazard as
+  above, so the inherited drainer is discarded rather than shut down. If the
+  parent had one running (`interval` was set), the child gets an equivalent
+  fresh drainer on its own interval, so a child that keeps buffering jobs
+  still flushes them. The captured `buffer_client_factory` is cleared with it,
+  since it closes over the parent's pre-fork Redis pool — the next buffered
+  push in the child recaptures a factory scoped to its own pool.
+
+Net effect: after a fork, each process — parent and every child — owns an
+independent buffer, drainer, and pair of mutexes, and only ever replays jobs
+it buffered itself.
 
 `reliable_push` buys you a bounded window over a *short* Redis blip in a
 *surviving* process. It is not a durable outbox. If losing an enqueue is
@@ -336,11 +454,17 @@ evicts your **oldest** jobs. Use `:raise` if you'd rather decide yourself:
 Wurk::Client.reliable_push_overflow = :raise
 
 begin
-  MyJob.perform_async(id)
+  MyJob.perform_bulk(ids.map { |id| [id] })
 rescue Wurk::Client::Buffered::Overflow => e
-  Outbox.create!(payload: e.payload)   # the offending payload rides along
+  Outbox.insert_all(e.payloads.map { |p| { payload: p } })   # every undelivered job
 end
 ```
+
+`:raise` fills the remaining capacity first, then raises **once**. `e.payloads`
+carries everything that push failed to deliver — the tail of a bulk push that
+didn't fit, plus any batched payloads in the same call (those never buffer). The
+payloads that *did* fit stay in the buffer and replay normally, so no job is
+both buffered and reported. `e.cause` is the underlying connection error.
 
 ---
 

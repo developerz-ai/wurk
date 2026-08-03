@@ -104,17 +104,15 @@ module Wurk
         end
       end
 
+      # Metadata HSET + EXPIRE + `lmtr-list` SADD in a single round trip. The
+      # script also gates the SADD on the metadata being newly written, so a
+      # per-job construction (`stripe-#{user_id}`) stops rewriting a set that
+      # grows one member per name — see limiter_register.lua for why that gate
+      # is only safe while it is atomic with the HSET.
       def register!
-        Wurk::Limiter.redis do |c|
-          c.call('SADD', LIST_KEY, @name)
-          c.call(
-            'HSET', meta_key,
-            'type', type.to_s,
-            'options', JSON.dump(serializable_options),
-            'fingerprint', fingerprint
-          )
-          c.call('EXPIRE', meta_key, @options[:ttl])
-        end
+        lua(:limiter_register,
+            keys: [meta_key, LIST_KEY],
+            argv: [@name, type.to_s, JSON.dump(serializable_options), fingerprint, ttl])
       end
 
       def ttl

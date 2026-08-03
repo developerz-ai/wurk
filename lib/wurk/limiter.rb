@@ -4,6 +4,7 @@ require 'json'
 require 'digest'
 require 'securerandom'
 require_relative 'lua'
+require_relative 'pool_checkout'
 
 module Wurk
   # Sidekiq Enterprise rate limiters: concurrent, bucket, window, leaky,
@@ -24,7 +25,10 @@ module Wurk
   # Layout (one file per type under `lib/wurk/limiter/`):
   #   * `Limiter::Base` owns the metadata write (lmtr:{name}) + the global
   #     `lmtr-list` registration so the Web UI can list every limiter, and
-  #     the uniform `status` shape.
+  #     the uniform `status` shape. Membership is added once per metadata
+  #     write and swept back out by `Web::Enterprise::Limits.list` once the
+  #     metadata expires — the two halves of keeping `lmtr-list` bounded
+  #     under interpolated names.
   #   * Per-type subclasses (Concurrent / Bucket / Window / Leaky / Points)
   #     own their acquire/wait loop. Each delegates the atomic step to a
   #     Lua script in `lib/wurk/lua/limiter_*.lua`.
@@ -146,9 +150,8 @@ module Wurk
       # Redis access: caller-supplied pool (Limiter.configure.redis = …) wins,
       # else fall back to the default Wurk pool. This is the same hierarchy
       # Sidekiq Ent documents — dedicated rate-limiter pool is opt-in.
-      def redis(&)
-        pool = config.pool || Wurk.redis_pool
-        pool.with(&)
+      def redis(idempotent: false, &)
+        PoolCheckout.with(config.pool || Wurk.redis_pool, idempotent, &)
       end
 
       # `ZRANGE key 0 0 WITHSCORES` yields a single [member, score] pair, but the

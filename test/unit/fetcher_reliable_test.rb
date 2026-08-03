@@ -64,6 +64,31 @@ class FetcherReliableTest < Wurk::Test::UnitCase
     assert_nil @fetcher.retrieve_work
   end
 
+  # Manager#quiet terminates the shared fetcher before it terminates the
+  # processors; Processor#run loops on its own flag, so the short-circuit has to
+  # pause or every processor spins for the width of that window.
+  def test_retrieve_work_pauses_on_the_quieted_short_circuit
+    @fetcher.terminate
+
+    took = elapsed { assert_nil @fetcher.retrieve_work }
+
+    assert_operator took, :>=, Wurk::Fetcher::Reliable::QUIET_PAUSE * 0.9
+  end
+
+  # Every queue paused → nothing to block on, so retrieve_work must back off a
+  # poll interval itself. Returning instantly hot-loops Processor#run and pays
+  # an SMEMBERS of the paused set on every pass (upstream Sidekiq #4825).
+  def test_retrieve_work_backs_off_a_poll_interval_when_no_queue_is_fetchable
+    @config.fetch_poll_interval = 0.2
+    Wurk::Queue.new(@queue_name).pause!
+
+    assert_empty @fetcher.queues_cmd
+
+    took = elapsed { assert_nil @fetcher.retrieve_work }
+
+    assert_operator took, :>=, 0.18
+  end
+
   # --- acknowledge / SIGKILL behavior ---------------------------------
 
   def test_acknowledge_removes_job_from_private_list
@@ -83,6 +108,49 @@ class FetcherReliableTest < Wurk::Test::UnitCase
     assert_equal 0, llen(@public_queue)
     assert_equal 1, llen(private_queue)
     assert_equal payload, lindex(private_queue, 0)
+  end
+
+  # The Processor fills in `jid` after parsing; the ACK then retires the job's
+  # poison-pill recovery counter in the same round trip as the LREM, so a job
+  # that completed can't be dead-set by a later reclaim (F6).
+  def test_acknowledge_clears_the_poison_pill_counter_for_its_jid
+    jid = "frj-#{Process.pid}-#{object_id}"
+    counter = Wurk::Middleware::PoisonPill.counter_key(jid)
+    @pool.with { |c| c.call('SET', counter, '2') }
+    enqueue('ack-recovered')
+    uow = @fetcher.retrieve_work
+    uow.jid = jid
+    uow.acknowledge
+
+    assert_equal 0, llen(private_queue), 'the ACK still removes the job from the private list'
+    assert_equal 0, Wurk::Middleware::PoisonPill.recovery_count(jid)
+  end
+
+  # No jid (a payload the Processor could not parse, or a fetcher that never
+  # sets one) → plain LREM, no DEL riding along.
+  def test_acknowledge_without_a_jid_only_lrems
+    enqueue('ack-plain')
+    uow = @fetcher.retrieve_work
+
+    assert_nil uow.jid
+
+    uow.acknowledge
+
+    assert_equal 0, llen(private_queue)
+  end
+
+  # A blank jid must not DEL the bare `super_fetch:recovered:` prefix — that
+  # key belongs to no job and deleting it would be a silent wrong-key write.
+  def test_acknowledge_with_blank_jid_leaves_the_prefix_key_alone
+    prefix = Wurk::Middleware::PoisonPill::KEY_PREFIX
+    @pool.with { |c| c.call('SET', prefix, 'sentinel') }
+    enqueue('ack-blank-jid')
+    uow = @fetcher.retrieve_work
+    uow.jid = ''
+    uow.acknowledge
+
+    assert_equal 0, llen(private_queue)
+    assert_equal('sentinel', @pool.with { |c| c.call('GET', prefix) })
   end
 
   # --- requeue (single) ----------------------------------------------
@@ -210,9 +278,20 @@ class FetcherReliableTest < Wurk::Test::UnitCase
   def test_private_queue_name_uses_pipe_separators_and_encodes_identity
     parts = Wurk::Fetcher::Reliable.private_queue_name(@public_queue).split('|')
 
-    # [public_queue, hostname, pid, index] — assert as a single tuple so the
-    # whole shape is one expectation rather than four.
-    assert_equal [@public_queue, parts[1], Process.pid.to_s, '0'], parts
+    # [public_queue, hostname, pid, nonce, index] — assert as a single tuple so
+    # the whole shape is one expectation rather than five.
+    assert_equal [@public_queue, parts[1], Process.pid.to_s, Wurk::Component::PROCESS_NONCE, '0'], parts
+  end
+
+  # The nonce is what distinguishes two incarnations that share host+pid (a
+  # container restarted into a fresh PID namespace), so it must be the
+  # process-wide one the heartbeat publishes in `identity`, not a fresh value
+  # per call.
+  def test_private_queue_name_carries_the_process_nonce_from_identity
+    nonce = Wurk::Fetcher::Reliable.private_queue_name(@public_queue).split('|')[3]
+
+    assert_equal @fetcher.identity.split(':').last, nonce
+    assert_equal nonce, Wurk::Fetcher::Reliable.private_queue_name(@public_queue).split('|')[3]
   end
 
   def test_private_queue_name_honors_dyno_env_when_set
@@ -254,8 +333,14 @@ class FetcherReliableTest < Wurk::Test::UnitCase
     used = nil
     conn = Object.new
     conn.define_singleton_method(:blocking_call) { |*_| nil }
-    @capsule.define_singleton_method(:fetch_redis) { |&blk| used = :fetch; blk.call(conn) }
-    @capsule.define_singleton_method(:redis) { |&blk| used = :main; blk.call(conn) }
+    @capsule.define_singleton_method(:fetch_redis) do |**_opts, &blk|
+      used = :fetch
+      blk.call(conn)
+    end
+    @capsule.define_singleton_method(:redis) do |**_opts, &blk|
+      used = :main
+      blk.call(conn)
+    end
 
     @fetcher.send(:blmove, @public_queue)
 
@@ -274,8 +359,15 @@ class FetcherReliableTest < Wurk::Test::UnitCase
       box.replace(a)
       nil
     end
-    @capsule.define_singleton_method(:fetch_redis) { |&blk| blk.call(conn) }
+    @capsule.define_singleton_method(:fetch_redis) { |**_opts, &blk| blk.call(conn) }
     box
+  end
+
+  # Monotonic wall-clock cost of the block, in seconds.
+  def elapsed
+    started = ::Process.clock_gettime(::Process::CLOCK_MONOTONIC)
+    yield
+    ::Process.clock_gettime(::Process::CLOCK_MONOTONIC) - started
   end
 
   def private_queue

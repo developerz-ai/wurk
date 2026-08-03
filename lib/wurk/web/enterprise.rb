@@ -22,19 +22,70 @@ module Wurk
       module Limits
         module_function
 
-        # @return [Array<String>] limiter names, optionally filtered to those
-        #   whose name contains the case-insensitive substring `filter`.
+        # Names per sweep round trip. Bounds both halves: the probe's pipeline
+        # (whose replies the client buffers) and the removal script, which is
+        # atomic — an unbatched pass over a set that leaked for months would
+        # block every other Redis client for its whole length. A healthy set
+        # fits in one slice, so the common case still costs one probe.
+        SWEEP_BATCH = 512
+
+        # @return [Array<String>] live limiter names, optionally filtered to
+        #   those whose name contains the case-insensitive substring `filter`.
+        #
+        # Listing is also the sweep. `lmtr-list` membership has no TTL of its
+        # own while `lmtr:<name>` expires with the limiter's ttl, so every
+        # interpolated name (`stripe-#{user_id}`) the spec blesses would leave a
+        # permanent member behind. Names whose metadata is gone are dropped from
+        # the SET and from the result, so the dashboard also stops rendering a
+        # row with nothing behind it. The liveness probe rides along with the
+        # SMEMBERS the listing already pays for — both are O(set) — and once the
+        # sweep has run the set is back down to live limiters.
         def list(filter: nil)
-          names = Wurk.redis { |c| c.call('SMEMBERS', Wurk::Limiter::LIST_KEY) }.sort
+          names = sweep(Wurk.redis(idempotent: true) { |c| c.call('SMEMBERS', Wurk::Limiter::LIST_KEY) }).sort
           return names if filter.nil? || filter.to_s.empty?
 
           needle = filter.to_s.downcase
           names.select { |n| n.downcase.include?(needle) }
         end
 
+        # Drop the names whose metadata is gone, return the ones still live.
+        def sweep(names)
+          names.each_slice(SWEEP_BATCH).flat_map { |slice| sweep_slice(slice) }
+        end
+
+        def sweep_slice(names)
+          live, dead = partition_live(names)
+          sweep_batch(dead) unless dead.empty?
+          live
+        end
+
+        def partition_live(names)
+          flags = Wurk.redis(idempotent: true) do |c|
+            c.pipelined { |pipe| names.each { |n| pipe.call('EXISTS', meta_key(n)) } }
+          end
+          names.partition.with_index { |_, i| flags[i].to_i == 1 }
+        end
+
+        # Claims apply-safety, unlike ProcessSet's comparable prune: the script
+        # re-decides liveness inside its own atomic step, so a replay can only
+        # remove names that are still dead.
+        def sweep_batch(names)
+          Wurk.redis(idempotent: true) do |c|
+            Wurk::Lua::Loader.eval_cached(
+              c, :limiter_list_sweep,
+              keys: [Wurk::Limiter::LIST_KEY],
+              argv: ['lmtr:', *names]
+            )
+          end
+        end
+
         def metadata(name)
-          raw = Wurk.redis { |c| c.call('HGETALL', "lmtr:#{name}") }
+          raw = Wurk.redis(idempotent: true) { |c| c.call('HGETALL', meta_key(name)) }
           raw.is_a?(Array) ? raw.each_slice(2).to_h : raw
+        end
+
+        def meta_key(name)
+          "lmtr:#{name}"
         end
 
         # Stats-key reset: drops every `lmtr-stats:` / state key for the
@@ -51,8 +102,9 @@ module Wurk
         end
 
         # Read-only reconstruction (`register: false`) from the persisted
-        # metadata. Returns nil when the meta HASH is gone or malformed —
-        # LIST membership has no TTL, so a name can outlive its metadata.
+        # metadata. Returns nil when the meta HASH is gone or malformed — the
+        # name a caller holds came from a page `list` rendered earlier, and the
+        # metadata can expire between the two.
         def rebuild(name)
           meta = metadata(name)
           return nil if meta.nil? || meta.empty?

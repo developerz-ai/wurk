@@ -25,7 +25,7 @@ module Wurk
 
     # @return [Array<Queue>] one per known queue, sorted by name.
     def self.all
-      names = Wurk.redis { |conn| conn.call('SMEMBERS', Keys::QUEUES_SET) }
+      names = Wurk.redis(idempotent: true) { |conn| conn.call('SMEMBERS', Keys::QUEUES_SET) }
       names.sort.map { |n| new(n) }
     end
 
@@ -35,12 +35,12 @@ module Wurk
     end
 
     def size
-      Wurk.redis { |conn| conn.call('LLEN', @rname) }
+      Wurk.redis(idempotent: true) { |conn| conn.call('LLEN', @rname) }
     end
 
     # Seconds since the oldest job (tail of LIST) was enqueued. 0.0 when empty.
     def latency
-      payload = Wurk.redis { |conn| conn.call('LRANGE', @rname, -1, -1).first }
+      payload = Wurk.redis(idempotent: true) { |conn| conn.call('LRANGE', @rname, -1, -1).first }
       return 0.0 if payload.nil?
 
       JobRecord.latency_from(Wurk.load_json(payload)['enqueued_at'])
@@ -51,19 +51,19 @@ module Wurk
     # True iff this queue's name is a member of the `paused` SET. Wurk
     # implements the Pro contract for free; fetchers consult the same set.
     def paused?
-      Wurk.redis { |conn| conn.call('SISMEMBER', Keys::PAUSED_SET, @name) } == 1
+      Wurk.redis(idempotent: true) { |conn| conn.call('SISMEMBER', Keys::PAUSED_SET, @name) } == 1
     end
 
     # Pause new fetches against this queue. Idempotent — `SADD` returns
     # 0 when the name was already present. In-flight jobs are untouched.
     def pause! # rubocop:disable Naming/PredicateMethod
-      Wurk.redis { |conn| conn.call('SADD', Keys::PAUSED_SET, @name) }
+      Wurk.redis(idempotent: true) { |conn| conn.call('SADD', Keys::PAUSED_SET, @name) }
       true
     end
 
     # Resume fetches. Idempotent.
     def unpause! # rubocop:disable Naming/PredicateMethod
-      Wurk.redis { |conn| conn.call('SREM', Keys::PAUSED_SET, @name) }
+      Wurk.redis(idempotent: true) { |conn| conn.call('SREM', Keys::PAUSED_SET, @name) }
       true
     end
 
@@ -74,7 +74,7 @@ module Wurk
       loop do
         start  = page * PAGE_SIZE
         stop   = start + PAGE_SIZE - 1
-        slice  = Wurk.redis { |conn| conn.call('LRANGE', @rname, start, stop) }
+        slice  = Wurk.redis(idempotent: true) { |conn| conn.call('LRANGE', @rname, start, stop) }
         slice.each { |value| yield JobRecord.new(value, @name) }
         break if slice.size < PAGE_SIZE
 
@@ -91,6 +91,9 @@ module Wurk
     # UNLINK the list + drop the queue from the `queues` set. Pipelined
     # so a partial failure leaves at most one of the two ops applied.
     # Method name is Sidekiq wire-compat — `clear?` would break the alias.
+    #
+    # Unlike pause!/unpause!, this one can't claim apply-safety: a replay after
+    # a lost reply would UNLINK whatever a producer enqueued in between.
     def clear # rubocop:disable Naming/PredicateMethod
       Wurk.redis do |conn|
         conn.pipelined do |pipe|

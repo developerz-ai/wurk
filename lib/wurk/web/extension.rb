@@ -148,7 +148,7 @@ module Wurk
           %(<time class="ltr" dir="ltr" title="#{iso}" datetime="#{iso}">#{iso}</time>)
         end
 
-        def redis(&) = ::Wurk.redis(&)
+        def redis(idempotent: false, &) = ::Wurk.redis(idempotent:, &)
         def product_version = ::Wurk::VERSION
         def number_with_delimiter(num) = num.to_s.reverse.gsub(/(\d{3})(?=\d)/, '\\1,').reverse
       end

@@ -1,6 +1,7 @@
 # frozen_string_literal: true
 
 require_relative 'redis_pool'
+require_relative 'pool_checkout'
 require_relative 'middleware/chain'
 require_relative 'fetcher/reliable'
 
@@ -120,14 +121,14 @@ module Wurk
       @fetch_redis_pool = nil
     end
 
-    def redis(&)
-      redis_pool.with(&)
+    def redis(idempotent: false, &)
+      PoolCheckout.with(redis_pool, idempotent, &)
     end
 
     # Checkout from the dedicated fetch pool. Only the reliable fetcher's
     # blocking BLMOVE uses this, so a parked fetch never holds a main-pool slot.
-    def fetch_redis(&)
-      fetch_redis_pool.with(&)
+    def fetch_redis(idempotent: false, &)
+      PoolCheckout.with(fetch_redis_pool, idempotent, &)
     end
 
     def lookup(name)

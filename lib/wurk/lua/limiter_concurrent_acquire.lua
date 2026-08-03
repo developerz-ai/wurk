@@ -6,7 +6,10 @@
 -- ARGV[3] = slot_id (caller-generated; SHA-fingerprinted on the Ruby side)
 -- ARGV[4] = ttl seconds
 -- Returns {acquired, held, reclaimed}. acquired: 1 if slot recorded, 0 if full.
--- reclaimed: count of expired slots evicted on this pass.
+-- held: live ZCARD gauge after this pass. reclaimed: expired slots evicted here.
+-- The lifetime `held` counter in the stats hash is bumped here, not on the Ruby
+-- side, so it stays atomic with the ZADD (a process dying mid-acquire can't
+-- undercount) and costs no extra round trip on the acquire path.
 local cs_key = KEYS[1]
 local st_key = KEYS[2]
 local t = redis.call('TIME')
@@ -22,6 +25,7 @@ end
 local held = redis.call('ZCARD', cs_key)
 if held < limit then
   redis.call('ZADD', cs_key, now + lock_to, slot_id)
+  redis.call('HINCRBY', st_key, 'held', 1)
   redis.call('EXPIRE', cs_key, ttl)
   redis.call('EXPIRE', st_key, ttl)
   return {1, held + 1, reclaimed}

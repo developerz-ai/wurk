@@ -2,6 +2,7 @@
 
 require_relative '../component'
 require_relative '../launcher'
+require_relative '../client/buffered'
 require_relative '../fetcher/reliable'
 require_relative '../lua'
 require_relative 'orphan_guard'
@@ -106,6 +107,13 @@ module Wurk
 
       def reconnect_after_fork
         @config.reset_redis_pools!
+        # The reliable_push outage buffer, its drainer thread and its mutexes
+        # are process-global and were copied wholesale from the parent. The
+        # Process._fork hook normally beats us to it (making this a no-op) —
+        # the explicit call keeps the swarm path deterministic and ordered
+        # after the pool reset, so a re-armed drainer can only ever see the
+        # child's own pool.
+        Wurk::Client::Buffered.reset_after_fork!
         validate_redis!
         reconnect_active_record
         # The dogstatsd client is memoized at the class level (Statsd.client),

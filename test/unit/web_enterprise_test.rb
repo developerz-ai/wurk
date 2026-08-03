@@ -11,11 +11,12 @@ class WebEnterpriseTest < Wurk::Test::UnitCase
     @limiter = "lmt-#{@ns}"
     @lid = ::Digest::SHA1.hexdigest(@ns)[0, 16]
     @class_name = "EntPeriodicJob@#{@ns}"
+    @ghosts = []
   end
 
   def teardown
     Wurk.redis do |c|
-      c.call('SREM', Wurk::Limiter::LIST_KEY, @limiter)
+      c.call('SREM', Wurk::Limiter::LIST_KEY, @limiter, *@ghosts)
       %W[lmtr:#{@limiter} lmtr-cs:#{@limiter} lmtr-b:#{@limiter}
          lmtr-w:#{@limiter} lmtr-l:#{@limiter} lmtr-p:#{@limiter}
          lmtr-stats:#{@limiter}].each { |k| c.call('DEL', k) }
@@ -51,6 +52,66 @@ class WebEnterpriseTest < Wurk::Test::UnitCase
     names = Wurk::Web::Enterprise::Limits.list(filter: 'totally-unrelated-xyz')
 
     refute_includes names, @limiter
+  end
+
+  # `lmtr-list` membership has no TTL of its own, so before the sweep every
+  # interpolated name the spec blesses (`stripe-#{user_id}`) left a member
+  # behind for good once its metadata expired.
+  def test_limits_list_drops_names_whose_metadata_expired
+    ghost = seed_ghost('gone')
+
+    names = Wurk::Web::Enterprise::Limits.list
+
+    refute_includes names, ghost
+    refute list_member?(ghost)
+  end
+
+  def test_limits_list_keeps_names_whose_metadata_is_live
+    seed_limiter
+    seed_ghost('gone')
+
+    names = Wurk::Web::Enterprise::Limits.list
+
+    assert_includes names, @limiter
+    assert list_member?(@limiter)
+  end
+
+  # The sweep runs on the whole set, before the substring filter narrows the
+  # result — otherwise a leak would only heal for names someone searched for.
+  def test_limits_list_sweeps_names_the_filter_excludes
+    seed_limiter
+    ghost = seed_ghost('gone')
+
+    names = Wurk::Web::Enterprise::Limits.list(filter: @limiter)
+
+    assert_equal [@limiter], names
+    refute list_member?(ghost)
+  end
+
+  # A set that leaked for months is swept in bounded slices; the batching must
+  # not drop the tail.
+  def test_limits_list_sweeps_past_one_batch
+    ghosts = Array.new(Wurk::Web::Enterprise::Limits::SWEEP_BATCH + 7) { |i| seed_ghost("bulk#{i}") }
+
+    Wurk::Web::Enterprise::Limits.list
+
+    live = Wurk.redis { |c| c.call('SMEMBERS', Wurk::Limiter::LIST_KEY) }
+
+    assert_empty live & ghosts
+  end
+
+  # The probe and the SREM are separate round trips, and registration only
+  # SADDs on the first metadata write — so a name that re-registered in between
+  # would be hidden until its ttl ran out. The script re-decides atomically.
+  def test_limits_sweep_batch_spares_a_name_that_re_registered
+    seed_limiter
+    ghost = seed_ghost('gone')
+
+    removed = Wurk::Web::Enterprise::Limits.sweep_batch([@limiter, ghost])
+
+    assert_equal 1, removed
+    assert list_member?(@limiter)
+    refute list_member?(ghost)
   end
 
   def test_limits_metadata_returns_hash
@@ -176,6 +237,19 @@ class WebEnterpriseTest < Wurk::Test::UnitCase
       c.call('SADD', Wurk::Limiter::LIST_KEY, @limiter)
       c.call('HSET', "lmtr:#{@limiter}", 'type', 'concurrent', 'fingerprint', 'fp', 'options', '{"limit":5}')
     end
+  end
+
+  def list_member?(name)
+    Wurk.redis { |c| c.call('SISMEMBER', Wurk::Limiter::LIST_KEY, name) }.to_i == 1
+  end
+
+  # A member whose `lmtr:<name>` metadata has expired — what an interpolated
+  # limiter name decays into once its ttl lapses.
+  def seed_ghost(suffix)
+    name = "#{@limiter}-#{suffix}"
+    @ghosts << name
+    Wurk.redis { |c| c.call('SADD', Wurk::Limiter::LIST_KEY, name) }
+    name
   end
 
   def seed_loop(paused: '0', queue: 'default')

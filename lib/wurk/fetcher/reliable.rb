@@ -5,11 +5,12 @@ require_relative '../component'
 require_relative '../keys'
 require_relative '../lua'
 require_relative '../fetcher'
+require_relative '../middleware/poison_pill'
 
 module Wurk
   class Fetcher
     # Default fetcher. Each public queue is paired with a per-process
-    # private list (`queue:<name>|<host>|<pid>|<idx>`); a job is moved
+    # private list (`queue:<name>|<host>|<pid>|<nonce>|<idx>`); a job is moved
     # atomically from the public tail to the private head via LMOVE, and
     # stays there until the Processor explicitly ACKs (LREM). SIGKILL
     # between fetch and ack leaves the job in the private list, where the
@@ -30,15 +31,38 @@ module Wurk
       # Default BLMOVE block timeout; overridable via config.fetch_poll_interval.
       TIMEOUT = 2
 
+      # Backoff for the quieted short-circuit. Manager#quiet terminates the
+      # shared fetcher before it terminates the processors, and Processor#run
+      # loops on its *own* flag — so in that window every processor would spin
+      # on an instant nil. Kept below Manager::PAUSE_TIME, which #stop sleeps
+      # immediately after #quiet, so this pause adds no drain latency.
+      QUIET_PAUSE = 0.05
+
       # Carries the public queue key, the raw (still-JSON) job payload,
       # and the capsule we use to reach Redis. ACK removes from the private
       # list; requeue pushes back to the public queue head so the job is
       # next pulled. LREM count=1 is idempotent for our payloads since
       # each job's JSON contains a unique `jid`.
-      UnitOfWork = Struct.new(:queue, :job, :config, keyword_init: true) do
+      #
+      # `jid` is filled in by the Processor once it has parsed the payload —
+      # the fetcher never parses. It is only used to retire the job's
+      # poison-pill recovery counter, so an ACK without one is still a
+      # complete ACK.
+      UnitOfWork = Struct.new(:queue, :job, :config, :jid, keyword_init: true) do
+        # The counter DEL rides this round trip rather than taking one of its
+        # own: the ACK is the only Redis call the success path makes, and a
+        # per-job call would be a fetch+execute regression for the sake of a
+        # key that exists for roughly no jobs. See Middleware::PoisonPill.
         def acknowledge
+          private_list = Reliable.private_queue_name(queue)
+          job_jid = jid.to_s
+          return config.redis { |conn| conn.call('LREM', private_list, 1, job) } if job_jid.empty?
+
           config.redis do |conn|
-            conn.call('LREM', Reliable.private_queue_name(queue), 1, job)
+            conn.pipelined do |pipe|
+              pipe.call('LREM', private_list, 1, job)
+              Middleware::PoisonPill.clear_in(pipe, job_jid)
+            end
           end
         end
 
@@ -55,9 +79,16 @@ module Wurk
       # carrying a back-reference to its parent fetcher. Index defaults to
       # 0 — we run one fetcher per capsule today. Multi-processor topology
       # (one private list per processor slot) is a future Manager concern.
+      #
+      # The nonce marks the incarnation. host+pid alone is ambiguous once PID
+      # namespaces are in play: a restarted container reuses both, so the
+      # reaper's `kill(0)` liveness check would read a dead owner's list as
+      # live (jobs stranded) or a live owner's as dead (job run twice). Keys
+      # written before the nonce existed stay reclaimable — Reaper#parse_owner
+      # accepts both shapes.
       def self.private_queue_name(public_queue, index = 0)
         host = ENV['DYNO'] || Socket.gethostname
-        "#{public_queue}|#{host}|#{::Process.pid}|#{index}"
+        "#{public_queue}|#{host}|#{::Process.pid}|#{Component::PROCESS_NONCE}|#{index}"
       end
 
       def initialize(capsule)
@@ -66,11 +97,26 @@ module Wurk
         @done = false
       end
 
+      # Every pass that yields no job has to cost wall-clock time: Processor#run
+      # drives `process_one` in a bare `until @done` loop with no pause of its
+      # own, so any nil returned instantly turns N processor threads into a hot
+      # loop. The blocking BLMOVE pays that cost on the normal empty-queue path;
+      # the two short-circuits below have to pay it themselves.
       def retrieve_work
-        return nil if @done
+        if @done
+          sleep QUIET_PAUSE
+          return nil
+        end
 
         queues = queues_cmd
-        return nil if queues.empty?
+        # Nothing fetchable — every queue paused, or none configured. Back off a
+        # full poll interval rather than re-running queues_cmd (an SMEMBERS per
+        # pass, on the main pool) as fast as the CPU allows. Mirrors Sidekiq's
+        # BasicFetch guard, upstream #4825.
+        if queues.empty?
+          sleep poll_interval
+          return nil
+        end
 
         queues.each do |public_q|
           uow = lmove(public_q)
@@ -148,12 +194,19 @@ module Wurk
       # is dominated by the BLMOVE that follows. Returns a Set for O(1)
       # lookup against the (often weighted-expanded) queue list.
       def paused_names
-        config.redis { |conn| conn.call('SMEMBERS', Keys::PAUSED_SET) }.to_set
+        config.redis(idempotent: true) { |conn| conn.call('SMEMBERS', Keys::PAUSED_SET) }.to_set
       end
 
+      # Both LMOVE forms claim apply-safety, so fetch keeps the full
+      # connection-blip backoff the F5 split otherwise takes away: a move that
+      # applied but whose reply was lost leaves the job in *this* process's
+      # private list, un-ACKed — byte-for-byte the state a SIGKILL between fetch
+      # and ack leaves behind, which the next boot's Reaper already reclaims. The
+      # replay then pulls a different job; nothing duplicates and nothing is
+      # lost, at worst one job waits out this process's lifetime.
       def lmove(public_q)
         priv = self.class.private_queue_name(public_q)
-        job = config.redis { |conn| conn.call('LMOVE', public_q, priv, 'RIGHT', 'LEFT') }
+        job = config.redis(idempotent: true) { |conn| conn.call('LMOVE', public_q, priv, 'RIGHT', 'LEFT') }
         job ? UnitOfWork.new(queue: public_q, job: job, config: config) : nil
       end
 
@@ -165,7 +218,7 @@ module Wurk
         # starving the main pool's background loops (#101). Extend the socket
         # read-timeout one second past BLMOVE's own server-side timeout so the
         # connection's read timeout can't fire while BLMOVE is legitimately blocked.
-        job = config.fetch_redis do |conn|
+        job = config.fetch_redis(idempotent: true) do |conn|
           conn.blocking_call(timeout + 1, 'BLMOVE', public_q, priv, 'RIGHT', 'LEFT', timeout)
         end
         job ? UnitOfWork.new(queue: public_q, job: job, config: config) : nil

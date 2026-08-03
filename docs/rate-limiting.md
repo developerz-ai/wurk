@@ -281,9 +281,14 @@ reset: the next boundary for `bucket`, when the oldest entry leaves for
 room for `leaky`/`points`.
 
 `concurrent#status` additionally merges its counters — `held`, `held_time`,
-`immediate`, `waited`, `wait_time`, `overages`, `reclaimed`. `immediate` counts
-acquires that didn't wait, `waited`/`wait_time` those that did, `overages`
-timeouts, `reclaimed` slots evicted because they outlived `lock_timeout`.
+`immediate`, `waited`, `wait_time`, `overages`, `reclaimed`. `held`/`held_time`
+count acquired slots and the seconds they were held, `immediate` counts acquires
+that didn't wait, `waited`/`wait_time` those that did, `overages` holders that
+outran `lock_timeout` (their slot was already gone when they released),
+`reclaimed` slots evicted because they outlived `lock_timeout`.
+
+Waiting past `wait_timeout` is *not* an overage — that raises `OverLimit` and is
+counted per job in `overrated`.
 
 ---
 

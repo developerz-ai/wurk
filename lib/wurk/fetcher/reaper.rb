@@ -9,7 +9,7 @@ module Wurk
     # Orphan reclamation for the reliable fetcher (Pro super_fetch §3.2).
     #
     # The Reliable fetcher moves each job from a public queue into a
-    # per-process private list (`queue:<public>|<host>|<pid>|<idx>`) and
+    # per-process private list (`queue:<public>|<host>|<pid>|<nonce>|<idx>`) and
     # leaves it there until the Processor ACKs. A SIGKILLed or crashed
     # worker therefore strands its in-flight jobs in private lists that
     # nobody will ever ACK. The Reaper is the recovery half: it periodically
@@ -17,15 +17,16 @@ module Wurk
     # moves their jobs back to the public queue so a live worker re-runs them.
     #
     # Liveness is decided per owner:
-    #   * same host — the OS is authoritative: `Process.kill(0, pid)`. This
-    #     is instant and ignores a stale `processes` SET entry whose 60s TTL
-    #     hasn't lapsed yet, so a `kill -9`ed sibling is reclaimed the moment
-    #     the supervisor reaps it rather than 60s later. (Pid reuse by an
-    #     unrelated local process is the one blind spot — the supervisor
-    #     respawns with a fresh pid, so it does not arise in practice.)
-    #   * other host — we cannot ping the pid, so we trust the heartbeat:
-    #     the owner is alive iff some live `processes` member (one whose
-    #     `info` hash still exists) shares its `host:pid`. Cross-host reclaim
+    #   * our own host and nonce — the pid was minted in our PID namespace, so
+    #     the OS is authoritative: `Process.kill(0, pid)`. This is instant and
+    #     ignores a stale `processes` SET entry whose 60s TTL hasn't lapsed
+    #     yet, so a `kill -9`ed sibling is reclaimed the moment the supervisor
+    #     reaps it rather than 60s later. (Pid reuse by an unrelated process in
+    #     the same tree is the one blind spot — the supervisor respawns with a
+    #     fresh pid, so it does not arise in practice.)
+    #   * any other incarnation — its pid means nothing in our namespace, so we
+    #     trust the heartbeat: the owner is alive iff its identity is a live
+    #     `processes` member (one whose `info` hash still exists). Such reclaim
     #     therefore waits out the 60s heartbeat TTL, exactly as the spec says.
     #
     # Re-pushed jobs run through Wurk::Middleware::PoisonPill, which caps a
@@ -116,8 +117,8 @@ module Wurk
       # jobs reclaimed (re-queued or killed). Public so boot paths and tests
       # can drive a deterministic pass without the cluster lock.
       def reclaim!
-        prefixes = live_process_prefixes
-        served_queues.sum { |public_q| reclaim_queue(public_q, prefixes) }
+        owners = live_owners
+        served_queues.sum { |public_q| reclaim_queue(public_q, owners) }
       end
 
       # One unguarded full-keyspace sweep: every `queue:*|*` private list, even
@@ -125,10 +126,10 @@ module Wurk
       # of jobs reclaimed. Public so boot paths and tests can drive it without
       # the hourly lock.
       def reclaim_full!
-        prefixes = live_process_prefixes
+        owners = live_owners
         reclaimed = 0
-        each_full_private_list do |key, public_q, host, pid|
-          next if owner_alive?(host, pid, prefixes)
+        each_full_private_list do |key, public_q, host, pid, nonce|
+          next if owner_alive?(host, pid, nonce, owners)
 
           reclaimed += drain(key, public_q)
         end
@@ -148,39 +149,43 @@ module Wurk
       end
 
       # SCAN for this public queue's private lists, reclaim the orphaned ones.
-      def reclaim_queue(public_q, prefixes)
+      def reclaim_queue(public_q, owners)
         reclaimed = 0
-        each_private_list(public_q) do |key, host, pid|
-          next if owner_alive?(host, pid, prefixes)
+        each_private_list(public_q) do |key, host, pid, nonce|
+          next if owner_alive?(host, pid, nonce, owners)
 
           reclaimed += drain(key, public_q)
         end
         reclaimed
       end
 
-      # Yields [private_list_key, host, pid] for each private list of
+      # Yields [private_list_key, host, pid, nonce] for each private list of
       # `public_q`. MATCH `<public_q>|*` matches only this queue's private
       # lists (public queue keys carry no `|`).
       def each_private_list(public_q)
         cursor = '0'
         loop do
-          cursor, keys = redis { |c| c.call('SCAN', cursor, 'MATCH', "#{public_q}|*", 'COUNT', SCAN_COUNT) }
+          cursor, keys = redis(idempotent: true) do |c|
+            c.call('SCAN', cursor, 'MATCH', "#{public_q}|*", 'COUNT', SCAN_COUNT)
+          end
           keys.each do |key|
-            host, pid = parse_owner(public_q, key)
-            yield key, host, pid if pid
+            host, pid, nonce = parse_owner(public_q, key)
+            yield key, host, pid, nonce if pid
           end
           break if cursor == '0'
         end
       end
 
-      # Yields [private_list_key, public_q, host, pid] for every private list in
+      # Yields [private_list_key, public_q, host, pid, nonce] for every list in
       # the keyspace. MATCH `queue:*|*` matches only private lists (public queue
       # keys carry no `|`); parse_full_key drops anything that isn't a
-      # well-formed `queue:<public>|<host>|<pid>|<idx>`.
+      # well-formed `queue:<public>|<host>|<pid>|<nonce>|<idx>`.
       def each_full_private_list
         cursor = '0'
         loop do
-          cursor, keys = redis { |c| c.call('SCAN', cursor, 'MATCH', "#{Keys::QUEUE_PREFIX}*|*", 'COUNT', SCAN_COUNT) }
+          cursor, keys = redis(idempotent: true) do |c|
+            c.call('SCAN', cursor, 'MATCH', "#{Keys::QUEUE_PREFIX}*|*", 'COUNT', SCAN_COUNT)
+          end
           keys.each do |key|
             parsed = parse_full_key(key)
             yield key, *parsed if parsed
@@ -189,45 +194,88 @@ module Wurk
         end
       end
 
-      # `queue:<public>|<host>|<pid>|<idx>` → [public_q, host, pid], parsed from
-      # the right (pid + idx are integers, host precedes them) so a `|` inside
-      # the queue name is tolerated. nil when the key isn't a well-formed
-      # private list.
+      # `queue:<public>|<host>|<pid>|<nonce>|<idx>` → [public_q, host, pid,
+      # nonce], parsed from the right so a `|` inside the queue name is
+      # tolerated. nil when the key isn't a well-formed private list.
+      #
+      # With no known prefix to split on, both owner shapes are tried in
+      # preference order and the first one leaving a real public queue behind
+      # wins. The narrow reading is what saves a pre-nonce key from an all-digit
+      # host (`queue:q|123456789012|<pid>|<idx>` — a bare Docker hostname is 12
+      # hex chars): read wide, its host segment eats the whole queue name.
       def parse_full_key(key)
         parts = key.split('|')
-        return nil if parts.size < 4
+        owner_tails(parts).each do |host, pid, nonce, width|
+          public_q = parts[0...-width].join('|')
+          next unless public_q.start_with?(Keys::QUEUE_PREFIX) && public_q != Keys::QUEUE_PREFIX
 
-        host, pid, idx = parts.last(3)
-        return nil unless integer?(pid) && integer?(idx)
-
-        public_q = parts[0...-3].join('|')
-        return nil unless public_q.start_with?(Keys::QUEUE_PREFIX) && public_q != Keys::QUEUE_PREFIX
-
-        [public_q, host, pid.to_i]
+          return [public_q, host, pid, nonce]
+        end
+        nil
       end
 
-      # `<public_q>|<host>|<pid>|<idx>` → [host, pid] (pid as Integer), or
-      # [nil, nil] when the suffix isn't a well-formed `host|pid|idx` triple.
-      # Splitting the suffix off the known public-queue prefix tolerates a
-      # `|` inside the queue name itself.
+      # `<public_q>|<host>|<pid>|<nonce>|<idx>` → [host, pid, nonce] (pid as
+      # Integer), or all-nil when the suffix isn't a well-formed owner tail.
+      # Splitting the suffix off the known public-queue prefix tolerates a `|`
+      # inside the queue name itself, and leaves the tail unambiguous: exactly
+      # 4 segments for the current shape, exactly 3 for the pre-nonce one.
       def parse_owner(public_q, key)
         suffix = key.delete_prefix("#{public_q}|")
-        return [nil, nil] if suffix == key
+        return [nil, nil, nil] if suffix == key
 
-        host, pid, idx = suffix.split('|')
-        return [nil, nil] unless host && integer?(pid) && integer?(idx)
+        host, pid, nonce = owner_tails(suffix.split('|')).first
+        [host, pid, nonce]
+      end
 
-        [host, pid.to_i]
+      # Owner segments of a private-list key, taken from the right, as
+      # [host, pid, nonce, segment_count] readings in preference order (empty
+      # when nothing parses). The wide shape is preferred: an all-digit nonce is
+      # rare but reachable, and reading such a key narrow would take the pid for
+      # the host and the nonce for the pid — draining a live owner's list out
+      # from under it.
+      def owner_tails(parts)
+        return [] unless parts.size >= 3 && integer?(parts[-1])
+
+        [wide_tail(parts), narrow_tail(parts)].compact
+      end
+
+      # `<host>|<pid>|<nonce>|<idx>` — the shape every current process writes.
+      def wide_tail(parts)
+        [parts[-4], parts[-3].to_i, parts[-2], 4] if parts.size >= 4 && integer?(parts[-3])
+      end
+
+      # `<host>|<pid>|<idx>` — written before the nonce existed. Such a list can
+      # still hold a pre-upgrade process's in-flight jobs across a rolling
+      # upgrade, so it stays reclaimable even though nothing writes it anymore.
+      def narrow_tail(parts)
+        [parts[-3], parts[-2].to_i, nil, 3] if integer?(parts[-2])
       end
 
       def integer?(str)
         str.is_a?(String) && str.match?(/\A\d+\z/)
       end
 
-      def owner_alive?(host, pid, prefixes)
-        return local_pid_alive?(pid) if host == hostname
+      # `Process.kill(0, pid)` answers "does this pid exist *in my PID
+      # namespace*", which is the question we're actually asking only when the
+      # key was written from that same namespace. A shared hostname does not
+      # imply it: a container restarting under a fixed hostname comes back in a
+      # fresh namespace where the dead owner's pid is likely taken again (list
+      # read as live, jobs stranded forever), and two containers sharing a
+      # host's network namespace but not its pid namespace each hold pids the
+      # other lacks (live owner read as dead, list drained mid-job, duplicate
+      # run). So kill(0) can serve as neither a positive nor a negative signal
+      # off our own namespace.
+      #
+      # The nonce settles it: minted once per process image and inherited across
+      # fork, so a key carrying ours provably came from this very process tree.
+      # Every other owner goes through the namespace-blind heartbeat — alive iff
+      # its identity is a live `processes` member. A pre-nonce key can only be
+      # matched on the `<host>:<pid>` prefix of that identity.
+      def owner_alive?(host, pid, nonce, owners)
+        return local_pid_alive?(pid) if nonce == process_nonce && host == hostname
+        return owners.include?("#{host}:#{pid}:#{nonce}") if nonce
 
-        prefixes.include?("#{host}:#{pid}")
+        owners.include?("#{host}:#{pid}")
       end
 
       def local_pid_alive?(pid)
@@ -239,18 +287,21 @@ module Wurk
         true
       end
 
-      # `host:pid` of every live process — a member of `processes` whose
-      # `info` hash still exists. A bare SET membership isn't enough: the
-      # member lingers after its 60s hash TTL until ProcessSet#cleanup prunes
-      # it, and we must treat that window as dead for cross-host reclaim.
-      def live_process_prefixes
-        redis do |conn|
+      # Every live process indexed both ways: the full `<host>:<pid>:<nonce>`
+      # identity a nonce-bearing private list is matched on, and the
+      # `<host>:<pid>` prefix a pre-nonce one has to settle for. Live means a
+      # member of `processes` whose `info` hash still exists — a bare SET
+      # membership isn't enough, since the member lingers after its 60s hash
+      # TTL until ProcessSet#cleanup prunes it and that window must read as
+      # dead or the owner's jobs are never reclaimed.
+      def live_owners
+        redis(idempotent: true) do |conn|
           members = conn.call('SMEMBERS', Keys::PROCESSES)
           next ::Set.new if members.empty?
 
           infos = conn.pipelined { |pipe| members.each { |m| pipe.call('HGET', m, 'info') } }
           members.zip(infos).each_with_object(::Set.new) do |(member, info), set|
-            set << host_pid(member) if info
+            set << member << host_pid(member) if info
           end
         end
       end
@@ -265,6 +316,12 @@ module Wurk
       # poison check, so a crash mid-drain leaves the job safely in the public
       # queue (at-least-once), never lost. Poison jobs are killed to the dead
       # set by PoisonPill.track! and then LREM'd out of the public queue.
+      #
+      # Unlike the fetcher's LMOVE, this one does *not* claim apply-safety: a
+      # replay after a lost reply moves the next job and never poison-checks the
+      # one already on the public tail, so a job that kills its worker every time
+      # would get a free recovery past the cap. A raise instead lands in the
+      # rescue below, and the next sweep re-drains what's left.
       def drain(private_list, public_q)
         queue_name = public_q.delete_prefix(Keys::QUEUE_PREFIX)
         count = 0

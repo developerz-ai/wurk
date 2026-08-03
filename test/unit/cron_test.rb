@@ -28,10 +28,12 @@ class CronTest < Wurk::Test::UnitCase
     super
     @suffix = "cron#{Process.pid}#{object_id}"
     @lids = []
+    @configs = []
   end
 
   def teardown
     @lids.each { |lid| Wurk::Cron.unregister(lid) }
+    @configs.each(&:reset_redis_pools!)
   ensure
     super
   end
@@ -596,6 +598,141 @@ class CronTest < Wurk::Test::UnitCase
     cfg[:cron_tick_interval] = 0.25
 
     assert_equal 0.25, Wurk::Cron::Poller.new(cfg).instance_variable_get(:@tick_interval)
+  end
+
+  # ---- Fire-mark CAS ---------------------------------------------------
+  #
+  # `leader?` is a cached read, so two processes can both believe they lead
+  # for seconds after a handover and both reach the same due loop. The CAS on
+  # `nf` — not the leader gate — is what keeps a slot to a single fire.
+
+  def test_racing_pollers_fire_a_due_slot_exactly_once
+    queue = "cron-race-#{@suffix}"
+    lp = register_loop("CronTest::Race#{@suffix}", queue: queue)
+    pollers = Array.new(3) { build_leader_poller }
+    rounds = 8
+    claims = 0
+
+    rounds.times do
+      arm_due_mark(lp.lid)
+      claims += race_enqueue(pollers, lp).compact.size
+    end
+    len = queue_len(queue)
+    cleanup_queue(queue)
+
+    assert_equal rounds, claims, 'exactly one racing poller may claim each due slot'
+    assert_equal rounds, len, 'a claimed slot must enqueue exactly one job'
+  end
+
+  def test_enqueue_if_due_loses_the_slot_once_the_mark_moved
+    queue = "cron-cas-#{@suffix}"
+    lp = register_loop("CronTest::Cas#{@suffix}", queue: queue)
+    poller = build_leader_poller
+    arm_due_mark(lp.lid)
+
+    first = poller.send(:enqueue_if_due, lp)
+    arm_due_mark(lp.lid)
+    poller.define_singleton_method(:claim_fire?) { |*| false }
+    second = poller.send(:enqueue_if_due, lp)
+    len = queue_len(queue)
+    cleanup_queue(queue)
+
+    refute_nil first
+    assert_nil second, 'losing the CAS must return without enqueuing'
+    assert_equal 1, len
+  end
+
+  # The exhausted-schedule case: the winner cleared `nf`, so a loser arriving
+  # with the same slot sees no mark at all. `lf` is what tells it the slot is
+  # already spent.
+  def test_claim_fire_refuses_a_slot_already_covered_by_lf
+    lp = register_loop("CronTest::Spent#{@suffix}", queue: "cron-sp-#{@suffix}")
+    poller = Wurk::Cron::Poller.new(Wurk.configuration)
+    slot = ::Time.now.to_i - 30
+    seed_mark(lp.lid, 'lf', slot + 1)
+
+    refute poller.send(:claim_fire?, lp, slot.to_s, ::Time.now.to_i, nil),
+           'a slot the loop already fired must not be re-claimable after `nf` is cleared'
+  end
+
+  def test_claim_fire_bootstraps_an_unmarked_loop_then_rejects_the_replay
+    lp = register_loop("CronTest::Boot#{@suffix}", queue: "cron-bt-#{@suffix}")
+    poller = Wurk::Cron::Poller.new(Wurk.configuration)
+    now = ::Time.now.to_i
+
+    assert poller.send(:claim_fire?, lp, now.to_s, now, now + 60),
+           'a loop with no marks yet must be claimable'
+    refute poller.send(:claim_fire?, lp, now.to_s, now, now + 60),
+           'the mark moved — a second claim on the same slot must lose'
+  end
+
+  def test_claim_fire_writes_marks_byte_identically_to_the_ruby_path
+    lp = register_loop("CronTest::Bytes#{@suffix}", queue: "cron-by-#{@suffix}")
+    poller = Wurk::Cron::Poller.new(Wurk.configuration)
+    now = ::Time.now.to_i
+
+    poller.send(:claim_fire?, lp, now.to_s, now, now + 60)
+
+    assert_equal [now.to_s, (now + 60).to_s], marks(lp.lid), 'lf/nf stay decimal-epoch strings'
+  end
+
+  def test_claim_fire_clears_nf_when_there_is_no_future_occurrence
+    lp = register_loop("CronTest::Last#{@suffix}", queue: "cron-la-#{@suffix}")
+    poller = Wurk::Cron::Poller.new(Wurk.configuration)
+    now = ::Time.now.to_i
+    seed_mark(lp.lid, 'nf', now)
+
+    poller.send(:claim_fire?, lp, now.to_s, now, nil)
+
+    assert_nil marks(lp.lid)[1], 'a nil future must HDEL nf, never write ""'
+  end
+
+  # Ent periodic is best-effort about a miss, never about a duplicate: the mark
+  # advances before the push, so a failed push drops this occurrence instead of
+  # leaving the next tick to fire it a second time.
+  def test_enqueue_if_due_advances_the_mark_before_the_push
+    lp = register_loop("CronTest::Lost#{@suffix}", queue: "cron-lo-#{@suffix}")
+    arm_due_mark(lp.lid)
+    poller = poller_whose_push_fails(StringIO.new)
+
+    assert_raises(IOError) { poller.send(:enqueue_if_due, lp) }
+    assert_operator marks(lp.lid)[1].to_i, :>, ::Time.now.to_i,
+                    'the mark must advance before the push, not after'
+  end
+
+  def test_enqueue_if_due_logs_the_occurrence_lost_to_a_failed_push
+    io = StringIO.new
+    lp = register_loop("CronTest::LostLog#{@suffix}", queue: "cron-ll-#{@suffix}")
+    arm_due_mark(lp.lid)
+    poller = poller_whose_push_fails(io)
+
+    assert_raises(IOError) { poller.send(:enqueue_if_due, lp) }
+    assert_match(/fire lost/, io.string)
+  end
+
+  # The manual `Cron.fire!` path deliberately bypasses the CAS: an operator
+  # asking for a run contends with no schedule slot.
+  def test_manual_fire_enqueues_with_the_next_mark_far_in_the_future
+    queue = "cron-manual-#{@suffix}"
+    lp = register_loop("CronTest::Manual#{@suffix}", queue: queue)
+    seed_mark(lp.lid, 'nf', ::Time.now.to_i + 86_400)
+
+    jid = Wurk::Cron::Poller.new(Wurk.configuration).fire(lp)
+    cleanup_queue(queue)
+
+    refute_nil jid, 'a manual fire must not be gated by the schedule'
+    assert_operator marks(lp.lid)[0].to_i, :>, 0, 'a manual fire still advances lf'
+  end
+
+  def test_manual_fire_records_a_history_entry
+    queue = "cron-manhist-#{@suffix}"
+    lp = register_loop("CronTest::ManHist#{@suffix}", queue: queue)
+
+    Wurk::Cron::Poller.new(Wurk.configuration).fire(lp)
+    history = history_entries(lp.lid)
+    cleanup_queue(queue)
+
+    assert_equal 1, history.size
   end
 
   # ---- DST / timezone edge cases (US / EU / AU) -----------------------
@@ -1277,6 +1414,54 @@ class CronTest < Wurk::Test::UnitCase
   def loop_hash(lid)
     h = Wurk.redis { |c| c.call('HGETALL', "#{Wurk::Cron::LOOP_PREFIX}#{lid}") }
     h.is_a?(Array) ? h.each_slice(2).to_h : h
+  end
+
+  def loop_key(lid)
+    "#{Wurk::Cron::LOOP_PREFIX}#{lid}"
+  end
+
+  def seed_mark(lid, field, value)
+    Wurk.redis { |c| c.call('HSET', loop_key(lid), field, value.to_s) }
+  end
+
+  def marks(lid)
+    Wurk.redis { |c| c.call('HMGET', loop_key(lid), 'lf', 'nf') }
+  end
+
+  # An `nf` one second in the past makes the loop due right now whatever its
+  # schedule, so a tick has to go through the CAS to fire it.
+  def arm_due_mark(lid)
+    seed_mark(lid, 'nf', ::Time.now.to_i - 1)
+  end
+
+  def queue_len(queue)
+    Wurk.redis { |c| c.call('LLEN', "queue:#{queue}") }
+  end
+
+  # Poller on a throwaway Configuration — it inherits the worker's REDIS_URL,
+  # so it still reads and writes this test's DB — logging to `io`, whose push
+  # always fails.
+  def poller_whose_push_fails(io)
+    cfg = Wurk::Configuration.new
+    cfg.logger = Logger.new(io)
+    @configs << cfg
+    poller = Wurk::Cron::Poller.new(cfg)
+    poller.define_singleton_method(:enqueue!) { |_| raise IOError, 'redis down' }
+    poller
+  end
+
+  # Releases every poller onto the same loop at once — a barrier, so the CAS
+  # is what separates them rather than thread start-up skew.
+  def race_enqueue(pollers, loop_obj)
+    gate = Queue.new
+    threads = pollers.map do |p|
+      Thread.new do
+        gate.pop
+        p.send(:enqueue_if_due, loop_obj)
+      end
+    end
+    pollers.size.times { gate << :go }
+    threads.map(&:value)
   end
 
   def build_leader_poller

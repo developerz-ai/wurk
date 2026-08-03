@@ -21,24 +21,43 @@ module Wurk
       OVERFLOW_MODES        = %i[drop_oldest raise].freeze
       DEFAULT_OVERFLOW_MODE = :drop_oldest
 
-      # Raised by `enbuffer` when the cap would be exceeded under
-      # `overflow_mode == :raise`. Inherits from RuntimeError so callers
-      # can rescue narrowly. The payload that triggered the overflow rides
-      # along so the caller can persist/log/forward it.
+      # Raised when the cap would be exceeded under `overflow_mode == :raise`.
+      # Inherits from RuntimeError so callers can rescue narrowly. Carries
+      # EVERY payload the call failed to deliver — the tail that did not fit,
+      # plus, on a mixed push, the batched payloads that never buffer — so a
+      # caller can persist/log/forward the lot. `cause` is the connection error
+      # that sent the push to the buffer in the first place.
       class Overflow < RuntimeError
-        attr_reader :payload
+        attr_reader :payloads
 
-        def initialize(payload)
-          @payload = payload
-          super("reliable_push buffer is full (cap=#{Buffered.buffer_cap})")
+        def initialize(payloads)
+          @payloads = payloads
+          super("reliable_push buffer is full (cap=#{Buffered.buffer_cap}), " \
+                "#{payloads.size} payload(s) undelivered")
         end
       end
+
+      # Returned by the append helpers when everything fit.
+      NOTHING_UNDELIVERED = [].freeze
 
       # Eagerly initialized: `||=` inside an accessor is not atomic — two
       # threads racing first-touch could end up holding distinct Mutex
       # instances and lose all synchronization on the shared buffer.
-      INSTALL_MUTEX = Mutex.new
-      BUFFER_MUTEX  = Mutex.new
+      #
+      # Module ivars rather than constants so `reset_after_fork!` can replace
+      # them outright. MRI abandons a mutex whose owner thread didn't survive
+      # the fork (rb_thread_atfork), but that's an implementation detail rather
+      # than a documented guarantee, and it does NOT cover a fork taken from
+      # inside either critical section — there the child inherits the lock
+      # still owned, and its first `Client#push` (which drains, so it
+      # synchronizes, before pushing) blocks forever. Two allocations per fork
+      # buys immunity from both.
+      @install_mutex = Mutex.new
+      @buffer_mutex  = Mutex.new
+
+      # Process that owns the state above; a mismatch means we're running in a
+      # fork and the inherited copy has to go.
+      @owner_pid = ::Process.pid
 
       class << self
         attr_accessor :buffer_client_factory
@@ -102,38 +121,68 @@ module Wurk
           end
         end
 
+        # Fork hook, called from the `Process._fork` prepend below and from
+        # `Swarm::ChildBoot#reconnect_after_fork`. Whichever runs first wins
+        # and returns true; the pid guard makes the other a no-op returning
+        # false, so a caller can tell which one rebuilt the state.
+        #
+        # A child inherits a copy of every ivar here: the buffered payloads,
+        # the Drainer (whose thread did not survive the fork), and both mutexes
+        # (see their definition for why replacing them matters).
+        #
+        # The child DROPS its inherited payloads rather than replaying them:
+        # the parent still holds the same buffer and replays it on its own next
+        # push, so a child that also drained would enqueue every buffered job
+        # once per fork — `(children + 1) x N` duplicates. Only the parent
+        # replays.
+        #
+        # `@drainer` is dropped, never `stop`ped — its `@lock` carries the same
+        # inherited-mutex hazard. A parent-configured drainer is replaced by an
+        # equivalent fresh one so an opted-in child keeps flushing the buffer it
+        # fills itself; the captured client factory goes with it, since it
+        # closes over the parent's pre-fork Redis pool.
+        #
+        # Deliberately unsynchronized: the child has exactly one thread here,
+        # and waiting on the very mutex being replaced is what would hang it.
+        def reset_after_fork! # rubocop:disable Naming/PredicateMethod
+          return false if @owner_pid == ::Process.pid
+
+          @owner_pid             = ::Process.pid
+          @install_mutex         = Mutex.new
+          @buffer_mutex          = Mutex.new
+          @buffer                = []
+          @buffer_client_factory = nil
+          interval               = @drainer&.interval
+          @drainer               = nil
+          start_drainer!(interval: interval) if interval
+          true
+        end
+
         # Append payloads to the buffer. Behavior on cap exhaustion depends
         # on `overflow_mode`:
         #   * :drop_oldest (default, spec) — ring buffer, oldest evicted.
-        #   * :raise                       — Overflow raised, buffer left
-        #                                    unchanged for already-appended
-        #                                    siblings in the same call; the
-        #                                    offending payload is attached
-        #                                    to the exception.
+        #   * :raise                       — fills the remaining capacity, then
+        #                                    raises one Overflow carrying every
+        #                                    payload that did not fit.
         # Drops batched payloads — caller is expected to re-raise for those.
         # If client is provided, captures its pool for drainer to use by default.
         def enbuffer(payloads, client: nil)
           capture_pool_from_client(client)
 
-          cap = buffer_cap
+          cap  = buffer_cap
           mode = overflow_mode
-          buffer_mutex.synchronize do
-            payloads.each do |p|
-              if buffer.size >= cap
-                raise Overflow, p if mode == :raise
-
-                buffer.shift # :drop_oldest
-              end
-              buffer << p
-            end
+          undelivered = buffer_mutex.synchronize do
+            mode == :raise ? append_within_capacity(payloads, cap) : append_dropping_oldest(payloads, cap)
           end
+
+          raise Overflow, undelivered unless undelivered.empty?
         end
 
         private
 
-        # Capture the pool from the provided client and set it as the default
-        # factory for the drainer. Ensures buffered jobs are drained to the
-        # same pool they were pushed to, unless explicitly overridden.
+        # Remember how the buffering client reaches Redis, so the drainer
+        # replays into the same server it was pushed to unless explicitly
+        # overridden.
         def capture_pool_from_client(client)
           return unless client && !buffer_client_factory
 
@@ -141,10 +190,56 @@ module Wurk
           # A nil capture must not install a factory: it would pin the drainer
           # to the DEFAULT pool forever (the `!buffer_client_factory` guard
           # blocks any later, correct capture) — wrong Redis for jobs pushed
-          # through an explicit-pool client.
+          # through an explicit-pool client. A pool-less client already resolves
+          # its config at push time, and so does the fallback factory.
           return unless pool
 
-          self.buffer_client_factory = -> { Wurk::Client.new(pool: pool) }
+          resolver = pool_resolver(client, pool)
+          self.buffer_client_factory = -> { Wurk::Client.new(pool: resolver.call) }
+        end
+
+        # What must NOT be captured is the pool object. `reset_redis_pools!` —
+        # every fork, every embedded teardown — disconnects a pool and drops it
+        # for a lazily rebuilt one, and ConnectionPool#shutdown is terminal, so
+        # a pinned instance leaves the drainer replaying into dead sockets for
+        # the rest of the process's life. The config (a Configuration or a
+        # Capsule) is what survives that rebuild, so ask it again at drain time
+        # whenever the client's pool is the one it hands out. A pool the config
+        # does not own is a second Redis nothing else can produce — that one
+        # stays pinned, stale or not, because replaying it anywhere else writes
+        # to the wrong server.
+        def pool_resolver(client, pool)
+          config = client.instance_variable_get(:@config)
+          config_owns = config.respond_to?(:redis_pool) && config.redis_pool.equal?(pool)
+          config_owns ? -> { config.redis_pool } : -> { pool }
+        end
+
+        # Both append helpers run with buffer_mutex held and return the payloads
+        # they could not take.
+
+        def append_dropping_oldest(payloads, cap)
+          payloads.each do |p|
+            buffer.shift if buffer.size >= cap
+            buffer << p
+          end
+          NOTHING_UNDELIVERED
+        end
+
+        # The split has to be decided before any mutation: raising from inside
+        # the append loop leaves every payload after the rejected one neither
+        # buffered, nor enqueued, nor attached to the exception. `room` goes
+        # negative when the cap was lowered after the buffer filled — clamped,
+        # so an over-full buffer rejects the whole call instead of raising on
+        # `first`/`drop`.
+        def append_within_capacity(payloads, cap)
+          room = (cap - buffer.size).clamp(0, payloads.size)
+          if room == payloads.size
+            buffer.concat(payloads)
+            return NOTHING_UNDELIVERED
+          end
+
+          buffer.concat(payloads.first(room))
+          payloads.drop(room)
         end
 
         public
@@ -153,7 +248,10 @@ module Wurk
         # the first transient failure (ConnectionError past the pool's own
         # retries, or a starved checkout), preserving order at the head of
         # the buffer so the next push retries the same payload. Emits statsd
-        # `jobs.recovered.push` per drained payload.
+        # `jobs.recovered.push` per drained payload, plus the `jobs.enqueued`
+        # the buffering push deliberately did not emit — the replay is where
+        # the job actually reaches Redis, so a buffered-then-drained job counts
+        # once as enqueued and once as recovered.
         def drain!(client)
           drained = 0
           while (payload = pop_head)
@@ -173,6 +271,7 @@ module Wurk
               break
             end
 
+            client.send(:emit_enqueued, [payload])
             Wurk::Metrics::Statsd.increment('jobs.recovered.push')
             drained += 1
           end
@@ -191,7 +290,7 @@ module Wurk
         # handles the case where push activity stops mid-outage so the
         # passive (drain-on-next-push) path never fires.
         def start_drainer!(interval: Drainer::DEFAULT_INTERVAL, client_factory: nil)
-          INSTALL_MUTEX.synchronize do
+          install_mutex.synchronize do
             @drainer&.stop
             factory = client_factory || buffer_client_factory || -> { Wurk::Client.new }
             @drainer = Drainer.new(interval: interval, client_factory: factory)
@@ -200,25 +299,19 @@ module Wurk
         end
 
         def stop_drainer!
-          INSTALL_MUTEX.synchronize do
+          install_mutex.synchronize do
             @drainer&.stop
             @drainer = nil
           end
         end
 
         def drainer_running?
-          INSTALL_MUTEX.synchronize { @drainer&.running? == true }
+          install_mutex.synchronize { @drainer&.running? == true }
         end
 
         private
 
-        def install_mutex
-          INSTALL_MUTEX
-        end
-
-        def buffer_mutex
-          BUFFER_MUTEX
-        end
+        attr_reader :install_mutex, :buffer_mutex
 
         def pop_head
           buffer_mutex.synchronize { buffer.shift }
@@ -247,6 +340,10 @@ module Wurk
       class Drainer
         DEFAULT_INTERVAL = 2.0
         STOP_JOIN_TIMEOUT = 5.0
+
+        # Read by `Buffered.reset_after_fork!` off the *inherited* drainer, to
+        # rebuild an equivalent one in the child without touching its lock.
+        attr_reader :interval
 
         def initialize(interval: DEFAULT_INTERVAL, client_factory: -> { Wurk::Client.new })
           unless interval.is_a?(Numeric) && interval.positive?
@@ -326,16 +423,69 @@ module Wurk
 
         private
 
+        # Opens the delivery ledger Client writes into. It lives here rather
+        # than in Client because this rescue is its only reader: a Client
+        # without reliable_push! never allocates it.
         def raw_push(payloads)
+          Thread.current[DELIVERED_KEY] = []
           super
         rescue RedisClient::ConnectionError, ConnectionPool::TimeoutError
           raise if Thread.current[Buffered::DRAINING_KEY]
 
-          bidless, batched = payloads.partition { |p| !p['bid'] }
-          Buffered.enbuffer(bidless, client: self) if bidless.any?
+          bidless, batched = undelivered(payloads).partition { |p| !p['bid'] }
+          enbuffer_bidless(bidless, batched)
           raise unless batched.empty?
+
+          # Client#push subtracts these from the enqueued metric: they are in
+          # the buffer, not in Redis. Whatever the group did deliver stays out
+          # of the set and still counts.
+          bidless
+        ensure
+          Thread.current[DELIVERED_KEY] = nil
+        end
+
+        # The payloads this push is not known to have written. A push spanning
+        # several queues, or one mixing plain and batched jobs, fails after
+        # some of its groups already landed; buffering those would replay them
+        # into duplicate jobs once the outage clears. The ledger holds the very
+        # Hash objects Client just handed to Redis, hence the identity subtract.
+        def undelivered(payloads)
+          delivered = Thread.current[DELIVERED_KEY]
+          return payloads if delivered.empty?
+
+          reject_by_identity(payloads, delivered)
+        end
+
+        # Bare `raise` re-raises whatever `$!` holds: the connection error from
+        # the caller's rescue, or the Overflow once we're inside this one.
+        def enbuffer_bidless(bidless, batched)
+          Buffered.enbuffer(bidless, client: self) if bidless.any?
+        rescue Buffered::Overflow => e
+          # An overflow pre-empts the caller's connection-error re-raise, which
+          # would strand the batched payloads silently — they never buffer. One
+          # exception, every payload that failed to get through; `cause` stays
+          # the connection error rather than the folded-in Overflow.
+          raise if batched.empty?
+
+          raise Buffered::Overflow, e.payloads + batched, cause: e.cause
         end
       end
+
+      # Ruby >= 3.1 routes every `fork` / `Process.fork` through
+      # `Process._fork`, which is the only way to catch the forks Wurk never
+      # sees: a Puma or Unicorn parent that preloaded the app — and may already
+      # be holding buffered payloads — spawning its workers. Registered at
+      # require time because `reliable_push!` can be installed after the fork
+      # that copied the state. Guarded on the fork-less runtimes (JRuby), where
+      # there is no `super` to call.
+      module ForkHook
+        def _fork
+          pid = super
+          Buffered.reset_after_fork! if pid.zero?
+          pid
+        end
+      end
+      ::Process.singleton_class.prepend(ForkHook) if ::Process.respond_to?(:_fork)
     end
 
     class << self

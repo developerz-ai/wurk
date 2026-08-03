@@ -405,14 +405,41 @@ Redis connections are **never shared across forks**: the swarm parent calls
 
 ### Transient-failure handling
 
-`RedisPool#with` absorbs blips before raising:
+`RedisPool#with` absorbs blips before raising — but only where replaying the
+caller's block cannot change what the server already did. The block is arbitrary
+Ruby, so a retry re-issues every command in it:
 
 - `READONLY` / `NOREPLICAS` / `UNBLOCKED` — a failover; close and retry once
   immediately.
-- `RedisClient::ConnectionError` — close, sleep `(0.5 × 2ⁿ) + rand×0.25`, retry
-  up to 3 attempts total, then raise.
+- `CannotConnectError` / `FailoverError` — raised while dialing, so the command
+  that hit one never reached a server and cannot have applied: close, sleep
+  `(0.5 × 2ⁿ) + rand×0.25`, retry up to 3 attempts total, then raise.
+- `ReadTimeoutError` / `WriteTimeoutError` / bare `ConnectionError` — the command
+  may already have applied server-side, so these raise rather than double-push a
+  job or double-count a stat.
 - `ConnectionPool::TimeoutError` — one retry after `0.1–0.3s`, then raise.
   Sustained checkout starvation is a sizing bug; fix the size.
+
+Those proofs cover the command that raised, not the block around it. A block is
+several round trips and redis-client re-dials mid-block, so a
+`CannotConnectError` can surface on the second pipeline of a push whose first
+one already landed. The pool counts completed round trips per connection and
+refuses to replay a block that has any, so a write Redis already took is never
+re-applied — however provably the failing command missed the server.
+
+A block that is safe to re-run opts back into the full backoff with
+`idempotent: true`, forwarded by every wrapper (`Wurk.redis`, `Sidekiq.redis`,
+`Capsule#redis` / `#fetch_redis`, `Component#redis`, …):
+
+```ruby
+Wurk.redis(idempotent: true) { |conn| conn.call("LLEN", "queue:default") }
+```
+
+Wurk claims it for its own replay-safe paths — the fetcher's `LMOVE`/`BLMOVE` and
+paused-queue lookup, the reaper's SCAN and liveness sweep, `Stats`, `Queue`,
+`ProcessSet`, and the dashboard's search and limits reads. A host-supplied pool
+that doesn't understand the keyword keeps the conservative default; the zero-arg
+`Sidekiq.redis { … }` shape never changes.
 
 Every retry and final give-up is reported to `config.on_redis_error`:
 
