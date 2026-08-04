@@ -99,7 +99,8 @@
     "cron": "Trabajos periódicos (cron) con su programación y última ejecución — haz clic en un loop para ver su historial de ejecución.",
     "metrics": "Historial de rendimiento y fallos, con estadísticas de ejecución por trabajo.",
     "profiles": "Perfiles de trabajos capturados — abre uno en el profiler de Firefox para inspeccionar su flame graph.",
-    "search": "Busca un trabajo en colas, reintentos, programados y muertos por JID, nombre de clase o argumento."
+    "search": "Busca un trabajo en colas, reintentos, programados y muertos por JID, nombre de clase o argumento.",
+    "dashboard": "Totales en vivo, rendimiento en el periodo elegido y el estado de las colas de un vistazo."
   },
   "busy": {
     "hosts": "{n} hosts",

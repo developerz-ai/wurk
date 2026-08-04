@@ -70,6 +70,16 @@ describe('Metrics page', () => {
     vi.unstubAllGlobals();
   });
 
+  it('gives the document exactly one h1', async () => {
+    // Not just "a heading exists": this page began at h2 for a while, because it was
+    // one of two that skipped <PageHeader>. Rendered, not read from the source.
+    const { container } = renderMetrics();
+    await screen.findByText('Total Processed');
+    const h1s = container.querySelectorAll('h1');
+    expect(h1s).toHaveLength(1);
+    expect(h1s[0]?.textContent).toBe('Metrics');
+  });
+
   it('renders the four metric cards', async () => {
     renderMetrics();
     expect(await screen.findByText('Total Processed')).toBeInTheDocument();
