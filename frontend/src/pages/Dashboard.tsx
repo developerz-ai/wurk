@@ -3,6 +3,7 @@ import { createSignal, createMemo, onMount, For, Show, Switch, Match } from 'sol
 import { A } from '@solidjs/router';
 import { AreaChart } from '../components/charts';
 import { AnimatedNumber } from '../components/AnimatedNumber';
+import { PageHeader } from '../components/PageHeader';
 import { Skeleton, SkeletonCards, SkeletonTable } from '../components/Skeleton';
 import { t } from '../i18n';
 import { useSSE } from '../hooks/useSSE';
@@ -131,6 +132,7 @@ export default function Dashboard() {
     <Switch>
       <Match when={statsQuery.isLoading && !stats()}>
         <div class="obs">
+          <PageHeader icon="fa-gauge-high" title={t('nav.dashboard')} summary={t('summaries.dashboard')} />
           <SkeletonCards count={4} />
           <SkeletonTable rows={6} cols={4} />
         </div>
@@ -144,6 +146,7 @@ export default function Dashboard() {
       <Match when={stats()}>
         {(s) => (
           <div class="obs">
+            <PageHeader icon="fa-gauge-high" title={t('nav.dashboard')} summary={t('summaries.dashboard')} />
             <div class="obs-metrics">
               <A class="obs-card obs-metric obs-card--link" href="/metrics">
                 <div class="obs-metric__head">

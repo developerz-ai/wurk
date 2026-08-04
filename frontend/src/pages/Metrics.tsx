@@ -1,6 +1,7 @@
 import { useQuery } from '@tanstack/solid-query';
 import { createSignal, createMemo, onMount, For, Show } from 'solid-js';
 import { AreaChart, BarChart, LineChart, type Datum } from '../components/charts';
+import { PageHeader } from '../components/PageHeader';
 import { Skeleton } from '../components/Skeleton';
 import Modal from '../components/Modal';
 import { t } from '../i18n';
@@ -234,6 +235,7 @@ export default function Metrics() {
 
   return (
     <div class="obs">
+      <PageHeader icon="fa-chart-line" title={t('nav.metrics')} summary={t('summaries.metrics')} />
       <div class="obs-toolbar">
         <span class="obs-toolbar__label"><i class="fa-regular fa-calendar" aria-hidden="true" /> {t('metrics.time_range')}</span>
         <div class="obs-seg" role="tablist" aria-label={t('metrics.time_range')}>
