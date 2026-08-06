@@ -15,6 +15,10 @@ require_relative '../test_helper'
 # overflows and everything looks fine — so a snippet added without the attribute
 # would sail through review and only break for keyboard users on a phone.
 class SiteCodeBlocksTest < Minitest::Test
+  # Reads one file and touches no Redis or shared state, so it is safe in the
+  # parallel runner — matching the other 120 of 124 unit cases.
+  parallelize_me!
+
   ROOT = File.expand_path('../..', __dir__)
   INDEX = File.join(ROOT, 'docs', 'site', 'index.html')
 
