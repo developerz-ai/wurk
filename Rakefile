@@ -97,20 +97,27 @@ namespace :docs do
   end
 end
 
-desc "Run all benchmarks (enqueue, fetch+execute, bulk enqueue, swarm boot, memory)"
-task :bench do
-  Dir.glob(File.join(GEM_ROOT, "bench", "*.rb")).sort.each do |script|
-    next if File.basename(script) == "support.rb"
+# `rake bench` is the REGRESSION gate — its output is fed to bin/bench-compare
+# to diff head against main, so it may only contain benchmark/ips-shaped, wurk-
+# only scripts. vs_sidekiq.rb is a different animal (comparison against another
+# engine, minutes not seconds, prints a Markdown table) and is excluded here;
+# run it on its own via `rake bench:vs_sidekiq`.
+BENCH_SCRIPTS = Dir.glob(File.join(GEM_ROOT, "bench", "*.rb"))
+                   .sort
+                   .grep_v(%r{/support\.rb\z})
+                   .freeze
+GATE_SCRIPTS = BENCH_SCRIPTS.grep_v(/vs_sidekiq/).freeze
 
+desc "Run the benchmark gate (enqueue, fetch+execute, bulk enqueue, swarm boot, memory)"
+task :bench do
+  GATE_SCRIPTS.each do |script|
     puts "\n=== #{File.basename(script)} ==="
     sh "ruby", "-Ilib", script
   end
 end
 
 namespace :bench do
-  Dir.glob(File.join(GEM_ROOT, "bench", "*.rb")).sort.each do |script|
-    next if File.basename(script) == "support.rb"
-
+  BENCH_SCRIPTS.each do |script|
     name = File.basename(script, ".rb")
     desc "Run bench/#{name}.rb"
     task name do
