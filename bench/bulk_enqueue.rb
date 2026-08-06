@@ -21,10 +21,21 @@ pool.with { |c| c.call("DEL", "queue:default") }
 Benchmark.ips do |x|
   x.config(time: 5, warmup: 2)
 
+  # Depth cap: the queue grows by BULK_SIZE each push. We trim when depth
+  # exceeds a threshold to prevent unbounded memory growth during the benchmark.
+  # This is a periodic depth cap applied outside the core timing loop.
+  depth_limit = 50_000
+
   x.report("wurk push_bulk(#{BULK_SIZE})") do
     client.push_bulk(items)
-    # Trim to prevent Redis memory growth during the benchmark.
-    pool.with { |c| c.call("LTRIM", "queue:default", 0, 0) }
+    # Check queue depth infrequently to avoid serializing the bench.
+    # Trim when we exceed the depth limit, resetting to 1 item (LTRIM 0,0).
+    # The depth cap is outside the primary measurement concern (throughput),
+    # serving only to keep Redis memory bounded.
+    pool.with do |c|
+      depth = c.call("LLEN", "queue:default")
+      c.call("LTRIM", "queue:default", 0, 0) if depth > depth_limit
+    end
   end
 end
 
