@@ -1,12 +1,15 @@
 plan: 101-faster-than-sidekiq
 title: Faster than Sidekiq
-status: not_started
+status: in_progress
 created_by: sebi
 worked_by: ""
 owner: sebi
-percent: 0
-current_focus: ""
+percent: 5
+current_focus: "02-fetch-ack-metrics.md — sign-offs recorded, implementation next"
 slices:
+  - file: 00-semantics-signoff.md
+    status: complete
+    percent: 100
   - file: 01-hotspot-map.md
     status: not_started
     percent: 0
@@ -31,6 +34,7 @@ slices:
   - file: 08-bench-gate-verify.md
     status: not_started
     percent: 0
-evidence: []
-notes: "Absorbs slice 08-perf-quick-wins (P1-P13) of docs/plans/2026/07/31/101-leak-logic-perf-fixes/. Sign-offs needed before slice 02: History flush cadence (P2b), paused-set cache TTL (P1b), deferred-ack redelivery window. Slice 08 step 1 (restore bench CI) should land before any perf commit."
+evidence:
+  - "00-semantics-signoff.md — all three slice-02 semantics decisions accepted with their terms; divergences published in docs/reliability.md, docs/metrics.md, docs/api.md, docs/idea/parity-divergences.md"
+notes: "Absorbs slice 08-perf-quick-wins (P1-P13) of docs/plans/2026/07/31/101-leak-logic-perf-fixes/. Sign-offs for slice 02 are SETTLED in 00-semantics-signoff.md (History flush cadence P2b, paused-set cache TTL P1b, deferred-ack redelivery window) — its 'Required to hold' lists are conditions of acceptance; the hard one is flushing pending acks before bulk_requeue. Lua-folded fetch (P1a) stays deferred, needs its own sign-off. Slice 08 step 1 (restore bench CI) should land before any perf commit."
 last_updated: 2026-08-06

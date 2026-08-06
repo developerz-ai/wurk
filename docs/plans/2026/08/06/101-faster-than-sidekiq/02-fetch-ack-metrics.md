@@ -1,6 +1,6 @@
 # 02 — Fetch, ack, metrics: 4 RTT/job → ~1
 
-> Part of [`overview.md`](overview.md). Depends on: 01 (map), sign-offs in overview "Risks". This slice moves the headline noop ratio.
+> Part of [`overview.md`](overview.md). Depends on: 01 (map) and [`00-semantics-signoff.md`](00-semantics-signoff.md) — read its "Required to hold" lists before writing code; they are conditions of acceptance, not advice. This slice moves the headline noop ratio.
 
 ## Files to change
 

@@ -181,9 +181,8 @@ TTL therefore accumulates across *different* runs of the same jid, so three
 unrelated worker crashes (a deploy `SIGKILL`, an OOM kill, a node eviction)
 inside one window dead-set a job that completed every single time it ran. The
 ACK is the sharpest available "this job does not take its worker down" signal,
-and it is the one Redis round trip the success path already makes — so the
-correctness costs no extra call for the jobs, effectively all of them, that
-were never reclaimed.
+and the `DEL` rides the ACK's own pipeline — so the correctness costs no extra
+call for the jobs, effectively all of them, that were never reclaimed.
 
 *The notification:* `Batch::DeathHandler` is registered as a death handler.
 Suppressing the notification (Wurk's original `notify_failure: false`) meant a
@@ -196,3 +195,69 @@ event: the job is dead and is not coming back.
 **Anchor:** `lib/wurk/middleware/poison_pill.rb` (`clear_in`, `mark_poison`),
 `lib/wurk/fetcher/reliable.rb` (`UnitOfWork#acknowledge`),
 `lib/wurk/processor.rb` (`process`), Pro §12.
+
+## The ACK is deferred onto the next fetch, not sent when the job finishes
+
+**Wurk:** when a Processor finishes with a unit of work, the `LREM
+<private list> 1 <job JSON>` that retires it is held in the fetcher and sent in
+the **next** fetch's pipeline, next to the `LMOVE`. The poison-pill counter
+`DEL` still rides alongside it. Any pending ACK is flushed — as its own round
+trip — before the fetcher blocks in `BLMOVE`, before the all-paused/no-queues
+early return, on `terminate` (quiet), on processor stop, and before
+`bulk_requeue` at shutdown. Steady state on a busy queue is one round trip per
+job, total; an idle or draining process holds nothing.
+
+**Spec:** Pro §3.2 — "Job remains in the private queue until the worker
+explicitly `LREM`s it after success or retry handling."
+
+**Why:** the ordering the spec pins is unchanged — the `LREM` still happens
+after success or retry handling, and never before. What changes is *when* in
+wall-clock terms, and the only observable consequence is the width of the
+window in which a hard process death (`SIGKILL`, OOM, box loss) causes an
+already-completed job to be reclaimed and run a second time. That window goes
+from "the microseconds between `perform` returning and its own round trip" to
+"until the next fetch, or one of the flush points above". It is the same
+duplicate-execution mode `docs/reliability.md` already documents under the
+at-least-once contract, with the same mitigation (idempotent jobs) — not a new
+class, and unreachable on any graceful path. Nothing is ever lost: the payload
+leaves the private list *later* than before, never earlier, so every death in
+the widened window is a reclaim, never a drop.
+
+The reason to take it: the standalone ACK was the largest remaining per-job
+round trip on the success path, and the one command wurk sent that free
+Sidekiq's `BRPOP` sends none of. Leaving it standalone means a permanent
+1 RTT/job tax no downstream optimization can remove. Decision recorded with its
+full terms in
+`docs/plans/2026/08/06/101-faster-than-sidekiq/00-semantics-signoff.md`.
+
+**Anchor:** `lib/wurk/fetcher/reliable.rb` (`UnitOfWork#acknowledge`,
+`retrieve_work`, `bulk_requeue`, `terminate`), `lib/wurk/manager.rb`
+(`hard_shutdown`), Pro §3.2.
+
+## Paused queues are read from a 2s-TTL cache, not on every fetch pass
+
+**Wurk:** `Fetcher::Reliable` caches the `paused` SET per fetcher behind a
+monotonic-clock TTL (`PAUSED_TTL`, **2 seconds**) instead of issuing `SMEMBERS
+paused` on every fetch pass. A pause or unpause issued inside the fetching
+process invalidates that process's cache immediately, so a host app that pauses
+a queue from within a job sees its own workers stop on the next pass.
+`Wurk::Queue#paused?`, the JSON API, and the dashboard keep reading Redis
+directly — the cache is fetch-path only and is never a reporting source.
+
+**Spec:** Pro §6 — the fetcher "skips any queue listed in `paused`"; existing
+in-flight jobs continue.
+
+**Why:** the spec pins no propagation latency, and Pro cannot offer a tighter
+one — pause is a SET that pollers read, not a signal that gets delivered. More
+to the point, the fleet's worst-case pause latency does not move: an idle
+worker is parked in `BLMOVE` for `fetch_poll_interval` (default 2s) and cannot
+observe a pause until that block returns, so a 2s-stale cache is exactly the
+delay the idle path already had. The cache only makes the busy path behave like
+the idle one, and raising `fetch_poll_interval` makes the poll interval
+dominate and the cache invisible. In exchange, a queue that is not paused —
+effectively all of them, effectively always — stops costing a round trip per
+job to confirm it.
+
+**Anchor:** `lib/wurk/fetcher/reliable.rb` (`queues_cmd`, `paused_names`),
+`lib/wurk/queue.rb` (`pause!`, `unpause!`, `paused?`), Pro §6,
+`docs/plans/2026/08/06/101-faster-than-sidekiq/00-semantics-signoff.md`.
