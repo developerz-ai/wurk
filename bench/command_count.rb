@@ -15,13 +15,21 @@ require_relative "support"
 # asserts a budget. It is excluded from GATE_SCRIPTS in the Rakefile alongside
 # vs_sidekiq.rb — run it on its own via `rake bench:command_count`.
 #
-# EXPECTED TO FAIL until the ack piggyback lands: steady state today is 3
-# commands per job against a budget of 2 — LMOVE + LREM + DEL for reliable
-# fetch, ack and poison-pill retire. That red is the tripwire naming the work,
-# not a broken bench. Two costs that used to show here are gone: an SMEMBERS of
-# the paused set per fetch pass (Fetcher::Reliable now reads that SET once per
-# PAUSED_TTL) and 6 Metrics::History writes per job (Metrics::Accumulator folds
-# them in memory; Metrics::Flusher drains them every FLUSH_INTERVAL).
+# Counts COMMANDS, not round trips — `INFO commandstats` cannot see a pipeline.
+# The ack piggyback has landed, so those 3 commands now cost one round trip
+# rather than three (Fetcher::Reliable pipelines the finished job's LREM + DEL
+# in front of the next job's LMOVE), but the count is unmoved and the budget is
+# counted in commands.
+#
+# So this is still EXPECTED TO FAIL: 3 commands per job against a budget of 2.
+# The one left to lose is the poison-pill DEL, which is meaningful only for a
+# job the reaper reclaimed — skipping it for the rest is the open question in
+# docs/plans/2026/08/06/101-faster-than-sidekiq/02-fetch-ack-metrics.md step 4.
+# That red is the tripwire naming the work, not a broken bench. Two costs that
+# used to show here are already gone: an SMEMBERS of the paused set per fetch
+# pass (Fetcher::Reliable now reads that SET once per PAUSED_TTL) and 6
+# Metrics::History writes per job (Metrics::Accumulator folds them in memory;
+# Metrics::Flusher drains them every FLUSH_INTERVAL).
 #
 # Those metrics writes are ZERO here, not amortized: this loop runs no Launcher,
 # so no flusher ticks inside the window. A real worker pays one 6-command

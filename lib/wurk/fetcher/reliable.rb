@@ -16,6 +16,12 @@ module Wurk
     # between fetch and ack leaves the job in the private list, where the
     # next boot of this process reclaims it via bulk_requeue.
     #
+    # The ACK does not take a round trip of its own: it is held here and
+    # pipelined in front of the next fetch's LMOVE, so a worker draining a busy
+    # queue costs one round trip per job in total. See #flush_pending_acks for
+    # the paths that must send a held ACK before they stop fetching, and
+    # docs/idea/parity-divergences.md for the window that widens.
+    #
     # Priority handling: iterate queues_cmd in order with non-blocking
     # LMOVE, then fall back to a blocking BLMOVE on the first queue so an
     # empty poll doesn't spin Redis. BLMOVE has no multi-key form, so
@@ -47,32 +53,36 @@ module Wurk
       # immediately after #quiet, so this pause adds no drain latency.
       QUIET_PAUSE = 0.05
 
-      # Carries the public queue key, the raw (still-JSON) job payload,
-      # and the capsule we use to reach Redis. ACK removes from the private
-      # list; requeue pushes back to the public queue head so the job is
-      # next pulled. LREM count=1 is idempotent for our payloads since
-      # each job's JSON contains a unique `jid`.
+      # Carries the public queue key, the raw (still-JSON) job payload, the
+      # capsule we use to reach Redis, and the fetcher that holds this unit's
+      # ACK until it can ride a pipeline. ACK removes from the private list;
+      # requeue pushes back to the public queue head so the job is next pulled.
+      # LREM count=1 is idempotent for our payloads since each job's JSON
+      # contains a unique `jid`.
       #
       # `jid` is filled in by the Processor once it has parsed the payload —
       # the fetcher never parses. It is only used to retire the job's
       # poison-pill recovery counter, so an ACK without one is still a
       # complete ACK.
-      UnitOfWork = Struct.new(:queue, :job, :config, :jid, keyword_init: true) do
-        # The counter DEL rides this round trip rather than taking one of its
-        # own: the ACK is the only Redis call the success path makes, and a
+      UnitOfWork = Struct.new(:queue, :job, :config, :jid, :fetcher, keyword_init: true) do
+        # Deferred, never skipped: the LREM goes back to the fetcher, which
+        # pipelines it in front of the next fetch's LMOVE instead of spending a
+        # round trip of its own. Ordering against the job is unchanged — the
+        # LREM still happens only after success or retry handling (Pro §3.2) —
+        # so all that moves is the wall clock. Every path that stops fetching
+        # flushes first; see #flush_pending_acks.
+        def acknowledge
+          fetcher.defer_ack(self)
+        end
+
+        # Queue this unit's ACK into an already-open pipeline. The counter DEL
+        # rides the same round trip rather than taking one of its own: a
         # per-job call would be a fetch+execute regression for the sake of a
         # key that exists for roughly no jobs. See Middleware::PoisonPill.
-        def acknowledge
-          private_list = Reliable.private_queue_name(queue)
+        def write_ack(pipe)
+          pipe.call('LREM', Reliable.private_queue_name(queue), 1, job)
           job_jid = jid.to_s
-          return config.redis { |conn| conn.call('LREM', private_list, 1, job) } if job_jid.empty?
-
-          config.redis do |conn|
-            conn.pipelined do |pipe|
-              pipe.call('LREM', private_list, 1, job)
-              Middleware::PoisonPill.clear_in(pipe, job_jid)
-            end
-          end
+          Middleware::PoisonPill.clear_in(pipe, job_jid) unless job_jid.empty?
         end
 
         def queue_name
@@ -84,10 +94,11 @@ module Wurk
         end
       end
 
-      # Class-level so UnitOfWork can compute the private list without
-      # carrying a back-reference to its parent fetcher. Index defaults to
-      # 0 — we run one fetcher per capsule today. Multi-processor topology
-      # (one private list per processor slot) is a future Manager concern.
+      # Class-level: the name is a pure function of the public queue and this
+      # process's identity, and the fetcher, its units and the Reaper all need
+      # it. Index defaults to 0 — we run one fetcher per capsule today.
+      # Multi-processor topology (one private list per processor slot) is a
+      # future Manager concern.
       #
       # The nonce marks the incarnation. host+pid alone is ambiguous once PID
       # namespaces are in play: a restarted container reuses both, so the
@@ -127,6 +138,50 @@ module Wurk
         @paused = nil
         @paused_generation = nil
         @paused_expires_at = 0.0
+        @pending_acks = {}
+        @pending_lock = ::Mutex.new
+      end
+
+      # Take custody of a finished job's LREM instead of sending it now. One
+      # slot per processor thread: a capsule shares a single fetcher across its
+      # processors, and each thread's fetch → execute → ACK cycle is strictly
+      # sequential, so a thread only ever writes its own slot. The lock is for
+      # the flush paths, which drain every slot from a different thread.
+      def defer_ack(uow)
+        @pending_lock.synchronize { @pending_acks[::Thread.current] = uow }
+      end
+
+      # Send every held ACK now, in one pipeline of its own.
+      #
+      # Called from every path that stops fetching — nothing else would send
+      # them — and from #bulk_requeue, where it is a correctness requirement
+      # rather than an optimization: a finished job whose LREM is still pending
+      # is not in Manager#hard_shutdown's in-flight list, so the requeue Lua's
+      # LREM guard would still find its payload, RPUSH it onto the public
+      # queue, and run it a second time on every graceful shutdown.
+      def flush_pending_acks
+        pending = @pending_lock.synchronize do
+          held = @pending_acks
+          @pending_acks = {}
+          held
+        end
+        return if pending.empty?
+
+        begin
+          # Apply-safe for the same reason the piggybacked copy is: a replayed
+          # LREM finds the payload already gone and removes nothing, and the
+          # counter DEL is idempotent by definition. Claiming it buys the drain
+          # path the full connection-blip backoff.
+          config.redis(idempotent: true) do |conn|
+            conn.pipelined { |pipe| pending.each_value { |uow| uow.write_ack(pipe) } }
+          end
+        rescue StandardError
+          # Put them back rather than drop them: an LREM that is never sent
+          # leaves a finished job in the private list for the next boot's
+          # reaper to reclaim and run again. Newer slots win the merge.
+          @pending_lock.synchronize { @pending_acks = pending.merge(@pending_acks) }
+          raise
+        end
       end
 
       # Every pass that yields no job has to cost wall-clock time: Processor#run
@@ -136,6 +191,7 @@ module Wurk
       # the two short-circuits below have to pay it themselves.
       def retrieve_work
         if @done
+          flush_pending_acks
           sleep QUIET_PAUSE
           return nil
         end
@@ -145,15 +201,12 @@ module Wurk
         # full poll interval rather than re-running queues_cmd as fast as the CPU
         # allows. Mirrors Sidekiq's BasicFetch guard, upstream #4825.
         if queues.empty?
+          flush_pending_acks
           sleep poll_interval
           return nil
         end
 
-        queues.each do |public_q|
-          uow = lmove(public_q)
-          return uow if uow
-        end
-        blmove(queues.first)
+        walk(queues)
       end
 
       # Called on shutdown for jobs the Processor couldn't finish in time.
@@ -168,6 +221,11 @@ module Wurk
       # in-flight in the private list until the next boot; we prefer the
       # immediate move so a rolling deploy recovers work without a restart.
       def bulk_requeue(in_progress)
+        # First and unconditional — see #flush_pending_acks. Deliberately not
+        # rescued: if the ACKs could not be sent we would be requeueing jobs
+        # whose completion we failed to record. Leaving them in the private
+        # list for the next boot's reaper is the safer of the two.
+        flush_pending_acks
         return if in_progress.nil? || in_progress.empty?
 
         config.redis { |conn| requeue_pipelined(conn, in_progress) }
@@ -191,11 +249,46 @@ module Wurk
       # one sitting in the between-jobs window (Processor#run only re-checks its
       # own @done between iterations). Quiet is one-way — matches Sidekiq TSTP
       # (spec §21.3), there is no un-terminate.
+      #
+      # Which is exactly why it flushes: after this, retrieve_work short-circuits
+      # for good, so an ACK held here would otherwise sit until shutdown.
       def terminate
         @done = true
+        flush_pending_acks
+      rescue StandardError => e
+        # Runs on the Manager's thread mid-shutdown, where a raise would skip
+        # the rest of the quiet path. The ACKs are back in their slots, so the
+        # next flush point (Processor's ensure) retries them.
+        handle_exception(e, { context: 'Error flushing pending acks' })
       end
 
       private
+
+      # Capsule doesn't define handle_exception (it's a Configuration method);
+      # override Component's delegation so error handlers fire.
+      def handle_exception(ex, ctx = {})
+        config.config.handle_exception(ex, ctx)
+      end
+
+      # Non-blocking pass over the fetchable queues. The pending ACK rides the
+      # first LMOVE and only the first: the walk is one fetch, so a second copy
+      # of the same LREM would be a wasted command on every queue we find
+      # empty. By the time we fall through to BLMOVE this thread is holding
+      # nothing — which is the point, since a blocking call can't join a
+      # pipeline and would strand the ACK for a whole poll interval.
+      def walk(queues)
+        ack = take_pending_ack
+        queues.each do |public_q|
+          uow = lmove(public_q, ack)
+          ack = nil
+          return uow if uow
+        end
+        blmove(queues.first)
+      end
+
+      def take_pending_ack
+        @pending_lock.synchronize { @pending_acks.delete(::Thread.current) }
+      end
 
       # One pipelined RELIABLE_REQUEUE EVALSHA per UoW. Mirrors
       # Client#push_batched_pipelined: a pipelined EVALSHA surfaces NOSCRIPT
@@ -251,10 +344,27 @@ module Wurk
       # and ack leaves behind, which the next boot's Reaper already reclaims. The
       # replay then pulls a different job; nothing duplicates and nothing is
       # lost, at worst one job waits out this process's lifetime.
-      def lmove(public_q)
+      # A replayed ACK is a no-op (LREM removes nothing the second time, DEL is
+      # already done), so folding it in costs the retry nothing.
+      def lmove(public_q, ack = nil)
         priv = self.class.private_queue_name(public_q)
-        job = config.redis(idempotent: true) { |conn| conn.call('LMOVE', public_q, priv, 'RIGHT', 'LEFT') }
-        job ? UnitOfWork.new(queue: public_q, job: job, config: config) : nil
+        job = config.redis(idempotent: true) do |conn|
+          if ack
+            conn.pipelined do |pipe|
+              ack.write_ack(pipe)
+              pipe.call('LMOVE', public_q, priv, 'RIGHT', 'LEFT')
+            end.last
+          else
+            conn.call('LMOVE', public_q, priv, 'RIGHT', 'LEFT')
+          end
+        end
+        job ? UnitOfWork.new(queue: public_q, job: job, config: config, fetcher: self) : nil
+      rescue StandardError
+        # The ACK left its slot but never reached Redis. Hand it back so a
+        # later flush still retires the job — otherwise a finished job sits in
+        # the private list until the next boot's reaper runs it again.
+        defer_ack(ack) if ack
+        raise
       end
 
       def blmove(public_q)
@@ -268,7 +378,7 @@ module Wurk
         job = config.fetch_redis(idempotent: true) do |conn|
           conn.blocking_call(timeout + 1, 'BLMOVE', public_q, priv, 'RIGHT', 'LEFT', timeout)
         end
-        job ? UnitOfWork.new(queue: public_q, job: job, config: config) : nil
+        job ? UnitOfWork.new(queue: public_q, job: job, config: config, fetcher: self) : nil
       end
 
       # BLMOVE block timeout for an empty poll. `config.fetch_poll_interval`

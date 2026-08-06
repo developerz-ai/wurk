@@ -135,16 +135,30 @@ class RedisIdempotentCallSitesTest < Wurk::Test::UnitCase
     assert_empty @main.commands
   end
 
-  # The ACK and the shutdown re-push are the other side of the same fetcher: an
-  # RPUSH replayed after a lost reply is a duplicate job, so neither may claim.
-  def test_ack_and_requeue_do_not_claim_apply_safety
+  # The shutdown re-push is the other side of the same fetcher: an RPUSH
+  # replayed after a lost reply is a duplicate job, so it must not claim.
+  def test_requeue_does_not_claim_apply_safety
     enqueue('{"jid":"b"}')
-    uow = fetcher.retrieve_work
-    uow.requeue
-    uow.acknowledge
+    fetcher.retrieve_work.requeue
 
     assert_equal [false], @main.claims_for('RPUSH')
-    assert_equal [false], @main.claims_for('LREM')
+  end
+
+  # The ACK claims, and had to: it no longer owns a checkout — it rides the
+  # next fetch's pipeline, whose LMOVE claims. The claim is sound on its own
+  # terms anyway. A replayed LREM finds the payload already gone and removes
+  # nothing, because every job JSON carries a unique jid, and the poison-pill
+  # DEL beside it is idempotent by definition. The standalone flush claims for
+  # the same reason: it is the same two commands, on the drain path, where
+  # riding out a blip is worth more than anywhere else.
+  def test_the_ack_claims_apply_safety_on_both_the_piggybacked_and_flushed_paths
+    enqueue('{"jid":"b"}')
+    enqueue('{"jid":"c"}')
+    fetcher.retrieve_work.acknowledge
+    fetcher.retrieve_work.acknowledge
+    fetcher.flush_pending_acks
+
+    assert_equal [true, true], @main.claims_for('LREM')
   end
 
   # --- reaper -------------------------------------------------------------

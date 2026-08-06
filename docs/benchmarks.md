@@ -56,16 +56,17 @@ Redis commands per job, counted with `INFO commandstats` over 500 jobs. Reproduc
 | Engine | Per job | Breakdown |
 |---|---|---|
 | Sidekiq | ~1 | 1 BRPOP. Stat counters buffered in memory, flushed on a timer. |
-| Wurk | ~3 | 3 fetch + ack (LMOVE, then a pipelined LREM + DEL) |
+| Wurk | ~3 | 1 pipeline: LREM + DEL retiring the previous job, then the LMOVE claiming this one |
 
 What is left, and the verdict on it:
 
-- **Reliable fetch** — 2 round-trips vs BRPOP's 1. This is [`Wurk::Fetcher::Reliable`](reliability.md), the default. Sidekiq's equivalent (`super_fetch`) is a paid Pro feature; stock Sidekiq's BRPOP loses in-flight jobs when a worker is killed. The extra round-trip buys a guarantee, and is not a defect.
+- **Reliable fetch** — the same **one round trip** per job as BRPOP, with three commands inside it rather than one. This is [`Wurk::Fetcher::Reliable`](reliability.md), the default. Sidekiq's equivalent (`super_fetch`) is a paid Pro feature; stock Sidekiq's BRPOP loses in-flight jobs when a worker is killed. The extra commands buy a guarantee, and are not a defect. Note the table counts *commands*, not round trips — `INFO commandstats` cannot see a pipeline.
 
-Two costs that used to dominate this table are gone:
+Three costs that used to dominate this table are gone:
 
 - **Metrics** were 6 of the old 9 — `Wurk::Metrics::History` wrote 2 HINCRBY + EXPIRE per job, twice over. They are now folded in memory per (class, minute) and flushed every ≤5s, the same trade Sidekiq makes; see [Write cadence](metrics.md#write-cadence-and-what-a-hard-kill-costs) for what that costs on a hard kill. A worker still pays one 6-command pipeline per (class, minute) per flush, which rounds to nothing per job at any real throughput and does not appear above.
 - **The paused SET** added a seventh, an `SMEMBERS` on every fetch pass; it is now read at most once per [`PAUSED_TTL`](reliability.md#fetch-order-and-polling) per fetcher.
+- **The ACK** was a round trip of its own, sent the moment a job finished. Its `LREM` + `DEL` now [ride the next fetch's pipeline](reliability.md#the-ack-rides-the-next-fetch) — the same commands, one fewer round trip — at the cost of a wider window in which a hard kill re-runs an already-finished job.
 
 ## Running it
 
@@ -102,4 +103,4 @@ The comparison is only worth reading if the control is real. What the harness gu
 
 The claim "faster than Sidekiq" has been removed from the README and the site until the numbers support it.
 
-The `Metrics::History` batching that closed most of the command-count gap has landed — 9 commands per job down to 3, at the cost of dashboard counters lagging by the flush interval and a hard crash dropping the unflushed window, which is the trade Sidekiq already makes. **The throughput ratios above predate it and have not been re-measured**; they get republished from a fresh `bench:vs_sidekiq` once the remaining per-job round trip (the ack) is dealt with, not before.
+The `Metrics::History` batching and the ack piggyback that closed the round-trip gap have both landed — **four round trips per job down to one**, and 9 commands down to 3 — at the cost of dashboard counters lagging by the flush interval, a hard crash dropping the unflushed window, and a wider window in which a hard kill re-runs an already-finished job. **The throughput ratios above predate both and have not been re-measured**; they get republished from a fresh `bench:vs_sidekiq` when the rest of that work lands, not before.
