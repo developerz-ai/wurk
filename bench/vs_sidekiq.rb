@@ -3,6 +3,7 @@
 require 'etc'
 require 'fileutils'
 require 'json'
+require 'open3'
 require 'securerandom'
 require 'redis-client'
 require_relative 'support'
@@ -24,7 +25,7 @@ require_relative 'support'
 #      process. Both engines read the same Redis key schema, so a hand-built
 #      payload is the fairest possible starting line — neither side's client
 #      code is on the clock, and both dequeue the exact same bytes.
-#   3. Spawn the real worker binary and start the clock.
+#   3. Start the clock and spawn the real worker binary.
 #   4. Poll the completion counter each job INCRs. `boot` is the clock until
 #      the first completion; `drain` is first-to-last. Throughput is reported
 #      over `drain`, so a slower boot never flatters a slower engine — boot is
@@ -60,6 +61,10 @@ VERBOSE     = !ENV['WURK_BENCH_VS_VERBOSE'].nil?
 DONE_KEY    = 'wurk-bench:vs:done'
 SIDES       = %i[sidekiq wurk].freeze
 
+unless (unknown_shapes = SHAPES - %w[noop cpu io]).empty?
+  raise "bench/vs_sidekiq: unknown shape(s): #{unknown_shapes.join(', ')} (valid: noop, cpu, io)"
+end
+
 def monotonic = Process.clock_gettime(Process::CLOCK_MONOTONIC)
 
 # Dedicated logical DB via bench/support.rb (#258/#259) — this bench FLUSHDBs
@@ -92,13 +97,19 @@ end
 # the isolation works: if this prints the same version twice, the Sidekiq side
 # is loading wurk and every number below is meaningless.
 def engine_versions
-  sidekiq = `#{env_prefix(SIDEKIQ_GEMFILE)} bundle exec ruby -e 'require "sidekiq"; print Sidekiq::VERSION' 2>/dev/null`
-  wurk    = `#{env_prefix(WURK_GEMFILE)} bundle exec ruby -e 'require "wurk"; print Wurk::VERSION' 2>/dev/null`
-  { sidekiq: sidekiq.strip, wurk: wurk.strip }
+  { sidekiq: engine_version(SIDEKIQ_GEMFILE, 'sidekiq', 'Sidekiq::VERSION'),
+    wurk: engine_version(WURK_GEMFILE, 'wurk', 'Wurk::VERSION') }
 end
 
-def env_prefix(gemfile)
-  "cd #{ROOT} && env -u RUBYOPT -u RUBYLIB BUNDLE_GEMFILE=#{gemfile}"
+# Argument array + chdir, not a shell string — the checkout path may contain
+# spaces, and it stays on the same isolated-bundle path (child_env) as the workers.
+def engine_version(gemfile, require_name, const)
+  code = %(require "#{require_name}"; print #{const})
+  out, = Open3.capture2(
+    child_env(gemfile, 'noop'), 'bundle', 'exec', 'ruby', '-e', code,
+    chdir: ROOT, err: File::NULL
+  )
+  out.strip
 end
 
 # Hand-built payloads in the shared key schema — the one enqueue path that is
@@ -132,7 +143,12 @@ def spawn_workers(side, shape, log)
   args = ['-r', JOB_FILE, '-c', CONCURRENCY.to_s, '-q', 'default', '-t', '2']
   redirect = VERBOSE ? {} : { out: log, err: log }
   count = side == :sidekiq ? PROCESSES : 1
-  Array.new(count) { Process.spawn(env, *worker_command(side), *args, chdir: ROOT, **redirect) }
+  pids = []
+  count.times { pids << Process.spawn(env, *worker_command(side), *args, chdir: ROOT, **redirect) }
+  pids
+rescue StandardError
+  stop_workers(pids)
+  raise
 end
 
 def stop_workers(pids)
@@ -150,8 +166,7 @@ end
 
 # Returns [boot_seconds, drain_seconds]. Boot is spawn -> first completion;
 # drain is first -> last, and throughput is reported over drain alone.
-def measure(redis, log)
-  start = monotonic
+def measure(redis, log, start:)
   first = nil
   loop do
     done = redis.call('GET', DONE_KEY).to_i
@@ -172,8 +187,9 @@ def one_run(redis, side, shape)
   redis.call('FLUSHDB')
   enqueue(redis, JOBS)
   log = File.join(LOG_DIR, "vs_sidekiq-#{side}-#{shape}.log")
+  start = monotonic
   pids = spawn_workers(side, shape, log)
-  boot, drain = measure(redis, log)
+  boot, drain = measure(redis, log, start: start)
   [boot, JOBS / drain]
 ensure
   stop_workers(pids) if pids

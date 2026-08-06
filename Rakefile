@@ -106,7 +106,7 @@ BENCH_SCRIPTS = Dir.glob(File.join(GEM_ROOT, "bench", "*.rb"))
                    .sort
                    .grep_v(%r{/support\.rb\z})
                    .freeze
-GATE_SCRIPTS = BENCH_SCRIPTS.grep_v(/vs_sidekiq/).freeze
+GATE_SCRIPTS = BENCH_SCRIPTS.reject { |s| File.basename(s) == "vs_sidekiq.rb" }.freeze
 
 desc "Run the benchmark gate (enqueue, fetch+execute, bulk enqueue, swarm boot, memory)"
 task :bench do
