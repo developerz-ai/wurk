@@ -66,6 +66,14 @@
       background: var(--code); border: 1px solid var(--line-strong); border-radius: var(--radius);
       padding: 16px 18px; overflow-x: auto; font-size: 14px; line-height: 1.6; margin: 0;
     }
+    /* `overflow-x: auto` above makes EVERY snippet a scroll container the moment a
+       line is wider than the viewport — the migration diff already is, by 236px at
+       390px wide. A scroll container that nothing can focus is unreachable by
+       keyboard (WCAG 2.1.1), so each <pre> carries tabindex="0". That is only half
+       the fix: a focus stop with no visible ring is a cursor that vanishes, hence
+       the outline. Both belong here rather than on one element, because which
+       snippet overflows depends on the viewport, not on the markup. */
+    pre:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
     .add { color: var(--success); } .del { color: var(--danger); } .cmt { color: var(--muted); }
 
     /* ── Copy-able code block ── */
@@ -311,7 +319,7 @@
             <button class="copy-btn" type="button" data-copy='gem "wurk"' aria-label="Copy to clipboard">
               <i class="fa-regular fa-copy" aria-hidden="true"></i> Copy
             </button>
-<pre><span class="cmt"># Gemfile</span>
+<pre tabindex="0"><span class="cmt"># Gemfile</span>
 gem <span class="add">"wurk"</span></pre>
           </div>
         </div>
@@ -416,7 +424,7 @@ gem <span class="add">"wurk"</span></pre>
               <button class="copy-btn" type="button" data-copy='gem "wurk"' aria-label="Copy to clipboard">
                 <i class="fa-regular fa-copy" aria-hidden="true"></i> Copy
               </button>
-<pre><span class="cmt"># Gemfile</span>
+<pre tabindex="0"><span class="cmt"># Gemfile</span>
 gem <span class="add">"wurk"</span>
 
 <span class="cmt"># then</span>
@@ -429,7 +437,7 @@ bundle install</pre>
               <button class="copy-btn" type="button" data-copy='mount Wurk::Engine =&gt; "/wurk"' aria-label="Copy to clipboard">
                 <i class="fa-regular fa-copy" aria-hidden="true"></i> Copy
               </button>
-<pre><span class="cmt"># config/routes.rb</span>
+<pre tabindex="0"><span class="cmt"># config/routes.rb</span>
 mount Wurk::Engine =&gt; <span class="add">"/wurk"</span></pre>
             </div>
           </div>
@@ -443,7 +451,7 @@ mount Wurk::Engine =&gt; <span class="add">"/wurk"</span></pre>
           against the same Redis during cutover. Delete the paid gems, add one line:
         </p>
         <div class="codeblock">
-<pre><span class="del">- gem "sidekiq"</span>
+<pre tabindex="0"><span class="del">- gem "sidekiq"</span>
 <span class="del">- gem "sidekiq-pro", source: "https://gems.contribsys.com/"</span>
 <span class="del">- gem "sidekiq-ent", source: "https://enterprise.contribsys.com/"</span>
 <span class="add">+ gem "wurk"</span></pre>
