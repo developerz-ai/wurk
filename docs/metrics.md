@@ -29,7 +29,8 @@ one-line gem swap.
 
 `Wurk::Metrics::History` is a server middleware added to the default chain when
 `wurk` is required, so a stock boot already records metrics. It times every job
-and accumulates the result into two Redis hashes, flushed on a timer (see
+and accumulates the result in memory; a timer flushes the accumulator into two
+Redis hashes (see
 [Write cadence](#write-cadence-and-what-a-hard-kill-costs)):
 
 | Key | Type | Fields | TTL |
@@ -51,11 +52,13 @@ and accumulates the result into two Redis hashes, flushed on a timer (see
 Wurk does **not** write to Redis per job. Each worker process accumulates
 `processed` / `failed` / `ms` in memory, keyed by job class and by the minute
 bucket the job ran in, and flushes the whole accumulator every **≤5 seconds** in
-one pipeline — the same `HINCRBY` / `EXPIRE` commands against the same keys and
-fields. `HINCRBY` is additive, so a flushed batch of N executions leaves Redis in
-byte-identical state to N individual writes. It also flushes on a graceful stop.
+one pipeline per Redis pool — the same `HINCRBY` / `EXPIRE` commands against the
+same keys and fields, six per (class, minute) bucket inside that pool's
+pipeline. `HINCRBY` is additive, so a flushed batch of N executions leaves Redis
+in byte-identical state to N individual writes. It also flushes on a graceful
+stop.
 
-Writing per execution cost six Redis commands — six of the nine Wurk spent on a
+Writing per execution cost six Redis commands — six of the ten Wurk spent on a
 job ([Benchmarks](benchmarks.md#why-wurk-is-slower)) — for counters that back a
 chart. Two things follow from batching them, and both are worth knowing before
 you build on these numbers:

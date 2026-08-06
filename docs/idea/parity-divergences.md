@@ -182,7 +182,8 @@ unrelated worker crashes (a deploy `SIGKILL`, an OOM kill, a node eviction)
 inside one window dead-set a job that completed every single time it ran. The
 ACK is the sharpest available "this job does not take its worker down" signal,
 and the `DEL` rides the ACK's own pipeline — so the correctness costs no extra
-call for the jobs, effectively all of them, that were never reclaimed.
+round trip for the jobs, effectively all of them, that were never reclaimed. It
+is still a Redis command; `bench:command_count` counts it as one of the three.
 
 *The notification:* `Batch::DeathHandler` is registered as a death handler.
 Suppressing the notification (Wurk's original `notify_failure: false`) meant a

@@ -161,8 +161,13 @@ module Wurk
       # processors, and each thread's fetch → execute → ACK cycle is strictly
       # sequential, so a thread only ever writes its own slot. The lock is for
       # the flush paths, which drain every slot from a different thread.
+      #
+      # The slot holds a list rather than a single unit because a failed flush
+      # can hand an older ACK back to a thread that has already deferred a newer
+      # one (see #restore_pending_acks). Everywhere else it holds exactly one,
+      # and the array is reused empty rather than reallocated per job.
       def defer_ack(uow)
-        @pending_lock.synchronize { @pending_acks[::Thread.current] = uow }
+        @pending_lock.synchronize { (@pending_acks[::Thread.current] ||= []) << uow }
       end
 
       # Send every held ACK now, in one pipeline of its own.
@@ -174,12 +179,11 @@ module Wurk
       # LREM guard would still find its payload, RPUSH it onto the public
       # queue, and run it a second time on every graceful shutdown.
       def flush_pending_acks
-        pending = @pending_lock.synchronize do
-          held = @pending_acks
-          @pending_acks = {}
-          held
-        end
-        return if pending.empty?
+        pending = claim_pending_acks
+        # A thread whose ACK already rode a fetch leaves its queue behind empty;
+        # dropping the hash those queues lived in is also how the entry of a
+        # processor thread that has since died is reclaimed.
+        return if pending.each_value.all?(&:empty?)
 
         begin
           # Apply-safe for the same reason the piggybacked copy is: a replayed
@@ -187,13 +191,10 @@ module Wurk
           # counter DEL is idempotent by definition. Claiming it buys the drain
           # path the full connection-blip backoff.
           config.redis(idempotent: true) do |conn|
-            conn.pipelined { |pipe| pending.each_value { |uow| uow.write_ack(pipe) } }
+            conn.pipelined { |pipe| pending.each_value { |uows| uows.each { |uow| uow.write_ack(pipe) } } }
           end
         rescue StandardError
-          # Put them back rather than drop them: an LREM that is never sent
-          # leaves a finished job in the private list for the next boot's
-          # reaper to reclaim and run again. Newer slots win the merge.
-          @pending_lock.synchronize { @pending_acks = pending.merge(@pending_acks) }
+          restore_pending_acks(pending)
           raise
         end
       end
@@ -303,8 +304,36 @@ module Wurk
         blmove(queues.first)
       end
 
+      # Exactly one, even when a failed flush left this thread holding two: the
+      # walk is one fetch and one pipeline, and the rest go out on the next.
       def take_pending_ack
-        @pending_lock.synchronize { @pending_acks.delete(::Thread.current) }
+        @pending_lock.synchronize { @pending_acks[::Thread.current]&.shift }
+      end
+
+      def claim_pending_acks
+        @pending_lock.synchronize do
+          held = @pending_acks
+          @pending_acks = {}
+          held
+        end
+      end
+
+      # Put a failed flush's ACKs back rather than drop them: an LREM that is
+      # never sent leaves a finished job in the private list for the next boot's
+      # reaper to reclaim and run again.
+      #
+      # Prepended per thread rather than merged by thread: the flush runs while
+      # the processors keep working, so a thread we claimed an ACK from may have
+      # finished another job and deferred a second one meanwhile. Keeping only
+      # one of the two re-runs whichever job lost.
+      def restore_pending_acks(pending)
+        @pending_lock.synchronize do
+          pending.each do |thread, uows|
+            next if uows.empty?
+
+            (@pending_acks[thread] ||= []).unshift(*uows)
+          end
+        end
       end
 
       # One pipelined RELIABLE_REQUEUE EVALSHA per UoW. Mirrors

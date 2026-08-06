@@ -322,6 +322,30 @@ class FetcherReliableTest < Wurk::Test::UnitCase
     assert_equal 0, llen(private_queue)
   end
 
+  # A flush runs on the Manager's thread while the processors keep working, so
+  # the thread it took an ACK from can finish another job and defer a second one
+  # into the same slot before the rescue puts the first back. Keeping only one
+  # of the two leaves the loser in the private list for the next boot's reaper —
+  # a silent second run of a finished job, which is the outcome the restore
+  # exists to prevent.
+  def test_a_failed_flush_keeps_an_ack_deferred_while_it_was_in_flight
+    priv = private_queue
+    enqueue('flush-race-1')
+    enqueue('flush-race-2')
+    acked_before = @fetcher.retrieve_work
+    acked_during = @fetcher.retrieve_work
+    acked_before.acknowledge
+
+    assert_equal 2, llen(priv), 'precondition: neither ACK has been sent'
+
+    with_dead_redis(before_raise: -> { acked_during.acknowledge }) do
+      assert_raises(DeadRedis) { @fetcher.flush_pending_acks }
+    end
+    @fetcher.flush_pending_acks
+
+    assert_equal 0, llen(priv), 'the ACK the flush was holding must not lose its slot to the newer one'
+  end
+
   # Same contract on the piggybacked copy: the walk takes the ACK out of its
   # slot before it sends it, so a fetch that blows up has to hand it back.
   # `queues_cmd` is warmed first so the failure lands on the LMOVE, not on the
@@ -646,9 +670,14 @@ class FetcherReliableTest < Wurk::Test::UnitCase
   end
 
   # Runs the block with every main-pool checkout raising, then restores the real
-  # pool so the assertions that follow can read Redis.
-  def with_dead_redis
-    @capsule.define_singleton_method(:redis) { |**_opts, &_blk| raise DeadRedis }
+  # pool so the assertions that follow can read Redis. `before_raise` fires in
+  # place of the write the caller expected to land, for a test that has to reach
+  # into the window a failing call holds open.
+  def with_dead_redis(before_raise: nil)
+    @capsule.define_singleton_method(:redis) do |**_opts, &_blk|
+      before_raise&.call
+      raise DeadRedis
+    end
     yield
   ensure
     @capsule.singleton_class.remove_method(:redis)

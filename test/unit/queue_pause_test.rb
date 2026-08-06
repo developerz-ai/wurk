@@ -172,7 +172,7 @@ class QueuePauseTest < Wurk::Test::UnitCase
   # install, and re-confirming it once per fetch is the round trip per job the
   # cache exists to delete.
   def test_empty_paused_set_is_read_once_per_ttl_not_once_per_pass
-    fetcher, capsule, counter = build_fetcher_with_paused_counter
+    fetcher, capsule, counter = build_pinned_fetcher_with_paused_counter
 
     10.times { fetcher.queues_cmd }
 
@@ -182,7 +182,7 @@ class QueuePauseTest < Wurk::Test::UnitCase
   end
 
   def test_paused_set_stays_cached_while_a_queue_is_paused
-    fetcher, capsule, counter = build_fetcher_with_paused_counter
+    fetcher, capsule, counter = build_pinned_fetcher_with_paused_counter
     Wurk::Queue.new(@qname).pause!
 
     10.times { refute_includes fetcher.queues_cmd, @rqname }
@@ -240,7 +240,7 @@ class QueuePauseTest < Wurk::Test::UnitCase
   # cross-process case the sign-off bounds at PAUSED_TTL instead of making
   # immediate.
   def test_pause_from_another_process_is_invisible_until_the_cache_expires
-    fetcher, capsule = build_fetcher(%W[#{@qname}])
+    fetcher, capsule = build_fetcher(%W[#{@qname}], PinnedGeneration)
 
     assert_includes fetcher.queues_cmd, @rqname
 
@@ -273,7 +273,7 @@ class QueuePauseTest < Wurk::Test::UnitCase
   # Reporting is never served from the fetch cache: the dashboard has to show
   # what Redis says right now, even mid-TTL.
   def test_paused_predicate_reads_redis_while_a_fetcher_cache_is_warm
-    fetcher, capsule = build_fetcher(%W[#{@qname}])
+    fetcher, capsule = build_fetcher(%W[#{@qname}], PinnedGeneration)
     fetcher.queues_cmd
     pause_elsewhere(@qname)
 
@@ -283,13 +283,23 @@ class QueuePauseTest < Wurk::Test::UnitCase
     capsule&.stop
   end
 
+  # A fetcher whose view of the process-global paused generation is frozen.
+  # `Queue#pause!` bumps that counter for every fetcher in the process, which is
+  # exactly what the invalidation tests above assert — and exactly what makes a
+  # parallel sibling's pause! indistinguishable from a TTL expiry in the four
+  # tests that measure the TTL itself. Those build from here so a sibling's bump
+  # can't force the extra SMEMBERS their counts and stale reads are pinning.
+  PinnedGeneration = Class.new(Wurk::Fetcher::Reliable) do
+    def self.paused_generation = 0
+  end
+
   private
 
-  def build_fetcher(queues)
+  def build_fetcher(queues, klass = Wurk::Fetcher::Reliable)
     config  = Wurk::Configuration.new
     capsule = Wurk::Capsule.new('test', config)
     capsule.queues = queues
-    [Wurk::Fetcher::Reliable.new(capsule), capsule]
+    [klass.new(capsule), capsule]
   end
 
   def paused_members
@@ -327,8 +337,8 @@ class QueuePauseTest < Wurk::Test::UnitCase
     [fetcher, capsule, counter]
   end
 
-  def build_fetcher_with_paused_counter
-    fetcher, capsule = build_fetcher(%W[#{@qname} #{@other}])
+  def build_pinned_fetcher_with_paused_counter
+    fetcher, capsule = build_fetcher(%W[#{@qname} #{@other}], PinnedGeneration)
     counter = PausedReadCounter.new(capsule.redis_pool)
     capsule.instance_variable_set(:@redis_pool, counter)
     [fetcher, capsule, counter]

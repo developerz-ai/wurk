@@ -172,15 +172,25 @@ class MetricsHistoryTest < Wurk::Test::UnitCase
 
   # The behavior change slice 02 signed off on: nothing reaches Redis until a
   # flush. Everything below it is about that staying invisible on the wire.
+  #
+  # Proven on the wire rather than by reading the bucket back empty: `record`
+  # folds into the process-wide accumulator, which the argless `flush` in the
+  # parallel siblings of this class also drains, so an absent key would prove
+  # only that no sibling flushed in the window. The two halves use different
+  # class names for the same reason — the recorded one stays in that shared
+  # accumulator, and counting it twice here is not a failure worth asserting on.
   def test_record_writes_nothing_until_the_flush
-    Wurk::Metrics::History.record(@klass, 42, success: true, at: @at)
-    minute = Wurk::Metrics::History.minute_key(@at)
+    spy = Wurk::Test::CommandSpy.new(Wurk.redis_pool)
+    Thread.current[:wurk_capsule] = spy
+    Wurk::Metrics::History.record("#{@klass}Recorded", 42, success: true, at: @at)
 
-    assert_nil(Wurk.redis { |c| c.call('HGET', minute, "#{@klass}|p") })
+    assert_equal 0, spy.count
 
-    Wurk::Metrics::History.flush
+    fold { |acc| acc.add(nil, @klass, bucket, 42, true) }
 
-    assert_equal('1', Wurk.redis { |c| c.call('HGET', minute, "#{@klass}|p") })
+    assert_equal('1', minute_fields(@klass)['p'])
+  ensure
+    Thread.current[:wurk_capsule] = nil
   end
 
   # The whole trade: N executions must leave Redis in exactly the state N

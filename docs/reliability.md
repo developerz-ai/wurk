@@ -288,7 +288,8 @@ job runs through `Wurk::Middleware::PoisonPill`:
 - `INCR super_fetch:recovered:<jid>` with a **72h TTL** (wire-compatible with
   Sidekiq Pro — tooling that watches those keys expects 72h).
 - The counter is dropped when the job **acks** — the round trip that removes it
-  from its private list carries the `DEL`, so the reset costs nothing extra.
+  from its private list carries the `DEL`, so the reset costs no extra round
+  trip (it is still a Redis command, one of the three in that pipeline).
   Anything that finishes an attempt counts (a clean run, or a raise that booked
   a retry): the job proved it does not take its worker down. Only reclaims of an
   attempt that never finished accumulate, so unrelated crashes spread across the

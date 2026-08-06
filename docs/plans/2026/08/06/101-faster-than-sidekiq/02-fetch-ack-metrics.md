@@ -25,6 +25,6 @@
 
 ## Done when
 
-- Busy-queue steady state ≤2 Redis commands/job measured via the `INFO commandstats` method (`docs/benchmarks.md:54`), down from ~10.
+- Busy-queue steady state ≤3 Redis commands/job measured via the `INFO commandstats` method (`docs/benchmarks.md`, "Why wurk is slower"), down from ~10. 3, not the ~2 this line first asked for: step 4 settled on keeping the poison-pill `DEL`, so LREM + DEL + LMOVE is the floor for this command shape. `bench/command_count.rb` is the authority, and it holds the count to exactly that in both directions.
 - noop ratio moves materially (expected into ≥0.8× territory before slice 03).
 - kill-9 reclaim, graceful drain, pause/unpause integration tests green; parity green; coverage ≥90/90.

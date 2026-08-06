@@ -4,7 +4,8 @@
 > No code. This file is the record of what was decided, what it costs, what the
 > implementation is *required* to do, and what would reverse the decision.
 
-Slice 02 removes ~9 of the ~10 Redis commands wurk spends per job. All three of
+Slice 02 removes 7 of the ~10 Redis commands wurk spends per job, leaving the 3
+the reliable fetch itself costs (`bench:command_count`). All three of
 its moves are wire-compat-safe — no Redis key, no JSON field, no score format
 changes — and all three are **behavior-visible**. Wire compat is not the bar;
 "a user or an operator can observe the difference" is. Each one is written up

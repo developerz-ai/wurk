@@ -22,8 +22,8 @@ require_relative "support"
 # counted in commands.
 #
 # The budget is re-baselined to 3, the settled floor for this command shape —
-# down from ~10 (docs/benchmarks.md:58) before this PR group. The one
-# candidate to lose was the poison-pill DEL, meaningful only for a job the
+# down from ~10 (docs/benchmarks.md, "Why wurk is slower") before this PR group.
+# The one candidate to lose was the poison-pill DEL, meaningful only for a job the
 # reaper reclaimed — step 4 of
 # docs/plans/2026/08/06/101-faster-than-sidekiq/02-fetch-ack-metrics.md, now
 # settled: it stays. A reclaimed payload is byte-identical to a first-attempt
@@ -33,7 +33,7 @@ require_relative "support"
 # folding LREM + DEL + LMOVE into one script would read as 4 here, not 1. Those
 # 3 commands cost one round trip between them (down from 4 before this PR
 # group), which is the number that actually drives throughput — see
-# `bench:fetch_execute` and docs/benchmarks.md:106.
+# `bench:fetch_execute` and docs/benchmarks.md, "Status".
 #
 # Two costs that used to show here are already gone: an SMEMBERS of the paused
 # set per fetch pass (Fetcher::Reliable now reads that SET once per PAUSED_TTL)
@@ -62,6 +62,13 @@ require_relative "support"
 
 JOBS   = Integer(ENV.fetch("WURK_BENCH_CMD_JOBS", "500"))
 BUDGET = Float(ENV.fetch("WURK_BENCH_CMD_BUDGET", "3"))
+# The floor, checked as strictly as the ceiling. A count that DROPS is a win,
+# but an unannounced one leaves the comment above, docs/benchmarks.md and the
+# plan all quoting a number no run reproduces — the failure mode this script
+# exists to prevent, in the direction a budget alone can't see. Landing a
+# reduction means re-baselining here and republishing the prose in the same
+# commit, which is the point.
+BASELINE = Float(ENV.fetch("WURK_BENCH_CMD_BASELINE", "3"))
 WARMUP = [JOBS / 10, 1].max
 
 # Redis records CONFIG RESETSTAT *after* it clears the counters, so the reset
@@ -144,4 +151,12 @@ per_job = report(calls, JOBS)
 $stdout.flush
 
 abort format("✗ %.2f commands/job, over the budget of %.2f", per_job, BUDGET) if per_job > BUDGET
-puts format("✓ %.2f commands/job, within the budget of %.2f", per_job, BUDGET)
+if per_job < BASELINE
+  abort format(
+    "✗ %.2f commands/job, under the recorded baseline of %.2f — re-baseline this script and republish " \
+    "docs/benchmarks.md from this run",
+    per_job, BASELINE
+  )
+end
+puts format("✓ %.2f commands/job, within the budget of %.2f and at the recorded baseline of %.2f",
+            per_job, BUDGET, BASELINE)
