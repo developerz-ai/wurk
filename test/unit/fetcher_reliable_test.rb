@@ -76,8 +76,8 @@ class FetcherReliableTest < Wurk::Test::UnitCase
   end
 
   # Every queue paused → nothing to block on, so retrieve_work must back off a
-  # poll interval itself. Returning instantly hot-loops Processor#run and pays
-  # an SMEMBERS of the paused set on every pass (upstream Sidekiq #4825).
+  # poll interval itself. Returning instantly hot-loops Processor#run on passes
+  # that can never return a job (upstream Sidekiq #4825).
   def test_retrieve_work_backs_off_a_poll_interval_when_no_queue_is_fetchable
     @config.fetch_poll_interval = 0.2
     Wurk::Queue.new(@queue_name).pause!

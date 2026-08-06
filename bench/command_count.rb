@@ -16,12 +16,12 @@ require_relative "support"
 # vs_sidekiq.rb — run it on its own via `rake bench:command_count`.
 #
 # EXPECTED TO FAIL until the fetch/ack/metrics batching lands: steady state
-# today is 10 commands per job against a budget of 2 — 6 unbatched
-# Metrics::History writes (4 HINCRBY + 2 EXPIRE, one pair per time bucket),
-# LMOVE + LREM + DEL for reliable fetch, ack and poison-pill retire, and one
-# SMEMBERS of the paused set per fetch. That red is the tripwire naming the
-# work, not a broken bench. (docs/benchmarks.md quotes ~12 from a hand-run of
-# the same method; the printed breakdown below is the reproducible count.)
+# today is 9 commands per job against a budget of 2 — 6 unbatched
+# Metrics::History writes (4 HINCRBY + 2 EXPIRE, one pair per time bucket), plus
+# LMOVE + LREM + DEL for reliable fetch, ack and poison-pill retire. That red is
+# the tripwire naming the work, not a broken bench. (An SMEMBERS of the paused
+# set per fetch used to make it 10; Fetcher::Reliable now reads that SET once
+# per PAUSED_TTL, so it no longer shows up in the table at all.)
 #
 # Only the drain is counted. Enqueue happens before CONFIG RESETSTAT — it is
 # the client's cost and enqueue.rb already benches it — and a warmup pass runs

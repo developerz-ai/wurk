@@ -31,6 +31,15 @@ module Wurk
       # Default BLMOVE block timeout; overridable via config.fetch_poll_interval.
       TIMEOUT = 2
 
+      # How long a fetcher may answer from its own copy of the `paused` SET
+      # before re-reading it. Deliberately equal to the default poll interval:
+      # a worker parked in BLMOVE already cannot observe a pause until that
+      # block returns, so caching the busy path for the same window leaves the
+      # fleet's worst-case pause latency where it was. A constant, never a
+      # config knob — see
+      # docs/plans/2026/08/06/101-faster-than-sidekiq/00-semantics-signoff.md.
+      PAUSED_TTL = 2
+
       # Backoff for the quieted short-circuit. Manager#quiet terminates the
       # shared fetcher before it terminates the processors, and Processor#run
       # loops on its *own* flag — so in that window every processor would spin
@@ -91,10 +100,33 @@ module Wurk
         "#{public_queue}|#{host}|#{::Process.pid}|#{Component::PROCESS_NONCE}|#{index}"
       end
 
+      # Guards the generation bump only. Fetchers read the counter without it —
+      # a torn read is impossible for an Integer reference, and a fetcher that
+      # misses a bump by microseconds picks it up on its next pass.
+      PAUSED_GENERATION_LOCK = Mutex.new
+
+      @paused_generation = 0
+
+      class << self
+        # Every fetcher in this process caches the paused SET against this
+        # counter, so bumping it expires all of them at once.
+        attr_reader :paused_generation
+
+        # Queue#pause!/#unpause! call this. Without it a host app that pauses a
+        # queue from inside a job would keep watching its own workers drain that
+        # queue for up to PAUSED_TTL — the one staleness the sign-off refuses.
+        def invalidate_paused_cache!
+          PAUSED_GENERATION_LOCK.synchronize { @paused_generation += 1 }
+        end
+      end
+
       def initialize(capsule)
         super()
         @config = capsule
         @done = false
+        @paused = nil
+        @paused_generation = nil
+        @paused_expires_at = 0.0
       end
 
       # Every pass that yields no job has to cost wall-clock time: Processor#run
@@ -110,9 +142,8 @@ module Wurk
 
         queues = queues_cmd
         # Nothing fetchable — every queue paused, or none configured. Back off a
-        # full poll interval rather than re-running queues_cmd (an SMEMBERS per
-        # pass, on the main pool) as fast as the CPU allows. Mirrors Sidekiq's
-        # BasicFetch guard, upstream #4825.
+        # full poll interval rather than re-running queues_cmd as fast as the CPU
+        # allows. Mirrors Sidekiq's BasicFetch guard, upstream #4825.
         if queues.empty?
           sleep poll_interval
           return nil
@@ -189,12 +220,28 @@ module Wurk
         requeue_pipelined(conn, in_progress, eval_method: :eval_with_source)
       end
 
-      # SMEMBERS of the `paused` SET. One round-trip per fetch pass; the
-      # set is tiny in practice (one entry per paused queue) so the cost
-      # is dominated by the BLMOVE that follows. Returns a Set for O(1)
-      # lookup against the (often weighted-expanded) queue list.
+      # SMEMBERS of the `paused` SET, at most once per PAUSED_TTL per fetcher
+      # instead of once per fetch pass — on a busy queue that was a full round
+      # trip per job spent re-confirming a set that is empty for almost every
+      # install. Returns a Set for O(1) lookup against the (often
+      # weighted-expanded) queue list.
+      #
+      # Monotonic clock, so an NTP step can't pin the cache open. Per instance,
+      # so it dies with the fetcher and can never cross a fork.
+      #
+      # Processor threads share one fetcher and race here. The loser pays a
+      # second SMEMBERS and overwrites with an equally fresh read; @paused is
+      # published before the freshness stamps so a reader that trusts the stamps
+      # can never see the value they don't belong to.
       def paused_names
-        config.redis(idempotent: true) { |conn| conn.call('SMEMBERS', Keys::PAUSED_SET) }.to_set
+        generation = self.class.paused_generation
+        now = ::Process.clock_gettime(::Process::CLOCK_MONOTONIC)
+        return @paused if @paused_generation == generation && now < @paused_expires_at
+
+        @paused = config.redis(idempotent: true) { |conn| conn.call('SMEMBERS', Keys::PAUSED_SET) }.to_set
+        @paused_generation = generation
+        @paused_expires_at = now + PAUSED_TTL
+        @paused
       end
 
       # Both LMOVE forms claim apply-safety, so fetch keeps the full

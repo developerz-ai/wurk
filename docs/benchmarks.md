@@ -51,17 +51,19 @@ Forking does not close the gap. A stock Sidekiq user reaches multi-core by runni
 
 ## Why wurk is slower
 
-Redis round-trips per job, counted with `INFO commandstats` over 500 jobs:
+Redis commands per job, counted with `INFO commandstats` over 500 jobs. Reproduce with `bin/rake bench:command_count`, which prints the breakdown below and is the source these numbers are published from:
 
 | Engine | Per job | Breakdown |
 |---|---|---|
 | Sidekiq | ~1 | 1 BRPOP. Stat counters buffered in memory, flushed on a timer. |
-| Wurk | ~12 | 2 reliable fetch (LMOVE + LREM) · 9 metrics (6 HINCRBY + 3 EXPIRE) · 1 SMEMBERS |
+| Wurk | ~9 | 3 fetch + ack (LMOVE, then a pipelined LREM + DEL) · 6 metrics (4 HINCRBY + 2 EXPIRE) |
 
 Two costs, opposite verdicts:
 
 - **Reliable fetch** — 2 round-trips vs BRPOP's 1. This is [`Wurk::Fetcher::Reliable`](reliability.md), the default. Sidekiq's equivalent (`super_fetch`) is a paid Pro feature; stock Sidekiq's BRPOP loses in-flight jobs when a worker is killed. The extra round-trip buys a guarantee, and is not a defect.
-- **Unbatched metrics** — 9 of the 12. `Wurk::Metrics::History` writes 3 HINCRBY + EXPIRE per job, twice over. Sidekiq buffers identical counters in memory and flushes on an interval. This is the actual gap.
+- **Unbatched metrics** — 6 of the 9. `Wurk::Metrics::History` writes 2 HINCRBY + EXPIRE per job, twice over. Sidekiq buffers identical counters in memory and flushes on an interval. This is the actual gap.
+
+The paused SET used to add a seventh, an `SMEMBERS` on every fetch pass; it is now read at most once per [`PAUSED_TTL`](reliability.md#fetch-order-and-polling) per fetcher and rounds to nothing per job.
 
 ## Running it
 
