@@ -60,11 +60,17 @@ module Wurk
       # LREM count=1 is idempotent for our payloads since each job's JSON
       # contains a unique `jid`.
       #
+      # `queue_name` (the queue without its `queue:` prefix) and
+      # `private_queue` come off the fetcher's per-queue cache at build time:
+      # both are pure functions of the queue this unit came from, so deriving
+      # them here would be a per-job cost for a per-queue fact.
+      #
       # `jid` is filled in by the Processor once it has parsed the payload —
       # the fetcher never parses. It is only used to retire the job's
       # poison-pill recovery counter, so an ACK without one is still a
       # complete ACK.
-      UnitOfWork = Struct.new(:queue, :job, :config, :jid, :fetcher, keyword_init: true) do
+      UnitOfWork = Struct.new(:queue, :queue_name, :private_queue, :job, :config, :jid, :fetcher,
+                              keyword_init: true) do
         # Deferred, never skipped: the LREM goes back to the fetcher, which
         # pipelines it in front of the next fetch's LMOVE instead of spending a
         # round trip of its own. Ordering against the job is unchanged — the
@@ -79,14 +85,16 @@ module Wurk
         # rides the same round trip rather than taking one of its own: a
         # per-job call would be a fetch+execute regression for the sake of a
         # key that exists for roughly no jobs. See Middleware::PoisonPill.
+        #
+        # Sending it only for the jobs that own one is not available to us:
+        # whether a job was reclaimed lives in the counter, and a reclaimed
+        # payload is byte-identical to a first-attempt one (the job JSON is
+        # wire-frozen, so the reaper cannot flag it). Reading the counter to
+        # decide would spend the very round trip the DEL is riding for free.
         def write_ack(pipe)
-          pipe.call('LREM', Reliable.private_queue_name(queue), 1, job)
+          pipe.call('LREM', private_queue, 1, job)
           job_jid = jid.to_s
           Middleware::PoisonPill.clear_in(pipe, job_jid) unless job_jid.empty?
-        end
-
-        def queue_name
-          queue.delete_prefix(Keys::QUEUE_PREFIX)
         end
 
         def requeue
@@ -95,8 +103,10 @@ module Wurk
       end
 
       # Class-level: the name is a pure function of the public queue and this
-      # process's identity, and the fetcher, its units and the Reaper all need
-      # it. Index defaults to 0 — we run one fetcher per capsule today.
+      # process's identity, and both the fetcher and the Reaper need it (the
+      # fetcher's units carry the string #queue_keys built for them, so nothing
+      # on the hot path calls this per job). Index defaults to 0 — we run one
+      # fetcher per capsule today.
       # Multi-processor topology (one private list per processor slot) is a
       # future Manager concern.
       #
@@ -140,6 +150,10 @@ module Wurk
         @paused_expires_at = 0.0
         @pending_acks = {}
         @pending_lock = ::Mutex.new
+        @queue_keys = {}
+        @queue_keys_pid = ::Process.pid
+        @prefixed_queues = nil
+        @prefixed_source = nil
       end
 
       # Take custody of a finished job's LREM instead of sending it now. One
@@ -232,16 +246,19 @@ module Wurk
       end
 
       # Prefixed queue keys (`queue:<name>`) in fetch order. Strict mode
-      # preserves declaration order. Random/weighted shuffle each call —
-      # `@queues` is pre-expanded by weight in Capsule#queues=, so uniform
-      # shuffle yields weighted fairness; .uniq trims duplicates. Paused
-      # queues are filtered after shuffle so the membership test runs on
-      # the smallest possible set.
+      # preserves declaration order and, with nothing paused, hands back the
+      # prebuilt array as-is — the steady-state fetch allocates nothing here,
+      # matching Sidekiq's own strict path (fetch.rb:79-87). Random/weighted
+      # shuffle each call — `@queues` is pre-expanded by weight in
+      # Capsule#queues=, so uniform shuffle yields weighted fairness; .uniq
+      # trims duplicates. Paused queues are filtered after shuffle so the
+      # membership test runs on the smallest possible set.
       def queues_cmd
-        names = config.mode == :strict ? config.queues : config.queues.shuffle.uniq
-        paused = paused_names
-        names = names.reject { |q| paused.include?(q) } unless paused.empty?
-        names.map { |q| "#{Keys::QUEUE_PREFIX}#{q}" }
+        paused = paused_keys
+        keys = config.mode == :strict ? prefixed_queues : prefixed_queues.shuffle.uniq
+        return keys if paused.empty?
+
+        keys.reject { |key| paused.include?(key) }
       end
 
       # Quiet hook (Manager#quiet). Flips the drain flag so retrieve_work
@@ -301,7 +318,7 @@ module Wurk
           in_progress.each do |uow|
             Wurk::Lua::Loader.public_send(
               eval_method, pipe, :reliable_requeue,
-              keys: [self.class.private_queue_name(uow.queue), uow.queue],
+              keys: [queue_keys(uow.queue).first, uow.queue],
               argv: [uow.job]
             )
           end
@@ -319,6 +336,11 @@ module Wurk
       # install. Returns a Set for O(1) lookup against the (often
       # weighted-expanded) queue list.
       #
+      # Members are unprefixed on the wire (Sidekiq Pro's `paused` SET, which we
+      # never touch); the cache stores them prefixed because the only reader
+      # tests them against the `queue:<name>` keys it is about to LMOVE, and
+      # prefixing here is once per TTL instead of once per queue per pass.
+      #
       # Monotonic clock, so an NTP step can't pin the cache open. Per instance,
       # so it dies with the fetcher and can never cross a fork.
       #
@@ -326,15 +348,61 @@ module Wurk
       # second SMEMBERS and overwrites with an equally fresh read; @paused is
       # published before the freshness stamps so a reader that trusts the stamps
       # can never see the value they don't belong to.
-      def paused_names
+      def paused_keys
         generation = self.class.paused_generation
         now = ::Process.clock_gettime(::Process::CLOCK_MONOTONIC)
         return @paused if @paused_generation == generation && now < @paused_expires_at
 
-        @paused = config.redis(idempotent: true) { |conn| conn.call('SMEMBERS', Keys::PAUSED_SET) }.to_set
+        members = config.redis(idempotent: true) { |conn| conn.call('SMEMBERS', Keys::PAUSED_SET) }
+        @paused = members.to_set { |q| "#{Keys::QUEUE_PREFIX}#{q}" }
         @paused_generation = generation
         @paused_expires_at = now + PAUSED_TTL
         @paused
+      end
+
+      # `queue:<name>` for every queue this capsule serves. Rebuilt only when
+      # Capsule#queues= swaps the list in — it always allocates a fresh array,
+      # so identity is the whole check. Published before the source it came
+      # from, so a reader that trusts the source can never see a list built
+      # from a different one.
+      def prefixed_queues
+        source = config.queues
+        return @prefixed_queues if @prefixed_source.equal?(source)
+
+        @prefixed_queues = source.map { |q| "#{Keys::QUEUE_PREFIX}#{q}".freeze }.freeze
+        @prefixed_source = source
+        @prefixed_queues
+      end
+
+      # The two strings a fetch derives from a public queue key: this process's
+      # private list for it (a `gethostname` syscall plus a five-part
+      # interpolation) and the unprefixed name the Processor tags the job with.
+      # Both are pure functions of the queue and this process's identity, so
+      # they cost one build per queue rather than two per job.
+      #
+      # Rebuilt when the pid moves: a fetcher materialized before a fork would
+      # otherwise keep claiming into a private list stamped with the parent's
+      # pid, which the Reaper reads as owned by a live process — so nothing this
+      # child leaves behind would ever be reclaimed.
+      #
+      # Copy-on-write rather than mutated in place: processor threads share one
+      # fetcher and read this without a lock. A racing writer's entry can be
+      # lost, and the next fetch rebuilds it.
+      def queue_keys(public_q)
+        pid = ::Process.pid
+        if @queue_keys_pid != pid
+          @queue_keys = {}
+          @queue_keys_pid = pid
+        end
+
+        cache = @queue_keys
+        cached = cache[public_q]
+        return cached if cached
+
+        built = [self.class.private_queue_name(public_q).freeze,
+                 public_q.delete_prefix(Keys::QUEUE_PREFIX).freeze].freeze
+        @queue_keys = cache.merge(public_q => built)
+        built
       end
 
       # Both LMOVE forms claim apply-safety, so fetch keeps the full
@@ -347,7 +415,7 @@ module Wurk
       # A replayed ACK is a no-op (LREM removes nothing the second time, DEL is
       # already done), so folding it in costs the retry nothing.
       def lmove(public_q, ack = nil)
-        priv = self.class.private_queue_name(public_q)
+        priv, name = queue_keys(public_q)
         job = config.redis(idempotent: true) do |conn|
           if ack
             conn.pipelined do |pipe|
@@ -358,7 +426,7 @@ module Wurk
             conn.call('LMOVE', public_q, priv, 'RIGHT', 'LEFT')
           end
         end
-        job ? UnitOfWork.new(queue: public_q, job: job, config: config, fetcher: self) : nil
+        job ? unit_of_work(public_q, priv, name, job) : nil
       rescue StandardError
         # The ACK left its slot but never reached Redis. Hand it back so a
         # later flush still retires the job — otherwise a finished job sits in
@@ -368,7 +436,7 @@ module Wurk
       end
 
       def blmove(public_q)
-        priv = self.class.private_queue_name(public_q)
+        priv, name = queue_keys(public_q)
         timeout = poll_interval
         # Dedicated fetch pool, not the main one: a parked BLMOVE holds its slot
         # for the whole block window, so routing it here keeps idle fetchers from
@@ -378,7 +446,14 @@ module Wurk
         job = config.fetch_redis(idempotent: true) do |conn|
           conn.blocking_call(timeout + 1, 'BLMOVE', public_q, priv, 'RIGHT', 'LEFT', timeout)
         end
-        job ? UnitOfWork.new(queue: public_q, job: job, config: config, fetcher: self) : nil
+        job ? unit_of_work(public_q, priv, name, job) : nil
+      end
+
+      # Both fetch paths hand the unit every string its Processor and its ACK
+      # will need, so neither re-derives one per job.
+      def unit_of_work(public_q, priv, name, job)
+        UnitOfWork.new(queue: public_q, queue_name: name, private_queue: priv,
+                       job: job, config: config, fetcher: self)
       end
 
       # BLMOVE block timeout for an empty poll. `config.fetch_poll_interval`

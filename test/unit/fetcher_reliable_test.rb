@@ -79,6 +79,16 @@ class FetcherReliableTest < Wurk::Test::UnitCase
     assert_same @capsule, uow.config
   end
 
+  # The ACK is written from a string the fetch already built, so a finished job
+  # never re-derives the private list name (a gethostname syscall) to retire
+  # itself.
+  def test_unit_of_work_carries_the_private_list_it_will_be_acked_from
+    enqueue('p1')
+    uow = @fetcher.retrieve_work
+
+    assert_equal private_queue, uow.private_queue
+  end
+
   def test_retrieve_work_returns_nil_when_terminated
     @fetcher.terminate
 
@@ -477,6 +487,38 @@ class FetcherReliableTest < Wurk::Test::UnitCase
     @fetcher.queues_cmd.each { |q| assert_includes %w[queue:hot queue:cold], q }
   end
 
+  # The strict path is the steady state for almost every install, and it runs
+  # once per fetch attempt: with nothing paused it must hand back the array it
+  # built at first use rather than re-prefixing every queue name.
+  def test_queues_cmd_strict_reuses_the_array_it_prebuilt
+    @capsule.queues = %W[#{@queue_name} #{@queue_name}-b]
+
+    assert_same @fetcher.queues_cmd, @fetcher.queues_cmd
+  end
+
+  # ...but the prebuild is a cache, not a snapshot taken at boot: Capsule#queues=
+  # is a public setter, so a fetcher that kept serving the old list would fetch
+  # from queues it is no longer configured for.
+  def test_queues_cmd_follows_a_capsule_that_swaps_its_queue_list
+    @capsule.queues = %W[#{@queue_name}-a]
+
+    assert_equal ["#{@public_queue}-a"], @fetcher.queues_cmd
+
+    @capsule.queues = %W[#{@queue_name}-b]
+
+    assert_equal ["#{@public_queue}-b"], @fetcher.queues_cmd
+  end
+
+  # A paused queue still drops out of the strict list — the prebuilt array is
+  # only handed back untouched when there is nothing to filter.
+  def test_queues_cmd_strict_still_filters_a_paused_queue
+    other = "#{@queue_name}-other"
+    @capsule.queues = [@queue_name, other]
+    Wurk::Queue.new(other).pause!
+
+    assert_equal [@public_queue], @fetcher.queues_cmd
+  end
+
   # --- private queue naming -----------------------------------------
 
   def test_private_queue_name_uses_pipe_separators_and_encodes_identity
@@ -496,6 +538,33 @@ class FetcherReliableTest < Wurk::Test::UnitCase
 
     assert_equal @fetcher.identity.split(':').last, nonce
     assert_equal nonce, Wurk::Fetcher::Reliable.private_queue_name(@public_queue).split('|')[3]
+  end
+
+  # Two strings per fetch (the private list key and the unprefixed queue name)
+  # are pure functions of the queue, and the private one costs a gethostname
+  # syscall to build — so they are built once per queue, not once per job.
+  def test_the_strings_derived_from_a_queue_are_built_once
+    assert_same @fetcher.send(:queue_keys, @public_queue), @fetcher.send(:queue_keys, @public_queue)
+    assert_equal [private_queue, @queue_name], @fetcher.send(:queue_keys, @public_queue)
+  end
+
+  # The pid is half the private list's identity. A fetcher materialized before a
+  # fork would keep claiming into a list stamped with the parent's pid — and the
+  # Reaper reads that owner as alive, so nothing this child left behind would
+  # ever be reclaimed. Simulates the fork by aging the cache's pid stamp; a real
+  # one is covered by the swarm integration tests.
+  def test_a_fetch_after_a_fork_claims_into_this_process_private_list
+    inherited = "#{@public_queue}|parent-host|1|parent-nonce|0"
+    @fetcher.instance_variable_set(:@queue_keys, { @public_queue => [inherited, @queue_name] })
+    @fetcher.instance_variable_set(:@queue_keys_pid, 1)
+    enqueue('after-fork')
+
+    @fetcher.retrieve_work
+
+    assert_equal 1, llen(private_queue)
+    assert_equal 0, llen(inherited), "the parent's private list must not be claimed into"
+  ensure
+    @pool.with { |c| c.call('DEL', inherited) }
   end
 
   def test_private_queue_name_honors_dyno_env_when_set

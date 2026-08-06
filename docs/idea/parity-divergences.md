@@ -258,6 +258,6 @@ dominate and the cache invisible. In exchange, a queue that is not paused —
 effectively all of them, effectively always — stops costing a round trip per
 job to confirm it.
 
-**Anchor:** `lib/wurk/fetcher/reliable.rb` (`queues_cmd`, `paused_names`),
+**Anchor:** `lib/wurk/fetcher/reliable.rb` (`queues_cmd`, `paused_keys`),
 `lib/wurk/queue.rb` (`pause!`, `unpause!`, `paused?`), Pro §6,
 `docs/plans/2026/08/06/101-faster-than-sidekiq/00-semantics-signoff.md`.

@@ -22,14 +22,22 @@ require_relative "support"
 # counted in commands.
 #
 # So this is still EXPECTED TO FAIL: 3 commands per job against a budget of 2.
-# The one left to lose is the poison-pill DEL, which is meaningful only for a
-# job the reaper reclaimed — skipping it for the rest is the open question in
-# docs/plans/2026/08/06/101-faster-than-sidekiq/02-fetch-ack-metrics.md step 4.
-# That red is the tripwire naming the work, not a broken bench. Two costs that
-# used to show here are already gone: an SMEMBERS of the paused set per fetch
-# pass (Fetcher::Reliable now reads that SET once per PAUSED_TTL) and 6
-# Metrics::History writes per job (Metrics::Accumulator folds them in memory;
-# Metrics::Flusher drains them every FLUSH_INTERVAL).
+# The one candidate to lose was the poison-pill DEL, meaningful only for a job
+# the reaper reclaimed — step 4 of
+# docs/plans/2026/08/06/101-faster-than-sidekiq/02-fetch-ack-metrics.md, now
+# settled: it stays. A reclaimed payload is byte-identical to a first-attempt
+# one (the job JSON is wire-frozen), so only the counter knows, and reading it
+# to decide costs more than the DEL rides for. Nor can Lua hide the other two:
+# `INFO commandstats` counts a script's own calls as well as the EVALSHA, so
+# folding LREM + DEL + LMOVE into one script would read as 4 here, not 1.
+# 3 is therefore the floor for this command shape, and those 3 commands cost
+# one round trip between them. That leaves the budget for the slice's verify
+# step to re-baseline against what the shape can actually reach.
+#
+# Two costs that used to show here are already gone: an SMEMBERS of the paused
+# set per fetch pass (Fetcher::Reliable now reads that SET once per PAUSED_TTL)
+# and 6 Metrics::History writes per job (Metrics::Accumulator folds them in
+# memory; Metrics::Flusher drains them every FLUSH_INTERVAL).
 #
 # Those metrics writes are ZERO here, not amortized: this loop runs no Launcher,
 # so no flusher ticks inside the window. A real worker pays one 6-command
