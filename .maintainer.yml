@@ -13,8 +13,9 @@
 # for reviewer bots (coderabbit/copilot) to settle before acting. The native
 # review: block below activates the developerz review lane alongside CodeRabbit
 # (force: true, advisory — never requests changes, never approves). Everything
-# not set here uses the schema defaults (release: release-please, so merged
-# waves cut a batched release).
+# not set here uses the schema defaults. release: is now declared explicitly
+# (see the release: block) rather than inherited, because the inherited default
+# described a lane this repo does not run.
 version: 1
 
 tone:
@@ -83,6 +84,29 @@ review:
     dedupe: true
   path_filters: []
   path_instructions: []
+
+release:
+  # DECLARED, not inherited (wurk#328). The schema default is
+  # manager: release-please, which implies batched release PRs driven by
+  # release-please-config.json + .release-please-manifest.json. Neither file
+  # exists here and no release PR has ever been opened, so the inherited
+  # default described a lane this repo does not run.
+  #
+  # What actually cuts a release:
+  #   1. an operator tags vX.Y.Z
+  #   2. .github/workflows/release.yml fires on push: tags: ["v*"], cuts the
+  #      GitHub Release and publishes to RubyGems via OIDC trusted publishing
+  #   3. the maintainer agent writes the categorized notes at tag time
+  #      (see v1.2.1, published by developerz-ai[bot])
+  #
+  # `none` is the only value in the enum (release-please | none) that describes
+  # that, and it means "no release MANAGER" — it does not govern the agent's
+  # note generation, which the schema does not model at all.
+  manager: none
+  # Left at the default. The registry channels (incl. rubygems) are reserved and
+  # REJECTED at validation time, so publishing to RubyGems is declared by
+  # release.yml's OIDC step, not here.
+  channels: [github-release]
 
 escalate:
   always: [security, license, cla]
