@@ -1,6 +1,6 @@
 # Wurk
 
-> Wurk is a 100% API-compatible, free, faster drop-in replacement for Sidekiq, Sidekiq Pro, and Sidekiq Enterprise. It uses the same Redis key schema, the same job JSON, and the same Ruby DSL, so an existing Sidekiq app migrates with a one-line Gemfile change. Pro and Enterprise features (batches, rate limiters, unique jobs, periodic/cron, encryption) ship in the same gem with no license check. It is faster than Sidekiq via a fork-based swarm that gives real multi-core parallelism. Requires Ruby >= 3.2 and Redis >= 7.0; on JRuby/TruffleRuby/Windows it falls back to threads-only mode, behaviorally equivalent to stock Sidekiq.
+> Wurk is a 100% API-compatible, free drop-in replacement for Sidekiq, Sidekiq Pro, and Sidekiq Enterprise. It uses the same Redis key schema, the same job JSON, and the same Ruby DSL, so an existing Sidekiq app migrates with a one-line Gemfile change. Pro and Enterprise features (batches, rate limiters, unique jobs, periodic/cron, encryption) ship in the same gem with no license check. It runs a fork-based swarm for multi-core parallelism (Enterprise's sidekiqswarm, free) and uses reliable fetch (Pro's super_fetch equivalent) by default. It is NOT currently faster than stock Sidekiq — measured at roughly 0.45x-0.86x depending on workload shape, because reliable fetch and per-job metrics cost extra Redis round-trips; see the benchmarks doc. Requires Ruby >= 3.2 and Redis >= 7.0; on JRuby/TruffleRuby/Windows it falls back to threads-only mode, behaviorally equivalent to stock Sidekiq.
 
 > Prefer everything in one fetch? See [llms-full.txt](https://developerz-ai.github.io/wurk/llms-full.txt) — this map plus the full text of every guide below, inlined.
 
@@ -8,7 +8,7 @@
 
 - **Drop-in.** Same Redis key schema, job JSON, and Ruby DSL. Every public `Wurk::*` class is also exposed under its `Sidekiq::*` name (`Sidekiq::Job`, `Sidekiq::Worker`, `Sidekiq::Batch`, `Sidekiq::Limiter`, `Sidekiq.configure_server`, `Sidekiq::Client`, `Sidekiq::Pro::Web`, `Sidekiq::Enterprise`). Existing jobs, initializers, `sidekiq_options`, and live Redis data keep working. `Sidekiq.pro?` / `Sidekiq.ent?` return `false` (Wurk advertises as free OSS) — never gate behavior on them.
 - **Free.** Pro + Enterprise feature parity in one gem. No tiers, no flags, no license check.
-- **Faster.** Every release is benchmarked against stock Sidekiq on enqueue, fetch+execute, bulk enqueue, swarm boot, and memory.
+- **Parallel.** A fork-based swarm gives real multi-core parallelism from one supervisor, and reliable fetch is the default. Every release is benchmarked against stock Sidekiq (`rake bench:vs_sidekiq`) and the results are published, including when they are unfavourable — wurk is currently slower than stock Sidekiq.
 
 ## Concurrency vs parallelism (the #1 migration gotcha)
 
@@ -37,6 +37,7 @@ Job failures do NOT reach `config.error_handlers`. `Wurk::JobRetry#local` rescue
 
 ## Docs
 
+- [Benchmarks](https://github.com/developerz-ai/wurk/blob/main/docs/benchmarks.md): measured throughput vs stock Sidekiq by workload shape, why wurk is currently slower (Redis round-trips per job), the fairness guarantees of the harness, and how to reproduce.
 - [Migration guide (Sidekiq → Wurk)](https://github.com/developerz-ai/wurk/blob/main/docs/migrate-from-sidekiq.md): the comprehensive cutover — parallelism, clustered Puma, dedicated worker, gem mappings, known incompatibilities, cutover checklist.
 - [Generated API reference (YARD)](https://developerz-ai.github.io/wurk/api/): params, return types, and examples for the public classes (`Wurk::Worker`, `Wurk::Client`, `Wurk::Configuration`, `Wurk::Batch`, `Wurk::Limiter`, `Wurk::Unique`, the `Sidekiq::*` aliases).
 - [README](https://github.com/developerz-ai/wurk/blob/main/README.md): overview, install, dashboard.
