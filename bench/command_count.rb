@@ -15,13 +15,19 @@ require_relative "support"
 # asserts a budget. It is excluded from GATE_SCRIPTS in the Rakefile alongside
 # vs_sidekiq.rb — run it on its own via `rake bench:command_count`.
 #
-# EXPECTED TO FAIL until the fetch/ack/metrics batching lands: steady state
-# today is 9 commands per job against a budget of 2 — 6 unbatched
-# Metrics::History writes (4 HINCRBY + 2 EXPIRE, one pair per time bucket), plus
-# LMOVE + LREM + DEL for reliable fetch, ack and poison-pill retire. That red is
-# the tripwire naming the work, not a broken bench. (An SMEMBERS of the paused
-# set per fetch used to make it 10; Fetcher::Reliable now reads that SET once
-# per PAUSED_TTL, so it no longer shows up in the table at all.)
+# EXPECTED TO FAIL until the ack piggyback lands: steady state today is 3
+# commands per job against a budget of 2 — LMOVE + LREM + DEL for reliable
+# fetch, ack and poison-pill retire. That red is the tripwire naming the work,
+# not a broken bench. Two costs that used to show here are gone: an SMEMBERS of
+# the paused set per fetch pass (Fetcher::Reliable now reads that SET once per
+# PAUSED_TTL) and 6 Metrics::History writes per job (Metrics::Accumulator folds
+# them in memory; Metrics::Flusher drains them every FLUSH_INTERVAL).
+#
+# Those metrics writes are ZERO here, not amortized: this loop runs no Launcher,
+# so no flusher ticks inside the window. A real worker pays one 6-command
+# pipeline per (class, minute) every 5 seconds no matter its throughput, which
+# rounds to nothing per job at any rate this bench would measure — but the
+# table below is a per-job budget, and that cost is not in it.
 #
 # Only the drain is counted. Enqueue happens before CONFIG RESETSTAT — it is
 # the client's cost and enqueue.rb already benches it — and a warmup pass runs
@@ -79,11 +85,10 @@ def report(calls, jobs)
 end
 
 # The process-global config, not a fresh Wurk::Configuration.new: the default
-# server middleware chain is registered onto this one at load (wurk.rb:297-312)
-# and 6 of today's 10 commands per job are Metrics::History writes from it. A
-# fresh Configuration starts with an EMPTY chain, so benching against one would
-# hide exactly the writes this tripwire exists to watch. Every real worker boots
-# from this object.
+# server middleware chain is registered onto this one at load (wurk.rb:297-312),
+# and a fresh Configuration starts with an EMPTY chain — so benching against one
+# would drop the whole middleware stack out of the measurement and report a
+# number no worker can reproduce. Every real worker boots from this object.
 config = Wurk.configuration
 config.logger = Logger.new(IO::NULL)
 config.redis = { url: bench_redis_url("9") }

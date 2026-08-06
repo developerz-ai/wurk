@@ -100,6 +100,7 @@ class MetricsQueryTest < Wurk::Test::UnitCase
     Wurk::Metrics::History.record(@klass_a, 100, success: true, at: @now)
     Wurk::Metrics::History.record(@klass_a, 200, success: false, at: @now - 60)
     Wurk::Metrics::History.record(@klass_b, 50, success: true, at: @now)
+    Wurk::Metrics::History.flush
 
     rows = Wurk::Metrics::Query.top_jobs(minutes: 5, now: @now)
     found = rows.to_h
@@ -117,6 +118,7 @@ class MetricsQueryTest < Wurk::Test::UnitCase
     [31, 32, 33].each do |m|
       Wurk::Metrics::History.record(@klass_a, 100, success: true, at: ::Time.utc(2026, 5, 21, 14, m, 0))
     end
+    Wurk::Metrics::History.flush
 
     found = Wurk::Metrics::Query.top_jobs(minutes: 10, now: @now).to_h
 
@@ -126,6 +128,7 @@ class MetricsQueryTest < Wurk::Test::UnitCase
   def test_top_jobs_sorted_descending_by_volume
     5.times { Wurk::Metrics::History.record(@klass_a, 1, success: true, at: @now) }
     2.times { Wurk::Metrics::History.record(@klass_b, 1, success: true, at: @now) }
+    Wurk::Metrics::History.flush
 
     rows = Wurk::Metrics::Query.top_jobs(minutes: 5, now: @now)
     classes = rows.map(&:first).select { |k| [@klass_a, @klass_b].include?(k) }
@@ -136,6 +139,7 @@ class MetricsQueryTest < Wurk::Test::UnitCase
   def test_top_jobs_filters_by_prefix
     Wurk::Metrics::History.record(@klass_a, 1, success: true, at: @now)
     Wurk::Metrics::History.record(@klass_b, 1, success: true, at: @now)
+    Wurk::Metrics::History.flush
 
     rows = Wurk::Metrics::Query.top_jobs(class_filter: 'Alpha', minutes: 5, now: @now)
     klasses = rows.map(&:first)
@@ -150,6 +154,7 @@ class MetricsQueryTest < Wurk::Test::UnitCase
   # for MID_TERM (3 days), so the whole range is backed by data.
   def test_top_jobs_hours_reaches_the_documented_ceiling
     Wurk::Metrics::History.record(@klass_a, 5, success: true, at: @now)
+    Wurk::Metrics::History.flush
 
     [9, Wurk::Metrics::Query::MAX_HOURS].each do |hours|
       rows = Wurk::Metrics::Query.top_jobs(hours: hours, now: @now)
@@ -160,6 +165,7 @@ class MetricsQueryTest < Wurk::Test::UnitCase
 
   def test_top_jobs_hours_arg_converts_to_minutes
     Wurk::Metrics::History.record(@klass_a, 7, success: true, at: @now)
+    Wurk::Metrics::History.flush
 
     rows = Wurk::Metrics::Query.top_jobs(hours: 1, now: @now)
 
@@ -171,6 +177,7 @@ class MetricsQueryTest < Wurk::Test::UnitCase
   def test_for_job_minutes_returns_chronological_rows
     Wurk::Metrics::History.record(@klass_a, 10, success: true, at: @now - 60)
     Wurk::Metrics::History.record(@klass_a, 25, success: true, at: @now)
+    Wurk::Metrics::History.flush
 
     rows = Wurk::Metrics::Query.for_job(@klass_a, minutes: 3, now: @now)
 
@@ -189,6 +196,7 @@ class MetricsQueryTest < Wurk::Test::UnitCase
 
   def test_for_job_hours_returns_chronological_rows
     Wurk::Metrics::History.record(@klass_a, 99, success: true, at: @now)
+    Wurk::Metrics::History.flush
 
     rows = Wurk::Metrics::Query.for_job(@klass_a, hours: 2, now: @now)
 

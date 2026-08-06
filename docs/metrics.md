@@ -55,9 +55,10 @@ one pipeline — the same `HINCRBY` / `EXPIRE` commands against the same keys an
 fields. `HINCRBY` is additive, so a flushed batch of N executions leaves Redis in
 byte-identical state to N individual writes. It also flushes on a graceful stop.
 
-Writing per execution cost six Redis commands — roughly 60% of everything Wurk
-spent on a job — for counters that back a chart. Two things follow from
-batching them, and both are worth knowing before you build on these numbers:
+Writing per execution cost six Redis commands — six of the nine Wurk spent on a
+job ([Benchmarks](benchmarks.md#why-wurk-is-slower)) — for counters that back a
+chart. Two things follow from batching them, and both are worth knowing before
+you build on these numbers:
 
 - **Counters lag by up to the flush interval.** A job that ran at `T` appears in
   the dashboard at `T + ≤5s`. Bucket *attribution* does not drift — the minute
