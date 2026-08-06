@@ -1,0 +1,17 @@
+# frozen_string_literal: true
+
+# Stock Sidekiq, in its OWN bundle — deliberately not the repo Gemfile.
+#
+# Wurk ships lib/sidekiq.rb (the drop-in `require "sidekiq"` shim), and Bundler
+# puts every bundled gem's lib/ on $LOAD_PATH. Inside the repo bundle, wurk's
+# shim therefore SHADOWS the real gem: `bundle exec sidekiq` boots wurk. That
+# would silently benchmark wurk against wurk and report a dead heat.
+#
+# Isolating the Sidekiq side in this Gemfile keeps wurk's lib off its load path
+# entirely, so the control really is stock Sidekiq. bench/vs_sidekiq.rb installs
+# this bundle on demand and spawns the Sidekiq workers with BUNDLE_GEMFILE
+# pointed here.
+
+source "https://rubygems.org"
+
+gem "sidekiq", ">= 8.0"
