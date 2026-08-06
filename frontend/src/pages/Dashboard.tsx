@@ -3,6 +3,7 @@ import { createSignal, createMemo, onMount, For, Show, Switch, Match } from 'sol
 import { A } from '@solidjs/router';
 import { AreaChart } from '../components/charts';
 import { AnimatedNumber } from '../components/AnimatedNumber';
+import { PageHeader } from '../components/PageHeader';
 import { Skeleton, SkeletonCards, SkeletonTable } from '../components/Skeleton';
 import { t } from '../i18n';
 import { useSSE } from '../hooks/useSSE';
@@ -127,23 +128,39 @@ export default function Dashboard() {
   });
   const hasHistory = createMemo(() => series().some((p) => p.processed > 0 || p.failed > 0));
 
+  // One definition, rendered by every branch. The page's <h1> lives here, so a
+  // branch that omits it leaves the document untitled — which is how the dashboard
+  // lost its heading in the first place. A component rather than a shared element:
+  // each branch mounts its own node instead of moving one between them.
+  const Header = () => (
+    <PageHeader icon="fa-gauge-high" title={t('nav.dashboard')} summary={t('summaries.dashboard')} />
+  );
+
   return (
     <Switch>
       <Match when={statsQuery.isLoading && !stats()}>
         <div class="obs">
+          <Header />
           <SkeletonCards count={4} />
           <SkeletonTable rows={6} cols={4} />
         </div>
       </Match>
       <Match when={statsQuery.isError && !stats()}>
-        <div class="empty-state" style={{ color: 'var(--danger)' }}>{t('common.error')}</div>
+        <div class="obs">
+          <Header />
+          <div class="empty-state" style={{ color: 'var(--danger)' }}>{t('common.error')}</div>
+        </div>
       </Match>
       <Match when={!stats()}>
-        <div class="empty-state">{t('common.empty')}</div>
+        <div class="obs">
+          <Header />
+          <div class="empty-state">{t('common.empty')}</div>
+        </div>
       </Match>
       <Match when={stats()}>
         {(s) => (
           <div class="obs">
+            <Header />
             <div class="obs-metrics">
               <A class="obs-card obs-metric obs-card--link" href="/metrics">
                 <div class="obs-metric__head">
