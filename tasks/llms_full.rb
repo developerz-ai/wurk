@@ -40,6 +40,7 @@ module WurkDocs
       docs/dashboard.md
       docs/authentication.md
       docs/metrics-history.md
+      docs/benchmarks.md
     ].freeze
 
     def self.build(root)
