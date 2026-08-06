@@ -103,7 +103,6 @@ end
 # engine, minutes not seconds, prints a Markdown table) and is excluded here;
 # run it on its own via `rake bench:vs_sidekiq`.
 BENCH_SCRIPTS = Dir.glob(File.join(GEM_ROOT, "bench", "*.rb"))
-                   .sort
                    .grep_v(%r{/support\.rb\z})
                    .freeze
 GATE_SCRIPTS = BENCH_SCRIPTS.reject { |s| File.basename(s) == "vs_sidekiq.rb" }.freeze
