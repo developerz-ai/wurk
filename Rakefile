@@ -99,13 +99,19 @@ end
 
 # `rake bench` is the REGRESSION gate — its output is fed to bin/bench-compare
 # to diff head against main, so it may only contain benchmark/ips-shaped, wurk-
-# only scripts. vs_sidekiq.rb is a different animal (comparison against another
-# engine, minutes not seconds, prints a Markdown table) and is excluded here;
-# run it on its own via `rake bench:vs_sidekiq`.
+# only scripts. Every other bench/*.rb is picked up by the glob automatically,
+# so anything that reports in a different shape has to opt out here or it joins
+# the gate and bin/bench-compare reads it as a vanished benchmark:
+#
+#   vs_sidekiq.rb    — comparison against another engine, minutes not seconds,
+#                      prints a Markdown table. `rake bench:vs_sidekiq`.
+#   command_count.rb — INFO commandstats table plus a per-job budget assertion,
+#                      no i/s at all. `rake bench:command_count`.
 BENCH_SCRIPTS = Dir.glob(File.join(GEM_ROOT, "bench", "*.rb"))
                    .grep_v(%r{/support\.rb\z})
                    .freeze
-GATE_SCRIPTS = BENCH_SCRIPTS.reject { |s| File.basename(s) == "vs_sidekiq.rb" }.freeze
+UNGATED_SCRIPTS = %w[vs_sidekiq.rb command_count.rb].freeze
+GATE_SCRIPTS = BENCH_SCRIPTS.reject { |s| UNGATED_SCRIPTS.include?(File.basename(s)) }.freeze
 
 desc "Run the benchmark gate (enqueue, fetch+execute, bulk enqueue, swarm boot, memory)"
 task :bench do

@@ -1,0 +1,160 @@
+name: bench
+
+# The `rake bench` regression gate (CLAUDE.md pillar 3): did THIS PR slow wurk
+# down versus its own base? It says nothing about stock Sidekiq — that is
+# `rake bench:vs_sidekiq`, which takes minutes per shape and never gates.
+#
+# Deleted in #296 for cost, restored here in a cheaper shape. The old workflow
+# ran the suite 7x across TWO 8vcpu jobs and duplicated the whole thing on every
+# push to main. This is one PR-only job that runs it 6x (best-of-3 per side) and
+# only when a bench input actually moved. A full `rake bench` is ~1 min, so
+# best-of-3 costs minutes rather than the 45 the old timeout implied — and
+# best-of-N is exactly what keeps the noisiest benches from false-positiving the
+# gate (#250): `wurk swarm boot` reports +/-24% run to run.
+on:
+  pull_request:
+
+permissions:
+  contents: read
+  pull-requests: read
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  # `rake bench` measures Ruby throughput only, so only Ruby/bench inputs can
+  # move it. Gate the 8vcpu job on those paths so docs-, frontend- and test-only
+  # PRs never spin a bench runner. A JOB-level `if` is correct here, unlike the
+  # step-level gate test.yml uses: bench is deliberately not a required check, so
+  # a skipped job leaves no pending status parked on the PR.
+  #
+  # Gemfile.lock is deliberately absent from the filter — it is gitignored
+  # (.gitignore:5) and can never appear in a diff; `Gemfile` and the gemspec are
+  # what actually move dependencies.
+  detect:
+    name: detect changed paths
+    runs-on: blacksmith-2vcpu-ubuntu-2404
+    timeout-minutes: 5
+    outputs:
+      bench: ${{ steps.filter.outputs.bench }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: dorny/paths-filter@7b450fff21473bca461d4b92ce414b9d0420d706 # v4.0.2
+        id: filter
+        with:
+          filters: |
+            bench:
+              - 'lib/**'
+              - 'exe/**'
+              - 'bench/**'
+              - 'bin/bench-compare'
+              - 'Rakefile'
+              - 'Gemfile'
+              - '*.gemspec'
+              - '.github/workflows/bench.yml'
+
+  compare:
+    name: bench vs base
+    needs: detect
+    if: needs.detect.outputs.bench == 'true'
+    runs-on: blacksmith-8vcpu-ubuntu-2404
+    timeout-minutes: 30
+    permissions:
+      contents: read
+      pull-requests: write # sticky delta comment
+    services:
+      redis:
+        image: redis:7.4
+        ports: ["6379:6379"]
+        options: >-
+          --health-cmd "redis-cli ping"
+          --health-interval 5s
+          --health-timeout 3s
+          --health-retries 5
+    env:
+      BUNDLE_GEMFILE: ${{ github.workspace }}/Gemfile
+      # Pinned so a floating Rails resolve can't perturb the numbers, and so this
+      # job reuses the gem cache test.yml's 8.0 legs already populated.
+      RAILS_VERSION: "8.0"
+      REDIS_URL: redis://localhost:6379/0
+      BENCH_RUNS: 3
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0 # the base run checks out base.sha, which shallow lacks
+          persist-credentials: false
+      - uses: ruby/setup-ruby@95ef2b042f9d7a56d8268cba8559e2842e2ad01b # v1
+        with:
+          ruby-version: "3.4"
+          bundler-cache: true
+          cache-version: rails-8.0
+      # The base checkout below rewinds the working tree. Keep the PR's
+      # comparator so the gate rule under review is the one that runs.
+      - name: stage comparator
+        run: cp bin/bench-compare /tmp/bench-compare
+      # Best-of-N: bin/bench-compare keeps the fastest run per label, damping the
+      # cross-process tail (GC, runner contention) that ips' own +/- does not
+      # capture. Applied symmetrically to both sides, so it cannot hide a real
+      # regression — only a slowdown present in every run survives.
+      - name: bench head
+        run: |
+          set -o pipefail # `| tee` must not swallow a crashed bench run
+          : > /tmp/bench-head.txt
+          for i in $(seq 1 "$BENCH_RUNS"); do
+            echo "::group::bench head run $i"
+            bundle exec rake bench | tee -a /tmp/bench-head.txt
+            echo "::endgroup::"
+          done
+      - name: bench base
+        env:
+          BASE_SHA: ${{ github.event.pull_request.base.sha }}
+        run: |
+          # A silently-crashed BASE run is the dangerous one: it empties the
+          # baseline, and bin/bench-compare reads "no comparable benchmarks" as
+          # a pass. Fail loudly instead of gating on nothing.
+          set -o pipefail
+          git checkout --quiet "$BASE_SHA"
+          bundle install --quiet
+          : > /tmp/bench-base.txt
+          for i in $(seq 1 "$BENCH_RUNS"); do
+            echo "::group::bench base run $i"
+            bundle exec rake bench | tee -a /tmp/bench-base.txt
+            echo "::endgroup::"
+          done
+      # Gate rule lives in bin/bench-compare (:72-75 noise band, :102 fail_gate,
+      # :115 exit) — this step only transports its verdict.
+      - name: compare, comment, gate
+        env:
+          GH_TOKEN: ${{ github.token }}
+          PR: ${{ github.event.pull_request.number }}
+          REPO: ${{ github.repository }}
+        run: |
+          code=0
+          /tmp/bench-compare /tmp/bench-base.txt /tmp/bench-head.txt > /tmp/bench-comment.md || code=$?
+          tee -a "$GITHUB_STEP_SUMMARY" < /tmp/bench-comment.md
+
+          # Sticky comment: bin/bench-compare:27 prints its marker as the first
+          # line, so a prior comment is matched by prefix and edited in place
+          # instead of stacking one per push.
+          #
+          # Best-effort past this point. A PR from a fork gets a read-only token
+          # and the comment API 403s there; the gate verdict must not be masked
+          # by a comment we were never allowed to post. The table is already in
+          # the log and the job summary above.
+          set +e
+          gh api --paginate "repos/$REPO/issues/$PR/comments" \
+            --jq '.[] | select(.body | startswith("<!-- bench-compare -->")) | .id' > /tmp/bench-comment-ids.txt
+          existing=$(head -n1 /tmp/bench-comment-ids.txt)
+          if [ -n "$existing" ]; then
+            method=PATCH
+            endpoint="repos/$REPO/issues/comments/$existing"
+          else
+            method=POST
+            endpoint="repos/$REPO/issues/$PR/comments"
+          fi
+          gh api -X "$method" "$endpoint" -F body=@/tmp/bench-comment.md > /dev/null ||
+            echo "::warning::could not post the bench comment; the delta is in the job summary"
+          exit $code

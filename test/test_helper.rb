@@ -143,6 +143,7 @@ end
 
 require_relative "support/redis_namespace"
 require_relative "support/swarm_teardown"
+require_relative "support/command_spy"
 
 module Wurk
   module Test
