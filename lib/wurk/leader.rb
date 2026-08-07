@@ -5,6 +5,7 @@ require 'socket'
 require_relative 'component'
 require_relative 'lua'
 require_relative 'pool_checkout'
+require_relative 'timer_loop'
 
 module Wurk
   # Cluster leader election via Redis `SET NX EX`. Single-leader-per-cluster
@@ -148,14 +149,20 @@ module Wurk
       @thread
     end
 
+    # Bounded at TimerLoop::JOIN_TIMEOUT like every other periodic component: a
+    # tick parked on a wedged Redis (the campaign is a `SET NX EX`, so it waits
+    # out the socket timeouts) must not hold the whole process's teardown open —
+    # the swarm parent SIGKILLs a child that overruns its shutdown grace. The
+    # CAS release below runs either way; the loop's own trailing release makes
+    # a straggler's second attempt a no-op. A straggler also stays referenced,
+    # so a restart after a timed-out stop can't campaign twice in parallel.
     def stop
       thread = @mutex.synchronize do
         @done = true
         @sleeper.signal
         @thread
       end
-      thread&.join
-      @mutex.synchronize { @thread = nil }
+      @mutex.synchronize { @thread = nil } if thread.nil? || thread.join(TimerLoop::JOIN_TIMEOUT)
       release
     end
 

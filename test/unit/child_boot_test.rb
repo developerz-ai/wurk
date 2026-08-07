@@ -175,7 +175,7 @@ class ChildBootTest < Wurk::Test::UnitCase
   def test_validate_redis_costs_a_single_round_trip
     conn = RoundTripCountingConn.new
     capsule = @config.default_capsule
-    capsule.instance_variable_set(:@redis_pool, StubPool.new(conn))
+    capsule.instance_variable_get(:@pools)[:main] = StubPool.new(conn)
 
     @boot.send(:validate_redis!)
 
@@ -212,7 +212,7 @@ class ChildBootTest < Wurk::Test::UnitCase
   def record_capsule_commands
     sent = []
     capsule = @config.default_capsule
-    capsule.instance_variable_set(:@redis_pool, Wurk::Test::RecordingPool.new(capsule.redis_pool, sent))
+    capsule.instance_variable_get(:@pools)[:main] = Wurk::Test::RecordingPool.new(capsule.redis_pool, sent)
     yield
     sent
   ensure

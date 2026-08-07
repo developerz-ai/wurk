@@ -814,8 +814,8 @@ class ConfigurationTest < Wurk::Test::UnitCase
     @config.prepare_for_fork!
     cap = @config.default_capsule
 
-    assert_nil cap.instance_variable_get(:@redis_pool)
-    assert_nil cap.instance_variable_get(:@fetch_redis_pool)
+    assert_nil cap.instance_variable_get(:@pools)[:main]
+    assert_nil cap.instance_variable_get(:@pools)[:fetch]
     assert_nil cap.fetcher
   end
 

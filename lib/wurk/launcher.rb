@@ -15,6 +15,7 @@ require_relative 'metrics/flusher'
 require_relative 'history'
 require_relative 'fetcher/reaper'
 require_relative 'timer_loop'
+require_relative 'shutdown_gate'
 
 module Wurk
   # Top-level supervisor inside each worker process. Owns the Manager pool
@@ -60,6 +61,7 @@ module Wurk
       # beating would never publish quiet=true and would expire out of the live
       # set (#236). Only #stop ends the beat, by terminating @beat_timer.
       @done = false
+      @shutdown_gate = ShutdownGate.new
       @beat_timer = TimerLoop.new(BEAT_PAUSE)
       @managers = build_managers
       build_loops
@@ -131,20 +133,35 @@ module Wurk
       fire_event(:quiet, reverse: true)
     end
 
-    # Graceful shutdown. Deadline is monotonic so wall-clock skew can't
-    # extend it. Managers stop in parallel threads so a slow capsule
-    # doesn't block its siblings — and each drain is guarded, because a
-    # capsule that blows up mid-drain (Redis down during bulk_requeue) used
-    # to surface out of `join` and skip the whole teardown tail, leaving the
+    # Graceful shutdown, single-shot: several requests can be in flight at once
+    # (a dashboard-queued TERM, the embedded host's own `Embedded#stop`, a
+    # Manager that can no longer hold its concurrency), so the first caller
+    # drains and the rest wait it out — see ShutdownGate. Deadline is monotonic
+    # so wall-clock skew can't extend it. Managers stop in parallel threads so a
+    # slow capsule doesn't block its siblings — and each drain is guarded,
+    # because a capsule that blows up mid-drain (Redis down during bulk_requeue)
+    # used to surface out of `join` and skip the whole teardown tail, leaving the
     # leader lock held, the process listed as live, and its port open.
+    #
+    # The joins get one shared budget of `deadline + TimerLoop::JOIN_TIMEOUT`,
+    # not an open-ended wait. Manager#stop is meant to run a little past the
+    # deadline — on expiry it bulk_requeues the in-flight UnitsOfWork, kills the
+    # threads and gives them a ~3s window to run their `ensure` blocks — but
+    # past that it is wedged (a `fetcher.terminate` / `bulk_requeue` parked on a
+    # Redis that stopped answering), and every further second spent waiting
+    # comes out of the teardown tail below, which the swarm parent only allows
+    # `shutdown_timeout + Swarm::SHUTDOWN_GRACE` for before it SIGKILLs us
+    # mid-drain.
     def stop
-      deadline = ::Process.clock_gettime(::Process::CLOCK_MONOTONIC) + (@config[:timeout] || 25)
-      quiet
-      stoppers = @managers.map { |m| Thread.new { teardown_step('manager') { m.stop(deadline) } } }
-      fire_event(:shutdown, reverse: true)
-      stoppers.each(&:join)
-    ensure
-      release_components
+      @shutdown_gate.run do
+        deadline = ::Process.clock_gettime(::Process::CLOCK_MONOTONIC) + (@config[:timeout] || 25)
+        quiet
+        stoppers = @managers.map { |m| Thread.new { teardown_step('manager') { m.stop(deadline) } } }
+        fire_event(:shutdown, reverse: true)
+        @shutdown_gate.join_within(stoppers, deadline + TimerLoop::JOIN_TIMEOUT)
+      ensure
+        release_components
+      end
     end
 
     def stopping?
@@ -206,12 +223,14 @@ module Wurk
       %i[stop_heartbeat clear_heartbeat].each { |step| teardown_step(step) { send(step) } }
       # Unguarded: fire_event already reports and skips past a raising hook.
       fire_event(:exit, reverse: true)
-      # Embedded only: a swarm child or standalone process exits right after
-      # #stop anyway, so disconnecting here would just make every unit test
-      # that inspects Redis post-stop rebuild a pool for no reason. Embedded
-      # hosts (Puma, a rake task) keep running and can `run` again later —
-      # without this a stop-then-run cycle doubles the live socket set.
-      teardown_step('redis-pools') { @config.reset_redis_pools! } if @embedded
+      # Unconditional. A swarm child or standalone process exits right after
+      # #stop, so for those it only closes sockets the kernel was about to close
+      # anyway — but every other driver survives us: an embedded host (Puma, a
+      # rake task) that boots a fresh Launcher later, and anything driving
+      # Launcher directly. Skipping those leaked one main + one fetch pool per
+      # capsule, live, for the life of the host. Idempotent: `reset_redis_pools!`
+      # drops the memo, so the next checkout rebuilds.
+      teardown_step('redis-pools') { @config.reset_redis_pools! }
     ensure
       # In an ensure of its own, not merely a guarded step: a leaked TCPServer
       # FD survives even a non-StandardError unwind (a second TERM landing
@@ -356,8 +375,15 @@ module Wurk
     # concurrency. Standalone hands off to the installed TERM trap; embedded
     # owns no traps, so it drains in place — on its own thread, because callers
     # may be a thread `stop` itself joins (the heartbeat) or kills (a Processor).
+    #
+    # That thread is spawned once and retained by the gate: every later request
+    # rides the same drain instead of leaving another unreferenced `stop`
+    # running behind it. Returned so a caller that can afford to wait (a test,
+    # a host teardown) has something to join.
     def request_shutdown
-      @embedded ? Thread.new { stop } : redeliver('TERM')
+      return redeliver('TERM') unless @embedded
+
+      @shutdown_gate.runner { safe_thread('launcher-stop') { stop } }
     end
 
     # Separate method so tests can stub it — really sending TERM/TSTP would

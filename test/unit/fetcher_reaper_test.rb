@@ -473,6 +473,32 @@ class FetcherReaperTest < Wurk::Test::UnitCase
     refute_predicate reaper, :running?, 'a signalled, done loop must break and the thread join'
   end
 
+  # The full-keyspace sweep is exactly the tick that outlasts a stop, and waiting
+  # it out held the whole process teardown open past the swarm parent's shutdown
+  # grace — which SIGKILLs the child mid-drain, the outcome this reaper exists to
+  # recover from. Bounded at TimerLoop::JOIN_TIMEOUT like every other periodic
+  # component.
+  def test_stop_bounds_the_join_of_a_sweep_that_will_not_finish
+    reaper = Wurk::Fetcher::Reaper.new(@config, interval: 60, lock_key: "#{Wurk::Fetcher::Reaper::LOCK_KEY}:#{@ns}-wedged")
+    wedged = never_joins_thread
+    reaper.instance_variable_set(:@thread, wedged)
+
+    reaper.stop
+
+    assert_equal [Wurk::TimerLoop::JOIN_TIMEOUT], wedged.joins, 'the join must carry a timeout'
+    assert_same wedged, reaper.instance_variable_get(:@thread),
+                'a straggler stays referenced so a restart cannot spawn a second sweep loop'
+  end
+
+  def test_stop_clears_the_thread_once_the_sweep_joins
+    reaper = Wurk::Fetcher::Reaper.new(@config, interval: 60, lock_key: "#{Wurk::Fetcher::Reaper::LOCK_KEY}:#{@ns}-joins")
+    reaper.start
+
+    reaper.stop
+
+    assert_nil reaper.instance_variable_get(:@thread)
+  end
+
   # A short interval lets wait_next time out while @done is still false, so the
   # loop falls through to tick_once (run_loop's `break if done?` ELSE side, plus
   # wait_next's `unless @done` THEN side: it actually waited).
@@ -570,6 +596,19 @@ class FetcherReaperTest < Wurk::Test::UnitCase
   # as live (the `processes` SET is global to the worker's Redis DB).
   def unowned_pid
     @unowned_pid ||= 990_000 + (object_id % 9_000)
+  end
+
+  # Stands in for a sweep still SCANning when the stop lands: `join` records the
+  # timeout it was given and reports "not finished" (nil), exactly as a real
+  # thread that outlives the bound does. Cheaper and more precise than waiting a
+  # real JOIN_TIMEOUT out.
+  def never_joins_thread
+    thread = Object.new
+    joins = []
+    thread.define_singleton_method(:joins) { joins }
+    thread.define_singleton_method(:alive?) { true }
+    thread.define_singleton_method(:join) { |timeout| joins << timeout and nil }
+    thread
   end
 
   def wait_until(timeout: 5.0)

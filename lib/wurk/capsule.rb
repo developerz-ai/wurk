@@ -30,8 +30,15 @@ module Wurk
       @mode = :strict
       @weights = { 'default' => 0 }
       @fetcher = nil
-      @redis_pool = nil
-      @fetch_redis_pool = nil
+      # One mutable Hash rather than two ivars: the pools are the only part of a
+      # capsule that legitimately changes after Configuration#freeze! — fork
+      # closes them, Launcher#stop releases them, an embedded host that boots
+      # again rebuilds them. `Object#freeze` is shallow, so the Hash stays
+      # writable and freezing a capsule keeps meaning "no more configuration"
+      # instead of "these sockets are yours forever". Before this, a reset on a
+      # frozen capsule disconnected the pool and then raised FrozenError on the
+      # memo, leaving `redis_pool` answering with a shut-down pool for good.
+      @pools = {}
       @client_chain = nil
       @server_chain = nil
     end
@@ -121,7 +128,7 @@ module Wurk
     MIN_POOL_SIZE = 10
 
     def redis_pool
-      @redis_pool ||= build_pool(size: main_pool_size, name: "#{@name}-main")
+      @pools[:main] ||= build_pool(size: main_pool_size, name: "#{@name}-main")
     end
 
     # Dedicated pool for the reliable fetcher's blocking BLMOVE: one slot per
@@ -129,18 +136,17 @@ module Wurk
     # fetch at once. Keeping fetch off the main pool is what lets an idle worker
     # hold zero main-pool connections again.
     def fetch_redis_pool
-      @fetch_redis_pool ||= build_pool(size: @concurrency, name: "#{@name}-fetch")
+      @pools[:fetch] ||= build_pool(size: @concurrency, name: "#{@name}-fetch")
     end
 
-    # Disconnect and drop cached pools. Called by Wurk::Swarm just before
-    # fork (parent side: close inherited sockets) and just after fork
-    # (child side: rebuild lazily). Connection_pool#shutdown is terminal,
-    # so dropping the reference is required — `redis_pool` will rebuild.
+    # Disconnect and drop cached pools. Called by Wurk::Swarm just before fork
+    # (parent side: close inherited sockets), just after fork (child side:
+    # rebuild lazily), and by Launcher#stop (release what this process held).
+    # Connection_pool#shutdown is terminal, so dropping the reference is
+    # required — `redis_pool` will rebuild.
     def reset_redis_pools!
-      @redis_pool&.disconnect!
-      @redis_pool = nil
-      @fetch_redis_pool&.disconnect!
-      @fetch_redis_pool = nil
+      @pools.each_value(&:disconnect!)
+      @pools.clear
     end
 
     def redis(idempotent: false, &)

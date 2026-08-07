@@ -11,8 +11,8 @@ class CapsuleTest < Wurk::Test::UnitCase
   end
 
   def teardown
-    @capsule.instance_variable_get(:@redis_pool)&.disconnect!
-    @capsule.instance_variable_get(:@fetch_redis_pool)&.disconnect!
+    @capsule.instance_variable_get(:@pools)[:main]&.disconnect!
+    @capsule.instance_variable_get(:@pools)[:fetch]&.disconnect!
   rescue ConnectionPool::PoolShuttingDownError
     # already torn down
   ensure
@@ -142,8 +142,8 @@ class CapsuleTest < Wurk::Test::UnitCase
   def test_prepare_materializes_lazy_pools
     @capsule.prepare!
 
-    refute_nil @capsule.instance_variable_get(:@redis_pool)
-    refute_nil @capsule.instance_variable_get(:@fetch_redis_pool)
+    refute_nil @capsule.instance_variable_get(:@pools)[:main]
+    refute_nil @capsule.instance_variable_get(:@pools)[:fetch]
   end
 
   # --- prepare_shared! (the half a swarm parent runs pre-fork) ----------
@@ -165,8 +165,8 @@ class CapsuleTest < Wurk::Test::UnitCase
     @capsule.prepare_shared!
 
     assert_nil @capsule.fetcher
-    assert_nil @capsule.instance_variable_get(:@redis_pool)
-    assert_nil @capsule.instance_variable_get(:@fetch_redis_pool)
+    assert_nil @capsule.instance_variable_get(:@pools)[:main]
+    assert_nil @capsule.instance_variable_get(:@pools)[:fetch]
   end
 
   def test_prepare_completes_what_prepare_shared_left
@@ -175,8 +175,8 @@ class CapsuleTest < Wurk::Test::UnitCase
     @capsule.prepare!
 
     assert_instance_of Wurk::Fetcher::Reliable, @capsule.fetcher
-    refute_nil @capsule.instance_variable_get(:@redis_pool)
-    refute_nil @capsule.instance_variable_get(:@fetch_redis_pool)
+    refute_nil @capsule.instance_variable_get(:@pools)[:main]
+    refute_nil @capsule.instance_variable_get(:@pools)[:fetch]
   end
 
   def test_prepare_shared_returns_self
@@ -390,6 +390,22 @@ class CapsuleTest < Wurk::Test::UnitCase
     cap = Wurk::Capsule.new('untouched', @config)
 
     cap.reset_redis_pools! # must not raise
+  end
+
+  # Every capsule is frozen from Launcher#run onward, and #stop releases pools
+  # after that. With the pools in ivars the reset disconnected the pool and then
+  # raised FrozenError on the memo, so `redis_pool` answered with a shut-down
+  # pool for the rest of the process's life — freezing a capsule means "no more
+  # configuration", not "these sockets are yours forever".
+  def test_reset_redis_pools_works_on_a_frozen_capsule
+    @capsule.prepare!
+    before = @capsule.redis_pool
+    @capsule.freeze
+
+    @capsule.reset_redis_pools!
+
+    refute_same before, @capsule.redis_pool, 'a frozen capsule must still rebuild its pool'
+    assert_equal('PONG', @capsule.redis { |c| c.call('PING') })
   end
 
   # --- fetcher slot ------------------------------------------------------

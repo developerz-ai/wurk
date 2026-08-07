@@ -24,16 +24,22 @@ class LauncherTest < Wurk::Test::UnitCase
     cap.concurrency = 2
     # No manual fetcher wiring — Launcher#run defaults it now (regression #35).
     @config[:tag] = @ns
-    @pool = cap.redis_pool
     @cleanup_keys = []
     @threads = []
+  end
+
+  # Resolved per call, never captured: #stop disconnects the capsule's pools and
+  # drops the memo, so a reference taken in setup would be a shut-down pool by
+  # the time teardown swept its keys.
+  def pool
+    @config.default_capsule.redis_pool
   end
 
   def teardown
     # Before the key sweep, not after: a heartbeat thread left running would
     # SADD its identity back in behind us.
     @threads.each(&:kill)
-    @pool.with do |c|
+    pool.with do |c|
       @cleanup_keys.each do |k|
         c.call('SREM', Wurk::Keys::PROCESSES, k) if k.start_with?("host-#{@ns}")
         c.call('UNLINK', k)
@@ -580,10 +586,11 @@ class LauncherTest < Wurk::Test::UnitCase
     assert reset, 'embedded #stop must disconnect the Redis pools'
   end
 
-  # A8: a swarm child or standalone process exits right after #stop anyway —
-  # disconnecting here would just force every subsequent Redis touch (this
-  # test's own teardown included) to silently rebuild a pool for nothing.
-  def test_stop_leaves_redis_pools_connected_when_not_embedded
+  # A8: not just embedded. Anything driving Launcher directly — a rake task, a
+  # test — survives #stop too, and leaked one main + one fetch pool per capsule
+  # for the life of the host. A swarm child pays nothing for the release; it
+  # was about to exit anyway.
+  def test_stop_disconnects_redis_pools_when_not_embedded
     @config[:timeout] = 0
     launcher = Wurk::Launcher.new(@config)
     silence_managers(launcher)
@@ -592,7 +599,76 @@ class LauncherTest < Wurk::Test::UnitCase
 
     launcher.stop
 
-    refute reset, 'non-embedded #stop must not disconnect the Redis pools'
+    assert reset, 'non-embedded #stop must disconnect the Redis pools too'
+  end
+
+  # The release has to survive the freeze #run performs: a capsule frozen at
+  # boot could disconnect its pool but not drop the memo, so `redis_pool` kept
+  # answering with a shut-down pool and the next boot could never reconnect.
+  def test_stop_leaves_the_capsule_able_to_rebuild_its_pools
+    @config[:timeout] = 0
+    launcher = build_isolated_launcher
+    silence_boot(launcher)
+    silence_beat(launcher)
+    track(launcher_identity(launcher))
+    launcher.run(async_beat: false)
+    before = @config.default_capsule.redis_pool
+
+    launcher.stop
+
+    rebuilt = @config.default_capsule.redis_pool
+
+    refute_same before, rebuilt, 'a stopped capsule must rebuild its pool, not hand back the shut-down one'
+    assert_equal('PONG', rebuilt.with { |c| c.call('PING') })
+  end
+
+  # A wedged capsule — a `fetcher.terminate`/`bulk_requeue` parked on a Redis
+  # that stopped answering — used to hold the whole teardown open, which is what
+  # the swarm parent SIGKILLs a child for. The join budget ends it.
+  def test_stop_does_not_wait_forever_on_a_wedged_manager
+    join_budget_of(0.3)
+    gate = Queue.new
+    launcher = launcher_with_wedged_managers(gate)
+
+    elapsed = time_of { launcher.stop }
+
+    assert_operator elapsed, :<, 2, "stop must not block on a wedged manager (took #{elapsed}s)"
+    assert_predicate launcher, :stopping?
+  ensure
+    gate << true
+  end
+
+  # One shared budget: the teardown tail past this point has its own work to do
+  # inside the parent's shutdown grace, so N wedged capsules must not each cost
+  # a full JOIN_TIMEOUT.
+  def test_stop_shares_one_join_budget_across_capsules
+    @config.capsule('extra') { |c| c.concurrency = 1 }
+    join_budget_of(1)
+    gate = Queue.new
+    launcher = launcher_with_wedged_managers(gate)
+
+    assert_equal 2, launcher.managers.size
+    elapsed = time_of { launcher.stop }
+
+    assert_operator elapsed, :<, 1.7, "one budget for both capsules, not one each (took #{elapsed}s)"
+  ensure
+    2.times { gate << true }
+  end
+
+  # Every shutdown request past the first used to spawn its own unretained
+  # `stop`, so N TERMs meant N teardowns racing through #release_components.
+  def test_repeated_shutdown_requests_drain_once_when_embedded
+    @config[:timeout] = 0
+    launcher = build_isolated_launcher(embedded: true)
+    silence_managers(launcher)
+    track(launcher_identity(launcher))
+    drains = Queue.new
+    launcher.define_singleton_method(:release_components) { drains << true }
+
+    stoppers = request_shutdown_concurrently(launcher, 4)
+
+    assert_equal 1, drains.size, 'concurrent TERMs must share one drain'
+    assert_equal 1, stoppers.uniq.size, 'every request must get the same retained stopper'
   end
 
   # Branch coverage: #stop's safe-nav teardown of the cron poller, metrics
@@ -809,7 +885,7 @@ class LauncherTest < Wurk::Test::UnitCase
 
       launcher.flush_stats
 
-      processed, failed, expired = @pool.with do |c|
+      processed, failed, expired = pool.with do |c|
         c.call('MGET', Wurk::Keys::STAT_PROCESSED, 'stat:failed', Wurk::Keys::STAT_EXPIRED)
       end
 
@@ -827,7 +903,7 @@ class LauncherTest < Wurk::Test::UnitCase
     track(launcher_identity(launcher))
 
     launcher.heartbeat
-    member = @pool.with { |c| c.call('SISMEMBER', Wurk::Keys::PROCESSES, launcher_identity(launcher)) }
+    member = pool.with { |c| c.call('SISMEMBER', Wurk::Keys::PROCESSES, launcher_identity(launcher)) }
 
     assert_equal 1, member
   end
@@ -838,7 +914,7 @@ class LauncherTest < Wurk::Test::UnitCase
     track(launcher_identity(launcher))
 
     launcher.heartbeat
-    ttl = @pool.with { |c| c.call('TTL', launcher_identity(launcher)).to_i }
+    ttl = pool.with { |c| c.call('TTL', launcher_identity(launcher)).to_i }
 
     assert_operator ttl, :>, 0
     assert_operator ttl, :<=, 60
@@ -902,15 +978,13 @@ class LauncherTest < Wurk::Test::UnitCase
     track(launcher_identity(launcher))
     redelivered = []
     launcher.define_singleton_method(:redeliver) { |s| redelivered << s }
-    sig_key = "#{launcher_identity(launcher)}-signals"
-    @pool.with { |c| c.call('LPUSH', sig_key, 'TSTP') }
-    @cleanup_keys << sig_key
+    sig_key = queue_signal(launcher, 'TSTP')
 
     launcher.heartbeat
 
     assert_equal ['TSTP'], redelivered
     refute_predicate launcher, :stopping?, 'the trap, not the beat, owns the state change'
-    drained = @pool.with { |c| c.call('LPOP', sig_key) }
+    drained = pool.with { |c| c.call('LPOP', sig_key) }
 
     assert_nil drained
   end
@@ -920,9 +994,7 @@ class LauncherTest < Wurk::Test::UnitCase
     track(launcher_identity(launcher))
     redelivered = []
     launcher.define_singleton_method(:redeliver) { |s| redelivered << s }
-    sig_key = "#{launcher_identity(launcher)}-signals"
-    @pool.with { |c| c.call('LPUSH', sig_key, 'TERM') }
-    @cleanup_keys << sig_key
+    queue_signal(launcher, 'TERM')
 
     launcher.heartbeat
 
@@ -935,9 +1007,7 @@ class LauncherTest < Wurk::Test::UnitCase
   def test_heartbeat_dispatches_tstp_directly_when_embedded
     launcher = build_isolated_launcher(embedded: true)
     track(launcher_identity(launcher))
-    sig_key = "#{launcher_identity(launcher)}-signals"
-    @pool.with { |c| c.call('LPUSH', sig_key, 'TSTP') }
-    @cleanup_keys << sig_key
+    queue_signal(launcher, 'TSTP')
 
     launcher.heartbeat
 
@@ -949,9 +1019,7 @@ class LauncherTest < Wurk::Test::UnitCase
     track(launcher_identity(launcher))
     stopped = Queue.new
     launcher.define_singleton_method(:stop) { stopped << true }
-    sig_key = "#{launcher_identity(launcher)}-signals"
-    @pool.with { |c| c.call('LPUSH', sig_key, 'TERM') }
-    @cleanup_keys << sig_key
+    queue_signal(launcher, 'TERM')
 
     launcher.heartbeat
 
@@ -1005,9 +1073,7 @@ class LauncherTest < Wurk::Test::UnitCase
     launcher.instance_variable_get(:@config).logger.define_singleton_method(:warn) do |*_a, &blk|
       warned << blk.call
     end
-    sig_key = "#{launcher_identity(launcher)}-signals"
-    @pool.with { |c| c.call('LPUSH', sig_key, 'BOGUS') }
-    @cleanup_keys << sig_key
+    queue_signal(launcher, 'BOGUS')
 
     launcher.heartbeat
 
@@ -1038,7 +1104,7 @@ class LauncherTest < Wurk::Test::UnitCase
 
     launcher.heartbeat
 
-    info = Wurk.load_json(@pool.with { |c| c.call('HGET', launcher_identity(launcher), 'info') })
+    info = Wurk.load_json(pool.with { |c| c.call('HGET', launcher_identity(launcher), 'info') })
 
     assert info['embedded']
   end
@@ -1069,7 +1135,7 @@ class LauncherTest < Wurk::Test::UnitCase
     @cleanup_keys << work_key
 
     launcher.heartbeat
-    ttl = @pool.with { |c| c.call('TTL', work_key).to_i }
+    ttl = pool.with { |c| c.call('TTL', work_key).to_i }
 
     assert_operator ttl, :>, 0
   ensure
@@ -1080,12 +1146,12 @@ class LauncherTest < Wurk::Test::UnitCase
     launcher = build_isolated_launcher
     track(launcher_identity(launcher))
     work_key = "#{launcher_identity(launcher)}:work"
-    @pool.with { |c| c.call('HSET', work_key, 'stale-tid', '{}') }
+    pool.with { |c| c.call('HSET', work_key, 'stale-tid', '{}') }
     @cleanup_keys << work_key
     Wurk::Processor::WORK_STATE.clear
 
     launcher.heartbeat
-    exists = @pool.with { |c| c.call('EXISTS', work_key) }
+    exists = pool.with { |c| c.call('EXISTS', work_key) }
 
     assert_equal 0, exists
   end
@@ -1096,6 +1162,48 @@ class LauncherTest < Wurk::Test::UnitCase
   # BOOT_RECLAIM_JOIN_TIMEOUT, and (when `seconds` is given) shortens it for
   # the duration of the block. Without the lock a shortened bound would leak
   # into the sibling test running concurrently under parallelize_me!.
+  # Shrinks #stop's manager-join budget (`deadline + TimerLoop::JOIN_TIMEOUT`,
+  # where the deadline is `now + config[:timeout]`) by moving the deadline into
+  # the past. The constant itself is process-global and shared with every other
+  # periodic component, so a parallel run must not swap it.
+  # LPUSHes `sig` onto the launcher's dashboard signal list and registers the
+  # key for cleanup. Returns the key for the tests that assert it drained.
+  def queue_signal(launcher, sig)
+    key = "#{launcher_identity(launcher)}-signals"
+    pool.with { |c| c.call('LPUSH', key, sig) }
+    @cleanup_keys << key
+    key
+  end
+
+  # A launcher whose every Manager#stop parks on `gate` — a capsule wedged on a
+  # Redis that stopped answering, which is what the join budget exists to bound.
+  def launcher_with_wedged_managers(gate)
+    launcher = Wurk::Launcher.new(@config)
+    silence_managers(launcher)
+    launcher.managers.each { |m| m.define_singleton_method(:stop) { |_d| gate.pop } }
+    launcher
+  end
+
+  # Fires `count` concurrent shutdown requests, then one more once they have
+  # landed, and returns every stopper thread they were handed.
+  def request_shutdown_concurrently(launcher, count)
+    threads = Array.new(count) { track_thread(Thread.new { launcher.send(:request_shutdown) }) }
+    stoppers = threads.map { |t| t.join(5) && t.value }
+    last = launcher.send(:request_shutdown)
+    last.join(5)
+    stoppers << last
+  end
+
+  def join_budget_of(seconds)
+    @config[:timeout] = seconds - Wurk::TimerLoop::JOIN_TIMEOUT
+  end
+
+  def time_of
+    started = ::Process.clock_gettime(::Process::CLOCK_MONOTONIC)
+    yield
+    ::Process.clock_gettime(::Process::CLOCK_MONOTONIC) - started
+  end
+
   def with_boot_reclaim_join_timeout(seconds = nil)
     BOOT_RECLAIM_TIMEOUT_LOCK.synchronize do
       return yield unless seconds
@@ -1137,11 +1245,11 @@ class LauncherTest < Wurk::Test::UnitCase
   end
 
   def published(identity, field)
-    @pool.with { |c| c.call('HGET', identity, field) }
+    pool.with { |c| c.call('HGET', identity, field) }
   end
 
   def listed?(identity)
-    @pool.with { |c| c.call('SISMEMBER', Wurk::Keys::PROCESSES, identity) }
+    pool.with { |c| c.call('SISMEMBER', Wurk::Keys::PROCESSES, identity) }
   end
 
   def track(key)
@@ -1291,7 +1399,7 @@ class LauncherTest < Wurk::Test::UnitCase
   # redis-client returns HGETALL as either a Hash or a flat Array
   # depending on version; normalize to a Hash for assertion.
   def work_hash(work_key)
-    raw = @pool.with { |c| c.call('HGETALL', work_key) }
+    raw = pool.with { |c| c.call('HGETALL', work_key) }
     raw.is_a?(Hash) ? raw : Hash[*raw]
   end
 
@@ -1302,7 +1410,7 @@ class LauncherTest < Wurk::Test::UnitCase
   end
 
   def read_daily_ttls(day)
-    @pool.with do |c|
+    pool.with do |c|
       [
         c.call('TTL', "#{Wurk::Keys::STAT_PROCESSED}:#{day}").to_i,
         c.call('TTL', "stat:failed:#{day}").to_i,
@@ -1312,10 +1420,10 @@ class LauncherTest < Wurk::Test::UnitCase
   end
 
   def read_info(launcher)
-    Wurk.load_json(@pool.with { |c| c.call('HGET', launcher_identity(launcher), 'info') })
+    Wurk.load_json(pool.with { |c| c.call('HGET', launcher_identity(launcher), 'info') })
   end
 
   def read_beat_fields(launcher)
-    @pool.with { |c| c.call('HMGET', launcher_identity(launcher), 'concurrency', 'busy', 'beat', 'quiet', 'rss') }
+    pool.with { |c| c.call('HMGET', launcher_identity(launcher), 'concurrency', 'busy', 'beat', 'quiet', 'rss') }
   end
 end
