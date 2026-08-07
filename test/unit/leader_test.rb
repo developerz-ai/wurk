@@ -93,6 +93,14 @@ class LeaderTest < Wurk::Test::UnitCase
     assert_equal Wurk::Leader::DEFAULT_TTL / 2, Wurk::Leader::DEFAULT_RENEW_INTERVAL
   end
 
+  # Well under every leader-gated consumer's own first tick (cron 60s, both
+  # rollups 60s, history 30s), so deferring the campaign costs no cluster work.
+  def test_default_initial_wait_is_shorter_than_every_gated_first_tick
+    assert_operator Wurk::Leader::DEFAULT_INITIAL_WAIT, :>, 0
+    assert_operator Wurk::Leader::DEFAULT_INITIAL_WAIT, :<, Wurk::Cron::DEFAULT_TICK_SECONDS
+    assert_operator Wurk::Leader::DEFAULT_INITIAL_WAIT, :<, Wurk::Metrics::Rollup::DEFAULT_TICK_SECONDS
+  end
+
   # ---- Owner identity ---------------------------------------------------
 
   def test_owner_matches_component_identity_format
@@ -513,6 +521,39 @@ class LeaderTest < Wurk::Test::UnitCase
     assert_predicate ldr, :leader?
   end
 
+  # The campaign must not run at tick zero. A booting process's opening Redis
+  # round trips belong to its fetcher — every leader-gated consumer waits out a
+  # 30-60s interval before its own first tick, so nothing observes the gap.
+  def test_start_defers_the_first_campaign_by_initial_wait
+    ldr = build_leader(initial_wait: 30, renew_interval: 0.05, follower_interval: 0.05)
+    ldr.start
+    sleep 0.2
+
+    refute_predicate ldr, :leader?
+    assert_nil(Wurk.redis { |c| c.call('GET', @key) }, 'the campaign must wait out initial_wait')
+  end
+
+  def test_campaign_runs_once_the_initial_wait_elapses
+    ldr = build_leader(initial_wait: 0.05, renew_interval: 0.05, follower_interval: 0.05)
+    ldr.start
+    deadline = Time.now + 2
+    sleep 0.05 until ldr.leader? || Time.now > deadline
+
+    assert_predicate ldr, :leader?
+  end
+
+  # The delay rides the same condvar as the renew wait, so a shutdown landing
+  # inside it wakes the loop instead of holding the process open for 30s.
+  def test_stop_during_the_initial_wait_does_not_wait_it_out
+    ldr = build_leader(initial_wait: 30, renew_interval: 0.05, follower_interval: 0.05)
+    ldr.start
+    started = ::Process.clock_gettime(::Process::CLOCK_MONOTONIC)
+    ldr.stop
+
+    assert_operator ::Process.clock_gettime(::Process::CLOCK_MONOTONIC) - started, :<, 5
+    refute_predicate ldr, :running?
+  end
+
   def test_stop_releases_and_clears_thread
     ldr = build_leader(renew_interval: 0.05, follower_interval: 0.05)
     ldr.start
@@ -658,7 +699,7 @@ class LeaderTest < Wurk::Test::UnitCase
     seen = Queue.new
     cfg = reporting_config { |ex, ctx| seen << [ex.message, ctx] }
     pool = raising_pool
-    ldr = Wurk::Leader.new(key: @key, pool: pool, config: cfg,
+    ldr = Wurk::Leader.new(key: @key, pool: pool, config: cfg, initial_wait: 0,
                            renew_interval: 0.02, follower_interval: 0.02)
     ldr.start
 
@@ -679,7 +720,7 @@ class LeaderTest < Wurk::Test::UnitCase
     in_tick = Queue.new
     release_tick = Queue.new
     pool = gated_pool(in_tick, release_tick)
-    ldr = Wurk::Leader.new(key: @key, pool: pool, config: nil,
+    ldr = Wurk::Leader.new(key: @key, pool: pool, config: nil, initial_wait: 0,
                            renew_interval: 5, follower_interval: 5)
     ldr.start
 
@@ -702,7 +743,7 @@ class LeaderTest < Wurk::Test::UnitCase
   def test_loop_swallows_tick_errors_without_config
     calls = Queue.new
     pool = raising_pool(calls)
-    ldr = Wurk::Leader.new(key: @key, pool: pool, config: nil,
+    ldr = Wurk::Leader.new(key: @key, pool: pool, config: nil, initial_wait: 0,
                            renew_interval: 0.02, follower_interval: 0.02)
     ldr.start
 
@@ -718,8 +759,11 @@ class LeaderTest < Wurk::Test::UnitCase
 
   private
 
+  # `initial_wait: 0` by default: the pre-campaign delay is a boot-path
+  # concern (see the DEFAULT_INITIAL_WAIT tests), and paying it in every loop
+  # test would add a second of pure sleep each. Callers can override.
   def build_leader(**)
-    ldr = Wurk::Leader.new(key: @key, **)
+    ldr = Wurk::Leader.new(key: @key, initial_wait: 0, **)
     @leaders << ldr
     ldr
   end

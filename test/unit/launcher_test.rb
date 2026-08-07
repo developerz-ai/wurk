@@ -225,6 +225,21 @@ class LauncherTest < Wurk::Test::UnitCase
     assert_equal launcher.managers, started
   end
 
+  # Time-to-first-job is what boot is measured on (bench/vs_sidekiq.rb), and
+  # the managers are the only thing #run starts that can run a job at all.
+  # Everything after them is periodic work whose first tick is seconds away,
+  # so nothing may jump the queue — least of all a Redis round trip. The
+  # reaper and its boot-time reclaim stay right behind the managers: that pair
+  # is kill-9 recovery, not decoration.
+  def test_run_starts_the_managers_before_every_background_loop
+    launcher = Wurk::Launcher.new(@config)
+    seen = record_boot_order(launcher)
+
+    launcher.run(async_beat: false)
+
+    assert_equal %i[manager reaper poller leader cron_poller metrics_rollup queue_rollup metrics_flusher], seen
+  end
+
   def test_run_without_async_beat_does_not_spawn_heartbeat_thread
     launcher = Wurk::Launcher.new(@config)
     stub_managers(launcher)
@@ -1148,6 +1163,24 @@ class LauncherTest < Wurk::Test::UnitCase
     launcher.metrics_flusher.define_singleton_method(:start) { nil }
   end
 
+  # Boot-order mirror of #record_teardown: stubs #start on every collaborator
+  # #run spins up and records, in order, the ones that ran. The reaper's
+  # reclaim! is stubbed rather than recorded — it runs on its own thread, so
+  # its position in the sequence would be a race, not an assertion.
+  def record_boot_order(launcher)
+    seen = []
+    launcher.managers.each { |m| record_stop(m, :start, seen, :manager) }
+    reaper = launcher.instance_variable_get(:@reaper)
+    record_stop(reaper, :start, seen, :reaper)
+    reaper.define_singleton_method(:reclaim!) { nil }
+    record_stop(launcher.poller, :start, seen, :poller)
+    record_stop(launcher.instance_variable_get(:@leader), :start, seen, :leader)
+    %i[cron_poller metrics_rollup queue_rollup metrics_flusher].each do |name|
+      record_stop(launcher.public_send(name), :start, seen, name)
+    end
+    seen
+  end
+
   # Stubs every collaborator #stop's teardown tail touches and records, in
   # order, the ones that actually ran — so a test can assert the tail completed
   # end to end under an injected failure. @history stays nil (history is opt-in),
@@ -1242,8 +1275,11 @@ class LauncherTest < Wurk::Test::UnitCase
 
   # The poller is the first thing #run starts, so nothing else comes up before
   # the boot fails — the rollback is asserted against a known-small partial boot.
+  # The managers are #run's first step now, so failing there leaves nothing
+  # else started — the rollback has to be driven by #stop, not by a component
+  # that happened to already be up.
   def fail_first_boot_step(launcher, message)
-    launcher.poller.define_singleton_method(:start) { raise message }
+    launcher.managers.first.define_singleton_method(:start) { raise message }
   end
 
   def capture_reported_errors

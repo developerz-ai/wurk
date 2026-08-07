@@ -71,13 +71,22 @@ module Wurk
 
     # Boot order matters:
     #   1. freeze! the config so mutations after fork are visible mistakes.
-    #   2. spawn the heartbeat thread BEFORE the managers so the dashboard
-    #      sees the process the moment it can pick up jobs.
-    #   3. start the scheduler poller + the cron poller (both leader-gated for
-    #      what they enqueue; safe to start before leadership is settled since
-    #      a non-leader tick just returns early).
-    #   4. start the managers (which start their processors).
-    #   5. start the health probe server LAST so the listener doesn't
+    #   2. start the managers FIRST. They are the only thing here on the
+    #      time-to-first-job path (the number bench/vs_sidekiq.rb measures);
+    #      everything below is periodic background work whose first tick is
+    #      seconds away, so it has nothing to gain from going ahead of them.
+    #   3. spawn the heartbeat thread, so the dashboard sees the process
+    #      right after it can pick up jobs.
+    #   4. start the reaper and the boot-time reclaim sweep — kill-9 recovery,
+    #      not decoration: a SIGKILLed sibling's in-flight jobs wait on this,
+    #      so it stays ahead of the periodic loops.
+    #   5. start the periodic loops. None of them ticks at zero — TimerLoop#run
+    #      waits an interval before its first yield, Scheduled::Poller waits
+    #      INITIAL_WAIT, and Leader waits DEFAULT_INITIAL_WAIT — so starting
+    #      them last costs a few thread spawns and nothing else. Both leader-
+    #      gated pollers are also safe to start before leadership settles: a
+    #      non-leader tick just returns early.
+    #   6. start the health probe server LAST so the listener doesn't
     #      accept k8s probes until the rest of the launcher is up.
     def run(async_beat: true)
       @started_at = Time.now.to_f
@@ -86,13 +95,13 @@ module Wurk
       # CLI, embedded) runs through here, so none boots with a nil fetcher.
       @config.capsules.each_value(&:prepare!)
       @config.freeze!
-      @heartbeat_thread = safe_thread('heartbeat', &method(:start_heartbeat)) if async_beat
-      [@poller, @leader, @cron_poller, @metrics_rollup, @queue_rollup, @metrics_flusher, @history].compact.each(&:start)
       @managers.each(&:start)
+      @heartbeat_thread = safe_thread('heartbeat', &method(:start_heartbeat)) if async_beat
       @reaper.start
       # Run on a background thread so /ready probe isn't delayed by a large
       # orphan sweep (reaper.reclaim! is atomic, but can scan many entries).
       @boot_reclaim_thread = safe_thread('boot-reclaim', &method(:boot_reclaim))
+      start_periodic_components
       @health_server&.start
     rescue StandardError
       # Boot is not atomic: whatever raised (a health-check port already bound,
@@ -206,6 +215,15 @@ module Wurk
       # mid-teardown), and kubelet would keep getting 200s from a process that
       # is already gone.
       teardown_step('health-server') { @health_server&.stop }
+    end
+
+    # Mirror of #stop_periodic_components: every loop this process runs on a
+    # timer, started in one place at the tail of #run. `compact` because the
+    # history snapshotter is opt-in and an embedded boot may have stripped the
+    # rest.
+    def start_periodic_components
+      [@poller, @leader, @cron_poller, @metrics_rollup,
+       @queue_rollup, @metrics_flusher, @history].compact.each(&:start)
     end
 
     # Split out of #release_components to keep it under the AbcSize/
@@ -383,13 +401,15 @@ module Wurk
     # Every worker process campaigns for the single cluster lock (`dear-leader`);
     # one wins and renews it, the rest follow and promote on its death. Cadence
     # falls back to the spec defaults (TTL 30 / renew 15 / follower 60) unless
-    # the host tunes it. `Leader#start` no-ops under `WURK_LEADER=false`.
+    # the host tunes it, plus the short pre-campaign delay that keeps the first
+    # CAS off the boot path. `Leader#start` no-ops under `WURK_LEADER=false`.
     def build_leader
       Wurk::Leader.new(
         config: @config,
         ttl: @config[:leader_ttl] || Wurk::Leader::DEFAULT_TTL,
         renew_interval: @config[:leader_renew_interval] || Wurk::Leader::DEFAULT_RENEW_INTERVAL,
-        follower_interval: @config[:leader_follower_interval] || Wurk::Leader::DEFAULT_FOLLOWER_INTERVAL
+        follower_interval: @config[:leader_follower_interval] || Wurk::Leader::DEFAULT_FOLLOWER_INTERVAL,
+        initial_wait: @config[:leader_initial_wait] || Wurk::Leader::DEFAULT_INITIAL_WAIT
       )
     end
 

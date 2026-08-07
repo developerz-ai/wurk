@@ -21,9 +21,12 @@ module Wurk
   # too — it is never re-read on subsequent acquires, only on transitions.
   #
   # Cadence per spec: renew every 15s while leader, recheck every 60s as
-  # follower, lock TTL 30s. Opt out a process from campaigning entirely
-  # with `WURK_LEADER=false` (or its Sidekiq alias `SIDEKIQ_LEADER=false`),
-  # useful for hot-standby pools.
+  # follower, lock TTL 30s. The campaign itself starts `initial_wait` seconds
+  # after `#start` — the spec fixes the renew/follower/TTL cadence but says
+  # nothing about when the first campaign runs, and holding it back keeps a
+  # booting process's opening Redis round trips on the job path. Opt out a
+  # process from campaigning entirely with `WURK_LEADER=false` (or its Sidekiq
+  # alias `SIDEKIQ_LEADER=false`), useful for hot-standby pools.
   #
   # Spec: docs/target/sidekiq-ent.md §6.
   class Leader
@@ -32,6 +35,13 @@ module Wurk
     DEFAULT_TTL = 30
     DEFAULT_RENEW_INTERVAL = 15
     DEFAULT_FOLLOWER_INTERVAL = 60
+    # Delay before the campaign's first `SET NX EX`, so a booting process
+    # spends its opening Redis round trips on fetching jobs rather than on a
+    # leadership CAS. Every leader-gated consumer (cron, both rollups,
+    # history) waits out a 30-60s interval before its own first tick, so
+    # nothing observes the gap. Tune with `config[:leader_initial_wait]`;
+    # 0 campaigns immediately.
+    DEFAULT_INITIAL_WAIT = 1
     OPT_OUT_ENV = 'WURK_LEADER'            # native opt-out env
     SIDEKIQ_OPT_OUT_ENV = 'SIDEKIQ_LEADER' # Sidekiq Ent drop-in alias (§6.2/§7.2)
     THREAD_NAME = 'wurk-leader'
@@ -48,12 +58,14 @@ module Wurk
     def initialize(config: nil, key: DEFAULT_KEY, ttl: DEFAULT_TTL, # rubocop:disable Metrics/ParameterLists
                    renew_interval: DEFAULT_RENEW_INTERVAL,
                    follower_interval: DEFAULT_FOLLOWER_INTERVAL,
+                   initial_wait: DEFAULT_INITIAL_WAIT,
                    pool: nil, owner: nil)
       @config = config
       @key = key
       @ttl = ttl
       @renew_interval = renew_interval
       @follower_interval = follower_interval
+      @initial_wait = initial_wait.to_f
       @pool = pool
       @owner = owner || cluster_identity
       @held = false
@@ -224,11 +236,19 @@ module Wurk
     end
 
     def run_loop
+      wait_initial
       until done?
         tick_once
         wait_next
       end
       release
+    end
+
+    # Same condvar as #wait_next, so a `stop` landing inside the pre-campaign
+    # delay wakes the loop immediately instead of holding shutdown open for a
+    # whole initial_wait.
+    def wait_initial
+      wait_for(@initial_wait) if @initial_wait.positive?
     end
 
     def tick_once
@@ -238,7 +258,10 @@ module Wurk
     end
 
     def wait_next
-      interval = @held ? @renew_interval : @follower_interval
+      wait_for(@held ? @renew_interval : @follower_interval)
+    end
+
+    def wait_for(interval)
       @mutex.synchronize { @sleeper.wait(@mutex, interval) unless @done }
     end
 
