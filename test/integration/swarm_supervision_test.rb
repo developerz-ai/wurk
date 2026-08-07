@@ -16,6 +16,12 @@ class SwarmSupervisionTest < Wurk::Test::UnitCase
   POLL_INTERVAL = 0.1
   SHUTDOWN_TIMEOUT = 5
 
+  # A host subprocess exits with a status only the host could care about; each
+  # round gives the supervise loop several ticks to steal it.
+  HOST_SUBPROCESS_ROUNDS = 3
+  HOST_SUBPROCESS_STATUS = 7
+  STRAGGLER_LIFETIME = 300
+
   def setup
     super
     @ns = "swarmsup-#{::Process.pid}-#{object_id}"
@@ -129,8 +135,8 @@ class SwarmSupervisionTest < Wurk::Test::UnitCase
   # inside the child — where `@children` lists that child's SIBLINGS. Unguarded
   # it TERMs them, then stalls the entire shutdown timeout on PIDs it can never
   # reap, then SIGKILLs whatever survived. Forking the supervisor reproduces
-  # that inherited object graph exactly. No supervise thread here: its
-  # `Process.wait(-1, …)` would race us for the drainer's exit status.
+  # that inherited object graph exactly. No supervise thread needed — the drain
+  # under test runs entirely inside the fork.
   def test_shutdown_from_a_forked_child_leaves_the_fleet_alone
     swarm = Wurk::Swarm.new(topology: topology_n(2), config: @config, shutdown_timeout: SHUTDOWN_TIMEOUT)
 
@@ -177,6 +183,51 @@ class SwarmSupervisionTest < Wurk::Test::UnitCase
       end
       stop_supervisor_thread(supervisor, 10)
     end
+  end
+
+  # --- reaping ownership ----------------------------------------------------
+
+  # Embedded (`RailsBoot.boot_swarm`) the supervise loop ticks on a background
+  # thread of the host's own process, so a wildcard `wait2(-1)` there consumes
+  # the exit status of ANY child — a Puma worker, a `system`/`Open3`
+  # subprocess — and the host's own `Process.wait` then fails with ECHILD.
+  # Forking a stranger child while the loop ticks reproduces exactly that.
+  def test_supervise_leaves_the_hosts_own_subprocesses_to_the_host
+    swarm = Wurk::Swarm.new(topology: topology_n(1), config: @config, shutdown_timeout: SHUTDOWN_TIMEOUT)
+    supervisor = nil
+
+    begin
+      swarm.boot(install_signals: false)
+      supervisor = Thread.new { swarm.supervise }
+
+      assert_host_subprocesses_survive_the_supervisor
+    ensure
+      begin
+        swarm.shutdown(timeout: SHUTDOWN_TIMEOUT)
+      rescue StandardError
+        nil
+      end
+      stop_supervisor_thread(supervisor, 10)
+    end
+  end
+
+  # SIGKILL only schedules the teardown; the pid stays a zombie until someone
+  # waits on it, and `hard_kill_stragglers` is the last reap the swarm will ever
+  # do — `shutdown` has already left the supervise loop behind. Standalone the
+  # exiting process hands its zombies to init; embedded, the host lives on and
+  # keeps one per straggler for the rest of its life.
+  def test_hard_kill_stragglers_reaps_the_pids_it_killed
+    swarm = Wurk::Swarm.new(topology: topology_n(1), config: @config, shutdown_timeout: SHUTDOWN_TIMEOUT)
+    straggler = ::Process.fork { sleep STRAGGLER_LIFETIME }
+    register_straggler(swarm, straggler)
+
+    swarm.send(:hard_kill_stragglers)
+
+    assert_empty swarm.children
+    assert_fully_reaped(straggler)
+  ensure
+    ::Process.kill('KILL', straggler) if straggler && pid_alive?(straggler)
+    reap(straggler) if straggler
   end
 
   # --- orphan self-termination ---------------------------------------------
@@ -250,6 +301,48 @@ class SwarmSupervisionTest < Wurk::Test::UnitCase
     assert supervisor.join(SHUTDOWN_TIMEOUT + 5), 'supervise must return once it observes the drain request'
     assert_empty swarm.children, 'the supervise thread must have drained the fleet'
     assert(children.all? { |pid| wait_until_dead(pid, 5) }, "children #{children.inspect} survived the drain")
+  end
+
+  # Children the swarm never forked: the test owns them, and only the test may
+  # reap them. `exit!` skips this suite's at_exit hooks, the same as a real
+  # child gets.
+  def assert_host_subprocesses_survive_the_supervisor
+    HOST_SUBPROCESS_ROUNDS.times do
+      pid = ::Process.fork { exit!(HOST_SUBPROCESS_STATUS) }
+      sleep Wurk::Swarm::SUPERVISE_TICK * 3
+      status = reap_host_subprocess(pid)
+
+      assert status, "the supervisor reaped the host's subprocess #{pid} (ECHILD)"
+      assert_equal HOST_SUBPROCESS_STATUS, status.exitstatus
+    end
+  end
+
+  def reap_host_subprocess(pid)
+    _, status = ::Process.wait2(pid)
+    status
+  rescue Errno::ECHILD
+    nil
+  end
+
+  # A straggler exactly as the drain leaves one behind: tracked, about to be
+  # SIGKILLed, and no supervise loop left to wait on it. A real fleet can't
+  # produce one on demand — its children drain well inside the deadline.
+  def register_straggler(swarm, pid)
+    swarm.instance_variable_set(:@owner_pid, ::Process.pid)
+    swarm.instance_variable_get(:@children)[pid] =
+      { slot: topology_n(1).assignments.first, index: 0, spawned_at: monotonic_now }
+  end
+
+  # ECHILD is the unambiguous proof: not merely dead — waited on. A zombie still
+  # answers `wait2` (with a status) and still answers `kill(0)`.
+  def assert_fully_reaped(pid)
+    outcome = begin
+      ::Process.wait2(pid, ::Process::WNOHANG)
+    rescue Errno::ECHILD
+      :reaped
+    end
+
+    assert_equal :reaped, outcome, "straggler #{pid} was left behind: #{outcome.inspect}"
   end
 
   def assert_old_child_survives(swarm, original)
