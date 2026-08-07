@@ -87,9 +87,16 @@ end
 # assert a child runs it. NEVER mock Redis here.
 #
 # `install_signals: false` so the swarm doesn't poison the test process's
-# SIGTERM/INT handlers. The supervisor thread calls Process.wait(-1, …),
-# so tests inside this class must run sequentially (parallelize_me! is a
-# file-level marker; minitest/parallel_fork forks per file, not per test).
+# SIGTERM/INT handlers. The supervisor thread calls Process.wait(-1, …), and
+# the leader-order probe observes `dear-leader` — a key no @ns can namespace —
+# so these tests must never overlap. They can't, on either axis. Within the
+# class: `Wurk::Test::UnitCase` overrides `parallelize_me!` with a no-op, so
+# the marker below leaves test_order at :random (serial), and parallel_fork
+# re-extends any genuinely parallel suite with Minitest::Unparallelize anyway.
+# Across classes: parallel_fork deals whole suites round-robin to NCPU forked
+# workers that each run their slice sequentially on their own Redis logical DB.
+# A mutex would guard neither axis — there is no concurrent reader to contend
+# with, and a peer worker's mutex lives in another process.
 class SwarmBootTest < Wurk::Test::UnitCase
   parallelize_me!
 
@@ -114,9 +121,14 @@ class SwarmBootTest < Wurk::Test::UnitCase
   end
 
   def teardown
+    # `dear-leader` is the one key here no @ns can namespace, and every test in
+    # this class boots children that campaign for it. RedisNamespace#teardown's
+    # FLUSHDB swallows its own errors, so drop it explicitly on the observer
+    # connection — a survivor would read as a live leader to the next test.
     @observer_pool&.call('DEL', @sentinel_key, @boot_log_key, "queue:#{@queue_name}",
                          private_queue_key(@queue_name), @lock_key, @lock_key_2,
-                         @lua_result_key, @lua_result_key_2, @leader_probe_key)
+                         @lua_result_key, @lua_result_key_2, @leader_probe_key,
+                         Wurk::Leader::DEFAULT_KEY)
     @observer_pool&.close
     @config&.reset_redis_pools!
   ensure
