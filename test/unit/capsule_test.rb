@@ -430,6 +430,15 @@ class CapsuleTest < Wurk::Test::UnitCase
     assert_same obj, @capsule.lookup(:thing)
   end
 
+  # The only `lib/` caller of Configuration#lookup, and it passes no default
+  # class — `@directory[name] ||= nil` still *writes* on a miss, so a frozen
+  # directory turned the first post-boot resolution into a FrozenError.
+  def test_lookup_miss_survives_a_frozen_config
+    @config.freeze!
+
+    assert_nil @capsule.lookup(:never_registered)
+  end
+
   def test_logger_delegates_to_config
     custom = ::Logger.new(IO::NULL)
     @config.logger = custom

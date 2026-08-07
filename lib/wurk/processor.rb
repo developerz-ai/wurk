@@ -139,6 +139,19 @@ module Wurk
         @lock.synchronize { @work.delete(tid) }
       end
 
+      # RAII: publish for the duration of the block, always retract. The write
+      # lives *inside* this method's ensure frame on purpose — with the `set`
+      # one line above a `begin`, an async raise landing in that gap (a host
+      # timeout's `Thread#raise`, say) escapes the ensure and strands the
+      # entry for the life of the process: the payload String stays reachable
+      # and every heartbeat reports the thread as busy.
+      def track(tid, hash)
+        set(tid, hash)
+        yield
+      ensure
+        delete(tid)
+      end
+
       def dup
         @lock.synchronize { @work.dup }
       end
@@ -303,17 +316,14 @@ module Wurk
     # Heartbeat can mirror it into Redis (`<identity>:work`), and increments
     # PROCESSED/FAILURE counters around the inner block.
     def stats(jobstr, queue)
-      id = tid
       run_at = ::Process.clock_gettime(::Process::CLOCK_REALTIME, :second)
-      WORK_STATE.set(id, queue: queue, payload: jobstr, run_at: run_at)
-      begin
+      WORK_STATE.track(tid, queue: queue, payload: jobstr, run_at: run_at) do
         yield
       rescue Exception # rubocop:disable Lint/RescueException
         FAILURE.incr
         raise
       ensure
         PROCESSED.incr
-        WORK_STATE.delete(id)
       end
     end
   end

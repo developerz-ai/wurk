@@ -411,6 +411,14 @@ class ConfigurationTest < Wurk::Test::UnitCase
     assert_same instance, @config.lookup(:auto)
   end
 
+  # `h[k] ||= v` desugars to `h[k] || h[k] = v`, so *every* miss writes — a
+  # nil default class doesn't spare a frozen directory the FrozenError.
+  def test_lookup_miss_without_a_default_class_survives_freeze
+    @config.freeze!
+
+    assert_nil @config.lookup(:never_registered)
+  end
+
   # Only `lookup`'s own memo write survives the freeze; the host-facing half
   # of the registry stays closed.
   def test_register_still_refuses_writes_after_freeze

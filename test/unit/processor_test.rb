@@ -12,6 +12,15 @@ class ProcessorTest < Wurk::Test::UnitCase
   # fires without StandardError/Shutdown swallowing it earlier in the stack.
   class FatalBoom < Exception; end
 
+  # Stands in for an async raise delivered the instant after the entry is
+  # published — the seam `SharedWorkState#track` has to cover.
+  class RaisingWorkState < Wurk::Processor::SharedWorkState
+    def set(tid, hash)
+      super
+      raise FatalBoom, 'async raise right after the write'
+    end
+  end
+
   def setup
     super
     @queue_name = "pt-#{Process.pid}-#{object_id}"
@@ -556,6 +565,19 @@ class ProcessorTest < Wurk::Test::UnitCase
     assert_equal 0, Wurk::Processor::WORK_STATE.size
   end
 
+  # The retract has to survive the failure path too: `stats` re-raises through
+  # the retrier, and a stranded entry there would pin the payload of every job
+  # that ever raised.
+  def test_work_state_cleared_when_perform_raises
+    klass = define_worker_raising(RuntimeError, 'boom')
+    payload = enqueue(class: klass.name, args: [], retry: true)
+
+    @processor.process_one
+    take_retry_entry_for(payload['jid'])
+
+    refute_includes Wurk::Processor::WORK_STATE.dup.keys, @processor.tid
+  end
+
   # `stats` keys WORK_STATE with `tid` (memoized per thread, `component_test.rb`
   # covers the memo itself) — two jobs run back-to-back on the same thread must
   # publish under the identical key, not a fresh one per job.
@@ -652,6 +674,41 @@ class ProcessorTest < Wurk::Test::UnitCase
     s.set('b', x: 2)
 
     assert_equal %w[a], snap.keys
+  end
+
+  # --- SharedWorkState#track (RAII) ------------------------------------
+
+  def test_track_publishes_for_the_duration_of_the_block
+    s = Wurk::Processor::SharedWorkState.new
+    seen = s.track('tid-1', queue: 'q', payload: 'p', run_at: 1) { s.dup }
+
+    assert_equal({ queue: 'q', payload: 'p', run_at: 1 }, seen['tid-1'])
+    assert_equal 0, s.size
+  end
+
+  def test_track_returns_the_block_value
+    s = Wurk::Processor::SharedWorkState.new
+
+    assert_equal :done, s.track('tid-1', queue: 'q') { :done }
+  end
+
+  # Non-StandardError, so nothing between here and the ensure can swallow it.
+  def test_track_clears_when_the_block_raises
+    s = Wurk::Processor::SharedWorkState.new
+
+    assert_raises(FatalBoom) { s.track('tid-1', queue: 'q') { raise FatalBoom, 'boom' } }
+    assert_equal 0, s.size
+  end
+
+  # The window `track` exists to close: with the publish one line above a
+  # `begin`, a raise landing between the write and the ensure frame — an
+  # async `Thread#raise` from a host timeout, say — stranded the entry for the
+  # life of the process (payload String retained, heartbeat `busy` inflated).
+  def test_track_clears_when_a_raise_lands_right_after_the_write
+    s = RaisingWorkState.new
+
+    assert_raises(FatalBoom) { s.track('tid-1', queue: 'q') { flunk 'block must not run' } }
+    assert_equal 0, s.size
   end
 
   # --- compat ---------------------------------------------------------
