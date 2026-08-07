@@ -256,6 +256,42 @@ class MiddlewarePoisonPillTest < Wurk::Test::UnitCase
     assert_raises(ArgumentError) { Wurk::Middleware::PoisonPill.on_poison }
   end
 
+  # Re-running an initializer that hands back the same stored Proc each time
+  # (Rails code reloading, a re-required file) must not accumulate duplicate
+  # closures — each registration retains its own binding, so unbounded
+  # re-registration is an unbounded retention leak.
+  def test_on_poison_dedups_by_callback_identity
+    calls = 0
+    callback = proc { calls += 1 }
+    3.times { Wurk::Middleware::PoisonPill.on_poison(&callback) }
+    json = payload_json
+    3.times { Wurk::Middleware::PoisonPill.track!(json, queue: @queue) }
+
+    assert_equal 1, calls, 'the same Proc registered repeatedly must fire once per poison, not N times'
+  end
+
+  # A fresh block literal per call is a distinct callable and must still
+  # register separately (dedup is by identity, not by "already registered
+  # something").
+  def test_on_poison_does_not_dedup_distinct_blocks
+    calls = 0
+    2.times { Wurk::Middleware::PoisonPill.on_poison { calls += 1 } }
+    json = payload_json
+    3.times { Wurk::Middleware::PoisonPill.track!(json, queue: @queue) }
+
+    assert_equal 2, calls
+  end
+
+  def test_on_poison_returns_removable_registration
+    calls = 0
+    registration = Wurk::Middleware::PoisonPill.on_poison { calls += 1 }
+    registration.remove!
+    json = payload_json
+    3.times { Wurk::Middleware::PoisonPill.track!(json, queue: @queue) }
+
+    assert_equal 0, calls, 'a removed registration must not fire'
+  end
+
   # --- super_fetch! recovery callback (Pro §3.1: |jobstr, pill|) -----------
 
   def test_super_fetch_callback_fires_with_job_string_and_nil_pill_on_recovery

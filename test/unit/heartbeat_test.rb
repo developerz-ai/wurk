@@ -107,6 +107,34 @@ class HeartbeatTest < Wurk::Test::UnitCase
     assert_nil hb.send(:cores, raising_etc)
   end
 
+  # Regression: File.foreach(path).find { } never closes the underlying
+  # File — the Enumerator (and its FD) is abandoned until GC finalizes it.
+  # cpu_model/memory_total_kb must read via File.open with a block so the
+  # FD closes deterministically on return, not on the next GC pass.
+  # Minitest 6 dropped minitest/mock; a singleton override on the ::File
+  # class object is the stub.
+  def test_cpu_model_does_not_use_file_foreach
+    skip 'no /proc/cpuinfo on this platform' unless ::File.exist?('/proc/cpuinfo')
+
+    hb = build_heartbeat
+    with_file_foreach_disabled do
+      result = hb.send(:cpu_model)
+
+      assert_kind_of String, result if result
+    end
+  end
+
+  def test_memory_total_kb_does_not_use_file_foreach
+    skip 'no /proc/meminfo on this platform' unless ::File.exist?('/proc/meminfo')
+
+    hb = build_heartbeat
+    with_file_foreach_disabled do
+      result = hb.send(:memory_total_kb)
+
+      assert_operator result, :>, 0
+    end
+  end
+
   def test_beat_writes_info_tag_and_embedded_default
     hb = build_heartbeat
 
@@ -404,6 +432,14 @@ class HeartbeatTest < Wurk::Test::UnitCase
 
   def read_info
     Wurk.load_json(@pool.with { |c| c.call('HGET', @identity, 'info') })
+  end
+
+  def with_file_foreach_disabled
+    original = ::File.method(:foreach)
+    ::File.define_singleton_method(:foreach) { |*| raise 'must not use File.foreach — abandons the FD until GC' }
+    yield
+  ensure
+    ::File.define_singleton_method(:foreach, original)
   end
 
   def read_beat_fields

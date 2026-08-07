@@ -129,11 +129,32 @@ module Wurk
       # Register a callback fired when a poison pill is detected. Callbacks
       # receive a single Hash `{jid:, klass:, count:, queue:}` — matches
       # Sidekiq Pro's documented shape so consumers can drop in unchanged.
+      #
+      # Dedups by callable identity — an initializer that re-runs (Rails
+      # code reloading, a re-required file) and hands back the *same* stored
+      # Proc each time won't accumulate duplicate closures (and the bindings
+      # they retain). A fresh block literal per call still registers
+      # separately, same as before. Returns a {Registration} the caller can
+      # `#remove!` to deregister explicitly.
       def on_poison(&block)
         raise ArgumentError, 'block required' unless block
 
-        callbacks << block
-        block
+        callbacks << block unless callbacks.any? { |cb| cb.equal?(block) }
+        Registration.new(callbacks, block)
+      end
+
+      # Handle returned by {on_poison}. Removing it is idempotent and safe
+      # even after a {reset!} discarded the underlying list.
+      class Registration
+        def initialize(list, callback)
+          @list = list
+          @callback = callback
+        end
+
+        def remove!
+          @list.delete(@callback)
+          nil
+        end
       end
 
       def callbacks
