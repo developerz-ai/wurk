@@ -6,36 +6,45 @@ Two different benchmark suites live in `bench/`. They answer different questions
 
 | Suite | Question | Command | Gates merges |
 |---|---|---|---|
-| `bench/*.rb` | Did *this PR* slow wurk down vs `main`? | `rake bench` | Yes — >5% regression blocks |
+| `bench/*.rb` | Did *this PR* slow wurk down vs `main`? | `rake bench` | Yes — [`.github/workflows/bench.yml`](../.github/workflows/bench.yml), >5% regression blocks |
 | `bench/vs_sidekiq.rb` | Is wurk faster than *stock Sidekiq*? | `rake bench:vs_sidekiq` | No |
 
 The regression gate can be fully green while wurk is slower than Sidekiq. It measures wurk against its own past self. Do not read `rake bench` as a competitive result.
 
 ## Throughput vs stock Sidekiq
 
-wurk 1.4.0 · sidekiq 8.1.6 · ruby 3.4.9 (x86_64-linux) · 6 cores · local Redis · median of 3 runs × 4000 jobs.
+wurk 1.4.0 · sidekiq 8.1.6 · ruby 3.4.7 (x86_64-linux) · local Redis 7.4.10 · 5000 jobs/run · 12 runs per topology (4 invocations × 3 runs), paired per-run ratio (`wurk_i / sidekiq_i` within the same run, which cancels drift a median-of-medians would carry). Measured 2026-08-07; reproduce with `bin/rake bench:vs_sidekiq`.
 
 Ratios below 1.00 mean wurk is slower.
 
 **1 process × 5 threads**
 
-| Workload | Sidekiq | Wurk | Ratio |
+| Workload | Ratio (median of 12) | min | max |
 |---|---|---|---|
-| noop | 1579 jobs/s | 714 jobs/s | 0.45× |
-| cpu | 171 jobs/s | 138 jobs/s | 0.81× |
-| io | 731 jobs/s | 538 jobs/s | 0.74× |
+| noop | 0.87× | 0.74× | 1.08× |
+| cpu | 0.99× | 0.78× | 1.21× |
+| io | 0.99× | 0.84× | 1.11× |
 
 **4 processes × 5 threads** — `wurkswarm` (4 forks) vs 4 independent `sidekiq` processes
 
-| Workload | Sidekiq | Wurk | Ratio |
+| Workload | Ratio (median of 12) | min | max |
 |---|---|---|---|
-| noop | 4240 jobs/s | 2061 jobs/s | 0.49× |
-| cpu | 494 jobs/s | 424 jobs/s | 0.86× |
-| io | 2709 jobs/s | 1791 jobs/s | 0.66× |
+| noop | 0.95× | 0.71× | 1.19× |
+| cpu | 1.02× | 0.67× | 1.41× |
+| io | 0.97× | 0.60× | 1.26× |
 
-Boot to first job: sidekiq ~0.67s, wurk ~0.97s.
+Boot to first job, median over all runs per side:
+
+| Topology | Sidekiq | Wurk |
+|---|---|---|
+| 1p × 5t | 0.56s | 0.72s |
+| 4p × 5t | 0.60s | 0.78s |
+
+Wurk is at parity with stock Sidekiq on `cpu` and `io` at both topologies. It is still behind on `noop` — pure framework overhead, where the extra Redis commands below cost the most — and on boot. This is a large move from the numbers this doc previously published (noop 0.45×/0.49×, cpu 0.81×/0.86×, io 0.74×/0.66×), but it is not a "faster than Sidekiq" result; see [Status](#status).
 
 Forking does not close the gap. A stock Sidekiq user reaches multi-core by running N processes — that is the second table. The swarm's advantage is copy-on-write memory and a single supervisor, not throughput.
+
+The run carried unrelated background load on the host for part of the session, which is why the per-invocation spread (min/max above) is wide — the paired-ratio median is the number to trust, not any single run. Full per-invocation record: [`docs/plans/2026/08/06/101-faster-than-sidekiq/08-measurements.md`](plans/2026/08/06/101-faster-than-sidekiq/08-measurements.md).
 
 ## Workload shapes
 
@@ -47,26 +56,40 @@ Forking does not close the gap. A stock Sidekiq user reaches multi-core by runni
 | `cpu` | fixed arithmetic loop | holds the GVL; the shape fork-based parallelism exists for |
 | `io` | `sleep` | releases the GVL; threads and forks both scale — the honest control |
 
-`cpu` is the noisiest shape (±24–33% run to run). Single runs of it mean nothing; one isolated run read 1.17× before the median settled at 0.81×.
+`cpu` is the noisiest shape (min/max spans 0.67×–1.41× across the 12 paired runs above). Single runs of it mean nothing — only the paired-ratio median across many runs is worth reading.
 
-## Why wurk is slower
+## Why wurk is still behind on `noop`
 
 Redis commands per job, counted with `INFO commandstats` over 500 jobs. Reproduce with `bin/rake bench:command_count`, which prints the breakdown below and is the source these numbers are published from:
 
+```
+wurk — 500 noop jobs drained from queue:default (INFO commandstats)
+
+  commands  per job  command
+       500     1.00  lrem
+       500     1.00  lmove
+       500     1.00  del
+  --------  -------
+      1500     3.00  total
+```
+
 | Engine | Per job | Breakdown |
 |---|---|---|
-| Sidekiq | ~1 | 1 BRPOP. Stat counters buffered in memory, flushed on a timer. |
-| Wurk | ~3 | 1 pipeline: LREM + DEL retiring the previous job, then the LMOVE claiming this one |
+| Sidekiq | 1 | 1 BRPOP. Stat counters buffered in memory, flushed on a timer. |
+| Wurk | 3 | 1 pipeline, 1 round trip: LREM + DEL retiring the previous job, then the LMOVE claiming this one |
 
-What is left, and the verdict on it:
+**3.00 commands/job, at budget and at the recorded baseline** — down from the ~10 commands / 4 round trips this doc previously published. What is left, and the verdict on it:
 
 - **Reliable fetch** — the same **one round trip** per job as BRPOP, with three commands inside it rather than one. This is [`Wurk::Fetcher::Reliable`](reliability.md), the default. Sidekiq's equivalent (`super_fetch`) is a paid Pro feature; stock Sidekiq's BRPOP loses in-flight jobs when a worker is killed. The extra commands buy a guarantee, and are not a defect. Note the table counts *commands*, not round trips — `INFO commandstats` cannot see a pipeline.
+- **The poison-pill `DEL`** is a deliberate keeper, not an oversight — a reclaimed payload is byte-identical to a fresh one, so only the counter distinguishes them, and Lua can't fold this away. 3 commands/job is the settled floor; the plan's original ≤2 target is not reachable without dropping the poison-pill guarantee.
 
-Three costs that used to dominate this table are gone:
+Costs that used to dominate this table are gone:
 
-- **Metrics** were 6 of the old 10 — `Wurk::Metrics::History` wrote 2 HINCRBY + EXPIRE per job, twice over. They are now folded in memory per (class, minute) and flushed every ≤5s, the same trade Sidekiq makes; see [Write cadence](metrics.md#write-cadence-and-what-a-hard-kill-costs) for what that costs on a hard kill. A worker still pays one pipeline per Redis pool per flush, carrying 6 commands per (class, minute) bucket, which rounds to nothing per job at any real throughput and does not appear above.
+- **Metrics** were 6 of the old ~10 — `Wurk::Metrics::History` wrote 2 HINCRBY + EXPIRE per job, twice over. They are now folded in memory per (class, minute) and flushed every ≤5s, the same trade Sidekiq makes; see [Write cadence](metrics.md#write-cadence-and-what-a-hard-kill-costs) for what that costs on a hard kill. A worker still pays one pipeline per Redis pool per flush, carrying 6 commands per (class, minute) bucket, which rounds to nothing per job at any real throughput and does not appear above.
 - **The paused SET** was the seventh, an `SMEMBERS` on every fetch pass; it is now read at most once per [`PAUSED_TTL`](reliability.md#fetch-order-and-polling) per fetcher.
 - **The ACK** was a round trip of its own, sent the moment a job finished. Its `LREM` + `DEL` now [ride the next fetch's pipeline](reliability.md#the-ack-rides-the-next-fetch) — the same commands, one fewer round trip — at the cost of a wider window in which a hard kill re-runs an already-finished job.
+
+`noop` is pure framework overhead, so it is exactly where 3 commands per job against Sidekiq's 1 still costs — it is the shape that has to cross 1.0× before wurk stops being behind here at all.
 
 ## Running it
 
@@ -101,6 +124,8 @@ The comparison is only worth reading if the control is real. What the harness gu
 
 ## Status
 
-The claim "faster than Sidekiq" has been removed from the README and the site until the numbers support it.
+The claim "faster than Sidekiq" has been removed from the README and the site, and may not be added back until the numbers above support it — they do not yet (CLAUDE.md pillar 3).
 
-The `Metrics::History` batching and the ack piggyback that closed the round-trip gap have both landed — **four round trips per job down to one**, and 10 commands down to 3 — at the cost of dashboard counters lagging by the flush interval, a hard crash dropping the unflushed window, and a wider window in which a hard kill re-runs an already-finished job. **The throughput ratios above predate both and have not been re-measured**; they get republished from a fresh `bench:vs_sidekiq` when the rest of that work lands, not before.
+The `Metrics::History` batching and the ack piggyback that closed the round-trip gap have both landed and are reflected in the numbers above — **four round trips per job down to one**, and ~10 commands down to 3 — at the cost of dashboard counters lagging by the flush interval, a hard crash dropping the unflushed window, and a wider window in which a hard kill re-runs an already-finished job. The throughput and command-count tables above are re-measured post-landing, not carried over from before that work.
+
+**Net result: wurk is at parity with stock Sidekiq on `cpu` and `io` at both topologies measured, and still behind on `noop` and on boot to first job.** Not a "faster than Sidekiq" result. Full per-invocation record and the verdict against the plan's "done when" criteria: [`docs/plans/2026/08/06/101-faster-than-sidekiq/08-measurements.md`](plans/2026/08/06/101-faster-than-sidekiq/08-measurements.md).
