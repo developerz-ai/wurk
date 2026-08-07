@@ -44,6 +44,43 @@ class MiddlewareChainTest < Wurk::Test::UnitCase
     end
   end
 
+  class Ensurer
+    def initialize(label, log)
+      @label = label
+      @log = log
+    end
+
+    def call(*_args)
+      yield
+    ensure
+      @log << "#{@label}-ensure"
+    end
+  end
+
+  class ConfigProbe
+    attr_accessor :config
+
+    def initialize(log)
+      @log = log
+    end
+
+    def call(*_args)
+      @log << config
+      yield
+    end
+  end
+
+  class Identity
+    def initialize(log)
+      @log = log
+    end
+
+    def call(*_args)
+      @log << self
+      yield
+    end
+  end
+
   class WithConfig
     attr_accessor :config
 
@@ -307,6 +344,83 @@ class MiddlewareChainTest < Wurk::Test::UnitCase
     chain.invoke(:a, :b, :c) { :done }
 
     assert_equal [%i[a b c]], seen
+  end
+
+  # The default server chain is six entries deep; the index walk has to hold
+  # registration order (including prepend/insert_before repositioning) and
+  # unwind in reverse.
+  def test_invoke_walks_deep_chain_in_registration_order
+    log = []
+    chain = Wurk::Middleware::Chain.new
+    labels = %w[a b c d e f]
+    klasses = labels.to_h { |label| [label, Class.new(Recorder)] }
+    labels.each { |label| chain.add(klasses[label], label, log) }
+    chain.prepend(klasses['f'], 'f', log)
+    chain.insert_before(klasses['b'], klasses['e'], 'e', log)
+    chain.invoke('arg') { log << 'body' }
+
+    assert_equal %w[f-pre a-pre e-pre b-pre c-pre d-pre body d-post c-post b-post e-post a-post f-post], log
+  end
+
+  def test_invoke_builds_fresh_instances_per_call
+    seen = []
+    chain = Wurk::Middleware::Chain.new
+    chain.add(Identity, seen)
+    2.times { chain.invoke('arg') { :ok } }
+
+    assert_equal 2, seen.size
+    refute_same seen[0], seen[1]
+  end
+
+  def test_invoke_propagates_exception_and_unwinds_in_reverse
+    log = []
+    chain = Wurk::Middleware::Chain.new
+    chain.add(Class.new(Ensurer), 'outer', log)
+    chain.add(Class.new(Ensurer), 'inner', log)
+
+    assert_raises(RuntimeError) { chain.invoke('arg') { raise 'boom' } }
+    assert_equal %w[inner-ensure outer-ensure], log
+  end
+
+  def test_invoke_halt_mid_chain_skips_downstream
+    log = []
+    chain = Wurk::Middleware::Chain.new
+    chain.add(Class.new(Recorder), 'outer', log)
+    chain.add(Halter, log)
+    chain.add(Class.new(Recorder), 'never', log)
+    chain.invoke('arg') { log << 'body' }
+
+    assert_equal %w[outer-pre halter outer-post], log
+  end
+
+  def test_invoke_assigns_config_to_instances
+    cfg = Object.new
+    log = []
+    chain = Wurk::Middleware::Chain.new(cfg)
+    chain.add(ConfigProbe, log)
+    chain.add(NoConfig)
+    result = chain.invoke('arg') { :ok }
+
+    assert_equal :ok, result
+    assert_equal [cfg], log
+  end
+
+  # `config=` support is resolved once, when the entry is registered — a class
+  # that grows the setter afterwards only picks it up on re-registration.
+  def test_config_capability_is_resolved_at_registration
+    cfg = Object.new
+    klass = Class.new do
+      def call(*_args) = yield
+    end
+    chain = Wurk::Middleware::Chain.new(cfg)
+    chain.add(klass)
+    klass.class_eval { attr_accessor :config }
+
+    assert_nil chain.retrieve.first.config
+
+    chain.add(klass)
+
+    assert_same cfg, chain.retrieve.first.config
   end
 
   # --- copy_for / dup ----------------------------------------------------
