@@ -71,17 +71,23 @@ def monotonic = Process.clock_gettime(Process::CLOCK_MONOTONIC)
 # between every run, so the never-DB-0 guard in that helper is load-bearing.
 REDIS_URL = bench_redis_url('12')
 
-# A clean env per child: RUBYOPT carries the PARENT bundle's `-rbundler/setup`,
-# which would re-pin the Sidekiq child to the repo Gemfile and hand it wurk's
-# shadowing lib/sidekiq.rb. Clearing it (and RUBYLIB) is what makes
-# BUNDLE_GEMFILE actually decide which "sidekiq" the child loads.
+# Every channel `bundle exec` uses to reach into a subprocess, closed. RUBYOPT
+# carries `-rbundler/setup`; BUNDLER_SETUP is the same hook by another route
+# (rubygems requires it from gem_prelude, so clearing RUBYOPT alone does not
+# stop it); GEM_HOME/GEM_PATH pin the child to the PARENT bundle's gem dir, so
+# the Sidekiq side resolves against wurk's bundle — where stock sidekiq is not
+# installed — and `bundle check`/`install` fail before a single job runs.
+# Clearing all of them is what makes BUNDLE_GEMFILE alone decide which
+# "sidekiq" the child loads, instead of wurk's shadowing lib/sidekiq.rb.
+BUNDLER_LEAKS = %w[RUBYOPT RUBYLIB BUNDLER_SETUP BUNDLER_VERSION BUNDLE_BIN_PATH GEM_HOME GEM_PATH].freeze
+
 def child_env(gemfile, shape, extra = {})
-  {
-    'RUBYOPT' => nil, 'RUBYLIB' => nil, 'BUNDLE_GEMFILE' => gemfile,
+  BUNDLER_LEAKS.to_h { |key| [key, nil] }.merge(
+    'BUNDLE_GEMFILE' => gemfile,
     'REDIS_URL' => REDIS_URL,
     'WURK_BENCH_VS_SHAPE' => shape,
     'WURK_BENCH_VS_DONE_KEY' => DONE_KEY
-  }.merge(extra)
+  ).merge(extra)
 end
 
 def install_sidekiq_bundle
