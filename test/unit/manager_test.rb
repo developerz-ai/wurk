@@ -388,8 +388,11 @@ class ManagerTest < Wurk::Test::UnitCase
     Wurk::Fetcher::Reliable.private_queue_name(@public_queue)
   end
 
+  # `fetcher:` is what #acknowledge defers into; a unit without one raises
+  # NoMethodError the moment anything ACKs it.
   def make_uow(payload)
-    Wurk::Fetcher::Reliable::UnitOfWork.new(queue: @public_queue, job: payload, config: @capsule)
+    Wurk::Fetcher::Reliable::UnitOfWork.new(queue: @public_queue, job: payload,
+                                            config: @capsule, fetcher: @capsule.fetcher)
   end
 
   # Stand-in for a Processor that satisfies the Manager's interface without

@@ -15,13 +15,36 @@ require_relative "support"
 # asserts a budget. It is excluded from GATE_SCRIPTS in the Rakefile alongside
 # vs_sidekiq.rb — run it on its own via `rake bench:command_count`.
 #
-# EXPECTED TO FAIL until the fetch/ack/metrics batching lands: steady state
-# today is 10 commands per job against a budget of 2 — 6 unbatched
-# Metrics::History writes (4 HINCRBY + 2 EXPIRE, one pair per time bucket),
-# LMOVE + LREM + DEL for reliable fetch, ack and poison-pill retire, and one
-# SMEMBERS of the paused set per fetch. That red is the tripwire naming the
-# work, not a broken bench. (docs/benchmarks.md quotes ~12 from a hand-run of
-# the same method; the printed breakdown below is the reproducible count.)
+# Counts COMMANDS, not round trips — `INFO commandstats` cannot see a pipeline.
+# The ack piggyback has landed, so those 3 commands now cost one round trip
+# rather than three (Fetcher::Reliable pipelines the finished job's LREM + DEL
+# in front of the next job's LMOVE), but the count is unmoved and the budget is
+# counted in commands.
+#
+# The budget is re-baselined to 3, the settled floor for this command shape —
+# down from ~10 (docs/benchmarks.md, "Why wurk is slower") before this PR group.
+# The one candidate to lose was the poison-pill DEL, meaningful only for a job the
+# reaper reclaimed — step 4 of
+# docs/plans/2026/08/06/101-faster-than-sidekiq/02-fetch-ack-metrics.md, now
+# settled: it stays. A reclaimed payload is byte-identical to a first-attempt
+# one (the job JSON is wire-frozen), so only the counter knows, and reading it
+# to decide costs more than the DEL rides for. Nor can Lua hide the other two:
+# `INFO commandstats` counts a script's own calls as well as the EVALSHA, so
+# folding LREM + DEL + LMOVE into one script would read as 4 here, not 1. Those
+# 3 commands cost one round trip between them (down from 4 before this PR
+# group), which is the number that actually drives throughput — see
+# `bench:fetch_execute` and docs/benchmarks.md, "Status".
+#
+# Two costs that used to show here are already gone: an SMEMBERS of the paused
+# set per fetch pass (Fetcher::Reliable now reads that SET once per PAUSED_TTL)
+# and 6 Metrics::History writes per job (Metrics::Accumulator folds them in
+# memory; Metrics::Flusher drains them every FLUSH_INTERVAL).
+#
+# Those metrics writes are ZERO here, not amortized: this loop runs no Launcher,
+# so no flusher ticks inside the window. A real worker pays one 6-command
+# pipeline per (class, minute) every 5 seconds no matter its throughput, which
+# rounds to nothing per job at any rate this bench would measure — but the
+# table below is a per-job budget, and that cost is not in it.
 #
 # Only the drain is counted. Enqueue happens before CONFIG RESETSTAT — it is
 # the client's cost and enqueue.rb already benches it — and a warmup pass runs
@@ -38,7 +61,14 @@ require_relative "support"
 # touched.
 
 JOBS   = Integer(ENV.fetch("WURK_BENCH_CMD_JOBS", "500"))
-BUDGET = Float(ENV.fetch("WURK_BENCH_CMD_BUDGET", "2"))
+BUDGET = Float(ENV.fetch("WURK_BENCH_CMD_BUDGET", "3"))
+# The floor, checked as strictly as the ceiling. A count that DROPS is a win,
+# but an unannounced one leaves the comment above, docs/benchmarks.md and the
+# plan all quoting a number no run reproduces — the failure mode this script
+# exists to prevent, in the direction a budget alone can't see. Landing a
+# reduction means re-baselining here and republishing the prose in the same
+# commit, which is the point.
+BASELINE = Float(ENV.fetch("WURK_BENCH_CMD_BASELINE", "3"))
 WARMUP = [JOBS / 10, 1].max
 
 # Redis records CONFIG RESETSTAT *after* it clears the counters, so the reset
@@ -79,11 +109,10 @@ def report(calls, jobs)
 end
 
 # The process-global config, not a fresh Wurk::Configuration.new: the default
-# server middleware chain is registered onto this one at load (wurk.rb:297-312)
-# and 6 of today's 10 commands per job are Metrics::History writes from it. A
-# fresh Configuration starts with an EMPTY chain, so benching against one would
-# hide exactly the writes this tripwire exists to watch. Every real worker boots
-# from this object.
+# server middleware chain is registered onto this one at load (wurk.rb:297-312),
+# and a fresh Configuration starts with an EMPTY chain — so benching against one
+# would drop the whole middleware stack out of the measurement and report a
+# number no worker can reproduce. Every real worker boots from this object.
 config = Wurk.configuration
 config.logger = Logger.new(IO::NULL)
 config.redis = { url: bench_redis_url("9") }
@@ -122,4 +151,12 @@ per_job = report(calls, JOBS)
 $stdout.flush
 
 abort format("✗ %.2f commands/job, over the budget of %.2f", per_job, BUDGET) if per_job > BUDGET
-puts format("✓ %.2f commands/job, within the budget of %.2f", per_job, BUDGET)
+if per_job < BASELINE
+  abort format(
+    "✗ %.2f commands/job, under the recorded baseline of %.2f — re-baseline this script and republish " \
+    "docs/benchmarks.md from this run",
+    per_job, BASELINE
+  )
+end
+puts format("✓ %.2f commands/job, within the budget of %.2f and at the recorded baseline of %.2f",
+            per_job, BUDGET, BASELINE)
