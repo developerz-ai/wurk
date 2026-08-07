@@ -138,7 +138,21 @@ module Wurk
 
     private
 
+    # #push and #push_bulk verify at different points and both match Sidekiq
+    # exactly: push walks the payload the chain handed back (sidekiq
+    # client.rb:101 — normalize → middleware → verify → raw_push), bulk walks it
+    # inside the innermost block (sidekiq client.rb:165). Push used to do both,
+    # and since `strict_args_mode` defaults to :raise the second full recursive
+    # args walk was never skipped.
+    #
+    # Bulk keeps its walk inside the block on purpose: a client middleware that
+    # halts the job there short-circuits the walk, and hoisting it out would
+    # raise on args that middleware was about to drop.
     def invoke_chain(normed)
+      @chain.invoke(normed['class'], normed, normed['queue'], pool) { normed }
+    end
+
+    def invoke_chain_verified(normed)
       @chain.invoke(normed['class'], normed, normed['queue'], pool) do
         verify_json(normed)
         normed
@@ -191,7 +205,7 @@ module Wurk
         item = base.merge('args' => job_args)
         item['at'] = ats[idx] if ats
         normed = normalize_item(item)
-        invoke_chain(normed)
+        invoke_chain_verified(normed)
       end
     end
 

@@ -4,22 +4,16 @@ require_relative '../test_helper'
 require 'date'
 require 'stringio'
 
-module WurkGlobalStateLock
-  # One process-wide mutex serializing every test that mutates Wurk's
-  # process-global state (`@default_job_options`, `@strict_args_mode`,
-  # `@testing_mode`, `@server`). Without this, parallel classes holding
-  # separate locks could interleave and corrupt shared state.
-  MUTEX = Mutex.new
-end
-
 class JobUtilTest < Wurk::Test::UnitCase
   parallelize_me!
 
-  STRICT_MUTEX = WurkGlobalStateLock::MUTEX
+  STRICT_MUTEX = Wurk::Test::GLOBAL_STATE_MUTEX
 
   Host = Struct.new(:placeholder) do
     include Wurk::JobUtil
   end
+
+  class StringLike < String; end
 
   # Sidekiq's public API names this `get_sidekiq_options` — wire-compat sacred.
   class StubWorker
@@ -157,6 +151,34 @@ class JobUtilTest < Wurk::Test::UnitCase
     end
   end
 
+  # The walk dispatches on `val.class` through a compare_by_identity table, so a
+  # subclass of a JSON-native type misses and is reported unsafe. Sidekiq
+  # (job_util.rb:80-111) behaves identically — an ActiveSupport::SafeBuffer arg
+  # raises there too — and the oracle is the contract.
+  def test_verify_json_rejects_a_string_subclass_value
+    with_strict_mode(:raise) do
+      err = assert_raises(ArgumentError) { @host.verify_json({ 'class' => 'X', 'args' => [StringLike.new('hi')] }) }
+
+      assert_match(/StringLike/, err.message)
+    end
+  end
+
+  # Hash keys are the documented exception: Sidekiq checks them with `String ===`,
+  # not the identity table, so a String subclass key stays acceptable.
+  def test_verify_json_accepts_a_string_subclass_hash_key
+    with_strict_mode(:raise) do
+      @host.verify_json({ 'class' => 'X', 'args' => [{ StringLike.new('k') => 'v' }] })
+    end
+  end
+
+  def test_verify_json_reports_the_first_offender_in_order
+    with_strict_mode(:raise) do
+      err = assert_raises(ArgumentError) { @host.verify_json({ 'class' => 'X', 'args' => [1, :first, Date.today] }) }
+
+      assert_match(/:first is a Symbol/, err.message)
+    end
+  end
+
   # --- normalize_item --------------------------------------------------
 
   def test_normalize_item_assigns_jid_as_24_hex
@@ -271,7 +293,7 @@ end
 class WurkTopLevelTest < Wurk::Test::UnitCase
   parallelize_me!
 
-  STATE_MUTEX = WurkGlobalStateLock::MUTEX
+  STATE_MUTEX = Wurk::Test::GLOBAL_STATE_MUTEX
 
   def test_shutdown_is_an_interrupt
     assert_operator Wurk::Shutdown, :<, Interrupt

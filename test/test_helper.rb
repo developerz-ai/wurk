@@ -161,6 +161,12 @@ module Wurk
     # the reader see 0 instead of the identity it just registered.
     PROCESSES_MUTEX = Mutex.new
 
+    # Suite-wide mutex for tests that mutate Wurk's process-global state
+    # (`@strict_args_mode`, `@default_job_options`, `@testing_mode`, `@server`).
+    # Shared by every such class — a class-local mutex would let JobUtilTest's
+    # `strict_args!(false)` land inside ClientVerifyJsonTest's `assert_raises`.
+    GLOBAL_STATE_MUTEX = Mutex.new
+
     # Suite-wide mutex for tests that read/write the in-process
     # `Wurk::Processor::{PROCESSED, FAILURE, EXPIRED}` counters and then
     # assert on their value. Without it, the LauncherTest flush_stats
