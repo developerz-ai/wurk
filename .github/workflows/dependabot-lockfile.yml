@@ -1,0 +1,98 @@
+name: dependabot lockfile
+
+# Dependabot cannot maintain `frontend/bun.lock` (#373).
+#
+# Its `npm` ecosystem understands package-lock.json / yarn.lock / pnpm-lock.yaml,
+# not bun's lockfile, so every frontend dependency PR arrives with a bumped
+# `frontend/package.json` and an untouched `frontend/bun.lock`. CI then runs
+# `bun install --frozen-lockfile` in five jobs (the frontend job, the three Ruby
+# matrix legs, and coverage — the Ruby jobs build the SPA too), and all five go
+# red on a one-line dependency mismatch before a single test runs.
+#
+# This has never worked. #300 and #304 look like Dependabot updated the lockfile,
+# but their commit lists show a human pushing a "regenerate bun.lock" commit on
+# top. #334 and #341 were closed unmerged; #371 and #372 needed the same manual
+# regeneration. This workflow does that step instead of a person.
+#
+# WHY `pull_request_target`:
+#   A Dependabot-triggered `pull_request` run gets a read-only GITHUB_TOKEN and
+#   no secrets, so it cannot push the fix back. `pull_request_target` runs in the
+#   base repo's context with a writable token.
+#
+# WHY THAT IS SAFE HERE:
+#   The usual `pull_request_target` hazard is executing untrusted PR code with a
+#   write token. This job never executes PR code:
+#     * `bun install --lockfile-only` resolves registry metadata and writes
+#       bun.lock. It does not install packages and it does not run scripts.
+#       Bun additionally never runs dependency lifecycle scripts at all
+#       (`--ignore-scripts` covers only the project's own).
+#     * The workflow definition itself is read from the BASE branch under
+#       `pull_request_target`, so a PR cannot alter these steps.
+#     * `github.actor == 'dependabot[bot]'` gates the whole job, and Dependabot
+#       branches can only be created by Dependabot.
+#   No build, no test, no `bun run` — the only thing this job can produce is a
+#   lockfile.
+#
+# KNOWN LIMITATION:
+#   The push below uses GITHUB_TOKEN, and GitHub deliberately does not start new
+#   workflow runs for commits pushed with it. So the lockfile lands on the PR but
+#   the red checks stay red until someone re-runs them (or Dependabot pushes
+#   again). That is still the whole manual step removed — nobody has to clone,
+#   install, commit and push. Swapping `token:` for a PAT with `contents: write`
+#   would close the last gap and make the PR go green unattended.
+
+on:
+  pull_request_target:
+    types: [opened, synchronize, reopened]
+    paths:
+      - "frontend/package.json"
+
+permissions:
+  contents: write
+
+# Keyed on the PR number, not github.ref: under `pull_request_target` github.ref
+# is the BASE branch, so every open Dependabot PR would share one group and
+# cancel the others.
+concurrency:
+  group: dependabot-lockfile-${{ github.event.pull_request.number }}
+  cancel-in-progress: true
+
+jobs:
+  reconcile:
+    name: reconcile bun.lock
+    # Matches dependabot-automerge.yml. The PR author is the right check —
+    # `github.actor` is whoever triggered the run, which on a `synchronize` can
+    # be someone other than Dependabot.
+    if: github.event.pull_request.user.login == 'dependabot[bot]'
+    runs-on: blacksmith-2vcpu-ubuntu-2404
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          # Check out the PR's head so the lockfile is regenerated against the
+          # bumped package.json. Credentials are persisted here on purpose —
+          # the push step below needs them.
+          ref: ${{ github.event.pull_request.head.ref }}
+          repository: ${{ github.event.pull_request.head.repo.full_name }}
+      - uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2
+        with:
+          bun-version: "1.3.14"
+      - name: regenerate bun.lock
+        run: bun install --lockfile-only
+        working-directory: frontend
+      - name: commit and push if it changed
+        run: |
+          set -euo pipefail
+          if git diff --quiet -- frontend/bun.lock; then
+            echo "bun.lock already matches package.json — nothing to do."
+            exit 0
+          fi
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add frontend/bun.lock
+          git commit -m "chore(deps): reconcile bun.lock
+
+          Dependabot bumps frontend/package.json but cannot maintain
+          frontend/bun.lock, so \`bun install --frozen-lockfile\` fails in every
+          job that builds the SPA. Regenerated automatically (#373)."
+          git push
