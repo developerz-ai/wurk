@@ -209,7 +209,7 @@ module Wurk
     end
 
     def redis(idempotent: false, &)
-      PoolCheckout.with(redis_pool, idempotent, &)
+      PoolCheckout.trusted(redis_pool, idempotent, &)
     end
 
     # --- Web dashboard Redis pool ----------------------------------------

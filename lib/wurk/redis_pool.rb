@@ -190,9 +190,9 @@ module Wurk
     # redials a closed socket lazily), so a busy fetcher can't leak checkouts.
     def run(conn, idempotent)
       attempts = 0
+      odometer = conn.round_trips
       begin
         attempts += 1
-        odometer = conn.round_trips
         yield conn
       rescue RedisClient::Error => e
         plan = retry_plan(e, attempts, idempotent, conn.round_trips != odometer)
@@ -204,6 +204,7 @@ module Wurk
 
         safe_close(conn)
         sleep(backoff_delay(attempts)) if plan == :backoff
+        odometer = conn.round_trips
         retry
       end
     end
