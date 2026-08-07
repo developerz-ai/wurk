@@ -126,7 +126,11 @@ class StaticAssetsTest < Wurk::Test::EngineCase
 
     options "/wurk-assets/assets/#{File.basename(asset)}"
 
-    refute_includes last_response.headers['cache-control'].to_s, 'immutable'
+    # Rack::Files answers OPTIONS with 200 + Allow (rack/files.rb:69). The
+    # contract is no cache directive at all, not merely "not immutable" —
+    # asserting nil would fail if OPTIONS ever picked up `public, no-cache`.
+    assert_equal 200, last_response.status
+    assert_nil last_response.headers['cache-control']
   end
 
   def test_unknown_asset_falls_through_with_404
