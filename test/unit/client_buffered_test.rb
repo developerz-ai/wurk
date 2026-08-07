@@ -552,19 +552,33 @@ class ClientBufferedTest < Wurk::Test::UnitCase
 
   # Statsd singletons are process-global — serialize against every other test
   # class that also rewrites `Wurk::Metrics::Statsd.increment`.
-  def with_statsd_capture
+  def with_statsd_capture(&)
     Wurk::Test::STATSD_MUTEX.synchronize do
       calls = []
-      Wurk::Metrics::Statsd.singleton_class.alias_method(:__increment_real, :increment)
-      Wurk::Metrics::Statsd.define_singleton_method(:increment) { |metric, **| calls << metric }
-      begin
-        yield
-        calls
-      ensure
-        Wurk::Metrics::Statsd.singleton_class.send(:alias_method, :increment, :__increment_real)
-        Wurk::Metrics::Statsd.singleton_class.send(:remove_method, :__increment_real)
-      end
+      with_stand_in_client { with_increment_stub(calls, &) }
+      calls
     end
+  end
+
+  # The capture stubs `increment` rather than the client, but
+  # `Client#emit_enqueued` resolves the client first and skips the whole emit
+  # when none is wired up — so one has to stand in for the block's duration.
+  # The stub means it is never actually called; any object will do.
+  def with_stand_in_client
+    prev = Wurk.configuration.dogstatsd
+    Wurk.configuration.dogstatsd = Object.new
+    yield
+  ensure
+    Wurk.configuration.dogstatsd = prev
+  end
+
+  def with_increment_stub(calls)
+    Wurk::Metrics::Statsd.singleton_class.alias_method(:__increment_real, :increment)
+    Wurk::Metrics::Statsd.define_singleton_method(:increment) { |metric, **| calls << metric }
+    yield
+  ensure
+    Wurk::Metrics::Statsd.singleton_class.send(:alias_method, :increment, :__increment_real)
+    Wurk::Metrics::Statsd.singleton_class.send(:remove_method, :__increment_real)
   end
 
   def base_item(overrides = {})

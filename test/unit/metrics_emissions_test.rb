@@ -70,6 +70,29 @@ class MetricsEmissionsTest < Wurk::Test::UnitCase
     assert_nil @fake.calls.find { |c| c[1] == 'sidekiq.jobs.enqueued' }
   end
 
+  # With nothing configured the emit must not read the payload at all — no tag
+  # strings built per job for an increment that gets dropped. A payload that
+  # raises on `[]` pins that deterministically, without counting allocations.
+  def test_emit_enqueued_reads_nothing_without_a_client
+    Wurk.configuration.dogstatsd = nil
+
+    assert_nil Wurk::Client.new.send(:emit_enqueued, [tripwire_payload])
+  end
+
+  def test_emit_enqueued_reads_payloads_when_a_client_is_configured
+    assert_raises(RuntimeError) { Wurk::Client.new.send(:emit_enqueued, [tripwire_payload]) }
+  end
+
+  # The guard resolves the client inline, so a builder that raises would take
+  # the enqueue down with it if it weren't swallowed.
+  def test_push_survives_a_raising_dogstatsd_builder
+    Wurk.configuration.dogstatsd = -> { raise 'boom' }
+
+    assert Wurk::Client.new.push('class' => 'MyJob', 'queue' => @ns, 'args' => [])
+  ensure
+    cleanup_queue
+  end
+
   def test_push_bulk_emits_one_jobs_enqueued_per_payload
     Wurk::Client.new.push_bulk('class' => 'MyJob', 'queue' => @ns, 'args' => [[1], [2], [3]])
 
@@ -182,5 +205,13 @@ class MetricsEmissionsTest < Wurk::Test::UnitCase
 
   def cleanup_queue
     Wurk.redis { |c| c.call('UNLINK', "queue:#{@ns}") }
+  end
+
+  # A payload that reports any read of itself, so "allocated nothing" is
+  # assertable as "never indexed" instead of an allocation count.
+  def tripwire_payload
+    Class.new(Hash) do
+      def [](_key) = raise('emit_enqueued must not read payloads with no statsd client')
+    end.new
   end
 end

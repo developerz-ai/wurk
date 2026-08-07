@@ -140,32 +140,52 @@ module Wurk
       end
     end
 
+    JSON_NATIVE = ->(_val) {}
+
+    # Dispatch table for the args walk, ported from Sidekiq (job_util.rb:80-111).
+    # Keyed by `val.class` under `compare_by_identity`, so every node costs one
+    # identity lookup + one call instead of the ladder of `Module#===` checks a
+    # `case/when` compiles to — the entry node is always the args Array, which
+    # sat behind six failing `===` probes.
+    #
+    # Identity lookup means a *subclass* of a JSON-native type misses the table
+    # and falls to the default lambda, i.e. is reported unsafe: an
+    # ActiveSupport::SafeBuffer arg raises where a bare String does not. That is
+    # Sidekiq's behavior and the drop-in contract, not an oversight. Hash keys
+    # are the one exception — they are checked with `is_a?`, so a String
+    # subclass key is accepted, again matching Sidekiq.
+    RECURSIVE_JSON_UNSAFE = { # rubocop:disable Style/MutableConstant -- frozen below, after the two setup calls
+      Integer => JSON_NATIVE,
+      Float => JSON_NATIVE,
+      TrueClass => JSON_NATIVE,
+      FalseClass => JSON_NATIVE,
+      NilClass => JSON_NATIVE,
+      String => JSON_NATIVE,
+      Array => lambda { |val|
+        val.each do |e|
+          bad = RECURSIVE_JSON_UNSAFE[e.class].call(e)
+          return bad unless bad.nil?
+        end
+        nil
+      },
+      Hash => lambda { |val|
+        val.each do |k, v|
+          return k unless k.is_a?(String)
+
+          bad = RECURSIVE_JSON_UNSAFE[v.class].call(v)
+          return bad unless bad.nil?
+        end
+        nil
+      }
+    }
+    RECURSIVE_JSON_UNSAFE.default = ->(val) { val }
+    RECURSIVE_JSON_UNSAFE.compare_by_identity
+    RECURSIVE_JSON_UNSAFE.freeze
+    private_constant :JSON_NATIVE, :RECURSIVE_JSON_UNSAFE
+
     # Returns the first offending value, or nil when the tree is JSON-native.
     def json_unsafe(obj)
-      case obj
-      when String, Integer, Float, TrueClass, FalseClass, NilClass then nil
-      when Array then json_unsafe_array(obj)
-      when Hash then json_unsafe_hash(obj)
-      else obj
-      end
-    end
-
-    def json_unsafe_array(arr)
-      arr.each do |v|
-        bad = json_unsafe(v)
-        return bad unless bad.nil?
-      end
-      nil
-    end
-
-    def json_unsafe_hash(hash)
-      hash.each do |k, v|
-        return k unless k.is_a?(String)
-
-        bad = json_unsafe(v)
-        return bad unless bad.nil?
-      end
-      nil
+      RECURSIVE_JSON_UNSAFE[obj.class].call(obj)
     end
   end
 end

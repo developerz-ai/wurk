@@ -4,22 +4,16 @@ require_relative '../test_helper'
 require 'date'
 require 'stringio'
 
-module WurkGlobalStateLock
-  # One process-wide mutex serializing every test that mutates Wurk's
-  # process-global state (`@default_job_options`, `@strict_args_mode`,
-  # `@testing_mode`, `@server`). Without this, parallel classes holding
-  # separate locks could interleave and corrupt shared state.
-  MUTEX = Mutex.new
-end
-
 class JobUtilTest < Wurk::Test::UnitCase
   parallelize_me!
 
-  STRICT_MUTEX = WurkGlobalStateLock::MUTEX
+  STRICT_MUTEX = Wurk::Test::GLOBAL_STATE_MUTEX
 
   Host = Struct.new(:placeholder) do
     include Wurk::JobUtil
   end
+
+  class StringLike < String; end
 
   # Sidekiq's public API names this `get_sidekiq_options` — wire-compat sacred.
   class StubWorker
@@ -157,6 +151,34 @@ class JobUtilTest < Wurk::Test::UnitCase
     end
   end
 
+  # The walk dispatches on `val.class` through a compare_by_identity table, so a
+  # subclass of a JSON-native type misses and is reported unsafe. Sidekiq
+  # (job_util.rb:80-111) behaves identically — an ActiveSupport::SafeBuffer arg
+  # raises there too — and the oracle is the contract.
+  def test_verify_json_rejects_a_string_subclass_value
+    with_strict_mode(:raise) do
+      err = assert_raises(ArgumentError) { @host.verify_json({ 'class' => 'X', 'args' => [StringLike.new('hi')] }) }
+
+      assert_match(/StringLike/, err.message)
+    end
+  end
+
+  # Hash keys are the documented exception: Sidekiq checks them with `String ===`,
+  # not the identity table, so a String subclass key stays acceptable.
+  def test_verify_json_accepts_a_string_subclass_hash_key
+    with_strict_mode(:raise) do
+      @host.verify_json({ 'class' => 'X', 'args' => [{ StringLike.new('k') => 'v' }] })
+    end
+  end
+
+  def test_verify_json_reports_the_first_offender_in_order
+    with_strict_mode(:raise) do
+      err = assert_raises(ArgumentError) { @host.verify_json({ 'class' => 'X', 'args' => [1, :first, Date.today] }) }
+
+      assert_match(/:first is a Symbol/, err.message)
+    end
+  end
+
   # --- normalize_item --------------------------------------------------
 
   def test_normalize_item_assigns_jid_as_24_hex
@@ -245,6 +267,51 @@ class JobUtilTest < Wurk::Test::UnitCase
     refute item.key?('pool')
   end
 
+  # --- normalize_item: byte-identical payload shape (Plan 04/S8) -------
+  #
+  # Pins #normalize_item's output shape against the merge trim in
+  # #normalize_item / #wrap_options (Plan 04/S7 — merge only when wrapping
+  # actually applies): fewer intermediate Hash#merge calls must never change
+  # which keys land in the final payload or their values. Six representative
+  # shapes exercise every branch: bare class default, per-class
+  # `get_sidekiq_options`, an explicit key overriding both, a `wrapped`
+  # class (whose own options are shadowed once outer class defaults already
+  # set `queue`/`retry` — verified against the real implementation, not
+  # hand-derived), tags + `retry_for` coercion, and `at` + `expires_in`
+  # stamping. `created_at` is excluded — it is a clock read, not merge output.
+  def test_normalize_item_payload_shape_is_unchanged_for_representative_jobs
+    jid = 'a' * 24
+    cases = {
+      plain_default: { 'class' => 'X', 'args' => [1, 2] },
+      per_class_options: { 'class' => StubWorker, 'args' => [] },
+      explicit_override: { 'class' => StubWorker, 'args' => [], 'queue' => 'override', 'retry' => false },
+      wrapped_class: { 'class' => 'ActiveJob::Adapter', 'wrapped' => StubWorker, 'args' => [1] },
+      with_tags_and_retry_for: { 'class' => 'X', 'args' => [], 'tags' => ['a'], 'retry_for' => '30' },
+      with_expires_in_and_at: { 'class' => 'X', 'args' => [], 'at' => 2_000_000_000, 'expires_in' => 60 }
+    }
+
+    actual = cases.to_h do |name, item|
+      item = item.merge('jid' => jid)
+      [name, @host.normalize_item(item).except('created_at')]
+    end
+
+    expected = {
+      plain_default: { 'retry' => true, 'queue' => 'default', 'class' => 'X', 'args' => [1, 2], 'jid' => jid },
+      per_class_options: { 'queue' => 'critical', 'retry' => 5, 'class' => 'JobUtilTest::StubWorker',
+                           'args' => [], 'jid' => jid },
+      explicit_override: { 'queue' => 'override', 'retry' => false, 'class' => 'JobUtilTest::StubWorker',
+                           'args' => [], 'jid' => jid },
+      wrapped_class: { 'queue' => 'default', 'retry' => true, 'class' => 'ActiveJob::Adapter',
+                       'wrapped' => StubWorker, 'args' => [1], 'jid' => jid },
+      with_tags_and_retry_for: { 'retry' => true, 'queue' => 'default', 'class' => 'X', 'args' => [],
+                                 'tags' => ['a'], 'retry_for' => 30, 'jid' => jid },
+      with_expires_in_and_at: { 'retry' => true, 'queue' => 'default', 'class' => 'X', 'args' => [],
+                                'at' => 2_000_000_000, 'expires_in' => 60, 'jid' => jid, 'expiry' => 2_000_000_060.0 }
+    }
+
+    assert_equal expected, actual
+  end
+
   # --- now_in_millis ---------------------------------------------------
 
   def test_now_in_millis_returns_integer
@@ -271,7 +338,7 @@ end
 class WurkTopLevelTest < Wurk::Test::UnitCase
   parallelize_me!
 
-  STATE_MUTEX = WurkGlobalStateLock::MUTEX
+  STATE_MUTEX = Wurk::Test::GLOBAL_STATE_MUTEX
 
   def test_shutdown_is_an_interrupt
     assert_operator Wurk::Shutdown, :<, Interrupt
