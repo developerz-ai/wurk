@@ -469,11 +469,12 @@ module Wurk
         timeout = poll_interval
         # Dedicated fetch pool, not the main one: a parked BLMOVE holds its slot
         # for the whole block window, so routing it here keeps idle fetchers from
-        # starving the main pool's background loops (#101). Extend the socket
-        # read-timeout one second past BLMOVE's own server-side timeout so the
-        # connection's read timeout can't fire while BLMOVE is legitimately blocked.
+        # starving the main pool's background loops (#101). redis-client's
+        # connection_timeout helper (connection_mixin.rb:87-93) adds config.read_timeout
+        # to the blocking call timeout, ensuring the socket read timeout won't fire
+        # while BLMOVE is legitimately blocked.
         job = config.fetch_redis(idempotent: true) do |conn|
-          conn.blocking_call(timeout + 1, 'BLMOVE', public_q, priv, 'RIGHT', 'LEFT', timeout)
+          conn.blocking_call(timeout, 'BLMOVE', public_q, priv, 'RIGHT', 'LEFT', timeout)
         end
         job ? unit_of_work(public_q, priv, name, job) : nil
       end
