@@ -58,6 +58,16 @@ class ComponentTest < Wurk::Test::UnitCase
     assert_predicate @host.tid, :frozen?
   end
 
+  # `Thread#[]` is fiber-local, so memoizing there would miss on every read
+  # taken inside a Fiber — including the ones an Enumerator opens under a job.
+  # The id belongs to the thread, so the memo must too.
+  def test_tid_is_memoized_across_fibers
+    outer = @host.tid
+    inner = ::Fiber.new { @host.tid }.resume
+
+    assert_same outer, inner
+  end
+
   # The forking thread keeps its thread-locals in the child, but its pid — and
   # so its tid — changed. Inheriting the parent's tid would collide with it in
   # `<identity>:work` and mislabel every log line the child writes.

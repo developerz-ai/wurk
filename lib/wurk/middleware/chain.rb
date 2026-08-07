@@ -117,11 +117,14 @@ module Wurk
       # instantiation until `retrieve`/`invoke` runs so each job gets a fresh
       # object.
       #
-      # Whether the middleware takes a config is resolved once, at registration,
-      # rather than per instantiation (`respond_to?` on every job × every entry).
-      # A class that gains `config=` after being registered must be re-added —
-      # in practice registration follows the class body, so the setter (usually
-      # from `include Wurk::Middleware::ServerMiddleware`) is already there.
+      # Whether the class declares `config=` is resolved once, at registration,
+      # so the common case (the setter comes from `include
+      # Wurk::Middleware::ServerMiddleware`) skips a `respond_to?` on every job
+      # × every entry. It is a fast path, not the rule: the contract is "set
+      # `config` if the instance is respondable" (spec §10.1), which also covers
+      # a setter defined on the singleton in `initialize`, one reached through
+      # `method_missing`, or one added to the class after it was registered — so
+      # a class that does not declare it still gets asked.
       class Entry
         attr_reader :klass
 
@@ -133,7 +136,7 @@ module Wurk
 
         def make_new(config = nil)
           instance = @klass.new(*@args)
-          instance.config = config if config && @takes_config
+          instance.config = config if config && (@takes_config || instance.respond_to?(:config=))
           instance
         end
       end

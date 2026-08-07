@@ -405,9 +405,10 @@ class MiddlewareChainTest < Wurk::Test::UnitCase
     assert_equal [cfg], log
   end
 
-  # `config=` support is resolved once, when the entry is registered — a class
-  # that grows the setter afterwards only picks it up on re-registration.
-  def test_config_capability_is_resolved_at_registration
+  # The class check taken at registration is a fast path, not the rule: the
+  # contract is "assign config if the *instance* is respondable" (spec §10.1),
+  # so a setter the class did not declare when it was added must still be seen.
+  def test_config_is_assigned_when_the_setter_appears_after_registration
     cfg = Object.new
     klass = Class.new do
       def call(*_args) = yield
@@ -416,11 +417,30 @@ class MiddlewareChainTest < Wurk::Test::UnitCase
     chain.add(klass)
     klass.class_eval { attr_accessor :config }
 
-    assert_nil chain.retrieve.first.config
+    assert_same cfg, chain.retrieve.first.config
+  end
 
+  # A middleware that only grows the setter on its singleton (or reaches it
+  # through method_missing) never answers `public_method_defined?`.
+  def test_config_is_assigned_when_only_the_instance_responds
+    cfg = Object.new
+    klass = Class.new do
+      def initialize = singleton_class.class_eval { attr_accessor :config }
+      def call(*_args) = yield
+    end
+    chain = Wurk::Middleware::Chain.new(cfg)
     chain.add(klass)
 
     assert_same cfg, chain.retrieve.first.config
+  end
+
+  # The fast path must not invent a setter: a middleware with no `config=` at
+  # all is built untouched, not crashed on.
+  def test_config_is_not_assigned_when_nothing_responds
+    chain = Wurk::Middleware::Chain.new(Object.new)
+    chain.add(NoConfig)
+
+    refute_respond_to chain.retrieve.first, :config=
   end
 
   # --- copy_for / dup ----------------------------------------------------

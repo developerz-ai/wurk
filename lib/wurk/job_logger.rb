@@ -59,15 +59,14 @@ module Wurk
       (::Process.clock_gettime(::Process::CLOCK_MONOTONIC) - start).round(3)
     end
 
+    # The attribute list is a host setting (defaults to %w[bid tags]), so the
+    # walk cannot be short-circuited on the default keys: a host that adds
+    # `tenant_id` logs jobs that carry neither `bid` nor `tags`.
     def context_hash(job_hash)
       h = {
         jid: job_hash['jid'],
         class: job_hash['wrapped'] || job_hash['class']
       }
-
-      # logged_job_attributes defaults to %w[bid tags]; most jobs carry
-      # neither, so skip the walk entirely unless one is present.
-      return h unless job_hash.key?('bid') || job_hash.key?('tags')
 
       @config[:logged_job_attributes].each do |attr|
         h[attr.to_sym] = job_hash[attr] if job_hash.key?(attr)

@@ -47,13 +47,19 @@ module Wurk
     # its thread-locals in the child, where the pid — and therefore the tid —
     # has changed. Without the guard a forked child would report the parent's
     # tid and collide with it in `<identity>:work`.
+    #
+    # Thread-local, not `Thread#[]`: the latter is fiber-local, so a job that
+    # runs inside a Fiber (or any Enumerator) would miss the memo and allocate
+    # a fresh String on every read — the identity the memo exists to cache is
+    # the thread's, and it does not change when a fiber does.
     def self.tid
-      memo = Thread.current[:wurk_tid]
+      thread = Thread.current
+      memo = thread.thread_variable_get(:wurk_tid)
       pid = ::Process.pid
       return memo[1] if memo && memo[0] == pid
 
-      id = (Thread.current.object_id ^ pid).to_s(36).freeze
-      Thread.current[:wurk_tid] = [pid, id].freeze
+      id = (thread.object_id ^ pid).to_s(36).freeze
+      thread.thread_variable_set(:wurk_tid, [pid, id].freeze)
       id
     end
 
