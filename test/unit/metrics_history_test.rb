@@ -148,14 +148,25 @@ class MetricsHistoryTest < Wurk::Test::UnitCase
     assert_operator ttl, :<=, Wurk::Metrics::History::MID_TERM
   end
 
+  # Asserted on the fields a blank name would write, not on the bucket's
+  # existence: the fixed-@at minute bucket is shared with every sibling in this
+  # parallel class, so `EXISTS` on it answers "did anyone record this minute?"
+  # — which is why it flaked. A blank name interpolates to a bare-pipe field
+  # (`|p`) and to an hour key with an empty class segment; no real class name
+  # reaches either.
   def test_record_ignores_blank_klass
+    hour = Wurk::Metrics::History.hour_key('', @at)
     Wurk::Metrics::History.record(nil, 1, success: true, at: @at)
     Wurk::Metrics::History.record('', 1, success: true, at: @at)
     Wurk::Metrics::History.flush
 
-    minute = Wurk::Metrics::History.minute_key(@at)
+    fields = Wurk.redis { |c| c.call('HKEYS', Wurk::Metrics::History.minute_key(@at)) }
+    hour_exists = Wurk.redis { |c| c.call('EXISTS', hour) }
 
-    refute(Wurk.redis { |c| c.call('EXISTS', minute) == 1 })
+    assert_empty fields.grep(/\A\|/), 'a blank class must not write a bare-pipe field'
+    assert_equal 0, hour_exists
+  ensure
+    Wurk.redis { |c| c.call('DEL', hour) }
   end
 
   def test_record_clamps_negative_duration_to_zero

@@ -37,8 +37,34 @@ module Wurk
 
     # --- identity -------------------------------------------------------
 
+    # Base36 `thread.object_id ^ pid` — the id in every log line and the key
+    # each Processor publishes its in-flight job under. Constant for the life
+    # of a thread inside one process and read several times per job, so it is
+    # memoized per thread (frozen: it is used as a Hash key, and an unfrozen
+    # String key is duped on every store).
+    #
+    # The pid is memoized alongside it because the thread that calls fork keeps
+    # its thread-locals in the child, where the pid — and therefore the tid —
+    # has changed. Without the guard a forked child would report the parent's
+    # tid and collide with it in `<identity>:work`.
+    #
+    # Thread-local, not `Thread#[]`: the latter is fiber-local, so a job that
+    # runs inside a Fiber (or any Enumerator) would miss the memo and allocate
+    # a fresh String on every read — the identity the memo exists to cache is
+    # the thread's, and it does not change when a fiber does.
+    def self.tid
+      thread = Thread.current
+      memo = thread.thread_variable_get(:wurk_tid)
+      pid = ::Process.pid
+      return memo[1] if memo && memo[0] == pid
+
+      id = (thread.object_id ^ pid).to_s(36).freeze
+      thread.thread_variable_set(:wurk_tid, [pid, id].freeze)
+      id
+    end
+
     def tid
-      (Thread.current.object_id ^ ::Process.pid).to_s(36)
+      Component.tid
     end
 
     def hostname
@@ -110,10 +136,16 @@ module Wurk
     # Spawns a named thread that runs `block` under `watchdog(name)`. The
     # parent must retain the returned Thread; otherwise GC may not, but
     # report_on_exception is disabled so we don't double-log on death.
+    #
+    # Priority resolution matches Sidekiq (component.rb:44-48): explicit
+    # argument, then `config.thread_priority`, then -1. Ruby's default of 0
+    # buys a 100ms timeslice; each negative step halves it, so -1 keeps a
+    # CPU-heavy capsule from starving its siblings for a whole tick.
     def safe_thread(name, priority: nil, &block)
+      resolved = priority || config.thread_priority || DEFAULT_THREAD_PRIORITY
       Thread.new do
         Thread.current.name = name
-        Thread.current.priority = priority || DEFAULT_THREAD_PRIORITY
+        Thread.current.priority = resolved
         Thread.current.report_on_exception = false
         watchdog(name, &block)
       end
