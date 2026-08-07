@@ -17,11 +17,12 @@ module Wurk
         # Eagerly upload every registered script to the given connection in a
         # single pipelined round-trip (all SCRIPT LOADs, one RTT — not one per
         # script). Idempotent on the Redis side: `SCRIPT LOAD` of the same source
-        # returns the same SHA no matter how often it runs. ChildBoot calls this
-        # once per child right after the post-fork reconnect so the first real
-        # EVALSHA hits a warm cache instead of paying a NOSCRIPT reload. Transient
-        # connection errors are the pool wrapper's job (Wurk::RedisPool#with);
-        # this only ships the loads.
+        # returns the same SHA no matter how often it runs. The script cache is
+        # server-global, so Swarm#preload_lua_scripts calls this once in the
+        # parent before forking and the whole fleet's first EVALSHA hits a warm
+        # cache instead of paying a NOSCRIPT reload. Transient connection errors
+        # are the pool wrapper's job (Wurk::RedisPool#with); this only ships the
+        # loads.
         def script_load_all(redis)
           redis.pipelined do |pipe|
             SCRIPTS.each_value { |src| pipe.call('SCRIPT', 'LOAD', src) }

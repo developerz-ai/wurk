@@ -6,6 +6,7 @@ require_relative 'component'
 require_relative 'launcher'
 require_relative 'fetcher/reliable'
 require_relative 'keys'
+require_relative 'lua'
 require_relative 'swarm/child_boot'
 require_relative 'swarm/backoff'
 require_relative 'swarm/restart'
@@ -109,6 +110,7 @@ module Wurk
       @owner_pid = ::Process.pid
       install_signal_handlers if install_signals
       close_parent_sockets
+      preload_lua_scripts
       fork_children
       child_pids
     end
@@ -240,6 +242,25 @@ module Wurk
       ::ActiveRecord::Base.connection_handler.flush_idle_connections!
     rescue StandardError => e
       logger.warn { "swarm: ActiveRecord close failed: #{e.class}: #{e.message}" }
+    end
+
+    # Between steps 3 and 4. `SCRIPT LOAD` is server-global, so the whole fleet
+    # shares one upload: doing it per child (the old ChildBoot#validate_redis!)
+    # put N-1 redundant round trips on every child's boot-critical path, ahead
+    # of its first fetch. Runs on the supervisor pool — `close_parent_sockets`
+    # just closed the capsule pools and reopening one here would hand every
+    # child an inherited socket, while `fork_child` drops the supervisor pool
+    # before each fork.
+    #
+    # Best-effort: a Redis that is unreachable at boot must not take the
+    # supervisor down with it (children still PING, and a dead Redis crashes
+    # them into respawn backoff instead). A cache that never warmed — or that a
+    # Redis restart wiped after the fork — self-heals on first use, where
+    # `Lua::Loader.eval_cached` reloads on NOSCRIPT and retries.
+    def preload_lua_scripts
+      supervisor_pool.with { |conn| Wurk::Lua::Loader.script_load_all(conn) }
+    rescue StandardError => e
+      logger.warn { "swarm: Lua preload failed (#{e.class}: #{e.message}); children will load on first NOSCRIPT" }
     end
 
     # Step 4.

@@ -81,16 +81,15 @@ class ChildBootTest < Wurk::Test::UnitCase
     end
   end
 
-  # PINGs, primes every Lua script, and (with ActiveRecord absent in unit env)
-  # returns cleanly. A live-cache SCRIPT FLUSH would race peer workers that
-  # share the global script cache, so we assert the end state: all SHAs present.
-  def test_reconnect_after_fork_primes_every_lua_script
+  # Reconnect drops the inherited pools, PINGs through a fresh one, and (with
+  # ActiveRecord absent in the unit env) returns cleanly — so a live connection
+  # exists afterwards where the inherited one was closed.
+  def test_reconnect_after_fork_leaves_a_working_pool
     @boot.send(:reconnect_after_fork)
 
-    shas    = Wurk::Lua::SHAS.values
-    present = @config.redis { |c| c.call('SCRIPT', 'EXISTS', *shas) }
+    pong = @config.redis { |c| c.call('PING') }
 
-    assert(present.all? { |v| v == 1 }, "post-fork boot must leave every script cached, got #{present.inspect}")
+    assert_equal 'PONG', pong
   end
 
   # A6: the dogstatsd client is memoized at the class level, so a forked
@@ -106,16 +105,35 @@ class ChildBootTest < Wurk::Test::UnitCase
     Wurk::Metrics::Statsd.reset!
   end
 
-  def test_validate_redis_pings_then_pipelines_every_script_load
-    result = @boot.send(:validate_redis!)
+  def test_validate_redis_pings_the_fresh_pool
+    assert_equal 'PONG', @boot.send(:validate_redis!)
+  end
 
-    # #with returns the block value; script_load_all is the last expression, so
-    # its one-SHA-per-script pipeline result proves both the PING (which would
-    # have raised first) and the eager load ran on the same checkout.
-    assert_equal Wurk::Lua::SCRIPTS.size, result.size
+  # `SCRIPT LOAD` is server-global and the parent runs it once before forking
+  # (Swarm#preload_lua_scripts). A child that re-uploads the set puts N-1
+  # redundant round trips on its boot-critical path, and `SCRIPT EXISTS` can't
+  # catch the regression — every parallel worker shares one script cache — so
+  # assert on what the child actually sends.
+  def test_validate_redis_leaves_the_lua_upload_to_the_parent
+    sent = record_capsule_commands { @boot.send(:validate_redis!) }
+
+    assert_equal [%w[PING]], sent
   end
 
   private
+
+  # Swaps the default capsule's main pool for a command-recording decorator.
+  # Restored (and the real pool dropped) on the way out so the next checkout
+  # rebuilds normally.
+  def record_capsule_commands
+    sent = []
+    capsule = @config.default_capsule
+    capsule.instance_variable_set(:@redis_pool, Wurk::Test::RecordingPool.new(capsule.redis_pool, sent))
+    yield
+    sent
+  ensure
+    @config.reset_redis_pools!
+  end
 
   # Drives dispatch_signals synchronously against an injected pipe. Every call
   # must end in TERM so the dispatch loop breaks instead of blocking.

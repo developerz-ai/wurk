@@ -18,6 +18,28 @@ class SwarmTest < Wurk::Test::UnitCase
     end
   end
 
+  # Fork-free swarm that snapshots the supervisor pool's command log the moment
+  # the first (faked) fork happens — the Lua preload has to be finished by then
+  # or children boot against a cold script cache.
+  class PreloadProbeSwarm < FakeForkSwarm
+    attr_accessor :commands
+    attr_reader :commands_at_first_fork
+
+    private
+
+    def fork_child(slot, idx)
+      @commands_at_first_fork ||= commands.dup
+      super
+    end
+  end
+
+  # Stands in for a supervisor pool whose Redis is unreachable, without paying
+  # RedisPool#with's real connect backoff (seconds) in a unit test.
+  class DeadPool
+    def with(*) = raise(RedisClient::CannotConnectError, 'connection refused')
+    def disconnect! = nil
+  end
+
   def setup
     super
     @config = Wurk::Configuration.new
@@ -83,6 +105,42 @@ class SwarmTest < Wurk::Test::UnitCase
     swarm = Wurk::Swarm.new(topology: Wurk::Topology.new, config: @config)
 
     assert_raises(ArgumentError) { swarm.boot(install_signals: false) }
+  end
+
+  # --- boot-time Lua preload --------------------------------------------
+
+  # `SCRIPT LOAD` is server-global, so the fleet shares one upload. Children
+  # used to each re-upload the full set on their boot-critical path; the parent
+  # now does it once, and it must land BEFORE the first fork or a child can
+  # still reach its first EVALSHA against a cold cache.
+  def test_boot_uploads_every_lua_script_before_the_first_fork
+    swarm = preload_probe_swarm
+
+    swarm.boot(install_signals: false)
+
+    assert_equal Wurk::Lua::SCRIPTS.size, script_loads(swarm.commands_at_first_fork),
+                 'the parent must upload every Lua script before forking'
+  end
+
+  def test_boot_uploads_the_lua_scripts_only_once_for_the_whole_fleet
+    swarm = preload_probe_swarm(slots: 3)
+
+    swarm.boot(install_signals: false)
+
+    assert_equal Wurk::Lua::SCRIPTS.size, script_loads(swarm.commands),
+                 'the preload must not repeat per slot'
+  end
+
+  # A Redis that is unreachable at boot must not take the supervisor with it:
+  # children still PING (and crash into respawn backoff on a dead Redis), and
+  # `Lua::Loader.eval_cached` reloads on NOSCRIPT, so the cold cache self-heals.
+  def test_boot_survives_an_unreachable_redis_during_the_preload
+    swarm = bare_swarm(FakeForkSwarm)
+    swarm.instance_variable_set(:@supervisor_pool, DeadPool.new)
+
+    pids = swarm.boot(install_signals: false)
+
+    assert_equal 1, pids.size, 'a failed preload must not abort the fork loop'
   end
 
   # --- owner-pid guard --------------------------------------------------
@@ -229,8 +287,23 @@ class SwarmTest < Wurk::Test::UnitCase
 
   private
 
-  def topology
-    Wurk::Topology.flat(count: 1, queues: ['default'], concurrency: 1)
+  def topology(count = 1)
+    Wurk::Topology.flat(count: count, queues: ['default'], concurrency: 1)
+  end
+
+  # A fork-free swarm whose supervisor pool records what boot sends to Redis.
+  # The pool is pre-seeded so `supervisor_pool`'s memo hands the recorder to
+  # `preload_lua_scripts`; teardown returns the wrapped connection.
+  def preload_probe_swarm(slots: 1)
+    swarm = PreloadProbeSwarm.new(topology: topology(slots), config: @config).tap { |s| @swarms << s }
+    swarm.commands = []
+    recorder = Wurk::Test::RecordingPool.new(@config.new_redis_pool(1, 'swarm-preload-test'), swarm.commands)
+    swarm.instance_variable_set(:@supervisor_pool, recorder)
+    swarm
+  end
+
+  def script_loads(commands)
+    commands.count { |cmd| cmd.first(2) == %w[SCRIPT LOAD] }
   end
 
   # Tracked so teardown returns the one supervisor connection a probe opens.

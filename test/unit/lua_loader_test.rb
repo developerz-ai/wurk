@@ -95,6 +95,34 @@ class LuaLoaderTest < Wurk::Test::UnitCase
     assert_equal %w[EVALSHA SCRIPT EVALSHA], conn.command_log
   end
 
+  # The swarm parent primes the cache once and then forks
+  # (Swarm#preload_lua_scripts); children never re-upload, so a Redis restart
+  # any time after that leaves every child holding SHAs the server has
+  # forgotten. Self-heal is exactly what makes skipping the per-child load safe,
+  # so prove it against real Redis and not only against a fake: a real SCRIPT
+  # LOAD must go back out, the retry must return the real Lua value, and the
+  # server must be warm again afterwards.
+  #
+  # A real `SCRIPT FLUSH` would wipe the cache for the parallel workers sharing
+  # this server, so the restart is staged by injecting one NOSCRIPT on the first
+  # EVALSHA — what a restarted server replies — and passing everything else
+  # through to Redis.
+  def test_eval_cached_self_heals_when_the_server_lost_a_preloaded_script
+    set_key = "#{@ns}:restart"
+    @pool.with do |real|
+      Wurk::Lua::Loader.script_load_all(real)
+      real.call('ZADD', set_key, 1, 'job-after-restart')
+      cold = ColdCacheConn.new(real)
+
+      result = Wurk::Lua::Loader.eval_cached(cold, :zpopbyscore, keys: [set_key], argv: [10])
+
+      assert_equal 'job-after-restart', result, 'the retry must return the real Lua value'
+      assert_equal %w[EVALSHA SCRIPT EVALSHA], cold.command_log.map(&:first)
+      assert_equal Wurk::Lua::SHAS[:zpopbyscore], cold.load_reply,
+                   'the recovery must re-upload the registered source — Redis echoes back its SHA'
+    end
+  end
+
   def test_eval_cached_passes_through_non_noscript_errors_without_retry
     conn = FakeErrorConn.new(message: 'ERR wrong number of arguments')
     err = assert_raises(RedisClient::CommandError) do
@@ -199,6 +227,31 @@ class LuaLoaderTest < Wurk::Test::UnitCase
       when 'SCRIPT'
         Wurk::Lua::SHAS.values.first
       end
+    end
+  end
+
+  # A REAL connection with one staged NOSCRIPT: the first EVALSHA fails the way
+  # a restarted (empty-cache) server replies, and everything after it — the
+  # recovery SCRIPT LOAD and the retried EVALSHA — reaches Redis for real.
+  class ColdCacheConn < SimpleDelegator
+    attr_reader :command_log, :load_reply
+
+    def initialize(conn)
+      super
+      @command_log = []
+      @cold = true
+    end
+
+    def call(*args)
+      @command_log << args
+      if @cold && args[0] == 'EVALSHA'
+        @cold = false
+        raise RedisClient::CommandError, "NOSCRIPT No matching script. Use EVAL. #{args[1]}"
+      end
+
+      reply = __getobj__.call(*args)
+      @load_reply = reply if args.first(2) == %w[SCRIPT LOAD]
+      reply
     end
   end
 
