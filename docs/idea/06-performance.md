@@ -1,6 +1,8 @@
-# Performance — Why Wurk Is Faster
+# Performance — How Wurk Is Measured
 
-Speed is a pillar, not a side effect. Wurk must beat stock Sidekiq on every benchmark we ship.
+Speed is measured, not claimed. Wurk is **not** currently faster than stock Sidekiq: it runs at roughly 0.45x-0.86x depending on workload shape, because reliable fetch and per-job metrics cost extra Redis round-trips. The numbers, the method, and the reproduction command live in `docs/benchmarks.md`.
+
+The optimizations below are real and worth keeping — they are why the gap is not larger — but they have not added up to beating stock Sidekiq, and this document does not claim they have.
 
 ## Redis path
 
@@ -55,6 +57,10 @@ Every release must run, and must not regress on:
 
 The benchmark job runs in CI on Blacksmith. Results uploaded as artifacts. PR comment shows delta vs main. Greater than 5% regression flags the PR.
 
-## Promise
+## What actually gates a merge
 
-Wurk is at least as fast as stock Sidekiq on every benchmark, and ideally meaningfully faster on enqueue and bulk paths. If a release can't claim this, the release waits.
+`rake bench` is the regression gate: it compares Wurk against **its own past self** on enqueue, fetch+execute, bulk enqueue, swarm boot, and memory. A regression greater than 5% on any of those blocks the merge.
+
+`rake bench:vs_sidekiq` is the comparison suite against stock Sidekiq. It gates nothing. A green CI run says nothing about how Wurk compares to Sidekiq — only that Wurk has not got slower than it was.
+
+There is deliberately no "must beat Sidekiq to release" rule. One previously stood here and was not followed — v1.5.0 shipped on 2026-08-06 while slower — so it is removed rather than left as a policy releases ignore. Closing the gap is tracked as ordinary performance work, and `docs/benchmarks.md` is the place the current numbers are published.
