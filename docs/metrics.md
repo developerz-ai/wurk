@@ -29,7 +29,9 @@ one-line gem swap.
 
 `Wurk::Metrics::History` is a server middleware added to the default chain when
 `wurk` is required, so a stock boot already records metrics. It times every job
-and writes two Redis hashes per execution, in one pipelined round-trip:
+and accumulates the result in memory; a timer flushes the accumulator into two
+Redis hashes (see
+[Write cadence](#write-cadence-and-what-a-hard-kill-costs)):
 
 | Key | Type | Fields | TTL |
 |-----|------|--------|-----|
@@ -45,7 +47,39 @@ and writes two Redis hashes per execution, in one pipelined round-trip:
 - Writes are best-effort: a Redis failure during the metrics write is passed to
   your error handler and never changes the job's outcome.
 
-Two divergences from Sidekiq worth knowing:
+### Write cadence and what a hard kill costs
+
+Wurk does **not** write to Redis per job. Each worker process accumulates
+`processed` / `failed` / `ms` in memory, keyed by job class and by the minute
+bucket the job ran in, and flushes the whole accumulator every **≤5 seconds** in
+one pipeline per Redis pool — the same `HINCRBY` / `EXPIRE` commands against the
+same keys and fields, six per (class, minute) bucket inside that pool's
+pipeline. `HINCRBY` is additive, so a flushed batch of N executions leaves Redis
+in byte-identical state to N individual writes. It also flushes on a graceful
+stop.
+
+Writing per execution cost six Redis commands — six of the ten Wurk spent on a
+job ([Benchmarks](benchmarks.md#why-wurk-is-slower)) — for counters that back a
+chart. Two things follow from batching them, and both are worth knowing before
+you build on these numbers:
+
+- **Counters lag by up to the flush interval.** A job that ran at `T` appears in
+  the dashboard at `T + ≤5s`. Bucket *attribution* does not drift — the minute
+  bucket is decided when the job runs, not when the flush happens, so a job that
+  ran at 12:03:59 and flushed at 12:04:02 still counts toward 12:03.
+- **A hard kill drops the unflushed window.** `SIGKILL`, an OOM kill, or a lost
+  instance loses up to 5 seconds of that process's counters. Nothing about the
+  *jobs* is lost — they ran, and their retry, dead-set, and private-list state is
+  in Redis as always ([Reliability](reliability.md)). What is lost is statistics.
+  A graceful shutdown loses nothing.
+
+This is the trade stock Sidekiq already makes — it flushes process stats on its
+10-second heartbeat and writes nothing per job — and these counters were already
+explicitly best-effort (a Redis failure during a metrics write has always been
+swallowed into your error handler). For anything that must reconcile exactly,
+they were never the right source; use your own job-level bookkeeping.
+
+Two further divergences from Sidekiq worth knowing:
 
 - Wurk does **not** write the `H:m0` 10-minute rollup. Its key format collides
   with the real minute-0 bucket, which would make that minute read back as a
@@ -378,8 +412,8 @@ without limit.
 
 | Key | Written by | Retention | Steady-state size |
 |-----|-----------|-----------|-------------------|
-| `j\|<YYYYMMDD>\|<H>:<M>` | every job | 3 days from last write | ≤ 4 320 keys; 3 fields × active job classes each |
-| `<klass>-<YYYYMMDD>-<H>` | every job | 3 days from last write | 72 keys × active job classes; 3 fields each |
+| `j\|<YYYYMMDD>\|<H>:<M>` | every worker, ≤5s | 3 days from last write | ≤ 4 320 keys; 3 fields × active job classes each |
+| `<klass>-<YYYYMMDD>-<H>` | every worker, ≤5s | 3 days from last write | 72 keys × active job classes; 3 fields each |
 | `jr\|{1m,5m,1h}\|<epoch>` | rollup leader | 24h / 7d / 30d | ≈ 4 176 keys total — see [Metrics history](metrics-history.md) |
 | `qm\|{1m,5m,1h}\|<epoch>` | queue-rollup leader | 24h / 7d / 30d | ≈ 4 176 keys; 2 fields × live queues each |
 | `history:metrics` | `retain_history` snapshotter | capped at ~10 000 entries | ~3.5 days at the 30s default |
