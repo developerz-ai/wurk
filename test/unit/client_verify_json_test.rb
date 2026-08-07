@@ -51,6 +51,9 @@ class ClientVerifyJsonTest < Wurk::Test::UnitCase
     assert_equal 1, @events.count(:verify)
   end
 
+  # Deliberately the mirror image of the #push_bulk order below: #push runs the
+  # walk on the payload the chain returned (`invoke_chain` + verify), bulk runs
+  # it in the innermost block (`invoke_chain_verified`). Both match Sidekiq.
   def test_push_verifies_after_the_client_middleware_chain
     client(RecordingMiddleware).push(item)
 
@@ -88,6 +91,8 @@ class ClientVerifyJsonTest < Wurk::Test::UnitCase
     assert_equal 3, @events.count(:verify)
   end
 
+  # Inside the chain, unlike #push above — a halting middleware must be able to
+  # short-circuit the walk on args it is about to drop.
   def test_push_bulk_verifies_inside_the_client_middleware_chain
     client(RecordingMiddleware).push_bulk('class' => @class_name, 'queue' => @queue, 'args' => [[1]])
 
