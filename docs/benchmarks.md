@@ -62,7 +62,7 @@ The run carried unrelated background load on the host for part of the session, w
 
 Redis commands per job, counted with `INFO commandstats` over 500 jobs. Reproduce with `bin/rake bench:command_count`, which prints the breakdown below and is the source these numbers are published from:
 
-```
+```text
 wurk — 500 noop jobs drained from queue:default (INFO commandstats)
 
   commands  per job  command

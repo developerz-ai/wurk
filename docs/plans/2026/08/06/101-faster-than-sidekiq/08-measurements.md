@@ -1,6 +1,6 @@
 # 08 — Final measurement record
 
-> Evidence for step 6 of [`08-bench-gate-verify.md`](08-bench-gate-verify.md), taken after slices 02–07 landed (through `8571520`). This file is the raw record; republishing it into `docs/benchmarks.md` is the next task. Numbers here are copied from the run output, never retyped from memory.
+> Evidence for step 6 of [`08-bench-gate-verify.md`](08-bench-gate-verify.md), taken after slices 02–07 landed (through `8571520`). This file is the raw record; it was republished into [`docs/benchmarks.md`](../../../../../benchmarks.md) in `656344f`, and the README/CLAUDE.md/llms.txt summaries followed in `dfed2c0`. Numbers here are copied from the run output, never retyped from memory.
 
 ## Environment
 
@@ -19,7 +19,7 @@
 
 Six full `rake bench` runs on this branch, best-of-3 per side fed to `bin/bench-compare` — the same shape `.github/workflows/bench.yml` runs. This branch carries no `lib/` change, so both sides are the same code and the table is the harness's own noise floor.
 
-```
+```text
 | benchmark                          | base (i/s) | head (i/s) |     Δ |
 |------------------------------------|-----------:|-----------:|------:|
 | wurk enqueue                       |      4.03k |      3.96k | -1.6% |
@@ -96,7 +96,7 @@ Boot to first job, median over all 36 shape-runs per side:
 
 ## 3. `rake bench:command_count` — commands per job
 
-```
+```text
 wurk — 500 noop jobs drained from queue:default (INFO commandstats)
 
   commands  per job  command
@@ -109,13 +109,15 @@ wurk — 500 noop jobs drained from queue:default (INFO commandstats)
 ✓ 3.00 commands/job, within the budget of 3.00 and at the recorded baseline of 3.00
 ```
 
-**3.00 commands/job**, one round trip. Down from the ~10 commands / 4 round trips `docs/benchmarks.md` still publishes.
+**3.00 commands/job**, one round trip. Down from the ~10 commands / 4 round trips `docs/benchmarks.md` published before this record was republished into it.
 
 ## 4. Harness fix this measurement required
 
 `rake bench:vs_sidekiq` did not run at all under bundler 2.7. `child_env` cleared `RUBYOPT` and `RUBYLIB`, but `bundle exec` also exports `BUNDLER_SETUP` (rubygems requires it from `gem_prelude`, so clearing `RUBYOPT` does not stop it) and `GEM_HOME`/`GEM_PATH`, which pin the child to the parent bundle's gem dir. The Sidekiq side therefore resolved against wurk's bundle, where stock sidekiq is not installed, and `install_sidekiq_bundle` raised before a single job ran.
 
-Fixed by clearing every channel (`BUNDLER_LEAKS` in `bench/vs_sidekiq.rb`) and pinned by `test/unit/bench_vs_sidekiq_env_test.rb`, which asks the installed bundler what it injects rather than hard-coding a list, so a new channel in a future bundler fails in the test suite instead of at measurement time.
+Fixed by clearing every channel (`BenchVsSidekiq::ChildEnv::LEAKS` in `bench/vs_sidekiq/child_env.rb`) and pinned by `test/unit/bench_vs_sidekiq_env_test.rb`, which asks the installed bundler what it injects rather than hard-coding a list, so a new channel in a future bundler fails in the test suite instead of at measurement time.
+
+That pin paid for itself immediately: CI's ruby 4.0 bundler also exports `BUNDLE_LOCKFILE`, which outranks `BUNDLE_GEMFILE` outright — `default_lockfile` returns it verbatim when set, so the Sidekiq side would have read wurk's `Gemfile.lock` whatever Gemfile it was handed. The test failed on the runner, not in a measurement.
 
 ## 5. Verdict against the plan's "Done when"
 
@@ -128,7 +130,7 @@ Fixed by clearing every channel (`BUNDLER_LEAKS` in `bench/vs_sidekiq.rb`) and p
 | ≤2 Redis commands per job | 3.00 | ✗ — deliberately: the poison-pill `DEL` was kept, [`02-fetch-ack-metrics.md`](02-fetch-ack-metrics.md) step 4, and 3 is the settled floor |
 | `rake bench` gate green | worst delta −1.6% | ✓ |
 
-**Wurk is no longer materially slower than stock Sidekiq — it is at parity on `cpu` and `io`, and still behind on `noop` and on boot.** Against the numbers `docs/benchmarks.md` currently publishes (noop 0.45×/0.49×, cpu 0.81×/0.86×, io 0.74×/0.66×) that is a large move, and it is the number the round-trip work was aiming at. It is not a "faster than Sidekiq" result. Per CLAUDE.md pillar 3 and the `f4c7d9e` policy, **no "faster" claim may be added to the README, site, or llms.txt.** `noop` — pure framework overhead — is exactly where 3 commands per job against Sidekiq's 1 still costs, and it is the shape that has to cross 1.0× before that changes.
+**Wurk is no longer materially slower than stock Sidekiq — it is at parity on `cpu` and `io`, and still behind on `noop` and on boot.** Against the numbers `docs/benchmarks.md` published before this record replaced them (noop 0.45×/0.49×, cpu 0.81×/0.86×, io 0.74×/0.66×) that is a large move, and it is the number the round-trip work was aiming at. It is not a "faster than Sidekiq" result. Per CLAUDE.md pillar 3 and the `f4c7d9e` policy, **no "faster" claim may be added to the README, site, or llms.txt.** `noop` — pure framework overhead — is exactly where 3 commands per job against Sidekiq's 1 still costs, and it is the shape that has to cross 1.0× before that changes.
 
 ## 6. Reproducing
 
