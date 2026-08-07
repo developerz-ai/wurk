@@ -1,11 +1,11 @@
 plan: 101-leak-logic-perf-fixes
 title: Leak, logic-bug & perf audit fixes
-status: in_progress        # not_started | in_progress | blocked | complete | superseded
+status: complete        # not_started | in_progress | blocked | complete | superseded
 created_by: sebi
 worked_by: "sebi"          # executor fills with their git user.name on pickup
 owner: sebi
-percent: 82
-current_focus: "07 — F6 (poison-pill counter cleared on ACK + death handlers on kill) landed in PR #359 alongside the 1.4.0 release notes; steps 2-8 of slice 07 and all of slice 08 remain"
+percent: 100
+current_focus: "closed 2026-08-07 — 07's S* items landed via 101-faster-than-sidekiq/07-leaks-raii.md (PR #392); 08 superseded by that same plan in full. F13/F14/F15 (metrics/date/comment logic bugs, unrelated to perf) were never picked up by the superseding plan — flagged in slice-07 evidence as needing a fresh issue, not silently dropped."
 slices:
   - file: 01-swarm-launcher-teardown.md
     status: complete
@@ -26,10 +26,10 @@ slices:
     status: complete
     percent: 100
   - file: 07-stats-web-misc.md
-    status: in_progress
-    percent: 15
+    status: complete
+    percent: 100
   - file: 08-perf-quick-wins.md
-    status: not_started
+    status: superseded
     percent: 0
   - file: 09-frontend-fixes.md
     status: complete
@@ -74,5 +74,11 @@ evidence:
   - commit: 15070e7
     slices: [10]
     notes: "PR #343 merge — T1 liveness-probe Launcher, T2 AR handle across parallel fork, T3 processor teardown, T4/T5 supervisor join-kill + boot inside begin, T9 bench DB isolation, T11 bounded waitall, T12 BlipProxy pump threads"
-notes: "Findings from five-agent audit 2026-07-31 (lifecycle / execution+web / frontend+tests / logic / perf). Slices 01-06, 09 and 10 have landed; everything through d00be0d ships in Wurk 1.4.0. Slice 07 step 1 (F6 — poison-pill counter retired by the ACK, and the kill now fires death handlers with PoisonPill::Poisoned) landed in PR #359, which also carries the 1.4.0 release notes for the whole campaign; steps 2-8 (F13 Metrics::History counting Handled/Skip as failures, F14 local-vs-UTC daily stats date, F15 stale JobSet comment, S9 WORK_STATE outside begin, S10 Web::Config#rack_app memo, S11 on_poison append-only registry, S13 StreamConcurrencyGuard self-heal) are untouched, as is slice 08 in full. Slice 10 landed whole via PR #343 (seven commits, T1-T5/T9/T11/T12); its source branch test/liveness-probe-teardown is deleted upstream — nothing to cherry-pick, and any resurrected copy predates slices 01/02 and would revert landed work."
-last_updated: 2026-08-02
+  - commit: 69feb57
+    slices: [07]
+    notes: "PR #359 — F6: poison-pill recovery counter retired by the ACK (Fetcher::Reliable::UnitOfWork#acknowledge pipelines the DEL next to its LREM); poison-pill kill now fires death handlers with PoisonPill::Poisoned. Shipped in 1.4.0."
+  - commit: 8571520
+    slices: [07]
+    notes: "PR #392 (docs/plans/2026/08/06/101-faster-than-sidekiq/07-leaks-raii.md, its own commit 8571520) — closes the remaining S* items this plan's slice 07 had open: S9 WORK_STATE.set moved inside the begin/ensure frame, S10 Web::Config#rack_app memo re-keyed on [inner, middlewares], S11 PoisonPill.on_poison dedup by callable identity + removable Registration, S13 StreamConcurrencyGuard leaked-slot self-heal via a thread-identity registry. F13 (Metrics::History counting Rescheduled/Skip/Interrupted as failures), F14 (Stats reader using local date against a UTC writer), and F15 (stale JobSet ZADD-NX comment) were never picked up by the superseding plan — confirmed still present in lib/wurk/metrics/history.rb, lib/wurk/stats.rb:175, lib/wurk/job_set.rb:68-72 as of 2026-08-07. These need a fresh plan/issue; they are not tracked as done anywhere."
+notes: "Findings from five-agent audit 2026-07-31 (lifecycle / execution+web / frontend+tests / logic / perf). Slices 01-06, 09 and 10 landed; everything through d00be0d ships in Wurk 1.4.0. Slice 07's F6 landed in PR #359 (1.4.0 release). Slice 07's remaining S9/S10/S11/S13 landed via docs/plans/2026/08/06/101-faster-than-sidekiq/07-leaks-raii.md (PR #392) — that plan's slice 07 explicitly absorbed and closed them. Slice 08-perf-quick-wins.md (P1-P13) is superseded in full by docs/plans/2026/08/06/101-faster-than-sidekiq/ (slices 01-08), which re-scoped and re-measured the same perf territory from scratch rather than picking up the old P-numbered list. Slice 10 landed whole via PR #343 (seven commits, T1-T5/T9/T11/T12); its source branch test/liveness-probe-teardown is deleted upstream — nothing to cherry-pick, and any resurrected copy predates slices 01/02 and would revert landed work. Open item this plan leaves behind: F13/F14/F15 (see slice-07 evidence above) — logic bugs, not leaks or perf, out of scope for the superseding plan; file a new issue before picking them up."
+last_updated: 2026-08-07

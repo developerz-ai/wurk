@@ -7,6 +7,7 @@ require 'open3'
 require 'securerandom'
 require 'redis-client'
 require_relative 'support'
+require_relative 'vs_sidekiq/child_env'
 
 # Wurk vs stock Sidekiq — end-to-end job throughput.
 #
@@ -71,17 +72,12 @@ def monotonic = Process.clock_gettime(Process::CLOCK_MONOTONIC)
 # between every run, so the never-DB-0 guard in that helper is load-bearing.
 REDIS_URL = bench_redis_url('12')
 
-# A clean env per child: RUBYOPT carries the PARENT bundle's `-rbundler/setup`,
-# which would re-pin the Sidekiq child to the repo Gemfile and hand it wurk's
-# shadowing lib/sidekiq.rb. Clearing it (and RUBYLIB) is what makes
-# BUNDLE_GEMFILE actually decide which "sidekiq" the child loads.
+# Bundler-isolated child environment — see bench/vs_sidekiq/child_env.rb for
+# which variables `bundle exec` leaks and why each one has to go.
 def child_env(gemfile, shape, extra = {})
-  {
-    'RUBYOPT' => nil, 'RUBYLIB' => nil, 'BUNDLE_GEMFILE' => gemfile,
-    'REDIS_URL' => REDIS_URL,
-    'WURK_BENCH_VS_SHAPE' => shape,
-    'WURK_BENCH_VS_DONE_KEY' => DONE_KEY
-  }.merge(extra)
+  BenchVsSidekiq::ChildEnv.build(
+    gemfile: gemfile, redis_url: REDIS_URL, shape: shape, done_key: DONE_KEY, extra: extra
+  )
 end
 
 def install_sidekiq_bundle
