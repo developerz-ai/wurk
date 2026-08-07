@@ -171,6 +171,7 @@ Not in `DEFAULTS` — unset unless you assign them.
 | `:leader_ttl` | Integer | `30` | Cluster leader lock TTL |
 | `:leader_renew_interval` | Integer | `15` | Leader renew cadence |
 | `:leader_follower_interval` | Integer | `60` | Follower re-campaign cadence |
+| `:leader_initial_wait` | Numeric | `1` | Seconds before the first leader campaign (keeps the boot path free; `0` campaigns immediately) |
 | `:history_stream_cap` | Integer | `10_000` | Cap on the historical-metrics stream |
 | `:health_check_options` | Hash | — | Set by `config.health_check(port:)` |
 | `:web_pool_size` | Integer | `5` | Connections in the dedicated dashboard Redis pool |

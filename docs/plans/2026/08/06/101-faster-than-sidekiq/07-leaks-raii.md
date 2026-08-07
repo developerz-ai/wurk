@@ -18,7 +18,7 @@
 | `lib/wurk/web/config.rb:205-213` | low (S10) | `rack_app` memo ignores `inner` — first caller's inner app pinned forever. Fix: key memo on `[inner, @middlewares]` or drop memo. |
 | `lib/wurk/client/buffered.rb:115-122` | low | `reset!` swaps buffer but never stops `@drainer` — surviving thread ticks against nil'd factory. Fix: `@drainer&.stop` inside `reset!`. Test-only entry today; still a footgun. |
 | `lib/wurk/launcher.rb:208` | low | `reset_redis_pools!` only when `@embedded` — direct `Launcher` drivers (rake/tests) leak every capsule pool's sockets on stop. Fix: always reset on stop; idempotent. |
-| `lib/wurk/configuration.rb:246-248` | low | `lookup` does `@directory[name] ||= …` on a Hash frozen by `freeze!` (`:491`) → `FrozenError` on first post-boot lookup. Fix: pre-warm the directory before freeze, or use a non-frozen inner store. Blocks 06 step 3 (earlier freeze). |
+| ~~`lib/wurk/configuration.rb:246-248`~~ | ~~low~~ | **Landed in 06 step 3** — it blocked the earlier freeze, so it shipped with it. `freeze!` no longer freezes `@directory` (the lazily-filled `lookup` memo), and `prepare_for_fork!` materializes the default capsule before `@capsules` closes, so the same FrozenError can't hit `default_capsule` either. |
 
 Not worth acting on: `lib/wurk/cron.rb:239` tz cache (bounded by config).
 

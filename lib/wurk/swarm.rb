@@ -101,6 +101,21 @@ module Wurk
     # its default disposition — it died instantly and orphaned live, fetching
     # children. Installed first, the trap queues the TERM and the supervise
     # loop drains it (relaying to children) even if it arrives mid-boot.
+    #
+    # `prepare_for_fork!` is the last thing before the fork and stays after
+    # `close_parent_sockets`: it materializes the slot-independent config so
+    # every child inherits it copy-on-write, and none of what it touches opens
+    # a socket — anything that did would land back on the wrong side of step 3.
+    #
+    # Nothing else belongs between steps 3 and 4. #101 boot-audit: a pre-fork
+    # `SCRIPT LOAD` was tried here (the cache is server-global, so one upload
+    # could serve the whole fleet and children would only PING) and MEASURED
+    # SLOWER — `bench:swarm_boot` 152 -> 95 i/s, a 36.7% regression. Step 3 has
+    # just closed every parent socket, so the upload has to open its own
+    # connection, and it lands serially ahead of the first fork: ~2ms of a
+    # ~10ms boot, on every child's path. The per-child upload it replaced cost
+    # far less — the children reconnect in parallel, and it rides in the
+    # pipeline of a PING each one already sends (ChildBoot#validate_redis!).
     def boot(install_signals: true)
       raise 'Wurk::Swarm already booted' unless @assignments.empty?
       raise ArgumentError, 'Topology has no slots' if @topology.empty?
@@ -109,6 +124,7 @@ module Wurk
       @owner_pid = ::Process.pid
       install_signal_handlers if install_signals
       close_parent_sockets
+      @config.prepare_for_fork!
       fork_children
       child_pids
     end
@@ -243,6 +259,16 @@ module Wurk
     end
 
     # Step 4.
+    #
+    # #101 boot-audit: measured, not assumed. Instrumented an 8-child boot
+    # against real Redis — `close_supervisor_pool` costs ~0.01-0.07ms per
+    # call (a nil-checked ivar write plus, at most, a disconnect on an
+    # already-torn-down pool); `Process.fork` itself is ~1-2ms/child and
+    # dominates the loop entirely. Hoisting the close out of the loop would
+    # save microseconds against a multi-millisecond fork syscall — not worth
+    # losing the "must run before the first fork" invariant's current
+    # per-fork enforcement. Left sequential; re-measure with
+    # `bin/rake bench:swarm_boot` before revisiting.
     def fork_children
       @assignments.each_index { |idx| spawn_child(@assignments[idx], idx) }
     end

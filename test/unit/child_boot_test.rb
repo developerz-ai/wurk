@@ -10,6 +10,47 @@ require_relative '../test_helper'
 class ChildBootTest < Wurk::Test::UnitCase
   parallelize_me!
 
+  # Counts round trips — one per pipeline, one per direct call — and nothing
+  # else; a `PING` plus a separate pipelined upload sends the same commands and
+  # returns the same replies, so only the count can tell the one-trip form from
+  # the two-trip one. What is actually sent is asserted against real Redis.
+  class RoundTripCountingConn
+    attr_reader :round_trips
+
+    def initialize
+      @round_trips = 0
+    end
+
+    def call(*_args)
+      @round_trips += 1
+      nil
+    end
+
+    def pipelined
+      @round_trips += 1
+      yield Pipe.new
+      []
+    end
+
+    # Buffered commands cost nothing on their own — the enclosing pipeline is
+    # the round trip.
+    class Pipe
+      def call(*_args) = nil
+    end
+  end
+
+  # Hands the same connection to every checkout. Swallows RedisPool#with's
+  # `idempotent:` keyword — retry behavior is that class's business, not this
+  # test's.
+  class StubPool
+    def initialize(conn)
+      @conn = conn
+    end
+
+    def with(**) = yield(@conn)
+    def disconnect! = nil
+  end
+
   # Records the launcher calls the signal dispatcher makes.
   class FakeLauncher
     attr_reader :events
@@ -81,16 +122,15 @@ class ChildBootTest < Wurk::Test::UnitCase
     end
   end
 
-  # PINGs, primes every Lua script, and (with ActiveRecord absent in unit env)
-  # returns cleanly. A live-cache SCRIPT FLUSH would race peer workers that
-  # share the global script cache, so we assert the end state: all SHAs present.
-  def test_reconnect_after_fork_primes_every_lua_script
+  # Reconnect drops the inherited pools, PINGs through a fresh one, and (with
+  # ActiveRecord absent in the unit env) returns cleanly — so a live connection
+  # exists afterwards where the inherited one was closed.
+  def test_reconnect_after_fork_leaves_a_working_pool
     @boot.send(:reconnect_after_fork)
 
-    shas    = Wurk::Lua::SHAS.values
-    present = @config.redis { |c| c.call('SCRIPT', 'EXISTS', *shas) }
+    pong = @config.redis { |c| c.call('PING') }
 
-    assert(present.all? { |v| v == 1 }, "post-fork boot must leave every script cached, got #{present.inspect}")
+    assert_equal 'PONG', pong
   end
 
   # A6: the dogstatsd client is memoized at the class level, so a forked
@@ -106,16 +146,78 @@ class ChildBootTest < Wurk::Test::UnitCase
     Wurk::Metrics::Statsd.reset!
   end
 
-  def test_validate_redis_pings_then_pipelines_every_script_load
-    result = @boot.send(:validate_redis!)
+  def test_validate_redis_pings_the_fresh_pool
+    assert_equal 'PONG', @boot.send(:validate_redis!).first
+  end
 
-    # #with returns the block value; script_load_all is the last expression, so
-    # its one-SHA-per-script pipeline result proves both the PING (which would
-    # have raised first) and the eager load ran on the same checkout.
-    assert_equal Wurk::Lua::SCRIPTS.size, result.size
+  # The child's whole Redis validation is ONE round trip: the liveness PING and
+  # the eager Lua upload ride in the same pipeline. `SCRIPT EXISTS` can't catch
+  # a regression here — every parallel worker shares one server-global script
+  # cache — so assert on what the child actually sends, and on the single batch
+  # of replies that comes back (two round trips can't produce one).
+  #
+  # #101 boot-audit: hoisting the upload into the parent (children PING only)
+  # was measured and REJECTED — see Swarm#boot. Children reconnect in parallel;
+  # the parent's upload would have been serial, ahead of every fork.
+  def test_validate_redis_uploads_every_lua_script_in_the_ping_round_trip
+    replies = nil
+    sent = record_capsule_commands { replies = @boot.send(:validate_redis!) }
+
+    assert_equal %w[PING], sent.first
+    assert_equal Wurk::Lua::SCRIPTS.size + 1, sent.size, 'nothing else may ride the boot-critical round trip'
+    assert_equal ['PONG', *Wurk::Lua::SHAS.values], replies,
+                 'the PING reply and every uploaded SHA must come back together'
+  end
+
+  # The saving itself: the child's whole Redis validation costs ONE round trip.
+  # A separate `PING` ahead of the upload sends the same commands and returns
+  # the same replies, so the test above cannot see the difference — this can.
+  def test_validate_redis_costs_a_single_round_trip
+    conn = RoundTripCountingConn.new
+    capsule = @config.default_capsule
+    capsule.instance_variable_set(:@redis_pool, StubPool.new(conn))
+
+    @boot.send(:validate_redis!)
+
+    assert_equal 1, conn.round_trips
+  ensure
+    @config.reset_redis_pools!
+  end
+
+  # #101 boot-audit: `reconnect_active_record` must not itself pay a DB
+  # handshake on the child's boot-critical path — `establish_connection`
+  # only records the spec; AR opens the real socket lazily on first checkout.
+  # Pin that here (not just eyeball it) so a future AR upgrade that changes
+  # this can't silently put a DB round trip ahead of `:startup`. Requires
+  # `active_record` + `sqlite3` directly (unit env doesn't load them) rather
+  # than stubbing, per "never mock" — this is real AR, just an in-memory DB.
+  def test_reconnect_active_record_does_not_eagerly_open_a_connection
+    require 'active_record'
+    require 'sqlite3'
+    ::ActiveRecord::Base.establish_connection(adapter: 'sqlite3', database: ':memory:')
+    ::ActiveRecord::Base.connection_handler.clear_active_connections!
+
+    @boot.send(:reconnect_active_record)
+
+    assert_equal 0, ::ActiveRecord::Base.connection_pool.stat[:connections]
+  ensure
+    ::ActiveRecord::Base.connection_handler.clear_all_connections! if defined?(::ActiveRecord::Base)
   end
 
   private
+
+  # Swaps the default capsule's main pool for a command-recording decorator.
+  # Restored (and the real pool dropped) on the way out so the next checkout
+  # rebuilds normally.
+  def record_capsule_commands
+    sent = []
+    capsule = @config.default_capsule
+    capsule.instance_variable_set(:@redis_pool, Wurk::Test::RecordingPool.new(capsule.redis_pool, sent))
+    yield
+    sent
+  ensure
+    @config.reset_redis_pools!
+  end
 
   # Drives dispatch_signals synchronously against an injected pipe. Every call
   # must end in TERM so the dispatch loop breaks instead of blocking.

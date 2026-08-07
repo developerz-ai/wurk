@@ -23,9 +23,15 @@ module Wurk
         # connection errors are the pool wrapper's job (Wurk::RedisPool#with);
         # this only ships the loads.
         def script_load_all(redis)
-          redis.pipelined do |pipe|
-            SCRIPTS.each_value { |src| pipe.call('SCRIPT', 'LOAD', src) }
-          end
+          redis.pipelined { |pipe| queue_script_loads(pipe) }
+        end
+
+        # The same loads, queued onto a pipeline the caller already owns, for a
+        # caller with other work to batch with them: ChildBoot pairs them with
+        # its liveness PING so a child's whole Redis validation costs one round
+        # trip instead of two, on the boot-critical path.
+        def queue_script_loads(pipe)
+          SCRIPTS.each_value { |src| pipe.call('SCRIPT', 'LOAD', src) }
         end
 
         # @param redis [RedisClient] a single connection (not a pool)

@@ -252,6 +252,11 @@ module Wurk
       @directory[name] = instance
     end
 
+    # Memoizes on a miss, and the first miss can land long after boot (an
+    # extension resolved on its first tick), which is why `freeze!` leaves
+    # `@directory` writable: frozen, that lookup raised FrozenError instead of
+    # building the default. `register` — the host-facing half — still refuses
+    # writes past the freeze, so the closed surface is unchanged.
     def lookup(name, default_class = nil)
       @directory[name] ||= default_class&.new
     end
@@ -491,14 +496,39 @@ module Wurk
       mb&.positive? ? mb * 1024 : nil
     end
 
-    def freeze!
-      return self if @frozen
+    # The pre-fork half of `freeze!`, and the only half a forking parent can
+    # run: capsules stay writable until each child has applied its slot
+    # (ChildBoot#apply_slot_to_config) and opened its own Redis pools. What is
+    # left is slot-independent — the options Hash and every capsule's middleware
+    # chains — so the swarm parent settles it once and every child inherits the
+    # result copy-on-write instead of allocating and dirtying its own copy.
+    # Freezing the options here also makes a post-fork option write raise in the
+    # child that wrote it, rather than silently diverging from its siblings.
+    #
+    # `@directory` is deliberately left out — see #lookup.
+    def prepare_for_fork!
+      # The capsule every swarm child configures (ChildBoot reaches for it by
+      # name), and the one a client-only config builds on its first enqueue.
+      # Materialized here so its chains are shared rather than rebuilt N times
+      # — and so `freeze!` can't close `@capsules` around a name that is only
+      # ever resolved later, which turned that first resolution into a
+      # FrozenError on the frozen Hash.
+      default_capsule
+      @capsules.each_value(&:prepare_shared!)
+      @options.freeze
+      @frozen = true
+      self
+    end
 
+    # Guarded on the capsule table, not `@frozen`: a swarm child reaches this
+    # with `prepare_for_fork!` already run in its parent, so `@frozen` is true
+    # while the capsules it has just configured are still open.
+    def freeze!
+      return self if @capsules.frozen?
+
+      prepare_for_fork!
       @capsules.each_value(&:freeze)
       @capsules.freeze
-      @options.freeze
-      @directory.freeze
-      @frozen = true
       self
     end
 

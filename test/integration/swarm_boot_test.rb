@@ -17,13 +17,86 @@ class SwarmBootSentinelWorker
   end
 end
 
+# Records the commands `eval_cached` issues and, when `cold`, fails the first
+# EVALSHA with NOSCRIPT — what a restarted or failed-over Redis replies to a
+# child still holding a SHA the server has forgotten. Everything else passes
+# through to the real connection.
+#
+# The fault is staged rather than provoked with a real `SCRIPT FLUSH`: the
+# script cache is server-global while parallel test workers are isolated only
+# by logical DB, so a flush would strand every peer worker's warm SHAs
+# mid-test. Same technique as lua_loader_test.rb's ColdCacheConn.
+class SwarmColdCacheConn < SimpleDelegator
+  attr_reader :command_log
+
+  def initialize(conn, cold:)
+    super(conn)
+    @command_log = []
+    @cold = cold
+  end
+
+  def call(*args)
+    @command_log << args[0]
+    if @cold && args[0] == 'EVALSHA'
+      @cold = false
+      raise RedisClient::CommandError, "NOSCRIPT No matching script. Use EVAL. #{args[1]}"
+    end
+
+    __getobj__.call(*args)
+  end
+end
+
+# Exercises Wurk::Lua::Loader.eval_cached (the same entry point the fetch/push
+# hot paths use) from inside a forked child, on a fresh connection the parent
+# never touched. Reports `<script result>|<commands it took>` so the parent can
+# tell a plain EVALSHA against the parent-warmed cache from a NOSCRIPT
+# self-heal. `release_if_owner` is a single-key, single-arg script (no shared
+# `queues` SET to pollute), ideal for an isolated per-test lock key.
+class SwarmLuaWorker
+  include Wurk::Job
+
+  LOCK_TOKEN = 'swarm-boot-lua-owner'
+
+  def perform(redis_url, lock_key, result_key, cold)
+    client = RedisClient.config(url: redis_url).new_client
+    conn = SwarmColdCacheConn.new(client, cold: cold)
+    released = Wurk::Lua::Loader.eval_cached(conn, :release_if_owner, keys: [lock_key], argv: [LOCK_TOKEN])
+    client.call('RPUSH', result_key, "#{released}|#{conn.command_log.join(' ')}")
+    client.call('EXPIRE', result_key, 60)
+  ensure
+    client&.close
+  end
+end
+
+# Reports whether the cluster leader lock existed the instant this job ran —
+# the observable proof that a booting child spends its opening Redis round
+# trips on the job path rather than on a leadership CAS.
+class SwarmLeaderOrderProbeWorker
+  include Wurk::Job
+
+  def perform(redis_url, result_key)
+    client = RedisClient.config(url: redis_url).new_client
+    client.call('RPUSH', result_key, client.call('EXISTS', Wurk::Leader::DEFAULT_KEY).to_s)
+    client.call('EXPIRE', result_key, 60)
+  ensure
+    client&.close
+  end
+end
+
 # Real forks, real Redis, real perform. Boot a 2-child swarm, push a job,
 # assert a child runs it. NEVER mock Redis here.
 #
 # `install_signals: false` so the swarm doesn't poison the test process's
-# SIGTERM/INT handlers. The supervisor thread calls Process.wait(-1, …),
-# so tests inside this class must run sequentially (parallelize_me! is a
-# file-level marker; minitest/parallel_fork forks per file, not per test).
+# SIGTERM/INT handlers. The supervisor thread calls Process.wait(-1, …), and
+# the leader-order probe observes `dear-leader` — a key no @ns can namespace —
+# so these tests must never overlap. They can't, on either axis. Within the
+# class: `Wurk::Test::UnitCase` overrides `parallelize_me!` with a no-op, so
+# the marker below leaves test_order at :random (serial), and parallel_fork
+# re-extends any genuinely parallel suite with Minitest::Unparallelize anyway.
+# Across classes: parallel_fork deals whole suites round-robin to NCPU forked
+# workers that each run their slice sequentially on their own Redis logical DB.
+# A mutex would guard neither axis — there is no concurrent reader to contend
+# with, and a peer worker's mutex lives in another process.
 class SwarmBootTest < Wurk::Test::UnitCase
   parallelize_me!
 
@@ -36,6 +109,11 @@ class SwarmBootTest < Wurk::Test::UnitCase
     @queue_name = "#{@ns}-q"
     @sentinel_key = "#{@ns}-sentinel"
     @boot_log_key = "#{@ns}-boot-log"
+    @lock_key = "#{@ns}-lua-lock-1"
+    @lock_key_2 = "#{@ns}-lua-lock-2"
+    @lua_result_key = "#{@ns}-lua-result-1"
+    @lua_result_key_2 = "#{@ns}-lua-result-2"
+    @leader_probe_key = "#{@ns}-leader-probe"
     @config = Wurk::Configuration.new
     @config.logger = ::Logger.new(IO::NULL)
     @config[:timeout] = 5
@@ -43,8 +121,14 @@ class SwarmBootTest < Wurk::Test::UnitCase
   end
 
   def teardown
+    # `dear-leader` is the one key here no @ns can namespace, and every test in
+    # this class boots children that campaign for it. RedisNamespace#teardown's
+    # FLUSHDB swallows its own errors, so drop it explicitly on the observer
+    # connection — a survivor would read as a live leader to the next test.
     @observer_pool&.call('DEL', @sentinel_key, @boot_log_key, "queue:#{@queue_name}",
-                         private_queue_key(@queue_name))
+                         private_queue_key(@queue_name), @lock_key, @lock_key_2,
+                         @lua_result_key, @lua_result_key_2, @leader_probe_key,
+                         Wurk::Leader::DEFAULT_KEY)
     @observer_pool&.close
     @config&.reset_redis_pools!
   ensure
@@ -137,6 +221,84 @@ class SwarmBootTest < Wurk::Test::UnitCase
     end
   end
 
+  # #101 boot-audit: each child uploads every script ONCE, in the pipeline of
+  # the liveness PING it already sends after its fork (ChildBoot), and the
+  # parent's boot path stays off Redis entirely — hoisting the upload there was
+  # measured slower. That the child sends exactly one PING + upload round trip
+  # and the parent sends nothing is pinned deterministically in
+  # test/unit/child_boot_test.rb and test/unit/swarm_test.rb; what only a real
+  # fork can show is the consequence: by the time a child runs its first job, a
+  # single EVALSHA against its own warmed cache is enough — no reload — and if
+  # the server forgets the script afterwards (restart, failover), eval_cached's
+  # own NOSCRIPT rescue heals the child in flight. Both children report the
+  # exact command sequence they took, so neither claim can pass on a
+  # coincidence.
+  def test_a_child_runs_lua_off_its_warmed_cache_and_self_heals_a_lost_script # rubocop:disable Metrics/AbcSize,Minitest/MultipleAssertions
+    swarm = Wurk::Swarm.new(topology: topology_n(2), config: @config, shutdown_timeout: 5)
+    supervisor = nil
+
+    begin
+      swarm.boot(install_signals: false)
+      supervisor = Thread.new { swarm.supervise }
+
+      @observer_pool.call('SET', @lock_key, SwarmLuaWorker::LOCK_TOKEN)
+      push_lua_job(@lock_key, @lua_result_key, cold: false)
+
+      assert_equal ['1|EVALSHA'], wait_for_list(@lua_result_key),
+                   'a child must run release_if_owner in one EVALSHA off the cache its own boot warmed'
+      refute @observer_pool.call('GET', @lock_key), 'the lock key should be gone after release_if_owner'
+
+      @observer_pool.call('SET', @lock_key_2, SwarmLuaWorker::LOCK_TOKEN)
+      push_lua_job(@lock_key_2, @lua_result_key_2, cold: true)
+
+      assert_equal ['1|EVALSHA SCRIPT EVALSHA'], wait_for_list(@lua_result_key_2),
+                   'a child must reload and retry when the server lost the script, and still succeed'
+      refute @observer_pool.call('GET', @lock_key_2), 'the self-healed retry must have run the script for real'
+    ensure
+      begin
+        swarm.shutdown(timeout: 5)
+      rescue StandardError
+        nil
+      end
+      stop_supervisor_thread(supervisor, 10)
+    end
+  end
+
+  # #101 boot-audit: Launcher#run starts managers (fetch/execute) first and
+  # `start_periodic_components` last, and Leader holds its first `SET NX EX`
+  # back by `leader_initial_wait` (leader.rb) — together they keep a booting
+  # process's opening Redis round trips on the job path instead of a leadership
+  # CAS. The observable consequence through a real fork: a queued job runs to
+  # completion while `dear-leader` still does not exist. The follow-up wait
+  # keeps that from passing vacuously — the child must genuinely campaign once
+  # the wait elapses, not simply never campaign. (The source order itself is
+  # pinned by test/unit/launcher_test.rb; a real fork can't resolve two
+  # sub-millisecond boot steps without racing.)
+  def test_probe_job_completes_before_the_leader_key_exists
+    @config[:leader_initial_wait] = 2
+    push_leader_probe_job
+
+    swarm = Wurk::Swarm.new(topology: topology_n(1), config: @config, shutdown_timeout: 5)
+    supervisor = nil
+
+    begin
+      swarm.boot(install_signals: false)
+      supervisor = Thread.new { swarm.supervise }
+
+      assert_equal ['0'], wait_for_list(@leader_probe_key),
+                   'the queued job must finish before the child campaigns for leadership'
+      assert wait_for_key(Wurk::Leader::DEFAULT_KEY),
+             'the child must still take the leader lock once the initial wait elapses'
+    ensure
+      begin
+        swarm.shutdown(timeout: 5)
+      rescue StandardError
+        nil
+      end
+      stop_supervisor_thread(supervisor, 10)
+    end
+  end
+
   private
 
   def topology_n(count)
@@ -177,6 +339,44 @@ class SwarmBootTest < Wurk::Test::UnitCase
     client.push('class' => SwarmBootSentinelWorker.name,
                 'args' => [Wurk::Test.redis_url, @sentinel_key],
                 'queue' => @queue_name)
+  end
+
+  def push_lua_job(lock_key, result_key, cold:)
+    client = Wurk::Client.new(pool: capsule_pool, config: @config)
+    client.push('class' => SwarmLuaWorker.name,
+                'args' => [Wurk::Test.redis_url, lock_key, result_key, cold],
+                'queue' => @queue_name)
+  end
+
+  def push_leader_probe_job
+    client = Wurk::Client.new(pool: capsule_pool, config: @config)
+    client.push('class' => SwarmLeaderOrderProbeWorker.name,
+                'args' => [Wurk::Test.redis_url, @leader_probe_key],
+                'queue' => @queue_name)
+  end
+
+  def wait_for_key(key) # rubocop:disable Naming/PredicateMethod
+    deadline = monotonic_now + POLL_TIMEOUT
+    while monotonic_now < deadline
+      return true if @observer_pool.call('EXISTS', key) == 1
+
+      sleep POLL_INTERVAL
+    end
+    false
+  end
+
+  # Polls an RPUSH-built result list until it has at least one entry, or the
+  # shared POLL_TIMEOUT elapses (returning whatever is there, possibly empty,
+  # so a timeout reads as an assertion failure rather than a silent nil).
+  def wait_for_list(key)
+    deadline = monotonic_now + POLL_TIMEOUT
+    while monotonic_now < deadline
+      vals = @observer_pool.call('LRANGE', key, 0, -1)
+      return vals unless vals.empty?
+
+      sleep POLL_INTERVAL
+    end
+    @observer_pool.call('LRANGE', key, 0, -1)
   end
 
   def capsule_pool

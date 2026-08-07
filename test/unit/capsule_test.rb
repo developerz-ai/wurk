@@ -146,6 +146,43 @@ class CapsuleTest < Wurk::Test::UnitCase
     refute_nil @capsule.instance_variable_get(:@fetch_redis_pool)
   end
 
+  # --- prepare_shared! (the half a swarm parent runs pre-fork) ----------
+
+  def test_prepare_shared_materializes_the_middleware_chains
+    @capsule.prepare_shared!
+    @capsule.freeze
+
+    assert_kind_of Wurk::Middleware::Chain, @capsule.client_middleware
+    assert_kind_of Wurk::Middleware::Chain, @capsule.server_middleware
+  end
+
+  # Slot-dependent and socket-owning state stays behind: pools are sized off
+  # the slot's concurrency, and build_fetcher fires the host's per-child
+  # config[:fetch_setup] hook.
+  def test_prepare_shared_leaves_the_pools_and_fetcher_alone
+    @config[:fetch_setup] = ->(_fetcher) { raise 'fetch_setup must not fire before the fork' }
+
+    @capsule.prepare_shared!
+
+    assert_nil @capsule.fetcher
+    assert_nil @capsule.instance_variable_get(:@redis_pool)
+    assert_nil @capsule.instance_variable_get(:@fetch_redis_pool)
+  end
+
+  def test_prepare_completes_what_prepare_shared_left
+    @capsule.prepare_shared!
+
+    @capsule.prepare!
+
+    assert_instance_of Wurk::Fetcher::Reliable, @capsule.fetcher
+    refute_nil @capsule.instance_variable_get(:@redis_pool)
+    refute_nil @capsule.instance_variable_get(:@fetch_redis_pool)
+  end
+
+  def test_prepare_shared_returns_self
+    assert_same @capsule, @capsule.prepare_shared!
+  end
+
   def test_queue_specs_round_trips_weighted_queues
     @capsule.queues = %w[high,3 default,2]
 

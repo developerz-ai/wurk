@@ -399,6 +399,26 @@ class ConfigurationTest < Wurk::Test::UnitCase
     assert_same instance, @config.lookup(:auto)
   end
 
+  # The directory is a lazily-filled memo, so the first miss can land long
+  # after boot. Frozen along with the rest of the config it raised FrozenError
+  # there instead of building the default.
+  def test_lookup_still_builds_the_default_after_freeze
+    @config.freeze!
+
+    instance = @config.lookup(:auto, Hash)
+
+    assert_kind_of Hash, instance
+    assert_same instance, @config.lookup(:auto)
+  end
+
+  # Only `lookup`'s own memo write survives the freeze; the host-facing half
+  # of the registry stays closed.
+  def test_register_still_refuses_writes_after_freeze
+    @config.freeze!
+
+    assert_raises(FrozenError) { @config.register(:thing, Object.new) }
+  end
+
   # --- handlers ----------------------------------------------------------
 
   def test_error_handlers_default_includes_default_handler
@@ -744,6 +764,73 @@ class ConfigurationTest < Wurk::Test::UnitCase
 
   def test_freeze_returns_self
     assert_same @config, @config.freeze!
+  end
+
+  def test_freeze_closes_the_capsules
+    @config.freeze!
+
+    assert_predicate @config.default_capsule, :frozen?
+  end
+
+  # --- prepare_for_fork! (pre-fork half of the freeze) -------------------
+
+  def test_prepare_for_fork_freezes_the_options
+    @config.prepare_for_fork!
+
+    assert_predicate @config, :frozen?
+    assert_raises(FrozenError) { @config[:concurrency] = 99 }
+  end
+
+  # A swarm child still has to apply its own slot and open its own pools, so
+  # the capsules must survive the parent's half of the freeze untouched.
+  def test_prepare_for_fork_leaves_the_capsules_writable
+    @config.prepare_for_fork!
+    cap = @config.default_capsule
+
+    cap.queues = %w[critical default]
+    cap.concurrency = 3
+    @config.reset_redis_pools!
+
+    refute_predicate cap, :frozen?
+    assert_equal 3, cap.concurrency
+    assert_equal %w[critical default], cap.queues
+  end
+
+  # The point of doing it in the parent: the chains are allocated once and
+  # inherited, and the capsule can then be frozen without the first middleware
+  # access hitting a FrozenError building them.
+  def test_prepare_for_fork_materializes_the_middleware_chains
+    @config.prepare_for_fork!
+    cap = @config.default_capsule
+    cap.freeze
+
+    assert_kind_of Wurk::Middleware::Chain, cap.client_middleware
+    assert_kind_of Wurk::Middleware::Chain, cap.server_middleware
+  end
+
+  # Both pools are sized off the slot's concurrency, and one opened here would
+  # hand every child an inherited socket.
+  def test_prepare_for_fork_builds_no_redis_pools
+    @config.prepare_for_fork!
+    cap = @config.default_capsule
+
+    assert_nil cap.instance_variable_get(:@redis_pool)
+    assert_nil cap.instance_variable_get(:@fetch_redis_pool)
+    assert_nil cap.fetcher
+  end
+
+  def test_freeze_after_prepare_for_fork_still_closes_the_capsules
+    @config.prepare_for_fork!
+    @config.freeze!
+
+    assert_predicate @config.default_capsule, :frozen?
+    assert_predicate @config.capsules, :frozen?
+  end
+
+  def test_prepare_for_fork_is_idempotent
+    @config.prepare_for_fork!
+
+    assert_same @config, @config.prepare_for_fork!
   end
 
   # --- topology (regression #36) -----------------------------------------

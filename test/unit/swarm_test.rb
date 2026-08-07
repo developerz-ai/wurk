@@ -18,6 +18,47 @@ class SwarmTest < Wurk::Test::UnitCase
     end
   end
 
+  # Fork-free swarm that snapshots the supervisor pool's command log the moment
+  # the first (faked) fork happens. Two windows, because a Redis round trip is
+  # boot latency wherever it lands: the snapshot covers steps 3-4 (ahead of
+  # every child), the full log covers the rest of the fork loop.
+  class BootTrafficProbeSwarm < FakeForkSwarm
+    attr_accessor :commands
+    attr_reader :commands_at_first_fork
+
+    private
+
+    def fork_child(slot, idx)
+      @commands_at_first_fork ||= commands.dup
+      super
+    end
+  end
+
+  # Fork-free swarm that snapshots how far the config had settled at the moment
+  # of the first (faked) fork: what a child inherits has to be in place by then,
+  # and what a child still writes for its own slot must not be.
+  class FreezeProbeSwarm < FakeForkSwarm
+    attr_reader :config_at_first_fork
+
+    private
+
+    def fork_child(slot, idx)
+      @config_at_first_fork ||= {
+        frozen: @config.frozen?,
+        capsules_open: @config.capsules.each_value.none?(&:frozen?),
+        chains_built: @config.default_capsule.instance_variable_get(:@server_chain)
+      }
+      super
+    end
+  end
+
+  # Stands in for a supervisor pool whose Redis is unreachable, without paying
+  # RedisPool#with's real connect backoff (seconds) in a unit test.
+  class DeadPool
+    def with(*) = raise(RedisClient::CannotConnectError, 'connection refused')
+    def disconnect! = nil
+  end
+
   def setup
     super
     @config = Wurk::Configuration.new
@@ -83,6 +124,63 @@ class SwarmTest < Wurk::Test::UnitCase
     swarm = Wurk::Swarm.new(topology: Wurk::Topology.new, config: @config)
 
     assert_raises(ArgumentError) { swarm.boot(install_signals: false) }
+  end
+
+  # --- boot stays off Redis ---------------------------------------------
+
+  # #101 boot-audit: a pre-fork `SCRIPT LOAD` was tried between steps 3 and 4
+  # — the cache is server-global, so one upload could serve the whole fleet —
+  # and MEASURED SLOWER (`bench:swarm_boot` 152 -> 95 i/s). Step 3 has just
+  # closed every parent socket, so the upload had to open its own connection,
+  # serially, ahead of every fork. The children reconnect in parallel and carry
+  # the upload in a PING each one already sends (ChildBoot#validate_redis!), so
+  # the parent's boot path stays free of Redis entirely.
+  def test_boot_puts_no_redis_round_trip_on_the_fork_path
+    swarm = boot_traffic_probe_swarm(slots: 3)
+
+    swarm.boot(install_signals: false)
+
+    assert_empty swarm.commands_at_first_fork, 'the parent must not talk to Redis before forking'
+    assert_empty swarm.commands, 'the parent must not talk to Redis between forks either'
+  end
+
+  # The same claim from the other side, and the one a `rescue` around new boot
+  # traffic could not hide: nothing in `boot` may need a reachable Redis. The
+  # children still PING (and crash into respawn backoff on a dead Redis).
+  def test_boot_completes_without_a_reachable_redis
+    swarm = bare_swarm(FakeForkSwarm)
+    swarm.instance_variable_set(:@supervisor_pool, DeadPool.new)
+
+    pids = swarm.boot(install_signals: false)
+
+    assert_equal 1, pids.size, 'boot must not depend on a Redis round trip'
+  end
+
+  # --- boot-time config freeze ------------------------------------------
+
+  # The slot-independent config settles in the parent so every child inherits
+  # the same pages copy-on-write instead of rebuilding and dirtying its own —
+  # and an option written after the fork raises in the child that wrote it.
+  def test_boot_settles_the_shared_config_before_the_first_fork
+    swarm = bare_swarm(FreezeProbeSwarm)
+
+    swarm.boot(install_signals: false)
+
+    assert swarm.config_at_first_fork[:frozen], 'the options must be frozen before the first fork'
+    refute_nil swarm.config_at_first_fork[:chains_built], 'the middleware chains must be built before the fork'
+  end
+
+  # ChildBoot#apply_slot_to_config writes queues + concurrency, and the child
+  # opens its own pools, so the capsules have to cross the fork still open.
+  def test_boot_leaves_the_capsules_open_for_the_child_slot
+    swarm = bare_swarm(FreezeProbeSwarm)
+
+    swarm.boot(install_signals: false)
+
+    assert swarm.config_at_first_fork[:capsules_open], 'a frozen capsule would break the slot assignment'
+    @config.default_capsule.concurrency = 4 # must not raise post-boot either
+
+    assert_equal 4, @config.default_capsule.concurrency
   end
 
   # --- owner-pid guard --------------------------------------------------
@@ -229,8 +327,20 @@ class SwarmTest < Wurk::Test::UnitCase
 
   private
 
-  def topology
-    Wurk::Topology.flat(count: 1, queues: ['default'], concurrency: 1)
+  def topology(count = 1)
+    Wurk::Topology.flat(count: count, queues: ['default'], concurrency: 1)
+  end
+
+  # A fork-free swarm whose supervisor pool records what boot sends to Redis.
+  # The pool is pre-seeded so `supervisor_pool`'s memo hands the recorder to
+  # anything in `boot` that reaches for it; teardown returns the wrapped
+  # connection.
+  def boot_traffic_probe_swarm(slots: 1)
+    swarm = BootTrafficProbeSwarm.new(topology: topology(slots), config: @config).tap { |s| @swarms << s }
+    swarm.commands = []
+    recorder = Wurk::Test::RecordingPool.new(@config.new_redis_pool(1, 'swarm-boot-traffic-test'), swarm.commands)
+    swarm.instance_variable_set(:@supervisor_pool, recorder)
+    swarm
   end
 
   # Tracked so teardown returns the one supervisor connection a probe opens.
