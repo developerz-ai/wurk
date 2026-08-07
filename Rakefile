@@ -150,7 +150,35 @@ namespace :frontend do
   task :dev do
     sh "bun", "run", "dev", chdir: FRONTEND_DIR
   end
+
+  # Build the SPA only when it isn't there yet.
+  #
+  # The dashboard controller raises when the precompiled index.html is missing,
+  # so the engine tests need a bundle on disk. The bundle is built, not
+  # committed (.gitignore), which means a *fresh clone* has none and `rake test`
+  # died with two errors before running a single engine test. CI never saw it:
+  # the workflow runs `rake frontend:build` first. The contributor following
+  # CONTRIBUTING step 3 is exactly who hit it.
+  #
+  # Conditional on purpose. An unconditional prerequisite would re-run the ~4s
+  # install+vite build on every `rake test`, including in CI where the workflow
+  # has already built it in a separate `bundle exec rake` invocation (so Rake's
+  # once-per-run memo doesn't help). Someone changing frontend code still
+  # rebuilds explicitly with `rake frontend:build`; this only rescues the
+  # "there is nothing at all" case.
+  task :ensure_build do
+    next if File.exist?(File.join(DASHBOARD_BUNDLE_DIR, "index.html"))
+
+    puts "frontend: precompiled SPA missing — building it once (rake frontend:build)"
+    Rake::Task["frontend:build"].invoke
+  end
 end
+
+# Engine tests render the dashboard shell, so they need the built SPA present.
+# Attached here rather than inside the TestTask blocks so the dependency reads
+# next to the task that satisfies it.
+task test: "frontend:ensure_build"
+task "test:engine" => "frontend:ensure_build"
 
 namespace :release do
   desc "Pre-release gate: tag matches version, bundle present, version matches CHANGELOG, clean tree, tests green"
