@@ -107,6 +107,57 @@ class MetricsStatsdTest < Wurk::Test::UnitCase
     assert_equal 1, fake.calls.size
   end
 
+  # --- client memo --------------------------------------------------------
+
+  # The memo is tri-state: "unresolved" is distinct from a resolved nil, so an
+  # unconfigured process stops re-reading config on every emit. Assigning
+  # behind the writer's back is how a test can observe the cached nil at all.
+  def test_client_memoizes_the_unconfigured_answer
+    Wurk.configuration.dogstatsd = nil
+
+    assert_nil Wurk::Metrics::Statsd.client
+
+    Wurk.configuration.instance_variable_set(:@dogstatsd, FakeClient.new)
+
+    assert_nil Wurk::Metrics::Statsd.client, 'unconfigured answer must be cached, not re-resolved per call'
+  end
+
+  def test_dogstatsd_assignment_drops_the_memo
+    Wurk.configuration.dogstatsd = nil
+
+    assert_nil Wurk::Metrics::Statsd.client
+
+    fake = FakeClient.new
+    Wurk.configuration.dogstatsd = fake
+
+    assert_same fake, Wurk::Metrics::Statsd.client
+  end
+
+  # Swarm children call reset! after fork so they build their own socket
+  # instead of inheriting the parent's (Swarm::ChildBoot).
+  def test_reset_re_invokes_the_builder
+    invocations = 0
+    Wurk.configuration.dogstatsd = lambda {
+      invocations += 1
+      FakeClient.new
+    }
+
+    Wurk::Metrics::Statsd.client
+    Wurk::Metrics::Statsd.reset!
+    Wurk::Metrics::Statsd.client
+
+    assert_equal 2, invocations
+  end
+
+  # Hot-path callers reach for the client directly to skip work; a builder that
+  # blows up must degrade to "no client", never propagate into their caller.
+  def test_safe_client_swallows_a_raising_builder
+    Wurk.configuration.dogstatsd = -> { raise 'boom' }
+
+    assert_raises(RuntimeError) { Wurk::Metrics::Statsd.client }
+    assert_nil Wurk::Metrics::Statsd.safe_client
+  end
+
   # --- #115: Pro drop-in statsd setup snippet (spec §9.1) -----------------
 
   def test_server_statsd_alias_and_verbatim_snippet

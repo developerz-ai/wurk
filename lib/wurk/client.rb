@@ -450,7 +450,13 @@ module Wurk
     # evict them, and the drain that does land one counts it then — so booking
     # them here would inflate the counter on an outage and double-count every
     # payload that later replays.
+    #
+    # Resolve the client once for the whole batch and bail before touching a
+    # payload: unconfigured is the common case, and the tags below cost two
+    # Strings and an Array per job for `increment` to immediately drop.
     def emit_enqueued(payloads, buffered = nil)
+      return if Wurk::Metrics::Statsd.safe_client.nil?
+
       payloads = reject_by_identity(payloads, buffered) if buffered && !buffered.empty?
       payloads.each do |p|
         Wurk::Metrics::Statsd.increment(
