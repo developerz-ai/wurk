@@ -41,13 +41,7 @@ module Wurk
     # under a per-job log level. ActiveJob-wrapped jobs expose the real
     # class via the "wrapped" key — log that, not the wrapper.
     def prepare(job_hash, &block)
-      h = {
-        jid: job_hash['jid'],
-        class: job_hash['wrapped'] || job_hash['class']
-      }
-      @config[:logged_job_attributes].each do |attr|
-        h[attr.to_sym] = job_hash[attr] if job_hash.key?(attr)
-      end
+      h = context_hash(job_hash)
 
       level = job_hash['log_level']
       Wurk::Context.with(h) do
@@ -63,6 +57,22 @@ module Wurk
 
     def elapsed(start)
       (::Process.clock_gettime(::Process::CLOCK_MONOTONIC) - start).round(3)
+    end
+
+    def context_hash(job_hash)
+      h = {
+        jid: job_hash['jid'],
+        class: job_hash['wrapped'] || job_hash['class']
+      }
+
+      # logged_job_attributes defaults to %w[bid tags]; most jobs carry
+      # neither, so skip the walk entirely unless one is present.
+      return h unless job_hash.key?('bid') || job_hash.key?('tags')
+
+      @config[:logged_job_attributes].each do |attr|
+        h[attr.to_sym] = job_hash[attr] if job_hash.key?(attr)
+      end
+      h
     end
   end
 end

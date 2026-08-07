@@ -14,7 +14,7 @@ module Wurk
     # context is restored on exit, even if the block raises — safe to nest.
     def self.with(hash)
       prior = Thread.current[KEY]
-      Thread.current[KEY] = (prior || {}).merge(hash)
+      Thread.current[KEY] = prior ? prior.merge(hash) : hash
       yield
     ensure
       Thread.current[KEY] = prior
