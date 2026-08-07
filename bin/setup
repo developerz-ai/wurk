@@ -7,14 +7,17 @@ echo "==> bundle install (gem)"
 bundle check >/dev/null 2>&1 || bundle install
 
 if [ -d frontend ]; then
-  # bun is only needed to touch the dashboard frontend (CONTRIBUTING.md); the
-  # precompiled bundle ships in vendor/assets/. Skip gracefully rather than
-  # hard-fail under `set -e` for contributors without bun.
+  # bun is required to run the suite, not just to work on the frontend: the
+  # engine tests render the dashboard shell, vendor/assets/dashboard is
+  # gitignored, and `rake test` builds it via `frontend:build` when missing.
+  # (The bundle ships inside the released gem, so gem *consumers* need neither
+  # Node nor bun.) Still skip gracefully rather than hard-fail under `set -e` —
+  # setup should finish and say what is missing rather than abort halfway.
   if command -v bun >/dev/null 2>&1; then
     echo "==> frontend deps (bun)"
     (cd frontend && bun install)
   else
-    echo "==> skipping frontend deps (bun not installed; only needed if you touch frontend/)"
+    echo "==> skipping frontend deps (bun not installed — install it before \`rake test\`, which builds the dashboard bundle)"
   fi
 fi
 
