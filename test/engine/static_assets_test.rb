@@ -80,6 +80,59 @@ class StaticAssetsTest < Wurk::Test::EngineCase
     assert_equal 200, last_response.status
   end
 
+  # AssetMount sits at index 0 of the HOST middleware stack, so Rack::ETag and
+  # Rack::ConditionalGet never see these responses. Without an explicit
+  # directive the fingerprinted bundle shipped with no Cache-Control at all and
+  # browsers refetched or revalidated it on every dashboard load.
+  def test_fingerprinted_asset_is_cached_immutably
+    asset = Dir.glob(ASSETS_DIR.join('assets', '*.js')).first
+    skip 'no built JS asset to probe' unless asset
+
+    get "/wurk-assets/assets/#{File.basename(asset)}"
+
+    assert_equal 200, last_response.status
+    assert_equal 'public, max-age=31536000, immutable', last_response.headers['cache-control']
+  end
+
+  # index.html keeps the same name across builds, so caching it immutably would
+  # pin a client to a stale dashboard shell forever. It must revalidate.
+  def test_non_fingerprinted_asset_must_revalidate
+    skip 'index.html missing' unless ASSETS_DIR.join('index.html').exist?
+
+    get '/wurk-assets/index.html'
+
+    assert_equal 200, last_response.status
+    assert_equal 'public, no-cache', last_response.headers['cache-control']
+    refute_includes last_response.headers['cache-control'].to_s, 'immutable'
+  end
+
+  # Rack::Files answers more than file reads: OPTIONS (200 + Allow) and 405 for
+  # any other verb. 405 is cacheable by default (RFC 9110 §15.5.6), so caching
+  # one immutably would let a shared proxy serve "method not allowed" for a year
+  # to every client behind it.
+  def test_rejected_verb_gets_no_cache_control
+    asset = Dir.glob(ASSETS_DIR.join('assets', '*.js')).first
+    skip 'no built JS asset to probe' unless asset
+
+    post "/wurk-assets/assets/#{File.basename(asset)}"
+
+    assert_equal 405, last_response.status
+    assert_nil last_response.headers['cache-control']
+  end
+
+  def test_options_request_is_not_cached_immutably
+    asset = Dir.glob(ASSETS_DIR.join('assets', '*.js')).first
+    skip 'no built JS asset to probe' unless asset
+
+    options "/wurk-assets/assets/#{File.basename(asset)}"
+
+    # Rack::Files answers OPTIONS with 200 + Allow (rack/files.rb:69). The
+    # contract is no cache directive at all, not merely "not immutable" —
+    # asserting nil would fail if OPTIONS ever picked up `public, no-cache`.
+    assert_equal 200, last_response.status
+    assert_nil last_response.headers['cache-control']
+  end
+
   def test_unknown_asset_falls_through_with_404
     get '/wurk-assets/assets/does-not-exist-xyz.js'
 
