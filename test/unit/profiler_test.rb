@@ -78,6 +78,15 @@ class ProfilerTest < Wurk::Test::UnitCase
     assert_equal(0, Wurk.redis { |c| c.call('ZCARD', Wurk::Keys::PROFILES) })
   end
 
+  # Every job passes through `call`, so it must not declare a block parameter:
+  # `&block` makes MRI reify the dispatch block into a Proc even for the jobs
+  # that never profile. `yield` does not.
+  def test_call_declares_no_block_parameter
+    kinds = Wurk::Profiler.method(:call).parameters.map(&:first)
+
+    refute_includes kinds, :block
+  end
+
   # Regression: the hook must NOT swallow the job's exceptions — a broad rescue
   # here once ate JobRetry::Skip and re-ran the block, scheduling phantom retries.
   def test_call_propagates_job_exceptions

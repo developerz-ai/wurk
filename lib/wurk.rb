@@ -5,6 +5,7 @@
 # end of this file when Rails is present (drop-in parity, #246), and stay
 # unloaded otherwise so a no-Rails boot pulls in zero Rails code.
 
+require_relative 'wurk/errors'
 require_relative 'wurk/version'
 require_relative 'wurk/keys'
 require_relative 'wurk/redis_pool'
@@ -86,13 +87,6 @@ require 'json'
 #
 # @see https://github.com/developerz-ai/wurk/blob/main/docs/migrate-from-sidekiq.md Migration guide
 module Wurk
-  class Error < StandardError; end
-
-  # Raised inside a worker process to abort the run loop. User code must not
-  # rescue this — the swarm uses it to signal teardown across thread boundaries.
-  # Spec: docs/target/sidekiq-free.md §3.
-  class Shutdown < Interrupt; end
-
   # Process-wide job option defaults. Per-class options from `sidekiq_options`
   # take precedence; this hash is the floor.
   DEFAULT_JOB_OPTIONS = { 'retry' => true, 'queue' => 'default' }.freeze

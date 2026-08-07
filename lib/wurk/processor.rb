@@ -26,6 +26,26 @@ module Wurk
   class Processor
     include Component
 
+    # Interrupt masks for the two `Thread.handle_interrupt` scopes every job
+    # runs inside. Frozen constants rather than the inline literals they
+    # replace: the mask never varies, and a literal allocated two Hashes per
+    # job. Sidekiq hoists the same pair (processor.rb:161-164).
+    IGNORE_SHUTDOWN_INTERRUPTS = { Wurk::Shutdown => :never }.freeze
+    private_constant :IGNORE_SHUTDOWN_INTERRUPTS
+    ALLOW_SHUTDOWN_INTERRUPTS = { Wurk::Shutdown => :immediate }.freeze
+    private_constant :ALLOW_SHUTDOWN_INTERRUPTS
+
+    # Stand-in for the default reloader, `proc { |&b| b.call }`. That default
+    # is an identity wrapper, but a block param (`|&b|`) forces MRI to reify
+    # the dispatch block into a Proc on every job just to call it straight
+    # back; `yield` does not. Same contract, one less allocation per job.
+    module IdentityReloader
+      def self.call
+        yield
+      end
+    end
+    private_constant :IdentityReloader
+
     attr_reader :thread, :job, :capsule
 
     def initialize(capsule, &callback)
@@ -35,7 +55,7 @@ module Wurk
       @done = false
       @job = nil
       @thread = nil
-      @reloader = capsule.config[:reloader] || proc { |&b| b.call }
+      @reloader = resolve_reloader(capsule.config[:reloader])
       @job_logger = (capsule.config[:job_logger] || JobLogger).new(capsule.config)
       @retrier = JobRetry.new(capsule)
     end
@@ -139,6 +159,17 @@ module Wurk
 
     private
 
+    # Only the untouched framework default is swapped out — a host-supplied
+    # reloader (Rails wraps every job in `Rails.application.reloader`) is used
+    # exactly as given. `equal?` against DEFAULTS is sound because
+    # Configuration's deep-dup copies Hashes/Arrays only, so an unset
+    # `:reloader` is still the very Proc object DEFAULTS holds.
+    def resolve_reloader(configured)
+      return IdentityReloader if configured.nil? || configured.equal?(Configuration::DEFAULTS[:reloader])
+
+      configured
+    end
+
     def run
       begin
         process_one until @done
@@ -197,9 +228,9 @@ module Wurk
 
       ack = false
       begin
-        Thread.handle_interrupt(Wurk::Shutdown => :never) do
+        Thread.handle_interrupt(IGNORE_SHUTDOWN_INTERRUPTS) do
           dispatch(job_hash, queue, jobstr) do |instance|
-            Thread.handle_interrupt(Wurk::Shutdown => :immediate) do
+            Thread.handle_interrupt(ALLOW_SHUTDOWN_INTERRUPTS) do
               execute_job(instance, job_hash, queue)
             end
           end

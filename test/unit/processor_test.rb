@@ -460,6 +460,62 @@ class ProcessorTest < Wurk::Test::UnitCase
     assert_equal 0, llen(private_queue), 'job without bid= setter must still ack'
   end
 
+  # --- dispatch onion: reloader + interrupt masks ----------------------
+
+  # The framework default is `proc { |&b| b.call }` — an identity wrapper whose
+  # block parameter forces the dispatch block to be reified into a Proc on
+  # every job. Processor swaps it for an equivalent that yields instead.
+  def test_default_reloader_is_swapped_for_a_non_reifying_identity
+    reloader = reloader_of(@processor)
+
+    refute_kind_of Proc, reloader
+    assert_equal(:from_block, reloader.call { :from_block })
+  end
+
+  def test_absent_reloader_falls_back_to_the_same_identity
+    @config[:reloader] = nil
+    reloader = reloader_of(new_processor)
+
+    assert_same reloader_of(@processor), reloader
+    assert_equal(:from_block, reloader.call { :from_block })
+  end
+
+  # Only the untouched default is swapped: Rails hands us its own reloader and
+  # every job has to run inside it.
+  def test_host_supplied_reloader_is_used_verbatim_and_wraps_perform
+    sink = []
+    custom = proc do |&inner|
+      sink << :enter
+      inner.call
+      sink << :leave
+    end
+    @config[:reloader] = custom
+    processor = new_processor
+    klass = define_worker_appending(sink, :perform)
+    enqueue(class: klass.name, args: [])
+
+    processor.process_one
+
+    assert_same custom, reloader_of(processor)
+    assert_equal %i[enter perform leave], sink
+  end
+
+  # Both masks are constant for the life of the process; the inline literals
+  # they replaced allocated two Hashes per job (Sidekiq hoists the same pair).
+  def test_ignore_shutdown_interrupts_is_a_frozen_constant
+    mask = Wurk::Processor.const_get(:IGNORE_SHUTDOWN_INTERRUPTS)
+
+    assert_equal({ Wurk::Shutdown => :never }, mask)
+    assert_predicate mask, :frozen?
+  end
+
+  def test_allow_shutdown_interrupts_is_a_frozen_constant
+    mask = Wurk::Processor.const_get(:ALLOW_SHUTDOWN_INTERRUPTS)
+
+    assert_equal({ Wurk::Shutdown => :immediate }, mask)
+    assert_predicate mask, :frozen?
+  end
+
   # --- counters / WORK_STATE ------------------------------------------
 
   def test_processed_counter_increments_on_success
@@ -575,6 +631,12 @@ class ProcessorTest < Wurk::Test::UnitCase
 
   def new_processor(&block)
     Wurk::Processor.new(@capsule, &block).tap { |p| @processors << p }
+  end
+
+  # Which reloader a Processor settled on is an internal decision (see
+  # Processor#resolve_reloader) with no public reader.
+  def reloader_of(processor)
+    processor.instance_variable_get(:@reloader)
   end
 
   # `kill(true)` would block in `@thread.value` with no timeout, so teardown

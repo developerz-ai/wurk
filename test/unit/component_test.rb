@@ -230,6 +230,35 @@ class ComponentTest < Wurk::Test::UnitCase
     assert_equal(-3, q.pop)
   end
 
+  # `config.thread_priority` is documented Sidekiq surface (spec §4.2) — the
+  # knob a CPU-heavy app turns back up to 0.
+  def test_safe_thread_honors_configured_thread_priority
+    @config.thread_priority = -2
+    q = Queue.new
+    t = @host.safe_thread('p') { q << Thread.current.priority }
+    t.join
+
+    assert_equal(-2, q.pop)
+  end
+
+  def test_explicit_priority_outranks_the_configured_one
+    @config.thread_priority = 0
+    q = Queue.new
+    t = @host.safe_thread('p', priority: -3) { q << Thread.current.priority }
+    t.join
+
+    assert_equal(-3, q.pop)
+  end
+
+  def test_safe_thread_falls_back_when_configured_priority_is_nil
+    @config.thread_priority = nil
+    q = Queue.new
+    t = @host.safe_thread('p') { q << Thread.current.priority }
+    t.join
+
+    assert_equal Wurk::Component::DEFAULT_THREAD_PRIORITY, q.pop
+  end
+
   def test_safe_thread_reports_errors
     io = StringIO.new
     @config.logger = ::Logger.new(io)

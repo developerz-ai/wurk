@@ -130,10 +130,16 @@ module Wurk
     # Spawns a named thread that runs `block` under `watchdog(name)`. The
     # parent must retain the returned Thread; otherwise GC may not, but
     # report_on_exception is disabled so we don't double-log on death.
+    #
+    # Priority resolution matches Sidekiq (component.rb:44-48): explicit
+    # argument, then `config.thread_priority`, then -1. Ruby's default of 0
+    # buys a 100ms timeslice; each negative step halves it, so -1 keeps a
+    # CPU-heavy capsule from starving its siblings for a whole tick.
     def safe_thread(name, priority: nil, &block)
+      resolved = priority || config.thread_priority || DEFAULT_THREAD_PRIORITY
       Thread.new do
         Thread.current.name = name
-        Thread.current.priority = priority || DEFAULT_THREAD_PRIORITY
+        Thread.current.priority = resolved
         Thread.current.report_on_exception = false
         watchdog(name, &block)
       end

@@ -60,6 +60,16 @@ class CapsuleTest < Wurk::Test::UnitCase
     assert_equal ['default'], @capsule.queues
   end
 
+  # Manager/Processor/Fetcher pass their capsule to Component as `config`, and
+  # safe_thread reads the priority off it.
+  def test_thread_priority_delegates_to_config
+    assert_equal @config.thread_priority, @capsule.thread_priority
+
+    @config.thread_priority = 0
+
+    assert_equal 0, @capsule.thread_priority
+  end
+
   # --- prepare! / fetcher defaulting (regression #35) -------------------
 
   def test_prepare_defaults_fetcher_to_reliable
