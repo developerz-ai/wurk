@@ -3,12 +3,12 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>Wurk — a free, faster, 100% drop-in replacement for Sidekiq + Pro + Enterprise</title>
-  <meta name="description" content="Wurk is a 100% API-compatible drop-in replacement for Sidekiq, Sidekiq Pro, and Sidekiq Enterprise. Same Redis schema, same job JSON, same Ruby DSL. Pro + Enterprise features in one free gem. Faster via fork-based real parallelism.">
+  <title>Wurk — a free, 100% drop-in replacement for Sidekiq + Pro + Enterprise</title>
+  <meta name="description" content="Wurk is a 100% API-compatible drop-in replacement for Sidekiq, Sidekiq Pro, and Sidekiq Enterprise. Same Redis schema, same job JSON, same Ruby DSL. Pro + Enterprise features in one free gem, including a fork-based swarm for multi-core parallelism.">
   <link rel="canonical" href="https://developerz-ai.github.io/wurk/">
   <meta property="og:type" content="website">
-  <meta property="og:title" content="Wurk — free, faster, drop-in Sidekiq replacement">
-  <meta property="og:description" content="Swap one Gemfile line. Same Redis schema and DSL. Pro + Enterprise feature parity in one free gem. Fork-based real parallelism.">
+  <meta property="og:title" content="Wurk — free, drop-in Sidekiq Pro + Enterprise replacement">
+  <meta property="og:description" content="Swap one Gemfile line. Same Redis schema and DSL. Pro + Enterprise feature parity in one free gem. Reliable fetch and a fork-based swarm included.">
   <meta property="og:url" content="https://developerz-ai.github.io/wurk/">
   <meta property="og:image" content="https://developerz-ai.github.io/wurk/wurk-logo.png">
   <meta name="twitter:card" content="summary">
@@ -31,7 +31,11 @@
       --code: #0d1117; --radius: 8px;
     }
     * { box-sizing: border-box; }
-    html { scroll-behavior: smooth; }
+    /* 73px sticky header (12 + 48 logo + 12 + 1px rule) would otherwise cover
+       whatever a jump lands on: #features and #install put their <h2> at y=31,
+       under the bar. Offsetting the scrollport fixes fragment navigation and the
+       browser's scroll-focused-element-into-view in one line. */
+    html { scroll-behavior: smooth; scroll-padding-top: 88px; }
     body {
       margin: 0; background: var(--bg); color: var(--fg);
       font: 16px/1.6 system-ui, -apple-system, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
@@ -39,12 +43,37 @@
     }
     a { color: var(--fg); text-decoration: none; }
     a:hover { text-decoration: underline; text-underline-offset: 2px; }
+    /* Links inside prose carry an always-visible underline. Colour alone is not
+       enough: --fg on a --muted paragraph is 2.6:1, under the 3:1 that WCAG 1.4.1
+       requires to tell a link from its surrounding text, and the hover underline
+       does not help a reader who never hovers. Buttons opt out — they are already
+       distinguishable by their box. */
+    main a:not(.btn):not(.navlink) { text-decoration: underline; text-underline-offset: 2px; }
+    /* Reachable by keyboard, out of the way for everyone else. */
+    .sr-only {
+      position: absolute; width: 1px; height: 1px; margin: -1px; padding: 0;
+      overflow: hidden; clip: rect(0 0 0 0); clip-path: inset(50%); white-space: nowrap; border: 0;
+    }
+    .skip-link {
+      position: absolute; left: 8px; top: -100%; z-index: 100;
+      padding: 10px 16px; border-radius: var(--radius);
+      background: var(--fg); color: var(--bg); font-weight: 700;
+    }
+    .skip-link:focus { top: 8px; }
     .wrap { max-width: 960px; margin: 0 auto; padding: 0 20px; }
     code, pre { font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; }
     pre {
       background: var(--code); border: 1px solid var(--line-strong); border-radius: var(--radius);
       padding: 16px 18px; overflow-x: auto; font-size: 14px; line-height: 1.6; margin: 0;
     }
+    /* `overflow-x: auto` above makes EVERY snippet a scroll container the moment a
+       line is wider than the viewport — the migration diff already is, by 236px at
+       390px wide. A scroll container that nothing can focus is unreachable by
+       keyboard (WCAG 2.1.1), so each <pre> carries tabindex="0". That is only half
+       the fix: a focus stop with no visible ring is a cursor that vanishes, hence
+       the outline. Both belong here rather than on one element, because which
+       snippet overflows depends on the viewport, not on the markup. */
+    pre:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
     .add { color: var(--success); } .del { color: var(--danger); } .cmt { color: var(--muted); }
 
     /* ── Copy-able code block ── */
@@ -251,10 +280,11 @@
   </style>
 </head>
 <body>
+  <a class="skip-link" href="#main">Skip to content</a>
   <header>
     <div class="wrap">
       <nav>
-        <span class="brand"><img src="wurk-logo.png" alt="Wurk — an orc ready to work"> Wurk</span>
+        <span class="brand"><img src="wurk-logo.png" alt="Wurk — an orc ready to work" width="400" height="500"> Wurk</span>
         <span class="spacer"></span>
         <a class="navlink hide" href="#features">Features</a>
         <a class="navlink hide" href="#install">Install</a>
@@ -266,14 +296,18 @@
     </div>
   </header>
 
-  <main>
+  <!-- tabindex="-1" so the skip link MOVES FOCUS rather than only scrolling.
+       Without it the browser jumps the viewport but leaves focus on the link,
+       so the next Tab goes back into the header nav — the very thing the link
+       exists to skip. (Same treatment YARD already gives api/ #main.) -->
+  <main id="main" tabindex="-1">
     <div class="wrap">
       <section class="hero" style="border-top:none">
         <h1>Wurk <i class="fa-solid fa-bolt bolt" aria-hidden="true"></i></h1>
         <p class="strapline">Wurk, wurk. 🪓 Ready to work. Zug zug.</p>
         <p class="lede">
           A 100% drop-in replacement for Sidekiq + Sidekiq Pro + Sidekiq Enterprise.
-          Free forever. Faster.
+          Free forever.
         </p>
         <div class="cta">
           <a class="btn primary" href="https://wurk.demo.developerz.ai/wurk"><i class="fa-solid fa-gauge-high" aria-hidden="true"></i> View the live demo</a>
@@ -285,13 +319,14 @@
             <button class="copy-btn" type="button" data-copy='gem "wurk"' aria-label="Copy to clipboard">
               <i class="fa-regular fa-copy" aria-hidden="true"></i> Copy
             </button>
-<pre><span class="cmt"># Gemfile</span>
+<pre tabindex="0"><span class="cmt"># Gemfile</span>
 gem <span class="add">"wurk"</span></pre>
           </div>
         </div>
       </section>
 
       <section id="pillars" class="reveal" style="border-top:none">
+        <h2 class="sr-only">Why Wurk</h2>
         <div class="pillars">
           <div class="pillar">
             <span class="ic"><i class="fa-solid fa-plug" aria-hidden="true"></i></span>
@@ -305,8 +340,9 @@ gem <span class="add">"wurk"</span></pre>
           </div>
           <div class="pillar">
             <span class="ic"><i class="fa-solid fa-bolt" aria-hidden="true"></i></span>
-            <h3>Faster</h3>
-            <p>Fork-based real parallelism. Every release benchmarked vs Sidekiq.</p>
+            <h3>Parallel</h3>
+            <p>Enterprise's forking swarm, in the free gem. Every release benchmarked against stock
+              Sidekiq &mdash; <a href="https://github.com/developerz-ai/wurk/blob/main/docs/benchmarks.md">published numbers</a>, not claims.</p>
           </div>
         </div>
       </section>
@@ -388,7 +424,7 @@ gem <span class="add">"wurk"</span></pre>
               <button class="copy-btn" type="button" data-copy='gem "wurk"' aria-label="Copy to clipboard">
                 <i class="fa-regular fa-copy" aria-hidden="true"></i> Copy
               </button>
-<pre><span class="cmt"># Gemfile</span>
+<pre tabindex="0"><span class="cmt"># Gemfile</span>
 gem <span class="add">"wurk"</span>
 
 <span class="cmt"># then</span>
@@ -401,7 +437,7 @@ bundle install</pre>
               <button class="copy-btn" type="button" data-copy='mount Wurk::Engine =&gt; "/wurk"' aria-label="Copy to clipboard">
                 <i class="fa-regular fa-copy" aria-hidden="true"></i> Copy
               </button>
-<pre><span class="cmt"># config/routes.rb</span>
+<pre tabindex="0"><span class="cmt"># config/routes.rb</span>
 mount Wurk::Engine =&gt; <span class="add">"/wurk"</span></pre>
             </div>
           </div>
@@ -415,7 +451,7 @@ mount Wurk::Engine =&gt; <span class="add">"/wurk"</span></pre>
           against the same Redis during cutover. Delete the paid gems, add one line:
         </p>
         <div class="codeblock">
-<pre><span class="del">- gem "sidekiq"</span>
+<pre tabindex="0"><span class="del">- gem "sidekiq"</span>
 <span class="del">- gem "sidekiq-pro", source: "https://gems.contribsys.com/"</span>
 <span class="del">- gem "sidekiq-ent", source: "https://enterprise.contribsys.com/"</span>
 <span class="add">+ gem "wurk"</span></pre>
@@ -427,6 +463,7 @@ mount Wurk::Engine =&gt; <span class="add">"/wurk"</span></pre>
           walks through parallelism, clustered Puma, and the gem mappings (cron, unique-jobs).</p>
       </section>
     </div>
+    <p id="copy-status" class="sr-only" role="status" aria-live="polite"></p>
   </main>
 
   <footer>
@@ -468,13 +505,25 @@ mount Wurk::Engine =&gt; <span class="add">"/wurk"</span></pre>
         btn.addEventListener('click', function () {
           var text = btn.getAttribute('data-copy') || '';
           var original = btn.innerHTML;
-          var flash = function (markup, cls) {
+          // The button carries aria-label="Copy to clipboard", which OVERRIDES its
+          // descendant text when the accessible name is computed — so swapping
+          // innerHTML to "Copied" is invisible to a screen reader no matter what it
+          // says. The outcome has to go somewhere that is announced, and it goes
+          // there once, here, rather than in each caller.
+          var say = function (label) {
+            var live = document.getElementById('copy-status');
+            if (!live) return;
+            live.textContent = '';
+            live.textContent = label;
+          };
+          var flash = function (icon, label, cls) {
             if (cls) btn.classList.add(cls);
-            btn.innerHTML = markup;
+            btn.innerHTML = icon + ' ' + label;
+            say(label);
             setTimeout(function () { if (cls) btn.classList.remove(cls); btn.innerHTML = original; }, 1600);
           };
-          var done = function () { flash('<i class="fa-solid fa-check" aria-hidden="true"></i> Copied', 'copied'); };
-          var fail = function () { flash('<i class="fa-solid fa-xmark" aria-hidden="true"></i> Copy failed'); };
+          var done = function () { flash('<i class="fa-solid fa-check" aria-hidden="true"></i>', 'Copied', 'copied'); };
+          var fail = function () { flash('<i class="fa-solid fa-xmark" aria-hidden="true"></i>', 'Copy failed'); };
           if (navigator.clipboard && navigator.clipboard.writeText) {
             navigator.clipboard.writeText(text).then(done, fail);
           } else {

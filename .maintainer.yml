@@ -3,12 +3,19 @@
 #
 # Dogfood pass with coding handoff live. The bot triages (qualifies, labels,
 # asks reporters for repro) and, once a task is ready, dispatches coding to the
-# fleet over the webhook handoff. Auto-merge is ON (dz#789 dependency-PR lane
-# dogfood): green routine PRs — including Dependabot minors — merge on CI +
-# gates; majors still stop on ask_before_acting (major_dep_bump). We still wait
-# for reviewer bots (coderabbit/copilot) to settle before acting. Everything
-# not set here uses the schema defaults (release: release-please, so merged
-# waves cut a batched release).
+# fleet over the webhook handoff. Auto-merge is OFF (pinned 2026-08-01 — see
+# the pr: block): this file was schema-invalid until now, so the platform ran
+# defaultPolicy (auto_merge false), and making the file valid must not change
+# the merge posture: legacy branch protection exists (1 required review + the
+# test matrix), but an approving bot review satisfies the required review, so
+# auto_merge:true would merge routine PRs on bot-approval + green CI with no
+# human. We still wait
+# for reviewer bots (coderabbit/copilot) to settle before acting. The native
+# review: block below activates the developerz review lane alongside CodeRabbit
+# (force: true, advisory — never requests changes, never approves). Everything
+# not set here uses the schema defaults. release: is now declared explicitly
+# (see the release: block) rather than inherited, because the inherited default
+# described a lane this repo does not run.
 version: 1
 
 tone:
@@ -25,23 +32,81 @@ triage:
 
 handoff:
   mode: webhook
+  # Validation placeholder only — the fleet `direct` sink claims the durable
+  # tasks row and never fires an external webhook (developerz-ai/developerz.ai#1026).
+  # Same pattern as developerz-ai/developerz.ai's own live policy. Without this
+  # line the WHOLE file fails semantic validation and is silently discarded.
+  webhook_ref: wh_fleet_placeholder
   ask_reporter_first: false
 
 pr:
   wait_for_other_bots: [coderabbit, copilot]
-  # Restored 2026-07-28: the pin below has been lifted because the condition it
-  # named is met. It read "RESTORE auto_merge: true once #1080 is merged" —
-  # developerz-ai/developerz.ai#1080 (the 120s review-absence hole, where a PR
-  # whose COMMIT was older than two minutes merged with zero review from anyone)
-  # closed COMPLETED on 2026-07-27 via #1113 and #1127. This repo still has no
-  # branch-protection ruleset, so that gate was the whole protection — which is
-  # exactly why the pin was written with a precondition instead of a date.
+  # PINNED OFF 2026-08-01 (operator decision, developerz-ai/wurk#345). Until
+  # this PR the file was schema-invalid (handoff.mode=webhook without
+  # webhook_ref), so the platform discarded it whole and ran defaultPolicy —
+  # whose pr.auto_merge is false. Activating the file with the previously
+  # declared `true` would have flipped auto-merge ON: legacy branch protection
+  # is in place (1 required approving review + the test matrix, strict), but an
+  # approving bot review satisfies the required review, so a bot approval plus
+  # green CI would merge a routine PR with no human in the loop. Activation must
+  # be behavior-preserving on the
+  # merge posture; every other declared value activates as written. The dz#789
+  # dependency-PR lane posture (green routine PRs merge on CI + gates) is
+  # restored only behind a ruleset or a fresh explicit operator decision.
+  # NOTE (wurk#347): this governs the platform BOT only. Non-major Dependabot
+  # updates are also targeted by a separate GitHub-native GHA lane
+  # (.github/workflows/dependabot-automerge.yml, dz#789) that this policy does
+  # not govern. Repo auto-merge is enabled, so that lane is not inert by config
+  # — yet every Dependabot PR so far (#299-304) was merged by hand, so in
+  # practice a human still gates merges on this repo. auto_merge: false scopes
+  # the platform bot; it does not control the GHA lane.
+  auto_merge: false
+
+review:
+  enabled: true
+  force: true                 # CodeRabbit is active on wurk; without this we defer forever
+  depth: inline               # not deep — no checkout guarantee, avoids review.depth_unservable
+  profile: chill
+  request_changes: false      # first live pass must not block a merge
+  approval: false             # first live pass must not APPROVE
+  high_level_summary: true
+  learnings: false            # no KB write-back on a public repo yet
+  chat_auto_reply: true       # keep on — the reply lane is the positive control
+  auto_review:
+    enabled: true
+    incremental: true
+    drafts: false
+    base_branches: [main]     # verified: wurk's default branch is main
+    ignore_title_keywords: [WIP, "DO NOT MERGE"]
+  anti_noise:
+    severity_floor: minor
+    max_comments: 10          # DELIBERATE — pins defaultAntiNoise's 10, defeats the schema's 30
+    dedupe: true
+  path_filters: []
+  path_instructions: []
+
+release:
+  # DECLARED, not inherited (wurk#328). The schema default is
+  # manager: release-please, which implies batched release PRs driven by
+  # release-please-config.json + .release-please-manifest.json. Neither file
+  # exists here and no release PR has ever been opened, so the inherited
+  # default described a lane this repo does not run.
   #
-  # Back to this repo's deliberate dz#789 posture: green routine PRs — Dependabot
-  # minors included — merge on CI + gates; majors still stop on
-  # ask_before_acting (major_dep_bump), and we still wait for the reviewer bots
-  # above to settle first.
-  auto_merge: true
+  # What actually cuts a release:
+  #   1. an operator tags vX.Y.Z
+  #   2. .github/workflows/release.yml fires on push: tags: ["v*"], cuts the
+  #      GitHub Release and publishes to RubyGems via OIDC trusted publishing
+  #   3. the maintainer agent writes the categorized notes at tag time
+  #      (see v1.2.1, published by developerz-ai[bot])
+  #
+  # `none` is the only value in the enum (release-please | none) that describes
+  # that, and it means "no release MANAGER" — it does not govern the agent's
+  # note generation, which the schema does not model at all.
+  manager: none
+  # Left at the default. The registry channels (incl. rubygems) are reserved and
+  # REJECTED at validation time, so publishing to RubyGems is declared by
+  # release.yml's OIDC step, not here.
+  channels: [github-release]
 
 escalate:
   always: [security, license, cla]

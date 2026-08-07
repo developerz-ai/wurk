@@ -12,7 +12,7 @@ The path a job takes:
 | `perform_async` → Redis | Client push (optional [outage buffer](#client-side-redis-outage-buffering)) | Redis unreachable and buffering off → the call raises |
 | `schedule` / `retry` ZSET → queue | Scheduler poller | Pop-then-push window, unless [`reliable_scheduler!`](#the-reliable-scheduler) |
 | queue → worker | [Reliable fetch](#reliable-fetch) (BLMOVE + private list) | None — that's the point |
-| worker → done | ACK on completion, [reaper](#the-reaper) on death | None, but **duplicate execution is possible** |
+| worker → done | [ACK](#the-ack-rides-the-next-fetch) on the next fetch, [reaper](#the-reaper) on death | None, but **duplicate execution is possible** |
 
 ---
 
@@ -82,8 +82,8 @@ queue:<public queue name>|<host>|<pid>|<nonce>|<index>
 > would strand it. See [How "dead" is decided](#how-dead-is-decided) for how
 > liveness is checked differently for nonce-bearing vs. pre-nonce keys.
 
-The job stays in that private list for the entire duration of `perform`. Only
-when the Processor finishes does it ACK:
+The job stays in that private list for the entire duration of `perform`, and
+past it. It leaves only on an ACK:
 
 ```
 LREM  queue:default|web-1|4711|0  1  <job JSON>
@@ -91,7 +91,7 @@ LREM  queue:default|web-1|4711|0  1  <job JSON>
 
 `count = 1` is safe because every payload carries a unique `jid`.
 
-The job is ACKed when the job succeeded **or** when the retry layer booked the
+A job becomes ACK-able when it succeeded **or** when the retry layer booked the
 outcome (scheduled a retry, sent it to the dead set, or a middleware
 re-enqueued it). If neither happened — the process died — the payload is still
 sitting in the private list.
@@ -99,6 +99,34 @@ sitting in the private list.
 **That is why `SIGKILL` is safe.** There is no in-memory-only state to lose: at
 every instant, the payload exists in Redis, in exactly one of the public queue
 or one private list.
+
+### The ACK rides the next fetch
+
+The `LREM` is not sent the instant the Processor is done with the job. It is
+held in the fetcher and pipelined with the **next** fetch's `LMOVE`, so a
+worker draining a busy queue spends one Redis round trip per job in total
+rather than one to fetch and another to ACK.
+
+A pending ACK never sits on an idle worker. It is flushed, as its own round
+trip, before any of:
+
+- the fetcher blocking in `BLMOVE` (a blocking call can't join a pipeline),
+- a fetch pass with nothing to fetch — every served queue paused, or none
+  configured,
+- `SIGTSTP` quiet, which stops the fetcher permanently and so would otherwise
+  strand it until shutdown,
+- the processor stopping,
+- the [shutdown requeue](#graceful-shutdown).
+
+**What this costs.** The window in which a *hard* death — `SIGKILL`, OOM kill,
+lost instance — reclaims an already-finished job and runs it a second time
+widens from "the microseconds after `perform` returned" to "until the next
+fetch, or one of the flushes above". This is the same duplicate execution the
+at-least-once contract already covers (see *Duplicate execution — be honest
+about this*, below), with the same mitigation: idempotent jobs. It is not
+reachable by any graceful path, and nothing can be **lost** — the payload leaves
+the private list later than it used to, never earlier, so every death inside the
+widened window is a reclaim, not a drop.
 
 ### Fetch order and polling
 
@@ -118,15 +146,36 @@ Default is `Wurk::Fetcher::Reliable::TIMEOUT`, **2 seconds**. The socket read
 timeout is set one second wider than the block window so a legitimately blocked
 `BLMOVE` never trips it.
 
-Paused queues (`SMEMBERS paused`) are skipped on every fetch pass. In-flight
-jobs on a paused queue continue to completion.
+Paused queues are skipped on every fetch pass. In-flight jobs on a paused queue
+continue to completion.
+
+The `paused` SET is read with `SMEMBERS` at most once every
+`Fetcher::Reliable::PAUSED_TTL` (**2 seconds**, monotonic clock) per fetcher,
+not once per fetch — otherwise a queue that nobody has paused would cost a
+round trip per job just to keep confirming it. A `pause!` issued from another
+process therefore takes hold within `PAUSED_TTL` rather than on the very next
+fetch. Issued from *inside* a worker process, it takes hold on that process's
+next fetch pass.
+
+That does not move the fleet's worst case: an idle worker is parked in `BLMOVE`
+for `fetch_poll_interval` — 2 seconds by default — and can't observe a pause
+until the block returns, so the cache is exactly the delay the idle path
+already had. Raise `fetch_poll_interval` and the poll interval dominates.
+`Wurk::Queue#paused?`, the JSON API, and the dashboard read Redis directly and
+are never served from this cache.
 
 ### Graceful shutdown
 
 On `SIGTERM`, in-flight jobs get until `shutdown_timeout` (default **25s**,
-`config[:timeout]`) to finish. Whatever is still running at the deadline is
-moved private-list → public queue by `bulk_requeue`, using an LREM-guarded
-`RPUSH` in one Lua hop, before the threads are killed.
+`config[:timeout]`) to finish. Pending ACKs are flushed first, then whatever is
+still running at the deadline is moved private-list → public queue by
+`bulk_requeue`, using an LREM-guarded `RPUSH` in one Lua hop, before the threads
+are killed.
+
+That ordering is load-bearing. A job that finished moments before the deadline
+has an ACK still pending; requeuing before flushing it would find the payload
+still in the private list, pass the guard, and re-run completed work on every
+graceful shutdown.
 
 The LREM guard is what makes this safe against the race where a Processor ACKs
 between the snapshot and the move: LREM removes 0 → RPUSH is skipped → a
@@ -238,8 +287,29 @@ job runs through `Wurk::Middleware::PoisonPill`:
 
 - `INCR super_fetch:recovered:<jid>` with a **72h TTL** (wire-compatible with
   Sidekiq Pro — tooling that watches those keys expects 72h).
+- The counter is dropped when the job **acks** — the round trip that removes it
+  from its private list carries the `DEL`, so the reset costs no extra round
+  trip (it is still a Redis command, one of the three in that pipeline).
+  Anything that finishes an attempt counts (a clean run, or a raise that booked
+  a retry): the job proved it does not take its worker down. Only reclaims of an
+  attempt that never finished accumulate, so unrelated crashes spread across the
+  72h window can't dead-set a job that has been completing all along. Because
+  [the ACK rides the next fetch](#the-ack-rides-the-next-fetch), a job hard-killed
+  after finishing but before its ACK flushed does accrue a recovery; crossing the
+  threshold that way needs three such kills on the same `jid` inside 72h, each of
+  which is a duplicate execution in its own right.
+  The reset needs the jid, which the ACK path takes from the payload it has
+  already parsed. A unit of work carrying no jid — a blank one, or a custom
+  `config[:fetch_class]` whose unit of work has no jid slot at all — still acks
+  normally, it just leaves its counter to expire on the 72h TTL rather than
+  clearing it early. Nothing is deleted on a blank jid: the key it would build
+  is the bare prefix, which is shared rather than per-job.
 - At `RECOVERY_THRESHOLD` (**3**) the job is killed into the dead set and
   `LREM`'d back off the public queue so it isn't also re-run.
+- The kill fires **death handlers** (`ex` is a
+  `Wurk::Middleware::PoisonPill::Poisoned`), so `:death` batch callbacks and
+  error services see it like any other exhaustion. Sidekiq Pro doesn't specify
+  this either way — see [parity divergences](idea/parity-divergences.md).
 - Statsd `sidekiq.jobs.recovered.fetch` fires on every recovery;
   `sidekiq.jobs.poison` on the kill.
 
@@ -260,7 +330,7 @@ end
 ```
 
 `Wurk::Middleware::PoisonPill.recovery_count(jid)` reads the counter without
-bumping it.
+bumping it; `.clear!(jid)` resets one by hand.
 
 ---
 
@@ -509,6 +579,25 @@ Key schema, counter keys, TTLs, lock names, and statsd metric names all match
 Pro exactly — external tooling built against `super_fetch:recovered:*`,
 `super_fetch:reaper`, `sidekiq.jobs.poison`, or the `queue:<q>|<host>|<pid>|<idx>`
 naming works unchanged.
+
+### Intentional divergences
+
+Wire compatibility is absolute; *timing* is where Wurk deviates on purpose.
+Three deviations on this page are deliberate and recorded — none of them
+changes a key, a field, or a guarantee class, and none is behind a flag:
+
+| Divergence | Pro behavior | Wurk behavior | Cost |
+|---|---|---|---|
+| [ACK timing](#the-ack-rides-the-next-fetch) | `LREM` right after success or retry handling | Same ordering, pipelined with the next fetch; flushed before every idle, quiet, stop, or shutdown | A hard kill can re-run an already-finished job for longer. At-least-once either way |
+| [Paused-queue visibility](#fetch-order-and-polling) | `SMEMBERS paused` per fetch pass | Cached 2s per fetcher; in-process pause is immediate | Cross-process pause lands within 2s. Unchanged fleet-wide worst case |
+| [Shutdown requeue](#graceful-shutdown) | In-flight jobs stay in the private list until the process boots again | Moved back to the public queue immediately | None — a rolling deploy recovers the work without waiting for a restart |
+
+The full argument for each, the conditions they were accepted under, and what
+would reverse them: [parity divergences](idea/parity-divergences.md) and
+`docs/plans/2026/08/06/101-faster-than-sidekiq/00-semantics-signoff.md`. Job
+metrics are batched on the same reasoning — that one is in
+[Metrics](metrics.md#write-cadence-and-what-a-hard-kill-costs), since it affects
+dashboard counters rather than delivery.
 
 ---
 

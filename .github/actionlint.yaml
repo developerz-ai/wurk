@@ -1,0 +1,12 @@
+# Blacksmith runners (CLAUDE.md "CI standard"). actionlint only knows the
+# GitHub-hosted label set, so every `runs-on: blacksmith-*` in .github/workflows
+# is otherwise reported as an unknown label. Declaring them here is the
+# documented escape hatch, not a suppression: a typo'd Blacksmith label is still
+# an error because it is not in this list.
+#
+# Keep in sync with the labels actually used by .github/workflows/*.yml.
+self-hosted-runner:
+  labels:
+    - blacksmith-2vcpu-ubuntu-2404
+    - blacksmith-4vcpu-ubuntu-2404
+    - blacksmith-8vcpu-ubuntu-2404

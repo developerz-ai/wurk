@@ -99,7 +99,8 @@
     "cron": "Periodische (Cron-)Jobs mit Zeitplan und letzter Ausführung — klicke auf eine Loop für den Ausführungsverlauf.",
     "metrics": "Durchsatz- und Fehlerverlauf mit Ausführungsstatistiken pro Job.",
     "profiles": "Erfasste Job-Profile — öffne eines im Firefox-Profiler, um den Flame-Graph zu untersuchen.",
-    "search": "Suche einen Job über Warteschlangen, Wiederholungen, geplante und tote Jobs nach JID, Klassenname oder Argument."
+    "search": "Suche einen Job über Warteschlangen, Wiederholungen, geplante und tote Jobs nach JID, Klassenname oder Argument.",
+    "dashboard": "Live-Gesamtwerte, Durchsatz im gewählten Zeitraum und der Zustand der Queues auf einen Blick."
   },
   "busy": {
     "hosts": "{n} Hosts",

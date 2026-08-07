@@ -264,6 +264,7 @@ class LauncherTest < Wurk::Test::UnitCase
     launcher.instance_variable_set(:@leader, nil)
     launcher.cron_poller = nil
     launcher.metrics_rollup = nil
+    launcher.metrics_flusher = nil
 
     launcher.run(async_beat: false)
 
@@ -285,7 +286,7 @@ class LauncherTest < Wurk::Test::UnitCase
     err = assert_raises(RuntimeError) { launcher.run(async_beat: false) }
 
     assert_equal 'redis down at boot', err.message, 'the boot failure must still reach the caller'
-    assert_equal %i[cron_poller metrics_rollup queue_rollup reaper leader heartbeat exit health], seen
+    assert_equal %i[metrics_flusher cron_poller metrics_rollup queue_rollup reaper leader heartbeat exit health], seen
   end
 
   # The rollback is guarded: a launcher that cannot tear itself down must still
@@ -612,7 +613,7 @@ class LauncherTest < Wurk::Test::UnitCase
 
     launcher.stop
 
-    assert_equal %i[cron_poller metrics_rollup queue_rollup reaper leader heartbeat exit health], seen
+    assert_equal %i[metrics_flusher cron_poller metrics_rollup queue_rollup reaper leader heartbeat exit health], seen
   end
 
   def test_stop_reports_a_manager_that_raises_mid_drain
@@ -640,7 +641,7 @@ class LauncherTest < Wurk::Test::UnitCase
 
     launcher.stop
 
-    assert_equal %i[cron_poller metrics_rollup queue_rollup reaper heartbeat exit health], seen
+    assert_equal %i[metrics_flusher cron_poller metrics_rollup queue_rollup reaper heartbeat exit health], seen
   end
 
   def test_stop_closes_the_health_server_when_clearing_the_heartbeat_raises
@@ -1143,6 +1144,8 @@ class LauncherTest < Wurk::Test::UnitCase
     launcher.instance_variable_get(:@leader).define_singleton_method(:start) { nil }
     # Don't spawn the real cron tick thread (it would poll Redis on a timer).
     launcher.cron_poller.define_singleton_method(:start) { nil }
+    # Same for the metrics flusher — its loop outlives a test that never stops.
+    launcher.metrics_flusher.define_singleton_method(:start) { nil }
   end
 
   # Stubs every collaborator #stop's teardown tail touches and records, in
@@ -1151,7 +1154,7 @@ class LauncherTest < Wurk::Test::UnitCase
   # which also covers the safe-nav else branch in the timer-loop sweep.
   def record_teardown(launcher)
     seen = []
-    %i[cron_poller metrics_rollup queue_rollup].each do |name|
+    %i[metrics_flusher cron_poller metrics_rollup queue_rollup].each do |name|
       record_stop(launcher.public_send(name), :terminate, seen, name)
     end
     record_stop(launcher.instance_variable_get(:@reaper), :stop, seen, :reaper)
@@ -1223,12 +1226,18 @@ class LauncherTest < Wurk::Test::UnitCase
       m.define_singleton_method(:quiet) { nil }
       m.define_singleton_method(:stop) { |_d| nil }
     end
-    launcher.poller = launcher.cron_poller = launcher.metrics_rollup = launcher.queue_rollup = launcher.history = nil
+    nil_out_loops(launcher)
     launcher.instance_variable_set(:@leader, nil)
     reaper = launcher.instance_variable_get(:@reaper)
     reaper.define_singleton_method(:start) { nil }
     reaper.define_singleton_method(:stop) { nil }
     reaper.define_singleton_method(:reclaim!) { nil }
+  end
+
+  # Every periodic loop Launcher#build_loops constructs.
+  def nil_out_loops(launcher)
+    launcher.poller = launcher.cron_poller = launcher.metrics_rollup = nil
+    launcher.queue_rollup = launcher.metrics_flusher = launcher.history = nil
   end
 
   # The poller is the first thing #run starts, so nothing else comes up before

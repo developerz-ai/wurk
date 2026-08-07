@@ -20,11 +20,13 @@ class MiddlewarePoisonPillTest < Wurk::Test::UnitCase
     @pool     = Wurk.configuration.redis_pool
     @key      = "super_fetch:recovered:#{@jid}"
     @stub_increments = []
+    @saved_handlers = Wurk.configuration.death_handlers.dup
     Wurk::Middleware::PoisonPill.reset!
     clean
   end
 
   def teardown
+    Wurk.configuration.death_handlers.replace(@saved_handlers)
     Wurk::Middleware::PoisonPill.reset!
     clean
   ensure
@@ -77,6 +79,35 @@ class MiddlewarePoisonPillTest < Wurk::Test::UnitCase
   def test_clear_is_a_noop_for_empty_jid
     assert_nil Wurk::Middleware::PoisonPill.clear!(nil)
     assert_nil Wurk::Middleware::PoisonPill.clear!('')
+  end
+
+  # The ACK path's form of clear!: the DEL rides a pipeline the caller already
+  # opened (Fetcher::Reliable::UnitOfWork#acknowledge) instead of taking a
+  # round trip of its own.
+  def test_clear_in_drops_the_counter_from_an_open_pipeline
+    Wurk::Middleware::PoisonPill.track!(payload_json, queue: @queue)
+    @pool.with { |c| c.pipelined { |pipe| Wurk::Middleware::PoisonPill.clear_in(pipe, @jid) } }
+
+    assert_equal 0, Wurk::Middleware::PoisonPill.recovery_count(@jid)
+  end
+
+  # clear_in guards the blank jid itself rather than trusting its caller:
+  # counter_key(nil) is the bare KEY_PREFIX, so an unguarded DEL would drop a
+  # shared key instead of a per-job one. Queue nothing, and leave a real
+  # counter parked under the bare prefix untouched.
+  def test_clear_in_is_a_noop_for_empty_jid
+    prefix = Wurk::Middleware::PoisonPill.counter_key(nil)
+    @pool.with { |c| c.call('SET', prefix, '7') }
+
+    [nil, ''].each do |blank|
+      @pool.with { |c| c.pipelined { |pipe| Wurk::Middleware::PoisonPill.clear_in(pipe, blank) } }
+    end
+
+    assert_equal('7', @pool.with { |c| c.call('GET', prefix) })
+  end
+
+  def test_counter_key_is_the_pro_wire_key
+    assert_equal @key, Wurk::Middleware::PoisonPill.counter_key(@jid)
   end
 
   def test_recovery_count_returns_zero_for_unknown_jid
@@ -160,6 +191,37 @@ class MiddlewarePoisonPillTest < Wurk::Test::UnitCase
     assert_equal 1, poison.size
     assert_nil poison.first[1]
     assert_equal 1, dead_for_jid_count
+  end
+
+  # --- death handlers -----------------------------------------------------
+
+  # A poison kill is a death: Batch::DeathHandler is a death handler, so
+  # suppressing the notification would strand every batch owning the job.
+  # rubocop:disable Minitest/MultipleAssertions, Metrics/AbcSize
+  def test_poison_kill_fires_death_handlers_with_the_poisoned_error
+    received = []
+    Wurk.configuration.death_handlers << ->(job, ex) { received << [job['jid'], ex] }
+    json = payload_json
+    3.times { Wurk::Middleware::PoisonPill.track!(json, queue: @queue) }
+
+    assert_equal 1, received.size, 'only the kill notifies — sub-threshold recoveries are not deaths'
+    jid, ex = received.first
+
+    assert_equal @jid, jid
+    assert_instance_of Wurk::Middleware::PoisonPill::Poisoned, ex
+    assert_equal 'PoisonPillTestJob was recovered 3 times without completing', ex.message
+    refute_nil ex.backtrace, 'error services expect a backtrace'
+  end
+  # rubocop:enable Minitest/MultipleAssertions, Metrics/AbcSize
+
+  # Falls back to a generic subject when the payload carries no class name.
+  def test_poisoned_error_message_without_a_class
+    received = []
+    Wurk.configuration.death_handlers << ->(_job, ex) { received << ex.message }
+    hash = { 'jid' => @jid }
+    3.times { Wurk::Middleware::PoisonPill.track!(hash, queue: nil) }
+
+    assert_equal ['job was recovered 3 times without completing'], received
   end
 
   # --- callback hooks -----------------------------------------------------

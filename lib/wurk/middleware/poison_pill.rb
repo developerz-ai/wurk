@@ -19,15 +19,22 @@ module Wurk
     # Counter key TTL is wire-compat with Sidekiq Pro — third-party tooling
     # that watches `super_fetch:recovered:*` expects 72h.
     #
-    # No server-middleware registration: callers are reaper / bulk_requeue
-    # paths that drive the lifecycle directly via `track!(payload, queue:)`.
-    # When that integration lands, it just calls `PoisonPill.track!` on each
-    # orphan it about to RPUSH back to the public queue.
+    # No server-middleware registration: the producer is Reaper#drain, which
+    # drives the lifecycle directly via `track!(payload, queue:)` on each
+    # orphan it moves back to the public queue. The consumer is the ACK —
+    # `Fetcher::Reliable::UnitOfWork#acknowledge` pipelines {clear_in} next to
+    # its LREM, so an attempt that finished starts the next one at zero
+    # without costing a round trip of its own.
     module PoisonPill
       RECOVERY_THRESHOLD = 3
       RECOVERY_TTL = 72 * 60 * 60
       KEY_PREFIX = 'super_fetch:recovered:'
-      DEAD_RECORD_LIMIT = 100
+
+      # Handed to death handlers (and therefore to `:death` batch callbacks)
+      # as the cause when a recovered job is killed as a poison pill. Never
+      # raised: nothing is on a stack here — the reaper kills the job from the
+      # outside, on behalf of the workers it took down.
+      class Poisoned < ::StandardError; end
 
       # The `pill` handed to a Pro `super_fetch! { |jobstr, pill| }` recovery
       # callback on the kill path. Responds to .jid/.klass/.count/.queue so a
@@ -62,7 +69,7 @@ module Wurk
 
         jid = job['jid']
         klass = job['class']
-        emit_recovered_fetch(klass, queue)
+        emit('jobs.recovered.fetch', klass, queue)
 
         count = bump_counter(jid) if jid && !jid.empty?
         if count && count >= RECOVERY_THRESHOLD
@@ -80,15 +87,43 @@ module Wurk
       def recovery_count(jid)
         return 0 if jid.nil? || jid.to_s.empty?
 
-        Wurk.redis { |conn| conn.call('GET', "#{KEY_PREFIX}#{jid}") }.to_i
+        Wurk.redis { |conn| conn.call('GET', counter_key(jid)) }.to_i
       end
 
-      # Resets the counter for a jid — call after a successful perform so a
-      # job that recovered twice and then completed doesn't accumulate state.
+      # Resets the counter for a jid. The hot path uses {clear_in} instead —
+      # this is the standalone form for the API/dashboard and for callers with
+      # no pipeline of their own.
       def clear!(jid)
         return if jid.nil? || jid.to_s.empty?
 
-        Wurk.redis { |conn| conn.call('DEL', "#{KEY_PREFIX}#{jid}") }
+        Wurk.redis { |conn| conn.call('DEL', counter_key(jid)) }
+      end
+
+      # Queue the counter reset onto a pipeline the caller already has open.
+      #
+      # The ACK is the reset point. An attempt that got as far as acking —
+      # returned, or raised and booked its retry — is proof the job did not
+      # take its worker down, and that is the only thing this counter
+      # measures. Without the reset, three reclaims caused by three unrelated
+      # crashes inside 72h dead-set a job that has been completing all along
+      # (jids do come back: a UI/API retry re-pushes the same one, as does any
+      # client that supplies its own). Riding a round trip the ACK already
+      # makes is what keeps that free for the jobs — nearly all of them — that
+      # were never reclaimed at all.
+      # Guards the blank jid for the same reason {clear!} and {recovery_count}
+      # do, rather than relying on the one caller to do it: `counter_key(nil)`
+      # is the bare KEY_PREFIX, so an unguarded DEL here would delete a key
+      # that is shared rather than per-job. The caller's own check stays --
+      # it also skips queueing the command at all -- but the invariant belongs
+      # on the method that builds the key.
+      def clear_in(pipe, jid)
+        return if jid.nil? || jid.to_s.empty?
+
+        pipe.call('DEL', counter_key(jid))
+      end
+
+      def counter_key(jid)
+        "#{KEY_PREFIX}#{jid}"
       end
 
       # Register a callback fired when a poison pill is detected. Callbacks
@@ -113,15 +148,12 @@ module Wurk
       # ---- internals --------------------------------------------------
 
       def parse(payload)
-        case payload
-        when Hash then payload
-        when String
-          begin
-            Wurk.load_json(payload)
-          rescue ::JSON::ParserError
-            nil
-          end
-        end
+        return payload if payload.is_a?(::Hash)
+        return nil unless payload.is_a?(::String)
+
+        Wurk.load_json(payload)
+      rescue ::JSON::ParserError
+        nil
       end
 
       # No apply-safety claim: INCR is additive, so a block replayed after a
@@ -130,7 +162,7 @@ module Wurk
       # count short — Reaper#drain rescues, and the job is already back on its
       # public queue, so it just misses one poison check.
       def bump_counter(jid)
-        key = "#{KEY_PREFIX}#{jid}"
+        key = counter_key(jid)
         Wurk.redis do |conn|
           count = conn.call('INCR', key).to_i
           conn.call('EXPIRE', key, RECOVERY_TTL)
@@ -138,25 +170,29 @@ module Wurk
         end
       end
 
-      def emit_recovered_fetch(klass, queue)
+      def emit(metric, klass, queue)
         tags = []
         tags << "class:#{klass}" if klass
         tags << "queue:#{queue}" if queue
-        Wurk::Metrics::Statsd.increment('jobs.recovered.fetch', tags: tags.empty? ? nil : tags)
+        Wurk::Metrics::Statsd.increment(metric, tags: tags.empty? ? nil : tags)
       end
 
+      # Death handlers fire (`notify_failure` defaults to true). A poison kill
+      # is a death like any other exhaustion: suppressing it strands every
+      # batch that owns the job — Batch::DeathHandler is a death handler, so a
+      # silent kill leaves the batch's pending count stuck forever and neither
+      # `:death` nor `:complete` ever runs. Pro's spec is silent here
+      # (docs/target/sidekiq-pro.md §12); recorded in docs/idea/parity-divergences.md.
       def mark_poison(payload, job, queue:, count:)
-        emit_poison(job['class'], queue)
+        emit('jobs.poison', job['class'], queue)
         json = payload.is_a?(String) ? payload : Wurk.dump_json(job)
-        Wurk::DeadSet.new.kill(json, notify_failure: false)
+        Wurk::DeadSet.new.kill(json, ex: poisoned_error(job['class'], count))
         fire_callbacks(jid: job['jid'], klass: job['class'], count: count, queue: queue)
       end
 
-      def emit_poison(klass, queue)
-        tags = []
-        tags << "class:#{klass}" if klass
-        tags << "queue:#{queue}" if queue
-        Wurk::Metrics::Statsd.increment('jobs.poison', tags: tags.empty? ? nil : tags)
+      def poisoned_error(klass, count)
+        message = "#{klass || 'job'} was recovered #{count} times without completing"
+        Poisoned.new(message).tap { |e| e.set_backtrace(caller) }
       end
 
       def fire_callbacks(pill)

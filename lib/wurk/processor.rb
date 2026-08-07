@@ -10,8 +10,11 @@ require_relative 'profiler'
 module Wurk
   # Inside each Manager, N Processors run in parallel. Each owns one thread,
   # pulls a UnitOfWork from the capsule's fetcher, parses the payload, walks
-  # the server middleware chain, invokes `perform`, then ACKs (removes the
-  # payload from the per-process private list).
+  # the server middleware chain, invokes `perform`, then ACKs (retires the
+  # payload from the per-process private list). The ACK is handed to the
+  # fetcher, which pipelines it with the next fetch rather than spending a
+  # round trip on it — #flush_acks covers the case where there is no next
+  # fetch.
   #
   # Shutdown is two-stage:
   #   * `terminate` flips a flag; the run loop exits between jobs.
@@ -137,7 +140,11 @@ module Wurk
     private
 
     def run
-      process_one until @done
+      begin
+        process_one until @done
+      ensure
+        flush_acks
+      end
       @callback&.call(self)
     rescue Wurk::Shutdown
       @callback&.call(self)
@@ -145,6 +152,24 @@ module Wurk
       handle_exception(e, { context: '!shutdown' })
       @callback&.call(self)
       raise
+    end
+
+    # The fetcher holds each finished job's LREM until a fetch can pipeline it
+    # (Fetcher::Reliable#defer_ack). This thread has stopped fetching, so
+    # nothing else will send the one it may still be holding — and a finished
+    # job left in the private list is invisible to Manager#hard_shutdown's
+    # in-flight list, so the next boot's reaper would run it a second time.
+    #
+    # Inside the loop's own ensure rather than the method's: the callback below
+    # drops this Processor from the Manager's pool, which is what lets
+    # Manager#stop return and close the capsule's Redis pool out from under us.
+    # `respond_to?` because a config[:fetch_class] fetcher need not defer, and
+    # the capsule has no fetcher at all if the launcher died before prepare!.
+    def flush_acks
+      fetcher = @capsule.fetcher
+      fetcher.flush_pending_acks if fetcher.respond_to?(:flush_pending_acks)
+    rescue StandardError => e
+      handle_exception(e, { context: 'Error flushing pending acks' })
     end
 
     def fetch
@@ -163,6 +188,12 @@ module Wurk
 
       job_hash = parse_or_kill(jobstr, uow)
       return if job_hash.nil?
+
+      # The fetcher never parses, so hand it the jid we just read: the ACK
+      # retires this job's poison-pill recovery counter inside the round trip
+      # it rides. A fetcher plugged in via `config[:fetch_class]` has no jid
+      # slot and simply ACKs — the counter then ages out on its 72h TTL.
+      uow.jid = job_hash['jid'] if uow.respond_to?(:jid=)
 
       ack = false
       begin

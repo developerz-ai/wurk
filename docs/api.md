@@ -168,7 +168,9 @@ Wurk::Queue.new("bulk_export").unpause!
 ```
 
 - Fetchers consult the same `paused` SET, so pausing takes effect cluster-wide
-  without a restart or a signal.
+  without a restart or a signal — **within 2 seconds**, the fetch-path cache TTL.
+  Pausing from inside a worker process takes effect on that process's next fetch
+  pass. See [Reliability](reliability.md#fetch-order-and-polling).
 - **Only new fetches stop.** Jobs already running continue to completion.
 - Enqueueing is unaffected — the queue keeps growing while paused.
 - Both calls are idempotent and return `true` whether or not they changed

@@ -1,5 +1,6 @@
 # frozen_string_literal: true
 
+require_relative 'fetcher/reliable'
 require_relative 'job_record'
 
 module Wurk
@@ -11,6 +12,11 @@ module Wurk
   # of the `paused` SET drives both `paused?` and the fetcher's queue filter
   # (see `Wurk::Fetcher::Reliable#queues_cmd`). In-flight jobs continue to
   # completion — pausing only stops new fetches.
+  #
+  # Fetchers answer from a `PAUSED_TTL` cache rather than re-reading the SET
+  # every pass, so `pause!`/`unpause!` expire this process's copy inline and
+  # other processes pick the change up within the TTL. `paused?` is a reporting
+  # call and always reads Redis.
   #
   # Spec: docs/target/sidekiq-free.md §19.2, sidekiq-pro.md §6.
   class Queue
@@ -58,12 +64,14 @@ module Wurk
     # 0 when the name was already present. In-flight jobs are untouched.
     def pause! # rubocop:disable Naming/PredicateMethod
       Wurk.redis(idempotent: true) { |conn| conn.call('SADD', Keys::PAUSED_SET, @name) }
+      Fetcher::Reliable.invalidate_paused_cache!
       true
     end
 
     # Resume fetches. Idempotent.
     def unpause! # rubocop:disable Naming/PredicateMethod
       Wurk.redis(idempotent: true) { |conn| conn.call('SREM', Keys::PAUSED_SET, @name) }
+      Fetcher::Reliable.invalidate_paused_cache!
       true
     end
 

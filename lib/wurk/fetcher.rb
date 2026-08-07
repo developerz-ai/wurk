@@ -12,5 +12,11 @@ module Wurk
     # and stop pulling new work the instant a process is quieted. No-op in the
     # abstract base; Reliable flips its drain flag.
     def terminate; end
+
+    # Send any ACK the fetcher is holding back rather than sending immediately.
+    # Processor calls this as it stops, so a job that finished but whose ACK
+    # never caught a fetch to ride on can't be reclaimed as unfinished. No-op
+    # in the abstract base; only Reliable defers.
+    def flush_pending_acks; end
   end
 end

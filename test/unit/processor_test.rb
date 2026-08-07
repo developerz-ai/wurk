@@ -186,6 +186,69 @@ class ProcessorTest < Wurk::Test::UnitCase
     refute_predicate processor.thread, :alive?
   end
 
+  # --- held ACKs at stop ------------------------------------------------
+
+  # A processor's last job is the trap the ACK piggyback sets: it finishes,
+  # hands its LREM to the fetcher, and the run loop then exits without ever
+  # fetching again. Nothing else would send it, and a finished job is no longer
+  # in flight, so Manager#hard_shutdown can't see it either — it would sit in
+  # the private list until the next boot's reaper ran it a second time.
+  def test_run_sends_a_held_ack_when_the_loop_stops
+    klass = define_worker_recording
+    enqueue(class: klass.name, args: [])
+    @processor.process_one
+    @processor.terminate
+
+    assert_equal 1, llen(private_queue), 'precondition: the ACK is held, not sent'
+
+    @processor.send(:run)
+
+    assert_equal [[]], klass.sink
+    assert_equal 0, llen(private_queue)
+  end
+
+  # Before the callback, not after it: the callback drops this Processor from
+  # the Manager's pool, which is what lets Manager#stop return and close the
+  # capsule's Redis pool out from under the flush.
+  def test_a_held_ack_is_sent_before_the_stop_callback_fires
+    klass = define_worker_recording
+    enqueue(class: klass.name, args: [])
+    private_at_callback = nil
+    processor = new_processor { |_p| private_at_callback = llen(private_queue) }
+    processor.process_one
+    processor.terminate
+
+    processor.send(:run)
+
+    assert_equal 0, private_at_callback
+  end
+
+  # The flush is the last thing a dying thread does; a Redis blip there must be
+  # reported, not turned into a thread that dies with an exception.
+  def test_a_failed_stop_flush_is_reported_not_raised
+    errors = []
+    @config.error_handlers.replace([->(ex, _ctx, _cfg) { errors << ex }])
+    @capsule.fetcher.define_singleton_method(:flush_pending_acks) { raise 'redis down' }
+    @processor.terminate
+
+    @processor.send(:run)
+
+    assert_equal 1, errors.size
+  end
+
+  # A fetcher plugged in via config[:fetch_class] need not defer anything, so it
+  # need not answer the flush at all.
+  def test_run_tolerates_a_fetcher_that_does_not_defer
+    @capsule.fetcher = Object.new
+    called = []
+    processor = new_processor { |p| called << p }
+    processor.terminate
+
+    processor.send(:run)
+
+    assert_equal [processor], called
+  end
+
   # --- successful processing -------------------------------------------
 
   def test_process_one_runs_perform_and_acks
@@ -193,10 +256,90 @@ class ProcessorTest < Wurk::Test::UnitCase
     enqueue(class: klass.name, args: [1, 'two', { 'k' => 'v' }])
 
     @processor.process_one
+    settle_acks
 
     assert_equal [1, 'two', { 'k' => 'v' }], klass.sink.first
     assert_equal 0, llen(private_queue), 'expected UoW to be acked'
     assert_equal 0, llen(@public_queue)
+  end
+
+  # --- poison-pill counter (F6) -----------------------------------------
+
+  # A job that runs to completion must leave no recovery counter behind: the
+  # ACK drops `super_fetch:recovered:<jid>` so the next reclaim of that jid
+  # starts from one.
+  def test_process_one_clears_the_poison_pill_recovery_counter
+    klass = define_worker_recording
+    payload = enqueue(class: klass.name, args: [])
+    Wurk::Middleware::PoisonPill.track!(Wurk.dump_json(payload), queue: @queue_name)
+
+    assert_equal 1, Wurk::Middleware::PoisonPill.recovery_count(payload['jid'])
+
+    @processor.process_one
+    settle_acks
+
+    assert_equal 0, Wurk::Middleware::PoisonPill.recovery_count(payload['jid'])
+  end
+
+  # The F6 loss scenario end to end: two reclaims, one healthy run, a third
+  # reclaim. Without the clear the third crosses RECOVERY_THRESHOLD and the
+  # job is silently dead-set even though it has never failed.
+  def test_reclaims_around_a_successful_run_do_not_reach_the_poison_threshold
+    klass = define_worker_recording
+    payload = enqueue(class: klass.name, args: [])
+    json = Wurk.dump_json(payload)
+    2.times { Wurk::Middleware::PoisonPill.track!(json, queue: @queue_name) }
+
+    @processor.process_one
+    settle_acks
+
+    assert_equal :recovered, Wurk::Middleware::PoisonPill.track!(json, queue: @queue_name)
+    assert_equal 1, Wurk::Middleware::PoisonPill.recovery_count(payload['jid'])
+    assert_equal 0, dead_count_for(payload['jid']), 'a job that completed must not be killed as a poison pill'
+  end
+
+  # The counter is retired by the ACK, not by `perform` returning: a job that
+  # raised and booked a retry still proved it does not take the process down,
+  # which is the only thing the poison pill is looking for.
+  def test_failed_job_that_books_a_retry_also_clears_the_counter
+    klass = define_worker_raising(RuntimeError, 'boom')
+    payload = enqueue(class: klass.name, args: [], retry: true)
+    Wurk::Middleware::PoisonPill.track!(Wurk.dump_json(payload), queue: @queue_name)
+
+    @processor.process_one
+    settle_acks
+
+    assert_equal 0, Wurk::Middleware::PoisonPill.recovery_count(payload['jid'])
+  end
+
+  # The other side of that line: an interrupted job is never acked, so its
+  # counter survives to be bumped again by the reclaim — a job that keeps
+  # taking its worker down still reaches the threshold.
+  def test_job_interrupted_mid_perform_keeps_its_poison_pill_counter
+    klass = define_worker_blocking
+    payload = enqueue(class: klass.name, args: [])
+    Wurk::Middleware::PoisonPill.track!(Wurk.dump_json(payload), queue: @queue_name)
+    @processor.start
+    klass.started_latch.pop
+    @processor.kill(true)
+
+    assert_equal 1, llen(private_queue), 'precondition: an interrupted job is not acked'
+    assert_equal 1, Wurk::Middleware::PoisonPill.recovery_count(payload['jid'])
+  end
+
+  # Fetchers plugged in via config[:fetch_class] hand back their own UnitOfWork
+  # with no jid slot; the Processor must still run and ACK the job.
+  def test_process_one_acks_a_unit_of_work_that_carries_no_jid_slot
+    klass = define_worker_recording
+    acked = []
+    uow = Struct.new(:job, :queue_name).new(json_for(klass), @queue_name)
+    uow.define_singleton_method(:acknowledge) { acked << :ack }
+    @processor.define_singleton_method(:fetch) { uow }
+
+    @processor.process_one
+
+    assert_equal [[]], klass.sink
+    assert_equal [:ack], acked
   end
 
   def test_process_one_assigns_jid_and_context_on_instance
@@ -216,15 +359,10 @@ class ProcessorTest < Wurk::Test::UnitCase
     payload = enqueue(class: klass.name, args: [], retry: true)
 
     @processor.process_one
+    settle_acks
 
     assert_equal 0, llen(private_queue), 'retrier handles → UoW must ack'
-    # JobRetry ZADDs the rewritten payload into the canonical `retry` ZSET.
-    found = @pool.with do |c|
-      c.call('ZRANGE', Wurk::Keys::RETRY, 0, -1).find { |raw| raw.include?(%("jid":"#{payload['jid']}")) }
-    end
-    @pool.with { |c| c.call('ZREM', Wurk::Keys::RETRY, found) } if found
-
-    refute_nil found, 'expected JobRetry to ZADD the failure into retry'
+    refute_nil take_retry_entry_for(payload['jid']), 'expected JobRetry to ZADD the failure into retry'
   end
 
   def test_process_one_acks_on_jobretry_handled
@@ -232,6 +370,7 @@ class ProcessorTest < Wurk::Test::UnitCase
     enqueue(class: klass.name, args: [])
 
     @processor.process_one
+    settle_acks
 
     assert_equal 0, llen(private_queue), 'Handled should be treated as a clean exit'
   end
@@ -241,6 +380,7 @@ class ProcessorTest < Wurk::Test::UnitCase
     enqueue(class: klass.name, args: [])
 
     @processor.process_one
+    settle_acks
 
     assert_equal 0, llen(private_queue)
   end
@@ -253,6 +393,7 @@ class ProcessorTest < Wurk::Test::UnitCase
     @pool.with { |c| c.call('LPUSH', @public_queue, payload) }
 
     @processor.process_one
+    settle_acks
 
     members = @pool.with { |c| c.call('ZRANGE', Wurk::Keys::DEAD, 0, -1) }
 
@@ -266,6 +407,7 @@ class ProcessorTest < Wurk::Test::UnitCase
     @pool.with { |c| c.call('LPUSH', @public_queue, payload) }
 
     @processor.process_one
+    settle_acks
 
     assert_equal 0, llen(private_queue)
   end
@@ -312,6 +454,7 @@ class ProcessorTest < Wurk::Test::UnitCase
     enqueue(class: klass.name, args: ['ok'], bid: 'B123')
 
     @processor.process_one
+    settle_acks
 
     assert_equal ['ok'], klass.sink.first
     assert_equal 0, llen(private_queue), 'job without bid= setter must still ack'
@@ -459,6 +602,14 @@ class ProcessorTest < Wurk::Test::UnitCase
     nil
   end
 
+  # The ACK rides the next fetch, so a test that drives a single `process_one`
+  # has to settle it before asserting on the private list or the poison-pill
+  # counter. A running processor settles it on its next fetch, or — when there
+  # is no next fetch — in Processor#run's ensure.
+  def settle_acks
+    @capsule.fetcher.flush_pending_acks
+  end
+
   def private_queue
     Wurk::Fetcher::Reliable.private_queue_name(@public_queue)
   end
@@ -471,6 +622,28 @@ class ProcessorTest < Wurk::Test::UnitCase
 
   def llen(key)
     @pool.with { |c| c.call('LLEN', key) }
+  end
+
+  # A job payload that is never pushed to Redis — for the stubbed-fetch tests.
+  def json_for(klass)
+    Wurk.dump_json('class' => klass.name, 'args' => [], 'queue' => @queue_name, 'jid' => SecureRandom.hex(6))
+  end
+
+  # JobRetry ZADDs the rewritten payload into the canonical `retry` ZSET, which
+  # every test in this worker shares — so this takes the entry back out as it
+  # reads it.
+  def take_retry_entry_for(jid)
+    entry = @pool.with do |c|
+      c.call('ZRANGE', Wurk::Keys::RETRY, 0, -1).find { |raw| raw.include?(%("jid":"#{jid}")) }
+    end
+    @pool.with { |c| c.call('ZREM', Wurk::Keys::RETRY, entry) } if entry
+    entry
+  end
+
+  def dead_count_for(jid)
+    @pool.with do |c|
+      c.call('ZRANGE', Wurk::Keys::DEAD, 0, -1).count { |raw| raw.include?(jid) }
+    end
   end
 
   # --- worker fixtures ------------------------------------------------

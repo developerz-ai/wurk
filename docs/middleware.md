@@ -447,8 +447,15 @@ reliable-fetch reaper / `bulk_requeue` paths via
 Each recovery of a job out of a dead process's private list `INCR`s
 `super_fetch:recovered:<jid>` (72h TTL — wire-compatible with Sidekiq Pro's
 tooling). At `RECOVERY_THRESHOLD` (3) the payload is moved to the dead set,
-`jobs.poison` is emitted, and callbacks fire. `track!` returns `:poison` or
+`jobs.poison` is emitted, death handlers fire with a
+`PoisonPill::Poisoned` error, and callbacks fire. `track!` returns `:poison` or
 `:recovered`.
+
+The counter is retired by the ACK: `Fetcher::Reliable::UnitOfWork#acknowledge`
+pipelines the `DEL` next to its `LREM`, so an attempt that finished — returned,
+or raised and booked a retry — resets the count without costing a round trip.
+Only an attempt that never acked (the process died under it) leaves the counter
+standing.
 
 ```ruby
 # config/initializers/wurk.rb

@@ -99,7 +99,8 @@
     "cron": "Jobs periódicos (cron) com seu agendamento e última execução — clique em um loop para ver seu histórico de execução.",
     "metrics": "Histórico de throughput e falhas, com estatísticas de execução por job.",
     "profiles": "Perfis de jobs capturados — abra um no profiler do Firefox para inspecionar seu flame graph.",
-    "search": "Encontre um job em filas, tentativas, agendados e mortos por JID, nome de classe ou argumento."
+    "search": "Encontre um job em filas, tentativas, agendados e mortos por JID, nome de classe ou argumento.",
+    "dashboard": "Totais ao vivo, taxa de processamento no período escolhido e a saúde das filas num relance."
   },
   "busy": {
     "hosts": "{n} hosts",
