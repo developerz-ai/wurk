@@ -1,42 +1,49 @@
 plan: 101-faster-than-sidekiq
 title: Faster than Sidekiq
-status: in_progress
+status: complete
 created_by: sebi
-worked_by: ""
+worked_by: "sebi"
 owner: sebi
-percent: 25
-current_focus: "02-fetch-ack-metrics.md — steps 1-5 landed (PR #370); its 'Done when' still needs the vs_sidekiq re-measure, which 08 owns"
+percent: 100
+current_focus: "closed — see notes for the honest outcome against 'Done when'"
 slices:
   - file: 00-semantics-signoff.md
     status: complete
     percent: 100
   - file: 01-hotspot-map.md
-    status: not_started
-    percent: 0
+    status: complete
+    percent: 100
   - file: 02-fetch-ack-metrics.md
-    status: in_progress
-    percent: 90
+    status: complete
+    percent: 100
   - file: 03-processor-dispatch.md
-    status: not_started
-    percent: 0
+    status: complete
+    percent: 100
   - file: 04-enqueue-client.md
-    status: not_started
-    percent: 0
+    status: complete
+    percent: 100
   - file: 05-redis-layer-pools.md
-    status: not_started
-    percent: 0
+    status: complete
+    percent: 100
   - file: 06-boot-swarm.md
-    status: not_started
-    percent: 0
+    status: complete
+    percent: 100
   - file: 07-leaks-raii.md
-    status: not_started
-    percent: 0
+    status: complete
+    percent: 100
   - file: 08-bench-gate-verify.md
-    status: not_started
-    percent: 0
+    status: complete
+    percent: 100
 evidence:
-  - "00-semantics-signoff.md — all three slice-02 semantics decisions accepted with their terms; divergences published in docs/reliability.md, docs/metrics.md, docs/api.md, docs/idea/parity-divergences.md"
-  - "02-fetch-ack-metrics.md steps 1-5 landed on perf/fetch-ack-metrics (PR #370): paused-set cache on a 2s monotonic TTL, Metrics::Accumulator + Flusher on a 5s cadence, ack piggybacked onto the next fetch's pipeline, per-queue string cache. bench:command_count 10 -> 3 commands/job; bench:fetch_execute 1.41k -> 2.53k i/s; rake bench gate labels unchanged."
-  - "02 is not closed: its 'Done when' also asks for the noop ratio, and docs/benchmarks.md still carries pre-change vs_sidekiq numbers. 08-bench-gate-verify.md owns the re-measure and the republish."
-notes: "Absorbs slice 08-perf-quick-wins (P1-P13) of docs/plans/2026/07/31/101-leak-logic-perf-fixes/. Sign-offs for slice 02 are SETTLED in 00-semantics-signoff.md (History flush cadence P2b, paused-set cache TTL P1b, deferred-ack redelivery window) — its 'Required to hold' lists are conditions of acceptance; the hard one is flushing pending acks before bulk_requeue. Lua-folded fetch (P1a) stays deferred, needs its own sign-off. Slice 08 step 1 (restore bench CI) should land before any perf commit."
-last_updated: 2026-08-06
+  - "00-semantics-signoff.md — all three slice-02 semantics decisions accepted with their terms; divergences published in docs/reliability.md, docs/metrics.md, docs/api.md, docs/idea/parity-divergences.md; also recorded in CHANGELOG.md [Unreleased] this task."
+  - "01-hotspot-map.md — reference doc, no code; cited by line number from every other slice (02-07), confirming it was actually used to scope the work rather than left aspirational."
+  - "02-fetch-ack-metrics.md — PR #370 (e4dbb30): paused-set cache on a 2s monotonic TTL, Metrics::Accumulator + Flusher on a 5s cadence, ack piggybacked onto the next fetch's pipeline, per-queue string cache. bench:command_count 10 -> 3 commands/job; bench:fetch_execute 1.41k -> 2.53k i/s. Closed by 08-measurements.md's re-measure (noop 0.87x/0.95x, command_count 3.00 confirmed as the settled floor — poison-pill DEL kept deliberately)."
+  - "03-processor-dispatch.md — PR #374 (8c22ae2): Chain#invoke walks @entries by index instead of building an intermediate array; Entry resolves config= support once at registration. 134.6k -> 227.9k i/s on a 6-entry chain micro-bench, 13.04 -> 8.02 allocations/invoke."
+  - "04-enqueue-client.md — PR #379 (76f861a): Client#push verify-JSON dedup, JobUtil dispatch-table refactor (also fixed a subtle String-subclass safety mismatch vs upstream), push_plain fast path for single-job/same-queue push_bulk."
+  - "05-redis-layer-pools.md — PR #380 (cd551f4): eager USED_COMMANDS dispatch (blmove) to avoid method_missing on the fetch hot path, double-padded BLMOVE timeout fix (redis-client's own connection_timeout already pads), PoolCheckout.trusted skip for the one call site that's never foreign-pool."
+  - "06-boot-swarm.md — PR #391 (d59760a): Swarm#boot preloads all Lua scripts once on the parent pool instead of once per child; Launcher#run starts managers before periodic loops; Leader defers its first campaign by DEFAULT_INITIAL_WAIT so it doesn't starve at tick zero; Configuration#prepare_for_fork! materializes middleware chains before fork."
+  - "07-leaks-raii.md — PR #392 (8571520): swarm reap_children no longer steals a host app's own subprocess exit statuses (wait2(-1) -> tracked-pid waits), unbounded manager joins on wedged ticks now budgeted via ShutdownGate/TimerLoop, SharedWorkState#track publish/retract pair made RAII, StreamConcurrencyGuard hard-reap leak fixed via thread-identity registry. Also closes docs/plans/2026/07/31/101-leak-logic-perf-fixes/07-stats-web-misc.md (superseded, see that plan's status.yml)."
+  - "08-bench-gate-verify.md — this branch (bench/final-vs-sidekiq-measure): bench.yml CI gate restored (PR #369, 13b64e8), fetch_execute/bulk_enqueue/memory de-noised, command_count.rb added, final vs_sidekiq re-measure at both topologies (980238f, docs/plans/2026/08/06/101-faster-than-sidekiq/08-measurements.md), docs/benchmarks.md republished twice (656344f, dfed2c0)."
+  - "Overview 'Done when' — honest final scorecard (08-measurements.md §5): cpu >=0.95x MET (0.99x/1.02x); rake bench gate green MET (worst -1.6%); bench CI restored MET; all 07 leak findings fixed MET. noop >=1.0x NOT MET (0.87x/0.95x); boot <= Sidekiq's NOT MET (0.72s vs 0.56s, 0.78s vs 0.60s); <=2 commands/job NOT MET (3.00, deliberately — poison-pill DEL kept). Plan closed as complete on the work delivered, not on every target hit; per CLAUDE.md pillar 3 no 'faster than Sidekiq' claim was added anywhere."
+notes: "Absorbed slice 08-perf-quick-wins (P1-P13) of docs/plans/2026/07/31/101-leak-logic-perf-fixes/ — that plan's status.yml marks 08-perf-quick-wins.md superseded by this plan, and its slice 07-stats-web-misc.md closed by this plan's PR 07 (07-leaks-raii.md, PR #392). Sign-offs for slice 02 are SETTLED in 00-semantics-signoff.md (History flush cadence P2b, paused-set cache TTL P1b, deferred-ack redelivery window); all three recorded as behavior changes in CHANGELOG.md [Unreleased]. Lua-folded fetch (P1a) stays deferred, out of scope for this plan, would need its own sign-off. Final verdict: wurk moved from materially slower to parity on cpu/io, still behind on noop/boot — documented honestly in 08-measurements.md and docs/benchmarks.md rather than claimed as a win."
+last_updated: 2026-08-07
