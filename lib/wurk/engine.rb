@@ -25,6 +25,16 @@ module Wurk
     class AssetMount
       PREFIX = '/wurk-assets'
 
+      # Vite fingerprints everything it emits into `assets/`
+      # (`Dashboard-cGKycyd0.js`), so the bytes behind one of those URLs can
+      # never change — cache them for a year and never revalidate. The rest of
+      # the bundle (index.html, the favicons, wurk-manifest.json,
+      # .vite/manifest.json) keeps a stable name across builds, so it must be
+      # revalidated or a client would pin a stale dashboard shell forever.
+      FINGERPRINTED_PREFIX = '/assets/'
+      IMMUTABLE_CACHE_CONTROL = 'public, max-age=31536000, immutable'
+      REVALIDATE_CACHE_CONTROL = 'public, no-cache'
+
       def initialize(app, root:)
         @app   = app
         @files = ::Rack::Files.new(root)
@@ -38,7 +48,19 @@ module Wurk
         stripped = path.delete_prefix(PREFIX)
         inner[::Rack::PATH_INFO] = stripped.empty? ? '/' : stripped
         response = @files.call(inner)
-        response[0] == 404 ? @app.call(env) : response
+        return @app.call(env) if response[0] == 404
+
+        # This mount is inserted at index 0 of the HOST app's stack (see the
+        # initializer below), so Rack::ETag and Rack::ConditionalGet never see
+        # these responses — without this the dashboard's fingerprinted bundle
+        # shipped with no cache directive at all and was refetched every load.
+        response[1]['cache-control'] ||=
+          if stripped.start_with?(FINGERPRINTED_PREFIX)
+            IMMUTABLE_CACHE_CONTROL
+          else
+            REVALIDATE_CACHE_CONTROL
+          end
+        response
       end
     end
 
