@@ -556,6 +556,39 @@ class ProcessorTest < Wurk::Test::UnitCase
     assert_equal 0, Wurk::Processor::WORK_STATE.size
   end
 
+  # `stats` keys WORK_STATE with `tid` (memoized per thread, `component_test.rb`
+  # covers the memo itself) — two jobs run back-to-back on the same thread must
+  # publish under the identical key, not a fresh one per job.
+  def test_work_state_key_is_stable_across_jobs_on_the_same_thread
+    klass = define_worker_snapshotting_work_state
+    enqueue(class: klass.name, args: [])
+    enqueue(class: klass.name, args: [])
+
+    @processor.process_one
+    @processor.process_one
+
+    keys = klass.sink.map { |snap| snap.keys.first }
+
+    assert_equal 2, keys.size
+    assert_equal keys[0], keys[1]
+  end
+
+  # A job run from a different thread must publish under a different tid, or
+  # two processors racing on separate threads would clobber each other's
+  # WORK_STATE entry.
+  def test_work_state_key_differs_across_threads
+    klass = define_worker_snapshotting_work_state
+    enqueue(class: klass.name, args: [])
+    enqueue(class: klass.name, args: [])
+
+    @processor.process_one
+    Thread.new { @processor.process_one }.join
+
+    keys = klass.sink.map { |snap| snap.keys.first }
+
+    refute_equal keys[0], keys[1]
+  end
+
   # --- Counter ---------------------------------------------------------
 
   def test_counter_increments_by_one_by_default
