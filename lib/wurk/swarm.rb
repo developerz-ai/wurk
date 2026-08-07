@@ -102,6 +102,11 @@ module Wurk
     # its default disposition — it died instantly and orphaned live, fetching
     # children. Installed first, the trap queues the TERM and the supervise
     # loop drains it (relaying to children) even if it arrives mid-boot.
+    #
+    # `prepare_for_fork!` is the last thing before the fork and stays after
+    # `close_parent_sockets`: it materializes the slot-independent config so
+    # every child inherits it copy-on-write, and none of what it touches opens
+    # a socket — anything that did would land back on the wrong side of step 3.
     def boot(install_signals: true)
       raise 'Wurk::Swarm already booted' unless @assignments.empty?
       raise ArgumentError, 'Topology has no slots' if @topology.empty?
@@ -111,6 +116,7 @@ module Wurk
       install_signal_handlers if install_signals
       close_parent_sockets
       preload_lua_scripts
+      @config.prepare_for_fork!
       fork_children
       child_pids
     end

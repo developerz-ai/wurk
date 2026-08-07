@@ -33,6 +33,24 @@ class SwarmTest < Wurk::Test::UnitCase
     end
   end
 
+  # Fork-free swarm that snapshots how far the config had settled at the moment
+  # of the first (faked) fork: what a child inherits has to be in place by then,
+  # and what a child still writes for its own slot must not be.
+  class FreezeProbeSwarm < FakeForkSwarm
+    attr_reader :config_at_first_fork
+
+    private
+
+    def fork_child(slot, idx)
+      @config_at_first_fork ||= {
+        frozen: @config.frozen?,
+        capsules_open: @config.capsules.each_value.none?(&:frozen?),
+        chains_built: @config.default_capsule.instance_variable_get(:@server_chain)
+      }
+      super
+    end
+  end
+
   # Stands in for a supervisor pool whose Redis is unreachable, without paying
   # RedisPool#with's real connect backoff (seconds) in a unit test.
   class DeadPool
@@ -141,6 +159,33 @@ class SwarmTest < Wurk::Test::UnitCase
     pids = swarm.boot(install_signals: false)
 
     assert_equal 1, pids.size, 'a failed preload must not abort the fork loop'
+  end
+
+  # --- boot-time config freeze ------------------------------------------
+
+  # The slot-independent config settles in the parent so every child inherits
+  # the same pages copy-on-write instead of rebuilding and dirtying its own —
+  # and an option written after the fork raises in the child that wrote it.
+  def test_boot_settles_the_shared_config_before_the_first_fork
+    swarm = bare_swarm(FreezeProbeSwarm)
+
+    swarm.boot(install_signals: false)
+
+    assert swarm.config_at_first_fork[:frozen], 'the options must be frozen before the first fork'
+    refute_nil swarm.config_at_first_fork[:chains_built], 'the middleware chains must be built before the fork'
+  end
+
+  # ChildBoot#apply_slot_to_config writes queues + concurrency, and the child
+  # opens its own pools, so the capsules have to cross the fork still open.
+  def test_boot_leaves_the_capsules_open_for_the_child_slot
+    swarm = bare_swarm(FreezeProbeSwarm)
+
+    swarm.boot(install_signals: false)
+
+    assert swarm.config_at_first_fork[:capsules_open], 'a frozen capsule would break the slot assignment'
+    @config.default_capsule.concurrency = 4 # must not raise post-boot either
+
+    assert_equal 4, @config.default_capsule.concurrency
   end
 
   # --- owner-pid guard --------------------------------------------------

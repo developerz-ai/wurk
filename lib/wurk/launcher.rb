@@ -71,6 +71,9 @@ module Wurk
 
     # Boot order matters:
     #   1. freeze! the config so mutations after fork are visible mistakes.
+    #      A swarm child finds the slot-independent half already frozen by its
+    #      parent (Configuration#prepare_for_fork!); what closes here is the
+    #      capsules, which stayed open for this child's slot and pools.
     #   2. start the managers FIRST. They are the only thing here on the
     #      time-to-first-job path (the number bench/vs_sidekiq.rb measures);
     #      everything below is periodic background work whose first tick is

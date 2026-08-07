@@ -69,9 +69,26 @@ module Wurk
     # by hand; centralizing it here covers the standalone CLI and embedded
     # paths too (the bug behind a nil `fetcher` in `exe/wurk`). Idempotent.
     def prepare!
+      prepare_shared!
       @fetcher ||= build_fetcher
       redis_pool
       fetch_redis_pool
+      self
+    end
+
+    # The half of `prepare!` a forking parent can run on every child's behalf:
+    # the chains are a pure function of this capsule's identity, not of the slot
+    # (queues + concurrency) a swarm child is assigned later, and `copy_for`
+    # opens nothing. Run before the fork, the entries are allocated once and
+    # inherited copy-on-write instead of rebuilt in every child.
+    #
+    # The rest of `prepare!` deliberately stays post-fork: both pools are sized
+    # off the slot's concurrency and one built here would hand every child an
+    # inherited socket, and `build_fetcher` fires the host's
+    # `config[:fetch_setup]` hook, which is per-child — running it in the parent
+    # would let a custom fetcher snapshot the wrong queues, or leak whatever the
+    # hook opened across the fork. Idempotent.
+    def prepare_shared!
       client_middleware
       server_middleware
       self
