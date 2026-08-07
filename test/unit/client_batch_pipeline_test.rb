@@ -21,6 +21,17 @@ class ClientBatchPipelineTest < Wurk::Test::UnitCase
   def setup
     super
     @pool       = Wurk.configuration.redis_pool
+    # Prime the server-wide EVALSHA cache, exactly as ChildBoot does per fork.
+    # Nothing else in the suite guarantees it: the cache only warms as a side
+    # effect of some earlier test's inline NOSCRIPT recovery, and with
+    # `parallelize_me!` plus a random --seed whether that happened before this
+    # file runs is luck. Cold, two things break here — the raw `conn.pipelined`
+    # in the per-job-parity test bypasses `eval_batched_slice`, so its NOSCRIPT
+    # has no rescue and errors the test; and in the round-trip tests the
+    # recovery fires and spends a `script_load_all` plus a replay pipeline,
+    # turning `assert_equal 1, @probe.pipelines` into 3. Same one-liner the
+    # limiter and lua suites already use in their own setup.
+    @pool.with { |c| Wurk::Lua::Loader.script_load_all(c) }
     @queue      = "bp-q-#{Process.pid}-#{object_id}"
     @class_name = "BatchPipelineJob@#{Process.pid}-#{object_id}"
     @bid        = "BP-#{Process.pid}-#{object_id}"
