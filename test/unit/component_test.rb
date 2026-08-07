@@ -51,6 +51,41 @@ class ComponentTest < Wurk::Test::UnitCase
     refute_equal main, other
   end
 
+  # Read several times per job, constant per thread — so it must be the very
+  # same (frozen) String every call, not a fresh one.
+  def test_tid_is_memoized_per_thread
+    assert_same @host.tid, @host.tid
+    assert_predicate @host.tid, :frozen?
+  end
+
+  # The forking thread keeps its thread-locals in the child, but its pid — and
+  # so its tid — changed. Inheriting the parent's tid would collide with it in
+  # `<identity>:work` and mislabel every log line the child writes.
+  def test_tid_is_recomputed_after_a_fork
+    parent = @host.tid
+    reader, writer = ::IO.pipe
+    pid = ::Process.fork do
+      reader.close
+      writer.write(@host.tid)
+      writer.close
+      exit!(0)
+    end
+    writer.close
+    child = reader.read
+    ::Process.wait(pid)
+
+    assert_match(/\A[0-9a-z]+\z/, child)
+    refute_equal parent, child
+  ensure
+    reader&.close
+  end
+
+  # One implementation, one thread-local: the log formatter renders the same
+  # tid the Processor keys WORK_STATE with (and inherits the fork guard).
+  def test_tid_is_shared_with_the_log_formatter
+    assert_same @host.tid, Wurk::Logger::Formatters::Pretty.new.tid
+  end
+
   def test_hostname_prefers_dyno_env
     ENV_MUTEX.synchronize do
       saved = ENV.fetch('DYNO', nil)

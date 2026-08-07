@@ -37,8 +37,28 @@ module Wurk
 
     # --- identity -------------------------------------------------------
 
+    # Base36 `thread.object_id ^ pid` — the id in every log line and the key
+    # each Processor publishes its in-flight job under. Constant for the life
+    # of a thread inside one process and read several times per job, so it is
+    # memoized per thread (frozen: it is used as a Hash key, and an unfrozen
+    # String key is duped on every store).
+    #
+    # The pid is memoized alongside it because the thread that calls fork keeps
+    # its thread-locals in the child, where the pid — and therefore the tid —
+    # has changed. Without the guard a forked child would report the parent's
+    # tid and collide with it in `<identity>:work`.
+    def self.tid
+      memo = Thread.current[:wurk_tid]
+      pid = ::Process.pid
+      return memo[1] if memo && memo[0] == pid
+
+      id = (Thread.current.object_id ^ pid).to_s(36).freeze
+      Thread.current[:wurk_tid] = [pid, id].freeze
+      id
+    end
+
     def tid
-      (Thread.current.object_id ^ ::Process.pid).to_s(36)
+      Component.tid
     end
 
     def hostname

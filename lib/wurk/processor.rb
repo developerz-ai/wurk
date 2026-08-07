@@ -272,7 +272,9 @@ module Wurk
     # Heartbeat can mirror it into Redis (`<identity>:work`), and increments
     # PROCESSED/FAILURE counters around the inner block.
     def stats(jobstr, queue)
-      WORK_STATE.set(tid, queue: queue, payload: jobstr, run_at: ::Time.now.to_i)
+      id = tid
+      run_at = ::Process.clock_gettime(::Process::CLOCK_REALTIME, :second)
+      WORK_STATE.set(id, queue: queue, payload: jobstr, run_at: run_at)
       begin
         yield
       rescue Exception # rubocop:disable Lint/RescueException
@@ -280,7 +282,7 @@ module Wurk
         raise
       ensure
         PROCESSED.incr
-        WORK_STATE.delete(tid)
+        WORK_STATE.delete(id)
       end
     end
   end
