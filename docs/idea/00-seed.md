@@ -10,7 +10,7 @@
 
 1. **100% drop-in.** Same Ruby API, same Redis wire format, same DSL. Migration is a one-line gem swap. Third-party gems built on Sidekiq (sidekiq-cron, sidekiq-unique-jobs, sidekiq-scheduler, sidekiq-status, etc.) work unchanged. We prove this in CI by running each ecosystem gem's own test suite against Wurk.
 2. **Free.** Pro + Enterprise feature parity built in. No license tiers, no paid features.
-3. **Measured.** Real multi-process parallelism via fork. Optimized Redis path. Precompiled assets. Hot loops tuned. Two benchmark suites, and only one of them gates: `rake bench` compares Wurk against its own past self and blocks merge on a >5% regression; `rake bench:vs_sidekiq` compares against stock Sidekiq and gates nothing. Wurk is **not** currently faster than stock Sidekiq — it runs at roughly 0.45x-0.86x depending on workload shape. See `docs/benchmarks.md` for the numbers and the reproduction command.
+3. **Measured.** Real multi-process parallelism via fork. Optimized Redis path. Precompiled assets. Hot loops tuned. Two benchmark suites, and only one of them gates: `rake bench` compares Wurk against its own past self and blocks merge on a >5% regression; `rake bench:vs_sidekiq` compares against stock Sidekiq and gates nothing. Wurk is **not** currently faster than stock Sidekiq — it runs at roughly 0.45×–0.86× depending on workload shape and process configuration. See `docs/benchmarks.md` for the numbers and the reproduction command.
 
 ## Shape
 
