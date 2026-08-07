@@ -52,6 +52,12 @@ Frontend unit + integration tests (Vitest, SolidJS Testing Library) run with
 | Benchmarks | `bin/rake bench` |
 | Lint | `bundle exec rubocop` |
 
+The engine tests render the dashboard shell, which needs the precompiled SPA.
+That bundle is built rather than committed, so a fresh clone has none — the
+first `bin/rake test` builds it once (roughly 4s) and says so. Later runs skip
+it. If you change anything under `frontend/src`, rebuild explicitly with
+`bin/rake frontend:build`; the automatic build only covers "no bundle at all".
+
 Test layers:
 
 - **unit** — plain Ruby classes in isolation.
