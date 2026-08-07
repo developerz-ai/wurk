@@ -91,38 +91,63 @@ jobs:
           ruby-version: "3.4"
           bundler-cache: true
           cache-version: rails-8.0
-      # The base checkout below rewinds the working tree. Keep the PR's
+      # The base checkouts below rewind the working tree. Keep the PR's
       # comparator so the gate rule under review is the one that runs.
       - name: stage comparator
         run: cp bin/bench-compare /tmp/bench-compare
-      # Best-of-N: bin/bench-compare keeps the fastest run per label, damping the
-      # cross-process tail (GC, runner contention) that ips' own +/- does not
-      # capture. Applied symmetrically to both sides, so it cannot hide a real
-      # regression — only a slowdown present in every run survives.
-      - name: bench head
-        run: |
-          set -o pipefail # `| tee` must not swallow a crashed bench run
-          : > /tmp/bench-head.txt
-          for i in $(seq 1 "$BENCH_RUNS"); do
-            echo "::group::bench head run $i"
-            bundle exec rake bench | tee -a /tmp/bench-head.txt
-            echo "::endgroup::"
-          done
-      - name: bench base
+      # Interleaved, not batched per side — the two sides have to sample the
+      # same runner, and a runner is not the same machine minute to minute. It
+      # is coldest and most contended right after the cache restore and settles
+      # later, so N head samples in the job's first window against N base
+      # samples in its second measures the windows, not the diff.
+      #
+      # #391 failed exactly that way: every Redis-touching bench read 2-24%
+      # "slower" on head with error bars 2-4x wider than base's, while both
+      # allocation benches (no Redis, deterministic) matched to the digit — on a
+      # branch whose entire enqueue path is byte-identical to base.
+      #
+      # So one round is one head sample plus one base sample, back to back, and
+      # the within-round order flips each round so neither side permanently owns
+      # the colder first slot. Best-of-N (bin/bench-compare keeps each label's
+      # fastest run, symmetrically, so it cannot hide a real regression) then
+      # damps what is left: a contended window costs each side one sample rather
+      # than every sample that side has.
+      - name: bench head vs base, interleaved
         env:
           BASE_SHA: ${{ github.event.pull_request.base.sha }}
         run: |
-          # A silently-crashed BASE run is the dangerous one: it empties the
-          # baseline, and bin/bench-compare reads "no comparable benchmarks" as
-          # a pass. Fail loudly instead of gating on nothing.
-          set -o pipefail
-          git checkout --quiet "$BASE_SHA"
-          bundle install --quiet
+          # A silently-crashed run is the dangerous one: an empty baseline makes
+          # bin/bench-compare report "no comparable benchmarks" and exit 0,
+          # gating on nothing. `-e` plus pipefail (`| tee` must not swallow a
+          # crashed bench run) fails the job loudly instead.
+          set -eo pipefail
+          HEAD_SHA=$(git rev-parse HEAD)
+          : > /tmp/bench-head.txt
           : > /tmp/bench-base.txt
-          for i in $(seq 1 "$BENCH_RUNS"); do
-            echo "::group::bench base run $i"
-            bundle exec rake bench | tee -a /tmp/bench-base.txt
+
+          # $1 = side (head|base), $2 = round. Reinstalls on every switch: the
+          # two sides may resolve different gems, and the lockfile is not
+          # committed to tell us whether this one does.
+          run_side() {
+            case "$1" in
+              head) sha=$HEAD_SHA ;;
+              base) sha=$BASE_SHA ;;
+            esac
+            echo "::group::bench $1 run $2"
+            git checkout --quiet "$sha"
+            bundle install --quiet
+            bundle exec rake bench | tee -a "/tmp/bench-$1.txt"
             echo "::endgroup::"
+          }
+
+          for i in $(seq 1 "$BENCH_RUNS"); do
+            if [ $((i % 2)) -eq 1 ]; then
+              run_side head "$i"
+              run_side base "$i"
+            else
+              run_side base "$i"
+              run_side head "$i"
+            fi
           done
       # Gate rule lives in bin/bench-compare (:72-75 noise band, :102 fail_gate,
       # :115 exit) — this step only transports its verdict.
