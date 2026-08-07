@@ -134,13 +134,64 @@ class ClientBatchPipelineTest < Wurk::Test::UnitCase
     assert_equal (SLICE + 1).to_s, batch_field('total')
   end
 
+  # --- identical Redis state: pipelined vs per-job (Plan 04/S8) -----------
+  #
+  # The pipeline only changes how many round trips the N EVALSHA calls ride
+  # in — the Lua script and its per-job KEYS/ARGV are untouched. Runs the
+  # exact same private #push_batched twice against disjoint bid/queue
+  # namespaces: once wrapped in `pipelined` (today's path), once against a
+  # bare connection so each EVALSHA is its own round trip (the pre-#313
+  # per-job path). Diffs the resulting batch hash, live-jid set, and queued
+  # payloads — normalized for the namespace names, which differ by design so
+  # the two runs don't collide.
+  def test_pipelined_batch_push_matches_per_job_redis_state
+    now             = Process.clock_gettime(Process::CLOCK_REALTIME, :millisecond)
+    pipelined_bid   = "#{@bid}-pl"
+    per_job_bid     = "#{@bid}-pj"
+    pipelined_queue = "#{@queue}-pl"
+    per_job_queue   = "#{@queue}-pj"
+    client          = Wurk::Client.new(pool: @pool)
+
+    @pool.with do |conn|
+      conn.pipelined do |pipe|
+        client.send(:push_batched, pipe, payloads(5, bid: pipelined_bid, queue: pipelined_queue), now)
+      end
+    end
+    @pool.with do |conn|
+      client.send(:push_batched, conn, payloads(5, bid: per_job_bid, queue: per_job_queue), now)
+    end
+
+    assert_equal batch_state(pipelined_bid, pipelined_queue), batch_state(per_job_bid, per_job_queue)
+  ensure
+    cleanup_namespace(pipelined_bid, pipelined_queue)
+    cleanup_namespace(per_job_bid, per_job_queue)
+  end
+
   private
 
-  def payloads(count, at: nil)
+  def payloads(count, at: nil, bid: @bid, queue: @queue)
     Array.new(count) do |i|
-      job = { 'class' => @class_name, 'args' => [i], 'queue' => @queue,
-              'jid' => format('%024x', i), 'bid' => @bid }
+      job = { 'class' => @class_name, 'args' => [i], 'queue' => queue,
+              'jid' => format('%024x', i), 'bid' => bid }
       at ? job.merge('at' => at) : job
+    end
+  end
+
+  def batch_state(bid, queue)
+    @pool.with do |conn|
+      {
+        total: conn.call('HGET', "b-#{bid}", 'total'),
+        pending: conn.call('HGET', "b-#{bid}", 'pending'),
+        jids: conn.call('SMEMBERS', "b-#{bid}-jids").sort,
+        jobs: conn.call('LRANGE', "queue:#{queue}", 0, -1).map { |s| JSON.parse(s).except('queue', 'bid') }
+      }
+    end
+  end
+
+  def cleanup_namespace(bid, queue)
+    @pool.with do |conn|
+      conn.call('DEL', "queue:#{queue}", "b-#{bid}", "b-#{bid}-jids")
+      conn.call('SREM', 'queues', queue)
     end
   end
 

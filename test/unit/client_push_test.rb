@@ -2,6 +2,7 @@
 
 require_relative '../test_helper'
 require 'json'
+require 'stringio'
 
 # Drives Wurk::Client against real Redis. Asserts on the canonical Sidekiq
 # wire shape — keys, JID format, ms timestamps — and on the validation
@@ -227,6 +228,78 @@ class ClientPushTest < Wurk::Test::UnitCase
     end
   end
 
+  # --- verify_json: exactly once per push (Plan 04/S8) --------------------
+  #
+  # #push used to walk the payload's args twice (once inside the client
+  # middleware chain, once again on the returned payload); #push_bulk still
+  # walks once per job, inside the chain. A spy on the public `verify_json`
+  # method counts real invocations against real Redis, so a regression that
+  # reintroduces the second walk — or drops the only one — trips a count
+  # mismatch instead of just costing allocations silently.
+  def test_push_calls_verify_json_exactly_once
+    calls = 0
+    @client.define_singleton_method(:verify_json) do |item|
+      calls += 1
+      super(item)
+    end
+
+    @client.push(base_item)
+
+    assert_equal 1, calls
+  end
+
+  def test_push_bulk_calls_verify_json_exactly_once_per_job
+    calls = 0
+    @client.define_singleton_method(:verify_json) do |item|
+      calls += 1
+      super(item)
+    end
+
+    @client.push_bulk(base_item('args' => [[1], [2], [3]]))
+
+    assert_equal 3, calls
+  end
+
+  # --- verify_json: :warn/:raise mode matrix -------------------------------
+  #
+  # Both entry points route unsafe args through the same JobUtil#verify_json,
+  # so :raise must raise identically from push and push_bulk, and :warn must
+  # let both through unraised (job still lands on the wire) while logging the
+  # same message shape. Pins the matrix so a future divergence between the
+  # two push paths — e.g. push_bulk regaining its own verify call with a
+  # different mode read — shows up as a failing cell, not a shrug.
+  def test_push_raises_on_unsafe_args_in_raise_mode
+    with_strict_mode(:raise) do
+      err = assert_raises(ArgumentError) { @client.push(base_item('args' => [:sym])) }
+      assert_match(/native JSON/, err.message)
+    end
+  end
+
+  def test_push_bulk_raises_on_unsafe_args_in_raise_mode
+    with_strict_mode(:raise) do
+      err = assert_raises(ArgumentError) { @client.push_bulk(base_item('args' => [[:sym]])) }
+      assert_match(/native JSON/, err.message)
+    end
+  end
+
+  def test_push_warns_without_raising_on_unsafe_args_in_warn_mode
+    with_strict_mode(:warn) do
+      log = capture_log { @client.push(base_item('args' => [:sym])) }
+
+      assert_match(/native JSON/, log)
+      assert_equal [['sym']], queued_args
+    end
+  end
+
+  def test_push_bulk_warns_without_raising_on_unsafe_args_in_warn_mode
+    with_strict_mode(:warn) do
+      log = capture_log { @client.push_bulk(base_item('args' => [[:sym]])) }
+
+      assert_match(/native JSON/, log)
+      assert_equal [['sym']], queued_args
+    end
+  end
+
   # --- pool routing ------------------------------------------------------
 
   def test_class_via_overrides_pool_in_block
@@ -319,6 +392,26 @@ class ClientPushTest < Wurk::Test::UnitCase
     rescue JSON::ParserError
       next
     end
+  end
+
+  def with_strict_mode(mode)
+    Wurk::Test::GLOBAL_STATE_MUTEX.synchronize do
+      original = Wurk.strict_args_mode
+      Wurk.strict_args!(mode)
+      yield
+    ensure
+      Wurk.strict_args!(original)
+    end
+  end
+
+  def capture_log
+    io = StringIO.new
+    saved = Wurk.configuration.logger
+    Wurk.configuration.logger = ::Logger.new(io)
+    yield
+    io.string
+  ensure
+    Wurk.configuration.logger = saved
   end
 
   def fake_pool(&hook)

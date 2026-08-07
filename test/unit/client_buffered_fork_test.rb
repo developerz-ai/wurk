@@ -23,8 +23,11 @@ class ClientBufferedForkTest < Wurk::Test::UnitCase
   # state" — what a child observes after fork.
   FOREIGN_PID = -1
 
+  # Statsd singletons are process-global too (see #test_statsd_memo_resets_on_fork
+  # below) — serialize against every other test class that rewrites them
+  # (MetricsStatsdTest, ClientBufferedTest, ...), not just against this one.
   def run(*args, &)
-    MUTEX.synchronize { super }
+    Wurk::Test::STATSD_MUTEX.synchronize { MUTEX.synchronize { super } }
   end
 
   def setup
@@ -157,6 +160,53 @@ class ClientBufferedForkTest < Wurk::Test::UnitCase
 
     assert(eventually? { queued_args == [['post-fork']] },
            'the re-armed drainer never flushed the buffer through the default pool')
+  end
+
+  # --- statsd memo: fork + reconfigure (Plan 04/S8) -----------------------
+  #
+  # `Swarm::ChildBoot#reconnect_after_fork` calls `Buffered.reset_after_fork!`
+  # and `Statsd.reset!` in the same breath (lib/wurk/swarm/child_boot.rb) —
+  # the dogstatsd client is memoized at the class level, so without the reset
+  # every forked child would share the parent's UDP socket and thread-locals
+  # instead of building its own. Proven alongside the Buffered fork tests
+  # above because production pairs the two resets; a regression in either
+  # leaves a forked child holding process-global state it must not.
+  def test_statsd_memo_resets_on_fork
+    invocations = 0
+    prev = Wurk.configuration.instance_variable_get(:@dogstatsd)
+    Wurk.configuration.instance_variable_set(:@dogstatsd, lambda {
+      invocations += 1
+      Object.new
+    })
+    Wurk::Metrics::Statsd.reset!
+    Wurk::Metrics::Statsd.client # parent process resolves + memoizes once
+
+    Wurk::Metrics::Statsd.reset! # mirrors reconnect_after_fork's post-fork reset
+    Wurk::Metrics::Statsd.client
+
+    assert_equal 2, invocations, 'the child must rebuild its own client instead of inheriting the parent memo'
+  ensure
+    Wurk.configuration.instance_variable_set(:@dogstatsd, prev)
+    Wurk::Metrics::Statsd.reset!
+  end
+
+  # `Configuration#dogstatsd=` also drops the memo (configuration.rb) — a host
+  # app that wires up statsd after boot must not have the earlier "no client"
+  # answer stick around from the first emit.
+  def test_statsd_memo_resets_on_reconfigure
+    prev = Wurk.configuration.dogstatsd
+    first  = Object.new
+    second = Object.new
+    Wurk.configuration.dogstatsd = first
+
+    assert_same first, Wurk::Metrics::Statsd.client
+
+    Wurk.configuration.dogstatsd = second
+
+    assert_same second, Wurk::Metrics::Statsd.client, 'dogstatsd= must drop the stale memo, not just future assignments'
+  ensure
+    Wurk.configuration.dogstatsd = prev
+    Wurk::Metrics::Statsd.reset!
   end
 
   private
