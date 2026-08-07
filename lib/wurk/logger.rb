@@ -28,7 +28,7 @@ module Wurk
         }.freeze
 
         def tid
-          Thread.current[:wurk_tid] ||= (Thread.current.object_id ^ ::Process.pid).to_s(36)
+          Wurk::Component.tid
         end
 
         def format_context(ctxt = Wurk::Context.current)

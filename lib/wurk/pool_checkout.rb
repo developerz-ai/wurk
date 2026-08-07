@@ -25,5 +25,15 @@ module Wurk
 
       pool.with(idempotent: true, &)
     end
+
+    # Same apply-safety forwarding as .with, minus the is_a? probe. Only for
+    # call sites whose pool is always this process's own {RedisPool} — never a
+    # host-supplied `pool:` kwarg — so the polymorphic check has nothing to
+    # decide.
+    def self.trusted(pool, idempotent, &)
+      return pool.with(&) unless idempotent
+
+      pool.with(idempotent: true, &)
+    end
   end
 end

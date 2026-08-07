@@ -611,17 +611,18 @@ class FetcherReliableTest < Wurk::Test::UnitCase
     @fetcher.send(:blmove, @public_queue)
     t = Wurk::Fetcher::Reliable::TIMEOUT
 
-    assert_equal [t + 1, 'BLMOVE', @public_queue, private_queue, 'RIGHT', 'LEFT', t], args
+    assert_equal [t, 'BLMOVE', @public_queue, private_queue, 'RIGHT', 'LEFT', t], args
   end
 
-  # config.fetch_poll_interval overrides the block timeout (and the socket
-  # read-timeout stays one second past it).
+  # config.fetch_poll_interval overrides the block timeout. redis-client's
+  # connection_timeout helper (connection_mixin.rb:87-93) adds config.read_timeout
+  # to the socket read timeout, so manual padding is unnecessary.
   def test_blmove_honors_config_fetch_poll_interval
     @config.fetch_poll_interval = 0.25
     args = captured_blmove_args
     @fetcher.send(:blmove, @public_queue)
 
-    assert_equal [1.25, 'BLMOVE', @public_queue, private_queue, 'RIGHT', 'LEFT', 0.25], args
+    assert_equal [0.25, 'BLMOVE', @public_queue, private_queue, 'RIGHT', 'LEFT', 0.25], args
   end
 
   # blmove must draw from the dedicated fetch pool, never the main pool, so a

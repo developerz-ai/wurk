@@ -87,7 +87,16 @@ module Wurk
     #   config.dogstatsd = -> { Datadog::Statsd.new('host', 8125) }
     #
     # Spec: docs/target/sidekiq-pro.md §9.1.
-    attr_accessor :dogstatsd
+    attr_reader :dogstatsd
+
+    # Assignment drops Statsd's resolved-client memo. That memo caches the
+    # "nothing configured" answer too (so the no-client emit path allocates
+    # nothing), which means a builder wired up after the first emit would
+    # otherwise never be picked up.
+    def dogstatsd=(builder)
+      @dogstatsd = builder
+      Wurk::Metrics::Statsd.reset!
+    end
 
     def initialize(options = {})
       @options = deep_dup_defaults.merge(options)
@@ -200,7 +209,7 @@ module Wurk
     end
 
     def redis(idempotent: false, &)
-      PoolCheckout.with(redis_pool, idempotent, &)
+      PoolCheckout.trusted(redis_pool, idempotent, &)
     end
 
     # --- Web dashboard Redis pool ----------------------------------------

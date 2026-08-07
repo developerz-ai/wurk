@@ -11,10 +11,15 @@ cd wurk
 bin/setup          # gem + frontend (bun) deps + dummy app db:prepare
 ```
 
-You'll need a local **Redis ≥ 7.0** running (tests use real Redis, never a mock).
-[**bun**](https://bun.sh) is only needed if you touch the dashboard frontend
-(`frontend/`, a SolidJS SPA); the precompiled bundle is committed under
-`vendor/assets/`, so consumers run neither Node nor bun.
+You'll need a local **Redis ≥ 7.0** running (tests use real Redis, never a mock)
+and [**bun**](https://bun.sh). Bun is not only for frontend work: the engine
+tests render the dashboard shell, so the SolidJS SPA under `frontend/` has to be
+built before they can run. `vendor/assets/dashboard/` is gitignored rather than
+committed, so a fresh clone has no bundle — `bin/setup` installs the frontend
+deps, and the first `bin/rake test` builds the bundle itself.
+
+Consumers of the published gem run neither Node nor bun: the bundle is baked
+into `vendor/assets/` at release time and ships inside the gem.
 
 `bin/setup` installs the dummy app's gems into a **project-local** path
 (`test/dummy/vendor/bundle`) so a read-only or permission-locked global gem home
@@ -51,6 +56,12 @@ Frontend unit + integration tests (Vitest, SolidJS Testing Library) run with
 | Coverage gate | `COVERAGE=1 bin/rake test` |
 | Benchmarks | `bin/rake bench` |
 | Lint | `bundle exec rubocop` |
+
+The engine tests render the dashboard shell, which needs the precompiled SPA.
+That bundle is built rather than committed, so a fresh clone has none — the
+first `bin/rake test` builds it once (roughly 4s) and says so. Later runs skip
+it. If you change anything under `frontend/src`, rebuild explicitly with
+`bin/rake frontend:build`; the automatic build only covers "no bundle at all".
 
 Test layers:
 

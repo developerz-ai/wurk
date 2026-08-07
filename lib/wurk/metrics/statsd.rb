@@ -35,6 +35,15 @@ module Wurk
       METRIC_PREFIX = 'sidekiq.'
       DEFAULT_SAMPLE_RATE = 1.0
 
+      # Unresolved state of the {.client} memo, distinct from a resolved nil.
+      UNSET = :unset
+      private_constant :UNSET
+
+      # Seeded in the class body (not `class << self`, where `self` is the
+      # singleton class) so {.client} is a bare ivar read with no `defined?`
+      # guard on the hot path.
+      @client = UNSET
+
       class << self
         attr_accessor :options
 
@@ -91,19 +100,35 @@ module Wurk
         # Resolves the live client: invokes the configured `dogstatsd` proc
         # exactly once per process and memoizes. Returns nil when no proc
         # is configured, so callers get a clean no-op without raising.
+        #
+        # The *unconfigured* answer is memoized too, which is what makes the
+        # no-client path free: Client#emit_enqueued asks once per payload, so
+        # re-reading `Wurk.configuration` here would cost a config lookup per
+        # job on every bulk push. Both invalidation points call {.reset!}.
         def client
-          return @client if defined?(@client) && !@client.nil?
+          memo = @client
+          return memo unless UNSET.equal?(memo)
 
           builder = Wurk.configuration.respond_to?(:dogstatsd) ? Wurk.configuration.dogstatsd : nil
-          return nil if builder.nil?
-
           @client = builder.respond_to?(:call) ? builder.call : builder
         end
 
-        # Test/lifecycle hook. Reset between specs and after fork so the
-        # parent's socket doesn't bleed into children.
+        # {.client} without the raise: a builder proc that blows up is reported
+        # through the error handler and treated as "no client", so misconfigured
+        # metrics can never fail the work they were measuring. Callers on a
+        # hot path use this to skip building anything the emit would drop.
+        def safe_client
+          client
+        rescue StandardError => e
+          handle_error(e)
+          nil
+        end
+
+        # Test/lifecycle hook. Reset between specs, after fork so the parent's
+        # socket doesn't bleed into children, and on every `config.dogstatsd=`
+        # — a memoized nil would otherwise hide a client configured later.
         def reset!
-          @client = nil
+          @client = UNSET
         end
 
         private
@@ -118,8 +143,7 @@ module Wurk
       end
 
       def call(_worker, job, queue) # rubocop:disable Metrics/AbcSize
-        client = safe_client
-        return yield if client.nil?
+        return yield if self.class.safe_client.nil?
 
         klass = job['class']
         opts  = per_job_options(klass, job, queue)
@@ -145,16 +169,6 @@ module Wurk
       end
 
       private
-
-      # Wraps `self.class.client` so a misconfigured builder proc never turns
-      # a metrics-init failure into a job failure. Returns nil on error (the
-      # caller falls through to a plain `yield`).
-      def safe_client
-        self.class.client
-      rescue StandardError => e
-        self.class.send(:handle_error, e)
-        nil
-      end
 
       # Per-spec §9.2: caller-supplied proc may override tags / sample_rate
       # on a per-job basis. The job's own `dd_rate` field, when present,

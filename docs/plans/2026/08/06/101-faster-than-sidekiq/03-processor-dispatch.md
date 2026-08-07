@@ -14,6 +14,8 @@
 - Middleware **instances stay per-job-fresh** (`chain.rb:10-12`, documented Sidekiq contract; caching rejected in prior plan).
 - `Object.const_get` per job stays (`processor.rb:233`; memo breaks Rails reloading).
 - The 4 mutex acquisitions in `stats` stay (prior plan: leave the mutexes alone).
+- The step-1 `config=` cache is a **fast path only** — the contract is "assign if the *instance* is respondable" (spec §10.1), which a class-level check misses for a singleton/`method_missing` setter. A class that declares the setter skips `respond_to?`; one that doesn't is still asked (settled in PR #374 review).
+- The step-4 attribute walk is **not** skipped on `%w[bid tags]` — `logged_job_attributes` is a host setting, and a job carrying only a configured extra would have been dropped. `Context.with`'s single merge is the win in that file pair (settled in PR #374 review).
 
 ## Steps
 

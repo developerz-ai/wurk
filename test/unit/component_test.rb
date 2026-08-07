@@ -51,6 +51,51 @@ class ComponentTest < Wurk::Test::UnitCase
     refute_equal main, other
   end
 
+  # Read several times per job, constant per thread — so it must be the very
+  # same (frozen) String every call, not a fresh one.
+  def test_tid_is_memoized_per_thread
+    assert_same @host.tid, @host.tid
+    assert_predicate @host.tid, :frozen?
+  end
+
+  # `Thread#[]` is fiber-local, so memoizing there would miss on every read
+  # taken inside a Fiber — including the ones an Enumerator opens under a job.
+  # The id belongs to the thread, so the memo must too.
+  def test_tid_is_memoized_across_fibers
+    outer = @host.tid
+    inner = ::Fiber.new { @host.tid }.resume
+
+    assert_same outer, inner
+  end
+
+  # The forking thread keeps its thread-locals in the child, but its pid — and
+  # so its tid — changed. Inheriting the parent's tid would collide with it in
+  # `<identity>:work` and mislabel every log line the child writes.
+  def test_tid_is_recomputed_after_a_fork
+    parent = @host.tid
+    reader, writer = ::IO.pipe
+    pid = ::Process.fork do
+      reader.close
+      writer.write(@host.tid)
+      writer.close
+      exit!(0)
+    end
+    writer.close
+    child = reader.read
+    ::Process.wait(pid)
+
+    assert_match(/\A[0-9a-z]+\z/, child)
+    refute_equal parent, child
+  ensure
+    reader&.close
+  end
+
+  # One implementation, one thread-local: the log formatter renders the same
+  # tid the Processor keys WORK_STATE with (and inherits the fork guard).
+  def test_tid_is_shared_with_the_log_formatter
+    assert_same @host.tid, Wurk::Logger::Formatters::Pretty.new.tid
+  end
+
   def test_hostname_prefers_dyno_env
     ENV_MUTEX.synchronize do
       saved = ENV.fetch('DYNO', nil)
@@ -193,6 +238,35 @@ class ComponentTest < Wurk::Test::UnitCase
     t.join
 
     assert_equal(-3, q.pop)
+  end
+
+  # `config.thread_priority` is documented Sidekiq surface (spec §4.2) — the
+  # knob a CPU-heavy app turns back up to 0.
+  def test_safe_thread_honors_configured_thread_priority
+    @config.thread_priority = -2
+    q = Queue.new
+    t = @host.safe_thread('p') { q << Thread.current.priority }
+    t.join
+
+    assert_equal(-2, q.pop)
+  end
+
+  def test_explicit_priority_outranks_the_configured_one
+    @config.thread_priority = 0
+    q = Queue.new
+    t = @host.safe_thread('p', priority: -3) { q << Thread.current.priority }
+    t.join
+
+    assert_equal(-3, q.pop)
+  end
+
+  def test_safe_thread_falls_back_when_configured_priority_is_nil
+    @config.thread_priority = nil
+    q = Queue.new
+    t = @host.safe_thread('p') { q << Thread.current.priority }
+    t.join
+
+    assert_equal Wurk::Component::DEFAULT_THREAD_PRIORITY, q.pop
   end
 
   def test_safe_thread_reports_errors

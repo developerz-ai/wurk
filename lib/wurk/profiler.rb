@@ -34,11 +34,15 @@ module Wurk
       # from the interrupt/expiry middleware) must propagate untouched so the
       # retry/skip flow works. Only the storage step is made failure-safe
       # (see #safe_store).
-      def call(job_hash, &)
+      # No `&block` parameter: every job passes through here, and declaring one
+      # would reify the caller's block into a Proc even on the `yield`-straight-
+      # through path that opted-out jobs take. The capture path pays for its own
+      # block instead.
+      def call(job_hash)
         label = job_hash['profile']
         return yield unless label && defined?(::Vernier)
 
-        capture(job_hash, label, &)
+        capture(job_hash, label) { yield } # rubocop:disable Style/ExplicitBlockArgument
       end
 
       # Persists a profile. Extracted from capture so it is unit-testable
