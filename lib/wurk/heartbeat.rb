@@ -190,7 +190,7 @@ module Wurk
 
     def cpu_model
       if ::File.exist?('/proc/cpuinfo')
-        line = ::File.foreach('/proc/cpuinfo').find { |l| l.start_with?('model name') }
+        line = ::File.open('/proc/cpuinfo') { |f| f.find { |l| l.start_with?('model name') } }
         line&.split(':', 2)&.last&.strip
       else
         model = `sysctl -n machdep.cpu.brand_string 2>/dev/null`.strip
@@ -202,7 +202,7 @@ module Wurk
 
     def memory_total_kb
       if ::File.exist?('/proc/meminfo')
-        line = ::File.foreach('/proc/meminfo').find { |l| l.start_with?('MemTotal') }
+        line = ::File.open('/proc/meminfo') { |f| f.find { |l| l.start_with?('MemTotal') } }
         line.to_s[/\d+/].to_i
       else
         `sysctl -n hw.memsize 2>/dev/null`.to_i / 1024

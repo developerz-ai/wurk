@@ -402,7 +402,11 @@ Setting `config.redis[:size]` pins **the main pool only**; the fetch pool
 always tracks `concurrency` and the web pool always tracks `web_pool_size`.
 
 Redis connections are **never shared across forks**: the swarm parent calls
-`reset_redis_pools!` before forking and each child rebuilds lazily.
+`reset_redis_pools!` before forking and each child rebuilds lazily. A graceful
+shutdown releases them too — `Launcher#stop` resets the pools in its teardown
+tail, so a host that outlives Wurk (Puma, a rake task, a test) gets its sockets
+back instead of holding one main + one fetch pool per capsule open forever. The
+next checkout rebuilds, so a stop/start cycle is safe.
 
 ### Transient-failure handling
 

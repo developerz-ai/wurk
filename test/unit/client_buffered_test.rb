@@ -441,6 +441,22 @@ class ClientBufferedTest < Wurk::Test::UnitCase
     refute_predicate Wurk::Client, :reliable_push_drainer_running?
   end
 
+  # Regression: reset! used to swap the buffer/cap/overflow-mode/factory
+  # ivars but leave `@drainer` running — the thread survived reset! and
+  # kept ticking against a client_factory that was never nil'd directly
+  # but whose captured pool/state reset! had just discarded, i.e. a
+  # surviving thread retaining stale closure state indefinitely.
+  def test_reset_stops_a_running_drainer
+    Wurk::Client.reliable_push_drainer(interval: 0.02)
+
+    assert_predicate Wurk::Client, :reliable_push_drainer_running?
+
+    Wurk::Client::Buffered.reset!
+
+    refute_predicate Wurk::Client, :reliable_push_drainer_running?
+    assert_nil Wurk::Client::Buffered.instance_variable_get(:@drainer)
+  end
+
   # rubocop:disable Metrics/AbcSize
   def test_drainer_drains_buffer_against_recovering_pool
     pool = togglable_pool

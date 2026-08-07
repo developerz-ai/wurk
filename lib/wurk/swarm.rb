@@ -54,6 +54,12 @@ module Wurk
     SUPERVISOR_POOL_SIZE = 1
     SUPERVISOR_POOL_NAME = 'swarm-supervisor'
 
+    # Poll budget for the post-SIGKILL reap sweep (250ms). Deliberately far
+    # shorter than any drain deadline — it runs after the fleet is already dead
+    # and races a kernel teardown measured in microseconds.
+    HARD_KILL_REAP_ATTEMPTS = 25
+    HARD_KILL_REAP_INTERVAL = 0.01
+
     # Children each hard_shutdown after their own drain deadline (bulk_requeue
     # + a 3s ensure window + heartbeat cleanup); the parent must not SIGKILL
     # them mid-tail, so its own wait always extends past theirs by this much.
@@ -375,18 +381,29 @@ module Wurk
     end
 
     # Reap every exited child this tick (not one), so a fleet-wide death
-    # recovers in parallel rather than one child per SUPERVISE_TICK. ECHILD
-    # (momentarily no children — all crashed and awaiting backoff) is not a stop
-    # condition: the swarm only stops on an explicit TERM/INT.
+    # recovers in parallel rather than one child per SUPERVISE_TICK.
+    #
+    # Waits on the KNOWN pids, one by one — never `wait2(-1)`. Embedded
+    # (`RailsBoot.boot_swarm`) the supervisor shares a process with the host
+    # app, and a wildcard wait consumes the exit status of ANY child: a Puma
+    # worker, a `system`/`Open3`/`spawn` subprocess. The host's own
+    # `Process.wait` then fails with ECHILD and its subprocess bookkeeping
+    # breaks. A pid the swarm did not fork is never its business.
     def reap_children
-      loop do
-        pid, status = ::Process.wait2(-1, ::Process::WNOHANG)
-        break unless pid
+      child_pids.each { |pid| reap_child(pid) }
+    end
 
-        on_child_exit(pid, status)
-      end
+    # ECHILD on a pid the swarm forked means someone else already reaped it —
+    # an embedded host with its own wildcard reaper is exactly the mirror of the
+    # bug above. Retire the slot with an unknown status rather than skip it: the
+    # child is gone either way, and leaving the entry in the table wedges the
+    # slot forever (never respawned because it still looks alive, never reaped
+    # because there is nothing left to reap).
+    def reap_child(pid)
+      reaped, status = ::Process.wait2(pid, ::Process::WNOHANG)
+      on_child_exit(pid, status) if reaped
     rescue Errno::ECHILD
-      nil
+      on_child_exit(pid, nil)
     end
 
     def on_child_exit(pid, status)
@@ -396,7 +413,7 @@ module Wurk
         return if @restart.claim_exit(pid)
 
         if @stopping
-          logger.info { "swarm: child #{pid} exited (status=#{status.exitstatus})" }
+          logger.info { "swarm: child #{pid} exited (status=#{status&.exitstatus})" }
         else
           schedule_respawn(pid, status, meta)
         end
@@ -411,7 +428,7 @@ module Wurk
       idx = meta[:index]
       delay = @respawn_backoff.fail(idx, lifetime: monotonic - meta[:spawned_at])
       logger.warn do
-        "swarm: child #{pid} died (status=#{status.exitstatus}); respawning slot #{idx} in #{delay}s"
+        "swarm: child #{pid} died (status=#{status&.exitstatus}); respawning slot #{idx} in #{delay}s"
       end
     end
 
@@ -495,11 +512,42 @@ module Wurk
     # Kill and forget atomically: a child landing in the table between the walk
     # and the clear would be dropped from it without ever being signalled —
     # untracked and still alive.
+    #
+    # SIGKILL only schedules the teardown; the pid stays a zombie until someone
+    # waits on it, and this is the swarm's last reap — `shutdown` has already
+    # left the supervise loop behind. Standalone the exiting process hands its
+    # zombies to init, but embedded (`RailsBoot.boot_swarm`) the host lives on
+    # and carries one zombie per straggler for the rest of its life. The sweep
+    # runs on the pids taken under the lock but outside it: it sleeps, and the
+    # child table is never held across a sleep.
     def hard_kill_stragglers
-      @lock.synchronize do
-        @children.each_key { |pid| safe_kill(pid, 'KILL') }
+      killed = @lock.synchronize do
+        pids = @children.keys
+        pids.each { |pid| safe_kill(pid, 'KILL') }
         @children.clear
+        pids
       end
+      reap_killed(killed)
+    end
+
+    # Bounded and best-effort: SIGKILL is asynchronous, so poll rather than
+    # block on a pid that may be wedged in uninterruptible sleep. A straggler
+    # still unreaped when the budget runs out is dropped exactly as before —
+    # the drain must not stall on it.
+    def reap_killed(pids)
+      pending = pids
+      HARD_KILL_REAP_ATTEMPTS.times do
+        pending = pending.reject { |pid| reaped?(pid) }
+        break if pending.empty?
+
+        sleep HARD_KILL_REAP_INTERVAL
+      end
+    end
+
+    def reaped?(pid)
+      !::Process.wait2(pid, ::Process::WNOHANG).nil?
+    rescue Errno::ECHILD
+      true
     end
 
     # Has the child written its first heartbeat yet? One non-blocking SISMEMBER,

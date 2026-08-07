@@ -3,6 +3,7 @@
 require_relative '../component'
 require_relative '../keys'
 require_relative '../middleware/poison_pill'
+require_relative '../timer_loop'
 
 module Wurk
   class Fetcher
@@ -91,13 +92,22 @@ module Wurk
         @thread
       end
 
+      # Bounded at TimerLoop::JOIN_TIMEOUT like every other periodic component.
+      # The full-keyspace sweep is exactly the tick that outlasts a stop: it
+      # SCANs the whole `queue:*|*` keyspace and drains what it finds, so on a
+      # large or slow Redis it can still be running when shutdown lands. Waiting
+      # it out held the entire process's teardown open past the swarm parent's
+      # SHUTDOWN_GRACE — which SIGKILLs the child mid-drain, the one outcome
+      # this component exists to recover from. A straggler is left running
+      # instead — and still referenced, like every other periodic component, so
+      # a restart after a timed-out stop can't spawn a second sweep loop
+      # alongside it. Its own tick_once rescues and reports.
       def stop
         @mutex.synchronize do
           @done = true
           @sleeper.signal
         end
-        @thread&.join
-        @thread = nil
+        @thread = nil if @thread&.join(TimerLoop::JOIN_TIMEOUT)
       end
 
       def running?

@@ -84,6 +84,43 @@ class WebConfigTest < Wurk::Test::UnitCase
     refute Wurk::Web.config.authorized?({}, 'GET', '/api/stats')
   end
 
+  # --- rack_app memoization -----------------------------------------------
+
+  def test_rack_app_caches_for_the_same_inner_and_middlewares
+    inner = ->(_env) { [200, {}, ['ok']] }
+
+    first = Wurk::Web.config.rack_app(inner)
+    second = Wurk::Web.config.rack_app(inner)
+
+    assert_same first, second
+  end
+
+  def test_rack_app_rebuilds_when_middlewares_change
+    inner = ->(_env) { [200, {}, ['ok']] }
+    first = Wurk::Web.config.rack_app(inner)
+    Wurk::Web.configure { |c| c.use(Wurk::Web::Authorization) }
+    second = Wurk::Web.config.rack_app(inner)
+
+    refute_same first, second
+  end
+
+  # Regression: memoizing on the middleware list alone pins whichever
+  # `inner` the *first* caller passed, forever — a second mount (a second
+  # test's Rack app, a second engine mount) would silently get served the
+  # first one's app instead of its own.
+  def test_rack_app_rebuilds_when_inner_changes
+    first_inner = ->(_env) { [200, {}, ['first']] }
+    second_inner = ->(_env) { [200, {}, ['second']] }
+
+    first_app = Wurk::Web.config.rack_app(first_inner)
+    second_app = Wurk::Web.config.rack_app(second_inner)
+
+    refute_same first_app, second_app
+    _status, _headers, body = second_app.call(rack_env('GET', '/'))
+
+    assert_equal ['second'], body
+  end
+
   # --- Rack middleware --------------------------------------------------
 
   def test_middleware_returns_200_when_authorized

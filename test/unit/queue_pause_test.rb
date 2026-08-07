@@ -333,14 +333,14 @@ class QueuePauseTest < Wurk::Test::UnitCase
     Wurk::Queue.new(@qname).pause!
     Wurk::Queue.new(@other).pause!
     counter = RedisCallCounter.new(capsule.redis_pool)
-    capsule.instance_variable_set(:@redis_pool, counter)
+    capsule.instance_variable_get(:@pools)[:main] = counter
     [fetcher, capsule, counter]
   end
 
   def build_pinned_fetcher_with_paused_counter
     fetcher, capsule = build_fetcher(%W[#{@qname} #{@other}], PinnedGeneration)
     counter = PausedReadCounter.new(capsule.redis_pool)
-    capsule.instance_variable_set(:@redis_pool, counter)
+    capsule.instance_variable_get(:@pools)[:main] = counter
     [fetcher, capsule, counter]
   end
 

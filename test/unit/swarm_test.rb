@@ -242,7 +242,7 @@ class SwarmTest < Wurk::Test::UnitCase
 
     swarm.send(:heartbeat_seen?, 999_999)
 
-    assert_nil @config.default_capsule.instance_variable_get(:@redis_pool),
+    assert_nil @config.default_capsule.instance_variable_get(:@pools)[:main],
                'the heartbeat probe reopened the parent capsule pool that boot had closed'
   end
 

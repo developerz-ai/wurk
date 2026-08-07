@@ -7,28 +7,45 @@ module Wurk
   # we 503 with Retry-After — the SPA's EventSource reconnects (and its polling
   # fallback honors Retry-After) once a slot frees. Per-process is the right
   # scope: it's this process's own thread pool we're protecting.
+  #
+  # Slots are held as thread references rather than tallied in a counter so the
+  # cap can heal itself. A stream whose thread is killed mid-flight never
+  # reaches the `ensure` below (Puma hard-reaps worker threads past
+  # `force_shutdown_after`, and a thread killed inside an uninterruptible read
+  # can skip its ensure), which a counter would record as a slot held by nobody
+  # — ten of those and `/api/stream` 503s for the life of the process. A dead
+  # holder is instead evicted by the next acquire.
   module StreamConcurrencyGuard
     extend ActiveSupport::Concern
 
     MAX_CONCURRENT_STREAMS = 10
     RETRY_AFTER_SECONDS = 3
 
-    @open = 0
+    @holders = []
     @lock = Mutex.new
 
     class << self
-      # Reserve a stream slot; false when the cap is already reached.
+      # Reserve a stream slot for the calling thread; false when the cap is
+      # already reached by threads that are still alive.
       def acquire
         @lock.synchronize do
-          return false if @open >= MAX_CONCURRENT_STREAMS
+          @holders.keep_if(&:alive?)
+          return false if @holders.size >= MAX_CONCURRENT_STREAMS
 
-          @open += 1
+          @holders << Thread.current
           true
         end
       end
 
+      # Drops one slot held by the calling thread. Acquire and release always
+      # bracket a single block on one thread (`#with_stream_slot`), so a call
+      # from a thread holding nothing is a no-op rather than a slot taken away
+      # from whoever is actually streaming.
       def release
-        @lock.synchronize { @open -= 1 if @open.positive? }
+        @lock.synchronize do
+          index = @holders.rindex(Thread.current)
+          @holders.delete_at(index) if index
+        end
       end
     end
 

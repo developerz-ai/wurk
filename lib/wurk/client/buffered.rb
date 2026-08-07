@@ -119,6 +119,13 @@ module Wurk
             @overflow_mode = nil
             @buffer_client_factory = nil
           end
+          # Stop before dropping: an unstopped drainer thread survives with
+          # its factory nil'd out from under it and ticks forever against
+          # nothing, leaking the thread and everything its closure retains.
+          install_mutex.synchronize do
+            @drainer&.stop
+            @drainer = nil
+          end
         end
 
         # Fork hook, called from the `Process._fork` prepend below and from

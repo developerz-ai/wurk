@@ -554,6 +554,23 @@ class LeaderTest < Wurk::Test::UnitCase
     refute_predicate ldr, :running?
   end
 
+  # A campaign parked on a wedged Redis (`SET NX EX` waiting out its socket
+  # timeouts) must not hold the whole process teardown open — the swarm parent
+  # SIGKILLs a child that overruns its shutdown grace. Bounded at
+  # TimerLoop::JOIN_TIMEOUT like every other periodic component.
+  def test_stop_bounds_the_join_of_a_tick_that_will_not_finish
+    ldr = build_leader
+    wedged = never_joins_thread
+    ldr.instance_variable_set(:@thread, wedged)
+
+    ldr.stop
+
+    assert_equal [Wurk::TimerLoop::JOIN_TIMEOUT], wedged.joins, 'the join must carry a timeout'
+    assert_same wedged, ldr.instance_variable_get(:@thread),
+                'a straggler stays referenced so a restart cannot campaign twice in parallel'
+    assert_nil(Wurk.redis { |c| c.call('GET', @key) }, 'the CAS release runs even when the join times out')
+  end
+
   def test_stop_releases_and_clears_thread
     ldr = build_leader(renew_interval: 0.05, follower_interval: 0.05)
     ldr.start
@@ -766,6 +783,19 @@ class LeaderTest < Wurk::Test::UnitCase
     ldr = Wurk::Leader.new(key: @key, initial_wait: 0, **)
     @leaders << ldr
     ldr
+  end
+
+  # Stands in for a campaign tick still parked on Redis when the stop lands:
+  # `join` records the timeout it was given and reports "not finished" (nil),
+  # exactly as a real thread that outlives the bound does. Cheaper and more
+  # precise than waiting a real JOIN_TIMEOUT out.
+  def never_joins_thread
+    thread = Object.new
+    joins = []
+    thread.define_singleton_method(:joins) { joins }
+    thread.define_singleton_method(:alive?) { true }
+    thread.define_singleton_method(:join) { |timeout| joins << timeout and nil }
+    thread
   end
 
   # Run the block in `count` threads released from a common barrier, so they

@@ -196,15 +196,19 @@ module Wurk
       end
 
       # Builds the host-middleware chain wrapping `inner`, memoized against
-      # the middleware list it was built from — `middlewares` is the live
-      # array (upstream surface), so direct mutation after the first request
-      # triggers a rebuild instead of silently serving the stale chain.
-      # Production builds exactly once at boot; the per-request comparison is
-      # an == over a handful of entries.
+      # `[inner, middlewares]` — `middlewares` is the live array (upstream
+      # surface), so direct mutation after the first request triggers a
+      # rebuild instead of silently serving the stale chain. Keying on
+      # `inner` too matters for the same reason: memoizing on the
+      # middleware list alone pins whichever `inner` app the *first* caller
+      # passed, forever — a second mount (e.g. per-test Rack app, or a
+      # second engine mount) would silently get served the first one's app.
+      # Production builds exactly once at boot; the per-request comparison
+      # is an == over a handful of entries plus one object identity check.
       def rack_app(inner)
-        return @rack_app if @rack_app && @rack_app_stack == @middlewares
+        return @rack_app if @rack_app && @rack_app_key == [inner, @middlewares]
 
-        @rack_app_stack = @middlewares.dup
+        @rack_app_key = [inner, @middlewares.dup]
         stack = @middlewares
         @rack_app = ::Rack::Builder.new do
           stack.each { |middleware, args, block| use(middleware, *args, &block) }
