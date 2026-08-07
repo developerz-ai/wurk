@@ -12,6 +12,27 @@ class FetcherReliableTest < Wurk::Test::UnitCase
   # so it can't race with a parallel sibling reading the same variable.
   ENV_MUTEX = Mutex.new
 
+  # Raised by #with_dead_redis in place of a real connection error, so a test
+  # asserting the failure path can't accidentally pass on some other raise.
+  class DeadRedis < StandardError; end
+
+  # CommandSpy counts commands; the piggyback's whole point is round trips, so
+  # this counts checkouts too — each of the fetch and flush paths spends exactly
+  # one command or one pipeline per checkout.
+  class TripCountingSpy < Wurk::Test::CommandSpy
+    attr_reader :trips
+
+    def initialize(pool)
+      super
+      @trips = 0
+    end
+
+    def with(&)
+      @trips += 1
+      super
+    end
+  end
+
   def setup
     super
     @queue_name   = "fr-#{Process.pid}:#{object_id}"
@@ -58,6 +79,16 @@ class FetcherReliableTest < Wurk::Test::UnitCase
     assert_same @capsule, uow.config
   end
 
+  # The ACK is written from a string the fetch already built, so a finished job
+  # never re-derives the private list name (a gethostname syscall) to retire
+  # itself.
+  def test_unit_of_work_carries_the_private_list_it_will_be_acked_from
+    enqueue('p1')
+    uow = @fetcher.retrieve_work
+
+    assert_equal private_queue, uow.private_queue
+  end
+
   def test_retrieve_work_returns_nil_when_terminated
     @fetcher.terminate
 
@@ -76,8 +107,8 @@ class FetcherReliableTest < Wurk::Test::UnitCase
   end
 
   # Every queue paused → nothing to block on, so retrieve_work must back off a
-  # poll interval itself. Returning instantly hot-loops Processor#run and pays
-  # an SMEMBERS of the paused set on every pass (upstream Sidekiq #4825).
+  # poll interval itself. Returning instantly hot-loops Processor#run on passes
+  # that can never return a job (upstream Sidekiq #4825).
   def test_retrieve_work_backs_off_a_poll_interval_when_no_queue_is_fetchable
     @config.fetch_poll_interval = 0.2
     Wurk::Queue.new(@queue_name).pause!
@@ -91,13 +122,63 @@ class FetcherReliableTest < Wurk::Test::UnitCase
 
   # --- acknowledge / SIGKILL behavior ---------------------------------
 
-  def test_acknowledge_removes_job_from_private_list
+  # The ACK is held, not sent: it rides the next fetch's pipeline. Until then
+  # the payload stays in the private list, which is exactly the window a hard
+  # kill can now hit — see docs/idea/parity-divergences.md.
+  def test_acknowledge_holds_the_lrem_rather_than_spending_a_round_trip
     enqueue('ack-me')
     uow = @fetcher.retrieve_work
     uow.acknowledge
 
+    assert_equal 1, llen(private_queue), 'the ACK must not take a round trip of its own'
+  end
+
+  def test_acknowledge_removes_job_from_private_list_once_flushed
+    enqueue('ack-me')
+    uow = @fetcher.retrieve_work
+    uow.acknowledge
+    @fetcher.flush_pending_acks
+
     assert_equal 0, llen(private_queue)
     assert_equal 0, llen(@public_queue)
+  end
+
+  # The headline of the piggyback: the next fetch retires the job just finished
+  # and picks up the next one in the same pipeline.
+  def test_the_held_ack_rides_the_next_fetch
+    enqueue('j1')
+    enqueue('j2')
+    @fetcher.retrieve_work.acknowledge
+
+    second = @fetcher.retrieve_work
+
+    assert_equal [second.job], lrange(private_queue), 'only the job just fetched may still be private'
+  end
+
+  # "Exactly one LREM per job", pinned by a count rather than an eyeball: the
+  # whole job costs one checkout carrying LREM + DEL (retiring the previous job)
+  # + LMOVE (fetching the next). A held ACK re-sent on each queue of the walk,
+  # or left in its slot after a successful send, shows up here.
+  def test_a_job_costs_one_checkout_of_three_commands
+    enqueue('j1')
+    enqueue('j2')
+    @fetcher.retrieve_work.tap { |uow| uow.jid = 'jid-1' }.acknowledge
+    spy = install_command_spy
+
+    @fetcher.retrieve_work
+
+    assert_equal 1, spy.trips
+    assert_equal 3, spy.count
+  end
+
+  def test_acknowledge_itself_issues_no_command
+    enqueue('free-ack')
+    uow = @fetcher.retrieve_work
+    spy = install_command_spy
+
+    uow.acknowledge
+
+    assert_equal 0, spy.count
   end
 
   def test_unacked_job_survives_in_private_list_after_simulated_sigkill
@@ -121,6 +202,7 @@ class FetcherReliableTest < Wurk::Test::UnitCase
     uow = @fetcher.retrieve_work
     uow.jid = jid
     uow.acknowledge
+    @fetcher.flush_pending_acks
 
     assert_equal 0, llen(private_queue), 'the ACK still removes the job from the private list'
     assert_equal 0, Wurk::Middleware::PoisonPill.recovery_count(jid)
@@ -135,7 +217,10 @@ class FetcherReliableTest < Wurk::Test::UnitCase
     assert_nil uow.jid
 
     uow.acknowledge
+    spy = install_command_spy
+    @fetcher.flush_pending_acks
 
+    assert_equal 1, spy.count
     assert_equal 0, llen(private_queue)
   end
 
@@ -148,9 +233,150 @@ class FetcherReliableTest < Wurk::Test::UnitCase
     uow = @fetcher.retrieve_work
     uow.jid = ''
     uow.acknowledge
+    @fetcher.flush_pending_acks
 
     assert_equal 0, llen(private_queue)
     assert_equal('sentinel', @pool.with { |c| c.call('GET', prefix) })
+  end
+
+  # --- flush points ---------------------------------------------------
+
+  # A blocking BLMOVE can't join a pipeline, so an ACK still held when the walk
+  # comes up empty would sit for a whole poll interval. The walk sends it on the
+  # way past: the pipeline that finds nothing to LMOVE still carries the LREM.
+  def test_a_held_ack_is_sent_before_the_fetcher_blocks
+    @config.fetch_poll_interval = 0.05
+    enqueue('last')
+    @fetcher.retrieve_work.acknowledge
+
+    assert_nil @fetcher.retrieve_work, 'precondition: an empty queue, so this falls through to BLMOVE'
+    assert_equal 0, llen(private_queue)
+  end
+
+  # Every served queue paused: the walk never runs, so the early return has to
+  # send the held ACK itself.
+  def test_a_held_ack_is_sent_when_no_queue_is_fetchable
+    @config.fetch_poll_interval = 0.05
+    enqueue('paused-after')
+    @fetcher.retrieve_work.acknowledge
+    Wurk::Queue.new(@queue_name).pause!
+
+    assert_nil @fetcher.retrieve_work
+    assert_equal 0, llen(private_queue)
+  end
+
+  # Quiet is one-way: after it retrieve_work short-circuits forever, so an ACK
+  # held at that point would sit until shutdown.
+  def test_terminate_sends_held_acks
+    enqueue('quiet-me')
+    @fetcher.retrieve_work.acknowledge
+
+    @fetcher.terminate
+
+    assert_equal 0, llen(private_queue)
+  end
+
+  # ...and the short-circuit sends one deferred after quiet, for the processor
+  # that finishes its last job in that window and loops once more.
+  def test_the_quieted_short_circuit_sends_held_acks
+    enqueue('quiet-then-ack')
+    uow = @fetcher.retrieve_work
+    @fetcher.terminate
+    uow.acknowledge
+
+    assert_nil @fetcher.retrieve_work
+    assert_equal 0, llen(private_queue)
+  end
+
+  # A Redis failure on the quiet path must not escape: Manager#quiet has no
+  # rescue, and a raise there skips the rest of the drain. The ACK stays held
+  # for the next flush point instead.
+  def test_terminate_reports_a_failed_flush_instead_of_raising
+    errors = []
+    @config.error_handlers.replace([->(ex, _ctx, _cfg) { errors << ex }])
+    enqueue('quiet-blip')
+    @fetcher.retrieve_work.acknowledge
+    with_dead_redis { @fetcher.terminate }
+
+    assert_equal 1, errors.size
+    assert_equal 1, llen(private_queue), 'the ACK must survive a failed quiet flush'
+  end
+
+  # An idle fetcher must not spend a round trip announcing it has nothing to ACK.
+  def test_flushing_with_nothing_held_costs_no_round_trip
+    spy = install_command_spy
+
+    assert_nil @fetcher.flush_pending_acks
+    assert_equal 0, spy.count
+  end
+
+  # A transient failure must not eat the ACK — an LREM that is never sent leaves
+  # a finished job for the next boot's reaper to run again.
+  def test_a_failed_flush_keeps_the_acks_it_could_not_send
+    enqueue('flush-blip')
+    @fetcher.retrieve_work.acknowledge
+
+    with_dead_redis { assert_raises(DeadRedis) { @fetcher.flush_pending_acks } }
+    @fetcher.flush_pending_acks
+
+    assert_equal 0, llen(private_queue)
+  end
+
+  # A flush runs on the Manager's thread while the processors keep working, so
+  # the thread it took an ACK from can finish another job and defer a second one
+  # into the same slot before the rescue puts the first back. Keeping only one
+  # of the two leaves the loser in the private list for the next boot's reaper —
+  # a silent second run of a finished job, which is the outcome the restore
+  # exists to prevent.
+  def test_a_failed_flush_keeps_an_ack_deferred_while_it_was_in_flight
+    priv = private_queue
+    enqueue('flush-race-1')
+    enqueue('flush-race-2')
+    acked_before = @fetcher.retrieve_work
+    acked_during = @fetcher.retrieve_work
+    acked_before.acknowledge
+
+    assert_equal 2, llen(priv), 'precondition: neither ACK has been sent'
+
+    with_dead_redis(before_raise: -> { acked_during.acknowledge }) do
+      assert_raises(DeadRedis) { @fetcher.flush_pending_acks }
+    end
+    @fetcher.flush_pending_acks
+
+    assert_equal 0, llen(priv), 'the ACK the flush was holding must not lose its slot to the newer one'
+  end
+
+  # Same contract on the piggybacked copy: the walk takes the ACK out of its
+  # slot before it sends it, so a fetch that blows up has to hand it back.
+  # `queues_cmd` is warmed first so the failure lands on the LMOVE, not on the
+  # paused-set read ahead of it.
+  def test_a_failed_fetch_hands_the_held_ack_back
+    enqueue('fetch-blip')
+    @fetcher.retrieve_work.acknowledge
+    @fetcher.queues_cmd
+
+    with_dead_redis { assert_raises(DeadRedis) { @fetcher.retrieve_work } }
+    @fetcher.flush_pending_acks
+
+    assert_equal 0, llen(private_queue)
+  end
+
+  # One fetcher is shared by every processor thread, so a held ACK belongs to
+  # the thread that finished the job: another thread's fetch must not send it
+  # (it would be paying for work it isn't doing, and the owning thread would
+  # then send it again). A flush, unlike a fetch, drains every thread's slot.
+  def test_a_held_ack_belongs_to_the_thread_that_finished_the_job
+    enqueue('j1')
+    enqueue('j2')
+    held = Thread.new { @fetcher.retrieve_work.tap(&:acknowledge).job }.value
+
+    @fetcher.retrieve_work
+
+    assert_includes lrange(private_queue), held, "another thread's fetch must not send it"
+
+    @fetcher.flush_pending_acks
+
+    refute_includes lrange(private_queue), held, 'a flush drains every thread'
   end
 
   # --- requeue (single) ----------------------------------------------
@@ -181,10 +407,12 @@ class FetcherReliableTest < Wurk::Test::UnitCase
   end
 
   # hard_shutdown reads `job` off another thread, so a Processor can ACK
-  # (LREM the private copy) between that read and the requeue. The LREM guard
-  # then removes nothing and skips the RPUSH — a job that already finished is
-  # not resurrected onto the public queue.
-  def test_bulk_requeue_skips_rpush_when_job_already_acked
+  # between that read and the requeue — and a held ACK is invisible to it, so
+  # without the flush the requeue Lua's LREM guard would still find the payload
+  # in the private list and RPUSH a finished job back onto the public queue.
+  # That would re-run the last job of every busy processor on every graceful
+  # shutdown, which is the reversal trigger in the slice-02 sign-off.
+  def test_bulk_requeue_sends_held_acks_before_it_requeues
     enqueue('bq-acked')
     uow = @fetcher.retrieve_work
     uow.acknowledge
@@ -192,7 +420,17 @@ class FetcherReliableTest < Wurk::Test::UnitCase
     @fetcher.bulk_requeue([uow])
 
     assert_equal 0, llen(private_queue)
-    assert_equal 0, llen(@public_queue), 'acked job must not be re-pushed'
+    assert_equal 0, llen(@public_queue), 'a finished job must not be re-pushed'
+  end
+
+  # The flush is unconditional: a processor that finished its last job holds an
+  # ACK even when nothing is left in flight to requeue.
+  def test_bulk_requeue_sends_held_acks_with_nothing_in_flight
+    enqueue('bq-nothing-inflight')
+    @fetcher.retrieve_work.acknowledge
+
+    assert_nil @fetcher.bulk_requeue([])
+    assert_equal 0, llen(private_queue)
   end
 
   def test_bulk_requeue_moves_each_uow_to_its_own_queue
@@ -273,6 +511,38 @@ class FetcherReliableTest < Wurk::Test::UnitCase
     @fetcher.queues_cmd.each { |q| assert_includes %w[queue:hot queue:cold], q }
   end
 
+  # The strict path is the steady state for almost every install, and it runs
+  # once per fetch attempt: with nothing paused it must hand back the array it
+  # built at first use rather than re-prefixing every queue name.
+  def test_queues_cmd_strict_reuses_the_array_it_prebuilt
+    @capsule.queues = %W[#{@queue_name} #{@queue_name}-b]
+
+    assert_same @fetcher.queues_cmd, @fetcher.queues_cmd
+  end
+
+  # ...but the prebuild is a cache, not a snapshot taken at boot: Capsule#queues=
+  # is a public setter, so a fetcher that kept serving the old list would fetch
+  # from queues it is no longer configured for.
+  def test_queues_cmd_follows_a_capsule_that_swaps_its_queue_list
+    @capsule.queues = %W[#{@queue_name}-a]
+
+    assert_equal ["#{@public_queue}-a"], @fetcher.queues_cmd
+
+    @capsule.queues = %W[#{@queue_name}-b]
+
+    assert_equal ["#{@public_queue}-b"], @fetcher.queues_cmd
+  end
+
+  # A paused queue still drops out of the strict list — the prebuilt array is
+  # only handed back untouched when there is nothing to filter.
+  def test_queues_cmd_strict_still_filters_a_paused_queue
+    other = "#{@queue_name}-other"
+    @capsule.queues = [@queue_name, other]
+    Wurk::Queue.new(other).pause!
+
+    assert_equal [@public_queue], @fetcher.queues_cmd
+  end
+
   # --- private queue naming -----------------------------------------
 
   def test_private_queue_name_uses_pipe_separators_and_encodes_identity
@@ -292,6 +562,33 @@ class FetcherReliableTest < Wurk::Test::UnitCase
 
     assert_equal @fetcher.identity.split(':').last, nonce
     assert_equal nonce, Wurk::Fetcher::Reliable.private_queue_name(@public_queue).split('|')[3]
+  end
+
+  # Two strings per fetch (the private list key and the unprefixed queue name)
+  # are pure functions of the queue, and the private one costs a gethostname
+  # syscall to build — so they are built once per queue, not once per job.
+  def test_the_strings_derived_from_a_queue_are_built_once
+    assert_same @fetcher.send(:queue_keys, @public_queue), @fetcher.send(:queue_keys, @public_queue)
+    assert_equal [private_queue, @queue_name], @fetcher.send(:queue_keys, @public_queue)
+  end
+
+  # The pid is half the private list's identity. A fetcher materialized before a
+  # fork would keep claiming into a list stamped with the parent's pid — and the
+  # Reaper reads that owner as alive, so nothing this child left behind would
+  # ever be reclaimed. Simulates the fork by aging the cache's pid stamp; a real
+  # one is covered by the swarm integration tests.
+  def test_a_fetch_after_a_fork_claims_into_this_process_private_list
+    inherited = "#{@public_queue}|parent-host|1|parent-nonce|0"
+    @fetcher.instance_variable_set(:@queue_keys, { @public_queue => [inherited, @queue_name] })
+    @fetcher.instance_variable_set(:@queue_keys_pid, 1)
+    enqueue('after-fork')
+
+    @fetcher.retrieve_work
+
+    assert_equal 1, llen(private_queue)
+    assert_equal 0, llen(inherited), "the parent's private list must not be claimed into"
+  ensure
+    @pool.with { |c| c.call('DEL', inherited) }
   end
 
   def test_private_queue_name_honors_dyno_env_when_set
@@ -363,6 +660,29 @@ class FetcherReliableTest < Wurk::Test::UnitCase
     box
   end
 
+  # Points the capsule's main pool at a counting stand-in. PoolCheckout falls
+  # through to `pool.with` for anything that isn't a RedisPool, so the fetcher's
+  # `idempotent: true` claims resolve here unchanged.
+  def install_command_spy
+    spy = TripCountingSpy.new(@pool)
+    @capsule.define_singleton_method(:redis_pool) { spy }
+    spy
+  end
+
+  # Runs the block with every main-pool checkout raising, then restores the real
+  # pool so the assertions that follow can read Redis. `before_raise` fires in
+  # place of the write the caller expected to land, for a test that has to reach
+  # into the window a failing call holds open.
+  def with_dead_redis(before_raise: nil)
+    @capsule.define_singleton_method(:redis) do |**_opts, &_blk|
+      before_raise&.call
+      raise DeadRedis
+    end
+    yield
+  ensure
+    @capsule.singleton_class.remove_method(:redis)
+  end
+
   # Monotonic wall-clock cost of the block, in seconds.
   def elapsed
     started = ::Process.clock_gettime(::Process::CLOCK_MONOTONIC)
@@ -398,6 +718,6 @@ class FetcherReliableTest < Wurk::Test::UnitCase
   end
 
   def uow_for(public_queue, payload)
-    Wurk::Fetcher::Reliable::UnitOfWork.new(queue: public_queue, job: payload, config: @capsule)
+    Wurk::Fetcher::Reliable::UnitOfWork.new(queue: public_queue, job: payload, config: @capsule, fetcher: @fetcher)
   end
 end

@@ -14,6 +14,7 @@ Close the wurk-vs-Sidekiq gap (noop 0.45×, io 0.66–0.74×, cpu 0.81–0.86×,
 
 ## Plan files (execute in order)
 
+0. [`00-semantics-signoff.md`](00-semantics-signoff.md) — the three behavior-visible decisions 02 depends on, accepted with their terms. No code changes. Blocks 02.
 1. [`01-hotspot-map.md`](01-hotspot-map.md) — reference map: every measured hotspot with file:line. No code changes.
 2. [`02-fetch-ack-metrics.md`](02-fetch-ack-metrics.md) — the headline fix: 4 RTT/job → ~1 (paused-set cache, in-process metrics aggregation, ack piggyback). `fetcher/reliable.rb`, `metrics/history.rb`.
 3. [`03-processor-dispatch.md`](03-processor-dispatch.md) — per-job Ruby cost: chain traverse, tid/context/logger allocations. `processor.rb`, `middleware/chain.rb`, `job_logger.rb`.
@@ -37,10 +38,10 @@ Slices 02–07 touch disjoint files (per CLAUDE.md: no worktrees; parallel agent
 
 ## Risks / open questions
 
-- **Semantics sign-offs needed** (all wire-compat-safe, all behavior-visible; decide before 02):
-  - `Metrics::History` in-process aggregation + ≤5s flush (P2b): dashboard minute-buckets lag up to flush interval. Recommendation: do it — it's 6 of the ~10 commands/job and `docs/benchmarks.md:99` already names it as the fix.
-  - Paused-set cache (P1b, TTL ~2s) or Lua-folded fetch (P1a): queue pause takes effect within TTL instead of next fetch. Recommendation: P1b first, P1a if still short.
-  - Deferred ack piggyback (02 step 3): widens the at-least-once redelivery window from "ack after job" to "ack on next fetch / ≤100ms flush". Same guarantee class; must be documented as intentional divergence for parity.
+- ~~**Semantics sign-offs needed**~~ **Settled** — all three accepted, with their terms, in [`00-semantics-signoff.md`](00-semantics-signoff.md). Read it before implementing 02; the "Required to hold" lists there are conditions of acceptance, not suggestions (in particular: pending acks flush before `bulk_requeue`, or every graceful shutdown re-runs completed work).
+  - `Metrics::History` in-process aggregation + ≤5s flush (P2b): dashboard minute-buckets lag up to flush interval. **Accepted** — it's 6 of the ~10 commands/job and `docs/benchmarks.md:99` already names it as the fix.
+  - Paused-set cache (P1b, TTL 2s): queue pause takes effect within TTL instead of next fetch. **Accepted**; Lua-folded fetch (P1a) stays deferred and needs its own sign-off if 02 comes up short.
+  - Deferred ack piggyback (02 step 3): widens the at-least-once redelivery window from "ack after job" to "ack on next fetch / flush point". Same guarantee class. **Accepted**; recorded in `docs/idea/parity-divergences.md`.
 - Middleware **instance caching stays rejected** (per-job-fresh is the documented Sidekiq contract, `middleware/chain.rb:10-12`); 03 only cheapens construction/traverse. `Object.const_get` memoization stays rejected (Rails reloading).
 - cpu workload may stay <1.0× at 1 process — it's GVL-bound in both; wurk's win there is the swarm story, not per-thread. Don't chase it with unsafe changes.
 - If noop is still <1.0× after 02+03: remaining gap is dispatch-onion depth (`processor.rb:211-228`, 7 frames + 6-entry chain vs Sidekiq's ~1). Escalation options (conditional registration of no-op built-ins) need their own sign-off — drop-in contract review.

@@ -11,6 +11,7 @@ require_relative 'leader'
 require_relative 'cron'
 require_relative 'metrics/rollup'
 require_relative 'metrics/queue_rollup'
+require_relative 'metrics/flusher'
 require_relative 'history'
 require_relative 'fetcher/reaper'
 require_relative 'timer_loop'
@@ -49,7 +50,7 @@ module Wurk
     # shutdown lands right after boot; teardown must not hang on it.
     BOOT_RECLAIM_JOIN_TIMEOUT = 5
 
-    attr_accessor :managers, :poller, :cron_poller, :metrics_rollup, :queue_rollup, :history
+    attr_accessor :managers, :poller, :cron_poller, :metrics_rollup, :queue_rollup, :metrics_flusher, :history
 
     def initialize(config, embedded: false)
       @config = config
@@ -61,18 +62,11 @@ module Wurk
       @done = false
       @beat_timer = TimerLoop.new(BEAT_PAUSE)
       @managers = build_managers
-      @poller = build_poller
-      @cron_poller = build_cron_poller
-      @metrics_rollup = build_metrics_rollup
-      @queue_rollup = build_queue_rollup
-      @history = build_history
+      build_loops
       @leader = build_leader
       @reaper = build_reaper
-      @started_at = nil
-      @heartbeat = nil
-      @heartbeat_thread = nil
-      @boot_reclaim_thread = nil
       @health_server = build_health_server
+      reset_thread_state
     end
 
     # Boot order matters:
@@ -93,7 +87,7 @@ module Wurk
       @config.capsules.each_value(&:prepare!)
       @config.freeze!
       @heartbeat_thread = safe_thread('heartbeat', &method(:start_heartbeat)) if async_beat
-      [@poller, @leader, @cron_poller, @metrics_rollup, @queue_rollup, @history].compact.each(&:start)
+      [@poller, @leader, @cron_poller, @metrics_rollup, @queue_rollup, @metrics_flusher, @history].compact.each(&:start)
       @managers.each(&:start)
       @reaper.start
       # Run on a background thread so /ready probe isn't delayed by a large
@@ -215,10 +209,16 @@ module Wurk
     end
 
     # Split out of #release_components to keep it under the AbcSize/
-    # CyclomaticComplexity ceilings — these three are the "periodic loop"
-    # releases, independently guarded like everything else in the tail.
+    # CyclomaticComplexity ceilings — these are the "periodic loop" releases,
+    # independently guarded like everything else in the tail.
+    #
+    # The metrics flusher goes first: its #terminate drains the last window of
+    # per-job counters into the `j|…` minute buckets, and Metrics::Rollup reads
+    # exactly those buckets — stopping the rollup first would give its final
+    # tick nothing to roll.
     def stop_periodic_components
-      [@cron_poller, @metrics_rollup, @queue_rollup, @history].each { |t| teardown_step(t.class) { t&.terminate } }
+      [@metrics_flusher, @cron_poller, @metrics_rollup, @queue_rollup,
+       @history].each { |t| teardown_step(t.class) { t&.terminate } }
       teardown_step('reaper') { @reaper&.stop }
       teardown_step('leader') { @leader&.stop }
     end
@@ -352,37 +352,32 @@ module Wurk
       @config.capsules.values.map { |cap| Manager.new(cap, shutdown: method(:request_shutdown)) }
     end
 
-    def build_poller
-      Wurk::Scheduled::Poller.new(@config)
+    # The periodic loops, built in one place because they are started together
+    # (#run) and released together (#stop_periodic_components). Every process
+    # runs every one of them; what differs is who does the work inside a tick:
+    #
+    #   poller / reaper   every process, work shared through Redis
+    #   cron_poller       leader only enqueues — that is the exactly-once guard
+    #   metrics_rollup    leader only writes the cluster-total chart buckets
+    #                     (cadence: `config.metrics_rollup_interval`)
+    #   queue_rollup      leader only writes the `qm|…` per-queue gauges
+    #   metrics_flusher   NOT leader-gated: the counters it drains exist only in
+    #                     this process's memory, so every process flushes its own
+    #   history           Ent §5 snapshotter, leader-gated, opt-in via
+    #                     `config.retain_history`
+    def build_loops
+      @poller = Wurk::Scheduled::Poller.new(@config)
+      @cron_poller = Wurk::Cron::Poller.new(@config)
+      @metrics_rollup = Wurk::Metrics::Rollup.new(@config)
+      @queue_rollup = Wurk::Metrics::QueueRollup.new(@config)
+      @metrics_flusher = Wurk::Metrics::Flusher.new(@config)
+      @history = Wurk::History.new(@config) if @config.history_enabled?
     end
 
-    # Periodic (cron) tick loop. Like the scheduler poller, every process runs
-    # one, but only the elected leader enqueues — the single-leader invariant is
-    # what guarantees exactly one enqueue per (loop, tick) across the cluster.
-    def build_cron_poller
-      Wurk::Cron::Poller.new(@config)
-    end
-
-    # Leader-only metrics rollup. Every process runs one, but only the elected
-    # leader writes the cluster-total time-series buckets the dashboard charts
-    # read — a non-leader tick returns early. Tune the cadence (tests shrink it)
-    # with `config.metrics_rollup_interval`.
-    def build_metrics_rollup
-      Wurk::Metrics::Rollup.new(@config)
-    end
-
-    # Leader-only per-queue gauge sampler. Like the metrics rollup, every
-    # process runs one but only the leader writes the `qm|…` size/latency
-    # buckets the Historical tab's per-queue charts read.
-    def build_queue_rollup
-      Wurk::Metrics::QueueRollup.new(@config)
-    end
-
-    # Ent §5 Historical Metrics snapshotter — only when the host opted in via
-    # `config.retain_history`. Leader-gated like the rollups, so just one
-    # process emits the cluster-wide snapshot per interval.
-    def build_history
-      Wurk::History.new(@config) if @config.history_enabled?
+    # Filled in by #run. Declared up front so #initialize reads as the full
+    # inventory of what a Launcher owns.
+    def reset_thread_state
+      @started_at = @heartbeat = @heartbeat_thread = @boot_reclaim_thread = nil
     end
 
     # Every worker process campaigns for the single cluster lock (`dear-leader`);

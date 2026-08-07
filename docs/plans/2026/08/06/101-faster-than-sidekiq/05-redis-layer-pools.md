@@ -1,6 +1,6 @@
 # 05 — Redis layer: adapter tax, checkout frames, pool reuse
 
-> Part of [`overview.md`](overview.md). Depends on: none (disjoint files). Every win here multiplies across all commands (~10/job today, ~2 after 02).
+> Part of [`overview.md`](overview.md). Depends on: none (disjoint files). Every win here multiplies across all commands (~10/job before 02, 3 after).
 
 ## Files to change
 

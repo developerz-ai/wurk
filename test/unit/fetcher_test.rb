@@ -3,9 +3,10 @@
 require_relative '../test_helper'
 
 # The abstract Wurk::Fetcher base class defines the drop-in fetcher contract
-# (retrieve_work / bulk_requeue / terminate) as safe no-ops. A custom
-# config[:fetch_class] that subclasses it inherits these, so Manager#quiet can
-# call terminate and Manager#hard_shutdown can call bulk_requeue unconditionally.
+# (retrieve_work / bulk_requeue / terminate / flush_pending_acks) as safe
+# no-ops. A custom config[:fetch_class] that subclasses it inherits these, so
+# Manager#quiet can call terminate, Manager#hard_shutdown can call bulk_requeue,
+# and a stopping Processor can flush ACKs, all unconditionally.
 class FetcherTest < Wurk::Test::UnitCase
   parallelize_me!
 
@@ -25,5 +26,10 @@ class FetcherTest < Wurk::Test::UnitCase
   def test_terminate_defaults_to_noop
     # Quiet hook: a subclass without its own terminate must not raise when quieted.
     assert_nil @fetcher.terminate
+  end
+
+  def test_flush_pending_acks_defaults_to_noop
+    # Only Reliable defers its ACK; a subclass that ACKs inline has nothing to send.
+    assert_nil @fetcher.flush_pending_acks
   end
 end
