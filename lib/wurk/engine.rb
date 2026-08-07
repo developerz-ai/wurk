@@ -35,6 +35,15 @@ module Wurk
       IMMUTABLE_CACHE_CONTROL = 'public, max-age=31536000, immutable'
       REVALIDATE_CACHE_CONTROL = 'public, no-cache'
 
+      # Only a served body gets a cache directive. Rack::Files answers more than
+      # file reads: OPTIONS with 200 + Allow, 405 for any other verb
+      # (`ALLOWED_VERBS = %w[GET HEAD OPTIONS]`), and 416 for an unsatisfiable
+      # Range. 405 is cacheable by default (RFC 9110 §15.5.6), so stamping it
+      # `immutable` would let a shared proxy serve "method not allowed" for a
+      # year to everyone behind it.
+      CACHEABLE_METHODS = %w[GET HEAD].freeze
+      CACHEABLE_STATUSES = [200, 206, 304].freeze
+
       def initialize(app, root:)
         @app   = app
         @files = ::Rack::Files.new(root)
@@ -50,17 +59,26 @@ module Wurk
         response = @files.call(inner)
         return @app.call(env) if response[0] == 404
 
-        # This mount is inserted at index 0 of the HOST app's stack (see the
-        # initializer below), so Rack::ETag and Rack::ConditionalGet never see
-        # these responses — without this the dashboard's fingerprinted bundle
-        # shipped with no cache directive at all and was refetched every load.
+        stamp_cache_control(response, env, stripped)
+        response
+      end
+
+      private
+
+      # This mount is inserted at index 0 of the HOST app's stack (see the
+      # initializer below), so Rack::ETag and Rack::ConditionalGet never see
+      # these responses — without this the dashboard's fingerprinted bundle
+      # shipped with no cache directive at all and was refetched every load.
+      def stamp_cache_control(response, env, stripped)
+        return unless CACHEABLE_METHODS.include?(env[::Rack::REQUEST_METHOD])
+        return unless CACHEABLE_STATUSES.include?(response[0])
+
         response[1]['cache-control'] ||=
           if stripped.start_with?(FINGERPRINTED_PREFIX)
             IMMUTABLE_CACHE_CONTROL
           else
             REVALIDATE_CACHE_CONTROL
           end
-        response
       end
     end
 

@@ -106,6 +106,29 @@ class StaticAssetsTest < Wurk::Test::EngineCase
     refute_includes last_response.headers['cache-control'].to_s, 'immutable'
   end
 
+  # Rack::Files answers more than file reads: OPTIONS (200 + Allow) and 405 for
+  # any other verb. 405 is cacheable by default (RFC 9110 §15.5.6), so caching
+  # one immutably would let a shared proxy serve "method not allowed" for a year
+  # to every client behind it.
+  def test_rejected_verb_gets_no_cache_control
+    asset = Dir.glob(ASSETS_DIR.join('assets', '*.js')).first
+    skip 'no built JS asset to probe' unless asset
+
+    post "/wurk-assets/assets/#{File.basename(asset)}"
+
+    assert_equal 405, last_response.status
+    assert_nil last_response.headers['cache-control']
+  end
+
+  def test_options_request_is_not_cached_immutably
+    asset = Dir.glob(ASSETS_DIR.join('assets', '*.js')).first
+    skip 'no built JS asset to probe' unless asset
+
+    options "/wurk-assets/assets/#{File.basename(asset)}"
+
+    refute_includes last_response.headers['cache-control'].to_s, 'immutable'
+  end
+
   def test_unknown_asset_falls_through_with_404
     get '/wurk-assets/assets/does-not-exist-xyz.js'
 
