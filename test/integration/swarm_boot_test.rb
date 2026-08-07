@@ -221,18 +221,19 @@ class SwarmBootTest < Wurk::Test::UnitCase
     end
   end
 
-  # #101 boot-audit: Swarm#preload_lua_scripts (swarm.rb) loads every script
-  # ONCE, in the parent, before the fork loop — ChildBoot no longer uploads
-  # them per child. That the parent loads exactly once and a child loads not at
-  # all is pinned deterministically in test/unit/swarm_test.rb and
-  # test/unit/child_boot_test.rb; what only a real fork can show is the
-  # consequence for a child: on a connection the parent never touched, a single
-  # EVALSHA against the parent-warmed cache is enough — no per-child upload —
-  # and if the server forgets the script after the fork (restart, failover),
-  # eval_cached's own NOSCRIPT rescue heals the child in flight. Both children
-  # report the exact command sequence they took, so neither claim can pass on a
+  # #101 boot-audit: each child uploads every script ONCE, in the pipeline of
+  # the liveness PING it already sends after its fork (ChildBoot), and the
+  # parent's boot path stays off Redis entirely — hoisting the upload there was
+  # measured slower. That the child sends exactly one PING + upload round trip
+  # and the parent sends nothing is pinned deterministically in
+  # test/unit/child_boot_test.rb and test/unit/swarm_test.rb; what only a real
+  # fork can show is the consequence: by the time a child runs its first job, a
+  # single EVALSHA against its own warmed cache is enough — no reload — and if
+  # the server forgets the script afterwards (restart, failover), eval_cached's
+  # own NOSCRIPT rescue heals the child in flight. Both children report the
+  # exact command sequence they took, so neither claim can pass on a
   # coincidence.
-  def test_lua_scripts_survive_fork_and_a_child_self_heals_a_lost_script # rubocop:disable Metrics/AbcSize,Minitest/MultipleAssertions
+  def test_a_child_runs_lua_off_its_warmed_cache_and_self_heals_a_lost_script # rubocop:disable Metrics/AbcSize,Minitest/MultipleAssertions
     swarm = Wurk::Swarm.new(topology: topology_n(2), config: @config, shutdown_timeout: 5)
     supervisor = nil
 
@@ -244,7 +245,7 @@ class SwarmBootTest < Wurk::Test::UnitCase
       push_lua_job(@lock_key, @lua_result_key, cold: false)
 
       assert_equal ['1|EVALSHA'], wait_for_list(@lua_result_key),
-                   'a child must run release_if_owner in one EVALSHA off the parent-preloaded cache'
+                   'a child must run release_if_owner in one EVALSHA off the cache its own boot warmed'
       refute @observer_pool.call('GET', @lock_key), 'the lock key should be gone after release_if_owner'
 
       @observer_pool.call('SET', @lock_key_2, SwarmLuaWorker::LOCK_TOKEN)

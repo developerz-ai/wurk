@@ -50,6 +50,22 @@ class LuaLoaderTest < Wurk::Test::UnitCase
            "expected only SCRIPT LOADs, got #{conn.loaded.inspect}")
   end
 
+  # --- queue_script_loads ---------------------------------------------
+
+  # The pipeline-filling half, for the caller that already owns a pipeline:
+  # ChildBoot batches these behind its liveness PING so the child's Redis
+  # validation is one round trip instead of two. It must queue exactly what
+  # `script_load_all` sends and open no pipeline of its own — one that did
+  # would put the second RTT straight back.
+  def test_queue_script_loads_queues_every_load_onto_the_callers_pipeline
+    conn = FakePipelineConn.new
+
+    conn.pipelined { |pipe| Wurk::Lua::Loader.queue_script_loads(pipe) }
+
+    assert_equal 1, conn.pipeline_count, 'queue_script_loads must not open a pipeline of its own'
+    assert_equal Wurk::Lua::SCRIPTS.values.map { |src| ['SCRIPT', 'LOAD', src] }, conn.loaded
+  end
+
   # --- eval_cached happy path ----------------------------------------
 
   def test_eval_cached_executes_and_returns_lua_value
@@ -95,13 +111,13 @@ class LuaLoaderTest < Wurk::Test::UnitCase
     assert_equal %w[EVALSHA SCRIPT EVALSHA], conn.command_log
   end
 
-  # The swarm parent primes the cache once and then forks
-  # (Swarm#preload_lua_scripts); children never re-upload, so a Redis restart
-  # any time after that leaves every child holding SHAs the server has
-  # forgotten. Self-heal is exactly what makes skipping the per-child load safe,
-  # so prove it against real Redis and not only against a fake: a real SCRIPT
-  # LOAD must go back out, the retry must return the real Lua value, and the
-  # server must be warm again afterwards.
+  # Each child primes the cache once, right after its fork
+  # (ChildBoot#validate_redis!), and never re-uploads — so a Redis restart any
+  # time after that leaves every child holding SHAs the server has forgotten.
+  # Self-heal is exactly what makes the one-shot eager load safe, so prove it
+  # against real Redis and not only against a fake: a real SCRIPT LOAD must go
+  # back out, the retry must return the real Lua value, and the server must be
+  # warm again afterwards.
   #
   # A real `SCRIPT FLUSH` would wipe the cache for the parallel workers sharing
   # this server, so the restart is staged by injecting one NOSCRIPT on the first

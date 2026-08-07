@@ -4,6 +4,7 @@ require_relative '../component'
 require_relative '../launcher'
 require_relative '../client/buffered'
 require_relative '../fetcher/reliable'
+require_relative '../lua'
 require_relative 'orphan_guard'
 
 module Wurk
@@ -129,13 +130,21 @@ module Wurk
       # (the swarm respawns it) rather than booting a worker that can't reach
       # Redis.
       #
-      # Lua scripts are deliberately NOT loaded here: `SCRIPT LOAD` is
-      # server-global, so the parent primes the cache once before forking
-      # (Swarm#preload_lua_scripts) and every child inherits a warm one. If it
-      # is cold anyway (parent preload failed, Redis restarted since),
-      # `Lua::Loader.eval_cached` reloads on NOSCRIPT and retries.
+      # The PING rides in the same pipeline as the eager Lua upload, so the whole
+      # check is one round trip and the child's first EVALSHA hits a warm cache.
+      #
+      # #101 boot-audit: hoisting the upload into the parent (one server-global
+      # `SCRIPT LOAD` for the whole fleet, children PING only) was measured and
+      # REJECTED — see Swarm#boot. Children reconnect in parallel, so the upload
+      # they pay here overlaps; the parent's would have been serial, ahead of
+      # every fork.
       def validate_redis!
-        @config.redis_pool.with { |conn| conn.call('PING') }
+        @config.redis_pool.with do |conn|
+          conn.pipelined do |pipe|
+            pipe.call('PING')
+            Wurk::Lua::Loader.queue_script_loads(pipe)
+          end
+        end
       end
 
       # AR reconnect is best-effort — a Redis-only worker with no database still

@@ -10,10 +10,11 @@ module Wurk
     #
     # Sibling of CommandSpy: that one counts commands to bound hot-path traffic,
     # this one keeps the argument vectors so a test can assert *which* commands a
-    # boot path sent. The Lua preload is the motivating case — `SCRIPT LOAD` is
-    # server-global and every parallel worker shares one script cache, so
-    # `SCRIPT EXISTS` can never tell "this process loaded them" from "a peer test
-    # did"; recording what was actually sent is the only non-vacuous assertion.
+    # boot path sent. The child's eager Lua upload is the motivating case —
+    # `SCRIPT LOAD` is server-global and every parallel worker shares one script
+    # cache, so `SCRIPT EXISTS` can never tell "this process loaded them" from
+    # "a peer test did"; recording what was actually sent is the only
+    # non-vacuous assertion.
     #
     # Usage:
     #   sent = []

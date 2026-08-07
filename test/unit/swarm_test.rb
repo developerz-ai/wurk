@@ -19,9 +19,10 @@ class SwarmTest < Wurk::Test::UnitCase
   end
 
   # Fork-free swarm that snapshots the supervisor pool's command log the moment
-  # the first (faked) fork happens — the Lua preload has to be finished by then
-  # or children boot against a cold script cache.
-  class PreloadProbeSwarm < FakeForkSwarm
+  # the first (faked) fork happens. Two windows, because a Redis round trip is
+  # boot latency wherever it lands: the snapshot covers steps 3-4 (ahead of
+  # every child), the full log covers the rest of the fork loop.
+  class BootTrafficProbeSwarm < FakeForkSwarm
     attr_accessor :commands
     attr_reader :commands_at_first_fork
 
@@ -125,40 +126,34 @@ class SwarmTest < Wurk::Test::UnitCase
     assert_raises(ArgumentError) { swarm.boot(install_signals: false) }
   end
 
-  # --- boot-time Lua preload --------------------------------------------
+  # --- boot stays off Redis ---------------------------------------------
 
-  # `SCRIPT LOAD` is server-global, so the fleet shares one upload. Children
-  # used to each re-upload the full set on their boot-critical path; the parent
-  # now does it once, and it must land BEFORE the first fork or a child can
-  # still reach its first EVALSHA against a cold cache.
-  def test_boot_uploads_every_lua_script_before_the_first_fork
-    swarm = preload_probe_swarm
-
-    swarm.boot(install_signals: false)
-
-    assert_equal Wurk::Lua::SCRIPTS.size, script_loads(swarm.commands_at_first_fork),
-                 'the parent must upload every Lua script before forking'
-  end
-
-  def test_boot_uploads_the_lua_scripts_only_once_for_the_whole_fleet
-    swarm = preload_probe_swarm(slots: 3)
+  # #101 boot-audit: a pre-fork `SCRIPT LOAD` was tried between steps 3 and 4
+  # — the cache is server-global, so one upload could serve the whole fleet —
+  # and MEASURED SLOWER (`bench:swarm_boot` 152 -> 95 i/s). Step 3 has just
+  # closed every parent socket, so the upload had to open its own connection,
+  # serially, ahead of every fork. The children reconnect in parallel and carry
+  # the upload in a PING each one already sends (ChildBoot#validate_redis!), so
+  # the parent's boot path stays free of Redis entirely.
+  def test_boot_puts_no_redis_round_trip_on_the_fork_path
+    swarm = boot_traffic_probe_swarm(slots: 3)
 
     swarm.boot(install_signals: false)
 
-    assert_equal Wurk::Lua::SCRIPTS.size, script_loads(swarm.commands),
-                 'the preload must not repeat per slot'
+    assert_empty swarm.commands_at_first_fork, 'the parent must not talk to Redis before forking'
+    assert_empty swarm.commands, 'the parent must not talk to Redis between forks either'
   end
 
-  # A Redis that is unreachable at boot must not take the supervisor with it:
-  # children still PING (and crash into respawn backoff on a dead Redis), and
-  # `Lua::Loader.eval_cached` reloads on NOSCRIPT, so the cold cache self-heals.
-  def test_boot_survives_an_unreachable_redis_during_the_preload
+  # The same claim from the other side, and the one a `rescue` around new boot
+  # traffic could not hide: nothing in `boot` may need a reachable Redis. The
+  # children still PING (and crash into respawn backoff on a dead Redis).
+  def test_boot_completes_without_a_reachable_redis
     swarm = bare_swarm(FakeForkSwarm)
     swarm.instance_variable_set(:@supervisor_pool, DeadPool.new)
 
     pids = swarm.boot(install_signals: false)
 
-    assert_equal 1, pids.size, 'a failed preload must not abort the fork loop'
+    assert_equal 1, pids.size, 'boot must not depend on a Redis round trip'
   end
 
   # --- boot-time config freeze ------------------------------------------
@@ -338,17 +333,14 @@ class SwarmTest < Wurk::Test::UnitCase
 
   # A fork-free swarm whose supervisor pool records what boot sends to Redis.
   # The pool is pre-seeded so `supervisor_pool`'s memo hands the recorder to
-  # `preload_lua_scripts`; teardown returns the wrapped connection.
-  def preload_probe_swarm(slots: 1)
-    swarm = PreloadProbeSwarm.new(topology: topology(slots), config: @config).tap { |s| @swarms << s }
+  # anything in `boot` that reaches for it; teardown returns the wrapped
+  # connection.
+  def boot_traffic_probe_swarm(slots: 1)
+    swarm = BootTrafficProbeSwarm.new(topology: topology(slots), config: @config).tap { |s| @swarms << s }
     swarm.commands = []
-    recorder = Wurk::Test::RecordingPool.new(@config.new_redis_pool(1, 'swarm-preload-test'), swarm.commands)
+    recorder = Wurk::Test::RecordingPool.new(@config.new_redis_pool(1, 'swarm-boot-traffic-test'), swarm.commands)
     swarm.instance_variable_set(:@supervisor_pool, recorder)
     swarm
-  end
-
-  def script_loads(commands)
-    commands.count { |cmd| cmd.first(2) == %w[SCRIPT LOAD] }
   end
 
   # Tracked so teardown returns the one supervisor connection a probe opens.

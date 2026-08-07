@@ -364,8 +364,8 @@ module Wurk
     end
 
     # Outside of test boots and `SCRIPT FLUSH` the rescue branch is dead
-    # code; the swarm parent's pre-fork `script_load_all` keeps the script cache
-    # hot for the life of the server. The retry uses EVAL (source-embedded)
+    # code; the eager `script_load_all` after fork keeps the script cache
+    # hot for the life of the connection. The retry uses EVAL (source-embedded)
     # instead of EVALSHA so a freshly-loaded script can't race the retry and
     # NOSCRIPT a second time under heavy CI load (WorkerTest 3.4/7.2 flake).
     # `script_load_all` still primes the cache so the *next* pipeline returns
