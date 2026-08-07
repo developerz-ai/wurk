@@ -369,18 +369,35 @@ module Wurk
     # Cost is a round trip per distinct queue. The single-queue push — every
     # `perform_async`, every same-class `push_bulk` — still writes exactly the
     # one SADD + LPUSH pipeline it did before.
+    #
+    # `uniform_queue` short-circuits the common case (one job, or many jobs
+    # all destined for the same queue) without paying for the `group_by`
+    # Hash + per-group Array allocations; only a genuinely mixed-queue batch
+    # falls through to grouping.
     def push_plain(conn, payloads, now)
-      payloads.group_by { |j| j['queue'] }.each do |queue, jobs|
-        serialized = jobs.map do |j|
-          j['enqueued_at'] = now
-          Wurk.dump_json(j)
-        end
-        conn.pipelined do |pipe|
-          pipe.call('SADD', 'queues', queue)
-          pipe.call('LPUSH', "queue:#{queue}", *serialized)
-        end
-        mark_delivered(jobs)
+      queue = uniform_queue(payloads)
+      return push_plain_group(conn, queue, payloads, now) if queue
+
+      payloads.group_by { |j| j['queue'] }.each { |q, jobs| push_plain_group(conn, q, jobs, now) }
+    end
+
+    def uniform_queue(payloads)
+      first = payloads[0]['queue']
+      return first if payloads.size == 1
+
+      first if payloads.all? { |j| j['queue'] == first }
+    end
+
+    def push_plain_group(conn, queue, jobs, now)
+      serialized = jobs.map do |j|
+        j['enqueued_at'] = now
+        Wurk.dump_json(j)
       end
+      conn.pipelined do |pipe|
+        pipe.call('SADD', 'queues', queue)
+        pipe.call('LPUSH', "queue:#{queue}", *serialized)
+      end
+      mark_delivered(jobs)
     end
 
     # Batched jobs route through BATCH_PUSH: increments b-<bid> total+pending,
