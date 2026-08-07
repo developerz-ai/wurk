@@ -21,7 +21,7 @@
 
 Wurk is wire-compatible with Sidekiq — same Redis keys, same job JSON, same Ruby DSL. Swap one line in your `Gemfile` and your existing jobs, batches, limiters, cron entries, and live Redis data keep working untouched. The Pro and Enterprise feature sets ship in the same free gem, with no license check and no tiers.
 
-**On speed:** Wurk is not currently faster than stock Sidekiq — it runs at roughly 0.45×–0.86× depending on workload shape, because reliable fetch and per-job metrics cost extra Redis round-trips. Numbers, method, and the reproduction command are in [docs/benchmarks.md](docs/benchmarks.md); run them yourself with `rake bench:vs_sidekiq`.
+**On speed:** Wurk is not currently faster than stock Sidekiq — it runs at roughly 0.87×–0.99× depending on workload shape, with parity on CPU and I/O but still behind on framework overhead (noop) and boot time. Numbers, method, and the reproduction command are in [docs/benchmarks.md](docs/benchmarks.md); run them yourself with `rake bench:vs_sidekiq`.
 
 ## Install
 
