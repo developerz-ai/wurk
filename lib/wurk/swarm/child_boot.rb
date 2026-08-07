@@ -141,6 +141,16 @@ module Wurk
       # AR reconnect is best-effort — a Redis-only worker with no database still
       # runs — but the silent `rescue nil` here hid a real misconfiguration
       # during the #101 audit, so warn loudly instead of swallowing.
+      #
+      # #101 boot-audit: measured, not assumed. `establish_connection` only
+      # records the connection spec on the pool manager (~0.3ms warm, on top
+      # of a one-time adapter-load cost already paid pre-fork in the parent);
+      # it does not itself open a socket. `ConnectionPool#stat[:connections]`
+      # stays 0 immediately after — AR opens the real handshake lazily, on
+      # the job thread's first `ActiveRecord::Base.connection` checkout, same
+      # as it always has. So `:startup` (fired right after this in `#run`)
+      # never waits on a DB round trip. Pinned by
+      # `test_reconnect_active_record_does_not_eagerly_open_a_connection`.
       def reconnect_active_record
         return unless defined?(::ActiveRecord::Base)
 

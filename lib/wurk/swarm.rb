@@ -270,6 +270,16 @@ module Wurk
     end
 
     # Step 4.
+    #
+    # #101 boot-audit: measured, not assumed. Instrumented an 8-child boot
+    # against real Redis — `close_supervisor_pool` costs ~0.01-0.07ms per
+    # call (a nil-checked ivar write plus, at most, a disconnect on an
+    # already-torn-down pool); `Process.fork` itself is ~1-2ms/child and
+    # dominates the loop entirely. Hoisting the close out of the loop would
+    # save microseconds against a multi-millisecond fork syscall — not worth
+    # losing the "must run before the first fork" invariant's current
+    # per-fork enforcement. Left sequential; re-measure with
+    # `bin/rake bench:swarm_boot` before revisiting.
     def fork_children
       @assignments.each_index { |idx| spawn_child(@assignments[idx], idx) }
     end

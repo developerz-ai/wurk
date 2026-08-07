@@ -120,6 +120,26 @@ class ChildBootTest < Wurk::Test::UnitCase
     assert_equal [%w[PING]], sent
   end
 
+  # #101 boot-audit: `reconnect_active_record` must not itself pay a DB
+  # handshake on the child's boot-critical path — `establish_connection`
+  # only records the spec; AR opens the real socket lazily on first checkout.
+  # Pin that here (not just eyeball it) so a future AR upgrade that changes
+  # this can't silently put a DB round trip ahead of `:startup`. Requires
+  # `active_record` + `sqlite3` directly (unit env doesn't load them) rather
+  # than stubbing, per "never mock" — this is real AR, just an in-memory DB.
+  def test_reconnect_active_record_does_not_eagerly_open_a_connection
+    require 'active_record'
+    require 'sqlite3'
+    ::ActiveRecord::Base.establish_connection(adapter: 'sqlite3', database: ':memory:')
+    ::ActiveRecord::Base.connection_handler.clear_active_connections!
+
+    @boot.send(:reconnect_active_record)
+
+    assert_equal 0, ::ActiveRecord::Base.connection_pool.stat[:connections]
+  ensure
+    ::ActiveRecord::Base.connection_handler.clear_all_connections! if defined?(::ActiveRecord::Base)
+  end
+
   private
 
   # Swaps the default capsule's main pool for a command-recording decorator.
