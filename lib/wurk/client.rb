@@ -26,6 +26,20 @@ module Wurk
     SCHEDULED_BATCH_SIZE      = 100
     SPREAD_INTERVAL_FLOOR     = 5
 
+    # Batched (`bid`) payloads per EVALSHA pipeline. Ours, not Sidekiq's — it
+    # has no batches. Sized to DEFAULT_BATCH_SIZE so no existing caller's
+    # round-trip count moves: `push_bulk` already hands #raw_push at most that
+    # many payloads, so its batched pipeline stays exactly one round trip.
+    #
+    # The cap is for the one path that isn't pre-sliced: `autoflush = true`
+    # buffers a whole `Batch#jobs` block, so #flush_batched can be handed an
+    # unbounded payload set. Unsliced that is one pipeline holding every
+    # command and every reply in memory at once, and — Lua being atomic and
+    # single-threaded — one uninterrupted server-side sweep that blocks every
+    # other client for its duration. Same reasoning as the LIMIT on
+    # RELIABLE_SCHEDULE_PROMOTE.
+    BATCH_PIPELINE_SLICE      = 1_000
+
     # Thread-local slot holding the payloads of the current push whose Redis
     # write is confirmed applied. {Client::Buffered} subtracts them from the set
     # it re-buffers when a *later* phase of the same push loses the connection,
@@ -138,7 +152,21 @@ module Wurk
 
     private
 
+    # #push and #push_bulk verify at different points and both match Sidekiq
+    # exactly: push walks the payload the chain handed back (sidekiq
+    # client.rb:101 — normalize → middleware → verify → raw_push), bulk walks it
+    # inside the innermost block (sidekiq client.rb:165). Push used to do both,
+    # and since `strict_args_mode` defaults to :raise the second full recursive
+    # args walk was never skipped.
+    #
+    # Bulk keeps its walk inside the block on purpose: a client middleware that
+    # halts the job there short-circuits the walk, and hoisting it out would
+    # raise on args that middleware was about to drop.
     def invoke_chain(normed)
+      @chain.invoke(normed['class'], normed, normed['queue'], pool) { normed }
+    end
+
+    def invoke_chain_verified(normed)
       @chain.invoke(normed['class'], normed, normed['queue'], pool) do
         verify_json(normed)
         normed
@@ -191,7 +219,7 @@ module Wurk
         item = base.merge('args' => job_args)
         item['at'] = ats[idx] if ats
         normed = normalize_item(item)
-        invoke_chain(normed)
+        invoke_chain_verified(normed)
       end
     end
 
@@ -314,6 +342,27 @@ module Wurk
       push_batched_pipelined(conn, batched, now) unless batched.empty?
     end
 
+    # One pipeline per BATCH_PIPELINE_SLICE payloads, each marked delivered the
+    # moment its reply is in — same contract as push_plain_group, and for the
+    # same reason: a slice that Redis already accepted must stay out of the
+    # reliable_push ledger, or a later slice's failure would report it as
+    # undelivered.
+    def push_batched_pipelined(conn, batched, now)
+      batched.each_slice(BATCH_PIPELINE_SLICE) do |slice|
+        eval_batched_slice(conn) { |pipe, eval_method| push_batched(pipe, slice, now, eval_method: eval_method) }
+        mark_delivered(slice)
+      end
+    end
+
+    # Same slicing and NOSCRIPT recovery as push_batched_pipelined, for the
+    # scheduled batched path (BATCH_SCHEDULE instead of BATCH_PUSH).
+    def push_batched_scheduled_pipelined(conn, batched)
+      batched.each_slice(BATCH_PIPELINE_SLICE) do |slice|
+        eval_batched_slice(conn) { |pipe, eval_method| push_batched_scheduled(pipe, slice, eval_method: eval_method) }
+        mark_delivered(slice)
+      end
+    end
+
     # Outside of test boots and `SCRIPT FLUSH` the rescue branch is dead
     # code; the eager `script_load_all` after fork keeps the script cache
     # hot for the life of the connection. The retry uses EVAL (source-embedded)
@@ -321,24 +370,18 @@ module Wurk
     # NOSCRIPT a second time under heavy CI load (WorkerTest 3.4/7.2 flake).
     # `script_load_all` still primes the cache so the *next* pipeline returns
     # to the EVALSHA fast path.
-    def push_batched_pipelined(conn, batched, now)
-      conn.pipelined { |pipe| push_batched(pipe, batched, now) }
+    #
+    # Replaying the slice is safe precisely because every command in it is the
+    # same script: a flushed cache NOSCRIPTs all of them and applies none.
+    # Recovery is per slice, so the slices already acknowledged above are never
+    # re-sent. Mirrors Fetcher::Reliable#requeue_pipelined.
+    def eval_batched_slice(conn)
+      conn.pipelined { |pipe| yield(pipe, :eval_cached) }
     rescue RedisClient::CommandError => e
       raise unless e.message.to_s.start_with?('NOSCRIPT')
 
       Wurk::Lua::Loader.script_load_all(conn)
-      conn.pipelined { |pipe| push_batched(pipe, batched, now, eval_method: :eval_with_source) }
-    end
-
-    # Same NOSCRIPT-recovery shape as push_batched_pipelined, for the scheduled
-    # batched path (BATCH_SCHEDULE instead of BATCH_PUSH).
-    def push_batched_scheduled_pipelined(conn, batched)
-      conn.pipelined { |pipe| push_batched_scheduled(pipe, batched) }
-    rescue RedisClient::CommandError => e
-      raise unless e.message.to_s.start_with?('NOSCRIPT')
-
-      Wurk::Lua::Loader.script_load_all(conn)
-      conn.pipelined { |pipe| push_batched_scheduled(pipe, batched, eval_method: :eval_with_source) }
+      conn.pipelined { |pipe| yield(pipe, :eval_with_source) }
     end
 
     # One pipeline per queue, marked delivered the moment its reply is in.
@@ -355,27 +398,48 @@ module Wurk
     # Cost is a round trip per distinct queue. The single-queue push — every
     # `perform_async`, every same-class `push_bulk` — still writes exactly the
     # one SADD + LPUSH pipeline it did before.
+    #
+    # `uniform_queue` short-circuits the common case (one job, or many jobs
+    # all destined for the same queue) without paying for the `group_by`
+    # Hash + per-group Array allocations; only a genuinely mixed-queue batch
+    # falls through to grouping.
     def push_plain(conn, payloads, now)
-      payloads.group_by { |j| j['queue'] }.each do |queue, jobs|
-        serialized = jobs.map do |j|
-          j['enqueued_at'] = now
-          Wurk.dump_json(j)
-        end
-        conn.pipelined do |pipe|
-          pipe.call('SADD', 'queues', queue)
-          pipe.call('LPUSH', "queue:#{queue}", *serialized)
-        end
-        mark_delivered(jobs)
+      queue = uniform_queue(payloads)
+      return push_plain_group(conn, queue, payloads, now) if queue
+
+      payloads.group_by { |j| j['queue'] }.each { |q, jobs| push_plain_group(conn, q, jobs, now) }
+    end
+
+    def uniform_queue(payloads)
+      first = payloads[0]['queue']
+      return first if payloads.size == 1
+
+      first if payloads.all? { |j| j['queue'] == first }
+    end
+
+    def push_plain_group(conn, queue, jobs, now)
+      serialized = jobs.map do |j|
+        j['enqueued_at'] = now
+        Wurk.dump_json(j)
       end
+      conn.pipelined do |pipe|
+        pipe.call('SADD', 'queues', queue)
+        pipe.call('LPUSH', "queue:#{queue}", *serialized)
+      end
+      mark_delivered(jobs)
     end
 
     # Batched jobs route through BATCH_PUSH: increments b-<bid> total+pending,
     # SADDs jid into the live set, registers the queue, LPUSHes the payload —
-    # all atomically. One Redis round-trip per job (no pipeline grouping)
-    # because the lua needs per-job KEYS bound. Acceptable cost: batch
-    # enqueue is not the hot path; correctness is. `eval_method` is the
+    # all atomically. The Lua binds per-job KEYS, so grouping N jobs into one
+    # EVALSHA isn't available; they ride one pipeline instead (the `conn` here
+    # is always the pipeline #push_batched_pipelined opened), so the cost is
+    # N commands and one round trip, not N round trips. `eval_method` is the
     # Wurk::Lua::Loader entry point (`:eval_cached` for the hot EVALSHA path,
-    # `:eval_with_source` for the EVAL-source retry).
+    # `:eval_with_source` for the EVAL-source retry) — neither reads the reply,
+    # which is what makes the pipelined form legal: `eval_cached`'s inline
+    # NOSCRIPT rescue can't fire against a buffered call, so recovery is the
+    # caller's finalize-time rescue.
     def push_batched(conn, payloads, now, eval_method: :eval_cached)
       payloads.each do |j|
         j['enqueued_at'] = now
@@ -394,9 +458,9 @@ module Wurk
     # total/pending increment registers the job in its batch at creation, and
     # the ZADD defers it onto `schedule`. Payload is stripped of `at`/
     # `enqueued_at` exactly like push_scheduled — `enqueued_at` is stamped fresh
-    # at promotion, never while the job sits scheduled (spec §7.1). One Redis
-    # round-trip per job because the Lua binds per-job KEYS; scheduled batch
-    # enqueue is not the hot path.
+    # at promotion, never while the job sits scheduled (spec §7.1). Per-job
+    # KEYS again, so one EVALSHA per job — pipelined by
+    # #push_batched_scheduled_pipelined into one round trip per slice.
     def push_batched_scheduled(conn, payloads, eval_method: :eval_cached)
       payloads.each do |j|
         Wurk::Lua::Loader.public_send(
@@ -436,7 +500,13 @@ module Wurk
     # evict them, and the drain that does land one counts it then — so booking
     # them here would inflate the counter on an outage and double-count every
     # payload that later replays.
+    #
+    # Resolve the client once for the whole batch and bail before touching a
+    # payload: unconfigured is the common case, and the tags below cost two
+    # Strings and an Array per job for `increment` to immediately drop.
     def emit_enqueued(payloads, buffered = nil)
+      return if Wurk::Metrics::Statsd.safe_client.nil?
+
       payloads = reject_by_identity(payloads, buffered) if buffered && !buffered.empty?
       payloads.each do |p|
         Wurk::Metrics::Statsd.increment(

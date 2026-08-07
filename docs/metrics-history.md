@@ -7,8 +7,11 @@ resulting Redis footprint, which is **bounded entirely by TTL**.
 
 ## How it works
 
-Every job execution already writes a per-class minute bucket
-(`j|YYYYMMDD|H:M`, see `Wurk::Metrics::History`). Once per minute the elected
+Every job execution already lands in a per-class minute bucket
+(`j|YYYYMMDD|H:M`, see `Wurk::Metrics::History` — each worker folds executions in
+memory and flushes them within
+[5 seconds](metrics.md#write-cadence-and-what-a-hard-kill-costs), attributed to
+the minute the job ran in, not the minute it flushed). Once per minute the elected
 cluster leader sums the just-completed minute across all classes and folds the
 total into three resolutions:
 

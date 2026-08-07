@@ -129,6 +129,19 @@ class JobLoggerTest < Wurk::Test::UnitCase
     assert_equal 'k',     seen[:custom]
   end
 
+  # The list is a host setting, so a job carrying only a configured extra —
+  # neither `bid` nor `tags` — must still reach the context.
+  def test_prepare_pulls_in_a_custom_attribute_without_the_defaults
+    @config[:logged_job_attributes] = %w[bid tags tenant_id]
+    logger = Wurk::JobLogger.new(@config)
+    seen = nil
+    logger.prepare('jid' => 'a', 'class' => 'J', 'tenant_id' => 'acme') do
+      seen = Wurk::Context.current.dup
+    end
+
+    assert_equal 'acme', seen[:tenant_id]
+  end
+
   def test_prepare_skips_logged_job_attributes_absent_from_hash
     seen = nil
     @logger.prepare('jid' => 'a', 'class' => 'J') { seen = Wurk::Context.current.dup }

@@ -37,7 +37,7 @@ module Wurk
 
       # The Redis commands Sidekiq itself uses — defined eagerly so the
       # common ones skip method_missing. Same list as upstream.
-      USED_COMMANDS = %w[bitfield bitfield_ro del exists expire flushdb
+      USED_COMMANDS = %w[bitfield bitfield_ro blmove del exists expire flushdb
                          get hdel hget hgetall hincrby hlen hmget hset hsetnx incr incrby
                          lindex llen lmove lpop lpush lrange lrem mget mset ping pttl
                          publish rpop rpush sadd scard script set sismember smembers

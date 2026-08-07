@@ -86,6 +86,68 @@ class RedisClientAdapterTest < Wurk::Test::UnitCase
     end
   end
 
+  # Every hot command in USED_COMMANDS must resolve as a real defined method,
+  # not fall through method_missing — respond_to? without include_private
+  # reports method_missing's own presence (it's public-ish via
+  # respond_to_missing?'s super) the same as any other method, so this checks
+  # the *public* instance method table directly instead.
+  def test_used_commands_are_eagerly_defined_not_dispatched_via_method_missing
+    defined = Wurk::RedisClientAdapter::CompatMethods.instance_methods(false)
+
+    Wurk::RedisClientAdapter::CompatMethods::USED_COMMANDS.each do |name|
+      assert_includes defined, name.to_sym, "#{name} must be an eagerly defined method, not method_missing-dispatched"
+    end
+  end
+
+  # respond_to? alone can't distinguish "really defined" from "answered by
+  # respond_to_missing?", so also spy on method_missing itself: a USED_COMMANDS
+  # entry must never reach it. Uses a fake `call`-recording host (not real
+  # Redis) so this can call every command — including destructive ones like
+  # flushdb/unlink/del — without touching the shared per-worker test DB.
+  class DispatchSpyHost
+    include Wurk::RedisClientAdapter::CompatMethods
+
+    attr_reader :calls, :method_missing_hits
+
+    def initialize
+      @calls = []
+      @method_missing_hits = []
+    end
+
+    def call(*args, **_kwargs, &)
+      @calls << args.first
+      nil
+    end
+
+    def method_missing(*args, &)
+      @method_missing_hits << args.first
+      super
+    rescue NoMethodError
+      nil
+    end
+    ruby2_keywords :method_missing
+
+    def respond_to_missing?(_name, _include_private = false)
+      true
+    end
+  end
+
+  def test_used_commands_never_reach_method_missing
+    host = DispatchSpyHost.new
+
+    Wurk::RedisClientAdapter::CompatMethods::USED_COMMANDS.each do |name|
+      host.public_send(name)
+    end
+
+    assert_equal Wurk::RedisClientAdapter::CompatMethods::USED_COMMANDS, host.calls,
+                 'every USED_COMMANDS entry must reach #call directly'
+    assert_empty host.method_missing_hits, 'no USED_COMMANDS entry may pass through method_missing'
+  end
+
+  def test_blmove_is_eagerly_defined_not_dispatched_via_method_missing
+    assert_includes Wurk::RedisClientAdapter::CompatMethods.instance_methods(false), :blmove
+  end
+
   # --- round-trip odometer (RedisPool's replay guard reads this) ---
 
   def test_round_trips_counts_call_and_pipelined

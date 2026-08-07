@@ -17,6 +17,11 @@ module Wurk
     attr_reader :name, :queues, :mode, :weights, :config
     attr_accessor :concurrency, :fetcher
 
+    # Capsule-hosted components (Manager, Processor, Fetcher) hand their capsule
+    # to Component as `config`, and `safe_thread` reads the priority off it.
+    # Sidekiq delegates the same accessor (capsule.rb:30).
+    def thread_priority = @config.thread_priority
+
     def initialize(name, config)
       @name = name.to_s
       @config = config

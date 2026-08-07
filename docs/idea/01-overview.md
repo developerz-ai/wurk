@@ -8,15 +8,15 @@ Not "Sidekiq-compatible enough." Bit-for-bit on the public surface.
 
 ## The value prop (one sentence)
 
-**100% API-compatible with Sidekiq + Pro + Enterprise, free forever, and meaningfully faster.**
+**100% API-compatible with Sidekiq + Pro + Enterprise, free forever.**
 
-That's the entire pitch. Every other claim in this project supports one of those three.
+That's the entire pitch. Every other claim in this project exists to support it — including the third pillar below, which is how the first two are kept honest rather than a selling point of its own.
 
 ## The three pillars (must all be true)
 
 1. **100% drop-in.** Swap one gem line. Existing jobs, batches, limiters, cron entries, Redis data — all continue to work untouched. Third-party gems built on Sidekiq's API (sidekiq-cron, sidekiq-unique-jobs, sidekiq-scheduler, sidekiq-status, etc.) work against Wurk with no changes. We test this in CI — see 14-ecosystem-compat.md.
 2. **Free.** Pro features (batches, reliable fetch, queue pause, statsd, search). Enterprise features (rate limiters, cron, unique jobs, encryption, historical metrics, swarm, rolling restart, leader election). No license fees, ever.
-3. **Faster and optimized.** Real multi-process parallelism. Optimized Redis path with BLMOVE, Lua bulk ops, pipelining. Per-fork connection pools. Hot-path allocations minimized. Faster than stock Sidekiq on enqueue, fetch, and total throughput. CI enforces this — regressions block merge. See 06-performance.md.
+3. **Measured and optimized.** Real multi-process parallelism. Optimized Redis path with BLMOVE, Lua bulk ops, pipelining. Per-fork connection pools. Hot-path allocations minimized. Two benchmark suites, and only one of them gates: `rake bench` compares Wurk against its own past self and blocks merge on a >5% regression; `rake bench:vs_sidekiq` compares against stock Sidekiq and gates nothing, so a green CI says nothing about Sidekiq. Wurk is **not** currently faster than stock Sidekiq — roughly 0.45×–0.86× depending on workload shape and process configuration. See 06-performance.md and `docs/benchmarks.md`.
 
 ## Who it's for
 
