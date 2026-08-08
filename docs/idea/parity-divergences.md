@@ -262,3 +262,34 @@ job to confirm it.
 **Anchor:** `lib/wurk/fetcher/reliable.rb` (`queues_cmd`, `paused_keys`),
 `lib/wurk/queue.rb` (`pause!`, `unpause!`, `paused?`), Pro §6,
 `docs/plans/2026/08/06/101-faster-than-sidekiq/00-semantics-signoff.md`.
+
+## An interrupted `IterableJob` run books `p` + `ms`, never `f` (#394, resolved)
+
+**Wurk:** `Metrics::History#call` and `Metrics::Statsd#call` treat
+`Wurk::Job::Interrupted` (raised mid-`IterableJob`, caught by
+`InterruptHandler` outside both metrics middlewares) as `success: true` for
+booking purposes — `<klass>|p` and `<klass>|ms` (or `jobs.success` +
+`jobs.perform*`) are recorded, `<klass>|f` (`jobs.failure`) is not. A resumed
+run that later completes books a second `p`/`ms` on top of the first.
+
+**Spec:** `docs/target/sidekiq-free.md` does not pin the interrupted case (no
+divergence to measure against it). The applicable oracle is upstream
+`Sidekiq::Metrics::ExecutionTracker#track` (`lib/sidekiq/metrics/tracking.rb`),
+whose `rescue JobRetry::Skip` arm — the exact analog of Wurk's
+`Wurk::Job::Interrupted` — calls `track_time` (books `ms`) and always reaches
+the outer `ensure` (books `p`), never the `rescue Exception` arm that books
+`f`.
+
+**Why:** this closes [#394](https://github.com/developerz-ai/wurk/issues/394)
+rather than opening a divergence — before this fix, Wurk booked a spurious
+`f` for every interrupted run, diverging *from* the oracle above. Recorded
+here anyway per the "resolved" convention, since the fixed behavior (two `p`
+increments and two summed `ms` windows for one logical job execution across
+an interruption) is itself worth anchoring: it is intentional, matches
+upstream's own double-counting of a resumed `track` call, and is not a bug to
+"fix" back toward single-counting. Full terms in
+`docs/plans/2026/08/07/101-beyond-sidekiq/00-semantics-signoff.md` §1.
+
+**Anchor:** `lib/wurk/metrics/history.rb:65-86`, `lib/wurk/metrics/statsd.rb:145-165`,
+`lib/wurk/middleware/interrupt_handler.rb:31-33`,
+`docs/plans/2026/08/07/101-beyond-sidekiq/00-semantics-signoff.md`.
