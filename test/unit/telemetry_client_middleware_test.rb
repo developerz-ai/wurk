@@ -17,6 +17,15 @@ require 'logger'
 #
 # Takes GLOBAL_STATE_MUTEX for the whole class: `::OpenTelemetry` is a process
 # constant, and TelemetryTest installs and removes it too.
+
+# A real, resolvable constant for the drop-in tests below — `Object.const_get`
+# needs an actual class on the lookup path, not the per-test synthetic string
+# names (`TelemetryJob@<pid>-<oid>`) used everywhere else in this file, and
+# stock Sidekiq's dispatch really does call `.new` and `.jid=` on it.
+class TelemetryDropInWorker
+  attr_accessor :jid
+end
+
 class TelemetryClientMiddlewareTest < Wurk::Test::UnitCase
   parallelize_me!
 
@@ -290,6 +299,77 @@ class TelemetryClientMiddlewareTest < Wurk::Test::UnitCase
     end
   end
 
+  # --- drop-in: dispatched the way stock Sidekiq actually does it ----------
+  #
+  # `Sidekiq::Processor#dispatch` and `Sidekiq::JobLogger#prepare`, pinned at
+  # test/parity/.sidekiq_sha (e1f808a08645f9b8a194852a171b5667f5f877bd),
+  # fetched verbatim rather than assumed:
+  #
+  #   # lib/sidekiq/processor.rb:137,148-150
+  #   @job_logger.prepare(job_hash) do
+  #     ...
+  #     klass = Object.const_get(job_hash["class"])
+  #     instance = klass.new
+  #     instance.jid = job_hash["jid"]
+  #
+  #   # lib/sidekiq/job_logger.rb:26-33
+  #   def prepare(job_hash, &block)
+  #     h = { jid: job_hash["jid"], class: job_hash["wrapped"] || job_hash["class"] }
+  #     @config[:logged_job_attributes].each do |attr|
+  #       h[attr.to_sym] = job_hash[attr] if job_hash.has_key?(attr)
+  #     end
+  #
+  # `Sidekiq.load_json` is a bare `JSON.parse` (lib/sidekiq.rb:62) and every
+  # access above is `Hash#[]`/`#has_key?` by known key name — nothing
+  # enumerates or validates the full key set. `stock_sidekiq_dispatch` below
+  # reproduces that exact fragment; running it against a real traced Wurk
+  # payload is what actually proves "Sidekiq's own Processor ignores unknown
+  # keys" rather than merely asserting the payload shape in isolation.
+  def stock_sidekiq_dispatch(jobstr, logged_job_attributes: %w[bid])
+    job_hash = JSON.parse(jobstr)
+    prepared = { jid: job_hash['jid'], class: job_hash['wrapped'] || job_hash['class'] }
+    logged_job_attributes.each { |attr| prepared[attr.to_sym] = job_hash[attr] if job_hash.key?(attr) }
+    klass = Object.const_get(job_hash['class'])
+    instance = klass.new
+    instance.jid = job_hash['jid']
+    { instance: instance, args: job_hash['args'], prepared: prepared }
+  end
+
+  def test_a_traced_job_dispatches_unmodified_through_stock_sidekiqs_processor
+    with_otel do
+      traced_client.push(item('class' => TelemetryDropInWorker.name))
+      dispatched = stock_sidekiq_dispatch(stored_raw.first)
+
+      assert_instance_of TelemetryDropInWorker, dispatched[:instance]
+      assert_equal JID, dispatched[:instance].jid
+      assert_equal [1, 'two'], dispatched[:args]
+      assert_equal({ jid: JID, class: TelemetryDropInWorker.name }, dispatched[:prepared])
+    end
+  end
+
+  # The wrapped-class label (ActiveJob) is read the same way whether or not
+  # the payload carries a trace context.
+  def test_a_traced_activejob_wrapper_reports_the_wrapped_class_to_the_logger
+    with_otel do
+      traced_client.push(item('class' => TelemetryDropInWorker.name, 'wrapped' => 'SomeMailerJob'))
+      dispatched = stock_sidekiq_dispatch(stored_raw.first)
+
+      assert_equal 'SomeMailerJob', dispatched[:prepared][:class]
+    end
+  end
+
+  # `logged_job_attributes` reads whatever the host configured — `bid` here —
+  # off the same hash `traceparent` landed on; the extra key must not shadow
+  # or shift access to any other one.
+  def test_traced_payload_does_not_disturb_logged_job_attribute_lookup
+    with_otel do
+      traced_client.push(item('class' => TelemetryDropInWorker.name, 'bid' => @bid))
+      dispatched = stock_sidekiq_dispatch(stored_raw.first)
+
+      assert_equal @bid, dispatched[:prepared][:bid]
+    end
+  end
+
   # --- tracer resolution ---------------------------------------------------
 
   def test_the_tracer_is_resolved_once_per_provider
@@ -353,7 +433,13 @@ class TelemetryClientMiddlewareTest < Wurk::Test::UnitCase
   end
 
   def stored
-    @pool.with { |conn| conn.call('LRANGE', "queue:#{@queue}", 0, -1) }.map { |raw| JSON.parse(raw) }
+    stored_raw.map { |raw| JSON.parse(raw) }
+  end
+
+  # Unparsed — the drop-in oracle above does its own `JSON.parse`, exactly
+  # like `Sidekiq.load_json`, rather than being handed an already-parsed Hash.
+  def stored_raw
+    @pool.with { |conn| conn.call('LRANGE', "queue:#{@queue}", 0, -1) }
   end
 
   # --- the opentelemetry-api stand-in --------------------------------------
