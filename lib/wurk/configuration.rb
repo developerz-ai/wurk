@@ -58,7 +58,13 @@ module Wurk
       # keep succeeded jobs around longer than they ran, or to 0 for Sidekiq's
       # own behavior, where a job that succeeds leaves nothing behind.
       status_ttl: Keys::STATUS_TTL,
-      status_retention: nil
+      status_retention: nil,
+      # Distributed tracing (Wurk::Telemetry). Seeded here, not written on
+      # demand, so the read side answers on a config that `freeze!` has already
+      # closed — and so a gem inspecting @options sees the same key set whether
+      # or not the host traces. Flipping it is only half the gate; the
+      # opentelemetry-api gem has to be present too (Wurk::Telemetry.enabled?).
+      telemetry: false
     }.freeze
 
     # :fork fires only inside swarm children, after fork + internal AR/Redis
@@ -121,6 +127,7 @@ module Wurk
       @web_redis_pool = nil
       @logger = nil
       @thread_priority = DEFAULT_THREAD_PRIORITY
+      @telemetry_installed = false
       @frozen = false
     end
 
@@ -393,6 +400,41 @@ module Wurk
     def history_enabled? = @options.key?(:history_interval)
     def history_interval = @options.fetch(:history_interval, HISTORY_DEFAULT_INTERVAL)
     def history_collector = @options[:history_collector]
+
+    # --- Distributed tracing (OpenTelemetry) ------------------------------
+
+    # @return [Boolean] whether the host asked for tracing. Half the gate;
+    #   {Wurk::Telemetry.enabled?} is the whole one.
+    def telemetry? = @options[:telemetry] == true
+
+    # Opt into Wurk::Telemetry — a producer span carrying W3C trace context on
+    # the job hash at enqueue, a linked consumer span on execute:
+    #
+    #   Wurk.configure_server { |config| config.telemetry = true }
+    #
+    # Loading `wurk/telemetry` is deferred to this call, which is the only
+    # reason `require "wurk"` can leave `opentelemetry-api` untouched in an app
+    # that doesn't trace.
+    #
+    # Warns when the host opted in but the gem is missing: tracing then stays
+    # off, and a silent no-op is indistinguishable from a broken exporter.
+    def telemetry=(enabled)
+      guard_frozen!
+      @options[:telemetry] = enabled ? true : false
+      # Turning tracing back off still has to unregister, but must not *load*
+      # the module to do it — that require is the whole cost this flag gates,
+      # and a config that never opted in has nothing registered to undo. Tracked
+      # per instance rather than off `defined?(Wurk::Telemetry)`: whether some
+      # *other* config loaded the module says nothing about this one's chain.
+      return if !@options[:telemetry] && !@telemetry_installed
+
+      require_relative 'telemetry'
+      @telemetry_installed = true
+      Wurk::Telemetry.install!(self)
+      return if !@options[:telemetry] || Wurk::Telemetry.available?
+
+      logger.warn { 'config.telemetry = true but opentelemetry-api is not installed; tracing stays off' }
+    end
 
     # --- Web dashboard ----------------------------------------------------
 

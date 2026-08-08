@@ -296,3 +296,56 @@ Chain order verified in `test/unit/metrics_agreement_test.rb:79-82`.
 `lib/wurk/metrics/statsd.rb:145-169,191-196`,
 `lib/wurk/middleware/interrupt_handler.rb:29-34,46`,
 `docs/plans/2026/08/07/101-beyond-sidekiq/00-semantics-signoff.md` §1.
+
+## OpenTelemetry adds `traceparent`/`tracestate` as top-level job-JSON keys, opt-in only
+
+**Wurk:** when a host opts into tracing (`config.telemetry = true`, gem
+present), `Wurk::Telemetry::ClientMiddleware` writes a W3C `traceparent`
+string — and `tracestate` only when the trace carries vendor state — as extra
+top-level keys on the job hash, on every plain push and every `push_bulk`
+item (`lib/wurk/telemetry/client_middleware.rb:26-56`). Nothing else about
+the payload changes: byte-compared against an untraced push, the only key
+diff is `traceparent` (`test/unit/telemetry_client_middleware_test.rb`,
+`test_opting_in_adds_the_trace_context_and_nothing_else`). A host that never
+opts in, or that has `telemetry = true` but no `opentelemetry-api` installed,
+gets byte-identical payloads to today — proven by the same suite and by
+`rake bench` with tracing off.
+
+**Spec:** `docs/target/sidekiq-free.md` has no `traceparent`/`tracestate`
+concept — Sidekiq itself ships no first-party tracing, so there is no spec
+position to diverge from. The relevant question is whether an unrecognized
+top-level key is safe cargo on the wire, which is a `Sidekiq::Processor`
+question, not a spec one.
+
+**Why:** `Sidekiq::Processor#dispatch` and `Sidekiq::JobLogger#prepare`,
+pinned at `test/parity/.sidekiq_sha`
+(`e1f808a08645f9b8a194852a171b5667f5f877bd`, fetched verbatim, not from
+memory) read the job hash exclusively by known key name —
+`job_hash["class"]`, `job_hash["jid"]`, `job_hash["wrapped"] ||
+job_hash["class"]`, `job_hash[attr] if job_hash.has_key?(attr)` for
+`logged_job_attributes` — off a plain `Sidekiq.load_json` (`JSON.parse`).
+Nothing enumerates or validates the full key set, so `traceparent` is inert
+cargo to a real stock-Sidekiq dispatch, not a protocol violation. This
+reproduces that exact fragment against a real traced Wurk payload
+(`test/unit/telemetry_client_middleware_test.rb`,
+`test_a_traced_job_dispatches_unmodified_through_stock_sidekiqs_processor`
+and neighbors) rather than merely asserting the payload shape in isolation.
+The reverse direction — a stock-Sidekiq-shaped job with no `traceparent` at
+all, hand-built and `LPUSH`ed the way `Sidekiq::Client` actually writes it —
+still runs cleanly under a Wurk swarm with tracing on, as a root span with no
+parent or link (`test/integration/telemetry_fork_test.rb`,
+`test_a_stock_sidekiq_shaped_job_with_no_traceparent_is_consumed_here`).
+`traceparent` is metadata, not an argument: `lib/wurk/encryption.rb`'s
+encrypted-args envelope only ever touches `args.last`, so it neither
+encrypts the trace context nor is perturbed by its presence
+(`test/unit/encryption_test.rb`, the "telemetry interaction" section).
+Retries reuse the original `traceparent` (`JobRetry#schedule_retry` re-ZADDs
+the same hash, so the client chain never runs again), and a producer context
+older than 60s becomes a span **link** instead of a parent edge — both
+documented in `lib/wurk/telemetry/server_middleware.rb:28-53`. Full terms in
+`docs/plans/2026/08/07/101-beyond-sidekiq/00-semantics-signoff.md` §2.
+
+**Anchor:** `lib/wurk/telemetry/client_middleware.rb`,
+`lib/wurk/telemetry/server_middleware.rb`,
+`docs/plans/2026/08/07/101-beyond-sidekiq/00-semantics-signoff.md` §2,
+`test/parity/.sidekiq_sha`.

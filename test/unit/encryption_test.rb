@@ -524,6 +524,71 @@ class EncryptionTest < Wurk::Test::UnitCase
     end
   end
 
+  # ---- telemetry interaction: traceparent is metadata, not an argument (slice 05) ----
+  #
+  # `Wurk::Telemetry::ClientMiddleware` writes `traceparent` (and optionally
+  # `tracestate`) as top-level String keys on the job hash — see
+  # lib/wurk/telemetry/client_middleware.rb:36. Encryption only ever reads and
+  # rewrites `job['args'].last` (`#encrypt` above, `#decrypt_last_arg!` below);
+  # this pins that contract when both features are opted into the same job, in
+  # either order, without depending on opentelemetry-api being installed — the
+  # two middleware pairs never interact through anything but the job hash they
+  # share, and a real `traceparent` string is enough to prove it.
+
+  TRACEPARENT = '00-4bf92f3577b34da6a3ce929d0e0e4736-00f067aa0ba902b7-01'
+  TRACESTATE = 'rojo=00f067aa0ba902b7'
+
+  def test_traceparent_and_tracestate_survive_the_client_middleware_untouched
+    ENABLE_MUTEX.synchronize do
+      Wurk::Encryption.enable(active_version: 1) { |_v| KEY_V1 }
+      job = { 'class' => 'X', 'args' => [1, { 'ssn' => '123-45-6789' }], 'encrypt' => true,
+              'traceparent' => TRACEPARENT, 'tracestate' => TRACESTATE }
+      invoke_client(job)
+
+      assert_equal TRACEPARENT, job['traceparent'], 'trace context is metadata, not an argument to encrypt'
+      assert_equal TRACESTATE, job['tracestate']
+      assert Wurk::Encryption.envelope?(job['args'].last), 'args.last must still be enveloped'
+    end
+  end
+
+  def test_traceparent_is_not_folded_into_the_envelope
+    ENABLE_MUTEX.synchronize do
+      Wurk::Encryption.enable(active_version: 1) { |_v| KEY_V1 }
+      job = { 'class' => 'X', 'args' => ['plaintext arg'], 'encrypt' => true, 'traceparent' => TRACEPARENT }
+      invoke_client(job)
+      envelope = job['args'].last
+
+      refute_includes envelope.values.join, TRACEPARENT, 'the trace context must never end up inside the ciphertext'
+    end
+  end
+
+  # The headline assertion: a traceparent riding alongside `encrypt: true`
+  # must not perturb encryption.rb:131-137's envelope shape or its round trip
+  # back to plaintext, and the server-side decrypt must leave the trace
+  # context exactly as it found it — nothing here is Telemetry-aware, on
+  # purpose; if it needed to be, the "metadata, not an argument" contract
+  # would already be broken.
+  def test_the_args_round_trip_is_unaffected_by_a_traceparent_key
+    ENABLE_MUTEX.synchronize do
+      Wurk::Encryption.enable(active_version: 1) { |_v| KEY_V1 }
+      secret = { 'card' => '4111', 'cvv' => '999' }
+      job = { 'class' => 'X', 'jid' => jid, 'args' => [42, secret], 'encrypt' => true,
+              'traceparent' => TRACEPARENT, 'tracestate' => TRACESTATE }
+      before_metadata = job.except('args').dup
+
+      invoke_client(job)
+
+      assert Wurk::Encryption.envelope?(job['args'].last), 'the enqueued payload must be ciphertext'
+
+      invoke_server(job) { :ok }
+
+      assert_equal [42, secret], job['args'],
+                   'a traceparent alongside encrypt: true must not break the envelope round-trip'
+      assert_equal before_metadata, job.except('args'),
+                   'traceparent/tracestate must be byte-identical before and after the whole round trip'
+    end
+  end
+
   # ---- Web UI redaction (§4.7) -----------------------------------------
 
   def test_redact_args_passthrough_when_not_encrypted
