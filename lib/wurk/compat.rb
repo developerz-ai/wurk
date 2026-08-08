@@ -152,6 +152,16 @@ module Sidekiq
   Shutdown         = Wurk::Shutdown
   SortedEntry      = Wurk::SortedEntry
   Stats            = Wurk::Stats
+  # No `Sidekiq::Status` alias on purpose, same reason as `Sidekiq::Cron`
+  # (#204): the sidekiq-status gem owns that namespace and opens it with
+  # `module Sidekiq::Status`, which resolves an existing constant rather than
+  # defining a fresh module — so the alias would make the gem reopen
+  # Wurk::Status and, loading second, silently replace `.get`/`.delete` with its
+  # own two-arg-shaped versions while nesting its Storage/Worker/middlewares
+  # inside ours. Upstream Sidekiq's only Status is `Sidekiq::Batch::Status`
+  # (sidekiq-pro.md §2.5), which *is* aliased; the top-level name is not a
+  # Sidekiq surface at all. Wurk's tracking is `Wurk::Status`, reached by name,
+  # and its `status:<jid>` rows are disjoint from the gem's `sidekiq:status:<jid>`.
   Testing          = Wurk::Testing
   TransactionAwareClient = Wurk::TransactionAwareClient
   Queues           = Wurk::Queues

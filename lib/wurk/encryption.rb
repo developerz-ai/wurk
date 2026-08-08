@@ -45,6 +45,11 @@ module Wurk
   #     remain plaintext.
   #   * Incompatible with Wurk::Unique (each ciphertext differs → digest
   #     defeats the lock). Documented invariant.
+  #   * A worker that also sets `track: true` gets its full Wurk::Status
+  #     lifecycle but no stored result — `perform`'s return value is dropped and
+  #     the row is flagged `result_withheld`, rather than landing in a plaintext
+  #     HASH beside the arguments this envelope exists to protect. See
+  #     Wurk::Middleware::Status#withhold_result?.
   #   * Web UI redacts the last arg when `encrypt: true` is set on the job.
   #
   # Spec: docs/target/sidekiq-ent.md §4.

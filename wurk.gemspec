@@ -27,8 +27,12 @@ Gem::Specification.new do |spec|
   # (js/css/html + asset manifest), the engine's config, README, and LICENSE.
   # No images, no docs/, no CHANGELOG/CONTRIBUTING/SECURITY — those live on
   # GitHub (see the *_uri metadata above).
+  # lib/**/*.lua is not optional: Wurk::Lua::FILE_SCRIPTS globs that directory
+  # at load, so a gem built without them registers no limiter/status script and
+  # every EVALSHA of one raises "unknown Lua script" in the consumer's app.
   spec.files = Dir[
     'lib/**/*.rb',
+    'lib/**/*.lua',
     'app/**/*.rb',
     'config/**/*',
     'exe/*',

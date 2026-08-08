@@ -65,6 +65,7 @@ require_relative 'wurk/leader'
 require_relative 'wurk/history'
 require_relative 'wurk/unique'
 require_relative 'wurk/encryption'
+require_relative 'wurk/status'
 require_relative 'wurk/metrics'
 require_relative 'wurk/metrics/statsd'
 require_relative 'wurk/metrics/history'
@@ -304,6 +305,14 @@ Wurk.configuration.server_middleware.add(Wurk::Metrics::Statsd)
 # embedded/CLI; we mirror that here at load. Runs server-side only (the chain
 # never executes in a client-only process). Spec: docs/target/sidekiq-free.md §10.3.
 Wurk.configuration.server_middleware.add(Wurk::Metrics::History)
+
+# Job status / progress / result tracking — a Wurk extra, opt-in per worker
+# class via `sidekiq_options track: true`. Registered LAST of the built-ins so
+# it is the innermost of them: the value it stores is `perform`'s own return
+# value, and none of the middleware above may wrap or replace it on the way out
+# first. Also registers a death handler, because whether a failed job retries or
+# dies is decided in JobRetry, one frame outside any middleware.
+require_relative 'wurk/middleware/status'
 
 # Pro Fast API: Lua-backed Queue#delete_job / #delete_by_class plus
 # SortedSet#scan { |JobRecord| … }. Mixed in via include/prepend on the

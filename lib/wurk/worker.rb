@@ -1,5 +1,6 @@
 # frozen_string_literal: true
 
+require_relative 'job_util'
 require_relative 'worker/setter'
 
 module Wurk
@@ -75,6 +76,24 @@ module Wurk
       Wurk::Batch.new(@bid)
     end
 
+    # Progress handle for a class that opted into tracking with
+    # `sidekiq_options track: true` — `status.at(row, total, 'importing')`.
+    # nil for every other class, so callers that report progress conditionally
+    # write `status&.at(...)`.
+    #
+    # Defined as a plain reader rather than pushed onto the including class the
+    # way `jid` is: `status` is a name a job may well already own, and a method
+    # in this module loses to one in the class body, which is the right way
+    # round for a Wurk extra.
+    #
+    # @see Wurk::Status
+    def status
+      @status
+    end
+
+    # @api private — Middleware::Status sets this before perform.
+    attr_writer :status
+
     # False if the batch was invalidated. Workers should `return unless
     # valid_within_batch?` to short-circuit work for cancelled batches.
     def valid_within_batch?
@@ -90,13 +109,16 @@ module Wurk
       #
       # @example
       #   sidekiq_options queue: "mailers", retry: 3, unique_for: 10.minutes
+      # @example Opt into Wurk::Status tracking
+      #   sidekiq_options track: true
       # @param opts [Hash] any of `queue:`, `retry:`, `dead:`, `backtrace:`,
-      #   `expires_in:`, `tags:`, `pool:`, `unique_for:`, … (see the migration
-      #   guide's sidekiq_options table for the full set)
+      #   `expires_in:`, `tags:`, `pool:`, `unique_for:`, `track:`, … (see the
+      #   migration guide's sidekiq_options table for the full set)
       # @return [Hash] the merged, string-keyed options hash
       def sidekiq_options(opts = {})
-        merged = get_sidekiq_options.merge(opts.transform_keys(&:to_s))
-        @sidekiq_options_hash = merged
+        stringified = opts.transform_keys(&:to_s)
+        Wurk::JobUtil.validate_track!(stringified['track'], stringified) if stringified.key?('track')
+        @sidekiq_options_hash = get_sidekiq_options.merge(stringified)
       end
 
       # Sidekiq's public API name — wire-compat sacred. Must stay `get_sidekiq_options`.

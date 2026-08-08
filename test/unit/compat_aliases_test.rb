@@ -131,6 +131,17 @@ class CompatAliasesTest < Wurk::Test::UnitCase
     assert_same Wurk::Cron, Sidekiq::Periodic
   end
 
+  # Same rule as Sidekiq::Cron, and for a namespace that bites harder: the
+  # sidekiq-status gem opens `module Sidekiq::Status`, which reopens an existing
+  # constant rather than defining a fresh module. An alias here would hand it
+  # Wurk::Status to reopen, and — loading second — its `.get(jid, field)` /
+  # `.delete(jid)` would replace ours. Upstream's only Status is
+  # Sidekiq::Batch::Status, which is aliased.
+  def test_status_namespace_not_squatted
+    refute Sidekiq.const_defined?(:Status, false)
+    assert_same Wurk::Batch::Status, Sidekiq::Batch::Status
+  end
+
   def test_metrics_alias
     assert_same Wurk::Metrics, Sidekiq::Metrics
     assert_same Wurk::Metrics::Rollup, Sidekiq::Metrics::Rollup
