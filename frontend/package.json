@@ -11,6 +11,7 @@
     "build": "tsc -b && vite build --outDir ../vendor/assets/dashboard --emptyOutDir",
     "preview": "vite preview",
     "typecheck": "tsc --noEmit",
+    "lint": "oxlint --deny-warnings",
     "test": "vitest run"
   },
   "dependencies": {
@@ -28,6 +29,7 @@
     "@testing-library/jest-dom": "^7.0.0",
     "daisyui": "^5.7.0",
     "jsdom": "^30.0.1",
+    "oxlint": "^1.77.0",
     "sass": "^1.101.7",
     "tailwindcss": "^4.3.3",
     "typescript": "^7.0.2",

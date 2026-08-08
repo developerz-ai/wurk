@@ -347,12 +347,17 @@ jobs:
       - name: install dashboard deps
         run: bun install --frozen-lockfile
         working-directory: frontend
-      # `tsc --noEmit` is the frontend's only static gate, by necessity. eslint
-      # is not wired up here because typescript-eslint does not support the
-      # TypeScript 7 this dashboard builds on (typescript-eslint#10940), so it
-      # cannot parse a single .ts/.tsx file in src/. Revisit when that lands.
       - name: typecheck
         run: bun run typecheck
+        working-directory: frontend
+      # oxlint, not eslint: typescript-eslint peer-depends on
+      # `typescript >=4.8.4 <6.1.0`, and this dashboard builds on TypeScript 7,
+      # so its parser cannot read a single .ts/.tsx file here
+      # (typescript-eslint#10940, still open). oxlint parses TS/TSX itself and
+      # has no `typescript` peer at all. `--deny-warnings` is what makes it a
+      # gate rather than a report; enabled rules live in frontend/.oxlintrc.json.
+      - name: lint
+        run: bun run lint
         working-directory: frontend
       - name: vitest
         run: bun run test

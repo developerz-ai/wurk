@@ -1,0 +1,16 @@
+{
+  // oxlint, not eslint: typescript-eslint peer-depends on `typescript
+  // >=4.8.4 <6.1.0` and this dashboard builds on TypeScript 7, so its parser
+  // cannot read a single .ts/.tsx file here (typescript-eslint#10940 is still
+  // open). oxlint parses TS/TSX itself and needs no `typescript` at all.
+  //
+  // Default category only (`correctness` — "outright wrong or useless").
+  // `suspicious`/`pedantic` add ~30 style findings whose fixes are debatable
+  // in SolidJS; widen the gate in its own change, not silently here.
+  "rules": {
+    // SolidJS ref idiom: `let el!: HTMLDivElement` is assigned by the JSX
+    // `ref={el}` binding that the Solid compiler emits, which this rule
+    // cannot see. Every hit is that pattern.
+    "no-unassigned-vars": "off"
+  }
+}
