@@ -5,8 +5,11 @@
 @import "tailwindcss";
 @import "@fortawesome/fontawesome-free/css/all.min.css";
 
-/* Dark-only dashboard. daisyUI's `dark` theme provides the component scheme;
-   the palette itself is overridden in styles/abstracts/_tokens.scss. */
+/* daisyUI supplies the component scheme only — both palettes are overridden in
+   styles/abstracts/_tokens.scss. `dark --default` keeps dark on bare `:root`;
+   `light` must stay registered so `[data-theme="light"]` also gets
+   `color-scheme: light`, otherwise native controls and scrollbars render dark
+   underneath the light palette. */
 @plugin "daisyui" {
-  themes: dark --default;
+  themes: dark --default, light;
 }

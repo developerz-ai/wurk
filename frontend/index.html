@@ -1,13 +1,44 @@
 <!doctype html>
-<html lang="en" data-theme="dark">
+<html lang="en">
   <head>
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
-    <meta name="color-scheme" content="dark" />
+    <meta name="color-scheme" content="light dark" />
     <meta name="theme-color" content="#09090b" />
-    <!-- The dashboard is dark-only. Tell the Dark Reader extension not to
-         re-invert it — otherwise it washes the already-dark UI to white. -->
-    <meta name="darkreader-lock" />
+
+    <!-- Pre-paint theme stamp. Resolves the same three-state preference as
+         src/theme.ts, inline and ahead of the bundle: resolving it after the
+         module graph loads would flash the wrong palette on every load. Keep
+         the two in step — this is the only copy of that logic.
+         `__WURK_THEME__` is the host default, injected right after <head> by
+         Wurk::DashboardController when the app configured one. The <html> tag
+         carries no `data-theme` of its own: dark is the bare-`:root` palette,
+         so the shell still renders as designed with this script blocked. -->
+    <script>
+      (function () {
+        var ok = function (v) {
+          return v === 'light' || v === 'dark' || v === 'system';
+        };
+        var pref;
+        try {
+          pref = localStorage.getItem('wurk.theme');
+        } catch (e) {
+          /* storage disabled (private mode, sandboxed iframe) */
+        }
+        if (!ok(pref)) pref = window.__WURK_THEME__;
+        if (!ok(pref)) pref = 'system';
+        var light =
+          pref === 'light' ||
+          (pref === 'system' && !!window.matchMedia && window.matchMedia('(prefers-color-scheme: light)').matches);
+        document.documentElement.setAttribute('data-theme', light ? 'light' : 'dark');
+        // Mirrors --color-base-100 in styles/abstracts/_tokens.scss. The
+        // stylesheet is not loaded yet, so it cannot be read off the token
+        // here; theme.ts takes the meta over from the computed value later.
+        var meta = document.querySelector('meta[name="theme-color"]');
+        if (light && meta) meta.setAttribute('content', '#fafafa');
+      })();
+    </script>
+
     <meta
       name="description"
       content="Wurk — a free, faster, 100% drop-in replacement for Sidekiq + Sidekiq Pro + Sidekiq Enterprise. Real fork-based parallelism, mountable Rails engine, live dashboard."

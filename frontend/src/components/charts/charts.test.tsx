@@ -43,8 +43,8 @@ describe('LineChart', () => {
         legend
         yAxisWidth={36}
         series={[
-          { key: 'processed', name: 'Proc', stroke: '#fafafa' },
-          { key: 'failed', stroke: '#a1a1aa' },
+          { key: 'processed', name: 'Proc', stroke: 'var(--mono-1)' },
+          { key: 'failed', stroke: 'var(--mono-3)' },
         ]}
       />
     ));
@@ -70,8 +70,8 @@ describe('AreaChart', () => {
         height={300}
         yAxisWidth={36}
         series={[
-          { key: 'processed', stroke: '#fafafa', fill: 'gradient' },
-          { key: 'failed', stroke: '#a1a1aa', fill: 'none' },
+          { key: 'processed', stroke: 'var(--mono-1)', fill: 'gradient' },
+          { key: 'failed', stroke: 'var(--mono-3)', fill: 'none' },
         ]}
       />
     ));
@@ -90,9 +90,9 @@ describe('BarChart', () => {
     const { container } = render(() => (
       <BarChart
         data={[
-          { label: 'A', value: 5, color: '#fafafa' },
-          { label: 'B', value: 8, color: '#3f3f46' },
-          { label: 'C', value: 3, color: '#3f3f46' },
+          { label: 'A', value: 5, color: 'var(--mono-1)' },
+          { label: 'B', value: 8, color: 'var(--mono-6)' },
+          { label: 'C', value: 3, color: 'var(--mono-6)' },
         ]}
         height={240}
         name="Depth"

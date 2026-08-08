@@ -2,19 +2,20 @@ import { createSignal, onCleanup, onMount, For, Show, type JSX } from 'solid-js'
 import { formatNumber } from '../../utils';
 
 // Shared primitives for the hand-rolled SVG charts that replace recharts. No
-// deps beyond Solid + SVG — the dark Obsidian palette is baked in here so every
-// chart reads identically (ticks #71717a, faint white grid, JetBrains Mono).
+// deps beyond Solid + SVG. Every value below is a token reference, never a
+// literal: SVG presentation attributes resolve `var()` the same way CSS
+// declarations do, so charts re-paint on a theme flip with no JS involved.
 
-export const AXIS_TICK = '#71717a';
-export const GRID = 'rgba(255,255,255,0.06)';
-export const MONO = 'JetBrains Mono, monospace';
-export const CURSOR = 'rgba(255,255,255,0.25)';
-export const BAR_CURSOR = 'rgba(255,255,255,0.04)';
-export const TOOLTIP_BG = '#161618';
-export const TOOLTIP_BORDER = '#272729';
-export const TOOLTIP_FG = '#e4e4e7';
-export const TOOLTIP_LABEL = '#a1a1aa';
-export const DOT_STROKE = '#09090b';
+export const AXIS_TICK = 'var(--mono-4)';
+export const GRID = 'var(--chart-grid)';
+export const MONO = 'var(--font-mono)';
+export const CURSOR = 'var(--chart-cursor)';
+export const BAR_CURSOR = 'var(--chart-band)';
+export const TOOLTIP_BG = 'var(--surface)';
+export const TOOLTIP_BORDER = 'var(--border)';
+export const TOOLTIP_FG = 'var(--text)';
+export const TOOLTIP_LABEL = 'var(--text-muted)';
+export const DOT_STROKE = 'var(--bg)';
 
 export interface Datum {
   label: string;

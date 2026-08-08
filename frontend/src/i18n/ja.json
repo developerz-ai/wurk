@@ -19,6 +19,8 @@
     "language_current": "言語: {name}",
     "timezone": "タイムゾーン",
     "timezone_current": "タイムゾーン: {name}",
+    "theme_current": "テーマ: {name}",
+    "theme_next": "{name}テーマに切り替える",
     "status_active": "システム状態: 稼働中",
     "status_inactive": "システム状態: 切断"
   },
@@ -267,5 +269,10 @@
     "automatic": "自動 ({name})",
     "filter": "タイムゾーンを絞り込み…",
     "empty": "“{query}”に一致するタイムゾーンはありません"
+  },
+  "theme": {
+    "light": "ライト",
+    "dark": "ダーク",
+    "system": "システム"
   }
 }

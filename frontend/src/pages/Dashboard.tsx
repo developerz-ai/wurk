@@ -243,8 +243,8 @@ export default function Dashboard() {
                       height={320}
                       xMinTickGap={64}
                       series={[
-                        { key: 'processed', name: t('dashboard.processed'), stroke: '#fafafa', strokeWidth: 2, fill: 'gradient' },
-                        { key: 'failed', name: t('dashboard.failed'), stroke: '#a1a1aa', strokeWidth: 1.5, strokeDasharray: '5 4', fill: 'none' },
+                        { key: 'processed', name: t('dashboard.processed'), stroke: 'var(--mono-1)', strokeWidth: 2, fill: 'gradient' },
+                        { key: 'failed', name: t('dashboard.failed'), stroke: 'var(--mono-3)', strokeWidth: 1.5, strokeDasharray: '5 4', fill: 'none' },
                       ]}
                     />
                   </Show>

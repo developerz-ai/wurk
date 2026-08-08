@@ -47,7 +47,7 @@ export function ReadOnlyBanner() {
         role="status"
         style={{
           background: 'var(--warning)',
-          color: '#1a1a1a',
+          color: 'var(--color-warning-content)',
           'text-align': 'center',
           padding: '0.5rem 1rem',
           'font-weight': 600,

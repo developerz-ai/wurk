@@ -46,6 +46,22 @@
   outline-offset: $offset;
 }
 
+// The button reset every nav-rail footer control shares (language, timezone,
+// theme). Always chained onto `.wurk-navlink` at the call site: that class is
+// declared in an inline <style> shipped after this stylesheet, so a
+// single-class rule loses the tie and inherits nav-item — not footer-control —
+// colouring.
+@mixin rail-control {
+  width: calc(100% - #{fn.to-rem(16)});
+  border: 0;
+  background: transparent;
+  color: var(--text-muted);
+  font-family: inherit;
+  font-size: fn.to-rem(13);
+  text-align: start;
+  cursor: pointer;
+}
+
 // A shorthand for the common `transition: <props> <dur> <ease>` pattern using
 // the motion scale. `@include transition(color border-color, 'fast')`.
 @mixin transition($props, $speed: 'base', $ease: 'standard') {

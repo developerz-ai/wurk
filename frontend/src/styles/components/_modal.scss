@@ -44,7 +44,7 @@
 
   &::backdrop {
     // Dim + blur the page so focus lands on the modal. Fades with the dialog.
-    background: oklch(0 0 0 / 0.58);
+    background: var(--scrim);
     -webkit-backdrop-filter: blur(to-rem(6)) saturate(75%);
     backdrop-filter: blur(to-rem(6)) saturate(75%);
     opacity: 0;
@@ -70,7 +70,7 @@
   background: var(--surface);
   border: to-rem(1) solid var(--border-strong);
   border-radius: var(--radius);
-  box-shadow: 0 to-rem(20) to-rem(60) oklch(0 0 0 / 0.5);
+  box-shadow: 0 to-rem(20) to-rem(60) var(--shadow-color);
   display: flex;
   flex-direction: column;
   max-height: 88vh;

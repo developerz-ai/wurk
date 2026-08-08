@@ -298,6 +298,30 @@ class MetricsHistoryTest < Wurk::Test::UnitCase
     assert_equal({ 'p' => '1', 'ms' => '1' }, minute_fields(healthy))
   end
 
+  # ConnectionPool#shutdown is one-way, so counts recorded through a pool that
+  # has since been reset can never be written. Keeping them would re-raise on
+  # every tick forever — the process-wide accumulator outlives any single pool
+  # (a fork inherits it, `reset_redis_pools!` is host-callable).
+  def test_a_shut_down_pool_drops_its_counts_instead_of_retrying_forever
+    acc = Wurk::Metrics::Accumulator.new
+    acc.add(shut_down_pool, @klass, bucket, 1, true)
+
+    assert_nil Wurk::Metrics::History.flush(acc)
+    assert_predicate acc, :empty?
+  end
+
+  # The dead pool is drained alongside live ones; it must not cost them their
+  # flush, nor reach Flusher#tick as an error no operator can act on.
+  def test_a_shut_down_pool_does_not_fail_the_pools_drained_with_it
+    healthy = "#{@klass}Healthy"
+    acc = Wurk::Metrics::Accumulator.new
+    acc.add(shut_down_pool, @klass, bucket, 1, true)
+    acc.add(nil, healthy, bucket, 1, true)
+
+    assert_nil Wurk::Metrics::History.flush(acc)
+    assert_equal({ 'p' => '1', 'ms' => '1' }, minute_fields(healthy))
+  end
+
   # Raises once, then delegates — a Redis blip, not a dead server.
   class FlakyPool
     def initialize(pool)
@@ -546,6 +570,12 @@ class MetricsHistoryTest < Wurk::Test::UnitCase
   # at 4ms. Same sequence whether it is folded into one flush or ten.
   def execution(acc, klass, index)
     index < 7 ? acc.add(nil, klass, bucket, 10, true) : acc.add(nil, klass, bucket, 4, false)
+  end
+
+  # A real pool that has been disconnected, the state Capsule#reset_redis_pools!
+  # leaves behind — every checkout raises ConnectionPool::PoolShuttingDownError.
+  def shut_down_pool
+    Wurk::RedisPool.new(size: 1, url: Wurk::Test.redis_url, name: 'shut-down').tap(&:disconnect!)
   end
 
   # One execution behind a pool that fails its first checkout — a Redis blip,

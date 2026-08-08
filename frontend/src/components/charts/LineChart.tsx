@@ -121,7 +121,7 @@ export function LineChart(props: LineChartProps): JSX.Element {
             gap: '12px',
             'font-size': '11px',
             'font-family': MONO,
-            color: '#a1a1aa',
+            color: 'var(--text-muted)',
             'padding-top': '6px',
           }}
         >

@@ -388,6 +388,48 @@ class WebConfigTest < Wurk::Test::UnitCase
     assert_empty cfg.translations
   end
 
+  def test_default_theme_starts_unset_so_the_spa_follows_the_visitor
+    assert_nil Wurk::Web.config.default_theme
+  end
+
+  def test_default_theme_accepts_every_preference_the_spa_resolves
+    cfg = Wurk::Web.config
+
+    Wurk::Web::Config::THEMES.each do |theme|
+      cfg.default_theme = theme
+
+      assert_equal theme, cfg.default_theme
+    end
+
+    cfg.default_theme = :light
+
+    assert_equal 'light', cfg.default_theme
+  end
+
+  # Loud rather than ignored: a typo'd theme that silently does nothing is a
+  # support ticket, and there are only three values to get right.
+  def test_default_theme_rejects_a_preference_the_spa_cannot_resolve
+    error = assert_raises(ArgumentError) { Wurk::Web.config.default_theme = 'obsidian' }
+
+    assert_match(/default_theme/, error.message)
+  end
+
+  def test_default_theme_can_be_cleared
+    cfg = Wurk::Web.config
+    cfg.default_theme = 'dark'
+    cfg.default_theme = nil
+
+    assert_nil cfg.default_theme
+  end
+
+  def test_reset_clears_the_default_theme
+    cfg = Wurk::Web.config
+    cfg.default_theme = 'light'
+    cfg.reset!
+
+    assert_nil cfg.default_theme
+  end
+
   # The server negotiates Accept-Language against BUNDLED_LOCALES, but the SPA
   # decides what it can actually render from its own bundle imports. A bundle
   # added on one side only would emit a hint the dashboard can't honour, so pin
@@ -399,6 +441,20 @@ class WebConfigTest < Wurk::Test::UnitCase
     shipped = Dir.children(dir).grep(/\.json\z/).map { |f| File.basename(f, '.json') }
 
     assert_equal shipped.sort, Wurk::Web::Config::BUNDLED_LOCALES.sort
+  end
+
+  # The shell's pre-paint script (frontend/index.html) hand-duplicates the SPA's
+  # preference resolution — it has to run before the bundle exists, or every
+  # dark-mode visitor gets a white flash. Pin its accepted values to the ones
+  # this config will emit, so a theme added on one side alone fails here rather
+  # than silently resolving to 'system' in front of first paint.
+  def test_themes_match_the_shells_pre_paint_script
+    shell = File.expand_path('../../frontend/index.html', __dir__)
+    skip 'frontend sources absent (installed gem)' unless File.exist?(shell)
+
+    accepted = File.read(shell).scan(/v === '([a-z]+)'/).flatten
+
+    assert_equal Wurk::Web::Config::THEMES.sort, accepted.sort
   end
 
   private

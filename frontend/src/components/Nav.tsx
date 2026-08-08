@@ -4,6 +4,7 @@ import { t } from '../i18n';
 import { useMeta } from '../hooks/useMeta';
 import { useSSE } from '../hooks/useSSE';
 import LocalePicker from './LocalePicker';
+import ThemeToggle from './ThemeToggle';
 import TimezonePicker from './TimezonePicker';
 import logoUrl from '../assets/wurk-logo.png';
 
@@ -57,7 +58,7 @@ export default function Nav(props: NavProps) {
           style={{
             position: 'fixed',
             inset: 0,
-            background: 'rgba(0,0,0,0.5)',
+            background: 'var(--scrim)',
             'z-index': 99,
             display: 'none',
           }}
@@ -106,7 +107,7 @@ export default function Nav(props: NavProps) {
                 width: 'auto',
                 display: 'block',
                 flex: 'none',
-                filter: 'drop-shadow(0 2px 6px rgba(0,0,0,0.45))',
+                filter: 'drop-shadow(0 2px 6px var(--shadow-color))',
               }}
             />
             <span class="nav-label" style={{ display: 'flex', 'flex-direction': 'column', 'line-height': 1.15 }}>
@@ -245,10 +246,11 @@ export default function Nav(props: NavProps) {
         </button>
 
         {/* The rail footer is the dashboard's only non-route control area, so the
-            display preferences — language, then the zone every timestamp is
-            rendered in — live here next to the collapse toggle. */}
+            display preferences — language, the zone every timestamp is rendered
+            in, then the palette — live here next to the collapse toggle. */}
         <LocalePicker />
         <TimezonePicker />
+        <ThemeToggle />
 
         {/* Footer: link out to the source repo. Pinned to the bottom because the
             nav list above is flex:1. Muted by default; hover lifts like a nav item. */}

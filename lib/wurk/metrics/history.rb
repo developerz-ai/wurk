@@ -129,10 +129,21 @@ module Wurk
         # one accumulator and nothing in wurk passes a second. Tests pass their
         # own so a deliberately broken pool cannot leak into a parallel test's
         # flush through the process-wide one.
+        #
+        # A shut-down pool is the one failure that is *terminal*: ConnectionPool
+        # #shutdown is one-way (see Capsule#reset_redis_pools!), so its counts
+        # can never be written by anyone. Merging them back would re-raise on
+        # every tick for the life of the process — a permanent 5s error-handler
+        # loop over a condition no operator can act on. The accumulator survives
+        # the pool that fed it (a fork inherits it; `reset_redis_pools!` is host-
+        # callable), so drop those counts, exactly as the retry cap already
+        # drops a window Redis stayed down through.
         def flush(accumulator = ACCUMULATOR)
           error = nil
           accumulator.drain.each do |pool, minutes|
             write(pool, minutes)
+          rescue ConnectionPool::PoolShuttingDownError
+            next
           rescue StandardError => e
             accumulator.merge_back(pool, minutes)
             error = e

@@ -5,19 +5,8 @@
 
 @use '../abstracts' as *;
 
-// Chained with `.wurk-navlink` for the same reason the locale trigger is:
-// Nav.tsx declares that class in an inline <style> that ships after this
-// stylesheet, so a single-class rule here would lose the tie and inherit
-// nav-item (not footer-control) colouring.
 .wurk-navlink.timezone-picker__trigger {
-  width: calc(100% - #{to-rem(16)});
-  border: 0;
-  background: transparent;
-  color: var(--text-muted);
-  font-family: inherit;
-  font-size: to-rem(13);
-  text-align: start;
-  cursor: pointer;
+  @include rail-control;
 }
 
 .timezone-picker__hint {

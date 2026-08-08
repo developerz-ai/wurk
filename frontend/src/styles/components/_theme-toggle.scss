@@ -1,0 +1,11 @@
+// ── Theme toggle ─────────────────────────────────────────────────────────────
+// The rail-footer light/dark/system control. One cycling button with no panel,
+// so the button reset shared with the other two footer controls is all it
+// needs — the collapsed-rail treatment (round glyph, centred, rail-width box)
+// comes from `.wurk-navlink` in Nav.tsx.
+
+@use '../abstracts' as *;
+
+.wurk-navlink.theme-toggle__trigger {
+  @include rail-control;
+}

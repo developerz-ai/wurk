@@ -19,6 +19,8 @@
     "language_current": "语言：{name}",
     "timezone": "时区",
     "timezone_current": "时区：{name}",
+    "theme_current": "主题：{name}",
+    "theme_next": "切换到{name}主题",
     "status_active": "系统状态：运行中",
     "status_inactive": "系统状态：已断开"
   },
@@ -267,5 +269,10 @@
     "automatic": "自动（{name}）",
     "filter": "筛选时区…",
     "empty": "没有与“{query}”匹配的时区"
+  },
+  "theme": {
+    "light": "浅色",
+    "dark": "深色",
+    "system": "系统"
   }
 }

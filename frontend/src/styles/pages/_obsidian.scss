@@ -1,27 +1,26 @@
 // ── Obsidian Engineering System ──────────────────────────────────────────────
 // Self-contained sub-system scoped under `.obs` (dashboard + metrics + profiles).
 // Monochromatic, engineered/HUD: Geist + JetBrains Mono, tonal surfaces, 1px
-// borders (no shadows), luminance over hue. Local `--obs-*` tokens keep it
-// portable; the reduced-motion carve-out lives at the bottom.
+// borders (no shadows), luminance over hue. The local `--obs-*` names keep the
+// sub-system readable; the reduced-motion carve-out lives at the bottom.
 
 @use '../abstracts' as *;
 
+// Aliases, not a second palette. These were literals duplicating `_tokens.scss`,
+// which froze `.obs` to the dark values while the rest of the SPA followed
+// `data-theme`. Fonts and radii are inherited from `:root` outright.
 .obs {
-  --obs-bg: #09090b;
-  --obs-surface: #161618;
-  --obs-surface-2: #1e1e21;
-  --obs-border: #272729;
-  --obs-border-hover: #3a3a3d;
-  --obs-text: #fafafa;
-  --obs-text-2: #e4e4e7;
-  --obs-muted: #a1a1aa;
-  --obs-faint: #3f3f46;
-  --obs-success: #3fb950;
-  --obs-danger: #f0786f;
-  --obs-radius: 8px;
-  --obs-radius-sm: 4px;
-  --font-sans: 'Geist', system-ui, -apple-system, sans-serif;
-  --font-mono: 'JetBrains Mono', ui-monospace, 'SFMono-Regular', monospace;
+  --obs-surface: var(--surface);
+  --obs-surface-2: var(--surface-strong);
+  --obs-border: var(--border);
+  --obs-border-hover: var(--border-strong);
+  --obs-text: var(--text-bright);
+  --obs-text-2: var(--text);
+  --obs-muted: var(--text-muted);
+  --obs-success: var(--success);
+  --obs-danger: var(--danger);
+  --obs-radius: var(--radius);
+  --obs-radius-sm: var(--radius-sm);
 
   font-family: var(--font-sans);
   color: var(--obs-text-2);
@@ -154,7 +153,7 @@
   display: inline-block;
 }
 .obs-legend .dot--processed {
-  background: #fafafa;
+  background: var(--mono-1);
 }
 .obs-legend .dot--failed {
   border: to-rem(1) solid var(--obs-muted);
@@ -259,8 +258,8 @@
   color: var(--obs-text-2);
 }
 .obs-chip--paused {
-  color: #d8b34a;
-  border-color: #4a3f1e;
+  color: var(--warning);
+  border-color: color-mix(in oklch, var(--warning) 30%, transparent);
 }
 
 // ── Footer CTA ──
@@ -268,7 +267,7 @@
   padding: to-rem(56) to-rem(24) to-rem(60);
   text-align: center;
   margin-bottom: to-rem(8);
-  background: radial-gradient(130% 120% at 50% 0%, #1b1b1f 0%, var(--obs-surface) 55%);
+  background: radial-gradient(130% 120% at 50% 0%, var(--obs-surface-2) 0%, var(--obs-surface) 55%);
 }
 .obs-cta__icon {
   width: to-rem(56);
@@ -322,9 +321,9 @@
   cursor: pointer;
 }
 .obs-btn--primary {
-  background: #fafafa;
-  color: #09090b;
-  border-color: #fafafa;
+  background: var(--accent);
+  color: var(--color-accent-content);
+  border-color: var(--accent);
 }
 .obs-btn--primary:hover {
   filter: brightness(0.92);
