@@ -81,13 +81,18 @@ module Wurk
       # for a client-only process) must stop stamping payloads, not just stop
       # exporting.
       #
-      # Idempotent — Chain#add removes any prior entry for the same class first.
+      # Idempotent — Chain#add and the insert helpers all drop any prior entry
+      # for the same class first.
       #
       # @param config [Wurk::Configuration]
       def install!(config = Wurk.configuration)
-        return config.client_middleware.remove(ClientMiddleware) unless enabled?(config)
+        unless enabled?(config)
+          config.client_middleware.remove(ClientMiddleware)
+          return config.server_middleware.remove(ServerMiddleware)
+        end
 
         config.client_middleware.add(ClientMiddleware)
+        install_server(config.server_middleware)
       end
 
       # Memoized against the provider that produced it rather than once for the
@@ -107,8 +112,26 @@ module Wurk
 
         (@tracer = [provider, provider.tracer(INSTRUMENTATION_NAME, Wurk::VERSION)].freeze)[1]
       end
+
+      private
+
+      # As far out in the server chain as the consumer span can go while still
+      # sitting *inside* `InterruptHandler` — see ServerMiddleware's note on why
+      # that one middleware stays outside. `InterruptHandler` prepends itself
+      # when `wurk.rb` loads, so on the process config it is always entry 0 and
+      # this lands at 1; a bare `Wurk::Configuration` (a client-only capsule, a
+      # test) has no chain to anchor against and takes the head instead.
+      # `insert_after`'s own miss behaviour is the tail, which would be the
+      # innermost position — the opposite of what this wants.
+      def install_server(chain)
+        anchor = Wurk::Middleware::InterruptHandler
+        return chain.insert_after(anchor, ServerMiddleware) if chain.exists?(anchor)
+
+        chain.prepend(ServerMiddleware)
+      end
     end
   end
 end
 
 require_relative 'telemetry/client_middleware'
+require_relative 'telemetry/server_middleware'
