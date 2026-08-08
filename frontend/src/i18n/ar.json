@@ -32,7 +32,7 @@
     "live": "مباشر",
     "paused": "متوقّف مؤقتًا",
     "strapline": "وُرك، وُرك. جاهز للعمل. زوغ زوغ.",
-    "tagline": "بديل متوافق 100% مع Sidekiq + Sidekiq Pro + Sidekiq Enterprise. مجاني للأبد. أسرع.",
+    "tagline": "بديل متوافق 100% مع Sidekiq + Sidekiq Pro + Sidekiq Enterprise. مجاني للأبد.",
     "install": "التثبيت",
     "docs": "التوثيق",
     "active": "نشط",

@@ -32,7 +32,7 @@
     "live": "Live",
     "paused": "Paused",
     "strapline": "Wurk, wurk. Ready to work. Zug zug.",
-    "tagline": "A 100% drop-in replacement for Sidekiq + Sidekiq Pro + Sidekiq Enterprise. Free forever. Faster.",
+    "tagline": "A 100% drop-in replacement for Sidekiq + Sidekiq Pro + Sidekiq Enterprise. Free forever.",
     "install": "Install",
     "docs": "Documentation",
     "active": "Active",

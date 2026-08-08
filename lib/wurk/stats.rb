@@ -172,7 +172,11 @@ module Wurk
         raise ArgumentError, "days_previous must be in 1..#{MAX_DAYS}" unless (1..MAX_DAYS).cover?(days_previous)
 
         @days_previous = days_previous
-        @start_date    = start_date || ::Date.today
+        # UTC, not `Date.today`: the writer (Launcher#write_stats) keys these
+        # buckets off `Time.now.utc`, so a local civil date reads a day the
+        # writer never wrote for whatever slice of each day the host's offset
+        # spans — the newest bucket comes back 0 and the window is shifted.
+        @start_date    = start_date || ::Time.now.utc.to_date
         @pool          = pool
       end
 
