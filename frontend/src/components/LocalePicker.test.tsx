@@ -22,6 +22,22 @@ function open() {
 
 const items = () => screen.getAllByRole('menuitemradio');
 
+// jsdom measures every element as a zero rect, so placement is the one
+// behaviour that has to be handed a real one. Viewport is jsdom's 768px tall.
+function openAt(top: number, height = 36) {
+  render(() => <LocalePicker />);
+  const trigger = screen.getByRole('button', { name: label('English') });
+  vi.spyOn(trigger, 'getBoundingClientRect').mockReturnValue({
+    top,
+    bottom: top + height,
+    left: 20,
+    right: 84,
+    height,
+  } as DOMRect);
+  fireEvent.click(trigger);
+  return screen.getByRole('menu');
+}
+
 beforeEach(() => vi.mocked(setLocale).mockClear());
 
 describe('LocalePicker', () => {
@@ -128,5 +144,35 @@ describe('LocalePicker', () => {
     open();
     fireEvent.scroll(window);
     expect(screen.queryByRole('menu')).not.toBeInTheDocument();
+  });
+
+  it('opens upward from a trigger in the rail footer', () => {
+    const menu = openAt(700);
+
+    expect(menu.style.bottom).toBe('76px');
+    expect(menu.style.top).toBe('');
+    expect(menu.style.maxHeight).toBe('684px');
+  });
+
+  it('flips below the trigger when there is no room above', () => {
+    // A short viewport or the mobile drawer can put the footer near the top;
+    // opening upward there would strand the entries off-screen.
+    const menu = openAt(10);
+
+    expect(menu.style.top).toBe('54px');
+    expect(menu.style.bottom).toBe('');
+    expect(menu.style.maxHeight).toBe('706px');
+  });
+
+  it.each([0, 40, 120, 400, 740, 760])('keeps the panel on screen from %ipx', (top) => {
+    const { style } = openAt(top);
+    const height = parseFloat(style.maxHeight);
+    // Whichever edge it is pinned to, the panel grows away from it — so both
+    // ends have to land inside the viewport.
+    const edge = parseFloat(style.bottom || style.top);
+
+    expect(height).toBeGreaterThan(0);
+    expect(edge).toBeGreaterThanOrEqual(0);
+    expect(edge + height).toBeLessThanOrEqual(window.innerHeight);
   });
 });

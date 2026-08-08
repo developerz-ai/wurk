@@ -21,13 +21,16 @@ const ENDONYMS: Record<string, string> = {
 /** Gap between the trigger and the panel, and the panel's viewport margin. */
 const GAP = 8;
 
-/** Floor for the panel height, so a trigger near the viewport top still lists. */
+/** Room the panel wants; short of it, `open()` takes the roomier side. */
 const MIN_PANEL = 160;
 
 interface Anchor {
   /** Distance from the viewport's inline-start edge (right edge under RTL). */
   start: number;
-  bottom: number;
+  /** Whether the panel hangs above the trigger; below it when false. */
+  up: boolean;
+  /** Distance from the viewport edge the panel is pinned to. */
+  offset: number;
   maxHeight: number;
 }
 
@@ -59,10 +62,21 @@ export default function LocalePicker() {
     // which would otherwise clip it to 64px in the collapsed rail. Anchored to
     // the trigger's inline-start edge — the viewport's right edge under RTL.
     const rtl = document.documentElement.dir === 'rtl';
+    // Room left on each side of the trigger once both gaps are spent: one
+    // between panel and trigger, one between panel and viewport edge.
+    const above = r.top - GAP * 2;
+    const below = window.innerHeight - r.bottom - GAP * 2;
+    // Upward is the natural direction — the trigger sits in the rail's footer —
+    // but a trigger high in the viewport would push a fixed panel off the top
+    // edge, where its own scrollbar can't bring the clipped entries back.
+    const up = above >= MIN_PANEL || above >= below;
     setAnchor({
       start: rtl ? window.innerWidth - r.right : r.left,
-      bottom: window.innerHeight - r.top + GAP,
-      maxHeight: Math.max(r.top - GAP * 2, MIN_PANEL),
+      up,
+      offset: up ? window.innerHeight - r.top + GAP : r.bottom + GAP,
+      // Never taller than the side it opened onto: entries past the viewport
+      // edge are unreachable, entries past the panel's edge only need a scroll.
+      maxHeight: Math.max(up ? above : below, 0),
     });
     // Solid renders the panel synchronously with the write above, so its refs
     // are already assigned here.
@@ -114,7 +128,7 @@ export default function LocalePicker() {
   };
 
   const onTriggerKeyDown = (e: KeyboardEvent) => {
-    // The panel opens upward, so both arrows are natural "open it" keys.
+    // The panel lands on whichever side has room, so both arrows open it.
     if (isOpen() || (e.key !== 'ArrowUp' && e.key !== 'ArrowDown')) return;
     e.preventDefault();
     open();
@@ -168,7 +182,7 @@ export default function LocalePicker() {
               class="locale-menu"
               style={{
                 'inset-inline-start': `${pos().start}px`,
-                bottom: `${pos().bottom}px`,
+                ...(pos().up ? { bottom: `${pos().offset}px` } : { top: `${pos().offset}px` }),
                 'max-height': `${pos().maxHeight}px`,
               }}
               onKeyDown={onPanelKeyDown}
