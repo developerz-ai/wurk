@@ -47,7 +47,13 @@ module Wurk
       # job in the process, tracked or not.
       #
       # Rescue taxonomy mirrors Batch::ServerMiddleware — a handled skip and a
-      # cooperative interruption are not failures. Caveat inherited from the
+      # cooperative interruption are not failures. A job cut by its absolute
+      # `deadline` deliberately is one here, where the two metric emitters count
+      # it as processed-and-expired instead: those feed an aggregate an operator
+      # subtracts (executed = processed - failed - expired), while this row
+      # answers "what happened to this job" — it did not finish, and
+      # `error_class`/`error_message` say why. `interrupted` would promise a
+      # resume that never comes. Caveat inherited from the
       # chain position it shares with Metrics::History: a `Limiter::OverLimit`
       # raised inside the job body unwinds through here *before* Limiter (outer)
       # converts it into a reschedule, so a rate-limited job books `failed` for

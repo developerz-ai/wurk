@@ -71,17 +71,25 @@ module Wurk
           result = yield
           success = true
           result
-        rescue Wurk::Job::Interrupted
-          # A cooperative interruption is not a failure. InterruptHandler
-          # self-prepends, so it sits *outside* this middleware: Interrupted
-          # passes through here before it becomes a JobRetry::Skip, and
-          # without this arm one interrupted IterableJob books a spurious
-          # `<klass>|f` (#394). Upstream's ExecutionTracker#track books `p`
-          # + `ms` for that Skip and reserves `f` for a real exception; `p`
-          # is the bucket for "reached perform and didn't error", so the
-          # resumed run booking a second `p` is the oracle's behavior, not a
-          # rounding error. Signed off in
+        rescue Wurk::Job::Interrupted, Wurk::Job::DeadlineExceeded
+          # Neither is the job failing. A cooperative interruption is not a
+          # failure: InterruptHandler self-prepends, so it sits *outside* this
+          # middleware, Interrupted passes through here before it becomes a
+          # JobRetry::Skip, and without this arm one interrupted IterableJob
+          # books a spurious `<klass>|f` (#394). Upstream's
+          # ExecutionTracker#track books `p` + `ms` for that Skip and reserves
+          # `f` for a real exception; `p` is the bucket for "reached perform and
+          # didn't error", so the resumed run booking a second `p` is the
+          # oracle's behavior, not a rounding error. Signed off in
           # docs/plans/2026/08/07/101-beyond-sidekiq/00-semantics-signoff.md §1.
+          #
+          # A job cut by its absolute deadline lands in the same bucket for a
+          # plainer reason: Middleware::Expiry, also outside this one, catches
+          # that raise and books the job `expired`. Booking `f` here too would
+          # put one abandoned job in two of the three counts an operator
+          # subtracts (executed = processed - failed - expired), and would make
+          # it the only expired job that also reads as failed — the ones dropped
+          # before `perform` never reach this middleware at all.
           success = true
           raise
         ensure

@@ -32,6 +32,14 @@ module Wurk
     # breaking every `Timeout.timeout(...)` written inside a `perform`.
     class TimedOut < RuntimeError; end
 
+    # Raised into the thread running `perform` by {Wurk::Watchdog} once the job
+    # outlives `sidekiq_options deadline:` — the cutoff measured from enqueue,
+    # not from this attempt. Unlike {TimedOut} it is not a failure to retry:
+    # {Wurk::Middleware::Expiry} catches it and books the job `expired`, the
+    # same terminal state as one whose deadline had already passed before it
+    # started. A job may still rescue it to clean up after itself.
+    class DeadlineExceeded < RuntimeError; end
+
     # Per-call option carrier returned by `set(...)`. Sidekiq 7+ documents it
     # under the modern mixin name `Sidekiq::Job::Setter`; since
     # `Sidekiq::Job = Wurk::Job`, this rebind is what makes that constant

@@ -253,7 +253,7 @@ reputation.
 |---|---|---|
 | 05 OpenTelemetry | `traceparent`, optionally `tracestate` | only when tracing is opted in (`Telemetry.available?` **and** host opt-in) |
 | 06 Status | one opt-in marker key (exact name settled in 06 against the `sidekiq-status` ecosystem suite's existing key names — must not collide) | only for a worker class with `wurk_options track: true` |
-| 08 Timeout/deadline | `timeout`, `deadline` | only when set in `wurk_options` |
+| 08 Timeout/deadline | `timeout`, `deadline`, plus `deadline_at` — the absolute epoch-float `deadline` resolves to at push, exactly as Pro's `expires_in` resolves to `expiry` (`job_util.rb`) | only when set in `wurk_options` |
 
 **Required to hold, for every key any of the three slices add:**
 

@@ -39,10 +39,14 @@ class MetricsEmitterAgreementTest < Wurk::Test::UnitCase
   end
 
   # Job outcome → the classification both emitters owe it. The interrupted row
-  # is #394: a cooperative interruption is not a failure.
+  # is #394: a cooperative interruption is not a failure. Neither is a job cut
+  # by its absolute deadline — Middleware::Expiry books that one `expired`, and
+  # counting it failed here as well would put one abandoned job in two of the
+  # three counts an operator subtracts.
   PATHS = [
     ['clean return', :processed, -> { :ok }],
     ['cooperative interruption', :processed, -> { raise Wurk::Job::Interrupted }],
+    ['deadline cut', :processed, -> { raise Wurk::Job::DeadlineExceeded }],
     ['real exception', :failed, -> { raise 'boom' }]
   ].freeze
 

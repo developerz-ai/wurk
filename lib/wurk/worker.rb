@@ -111,13 +111,17 @@ module Wurk
       #   sidekiq_options queue: "mailers", retry: 3, unique_for: 10.minutes
       # @example Opt into Wurk::Status tracking
       #   sidekiq_options track: true
+      # @example Bound one attempt, and the job as a whole
+      #   sidekiq_options timeout: 30, deadline: 5.minutes
       # @param opts [Hash] any of `queue:`, `retry:`, `dead:`, `backtrace:`,
-      #   `expires_in:`, `tags:`, `pool:`, `unique_for:`, `track:`, … (see the
-      #   migration guide's sidekiq_options table for the full set)
+      #   `expires_in:`, `tags:`, `pool:`, `unique_for:`, `track:`, `timeout:`,
+      #   `deadline:`, … (see the migration guide's sidekiq_options table for
+      #   the full set)
       # @return [Hash] the merged, string-keyed options hash
       def sidekiq_options(opts = {})
         stringified = opts.transform_keys(&:to_s)
         Wurk::JobUtil.validate_track!(stringified['track'], stringified) if stringified.key?('track')
+        Wurk::JobUtil.validate_bounds!(stringified)
         @sidekiq_options_hash = get_sidekiq_options.merge(stringified)
       end
 
