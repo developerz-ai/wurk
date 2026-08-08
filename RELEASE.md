@@ -40,7 +40,32 @@ GitHub's short-lived OIDC token for a scoped RubyGems credential at push time.
    The `release` workflow (`.github/workflows/release.yml`) triggers on `v*`
    tags and does the rest, end-to-end, with no human-held secret.
 
-## What the release workflow does (on a `v*` tag)
+   > **Never tag ahead of step 4.** The tag must point at a commit whose
+   > `Wurk::VERSION` already equals it. Tagging first is the one way to strand a
+   > release — see below.
+
+## If a release fails
+
+`release:check` runs *inside* the tag-triggered workflow, so a tag pushed at a
+commit that was never bumped fails the gate and publishes nothing — but the
+maintainer agent writes the GitHub Release notes at tag time, independently. The
+result is a tag and a **GitHub Release marked `Latest` with no gem behind it**,
+while `gem install wurk` quietly keeps serving the previous version. This is what
+happened to the first `v1.5.0` (tagged at `13b64e8`, `Wurk::VERSION` still
+`1.4.0`, [run 31114866972](https://github.com/developerz-ai/wurk/actions/runs/31114866972)).
+
+Recovering, once the real bump is merged to `main`:
+
+```bash
+gh release delete v1.5.0 --yes        # drop the gem-less Release
+git push origin --delete v1.5.0       # drop the remote tag
+git tag -d v1.5.0                     # and the local one
+git tag v1.5.0 <merge-commit> && git push origin v1.5.0
+```
+
+Deleting and re-cutting is only safe because **no gem was ever published** for
+that version — RubyGems forbids re-pushing a version, so once a `.gem` is live
+the number is burned and the next release must take the following one.
 
 1. Checks out, sets up Ruby + Node.
 2. Precompiles the Vite SPA into `vendor/assets/` (`rake frontend:build`).
