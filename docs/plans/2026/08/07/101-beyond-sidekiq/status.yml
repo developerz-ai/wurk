@@ -1,0 +1,64 @@
+plan: 101-beyond-sidekiq
+title: Beyond Sidekiq
+status: not_started
+created_by: sebi
+worked_by: ""
+owner: sebi
+percent: 0
+current_focus: "01-metrics-interrupted-job.md — needs the upstream ExecutionTracker parity call before code (issue #394)"
+slices:
+  - file: 00-census.md
+    status: complete
+    percent: 100
+  - file: 01-metrics-interrupted-job.md
+    status: not_started
+    percent: 0
+  - file: 02-frontend-locale.md
+    status: not_started
+    percent: 0
+  - file: 03-frontend-theme.md
+    status: not_started
+    percent: 0
+  - file: 04-frontend-dates.md
+    status: not_started
+    percent: 0
+  - file: 05-opentelemetry.md
+    status: not_started
+    percent: 0
+  - file: 06-job-status-results.md
+    status: not_started
+    percent: 0
+  - file: 07-http-producer-api.md
+    status: not_started
+    percent: 0
+  - file: 08-timeout-deadline.md
+    status: not_started
+    percent: 0
+  - file: 09-debounce-throttle.md
+    status: not_started
+    percent: 0
+  - file: 10-global-concurrency.md
+    status: not_started
+    percent: 0
+  - file: 11-flows.md
+    status: not_started
+    percent: 0
+  - file: 12-docs-site.md
+    status: not_started
+    percent: 0
+evidence:
+  - "00-census.md — cross-ecosystem survey completed 2026-08-07 (BullMQ/Pro, Oban Pro, River, Asynq, Faktory, Celery, Dramatiq, pg-boss, Laravel/Horizon, Hangfire, Temporal/Inngest/Trigger.dev/Hatchet, Solid Queue, GoodJob, SQS, Cloud Tasks). Sources linked in that file. No code."
+notes: >
+  Additive-only plan: every slice must be inert when unused — no change to the default
+  enqueue/fetch/execute path, no existing Redis key or JSON field touched. Slice 10
+  (global concurrency) is the sole hot-path slice and is explicitly allowed to close as
+  "deferred" if it can't clear the bench gate; that is a documented acceptable outcome,
+  not a failure. Slice 03 (light theme) is blocked on a maintainer call — CLAUDE.md and
+  docs/idea/08-dashboard.md both declare the dashboard dark-only by design.
+  Slice 01 fixes issue #394 and is independent of everything else; it needs a parity
+  determination against upstream Metrics::ExecutionTracker first, and Metrics::Statsd
+  (Pro §9) has the identical shape and must be settled in the same pass.
+  06 blocks 07 (GET /jobs/:jid) and 11 (chains need stored results). 02-04 (frontend)
+  are disjoint from 05-11 (backend) and can run in parallel in this checkout.
+  12 runs last and documents only what actually shipped.
+last_updated: 2026-08-07
