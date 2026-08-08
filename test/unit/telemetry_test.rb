@@ -140,16 +140,20 @@ class TelemetryTest < Wurk::Test::UnitCase
   # attributable to lib/wurk/telemetry.rb in the coverage report, which cannot
   # follow an exec'd child.
 
-  # Safe despite `parallelize_me!`: that is a stub in test/test_helper.rb —
-  # minitest-parallel_fork splits by process, and tests inside a worker run
-  # sequentially — so no other class can observe the constant mid-flight.
+  # `::OpenTelemetry` is process-global and the three sibling telemetry classes
+  # define it too, so hold the mutex they hold. Scoped to this method rather
+  # than the whole class the way they do it: the subprocess cases above touch no
+  # shared state, and guarding `run` would serialize a dozen `IO.popen`s behind
+  # TelemetryForkTest's real swarms for nothing.
   def with_otel(*methods)
-    api = Module.new
-    methods.each { |m| api.define_singleton_method(m) { nil } }
-    Object.const_set(:OpenTelemetry, api)
-    yield
-  ensure
-    Object.send(:remove_const, :OpenTelemetry)
+    Wurk::Test::GLOBAL_STATE_MUTEX.synchronize do
+      api = Module.new
+      methods.each { |m| api.define_singleton_method(m) { nil } }
+      Object.const_set(:OpenTelemetry, api)
+      yield
+    ensure
+      Object.send(:remove_const, :OpenTelemetry)
+    end
   end
 
   def silent_config

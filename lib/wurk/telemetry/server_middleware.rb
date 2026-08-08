@@ -43,6 +43,16 @@ module Wurk
       # that would otherwise have already ruled on the producer's trace.
       PARENT_WINDOW_SECONDS = 60
 
+      # `created_at` is epoch millis today — `JobUtil#now_in_millis`, and
+      # upstream's own since Sidekiq 8.x — but Sidekiq <= 7.x stamped a Float of
+      # epoch *seconds*, and those payloads outlive the upgrade in the retry,
+      # scheduled and dead sets. Read shape-agnostically on the same threshold
+      # `JobRecord#parse_time` and `Stats` use: no epoch-second stamp reaches
+      # ten digits until 2286, and no epoch-milli one has been under it since
+      # April 1970. Assuming millis would date every seconds-shaped job to 1970
+      # and demote a perfectly fresh one from parent to link.
+      SECONDS_SHAPED_BELOW = 10_000_000_000
+
       # Retries carry the *original* `traceparent`: `JobRetry#schedule_retry`
       # re-ZADDs the same hash, so the client chain — and with it injection —
       # never runs again. That is deliberate and it is the answer to "one trace
@@ -110,14 +120,18 @@ module Wurk
         [::OpenTelemetry::Trace::Link.new(producer)] if producer.valid?
       end
 
-      # Age of the *trace context*, not of the enqueue: `created_at` (epoch
-      # millis, JobUtil#now_in_millis) is stamped at push, which is when the
-      # producer span ended. `enqueued_at` would be wrong here — the scheduler
-      # re-stamps it when it moves a job onto the queue, so every scheduled job
-      # would look fresh no matter how long it waited.
+      # Age of the *trace context*, not of the enqueue: `created_at` is stamped
+      # at push, which is when the producer span ended. `enqueued_at` would be
+      # wrong here — the scheduler re-stamps it when it moves a job onto the
+      # queue, so every scheduled job would look fresh no matter how long it
+      # waited.
       def age_of(job)
         created = job['created_at']
-        created && (::Process.clock_gettime(::Process::CLOCK_REALTIME) - (created.to_f / 1000.0))
+        return nil if created.nil?
+
+        created = created.to_f
+        seconds = created < SECONDS_SHAPED_BELOW ? created : created / 1000.0
+        ::Process.clock_gettime(::Process::CLOCK_REALTIME) - seconds
       end
 
       # Same `messaging.*` vocabulary as the producer half, so one query spans

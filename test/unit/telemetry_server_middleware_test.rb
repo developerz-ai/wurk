@@ -114,6 +114,23 @@ class TelemetryServerMiddlewareTest < Wurk::Test::UnitCase
     assert_equal [FakeOtel::Trace::Context, :root], [inside.class, outside]
   end
 
+  # The other `created_at` shape a drop-in has to read: Sidekiq <= 7.x wrote a
+  # Float of epoch seconds, and those payloads survive the upgrade in the retry
+  # and scheduled sets. Divided by 1000 they date to 1970, so a millis-only read
+  # links every one of them — including the ones enqueued a second ago.
+  def test_the_window_decides_on_a_seconds_shaped_created_at_too
+    inside  = with_otel { perform(traced_job('created_at' => seconds_ago(1))) } && span.parent
+    outside = with_otel { perform(traced_job('created_at' => seconds_ago(3600))) } && span.parent
+
+    assert_equal [FakeOtel::Trace::Context, :root], [inside.class, outside]
+  end
+
+  def test_a_seconds_shaped_child_points_at_the_producer
+    with_otel { perform(traced_job('created_at' => seconds_ago(1))) }
+
+    assert_equal [TRACE_ID, SPAN_ID], [parent_context.trace_id, parent_context.span_id]
+  end
+
   # Conservative on an unknown age: a link where a parent belonged costs one hop
   # in the UI; a parent where a link belonged can lose the trace outright.
   def test_a_job_with_no_created_at_links_instead_of_parenting
@@ -328,6 +345,10 @@ class TelemetryServerMiddlewareTest < Wurk::Test::UnitCase
   def millis_ago(seconds)
     ((Process.clock_gettime(Process::CLOCK_REALTIME) - seconds) * 1000).to_i
   end
+
+  # Float epoch seconds — what Sidekiq <= 7.x stamped, and still the shape of
+  # anything it left behind in a sorted set.
+  def seconds_ago(seconds) = Process.clock_gettime(Process::CLOCK_REALTIME) - seconds
 
   # Through a real Chain so entry construction and config binding are exercised
   # the way the Processor exercises them.

@@ -302,10 +302,15 @@ class TelemetryForkTest < Wurk::Test::UnitCase
                  'both ends of the hop must agree on the jid — the messaging conventions survive the fork too'
   end
 
-  # `created_at`/`enqueued_at` (epoch seconds, Sidekiq's own format — Wurk
-  # matches it) plus the handful of keys `Sidekiq::Client` actually writes.
-  # Deliberately built by hand rather than via Wurk::Client so no Wurk-only
-  # field (`traceparent` chief among them) can leak in.
+  # Only the keys `Sidekiq::Client` actually writes, built by hand rather than
+  # pushed through Wurk::Client so no Wurk-only field (`traceparent` chief among
+  # them) can leak in. `created_at`/`enqueued_at` are Float epoch *seconds* —
+  # what Sidekiq <= 7.x stamped, not the millis Wurk and Sidekiq 8.x write —
+  # because the old shape is the one a drop-in still has to read. That shape is
+  # incidental to what this case proves, though: with no `traceparent` there is
+  # no producer context to age, so the span is a root either way and
+  # `ServerMiddleware#age_of` never runs. The shape itself is pinned in the unit
+  # suite instead.
   def push_stock_sidekiq_job
     jid = SecureRandom.hex(12)
     now = Time.now.to_f
