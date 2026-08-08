@@ -332,6 +332,7 @@ Define jobs exactly as before — `include Sidekiq::Job` (or `Sidekiq::Worker`) 
 | `tags:` | ✅ | array of strings; surfaced in the dashboard + logs |
 | `batch` | ✅ (Pro, free) | not a `sidekiq_options` key — `bid` is stamped automatically inside `Sidekiq::Batch#jobs { … }`; access via `#bid` / `#batch` |
 | `pool:` | ✅ | selects the client Redis pool; stripped from the stored payload |
+| `track:` (`true` / `false`) | ➕ Wurk extra | opt into `Wurk::Status` — a `status:<jid>` row carrying state, progress, timings, result and error. Default `false`: a class that doesn't opt in writes nothing and costs nothing. Lifetime via `status_ttl` / `status_retention` |
 | `lock:` | ⚠️ not native | Wurk's native uniqueness uses `unique_for:` / `unique_until:` (see [§6](#6-third-party-gem-mappings)). The `sidekiq-unique-jobs` gem and its `lock:` option also run against Wurk in the ecosystem CI suite |
 
 Custom retry hooks are unchanged: `sidekiq_retry_in { |count, ex, msg| … }` and

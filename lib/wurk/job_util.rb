@@ -21,16 +21,33 @@ module Wurk
 
     RETRY_FOR_MAX = 1_000_000_000
 
+    # The only values `track` (the Wurk::Status opt-in) may hold. Checked
+    # rather than coerced because {Wurk::Status.tracked?} asks the payload for
+    # truthiness: `track: 'false'` would track every job of the class, and
+    # `track: :maybe` would too. Both read as "off" to whoever wrote them and
+    # cost a Redis row per job until someone goes looking in the key space.
+    TRACK_VALUES = [true, false, nil].freeze
+
+    # Both doors `track` can come through — a class-level `sidekiq_options`
+    # (worker or ActiveJob) and a raw payload push — end up here, so the two
+    # DSL copies stay in sync by calling the same check rather than repeating
+    # it. Rejected where it was written, not where it is read.
+    #
+    # @raise [ArgumentError] unless `value` is true, false, or absent.
+    def self.validate_track!(value, subject)
+      return if TRACK_VALUES.include?(value)
+
+      raise(ArgumentError, "Job 'track' must be true or false: `#{subject}`")
+    end
+
     # @raise [ArgumentError] if the payload is structurally invalid.
     def validate(item)
       raise(ArgumentError, "Job must be a Hash with 'class' and 'args' keys: `#{item}`") unless valid_shape?(item)
       raise(ArgumentError, "Job args must be an Array: `#{item}`") unless item['args'].is_a?(Array)
       raise(ArgumentError, "Job class must be a Class or String: `#{item}`") unless valid_class?(item['class'])
       raise(ArgumentError, "Job 'at' must be a Numeric timestamp: `#{item}`") unless valid_at?(item)
-      raise(ArgumentError, "Job tags must be an Array: `#{item}`") unless valid_tags?(item)
-      return if valid_retry_for?(item)
 
-      raise(ArgumentError, "Job retry_for over #{RETRY_FOR_MAX} is unreasonable: `#{item}`")
+      validate_option_values(item)
     end
 
     # Walk args; report the first non-JSON-native value according to the
@@ -60,6 +77,18 @@ module Wurk
     end
 
     private
+
+    # The second half of #validate: the keys a caller *may* set rather than the
+    # ones every job must have. Split off for the ABC ceiling alone — the two
+    # halves run back to back and mean the same thing.
+    def validate_option_values(item)
+      raise(ArgumentError, "Job tags must be an Array: `#{item}`") unless valid_tags?(item)
+
+      JobUtil.validate_track!(item['track'], item)
+      return if valid_retry_for?(item)
+
+      raise(ArgumentError, "Job retry_for over #{RETRY_FOR_MAX} is unreasonable: `#{item}`")
+    end
 
     def valid_shape?(item) = item.is_a?(Hash) && item.key?('class') && item.key?('args')
     def valid_class?(klass) = klass.is_a?(Class) || klass.is_a?(String)

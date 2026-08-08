@@ -156,8 +156,17 @@ module Wurk
       # The three terminal transitions. Each builds its fields *inside*
       # `safely`, so neither a Redis blip nor a return value that refuses to
       # serialize can replace the exception the caller is about to re-raise.
+      #
+      # `status_retention` bends the row's lifetime, and only here: a job that
+      # succeeded is the one the census gap is about — Sidekiq loses it the
+      # instant it finishes — while a failed or dead job is still findable in
+      # the retry and dead sets. `0` reproduces that loss on purpose, so a host
+      # that wants tracking only for jobs in flight keeps today's key space.
       def complete(jid, progress, result)
-        safely { finish(jid, progress, state: 'complete', **encode_result(result)) }
+        keep = ::Wurk::Status.retention
+        return safely { ::Wurk::Status.delete(jid, pool: redis_pool) } if keep&.zero?
+
+        safely { finish(jid, progress, ttl: keep, state: 'complete', **encode_result(result)) }
       end
 
       def interrupted(jid, progress)

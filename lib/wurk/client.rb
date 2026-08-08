@@ -3,6 +3,7 @@
 require_relative 'iterable_job'
 require_relative 'job_util'
 require_relative 'lua'
+require_relative 'status'
 
 module Wurk
   # Enqueue interface. Pipelined LPUSH / ZADD writes against the canonical
@@ -425,8 +426,27 @@ module Wurk
       conn.pipelined do |pipe|
         pipe.call('SADD', 'queues', queue)
         pipe.call('LPUSH', "queue:#{queue}", *serialized)
+        track_enqueued(pipe, jobs, now)
       end
       mark_delivered(jobs)
+    end
+
+    # Ride the pipeline that is already open for the queue write, so a tracked
+    # push costs the same round trip an untracked one does. An app that never
+    # opts in pays one Hash lookup per payload here and appends nothing: the
+    # plain push stays exactly the two commands (SADD + LPUSH) it has always
+    # been, which is what `rake bench:command_count_tracked_off` asserts.
+    #
+    # The TTL is resolved once per group, and only when something is actually
+    # tracked — an untracked push never reads the config at all.
+    def track_enqueued(pipe, jobs, now)
+      ttl = nil
+      jobs.each do |job|
+        next unless job['track']
+
+        ttl ||= Wurk::Status.default_ttl(@config)
+        Wurk::Status.enqueued(pipe, job, now, ttl: ttl)
+      end
     end
 
     # Batched jobs route through BATCH_PUSH: increments b-<bid> total+pending,
@@ -452,6 +472,11 @@ module Wurk
           argv: [j['queue'], j['jid'], Wurk.dump_json(j), j['bid'], Wurk::Batch::DEFAULT_EXPIRY_SECONDS]
         )
       end
+      # Same pipeline, so a batched tracked push keeps its one round trip too.
+      # This slice is the one that gets replayed on NOSCRIPT (see
+      # #eval_batched_slice); HSET + EXPIRE are idempotent, so a replay writes
+      # the same row twice rather than double-counting anything.
+      track_enqueued(conn, payloads, now)
     end
 
     # Scheduled batched jobs route through BATCH_SCHEDULE: the SADD-guarded

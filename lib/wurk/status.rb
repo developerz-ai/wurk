@@ -18,8 +18,10 @@ module Wurk
   #                         finished_at, progress, total, message, result,
   #                         error_class, error_message, attempt
   #
-  # Every write re-stamps {Wurk::Keys::STATUS_TTL}, so an abandoned row
-  # disappears on its own — no sweeper, no unbounded key growth.
+  # Every write re-stamps the row's TTL (`status_ttl`, default
+  # {Wurk::Keys::STATUS_TTL}), so an abandoned row disappears on its own — no
+  # sweeper, no unbounded key growth. A succeeded job's row can be kept longer,
+  # or dropped immediately, via `status_retention`.
   #
   # Tracking is opt-in per worker class. A class that doesn't opt in never
   # reaches this module, so an untracked job costs exactly what it costs today.
@@ -39,6 +41,47 @@ module Wurk
       # class's `sidekiq_options`), so a job enqueued before the option was set
       # keeps running untracked to completion instead of half-tracking.
       def tracked?(job) = job['track'] ? true : false
+
+      # @return [Integer] seconds a status row lives, re-stamped on every write.
+      def default_ttl(config = Wurk.configuration) = (config[:status_ttl] || Keys::STATUS_TTL).to_i
+
+      # How long a `complete` row outlives the job that wrote it.
+      #
+      # @return [Integer, nil] nil (the default) to expire on the same clock as
+      #   every other row; 0 to delete the row the moment the job succeeds,
+      #   which is what Sidekiq does today — a succeeded job leaves nothing.
+      def retention(config = Wurk.configuration) = config[:status_retention]&.to_i
+
+      # Append this job's `enqueued` row onto an already-open pipeline — the
+      # client's own queue-write pipeline, never one of ours. Two commands, no
+      # round trip of its own, and nothing at all for a job whose class never
+      # opted in: {Wurk::Client} does not call this for an untracked payload,
+      # so a plain push stays exactly the SADD + LPUSH it has always been.
+      #
+      # HSET + EXPIRE rather than the status_write script, for two reasons. A
+      # NOSCRIPT from an EVALSHA surfaces only when the pipeline finalizes, and
+      # Client#push_immediate keeps Lua out of the plain pipeline precisely so
+      # a script reload can never replay an already-applied LPUSH into a second
+      # copy of the job; both commands here are idempotent, so they are also
+      # safe in the batched pipeline, which does replay. And the create gate
+      # the script exists for is meaningless on this path: this write IS the
+      # create.
+      #
+      # Only immediate pushes write a row. A scheduled job sits in the ZSET for
+      # minutes or days — well past {#default_ttl} — so a row claiming
+      # `enqueued` would expire before the job ran, and the state machine has
+      # no `scheduled` state to tell the truth with. Its first row is the
+      # `running` one the server middleware writes, which re-derives every
+      # timestamp from the payload anyway.
+      def enqueued(pipe, job, at_millis, ttl: default_ttl)
+        jid = job['jid']
+        return if jid.nil? || jid.to_s.empty?
+
+        row = key(jid)
+        pipe.call('HSET', row, 'state', 'enqueued', 'class', job['class'].to_s,
+                  'queue', job['queue'].to_s, 'enqueued_at', (at_millis / 1000.0).to_s)
+        pipe.call('EXPIRE', row, ttl)
+      end
 
       # @return [Wurk::Status::Record, nil] nil when no row exists — the jid is
       #   unknown, the class isn't tracked, or the row's TTL has lapsed.
@@ -66,14 +109,14 @@ module Wurk
       # fall away.
       #
       # @return [Boolean] true when the row was written.
-      def write(jid, ttl: Keys::STATUS_TTL, create: true, pool: nil, **fields) # rubocop:disable Naming/PredicateMethod
+      def write(jid, ttl: nil, create: true, pool: nil, **fields) # rubocop:disable Naming/PredicateMethod
         validate_state!(fields[:state])
         argv = flatten(fields)
         return false if argv.empty?
 
         wrote = with_pool(pool) do |conn|
           Lua::Loader.eval_cached(conn, :status_write, keys: [key(jid)],
-                                                       argv: [ttl.to_i, create ? '1' : '0', *argv])
+                                                       argv: [(ttl || default_ttl).to_i, create ? '1' : '0', *argv])
         end
         wrote.to_i == 1
       end

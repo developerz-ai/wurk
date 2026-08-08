@@ -8,6 +8,7 @@ require_relative 'pool_checkout'
 require_relative 'context'
 require_relative 'topology'
 require_relative 'redis_options'
+require_relative 'keys'
 
 module Wurk
   # Owns runtime knobs (concurrency, queues, timeouts, lifecycle events,
@@ -46,7 +47,18 @@ module Wurk
       backtrace_cleaner: ->(bt) { bt },
       logged_job_attributes: %w[bid tags],
       redis_idle_timeout: nil,
-      redis_error_handlers: []
+      redis_error_handlers: [],
+      # Wurk extras, appended after the mirrored keys so the Sidekiq prefix
+      # above stays byte-for-byte what a gem reading @options expects.
+      #
+      # Lifetime of a `status:<jid>` row (Wurk::Status), re-stamped on every
+      # write, and the separate lifetime a `complete` row gets once the job
+      # succeeded. Retention is off by default — nil means a finished job's
+      # row expires on the same clock as a running one. Set it to seconds to
+      # keep succeeded jobs around longer than they ran, or to 0 for Sidekiq's
+      # own behavior, where a job that succeeds leaves nothing behind.
+      status_ttl: Keys::STATUS_TTL,
+      status_retention: nil
     }.freeze
 
     # :fork fires only inside swarm children, after fork + internal AR/Redis

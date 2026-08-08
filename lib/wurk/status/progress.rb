@@ -1,7 +1,5 @@
 # frozen_string_literal: true
 
-require_relative '../keys'
-
 module Wurk
   module Status
     # The in-job progress handle: `status.at(row, total, 'importing')`.
@@ -25,7 +23,9 @@ module Wurk
 
       attr_reader :jid
 
-      def initialize(jid, ttl: Keys::STATUS_TTL, interval: INTERVAL, pool: nil)
+      # `ttl: nil` defers to `status_ttl` at write time rather than freezing the
+      # configured value into every handle the process builds.
+      def initialize(jid, ttl: nil, interval: INTERVAL, pool: nil)
         @jid      = jid.to_s
         @ttl      = ttl
         @interval = interval
