@@ -117,6 +117,122 @@ describe('locale-aware formatting', () => {
   });
 });
 
+// Full ladder walk, past and future, for every shipped locale that isn't
+// English — pins the exact CLDR strings (including the day/year "yesterday" /
+// "next year" idioms numeric:'auto' substitutes at count 1) so a future CLDR
+// update or a ladder-threshold regression fails loudly instead of silently
+// changing copy in one locale.
+describe('relativeTime across locales', () => {
+  beforeEach(() => {
+    vi.useFakeTimers();
+    vi.setSystemTime(NOW);
+  });
+  afterEach(() => {
+    vi.useRealTimers();
+    document.getElementById('wurk-root')?.remove();
+    vi.resetModules();
+  });
+
+  const BOUNDARIES: { [locale: string]: { ago: [number, string][]; ahead: [number, string][] } } = {
+    en: {
+      ago: [
+        [0, 'now'],
+        [45, '45 seconds ago'],
+        [170, '3 minutes ago'],
+        [3 * 3600, '3 hours ago'],
+        [86400, 'yesterday'],
+        [2 * 86400, '2 days ago'],
+        [21 * 86400, '3 weeks ago'],
+        [100 * 86400, '3 months ago'],
+        [800 * 86400, '2 years ago'],
+      ],
+      ahead: [
+        [150, 'in 3 minutes'],
+        [86400, 'tomorrow'],
+        [3 * 86400, 'in 3 days'],
+      ],
+    },
+    de: {
+      ago: [
+        [0, 'jetzt'],
+        [45, 'vor 45 Sekunden'],
+        [170, 'vor 3 Minuten'],
+        [3 * 3600, 'vor 3 Stunden'],
+        [86400, 'gestern'],
+        [2 * 86400, 'vorgestern'],
+        [21 * 86400, 'vor 3 Wochen'],
+        [100 * 86400, 'vor 3 Monaten'],
+        [800 * 86400, 'vor 2 Jahren'],
+      ],
+      ahead: [
+        [150, 'in 3 Minuten'],
+        [86400, 'morgen'],
+        [3 * 86400, 'in 3 Tagen'],
+      ],
+    },
+    ja: {
+      ago: [
+        [0, '今'],
+        [45, '45 秒前'],
+        [170, '3 分前'],
+        [3 * 3600, '3 時間前'],
+        [86400, '昨日'],
+        [2 * 86400, '一昨日'],
+        [21 * 86400, '3 週間前'],
+        [100 * 86400, '3 か月前'],
+        [800 * 86400, '2 年前'],
+      ],
+      ahead: [
+        [150, '3 分後'],
+        [86400, '明日'],
+        [3 * 86400, '3 日後'],
+      ],
+    },
+    ar: {
+      ago: [
+        [0, 'الآن'],
+        [45, 'قبل 45 ثانية'],
+        [170, 'قبل 3 دقائق'],
+        [3 * 3600, 'قبل 3 ساعات'],
+        [86400, 'أمس'],
+        [2 * 86400, 'أول أمس'],
+        [21 * 86400, 'قبل 3 أسابيع'],
+        [100 * 86400, 'قبل 3 أشهر'],
+        [800 * 86400, 'قبل سنتين'],
+      ],
+      ahead: [
+        [150, 'خلال 3 دقائق'],
+        [86400, 'غدًا'],
+        [3 * 86400, 'خلال 3 أيام'],
+      ],
+    },
+  };
+
+  for (const [loc, { ago, ahead }] of Object.entries(BOUNDARIES)) {
+    it(`walks the past ladder in ${loc}`, async () => {
+      const mod = await utilsIn(loc);
+      for (const [seconds, expected] of ago) {
+        expect(mod.relativeTime(EPOCH - seconds)).toBe(expected);
+      }
+    });
+
+    it(`walks the future ladder in ${loc}`, async () => {
+      const mod = await utilsIn(loc);
+      for (const [seconds, expected] of ahead) {
+        expect(mod.relativeTime(EPOCH + seconds)).toBe(expected);
+      }
+    });
+  }
+
+  it('guards a timestamp that never arrived, in every locale', async () => {
+    for (const loc of Object.keys(BOUNDARIES)) {
+      const mod = await utilsIn(loc);
+      expect(mod.relativeTime(NaN)).toBe('—');
+      expect(mod.relativeTime(Infinity)).toBe('—');
+    }
+  });
+});
+
 describe('absoluteTime', () => {
   // 2026-02-02T02:40:00Z — the same instant is the previous evening in New York
   // and the same morning in Tokyo.
