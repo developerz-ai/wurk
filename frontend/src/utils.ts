@@ -84,6 +84,40 @@ export function hoverTime(epochSeconds: number, timeZone?: string): string {
   return ms === undefined ? '' : `${dateFormat(timeZone).format(ms)} · ${new Date(ms).toISOString()}`;
 }
 
+const bucketFormatters = new Map<string, Intl.DateTimeFormat>();
+
+function bucketFormat(dated: boolean, timeZone: string | undefined): Intl.DateTimeFormat {
+  const key = `${dated}|${timeZone ?? ''}`;
+  let formatter = bucketFormatters.get(key);
+  if (!formatter) {
+    // `dated` buckets (hourly rollups) need the date to disambiguate across
+    // midnight; finer rollups fit a whole chart axis in HH:MM alone.
+    formatter = dated
+      ? new Intl.DateTimeFormat(LOCALE, { timeZone, month: 'numeric', day: 'numeric', hour: '2-digit', minute: '2-digit', hour12: false })
+      : new Intl.DateTimeFormat(LOCALE, { timeZone, hour: '2-digit', minute: '2-digit', hour12: false });
+    bucketFormatters.set(key, formatter);
+  }
+  return formatter;
+}
+
+/** Chart-axis / table bucket label, in `timeZone` or the runtime's zone. */
+export function formatBucket(epochSeconds: number, bucket: string, timeZone?: string): string {
+  const ms = millis(epochSeconds);
+  return ms === undefined ? '' : bucketFormat(bucket === '1h', timeZone).format(ms);
+}
+
+const numberFormatter = new Intl.NumberFormat(LOCALE);
+
+/** Locale-aware thousands grouping for a plain count. */
+export function formatNumber(n: number): string {
+  return numberFormatter.format(n);
+}
+
+/** Current time in epoch seconds — one call site for every `Date.now()/1000`. */
+export function nowSeconds(): number {
+  return Date.now() / 1000;
+}
+
 const unitFormatters = new Map<string, Intl.NumberFormat>();
 
 function unit(name: string, value: number, unitDisplay: 'narrow' | 'short', digits = 0): string {

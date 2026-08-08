@@ -1,4 +1,5 @@
 import { createSignal, onCleanup, onMount, For, Show, type JSX } from 'solid-js';
+import { formatNumber } from '../../utils';
 
 // Shared primitives for the hand-rolled SVG charts that replace recharts. No
 // deps beyond Solid + SVG — the dark Obsidian palette is baked in here so every
@@ -117,7 +118,7 @@ export function yScale(maxVal: number, allowDecimals = true): { max: number; tic
 }
 
 export function fmtTick(v: number): string {
-  return Number.isInteger(v) ? v.toLocaleString() : v.toFixed(v < 10 ? 2 : 1);
+  return Number.isInteger(v) ? formatNumber(v) : v.toFixed(v < 10 ? 2 : 1);
 }
 
 // preserveStartEnd + minTickGap: keep both endpoints and thin the interior to
@@ -226,7 +227,7 @@ export interface TooltipRow {
 }
 
 function fmtVal(v: number): string {
-  return Number.isInteger(v) ? v.toLocaleString() : v.toFixed(2);
+  return Number.isInteger(v) ? formatNumber(v) : v.toFixed(2);
 }
 
 // HTML overlay tooltip (crisp text, unlike SVG <text>). Flips to the other side

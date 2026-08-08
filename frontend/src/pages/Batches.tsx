@@ -8,7 +8,7 @@ import { usePageParam } from '../hooks/usePageParam';
 import { useResetPageOnEmpty } from '../hooks/useResetPageOnEmpty';
 import { t } from '../i18n';
 import { PageHeader } from '../components/PageHeader';
-import { relativeTime, truncate } from '../utils';
+import { formatNumber, relativeTime, truncate } from '../utils';
 import { SkeletonTable } from '../components/Skeleton';
 import { basePath } from '../basePath';
 import { getJSON } from '../http';
@@ -75,7 +75,7 @@ export default function Batches() {
         {(data) => (
           <div>
             <PageHeader icon="fa-table-cells-large" title={t('nav.batches')} summary={t('summaries.batches')}>
-              <span class="badge badge-accent">{data().total.toLocaleString()}</span>
+              <span class="badge badge-accent">{formatNumber(data().total)}</span>
             </PageHeader>
 
             <Show when={sorted().length > 0} fallback={<div class="empty-state">{t('common.empty')}</div>}>
@@ -105,12 +105,12 @@ export default function Batches() {
                               </A>
                             </td>
                             <td title={batch.description ?? ''}>{truncate(batch.description ?? '—', 40)}</td>
-                            <td>{batch.total.toLocaleString()}</td>
+                            <td>{formatNumber(batch.total)}</td>
                             <td style={{ color: batch.pending > 0 ? 'var(--warning)' : 'var(--success)' }}>
-                              {batch.pending.toLocaleString()}
+                              {formatNumber(batch.pending)}
                             </td>
                             <td style={{ color: batch.failures > 0 ? 'var(--danger)' : undefined }}>
-                              {batch.failures.toLocaleString()}
+                              {formatNumber(batch.failures)}
                             </td>
                             <td style={{ width: '100px' }}>
                               <div style={{ display: 'flex', 'align-items': 'center', gap: '0.5rem' }}>

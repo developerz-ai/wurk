@@ -4,7 +4,7 @@ import { Pagination } from '../components/Pagination';
 import { ArgsValue } from '../components/ArgsValue';
 import { t } from '../i18n';
 import { PageHeader } from '../components/PageHeader';
-import { relativeTime, truncate, formatArgs, hoverTime } from '../utils';
+import { formatArgs, formatNumber, hoverTime, relativeTime, truncate } from '../utils';
 import JobDetailModal, { type JobEntry } from '../components/JobDetailModal';
 import JobSetActionBar, { type ActionDef } from '../components/JobSetActionBar';
 import { SortableTh } from '../components/SortableTh';
@@ -115,7 +115,7 @@ export default function Retries() {
         {(data) => (
           <div>
             <PageHeader icon="fa-rotate-right" title={t('nav.retries')} summary={t('summaries.retries')}>
-              <span class="badge badge-warning">{data().total.toLocaleString()}</span>
+              <span class="badge badge-warning">{formatNumber(data().total)}</span>
             </PageHeader>
 
             <FilterBox value={filter()} onChange={onFilterChange} placeholder={t('common.filter_placeholder')} />

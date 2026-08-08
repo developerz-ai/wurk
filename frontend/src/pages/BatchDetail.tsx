@@ -2,7 +2,7 @@ import { useQuery } from '@tanstack/solid-query';
 import { onMount, For, Show, Switch, Match, type JSX } from 'solid-js';
 import { A, useParams } from '@solidjs/router';
 import { t } from '../i18n';
-import { relativeTime } from '../utils';
+import { formatNumber, relativeTime } from '../utils';
 import { SkeletonCards } from '../components/Skeleton';
 import { basePath } from '../basePath';
 
@@ -122,10 +122,10 @@ export default function BatchDetail() {
                   'margin-top': '1rem',
                 }}
               >
-                <Field label={t('table.total')}>{data().total.toLocaleString()}</Field>
-                <Field label={t('table.pending')}>{data().pending.toLocaleString()}</Field>
-                <Field label={t('table.failures')}>{data().failures.toLocaleString()}</Field>
-                <Field label={t('batches.children')}>{data().child_count.toLocaleString()}</Field>
+                <Field label={t('table.total')}>{formatNumber(data().total)}</Field>
+                <Field label={t('table.pending')}>{formatNumber(data().pending)}</Field>
+                <Field label={t('table.failures')}>{formatNumber(data().failures)}</Field>
+                <Field label={t('batches.children')}>{formatNumber(data().child_count)}</Field>
                 <Field label={t('table.created')}>{data().created_at ? relativeTime(data().created_at!) : '—'}</Field>
                 <Field label={t('batches.completed')}>{data().complete_at ? relativeTime(data().complete_at!) : '—'}</Field>
                 <Show when={data().parent_bid}>

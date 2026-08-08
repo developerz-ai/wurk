@@ -1,4 +1,5 @@
 import { useCountUp } from '../hooks/useCountUp';
+import { formatNumber } from '../utils';
 
 interface AnimatedNumberProps {
   value: number;
@@ -9,5 +10,5 @@ interface AnimatedNumberProps {
 // exactly on the target.
 export function AnimatedNumber(props: AnimatedNumberProps) {
   const display = useCountUp(() => props.value);
-  return <>{Math.round(display()).toLocaleString()}</>;
+  return <>{formatNumber(Math.round(display()))}</>;
 }

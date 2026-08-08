@@ -4,7 +4,7 @@ import { t } from '../i18n';
 import { PageHeader } from '../components/PageHeader';
 import Modal from '../components/Modal';
 import { ArgsValue } from '../components/ArgsValue';
-import { relativeTime, hoverTime, formatKb, formatDuration, formatArgs, truncate } from '../utils';
+import { relativeTime, hoverTime, formatKb, formatDuration, formatArgs, nowSeconds, truncate } from '../utils';
 import { useMeta } from '../hooks/useMeta';
 import { SkeletonCards } from '../components/Skeleton';
 import { basePath } from '../basePath';
@@ -305,7 +305,7 @@ export default function Busy() {
                       <For each={group.processes}>
                         {(proc) => {
                           const utilization = proc.concurrency > 0 ? (proc.busy / proc.concurrency) * 100 : 0;
-                          const isRecent = Date.now() / 1000 - proc.beat < 30;
+                          const isRecent = nowSeconds() - proc.beat < 30;
 
                           return (
                             <div
@@ -317,7 +317,7 @@ export default function Busy() {
                                   <div style={{ 'font-weight': 600, 'font-size': '15px' }}>PID {proc.pid}</div>
                                   <div style={{ color: 'var(--text-muted)', 'font-size': '12px' }}>
                                     {proc.tag || proc.hostname}
-                                    {proc.started_at ? ` · ${t('busy.up_for')} ${formatDuration(Date.now() / 1000 - proc.started_at)}` : ''}
+                                    {proc.started_at ? ` · ${t('busy.up_for')} ${formatDuration(nowSeconds() - proc.started_at)}` : ''}
                                   </div>
                                 </div>
                                 <div style={{ display: 'flex', gap: '0.375rem' }}>

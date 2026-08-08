@@ -2,6 +2,8 @@ import { useQuery } from '@tanstack/solid-query';
 import { onMount, For, Switch, Match, Show } from 'solid-js';
 import { SkeletonTable } from '../components/Skeleton';
 import { t } from '../i18n';
+import { absoluteTime, formatNumber, hoverTime } from '../utils';
+import { timeZone } from '../tz';
 import { basePath } from '../basePath';
 
 // One row from GET <mount>/api/profiles (Wurk::Api::Serializers.profile_record).
@@ -19,10 +21,6 @@ function fmtBytes(n: number): string {
   if (n < 1024) return `${n} B`;
   if (n < 1024 * 1024) return `${(n / 1024).toFixed(1)} KB`;
   return `${(n / (1024 * 1024)).toFixed(1)} MB`;
-}
-
-function fmtWhen(ts: number | null): string {
-  return ts ? new Date(ts * 1000).toLocaleString() : '—';
 }
 
 export default function Profiles() {
@@ -60,7 +58,7 @@ export default function Profiles() {
                 <h1>{t('nav.profiles')}</h1>
                 <p class="obs-panel__sub">{t('summaries.profiles')}</p>
               </div>
-              <span class="obs-chip obs-chip--active">{data().length.toLocaleString()}</span>
+              <span class="obs-chip obs-chip--active">{formatNumber(data().length)}</span>
             </div>
 
             <Show
@@ -86,8 +84,12 @@ export default function Profiles() {
                           <tr>
                             <td style={{ 'font-weight': 500, color: 'var(--obs-text)' }}>{p.type}</td>
                             <td><span class="obs-mono-cell">{p.jid}</span></td>
-                            <td>{fmtWhen(p.started_at)}</td>
-                            <td>{p.elapsed.toLocaleString()} {t('common.ms')}</td>
+                            <td>
+                              <Show when={p.started_at} fallback="—">
+                                {(startedAt) => <span title={hoverTime(startedAt(), timeZone)}>{absoluteTime(startedAt(), timeZone)}</span>}
+                              </Show>
+                            </td>
+                            <td>{formatNumber(p.elapsed)} {t('common.ms')}</td>
                             <td>{fmtBytes(p.size)}</td>
                             <td style={{ 'text-align': 'end' }}>
                               {/* Full reload (not client-route): the backend POSTs the blob

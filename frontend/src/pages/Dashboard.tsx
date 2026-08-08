@@ -7,7 +7,8 @@ import { PageHeader } from '../components/PageHeader';
 import { Skeleton, SkeletonCards, SkeletonTable } from '../components/Skeleton';
 import { t } from '../i18n';
 import { useSSE } from '../hooks/useSSE';
-import { formatDuration } from '../utils';
+import { formatBucket, formatDuration } from '../utils';
+import { timeZone } from '../tz';
 import { basePath } from '../basePath';
 
 interface StatsData {
@@ -62,14 +63,6 @@ const RANGES = [
   { key: '30d', bucket: '1h', window: '30d', desc_key: 'dashboard.range_30d_desc' },
 ] as const;
 
-const fmtBucket = (at: number, bucket: string) => {
-  const d = new Date(at * 1000);
-  const hh = String(d.getHours()).padStart(2, '0');
-  return bucket === '1h'
-    ? `${d.getMonth() + 1}/${d.getDate()} ${hh}:00`
-    : `${hh}:${String(d.getMinutes()).padStart(2, '0')}`;
-};
-
 function DeltaSub(props: { pct: number | null; goodWhenUp: boolean }) {
   return (
     <Show when={props.pct !== null} fallback={<span class="obs-metric__sub">{t('dashboard.vs_last_hour')}</span>}>
@@ -119,7 +112,7 @@ export default function Dashboard() {
   // hourlyDeltaPct() and slice only for chart rendering. Slicing first would
   // drop the comparison window on the 1h tab and force the 100% fallback.
   const fullSeries = createMemo(() =>
-    (historyQuery.data?.series ?? []).map((p) => ({ ...p, label: fmtBucket(p.at, range().bucket) })),
+    (historyQuery.data?.series ?? []).map((p) => ({ ...p, label: formatBucket(p.at, range().bucket, timeZone) })),
   );
   const series = createMemo(() => {
     const r = range();

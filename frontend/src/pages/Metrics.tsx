@@ -5,7 +5,8 @@ import { PageHeader } from '../components/PageHeader';
 import { Skeleton } from '../components/Skeleton';
 import Modal from '../components/Modal';
 import { t } from '../i18n';
-import { formatDuration, truncate } from '../utils';
+import { formatBucket, formatDuration, formatNumber, truncate } from '../utils';
+import { timeZone } from '../tz';
 import { basePath } from '../basePath';
 
 // Matches Wurk::Api::Serializers.metric_row — processed (successes), failed,
@@ -95,14 +96,6 @@ const RANGES = [
   { key: '7d', bucket: '5m', window: '7d', minutes: 7 * 24 * 60 },
   { key: '30d', bucket: '1h', window: '30d', minutes: 30 * 24 * 60 },
 ] as const;
-
-const fmtBucket = (at: number, bucket: string) => {
-  const d = new Date(at * 1000);
-  const hh = String(d.getHours()).padStart(2, '0');
-  return bucket === '1h'
-    ? `${d.getMonth() + 1}/${d.getDate()} ${hh}:00`
-    : `${hh}:${String(d.getMinutes()).padStart(2, '0')}`;
-};
 
 function deltaPct(series: HistoryPoint[], key: 'processed' | 'failed'): number | null {
   if (series.length < 2) return null;
@@ -198,7 +191,7 @@ export default function Metrics() {
   // Keep the full history for deltaPct() — slicing first would drop the
   // previous-hour comparison window and force the 100% fallback on the 1h tab.
   const fullSeries = createMemo(() =>
-    (historyQuery.data?.series ?? []).map((p) => ({ ...p, label: fmtBucket(p.at, range().bucket) })),
+    (historyQuery.data?.series ?? []).map((p) => ({ ...p, label: formatBucket(p.at, range().bucket, timeZone) })),
   );
   const series = createMemo(() => {
     const r = range();
@@ -214,7 +207,7 @@ export default function Metrics() {
   const depthRows = createMemo(() =>
     sample(
       ats().map((at, i) => ({
-        label: fmtBucket(at, range().bucket),
+        label: formatBucket(at, range().bucket, timeZone),
         depth: queues().reduce((s, q) => s + (q.points[i]?.size ?? 0), 0),
       })),
       16,
@@ -261,7 +254,7 @@ export default function Metrics() {
             <i class="fa-solid fa-circle-check obs-metric__icon" aria-hidden="true" />
           </div>
           <span class="obs-metric__value">
-            {(statsQuery.data?.processed ?? 0).toLocaleString()}
+            {formatNumber(statsQuery.data?.processed ?? 0)}
             <Delta pct={deltaPct(fullSeries(), 'processed')} goodWhenUp />
           </span>
           <span class="obs-metric__sub">{t('metrics.across_all_queues')}</span>
@@ -272,7 +265,7 @@ export default function Metrics() {
             <i class="fa-solid fa-triangle-exclamation obs-metric__icon" aria-hidden="true" />
           </div>
           <span class="obs-metric__value">
-            {(statsQuery.data?.failed ?? 0).toLocaleString()}
+            {formatNumber(statsQuery.data?.failed ?? 0)}
             <Delta pct={deltaPct(fullSeries(), 'failed')} goodWhenUp={false} />
           </span>
           <span class="obs-metric__sub">{t('metrics.total_failures')}</span>
@@ -290,7 +283,7 @@ export default function Metrics() {
             <span class="obs-mono">{t('metrics.active_workers')}</span>
             <i class="fa-solid fa-gears obs-metric__icon" aria-hidden="true" />
           </div>
-          <span class="obs-metric__value">{(statsQuery.data?.processes ?? 0).toLocaleString()}</span>
+          <span class="obs-metric__value">{formatNumber(statsQuery.data?.processes ?? 0)}</span>
           <span class="obs-metric__sub">{(statsQuery.data?.processes ?? 0) > 0 ? t('metrics.stable') : t('metrics.no_workers')}</span>
         </div>
       </div>
@@ -336,7 +329,7 @@ export default function Metrics() {
         <div class="obs-card obs-panel">
           <div class="obs-panel__head">
             <h2 class="obs-panel__title" style={{ 'font-size': '18px' }}>{t('metrics.queue_depth')}</h2>
-            <span class="obs-mono">{maxDepth() > 0 ? t('metrics.peak', { n: maxDepth().toLocaleString() }) : ''}</span>
+            <span class="obs-mono">{maxDepth() > 0 ? t('metrics.peak', { n: formatNumber(maxDepth()) }) : ''}</span>
           </div>
           <div class="obs-chartbox">
             <Show when={!queueQuery.isPending} fallback={<ChartLoader height={240} />}>
@@ -395,7 +388,7 @@ export default function Metrics() {
                               {truncate(j.klass.split('::').pop() ?? j.klass, 36)}
                             </button>
                           </td>
-                          <td style={{ 'text-align': 'end', 'font-variant-numeric': 'tabular-nums' }}>{j.count.toLocaleString()}</td>
+                          <td style={{ 'text-align': 'end', 'font-variant-numeric': 'tabular-nums' }}>{formatNumber(j.count)}</td>
                           <td class="obs-pct" style={{ 'text-align': 'end' }}>
                             {jobsTotal() > 0 ? Math.round((j.count / jobsTotal()) * 100) : 0}%
                           </td>
@@ -433,7 +426,7 @@ function JobMetricsModal(props: { klass: string | null; minutes: number; onClose
   }));
 
   const rows = createMemo(() =>
-    (data.data?.series ?? []).map((p) => ({ label: fmtBucket(p.at, '1m'), processed: p.p, failed: p.f, runtime_ms: p.ms })),
+    (data.data?.series ?? []).map((p) => ({ label: formatBucket(p.at, '1m', timeZone), processed: p.p, failed: p.f, runtime_ms: p.ms })),
   );
   const hasData = createMemo(() => rows().some((r) => r.processed > 0 || r.failed > 0));
   const totals = createMemo(() => rows().reduce((acc, r) => ({ processed: acc.processed + r.processed, failed: acc.failed + r.failed }), { processed: 0, failed: 0 }));
@@ -444,11 +437,11 @@ function JobMetricsModal(props: { klass: string | null; minutes: number; onClose
         <div style={{ display: 'flex', gap: '1.5rem', 'margin-bottom': '1rem' }}>
           <div>
             <div class="obs-mono">{t('dashboard.processed')}</div>
-            <div style={{ 'font-size': '18px', 'font-weight': 600 }}>{totals().processed.toLocaleString()}</div>
+            <div style={{ 'font-size': '18px', 'font-weight': 600 }}>{formatNumber(totals().processed)}</div>
           </div>
           <div>
             <div class="obs-mono">{t('dashboard.failed')}</div>
-            <div style={{ 'font-size': '18px', 'font-weight': 600, color: 'var(--danger)' }}>{totals().failed.toLocaleString()}</div>
+            <div style={{ 'font-size': '18px', 'font-weight': 600, color: 'var(--danger)' }}>{formatNumber(totals().failed)}</div>
           </div>
         </div>
         <Show when={!data.isPending} fallback={<ChartLoader height={240} />}>
@@ -501,7 +494,7 @@ function QueueLatencyHistory(props: { range: (typeof RANGES)[number] }) {
   const ats = createMemo(() => queues()[0]?.points.map((p) => p.at) ?? []);
   const rows = createMemo(() =>
     ats().map((at, i) => {
-      const row: Datum = { label: fmtBucket(at, props.range.bucket) };
+      const row: Datum = { label: formatBucket(at, props.range.bucket, timeZone) };
       queues().forEach((q, qi) => { row[queueKeys()[qi].key] = q.points[i]?.latency ?? 0; });
       return row;
     }),
@@ -554,8 +547,7 @@ function HistoricalSnapshots() {
   );
   const rows = createMemo(() =>
     snapshots().map((s) => {
-      const d = new Date(s.at * 1000);
-      const row: Datum = { label: `${String(d.getHours()).padStart(2, '0')}:${String(d.getMinutes()).padStart(2, '0')}` };
+      const row: Datum = { label: formatBucket(s.at, '1m', timeZone) };
       for (const k of Object.keys(s)) row[k] = s[k];
       return row;
     }),

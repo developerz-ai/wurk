@@ -7,7 +7,7 @@ import { useSort, type Accessors } from '../hooks/useSort';
 import { usePageParam } from '../hooks/usePageParam';
 import { t } from '../i18n';
 import { PageHeader } from '../components/PageHeader';
-import { relativeTime, truncate, formatArgs, hoverTime } from '../utils';
+import { formatArgs, formatNumber, hoverTime, relativeTime, truncate } from '../utils';
 import JobDetailModal, { type JobEntry } from '../components/JobDetailModal';
 import JobSetActionBar, { type ActionDef } from '../components/JobSetActionBar';
 import { useMeta } from '../hooks/useMeta';
@@ -99,7 +99,7 @@ export default function Scheduled() {
         {(data) => (
           <div>
             <PageHeader icon="fa-clock" title={t('nav.scheduled')} summary={t('summaries.scheduled')}>
-              <span class="badge badge-accent">{data().total.toLocaleString()}</span>
+              <span class="badge badge-accent">{formatNumber(data().total)}</span>
             </PageHeader>
 
             <FilterBox value={filter()} onChange={onFilterChange} placeholder={t('common.filter_placeholder')} />
