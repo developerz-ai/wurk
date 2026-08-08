@@ -52,18 +52,25 @@ function normalizeTag(raw: string | null | undefined): string | undefined {
 }
 
 /**
- * The bundle key serving `loc`, or undefined when this build ships nothing for
- * it: exact match (case-insensitively), then the base subtag ("es-419" -> "es"),
- * then the first regional bundle sharing that base ("pt" -> "pt-BR").
+ * The key in `keys` serving `loc`, or undefined when none does: exact match
+ * (case-insensitively), then the base subtag ("es-419" -> "es"), then the first
+ * regional key sharing that base ("pt" -> "pt-BR"). Wurk::Web::LocaleNegotiator
+ * walks the same three rungs server-side — they have to agree, or the hint the
+ * engine emits resolves to a bundle it didn't intend.
  */
-export function bundleFor(loc: string): string | undefined {
+function matchTag(keys: readonly string[], loc: string): string | undefined {
   const lower = loc.toLowerCase();
   const base = lower.split('-')[0];
   return (
-    availableLocales.find((k) => k.toLowerCase() === lower) ??
-    availableLocales.find((k) => k.toLowerCase() === base) ??
-    availableLocales.find((k) => k.toLowerCase().split('-')[0] === base)
+    keys.find((k) => k.toLowerCase() === lower) ??
+    keys.find((k) => k.toLowerCase() === base) ??
+    keys.find((k) => k.toLowerCase().split('-')[0] === base)
   );
+}
+
+/** The bundle key serving `loc`, or undefined when this build ships nothing for it. */
+export function bundleFor(loc: string): string | undefined {
+  return matchTag(availableLocales, loc);
 }
 
 function fromQuery(): string | undefined {
@@ -140,10 +147,21 @@ export function setLocale(loc: string): void {
   else window.location.assign(url.href);
 }
 
-function loadHostOverrides(): DeepPartial<Translations> {
+/**
+ * Host copy overrides for `loc`, from the `#wurk-i18n` block the engine emits
+ * out of `Wurk::Web.config.translations`. That payload is keyed by locale
+ * rather than flat because the server's `data-locale` hint is not the last
+ * word — a `?locale=` link or a stored pick outranks it — so the entry has to
+ * be selected here, against the locale actually rendered, using the same match
+ * that chose the bundle underneath it.
+ */
+function loadHostOverrides(loc: string): DeepPartial<Translations> {
   try {
     const el = document.getElementById('wurk-i18n');
-    return el ? (JSON.parse(el.textContent ?? '{}') as DeepPartial<Translations>) : {};
+    if (!el) return {};
+    const byLocale = JSON.parse(el.textContent ?? '{}') as Record<string, DeepPartial<Translations>>;
+    const key = matchTag(Object.keys(byLocale), loc);
+    return key ? (byLocale[key] ?? {}) : {};
   } catch {
     return {};
   }
@@ -173,7 +191,7 @@ export const locale = detectLocale();
 export const dir = directionFor(locale);
 const langKey = bundleFor(locale) ?? 'en';
 const base = deepMerge(en, (LOCALES[langKey] ?? {}) as DeepPartial<typeof en>);
-const merged = deepMerge(base, loadHostOverrides());
+const merged = deepMerge(base, loadHostOverrides(locale));
 
 export function t(path: string, vars?: Record<string, string | number>): string {
   const parts = path.split('.');

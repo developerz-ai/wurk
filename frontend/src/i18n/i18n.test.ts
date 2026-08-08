@@ -306,25 +306,75 @@ describe('resolved bundle', () => {
   });
 });
 
+// The engine emits this block from Wurk::Web.config.translations, keyed by
+// locale — the server's data-locale hint is only third in the precedence chain,
+// so the entry has to be picked in the browser against the rendered locale.
+function mountOverrides(payload: unknown): void {
+  const el = document.createElement('script');
+  el.id = 'wurk-i18n';
+  el.type = 'application/json';
+  el.textContent = typeof payload === 'string' ? payload : JSON.stringify(payload);
+  document.head.appendChild(el);
+}
+
 describe('host overrides', () => {
+  beforeEach(clearLocaleEnvironment);
   afterEach(() => {
+    clearLocaleEnvironment();
     document.getElementById('wurk-i18n')?.remove();
     vi.resetModules();
   });
 
-  it('deep-merges a #wurk-i18n script tag over the base bundle', async () => {
-    const el = document.createElement('script');
-    el.id = 'wurk-i18n';
-    el.type = 'application/json';
+  it('deep-merges the entry for the rendered locale over the bundle', async () => {
+    mountRoot('de');
     // Override one leaf; siblings and untouched branches must survive the merge.
-    el.textContent = JSON.stringify({ nav: { dashboard: 'Control Center' } });
-    document.head.appendChild(el);
+    mountOverrides({ de: { nav: { dashboard: 'Kontrollzentrum' } } });
 
     // The bundle reads the override at module-eval time, so re-evaluate it with
     // the script tag present.
     vi.resetModules();
     const mod = await import('./index');
-    expect(mod.t('nav.dashboard')).toBe('Control Center');
-    expect(mod.t('nav.queues')).toBe('Queues');
+    expect(mod.t('nav.dashboard')).toBe('Kontrollzentrum');
+    expect(mod.t('nav.queues')).toBe(de.nav.queues);
+  });
+
+  it('matches the entry the same way the bundle was matched', async () => {
+    mountRoot('es-419');
+    mountOverrides({ es: { nav: { dashboard: 'Centro de Control' } } });
+
+    vi.resetModules();
+    const mod = await import('./index');
+    expect(mod.t('nav.dashboard')).toBe('Centro de Control');
+  });
+
+  it('leaves the bundle alone when nothing is keyed for the locale', async () => {
+    mountRoot('de');
+    mountOverrides({ en: { nav: { dashboard: 'Control Center' } } });
+
+    vi.resetModules();
+    const mod = await import('./index');
+    expect(mod.t('nav.dashboard')).toBe(de.nav.dashboard);
+  });
+
+  // The point of the hook: a host can serve a locale this build ships no
+  // bundle for by supplying the copy itself.
+  it('supplies copy for a locale with no bundle', async () => {
+    mountRoot('he');
+    mountOverrides({ he: { nav: { dashboard: 'לוח בקרה' } } });
+
+    vi.resetModules();
+    const mod = await import('./index');
+    expect(mod.dir).toBe('rtl');
+    expect(mod.t('nav.dashboard')).toBe('לוח בקרה');
+    expect(mod.t('nav.queues')).toBe('Queues'); // untranslated keys still fall back to en
+  });
+
+  it('falls back to the shipped copy when the block is malformed', async () => {
+    mountRoot('de');
+    mountOverrides('not json');
+
+    vi.resetModules();
+    const mod = await import('./index');
+    expect(mod.t('nav.dashboard')).toBe(de.nav.dashboard);
   });
 });

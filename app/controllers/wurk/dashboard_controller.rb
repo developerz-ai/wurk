@@ -3,6 +3,7 @@
 require 'json'
 require 'net/http'
 require 'uri'
+require 'wurk/web'
 
 module Wurk
   # Serves the SPA shell. Everything else is JSON from ApiController.
@@ -25,15 +26,28 @@ module Wurk
     VITE_ASSET_BASE = "#{::Wurk::Engine::AssetMount::PREFIX}/".freeze # "/wurk-assets/"
     VITE_DEV_URL = "#{VITE_DEV_HOST}#{VITE_ASSET_BASE}".freeze
     INDEX_REL_PATH = ['vendor', 'assets', 'dashboard', 'index.html'].freeze
+    # The SPA mount point, matched without its closing `>` so the locale hint
+    # appends to whatever attributes the shell already carries.
+    ROOT_DIV = '<div id="wurk-root"'
 
     def index
-      render layout: false, html: inject_mount_base(spa_html).html_safe
+      render layout: false, html: decorate_shell(spa_html).html_safe
     end
 
     private
 
+    def decorate_shell(html)
+      inject_locale_hint(inject_head(html))
+    end
+
     def spa_html
       ENV['WURK_VITE_DEV'] == '1' ? fetch_vite_dev_shell : read_built_index
+    end
+
+    # Block form deliberately: a string replacement would interpret `\0`/`\&`
+    # backreferences inside the host-configured JSON these scripts carry.
+    def inject_head(html)
+      html.sub('</head>') { "#{mount_base_script}#{host_translations_script}</head>" }
     end
 
     # The SPA is mount-agnostic: it reads window.__WURK_BASE__ to build every API
@@ -41,20 +55,45 @@ module Wurk
     # the host mounts the engine at /wurk, /sidekiq, or /admin/jobs. script_name
     # is the mount prefix ("/sidekiq"), or "" at the app root. Injected into every
     # served shell (built and Vite-dev) so a non-/wurk mount needs no rebuild.
-    def inject_mount_base(html)
-      html.sub('</head>', "#{mount_base_script}</head>")
-    end
-
     def mount_base_script
       base = request.script_name.to_s.chomp('/')
-      %(<script>window.__WURK_BASE__ = #{js_string(base)};</script>\n  )
+      %(<script>window.__WURK_BASE__ = #{json_literal(base)};</script>\n  )
     end
 
-    # JSON-quote the mount prefix as a literal inside <script>, escaping the
-    # sequences that could otherwise break out of the tag. The mount is
+    # Host copy overrides (Wurk::Web.config.translations), read once at SPA boot
+    # by loadHostOverrides() in frontend/src/i18n/index.ts and deep-merged over
+    # the shipped bundle for the locale in use.
+    def host_translations_script
+      overrides = ::Wurk::Web.config.translations
+      return '' unless overrides.is_a?(::Hash) && !overrides.empty?
+
+      %(<script type="application/json" id="wurk-i18n">#{json_literal(overrides)}</script>\n  )
+    end
+
+    # First-paint language hint, third in the SPA's precedence chain (`?locale=`
+    # and a stored pick both outrank it), so it only decides the render for a
+    # visitor who has never chosen. The negotiator returns a tag from the host's
+    # offered list or nothing — request text never reaches the attribute — and
+    # no hint at all is the right answer for an unrecognized language: the SPA
+    # then falls through to navigator.languages.
+    def inject_locale_hint(html)
+      locale = negotiated_locale
+      return html unless locale
+
+      html.sub(ROOT_DIV) { %(#{ROOT_DIV} data-locale="#{::ERB::Util.html_escape(locale)}") }
+    end
+
+    def negotiated_locale
+      config = ::Wurk::Web.config
+      header = request.get_header('HTTP_ACCEPT_LANGUAGE')
+      ::Wurk::Web::LocaleNegotiator.call(header, offered: config.offered_locales) || config.default_locale
+    end
+
+    # JSON-encode a value as a literal inside <script>, escaping the sequences
+    # that could otherwise break out of the tag. Both payloads are
     # host-configured, not request input, but the injection stays safe regardless.
-    def js_string(str)
-      str.to_json.gsub(/[<>&]/) { |c| format('\u%04x', c.ord) }
+    def json_literal(value)
+      value.to_json.gsub(/[<>&]/) { |c| format('\u%04x', c.ord) }
     end
 
     def fetch_vite_dev_shell
