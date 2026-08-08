@@ -5,7 +5,7 @@ import { t } from '../i18n';
 import { PageHeader } from '../components/PageHeader';
 import { ArgsValue } from '../components/ArgsValue';
 import { SkeletonTable } from '../components/Skeleton';
-import { relativeTime, truncate, isoTime, formatArgs } from '../utils';
+import { relativeTime, truncate, hoverTime, formatArgs } from '../utils';
 import { basePath } from '../basePath';
 import { getJSON } from '../http';
 
@@ -141,7 +141,8 @@ export default function Search() {
     ).slice(0, 5);
 
   // Sorted-set hits carry `at`; queue hits fall back to enqueue time. NaN when
-  // neither is present — relativeTime/isoTime both render that as a safe dash.
+  // neither is present — relativeTime renders that as a dash, hoverTime as an
+  // empty title.
   const whenOf = (h: SearchHit) => (typeof h.at === 'number' ? h.at : (h.enqueued_at ?? NaN));
   const count = () => results.data?.hits.length ?? 0;
 
@@ -229,7 +230,7 @@ export default function Search() {
                                   <span title={hit.error_message ?? ''}>{truncate(hit.error_class, 28)}</span>
                                 </Show>
                               </td>
-                              <td title={isoTime(whenOf(hit))}>{relativeTime(whenOf(hit))}</td>
+                              <td title={hoverTime(whenOf(hit))}>{relativeTime(whenOf(hit))}</td>
                             </tr>
                           )}
                         </For>

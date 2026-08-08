@@ -4,7 +4,7 @@ import { t } from '../i18n';
 import { PageHeader } from '../components/PageHeader';
 import { SkeletonTable } from '../components/Skeleton';
 import Modal from '../components/Modal';
-import { relativeTime, isoTime, truncate } from '../utils';
+import { relativeTime, hoverTime, truncate } from '../utils';
 import { useMeta } from '../hooks/useMeta';
 import { SortableTh } from '../components/SortableTh';
 import { useSort, type Accessors } from '../hooks/useSort';
@@ -196,7 +196,7 @@ export default function Cron() {
                           <For each={history()}>
                             {([firedAt, jid]) => (
                               <tr>
-                                <td style={{ color: 'var(--text-muted)' }} title={isoTime(firedAt)}>
+                                <td style={{ color: 'var(--text-muted)' }} title={hoverTime(firedAt)}>
                                   {relativeTime(firedAt)}
                                 </td>
                                 <td style={{ 'font-family': 'monospace', 'font-size': '12px' }}>{jid}</td>

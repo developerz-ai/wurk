@@ -4,7 +4,7 @@ import { Pagination } from '../components/Pagination';
 import { ArgsValue } from '../components/ArgsValue';
 import { t } from '../i18n';
 import { PageHeader } from '../components/PageHeader';
-import { relativeTime, truncate, formatArgs, isoTime } from '../utils';
+import { relativeTime, truncate, formatArgs, hoverTime } from '../utils';
 import JobDetailModal, { type JobEntry } from '../components/JobDetailModal';
 import JobSetActionBar, { type ActionDef } from '../components/JobSetActionBar';
 import { SortableTh } from '../components/SortableTh';
@@ -169,7 +169,7 @@ export default function Retries() {
                               </td>
                               <td title={entry.error_message ?? ''}>{truncate(entry.error_message, 50)}</td>
                               <td style={{ color: 'var(--warning)' }}>{entry.retry_count}</td>
-                              <td title={isoTime(entry.at)}>
+                              <td title={hoverTime(entry.at)}>
                                 {relativeTime(entry.at)}
                               </td>
                             </tr>

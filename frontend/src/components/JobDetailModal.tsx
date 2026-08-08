@@ -1,7 +1,7 @@
 import { For, Show, type JSX } from 'solid-js';
 import Modal from './Modal';
 import { t } from '../i18n';
-import { formatArgs, isoTime, relativeTime } from '../utils';
+import { absoluteTime, formatArgs, hoverTime, relativeTime } from '../utils';
 import type { ActionDef } from './JobSetActionBar';
 
 // Union of the fields the various list endpoints expose for a job/entry
@@ -87,10 +87,18 @@ export default function JobDetailModal(props: JobDetailModalProps) {
                 <Field label={t('job.retries')}>{entry().retry_count}</Field>
               </Show>
               <Show when={entry().enqueued_at != null}>
-                <Field label={t('job.enqueued')} mono>{isoTime(entry().enqueued_at!)} ({relativeTime(entry().enqueued_at!)})</Field>
+                <Field label={t('job.enqueued')} mono>
+                  <span title={hoverTime(entry().enqueued_at!)}>
+                    {absoluteTime(entry().enqueued_at!)} ({relativeTime(entry().enqueued_at!)})
+                  </span>
+                </Field>
               </Show>
               <Show when={entry().at != null}>
-                <Field label={props.atLabel ?? t('job.at')} mono>{isoTime(entry().at!)} ({relativeTime(entry().at!)})</Field>
+                <Field label={props.atLabel ?? t('job.at')} mono>
+                  <span title={hoverTime(entry().at!)}>
+                    {absoluteTime(entry().at!)} ({relativeTime(entry().at!)})
+                  </span>
+                </Field>
               </Show>
             </div>
 
