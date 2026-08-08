@@ -19,6 +19,8 @@
     "language_current": "Sprache: {name}",
     "timezone": "Zeitzone",
     "timezone_current": "Zeitzone: {name}",
+    "theme_current": "Design: {name}",
+    "theme_next": "Zu Design {name} wechseln",
     "status_active": "Systemstatus: Aktiv",
     "status_inactive": "Systemstatus: Getrennt"
   },
@@ -267,5 +269,10 @@
     "automatic": "Automatisch ({name})",
     "filter": "Zeitzonen filtern…",
     "empty": "Keine Zeitzone passt zu „{query}“"
+  },
+  "theme": {
+    "light": "Hell",
+    "dark": "Dunkel",
+    "system": "System"
   }
 }

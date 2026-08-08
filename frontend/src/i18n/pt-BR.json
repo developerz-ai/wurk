@@ -19,6 +19,8 @@
     "language_current": "Idioma: {name}",
     "timezone": "Fuso horário",
     "timezone_current": "Fuso horário: {name}",
+    "theme_current": "Tema: {name}",
+    "theme_next": "Mudar para o tema {name}",
     "status_active": "Status do sistema: Ativo",
     "status_inactive": "Status do sistema: Desconectado"
   },
@@ -267,5 +269,10 @@
     "automatic": "Automático ({name})",
     "filter": "Filtrar fusos horários…",
     "empty": "Nenhum fuso horário corresponde a “{query}”"
+  },
+  "theme": {
+    "light": "Claro",
+    "dark": "Escuro",
+    "system": "Sistema"
   }
 }

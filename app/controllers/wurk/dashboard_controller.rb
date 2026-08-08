@@ -29,6 +29,11 @@ module Wurk
     # The SPA mount point, matched without its closing `>` so the locale hint
     # appends to whatever attributes the shell already carries.
     ROOT_DIV = '<div id="wurk-root"'
+    # The theme hint's anchor. It is the one payload that has to land at the
+    # *top* of <head> rather than before </head> with the others: the shell's
+    # pre-paint script reads it, and that script runs before the stylesheet so
+    # a host default never flashes the other palette.
+    HEAD_OPEN = '<head>'
 
     def index
       render layout: false, html: decorate_shell(spa_html).html_safe
@@ -37,7 +42,7 @@ module Wurk
     private
 
     def decorate_shell(html)
-      inject_locale_hint(inject_head(html))
+      inject_theme_default(inject_locale_hint(inject_head(html)))
     end
 
     def spa_html
@@ -81,6 +86,18 @@ module Wurk
       return html unless locale
 
       html.sub(ROOT_DIV) { %(#{ROOT_DIV} data-locale="#{::ERB::Util.html_escape(locale)}") }
+    end
+
+    # First-paint theme default (Wurk::Web.config.default_theme), last in the
+    # SPA's precedence chain behind a stored pick — so it only decides the
+    # palette for a visitor who has never chosen one. No config emits nothing
+    # and leaves the SPA on 'system', which follows the visitor's OS.
+    def inject_theme_default(html)
+      theme = ::Wurk::Web.config.default_theme
+      return html unless theme
+
+      script = %(<script>window.__WURK_THEME__ = #{json_literal(theme)};</script>)
+      html.sub(HEAD_OPEN) { "#{HEAD_OPEN}\n    #{script}" }
     end
 
     def negotiated_locale

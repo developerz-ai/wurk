@@ -38,6 +38,7 @@
 @use 'components/toast';
 @use 'components/locale-picker';
 @use 'components/timezone-picker';
+@use 'components/theme-toggle';
 
 // — Layout —
 @use 'layout/shell';

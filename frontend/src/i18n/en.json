@@ -19,6 +19,8 @@
     "language_current": "Language: {name}",
     "timezone": "Timezone",
     "timezone_current": "Timezone: {name}",
+    "theme_current": "Theme: {name}",
+    "theme_next": "Switch to {name} theme",
     "status_active": "System Status: Active",
     "status_inactive": "System Status: Disconnected"
   },
@@ -267,5 +269,10 @@
     "automatic": "Automatic ({name})",
     "filter": "Filter timezones…",
     "empty": "No timezone matches “{query}”"
+  },
+  "theme": {
+    "light": "Light",
+    "dark": "Dark",
+    "system": "System"
   }
 }

@@ -19,6 +19,8 @@
     "language_current": "Idioma: {name}",
     "timezone": "Zona horaria",
     "timezone_current": "Zona horaria: {name}",
+    "theme_current": "Tema: {name}",
+    "theme_next": "Cambiar al tema {name}",
     "status_active": "Estado del sistema: Activo",
     "status_inactive": "Estado del sistema: Desconectado"
   },
@@ -267,5 +269,10 @@
     "automatic": "Automática ({name})",
     "filter": "Filtrar zonas horarias…",
     "empty": "Ninguna zona horaria coincide con “{query}”"
+  },
+  "theme": {
+    "light": "Claro",
+    "dark": "Oscuro",
+    "system": "Sistema"
   }
 }

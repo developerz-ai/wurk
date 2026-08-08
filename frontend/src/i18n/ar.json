@@ -19,6 +19,8 @@
     "language_current": "اللغة: {name}",
     "timezone": "المنطقة الزمنية",
     "timezone_current": "المنطقة الزمنية: {name}",
+    "theme_current": "المظهر: {name}",
+    "theme_next": "التبديل إلى مظهر {name}",
     "status_active": "حالة النظام: نشط",
     "status_inactive": "حالة النظام: غير متصل"
   },
@@ -267,5 +269,10 @@
     "automatic": "تلقائي ({name})",
     "filter": "تصفية المناطق الزمنية…",
     "empty": "لا توجد منطقة زمنية تطابق «{query}»"
+  },
+  "theme": {
+    "light": "فاتح",
+    "dark": "داكن",
+    "system": "النظام"
   }
 }

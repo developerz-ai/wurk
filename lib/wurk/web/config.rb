@@ -74,6 +74,11 @@ module Wurk
       # it can).
       BUNDLED_LOCALES = %w[en es fr de pt-BR ja zh-CN ar].freeze
 
+      # Preferences the SPA's theme runtime understands (frontend/src/theme.ts).
+      # 'system' follows the visitor's OS; the palettes themselves are the two
+      # `data-theme` values.
+      THEMES = %w[light dark system].freeze
+
       # Host-app Rack middleware stacked in front of the dashboard, newest
       # last. Each entry is `[middleware, args, block]`. The LIVE array, like
       # Sidekiq::Web::Config#middlewares — callers mutate it directly
@@ -119,6 +124,22 @@ module Wurk
       # renderer's locale-*directory* list, a separate i18n system for
       # server-rendered third-party tabs.
       attr_accessor :offered_locales, :default_locale
+
+      # Dashboard theme hint. The SPA resolves 'light', 'dark' or 'system'
+      # (the default) out of localStorage; this is what it falls back to for a
+      # visitor who has never picked one. Injected ahead of the shell's
+      # pre-paint script so a host default paints with everything else instead
+      # of flashing the other palette. nil emits nothing.
+      attr_reader :default_theme
+
+      def default_theme=(value)
+        theme = value&.to_s
+        unless theme.nil? || THEMES.include?(theme)
+          raise ArgumentError, "default_theme must be one of #{THEMES.inspect} (got #{value.inspect})"
+        end
+
+        @default_theme = theme
+      end
 
       # Host copy overrides for the dashboard, keyed by locale tag and
       # deep-merged over the shipped bundle by the SPA:
@@ -257,6 +278,7 @@ module Wurk
         @authorization = nil
         @read_only = env_read_only?
         @read_only_message = nil
+        @default_theme = nil
         @middlewares = []
         @rack_app = nil
         init_extensions!

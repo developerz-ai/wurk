@@ -12,11 +12,17 @@ import './tailwind.css';
 import './styles/main.scss';
 import App from './App';
 import { applyLocale, locale, t } from './i18n';
+import { startTheme } from './theme';
 
 // Set text direction + language from the resolved locale before first paint so
 // the whole SPA (and its logical-property CSS) lays out RTL for ar/he/fa. This
 // module is deferred, so #wurk-root already exists and gets its `dir` here too.
 applyLocale(locale);
+
+// Re-stamp the theme the inline pre-paint script already resolved (index.html)
+// and subscribe to the OS preference, which that script can only sample once.
+// Same pass as the locale, and before render for the same reason.
+startTheme();
 
 // When this SPA is loaded inside the Extension page's embed iframe (see
 // pages/Extension.tsx), the host did NOT mount real content at the extension's
