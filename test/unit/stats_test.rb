@@ -414,8 +414,18 @@ class StatsTest < Wurk::Test::UnitCase
   # Launcher#write_stats keys stat:<kind>:<day> off `Time.now.utc.strftime('%F')`.
   # Defaulting the read side to the *local* civil date asks for a day the writer
   # never wrote, for whatever slice of each day the host's UTC offset spans.
+  #
+  # This discriminates only on a host whose civil date differs from UTC's at the
+  # moment it runs — it is a tautology on a UTC runner, which is what CI uses.
+  # It earns its keep on developer machines (this repo's are UTC-5) and as an
+  # executable statement of which clock owns these keys.
   def test_history_window_is_anchored_to_the_utc_day_the_writer_uses
-    assert_equal Time.now.utc.strftime('%F'), Wurk::Stats::History.new(1).processed.keys.first
+    before = Time.now.utc.strftime('%F')
+    key    = Wurk::Stats::History.new(1).processed.keys.first
+    after  = Time.now.utc.strftime('%F')
+
+    # `before`/`after` differ only if UTC midnight fell between them.
+    assert_includes [before, after], key
   end
 
   def test_history_uses_explicit_pool
