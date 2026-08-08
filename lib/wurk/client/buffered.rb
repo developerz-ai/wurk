@@ -531,7 +531,7 @@ module Wurk
       # next push — this is a Wurk extension for issue #19's "Background
       # drain thread flushes on reconnect" so producer-stopped-mid-outage
       # buffers don't sit idle until next push.
-      def reliable_push_drainer(interval: Buffered::Drainer::DEFAULT_INTERVAL)
+      def reliable_push_drainer(interval: Buffered::Drainer::DEFAULT_INTERVAL) # rubocop:disable Naming/PredicateMethod
         Buffered.install!
         Buffered.start_drainer!(interval: interval)
         true

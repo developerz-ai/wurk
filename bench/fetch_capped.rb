@@ -1,9 +1,9 @@
 # frozen_string_literal: true
 
-require "benchmark/ips"
-require "logger"
-require "wurk"
-require_relative "support"
+require 'benchmark/ips'
+require 'logger'
+require 'wurk'
+require_relative 'support'
 
 # Step 1 of docs/plans/2026/08/07/101-beyond-sidekiq/10-global-concurrency.md:
 # "Measure first... so the cost is known, not argued." Slice 10 has not landed
@@ -37,14 +37,14 @@ require_relative "support"
 # seed + top-up watchdog are copied verbatim rather than "simplified" for a
 # probe script.
 
-CAP          = Integer(ENV.fetch("WURK_BENCH_CAP", "20"))
+CAP          = Integer(ENV.fetch('WURK_BENCH_CAP', '20'))
 REFILL_CHUNK = 25_000
 SEED_CHUNKS  = 6
 REFILL_FLOOR = 25_000
 REFILL_POLL  = 0.05
 EMPTY_POLL   = 0.05
 
-SLOT_KEY = "bench:fetch_capped:slot"
+SLOT_KEY = 'bench:fetch_capped:slot'
 
 # Throwaway prototype, not the shape lib/wurk/lua/queue_slot.lua will end up
 # with (see header). KEYS = [slot_counter], ARGV = [cap]. Returns 1 acquired,
@@ -77,29 +77,29 @@ end
 
 config = Wurk::Configuration.new
 config.logger = Logger.new(IO::NULL)
-config.redis = { url: bench_redis_url("8") }
+config.redis = { url: bench_redis_url('8') }
 config.queues = %w[default]
 config.fetch_poll_interval = EMPTY_POLL
 capsule = config.default_capsule
 capsule.prepare!
 
-capsule.redis { |c| c.call("FLUSHDB") }
+capsule.redis { |c| c.call('FLUSHDB') }
 capsule.redis { |c| Wurk::Lua::Loader.script_load_all(c) }
 
-acquire_sha = capsule.redis { |c| c.call("SCRIPT", "LOAD", SLOT_ACQUIRE) }
-release_sha = capsule.redis { |c| c.call("SCRIPT", "LOAD", SLOT_RELEASE) }
+acquire_sha = capsule.redis { |c| c.call('SCRIPT', 'LOAD', SLOT_ACQUIRE) }
+release_sha = capsule.redis { |c| c.call('SCRIPT', 'LOAD', SLOT_RELEASE) }
 
 client    = Wurk::Client.new(pool: capsule.redis_pool)
 processor = Wurk::Processor.new(capsule)
 
-chunk = { "class" => "BenchJob", "args" => Array.new(REFILL_CHUNK) { [] }, "queue" => "default" }
+chunk = { 'class' => 'BenchJob', 'args' => Array.new(REFILL_CHUNK) { [] }, 'queue' => 'default' }
 
 SEED_CHUNKS.times { client.push_bulk(chunk) }
 
 stop = Queue.new
 refiller = Thread.new do
   until stop.pop(timeout: REFILL_POLL)
-    client.push_bulk(chunk) if capsule.redis { |c| c.call("LLEN", "queue:default") } < REFILL_FLOOR
+    client.push_bulk(chunk) if capsule.redis { |c| c.call('LLEN', 'queue:default') } < REFILL_FLOOR
   end
 end
 
@@ -107,7 +107,7 @@ begin
   Benchmark.ips do |x|
     x.config(time: 5, warmup: 2)
 
-    x.report("wurk fetch+execute (uncapped)") do
+    x.report('wurk fetch+execute (uncapped)') do
       processor.process_one
     end
 
@@ -115,10 +115,10 @@ begin
     # actually contends against CAP — this reports the round-trip overhead of
     # the gate, not its throttling behavior (that needs the multi-process
     # integration test slice 10 already scopes for itself).
-    x.report("wurk fetch+execute (capped, prototype slot)") do
-      acquired = capsule.redis { |c| c.call("EVALSHA", acquire_sha, 1, SLOT_KEY, CAP.to_s) }
+    x.report('wurk fetch+execute (capped, prototype slot)') do
+      acquired = capsule.redis { |c| c.call('EVALSHA', acquire_sha, 1, SLOT_KEY, CAP.to_s) }
       processor.process_one if acquired == 1
-      capsule.redis { |c| c.call("EVALSHA", release_sha, 1, SLOT_KEY) }
+      capsule.redis { |c| c.call('EVALSHA', release_sha, 1, SLOT_KEY) }
     end
   end
 ensure
@@ -126,4 +126,4 @@ ensure
   refiller.join
 end
 
-capsule.redis { |c| c.call("FLUSHDB") }
+capsule.redis { |c| c.call('FLUSHDB') }

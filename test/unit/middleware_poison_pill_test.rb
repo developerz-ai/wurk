@@ -197,7 +197,6 @@ class MiddlewarePoisonPillTest < Wurk::Test::UnitCase
 
   # A poison kill is a death: Batch::DeathHandler is a death handler, so
   # suppressing the notification would strand every batch owning the job.
-  # rubocop:disable Minitest/MultipleAssertions, Metrics/AbcSize
   def test_poison_kill_fires_death_handlers_with_the_poisoned_error
     received = []
     Wurk.configuration.death_handlers << ->(job, ex) { received << [job['jid'], ex] }
@@ -212,7 +211,7 @@ class MiddlewarePoisonPillTest < Wurk::Test::UnitCase
     assert_equal 'PoisonPillTestJob was recovered 3 times without completing', ex.message
     refute_nil ex.backtrace, 'error services expect a backtrace'
   end
-  # rubocop:enable Minitest/MultipleAssertions, Metrics/AbcSize
+  # rubocop:enable Minitest/MultipleAssertions
 
   # Falls back to a generic subject when the payload carries no class name.
   def test_poisoned_error_message_without_a_class
@@ -315,7 +314,7 @@ class MiddlewarePoisonPillTest < Wurk::Test::UnitCase
     assert_equal [['not-json{{', nil]], recorded
   end
 
-  # rubocop:disable Minitest/MultipleAssertions, Metrics/AbcSize
+  # rubocop:disable Minitest/MultipleAssertions
   def test_super_fetch_callback_receives_pill_on_poison_kill
     recorded = []
     cfg = recovery_config { |jobstr, pill| recorded << [jobstr, pill] }
@@ -333,7 +332,7 @@ class MiddlewarePoisonPillTest < Wurk::Test::UnitCase
     assert_equal 3, pill.count
     assert_equal @queue, pill.queue
   end
-  # rubocop:enable Minitest/MultipleAssertions, Metrics/AbcSize
+  # rubocop:enable Minitest/MultipleAssertions
 
   # The two-arg super_fetch block and the legacy on_poison Hash callback are
   # independent registries; both must fire on a poison kill.

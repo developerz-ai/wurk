@@ -26,7 +26,6 @@ class IterableJobQueryTest < Wurk::Test::UnitCase
 
   # --- State decoding ----------------------------------------------------
 
-  # rubocop:disable Minitest/MultipleAssertions
   # One canonical State shape — all four decoded fields belong in one assertion set.
   def test_state_decodes_wire_fields
     jid = seed(ex: 3, rt: 12.5, cursor: [42, 'page'])

@@ -124,7 +124,6 @@ class MiddlewareExpiryTest < Wurk::Test::UnitCase
     assert_nil result
   end
 
-  # rubocop:disable Minitest/MultipleAssertions
   # One test pinning the entire statsd wire shape (count + metric + tags);
   # splitting would obscure the contract.
   def test_skip_emits_statsd_jobs_expired

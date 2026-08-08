@@ -46,7 +46,6 @@ class ActiveJobAdapterTest < Wurk::Test::UnitCase
 
   # --- enqueue: shape & wire-compat --------------------------------------
 
-  # rubocop:disable Minitest/MultipleAssertions
   # One test, one canonical shape — splitting the four field assertions
   # would obscure the contract ("the LPUSH'd JSON has exactly these fields").
   def test_enqueue_lpushes_canonical_wrapper_payload

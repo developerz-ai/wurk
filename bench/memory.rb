@@ -1,8 +1,8 @@
 # frozen_string_literal: true
 
-require "logger"
-require "wurk"
-require_relative "support"
+require 'logger'
+require 'wurk'
+require_relative 'support'
 
 # Memory profile of the fetch+execute hot path — the "memory blocks merge"
 # critical path in CLAUDE.md's "Faster" pillar. Drives the REAL client.push +
@@ -36,8 +36,8 @@ require_relative "support"
 # Real Redis, dedicated logical DB (default 13, mirroring fetch_execute's
 # isolation from #259). DB 0 is never touched.
 
-JOBS    = Integer(ENV.fetch("WURK_BENCH_MEM_JOBS", "2000"))
-SAMPLES = Integer(ENV.fetch("WURK_BENCH_MEM_SAMPLES", "5"))
+JOBS    = Integer(ENV.fetch('WURK_BENCH_MEM_JOBS', '2000'))
+SAMPLES = Integer(ENV.fetch('WURK_BENCH_MEM_SAMPLES', '5'))
 
 class BenchJob
   include Wurk::Job
@@ -47,19 +47,19 @@ end
 
 config = Wurk::Configuration.new
 config.logger = Logger.new(IO::NULL)
-config.redis = { url: bench_redis_url("13") }
+config.redis = { url: bench_redis_url('13') }
 config.queues = %w[default]
 capsule = config.default_capsule
 capsule.prepare!
 
 # Isolated scratch DB: a clean slate keeps this closed loop the only consumer
 # of queue:default, so every LMOVE finds the job we just pushed.
-capsule.redis { |c| c.call("FLUSHDB") }
+capsule.redis { |c| c.call('FLUSHDB') }
 capsule.redis { |c| Wurk::Lua::Loader.script_load_all(c) }
 
 client    = Wurk::Client.new(pool: capsule.redis_pool)
 processor = Wurk::Processor.new(capsule)
-job       = { "class" => "BenchJob", "args" => [], "queue" => "default" }
+job       = { 'class' => 'BenchJob', 'args' => [], 'queue' => 'default' }
 
 # Closed loop: push one, drain one, JOBS times — measuring both series across
 # the whole push + fetch + middleware + perform + ack round-trip.
@@ -95,10 +95,10 @@ hot_path_sample(client, processor, job, [JOBS / 4, 1].max)
 
 samples = Array.new(SAMPLES) { hot_path_sample(client, processor, job, JOBS) }
 
-capsule.redis { |c| c.call("FLUSHDB") }
+capsule.redis { |c| c.call('FLUSHDB') }
 
-report_series("wurk hot-path (jobs/1k-alloc)", samples.map { |allocated, _| JOBS * 1000.0 / allocated })
+report_series('wurk hot-path (jobs/1k-alloc)', samples.map { |allocated, _| JOBS * 1000.0 / allocated })
 # Clamp the delta at 0: warmup can free more than the loop retains, and a
 # negative score would not parse as a benchmark/ips line at all.
-report_series("wurk hot-path (retention-free/1k)",
+report_series('wurk hot-path (retention-free/1k)',
               samples.map { |_, retained| JOBS * 1000.0 / (JOBS + [retained, 0].max) })

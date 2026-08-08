@@ -51,14 +51,15 @@ class MetricsEmissionsTest < Wurk::Test::UnitCase
     enq = @fake.calls.find { |c| c[1] == 'sidekiq.jobs.enqueued' }
 
     refute_nil enq, 'expected sidekiq.jobs.enqueued increment'
-    assert_equal ["worker:MyJob", "queue:#{@ns}"], enq[2][:tags]
+    assert_equal ['worker:MyJob', "queue:#{@ns}"], enq[2][:tags]
   ensure
     cleanup_queue
   end
 
   def test_push_skips_emit_when_middleware_halts
     halt = Class.new do
-      def call(_w, _job, _q, _r); end # returns nil → halt
+      # Returning nil halts the client middleware chain.
+      def call(_w, _job, _q, _redis); end
     end
     Wurk.configuration.client_middleware.add(halt)
     begin
@@ -67,7 +68,7 @@ class MetricsEmissionsTest < Wurk::Test::UnitCase
       Wurk.configuration.client_middleware.remove(halt)
     end
 
-    assert_nil @fake.calls.find { |c| c[1] == 'sidekiq.jobs.enqueued' }
+    assert_nil(@fake.calls.find { |c| c[1] == 'sidekiq.jobs.enqueued' })
   end
 
   # With nothing configured the emit must not read the payload at all — no tag
@@ -113,7 +114,7 @@ class MetricsEmissionsTest < Wurk::Test::UnitCase
     ret = @fake.calls.find { |c| c[1] == 'sidekiq.jobs.retried' }
 
     refute_nil ret
-    assert_equal ["worker:FailingJob", "queue:#{@ns}"], ret[2][:tags]
+    assert_equal ['worker:FailingJob', "queue:#{@ns}"], ret[2][:tags]
   ensure
     # schedule_retry doesn't mutate msg, so the ZADDed payload is exactly
     # `dump_json(msg)`. ZREM that single entry only — wiping the whole zset

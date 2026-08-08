@@ -30,7 +30,7 @@ module Wurk
     class ServerMiddleware
       include Wurk::Middleware::ServerMiddleware
 
-      def call(_worker, job, _queue)
+      def call(_worker, job, _queue, &)
         bid = job['bid']
         return yield unless bid
 
@@ -39,7 +39,7 @@ module Wurk
           return
         end
 
-        run_and_ack(bid, job['jid']) { yield }
+        run_and_ack(bid, job['jid'], &)
       end
 
       private

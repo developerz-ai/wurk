@@ -40,7 +40,6 @@ class ActiveJobSidekiqAdapterEngineTest < Wurk::Test::EngineCase
     )
   end
 
-  # rubocop:disable Minitest/MultipleAssertions
   # One test, one canonical shape — splitting the field assertions would
   # obscure the contract ("the LPUSH'd JSON has exactly these fields").
   def test_perform_later_enqueues_canonical_wrapper_payload

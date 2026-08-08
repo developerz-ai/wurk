@@ -409,7 +409,7 @@ module Wurk
       guard_frozen!
       p = Integer(port)
       rw = Integer(ready_window)
-      raise ArgumentError, 'port must be between 0 and 65535' unless (0..65535).cover?(p)
+      raise ArgumentError, 'port must be between 0 and 65535' unless (0..65_535).cover?(p)
       raise ArgumentError, 'ready_window must be > 0' unless rw.positive?
 
       b = bind.to_s
@@ -557,7 +557,7 @@ module Wurk
     # native name, SIDEKIQ_COUNT the drop-in alias. Unparseable input falls back
     # to the CPU count; the result is floored at 1 so the swarm always forks.
     def default_child_count
-      raw = ENV['WURK_COUNT'] || ENV['SIDEKIQ_COUNT']
+      raw = ENV['WURK_COUNT'] || ENV.fetch('SIDEKIQ_COUNT', nil)
       return Etc.nprocessors if raw.nil? || raw.strip.empty?
 
       value = Float(raw)
@@ -570,7 +570,7 @@ module Wurk
     # SIDEKIQ_MAXMEM_MB is the drop-in name; WURK_MAXMEM_MB the native alias.
     # Unparseable / empty input disables recycling rather than raising at boot.
     def env_memory_limit_mb
-      raw = ENV['WURK_MAXMEM_MB'] || ENV['SIDEKIQ_MAXMEM_MB']
+      raw = ENV['WURK_MAXMEM_MB'] || ENV.fetch('SIDEKIQ_MAXMEM_MB', nil)
       return nil if raw.nil? || raw.strip.empty?
 
       Integer(raw)

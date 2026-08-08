@@ -10,7 +10,7 @@ class ChangelogSectionTest < Wurk::Test::UnitCase
 
   SCRIPT = File.expand_path('../../bin/changelog-section', __dir__)
 
-  def test_prints_known_section_body # rubocop:disable Minitest/MultipleAssertions
+  def test_prints_known_section_body
     out = `#{SCRIPT} 0.0.5`
 
     assert_equal 0, $CHILD_STATUS.exitstatus

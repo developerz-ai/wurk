@@ -425,7 +425,7 @@ class LuaTest < Wurk::Test::UnitCase
     end
   end
 
-  def test_batch_ack_complete_records_death_and_signals_first # rubocop:disable Metrics/AbcSize
+  def test_batch_ack_complete_records_death_and_signals_first
     bkey   = "#{@ns}:b-d"
     jids   = "#{@ns}:b-d-jids"
     died   = "#{@ns}:b-d-died"

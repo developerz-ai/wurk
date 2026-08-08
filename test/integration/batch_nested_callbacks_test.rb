@@ -21,7 +21,9 @@ class Batch209GatedWorker
     client.call('SET', running_key, ::Process.pid.to_s, 'EX', 60)
     deadline = ::Process.clock_gettime(::Process::CLOCK_MONOTONIC) + 20
     until client.call('EXISTS', release_key) == 1
-      raise "#{release_key} never set — test driver lost?" if ::Process.clock_gettime(::Process::CLOCK_MONOTONIC) > deadline
+      if ::Process.clock_gettime(::Process::CLOCK_MONOTONIC) > deadline
+        raise "#{release_key} never set — test driver lost?"
+      end
 
       sleep 0.05
     end
@@ -73,7 +75,7 @@ class BatchNestedCallbacksTest < Wurk::Test::UnitCase
     super
   end
 
-  def test_parent_callbacks_wait_for_running_child_batch_under_real_forks # rubocop:disable Metrics/AbcSize,Metrics/MethodLength,Minitest/MultipleAssertions
+  def test_parent_callbacks_wait_for_running_child_batch_under_real_forks # rubocop:disable Metrics/MethodLength
     parent, child = enqueue_nested_batches
     swarm = Wurk::Swarm.new(topology: topology, config: @config, shutdown_timeout: 5)
     supervisor = nil
@@ -157,7 +159,7 @@ class BatchNestedCallbacksTest < Wurk::Test::UnitCase
     @observer.call('HGET', "b-#{batch.bid}", field)
   end
 
-  def wait_until
+  def wait_until # rubocop:disable Naming/PredicateMethod
     deadline = monotonic_now + POLL_TIMEOUT
     until monotonic_now > deadline
       return true if yield

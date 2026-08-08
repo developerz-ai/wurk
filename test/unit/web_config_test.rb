@@ -163,7 +163,7 @@ class WebConfigTest < Wurk::Test::UnitCase
   # --- Read-only mode ---------------------------------------------------
 
   def test_read_only_defaults_off
-    refute Wurk::Web.config.read_only?
+    refute_predicate Wurk::Web.config, :read_only?
   end
 
   def test_read_only_message_defaults_nil
@@ -186,14 +186,14 @@ class WebConfigTest < Wurk::Test::UnitCase
   def test_read_only_writer_coerces_to_boolean
     Wurk::Web.configure { |c| c.read_only = 'yes' }
 
-    assert_equal true, Wurk::Web.config.read_only?
+    assert_predicate Wurk::Web.config, :read_only?
   end
 
   def test_read_only_writer_treats_falsey_strings_as_off
     ['0', 'false', 'FALSE', 'no', 'off', ' ', ''].each do |off|
       Wurk::Web.configure { |c| c.read_only = off }
 
-      assert_equal false, Wurk::Web.config.read_only?, "expected #{off.inspect} to be off"
+      refute_predicate Wurk::Web.config, :read_only?, "expected #{off.inspect} to be off"
     end
   end
 
@@ -201,7 +201,7 @@ class WebConfigTest < Wurk::Test::UnitCase
     with_env('WURK_WEB_READ_ONLY', '1') do
       Wurk::Web.reset_config!
 
-      assert Wurk::Web.config.read_only?
+      assert_predicate Wurk::Web.config, :read_only?
     end
   end
 
@@ -358,7 +358,7 @@ class WebConfigTest < Wurk::Test::UnitCase
   private
 
   def with_env(key, value)
-    previous = ENV[key]
+    previous = ENV.fetch(key, nil)
     ENV[key] = value
     yield
   ensure

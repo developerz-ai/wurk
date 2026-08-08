@@ -67,7 +67,7 @@ class CompatAliasesTest < Wurk::Test::UnitCase
 
       Wurk.configuration[:use_datadog_extensions] = false
 
-      assert_equal false, Wurk.configuration[:use_datadog_extensions]
+      refute Wurk.configuration[:use_datadog_extensions]
     ensure
       Wurk.configuration.dogstatsd = previous
       Wurk.configuration[:use_datadog_extensions] = previous_dd
@@ -359,11 +359,13 @@ class CompatAliasesTest < Wurk::Test::UnitCase
       custom = Logger.new(IO::NULL)
 
       Sidekiq.logger = custom
+
       assert_same custom, Sidekiq.logger
       assert_same custom, Wurk.configuration.logger
 
       other = Logger.new(IO::NULL)
       Wurk.logger = other
+
       assert_same other, Wurk.logger
       assert_same other, Wurk.configuration.logger
     ensure

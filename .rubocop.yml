@@ -10,10 +10,12 @@ AllCops:
     - "test/dummy/vendor/**/*"
     - "vendor/**/*"
     - "frontend/**/*"
+    # Gitignored scratch. Linting it makes a local run disagree with CI.
+    - "tmp/**/*"
     # The demo is a standalone Rails app (Rails-idiomatic style), not gem source.
     - "demo/**/*"
 
-require:
+plugins:
   - rubocop-minitest
   - rubocop-rake
 
@@ -27,13 +29,56 @@ Style/Documentation:
 Style/FrozenStringLiteralComment:
   EnforcedStyle: always
 
+# Benchmarks and CLI output are printf-style column formatting ("%-28s %8.1f").
+# Annotated tokens buy nothing there and make the format strings unreadable.
+Style/FormatStringToken:
+  EnforcedStyle: unannotated
+
 Metrics/MethodLength:
   Max: 30
+
+# A 30-line method (see above) lands around 9-10 branches naturally; the default
+# 7/8 would flag ordinary Sidekiq-compat option handling as complexity.
+Metrics/CyclomaticComplexity:
+  Max: 10
+
+Metrics/PerceivedComplexity:
+  Max: 10
 
 Metrics/ClassLength:
   Max: 200
   Exclude:
     - "test/**/*"
+
+# A module here is a class by another name (Client::Buffered, Batch::Callbacks).
+# Same budget as Metrics/ClassLength rather than the default 100.
+Metrics/ModuleLength:
+  Max: 200
+  Exclude:
+    - "test/**/*"
+
+# `test/` and `bench/` are harnesses, not gem source: setup-heavy test bodies and
+# single-file benchmark scripts are supposed to be long and linear, and gating
+# them on gem-source metrics only rewards indirection.
+Metrics/AbcSize:
+  Exclude:
+    - "test/**/*"
+    - "bench/**/*"
+
+# Route blocks, Rake namespaces and the gemspec are declaration lists, not logic;
+# their length is their content.
+Metrics/BlockLength:
+  Exclude:
+    - "config/routes.rb"
+    - "Rakefile"
+    - "tasks/**/*"
+    - "*.gemspec"
+
+# Sidekiq's limiter constructors are wide by spec (name, count, interval, plus
+# :wait_timeout/:lock_timeout/:policy/:ttl). Keywords are self-documenting at the
+# call site, so only positional arity is worth policing. Wire-compat = sacred.
+Metrics/ParameterLists:
+  CountKeywordArgs: false
 
 # Sidekiq's public API uses short names (ex, ctx, q, w, b). Wire-compat = sacred.
 Naming/MethodParameterName:
@@ -49,8 +94,20 @@ Naming/MethodParameterName:
     - tz
     - at
     - ms
+    - by
 
 # Tests assert on Sidekiq-spec'd integer defaults (e.g. timeout: 25). Allow trailing digits.
 Naming/VariableNumber:
   Exclude:
     - "test/**/*"
+
+# The limiter tests measure the limiter itself: `limiter.within_limit { }` with an
+# empty body IS the assertion, because any work in the block pollutes the timing.
+Lint/EmptyBlock:
+  Exclude:
+    - "test/**/*"
+
+# One behaviour per test, but a behaviour is rarely one assertion: checking a
+# pushed job's queue, class, and args is three asserts describing one outcome.
+Minitest/MultipleAssertions:
+  Enabled: false

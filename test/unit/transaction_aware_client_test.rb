@@ -59,7 +59,6 @@ class TransactionAwareClientTest < Wurk::Test::UnitCase
 
   # --- push deferral / commit / rollback ---------------------------------
 
-  # rubocop:disable Minitest/MultipleAssertions
   # One story: jid is returned synchronously, the enqueue is deferred, and the
   # deferred push persists that same jid. Splitting would obscure the contract.
   def test_push_returns_jid_synchronously_but_defers_the_enqueue
@@ -126,7 +125,7 @@ class TransactionAwareClientTest < Wurk::Test::UnitCase
     end
   end
 
-  def test_batching_pushes_immediately # rubocop:disable Metrics/AbcSize
+  def test_batching_pushes_immediately
     client = Wurk::TransactionAwareClient.new
     bid = "btest-#{Process.pid}-#{object_id}"
     previous = Thread.current[Wurk::Batch::THREAD_KEY]
@@ -146,7 +145,7 @@ class TransactionAwareClientTest < Wurk::Test::UnitCase
 
   # --- end-to-end through the worker DSL ---------------------------------
 
-  # rubocop:disable Minitest/MultipleAssertions, Metrics/AbcSize
+  # rubocop:disable Minitest/MultipleAssertions
   # End-to-end acceptance: one perform_async, deferred, committed, asserting the
   # full payload shape lands correctly. Cohesive — keep it as one scenario.
   def test_perform_async_defers_when_transactional_push_enabled
@@ -170,7 +169,7 @@ class TransactionAwareClientTest < Wurk::Test::UnitCase
       refute payload.key?('client_class'), 'client_class must never reach the wire'
     end
   end
-  # rubocop:enable Minitest/MultipleAssertions, Metrics/AbcSize
+  # rubocop:enable Minitest/MultipleAssertions
 
   # A class whose sidekiq_options memoized BEFORE the global opt-in must still
   # route through the transactional client — transactional_push! lives in an

@@ -59,7 +59,6 @@ class WorkSetTest < Wurk::Test::UnitCase
 
   # --- each --------------------------------------------------------------
 
-  # rubocop:disable Minitest/MultipleAssertions
   # One test, one yielded shape: pid/tid/job.jid are the public contract.
   def test_each_yields_pid_tid_work_triples
     jid = push_work(@identity, 't1')

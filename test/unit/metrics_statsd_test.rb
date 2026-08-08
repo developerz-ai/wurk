@@ -198,7 +198,6 @@ class MetricsStatsdTest < Wurk::Test::UnitCase
     assert_operator dist[2], :>=, 0.0
   end
 
-  # rubocop:disable Metrics/AbcSize
   def test_metric_names_get_sidekiq_prefix
     fake = FakeClient.new
     Wurk.configuration.dogstatsd = fake
@@ -209,7 +208,6 @@ class MetricsStatsdTest < Wurk::Test::UnitCase
     assert_equal 'sidekiq.jobs.poison', fake.calls.first[1]
     assert_equal ['class:X'], fake.calls.first[2][:tags]
   end
-  # rubocop:enable Metrics/AbcSize
 
   def test_increment_swallows_client_errors
     boom = Object.new
@@ -303,7 +301,6 @@ class MetricsStatsdTest < Wurk::Test::UnitCase
     assert yielded
   end
 
-  # rubocop:disable Minitest/MultipleAssertions
   def test_call_emits_count_success_perform_perform_dist_on_success
     fake = FakeClient.new
     Wurk.configuration.dogstatsd = fake

@@ -27,7 +27,7 @@ class SwarmRestartTest < Wurk::Test::UnitCase
     assert_predicate @restart, :idle?
   end
 
-  def test_happy_path_replaces_slot_then_drains_old # rubocop:disable Minitest/MultipleAssertions
+  def test_happy_path_replaces_slot_then_drains_old
     @restart.enqueue([100])
 
     @restart.advance # spawn replacement
@@ -46,7 +46,7 @@ class SwarmRestartTest < Wurk::Test::UnitCase
     assert_predicate @restart, :idle?
   end
 
-  def test_replacement_death_keeps_old_and_retries_after_backoff # rubocop:disable Minitest/MultipleAssertions
+  def test_replacement_death_keeps_old_and_retries_after_backoff
     @restart.enqueue([100])
     @restart.advance # spawn first replacement
 
@@ -68,7 +68,7 @@ class SwarmRestartTest < Wurk::Test::UnitCase
 
   # A fork/resource failure while spawning the replacement must requeue the
   # slot (not drop the restart work item) and must not escape `advance`.
-  def test_spawn_failure_requeues_slot_and_retries_after_backoff # rubocop:disable Minitest/MultipleAssertions
+  def test_spawn_failure_requeues_slot_and_retries_after_backoff
     fail_next = [true]
     spawner = lambda do |slot, idx|
       raise Errno::EAGAIN, 'resource temporarily unavailable' if fail_next[0]

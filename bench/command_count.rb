@@ -1,8 +1,8 @@
 # frozen_string_literal: true
 
-require "logger"
-require "wurk"
-require_relative "support"
+require 'logger'
+require 'wurk'
+require_relative 'support'
 
 # Per-job Redis command tripwire — the round-trip half of the "Why wurk is
 # slower" story in docs/benchmarks.md. Scripts the `INFO commandstats` method
@@ -60,15 +60,15 @@ require_relative "support"
 # stray dev/CI Redis with real data is never drained or flushed. DB 0 is never
 # touched.
 
-JOBS   = Integer(ENV.fetch("WURK_BENCH_CMD_JOBS", "500"))
-BUDGET = Float(ENV.fetch("WURK_BENCH_CMD_BUDGET", "3"))
+JOBS   = Integer(ENV.fetch('WURK_BENCH_CMD_JOBS', '500'))
+BUDGET = Float(ENV.fetch('WURK_BENCH_CMD_BUDGET', '3'))
 # The floor, checked as strictly as the ceiling. A count that DROPS is a win,
 # but an unannounced one leaves the comment above, docs/benchmarks.md and the
 # plan all quoting a number no run reproduces — the failure mode this script
 # exists to prevent, in the direction a budget alone can't see. Landing a
 # reduction means re-baselining here and republishing the prose in the same
 # commit, which is the point.
-BASELINE = Float(ENV.fetch("WURK_BENCH_CMD_BASELINE", "3"))
+BASELINE = Float(ENV.fetch('WURK_BENCH_CMD_BASELINE', '3'))
 
 # This same BUDGET/BASELINE pair (env-overridable, not forked into new
 # constants) IS the "feature disabled" gate that three slices of
@@ -105,7 +105,7 @@ end
 
 # Server-side call counters, keyed by command name ("hincrby", "config|get").
 def command_calls(capsule)
-  info = capsule.redis { |c| c.call("INFO", "commandstats") }
+  info = capsule.redis { |c| c.call('INFO', 'commandstats') }
   info.each_line
       .filter_map { |line| line.match(/\Acmdstat_(?<cmd>[^:]+):calls=(?<calls>\d+)/) }
       .to_h { |m| [m[:cmd], Integer(m[:calls])] }
@@ -123,7 +123,7 @@ end
 def report(calls, jobs)
   rows = calls.sort_by { |_, count| -count }
   rows.each { |cmd, count| printf("  %8d  %7.2f  %s\n", count, count / jobs.to_f, cmd) }
-  puts "  --------  -------"
+  puts '  --------  -------'
   total = calls.values.sum
   printf("  %8d  %7.2f  total\n\n", total, total / jobs.to_f)
   total / jobs.to_f
@@ -136,48 +136,48 @@ end
 # number no worker can reproduce. Every real worker boots from this object.
 config = Wurk.configuration
 config.logger = Logger.new(IO::NULL)
-config.redis = { url: bench_redis_url("9") }
+config.redis = { url: bench_redis_url('9') }
 config.queues = %w[default]
 capsule = config.default_capsule
 capsule.prepare!
 
 # Isolated scratch DB: a clean slate keeps this closed loop the only consumer
 # of queue:default, so every fetch finds the job we pushed.
-capsule.redis { |c| c.call("FLUSHDB") }
+capsule.redis { |c| c.call('FLUSHDB') }
 capsule.redis { |c| Wurk::Lua::Loader.script_load_all(c) }
 
 client    = Wurk::Client.new(pool: capsule.redis_pool)
 processor = Wurk::Processor.new(capsule)
 
-client.push_bulk("class" => "BenchJob", "args" => Array.new(WARMUP + JOBS) { [] }, "queue" => "default")
+client.push_bulk('class' => 'BenchJob', 'args' => Array.new(WARMUP + JOBS) { [] }, 'queue' => 'default')
 drain(processor, WARMUP)
 
-capsule.redis { |c| c.call("CONFIG", "RESETSTAT") }
+capsule.redis { |c| c.call('CONFIG', 'RESETSTAT') }
 processed = drain(processor, JOBS)
 calls     = command_calls(capsule)
 
-capsule.redis { |c| c.call("FLUSHDB") }
+capsule.redis { |c| c.call('FLUSHDB') }
 
 # A queue that ran dry parks the fetcher in BLMOVE and yields nil: fewer
 # commands for fewer jobs, which reads as an improvement. Fail loud instead.
 unless processed == JOBS
-  abort format("✗ drained %d of %d jobs — the queue ran dry, so the count is meaningless", processed, JOBS)
+  abort format('✗ drained %d of %d jobs — the queue ran dry, so the count is meaningless', processed, JOBS)
 end
 
 puts "wurk — #{JOBS} noop jobs drained from queue:default (INFO commandstats)\n\n"
-puts "  commands  per job  command"
+puts '  commands  per job  command'
 per_job = report(calls, JOBS)
 # abort writes to unbuffered stderr, which would land the verdict above the
 # table it is a verdict on.
 $stdout.flush
 
-abort format("✗ %.2f commands/job, over the budget of %.2f", per_job, BUDGET) if per_job > BUDGET
+abort format('✗ %.2f commands/job, over the budget of %.2f', per_job, BUDGET) if per_job > BUDGET
 if per_job < BASELINE
   abort format(
-    "✗ %.2f commands/job, under the recorded baseline of %.2f — re-baseline this script and republish " \
-    "docs/benchmarks.md from this run",
+    '✗ %.2f commands/job, under the recorded baseline of %.2f — re-baseline this script and republish ' \
+    'docs/benchmarks.md from this run',
     per_job, BASELINE
   )
 end
-puts format("✓ %.2f commands/job, within the budget of %.2f and at the recorded baseline of %.2f",
+puts format('✓ %.2f commands/job, within the budget of %.2f and at the recorded baseline of %.2f',
             per_job, BUDGET, BASELINE)

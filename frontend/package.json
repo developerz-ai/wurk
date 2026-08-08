@@ -10,7 +10,6 @@
     "dev": "vite",
     "build": "tsc -b && vite build --outDir ../vendor/assets/dashboard --emptyOutDir",
     "preview": "vite preview",
-    "lint": "eslint .",
     "typecheck": "tsc --noEmit",
     "test": "vitest run"
   },
@@ -28,7 +27,6 @@
     "@testing-library/dom": "^10.4.1",
     "@testing-library/jest-dom": "^7.0.0",
     "daisyui": "^5.7.0",
-    "eslint": "^9.0.0",
     "jsdom": "^30.0.1",
     "sass": "^1.101.7",
     "tailwindcss": "^4.3.3",

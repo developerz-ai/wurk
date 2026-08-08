@@ -36,7 +36,7 @@ module Wurk
   # Nested batches: a job opening its OWN batch (`batch.jobs { ... }`)
   # increments live counters on the existing batch. A callback opening its
   # PARENT batch links via parent_bid and adds child BID to b-<bid>-kids.
-  class Batch
+  class Batch # rubocop:disable Metrics/ClassLength
     DEFAULT_EXPIRY_SECONDS = 30 * 24 * 60 * 60
     POST_SUCCESS_EXPIRY_SECONDS = 24 * 60 * 60
     CALLBACK_NOTIFY_TTL = 30 * 24 * 60 * 60

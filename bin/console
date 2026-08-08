@@ -1,13 +1,13 @@
 #!/usr/bin/env ruby
 # frozen_string_literal: true
 
-require "bundler/setup"
-require "wurk"
+require 'bundler/setup'
+require 'wurk'
 
 begin
-  require "pry"
+  require 'pry'
   Pry.start
 rescue LoadError
-  require "irb"
+  require 'irb'
   IRB.start(__FILE__)
 end

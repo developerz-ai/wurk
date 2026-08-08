@@ -36,7 +36,7 @@ class SiteCodeBlocksTest < Minitest::Test
     unfocusable = opening_tags.reject { |tag| tag.include?('tabindex="0"') }
 
     assert_empty unfocusable,
-                 "every <pre> is a horizontal scroll container and must carry tabindex=\"0\" " \
+                 'every <pre> is a horizontal scroll container and must carry tabindex="0" ' \
                  "so it can be scrolled by keyboard (WCAG 2.1.1); missing on: #{unfocusable.join(', ')}"
   end
 

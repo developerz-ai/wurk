@@ -92,7 +92,8 @@ class WebAuthorizationTest < Wurk::Test::EngineCase
 
     assert_equal 200, last_response.status
     body = JSON.parse(last_response.body)
-    assert_equal false, body['read_only']
+
+    refute body['read_only']
     assert_nil body['read_only_message']
   end
 
@@ -111,7 +112,7 @@ class WebAuthorizationTest < Wurk::Test::EngineCase
     get '/wurk/api/meta'
 
     assert_equal 200, last_response.status
-    assert_equal true, JSON.parse(last_response.body)['read_only']
+    assert JSON.parse(last_response.body)['read_only']
   end
 
   # Per-request read-only: a viewer role (authorization hook permits GET but
@@ -123,7 +124,7 @@ class WebAuthorizationTest < Wurk::Test::EngineCase
     get '/wurk/api/meta'
 
     assert_equal 200, last_response.status
-    assert_equal true, JSON.parse(last_response.body)['read_only']
+    assert JSON.parse(last_response.body)['read_only']
   end
 
   # An authorization hook that permits mutations (e.g. an admin role) keeps
@@ -134,7 +135,7 @@ class WebAuthorizationTest < Wurk::Test::EngineCase
     get '/wurk/api/meta'
 
     assert_equal 200, last_response.status
-    assert_equal false, JSON.parse(last_response.body)['read_only']
+    refute JSON.parse(last_response.body)['read_only']
   end
 
   # A path-sensitive hook (permits the current /api/meta path but denies real
@@ -149,7 +150,7 @@ class WebAuthorizationTest < Wurk::Test::EngineCase
     get '/wurk/api/meta'
 
     assert_equal 200, last_response.status
-    assert_equal true, JSON.parse(last_response.body)['read_only']
+    assert JSON.parse(last_response.body)['read_only']
   end
 
   def test_meta_includes_read_only_message_when_set

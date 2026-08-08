@@ -66,7 +66,7 @@ module Wurk
       # `leader_identity` is the cluster's `dear-leader` value (ProcessSet#leader,
       # memoized to one Redis GET per request) — comparing here avoids the N+1
       # `Process#leader?` GET-per-row that a per-process lookup would cost.
-      def process_row(process, leader_identity: nil)
+      def process_row(process, leader_identity: nil) # rubocop:disable Metrics/AbcSize
         {
           identity: process.identity,
           hostname: process['hostname'],

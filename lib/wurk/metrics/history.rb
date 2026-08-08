@@ -132,8 +132,7 @@ module Wurk
         # cannot drift on bucket-naming convention.
         def minute_key(time)
           t = time.utc
-          format("#{MINUTE_KEY_PREFIX}%<date>s|%<hr>d:%<min>d",
-                 date: t.strftime(DATE_FORMAT), hr: t.hour, min: t.min)
+          format("#{MINUTE_KEY_PREFIX}%s|%d:%d", t.strftime(DATE_FORMAT), t.hour, t.min)
         end
 
         def hour_key(klass, time)

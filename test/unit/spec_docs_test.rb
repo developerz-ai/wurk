@@ -21,18 +21,18 @@ class SpecDocsTest < Minitest::Test
 
     refute(
       !File.directory?(docs_target),
-      "docs/target/ directory does not exist"
+      'docs/target/ directory does not exist'
     )
 
     SPEC_FILES.each do |filename|
       spec_file = File.join(docs_target, filename)
-      assert(
-        File.exist?(spec_file),
+
+      assert_path_exists(
+        spec_file,
         "spec doc #{filename} does not exist in docs/target/"
       )
-      assert(
-        File.size(spec_file) > 0,
-        "spec doc #{filename} is empty (0 bytes)"
+      assert_operator(
+        File.size(spec_file), :>, 0, "spec doc #{filename} is empty (0 bytes)"
       )
     end
   end

@@ -28,7 +28,7 @@ module Wurk
       # Apply refill on read so the size matches what the *next* acquire
       # would see. Stored balance only updates on acquire/refund; without
       # this, a fully-refilled bucket reports stale low numbers.
-      def size
+      def size # rubocop:disable Metrics/AbcSize
         cap = @options[:initial].to_f
         data = Wurk::Limiter.redis { |c| c.call('HMGET', state_key, 'points', 'last') }
         stored = data[0]

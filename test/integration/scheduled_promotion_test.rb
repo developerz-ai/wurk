@@ -80,7 +80,7 @@ class ScheduledPromotionTest < Wurk::Test::UnitCase
     super
   end
 
-  def test_due_scheduled_job_is_promoted_and_runs # rubocop:disable Metrics/AbcSize,Minitest/MultipleAssertions
+  def test_due_scheduled_job_is_promoted_and_runs
     target_at = schedule_sentinel_job(SCHEDULE_DELAY)
     swarm = Wurk::Swarm.new(topology: topology_n(1), config: @config, shutdown_timeout: 5)
     supervisor = nil

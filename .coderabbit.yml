@@ -2,12 +2,13 @@
 # Docs: https://docs.coderabbit.ai/reference/configuration
 
 language: en-US
-tone_instructions: >
-  Be friendly and constructive. The three load-bearing invariants are:
-  100% drop-in Sidekiq API + Redis schema, free (no tiers), and measured
-  (performance is benchmarked and published, never claimed — wurk is not
-  currently faster than stock Sidekiq, see docs/benchmarks.md). Flag changes
-  that risk any of those over style nitpicks.
+# Hard cap: 250 characters. Over that, CodeRabbit rejects the whole file and
+# silently reviews with its defaults instead.
+tone_instructions: >-
+  Friendly and constructive. Three load-bearing rules: 100% drop-in
+  Sidekiq API + Redis schema; free, no tiers; measured (benchmarked, never
+  claimed — wurk is not faster than Sidekiq today, see docs/benchmarks.md).
+  Flag risks to those over nitpicks.
 early_access: false
 enable_free_tier: true
 

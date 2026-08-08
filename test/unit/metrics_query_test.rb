@@ -316,7 +316,7 @@ class MetricsQueryTest < Wurk::Test::UnitCase
   end
 
   def test_queue_history_caps_queue_count
-    names = (0...30).map { |i| format('Qcap%<s>s_%<i>02d', s: @suffix, i: i) }
+    names = (0...30).map { |i| format('Qcap%s_%02d', @suffix, i) }
     Wurk.redis { |c| c.call('SADD', 'queues', *names) }
 
     series = Wurk::Metrics::Query.queue_history('1m', 120, now: @now)

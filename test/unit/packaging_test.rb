@@ -35,7 +35,7 @@ class PackagingTest < Wurk::Test::UnitCase
 
       assert_includes runtime_dep_names, gem_name,
                       "lib/ requires '#{lib}' but #{gem_name} is not a gemspec runtime " \
-                      "dependency — `require \"wurk\"` will LoadError on a Ruby version " \
+                      'dependency — `require "wurk"` will LoadError on a Ruby version ' \
                       "where #{lib} has left the default gems (non-Rails apps, #237)."
     end
   end

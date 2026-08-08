@@ -347,6 +347,10 @@ jobs:
       - name: install dashboard deps
         run: bun install --frozen-lockfile
         working-directory: frontend
+      # `tsc --noEmit` is the frontend's only static gate, by necessity. eslint
+      # is not wired up here because typescript-eslint does not support the
+      # TypeScript 7 this dashboard builds on (typescript-eslint#10940), so it
+      # cannot parse a single .ts/.tsx file in src/. Revisit when that lands.
       - name: typecheck
         run: bun run typecheck
         working-directory: frontend

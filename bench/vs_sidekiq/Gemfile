@@ -12,6 +12,6 @@
 # this bundle on demand and spawns the Sidekiq workers with BUNDLE_GEMFILE
 # pointed here.
 
-source "https://rubygems.org"
+source 'https://rubygems.org'
 
-gem "sidekiq", ">= 8.0"
+gem 'sidekiq', '>= 8.0'

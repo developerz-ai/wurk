@@ -120,6 +120,7 @@ class LimiterBucketTest < Wurk::Test::UnitCase
       refute_equal 1, c.call('EXISTS', "lmtr-b:#{name}"),
                    'must not write a bare-prefix key (#91)'
       keys = c.call('KEYS', "lmtr-b:#{name}:*")
+
       assert_equal 1, keys.size, "exactly one declared epoch key, got #{keys.inspect}"
       assert_match(/\Almtr-b:#{Regexp.escape(name)}:\d+\z/, keys.first)
       assert_equal '1', c.call('GET', keys.first)

@@ -17,7 +17,7 @@ module Wurk
   #   Wurk::Client.new.push_bulk("class" => "MyJob", "args" => [[1], [2], [3]])
   #
   # Spec: docs/target/sidekiq-free.md §7.
-  class Client
+  class Client # rubocop:disable Metrics/ClassLength
     include JobUtil
 
     # Sidekiq mirrors these exactly. Tests against the upstream parity suite

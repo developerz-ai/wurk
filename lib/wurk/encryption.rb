@@ -48,7 +48,7 @@ module Wurk
   #   * Web UI redacts the last arg when `encrypt: true` is set on the job.
   #
   # Spec: docs/target/sidekiq-ent.md §4.
-  module Encryption # rubocop:disable Metrics/ModuleLength
+  module Encryption
     CIPHER_NAME = 'aes-256-gcm'
     KEY_BYTES = 32
     IV_BYTES = 12 # GCM standard: 96-bit IV.

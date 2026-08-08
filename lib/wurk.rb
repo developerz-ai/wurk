@@ -335,7 +335,7 @@ require_relative 'wurk/compat'
 # Rails::Engine::Configuration::ActionDispatch` mid-`require "sidekiq"`. In a
 # real Rails host both are loaded by `rails/all` before Bundler.require, so the
 # stricter gate is invisible there.
-require_relative 'wurk/rails' if defined?(Rails::Engine) && defined?(::ActionDispatch::Routing::RouteSet)
+require_relative 'wurk/rails' if defined?(Rails::Engine) && defined?(ActionDispatch::Routing::RouteSet)
 
 # The gate above is evaluated exactly once, when this file is first required —
 # which is too early for the standalone runners (#282). `exe/wurk` and

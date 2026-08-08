@@ -9,7 +9,7 @@ Wurk::Engine.routes.draw do
     get  'stats',            to: 'api#stats'
     get  'queues',           to: 'api#queues'
     get  'queues/:name',     to: 'api#queue', as: :api_queue, constraints: { name: %r{[^/]+} }
-    post 'queues/:name/clear',  to: 'api#clear_queue',     as: :api_clear_queue,     constraints: { name: %r{[^/]+} }
+    post 'queues/:name/clear',  to: 'api#clear_queue', as: :api_clear_queue, constraints: { name: %r{[^/]+} }
     post 'queues/:name/delete', to: 'api#delete_queue_job', as: :api_delete_queue_job, constraints: { name: %r{[^/]+} }
     # Per-queue Pause/Unpause (Pro §6, §10.1): toggles membership of the `paused`
     # SET that fetchers consult. Read-only mode 403s these via Authorization.
@@ -28,7 +28,7 @@ Wurk::Engine.routes.draw do
     get  'retries',          to: 'api#retries'
     post 'retries',          to: 'api#retries_bulk',   as: :api_retries_bulk
     post 'retries/all/:cmd', to: 'api#retries_all',    as: :api_retries_all
-    post 'retries/:key',     to: 'api#retry_job',      as: :api_retry_job,   constraints: { key: %r{[^/]+} }
+    post 'retries/:key',     to: 'api#retry_job',      as: :api_retry_job, constraints: { key: %r{[^/]+} }
     get  'scheduled',        to: 'api#scheduled'
     post 'scheduled',          to: 'api#scheduled_bulk', as: :api_scheduled_bulk
     post 'scheduled/all/:cmd', to: 'api#scheduled_all',  as: :api_scheduled_all
@@ -57,7 +57,7 @@ Wurk::Engine.routes.draw do
     get  'metrics',          to: 'api#metrics'
     get  'metrics/:klass',   to: 'api#metrics_for_job', as: :api_metrics_for_job, constraints: { klass: %r{[^/]+} }
     get  'history/snapshots', to: 'api#history_snapshots', as: :api_history_snapshots
-    get  'history/:bucket',  to: 'api#history', as: :api_history
+    get  'history/:bucket', to: 'api#history', as: :api_history
     get  'queue-history/:bucket', to: 'api#queue_history', as: :api_queue_history
     get  'search',           to: 'api#search'
     get  'profiles',         to: 'api#profiles'

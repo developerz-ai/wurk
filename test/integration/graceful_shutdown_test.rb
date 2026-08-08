@@ -86,7 +86,7 @@ class GracefulShutdownTest < Wurk::Test::UnitCase
     super
   end
 
-  def test_sigterm_to_parent_lets_in_flight_job_drain # rubocop:disable Minitest/MultipleAssertions
+  def test_sigterm_to_parent_lets_in_flight_job_drain
     push_job(sleep_seconds: 2)
     parent_pid = fork_swarm_supervisor(count: 1)
 
@@ -112,7 +112,7 @@ class GracefulShutdownTest < Wurk::Test::UnitCase
   # end to end: a job that sleeps past a short shutdown_timeout gets hard-killed
   # and requeued exactly once (private list empty, public queue holds one copy),
   # and a reboot that picks it back up runs it exactly once more — not twice.
-  def test_job_killed_past_shutdown_timeout_is_requeued_and_runs_exactly_once_more # rubocop:disable Minitest/MultipleAssertions,Metrics/AbcSize
+  def test_job_killed_past_shutdown_timeout_is_requeued_and_runs_exactly_once_more
     push_timeout_job(sleep_seconds: TIMEOUT_JOB_SLEEP_SECONDS)
 
     first_pid = fork_swarm_supervisor(config_timeout: FAST_DRAIN_TIMEOUT, swarm_timeout: FAST_SWARM_TIMEOUT)

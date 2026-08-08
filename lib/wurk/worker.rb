@@ -85,7 +85,7 @@ module Wurk
 
     # Class-level DSL mixed into every job class by {Wurk::Worker}. These are
     # the public enqueue and configuration entry points.
-    module ClassMethods # rubocop:disable Metrics/ModuleLength
+    module ClassMethods
       # Set per-class job options (merged over any inherited options).
       #
       # @example

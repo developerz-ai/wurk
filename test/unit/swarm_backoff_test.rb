@@ -31,7 +31,7 @@ class SwarmBackoffTest < Wurk::Test::UnitCase
     assert @backoff.ready?(0)
   end
 
-  def test_rapid_failures_double_until_capped # rubocop:disable Minitest/MultipleAssertions
+  def test_rapid_failures_double_until_capped
     assert_in_delta 1.0, @backoff.fail(0)
     assert_in_delta 2.0, @backoff.fail(0)
     assert_in_delta 4.0, @backoff.fail(0)

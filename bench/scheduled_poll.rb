@@ -1,9 +1,9 @@
 # frozen_string_literal: true
 
-require "benchmark/ips"
-require "logger"
-require "wurk"
-require_relative "support"
+require 'benchmark/ips'
+require 'logger'
+require 'wurk'
+require_relative 'support'
 
 # Gate: >5% regression vs main blocks merge.
 #
@@ -18,21 +18,21 @@ require_relative "support"
 
 config = Wurk::Configuration.new
 config.logger = Logger.new(IO::NULL)
-config.redis = { url: bench_redis_url("12") }
+config.redis = { url: bench_redis_url('12') }
 pool = config.default_capsule.redis_pool
 pool.with { |c| Wurk::Lua::Loader.script_load_all(c) }
 
 # Empty both sets so every sweep exercises the idle (nothing-due) path.
-pool.with { |c| c.call("DEL", "schedule", "retry") }
+pool.with { |c| c.call('DEL', 'schedule', 'retry') }
 
 enq = Wurk::Scheduled::Enq.new(config)
 
 Benchmark.ips do |x|
   x.config(time: 5, warmup: 2)
 
-  x.report("wurk idle scheduler sweep") do
+  x.report('wurk idle scheduler sweep') do
     enq.enqueue_jobs
   end
 end
 
-pool.with { |c| c.call("DEL", "schedule", "retry") }
+pool.with { |c| c.call('DEL', 'schedule', 'retry') }

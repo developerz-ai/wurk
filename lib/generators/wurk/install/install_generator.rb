@@ -1,6 +1,6 @@
 # frozen_string_literal: true
 
-require "rails/generators"
+require 'rails/generators'
 
 module Wurk
   module Generators
@@ -8,10 +8,10 @@ module Wurk
     # Writes a config initializer and adds a commented-out mount line to routes.
     # The host app picks the mount path; the generator suggests /wurk.
     class InstallGenerator < ::Rails::Generators::Base
-      source_root File.expand_path("templates", __dir__)
+      source_root File.expand_path('templates', __dir__)
 
       def copy_initializer
-        template "wurk.rb", "config/initializers/wurk.rb"
+        template 'wurk.rb', 'config/initializers/wurk.rb'
       end
 
       def insert_mount_line

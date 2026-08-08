@@ -38,7 +38,6 @@ class ClientOutageTest < Wurk::Test::UnitCase
     super
   end
 
-  # rubocop:disable Metrics/AbcSize
   def test_producer_through_redis_outage_preserves_all_jobs_in_order
     pool   = TogglablePool.new(@real_pool)
     client = Wurk::Client.new(pool: pool)
@@ -60,11 +59,9 @@ class ClientOutageTest < Wurk::Test::UnitCase
 
     assert_equal %w[1 2 3 4 5], tags
   end
-  # rubocop:enable Metrics/AbcSize
 
   # The producer-stops case the background drainer exists for — without it,
   # the passive drain-on-next-push path never fires.
-  # rubocop:disable Metrics/AbcSize
   def test_background_drainer_flushes_when_pool_recovers_without_new_push
     pool = TogglablePool.new(@real_pool)
     client = Wurk::Client.new(pool: pool)
@@ -92,7 +89,6 @@ class ClientOutageTest < Wurk::Test::UnitCase
 
     assert_equal %w[a b c], tags
   end
-  # rubocop:enable Metrics/AbcSize
 
   private
 

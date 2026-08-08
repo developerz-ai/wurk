@@ -266,7 +266,7 @@ class LimiterTest < Wurk::Test::UnitCase
     end
   end
 
-  def test_bucket_status_tracks_usage_and_reset_boundary # rubocop:disable Minitest/MultipleAssertions
+  def test_bucket_status_tracks_usage_and_reset_boundary
     l = Wurk::Limiter.bucket("sbu-#{@suffix}", 3, :minute, wait_timeout: 0)
     2.times { l.within_limit { nil } }
     s = l.status
@@ -309,7 +309,7 @@ class LimiterTest < Wurk::Test::UnitCase
   # run is neither success nor failure — the outer Batch onion skips both acks
   # and the Processor acks the UoW with no retry record. The push to `schedule`
   # happens before the raise. (#18)
-  def test_server_middleware_reschedules_on_over_limit # rubocop:disable Metrics/AbcSize
+  def test_server_middleware_reschedules_on_over_limit
     l = Wurk::Limiter.bucket("mw-#{@suffix}", 1, :minute, wait_timeout: 0, reschedule: 5)
     jid = "mwj#{@suffix}"
     job = { 'class' => 'NoopWorker', 'args' => [1], 'queue' => 'default', 'jid' => jid }
@@ -336,7 +336,7 @@ class LimiterTest < Wurk::Test::UnitCase
   # #16 poison brake: once `overrated` reaches the reschedule cap the job is
   # rate-limit-poison — instead of re-raising into the 25× retry pipeline,
   # the middleware drops it straight into the dead set tagged `rate_limited`.
-  def test_server_middleware_routes_to_dead_after_reschedule_cap # rubocop:disable Minitest/MultipleAssertions,Metrics/AbcSize
+  def test_server_middleware_routes_to_dead_after_reschedule_cap
     l = Wurk::Limiter.bucket("cap-#{@suffix}", 1, :minute, wait_timeout: 0, reschedule: 2)
     jid = "capj#{@suffix}"
     job = { 'class' => 'NoopWorker', 'args' => [], 'queue' => 'default', 'jid' => jid, 'overrated' => 1 }
@@ -391,7 +391,7 @@ class LimiterTest < Wurk::Test::UnitCase
   # A registered custom error that exposes neither #limiter nor #job= drives
   # the else sides of `respond_to?(:limiter)` / `respond_to?(:job=)` plus the
   # nil-limiter `reschedule_cap` short-circuit (default cap, reschedule path).
-  def test_server_middleware_handles_plain_registered_error # rubocop:disable Metrics/AbcSize
+  def test_server_middleware_handles_plain_registered_error
     custom = Class.new(StandardError)
     Wurk::Limiter.config.errors << custom
     job = { 'class' => 'NoopWorker', 'args' => [], 'queue' => 'default', 'jid' => "pln#{@suffix}" }
@@ -416,7 +416,7 @@ class LimiterTest < Wurk::Test::UnitCase
 
   # A limiter type with no `:reschedule` option (concurrent) → reschedule_cap
   # hits the `cap.nil? ? DEFAULT_RESCHEDULE` then-side via the default.
-  def test_server_middleware_uses_default_cap_when_limiter_has_no_reschedule_option # rubocop:disable Minitest/MultipleAssertions,Metrics/AbcSize
+  def test_server_middleware_uses_default_cap_when_limiter_has_no_reschedule_option
     l = Wurk::Limiter.concurrent("nocap-#{@suffix}", 1, wait_timeout: 0)
 
     refute l.options.key?(:reschedule), 'concurrent limiter carries no reschedule option'
