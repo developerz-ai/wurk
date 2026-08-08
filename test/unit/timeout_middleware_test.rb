@@ -183,6 +183,46 @@ class TimeoutMiddlewareTest < Wurk::Test::UnitCase
     assert_includes recorded_fields(klass, before), 'f'
   end
 
+  # ---- zero cost, at process scope ------------------------------------------
+
+  # The other tests in this file pin "zero cost" through the Watchdog's own
+  # bookkeeping (#size, #running?); this one pins the claim the plan doc asks
+  # for literally — the OS thread count of the process a class with no bound
+  # runs in must not move, not just the Watchdog's private view of itself.
+  def test_no_bound_configured_leaves_the_process_thread_count_unchanged
+    attach_watchdog
+    before = Thread.list.size
+
+    100.times { assert_equal :ok, invoke({ 'class' => 'PlainJob' }) { :ok } }
+
+    assert_equal before, Thread.list.size
+  end
+
+  # ---- leak check ------------------------------------------------------------
+
+  # 1000 attempts, every one cut, through the real registered chain (Batch,
+  # Expiry, Limiter, Timeout, Statsd, History, Status) — the same RAII
+  # discipline docs/plans/2026/07/31/101-leak-logic-perf-fixes/ closed applies
+  # here: an interrupt landing mid-bookkeeping must never strand a Redis
+  # checkout or an OS thread. One class, so the minute-bucket field this
+  # leaves behind is one HINCRBY target, not a thousand.
+  def test_a_thousand_cut_attempts_leak_no_thread_or_connection
+    klass = book("TimeoutLeakJob-#{SecureRandom.hex(8)}")
+    job = { 'class' => klass, 'args' => [], 'jid' => SecureRandom.hex(12), 'queue' => 'default' }
+    pool = Wurk.configuration.default_capsule.redis_pool
+    threads_before = Thread.list.size
+    available_before = pool.available
+
+    1000.times do
+      assert_raises(Wurk::Job::TimedOut) do
+        real_chain.invoke(nil, job, 'default') { raise Wurk::Job::TimedOut, 'cut' }
+      end
+    end
+
+    assert_equal threads_before, Thread.list.size, 'no thread may accumulate across 1000 cut attempts'
+    assert_equal available_before, pool.available, 'every Redis checkout the chain took must have been returned'
+  end
+
   private
 
   def build(config)
