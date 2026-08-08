@@ -5,6 +5,7 @@ import { Show } from 'solid-js';
 import { useMeta } from './hooks/useMeta';
 import { basePath } from './basePath';
 import { t } from './i18n';
+import { useLiveTick } from './tick';
 import Nav from './components/Nav';
 import { PageSkeleton } from './components/Skeleton';
 import ErrorBoundary from './components/ErrorBoundary';
@@ -68,6 +69,11 @@ const NAV_COLLAPSED_KEY = 'wurk-nav-collapsed';
 // every route. Solid Router renders the matched route into `props.children`,
 // which lives inside the <Suspense> so lazy chunks fall back to the skeleton.
 function Layout(props: ParentProps) {
+  // The shell outlives every route, so owning the tick here gives the relative
+  // labels on whichever page is mounted one interval between them — rather than
+  // one per page, or one per cell in a table of hundreds.
+  useLiveTick();
+
   const [navOpen, setNavOpen] = createSignal(false);
   // Desktop-only: pin the rail collapsed (icons) or expanded (full), persisted
   // so the choice survives reloads.

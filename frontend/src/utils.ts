@@ -1,4 +1,5 @@
 import { locale } from './i18n';
+import { liveTick } from './tick';
 
 // Intl constructors throw a RangeError on a tag they cannot parse, and the
 // locale can arrive from an untrusted `?locale=` link — i18n only checks
@@ -35,8 +36,14 @@ export function relativeTime(epochSeconds: number): string {
   // value renders a dash instead of "NaNs ago".
   if (!Number.isFinite(epochSeconds)) return '—';
 
+  // Subscribes this cell to the app's shared tick (tick.ts), so "5 minutes ago"
+  // becomes "6 minutes ago" on its own rather than standing still until the
+  // query behind the table refetches. One interval drives every label on the
+  // page; nothing is attached per cell.
+  liveTick();
+
   // Intl's sign convention: the past is negative, the future positive.
-  let value = epochSeconds - Date.now() / 1000;
+  let value = epochSeconds - nowSeconds();
   for (const [unit, perNextUnit] of RELATIVE_LADDER) {
     // Round before comparing, not after: at 59.6s the rounded value is already
     // 60, and that has to read "1 minute ago", not "60 seconds ago".
