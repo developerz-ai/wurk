@@ -189,6 +189,11 @@ module Wurk
         'jobs.retried',
         tags: ["worker:#{msg['class']}", "queue:#{msg['queue']}"]
       )
+      # `retrying` vs `dead` is decided here and nowhere else — a middleware
+      # inside this frame only ever sees "the attempt raised". No-op unless the
+      # class opted into tracking, same as the statsd call above is a no-op
+      # without a client.
+      Wurk::Middleware::Status.retrying(msg)
     end
 
     def time_for(item)

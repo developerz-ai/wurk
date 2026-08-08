@@ -306,6 +306,14 @@ Wurk.configuration.server_middleware.add(Wurk::Metrics::Statsd)
 # never executes in a client-only process). Spec: docs/target/sidekiq-free.md §10.3.
 Wurk.configuration.server_middleware.add(Wurk::Metrics::History)
 
+# Job status / progress / result tracking — a Wurk extra, opt-in per worker
+# class via `sidekiq_options track: true`. Registered LAST of the built-ins so
+# it is the innermost of them: the value it stores is `perform`'s own return
+# value, and none of the middleware above may wrap or replace it on the way out
+# first. Also registers a death handler, because whether a failed job retries or
+# dies is decided in JobRetry, one frame outside any middleware.
+require_relative 'wurk/middleware/status'
+
 # Pro Fast API: Lua-backed Queue#delete_job / #delete_by_class plus
 # SortedSet#scan { |JobRecord| … }. Mixed in via include/prepend on the
 # existing data API classes so the surface is wire-compat with Sidekiq Pro.

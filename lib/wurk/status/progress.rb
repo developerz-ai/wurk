@@ -8,10 +8,11 @@ module Wurk
     #
     # Writes are coalesced. A job looping over 100k rows and reporting each one
     # must not become 100k Redis round trips, so at most one write lands per
-    # {INTERVAL}; the newest unwritten values are buffered and `#flush` (called
-    # by the server middleware on the way out) always persists the last thing
-    # the job said. The first report is never delayed — a job that calls `at`
-    # once, early, is visible immediately.
+    # {INTERVAL}; the newest unwritten values are buffered and the last thing
+    # the job said is always persisted — by `#flush` for a caller with nothing
+    # else to write, or by `#drain` for the server middleware, which folds the
+    # buffer into the terminal write it is making anyway. The first report is
+    # never delayed — a job that calls `at` once, early, is visible immediately.
     #
     # Not thread-safe: one handle belongs to one job execution on one thread,
     # the same contract IterableJob's cursor state has.
@@ -59,6 +60,19 @@ module Wurk
         return false if @pending.empty?
 
         write
+      end
+
+      # Hand the buffer back instead of writing it, and clear it. The caller
+      # takes over responsibility for persisting the values — {Wurk::Middleware
+      # ::Status} does this so a job's last reported position rides along on
+      # the terminal `complete`/`failed` write rather than costing a second
+      # round trip of its own.
+      #
+      # @return [Hash] the buffered fields, empty when nothing is pending
+      def drain
+        pending = @pending
+        @pending = {}
+        pending
       end
 
       private

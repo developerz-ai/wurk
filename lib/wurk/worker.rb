@@ -75,6 +75,24 @@ module Wurk
       Wurk::Batch.new(@bid)
     end
 
+    # Progress handle for a class that opted into tracking with
+    # `sidekiq_options track: true` — `status.at(row, total, 'importing')`.
+    # nil for every other class, so callers that report progress conditionally
+    # write `status&.at(...)`.
+    #
+    # Defined as a plain reader rather than pushed onto the including class the
+    # way `jid` is: `status` is a name a job may well already own, and a method
+    # in this module loses to one in the class body, which is the right way
+    # round for a Wurk extra.
+    #
+    # @see Wurk::Status
+    def status
+      @status
+    end
+
+    # @api private — Middleware::Status sets this before perform.
+    attr_writer :status
+
     # False if the batch was invalidated. Workers should `return unless
     # valid_within_batch?` to short-circuit work for cancelled batches.
     def valid_within_batch?

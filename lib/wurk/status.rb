@@ -34,6 +34,12 @@ module Wurk
     class << self
       def key(jid) = Keys.status(jid)
 
+      # The opt-in gate, in one place: everything that writes a status row asks
+      # this first. `track` rides on the job payload (merged in from the
+      # class's `sidekiq_options`), so a job enqueued before the option was set
+      # keeps running untracked to completion instead of half-tracking.
+      def tracked?(job) = job['track'] ? true : false
+
       # @return [Wurk::Status::Record, nil] nil when no row exists — the jid is
       #   unknown, the class isn't tracked, or the row's TTL has lapsed.
       def get(jid, pool: nil)

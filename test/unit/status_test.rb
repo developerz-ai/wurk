@@ -198,7 +198,8 @@ class StatusTest < Wurk::Test::UnitCase
     assert_equal({ 'jid' => id, 'state' => 'complete', 'queue' => nil, 'class' => 'MyJob',
                    'enqueued_at' => nil, 'started_at' => nil, 'finished_at' => nil,
                    'progress' => 3, 'total' => nil, 'message' => nil, 'result' => [1, 2],
-                   'error_class' => nil, 'error_message' => nil, 'attempt' => nil },
+                   'result_truncated' => false, 'error_class' => nil, 'error_message' => nil,
+                   'attempt' => nil },
                  Wurk::Status.get(id).to_h)
   end
 

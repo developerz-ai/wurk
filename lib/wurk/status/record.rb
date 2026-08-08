@@ -37,11 +37,23 @@ module Wurk
       def started_at  = @data['started_at']&.to_f
       def finished_at = @data['finished_at']&.to_f
 
+      # True when the return value was bigger than
+      # {Wurk::Middleware::Status::MAX_RESULT_BYTES} and only its head was
+      # kept. Check this before treating {#result} as data.
+      def result_truncated? = @data['result_truncated'] == '1'
+
       # The stored return value of `perform`, decoded. JSON only — see
       # CLAUDE.md; a result that wouldn't serialize never reached Redis.
+      #
+      # A truncated result is a JSON fragment, so there is nothing to decode:
+      # it comes back as the raw head string, which is still the most useful
+      # thing anyone can be handed — the alternative is nothing at all.
       def result
         raw = @data['result']
-        raw && ::JSON.parse(raw)
+        return nil if raw.nil?
+        return raw if result_truncated?
+
+        ::JSON.parse(raw)
       end
 
       # Raw field access for anything without a reader.
@@ -54,7 +66,8 @@ module Wurk
         { 'jid' => jid, 'state' => state, 'queue' => queue, 'class' => job_class,
           'enqueued_at' => enqueued_at, 'started_at' => started_at, 'finished_at' => finished_at,
           'progress' => progress, 'total' => total, 'message' => message, 'result' => result,
-          'error_class' => error_class, 'error_message' => error_message, 'attempt' => attempt }
+          'result_truncated' => result_truncated?, 'error_class' => error_class,
+          'error_message' => error_message, 'attempt' => attempt }
       end
     end
   end
