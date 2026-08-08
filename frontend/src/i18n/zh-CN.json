@@ -32,7 +32,7 @@
     "live": "实时",
     "paused": "已暂停",
     "strapline": "Wurk, wurk. 准备就绪。Zug zug.",
-    "tagline": "与Sidekiq + Sidekiq Pro + Sidekiq Enterprise 100%兼容的替代品。永久免费，更快。",
+    "tagline": "与Sidekiq + Sidekiq Pro + Sidekiq Enterprise 100%兼容的替代品。永久免费。",
     "install": "安装",
     "docs": "文档",
     "active": "活跃",

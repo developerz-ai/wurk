@@ -8,7 +8,7 @@ Gem::Specification.new do |spec|
   spec.authors     = ["developerz.ai"]
   spec.email       = ["admin@developerz.ai"]
 
-  spec.summary     = "100% drop-in replacement for Sidekiq + Sidekiq Pro + Sidekiq Enterprise. Free. Faster."
+  spec.summary     = "100% drop-in replacement for Sidekiq + Sidekiq Pro + Sidekiq Enterprise. Free."
   spec.description = "Wire-compatible Ruby background job processor: same Redis schema, same job JSON, same Ruby DSL. Pro + Enterprise feature parity in the same gem, no license check. Fork-based real parallelism. Mountable Rails engine with a precompiled SolidJS dashboard."
   spec.homepage    = "https://github.com/developerz-ai/wurk"
   spec.license     = "MIT"

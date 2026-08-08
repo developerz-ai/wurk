@@ -117,7 +117,9 @@ history.expired
 | `failed` | same shape |
 | `expired` | same shape |
 
-`start_date` defaults to `Date.today`; keys run backwards from it. `pool:`
+`start_date` defaults to the current **UTC** date — the same clock `Launcher`
+writes these buckets under, so a host on a non-UTC offset doesn't read a day
+that was never written. Keys run backwards from it. `pool:`
 targets a non-default connection pool (a second Redis shard, say); omitted, it
 uses `Wurk.redis`.
 

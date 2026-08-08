@@ -65,8 +65,9 @@ module Wurk
   #
   # Spec: docs/target/sidekiq-free.md §19.5.
   class JobSet < SortedSet
-    # ZADD with NX so re-scheduling the same payload doesn't reset its score.
-    # Mirrors Sidekiq::JobSet#schedule exactly.
+    # Plain ZADD, no NX: re-scheduling an identical payload *moves* it to the
+    # new timestamp rather than keeping the first one. Mirrors
+    # Sidekiq::JobSet#schedule exactly — the last schedule call wins.
     def schedule(timestamp, message)
       Wurk.redis { |conn| conn.call('ZADD', @name, timestamp.to_f.to_s, Wurk.dump_json(message)) }
     end

@@ -13,7 +13,7 @@ The regression gate can be fully green while wurk is slower than Sidekiq. It mea
 
 ## Throughput vs stock Sidekiq
 
-wurk 1.4.0 · sidekiq 8.1.6 · ruby 3.4.7 (x86_64-linux) · local Redis 7.4.10 · 5000 jobs/run · 12 runs per topology (4 invocations × 3 runs), paired per-run ratio (`wurk_i / sidekiq_i` within the same run, which cancels drift a median-of-medians would carry). Measured 2026-08-07; reproduce with `bin/rake bench:vs_sidekiq`.
+wurk 1.5.0 · sidekiq 8.1.6 · ruby 3.4.7 (x86_64-linux) · local Redis 7.4.10 · 5000 jobs/run · 12 runs per topology (4 invocations × 3 runs), paired per-run ratio (`wurk_i / sidekiq_i` within the same run, which cancels drift a median-of-medians would carry). Measured 2026-08-07; reproduce with `bin/rake bench:vs_sidekiq`.
 
 Ratios below 1.00 mean wurk is slower.
 

@@ -4,8 +4,10 @@
 language: en-US
 tone_instructions: >
   Be friendly and constructive. The three load-bearing invariants are:
-  100% drop-in Sidekiq API + Redis schema, free (no tiers), and faster than
-  stock Sidekiq. Flag changes that risk any of those over style nitpicks.
+  100% drop-in Sidekiq API + Redis schema, free (no tiers), and measured
+  (performance is benchmarked and published, never claimed — wurk is not
+  currently faster than stock Sidekiq, see docs/benchmarks.md). Flag changes
+  that risk any of those over style nitpicks.
 early_access: false
 enable_free_tier: true
 

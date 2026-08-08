@@ -32,7 +32,7 @@
     "live": "En direct",
     "paused": "En pause",
     "strapline": "Wurk, wurk. Prêt à travailler. Zug zug.",
-    "tagline": "Un remplacement 100% compatible avec Sidekiq + Sidekiq Pro + Sidekiq Enterprise. Gratuit pour toujours. Plus rapide.",
+    "tagline": "Un remplacement 100% compatible avec Sidekiq + Sidekiq Pro + Sidekiq Enterprise. Gratuit pour toujours.",
     "install": "Installer",
     "docs": "Documentation",
     "active": "Actif",

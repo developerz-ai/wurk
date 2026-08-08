@@ -360,7 +360,7 @@ class StatsTest < Wurk::Test::UnitCase
   end
 
   def test_history_processed_returns_hash_keyed_by_date_string
-    today = Date.today.strftime('%Y-%m-%d')
+    today = Time.now.utc.to_date.strftime('%Y-%m-%d')
     @pool.with { |c| c.call('SET', "stat:processed:#{today}", 12) }
     begin
       h = Wurk::Stats::History.new(3)
@@ -372,7 +372,7 @@ class StatsTest < Wurk::Test::UnitCase
   end
 
   def test_history_failed_returns_hash_keyed_by_date_string
-    today = Date.today.strftime('%Y-%m-%d')
+    today = Time.now.utc.to_date.strftime('%Y-%m-%d')
     @pool.with { |c| c.call('SET', "stat:failed:#{today}", 4) }
     begin
       assert_equal 4, Wurk::Stats::History.new(3).failed[today]
@@ -411,8 +411,15 @@ class StatsTest < Wurk::Test::UnitCase
     assert_equal [0, 0], h.processed.values
   end
 
+  # Launcher#write_stats keys stat:<kind>:<day> off `Time.now.utc.strftime('%F')`.
+  # Defaulting the read side to the *local* civil date asks for a day the writer
+  # never wrote, for whatever slice of each day the host's UTC offset spans.
+  def test_history_window_is_anchored_to_the_utc_day_the_writer_uses
+    assert_equal Time.now.utc.strftime('%F'), Wurk::Stats::History.new(1).processed.keys.first
+  end
+
   def test_history_uses_explicit_pool
-    today = Date.today.strftime('%Y-%m-%d')
+    today = Time.now.utc.to_date.strftime('%Y-%m-%d')
     @pool.with { |c| c.call('SET', "stat:processed:#{today}", 5) }
     begin
       assert_equal 5, Wurk::Stats::History.new(1, nil, pool: @pool).processed[today]
