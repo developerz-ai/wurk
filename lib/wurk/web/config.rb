@@ -67,6 +67,13 @@ module Wurk
         batches limiters cron search
       ].freeze
 
+      # Locale tags the shipped SPA bundle carries copy for, in menu order.
+      # Mirrors `availableLocales` in frontend/src/i18n/index.ts — the pair is
+      # pinned by WebConfigTest, since a bundle added on one side only would
+      # make the server negotiate a locale the SPA can't render (or refuse one
+      # it can).
+      BUNDLED_LOCALES = %w[en es fr de pt-BR ja zh-CN ar].freeze
+
       # Host-app Rack middleware stacked in front of the dashboard, newest
       # last. Each entry is `[middleware, args, block]`. The LIVE array, like
       # Sidekiq::Web::Config#middlewares — callers mutate it directly
@@ -75,13 +82,7 @@ module Wurk
       attr_reader :middlewares
 
       def initialize
-        @options = OPTIONS.dup
-        @authorization = nil
-        @read_only = env_read_only?
-        @read_only_message = nil
-        @middlewares = []
-        @rack_app = nil
-        init_extensions!
+        reset!
       end
 
       def_delegators :@options, :[], :[]=, :fetch, :key?, :has_key?, :merge!, :dig
@@ -105,6 +106,29 @@ module Wurk
       # host explain *why* it's read-only — e.g. the public demo sets
       # "This is a public demo — actions are disabled."
       attr_accessor :read_only_message
+
+      # Dashboard language. `offered_locales` is the set the server negotiates
+      # a request's `Accept-Language` against before emitting the SPA's
+      # `data-locale` hint (see Wurk::Web::LocaleNegotiator): it starts as the
+      # locales the bundle ships and may be narrowed, or widened with one the
+      # host supplies copy for through `translations`. `default_locale` is the
+      # hint used when the header asks for nothing offered — nil emits no hint
+      # at all, leaving the browser's own preference list to decide.
+      #
+      # Not to be confused with `locales` above: that is the extension
+      # renderer's locale-*directory* list, a separate i18n system for
+      # server-rendered third-party tabs.
+      attr_accessor :offered_locales, :default_locale
+
+      # Host copy overrides for the dashboard, keyed by locale tag and
+      # deep-merged over the shipped bundle by the SPA:
+      #
+      #   c.translations = { 'en' => { 'nav' => { 'queues' => 'Pipelines' } } }
+      #
+      # Keyed rather than flat because the negotiated hint is not the last
+      # word — a `?locale=` link or a stored pick outranks it — so the entry
+      # has to be chosen in the browser, against the locale actually rendered.
+      attr_accessor :translations
 
       # Registers a `(env, method, path) -> truthy/falsey` block. Re-calling
       # overwrites; the spec exposes a single hook, not a chain.
@@ -236,6 +260,7 @@ module Wurk
         @middlewares = []
         @rack_app = nil
         init_extensions!
+        init_locales!
       end
 
       # Returns true when no block is registered, otherwise the block's
@@ -261,6 +286,14 @@ module Wurk
         @custom_job_info_rows = []
         @app_url = nil
         @assets_path = nil
+      end
+
+      def init_locales!
+        # Dup'd like `tabs`: hosts narrow the list in place (`delete`) as often
+        # as they replace it, and a frozen default would raise on the first.
+        @offered_locales = BUNDLED_LOCALES.dup
+        @default_locale = nil
+        @translations = {}
       end
 
       def job_info_pair(row, job)

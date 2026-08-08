@@ -15,6 +15,8 @@
     "extensions": "Extensiones",
     "collapse": "Contraer",
     "expand": "Expandir",
+    "language": "Idioma",
+    "language_current": "Idioma: {name}",
     "status_active": "Estado del sistema: Activo",
     "status_inactive": "Estado del sistema: Desconectado"
   },

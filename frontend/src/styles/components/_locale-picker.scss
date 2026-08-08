@@ -1,0 +1,67 @@
+// ── Locale picker ────────────────────────────────────────────────────────────
+// The rail-footer language menu. The panel is portaled to <body> and positioned
+// `fixed` from the trigger's rect (LocalePicker.tsx) because the nav clips its
+// overflow — an in-flow panel would be cut to 64px in the collapsed rail. Only
+// the panel's own chrome lives here; the trigger reuses `.wurk-navlink` so the
+// collapsed-rail rules in Nav.tsx (round glyph, centred, rail-width box) apply
+// to it unchanged.
+
+@use '../abstracts' as *;
+
+// Chained with `.wurk-navlink` deliberately: Nav.tsx declares that class in an
+// inline <style> that ships after this stylesheet, so a single-class rule here
+// would lose the tie and inherit nav-item (not footer-control) colouring.
+.wurk-navlink.locale-picker__trigger {
+  width: calc(100% - #{to-rem(16)});
+  border: 0;
+  background: transparent;
+  color: var(--text-muted);
+  font-family: inherit;
+  font-size: to-rem(13);
+  text-align: start;
+  cursor: pointer;
+}
+
+.locale-menu {
+  position: fixed;
+  z-index: z('popover');
+  min-width: to-rem(180);
+  max-width: to-rem(260);
+  overflow-y: auto;
+  padding: to-rem(4);
+  @include surface(var(--surface-strong), var(--border-strong));
+  box-shadow: 0 to-rem(10) to-rem(28) oklch(0 0 0 / 0.45);
+  animation: fade-up duration('base') easing('emphasized');
+}
+
+.locale-menu__item {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: to-rem(12);
+  width: 100%;
+  padding: to-rem(7) to-rem(10);
+  border: 0;
+  border-radius: var(--radius-sm);
+  background: transparent;
+  color: var(--text);
+  font-family: inherit;
+  font-size: to-rem(13);
+  text-align: start;
+  cursor: pointer;
+  @include transition(background color);
+
+  &:hover {
+    background: var(--surface-hover);
+    color: var(--accent);
+  }
+
+  &:focus-visible {
+    @include focus-ring;
+  }
+
+  &[aria-checked='true'] {
+    color: var(--accent);
+    font-weight: 600;
+  }
+}

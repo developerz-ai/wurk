@@ -15,6 +15,8 @@
     "extensions": "الإضافات",
     "collapse": "طيّ",
     "expand": "توسيع",
+    "language": "اللغة",
+    "language_current": "اللغة: {name}",
     "status_active": "حالة النظام: نشط",
     "status_inactive": "حالة النظام: غير متصل"
   },

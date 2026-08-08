@@ -15,6 +15,8 @@
     "extensions": "扩展",
     "collapse": "折叠",
     "expand": "展开",
+    "language": "语言",
+    "language_current": "语言：{name}",
     "status_active": "系统状态：运行中",
     "status_inactive": "系统状态：已断开"
   },

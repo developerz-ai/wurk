@@ -708,6 +708,42 @@ end
 (`""`, `"0"`, `"false"`, `"no"`, `"off"` mean off). Authorization hooks, Rack
 middleware, and CSRF are covered in [authentication.md](authentication.md).
 
+### Language
+
+The dashboard ships copy for `en es fr de pt-BR ja zh-CN ar` and picks one per
+visitor, highest source first:
+
+1. `?locale=` on the URL — one-off, not persisted (handy in a support link).
+2. The visitor's own pick from the language menu (`localStorage`).
+3. The server hint: the engine negotiates the request's `Accept-Language`
+   against `offered_locales` and renders it as `data-locale` on the shell, so
+   the first paint is already in the right language.
+4. `navigator.languages`, first entry wurk ships a bundle for.
+5. English.
+
+```ruby
+Wurk.configure_server do |config|
+  # Narrow what the server will negotiate, or widen it with a locale you
+  # supply copy for yourself. Defaults to every bundled locale.
+  config.web.offered_locales = %w[en de he]
+  # Hint used when Accept-Language asks for nothing offered. Leave nil and the
+  # browser's own preference list decides instead.
+  config.web.default_locale = "de"
+  # Override any string in the shipped bundles, keyed by locale. Deep-merged,
+  # so untouched keys keep their translation.
+  config.web.translations = {
+    "en" => { "nav" => { "queues" => "Pipelines" } },
+    "he" => { "nav" => { "dashboard" => "לוח בקרה" } }
+  }
+end
+```
+
+A locale with no bundle (`he` above) still lays the board out right-to-left and
+falls back to English for keys you don't translate — which is what makes
+serving a language wurk doesn't ship possible without a gem release.
+`offered_locales` is unrelated to `config.web.locales`, the locale-*directory*
+list third-party web extensions append to.
+
 ---
 
 ## Health checks

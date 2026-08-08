@@ -355,6 +355,52 @@ class WebConfigTest < Wurk::Test::UnitCase
     assert_includes paths, 'expiry'
   end
 
+  def test_locale_settings_default_to_the_shipped_bundles
+    cfg = Wurk::Web.config
+
+    assert_equal Wurk::Web::Config::BUNDLED_LOCALES, cfg.offered_locales
+    assert_nil cfg.default_locale
+    assert_empty cfg.translations
+  end
+
+  def test_locale_settings_are_configurable
+    Wurk::Web.configure do |c|
+      c.offered_locales = %w[en de he]
+      c.default_locale = 'de'
+      c.translations = { 'en' => { 'nav' => { 'queues' => 'Pipelines' } } }
+    end
+    cfg = Wurk::Web.config
+
+    assert_equal %w[en de he], cfg.offered_locales
+    assert_equal 'de', cfg.default_locale
+    assert_equal 'Pipelines', cfg.translations.dig('en', 'nav', 'queues')
+  end
+
+  def test_reset_clears_locale_settings
+    cfg = Wurk::Web.config
+    cfg.offered_locales = %w[fr]
+    cfg.default_locale = 'fr'
+    cfg.translations = { 'fr' => {} }
+    cfg.reset!
+
+    assert_equal Wurk::Web::Config::BUNDLED_LOCALES, cfg.offered_locales
+    assert_nil cfg.default_locale
+    assert_empty cfg.translations
+  end
+
+  # The server negotiates Accept-Language against BUNDLED_LOCALES, but the SPA
+  # decides what it can actually render from its own bundle imports. A bundle
+  # added on one side only would emit a hint the dashboard can't honour, so pin
+  # the two lists together at the source of truth: the JSON files themselves.
+  def test_bundled_locales_match_the_shipped_translation_files
+    dir = File.expand_path('../../frontend/src/i18n', __dir__)
+    skip 'frontend sources absent (installed gem)' unless File.directory?(dir)
+
+    shipped = Dir.children(dir).grep(/\.json\z/).map { |f| File.basename(f, '.json') }
+
+    assert_equal shipped.sort, Wurk::Web::Config::BUNDLED_LOCALES.sort
+  end
+
   private
 
   def with_env(key, value)
