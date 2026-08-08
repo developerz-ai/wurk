@@ -332,7 +332,7 @@ Define jobs exactly as before — `include Sidekiq::Job` (or `Sidekiq::Worker`) 
 | `tags:` | ✅ | array of strings; surfaced in the dashboard + logs |
 | `batch` | ✅ (Pro, free) | not a `sidekiq_options` key — `bid` is stamped automatically inside `Sidekiq::Batch#jobs { … }`; access via `#bid` / `#batch` |
 | `pool:` | ✅ | selects the client Redis pool; stripped from the stored payload |
-| `track:` (`true` / `false`) | ➕ Wurk extra | opt into `Wurk::Status` — a `status:<jid>` row carrying state, progress, timings, result and error. Default `false`: a class that doesn't opt in writes nothing and costs nothing. Lifetime via `status_ttl` / `status_retention` |
+| `track:` (`true` / `false`) | ➕ Wurk extra | opt into `Wurk::Status` — a `status:<jid>` row carrying state, progress, timings, result and error. Default `false`: a class that doesn't opt in writes nothing and costs nothing. Lifetime via `status_ttl` / `status_retention`. A worker that also sets `encrypt: true` records everything but the result — see [encryption](encryption.md#interactions) |
 | `lock:` | ⚠️ not native | Wurk's native uniqueness uses `unique_for:` / `unique_until:` (see [§6](#6-third-party-gem-mappings)). The `sidekiq-unique-jobs` gem and its `lock:` option also run against Wurk in the ecosystem CI suite |
 
 Custom retry hooks are unchanged: `sidekiq_retry_in { |count, ex, msg| … }` and
@@ -446,7 +446,7 @@ they only touch the Sidekiq API surface and Redis keys Wurk already mirrors.
 | Gem | Status on Wurk | Notes |
 |---|---|---|
 | `sidekiq-scheduler` | ✅ works unchanged | uses the standard schedule ZSET |
-| `sidekiq-status` | ✅ works unchanged | rides the standard job lifecycle + middleware |
+| `sidekiq-status` | ✅ works unchanged | rides the standard job lifecycle + middleware. Coexists with Wurk's native `track:` — the gem keeps `Sidekiq::Status` and its `sidekiq:status:<jid>` rows, Wurk uses `Wurk::Status` and `status:<jid>`, and neither reads the other |
 | `sidekiq-failures` | ✅ works unchanged | reads the standard `retry`/`dead` sets |
 | `sidekiq-throttled` | ✅ works unchanged | client/server middleware contract is identical |
 | `sidekiq-cron` | ⚠️ prefer native | works in CI, but native `config.periodic` is recommended (no `Sidekiq::Cron::Job` constant) |

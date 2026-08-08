@@ -42,6 +42,13 @@ module Wurk
       # kept. Check this before treating {#result} as data.
       def result_truncated? = @data['result_truncated'] == '1'
 
+      # True when the job's class set `encrypt: true`, so its return value was
+      # deliberately never stored — see
+      # {Wurk::Middleware::Status#withhold_result?}. Separates "the job returned
+      # nothing" from "the job returned something Wurk refused to keep beside
+      # the encrypted args in plaintext".
+      def result_withheld? = @data['result_withheld'] == '1'
+
       # The stored return value of `perform`, decoded. JSON only — see
       # CLAUDE.md; a result that wouldn't serialize never reached Redis.
       #
@@ -66,8 +73,8 @@ module Wurk
         { 'jid' => jid, 'state' => state, 'queue' => queue, 'class' => job_class,
           'enqueued_at' => enqueued_at, 'started_at' => started_at, 'finished_at' => finished_at,
           'progress' => progress, 'total' => total, 'message' => message, 'result' => result,
-          'result_truncated' => result_truncated?, 'error_class' => error_class,
-          'error_message' => error_message, 'attempt' => attempt }
+          'result_truncated' => result_truncated?, 'result_withheld' => result_withheld?,
+          'error_class' => error_class, 'error_message' => error_message, 'attempt' => attempt }
       end
     end
   end

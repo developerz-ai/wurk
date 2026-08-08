@@ -198,9 +198,28 @@ class StatusTest < Wurk::Test::UnitCase
     assert_equal({ 'jid' => id, 'state' => 'complete', 'queue' => nil, 'class' => 'MyJob',
                    'enqueued_at' => nil, 'started_at' => nil, 'finished_at' => nil,
                    'progress' => 3, 'total' => nil, 'message' => nil, 'result' => [1, 2],
-                   'result_truncated' => false, 'error_class' => nil, 'error_message' => nil,
-                   'attempt' => nil },
+                   'result_truncated' => false, 'result_withheld' => false, 'error_class' => nil,
+                   'error_message' => nil, 'attempt' => nil },
                  Wurk::Status.get(id).to_h)
+  end
+
+  # A withheld result is not an absent one: the reader has to be able to say
+  # "there was a return value and it was deliberately not kept".
+  def test_record_reports_a_withheld_result
+    id = jid
+    Wurk::Status.write(id, state: 'complete', result_withheld: '1')
+    record = Wurk::Status.get(id)
+
+    assert_predicate record, :result_withheld?
+    assert_nil record.result
+    refute_predicate record, :result_truncated?
+  end
+
+  def test_record_result_is_not_withheld_by_default
+    id = jid
+    Wurk::Status.write(id, state: 'complete', result: JSON.generate('ok'))
+
+    refute_predicate Wurk::Status.get(id), :result_withheld?
   end
 
   # --- delete --------------------------------------------------------

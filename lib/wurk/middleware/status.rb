@@ -63,7 +63,7 @@ module Wurk
         started(jid, job, queue)
         begin
           result = yield
-          complete(jid, progress, result)
+          complete(jid, job, progress, result)
           result
         rescue ::Wurk::Job::Interrupted
           interrupted(jid, progress)
@@ -162,11 +162,11 @@ module Wurk
       # instant it finishes — while a failed or dead job is still findable in
       # the retry and dead sets. `0` reproduces that loss on purpose, so a host
       # that wants tracking only for jobs in flight keeps today's key space.
-      def complete(jid, progress, result)
+      def complete(jid, job, progress, result)
         keep = ::Wurk::Status.retention
         return safely { ::Wurk::Status.delete(jid, pool: redis_pool) } if keep&.zero?
 
-        safely { finish(jid, progress, ttl: keep, state: 'complete', **encode_result(result)) }
+        safely { finish(jid, progress, ttl: keep, state: 'complete', **encode_result(job, result)) }
       end
 
       def interrupted(jid, progress)
@@ -190,8 +190,9 @@ module Wurk
       # a model) is serialized, then capped — opting into tracking is opting
       # into that cost. Anything that raises on the way is dropped: a result is
       # a record of the job, never a reason to fail it.
-      def encode_result(value)
+      def encode_result(job, value)
         return {} if value.nil?
+        return { result_withheld: '1' } if withhold_result?(job)
 
         json = ::Wurk.dump_json(value)
         return { result: json } if json.bytesize <= MAX_RESULT_BYTES
@@ -201,6 +202,30 @@ module Wurk
         self.class.report(e, 'serializing job result')
         {}
       end
+
+      # `encrypt: true` declares the last argument a secret, and a job handed a
+      # secret usually returns something derived from it — so storing `perform`'s
+      # value verbatim would put back into a plaintext HASH exactly what
+      # enveloping the args kept out of Redis. Encrypting the row instead was the
+      # alternative and was rejected: the crypto contract is scoped to the last
+      # positional argument (docs/target/sidekiq-ent.md §4), and every reader of
+      # a status row — dashboard, HTTP API, a chain piping the result onward —
+      # would then need the key. `result_withheld` marks the drop as policy so it
+      # doesn't read as "returned nothing".
+      #
+      # Only the result is withheld, because only the result is new: the whole
+      # combination is refused nowhere (unlike Wurk::Unique, whose digest
+      # encryption genuinely breaks — see Unique::ClientMiddleware
+      # #reject_encrypted!), and `error_class`/`error_message` are already stored
+      # verbatim on the retry and dead records by Sidekiq itself while a
+      # `status.at(n, total, msg)` message is text the job chose to publish.
+      #
+      # The payload's own declaration decides this, not `Encryption.enabled?`, so
+      # what a job leaves behind never depends on whether crypto happened to be
+      # configured in the process that ran it — including the case the docs call
+      # out as a silent no-op, where `encrypt: true` is set but `enable` was
+      # never called and the args went to Redis in cleartext anyway.
+      def withhold_result?(job) = job['encrypt'] ? true : false
 
       def encode_error(exception)
         { error_class: exception.class.name,

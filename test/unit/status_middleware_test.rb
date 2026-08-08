@@ -182,6 +182,67 @@ class StatusMiddlewareTest < Wurk::Test::UnitCase
     assert_nil row.result
   end
 
+  # --- encryption: everything but the result -------------------------
+
+  # The whole point: a status row is a plaintext HASH, and `encrypt: true` says
+  # the last argument is a secret. Storing what the job derived from it beside
+  # the envelope would hand back exactly what the envelope kept out of Redis.
+  def test_an_encrypted_job_stores_no_result
+    chain.invoke(Worker.new, job('encrypt' => true), @queue) { { 'pan' => '4111111111111111' } }
+
+    refute_includes hgetall, 'result'
+    refute_includes hgetall.values.join, '4111111111111111'
+    assert_nil row.result
+  end
+
+  # Withheld is not "returned nothing" — a reader has to be able to tell.
+  def test_an_encrypted_job_flags_the_withheld_result
+    chain.invoke(Worker.new, job('encrypt' => true), @queue) { 'secret' }
+
+    assert_predicate row, :result_withheld?
+    refute_predicate row, :result_truncated?
+  end
+
+  # Only the result is withheld: the lifecycle is the reason to track an
+  # encrypted job at all, and none of these fields is new — the retry and dead
+  # records already carry the error verbatim.
+  def test_an_encrypted_job_keeps_its_lifecycle
+    chain.invoke(Worker.new, job('encrypt' => true), @queue) { :ok }
+
+    assert_equal 'complete', row.state
+    assert_equal 'StatusMiddlewareJob', row.job_class
+    assert_equal @queue, row.queue
+    assert_operator row.finished_at, :>=, row.started_at
+  end
+
+  # A job that returned nothing withheld nothing, so the flag would be a lie.
+  def test_an_encrypted_job_returning_nil_is_not_flagged
+    chain.invoke(Worker.new, job('encrypt' => true), @queue) { nil }
+
+    refute_predicate row, :result_withheld?
+    refute_includes hgetall, 'result_withheld'
+  end
+
+  # The declaration alone decides it, never `Encryption.enabled?`. This chain
+  # holds no Encryption middleware, so nothing here was ever enveloped — the
+  # same shape as the documented silent no-op where `encrypt: true` is set but
+  # `enable` was never called and the arg went to Redis in cleartext. The
+  # operator still called the payload a secret, so the result is still withheld.
+  def test_the_result_is_withheld_without_any_crypto_in_the_chain
+    args = ['4111111111111111']
+    chain.invoke(Worker.new, job('encrypt' => true, 'args' => args), @queue) { args.first }
+
+    assert_predicate row, :result_withheld?
+    refute_includes hgetall.values.join, '4111111111111111'
+  end
+
+  def test_an_unencrypted_job_still_stores_its_result
+    chain.invoke(Worker.new, job('encrypt' => false), @queue) { 'kept' }
+
+    assert_equal 'kept', row.result
+    refute_predicate row, :result_withheld?
+  end
+
   # --- interrupted / skipped are not failures ------------------------
 
   def test_a_cooperative_interruption_is_interrupted_not_failed
