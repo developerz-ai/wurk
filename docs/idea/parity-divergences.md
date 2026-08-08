@@ -6,6 +6,8 @@ divergence from them is a bug unless recorded here as intentional.
 
 Each entry: what Wurk does, what the spec says, why the divergence is safe
 and deliberate, and the anchor to revisit if the spec or upstream changes.
+An entry tagged *decided — pending implementation* is a signed-off target the
+code has not reached yet; its **Wurk:** paragraph states today's behavior.
 
 ## Reliable fetch is the only mode; no BRPOP
 
@@ -263,14 +265,21 @@ job to confirm it.
 `lib/wurk/queue.rb` (`pause!`, `unpause!`, `paused?`), Pro §6,
 `docs/plans/2026/08/06/101-faster-than-sidekiq/00-semantics-signoff.md`.
 
-## An interrupted `IterableJob` run books `p` + `ms`, never `f` (#394, resolved)
+## An interrupted `IterableJob` run books `p` + `ms`, never `f` (#394, decided — pending implementation)
 
-**Wurk:** `Metrics::History#call` and `Metrics::Statsd#call` treat
-`Wurk::Job::Interrupted` (raised mid-`IterableJob`, caught by
-`InterruptHandler` outside both metrics middlewares) as `success: true` for
-booking purposes — `<klass>|p` and `<klass>|ms` (or `jobs.success` +
-`jobs.perform*`) are recorded, `<klass>|f` (`jobs.failure`) is not. A resumed
-run that later completes books a second `p`/`ms` on top of the first.
+**Wurk:** *today*, both `Metrics::History#call` and `Metrics::Statsd#call` book
+an interrupted run as a failure. Each sets `success = false` before `yield` and
+flips it to `true` only when `yield` returns, so `Wurk::Job::Interrupted`
+(raised mid-`IterableJob`) escapes with `success` still false and is recorded
+as `<klass>|f` / `jobs.failure`. It escapes both because `InterruptHandler`
+self-prepends (`lib/wurk/middleware/interrupt_handler.rb:46`) and therefore
+sits *outside* them in the chain: the exception propagates up through both
+metrics middlewares before `InterruptHandler` catches it, re-pushes the job,
+and converts it to `Wurk::JobRetry::Skip`. *Target*, accepted and not yet
+implemented: an interrupted run books `<klass>|p` and `<klass>|ms`
+(`jobs.success` plus the `jobs.perform`/`jobs.perform_dist` gauges), never
+`<klass>|f` / `jobs.failure` — and a resumed run that later completes books a
+second `p`/`ms` on top of the first.
 
 **Spec:** `docs/target/sidekiq-free.md` does not pin the interrupted case (no
 divergence to measure against it). The applicable oracle is upstream
@@ -280,16 +289,23 @@ whose `rescue JobRetry::Skip` arm — the exact analog of Wurk's
 the outer `ensure` (books `p`), never the `rescue Exception` arm that books
 `f`.
 
-**Why:** this closes [#394](https://github.com/developerz-ai/wurk/issues/394)
-rather than opening a divergence — before this fix, Wurk booked a spurious
-`f` for every interrupted run, diverging *from* the oracle above. Recorded
-here anyway per the "resolved" convention, since the fixed behavior (two `p`
-increments and two summed `ms` windows for one logical job execution across
-an interruption) is itself worth anchoring: it is intentional, matches
-upstream's own double-counting of a resumed `track` call, and is not a bug to
-"fix" back toward single-counting. Full terms in
-`docs/plans/2026/08/07/101-beyond-sidekiq/00-semantics-signoff.md` §1.
+**Why:** the divergence from that oracle is **open today**, not closed: every
+interrupted run books a spurious `f`
+([#394](https://github.com/developerz-ai/wurk/issues/394)), and the fix is
+signed off but not yet written — so this entry records an accepted decision,
+not shipped behavior. It is filed here because the *post-fix* shape is the
+part that reads like a bug and isn't: one logical job execution spanning an
+interruption produces two `p` increments and two summed `ms` windows, since
+the resumed run re-enters the middleware chain and books again. That is
+intentional, matches upstream's own double-counting of a second `track` call,
+and is not to be "fixed" back toward single-counting. Full terms in
+`docs/plans/2026/08/07/101-beyond-sidekiq/00-semantics-signoff.md` §1, whose
+"Today" paragraph likewise describes the pre-fix behavior; the code lands in
+`docs/plans/2026/08/07/101-beyond-sidekiq/01-metrics-interrupted-job.md`
+(status: `not_started`).
 
-**Anchor:** `lib/wurk/metrics/history.rb:65-86`, `lib/wurk/metrics/statsd.rb:145-165`,
-`lib/wurk/middleware/interrupt_handler.rb:31-33`,
-`docs/plans/2026/08/07/101-beyond-sidekiq/00-semantics-signoff.md`.
+**Anchor:** `lib/wurk/metrics/history.rb:65-86`,
+`lib/wurk/metrics/statsd.rb:145-169,191-196`,
+`lib/wurk/middleware/interrupt_handler.rb:29-34,46`,
+`docs/plans/2026/08/07/101-beyond-sidekiq/00-semantics-signoff.md` §1,
+`docs/plans/2026/08/07/101-beyond-sidekiq/01-metrics-interrupted-job.md`.

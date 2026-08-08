@@ -1,8 +1,0 @@
-# Upstream checkout this suite runs from. Bump sha only after re-running
-# `bin/rake test:ecosystem` green against the new tag.
-#
-# Repo is archived (last release 2019) — v1.1.4 is the final tag, there is
-# no newer ref to track.
-repo: https://github.com/utgarda/sidekiq-status
-ref: v1.1.4
-sha: 68d5c5ea2096dbfd35dee86fdfc260980f72516d

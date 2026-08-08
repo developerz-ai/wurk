@@ -67,7 +67,7 @@ class CompatAliasesTest < Wurk::Test::UnitCase
 
       Wurk.configuration[:use_datadog_extensions] = false
 
-      refute Wurk.configuration[:use_datadog_extensions]
+      assert_same false, Wurk.configuration[:use_datadog_extensions]
     ensure
       Wurk.configuration.dogstatsd = previous
       Wurk.configuration[:use_datadog_extensions] = previous_dd

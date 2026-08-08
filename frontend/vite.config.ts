@@ -19,11 +19,20 @@ export default defineConfig({
       name: "wurk-manifest-generator",
       apply: "build",
       writeBundle() {
-        // Read gem version from lib/wurk/version.rb
+        // lib/wurk/version.rb is the single source of truth for the gem
+        // version. Match either quote style: the literal's quotes are whatever
+        // rubocop's Style/StringLiterals currently enforces, and a `"` -> `'`
+        // autocorrect once slipped past a double-quote-only regex. That miss
+        // used to fall back to a hardcoded "0.0.1" and ship a manifest
+        // disagreeing with the gem, so an unparseable version now fails the
+        // build instead of silently stamping a wrong one.
         const versionFilePath = resolve(__dirname, "../lib/wurk/version.rb");
         const versionContent = readFileSync(versionFilePath, "utf-8");
-        const versionMatch = versionContent.match(/VERSION = "([^"]+)"/);
-        const version = versionMatch ? versionMatch[1] : "0.0.1";
+        const versionMatch = versionContent.match(/VERSION\s*=\s*['"]([^'"]+)['"]/);
+        if (!versionMatch) {
+          throw new Error(`wurk-manifest-generator: no VERSION literal in ${versionFilePath}`);
+        }
+        const version = versionMatch[1];
 
         // Create wurk-manifest.json with version for boot-time validation
         const manifestPath = resolve(__dirname, "../vendor/assets/dashboard/wurk-manifest.json");

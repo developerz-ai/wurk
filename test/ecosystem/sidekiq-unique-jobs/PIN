@@ -1,5 +1,0 @@
-# Upstream checkout this suite runs from. Bump sha only after re-running
-# `bin/rake test:ecosystem` green against the new tag.
-repo: https://github.com/mhenrixon/sidekiq-unique-jobs
-ref: v8.1.0
-sha: 4e57de89f3ac817b876c6b5d57050e05accad2d6

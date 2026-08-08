@@ -117,13 +117,19 @@ begin
     # integration test slice 10 already scopes for itself).
     x.report('wurk fetch+execute (capped, prototype slot)') do
       acquired = capsule.redis { |c| c.call('EVALSHA', acquire_sha, 1, SLOT_KEY, CAP.to_s) }
-      processor.process_one if acquired == 1
-      capsule.redis { |c| c.call('EVALSHA', release_sha, 1, SLOT_KEY) }
+      # A failed acquire holds no slot, so releasing would decrement whatever
+      # other holder is at the cap — release only what this iteration took.
+      next unless acquired == 1
+
+      begin
+        processor.process_one
+      ensure
+        capsule.redis { |c| c.call('EVALSHA', release_sha, 1, SLOT_KEY) }
+      end
     end
   end
 ensure
   stop << :stop
   refiller.join
+  capsule.redis { |c| c.call('FLUSHDB') }
 end
-
-capsule.redis { |c| c.call('FLUSHDB') }
