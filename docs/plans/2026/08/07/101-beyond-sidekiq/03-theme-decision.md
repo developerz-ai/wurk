@@ -1,29 +1,51 @@
-# Decision: Dark-Only Theme (Slice 03)
+# Decision: Theme System (Slice 03)
 
-**Date:** 2026-08-08  
-**Decision:** Ship dark-only. Do not implement light mode.
+**Decision:** Ship light / dark / system. Dark stays the design default.
+**Date:** 2026-08-08 — supersedes the dark-only call recorded the same day (below).
 
-## Rationale
+## Current decision
 
-The dashboard was designed dark-first against a near-black canvas (`#09090b`). The visual hierarchy relies on "luminance over hue": 1px borders and no shadows carry structural weight, colour reserved purely for status signal.
+Light mode ships. Dark remains the default and the design reference: it is the
+bare-`:root` palette, so a document that never sets `data-theme` still renders
+Obsidian exactly as authored. Light is an override block keyed on
+`:root[data-theme="light"]`, and every var it touches already has a `:root`
+value — nothing in the SPA depends on the light block existing.
 
-Implementing light mode would require re-deriving this entire hierarchy — tonal surfaces replacing borders, different shadow treatment, completely re-picked status colours for contrast on white. This is not a palette swap; it's a redesign.
+The derivation rule is **invert luminance, not hue**. Obsidian's structure comes
+from tone steps and 1px borders rather than shadows, so the whole ladder flips
+direction: surfaces step *down* in lightness from the canvas, borders go *darker*
+than what they separate, and `--shadow` stays `none` in both themes — elevation
+is still edge, never blur.
 
-## Outcome
+The status trio is re-picked rather than reused. The dark values sit around
+OKLCH L 0.70–0.78 and land near 1.4:1 on a white canvas. The light values hold
+the same hues at L≈0.47:
 
-- Close slice 03 (theme system) as complete.
-- Keep `<meta name="darkreader-lock">` in `frontend/index.html:10` so Dark Reader users cannot accidentally un-invert a cohesively dark UI.
-- Do not implement theme toggle, theme picker, or theme runtime.
-- Do not restructure `_tokens.scss` into light/dark branches.
-- Do not write theme tests or contrast audits.
-- Skip tasks 20–23 of the "Theme system" group (all theme-implementation tasks).
+| Token | Dark | Light | Hue held | Light on canvas | Light on 16% badge fill |
+|---|---|---|---|---|---|
+| `--color-error` | `#f0786f` | `#a32224` | 25.9° → 25.7° | 7.16 | 5.18 |
+| `--color-warning` | `#d8b34a` | `#715700` | 89.5° → 88.5° | 6.56 | 4.95 |
+| `--color-success` | `#3fb950` | `#0f6b23` | 145.6° → 145.9° | 6.39 | 4.78 |
 
-## References
+Amber is chroma-capped by sRGB at that lightness — dark gold is as saturated as
+an AA-passing yellow gets.
 
-- `CLAUDE.md` Dashboard § (line 107): "dark-only, mobile-first, i18n" — documented as a property of the design system.
-- `docs/idea/08-dashboard.md` § "Look and feel" (line 9): "Dark-only theme. A single cohesive dark theme (no light toggle), with a data viz palette tuned for accessibility."
-- `frontend/index.html:2,6-10` — all existing markup already reflects dark-only (data-theme="dark", color-scheme="dark", darkreader-lock present).
+`darkreader-lock` (`frontend/index.html:10`) comes out once the toggle ships: it
+exists to stop Dark Reader washing out a UI with no light option, and that is no
+longer the situation.
 
-## No Code Changes Required
+## Superseded: dark-only (2026-08-08)
 
-This is a documented decision, not an implementation. The codebase already implements the dark-only choice perfectly. No palette work, no tests, no theme picker — just close the decision.
+The original call was to ship dark-only, on the grounds that light mode is a
+visual-identity change rather than a palette swap — Obsidian was authored
+against a near-black canvas, and re-deriving the hierarchy for a light canvas is
+a redesign. `CLAUDE.md` (Dashboard §) and `docs/idea/08-dashboard.md` line 9
+both declared the dashboard dark-only, and `frontend/index.html` already shipped
+`data-theme="dark"`, `color-scheme="dark"` and `darkreader-lock`.
+
+That reasoning is why the light palette is derived the way it is rather than by
+flipping a switch — the redesign concern was real, it was answered by doing the
+derivation deliberately (luminance ladder inverted, status colours re-picked and
+contrast-audited) instead of by dropping the feature.
+
+Reversed. Slice 03 proceeds; tasks 20–23 are in scope.

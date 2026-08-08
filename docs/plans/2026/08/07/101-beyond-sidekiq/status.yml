@@ -53,8 +53,9 @@ notes: >
   enqueue/fetch/execute path, no existing Redis key or JSON field touched. Slice 10
   (global concurrency) is the sole hot-path slice and is explicitly allowed to close as
   "deferred" if it can't clear the bench gate; that is a documented acceptable outcome,
-  not a failure. Slice 03 (light theme) is blocked on a maintainer call — CLAUDE.md and
-  docs/idea/08-dashboard.md both declare the dashboard dark-only by design.
+  not a failure. Slice 03 (light theme) was blocked on a maintainer call; it is settled
+  in 03-theme-decision.md — light ships, dark stays the bare-`:root` default. CLAUDE.md
+  and docs/idea/08-dashboard.md still say "dark-only" and are corrected by slice 12.
   Slice 01 fixes issue #394 and is independent of everything else; it needs a parity
   determination against upstream Metrics::ExecutionTracker first, and Metrics::Statsd
   (Pro §9) has the identical shape and must be settled in the same pass.
