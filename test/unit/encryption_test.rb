@@ -489,6 +489,41 @@ class EncryptionTest < Wurk::Test::UnitCase
     end
   end
 
+  # ---- tracked + encrypted: the two middlewares together (slice 06) ----
+
+  # A worker that can take the progress handle, like a real Wurk::Worker.
+  class StatusHoldingWorker
+    attr_accessor :status
+  end
+
+  # Isolated coverage exists on each side (this file: encrypt/decrypt;
+  # status_middleware_test.rb: withhold on a bare `encrypt: true` flag with no
+  # crypto middleware in the chain at all). Neither exercises the real
+  # sequence: Encryption actually decrypting the envelope back to plaintext
+  # for `perform`, in the same invocation where Status captures that call's
+  # return value. Withholding is decided from the `encrypt` flag alone
+  # (Wurk::Middleware::Status#withhold_result?), not from chain order, but
+  # only a run with both middlewares live can prove that a real decrypted
+  # secret never ends up in the stored result or anywhere else in the row.
+  def test_a_tracked_encrypted_job_stores_no_plaintext_result_through_the_real_chain
+    ENABLE_MUTEX.synchronize do
+      Wurk::Encryption.enable(active_version: 1) { |_v| KEY_V1 }
+      pan = '4111111111111111'
+      job = { 'class' => 'TrackedEncryptedJob', 'args' => ['uid', { 'pan' => pan }],
+              'encrypt' => true, 'jid' => jid, 'queue' => 'default', 'track' => true }
+      invoke_client(job)
+
+      assert Wurk::Encryption.envelope?(job['args'].last), 'the enqueued payload must be ciphertext'
+
+      seen_args = run_through_encryption_and_status_chain(job)
+
+      assert_equal ['uid', { 'pan' => pan }], seen_args, 'perform must still see the decrypted plaintext'
+      assert_no_plaintext_result_stored(jid, pan)
+    ensure
+      Wurk::Status.delete(jid)
+    end
+  end
+
   # ---- Web UI redaction (§4.7) -----------------------------------------
 
   def test_redact_args_passthrough_when_not_encrypted
@@ -548,6 +583,35 @@ class EncryptionTest < Wurk::Test::UnitCase
     mw = Wurk::Encryption::ServerMiddleware.new
     mw.config = Wurk.configuration
     mw.call(nil, job, job['queue'], &)
+  end
+
+  # Real Encryption::ServerMiddleware outer of the real Middleware::Status, so
+  # `perform` sees decrypted plaintext and Status captures that same call's
+  # return value. Returns the args `perform` actually saw.
+  def run_through_encryption_and_status_chain(job)
+    chain = Wurk::Middleware::Chain.new(Wurk.configuration.default_capsule) do |c|
+      c.add(Wurk::Encryption::ServerMiddleware)
+      c.add(Wurk::Middleware::Status)
+    end
+    seen_args = nil
+    chain.invoke(StatusHoldingWorker.new, job, job['queue']) do
+      seen_args = job['args'].dup
+      { 'masked_pan' => job['args'].last['pan'][-4..] }
+    end
+    seen_args
+  end
+
+  def assert_no_plaintext_result_stored(target_jid, secret)
+    record = Wurk::Status.get(target_jid)
+
+    assert_equal 'complete', record.state
+    assert_predicate record, :result_withheld?
+    assert_nil record.result
+    raw = Wurk.redis { |c| c.call('HGETALL', Wurk::Status.key(target_jid)) }
+    raw = raw.each_slice(2).to_h unless raw.is_a?(Hash)
+
+    refute_includes raw, 'result'
+    refute_includes raw.values.join, secret, 'no plaintext or ciphertext of the secret arg may land in the status row'
   end
 
   def jid
