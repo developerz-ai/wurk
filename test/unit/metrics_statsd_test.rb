@@ -1,6 +1,7 @@
 # frozen_string_literal: true
 
 require_relative '../test_helper'
+require 'securerandom'
 
 # Pins the Wurk::Metrics::Statsd contract: no-op when no client wired,
 # emits prefixed metrics through the configured callable, supports the
@@ -367,6 +368,96 @@ class MetricsStatsdTest < Wurk::Test::UnitCase
 
     assert_equal 2, metrics.count('sidekiq.jobs.success')
     assert_equal 0, metrics.count('sidekiq.jobs.failure')
+  end
+
+  # ---- #394 follow-up: real chain + chain-order regressions ---------------
+  #
+  # Everything above exercises Statsd in isolation (`build_middleware`). These
+  # run through `Wurk.configuration.default_capsule.server_middleware`, the
+  # exact bound chain Processor invokes, so a future reorder (InterruptHandler
+  # no longer outside Statsd, Limiter moving inside it, …) trips them instead
+  # of silently changing what a dashboard shows.
+
+  # One interruption + one resume-and-complete through the real chain: 2
+  # `jobs.success`, 0 `jobs.failure` — mirrors MetricsHistoryTest's `p`/`f`
+  # shape for the identical event.
+  def test_interrupted_job_through_the_real_chain_emits_two_successes_zero_failures
+    fake = FakeClient.new
+    Wurk.configuration.dogstatsd = fake
+    job = { 'class' => 'MyJob', 'args' => [], 'jid' => SecureRandom.hex(12), 'queue' => 'q' }
+    chain = Wurk.configuration.default_capsule.server_middleware
+
+    assert_raises(Wurk::JobRetry::Skip) do
+      chain.invoke(nil, job, 'q') { raise Wurk::Job::Interrupted }
+    end
+    chain.invoke(nil, job, 'q') { :ok }
+
+    metrics = fake.calls.map { |c| c[1] }
+
+    assert_equal 2, metrics.count('sidekiq.jobs.success')
+    assert_equal 0, metrics.count('sidekiq.jobs.failure')
+  end
+
+  # Guard against the rescue widening in the other direction: a real error
+  # through the full chain still emits `jobs.failure`, never `jobs.success`.
+  def test_genuine_failure_through_the_real_chain_still_emits_failure
+    fake = FakeClient.new
+    Wurk.configuration.dogstatsd = fake
+    job = { 'class' => 'MyJob', 'args' => [], 'jid' => SecureRandom.hex(12), 'queue' => 'q' }
+    chain = Wurk.configuration.default_capsule.server_middleware
+
+    assert_raises(RuntimeError) do
+      chain.invoke(nil, job, 'q') { raise 'boom' }
+    end
+
+    metrics = fake.calls.map { |c| c[1] }
+
+    assert_includes metrics, 'sidekiq.jobs.failure'
+    refute_includes metrics, 'sidekiq.jobs.success'
+  end
+
+  # Same invariant as MetricsHistoryTest's — see that file for the full
+  # `Chain#traverse` reasoning. Limiter (`lib/wurk.rb:291`) is added before
+  # Statsd (`:299`), so Limiter is OUTER: `Wurk::Limiter::Rescheduled`, raised
+  # fresh from Limiter's own `rescue`, is already outside Statsd's stack frame
+  # by the time it exists and can never be the exception Statsd#call sees.
+  def test_limiter_middleware_is_registered_outer_of_metrics_statsd
+    klasses = Wurk.configuration.server_middleware.map(&:klass)
+    limiter_i = klasses.index(Wurk::Limiter::ServerMiddleware)
+    statsd_i = klasses.index(Wurk::Metrics::Statsd)
+
+    refute_nil limiter_i, 'Limiter::ServerMiddleware must be registered'
+    refute_nil statsd_i, 'Metrics::Statsd must be registered'
+    assert_operator limiter_i, :<, statsd_i, 'Limiter must be OUTER (registered before) Metrics::Statsd'
+  end
+
+  # Mirrors MetricsHistoryTest's identical finding: `Rescheduled` itself is
+  # unreachable (see the chain-order test above), but the `OverLimit` that
+  # triggers it unwinds through Statsd first, and Statsd has no way to know
+  # at that point whether Limiter will reschedule it, re-raise it unchanged
+  # (`reschedule: 0`), or poison-brake it to the dead set. So it currently
+  # emits `jobs.failure` before Limiter ever raises `Rescheduled`, contradicting
+  # the "stays unrecorded, unchanged" premise in
+  # docs/plans/2026/08/07/101-beyond-sidekiq/00-semantics-signoff.md §1. This
+  # pins verified current behavior, not that unverified assumption.
+  def test_limiter_reschedule_through_the_real_chain_currently_emits_a_failure
+    fake = FakeClient.new
+    Wurk.configuration.dogstatsd = fake
+    bucket_name = "statsd-reschedule-#{SecureRandom.hex(6)}"
+    limiter = Wurk::Limiter.bucket(bucket_name, 1, :minute, wait_timeout: 0, reschedule: 5)
+    limiter.within_limit {} # consume the only slot so the job below sees OverLimit
+    job = { 'class' => 'MyJob', 'args' => [], 'jid' => SecureRandom.hex(12), 'queue' => 'q' }
+    chain = Wurk.configuration.default_capsule.server_middleware
+
+    assert_raises(Wurk::Limiter::Rescheduled) do
+      chain.invoke(nil, job, 'q') { limiter.within_limit { raise 'should not run' } }
+    end
+
+    metrics = fake.calls.map { |c| c[1] }
+    msg = 'OverLimit currently unwinds through Statsd before Limiter converts it'
+
+    assert_includes metrics, 'sidekiq.jobs.failure', msg
+    refute_includes metrics, 'sidekiq.jobs.success'
   end
 
   def test_default_tags_include_worker_and_queue

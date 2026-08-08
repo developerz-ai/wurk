@@ -404,6 +404,110 @@ class MetricsHistoryTest < Wurk::Test::UnitCase
     assert_nil fields['f']
   end
 
+  # ---- #394 follow-up: real chain + chain-order regressions ---------------
+  #
+  # Everything above exercises History in isolation (`build_middleware`). The
+  # isolated instance proves the rescue arm works; it can't prove *placement*
+  # in the real chain doesn't undo it — InterruptHandler has to actually sit
+  # outside History for Interrupted to still be `Wurk::Job::Interrupted` (not
+  # already downgraded to `JobRetry::Skip`) by the time History sees it. These
+  # run through `Wurk.configuration.default_capsule.server_middleware`, the
+  # exact bound chain Processor invokes, so a future reorder trips them.
+
+  # One interruption + one resume-and-complete through the real chain: the
+  # first pass books `p`+`ms` (not `f`) via History's rescue arm, then
+  # InterruptHandler converts to `JobRetry::Skip` on its way further out. The
+  # second pass is an ordinary success. Net: 2 `p`, 0 `f` — same shape as the
+  # isolated-middleware test above, proven end to end.
+  def test_interrupted_job_through_the_real_chain_books_zero_f_and_two_p_after_resume
+    before = ::Time.now.utc
+    job = { 'class' => @klass, 'args' => [], 'jid' => SecureRandom.hex(12), 'queue' => 'default' }
+    chain = Wurk.configuration.default_capsule.server_middleware
+
+    assert_raises(Wurk::JobRetry::Skip) do
+      chain.invoke(nil, job, 'default') { raise Wurk::Job::Interrupted }
+    end
+    chain.invoke(nil, job, 'default') { :ok }
+    Wurk::Metrics::History.flush
+    fields = middleware_fields(before, ::Time.now.utc)
+
+    assert_equal '2', fields['p']
+    assert_nil fields['f']
+  end
+
+  # Guard against the rescue widening in the other direction: a real error
+  # through the full chain (not just the isolated middleware) still books
+  # `f`, never `p`.
+  def test_genuine_failure_through_the_real_chain_still_books_f
+    before = ::Time.now.utc
+    job = { 'class' => @klass, 'args' => [], 'jid' => SecureRandom.hex(12), 'queue' => 'default' }
+    chain = Wurk.configuration.default_capsule.server_middleware
+
+    assert_raises(RuntimeError) do
+      chain.invoke(nil, job, 'default') { raise 'boom' }
+    end
+    Wurk::Metrics::History.flush
+    fields = middleware_fields(before, ::Time.now.utc)
+
+    assert_equal '1', fields['f']
+    assert_nil fields['p']
+  end
+
+  # Chain-order invariant behind 00-semantics-signoff.md §1's "Limiter::
+  # Rescheduled ... never reaching either middleware" claim: `Chain#invoke`
+  # walks entries outside-in on the way *in*, but unwinds inside-out on the
+  # way *out* (`lib/wurk/middleware/chain.rb#traverse`), so the entry with the
+  # *lower* index sees an exception *last*, only after every higher-index
+  # entry it wraps has already run its own rescue/ensure. Limiter is added at
+  # `lib/wurk.rb:291`, History at `:306` — Limiter's index is lower, so
+  # `Wurk::Limiter::Rescheduled`, raised fresh from inside Limiter's own
+  # `rescue` clause, is already outside History's (and Statsd's) stack frame
+  # and can never be the exception their `call` sees. Reorder History ahead
+  # of Limiter and this flips.
+  def test_limiter_middleware_is_registered_outer_of_metrics_history
+    klasses = Wurk.configuration.server_middleware.map(&:klass)
+    limiter_i = klasses.index(Wurk::Limiter::ServerMiddleware)
+    history_i = klasses.index(Wurk::Metrics::History)
+
+    refute_nil limiter_i, 'Limiter::ServerMiddleware must be registered'
+    refute_nil history_i, 'Metrics::History must be registered'
+    assert_operator limiter_i, :<, history_i, 'Limiter must be OUTER (registered before) Metrics::History'
+  end
+
+  # What the chain-order invariant above does *not* cover: `Rescheduled`
+  # itself is unreachable, but the `Wurk::Limiter::OverLimit` that *triggers*
+  # it is raised deeper still (inside the job body, wrapped by History same as
+  # any other exception) and unwinds *through* History before Limiter ever
+  # gets a chance to convert it. History has no way to know, at that point,
+  # whether Limiter will reschedule it (arguably neither success nor failure,
+  # like a Skip) or re-raise it unchanged (`reschedule: 0` — a genuine
+  # failure) or poison-brake it to the dead set — that decision happens one
+  # frame further out. So today, a rate-limited-and-rescheduled job books an
+  # `f` before Limiter ever raises `Rescheduled`, contradicting the "stays
+  # unrecorded, unchanged" / "books nothing" premise in
+  # docs/plans/2026/08/07/101-beyond-sidekiq/00-semantics-signoff.md §1 and
+  # 01-metrics-interrupted-job.md step 4. This pins that verified, current
+  # (not necessarily desired) behavior rather than the unverified assumption
+  # — fixing it for real needs History to learn the outcome only Limiter
+  # knows, which is a chain-order/coupling decision of its own, out of #394's
+  # scope.
+  def test_limiter_reschedule_through_the_real_chain_currently_books_a_failure
+    before = ::Time.now.utc
+    limiter = Wurk::Limiter.bucket("history-reschedule-#{@klass}", 1, :minute, wait_timeout: 0, reschedule: 5)
+    limiter.within_limit {} # consume the only slot so the job below sees OverLimit
+    job = { 'class' => @klass, 'args' => [], 'jid' => SecureRandom.hex(12), 'queue' => 'default' }
+    chain = Wurk.configuration.default_capsule.server_middleware
+
+    assert_raises(Wurk::Limiter::Rescheduled) do
+      chain.invoke(nil, job, 'default') { limiter.within_limit { raise 'should not run' } }
+    end
+    Wurk::Metrics::History.flush
+    fields = middleware_fields(before, ::Time.now.utc)
+
+    assert_equal '1', fields['f'], 'OverLimit currently unwinds through History before Limiter converts it'
+    assert_nil fields['p']
+  end
+
   # Recording is in-memory, so the failure the middleware has to swallow is no
   # longer a Redis blip (that moved to Flusher) but a payload it cannot key on —
   # here a `class` that isn't a String, which blows up on `#empty?`. The job's
