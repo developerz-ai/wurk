@@ -1,5 +1,7 @@
 # frozen_string_literal: true
 
+require_relative '../job'
+
 module Wurk
   module Metrics
     # Pro parity (§9): emits per-job timing + counters to a statsd / dogstatsd
@@ -156,6 +158,16 @@ module Wurk
         begin
           yield
           success = true
+        rescue Wurk::Job::Interrupted
+          # Same arm, same reason as Metrics::History#call (#394): InterruptHandler
+          # self-prepends, so a cooperative interruption passes through here before
+          # it becomes a JobRetry::Skip, and without this it emits `jobs.failure`.
+          # Pro's statsd emitter is closed source, so the oracle is the free
+          # ExecutionTracker plus the rule that the two Wurk emitters must never
+          # classify one event differently. Signed off in
+          # docs/plans/2026/08/07/101-beyond-sidekiq/00-semantics-signoff.md §1.
+          success = true
+          raise
         ensure
           duration = monotonic_ms - started
           # Metrics are best-effort: an emit failure mid-finalize must not

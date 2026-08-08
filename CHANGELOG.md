@@ -4,6 +4,10 @@ All notable changes to Wurk are recorded here. Format: [Keep a Changelog](https:
 
 ## [Unreleased]
 
+### Fixed
+
+- **An interrupted `IterableJob` run no longer books as a failure.** `Metrics::History#call` and `Metrics::Statsd#call` now rescue `Wurk::Job::Interrupted` and re-raise it unmodified, so the exception propagates up through them to `InterruptHandler` without flipping the `success` flag. Both metrics middlewares now book an interrupted run as `jobs.success` + duration, never `jobs.failure` — matching upstream's own `Sidekiq::Metrics::ExecutionTracker` treatment of `JobRetry::Skip`. A resumed run that later completes books a second success and duration on top of the first, intentionally, as the job re-enters the middleware chain. Chain order verified in regression tests. (#394)
+
 ## [1.5.0] - 2026-08-07
 
 A performance release, and the first one to publish honest numbers against stock Sidekiq rather than a slogan. The fetch path went from ~4 Redis round trips per job to ~1, the swarm parent now warms the Lua cache once for the whole fleet instead of once per child, and a resource-lifecycle audit closed the leaks and shutdown races that only show up in a process that has been up for a week. Three of the round-trip wins are behavior-visible and are documented as intentional divergences — read *Changed* before deploying. The "Faster." claim is gone from the gem summary, the dashboard and every translation: wurk is currently **0.87×–1.02×** stock Sidekiq depending on workload, at parity on CPU- and I/O-bound jobs and still behind on framework overhead and boot. The numbers, the method, and the command to reproduce them are in [`docs/benchmarks.md`](docs/benchmarks.md).
