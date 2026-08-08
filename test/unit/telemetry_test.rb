@@ -111,6 +111,15 @@ class TelemetryTest < Wurk::Test::UnitCase
     assert_includes ruby(:present, otel_loaded, entry: 'wurk'), 'LOADED=false'
   end
 
+  # Explicitly turning tracing *off* still has to unregister the middlewares,
+  # but a host that never turned it on has nothing to undo — so the setter must
+  # reach install! without paying for the require it exists to avoid.
+  def test_opting_out_does_not_load_the_otel_api
+    out = ruby(:present, "Wurk.configuration.telemetry = false; #{otel_loaded}", entry: 'wurk')
+
+    assert_includes out, 'LOADED=false'
+  end
+
   # The opt-in is what pulls the API in — so an app that traces still gets it
   # without requiring wurk/telemetry by hand.
   def test_opting_in_loads_the_otel_api

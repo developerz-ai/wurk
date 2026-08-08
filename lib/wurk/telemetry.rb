@@ -41,6 +41,9 @@ module Wurk
   # constant, so aliasing would invent a Sidekiq surface rather than mirror one
   # — same call as `Wurk::Status` (see lib/wurk/compat.rb).
   module Telemetry
+    # Instrumentation scope stamped on every span this gem emits.
+    INSTRUMENTATION_NAME = 'wurk'
+
     # The API the client/server middlewares call. A defined `::OpenTelemetry` is
     # not proof the gem is there — a host can own that constant itself, and an
     # `opentelemetry-api` old enough to predate these entry points would answer
@@ -71,6 +74,41 @@ module Wurk
       def enabled?(config = Wurk.configuration)
         config.telemetry? && available?
       end
+
+      # Bring the middleware registrations in line with {enabled?}. Called by
+      # {Wurk::Configuration#telemetry=}, so the chain follows the flag in both
+      # directions: a host that turns tracing back off (a test, a capsule built
+      # for a client-only process) must stop stamping payloads, not just stop
+      # exporting.
+      #
+      # Idempotent — Chain#add removes any prior entry for the same class first.
+      #
+      # @param config [Wurk::Configuration]
+      def install!(config = Wurk.configuration)
+        return config.client_middleware.remove(ClientMiddleware) unless enabled?(config)
+
+        config.client_middleware.add(ClientMiddleware)
+      end
+
+      # Memoized against the provider that produced it rather than once for the
+      # process: `OpenTelemetry::SDK.configure` is routinely called *after* the
+      # code that will emit spans is loaded, and `OpenTelemetry.tracer_provider=`
+      # swaps the object — a tracer cached before that would silently export
+      # nothing for the life of the process. The check costs one `equal?` per
+      # enqueue and re-resolves whenever the provider actually changes.
+      #
+      # The pair is published in a single store so a concurrent reader sees
+      # either the old provider with its own tracer or the new one with its own,
+      # never a tracer attributed to the wrong provider.
+      def tracer
+        memo     = @tracer
+        provider = ::OpenTelemetry.tracer_provider
+        return memo[1] if memo && memo[0].equal?(provider)
+
+        (@tracer = [provider, provider.tracer(INSTRUMENTATION_NAME, Wurk::VERSION)].freeze)[1]
+      end
     end
   end
 end
+
+require_relative 'telemetry/client_middleware'

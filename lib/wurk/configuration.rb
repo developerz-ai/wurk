@@ -127,6 +127,7 @@ module Wurk
       @web_redis_pool = nil
       @logger = nil
       @thread_priority = DEFAULT_THREAD_PRIORITY
+      @telemetry_installed = false
       @frozen = false
     end
 
@@ -420,10 +421,17 @@ module Wurk
     def telemetry=(enabled)
       guard_frozen!
       @options[:telemetry] = enabled ? true : false
-      return unless @options[:telemetry]
+      # Turning tracing back off still has to unregister, but must not *load*
+      # the module to do it — that require is the whole cost this flag gates,
+      # and a config that never opted in has nothing registered to undo. Tracked
+      # per instance rather than off `defined?(Wurk::Telemetry)`: whether some
+      # *other* config loaded the module says nothing about this one's chain.
+      return if !@options[:telemetry] && !@telemetry_installed
 
       require_relative 'telemetry'
-      return if Wurk::Telemetry.available?
+      @telemetry_installed = true
+      Wurk::Telemetry.install!(self)
+      return if !@options[:telemetry] || Wurk::Telemetry.available?
 
       logger.warn { 'config.telemetry = true but opentelemetry-api is not installed; tracing stays off' }
     end
