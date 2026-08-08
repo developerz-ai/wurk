@@ -21,6 +21,17 @@ module Wurk
     # Spec: docs/target/sidekiq-free.md §6.4.
     class Interrupted < RuntimeError; end
 
+    # Raised into the thread running `perform` by {Wurk::Watchdog} once the
+    # attempt outlives `sidekiq_options timeout:`. An ordinary error on purpose:
+    # the job may rescue it to clean up, and the retry layer books it exactly
+    # like any other failure. See {Wurk::Middleware::Timeout}.
+    #
+    # `TimedOut`, not `Timeout`, and the name is load-bearing: `include
+    # Sidekiq::Job` puts this module into the worker's ancestry, and a constant
+    # named `Timeout` here would resolve ahead of the top-level one — silently
+    # breaking every `Timeout.timeout(...)` written inside a `perform`.
+    class TimedOut < RuntimeError; end
+
     # Per-call option carrier returned by `set(...)`. Sidekiq 7+ documents it
     # under the modern mixin name `Sidekiq::Job::Setter`; since
     # `Sidekiq::Job = Wurk::Job`, this rebind is what makes that constant
