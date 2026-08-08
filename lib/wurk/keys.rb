@@ -52,11 +52,32 @@ module Wurk
     # Sidekiq::Launcher::STATS_TTL.
     STATS_TTL = 5 * 365 * 24 * 60 * 60
 
+    # Per-job status rows: `status:<jid>` HASH holding state, progress,
+    # timings, result and error for a worker class that opted into tracking.
+    # A Wurk extra, not a Sidekiq surface — nothing in the spec's key schema
+    # (sidekiq-free.md §1) lives here, so no existing key is read or written.
+    #
+    # Deliberately NOT `sidekiq:status:<jid>`: that is the `sidekiq-status`
+    # gem's own row (`Sidekiq::Status.status_key`), and a host running both
+    # must see two independent sets of keys, not one they fight over.
+    STATUS_PREFIX = 'status:'
+
+    # TTL stamped on every `status:<jid>` write. A status row is a live view
+    # of a job in flight, not an audit log — retention past the terminal
+    # write is a separate, opt-in knob.
+    STATUS_TTL = 30 * 60
+
     # Build a queue list key from a queue name. Centralizing the concat keeps
     # the prefix in one place even though it's a constant — third-party gems
     # that grep for `"queue:"` still find it via the constant.
     def self.queue(name)
       "#{QUEUE_PREFIX}#{name}"
+    end
+
+    # Status row key for one jid. Same reason as .queue: one place owns the
+    # concat, even though the prefix is a constant.
+    def self.status(jid)
+      "#{STATUS_PREFIX}#{jid}"
     end
   end
 end

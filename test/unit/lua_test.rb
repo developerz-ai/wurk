@@ -41,7 +41,8 @@ class LuaTest < Wurk::Test::UnitCase
          limiter_register limiter_list_sweep
          limiter_concurrent_acquire limiter_concurrent_release
          limiter_bucket_acquire limiter_window_acquire limiter_window_status limiter_leaky_acquire
-         limiter_points_acquire limiter_points_refund].sort,
+         limiter_points_acquire limiter_points_refund
+         status_write].sort,
       Wurk::Lua::SCRIPTS.keys.sort
     )
   end
