@@ -1,5 +1,13 @@
-import { describe, it, expect, afterEach, vi } from 'vitest';
-import { t, directionFor } from './index';
+import { describe, it, expect, afterEach, beforeEach, vi } from 'vitest';
+import {
+  t,
+  directionFor,
+  bundleFor,
+  detectLocale,
+  applyLocale,
+  setLocale,
+  availableLocales,
+} from './index';
 import en from './en.json';
 import es from './es.json';
 import fr from './fr.json';
@@ -103,6 +111,199 @@ describe('locale parity', () => {
       });
     });
   }
+});
+
+describe('bundleFor()', () => {
+  it('matches an exact key, case-insensitively', () => {
+    expect(bundleFor('de')).toBe('de');
+    expect(bundleFor('pt-BR')).toBe('pt-BR');
+    expect(bundleFor('PT-br')).toBe('pt-BR');
+  });
+
+  it('falls back to the base subtag', () => {
+    expect(bundleFor('es-419')).toBe('es');
+    expect(bundleFor('en-GB')).toBe('en');
+    expect(bundleFor('ar-EG')).toBe('ar');
+  });
+
+  // The previous `locale.startsWith(key)` match was backwards for regional
+  // bundles — "pt".startsWith("pt-BR") is false, so a browser set to plain
+  // Portuguese silently rendered English.
+  it('promotes a bare subtag to its regional bundle', () => {
+    expect(bundleFor('pt')).toBe('pt-BR');
+    expect(bundleFor('zh')).toBe('zh-CN');
+    expect(bundleFor('pt-PT')).toBe('pt-BR');
+    expect(bundleFor('zh-Hant-TW')).toBe('zh-CN');
+  });
+
+  it('reports nothing for a locale this build does not ship', () => {
+    expect(bundleFor('he')).toBeUndefined();
+    expect(bundleFor('fa-IR')).toBeUndefined();
+  });
+
+  it('resolves every advertised locale to itself', () => {
+    expect(availableLocales.length).toBeGreaterThan(0);
+    for (const code of availableLocales) expect(bundleFor(code)).toBe(code);
+  });
+});
+
+// Every locale source lives on a global, so each test owns the whole
+// environment and hands it back clean.
+function clearLocaleEnvironment(): void {
+  history.replaceState({}, '', '/');
+  localStorage.clear();
+  document.getElementById('wurk-root')?.remove();
+  // Drops the own-property stub, revealing jsdom's real prototype getter.
+  delete (navigator as unknown as Record<string, unknown>).languages;
+  delete (navigator as unknown as Record<string, unknown>).language;
+  document.documentElement.removeAttribute('lang');
+  document.documentElement.removeAttribute('dir');
+}
+
+function stubLanguages(langs: string[]): void {
+  Object.defineProperty(navigator, 'languages', { value: langs, configurable: true });
+  Object.defineProperty(navigator, 'language', { value: langs[0] ?? '', configurable: true });
+}
+
+function mountRoot(dataLocale?: string): HTMLElement {
+  const el = document.createElement('div');
+  el.id = 'wurk-root';
+  if (dataLocale !== undefined) el.dataset.locale = dataLocale;
+  document.body.appendChild(el);
+  return el;
+}
+
+describe('detectLocale()', () => {
+  beforeEach(clearLocaleEnvironment);
+  afterEach(clearLocaleEnvironment);
+
+  it('prefers ?locale= over every persisted or detected source', () => {
+    history.replaceState({}, '', '/?locale=fr');
+    localStorage.setItem('wurk.locale', 'de');
+    mountRoot('ja');
+    stubLanguages(['es']);
+    expect(detectLocale()).toBe('fr');
+  });
+
+  it('prefers the stored pick over the server hint', () => {
+    localStorage.setItem('wurk.locale', 'de');
+    mountRoot('ja');
+    stubLanguages(['es']);
+    expect(detectLocale()).toBe('de');
+  });
+
+  it('prefers the server hint over browser preferences', () => {
+    mountRoot('ja');
+    stubLanguages(['es']);
+    expect(detectLocale()).toBe('ja');
+  });
+
+  it('walks navigator.languages in order', () => {
+    stubLanguages(['zh-CN', 'es']);
+    expect(detectLocale()).toBe('zh-CN');
+  });
+
+  // A passive browser preference we ship nothing for is skipped rather than
+  // honoured, so a Hebrew browser doesn't get an RTL board of English strings.
+  it('skips browser preferences with no bundle', () => {
+    stubLanguages(['he', 'de']);
+    expect(detectLocale()).toBe('de');
+  });
+
+  it('honours an explicit pick with no bundle', () => {
+    localStorage.setItem('wurk.locale', 'he');
+    stubLanguages(['de']);
+    expect(detectLocale()).toBe('he');
+  });
+
+  it('ends at en', () => {
+    stubLanguages([]);
+    expect(detectLocale()).toBe('en');
+  });
+
+  it('ignores malformed tags from every source', () => {
+    history.replaceState({}, '', '/?locale=%3Cscript%3E');
+    localStorage.setItem('wurk.locale', 'not a locale');
+    mountRoot('');
+    stubLanguages(['de']);
+    expect(detectLocale()).toBe('de');
+  });
+});
+
+describe('applyLocale()', () => {
+  beforeEach(clearLocaleEnvironment);
+  afterEach(clearLocaleEnvironment);
+
+  it('mirrors lang and dir onto the document and the root node', () => {
+    const root = mountRoot();
+    applyLocale('ar-EG');
+    expect(document.documentElement.lang).toBe('ar-EG');
+    expect(document.documentElement.dir).toBe('rtl');
+    expect(root.dir).toBe('rtl');
+  });
+
+  it('is a no-op on the root node when it is absent', () => {
+    applyLocale('de');
+    expect(document.documentElement.dir).toBe('ltr');
+  });
+});
+
+describe('setLocale()', () => {
+  beforeEach(clearLocaleEnvironment);
+  afterEach(clearLocaleEnvironment);
+
+  // jsdom's Location is unforgeable, so `reload`/`assign` can't be stubbed and
+  // the reload itself is out of reach here (it logs "Not implemented" and is a
+  // no-op). What's pinned is the observable contract: the pick is persisted and
+  // mirrored before the page turns over.
+  it('persists the pick and mirrors it onto the document', () => {
+    const root = mountRoot();
+    setLocale('ar');
+    expect(localStorage.getItem('wurk.locale')).toBe('ar');
+    expect(document.documentElement.lang).toBe('ar');
+    expect(document.documentElement.dir).toBe('rtl');
+    expect(root.dir).toBe('rtl');
+  });
+
+  it('rejects a malformed tag instead of persisting it', () => {
+    setLocale('not a locale');
+    expect(localStorage.getItem('wurk.locale')).toBeNull();
+    expect(document.documentElement.hasAttribute('lang')).toBe(false);
+  });
+});
+
+describe('resolved bundle', () => {
+  beforeEach(clearLocaleEnvironment);
+  afterEach(() => {
+    clearLocaleEnvironment();
+    vi.resetModules();
+  });
+
+  it('serves the regional bundle for a bare subtag', async () => {
+    mountRoot('pt');
+    vi.resetModules();
+    const mod = await import('./index');
+    expect(mod.locale).toBe('pt');
+    expect(mod.t('nav.dashboard')).toBe('Painel');
+  });
+
+  it('serves the base bundle for an unshipped region', async () => {
+    mountRoot('es-419');
+    vi.resetModules();
+    const mod = await import('./index');
+    expect(mod.t('nav.dashboard')).toBe('Panel');
+  });
+
+  // Deliberate: a bundle-less locale still flips direction and falls back to en
+  // strings, so a host can override copy without shipping a translation file.
+  it('flips RTL with English strings when nothing ships for the locale', async () => {
+    mountRoot('he');
+    vi.resetModules();
+    const mod = await import('./index');
+    expect(mod.locale).toBe('he');
+    expect(mod.dir).toBe('rtl');
+    expect(mod.t('nav.dashboard')).toBe('Dashboard');
+  });
 });
 
 describe('host overrides', () => {
