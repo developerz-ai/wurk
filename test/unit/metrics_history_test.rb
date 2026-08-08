@@ -371,6 +371,39 @@ class MetricsHistoryTest < Wurk::Test::UnitCase
     assert_equal('1', Wurk.redis { |c| c.call('HGET', minute, "#{@klass}|f") })
   end
 
+  # #394: InterruptHandler self-prepends, so Wurk::Job::Interrupted reaches this
+  # middleware on its way out and used to be booked as a failure. It is neither
+  # — the oracle books `p` + `ms` for a cooperative interruption and reserves
+  # `f` for a real exception.
+  def test_middleware_books_processed_not_failed_when_interrupted
+    before = ::Time.now.utc
+    assert_raises(Wurk::Job::Interrupted) do
+      build_middleware.call(nil, { 'class' => @klass }, 'default') { raise Wurk::Job::Interrupted }
+    end
+    Wurk::Metrics::History.flush
+    fields = middleware_fields(before, ::Time.now.utc)
+
+    assert_equal '1', fields['p']
+    assert_nil fields['f']
+    assert fields.key?('ms'), 'expected the interrupted run to book its wall-clock into |ms'
+  end
+
+  # Guard against the rescue widening: an IterableJob that resumes and finishes
+  # books a second `p`, so one interruption plus one completion is 2 `p` / 0 `f`.
+  def test_middleware_books_a_second_processed_when_the_interrupted_job_resumes
+    before = ::Time.now.utc
+    mw = build_middleware
+    assert_raises(Wurk::Job::Interrupted) do
+      mw.call(nil, { 'class' => @klass }, 'default') { raise Wurk::Job::Interrupted }
+    end
+    mw.call(nil, { 'class' => @klass }, 'default') { :ok }
+    Wurk::Metrics::History.flush
+    fields = middleware_fields(before, ::Time.now.utc)
+
+    assert_equal '2', fields['p']
+    assert_nil fields['f']
+  end
+
   # Recording is in-memory, so the failure the middleware has to swallow is no
   # longer a Redis blip (that moved to Flusher) but a payload it cannot key on —
   # here a `class` that isn't a String, which blows up on `#empty?`. The job's
@@ -439,6 +472,17 @@ class MetricsHistoryTest < Wurk::Test::UnitCase
     mw = Wurk::Metrics::History.new
     mw.config = Wurk.configuration
     mw
+  end
+
+  # This class's fields out of whichever candidate minute bucket the middleware
+  # landed in, prefix stripped. Merging both candidates is safe because @klass is
+  # unique per test instance, so only one of them can hold its fields.
+  def middleware_fields(started_at, ended_at)
+    [started_at, ended_at].map { |t| Wurk::Metrics::History.minute_key(t) }.uniq.each_with_object({}) do |key, out|
+      hgetall(key).each do |field, value|
+        out[field.split('|', 2).last] = value if field.start_with?("#{@klass}|")
+      end
+    end
   end
 
   # The middleware records at its own Time.now, so the bucket lands in the

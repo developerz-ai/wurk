@@ -1,5 +1,6 @@
 # frozen_string_literal: true
 
+require_relative '../job'
 require_relative '../middleware'
 require_relative '../pool_checkout'
 require_relative 'accumulator'
@@ -70,6 +71,19 @@ module Wurk
           result = yield
           success = true
           result
+        rescue Wurk::Job::Interrupted
+          # A cooperative interruption is not a failure. InterruptHandler
+          # self-prepends, so it sits *outside* this middleware: Interrupted
+          # passes through here before it becomes a JobRetry::Skip, and
+          # without this arm one interrupted IterableJob books a spurious
+          # `<klass>|f` (#394). Upstream's ExecutionTracker#track books `p`
+          # + `ms` for that Skip and reserves `f` for a real exception; `p`
+          # is the bucket for "reached perform and didn't error", so the
+          # resumed run booking a second `p` is the oracle's behavior, not a
+          # rounding error. Signed off in
+          # docs/plans/2026/08/07/101-beyond-sidekiq/00-semantics-signoff.md §1.
+          success = true
+          raise
         ensure
           duration = (monotonic_ms - started).round
           # Best-effort: a metrics failure must never propagate into the job
