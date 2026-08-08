@@ -39,5 +39,8 @@ $z-layers: (
   'sticky-corner': 3,
   'nav': 100,
   'hamburger': 200,
+  // Menus anchored to the nav must clear it and the hamburger; they are portaled
+  // to <body>, so they can't rely on being nested inside the rail's stacking.
+  'popover': 250,
   'toast': 300,
 );
