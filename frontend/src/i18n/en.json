@@ -17,6 +17,8 @@
     "expand": "Expand",
     "language": "Language",
     "language_current": "Language: {name}",
+    "timezone": "Timezone",
+    "timezone_current": "Timezone: {name}",
     "status_active": "System Status: Active",
     "status_inactive": "System Status: Disconnected"
   },
@@ -258,5 +260,12 @@
     "queue_latency_seconds": "Queue Latency (seconds)",
     "historical_snapshots": "Historical Snapshots",
     "view_job_detail": "View job class detail"
+  },
+  "timezone": {
+    "title": "Timezone",
+    "shown_in": "Times shown in {name}",
+    "automatic": "Automatic ({name})",
+    "filter": "Filter timezones…",
+    "empty": "No timezone matches “{query}”"
   }
 }

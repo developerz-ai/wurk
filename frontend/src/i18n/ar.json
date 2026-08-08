@@ -17,6 +17,8 @@
     "expand": "توسيع",
     "language": "اللغة",
     "language_current": "اللغة: {name}",
+    "timezone": "المنطقة الزمنية",
+    "timezone_current": "المنطقة الزمنية: {name}",
     "status_active": "حالة النظام: نشط",
     "status_inactive": "حالة النظام: غير متصل"
   },
@@ -258,5 +260,12 @@
     "queue_latency_seconds": "زمن استجابة الطابور (ثوانٍ)",
     "historical_snapshots": "اللقطات التاريخية",
     "view_job_detail": "عرض تفاصيل فئة المهمة"
+  },
+  "timezone": {
+    "title": "المنطقة الزمنية",
+    "shown_in": "الأوقات معروضة بتوقيت {name}",
+    "automatic": "تلقائي ({name})",
+    "filter": "تصفية المناطق الزمنية…",
+    "empty": "لا توجد منطقة زمنية تطابق «{query}»"
   }
 }
