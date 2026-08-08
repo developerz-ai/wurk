@@ -107,10 +107,18 @@ end
 #                      prints a Markdown table. `rake bench:vs_sidekiq`.
 #   command_count.rb — INFO commandstats table plus a per-job budget assertion,
 #                      no i/s at all. `rake bench:command_count`.
+#   fetch_capped.rb  — prototype fetch-under-a-cap probe for slice 10
+#                      (docs/plans/2026/08/07/101-beyond-sidekiq/10-global-
+#                      concurrency.md, step 1: "measure first"). It gates
+#                      nothing today — there is no real cap to regress against,
+#                      only a stand-in Lua slot script — so it stays out of the
+#                      regression gate until slice 10 lands a real gate and
+#                      decides ship-vs-defer on these numbers. `rake
+#                      bench:fetch_capped`.
 BENCH_SCRIPTS = Dir.glob(File.join(GEM_ROOT, "bench", "*.rb"))
                    .grep_v(%r{/support\.rb\z})
                    .freeze
-UNGATED_SCRIPTS = %w[vs_sidekiq.rb command_count.rb].freeze
+UNGATED_SCRIPTS = %w[vs_sidekiq.rb command_count.rb fetch_capped.rb].freeze
 GATE_SCRIPTS = BENCH_SCRIPTS.reject { |s| UNGATED_SCRIPTS.include?(File.basename(s)) }.freeze
 
 desc "Run the benchmark gate (enqueue, fetch+execute, bulk enqueue, swarm boot, memory)"
@@ -127,6 +135,22 @@ namespace :bench do
     desc "Run bench/#{name}.rb"
     task name do
       sh "ruby", "-Ilib", script
+    end
+  end
+
+  # Named "feature disabled" gates for docs/plans/2026/08/07/101-beyond-
+  # sidekiq/overview.md slices 06, 09, 10 — see bench/command_count.rb for why
+  # these are separate names running the same script today. Each slice's PR
+  # narrows its own task to the real off-state once the feature exists; until
+  # then this IS that off-state, because there is nothing yet to turn on.
+  {
+    command_count_tracked_off: "06-job-status-results: untracked worker",
+    command_count_policy_off: "09-debounce-throttle: no unique policy set",
+    command_count_cap_off: "10-global-concurrency: no cap configured"
+  }.each do |name, off_state|
+    desc "Command-count gate (#{off_state}) — bench/command_count.rb"
+    task name do
+      sh "ruby", "-Ilib", File.join(GEM_ROOT, "bench", "command_count.rb")
     end
   end
 end

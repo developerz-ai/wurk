@@ -69,6 +69,27 @@ BUDGET = Float(ENV.fetch("WURK_BENCH_CMD_BUDGET", "3"))
 # reduction means re-baselining here and republishing the prose in the same
 # commit, which is the point.
 BASELINE = Float(ENV.fetch("WURK_BENCH_CMD_BASELINE", "3"))
+
+# This same BUDGET/BASELINE pair (env-overridable, not forked into new
+# constants) IS the "feature disabled" gate that three slices of
+# docs/plans/2026/08/07/101-beyond-sidekiq/overview.md are written against —
+# each ships nothing on the default enqueue/fetch/execute path, so its "off"
+# state is, until it lands, indistinguishable from today's run of this script:
+#
+#   06 job status/results  — an untracked worker (no `track:` opt-in) must add
+#                             zero commands here (06-job-status-results.md).
+#   09 debounce/throttle   — a worker with no unique policy set must add zero
+#                             commands here (09-debounce-throttle.md).
+#   10 global concurrency  — a queue with no cap configured must add zero
+#                             commands here (10-global-concurrency.md); the one
+#                             slice allowed to close as "deferred" if it can't.
+#
+# Rake exposes each as its own name (`rake bench:command_count_tracked_off`,
+# `:command_count_policy_off`, `:command_count_cap_off`, see Rakefile) so each
+# slice's PR gets a pre-existing, reviewable CI target instead of inventing
+# one under review — and so a regression that only shows up once one of these
+# features exists still reads as "the tracked/policy/cap-off gate failed",
+# not a mystery command-count drift.
 WARMUP = [JOBS / 10, 1].max
 
 # Redis records CONFIG RESETSTAT *after* it clears the counters, so the reset
