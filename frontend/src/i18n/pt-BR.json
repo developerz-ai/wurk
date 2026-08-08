@@ -17,6 +17,8 @@
     "expand": "Expandir",
     "language": "Idioma",
     "language_current": "Idioma: {name}",
+    "timezone": "Fuso horário",
+    "timezone_current": "Fuso horário: {name}",
     "status_active": "Status do sistema: Ativo",
     "status_inactive": "Status do sistema: Desconectado"
   },
@@ -258,5 +260,12 @@
     "queue_latency_seconds": "Latência da fila (segundos)",
     "historical_snapshots": "Snapshots históricos",
     "view_job_detail": "Ver detalhe da classe de job"
+  },
+  "timezone": {
+    "title": "Fuso horário",
+    "shown_in": "Horários exibidos em {name}",
+    "automatic": "Automático ({name})",
+    "filter": "Filtrar fusos horários…",
+    "empty": "Nenhum fuso horário corresponde a “{query}”"
   }
 }

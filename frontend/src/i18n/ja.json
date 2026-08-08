@@ -17,6 +17,8 @@
     "expand": "展開",
     "language": "言語",
     "language_current": "言語: {name}",
+    "timezone": "タイムゾーン",
+    "timezone_current": "タイムゾーン: {name}",
     "status_active": "システム状態: 稼働中",
     "status_inactive": "システム状態: 切断"
   },
@@ -258,5 +260,12 @@
     "queue_latency_seconds": "キューレイテンシ(秒)",
     "historical_snapshots": "過去のスナップショット",
     "view_job_detail": "ジョブクラスの詳細を表示"
+  },
+  "timezone": {
+    "title": "タイムゾーン",
+    "shown_in": "{name} の時刻で表示しています",
+    "automatic": "自動 ({name})",
+    "filter": "タイムゾーンを絞り込み…",
+    "empty": "“{query}”に一致するタイムゾーンはありません"
   }
 }

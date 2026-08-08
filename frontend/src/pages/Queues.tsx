@@ -8,7 +8,7 @@ import { usePageParam } from '../hooks/usePageParam';
 import { useResetPageOnEmpty } from '../hooks/useResetPageOnEmpty';
 import { t } from '../i18n';
 import { PageHeader } from '../components/PageHeader';
-import { relativeTime, truncate, formatArgs, formatDuration } from '../utils';
+import { formatArgs, formatDuration, formatNumber, relativeTime, truncate } from '../utils';
 import JobDetailModal, { type JobEntry } from '../components/JobDetailModal';
 import Modal from '../components/Modal';
 import { Tooltip } from '../components/Tooltip';
@@ -97,7 +97,7 @@ function QueueJobs(props: { name: string }) {
           <div class="qjobs">
             <div style={{ display: 'flex', 'align-items': 'center', gap: '0.75rem', 'margin-bottom': '1rem' }}>
               <span style={{ color: 'var(--text-muted)', 'font-size': '13px' }}>
-                {t('queues.job_count', { n: data().size.toLocaleString() })} ·{' '}
+                {t('queues.job_count', { n: formatNumber(data().size) })} ·{' '}
                 <span title={`${data().latency.toFixed(3)}s`}>{t('queues.latency_label')} {formatDuration(data().latency)}</span>
               </span>
               <Show when={data().paused}>
@@ -253,7 +253,7 @@ export default function Queues() {
                       {(q) => (
                         <tr class="row-clickable" onClick={() => setSelectedQueue(q.name)}>
                           <td style={{ 'font-weight': 500 }}>{q.name}</td>
-                          <td>{q.size.toLocaleString()}</td>
+                          <td>{formatNumber(q.size)}</td>
                           <td title={`${q.latency.toFixed(3)}s`}>{formatDuration(q.latency)}</td>
                           <td>
                             <Show when={q.paused} fallback={<span class="badge badge-success">{t('dashboard.active')}</span>}>

@@ -17,6 +17,8 @@
     "expand": "Expandir",
     "language": "Idioma",
     "language_current": "Idioma: {name}",
+    "timezone": "Zona horaria",
+    "timezone_current": "Zona horaria: {name}",
     "status_active": "Estado del sistema: Activo",
     "status_inactive": "Estado del sistema: Desconectado"
   },
@@ -258,5 +260,12 @@
     "queue_latency_seconds": "Latencia de cola (segundos)",
     "historical_snapshots": "Instantáneas históricas",
     "view_job_detail": "Ver detalle de la clase de trabajo"
+  },
+  "timezone": {
+    "title": "Zona horaria",
+    "shown_in": "Horas mostradas en {name}",
+    "automatic": "Automática ({name})",
+    "filter": "Filtrar zonas horarias…",
+    "empty": "Ninguna zona horaria coincide con “{query}”"
   }
 }

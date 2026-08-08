@@ -4,6 +4,7 @@ import { t } from '../i18n';
 import { useMeta } from '../hooks/useMeta';
 import { useSSE } from '../hooks/useSSE';
 import LocalePicker from './LocalePicker';
+import TimezonePicker from './TimezonePicker';
 import logoUrl from '../assets/wurk-logo.png';
 
 interface NavProps {
@@ -244,8 +245,10 @@ export default function Nav(props: NavProps) {
         </button>
 
         {/* The rail footer is the dashboard's only non-route control area, so the
-            language menu lives here next to the collapse toggle. */}
+            display preferences — language, then the zone every timestamp is
+            rendered in — live here next to the collapse toggle. */}
         <LocalePicker />
+        <TimezonePicker />
 
         {/* Footer: link out to the source repo. Pinned to the bottom because the
             nav list above is flex:1. Muted by default; hover lifts like a nav item. */}

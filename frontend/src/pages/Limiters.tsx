@@ -8,6 +8,7 @@ import { useResetPageOnEmpty } from '../hooks/useResetPageOnEmpty';
 import { t } from '../i18n';
 import { PageHeader } from '../components/PageHeader';
 import { SkeletonTable } from '../components/Skeleton';
+import { formatNumber } from '../utils';
 import { useMeta } from '../hooks/useMeta';
 import { basePath } from '../basePath';
 import { getJSON, post } from '../http';
@@ -102,7 +103,7 @@ export default function Limiters() {
         {(data) => (
           <div>
             <PageHeader icon="fa-gauge" title={t('nav.limiters')} summary={t('summaries.limiters')}>
-              <span class="badge badge-muted">{data().total.toLocaleString()}</span>
+              <span class="badge badge-muted">{formatNumber(data().total)}</span>
             </PageHeader>
 
             <Show when={sorted().length > 0} fallback={<div class="empty-state">{t('common.empty')}</div>}>
@@ -140,10 +141,10 @@ export default function Limiters() {
                             <td style={{ 'font-weight': 500 }} title={limiter.name}>{limiter.name}</td>
                             <td><span class="badge badge-accent">{limiter.type}</span></td>
                             <td style={{ 'font-variant-numeric': 'tabular-nums' }} title={metricTitle}>
-                              {used.toLocaleString()}
+                              {formatNumber(used)}
                             </td>
                             <td style={{ 'font-variant-numeric': 'tabular-nums' }}>
-                              {limit == null ? '∞' : limit.toLocaleString()}
+                              {limit == null ? '∞' : formatNumber(limit)}
                             </td>
                             <td style={{ width: '160px' }}>
                               <Show

@@ -136,7 +136,7 @@ describe('Busy', () => {
 
   it('renders a live heartbeat from the API `beat` field', async () => {
     renderBusy();
-    const beats = await screen.findAllByText(/\ds ago/);
+    const beats = await screen.findAllByText(/\d seconds ago/);
     expect(beats.length).toBeGreaterThanOrEqual(3);
     expect(screen.queryAllByText('—')).toHaveLength(0);
   });

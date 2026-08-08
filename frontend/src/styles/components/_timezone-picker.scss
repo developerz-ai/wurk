@@ -1,0 +1,77 @@
+// ── Timezone picker ──────────────────────────────────────────────────────────
+// The rail-footer zone control. Its panel is a <Modal>, so the dialog chrome
+// comes from `components/modal`; only the trigger's button reset and the zone
+// list inside the panel live here.
+
+@use '../abstracts' as *;
+
+// Chained with `.wurk-navlink` for the same reason the locale trigger is:
+// Nav.tsx declares that class in an inline <style> that ships after this
+// stylesheet, so a single-class rule here would lose the tie and inherit
+// nav-item (not footer-control) colouring.
+.wurk-navlink.timezone-picker__trigger {
+  width: calc(100% - #{to-rem(16)});
+  border: 0;
+  background: transparent;
+  color: var(--text-muted);
+  font-family: inherit;
+  font-size: to-rem(13);
+  text-align: start;
+  cursor: pointer;
+}
+
+.timezone-picker__hint {
+  margin-bottom: to-rem(12);
+  color: var(--text-muted);
+  font-size: to-rem(13);
+}
+
+.timezone-picker__filter {
+  width: 100%;
+  margin-bottom: to-rem(8);
+}
+
+.timezone-picker__list {
+  // Capped so the dialog never outgrows a short viewport: ~400 zones scroll
+  // inside the list, not the page behind it.
+  max-height: to-rem(320);
+  overflow-y: auto;
+}
+
+.timezone-picker__option {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: to-rem(12);
+  width: 100%;
+  padding: to-rem(7) to-rem(10);
+  border: 0;
+  border-radius: var(--radius-sm);
+  background: transparent;
+  color: var(--text);
+  font-family: inherit;
+  font-size: to-rem(13);
+  text-align: start;
+  cursor: pointer;
+  @include transition(background color);
+
+  &:hover {
+    background: var(--surface-hover);
+    color: var(--accent);
+  }
+
+  &:focus-visible {
+    @include focus-ring;
+  }
+
+  &[aria-selected='true'] {
+    color: var(--accent);
+    font-weight: 600;
+  }
+}
+
+.timezone-picker__empty {
+  padding: to-rem(12) to-rem(10);
+  color: var(--text-muted);
+  font-size: to-rem(13);
+}

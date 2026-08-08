@@ -17,6 +17,8 @@
     "expand": "展开",
     "language": "语言",
     "language_current": "语言：{name}",
+    "timezone": "时区",
+    "timezone_current": "时区：{name}",
     "status_active": "系统状态：运行中",
     "status_inactive": "系统状态：已断开"
   },
@@ -258,5 +260,12 @@
     "queue_latency_seconds": "队列延迟（秒）",
     "historical_snapshots": "历史快照",
     "view_job_detail": "查看任务类详情"
+  },
+  "timezone": {
+    "title": "时区",
+    "shown_in": "时间以 {name} 显示",
+    "automatic": "自动（{name}）",
+    "filter": "筛选时区…",
+    "empty": "没有与“{query}”匹配的时区"
   }
 }

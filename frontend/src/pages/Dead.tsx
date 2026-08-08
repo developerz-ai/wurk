@@ -7,7 +7,7 @@ import { useSort, type Accessors } from '../hooks/useSort';
 import { usePageParam } from '../hooks/usePageParam';
 import { t } from '../i18n';
 import { PageHeader } from '../components/PageHeader';
-import { relativeTime, truncate, formatArgs, isoTime } from '../utils';
+import { formatArgs, formatNumber, hoverTime, relativeTime, truncate } from '../utils';
 import JobDetailModal, { type JobEntry } from '../components/JobDetailModal';
 import JobSetActionBar, { type ActionDef } from '../components/JobSetActionBar';
 import { useMeta } from '../hooks/useMeta';
@@ -105,7 +105,7 @@ export default function Dead() {
         {(data) => (
           <div>
             <PageHeader icon="fa-skull" title={t('nav.dead')} summary={t('summaries.dead')}>
-              <span class="badge badge-danger">{data().total.toLocaleString()}</span>
+              <span class="badge badge-danger">{formatNumber(data().total)}</span>
             </PageHeader>
 
             <FilterBox value={filter()} onChange={onFilterChange} placeholder={t('common.filter_placeholder')} />
@@ -164,7 +164,7 @@ export default function Dead() {
                                 {truncate(entry.error_class, 25)}
                               </td>
                               <td title={entry.error_message ?? ''}>{truncate(entry.error_message, 40)}</td>
-                              <td title={isoTime(entry.at)}>
+                              <td title={hoverTime(entry.at)}>
                                 {relativeTime(entry.at)}
                               </td>
                             </tr>

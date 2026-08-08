@@ -4,7 +4,7 @@ import { t } from '../i18n';
 import { PageHeader } from '../components/PageHeader';
 import Modal from '../components/Modal';
 import { ArgsValue } from '../components/ArgsValue';
-import { relativeTime, isoTime, formatKb, formatDuration, formatArgs, truncate } from '../utils';
+import { relativeTime, hoverTime, formatKb, formatDuration, formatArgs, nowSeconds, truncate } from '../utils';
 import { useMeta } from '../hooks/useMeta';
 import { SkeletonCards } from '../components/Skeleton';
 import { basePath } from '../basePath';
@@ -107,8 +107,8 @@ function ProcessDetail(props: { proc: Process }) {
     [t('busy.identity'), <code style={{ 'font-size': '12px' }}>{props.proc.identity}</code>],
     [t('busy.leader'), props.proc.leader ? <span class="badge badge-accent">{t('busy.leader')}</span> : '—'],
     ['PID', props.proc.pid],
-    [t('busy.started'), props.proc.started_at ? <span title={isoTime(props.proc.started_at)}>{relativeTime(props.proc.started_at)}</span> : '—'],
-    [t('busy.heartbeat'), <span title={isoTime(props.proc.beat)}>{relativeTime(props.proc.beat)}</span>],
+    [t('busy.started'), props.proc.started_at ? <span title={hoverTime(props.proc.started_at)}>{relativeTime(props.proc.started_at)}</span> : '—'],
+    [t('busy.heartbeat'), <span title={hoverTime(props.proc.beat)}>{relativeTime(props.proc.beat)}</span>],
     [`${t('table.busy')} / ${t('table.concurrency')}`, `${props.proc.busy} / ${props.proc.concurrency}`],
     [t('busy.rss'), formatKb(props.proc.rss ?? 0)],
     [t('busy.rtt'), props.proc.rtt_us ? `${(props.proc.rtt_us / 1000).toFixed(1)} ${t('common.ms')}` : '—'],
@@ -162,7 +162,7 @@ function ProcessDetail(props: { proc: Process }) {
                     <td style={{ 'font-weight': 500 }}>{w.klass}</td>
                     <td><span class="badge badge-muted">{w.queue}</span></td>
                     <td><ArgsValue str={formatArgs(w.args)} max={40} /></td>
-                    <td title={isoTime(w.run_at)}>{relativeTime(w.run_at)}</td>
+                    <td title={hoverTime(w.run_at)}>{relativeTime(w.run_at)}</td>
                   </tr>
                 )}
               </For>
@@ -305,7 +305,7 @@ export default function Busy() {
                       <For each={group.processes}>
                         {(proc) => {
                           const utilization = proc.concurrency > 0 ? (proc.busy / proc.concurrency) * 100 : 0;
-                          const isRecent = Date.now() / 1000 - proc.beat < 30;
+                          const isRecent = nowSeconds() - proc.beat < 30;
 
                           return (
                             <div
@@ -317,7 +317,7 @@ export default function Busy() {
                                   <div style={{ 'font-weight': 600, 'font-size': '15px' }}>PID {proc.pid}</div>
                                   <div style={{ color: 'var(--text-muted)', 'font-size': '12px' }}>
                                     {proc.tag || proc.hostname}
-                                    {proc.started_at ? ` · ${t('busy.up_for')} ${formatDuration(Date.now() / 1000 - proc.started_at)}` : ''}
+                                    {proc.started_at ? ` · ${t('busy.up_for')} ${formatDuration(nowSeconds() - proc.started_at)}` : ''}
                                   </div>
                                 </div>
                                 <div style={{ display: 'flex', gap: '0.375rem' }}>

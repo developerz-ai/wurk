@@ -17,6 +17,8 @@
     "expand": "Ausklappen",
     "language": "Sprache",
     "language_current": "Sprache: {name}",
+    "timezone": "Zeitzone",
+    "timezone_current": "Zeitzone: {name}",
     "status_active": "Systemstatus: Aktiv",
     "status_inactive": "Systemstatus: Getrennt"
   },
@@ -258,5 +260,12 @@
     "queue_latency_seconds": "Warteschlangen-Latenz (Sekunden)",
     "historical_snapshots": "Historische Snapshots",
     "view_job_detail": "Job-Klassendetail anzeigen"
+  },
+  "timezone": {
+    "title": "Zeitzone",
+    "shown_in": "Zeiten werden in {name} angezeigt",
+    "automatic": "Automatisch ({name})",
+    "filter": "Zeitzonen filtern…",
+    "empty": "Keine Zeitzone passt zu „{query}“"
   }
 }

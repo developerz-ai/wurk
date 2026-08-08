@@ -17,6 +17,8 @@
     "expand": "Développer",
     "language": "Langue",
     "language_current": "Langue : {name}",
+    "timezone": "Fuseau horaire",
+    "timezone_current": "Fuseau horaire : {name}",
     "status_active": "État du système : Actif",
     "status_inactive": "État du système : Déconnecté"
   },
@@ -258,5 +260,12 @@
     "queue_latency_seconds": "Latence de file (secondes)",
     "historical_snapshots": "Instantanés historiques",
     "view_job_detail": "Voir le détail de la classe de tâche"
+  },
+  "timezone": {
+    "title": "Fuseau horaire",
+    "shown_in": "Heures affichées dans le fuseau {name}",
+    "automatic": "Automatique ({name})",
+    "filter": "Filtrer les fuseaux horaires…",
+    "empty": "Aucun fuseau horaire ne correspond à « {query} »"
   }
 }
