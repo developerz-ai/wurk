@@ -66,7 +66,7 @@ class ReaperKill9Test < Wurk::Test::UnitCase
     super
   end
 
-  def test_kill_9_storm_loses_no_jobs_and_never_loops_forever # rubocop:disable Metrics/AbcSize
+  def test_kill_9_storm_loses_no_jobs_and_never_loops_forever
     enqueue_jobs
     swarm = Wurk::Swarm.new(topology: topology, config: @config, shutdown_timeout: 5)
     supervisor = nil

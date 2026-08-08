@@ -48,7 +48,7 @@ module Demo
 
     def initialize(logger: nil, interval: nil)
       @logger = logger
-      @interval = interval || (ENV['DEMO_PRODUCER_INTERVAL']&.to_f&.nonzero?) || DEFAULT_INTERVAL
+      @interval = interval || ENV['DEMO_PRODUCER_INTERVAL']&.to_f&.nonzero? || DEFAULT_INTERVAL
       @stop = false
       @last_batch_at = nil # nil → first tick always rolls a batch; BATCH_INTERVAL spaces the rest
     end

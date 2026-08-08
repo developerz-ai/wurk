@@ -43,7 +43,6 @@ class ClientPushTest < Wurk::Test::UnitCase
     assert_match JID_PATTERN, @client.push(base_item)
   end
 
-  # rubocop:disable Minitest/MultipleAssertions
   # One test, one canonical shape — splitting it 5 ways would obscure
   # the contract ("the LPUSH'd JSON has exactly these fields").
   def test_push_writes_lpush_with_canonical_json_keys

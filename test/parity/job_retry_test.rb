@@ -157,7 +157,7 @@ class JobRetryParityTest < Wurk::Test::UnitCase
 
   # --- sidekiq_retry_in strategies (upstream §17.1) ---------------------
 
-  def test_sidekiq_retry_in_integer_overrides_delay # rubocop:disable Metrics/AbcSize
+  def test_sidekiq_retry_in_integer_overrides_delay
     klass = Class.new do
       include Sidekiq::Worker
 
@@ -174,7 +174,7 @@ class JobRetryParityTest < Wurk::Test::UnitCase
     assert_operator score, :<=, before + 99 + 11
   end
 
-  def test_sidekiq_retry_in_discard_drops_silently # rubocop:disable Metrics/AbcSize
+  def test_sidekiq_retry_in_discard_drops_silently
     klass = Class.new do
       include Sidekiq::Worker
 

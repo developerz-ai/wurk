@@ -39,7 +39,7 @@ class HealthTest < Wurk::Test::UnitCase
   # A heartbeat-shaped object that does NOT respond to #last_beat_at, to drive
   # the "respond_to?(:last_beat_at)" guard's false branch independently of the
   # nil-heartbeat path.
-  class HeartbeatWithoutLastBeat
+  class HeartbeatWithoutLastBeat # rubocop:disable Lint/EmptyClass
   end
 
   class FakeHeartbeat

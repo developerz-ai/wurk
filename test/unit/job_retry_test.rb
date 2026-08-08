@@ -121,7 +121,7 @@ class JobRetryTest < Wurk::Test::UnitCase
 
   # Plain class (no Worker mixin) → does not respond to the block accessors,
   # so wrapped_block returns nil and falls back to the instance block.
-  class PlainWrapped; end
+  class PlainWrapped; end # rubocop:disable Lint/EmptyClass
 
   # Exception whose #backtrace is nil even after being raised — exercises the
   # nil-backtrace guard in stamp_backtrace.
@@ -235,7 +235,7 @@ class JobRetryTest < Wurk::Test::UnitCase
 
   # --- global with retry=true: ZADD into retry -----------------------
 
-  def test_global_zadds_into_retry_with_default_delay # rubocop:disable Metrics/AbcSize, Minitest/MultipleAssertions
+  def test_global_zadds_into_retry_with_default_delay
     job = base_msg(retry: true)
     assert_raises(Wurk::JobRetry::Handled) do
       @retrier.global(Wurk.dump_json(job), @queue) { raise 'boom' }
@@ -299,7 +299,7 @@ class JobRetryTest < Wurk::Test::UnitCase
     assert_equal 10_000, Wurk.load_json(payload)['error_message'].bytesize
   end
 
-  def test_global_stores_compressed_backtrace_when_enabled # rubocop:disable Minitest/MultipleAssertions
+  def test_global_stores_compressed_backtrace_when_enabled
     job = base_msg(retry: true, 'backtrace' => true)
     assert_raises(Wurk::JobRetry::Handled) do
       @retrier.global(Wurk.dump_json(job), @queue) { raise 'boom' }
@@ -354,7 +354,7 @@ class JobRetryTest < Wurk::Test::UnitCase
     assert payload, 'should be in dead set'
   end
 
-  def test_global_fires_death_handlers_on_morgue # rubocop:disable Metrics/AbcSize, Minitest/MultipleAssertions
+  def test_global_fires_death_handlers_on_morgue
     received = []
     @config.death_handlers << ->(msg, ex) { received << [msg['jid'], ex.message] }
     job = base_msg(retry: 1, 'retry_count' => 0)
@@ -368,7 +368,7 @@ class JobRetryTest < Wurk::Test::UnitCase
     assert_equal 'final', received.first.last
   end
 
-  def test_global_fires_death_handlers_when_retry_false # rubocop:disable Metrics/AbcSize, Minitest/MultipleAssertions
+  def test_global_fires_death_handlers_when_retry_false
     received = []
     @config.death_handlers << ->(msg, ex) { received << [msg['jid'], ex] }
     job = base_msg(retry: false)
@@ -428,7 +428,7 @@ class JobRetryTest < Wurk::Test::UnitCase
     end
   end
 
-  def test_local_honors_sidekiq_retry_in_block # rubocop:disable Metrics/AbcSize
+  def test_local_honors_sidekiq_retry_in_block
     inst = CustomDelayJob.new
     job = base_msg(retry: true)
     before = ::Time.now.to_f
@@ -443,7 +443,7 @@ class JobRetryTest < Wurk::Test::UnitCase
     assert_operator score, :<=, before + 42 + 11
   end
 
-  def test_local_discard_strategy_skips_retry_and_morgue # rubocop:disable Metrics/AbcSize, Minitest/MultipleAssertions
+  def test_local_discard_strategy_skips_retry_and_morgue
     inst = DiscardJob.new
     received = []
     @config.death_handlers << ->(msg, _ex) { received << msg['jid'] }
@@ -481,7 +481,7 @@ class JobRetryTest < Wurk::Test::UnitCase
     assert payload, 'fell back to default schedule_retry'
   end
 
-  def test_local_runs_retries_exhausted_block # rubocop:disable Metrics/AbcSize
+  def test_local_runs_retries_exhausted_block
     ExhaustedJob.callbacks.clear
     inst = ExhaustedJob.new
     job = base_msg(retry: 0, 'retry_count' => 0)
@@ -505,7 +505,7 @@ class JobRetryTest < Wurk::Test::UnitCase
 
   # --- retry_for ---------------------------------------------------------
 
-  def test_retry_for_uses_duration_not_count # rubocop:disable Metrics/AbcSize
+  def test_retry_for_uses_duration_not_count
     failed_at = (::Time.now - 3600).to_f * 1000
     job = base_msg(retry: 999, 'retry_count' => 0, 'failed_at' => failed_at.to_i, 'retry_for' => 60)
     assert_raises(Wurk::JobRetry::Handled) do

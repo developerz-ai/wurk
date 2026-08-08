@@ -89,7 +89,7 @@ class BatchLifecycleTest < Wurk::Test::UnitCase
   def test_autoflush_empty_block_still_enqueues_marker
     batch = new_batch
     batch.autoflush = true
-    batch.jobs {} # rubocop:disable Lint/EmptyBlock
+    batch.jobs {}
 
     assert_operator total(batch), :>=, 1
   end
@@ -257,6 +257,7 @@ class BatchLifecycleTest < Wurk::Test::UnitCase
     jid = jid_for(@queue, batch.bid)
 
     fail_job(batch.bid, jid)
+
     assert_equal 1, Wurk::Batch::Status.new(batch.bid).failures
 
     batch.invalidate_all
@@ -288,7 +289,7 @@ class BatchLifecycleTest < Wurk::Test::UnitCase
   # Limiter::Rescheduled (a JobRetry::Skip); the Batch middleware must skip
   # both acks — pending stays put, no failure recorded, no :success. :success
   # fires only once the rescheduled job later runs to success.
-  def test_limiter_reschedule_inside_batch_is_neither_success_nor_failure # rubocop:disable Minitest/MultipleAssertions,Metrics/AbcSize
+  def test_limiter_reschedule_inside_batch_is_neither_success_nor_failure
     batch = new_batch(success: 'S')
     batch.jobs { perform_one }
     jid = jid_for(@queue, batch.bid)
@@ -316,7 +317,7 @@ class BatchLifecycleTest < Wurk::Test::UnitCase
   # to success." Full morgue round-trip: the job dies into the dead set, the
   # operator hits "retry" (SortedEntry#retry → Client push → BATCH_PUSH), the
   # retry succeeds, and the batch fires :success.
-  def test_dead_job_retried_from_morgue_to_success_fires_success # rubocop:disable Minitest/MultipleAssertions
+  def test_dead_job_retried_from_morgue_to_success_fires_success
     batch = new_batch(success: 'S', complete: 'C', death: 'D')
     batch.jobs { perform_one }
     payload = queued(@queue).find { |j| j['bid'] == batch.bid }
@@ -364,7 +365,7 @@ class BatchLifecycleTest < Wurk::Test::UnitCase
   # A retried dead job that dies again re-marks the batch dead (durable flag
   # + dead-batches) without re-enqueuing :death; a second retry that finally
   # succeeds still fires :success.
-  def test_re_death_after_recovery_re_marks_dead_without_refiring_death # rubocop:disable Minitest/MultipleAssertions
+  def test_re_death_after_recovery_re_marks_dead_without_refiring_death
     batch = new_batch(success: 'S', death: 'D')
     batch.jobs { perform_one }
     jid = jid_for(@queue, batch.bid)
@@ -432,7 +433,7 @@ class BatchLifecycleTest < Wurk::Test::UnitCase
   # Spec §2.4 across the parent chain: a child's job dies (cascading :death up
   # to the parent), the operator retries it to success, the child fires
   # :success, and the parent fires :success once its own work is done too.
-  def test_nested_descendant_recovery_fires_ancestor_success # rubocop:disable Minitest/MultipleAssertions
+  def test_nested_descendant_recovery_fires_ancestor_success
     parent, child = nested(parent_cbs: { success: 'ParentSuccess', death: 'ParentDeath' },
                            child_cbs: { success: 'ChildSuccess', death: 'ChildDeath' })
     child_jid = jid_for(@queue, child.bid)
@@ -458,7 +459,7 @@ class BatchLifecycleTest < Wurk::Test::UnitCase
 
   # A parent with two dead children must keep :success suppressed until BOTH
   # recover — recovering only one leaves the parent's subtree still dead.
-  def test_ancestor_stays_suppressed_while_other_descendant_dead # rubocop:disable Minitest/MultipleAssertions
+  def test_ancestor_stays_suppressed_while_other_descendant_dead
     parent = new_batch(success: 'ParentSuccess', death: 'ParentDeath')
     child_a = child_b = nil
     parent.jobs do
@@ -495,7 +496,7 @@ class BatchLifecycleTest < Wurk::Test::UnitCase
 
   # The clear walks the full chain: a leaf recovery must lift suppression on
   # every ancestor up to the root.
-  def test_deep_recovery_fires_success_through_every_ancestor # rubocop:disable Minitest/MultipleAssertions
+  def test_deep_recovery_fires_success_through_every_ancestor
     grand = new_batch(success: 'GrandSuccess', death: 'GrandDeath')
     parent = child = nil
     grand.jobs do
@@ -526,7 +527,7 @@ class BatchLifecycleTest < Wurk::Test::UnitCase
 
   # A descendant that dies again after recovery must re-mark every ancestor
   # dead (durable flag + dead-batches) without re-enqueuing :death anywhere.
-  def test_descendant_re_death_re_marks_ancestors_without_refiring_death # rubocop:disable Minitest/MultipleAssertions
+  def test_descendant_re_death_re_marks_ancestors_without_refiring_death
     parent, child = nested(parent_cbs: { success: 'ParentSuccess', death: 'ParentDeath' },
                            child_cbs: { death: 'ChildDeath' })
     child_jid = jid_for(@queue, child.bid)
@@ -560,7 +561,7 @@ class BatchLifecycleTest < Wurk::Test::UnitCase
   # *successful* child drain via propagate_to_parent), so subtree_dead? is
   # still true and :success must stay suppressed until the retried job
   # actually succeeds.
-  def test_parent_own_ack_in_retry_window_keeps_success_suppressed # rubocop:disable Minitest/MultipleAssertions
+  def test_parent_own_ack_in_retry_window_keeps_success_suppressed
     parent, child = nested(parent_cbs: { success: 'ParentSuccess', death: 'ParentDeath' },
                            child_cbs: { success: 'ChildSuccess' })
     parent_jid = jid_for(@queue, parent.bid)
@@ -803,7 +804,7 @@ class BatchLifecycleTest < Wurk::Test::UnitCase
 
   # --- #209: parent gated on running child batches ------------------------
 
-  def test_parent_callbacks_wait_when_parent_acks_before_child # rubocop:disable Minitest/MultipleAssertions
+  def test_parent_callbacks_wait_when_parent_acks_before_child
     parent, child = nested(parent_cbs: { success: 'ParentSuccess', complete: 'ParentComplete' },
                            child_cbs: { success: 'ChildSuccess' })
 
@@ -1107,7 +1108,7 @@ class BatchLifecycleTest < Wurk::Test::UnitCase
   def ack_success(bid, jid)
     mw = Wurk::Batch::ServerMiddleware.new
     mw.config = Wurk.configuration
-    mw.call(nil, { 'bid' => bid, 'jid' => jid }, @queue) {} # rubocop:disable Lint/EmptyBlock
+    mw.call(nil, { 'bid' => bid, 'jid' => jid }, @queue) {}
   end
 
   def kill(bid, jid)

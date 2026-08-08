@@ -64,7 +64,6 @@ class ProcessSetTest < Wurk::Test::UnitCase
     assert_kind_of Wurk::Process, process
   end
 
-  # rubocop:disable Minitest/MultipleAssertions
   # One test, one Process shape: each field is part of the public contract.
   def test_lookup_populates_busy_beat_quiet_rss
     register!(info: base_info, busy: '3', beat: '12345.6', quiet: 'false', rss: '4096', rtt_us: '900')

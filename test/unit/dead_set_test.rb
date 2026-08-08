@@ -157,7 +157,7 @@ class DeadSetTest < Wurk::Test::UnitCase
     refute_nil(@pool.with { |c| c.call('ZSCORE', @dead, fresh) })
   end
 
-  def test_kill_with_trim_false_skips_trim # rubocop:disable Metrics/AbcSize
+  def test_kill_with_trim_false_skips_trim
     # Seed enough entries that max_jobs:1 would normally trim everything.
     seed_dead((0...5).map { |i| [i.to_f, "skip-seed-#{@ns}-#{i}"] })
     skip_opts = { notify_failure: false, trim: false, max_jobs: 1, timeout: 60_000 }

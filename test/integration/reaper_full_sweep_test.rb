@@ -33,7 +33,6 @@ class ReaperFullSweepTest < Wurk::Test::UnitCase
     super
   end
 
-  # rubocop:disable Minitest/MultipleAssertions, Metrics/AbcSize
   def test_full_sweep_reclaims_a_killed_owners_orphan_in_an_unserved_queue
     @observer.call('RPUSH', @orphan_q, payload('job-1'))
     @child_pid = fork_fetcher(@orphan_q)
@@ -51,7 +50,7 @@ class ReaperFullSweepTest < Wurk::Test::UnitCase
     assert_equal 0, @observer.call('LLEN', priv), 'private list drained'
     assert_equal 1, @observer.call('LLEN', @orphan_q), 'job re-queued onto its public queue'
   end
-  # rubocop:enable Minitest/MultipleAssertions, Metrics/AbcSize
+  # rubocop:enable Minitest/MultipleAssertions
 
   # Migration window: a private list written before the PROCESS_NONCE upgrade
   # (`<host>|<pid>|<idx>`, no nonce segment) must stay reclaimable by the full

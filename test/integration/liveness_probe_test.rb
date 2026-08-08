@@ -130,6 +130,7 @@ class LivenessProbeTest < Wurk::Test::UnitCase
 
       sleep POLL_INTERVAL
     end
+
     flunk 'Health::Server did not start within poll timeout'
   end
 
@@ -155,5 +156,4 @@ class LivenessProbeTest < Wurk::Test::UnitCase
       json: ::JSON.parse(body)
     }
   end
-
 end

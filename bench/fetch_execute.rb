@@ -1,9 +1,9 @@
 # frozen_string_literal: true
 
-require "benchmark/ips"
-require "logger"
-require "wurk"
-require_relative "support"
+require 'benchmark/ips'
+require 'logger'
+require 'wurk'
+require_relative 'support'
 
 # End-to-end fetch+execute — one of the four "Faster" pillar critical paths
 # (CLAUDE.md). Each iteration drives the REAL reliable fetcher (atomic LMOVE:
@@ -63,7 +63,7 @@ end
 
 config = Wurk::Configuration.new
 config.logger = Logger.new(IO::NULL)
-config.redis = { url: bench_redis_url("15") }
+config.redis = { url: bench_redis_url('15') }
 config.queues = %w[default]
 config.fetch_poll_interval = EMPTY_POLL
 capsule = config.default_capsule
@@ -71,7 +71,7 @@ capsule.prepare!
 
 # Isolated scratch DB: a clean slate at both ends keeps this process the only
 # consumer of queue:default, so every LMOVE finds a job.
-capsule.redis { |c| c.call("FLUSHDB") }
+capsule.redis { |c| c.call('FLUSHDB') }
 capsule.redis { |c| Wurk::Lua::Loader.script_load_all(c) }
 
 client    = Wurk::Client.new(pool: capsule.redis_pool)
@@ -80,7 +80,7 @@ processor = Wurk::Processor.new(capsule)
 # One args array, reused by the seed and every top-up. Allocating a fresh
 # 25k-element array per refill would charge the producer's GC churn to the
 # process under measurement.
-chunk = { "class" => "BenchJob", "args" => Array.new(REFILL_CHUNK) { [] }, "queue" => "default" }
+chunk = { 'class' => 'BenchJob', 'args' => Array.new(REFILL_CHUNK) { [] }, 'queue' => 'default' }
 
 SEED_CHUNKS.times { client.push_bulk(chunk) }
 
@@ -90,7 +90,7 @@ SEED_CHUNKS.times { client.push_bulk(chunk) }
 stop = Queue.new
 refiller = Thread.new do
   until stop.pop(timeout: REFILL_POLL)
-    client.push_bulk(chunk) if capsule.redis { |c| c.call("LLEN", "queue:default") } < REFILL_FLOOR
+    client.push_bulk(chunk) if capsule.redis { |c| c.call('LLEN', 'queue:default') } < REFILL_FLOOR
   end
 end
 
@@ -98,7 +98,7 @@ begin
   Benchmark.ips do |x|
     x.config(time: 5, warmup: 2)
 
-    x.report("wurk fetch+execute") do
+    x.report('wurk fetch+execute') do
       processor.process_one
     end
   end
@@ -107,4 +107,4 @@ ensure
   refiller.join
 end
 
-capsule.redis { |c| c.call("FLUSHDB") }
+capsule.redis { |c| c.call('FLUSHDB') }

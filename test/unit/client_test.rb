@@ -84,7 +84,7 @@ class ClientTest < Wurk::Test::UnitCase
   end
 
   def test_flush_batched_pushes_batched_payload_through_lua
-    @client.flush_batched([batched_payload(jid: 'b1' + ('0' * 22))])
+    @client.flush_batched([batched_payload(jid: "b1#{'0' * 22}")])
 
     assert_equal(1, @pool.with { |c| c.call('LLEN', "queue:#{@queue}") })
     assert_equal('1', @pool.with { |c| c.call('HGET', "b-#{@bid}", 'pending') })
@@ -97,7 +97,7 @@ class ClientTest < Wurk::Test::UnitCase
   def test_flush_batched_reloads_lua_after_noscript
     client = Wurk::Client.new(pool: NoscriptOncePool.new(@pool))
 
-    client.flush_batched([batched_payload(jid: 'b2' + ('0' * 22))])
+    client.flush_batched([batched_payload(jid: "b2#{'0' * 22}")])
 
     assert_equal 1, @pool.with { |c| c.call('LLEN', "queue:#{@queue}") },
                  'a simulated NOSCRIPT must trigger script_load_all + EVAL-source retry, then succeed'
@@ -110,7 +110,7 @@ class ClientTest < Wurk::Test::UnitCase
   def test_flush_batched_reraises_non_noscript_command_error
     # b-<bid> as a String makes the BATCH_PUSH Lua's HINCRBY raise WRONGTYPE
     # (a CommandError that is *not* NOSCRIPT), which must propagate, not retry.
-    payload = batched_payload(jid: 'b3' + ('0' * 22)) # sets @bid
+    payload = batched_payload(jid: "b3#{'0' * 22}") # sets @bid
     @pool.with { |c| c.call('SET', "b-#{@bid}", 'not-a-hash') }
 
     assert_raises(RedisClient::CommandError) { @client.flush_batched([payload]) }

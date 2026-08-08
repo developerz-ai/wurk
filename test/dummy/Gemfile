@@ -1,11 +1,11 @@
 # frozen_string_literal: true
 
-source "https://rubygems.org"
+source 'https://rubygems.org'
 
-gem "rails", ">= 7.1"
-gem "sqlite3"
-gem "wurk", path: "../.."
+gem 'rails', '>= 7.1'
+gem 'sqlite3'
+gem 'wurk', path: '../..'
 
 group :development do
-  gem "puma"
+  gem 'puma'
 end

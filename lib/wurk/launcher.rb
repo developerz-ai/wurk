@@ -93,7 +93,7 @@ module Wurk
     #      non-leader tick just returns early.
     #   6. start the health probe server LAST so the listener doesn't
     #      accept k8s probes until the rest of the launcher is up.
-    def run(async_beat: true)
+    def run(async_beat: true) # rubocop:disable Metrics/AbcSize
       @started_at = Time.now.to_f
       # Default each capsule's fetcher + materialize its lazy pools/middleware
       # before the config freezes. Every entry point (swarm child, standalone

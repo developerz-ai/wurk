@@ -6,7 +6,7 @@ require_relative '../test_helper'
 class TopologyTest < Wurk::Test::UnitCase
   parallelize_me!
 
-  def test_starts_empty # rubocop:disable Minitest/MultipleAssertions
+  def test_starts_empty
     t = Wurk::Topology.new
 
     assert_empty t.slots
@@ -85,7 +85,7 @@ class TopologyTest < Wurk::Test::UnitCase
     assert_equal 5, t.total_processes
   end
 
-  def test_flat_builds_single_slot_topology # rubocop:disable Minitest/MultipleAssertions
+  def test_flat_builds_single_slot_topology
     t = Wurk::Topology.flat(count: 4, queues: %w[default low], concurrency: 10)
 
     assert_equal 1, t.slots.size

@@ -23,7 +23,7 @@ module Wurk
     #
     # A wider window has no data to read anyway (the buckets are TTL'd out),
     # so we fail loudly rather than silently returning sparse results.
-    module Query # rubocop:disable Metrics/ModuleLength
+    module Query
       MAX_MINUTES = 480
       MAX_HOURS = 72
       TOTAL_FIELDS = %w[p f ms].freeze

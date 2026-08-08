@@ -129,8 +129,7 @@ module Wurk
 
       def run
         until @done
-          ready = ::IO.select([@server], nil, nil, ACCEPT_TIMEOUT)
-          next unless ready
+          next unless @server.wait_readable(ACCEPT_TIMEOUT)
 
           begin
             client, _addr = @server.accept_nonblock(exception: false)
@@ -146,8 +145,9 @@ module Wurk
         # Server was closed during shutdown — expected.
       end
 
-      def handle(client)
-        return unless ::IO.select([client], nil, nil, 1.0)
+      def handle(client) # rubocop:disable Metrics/AbcSize
+        return unless client.wait_readable(1.0)
+
         request_line = client.gets("\r\n")
         return if request_line.nil?
 
@@ -156,7 +156,8 @@ module Wurk
         # Wait for readability before each gets so a stalled client can't
         # block the single accept thread mid-headers.
         loop do
-          break unless ::IO.select([client], nil, nil, 1.0)
+          break unless client.wait_readable(1.0)
+
           line = client.gets("\r\n")
           break if line.nil? || line == "\r\n"
         end
@@ -194,7 +195,7 @@ module Wurk
         if redis_ok && beat_fresh
           [json('ok', check: 'ready'), 200]
         else
-          reason = !redis_ok ? 'redis unreachable' : 'heartbeat stale'
+          reason = redis_ok ? 'heartbeat stale' : 'redis unreachable'
           [json('down', check: 'ready', reason: reason), 503]
         end
       end
@@ -207,7 +208,7 @@ module Wurk
 
       def heartbeat_fresh?
         hb = @launcher.instance_variable_get(:@heartbeat)
-        return false unless hb&.respond_to?(:last_beat_at)
+        return false unless hb.respond_to?(:last_beat_at)
 
         last = hb.last_beat_at
         return false if last.nil?

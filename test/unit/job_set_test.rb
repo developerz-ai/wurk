@@ -152,7 +152,7 @@ class JobSetTest < Wurk::Test::UnitCase
     total = Wurk::SortedSet::PAGE_SIZE + 5
     total.times { |i| add_member(score: i.to_f) }
 
-    count = @set.each { |_e| } # rubocop:disable Lint/EmptyBlock
+    count = @set.each { |_e| }
 
     assert_equal total, count
     assert_equal total, @set.to_a.size

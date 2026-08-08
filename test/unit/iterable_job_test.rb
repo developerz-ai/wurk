@@ -400,7 +400,7 @@ class IterableJobTest < Wurk::Test::UnitCase
 
   # Pins the full HASH wire shape (ex, c, rt, cancelled) on an interrupted
   # run. Splitting would obscure the contract — the field set IS the spec.
-  def test_interrupted_perform_persists_state_hash # rubocop:disable Metrics/AbcSize,Minitest/MultipleAssertions
+  def test_interrupted_perform_persists_state_hash
     jid = random_jid
     worker = CancelThenInterrupt.new
     worker.jid = jid

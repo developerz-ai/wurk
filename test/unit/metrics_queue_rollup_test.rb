@@ -120,7 +120,6 @@ class MetricsQueueRollupTest < Wurk::Test::UnitCase
   end
 
   # Exercises the spawned-thread `until @done` loop without a fixed sleep.
-  # rubocop:disable Metrics/AbcSize
   def test_start_loop_samples_until_terminated
     config = Wurk::Configuration.new
     config.logger = ::Logger.new(IO::NULL)
@@ -135,7 +134,6 @@ class MetricsQueueRollupTest < Wurk::Test::UnitCase
 
     assert_operator qr.instance_variable_get(:@ticks).to_i, :>, 0
   end
-  # rubocop:enable Metrics/AbcSize
 
   # terminate is a barrier: the launcher releases the cluster lock right after
   # it returns, so a sample still in flight would write the same buckets as the

@@ -202,7 +202,7 @@ class BatchTest < Wurk::Test::UnitCase
 
   def test_empty_jobs_block_enqueues_marker_job
     batch = track(Wurk::Batch.new)
-    batch.jobs {} # rubocop:disable Lint/EmptyBlock
+    batch.jobs {}
 
     assert_operator Wurk::Batch::Status.new(batch.bid).total, :>=, 1
   end
@@ -211,7 +211,7 @@ class BatchTest < Wurk::Test::UnitCase
   # BATCH_SCHEDULE: total/pending move now, the jid joins the live set, and the
   # payload waits in `schedule` (not the queue). Promotion later re-pushes it
   # through BATCH_PUSH's guard — jid already live → no double count.
-  def test_scheduled_job_in_jobs_block_counts_and_registers # rubocop:disable Minitest/MultipleAssertions,Metrics/AbcSize
+  def test_scheduled_job_in_jobs_block_counts_and_registers
     at    = future_at
     batch = track(Wurk::Batch.new)
     batch.jobs { perform_one_scheduled(at) }
@@ -275,7 +275,7 @@ class BatchTest < Wurk::Test::UnitCase
     refute_includes batch, 'deadbeef'
   end
 
-  def test_remove_jobs_decrements_total_and_pending # rubocop:disable Metrics/AbcSize
+  def test_remove_jobs_decrements_total_and_pending
     batch = track(Wurk::Batch.new)
     batch.jobs { 3.times { perform_one(batch) } }
     jids = queued_jids

@@ -189,7 +189,7 @@ class ApiEndpointsTest < Wurk::Test::EngineCase
     assert_kind_of Array, json_body
   end
 
-  def test_process_row_carries_host_facts_and_beat # rubocop:disable Minitest/MultipleAssertions
+  def test_process_row_carries_host_facts_and_beat
     identity = seed_process
     get '/wurk/api/processes'
 
@@ -237,7 +237,7 @@ class ApiEndpointsTest < Wurk::Test::EngineCase
     cleanup_process(identity)
   end
 
-  def test_workers_lists_in_flight_jobs_per_process # rubocop:disable Minitest/MultipleAssertions
+  def test_workers_lists_in_flight_jobs_per_process
     identity = seed_process(work: true)
     get '/wurk/api/workers'
 
@@ -263,7 +263,7 @@ class ApiEndpointsTest < Wurk::Test::EngineCase
     assert_equal 0, payload[:page]
   end
 
-  def test_batches_row_carries_status_and_progress # rubocop:disable Minitest/MultipleAssertions
+  def test_batches_row_carries_status_and_progress
     bid = seed_batch
     get '/wurk/api/batches'
 
@@ -277,7 +277,7 @@ class ApiEndpointsTest < Wurk::Test::EngineCase
     cleanup_batch(bid)
   end
 
-  def test_batch_detail_by_bid # rubocop:disable Minitest/MultipleAssertions
+  def test_batch_detail_by_bid
     bid = seed_batch
     get "/wurk/api/batches/#{bid}"
 

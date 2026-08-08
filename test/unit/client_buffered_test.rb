@@ -225,7 +225,6 @@ class ClientBufferedTest < Wurk::Test::UnitCase
     assert_equal 2, Wurk::Client::Buffered.buffer_size
   end
 
-  # rubocop:disable Metrics/AbcSize, Minitest/MultipleAssertions
   def test_drain_after_cap_eviction_replays_surviving_entries
     Wurk::Client.reliable_push_buffer = 2
     failing = build_client(failing_pool)
@@ -242,7 +241,7 @@ class ClientBufferedTest < Wurk::Test::UnitCase
     assert_includes queued, ['newest']
     assert_includes queued, ['fresh']
   end
-  # rubocop:enable Metrics/AbcSize, Minitest/MultipleAssertions
+  # rubocop:enable Minitest/MultipleAssertions
 
   # --- batch bypass ------------------------------------------------------
 
@@ -338,7 +337,6 @@ class ClientBufferedTest < Wurk::Test::UnitCase
   # short of the cap used to buffer that one payload, raise on the second and
   # drop the other 998 on the floor — no buffer slot, no Redis write, no
   # reference on the exception.
-  # rubocop:disable Metrics/AbcSize
   def test_overflow_raise_loses_no_payload_from_a_large_bulk_push
     cap = 1_000
     Wurk::Client.reliable_push_buffer = cap
@@ -356,7 +354,6 @@ class ClientBufferedTest < Wurk::Test::UnitCase
     # exception: every one accounted for exactly once, in submission order.
     assert_equal fresh, buffered_args.last(1) + payload_args(err.payloads)
   end
-  # rubocop:enable Metrics/AbcSize
 
   # Lowering the cap below the current buffer size makes remaining capacity
   # negative; the whole call must be reported, not clamped into a partial take.
@@ -457,7 +454,6 @@ class ClientBufferedTest < Wurk::Test::UnitCase
     assert_nil Wurk::Client::Buffered.instance_variable_get(:@drainer)
   end
 
-  # rubocop:disable Metrics/AbcSize
   def test_drainer_drains_buffer_against_recovering_pool
     pool = togglable_pool
     failing_client = build_client(pool.failing_facade)
@@ -481,7 +477,6 @@ class ClientBufferedTest < Wurk::Test::UnitCase
     assert_equal 0, Wurk::Client::Buffered.buffer_size, 'drainer did not flush buffer within 3s'
     assert_equal [['a'], ['b']], queued_args.reverse
   end
-  # rubocop:enable Metrics/AbcSize
 
   def test_drainer_rejects_non_positive_interval
     assert_raises(ArgumentError) { Wurk::Client::Buffered::Drainer.new(interval: 0) }
@@ -564,7 +559,7 @@ class ClientBufferedTest < Wurk::Test::UnitCase
   # Stands in for a Wurk::Client in the drainer's run loop. drain! calls
   # pop_head (empty buffer → nil → no replay), so push is never reached;
   # this just satisfies the factory contract without hitting Redis.
-  class NoopDrainClient; end
+  class NoopDrainClient; end # rubocop:disable Lint/EmptyClass
 
   # Statsd singletons are process-global — serialize against every other test
   # class that also rewrites `Wurk::Metrics::Statsd.increment`.

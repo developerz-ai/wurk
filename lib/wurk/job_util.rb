@@ -8,7 +8,7 @@ module Wurk
   # and JSON-verify job payloads before they hit Redis.
   #
   # Spec: docs/target/sidekiq-free.md §9 (Sidekiq::JobUtil).
-  module JobUtil # rubocop:disable Metrics/ModuleLength
+  module JobUtil
     # Top-level keys consumed at enqueue time but stripped from every payload
     # before raw_push — they must never reach the wire (spec §2.2):
     #   `pool`         selects the Redis pool (resolved in client_push/build_client)

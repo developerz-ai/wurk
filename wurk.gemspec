@@ -1,61 +1,63 @@
 # frozen_string_literal: true
 
-require_relative "lib/wurk/version"
+require_relative 'lib/wurk/version'
 
 Gem::Specification.new do |spec|
-  spec.name        = "wurk"
+  spec.name        = 'wurk'
   spec.version     = Wurk::VERSION
-  spec.authors     = ["developerz.ai"]
-  spec.email       = ["admin@developerz.ai"]
+  spec.authors     = ['developerz.ai']
+  spec.email       = ['admin@developerz.ai']
 
-  spec.summary     = "100% drop-in replacement for Sidekiq + Sidekiq Pro + Sidekiq Enterprise. Free."
-  spec.description = "Wire-compatible Ruby background job processor: same Redis schema, same job JSON, same Ruby DSL. Pro + Enterprise feature parity in the same gem, no license check. Fork-based real parallelism. Mountable Rails engine with a precompiled SolidJS dashboard."
-  spec.homepage    = "https://github.com/developerz-ai/wurk"
-  spec.license     = "MIT"
+  spec.summary     = '100% drop-in replacement for Sidekiq + Sidekiq Pro + Sidekiq Enterprise. Free.'
+  spec.description = 'Wire-compatible Ruby background job processor: same Redis schema, same job JSON, ' \
+                     'same Ruby DSL. Pro + Enterprise feature parity in the same gem, no license check. ' \
+                     'Fork-based real parallelism. Mountable Rails engine with a precompiled SolidJS dashboard.'
+  spec.homepage    = 'https://github.com/developerz-ai/wurk'
+  spec.license     = 'MIT'
 
-  spec.required_ruby_version = ">= 3.2.0"
+  spec.required_ruby_version = '>= 3.2.0'
 
-  spec.metadata["source_code_uri"]   = spec.homepage
-  spec.metadata["documentation_uri"] = "https://developerz-ai.github.io/wurk/api/"
-  spec.metadata["changelog_uri"]     = "#{spec.homepage}/blob/main/CHANGELOG.md"
-  spec.metadata["bug_tracker_uri"]   = "#{spec.homepage}/issues"
-  spec.metadata["rubygems_mfa_required"] = "true"
+  spec.metadata['source_code_uri']   = spec.homepage
+  spec.metadata['documentation_uri'] = 'https://developerz-ai.github.io/wurk/api/'
+  spec.metadata['changelog_uri']     = "#{spec.homepage}/blob/main/CHANGELOG.md"
+  spec.metadata['bug_tracker_uri']   = "#{spec.homepage}/issues"
+  spec.metadata['rubygems_mfa_required'] = 'true'
 
   # Ship only what the gem needs at runtime: Ruby, the precompiled dashboard
   # (js/css/html + asset manifest), the engine's config, README, and LICENSE.
   # No images, no docs/, no CHANGELOG/CONTRIBUTING/SECURITY — those live on
   # GitHub (see the *_uri metadata above).
   spec.files = Dir[
-    "lib/**/*.rb",
-    "app/**/*.rb",
-    "config/**/*",
-    "exe/*",
-    "vendor/assets/dashboard/**/*",
-    "README.md",
-    "LICENSE"
+    'lib/**/*.rb',
+    'app/**/*.rb',
+    'config/**/*',
+    'exe/*',
+    'vendor/assets/dashboard/**/*',
+    'README.md',
+    'LICENSE'
   ]
 
-  spec.bindir      = "exe"
-  spec.executables = ["wurk", "wurkswarm", "sidekiqswarm"]
-  spec.require_paths = ["lib"]
+  spec.bindir      = 'exe'
+  spec.executables = %w[wurk wurkswarm sidekiqswarm]
+  spec.require_paths = ['lib']
 
   # Bounded ranges (not pessimistic `~>`) where a newer major is already in
   # use: connection_pool 3.x and rack 3.x (Rails 7.1+/8) must both be allowed,
   # so cap at the *next* untested major rather than the current one.
-  spec.add_dependency "redis-client", "~> 0.22"
-  spec.add_dependency "connection_pool", ">= 2.4", "< 4"
-  spec.add_dependency "rack", ">= 2.2", "< 4"
-  spec.add_dependency "concurrent-ruby", "~> 1.2"
+  spec.add_dependency 'concurrent-ruby', '~> 1.2'
+  spec.add_dependency 'connection_pool', '>= 2.4', '< 4'
+  spec.add_dependency 'rack', '>= 2.2', '< 4'
+  spec.add_dependency 'redis-client', '~> 0.22'
   # Bundled-gem extractions: base64 left default gems in Ruby 3.4, logger became
   # a bundled gem in Ruby 3.5 (with deprecation warnings starting in Ruby 3.4).
   # A Rails app pulls them in transitively, but a standalone (non-Rails) consumer
   # has neither — without these, `require "wurk"` raises LoadError on Ruby 3.4+.
-  spec.add_dependency "base64", ">= 0.1", "< 1"
-  spec.add_dependency "logger", ">= 1.5", "< 2"
+  spec.add_dependency 'base64', '>= 0.1', '< 1'
+  spec.add_dependency 'logger', '>= 1.5', '< 2'
   # fiddle left the default gems in Ruby 4.0. The swarm's Linux PR_SET_PDEATHSIG
   # orphan-guard fast-path (lib/wurk/swarm/orphan_guard.rb) requires it; without
   # the dep it silently degrades to the getppid watchdog on Ruby 4.0 (and the
   # orphan-guard test errors on LoadError). Declaring it keeps the kernel-level
   # path working there, exactly as base64/logger keep `require "wurk"` working.
-  spec.add_dependency "fiddle", ">= 1.0", "< 2"
+  spec.add_dependency 'fiddle', '>= 1.0', '< 2'
 end

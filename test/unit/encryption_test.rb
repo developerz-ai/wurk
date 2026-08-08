@@ -119,7 +119,7 @@ class EncryptionTest < Wurk::Test::UnitCase
 
   # ---- encrypt / decrypt round-trip -----------------------------------
 
-  def test_encrypt_returns_envelope_shape # rubocop:disable Minitest/MultipleAssertions
+  def test_encrypt_returns_envelope_shape
     ENABLE_MUTEX.synchronize do
       Wurk::Encryption.enable(active_version: 1) { |_v| KEY_V1 }
       env = Wurk::Encryption.encrypt('hello')
@@ -201,7 +201,7 @@ class EncryptionTest < Wurk::Test::UnitCase
 
   # ---- key rotation ----------------------------------------------------
 
-  def test_rotation_decrypts_legacy_envelopes # rubocop:disable Minitest/MultipleAssertions
+  def test_rotation_decrypts_legacy_envelopes
     ENABLE_MUTEX.synchronize do
       keys = { 1 => KEY_V1, 2 => KEY_V2 }
       Wurk::Encryption.enable(active_version: 1) { |v| keys[v] }
@@ -221,7 +221,7 @@ class EncryptionTest < Wurk::Test::UnitCase
 
   # #18 "Done when": enable v1, push, rotate to v2, push, both decrypt cleanly
   # — exercised end-to-end through the real client + server middleware pair.
-  def test_rotation_decrypts_both_versions_through_middleware # rubocop:disable Minitest/MultipleAssertions,Metrics/AbcSize
+  def test_rotation_decrypts_both_versions_through_middleware
     ENABLE_MUTEX.synchronize do
       keys = { 1 => KEY_V1, 2 => KEY_V2 }
 
@@ -257,7 +257,7 @@ class EncryptionTest < Wurk::Test::UnitCase
     end
   end
 
-  def test_envelope_predicate_rejects_plain_hash # rubocop:disable Minitest/MultipleAssertions
+  def test_envelope_predicate_rejects_plain_hash
     refute Wurk::Encryption.envelope?({ 'v' => 1, 'iv' => 'a', 'ct' => 'b', 'tag' => 'c' })
     refute Wurk::Encryption.envelope?({ Wurk::Encryption::ENVELOPE_MARKER => true })
     refute Wurk::Encryption.envelope?('string')
@@ -382,7 +382,7 @@ class EncryptionTest < Wurk::Test::UnitCase
   # server middleware routes it straight to the dead set (tagged
   # encryption_error) and ACKs via JobRetry::Skip rather than letting the
   # CipherError bubble into the 25× retry loop.
-  def test_server_middleware_routes_bad_tag_to_dead_set # rubocop:disable Minitest/MultipleAssertions,Metrics/AbcSize
+  def test_server_middleware_routes_bad_tag_to_dead_set
     ENABLE_MUTEX.synchronize do
       Wurk::Encryption.enable(active_version: 1) { |_v| KEY_V1 }
       env = Wurk::Encryption.encrypt('x')
@@ -407,7 +407,7 @@ class EncryptionTest < Wurk::Test::UnitCase
   end
 
   # #18 "Done when": missing-key job lands in dead with encryption_error in <1s.
-  def test_missing_key_routes_to_dead_under_one_second # rubocop:disable Minitest/MultipleAssertions,Metrics/AbcSize
+  def test_missing_key_routes_to_dead_under_one_second
     ENABLE_MUTEX.synchronize do
       Wurk::Encryption.enable(active_version: 1) { |_v| KEY_V1 }
       env = Wurk::Encryption.encrypt('secret')
@@ -431,7 +431,7 @@ class EncryptionTest < Wurk::Test::UnitCase
     end
   end
 
-  def test_decryption_failure_fires_death_handlers # rubocop:disable Metrics/AbcSize
+  def test_decryption_failure_fires_death_handlers
     ENABLE_MUTEX.synchronize do
       fired = []
       handler = ->(j, ex) { fired << [j['jid'], ex.class] }

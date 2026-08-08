@@ -6,9 +6,9 @@ require_relative '../test_helper'
 # serialized via ENV_MUTEX so the env-touching class can still opt into the
 # parallel runner without cross-test interference.
 module LoggerTestHelpers
-  private
-
   ENV_MUTEX = Mutex.new
+
+  private
 
   def format_with(formatter, severity, message)
     formatter.call(severity, Time.utc(2026, 1, 2, 3, 4, 5), nil, message)

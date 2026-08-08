@@ -59,7 +59,7 @@ class ScheduledParityTest < Wurk::Test::UnitCase
     assert_in_delta at.to_f, score, 0.001, 'perform_at score should equal the given timestamp'
   end
 
-  def test_scheduled_member_omits_at_and_keeps_core_fields # rubocop:disable Minitest/MultipleAssertions
+  def test_scheduled_member_omits_at_and_keeps_core_fields
     jid = enqueue_in(100, 1, 2)
 
     member, = scheduled_entry(jid)

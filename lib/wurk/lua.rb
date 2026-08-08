@@ -12,7 +12,7 @@ module Wurk
   #
   # `:zpopbyscore` is reproduced verbatim from sidekiq-free.md §1.8 and
   # MUST NOT diverge — parity tests will fail on a single byte change.
-  module Lua # rubocop:disable Metrics/ModuleLength
+  module Lua
     ZPOPBYSCORE = <<~LUA
       local key, now = KEYS[1], ARGV[1]
       local jobs = redis.call("zrange", key, "-inf", now, "byscore", "limit", 0, 1)
@@ -422,8 +422,8 @@ module Wurk
     # individual rate-limiter changes painless and keeps each script self-
     # contained for the `redis-cli --eval` debug workflow.
     LUA_DIR = File.expand_path('lua', __dir__)
-    FILE_SCRIPTS = Dir.glob(File.join(LUA_DIR, '*.lua')).each_with_object({}) do |path, h|
-      h[File.basename(path, '.lua').to_sym] = File.read(path)
+    FILE_SCRIPTS = Dir.glob(File.join(LUA_DIR, '*.lua')).to_h do |path|
+      [File.basename(path, '.lua').to_sym, File.read(path)]
     end.freeze
 
     SCRIPTS = {

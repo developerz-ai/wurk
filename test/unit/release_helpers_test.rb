@@ -104,7 +104,7 @@ class ReleaseHelpersTest < Wurk::Test::UnitCase
   # Package a throwaway gem in `dir`, optionally with the dashboard bundle, and
   # return the absolute .gem path. chdir is process-global but safe here: each
   # test class runs in its own fork and tests within a class run sequentially.
-  def build_fake_gem(dir, include_dashboard:) # rubocop:disable Metrics/AbcSize
+  def build_fake_gem(dir, include_dashboard:)
     Dir.chdir(dir) do
       FileUtils.mkdir_p('lib')
       File.write('lib/fake.rb', "# fake\n")

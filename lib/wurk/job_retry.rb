@@ -218,7 +218,7 @@ module Wurk
       [:default, default_delay]
     end
 
-    def run_retry_in_block(jobinst, count, exception, msg) # rubocop:disable Metrics/CyclomaticComplexity
+    def run_retry_in_block(jobinst, count, exception, msg)
       block = jobinst&.class&.sidekiq_retry_in_block
       block = wrapped_block(msg, :sidekiq_retry_in_block) || block if msg['wrapped']
       block&.call(count, exception, msg)

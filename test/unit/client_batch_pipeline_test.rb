@@ -20,7 +20,7 @@ class ClientBatchPipelineTest < Wurk::Test::UnitCase
 
   def setup
     super
-    @pool       = Wurk.configuration.redis_pool
+    @pool = Wurk.configuration.redis_pool
     # Prime the server-wide EVALSHA cache, exactly as ChildBoot does per fork.
     # Nothing else in the suite guarantees it: the cache only warms as a side
     # effect of some earlier test's inline NOSCRIPT recovery, and with

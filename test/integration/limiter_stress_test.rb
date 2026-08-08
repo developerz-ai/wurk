@@ -31,7 +31,7 @@ class LimiterStressTest < Wurk::Test::UnitCase
     super
   end
 
-  def test_1000_concurrent_acquires_never_exceed_the_limit # rubocop:disable Minitest/MultipleAssertions,Metrics/AbcSize
+  def test_1000_concurrent_acquires_never_exceed_the_limit
     limit = 5
     limiter = Wurk::Limiter.concurrent("c-#{@suffix}", limit, wait_timeout: 15, lock_timeout: 30)
 

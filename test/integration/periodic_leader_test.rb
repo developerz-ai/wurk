@@ -111,7 +111,7 @@ class PeriodicLeaderTest < Wurk::Test::UnitCase
     @observer.call('LLEN', "#{Wurk::Cron::HISTORY_PREFIX}#{@lid}").to_i
   end
 
-  def wait_for_history
+  def wait_for_history # rubocop:disable Naming/PredicateMethod
     deadline = monotonic_now + POLL_TIMEOUT
     while monotonic_now < deadline
       return true if history_len >= 1

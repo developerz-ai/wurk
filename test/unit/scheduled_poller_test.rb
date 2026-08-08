@@ -177,7 +177,6 @@ class ScheduledPollerTest < Wurk::Test::UnitCase
   # jobs still get promoted, and the failure is reported to the error handlers.
   # (The popped-then-failed job is lost — the default scheduler's known pop→push
   # tradeoff; ReliableEnq is the loss-free path.)
-  # rubocop:disable Metrics/AbcSize, Minitest/MultipleAssertions
   def test_drain_continues_after_a_failing_push_and_reports_it
     2.times { |i| schedule_job(set: @schedule, at: Time.now.to_f - 10 + i) }
     captured = []
@@ -203,7 +202,7 @@ class ScheduledPollerTest < Wurk::Test::UnitCase
     assert_equal 1, captured.size
     assert_equal 'push blew up', captured.first.message
   end
-  # rubocop:enable Metrics/AbcSize, Minitest/MultipleAssertions
+  # rubocop:enable Minitest/MultipleAssertions
 
   # ZPOPBYSCORE claims no apply-safety, so a read timeout reaches #drain_set
   # instead of being replayed. The outcome of that pop is unknown, so the set's

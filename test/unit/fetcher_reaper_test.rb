@@ -15,7 +15,8 @@ class FetcherReaperTest < Wurk::Test::UnitCase
 
   DEAD_PID = 999_999 # never a running pid in CI/dev
 
-  def setup # rubocop:disable Metrics/AbcSize -- linear fixture wiring, no branching
+  # Linear fixture wiring, no branching.
+  def setup
     super
     @ns           = "reaper-#{Process.pid}-#{object_id}"
     @queue_name   = "#{@ns}-q"
@@ -123,7 +124,6 @@ class FetcherReaperTest < Wurk::Test::UnitCase
 
   # On the poison path the same block receives a pill responding to
   # .jid/.klass/.count/.queue, so a `pill.jid`-style Pro initializer drops in.
-  # rubocop:disable Minitest/MultipleAssertions, Metrics/AbcSize
   def test_recovery_callback_receives_pill_on_poison_kill
     jid = SecureRandom.hex(12)
     pill = nil
@@ -142,11 +142,11 @@ class FetcherReaperTest < Wurk::Test::UnitCase
   ensure
     Wurk.redis { |c| c.call('DEL', recovery_key(jid)) }
   end
-  # rubocop:enable Minitest/MultipleAssertions, Metrics/AbcSize
+  # rubocop:enable Minitest/MultipleAssertions
 
   # --- poison-pill cap ---------------------------------------------------
 
-  # rubocop:disable Metrics/AbcSize, Minitest/MultipleAssertions
+  # rubocop:disable Minitest/MultipleAssertions
   def test_recovery_past_threshold_kills_to_dead_set_instead_of_requeue
     jid = SecureRandom.hex(12)
     job = payload('poison', jid: jid)
@@ -163,7 +163,7 @@ class FetcherReaperTest < Wurk::Test::UnitCase
   ensure
     Wurk.redis { |c| c.call('DEL', recovery_key(jid)) }
   end
-  # rubocop:enable Metrics/AbcSize, Minitest/MultipleAssertions
+  # rubocop:enable Minitest/MultipleAssertions
 
   def test_under_threshold_recovery_requeues_and_bumps_counter
     jid = SecureRandom.hex(12)

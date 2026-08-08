@@ -16,8 +16,12 @@
 # Single source of truth: mirror the Sidekiq release wurk targets
 # (Sidekiq::VERSION in lib/wurk/compat.rb) so ecosystem gems' version gates
 # (`add_dependency "sidekiq", ">= 6.5"` etc.) resolve the same as upstream.
+# Match either quote style: the literal's quotes are whatever rubocop's
+# Style/StringLiterals currently enforces, and pinning one of them makes an
+# autocorrect over there break every ecosystem harness over here.
 compat = File.read(File.expand_path('../../lib/wurk/compat.rb', __dir__))
-sidekiq_version = compat[/VERSION\s*=\s*'([^']+)'/, 1] or raise 'Sidekiq::VERSION not found in lib/wurk/compat.rb'
+sidekiq_version = compat[/VERSION\s*=\s*['"]([^'"]+)['"]/, 1]
+raise 'Sidekiq::VERSION not found in lib/wurk/compat.rb' unless sidekiq_version
 
 Gem::Specification.new do |spec|
   spec.name        = 'sidekiq'

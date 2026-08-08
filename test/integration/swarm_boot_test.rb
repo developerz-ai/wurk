@@ -135,7 +135,7 @@ class SwarmBootTest < Wurk::Test::UnitCase
     super
   end
 
-  def test_swarm_boots_forks_and_runs_a_job_in_a_child # rubocop:disable Metrics/AbcSize,Minitest/MultipleAssertions
+  def test_swarm_boots_forks_and_runs_a_job_in_a_child
     push_sentinel_job
     swarm = Wurk::Swarm.new(topology: topology_n(2), config: @config, shutdown_timeout: 5)
     supervisor = nil
@@ -172,7 +172,7 @@ class SwarmBootTest < Wurk::Test::UnitCase
   # supervisor's immediate first memory check can't recycle it mid-boot), then
   # start the supervisor and watch a different pid take over AND the original
   # drain out (it lives on briefly past the replacement's boot).
-  def test_swarm_recycles_a_child_that_exceeds_the_memory_limit # rubocop:disable Metrics/AbcSize,Minitest/MultipleAssertions
+  def test_swarm_recycles_a_child_that_exceeds_the_memory_limit
     log_boot_pids
     @config.memory_limit_mb = 1
     swarm = Wurk::Swarm.new(topology: topology_n(1), config: @config, shutdown_timeout: 5)
@@ -233,7 +233,7 @@ class SwarmBootTest < Wurk::Test::UnitCase
   # own NOSCRIPT rescue heals the child in flight. Both children report the
   # exact command sequence they took, so neither claim can pass on a
   # coincidence.
-  def test_a_child_runs_lua_off_its_warmed_cache_and_self_heals_a_lost_script # rubocop:disable Metrics/AbcSize,Minitest/MultipleAssertions
+  def test_a_child_runs_lua_off_its_warmed_cache_and_self_heals_a_lost_script
     swarm = Wurk::Swarm.new(topology: topology_n(2), config: @config, shutdown_timeout: 5)
     supervisor = nil
 

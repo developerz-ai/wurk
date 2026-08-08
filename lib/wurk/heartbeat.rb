@@ -191,7 +191,7 @@ module Wurk
     def cpu_model
       if ::File.exist?('/proc/cpuinfo')
         line = ::File.open('/proc/cpuinfo') { |f| f.find { |l| l.start_with?('model name') } }
-        line&.split(':', 2)&.last&.strip
+        line.nil? ? nil : line.split(':', 2).last&.strip
       else
         model = `sysctl -n machdep.cpu.brand_string 2>/dev/null`.strip
         model.empty? ? nil : model

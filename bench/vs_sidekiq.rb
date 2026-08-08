@@ -125,7 +125,7 @@ end
 
 def worker_command(side)
   case side
-  when :sidekiq then ['bundle', 'exec', 'sidekiq']
+  when :sidekiq then %w[bundle exec sidekiq]
   when :wurk    then ['bundle', 'exec', PROCESSES > 1 ? 'wurkswarm' : 'wurk']
   end
 end
@@ -168,6 +168,7 @@ def measure(redis, log, start:)
     done = redis.call('GET', DONE_KEY).to_i
     (first ||= monotonic) if done.positive?
     return [first - start, [monotonic - first, 1e-6].max] if done >= JOBS
+
     raise_timeout(log, done) if monotonic - start > TIMEOUT
 
     sleep 0.002

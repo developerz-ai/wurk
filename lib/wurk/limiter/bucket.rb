@@ -27,7 +27,7 @@ module Wurk
         build_status(used: size, limit: @options[:count], reset_at: next_boundary)
       end
 
-      def within_limit(used: 1, &block)
+      def within_limit(used: 1, &block) # rubocop:disable Metrics/AbcSize
         raise ArgumentError, 'block required' unless block
 
         deadline = ::Time.now.to_f + @options[:wait_timeout]

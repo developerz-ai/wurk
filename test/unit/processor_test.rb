@@ -10,7 +10,7 @@ class ProcessorTest < Wurk::Test::UnitCase
 
   # Named (marshalable) non-StandardError so `run`'s `rescue Exception` path
   # fires without StandardError/Shutdown swallowing it earlier in the stack.
-  class FatalBoom < Exception; end
+  class FatalBoom < Exception; end # rubocop:disable Lint/InheritException
 
   # Stands in for an async raise delivered the instant after the entry is
   # published — the seam `SharedWorkState#track` has to cover.

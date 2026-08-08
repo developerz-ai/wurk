@@ -56,7 +56,7 @@ module Wurk
 
     attr_reader :key, :ttl, :owner, :token, :config
 
-    def initialize(config: nil, key: DEFAULT_KEY, ttl: DEFAULT_TTL, # rubocop:disable Metrics/ParameterLists
+    def initialize(config: nil, key: DEFAULT_KEY, ttl: DEFAULT_TTL,
                    renew_interval: DEFAULT_RENEW_INTERVAL,
                    follower_interval: DEFAULT_FOLLOWER_INTERVAL,
                    initial_wait: DEFAULT_INITIAL_WAIT,

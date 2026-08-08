@@ -46,7 +46,6 @@ class RollingRestartTest < Wurk::Test::UnitCase
     super
   end
 
-  # rubocop:disable Minitest/MultipleAssertions, Metrics/AbcSize
   def test_sigusr1_cycles_each_slot_in_turn
     parent_pid, pipe_read = fork_swarm_supervisor
 
@@ -76,7 +75,7 @@ class RollingRestartTest < Wurk::Test::UnitCase
       shutdown_supervisor(parent_pid)
     end
   end
-  # rubocop:enable Minitest/MultipleAssertions, Metrics/AbcSize
+  # rubocop:enable Minitest/MultipleAssertions
 
   private
 

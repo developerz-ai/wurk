@@ -224,7 +224,8 @@ module Wurk
           # and redirects into the embed URL space; `embed: false` (the
           # standalone `run Sidekiq::Web` Rack app, #204) leaves the
           # extension's own route paths as the URL space, like upstream.
-          # rubocop:disable Metrics/ParameterLists -- request facts (name/verb/path/env) + URL-space (mount/embed); bundling them would just rename the list
+          # The keywords are request facts (name/verb/path/env) plus URL-space
+          # (mount/embed); bundling them would just rename the list.
           def call(name:, method:, subpath:, env:, mount:, embed: true)
             ext = registered_extension(name)
             return nil unless ext
@@ -236,7 +237,6 @@ module Wurk
             env['wurk.ext.subpath'] = subpath
             render(ext, route_params, block, env, { mount: mount, embed: embed })
           end
-          # rubocop:enable Metrics/ParameterLists
 
           # `[absolute_path, cache_for_seconds]` of an asset under the
           # extension's asset_paths, or nil if the extension/file isn't found.

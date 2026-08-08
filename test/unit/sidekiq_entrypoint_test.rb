@@ -20,8 +20,11 @@ class SidekiqEntrypointTest < Wurk::Test::UnitCase
     sidekiq/api
     sidekiq/client
     sidekiq/job
+    sidekiq/job_retry
     sidekiq/launcher
+    sidekiq/manager
     sidekiq/middleware/chain
+    sidekiq/processor
     sidekiq/redis_connection
     sidekiq/scheduled
     sidekiq/version

@@ -1,14 +1,14 @@
 # frozen_string_literal: true
 
-require_relative "boot"
+require_relative 'boot'
 
-require "rails"
-require "active_model/railtie"
-require "active_job/railtie"
-require "active_record/railtie"
-require "action_controller/railtie"
-require "action_view/railtie"
-require "action_dispatch/railtie"
+require 'rails'
+require 'active_model/railtie'
+require 'active_job/railtie'
+require 'active_record/railtie'
+require 'action_controller/railtie'
+require 'action_view/railtie'
+require 'action_dispatch/railtie'
 
 Bundler.require(*Rails.groups)
 
@@ -17,7 +17,7 @@ Bundler.require(*Rails.groups)
 # would make wurk.rb's auto-load guard a no-op). The plain-`require "wurk"`
 # drop-in path from #246 is proven order-faithfully in
 # test/unit/rails_autoload_test.rb (fresh subprocess, Rails present).
-require "wurk/rails"
+require 'wurk/rails'
 
 module Dummy
   class Application < ::Rails::Application
@@ -29,6 +29,6 @@ module Dummy
     config.active_job.queue_adapter = :wurk
 
     # Skip auto-fork in the dummy unless an integration test opts in.
-    ENV["WURK_DISABLED"] ||= "1"
+    ENV['WURK_DISABLED'] ||= '1'
   end
 end

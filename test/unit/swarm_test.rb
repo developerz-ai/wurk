@@ -318,7 +318,7 @@ class SwarmTest < Wurk::Test::UnitCase
     assert_equal 25, Wurk::Swarm::DEFAULT_SHUTDOWN_TIMEOUT
   end
 
-  def test_supervisor_tunables_are_numeric # rubocop:disable Minitest/MultipleAssertions
+  def test_supervisor_tunables_are_numeric
     assert_kind_of Numeric, Wurk::Swarm::SUPERVISE_TICK
     assert_kind_of Numeric, Wurk::Swarm::RESPAWN_BACKOFF
     assert_kind_of Numeric, Wurk::Swarm::HEARTBEAT_WAIT

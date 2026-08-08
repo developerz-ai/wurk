@@ -132,8 +132,8 @@ module Wurk
       # the extension's `registered(app)` routes/ERB views are served by
       # Wurk::Web::Extension::Renderer under `ext/:name/*` (#187) — the SPA's
       # Extension page embeds the rendered HTML. Yields self to an optional
-      # block for further config, and returns self.
-      # rubocop:disable Metrics/ParameterLists -- signature matches Sidekiq::Web::Config#register_extension (spec §25.2)
+      # block for further config, and returns self. The wide keyword signature
+      # matches Sidekiq::Web::Config#register_extension (spec §25.2).
       def register_extension(extension, name:, tab:, index:, root_dir: nil,
                              cache_for: 86_400, asset_paths: nil)
         Array(tab).zip(Array(index)).each { |label, path| @tabs[label] = path if label }
@@ -147,7 +147,6 @@ module Wurk
         yield self if block_given?
         self
       end
-      # rubocop:enable Metrics/ParameterLists
       alias register register_extension
 
       # Tabs the SPA should render in the nav: everything registered beyond the

@@ -8,7 +8,6 @@ require 'active_job/queue_adapters/wurk_adapter'
 class CronTest < Wurk::Test::UnitCase
   parallelize_me!
 
-
   # Workers used by ConfigTester resolution checks. Bodies stay empty —
   # the test only needs the constant to resolve, not actual perform logic.
   class FooWorker # rubocop:disable Lint/EmptyClass
@@ -597,7 +596,7 @@ class CronTest < Wurk::Test::UnitCase
     cfg = Wurk::Configuration.new
     cfg[:cron_tick_interval] = 0.25
 
-    assert_equal 0.25, Wurk::Cron::Poller.new(cfg).instance_variable_get(:@tick_interval)
+    assert_in_delta(0.25, Wurk::Cron::Poller.new(cfg).instance_variable_get(:@tick_interval))
   end
 
   # ---- Fire-mark CAS ---------------------------------------------------
@@ -808,7 +807,10 @@ class CronTest < Wurk::Test::UnitCase
     # an hourly cadence whose repeated hour is a genuine second run.
     nyt = tz('America/New_York')
     fires = simulate_fires('0 * * * *', nyt, Time.utc(2026, 11, 1, 4, 0), Time.utc(2026, 11, 1, 7, 0))
-    one_am = fires.count { |f| lc = nyt.utc_to_local(Time.at(f).utc); lc.hour == 1 && lc.min.zero? }
+    one_am = fires.count do |f|
+      lc = nyt.utc_to_local(Time.at(f).utc)
+      lc.hour == 1 && lc.min.zero?
+    end
 
     assert_equal 2, one_am, 'hourly 0 * * * * must fire in both fold 01:00 hours, not skip one'
   end
@@ -818,7 +820,10 @@ class CronTest < Wurk::Test::UnitCase
     # "minute == 0". 15 * * * * must also keep both repeated fall-back hours.
     nyt = tz('America/New_York')
     fires = simulate_fires('15 * * * *', nyt, Time.utc(2026, 11, 1, 4, 0), Time.utc(2026, 11, 1, 7, 0))
-    one_fifteen = fires.count { |f| lc = nyt.utc_to_local(Time.at(f).utc); lc.hour == 1 && lc.min == 15 }
+    one_fifteen = fires.count do |f|
+      lc = nyt.utc_to_local(Time.at(f).utc)
+      lc.hour == 1 && lc.min == 15
+    end
 
     assert_equal 2, one_fifteen
   end
@@ -951,6 +956,10 @@ class CronTest < Wurk::Test::UnitCase
 
   # ---- Parser branch coverage: match_components? / match_day? ----------
 
+  # `Parser#match?` answers "does this schedule fire at this time" — it is not a
+  # regexp match, so assert_match/refute_match would compare a Parser to a Time.
+  # rubocop:disable Minitest/AssertMatch, Minitest/RefuteMatch
+
   # 112 then: month field restricted and the candidate month does not match,
   # so match_components? short-circuits to false before reaching match_day?.
   def test_match_returns_false_when_month_does_not_match
@@ -985,6 +994,7 @@ class CronTest < Wurk::Test::UnitCase
     assert p.match?(::Time.utc(2026, 1, 15, 0, 0, 0)), 'the 15th matches a dom-only schedule'
     refute p.match?(::Time.utc(2026, 1, 16, 0, 0, 0)), 'the 16th must not match a dom-15 schedule'
   end
+  # rubocop:enable Minitest/AssertMatch, Minitest/RefuteMatch
 
   # ---- Parser branch coverage: local_time tz dispatch ------------------
 
@@ -1346,9 +1356,9 @@ class CronTest < Wurk::Test::UnitCase
     end
   end
 
-  def register_loop(klass, queue:, schedule: '* * * * *', **opts)
+  def register_loop(klass, queue:, schedule: '* * * * *', **)
     mgr = Wurk::Cron::Manager.new
-    lp = mgr.register(schedule, klass, queue: queue, **opts)
+    lp = mgr.register(schedule, klass, queue: queue, **)
     @lids << lp.lid
     lp
   end
@@ -1381,6 +1391,7 @@ class CronTest < Wurk::Test::UnitCase
   def next_local_fire(schedule, tzobj, from_utc)
     loop_obj = dst_loop(schedule, tzobj)
     nf = loop_obj.next_fire_at(from_utc.to_i)
+
     refute_nil nf, 'next_fire_at must resolve a future fire across the spring-forward gap'
     loop_obj.local_components(nf)[0, 3]
   end
@@ -1439,11 +1450,11 @@ class CronTest < Wurk::Test::UnitCase
   end
 
   # Poller on a throwaway Configuration — it inherits the worker's REDIS_URL,
-  # so it still reads and writes this test's DB — logging to `io`, whose push
-  # always fails.
-  def poller_whose_push_fails(io)
+  # so it still reads and writes this test's DB — logging to `log_io`, whose
+  # push always fails.
+  def poller_whose_push_fails(log_io)
     cfg = Wurk::Configuration.new
-    cfg.logger = Logger.new(io)
+    cfg.logger = Logger.new(log_io)
     @configs << cfg
     poller = Wurk::Cron::Poller.new(cfg)
     poller.define_singleton_method(:enqueue!) { |_| raise IOError, 'redis down' }

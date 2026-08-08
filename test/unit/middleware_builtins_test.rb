@@ -370,7 +370,6 @@ class MiddlewareBuiltinsTest < Wurk::Test::UnitCase
     assert_empty handler.config.redis_pool.conn.calls
   end
 
-  # rubocop:disable Minitest/MultipleAssertions
   # One test pinning the entire repush wire shape (cmd, key, payload); split
   # would just obscure the contract.
   def test_interrupt_handler_repushes_on_interrupted

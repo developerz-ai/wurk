@@ -13,7 +13,7 @@ module Wurk
   # objects (Stats, Queue, RetrySet, ScheduledSet, DeadSet, ProcessSet,
   # BatchSet, Cron::LoopSet) so dashboards stay aligned with the Redis schema
   # in `docs/target/sidekiq-{free,pro,ent}.md`.
-  class ApiController < ApplicationController
+  class ApiController < ApplicationController # rubocop:disable Metrics/ClassLength
     include ActionController::Live
     # The SPA is a token-less JSON client; SameOriginGuard supplies Sidekiq's
     # same-origin CSRF defense (spec §25.1) so every mutating endpoint is
@@ -256,7 +256,7 @@ module Wurk
     # `:bucket` is 1m/5m/1h; `?window=24h` (s/m/h/d) is clamped to the bucket's
     # retention; optional `?queue=<name>` narrows to one queue. Each queue's
     # `points` are chart-ready.
-    def queue_history
+    def queue_history # rubocop:disable Metrics/AbcSize
       window = parse_window(params[:window])
       queues = params[:queue].present? ? [params[:queue].to_s] : nil
       series = ::Wurk::Web::Enterprise::Historical.queue_history(params[:bucket].to_s, window: window, queues: queues)
@@ -304,8 +304,6 @@ module Wurk
       end
     end
 
-    private
-
     # Engine-relative path probed as a representative mutation. Must be a real
     # mutating route (POST /api/retries — bulk retry/delete/kill) so that a
     # path-sensitive hook resolves it the same way the Authorization middleware
@@ -313,6 +311,9 @@ module Wurk
     # is the GET /api/meta path) would let such a hook allow the probe while
     # still 403ing real mutations, reviving the "button shows, then 403s" gap.
     MUTATION_PROBE_PATH = '/api/retries'
+    private_constant :MUTATION_PROBE_PATH
+
+    private
 
     # Per-request read-only signal for the SPA. When a registered authorization
     # hook would reject a *mutating* request for this user (e.g. a viewer role
@@ -342,7 +343,7 @@ module Wurk
     end
 
     # Bulk variant: `keys[]` + a single `cmd` applied to every resolved entry.
-    def bulk_entry_action(set, actions)
+    def bulk_entry_action(set, actions) # rubocop:disable Metrics/AbcSize
       method = actions[params[:cmd].to_s]
       return render(json: { error: 'unknown action' }, status: :bad_request) unless method
 
@@ -364,7 +365,7 @@ module Wurk
     # live process when identity is blank/"all". Embedded processes are skipped
     # (they raise on quiet!/stop! — there's no separate process to signal). 404s
     # when a named identity isn't in the live set.
-    def signal_processes(method)
+    def signal_processes(method) # rubocop:disable Metrics/AbcSize
       identity = params[:identity].to_s
       if identity.empty? || identity == 'all'
         count = ::Wurk::ProcessSet.new.reject(&:embedded?).each { |p| p.public_send(method) }.size

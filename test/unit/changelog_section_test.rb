@@ -10,8 +10,11 @@ class ChangelogSectionTest < Wurk::Test::UnitCase
 
   SCRIPT = File.expand_path('../../bin/changelog-section', __dir__)
 
-  def test_prints_known_section_body # rubocop:disable Minitest/MultipleAssertions
-    out = `#{SCRIPT} 0.0.5`
+  # Array-form IO.popen, never backticks: a checkout path containing a space or
+  # a shell metacharacter would otherwise be re-split (or executed) by the shell.
+  # The block form is what sets $CHILD_STATUS.
+  def test_prints_known_section_body
+    out = IO.popen([SCRIPT, '0.0.5'], &:read)
 
     assert_equal 0, $CHILD_STATUS.exitstatus
     assert_includes out, 'Project logo'
@@ -20,14 +23,14 @@ class ChangelogSectionTest < Wurk::Test::UnitCase
   end
 
   def test_fails_on_missing_version
-    out = `#{SCRIPT} 99.99.99 2>&1`
+    out = IO.popen([SCRIPT, '99.99.99'], err: %i[child out], &:read)
 
     refute_equal 0, $CHILD_STATUS.exitstatus
     assert_includes out, 'no `## [99.99.99]`'
   end
 
   def test_requires_a_version_argument
-    out = `#{SCRIPT} 2>&1`
+    out = IO.popen([SCRIPT], err: %i[child out], &:read)
 
     refute_equal 0, $CHILD_STATUS.exitstatus
     assert_includes out, 'usage'

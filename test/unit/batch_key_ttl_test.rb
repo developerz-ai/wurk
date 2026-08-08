@@ -210,7 +210,7 @@ class BatchKeyTtlTest < Wurk::Test::UnitCase
   def ack_success(bid, jid)
     mw = Wurk::Batch::ServerMiddleware.new
     mw.config = Wurk.configuration
-    mw.call(nil, { 'bid' => bid, 'jid' => jid }, @queue) {} # rubocop:disable Lint/EmptyBlock
+    mw.call(nil, { 'bid' => bid, 'jid' => jid }, @queue) {}
   end
 
   def fail_job(bid, jid)

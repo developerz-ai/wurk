@@ -69,6 +69,10 @@ class WebAuthorizationTest < Wurk::Test::EngineCase
   end
 
   # --- Read-only mode ---------------------------------------------------
+  #
+  # The SPA branches on `read_only` directly, so /api/meta must carry a real
+  # JSON boolean — `assert_same true/false` rather than assert/refute, which a
+  # dropped key (nil) or a truthy non-boolean would still satisfy.
 
   def test_read_only_blocks_mutating_endpoint
     Wurk::Web.configure { |c| c.read_only = true }
@@ -92,7 +96,8 @@ class WebAuthorizationTest < Wurk::Test::EngineCase
 
     assert_equal 200, last_response.status
     body = JSON.parse(last_response.body)
-    assert_equal false, body['read_only']
+
+    assert_same false, body['read_only']
     assert_nil body['read_only_message']
   end
 
@@ -111,7 +116,7 @@ class WebAuthorizationTest < Wurk::Test::EngineCase
     get '/wurk/api/meta'
 
     assert_equal 200, last_response.status
-    assert_equal true, JSON.parse(last_response.body)['read_only']
+    assert_same true, JSON.parse(last_response.body)['read_only']
   end
 
   # Per-request read-only: a viewer role (authorization hook permits GET but
@@ -123,7 +128,7 @@ class WebAuthorizationTest < Wurk::Test::EngineCase
     get '/wurk/api/meta'
 
     assert_equal 200, last_response.status
-    assert_equal true, JSON.parse(last_response.body)['read_only']
+    assert_same true, JSON.parse(last_response.body)['read_only']
   end
 
   # An authorization hook that permits mutations (e.g. an admin role) keeps
@@ -134,7 +139,7 @@ class WebAuthorizationTest < Wurk::Test::EngineCase
     get '/wurk/api/meta'
 
     assert_equal 200, last_response.status
-    assert_equal false, JSON.parse(last_response.body)['read_only']
+    assert_same false, JSON.parse(last_response.body)['read_only']
   end
 
   # A path-sensitive hook (permits the current /api/meta path but denies real
@@ -149,7 +154,7 @@ class WebAuthorizationTest < Wurk::Test::EngineCase
     get '/wurk/api/meta'
 
     assert_equal 200, last_response.status
-    assert_equal true, JSON.parse(last_response.body)['read_only']
+    assert_same true, JSON.parse(last_response.body)['read_only']
   end
 
   def test_meta_includes_read_only_message_when_set

@@ -49,7 +49,6 @@ module Wurk
       # without vernier: tests pass a ready gecko JSON blob. The wide keyword
       # list mirrors the HASH fields one-to-one — collapsing them into an
       # options hash would just hide the schema.
-      # rubocop:disable Metrics/ParameterLists
       def store(jid:, type:, gecko_json:, started_at:, elapsed_ms:, token: SecureRandom.hex(8),
                 sid: Wurk.configuration[:identity], pool: nil)
         key = profile_key(token, jid)
@@ -65,7 +64,6 @@ module Wurk
         end
         key
       end
-      # rubocop:enable Metrics/ParameterLists
 
       def profile_key(token, jid)
         "#{token}-#{jid}"

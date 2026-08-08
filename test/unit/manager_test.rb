@@ -132,7 +132,7 @@ class ManagerTest < Wurk::Test::UnitCase
   # replacement (test_processor_result_does_not_replace_after_quiet), churn-then-quiet
   # spawns one first — but neither ordering may raise or corrupt @workers. Looped
   # under this file's parallelize_me! to shake out ordering-dependent bugs.
-  def test_quiet_races_processor_churn_without_exceptions_or_leaks # rubocop:disable Metrics/AbcSize
+  def test_quiet_races_processor_churn_without_exceptions_or_leaks
     25.times do
       mgr = Wurk::Manager.new(@capsule)
       silence_processors(mgr)
@@ -166,7 +166,7 @@ class ManagerTest < Wurk::Test::UnitCase
 
   # --- processor_result ------------------------------------------------
 
-  def test_processor_result_removes_processor_and_spawns_replacement # rubocop:disable Minitest/MultipleAssertions
+  def test_processor_result_removes_processor_and_spawns_replacement
     mgr = Wurk::Manager.new(@capsule)
     victim = mgr.workers.first
     replacement = fake_processor
@@ -205,7 +205,7 @@ class ManagerTest < Wurk::Test::UnitCase
 
   # A replacement that can't be spawned (Processor.new raising) must escalate
   # through the owner's shutdown request — not silently drop concurrency.
-  def test_processor_result_requests_shutdown_when_replacement_cannot_spawn # rubocop:disable Minitest/MultipleAssertions,Metrics/AbcSize
+  def test_processor_result_requests_shutdown_when_replacement_cannot_spawn
     requested = 0
     mgr = Wurk::Manager.new(@capsule, shutdown: -> { requested += 1 })
     silence_processors(mgr)
@@ -337,7 +337,7 @@ class ManagerTest < Wurk::Test::UnitCase
     assert_operator elapsed, :<, 5, "stop waited #{elapsed.round(1)}s on processors that were never started"
   end
 
-  def test_hard_shutdown_bulk_requeues_inflight_jobs_then_kills_threads # rubocop:disable Metrics/AbcSize
+  def test_hard_shutdown_bulk_requeues_inflight_jobs_then_kills_threads
     mgr = Wurk::Manager.new(@capsule)
     uow_a = make_uow('payload-a')
     uow_b = make_uow('payload-b')

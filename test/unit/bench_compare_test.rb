@@ -21,7 +21,7 @@ class BenchCompareTest < Wurk::Test::UnitCase
 
   # benchmark/ips report line, as bin/bench-compare parses it.
   def ips_line(label, ips, err)
-    format('%<label>s   %<ips>.1f (± %<err>.1f%%) i/s -    1.00k in   5.000s', label: label, ips: ips, err: err)
+    format('%s   %.1f (± %.1f%%) i/s -    1.00k in   5.000s', label, ips, err)
   end
 
   # rows: [label, ips, err] triples, one report line each.

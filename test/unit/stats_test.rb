@@ -23,7 +23,7 @@ class StatsTest < Wurk::Test::UnitCase
   # critical assertion, not the whole test.
   COUNTER_MUTEX = Mutex.new
 
-  def setup # rubocop:disable Metrics/AbcSize
+  def setup
     super
     @ns         = "#{Process.pid}-#{object_id}"
     @queue      = "stats-q-#{@ns}"
@@ -203,7 +203,6 @@ class StatsTest < Wurk::Test::UnitCase
     assert_equal 1, summary.size
   end
 
-  # rubocop:disable Minitest/MultipleAssertions
   # One test, one shape: the QueueSummary Data class is the public contract.
   def test_queue_summary_exposes_data_shape
     push_my_job
