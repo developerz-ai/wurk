@@ -284,6 +284,29 @@ jobs:
             echo "✓ $file exists and is non-empty ($(wc -l < "$file") lines)"
           done
 
+  # Ruby linting — nothing runs rubocop today, so this closes that gap.
+  # Paired with the `frontend` and `spec-docs` jobs as quick, parallel checks.
+  lint:
+    name: lint (rubocop)
+    needs: detect
+    if: github.event_name != 'pull_request' || needs.detect.outputs.ruby == 'true'
+    runs-on: blacksmith-2vcpu-ubuntu-2404
+    timeout-minutes: 5
+    concurrency:
+      group: ${{ github.workflow }}-${{ github.ref }}:lint
+      cancel-in-progress: true
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: ruby/setup-ruby@95ef2b042f9d7a56d8268cba8559e2842e2ad01b # v1
+        with:
+          ruby-version: "3.4"
+          bundler-cache: true
+          cache-version: rails-8.0
+      - name: rubocop
+        run: bundle exec rubocop
+
   # The matrix `test` and `coverage` jobs only *build* the SPA (tsc + vite) via
   # `rake frontend:build`; hand-written frontend types can typecheck clean yet
   # null-render at runtime (#272), so the build alone is not a regression gate.
@@ -323,6 +346,9 @@ jobs:
             ${{ runner.os }}-bun-
       - name: install dashboard deps
         run: bun install --frozen-lockfile
+        working-directory: frontend
+      - name: typecheck
+        run: bun run typecheck
         working-directory: frontend
       - name: vitest
         run: bun run test
