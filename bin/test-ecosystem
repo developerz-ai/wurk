@@ -8,6 +8,9 @@ set -euo pipefail
 #   Gemfile — overlay mirroring the gem's own Gemfile, with `sidekiq`
 #             resolved to wurk's shim gem (ecosystem/sidekiq-shim) so the
 #             suite installs NO real sidekiq and runs entirely on wurk.
+#   TASK    — optional: rake task name to run (default "test"). Not every
+#             gem aliases its suite to :test (sidekiq-unique-jobs only
+#             defines :rspec).
 #
 # Checkouts are cloned (cached) into test/ecosystem/.checkouts/ (gitignored).
 # The gem's suite hits real Redis; default DB 15 — override with
@@ -51,6 +54,11 @@ for harness in "$ECOSYSTEM_DIR"/*/; do
     done < "$harness/EXCLUDE"
   fi
 
+  task="test"
+  if [ -f "$harness/TASK" ]; then
+    task=$(head -n 1 "$harness/TASK")
+  fi
+
   echo "==> $name @ $sha"
   ran=$((ran + 1))
   # Run each harness in its own bundle, fully detached from the parent wurk
@@ -81,7 +89,7 @@ for harness in "$ECOSYSTEM_DIR"/*/; do
            REDIS_URL="$REDIS_URL" \
            TESTOPTS="$testopts" &&
     bundle install --quiet &&
-    bundle exec rake test
+    bundle exec rake "$task"
   ); then
     echo "FAIL: $name"
     failures=$((failures + 1))
