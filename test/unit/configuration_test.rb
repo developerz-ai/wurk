@@ -915,7 +915,71 @@ class ConfigurationTest < Wurk::Test::UnitCase
     assert_raises(FrozenError) { @config.topology = Wurk::Topology.new }
   end
 
+  # --- telemetry (Wurk::Telemetry opt-in) --------------------------------
+
+  def test_defaults_telemetry_is_off
+    assert_same false, @config[:telemetry]
+    refute_predicate @config, :telemetry?
+  end
+
+  # Seeded in DEFAULTS rather than written on first use, so the read side keeps
+  # answering on a config `freeze!` has already closed.
+  def test_telemetry_reads_on_a_frozen_config
+    @config.freeze!
+
+    refute_predicate @config, :telemetry?
+    assert_same false, @config[:telemetry]
+  end
+
+  def test_telemetry_opt_in
+    opt_into_telemetry(true)
+
+    assert_predicate @config, :telemetry?
+    assert_same true, @config[:telemetry]
+  end
+
+  def test_telemetry_opt_out
+    opt_into_telemetry(true)
+    @config.telemetry = false
+
+    refute_predicate @config, :telemetry?
+    assert_same false, @config[:telemetry]
+  end
+
+  # Stored as a real Boolean, not the argument: `config[:telemetry]` is on the
+  # options Hash third-party gems read.
+  def test_telemetry_coerces_to_a_boolean
+    opt_into_telemetry('yes')
+
+    assert_same true, @config[:telemetry]
+  end
+
+  # Message asserted, not just the class: the frozen options Hash would raise
+  # FrozenError on its own, so only the text proves the writer went through
+  # guard_frozen! and reports like every other closed setter here.
+  def test_telemetry_setter_raises_once_frozen
+    @config.freeze!
+
+    err = assert_raises(FrozenError) { @config.telemetry = true }
+
+    assert_equal 'Wurk::Configuration is frozen', err.message
+  end
+
+  def test_telemetry_opt_in_loads_the_telemetry_module
+    opt_into_telemetry(true)
+
+    assert Wurk.const_defined?(:Telemetry, false), 'config.telemetry = true must require wurk/telemetry'
+  end
+
   private
+
+  # Opting in warns whenever opentelemetry-api is absent, which it is in this
+  # suite. Keep that off the runner's stdout — TelemetryTest asserts the warning
+  # itself, in a subprocess where the gem's presence is pinned by a fixture.
+  def opt_into_telemetry(value)
+    @config.logger = ::Logger.new(IO::NULL)
+    @config.telemetry = value
+  end
 
   def build_exception(message)
     raise StandardError, message

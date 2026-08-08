@@ -64,4 +64,10 @@ Gem::Specification.new do |spec|
   # orphan-guard test errors on LoadError). Declaring it keeps the kernel-level
   # path working there, exactly as base64/logger keep `require "wurk"` working.
   spec.add_dependency 'fiddle', '>= 1.0', '< 2'
+  # NOT declared, deliberately: opentelemetry-api. lib/wurk/telemetry.rb requires
+  # it inside a LoadError rescue and Wurk::Telemetry.available? reports the
+  # result, so tracing is inert without it and nothing here needs it to boot.
+  # Declaring it would install and load an observability API in every app that
+  # never traces, and buy nothing for the apps that do — those already resolve
+  # it transitively through their OTel SDK / exporter / instrumentation gems.
 end
