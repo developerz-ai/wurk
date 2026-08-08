@@ -146,6 +146,29 @@ class CapsuleTest < Wurk::Test::UnitCase
     refute_nil @capsule.instance_variable_get(:@pools)[:fetch]
   end
 
+  # --- watchdog (per-job bounds) -----------------------------------------
+
+  # One per capsule, so one per Manager. Materialized here rather than in the
+  # constructor so a client-only process allocates none — and holding no thread
+  # until a job is actually bounded is the zero-cost claim.
+  def test_prepare_materializes_a_thread_free_watchdog
+    assert_nil @capsule.watchdog
+
+    @capsule.prepare!
+
+    assert_instance_of Wurk::Watchdog, @capsule.watchdog
+    refute_predicate @capsule.watchdog, :running?
+  end
+
+  def test_prepare_keeps_the_same_watchdog_across_calls
+    @capsule.prepare!
+    first = @capsule.watchdog
+
+    @capsule.prepare!
+
+    assert_same first, @capsule.watchdog
+  end
+
   # --- prepare_shared! (the half a swarm parent runs pre-fork) ----------
 
   def test_prepare_shared_materializes_the_middleware_chains

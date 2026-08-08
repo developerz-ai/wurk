@@ -4,6 +4,7 @@ require_relative 'redis_pool'
 require_relative 'pool_checkout'
 require_relative 'middleware/chain'
 require_relative 'fetcher/reliable'
+require_relative 'watchdog'
 
 module Wurk
   # One processing unit: a set of threads + queues sharing a fetcher and a
@@ -14,7 +15,7 @@ module Wurk
   class Capsule
     MODES = %i[strict weighted random].freeze
 
-    attr_reader :name, :queues, :mode, :weights, :config
+    attr_reader :name, :queues, :mode, :weights, :config, :watchdog
     attr_accessor :concurrency, :fetcher
 
     # Capsule-hosted components (Manager, Processor, Fetcher) hand their capsule
@@ -41,6 +42,7 @@ module Wurk
       @pools = {}
       @client_chain = nil
       @server_chain = nil
+      @watchdog = nil
     end
 
     def to_h
@@ -78,6 +80,11 @@ module Wurk
     def prepare!
       prepare_shared!
       @fetcher ||= build_fetcher
+      # Here rather than in the constructor so a client-only process — a web
+      # dyno building the same Configuration — allocates nothing, and so the
+      # scanner thread a bounded job spawns belongs to the child that runs it.
+      # The object itself holds no thread until something is bounded.
+      @watchdog ||= Watchdog.new(self)
       redis_pool
       fetch_redis_pool
       self
