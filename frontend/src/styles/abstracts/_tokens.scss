@@ -3,12 +3,12 @@
 // `:root` so it wins over daisyUI's layered theme rules regardless of source
 // order (host apps can still override any var). One responsibility: declare the
 // palette + scale; no component ever hardcodes a colour or duration.
-//
+
 // Obsidian Engineering System — zinc palette. Monochromatic, engineered/HUD:
 // near-black canvas, tonal surfaces, 1px solid borders (no shadows), luminance
 // over hue. Geist + JetBrains Mono. Status colour (red/amber/green) is reserved
 // for signal only — no aurora, no glow.
-//
+
 // Theming: dark is the design default and lives on bare `:root`, so a document
 // with no `data-theme` at all still renders the intended palette. Light is a
 // same-name override block below — never a media query, never the only place a
@@ -121,12 +121,12 @@
 // nothing depends on this block existing. Applied by `<html data-theme="light">`
 // and nothing else: no `prefers-color-scheme` query, because the resolved theme
 // is stamped on the element (an explicit choice must beat the OS preference).
-//
+
 // Derived by inverting luminance, not hue. Obsidian's structure comes from tone
 // steps and 1px borders, so the whole ladder flips direction: surfaces step
 // *down* in lightness from the canvas, borders go *darker* than what they
 // separate, and `--shadow` stays `none` — elevation is still edge, never blur.
-//
+
 // The status trio is re-picked, not reused: the dark values sit at OKLCH L
 // 0.70–0.78 and land near 1.4:1 on white. These hold the same hues at L≈0.47,
 // which clears AA both as text and on the 16%-tinted badge fills they also

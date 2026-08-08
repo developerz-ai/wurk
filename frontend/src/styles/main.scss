@@ -1,13 +1,13 @@
 // ═══════════════════════════════════════════════════════════════════════════
 // Wurk dashboard — SCSS entry (ITCSS-ish, SRP per partial)
-//
+// ───────────────────────────────────────────────────────────────────────────
 //   abstracts/  — zero-CSS helpers (maps, functions, mixins) + the CSS-emitting
 //                 token & keyframe layers every component builds on.
 //   base/       — reset, typography, scrollbars, the reduced-motion policy.
 //   components/ — one file per reusable UI atom (button, badge, card, modal…).
 //   layout/     — structural regions (shell, nav, page header).
 //   pages/      — page-scoped systems (dashboard hero, Obsidian, search…).
-//
+// ───────────────────────────────────────────────────────────────────────────
 // Tailwind + daisyUI live in the sibling `tailwind.css` (loaded first in
 // main.tsx). This file owns everything hand-authored; its `:root` token block
 // stays unlayered so it wins over daisyUI's layered theme regardless of order.

@@ -20,6 +20,7 @@
   overflow-y: auto;
   padding: to-rem(4);
   @include surface(var(--surface-strong), var(--border-strong));
+
   box-shadow: 0 to-rem(10) to-rem(28) var(--shadow-color);
   animation: fade-up duration('base') easing('emphasized');
 }
