@@ -315,7 +315,6 @@ class MetricsStatsdTest < Wurk::Test::UnitCase
     assert_includes metrics, 'sidekiq.jobs.perform_dist'
     refute_includes metrics, 'sidekiq.jobs.failure'
   end
-  # rubocop:enable Minitest/MultipleAssertions
 
   def test_call_emits_failure_on_raise_and_rebubbles
     fake = FakeClient.new
@@ -329,6 +328,45 @@ class MetricsStatsdTest < Wurk::Test::UnitCase
 
     assert_includes metrics, 'sidekiq.jobs.failure'
     refute_includes metrics, 'sidekiq.jobs.success'
+  end
+
+  # #394: InterruptHandler self-prepends, so Wurk::Job::Interrupted reaches this
+  # middleware on its way out and used to emit `jobs.failure`. A cooperative
+  # interruption is a success for classification purposes — same call as
+  # Metrics::History's, so the two emitters can't disagree about one event.
+  def test_call_emits_success_not_failure_when_interrupted
+    fake = FakeClient.new
+    Wurk.configuration.dogstatsd = fake
+
+    assert_raises(Wurk::Job::Interrupted) do
+      build_middleware.call(nil, { 'class' => 'MyJob' }, 'q') { raise Wurk::Job::Interrupted }
+    end
+
+    metrics = fake.calls.map { |c| c[1] }
+
+    assert_includes metrics, 'sidekiq.jobs.success'
+    refute_includes metrics, 'sidekiq.jobs.failure'
+    assert_includes metrics, 'sidekiq.jobs.perform'
+    assert_includes metrics, 'sidekiq.jobs.perform_dist'
+  end
+
+  # Guard against the rescue widening: an IterableJob that resumes and finishes
+  # emits a second `jobs.success`, so one interruption plus one completion is
+  # 2 success / 0 failure — the counts Metrics::History books as 2 `p` / 0 `f`.
+  def test_call_emits_a_second_success_when_the_interrupted_job_resumes
+    fake = FakeClient.new
+    Wurk.configuration.dogstatsd = fake
+    middleware = build_middleware
+
+    assert_raises(Wurk::Job::Interrupted) do
+      middleware.call(nil, { 'class' => 'MyJob' }, 'q') { raise Wurk::Job::Interrupted }
+    end
+    middleware.call(nil, { 'class' => 'MyJob' }, 'q') { :ok }
+
+    metrics = fake.calls.map { |c| c[1] }
+
+    assert_equal 2, metrics.count('sidekiq.jobs.success')
+    assert_equal 0, metrics.count('sidekiq.jobs.failure')
   end
 
   def test_default_tags_include_worker_and_queue
