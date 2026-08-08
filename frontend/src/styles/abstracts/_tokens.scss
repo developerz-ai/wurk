@@ -37,8 +37,20 @@
 
   --bg: var(--color-base-100);
   --text: var(--color-base-content);
-  --text-muted: #a1a1aa;
-  --text-bright: #fafafa;
+
+  // Ink ladder — *decreasing contrast against the canvas*, not decreasing
+  // lightness: the light theme reverses the hexes so `--mono-1` is always the
+  // most-contrasting ink. Muted text, chart axes, series strokes and the
+  // job-type dots all step down this one ladder instead of re-picking greys.
+  --mono-1: #fafafa;
+  --mono-2: #d4d4d8;
+  --mono-3: #a1a1aa;
+  --mono-4: #71717a;
+  --mono-5: #52525b;
+  --mono-6: #3f3f46;
+
+  --text-muted: var(--mono-3);
+  --text-bright: var(--mono-1);
 
   // Monochrome accent: no chroma. Emphasis comes from brightness, a subtle white
   // fill, and hover underlines — colour stays reserved for logo and status.
@@ -50,6 +62,24 @@
   --warning: var(--color-warning);
   --success: var(--color-success);
 
+  // Categorical series palette — the only place hue is allowed outside status,
+  // and only where a chart must tell N queues apart. Anything monochrome uses
+  // the ink ladder. Light holds the same hues at OKLCH L 0.52; the dark values
+  // sit at L 0.64–0.79 and drop under 2:1 on a light canvas.
+  --series-1: #e0b341;
+  --series-2: #46b3a8;
+  --series-3: #d4737e;
+  --series-4: #8a7fd1;
+  --series-5: #5fa8d3;
+  --series-6: #c08457;
+  --series-7: #7bb274;
+
+  // Chart furniture. Tints of the ink rather than opaque greys, so they stay
+  // correct where they cross a gradient area fill.
+  --chart-grid: oklch(1 0 0 / 0.06);
+  --chart-cursor: oklch(1 0 0 / 0.25);
+  --chart-band: oklch(1 0 0 / 0.04);
+
   // Flat surfaces: opaque fills, a 1px solid edge, no shadow. Elevation is
   // border + tone, never blur (Obsidian: no muddiness in dark mode).
   --surface: var(--color-base-200);
@@ -58,6 +88,14 @@
   --border: #272729;
   --border-strong: #3a3a3d;
   --shadow: none;
+
+  // The two exceptions to `--shadow: none`, for the only things that leave the
+  // page plane: the dim behind a modal/drawer, and the drop under a floating
+  // panel (modal, toast, popover). Light needs a much weaker drop — the same
+  // alpha that reads as a soft edge on near-black reads as soot on near-white.
+  --scrim: oklch(0 0 0 / 0.55);
+  --shadow-color: oklch(0 0 0 / 0.45);
+
   --radius: 8px;
   --radius-sm: 4px;
 
@@ -111,8 +149,32 @@
   --color-success: #0f6b23;
   --color-success-content: #fafafa;
 
-  --text-muted: #52525b;
-  --text-bright: #09090b;
+  // Ladder reversed, same zinc steps. `--text-muted` / `--text-bright` follow
+  // from mono-3 / mono-1 and need no override of their own.
+  --mono-1: #09090b;
+  --mono-2: #27272a;
+  --mono-3: #52525b;
+  --mono-4: #71717a;
+  --mono-5: #a1a1aa;
+  --mono-6: #d4d4d8;
+
+  // Same hues, re-picked at L 0.52 with chroma clamped to sRGB: 5.0–5.7:1 on
+  // the canvas and ≥4.7:1 on a card, so a series reads as text in a legend and
+  // not just as a 2px stroke.
+  --series-1: #836400;
+  --series-2: #007a71;
+  --series-3: #aa3f50;
+  --series-4: #6858b3;
+  --series-5: #0471a0;
+  --series-6: #97561e;
+  --series-7: #3b7a34;
+
+  --chart-grid: oklch(0 0 0 / 0.08);
+  --chart-cursor: oklch(0 0 0 / 0.28);
+  --chart-band: oklch(0 0 0 / 0.05);
+
+  --scrim: oklch(0 0 0 / 0.35);
+  --shadow-color: oklch(0 0 0 / 0.16);
 
   --accent: #18181b;
   --accent-hover: #000000;

@@ -79,12 +79,14 @@ interface StatsData {
 }
 
 const QUEUE_COLORS = [
-  'var(--accent)', '#e0b341', '#46b3a8', '#d4737e', '#8a7fd1', '#5fa8d3', '#c08457', '#7bb274',
+  'var(--accent)', 'var(--series-1)', 'var(--series-2)', 'var(--series-3)',
+  'var(--series-4)', 'var(--series-5)', 'var(--series-6)', 'var(--series-7)',
 ] as const;
 const queueColor = (i: number) => QUEUE_COLORS[i % QUEUE_COLORS.length];
 
-// Greyscale dots for the Top Job Types table (luminance, not hue).
-const JOB_DOTS = ['#fafafa', '#d4d4d8', '#a1a1aa', '#71717a', '#52525b', '#3f3f46'];
+// Dots for the Top Job Types table: the ink ladder, so ranking reads as
+// contrast rather than hue.
+const JOB_DOTS = ['var(--mono-1)', 'var(--mono-2)', 'var(--mono-3)', 'var(--mono-4)', 'var(--mono-5)', 'var(--mono-6)'];
 
 // Range buttons → rollup bucket + retention window. "1h" reuses the 1m/24h
 // rollup and slices client-side; the rest map 1:1 to a stored window.
@@ -316,8 +318,8 @@ export default function Metrics() {
                 yDecimals={false}
                 xMinTickGap={56}
                 series={[
-                  { key: 'processed', name: t('dashboard.processed'), stroke: '#fafafa', strokeWidth: 2, fill: 'gradient' },
-                  { key: 'failed', name: t('dashboard.failed'), stroke: '#a1a1aa', strokeWidth: 1.5, strokeDasharray: '5 4', fill: 'none' },
+                  { key: 'processed', name: t('dashboard.processed'), stroke: 'var(--mono-1)', strokeWidth: 2, fill: 'gradient' },
+                  { key: 'failed', name: t('dashboard.failed'), stroke: 'var(--mono-3)', strokeWidth: 1.5, strokeDasharray: '5 4', fill: 'none' },
                 ]}
               />
             </Show>
@@ -345,7 +347,7 @@ export default function Metrics() {
                   data={depthRows().map((r) => ({
                     label: r.label,
                     value: r.depth,
-                    color: r.depth === maxDepth() && maxDepth() > 0 ? '#fafafa' : '#3f3f46',
+                    color: r.depth === maxDepth() && maxDepth() > 0 ? 'var(--mono-1)' : 'var(--mono-6)',
                   }))}
                   height={240}
                   name={t('metrics.queue_depth')}
@@ -461,8 +463,8 @@ function JobMetricsModal(props: { klass: string | null; minutes: number; onClose
                 xMinTickGap={48}
                 legend
                 series={[
-                  { key: 'processed', name: t('dashboard.processed'), stroke: '#fafafa', strokeWidth: 2 },
-                  { key: 'failed', name: t('dashboard.failed'), stroke: '#a1a1aa', strokeWidth: 1.5 },
+                  { key: 'processed', name: t('dashboard.processed'), stroke: 'var(--mono-1)', strokeWidth: 2 },
+                  { key: 'failed', name: t('dashboard.failed'), stroke: 'var(--mono-3)', strokeWidth: 1.5 },
                 ]}
               />
             </Show>

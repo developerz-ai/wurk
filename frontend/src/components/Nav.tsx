@@ -58,7 +58,7 @@ export default function Nav(props: NavProps) {
           style={{
             position: 'fixed',
             inset: 0,
-            background: 'rgba(0,0,0,0.5)',
+            background: 'var(--scrim)',
             'z-index': 99,
             display: 'none',
           }}
@@ -107,7 +107,7 @@ export default function Nav(props: NavProps) {
                 width: 'auto',
                 display: 'block',
                 flex: 'none',
-                filter: 'drop-shadow(0 2px 6px rgba(0,0,0,0.45))',
+                filter: 'drop-shadow(0 2px 6px var(--shadow-color))',
               }}
             />
             <span class="nav-label" style={{ display: 'flex', 'flex-direction': 'column', 'line-height': 1.15 }}>

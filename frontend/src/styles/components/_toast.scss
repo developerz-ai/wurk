@@ -33,7 +33,7 @@
   background: var(--surface-strong);
   border: to-rem(1) solid var(--border-strong);
   border-inline-start: to-rem(3) solid var(--text-muted);
-  box-shadow: 0 to-rem(8) to-rem(24) oklch(0 0 0 / 0.4);
+  box-shadow: 0 to-rem(8) to-rem(24) var(--shadow-color);
   color: var(--text);
   font-size: to-rem(13);
   line-height: 1.4;

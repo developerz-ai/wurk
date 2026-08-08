@@ -51,7 +51,7 @@ export function Tooltip(props: { tip: string; children: JSX.Element }) {
                 'line-height': 1.35,
                 'z-index': 9999,
                 'pointer-events': 'none',
-                'box-shadow': '0 4px 14px rgba(0, 0, 0, 0.45)',
+                'box-shadow': '0 4px 14px var(--shadow-color)',
               }}
             >
               {props.tip}

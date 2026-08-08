@@ -23,5 +23,11 @@ export default defineConfig({
     // tests never leak signals or the document between suites.
     pool: 'threads',
     isolate: true,
+    // Stylesheets are stubbed to `""` by default, which silently empties a
+    // `?raw` import too — styles/palette.test.ts greps the SCSS source and
+    // would pass by scanning nothing. Letting `?raw` through hands it to Vite's
+    // asset loader (which skips the CSS pipeline for that query), so it gets
+    // the file verbatim; plain stylesheet imports stay stubbed.
+    css: { include: [/\?raw/] },
   },
 });
