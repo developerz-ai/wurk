@@ -119,9 +119,12 @@ module Wurk
       # own replay arm refreshes this token's hold rather than counting it twice.
       def claim(public_q, keys, gate, ack, now)
         priv, name = keys
+        token = QueueSlot.token
         script_keys = [gate.slot_key, public_q, priv]
-        status, payload = config.redis(idempotent: true) { |conn| fetch_slot(conn, script_keys, gate.capacity, ack) }
-        return unit_of_work(public_q, priv, name, payload) if status == CLAIMED
+        status, payload = config.redis(idempotent: true) do |conn|
+          fetch_slot(conn, script_keys, gate.capacity, token, ack)
+        end
+        return hold(unit_of_work(public_q, priv, name, payload), gate.slot_key, token) if status == CLAIMED
 
         # The refusal is the only answer worth remembering: it cannot change
         # faster than a job finishes somewhere in the cluster, so re-asking on
@@ -136,11 +139,24 @@ module Wurk
         raise
       end
 
+      # The claim's other half — the bookkeeping the script's ZADD implies.
+      #
+      # The unit carries the slot it was admitted under so its release can name
+      # that slot without re-deriving anything on the way out
+      # (UnitOfWork#write_ack), and the process ledger carries it so the
+      # heartbeat keeps the hold alive under a job that outlives the TTL.
+      def hold(uow, slot_key, token)
+        QueueSlot::HELD.hold(token, slot_key)
+        uow.slot_key = slot_key
+        uow.slot_token = token
+        uow
+      end
+
       # One EVALSHA, or that same EVALSHA behind the held ACK in one pipeline —
       # the shape #lmove already uses, so the gate costs no round trip of its
       # own either way.
-      def fetch_slot(conn, keys, capacity, ack)
-        argv = [capacity, QueueSlot.token, QueueSlot::TTL_SECONDS]
+      def fetch_slot(conn, keys, capacity, token, ack)
+        argv = [capacity, token, QueueSlot::TTL_SECONDS]
         return Wurk::Lua::Loader.eval_cached(conn, :fetch_slot, keys: keys, argv: argv) unless ack
 
         Wurk::Lua::Loader.pipelined_eval(conn) do |pipe, eval_method|
@@ -170,6 +186,12 @@ module Wurk
         open_q = queues.find { |public_q| gate_for(public_q).nil? }
         return blmove(open_q, wait) if open_q
 
+        # Which also hands back the slot this thread's last job ran under: a
+        # held ACK carries that ZREM, and a thread idling out a backoff with no
+        # job in hand must not keep capacity somebody else could be using. The
+        # two cases are the same one — an ACK survives the loop above only when
+        # every queue was gate-blocked, and a gate-blocked queue is a capped
+        # queue, so there was never an uncapped one to park on either.
         flush_pending_acks
         sleep wait
         nil

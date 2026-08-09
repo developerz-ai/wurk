@@ -48,6 +48,11 @@ class FetcherCappedTest < Wurk::Test::UnitCase
   end
 
   def teardown
+    # Nothing here runs a Processor, so no ACK ever carries the release that
+    # would take this test's hold off the process-wide ledger. Left behind, it
+    # would have every later beat in this worker refreshing a slot key that no
+    # longer exists.
+    Wurk::QueueSlot::HELD.drop(Wurk::QueueSlot.token, Wurk::Keys.queue_slot(@queue_name))
     @pool&.with do |conn|
       conn.call('DEL', @public_queue, @open_queue, private_queue(@public_queue),
                 private_queue(@open_queue), Wurk::Keys.queue_slot(@queue_name))
@@ -180,7 +185,8 @@ class FetcherCappedTest < Wurk::Test::UnitCase
 
     assert_equal 'p2', @fetcher.retrieve_work.job
     assert_equal 1, spy.trips, 'the gate must join the fetch pipeline, not take a round trip of its own'
-    assert_equal 2, spy.count, 'the pipeline is the held LREM and the gated fetch, nothing else'
+    assert_equal 3, spy.count,
+                 'the pipeline is the held LREM, its slot release and the gated fetch, nothing else'
     assert_equal ['p2'], lrange(private_queue(@public_queue)), 'the piggybacked ACK still retired p1'
   end
 

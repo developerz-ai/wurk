@@ -257,8 +257,35 @@ module Wurk
       rescue Wurk::Shutdown
         # Don't ack — UoW stays in private list and is reclaimed on reboot.
       ensure
-        uow.acknowledge if ack
+        # This frame is the one every exit path passes through, which is why a
+        # global-concurrency slot is given back from here and nowhere else: a
+        # clean return, a failure, a retry, `Handled`, the watchdog's async
+        # raise for a timeout or a deadline, the shutdown raise. A release added
+        # to any single arm above is a release the next arm forgets, and a
+        # forgotten one strands cluster-wide capacity for the whole slot TTL.
+        #
+        # One call on either branch, never a release on its own line after the
+        # ACK: an async raise can land inside this frame (SharedWorkState#track
+        # has the same hazard), and a second statement here is one that
+        # sometimes does not run. So the ACK carries the slot's ZREM in its own
+        # pipeline, and only the path that deliberately does not ACK — the
+        # shutdown, whose payload goes back to the queue for someone else to run
+        # — releases by itself.
+        if ack
+          uow.acknowledge
+        elsif uow.respond_to?(:release_slot)
+          release_slot(uow)
+        end
       end
+    end
+
+    # Reported, never raised: this runs inside #process's ensure on the shutdown
+    # path, where a raise would replace the Wurk::Shutdown that got us here and
+    # skip the rest of the unwind. The hold ages out on its TTL regardless.
+    def release_slot(uow)
+      uow.release_slot
+    rescue StandardError => e
+      handle_exception(e, { context: 'Error releasing a queue slot' })
     end
 
     # Parse JSON; on failure send the raw payload to the dead set (ZADD +

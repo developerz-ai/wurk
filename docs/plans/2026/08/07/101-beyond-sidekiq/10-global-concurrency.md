@@ -34,6 +34,8 @@
 5. Interaction with rolling restart (`lib/wurk/swarm/restart.rb`): during a restart both the old and new slot hold capacity briefly. Decide whether that's tolerated (recommend yes, TTL bounded) and document it.
 6. Interaction with quiet/TSTP: a quiet process must release its slots, not sit on them while draining.
 
+> Steps 4–6 are settled in [`10-global-concurrency-lifecycle.md`](10-global-concurrency-lifecycle.md): the release anchored in `Processor#process`'s `ensure` and riding the ACK's pipeline, the refresh riding the heartbeat, rolling restart tolerated as bounded over-admission, and quiet holding only the slots its draining jobs are spending.
+
 ## Tests
 
 - Unit: cap N, N+1 concurrent claims → the extra waits; released slot admits the waiter.

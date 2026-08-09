@@ -63,6 +63,13 @@ module Wurk
       # covers a quiet that lands before Capsule#prepare! materializes the fetcher
       # (e.g. a signal-driven quiet on a partially-booted launcher) — nothing is
       # fetching yet, so there is nothing to halt.
+      #
+      # Also what keeps a quieted capsule off the global-concurrency ledger: it
+      # takes no further slots, and Fetcher#terminate flushes the ACKs it is
+      # holding, each of which carries the release of the slot its job ran under
+      # (Fetcher::Reliable::UnitOfWork#release_slot_in). What is left is exactly
+      # the slots the still-draining jobs are using — a quiet process holds
+      # capacity it is spending, never capacity it is only reserving.
       capsule.fetcher&.terminate
       logger.info { "Terminating quiet threads for #{capsule.name} capsule" }
       snapshot.each(&:terminate)

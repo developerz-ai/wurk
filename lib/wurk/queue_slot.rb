@@ -45,6 +45,32 @@ module Wurk
   # member rather than counting itself twice). Nothing about the job is stored
   # — a slot is capacity, not a claim on a payload, and the payload's own
   # reliability is the private list's job.
+  #
+  # ## How a hold ends
+  #
+  # Three ways, in the order they are hoped for:
+  #
+  #   * The job finishes. `Processor#process`'s `ensure` is the one frame every
+  #     exit path passes through, so the release is anchored there — success,
+  #     failure, retry, `Handled`, a watchdog timeout, a shutdown raise. The
+  #     ZREM rides the ACK's pipeline, so a released slot costs no round trip.
+  #   * The holder goes quiet. A quieted process stops fetching, so it stops
+  #     taking slots, and the ones it still holds drain with its last jobs — it
+  #     never sits on capacity it is not using.
+  #   * Nothing at all. A SIGKILLed holder stops refreshing and ages out within
+  #     {TTL_SECONDS}. That is the floor the other two are optimizations on top
+  #     of, and it is why a live holder has to keep saying so — {HELD} is the
+  #     ledger the heartbeat refreshes from (see {refresh_in}).
+  #
+  # A rolling restart is the one case where a queue can briefly run over its
+  # cap: `Swarm::Restart` boots the replacement before it TERMs the old child,
+  # so for the length of one drain both generations hold slots. That is
+  # deliberate and left alone. Fixing it would mean either starving the
+  # replacement until the old child's last job finished — the deploy stalls
+  # behind the slowest job on the queue — or handing capacity between processes,
+  # which needs the counter this ledger exists to avoid. The excess is bounded
+  # by the old child's in-flight count, lasts at most one `drain_timeout`, and
+  # is TTL-bounded even if that child is SIGKILLed instead of draining.
   module QueueSlot
     # How long a hold survives with nobody refreshing it. Deliberately the same
     # as `Heartbeat::TTL_SECONDS` (pinned by a test): a hold is refreshed on the
@@ -54,6 +80,49 @@ module Wurk
     # longer and a killed process's capacity comes back later than the process
     # itself disappears from the dashboard.
     TTL_SECONDS = 60
+
+    # Which slots this process is holding right now, so the heartbeat can
+    # extend them on the beat it was already sending.
+    #
+    # A process-wide singleton rather than fetcher state, for the reason
+    # `Processor::WORK_STATE` is one: the reader is the Heartbeat, which lives a
+    # layer above the capsules and would otherwise have to walk them looking for
+    # fetchers that may not exist. Keyed by holder token, which is one per
+    # processor thread and so already the identity of "the thread holding this",
+    # and a thread runs one job at a time — so the map holds at most one entry
+    # per busy thread and is empty for every install that caps nothing.
+    #
+    # Nothing here is authoritative: Redis is. The ledger only decides what gets
+    # refreshed, so an entry lost to a crash costs a hold its TTL, never
+    # correctness.
+    class Held
+      def initialize
+        @held = {}
+        @lock = ::Mutex.new
+      end
+
+      def hold(token, slot_key)
+        @lock.synchronize { @held[token] = slot_key }
+      end
+
+      # Drops the named hold and only the named hold. A release can arrive after
+      # the same thread has claimed a slot on a different queue (a flush that
+      # failed and was retried), and dropping by token alone would stop
+      # refreshing the hold that is actually live.
+      def drop(token, slot_key)
+        @lock.synchronize { @held.delete(token) if @held[token] == slot_key }
+      end
+
+      def snapshot
+        @lock.synchronize { @held.dup }
+      end
+
+      def size
+        @lock.synchronize { @held.size }
+      end
+    end
+
+    HELD = Held.new
 
     class << self
       # @param queue [String] unprefixed queue name
@@ -113,6 +182,33 @@ module Wurk
       # @return [Boolean] true when the caller's hold was still live
       def release(queue, token: self.token, pool: nil) # rubocop:disable Naming/PredicateMethod
         with_pool(pool, idempotent: true) { |conn| conn.call('ZREM', key_for(queue), token) } == 1
+      end
+
+      # Queue a refresh of every slot this process holds onto a pipeline the
+      # caller already owns — the Heartbeat's, so a cap costs no beat traffic of
+      # its own: one EVALSHA covering every hold, appended to a write that was
+      # going out anyway.
+      #
+      # Returns without touching the pipeline when nothing is held, which is
+      # every process in an install that caps nothing: the whole feature costs
+      # such a process one Hash read every 10 seconds.
+      #
+      # `eval_method` is `Lua::Loader.pipelined_eval`'s — the beat runs through
+      # it so a flushed script cache is one replay rather than a lost beat.
+      #
+      # @return [void]
+      def refresh_in(pipe, eval_method = :eval_cached, ttl: TTL_SECONDS)
+        held = HELD.snapshot
+        return if held.empty?
+
+        keys = []
+        argv = [ttl]
+        held.each do |holder, slot_key|
+          keys << slot_key
+          argv << holder
+        end
+        Lua::Loader.public_send(eval_method, pipe, :refresh_slots, keys: keys, argv: argv)
+        nil
       end
 
       # How many of `queue`'s slots are held right now.

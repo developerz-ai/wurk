@@ -4,7 +4,9 @@ require 'etc'
 
 require_relative 'component'
 require_relative 'keys'
+require_relative 'lua'
 require_relative 'processor'
+require_relative 'queue_slot'
 
 module Wurk
   # Single-purpose owner of the Redis-side process heartbeat. Lifted out of
@@ -18,6 +20,7 @@ module Wurk
   #   UNLINK <identity>:work
   #   HSET   <identity>:work     <tid> <json> ...    (only if WORK_STATE non-empty)
   #   EXPIRE <identity>:work     60                  (only if WORK_STATE non-empty)
+  #   EVALSHA refresh_slots      <held slots>        (only if QueueSlot::HELD non-empty)
   # then the signal drain:
   #   LPOP   <identity>-signals  × BEAT_PAUSE
   # Two rather than one because only the first is safe to replay — see
@@ -98,19 +101,34 @@ module Wurk
     # rides out a blip the way it did before the pool started splitting replay
     # by it. `rtt_us` measures this write alone — the signal drain that follows
     # is a separate checkout and deliberately not part of the gauge.
+    # Wrapped in `pipelined_eval` rather than a bare `pipelined` because the
+    # slot refresh below is an EVALSHA, and a pipelined one surfaces NOSCRIPT
+    # only when the pipeline finalizes — a flushed script cache would otherwise
+    # cost this process every beat until some other caller reloaded the script.
+    # A beat that refreshes nothing queues no EVALSHA and so cannot reach the
+    # recovery arm at all: for an install that caps no queue this is the same
+    # single pipeline it was.
     def pipelined_beat
       work_snapshot = Processor::WORK_STATE.dup
       t0 = ::Process.clock_gettime(::Process::CLOCK_MONOTONIC, :microsecond)
-      redis(idempotent: true) { |conn| conn.pipelined { |pipe| write_beat(pipe, work_snapshot) } }
+      redis(idempotent: true) do |conn|
+        Wurk::Lua::Loader.pipelined_eval(conn) { |pipe, eval_method| write_beat(pipe, work_snapshot, eval_method) }
+      end
       rtt = ::Process.clock_gettime(::Process::CLOCK_MONOTONIC, :microsecond) - t0
       [drain_signals, rtt]
     end
 
-    def write_beat(pipe, work_snapshot)
+    def write_beat(pipe, work_snapshot, eval_method = :eval_cached)
       pipe.call('SADD', Keys::PROCESSES, @identity)
       pipe.call('HSET', @identity, *beat_hash_args(work_snapshot.size))
       pipe.call('EXPIRE', @identity, TTL_SECONDS)
       write_work_hash(pipe, work_snapshot)
+      # Global-concurrency holds ride the beat instead of a timer of their own:
+      # a hold expires so a killed holder's capacity comes back on its own, and
+      # the beat is the statement "still alive" this process already makes every
+      # BEAT_PAUSE seconds. Nothing held → nothing queued, so the cost to a
+      # process that caps nothing is one Hash read per beat.
+      QueueSlot.refresh_in(pipe, eval_method)
     end
 
     def beat_hash_args(busy)
