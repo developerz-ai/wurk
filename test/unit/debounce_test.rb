@@ -227,6 +227,8 @@ class DebounceTest < Wurk::Test::UnitCase
     threads.each(&:join)
 
     assert_equal 1, mine.size
+  ensure
+    pool&.disconnect!
   end
 
   # A pool retry after a lost reply re-runs the block; the script has to

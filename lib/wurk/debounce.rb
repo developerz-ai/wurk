@@ -85,6 +85,14 @@ module Wurk
         # ZADDs it back, so a pool retry after a lost reply converges on one
         # entry rather than a duplicate — the whole point of doing this in a
         # script rather than a pipeline.
+        #
+        # The replay is not byte-identical: it recomputes `now`, so the fire
+        # time moves out by the retry's own latency (and `first` is carried
+        # forward, so `max_wait` still caps where it lands). That is the claim
+        # worth making anyway. A lost reply means the write probably applied,
+        # and refusing the replay only converts a bounded shift into an
+        # exception out of `perform_async` for a job that is already scheduled
+        # — whose caller then re-enqueues and shifts the fire time regardless.
         raw = with_pool(pool, idempotent: true) do |conn|
           Lua::Loader.eval_cached(conn, :debounce, keys: [key_for(job), Keys::SCHEDULE], argv: argv)
         end

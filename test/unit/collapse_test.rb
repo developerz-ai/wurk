@@ -258,12 +258,57 @@ class CollapseTest < Wurk::Test::UnitCase
     assert_equal(1, Wurk::ScheduledSet.new.count { |entry| entry.klass == @class_name })
   end
 
+  # --- the decision is taken once --------------------------------------
+
+  def test_the_stored_member_does_not_carry_the_policy_that_wrote_it
+    invoke(debounced)
+
+    refute scheduled.first.key?('collapse')
+  end
+
+  # The one that makes the strip load-bearing rather than cosmetic:
+  # Scheduled::Enq#push_promoted re-pushes a promoted job through Client#push,
+  # which re-runs this chain. A member still carrying `collapse` is debounced
+  # again on every promotion and never runs at all.
+  def test_a_promoted_debounced_job_enqueues_instead_of_debouncing_again
+    invoke(debounced)
+    member = raw_scheduled.first.first
+    # Scheduled::Enq's two steps, in its order: pop the due member, re-push it
+    # through the client.
+    @pool.with { |conn| conn.call('ZREM', Wurk::Keys::SCHEDULE, member) }
+
+    Wurk::Client.new(pool: @pool).push(JSON.parse(member))
+
+    assert_equal 0, scheduled.size, 'the promoted job was debounced a second time and will never run'
+    assert_equal 1, queue_length
+  end
+
+  def test_an_admitted_throttled_payload_does_not_carry_the_policy
+    admitted = invoke(throttled(jid: 'first'))
+
+    refute admitted.key?('collapse')
+    assert_equal 'first', admitted['jid']
+  end
+
+  # Same reason on the other policy: an admitted job's retries are promoted back
+  # through this chain, in whatever slot they land in — where a fresh sibling has
+  # long since taken the slot. Deleting the slot key and admitting `sibling`
+  # stands in for that later slot without waiting an hour for one.
+  def test_a_promoted_throttled_retry_is_not_re_judged_in_a_later_slot
+    admitted = invoke(throttled(jid: 'first'))
+    @pool.with { |conn| conn.call('DEL', *slot_keys) }
+    invoke(throttled(jid: 'sibling'))
+
+    assert_equal 'first', Wurk::Client.new(pool: @pool).push(admitted),
+                 'the retry was re-throttled and silently dropped'
+  end
+
   # --- the middleware: throttle ----------------------------------------
 
   def test_throttle_admits_the_first_and_drops_the_rest_of_the_slot
     job = throttled(jid: 'first')
 
-    assert_same job, invoke(job)
+    assert_equal job.except('collapse'), invoke(job)
     assert_nil invoke(throttled(jid: 'second'))
     assert_nil invoke(throttled(jid: 'third'))
   end
@@ -290,7 +335,7 @@ class CollapseTest < Wurk::Test::UnitCase
   def test_throttle_inside_a_batch_is_allowed
     job = throttled({ 'bid' => 'b-1' }, jid: 'first')
 
-    assert_same job, invoke(job)
+    assert_equal job.except('collapse'), invoke(job)
     assert_nil invoke(throttled({ 'bid' => 'b-1' }, jid: 'second'))
   end
 
@@ -306,7 +351,7 @@ class CollapseTest < Wurk::Test::UnitCase
   def test_throttle_with_an_explicit_at_is_allowed
     job = throttled({ 'at' => Time.now.to_f + 3600 })
 
-    assert_same job, invoke(job)
+    assert_equal job.except('collapse'), invoke(job)
   end
 
   # `encrypt: true` with no crypto configured is inert, so the policy proceeds —
@@ -432,6 +477,12 @@ class CollapseTest < Wurk::Test::UnitCase
   end
 
   def scheduled = raw_scheduled.map { |member, _score| JSON.parse(member) }
+
+  def queue_length = @pool.with { |conn| conn.call('LLEN', Wurk::Keys.queue(@queue)) }
+
+  def slot_keys
+    @pool.with { |conn| conn.call('KEYS', "#{Wurk::Throttle.key_prefix_for(throttled)}:*") }
+  end
 
   # Anonymous, so nothing is left on Object for a sibling test to trip over.
   def worker_class(**opts)

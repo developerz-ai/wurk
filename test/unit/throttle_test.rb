@@ -149,6 +149,10 @@ class ThrottleTest < Wurk::Test::UnitCase
   # The next slot admits again — the whole point of a ceiling rather than a
   # one-shot lock.
   def test_the_next_slot_admits_again
+    # Anchor to the top of a slot first. Slots are epoch-aligned, so a first
+    # admit landing near a boundary leaves the drop assertion below in the
+    # *next* slot, where a legitimate new admission reads as a failure.
+    sleep(1 - (Time.now.to_f % 1))
     first = Wurk::Throttle.admit(job(jid: jid('a')), slot: 1)
 
     assert_predicate first, :admitted?

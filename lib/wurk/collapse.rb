@@ -267,11 +267,24 @@ module Wurk
 
       private
 
+      # The policy comes off the payload the decision hands on, and that is not
+      # tidying. `Scheduled::Enq#push_promoted` re-pushes a promoted job through
+      # {Wurk::Client#push}, which re-runs this chain: a `schedule` member still
+      # carrying `collapse` is debounced again on every promotion and so never
+      # runs at all, and an admitted throttled job's retry — promoted the same
+      # way, minutes later, into a slot a fresh sibling has since taken — is
+      # judged a second time and silently dropped. A collapse decision belongs
+      # to the enqueue door and is taken exactly once, on the push that made it.
+      #
+      # Identity is unaffected: {Wurk::Unique.digest_for} reads
+      # `[class, queue, args]`, so the next push of the same job still collapses
+      # into this one's key.
       def decide(policy, job, pool)
         reject_incompatible!(job, policy)
-        return collapse(job, policy, pool) if policy.name == :debounce
+        carried = job.except(Wurk::Collapse::OPTION)
+        return collapse(carried, policy, pool) if policy.name == :debounce
 
-        admit(job, policy, pool)
+        admit(carried, policy, pool)
       end
 
       # Returns nil unconditionally: the job is already in `schedule`, and the
