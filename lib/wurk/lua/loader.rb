@@ -50,6 +50,29 @@ module Wurk
           evalsha(redis, sha, keys, argv)
         end
 
+        # Run a pipeline that contains EVALSHAs, recovering from a flushed script
+        # cache the way a pipeline forces us to.
+        #
+        # A pipelined EVALSHA surfaces NOSCRIPT only when the pipeline finalizes
+        # — never to #eval_cached's inline rescue, which has already returned by
+        # then — and the pipeline applies none of itself when it does. So
+        # recovery is one SCRIPT LOAD and a replay of the same block through
+        # source-embedded EVAL, which cannot raise NOSCRIPT at all.
+        #
+        # The block is handed the pipeline and the eval method to route through,
+        # and must be replay-safe: it may run twice. Both of Fetcher::Reliable's
+        # callers pipeline commands that are (a replayed LREM removes nothing, a
+        # replayed reliable_requeue is LREM-guarded, a replayed fetch_slot claims
+        # a different job into the same private list).
+        def pipelined_eval(redis)
+          redis.pipelined { |pipe| yield pipe, :eval_cached }
+        rescue RedisClient::CommandError => e
+          raise unless noscript?(e)
+
+          script_load_all(redis)
+          redis.pipelined { |pipe| yield pipe, :eval_with_source }
+        end
+
         # Source-embedded EVAL — the slow but cache-independent counterpart to
         # `eval_cached`. Used on retry from a pipelined NOSCRIPT recovery where
         # EVALSHA can still race a freshly-loaded script under heavy CI load

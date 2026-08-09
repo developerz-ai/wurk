@@ -5,6 +5,7 @@ require_relative '../component'
 require_relative '../keys'
 require_relative '../lua'
 require_relative '../fetcher'
+require_relative 'capped'
 require_relative '../middleware/poison_pill'
 
 module Wurk
@@ -33,6 +34,12 @@ module Wurk
     # docs/target/sidekiq-free.md §15 (TIMEOUT=2).
     class Reliable < Fetcher
       include Component
+      # Global per-queue concurrency, as a decorator over #walk. Prepended
+      # rather than mixed in so there stays exactly one copy of the uncapped
+      # fetch loop — Capped#walk hands straight back to `super` for an install
+      # that caps nothing, which is a stronger guarantee that the unconfigured
+      # path is unchanged than a second loop kept in step by hand.
+      prepend Capped
 
       # Default BLMOVE block timeout; overridable via config.fetch_poll_interval.
       TIMEOUT = 2
@@ -336,14 +343,10 @@ module Wurk
         end
       end
 
-      # One pipelined RELIABLE_REQUEUE EVALSHA per UoW. Mirrors
-      # Client#push_batched_pipelined: a pipelined EVALSHA surfaces NOSCRIPT
-      # only at finalize (never to eval_cached's inline rescue). Every command
-      # here is the same script, so a flushed cache fails all of them and
-      # applies none — recover by reloading once and replaying the whole
-      # pipeline via source-embedded EVAL.
-      def requeue_pipelined(conn, in_progress, eval_method: :eval_cached)
-        conn.pipelined do |pipe|
+      # One pipelined RELIABLE_REQUEUE EVALSHA per UoW; the flushed-script-cache
+      # replay is Lua::Loader.pipelined_eval's.
+      def requeue_pipelined(conn, in_progress)
+        Wurk::Lua::Loader.pipelined_eval(conn) do |pipe, eval_method|
           in_progress.each do |uow|
             Wurk::Lua::Loader.public_send(
               eval_method, pipe, :reliable_requeue,
@@ -352,11 +355,6 @@ module Wurk
             )
           end
         end
-      rescue RedisClient::CommandError => e
-        raise unless e.message.to_s.start_with?('NOSCRIPT')
-
-        Wurk::Lua::Loader.script_load_all(conn)
-        requeue_pipelined(conn, in_progress, eval_method: :eval_with_source)
       end
 
       # SMEMBERS of the `paused` SET, at most once per PAUSED_TTL per fetcher
@@ -464,9 +462,12 @@ module Wurk
         raise
       end
 
-      def blmove(public_q)
+      # `timeout` overrides the block window for a caller that has a reason to
+      # come back sooner than a poll interval; Capped#wait_capped shortens it
+      # while a capped queue is sitting at capacity. nil keeps today's default.
+      def blmove(public_q, timeout = nil)
         priv, name = queue_keys(public_q)
-        timeout = poll_interval
+        timeout ||= poll_interval
         # Dedicated fetch pool, not the main one: a parked BLMOVE holds its slot
         # for the whole block window, so routing it here keeps idle fetchers from
         # starving the main pool's background loops (#101). redis-client's
