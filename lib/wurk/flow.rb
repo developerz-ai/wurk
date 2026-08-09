@@ -1,6 +1,7 @@
 # frozen_string_literal: true
 
 require 'securerandom'
+require_relative 'batch'
 
 module Wurk
   # A DAG of jobs: fan out, fan in, and run each node only after everything it
@@ -12,7 +13,7 @@ module Wurk
   #     a = f.job(FetchJob, 'https://a')
   #     b = f.job(FetchJob, 'https://b')
   #     f.job(MergeJob, depends_on: [a, b])
-  #   end
+  #   end.run
   #
   # @example The same graph, addressed by name — forward references are legal
   #   Wurk::Flow.new do |f|
@@ -66,6 +67,12 @@ module Wurk
     # a single completion enqueues.
     MAX_WIDTH = 100
 
+    # The `:success` callback every node's batch is created with — the one hop
+    # that advances a flow. Named here because creation writes the spec and the
+    # completion step is the class that answers to it; a literal in both places
+    # is a flow that stalls the day one of them is renamed.
+    ADVANCE_CALLBACK = 'Wurk::Flow::Completion'
+
     # Every build-time refusal. `ArgumentError` because a malformed graph is a
     # caller mistake in exactly the way a malformed job payload is — which also
     # means the HTTP API's existing rescue turns one into a 400 with no new arm.
@@ -92,6 +99,25 @@ module Wurk
     # @return [Integer] the most edges on either side of any one node.
     attr_reader :width
 
+    # @return [Integer] seconds every key this flow creates lives for, absent
+    #   the shorter clocks a finished batch stamps on its own keys.
+    attr_reader :expiry
+
+    # @return [Array<String>, nil] each node's jid, in node-index order, or nil
+    #   before {#run}. A node is one job (decision 0), so this is the address
+    #   of its result: `Wurk::Status.get(flow.jids[i])`.
+    attr_reader :jids
+
+    # @return [Array<String>, nil] each node's bid, in node-index order, or nil
+    #   before {#run}. A node's batch is what carries its completion.
+    attr_reader :bids
+
+    # The queue every node batch's callbacks run on. Same knob and same default
+    # as {Wurk::Batch#callback_queue}: a flow advances one callback at a time,
+    # so a host that keeps callbacks off a saturated `default` needs to be able
+    # to say so here too.
+    attr_accessor :callback_queue
+
     def initialize(&block)
       raise ArgumentError, 'flow requires a block' unless block
 
@@ -101,6 +127,9 @@ module Wurk
       @nodes = builder.build.freeze
       @depth = builder.depth
       @width = builder.width
+      @expiry = Wurk::Batch::DEFAULT_EXPIRY_SECONDS
+      @callback_queue = 'default'
+      @created = false
     end
 
     def size = @nodes.size
@@ -108,8 +137,41 @@ module Wurk
     # @return [Array<Flow::Node>] the nodes with no dependencies — what
     #   creation enqueues immediately; everything else waits on a callback.
     def roots = @nodes.select(&:root?)
+
+    # Retention for every key this flow creates, its nodes' batches included.
+    # The batch clock (30 days) by default, because a flow is a relation
+    # between batches and an abandoned one has to disappear the same way they
+    # do — on its own, with no sweeper to elect a leader for.
+    def expires_in(duration)
+      @expiry = duration.to_i
+      self
+    end
+
+    def created? = @created
+
+    # Create the flow: persist the whole graph and enqueue the nodes that have
+    # nothing to wait for, in one atomic write. Nothing before this touches
+    # Redis, and a refusal here leaves nothing behind.
+    #
+    # The claim is taken before the write, not after it. A write whose reply is
+    # lost may well have applied, and a second #run would build fresh jids only
+    # to be turned away by the script's own claim — leaving this object
+    # describing a flow that Redis does not have. One flow object creates one
+    # flow; recovering from an ambiguous failure means building another.
+    #
+    # @return [self]
+    def run
+      raise "flow #{@fid} has already been created" if @created
+
+      @created = true
+      payloads = Creation.new(self).call
+      @jids = payloads.map { |payload| payload['jid'] }.freeze
+      @bids = payloads.map { |payload| payload['bid'] }.freeze
+      self
+    end
   end
 end
 
 require_relative 'flow/node'
 require_relative 'flow/builder'
+require_relative 'flow/creation'
