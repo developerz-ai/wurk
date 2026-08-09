@@ -65,6 +65,14 @@ module Wurk
       # it is echoed back on every listing.
       QUEUE_NAME_FORMAT = /\A[^[:space:][:cntrl:]]{1,255}\z/
 
+      # A process identity is `<hostname>:<pid>:<nonce>` and is itself a Redis
+      # key — the heartbeat HASH, `<identity>:work` and `<identity>-signals`
+      # are all built by interpolating it. The same shape as a queue name for
+      # the same reason, spelled separately because the two doors are
+      # independent: bounding what may be addressed as a queue says nothing
+      # about what may be addressed as a process.
+      IDENTITY_FORMAT = /\A[^[:space:][:cntrl:]]{1,255}\z/
+
       # Same word the router uses for "any scope": here it turns the class
       # allow-list off.
       ANY = :any
@@ -175,6 +183,14 @@ module Wurk
         return name if name.is_a?(::String) && QUEUE_NAME_FORMAT.match?(name)
 
         raise Invalid, 'A queue name is up to 255 characters with no whitespace or control characters.'
+      end
+
+      # @raise [Invalid] unless `identity` fits {IDENTITY_FORMAT}.
+      # @return [String] the process identity.
+      def identity!(identity)
+        return identity if identity.is_a?(::String) && IDENTITY_FORMAT.match?(identity)
+
+        raise Invalid, 'A process identity is up to 255 characters with no whitespace or control characters.'
       end
 
       # Validates the allow-list where it is declared, so a typo'd class name

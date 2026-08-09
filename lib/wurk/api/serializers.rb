@@ -1,5 +1,7 @@
 # frozen_string_literal: true
 
+require 'json'
+
 module Wurk
   module API
     # Wire shapes for the observe plane.
@@ -13,7 +15,119 @@ module Wurk
     # extension rows — an engine dependency the API cannot take, because it
     # also runs standalone. Under /v1 these field names are a contract.
     module Serializers
+      # Three missed beats at {Wurk::Heartbeat::BEAT_PAUSE} cadence, which is
+      # also the window Wurk::Health calls a heartbeat stale, and half the
+      # heartbeat key's TTL — so a process that stopped beating is reported
+      # stale for ~30s before Redis reaps the row out from under this API.
+      STALE_AFTER_SECONDS = ::Wurk::Heartbeat::BEAT_PAUSE * 3
+
       module_function
+
+      # Seconds since this process last beat, measured against a `now` the
+      # caller took once for the whole listing so rows never disagree by a
+      # round trip. Floored at zero: `beat` is stamped by the beating process's
+      # clock and this is read on another host's, so a skew of a few
+      # milliseconds must not surface as a negative age.
+      def beat_age_seconds(beat, now)
+        [now - beat.to_f, 0.0].max.round(3)
+      end
+
+      def stale?(age) = age > STALE_AFTER_SECONDS
+
+      # One live process. `beat_age_seconds` and `stale` are derived here
+      # rather than left to the client: a client comparing `beat` against its
+      # own clock is comparing two clocks, which is the one comparison this
+      # roll-up exists to save it from.
+      #
+      # `leader` is passed in because the two callers learn it differently — a
+      # listing compares against one memoized `dear-leader` read, a single
+      # process asks itself — and neither should pay the other's round trips.
+      def process_row(process, leader:, now:)
+        declared(process, now).merge(measured(process, now)).merge(leader: leader)
+      end
+
+      # The half a process wrote about itself in the `info` JSON: who it is and
+      # what it was configured to do. Split along the same seam the heartbeat
+      # itself uses (Heartbeat#info_hash versus #beat_hash_args), so a field
+      # that moves between the two halves upstream moves between these.
+      def declared(process, now)
+        {
+          identity: process.identity, hostname: process['hostname'], pid: process['pid'],
+          tag: process.tag, version: process.version, embedded: process.embedded?,
+          concurrency: process['concurrency'], queues: process.queues,
+          weights: process.weights, labels: process.labels,
+          started_at: process['started_at'], uptime_seconds: uptime_seconds(process['started_at'], now)
+        }
+      end
+
+      # The half its last beat measured, plus the two values derived from it.
+      def measured(process, now)
+        age = beat_age_seconds(process['beat'], now)
+        {
+          busy: process['busy'], rss_kb: process['rss'], rtt_us: process['rtt_us'],
+          beat: process['beat'], beat_age_seconds: age, stale: stale?(age),
+          quiet: process.stopping?
+        }
+      end
+
+      # One in-flight job. `class`/`args` are the display view for the reason
+      # {#job_record} gives, and `elapsed_seconds` is derived for the reason
+      # `beat_age_seconds` is — the client's clock is not the swarm's.
+      def work_row(process_id, thread_id, work, now:)
+        record = work.job
+        run_at = work.run_at.to_f
+        {
+          process_id: process_id, thread_id: thread_id, queue: work.queue,
+          jid: record.jid, class: record.display_class, args: record.display_args,
+          run_at: run_at, elapsed_seconds: [now - run_at, 0.0].max.round(3)
+        }
+      end
+
+      # `available`, not the `available?` {Wurk::Limiter::Base#build_status}
+      # keys it with: a trailing `?` is Ruby's convention for a predicate, not
+      # JSON's for a Boolean field. `status` is null when the limiter's
+      # metadata expired between the listing that named it and this read.
+      def limiter_row(name, meta, status)
+        {
+          name: name,
+          type: meta['type'].to_s,
+          fingerprint: meta['fingerprint'].to_s,
+          options: parse_options(meta['options']),
+          status: status && {
+            used: status[:used], limit: status[:limit],
+            reset_at: status[:reset_at], available: status[:available?]
+          }
+        }
+      end
+
+      # One registered cron loop. `next_fire_at` is evaluated against a `now`
+      # the caller took once, so every row in a listing answers "next after the
+      # same instant" rather than drifting a row at a time.
+      def cron_loop(loop_obj, now:)
+        {
+          lid: loop_obj.lid, schedule: loop_obj.schedule, class: loop_obj.klass,
+          queue: loop_obj.queue, args: loop_obj.args, tz: loop_obj.tz_name,
+          paused: loop_obj.paused?,
+          last_fired_at: loop_obj.last_fired_at,
+          next_fire_at: loop_obj.next_fire_at(now)
+        }
+      end
+
+      def parse_options(raw)
+        return {} if raw.nil? || raw.to_s.empty?
+
+        ::JSON.parse(raw)
+      rescue ::JSON::ParserError
+        {}
+      end
+
+      # nil rather than 0 when the heartbeat carries no `started_at`: a process
+      # of unknown age is not one that just booted.
+      def uptime_seconds(started_at, now)
+        return nil if started_at.nil?
+
+        [now - started_at.to_f, 0.0].max.round(3)
+      end
 
       # `default_queue_latency`, not the dashboard's `latency`: sitting beside
       # a `queues` array, a bare `latency` reads as the whole fleet's rather

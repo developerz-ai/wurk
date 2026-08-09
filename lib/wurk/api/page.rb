@@ -36,8 +36,12 @@ module Wurk
       #   asking for more rows than the API will give is not a client bug — and
       #   every listing echoes the effective values back, so the clamp is
       #   visible rather than silent.
-      def window!(request)
-        query = query!(request)
+      def window!(request) = window(query!(request))
+
+      # The parsed-query half, for a route that reads a parameter of its own
+      # (`?filter=`) beside the paging ones: it parses once and hands the same
+      # Hash to both, rather than re-parsing the query string per parameter.
+      def window(query)
         Window.new(
           page: integer!(query['page'], 'page', 0).clamp(0, MAX_PAGE),
           count: integer!(query['count'], 'count', DEFAULT_COUNT).clamp(1, MAX_COUNT)

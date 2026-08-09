@@ -9,6 +9,7 @@ require_relative 'queues'
 require_relative 'request'
 require_relative 'response'
 require_relative 'router'
+require_relative 'swarm'
 
 module Wurk
   module API
@@ -57,6 +58,7 @@ module Wurk
         router.get('/', scope: Auth::ANY) { |request| root(request) }
         Jobs.draw(router)
         Queues.draw(router)
+        Swarm.draw(router)
       end
 
       # Authentication runs before the version gate and before routing, so an

@@ -27,6 +27,13 @@ module Wurk
       # The same distinction one addressable resource over: a well-formed bid
       # the `batches` set has never held, as opposed to a mistyped path.
       BATCH_NOT_FOUND = 'batch_not_found'
+      # A well-formed identity that no live heartbeat answers to — the process
+      # exited, or its beat lapsed and Redis reaped the row.
+      PROCESS_NOT_FOUND = 'process_not_found'
+      # The process is live and the caller may signal it, but this one cannot
+      # be signalled at all: an embedded process shares its host application's
+      # PID, so a TSTP or TERM aimed at it would hit the web server around it.
+      PROCESS_NOT_SIGNALABLE = 'process_not_signalable'
       # Named for RFC 6750 §3.1 so the slug and the `error=` the 403 carries in
       # WWW-Authenticate are the same word.
       INSUFFICIENT_SCOPE = 'insufficient_scope'
@@ -57,6 +64,8 @@ module Wurk
         INVALID_REQUEST => 'Invalid Request',
         JOB_NOT_FOUND => 'Job Not Found',
         BATCH_NOT_FOUND => 'Batch Not Found',
+        PROCESS_NOT_FOUND => 'Process Not Found',
+        PROCESS_NOT_SIGNALABLE => 'Process Not Signalable',
         PAYLOAD_TOO_LARGE => 'Payload Too Large',
         CLASS_NOT_ALLOWED => 'Class Not Allowed',
         IDEMPOTENCY_KEY_REUSED => 'Idempotency Key Reused',
