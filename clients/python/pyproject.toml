@@ -1,0 +1,36 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "wurk-client"
+version = "0.1.0"
+description = "Reference Python client for the Wurk HTTP API (/v1) — enqueue, bulk, status, queues."
+readme = "README.md"
+requires-python = ">=3.9"
+license = { text = "MIT" }
+authors = [{ name = "developerz.ai" }]
+keywords = ["wurk", "sidekiq", "redis", "background-jobs", "queue"]
+classifiers = [
+  "Development Status :: 3 - Alpha",
+  "Intended Audience :: Developers",
+  "License :: OSI Approved :: MIT License",
+  "Programming Language :: Python :: 3",
+  "Topic :: System :: Distributed Computing",
+]
+# Zero third-party dependencies on purpose — this client is a thin wrapper
+# over `urllib.request`, matching the "thin" brief in the plan doc
+# (docs/plans/2026/08/07/101-beyond-sidekiq/07-http-producer-api.md): enqueue,
+# bulk, status, queues, and nothing else. A consumer that wants retries,
+# connection pooling, or async should wrap this or reach for `requests`/`httpx`
+# themselves — this package stays dependency-free so it never fights a host
+# app's own pin.
+dependencies = []
+
+[project.urls]
+Homepage = "https://github.com/developerz-ai/wurk"
+Documentation = "https://github.com/developerz-ai/wurk/blob/main/docs/api-http.md"
+Source = "https://github.com/developerz-ai/wurk"
+
+[tool.setuptools.packages.find]
+where = ["src"]
