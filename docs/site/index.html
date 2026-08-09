@@ -179,7 +179,7 @@
        palette (OSS green == --success). JS sets --edge-proximity (0–100) and
        --cursor-angle; both stay 0/45deg without JS, so the cards degrade to the
        plain bordered panels. */
-    :root { --tier-oss: 63 185 80; --tier-pro: 88 166 255; --tier-ent: 188 140 255; }
+    :root { --tier-oss: 63 185 80; --tier-pro: 88 166 255; --tier-ent: 188 140 255; --tier-extra: 210 153 34; }
     .feature {
       isolation: isolate; overflow: visible;
       --edge-proximity: 0; --cursor-angle: 45deg;
@@ -189,6 +189,12 @@
     .feature--oss { --glow: var(--tier-oss); }
     .feature--pro { --glow: var(--tier-pro); }
     .feature--ent { --glow: var(--tier-ent); }
+    /* Wurk-only extras (no Sidekiq tier at all) get their own amber hue rather
+       than reusing an OSS/Pro/Ent color, so the grid doesn't imply parity. */
+    .feature--extra { --glow: var(--tier-extra); }
+    .feature__tier .extra { color: var(--warning); }
+    .extras-grid { display: grid; grid-template-columns: repeat(3, 1fr); gap: 16px; }
+    @media (max-width: 900px) { .extras-grid { grid-template-columns: 1fr; } }
 
     /* Soft inner colour wash that follows the pointer (under the text). */
     .feature::before {
@@ -287,6 +293,7 @@
         <span class="brand"><img src="wurk-logo.png" alt="Wurk — an orc ready to work" width="400" height="500"> Wurk</span>
         <span class="spacer"></span>
         <a class="navlink hide" href="#features">Features</a>
+        <a class="navlink hide" href="#extras">Extras</a>
         <a class="navlink hide" href="#install">Install</a>
         <a class="navlink hide" href="#migrate">Migrate</a>
         <a class="navlink" href="https://wurk.demo.developerz.ai/wurk">Live demo</a>
@@ -401,6 +408,80 @@ gem <span class="add">"wurk"</span></pre>
         <p class="freebar">
           That's the full Sidekiq + Pro + Enterprise surface — <b>$0</b>, one gem, MIT licensed.
         </p>
+      </section>
+
+      <section id="extras" class="reveal">
+        <h2>Wurk extras &mdash; not Sidekiq parity</h2>
+        <p class="section-lede">
+          Sidekiq has no equivalent for any of these. Each is <b>off by default and free when unused</b> &mdash;
+          no extra Redis round trip on the hot path unless you opt in &mdash; and each is <b>Wurk-only</b>:
+          using it ties that code to Wurk.
+        </p>
+        <div class="extras-grid">
+          <div class="feature feature--extra">
+            <span class="edge-light" aria-hidden="true"></span>
+            <span class="feature__ic"><i class="fa-solid fa-list-check" aria-hidden="true"></i></span>
+            <h3>Job status, progress &amp; results</h3>
+            <p>Opt-in <code>track: true</code> persists state, coalesced progress writes, and the return value &mdash; read back from Ruby or the dashboard.</p>
+            <span class="feature__tier"><i class="fa-solid fa-star extra" aria-hidden="true"></i> Wurk-only</span>
+          </div>
+          <div class="feature feature--extra">
+            <span class="edge-light" aria-hidden="true"></span>
+            <span class="feature__ic"><i class="fa-solid fa-diagram-project" aria-hidden="true"></i></span>
+            <h3>HTTP producer + observe API</h3>
+            <p>A bearer-token-scoped <code>/v1</code> JSON API to enqueue, bulk-enqueue, and inspect queues, jobs, and the swarm &mdash; standalone, engine-nested, or via the <code>wurk api</code> CLI.</p>
+            <span class="feature__tier"><i class="fa-solid fa-star extra" aria-hidden="true"></i> Wurk-only</span>
+          </div>
+          <div class="feature feature--extra">
+            <span class="edge-light" aria-hidden="true"></span>
+            <span class="feature__ic"><i class="fa-solid fa-route" aria-hidden="true"></i></span>
+            <h3>OpenTelemetry tracing</h3>
+            <p>W3C <code>traceparent</code>/<code>tracestate</code> propagated client to server, one span per attempt, linked across long retry delays instead of stretching one trace across hours.</p>
+            <span class="feature__tier"><i class="fa-solid fa-star extra" aria-hidden="true"></i> Wurk-only</span>
+          </div>
+          <div class="feature feature--extra">
+            <span class="edge-light" aria-hidden="true"></span>
+            <span class="feature__ic"><i class="fa-solid fa-sitemap" aria-hidden="true"></i></span>
+            <h3>Flows &mdash; DAGs on batches</h3>
+            <p><code>Wurk::Flow</code> chains and fans batches out and in with dependency edges, piped results between nodes, and cycle/depth/width limits.</p>
+            <span class="feature__tier"><i class="fa-solid fa-star extra" aria-hidden="true"></i> Wurk-only</span>
+          </div>
+          <div class="feature feature--extra">
+            <span class="edge-light" aria-hidden="true"></span>
+            <span class="feature__ic"><i class="fa-solid fa-layer-group" aria-hidden="true"></i></span>
+            <h3>Debounce, throttle-to-slot &amp; collapse</h3>
+            <p><code>collapse: { policy: :debounce/:throttle }</code> coalesces a burst into one job &mdash; last-payload-wins, or one admission per fixed time slot.</p>
+            <span class="feature__tier"><i class="fa-solid fa-star extra" aria-hidden="true"></i> Wurk-only</span>
+          </div>
+          <div class="feature feature--extra">
+            <span class="edge-light" aria-hidden="true"></span>
+            <span class="feature__ic"><i class="fa-solid fa-hourglass-half" aria-hidden="true"></i></span>
+            <h3>Per-job timeouts &amp; deadlines</h3>
+            <p><code>timeout:</code> bounds one attempt; <code>deadline:</code> bounds the whole job from enqueue &mdash; enforced by a lightweight per-capsule watchdog, no thread-per-job.</p>
+            <span class="feature__tier"><i class="fa-solid fa-star extra" aria-hidden="true"></i> Wurk-only</span>
+          </div>
+          <div class="feature feature--extra">
+            <span class="edge-light" aria-hidden="true"></span>
+            <span class="feature__ic"><i class="fa-solid fa-gauge-simple" aria-hidden="true"></i></span>
+            <h3>Global per-queue concurrency caps</h3>
+            <p><code>config.global_concurrency = { critical: 20 }</code> caps in-flight jobs for a queue across the whole cluster, folded into the fetch pipeline.</p>
+            <span class="feature__tier"><i class="fa-solid fa-star extra" aria-hidden="true"></i> Wurk-only</span>
+          </div>
+          <div class="feature feature--extra">
+            <span class="edge-light" aria-hidden="true"></span>
+            <span class="feature__ic"><i class="fa-solid fa-heart-pulse" aria-hidden="true"></i></span>
+            <h3>Kubernetes probes</h3>
+            <p><code>config.health_check</code> opens a thin <code>/live</code>/<code>/ready</code> HTTP listener that self-elects across a swarm's children.</p>
+            <span class="feature__tier"><i class="fa-solid fa-star extra" aria-hidden="true"></i> Wurk-only</span>
+          </div>
+          <div class="feature feature--extra">
+            <span class="edge-light" aria-hidden="true"></span>
+            <span class="feature__ic"><i class="fa-solid fa-wand-magic-sparkles" aria-hidden="true"></i></span>
+            <h3>Theme, locale, timezone &amp; AI panes</h3>
+            <p>Light/dark/system theme, per-visitor locale override, a 400-zone timezone picker, and opt-in AI panes (anomaly detection, NL queries, capacity forecasting).</p>
+            <span class="feature__tier"><i class="fa-solid fa-star extra" aria-hidden="true"></i> Wurk-only</span>
+          </div>
+        </div>
       </section>
 
       <section id="dashboard" class="reveal">

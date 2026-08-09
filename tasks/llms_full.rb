@@ -33,6 +33,10 @@ module WurkDocs
       docs/reliability.md
       docs/middleware.md
       docs/api.md
+      docs/api-http.md
+      docs/job-status.md
+      docs/flows.md
+      docs/telemetry.md
       docs/metrics.md
       docs/sentry.md
       docs/encryption.md

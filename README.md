@@ -53,7 +53,25 @@ Everything below is in the one free gem. The "Sidekiq tier" column is only there
 | **Encryption** | Transparent AES-256-GCM job-argument encryption with zero-downtime key rotation | Enterprise |
 | **Dashboard** | Mountable Rails engine, precompiled SolidJS SPA (no Node needed), live SSE, charts, host-app auth hook | OSS + Pro/Ent |
 
-Plus Wurk extras: a worker topology DSL, a Kubernetes liveness/readiness listener, and opt-in AI dashboard panes (anomaly detection, NL queries, backlog forecasting).
+Plus the [Wurk extras](#wurk-extras) below: a worker topology DSL, a Kubernetes liveness/readiness listener, opt-in AI dashboard panes (anomaly detection, NL queries, backlog forecasting), OpenTelemetry tracing, job status/progress/results, an HTTP producer+observe API, per-job timeouts/deadlines, debounce/throttle/collapse, global per-queue concurrency caps, and DAG flows.
+
+## Wurk extras
+
+Sidekiq has no equivalent for any of these — they aren't parity, they're new surface. Each is **off by default and free when unused** (no extra Redis round trip on the hot path unless you opt in), and each is documented as **Wurk-only**: using it ties that code to Wurk, so migrating back to plain Sidekiq means removing or reimplementing it.
+
+| Extra | What it does | Give up if you migrate back to Sidekiq |
+|---|---|---|
+| **[Job status, progress & results](docs/job-status.md)** | Opt-in `sidekiq_options track: true` persists a `status:<jid>` row — state, coalesced progress writes, the return value (size-capped, withheld under encryption) | `Wurk::Status` reads/writes and the dashboard's per-job progress bar |
+| **[HTTP producer + observe API](docs/api-http.md)** | A bearer-token-scoped `/v1` JSON API — enqueue, bulk-enqueue, inspect queues/jobs/swarm — mountable standalone, nested in the engine, or via the `wurk api` CLI | The whole `/v1` surface; non-Ruby producers lose their enqueue/inspect path |
+| **[OpenTelemetry tracing](docs/telemetry.md)** | W3C `traceparent`/`tracestate` propagated client → server, one span per attempt, linked (not force-parented) across long delays | Distributed traces across your job graph |
+| **[Flows — DAG-on-batches](docs/flows.md)** | `Wurk::Flow` chains and fans batches out/in with dependency edges, piped results between nodes, cycle/depth/width limits | The DAG builder, `pipe:` result-passing, `Flow.abandon` |
+| **[Debounce, throttle-to-slot & collapse](docs/unique-jobs.md)** | `collapse: { policy: :debounce/:throttle }` coalesces bursts into one job (last-payload-wins) or admits one job per fixed time slot | Burst coalescing — every enqueue in the window runs standalone again |
+| **[Per-job timeouts & deadlines](docs/retries.md)** | `timeout:` bounds one attempt, `deadline:` bounds the whole job from enqueue, enforced by a lightweight per-capsule watchdog thread (no thread-per-job) | Runaway/stuck jobs run unbounded except for `shutdown_timeout` |
+| **[Global per-queue concurrency caps](docs/rate-limiting.md)** | `config.global_concurrency = { critical: 20 }` caps in-flight jobs for a queue across the whole cluster, folded into the fetch pipeline | The cluster-wide cap; only per-key `Limiter`s remain |
+| **Worker topology DSL** | Declare which queues/classes a given fleet role runs, in code instead of ad hoc `-q` flags | The declarative topology; fall back to CLI queue flags |
+| **[Kubernetes probes](#kubernetes-probes)** | `config.health_check` opens a thin `/live`/`/ready` HTTP listener, self-electing across a swarm's children | The built-in probe listener; roll your own liveness check |
+| **Dashboard theme, locale & timezone** | Light/dark/system theme, per-visitor locale override, and a 400-zone timezone picker for every timestamp in the SPA | Nothing server-side — this is dashboard-only |
+| **AI dashboard panes** | Opt-in anomaly detection, natural-language queries, error triage, and capacity forecasting (requires an Anthropic API token) | The AI panes; the rest of the dashboard is unaffected |
 
 ## Documentation
 
