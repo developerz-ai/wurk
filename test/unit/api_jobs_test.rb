@@ -46,9 +46,9 @@ class ApiJobsTest < Wurk::Test::UnitCase
 
   def setup
     super
-    @ns = "#{Process.pid}-#{object_id}"
+    @ns = "#{Process.pid}_#{object_id}"
     @queue = "q-#{@ns}"
-    @class_name = "ApiJobsWorker@#{@ns}"
+    @class_name = "ApiJobsWorker#{@ns}"
     @pool = Wurk.configuration.redis_pool
   end
 
@@ -323,11 +323,15 @@ class ApiJobsTest < Wurk::Test::UnitCase
 
   def app = @app ||= Wurk::API::App.new(config: config)
 
+  # The allow-list names this instance's class, so every route below runs the
+  # same way a configured host's does. Boundary rules are pinned in
+  # api_validation_test.rb; here they only have to be out of the way.
   def config
     @config ||= Wurk::Configuration.new.tap do |cfg|
       cfg.api_token(ADMIN_TOKEN, scopes: %i[admin])
       cfg.api_token(ENQUEUE_TOKEN, scopes: %i[enqueue])
       cfg.api_token(READ_TOKEN, scopes: %i[read])
+      cfg.api_enqueue_classes = [@class_name]
     end
   end
 

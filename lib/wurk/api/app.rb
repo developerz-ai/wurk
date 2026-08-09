@@ -36,6 +36,9 @@ module Wurk
 
       def call(env)
         request = Request.new(env)
+        # Stamped once, before anything reads it, so every handler sees the
+        # same config the auth gate did — including a test's injected one.
+        request.config = config
         response = handle(request)
         # HEAD is routed as GET, so the handler built a body it must not send.
         request.head? ? [response[0], response[1], []] : response
@@ -58,6 +61,7 @@ module Wurk
       # unauthenticated prober can't enumerate which paths or versions exist
       # from the difference between a 404 and a 405.
       def handle(request)
+        config = request.config
         return not_found(request) unless Auth.configured?(config)
 
         principal = Auth.authenticate(request, config)

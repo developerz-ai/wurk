@@ -1,8 +1,9 @@
 # frozen_string_literal: true
 
-require 'json'
+require_relative 'idempotency'
 require_relative 'problem'
 require_relative 'response'
+require_relative 'validation'
 
 module Wurk
   module API
@@ -23,18 +24,11 @@ module Wurk
     # chain and pool at call time — exactly what a Ruby producer in this process
     # gets — and the canonical inspectors this plane shares Redis with
     # (ScheduledSet, RetrySet) read `Wurk.redis` unconditionally.
+    #
+    # What a stranger may send is {Validation}'s job, and whether a retry of it
+    # counts twice is {Idempotency}'s. This module owns only the three routes
+    # and the order those two run in.
     module Jobs
-      # Raised for a body this module rejects before Client ever sees it.
-      # Client's own ArgumentError covers everything past that point.
-      class Invalid < StandardError; end
-
-      # A jid reaches Redis as a ZSCAN glob (JobSet#find_job wraps it in `*`),
-      # so an unbounded or metacharacter-carrying jid off the network is a scan
-      # this API runs on the client's behalf. Sidekiq's own jids are
-      # `SecureRandom.hex(12)`; admit any URL-safe token of a sane length and
-      # refuse the rest at the door.
-      JID_FORMAT = /\A[A-Za-z0-9_-]{1,255}\z/
-
       module_function
 
       def draw(router)
@@ -51,19 +45,54 @@ module Wurk
       # the push — a `collapse:`/`unique_for:` drop is the producer's own policy
       # doing its job, not a failure to report as one.
       def create(request)
-        jid = ::Wurk::Client.new.push(object_body(request))
-        Response.json(jid ? 201 : 200, jid: jid)
-      rescue Invalid, ::ArgumentError => e
-        invalid_request(request, e.message)
+        produce(request) do |payload, config|
+          Validation.job!(payload, principal: request.principal, config: config)
+          jid = ::Wurk::Client.new.push(payload)
+          Response.json(jid ? 201 : 200, jid: jid)
+        end
       end
 
       # The `push_bulk` shape verbatim: one `class`, an array of arg arrays, and
       # optionally `at`/`spread_interval`/`batch_size`. Nil entries in `jids`
       # mark the jobs middleware halted, positionally.
       def create_bulk(request)
-        jids = ::Wurk::Client.new.push_bulk(object_body(request))
-        Response.json(jids.any? { |jid| !jid.nil? } ? 201 : 200, jids: jids)
-      rescue Invalid, ::ArgumentError => e
+        produce(request) do |payload, config|
+          Validation.bulk!(payload, principal: request.principal, config: config)
+          jids = ::Wurk::Client.new.push_bulk(payload)
+          Response.json(jids.any? { |jid| !jid.nil? } ? 201 : 200, jids: jids)
+        end
+      end
+
+      # The shape both produce routes share.
+      #
+      # The body cap runs first, because it is the only check that can be made
+      # without holding the request. The `Idempotency-Key` claim wraps
+      # everything after it — parsing, validation and the push alike. That
+      # looks like it burns a client's key on a malformed body and does not:
+      # the claim releases on any answer that isn't a success, so the
+      # correction can be sent under the same key. What it buys is that the key
+      # is claimed *before* the push, the only ordering in which two concurrent
+      # retries of a dropped connection can't both enqueue.
+      def produce(request)
+        config = request.config
+        raw = Validation.body!(request, config.api_max_body_bytes)
+        Idempotency.around(request, raw, config) { rejectable(request) { yield(Validation.object!(raw), config) } }
+      rescue Validation::Invalid => e
+        # Only the two checks above the claim reach here — the body cap, and
+        # the shape of the Idempotency-Key itself. Everything below is answered
+        # inside the claim, where the status it decides on is visible.
+        problem(request, e)
+      end
+
+      # Renders a refusal *inside* the claim, so what the claim weighs is a
+      # response with a status on it rather than an exception it could only
+      # release on. Client owns what a valid job hash is past the boundary; the
+      # route surfaces its verdict instead of duplicating it.
+      def rejectable(request)
+        yield
+      rescue Validation::Invalid => e
+        problem(request, e)
+      rescue ::ArgumentError => e
         invalid_request(request, e.message)
       end
 
@@ -72,13 +101,13 @@ module Wurk
       # has already died stays in `dead`, where deleting it is an operator
       # action against a different set.
       def destroy(request)
-        jid = request.path_params[:jid].to_s
-        return invalid_request(request, 'A jid is a URL-safe token of up to 255 characters.') unless valid_jid?(jid)
-
+        jid = Validation.jid!(request.path_params[:jid].to_s)
         set = cancellable_sets.find { |candidate| remove(candidate, jid) }
         return job_not_found(request, jid) unless set
 
         Response.json(200, jid: jid, set: set.name)
+      rescue Validation::Invalid => e
+        problem(request, e)
       end
 
       # `schedule` first: a job merely waiting for its time is the one a
@@ -97,21 +126,10 @@ module Wurk
         entry ? entry.delete : false
       end
 
-      def valid_jid?(jid) = JID_FORMAT.match?(jid)
-
-      # The body is the job hash with no envelope around it. Client owns what a
-      # valid one is; this only insists it is a JSON object at all, because
-      # everything downstream indexes it by key.
-      def object_body(request)
-        parsed = ::JSON.parse(request.body&.read.to_s)
-        raise Invalid, 'The request body must be a JSON object.' unless parsed.is_a?(::Hash)
-
-        parsed
-      rescue ::JSON::ParserError
-        # Deliberately not the parser's own message: it quotes the unparsed
-        # remainder of the document, so a large malformed body would come back
-        # as a large error.
-        raise Invalid, 'The request body is not valid JSON.'
+      # Validation decided which problem this is; rendering it is all that is
+      # left, so a new rejection never needs a new arm here.
+      def problem(request, error)
+        Problem.render(error.type, status: error.status, detail: error.message, instance: request.path, **error.extra)
       end
 
       def invalid_request(request, detail)

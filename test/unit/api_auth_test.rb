@@ -295,7 +295,7 @@ class ApiAuthTest < Wurk::Test::UnitCase
   # --- Principal -----------------------------------------------------------
 
   def test_a_principal_reports_only_what_it_was_granted
-    principal = Wurk::API::Auth::Principal.new(%i[read])
+    principal = Wurk::API::Auth::Principal.new('0123456789abcdef0123456789abcdef', %i[read])
 
     assert principal.permits?(:read)
     assert principal.permits?(Wurk::API::Auth::ANY)

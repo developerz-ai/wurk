@@ -71,7 +71,20 @@ module Wurk
       # never registers a token carries no new HTTP surface at all. Seeded here
       # rather than written on demand so the read side answers on a config that
       # `freeze!` has already closed.
-      api_tokens: {}
+      api_tokens: {},
+      # Boundary caps for the HTTP API's produce plane. A body larger than
+      # `api_max_body_bytes` is refused before it is parsed; a job whose args
+      # serialize larger than `api_max_args_bytes` before it is pushed — the
+      # second is the one that bounds what a bulk request lands in Redis, since
+      # one request becomes many payloads. `api_idempotency_ttl` is how long an
+      # `Idempotency-Key` is remembered: a replay window for a producer
+      # retrying a lost response, not an audit log.
+      api_max_body_bytes: 1_048_576,
+      api_max_args_bytes: 65_536,
+      api_idempotency_ttl: 3_600,
+      # Allow-list of classes the HTTP API may enqueue. nil (the default) means
+      # only an `admin` token may enqueue at all — see #api_enqueue_classes=.
+      api_enqueue_classes: nil
     }.freeze
 
     # :fork fires only inside swarm children, after fork + internal AR/Redis
@@ -471,6 +484,50 @@ module Wurk
     #   is conditional on this.
     def api_enabled? = !@options[:api_tokens].empty?
 
+    # @return [Integer] largest request body the produce plane will read.
+    def api_max_body_bytes = @options[:api_max_body_bytes]
+
+    def api_max_body_bytes=(bytes)
+      @options[:api_max_body_bytes] = api_limit!(:api_max_body_bytes, bytes)
+    end
+
+    # @return [Integer] largest `args` any single job may serialize to.
+    def api_max_args_bytes = @options[:api_max_args_bytes]
+
+    def api_max_args_bytes=(bytes)
+      @options[:api_max_args_bytes] = api_limit!(:api_max_args_bytes, bytes)
+    end
+
+    # @return [Integer] seconds an `Idempotency-Key` stays replayable.
+    def api_idempotency_ttl = @options[:api_idempotency_ttl]
+
+    def api_idempotency_ttl=(seconds)
+      @options[:api_idempotency_ttl] = api_limit!(:api_idempotency_ttl, seconds)
+    end
+
+    # @return [Array<String>, :any, nil] classes the HTTP API may enqueue.
+    def api_enqueue_classes = @options[:api_enqueue_classes]
+
+    # The allow-list `JobUtil::TRANSIENT_ATTRIBUTES` deliberately is not — that
+    # is a strip-list, right for a producer already running your code:
+    #
+    #   config.api_enqueue_classes = %w[Billing::Charge ReportJob]
+    #
+    # Unset, only an `admin` token may enqueue at all. `class` is a code
+    # selector — a producer token that can name any constant in the host is
+    # choosing which of its jobs to run — so an `enqueue`-scoped credential has
+    # to be told exactly what it is for. Once a list exists it binds every
+    # token, `admin` included: a host that writes one means it.
+    #
+    # `:any` turns the check off, which is what an enqueue-scoped relay that
+    # legitimately pushes arbitrary classes needs — the alternative is handing
+    # it `admin` and the destructive routes that come with it.
+    def api_enqueue_classes=(classes)
+      guard_frozen!
+      require_relative 'api/validation'
+      @options[:api_enqueue_classes] = Wurk::API::Validation.enqueueable_classes!(classes)
+    end
+
     # --- Web dashboard ----------------------------------------------------
 
     # Web UI configuration: the authorization hook and read-only mode. Returns
@@ -669,6 +726,17 @@ module Wurk
 
     def guard_frozen!
       raise FrozenError, 'Wurk::Configuration is frozen' if @frozen
+    end
+
+    # Boundary caps are refused where they are written, not where they are
+    # read: a cap that silently coerced to 0 is a cap that isn't one, and the
+    # request path is the wrong place to discover that.
+    def api_limit!(name, value)
+      guard_frozen!
+      size = Integer(value, exception: false)
+      raise ArgumentError, "#{name} must be a positive Integer" unless size&.positive?
+
+      size
     end
 
     def deep_dup_defaults

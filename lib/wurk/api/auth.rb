@@ -45,9 +45,22 @@ module Wurk
 
       REALM = 'Bearer realm="wurk"'
 
-      # What the request proved about itself: the scopes it was granted, and
-      # nothing that could identify the secret it presented.
-      Principal = Struct.new(:scopes) do
+      # Domain-separated so the label below is not a digest of the raw token —
+      # a value that leaked into a log would otherwise be a free head start on
+      # confirming a guessed token offline.
+      FINGERPRINT_DOMAIN = 'wurk.api.token.'
+
+      # 128 bits of the digest. Long enough that two credentials never share a
+      # label, short enough to read in a log line.
+      FINGERPRINT_LENGTH = 32
+
+      # What the request proved about itself: the scopes it was granted, and a
+      # stable label for the credential that granted them. `id` is a truncated
+      # domain-separated digest, never the token — enough to namespace
+      # per-credential state (an Idempotency-Key record belongs to the producer
+      # that chose it, not to whoever guesses the same string), and nothing a
+      # holder could work backwards from.
+      Principal = Struct.new(:id, :scopes) do
         def permits?(scope)
           scope == ANY || scopes.include?(scope) || scopes.include?(:admin)
         end
@@ -94,8 +107,8 @@ module Wurk
         presented = bearer(request.get_header('HTTP_AUTHORIZATION'))
         return nil unless presented
 
-        scopes = lookup(presented, config.api_tokens)
-        scopes && Principal.new(scopes)
+        token, scopes = lookup(presented, config.api_tokens)
+        scopes && Principal.new(fingerprint(token), scopes)
       end
 
       def bearer(header)
@@ -113,9 +126,13 @@ module Wurk
         digest = ::Digest::SHA256.digest(presented)
         found = nil
         tokens.each do |token, scopes|
-          found = scopes if OpenSSL.fixed_length_secure_compare(digest, ::Digest::SHA256.digest(token))
+          found = [token, scopes] if OpenSSL.fixed_length_secure_compare(digest, ::Digest::SHA256.digest(token))
         end
         found
+      end
+
+      def fingerprint(token)
+        ::Digest::SHA256.hexdigest("#{FINGERPRINT_DOMAIN}#{token}")[0, FINGERPRINT_LENGTH]
       end
 
       # RFC 6750 §3. The challenge names `invalid_token` only when the client
