@@ -349,3 +349,61 @@ documented in `lib/wurk/telemetry/server_middleware.rb:28-53`. Full terms in
 `lib/wurk/telemetry/server_middleware.rb`,
 `docs/plans/2026/08/07/101-beyond-sidekiq/00-semantics-signoff.md` §2,
 `test/parity/.sidekiq_sha`.
+
+## `Wurk::Status` adds `track` as a top-level job-JSON key, opt-in only
+
+**Wurk:** `sidekiq_options track: true` (or a raw push carrying `"track":
+true`) writes `track` as a top-level string/boolean key on the job hash
+(`JobUtil::TRACK_VALUES = [true, false, nil]`, validated at both DSL doors —
+worker `sidekiq_options` and ActiveJob — and at raw push,
+`lib/wurk/job_util.rb`). `Wurk::Middleware::Status` reads it to decide whether
+to open a `status:<jid>` HASH; a job that never opts in costs nothing extra on
+push or execute. `nil`/absent and `false` are both "off" — the key is falsy
+either way to `Wurk::Status.tracked?` (`lib/wurk/status.rb:43`).
+
+**Spec:** No `Sidekiq::Status` concept in `docs/target/sidekiq-free.md` —
+Sidekiq itself has no built-in progress/result tracking (the `sidekiq-status`
+gem adds this as a third-party feature, under its own `sidekiq:status:<jid>`
+Redis key, disjoint from Wurk's `status:<jid>`). No `Sidekiq::Status` alias is
+added for the same reason `Sidekiq::Cron` isn't (#204): `sidekiq-status`
+v4.0.0 reopens `Sidekiq::Status` itself and defines its own `.get`/`.delete`;
+aliasing would hand it `Wurk::Status` to clobber. The two coexist by
+construction (disjoint keys, no alias) rather than by an ecosystem suite,
+which currently can't exercise the gem — see
+[`docs/idea/14-ecosystem-compat.md`](14-ecosystem-compat.md).
+
+**Why:** an unrecognized top-level key is inert cargo to a real
+`Sidekiq::Processor#dispatch`, exactly the same reasoning as the OTel entry
+above — nothing in stock Sidekiq's dispatch path enumerates or validates the
+full job-hash key set, so a `track` key a stock consumer doesn't understand is
+simply never read, not a protocol violation.
+
+**Anchor:** `lib/wurk/job_util.rb` (`TRACK_VALUES`, `validate_track!`),
+`lib/wurk/status.rb`, `lib/wurk/middleware/status.rb`.
+
+## `timeout:`/`deadline:` add `timeout`, `deadline`, and `deadline_at` as top-level job-JSON keys, opt-in only
+
+**Wurk:** `sidekiq_options timeout: <seconds>` writes `timeout` verbatim.
+`sidekiq_options deadline: <seconds>` is resolved once at push into an
+absolute `deadline_at` epoch-float (`JobUtil#stamp_deadline`,
+`lib/wurk/job_util.rb:205-219`) — the *raw* `deadline` key is not itself kept
+on the wire past normalization; what a worker or a retry/resume reads back is
+`deadline_at`. Both are read only by `Wurk::Middleware::Timeout` (arms the
+per-process `Wurk::Watchdog`) and `Wurk::Middleware::Expiry` (the
+`deadline_at` preemption/skip path). A job that declares neither costs two
+Hash lookups and a `yield` — no watchdog thread spawns.
+
+**Spec:** No timeout/deadline concept in `docs/target/sidekiq-free.md` beyond
+Pro's `expires_in:` (→ `expiry`, already an existing top-level key, unrelated
+to this pair). Sidekiq itself ships no per-job wall-clock bound.
+
+**Why:** same "unrecognized top-level key is inert cargo, not a protocol
+violation" reasoning as the two entries above. `timeout`/`deadline_at` never
+touch `lib/wurk/encryption.rb`'s envelope (only `args.last` is enveloped), and
+retries/`IterableJob` resumes re-push the same job hash, so `deadline_at`
+naturally carries the same absolute cutoff across every attempt rather than
+resetting it.
+
+**Anchor:** `lib/wurk/job_util.rb:205-219`, `lib/wurk/middleware/timeout.rb`,
+`lib/wurk/middleware/expiry.rb`, `lib/wurk/job.rb` (`Job::TimedOut`,
+`Job::DeadlineExceeded`).

@@ -196,3 +196,14 @@ against wurk (wurk intentionally does not depend on — or install — the sidek
 gem; the consumer app shouldn't either, since wurk's native unique-jobs / cron /
 batches / limiter replace the common ecosystem gems). A `require "sidekiq"`
 compatibility shim is tracked, deliberately deferred, in #204.
+
+## Language, theme, and timezone
+
+Not security settings, but the other three per-visitor things a host can hint
+a default for: `config.web.offered_locales` / `default_locale`, and
+`config.web.default_theme` are read server-side and injected ahead of the
+shell's pre-paint script, so a visitor's first load already renders in the
+right language and palette instead of flashing the wrong one. Timezone has no
+server-side hint — it's resolved entirely client-side from the browser's own
+zone, or a visitor's own override. Full reference, including precedence order
+and every option: [Configuration → Dashboard configuration](configuration.md#dashboard-configuration).

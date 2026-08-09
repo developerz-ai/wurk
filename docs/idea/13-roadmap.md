@@ -8,7 +8,8 @@ Ship parity incrementally. Every milestone produces a usable gem.
 - Dummy Rails app under `test/dummy/` boots.
 - Minitest parallel runner configured.
 - Blacksmith CI workflow green on a smoke test.
-- VitePress docs site scaffolded and published to GitHub Pages.
+- Docs site (`docs/site/`, hand-written static HTML — not VitePress; a
+  VitePress build was never adopted) published to GitHub Pages.
 
 ## M1 — Core processor
 
@@ -44,6 +45,35 @@ Ship parity incrementally. Every milestone produces a usable gem.
 - Encryption (AES-256-GCM with key rotation).
 - Historical metrics (time-series).
 - Rolling restart logic on SIGUSR1.
+
+## M4.5 — Beyond Sidekiq (shipped)
+
+Features with no Sidekiq/Pro/Ent equivalent — extras other queue systems
+(BullMQ Pro, Oban Pro, pg-boss, River) have and Sidekiq doesn't. Full detail,
+decisions, and measurements: `docs/plans/2026/08/07/101-beyond-sidekiq/`.
+
+- Interrupted-`IterableJob` metrics fix — books `p`+`ms`, never `f` (#394).
+- Dashboard locale negotiation (server hint + client override) and Intl-based
+  date/time/duration formatting, incl. a timezone picker.
+- Dashboard light theme, three-state (`light`/`dark`/`system`), no
+  performance cost.
+- OpenTelemetry tracing (`Wurk::Telemetry`) — W3C `traceparent` propagation
+  from enqueue through execute, opt-in, zero cost when off.
+- Job status, progress, and results (`Wurk::Status`) — `track:` opt-in,
+  coalesced in-job writes, encryption-aware result withholding.
+- Machine-facing HTTP API (`Wurk::API`) — produce + observe planes, bearer
+  auth with scopes, idempotency keys, three mount modes, a reference Python
+  client.
+- Per-job `timeout:` and `deadline:`, backed by one monotonic watchdog thread
+  per process, never armed (so free) unless a job declares a bound.
+- Debounce (`collapse: { policy: :debounce }`) and throttle-to-slot
+  (`collapse: { policy: :throttle }`) — burst collapsing and rate ceilings at
+  enqueue time, atomic single-Lua-call implementations.
+- Global per-queue concurrency (`config.global_concurrency`) — a cluster-wide
+  cap enforced at fetch time, folded into the existing pipelined fetch so it
+  costs nothing when unset.
+- Flows (`Wurk::Flow`) — a DAG of batches with `depends_on:`, chained
+  results (`pipe:`), and an abandon kill switch.
 
 ## M5 — AI dashboard
 

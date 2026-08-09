@@ -46,6 +46,17 @@ Redis hashes (see
   keep resolving afterwards.
 - Writes are best-effort: a Redis failure during the metrics write is passed to
   your error handler and never changes the job's outcome.
+- An **interrupted** run — an `IterableJob` cut by `Wurk::Shutdown` or a
+  quiet/rolling restart mid-iteration — books `p` and `ms`, never `f`. It is
+  not a failure: the job is resumed from its saved cursor, not retried, so
+  counting it as one would misreport a clean interruption as broken code. A
+  run that is later resumed and completes books a second `p`/`ms` on top of
+  the first — one logical job spanning an interruption produces two
+  increments, matching upstream Sidekiq's own `ExecutionTracker#track`
+  behavior on the same `JobRetry::Skip` case. See
+  [`docs/idea/parity-divergences.md`](idea/parity-divergences.md#an-interrupted-iterablejob-run-books-p--ms-never-f-394-resolved-in-pr1)
+  for the full parity determination. The Statsd emitter (below) agrees:
+  `jobs.success` and the duration gauges, never `jobs.failure`.
 
 ### Write cadence and what a hard kill costs
 

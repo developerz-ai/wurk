@@ -164,6 +164,44 @@ end
   Values above 1,000,000,000 are rejected at enqueue time with an
   `ArgumentError`.
 
+### `timeout:` and `deadline:` — bounding how long a job may run
+
+Two Wurk extras (no Sidekiq equivalent) that guard wall-clock time, both
+backed by one monotonic watchdog thread per worker process — never armed, and
+so free, unless a job declares a bound:
+
+```ruby
+class SlowJob
+  include Wurk::Job
+
+  sidekiq_options timeout: 30    # seconds, per attempt
+  # sidekiq_options deadline: 300  # seconds, from enqueue — mutually independent
+end
+```
+
+| Option | Bounds | On expiry | Retries? |
+|---|---|---|---|
+| `timeout:` | One attempt | `Wurk::Job::TimedOut` raised into the running thread | **Yes** — ordinary failure path: booked as a failure, retried on the class's own `retry:` policy |
+| `deadline:` | The job as a whole, from enqueue | `Wurk::Job::DeadlineExceeded` raised (if already running) or the job dropped before `perform` starts (if the window already closed) | **No** — terminal `expired` state, same as `expires_in:` ([reliability.md](reliability.md)) |
+
+- **`timeout:`** is per attempt: a retried job that timed out gets the full
+  budget again on its next run. It is soft — `Thread#raise`, not
+  `Thread#kill` — so a `perform` that swallows `StandardError` swallows this
+  too, the same bargain stdlib `Timeout` and Celery's soft time limit make.
+- **`deadline:`** is resolved to an absolute cutoff once, at push, so retries
+  and `IterableJob` resumes all draw from the *same* budget rather than each
+  getting a fresh one. Past the cutoff the job never runs (or is cut mid-run)
+  and lands in the same `expired` terminal state `expires_in:` produces —
+  bumps `stat:expired` and `jobs.expired`, no retry, no dead-set entry.
+- Both bounds race `shutdown_timeout` — whichever is shorter wins. A `timeout`
+  under the drain budget fires first and the job retries normally; a `timeout`
+  over it never gets the chance, since graceful shutdown unwinds the job with
+  `Wurk::Shutdown` instead and the payload is reclaimed from the private list
+  on the next boot.
+- A worker can declare `timeout:`, `deadline:`, both, or neither — they answer
+  different questions ("how long may one attempt take" vs "how long may the
+  whole job take") and aren't mutually exclusive.
+
 ---
 
 ## Backoff

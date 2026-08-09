@@ -146,6 +146,18 @@ Verbatim from `Wurk::Configuration::DEFAULTS`.
 | `:logged_job_attributes` | Array\<String\> | `["bid", "tags"]` | Job hash keys copied into the log context |
 | `:redis_idle_timeout` | Integer / nil | `nil` | Accepted for drop-in compatibility; **not consumed by Wurk** |
 | `:redis_error_handlers` | Array | `[]` | Registered via `config.on_redis_error`; receives one Hash |
+| `:status_ttl` | Integer | `Keys::STATUS_TTL` | `status:<jid>` (`Wurk::Status`) row lifetime, re-stamped on every write |
+| `:status_retention` | Integer / nil | `nil` | Extra lifetime a `complete` status row gets past `status_ttl`; `nil` keeps the same clock as a running job, `0` matches Sidekiq's own behavior (nothing left behind) |
+| `:telemetry` | Boolean | `false` | Opts into OpenTelemetry spans (`Wurk::Telemetry`); also needs the `opentelemetry-api` gem installed |
+| `:api_tokens` | Hash | `{}` | Bearer tokens for the HTTP API (`Wurk::API`), as `token => [scopes]`. Empty means the API mount doesn't exist |
+| `:api_max_body_bytes` | Integer | `1_048_576` | Request body cap, refused before parsing |
+| `:api_max_args_bytes` | Integer | `65_536` | Per-job serialized-args cap on the produce plane |
+| `:api_idempotency_ttl` | Integer | `3_600` | Seconds an `Idempotency-Key` replay is remembered |
+| `:api_enqueue_classes` | Array\<String\> / nil | `nil` | Allow-list of classes the API may enqueue; `nil` means only an `admin`-scoped token may enqueue at all |
+| `:api_read_only` | Boolean / nil | `nil` | Three-state — `nil` inherits the dashboard's read-only setting (mount mode 1 only); `true`/`false` overrides it |
+| `:api_rate_limit` | Integer / nil | `nil` | Per-token request ceiling; `nil` is off |
+| `:api_rate_limit_interval` | Symbol | `:minute` | Window `api_rate_limit` is measured over |
+| `:global_concurrency` | Hash | `{}` | Cluster-wide per-queue cap (`Wurk::QueueSlot`), as `{ "critical" => 20 }`. Empty means no queue is capped |
 
 ### Additional keys read at runtime
 
@@ -211,6 +223,12 @@ Not in `DEFAULTS` — unset unless you assign them.
 | `config.super_fetch!` | Sidekiq Pro toggle; reliable fetch is already the default, so this is a no-op apart from capturing its optional recovery block |
 | `config.reliable_scheduler!` | **Not a no-op.** Swaps `:scheduled_enq` to the atomic promoter. The default poller pops then pushes and has a job-loss window — see [Reliability](reliability.md) |
 | `config.fetch_poll_interval` / `= seconds` | Empty-poll BLMOVE backoff |
+| `config.telemetry` / `= bool` | Opt into OpenTelemetry spans (`Wurk::Telemetry`); lazy-requires the module, warns if `opentelemetry-api` isn't installed |
+| `config.api_token(token, scopes:)` | Registers a bearer token for `Wurk::API` (`:enqueue`/`:read`/`:admin`); the first call brings the API mount into existence |
+| `config.api_enqueue_classes` / `= [...]` \| `:any` | Allow-list of classes the HTTP API may enqueue; unset means only an `admin` token may enqueue |
+| `config.api_read_only` / `= bool` \| `nil` | Freezes API writes; `nil` inherits the dashboard's read-only setting (mount mode 1 only) |
+| `config.api_rate_limit` / `= n` | Per-token request ceiling, enforced by a `Wurk::Limiter` window (see `api_rate_limit_interval`); `nil` is off |
+| `config.global_concurrency` / `= { "queue" => n }` | Cluster-wide per-queue cap (`Wurk::QueueSlot`), resolved once at boot; assign a new Hash to change it |
 | `config.freeze!` / `config.frozen?` | The launcher freezes options + capsules at boot |
 
 `config.freeze!` runs in `Launcher#run`, so every mutation must happen before
@@ -743,6 +761,40 @@ falls back to English for keys you don't translate — which is what makes
 serving a language wurk doesn't ship possible without a gem release.
 `offered_locales` is unrelated to `config.web.locales`, the locale-*directory*
 list third-party web extensions append to.
+
+### Theme
+
+Dark, light, or a visitor's own OS preference — resolved client-side, highest
+source first:
+
+1. The visitor's in-session toggle (doesn't survive a reload).
+2. Their own pick from `localStorage`, if they've ever chosen one.
+3. `config.web.default_theme` — the host's fallback for a visitor who never
+   picked, injected ahead of the shell's pre-paint script so it paints
+   correctly on the very first load instead of flashing the other palette.
+4. `system` — follows `prefers-color-scheme`, live: it flips if the OS does,
+   without a reload.
+
+```ruby
+Wurk.configure_server do |config|
+  config.web.default_theme = "dark" # "light" | "dark" | "system" (the built-in default)
+end
+```
+
+Dark is the palette on the bare `:root`; light is a full second palette, not a
+filter — see [`docs/benchmarks.md`](benchmarks.md) for none of this affects
+performance, it's pure CSS custom properties swapped by a `data-theme`
+attribute.
+
+### Timezone
+
+Client-side only — there is no `config.web.*` equivalent. Every visitor picks
+their own zone from the rail-footer timezone picker (backed by `Intl`, ~400
+IANA zones, UTC pinned first); the pick is stored in `localStorage` and used
+for every absolute timestamp the dashboard renders. Unset, the browser's own
+runtime zone is used. There is no server hint to configure because — unlike
+locale — there is no `Accept-*` header carrying a visitor's timezone for the
+engine to negotiate against on first paint.
 
 ---
 
