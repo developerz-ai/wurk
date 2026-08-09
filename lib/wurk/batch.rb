@@ -117,9 +117,18 @@ module Wurk
     # can drive the trim on isolated limits without mutating the process-global
     # `Wurk.configuration`.
     def self.trim_index(pipe, key, max: nil, timeout: nil)
+      score, rank = trim_bounds(max: max, timeout: timeout)
+      pipe.call('ZREMRANGEBYSCORE', key, '-inf', score)
+      pipe.call('ZREMRANGEBYRANK', key, 0, rank)
+    end
+
+    # The same two bounds as arguments, for a writer that cannot append to a
+    # pipeline: `Wurk::Flow`'s creation script has to trim from inside its own
+    # atomic write, and one policy read out of here beats a second copy of the
+    # cutoff arithmetic that drifts the day this one changes.
+    def self.trim_bounds(max: nil, timeout: nil)
       cutoff = ::Process.clock_gettime(::Process::CLOCK_REALTIME) - (timeout || DEFAULT_EXPIRY_SECONDS)
-      pipe.call('ZREMRANGEBYSCORE', key, '-inf', "(#{cutoff}")
-      pipe.call('ZREMRANGEBYRANK', key, 0, -(max || INDEX_MAX))
+      ["(#{cutoff}", -(max || INDEX_MAX)]
     end
 
     def initialize(bid = nil)

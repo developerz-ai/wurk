@@ -120,6 +120,15 @@ module Sidekiq
   Deploy           = Wurk::Deploy
   Embedded         = Wurk::Embedded
   Encryption       = Wurk::Encryption
+  # A Wurk extra, not parity — aliased because nothing else claims the name.
+  # Checked before adding it, the way `Sidekiq::Cron` (#204) and
+  # `Sidekiq::Status` taught us to: upstream Sidekiq defines no `Flow` anywhere
+  # in `lib/` at the pinned parity SHA, RubyGems has no `sidekiq-flow` or
+  # `sidekiq_flow` gem, and the only `Sidekiq::Flow` in public Ruby is a
+  # `FlowIdMiddleware` nested under a gem's *own* `Sidekiq` module, which this
+  # constant cannot reach.
+  Flow             = Wurk::Flow
+  FlowSet          = Wurk::FlowSet
   History          = Wurk::History
   IterableJob      = Wurk::IterableJob
   IterableJobQuery = Wurk::IterableJobQuery

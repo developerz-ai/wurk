@@ -23,6 +23,8 @@ const Dead = lazy(() => import('./pages/Dead'));
 const Busy = lazy(() => import('./pages/Busy'));
 const Batches = lazy(() => import('./pages/Batches'));
 const BatchDetail = lazy(() => import('./pages/BatchDetail'));
+const Flows = lazy(() => import('./pages/Flows'));
+const FlowDetail = lazy(() => import('./pages/FlowDetail'));
 const Limiters = lazy(() => import('./pages/Limiters'));
 const Cron = lazy(() => import('./pages/Cron'));
 const Metrics = lazy(() => import('./pages/Metrics'));
@@ -171,6 +173,8 @@ export default function App() {
       <Route path="/busy" component={Busy} />
       <Route path="/batches" component={Batches} />
       <Route path="/batches/:bid" component={BatchDetail} />
+      <Route path="/flows" component={Flows} />
+      <Route path="/flows/:fid" component={FlowDetail} />
       <Route path="/limiters" component={Limiters} />
       <Route path="/cron" component={Cron} />
       <Route path="/metrics" component={Metrics} />

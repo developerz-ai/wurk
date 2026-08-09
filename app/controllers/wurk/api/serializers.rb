@@ -139,6 +139,56 @@ module Wurk
         }
       end
 
+      # One row of the flow listing. Header fields only: {Wurk::Flow::Status}
+      # reads its node records lazily, and a page of 25 flows that each fetched
+      # a thousand of them would be 25,000 HMGETs to render a progress bar.
+      def flow_row(status)
+        {
+          fid: status.fid,
+          state: status.state,
+          total: status.total,
+          pending: status.pending,
+          succeeded: status.succeeded_count,
+          depth: status.depth,
+          width: status.width,
+          created_at: status.created_at,
+          finished_at: status.finished_at,
+          failed_at: status.failed_at,
+          abandoned_at: status.abandoned_at
+        }
+      end
+
+      # The graph. Nodes ride inside the same document rather than behind a
+      # second request: the SPA lays the DAG out from `depends_on`, and a
+      # header fetched separately from its edges can describe a different
+      # revision of the flow than the one being drawn.
+      def flow_detail(status)
+        flow_row(status).merge(
+          dead_nodes: status.dead_indexes,
+          nodes: status.nodes.map { |node| flow_node(node) }
+        )
+      end
+
+      # `error` carries a broken pipe's reason (slice 11 decision 2) — the one
+      # node state whose cause is not discoverable from the job itself, because
+      # no job ever ran.
+      def flow_node(node)
+        {
+          index: node.index,
+          name: node.name,
+          klass: node.klass,
+          queue: node.queue,
+          jid: node.jid,
+          bid: node.bid,
+          state: node.state,
+          depends_on: node.dependencies,
+          dependents: node.dependents,
+          remaining: node.remaining,
+          piped: node.piped?,
+          error: node.error
+        }
+      end
+
       def metric_row(klass, totals)
         { klass: klass, processed: totals[:p], failed: totals[:f], runtime_ms: totals[:ms] }
       end

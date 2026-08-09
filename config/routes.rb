@@ -45,6 +45,14 @@ Wurk::Engine.routes.draw do
     # middleware. Spec: docs/target/sidekiq-free.md §25.4 (POST /busy).
     post 'busy/quiet', to: 'api#quiet_process', as: :api_quiet_process
     post 'busy/stop',  to: 'api#stop_process',  as: :api_stop_process
+    # Flows (Wurk::Flow) read the way the batches below them do — a paged index
+    # plus one document per id — because a flow *is* the parent relation between
+    # batches. `abandon` is the kill switch (slice 11 decision 4): a non-GET, so
+    # read-only mode 403s it via the Authorization middleware, no guard needed
+    # here.
+    get  'flows',            to: 'api#flows'
+    get  'flows/:fid',       to: 'api#flow', as: :api_flow
+    post 'flows/:fid/abandon', to: 'api#abandon_flow', as: :api_abandon_flow
     get  'batches',          to: 'api#batches'
     get  'batches/:bid',     to: 'api#batch', as: :api_batch
     get  'limiters',         to: 'api#limiters'

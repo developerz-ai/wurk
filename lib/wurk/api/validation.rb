@@ -171,6 +171,12 @@ module Wurk
       # @return [String] the bid.
       def bid!(bid) = url_safe!(bid, 'batch id')
 
+      # A fid interpolates into `flow:<fid>` and, one segment further, into
+      # every node record under it — the same key-fragment exposure a bid has,
+      # so the same door.
+      # @return [String] the fid.
+      def fid!(fid) = url_safe!(fid, 'flow id')
+
       def url_safe!(value, label)
         return value if value.is_a?(::String) && JID_FORMAT.match?(value)
 

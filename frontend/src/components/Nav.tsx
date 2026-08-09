@@ -25,6 +25,7 @@ const LINKS = [
   { to: '/dead', label: t('nav.dead'), icon: 'fa-skull', end: false },
   { to: '/busy', label: t('nav.busy'), icon: 'fa-gears', end: false },
   { to: '/batches', label: t('nav.batches'), icon: 'fa-table-cells-large', end: false },
+  { to: '/flows', label: t('nav.flows'), icon: 'fa-diagram-project', end: false },
   { to: '/limiters', label: t('nav.limiters'), icon: 'fa-gauge', end: false },
   { to: '/cron', label: t('nav.cron'), icon: 'fa-stopwatch', end: false },
   { to: '/metrics', label: t('nav.metrics'), icon: 'fa-chart-line', end: false },

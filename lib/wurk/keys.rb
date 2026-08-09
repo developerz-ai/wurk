@@ -98,6 +98,22 @@ module Wurk
     # under two names that can never be mistaken for one another by a SCAN.
     QUEUE_SLOT_PREFIX = 'queue_slot:'
 
+    # Flows (Wurk::Flow): `flow:<fid>` HASH for the flow itself and
+    # `flow:<fid>:<node index>` HASH per node. A Wurk extra like `status:` —
+    # Sidekiq has no DAG, so nothing in its key schema (sidekiq-free.md §1)
+    # answers to this name, and no third-party gem claims the prefix.
+    #
+    # A node key is the flow key plus `:<index>`, which is unambiguous because
+    # a fid is URL-safe base64 and can never contain a colon. The node's *jobs*
+    # live where every other job does: its own batch's keys and its queue.
+    FLOW_PREFIX = 'flow:'
+
+    # ZSET of every flow, score = creation epoch — the counterpart of `batches`,
+    # and the only way a created flow is discoverable without its fid. Bounded
+    # by the same two-axis trim (`Batch.trim_bounds`), since flow keys carry the
+    # batch clock.
+    FLOWS_SET = 'flows'
+
     # `Idempotency-Key` replay records for the HTTP API: `idempotency:<digest>`
     # STRING holding the response the first request produced. A Wurk extra like
     # `status:` — nothing in the Sidekiq key schema lives here, and nothing
@@ -142,6 +158,30 @@ module Wurk
     # as .queue.
     def self.queue_slot(queue)
       "#{QUEUE_SLOT_PREFIX}#{queue}"
+    end
+
+    # The flow record for one fid. Same reason as .queue.
+    def self.flow(fid)
+      "#{FLOW_PREFIX}#{fid}"
+    end
+
+    # One node's record. Derived from the flow key rather than the prefix so
+    # the two can never disagree about where a flow lives.
+    def self.flow_node(fid, index)
+      "#{flow(fid)}:#{index}"
+    end
+
+    # The indexes of the nodes a flow is failed because of: the ones whose job
+    # is currently dead, plus the chain links that could not be built because
+    # the result they pipe was not there to pipe. A set beside the record
+    # rather than a field on it, exactly as `b-<bid>-died` sits beside a batch:
+    # a dead node leaves it when its job is retried to success, and an empty
+    # set is what makes the flow's `failed` state recoverable. A broken chain
+    # link never leaves, which is the truth about it — there is no job in the
+    # morgue to retry. It can never collide with .flow_node, whose last segment
+    # is always digits.
+    def self.flow_dead(fid)
+      "#{flow(fid)}:dead"
     end
   end
 end

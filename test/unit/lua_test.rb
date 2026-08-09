@@ -42,7 +42,8 @@ class LuaTest < Wurk::Test::UnitCase
          limiter_concurrent_acquire limiter_concurrent_release
          limiter_bucket_acquire limiter_window_acquire limiter_window_status limiter_leaky_acquire
          limiter_points_acquire limiter_points_refund
-         status_write debounce throttle_slot queue_slot fetch_slot refresh_slots].sort,
+         status_write debounce throttle_slot queue_slot fetch_slot refresh_slots
+         flow_create flow_advance flow_fail flow_abandon].sort,
       Wurk::Lua::SCRIPTS.keys.sort
     )
   end

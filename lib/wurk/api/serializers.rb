@@ -177,6 +177,40 @@ module Wurk
         }
       end
 
+      # One flow and its graph. `succeeded` is emitted alongside `pending`
+      # because a client rendering progress would otherwise have to know that
+      # the two are complements of `total` — a relation this contract should
+      # not require anyone to rediscover.
+      #
+      # `nodes` is empty for an abandoned flow: the kill switch releases the
+      # node records, and inventing rows for keys that are gone would report a
+      # graph nothing can still act on.
+      def flow(status)
+        {
+          fid: status.fid, state: status.state, terminal: status.terminal?,
+          total: status.total, pending: status.pending, succeeded: status.succeeded_count,
+          depth: status.depth, width: status.width,
+          created_at: status.created_at, finished_at: status.finished_at,
+          failed_at: status.failed_at, abandoned_at: status.abandoned_at,
+          dead_nodes: status.dead_indexes,
+          nodes: status.nodes.map { |node| flow_node(node) }
+        }
+      end
+
+      # `depends_on` and `dependents` are node indexes, which is what a node is
+      # addressed by: `name` is optional, and two nodes of the same class are
+      # otherwise indistinguishable. `error` is set only on a `broken` node —
+      # one whose piped input never arrived, so no job ran to leave a failure
+      # anywhere else.
+      def flow_node(node)
+        {
+          index: node.index, name: node.name, class: node.klass, queue: node.queue,
+          jid: node.jid, bid: node.bid, state: node.state,
+          depends_on: node.dependencies, dependents: node.dependents,
+          remaining: node.remaining, piped: node.piped?, error: node.error
+        }
+      end
+
       # `at` is the member's ZSET score in epoch seconds — when it is due to
       # retry, due to run, or when it died, depending on which set it came out
       # of. Emitted once: the score and the timestamp are the same number, and
