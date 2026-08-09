@@ -1,5 +1,6 @@
 # frozen_string_literal: true
 
+require_relative 'collapse'
 require_relative 'job_util'
 require_relative 'worker/setter'
 
@@ -113,16 +114,24 @@ module Wurk
       #   sidekiq_options track: true
       # @example Bound one attempt, and the job as a whole
       #   sidekiq_options timeout: 30, deadline: 5.minutes
+      # @example Collapse a burst of enqueues into one job
+      #   sidekiq_options collapse: { policy: :debounce, wait: 5, max_wait: 60 }
       # @param opts [Hash] any of `queue:`, `retry:`, `dead:`, `backtrace:`,
       #   `expires_in:`, `tags:`, `pool:`, `unique_for:`, `track:`, `timeout:`,
-      #   `deadline:`, … (see the migration guide's sidekiq_options table for
-      #   the full set)
+      #   `deadline:`, `collapse:`, … (see the migration guide's sidekiq_options
+      #   table for the full set)
       # @return [Hash] the merged, string-keyed options hash
       def sidekiq_options(opts = {})
         stringified = opts.transform_keys(&:to_s)
         Wurk::JobUtil.validate_track!(stringified['track'], stringified) if stringified.key?('track')
         Wurk::JobUtil.validate_bounds!(stringified)
-        @sidekiq_options_hash = get_sidekiq_options.merge(stringified)
+        merged = get_sidekiq_options.merge(stringified)
+        # On the merged options rather than the new ones, and before the assign:
+        # a subclass adding `collapse:` to a parent's `unique_for:` has declared
+        # both, and only the merge can see it. Raising first leaves the class
+        # holding the options it had.
+        Wurk::Collapse.policy_for(merged)
+        @sidekiq_options_hash = merged
       end
 
       # Sidekiq's public API name — wire-compat sacred. Must stay `get_sidekiq_options`.

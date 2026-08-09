@@ -87,9 +87,10 @@ module Wurk
       validate_bulk_shape!(items, args)
       return [] if args.empty?
 
+      base      = bulk_base(items)
+      reject_bulk_collapse!(base)
       at_values = expand_at(items, args.size)
       batch_sz  = items['batch_size'] || items[:batch_size] || (at_values ? SCHEDULED_BATCH_SIZE : DEFAULT_BATCH_SIZE)
-      base      = bulk_base(items)
       flush_bulk(args, at_values, base, batch_sz)
     end
 
@@ -197,6 +198,19 @@ module Wurk
       base = items.transform_keys(&:to_s)
       %w[args at spread_interval batch_size].each { |k| base.delete(k) }
       base
+    end
+
+    # Up front, before the first slice is written — a policy discovered halfway
+    # through would leave the slices already flushed in Redis. Two lookups and no
+    # allocation on the untouched path.
+    #
+    # `class_defaults_for` is the same resolution #normalize_item does per item,
+    # so this sees a policy in exactly the cases the middleware would: a bulk
+    # pushed by class *name* never merges class options at all, and so never
+    # carries one. Spelled out in {Wurk::Collapse.reject_bulk!}.
+    def reject_bulk_collapse!(base)
+      key = Wurk::Collapse::OPTION
+      Wurk::Collapse.reject_bulk!(base['class'], base[key] || class_defaults_for(base['class'])[key])
     end
 
     def flush_bulk(args, at_values, base, batch_size)
