@@ -6,7 +6,7 @@
 
 ## Why
 
-"At most 20 jobs from this queue running cluster-wide, whatever the worker count." Oban Pro's Smart Engine and BullMQ's global concurrency both sell this; Wurk's limiters can't express it — `Wurk::Limiter::Concurrent` is keyed per-lock, not per-queue, and gates *inside* the job (server middleware) rather than at fetch. Gating inside the job means the job is already claimed off the queue, so it either blocks a thread or reschedules — neither is a real cap.
+"At most 20 jobs from this queue running cluster-wide, whatever the worker count." A ceiling on steady-state concurrency, with one named exception: a rolling restart runs both generations for the length of one drain, so the cap can be briefly exceeded by the old child's in-flight count — bounded, deliberate, and settled in step 5 below. Oban Pro's Smart Engine and BullMQ's global concurrency both sell this; Wurk's limiters can't express it — `Wurk::Limiter::Concurrent` is keyed per-lock, not per-queue, and gates *inside* the job (server middleware) rather than at fetch. Gating inside the job means the job is already claimed off the queue, so it either blocks a thread or reschedules — neither is a real cap.
 
 ## Design constraints
 
@@ -34,6 +34,8 @@
 5. Interaction with rolling restart (`lib/wurk/swarm/restart.rb`): during a restart both the old and new slot hold capacity briefly. Decide whether that's tolerated (recommend yes, TTL bounded) and document it.
 6. Interaction with quiet/TSTP: a quiet process must release its slots, not sit on them while draining.
 
+> Steps 4–6 are settled in [`10-global-concurrency-lifecycle.md`](10-global-concurrency-lifecycle.md): the release anchored in `Processor#process`'s `ensure` and riding the ACK's pipeline, the refresh riding the heartbeat, rolling restart tolerated as bounded over-admission, and quiet holding only the slots its draining jobs are spending.
+
 ## Tests
 
 - Unit: cap N, N+1 concurrent claims → the extra waits; released slot admits the waiter.
@@ -51,3 +53,67 @@
 - Unconfigured path proven unchanged by command count **and** bench.
 - Capped queues don't starve other queues.
 - If any of the above can't be met: slice closed as **deferred**, with the measurements written up. That is an acceptable outcome.
+
+## Ship decision (2026-08-09)
+
+**Shipped, not deferred.** The gate this slice lives or dies by is the last two bullets
+above, and both are met, measured against `main` (`c8af524`) at head (`896803c`).
+
+`bench/command_count.rb` — unconfigured (no `global_concurrency` set), 500 noop jobs,
+`INFO commandstats` on an otherwise-idle Redis (the shared dev Redis container reads
+high because another local process's traffic pollutes server-wide commandstats; run
+against a dedicated container instead — see below):
+
+```text
+  commands  per job  command
+       500     1.00  lrem
+       500     1.00  lmove
+       500     1.00  del
+  --------  -------
+      1500     3.00  total
+
+✓ 3.00 commands/job, within the budget of 3.00 and at the recorded baseline of 3.00
+```
+
+Unchanged from the pre-slice baseline in `docs/benchmarks.md` — `Fetcher::Capped`'s
+boot-resolved `@capped` boolean means an unconfigured install runs the exact `Reliable`
+loop it ran before this slice existed, not that loop plus a per-fetch check.
+
+`rake bench` (the gate: `enqueue`, `fetch+execute`, `bulk_enqueue`, `memory`,
+`scheduled_poll`, `swarm_boot`; unconfigured), head vs `main`, `bin/bench-compare`:
+
+```text
+| benchmark                          | base (i/s) | head (i/s) |    Δ   |               |
+|-------------------------------------|-----------:|-----------:|-------:|---------------|
+| wurk enqueue                       |      4.20k |      4.02k |  -4.3% | slower, noise |
+| wurk fetch+execute                 |      3.22k |      3.32k |  +2.9% | 🟢            |
+| wurk hot-path (jobs/1k-alloc)      |          6 |          6 |  +0.0% | 🟢            |
+| wurk hot-path (retention-free/1k)  |      1.00k |      1.00k |  +0.0% | 🟢            |
+| wurk idle scheduler sweep          |      2.42k |      2.32k |  -4.4% | slower, noise |
+| wurk push_bulk(1000)               |         66 |         68 |  +4.1% | 🟢            |
+| wurk swarm boot                    |        115 |         88 | -23.6% | slower, noise |
+```
+
+No benchmark clears `bin/bench-compare`'s regression bar (combined ±noise + 5%);
+`swarm_boot`'s headline -23.6% carries ±47%/±25% error on the two sides, an order of
+magnitude wider than the delta — noise, not a regression. A second pairing against the
+same commits on the team's shared dev Redis (`wurk-dev-redis`, noisier host) showed the
+same picture (`fetch+execute` -4.3%, everything else flat or faster). Reproduce:
+`git checkout main && rake bench > base.txt; git checkout <branch> && rake bench > head.txt;
+bin/bench-compare base.txt head.txt`. Run against a Redis container this process alone
+holds — `INFO commandstats` and benchmark/ips throughput are both server-wide, and a
+shared dev Redis with another local process on it reads as noise or a phantom command,
+never as a false pass.
+
+Both halves of the gate hold, so the feature ships: slot model, fetch-path fold,
+lifecycle (release/refresh/quiet/restart), and real-fork integration proof are all in
+`main` as of this branch.
+
+The configured-cost side of the trade (a cap actually in use costs something, on
+purpose) is **not** measured. The gate this slice was allowed to ship on is the
+unconfigured floor above; what a capped queue costs is bounded by construction — the
+claim rides the fetch's own round trip, so the added cost is `fetch_slot.lua`'s commands
+rather than another trip — and unbenchmarked beyond that.
+[`10-global-concurrency-measurement.md`](10-global-concurrency-measurement.md) is the
+pre-implementation prototype and prices the *rejected* shape (acquire and release
+bracketing the fetch, 2.2x–2.6x); it is an upper bound, not this implementation's number.

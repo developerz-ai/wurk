@@ -91,6 +91,25 @@ Costs that used to dominate this table are gone:
 
 `noop` is pure framework overhead, so it is exactly where 3 commands per job against Sidekiq's 1 still costs — it is the shape that has to cross 1.0× before wurk stops being behind here at all.
 
+Global per-queue concurrency capping (`config.global_concurrency`,
+[`10-global-concurrency.md`](plans/2026/08/07/101-beyond-sidekiq/10-global-concurrency.md))
+shipped without moving this table. Unconfigured, `Wurk::Fetcher::Capped` resolves a
+boot-time boolean and falls straight through to the same `Reliable` loop counted above —
+still 3.00 commands/job, and `rake bench` unconfigured stayed within noise of `main`
+across the whole gate (enqueue, fetch+execute, bulk enqueue, swarm boot, memory) —
+see the slice doc's
+[ship decision](plans/2026/08/07/101-beyond-sidekiq/10-global-concurrency.md#ship-decision-2026-08-09)
+for those numbers.
+
+A queue that *is* capped pays for it, honestly, and that cost has not been benchmarked:
+`fetch_slot.lua` folds the gate into the fetch so a capped queue spends the same one
+round trip an uncapped one does, but its script runs `TIME`, `ZREMRANGEBYSCORE`, `ZCARD`
+and `ZADD` around the `LMOVE`, and nobody has put an i/s number on that.
+[`10-global-concurrency-measurement.md`](plans/2026/08/07/101-beyond-sidekiq/10-global-concurrency-measurement.md)
+is **not** that number — it is the pre-implementation prototype, which priced the
+bracketing shape (a bare acquire and release around the fetch, 2.2x–2.6x) that the real
+implementation exists to avoid. Read it as the upper bound it is.
+
 ## Running it
 
 ```bash

@@ -6,26 +6,30 @@ require 'wurk'
 require_relative 'support'
 
 # Step 1 of docs/plans/2026/08/07/101-beyond-sidekiq/10-global-concurrency.md:
-# "Measure first... so the cost is known, not argued." Slice 10 has not landed
-# — there is no `lib/wurk/fetcher/reliable.rb` gate, no config option, no
+# "Measure first... so the cost is known, not argued." Written before slice 10
+# landed — no `lib/wurk/fetcher/capped.rb` gate, no config option, no
 # `lib/wurk/lua/queue_slot.lua` — so this is NOT a preview of the real
-# integration. It is a standalone probe: the REAL fetch+execute path
-# (identical to bench/fetch_execute.rb) reported once uncapped and once
-# wrapped in a throwaway acquire/release Lua pair, EVAL'd directly rather than
-# registered in lib/wurk/lua.rb, to put a number on "one extra atomic Redis
-# round-trip either side of a fetch" before slice 10 argues about it in
-# review.
+# integration, and it was not re-pointed at one when the real gate shipped: the
+# shape it prices is the one that measurement rejected. It is a standalone
+# probe: the REAL fetch+execute path (identical to bench/fetch_execute.rb)
+# reported once uncapped and once wrapped in a throwaway acquire/release Lua
+# pair — SCRIPT LOADed at boot and called with EVALSHA, like every other script
+# here, but outside lib/wurk/lua.rb's registry — to put a number on "one extra
+# atomic Redis round-trip either side of a fetch" before slice 10 argued about
+# it in review.
 #
 # The slot script below is the cheapest correct-ish shape a cap COULD take — a
-# bare counter with a TTL safety net — not a claim about what slice 10 ships.
-# The plan's own constraint #3 (crash safety) wants a TTL'd holder key PER
-# SLOT, refreshed by the heartbeat, which is a different (likely pricier)
-# shape. Re-run this against that shape once it exists; don't trust this
-# number past "roughly what a single extra round trip costs here".
+# bare counter with a TTL safety net — and is not what slice 10 shipped. What
+# shipped is a TTL'd holder per slot (lib/wurk/lua/queue_slot.lua), refreshed by
+# the heartbeat, and the claim folded INTO the fetch rather than bracketing it
+# (lib/wurk/lua/fetch_slot.lua) — precisely because of the number below. So this
+# is an upper bound on the shipped cost and nothing more precise; don't read it
+# past "roughly what a single extra round trip costs here".
 #
-# Excluded from `rake bench` (Rakefile UNGATED_SCRIPTS) until slice 10 lands a
-# real gate and decides ship-vs-defer on real numbers — run explicitly via
-# `rake bench:fetch_capped`.
+# Excluded from `rake bench` (Rakefile UNGATED_SCRIPTS): it measures a shape
+# nothing in lib/ has, so there is nothing here to regress. Run it explicitly
+# via `rake bench:fetch_capped`. The unconfigured floor slice 10 IS gated on is
+# bench/command_count.rb (`rake bench:command_count_cap_off`).
 #
 # Runs on a dedicated Redis logical DB (default 8, unused by every other
 # bench/*.rb) so a stray dev/CI Redis with real data is never drained or

@@ -226,29 +226,26 @@ module Wurk
       nil
     end
 
+    # The protected frame opens before the payload is parsed, not after: parsing
+    # a malformed payload writes it to the morgue, which is a Redis round trip,
+    # and `Wurk::Shutdown` can land anywhere in it. Left outside, that raise
+    # would take the job's global-concurrency slot with it — the private-list
+    # entry is recovered by the reaper either way, but the slot would sit out
+    # its whole TTL, and on a low-capacity queue that is the cluster refusing
+    # work for a minute. Inside, every exit reaches the `ensure` below.
     def process(uow)
       jobstr = uow.job
       queue  = uow.queue_name
 
-      job_hash = parse_or_kill(jobstr, uow)
-      return if job_hash.nil?
-
-      # The fetcher never parses, so hand it the jid we just read: the ACK
-      # retires this job's poison-pill recovery counter inside the round trip
-      # it rides. A fetcher plugged in via `config[:fetch_class]` has no jid
-      # slot and simply ACKs — the counter then ages out on its 72h TTL.
-      uow.jid = job_hash['jid'] if uow.respond_to?(:jid=)
-
       ack = false
       begin
-        Thread.handle_interrupt(IGNORE_SHUTDOWN_INTERRUPTS) do
-          dispatch(job_hash, queue, jobstr) do |instance|
-            Thread.handle_interrupt(ALLOW_SHUTDOWN_INTERRUPTS) do
-              execute_job(instance, job_hash, queue)
-            end
-          end
-          ack = true
-        end
+        # A payload that would not parse is already in the morgue and has
+        # nothing left to run, but it is still ACKed from here rather than from
+        # #parse_or_kill: one cleanup path, so the slot is released exactly once
+        # on that exit as on every other.
+        job_hash = parse_or_kill(jobstr)
+        run_job(uow, job_hash, queue, jobstr) if job_hash
+        ack = true
       rescue Wurk::JobRetry::Handled
         # Handled / JobRetry::Skip (incl. Limiter::Rescheduled, where the
         # limiter middleware already re-enqueued the job) — the retry layer or
@@ -257,20 +254,67 @@ module Wurk
       rescue Wurk::Shutdown
         # Don't ack — UoW stays in private list and is reclaimed on reboot.
       ensure
-        uow.acknowledge if ack
+        # This frame is the one every exit path passes through, which is why a
+        # global-concurrency slot is given back from here and nowhere else: a
+        # clean return, a failure, a retry, `Handled`, the watchdog's async
+        # raise for a timeout or a deadline, the shutdown raise. A release added
+        # to any single arm above is a release the next arm forgets, and a
+        # forgotten one strands cluster-wide capacity for the whole slot TTL.
+        #
+        # One call on either branch, never a release on its own line after the
+        # ACK: an async raise can land inside this frame (SharedWorkState#track
+        # has the same hazard), and a second statement here is one that
+        # sometimes does not run. So the ACK carries the slot's ZREM in its own
+        # pipeline, and only the path that deliberately does not ACK — the
+        # shutdown, whose payload goes back to the queue for someone else to run
+        # — releases by itself.
+        if ack
+          uow.acknowledge
+        elsif uow.respond_to?(:release_slot)
+          release_slot(uow)
+        end
       end
+    end
+
+    # The dispatch half of #process, split out so the frame above stays one
+    # readable begin/rescue/ensure. Shutdown is deferred for the whole onion and
+    # allowed only around the perform itself, which is what lets a job finish
+    # its middleware unwind before the raise lands.
+    def run_job(uow, job_hash, queue, jobstr)
+      # The fetcher never parses, so hand it the jid we just read: the ACK
+      # retires this job's poison-pill recovery counter inside the round trip
+      # it rides. A fetcher plugged in via `config[:fetch_class]` has no jid
+      # slot and simply ACKs — the counter then ages out on its 72h TTL.
+      uow.jid = job_hash['jid'] if uow.respond_to?(:jid=)
+
+      Thread.handle_interrupt(IGNORE_SHUTDOWN_INTERRUPTS) do
+        dispatch(job_hash, queue, jobstr) do |instance|
+          Thread.handle_interrupt(ALLOW_SHUTDOWN_INTERRUPTS) do
+            execute_job(instance, job_hash, queue)
+          end
+        end
+      end
+    end
+
+    # Reported, never raised: this runs inside #process's ensure on the shutdown
+    # path, where a raise would replace the Wurk::Shutdown that got us here and
+    # skip the rest of the unwind. The hold ages out on its TTL regardless.
+    def release_slot(uow)
+      uow.release_slot
+    rescue StandardError => e
+      handle_exception(e, { context: 'Error releasing a queue slot' })
     end
 
     # Parse JSON; on failure send the raw payload to the dead set (ZADD +
     # trim, via the shared DeadSet#kill_raw so the malformed path caps the
-    # morgue exactly like send_to_morgue does — spec §31.8/§31.9) and ack.
-    # Returns nil to signal "no further processing".
-    def parse_or_kill(jobstr, uow)
+    # morgue exactly like send_to_morgue does — spec §31.8/§31.9).
+    # Returns nil to signal "no further processing" — the ACK that retires the
+    # payload belongs to #process's ensure, which is the one cleanup path.
+    def parse_or_kill(jobstr)
       Wurk.load_json(jobstr)
     rescue ::JSON::ParserError => e
       handle_exception(e, { context: 'Invalid JSON', jobstr: jobstr })
       DeadSet.new.kill_raw(jobstr)
-      uow.acknowledge
       nil
     end
 
