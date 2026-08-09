@@ -152,6 +152,12 @@ module Wurk
 
     def initialize(options = {})
       @options = deep_dup_defaults.merge(options)
+      # Through the same door `global_concurrency=` uses, so a cap passed to
+      # `Configuration.new` is validated rather than trusted, and the default
+      # Hash arrives frozen: the fetch path resolves caps once at boot, so a
+      # Hash still mutable here is one a caller can add a queue to and have
+      # nothing read it. FrozenError is the honest answer to that.
+      @options[:global_concurrency] = normalize_global_concurrency(@options[:global_concurrency])
       @options[:error_handlers] << ERROR_HANDLER if @options[:error_handlers].empty?
       @capsules = {}
       @directory = {}
@@ -608,7 +614,8 @@ module Wurk
     # --- Global per-queue concurrency (Wurk::QueueSlot) -------------------
 
     # @return [Hash{String => Integer}] queue name → cluster-wide ceiling.
-    #   Frozen once assigned; see #global_concurrency=.
+    #   Always frozen — the default included, normalized in #initialize; see
+    #   #global_concurrency=.
     def global_concurrency = @options[:global_concurrency]
 
     # Caps how many jobs from a queue may run at once across the whole

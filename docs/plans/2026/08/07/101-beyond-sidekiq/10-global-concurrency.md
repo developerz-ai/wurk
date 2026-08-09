@@ -6,7 +6,7 @@
 
 ## Why
 
-"At most 20 jobs from this queue running cluster-wide, whatever the worker count." Oban Pro's Smart Engine and BullMQ's global concurrency both sell this; Wurk's limiters can't express it — `Wurk::Limiter::Concurrent` is keyed per-lock, not per-queue, and gates *inside* the job (server middleware) rather than at fetch. Gating inside the job means the job is already claimed off the queue, so it either blocks a thread or reschedules — neither is a real cap.
+"At most 20 jobs from this queue running cluster-wide, whatever the worker count." A ceiling on steady-state concurrency, with one named exception: a rolling restart runs both generations for the length of one drain, so the cap can be briefly exceeded by the old child's in-flight count — bounded, deliberate, and settled in step 5 below. Oban Pro's Smart Engine and BullMQ's global concurrency both sell this; Wurk's limiters can't express it — `Wurk::Limiter::Concurrent` is keyed per-lock, not per-queue, and gates *inside* the job (server middleware) rather than at fetch. Gating inside the job means the job is already claimed off the queue, so it either blocks a thread or reschedules — neither is a real cap.
 
 ## Design constraints
 
@@ -107,6 +107,13 @@ never as a false pass.
 
 Both halves of the gate hold, so the feature ships: slot model, fetch-path fold,
 lifecycle (release/refresh/quiet/restart), and real-fork integration proof are all in
-`main` as of this branch. The configured-cost side of the trade (a cap actually in use
-costs something, on purpose) is measured separately in
-[`10-global-concurrency-measurement.md`](10-global-concurrency-measurement.md).
+`main` as of this branch.
+
+The configured-cost side of the trade (a cap actually in use costs something, on
+purpose) is **not** measured. The gate this slice was allowed to ship on is the
+unconfigured floor above; what a capped queue costs is bounded by construction — the
+claim rides the fetch's own round trip, so the added cost is `fetch_slot.lua`'s commands
+rather than another trip — and unbenchmarked beyond that.
+[`10-global-concurrency-measurement.md`](10-global-concurrency-measurement.md) is the
+pre-implementation prototype and prices the *rejected* shape (acquire and release
+bracketing the fetch, 2.2x–2.6x); it is an upper bound, not this implementation's number.

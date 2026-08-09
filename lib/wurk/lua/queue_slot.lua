@@ -4,7 +4,7 @@
 -- One ZSET per capped queue holding the holders themselves, not a count of
 -- them:
 --
---   queue_slot:<queue>   ZSET   member = <identity>:<tid>
+--   queue_slot:<queue>   ZSET   member = <identity>:<tid>[:<claim>]
 --                               score  = the epoch that hold expires unless
 --                                        its holder refreshes it
 --
@@ -35,7 +35,9 @@
 --
 -- KEYS[1] = queue_slot:<queue>
 -- ARGV[1] = capacity
--- ARGV[2] = holder token, `<identity>:<tid>`
+-- ARGV[2] = holder token, `<identity>:<tid>` for a release paired on the same
+--           thread, `<identity>:<tid>:<claim>` when it is deferred past the
+--           next claim (Wurk::QueueSlot.claim_token)
 -- ARGV[3] = seconds this hold survives without a refresh
 -- Returns 1 when the caller holds a slot, 0 when the queue is at capacity.
 local key = KEYS[1]

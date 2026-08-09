@@ -52,7 +52,7 @@ class QueueSlotLifecycleTest < Wurk::Test::UnitCase
 
   def teardown
     @capsule.watchdog&.terminate
-    Wurk::QueueSlot::HELD.drop(Wurk::QueueSlot.token, @slot_key)
+    drop_local_holds
     @pool.with do |conn|
       conn.call('DEL', @public_queue, private_queue, @slot_key, @identity, "#{@identity}:work")
       conn.call('SREM', Wurk::Keys::PROCESSES, @identity)
@@ -73,7 +73,8 @@ class QueueSlotLifecycleTest < Wurk::Test::UnitCase
 
     drive_one
 
-    assert_equal [[Wurk::QueueSlot.token]], worker.sink, 'the job ran while holding the slot its fetch took'
+    assert_equal 1, worker.sink.first.size, 'the job ran while holding the slot its fetch took'
+    assert_match this_threads_claim, worker.sink.first.first
     assert_empty holders
     assert_equal 0, llen(private_queue), 'a finished job is still acked'
   end
@@ -138,11 +139,16 @@ class QueueSlotLifecycleTest < Wurk::Test::UnitCase
 
     assert_equal [['redis is gone', 'Error releasing a queue slot']], reported
   ensure
-    @capsule.singleton_class.remove_method(:redis) if @capsule.singleton_class.method_defined?(:redis)
+    # Only the override this test installed. `method_defined?` walks ancestors
+    # and Wurk::Capsule defines `redis` itself, so asking it would answer true
+    # even when the worker body never ran — and `remove_method` would then raise
+    # a NameError over whatever assertion actually failed.
+    @capsule.singleton_class.remove_method(:redis) if @capsule.singleton_class.method_defined?(:redis, false)
   end
 
-  # parse_or_kill ACKs and returns before #process's begin/ensure is ever
-  # entered — the release rides that ACK rather than needing an arm of its own.
+  # A malformed payload is killed and then acked from the same `ensure` every
+  # other exit uses, so the release rides that ACK rather than needing an arm of
+  # its own.
   def test_a_malformed_payload_gives_the_slot_back_with_its_ack
     push_raw("not json #{@queue_name}")
 
@@ -151,6 +157,21 @@ class QueueSlotLifecycleTest < Wurk::Test::UnitCase
     assert_empty holders
     assert_equal 0, llen(private_queue)
     assert_equal 1, dead_set_size, 'the malformed payload still reached the morgue'
+  end
+
+  # The window the parse used to sit outside of: `Wurk::Shutdown` can land while
+  # a malformed payload is being written to the morgue. The payload is recovered
+  # from the private list either way, but a slot left behind here would sit out
+  # its whole TTL — on a low-capacity queue, a minute of the cluster refusing
+  # work for a job nobody is running.
+  def test_a_shutdown_during_the_parse_still_gives_the_slot_back
+    enqueue(worker_that { nil })
+    @processor.define_singleton_method(:parse_or_kill) { |_jobstr| raise Wurk::Shutdown }
+
+    @processor.process_one
+
+    assert_empty holders
+    assert_equal 1, llen(private_queue), 'the payload is left for the reaper, unacked'
   end
 
   # --- what the release costs ------------------------------------------
@@ -163,8 +184,8 @@ class QueueSlotLifecycleTest < Wurk::Test::UnitCase
 
     @processor.process_one
 
-    assert_equal [Wurk::QueueSlot.token], holders,
-                 'the hold is still in Redis until the ACK carrying its ZREM goes out'
+    assert_equal 1, holders.size, 'the hold is still in Redis until the ACK carrying its ZREM goes out'
+    assert_match this_threads_claim, holders.first
 
     @capsule.fetcher.flush_pending_acks
 
@@ -195,11 +216,30 @@ class QueueSlotLifecycleTest < Wurk::Test::UnitCase
     @processor.process_one
     close_gate!
 
-    assert_equal [Wurk::QueueSlot.token], holders
+    assert_equal 1, holders.size
 
     @capsule.fetcher.retrieve_work
 
     assert_empty holders, 'the parked thread flushed its release before blocking'
+  end
+
+  # The window a failed flush opens: #restore_pending_acks hands a finished
+  # job's ACK back to its thread, which by then may be running the next job
+  # under a fresh hold on the same queue. A holder token names one *claim*, so
+  # that stale release names a member that is already gone — it cannot take the
+  # running job's capacity and leave the cluster free to admit one over the cap.
+  def test_a_stale_ack_cannot_release_the_hold_of_the_claim_that_replaced_it
+    rebuild_fetcher_with_capacity(2)
+    enqueue(worker_that { nil })
+    enqueue(worker_that { nil })
+    stale = @capsule.fetcher.retrieve_work
+    live  = @capsule.fetcher.retrieve_work
+
+    refute_equal stale.slot_token, live.slot_token, 'each claim names itself, not its thread'
+
+    @pool.with { |conn| conn.pipelined { |pipe| stale.write_ack(pipe) } }
+
+    assert_equal [live.slot_token], holders, "the running job's capacity is still its own"
   end
 
   # --- quiet ------------------------------------------------------------
@@ -211,7 +251,7 @@ class QueueSlotLifecycleTest < Wurk::Test::UnitCase
     enqueue(worker)
     @processor.process_one
 
-    assert_equal [Wurk::QueueSlot.token], holders
+    assert_equal 1, holders.size
 
     @capsule.fetcher.terminate
 
@@ -233,21 +273,20 @@ class QueueSlotLifecycleTest < Wurk::Test::UnitCase
 
   def test_a_capped_claim_registers_the_hold_the_beat_refreshes
     enqueue(worker_that { nil })
-    @capsule.fetcher.retrieve_work
+    uow = @capsule.fetcher.retrieve_work
 
-    assert_equal @slot_key, Wurk::QueueSlot::HELD.snapshot[Wurk::QueueSlot.token]
+    assert_equal @slot_key, Wurk::QueueSlot::HELD.snapshot[uow.slot_token]
   end
 
   def test_a_release_takes_the_hold_off_the_ledger
     enqueue(worker_that { nil })
     drive_one
 
-    assert_nil Wurk::QueueSlot::HELD.snapshot[Wurk::QueueSlot.token]
+    refute_includes Wurk::QueueSlot::HELD.snapshot.values, @slot_key
   end
 
-  # A release can arrive after the same thread has claimed a slot on another
-  # queue — a flush that failed and was retried. Dropping by token alone would
-  # then stop refreshing the hold that is actually live.
+  # Belt and braces: the drop names the slot key as well as the token, so no
+  # late release can take a live hold off the ledger the beat refreshes from.
   def test_the_ledger_drops_only_the_hold_it_names
     ledger = Wurk::QueueSlot::Held.new
     ledger.hold('t1', 'queue_slot:a')
@@ -331,6 +370,22 @@ class QueueSlotLifecycleTest < Wurk::Test::UnitCase
 
   def holders
     @pool.with { |conn| conn.call('ZRANGE', @slot_key, 0, -1) }
+  end
+
+  # A capped fetch's member names one claim, `<thread token>:<n>`; the counter
+  # belongs to QueueSlot and is deliberately not a fact a caller can rebuild.
+  def this_threads_claim = /\A#{Regexp.escape(Wurk::QueueSlot.token)}:\d+\z/
+
+  # This test's holds, off the process-wide ledger. Left behind, they would have
+  # every later beat in this worker refreshing a slot key that is long gone.
+  def drop_local_holds
+    Wurk::QueueSlot::HELD.snapshot.each { |token, key| Wurk::QueueSlot::HELD.drop(token, key) if key == @slot_key }
+  end
+
+  # Two concurrent claims need a queue that admits two.
+  def rebuild_fetcher_with_capacity(capacity)
+    @config.global_concurrency = { @queue_name => capacity }
+    @capsule.fetcher = Wurk::Fetcher::Reliable.new(@capsule)
   end
 
   def hold_expiry

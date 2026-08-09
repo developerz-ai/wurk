@@ -116,10 +116,17 @@ module Wurk
       # Claims the same apply-safety #lmove does, for the same reason: a claim
       # whose reply was lost leaves the job in *this* process's private list
       # un-ACKed, which the next boot's Reaper already reclaims, and the script's
-      # own replay arm refreshes this token's hold rather than counting it twice.
+      # own replay arm refreshes this token's hold rather than counting it twice
+      # — the token is built here, before the retried block, so a replay carries
+      # the same one.
+      #
+      # A token per claim rather than per thread, because the matching release
+      # is deferred: an ACK handed back by a failed flush must not be able to
+      # take the hold of whatever this thread is running by then. See
+      # QueueSlot.claim_token.
       def claim(public_q, keys, gate, ack, now)
         priv, name = keys
-        token = QueueSlot.token
+        token = QueueSlot.claim_token
         script_keys = [gate.slot_key, public_q, priv]
         status, payload = config.redis(idempotent: true) do |conn|
           fetch_slot(conn, script_keys, gate.capacity, token, ack)

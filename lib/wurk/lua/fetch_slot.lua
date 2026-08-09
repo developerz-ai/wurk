@@ -23,7 +23,7 @@
 -- KEYS[2] = queue:<name>                           public queue
 -- KEYS[3] = queue:<name>|<host>|<pid>|<nonce>|<i>  this process's private list
 -- ARGV[1] = capacity, the cluster-wide ceiling for this queue
--- ARGV[2] = holder token, `<identity>:<tid>`
+-- ARGV[2] = holder token for this claim, `<identity>:<tid>:<n>`
 -- ARGV[3] = seconds this hold survives without a refresh
 --
 -- Returns {0}          the cluster is at capacity; nothing was moved
@@ -53,10 +53,16 @@ redis.call('ZREMRANGEBYSCORE', slots, '-inf', now_s)
 
 -- Refuse before touching either list, so a queue at capacity costs one round
 -- trip and moves nothing. ZSCORE is only spent on the full path: the caller may
--- already be one of the holders — a claim whose reply was lost is retried on the
--- pool's idempotent path, and a thread that has not yet released the slot its
--- last job ran under is asking for the one it is standing in. Both have to
--- converge on "you hold it" rather than be refused against their own member.
+-- already be this member — a claim whose reply was lost is retried on the pool's
+-- idempotent path with the same token, and has to converge on "you hold it"
+-- rather than be refused against its own member, which would leave a slot held
+-- by a caller that believes it owns nothing until the TTL took it.
+--
+-- Only that. A token names one claim, not one thread (QueueSlot.claim_token), so
+-- a thread whose previous job's release has not landed yet is a different member
+-- here and is refused like anybody else while the queue is full. That is the
+-- cap doing its job: the ledger says N jobs' worth of capacity is spoken for,
+-- and it is right until the release lands.
 if redis.call('ZCARD', slots) >= capacity and not redis.call('ZSCORE', slots, token) then
   return { 0 }
 end
@@ -71,7 +77,7 @@ if not job then
 end
 
 -- Last, and only now that the job is ours: the ZADD both takes a free slot and
--- refreshes one this token already held, so a claim can never count itself
--- twice.
+-- refreshes one this token already held, so a replayed claim can never count
+-- itself twice.
 redis.call('ZADD', slots, expires, token)
 return { 2, job }

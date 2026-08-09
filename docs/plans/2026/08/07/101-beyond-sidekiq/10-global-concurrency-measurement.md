@@ -6,17 +6,28 @@
 
 ## What this is not
 
+> **Historical.** This is the pre-implementation prototype, written before any
+> of slice 10 existed and kept for the design constraint it settles. It is not
+> a measurement of the shipped gate — see [What this settles vs. what it
+> doesn't](#what-this-settles-vs-what-it-doesnt), and the slice doc's
+> [Ship decision](10-global-concurrency.md#ship-decision-2026-08-09) for the
+> numbers the shipped feature was gated on.
+
 `bench/fetch_capped.rb` (landed in #397, the foundations PR) is a **standalone
 probe**, not a preview of the real feature. Slice 10 has not landed: no
 fetcher gate, no config option, no `lib/wurk/lua/queue_slot.lua`. The probe
 wraps the real `Wurk::Processor#process_one` path in a throwaway
-acquire/release Lua pair, EVAL'd directly rather than folded into
-`Fetcher::Reliable#lmove`'s existing pipeline (`lib/wurk/fetcher/reliable.rb:449-453`,
-which already does the ack's `LREM`+`DEL` and the `LMOVE` in **one** pipelined
-round trip). That's deliberate: it prices "two bare extra round trips around a
-fetch" so design constraint #2 in the plan ("must join that pipeline or that
+acquire/release Lua pair — `SCRIPT LOAD`ed once at boot and called with
+`EVALSHA` per fetch, the same script-cache behavior the implementation uses,
+but registered nowhere near `lib/wurk/lua.rb` and, crucially, *bracketing*
+`Fetcher::Reliable#lmove`'s existing pipeline
+(`lib/wurk/fetcher/reliable.rb:449-453`, which already does the ack's
+`LREM`+`DEL` and the `LMOVE` in **one** pipelined round trip) rather than
+folded into it. That's deliberate: it prices "two bare extra round trips around
+a fetch" so design constraint #2 in the plan ("must join that pipeline or that
 Lua, not add a round-trip") has a number to justify itself against, not an
-assertion.
+assertion. The cost being measured is the round trips, not the dispatch — both
+sides are `EVALSHA`.
 
 ## Harness
 
@@ -77,7 +88,17 @@ met.
 - Does not settle: ship vs. defer. That call, per the plan's "Done when",
   needs the real slot model (step 2), fairness under contention (step 3), and
   the actual `rake bench` / `command_count` deltas once a real gate exists —
-  not this prototype's numbers.
+  not this prototype's numbers. It was made on those, in
+  [Ship decision](10-global-concurrency.md#ship-decision-2026-08-09).
+- Does not settle: what the *shipped* configured cap costs. `fetch_slot.lua`
+  folds the gate into the fetch, so a capped queue spends the same one round
+  trip an uncapped one does (pinned by
+  `test/unit/fetcher_capped_test.rb#test_the_held_ack_rides_the_gated_fetch_in_one_round_trip`)
+  and the added cost is the script's own commands, not another trip. This
+  prototype prices the shape that measurement rejected, so its 2.2x-2.6x is an
+  upper bound on the shipped one and nothing more precise. Nobody has run a
+  benchmark against a configured cap on the real gate; when someone does, it
+  belongs here, next to these numbers.
 - Unconfigured-queue cost is unaffected either way: `command_count.rb` still
   reports 3.00, unchanged by this probe (the probe never touches the real
   fetcher).

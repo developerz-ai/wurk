@@ -27,7 +27,7 @@ module Wurk
   #
   # So the ledger holds the *holders*, one ZSET member each:
   #
-  #   queue_slot:<queue>   ZSET   member = <identity>:<tid>
+  #   queue_slot:<queue>   ZSET   member = <identity>:<tid>[:<claim>]
   #                               score  = epoch the hold expires unless
   #                                        its holder refreshes it
   #
@@ -39,12 +39,15 @@ module Wurk
   #
   # ## What a hold is
   #
-  # One member per *thread*, because a processor thread runs one job at a time:
-  # `<identity>:<tid>` is unique across the cluster and stable for that thread,
-  # which is also what makes a replayed acquire converge (it finds its own
-  # member rather than counting itself twice). Nothing about the job is stored
-  # — a slot is capacity, not a claim on a payload, and the payload's own
-  # reliability is the private list's job.
+  # One member per *claim*. `<identity>:<tid>` is unique across the cluster and
+  # stable for one thread, and a processor thread runs one job at a time — but
+  # the fetch path's release is deferred, so a claim needs an identity a stale
+  # release cannot be mistaken for. {claim_token} appends a per-thread counter
+  # for exactly that; a paired acquire/release that never leaves the thread can
+  # use {token} itself. Either way a replayed claim finds its own member rather
+  # than counting itself twice. Nothing about the job is stored — a slot is
+  # capacity, not a claim on a payload, and the payload's own reliability is
+  # the private list's job.
   #
   # ## How a hold ends
   #
@@ -87,10 +90,12 @@ module Wurk
     # A process-wide singleton rather than fetcher state, for the reason
     # `Processor::WORK_STATE` is one: the reader is the Heartbeat, which lives a
     # layer above the capsules and would otherwise have to walk them looking for
-    # fetchers that may not exist. Keyed by holder token, which is one per
-    # processor thread and so already the identity of "the thread holding this",
-    # and a thread runs one job at a time — so the map holds at most one entry
-    # per busy thread and is empty for every install that caps nothing.
+    # fetchers that may not exist. Keyed by holder token, which names one claim
+    # ({claim_token}) — a thread runs one job at a time, so the map holds one
+    # entry per busy thread and is empty for every install that caps nothing.
+    # The exception is the window a failed ACK flush opens: a thread whose
+    # finished job's release has not landed yet appears twice until it does,
+    # which keeps that hold alive rather than letting it be reused early.
     #
     # Nothing here is authoritative: Redis is. The ledger only decides what gets
     # refreshed, so an entry lost to a crash costs a hold its TTL, never
@@ -105,10 +110,9 @@ module Wurk
         @lock.synchronize { @held[token] = slot_key }
       end
 
-      # Drops the named hold and only the named hold. A release can arrive after
-      # the same thread has claimed a slot on a different queue (a flush that
-      # failed and was retried), and dropping by token alone would stop
-      # refreshing the hold that is actually live.
+      # Drops the named hold and only the named hold — the slot key is checked
+      # as well as the token, so a release that arrives late can never stop the
+      # heartbeat refreshing a hold that is actually live.
       def drop(token, slot_key)
         @lock.synchronize { @held.delete(token) if @held[token] == slot_key }
       end
@@ -138,6 +142,9 @@ module Wurk
       # and the tid have moved, and a child reusing the parent's token would
       # share the parent's slot instead of taking one of its own.
       #
+      # Paired acquire/release on one thread can use this directly. A *deferred*
+      # release cannot; see {claim_token}.
+      #
       # @return [String]
       def token
         thread = ::Thread.current
@@ -150,11 +157,44 @@ module Wurk
         built
       end
 
+      # A holder token naming one *claim*: `<identity>:<tid>:<n>`.
+      #
+      # The thread half alone would name a holder — a processor thread runs one
+      # job at a time — but it does not name a claim, and the fetch path's
+      # release is deferred. An ACK whose flush failed is handed back to its
+      # thread (`Fetcher::Reliable#restore_pending_acks`), which by then may be
+      # running its next job under a fresh hold on the same queue. Both claims
+      # would be the same member, so that stale ACK's `ZREM` would take the live
+      # job's hold with it and leave the cluster free to admit one over the cap
+      # for the rest of that job. With the counter the two are different
+      # members, so a stale release names one that is already gone and frees
+      # nothing — the same shape as a release arriving after its own hold aged
+      # out. It errs the safe way: the finished job's hold lingers until its ACK
+      # lands or the TTL takes it, which under-counts rather than over-admits.
+      #
+      # Built once per claim by the caller and reused across the pool's
+      # idempotent retry, so a claim whose reply was lost still replays against
+      # its own member and converges on "you hold it" rather than counting
+      # itself twice (`fetch_slot.lua`).
+      #
+      # @return [String]
+      def claim_token
+        thread = ::Thread.current
+        seq = thread.thread_variable_get(:wurk_queue_slot_seq).to_i + 1
+        thread.thread_variable_set(:wurk_queue_slot_seq, seq)
+        "#{token}:#{seq}"
+      end
+
       # Take one of `queue`'s slots, or report that the cluster is at capacity.
       #
       # Replay-safe, so it runs on the pool's idempotent path: a retried call
       # whose first attempt already landed finds its own member and answers
       # true again rather than reporting a refusal on a slot it holds.
+      #
+      # Defaults to this thread's {token}, which pairs with a {release} on the
+      # same thread. A caller that defers its release past the next claim wants
+      # a {claim_token} instead, and has to carry it to the release — the fetch
+      # path does, on the unit of work.
       #
       # @param queue [String] unprefixed queue name
       # @param capacity [Integer] cluster-wide ceiling for this queue

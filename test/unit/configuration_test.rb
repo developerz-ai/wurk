@@ -1030,6 +1030,27 @@ class ConfigurationTest < Wurk::Test::UnitCase
     assert_equal({ 'critical' => 20 }, @config.global_concurrency)
   end
 
+  # The default Hash is normalized like any other, so it arrives frozen: the
+  # fetch path resolves caps at boot, and a Hash a caller could add a queue to
+  # here is one nothing would read.
+  def test_default_global_concurrency_is_frozen_too
+    assert_raises(FrozenError) { @config.global_concurrency['critical'] = 5 }
+  end
+
+  # Same door as the setter, so a cap handed to the constructor is validated
+  # rather than trusted — including on the Configuration each Capsule builds.
+  def test_global_concurrency_passed_to_the_constructor_is_normalized
+    config = Wurk::Configuration.new(global_concurrency: { critical: 20 })
+
+    assert_equal({ 'critical' => 20 }, config.global_concurrency)
+    assert_raises(FrozenError) { config.global_concurrency['low'] = 1 }
+  end
+
+  def test_global_concurrency_passed_to_the_constructor_is_validated
+    assert_raises(ArgumentError) { Wurk::Configuration.new(global_concurrency: { 'critical' => 0 }) }
+    assert_raises(ArgumentError) { Wurk::Configuration.new(global_concurrency: %w[critical]) }
+  end
+
   def test_global_concurrency_setter_raises_once_frozen
     @config.freeze!
 

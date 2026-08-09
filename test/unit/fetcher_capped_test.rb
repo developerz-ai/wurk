@@ -11,10 +11,11 @@ require_relative '../test_helper'
 # more than an uncapped one, and a queue at capacity backs off without taking
 # the rest of the pass down with it.
 #
-# Distinct tokens stand in for other hosts — a token is `<identity>:<tid>` and
-# nothing in the script reads more of a holder than that, so a foreign token
-# here is what another worker's fetcher writes. Real forks are the slice's
-# integration test, not this file's job.
+# Distinct tokens stand in for other hosts — a token is opaque to the script,
+# so a foreign one here is what another worker's fetcher writes. Real forks are
+# the slice's integration test, not this file's job. This process's own members
+# are `<identity>:<tid>:<claim>` (QueueSlot.claim_token), which is why the
+# assertions read the token off the unit of work rather than rebuilding it.
 #
 # Parallel safety: every queue name is namespaced to this test, so its public
 # queue, private list and slot key are unique to it.
@@ -48,11 +49,9 @@ class FetcherCappedTest < Wurk::Test::UnitCase
   end
 
   def teardown
-    # Nothing here runs a Processor, so no ACK ever carries the release that
-    # would take this test's hold off the process-wide ledger. Left behind, it
-    # would have every later beat in this worker refreshing a slot key that no
-    # longer exists.
-    Wurk::QueueSlot::HELD.drop(Wurk::QueueSlot.token, Wurk::Keys.queue_slot(@queue_name))
+    # Left behind, this test's holds would have every later beat in this worker
+    # refreshing a slot key that no longer exists.
+    drop_local_holds(Wurk::Keys.queue_slot(@queue_name))
     @pool&.with do |conn|
       conn.call('DEL', @public_queue, @open_queue, private_queue(@public_queue),
                 private_queue(@open_queue), Wurk::Keys.queue_slot(@queue_name))
@@ -92,12 +91,15 @@ class FetcherCappedTest < Wurk::Test::UnitCase
 
   # --- admission ------------------------------------------------------
 
-  def test_a_capped_fetch_claims_one_slot_named_for_this_thread
+  def test_a_capped_fetch_claims_one_slot_named_for_this_claim
     build_fetcher
     enqueue(@public_queue, 'p1')
+    uow = @fetcher.retrieve_work
 
-    assert_equal 'p1', @fetcher.retrieve_work.job
-    assert_equal [Wurk::QueueSlot.token], slot_members
+    assert_equal 'p1', uow.job
+    assert_equal [uow.slot_token], slot_members
+    assert_match(/\A#{Regexp.escape(Wurk::QueueSlot.token)}:\d+\z/, uow.slot_token,
+                 'the member names this thread and the claim it made')
   end
 
   # The refusal has to happen before either list is touched, or a worker that
@@ -139,10 +141,10 @@ class FetcherCappedTest < Wurk::Test::UnitCase
   def test_an_empty_capped_queue_leaves_a_live_hold_alone
     build_fetcher
     enqueue(@public_queue, 'p1')
-    @fetcher.retrieve_work
+    uow = @fetcher.retrieve_work
 
     assert_nil @fetcher.retrieve_work
-    assert_equal [Wurk::QueueSlot.token], slot_members
+    assert_equal [uow.slot_token], slot_members
   end
 
   # Crash safety, on the fetch path: a holder that stopped refreshing — killed,
@@ -153,23 +155,38 @@ class FetcherCappedTest < Wurk::Test::UnitCase
     build_fetcher
     expire_slot('killed-host:1')
     enqueue(@public_queue, 'p1')
+    uow = @fetcher.retrieve_work
 
-    assert_equal 'p1', @fetcher.retrieve_work.job
-    assert_equal [Wurk::QueueSlot.token], slot_members
+    assert_equal 'p1', uow.job
+    assert_equal [uow.slot_token], slot_members
   end
 
   # The script's replay arm. A claim whose reply was lost is retried on the
-  # pool's idempotent path and has to converge on "you hold it" rather than be
-  # refused against its own member — otherwise the slot is held by a caller that
-  # believes it owns nothing and nobody releases it before the TTL.
-  def test_a_caller_that_already_holds_the_last_slot_is_not_refused_against_itself
+  # pool's idempotent path — with the same token, built before the retried block
+  # — and has to converge on "you hold it" rather than be refused against its
+  # own member, or the slot is held by a caller that believes it owns nothing
+  # and nobody releases it before the TTL.
+  def test_a_replayed_claim_converges_on_the_member_it_already_holds
     build_fetcher
     enqueue(@public_queue, 'p1')
     enqueue(@public_queue, 'p2')
-    @fetcher.retrieve_work
+    token = @fetcher.retrieve_work.slot_token
 
-    refute_nil @fetcher.retrieve_work
-    assert_equal 1, slot_count, 'a claim must never count itself twice'
+    assert_equal 'p2', replay_claim(token).last
+    assert_equal [token], slot_members, 'a claim must never count itself twice'
+  end
+
+  # And only its own. A token names one claim, so the thread's *next* claim is a
+  # different member and is refused like anybody else while the queue is full —
+  # the ledger says the cap's worth of capacity is spoken for, and it is right
+  # until the finished job's release lands.
+  def test_a_second_claim_by_the_same_thread_is_refused_at_capacity
+    build_fetcher
+    enqueue(@public_queue, 'p1')
+    held = @fetcher.retrieve_work.slot_token
+
+    assert_nil @fetcher.retrieve_work
+    assert_equal [held], slot_members
   end
 
   # --- round trips ----------------------------------------------------
@@ -390,6 +407,23 @@ class FetcherCappedTest < Wurk::Test::UnitCase
   # Stand in for a holder on another host.
   def hold_slot(token)
     Wurk::QueueSlot.acquire(@queue_name, capacity: 99, token: token, pool: @pool)
+  end
+
+  # What the pool's idempotent retry sends when a claim's reply was lost: the
+  # same script with the same token, a second time.
+  def replay_claim(token)
+    keys = [Wurk::Keys.queue_slot(@queue_name), @public_queue, private_queue(@public_queue)]
+    @pool.with do |conn|
+      Wurk::Lua::Loader.eval_cached(conn, :fetch_slot, keys: keys,
+                                                       argv: [1, token, Wurk::QueueSlot::TTL_SECONDS])
+    end
+  end
+
+  # This test's holds, off the process-wide ledger. Nothing here runs a
+  # Processor, so no ACK ever carries the release that would take them off, and
+  # a member named for a claim cannot be rebuilt from the outside.
+  def drop_local_holds(slot_key)
+    Wurk::QueueSlot::HELD.snapshot.each { |token, key| Wurk::QueueSlot::HELD.drop(token, key) if key == slot_key }
   end
 
   # A hold whose expiry is already behind Redis's own clock: what a SIGKILLed

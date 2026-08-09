@@ -68,7 +68,11 @@ module Wurk
         # the queue it just ran releases before it asks, never after.
         #
         # Idempotent by construction (QueueSlot#release): it names one member,
-        # so a replayed ACK frees nothing that has since been handed on.
+        # so a replayed ACK frees nothing that has since been handed on. The
+        # member names this *claim* rather than this thread, which is what makes
+        # that true of a stale ACK too — one handed back by a failed flush
+        # (Fetcher::Reliable#restore_pending_acks) after the thread has already
+        # claimed its next slot on the same queue. See QueueSlot.claim_token.
         def release_slot_in(pipe)
           QueueSlot::HELD.drop(slot_token, slot_key)
           pipe.call('ZREM', slot_key, slot_token)

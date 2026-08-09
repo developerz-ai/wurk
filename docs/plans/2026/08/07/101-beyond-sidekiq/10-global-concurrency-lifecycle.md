@@ -19,6 +19,15 @@ raise. A release written into any single arm is a release the next arm added
 forgets, and a forgotten one strands cluster-wide capacity for the whole 60s
 TTL. There is deliberately no happy-path `release` call anywhere.
 
+The frame opens *before* the payload is parsed. Parsing a malformed one writes
+it to the morgue, which is a Redis round trip, and the shutdown raise can land
+anywhere in it — outside the frame, that raise would take the slot with it and
+leave a low-capacity queue refusing work for a TTL with nothing running. The
+malformed payload's own ACK is issued from the same `ensure` for the same
+reason: one cleanup path, so the slot is released exactly once whichever way
+the job ended
+(`queue_slot_lifecycle_test.rb#test_a_shutdown_during_the_parse_still_gives_the_slot_back`).
+
 **It costs nothing.** The `ZREM` is written into `UnitOfWork#write_ack`, so it
 rides the pipeline the ACK already rides — the one the *next* fetch opens
 (`Fetcher::Reliable#defer_ack`). A capped job therefore costs the same single
@@ -96,24 +105,41 @@ Neither alternative is better:
   cannot tell a leaked unit from a busy one, so a child SIGKILLed mid-handover
   takes the capacity with it forever.
 
-The excess is bounded three ways: by the old child's in-flight job count, by one
-`drain_timeout`, and — if that child is SIGKILLed rather than drained — by the
-60s hold TTL. A cluster-wide cap is a ceiling on steady-state concurrency, not a
-transactional invariant across a deploy; Oban Pro's and BullMQ's global limits
-make the same trade.
+The excess is bounded three ways, and each bound is a test rather than a claim:
+
+| Bound | Pinned by |
+|---|---|
+| The old child's in-flight job count — one child, one generation of overlap, never a fan-out | `swarm_restart_test.rb#test_happy_path_replaces_slot_then_drains_old` (spawn → heartbeat → TERM → drain, one slot at a time) and `#test_enqueue_skips_in_flight_slot` |
+| One `drain_timeout` | `swarm_restart_test.rb#test_overrunning_old_is_killed_after_drain_timeout` |
+| The 60s hold TTL, if that child is SIGKILLed rather than drained | `global_concurrency_test.rb#test_a_sigkilled_slot_holder_recovers_its_capacity_within_the_ttl` (real fork, real kill) |
+
+So the contract in [`10-global-concurrency.md`](10-global-concurrency.md) reads
+"at most N running cluster-wide" with this one named exception, not without it. A
+cluster-wide cap is a ceiling on steady-state concurrency, not a transactional
+invariant across a deploy; Oban Pro's and BullMQ's global limits make the same
+trade.
 
 ## Known windows, written down rather than papered over
 
 * **Deferred release, above.** One loop iteration on a busy worker; flushed by
   every path that stops fetching.
 * **A flush that fails and is restored.** `#restore_pending_acks` hands an ACK
-  back to a thread that may since have claimed a new slot on the same queue, and
-  a holder token is per *thread*, not per job — so a later standalone flush of
-  that stale ACK can release a live hold. It needs a Redis error plus a
-  concurrent flush from another thread while a job runs; the result is one slot
-  over-admitted for the rest of that job, self-healing. Cheaper to name than to
-  close with a per-claim token, which would cost the script's
-  replay-convergence arm.
+  back to a thread that may since have claimed a new slot on the same queue.
+  A holder token therefore names one *claim* — `<identity>:<tid>:<n>`,
+  `QueueSlot.claim_token` — and not one thread, so the stale ACK's `ZREM` names
+  a member that is already gone and frees nothing, exactly as a release
+  arriving after its own hold expired does. Pinned by
+  `queue_slot_lifecycle_test.rb#test_a_stale_ack_cannot_release_the_hold_of_the_claim_that_replaced_it`.
+
+  This was written down as a tolerated over-admission first, on the grounds
+  that closing it would cost the script's replay-convergence arm. That was
+  wrong: the arm converges on a token, and the token is built once per claim
+  *before* the pool's idempotent retry, so a replay still carries the same one.
+  What the counter does cost is the other thing the arm used to cover — a
+  thread whose finished job's release has not landed yet is now a different
+  member and is refused while the queue is full. That is the safe direction:
+  one job's worth of capacity spoken for a moment longer, rather than one job's
+  worth handed out twice.
 * **A cap changed mid-deploy.** Capacity is passed in by the caller rather than
   stored, so both generations ask for their own number and the larger one is in
   force until the last process running it stops fetching. Deliberate — see

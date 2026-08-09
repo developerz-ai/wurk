@@ -59,6 +59,17 @@ class QueueSlotTest < Wurk::Test::UnitCase
     refute_equal mine, Thread.new { Wurk::QueueSlot.token }.value
   end
 
+  # The half a deferred release needs. Two claims on one thread have to be two
+  # members, or the release of the first takes the second's capacity with it.
+  def test_a_claim_token_is_this_thread_plus_a_claim_of_its_own
+    first = Wurk::QueueSlot.claim_token
+    second = Wurk::QueueSlot.claim_token
+
+    assert_match(/\A#{Regexp.escape(Wurk::QueueSlot.token)}:\d+\z/, first)
+    refute_equal first, second
+    refute_equal second, Thread.new { Wurk::QueueSlot.claim_token }.value
+  end
+
   # A hold is refreshed on the beat, so it has to outlive a missed beat by
   # exactly as long as the holder's own `processes` entry does. Pinned rather
   # than aliased: queue_slot.rb deliberately does not require the heartbeat
