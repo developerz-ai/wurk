@@ -115,10 +115,18 @@ end
 #                      regression gate until slice 10 lands a real gate and
 #                      decides ship-vs-defer on these numbers. `rake
 #                      bench:fetch_capped`.
+#   debounce_enqueue.rb — reports what a debounce policy itself costs (a Lua
+#                      round trip in place of the plain LPUSH pipeline); the
+#                      "no policy" side of that same comparison is already
+#                      bench/enqueue.rb, which stays in the gate. There is no
+#                      plain-push baseline for the debounce number to regress
+#                      against — a whole extra round trip is the policy's
+#                      point, not a regression — so it is read, not diffed.
+#                      `rake bench:debounce_enqueue`.
 BENCH_SCRIPTS = Dir.glob(File.join(GEM_ROOT, 'bench', '*.rb'))
                    .grep_v(%r{/support\.rb\z})
                    .freeze
-UNGATED_SCRIPTS = %w[vs_sidekiq.rb command_count.rb fetch_capped.rb].freeze
+UNGATED_SCRIPTS = %w[vs_sidekiq.rb command_count.rb fetch_capped.rb debounce_enqueue.rb].freeze
 GATE_SCRIPTS = BENCH_SCRIPTS.reject { |s| UNGATED_SCRIPTS.include?(File.basename(s)) }.freeze
 
 desc 'Run the benchmark gate (enqueue, fetch+execute, bulk enqueue, swarm boot, memory)'

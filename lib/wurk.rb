@@ -64,6 +64,8 @@ require_relative 'wurk/cron'
 require_relative 'wurk/leader'
 require_relative 'wurk/history'
 require_relative 'wurk/unique'
+require_relative 'wurk/debounce'
+require_relative 'wurk/throttle'
 require_relative 'wurk/encryption'
 require_relative 'wurk/status'
 require_relative 'wurk/metrics'
@@ -255,6 +257,17 @@ require_relative 'wurk/batch/callbacks'
 require_relative 'wurk/batch/client_middleware'
 require_relative 'wurk/batch/server_middleware'
 require_relative 'wurk/batch/death_handler'
+
+# Collapse policies — `sidekiq_options collapse: { policy: :debounce, wait: 5 }`,
+# a Wurk extra with no Sidekiq counterpart. Registered here rather than as a
+# load-time side effect of collapse.rb, which worker.rb pulls in far earlier: the
+# decision has to be taken on the way *out* of the chain, so the payload it
+# writes to `schedule` carries whatever the middleware inside it stamped on. That
+# only works from the outermost slot, and prepending here — after Batch has
+# prepended its own `bid` stamp, which this then wraps, and before any
+# host-installed `Unique.enable!` / `Encryption.enable!` / `Telemetry.install!`
+# appends inside it — is what puts it there and keeps it there.
+Wurk.configuration.client_middleware.prepend(Wurk::Collapse::ClientMiddleware)
 
 # Expiry must register AFTER Batch::ServerMiddleware so it sits inside that
 # middleware's onion — a skipped (expired) job then unwinds back through

@@ -1,5 +1,6 @@
 # frozen_string_literal: true
 
+require_relative '../collapse'
 require_relative '../job_util'
 
 module Wurk
@@ -27,7 +28,9 @@ module Wurk
           stringified = opts.transform_keys(&:to_s)
           Wurk::JobUtil.validate_track!(stringified['track'], stringified) if stringified.key?('track')
           Wurk::JobUtil.validate_bounds!(stringified)
-          @sidekiq_options_hash = get_sidekiq_options.merge(stringified)
+          merged = get_sidekiq_options.merge(stringified)
+          Wurk::Collapse.policy_for(merged)
+          @sidekiq_options_hash = merged
         end
 
         # Sidekiq's public API name — must stay `get_sidekiq_options`.
