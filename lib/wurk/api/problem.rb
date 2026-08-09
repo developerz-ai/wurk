@@ -24,6 +24,9 @@ module Wurk
       # client that asked to cancel a job needs to tell "you addressed nothing"
       # apart from "that job already ran".
       JOB_NOT_FOUND = 'job_not_found'
+      # The same distinction one addressable resource over: a well-formed bid
+      # the `batches` set has never held, as opposed to a mistyped path.
+      BATCH_NOT_FOUND = 'batch_not_found'
       # Named for RFC 6750 §3.1 so the slug and the `error=` the 403 carries in
       # WWW-Authenticate are the same word.
       INSUFFICIENT_SCOPE = 'insufficient_scope'
@@ -53,6 +56,7 @@ module Wurk
         INSUFFICIENT_SCOPE => 'Insufficient Scope',
         INVALID_REQUEST => 'Invalid Request',
         JOB_NOT_FOUND => 'Job Not Found',
+        BATCH_NOT_FOUND => 'Batch Not Found',
         PAYLOAD_TOO_LARGE => 'Payload Too Large',
         CLASS_NOT_ALLOWED => 'Class Not Allowed',
         IDEMPOTENCY_KEY_REUSED => 'Idempotency Key Reused',
@@ -69,6 +73,14 @@ module Wurk
         }
         body.merge!(extra)
         [status, response_headers(headers), [::JSON.generate(body)]]
+      end
+
+      # Renders a refusal that already knows which problem it is — the shape
+      # Validation::Invalid carries. The mapping from a rejection to a status
+      # code stays with the check that made it, so a new rejection never needs
+      # a new arm in the route that surfaces it.
+      def from(error, instance:)
+        render(error.type, status: error.status, detail: error.message, instance: instance, **error.extra)
       end
 
       # nosniff so a browser pointed at an error can never be talked into

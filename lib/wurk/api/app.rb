@@ -5,6 +5,7 @@ require_relative '../version'
 require_relative 'auth'
 require_relative 'jobs'
 require_relative 'problem'
+require_relative 'queues'
 require_relative 'request'
 require_relative 'response'
 require_relative 'router'
@@ -50,11 +51,12 @@ module Wurk
         @config || ::Wurk.configuration
       end
 
-      # One table per plane, each owning its own routes and handlers. Queues and
-      # swarm join Jobs here.
+      # One table per plane, each owning its own routes and handlers. Swarm
+      # joins Jobs and Queues here.
       def draw(router)
         router.get('/', scope: Auth::ANY) { |request| root(request) }
         Jobs.draw(router)
+        Queues.draw(router)
       end
 
       # Authentication runs before the version gate and before routing, so an

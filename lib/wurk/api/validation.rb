@@ -5,7 +5,7 @@ require_relative 'problem'
 
 module Wurk
   module API
-    # Everything the produce plane refuses before {Wurk::Client} sees it.
+    # Everything the API refuses at its boundary, before a Wurk object sees it.
     #
     # Client validates a job hash written by Ruby running in this process. This
     # validates one typed by a stranger, and the two are different jobs.
@@ -55,6 +55,15 @@ module Wurk
       # `SecureRandom.hex(12)`; admit any URL-safe token of a sane length and
       # refuse the rest at the door.
       JID_FORMAT = /\A[A-Za-z0-9_-]{1,255}\z/
+
+      # A queue name arrives as one path segment (percent-decoded by the
+      # router, so a name containing '/' is reachable) and reaches Redis as
+      # `queue:<name>`. The Sidekiq schema bounds it nowhere, so this door
+      # does: whitespace and control characters are out because a name
+      # carrying them is one no operator can type back into the dashboard or a
+      # CLI flag, and the length cap exists for the same reason a jid's does —
+      # it is echoed back on every listing.
+      QUEUE_NAME_FORMAT = /\A[^[:space:][:cntrl:]]{1,255}\z/
 
       # Same word the router uses for "any scope": here it turns the class
       # allow-list off.
@@ -146,10 +155,26 @@ module Wurk
 
       # @raise [Invalid] unless `jid` is a URL-safe token of a sane length.
       # @return [String] the jid.
-      def jid!(jid)
-        return jid if jid.is_a?(::String) && JID_FORMAT.match?(jid)
+      def jid!(jid) = url_safe!(jid, 'jid')
 
-        raise Invalid, 'A jid is a URL-safe token of up to 255 characters.'
+      # A bid indexes `b-<bid>` and its satellite keys, and Batch::Status
+      # builds every one of them by interpolation — the same key-fragment
+      # exposure a jid has, so the same door.
+      # @return [String] the bid.
+      def bid!(bid) = url_safe!(bid, 'batch id')
+
+      def url_safe!(value, label)
+        return value if value.is_a?(::String) && JID_FORMAT.match?(value)
+
+        raise Invalid, "A #{label} is a URL-safe token of up to 255 characters."
+      end
+
+      # @raise [Invalid] unless `name` fits {QUEUE_NAME_FORMAT}.
+      # @return [String] the queue name.
+      def queue_name!(name)
+        return name if name.is_a?(::String) && QUEUE_NAME_FORMAT.match?(name)
+
+        raise Invalid, 'A queue name is up to 255 characters with no whitespace or control characters.'
       end
 
       # Validates the allow-list where it is declared, so a typo'd class name
