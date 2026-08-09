@@ -17,10 +17,14 @@ class BenchGateScriptsTest < Wurk::Test::UnitCase
 
   # Not ips reports: vs_sidekiq.rb prints a Markdown comparison table,
   # command_count.rb an INFO commandstats tally plus a per-job budget assertion.
-  # fetch_capped.rb is an ips report but gates nothing yet — it measures a
-  # stand-in Lua slot script, so there is no real cap for it to regress against
-  # until slice 10 lands one (see the Rakefile's UNGATED_SCRIPTS rationale).
-  UNGATED = %w[vs_sidekiq.rb command_count.rb fetch_capped.rb].freeze
+  # fetch_capped.rb and debounce_enqueue.rb are ips reports but gate nothing:
+  # fetch_capped.rb measures a stand-in Lua slot script, so there is no real
+  # cap for it to regress against until slice 10 lands one; debounce_enqueue.rb
+  # reports what the debounce policy itself costs over the plain-push baseline
+  # bench/enqueue.rb already gates — a whole extra Lua round trip is the
+  # policy's point, not a regression, so there is nothing to diff against main
+  # (see the Rakefile's UNGATED_SCRIPTS rationale for both).
+  UNGATED = %w[vs_sidekiq.rb command_count.rb fetch_capped.rb debounce_enqueue.rb].freeze
 
   def test_scripts_that_are_not_ips_reports_stay_out_of_the_gate
     UNGATED.each do |script|
