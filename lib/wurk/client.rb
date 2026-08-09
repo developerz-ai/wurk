@@ -325,7 +325,7 @@ module Wurk
 
     def push_scheduled(conn, payloads)
       args = payloads.flat_map do |hash|
-        [hash['at'].to_s, Wurk.dump_json(hash.except('enqueued_at', 'at'))]
+        [hash['at'].to_s, JobUtil.scheduled_member(hash)]
       end
       conn.call('ZADD', 'schedule', *args)
     end

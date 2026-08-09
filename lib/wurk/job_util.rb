@@ -73,6 +73,19 @@ module Wurk
       seconds.finite? && seconds.positive?
     end
 
+    # The exact bytes a job is stored as inside the `schedule` ZSET. `at` is
+    # dropped because it *is* the score, and `enqueued_at` because it marks
+    # arrival on an immediate queue — the promoter restamps it on the way out
+    # (Lua RELIABLE_SCHEDULE_PROMOTE), so a stored member carrying a stale one
+    # would ship the wrong value to any reader that looks before promotion.
+    #
+    # One definition, because more than one writer puts members in that ZSET
+    # ({Wurk::Client#push_scheduled} and {Wurk::Debounce}) and wire-compat does
+    # not survive the two of them drifting.
+    def self.scheduled_member(hash)
+      Wurk.dump_json(hash.except('enqueued_at', 'at'))
+    end
+
     # @raise [ArgumentError] if the payload is structurally invalid.
     def validate(item)
       raise(ArgumentError, "Job must be a Hash with 'class' and 'args' keys: `#{item}`") unless valid_shape?(item)

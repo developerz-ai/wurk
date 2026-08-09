@@ -67,6 +67,15 @@ module Wurk
     # write is a separate, opt-in knob.
     STATUS_TTL = 30 * 60
 
+    # Debounce state: `debounce:<digest>` HASH holding the job JSON currently
+    # pending in `schedule` for that key plus the epoch the burst opened at.
+    # A Wurk extra, like `status:` — no Sidekiq key schema entry lives here.
+    #
+    # The collapsed job itself is an ordinary `schedule` member; this key only
+    # records which member to pull back out when the next enqueue extends the
+    # burst, and is not read by anything that renders jobs.
+    DEBOUNCE_PREFIX = 'debounce:'
+
     # Build a queue list key from a queue name. Centralizing the concat keeps
     # the prefix in one place even though it's a constant — third-party gems
     # that grep for `"queue:"` still find it via the constant.
@@ -78,6 +87,11 @@ module Wurk
     # concat, even though the prefix is a constant.
     def self.status(jid)
       "#{STATUS_PREFIX}#{jid}"
+    end
+
+    # Debounce state key for one identity digest. Same reason as .queue.
+    def self.debounce(digest)
+      "#{DEBOUNCE_PREFIX}#{digest}"
     end
   end
 end

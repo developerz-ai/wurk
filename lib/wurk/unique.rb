@@ -123,8 +123,16 @@ module Wurk
       # `sidekiq_unique_context` when the worker class is loaded and
       # defines it.
       def lock_key_for(job)
-        context = unique_context(job)
-        "#{KEY_PREFIX}#{Digest::SHA256.hexdigest(JSON.dump(context))}"
+        "#{KEY_PREFIX}#{digest_for(job)}"
+      end
+
+      # The identity digest on its own, without the `unique:` prefix.
+      # {Wurk::Debounce} keys off the same digest under its own prefix, so a
+      # class that narrows its identity via `sidekiq_unique_context` narrows
+      # both policies through the one documented hook instead of growing a
+      # second, near-identical one.
+      def digest_for(job)
+        Digest::SHA256.hexdigest(JSON.dump(unique_context(job)))
       end
 
       # Default: `[class, queue, args]`. Workers may override by defining
