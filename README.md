@@ -21,7 +21,7 @@
 
 Wurk is wire-compatible with Sidekiq — same Redis keys, same job JSON, same Ruby DSL. Swap one line in your `Gemfile` and your existing jobs, batches, limiters, cron entries, and live Redis data keep working untouched. The Pro and Enterprise feature sets ship in the same free gem, with no license check and no tiers.
 
-**On Sidekiq:** Sidekiq is the reason Ruby background processing works as well as it does. Mike Perham and Contributed Systems have maintained it for well over a decade and funded that work through Pro and Enterprise — a model that kept a critical piece of the ecosystem healthy, documented, and supported, and one the whole community has benefited from. Wurk implements Sidekiq's API because it is a genuinely good API. This isn't a swipe at it; it's a different bet about what maintenance costs now — see [Why Wurk exists](#why-wurk-exists).
+**On Sidekiq:** Sidekiq is the reason Ruby background processing works as well as it does. Mike Perham and Contributed Systems have maintained it for well over a decade and funded that work through Pro and Enterprise — a model that kept a critical piece of the ecosystem healthy, documented, and supported, and one the whole community has benefited from. Wurk implements Sidekiq's API because it is a genuinely good API, and exists to make a different bet about what maintenance costs now — see [Why Wurk exists](#why-wurk-exists).
 
 **On speed:** Wurk is not currently faster than stock Sidekiq — it runs at roughly 0.87×–1.02× depending on workload shape, with parity on CPU and I/O but still behind on framework overhead (noop) and boot time. Numbers, method, and the reproduction command are in [docs/benchmarks.md](docs/benchmarks.md); run them yourself with `rake bench:vs_sidekiq`.
 
@@ -205,7 +205,7 @@ Knobs: `health_check(port:, bind: "0.0.0.0", ready_window: 30)`. In swarm mode o
 
 ## Why Wurk exists
 
-Sidekiq's split into OSS, Pro, and Enterprise was never a shakedown — it was how a decade of serious maintenance got funded, and it worked. The ecosystem got a background-job library that stayed maintained, documented, and answerable to its users for longer than most infrastructure gems survive at all. Credit where it's due: Wurk is standing on that work, not competing with the reasoning behind it.
+Sidekiq's split into OSS, Pro, and Enterprise is how a decade of serious maintenance got funded, and it worked. Ruby got a background-job library that stayed maintained, documented, and answerable to its users for longer than most infrastructure gems survive at all — and the API in this README is the one that came out of it. Wurk is standing on that work.
 
 What Wurk bets on is that the economics underneath changed. Wurk is built and maintained **AI-first** — implementation, parity suite, docs, and benchmarks are written and kept current by AI agents working under human review. That is what makes it practical to:
 
