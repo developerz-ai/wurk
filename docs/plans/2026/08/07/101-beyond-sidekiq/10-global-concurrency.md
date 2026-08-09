@@ -53,3 +53,60 @@
 - Unconfigured path proven unchanged by command count **and** bench.
 - Capped queues don't starve other queues.
 - If any of the above can't be met: slice closed as **deferred**, with the measurements written up. That is an acceptable outcome.
+
+## Ship decision (2026-08-09)
+
+**Shipped, not deferred.** The gate this slice lives or dies by is the last two bullets
+above, and both are met, measured against `main` (`c8af524`) at head (`896803c`).
+
+`bench/command_count.rb` — unconfigured (no `global_concurrency` set), 500 noop jobs,
+`INFO commandstats` on an otherwise-idle Redis (the shared dev Redis container reads
+high because another local process's traffic pollutes server-wide commandstats; run
+against a dedicated container instead — see below):
+
+```text
+  commands  per job  command
+       500     1.00  lrem
+       500     1.00  lmove
+       500     1.00  del
+  --------  -------
+      1500     3.00  total
+
+✓ 3.00 commands/job, within the budget of 3.00 and at the recorded baseline of 3.00
+```
+
+Unchanged from the pre-slice baseline in `docs/benchmarks.md` — `Fetcher::Capped`'s
+boot-resolved `@capped` boolean means an unconfigured install runs the exact `Reliable`
+loop it ran before this slice existed, not that loop plus a per-fetch check.
+
+`rake bench` (the gate: `enqueue`, `fetch+execute`, `bulk_enqueue`, `memory`,
+`scheduled_poll`, `swarm_boot`; unconfigured), head vs `main`, `bin/bench-compare`:
+
+```text
+| benchmark                          | base (i/s) | head (i/s) |    Δ   |               |
+|-------------------------------------|-----------:|-----------:|-------:|---------------|
+| wurk enqueue                       |      4.20k |      4.02k |  -4.3% | slower, noise |
+| wurk fetch+execute                 |      3.22k |      3.32k |  +2.9% | 🟢            |
+| wurk hot-path (jobs/1k-alloc)      |          6 |          6 |  +0.0% | 🟢            |
+| wurk hot-path (retention-free/1k)  |      1.00k |      1.00k |  +0.0% | 🟢            |
+| wurk idle scheduler sweep          |      2.42k |      2.32k |  -4.4% | slower, noise |
+| wurk push_bulk(1000)               |         66 |         68 |  +4.1% | 🟢            |
+| wurk swarm boot                    |        115 |         88 | -23.6% | slower, noise |
+```
+
+No benchmark clears `bin/bench-compare`'s regression bar (combined ±noise + 5%);
+`swarm_boot`'s headline -23.6% carries ±47%/±25% error on the two sides, an order of
+magnitude wider than the delta — noise, not a regression. A second pairing against the
+same commits on the team's shared dev Redis (`wurk-dev-redis`, noisier host) showed the
+same picture (`fetch+execute` -4.3%, everything else flat or faster). Reproduce:
+`git checkout main && rake bench > base.txt; git checkout <branch> && rake bench > head.txt;
+bin/bench-compare base.txt head.txt`. Run against a Redis container this process alone
+holds — `INFO commandstats` and benchmark/ips throughput are both server-wide, and a
+shared dev Redis with another local process on it reads as noise or a phantom command,
+never as a false pass.
+
+Both halves of the gate hold, so the feature ships: slot model, fetch-path fold,
+lifecycle (release/refresh/quiet/restart), and real-fork integration proof are all in
+`main` as of this branch. The configured-cost side of the trade (a cap actually in use
+costs something, on purpose) is measured separately in
+[`10-global-concurrency-measurement.md`](10-global-concurrency-measurement.md).
