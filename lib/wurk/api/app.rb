@@ -1,6 +1,7 @@
 # frozen_string_literal: true
 
 require 'rack'
+require_relative '../api'
 require_relative '../version'
 require_relative 'auth'
 require_relative 'jobs'
@@ -22,10 +23,6 @@ module Wurk
     # SCRIPT_NAME (Request#url_for) — the same mount-agnostic rule the SPA shell
     # follows in dashboard_controller.rb.
     class App
-      API_VERSION = 'v1'
-      VERSION_PREFIX = "/#{API_VERSION}".freeze
-      SUPPORTED_VERSIONS = [API_VERSION].freeze
-
       # `config` is read on every request rather than captured, so a token
       # registered after the first request still takes effect. Injectable
       # because a test must be able to hand this app its own token table
@@ -102,7 +99,7 @@ module Wurk
       end
 
       def versioned?(path)
-        path == VERSION_PREFIX || path.start_with?("#{VERSION_PREFIX}/")
+        path == VERSION_PREFIX || path.start_with?(NESTED_PREFIX)
       end
 
       def route_miss(request, match)

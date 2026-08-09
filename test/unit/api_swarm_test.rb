@@ -264,7 +264,7 @@ class ApiSwarmTest < Wurk::Test::UnitCase
     identity = beat('a')
     @pool.with do |c|
       info = Wurk.load_json(c.call('HGET', identity, 'info'))
-      c.call('HSET', identity, 'info', Wurk.dump_json(info.reject { |key, _| key == 'started_at' }))
+      c.call('HSET', identity, 'info', Wurk.dump_json(info.except('started_at')))
     end
 
     _status, _headers, body = get('/v1/processes')
@@ -614,7 +614,7 @@ class ApiSwarmTest < Wurk::Test::UnitCase
 
     _status, _headers, body = get('/v1/limiters')
 
-    assert_equal [{}, {}], body['limiters'].map { |row| row['options'] }
+    assert_equal([{}, {}], body['limiters'].map { |row| row['options'] })
   end
 
   def test_limiters_filter_by_substring

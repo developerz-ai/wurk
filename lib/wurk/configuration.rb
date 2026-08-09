@@ -461,9 +461,15 @@ module Wurk
     # Registers a bearer token for the HTTP API and the scopes it grants —
     # any of `:enqueue`, `:read`, `:admin` (which grants the other two):
     #
-    #   Wurk.configure_server do |config|
-    #     config.api_token ENV.fetch('WURK_API_TOKEN'), scopes: %i[enqueue read]
-    #   end
+    #   # config/initializers/wurk.rb
+    #   Wurk.configuration.api_token ENV.fetch('WURK_API_TOKEN'), scopes: %i[enqueue read]
+    #
+    # Registered unconditionally, not inside `configure_server`/`configure_client`
+    # — the process that serves the API has to be the one holding the credential,
+    # and neither block runs in every such process. A Puma-cluster web process
+    # never enters server mode (Wurk::RailsBoot refuses to fork a swarm from
+    # one), so a token registered in `configure_server` would be absent from the
+    # exact process serving the engine-nested mount.
     #
     # Registering the first token is what brings the API into existence; with
     # none the app is never mounted. Re-registering a token replaces its
