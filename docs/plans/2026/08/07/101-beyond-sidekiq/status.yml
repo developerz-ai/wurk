@@ -1,65 +1,72 @@
 plan: 101-beyond-sidekiq
 title: Beyond Sidekiq
-status: not_started
+status: complete
 created_by: sebi
-worked_by: ""
+worked_by: sebi
 owner: sebi
-percent: 0
-current_focus: "01-metrics-interrupted-job.md — needs the upstream ExecutionTracker parity call before code (issue #394)"
+percent: 100
+current_focus: "shipped in v1.6.0 (2026-08-09)"
 slices:
   - file: 00-census.md
     status: complete
     percent: 100
   - file: 01-metrics-interrupted-job.md
-    status: not_started
-    percent: 0
+    status: complete
+    percent: 100
   - file: 02-frontend-locale.md
-    status: not_started
-    percent: 0
+    status: complete
+    percent: 100
   - file: 03-frontend-theme.md
-    status: not_started
-    percent: 0
+    status: complete
+    percent: 100
   - file: 04-frontend-dates.md
-    status: not_started
-    percent: 0
+    status: complete
+    percent: 100
   - file: 05-opentelemetry.md
-    status: not_started
-    percent: 0
+    status: complete
+    percent: 100
   - file: 06-job-status-results.md
-    status: not_started
-    percent: 0
+    status: complete
+    percent: 100
   - file: 07-http-producer-api.md
-    status: not_started
-    percent: 0
+    status: complete
+    percent: 100
   - file: 08-timeout-deadline.md
-    status: not_started
-    percent: 0
+    status: complete
+    percent: 100
   - file: 09-debounce-throttle.md
-    status: not_started
-    percent: 0
+    status: complete
+    percent: 100
   - file: 10-global-concurrency.md
-    status: not_started
-    percent: 0
+    status: complete
+    percent: 100
   - file: 11-flows.md
-    status: not_started
-    percent: 0
+    status: complete
+    percent: 100
   - file: 12-docs-site.md
-    status: not_started
-    percent: 0
+    status: complete
+    percent: 100
 evidence:
   - "00-census.md — cross-ecosystem survey completed 2026-08-07 (BullMQ/Pro, Oban Pro, River, Asynq, Faktory, Celery, Dramatiq, pg-boss, Laravel/Horizon, Hangfire, Temporal/Inngest/Trigger.dev/Hatchet, Solid Queue, GoodJob, SQS, Cloud Tasks). Sources linked in that file. No code."
+  - "01 — #398: interrupted IterableJob books p/ms, never f; Metrics::History and Metrics::Statsd both rescue-and-re-raise Wurk::Job::Interrupted. Recorded in docs/idea/parity-divergences.md."
+  - "02 — #399: locale negotiation, picker, server #wurk-root[data-locale] hint across 8 locales."
+  - "03 — #401: light/dark/system theme over the token layer, per 03-theme-decision.md (light ships, dark stays the bare-`:root` default)."
+  - "04 — #400: Intl-based locale/timezone-aware relative and absolute dates, ~400-zone picker, shared live-tick timer."
+  - "05 — #403: Wurk::Telemetry, opt-in W3C traceparent/tracestate, span-link fallback beyond 60s."
+  - "06 — #402: Wurk::Status — track: opt-in, coalesced progress, 8 KB result cap, no Sidekiq::Status alias (sidekiq-status owns it)."
+  - "07 — #406, #407: Wurk::API produce + observe planes, three mount modes, Python reference client."
+  - "08 — #404: timeout:/deadline: on Wurk::Watchdog — 3.0µs/bounded job vs 4.5µs stdlib Timeout (08-watchdog-measurement.md)."
+  - "09 — #405: collapse: { policy: :debounce | :throttle } — named collapse:, not unique:, because sidekiq-unique-jobs already maps unique:."
+  - "10 — #410: config.global_concurrency folded into the existing fetch pipeline; no added round trip when capped, 3.00 commands/job unchanged when unconfigured (10-global-concurrency-measurement.md). Shipped, not deferred."
+  - "11 — #411: Wurk::Flow — DAG over batches, atomic Lua creation, cycle/MAX_NODES/MAX_DEPTH/MAX_WIDTH validation, pipe:, Flow.abandon."
+  - "12 — docs written alongside each slice (api-http, telemetry, job-status, flows + updates to unique-jobs, retries, rate-limiting, dashboard, configuration, metrics, parity-divergences, 13-roadmap, README, site, llms.txt). #412 cleared the last unsupported 'faster' claims from the frontend meta descriptions."
 notes: >
-  Additive-only plan: every slice must be inert when unused — no change to the default
-  enqueue/fetch/execute path, no existing Redis key or JSON field touched. Slice 10
-  (global concurrency) is the sole hot-path slice and is explicitly allowed to close as
-  "deferred" if it can't clear the bench gate; that is a documented acceptable outcome,
-  not a failure. Slice 03 (light theme) was blocked on a maintainer call; it is settled
-  in 03-theme-decision.md — light ships, dark stays the bare-`:root` default. CLAUDE.md
-  and docs/idea/08-dashboard.md still say "dark-only" and are corrected by slice 12.
-  Slice 01 fixes issue #394 and is independent of everything else; it needs a parity
-  determination against upstream Metrics::ExecutionTracker first, and Metrics::Statsd
-  (Pro §9) has the identical shape and must be settled in the same pass.
-  06 blocks 07 (GET /jobs/:jid) and 11 (chains need stored results). 02-04 (frontend)
-  are disjoint from 05-11 (backend) and can run in parallel in this checkout.
-  12 runs last and documents only what actually shipped.
-last_updated: 2026-08-07
+  Shipped in v1.6.0 (2026-08-09). Additive-only as planned: every feature is inert when
+  unused — no change to the default enqueue/fetch/execute path, no existing Redis key or
+  JSON field touched. Slice 10 cleared the bench gate and shipped rather than deferring.
+  Slice 03 shipped light mode per 03-theme-decision.md; CLAUDE.md's Dashboard section no
+  longer says "dark-only". Slices 05, 06 and 08 add top-level job-JSON keys
+  (traceparent/tracestate, timeout/deadline/deadline_at, collapse) and a status:<jid>
+  side-record, each written only when the feature is opted into and each signed off in
+  docs/idea/parity-divergences.md.
+last_updated: 2026-08-09
