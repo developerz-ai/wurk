@@ -175,8 +175,10 @@ only fixable if you can see which edge to delete.
 names both the cap and the offending node.
 
 Both are subclasses of `Wurk::Flow::InvalidGraph`, itself an `ArgumentError`
-subclass — the same rescue arm that already turns a malformed job payload
-into a `400` on the HTTP API covers a malformed flow with no new code.
+subclass. Validation is producer-side: the builder raises before `#run` writes
+anything, in the process that declared the graph. The HTTP API has no flow
+write route to raise through — `GET /v1/flows/:fid` is read-only and reports
+lookup failures only.
 
 The same validation pass also refuses: an empty flow (no `f.job` calls), a
 duplicate node name, a `depends_on:`/`pipe:` naming something nothing

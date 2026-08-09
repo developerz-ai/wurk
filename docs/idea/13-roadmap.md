@@ -64,8 +64,9 @@ decisions, and measurements: `docs/plans/2026/08/07/101-beyond-sidekiq/`.
 - Machine-facing HTTP API (`Wurk::API`) — produce + observe planes, bearer
   auth with scopes, idempotency keys, three mount modes, a reference Python
   client.
-- Per-job `timeout:` and `deadline:`, backed by one monotonic watchdog thread
-  per process, never armed (so free) unless a job declares a bound.
+- Per-job `timeout:` and `deadline:`, backed by one lazily started monotonic
+  watchdog thread per capsule, never armed (so free) unless a job declares a
+  bound.
 - Debounce (`collapse: { policy: :debounce }`) and throttle-to-slot
   (`collapse: { policy: :throttle }`) — burst collapsing and rate ceilings at
   enqueue time, atomic single-Lua-call implementations.

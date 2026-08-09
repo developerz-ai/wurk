@@ -1,9 +1,12 @@
 # OpenTelemetry tracing
 
 A producer span on enqueue whose W3C trace context rides the job hash across
-the Redis hop, and a linked consumer span when a worker picks the job up —
-one trace that follows a job from `push` to `perform`, in-process or across a
-forked swarm.
+the Redis hop, and a consumer span when a worker picks the job up — correlated
+back to the enqueue that caused it, in-process or across a forked swarm. A job
+picked up promptly runs as a **child** of its producer span, in the same trace;
+one that sits in a scheduled set or a backoff for longer than the [parent
+window](#long-delay-and-scheduled-jobs) starts its own trace and carries a
+**link** back instead, rather than stretching a single trace across hours.
 
 > **Wurk-only extra — not a Sidekiq parity feature.** Stock Sidekiq ships no
 > first-party tracing at all; getting a trace today means bolting on a
@@ -116,11 +119,16 @@ enabled; an untraced push and a traced push are byte-identical except for
 these keys (`test/unit/telemetry_client_middleware_test.rb`,
 `test_opting_in_adds_the_trace_context_and_nothing_else`).
 
-This is a documented, sanctioned parity divergence — recorded in
-[`docs/idea/parity-divergences.md`](idea/parity-divergences.md) — not an
+Be precise about what that means for the drop-in contract. A traced payload is
+**not** key-for-key identical to a stock Sidekiq one: it is a strict superset —
+the stock key set plus additive metadata. What the tests below establish is
+that such a payload stays **Sidekiq-consumable**, which is the guarantee a swap
+actually rests on, not that the key set is unchanged. The addition is a
+documented, sanctioned parity divergence, recorded in
+[`docs/idea/parity-divergences.md`](idea/parity-divergences.md), not an
 accident:
 
-- **Drop-in both directions.** A job traced and enqueued by Wurk runs
+- **Consumable both directions.** A job traced and enqueued by Wurk runs
   unmodified on stock Sidekiq: `Sidekiq::Processor#dispatch` and
   `Sidekiq::JobLogger#prepare` read the job hash exclusively by known key
   name off a plain `JSON.parse`, so `traceparent` is inert cargo to a real
@@ -140,13 +148,16 @@ accident:
 A retried job carries the **original** `traceparent`, not a fresh one.
 `JobRetry#schedule_retry` re-`ZADD`s the same job hash it already has, so the
 client chain — and with it the injection step — never runs again for a
-retry. That means one trace per logical job across every attempt: attempt 1
-usually lands inside the [parent window](#long-delay-and-scheduled-jobs) and
-shows up as a child span, and later attempts, pushed further out by
-exponential backoff, land outside the window and become root spans carrying
-a **link** back to the original producer span instead. Neither case is ever
-an unrelated, untraceable root — every attempt is reachable from the enqueue
-that caused it.
+retry. Every attempt therefore points back at the same producer span — but not
+all of them from inside the same trace. Attempt 1 usually lands inside the
+[parent window](#long-delay-and-scheduled-jobs) and shows up as a child span,
+sharing the producer's trace id; later attempts, pushed further out by
+exponential backoff, land outside the window and start their own trace as root
+spans carrying a **link** back to the original producer span instead. So the
+attempts of one logical job are correlated by parentage or by link, not
+necessarily gathered under one trace id — but neither case is ever an
+unrelated, untraceable root. Every attempt is reachable from the enqueue that
+caused it.
 
 ## Long-delay and scheduled jobs
 

@@ -340,11 +340,11 @@ each keeping a different job:
 | Policy | Keeps | Use it when |
 |---|---|---|
 | `unique_for:` (this page) | The **first** push; rejects duplicates until the lock clears | You want exactly one in flight, and later pushes carry nothing new |
-| `collapse: { policy: :debounce, … }` | The **last** push's payload, fired once the bursts goes quiet | Fifty edits in a minute should produce one rebuild, with the *latest* state |
+| `collapse: { policy: :debounce, … }` | The **last** push's payload, fired once the burst goes quiet | Fifty edits in a minute should produce one rebuild, with the *latest* state |
 | `collapse: { policy: :throttle, … }` | The **first** push per fixed time slot; every extra in that slot is dropped | Poll an API at most once a minute, however many events ask for it |
 
 Both `collapse:` policies are separate from `unique_for:` on purpose — a lock
-drops the very re-enqueue debounce needs in order to extend a burst — and a
+drops the very re-enqueue debounce needs to extend a burst — and a
 worker declares at most one of the two; declaring both raises
 `Wurk::Collapse::ConfigurationError` where the class is defined.
 
@@ -385,8 +385,13 @@ end
   currently owns the slot, whether this push replaced a pending sibling).
 - `push_bulk` rejects a `collapse:`-declared class outright rather than
   deciding item-by-item — folding per-item collapse decisions into the bulk
-  Lua path costs one round trip per item instead of one for the whole batch
-  (measured: ~1,000× slower for 1,000 jobs). Push those jobs individually.
+  Lua path costs one round trip per item instead of one for the whole batch.
+  Measured on a 1,000-job batch: **1,000 round trips and ~6,000 Redis
+  commands** per-item, against **1 round trip and 2 commands** to reject. The
+  wall-clock gap is far smaller than that 1,000× round-trip ratio on loopback
+  Redis — round trips are cheap there — but it grows with every millisecond of
+  network latency between you and Redis, which is the case the bulk path exists
+  for. Push those jobs individually.
 - Neither policy has a `sidekiq-unique-jobs` equivalent; there is nothing to
   migrate in [§13](#13-migrating-from-sidekiq-unique-jobs) beyond `unique_for:`
   itself.

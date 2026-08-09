@@ -26,16 +26,16 @@ Sidekiq runs one process with a thread pool. Wurk runs a swarm of forked process
 
 ## Wurk extras (not Sidekiq parity)
 
-Sidekiq has no equivalent for any of these. Each is off by default and free when unused (no extra Redis round trip on the hot path unless opted in), and each is Wurk-only: using it ties that code to Wurk.
+Sidekiq has no equivalent for any of these, and each is Wurk-only: using it ties that code to Wurk. Everything that touches the job path is opt-in and free when unused (no extra Redis round trip on the hot path until it is turned on). The dashboard's theme, locale and timezone are the exception — active whenever the dashboard is, and costing the job path nothing either way.
 
 - **Job status, progress & results** — opt-in `sidekiq_options track: true` persists a `status:<jid>` row (state, coalesced progress writes, size-capped return value, withheld under encryption). [docs/job-status.md](https://github.com/developerz-ai/wurk/blob/main/docs/job-status.md).
 - **HTTP producer + observe API** — a bearer-token-scoped `/v1` JSON API to enqueue, bulk-enqueue, and inspect queues/jobs/swarm; mountable standalone, engine-nested, or via the `wurk api` CLI. [docs/api-http.md](https://github.com/developerz-ai/wurk/blob/main/docs/api-http.md).
 - **OpenTelemetry tracing** — opt-in `config.telemetry = true`; W3C `traceparent`/`tracestate` propagated client→server, one span per attempt, linked (not force-parented) across long retry delays. [docs/telemetry.md](https://github.com/developerz-ai/wurk/blob/main/docs/telemetry.md).
 - **Flows — DAGs on batches** — `Wurk::Flow` chains and fans batches out/in with dependency edges, piped results between nodes, cycle/depth/width limits, and `Flow.abandon`. [docs/flows.md](https://github.com/developerz-ai/wurk/blob/main/docs/flows.md).
-- **Debounce, throttle-to-slot & collapse** — `collapse: { policy: :debounce/:throttle }` coalesces a burst into one job (last-payload-wins) or admits one job per fixed time slot. [docs/unique-jobs.md](https://github.com/developerz-ai/wurk/blob/main/docs/unique-jobs.md).
+- **Debounce, throttle-to-slot & collapse** — `collapse: { policy: :debounce }` coalesces a burst into one job (last payload wins); `collapse: { policy: :throttle }` admits one job per fixed time slot. [docs/unique-jobs.md](https://github.com/developerz-ai/wurk/blob/main/docs/unique-jobs.md).
 - **Per-job timeouts & deadlines** — `timeout:` bounds one attempt, `deadline:` bounds the whole job from enqueue; enforced by a lightweight per-capsule watchdog thread, not thread-per-job. [docs/retries.md](https://github.com/developerz-ai/wurk/blob/main/docs/retries.md).
 - **Global per-queue concurrency caps** — `config.global_concurrency = { "critical" => 20 }` caps in-flight jobs for a queue across the whole cluster, folded into the fetch pipeline; distinct from the per-key `Limiter`s. [docs/rate-limiting.md](https://github.com/developerz-ai/wurk/blob/main/docs/rate-limiting.md).
-- **Kubernetes probes, worker topology DSL, dashboard theme/locale/timezone, opt-in AI panes** — see the README's "Wurk extras" table.
+- **Kubernetes probes, worker topology DSL, dashboard theme/locale/timezone** — see the README's "Wurk extras" table. (AI dashboard panes are roadmap M5, not shipped.)
 
 ## Third-party gem mappings
 

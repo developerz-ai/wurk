@@ -384,14 +384,18 @@ simply never read, not a protocol violation.
 ## `timeout:`/`deadline:` add `timeout`, `deadline`, and `deadline_at` as top-level job-JSON keys, opt-in only
 
 **Wurk:** `sidekiq_options timeout: <seconds>` writes `timeout` verbatim.
-`sidekiq_options deadline: <seconds>` is resolved once at push into an
-absolute `deadline_at` epoch-float (`JobUtil#stamp_deadline`,
-`lib/wurk/job_util.rb:205-219`) — the *raw* `deadline` key is not itself kept
-on the wire past normalization; what a worker or a retry/resume reads back is
-`deadline_at`. Both are read only by `Wurk::Middleware::Timeout` (arms the
-per-process `Wurk::Watchdog`) and `Wurk::Middleware::Expiry` (the
-`deadline_at` preemption/skip path). A job that declares neither costs two
-Hash lookups and a `yield` — no watchdog thread spawns.
+`deadline:` is the *input option*: it too rides the wire verbatim, and push-time
+normalization derives an absolute `deadline_at` epoch-float from it
+(`JobUtil#stamp_deadline`, `lib/wurk/job_util.rb:205-223`). The two are not
+interchangeable — `deadline` is a relative duration frozen at declaration,
+`deadline_at` the absolute cutoff every later attempt measures against, so a
+retry or an `IterableJob` resume reads `deadline_at` and never re-derives one
+(`||=` keeps the first push's stamp). The persisted top-level fields are
+therefore `timeout`, `deadline`, and `deadline_at`. `timeout` and `deadline_at`
+are read only by `Wurk::Middleware::Timeout` (arms the per-capsule
+`Wurk::Watchdog`) and `Wurk::Middleware::Expiry` (the `deadline_at`
+preemption/skip path). A job that declares neither costs two Hash lookups and a
+`yield` — no watchdog thread spawns.
 
 **Spec:** No timeout/deadline concept in `docs/target/sidekiq-free.md` beyond
 Pro's `expires_in:` (→ `expiry`, already an existing top-level key, unrelated

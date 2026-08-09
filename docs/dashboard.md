@@ -199,11 +199,16 @@ compatibility shim is tracked, deliberately deferred, in #204.
 
 ## Language, theme, and timezone
 
-Not security settings, but the other three per-visitor things a host can hint
-a default for: `config.web.offered_locales` / `default_locale`, and
-`config.web.default_theme` are read server-side and injected ahead of the
-shell's pre-paint script, so a visitor's first load already renders in the
-right language and palette instead of flashing the wrong one. Timezone has no
-server-side hint — it's resolved entirely client-side from the browser's own
-zone, or a visitor's own override. Full reference, including precedence order
+Not security settings, but the other three per-visitor things a host shapes
+server-side. `config.web.offered_locales` is the *supported set*, not a
+default: the dashboard negotiates it against the visitor's `Accept-Language`
+header (`negotiated_locale` in `Wurk::DashboardController`, backed by
+`Wurk::Web::LocaleNegotiator`). `config.web.default_locale` is the fallback
+used when nothing in that header matches the offered set, and
+`config.web.default_theme` is the palette default. All three are read
+server-side and injected ahead of the shell's pre-paint script, so a visitor's
+first load already renders in the right language and palette instead of
+flashing the wrong one. Timezone has no server-side hint at all — it's resolved
+entirely client-side from the browser's own zone, or a visitor's own override.
+Full reference, including precedence order
 and every option: [Configuration → Dashboard configuration](configuration.md#dashboard-configuration).

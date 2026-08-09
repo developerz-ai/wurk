@@ -181,7 +181,7 @@ end
 
 | Option | Bounds | On expiry | Retries? |
 |---|---|---|---|
-| `timeout:` | One attempt | `Wurk::Job::TimedOut` raised into the running thread | **Yes** — ordinary failure path: booked as a failure, retried on the class's own `retry:` policy |
+| `timeout:` | One attempt | `Wurk::Job::TimedOut` raised into the running thread | **Yes, if it escapes `perform`** — then the ordinary failure path: booked as a failure, retried on the class's own `retry:` policy. A `perform` that rescues it swallows the retry too |
 | `deadline:` | The job as a whole, from enqueue | `Wurk::Job::DeadlineExceeded` raised (if already running) or the job dropped before `perform` starts (if the window already closed) | **No** — terminal `expired` state, same as `expires_in:` ([reliability.md](reliability.md)) |
 
 - **`timeout:`** is per attempt: a retried job that timed out gets the full
@@ -193,11 +193,13 @@ end
   getting a fresh one. Past the cutoff the job never runs (or is cut mid-run)
   and lands in the same `expired` terminal state `expires_in:` produces —
   bumps `stat:expired` and `jobs.expired`, no retry, no dead-set entry.
-- Both bounds race `shutdown_timeout` — whichever is shorter wins. A `timeout`
-  under the drain budget fires first and the job retries normally; a `timeout`
-  over it never gets the chance, since graceful shutdown unwinds the job with
-  `Wurk::Shutdown` instead and the payload is reclaimed from the private list
-  on the next boot.
+- Both bounds race `shutdown_timeout` — and the comparison is between what's
+  *left* of each, not between the configured numbers. A bound whose remaining
+  budget is shorter than the remaining drain fires first and the job retries
+  normally; otherwise graceful shutdown unwinds the job with `Wurk::Shutdown`
+  instead and the payload is reclaimed from the private list on the next boot.
+  So a 30s `timeout:` can still beat a 10s drain: an attempt already 25s in has
+  5s of budget left when the `TERM` lands.
 - A worker can declare `timeout:`, `deadline:`, both, or neither — they answer
   different questions ("how long may one attempt take" vs "how long may the
   whole job take") and aren't mutually exclusive.

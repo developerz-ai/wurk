@@ -19,7 +19,7 @@ A "beyond Sidekiq" release: eight Wurk-only extras, none of them Sidekiq parity.
 
 ### Changed
 
-- **Job JSON gains new top-level, additive-only fields — never sent unless the corresponding feature is opted into.** `traceparent`/`tracestate` (telemetry), a `status:<jid>` side-record keyed off `track: true` (no job-JSON field, a separate Redis key), `timeout`/`deadline` (per-job bounds), `collapse` (debounce/throttle policy). Precedent for additive top-level keys: `job_util.rb`'s existing `TRANSIENT_ATTRIBUTES`, plus `sidekiq-cron`/`sidekiq-unique-jobs` both adding their own. None of these are read by, or break, an unmodified Sidekiq worker.
+- **Job JSON gains new top-level, additive-only fields — never sent unless the corresponding feature is opted into.** `traceparent`/`tracestate` (telemetry), a `status:<jid>` side-record keyed off `track: true` (no job-JSON field, a separate Redis key), `timeout`/`deadline`/`deadline_at` (per-job bounds — `deadline:` is the input option and is kept verbatim; `deadline_at` is the absolute cutoff derived from it once, at push), `collapse` (debounce/throttle policy). Precedent for additive top-level keys: `job_util.rb`'s existing `TRANSIENT_ATTRIBUTES`, plus `sidekiq-cron`/`sidekiq-unique-jobs` both adding their own. None of these are read by, or break, an unmodified Sidekiq worker.
 
 ### Fixed
 

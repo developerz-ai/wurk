@@ -38,8 +38,9 @@ Redis hashes (see
 | `j\|<YYYYMMDD>\|<H>:<M>` | HASH | `<klass>\|p`, `<klass>\|f`, `<klass>\|ms` | 3 days (`MID_TERM`) |
 | `<klass>-<YYYYMMDD>-<H>` | HASH | `p`, `f`, `ms` | 3 days |
 
-- `p` counts successful executions, `f` counts raised ones, `ms` accumulates
-  total wall-clock milliseconds for **both** outcomes.
+- `p` counts *processed* attempts — those that returned cleanly plus those cut
+  short by a cooperative interruption (see below) — `f` counts raised ones, and
+  `ms` accumulates total wall-clock milliseconds for **both** outcomes.
 - Timestamps are UTC. The TTL is re-set on every write, so a class that keeps
   running keeps its bucket for 3 days measured from the *last* write.
 - The key format is Sidekiq's, so metrics written by Sidekiq before the swap

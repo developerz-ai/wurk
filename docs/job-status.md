@@ -112,11 +112,11 @@ job`, all in the same pipeline.
 
 ## State machine
 
-```
+```text
 enqueued ──▶ running ──┬─▶ complete
-                        ├─▶ interrupted
-                        └─▶ failed ──┬─▶ retrying   (next attempt writes running again)
-                                     └─▶ dead
+                       ├─▶ interrupted
+                       └─▶ failed ──┬─▶ retrying   (next attempt writes running again)
+                                    └─▶ dead
 ```
 
 The exact state strings (`Wurk::Status::STATES`):
@@ -202,7 +202,8 @@ end
 - `status.message(text)` — reports a step description without moving the
   counter.
 - `status.flush` — forces out whatever `at`/`message` buffered since the last
-  write; returns `true` when something was actually written.
+  write, *bypassing* the coalescing window below; returns `true` when something
+  was actually written, `false` when there was nothing buffered to write.
 
 ## Coalescing
 
@@ -214,6 +215,14 @@ progress are the same traffic problem). The newest unwritten values are
 buffered in memory; only the most recent `at`/`message` call inside a window
 survives. The first report is never delayed — a job that calls `at` once,
 early, is visible immediately.
+
+The window governs `at`/`message` only. `status.flush` is the deliberate
+escape hatch and ignores it: an `at` followed by an explicit `flush` writes
+straight through, even twice inside the same 5 seconds. That is the point — a
+milestone worth interrupting a batch for shouldn't wait on a rate limiter — but
+it does mean a `flush` in the same tight loop you were protecting hands the
+rate limit right back. Flushing with nothing buffered costs no round trip and
+returns `false`.
 
 Nothing is lost at the end of a run: the server middleware's terminal write
 (`complete`/`interrupted`/`failed`) drains whatever the handle buffered and

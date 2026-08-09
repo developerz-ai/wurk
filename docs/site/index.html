@@ -413,9 +413,10 @@ gem <span class="add">"wurk"</span></pre>
       <section id="extras" class="reveal">
         <h2>Wurk extras &mdash; not Sidekiq parity</h2>
         <p class="section-lede">
-          Sidekiq has no equivalent for any of these. Each is <b>off by default and free when unused</b> &mdash;
-          no extra Redis round trip on the hot path unless you opt in &mdash; and each is <b>Wurk-only</b>:
-          using it ties that code to Wurk.
+          Sidekiq has no equivalent for any of these, and each is <b>Wurk-only</b>: using it ties that code
+          to Wurk. Everything that touches the job path is <b>opt-in and free when unused</b> &mdash; no extra
+          Redis round trip on the hot path until you turn it on. The dashboard's theme, locale and timezone
+          are the exception: they're on whenever the dashboard is, and cost the job path nothing either way.
         </p>
         <div class="extras-grid">
           <div class="feature feature--extra">
@@ -450,7 +451,7 @@ gem <span class="add">"wurk"</span></pre>
             <span class="edge-light" aria-hidden="true"></span>
             <span class="feature__ic"><i class="fa-solid fa-layer-group" aria-hidden="true"></i></span>
             <h3>Debounce, throttle-to-slot &amp; collapse</h3>
-            <p><code>collapse: { policy: :debounce/:throttle }</code> coalesces a burst into one job &mdash; last-payload-wins, or one admission per fixed time slot.</p>
+            <p><code>collapse: { policy: :debounce }</code> coalesces a burst into one job (last payload wins); <code>collapse: { policy: :throttle }</code> admits one job per fixed time slot.</p>
             <span class="feature__tier"><i class="fa-solid fa-star extra" aria-hidden="true"></i> Wurk-only</span>
           </div>
           <div class="feature feature--extra">
@@ -477,8 +478,8 @@ gem <span class="add">"wurk"</span></pre>
           <div class="feature feature--extra">
             <span class="edge-light" aria-hidden="true"></span>
             <span class="feature__ic"><i class="fa-solid fa-wand-magic-sparkles" aria-hidden="true"></i></span>
-            <h3>Theme, locale, timezone &amp; AI panes</h3>
-            <p>Light/dark/system theme, per-visitor locale override, a 400-zone timezone picker, and opt-in AI panes (anomaly detection, NL queries, capacity forecasting).</p>
+            <h3>Dashboard theme, locale &amp; timezone</h3>
+            <p>Light/dark/system theme, per-visitor locale override, and a 400-zone timezone picker applied to every timestamp in the SPA. (AI panes &mdash; anomaly detection, NL queries, capacity forecasting &mdash; are planned for M5, not shipped.)</p>
             <span class="feature__tier"><i class="fa-solid fa-star extra" aria-hidden="true"></i> Wurk-only</span>
           </div>
         </div>

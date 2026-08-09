@@ -242,8 +242,10 @@ Wurk.configure_server do |config|
 end
 ```
 
-- Capacity, not a rate: a `window`/`bucket` limiter answers "how many per
-  second"; `global_concurrency` answers "how many at once". There is no
+- Capacity, not a rate: a `window`/`bucket` limiter answers "how many within
+  the configured interval" (a second, a minute, an hour, a day, or an
+  arbitrary span of seconds); `global_concurrency` answers "how many at
+  once" — a ceiling on jobs in flight, with no interval at all. There is no
   waiting or rescheduling built in — a queue at its cap is simply skipped on
   that fetch pass and retried on the next one, so throughput settles at
   whatever the cap allows rather than backing off exponentially.
