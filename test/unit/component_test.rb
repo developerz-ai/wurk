@@ -161,6 +161,15 @@ class ComponentTest < Wurk::Test::UnitCase
     assert_equal expected, @host.identity
   end
 
+  # The module-level pair exists for callers with no Component instance to hand
+  # — Wurk::QueueSlot builds its holder token out of them. They must be the
+  # same string an instance reports, or a holder would name itself differently
+  # from its own entry in the `processes` set.
+  def test_module_level_identity_matches_the_instance
+    assert_equal @host.identity, Wurk::Component.identity
+    assert_equal @host.hostname, Wurk::Component.hostname
+  end
+
   def test_default_tag_uses_pwd_basename
     assert_equal File.basename(Dir.pwd), @host.default_tag
   end

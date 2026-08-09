@@ -971,6 +971,73 @@ class ConfigurationTest < Wurk::Test::UnitCase
     assert Wurk.const_defined?(:Telemetry, false), 'config.telemetry = true must require wurk/telemetry'
   end
 
+  # --- global_concurrency (Wurk::QueueSlot) ------------------------------
+
+  # Seeded in DEFAULTS rather than written on first use, so the fetch path can
+  # resolve "nothing is capped" at boot off a config `freeze!` has closed.
+  def test_defaults_global_concurrency_is_empty
+    assert_empty @config[:global_concurrency]
+    refute_predicate @config, :global_concurrency?
+  end
+
+  def test_global_concurrency_reads_on_a_frozen_config
+    @config.freeze!
+
+    refute_predicate @config, :global_concurrency?
+    assert_empty @config.global_concurrency
+  end
+
+  def test_global_concurrency_normalizes_queue_names_to_strings
+    @config.global_concurrency = { critical: 20, 'low' => 2 }
+
+    assert_equal({ 'critical' => 20, 'low' => 2 }, @config.global_concurrency)
+    assert_predicate @config, :global_concurrency?
+  end
+
+  # The fetch path reads this once at boot, so a cap added by mutating the Hash
+  # afterwards would be enforced by nobody. Better to raise than to be ignored.
+  def test_global_concurrency_is_frozen_once_assigned
+    @config.global_concurrency = { 'critical' => 20 }
+
+    assert_raises(FrozenError) { @config.global_concurrency['other'] = 5 }
+  end
+
+  def test_global_concurrency_rejects_a_non_hash
+    assert_raises(ArgumentError) { @config.global_concurrency = %w[critical] }
+    assert_raises(ArgumentError) { @config.global_concurrency = nil }
+  end
+
+  def test_global_concurrency_rejects_a_non_positive_cap
+    assert_raises(ArgumentError) { @config.global_concurrency = { 'critical' => 0 } }
+    assert_raises(ArgumentError) { @config.global_concurrency = { 'critical' => -1 } }
+  end
+
+  def test_global_concurrency_rejects_an_uncountable_cap
+    assert_raises(ArgumentError) { @config.global_concurrency = { 'critical' => 'twenty' } }
+    assert_raises(ArgumentError) { @config.global_concurrency = { 'critical' => nil } }
+  end
+
+  def test_global_concurrency_rejects_an_empty_queue_name
+    assert_raises(ArgumentError) { @config.global_concurrency = { '' => 5 } }
+  end
+
+  # A rejected assignment must leave the previous caps in force rather than
+  # half-applying the new Hash.
+  def test_a_rejected_assignment_keeps_the_previous_caps
+    @config.global_concurrency = { 'critical' => 20 }
+
+    assert_raises(ArgumentError) { @config.global_concurrency = { 'critical' => 5, 'low' => 0 } }
+    assert_equal({ 'critical' => 20 }, @config.global_concurrency)
+  end
+
+  def test_global_concurrency_setter_raises_once_frozen
+    @config.freeze!
+
+    err = assert_raises(FrozenError) { @config.global_concurrency = { 'critical' => 1 } }
+
+    assert_equal 'Wurk::Configuration is frozen', err.message
+  end
+
   private
 
   # Opting in warns whenever opentelemetry-api is absent, which it is in this

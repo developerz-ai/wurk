@@ -88,6 +88,16 @@ module Wurk
     # `:threshold` / `:concurrency.v2`.
     THROTTLE_PREFIX = 'throttle:'
 
+    # Global per-queue concurrency (Wurk::QueueSlot): `queue_slot:<queue>` ZSET
+    # of the live holders of that queue's slots, score = the epoch each hold
+    # expires unless refreshed. A Wurk extra, like `throttle:` — Sidekiq has no
+    # cluster-wide per-queue cap, so nothing in its key schema
+    # (sidekiq-free.md §1) or in a third-party gem answers to this name.
+    #
+    # Keyed on the unprefixed queue name, so `queue:critical` and its cap live
+    # under two names that can never be mistaken for one another by a SCAN.
+    QUEUE_SLOT_PREFIX = 'queue_slot:'
+
     # `Idempotency-Key` replay records for the HTTP API: `idempotency:<digest>`
     # STRING holding the response the first request produced. A Wurk extra like
     # `status:` — nothing in the Sidekiq key schema lives here, and nothing
@@ -126,6 +136,12 @@ module Wurk
     # Idempotency replay record for one request digest. Same reason as .queue.
     def self.idempotency(digest)
       "#{IDEMPOTENCY_PREFIX}#{digest}"
+    end
+
+    # Slot holders for one capped queue, from its unprefixed name. Same reason
+    # as .queue.
+    def self.queue_slot(queue)
+      "#{QUEUE_SLOT_PREFIX}#{queue}"
     end
   end
 end

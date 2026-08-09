@@ -92,7 +92,13 @@ module Wurk
       # request until a host asks for a limit, and no number picked here would
       # be right for both a cron relay and a fan-out producer.
       api_rate_limit: nil,
-      api_rate_limit_interval: :minute
+      api_rate_limit_interval: :minute,
+      # Cluster-wide ceiling per queue (Wurk::QueueSlot), as
+      # `{ 'critical' => 20 }`. Empty is the whole point of seeding it here:
+      # the fetch path reads this once at boot, so an app that caps nothing
+      # resolves to "no capped queues" before the first fetch and never asks
+      # again.
+      global_concurrency: {}
     }.freeze
 
     # :fork fires only inside swarm children, after fork + internal AR/Redis
@@ -599,6 +605,35 @@ module Wurk
       @options[:api_rate_limit_interval] = interval
     end
 
+    # --- Global per-queue concurrency (Wurk::QueueSlot) -------------------
+
+    # @return [Hash{String => Integer}] queue name → cluster-wide ceiling.
+    #   Frozen once assigned; see #global_concurrency=.
+    def global_concurrency = @options[:global_concurrency]
+
+    # Caps how many jobs from a queue may run at once across the whole
+    # cluster, whatever the worker count:
+    #
+    #   Wurk.configure_server { |config| config.global_concurrency = { critical: 20 } }
+    #
+    # Not the same thing as `concurrency`, which is threads in one process, nor
+    # as a {Wurk::Limiter}, which is keyed per lock and gates inside the job
+    # (by which point the job is already claimed off the queue). This is a
+    # ceiling on the queue itself, enforced where the work is picked up.
+    #
+    # Names are normalized to Strings and the result is frozen, because the
+    # fetch path resolves it once at boot: a cap added by mutating this Hash
+    # afterwards would be read by nothing, so it raises rather than doing
+    # nothing. Assign a new Hash to change one.
+    def global_concurrency=(caps)
+      guard_frozen!
+      @options[:global_concurrency] = normalize_global_concurrency(caps)
+    end
+
+    # @return [Boolean] whether any queue is capped. The one question the
+    #   fetcher asks at boot to decide whether it has a gate to run at all.
+    def global_concurrency? = !@options[:global_concurrency].empty?
+
     # --- Web dashboard ----------------------------------------------------
 
     # Web UI configuration: the authorization hook and read-only mode. Returns
@@ -819,6 +854,24 @@ module Wurk
       raise ArgumentError, "#{name} must be a positive Integer" unless size&.positive?
 
       size
+    end
+
+    # A cap is a promise about how much of a queue may run; a typo in one is a
+    # queue that silently runs unbounded (name) or never runs (count), and
+    # neither shows up until production is either overloaded or stalled. Both
+    # are refused in the initializer that wrote them.
+    def normalize_global_concurrency(caps)
+      raise ArgumentError, "global_concurrency must be a Hash, got #{caps.class}" unless caps.is_a?(Hash)
+
+      caps.each_with_object({}) do |(queue, cap), resolved|
+        name = queue.to_s
+        raise ArgumentError, 'global_concurrency queue names cannot be empty' if name.empty?
+
+        limit = Integer(cap, exception: false)
+        raise ArgumentError, "global_concurrency[#{name.inspect}] must be a positive Integer" unless limit&.positive?
+
+        resolved[name] = limit
+      end.freeze
     end
 
     def deep_dup_defaults

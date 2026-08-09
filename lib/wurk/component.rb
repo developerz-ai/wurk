@@ -67,8 +67,20 @@ module Wurk
       Component.tid
     end
 
-    def hostname
+    def self.hostname
       ENV['DYNO'] || Socket.gethostname
+    end
+
+    # Class-level so a plain module with no Component instance to hand — the
+    # queue-slot holder token, which has to name this process the same way the
+    # `processes` set does — reaches the one definition instead of copying the
+    # format. The instance methods below are the same string.
+    def self.identity
+      "#{hostname}:#{::Process.pid}:#{PROCESS_NONCE}"
+    end
+
+    def hostname
+      Component.hostname
     end
 
     def process_nonce
@@ -76,7 +88,7 @@ module Wurk
     end
 
     def identity
-      "#{hostname}:#{::Process.pid}:#{process_nonce}"
+      Component.identity
     end
 
     def default_tag(dir = Dir.pwd)
