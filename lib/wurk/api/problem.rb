@@ -19,6 +19,11 @@ module Wurk
       UNSUPPORTED_API_VERSION = 'unsupported_api_version'
       INTERNAL_ERROR = 'internal_error'
       UNAUTHORIZED = 'unauthorized'
+      INVALID_REQUEST = 'invalid_request'
+      # Distinct from `not_found`, which means the API has no such route. A
+      # client that asked to cancel a job needs to tell "you addressed nothing"
+      # apart from "that job already ran".
+      JOB_NOT_FOUND = 'job_not_found'
       # Named for RFC 6750 §3.1 so the slug and the `error=` the 403 carries in
       # WWW-Authenticate are the same word.
       INSUFFICIENT_SCOPE = 'insufficient_scope'
@@ -31,7 +36,9 @@ module Wurk
         UNSUPPORTED_API_VERSION => 'Unsupported API Version',
         INTERNAL_ERROR => 'Internal Server Error',
         UNAUTHORIZED => 'Unauthorized',
-        INSUFFICIENT_SCOPE => 'Insufficient Scope'
+        INSUFFICIENT_SCOPE => 'Insufficient Scope',
+        INVALID_REQUEST => 'Invalid Request',
+        JOB_NOT_FOUND => 'Job Not Found'
       }.freeze
 
       module_function

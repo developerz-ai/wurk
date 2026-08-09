@@ -312,10 +312,10 @@ class ApiAuthTest < Wurk::Test::UnitCase
     private
 
     def draw(router)
-      router.get('/', scope: Wurk::API::Auth::ANY) { |_request| json(200, ok: 'any') }
-      router.get('/reads', scope: :read) { |_request| json(200, ok: 'read') }
-      router.post('/enqueues', scope: :enqueue) { |_request| json(201, ok: 'enqueue') }
-      router.post('/admins', scope: :admin) { |_request| json(200, ok: 'admin') }
+      router.get('/', scope: Wurk::API::Auth::ANY) { |_request| Wurk::API::Response.json(200, ok: 'any') }
+      router.get('/reads', scope: :read) { |_request| Wurk::API::Response.json(200, ok: 'read') }
+      router.post('/enqueues', scope: :enqueue) { |_request| Wurk::API::Response.json(201, ok: 'enqueue') }
+      router.post('/admins', scope: :admin) { |_request| Wurk::API::Response.json(200, ok: 'admin') }
     end
   end
 

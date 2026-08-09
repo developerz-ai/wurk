@@ -1,11 +1,12 @@
 # frozen_string_literal: true
 
-require 'json'
 require 'rack'
 require_relative '../version'
 require_relative 'auth'
+require_relative 'jobs'
 require_relative 'problem'
 require_relative 'request'
+require_relative 'response'
 require_relative 'router'
 
 module Wurk
@@ -22,8 +23,6 @@ module Wurk
       API_VERSION = 'v1'
       VERSION_PREFIX = "/#{API_VERSION}".freeze
       SUPPORTED_VERSIONS = [API_VERSION].freeze
-
-      JSON_HEADERS = { 'content-type' => 'application/json', 'x-content-type-options' => 'nosniff' }.freeze
 
       # `config` is read on every request rather than captured, so a token
       # registered after the first request still takes effect. Injectable
@@ -48,9 +47,11 @@ module Wurk
         @config || ::Wurk.configuration
       end
 
-      # Later slices hang their own tables off this: jobs, queues, swarm.
+      # One table per plane, each owning its own routes and handlers. Queues and
+      # swarm join Jobs here.
       def draw(router)
         router.get('/', scope: Auth::ANY) { |request| root(request) }
+        Jobs.draw(router)
       end
 
       # Authentication runs before the version gate and before routing, so an
@@ -87,7 +88,9 @@ module Wurk
       # The document a client hits to confirm which mount and which contract it
       # is talking to before it starts guessing paths.
       def root(request)
-        json(200, api_version: API_VERSION, wurk_version: ::Wurk::VERSION, url: request.url_for(VERSION_PREFIX))
+        Response.json(
+          200, api_version: API_VERSION, wurk_version: ::Wurk::VERSION, url: request.url_for(VERSION_PREFIX)
+        )
       end
 
       def versioned?(path)
@@ -145,10 +148,6 @@ module Wurk
           detail: 'The request could not be completed.',
           instance: request.path
         )
-      end
-
-      def json(status, payload)
-        [status, JSON_HEADERS.dup, [::JSON.generate(payload)]]
       end
     end
   end

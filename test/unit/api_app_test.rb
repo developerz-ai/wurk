@@ -206,8 +206,10 @@ class ApiAppTest < Wurk::Test::UnitCase
     private
 
     def draw(router)
-      router.get('/echo/:name', scope: :read) { |request| json(200, echoed: request.path_params[:name]) }
-      router.post('/create', scope: :enqueue) { |_request| json(201, created: true) }
+      router.get('/echo/:name', scope: :read) do |request|
+        Wurk::API::Response.json(200, echoed: request.path_params[:name])
+      end
+      router.post('/create', scope: :enqueue) { |_request| Wurk::API::Response.json(201, created: true) }
     end
   end
 
