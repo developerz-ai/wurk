@@ -128,6 +128,7 @@ module Sidekiq
   # `FlowIdMiddleware` nested under a gem's *own* `Sidekiq` module, which this
   # constant cannot reach.
   Flow             = Wurk::Flow
+  FlowSet          = Wurk::FlowSet
   History          = Wurk::History
   IterableJob      = Wurk::IterableJob
   IterableJobQuery = Wurk::IterableJobQuery

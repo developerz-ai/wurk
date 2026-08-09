@@ -27,6 +27,11 @@ module Wurk
       # The same distinction one addressable resource over: a well-formed bid
       # the `batches` set has never held, as opposed to a mistyped path.
       BATCH_NOT_FOUND = 'batch_not_found'
+      # And one relation further out: a well-formed fid the `flows` set has
+      # never held. Distinct from `batch_not_found` because a flow's nodes are
+      # batches — a client told "batch not found" for a fid would go looking
+      # for the wrong thing.
+      FLOW_NOT_FOUND = 'flow_not_found'
       # A well-formed identity that no live heartbeat answers to — the process
       # exited, or its beat lapsed and Redis reaped the row.
       PROCESS_NOT_FOUND = 'process_not_found'
@@ -74,6 +79,7 @@ module Wurk
         INVALID_REQUEST => 'Invalid Request',
         JOB_NOT_FOUND => 'Job Not Found',
         BATCH_NOT_FOUND => 'Batch Not Found',
+        FLOW_NOT_FOUND => 'Flow Not Found',
         PROCESS_NOT_FOUND => 'Process Not Found',
         PROCESS_NOT_SIGNALABLE => 'Process Not Signalable',
         PAYLOAD_TOO_LARGE => 'Payload Too Large',

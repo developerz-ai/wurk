@@ -182,6 +182,31 @@ module Wurk
       render json: { error: 'unknown batch' }, status: :not_found
     end
 
+    def flows
+      set = ::Wurk::FlowSet.new
+      page = ::Wurk::Api::Pagination.window(params)
+      rows = ::Wurk::Api::Pagination.slice(set, page) { |status| ::Wurk::Api::Serializers.flow_row(status) }
+      render json: { total: set.size, page: page[:page], count: page[:count], flows: rows }
+    end
+
+    def flow
+      status = flow_status
+      return render(json: { error: 'unknown flow' }, status: :not_found) unless status&.exists?
+
+      render json: ::Wurk::Api::Serializers.flow_detail(status)
+    end
+
+    # The kill switch (slice 11 decision 4). Read-only mode 403s it via the
+    # Authorization middleware, like every other non-GET here. `abandoned`
+    # comes back false for a flow that had already finished or been abandoned —
+    # neither is stuck, and neither is touched.
+    def abandon_flow
+      status = flow_status
+      return render(json: { error: 'unknown flow' }, status: :not_found) unless status&.exists?
+
+      render json: { ok: true, abandoned: ::Wurk::Flow.abandon(status.fid) }
+    end
+
     def limiters
       names = ::Wurk::Web::Enterprise::Limits.list(filter: params[:substr])
       page = ::Wurk::Api::Pagination.window(params)
@@ -326,6 +351,16 @@ module Wurk
     # answers for a real mutation, not the GET /api/meta request carrying it.
     def mutations_authorized?(config)
       config.authorized?(request.env, 'POST', MUTATION_PROBE_PATH)
+    end
+
+    # nil for an empty fid, which Flow::Status refuses rather than reading
+    # `flow:` — the key prefix itself, which is not a flow. Both callers turn
+    # that into the same 404 a fid nothing was created under gets, because from
+    # outside there is no difference worth telling apart.
+    def flow_status
+      ::Wurk::Flow::Status.new(params[:fid].to_s)
+    rescue ::ArgumentError
+      nil
     end
 
     # Resolves a single entry by "<score>|<jid>" key and applies a whitelisted

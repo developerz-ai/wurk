@@ -241,6 +241,7 @@ branches on; renaming one is a breaking change, adding one is not.
 | `class_not_allowed` | 403 | `class` is not on `config.api_enqueue_classes`. |
 | `job_not_found` | 404 | No scheduled/retrying job, or no tracked status, for this jid. |
 | `batch_not_found` | 404 | No batch with this bid. |
+| `flow_not_found` | 404 | No flow with this fid. |
 | `process_not_found` | 404 | No live process with this identity. |
 | `process_not_signalable` | 409 | Process is embedded in its host app; signalling it would signal the host. |
 | `idempotency_key_reused` | 409 | Same `Idempotency-Key`, different request body — rotate the key. |
@@ -377,6 +378,13 @@ deep a queue is.
 | `GET /scheduled` | `read` | Paged `schedule` set. |
 | `GET /dead` | `read` | Paged `dead` set. |
 | `GET /batches/:bid` | `read` | Batch status/counters. `404 batch_not_found` if never created or expired. |
+| `GET /flows/:fid` | `read` | A flow's state, counters and whole node graph. `404 flow_not_found` if never created or expired. |
+
+There is no `GET /flows` and no way to abandon one over this API. A producer
+holds the fid of the flow it created, which is the only flow it has a question
+about; browsing every flow in the deployment, and deciding one is stuck enough
+to kill, are things an operator does with the graph on screen — the dashboard's
+Flows pages.
 
 Paged routes take `?page=` (0-based) and `?count=` (default 25, max 200);
 out-of-range values are clamped, not refused, and the effective values are

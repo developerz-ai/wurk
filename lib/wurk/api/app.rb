@@ -4,6 +4,7 @@ require 'rack'
 require_relative '../api'
 require_relative '../version'
 require_relative 'auth'
+require_relative 'flows'
 require_relative 'jobs'
 require_relative 'problem'
 require_relative 'queues'
@@ -51,12 +52,13 @@ module Wurk
         @config || ::Wurk.configuration
       end
 
-      # One table per plane, each owning its own routes and handlers. Swarm
-      # joins Jobs and Queues here.
+      # One table per plane, each owning its own routes and handlers. Queues,
+      # Flows and Swarm join Jobs here.
       def draw(router)
         router.get('/', scope: Auth::ANY) { |request| root(request) }
         Jobs.draw(router)
         Queues.draw(router)
+        Flows.draw(router)
         Swarm.draw(router)
       end
 
