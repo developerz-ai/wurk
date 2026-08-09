@@ -78,7 +78,7 @@ Wurk::Engine.routes.draw do
   # own routes, declared BEFORE the engine when its path extends the engine's —
   # Rails matches a mounted app by bare string prefix, so `mount Wurk::Engine =>
   # '/wurk'` declared first swallows every `/wurk-api/...` request.
-  mount Wurk::API => '/api', constraints: ->(request) { Wurk::API.serves?(request.path_info) }
+  mount Wurk::API => Wurk::API::ENGINE_MOUNT, constraints: ->(request) { Wurk::API.serves?(request.path_info) }
 
   # Profiles (v8.0+) — not under /api: `:key/data` streams the gzipped gecko
   # blob with a gzip Content-Encoding, and `:key` POST-uploads the profile to

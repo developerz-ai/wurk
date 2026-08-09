@@ -409,6 +409,19 @@ module Wurk
         path = env['PATH_INFO'].to_s
         config = Wurk::Web.config
         return forbidden(FORBIDDEN_BODY) unless config.authorized?(env, method, path)
+
+        # The machine API's own read-only refusal is an RFC-9457 problem
+        # document with a slug a client can branch on; this one is the string
+        # "Read-only mode" in text/plain. Same verdict either way, so hand the
+        # decision down rather than answering here — stamping the env is what
+        # makes mount mode 1 (and nothing else) inherit `WURK_WEB_READ_ONLY`.
+        # The host's `authorized?` block above still applies: it gates the
+        # mount, and a machine client reaching this path chose that mount.
+        if ::Wurk::API.engine_serves?(path)
+          env[::Wurk::API::READ_ONLY_ENV] = true if config.read_only?
+          return @app.call(env)
+        end
+
         return forbidden(READ_ONLY_BODY) if config.read_only? && !SAFE_METHODS.include?(method)
 
         @app.call(env)

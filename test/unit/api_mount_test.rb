@@ -54,6 +54,38 @@ class ApiMountTest < Wurk::Test::UnitCase
     assert_equal ['v1'], Wurk::API::SUPPORTED_VERSIONS
   end
 
+  # The same question one prefix out, for `Wurk::Web::Authorization` — it runs
+  # before routing, so the engine's mount has not stripped anything yet and it
+  # has to tell a machine-plane path from a dashboard one to know whose
+  # read-only refusal this is.
+  def test_the_engine_mount_prefix_is_the_one_the_engine_mounts_under
+    assert_equal '/api', Wurk::API::ENGINE_MOUNT
+  end
+
+  def test_the_unstripped_form_claims_the_machine_plane
+    assert Wurk::API.engine_serves?('/api/v1', config)
+    assert Wurk::API.engine_serves?('/api/v1/jobs', config)
+  end
+
+  def test_the_unstripped_form_leaves_the_dashboards_own_api_alone
+    refute Wurk::API.engine_serves?('/api/stats', config)
+    refute Wurk::API.engine_serves?('/api', config)
+  end
+
+  # Nested in the engine the machine plane lives under /api and nowhere else. A
+  # path that looks like the version prefix on its own is some other engine
+  # route, and handing it over would take it out from behind the read-only gate
+  # it belongs to.
+  def test_the_unstripped_form_requires_the_mount_prefix
+    refute Wurk::API.engine_serves?('/v1', config)
+    refute Wurk::API.engine_serves?('/v1/jobs', config)
+    refute Wurk::API.engine_serves?('/apiary/v1', config)
+  end
+
+  def test_the_unstripped_form_claims_nothing_without_a_token
+    refute Wurk::API.engine_serves?('/api/v1/jobs', bare_config)
+  end
+
   private
 
   def config

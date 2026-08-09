@@ -51,6 +51,16 @@ module Wurk
       # not answered yet, which it fixes by waiting.
       IDEMPOTENCY_KEY_REUSED = 'idempotency_key_reused'
       REQUEST_IN_PROGRESS = 'request_in_progress'
+      # Not `insufficient_scope`: the credential is granted everything it needs
+      # and would work against another deployment unchanged. Nothing the client
+      # can send fixes this one, which is why it gets its own slug — a producer
+      # that retried a 403 forever on a frozen deployment is the failure this
+      # avoids.
+      READ_ONLY = 'read_only'
+      # The one refusal that comes with a time attached. `retry_after` repeats
+      # the header as a number so a client that already parses this body does
+      # not have to reach back into the headers for it.
+      RATE_LIMITED = 'rate_limited'
 
       # Every slug needs a human title; `fetch` below turns a missing one into a
       # loud failure in the test suite rather than a half-formed error body.
@@ -69,7 +79,9 @@ module Wurk
         PAYLOAD_TOO_LARGE => 'Payload Too Large',
         CLASS_NOT_ALLOWED => 'Class Not Allowed',
         IDEMPOTENCY_KEY_REUSED => 'Idempotency Key Reused',
-        REQUEST_IN_PROGRESS => 'Request In Progress'
+        REQUEST_IN_PROGRESS => 'Request In Progress',
+        READ_ONLY => 'Read-Only Mode',
+        RATE_LIMITED => 'Too Many Requests'
       }.freeze
 
       module_function

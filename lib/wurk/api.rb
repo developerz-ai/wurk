@@ -14,6 +14,18 @@ module Wurk
     NESTED_PREFIX = "#{VERSION_PREFIX}/".freeze
     SUPPORTED_VERSIONS = [API_VERSION].freeze
 
+    # Where mount mode 1 puts this plane inside the engine (config/routes.rb).
+    # Named here because two callers have to agree on it: the mount itself, and
+    # `Wurk::Web::Authorization`, which runs before routing and so sees the
+    # engine-relative path with this prefix still on it.
+    ENGINE_MOUNT = '/api'
+
+    # Rack env key the engine's Authorization middleware stamps when the
+    # dashboard is read-only. It is how mount mode 1 — and only mode 1 —
+    # inherits `WURK_WEB_READ_ONLY`: a separately mounted or standalone API is
+    # a different deployment and opts in on its own (`config.api_read_only`).
+    READ_ONLY_ENV = 'wurk.web.read_only'
+
     class << self
       # Class-level Rack entry, the same shape as Wurk::Web.call, so
       # `mount Wurk::API => '/wurk-api'` and `run Wurk::API` both work.
@@ -46,6 +58,14 @@ module Wurk
         return false unless config.api_enabled?
 
         path == VERSION_PREFIX || path.start_with?(NESTED_PREFIX)
+      end
+
+      # The same question asked one prefix out, for callers that run before the
+      # engine's mount has stripped it — `Wurk::Web::Authorization` is the only
+      # one. It has to tell a machine-plane path from a dashboard one (both live
+      # under /api) without loading App, which is why this is here and not there.
+      def engine_serves?(path, config = ::Wurk.configuration)
+        path.start_with?(ENGINE_MOUNT) && serves?(path.delete_prefix(ENGINE_MOUNT), config)
       end
 
       private
