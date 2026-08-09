@@ -76,6 +76,18 @@ module Wurk
     # burst, and is not read by anything that renders jobs.
     DEBOUNCE_PREFIX = 'debounce:'
 
+    # Throttle-to-slot state: `throttle:<digest>:<slot index>` STRING holding
+    # the jid that won that slot. A Wurk extra, like `debounce:` — nothing in
+    # the Sidekiq key schema (sidekiq-free.md §1) lives here.
+    #
+    # The slot index is part of the key rather than a field under it, so two
+    # adjacent slots are two names and the TTL is left with nothing to decide.
+    #
+    # `sidekiq-throttled` is the near neighbour and cannot collide: it owns no
+    # fixed prefix at all, keying off a host-supplied strategy name suffixed
+    # `:threshold` / `:concurrency.v2`.
+    THROTTLE_PREFIX = 'throttle:'
+
     # Build a queue list key from a queue name. Centralizing the concat keeps
     # the prefix in one place even though it's a constant — third-party gems
     # that grep for `"queue:"` still find it via the constant.
@@ -92,6 +104,13 @@ module Wurk
     # Debounce state key for one identity digest. Same reason as .queue.
     def self.debounce(digest)
       "#{DEBOUNCE_PREFIX}#{digest}"
+    end
+
+    # Throttle key *prefix* for one identity digest — not a key on its own.
+    # The slot index the Lua script derives from Redis's clock is appended to
+    # it, because only Redis can align every producer on the same boundary.
+    def self.throttle(digest)
+      "#{THROTTLE_PREFIX}#{digest}"
     end
   end
 end
