@@ -332,7 +332,73 @@ uniqueness, prefer a plain `include Sidekiq::Job` worker for those.
 
 ---
 
-## 12. Migrating from sidekiq-unique-jobs
+## 12. Collapsing bursts and rate ceilings — `collapse:`
+
+Three Wurk extras answer "this was enqueued more often than it needs to run",
+each keeping a different job:
+
+| Policy | Keeps | Use it when |
+|---|---|---|
+| `unique_for:` (this page) | The **first** push; rejects duplicates until the lock clears | You want exactly one in flight, and later pushes carry nothing new |
+| `collapse: { policy: :debounce, … }` | The **last** push's payload, fired once the burst goes quiet | Fifty edits in a minute should produce one rebuild, with the *latest* state |
+| `collapse: { policy: :throttle, … }` | The **first** push per fixed time slot; every extra in that slot is dropped | Poll an API at most once a minute, however many events ask for it |
+
+Both `collapse:` policies are separate from `unique_for:` on purpose — a lock
+drops the very re-enqueue debounce needs to extend a burst — and a
+worker declares at most one of the two; declaring both raises
+`Wurk::Collapse::ConfigurationError` where the class is defined.
+
+```ruby
+class ReindexJob
+  include Wurk::Job
+  sidekiq_options collapse: { policy: :debounce, wait: 5, max_wait: 60 }
+
+  def perform(record_id) = Record.find(record_id).reindex!
+end
+
+class PollJob
+  include Wurk::Job
+  sidekiq_options collapse: { policy: :throttle, slot: 60 }
+
+  def perform(feed_id) = Feed.find(feed_id).poll!
+end
+```
+
+- **`debounce:`** — `wait:` seconds of quiet before the collapsed job fires;
+  every push inside the window replaces the pending payload and restarts the
+  countdown. `max_wait:` (optional) caps how long a continuously-refreshed
+  burst can be held off, so a feed that never goes quiet still eventually
+  runs. The collapsed job lands in the ordinary `schedule` ZSET — the
+  dashboard, `Wurk::ScheduledSet`, and a stock Sidekiq poller all see it as
+  any other scheduled job.
+- **`throttle:`** — `slot:` seconds, aligned to the Unix epoch (not to first
+  use), so every producer means the same slot by "this minute". Only the
+  winner is enqueued; nothing else is stored. `slot:` must be a whole number
+  of seconds.
+- Both policies share `Wurk::Unique`'s identity digest (`[class, queue,
+  args]`), so a class that narrows its key with `sidekiq_unique_context`
+  narrows its collapse identity the same way — one hook covers uniqueness,
+  debounce, and throttle.
+- Both return **nil** from the enqueue call when a push is collapsed, same as
+  a dropped `unique_for:` push. `Wurk::Debounce.schedule` / `Wurk::Throttle.admit`
+  are the lower-level entry points if you need the detail nil hides (which jid
+  currently owns the slot, whether this push replaced a pending sibling).
+- `push_bulk` rejects a `collapse:`-declared class outright rather than
+  deciding item-by-item — folding per-item collapse decisions into the bulk
+  Lua path costs one round trip per item instead of one for the whole batch.
+  Measured on a 1,000-job batch: **1,000 round trips and ~6,000 Redis
+  commands** per-item, against **1 round trip and 2 commands** to reject. The
+  wall-clock gap is far smaller than that 1,000× round-trip ratio on loopback
+  Redis — round trips are cheap there — but it grows with every millisecond of
+  network latency between you and Redis, which is the case the bulk path exists
+  for. Push those jobs individually.
+- Neither policy has a `sidekiq-unique-jobs` equivalent; there is nothing to
+  migrate in [§13](#13-migrating-from-sidekiq-unique-jobs) beyond `unique_for:`
+  itself.
+
+---
+
+## 13. Migrating from sidekiq-unique-jobs
 
 The gem still works against Wurk (it runs in the ecosystem CI suite), but the
 native path has no extra dependency and no separate lock store. Swap

@@ -223,6 +223,56 @@ immediately.
 
 ---
 
+## Global concurrency vs the per-key limiters
+
+Two different questions, easy to reach for the wrong one:
+
+| Question | Reach for |
+|---|---|
+| "At most N jobs from **this queue** should ever be running, across the whole cluster, no matter how many worker processes are up" | `config.global_concurrency` |
+| "Calls against **this external resource** (an API, a DB, a seat pool) must stay under a rate or a concurrency limit, and the jobs making those calls may be spread across several queues, or several classes on the same queue" | `Sidekiq::Limiter` (this page) |
+
+`config.global_concurrency` is a **fetch-side** gate — it caps how many jobs
+of a queue are *checked out and running* at once, enforced before a job is
+even popped off Redis:
+
+```ruby
+Wurk.configure_server do |config|
+  config.global_concurrency = { "critical" => 20, "reports" => 2 }
+end
+```
+
+- Capacity, not a rate: a `window`/`bucket` limiter answers "how many within
+  the configured interval" (a second, a minute, an hour, a day, or an
+  arbitrary span of seconds); `global_concurrency` answers "how many at
+  once" — a ceiling on jobs in flight, with no interval at all. There is no
+  waiting or rescheduling built in — a queue at its cap is simply skipped on
+  that fetch pass and retried on the next one, so throughput settles at
+  whatever the cap allows rather than backing off exponentially.
+- Crash-safe by construction: each hold is a ZSET member with an expiry, so a
+  `SIGKILL`ed worker's slot returns on its own; nothing to reconcile or reap
+  by hand ({Wurk::QueueSlot}).
+- Zero cost when unset — `global_concurrency: {}` (the default) skips the cap
+  check on every fetch, so an app that never configures this pays nothing for
+  it (verified in `bench/command_count.rb`).
+- Scoped to a **queue name**, not a resource or a job class. If two different
+  classes share a queue, they share the cap.
+
+A `Sidekiq::Limiter` is the right tool when the constraint lives on the
+*resource* your job calls, independent of which queue or class it runs under
+— a Stripe rate limit, a database connection ceiling, a third-party API's
+requests-per-minute. It runs inside `perform`, so it can wait, back off, or
+reschedule around a busy limiter rather than just skipping a fetch pass; and
+because its identity is a name you pick, not a queue, jobs on different
+queues (or written in different classes) can share one limiter.
+
+The two compose freely and answer different halves of the same "too much load
+at once" problem — a queue can carry a `global_concurrency` cap *and* have its
+jobs call into a `Sidekiq::Limiter.concurrent` around the one shared resource
+they all hit.
+
+---
+
 ## Naming and Redis keys
 
 The name is the Redis key suffix, so it is also the unit of sharing. It must
