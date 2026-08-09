@@ -43,27 +43,58 @@ module Wurk
     class Expiry
       include Wurk::Middleware::ServerMiddleware
 
+      # The rescue is scoped to the guarded call rather than the method body:
+      # only a job that carries a cutoff can be cut by one, and a job that
+      # raises `DeadlineExceeded` from its own code without carrying one has to
+      # unwind to JobRetry like any other failure instead of being acked.
       def call(_job_instance, job, _queue)
         expiry = job['expiry']
         deadline = job['deadline_at']
         return yield unless expiry || deadline
 
-        return drop(job) if ::Time.now.to_f > cutoff(expiry, deadline)
+        at = cutoff(expiry, deadline)
+        return yield unless at
 
-        yield
-      rescue ::Wurk::Job::DeadlineExceeded
-        drop(job)
+        return drop(job) if ::Time.now.to_f > at
+
+        begin
+          yield
+        rescue ::Wurk::Job::DeadlineExceeded
+          drop(job)
+        end
       end
 
       private
 
-      # Whichever window closes first. Coerced rather than type-checked, so a
-      # payload that round-tripped a timestamp as a String still expires.
+      # Whichever window closes first, or nil when neither field carries a
+      # cutoff this can read.
+      #
+      # Coerced rather than type-checked — a payload that round-tripped a
+      # timestamp as a String still expires — but only where the coercion means
+      # something. `to_f` alone answered `'soon'` with 1970 and silently
+      # discarded the job, and answered `true` with NoMethodError out of the
+      # middleware chain. Neither is an answer: an unreadable cutoff leaves the
+      # job alone, which is what {Timeout} already does with a bound it cannot
+      # arm, and the two must not disagree about the same `deadline_at`.
+      #
+      # Deliberately not JobUtil.positive_seconds?: that validates a *duration*
+      # option where it is declared, and refuses `'300'` so a typo in
+      # `sidekiq_options deadline:` is reported to its author. These are
+      # absolute instants off the wire, where a numeric String is a value rather
+      # than a typo — and one at or before epoch is simply long past, the same
+      # reading Sidekiq Pro's bare `Time.now.to_f > job['expiry']` gives it.
+      #
+      # Reached only by a job that declared a window: the presence check in
+      # #call is what keeps the default job allocation-free through this frame.
       def cutoff(expiry, deadline)
-        return deadline.to_f unless expiry
-        return expiry.to_f unless deadline
+        [instant(expiry), instant(deadline)].compact.min
+      end
 
-        [expiry.to_f, deadline.to_f].min
+      # Finite or nothing: Infinity is a window that never closes and NaN
+      # compares false against everything, so both already meant "no cutoff".
+      def instant(value)
+        seconds = Float(value, exception: false)
+        seconds if seconds&.finite?
       end
 
       # nil, never a raise — the skip path above, and the reason nothing

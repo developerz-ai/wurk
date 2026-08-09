@@ -27,6 +27,12 @@ class DeadlineTest < Wurk::Test::UnitCase
   # positive, finite number of seconds.
   UNUSABLE = ['300', 0, -1, Float::INFINITY, Float::NAN, true, :soon].freeze
 
+  # The subset of UNUSABLE that is not a readable instant either. `'300'`, `0`
+  # and `-1` are unusable as durations and perfectly readable as cutoffs — all
+  # three are long past, and Middleware::Expiry drops on them, which is what
+  # Sidekiq Pro's bare `Time.now.to_f > job['expiry']` does too.
+  UNREADABLE = ['soon', true, :soon, Float::INFINITY, Float::NAN].freeze
+
   CREATED_AT_MS = 1_700_000_000_000
   CREATED_AT_S = CREATED_AT_MS / 1000.0
 
@@ -189,6 +195,48 @@ class DeadlineTest < Wurk::Test::UnitCase
     assert yielded_through_expiry?('expiry' => now + 60, 'deadline_at' => now + 60)
   end
 
+  # The mirror of test_an_unusable_cutoff_leaves_the_job_unbounded, on the same
+  # field. Expiry is the outer frame, so a cutoff it reads differently is the
+  # one that lands: a `deadline_at` it cannot read has to run the job, not
+  # discard it, or Timeout's policy never gets a say.
+  def test_a_cutoff_neither_middleware_can_read_leaves_the_job_alone
+    live = ::Time.now.to_f + 60
+    with_expired_counter do
+      UNREADABLE.each do |value|
+        assert yielded_through_expiry?('deadline_at' => value), "deadline_at #{value.inspect} dropped the job"
+        assert yielded_through_expiry?('expiry' => value), "expiry #{value.inspect} dropped the job"
+        # And it is dropped, not carried into the comparison: NaN and Infinity
+        # both poison a `min` against the window that *was* readable.
+        assert yielded_through_expiry?('expiry' => live, 'deadline_at' => value),
+               "deadline_at #{value.inspect} broke the readable window beside it"
+      end
+
+      assert_equal 0, Wurk::Processor::EXPIRED.reset
+    end
+  end
+
+  # The tolerance that guard must not cost: a cutoff that round-tripped as a
+  # String is a value, not a typo, and still closes its window.
+  def test_a_cutoff_that_round_tripped_as_a_string_still_expires
+    with_expired_counter do
+      refute yielded_through_expiry?('deadline_at' => (::Time.now.to_f - 1).to_s)
+      assert_equal 1, Wurk::Processor::EXPIRED.reset
+    end
+  end
+
+  # Only a job carrying a cutoff can be cut by one. Without a cutoff the same
+  # exception is the job's own, and it unwinds to JobRetry rather than being
+  # swallowed into a clean ack.
+  def test_a_deadline_error_from_a_job_that_declared_none_is_not_swallowed
+    with_expired_counter do
+      assert_raises(Wurk::Job::DeadlineExceeded) do
+        expiry.call(nil, job, 'q') { raise Wurk::Job::DeadlineExceeded }
+      end
+
+      assert_equal 0, Wurk::Processor::EXPIRED.reset
+    end
+  end
+
   def test_the_drop_emits_the_same_statsd_counter_as_expires_in
     with_statsd_recorder do |calls|
       expiry.call(nil, job('class' => 'MyJob', 'deadline_at' => ::Time.now.to_f - 1), 'q') { flunk 'must not yield' }
@@ -252,10 +300,14 @@ class DeadlineTest < Wurk::Test::UnitCase
   end
 
   # The absolute bound is armed outside the per-attempt one, so a job that
-  # swallows its `TimedOut` and carries on is still cut by its deadline.
+  # swallows its `TimedOut` and carries on is still cut by its deadline. The
+  # deadline is a whole second rather than the milliseconds the other timing
+  # tests use: those race `sleep 5` and have unbounded margin, this one has a
+  # real ceiling, and a loaded parallel CI run can eat a tenth of a second in
+  # scheduling alone.
   def test_the_deadline_outlives_a_swallowed_timeout
     attach_watchdog
-    job = running_job(0.15).merge('timeout' => 0.02)
+    job = running_job(1.0).merge('timeout' => 0.02)
 
     assert_raises(Wurk::Job::DeadlineExceeded) do
       timeout.call(nil, job, 'q') do

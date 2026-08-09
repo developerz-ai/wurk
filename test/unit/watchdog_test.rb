@@ -12,6 +12,10 @@ class WatchdogTest < Wurk::Test::UnitCase
 
   class Bound < StandardError; end
 
+  # A second class, because the two masks in #watch are per-exception: only a
+  # bound of a *different* class can be delivered inside another one's scope.
+  class Other < StandardError; end
+
   # Models a host handing us an exception class that can't be built. Thread#raise
   # instantiates in the *calling* thread, so this blows up in the scanner.
   Unbuildable = Class.new(StandardError) do
@@ -116,6 +120,57 @@ class WatchdogTest < Wurk::Test::UnitCase
     assert retracted, 'the raise must not land inside the masked retraction'
     refute_predicate Thread, :pending_interrupt?, 'no interrupt may outlive #watch'
     assert_equal 0, wd.size
+  end
+
+  # The other half of the same race, and the one the mask alone cannot close:
+  # the scan has already selected the entry and is about to raise when the
+  # thread it aimed at finishes. Selection and raise are one critical section
+  # under @lock, and #disarm takes that lock, so the thread is parked inside its
+  # mask — not past it — when the exception goes out.
+  def test_a_raise_already_selected_cannot_overtake_the_retraction
+    wd = build(interval: 60)
+    poised, release = poise_the_scan(wd)
+    finish = Queue.new
+    left_block = Queue.new
+    outcome = Queue.new
+    worker = bounded_worker(wd, finish, left_block, outcome)
+    wait_until { wd.size == 1 }
+    scan = Thread.new { wd.send(:tick) }
+
+    poised.pop(timeout: 5)      # entry selected, raise not issued yet
+    finish << :go               # the guarded block returns at exactly that moment
+    left_block.pop(timeout: 5)
+    wait_until { worker.status == 'sleep' || !worker.status }
+    release << :go              # and only now does the raise go out
+
+    assert_equal :contained, outcome.pop(timeout: 5), 'the raise landed outside #watch'
+    assert_equal :clean, outcome.pop(timeout: 5), 'no interrupt may outlive #watch'
+  ensure
+    release&.<<(:go)
+    scan&.join(2)
+    worker&.join(2)
+  end
+
+  # Two bounds on one thread: the inner retraction runs inside the outer bound's
+  # `:immediate` scope, so an outer raise landing mid-retraction would strand the
+  # inner entry — still armed, no thread left to retract it, free to fire into
+  # whatever that thread picks up next. Widening #disarm makes the race
+  # deterministic: the outer bound passes while the inner one is retracting.
+  def test_an_outer_bound_firing_mid_retraction_strands_nothing
+    wd = build(interval: 0.01)
+    inner_id = nil
+    wd.define_singleton_method(:disarm) do |id|
+      sleep 0.3 if id == inner_id
+      super(id)
+    end
+
+    assert_raises(Other) do
+      wd.watch(0.02, Other, 'outer') do
+        wd.watch(5, Bound, 'inner') { inner_id = wd.instance_variable_get(:@seq) }
+      end
+    end
+
+    assert_equal 0, wd.size, 'the inner bound must be retracted, not stranded'
   end
 
   def test_nested_bounds_fire_independently
@@ -252,6 +307,39 @@ class WatchdogTest < Wurk::Test::UnitCase
   end
 
   private
+
+  # Parks the scan between selecting a due entry and raising into it — the exact
+  # interleaving the lock exists to forbid. Returns the two gates: one that fires
+  # when the scan is poised, one that lets it through.
+  def poise_the_scan(watchdog)
+    poised = Queue.new
+    release = Queue.new
+    watchdog.define_singleton_method(:interrupt) do |entry, failures|
+      poised << :selected
+      release.pop
+      super(entry, failures)
+    end
+    [poised, release]
+  end
+
+  # A thread holding a bound that has already passed, blocked inside the guarded
+  # block until `finish`. Reports where the raise landed — inside #watch or after
+  # it — and whether anything was still pending once #watch returned.
+  def bounded_worker(watchdog, finish, left_block, outcome)
+    Thread.new do
+      landed = begin
+        watchdog.watch(0, Bound) do
+          finish.pop
+          left_block << :returning
+        end
+        :escaped
+      rescue Bound
+        :contained
+      end
+      outcome << landed
+      outcome << (Thread.pending_interrupt? ? :pending : :clean)
+    end
+  end
 
   def build(interval: Wurk::Watchdog::SCAN_INTERVAL)
     Wurk::Watchdog.new(@capsule, interval: interval).tap { |wd| @watchdogs << wd }

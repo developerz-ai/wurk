@@ -67,12 +67,22 @@ module Wurk
     # on the inner scope is what lets a wedged job be interrupted at all;
     # without it the outer mask would hold the raise until the block it is meant
     # to cut short returned on its own.
+    #
+    # The mask only contains a raise that is issued while this frame is on the
+    # stack; #tick is what guarantees that, by taking the same @lock #disarm
+    # takes and holding it across the raise.
     def watch(seconds, exception, message = nil)
       bound_id = arm(seconds, exception, message)
       Thread.handle_interrupt(exception => :never) do
         Thread.handle_interrupt(exception => :immediate) { yield } # rubocop:disable Style/ExplicitBlockArgument
       ensure
-        disarm(bound_id)
+        # Masked against everything, not just `exception`: a job holding two
+        # bounds runs this inside the other one's `:immediate` scope, and a raise
+        # landing mid-retraction would strand this entry — still armed, no longer
+        # retractable, free to fire into whatever the thread picks up next.
+        # `:never` defers rather than discards, so the other bound is still
+        # delivered, one frame later.
+        Thread.handle_interrupt(::Object => :never) { disarm(bound_id) }
       end
     end
 
@@ -133,22 +143,35 @@ module Wurk
       @thread = safe_thread(THREAD_NAME) { @timer.run { tick } }
     end
 
+    # Selection and raise are one critical section, under the lock #disarm also
+    # takes. Splitting them leaves a window the mask cannot close: the scan
+    # picks an entry, loses the GVL before the raise, and the thread it aimed at
+    # finishes, retracts, and leaves #watch in the meantime — so the exception
+    # lands on the ACK or on the next job, which is the stdlib `Timeout` failure
+    # this class exists to avoid. Holding the lock means a thread racing us is
+    # parked in #disarm, still inside its mask, when the raise goes out.
+    #
+    # Errors are reported after the lock, not under it: an error handler is host
+    # code, and running it here would let a handler that arms a bound of its own
+    # deadlock the scanner against itself.
     def tick
-      due.each { |entry| interrupt(entry) }
+      failures = []
+      @lock.synchronize { fire_due(mono_ms, failures) }
+      failures.each { |ex| handle_exception(ex, { context: THREAD_NAME }) }
     end
 
-    # Entries are removed here, before the raise: a fired bound can't fire
-    # twice, and #disarm has nothing left to do if the exception lands on it.
-    # That removal is also what retracts a stranded bound — one armed by a
-    # thread that then died, so no #disarm will ever reach it. No liveness check
-    # guards the raise itself: `Thread#raise` into a dead thread is a documented
-    # no-op, and it doesn't even build the exception first.
-    def due
-      now = mono_ms
-      @lock.synchronize do
-        expired = @armed.select { |_, entry| entry.at_ms <= now }
-        expired.each_key { |bound_id| @armed.delete(bound_id) }
-        expired.values
+    # Entries are removed as they fire: a fired bound can't fire twice, and
+    # #disarm has nothing left to do if the exception lands on it. That removal
+    # is also what retracts a stranded bound — one armed by a thread that then
+    # died, so no #disarm will ever reach it. No liveness check guards the raise
+    # itself: `Thread#raise` into a dead thread is a documented no-op, and it
+    # doesn't even build the exception first.
+    def fire_due(now, failures)
+      @armed.delete_if do |_, entry|
+        next false unless entry.at_ms <= now
+
+        interrupt(entry, failures)
+        true
       end
     end
 
@@ -156,10 +179,10 @@ module Wurk
     # must not swallow the bounds of every other job in the same pass, and must
     # not take the scanner down with it — its bound was already retracted, so
     # nothing would ever re-arm it.
-    def interrupt(entry)
+    def interrupt(entry, failures)
       entry.thread.raise(entry.exception, entry.message)
     rescue StandardError => e
-      handle_exception(e, { context: THREAD_NAME })
+      failures << e
     end
   end
 end
