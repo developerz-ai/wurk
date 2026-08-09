@@ -172,13 +172,15 @@ class FlowCreationTest < Wurk::Test::UnitCase
 
   # --- the batch behind each node -----------------------------------------
 
-  def test_every_node_batch_is_born_with_the_advance_callback
+  def test_every_node_batch_is_born_with_both_completion_callbacks
     flow = diamond.run
 
     (0..2).each do |i|
       callbacks = JSON.parse(hgetall("b-#{flow.bids[i]}")['callbacks'])
+      options   = { 'fid' => flow.fid, 'node' => i }
 
-      assert_equal [['success', 'Wurk::Flow::Completion', { 'fid' => flow.fid, 'node' => i }]], callbacks
+      assert_equal [['success', 'Wurk::Flow::Completion', options],
+                    ['death', 'Wurk::Flow::Completion', options]], callbacks
     end
   end
 
@@ -224,6 +226,14 @@ class FlowCreationTest < Wurk::Test::UnitCase
     flow = diamond.expires_in(600).run
 
     keys_of(flow).each { |key| assert_in_delta 600, ttl(key), 60, "#{key} kept the default TTL" }
+  end
+
+  # The keys a node's release creates — its batch's live-jid set — are written
+  # by a script that has only the fid to go on, so the clock they stamp has to
+  # be readable from the record rather than guessed at.
+  def test_the_flow_record_carries_the_clock_its_later_writes_need
+    assert_equal Wurk::Batch::DEFAULT_EXPIRY_SECONDS.to_s, hgetall(Wurk::Keys.flow(diamond.run.fid))['expiry']
+    assert_equal '600', hgetall(Wurk::Keys.flow(diamond.expires_in(600).run.fid))['expiry']
   end
 
   # --- refusals leave nothing behind --------------------------------------

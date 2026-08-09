@@ -67,11 +67,12 @@ module Wurk
     # a single completion enqueues.
     MAX_WIDTH = 100
 
-    # The `:success` callback every node's batch is created with — the one hop
-    # that advances a flow. Named here because creation writes the spec and the
-    # completion step is the class that answers to it; a literal in both places
-    # is a flow that stalls the day one of them is renamed.
-    ADVANCE_CALLBACK = 'Wurk::Flow::Completion'
+    # The callback class every node's batch is created with, for both events a
+    # node can reach: `:success` advances the flow, `:death` marks it failed.
+    # Named here because creation writes the spec and {Flow::Completion} is what
+    # answers to it; a literal in both places is a flow that stalls silently the
+    # day one of them is renamed.
+    COMPLETION_CALLBACK = 'Wurk::Flow::Completion'
 
     # Every build-time refusal. `ArgumentError` because a malformed graph is a
     # caller mistake in exactly the way a malformed job payload is — which also
@@ -175,3 +176,4 @@ end
 require_relative 'flow/node'
 require_relative 'flow/builder'
 require_relative 'flow/creation'
+require_relative 'flow/completion'

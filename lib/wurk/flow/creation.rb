@@ -162,12 +162,16 @@ module Wurk
           'remaining' => node.dependencies.size.to_s }
       end
 
-      # The one callback a node batch is born with, in the triple shape
-      # `Batch#on` writes: the flow advances when a node succeeds, and only
-      # then, because a batch holding a dead job fires `:complete` but never
-      # `:success` (decision 1 — the parent simply never runs).
+      # The callbacks a node batch is born with, in the triple shape `Batch#on`
+      # writes. The flow advances on `:success` and only on `:success`, because
+      # a batch holding a dead job fires `:complete` but never `:success`
+      # (decision 1 — the dependents of a dead node simply never run).
+      #
+      # `:death` adds nothing to that gate; it is what stops the flow record
+      # from reading `running` forever once a node can no longer move.
       def callbacks_json(node)
-        Wurk.dump_json([['success', ADVANCE_CALLBACK, { 'fid' => @flow.fid, 'node' => node.index }]])
+        options = { 'fid' => @flow.fid, 'node' => node.index }
+        Wurk.dump_json([['success', COMPLETION_CALLBACK, options], ['death', COMPLETION_CALLBACK, options]])
       end
 
       # Only the roots. `jobs.enqueued` counts jobs put on a queue, and the rest

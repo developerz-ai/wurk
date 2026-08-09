@@ -64,7 +64,11 @@ redis.call('HSET', flow_key,
   -- Nodes that have not succeeded yet. All of them, until a node does.
   'pending', total,
   'depth', ARGV[4],
-  'width', ARGV[5])
+  'width', ARGV[5],
+  -- Recorded because the writes that come later only know the fid: a node
+  -- released by `flow_advance` creates its batch's live-jid set, and the clock
+  -- it stamps on that key has to be this flow's, not a default it guessed.
+  'expiry', expiry)
 redis.call('EXPIRE', flow_key, expiry, 'NX')
 
 local enqueued = 0
