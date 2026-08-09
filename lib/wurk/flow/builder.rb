@@ -43,15 +43,19 @@ module Wurk
       # @param depends_on [Node, Symbol, String, Array, nil] what must succeed
       #   before this node runs — handles returned by earlier `#job` calls,
       #   names, or a mix.
+      # @param pipe [Node, Symbol, String, nil] the one dependency whose stored
+      #   return value is appended to this node's arguments — a chain link.
+      #   Implies `depends_on:`, and cannot be combined with it.
       # @param options [Hash] job options (`queue:`, `retry:`, `track:`, …),
       #   merged into the payload at creation.
       # @return [Node] a handle, usable as another node's `depends_on:`.
-      def job(klass, *args, name: nil, depends_on: nil, **options)
+      def job(klass, *args, name: nil, depends_on: nil, pipe: nil, **options)
         validate_class!(klass)
+        validate_pipe!(klass, depends_on, pipe)
         key = register_name!(name)
         check_size!(klass)
-        node = Node.new(index: @nodes.size, name: key, klass: klass, args: args,
-                        options: options, declared: refs(depends_on))
+        node = Node.new(index: @nodes.size, name: key, klass: klass, args: args, options: options,
+                        declared: refs(pipe || depends_on), pipe: pipe)
         @nodes << node
         @by_name[key] = node if key
         node
@@ -68,6 +72,7 @@ module Wurk
 
         link!
         order = topological_order
+        link_pipes!
         measure!(order)
         check_depth!(order)
         check_width!(order)
@@ -76,6 +81,41 @@ module Wurk
       end
 
       private
+
+      # `pipe:` says "hand me my dependency's result", which only names a value
+      # when there is one dependency to name it from — decision 2 in the slice
+      # plan declines to synthesise an aggregate argument for a fan-in, because
+      # every way of building one is either unbounded or silently lossy. So the
+      # combination is refused here rather than resolved to a guess.
+      def validate_pipe!(klass, depends_on, pipe)
+        return if pipe.nil?
+        raise InvalidGraph, "#{klass}: pipe: takes one node or name, not #{pipe.inspect}" if pipe.is_a?(Array)
+        return if depends_on.nil?
+
+        raise InvalidGraph, "#{klass}: pipe: is a dependency, so it cannot be combined with depends_on:"
+      end
+
+      # A piped node's source has to store a result for the pipe to carry, and
+      # tracking is opt-in per job — so creation enqueues the source with
+      # `track: true` whether or not the caller said so. An *explicit*
+      # `track: false` on that node is the one thing it will not overrule: the
+      # two declarations contradict each other, and picking a winner silently is
+      # how a chain ends up refusing to run in production for a reason nobody
+      # wrote down.
+      def link_pipes!
+        @nodes.each do |node|
+          next unless node.piped?
+
+          source = node.source
+          refuse_untracked!(node, source) if source.options.key?(:track) && !source.options[:track]
+          source.feeds_pipe!
+        end
+      end
+
+      def refuse_untracked!(node, source)
+        raise InvalidGraph, "#{node.label} pipes from #{source.label}, which is declared track: false; " \
+                            'a pipe carries the stored result, and an untracked job stores none'
+      end
 
       def refs(depends_on)
         case depends_on

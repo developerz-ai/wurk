@@ -171,11 +171,15 @@ module Wurk
       "#{flow(fid)}:#{index}"
     end
 
-    # The indexes of a flow's nodes whose job is currently dead. A set beside
-    # the record rather than a field on it, exactly as `b-<bid>-died` sits
-    # beside a batch: a node leaves it when its job is retried to success, and
-    # an empty set is what makes the flow's `failed` state recoverable. It can
-    # never collide with .flow_node, whose last segment is always digits.
+    # The indexes of the nodes a flow is failed because of: the ones whose job
+    # is currently dead, plus the chain links that could not be built because
+    # the result they pipe was not there to pipe. A set beside the record
+    # rather than a field on it, exactly as `b-<bid>-died` sits beside a batch:
+    # a dead node leaves it when its job is retried to success, and an empty
+    # set is what makes the flow's `failed` state recoverable. A broken chain
+    # link never leaves, which is the truth about it — there is no job in the
+    # morgue to retry. It can never collide with .flow_node, whose last segment
+    # is always digits.
     def self.flow_dead(fid)
       "#{flow(fid)}:dead"
     end

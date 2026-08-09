@@ -33,10 +33,12 @@ module Wurk
       # written when the graph was created, and every fact about the graph is
       # read inside the script that acts on it. What comes back is the flow's
       # remaining node count — dropped, because the record already carries it —
-      # then one class/queue pair per node the call released.
+      # then what the call released, then what it refused to.
       def on_success(_status, options)
         fid, index = address(options)
-        emit_enqueued(Array(advance(fid, index)).drop(1))
+        _pending, released, broken = Array(advance(fid, index))
+        emit_enqueued(Array(released))
+        report_broken(fid, Array(broken))
       end
 
       # A node's job died. Its dependents are not cancelled — they are simply
@@ -62,7 +64,7 @@ module Wurk
           Wurk::Lua::Loader.eval_cached(
             conn, :flow_advance,
             keys: [Keys.flow(fid), 'queues'],
-            argv: [index, now_seconds, now_millis]
+            argv: [index, now_seconds, now_millis, Keys::STATUS_PREFIX]
           )
         end
       end
@@ -90,6 +92,18 @@ module Wurk
 
         pairs.each_slice(2) do |klass, queue|
           Wurk::Metrics::Statsd.increment('jobs.enqueued', tags: ["worker:#{klass}", "queue:#{queue}"])
+        end
+      end
+
+      # A chain link whose upstream result was not there to pipe. Louder than a
+      # death, and deliberately so: a dead node is a job that ran and lost, is
+      # in the morgue, and puts the flow back on its feet the moment someone
+      # retries it. This node never ran and never will — nothing is queued to
+      # retry — so the flow is over, and the only place that fact is going to be
+      # noticed is here and on the record the reason was written to.
+      def report_broken(fid, pairs)
+        pairs.each_slice(2) do |index, reason|
+          Wurk.logger.error("flow #{fid}: node #{index} cannot run — #{reason}; the flow is marked failed")
         end
       end
 

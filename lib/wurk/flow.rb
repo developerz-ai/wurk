@@ -2,6 +2,8 @@
 
 require 'securerandom'
 require_relative 'batch'
+require_relative 'keys'
+require_relative 'lua'
 
 module Wurk
   # A DAG of jobs: fan out, fan in, and run each node only after everything it
@@ -27,6 +29,13 @@ module Wurk
   # and a rendered status, so a flow is the parent relation between batches and
   # not a second completion tracker. Two trackers that can disagree is the
   # failure mode of this feature.
+  #
+  # @example A chain — every step is handed the step before it
+  #   Wurk::Flow.chain do |c|
+  #     c.job(FetchJob, 'https://example.com')
+  #     c.job(ParseJob)
+  #     c.job(StoreJob, 'reports')
+  #   end.run
   #
   # Work that is wide rather than deep belongs *inside* a node — that node's
   # job opens its own batch and enqueues however many children it likes, and
@@ -119,6 +128,67 @@ module Wurk
     # to say so here too.
     attr_accessor :callback_queue
 
+    class << self
+      # A flow with one path through it: every step waits on the step before it
+      # and is handed that step's stored return value as its last argument.
+      #
+      #   Wurk::Flow.chain do |c|
+      #     c.job(FetchJob, 'https://example.com')
+      #     c.job(ParseJob)                        # ParseJob#perform(fetch_result)
+      #     c.job(StoreJob, 'reports')             # StoreJob#perform('reports', parse_result)
+      #   end.run
+      #
+      # Every step but the last is enqueued with `track: true`, because the
+      # pipe carries {Wurk::Status}'s stored result and tracking is opt-in per
+      # job. A result too big to store — past
+      # {Wurk::Middleware::Status::MAX_RESULT_BYTES} — stops the chain and
+      # fails the flow rather than piping the truncated head: a shortened
+      # display is lossy, a shortened *argument* is wrong.
+      #
+      # @see Flow::Chain
+      def chain(&block)
+        raise ArgumentError, 'flow requires a block' unless block
+
+        new { |builder| block.call(Chain.new(builder)) }
+      end
+
+      # The kill switch: give up on a flow and release what it is holding.
+      #
+      # Marks the flow `abandoned` and drops every node record, every node
+      # batch and the dead-node set — the ~9 keys per node that are the actual
+      # weight. The flow's own record stays, on the clock it was created with,
+      # because a flow that vanishes silently is indistinguishable from one
+      # that was never created; `abandoned` is the answer to "where did it go".
+      #
+      # It does **not** chase in-flight jobs out of their queues. Same caveat
+      # and same wording as {Wurk::Batch::Status#delete}: jobs already queued
+      # will run and ack against a batch that is gone. Nothing they do can
+      # revive the flow — every write in {Flow::Completion} claims on a node
+      # record this released.
+      #
+      # Only a live flow can be abandoned. A flow that already succeeded, or
+      # that was already abandoned, is not stuck and is left exactly as it is.
+      #
+      # `idempotent: true` is that claim spent: a replay after a lost reply
+      # finds the flow already terminal and writes nothing, so the pool may
+      # retry a connection error rather than give up on the kill switch. The
+      # cost is that such a replay reports false for a call that did apply —
+      # the flow record is the authority, not the return value.
+      #
+      # @return [Boolean] true when this call abandoned the flow.
+      def abandon(fid) # rubocop:disable Naming/PredicateMethod
+        now = ::Process.clock_gettime(::Process::CLOCK_REALTIME).to_s
+        released = Wurk.redis(idempotent: true) do |conn|
+          Wurk::Lua::Loader.eval_cached(
+            conn, :flow_abandon,
+            keys: [Keys.flow(fid), 'batches', 'dead-batches'],
+            argv: [now, *Wurk::Batch::KEY_SUFFIXES]
+          )
+        end
+        released.to_i >= 0
+      end
+    end
+
     def initialize(&block)
       raise ArgumentError, 'flow requires a block' unless block
 
@@ -170,10 +240,15 @@ module Wurk
       @bids = payloads.map { |payload| payload['bid'] }.freeze
       self
     end
+
+    # @return [Boolean] true when this call abandoned the flow.
+    # @see Flow.abandon
+    def abandon = self.class.abandon(@fid)
   end
 end
 
 require_relative 'flow/node'
 require_relative 'flow/builder'
+require_relative 'flow/chain'
 require_relative 'flow/creation'
 require_relative 'flow/completion'

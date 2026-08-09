@@ -95,6 +95,9 @@ for i = FIRST_NODE, #ARGV do
     -- Dependencies still to succeed. The completion step decrements this; at
     -- zero the node's payload below is what gets pushed.
     'remaining', node.remaining,
+    -- The sentinel a chain link's upstream result is spliced over, or empty
+    -- for the ordinary node that is handed nothing.
+    'pipe', node.pipe,
     'payload', node.payload)
   redis.call('EXPIRE', node_key, expiry, 'NX')
 

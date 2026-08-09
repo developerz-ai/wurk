@@ -36,6 +36,11 @@ module Wurk
       # @return [Array] the raw `depends_on:` refs — nodes, names, or both.
       attr_reader :declared
 
+      # @return [Node, Symbol, String, nil] the raw `pipe:` ref: the one
+      #   dependency whose stored result is handed to this node as its last
+      #   argument. nil for every ordinary node.
+      attr_reader :pipe
+
       # @return [Array<Node>] resolved dependencies. This node runs after all
       #   of them succeed.
       attr_reader :dependencies
@@ -47,19 +52,42 @@ module Wurk
       #   topological order, so a node's level is final by the time it is read.
       attr_reader :level
 
-      def initialize(index:, klass:, args:, options:, declared:, name: nil)
+      def initialize(index:, klass:, args:, options:, declared:, name: nil, pipe: nil)
         @index        = index
         @name         = name
         @klass        = klass
         @args         = args.freeze
         @options      = options.freeze
         @declared     = declared.freeze
+        @pipe         = pipe
+        @feeds_pipe   = false
         @dependencies = []
         @dependents   = []
         @level        = 0
       end
 
       def root? = @dependencies.empty?
+
+      # @return [Boolean] true when this node is handed its dependency's stored
+      #   result as its last argument.
+      def piped? = !@pipe.nil?
+
+      # @return [Node, nil] the dependency a piped node's argument comes from.
+      #   The *only* dependency: {Flow::Builder} refuses `pipe:` on a node with
+      #   more than one, because the graph is what makes "the upstream result"
+      #   a single well-defined value (decision 2 in the slice plan).
+      def source = @dependencies.first
+
+      # @return [Boolean] true when some dependent pipes this node's result, so
+      #   creation has to enqueue it with `track: true` — a node whose result
+      #   nothing reads is not tracked, and tracking is opt-in per job.
+      def feeds_pipe? = @feeds_pipe
+
+      # Builder-only, between {#link!} and {#seal!}.
+      def feeds_pipe!
+        @feeds_pipe = true
+        self
+      end
 
       # Every error message in the builder ends up here, so it has to identify a
       # node in a thousand-node graph unambiguously: the class says what it is,

@@ -39,6 +39,18 @@ module Wurk
       WAITING  = 'waiting'
       ENQUEUED = 'enqueued'
 
+      # What a piped node carries in place of the argument it does not have
+      # yet. The upstream result is not known until the upstream runs, so the
+      # payload is stored with this sentinel where the argument goes and
+      # `lua/flow_advance.lua` swaps the two bytes-for-bytes on the way to the
+      # queue — no cjson round trip, which would round a 64-bit number in some
+      # *other* argument to a double.
+      #
+      # It carries the fid and the node index so a sentinel is unique to the
+      # one splice it belongs to, and so a payload caught in the dashboard mid
+      # flow says what it is waiting for rather than showing a bare marker.
+      PIPE_SENTINEL_PREFIX = 'wurk.flow.pipe:'
+
       def initialize(flow, config: nil)
         @flow   = flow
         @config = config || Wurk.configuration
@@ -61,7 +73,27 @@ module Wurk
         without_enclosing_batch do
           @flow.nodes.each { |node| buffer.add([payload_for(node)]) }
         end
-        by_node_index(buffer.drain)
+        payloads = by_node_index(buffer.drain)
+        check_pipes!(payloads)
+        payloads
+      end
+
+      # The one pipe refusal that needs a normalized payload to see, so it
+      # cannot live in the builder with the rest: `encrypt` may come from the
+      # job class's own `sidekiq_options` rather than from the node.
+      #
+      # An encrypted job's return value is deliberately never stored — storing
+      # it would put back into a plaintext HASH exactly what enveloping the
+      # args kept out of Redis (see Middleware::Status#withhold_result?) — so a
+      # pipe from one can never carry anything. Refused here, before the write,
+      # rather than at the release that would discover it minutes later.
+      def check_pipes!(payloads)
+        @flow.nodes.each do |node|
+          next unless node.piped? && payloads[node.source.index]['encrypt']
+
+          raise InvalidGraph, "#{node.label} pipes from #{node.source.label}, which declares encrypt: true; " \
+                              'an encrypted job stores no result for a pipe to carry'
+        end
       end
 
       # Built in topological order, handed back in declaration order. The two
@@ -93,8 +125,13 @@ module Wurk
       # middleware that writes `bid` is disarmed above.
       def payload_for(node)
         item = node.options.transform_keys(&:to_s).merge(
-          'class' => node.klass, 'args' => node.args, 'bid' => new_bid
+          'class' => node.klass, 'args' => pipe_args(node), 'bid' => new_bid
         )
+        # A node whose result something downstream pipes is tracked whether or
+        # not the caller asked: the pipe reads Wurk::Status's row, and tracking
+        # is opt-in per job. The builder has already refused the one case where
+        # this would overrule the caller rather than fill in for them.
+        item['track'] = true if node.feeds_pipe?
         normed = normalize_item(item)
         built  = @config.client_middleware.invoke(normed['class'], normed, normed['queue'], @config.redis_pool) do
           verify_json(normed)
@@ -113,6 +150,10 @@ module Wurk
       end
 
       def new_bid = SecureRandom.urlsafe_base64(Wurk::Batch::BID_BYTES)
+
+      def pipe_args(node) = node.piped? ? [*node.args, pipe_sentinel(node)] : node.args
+
+      def pipe_sentinel(node) = "#{PIPE_SENTINEL_PREFIX}#{@flow.fid}:#{node.index}"
 
       # `idempotent: true` is earned by the script's own claim: a replay after a
       # lost reply finds the flow key already there and writes nothing, so the
@@ -150,10 +191,28 @@ module Wurk
       end
 
       def node_fields(node, payload)
+        json = Wurk.dump_json(payload)
         { 'i' => node.index.to_s, 'name' => node.name.to_s, 'class' => payload['class'],
           'queue' => payload['queue'], 'jid' => payload['jid'], 'bid' => payload['bid'],
-          'state' => node.root? ? ENQUEUED : WAITING, 'payload' => Wurk.dump_json(payload),
-          'desc' => node.label, 'cb' => callbacks_json(node) }
+          'state' => node.root? ? ENQUEUED : WAITING, 'payload' => json,
+          'desc' => node.label, 'cb' => callbacks_json(node), 'pipe' => pipe_field(node, json) }
+      end
+
+      # Empty for an ordinary node, and the sentinel — exactly as it appears in
+      # the stored bytes — for a piped one, which is both the flag the release
+      # tests and the needle it splices at.
+      #
+      # Checked rather than assumed: a client middleware that rewrote `args`
+      # would otherwise leave a node whose job runs with the wrong number of
+      # arguments, or with a sentinel string where its input should be. Both
+      # are silent, and the second is worse than not running at all.
+      def pipe_field(node, json)
+        return '' unless node.piped?
+
+        sentinel = pipe_sentinel(node)
+        return sentinel if json.scan("\"#{sentinel}\"").size == 1
+
+        raise InvalidGraph, "#{node.label}: client middleware rewrote the argument its pipe writes into"
       end
 
       def edge_fields(node)
