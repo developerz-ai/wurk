@@ -26,6 +26,7 @@ module Wurk
         def sidekiq_options(opts = {})
           stringified = opts.transform_keys(&:to_s)
           Wurk::JobUtil.validate_track!(stringified['track'], stringified) if stringified.key?('track')
+          Wurk::JobUtil.validate_bounds!(stringified)
           @sidekiq_options_hash = get_sidekiq_options.merge(stringified)
         end
 

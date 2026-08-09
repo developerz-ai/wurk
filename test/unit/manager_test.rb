@@ -372,6 +372,47 @@ class ManagerTest < Wurk::Test::UnitCase
     refute called
   end
 
+  # --- watchdog lifecycle ----------------------------------------------
+
+  # The capsule's per-job watchdog is released by #stop, not #quiet: a quieted
+  # capsule still has in-flight jobs, and a bound shorter than the drain budget
+  # has to fire before shutdown wins.
+  def test_quiet_leaves_the_capsule_watchdog_running
+    mgr = Wurk::Manager.new(@capsule)
+    silence_processors(mgr)
+    terminated = watchdog_terminations
+
+    mgr.quiet
+
+    assert_equal 0, terminated.size
+  end
+
+  def test_stop_terminates_the_capsule_watchdog
+    mgr = Wurk::Manager.new(@capsule)
+    silence_processors(mgr)
+    mgr.workers.clear
+    terminated = watchdog_terminations
+    @capsule.define_singleton_method(:stop) { nil }
+
+    mgr.stop(::Process.clock_gettime(::Process::CLOCK_MONOTONIC) + 1)
+
+    assert_equal 1, terminated.size
+  end
+
+  # Stop can land on a capsule that never reached prepare! (a launcher that
+  # raised mid-boot), so the terminate has to tolerate no watchdog at all.
+  def test_stop_tolerates_a_capsule_without_a_watchdog
+    mgr = Wurk::Manager.new(@capsule)
+    silence_processors(mgr)
+    mgr.workers.clear
+
+    assert_nil @capsule.watchdog
+
+    mgr.stop(::Process.clock_gettime(::Process::CLOCK_MONOTONIC) + 1)
+
+    assert_predicate mgr, :stopped?
+  end
+
   # --- compat ---------------------------------------------------------
 
   def test_pause_time_constant_defined
@@ -413,6 +454,15 @@ class ManagerTest < Wurk::Test::UnitCase
   # kill real (un-started) threads.
   def silence_processors(mgr)
     mgr.workers.each { |w| w.define_singleton_method(:terminate) { nil } }
+  end
+
+  # Materializes the capsule's watchdog (prepare! is what a real boot runs) and
+  # records each #terminate; returns the recorder.
+  def watchdog_terminations
+    @capsule.prepare!
+    [].tap do |seen|
+      @capsule.watchdog.define_singleton_method(:terminate) { seen << :terminated }
+    end
   end
 
   # #stop only waits on processors that hold a live thread — a never-started

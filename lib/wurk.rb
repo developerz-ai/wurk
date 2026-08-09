@@ -291,6 +291,14 @@ require_relative 'wurk/middleware/interrupt_handler'
 # Spec: docs/target/sidekiq-ent.md §1.4.
 Wurk.configuration.server_middleware.add(Wurk::Limiter::ServerMiddleware)
 
+# Per-attempt wall-clock bound — `sidekiq_options timeout: 30`, a Wurk extra
+# with no Sidekiq counterpart. Sits here for both of its neighbours: INSIDE
+# Limiter, so the watchdog's raise can never land between Limiter's reschedule
+# and the `Rescheduled` it raises after it (a job both rescheduled *and*
+# retried), and OUTSIDE the three middleware below, so a timeout unwinds
+# through Statsd, History and Status and is booked as the failure it is.
+require_relative 'wurk/middleware/timeout'
+
 # Statsd metrics middleware: per-job count / success / failure / perform_dist
 # emissions. No-op when `config.dogstatsd` is unset (Statsd.client returns
 # nil and the middleware yields straight through), so auto-registering here

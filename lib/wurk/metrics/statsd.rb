@@ -158,10 +158,12 @@ module Wurk
         begin
           yield
           success = true
-        rescue Wurk::Job::Interrupted
-          # Same arm, same reason as Metrics::History#call (#394): InterruptHandler
-          # self-prepends, so a cooperative interruption passes through here before
-          # it becomes a JobRetry::Skip, and without this it emits `jobs.failure`.
+        rescue Wurk::Job::Interrupted, Wurk::Job::DeadlineExceeded
+          # Same arm, same reasons as Metrics::History#call (#394): a cooperative
+          # interruption passes through here before InterruptHandler turns it
+          # into a JobRetry::Skip, and a job cut by its deadline passes through
+          # before Middleware::Expiry books it `expired` — both sit outside this
+          # middleware, and without this arm either one emits `jobs.failure`.
           # Pro's statsd emitter is closed source, so the oracle is the free
           # ExecutionTracker plus the rule that the two Wurk emitters must never
           # classify one event differently. Signed off in

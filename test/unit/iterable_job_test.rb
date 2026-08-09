@@ -350,6 +350,30 @@ class IterableJobTest < Wurk::Test::UnitCase
     redis.with { |c| c.call('EXISTS', "it-#{jid}") } == 1
   end
 
+  def interrupt_handler
+    Wurk::Middleware::InterruptHandler.new.tap { |m| m.config = Wurk.configuration }
+  end
+
+  def pop_repush(queue)
+    raw = redis.with { |c| c.call('LPOP', "queue:#{queue}") }
+
+    refute_nil raw, 'InterruptHandler must have repushed the job'
+    ::JSON.parse(raw)
+  end
+
+  def build_timeout_capsule
+    config = Wurk::Configuration.new
+    config.logger = ::Logger.new(IO::NULL)
+    capsule = Wurk::Capsule.new("it-timeout-#{::Process.pid}-#{object_id}", config)
+    watchdog = Wurk::Watchdog.new(capsule, interval: 0.01)
+    capsule.instance_variable_set(:@watchdog, watchdog)
+    [capsule, watchdog]
+  end
+
+  def timeout_middleware(capsule)
+    Wurk::Middleware::Timeout.new.tap { |m| m.config = capsule }
+  end
+
   def test_cancel_persists_to_iteration_hash_when_jid_set
     jid = random_jid
     worker = SimpleIterable.new
@@ -756,6 +780,113 @@ class IterableJobTest < Wurk::Test::UnitCase
 
       assert_equal %i[cancel stop complete], worker.events
     ensure
+      cleanup_iteration_key(jid)
+    end
+  end
+
+  # --- interaction with sidekiq_options timeout:/deadline: (08-timeout-deadline) --
+
+  # A cooperative interrupt persists cursor state to `it-<jid>` (iteration_key,
+  # flush_state) — a HASH keyed off the jid, entirely separate from the job
+  # envelope InterruptHandler re-pushes. `deadline_at` lives on that envelope,
+  # so proving it survives is proving InterruptHandler's repush is verbatim,
+  # not that IterableJob does anything with it — it never sees the field.
+  class DeadlineAwareIterable
+    include Wurk::IterableJob
+
+    attr_writer :seen
+
+    def seen = @seen ||= []
+
+    def build_enumerator(*, cursor:)
+      start = cursor || 0
+      Enumerator.new { |y| start.upto(2) { |i| y << [i, i + 1] } }
+    end
+
+    def each_iteration(item, *)
+      seen << item
+    end
+  end
+
+  def test_deadline_survives_interrupt_and_resume
+    jid = random_jid
+    queue = "iq-#{::Process.pid}-#{object_id}"
+    deadline_at = ::Time.now.to_f + 300
+    job = { 'class' => DeadlineAwareIterable.name, 'args' => [], 'jid' => jid, 'deadline_at' => deadline_at }
+
+    begin
+      worker = DeadlineAwareIterable.new
+      worker.jid = jid
+      worker._context = StoppingContext.new(stop_after: 1)
+
+      assert_raises(Wurk::JobRetry::Skip) do
+        interrupt_handler.call(worker, job, queue) { worker.perform }
+      end
+
+      repushed = pop_repush(queue)
+
+      assert_in_delta deadline_at, repushed['deadline_at'], 0.001,
+                      'the absolute cutoff must ride the repush unchanged, not be re-derived'
+
+      resumed = DeadlineAwareIterable.new
+      resumed.jid = jid
+      resumed.perform
+
+      assert_equal [1, 2], resumed.seen, 'resumed iteration continues from the persisted cursor either way'
+    ensure
+      cleanup_iteration_key(jid)
+      redis.with { |c| c.call('DEL', "queue:#{queue}") }
+    end
+  end
+
+  # `timeout:` is per-attempt: Middleware::Timeout reads job['timeout'] fresh
+  # on every call, so a resumed IterableJob attempt gets the whole bound again
+  # rather than whatever was left when the first attempt was interrupted.
+  class TimeoutResumableJob
+    include Wurk::IterableJob
+
+    attr_writer :seen, :sleep_before_next
+
+    def seen = @seen ||= []
+    def sleep_before_next = @sleep_before_next ||= 0
+
+    def build_enumerator(*, cursor:)
+      start = cursor || 0
+      Enumerator.new { |y| start.upto(2) { |i| y << [i, i + 1] } }
+    end
+
+    def each_iteration(item, *)
+      sleep sleep_before_next if sleep_before_next.positive?
+      seen << item
+    end
+  end
+
+  def test_timeout_resets_per_attempt_across_iterable_resume
+    jid = random_jid
+    capsule, watchdog = build_timeout_capsule
+    job = { 'class' => TimeoutResumableJob.name, 'timeout' => 0.05 }
+
+    begin
+      interrupted = TimeoutResumableJob.new
+      interrupted.jid = jid
+      interrupted._context = StoppingContext.new(stop_after: 1)
+
+      assert_raises(Wurk::IterableJob::Interrupted) do
+        timeout_middleware(capsule).call(nil, job, 'q') { interrupted.perform }
+      end
+      assert_equal 0, watchdog.size, 'a cooperative interrupt retracts the bound cleanly — it never gets to fire'
+
+      resumed = TimeoutResumableJob.new
+      resumed.jid = jid
+      resumed.sleep_before_next = 0.2
+
+      err = assert_raises(Wurk::Job::TimedOut) do
+        timeout_middleware(capsule).call(nil, job, 'q') { resumed.perform }
+      end
+      assert_match(/timed out after 0\.05s/, err.message,
+                   'the resumed attempt must get the full bound again, not whatever was left of the first')
+    ensure
+      watchdog.terminate
       cleanup_iteration_key(jid)
     end
   end

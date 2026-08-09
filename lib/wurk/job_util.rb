@@ -40,6 +40,39 @@ module Wurk
       raise(ArgumentError, "Job 'track' must be true or false: `#{subject}`")
     end
 
+    # The two wall-clock bounds, both in seconds: `timeout` bounds one attempt,
+    # `deadline` bounds the job from enqueue onward. Checked here rather than
+    # where they are read, for the same reason `track` is — the reader is
+    # {Wurk::Middleware::Timeout}, on a server one deploy away from whoever
+    # wrote `deadline: '5 minutes'`, and its answer to a bound it cannot use is
+    # to run the job unbounded, because the payload may predate the option or
+    # come from stock Sidekiq. Silence is right there and useless here, so both
+    # doors a Wurk-written bound comes through — a class-level `sidekiq_options`
+    # (worker or ActiveJob) and a payload push — call this instead.
+    BOUND_OPTIONS = %w[timeout deadline].freeze
+
+    # @raise [ArgumentError] unless every bound present is a positive, finite
+    #   number of seconds.
+    def self.validate_bounds!(item)
+      BOUND_OPTIONS.each do |name|
+        value = item[name]
+        next if value.nil? || positive_seconds?(value)
+
+        raise(ArgumentError, "Job '#{name}' must be a positive number of seconds: `#{item}`")
+      end
+    end
+
+    # The one definition of a bound Wurk can act on, shared by the check above
+    # and by the middleware that arms it, so "valid where it was declared" and
+    # "usable where it is read" cannot drift apart. ActiveSupport durations
+    # pass: `5.minutes.is_a?(Numeric)` is true by that class's own design.
+    def self.positive_seconds?(value)
+      return false unless value.is_a?(::Numeric)
+
+      seconds = value.to_f
+      seconds.finite? && seconds.positive?
+    end
+
     # @raise [ArgumentError] if the payload is structurally invalid.
     def validate(item)
       raise(ArgumentError, "Job must be a Hash with 'class' and 'args' keys: `#{item}`") unless valid_shape?(item)
@@ -85,6 +118,7 @@ module Wurk
       raise(ArgumentError, "Job tags must be an Array: `#{item}`") unless valid_tags?(item)
 
       JobUtil.validate_track!(item['track'], item)
+      JobUtil.validate_bounds!(item)
       return if valid_retry_for?(item)
 
       raise(ArgumentError, "Job retry_for over #{RETRY_FOR_MAX} is unreasonable: `#{item}`")
@@ -140,22 +174,47 @@ module Wurk
       normalized['retry_for'] = numeric_retry_for(normalized['retry_for']) if normalized.key?('retry_for')
       normalized['created_at'] ||= now_in_millis
       stamp_expiry(normalized)
+      stamp_deadline(normalized)
       normalized
     end
 
     # Pro `expires_in:` → absolute epoch-float `expiry` resolved once at push,
     # so the server middleware doesn't redo the math. Spec: sidekiq-pro.md §7.
-    # For scheduled jobs the clock origin is `at` (epoch seconds), not
-    # `created_at` (epoch millis) — otherwise any delay > expires_in makes the
-    # job born-expired: perform_in(2h) + expires_in: 1h must expire at 3h.
     # nil.respond_to?(:to_f) is true on modern Ruby (returns 0.0), so we must
     # gate on a non-nil duration before coercing.
     def stamp_expiry(item)
       d = item['expires_in']
       return if d.nil? || !d.respond_to?(:to_f)
 
-      origin = item['at'] ? item['at'].to_f : (item['created_at'].to_f / 1000.0)
-      item['expiry'] ||= origin + d.to_f
+      item['expiry'] ||= clock_origin(item) + d.to_f
+    end
+
+    # `deadline:` → absolute epoch-float `deadline_at`, the same conversion
+    # #stamp_expiry does and, here, the thing that makes the option mean what it
+    # says. A deadline is absolute: retries can't outlive it, and neither can an
+    # IterableJob resuming after a cooperative interrupt. Both re-push this hash
+    # and the stamp rides along on it, so every later attempt measures against
+    # the first push's cutoff instead of restarting the clock — which is exactly
+    # what a per-attempt `timeout` does instead, and why they are two options.
+    # `||=` protects the same property against a caller that re-normalizes.
+    #
+    # An unusable value is left unstamped rather than raised on: both doors that
+    # can write one already refused it (.validate_bounds!), so what reaches here
+    # is a class default set some other way, and Middleware::Timeout's answer to
+    # a bound it can't use — run the job unbounded — is the one to agree with.
+    def stamp_deadline(item)
+      d = item['deadline']
+      return unless JobUtil.positive_seconds?(d)
+
+      item['deadline_at'] ||= clock_origin(item) + d.to_f
+    end
+
+    # For scheduled jobs the clock origin is `at` (epoch seconds), not
+    # `created_at` (epoch millis) — otherwise any delay longer than the duration
+    # makes the job born-expired: perform_in(2h) + expires_in: 1h must expire at
+    # 3h, and the same holds for a deadline.
+    def clock_origin(item)
+      item['at'] ? item['at'].to_f : (item['created_at'].to_f / 1000.0)
     end
 
     def report_unsafe(item, offender, mode)

@@ -84,6 +84,11 @@ module Wurk
 
       hard_shutdown
     ensure
+      # After the drain, not in #quiet: a quieted capsule still has in-flight
+      # jobs, and a bound shorter than the drain budget has to fire before
+      # shutdown wins. Ahead of capsule.stop so no scan can raise into a thread
+      # once the capsule has released what that thread was holding.
+      capsule.watchdog&.terminate
       capsule.stop
     end
 
