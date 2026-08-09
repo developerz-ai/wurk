@@ -88,6 +88,16 @@ module Wurk
     # `:threshold` / `:concurrency.v2`.
     THROTTLE_PREFIX = 'throttle:'
 
+    # `Idempotency-Key` replay records for the HTTP API: `idempotency:<digest>`
+    # STRING holding the response the first request produced. A Wurk extra like
+    # `status:` — nothing in the Sidekiq key schema lives here, and nothing
+    # outside Wurk::API::Idempotency reads it.
+    #
+    # The digest covers the credential, the route and the client's key, so the
+    # client's own string never reaches Redis in the clear and two producers
+    # that both chose `1` address two different records.
+    IDEMPOTENCY_PREFIX = 'idempotency:'
+
     # Build a queue list key from a queue name. Centralizing the concat keeps
     # the prefix in one place even though it's a constant — third-party gems
     # that grep for `"queue:"` still find it via the constant.
@@ -111,6 +121,11 @@ module Wurk
     # it, because only Redis can align every producer on the same boundary.
     def self.throttle(digest)
       "#{THROTTLE_PREFIX}#{digest}"
+    end
+
+    # Idempotency replay record for one request digest. Same reason as .queue.
+    def self.idempotency(digest)
+      "#{IDEMPOTENCY_PREFIX}#{digest}"
     end
   end
 end

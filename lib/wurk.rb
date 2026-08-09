@@ -341,6 +341,12 @@ require_relative 'wurk/middleware/status'
 # Spec: docs/target/sidekiq-pro.md §11.
 require_relative 'wurk/api/fast'
 
+# The machine-facing HTTP API's mount point (`mount Wurk::API`, `run
+# Wurk::API`). Only the entry point loads here; the router, Rack::Request and
+# the rest arrive on the first request, so a swarm that never serves HTTP pays
+# nothing for the constant existing.
+require_relative 'wurk/api'
+
 # Sidekiq aliases load last — every Wurk::* constant they reference must be
 # fully defined first. compat.rb only redefines names, it does not gate
 # behavior, so trailing the load order is safe.
