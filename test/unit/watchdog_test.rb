@@ -189,11 +189,17 @@ class WatchdogTest < Wurk::Test::UnitCase
 
   # --- one thread, many bounds ------------------------------------------
 
+  # Every spawn attempt has run once four bounds are armed — #arm spawns under
+  # the same lock it registers under. Only the *name* trails: safe_thread sets
+  # it from inside the thread, so `scanners` is empty until the scanner is first
+  # scheduled, and the size check above can be satisfied on its first poll
+  # without ever yielding the GVL. Wait for the name rather than racing it.
   def test_one_scanner_serves_every_bounded_thread
     wd = build
     gate = Queue.new
     threads = Array.new(4) { Thread.new { wd.watch(5, Bound) { gate.pop } } }
     wait_until { wd.size == 4 }
+    wait_until { scanners.any? }
 
     assert_equal 1, scanners.size
   ensure

@@ -64,6 +64,25 @@ Wurk::Engine.routes.draw do
     get  'stream',           to: 'api#stream' # SSE
   end
 
+  # The machine-facing HTTP API (lib/wurk/api/) — mount mode 1 of three. An app
+  # that already mounts the engine gets it at `<mount>/api/v1` for free once a
+  # token exists; `Wurk::API.serves?` decides per request, so with none the
+  # constraint fails, Rails falls through, and there is no surface to find. It
+  # shares the /api prefix with the dashboard's own JSON API above; the
+  # constraint — not the declaration order — is what keeps those matching. It
+  # claims every version-shaped path rather than `/v1` alone, so an unknown
+  # version reaches the app and comes back as the same `unsupported_api_version`
+  # problem document the other two mounts answer with.
+  #
+  # Nested here it also inherits the engine's middleware — the host's
+  # `Wurk::Web.use` chain and the read-only gate — so a dashboard behind Devise
+  # keeps gating this path too. A machine client that cannot pass a browser
+  # login wants mode 2 instead: `mount Wurk::API => '/wurk-api'` in the host's
+  # own routes, declared BEFORE the engine when its path extends the engine's —
+  # Rails matches a mounted app by bare string prefix, so `mount Wurk::Engine =>
+  # '/wurk'` declared first swallows every `/wurk-api/...` request.
+  mount Wurk::API => Wurk::API::ENGINE_MOUNT, constraints: ->(request) { Wurk::API.serves?(request.path_info) }
+
   # Profiles (v8.0+) — not under /api: `:key/data` streams the gzipped gecko
   # blob with a gzip Content-Encoding, and `:key` POST-uploads the profile to
   # the Firefox profiler then 302s to its public view. `:key` is "<token>-<jid>".

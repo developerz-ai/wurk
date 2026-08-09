@@ -7,8 +7,8 @@ require_relative 'validation'
 
 module Wurk
   module API
-    # The produce plane: enqueue one job, enqueue many, take a not-yet-run job
-    # back out.
+    # The produce plane: enqueue one job, enqueue many, ask what became of one,
+    # take a not-yet-run job back out.
     #
     # The request body *is* the Sidekiq job hash — `{"class", "args", "queue",
     # "at", "retry"}` — and every write below hands it to {Wurk::Client}, the
@@ -34,6 +34,11 @@ module Wurk
       def draw(router)
         router.post('/jobs', scope: :enqueue) { |request| create(request) }
         router.post('/jobs/bulk', scope: :enqueue) { |request| create_bulk(request) }
+        # :read. A producer that wants to poll what it pushed is granted
+        # `%i[enqueue read]` — the same pair the configuration docs show —
+        # rather than having every enqueue token able to read a jid it did not
+        # produce, which is what folding this into :enqueue would mean.
+        router.get('/jobs/:jid', scope: :read) { |request| show(request) }
         # :admin, not :enqueue. A jid is not bound to the token that produced
         # it, so an enqueue-scoped producer holding this route could walk the
         # retry set one jid at a time. Widening a scope later is additive to
@@ -96,6 +101,22 @@ module Wurk
         invalid_request(request, e.message)
       end
 
+      # The record {Wurk::Status} keeps for one jid: state, progress, result,
+      # error. Sidekiq keeps nothing at all about a job once it succeeds, so
+      # this route can only answer for a class that opted in with
+      # `track: true`; an untracked jid, an unknown one and a row whose TTL has
+      # lapsed are all the same answer, because Redis holds nothing that tells
+      # them apart.
+      def show(request)
+        jid = Validation.jid!(request.path_params[:jid].to_s)
+        record = ::Wurk::Status.get(jid)
+        return status_not_found(request, jid) unless record
+
+        Response.json(200, record.to_h)
+      rescue Validation::Invalid => e
+        problem(request, e)
+      end
+
       # Removes a job that has not run yet from `schedule` or `retry`. Not a
       # cancel: a job already handed to a processor keeps running, and one that
       # has already died stays in `dead`, where deleting it is an operator
@@ -128,9 +149,7 @@ module Wurk
 
       # Validation decided which problem this is; rendering it is all that is
       # left, so a new rejection never needs a new arm here.
-      def problem(request, error)
-        Problem.render(error.type, status: error.status, detail: error.message, instance: request.path, **error.extra)
-      end
+      def problem(request, error) = Problem.from(error, instance: request.path)
 
       def invalid_request(request, detail)
         Problem.render(Problem::INVALID_REQUEST, status: 400, detail: detail, instance: request.path)
@@ -141,6 +160,17 @@ module Wurk
           Problem::JOB_NOT_FOUND,
           status: 404,
           detail: "No scheduled or retrying job has jid #{jid}.",
+          instance: request.path,
+          jid: jid
+        )
+      end
+
+      def status_not_found(request, jid)
+        Problem.render(
+          Problem::JOB_NOT_FOUND,
+          status: 404,
+          detail: "No status is recorded for jid #{jid}; the job is unknown, its class does not set " \
+                  'track: true, or its record has expired.',
           instance: request.path,
           jid: jid
         )

@@ -24,6 +24,27 @@ module Wurk
     # format and Lua scripts rely on commands introduced in Redis 7.
     MIN_REDIS_VERSION = '7.0.0'
 
+    # Subcommands. Bare `wurk` runs the worker — the historical shape, and the
+    # only one the swarm binaries accept — so a subcommand is never anything
+    # but the first argument, and every argument after it is that command's.
+    COMMANDS = %w[api].freeze
+
+    # `wurk api` defaults. 0.0.0.0 because the point of the machine API is for
+    # another service to reach it; it is bearer-gated, and answers 404 to
+    # everything until a token exists. `--bind 127.0.0.1` narrows it.
+    DEFAULT_API_BIND = '0.0.0.0'
+    DEFAULT_API_PORT = 7433
+
+    # Serving the API with nothing registered would bind a port and 404 every
+    # request — the surface is off until a token exists, so say so at boot
+    # rather than leaving an operator to diagnose it over HTTP.
+    NO_API_TOKEN_MESSAGE = <<~MSG
+      No API token is registered, so every request would answer 404.
+      Register one where the app loaded by -r configures wurk:
+
+          Wurk.configuration.api_token(ENV.fetch('WURK_API_TOKEN'), scopes: %i[enqueue read])
+    MSG
+
     # Thread-backtrace dumper used by both TTIN and INFO. Same body — INFO is
     # the modern name, TTIN is kept for parity with older Sidekiq users.
     BACKTRACE_DUMPER = lambda do |cli|
@@ -68,7 +89,19 @@ module Wurk
       ['-C', '--config PATH',          :config_file, 'path to YAML config file']
     ].freeze
 
+    # Same table shape, offered only when `api` is the subcommand: none of it
+    # means anything to a worker process, and `wurk --help` stays the worker's.
+    API_OPTION_FLAGS = [
+      ['-b', '--bind ADDRESS', :api_bind,   "Address to bind (default #{DEFAULT_API_BIND})"],
+      ['-p', '--port PORT',    :api_port,   "Port to listen on (default #{DEFAULT_API_PORT})", :to_i],
+      ['-s', '--server NAME',  :api_server, 'Rack handler to serve with (default: the first installed)']
+    ].freeze
+
     attr_accessor :launcher, :environment, :config
+
+    # The subcommand `parse` pulled off argv, or nil for the worker runner.
+    # The binary picks the mode from it — `exe/wurk` runs the API for `api`.
+    attr_reader :command
 
     def self.instance
       @instance ||= new
@@ -84,12 +117,14 @@ module Wurk
       @launcher = nil
       @environment = nil
       @parser = nil
+      @command = nil
     end
 
     # `parse` is split from `run` so tests can drive option parsing without
     # touching Redis or booting the host app.
     def parse(args = ARGV.dup)
       @config ||= Wurk.default_configuration
+      @command = extract_command!(args)
       setup_options(args)
       initialize_logger
       validate!
@@ -137,6 +172,8 @@ module Wurk
     # `SIDEKIQ_PRELOAD_APP` whole-app eager-load) and boots `Process.warmup`
     # before the fork so children share warmed pages (copy-on-write). Spec §7.
     def run_swarm(boot_app: true, warmup: true)
+      raise ArgumentError, "the swarm runner takes no subcommand; run `wurk #{@command}` instead" if @command
+
       # Server mode before the app loads — see #run. The flag rides through the
       # fork into every child (the config object is copied), so configure_server
       # blocks registered in the parent take effect in the workers.
@@ -163,6 +200,32 @@ module Wurk
       end
     end
 
+    # `wurk api` — serve the machine-facing HTTP API and nothing else: no
+    # fetcher, no heartbeat, no job ever runs here. This is mount mode 3, the
+    # standalone one: the same Rack app the engine nests and a host can mount
+    # itself, served without Rails.
+    #
+    # Server mode is entered for the reason #run does it — a host that
+    # registers its token inside a `configure_server` block would otherwise
+    # boot an API with no credential and 404 every request. Nothing starts as a
+    # side effect: no lifecycle event fires and no Launcher is ever built.
+    #
+    # `handler:` is a test seam; production resolves one from the installed
+    # gems.
+    def run_api(boot_app: true, handler: nil)
+      enter_server_mode
+      boot_application if boot_app
+      validate_redis!
+      # Load the app here, not on the first request: a broken load should fail
+      # the boot an operator is watching, not the first client to call.
+      require_relative 'api/app'
+      raise ArgumentError, NO_API_TOKEN_MESSAGE unless @config.api_enabled?
+
+      handler ||= api_handler(@config[:api_server])
+      logger.info { "Wurk API listening on http://#{api_bind}:#{api_port}#{Wurk::API::VERSION_PREFIX}" }
+      handler.run(Wurk::API, Host: api_bind, Port: api_port)
+    end
+
     def handle_signal(sig)
       logger.debug { "Got #{sig} signal" }
       handler = SIGNAL_HANDLERS[sig]
@@ -186,6 +249,29 @@ module Wurk
       return unless ::Process.respond_to?(:warmup) && ENV['RUBY_DISABLE_WARMUP'] != '1'
 
       ::Process.warmup
+    end
+
+    def api_bind = @config[:api_bind] || DEFAULT_API_BIND
+    def api_port = @config[:api_port] || DEFAULT_API_PORT
+
+    # Rack 3 moved the server handlers out to the `rackup` gem; rack 2 still
+    # ships them itself. Neither is a wurk dependency — the web server is the
+    # host's choice here exactly as it is for the app this sits next to — so
+    # resolve one at run time and name the fix when there is none.
+    def api_handler(name)
+      registry = handler_registry
+      name ? registry.get(name) : registry.default
+    rescue ::LoadError, ::NameError, ::ArgumentError => e
+      raise ArgumentError, "wurk api could not start a web server (#{e.message}). Add one to your Gemfile " \
+                           '— puma, falcon, or rackup + webrick — or name an installed one with --server.'
+    end
+
+    def handler_registry
+      require 'rackup/handler'
+      ::Rackup::Handler
+    rescue ::LoadError
+      require 'rack/handler'
+      ::Rack::Handler
     end
 
     def launch(self_read)
@@ -270,6 +356,14 @@ module Wurk
 
     # --- options + config-file --------------------------------------------
 
+    # Pulled off before OptionParser sees argv, so the banner and the flag
+    # table can depend on which command was named. A bare word OptionParser
+    # doesn't recognize would otherwise survive `parse!` and be silently
+    # ignored, which is how `wurk api` would look like it worked.
+    def extract_command!(args)
+      COMMANDS.include?(args.first) ? args.shift : nil
+    end
+
     def setup_options(args)
       opts = parse_options(args)
       set_environment(opts[:environment])
@@ -351,14 +445,15 @@ module Wurk
 
     def option_parser(opts)
       ::OptionParser.new do |o|
-        o.banner = 'wurk [options]'
-        define_value_flags(o, opts)
+        o.banner = @command ? "wurk #{@command} [options]" : 'wurk [options]'
+        define_value_flags(o, opts, OPTION_FLAGS)
+        define_value_flags(o, opts, API_OPTION_FLAGS) if @command == 'api'
         define_meta_flags(o, opts)
       end
     end
 
-    def define_value_flags(parser, opts)
-      OPTION_FLAGS.each do |short, long, key, desc, transform|
+    def define_value_flags(parser, opts, flags)
+      flags.each do |short, long, key, desc, transform|
         parser.on(short, long, desc) { |arg| assign_flag(opts, key, arg, transform) }
       end
     end

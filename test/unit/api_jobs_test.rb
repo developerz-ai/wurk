@@ -223,6 +223,74 @@ class ApiJobsTest < Wurk::Test::UnitCase
     body['jids'].each { |jid| refute_nil Wurk::ScheduledSet.new.find_job(jid) }
   end
 
+  # --- GET /jobs/:jid ----------------------------------------------------
+
+  def test_get_job_returns_the_status_record
+    jid = SecureRandom.hex(12)
+    Wurk::Status.write(jid, state: 'complete', queue: @queue, class: @class_name,
+                            progress: 7, total: 10, result: JSON.generate('ok'))
+
+    status, headers, body = get("/v1/jobs/#{jid}")
+
+    assert_equal 200, status
+    assert_equal 'application/json', headers['content-type']
+    assert_equal jid, body['jid']
+    assert_equal 'complete', body['state']
+    assert_equal @class_name, body['class']
+    assert_equal @queue, body['queue']
+    assert_equal 7, body['progress']
+    assert_equal 10, body['total']
+    assert_equal 'ok', body['result']
+  end
+
+  # The same object the dashboard reads, so the two can never disagree about
+  # what a job did.
+  def test_get_job_agrees_with_the_status_record_it_reads
+    jid = SecureRandom.hex(12)
+    Wurk::Status.write(jid, state: 'failed', error_class: 'RuntimeError', error_message: 'boom')
+
+    _status, _headers, body = get("/v1/jobs/#{jid}")
+
+    assert_equal Wurk::Status.get(jid).to_h, body
+  end
+
+  # An untracked jid, an unknown one and a lapsed row are one answer: Redis
+  # holds nothing that tells them apart.
+  def test_get_job_of_an_untracked_jid_is_a_job_not_found_problem
+    jid = SecureRandom.hex(12)
+    status, headers, body = get("/v1/jobs/#{jid}")
+
+    assert_equal 404, status
+    assert_equal 'application/problem+json', headers['content-type']
+    assert_equal 'job_not_found', body['type']
+    assert_equal jid, body['jid']
+    assert_includes body['detail'], 'track: true'
+  end
+
+  def test_get_job_rejects_a_jid_that_is_not_url_safe
+    status, _headers, body = get('/v1/jobs/%2A')
+
+    assert_equal 400, status
+    assert_equal 'invalid_request', body['type']
+  end
+
+  # A producer polling what it pushed is granted %i[enqueue read]; enqueue
+  # alone does not carry a jid it may not have produced.
+  def test_read_scope_may_get_a_job
+    jid = SecureRandom.hex(12)
+    Wurk::Status.write(jid, state: 'running')
+    status, = get("/v1/jobs/#{jid}", token: READ_TOKEN)
+
+    assert_equal 200, status
+  end
+
+  def test_enqueue_scope_may_not_get_a_job
+    status, _headers, body = get("/v1/jobs/#{SecureRandom.hex(12)}", token: ENQUEUE_TOKEN)
+
+    assert_equal 403, status
+    assert_equal 'read', body['required_scope']
+  end
+
   # --- DELETE /jobs/:jid -------------------------------------------------
 
   def test_delete_removes_a_scheduled_job
@@ -373,6 +441,8 @@ class ApiJobsTest < Wurk::Test::UnitCase
   end
 
   def delete(path, token: ADMIN_TOKEN) = parse(call(env_for('DELETE', path, token: token)))
+
+  def get(path, token: ADMIN_TOKEN) = parse(call(env_for('GET', path, token: token)))
 
   def parse(response)
     status, headers, body = response

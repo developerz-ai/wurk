@@ -24,6 +24,16 @@ module Wurk
       # client that asked to cancel a job needs to tell "you addressed nothing"
       # apart from "that job already ran".
       JOB_NOT_FOUND = 'job_not_found'
+      # The same distinction one addressable resource over: a well-formed bid
+      # the `batches` set has never held, as opposed to a mistyped path.
+      BATCH_NOT_FOUND = 'batch_not_found'
+      # A well-formed identity that no live heartbeat answers to — the process
+      # exited, or its beat lapsed and Redis reaped the row.
+      PROCESS_NOT_FOUND = 'process_not_found'
+      # The process is live and the caller may signal it, but this one cannot
+      # be signalled at all: an embedded process shares its host application's
+      # PID, so a TSTP or TERM aimed at it would hit the web server around it.
+      PROCESS_NOT_SIGNALABLE = 'process_not_signalable'
       # Named for RFC 6750 §3.1 so the slug and the `error=` the 403 carries in
       # WWW-Authenticate are the same word.
       INSUFFICIENT_SCOPE = 'insufficient_scope'
@@ -41,6 +51,16 @@ module Wurk
       # not answered yet, which it fixes by waiting.
       IDEMPOTENCY_KEY_REUSED = 'idempotency_key_reused'
       REQUEST_IN_PROGRESS = 'request_in_progress'
+      # Not `insufficient_scope`: the credential is granted everything it needs
+      # and would work against another deployment unchanged. Nothing the client
+      # can send fixes this one, which is why it gets its own slug — a producer
+      # that retried a 403 forever on a frozen deployment is the failure this
+      # avoids.
+      READ_ONLY = 'read_only'
+      # The one refusal that comes with a time attached. `retry_after` repeats
+      # the header as a number so a client that already parses this body does
+      # not have to reach back into the headers for it.
+      RATE_LIMITED = 'rate_limited'
 
       # Every slug needs a human title; `fetch` below turns a missing one into a
       # loud failure in the test suite rather than a half-formed error body.
@@ -53,10 +73,15 @@ module Wurk
         INSUFFICIENT_SCOPE => 'Insufficient Scope',
         INVALID_REQUEST => 'Invalid Request',
         JOB_NOT_FOUND => 'Job Not Found',
+        BATCH_NOT_FOUND => 'Batch Not Found',
+        PROCESS_NOT_FOUND => 'Process Not Found',
+        PROCESS_NOT_SIGNALABLE => 'Process Not Signalable',
         PAYLOAD_TOO_LARGE => 'Payload Too Large',
         CLASS_NOT_ALLOWED => 'Class Not Allowed',
         IDEMPOTENCY_KEY_REUSED => 'Idempotency Key Reused',
-        REQUEST_IN_PROGRESS => 'Request In Progress'
+        REQUEST_IN_PROGRESS => 'Request In Progress',
+        READ_ONLY => 'Read-Only Mode',
+        RATE_LIMITED => 'Too Many Requests'
       }.freeze
 
       module_function
@@ -69,6 +94,14 @@ module Wurk
         }
         body.merge!(extra)
         [status, response_headers(headers), [::JSON.generate(body)]]
+      end
+
+      # Renders a refusal that already knows which problem it is — the shape
+      # Validation::Invalid carries. The mapping from a rejection to a status
+      # code stays with the check that made it, so a new rejection never needs
+      # a new arm in the route that surfaces it.
+      def from(error, instance:)
+        render(error.type, status: error.status, detail: error.message, instance: instance, **error.extra)
       end
 
       # nosniff so a browser pointed at an error can never be talked into

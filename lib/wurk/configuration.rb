@@ -84,7 +84,15 @@ module Wurk
       api_idempotency_ttl: 3_600,
       # Allow-list of classes the HTTP API may enqueue. nil (the default) means
       # only an `admin` token may enqueue at all — see #api_enqueue_classes=.
-      api_enqueue_classes: nil
+      api_enqueue_classes: nil,
+      # Three-state on purpose — see #api_read_only=. nil is "inherit", which
+      # only mount mode 1 has anything to inherit from.
+      api_read_only: nil,
+      # Per-token request ceiling. nil is off: the API adds no Redis work to a
+      # request until a host asks for a limit, and no number picked here would
+      # be right for both a cron relay and a fan-out producer.
+      api_rate_limit: nil,
+      api_rate_limit_interval: :minute
     }.freeze
 
     # :fork fires only inside swarm children, after fork + internal AR/Redis
@@ -461,9 +469,15 @@ module Wurk
     # Registers a bearer token for the HTTP API and the scopes it grants —
     # any of `:enqueue`, `:read`, `:admin` (which grants the other two):
     #
-    #   Wurk.configure_server do |config|
-    #     config.api_token ENV.fetch('WURK_API_TOKEN'), scopes: %i[enqueue read]
-    #   end
+    #   # config/initializers/wurk.rb
+    #   Wurk.configuration.api_token ENV.fetch('WURK_API_TOKEN'), scopes: %i[enqueue read]
+    #
+    # Registered unconditionally, not inside `configure_server`/`configure_client`
+    # — the process that serves the API has to be the one holding the credential,
+    # and neither block runs in every such process. A Puma-cluster web process
+    # never enters server mode (Wurk::RailsBoot refuses to fork a swarm from
+    # one), so a token registered in `configure_server` would be absent from the
+    # exact process serving the engine-nested mount.
     #
     # Registering the first token is what brings the API into existence; with
     # none the app is never mounted. Re-registering a token replaces its
@@ -526,6 +540,63 @@ module Wurk
       guard_frozen!
       require_relative 'api/validation'
       @options[:api_enqueue_classes] = Wurk::API::Validation.enqueueable_classes!(classes)
+    end
+
+    # @return [Boolean, nil] true/false when the host said so, nil to inherit.
+    def api_read_only = @options[:api_read_only]
+
+    # Freezes the API's writes — enqueue included, not only the destructive
+    # `admin` routes. Same rule as the dashboard's `Wurk::Web.config.read_only`
+    # and deliberately the same sentence: a read-only deployment answers reads.
+    # Carving enqueue out would mean a viewer-only deploy could still be made
+    # to run arbitrary work, and would leave an operator holding two different
+    # definitions of the same word.
+    #
+    # Three states, because the two planes are not always one deployment:
+    #
+    #   nil (default)  inherit. Mounted inside the engine, the API is part of
+    #                  the dashboard's deployment and `WURK_WEB_READ_ONLY=1`
+    #                  freezes both. Mounted on its own path or run standalone
+    #                  there is nothing to inherit from and this means off.
+    #   true           frozen wherever it is mounted. `WURK_API_READ_ONLY=1`
+    #                  sets it, which is the only door mode 3 has.
+    #   false          live even inside a read-only dashboard — the host that
+    #                  wants a viewer-only UI and a working producer on the
+    #                  same mount, said out loud.
+    def api_read_only=(value)
+      guard_frozen!
+      @options[:api_read_only] = value.nil? ? nil : truthy_setting?(value)
+    end
+
+    # @return [Boolean] the resolved verdict for a mount with nothing to
+    #   inherit; App layers mode 1's inherited flag over it.
+    def api_read_only?
+      value = @options[:api_read_only]
+      value.nil? ? ENV['WURK_API_READ_ONLY'] == '1' : value
+    end
+
+    # @return [Integer, nil] requests one token may make per interval.
+    def api_rate_limit = @options[:api_rate_limit]
+
+    # Requests per `api_rate_limit_interval`, per token, across the fleet —
+    # enforced by a `Wurk::Limiter` sliding window rather than a second
+    # limiter, so an API ceiling shows up on the Limiters page beside every
+    # other one and resets on the same Redis clock. nil turns it off.
+    def api_rate_limit=(count)
+      guard_frozen!
+      @options[:api_rate_limit] = count.nil? ? nil : api_limit!(:api_rate_limit, count)
+    end
+
+    # @return [Symbol, Integer] the window the limit is counted over.
+    def api_rate_limit_interval = @options[:api_rate_limit_interval]
+
+    # `:second :minute :hour :day` or a raw Integer of seconds — whatever
+    # `Limiter.window` accepts, validated here so a typo raises in the
+    # initializer that wrote it rather than on the first throttled request.
+    def api_rate_limit_interval=(interval)
+      guard_frozen!
+      Wurk::Limiter.interval_seconds(interval, allow_integer: true)
+      @options[:api_rate_limit_interval] = interval
     end
 
     # --- Web dashboard ----------------------------------------------------
@@ -726,6 +797,17 @@ module Wurk
 
     def guard_frozen!
       raise FrozenError, 'Wurk::Configuration is frozen' if @frozen
+    end
+
+    # `config.api_read_only = ENV['SOMETHING']` is the shape a host reaches for,
+    # and `!!'false'` is true. Borrow the dashboard's list of strings that mean
+    # off rather than growing a second one that could disagree with it about the
+    # same env var.
+    def truthy_setting?(value)
+      return !!value unless value.is_a?(String)
+
+      require_relative 'web/config'
+      !Wurk::Web::Config::FALSEY_STRINGS.include?(value.strip.downcase)
     end
 
     # Boundary caps are refused where they are written, not where they are

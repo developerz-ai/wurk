@@ -1,13 +1,18 @@
 # frozen_string_literal: true
 
 require 'rack'
+require_relative '../api'
 require_relative '../version'
 require_relative 'auth'
 require_relative 'jobs'
 require_relative 'problem'
+require_relative 'queues'
+require_relative 'read_only'
 require_relative 'request'
 require_relative 'response'
 require_relative 'router'
+require_relative 'swarm'
+require_relative 'throttle'
 
 module Wurk
   module API
@@ -20,10 +25,6 @@ module Wurk
     # SCRIPT_NAME (Request#url_for) — the same mount-agnostic rule the SPA shell
     # follows in dashboard_controller.rb.
     class App
-      API_VERSION = 'v1'
-      VERSION_PREFIX = "/#{API_VERSION}".freeze
-      SUPPORTED_VERSIONS = [API_VERSION].freeze
-
       # `config` is read on every request rather than captured, so a token
       # registered after the first request still takes effect. Injectable
       # because a test must be able to hand this app its own token table
@@ -50,16 +51,25 @@ module Wurk
         @config || ::Wurk.configuration
       end
 
-      # One table per plane, each owning its own routes and handlers. Queues and
-      # swarm join Jobs here.
+      # One table per plane, each owning its own routes and handlers. Swarm
+      # joins Jobs and Queues here.
       def draw(router)
         router.get('/', scope: Auth::ANY) { |request| root(request) }
         Jobs.draw(router)
+        Queues.draw(router)
+        Swarm.draw(router)
       end
 
       # Authentication runs before the version gate and before routing, so an
       # unauthenticated prober can't enumerate which paths or versions exist
       # from the difference between a 404 and a 405.
+      #
+      # Then two refusals that are true of the whole deployment rather than of
+      # any one route, in cost order. Read-only is a fact this process already
+      # holds, so it answers without touching Redis. The throttle needs a
+      # credential to charge, which is why it cannot run before authentication —
+      # and it charges every authenticated request, routed or not: a client
+      # walking paths that don't exist is exactly the traffic a ceiling is for.
       def handle(request)
         config = request.config
         return not_found(request) unless Auth.configured?(config)
@@ -68,7 +78,8 @@ module Wurk
         return Auth.unauthorized(request) unless principal
 
         request.principal = principal
-        route(request)
+        refusal = ReadOnly.refuse(request) || Throttle.refuse(request)
+        refusal || route(request)
       rescue StandardError => e
         internal_error(request, e)
       end
@@ -90,15 +101,30 @@ module Wurk
       end
 
       # The document a client hits to confirm which mount and which contract it
-      # is talking to before it starts guessing paths.
+      # is talking to before it starts guessing paths. It carries the two
+      # deployment-wide refusals as well: both are things a producer would
+      # otherwise only learn by having a write refused, and a client that can
+      # read "this one is frozen" at startup fails in its own logs instead of
+      # halfway through a batch.
       def root(request)
         Response.json(
-          200, api_version: API_VERSION, wurk_version: ::Wurk::VERSION, url: request.url_for(VERSION_PREFIX)
+          200,
+          api_version: API_VERSION, wurk_version: ::Wurk::VERSION, url: request.url_for(VERSION_PREFIX),
+          read_only: ReadOnly.enabled?(request), rate_limit: rate_limit(request.config)
         )
       end
 
+      # nil, not an object with nil members: "there is no ceiling here" and
+      # "there is one, of unknown size" are different answers.
+      def rate_limit(config)
+        limit = config.api_rate_limit
+        return nil unless limit
+
+        { limit: limit, interval_seconds: Throttle.interval_seconds(config.api_rate_limit_interval) }
+      end
+
       def versioned?(path)
-        path == VERSION_PREFIX || path.start_with?("#{VERSION_PREFIX}/")
+        path == VERSION_PREFIX || path.start_with?(NESTED_PREFIX)
       end
 
       def route_miss(request, match)
