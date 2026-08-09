@@ -1,6 +1,7 @@
 # frozen_string_literal: true
 
 require 'rack'
+require_relative 'auth'
 
 module Wurk
   module API
@@ -12,12 +13,17 @@ module Wurk
     # A capture never spans '/', so a queue named "a/b" has to arrive
     # percent-encoded — the same constraint `config/routes.rb` puts on the
     # dashboard's `:name`.
+    #
+    # Every route names the Auth scope its caller must hold. The router only
+    # records it — App#dispatch enforces it — but the keyword is required, so
+    # adding an endpoint without deciding who may call it is impossible rather
+    # than merely discouraged. A new route can never default open.
     class Router
-      Route = Struct.new(:verb, :segments, :handler, keyword_init: true)
+      Route = Struct.new(:verb, :segments, :scope, :handler, keyword_init: true)
       # `handler` nil means nothing matched the path; `allowed` then carries the
       # verbs registered for a path that *did* match, so the caller can answer
       # 405 with an Allow header instead of a misleading 404.
-      Match = Struct.new(:handler, :params, :allowed, keyword_init: true)
+      Match = Struct.new(:handler, :params, :scope, :allowed, keyword_init: true)
 
       NO_PARAMS = {}.freeze
 
@@ -25,9 +31,9 @@ module Wurk
         @routes = []
       end
 
-      def get(pattern, &handler) = add('GET', pattern, handler)
-      def post(pattern, &handler) = add('POST', pattern, handler)
-      def delete(pattern, &handler) = add('DELETE', pattern, handler)
+      def get(pattern, scope:, &handler) = add('GET', pattern, scope, handler)
+      def post(pattern, scope:, &handler) = add('POST', pattern, scope, handler)
+      def delete(pattern, scope:, &handler) = add('DELETE', pattern, scope, handler)
 
       # HEAD is served by the GET route (RFC 9110 §9.3.2); the caller drops the
       # body.
@@ -38,17 +44,25 @@ module Wurk
         @routes.each do |route|
           params = bind(route.segments, segments)
           next unless params
-          return Match.new(handler: route.handler, params: params, allowed: nil) if route.verb == verb
+          if route.verb == verb
+            return Match.new(handler: route.handler, params: params, scope: route.scope, allowed: nil)
+          end
 
           allowed << route.verb
         end
-        Match.new(handler: nil, params: NO_PARAMS, allowed: allowed.uniq)
+        Match.new(handler: nil, params: NO_PARAMS, scope: nil, allowed: allowed.uniq)
       end
 
       private
 
-      def add(verb, pattern, handler)
-        @routes << Route.new(verb: verb, segments: split(pattern), handler: handler)
+      # A misspelled scope would 403 the route forever; reject it at draw time,
+      # which is boot, rather than letting it surface as a runtime denial.
+      def add(verb, pattern, scope, handler)
+        unless Auth::ROUTE_SCOPES.include?(scope)
+          raise ArgumentError, "unknown route scope #{scope.inspect}; valid scopes are #{Auth::ROUTE_SCOPES.inspect}"
+        end
+
+        @routes << Route.new(verb: verb, segments: split(pattern), scope: scope, handler: handler)
         self
       end
 

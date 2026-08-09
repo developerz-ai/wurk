@@ -18,6 +18,10 @@ module Wurk
       METHOD_NOT_ALLOWED = 'method_not_allowed'
       UNSUPPORTED_API_VERSION = 'unsupported_api_version'
       INTERNAL_ERROR = 'internal_error'
+      UNAUTHORIZED = 'unauthorized'
+      # Named for RFC 6750 §3.1 so the slug and the `error=` the 403 carries in
+      # WWW-Authenticate are the same word.
+      INSUFFICIENT_SCOPE = 'insufficient_scope'
 
       # Every slug needs a human title; `fetch` below turns a missing one into a
       # loud failure in the test suite rather than a half-formed error body.
@@ -25,7 +29,9 @@ module Wurk
         NOT_FOUND => 'Not Found',
         METHOD_NOT_ALLOWED => 'Method Not Allowed',
         UNSUPPORTED_API_VERSION => 'Unsupported API Version',
-        INTERNAL_ERROR => 'Internal Server Error'
+        INTERNAL_ERROR => 'Internal Server Error',
+        UNAUTHORIZED => 'Unauthorized',
+        INSUFFICIENT_SCOPE => 'Insufficient Scope'
       }.freeze
 
       module_function

@@ -8,10 +8,14 @@ require 'logger'
 # Slice 07 — the Wurk::API Rack app skeleton: versioned under /v1, mount-
 # agnostic (every emitted URL derives from SCRIPT_NAME), RFC-9457-shaped
 # problem bodies. Route tables for jobs/queues/swarm land in later slices.
+#
+# Auth is exercised in api_auth_test.rb; every request here carries a valid
+# admin token so these tests speak only about routing and error shape.
 class ApiAppTest < Wurk::Test::UnitCase
   parallelize_me!
 
   LIB = File.expand_path('../../lib', __dir__)
+  TOKEN = 'api-app-test-token-0123456789'
 
   def test_version_root_reports_the_contract_it_serves
     status, headers, body = get('/v1')
@@ -112,13 +116,13 @@ class ApiAppTest < Wurk::Test::UnitCase
   end
 
   def test_allow_advertises_only_the_verbs_the_path_answers
-    _status, headers, = RoutesApp.new.call(env_for('GET', '/v1/create'))
+    _status, headers, = RoutesApp.new(config: config).call(env_for('GET', '/v1/create'))
 
     assert_equal 'POST', headers['allow']
   end
 
   def test_router_captures_reach_the_handler_decoded
-    _status, _headers, body = RoutesApp.new.call(env_for('GET', '/v1/echo/two%20words'))
+    _status, _headers, body = RoutesApp.new(config: config).call(env_for('GET', '/v1/echo/two%20words'))
 
     assert_equal 'two words', JSON.parse(body.join)['echoed']
   end
@@ -132,7 +136,7 @@ class ApiAppTest < Wurk::Test::UnitCase
   end
 
   def test_handler_failure_becomes_a_problem_without_leaking_the_exception
-    status, headers, body = BoomApp.new.call(env_for('GET', '/v1'))
+    status, headers, body = BoomApp.new(config: config).call(env_for('GET', '/v1'))
 
     assert_equal 500, status
     assert_equal 'application/problem+json', headers['content-type']
@@ -143,25 +147,34 @@ class ApiAppTest < Wurk::Test::UnitCase
   end
 
   def test_handler_failure_is_logged_server_side
-    log = capture_log { BoomApp.new.call(env_for('GET', '/v1', script_name: '/wurk/api')) }
+    log = capture_log do
+      BoomApp.new(config: config).call(env_for('GET', '/v1', script_name: '/wurk/api'))
+    end
 
     assert_includes log, 'kaboom'
     assert_includes log, 'GET /wurk/api/v1'
   end
 
-  # `mount Wurk::API => …` and `run Wurk::API` both go through this entry.
+  # `mount Wurk::API => …` and `run Wurk::API` both go through this entry, which
+  # reads the process-wide config — hence the global-state mutex and the
+  # deregistration in `ensure`.
   def test_module_level_rack_entry_serves_the_same_routes
-    status, _headers, body = Wurk::API.call(env_for('GET', '/v1'))
+    Wurk::Test::GLOBAL_STATE_MUTEX.synchronize do
+      Wurk.configuration.api_token(TOKEN, scopes: %i[read])
+      status, _headers, body = Wurk::API.call(env_for('GET', '/v1'))
 
-    assert_equal 200, status
-    assert_equal 'v1', JSON.parse(body.join)['api_version']
+      assert_equal 200, status
+      assert_equal 'v1', JSON.parse(body.join)['api_version']
+    ensure
+      Wurk.configuration.api_tokens.delete(TOKEN)
+    end
   end
 
   # The additive invariant: a swarm that never serves HTTP must not carry the
   # router or Rack::Request in its pre-fork heap. Subprocess, because this
   # process has already required the app.
   def test_requiring_wurk_does_not_load_the_http_api
-    loaded = ruby('require "wurk"; print $LOADED_FEATURES.grep(%r{wurk/api/(app|router|request)\.rb\z}).size')
+    loaded = ruby('require "wurk"; print $LOADED_FEATURES.grep(%r{wurk/api/(app|auth|router|request)\.rb\z}).size')
 
     assert_equal '0', loaded
   end
@@ -170,10 +183,10 @@ class ApiAppTest < Wurk::Test::UnitCase
     loaded = ruby(<<~RUBY)
       require 'wurk'
       Wurk::API.call('REQUEST_METHOD' => 'GET', 'PATH_INFO' => '/v1', 'SCRIPT_NAME' => '')
-      print $LOADED_FEATURES.grep(%r{wurk/api/(app|router|request)\\.rb\\z}).size
+      print $LOADED_FEATURES.grep(%r{wurk/api/(app|auth|router|request)\\.rb\\z}).size
     RUBY
 
-    assert_equal '3', loaded
+    assert_equal '4', loaded
   end
 
   private
@@ -183,7 +196,7 @@ class ApiAppTest < Wurk::Test::UnitCase
     private
 
     def draw(router)
-      router.get('/') { raise 'kaboom' }
+      router.get('/', scope: Wurk::API::Auth::ANY) { raise 'kaboom' }
     end
   end
 
@@ -193,12 +206,16 @@ class ApiAppTest < Wurk::Test::UnitCase
     private
 
     def draw(router)
-      router.get('/echo/:name') { |request| json(200, echoed: request.path_params[:name]) }
-      router.post('/create') { |_request| json(201, created: true) }
+      router.get('/echo/:name', scope: :read) { |request| json(200, echoed: request.path_params[:name]) }
+      router.post('/create', scope: :enqueue) { |_request| json(201, created: true) }
     end
   end
 
-  def call(env) = Wurk::API::App.new.call(env)
+  def call(env) = Wurk::API::App.new(config: config).call(env)
+
+  def config
+    @config ||= Wurk::Configuration.new.tap { |cfg| cfg.api_token(TOKEN, scopes: %i[admin]) }
+  end
 
   def ruby(script)
     IO.popen([RbConfig.ruby, '-I', LIB, '-e', script], err: %i[child out], &:read)
@@ -215,6 +232,7 @@ class ApiAppTest < Wurk::Test::UnitCase
       'PATH_INFO' => path,
       'SCRIPT_NAME' => script_name,
       'QUERY_STRING' => '',
+      'HTTP_AUTHORIZATION' => "Bearer #{TOKEN}",
       'rack.input' => StringIO.new,
       'rack.errors' => StringIO.new
     }

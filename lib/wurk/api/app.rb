@@ -3,6 +3,7 @@
 require 'json'
 require 'rack'
 require_relative '../version'
+require_relative 'auth'
 require_relative 'problem'
 require_relative 'request'
 require_relative 'router'
@@ -24,7 +25,12 @@ module Wurk
 
       JSON_HEADERS = { 'content-type' => 'application/json', 'x-content-type-options' => 'nosniff' }.freeze
 
-      def initialize
+      # `config` is read on every request rather than captured, so a token
+      # registered after the first request still takes effect. Injectable
+      # because a test must be able to hand this app its own token table
+      # instead of mutating the process-wide one.
+      def initialize(config: nil)
+        @config = config
         @router = Router.new
         draw(@router)
       end
@@ -38,23 +44,41 @@ module Wurk
 
       private
 
-      # Later slices hang their own tables off this: jobs, queues, swarm.
-      def draw(router)
-        router.get('/') { |request| root(request) }
+      def config
+        @config || ::Wurk.configuration
       end
 
+      # Later slices hang their own tables off this: jobs, queues, swarm.
+      def draw(router)
+        router.get('/', scope: Auth::ANY) { |request| root(request) }
+      end
+
+      # Authentication runs before the version gate and before routing, so an
+      # unauthenticated prober can't enumerate which paths or versions exist
+      # from the difference between a 404 and a 405.
       def handle(request)
+        return not_found(request) unless Auth.configured?(config)
+
+        principal = Auth.authenticate(request, config)
+        return Auth.unauthorized(request) unless principal
+
+        request.principal = principal
+        route(request)
+      rescue StandardError => e
+        internal_error(request, e)
+      end
+
+      def route(request)
         path = request.path_info.to_s
         return unsupported_version(request) unless versioned?(path)
 
         dispatch(request, path.delete_prefix(VERSION_PREFIX))
-      rescue StandardError => e
-        internal_error(request, e)
       end
 
       def dispatch(request, path)
         match = @router.match(request.request_method, path)
         return route_miss(request, match) unless match.handler
+        return Auth.forbidden(request, match.scope) unless request.principal.permits?(match.scope)
 
         request.path_params = match.params
         match.handler.call(request)

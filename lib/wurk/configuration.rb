@@ -64,7 +64,14 @@ module Wurk
       # closed — and so a gem inspecting @options sees the same key set whether
       # or not the host traces. Flipping it is only half the gate; the
       # opentelemetry-api gem has to be present too (Wurk::Telemetry.enabled?).
-      telemetry: false
+      telemetry: false,
+      # Bearer tokens for the machine-facing HTTP API (Wurk::API), as
+      # `token => [scopes]`. Empty means the API does not exist: the engine
+      # skips the mount and a directly mounted app answers 404, so a host that
+      # never registers a token carries no new HTTP surface at all. Seeded here
+      # rather than written on demand so the read side answers on a config that
+      # `freeze!` has already closed.
+      api_tokens: {}
     }.freeze
 
     # :fork fires only inside swarm children, after fork + internal AR/Redis
@@ -435,6 +442,34 @@ module Wurk
 
       logger.warn { 'config.telemetry = true but opentelemetry-api is not installed; tracing stays off' }
     end
+
+    # --- Machine-facing HTTP API (Wurk::API) ------------------------------
+
+    # Registers a bearer token for the HTTP API and the scopes it grants —
+    # any of `:enqueue`, `:read`, `:admin` (which grants the other two):
+    #
+    #   Wurk.configure_server do |config|
+    #     config.api_token ENV.fetch('WURK_API_TOKEN'), scopes: %i[enqueue read]
+    #   end
+    #
+    # Registering the first token is what brings the API into existence; with
+    # none the app is never mounted. Re-registering a token replaces its
+    # scopes. Loading `wurk/api/auth` is deferred to this call so a host that
+    # serves no HTTP API never pays for openssl/digest in every swarm child.
+    def api_token(token, scopes:)
+      guard_frozen!
+      require_relative 'api/auth'
+      value, granted = Wurk::API::Auth.credential!(token, scopes)
+      @options[:api_tokens][value] = granted
+      nil
+    end
+
+    # @return [Hash{String => Array<Symbol>}] registered tokens and their scopes
+    def api_tokens = @options[:api_tokens]
+
+    # @return [Boolean] whether the HTTP API exists at all. The engine's mount
+    #   is conditional on this.
+    def api_enabled? = !@options[:api_tokens].empty?
 
     # --- Web dashboard ----------------------------------------------------
 
