@@ -296,6 +296,7 @@
         <a class="navlink hide" href="#extras">Extras</a>
         <a class="navlink hide" href="#install">Install</a>
         <a class="navlink hide" href="#migrate">Migrate</a>
+        <a class="navlink hide" href="#why">Why</a>
         <a class="navlink" href="https://wurk.demo.developerz.ai/wurk">Live demo</a>
         <a class="navlink" href="https://github.com/developerz-ai/wurk/wiki">Docs</a>
         <a class="navlink" href="https://github.com/developerz-ai/wurk">GitHub</a>
@@ -358,8 +359,8 @@ gem <span class="add">"wurk"</span></pre>
         <h2>Everything, in one free gem</h2>
         <p class="section-lede">
           The runtime, the Pro batches, the Enterprise limiters, periodic jobs, and encryption —
-          the features Sidekiq splits across three paid tiers all ship in a single MIT-licensed gem.
-          No license keys, no per-seat math, no feature flags. Just <code>bundle install</code>.
+          the features Sidekiq offers across its three tiers all ship in a single MIT-licensed gem.
+          No license keys, no feature flags. Just <code>bundle install</code>.
         </p>
         <div class="features-grid">
           <div class="feature feature--oss">
@@ -530,7 +531,7 @@ mount Wurk::Engine =&gt; <span class="add">"/wurk"</span></pre>
         <h2>Migrating from Sidekiq</h2>
         <p class="section-lede">
           Wurk reads and writes the same Redis schema, so a rolling deploy can run Sidekiq and Wurk
-          against the same Redis during cutover. Delete the paid gems, add one line:
+          against the same Redis during cutover. Swap the gems, add one line:
         </p>
         <div class="codeblock">
 <pre tabindex="0"><span class="del">- gem "sidekiq"</span>
@@ -543,6 +544,34 @@ mount Wurk::Engine =&gt; <span class="add">"/wurk"</span></pre>
           <code>WURK_COUNT × concurrency</code> — check your DB pool before the first deploy. The
           <a href="https://github.com/developerz-ai/wurk/blob/main/docs/migrate-from-sidekiq.md">migration guide</a>
           walks through parallelism, clustered Puma, and the gem mappings (cron, unique-jobs).</p>
+      </section>
+
+      <section id="why" class="reveal">
+        <h2>Why Wurk exists</h2>
+        <p class="section-lede">
+          Sidekiq has been the backbone of Ruby background processing for over a decade. Mike Perham
+          and Contributed Systems designed the API Wurk implements, maintained it, documented it, and
+          funded that work through Pro and Enterprise — a model that kept a critical piece of
+          infrastructure healthy and supported far longer than most gems survive at all. Wurk is
+          standing on that work, not arguing with it.
+        </p>
+        <p style="color:var(--muted);margin-top:14px">
+          What Wurk bets on is that the economics changed. It is built and maintained
+          <b>AI-first</b> — implementation, parity suite, docs, and benchmarks written and kept
+          current by AI agents under human review. That is what makes it practical to ship the whole
+          Pro + Enterprise surface for free, to verify parity mechanically on every push (Sidekiq's
+          own tests as an oracle, third-party gems' upstream suites run against Wurk), to keep adding
+          surface Sidekiq doesn't have, and to sustain it — because a fix, a doc update, or a version
+          bump no longer costs somebody a week. It also means the claims stay measured:
+          <a href="https://github.com/developerz-ai/wurk/blob/main/docs/benchmarks.md">published numbers</a>
+          against stock Sidekiq every release, including the unflattering ones.
+        </p>
+        <p style="color:var(--muted);margin-top:14px">
+          This won't be right for everyone. Sidekiq Pro and Enterprise come with a commercial support
+          contract, a decade of production track record, and a human on the other end of an email. If
+          that is what your risk profile needs, buy it — it is worth the money, and it is why the API
+          Wurk implements exists at all.
+        </p>
       </section>
     </div>
     <p id="copy-status" class="sr-only" role="status" aria-live="polite"></p>

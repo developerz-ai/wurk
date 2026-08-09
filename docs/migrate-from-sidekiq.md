@@ -10,6 +10,16 @@ This guide covers what stays the same, the two knobs that surprise people
 (parallelism vs concurrency), how to run a dedicated worker, the third-party gem
 mappings, and a one-page cutover.
 
+> **Before you migrate, a word about what you're migrating from.** Sidekiq has been
+> the backbone of Ruby background processing for over a decade, and the API this
+> guide teaches you to keep is *Sidekiq's* — designed, refined, and supported by
+> Mike Perham and Contributed Systems, funded by the Pro and Enterprise tiers. That
+> model is why the library stayed maintained and well documented long enough for
+> the whole ecosystem to build on it. Moving to Wurk is a bet on a different
+> maintenance model (see the README's *Why Wurk exists*), not a verdict on Sidekiq
+> — and if you want a commercial support contract and a decade of production track
+> record behind your queue, staying on Pro/Enterprise is a perfectly good answer.
+
 - **Authoritative API surface:** [`docs/target/sidekiq-free.md`](target/sidekiq-free.md) ·
   [`sidekiq-pro.md`](target/sidekiq-pro.md) · [`sidekiq-ent.md`](target/sidekiq-ent.md)
 - **Generated API reference (YARD):** <https://developerz-ai.github.io/wurk/api/>

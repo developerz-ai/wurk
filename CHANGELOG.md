@@ -4,6 +4,8 @@ All notable changes to Wurk are recorded here. Format: [Keep a Changelog](https:
 
 ## [Unreleased]
 
+## [1.6.0] - 2026-08-09
+
 A "beyond Sidekiq" release: eight Wurk-only extras, none of them Sidekiq parity. Every one is additive-only — off by default, zero Redis round trips on the hot path unless opted in, no existing Redis key, sorted-set score, or job-JSON field changed. Full plan and per-slice sign-off: [`docs/plans/2026/08/07/101-beyond-sidekiq/overview.md`](docs/plans/2026/08/07/101-beyond-sidekiq/overview.md).
 
 ### Added
@@ -19,6 +21,7 @@ A "beyond Sidekiq" release: eight Wurk-only extras, none of them Sidekiq parity.
 
 ### Changed
 
+- **Docs now credit Sidekiq rather than position against it.** The README, [`docs/migrate-from-sidekiq.md`](docs/migrate-from-sidekiq.md), [`docs/clean-room.md`](docs/clean-room.md), the site and `llms.txt` framed Sidekiq's tiers mainly as something to be freed from ("what you'd otherwise pay for", "no per-seat math"). That undersold a decade of work the whole ecosystem is built on: Sidekiq's API is the one Wurk implements, and the Pro/Enterprise model is what funded keeping it stable and documented long enough to be worth reimplementing. A new **Why Wurk exists** section (README, and an `#why` section on the site) states the actual difference — Wurk is maintained AI-first, which is what makes a free Pro + Enterprise surface, mechanically-verified parity on every push, and this feature cadence sustainable — and says plainly that Sidekiq Pro/Enterprise remain the better choice for teams who need a commercial support contract. `llms.txt` carries the same instruction so agents summarising Wurk don't manufacture a rivalry. No behavior or API change.
 - **Job JSON gains new top-level, additive-only fields — never sent unless the corresponding feature is opted into.** `traceparent`/`tracestate` (telemetry), a `status:<jid>` side-record keyed off `track: true` (no job-JSON field, a separate Redis key), `timeout`/`deadline`/`deadline_at` (per-job bounds — `deadline:` is the input option and is kept verbatim; `deadline_at` is the absolute cutoff derived from it once, at push), `collapse` (debounce/throttle policy). Precedent for additive top-level keys: `job_util.rb`'s existing `TRANSIENT_ATTRIBUTES`, plus `sidekiq-cron`/`sidekiq-unique-jobs` both adding their own. None of these are read by, or break, an unmodified Sidekiq worker.
 
 ### Fixed
@@ -379,10 +382,25 @@ First public (pre-1.0) release. Wurk is a 100% API-compatible drop-in replacemen
 - ActiveJob adapter, `IterableJob`, embedded mode, and a standalone `exe/wurk` runner.
 - Sidekiq client/server middleware contract; third-party ecosystem suites (sidekiq-cron, sidekiq-unique-jobs, sidekiq-scheduler, sidekiq-status, sidekiq-failures, sidekiq-throttled) pass against Wurk.
 
-[Unreleased]: https://github.com/developerz-ai/wurk/compare/v1.0.0-rc1...HEAD
-[1.0.0.rc1]: https://github.com/developerz-ai/wurk/compare/v0.0.5...v1.0.0-rc1
+[Unreleased]: https://github.com/developerz-ai/wurk/compare/v1.6.0...HEAD
+[1.6.0]: https://github.com/developerz-ai/wurk/compare/v1.5.0...v1.6.0
+[1.5.0]: https://github.com/developerz-ai/wurk/compare/v1.4.0...v1.5.0
+[1.4.0]: https://github.com/developerz-ai/wurk/compare/v1.3.1...v1.4.0
+[1.3.1]: https://github.com/developerz-ai/wurk/compare/v1.3.0...v1.3.1
+[1.3.0]: https://github.com/developerz-ai/wurk/compare/v1.2.1...v1.3.0
+[1.2.1]: https://github.com/developerz-ai/wurk/compare/v1.2.0...v1.2.1
+[1.2.0]: https://github.com/developerz-ai/wurk/compare/v1.1.2...v1.2.0
+[1.1.2]: https://github.com/developerz-ai/wurk/compare/v1.1.1...v1.1.2
+[1.1.1]: https://github.com/developerz-ai/wurk/compare/v1.1.0...v1.1.1
+[1.1.0]: https://github.com/developerz-ai/wurk/compare/v1.0.7...v1.1.0
+[1.0.7]: https://github.com/developerz-ai/wurk/compare/v1.0.6...v1.0.7
+[1.0.6]: https://github.com/developerz-ai/wurk/compare/v1.0.5...v1.0.6
+[1.0.5]: https://github.com/developerz-ai/wurk/compare/v1.0.4...v1.0.5
+[1.0.4]: https://github.com/developerz-ai/wurk/compare/v1.0.3...v1.0.4
+[1.0.3]: https://github.com/developerz-ai/wurk/compare/v1.0.1...v1.0.3
+[1.0.1]: https://github.com/developerz-ai/wurk/compare/v1.0.0...v1.0.1
+[1.0.0]: https://github.com/developerz-ai/wurk/compare/v0.0.5...v1.0.0
 [0.0.5]: https://github.com/developerz-ai/wurk/compare/v0.0.4...v0.0.5
 [0.0.4]: https://github.com/developerz-ai/wurk/compare/v0.0.3...v0.0.4
 [0.0.3]: https://github.com/developerz-ai/wurk/compare/v0.0.2...v0.0.3
-[0.0.2]: https://github.com/developerz-ai/wurk/compare/v0.0.1...v0.0.2
-[0.0.1]: https://github.com/developerz-ai/wurk/releases/tag/v0.0.1
+[0.0.2]: https://github.com/developerz-ai/wurk/releases/tag/v0.0.2
