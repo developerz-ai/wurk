@@ -149,7 +149,7 @@ class Client:
         Requires the `admin` scope. Raises WurkAPIError(type="job_not_found")
         if it already ran, already died, or never existed.
         """
-        return self._call("DELETE", f"/jobs/{jid}")
+        return self._call("DELETE", f"/jobs/{_path_segment(jid)}")
 
     # -- status ------------------------------------------------------------
 
@@ -159,7 +159,7 @@ class Client:
         untracked, unknown, or expired jid — Redis holds nothing that tells
         those apart.
         """
-        return self._call("GET", f"/jobs/{jid}")
+        return self._call("GET", f"/jobs/{_path_segment(jid)}")
 
     # -- queues --------------------------------------------------------
 
@@ -169,15 +169,15 @@ class Client:
 
     def queue(self, name: str, *, page: int = 0, count: int = 25) -> dict:
         """`GET /queues/:name` — gauges plus a page of the jobs waiting in it."""
-        return self._call("GET", f"/queues/{name}", query={"page": page, "count": count})
+        return self._call("GET", f"/queues/{_path_segment(name)}", query={"page": page, "count": count})
 
     def pause_queue(self, name: str) -> dict:
         """`POST /queues/:name/pause`. Requires the `admin` scope."""
-        return self._call("POST", f"/queues/{name}/pause")
+        return self._call("POST", f"/queues/{_path_segment(name)}/pause")
 
     def unpause_queue(self, name: str) -> dict:
         """`POST /queues/:name/unpause`. Requires the `admin` scope."""
-        return self._call("POST", f"/queues/{name}/unpause")
+        return self._call("POST", f"/queues/{_path_segment(name)}/unpause")
 
     def stats(self) -> dict:
         """`GET /stats` — the same counters `Wurk::Stats` feeds the dashboard."""
@@ -218,7 +218,12 @@ class Client:
         headers = {"Authorization": f"Bearer {self._token}", "Accept": "application/json"}
         data = None
         if body is not None:
-            data = json.dumps(body).encode("utf-8")
+            # `allow_nan=False` because Python's default emits the JavaScript
+            # literals NaN/Infinity, which are not JSON — Ruby's parser rejects
+            # them, so the server would answer 400 invalid_request. Better a
+            # ValueError here, naming the argument, than a round trip to learn
+            # the payload was never JSON in the first place.
+            data = json.dumps(body, allow_nan=False).encode("utf-8")
             headers["Content-Type"] = "application/json"
         if idempotency_key is not None:
             headers["Idempotency-Key"] = idempotency_key
@@ -229,6 +234,18 @@ class Client:
                 return _Response(status=raw.status, body=_parse(raw.read()))
         except urllib.error.HTTPError as error:
             return _Response(status=error.code, body=_parse(error.read()))
+
+
+def _path_segment(value: str) -> str:
+    """Percent-encode `value` as exactly one path segment.
+
+    A jid is hex and a queue name usually isn't exotic, but neither is
+    constrained to be: `/`, `?`, and `#` are all legal in a Sidekiq queue name
+    and each would silently re-address the request. `safe=""` escapes them,
+    and the server's router unescapes per segment (`lib/wurk/api/router.rb`),
+    so the name it binds is the one that was passed in here.
+    """
+    return urllib.parse.quote(str(value), safe="")
 
 
 def _parse(raw_bytes: bytes) -> Any:

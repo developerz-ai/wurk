@@ -34,19 +34,25 @@ class ApiMountTest < Wurk::Test::UnitCase
     refute Wurk::API.serves?('/stats', config)
     refute Wurk::API.serves?('/queues/critical', config)
     refute Wurk::API.serves?('/', config)
+    # A queue may legally be named "v2". Only the first segment names a version.
+    refute Wurk::API.serves?('/queues/v2', config)
   end
 
-  # `start_with?('/v1')` alone would claim these.
+  # `start_with?('/v1')` alone would claim these: neither names a version, so
+  # both belong to whatever else is mounted here.
   def test_a_path_that_merely_starts_with_the_version_string_is_not_claimed
-    refute Wurk::API.serves?('/v10', config)
     refute Wurk::API.serves?('/v1x/jobs', config)
+    refute Wurk::API.serves?('/version', config)
+    refute Wurk::API.serves?('/v', config)
   end
 
   # An unknown version is the App's 404 to answer (unsupported_api_version, with
-  # the versions it does serve), so the mount has to hand it over rather than
-  # leaving the client a bare Rails route miss.
-  def test_an_unknown_version_is_not_claimed_here
-    refute Wurk::API.serves?('/v2/jobs', config)
+  # the versions it does serve), so the mount hands it over rather than leaving
+  # the client a bare Rails route miss — the answer the other two mounts give.
+  def test_an_unknown_version_is_claimed_so_the_app_can_refuse_it_by_name
+    assert Wurk::API.serves?('/v2', config)
+    assert Wurk::API.serves?('/v2/jobs', config)
+    assert Wurk::API.serves?('/v10/jobs', config)
   end
 
   def test_the_version_prefix_is_the_one_the_app_serves_under
@@ -65,6 +71,7 @@ class ApiMountTest < Wurk::Test::UnitCase
   def test_the_unstripped_form_claims_the_machine_plane
     assert Wurk::API.engine_serves?('/api/v1', config)
     assert Wurk::API.engine_serves?('/api/v1/jobs', config)
+    assert Wurk::API.engine_serves?('/api/v2/jobs', config), 'an unknown version is still the machine plane'
   end
 
   def test_the_unstripped_form_leaves_the_dashboards_own_api_alone

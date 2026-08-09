@@ -69,7 +69,10 @@ Wurk::Engine.routes.draw do
   # token exists; `Wurk::API.serves?` decides per request, so with none the
   # constraint fails, Rails falls through, and there is no surface to find. It
   # shares the /api prefix with the dashboard's own JSON API above; the
-  # constraint — not the declaration order — is what keeps those matching.
+  # constraint — not the declaration order — is what keeps those matching. It
+  # claims every version-shaped path rather than `/v1` alone, so an unknown
+  # version reaches the app and comes back as the same `unsupported_api_version`
+  # problem document the other two mounts answer with.
   #
   # Nested here it also inherits the engine's middleware — the host's
   # `Wurk::Web.use` chain and the read-only gate — so a dashboard behind Devise

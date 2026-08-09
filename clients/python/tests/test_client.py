@@ -146,6 +146,49 @@ class ClientTest(unittest.TestCase):
             self.assertIn("page=1", request.full_url)
             self.assertIn("count=10", request.full_url)
 
+    # A queue name is an opaque Redis string, so `/`, `?` and `#` are all legal
+    # in one. Interpolated raw they would re-address the request — a `/` splits
+    # into two segments and misses the route, a `?` starts a query string.
+    def test_a_queue_name_with_reserved_characters_is_encoded_as_one_segment(self):
+        with unittest.mock.patch("urllib.request.urlopen") as urlopen:
+            urlopen.return_value = _json_response(200, {"name": "a/b?c#d", "jobs": []})
+
+            self.client.queue("a/b?c#d")
+
+            request = urlopen.call_args[0][0]
+            self.assertIn("/v1/queues/a%2Fb%3Fc%23d?", request.full_url)
+
+    def test_reserved_characters_are_encoded_in_every_dynamic_segment(self):
+        calls = [
+            (lambda: self.client.status("a/b"), "/v1/jobs/a%2Fb"),
+            (lambda: self.client.cancel("a/b"), "/v1/jobs/a%2Fb"),
+            (lambda: self.client.pause_queue("a/b"), "/v1/queues/a%2Fb/pause"),
+            (lambda: self.client.unpause_queue("a/b"), "/v1/queues/a%2Fb/unpause"),
+        ]
+        for call, expected_path in calls:
+            with unittest.mock.patch("urllib.request.urlopen") as urlopen:
+                urlopen.return_value = _json_response(200, {})
+
+                call()
+
+                self.assertEqual(
+                    f"https://wurk.example.com/wurk/api{expected_path}",
+                    urlopen.call_args[0][0].full_url,
+                )
+
+    # -- serialization -----------------------------------------------------
+
+    # Python's json.dumps emits the JavaScript literals NaN/Infinity by
+    # default, which are not JSON: the server's parser rejects them and answers
+    # 400 invalid_request. Fail here instead, before the round trip.
+    def test_a_non_finite_argument_raises_before_a_request_is_sent(self):
+        for value in (float("nan"), float("inf"), float("-inf")):
+            with unittest.mock.patch("urllib.request.urlopen") as urlopen:
+                with self.assertRaises(ValueError):
+                    self.client.enqueue("HardWorker", args=[value])
+
+                urlopen.assert_not_called()
+
     # -- errors ------------------------------------------------------------
 
     def test_rate_limited_raises_with_retry_after(self):

@@ -205,7 +205,10 @@ client's own logs instead of halfway through a batch.
 
 An unrecognized version prefix (`/v2/...`) is a `404`
 (`unsupported_api_version`), not a `400` — the address doesn't exist, the
-client's request was otherwise well-formed.
+client's request was otherwise well-formed. All three mounts answer it the
+same way: the engine-nested mount claims every version-shaped path, not only
+the one it serves, so a wrong version never degrades into the host app's own
+route miss.
 
 ## Errors
 

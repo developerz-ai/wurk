@@ -14,6 +14,17 @@ module Wurk
     NESTED_PREFIX = "#{VERSION_PREFIX}/".freeze
     SUPPORTED_VERSIONS = [API_VERSION].freeze
 
+    # A path that names *some* version of this plane — `/v1`, `/v2/jobs`, not
+    # `/v1x` and not the dashboard's own `/stats`. Version-shaped rather than
+    # `v1`-only because the mount has to claim a version it does not serve in
+    # order for App to answer it `unsupported_api_version`, which is what the
+    # standalone and separately-mounted modes already do. Claiming only `/v1`
+    # would leave mode 1 alone in falling through to the host's router, and a
+    # client would learn "wrong version" from Rails' 404 in one deployment
+    # shape and from a problem document naming the supported versions in the
+    # other two.
+    VERSION_PATH = %r{\A/v\d+(?:/|\z)}
+
     # Where mount mode 1 puts this plane inside the engine (config/routes.rb).
     # Named here because two callers have to agree on it: the mount itself, and
     # `Wurk::Web::Authorization`, which runs before routing and so sees the
@@ -54,10 +65,12 @@ module Wurk
       #     dashboard's own JSON API. Without the version check a mistyped
       #     dashboard path would fall through to the machine plane and draw a
       #     bearer challenge for a route that was never part of this contract.
+      #     A version-shaped path is never one of the dashboard's, so this
+      #     claims every version and lets App refuse the ones it cannot serve.
       def serves?(path, config = ::Wurk.configuration)
         return false unless config.api_enabled?
 
-        path == VERSION_PREFIX || path.start_with?(NESTED_PREFIX)
+        VERSION_PATH.match?(path)
       end
 
       # The same question asked one prefix out, for callers that run before the

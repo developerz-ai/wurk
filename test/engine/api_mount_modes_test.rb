@@ -79,6 +79,21 @@ class ApiMountModesTest < Wurk::Test::EngineCase
     end
   end
 
+  # A version this build does not serve is the app's refusal to make, and it
+  # has to read the same from all three mounts: a problem document naming the
+  # versions that do exist, never a bare Rails route miss that leaves a client
+  # guessing whether it got the version wrong or the address.
+  def test_every_mount_refuses_an_unsupported_version_by_name
+    (RAILS_MOUNTS + [STANDALONE_MOUNT]).each do |mount|
+      refused = get_at(mount, '/v2/jobs')
+
+      assert_equal 404, refused.status, mount
+      assert_equal 'application/problem+json', refused.content_type, mount
+      assert_equal 'unsupported_api_version', json(refused)['type'], mount
+      assert_equal ['v1'], json(refused)['supported_versions'], mount
+    end
+  end
+
   def test_every_mount_reports_the_same_allowed_methods
     (RAILS_MOUNTS + [STANDALONE_MOUNT]).each do |mount|
       refused = post_at(mount, '/v1')
