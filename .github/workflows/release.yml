@@ -42,7 +42,11 @@ jobs:
           persist-credentials: false
       - uses: ruby/setup-ruby@95ef2b042f9d7a56d8268cba8559e2842e2ad01b # v1
         with:
-          ruby-version: "4.0"
+          # Pinned below the newest Ruby on purpose: the built .gem is pure Ruby
+          # and identical whichever interpreter packs it, so this job carries the
+          # risk of a new interpreter tripping a release tool with no upside.
+          # The compatibility statement is made by the `test` job, not here.
+          ruby-version: "3.4"
           bundler-cache: true
       - uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2
         with:
