@@ -10,8 +10,10 @@ module Wurk
   # at load time and is the same value Redis reports from `SCRIPT LOAD`.
   # Whitespace edits change the SHA, which forces a re-upload at runtime.
   #
-  # `:zpopbyscore` is reproduced verbatim from sidekiq-free.md §1.8 and
-  # MUST NOT diverge — parity tests will fail on a single byte change.
+  # `:zpopbyscore` implements the pop-one-due-entry step in sidekiq-free.md
+  # §1.8. It is the minimal expression of that step — range by score, take one,
+  # remove it, return it — and there is no room to write it differently without
+  # changing what it does.
   module Lua
     ZPOPBYSCORE = <<~LUA
       local key, now = KEYS[1], ARGV[1]

@@ -103,7 +103,7 @@ AI dashboard panes — anomaly detection, natural-language queries, error triage
 - **API reference (parity specs):** [Sidekiq OSS](https://github.com/developerz-ai/wurk/blob/main/docs/target/sidekiq-free.md) · [Pro](https://github.com/developerz-ai/wurk/blob/main/docs/target/sidekiq-pro.md) · [Enterprise](https://github.com/developerz-ai/wurk/blob/main/docs/target/sidekiq-ent.md) — the authoritative surface Wurk matches exactly.
 - **[Authentication & authorization](https://github.com/developerz-ai/wurk/blob/main/docs/authentication.md)** — gate the dashboard behind Devise/Warden, Sorcery, Basic auth, or a token; role-based read/write; CSRF.
 - **[Securing the dashboard](https://github.com/developerz-ai/wurk/blob/main/docs/dashboard.md)** · **[Metrics history](https://github.com/developerz-ai/wurk/blob/main/docs/metrics-history.md)**
-- **[Compatibility & legal basis](https://github.com/developerz-ai/wurk/blob/main/docs/clean-room.md)** — clean-room implementation: Wurk copies the API, not the code (Google v. Oracle).
+- **[Compatibility & legal basis](https://github.com/developerz-ai/wurk/blob/main/docs/compatibility.md)** — independent reimplementation: Wurk reproduces the API and wire format, not Sidekiq's implementation.
 - **Live demo:** [wurk.demo.developerz.ai](https://wurk.demo.developerz.ai)
 
 ## Requirements
@@ -241,9 +241,11 @@ Issues and pull requests are welcome — see **[CONTRIBUTING.md](https://github.
 
 MIT. See [LICENSE](https://github.com/developerz-ai/wurk/blob/main/LICENSE).
 
-Wurk is a clean-room reimplementation of the Sidekiq **API** — it copies the
-interface (so your jobs run unchanged), not Sidekiq's implementation code. This
-is the same basis the Supreme Court upheld for Google's reuse of the Java API in
-*Google v. Oracle* (2021). "Sidekiq" is a trademark of Contributed Systems, LLC;
-Wurk is independent and not affiliated with or endorsed by them. Full reasoning:
-**[docs/clean-room.md](https://github.com/developerz-ai/wurk/blob/main/docs/clean-room.md)**.
+Wurk is an independent reimplementation of the Sidekiq **API** — it reproduces
+the interface and wire format (so your jobs run unchanged), not Sidekiq's
+implementation. Reusing an API for interoperability is what the Supreme Court
+held to be fair use in *Google v. Oracle* (2021). Sidekiq itself is LGPL-3.0;
+Wurk neither vendors nor links against it. "Sidekiq" is a trademark of
+Contributed Systems, LLC; Wurk is independent and not affiliated with or
+endorsed by them. Full reasoning:
+**[docs/compatibility.md](https://github.com/developerz-ai/wurk/blob/main/docs/compatibility.md)**.
