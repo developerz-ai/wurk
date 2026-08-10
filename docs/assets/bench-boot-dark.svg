@@ -1,0 +1,30 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="780" height="236" viewBox="0 0 780 236" role="img" aria-label="Boot to first job, median seconds. 1 process by 5 threads: Sidekiq 0.56, Wurk 0.72. 4 processes by 5 threads: Sidekiq 0.60, Wurk 0.78.">
+<rect width="780" height="236" fill="#1a1a19" rx="8"/>
+<text x="172" y="26" font-family="system-ui,-apple-system,&apos;Segoe UI&apos;,sans-serif" font-size="14" font-weight="600" fill="#ffffff">Boot to first job</text>
+<text x="172" y="45" font-family="system-ui,-apple-system,&apos;Segoe UI&apos;,sans-serif" font-size="11.5" fill="#c3c2b7">Median seconds, lower is better. Wurk is behind here.</text>
+<rect x="528" y="18" width="9" height="9" rx="2" fill="#d95926"/>
+<text x="542" y="27" font-family="system-ui,-apple-system,&apos;Segoe UI&apos;,sans-serif" font-size="11.5" fill="#c3c2b7">Sidekiq</text>
+<rect x="610" y="18" width="9" height="9" rx="2" fill="#3987e5"/>
+<text x="624" y="27" font-family="system-ui,-apple-system,&apos;Segoe UI&apos;,sans-serif" font-size="11.5" fill="#c3c2b7">Wurk</text>
+<line x1="274.4" y1="54" x2="274.4" y2="168" stroke="#2c2c2a" stroke-width="1"/>
+<line x1="376.8" y1="54" x2="376.8" y2="168" stroke="#2c2c2a" stroke-width="1"/>
+<line x1="479.2" y1="54" x2="479.2" y2="168" stroke="#2c2c2a" stroke-width="1"/>
+<line x1="581.6" y1="54" x2="581.6" y2="168" stroke="#2c2c2a" stroke-width="1"/>
+<line x1="684.0" y1="54" x2="684.0" y2="168" stroke="#2c2c2a" stroke-width="1"/>
+<text x="148" y="84" font-family="system-ui,-apple-system,&apos;Segoe UI&apos;,sans-serif" font-size="12.5" text-anchor="end" fill="#ffffff">1p x 5t</text>
+<rect x="172" y="62" width="286.7" height="16" rx="4" fill="#d95926"/>
+<text x="458.7" y="74" dx="8" font-family="system-ui,-apple-system,&apos;Segoe UI&apos;,sans-serif" font-size="11.5" font-weight="600" fill="#ffffff" style="font-variant-numeric:tabular-nums">0.56s</text>
+<rect x="172" y="82" width="368.6" height="16" rx="4" fill="#3987e5"/>
+<text x="540.6" y="94" dx="8" font-family="system-ui,-apple-system,&apos;Segoe UI&apos;,sans-serif" font-size="11.5" font-weight="600" fill="#ffffff" style="font-variant-numeric:tabular-nums">0.72s</text>
+<text x="148" y="146" font-family="system-ui,-apple-system,&apos;Segoe UI&apos;,sans-serif" font-size="12.5" text-anchor="end" fill="#ffffff">4p x 5t</text>
+<rect x="172" y="124" width="307.2" height="16" rx="4" fill="#d95926"/>
+<text x="479.2" y="136" dx="8" font-family="system-ui,-apple-system,&apos;Segoe UI&apos;,sans-serif" font-size="11.5" font-weight="600" fill="#ffffff" style="font-variant-numeric:tabular-nums">0.60s</text>
+<rect x="172" y="144" width="399.4" height="16" rx="4" fill="#3987e5"/>
+<text x="571.4" y="156" dx="8" font-family="system-ui,-apple-system,&apos;Segoe UI&apos;,sans-serif" font-size="11.5" font-weight="600" fill="#ffffff" style="font-variant-numeric:tabular-nums">0.78s</text>
+<line x1="172" y1="168" x2="684" y2="168" stroke="#383835" stroke-width="1"/>
+<text x="274.4" y="185" font-family="system-ui,-apple-system,&apos;Segoe UI&apos;,sans-serif" font-size="11" text-anchor="middle" fill="#898781" style="font-variant-numeric:tabular-nums">0.2s</text>
+<text x="376.8" y="185" font-family="system-ui,-apple-system,&apos;Segoe UI&apos;,sans-serif" font-size="11" text-anchor="middle" fill="#898781" style="font-variant-numeric:tabular-nums">0.4s</text>
+<text x="479.2" y="185" font-family="system-ui,-apple-system,&apos;Segoe UI&apos;,sans-serif" font-size="11" text-anchor="middle" fill="#898781" style="font-variant-numeric:tabular-nums">0.6s</text>
+<text x="581.6" y="185" font-family="system-ui,-apple-system,&apos;Segoe UI&apos;,sans-serif" font-size="11" text-anchor="middle" fill="#898781" style="font-variant-numeric:tabular-nums">0.8s</text>
+<text x="684.0" y="185" font-family="system-ui,-apple-system,&apos;Segoe UI&apos;,sans-serif" font-size="11" text-anchor="middle" fill="#898781" style="font-variant-numeric:tabular-nums">1.0s</text>
+</svg>

@@ -12,9 +12,11 @@ module Wurk
   # (RedisPool#build_client); wurk's own hot paths keep using #call, which the
   # decorator forwards with a single delegation hop.
   #
-  # Mirrors sidekiq-8.1.6 lib/sidekiq/redis_client_adapter.rb byte-for-byte in
-  # behavior: same fast-path command list, same deprecation warning, same
+  # Behaviourally equivalent to the adapter a drop-in app expects from
+  # sidekiq 8.1.x: same fast-path command list, same deprecation warning, same
   # error constants (gems rescue `Sidekiq::RedisClientAdapter::BaseError`).
+  # The constant names and the deprecated-command set are fixed by that
+  # contract; everything below them is Wurk's own.
   class RedisClientAdapter
     BaseError = RedisClient::Error
     CommandError = RedisClient::CommandError

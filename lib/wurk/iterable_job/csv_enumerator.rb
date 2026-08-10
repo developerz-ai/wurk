@@ -17,24 +17,41 @@ module Wurk
       end
 
       # Enumerator of `[row, index]` pairs, skipping the first `cursor` rows.
+      # `size` is the row count of the whole file, not of the remainder — a
+      # resumed run reports the same total as a fresh one.
       def rows(cursor:)
-        @csv.lazy
-            .each_with_index
-            .drop(cursor || 0)
-            .to_enum { count_of_rows_in_file }
+        scan(cursor, -> { count_of_rows_in_file }) { |sink| @csv.each { |row| sink.call(row) } }
       end
 
       # Enumerator of `[rows_batch, batch_index]` pairs, skipping the first
-      # `cursor` batches.
+      # `cursor` batches. `size` is the batch count, rounded up.
       def batches(cursor:, batch_size: 100)
-        @csv.lazy
-            .each_slice(batch_size)
-            .with_index
-            .drop(cursor || 0)
-            .to_enum { (count_of_rows_in_file.to_f / batch_size).ceil }
+        size = -> { (count_of_rows_in_file.to_i + batch_size - 1) / batch_size }
+        scan(cursor, size) { |sink| @csv.each_slice(batch_size) { |rows| sink.call(rows) } }
       end
 
       private
+
+      # Shared skeleton for both readers: number every element the block feeds
+      # in, emit the ones at or past the cursor. Kept as one pass over the CSV
+      # (rather than enumerate-then-drop) because the source is a file handle —
+      # skipped rows are read and discarded, never buffered.
+      #
+      # `.lazy` is not decoration: `#build_enumerator` is user code, and a host
+      # chaining `.map`/`.select` onto what we return has to keep getting a
+      # deferred enumerator over an open file rather than an eager Array. It
+      # carries the size lambda through unevaluated.
+      def scan(cursor, size)
+        skip = cursor.to_i
+        ::Enumerator.new(size) do |yielder|
+          position = -1
+          sink = lambda do |element|
+            position += 1
+            yielder.yield(element, position) if position >= skip
+          end
+          yield sink
+        end.lazy
+      end
 
       # Best-effort row count for the enumerator's `size` (progress display).
       # Only invoked if a caller asks for `#size`; the run loop never does.

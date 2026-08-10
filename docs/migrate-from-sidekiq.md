@@ -1,6 +1,6 @@
 # Migrating from Sidekiq to Wurk
 
-Wurk is a clean-room, **wire-compatible** drop-in for Sidekiq + Sidekiq Pro + Sidekiq
+Wurk is an independently implemented, **wire-compatible** drop-in for Sidekiq + Sidekiq Pro + Sidekiq
 Enterprise: the same Redis key schema, the same job JSON, and the same Ruby DSL. In
 the common case the migration is a one-line `Gemfile` change — your existing jobs,
 batches, limiters, cron entries, and live Redis data keep working untouched, and the
@@ -21,7 +21,7 @@ mappings, and a one-page cutover.
 - **Authoritative API surface:** [`docs/target/sidekiq-free.md`](target/sidekiq-free.md) ·
   [`sidekiq-pro.md`](target/sidekiq-pro.md) · [`sidekiq-ent.md`](target/sidekiq-ent.md)
 - **Generated API reference (YARD):** <https://developerz-ai.github.io/wurk/api/>
-- **Why this is legal:** [`docs/clean-room.md`](clean-room.md)
+- **Why this is legal:** [`docs/compatibility.md`](compatibility.md)
 
 > Verified against Wurk's Sidekiq-compat layer (`lib/wurk/compat.rb`), which mirrors
 > Sidekiq **8.1.x**. Requires **Ruby ≥ 3.2** and **Redis ≥ 7.0**. On JRuby /

@@ -30,10 +30,9 @@ module Wurk
       end
 
       # `[records_batch, batch.first.id]` pairs. The size lambda is the record
-      # count, NOT the batch count — byte-for-byte with upstream Sidekiq's
-      # `ActiveRecordEnumerator#batches`, so `enum.size` returns the same value
-      # a drop-in app gets from Sidekiq. (Only the lazy `#size` differs from
-      # `relations`; the run loop never calls it.)
+      # count, NOT the batch count — that is what a drop-in app already gets
+      # from `enum.size`, so it is preserved deliberately. (Only the lazy
+      # `#size` differs from `relations`; the run loop never calls it.)
       def batches
         ::Enumerator.new(-> { @relation.count }) do |yielder|
           @relation.find_in_batches(**@options, start: @cursor) do |batch|
@@ -63,8 +62,7 @@ module Wurk
       private
 
       def relations_size
-        batch_size = @options[:batch_size] || 1000
-        (@relation.count + batch_size - 1) / batch_size # ceiling division
+        @relation.count.fdiv(@options[:batch_size] || 1000).ceil
       end
     end
   end

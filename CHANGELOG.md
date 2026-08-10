@@ -4,6 +4,16 @@ All notable changes to Wurk are recorded here. Format: [Keep a Changelog](https:
 
 ## [Unreleased]
 
+### Fixed
+
+- **Provenance claims in the docs were wrong, in both directions.** `docs/clean-room.md` stated that the `test/parity/` files were "lifted from Sidekiq's own MIT-licensed test suite". Two errors in one sentence: Sidekiq is **LGPL-3.0** (`sidekiq.gemspec`, `LICENSE.txt`), not MIT, and the parity tests are not copies of upstream test files — they are independently written oracles using Wurk's own helpers and class names. `test/parity/README.md` compounded it by instructing contributors to "copy it verbatim from upstream Sidekiq". Both are corrected: the page is now [`docs/compatibility.md`](docs/compatibility.md), it states Sidekiq's actual licence, and the parity README describes writing oracles from the documented behaviour rather than copying LGPL files into an MIT repository.
+- **"Clean-room" was the wrong term and is no longer used.** Clean-room is a term of art requiring separated specification and implementation teams with records kept to prove independent creation. Wurk was not built that way. It is an **independent reimplementation** of a published interface, which is what the docs now say (README, `docs/migrate-from-sidekiq.md`, site footer). The *Google v. Oracle* rationale is kept but scoped honestly: it covers declaring code, it was a fair-use ruling on its facts rather than a categorical rule, and it says nothing about trademark.
+- **Two enumerator helpers were re-expressed as Wurk's own code.** `IterableJob::CsvEnumerator#rows`/`#batches` and `IterableJob::ActiveRecordEnumerator#relations_size` had converged on upstream Sidekiq's exact phrasing — the latter down to a shared trailing comment. Both are rewritten from the behaviour they owe: `CsvEnumerator` now shares one cursor-skipping pass between rows and batches instead of duplicating a lazy chain, and `relations_size` uses `fdiv(...).ceil`. Enumerator element shapes, `#size` values (including the `nil`-path and record-count-not-batch-count quirks a drop-in app already sees), and cursor-resume semantics are unchanged.
+
+### Changed
+
+- Comments that described Wurk's code as matching Sidekiq's source "byte-for-byte" now describe the behaviour and the contract that fixes it (`redis_client_adapter.rb`, `iterable_job/active_record_enumerator.rb`, `lua.rb`). Where the interface genuinely leaves no room for a different expression — `Configuration::DEFAULTS` key names, the JSON log field names, `RedisClientAdapter::BaseError`, the `ServerMiddleware` accessors — `docs/compatibility.md` now names those fragments and says why they are fixed, rather than leaving the resemblance unexplained.
+
 ## [1.7.0] - 2026-08-10
 
 A maintenance release with three unrelated threads: the Ruby that runs between `conn.call(...)` and the socket got cheaper, CI stopped running the same suite four times, and the docs stopped writing about Sidekiq at length. No Redis key, command sequence, job-JSON field, or public API changed — a 1.6.0 worker and a 1.7.0 worker can drain the same queue.
