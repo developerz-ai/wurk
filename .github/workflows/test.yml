@@ -60,43 +60,46 @@ jobs:
               - 'docs/target/**'
               - '.github/workflows/test.yml'
 
+  # ONE full run of the Ruby suite, on the newest Ruby and the newest Rails,
+  # with the coverage gate folded into it.
+  #
+  # It used to be four: a three-leg version matrix (3.3/8.0, 3.4/7.2, 4.0/8.0)
+  # plus a separate `coverage` job that ran the identical suite a second time
+  # under SimpleCov. That is four executions of the same tests to answer two
+  # questions, and the version matrix was pinned to Rails lines (7.2, 8.0) that
+  # are no longer the newest anyway. Wurk targets current Ruby and current
+  # Rails; the floor in the gemspec (>= 3.2) is held by rubocop's
+  # `TargetRubyVersion: 3.2`, which rejects syntax and APIs newer than it.
+  #
+  # Stays 4 vCPU: the suite forks 4 parallel workers (test_helper's NCPU
+  # default, which is deliberately below core count — its integration layer
+  # boots real swarms, so one worker per core oversubscribes and turns
+  # wall-clock pressure into red builds). A bigger box would idle.
   test:
+    name: test + coverage (latest ruby/rails)
     needs: detect
-    # No explicit `name:` — GitHub's default matrix naming emits
-    # "test (<ruby>, <rails>)", which branch protection (strict: true) requires
-    # byte-identical for "test (3.4, 7.2)" and "test (4.0, 8.0)" (merge-gated).
-    # Trimmed from the 7-leg 3.2/3.3/3.4 × 7.2/8.0 matrix (#290): the two
-    # required legs plus one non-edge middle combo (3.3/8.0) for coverage.
     runs-on: blacksmith-4vcpu-ubuntu-2404
-    timeout-minutes: 10
-    strategy:
-      fail-fast: false
-      matrix:
-        include:
-          - ruby: "3.3"
-            rails: "8.0"
-          - ruby: "3.4"
-            rails: "7.2"
-          - ruby: "4.0"
-            rails: "8.0"
+    timeout-minutes: 15
     services:
       redis:
         image: redis:7.4
         ports: ["6379:6379"]
         options: >-
           --health-cmd "redis-cli ping"
-          --health-interval 5s
-          --health-timeout 3s
-          --health-retries 5
+          --health-interval 2s
+          --health-timeout 2s
+          --health-retries 10
+          --health-start-period 1s
     env:
       BUNDLE_GEMFILE: ${{ github.workspace }}/Gemfile
-      RAILS_VERSION: ${{ matrix.rails }}
+      RUBY_VERSION: "4.0"
+      RAILS_VERSION: "8.1"
       REDIS_URL: redis://localhost:6379/0
-      # Gated per STEP, not per job. "test (3.4, 7.2)" and "test (4.0, 8.0)" are
-      # required checks under branch protection, and GitHub does not count a
-      # skipped required check as satisfied — a job-level `if:` would park every
-      # docs-only PR on "Expected — waiting for status" forever. So the job always
-      # runs and reports success; on an irrelevant change it just does nothing.
+      COVERAGE: "1"
+      # Gated per STEP, not per job, so this job always reports a status even on
+      # a docs-only PR: a job-level `if:` reports "skipped", and anything that
+      # later marks this check required would park such a PR on "Expected —
+      # waiting for status" forever. On an irrelevant change it just does nothing.
       RUN: ${{ github.event_name != 'pull_request' || needs.detect.outputs.ruby == 'true' }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -105,10 +108,9 @@ jobs:
       - uses: ruby/setup-ruby@95ef2b042f9d7a56d8268cba8559e2842e2ad01b # v1
         if: env.RUN == 'true'
         with:
-          ruby-version: ${{ matrix.ruby }}
+          ruby-version: ${{ env.RUBY_VERSION }}
           bundler-cache: true
-          # Each Rails leg resolves a different lock; isolate the gem cache.
-          cache-version: rails-${{ matrix.rails }}
+          cache-version: rails-${{ env.RAILS_VERSION }}
       - uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2
         if: env.RUN == 'true'
         with:
@@ -149,14 +151,26 @@ jobs:
           cd test/dummy
           bundle install
           bin/rails db:prepare
-      - name: rake test
+      # COVERAGE=1 is set for the whole job, so this one invocation is both the
+      # test gate and the blocking line+branch coverage gate (>= 90% each, from
+      # test_helper's SimpleCov config). The Cobertura report is still uploaded
+      # for per-file inspection.
+      - name: rake test (with coverage gate)
         if: env.RUN == 'true'
         run: bundle exec rake test
+      - name: upload coverage report
+        if: always() && env.RUN == 'true'
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        with:
+          name: coverage
+          path: coverage/coverage.xml
+          if-no-files-found: warn
 
   # Oracle suite lifted from upstream Sidekiq (SHA-pinned in
   # test/parity/.sidekiq_sha). Its own dedicated job so a parity divergence is
-  # legible at a glance, separate from the version matrix. Pin RAILS_VERSION so
-  # it tests a matrix Rails line rather than floating to newest.
+  # legible at a glance rather than buried in the main suite's output. Needs
+  # neither the dashboard bundle nor a Node toolchain, which is why it stays a
+  # 4vcpu job that finishes in well under a minute.
   parity:
     name: parity (oracle)
     needs: detect
@@ -169,12 +183,13 @@ jobs:
         ports: ["6379:6379"]
         options: >-
           --health-cmd "redis-cli ping"
-          --health-interval 5s
-          --health-timeout 3s
-          --health-retries 5
+          --health-interval 2s
+          --health-timeout 2s
+          --health-retries 10
+          --health-start-period 1s
     env:
       BUNDLE_GEMFILE: ${{ github.workspace }}/Gemfile
-      RAILS_VERSION: "8.0"
+      RAILS_VERSION: "8.1"
       REDIS_URL: redis://localhost:6379/0
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -182,81 +197,12 @@ jobs:
           persist-credentials: false
       - uses: ruby/setup-ruby@95ef2b042f9d7a56d8268cba8559e2842e2ad01b # v1
         with:
-          ruby-version: "3.4"
+          ruby-version: "4.0"
           bundler-cache: true
-          cache-version: rails-8.0
+          # Same key the `test` job populates, so this job installs from cache.
+          cache-version: rails-8.1
       - name: rake test:parity
         run: bundle exec rake test:parity
-
-  # Blocking line + branch coverage gates (both >= 90%) on lib/. The Cobertura
-  # report is still uploaded for per-file inspection. Pin RAILS_VERSION so the
-  # gated numbers stay deterministic.
-  coverage:
-    name: coverage (line + branch >= 90%)
-    needs: detect
-    if: github.event_name != 'pull_request' || needs.detect.outputs.ruby == 'true'
-    runs-on: blacksmith-4vcpu-ubuntu-2404
-    timeout-minutes: 10
-    services:
-      redis:
-        image: redis:7.4
-        ports: ["6379:6379"]
-        options: >-
-          --health-cmd "redis-cli ping"
-          --health-interval 5s
-          --health-timeout 3s
-          --health-retries 5
-    env:
-      BUNDLE_GEMFILE: ${{ github.workspace }}/Gemfile
-      RAILS_VERSION: "8.0"
-      REDIS_URL: redis://localhost:6379/0
-      COVERAGE: "1"
-    steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-        with:
-          persist-credentials: false
-      - uses: ruby/setup-ruby@95ef2b042f9d7a56d8268cba8559e2842e2ad01b # v1
-        with:
-          ruby-version: "3.4"
-          bundler-cache: true
-          cache-version: rails-8.0
-      - uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2
-        with:
-          bun-version: "1.3.14"
-      # See the `test` job for why Node is pinned alongside Bun.
-      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
-        with:
-          node-version: "24"
-      # Cache Bun's global download cache so `bun install --frozen-lockfile`
-      # (run here directly in `frontend`, and via `rake frontend:build` in the
-      # test/coverage legs) reuses tarballs instead of re-fetching them each run.
-      # Best-effort by design: actions/cache warns and continues on a restore
-      # miss or a save failure, so this step can never fail the job. Keyed on the
-      # frontend lockfile; the shared key is intentional so every matrix leg and
-      # job reuses one cache.
-      - name: cache bun install cache
-        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
-        with:
-          path: ~/.bun/install/cache
-          key: ${{ runner.os }}-bun-${{ hashFiles('frontend/bun.lock') }}
-          restore-keys: |
-            ${{ runner.os }}-bun-
-      - name: build dashboard SPA
-        run: bundle exec rake frontend:build
-      - name: dummy app setup
-        run: |
-          cd test/dummy
-          bundle install
-          bin/rails db:prepare
-      - name: coverage gate
-        run: bundle exec rake test:coverage
-      - name: upload coverage report
-        if: always()
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
-        with:
-          name: coverage
-          path: coverage/coverage.xml
-          if-no-files-found: warn
 
   # Guard against deleted/truncated spec docs (the authoritative oracles for
   # parity). This is a quick, standalone check that doesn't require Redis or Ruby.
@@ -301,11 +247,23 @@ jobs:
           persist-credentials: false
       - uses: ruby/setup-ruby@95ef2b042f9d7a56d8268cba8559e2842e2ad01b # v1
         with:
-          ruby-version: "3.4"
+          ruby-version: "4.0"
           bundler-cache: true
-          cache-version: rails-8.0
+          cache-version: rails-8.1
+      # RuboCop's own result cache, keyed on the config that invalidates it plus
+      # the ref, so a re-run of the same branch re-inspects only what changed.
+      # Best-effort: actions/cache warns and continues on a miss, so this step
+      # can never fail lint.
+      - name: cache rubocop results
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: ~/.cache/rubocop_cache
+          key: ${{ runner.os }}-rubocop-${{ hashFiles('.rubocop.yml', 'Gemfile') }}-${{ github.sha }}
+          restore-keys: |
+            ${{ runner.os }}-rubocop-${{ hashFiles('.rubocop.yml', 'Gemfile') }}-
+            ${{ runner.os }}-rubocop-
       - name: rubocop
-        run: bundle exec rubocop
+        run: bundle exec rubocop --parallel
 
   # The matrix `test` and `coverage` jobs only *build* the SPA (tsc + vite) via
   # `rake frontend:build`; hand-written frontend types can typecheck clean yet

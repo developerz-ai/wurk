@@ -315,7 +315,8 @@
         <p class="strapline">Wurk, wurk. 🪓 Ready to work. Zug zug.</p>
         <p class="lede">
           A 100% drop-in replacement for Sidekiq + Sidekiq Pro + Sidekiq Enterprise.
-          Free forever.
+          Free forever. In production at developerz.ai and partner deployments —
+          millions of jobs an hour, across many servers.
         </p>
         <div class="cta">
           <a class="btn primary" href="https://wurk.demo.developerz.ai/wurk"><i class="fa-solid fa-gauge-high" aria-hidden="true"></i> View the live demo</a>
@@ -549,28 +550,27 @@ mount Wurk::Engine =&gt; <span class="add">"/wurk"</span></pre>
       <section id="why" class="reveal">
         <h2>Why Wurk exists</h2>
         <p class="section-lede">
-          Sidekiq has been the backbone of Ruby background processing for over a decade. Mike Perham
-          and Contributed Systems designed the API Wurk implements, maintained it, documented it, and
-          funded that work through Pro and Enterprise — a model that kept a critical piece of
-          infrastructure healthy and supported far longer than most gems survive at all. Wurk is
-          standing on that work, not arguing with it.
+          Infrastructure this basic should be free software. A Rails app shouldn't need a licence key
+          for reliable fetch, batches, rate limiting, or cron — those are table stakes, not a premium
+          tier.
         </p>
         <p style="color:var(--muted);margin-top:14px">
-          What Wurk bets on is that the economics changed. It is built and maintained
-          <b>AI-first</b> — implementation, parity suite, docs, and benchmarks written and kept
-          current by AI agents under human review. That is what makes it practical to ship the whole
-          Pro + Enterprise surface for free, to verify parity mechanically on every push (Sidekiq's
-          own tests as an oracle, third-party gems' upstream suites run against Wurk), to keep adding
-          surface Sidekiq doesn't have, and to sustain it — because a fix, a doc update, or a version
-          bump no longer costs somebody a week. It also means the claims stay measured:
+          What makes that hard is maintenance: someone has to be paid to do it. Sidekiq funds a
+          decade of <i>human</i> maintenance through its paid tiers, which is an honest trade. Wurk
+          makes a different one — it is maintained <b>AI-first</b>: implementation, parity suite,
+          docs, and benchmarks written and kept current by AI agents under human review. A fix, a doc
+          update, or a version bump no longer costs somebody a week, which is what makes it practical
+          to ship the whole Pro + Enterprise surface for free, to verify parity mechanically on every
+          push (Sidekiq's own tests as an oracle, third-party gems' upstream suites run against
+          Wurk), and to keep adding surface Sidekiq doesn't have. It also means the claims stay
+          measured:
           <a href="https://github.com/developerz-ai/wurk/blob/main/docs/benchmarks.md">published numbers</a>
           against stock Sidekiq every release, including the unflattering ones.
         </p>
         <p style="color:var(--muted);margin-top:14px">
-          This won't be right for everyone. Sidekiq Pro and Enterprise come with a commercial support
-          contract, a decade of production track record, and a human on the other end of an email. If
-          that is what your risk profile needs, buy it — it is worth the money, and it is why the API
-          Wurk implements exists at all.
+          Wurk is MIT and stays that way. If what you need is a commercial support contract and a
+          human on the other end of an email, buying that is a perfectly good answer. Wurk is
+          independent and not affiliated with or endorsed by Sidekiq or its maintainers.
         </p>
       </section>
     </div>

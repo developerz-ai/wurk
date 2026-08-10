@@ -67,6 +67,11 @@ jobs:
           persist-credentials: false
       - uses: ruby/setup-ruby@95ef2b042f9d7a56d8268cba8559e2842e2ad01b # v1
         with:
+          # NOT the newest Ruby, deliberately. This job's subject is third-party
+          # gems at pinned upstream SHAs, so it has to run a Ruby *they* support:
+          # Ruby 4.0 dropped `benchmark` from the default gems and sidekiq-cron's
+          # own test suite requires it, which fails the job on something that is
+          # not about Wurk at all. Bump when the pinned suites do.
           ruby-version: "3.4"
           bundler-cache: true
       - run: bundle exec rake test:ecosystem

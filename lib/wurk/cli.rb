@@ -1,9 +1,11 @@
 # frozen_string_literal: true
 
-require 'yaml'
-require 'optparse'
-require 'erb'
-
+# yaml, optparse and erb are required inside the two methods that use them
+# (#parse_config and #option_parser) rather than here. Together they cost ~45ms
+# of the ~290ms `require "wurk"` spends, and only `exe/wurk` ever reaches them —
+# a Rails app that enqueues and processes jobs pays that on every boot for a
+# command-line parser it never runs. `require` is idempotent, so the lazy call
+# is a $LOADED_FEATURES hash lookup on every invocation after the first.
 require_relative 'version'
 require_relative 'configuration'
 require_relative 'component'
@@ -410,6 +412,9 @@ module Wurk
     def parse_config(path)
       raise ArgumentError, "No such file #{path}" unless ::File.exist?(path)
 
+      require 'erb'
+      require 'yaml'
+
       erb = ::ERB.new(::File.read(path), trim_mode: '-')
       erb.filename = ::File.expand_path(path)
       opts = ::YAML.safe_load(erb.result, permitted_classes: [Symbol], aliases: true) || {}
@@ -444,6 +449,8 @@ module Wurk
     end
 
     def option_parser(opts)
+      require 'optparse'
+
       ::OptionParser.new do |o|
         o.banner = @command ? "wurk #{@command} [options]" : 'wurk [options]'
         define_value_flags(o, opts, OPTION_FLAGS)

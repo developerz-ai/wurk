@@ -2,6 +2,7 @@
 
 require 'socket'
 require_relative '../component'
+require_relative '../pid_cache'
 require_relative '../keys'
 require_relative '../lua'
 require_relative '../fetcher'
@@ -366,7 +367,7 @@ module Wurk
       # fetcher and read this without a lock. A racing writer's entry can be
       # lost, and the next fetch rebuilds it.
       def queue_keys(public_q)
-        pid = ::Process.pid
+        pid = PidCache.pid
         if @queue_keys_pid != pid
           @queue_keys = {}
           @queue_keys_pid = pid

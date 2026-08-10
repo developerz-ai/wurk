@@ -20,6 +20,10 @@ module Wurk
     def initialize(config)
       @config = config
       @logger = @config.logger
+      # Read once: `config[]` is a Hash lookup through a delegating Capsule, and
+      # #context_hash runs it per job only to walk a list that cannot change
+      # after boot (Configuration freezes at launch).
+      @logged_attributes = Array(@config[:logged_job_attributes]).map { |attr| [attr, attr.to_sym] }.freeze
       @skip = !!@config[:skip_default_job_logging]
     end
 
@@ -68,8 +72,8 @@ module Wurk
         class: job_hash['wrapped'] || job_hash['class']
       }
 
-      @config[:logged_job_attributes].each do |attr|
-        h[attr.to_sym] = job_hash[attr] if job_hash.key?(attr)
+      @logged_attributes.each do |attr, sym|
+        h[sym] = job_hash[attr] if job_hash.key?(attr)
       end
       h
     end

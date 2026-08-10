@@ -1,0 +1,82 @@
+#!/usr/bin/env bash
+# The one command to run before opening a PR: the same gates CI runs, in the
+# order that fails fastest.
+#
+#   bin/check              lint + full suite + parity     (the PR gate)
+#   bin/check fast         lint + unit tests only         (the inner loop)
+#   bin/check full         everything above + ecosystem   (third-party suites)
+#
+# Anything it runs, CI runs too — so a green `bin/check` is the same answer the
+# PR will get, minus the version matrix.
+#
+# Env knobs:
+#   NCPU=<n>   parallel test workers (default: core count, capped at 14)
+#   SKIP_LINT=1 / SKIP_PARITY=1   drop a stage
+set -euo pipefail
+
+cd "$(dirname "$0")/.."
+
+MODE="${1:-}"
+case "$MODE" in
+  ''|pr) MODE=pr ;;
+  fast|full) ;;
+  -h|--help|help)
+    sed -n '2,14p' "$0" | sed 's/^# \{0,1\}//'
+    exit 0
+    ;;
+  *)
+    echo "bin/check: unknown mode '$MODE' (want: fast | pr | full)" >&2
+    exit 64
+    ;;
+esac
+
+start=$(date +%s)
+failed=()
+
+# Each stage reports its own wall clock: the point of this script is to make the
+# slow stage obvious, so someone can reach for `bin/check fast` on the inner
+# loop instead of paying for the whole gate on every save.
+stage() {
+  local name="$1"
+  shift
+  local t0
+  t0=$(date +%s)
+  echo
+  echo "==> ${name}"
+  if "$@"; then
+    echo "    ✓ ${name} ($(($(date +%s) - t0))s)"
+  else
+    echo "    ✗ ${name} ($(($(date +%s) - t0))s)"
+    failed+=("$name")
+  fi
+}
+
+# Redis is not optional — integration and parity tests use a real server, never
+# a mock (CLAUDE.md). Fail here with the fix rather than 200 lines into a run.
+if ! (exec 3<>/dev/tcp/127.0.0.1/6379) 2>/dev/null; then
+  echo "bin/check: no Redis on 127.0.0.1:6379." >&2
+  echo "  start one with:  docker run --rm -p 6379:6379 redis:7.4" >&2
+  exit 69
+fi
+
+[ -n "${SKIP_LINT:-}" ] || stage "rubocop" bundle exec rubocop --parallel
+
+case "$MODE" in
+  fast) stage "unit tests" bundle exec rake test:unit ;;
+  *)    stage "test suite (unit + integration + engine)" bundle exec rake test ;;
+esac
+
+if [ "$MODE" != fast ] && [ -z "${SKIP_PARITY:-}" ]; then
+  stage "parity oracles" bundle exec rake test:parity
+fi
+
+[ "$MODE" = full ] && stage "ecosystem suites" bundle exec rake test:ecosystem
+
+echo
+if [ ${#failed[@]} -eq 0 ]; then
+  echo "bin/check ✓ all green in $(($(date +%s) - start))s"
+  exit 0
+fi
+
+echo "bin/check ✗ failed: ${failed[*]}  ($(($(date +%s) - start))s)" >&2
+exit 1

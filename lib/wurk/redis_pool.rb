@@ -2,6 +2,7 @@
 
 require 'redis-client'
 require 'connection_pool'
+require_relative 'command_builder'
 require_relative 'redis_client_adapter'
 require_relative 'redis_options'
 
@@ -52,13 +53,15 @@ module Wurk
     DEFAULT_WRITE_TIMEOUT      = 2.5
     DEFAULT_RECONNECT_ATTEMPTS = 1
 
-    # The floor every pool starts from; any key the host passed wins over it.
+    # The floor every pool starts from; any key the host passed wins over it —
+    # including `command_builder`, so an app that has its own keeps it.
     DEFAULT_CLIENT_CONFIG = {
       url: DEFAULT_URL,
       connect_timeout: DEFAULT_CONNECT_TIMEOUT,
       read_timeout: DEFAULT_READ_TIMEOUT,
       write_timeout: DEFAULT_WRITE_TIMEOUT,
-      reconnect_attempts: DEFAULT_RECONNECT_ATTEMPTS
+      reconnect_attempts: DEFAULT_RECONNECT_ATTEMPTS,
+      command_builder: CommandBuilder
     }.freeze
 
     # Server-side messages where the connection is closed and the block retried

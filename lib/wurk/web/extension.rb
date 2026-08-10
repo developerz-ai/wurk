@@ -1,7 +1,12 @@
 # frozen_string_literal: true
 
-require 'erb'
-require 'cgi'
+# erb and cgi are required by #call, the single entry point every extension
+# request comes through, rather than here: together with the `cgi` erb drags in
+# they are ~40ms of the ~220ms `require "wurk"` costs, and they are reachable
+# only from a host that has actually registered a Web extension. A worker
+# process — which loads this file because `wurk.rb` loads the web layer — never
+# renders anything. `require` is idempotent, so this is a $LOADED_FEATURES
+# lookup per request after the first.
 require 'securerandom'
 
 module Wurk
@@ -229,6 +234,9 @@ module Wurk
           def call(name:, method:, subpath:, env:, mount:, embed: true)
             ext = registered_extension(name)
             return nil unless ext
+
+            require 'erb'
+            require 'cgi'
 
             verb = method.to_s.upcase
             route, block, route_params = match_route(ext, verb, subpath)

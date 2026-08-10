@@ -230,6 +230,13 @@ class FetcherCappedTest < Wurk::Test::UnitCase
 
     assert_equal 'p2', @fetcher.retrieve_work.job
     assert_equal ['p2'], lrange(private_queue(@public_queue))
+  ensure
+    # The EVALSHA cache is SERVER-wide, not per-DB, so this flush is visible to
+    # every parallel_fork worker. Reload the moment the assertion below is done
+    # so the window a sibling suite can be caught in is a handful of commands
+    # rather than the rest of this test. (ClientBatchPipelineTest, which counts
+    # pipelines, detects the interference and skips rather than failing.)
+    @pool.with { |c| Wurk::Lua::Loader.script_load_all(c) }
   end
 
   # A claim that never reached Redis must hand its ACK back, or the finished job

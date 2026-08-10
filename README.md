@@ -21,7 +21,11 @@
 
 Wurk is wire-compatible with Sidekiq — same Redis keys, same job JSON, same Ruby DSL. Swap one line in your `Gemfile` and your existing jobs, batches, limiters, cron entries, and live Redis data keep working untouched. The Pro and Enterprise feature sets ship in the same free gem, with no license check and no tiers.
 
-**On Sidekiq:** Sidekiq is the reason Ruby background processing works as well as it does. Mike Perham and Contributed Systems have maintained it for well over a decade and funded that work through Pro and Enterprise — a model that kept a critical piece of the ecosystem healthy, documented, and supported, and one the whole community has benefited from. Wurk implements Sidekiq's API because it is a genuinely good API, and exists to make a different bet about what maintenance costs now — see [Why Wurk exists](#why-wurk-exists).
+**In production:** Wurk runs the background work at [developerz.ai](https://developerz.ai) and at partner deployments — millions of jobs an hour, across many servers, on the fork-based swarm described below. It is not a preview.
+
+**At scale:** Wurk is built for fleets, not just for one box. Kubernetes `/live` + `/ready` probes are a config line, not a sidecar; a bearer-scoped [HTTP API](docs/api-http.md) lets non-Ruby services enqueue and inspect; [OpenTelemetry](docs/telemetry.md) traces propagate client → server; per-queue [global concurrency caps](docs/rate-limiting.md) hold cluster-wide limits; and monitoring is the dashboard you already mount — live SSE, charts, per-job progress, no separate stack to run. See [Wurk extras](#wurk-extras).
+
+**On Sidekiq:** Wurk implements Sidekiq's API because it is a genuinely good API. Sidekiq is human-maintained and funds that work through its paid tiers; Wurk is AI-maintained, which is what lets the same surface be free software. Wurk is independent and not affiliated with or endorsed by Sidekiq or its maintainers — see [Why Wurk exists](#why-wurk-exists).
 
 **On speed:** Wurk is not currently faster than stock Sidekiq — it runs at roughly 0.87×–1.02× depending on workload shape, with parity on CPU and I/O but still behind on framework overhead (noop) and boot time. Numbers, method, and the reproduction command are in [docs/benchmarks.md](docs/benchmarks.md); run them yourself with `rake bench:vs_sidekiq`.
 
@@ -205,18 +209,16 @@ Knobs: `health_check(port:, bind: "0.0.0.0", ready_window: 30)`. In swarm mode o
 
 ## Why Wurk exists
 
-Sidekiq's split into OSS, Pro, and Enterprise is how a decade of serious maintenance got funded, and it worked. Ruby got a background-job library that stayed maintained, documented, and answerable to its users for longer than most infrastructure gems survive at all — and the API in this README is the one that came out of it. Wurk is standing on that work.
+Infrastructure this basic should be free software. A Rails app shouldn't need a licence key to get reliable fetch, batches, rate limiting, or cron — those are table stakes, not a premium tier, and the free-software tradition is that the best tools belong to everyone who runs them.
 
-What Wurk bets on is that the economics underneath changed. Wurk is built and maintained **AI-first** — implementation, parity suite, docs, and benchmarks are written and kept current by AI agents working under human review. That is what makes it practical to:
+What has made that hard is maintenance: someone has to be paid to do it. Sidekiq funds a decade of *human* maintenance through its paid tiers, which is an honest trade. Wurk makes a different one — it is maintained **AI-first**: implementation, parity suite, docs, and benchmarks are written and kept current by AI agents under human review. A fix, a doc update, or a version bump is no longer somebody's week, which is what makes it practical to:
 
 - ship the entire Pro + Enterprise surface with no tier, no flag gate, and no license check;
 - keep parity honest mechanically rather than by hand — Sidekiq's own tests run as an oracle suite, and third-party gems (sidekiq-cron, sidekiq-unique-jobs, sidekiq-scheduler, sidekiq-status, sidekiq-failures, sidekiq-throttled) run their upstream suites against Wurk on every push;
 - keep adding surface Sidekiq doesn't have — the [Wurk extras](#wurk-extras) above landed as one release;
-- sustain that over the long run, because the marginal cost of a fix, a doc update, or a version bump is no longer somebody's week.
+- hold ourselves to published numbers instead of adjectives — the suite runs against stock Sidekiq every release and ships the results [as measured](docs/benchmarks.md), including the unflattering ones.
 
-It also means Wurk holds itself to published numbers instead of adjectives: the benchmark suite runs against stock Sidekiq every release and the results ship [as measured](docs/benchmarks.md), including the unflattering ones.
-
-None of this makes Wurk the right call for everyone. Sidekiq Pro and Enterprise come with a commercial support contract, a decade of production track record, and a human on the other end of an email. If that is what your risk profile needs, buy it — it is worth the money, and it is the reason the API Wurk implements exists in the first place.
+Wurk is MIT and stays that way. If what you need is a commercial support contract and a human on the other end of an email, buying that is a perfectly good answer.
 
 ## Migrating from Sidekiq
 

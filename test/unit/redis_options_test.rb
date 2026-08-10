@@ -51,7 +51,8 @@ class RedisOptionsTest < Wurk::Test::UnitCase
     config = normalize(url: 'redis://example:6379/0', driver: 'hiredis',
                        network_timeout: 5, pool_timeout: 5, size: 12, logger: ::Logger.new(IO::NULL))
 
-    assert_equal(%i[connect_timeout driver read_timeout reconnect_attempts url write_timeout], config.keys.sort)
+    assert_equal(%i[command_builder connect_timeout driver read_timeout reconnect_attempts url write_timeout],
+                 config.keys.sort)
     assert_equal :hiredis, config[:driver], 'driver is a symbol in redis-client, a string in most YAML configs'
   end
 

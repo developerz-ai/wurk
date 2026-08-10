@@ -473,6 +473,13 @@ class FetcherReliableTest < Wurk::Test::UnitCase
 
     assert_equal [payload], lrange(@public_queue),
                  'NOSCRIPT must trigger script_load_all + EVAL-source retry, then move the job'
+  ensure
+    # The EVALSHA cache is SERVER-wide, not per-DB, so this flush is visible to
+    # every parallel_fork worker. Reload the moment the assertion below is done
+    # so the window a sibling suite can be caught in is a handful of commands
+    # rather than the rest of this test. (ClientBatchPipelineTest, which counts
+    # pipelines, detects the interference and skips rather than failing.)
+    @pool.with { |c| Wurk::Lua::Loader.script_load_all(c) }
   end
 
   # Re-raise branch: a string at the private-list key makes the RELIABLE_REQUEUE

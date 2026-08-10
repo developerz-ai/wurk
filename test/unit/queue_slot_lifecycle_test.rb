@@ -338,6 +338,13 @@ class QueueSlotLifecycleTest < Wurk::Test::UnitCase
 
     refute_nil build_heartbeat.beat!, 'the beat landed rather than falling into its rescue'
     assert_operator hold_expiry, :>, before + Wurk::QueueSlot::TTL_SECONDS - 5
+  ensure
+    # The EVALSHA cache is SERVER-wide, not per-DB, so this flush is visible to
+    # every parallel_fork worker. Reload the moment the assertion below is done
+    # so the window a sibling suite can be caught in is a handful of commands
+    # rather than the rest of this test. (ClientBatchPipelineTest, which counts
+    # pipelines, detects the interference and skips rather than failing.)
+    @pool.with { |c| Wurk::Lua::Loader.script_load_all(c) }
   end
 
   # Every hold rides one call, so a process running N capped jobs beats with the
