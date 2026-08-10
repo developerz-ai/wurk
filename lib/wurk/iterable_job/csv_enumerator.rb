@@ -36,6 +36,11 @@ module Wurk
       # in, emit the ones at or past the cursor. Kept as one pass over the CSV
       # (rather than enumerate-then-drop) because the source is a file handle —
       # skipped rows are read and discarded, never buffered.
+      #
+      # `.lazy` is not decoration: `#build_enumerator` is user code, and a host
+      # chaining `.map`/`.select` onto what we return has to keep getting a
+      # deferred enumerator over an open file rather than an eager Array. It
+      # carries the size lambda through unevaluated.
       def scan(cursor, size)
         skip = cursor.to_i
         ::Enumerator.new(size) do |yielder|
@@ -45,7 +50,7 @@ module Wurk
             yielder.yield(element, position) if position >= skip
           end
           yield sink
-        end
+        end.lazy
       end
 
       # Best-effort row count for the enumerator's `size` (progress display).
