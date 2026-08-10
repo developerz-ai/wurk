@@ -57,7 +57,7 @@ class ClientBatchPipelineTest < Wurk::Test::UnitCase
 
     client.flush_batched(payloads(4))
 
-    assert_equal 1, @probe.pipelines, 'four BATCH_PUSH EVALSHAs must ride one pipeline, not four round trips'
+    assert_pipelines 1, 'four BATCH_PUSH EVALSHAs must ride one pipeline, not four round trips'
     assert_equal 4, llen
   end
 
@@ -66,7 +66,7 @@ class ClientBatchPipelineTest < Wurk::Test::UnitCase
 
     client.send(:raw_push, payloads(4, at: future_seconds(600)))
 
-    assert_equal 1, @probe.pipelines, 'four BATCH_SCHEDULE EVALSHAs must ride one pipeline'
+    assert_pipelines 1, 'four BATCH_SCHEDULE EVALSHAs must ride one pipeline'
     assert_equal 4, scheduled_members.size
   end
 
@@ -77,7 +77,7 @@ class ClientBatchPipelineTest < Wurk::Test::UnitCase
 
     client.flush_batched(payloads(SLICE + 1))
 
-    assert_equal 2, @probe.pipelines
+    assert_pipelines 2, 'one pipeline per slice'
     assert_equal SLICE + 1, llen, 'every payload in every slice must land exactly once'
     assert_equal (SLICE + 1).to_s, batch_field('total')
   end
@@ -87,7 +87,7 @@ class ClientBatchPipelineTest < Wurk::Test::UnitCase
 
     client.send(:raw_push, payloads(SLICE + 1, at: future_seconds(600)))
 
-    assert_equal 2, @probe.pipelines
+    assert_pipelines 2, 'one pipeline per slice'
     assert_equal SLICE + 1, scheduled_members.size
   end
 
@@ -210,6 +210,17 @@ class ClientBatchPipelineTest < Wurk::Test::UnitCase
     Process.clock_gettime(Process::CLOCK_REALTIME) + delta
   end
 
+  # Pipeline counts are only meaningful if nothing reloaded the script cache
+  # mid-measurement. See ProbeConn#foreign_noscript? — a sibling worker's
+  # `SCRIPT FLUSH` costs the client a reload and a replay, which is the right
+  # behaviour and the wrong number, and there is no way to hold a server-wide
+  # cache still from in here.
+  def assert_pipelines(expected, message)
+    skip 'a sibling suite flushed the server-wide script cache mid-measurement' if @probe.foreign_noscript?
+
+    assert_equal expected, @probe.pipelines, message
+  end
+
   def probe_pool(drop_after: nil, noscript_on: nil)
     @probe = ProbeConn.new(Wurk::Test.redis_url, drop_after: drop_after, noscript_on: noscript_on)
     pool   = Object.new
@@ -258,7 +269,17 @@ class ClientBatchPipelineTest < Wurk::Test::UnitCase
       @drop_after  = drop_after
       @noscript_on = noscript_on
       @pipelines   = 0
+      @foreign_noscript = false
     end
+
+    # True when REAL Redis answered a pipeline with NOSCRIPT — i.e. a sibling
+    # worker ran `SCRIPT FLUSH` (four suites still do, and the cache is
+    # server-wide) between this test's setup priming and its measured call. The
+    # client then recovers by reloading and replaying, which is correct
+    # behaviour and two extra pipelines, so the count this class exists to
+    # measure is simply not measurable on that run. Staged NOSCRIPTs raised by
+    # `noscript_on` below are ours and deliberately do not set it.
+    def foreign_noscript? = @foreign_noscript
 
     def pipelined(&)
       @pipelines += 1
@@ -269,7 +290,12 @@ class ClientBatchPipelineTest < Wurk::Test::UnitCase
         raise RedisClient::CommandError, 'NOSCRIPT No matching script. Use EVAL.'
       end
 
-      @real.pipelined(&)
+      begin
+        @real.pipelined(&)
+      rescue RedisClient::CommandError => e
+        @foreign_noscript = true if e.message.start_with?('NOSCRIPT')
+        raise
+      end
     end
 
     def call(*, &) = @real.call(*, &)

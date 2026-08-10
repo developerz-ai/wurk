@@ -76,16 +76,29 @@ Wurk.configuration.logger = Logger.new(IO::NULL)
 
 require 'minitest/autorun'
 
-# minitest-parallel_fork forks ENV["NCPU"] workers (default 4) — and it forks
-# that many regardless of how many suites there are, so idle extra workers run
-# their startup FLUSHDB too. Each worker is isolated on its own Redis logical DB
+# minitest-parallel_fork forks ENV["NCPU"] workers — and it forks that many
+# regardless of how many suites there are, so idle extra workers run their
+# startup FLUSHDB too. Each worker is isolated on its own Redis logical DB
 # (1..14; never 0, and 15 is reserved). More workers than DBs would collide and
 # a colliding worker's FLUSHDB would wipe a peer's keys mid-test — the root cause
 # of the #84 batch-TTL and #73 periodic-leader flakes. Cap the worker count to
-# the number of worker DBs so every worker gets a unique one. (CI leaves NCPU
-# unset → 4, so this is a no-op there; it only bites machines that set a high
-# NCPU for speed.)
-ENV['NCPU'] = Wurk::Test::WORKER_DATABASES.to_s if (ENV['NCPU'] || '4').to_i > Wurk::Test::WORKER_DATABASES
+# the number of worker DBs so every worker gets a unique one.
+#
+# The default stays 4 — deliberately below the core count of most machines that
+# run this. The suite looks like a pure fan-out of independent classes, but the
+# integration layer isn't: a single test boots a swarm of 4 children × 5 threads,
+# several use real BLMOVE timeouts, and some pools carry a 1s read timeout. One
+# worker per core therefore oversubscribes badly, and the failures it produces
+# are wall-clock ones (a drain that doesn't finish, a socket read that times out)
+# rather than honest assertion failures. Measured on a 12-core box: `NCPU=12`
+# bought ~20% wall clock and cost a red build.
+#
+# `NCPU` is the knob for a machine with headroom to spare, and `NCPU=1` is how
+# to chase an ordering flake. Clamped rather than merely capped so a typo'd
+# `NCPU=` (`to_i` → 0) can't fork zero workers; the ceiling is the number of
+# isolated Redis DBs, since two workers sharing one would FLUSHDB each other
+# mid-test (the root cause of the #84 and #73 flakes).
+ENV['NCPU'] = (ENV['NCPU'] || 4).to_i.clamp(1, Wurk::Test::WORKER_DATABASES).to_s
 
 begin
   require 'minitest/parallel_fork'

@@ -2,6 +2,7 @@
 
 require 'socket'
 require 'securerandom'
+require_relative 'pid_cache'
 
 module Wurk
   # Shared mixin for runtime components (Launcher, Manager, Processor, Fetcher,
@@ -55,7 +56,7 @@ module Wurk
     def self.tid
       thread = Thread.current
       memo = thread.thread_variable_get(:wurk_tid)
-      pid = ::Process.pid
+      pid = PidCache.pid
       return memo[1] if memo && memo[0] == pid
 
       id = (thread.object_id ^ pid).to_s(36).freeze

@@ -110,6 +110,88 @@ is **not** that number — it is the pre-implementation prototype, which priced 
 bracketing shape (a bare acquire and release around the fetch, 2.2x–2.6x) that the real
 implementation exists to avoid. Read it as the upper bound it is.
 
+## The other half: Ruby-side cost per job
+
+Round trips are the headline, but they are not the whole bill. Once the fetch
+pipeline was down to one round trip, the next-largest movable cost was the Ruby
+that runs *between* `conn.call(...)` and the socket. `bin/profile` samples it
+against a real Redis:
+
+```bash
+bin/profile                 # fetch+execute, CPU samples
+bin/profile enqueue         # the client push path
+bin/profile fetch --alloc   # allocation counts, for GC pressure
+```
+
+What that turned up, and what was done about it. Percentages are that frame's
+share of a 50k-iteration `fetch+execute` CPU profile, before → after:
+
+| Frame | Before | After |
+|---|---:|---:|
+| `RedisClient::CommandBuilder#generate` | 4.4% | — |
+| `Enumerable#flat_map` (its `flat_map`) | 4.3% | 2.1% |
+| `Process.pid` | 1.0% | — |
+| `Wurk::JobLogger#context_hash` | 1.4% | 1.0% |
+
+About 6% of the profile, on a path where roughly a quarter of it is socket
+syscalls that no amount of Ruby can remove. The same three changes move
+`bench/memory.rb` — the one gate here that is deterministic rather than
+wall-clock, since it counts allocations — from **6.49 to 6.76 jobs per 1,000
+allocations**, about 4% fewer allocations per job. The throughput benches also
+improved on the same machine, but not by an amount worth publishing: this host
+was under unrelated load for the "before" run, and a paired re-measurement
+against stock Sidekiq has not been done since. The vs-Sidekiq table above is
+therefore unchanged and still the number to quote.
+
+
+- **Command normalization was 4.4% of fetch+execute.** redis-client's default
+  builder splices Hash arguments with a `flat_map` and stringifies the result
+  with a `map!` — two array allocations and two per-element type dispatches for
+  a command whose arguments are already Strings, which is what all three
+  commands per job are. [`Wurk::CommandBuilder`](../lib/wurk/command_builder.rb)
+  short-circuits that case and hands anything else (a Hash to splice, a Symbol
+  or number to stringify, kwargs) straight to redis-client's own builder, so the
+  semantics have exactly one implementation. Measured with
+  `bin/rake bench:command_builder`: **~2.2µs → ~0.45µs per command**. The ACK's
+  `LREM` count is a pre-stringified `'1'` for the same reason — one Integer
+  argument would send the whole command back through the slow path.
+  The shortcut has one trap worth naming: redis-client splats `**kwargs` before
+  calling the builder, so a `call` with no keywords arrives with an *empty
+  Hash*, never `nil`. A guard that only tested `.nil?` sent the whole hot path
+  down the slow branch while every output-equality test still passed — which is
+  why `Wurk::CommandBuilder.fast?` is public and asserted directly.
+- **`Process.pid` was 1.0%.** glibc dropped its `getpid` cache in 2.25, so it is
+  a real syscall — ~640ns — and the hot path called it twice per job
+  (`Component.tid` and the fetcher's per-queue key cache, both of which read it
+  only to notice a fork). [`Wurk::PidCache`](../lib/wurk/pid_cache.rb) memoizes
+  it and refreshes in the child half of every fork via `Process._fork`, which is
+  the only event that can change the answer.
+- **`JobLogger#context_hash` re-read `config[:logged_job_attributes]`** through
+  the capsule's delegating `[]` on every job, to walk a list that is fixed once
+  the configuration freezes at launch. Read once, in the constructor.
+
+And the cost paid before the first job runs at all — `require "wurk"`, which is
+boot time for every worker, every fork in a swarm, and every Rails app that
+loads the gem. It was **~290ms**; it is now **~186ms**. Three subtrees were
+pulling heavy stdlib in eagerly for code most processes never reach:
+
+| Required at load | By | Cost | Actually needed when |
+|---|---|---:|---|
+| `optparse`, `yaml`, `erb` | `Wurk::CLI` | ~45ms | `exe/wurk` parses argv or a config file |
+| `tempfile` (+ `tmpdir`) | `Wurk::Profiler` | ~19ms | vernier is loaded *and* a job is profiled |
+| `erb`, `cgi` | `Wurk::Web::Extension` | ~40ms | a host registered a Web extension and a request arrived |
+
+Each is now required inside the one method that uses it. `require` is
+idempotent, so every call after the first is a `$LOADED_FEATURES` hash lookup.
+What remains is dominated by `openssl` (~58ms), which redis-client's own config
+requires and Wurk cannot avoid.
+
+None of these change a Redis key, a command sequence, or a job-JSON field —
+they are the same wire traffic with less Ruby in front of it.
+`bench/command_builder.rb` is in the regression gate so a fast path that stops
+firing shows up as a merge-blocking delta rather than a slow drift nobody
+notices.
+
 ## Running it
 
 ```bash

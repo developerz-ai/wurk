@@ -86,6 +86,12 @@ class LimiterStressTest < Wurk::Test::UnitCase
 
     assert ran, 'acquire should recover from a flushed script cache'
   ensure
+    # The EVALSHA cache is SERVER-wide, not per-DB, so this flush is visible to
+    # every parallel_fork worker. Reload the moment the assertion below is done
+    # so the window a sibling suite can be caught in is a handful of commands
+    # rather than the rest of this test. (ClientBatchPipelineTest, which counts
+    # pipelines, detects the interference and skips rather than failing.)
+    @pool.with { |c| Wurk::Lua::Loader.script_load_all(c) }
     Wurk::Limiter.concurrent("flush-#{@suffix}", 1).delete
   end
 end

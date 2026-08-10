@@ -1,6 +1,6 @@
 # Sidekiq Enterprise — Public API Surface
 
-Spec target for Wurk. Source: contribsys wiki (`sidekiq/sidekiq`), `Ent-Changes.md`, Mike Perham blog posts, and observed `Sidekiq::Limiter` / `Sidekiq::Enterprise` usage in the wild. Reimplement bit-for-bit unless explicitly diverged in `docs/idea/`.
+Spec target for Wurk. Source: contribsys wiki (`sidekiq/sidekiq`), `Ent-Changes.md`, maintainer blog posts, and observed `Sidekiq::Limiter` / `Sidekiq::Enterprise` usage in the wild. Reimplement bit-for-bit unless explicitly diverged in `docs/idea/`.
 
 Coordinate-of-truth: everything below is what a paying Sidekiq Enterprise user can call. `require "sidekiq-ent"` (gem name `sidekiq-ent`) loads everything; `require "sidekiq-ent/web"` loads Web UI extensions.
 

@@ -17,7 +17,15 @@ require_relative '../engine_test_helper'
 # same un-namespaced keys — draining them here would flake sibling tests for
 # a property those suites already cover directly (ApiMutationsTest).
 class CsrfSameOriginTest < Wurk::Test::EngineCase
-  parallelize_me!
+  # Deliberately NOT parallelize_me!, for the same reason ApiMutationsTest isn't:
+  # the 2xx pass depends on fixtures living in the global retry/scheduled/dead
+  # zsets, and ApiMutationsTest drives `/wurk/api/<set>/all/<cmd>` — which drains
+  # those zsets wholesale. Minitest runs non-parallel tests serially in the
+  # runner thread, so opting out is what makes the two suites unable to
+  # interleave; a `parallelize_me!` here put this class in the executor pool
+  # alongside them and the drain landed between this suite's `setup` and its
+  # POST. Three tests, all sub-second — there is nothing to win by parallelising
+  # them anyway.
 
   def setup
     super
@@ -135,8 +143,16 @@ class CsrfSameOriginTest < Wurk::Test::EngineCase
 
   # Seeds one entry in the given global zset, returning its URL-encoded
   # "<score>|<jid>" route key (matches the SPA's encodeURIComponent).
+  #
+  # Scored an hour out, never `Time.now`. `retry` and `schedule` are global,
+  # un-namespaced keys (wire-compat — they cannot be namespaced per test), and a
+  # due entry in either is fair game for any poller running in a sibling suite
+  # on this worker's Redis DB: it gets promoted onto its queue, leaves the zset,
+  # and the route below 404s on a fixture that was there in `setup`. A future
+  # score is invisible to every poller and changes nothing this test asserts —
+  # the route key is just "<score>|<jid>".
   def seed_zset_entry(name)
-    score = ::Time.now.to_f
+    score = ::Time.now.to_f + 3600
     jid = ::SecureRandom.hex(12)
     payload = {
       'class' => @class_name, 'args' => [1], 'queue' => @queue, 'jid' => jid,

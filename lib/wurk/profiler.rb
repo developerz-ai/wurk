@@ -3,7 +3,6 @@
 require 'securerandom'
 require 'zlib'
 require 'stringio'
-require 'tempfile'
 require_relative 'keys'
 require_relative 'pool_checkout'
 
@@ -109,7 +108,12 @@ module Wurk
         Wurk.configuration.handle_exception(e, context: 'Wurk::Profiler')
       end
 
+      # `tempfile` (and the `tmpdir` it drags in) is ~19ms of `require "wurk"`,
+      # spent only by an install that has vernier loaded AND profiling switched
+      # on for a job. Everyone else was paying it at boot.
       def profile_to_json(&)
+        require 'tempfile'
+
         Tempfile.create(['wurk-profile', '.json']) do |file|
           ::Vernier.profile(out: file.path, &)
           File.read(file.path)

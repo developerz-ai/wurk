@@ -32,6 +32,13 @@ module Wurk
       # admitted under, and are set only by Fetcher::Capped — nil is the whole
       # uncapped path, which is why the release below is a field test rather
       # than a question asked of Redis.
+      # LREM's count, pre-stringified. Every argument of every command on the
+      # ACK pipeline is then a String, which is what keeps it on
+      # {Wurk::CommandBuilder}'s allocation-free fast path; an Integer here
+      # would send the whole command back through redis-client's normalizer.
+      LREM_COUNT = '1'
+      private_constant :LREM_COUNT
+
       UnitOfWork = Struct.new(:queue, :queue_name, :private_queue, :job, :config, :jid, :fetcher,
                               :slot_key, :slot_token, keyword_init: true) do
         # Deferred, never skipped: the LREM goes back to the fetcher, which
@@ -55,7 +62,7 @@ module Wurk
         # wire-frozen, so the reaper cannot flag it). Reading the counter to
         # decide would spend the very round trip the DEL is riding for free.
         def write_ack(pipe)
-          pipe.call('LREM', private_queue, 1, job)
+          pipe.call('LREM', private_queue, LREM_COUNT, job)
           job_jid = jid.to_s
           Middleware::PoisonPill.clear_in(pipe, job_jid) unless job_jid.empty?
           release_slot_in(pipe) if slot_key

@@ -71,14 +71,15 @@ jobs:
         ports: ["6379:6379"]
         options: >-
           --health-cmd "redis-cli ping"
-          --health-interval 5s
-          --health-timeout 3s
-          --health-retries 5
+          --health-interval 2s
+          --health-timeout 2s
+          --health-retries 10
+          --health-start-period 1s
     env:
       BUNDLE_GEMFILE: ${{ github.workspace }}/Gemfile
       # Pinned so a floating Rails resolve can't perturb the numbers, and so this
       # job reuses the gem cache test.yml's 8.0 legs already populated.
-      RAILS_VERSION: "8.0"
+      RAILS_VERSION: "8.1"
       REDIS_URL: redis://localhost:6379/0
       BENCH_RUNS: 3
     steps:
@@ -88,9 +89,9 @@ jobs:
           persist-credentials: false
       - uses: ruby/setup-ruby@95ef2b042f9d7a56d8268cba8559e2842e2ad01b # v1
         with:
-          ruby-version: "3.4"
+          ruby-version: "4.0"
           bundler-cache: true
-          cache-version: rails-8.0
+          cache-version: rails-8.1
       # The base checkouts below rewind the working tree. Keep the PR's
       # comparator so the gate rule under review is the one that runs.
       - name: stage comparator

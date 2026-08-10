@@ -43,3 +43,11 @@ group :test do
   # only touches CSV when the host has loaded it (`defined?(::CSV)` guard).
   gem 'csv'
 end
+
+group :development do
+  # Drives `bin/profile`, which samples the real fetch+execute and enqueue paths
+  # against a real Redis. Pillar 3 is "measured", and the benchmarks say *that*
+  # something regressed while this says *where*. Not a gemspec dependency and
+  # never required by lib/.
+  gem 'stackprof', require: false
+end

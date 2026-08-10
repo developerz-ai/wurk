@@ -1,0 +1,93 @@
+#!/usr/bin/env ruby
+# frozen_string_literal: true
+
+# Profile a hot path against a real Redis and print the top frames.
+#
+#   bin/profile                 # fetch+execute (the default; the path the gate protects)
+#   bin/profile enqueue         # client push
+#   bin/profile fetch --alloc   # allocation counts instead of CPU samples
+#   bin/profile fetch --dump    # keep the raw dump for `stackprof tmp/profile.dump --method ...`
+#
+# CPU mode answers "where does a job's time go"; allocation mode answers "what
+# is feeding the GC". Both drive the real code — real fetcher, real processor,
+# real round trips — because a stubbed hot path profiles the stub.
+#
+# Uses WURK_BENCH_DB (default 15, never 0) and FLUSHDBs it, exactly like
+# bench/fetch_execute.rb.
+
+require 'bundler/setup'
+
+begin
+  require 'stackprof'
+rescue LoadError
+  abort 'bin/profile needs stackprof: run `bundle install` (it is in the :development group).'
+end
+
+require 'logger'
+$LOAD_PATH.unshift(File.expand_path('../lib', __dir__))
+require 'wurk'
+require_relative '../bench/support'
+
+path  = ARGV.find { |a| !a.start_with?('-') } || 'fetch'
+alloc = ARGV.include?('--alloc')
+keep  = ARGV.include?('--dump')
+limit = Integer(ENV.fetch('PROFILE_LIMIT', '25'))
+iters = Integer(ENV.fetch('PROFILE_ITERATIONS', alloc ? '2000' : '50000'))
+
+class ProfileJob
+  include Wurk::Job
+
+  def perform(*); end
+end
+
+config = Wurk::Configuration.new
+config.logger = Logger.new(IO::NULL)
+config.redis = { url: bench_redis_url('15') }
+config.queues = %w[default]
+config.fetch_poll_interval = 0.05
+capsule = config.default_capsule
+capsule.prepare!
+capsule.redis { |c| c.call('FLUSHDB') }
+capsule.redis { |c| Wurk::Lua::Loader.script_load_all(c) }
+
+client = Wurk::Client.new(pool: capsule.redis_pool)
+
+work =
+  case path
+  when 'fetch', 'fetch_execute'
+    processor = Wurk::Processor.new(capsule)
+    # Seed generously: an empty queue turns every fetch into a blocking poll and
+    # the profile becomes a picture of BLMOVE rather than of the job path.
+    chunk = { 'class' => 'ProfileJob', 'args' => Array.new(50_000) { [] }, 'queue' => 'default' }
+    ((iters / 50_000) + 2).times { client.push_bulk(chunk) }
+    -> { processor.send(:process_one) }
+  when 'enqueue', 'push'
+    -> { client.push('class' => 'ProfileJob', 'args' => [], 'queue' => 'default') }
+  else
+    abort "bin/profile: unknown path #{path.inspect} (want: fetch | enqueue)"
+  end
+
+2_000.times { work.call } # warm the JIT, the pool, and the EVALSHA cache
+
+dump = File.expand_path('../tmp/profile.dump', __dir__)
+require 'fileutils'
+FileUtils.mkdir_p(File.dirname(dump))
+
+mode = alloc ? :object : :cpu
+StackProf.run(mode: mode, out: dump, raw: true, interval: alloc ? 1 : 200) do
+  iters.times { work.call }
+end
+
+capsule.redis { |c| c.call('FLUSHDB') }
+
+puts
+puts "#{path} — #{mode} profile, #{iters} iterations"
+report = StackProf::Report.new(Marshal.load(File.binread(dump))) # rubocop:disable Security/MarshalLoad
+report.print_text(false, limit)
+
+if keep
+  puts "\nraw dump: #{dump}"
+  puts "  bundle exec stackprof #{dump} --method 'Wurk::Processor#dispatch'"
+else
+  File.delete(dump)
+end

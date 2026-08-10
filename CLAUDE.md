@@ -17,6 +17,7 @@ Three pillars, all must stay true:
 | Task | Command |
 |---|---|
 | Install | `bundle install` |
+| Pre-PR gate (lint + suite + parity) | `bin/check` (`fast` = lint + unit, `full` = + ecosystem) |
 | Full test suite (parallel) | `bin/rake test` |
 | Single file | `bin/rake test TEST=test/path/to/file_test.rb` |
 | Single test by name | `bin/rake test TEST=test/foo_test.rb TESTOPTS="--name=/pattern/"` |
@@ -96,7 +97,7 @@ Skip step 3 → leaked sockets in children. Skip step 5 → children corrupt eac
 - **Never mock Redis** in integration or parity tests. Real Redis, unique namespace.
 - **Coverage gate.** SimpleCov **line** and **branch** coverage on `lib/` must both stay ≥90% (blocking; `minimum_coverage line: 90, branch: 90`). Branch was ratcheted from ~78% to ≥90% in #67 — keep new code at parity. The Cobertura report is still uploaded for per-file inspection. Coverage runs merge across the `minitest-parallel_fork` workers via `SimpleCov.at_fork`.
 - **CI** on GitHub Actions / Blacksmith runners. Benchmark bot comments deltas on every PR; >5% regression flags it.
-- **CI standard.** Runners are Blacksmith (`blacksmith-4vcpu-ubuntu-2404`; 8vcpu for bench — larger SKUs are deliberate, don't downsize). Every workflow declares a `concurrency` group with cancel-in-progress, and every job sets `timeout-minutes`. Deploy/publish workflows (deploy-demo, pages, release) never auto-cancel: `cancel-in-progress: false`.
+- **CI standard.** Cheap by construction: **one** full Ruby suite run per PR, on the newest Ruby + newest Rails, with the coverage gate folded into it (`COVERAGE=1` on the same invocation). No version matrix and no second coverage job — the gemspec's `>= 3.2` floor is held by rubocop's `TargetRubyVersion: 3.2`. Suite workers stay at `NCPU=4` (test_helper's default, deliberately below core count — the integration layer boots real swarms, so one worker per core oversubscribes and produces wall-clock failures, measured), which is why the suite job stays a 4vcpu box. Runners are Blacksmith (`blacksmith-4vcpu-ubuntu-2404` for the suite, parity and release; 8vcpu for bench; 2vcpu for detect/lint — SKUs are deliberate, don't change one without a timing reason). Every workflow declares a `concurrency` group with cancel-in-progress, and every job sets `timeout-minutes`. Deploy/publish workflows (deploy-demo, pages, release) never auto-cancel: `cancel-in-progress: false`. A `v*` tag publishes the gem and then calls `deploy-demo`, so the public demo tracks the released version automatically.
 
 ## Platforms
 

@@ -8,6 +8,8 @@
 require_relative 'wurk/errors'
 require_relative 'wurk/version'
 require_relative 'wurk/keys'
+require_relative 'wurk/pid_cache'
+require_relative 'wurk/command_builder'
 require_relative 'wurk/redis_pool'
 require_relative 'wurk/pool_checkout'
 require_relative 'wurk/redis_connection'

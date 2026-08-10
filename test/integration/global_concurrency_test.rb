@@ -84,6 +84,18 @@ end
 class GlobalConcurrencyTest < Wurk::Test::UnitCase
   parallelize_me!
 
+  # Wall-clock budget for the 10k-job drain below. It is a HANG DETECTOR, not a
+  # throughput assertion — `bench/` owns throughput, and this test's actual
+  # claim is "no slot holders leaked once the queue is empty".
+  #
+  # `wait_for` returns the instant the condition holds, so a generous budget
+  # costs a healthy run nothing and only buys a loaded one room — which is why
+  # it is deliberately far above the ~20s this drain actually takes on an idle
+  # machine. It also scales with the parallel worker count, since the test boots
+  # a 4-child swarm (20 threads) while every other minitest-parallel_fork worker
+  # is running something of its own.
+  DRAIN_BUDGET = 60 * Integer(ENV.fetch('NCPU', 4)).clamp(4, 14)
+
   def setup
     super
     @ns = "gc-#{Process.pid}-#{object_id}"
@@ -202,8 +214,8 @@ class GlobalConcurrencyTest < Wurk::Test::UnitCase
     push_bulk(queue, GlobalConcurrencyDoneWorker, Array.new(job_count) { [Wurk::Test.redis_url, done_key] })
 
     with_swarm(config, Wurk::Topology.flat(count: 4, queues: [queue], concurrency: 5)) do
-      assert wait_for(120) { @pool.with { |c| c.call('GET', done_key) }.to_i >= job_count },
-             "only #{@pool.with { |c| c.call('GET', done_key) }}/#{job_count} jobs finished within 120s"
+      assert wait_for(DRAIN_BUDGET) { @pool.with { |c| c.call('GET', done_key) }.to_i >= job_count },
+             "only #{@pool.with { |c| c.call('GET', done_key) }}/#{job_count} jobs finished in #{DRAIN_BUDGET}s"
 
       assert wait_for(10) { slot_count(queue).zero? }, "#{slot_count(queue)} slot holders leaked after full drain"
     end

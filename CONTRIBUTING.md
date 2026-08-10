@@ -46,6 +46,20 @@ Frontend unit + integration tests (Vitest, SolidJS Testing Library) run with
 
 ## Running the tests
 
+**`bin/check` is the one to remember.** It runs the same gates CI does, in the
+order that fails fastest, and prints a per-stage wall clock:
+
+```sh
+bin/check fast     # rubocop + unit tests           — the inner loop
+bin/check          # rubocop + full suite + parity  — run this before opening a PR
+bin/check full     # ...plus the ecosystem suites
+```
+
+It refuses to start without a local Redis and tells you how to get one. A green
+`bin/check` is the answer CI will give you.
+
+The individual tasks, when you want one:
+
 | Task | Command |
 |---|---|
 | Full suite (parallel) | `bin/rake test` |
@@ -55,13 +69,33 @@ Frontend unit + integration tests (Vitest, SolidJS Testing Library) run with
 | Ecosystem compatibility | `bin/rake test:ecosystem` |
 | Coverage gate | `COVERAGE=1 bin/rake test` |
 | Benchmarks | `bin/rake bench` |
-| Lint | `bundle exec rubocop` |
+| Lint | `bundle exec rubocop --parallel` |
+
+The suite forks 4 parallel workers, each on its own Redis logical DB. That is
+deliberately below most machines' core count: the integration layer boots real
+swarms (4 children × 5 threads apiece), so one worker per core oversubscribes and
+starts failing on wall clock rather than on assertions. `NCPU=<n>` raises it if
+your machine has headroom (ceiling 14, the number of isolated DBs); `NCPU=1` is
+how to chase an ordering flake.
 
 The engine tests render the dashboard shell, which needs the precompiled SPA.
 That bundle is built rather than committed, so a fresh clone has none — the
 first `bin/rake test` builds it once (roughly 4s) and says so. Later runs skip
 it. If you change anything under `frontend/src`, rebuild explicitly with
 `bin/rake frontend:build`; the automatic build only covers "no bundle at all".
+
+## Profiling a slow path
+
+```sh
+bin/profile                 # fetch+execute, CPU samples, real Redis
+bin/profile enqueue         # the client push path
+bin/profile fetch --alloc   # allocation counts — what feeds the GC
+bin/profile fetch --dump    # keep tmp/profile.dump for `stackprof --method ...`
+```
+
+`bin/rake bench` tells you *that* something regressed; this tells you *where*.
+Both drive the real fetcher, processor, and round trips — a stubbed hot path
+only profiles the stub.
 
 Test layers:
 
@@ -98,10 +132,11 @@ These are non-negotiable — they're what keep Wurk a true drop-in:
 
 1. Branch off `main`.
 2. Keep the change focused; add tests at the right layer.
-3. Run `bin/rake test`, `bin/rake test:parity`, `bin/rake test:ecosystem`, and `bundle exec rubocop` locally.
-4. Open the PR — CI runs the matrix (Ruby 3.2/3.3/3.4 × Rails 7.2/8.0), the
-   coverage gate, the parity job, and benchmarks. The bench bot comments
-   per-benchmark deltas; a real regression fails the check.
+3. Run `bin/check` (or `bin/check full` if you touched the compat surface).
+4. Open the PR — CI runs one Ruby suite on the newest Ruby + Rails with the
+   coverage gate folded in, plus the parity oracles, rubocop, the frontend
+   suite, and benchmarks. The bench bot comments per-benchmark deltas; a real
+   regression fails the check.
 5. Don't `--no-verify` past a failing hook — fix the hook.
 
 By contributing you agree your work is licensed under the project's

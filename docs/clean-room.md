@@ -7,13 +7,13 @@ This page explains exactly what that means and why it is lawful.
 > reasoning behind it. It is not a legal opinion. If you need one, consult a
 > lawyer.
 
-**Credit first.** Sidekiq is Mike Perham's and Contributed Systems' work, and it
-has served the Ruby community well for over a decade. The API described on this
-page is *theirs* — Wurk reimplements it because it is a well-designed interface
-that an enormous amount of production Ruby already speaks, and because API
-reimplementation is how ecosystems stay portable. Nothing here is a claim that
-Sidekiq was built or licensed wrongly. Wurk competes on maintenance model, not on
-the merits of the original.
+**Credit first.** The API described on this page is Sidekiq's, not Wurk's. Wurk
+reimplements it because it is a well-designed interface that an enormous amount
+of production Ruby already speaks, and because API reimplementation is how
+ecosystems stay portable. Nothing here is a claim that Sidekiq was built or
+licensed wrongly. Wurk is independent of, and not affiliated with or endorsed
+by, Sidekiq or its maintainers; it competes on maintenance model, not on the
+merits of the original.
 
 ## What Wurk copies: the API. Not the code.
 
