@@ -1,0 +1,57 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="780" height="392" viewBox="0 0 780 392" role="img" aria-label="Throughput relative to stock Sidekiq. Values below 1.0 mean Wurk is slower. Medians: noop 0.87 and 0.95, cpu 0.99 and 1.02, io 0.99 and 0.97.">
+<rect width="780" height="392" fill="#fcfcfb" rx="8"/>
+<text x="172" y="26" font-family="system-ui,-apple-system,&apos;Segoe UI&apos;,sans-serif" font-size="14" font-weight="600" fill="#0b0b0b">Throughput relative to stock Sidekiq</text>
+<text x="172" y="45" font-family="system-ui,-apple-system,&apos;Segoe UI&apos;,sans-serif" font-size="11.5" fill="#52514e">Paired per-run ratio, median of 12 runs. Dot = median, bar = min to max. Below 1.00 = Wurk slower.</text>
+<rect x="160" y="94" width="546" height="108" fill="rgba(11,11,11,0.035)" rx="5"/>
+<text x="160" y="88" font-family="system-ui,-apple-system,&apos;Segoe UI&apos;,sans-serif" font-size="11" font-weight="600" letter-spacing="0.4" fill="#898781">1 PROCESS X 5 THREADS</text>
+<rect x="160" y="218" width="546" height="108" fill="rgba(11,11,11,0.035)" rx="5"/>
+<text x="160" y="212" font-family="system-ui,-apple-system,&apos;Segoe UI&apos;,sans-serif" font-size="11" font-weight="600" letter-spacing="0.4" fill="#898781">4 PROCESSES X 5 THREADS</text>
+<line x1="201.0" y1="96" x2="201.0" y2="342" stroke="#e1e0d9" stroke-width="1"/>
+<line x1="317.0" y1="96" x2="317.0" y2="342" stroke="#e1e0d9" stroke-width="1"/>
+<line x1="549.0" y1="96" x2="549.0" y2="342" stroke="#e1e0d9" stroke-width="1"/>
+<line x1="665.0" y1="96" x2="665.0" y2="342" stroke="#e1e0d9" stroke-width="1"/>
+<line x1="433.0" y1="92" x2="433.0" y2="342" stroke="#c3c2b7" stroke-width="2" stroke-dasharray="4 3"/>
+<text x="433.0" y="86" font-family="system-ui,-apple-system,&apos;Segoe UI&apos;,sans-serif" font-size="11" font-weight="600" text-anchor="middle" fill="#52514e">parity 1.00x</text>
+<text x="148" y="120" font-family="system-ui,-apple-system,&apos;Segoe UI&apos;,sans-serif" font-size="12.5" text-anchor="end" fill="#0b0b0b">noop</text>
+<line x1="282.2" y1="116" x2="479.4" y2="116" stroke="#2a78d6" stroke-width="2" stroke-opacity="0.32" stroke-linecap="round"/>
+<line x1="282.2" y1="112" x2="282.2" y2="120" stroke="#2a78d6" stroke-width="2" stroke-opacity="0.32" stroke-linecap="round"/>
+<line x1="479.4" y1="112" x2="479.4" y2="120" stroke="#2a78d6" stroke-width="2" stroke-opacity="0.32" stroke-linecap="round"/>
+<circle cx="357.6" cy="116" r="5.5" fill="#2a78d6" stroke="#fcfcfb" stroke-width="2"/>
+<text x="762" y="120" text-anchor="end" font-family="system-ui,-apple-system,&apos;Segoe UI&apos;,sans-serif" font-size="12" font-weight="600" fill="#0b0b0b" style="font-variant-numeric:tabular-nums">0.87x</text>
+<text x="148" y="154" font-family="system-ui,-apple-system,&apos;Segoe UI&apos;,sans-serif" font-size="12.5" text-anchor="end" fill="#0b0b0b">cpu</text>
+<line x1="305.4" y1="150" x2="554.8" y2="150" stroke="#2a78d6" stroke-width="2" stroke-opacity="0.32" stroke-linecap="round"/>
+<line x1="305.4" y1="146" x2="305.4" y2="154" stroke="#2a78d6" stroke-width="2" stroke-opacity="0.32" stroke-linecap="round"/>
+<line x1="554.8" y1="146" x2="554.8" y2="154" stroke="#2a78d6" stroke-width="2" stroke-opacity="0.32" stroke-linecap="round"/>
+<circle cx="427.2" cy="150" r="5.5" fill="#2a78d6" stroke="#fcfcfb" stroke-width="2"/>
+<text x="762" y="154" text-anchor="end" font-family="system-ui,-apple-system,&apos;Segoe UI&apos;,sans-serif" font-size="12" font-weight="600" fill="#0b0b0b" style="font-variant-numeric:tabular-nums">0.99x</text>
+<text x="148" y="188" font-family="system-ui,-apple-system,&apos;Segoe UI&apos;,sans-serif" font-size="12.5" text-anchor="end" fill="#0b0b0b">io</text>
+<line x1="340.2" y1="184" x2="496.8" y2="184" stroke="#2a78d6" stroke-width="2" stroke-opacity="0.32" stroke-linecap="round"/>
+<line x1="340.2" y1="180" x2="340.2" y2="188" stroke="#2a78d6" stroke-width="2" stroke-opacity="0.32" stroke-linecap="round"/>
+<line x1="496.8" y1="180" x2="496.8" y2="188" stroke="#2a78d6" stroke-width="2" stroke-opacity="0.32" stroke-linecap="round"/>
+<circle cx="427.2" cy="184" r="5.5" fill="#2a78d6" stroke="#fcfcfb" stroke-width="2"/>
+<text x="762" y="188" text-anchor="end" font-family="system-ui,-apple-system,&apos;Segoe UI&apos;,sans-serif" font-size="12" font-weight="600" fill="#0b0b0b" style="font-variant-numeric:tabular-nums">0.99x</text>
+<text x="148" y="244" font-family="system-ui,-apple-system,&apos;Segoe UI&apos;,sans-serif" font-size="12.5" text-anchor="end" fill="#0b0b0b">noop</text>
+<line x1="264.8" y1="240" x2="543.2" y2="240" stroke="#2a78d6" stroke-width="2" stroke-opacity="0.32" stroke-linecap="round"/>
+<line x1="264.8" y1="236" x2="264.8" y2="244" stroke="#2a78d6" stroke-width="2" stroke-opacity="0.32" stroke-linecap="round"/>
+<line x1="543.2" y1="236" x2="543.2" y2="244" stroke="#2a78d6" stroke-width="2" stroke-opacity="0.32" stroke-linecap="round"/>
+<circle cx="404.0" cy="240" r="5.5" fill="#2a78d6" stroke="#fcfcfb" stroke-width="2"/>
+<text x="762" y="244" text-anchor="end" font-family="system-ui,-apple-system,&apos;Segoe UI&apos;,sans-serif" font-size="12" font-weight="600" fill="#0b0b0b" style="font-variant-numeric:tabular-nums">0.95x</text>
+<text x="148" y="278" font-family="system-ui,-apple-system,&apos;Segoe UI&apos;,sans-serif" font-size="12.5" text-anchor="end" fill="#0b0b0b">cpu</text>
+<line x1="241.6" y1="274" x2="670.8" y2="274" stroke="#2a78d6" stroke-width="2" stroke-opacity="0.32" stroke-linecap="round"/>
+<line x1="241.6" y1="270" x2="241.6" y2="278" stroke="#2a78d6" stroke-width="2" stroke-opacity="0.32" stroke-linecap="round"/>
+<line x1="670.8" y1="270" x2="670.8" y2="278" stroke="#2a78d6" stroke-width="2" stroke-opacity="0.32" stroke-linecap="round"/>
+<circle cx="444.6" cy="274" r="5.5" fill="#2a78d6" stroke="#fcfcfb" stroke-width="2"/>
+<text x="762" y="278" text-anchor="end" font-family="system-ui,-apple-system,&apos;Segoe UI&apos;,sans-serif" font-size="12" font-weight="600" fill="#0b0b0b" style="font-variant-numeric:tabular-nums">1.02x</text>
+<text x="148" y="312" font-family="system-ui,-apple-system,&apos;Segoe UI&apos;,sans-serif" font-size="12.5" text-anchor="end" fill="#0b0b0b">io</text>
+<line x1="201.0" y1="308" x2="583.8" y2="308" stroke="#2a78d6" stroke-width="2" stroke-opacity="0.32" stroke-linecap="round"/>
+<line x1="201.0" y1="304" x2="201.0" y2="312" stroke="#2a78d6" stroke-width="2" stroke-opacity="0.32" stroke-linecap="round"/>
+<line x1="583.8" y1="304" x2="583.8" y2="312" stroke="#2a78d6" stroke-width="2" stroke-opacity="0.32" stroke-linecap="round"/>
+<circle cx="415.6" cy="308" r="5.5" fill="#2a78d6" stroke="#fcfcfb" stroke-width="2"/>
+<text x="762" y="312" text-anchor="end" font-family="system-ui,-apple-system,&apos;Segoe UI&apos;,sans-serif" font-size="12" font-weight="600" fill="#0b0b0b" style="font-variant-numeric:tabular-nums">0.97x</text>
+<line x1="172" y1="352" x2="694" y2="352" stroke="#c3c2b7" stroke-width="1"/>
+<text x="201.0" y="368" font-family="system-ui,-apple-system,&apos;Segoe UI&apos;,sans-serif" font-size="11" text-anchor="middle" fill="#898781" style="font-variant-numeric:tabular-nums">0.6x</text>
+<text x="317.0" y="368" font-family="system-ui,-apple-system,&apos;Segoe UI&apos;,sans-serif" font-size="11" text-anchor="middle" fill="#898781" style="font-variant-numeric:tabular-nums">0.8x</text>
+<text x="433.0" y="368" font-family="system-ui,-apple-system,&apos;Segoe UI&apos;,sans-serif" font-size="11" text-anchor="middle" fill="#898781" style="font-variant-numeric:tabular-nums">1.0x</text>
+<text x="549.0" y="368" font-family="system-ui,-apple-system,&apos;Segoe UI&apos;,sans-serif" font-size="11" text-anchor="middle" fill="#898781" style="font-variant-numeric:tabular-nums">1.2x</text>
+<text x="665.0" y="368" font-family="system-ui,-apple-system,&apos;Segoe UI&apos;,sans-serif" font-size="11" text-anchor="middle" fill="#898781" style="font-variant-numeric:tabular-nums">1.4x</text>
+</svg>

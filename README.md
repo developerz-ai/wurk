@@ -48,18 +48,44 @@ gem "wurk"
 
 ## Feature matrix
 
-Everything below is in the one free gem. The "Sidekiq tier" column maps each area onto Sidekiq's own lineup, so you can see at a glance what a migration covers.
+Every capability Sidekiq splits across three tiers is in the one free gem. Columns are Sidekiq's own lineup, so you can see exactly what a migration covers.
 
-| Area | What you get | Sidekiq tier |
-|---|---|---|
-| **Runtime** | Fork-based real parallelism, reliable `BLMOVE` fetch, PID supervision, rolling restarts, graceful drain, scheduled/retry pollers | OSS + Pro |
-| **Batches** | `Sidekiq::Batch` with `on(:success/:complete/:death)` callbacks, nested batches, progress | Pro |
-| **Limiters** | Concurrent, bucket, window, leaky, and points rate limiters via `Sidekiq::Limiter` | Enterprise |
-| **Periodic** | Cron/periodic jobs, leader-elected so each tick fires exactly once across the cluster | Enterprise |
-| **Encryption** | Transparent AES-256-GCM job-argument encryption with zero-downtime key rotation | Enterprise |
-| **Dashboard** | Mountable Rails engine, precompiled SolidJS SPA (no Node needed), live SSE, charts, host-app auth hook | OSS + Pro/Ent |
+| Capability | OSS | Pro | Ent | **Wurk** |
+|---|:---:|:---:|:---:|:---:|
+| Threaded workers, middleware, retries with backoff, dead set | ✅ | ✅ | ✅ | **✅** |
+| Scheduled jobs (`perform_in` / `perform_at`), Active Job adapter | ✅ | ✅ | ✅ | **✅** |
+| Web dashboard, Data API, testing modes | ✅ | ✅ | ✅ | **✅** |
+| Reliable fetch — atomic `BLMOVE`, survives `SIGKILL` | — | ✅ | ✅ | **✅** |
+| Batches: `on(:success/:complete/:death)`, nesting, progress | — | ✅ | ✅ | **✅** |
+| Reliable scheduler · reliable client (Redis-outage buffering) | — | ✅ | ✅ | **✅** |
+| Queue pause/resume · job expiration (`expires_in`) | — | ✅ | ✅ | **✅** |
+| StatsD / DogStatsD metrics export | — | ✅ | ✅ | **✅** |
+| Rate limiting — concurrent, bucket, window, leaky, points | — | — | ✅ | **✅** |
+| Periodic (cron) jobs, leader-elected so each tick fires once | — | — | ✅ | **✅** |
+| Unique jobs, with custom lock context | — | — | ✅ | **✅** |
+| Encryption — AES-256-GCM args, zero-downtime key rotation | — | — | ✅ | **✅** |
+| Historical metrics retained in Redis | — | — | ✅ | **✅** |
+| Multi-process fork parallelism (`swarm`) + rolling restarts | — | — | ✅ | **✅** |
+| **Licence** | LGPL-3.0 | commercial | commercial | **MIT** |
 
-Plus the [Wurk extras](#wurk-extras) below: a worker topology DSL, a Kubernetes liveness/readiness listener, OpenTelemetry tracing, job status/progress/results, an HTTP producer+observe API, per-job timeouts/deadlines, debounce/throttle/collapse, global per-queue concurrency caps, and DAG flows.
+### Beyond Sidekiq
+
+Same table, other direction — these have no Sidekiq equivalent at any tier. All opt-in, and free on the job path until you turn them on.
+
+| Capability | OSS | Pro | Ent | **Wurk** |
+|---|:---:|:---:|:---:|:---:|
+| [Kubernetes `/live` + `/ready` probe listener](#kubernetes-metrics--tracing) | — | — | — | **✅** |
+| [OpenTelemetry tracing](docs/telemetry.md) — W3C context, client → server | — | — | — | **✅** |
+| [HTTP producer + observe API](docs/api-http.md) — enqueue/inspect over JSON | — | — | — | **✅** |
+| [Job status, progress & results](docs/job-status.md) | — | — | — | **✅** |
+| [Flows — DAG on batches](docs/flows.md) with piped results | — | — | — | **✅** |
+| [Global per-queue concurrency caps](docs/rate-limiting.md) (cluster-wide) | — | — | — | **✅** |
+| [Debounce, throttle-to-slot & collapse](docs/unique-jobs.md) | — | — | — | **✅** |
+| [Per-job timeouts & deadlines](docs/retries.md) | — | — | — | **✅** |
+| Worker topology DSL — fleet roles in code, not `-q` flags | — | — | — | **✅** |
+| Dashboard theme, locale & 400-zone timezone picker | — | — | — | **✅** |
+
+Details, and what you give up if you migrate back, in [Wurk extras](#wurk-extras).
 
 ## Wurk extras
 
@@ -75,10 +101,30 @@ Sidekiq has no equivalent for any of these — they aren't parity, they're new s
 | **[Per-job timeouts & deadlines](docs/retries.md)** | `timeout:` bounds one attempt, `deadline:` bounds the whole job from enqueue, enforced by a lightweight per-capsule watchdog thread (no thread-per-job) | Runaway/stuck jobs run unbounded except for `shutdown_timeout` |
 | **[Global per-queue concurrency caps](docs/rate-limiting.md)** | `config.global_concurrency = { critical: 20 }` caps in-flight jobs for a queue across the whole cluster, folded into the fetch pipeline | The cluster-wide cap; only per-key `Limiter`s remain |
 | **Worker topology DSL** | Declare which queues/classes a given fleet role runs, in code instead of ad hoc `-q` flags | The declarative topology; fall back to CLI queue flags |
-| **[Kubernetes probes](#kubernetes-probes)** | `config.health_check` opens a thin `/live`/`/ready` HTTP listener, self-electing across a swarm's children | The built-in probe listener; roll your own liveness check |
+| **[Kubernetes probes](#kubernetes-metrics--tracing)** | `config.health_check` opens a thin `/live`/`/ready` HTTP listener, self-electing across a swarm's children | The built-in probe listener; roll your own liveness check |
 | **Dashboard theme, locale & timezone** | Light/dark/system theme, per-visitor locale override, and a 400-zone timezone picker for every timestamp in the SPA | Nothing server-side — this is dashboard-only |
 
 AI dashboard panes — anomaly detection, natural-language queries, error triage, and capacity forecasting — are **planned, not shipped**: they're [roadmap M5](docs/idea/13-roadmap.md#m5--ai-dashboard), after the M4.5 extras above.
+
+## Benchmarks
+
+**Wurk is not faster than stock Sidekiq today.** Here is where it actually stands, measured rather than claimed — wurk 1.5.0 vs sidekiq 8.1.6, ruby 3.4.7, local Redis 7.4.10, 5000 jobs/run, 12 runs per topology, paired per-run ratios.
+
+<picture>
+  <source media="(prefers-color-scheme: dark)" srcset="docs/assets/bench-throughput-dark.svg">
+  <img alt="Throughput relative to stock Sidekiq. Median of 12 paired runs with min–max range. 1 process × 5 threads: noop 0.87×, cpu 0.99×, io 0.99×. 4 processes × 5 threads: noop 0.95×, cpu 1.02×, io 0.97×." src="docs/assets/bench-throughput-light.svg" width="100%">
+</picture>
+
+Parity on `cpu` and `io`; still behind on `noop`, which is pure framework overhead. The spread is wide because the host carried background load — the paired-ratio median is the number to trust, not any single run.
+
+<picture>
+  <source media="(prefers-color-scheme: dark)" srcset="docs/assets/bench-boot-dark.svg">
+  <img alt="Boot to first job, median seconds. 1p × 5t: Sidekiq 0.56s, Wurk 0.72s. 4p × 5t: Sidekiq 0.60s, Wurk 0.78s." src="docs/assets/bench-boot-light.svg" width="100%">
+</picture>
+
+Forking is not what closes the throughput gap — a stock Sidekiq user reaches multi-core by running N processes, which is the second topology above. The swarm buys copy-on-write memory and one supervisor, not raw speed.
+
+Method, per-invocation records, workload definitions, and the separate `rake bench` regression gate (wurk vs its own past self, which says nothing about Sidekiq): **[docs/benchmarks.md](docs/benchmarks.md)**. Reproduce with `bin/rake bench:vs_sidekiq`.
 
 ## Documentation
 
@@ -190,9 +236,11 @@ end
 
 Keys rotate without downtime — keep every still-in-flight version resolvable so old jobs decrypt, then bump `active_version`. A job that can't be decrypted (key rotated away, corrupt ciphertext) goes **straight to the dead set in under a second** rather than crash-looping through 25 retries, with the still-encrypted payload preserved for replay. The dashboard renders encrypted args as `"<encrypted>"`; cleartext is never written to Redis.
 
-## Kubernetes probes
+## Kubernetes, metrics & tracing
 
-Opt in to a thin HTTP listener for liveness/readiness:
+Wurk is built to run as a fleet: one supervisor per pod forking N children across the cores you gave it, drained gracefully on `SIGTERM`, replaced one slot at a time on `SIGUSR1`, and answerable to your existing monitoring rather than a bespoke one.
+
+**Probes.** Opt in to a thin HTTP listener for liveness/readiness:
 
 ```ruby
 Wurk.configure_server do |config|
@@ -205,7 +253,21 @@ end
 | `/live` | 200 while the Launcher is running; 503 once `stop`/`quiet` is called. |
 | `/ready` | 200 only when Redis is reachable **and** the heartbeat fired within `ready_window` (default 30s); 503 otherwise. |
 
-Knobs: `health_check(port:, bind: "0.0.0.0", ready_window: 30)`. In swarm mode one child owns the port; the others poll every 5s and take it over if the owner dies, so probes survive a child restart.
+Knobs: `health_check(port:, bind: "0.0.0.0", ready_window: 30)`. In swarm mode one child owns the port; the others poll every 5s and take it over if the owner dies, so probes survive a child restart — a pod never fails a probe just because a worker recycled.
+
+**Getting the numbers out.** Point these at whatever you already run:
+
+| Signal | How it leaves the process | Docs |
+|---|---|---|
+| Job metrics (counts, latency, per-class timing) | StatsD / DogStatsD via `config.dogstatsd` — into Datadog directly, or into Grafana through your StatsD exporter | [metrics](docs/metrics.md) |
+| Historical time series | Retained in Redis, queried by the dashboard or `Wurk::History` | [metrics-history](docs/metrics-history.md) |
+| Distributed traces | OpenTelemetry — W3C `traceparent` propagated client → server, one span per attempt | [telemetry](docs/telemetry.md) |
+| Queue/job/swarm state for external scrapers and autoscalers | Bearer-token `/v1` JSON API, mountable standalone or via `wurk api` | [api-http](docs/api-http.md) |
+| Errors | Built-in Sentry reporting, terminal failures only, no job args | [sentry](docs/sentry.md) |
+
+There is no native Prometheus `/metrics` endpoint — the StatsD export or the `/v1` API is the current path into a Prometheus/Grafana stack.
+
+**Backpressure at fleet scale.** `config.global_concurrency = { critical: 20 }` caps in-flight jobs for a queue across every pod, folded into the fetch pipeline rather than bolted on as a middleware sleep — see [rate limiting](docs/rate-limiting.md).
 
 ## Why Wurk exists
 
@@ -214,7 +276,7 @@ Infrastructure this basic should be free software. A Rails app shouldn't need a 
 What has made that hard is maintenance: someone has to be paid to do it. Sidekiq funds a decade of *human* maintenance through its paid tiers, which is an honest trade. Wurk makes a different one — it is maintained **AI-first**: implementation, parity suite, docs, and benchmarks are written and kept current by AI agents under human review. A fix, a doc update, or a version bump is no longer somebody's week, which is what makes it practical to:
 
 - ship the entire Pro + Enterprise surface with no tier, no flag gate, and no license check;
-- keep parity honest mechanically rather than by hand — Sidekiq's own tests run as an oracle suite, and third-party gems (sidekiq-cron, sidekiq-unique-jobs, sidekiq-scheduler, sidekiq-status, sidekiq-failures, sidekiq-throttled) run their upstream suites against Wurk on every push;
+- keep parity honest mechanically rather than by hand — an independently written parity oracle suite, pinned to a documented Sidekiq revision, plus third-party gems (sidekiq-cron, sidekiq-unique-jobs, sidekiq-scheduler, sidekiq-status, sidekiq-failures, sidekiq-throttled) running their own upstream suites against Wurk on every push;
 - keep adding surface Sidekiq doesn't have — the [Wurk extras](#wurk-extras) above landed as one release;
 - hold ourselves to published numbers instead of adjectives — the suite runs against stock Sidekiq every release and ships the results [as measured](docs/benchmarks.md), including the unflattering ones.
 
