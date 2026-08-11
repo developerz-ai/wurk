@@ -29,6 +29,18 @@ if ENV["WURK_DEMO"] == "1"
     Wurk.configuration.server_middleware.add(Wurk::Metrics::History)
   end
 
+  # DemoProducer registers cron jobs onto `high` (ThrottledApiJob) and `low`
+  # (DailyReportJob), but the default capsule fetches `default` only — so those
+  # two queues were produced into and never consumed. The hourly demo:reset
+  # FLUSHDB hid it; when that CronJob started failing, `low` reached 598 jobs at
+  # ~10h latency on the public dashboard. Set before the swarm is built: the
+  # worker's `rails runner` reads Wurk.configuration.topology, which derives
+  # from this capsule's queue_specs, and initializers run first.
+  #
+  # Order is strict priority, and it is also the thing the demo exists to show:
+  # `high` drains before `default`, which drains before `low`.
+  Wurk.configuration.queues = %w[high default low]
+
   # Web side (non-forking process): run the traffic producer in a background
   # thread. Gated off the swarm so its Redis connection can't be inherited
   # across a fork (CLAUDE.md boot order). The worker process drains the traffic.
