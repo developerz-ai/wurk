@@ -33,8 +33,9 @@ internet ──►│                                                     ├─
 ## Deploy: who can trigger it
 
 `.github/workflows/deploy-demo.yml` **builds and pushes the image only** — it
-holds no cluster credentials. The in-cluster **ArgoCD Image Updater** watches the
-DOCR `:latest` digest and syncs the deployment automatically; the pushed digest
+holds no cluster credentials. The in-cluster **ArgoCD Image Updater** selects the
+newest DOCR tag matching `^sha-[0-9a-f]{7}$` and syncs the deployment
+automatically; the pushed digest
 *is* the deploy trigger. It runs two ways — `workflow_dispatch` by hand, or
 called by `release.yml` after a `v*` tag publishes — and is gated three ways so
 only the org can ship an image:
@@ -68,8 +69,8 @@ The image is pushed to **two** registries from one build:
 
 | Registry | Tag | Role |
 |---|---|---|
-| `registry.digitalocean.com/developerz-ai/wurk-demo` | `latest` + `<sha>` | **Deploy-critical.** Image Updater watches this digest. |
-| `ghcr.io/developerz-ai/wurk-demo` | `latest` + `<sha>` | Mirror, so the manifests' literal `ghcr.io` image ref still resolves. |
+| `registry.digitalocean.com/developerz-ai/wurk-demo` | `sha-<7>` + `latest` + `<sha>` | **Deploy-critical.** Image Updater selects on `sha-<7>`; the other two are for humans and rollback. |
+| `ghcr.io/developerz-ai/wurk-demo` | `sha-<7>` + `latest` + `<sha>` | Mirror, so the manifests' literal `ghcr.io` image ref still resolves. |
 
 Infra moved the demo to DOCR on 2026-07-12 (infra #803) after a dead GHCR org
 token broke fresh pulls; `stacks/apps/wurk-demo/manifests/kustomization.yml`
@@ -89,7 +90,7 @@ also the rebuild recipe. Items marked **(app)** live in this repo.
 - [x] **`SECRET_KEY_BASE`** — a strong random value injected at runtime (k8s secret) so the Rails app boots in production. Not baked into the image.
 - [x] **Registry pull access** — sealed `docr-pull` / `ghcr-pull` imagePullSecrets in ns `wurk-demo`.
 - [x] **ArgoCD Application `wurk-demo`** in `../infrastructure` — Deployments for `web` (cmd `web`) and `worker` (cmd `worker`), a Service, and the Redis dependency.
-- [x] **ArgoCD Image Updater** watching `registry.digitalocean.com/developerz-ai/wurk-demo:latest` (digest strategy) so a pushed image auto-syncs. CI holds no cluster credentials, so there are no `ARGOCD_*` secrets.
+- [x] **ArgoCD Image Updater** watching `registry.digitalocean.com/developerz-ai/wurk-demo` with `update-strategy: newest-build` and `allow-tags: regexp:^sha-[0-9a-f]{7}$` so a pushed image auto-syncs. The `sha-<7>` tag format is the contract — if CI stops emitting it, Image Updater silently has no candidate and the demo freezes on its current digest (this happened, and is what #418 fixes). CI holds no cluster credentials, so there are no `ARGOCD_*` secrets.
 - [x] **DNS** — `wurk.demo.developerz.ai` → the cluster ingress / Traefik.
 - [x] **Ingress (Traefik) + TLS** — route the host to the `web` Service, Let's Encrypt cert.
 - [x] **Public rate-limit** — a Traefik rate-limit middleware on the ingress to discourage abuse.
