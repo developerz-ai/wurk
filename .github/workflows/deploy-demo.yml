@@ -13,7 +13,9 @@ name: deploy-demo
 #   1. workflow_dispatch on a PUBLIC repo can only be triggered by users with
 #      *write* access (org members) — external forks/users cannot.
 #   2. the `authorize` job rejects anyone not in the DEMO_DEPLOYERS repo
-#      variable (comma-separated GitHub usernames).
+#      variable (comma-separated GitHub usernames). This guards the
+#      workflow_dispatch door only — release.yml passes `trusted: true` and is
+#      exempt, because it has already published this commit's gem. See the job.
 #   3. the `build` job targets the protected `demo` environment — add Required
 #      Reviewers there so the build (which produces the deploy-triggering image
 #      digest) waits for a named approver. The gate sits on `build` precisely
@@ -27,10 +29,10 @@ on:
         description: Git ref (branch / tag / SHA) to build and push (Image Updater deploys it)
         required: false
         default: main
-  # release.yml calls this after a successful `v*` publish so a new gem version
-  # reaches the demo without a second manual step. Both gates still apply: the
-  # caller's actor must be in DEMO_DEPLOYERS, and `build` still enters the
-  # protected `demo` environment.
+  # release.yml calls this after a successful publish so a new gem version
+  # reaches the demo without a second manual step. `build` still enters the
+  # protected `demo` environment; the actor allowlist is waived via `trusted`
+  # (see the authorize job for why).
   workflow_call:
     inputs:
       ref:
@@ -38,6 +40,13 @@ on:
         required: false
         default: main
         type: string
+      trusted:
+        description: >-
+          Set by release.yml only. Waives the DEMO_DEPLOYERS actor check —
+          the caller has already published this commit's gem to RubyGems.
+        required: false
+        default: false
+        type: boolean
 
 # Hardcoded group: under workflow_call `github.workflow` is the CALLER's name,
 # which put this job in the caller's own group — GitHub detects that as a
@@ -65,11 +74,27 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 10
     steps:
+      # The allowlist guards the workflow_dispatch door: it stops someone with
+      # write access from hand-deploying an arbitrary ref to the public demo.
+      #
+      # It is NOT applicable on the release path, and enforcing it there is
+      # actively harmful. By the time release.yml calls us, the gem built from
+      # this exact commit is already published to RubyGems — an irreversible act
+      # strictly more consequential than putting the same commit on the demo. So
+      # the check protects nothing here, while failing it strands the release at
+      # its worst possible point: gem live, demo stale, run red. That is exactly
+      # what would happen once the developerz.ai bot merges the release PRs,
+      # since `github.actor` is then the bot rather than a listed human.
       - name: Verify actor is an approved deployer
         env:
           ALLOW: ${{ vars.DEMO_DEPLOYERS }}
           ACTOR: ${{ github.actor }}
+          TRUSTED: ${{ inputs.trusted }}
         run: |
+          if [ "$TRUSTED" = "true" ]; then
+            echo "Called by the release lane, which already published this commit's gem — actor allowlist does not apply."
+            exit 0
+          fi
           if [ -z "$ALLOW" ]; then
             echo "::error::DEMO_DEPLOYERS repo variable is not set — refusing to deploy."
             exit 1
@@ -129,7 +154,10 @@ jobs:
       - uses: docker/login-action@dbcb813823bdd20940b903addbd779551569679f # v4.6.0
         with:
           registry: ghcr.io
-          username: ${{ github.actor }}
+          # Not github.actor: the token is what authenticates, and pinning the
+          # username to the owner keeps the login independent of who triggered
+          # the run (a bot merging a release PR is an actor like any other).
+          username: ${{ github.repository_owner }}
           password: ${{ secrets.GITHUB_TOKEN }}
       - uses: docker/build-push-action@53b7df96c91f9c12dcc8a07bcb9ccacbed38856a # v7.3.0
         with:

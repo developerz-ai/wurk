@@ -58,6 +58,13 @@ end-to-end, with no human-held secret and no tag to push.
 Keep the version bump in its own PR, or at least its own commit — anything that
 touches `lib/wurk/version.rb` on `main` wakes the release lane.
 
+**Who merges doesn't matter.** The lane is triggered by the push, and every gate
+downstream is keyed to the repository and the workflow rather than to the actor:
+RubyGems trusted publishing authenticates the *workflow's* OIDC identity, the
+GitHub Release uses `github.token`, and the demo deploy is waived past its actor
+allowlist by `trusted: true`. So a release merged by the developerz.ai bot
+publishes and deploys exactly as one merged by a human.
+
 ## What the release workflow does
 
 | # | Job / step | Detail |
@@ -69,7 +76,7 @@ touches `lib/wurk/version.rb` on `main` wakes the release lane.
 | 5 | **build & verify gem** | `rake release:package` packages into `pkg/` and asserts the precompiled dashboard is *inside* the `.gem`. |
 | 6 | **publish** | `rubygems/configure-rubygems-credentials` exchanges the OIDC token, then `gem push`, then `rubygems-await` blocks on propagation. |
 | 7 | **tag & GitHub Release** | `gh release create <tag> --target <sha>` creates the tag *and* the Release in one call, with the CHANGELOG section as notes and the `.gem` attached (marked pre-release automatically for `Gem::Version#prerelease?`). **Last, deliberately** — see [the one rule](#the-one-rule-the-tag-is-an-output-not-an-input). |
-| 8 | **`demo`** | Ships the released tag to `wurk.demo.developerz.ai`, gated on `DEMO_DEPLOYERS` + the protected `demo` environment. An unapproved release still publishes the gem; the demo just stays on the previous image. |
+| 8 | **`demo`** | Ships the released tag to `wurk.demo.developerz.ai` via the protected `demo` environment. It passes `trusted: true`, which waives deploy-demo's `DEMO_DEPLOYERS` actor allowlist — that allowlist guards the hand-dispatched door, and has nothing to add once this workflow has already published the commit's gem. Waiving it is also what lets a release merged by the developerz.ai bot deploy the demo, rather than stranding it after the irreversible publish. |
 
 `workflow_dispatch` runs the same lane by hand — use it to retry a release whose
 run failed after the bump was already merged.
