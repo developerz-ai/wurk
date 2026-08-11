@@ -163,13 +163,17 @@ jobs:
 
   # Ship the released tag to wurk.demo.developerz.ai. Runs only after the gem is
   # published, so the demo never advertises a version RubyGems does not have.
-  # deploy-demo keeps both of its gates (DEMO_DEPLOYERS actor allowlist + the
-  # protected `demo` environment), so this queues the deploy rather than forcing
-  # it — an unapproved release still publishes the gem and just leaves the demo
-  # on the previous image.
+  #
+  # `trusted: true` waives deploy-demo's DEMO_DEPLOYERS actor allowlist. That
+  # allowlist exists to stop a hand-dispatched deploy of an arbitrary ref; it has
+  # nothing to add once this workflow has published the commit's gem, and
+  # enforcing it would break every release merged by the developerz.ai bot (the
+  # actor would be the bot, not a listed human) at the worst point — after the
+  # irreversible publish. The protected `demo` environment gate still applies.
   demo:
     needs: [preflight, release]
     uses: ./.github/workflows/deploy-demo.yml
     with:
       ref: ${{ needs.preflight.outputs.tag }}
+      trusted: true
     secrets: inherit

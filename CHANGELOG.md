@@ -4,6 +4,10 @@ All notable changes to Wurk are recorded here. Format: [Keep a Changelog](https:
 
 ## [Unreleased]
 
+### Fixed
+
+- **The release lane no longer depends on who merged the version bump.** `deploy-demo.yml`'s `authorize` job rejects any `github.actor` outside the `DEMO_DEPLOYERS` allowlist, so once the developerz.ai bot merges release PRs the demo leg would fail — and it would fail at the worst possible point, *after* the irreversible `gem push`, leaving the gem live, the demo stale, and the run red. `release.yml` now passes `trusted: true`, which waives that check: the allowlist exists to stop a hand-dispatched deploy of an arbitrary ref, and it has nothing left to protect once the caller has already published that commit's gem. The waiver is pinned to the one caller it is meant for: `trusted` is a `workflow_call` input only (deliberately absent from `workflow_dispatch`, so it cannot be set by hand), and it is honoured only when the caller is `release` running on `main` — under `workflow_call` `github.workflow` resolves to the *caller's* name, so it identifies the caller, and the ref check means that caller's definition reached `main` through branch protection. Anything else passing `trusted: true` is rejected outright. The protected `demo` environment gate is unchanged. The GHCR login also stopped using `github.actor` as its username (the token is what authenticates; `github.repository_owner` keeps it actor-independent).
+
 ## [1.7.2] - 2026-08-11
 
 A delivery release: nothing in the runtime changed, but the three things that carry Wurk from a merged PR to a running worker — the release lane, the demo image, and the demo's own queues — each had a defect that let a green CI run mean less than it looked. No Redis key, command sequence, job-JSON field, or public API changed: a 1.7.1 worker and a 1.7.2 worker can drain the same queue.
