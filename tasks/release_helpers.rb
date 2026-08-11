@@ -28,10 +28,20 @@ module ReleaseHelpers
           'run `bundle exec rake frontend:build` first)'
   end
 
-  # On a CI tag push GITHUB_REF_NAME is the tag. Git tags spell a prerelease with
-  # a hyphen ("v1.0.0-rc1") while RubyGems uses a dot ("1.0.0.rc1"); treat them as
-  # the same. No-op when not building off a v-tag (e.g. a local gate run).
-  def tag_matches_version!(version, tag = ENV.fetch('GITHUB_REF_NAME', ''))
+  # The tag the release lane cuts for a given Wurk::VERSION — the exact inverse
+  # of tag_matches_version!. Git spells a prerelease with a hyphen
+  # ("v1.0.0-rc1"), RubyGems with a dot ("1.0.0.rc1"), so the dot introducing the
+  # prerelease suffix (the first one followed by a letter) becomes a hyphen.
+  # Deriving the tag from the version is what makes the two unable to disagree.
+  def git_tag_for(version)
+    "v#{version.sub(/\.(?=[a-zA-Z])/, '-')}"
+  end
+
+  # The release job derives its tag and passes it here as WURK_RELEASE_TAG; a
+  # local gate run falls back to GITHUB_REF_NAME. Git tags spell a prerelease
+  # with a hyphen ("v1.0.0-rc1") while RubyGems uses a dot ("1.0.0.rc1"); treat
+  # them as the same. No-op when not building off a v-tag.
+  def tag_matches_version!(version, tag = ENV.fetch('WURK_RELEASE_TAG', nil) || ENV.fetch('GITHUB_REF_NAME', ''))
     return unless tag.start_with?('v')
 
     from_tag = tag.delete_prefix('v').tr('-', '.')

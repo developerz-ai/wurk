@@ -93,20 +93,26 @@ release:
   # default described a lane this repo does not run.
   #
   # What actually cuts a release:
-  #   1. an operator tags vX.Y.Z
-  #   2. .github/workflows/release.yml fires on push: tags: ["v*"], cuts the
-  #      GitHub Release and publishes to RubyGems via OIDC trusted publishing
-  #   3. the maintainer agent writes the categorized notes at tag time
-  #      (see v1.2.1, published by developerz-ai[bot])
+  #   1. a version bump to lib/wurk/version.rb lands on main
+  #   2. .github/workflows/release.yml fires on that path, publishes to RubyGems
+  #      via OIDC trusted publishing, and only then cuts the tag + GitHub Release
+  #      from the CHANGELOG section
   #
   # `none` is the only value in the enum (release-please | none) that describes
   # that, and it means "no release MANAGER" — it does not govern the agent's
   # note generation, which the schema does not model at all.
   manager: none
-  # Left at the default. The registry channels (incl. rubygems) are reserved and
-  # REJECTED at validation time, so publishing to RubyGems is declared by
-  # release.yml's OIDC step, not here.
-  channels: [github-release]
+  # EMPTIED 2026-08-11 (wurk#420). `manager: none` did NOT stop the agent from
+  # cutting releases — `channels: [github-release]` did that independently, and
+  # it fired on feature merges with Wurk::VERSION unbumped. Six times (v1.2.1,
+  # v1.5.0, v1.6.0, v1.7.0, v1.8.0, v1.7.1, v1.7.2) that produced a tag and a
+  # GitHub Release marked "Latest" with no gem behind it, while `gem install
+  # wurk` kept serving the previous version — and a red release run each time.
+  # release.yml owns the whole lane end to end (gem first, then tag + Release
+  # from the CHANGELOG), so there is no channel left for the agent to publish on.
+  # The registry channels (incl. rubygems) are reserved and REJECTED at
+  # validation time regardless; RubyGems is declared by release.yml's OIDC step.
+  channels: []
 
 escalate:
   always: [security, license, cla]

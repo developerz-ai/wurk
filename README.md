@@ -280,6 +280,10 @@ What has made that hard is maintenance: someone has to be paid to do it. Sidekiq
 - keep adding surface Sidekiq doesn't have — the [Wurk extras](#wurk-extras) above landed as one release;
 - hold ourselves to published numbers instead of adjectives — the suite runs against stock Sidekiq every release and ships the results [as measured](docs/benchmarks.md), including the unflattering ones.
 
+DHH makes the broader version of this argument in [Let the agents democratize open source](https://world.hey.com/dhh/let-the-agents-democratize-open-source-9fd630a9): open source fought for everyone's right to change the software they run, and refusing agent-written code re-erects the gate it spent decades tearing down — "all programmers are equal, but some programmers are more equal than others." His subject is contributions; ours is maintenance, which is the same economics from the other end. The reason a licence key guards batches and cron is not that the code is precious, it's that somebody had to be paid to keep it working. Drop that cost and the tier stops being necessary.
+
+That cuts both ways, and we'd rather show the scar than the slogan: this repo shipped seven GitHub releases with no gem behind them because its own maintainer agent kept tagging versions that were never bumped. The gate caught it every time and no bad gem ever shipped, but the fix was to stop trusting the agent's good behaviour and make the tag a *derived* artifact instead — the write-up is in [RELEASE.md](https://github.com/developerz-ai/wurk/blob/main/RELEASE.md#if-a-release-fails). Agents lower the cost of maintenance; they don't remove the need to design for them getting it wrong.
+
 Wurk is MIT and stays that way. If what you need is a commercial support contract and a human on the other end of an email, buying that is a perfectly good answer.
 
 ## Migrating from Sidekiq

@@ -8,6 +8,26 @@ require_relative '../../tasks/release_helpers'
 class ReleaseHelpersTest < Wurk::Test::UnitCase
   parallelize_me!
 
+  # --- git_tag_for ------------------------------------------------------
+
+  def test_git_tag_for_plain_version
+    assert_equal 'v1.7.2', ReleaseHelpers.git_tag_for('1.7.2')
+  end
+
+  def test_git_tag_for_prerelease_uses_git_hyphen_form
+    assert_equal 'v1.0.0-rc1', ReleaseHelpers.git_tag_for('1.0.0.rc1')
+    assert_equal 'v2.0.0-beta.3', ReleaseHelpers.git_tag_for('2.0.0.beta.3')
+  end
+
+  # The release lane derives its tag from Wurk::VERSION and then re-asserts it
+  # through the gate, so the two helpers must be exact inverses for every shape
+  # of version we publish — otherwise the gate rejects a tag it just built.
+  def test_git_tag_for_round_trips_through_the_gate
+    %w[1.0.0 1.7.2 10.20.30 1.0.0.rc1 2.0.0.beta.3].each do |version|
+      ReleaseHelpers.tag_matches_version!(version, ReleaseHelpers.git_tag_for(version))
+    end
+  end
+
   # --- tag_matches_version! --------------------------------------------
 
   def test_tag_matches_plain_version
