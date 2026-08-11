@@ -85,15 +85,28 @@ jobs:
       # its worst possible point: gem live, demo stale, run red. That is exactly
       # what would happen once the developerz.ai bot merges the release PRs,
       # since `github.actor` is then the bot rather than a listed human.
+      #
+      # The waiver is pinned to the one caller it is meant for. `trusted` is a
+      # workflow_call input only (never workflow_dispatch), and on top of that we
+      # require the caller to BE release.yml running on main: under workflow_call
+      # `github.workflow` resolves to the CALLER's name — the same quirk that
+      # forced the hardcoded concurrency group above — so it identifies the
+      # caller, and the ref check means that caller's definition is a file that
+      # reached main through branch protection.
       - name: Verify actor is an approved deployer
         env:
           ALLOW: ${{ vars.DEMO_DEPLOYERS }}
           ACTOR: ${{ github.actor }}
           TRUSTED: ${{ inputs.trusted }}
+          CALLER: ${{ github.workflow }}
         run: |
           if [ "$TRUSTED" = "true" ]; then
-            echo "Called by the release lane, which already published this commit's gem — actor allowlist does not apply."
-            exit 0
+            if [ "$CALLER" = "release" ] && [ "$GITHUB_REF" = "refs/heads/main" ]; then
+              echo "Called by the release lane on main, which already published this commit's gem — actor allowlist does not apply."
+              exit 0
+            fi
+            echo "::error::trusted:true is only honoured from the release workflow on main (caller=$CALLER ref=$GITHUB_REF)."
+            exit 1
           fi
           if [ -z "$ALLOW" ]; then
             echo "::error::DEMO_DEPLOYERS repo variable is not set — refusing to deploy."
