@@ -4,9 +4,10 @@ name: deploy-demo
 # release.yml call it after publishing a `v*` tag.
 #
 # DEPLOY MODEL: this workflow only BUILDS + PUSHES the image. Infra deploys it
-# via the in-cluster ArgoCD Image Updater, which watches the DOCR `:latest` tag
-# (digest strategy) and syncs automatically — CI holds NO cluster credentials
-# (infra repo rule). There is no ArgoCD step here, and no ARGOCD_* secrets.
+# via the in-cluster ArgoCD Image Updater, which selects the newest DOCR tag
+# matching `^sha-[0-9a-f]{7}$` (newest-build strategy, infrastructure#232) and
+# syncs automatically — CI holds NO cluster credentials (infra repo rule).
+# There is no ArgoCD step here, and no ARGOCD_* secrets.
 #
 # WHO CAN RUN IT — three layers, only-the-org by construction:
 #   1. workflow_dispatch on a PUBLIC repo can only be triggered by users with
@@ -41,7 +42,7 @@ on:
 # Hardcoded group: under workflow_call `github.workflow` is the CALLER's name,
 # which put this job in the caller's own group — GitHub detects that as a
 # deadlock and cancels the run. A fixed name also serializes every demo deploy,
-# so two builds can't race pushing the `:latest` digest Image Updater watches.
+# so two builds can't race pushing the tags Image Updater selects from.
 concurrency:
   group: deploy-demo
   cancel-in-progress: false
@@ -52,7 +53,7 @@ permissions:
 
 env:
   # DOCR is the deploy-critical registry: infra's Image Updater watches
-  # `registry.digitalocean.com/developerz-ai/wurk-demo:latest` and the demo's
+  # `registry.digitalocean.com/developerz-ai/wurk-demo` and the demo's
   # kustomization rewrites the manifests' ghcr.io ref onto it (infra #803 —
   # moved off GHCR 2026-07-12 when a dead org token broke fresh pulls). GHCR
   # stays a mirror so the manifests' literal image ref keeps resolving.
@@ -102,9 +103,22 @@ jobs:
       # github.sha is the SHA of the ref the WORKFLOW was loaded from (the
       # default branch on a dispatch), not of `inputs.ref` — tagging with it
       # mislabels the image whenever the two differ, e.g. deploying a tag.
+      #
+      # `short` is the deploy-critical one. Infra's Image Updater selects by
+      # `allow-tags: regexp:^sha-[0-9a-f]{7}$` (the fleet convention adopted in
+      # infrastructure#232 — immutable tags, because `latest` moves under you
+      # and a digest can be re-pushed). Nothing here matched that pattern, so
+      # Image Updater had no candidate and the demo sat on an old digest across
+      # several releases. Keep this format in lockstep with
+      # stacks/apps/wurk-demo/application.yml in the infrastructure repo.
       - name: resolve built commit
         id: built
-        run: echo "sha=$(git rev-parse HEAD)" >> "$GITHUB_OUTPUT"
+        run: |
+          sha="$(git rev-parse HEAD)"
+          {
+            echo "sha=$sha"
+            echo "short=sha-$(printf '%.7s' "$sha")"
+          } >> "$GITHUB_OUTPUT"
 
       - uses: docker/setup-buildx-action@bb05f3f5519dd87d3ba754cc423b652a5edd6d2c # v4.2.0
       - uses: docker/login-action@dbcb813823bdd20940b903addbd779551569679f # v4.6.0
@@ -123,8 +137,10 @@ jobs:
           file: Dockerfile
           push: true
           tags: |
+            ${{ env.IMAGE }}:${{ steps.built.outputs.short }}
             ${{ env.IMAGE }}:${{ steps.built.outputs.sha }}
             ${{ env.IMAGE }}:latest
+            ${{ env.MIRROR }}:${{ steps.built.outputs.short }}
             ${{ env.MIRROR }}:${{ steps.built.outputs.sha }}
             ${{ env.MIRROR }}:latest
           cache-from: type=gha
@@ -159,9 +175,10 @@ jobs:
       - name: verify retained images still resolve
         env:
           SHA: ${{ steps.built.outputs.sha }}
+          SHORT: ${{ steps.built.outputs.short }}
         run: |
-          for ref in "${IMAGE}:latest" "${IMAGE}:${SHA}" \
-                     "${MIRROR}:latest" "${MIRROR}:${SHA}"; do
+          for ref in "${IMAGE}:${SHORT}" "${IMAGE}:latest" "${IMAGE}:${SHA}" \
+                     "${MIRROR}:${SHORT}" "${MIRROR}:latest" "${MIRROR}:${SHA}"; do
             echo "==> inspecting $ref"
             docker buildx imagetools inspect "$ref" >/dev/null
           done
