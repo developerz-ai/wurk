@@ -4,6 +4,10 @@ All notable changes to Wurk are recorded here. Format: [Keep a Changelog](https:
 
 ## [Unreleased]
 
+## [1.7.1] - 2026-08-10
+
+A correctness release about what Wurk says about itself. An audit of `lib/` against the Sidekiq revision the parity suite pins measured 0.47% overlapping code (66 matching 6-line windows out of 13,996); two files carried enough of it to be worth re-expressing, and they are now Wurk's own. The docs that described all of this were wrong in both directions — overstating Sidekiq's licence permissiveness while also claiming copying that had not happened — and are corrected. No Redis key, command sequence, job-JSON field, or public API changed: a 1.7.0 worker and a 1.7.1 worker can drain the same queue.
+
 ### Fixed
 
 - **Provenance claims in the docs were wrong, in both directions.** `docs/clean-room.md` stated that the `test/parity/` files were "lifted from Sidekiq's own MIT-licensed test suite". Two errors in one sentence: Sidekiq is **LGPL-3.0** (`sidekiq.gemspec`, `LICENSE.txt`), not MIT, and the parity tests are not copies of upstream test files — they are independently written oracles using Wurk's own helpers and class names. `test/parity/README.md` compounded it by instructing contributors to "copy it verbatim from upstream Sidekiq". Both are corrected: the page is now [`docs/compatibility.md`](docs/compatibility.md), it states Sidekiq's actual licence, and the parity README describes writing oracles from the documented behaviour rather than copying LGPL files into an MIT repository.
@@ -12,6 +16,10 @@ All notable changes to Wurk are recorded here. Format: [Keep a Changelog](https:
 
 ### Changed
 
+- **The README now shows the benchmark numbers instead of linking to them.** Two theme-aware SVGs built from the published measurements: throughput as a dot plot with min–max whiskers against a 1.00× parity line (the spread is the story — a bar chart hides it), and boot-to-first-job as a paired bar. Both lead with "Wurk is not faster than stock Sidekiq today" rather than cropping to the flattering rows. Method and per-invocation records stay in [`docs/benchmarks.md`](docs/benchmarks.md).
+- **The feature matrix is now a coverage table.** OSS / Pro / Ent / **Wurk** columns with checkmarks, mapped tier by tier off `docs/target/sidekiq-{pro,ent}.md`, plus a second table for the surface Sidekiq has no equivalent for at any tier. It replaces a prose "area → tier" table that never actually showed what a migration covers.
+- **The Kubernetes section covers the whole operational surface** — probes, StatsD/DogStatsD export, historical metrics, OpenTelemetry, the `/v1` API, and cluster-wide queue caps — and says plainly that there is **no native Prometheus `/metrics` endpoint**; StatsD or the `/v1` API is the path into a Prometheus/Grafana stack.
+- **The GitHub repository description no longer claims speed.** v1.7.0 removed "meaningfully faster" from every file, but the repo description is set in GitHub's settings rather than in the tree, so no grep or PR review reached it and it kept making the claim publicly. It now reads "fork-based multi-core swarm" — a true differentiator instead of an unsupported one.
 - Comments that described Wurk's code as matching Sidekiq's source "byte-for-byte" now describe the behaviour and the contract that fixes it (`redis_client_adapter.rb`, `iterable_job/active_record_enumerator.rb`, `lua.rb`). Where the interface genuinely leaves no room for a different expression — `Configuration::DEFAULTS` key names, the JSON log field names, `RedisClientAdapter::BaseError`, the `ServerMiddleware` accessors — `docs/compatibility.md` now names those fragments and says why they are fixed, rather than leaving the resemblance unexplained.
 
 ## [1.7.0] - 2026-08-10
@@ -418,7 +426,8 @@ First public (pre-1.0) release. Wurk is a 100% API-compatible drop-in replacemen
 - ActiveJob adapter, `IterableJob`, embedded mode, and a standalone `exe/wurk` runner.
 - Sidekiq client/server middleware contract; third-party ecosystem suites (sidekiq-cron, sidekiq-unique-jobs, sidekiq-scheduler, sidekiq-status, sidekiq-failures, sidekiq-throttled) pass against Wurk.
 
-[Unreleased]: https://github.com/developerz-ai/wurk/compare/v1.7.0...HEAD
+[Unreleased]: https://github.com/developerz-ai/wurk/compare/v1.7.1...HEAD
+[1.7.1]: https://github.com/developerz-ai/wurk/compare/v1.7.0...v1.7.1
 [1.7.0]: https://github.com/developerz-ai/wurk/compare/v1.6.0...v1.7.0
 [1.6.0]: https://github.com/developerz-ai/wurk/compare/v1.5.0...v1.6.0
 [1.5.0]: https://github.com/developerz-ai/wurk/compare/v1.4.0...v1.5.0
