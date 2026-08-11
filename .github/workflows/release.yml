@@ -1,11 +1,28 @@
 name: release
 
+# The trigger is a version bump landing on main — NOT a tag push.
+#
+# This inversion is the fix for a failure that recurred six times (v1.2.1,
+# v1.5.0, v1.6.0, v1.7.0, v1.8.0, v1.7.1, v1.7.2): a bot cut a `vX.Y.Z` tag on a
+# feature merge whose `Wurk::VERSION` was never bumped, this workflow fired, and
+# `release:check` correctly refused to publish — leaving a red release run and a
+# gem-less GitHub Release sitting as "Latest" while `gem install wurk` served the
+# previous version. While a tag was an INPUT, anything able to push a tag could
+# turn the release lane red and lie about the latest version.
+#
+# Now the tag is an OUTPUT: `Wurk::VERSION` is the single source of truth, the
+# tag is derived from it (ReleaseHelpers.git_tag_for), and it is cut only after
+# the gem is live on RubyGems. A stray `v*` tag from any source is inert — it
+# triggers nothing. A failed run leaves no tag behind, so re-running is clean and
+# no tag ever has to be force-moved.
 on:
   push:
-    tags: ["v*"]
+    branches: [main]
+    paths: ["lib/wurk/version.rb"]
+  workflow_dispatch:
 
-# Least privilege: contents:write to cut the GitHub Release; id-token:write for
-# RubyGems trusted publishing (OIDC). No long-lived GEM_HOST_API_KEY anywhere.
+# Least privilege: contents:write to cut the tag + GitHub Release; id-token:write
+# for RubyGems trusted publishing (OIDC). No long-lived GEM_HOST_API_KEY anywhere.
 # packages:write is for the called deploy-demo workflow — a reusable workflow's
 # job permissions are capped by the caller's, so without it the demo's GHCR
 # mirror push is denied.
@@ -15,11 +32,53 @@ permissions:
   packages: write
 
 concurrency:
-  group: ${{ github.workflow }}-${{ github.ref }}
+  group: release
   cancel-in-progress: false
 
 jobs:
+  # Cheap gate that decides whether there is anything to release at all. RubyGems
+  # is the authoritative "already shipped" record — it forbids re-pushing a
+  # version, so its presence is the one idempotency key that cannot drift. This
+  # makes the workflow safe to re-run and makes a no-op edit to version.rb (a
+  # comment, a revert) resolve to "nothing to do" instead of a failure.
+  preflight:
+    runs-on: blacksmith-2vcpu-ubuntu-2404
+    timeout-minutes: 10
+    outputs:
+      version: ${{ steps.resolve.outputs.version }}
+      tag: ${{ steps.resolve.outputs.tag }}
+      proceed: ${{ steps.resolve.outputs.proceed }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: ruby/setup-ruby@95ef2b042f9d7a56d8268cba8559e2842e2ad01b # v1
+        with:
+          ruby-version: "3.4"
+          # No bundle needed: version.rb and release_helpers.rb are dependency-free.
+          bundler-cache: false
+
+      - name: resolve version and tag
+        id: resolve
+        run: |
+          version="$(ruby -Ilib -e 'require "wurk/version"; print Wurk::VERSION')"
+          tag="$(ruby -Itasks -e 'require "release_helpers"; print ReleaseHelpers.git_tag_for(ARGV[0])' "$version")"
+          {
+            echo "version=${version}"
+            echo "tag=${tag}"
+          } >> "$GITHUB_OUTPUT"
+
+          if curl -fsS -o /dev/null "https://rubygems.org/api/v2/rubygems/wurk/versions/${version}.json"; then
+            echo "proceed=false" >> "$GITHUB_OUTPUT"
+            echo "::notice::wurk ${version} is already on RubyGems — nothing to release."
+          else
+            echo "proceed=true" >> "$GITHUB_OUTPUT"
+            echo "::notice::wurk ${version} is not on RubyGems — releasing as ${tag}."
+          fi
+
   release:
+    needs: preflight
+    if: needs.preflight.outputs.proceed == 'true'
     runs-on: blacksmith-4vcpu-ubuntu-2404
     timeout-minutes: 30
     services:
@@ -34,6 +93,9 @@ jobs:
           --health-start-period 1s
     env:
       REDIS_URL: redis://localhost:6379/0
+      VERSION: ${{ needs.preflight.outputs.version }}
+      # Read by ReleaseHelpers.tag_matches_version! inside `rake release:check`.
+      WURK_RELEASE_TAG: ${{ needs.preflight.outputs.tag }}
     steps:
       # Third-party actions pinned to a commit SHA — this job holds id-token and
       # publishes the gem, so a moved tag must not be able to hijack it.
@@ -62,8 +124,8 @@ jobs:
           bundle install
           bin/rails db:prepare
 
-      # Gate: tag ↔ Wurk::VERSION, dashboard bundle + manifest present, CHANGELOG
-      # section exists, clean tree, tests green.
+      # Gate: derived tag ↔ Wurk::VERSION, dashboard bundle + manifest present,
+      # CHANGELOG section exists, clean tree, tests green.
       - name: release gate
         run: bundle exec rake release:check
 
@@ -77,27 +139,27 @@ jobs:
         uses: rubygems/configure-rubygems-credentials@dc5a8d8553e6ee01fc26761a49e99e733d17954a # v2.1.0
 
       - name: gem push
-        run: |
-          version="$(ruby -Ilib -e 'require "wurk/version"; print Wurk::VERSION')"
-          gem push "pkg/wurk-${version}.gem"
+        run: gem push "pkg/wurk-${VERSION}.gem"
 
       - name: await RubyGems propagation
-        run: |
-          version="$(ruby -Ilib -e 'require "wurk/version"; print Wurk::VERSION')"
-          gem exec rubygems-await "pkg/wurk-${version}.gem"
+        run: gem exec rubygems-await "pkg/wurk-${VERSION}.gem"
 
-      # GitHub Release: notes from the CHANGELOG section, the .gem attached.
-      - name: create GitHub Release
+      # Tag and GitHub Release in one step, LAST — `gh release create` creates the
+      # tag at --target. Cutting it only after the gem is live is what guarantees
+      # a tag always has a gem behind it, so "Latest" on GitHub can never
+      # disagree with RubyGems. Notes come from the CHANGELOG section, the .gem
+      # is attached.
+      - name: tag & create GitHub Release
         env:
           GH_TOKEN: ${{ github.token }}
+          TAG: ${{ needs.preflight.outputs.tag }}
         run: |
-          version="$(ruby -Ilib -e 'require "wurk/version"; print Wurk::VERSION')"
-          bin/changelog-section "$version" > "${RUNNER_TEMP}/notes.md"
-          flags=(--title "wurk ${GITHUB_REF_NAME}" --notes-file "${RUNNER_TEMP}/notes.md")
-          if [ "$(ruby -e 'require "rubygems"; print Gem::Version.new(ARGV[0]).prerelease?' "$version")" = "true" ]; then
+          bin/changelog-section "$VERSION" > "${RUNNER_TEMP}/notes.md"
+          flags=(--title "wurk ${TAG}" --notes-file "${RUNNER_TEMP}/notes.md" --target "$GITHUB_SHA")
+          if [ "$(ruby -e 'require "rubygems"; print Gem::Version.new(ARGV[0]).prerelease?' "$VERSION")" = "true" ]; then
             flags+=(--prerelease)
           fi
-          gh release create "${GITHUB_REF_NAME}" "${flags[@]}" "pkg/wurk-${version}.gem"
+          gh release create "$TAG" "${flags[@]}" "pkg/wurk-${VERSION}.gem"
 
   # Ship the released tag to wurk.demo.developerz.ai. Runs only after the gem is
   # published, so the demo never advertises a version RubyGems does not have.
@@ -106,8 +168,8 @@ jobs:
   # it — an unapproved release still publishes the gem and just leaves the demo
   # on the previous image.
   demo:
-    needs: release
+    needs: [preflight, release]
     uses: ./.github/workflows/deploy-demo.yml
     with:
-      ref: ${{ github.ref_name }}
+      ref: ${{ needs.preflight.outputs.tag }}
     secrets: inherit
