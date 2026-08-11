@@ -4,10 +4,21 @@ All notable changes to Wurk are recorded here. Format: [Keep a Changelog](https:
 
 ## [Unreleased]
 
+## [1.7.2] - 2026-08-11
+
+A delivery release: nothing in the runtime changed, but the three things that carry Wurk from a merged PR to a running worker — the release lane, the demo image, and the demo's own queues — each had a defect that let a green CI run mean less than it looked. No Redis key, command sequence, job-JSON field, or public API changed: a 1.7.1 worker and a 1.7.2 worker can drain the same queue.
+
 ### Fixed
 
 - **The release lane no longer takes a tag as input, so a stray tag can't break it.** Seven times in three weeks (v1.2.1, v1.5.0, v1.6.0, v1.7.0, v1.8.0, v1.7.1, v1.7.2) the `developerz-ai[bot]` maintainer agent cut a `vX.Y.Z` tag and GitHub Release on a feature merge whose `Wurk::VERSION` was never bumped. `release:check` refused to publish every time — **no incorrect gem ever shipped** — but the release run went red and a gem-less GitHub Release was left marked `Latest` while `gem install wurk` kept serving the previous version. `release.yml` now triggers on a `lib/wurk/version.rb` bump landing on `main`, derives the tag from `Wurk::VERSION` (`ReleaseHelpers.git_tag_for`, the exact inverse of the gate's `tag_matches_version!`), and cuts the tag *last* — only after RubyGems has accepted the `.gem`. A tag and a version can no longer disagree, every tag has a gem behind it, a failed run leaves no tag to force-move, and a `v*` tag from any other source is inert. A new `preflight` job asks RubyGems whether the version already exists, making the lane re-runnable and turning a no-op edit to `version.rb` into a skip rather than a failure.
 - **`.maintainer.yml` no longer authorizes the agent to publish releases.** `manager: none` was not sufficient on its own — the `release.channels: [github-release]` entry let the agent cut releases independently of the manager setting. It is now `channels: []`. This is belt-and-braces with the workflow change above on purpose: the policy file is honoured by a remote platform (and was once silently discarded for being schema-invalid), while the trigger change holds regardless.
+- **The demo image now emits the tag ArgoCD Image Updater actually selects on.** `wurk.demo.developerz.ai` served 1.3.1 while `main` shipped through 1.7.1, with every `deploy-demo` run green: the workflow pushed only `:latest` and a bare 40-char SHA, while infra's Image Updater selects on `^sha-[0-9a-f]{7}$` (`newest-build`), so no candidate ever matched. `deploy-demo.yml` now emits `sha-<7>`, and tags from `inputs.ref` rather than `github.sha` — the latter is the SHA the *workflow* was loaded from, which mislabels the image whenever a tag is being deployed.
+- **The demo worker fetches the queues its producer writes to.** `DemoProducer` registered cron jobs onto two queues the worker never fetched, so that work accumulated unprocessed.
+
+### Changed
+
+- **`RELEASE.md` is rewritten around the tag-as-output rule** — how the lane works step by step, how to recover a gem-less release, and how to verify a release actually shipped (RubyGems is the authority; a green run is necessary, not sufficient). `CLAUDE.md` records the invariant that a `tags:` trigger must never be re-added.
+- **The README's "Why Wurk exists" cites DHH's [Let the agents democratize open source](https://world.hey.com/dhh/let-the-agents-democratize-open-source-9fd630a9)** — his subject is agent-written contributions, Wurk's is agent-driven maintenance, and it is the same economics from the other end: the reason a licence key guards batches and cron is the cost of keeping them working, not the code itself.
 
 ## [1.7.1] - 2026-08-10
 
