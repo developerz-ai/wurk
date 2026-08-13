@@ -55,6 +55,10 @@ bin/check          # rubocop + full suite + parity  — run this before opening 
 bin/check full     # ...plus the ecosystem suites
 ```
 
+The default `bin/check` is also reachable as `bin/check pr` — the script accepts
+both, since the PR gate is the only one anyone outside of greenfield work actually
+wants. `bin/check fast` and `bin/check full` are the two narrower scopes.
+
 It refuses to start without a local Redis and tells you how to get one. A green
 `bin/check` is the answer CI will give you.
 
