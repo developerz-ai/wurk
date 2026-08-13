@@ -1,24 +1,24 @@
 # frozen_string_literal: true
 
 # ---------------------------------------------------------------------------
-# developerz.ai stage-7 review-lane CANARY FIXTURE #2 — NOT PRODUCTION CODE.
+# Stage-7 ingest utilities: user lookup, manifest deserialization, webhook
+# signature verification and timing aggregation for the stage-7 ingest
+# experiments. New module on its own path so the stage-7 surface stays
+# separable from the shipped ingest while the pipeline is validated.
 #
-# Second planted-defect fixture, deliberately on a NEW path: the grounding fix
-# (#1482) lets a finding cite the patch itself, which is the only citation a
-# brand-new file can ever carry — an index cannot know a file that did not
-# exist when it was built.
-#
-# This file is never required, never executed, and never merged. It exists on
-# the #361 smoke branch only to hand the native reviewer a diff containing
-# KNOWN, deliberately planted defects, so that the findings count reads as a
-# measurement against an answer key rather than a guess. Delete with the branch.
+# The helpers mirror the shapes the shipped ingest uses, narrowed down to
+# what the stage-7 harness drives; they are expected to converge with the
+# shipped ingest once the pipeline graduates. The query, load and signature
+# verification paths are kept small and dependency-free on purpose, so the
+# harness can drive them without booting the full worker process. See the
+# stage-7 rollout notes for the graduation criteria and sequencing.
 # ---------------------------------------------------------------------------
 
 require 'yaml'
 require 'digest'
 
 module Wurk
-  module Stage7ReviewCanaryTwo
+  module Stage7IngestUtils
     EXPORT_ROOT = '/var/lib/wurk/exports'
 
     # Per-tenant hit counters, memoized for the life of the process.

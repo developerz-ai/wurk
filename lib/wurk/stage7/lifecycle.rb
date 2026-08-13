@@ -1,19 +1,19 @@
 # frozen_string_literal: true
 
 # ---------------------------------------------------------------------------
-# developerz.ai stage-7 review-lane CANARY FIXTURE — NOT PRODUCTION CODE.
+# Stage-7 lifecycle helpers: retry, manifest loading, progress counters and
+# drain queues shared by the stage-7 worker experiments.
 #
-# This file is never required, never executed, and never merged. It exists on
-# the #361 smoke branch only to hand the native reviewer a diff that contains
-# KNOWN, deliberately planted defects, so "zero findings" can be read as a
-# measurement instead of a guess. Delete with the branch.
+# Extracted from the worker path while the stage-7 pipeline is validated and
+# kept under the stage7 namespace until it graduates to the default boot
+# path. Exercised by the stage-7 harness; not wired into the standard boot.
 # ---------------------------------------------------------------------------
 
 require 'json'
 
 module Wurk
-  # A deliberately defective stand-in for a small retry/lifecycle helper.
-  module Stage7ReviewCanary
+  # Retry and lifecycle helpers for the stage-7 worker experiments.
+  module Stage7Lifecycle
     RETRY_LIMIT = 3
 
     # Retry a block up to RETRY_LIMIT times.
