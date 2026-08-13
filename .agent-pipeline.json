@@ -1,0 +1,11 @@
+{
+  "repo": "developerz-ai/wurk",
+  "merge": {
+    "reviewGate": "ci-only"
+  },
+  "labels": {
+    "ready": "ready",
+    "afk": "afk",
+    "hitl": "hitl"
+  }
+}
