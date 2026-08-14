@@ -1,6 +1,7 @@
 {
   "repo": "developerz-ai/wurk",
   "merge": {
-    "reviewGate": "ci-only"
+    "reviewGate": "ci-only",
+    "standingAuthorization": true
   }
 }
