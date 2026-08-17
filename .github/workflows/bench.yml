@@ -32,9 +32,12 @@ jobs:
   # Gemfile.lock is deliberately absent from the filter — it is gitignored
   # (.gitignore:5) and can never appear in a diff; `Gemfile` and the gemspec are
   # what actually move dependencies.
+  # Runner selection is a repository variable (see test.yml's `detect` for the
+  # full rationale); `compare` reads its own so the bench box can be sized
+  # independently of the suite box.
   detect:
     name: detect changed paths
-    runs-on: blacksmith-2vcpu-ubuntu-2404
+    runs-on: ${{ github.event.pull_request.head.repo.fork && 'ubuntu-latest' || vars.WURK_CI_RUNNER || 'ubuntu-latest' }}
     timeout-minutes: 5
     outputs:
       bench: ${{ steps.filter.outputs.bench }}
@@ -60,15 +63,16 @@ jobs:
     name: bench vs base
     needs: detect
     if: needs.detect.outputs.bench == 'true'
-    runs-on: blacksmith-8vcpu-ubuntu-2404
-    timeout-minutes: 30
+    runs-on: ${{ github.event.pull_request.head.repo.fork && 'ubuntu-latest' || vars.WURK_BENCH_RUNNER || 'ubuntu-latest' }}
+    timeout-minutes: 45
     permissions:
       contents: read
       pull-requests: write # sticky delta comment
     services:
       redis:
         image: redis:7.4
-        ports: ["6379:6379"]
+        # Container port only — Docker binds a free host port. See test.yml.
+        ports: ["6379"]
         options: >-
           --health-cmd "redis-cli ping"
           --health-interval 2s
@@ -80,13 +84,16 @@ jobs:
       # Pinned so a floating Rails resolve can't perturb the numbers, and so this
       # job reuses the gem cache test.yml's 8.0 legs already populated.
       RAILS_VERSION: "8.1"
-      REDIS_URL: redis://localhost:6379/0
       BENCH_RUNS: 3
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           fetch-depth: 0 # the base run checks out base.sha, which shallow lacks
           persist-credentials: false
+      # STEP, not job-level `env:` — see test.yml. Both sides of the comparison
+      # sample this one runner, so both read the same resolved port.
+      - name: resolve redis port
+        run: echo "REDIS_URL=redis://localhost:${{ job.services.redis.ports['6379'] }}/0" >> "$GITHUB_ENV"
       - uses: ruby/setup-ruby@95ef2b042f9d7a56d8268cba8559e2842e2ad01b # v1
         with:
           ruby-version: "4.0"

@@ -23,9 +23,18 @@ jobs:
   # PULL REQUESTS ONLY. On push-to-main every job runs unconditionally: main is
   # what `release:check` and the tag build trust, so its history stays fully
   # verified regardless of what a given commit touched.
+  # Runner selection is a repository variable rather than a hard-coded label, so
+  # pointing CI at different hardware — or rolling back — is a settings change
+  # with no PR and no merge. Two properties of the expression are load-bearing.
+  # The fork guard comes first: wurk is public, a fork PR runs attacker-authored
+  # code, and GitHub's own guidance is never to let that reach self-hosted
+  # hardware. And an unset variable falls through to hosted compute, so a
+  # cleared or typo'd variable degrades to working CI rather than to a job that
+  # can never be scheduled. On `push` events the fork operand is null (falsy),
+  # which lands on the same fallback.
   detect:
     name: detect changed paths
-    runs-on: blacksmith-2vcpu-ubuntu-2404
+    runs-on: ${{ github.event.pull_request.head.repo.fork && 'ubuntu-latest' || vars.WURK_CI_RUNNER || 'ubuntu-latest' }}
     timeout-minutes: 5
     outputs:
       ruby: ${{ steps.filter.outputs.ruby }}
@@ -78,12 +87,17 @@ jobs:
   test:
     name: test + coverage (latest ruby/rails)
     needs: detect
-    runs-on: blacksmith-4vcpu-ubuntu-2404
-    timeout-minutes: 15
+    runs-on: ${{ github.event.pull_request.head.repo.fork && 'ubuntu-latest' || vars.WURK_CI_RUNNER || 'ubuntu-latest' }}
+    timeout-minutes: 25
     services:
       redis:
         image: redis:7.4
-        ports: ["6379:6379"]
+        # Container port only: Docker binds a free HOST port and the job reads
+        # it back below. A hosted runner owns its VM, so 6379 is always free
+        # there; several self-hosted runners sharing one Docker daemon make the
+        # second concurrent job die on `port is already allocated`, which
+        # surfaces as flaky CI rather than as an obvious misconfiguration.
+        ports: ["6379"]
         options: >-
           --health-cmd "redis-cli ping"
           --health-interval 2s
@@ -94,7 +108,6 @@ jobs:
       BUNDLE_GEMFILE: ${{ github.workspace }}/Gemfile
       RUBY_VERSION: "4.0"
       RAILS_VERSION: "8.1"
-      REDIS_URL: redis://localhost:6379/0
       COVERAGE: "1"
       # Gated per STEP, not per job, so this job always reports a status even on
       # a docs-only PR: a job-level `if:` reports "skipped", and anything that
@@ -105,6 +118,12 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
+      # Must be a STEP: the `job` context is available in
+      # `jobs.<id>.steps.env` but NOT in `jobs.<id>.env`, so the host port
+      # Docker assigned above cannot be read from the job-level `env:` block.
+      - name: resolve redis port
+        if: env.RUN == 'true'
+        run: echo "REDIS_URL=redis://localhost:${{ job.services.redis.ports['6379'] }}/0" >> "$GITHUB_ENV"
       - uses: ruby/setup-ruby@95ef2b042f9d7a56d8268cba8559e2842e2ad01b # v1
         if: env.RUN == 'true'
         with:
@@ -175,12 +194,12 @@ jobs:
     name: parity (oracle)
     needs: detect
     if: github.event_name != 'pull_request' || needs.detect.outputs.ruby == 'true'
-    runs-on: blacksmith-4vcpu-ubuntu-2404
-    timeout-minutes: 10
+    runs-on: ${{ github.event.pull_request.head.repo.fork && 'ubuntu-latest' || vars.WURK_CI_RUNNER || 'ubuntu-latest' }}
+    timeout-minutes: 25
     services:
       redis:
         image: redis:7.4
-        ports: ["6379:6379"]
+        ports: ["6379"]
         options: >-
           --health-cmd "redis-cli ping"
           --health-interval 2s
@@ -190,11 +209,13 @@ jobs:
     env:
       BUNDLE_GEMFILE: ${{ github.workspace }}/Gemfile
       RAILS_VERSION: "8.1"
-      REDIS_URL: redis://localhost:6379/0
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
+      # STEP, not job-level `env:` — see the `test` job above.
+      - name: resolve redis port
+        run: echo "REDIS_URL=redis://localhost:${{ job.services.redis.ports['6379'] }}/0" >> "$GITHUB_ENV"
       - uses: ruby/setup-ruby@95ef2b042f9d7a56d8268cba8559e2842e2ad01b # v1
         with:
           ruby-version: "4.0"
@@ -236,8 +257,8 @@ jobs:
     name: lint (rubocop)
     needs: detect
     if: github.event_name != 'pull_request' || needs.detect.outputs.ruby == 'true'
-    runs-on: blacksmith-2vcpu-ubuntu-2404
-    timeout-minutes: 5
+    runs-on: ${{ github.event.pull_request.head.repo.fork && 'ubuntu-latest' || vars.WURK_CI_RUNNER || 'ubuntu-latest' }}
+    timeout-minutes: 10
     concurrency:
       group: ${{ github.workflow }}-${{ github.ref }}:lint
       cancel-in-progress: true
@@ -274,8 +295,8 @@ jobs:
     name: frontend (vitest)
     needs: detect
     if: github.event_name != 'pull_request' || needs.detect.outputs.frontend == 'true'
-    runs-on: blacksmith-4vcpu-ubuntu-2404
-    timeout-minutes: 10
+    runs-on: ${{ github.event.pull_request.head.repo.fork && 'ubuntu-latest' || vars.WURK_CI_RUNNER || 'ubuntu-latest' }}
+    timeout-minutes: 25
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:

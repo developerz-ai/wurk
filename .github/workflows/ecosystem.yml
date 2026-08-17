@@ -21,9 +21,11 @@ jobs:
   # Gate it — but on pull requests ONLY: push-to-main keeps main verifiable, and
   # the weekly schedule has no base commit to diff against, so filtering there
   # would silently skip the run it exists for.
+  # Runner selection is a repository variable — see test.yml's `detect` for the
+  # full rationale, including why the fork guard comes first.
   detect:
     name: detect changed paths
-    runs-on: blacksmith-2vcpu-ubuntu-2404
+    runs-on: ${{ github.event.pull_request.head.repo.fork && 'ubuntu-latest' || vars.WURK_CI_RUNNER || 'ubuntu-latest' }}
     timeout-minutes: 5
     outputs:
       ruby: ${{ steps.filter.outputs.ruby }}
@@ -50,21 +52,30 @@ jobs:
   ecosystem:
     needs: detect
     if: github.event_name != 'pull_request' || needs.detect.outputs.ruby == 'true'
-    runs-on: blacksmith-4vcpu-ubuntu-2404
+    runs-on: ${{ github.event.pull_request.head.repo.fork && 'ubuntu-latest' || vars.WURK_CI_RUNNER || 'ubuntu-latest' }}
     timeout-minutes: 45
     services:
       redis:
         image: redis:7.4
-        ports: ["6379:6379"]
+        # Container port only — Docker binds a free host port. See test.yml.
+        # This job's concurrency group is per-ref, so a PR run, a push-to-main
+        # run and the weekly schedule can be in flight against one host at once.
+        ports: ["6379"]
         options: >-
           --health-cmd "redis-cli ping"
           --health-interval 5s
-    env:
-      REDIS_URL: redis://localhost:6379/0
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
+      # ECOSYSTEM_REDIS_URL, not REDIS_URL: bin/test-ecosystem:22 resolves
+      # `REDIS_URL="${ECOSYSTEM_REDIS_URL:-...}"` and exports its own value to
+      # every harness, so a REDIS_URL set here would be overwritten and never
+      # reach them. DB index 15 is what that script already uses — this change
+      # is about the port, not the namespace. STEP, not job-level `env:`, since
+      # the `job` context is unavailable there.
+      - name: resolve redis port
+        run: echo "ECOSYSTEM_REDIS_URL=redis://localhost:${{ job.services.redis.ports['6379'] }}/15" >> "$GITHUB_ENV"
       - uses: ruby/setup-ruby@95ef2b042f9d7a56d8268cba8559e2842e2ad01b # v1
         with:
           # NOT the newest Ruby, deliberately. This job's subject is third-party

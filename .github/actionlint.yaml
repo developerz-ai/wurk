@@ -1,12 +1,15 @@
-# Blacksmith runners (CLAUDE.md "CI standard"). actionlint only knows the
-# GitHub-hosted label set, so every `runs-on: blacksmith-*` in .github/workflows
-# is otherwise reported as an unknown label. Declaring them here is the
-# documented escape hatch, not a suppression: a typo'd Blacksmith label is still
-# an error because it is not in this list.
+# No `self-hosted-runner:` block, deliberately — do not repopulate it.
 #
-# Keep in sync with the labels actually used by .github/workflows/*.yml.
-self-hosted-runner:
-  labels:
-    - blacksmith-2vcpu-ubuntu-2404
-    - blacksmith-4vcpu-ubuntu-2404
-    - blacksmith-8vcpu-ubuntu-2404
+# Every `runs-on` that can select non-hosted hardware is now an expression
+# (`${{ ... vars.WURK_CI_RUNNER ... }}`), not a literal label, so no workflow
+# contains a self-hosted label for actionlint to check. Verified with actionlint
+# 1.7.12: a job whose `runs-on` is such an expression produces zero diagnostics,
+# because actionlint cannot evaluate `vars` and skips the `runner-label` check
+# entirely. Declaring labels here would therefore be inert, not protective.
+#
+# What this costs, stated plainly: no static check survives to catch a typo'd
+# runner. The real silent failure is not a typo'd label anyway but a typo'd
+# VARIABLE name — `vars.WURK_CI_RUNER` resolves to empty, falls through to
+# `ubuntu-latest`, and yields green CI indistinguishable from the intended
+# fallback, so the cutover simply never happens and nothing complains. Guard it
+# by grepping the expression sites, not by trusting a green run.
