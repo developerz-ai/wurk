@@ -24,6 +24,9 @@ class CLITest < Wurk::Test::UnitCase
     # Reset it so server-mode can't leak into another test class sharing this
     # worker process (e.g. WurkTopLevelTest#test_server_defaults_false).
     Wurk.server = false
+    # Same for the worker-boot claim: entering server mode from the CLI
+    # takes it, and RailsBoot reads it to decide whether to fork.
+    Wurk.worker_boot_claimed = false
   ensure
     super
   end

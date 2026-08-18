@@ -32,24 +32,27 @@ class RailtieTest < Wurk::Test::EngineCase
   # result would be two independent workers draining one queue — every job, and
   # every cron tick, run twice. The CLI claims the boot before the app loads.
   def test_skip_boot_is_true_once_the_cli_has_claimed_the_worker_boot
-    refute_predicate Wurk, :worker_boot_claimed?, 'precondition: nothing has claimed the boot'
+    Wurk.worker_boot_claimed = false
 
     Wurk.claim_worker_boot!
 
     assert_predicate Wurk::RailsBoot, :skip_boot?, 'the CLI already runs a worker here; the railtie must stand down'
   ensure
-    Wurk.instance_variable_set(:@worker_boot_claimed, false)
+    Wurk.worker_boot_claimed = false
   end
 
   # The claim must NOT live in enter_server_mode: the railtie enters server
   # mode too, and claiming there would make it skip its own boot and leave the
   # app with no workers at all.
   def test_entering_server_mode_does_not_claim_the_worker_boot
+    Wurk.worker_boot_claimed = false
+
     Wurk.enter_server_mode(Wurk::Configuration.new)
 
     refute_predicate Wurk, :worker_boot_claimed?
   ensure
-    Wurk.instance_variable_set(:@worker_boot_claimed, false)
+    Wurk.worker_boot_claimed = false
+    Wurk.server = false
   end
 
   # `rails console` defines ::Rails::Console before initializers run — a console

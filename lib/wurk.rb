@@ -245,6 +245,11 @@ module Wurk
       @worker_boot_claimed = true
     end
 
+    # Test seam, matching `attr_writer :server` above: the claim is
+    # process-global, so a test that runs the CLI has to hand it back or it
+    # leaks into whatever test class shares the worker process next.
+    attr_writer :worker_boot_claimed
+
     # Wurk ships Pro+Ent features in the free gem; these flags exist solely
     # for third-party gems that branch on Sidekiq.pro? / Sidekiq.ent?.
     def pro?
