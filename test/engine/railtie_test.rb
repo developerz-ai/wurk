@@ -27,6 +27,31 @@ class RailtieTest < Wurk::Test::EngineCase
     original.nil? ? ENV.delete('WURK_DISABLED') : (ENV['WURK_DISABLED'] = original)
   end
 
+  # The wurk CLI boots the host app itself and then runs a Launcher in this
+  # same process. If the railtie also forked a swarm from after_initialize the
+  # result would be two independent workers draining one queue — every job, and
+  # every cron tick, run twice. The CLI claims the boot before the app loads.
+  def test_skip_boot_is_true_once_the_cli_has_claimed_the_worker_boot
+    refute_predicate Wurk, :worker_boot_claimed?, 'precondition: nothing has claimed the boot'
+
+    Wurk.claim_worker_boot!
+
+    assert_predicate Wurk::RailsBoot, :skip_boot?, 'the CLI already runs a worker here; the railtie must stand down'
+  ensure
+    Wurk.instance_variable_set(:@worker_boot_claimed, false)
+  end
+
+  # The claim must NOT live in enter_server_mode: the railtie enters server
+  # mode too, and claiming there would make it skip its own boot and leave the
+  # app with no workers at all.
+  def test_entering_server_mode_does_not_claim_the_worker_boot
+    Wurk.enter_server_mode(Wurk::Configuration.new)
+
+    refute_predicate Wurk, :worker_boot_claimed?
+  ensure
+    Wurk.instance_variable_set(:@worker_boot_claimed, false)
+  end
+
   # `rails console` defines ::Rails::Console before initializers run — a console
   # session is not a server and must never fork the swarm.
   def test_skip_boot_is_true_in_rails_console

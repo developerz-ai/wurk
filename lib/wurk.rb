@@ -225,6 +225,26 @@ module Wurk
       config[:server] = true
     end
 
+    # True once something in THIS process has taken responsibility for running
+    # the workers. The CLI claims it before it boots the host application; the
+    # railtie's `after_initialize` hook reads it and stands down.
+    #
+    # Without the claim, `bundle exec wurk` inside a Rails app runs two
+    # independent workers: the CLI boots the app, the railtie forks a swarm
+    # from after_initialize, and then the CLI starts its own Launcher in the
+    # parent. Both drain the same queue, so every job runs twice — including
+    # every cron tick. See #claim_worker_boot!.
+    def worker_boot_claimed?
+      !!@worker_boot_claimed
+    end
+
+    # Claimed by the wurk/wurkswarm CLI. Not part of `enter_server_mode`: the
+    # railtie enters server mode too, and claiming there would make the railtie
+    # skip its own boot and run no workers at all.
+    def claim_worker_boot!
+      @worker_boot_claimed = true
+    end
+
     # Wurk ships Pro+Ent features in the free gem; these flags exist solely
     # for third-party gems that branch on Sidekiq.pro? / Sidekiq.ent?.
     def pro?

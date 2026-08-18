@@ -42,8 +42,14 @@ module Wurk
     # A process that won't run workers isn't a server: skip both server mode
     # and the swarm boot. Console mode is detected reliably here — the console
     # command file defines ::Rails::Console before initializers run.
+    #
+    # `Wurk.worker_boot_claimed?` covers the CLI: `bundle exec wurk` boots the
+    # host app itself and then runs a Launcher in this very process, so forking
+    # a swarm here as well would put two independent workers on one queue and
+    # run every job — every cron tick included — twice.
     def skip_boot?
       ENV['WURK_DISABLED'] == '1' ||
+        Wurk.worker_boot_claimed? ||
         building? ||
         defined?(::Rails::Console) ||
         ::Rails.env.test?
