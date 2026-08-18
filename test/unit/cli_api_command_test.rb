@@ -27,6 +27,9 @@ class CLIApiCommandTest < Wurk::Test::UnitCase
     # runner — reset it so server mode can't leak into a sibling test class
     # sharing this worker process.
     Wurk.server = false
+    # Same for the worker-boot claim: entering server mode from the CLI
+    # takes it, and RailsBoot reads it to decide whether to fork.
+    Wurk.worker_boot_claimed = false
   ensure
     super
   end

@@ -240,7 +240,11 @@ module Wurk
 
     # --- run helpers ----------------------------------------------------
 
+    # Claim the worker boot before the host app loads, so the railtie's
+    # after_initialize hook knows this process already has a worker and does
+    # not fork a second one on top of it (#worker_boot_claimed?).
     def enter_server_mode
+      Wurk.claim_worker_boot!
       Wurk.enter_server_mode(@config)
     end
 

@@ -27,6 +27,43 @@ class RailtieTest < Wurk::Test::EngineCase
     original.nil? ? ENV.delete('WURK_DISABLED') : (ENV['WURK_DISABLED'] = original)
   end
 
+  # The wurk CLI boots the host app itself and then runs a Launcher in this
+  # same process. If the railtie also forked a swarm from after_initialize the
+  # result would be two independent workers draining one queue — every job, and
+  # every cron tick, run twice. The CLI claims the boot before the app loads.
+  # Asserted with every OTHER reason to skip switched off, so the claim is the
+  # only thing that can flip the predicate. `skip_boot?` short-circuits on
+  # Rails.env.test?, which is true throughout this suite, so asserting it
+  # as-is would pass whatever the claim did.
+  def test_the_cli_claim_is_what_makes_the_railtie_stand_down
+    skip '::Rails::Console already defined outside this test' if defined?(::Rails::Console)
+
+    with_nothing_else_suppressing_boot do
+      refute_predicate Wurk::RailsBoot, :skip_boot?,
+                       'precondition: nothing else may be suppressing the boot'
+
+      Wurk.claim_worker_boot!
+
+      assert_predicate Wurk::RailsBoot, :skip_boot?,
+                       'the CLI already runs a worker here; the railtie must stand down'
+    end
+  end
+
+  # The claim must NOT live in enter_server_mode: the railtie enters server
+  # mode too, and claiming there would make it skip its own boot and leave the
+  # app with no workers at all.
+  def test_entering_server_mode_does_not_claim_the_worker_boot
+    original_server = Wurk.server?
+    Wurk.worker_boot_claimed = false
+
+    Wurk.enter_server_mode(Wurk::Configuration.new)
+
+    refute_predicate Wurk, :worker_boot_claimed?
+  ensure
+    Wurk.worker_boot_claimed = false
+    Wurk.server = original_server
+  end
+
   # `rails console` defines ::Rails::Console before initializers run — a console
   # session is not a server and must never fork the swarm.
   def test_skip_boot_is_true_in_rails_console
@@ -380,6 +417,32 @@ class RailtieTest < Wurk::Test::EngineCase
     yield
   ensure
     ::Rake.application = original if original
+  end
+
+  # Every other reason skip_boot? can return true, switched off, so a test can
+  # measure exactly one of them. Without this the suite's own Rails.env.test?
+  # short-circuits the predicate and the assertion proves nothing.
+  def with_nothing_else_suppressing_boot(&)
+    with_env('WURK_DISABLED' => nil, 'SECRET_KEY_BASE_DUMMY' => nil) do
+      with_rake_application(fake_rake([])) do
+        with_rails_env('production') do
+          Wurk.worker_boot_claimed = false
+          yield
+        end
+      end
+    end
+  ensure
+    Wurk.worker_boot_claimed = false
+  end
+
+  # Rails.env decides skip_boot? before anything else does, so a test about the
+  # other reasons has to step out of the test environment first.
+  def with_rails_env(name)
+    original = ::Rails.env
+    ::Rails.env = name
+    yield
+  ensure
+    ::Rails.env = original
   end
 
   def with_env(pairs)
