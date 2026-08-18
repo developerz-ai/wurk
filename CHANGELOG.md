@@ -4,6 +4,10 @@ All notable changes to Wurk are recorded here. Format: [Keep a Changelog](https:
 
 ## [Unreleased]
 
+## [1.7.3] - 2026-08-18
+
+A correctness release about how Wurk boots inside a Rails host. One bug, but it made the default invocation for a Rails app silently wrong: `bundle exec wurk` ran **two** workers, so every job — every cron tick included — was executed twice. No Redis key, command sequence, job-JSON field, or public API changed: a 1.7.2 worker and a 1.7.3 worker can drain the same queue.
+
 ### Fixed
 
 - **`bundle exec wurk` inside a Rails app no longer runs two workers.** The CLI boots the host application itself, which fires the railtie's `after_initialize` hook, which forked a worker swarm — and then the CLI started its own Launcher in the parent. Both drained the same queue, so every job ran twice, every cron tick fired twice, and any job that was not idempotent raced itself; one Rails app surfaced this as a flood of duplicate-key errors from two processes importing the same records, each with independent `I18n` state so the same failure was reported twice in two languages. `WURK_DISABLED=1` was the documented escape hatch, but nothing in the CLI path set it and nothing warned, so the default invocation for a Rails host was silently wrong. The CLI now claims the worker boot (`Wurk.claim_worker_boot!`) before it loads the app, and `RailsBoot.skip_boot?` honours the claim. The claim deliberately does not live in `enter_server_mode`: the railtie enters server mode too, and claiming there would make it skip its own boot and leave the app with no workers at all.
@@ -448,7 +452,9 @@ First public (pre-1.0) release. Wurk is a 100% API-compatible drop-in replacemen
 - ActiveJob adapter, `IterableJob`, embedded mode, and a standalone `exe/wurk` runner.
 - Sidekiq client/server middleware contract; third-party ecosystem suites (sidekiq-cron, sidekiq-unique-jobs, sidekiq-scheduler, sidekiq-status, sidekiq-failures, sidekiq-throttled) pass against Wurk.
 
-[Unreleased]: https://github.com/developerz-ai/wurk/compare/v1.7.1...HEAD
+[Unreleased]: https://github.com/developerz-ai/wurk/compare/v1.7.3...HEAD
+[1.7.3]: https://github.com/developerz-ai/wurk/compare/v1.7.2...v1.7.3
+[1.7.2]: https://github.com/developerz-ai/wurk/compare/v1.7.1...v1.7.2
 [1.7.1]: https://github.com/developerz-ai/wurk/compare/v1.7.0...v1.7.1
 [1.7.0]: https://github.com/developerz-ai/wurk/compare/v1.6.0...v1.7.0
 [1.6.0]: https://github.com/developerz-ai/wurk/compare/v1.5.0...v1.6.0
