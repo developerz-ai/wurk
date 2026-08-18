@@ -341,3 +341,5 @@ jobs:
       - name: vitest
         run: bun run test
         working-directory: frontend
+
+# infra#1263 cutover drill trigger (scratch, reverted on close)
