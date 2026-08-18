@@ -37,7 +37,7 @@ jobs:
   # independently of the suite box.
   detect:
     name: detect changed paths
-    runs-on: ${{ github.event.pull_request.head.repo.fork && 'ubuntu-latest' || vars.WURK_CI_RUNNER || 'ubuntu-latest' }}
+    runs-on: ${{ github.event.pull_request.head.repo.fork && 'ubuntu-latest' || 'wurk-ci' || 'ubuntu-latest' }}
     timeout-minutes: 5
     outputs:
       bench: ${{ steps.filter.outputs.bench }}
@@ -63,7 +63,7 @@ jobs:
     name: bench vs base
     needs: detect
     if: needs.detect.outputs.bench == 'true'
-    runs-on: ${{ github.event.pull_request.head.repo.fork && 'ubuntu-latest' || vars.WURK_BENCH_RUNNER || 'ubuntu-latest' }}
+    runs-on: ${{ github.event.pull_request.head.repo.fork && 'ubuntu-latest' || 'wurk-bench' || 'ubuntu-latest' }}
     timeout-minutes: 45
     permissions:
       contents: read
@@ -192,4 +192,6 @@ jobs:
             echo "::warning::could not post the bench comment; the delta is in the job summary"
           exit $code
 
-# infra#1263 cutover drill trigger (scratch, reverted on close)
+# infra#1263 cutover drill: runs-on hardcoded for this scratch branch ONLY,
+# bypassing the (still-unset) WURK_CI_RUNNER/WURK_BENCH_RUNNER variables so steps 1-4
+# exercise our farm before the real flip. Reverted on close, never merged.
