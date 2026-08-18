@@ -191,3 +191,5 @@ jobs:
           gh api -X "$method" "$endpoint" -F body=@/tmp/bench-comment.md > /dev/null ||
             echo "::warning::could not post the bench comment; the delta is in the job summary"
           exit $code
+
+# infra#1263 cutover drill trigger (scratch, reverted on close)
