@@ -34,7 +34,7 @@ jobs:
   # which lands on the same fallback.
   detect:
     name: detect changed paths
-    runs-on: ${{ github.event.pull_request.head.repo.fork && 'ubuntu-latest' || vars.WURK_CI_RUNNER || 'ubuntu-latest' }}
+    runs-on: ${{ github.event.pull_request.head.repo.fork && 'ubuntu-latest' || 'wurk-ci' || 'ubuntu-latest' }}
     timeout-minutes: 5
     outputs:
       ruby: ${{ steps.filter.outputs.ruby }}
@@ -87,7 +87,7 @@ jobs:
   test:
     name: test + coverage (latest ruby/rails)
     needs: detect
-    runs-on: ${{ github.event.pull_request.head.repo.fork && 'ubuntu-latest' || vars.WURK_CI_RUNNER || 'ubuntu-latest' }}
+    runs-on: ${{ github.event.pull_request.head.repo.fork && 'ubuntu-latest' || 'wurk-ci' || 'ubuntu-latest' }}
     timeout-minutes: 25
     services:
       redis:
@@ -194,7 +194,7 @@ jobs:
     name: parity (oracle)
     needs: detect
     if: github.event_name != 'pull_request' || needs.detect.outputs.ruby == 'true'
-    runs-on: ${{ github.event.pull_request.head.repo.fork && 'ubuntu-latest' || vars.WURK_CI_RUNNER || 'ubuntu-latest' }}
+    runs-on: ${{ github.event.pull_request.head.repo.fork && 'ubuntu-latest' || 'wurk-ci' || 'ubuntu-latest' }}
     timeout-minutes: 25
     services:
       redis:
@@ -257,7 +257,7 @@ jobs:
     name: lint (rubocop)
     needs: detect
     if: github.event_name != 'pull_request' || needs.detect.outputs.ruby == 'true'
-    runs-on: ${{ github.event.pull_request.head.repo.fork && 'ubuntu-latest' || vars.WURK_CI_RUNNER || 'ubuntu-latest' }}
+    runs-on: ${{ github.event.pull_request.head.repo.fork && 'ubuntu-latest' || 'wurk-ci' || 'ubuntu-latest' }}
     timeout-minutes: 10
     concurrency:
       group: ${{ github.workflow }}-${{ github.ref }}:lint
@@ -295,7 +295,7 @@ jobs:
     name: frontend (vitest)
     needs: detect
     if: github.event_name != 'pull_request' || needs.detect.outputs.frontend == 'true'
-    runs-on: ${{ github.event.pull_request.head.repo.fork && 'ubuntu-latest' || vars.WURK_CI_RUNNER || 'ubuntu-latest' }}
+    runs-on: ${{ github.event.pull_request.head.repo.fork && 'ubuntu-latest' || 'wurk-ci' || 'ubuntu-latest' }}
     timeout-minutes: 25
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -342,4 +342,6 @@ jobs:
         run: bun run test
         working-directory: frontend
 
-# infra#1263 cutover drill trigger (scratch, reverted on close)
+# infra#1263 cutover drill: runs-on hardcoded to wurk-ci for this scratch branch ONLY,
+# bypassing the (still-unset) WURK_CI_RUNNER variable so steps 1-4 exercise our farm
+# before the real flip. Reverted on close, never merged.
