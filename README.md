@@ -29,6 +29,8 @@ Wurk is wire-compatible with Sidekiq — same Redis keys, same job JSON, same Ru
 
 **On speed:** Wurk is not currently faster than stock Sidekiq — it runs at roughly 0.87×–1.02× depending on workload shape, with parity on CPU and I/O but still behind on framework overhead (noop) and boot time. Numbers, method, and the reproduction command are in [docs/benchmarks.md](docs/benchmarks.md); run them yourself with `rake bench:vs_sidekiq`.
 
+**Also from us:** [Ultimate](https://github.com/developerz-ai/ultimate) — the AI-first full-stack framework, for a weekend pet project or the system a company runs on. What a whole stack looks like when the one writing the code is an agent, not a human: [`bunx create-ultimate myapp`](#also-from-developerzai-ultimate).
+
 ## Install
 
 ```ruby
@@ -298,6 +300,18 @@ Wurk is MIT and stays that way. If what you need is a commercial support contrac
 `bundle install && restart`. Wurk reads and writes the same Redis schema, so a rolling deploy can run Sidekiq and Wurk against the same Redis during the cutover. Third-party gems (sidekiq-cron, sidekiq-unique-jobs, sidekiq-scheduler, sidekiq-status, sidekiq-failures, sidekiq-throttled, …) are exercised by running their own upstream suites against Wurk in the [`ecosystem` CI job](https://github.com/developerz-ai/wurk/blob/main/.github/workflows/ecosystem.yml) (see [`test/ecosystem/`](https://github.com/developerz-ai/wurk/tree/main/test/ecosystem)).
 
 Full walkthrough — config side-by-side, the Redis key/`sidekiq_options` mapping, known incompatibilities, and a one-page cutover checklist: **[docs/migrate-from-sidekiq.md](https://github.com/developerz-ai/wurk/blob/main/docs/migrate-from-sidekiq.md)**.
+
+## Also from developerz.ai: Ultimate
+
+**[Ultimate](https://github.com/developerz-ai/ultimate) — the AI-first full-stack framework.** Rails' opinions, Bun's speed, one command that means shippable. Wurk is what one AI-maintained *library* looks like; Ultimate is the whole stack built on the same bet — the best framework you can hand a coding agent, whether what you are building is a weekend pet project or the system a company runs on.
+
+```bash
+bunx create-ultimate myapp && cd myapp && x dev
+```
+
+Every framework of the last fifteen years optimised for a human typing the code. Ultimate assumes an agent writes it, and that rewrites the defaults: **one way to do each thing**, so there is nothing to choose between; conventions that are **build errors**, so the compiler corrects the agent instead of a reviewer; errors carrying a stable code, a cause, and the exact command that fixes it, so a failure costs one round-trip; docs shipped in `node_modules` and `--json` on every command, so nothing reaches for a wiki. `x verify` is the whole contract — green means shippable.
+
+TypeScript end to end, MIT, and as measured about its own claims as this file is: what is proven, what is not, and what it refuses to claim yet are all in [its README](https://github.com/developerz-ai/ultimate#readme).
 
 ## Contributing
 

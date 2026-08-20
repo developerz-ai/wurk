@@ -23,6 +23,11 @@ export default defineConfig({
     // tests never leak signals or the document between suites.
     pool: 'threads',
     isolate: true,
+    // Above vitest's 5s default: TimezonePicker renders the full IANA zone list
+    // (~400 rows) and asserts through `getAllByRole`, which computes an
+    // accessible name per row. That lands around a second locally and has timed
+    // out at 5s on a loaded shared runner — a real hang still fails, just later.
+    testTimeout: 20_000,
     // Stylesheets are stubbed to `""` by default, which silently empties a
     // `?raw` import too — styles/palette.test.ts greps the SCSS source and
     // would pass by scanning nothing. Letting `?raw` through hands it to Vite's
