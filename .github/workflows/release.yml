@@ -154,17 +154,47 @@ jobs:
       # a tag always has a gem behind it, so "Latest" on GitHub can never
       # disagree with RubyGems. Notes come from the CHANGELOG section, the .gem
       # is attached.
+      #
+      # It reconciles rather than aborting when a release for the tag is already
+      # there. `gem push` above is irreversible, so anything that fails after it
+      # leaves the version live on RubyGems, the run red, and nothing on GitHub
+      # to show for it — which is exactly what v1.7.3 did when a release for the
+      # tag was hand-cut while this job was running. A release someone else
+      # started is finished here instead: published at this commit, notes reset
+      # from the CHANGELOG, the .gem attached. The one case that still fails is a
+      # tag already pointing at a different commit — moving it is never this
+      # job's call.
       - name: tag & create GitHub Release
         env:
           GH_TOKEN: ${{ github.token }}
           TAG: ${{ needs.preflight.outputs.tag }}
         run: |
+          set -euo pipefail
           bin/changelog-section "$VERSION" > "${RUNNER_TEMP}/notes.md"
+
           flags=(--title "wurk ${TAG}" --notes-file "${RUNNER_TEMP}/notes.md" --target "$GITHUB_SHA")
           if [ "$(ruby -e 'require "rubygems"; print Gem::Version.new(ARGV[0]).prerelease?' "$VERSION")" = "true" ]; then
             flags+=(--prerelease)
           fi
-          gh release create "$TAG" "${flags[@]}" "pkg/wurk-${VERSION}.gem"
+
+          # A draft has no tag ref, so the releases listing — not `git ls-remote`
+          # — is what sees one.
+          existing="$(gh api "repos/${GITHUB_REPOSITORY}/releases" --paginate \
+            -q ".[] | select(.tag_name == \"${TAG}\") | .id" | tr -d '[:space:]')"
+          if [ -z "$existing" ]; then
+            gh release create "$TAG" "${flags[@]}" "pkg/wurk-${VERSION}.gem"
+            exit 0
+          fi
+
+          tagged="$(gh api "repos/${GITHUB_REPOSITORY}/git/ref/tags/${TAG}" -q .object.sha 2>/dev/null || true)"
+          if [ -n "$tagged" ] && [ "$tagged" != "$GITHUB_SHA" ]; then
+            echo "::error::${TAG} already exists and points at ${tagged}, not ${GITHUB_SHA} — refusing to move it."
+            exit 1
+          fi
+
+          echo "::warning::${TAG} already existed — completing that release instead of creating one."
+          gh release edit "$TAG" "${flags[@]}" --draft=false
+          gh release upload "$TAG" "pkg/wurk-${VERSION}.gem" --clobber
 
   # Ship the released tag to wurk.demo.developerz.ai. Runs only after the gem is
   # published, so the demo never advertises a version RubyGems does not have.
