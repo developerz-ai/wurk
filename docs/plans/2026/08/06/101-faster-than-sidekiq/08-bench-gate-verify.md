@@ -1,10 +1,11 @@
 # 08 — Bench harness, CI gate, final verification
 
-> **Superseded (2026-08-21).** This plan step predates #430, which removed hard-coded runner labels
-> from CI. Step 1's `blacksmith-8vcpu-ubuntu-2404` instruction and its "Per CI standard (CLAUDE.md)"
-> citation are stale: `CLAUDE.md` now states runner selection is a repository variable
-> (`vars.WURK_BENCH_RUNNER` for bench, `ubuntu-latest` fallback) — do not hard-code a runner label.
-> `bench.yml` already exists on `main`. Kept unedited below as an executed-plan record.
+> **Executed; one instruction superseded (2026-08-21).** This plan step predates #430, which removed
+> hard-coded runner labels from CI. Step 1's `blacksmith-8vcpu-ubuntu-2404` instruction and its
+> "Per CI standard (CLAUDE.md)" citation are stale: `CLAUDE.md` now states runner selection is a
+> repository variable (`vars.WURK_BENCH_RUNNER` for bench, `ubuntu-latest` fallback) — do not
+> hard-code a runner label on the bench job. `bench.yml` already exists on `main`. Kept unedited
+> below as an executed-plan record.
 
 > Part of [`overview.md`](overview.md). Depends on: 02–07 (this is the proof). Do the gate restoration (step 1) FIRST, before any perf commits land, so deltas attribute per commit — it's independent of the other slices.
 

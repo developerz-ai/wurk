@@ -35,22 +35,22 @@ A dedicated CI job runs the test suites of widely-used Sidekiq ecosystem gems (s
 
 ## CI: GitHub Actions
 
-Runner selection is a repository variable, not a hard-coded label: `vars.WURK_CI_RUNNER` for the test, parity, lint, frontend, and ecosystem jobs, `vars.WURK_BENCH_RUNNER` for the benchmark job. Both fall through to stock `ubuntu-latest` when unset, and fork PRs are pinned to `ubuntu-latest` unconditionally. CI runs:
+Runner selection is a repository variable, not a hard-coded label: `vars.WURK_CI_RUNNER` for the detect, test, parity, lint, frontend, and ecosystem jobs, `vars.WURK_BENCH_RUNNER` for the benchmark job. Both fall through to stock `ubuntu-latest` when unset, and fork PRs are pinned to `ubuntu-latest` unconditionally. Release, pages, and dependabot workflows stay on `ubuntu-latest` by design (credential containment). CI runs:
 
 - Test suite (one full run on the newest Ruby + newest Rails, coverage gate folded in — no version matrix)
 - Ecosystem compat suite
 - Benchmark suite
-- Docs site build
+- Docs site build (pages.yml, `ubuntu-latest`)
 
 The test workflow's suite job:
 
 - Checks out the repo.
 - Sets up Ruby via `ruby/setup-ruby` with bundler cache.
-- Boots Redis and Postgres service containers.
+- Boots a Redis service container.
 - Runs the dummy app setup.
 - Runs the full Minitest suite in parallel mode.
 
-The benchmark job runs wherever `vars.WURK_BENCH_RUNNER` points and uploads results as artifacts. A bot comments deltas vs main on every PR. Regressions greater than 5% flag the PR.
+The benchmark job runs wherever `vars.WURK_BENCH_RUNNER` points and publishes the delta vs main to the job summary and a sticky PR comment, on PRs that touch a bench input (`lib/`, `exe/`, `bench/`, `bin/bench-compare`, the Rakefile, Gemfile/gemspec, or the workflow itself). Regressions greater than 5% flag the PR.
 
 ## Coverage
 
@@ -60,8 +60,8 @@ SimpleCov with branch coverage. CI fails when branch coverage on the gem's main 
 
 Before a tag is cut:
 
-- Full matrix green.
-- Ecosystem compat matrix green.
+- Test suite green.
+- Ecosystem compat suite green.
 - Benchmark suite reports no regressions vs the previous tag.
 - Precompiled assets bundle is fresh.
 - Parity test SHA pin matches the latest Sidekiq main we've reviewed.
