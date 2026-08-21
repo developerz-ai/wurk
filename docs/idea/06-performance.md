@@ -55,7 +55,7 @@ Every release must run, and must not regress on:
 4. Swarm boot time, Rails-app baseline.
 5. Memory per worker post-boot, Rails-app baseline.
 
-The benchmark job runs in CI on Blacksmith. Results uploaded as artifacts. PR comment shows delta vs main. Greater than 5% regression flags the PR.
+The benchmark job runs in CI wherever the `vars.WURK_BENCH_RUNNER` repository variable points (`ubuntu-latest` when unset; fork PRs are pinned to `ubuntu-latest`, and the job only runs when a bench input changed). Results are published to the job summary and a sticky PR comment showing the delta vs the PR's base. Greater than 5% regression flags the PR.
 
 ## What actually gates a merge
 
