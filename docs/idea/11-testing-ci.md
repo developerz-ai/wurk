@@ -33,24 +33,24 @@ For each public class we implement, the equivalent test from upstream Sidekiq is
 
 A dedicated CI job runs the test suites of widely-used Sidekiq ecosystem gems (sidekiq-cron, sidekiq-unique-jobs, sidekiq-scheduler, etc.) against Wurk. See `14-ecosystem-compat.md`. These are the strongest possible drop-in proof.
 
-## CI: GitHub Actions on Blacksmith runners
+## CI: GitHub Actions
 
-Blacksmith (https://blacksmith.sh) provides faster runners than stock ubuntu-latest with better caching. We use Blacksmith for:
+Runner selection is a repository variable, not a hard-coded label: `vars.WURK_CI_RUNNER` for the test, parity, lint, frontend, and ecosystem jobs, `vars.WURK_BENCH_RUNNER` for the benchmark job. Both fall through to stock `ubuntu-latest` when unset, and fork PRs are pinned to `ubuntu-latest` unconditionally. CI runs:
 
-- Test matrix (Ruby × Redis × Rails versions)
+- Test suite (one full run on the newest Ruby + newest Rails, coverage gate folded in — no version matrix)
 - Ecosystem compat suite
 - Benchmark suite
 - Docs site build
 
-The test workflow runs the matrix on a 4-vCPU Blacksmith runner. Each matrix cell:
+The test workflow's suite job:
 
 - Checks out the repo.
-- Sets up Ruby via Blacksmith's setup action with bundler cache.
+- Sets up Ruby via `ruby/setup-ruby` with bundler cache.
 - Boots Redis and Postgres service containers.
 - Runs the dummy app setup.
 - Runs the full Minitest suite in parallel mode.
 
-Benchmark job runs on an 8-vCPU Blacksmith runner and uploads results as artifacts. A bot comments deltas vs main on every PR. Regressions greater than 5% flag the PR.
+The benchmark job runs wherever `vars.WURK_BENCH_RUNNER` points and uploads results as artifacts. A bot comments deltas vs main on every PR. Regressions greater than 5% flag the PR.
 
 ## Coverage
 
