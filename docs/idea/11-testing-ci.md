@@ -35,7 +35,7 @@ A dedicated CI job runs the test suites of widely-used Sidekiq ecosystem gems (s
 
 ## CI: GitHub Actions
 
-Runner selection is a repository variable, not a hard-coded label: `vars.WURK_CI_RUNNER` for the detect, test, parity, lint, frontend, and ecosystem jobs, `vars.WURK_BENCH_RUNNER` for the benchmark job. Both fall through to stock `ubuntu-latest` when unset, and fork PRs are pinned to `ubuntu-latest` unconditionally. Release, pages, and dependabot workflows stay on `ubuntu-latest` by design (credential containment). CI runs:
+Runner selection is a repository variable, not a hard-coded label: `vars.WURK_CI_RUNNER` for the detect, test, parity, lint, frontend, and ecosystem jobs, `vars.WURK_BENCH_RUNNER` for the benchmark job. Both fall through to stock `ubuntu-latest` when unset, and fork PRs are pinned to `ubuntu-latest` unconditionally. Release, deploy-demo, pages, and dependabot workflows stay on `ubuntu-latest` by design (credential containment), as does test.yml's `spec-docs` job, which needs neither Ruby nor Redis. The headline suites:
 
 - Test suite (one full run on the newest Ruby + newest Rails, coverage gate folded in — no version matrix)
 - Ecosystem compat suite
@@ -50,7 +50,7 @@ The test workflow's suite job:
 - Runs the dummy app setup.
 - Runs the full Minitest suite in parallel mode.
 
-The benchmark job runs wherever `vars.WURK_BENCH_RUNNER` points and publishes the delta vs main to the job summary and a sticky PR comment, on PRs that touch a bench input (`lib/`, `exe/`, `bench/`, `bin/bench-compare`, the Rakefile, Gemfile/gemspec, or the workflow itself). Regressions greater than 5% flag the PR.
+The benchmark job runs wherever `vars.WURK_BENCH_RUNNER` points and publishes the delta vs the PR's base to the job summary and a sticky PR comment, on PRs that touch a bench input (`lib/`, `exe/`, `bench/`, `bin/bench-compare`, the Rakefile, Gemfile/gemspec, or the workflow itself). Regressions greater than 5% flag the PR.
 
 ## Coverage
 
