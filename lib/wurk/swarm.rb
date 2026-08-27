@@ -65,6 +65,25 @@ module Wurk
     # them mid-tail, so its own wait always extends past theirs by this much.
     SHUTDOWN_GRACE = 5
 
+    # How often the drain re-relays TERM to whatever is still in the child
+    # table. A child forked in the instant before the drain can miss the first
+    # one outright: from `Process.fork` returning in the child until ChildBoot
+    # resets the inherited traps, the PARENT's handler is what a TERM finds
+    # there, and it writes the signal into the parent's self-pipe (or, once
+    # `fork_child` has dropped that pipe, into nothing) instead of stopping the
+    # child. The child then boots clean, drains nothing, and `wait_for_children`
+    # burns its whole budget before `hard_kill_stragglers` SIGKILLs it — taking
+    # its in-flight jobs with it. The window is the `_fork` hook chain
+    # (ActiveSupport's ForkTracker and friends all run child-side before
+    # `Process.fork` returns), so it widens with load: measured 10.5s drains
+    # against a 2.6s baseline once that chain is slowed. No child-side fix can
+    # close it — the window precedes any code the child controls — so the
+    # supervisor repeats itself instead. Re-sending is safe: by the second pass
+    # the child owns its handler, TERM to a child already draining is a no-op,
+    # and the pids come from the child table, where an exited child is a zombie
+    # until reaped and so can never be a recycled pid.
+    RETERM_INTERVAL = 1.0
+
     # USR2 is relayed (log reopen) — without a trap, a logrotate config that
     # signals the master pid would hit USR2's default disposition and kill the
     # whole swarm.
@@ -503,8 +522,13 @@ module Wurk
 
     def wait_for_children(timeout)
       deadline = monotonic + timeout
+      reterm_at = monotonic + RETERM_INTERVAL
       while monotonic < deadline && any_children?
         reap_children
+        if monotonic >= reterm_at
+          relay_signal('TERM')
+          reterm_at = monotonic + RETERM_INTERVAL
+        end
         sleep 0.1
       end
     end
