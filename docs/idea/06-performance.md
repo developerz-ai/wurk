@@ -47,7 +47,7 @@ Precompiled dashboard assets ship inside the gem — see 09-precompiled-assets.m
 
 ## Benchmark suite (required)
 
-Every release must run, and must not regress on:
+`rake bench` covers, and must not regress on, five shapes. It runs per PR (`bench.yml`), not per release — nothing in `rake release:check` invokes it:
 
 1. Enqueue throughput, single-client, single-queue.
 2. Fetch + execute throughput, no-op perform.
@@ -59,7 +59,7 @@ The benchmark job runs in CI wherever the `vars.WURK_BENCH_RUNNER` repository va
 
 ## What actually gates a merge
 
-`rake bench` is the regression gate: it compares Wurk against **its own past self** on enqueue, fetch+execute, bulk enqueue, swarm boot, and memory. A regression greater than 5% on any of those blocks the merge.
+`rake bench` is the regression gate: it compares Wurk against **its own past self** on enqueue, fetch+execute, bulk enqueue, swarm boot, and memory. A regression greater than 5% on any of those is what the gate is for — though `bench.yml` is deliberately not a required check, so in CI it flags the PR rather than mechanically blocking the merge button.
 
 `rake bench:vs_sidekiq` is the comparison suite against stock Sidekiq. It gates nothing. A green CI run says nothing about how Wurk compares to Sidekiq — only that Wurk has not regressed by more than 5% against its own baseline on the measured metrics. A 4% regression still passes.
 

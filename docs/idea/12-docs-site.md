@@ -1,5 +1,11 @@
 # Docs Site (GitHub Pages)
 
+> **Status: superseded — design intent, not head.** None of the generator
+> choice or the `docs-site/` layout below was built. What ships is a
+> hand-written static site in `docs/site/`, published by
+> `.github/workflows/pages.yml`. Only "Build and deploy" has been corrected to
+> what CI does; the rest is kept as the original reasoning.
+
 Public-facing documentation served on GitHub Pages, with the option to CNAME to a custom domain later.
 
 ## Generator choice: VitePress
@@ -24,9 +30,9 @@ Public-facing documentation served on GitHub Pages, with the option to CNAME to 
 
 ## Build and deploy
 
-A docs workflow on GitHub Actions runs when `docs-site/**` changes. It builds the VitePress site on a Blacksmith runner, uploads the static output as a Pages artifact, and deploys via the official pages deploy action.
+`.github/workflows/pages.yml` runs on pushes to `main` that touch `docs/**`, `lib/**`, `.yardopts`, `README.md`, the Rakefile, `tasks/llms_full.rb`, the Gemfile pair, or the workflow itself. It runs on `ubuntu-latest`, generates the YARD API docs into `docs/site/api/`, uploads `docs/site/` as a Pages artifact, and deploys via the official pages deploy action. There is no VitePress build and no `docs-site/` trigger path.
 
-The workflow is a separate file from the main test workflow so docs deploys don't depend on the full matrix turning green.
+The workflow is a separate file from the test workflow so docs deploys don't depend on the suite turning green.
 
 ## API ref generation
 
