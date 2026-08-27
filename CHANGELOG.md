@@ -4,6 +4,14 @@ All notable changes to Wurk are recorded here. Format: [Keep a Changelog](https:
 
 ## [Unreleased]
 
+## [1.7.5] - 2026-08-27
+
+A second shutdown-correctness release, on the far side of the same fork window 1.7.4 closed. 1.7.4 stopped the fleet from *losing* a signal; this one stops one child's signal from *becoming* the fleet's. No Redis key, command sequence, job-JSON field, or public API changed: a 1.7.4 worker and a 1.7.5 worker can drain the same queue.
+
+### Fixed
+
+- **Signalling one swarm child no longer drains the whole fleet.** `kill <child_pid>` on a single worker could take down the supervisor and every sibling with it. A forked child inherits the parent's signal traps *and* the parent's still-open self-pipe, and `fork_child` cannot drop either until `Process.fork` **returns** — the `_fork` hook chain (`ActiveSupport::ForkTracker`, `SQLite3::ForkSafety`, `ConnectionPool::ForkTracker`, `RedisClient::PIDCache`, `Wurk::PidCache`) all run child-side before it does. A TERM delivered in that window ran the parent's handler inside the child, which wrote `"TERM\n"` into the pipe the *parent* reads; the supervise loop dispatched it as its own TERM and drained everything. The risk was named in `fork_child`'s comment and the mitigation — dropping the pipe as the child's first statement — was simply too late to cover it. `emit_signal` now compares pids before writing, and because `@owner_pid` is stamped in `boot` *before* any fork, the inherited trap is inert in the child from its very first instruction: the window is gone rather than narrowed, which no child-side reset can achieve. Reproduced against real forks by slowing the `_fork` chain the way a loaded box does — TERMing one of two children killed the supervisor and the fleet; with the check, the supervisor survives and the signal stays with the child it was aimed at. Operators and process managers that signal individual worker pids are the exposed path, and forks happen at boot, on crash respawn, on rolling restart, and on memory recycle.
+
 ## [1.7.4] - 2026-08-27
 
 A correctness release about shutdown. One runtime bug — a child forked in the same instant a drain begins could miss the SIGTERM entirely and be SIGKILLed ten seconds later with its in-flight jobs still on it. The rest is repo hygiene that had gone stale enough to make CI red or lie about itself. No Redis key, command sequence, job-JSON field, or public API changed: a 1.7.3 worker and a 1.7.4 worker can drain the same queue.
@@ -469,6 +477,7 @@ First public (pre-1.0) release. Wurk is a 100% API-compatible drop-in replacemen
 - Sidekiq client/server middleware contract; third-party ecosystem suites (sidekiq-cron, sidekiq-unique-jobs, sidekiq-scheduler, sidekiq-status, sidekiq-failures, sidekiq-throttled) pass against Wurk.
 
 [Unreleased]: https://github.com/developerz-ai/wurk/compare/v1.7.3...HEAD
+[1.7.5]: https://github.com/developerz-ai/wurk/compare/v1.7.4...v1.7.5
 [1.7.4]: https://github.com/developerz-ai/wurk/compare/v1.7.3...v1.7.4
 [1.7.3]: https://github.com/developerz-ai/wurk/compare/v1.7.2...v1.7.3
 [1.7.2]: https://github.com/developerz-ai/wurk/compare/v1.7.1...v1.7.2
