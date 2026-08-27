@@ -41,6 +41,44 @@ class SwarmReapingTest < Wurk::Test::UnitCase
     end
   end
 
+  # Fork-free AND clock-free: `sleep` advances a fake monotonic clock instead of
+  # the runner, so a ten-second drain resolves in microseconds and the re-TERM
+  # cadence is read off exact times rather than a stopwatch. `exit_after` is how
+  # many polls the fake children survive — nil means they never drain, which is
+  # exactly the child that missed its TERM.
+  class DrainClockSwarm < ReapTestSwarm
+    attr_reader :relays
+    attr_accessor :exit_after
+
+    def initialize(**kwargs)
+      super
+      @clock = 0.0
+      @relays = []
+      @polls = 0
+    end
+
+    private
+
+    def monotonic = @clock
+
+    def sleep(seconds)
+      @clock += seconds
+      0
+    end
+
+    def reap_children
+      @polls += 1
+      @lock.synchronize { @children.clear } if exit_after && @polls >= exit_after
+    end
+
+    def relay_signal(sig)
+      @relays << [monotonic, sig]
+    end
+  end
+
+  # The parent's own worst case, the budget `shutdown` hands the drain.
+  DRAIN_BUDGET = 10.0
+
   def setup
     super
     @config = Wurk::Configuration.new
@@ -116,17 +154,50 @@ class SwarmReapingTest < Wurk::Test::UnitCase
     assert_empty swarm.children, 'an unreapable straggler must still be forgotten'
   end
 
+  # --- the drain repeats itself -------------------------------------------
+
+  # A child forked in the instant before the drain never sees the first TERM:
+  # until ChildBoot resets them, the PARENT's traps are what a signal finds in
+  # the fresh child, and they route it into the parent's self-pipe instead of
+  # stopping it. Unanswered, that child costs the whole drain budget and then
+  # takes a SIGKILL with its in-flight jobs still on it. Reproduced against a
+  # real fork by slowing the `_fork` hook chain the way a loaded box does: a
+  # 10.5s drain where the baseline is 2.6s.
+  def test_drain_re_terms_a_child_that_missed_the_first_one
+    swarm = drain_swarm
+
+    swarm.send(:wait_for_children, DRAIN_BUDGET)
+
+    assert_operator swarm.relays.size, :>, 1,
+                    'a child still alive mid-drain must be TERMed again, not just waited on'
+    assert_in_delta (DRAIN_BUDGET / Wurk::Swarm::RETERM_INTERVAL).floor, swarm.relays.size, 1,
+                    'the repeat must be paced by RETERM_INTERVAL, not sent on every poll'
+  end
+
+  # The repeat is for the child that missed the signal, not a second TERM for
+  # everyone: a fleet that drains inside the first interval is never re-signalled.
+  def test_drain_does_not_re_term_children_that_answered_the_first_one
+    swarm = drain_swarm
+    swarm.exit_after = 1
+
+    swarm.send(:wait_for_children, DRAIN_BUDGET)
+
+    assert_empty swarm.relays, 'children that drained promptly must not be signalled twice'
+  end
+
   private
 
   def topology
     Wurk::Topology.flat(count: SLOTS, queues: ['default'], concurrency: 1)
   end
 
-  def boot_swarm
-    swarm = ReapTestSwarm.new(topology: topology, config: @config)
+  def boot_swarm(klass = ReapTestSwarm)
+    swarm = klass.new(topology: topology, config: @config)
     swarm.boot(install_signals: false)
     swarm
   end
+
+  def drain_swarm = boot_swarm(DrainClockSwarm)
 
   def respawn_pending?(swarm, idx)
     swarm.instance_variable_get(:@respawn_backoff).pending?(idx)
