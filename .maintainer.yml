@@ -18,9 +18,10 @@
 # for reviewer bots (coderabbit/copilot) to settle before acting. The native
 # review: block below activates the developerz review lane alongside CodeRabbit
 # (force: true, advisory — never requests changes, never approves). Everything
-# not set here uses the schema defaults. release: is now declared explicitly
-# (see the release: block) rather than inherited, because the inherited default
-# described a lane this repo does not run.
+# not set here uses the schema defaults. release: is declared explicitly (see
+# the release: block): the manager runs the release-notes session on merged
+# PRs (wurk#324), while channels stay empty because release.yml owns the
+# publish lane end to end.
 version: 1
 
 tone:
@@ -95,33 +96,35 @@ review:
   path_filters: []
   path_instructions: []
 
+# RELEASE MANAGER ON (wurk#324, 2026-08-27). `manager: none` made the
+# agents-manager skip the release session entirely (skip reason
+# `release_manager_none`), so no release notes were ever posted on merged
+# PRs. `release-please` is the only other value in the enum
+# (release-please | none), so it is set here to let that loop execute and
+# post notes on merged PRs. The name is not literal: this repo runs no
+# release-please config (no release-please-config.json, no
+# .release-please-manifest.json) and opens no release PRs — the value only
+# gates whether the agent's release session runs.
+#
+# What actually cuts a release is unchanged (RELEASE.md):
+#   1. a version bump to lib/wurk/version.rb lands on main
+#   2. .github/workflows/release.yml fires on that path, publishes to RubyGems
+#      via OIDC trusted publishing, and only then cuts the tag + GitHub Release
+#      from the CHANGELOG section
+# Conventional commits may inform the agent's notes; they never become the
+# release trigger or the tag source — the tag is derived from Wurk::VERSION.
+#
+# `channels: []` stays EMPTIED (2026-08-11, wurk#420) even with the manager
+# on: `channels: [github-release]` fired on feature merges with Wurk::VERSION
+# unbumped and cut seven gem-less GitHub Releases marked "Latest" while
+# `gem install wurk` kept serving the previous version — and a red release
+# run each time. release.yml owns the whole lane end to end (gem first, then
+# tag + Release from the CHANGELOG), so there is no channel left for the
+# agent to publish on; the release session posts notes only. The registry
+# channels (incl. rubygems) are reserved and REJECTED at validation time
+# regardless; RubyGems is declared by release.yml's OIDC step.
 release:
-  # DECLARED, not inherited (wurk#328). The schema default is
-  # manager: release-please, which implies batched release PRs driven by
-  # release-please-config.json + .release-please-manifest.json. Neither file
-  # exists here and no release PR has ever been opened, so the inherited
-  # default described a lane this repo does not run.
-  #
-  # What actually cuts a release:
-  #   1. a version bump to lib/wurk/version.rb lands on main
-  #   2. .github/workflows/release.yml fires on that path, publishes to RubyGems
-  #      via OIDC trusted publishing, and only then cuts the tag + GitHub Release
-  #      from the CHANGELOG section
-  #
-  # `none` is the only value in the enum (release-please | none) that describes
-  # that, and it means "no release MANAGER" — it does not govern the agent's
-  # note generation, which the schema does not model at all.
-  manager: none
-  # EMPTIED 2026-08-11 (wurk#420). `manager: none` did NOT stop the agent from
-  # cutting releases — `channels: [github-release]` did that independently, and
-  # it fired on feature merges with Wurk::VERSION unbumped. Six times (v1.2.1,
-  # v1.5.0, v1.6.0, v1.7.0, v1.8.0, v1.7.1, v1.7.2) that produced a tag and a
-  # GitHub Release marked "Latest" with no gem behind it, while `gem install
-  # wurk` kept serving the previous version — and a red release run each time.
-  # release.yml owns the whole lane end to end (gem first, then tag + Release
-  # from the CHANGELOG), so there is no channel left for the agent to publish on.
-  # The registry channels (incl. rubygems) are reserved and REJECTED at
-  # validation time regardless; RubyGems is declared by release.yml's OIDC step.
+  manager: release-please
   channels: []
 
 escalate:
