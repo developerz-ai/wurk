@@ -4,6 +4,22 @@ All notable changes to Wurk are recorded here. Format: [Keep a Changelog](https:
 
 ## [Unreleased]
 
+## [1.7.4] - 2026-08-27
+
+A correctness release about shutdown. One runtime bug — a child forked in the same instant a drain begins could miss the SIGTERM entirely and be SIGKILLed ten seconds later with its in-flight jobs still on it. The rest is repo hygiene that had gone stale enough to make CI red or lie about itself. No Redis key, command sequence, job-JSON field, or public API changed: a 1.7.3 worker and a 1.7.4 worker can drain the same queue.
+
+### Fixed
+
+- **A child forked mid-shutdown no longer loses its SIGTERM.** Between `Process.fork` returning inside the child and `ChildBoot` resetting the inherited traps, the *parent's* handler is what a signal finds there — and it writes into the parent's self-pipe (or, once `fork_child` has dropped that pipe, into nothing) rather than stopping the child. The child then booted clean, drained nothing, and `wait_for_children` spent its entire `shutdown_timeout + SHUTDOWN_GRACE` budget on it before `hard_kill_stragglers` SIGKILLed it — losing whatever it had in flight. Any rolling restart, crash respawn or memory recycle that coincided with a shutdown could hit it. The window is the `_fork` hook chain (`ActiveSupport::ForkTracker`, `SQLite3::ForkSafety`, `ConnectionPool::ForkTracker`, `RedisClient::PIDCache`, `Wurk::PidCache` all run child-side before `Process.fork` returns), so it widened with load, which is why it only ever surfaced on CI — as a red `test_term_mid_restart_aborts_to_drain`, where the reported 10s was `wait_for_children`'s own budget elapsing on a child that would never answer. No child-side fix can close it, because the window precedes any code the child controls; the supervisor now re-relays TERM every second while it waits instead. Repeating is safe: by the second pass the child owns its handler, TERM to a child already draining is a no-op, and the pids come from the child table, where an exited child is a zombie until reaped and so can never be a recycled pid. Reproduced by slowing the `_fork` chain deliberately: a 10.5s drain ending in a hard kill became a 3.1s graceful one.
+
+- **`.maintainer.yml` was never in force.** `handoff.webhook_ref: wh_fleet_placeholder` named no registered webhook — the org account has none — so the policy ingest graded the whole file INVALID on every read and served the platform default in its place. Everything declared in it was inert, `release.manager: none` and the `release.channels: []` added in 1.7.2 included, which is the most likely reason the maintainer bot kept cutting gem-less GitHub Releases against both. `handoff.mode: fleet` grants the same handoff and needs no `webhook_ref`, so dropping the ref is the whole fix. Two comments in that file also claimed a "legacy branch protection (1 required review + the test matrix)" that has not existed since the `main-protection` ruleset replaced it on 2026-08-07: read off the live ruleset, it requires **zero** approving reviews and no status checks, which makes `pr.auto_merge: false` the only merge gate this repo has rather than a second one. The comments now say so.
+
+- **`lint (rubocop)` is green again.** `Gemfile.lock` is gitignored on purpose, so the lint job resolves rubocop fresh every run and inherits each release's new cops. 1.90 added `Style/DirectiveScope` and tightened `Layout/ExtraSpacing`, putting 14 offenses on `main` that no PR introduced. The directive pairs became `disable-next`; the spacing four were repaired by hand rather than by `rubocop -a`, which deletes alignment instead of fixing it and had left `Stats::FAST_QUERIES` half-aligned.
+
+### Changed
+
+- **`docs/idea` no longer misdescribes CI.** The residue #431/#443 left out of scope, eight lines, each re-stated against `.github/workflows/*.yml` at head: the docs job builds `docs/site/` with YARD on `ubuntu-latest` (there is no VitePress and no `docs-site/`); the benchmark job is `on: pull_request`, compares the PR's base rather than `main`, and flags rather than blocks, with nothing running it at tag time; `NCPU` defaults to 4, deliberately below core count; one Redis container hands each worker a logical DB 1-15; and the suite job's step list was missing the bun setup and dashboard build. `12-docs-site.md` is marked superseded rather than rewritten — the generator comparison in it is design intent that was never built.
+
 ## [1.7.3] - 2026-08-18
 
 A correctness release about how Wurk boots inside a Rails host. One bug, but it made the default invocation for a Rails app silently wrong: `bundle exec wurk` ran **two** workers, so every job — every cron tick included — was executed twice. No Redis key, command sequence, job-JSON field, or public API changed: a 1.7.2 worker and a 1.7.3 worker can drain the same queue.
@@ -453,6 +469,7 @@ First public (pre-1.0) release. Wurk is a 100% API-compatible drop-in replacemen
 - Sidekiq client/server middleware contract; third-party ecosystem suites (sidekiq-cron, sidekiq-unique-jobs, sidekiq-scheduler, sidekiq-status, sidekiq-failures, sidekiq-throttled) pass against Wurk.
 
 [Unreleased]: https://github.com/developerz-ai/wurk/compare/v1.7.3...HEAD
+[1.7.4]: https://github.com/developerz-ai/wurk/compare/v1.7.3...v1.7.4
 [1.7.3]: https://github.com/developerz-ai/wurk/compare/v1.7.2...v1.7.3
 [1.7.2]: https://github.com/developerz-ai/wurk/compare/v1.7.1...v1.7.2
 [1.7.1]: https://github.com/developerz-ai/wurk/compare/v1.7.0...v1.7.1
