@@ -166,6 +166,37 @@ class SwarmSignalsTest < Wurk::Test::UnitCase
     assert_nil swarm.instance_variable_get(:@signal_read)
   end
 
+  # --- one child's signal is not the fleet's ------------------------------
+
+  # A forked child inherits this trap AND the parent's still-open pipe:
+  # `fork_child` cannot drop either until `Process.fork` RETURNS, and the
+  # `_fork` hook chain runs child-side before that. Unguarded, an operator's
+  # `kill <child_pid>` landing in that window writes TERM into the PARENT's
+  # supervise loop and drains every sibling. Proven against real forks by
+  # slowing that chain the way a loaded box does: TERMing one child took the
+  # supervisor and the whole fleet down with it. Comparing pids closes the
+  # window entirely — `@owner_pid` is stamped before the fork, so the inherited
+  # trap is inert in the child from its first instruction.
+  def test_emit_signal_from_a_forked_child_never_reaches_the_parents_pipe
+    swarm = draining
+    read, = inject_pipe(swarm)
+    swarm.instance_variable_set(:@owner_pid, ::Process.pid + 1) # what a child sees
+
+    swarm.send(:emit_signal, 'TERM')
+
+    refute read.wait_readable(0),
+           "a child's signal must never surface in the parent's supervise loop"
+  end
+
+  def test_emit_signal_still_writes_for_the_owner
+    swarm = draining
+    read, = inject_pipe(swarm)
+
+    swarm.send(:emit_signal, 'TERM')
+
+    assert_equal 'TERM', read.gets&.strip
+  end
+
   # The traps stay installed after a drain; a late signal must not raise out of
   # trap context into the supervise thread.
   def test_emit_signal_after_shutdown_is_a_noop

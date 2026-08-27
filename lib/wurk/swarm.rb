@@ -360,7 +360,20 @@ module Wurk
     # stall signal delivery if the pipe fills. `exception: false` returns
     # :wait_writable instead of raising when full (drop the coalescible
     # duplicate); a closed pipe during shutdown is ignored too.
+    #
+    # The owner check is what keeps ONE child's signal from draining the whole
+    # fleet. A forked child inherits both this trap and the parent's live pipe,
+    # and `fork_child` cannot drop them until `Process.fork` RETURNS — the
+    # `_fork` hook chain runs child-side before that, so there is a window
+    # where an operator's `kill <child_pid>` writes TERM into the PARENT's
+    # supervise loop and drains every sibling. Measured: with that chain slowed
+    # the way a loaded box does, TERMing a single child killed the supervisor
+    # and all of it. Comparing pids instead closes it with no window at all —
+    # the inherited trap is inert in the child from its first instruction,
+    # because `@owner_pid` was stamped before the fork.
     def emit_signal(sig)
+      return unless owner?
+
       @signal_write&.write_nonblock("#{sig}\n", exception: false)
     rescue ::IOError, ::Errno::EPIPE, ::Errno::EBADF
       nil
