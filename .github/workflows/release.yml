@@ -152,8 +152,8 @@ jobs:
       # Tag and GitHub Release in one step, LAST — `gh release create` creates the
       # tag at --target. Cutting it only after the gem is live is what guarantees
       # a tag always has a gem behind it, so "Latest" on GitHub can never
-      # disagree with RubyGems. Notes come from the CHANGELOG section, the .gem
-      # is attached.
+      # disagree with RubyGems. Notes are the CHANGELOG section plus generated
+      # conventional-commit notes (`bin/release-notes`), the .gem is attached.
       #
       # It reconciles rather than aborting when a release for the tag is already
       # there. `gem push` above is irreversible, so anything that fails after it
@@ -170,7 +170,7 @@ jobs:
           TAG: ${{ needs.preflight.outputs.tag }}
         run: |
           set -euo pipefail
-          bin/changelog-section "$VERSION" > "${RUNNER_TEMP}/notes.md"
+          bin/release-notes "$VERSION" > "${RUNNER_TEMP}/notes.md"
 
           flags=(--title "wurk ${TAG}" --notes-file "${RUNNER_TEMP}/notes.md" --target "$GITHUB_SHA")
           if [ "$(ruby -e 'require "rubygems"; print Gem::Version.new(ARGV[0]).prerelease?' "$VERSION")" = "true" ]; then
