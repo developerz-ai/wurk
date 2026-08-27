@@ -314,7 +314,7 @@ class MiddlewarePoisonPillTest < Wurk::Test::UnitCase
     assert_equal [['not-json{{', nil]], recorded
   end
 
-  # rubocop:disable Minitest/MultipleAssertions
+  # rubocop:disable-next Minitest/MultipleAssertions
   def test_super_fetch_callback_receives_pill_on_poison_kill
     recorded = []
     cfg = recovery_config { |jobstr, pill| recorded << [jobstr, pill] }
@@ -332,7 +332,6 @@ class MiddlewarePoisonPillTest < Wurk::Test::UnitCase
     assert_equal 3, pill.count
     assert_equal @queue, pill.queue
   end
-  # rubocop:enable Minitest/MultipleAssertions
 
   # The two-arg super_fetch block and the legacy on_poison Hash callback are
   # independent registries; both must fire on a poison kill.

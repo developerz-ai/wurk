@@ -94,13 +94,12 @@ module Wurk
       # one without reopening this file. Baked into the literal rather than
       # appended at load, so the parallel test runner never observes a
       # half-built list.
-      # rubocop:disable Style/MutableConstant
+      # rubocop:disable-next Style/MutableConstant
       JOB_KEYS = %w[
         class args queue at retry jid backtrace tags dead
         retry_for retry_queue expires_in track timeout deadline
         encrypt unique_for unique_until collapse log_level locale wrapped
       ]
-      # rubocop:enable Style/MutableConstant
 
       # `push_bulk`'s envelope keys, on top of the job keys it shares.
       BULK_KEYS = %w[batch_size spread_interval].freeze

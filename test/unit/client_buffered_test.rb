@@ -316,7 +316,7 @@ class ClientBufferedTest < Wurk::Test::UnitCase
 
   # The cap splits a single bulk push: what fits is buffered, the rest rides on
   # the exception. Nothing may fall between the two.
-  # rubocop:disable Minitest/MultipleAssertions
+  # rubocop:disable-next Minitest/MultipleAssertions
   def test_overflow_raise_fills_remaining_capacity_and_reports_the_rest
     Wurk::Client.reliable_push_buffer = 3
     Wurk::Client.reliable_push_overflow = :raise
@@ -331,7 +331,6 @@ class ClientBufferedTest < Wurk::Test::UnitCase
     assert_equal [[0], [1], [2]], buffered_args
     assert_equal [[3], [4], [5]], payload_args(err.payloads)
   end
-  # rubocop:enable Minitest/MultipleAssertions
 
   # Plan 03/S2's stated case: a 1000-payload bulk push against a buffer one slot
   # short of the cap used to buffer that one payload, raise on the second and
@@ -387,7 +386,7 @@ class ClientBufferedTest < Wurk::Test::UnitCase
 
   # Batched payloads never buffer, so an overflow that pre-empts their
   # connection-error re-raise would strand them without a trace.
-  # rubocop:disable Minitest/MultipleAssertions
+  # rubocop:disable-next Minitest/MultipleAssertions
   def test_overflow_carries_batched_payloads_from_a_mixed_push
     Wurk::Client.reliable_push_buffer = 1
     Wurk::Client.reliable_push_overflow = :raise
@@ -400,7 +399,6 @@ class ClientBufferedTest < Wurk::Test::UnitCase
     assert_equal [['keep']], buffered_args, 'batched payload must not reach the buffer'
     assert_instance_of RedisClient::ConnectionError, err.cause
   end
-  # rubocop:enable Minitest/MultipleAssertions
 
   # With room left, the mixed push keeps the documented split: bidless buffers,
   # batched re-raises the connection error.

@@ -146,7 +146,7 @@ class FetcherReaperTest < Wurk::Test::UnitCase
 
   # --- poison-pill cap ---------------------------------------------------
 
-  # rubocop:disable Minitest/MultipleAssertions
+  # rubocop:disable-next Minitest/MultipleAssertions
   def test_recovery_past_threshold_kills_to_dead_set_instead_of_requeue
     jid = SecureRandom.hex(12)
     job = payload('poison', jid: jid)
@@ -163,7 +163,6 @@ class FetcherReaperTest < Wurk::Test::UnitCase
   ensure
     Wurk.redis { |c| c.call('DEL', recovery_key(jid)) }
   end
-  # rubocop:enable Minitest/MultipleAssertions
 
   def test_under_threshold_recovery_requeues_and_bumps_counter
     jid = SecureRandom.hex(12)

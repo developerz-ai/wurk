@@ -23,7 +23,7 @@ class BatchTest < Wurk::Test::UnitCase
     # Redis Set; parallel tests touching it cross-contaminate.
     @tag_customer = "customer:42:#{Process.pid}:#{object_id}"
     @tag_job      = "job:fulfill:#{Process.pid}:#{object_id}"
-    @bids      = []
+    @bids         = []
   end
 
   def teardown
