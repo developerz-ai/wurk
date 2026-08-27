@@ -116,9 +116,9 @@ module Wurk
     # Single pipeline for the cheap counters. Eagerly invoked at initialize
     # so callers can read many fields without paying per-method round trips.
     FAST_QUERIES = [
-      ['GET',   'stat:processed'],
-      ['GET',   'stat:failed'],
-      ['GET',   Keys::STAT_EXPIRED],
+      ['GET', 'stat:processed'],
+      ['GET', 'stat:failed'],
+      ['GET', Keys::STAT_EXPIRED],
       ['ZCARD', Keys::SCHEDULE],
       ['ZCARD', Keys::RETRY],
       ['ZCARD', Keys::DEAD],

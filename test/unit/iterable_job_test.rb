@@ -3,8 +3,9 @@
 require_relative '../test_helper'
 
 # `cursor:` keyword is part of the build_enumerator contract; many tests
-# don't read it but must still accept it. Disable the file-wide warning.
-# rubocop:disable Lint/UnusedMethodArgument
+# don't read it but must still accept it. Disabled for the whole class below,
+# which is all this file holds.
+# rubocop:disable-next Lint/UnusedMethodArgument
 class IterableJobTest < Wurk::Test::UnitCase
   parallelize_me!
 
@@ -999,4 +1000,3 @@ class IterableJobTest < Wurk::Test::UnitCase
     end
   end
 end
-# rubocop:enable Lint/UnusedMethodArgument

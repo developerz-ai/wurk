@@ -21,7 +21,7 @@ class WebExtensionTest < Wurk::Test::UnitCase
   # nested `def` inside `app.helpers` is the documented Sidekiq extension
   # idiom, and the route count is the fixture's whole point — both cops are
   # off for this faithful replica.
-  # rubocop:disable Lint/NestedMethodDefinition
+  # rubocop:disable-next Lint/NestedMethodDefinition
   module DemoExt
     def self.registered(app)
       app.helpers do
@@ -51,7 +51,6 @@ class WebExtensionTest < Wurk::Test::UnitCase
       end
     end
   end
-  # rubocop:enable Lint/NestedMethodDefinition
 
   def setup
     super

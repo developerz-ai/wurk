@@ -108,9 +108,8 @@ class APIFastTest < Wurk::Test::UnitCase
   def test_scan_arity_one_entry_can_be_deleted
     jid = SecureRandom.hex(12)
     add_member(jid: jid)
-    # rubocop:disable Style/SymbolProc -- explicit 1-arg block exercises arity dispatch.
+    # rubocop:disable-next Style/SymbolProc -- explicit 1-arg block exercises arity dispatch.
     @set.scan(jid) { |entry| entry.delete }
-    # rubocop:enable Style/SymbolProc
 
     assert_equal 0, @set.size
   end

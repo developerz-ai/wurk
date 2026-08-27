@@ -88,7 +88,7 @@ class ClientPartialDeliveryTest < Wurk::Test::UnitCase
   # The point of the whole exercise: a push that dies partway through two
   # queues and a batch, replayed against a healthy Redis, leaves every job in
   # existence exactly once.
-  # rubocop:disable Minitest/MultipleAssertions
+  # rubocop:disable-next Minitest/MultipleAssertions
   def test_drain_after_partial_delivery_enqueues_each_job_exactly_once
     client = Wurk::Client.new(pool: dropping_pool(deliver: 1))
     payloads = [item(args: ['a'], jid: 'j-a'),
@@ -103,7 +103,6 @@ class ClientPartialDeliveryTest < Wurk::Test::UnitCase
     assert_equal [['a'], ['c']], queued_args(@queue).reverse
     assert_equal [['b']], queued_args(@other_queue)
   end
-  # rubocop:enable Minitest/MultipleAssertions
 
   # Nothing acknowledged — the pre-existing behavior has to survive: every
   # bidless payload buffers, whatever queue it was headed for.

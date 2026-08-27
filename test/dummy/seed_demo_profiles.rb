@@ -7,12 +7,12 @@ require 'json'
 
 samples = [
   ['Demo::ReportJob', 15_200, 4],
-  ['Demo::FastJob',            120, 11],
-  ['Demo::RateLimitedJob',     890, 23],
+  ['Demo::FastJob', 120, 11],
+  ['Demo::RateLimitedJob', 890, 23],
   ['Demo::BatchChildJob', 3_400, 47],
   ['ThrottledApiJob', 540, 95],
   ['Demo::SlowReportJob', 7_600, 140],
-  ['MailerJob',                250, 320]
+  ['MailerJob', 250, 320]
 ]
 
 now = Time.now.to_i
