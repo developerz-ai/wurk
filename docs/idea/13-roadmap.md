@@ -7,7 +7,7 @@ Ship parity incrementally. Every milestone produces a usable gem.
 - Gemspec, engine class, version, MIT license.
 - Dummy Rails app under `test/dummy/` boots.
 - Minitest parallel runner configured.
-- Blacksmith CI workflow green on a smoke test.
+- CI workflow green on a smoke test.
 - Docs site (`docs/site/`, hand-written static HTML — not VitePress; a
   VitePress build was never adopted) published to GitHub Pages.
 

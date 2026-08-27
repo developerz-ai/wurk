@@ -20,7 +20,7 @@
 - Includes a dummy Rails app at `test/dummy/` for engine integration testing.
 - Modern dashboard: right-side menu, mobile-friendly, dark + light themes, i18n with extensible locales.
 - Minitest with multi-CPU parallel runner.
-- GitHub Actions on Blacksmith runners.
+- GitHub Actions, on whichever runner `vars.WURK_CI_RUNNER` / `vars.WURK_BENCH_RUNNER` names (`ubuntu-latest` when unset).
 - Public docs site on GitHub Pages.
 
 ## Doc index
@@ -37,7 +37,7 @@
 | 08-dashboard.md | SolidJS SPA, right-side menu, mobile, dark theme, i18n, AI |
 | 09-precompiled-assets.md | Assets baked into the gem at build time |
 | 10-dummy-app.md | `test/dummy/` Rails app for engine tests |
-| 11-testing-ci.md | Minitest parallel + Blacksmith GitHub workers |
+| 11-testing-ci.md | Minitest parallel + GitHub Actions CI |
 | 12-docs-site.md | GitHub Pages docs site |
 | 13-roadmap.md | MVP → 1.0 sequencing |
 | 14-ecosystem-compat.md | Tests against sidekiq-cron, sidekiq-unique-jobs, etc. |

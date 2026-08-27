@@ -3,13 +3,18 @@
 #
 # Dogfood pass with coding handoff live. The bot triages (qualifies, labels,
 # asks reporters for repro) and, once a task is ready, dispatches coding to the
-# fleet over the webhook handoff. Auto-merge is OFF (pinned 2026-08-01 — see
-# the pr: block): this file was schema-invalid until now, so the platform ran
+# fleet (handoff.mode: fleet). Auto-merge is OFF (pinned 2026-08-01 — see the
+# pr: block): this file was schema-invalid until now, so the platform ran
 # defaultPolicy (auto_merge false), and making the file valid must not change
-# the merge posture: legacy branch protection exists (1 required review + the
-# test matrix), but an approving bot review satisfies the required review, so
-# auto_merge:true would merge routine PRs on bot-approval + green CI with no
-# human. We still wait
+# the merge posture. `pr.auto_merge: false` is in fact the ONLY merge gate this
+# repo has — the live `main-protection` ruleset carries deletion +
+# non_fast_forward and a pull_request rule with
+# required_approving_review_count: 0 and no required-status-checks rule, so
+# nothing outside this file holds a merge back. (Read off the ruleset
+# 2026-08-27. The note that stood here — "legacy branch protection exists (1
+# required review + the test matrix)" — has been false since that ruleset
+# replaced it on 2026-08-07; wurk#445 flagged it, wurk#388 was the outage it
+# was created to end.) We still wait
 # for reviewer bots (coderabbit/copilot) to settle before acting. The native
 # review: block below activates the developerz review lane alongside CodeRabbit
 # (force: true, advisory — never requests changes, never approves). Everything
@@ -31,26 +36,31 @@ triage:
   confidence_threshold: 0.4
 
 handoff:
-  mode: webhook
-  # Validation placeholder only — the fleet `direct` sink claims the durable
-  # tasks row and never fires an external webhook (developerz-ai/developerz.ai#1026).
-  # Same pattern as developerz-ai/developerz.ai's own live policy. Without this
-  # line the WHOLE file fails semantic validation and is silently discarded.
-  webhook_ref: wh_fleet_placeholder
+  # `fleet`, not `webhook`: both grant HandoffWebhook
+  # (developerz-ai/developerz.ai packages/tools/src/policy-gate.ts:83) but `fleet`
+  # needs no `webhook_ref` (packages/policy/src/validate.ts:130, dz#1026), and the
+  # `wh_fleet_placeholder` ref that used to sit here resolved to no row and threw
+  # WebhookRefNotFoundError — the org account has zero registered webhooks, so
+  # the ingest graded the WHOLE file INVALID and served defaultPolicy instead
+  # (wurk#432). Every declared value below only takes effect once this is gone.
+  # This key is also the opt-in for the autonomous scout backlog-drain
+  # (apps/worker/src/cron/scout-backlog-drain.ts:22-29), which stays inert until
+  # dz#1249 and dz#1530 close. Enrolling wurk was authorized by Ivan (ivndev001)
+  # 2026-08-21 on wurk#445.
+  mode: fleet
   ask_reporter_first: false
 
 pr:
   wait_for_other_bots: [coderabbit, copilot]
   # PINNED OFF 2026-08-01 (operator decision, developerz-ai/wurk#345). Until
-  # this PR the file was schema-invalid (handoff.mode=webhook without
-  # webhook_ref), so the platform discarded it whole and ran defaultPolicy —
-  # whose pr.auto_merge is false. Activating the file with the previously
-  # declared `true` would have flipped auto-merge ON: legacy branch protection
-  # is in place (1 required approving review + the test matrix, strict), but an
-  # approving bot review satisfies the required review, so a bot approval plus
-  # green CI would merge a routine PR with no human in the loop. Activation must
-  # be behavior-preserving on the
-  # merge posture; every other declared value activates as written. The dz#789
+  # wurk#432/#445 the file was semantically invalid (handoff.webhook_ref named
+  # no registered webhook), so the platform discarded it whole and ran
+  # defaultPolicy — whose pr.auto_merge is false. Activating the file with the
+  # previously declared `true` would have flipped auto-merge ON with nothing
+  # behind it: the `main-protection` ruleset requires zero approving reviews and
+  # no status checks, so a routine PR would merge on green CI alone, no human in
+  # the loop. This line IS the gate. Activation must be behavior-preserving on
+  # the merge posture; every other declared value activates as written. The dz#789
   # dependency-PR lane posture (green routine PRs merge on CI + gates) is
   # restored only behind a ruleset or a fresh explicit operator decision.
   # NOTE (wurk#347): this governs the platform BOT only. Non-major Dependabot

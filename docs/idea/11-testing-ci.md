@@ -10,9 +10,9 @@ Reasons:
 
 ## Parallel execution (multi-CPU)
 
-Minitest's parallel executor uses all available CPU cores. Each test class opts in via `parallelize_me!`. Per-test Redis namespace isolation prevents cross-test interference — each test gets a unique key prefix tied to PID plus object id, cleaned up in teardown.
+Minitest's parallel executor forks `NCPU` workers, which `test_helper` defaults to 4 — deliberately below core count, because the integration layer boots real swarms and one worker per core oversubscribes into wall-clock failures. `NCPU` is the knob for a box with headroom. Each test class opts in via `parallelize_me!`. Per-test Redis namespace isolation prevents cross-test interference — each test gets a unique key prefix tied to PID plus object id, cleaned up in teardown.
 
-Tests that exercise the swarm itself fork real processes and need a Redis DB per worker. CI provisions enough Redis DBs (or separate Redis containers) for the parallel worker count.
+Tests that exercise the swarm itself fork real processes and need a Redis DB per worker. CI runs one Redis service container and hands each worker its own logical DB (1-15, never DB 0), assigned in `test_helper`'s `after_parallel_fork` hook — which is also why `NCPU` is capped at 15.
 
 ## Test layers
 
@@ -23,7 +23,7 @@ Tests that exercise the swarm itself fork real processes and need a Redis DB per
 | Integration | End-to-end: real forks, real Redis, real perform |
 | Parity | Ported tests from upstream Sidekiq's own test suite |
 | Ecosystem | Real third-party Sidekiq gems' test suites, run against Wurk (see 14-ecosystem-compat.md) |
-| Benchmarks | Throughput, latency, memory — must not regress vs main |
+| Benchmarks | Throughput, latency, memory — must not regress vs the PR's base |
 
 ## Sidekiq parity tests
 
@@ -46,9 +46,10 @@ The test workflow's suite job:
 
 - Checks out the repo.
 - Sets up Ruby via `ruby/setup-ruby` with bundler cache.
-- Boots a Redis service container.
+- Boots a Redis service container and resolves its mapped port.
+- Sets up bun and builds the dashboard SPA into `vendor/assets/`.
 - Runs the dummy app setup.
-- Runs the full Minitest suite in parallel mode.
+- Runs the full Minitest suite in parallel mode, with the coverage gate folded into the same invocation (`COVERAGE=1`).
 
 The benchmark job runs wherever `vars.WURK_BENCH_RUNNER` points and publishes the delta vs the PR's base to the job summary and a sticky PR comment, on PRs that touch a bench input (`lib/`, `exe/`, `bench/`, `bin/bench-compare`, the Rakefile, Gemfile/gemspec, or the workflow itself). Regressions greater than 5% flag the PR.
 
@@ -62,6 +63,6 @@ Before a tag is cut:
 
 - Test suite green.
 - Ecosystem compat suite green.
-- Benchmark suite reports no regressions vs the previous tag.
+- Benchmark deltas reviewed on the PRs that landed since the last tag. There is no tag-time bench run: `bench.yml` is `on: pull_request` and compares the PR's base, and `rake release:check` never invokes bench.
 - Precompiled assets bundle is fresh.
 - Parity test SHA pin matches the latest Sidekiq main we've reviewed.
