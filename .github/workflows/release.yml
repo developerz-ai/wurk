@@ -104,8 +104,12 @@ jobs:
     steps:
       # Third-party actions pinned to a commit SHA — this job holds id-token and
       # publishes the gem, so a moved tag must not be able to hijack it.
+      # fetch-depth: 0 because bin/release-notes derives the notes' commit range
+      # from the previous v* tag; the default shallow clone has no tags and no
+      # history, so the notes would silently shrink to the single HEAD commit.
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
+          fetch-depth: 0
           persist-credentials: false
       - uses: ruby/setup-ruby@95ef2b042f9d7a56d8268cba8559e2842e2ad01b # v1
         with:
