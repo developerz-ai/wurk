@@ -1,0 +1,121 @@
+#!/usr/bin/env ruby
+# frozen_string_literal: true
+
+# Print generated release notes for a version: the CHANGELOG.md section body
+# (via the same extraction as bin/changelog-section) followed by the commits
+# since the previous tag, grouped by conventional-commit type. Used by the
+# release workflow to populate the GitHub Release notes; write output to
+# stdout only so the workflow can redirect it to --notes-file.
+#
+#   bin/release-notes 1.0.0            # commits since the previous v* tag
+#   bin/release-notes 1.0.0 v0.9.0     # commits since an explicit tag
+#
+# The prev-tag argument can also be supplied as WURK_PREV_TAG (the argument
+# wins), which lets tests pin a fixed commit without needing real tags.
+# Missing or empty CHANGELOG sections abort non-zero; a range with zero
+# conventional commits prints the Changelog section plus a note and exits 0 —
+# a release must never go red over commit-message style.
+
+require 'open3'
+
+ROOT = File.expand_path('..', __dir__)
+USAGE = 'usage: bin/release-notes <version> [prev-tag]'
+
+# Matches the subject line of a conventional commit, e.g. "feat(api)!: add X".
+CONVENTIONAL = /\A(?<type>[a-z]+)(?:\((?<scope>[^()\n]+)\))?(?<bang>!)?: (?<summary>.+)\z/
+BREAKING_FOOTER = /^BREAKING[ -]CHANGE:/
+
+# Non-breaking groups in print order; anything else (including every unknown
+# type) falls into Other.
+GROUPS = { 'feat' => 'Features', 'fix' => 'Bug Fixes', 'perf' => 'Performance' }.freeze
+
+# The %x00 separators delimit subject, body, and record; git never emits NUL
+# inside a message, so splitting on the double NUL is exact.
+def collect_commits(prev_tag)
+  ensure_ref(prev_tag) if prev_tag
+  range = prev_tag ? "#{prev_tag}..HEAD" : 'HEAD'
+  out, err, status = Open3.capture3('git', 'log', range, '--format=%s%x00%b%x00%x00', chdir: ROOT)
+  abort "release-notes ✗ git log failed: #{err.strip}" unless status.success?
+
+  out.split("\x00\x00").filter_map do |record|
+    subject, body = record.strip.split("\x00", 2)
+    { subject: subject, body: body.to_s } unless subject.nil? || subject.empty?
+  end
+end
+
+# CI checks the suite out shallow (no fetch-depth on the checkout), so a pinned
+# WURK_PREV_TAG can be absent locally; deepen the clone once rather than fail.
+# Array form throughout: no shell ever sees the ref.
+def ensure_ref(ref)
+  out, = Open3.capture3('git', 'rev-parse', '--verify', '--quiet', "#{ref}^{commit}", chdir: ROOT)
+  return unless out.strip.empty?
+
+  Open3.capture3('git', 'fetch', '--deepen', '500', 'origin', chdir: ROOT)
+  out, = Open3.capture3('git', 'rev-parse', '--verify', '--quiet', "#{ref}^{commit}", chdir: ROOT)
+  abort "release-notes ✗ unknown prev-tag `#{ref}`" if out.strip.empty?
+end
+
+def group_commits(commits)
+  groups = Hash.new { |h, k| h[k] = [] }
+  commits.each do |commit|
+    match = CONVENTIONAL.match(commit[:subject])
+    breaking = (match && match[:bang]) || commit[:body].match?(BREAKING_FOOTER)
+    group = breaking ? 'breaking' : GROUPS.fetch(match && match[:type], 'other')
+    groups[group] << (match ? match[:summary] : commit[:subject])
+  end
+  groups
+end
+
+def default_prev_tag
+  tag, = Open3.capture3('git', 'describe', '--tags', '--abbrev=0', '--match', 'v*', 'HEAD^', chdir: ROOT)
+  tag = tag.strip
+  tag.empty? ? nil : tag
+end
+
+def resolve_prev_tag
+  tag = ARGV[1].to_s
+  tag = ENV['WURK_PREV_TAG'].to_s if tag.empty?
+  tag = default_prev_tag.to_s if tag.empty?
+  tag.empty? ? nil : tag
+end
+
+def changelog_body(version)
+  changelog = File.read(File.join(ROOT, 'CHANGELOG.md'))
+  section = changelog[/^## \[#{Regexp.escape(version)}\][^\n]*\n(.*?)(?=^## \[|\z)/m, 1]
+  abort "release-notes ✗ no `## [#{version}]` section in CHANGELOG.md" if section.nil?
+
+  body = section.strip
+  abort "release-notes ✗ `## [#{version}]` section is empty" if body.empty?
+  body
+end
+
+def print_groups(groups)
+  print_group('Breaking Changes', groups['breaking'])
+  GROUPS.each_value { |heading| print_group(heading, groups[groups.key(heading)]) }
+  print_group('Other', groups['other'])
+end
+
+def print_group(heading, subjects)
+  return if subjects.nil? || subjects.empty?
+
+  puts "### #{heading}", ''
+  subjects.each { |subject| puts "- #{subject}" }
+  puts ''
+end
+
+version = ARGV[0].to_s
+abort USAGE if version.empty?
+
+prev_tag = resolve_prev_tag
+groups = group_commits(collect_commits(prev_tag))
+
+puts '## Changelog', '', changelog_body(version), ''
+puts "## Commits since #{prev_tag || 'the beginning'}", ''
+if groups.empty?
+  puts '_No commits found in this range._'
+elsif groups.keys == ['other']
+  puts '_No commits in this range follow the conventional-commit format; they are listed under Other._', ''
+  print_group('Other', groups['other'])
+else
+  print_groups(groups)
+end
