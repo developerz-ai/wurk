@@ -34,7 +34,7 @@ Redis write every five seconds for their durability.
 
 `Sidekiq::IterableJob` is an alias for `Wurk::IterableJob`, and the enumerator
 classes resolve under their upstream names too — see
-[§ Sidekiq compatibility](#sidekiq-compatibility).
+[§ Sidekiq compatibility](#9-sidekiq-compatibility).
 
 ---
 

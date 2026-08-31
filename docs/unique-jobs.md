@@ -6,7 +6,7 @@ second push of the same job while that lock is held is **dropped** instead of
 enqueued.
 
 This is a **best-effort dedup at enqueue time**, not a distributed mutex. Read
-[§ What it does not guarantee](#what-it-does-not-guarantee) before you rely on
+[§ What it does not guarantee](#7-what-it-does-not-guarantee) before you rely on
 it for correctness.
 
 Everything here is Sidekiq-compatible: `Sidekiq::Enterprise.unique!`,
@@ -19,7 +19,7 @@ honored by Wurk and vice versa.
 
 > **Not the `sidekiq-unique-jobs` gem.** That gem's `lock:` DSL is a different
 > API. Wurk's native surface is `unique_for:` / `unique_until:` — see
-> [§ Migrating from sidekiq-unique-jobs](#migrating-from-sidekiq-unique-jobs).
+> [§ Migrating from sidekiq-unique-jobs](#13-migrating-from-sidekiq-unique-jobs).
 
 ---
 
