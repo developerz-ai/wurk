@@ -1,0 +1,51 @@
+# https://docs.devin.ai/onboard-devin/environment-yaml
+# Commands run from the repo root.
+
+# Baked into the snapshot. Apt's newest Ruby on 22.04 is 3.0 — below the
+# gemspec's 3.2 floor — so take the prebuilt toolcache tarball ruby/setup-ruby
+# uses in CI rather than compiling from source.
+initialize: |
+  RUBY_VERSION=3.4.5
+  if [ ! -x "/opt/hostedtoolcache/Ruby/$RUBY_VERSION/x64/bin/ruby" ]; then
+    sudo mkdir -p "/opt/hostedtoolcache/Ruby/$RUBY_VERSION"
+    curl -fsSL -o /tmp/ruby.tar.gz \
+      "https://github.com/ruby/ruby-builder/releases/download/toolcache/ruby-$RUBY_VERSION-ubuntu-22.04.tar.gz"
+    sudo tar -xzf /tmp/ruby.tar.gz -C "/opt/hostedtoolcache/Ruby/$RUBY_VERSION"
+    rm -f /tmp/ruby.tar.gz
+  fi
+  sudo chown -R "$(id -u):$(id -g)" /opt/hostedtoolcache/Ruby
+  for b in ruby gem bundle bundler rake irb erb rdoc ri; do
+    sudo ln -sf "/opt/hostedtoolcache/Ruby/$RUBY_VERSION/x64/bin/$b" "/usr/local/bin/$b"
+  done
+  echo 'export PATH="/opt/hostedtoolcache/Ruby/3.4.5/x64/bin:$PATH"' >> ~/.bashrc
+
+  docker pull redis:7.4
+  curl -fsSL https://bun.sh/install | bash
+
+  cd ~/repos/wurk && bundle install && (cd frontend && ~/.bun/bin/bun install)
+
+# Per session: containers do not survive the snapshot, and the gem/node trees do.
+maintenance: |
+  export PATH="/opt/hostedtoolcache/Ruby/3.4.5/x64/bin:$HOME/.bun/bin:$PATH"
+  docker start wurk-redis 2>/dev/null || docker run -d --name wurk-redis -p 6379:6379 redis:7.4
+  bundle check || bundle install
+
+knowledge:
+  - name: redis
+    contents: |
+      The suite needs a real Redis (never mocked) on 127.0.0.1:6379 — maintenance starts
+      the wurk-redis container. Unset the inherited REDIS_URL and DATABASE_URL before
+      running anything: they point at another service's Redis and Postgres and make the
+      dummy Rails app fail to boot.
+        env -u DATABASE_URL -u REDIS_URL bin/check
+  - name: check
+    contents: |
+      bin/check  # pre-PR gate: rubocop + full suite + parity oracles, ~3 min
+  - name: test
+    contents: |
+      bin/rake test TEST=test/unit/foo_test.rb
+      bin/rake test:parity
+  - name: frontend
+    contents: |
+      cd frontend && bun run test && bun run lint   # vitest + oxlint
+      bin/rake frontend:build                       # vite build -> vendor/assets/
