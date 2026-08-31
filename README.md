@@ -130,7 +130,7 @@ Method, per-invocation records, workload definitions, and the separate `rake ben
 
 ## Documentation
 
-- **[Website](https://developerz-ai.github.io/wurk/)** · **[Wiki / full docs](https://github.com/developerz-ai/wurk/wiki)** — the pitch, install, and the complete guide.
+- **[Website](https://developerz-ai.github.io/wurk/)** · **[Wiki](https://github.com/developerz-ai/wurk/wiki)** — the pitch, install, and short orientation guides; the complete reference is [`docs/`](https://github.com/developerz-ai/wurk/tree/main/docs), linked from every wiki page.
 - **[API reference (YARD)](https://developerz-ai.github.io/wurk/api/)** — generated docs for the public classes (`Wurk::Worker`, `Wurk::Client`, `Wurk::Configuration`, `Wurk::Batch`, `Wurk::Limiter`, `Wurk::Unique`, and the `Sidekiq::*` aliases). Machine-readable map for AI agents: **[llms.txt](https://developerz-ai.github.io/wurk/llms.txt)**.
 - **[Getting started & architecture](https://github.com/developerz-ai/wurk/blob/main/docs/idea/01-overview.md)** — how the swarm, manager, fetcher, and processor fit together.
 - **[Starting the worker](https://github.com/developerz-ai/wurk/blob/main/docs/running.md)** — Rails auto-start, the `wurk`/`wurkswarm` runners, and running standalone without Rails.
