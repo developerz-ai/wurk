@@ -33,7 +33,11 @@ Try it before installing anything: **[wurk.demo.developerz.ai](https://wurk.demo
 | [[Active Job]] | The adapter, the zero-edit `:sidekiq` path, wire compatibility |
 | [[Architecture]] | Swarm, manager, fetcher, processor, client; boot order and signals |
 | [[The Dashboard]] | Mount it, secure it (Devise/Warden/Sorcery), read-only mode |
+| [[Retries and the Dead Set]] | Backoff, exhaustion, the morgue, poison pills |
+| [[Reliability]] | At-least-once: reliable fetch, the reaper, and where a job can still be lost |
+| [[Unique Jobs]] | Enqueue-time dedup, and the silence when it isn't on |
 | [[Periodic, Limiters and Batches]] | Cron, the five rate limiters, batches with callbacks |
+| [[Wurk Extras]] | Flows, job status, tracing, HTTP API — **Wurk-only** |
 | [[Encryption]] | Transparent AES-256-GCM argument encryption with key rotation |
 | [[Kubernetes Probes]] | Liveness and readiness endpoints for orchestrators |
 
