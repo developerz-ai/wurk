@@ -9,9 +9,13 @@
 
 - [[Getting Started]]
 - [[Migrating from Sidekiq]]
+- [[Configuration]]
+- [[Active Job]]
+- [[Testing]]
 
 **Operate**
 
+- [[Running and Deployment]]
 - [[Architecture]]
 - [[The Dashboard]]
 - [[Kubernetes Probes]]
