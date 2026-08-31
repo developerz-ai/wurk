@@ -19,11 +19,15 @@
 - [[Architecture]]
 - [[The Dashboard]]
 - [[Kubernetes Probes]]
+- [[Reliability]]
 
 **Features**
 
+- [[Retries and the Dead Set]]
 - [[Periodic, Limiters and Batches]]
+- [[Unique Jobs]]
 - [[Encryption]]
+- [[Wurk Extras]]
 
 **Elsewhere**
 
