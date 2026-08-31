@@ -2,24 +2,36 @@
 
 **A 100% drop-in replacement for Sidekiq + Sidekiq Pro + Sidekiq Enterprise. Free forever — Pro and Enterprise parity in one gem, no license check.**
 
-On throughput Wurk is not ahead of stock Sidekiq: measured at **0.87×–1.02×** depending on workload (parity on CPU- and IO-bound jobs, behind on noop and boot). What the fork-based swarm buys is copy-on-write memory and one supervisor for multi-core, not raw speed — numbers and method in [docs/benchmarks.md](https://github.com/developerz-ai/wurk/blob/main/docs/benchmarks.md).
-
-Wurk is wire-compatible with Sidekiq — same Redis keys, same job JSON, same Ruby DSL. Swap one line in your `Gemfile` and your existing jobs, batches, limiters, cron entries, and live Redis data keep working untouched. The Pro and Enterprise feature sets ship in the same free gem, with no license check and no tiers.
+Same Redis keys, same job JSON, same Ruby DSL. Swap one line in your `Gemfile` and your existing jobs, batches, limiters, cron entries, and live Redis data keep working untouched.
 
 ```ruby
 # Gemfile
-gem "wurk"
+gem "wurk"   # remove sidekiq, sidekiq-pro, sidekiq-ent
 ```
 
-## Documentation
+On throughput Wurk is not ahead of stock Sidekiq: measured at **0.87×–1.02×** depending on workload (parity on CPU- and IO-bound jobs, behind on noop and boot). What the fork-based swarm buys is copy-on-write memory and one supervisor for multi-core, not raw speed — numbers and method in [docs/benchmarks.md](https://github.com/developerz-ai/wurk/blob/main/docs/benchmarks.md).
 
-- **[[Getting Started]]** — install, the drop-in swap, your first job, mount the dashboard.
-- **[[Architecture]]** — swarm, manager, fetcher, processor, client; boot order and signals.
-- **[[The Dashboard]]** — mount it, secure it (Devise/Warden/Sorcery), read-only mode.
-- **[[Periodic, Limiters and Batches]]** — cron, rate limiters, and batches with callbacks.
-- **[[Encryption]]** — transparent AES-256-GCM argument encryption with key rotation.
-- **[[Kubernetes Probes]]** — liveness/readiness for orchestration.
-- **[[Migrating from Sidekiq]]** — the swap and what to expect.
+Try it before installing anything: **[wurk.demo.developerz.ai](https://wurk.demo.developerz.ai)** runs the real dashboard against a live swarm.
+
+## Start here
+
+- **Evaluating Wurk?** [[Migrating from Sidekiq]] — the swap, and what changes.
+- **Installing it?** [[Getting Started]] — first job and the dashboard, in ten minutes.
+- **Running it?** [[Architecture]] — processes, boot order, and what each signal does.
+
+## The pages
+
+| Page | What it covers |
+|---|---|
+| [[Getting Started]] | Install, the drop-in swap, your first job, mounting the dashboard |
+| [[Architecture]] | Swarm, manager, fetcher, processor, client; boot order and signals |
+| [[The Dashboard]] | Mount it, secure it (Devise/Warden/Sorcery), read-only mode |
+| [[Periodic, Limiters and Batches]] | Cron, the five rate limiters, batches with callbacks |
+| [[Encryption]] | Transparent AES-256-GCM argument encryption with key rotation |
+| [[Kubernetes Probes]] | Liveness and readiness endpoints for orchestrators |
+| [[Migrating from Sidekiq]] | The one-line swap and what to expect |
+
+These are **orientation** pages: what a thing is, the smallest working example, the gotchas. The full reference — 30 documents covering every option, adapter, and API — lives in [docs/](https://github.com/developerz-ai/wurk/tree/main/docs) on `main`, and each page links its own.
 
 ## Feature matrix
 
@@ -39,4 +51,5 @@ Everything below is in the one free gem. The "Sidekiq tier" column shows what yo
 Ruby `>= 3.2.0`, Redis `>= 7.0.0`. JRuby/TruffleRuby/Windows fall back to threads-only mode (no fork), behaviorally equivalent to stock Sidekiq.
 
 - **Live demo:** [wurk.demo.developerz.ai](https://wurk.demo.developerz.ai)
+- **Docs site:** [developerz-ai.github.io/wurk](https://developerz-ai.github.io/wurk/) · [API reference](https://developerz-ai.github.io/wurk/api/)
 - **Source:** [github.com/developerz-ai/wurk](https://github.com/developerz-ai/wurk)

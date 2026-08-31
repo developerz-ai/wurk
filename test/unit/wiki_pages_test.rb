@@ -32,6 +32,7 @@ class WikiPagesTest < Minitest::Test
   # after blob/main/ is still a real path in THIS repo, so it is checkable here
   # — which is the point: a renamed doc breaks the build, not the public wiki.
   BLOB_LINK = %r{https://github\.com/developerz-ai/wurk/blob/main/([^)\s#]+)}
+  TREE_LINK = %r{https://github\.com/developerz-ai/wurk/tree/main/([^)\s#]+)}
   RELATIVE_DOCS_LINK = %r{\]\((docs/[^)\s#]+)\)}
   WIKI_LINK = /\[\[([^\]|]+)(?:\|[^\]]*)?\]\]/
 
@@ -59,7 +60,8 @@ class WikiPagesTest < Minitest::Test
   def test_every_docs_deep_link_resolves_to_a_file_in_this_repo
     broken = pages.flat_map do |page|
       body = File.read(File.join(WIKI, page))
-      targets = body.scan(BLOB_LINK).flatten + body.scan(RELATIVE_DOCS_LINK).flatten
+      targets = body.scan(BLOB_LINK).flatten + body.scan(TREE_LINK).flatten +
+                body.scan(RELATIVE_DOCS_LINK).flatten
       targets.reject { |t| File.exist?(File.join(ROOT, t)) }.map { |t| "#{page} -> #{t}" }
     end
 
