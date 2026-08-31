@@ -1,5 +1,10 @@
 ### [[Home]]
 
+**Evaluate**
+
+- [[Compatibility and Divergences]]
+- [[Performance]]
+
 **Start**
 
 - [[Getting Started]]
