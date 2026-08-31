@@ -15,7 +15,7 @@ Try it before installing anything: **[wurk.demo.developerz.ai](https://wurk.demo
 
 ## Start here
 
-- **Evaluating Wurk?** [[Migrating from Sidekiq]] — the swap, and what changes.
+- **Evaluating Wurk?** [[Compatibility and Divergences]] — will your exact setup work — and [[Performance]] for the honest numbers.
 - **Installing it?** [[Getting Started]] — first job and the dashboard, in ten minutes.
 - **Running it?** [[Architecture]] — processes, boot order, and what each signal does.
 
@@ -24,12 +24,14 @@ Try it before installing anything: **[wurk.demo.developerz.ai](https://wurk.demo
 | Page | What it covers |
 |---|---|
 | [[Getting Started]] | Install, the drop-in swap, your first job, mounting the dashboard |
+| [[Migrating from Sidekiq]] | The one-line swap, sizing processes × threads, the cutover checklist |
+| [[Compatibility and Divergences]] | What is identical, what deliberately differs, ecosystem gem status |
+| [[Performance]] | The measured 0.87×–1.02× position and what forking actually buys |
 | [[Architecture]] | Swarm, manager, fetcher, processor, client; boot order and signals |
 | [[The Dashboard]] | Mount it, secure it (Devise/Warden/Sorcery), read-only mode |
 | [[Periodic, Limiters and Batches]] | Cron, the five rate limiters, batches with callbacks |
 | [[Encryption]] | Transparent AES-256-GCM argument encryption with key rotation |
 | [[Kubernetes Probes]] | Liveness and readiness endpoints for orchestrators |
-| [[Migrating from Sidekiq]] | The one-line swap and what to expect |
 
 These are **orientation** pages: what a thing is, the smallest working example, the gotchas. The full reference — 30 documents covering every option, adapter, and API — lives in [docs/](https://github.com/developerz-ai/wurk/tree/main/docs) on `main`, and each page links its own.
 
