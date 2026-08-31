@@ -1,0 +1,82 @@
+name: publish-wiki
+
+# Mirrors docs/wiki/ onto the GitHub wiki repo (wurk.wiki.git).
+#
+# The wiki is a separate git repo with no pull requests and no CI, so anything
+# hand-edited there ships unreviewed — which is how "Free forever. Faster."
+# went live and sat there for the wiki's whole life. Making docs/wiki/ the
+# source and this job the only writer puts every wiki change behind the same
+# reviewed-PR + green-gate path as the code (the claim guard lives in
+# test/unit/wiki_pages_test.rb).
+#
+# The push is a FORCE MIRROR: whatever is in docs/wiki/ on main becomes the
+# wiki, and any wiki-side edit is destroyed. That is the point — a wiki-side
+# edit is by definition an unreviewed change, and letting it survive would
+# reintroduce the drift this replaces.
+on:
+  push:
+    branches: [main]
+    paths:
+      - "docs/wiki/**"
+      - ".github/workflows/publish-wiki.yml"
+  workflow_dispatch:
+
+# The wiki lives in a sibling repo of this one and is written with the job's
+# GITHUB_TOKEN; contents:write is what authorizes that push.
+permissions:
+  contents: write
+
+# Never cancel a publish in flight: an interrupted mirror would leave the wiki
+# half-written, and the wiki is public. Matches deploy/publish workflows here
+# (pages, release, deploy-demo).
+concurrency:
+  group: ${{ github.workflow }}
+  cancel-in-progress: false
+
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: mirror docs/wiki/ onto the wiki repo
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -euo pipefail
+
+          git clone --depth 1 \
+            "https://x-access-token:${GH_TOKEN}@github.com/${GITHUB_REPOSITORY}.wiki.git" wiki
+
+          # Delete-then-copy, so a page removed from docs/wiki/ is removed from
+          # the wiki too. `git rm` rather than `rm` keeps .git untouched.
+          cd wiki
+          git rm -rqf . 2>/dev/null || true
+          cd ..
+          cp docs/wiki/*.md wiki/
+
+          cd wiki
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add -A
+          if git diff --cached --quiet; then
+            echo "wiki already matches docs/wiki/ — nothing to publish"
+            exit 0
+          fi
+          git commit -m "Publish docs/wiki/ from ${GITHUB_SHA}"
+          git push origin HEAD
+
+      # Proves the mirror landed rather than trusting the push's exit code: a
+      # fresh clone must be byte-identical to the source tree.
+      - name: verify the wiki matches docs/wiki/
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -euo pipefail
+          git clone --depth 1 \
+            "https://x-access-token:${GH_TOKEN}@github.com/${GITHUB_REPOSITORY}.wiki.git" wiki-verify
+          diff -r --exclude=.git wiki-verify docs/wiki
+          echo "wiki matches docs/wiki/"
