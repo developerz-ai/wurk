@@ -1,0 +1,1 @@
+These pages are generated from [`docs/wiki/`](https://github.com/developerz-ai/wurk/tree/main/docs/wiki) on `main` and republished on every merge. **Edits made here are overwritten** — send a pull request against that directory instead. Wurk is MIT-licensed; the full reference lives in [`docs/`](https://github.com/developerz-ai/wurk/tree/main/docs).
