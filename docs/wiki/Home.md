@@ -27,6 +27,10 @@ Try it before installing anything: **[wurk.demo.developerz.ai](https://wurk.demo
 | [[Migrating from Sidekiq]] | The one-line swap, sizing processes × threads, the cutover checklist |
 | [[Compatibility and Divergences]] | What is identical, what deliberately differs, ecosystem gem status |
 | [[Performance]] | The measured 0.87×–1.02× position and what forking actually buys |
+| [[Configuration]] | The initializer, precedence, the options and env vars you will actually set |
+| [[Running and Deployment]] | The two runners, signals, rolling restarts, zero-downtime deploys |
+| [[Testing]] | The three modes, and what inline execution silently skips |
+| [[Active Job]] | The adapter, the zero-edit `:sidekiq` path, wire compatibility |
 | [[Architecture]] | Swarm, manager, fetcher, processor, client; boot order and signals |
 | [[The Dashboard]] | Mount it, secure it (Devise/Warden/Sorcery), read-only mode |
 | [[Periodic, Limiters and Batches]] | Cron, the five rate limiters, batches with callbacks |
