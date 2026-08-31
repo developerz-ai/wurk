@@ -1,6 +1,7 @@
 # frozen_string_literal: true
 
 require 'minitest/autorun'
+require 'ripper'
 
 # The gate on links between the reference docs in docs/*.md.
 #
@@ -118,5 +119,98 @@ class DocsLinksTest < Minitest::Test
 
     assert_empty broken.map { |l| "#{l[:doc]}:#{l[:line]} -> #{l[:href]}" },
                  'a link into another doc must name a heading that exists there'
+  end
+end
+
+# The gate on `docs/configuration.md`'s claim that its table is "Every `ENV`
+# read in `lib/`".
+#
+# The table said that while `WURK_API_READ_ONLY` was missing from it, which is
+# the failure a completeness claim invites: an operator auditing the env surface
+# from a table that calls itself complete concludes the variable does not exist,
+# and a stray `WURK_API_READ_ONLY=1` then 403s every API write with nothing in
+# the config to explain it.
+#
+# Reads are found with Ripper rather than grep, because `lib/` mentions env
+# names in places that are not reads: `cli.rb`'s `NO_API_TOKEN_MESSAGE` heredoc
+# shows `ENV.fetch('WURK_API_TOKEN')` as example text for an initializer, and
+# comments name variables freely. A lexer sees those as string and comment
+# tokens; a grep sees a read and fails the build over documentation that would
+# be wrong to write.
+class DocsEnvTableTest < Minitest::Test
+  # Reads files and touches no Redis or shared state.
+  parallelize_me!
+
+  ROOT = File.expand_path('../..', __dir__)
+  LIB = File.join(ROOT, 'lib')
+  TABLE = File.join(ROOT, 'docs', 'configuration.md')
+
+  NAME = /\A[A-Z][A-Z0-9_]*\z/
+  READERS = %w[fetch key?].freeze
+  SECTION = '## Environment variables'
+
+  # `ENV['NAME']`, `ENV.fetch('NAME', …)`, `ENV.key?('NAME')` — the reader forms
+  # in lib/, each read against a literal name. Ripper.lex is enough: an `ENV`
+  # inside a string or a comment lexes as tstring_content or comment and never
+  # as an on_const token. A read through a variable (`ENV[OPT_OUT_ENV]`) names
+  # nothing here and is not claimed to be covered.
+  def self.env_reads(path)
+    tokens = Ripper.lex(File.read(path)).reject do |(_pos, type, _tok, _state)|
+      %i[on_sp on_nl on_ignored_nl on_comment].include?(type)
+    end
+
+    tokens.each_index.filter_map do |at|
+      next unless tokens[at][1] == :on_const && tokens[at][2] == 'ENV'
+
+      name = literal_after(tokens, at)
+      name if name&.match?(NAME)
+    end
+  end
+
+  # The string literal the `ENV` at `at` is subscripted with, if it is one.
+  def self.literal_after(tokens, at)
+    shape = tokens[(at + 1)..(at + 4)].to_a.map { |(_pos, type, tok, _state)| [type, tok] }
+
+    case shape
+    in [[:on_lbracket, _], [:on_tstring_beg, _], [:on_tstring_content, name], *]
+      name
+    in [[:on_period, _], [:on_ident, reader], [:on_lparen, _], [:on_tstring_beg, _]] if READERS.include?(reader)
+      tokens[at + 5]&.fetch(2)
+    in _
+      nil
+    end
+  end
+
+  # Every variable named in the first column of the env table — including the
+  # `SIDEKIQ_*` aliases and the comma-separated cells. Rows are taken from that
+  # section alone, so a name appearing in one of the file's other tables cannot
+  # answer for a missing row here.
+  def documented
+    lines = File.readlines(TABLE)
+    from = lines.index { |line| line.start_with?(SECTION) }
+    return if from.nil?
+
+    section = lines[(from + 1)..].take_while { |line| !line.start_with?('## ') }
+    section.select { |line| line.start_with?('| `') }
+           .flat_map { |row| row.split('|')[1].to_s.scan(/`([A-Z][A-Z0-9_]*)`/) }
+           .flatten.to_set
+  end
+
+  def read_in_lib
+    Dir.glob(File.join(LIB, '**', '*.rb')).flat_map do |path|
+      self.class.env_reads(path).map { |name| [name, path.delete_prefix("#{ROOT}/")] }
+    end
+  end
+
+  def test_the_table_lists_every_env_read_in_lib
+    listed = documented
+
+    refute_nil listed, "the '#{SECTION}' section is gone from docs/configuration.md"
+
+    missing = read_in_lib.reject { |(name, _path)| listed.include?(name) }.uniq
+
+    assert_empty missing.map { |(name, path)| "#{name} (#{path})" },
+                 'docs/configuration.md says its table is "Every `ENV` read in `lib/`" — ' \
+                 'add a row, or stop claiming every'
   end
 end

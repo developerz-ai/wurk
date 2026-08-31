@@ -251,6 +251,7 @@ is the drop-in alias and is checked second (native wins).
 | `WURK_PRELOAD` / `SIDEKIQ_PRELOAD` | `CLI#preload_groups` | Comma-separated Bundler groups `Bundler.require`d in the swarm parent before fork. Default `default`; an explicit empty value disables the preload |
 | `WURK_PRELOAD_APP` / `SIDEKIQ_PRELOAD_APP` | `CLI#preload_app?` | `=1` eager-loads the whole Rails app in the swarm parent before forking (more copy-on-write sharing, slower parent boot) |
 | `WURK_WEB_READ_ONLY` | `Web::Config#env_read_only?` | `=1` boots the dashboard in read-only mode |
+| `WURK_API_READ_ONLY` | `Configuration#api_read_only?` | `=1` boots the HTTP API in read-only mode — every write route answers 403. Not inherited from `WURK_WEB_READ_ONLY`; see [HTTP API](api-http.md#read-only-mode). `config.api_read_only` wins when set |
 | `WURK_DEBUG` | `Configuration::ERROR_HANDLER` | Any value makes the default error handler log `full_message` (with backtrace) instead of `detailed_message` |
 | `WURK_VITE_DEV` | `Engine`, `DashboardController` | `=1` serves the SPA from the Vite dev server instead of the precompiled bundle |
 | `RAILS_MAX_THREADS` | `CLI#apply_defaults!` | Fallback `concurrency` when neither CLI nor YAML set it |
