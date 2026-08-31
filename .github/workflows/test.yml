@@ -49,6 +49,11 @@ jobs:
         with:
           filters: |
             ruby:
+              # docs/wiki/** is source for the public wiki and its only gate is
+              # test/unit/wiki_pages_test.rb, inside this suite. Without it here
+              # a wiki-only PR skips the Ruby job and reports green having never
+              # run the guard — and merging goes on to publish the page.
+              - 'docs/wiki/**'
               - 'lib/**'
               - 'app/**'
               - 'exe/**'
