@@ -247,6 +247,30 @@ authentication gates the mount.
 
 ---
 
+## Profiling Wurk itself — `bin/profile`
+
+Everything above profiles *your* jobs. To profile Wurk's own hot paths against
+a real Redis (the repo's own tool, `stackprof`, dev group):
+
+```bash
+bin/profile                 # fetch+execute — the path the bench gate protects
+bin/profile enqueue         # client push
+bin/profile fetch --alloc   # allocation counts instead of CPU samples
+bin/profile fetch --dump    # keep the raw dump for `stackprof tmp/profile.dump --method …`
+```
+
+| Env var | Default | Meaning |
+|---|---|---|
+| `PROFILE_LIMIT` | `25` | frames printed in the top-frames report |
+| `PROFILE_ITERATIONS` | `50000`, or `2000` under `--alloc` | jobs pushed/executed per run — allocation mode is far slower, hence the lower default |
+| `WURK_BENCH_DB` | `15` | Redis logical DB, which the run **FLUSHDBs**; never 0 (see [Benchmarks](benchmarks.md)) |
+
+Both knobs trade run time for signal: raise `PROFILE_ITERATIONS` when a frame
+you care about is buried in startup noise, raise `PROFILE_LIMIT` when the
+interesting frame is below the cut.
+
+---
+
 ## Related
 
 - [Dashboard](dashboard.md) — mounting, tabs, and web config.
