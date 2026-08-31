@@ -390,7 +390,7 @@ chart. All paths are relative to your engine mount (`/wurk/api/…` for a
 |----------|------------|
 | `GET /api/metrics` | `minutes` (1–480, default 60), `substr` prefix filter on class name |
 | `GET /api/metrics/:klass` | `minutes` (1–480, default 60) **or** `hours` (1–72, default 24) |
-| `GET /api/history/:bucket` | `:bucket` = `1m`/`5m`/`1h`; `window` accepts `s`/`m`/`h`/`d` suffixes (`24h`, `7d`), bare number = seconds, default `24h`, clamped to the bucket TTL |
+| `GET /api/history/:bucket` | `:bucket` and `window` — contract and response shape in [Metrics history § API](metrics-history.md#api) |
 | `GET /api/queue-history/:bucket` | same, plus `queue=<name>` to narrow to one queue |
 | `GET /api/history/snapshots` | `limit` (1–10000, default 1000) |
 

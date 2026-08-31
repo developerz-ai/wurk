@@ -411,22 +411,18 @@ Wurk::ScheduledSet.new.size    # => 4
 ## The sorted-set API
 
 `RetrySet`, `ScheduledSet`, and `DeadSet` all subclass `JobSet` and share one
-surface. Every method below is available under both the `Wurk::` and
-`Sidekiq::` names.
+surface. Every method is available under both the `Wurk::` and `Sidekiq::`
+names. The method-by-method reference lives in the Data API doc — one table, so
+it cannot drift from this page:
 
-| Method | Redis | Notes |
-|--------|-------|-------|
-| `size` | `ZCARD` | O(1) |
-| `each { |entry| }` | paged `ZRANGE … REV` | Newest-first, 50 per page; yields `SortedEntry` |
-| `scan(match)` | `ZSCAN` with `*match*` | Yields raw JSON + score |
-| `find_job(jid)` | `ZSCAN` | First entry with that exact jid, or `nil`. O(n) |
-| `fetch(score, jid = nil)` | `ZRANGEBYSCORE` | `score` may be a `Time`, `Numeric`, or `Range` |
-| `schedule(timestamp, job)` | `ZADD` | Insert a payload at an explicit time |
-| `retry_all` | — | Re-enqueue every entry; returns the count |
-| `kill_all(notify_failure: true, ex: nil)` | — | Move every entry to `dead`; returns the count |
-| `clear` | `UNLINK` | Drops the whole set |
-| `delete_by_value(name, value)` | `ZREM` | Exact-bytes removal |
-| `delete_by_jid(score, jid)` | `ZRANGEBYSCORE` + `ZREM` | Aliased as `delete` |
+- [`Wurk::SortedSet`](api.md#wurksortedset--the-generic-zset-surface) — `size`,
+  `scan`, `clear`.
+- [`Wurk::JobSet`](api.md#wurkjobset--the-job-aware-surface) — `each`,
+  `find_job`, `fetch`, `schedule`, `retry_all`, `kill_all`, the delete family.
+- [`Wurk::DeadSet` extras](api.md#wurkdeadset-extras) — `kill`, `kill_raw`,
+  `trim`, and the trim options.
+- [`Wurk::SortedEntry`](api.md#wurksortedentry) — the per-entry attributes and
+  mutations.
 
 `Enumerable` is included, so `select`, `map`, `count`, and friends work — at
 the cost of paging the whole set through Redis.
@@ -447,15 +443,10 @@ entry.failed_at      # => Time
 entry.retried_at     # => Time
 ```
 
-`SortedEntry` mutations:
-
-| Method | Effect |
-|--------|--------|
-| `retry` | Removes the entry and re-pushes it, **decrementing `retry_count` by 1** so a manual retry doesn't consume an attempt |
-| `add_to_queue` | Removes and re-pushes with the payload untouched — `retry_count` is not changed |
-| `kill` | Removes and writes to the dead set, firing death handlers with the synthesized "Job killed by API" exception |
-| `delete` | Removes the entry and nothing else |
-| `reschedule(at)` | `ZINCRBY` to shift the entry's score to a new time |
+The mutation that matters for retries: `entry.retry` re-pushes the job
+**decrementing `retry_count` by 1**, so a manual retry doesn't consume one of
+the configured attempts — unlike `add_to_queue`, which leaves the payload
+untouched. Full list: [`Wurk::SortedEntry`](api.md#wurksortedentry).
 
 ```ruby
 # Retry every dead ChargeJob for one customer.

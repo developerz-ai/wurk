@@ -212,6 +212,41 @@ Needs a local Redis. First run installs `bench/vs_sidekiq/Gemfile` (stock Sideki
 | `WURK_BENCH_VS_IO_SECONDS` | `0.005` | sleep duration in the `io` shape |
 | `WURK_BENCH_VS_VERBOSE` | unset | stream worker output instead of logging to `tmp/` |
 | `WURK_BENCH_DB` | `12` | Redis logical DB (never 0 — the bench FLUSHDBs) |
+| `WURK_BENCH_VS_TIMEOUT` | `180` | seconds one (shape, engine) run may take before the driver gives up |
+
+`WURK_BENCH_VS_SHAPE` and `WURK_BENCH_VS_DONE_KEY` are set by the driver in each
+child worker's environment (`bench/vs_sidekiq/child_env.rb`) — read by
+`bench/vs_sidekiq/job.rb`, not set by hand.
+
+### The regression benches
+
+`bin/rake bench` runs the harnesses the merge gate reads. Each takes its size
+from the environment, so a slow laptop can shrink a run without editing the
+harness:
+
+| Env var | Default | Harness | Meaning |
+|---|---|---|---|
+| `WURK_BENCH_CAP` | `20` | `bench/fetch_capped.rb` | in-flight fetch cap |
+| `WURK_BENCH_CMD_JOBS` | `500` | `bench/command_count.rb` | jobs pushed while counting Redis commands |
+| `WURK_BENCH_CMD_BUDGET` | `3` | `bench/command_count.rb` | commands per job the run is allowed before it fails |
+| `WURK_BENCH_CMD_BASELINE` | `3` | `bench/command_count.rb` | commands per job the comparison treats as the baseline |
+| `WURK_BENCH_MEM_JOBS` | `2000` | `bench/memory.rb` | jobs executed per RSS sample |
+| `WURK_BENCH_MEM_SAMPLES` | `5` | `bench/memory.rb` | RSS samples taken |
+| `WURK_BENCH_SWARM_CHILDREN` | `2` | `bench/swarm_boot.rb` | children forked per boot sample |
+| `WURK_BENCH_SWARM_SAMPLES` | `8` | `bench/swarm_boot.rb` | boot samples taken |
+
+### Comparing two runs
+
+`bin/bench-compare BASELINE.txt CURRENT.txt` prints the per-benchmark delta and
+is what fails the `bench vs base` check:
+
+| Env var | Default | Meaning |
+|---|---|---|
+| `BENCH_REGRESSION_PCT` | `5` | signal margin, in percent, on top of both runs' reported `± error` before a slowdown counts as a regression |
+
+A drop is flagged only when `drop% > base_err% + head_err% + BENCH_REGRESSION_PCT`,
+so two ±7% samples differing by ~14% with no code change do not block a merge.
+Speedups are always reported and never gated.
 
 ## Fairness
 

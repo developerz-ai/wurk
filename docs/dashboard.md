@@ -40,71 +40,18 @@ Wurk::Web.use(MyAuthMiddleware, some: "arg") { |env| ... }
 `new`. Multiple calls stack outermost-first. A middleware that returns a
 `401`/`403`/redirect short-circuits the request — the dashboard never sees it.
 
-### Devise / Warden
+### Recipes
 
-Devise builds on Warden, which is already in your middleware stack and has set
-`env['warden']` by the time a request reaches the mount. Gate with a tiny
-middleware that bounces unauthenticated users to your login page:
+The worked middleware for each auth stack lives in one place — [Authentication
+& authorization § `Wurk::Web.use`](authentication.md#2-wurkwebuse--rack-middleware):
 
-```ruby
-# config/initializers/wurk.rb
-class WurkAdminAuth
-  def initialize(app) = @app = app
-
-  def call(env)
-    warden = env["warden"]
-    user   = warden&.user
-    return @app.call(env) if user&.admin?
-
-    warden&.authenticate!(scope: :user) # 401 → Devise failure app → /users/sign_in
-    [403, { "Content-Type" => "text/plain" }, ["Forbidden"]]
-  end
-end
-
-Wurk::Web.use(WurkAdminAuth)
-```
-
-Prefer to keep it in `routes.rb`? `authenticate` works too, and needs no
-`Wurk::Web.use`:
-
-```ruby
-# config/routes.rb
-authenticate :user, ->(u) { u.admin? } do
-  mount Wurk::Engine => "/wurk"
-end
-```
-
-### Sorcery
-
-Sorcery exposes its helpers on the controller, not on `env`, so check the
-session directly in the middleware:
-
-```ruby
-class WurkSorceryAuth
-  def initialize(app) = @app = app
-
-  def call(env)
-    user_id = env["rack.session"]&.[](:user_id)
-    admin   = user_id && User.find_by(id: user_id)&.admin?
-    return @app.call(env) if admin
-
-    [302, { "Location" => "/login", "Content-Type" => "text/plain" }, ["Redirecting"]]
-  end
-end
-
-Wurk::Web.use(WurkSorceryAuth)
-```
-
-### Plain HTTP Basic auth
-
-For an internal tool, `Rack::Auth::Basic` is enough — no host-app coupling:
-
-```ruby
-Wurk::Web.use(Rack::Auth::Basic, "Wurk") do |user, password|
-  ActiveSupport::SecurityUtils.secure_compare(user, ENV["WURK_USER"]) &
-    ActiveSupport::SecurityUtils.secure_compare(password, ENV["WURK_PASS"])
-end
-```
+- [Devise / Warden](authentication.md#devise--warden), including scoped variants
+  and the `routes.rb` `authenticate` gate that needs no middleware at all.
+- [Sorcery](authentication.md#sorcery) — and the same shape for Clearance,
+  Rodauth, `has_secure_password`, or any hand-rolled session.
+- [HTTP Basic auth](authentication.md#http-basic-auth) — `Rack::Auth::Basic`
+  with constant-time comparison.
+- [API tokens / service-to-service](authentication.md#api-tokens--service-to-service).
 
 ## Authorization hook
 
@@ -123,7 +70,8 @@ end
 
 A falsey return short-circuits to `403`. `path` is engine-relative
 (`/api/stats`, not the host's absolute `/wurk/api/stats`), matching Sidekiq's
-contract.
+contract. Path-scoped examples and how the SPA learns its own capability:
+[Authentication & authorization § `authorization`](authentication.md#3-authorization--per-request-method--and-path-aware).
 
 ### Read-only mode
 
@@ -134,6 +82,10 @@ destructive actions. Equivalent in Ruby:
 ```ruby
 Wurk::Web.configure { |c| c.read_only = true }
 ```
+
+The banner message, the string coercion `read_only=` accepts, and what
+read-only does **not** protect: [Authentication & authorization §
+Read-only mode](authentication.md#4-read-only-mode).
 
 ## Custom tabs / Web extensions
 
