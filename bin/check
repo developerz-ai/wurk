@@ -52,11 +52,15 @@ stage() {
 }
 
 # Redis is not optional — integration and parity tests use a real server, never
-# a mock (CLAUDE.md). Fail here with the fix rather than 200 lines into a run.
+# a mock (CLAUDE.md). Refuse with the platform's preconditions-unmet contract
+# code (apps/runner/src/modes/setup/base.ts, CHECK_EXIT_PRECONDITIONS_UNMET =
+# 75). Local developers who hit this need a Redis on 127.0.0.1:6379 — the two
+# lines on stderr above tell them how. `docker run --rm -p 6379:6379 redis:7.4`
+# is the supported path.
 if ! (exec 3<>/dev/tcp/127.0.0.1/6379) 2>/dev/null; then
   echo "bin/check: no Redis on 127.0.0.1:6379." >&2
   echo "  start one with:  docker run --rm -p 6379:6379 redis:7.4" >&2
-  exit 69
+  exit 75
 fi
 
 [ -n "${SKIP_LINT:-}" ] || stage "rubocop" bundle exec rubocop --parallel
