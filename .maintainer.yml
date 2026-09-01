@@ -3,18 +3,19 @@
 #
 # Dogfood pass with coding handoff live. The bot triages (qualifies, labels,
 # asks reporters for repro) and, once a task is ready, dispatches coding to the
-# fleet (handoff.mode: fleet). Auto-merge is OFF (pinned 2026-08-01 — see the
-# pr: block): this file was schema-invalid until now, so the platform ran
-# defaultPolicy (auto_merge false), and making the file valid must not change
-# the merge posture. `pr.auto_merge: false` is in fact the ONLY merge gate this
-# repo has — the live `main-protection` ruleset carries deletion +
-# non_fast_forward and a pull_request rule with
-# required_approving_review_count: 0 and no required-status-checks rule, so
-# nothing outside this file holds a merge back. (Read off the ruleset
-# 2026-08-27. The note that stood here — "legacy branch protection exists (1
-# required review + the test matrix)" — has been false since that ruleset
-# replaced it on 2026-08-07; wurk#445 flagged it, wurk#388 was the outage it
-# was created to end.) We still wait
+# fleet (handoff.mode: fleet). Auto-merge is ON as of 2026-09-01 — see the pr:
+# block for the history and for what stands behind it. It is NOT this file: the
+# live `main-protection` ruleset now carries a required_status_checks rule
+# (dz#2798), so CI green is enforced by the repo, not by a line in here. That
+# sentence has been rewritten twice for the same reason and the reason is worth
+# keeping: a note here claiming what protects `main` goes stale the moment
+# someone edits the ruleset, and a stale one reads as a guarantee. Read the
+# ruleset before trusting any sentence in this file about it —
+# `gh api repos/developerz-ai/wurk/rulesets`. (Prior wrong versions: "legacy
+# branch protection exists (1 required review + the test matrix)", false from
+# 2026-08-07 when the ruleset replaced it — wurk#445 flagged it, wurk#388 was
+# the outage it caused; then "no required-status-checks rule", false from
+# 2026-09-01T05:12Z.) We still wait
 # for reviewer bots (coderabbit/copilot) to settle before acting. The native
 # review: block below activates the developerz review lane alongside CodeRabbit
 # (force: true, advisory — never requests changes, never approves). Everything
@@ -52,25 +53,40 @@ handoff:
 
 pr:
   wait_for_other_bots: [coderabbit, copilot]
-  # PINNED OFF 2026-08-01 (operator decision, developerz-ai/wurk#345). Until
-  # wurk#432/#445 the file was semantically invalid (handoff.webhook_ref named
-  # no registered webhook), so the platform discarded it whole and ran
-  # defaultPolicy — whose pr.auto_merge is false. Activating the file with the
-  # previously declared `true` would have flipped auto-merge ON with nothing
-  # behind it: the `main-protection` ruleset requires zero approving reviews and
-  # no status checks, so a routine PR would merge on green CI alone, no human in
-  # the loop. This line IS the gate. Activation must be behavior-preserving on
-  # the merge posture; every other declared value activates as written. The dz#789
-  # dependency-PR lane posture (green routine PRs merge on CI + gates) is
-  # restored only behind a ruleset or a fresh explicit operator decision.
+  # UNPINNED 2026-09-01, on the exit condition the pin itself named: "restored
+  # only behind a ruleset or a fresh explicit operator decision". Both arrived.
+  #
+  # HISTORY, kept because it is why this line was ever `false`. Pinned off
+  # 2026-08-01 (operator decision, developerz-ai/wurk#345): until wurk#432/#445
+  # the file was semantically invalid (handoff.webhook_ref named no registered
+  # webhook), so the platform discarded it whole and ran defaultPolicy — whose
+  # pr.auto_merge is false. Activating the file with the previously declared
+  # `true` would have flipped auto-merge ON with nothing behind it, because the
+  # `main-protection` ruleset then required zero approving reviews AND no status
+  # checks. That is no longer true, and leaving the old sentence here would be a
+  # comment asserting a state the repo no longer has.
+  #
+  # WHAT IS BEHIND IT NOW (dz#2798, ruleset 20556704, updated 2026-09-01T05:12Z,
+  # read back before this change): a `required_status_checks` rule requiring
+  # `test + coverage (latest ruby/rails)`, `lint (rubocop)` and `parity (oracle)`
+  # — the three the 15-PR inventory found ALWAYS created, so none can wedge a PR
+  # by never reporting. `strict_required_status_checks_policy: false`, so `main`
+  # moving does not force a rebase on every open PR. Still no classic branch
+  # protection behind the ruleset (404), so the ruleset IS the gate.
+  #
+  # WHAT IS STILL NOT BEHIND IT, stated rather than assumed:
+  # `required_approving_review_count` is 0. Merges are gated by MACHINES — CI
+  # green plus the ruleset — never by a human review, which is the platform's
+  # documented auto-merge posture and not an oversight. The shape wurk#450 got
+  # through (a red `test + coverage`, merged 24 seconds later) is no longer
+  # expressible.
   # NOTE (wurk#347): this governs the platform BOT only. Non-major Dependabot
   # updates are also targeted by a separate GitHub-native GHA lane
   # (.github/workflows/dependabot-automerge.yml, dz#789) that this policy does
-  # not govern. Repo auto-merge is enabled, so that lane is not inert by config
-  # — yet every Dependabot PR so far (#299-304) was merged by hand, so in
-  # practice a human still gates merges on this repo. auto_merge: false scopes
-  # the platform bot; it does not control the GHA lane.
-  auto_merge: false
+  # not govern. Repo auto-merge is enabled, so that lane is not inert by config.
+  # `auto_merge` here scopes the platform BOT; it does not control the GHA lane,
+  # and flipping it to `true` did not change that lane's behaviour either way.
+  auto_merge: true
 
 review:
   enabled: true
