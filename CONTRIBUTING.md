@@ -58,6 +58,24 @@ bin/check full     # ...plus the ecosystem suites
 It refuses to start without a local Redis and tells you how to get one. A green
 `bin/check` is the answer CI will give you.
 
+### Exit codes
+
+`bin/check` exits with one of four codes — CI treats anything but `0` as a
+failed run:
+
+| Exit | Trigger | Source |
+|---|---|---|
+| `0` | Every stage passed. | `bin/check:80-83` |
+| `1` | At least one stage reported failure. | `bin/check:85-86` |
+| `64` | Unknown mode argument (anything but `fast` / `pr` / `full`). | `bin/check:27-30` |
+| `75` | No Redis on `127.0.0.1:6379` — the platform's "preconditions unmet" code. | `bin/check:60-64` |
+
+### Env knobs
+
+- `SKIP_LINT=1` — drop the rubocop stage (`bin/check:66`).
+- `SKIP_PARITY=1` — drop the parity oracles stage (`bin/check:73`).
+- `NCPU=<n>` — see [Worker count](#worker-count) below for the trade-off (ceiling 14).
+
 The individual tasks, when you want one:
 
 | Task | Command |
@@ -70,6 +88,8 @@ The individual tasks, when you want one:
 | Coverage gate | `COVERAGE=1 bin/rake test` |
 | Benchmarks | `bin/rake bench` |
 | Lint | `bundle exec rubocop --parallel` |
+
+### Worker count
 
 The suite forks 4 parallel workers, each on its own Redis logical DB. That is
 deliberately below most machines' core count: the integration layer boots real
