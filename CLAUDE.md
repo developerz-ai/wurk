@@ -17,7 +17,7 @@ Three pillars, all must stay true:
 | Task | Command |
 |---|---|
 | Install | `bundle install` |
-| Pre-PR gate (lint + suite + parity) | `bin/check` (`fast` = lint + unit, `full` = + ecosystem) |
+| Pre-PR gate (lint + suite + parity) | `bin/check` (`fast` = lint + unit, `full` = + ecosystem; `SKIP_LINT=1` / `SKIP_PARITY=1` skip a stage, `NCPU=<n>` sets parallel test workers) |
 | Full test suite (parallel) | `bin/rake test` |
 | Single file | `bin/rake test TEST=test/path/to/file_test.rb` |
 | Single test by name | `bin/rake test TEST=test/foo_test.rb TESTOPTS="--name=/pattern/"` |
