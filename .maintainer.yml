@@ -24,6 +24,29 @@
 # described a lane this repo does not run.
 version: 1
 
+# THE SERVICES THIS REPO'S OWN GATE NEEDS BEFORE IT CAN GRADE A DIFF
+# (developerz-ai/developerz.ai#2918, mechanism in #2919).
+#
+# `bin/check` refuses without a Redis on 127.0.0.1:6379 -- integration and parity
+# tests use a real server, never a mock -- and that refusal is correct. What was
+# wrong is what happened next: every box in the fleet claimed this repo's coding
+# work, the agent produced the correct edit, passed its own guard, and the gate
+# discarded it in 60 ms for want of a service the box never had. Three attempts,
+# three times, each one filed as a bad diff.
+#
+# Declaring it turns "claimed and thrown away" into "claimed by a box that can
+# actually grade it". The platform mints a `service:redis` capability token into
+# the claim gate's requirement set, and a box adverts that token only by opening
+# a real connection to the port -- so this line routes the work rather than
+# describing an intention. A task no box can serve is HELD with
+# `no_service_capacity` naming the gap (#2920), instead of sitting pending and
+# silent.
+#
+# CLOSED VOCABULARY (`redis` | `postgres`): this key can never name an image or a
+# command, which is what keeps a `.maintainer.yml` from being a way to start a
+# process on somebody's box.
+services: [redis]
+
 tone:
   voice: friendly
   language: en
