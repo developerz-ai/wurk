@@ -61,13 +61,17 @@ It refuses to start without a local Redis and tells you how to get one. A green
 ### Exit codes
 
 `bin/check` exits with one of four codes — CI treats anything but `0` as a
-failed run:
+failed run.
+
+With no argument, mode defaults to `pr` (the same path `bin/check pr` takes) —
+the case dispatch at `bin/check:20-31` matches `''` to `pr` rather than
+treating it as unknown:
 
 | Exit | Trigger | Source |
 |---|---|---|
-| `0` | Every stage passed. | `bin/check:80-83` |
+| `0` | Every stage passed, OR `-h` / `--help` / `help` printed the help block without running any stage. | `bin/check:80-83`, `bin/check:23-26` |
 | `1` | At least one stage reported failure. | `bin/check:85-86` |
-| `64` | Unknown mode argument (anything but `fast` / `pr` / `full`). | `bin/check:27-30` |
+| `64` | Unrecognised mode argument — anything other than `''`, `pr`, `fast`, `full`, `-h`, `--help`, or `help`. | `bin/check:27-30` |
 | `75` | No Redis on `127.0.0.1:6379` — the platform's "preconditions unmet" code. | `bin/check:60-64` |
 
 ### Env knobs
