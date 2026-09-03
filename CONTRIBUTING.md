@@ -86,7 +86,7 @@ nobody wrote.
 ### Env knobs
 
 - `SKIP_LINT=1` — drop the rubocop stage (`bin/check:80`).
-- `SKIP_PARITY=1` — drop the parity oracles stage (`bin/check:87`).
+- `SKIP_PARITY=1` — drop the parity oracles stage (`bin/check:113`).
 - `SKIP_FRONTEND=1` — drop the frontend stage (typecheck + oxlint + vitest in `frontend/`; `bin/check:99-106`).
 - `NCPU=<n>` — see [Worker count](#worker-count) below for the trade-off (ceiling 14).
 
