@@ -40,6 +40,7 @@ jobs:
       ruby: ${{ steps.filter.outputs.ruby }}
       frontend: ${{ steps.filter.outputs.frontend }}
       specdocs: ${{ steps.filter.outputs.specdocs }}
+      workflows: ${{ steps.filter.outputs.workflows }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -75,6 +76,9 @@ jobs:
             specdocs:
               - 'docs/target/**'
               - '.github/workflows/test.yml'
+            workflows:
+              - '.github/workflows/**'
+              - '.github/actionlint.yaml'
 
   # ONE full run of the Ruby suite, on the newest Ruby and the newest Rails,
   # with the coverage gate folded into it.
@@ -257,6 +261,42 @@ jobs:
             fi
             echo "✓ $file exists and is non-empty ($(wc -l < "$file") lines)"
           done
+
+  # Workflow lint via actionlint. Closes the gap left by CodeRabbit's advisory
+  # actionlint pass (.coderabbit.yml:106-107 + .maintainer.yml:119-120 setting
+  # `request_changes: false` for the review lane), which never blocks a merge.
+  # actionlint embeds shellcheck for `run:` blocks, so no separate install.
+  # Not wired into the ruleset's required checks in this PR.
+  actionlint:
+    name: actionlint (workflow lint)
+    needs: detect
+    runs-on: ubuntu-latest
+    timeout-minutes: 3
+    env:
+      # Per-step gate so this job always reports a status even on a PR whose
+      # diff doesn't touch a workflow (see `test` job for the same pattern).
+      RUN: ${{ github.event_name != 'pull_request' || needs.detect.outputs.workflows == 'true' }}
+      # Triple pin: release version, download-script commit SHA, and the
+      # linux/amd64 binary's own SHA256. A silent upstream rewrite, a script
+      # change, or a tag repoint cannot reach main unobserved.
+      ACTIONLINT_VERSION: "1.7.12"
+      ACTIONLINT_SHA: "914e7df21a07ef503a81201c76d2b11c789d3fca"
+      ACTIONLINT_BINARY_SHA256: "c872d6db8c6bf83a8eaa704fc93999f027d55dffbc63b8a6abdccb47df5f4cd4"
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: download actionlint
+        if: env.RUN == 'true'
+        run: |
+          curl -fsSL \
+            "https://raw.githubusercontent.com/rhysd/actionlint/${ACTIONLINT_SHA}/scripts/download-actionlint.bash" \
+            | bash -s -- "${ACTIONLINT_VERSION}" /tmp/actionlint-bin
+          echo "${ACTIONLINT_BINARY_SHA256}  /tmp/actionlint-bin/actionlint" | sha256sum -c -
+          /tmp/actionlint-bin/actionlint -version
+      - name: run actionlint
+        if: env.RUN == 'true'
+        run: /tmp/actionlint-bin/actionlint -color
 
   # Ruby linting — nothing runs rubocop today, so this closes that gap.
   # Paired with the `frontend` and `spec-docs` jobs as quick, parallel checks.

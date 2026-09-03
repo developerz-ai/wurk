@@ -13,3 +13,8 @@
 # `ubuntu-latest`, and yields green CI indistinguishable from the intended
 # fallback, so the cutover simply never happens and nothing complains. Guard it
 # by grepping the expression sites, not by trusting a green run.
+#
+# This file is now read by the `actionlint` job in .github/workflows/test.yml
+# (added for #484). The job pins the actionlint binary to v1.7.12 by SHA, runs
+# on every PR, and gates per-step on a `workflows` paths-filter so it always
+# reports a status — even on a PR whose diff doesn't touch a workflow.
