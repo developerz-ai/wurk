@@ -99,10 +99,24 @@ pr:
   #
   # WHAT IS STILL NOT BEHIND IT, stated rather than assumed:
   # `required_approving_review_count` is 0. Merges are gated by MACHINES — CI
-  # green plus the ruleset — never by a human review, which is the platform's
+  # green plus the ruleset — not by a human review, which is the platform's
   # documented auto-merge posture and not an oversight. The shape wurk#450 got
   # through (a red `test + coverage`, merged 24 seconds later) is no longer
   # expressible.
+  #
+  # ONE EXCEPTION the count of 0 hides (wurk#488): the ruleset's pull_request
+  # rule sets `require_extra_approval_for_unattributed_changes: true` (read
+  # back via `gh api repos/developerz-ai/wurk/rulesets/20556704`, ruleset id
+  # stable since 2026-08-07), so a PR whose commits include any not attributed
+  # to a GitHub account needs one human approval before the bot's auto-merge
+  # will fire. Every squash on main to date is attributed (author.login
+  # non-null on the last 40), so this has not gated a PR yet — the day a fleet
+  # box commits with an email not linked to a GitHub account, that PR silently
+  # parks and the bot cannot move it. CONTRIBUTING.md tells contributors to
+  # commit with a GitHub-linked email for exactly this reason. The rule here
+  # (.maintainer.yml:10-14) says this file must not assert a ruleset state it
+  # does not have, and the count-of-0 sentence above would be one of those
+  # assertions without this caveat.
   # NOTE (wurk#347): this governs the platform BOT only. Non-major Dependabot
   # updates are also targeted by a separate GitHub-native GHA lane
   # (.github/workflows/dependabot-automerge.yml, dz#789) that this policy does
