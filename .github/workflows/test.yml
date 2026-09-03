@@ -192,11 +192,12 @@ jobs:
           path: coverage/coverage.xml
           if-no-files-found: warn
 
-  # Oracle suite lifted from upstream Sidekiq (SHA-pinned in
-  # test/parity/.sidekiq_sha). Its own dedicated job so a parity divergence is
-  # legible at a glance rather than buried in the main suite's output. Needs
-  # neither the dashboard bundle nor a Node toolchain, which is why it stays a
-  # 4vcpu job that finishes in well under a minute.
+  # Oracle suite: independently written oracles for the documented Sidekiq
+  # behaviour, pinned to the upstream revision in test/parity/.sidekiq_sha.
+  # Its own dedicated job so a parity divergence is legible at a glance rather
+  # than buried in the main suite's output. Needs neither the dashboard bundle
+  # nor a Node toolchain, which is why it stays a 4vcpu job that finishes in
+  # well under a minute.
   parity:
     name: parity (oracle)
     needs: detect
