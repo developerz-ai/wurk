@@ -2,16 +2,16 @@
 # The one command to run before opening a PR: the same gates CI runs, in the
 # order that fails fastest.
 #
-#   bin/check              lint + full suite + parity     (the PR gate)
-#   bin/check fast         lint + unit tests only         (the inner loop)
-#   bin/check full         everything above + ecosystem   (third-party suites)
+#   bin/check              lint + frontend + full suite + parity  (the PR gate)
+#   bin/check fast         lint + unit tests only                  (the inner loop)
+#   bin/check full         everything above + ecosystem            (third-party suites)
 #
 # Anything it runs, CI runs too — so a green `bin/check` is the same answer the
-# PR will get, minus the version matrix.
+# PR will get.
 #
 # Env knobs:
 #   NCPU=<n>   parallel test workers (default: core count, capped at 14)
-#   SKIP_LINT=1 / SKIP_PARITY=1   drop a stage
+#   SKIP_LINT=1 / SKIP_PARITY=1 / SKIP_FRONTEND=1   drop a stage
 set -euo pipefail
 
 cd "$(dirname "$0")/.."
@@ -78,6 +78,32 @@ if ! (exec 3<>/dev/tcp/127.0.0.1/6379) 2>/dev/null; then
 fi
 
 [ -n "${SKIP_LINT:-}" ] || stage "rubocop" bundle exec rubocop --parallel
+
+# Frontend gate mirrors test.yml's `frontend (vitest)` job: bun install +
+# typecheck + oxlint + vitest in frontend/. CI runs each as its own step;
+# bin/check rolls them into one stage so a failing step stops the gate fast
+# and the wall-clock report stays short. Skipped in `fast` (the inner loop is
+# the Ruby edit cycle, not dashboard work) and via SKIP_FRONTEND=1. Without
+# bun on PATH, refuse with 75 — the same preconditions-unmet code the
+# bundler / Redis guards above use.
+run_frontend_stage() {
+  (
+    cd frontend
+    bun install --frozen-lockfile \
+      && bun run typecheck \
+      && bun run lint \
+      && bun run test
+  )
+}
+
+if [ "$MODE" != fast ] && [ -z "${SKIP_FRONTEND:-}" ]; then
+  if ! command -v bun >/dev/null 2>&1; then
+    echo "bin/check: no bun on PATH — frontend gate cannot execute." >&2
+    echo "  install bun:                    curl -fsSL https://bun.sh/install | bash" >&2
+    exit 75
+  fi
+  stage "frontend" run_frontend_stage
+fi
 
 case "$MODE" in
   fast) stage "unit tests" bundle exec rake test:unit ;;

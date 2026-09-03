@@ -50,8 +50,8 @@ Frontend unit + integration tests (Vitest, SolidJS Testing Library) run with
 order that fails fastest, and prints a per-stage wall clock:
 
 ```sh
-bin/check fast     # rubocop + unit tests           — the inner loop
-bin/check          # rubocop + full suite + parity  — run this before opening a PR
+bin/check fast     # rubocop + unit tests              — the inner loop
+bin/check          # rubocop + frontend + full suite + parity  — run this before opening a PR
 bin/check full     # ...plus the ecosystem suites
 ```
 
@@ -74,6 +74,7 @@ treating it as unknown:
 | `64` | Unrecognised mode argument — anything other than `''`, `pr`, `fast`, `full`, `-h`, `--help`, or `help`. | `bin/check:27-30` |
 | `75` | No bundler on `PATH` — the environment cannot run the Ruby gate at all. | `bin/check:62-66` |
 | `75` | No Redis on `127.0.0.1:6379`. | `bin/check:74-78` |
+| `75` | No `bun` on `PATH` — frontend gate cannot execute. | `bin/check:100-104` |
 
 `75` is the platform's "preconditions unmet" code, and both triggers share it on
 purpose: neither says anything about the diff. A gate that cannot reach its Redis,
@@ -86,6 +87,7 @@ nobody wrote.
 
 - `SKIP_LINT=1` — drop the rubocop stage (`bin/check:80`).
 - `SKIP_PARITY=1` — drop the parity oracles stage (`bin/check:87`).
+- `SKIP_FRONTEND=1` — drop the frontend stage (typecheck + oxlint + vitest in `frontend/`; `bin/check:99-106`).
 - `NCPU=<n>` — see [Worker count](#worker-count) below for the trade-off (ceiling 14).
 
 The individual tasks, when you want one:
