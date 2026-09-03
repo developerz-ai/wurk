@@ -42,11 +42,6 @@ def parse(path)
     next unless m
 
     label = m[1].strip
-    # Skip stub benches tagged "(TODO)" — they aren't measuring real work and
-    # their cross-run jitter false-positives the noise gate (e.g. a `1 + 1`
-    # ips report swings ~14% on a ~50M i/s baseline, well past ±5.7%).
-    next if label.include?('(TODO)')
-
     value = m[2].delete(',').to_f * SCALE[m[3]]
     keep_fastest(results, label, value, m[4].delete(',').to_f)
   end
