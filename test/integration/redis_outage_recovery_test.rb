@@ -110,7 +110,6 @@ class RedisOutageRecoveryTest < Wurk::Test::UnitCase
     assert_equal @capsule.fetch_redis_pool.size, @capsule.fetch_redis_pool.available,
                  'idle worker must hold zero fetch-pool connections once fetching goes idle'
   end
-  # rubocop:enable Minitest/MultipleAssertions
 
   # 04-redis-retry-idempotency, F5 regression: Heartbeat#drain_signals is
   # deliberately excluded from `idempotent: true` (LPOP is destructive — see
