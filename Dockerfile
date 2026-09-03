@@ -10,7 +10,7 @@
 # needs a verification pass with infra — see docs/demo-deploy.md.
 
 # ---- Stage 1: build the dashboard SPA (no Node/bun at runtime) ----
-FROM oven/bun:1.3.14-slim AS spa
+FROM oven/bun:1.4.0-slim AS spa
 WORKDIR /src
 COPY frontend/package.json frontend/bun.lock ./frontend/
 RUN cd frontend && bun install --frozen-lockfile
