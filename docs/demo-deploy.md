@@ -37,14 +37,18 @@ holds no cluster credentials. The in-cluster **ArgoCD Image Updater** selects th
 newest DOCR tag matching `^sha-[0-9a-f]{7}$` and syncs the deployment
 automatically; the pushed digest
 *is* the deploy trigger. It runs two ways — `workflow_dispatch` by hand, or
-called by `release.yml` after a `v*` tag publishes — and is gated three ways so
-only the org can ship an image:
+called by `release.yml` after it publishes the gem for a
+`lib/wurk/version.rb` bump landing on `main` (the tag is an output there, cut
+last; see [RELEASE.md](../RELEASE.md)) — and is gated three ways so only the
+org can ship an image:
 
 1. **Public repo + `workflow_dispatch`** → only users with *write* access (org
-   members) can trigger it; external forks cannot. A release-triggered run is
-   attributed to whoever pushed the tag, so gate 2 still applies to it.
+   members) can trigger it; external forks cannot.
 2. **`DEMO_DEPLOYERS` repo variable** (comma-separated GitHub usernames) → the
-   `authorize` job rejects anyone not listed.
+   `authorize` job rejects anyone not listed. Guards the `workflow_dispatch`
+   door only: a run called by `release.yml` passes `trusted: true`, which waives
+   the allowlist (honoured only from the `release` workflow on `main`) — by then
+   that caller has already published this commit's gem.
 3. **Protected `demo` environment** → add Required Reviewers. The gate sits on the
    `build` job (not a separate deploy job) because the digest push is what
    triggers the deploy, so approval must pause the run *before* the image ships.
