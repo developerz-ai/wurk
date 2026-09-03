@@ -24,11 +24,16 @@ class ReadmeClaimsTest < Minitest::Test
   def test_every_sidekiq_gem_claimed_to_run_in_ci_has_a_pin
     # If README.md claims a sidekiq-* gem runs in CI, the claim has to be
     # backed by a harness on disk (test/ecosystem/<gem>/PIN) — otherwise the
-    # doc is making a promise CI doesn't keep. Target additions phrase
-    # themselves as "target addition" or "tracked in docs/idea/14-ecosystem-
-    # compat.md" and do not trigger this regex.
-    claimed = @text.lines.grep(CI_CLAIM)
-                   .flat_map { |line| line.scan(/sidekiq-[\w-]+/) }.uniq
+    # doc is making a promise CI doesn't keep. Only gems that appear up to
+    # the end of the CI_CLAIM match are considered; tracked lists that follow
+    # the claim on the same line (e.g. "sidekiq-cron runs in CI; the rest
+    # (sidekiq-foo, sidekiq-bar) are tracked in ...") are not CI claims.
+    claimed = @text.lines.flat_map do |line|
+      match = CI_CLAIM.match(line)
+      next [] unless match
+
+      line[0...match.end(0)].scan(/sidekiq-[\w-]+/)
+    end.uniq
 
     missing = claimed.reject { |gem| File.file?(File.join(ROOT, 'test', 'ecosystem', gem, 'PIN')) }
 
