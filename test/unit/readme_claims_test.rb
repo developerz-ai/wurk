@@ -15,7 +15,7 @@ class ReadmeClaimsTest < Minitest::Test
   # Variants used by the README today: "in CI", "in the `ecosystem` CI job",
   # "on every push". Each one means "this gem's upstream suite runs on every
   # PR"; anything in that phrasing has to point at a harness on disk.
-  CI_CLAIM = /\b(?:in CI|in the `ecosystem` CI job|on every push)\b/.freeze
+  CI_CLAIM = /\b(?:in CI|in the `ecosystem` CI job|on every push)\b/
 
   def setup
     @text = File.read(README)

@@ -46,7 +46,7 @@ class LlmsTxtTest < Minitest::Test
   # Variants used by the docs today: "in CI", "in the `ecosystem` CI job",
   # "on every push". Each one means "this gem's upstream suite runs on every
   # PR"; anything in that phrasing has to point at a harness on disk.
-  CI_CLAIM = /\b(?:in CI|in the `ecosystem` CI job|on every push)\b/.freeze
+  CI_CLAIM = /\b(?:in CI|in the `ecosystem` CI job|on every push)\b/
 
   def test_every_sidekiq_gem_claimed_to_run_in_ci_has_a_pin
     # llms.txt is the map agents consume. If it claims a sidekiq-* gem runs
