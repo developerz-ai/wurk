@@ -219,7 +219,9 @@ namespace :release do
     puts "release:check — Wurk #{version}"
     ReleaseHelpers.tag_matches_version!(version)
     ReleaseHelpers.dashboard_bundle_present!(DASHBOARD_BUNDLE_DIR)
-    ReleaseHelpers.changelog_has_version!(File.read(File.join(GEM_ROOT, 'CHANGELOG.md')), version)
+    changelog = File.read(File.join(GEM_ROOT, 'CHANGELOG.md'))
+    ReleaseHelpers.changelog_has_version!(changelog, version)
+    ReleaseHelpers.changelog_unreleased_link_current!(changelog, version)
     release_tree_clean!
     puts 'release:check — static checks passed; running tests…'
     Rake::Task['test'].invoke
