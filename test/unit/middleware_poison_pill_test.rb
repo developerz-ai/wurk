@@ -211,7 +211,6 @@ class MiddlewarePoisonPillTest < Wurk::Test::UnitCase
     assert_equal 'PoisonPillTestJob was recovered 3 times without completing', ex.message
     refute_nil ex.backtrace, 'error services expect a backtrace'
   end
-  # rubocop:enable Minitest/MultipleAssertions
 
   # Falls back to a generic subject when the payload carries no class name.
   def test_poisoned_error_message_without_a_class
@@ -225,7 +224,6 @@ class MiddlewarePoisonPillTest < Wurk::Test::UnitCase
 
   # --- callback hooks -----------------------------------------------------
 
-  # rubocop:disable Minitest/MultipleAssertions
   # One test pinning the entire callback contract — splitting would
   # obscure the pill-hash shape vs. fire-count constraint.
   def test_on_poison_fires_with_pill_hash
@@ -240,7 +238,6 @@ class MiddlewarePoisonPillTest < Wurk::Test::UnitCase
     assert_equal @queue, pill[:queue]
     assert_equal 3, pill[:count]
   end
-  # rubocop:enable Minitest/MultipleAssertions
 
   def test_on_poison_swallows_callback_errors
     Wurk::Middleware::PoisonPill.on_poison { |_| raise 'boom' }
@@ -314,7 +311,6 @@ class MiddlewarePoisonPillTest < Wurk::Test::UnitCase
     assert_equal [['not-json{{', nil]], recorded
   end
 
-  # rubocop:disable-next Minitest/MultipleAssertions
   def test_super_fetch_callback_receives_pill_on_poison_kill
     recorded = []
     cfg = recovery_config { |jobstr, pill| recorded << [jobstr, pill] }

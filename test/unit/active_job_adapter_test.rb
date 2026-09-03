@@ -59,7 +59,6 @@ class ActiveJobAdapterTest < Wurk::Test::UnitCase
     assert_equal @queue, payload['queue']
     assert_match JID_PATTERN, payload['jid']
   end
-  # rubocop:enable Minitest/MultipleAssertions
 
   def test_enqueue_wraps_args_as_single_aj_data_hash
     job = @job_class.new('x')

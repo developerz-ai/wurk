@@ -51,7 +51,6 @@ class ActiveJobSidekiqAdapterEngineTest < Wurk::Test::EngineCase
     assert_equal @job_class.name, payload['wrapped']
     assert_equal @queue, payload['queue']
   end
-  # rubocop:enable Minitest/MultipleAssertions
 
   def test_job_record_unwraps_wrapper_to_user_class
     @job_class.perform_later(42)

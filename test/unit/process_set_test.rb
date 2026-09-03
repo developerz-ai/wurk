@@ -75,7 +75,6 @@ class ProcessSetTest < Wurk::Test::UnitCase
     assert_equal 4096,     process['rss']
     assert_equal 900,      process['rtt_us']
   end
-  # rubocop:enable Minitest/MultipleAssertions
 
   def test_lookup_returns_nil_when_info_expired_but_identity_present
     @identities << @identity
@@ -214,7 +213,6 @@ class ProcessSetTest < Wurk::Test::UnitCase
 
   # --- Wurk::Process -----------------------------------------------------
 
-  # rubocop:disable Minitest/MultipleAssertions
   # One test, one Process shape: identity / id / tag / labels are all
   # public contract surface.
   def test_process_attributes_passthrough
@@ -225,7 +223,6 @@ class ProcessSetTest < Wurk::Test::UnitCase
     assert_equal @identity, process.id
     assert_equal %w[a b], process.labels
   end
-  # rubocop:enable Minitest/MultipleAssertions
 
   def test_process_labels_defaults_to_empty_array
     assert_empty Wurk::Process.new({}).labels

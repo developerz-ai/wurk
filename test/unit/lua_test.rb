@@ -131,7 +131,6 @@ class LuaTest < Wurk::Test::UnitCase
     end
   end
 
-  # rubocop:disable Minitest/MultipleAssertions
   def test_reliable_schedule_promote_moves_due_jobs_to_their_queues
     sset = "#{@ns}:schedule"
     qset = "#{@ns}:queues"
@@ -235,7 +234,7 @@ class LuaTest < Wurk::Test::UnitCase
   # or scheduled promotion re-enqueueing a job that never left the batch) must
   # re-LPUSH the payload but must NOT recount total/pending — else pending
   # inflates past the acks and :success never fires (spec §2.3/§2.5).
-  def test_batch_push_repush_of_live_jid_does_not_recount # rubocop:disable Minitest/MultipleAssertions
+  def test_batch_push_repush_of_live_jid_does_not_recount
     bkey = "#{@ns}:b-rp"
     jids = "#{@ns}:b-rp-jids"
     list = "#{@ns}:queue:default"
@@ -280,7 +279,7 @@ class LuaTest < Wurk::Test::UnitCase
   # BATCH_SCHEDULE registers a scheduled-in-batch job at creation: counts
   # total/pending (SADD guard), SADDs the jid live, and ZADDs the payload onto
   # `schedule` — so `total` moves even though nothing hits a queue yet.
-  def test_batch_schedule_registers_counts_jid_and_zadds # rubocop:disable Minitest/MultipleAssertions
+  def test_batch_schedule_registers_counts_jid_and_zadds
     sched = "#{@ns}:schedule"
     bkey  = "#{@ns}:b-s"
     jids  = "#{@ns}:b-s-jids"
@@ -300,7 +299,7 @@ class LuaTest < Wurk::Test::UnitCase
 
   # Same SADD-guard idempotency as batch_push: a jid already live re-ZADDs the
   # payload (a promotion that rescheduled, say) but must not recount.
-  def test_batch_schedule_repush_of_live_jid_does_not_recount # rubocop:disable Minitest/MultipleAssertions
+  def test_batch_schedule_repush_of_live_jid_does_not_recount
     sched = "#{@ns}:schedule"
     bkey  = "#{@ns}:b-sr"
     jids  = "#{@ns}:b-sr-jids"
@@ -320,7 +319,7 @@ class LuaTest < Wurk::Test::UnitCase
   # job — it rejoins the live set without recounting (total/pending already
   # include it), and draining the died set clears the death mark so a later
   # full drain can fire :success.
-  def test_batch_push_dead_jid_rejoins_live_set_without_recount # rubocop:disable Minitest/MultipleAssertions
+  def test_batch_push_dead_jid_rejoins_live_set_without_recount
     bkey = "#{@ns}:b-dr"
     jids = "#{@ns}:b-dr-jids"
     died = "#{@ns}:b-dr-died"
@@ -456,7 +455,6 @@ class LuaTest < Wurk::Test::UnitCase
       assert_equal 0, second_first
     end
   end
-  # rubocop:enable Minitest/MultipleAssertions
 
   # A job that was failing (in the failed set) then dies moves out of
   # currently-failing: failures decrements and the jid leaves the failed set.
