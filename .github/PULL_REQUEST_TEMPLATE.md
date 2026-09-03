@@ -7,10 +7,10 @@
 ## Checklist
 
 - [ ] Tests added/updated at the right layer (unit · engine · integration · parity)
-- [ ] `bin/rake test`, `bin/rake test:parity`, and `bundle exec rubocop` pass locally
+- [ ] `bin/check` passes locally (use `bin/check full` if you touched the compat surface)
 - [ ] No Redis key, JSON field, or sorted-set score format changed (wire-compat is sacred)
 - [ ] Public Sidekiq surface still matches `docs/target/sidekiq-{free,pro,ent}.md`
-- [ ] Coverage on `lib/` stays ≥ 90%
+- [ ] Coverage on `lib/` stays ≥ 90% (both line and branch, the blocking gate)
 
 ## How to test in prod
 

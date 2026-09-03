@@ -65,7 +65,7 @@ namespace :test do
     sh 'bin/test-ecosystem'
   end
 
-  desc 'Coverage gate: branch coverage on lib/ must stay >= 90%'
+  desc 'Coverage gate: SimpleCov line and branch coverage on lib/ must both stay >= 90% (both blocking)'
   task :coverage do
     ENV['COVERAGE'] = '1'
     Rake::Task['test'].invoke
