@@ -162,14 +162,22 @@ These are non-negotiable — they're what keep Wurk a true drop-in:
 
 ## Pull requests
 
-1. Branch off `main`.
-2. Keep the change focused; add tests at the right layer.
-3. Run `bin/check` (or `bin/check full` if you touched the compat surface).
-4. Open the PR — CI runs one Ruby suite on the newest Ruby + Rails with the
+1. Commit with an email linked to your GitHub account
+   (`git config user.email` matches the address on
+   <https://github.com/settings/emails>). The repo's `main-protection` ruleset
+   sets `require_extra_approval_for_unattributed_changes: true`, so any commit
+   in your PR not attributed to a GitHub account adds a human approval
+   requirement on top of the zero the ruleset otherwise asks for — this repo
+   otherwise never asks for one, so the PR will silently park instead of
+   auto-merging. See `.maintainer.yml` for the ruleset citation.
+2. Branch off `main`.
+3. Keep the change focused; add tests at the right layer.
+4. Run `bin/check` (or `bin/check full` if you touched the compat surface).
+5. Open the PR — CI runs one Ruby suite on the newest Ruby + Rails with the
    coverage gate folded in, plus the parity oracles, rubocop, the frontend
    suite, and benchmarks. The bench bot comments per-benchmark deltas; a real
    regression fails the check.
-5. Don't `--no-verify` past a failing hook — fix the hook.
+6. Don't `--no-verify` past a failing hook — fix the hook.
 
 By contributing you agree your work is licensed under the project's
 [MIT License](LICENSE).
