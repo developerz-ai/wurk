@@ -18,7 +18,7 @@ concurrency:
 
 jobs:
   # Which parts of the repo does this change touch? Everything below keys off
-  # these outputs, so a docs-only PR stops paying for the full Ruby matrix.
+  # these outputs, so a docs-only PR stops paying for the full Ruby suite.
   #
   # PULL REQUESTS ONLY. On push-to-main every job runs unconditionally: main is
   # what `release:check` and the tag build trust, so its history stays fully
@@ -154,12 +154,12 @@ jobs:
         with:
           node-version: "24"
       # Cache Bun's global download cache so `bun install --frozen-lockfile`
-      # (run here directly in `frontend`, and via `rake frontend:build` in the
-      # test/coverage legs) reuses tarballs instead of re-fetching them each run.
-      # Best-effort by design: actions/cache warns and continues on a restore
-      # miss or a save failure, so this step can never fail the job. Keyed on the
-      # frontend lockfile; the shared key is intentional so every matrix leg and
-      # job reuses one cache.
+      # (run here via `rake frontend:build`, and directly in the `frontend`
+      # job) reuses tarballs instead of re-fetching them each run. Best-effort
+      # by design: actions/cache warns and continues on a restore miss or a
+      # save failure, so this step can never fail the job. Keyed on the
+      # frontend lockfile; the shared key is intentional so the `test` job and
+      # the `frontend` job reuse one cache.
       - name: cache bun install cache
         if: env.RUN == 'true'
         uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
@@ -258,8 +258,9 @@ jobs:
             echo "✓ $file exists and is non-empty ($(wc -l < "$file") lines)"
           done
 
-  # Ruby linting — nothing runs rubocop today, so this closes that gap.
-  # Paired with the `frontend` and `spec-docs` jobs as quick, parallel checks.
+  # Ruby linting — bin/check already runs it; surfaced here so every PR that
+  # touches Ruby paths carries a visible verdict. Paired with the `frontend`
+  # and `spec-docs` jobs as quick, parallel checks.
   lint:
     name: lint (rubocop)
     needs: detect
@@ -293,11 +294,11 @@ jobs:
       - name: rubocop
         run: bundle exec rubocop --parallel
 
-  # The matrix `test` and `coverage` jobs only *build* the SPA (tsc + vite) via
-  # `rake frontend:build`; hand-written frontend types can typecheck clean yet
-  # null-render at runtime (#272), so the build alone is not a regression gate.
-  # This dedicated Node-only job runs the dashboard's Vitest suite on every PR
-  # (no Ruby/Redis needed; the suite is fast). Closes #273.
+  # The `test` job only *builds* the SPA (tsc + vite) via `rake frontend:build`;
+  # hand-written frontend types can typecheck clean yet null-render at runtime
+  # (#272), so the build alone is not a regression gate. This dedicated
+  # Node-only job runs the dashboard's Vitest suite on every PR (no Ruby/Redis
+  # needed; the suite is fast). Closes #273.
   frontend:
     name: frontend (vitest)
     needs: detect
@@ -317,12 +318,12 @@ jobs:
         with:
           node-version: "24"
       # Cache Bun's global download cache so `bun install --frozen-lockfile`
-      # (run here directly in `frontend`, and via `rake frontend:build` in the
-      # test/coverage legs) reuses tarballs instead of re-fetching them each run.
-      # Best-effort by design: actions/cache warns and continues on a restore
-      # miss or a save failure, so this step can never fail the job. Keyed on the
-      # frontend lockfile; the shared key is intentional so every matrix leg and
-      # job reuses one cache.
+      # (run here directly, and via `rake frontend:build` in the `test` job)
+      # reuses tarballs instead of re-fetching them each run. Best-effort by
+      # design: actions/cache warns and continues on a restore miss or a save
+      # failure, so this step can never fail the job. Keyed on the frontend
+      # lockfile; the shared key is intentional so the `test` job and the
+      # `frontend` job reuse one cache.
       - name: cache bun install cache
         uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:

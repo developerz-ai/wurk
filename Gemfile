@@ -21,20 +21,20 @@ group :development, :test do
   gem 'rubocop-rake', require: false
   gem 'simplecov', '~> 0.22', require: false
   gem 'simplecov-cobertura', '~> 3.2', require: false
+  gem 'benchmark-ips'
+  gem 'memory_profiler'
+  gem 'pry'
   # Development-only, and deliberately never a gemspec runtime dependency:
   # `lib/wurk/sentry.rb` guards every call site on `defined?(::Sentry)`, so the
   # integration is inert without it. Present here so SentrySdkSurfaceTest can
   # assert the real SDK objects still respond to the methods Wurk calls.
-  gem 'benchmark-ips'
-  gem 'memory_profiler'
-  gem 'pry'
   gem 'sentry-ruby', require: false
   gem 'yard', require: false
 end
 
 group :test do
-  # CI matrix pins a Rails series via RAILS_VERSION (e.g. "7.2", "8.0") so each
-  # leg resolves to that line; locally it floats to the newest supported Rails.
+  # CI pins a Rails series via RAILS_VERSION ("8.1"); locally it floats to the
+  # newest supported Rails.
   rails_version = ENV.fetch('RAILS_VERSION', nil)
   gem 'rack-test'
   gem 'rails', rails_version ? "~> #{rails_version}.0" : '>= 7.1'
