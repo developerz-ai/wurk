@@ -142,8 +142,13 @@ class TimeoutHangTest < Wurk::Test::UnitCase
   # (private list empty — nothing left in flight), which flushes it deterministically.
   def test_a_genuinely_sleeping_job_past_its_deadline_is_abandoned_and_booked_expired
     run_swarm(shutdown_timeout: 10) do |swarm|
-      # Pushed AFTER boot: the deadline is absolute from the push, and a fork +
-      # boot on a loaded runner must not spend it before the job is fetched.
+      # Pushed only once the child is FETCHING: the deadline is absolute from
+      # the push, and `swarm.boot` returning is not the child being ready — on a
+      # loaded runner the fork + dummy-app boot outlived a 2 s cutoff and the
+      # job was expired at dequeue, never started (2026-09-03, twice). The
+      # child's first heartbeat lands after its processors start, so its
+      # identity in the live `processes` set is the readiness signal.
+      assert wait_for_child_identity, "no child fetching #{@queue_name} within the #{START_TIMEOUT}s startup timeout"
       jid = push(DeadlineHangWorker)
 
       assert wait_for_key(@started_key), "job never started within the #{START_TIMEOUT}s startup timeout"
@@ -245,6 +250,20 @@ class TimeoutHangTest < Wurk::Test::UnitCase
 
   def wait_for_key(key, timeout: START_TIMEOUT)
     wait_for(timeout: timeout) { @observer.call('GET', key) }
+  end
+
+  # This test's child in the live `processes` set, found by the unique queue
+  # it fetches (parallel test methods share one Redis DB). Same probe
+  # swarm_cli_test.rb uses.
+  def wait_for_child_identity(timeout: START_TIMEOUT)
+    wait_for(timeout: timeout) do
+      @observer.call('SMEMBERS', Wurk::Keys::PROCESSES).find do |id|
+        info = @observer.call('HGET', id, 'info')
+        info && Array(Wurk.load_json(info)['queues']).include?(@queue_name)
+      rescue ::JSON::ParserError
+        false
+      end
+    end
   end
 
   def wait_for_retry_entry(jid, timeout: POLL_TIMEOUT)
