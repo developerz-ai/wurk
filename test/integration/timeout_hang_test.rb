@@ -81,6 +81,12 @@ class TimeoutHangTest < Wurk::Test::UnitCase
   parallelize_me!
 
   POLL_TIMEOUT = 20.0
+  # How long a job may take to START on a loaded runner before the test gives up.
+  # Separate from POLL_TIMEOUT on purpose: the deadline assertions below measure
+  # from `started`, so a slow swarm boot (parallel forks + a cold Redis on CI,
+  # 2026-09-03: "job never started within the poll window" at 20 s) must not be
+  # confused with the timeout/deadline behaviour these tests exist to prove.
+  START_TIMEOUT = 90.0
   POLL_INTERVAL = 0.1
   HANG_SLEEP_SECONDS = 5
   FAST_DRAIN_TIMEOUT = 2
@@ -228,8 +234,8 @@ class TimeoutHangTest < Wurk::Test::UnitCase
     keys
   end
 
-  def wait_for_key(key)
-    wait_for { @observer.call('GET', key) }
+  def wait_for_key(key, timeout: START_TIMEOUT)
+    wait_for(timeout: timeout) { @observer.call('GET', key) }
   end
 
   def wait_for_retry_entry(jid, timeout: POLL_TIMEOUT)
