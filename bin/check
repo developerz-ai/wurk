@@ -51,6 +51,20 @@ stage() {
   fi
 }
 
+# Bundler is not optional either, and its absence is NOT a verdict on a diff.
+# Every stage below is `bundle exec`, and `stage()` runs its command inside an
+# `if`, so a missing bundler does not abort under `set -e`: the shell's 127 is
+# swallowed into `failed[]` and this script exits 1. Exit 1 means "the gate ran
+# and judged the change", so an environment with no Ruby toolchain would tell a
+# coding agent its edit is RED and send it hunting a bug it did not write
+# (developerz-ai/developerz.ai#3067). Refuse with 75 instead — the same
+# preconditions-unmet contract the Redis guard below uses.
+if ! command -v bundle >/dev/null 2>&1; then
+  echo "bin/check: no bundler on PATH — this environment cannot run the Ruby gate." >&2
+  echo "  install Ruby and bundler, then:  bundle install" >&2
+  exit 75
+fi
+
 # Redis is not optional — integration and parity tests use a real server, never
 # a mock (CLAUDE.md). Refuse with the platform's preconditions-unmet contract
 # code (apps/runner/src/modes/setup/base.ts, CHECK_EXIT_PRECONDITIONS_UNMET =
