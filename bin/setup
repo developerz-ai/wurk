@@ -3,6 +3,11 @@ set -euo pipefail
 
 cd "$(dirname "$0")/.."
 
+# The toolchain is text (mise.toml): a fleet box carries `mise` and no ruby of
+# its own, and installs the declared version into the runner user's home here.
+# Guarded, so a machine without mise (CI's setup-ruby, a laptop on rbenv) skips it.
+command -v mise >/dev/null && mise install
+
 echo "==> bundle install (gem)"
 bundle check >/dev/null 2>&1 || bundle install
 
