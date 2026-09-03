@@ -90,6 +90,16 @@ fi
 
 [ "$MODE" = full ] && stage "ecosystem suites" bundle exec rake test:ecosystem
 
+if [ "$MODE" = full ]; then
+  if command -v python3 >/dev/null 2>&1; then
+    stage "python-client build" python3 -m pip install ./clients/python
+    stage "python-client tests" python3 -m unittest discover -s clients/python/tests -v
+  else
+    echo
+    echo "==> python-client skipped: python3 not found"
+  fi
+fi
+
 echo
 if [ ${#failed[@]} -eq 0 ]; then
   echo "bin/check ✓ all green in $(($(date +%s) - start))s"

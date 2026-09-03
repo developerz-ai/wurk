@@ -4,9 +4,8 @@ A thin, zero-dependency reference client for the [Wurk](https://github.com/devel
 HTTP API (`/v1`) — see [`docs/api-http.md`](../../docs/api-http.md) for the
 full route reference this wraps.
 
-Not yet published to PyPI — the wire contract this client speaks to is part
-of an in-progress PR; install from the repo until it's declared frozen
-(`docs/plans/2026/08/07/101-beyond-sidekiq/07-http-producer-api.md`, step 8):
+Not yet published to PyPI; install from the repo until the surface is declared
+frozen (`docs/plans/2026/08/07/101-beyond-sidekiq/07-http-producer-api.md`, step 8):
 
 ```bash
 pip install ./clients/python

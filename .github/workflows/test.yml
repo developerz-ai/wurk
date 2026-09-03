@@ -39,6 +39,7 @@ jobs:
     outputs:
       ruby: ${{ steps.filter.outputs.ruby }}
       frontend: ${{ steps.filter.outputs.frontend }}
+      python: ${{ steps.filter.outputs.python }}
       specdocs: ${{ steps.filter.outputs.specdocs }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -71,6 +72,9 @@ jobs:
               - '.github/workflows/test.yml'
             frontend:
               - 'frontend/**'
+              - '.github/workflows/test.yml'
+            python:
+              - 'clients/python/**'
               - '.github/workflows/test.yml'
             specdocs:
               - 'docs/target/**'
@@ -191,6 +195,32 @@ jobs:
           name: coverage
           path: coverage/coverage.xml
           if-no-files-found: warn
+
+  python-client:
+    name: python-client (${{ matrix.python-version }})
+    needs: detect
+    runs-on: >-
+      ${{ github.event.pull_request.head.repo.fork && 'ubuntu-latest' || vars.WURK_CI_RUNNER || 'ubuntu-latest' }}
+    timeout-minutes: 5
+    strategy:
+      matrix:
+        python-version: ["3.9", "3.13"]
+    env:
+      RUN: ${{ github.event_name != 'pull_request' || needs.detect.outputs.python == 'true' }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+        if: env.RUN == 'true'
+        with:
+          python-version: ${{ matrix.python-version }}
+      - name: install python client
+        if: env.RUN == 'true'
+        run: pip install ./clients/python
+      - name: python client tests
+        if: env.RUN == 'true'
+        run: python -m unittest discover -s clients/python/tests -v
 
   # Oracle suite lifted from upstream Sidekiq (SHA-pinned in
   # test/parity/.sidekiq_sha). Its own dedicated job so a parity divergence is
