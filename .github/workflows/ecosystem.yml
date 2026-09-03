@@ -43,8 +43,10 @@ jobs:
               - 'exe/**'
               - 'test/**'
               - 'tasks/**'
+              # Gemfile.lock is deliberately absent from the filter — it is gitignored
+              # (.gitignore:5) and can never appear in a diff; `Gemfile` and the gemspec are
+              # what actually move dependencies.
               - 'Gemfile'
-              - 'Gemfile.lock'
               - 'Rakefile'
               - '*.gemspec'
               - '.github/workflows/ecosystem.yml'
