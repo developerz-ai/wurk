@@ -157,8 +157,10 @@ These are non-negotiable — they're what keep Wurk a true drop-in:
 - **Frozen string literals everywhere**; per-fork Redis pools (never share a
   socket across a fork).
 - **Comments explain non-obvious _why_**, never restate the code.
-- **Coverage**: line coverage on `lib/` must stay ≥ 90% (the gate blocks PRs
-  below it). Branch coverage is tracked and ratcheting toward 90%.
+- **Coverage**: SimpleCov **line** and **branch** coverage on `lib/` must both
+  stay ≥ 90% (both are blocking; `minimum_coverage line: 90, branch: 90` in
+  `test/test_helper.rb`). Branch was ratcheted from ~78% to ≥90% in #67 —
+  keep new code at parity.
 
 ## Pull requests
 
