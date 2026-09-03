@@ -25,10 +25,17 @@ class TimeoutHangWorker
   end
 end
 
+# `deadline:` is resolved to an ABSOLUTE `deadline_at` at push (see
+# lib/wurk/middleware/timeout.rb), so the clock runs while the swarm forks and
+# boots. At 0.5 s a loaded CI runner booted past it and the job was expired
+# before `perform` ever ran — "job never started" at 20 s and again at 90 s
+# (2026-09-03) — which is the abandon-at-dequeue path, not the one this worker
+# exists to prove. 2 s leaves room for the fetch and still cuts the 5 s sleep
+# well short; the test also pushes only once the swarm is up.
 class DeadlineHangWorker
   include Wurk::Job
 
-  sidekiq_options deadline: 0.5, retry: 3
+  sidekiq_options deadline: 2.0, retry: 3
 
   def perform(redis_url, started_key, done_key, sleep_seconds)
     client = RedisClient.config(url: redis_url).new_client
@@ -134,9 +141,11 @@ class TimeoutHangTest < Wurk::Test::UnitCase
   # swarm is shut down as soon as the abandonment itself is confirmed
   # (private list empty — nothing left in flight), which flushes it deterministically.
   def test_a_genuinely_sleeping_job_past_its_deadline_is_abandoned_and_booked_expired
-    jid = push(DeadlineHangWorker)
-
     run_swarm(shutdown_timeout: 10) do |swarm|
+      # Pushed AFTER boot: the deadline is absolute from the push, and a fork +
+      # boot on a loaded runner must not spend it before the job is fetched.
+      jid = push(DeadlineHangWorker)
+
       assert wait_for_key(@started_key), "job never started within the #{START_TIMEOUT}s startup timeout"
       start = monotonic_now
 
