@@ -114,7 +114,7 @@ class TimeoutHangTest < Wurk::Test::UnitCase
     jid = push(TimeoutHangWorker)
 
     run_swarm(shutdown_timeout: 10) do
-      assert wait_for_key(@started_key), 'job never started within the poll window'
+      assert wait_for_key(@started_key), "job never started within the #{START_TIMEOUT}s startup timeout"
       start = monotonic_now
 
       entry = wait_for_retry_entry(jid)
@@ -137,7 +137,7 @@ class TimeoutHangTest < Wurk::Test::UnitCase
     jid = push(DeadlineHangWorker)
 
     run_swarm(shutdown_timeout: 10) do |swarm|
-      assert wait_for_key(@started_key), 'job never started within the poll window'
+      assert wait_for_key(@started_key), "job never started within the #{START_TIMEOUT}s startup timeout"
       start = monotonic_now
 
       assert wait_for { private_list_keys.empty? }, 'the abandoned job never cleared the in-flight private list'
@@ -159,7 +159,7 @@ class TimeoutHangTest < Wurk::Test::UnitCase
     push(LongTimeoutWorker)
 
     run_swarm(shutdown_timeout: FAST_DRAIN_TIMEOUT) do |swarm|
-      assert wait_for_key(@started_key), 'job never started within the poll window'
+      assert wait_for_key(@started_key), "job never started within the #{START_TIMEOUT}s startup timeout"
 
       swarm.shutdown(timeout: FAST_DRAIN_TIMEOUT)
 

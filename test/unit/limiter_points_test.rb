@@ -85,9 +85,14 @@ class LimiterPointsTest < Wurk::Test::UnitCase
     # time this line runs it already holds 50 x elapsed points; on a loaded CI
     # runner that was 1.16 with a fixed tolerance of 1 (2026-09-03). Bound the
     # size by the refill the clock actually allowed, never by a guessed constant.
+    # Read the balance FIRST, then take the clock: the read is a Redis round trip
+    # plus the refill maths, and a bound captured before it is a bound the read
+    # can legitimately exceed on a paused runner.
+    size = l.size
     elapsed = Process.clock_gettime(Process::CLOCK_MONOTONIC) - started
-    assert_operator l.size, :<=, (50 * elapsed) + 1
-    assert_operator l.size, :>=, 0
+
+    assert_operator size, :<=, (50 * elapsed) + 1
+    assert_operator size, :>=, 0
     sleep 0.5
     l.within_limit(estimate: 20) { |_h| }
   end
