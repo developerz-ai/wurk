@@ -3,6 +3,9 @@ contact_links:
   - name: Security vulnerability
     url: https://github.com/developerz-ai/wurk/security/advisories/new
     about: Report security issues privately, not as a public issue.
+  # Discussions are disabled for this repo, so the contact link points at a
+  # pre-labelled issue instead. If the operator later enables Discussions,
+  # flip the url back to https://github.com/developerz-ai/wurk/discussions.
   - name: Question or discussion
-    url: https://github.com/developerz-ai/wurk/discussions
+    url: https://github.com/developerz-ai/wurk/issues/new?labels=question&title=Question%3A+
     about: Usage questions, ideas, and general discussion.
