@@ -5,9 +5,6 @@
 # exercises cron, unique, batch, rate-limited, and failing jobs. One image runs
 # either the read-only dashboard (`web`) or the swarm (`worker`), selected by the
 # argument to bin/demo-entrypoint.
-#
-# NOTE: this is the starting scaffold for the deploy (#32). The build still
-# needs a verification pass with infra — see docs/demo-deploy.md.
 
 # ---- Stage 1: build the dashboard SPA (no Node/bun at runtime) ----
 FROM oven/bun:1.4.0-slim AS spa
