@@ -57,7 +57,10 @@ namespace :test do
   Rake::TestTask.new(:parity) do |t|
     t.libs << 'test' << 'lib'
     t.test_files = FileList['test/parity/**/*_test.rb']
-    t.description = 'Run Sidekiq parity tests (lifted from upstream, SHA pinned in test/parity/.sidekiq_sha)'
+    t.description = 'Run Sidekiq parity tests ' \
+                    '(independently written oracles ' \
+                    'for the documented Sidekiq behaviour, ' \
+                    'pinned to the upstream revision in test/parity/.sidekiq_sha)'
   end
 
   desc 'Run ecosystem gem suites against Wurk (sidekiq-cron, sidekiq-unique-jobs, ...)'

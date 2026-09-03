@@ -95,7 +95,7 @@ The individual tasks, when you want one:
 | Full suite (parallel) | `bin/rake test` |
 | A single file | `bin/rake test TEST=test/path/to/file_test.rb` |
 | A single test by name | `bin/rake test TEST=test/foo_test.rb TESTOPTS="--name=/pattern/"` |
-| Parity suite (oracles lifted from Sidekiq) | `bin/rake test:parity` |
+| Parity suite (independently written oracles) | `bin/rake test:parity` |
 | Ecosystem compatibility | `bin/rake test:ecosystem` |
 | Coverage gate | `COVERAGE=1 bin/rake test` |
 | Benchmarks | `bin/rake bench` |
@@ -134,7 +134,8 @@ Test layers:
 - **unit** — plain Ruby classes in isolation.
 - **engine** — boots the dummy Rails app in `test/dummy/`.
 - **integration** — real forks + real Redis.
-- **parity** (`test/parity/`) — tests lifted from upstream Sidekiq, SHA-pinned.
+- **parity** (`test/parity/`) — independently written oracles for the documented
+  Sidekiq behaviour, pinned to the upstream revision in `test/parity/.sidekiq_sha`.
   These are **oracles**: if Wurk diverges, Wurk is wrong unless the divergence
   is explicitly documented as intentional.
 - **ecosystem** — third-party Sidekiq gem suites run against Wurk.
