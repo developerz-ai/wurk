@@ -50,8 +50,8 @@ Frontend unit + integration tests (Vitest, SolidJS Testing Library) run with
 order that fails fastest, and prints a per-stage wall clock:
 
 ```sh
-bin/check fast     # rubocop + unit tests           — the inner loop
-bin/check          # rubocop + full suite + parity  — run this before opening a PR
+bin/check fast     # rubocop + unit tests              — the inner loop
+bin/check          # rubocop + frontend + full suite + parity  — run this before opening a PR
 bin/check full     # ...plus the ecosystem suites
 ```
 
@@ -75,8 +75,9 @@ treating it as unknown:
 | `75` | No bundler on `PATH` — the environment cannot run the Ruby gate at all. | `bin/check:62-66` |
 | `75` | Bundler is on `PATH` but the gems are not installed — `bin/setup` has never run here. | `bin/check:80-84` |
 | `75` | No Redis on `127.0.0.1:6379`. | `bin/check:92-96` |
+| `75` | No `bun` on `PATH` — frontend gate cannot execute. | `bin/check:117-121` |
 
-`75` is the platform's "preconditions unmet" code, and all three triggers share it
+`75` is the platform's "preconditions unmet" code, and all four triggers share it
 on purpose: none of them says anything about the diff. A gate that cannot reach its Redis,
 or cannot find the bundler it runs every stage through, has established NOTHING —
 so it must not exit `1`, which means "the gate ran and judged the change". An
@@ -86,7 +87,8 @@ nobody wrote.
 ### Env knobs
 
 - `SKIP_LINT=1` — drop the rubocop stage (`bin/check:98`).
-- `SKIP_PARITY=1` — drop the parity oracles stage (`bin/check:106`).
+- `SKIP_PARITY=1` — drop the parity oracles stage (`bin/check:130`).
+- `SKIP_FRONTEND=1` — drop the frontend stage (typecheck + oxlint + vitest in `frontend/`; `bin/check:100-123`).
 - `NCPU=<n>` — see [Worker count](#worker-count) below for the trade-off (ceiling 14).
 
 The individual tasks, when you want one:
