@@ -65,6 +65,24 @@ if ! command -v bundle >/dev/null 2>&1; then
   exit 75
 fi
 
+# Bundler ON PATH is not the same as the bundle being INSTALLED, and the gap
+# between them is the third way this gate can report a verdict it never reached.
+# A box that has ruby and bundler but has never run `bin/setup` fails every
+# `bundle exec` stage below with "Could not find gem ..." — swallowed into
+# `failed[]` exactly like the 127 above, and exiting 1: "the gate ran and judged
+# the change". It did not. Same laundering as the two guards either side of this
+# one, one layer further in.
+#
+# `bundle check` is the probe `bin/setup:18` already trusts for this exact
+# question (`bundle check >/dev/null 2>&1 || bundle install`), so this adds no
+# new technique and no new dependency — it asks the question the setup script
+# asks, at the moment the gate needs the answer.
+if ! bundle check >/dev/null 2>&1; then
+  echo "bin/check: gems are not installed — this environment cannot run the Ruby gate." >&2
+  echo "  run bin/setup first, or:  bundle install" >&2
+  exit 75
+fi
+
 # Redis is not optional — integration and parity tests use a real server, never
 # a mock (CLAUDE.md). Refuse with the platform's preconditions-unmet contract
 # code (apps/runner/src/modes/setup/base.ts, CHECK_EXIT_PRECONDITIONS_UNMET =
