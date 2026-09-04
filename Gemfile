@@ -33,8 +33,8 @@ group :development, :test do
 end
 
 group :test do
-  # CI matrix pins a Rails series via RAILS_VERSION (e.g. "7.2", "8.0") so each
-  # leg resolves to that line; locally it floats to the newest supported Rails.
+  # CI pins a Rails series via RAILS_VERSION ("8.1"); locally it floats to the
+  # newest supported Rails.
   rails_version = ENV.fetch('RAILS_VERSION', nil)
   gem 'rack-test'
   gem 'rails', rails_version ? "~> #{rails_version}.0" : '>= 7.1'
