@@ -202,7 +202,6 @@ class ScheduledPollerTest < Wurk::Test::UnitCase
     assert_equal 1, captured.size
     assert_equal 'push blew up', captured.first.message
   end
-  # rubocop:enable Minitest/MultipleAssertions
 
   # ZPOPBYSCORE claims no apply-safety, so a read timeout reaches #drain_set
   # instead of being replayed. The outcome of that pop is unknown, so the set's

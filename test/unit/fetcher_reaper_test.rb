@@ -142,11 +142,9 @@ class FetcherReaperTest < Wurk::Test::UnitCase
   ensure
     Wurk.redis { |c| c.call('DEL', recovery_key(jid)) }
   end
-  # rubocop:enable Minitest/MultipleAssertions
 
   # --- poison-pill cap ---------------------------------------------------
 
-  # rubocop:disable-next Minitest/MultipleAssertions
   def test_recovery_past_threshold_kills_to_dead_set_instead_of_requeue
     jid = SecureRandom.hex(12)
     job = payload('poison', jid: jid)
@@ -354,7 +352,6 @@ class FetcherReaperTest < Wurk::Test::UnitCase
   # The headline gap: a private list whose public queue this process does NOT
   # serve (renamed/decommissioned queue, or a dead host's queue no survivor
   # consumes) is invisible to the scoped sweep but recovered by the full one.
-  # rubocop:disable Minitest/MultipleAssertions
   # One scenario: scoped sweep misses it, full sweep recovers it onto the
   # foreign public queue and drains the private list. Cohesive — keep together.
   def test_reclaim_full_reclaims_orphan_in_an_unserved_queue
@@ -370,7 +367,6 @@ class FetcherReaperTest < Wurk::Test::UnitCase
     assert_equal 0, llen(private_key), 'orphan private list drained'
     assert_equal 2, llen(foreign_q), 'jobs re-queued onto the foreign public queue'
   end
-  # rubocop:enable Minitest/MultipleAssertions
 
   def test_reclaim_full_leaves_a_live_owners_list_untouched
     foreign_q = Wurk::Keys.queue("#{@ns}-live")
@@ -445,7 +441,7 @@ class FetcherReaperTest < Wurk::Test::UnitCase
 
   # --- thread lifecycle --------------------------------------------------
 
-  def test_start_is_idempotent_and_stop_joins # rubocop:disable Minitest/MultipleAssertions
+  def test_start_is_idempotent_and_stop_joins
     refute_predicate @reaper, :running?
     first = @reaper.start
     second = @reaper.start

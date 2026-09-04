@@ -3,7 +3,9 @@
 # Bundler is scoped to the root Gemfile (the shipped gem via the gemspec);
 # test/dummy, demo, and test/ecosystem Gemfiles are fixtures, not shipped deps.
 # Gem bumps wait 14 days after a version is published (cooldown) so brand-new
-# releases can be yanked/fixed upstream before we pick them up.
+# releases can be yanked/fixed upstream before we pick them up. The docker
+# ecosystem watches the Dockerfile's pinned base images alongside bundler, npm,
+# and github-actions.
 version: 2
 updates:
   - package-ecosystem: bundler
@@ -38,3 +40,25 @@ updates:
         update-types:
           - minor
           - patch
+  # docker covers Dockerfile:13 (oven/bun:1.3.14-slim) and Dockerfile:24
+  # (ruby:3.4-slim-bookworm). When dependabot bumps the bun tag, the matching
+  # `bun-version` input must move with it in all four workflow sites — it
+  # cannot edit those, so the human merging the docker PR updates them by
+  # hand: test.yml:143, test.yml:313, release.yml:120, dependabot-lockfile.yml:59.
+  # Ruby major updates are ignored: release.yml:112-116 holds release on 3.4
+  # on purpose, so a major bump would break the gem publish job until pages/
+  # release are revisited.
+  - package-ecosystem: docker
+    directory: "/"
+    schedule:
+      interval: weekly
+    open-pull-requests-limit: 5
+    groups:
+      minor-and-patch:
+        update-types:
+          - minor
+          - patch
+    ignore:
+      - dependency-name: "ruby"
+        update-types:
+          - "version-update:semver-major"

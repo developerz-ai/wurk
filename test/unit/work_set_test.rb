@@ -71,7 +71,6 @@ class WorkSetTest < Wurk::Test::UnitCase
     assert_equal 't1',     tid
     assert_equal jid,      work.job.jid
   end
-  # rubocop:enable Minitest/MultipleAssertions
 
   def test_each_skips_empty_work_hashes
     register!(@identity)

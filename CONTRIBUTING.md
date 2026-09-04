@@ -69,15 +69,16 @@ treating it as unknown:
 
 | Exit | Trigger | Source |
 |---|---|---|
-| `0` | Every stage passed, OR `-h` / `--help` / `help` printed the help block without running any stage. | `bin/check:94-97`, `bin/check:23-26` |
-| `1` | At least one stage reported failure. | `bin/check:99-100` |
+| `0` | Every stage passed, OR `-h` / `--help` / `help` printed the help block without running any stage. | `bin/check:112-115`, `bin/check:23-26` |
+| `1` | At least one stage reported failure. | `bin/check:117-118` |
 | `64` | Unrecognised mode argument — anything other than `''`, `pr`, `fast`, `full`, `-h`, `--help`, or `help`. | `bin/check:27-30` |
 | `75` | No bundler on `PATH` — the environment cannot run the Ruby gate at all. | `bin/check:62-66` |
-| `75` | No Redis on `127.0.0.1:6379`. | `bin/check:74-78` |
-| `75` | No `bun` on `PATH` — frontend gate cannot execute. | `bin/check:100-104` |
+| `75` | Bundler is on `PATH` but the gems are not installed — `bin/setup` has never run here. | `bin/check:80-84` |
+| `75` | No Redis on `127.0.0.1:6379`. | `bin/check:92-96` |
+| `75` | No `bun` on `PATH` — frontend gate cannot execute. | `bin/check:117-121` |
 
-`75` is the platform's "preconditions unmet" code, and both triggers share it on
-purpose: neither says anything about the diff. A gate that cannot reach its Redis,
+`75` is the platform's "preconditions unmet" code, and all four triggers share it
+on purpose: none of them says anything about the diff. A gate that cannot reach its Redis,
 or cannot find the bundler it runs every stage through, has established NOTHING —
 so it must not exit `1`, which means "the gate ran and judged the change". An
 automated maintainer reads `1` as a red diff and sends its agent hunting a bug
@@ -85,9 +86,9 @@ nobody wrote.
 
 ### Env knobs
 
-- `SKIP_LINT=1` — drop the rubocop stage (`bin/check:80`).
-- `SKIP_PARITY=1` — drop the parity oracles stage (`bin/check:113`).
-- `SKIP_FRONTEND=1` — drop the frontend stage (typecheck + oxlint + vitest in `frontend/`; `bin/check:99-106`).
+- `SKIP_LINT=1` — drop the rubocop stage (`bin/check:98`).
+- `SKIP_PARITY=1` — drop the parity oracles stage (`bin/check:130`).
+- `SKIP_FRONTEND=1` — drop the frontend stage (typecheck + oxlint + vitest in `frontend/`; `bin/check:100-123`).
 - `NCPU=<n>` — see [Worker count](#worker-count) below for the trade-off (ceiling 14).
 
 The individual tasks, when you want one:
@@ -97,7 +98,7 @@ The individual tasks, when you want one:
 | Full suite (parallel) | `bin/rake test` |
 | A single file | `bin/rake test TEST=test/path/to/file_test.rb` |
 | A single test by name | `bin/rake test TEST=test/foo_test.rb TESTOPTS="--name=/pattern/"` |
-| Parity suite (oracles lifted from Sidekiq) | `bin/rake test:parity` |
+| Parity suite (independently written oracles) | `bin/rake test:parity` |
 | Ecosystem compatibility | `bin/rake test:ecosystem` |
 | Coverage gate | `COVERAGE=1 bin/rake test` |
 | Benchmarks | `bin/rake bench` |
@@ -136,7 +137,8 @@ Test layers:
 - **unit** — plain Ruby classes in isolation.
 - **engine** — boots the dummy Rails app in `test/dummy/`.
 - **integration** — real forks + real Redis.
-- **parity** (`test/parity/`) — tests lifted from upstream Sidekiq, SHA-pinned.
+- **parity** (`test/parity/`) — independently written oracles for the documented
+  Sidekiq behaviour, pinned to the upstream revision in `test/parity/.sidekiq_sha`.
   These are **oracles**: if Wurk diverges, Wurk is wrong unless the divergence
   is explicitly documented as intentional.
 - **ecosystem** — third-party Sidekiq gem suites run against Wurk.

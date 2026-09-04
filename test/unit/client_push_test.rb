@@ -55,7 +55,6 @@ class ClientPushTest < Wurk::Test::UnitCase
     assert_match JID_PATTERN, payload['jid']
     assert payload['retry'], 'retry defaults to true (Wurk.default_job_options)'
   end
-  # rubocop:enable Minitest/MultipleAssertions
 
   # `pool` is a transient enqueue-time attribute (spec §2.2) — it selects the
   # Redis pool but must never reach the wire. Issue #95.

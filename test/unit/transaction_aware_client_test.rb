@@ -77,7 +77,6 @@ class TransactionAwareClientTest < Wurk::Test::UnitCase
       assert_equal jid, first_queued['jid'], 'the deferred push must persist the pre-allocated jid'
     end
   end
-  # rubocop:enable Minitest/MultipleAssertions
 
   def test_rollback_drops_the_push
     client = Wurk::TransactionAwareClient.new
@@ -145,7 +144,6 @@ class TransactionAwareClientTest < Wurk::Test::UnitCase
 
   # --- end-to-end through the worker DSL ---------------------------------
 
-  # rubocop:disable Minitest/MultipleAssertions
   # End-to-end acceptance: one perform_async, deferred, committed, asserting the
   # full payload shape lands correctly. Cohesive — keep it as one scenario.
   def test_perform_async_defers_when_transactional_push_enabled
@@ -169,7 +167,6 @@ class TransactionAwareClientTest < Wurk::Test::UnitCase
       refute payload.key?('client_class'), 'client_class must never reach the wire'
     end
   end
-  # rubocop:enable Minitest/MultipleAssertions
 
   # A class whose sidekiq_options memoized BEFORE the global opt-in must still
   # route through the transactional client — transactional_push! lives in an

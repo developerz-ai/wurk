@@ -241,7 +241,6 @@ class ClientBufferedTest < Wurk::Test::UnitCase
     assert_includes queued, ['newest']
     assert_includes queued, ['fresh']
   end
-  # rubocop:enable Minitest/MultipleAssertions
 
   # --- batch bypass ------------------------------------------------------
 
@@ -316,7 +315,6 @@ class ClientBufferedTest < Wurk::Test::UnitCase
 
   # The cap splits a single bulk push: what fits is buffered, the rest rides on
   # the exception. Nothing may fall between the two.
-  # rubocop:disable-next Minitest/MultipleAssertions
   def test_overflow_raise_fills_remaining_capacity_and_reports_the_rest
     Wurk::Client.reliable_push_buffer = 3
     Wurk::Client.reliable_push_overflow = :raise
@@ -386,7 +384,6 @@ class ClientBufferedTest < Wurk::Test::UnitCase
 
   # Batched payloads never buffer, so an overflow that pre-empts their
   # connection-error re-raise would strand them without a trace.
-  # rubocop:disable-next Minitest/MultipleAssertions
   def test_overflow_carries_batched_payloads_from_a_mixed_push
     Wurk::Client.reliable_push_buffer = 1
     Wurk::Client.reliable_push_overflow = :raise

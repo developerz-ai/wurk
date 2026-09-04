@@ -295,9 +295,15 @@ class ApiMutationsTest < Wurk::Test::EngineCase
   end
 
   # Returns [score, jid] so callers can build the "<score>|<jid>" route key.
+  #
+  # Seeded an hour OUT, never due: no test in this file depends on the entry
+  # being due (the API acts on the key, not the clock), and a due entry in the
+  # worker's shared Redis DB is exactly what a scheduled poller still running
+  # from an earlier class pops before the request lands — `count: 0` on
+  # `test_bulk_deduplicates_repeated_keys` on main, 2026-09-03.
   def push_to_zset(name)
     payload = job_payload
-    score = ::Time.now.to_f
+    score = ::Time.now.to_f + 3600
     ::Wurk.redis { |c| c.call('ZADD', name, score.to_s, ::Wurk.dump_json(payload)) }
     [score, payload['jid']]
   end

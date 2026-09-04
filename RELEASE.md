@@ -37,9 +37,9 @@ matters more than it sounds.
 
 2. **Update `CHANGELOG.md`.** Add a dated section whose header matches the new
    version exactly — `## [1.1.0] - YYYY-MM-DD` — with changes grouped under the
-   standard headings: Runtime, Batches, Limiters, Periodic, Encryption,
-   Dashboard, Compat. The release workflow lifts this section verbatim into the
-   GitHub Release notes (`bin/changelog-section`), so write it for readers.
+   Keep a Changelog headings the file already uses: Added, Changed, Fixed. The
+   release workflow lifts this section verbatim into the GitHub Release notes
+   (`bin/changelog-section`), so write it for readers.
 
 3. **Build the dashboard bundle and run the gate locally:**
    ```bash
@@ -88,6 +88,7 @@ run failed after the bump was already merged.
 | **Tag ↔ version** | The workflow passes its derived tag as `WURK_RELEASE_TAG`; it must match `Wurk::VERSION`. Git's hyphenated prerelease (`v1.0.0-rc1`) maps to RubyGems' dotted form (`1.0.0.rc1`). Falls back to `GITHUB_REF_NAME`, and no-ops for local runs. |
 | **Dashboard bundle present** | `vendor/assets/dashboard/` has `index.html`, a non-empty `wurk-manifest.json`, and a non-empty `assets/*.js`. Run `rake frontend:build` if missing. |
 | **Version ↔ CHANGELOG** | `CHANGELOG.md` contains a `## [<Wurk::VERSION>]` section header. |
+| **Unreleased link** | `CHANGELOG.md`'s `[Unreleased]:` compare link starts at `v<Wurk::VERSION>` (the tag about to be cut). |
 | **Clean tree** | `git status --porcelain` is empty, ignoring `vendor/assets/` (built output). |
 | **Tests green** | `rake test` (unit + integration + engine) passes. |
 

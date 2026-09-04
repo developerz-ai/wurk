@@ -56,6 +56,19 @@ module ReleaseHelpers
     abort "release:check ✗ CHANGELOG.md has no `## [#{version}]` section matching Wurk::VERSION"
   end
 
+  # Every release bump must also advance the [Unreleased] compare link; 1.7.4
+  # and 1.7.5 both shipped with it still comparing from v1.7.3. The expected
+  # from-tag is what git_tag_for derives, so link and tag cannot disagree either.
+  def changelog_unreleased_link_current!(changelog, version)
+    tag = git_tag_for(version)
+    link = changelog[/^\[Unreleased\]:\s*(\S+)/, 1]
+    return if link&.end_with?("compare/#{tag}...HEAD")
+
+    found = link ? "it reads #{link}" : 'there is no [Unreleased] reference line'
+    abort "release:check ✗ CHANGELOG.md [Unreleased] link must compare from #{tag}...HEAD " \
+          "(#{found})"
+  end
+
   # Read the packaged file list straight out of the built .gem (no install) and
   # assert the precompiled dashboard actually shipped inside it.
   def gem_contains_dashboard!(gem_path)
