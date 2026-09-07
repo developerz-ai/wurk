@@ -8,7 +8,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 Three pillars, all must stay true:
 
-1. **100% drop-in.** Same Redis key schema, same job JSON, same Ruby DSL. Existing Sidekiq jobs and Redis data keep working on a one-line gem swap. Third-party gems (sidekiq-cron, sidekiq-unique-jobs, sidekiq-scheduler, sidekiq-status, sidekiq-failures, sidekiq-throttled, etc.) pass their own test suites against Wurk.
+1. **100% drop-in.** Same Redis key schema, same job JSON, same Ruby DSL. Existing Sidekiq jobs and Redis data keep working on a one-line gem swap. sidekiq-cron passes its own test suite against Wurk; the rest (sidekiq-unique-jobs, sidekiq-scheduler, sidekiq-status, sidekiq-failures, sidekiq-throttled) are tracked in `docs/idea/14-ecosystem-compat.md`.
 2. **Free.** Pro + Ent feature parity in the same gem. No tiers, no flags gating Ent behavior, no license checks.
 3. **Measured.** Two suites, different jobs. `rake bench` is the REGRESSION gate (wurk vs its own past self; >5% on enqueue / fetch+execute / bulk enqueue / swarm boot / memory blocks merge). `rake bench:vs_sidekiq` is the COMPARISON vs stock Sidekiq. A green gate says nothing about Sidekiq. Wurk is currently SLOWER than stock Sidekiq (0.87x–1.02x depending on workload, with parity on CPU/IO but still behind on noop and boot, see `docs/benchmarks.md`) — do not add a "faster" claim to the README, site, or llms.txt until that doc's numbers support it.
 

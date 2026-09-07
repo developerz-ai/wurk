@@ -278,7 +278,7 @@ Infrastructure this basic should be free software. A Rails app shouldn't need a 
 What has made that hard is maintenance: someone has to be paid to do it. Sidekiq funds a decade of *human* maintenance through its paid tiers, which is an honest trade. Wurk makes a different one — it is maintained **AI-first**: implementation, parity suite, docs, and benchmarks are written and kept current by AI agents under human review. A fix, a doc update, or a version bump is no longer somebody's week, which is what makes it practical to:
 
 - ship the entire Pro + Enterprise surface with no tier, no flag gate, and no license check;
-- keep parity honest mechanically rather than by hand — an independently written parity oracle suite, pinned to a documented Sidekiq revision, plus third-party gems (sidekiq-cron, sidekiq-unique-jobs, sidekiq-scheduler, sidekiq-status, sidekiq-failures, sidekiq-throttled) running their own upstream suites against Wurk on every push;
+- keep parity honest mechanically rather than by hand — an independently written parity oracle suite, pinned to a documented Sidekiq revision, plus sidekiq-cron's upstream suite running against Wurk on every push ([docs/idea/14-ecosystem-compat.md](https://github.com/developerz-ai/wurk/blob/main/docs/idea/14-ecosystem-compat.md) tracks the rest);
 - keep adding surface Sidekiq doesn't have — the [Wurk extras](#wurk-extras) above landed as one release;
 - hold ourselves to published numbers instead of adjectives — the suite runs against stock Sidekiq every release and ships the results [as measured](docs/benchmarks.md), including the unflattering ones.
 
@@ -297,7 +297,7 @@ Wurk is MIT and stays that way. If what you need is a commercial support contrac
 + gem "wurk"
 ```
 
-`bundle install && restart`. Wurk reads and writes the same Redis schema, so a rolling deploy can run Sidekiq and Wurk against the same Redis during the cutover. Third-party gems (sidekiq-cron, sidekiq-unique-jobs, sidekiq-scheduler, sidekiq-status, sidekiq-failures, sidekiq-throttled, …) are exercised by running their own upstream suites against Wurk in the [`ecosystem` CI job](https://github.com/developerz-ai/wurk/blob/main/.github/workflows/ecosystem.yml) (see [`test/ecosystem/`](https://github.com/developerz-ai/wurk/tree/main/test/ecosystem)).
+`bundle install && restart`. Wurk reads and writes the same Redis schema, so a rolling deploy can run Sidekiq and Wurk against the same Redis during the cutover. sidekiq-cron's upstream suite runs against Wurk in the [`ecosystem` CI job](https://github.com/developerz-ai/wurk/blob/main/.github/workflows/ecosystem.yml) (see [`test/ecosystem/`](https://github.com/developerz-ai/wurk/tree/main/test/ecosystem)). sidekiq-unique-jobs, sidekiq-scheduler, sidekiq-status, sidekiq-failures and sidekiq-throttled are target additions tracked in [docs/idea/14-ecosystem-compat.md](https://github.com/developerz-ai/wurk/blob/main/docs/idea/14-ecosystem-compat.md).
 
 Full walkthrough — config side-by-side, the Redis key/`sidekiq_options` mapping, known incompatibilities, and a one-page cutover checklist: **[docs/migrate-from-sidekiq.md](https://github.com/developerz-ai/wurk/blob/main/docs/migrate-from-sidekiq.md)**.
 
