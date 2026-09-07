@@ -1,7 +1,8 @@
 name: deploy-demo
 
 # Deploy of the public demo (wurk.demo.developerz.ai) — run it by hand, or let
-# release.yml call it after publishing a `v*` tag.
+# release.yml call it after publishing the gem for a `lib/wurk/version.rb` bump
+# landing on main (the tag is an output there, cut last).
 #
 # DEPLOY MODEL: this workflow only BUILDS + PUSHES the image. Infra deploys it
 # via the in-cluster ArgoCD Image Updater, which selects the newest DOCR tag

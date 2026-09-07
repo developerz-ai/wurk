@@ -57,7 +57,10 @@ namespace :test do
   Rake::TestTask.new(:parity) do |t|
     t.libs << 'test' << 'lib'
     t.test_files = FileList['test/parity/**/*_test.rb']
-    t.description = 'Run Sidekiq parity tests (lifted from upstream, SHA pinned in test/parity/.sidekiq_sha)'
+    t.description = 'Run Sidekiq parity tests ' \
+                    '(independently written oracles ' \
+                    'for the documented Sidekiq behaviour, ' \
+                    'pinned to the upstream revision in test/parity/.sidekiq_sha)'
   end
 
   desc 'Run ecosystem gem suites against Wurk (sidekiq-cron, sidekiq-unique-jobs, ...)'
@@ -65,7 +68,7 @@ namespace :test do
     sh 'bin/test-ecosystem'
   end
 
-  desc 'Coverage gate: branch coverage on lib/ must stay >= 90%'
+  desc 'Coverage gate: SimpleCov line and branch coverage on lib/ must both stay >= 90% (both blocking)'
   task :coverage do
     ENV['COVERAGE'] = '1'
     Rake::Task['test'].invoke
@@ -219,7 +222,9 @@ namespace :release do
     puts "release:check — Wurk #{version}"
     ReleaseHelpers.tag_matches_version!(version)
     ReleaseHelpers.dashboard_bundle_present!(DASHBOARD_BUNDLE_DIR)
-    ReleaseHelpers.changelog_has_version!(File.read(File.join(GEM_ROOT, 'CHANGELOG.md')), version)
+    changelog = File.read(File.join(GEM_ROOT, 'CHANGELOG.md'))
+    ReleaseHelpers.changelog_has_version!(changelog, version)
+    ReleaseHelpers.changelog_unreleased_link_current!(changelog, version)
     release_tree_clean!
     puts 'release:check — static checks passed; running tests…'
     Rake::Task['test'].invoke

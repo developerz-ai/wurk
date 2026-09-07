@@ -142,4 +142,20 @@ class BenchCompareTest < Wurk::Test::UnitCase
     assert_includes out, "_New on head: #{RETENTION_LABEL}_"
     refute_includes out, 'Missing on head'
   end
+
+  # Regression guard for #487: a bench labelled "(TODO)" must be compared like any
+  # other — no bench under bench/ emits that label today (closed #259/#265/#266
+  # replaced every stub), and the comparator must not let a future stub bench
+  # silently opt out of the gate by naming itself "(TODO)".
+  def test_todo_labelled_bench_is_compared_not_skipped
+    todo_label = 'wurk foo (TODO)'
+    base = write_runs(todo_label, [1000.0, 0.0])
+    head = write_runs(todo_label, [800.0, 0.0])
+
+    out, code = compare(base, head)
+
+    assert_equal 1, code, 'a -20% drop on a (TODO)-labelled bench must still trip the gate'
+    assert_includes out, "Regression: `#{todo_label}` -20.0%"
+    assert_includes out, "| `#{todo_label}` | 1.00k | 800 |"
+  end
 end
