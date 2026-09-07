@@ -108,6 +108,47 @@ fi
 
 [ "$MODE" = full ] && stage "ecosystem suites" bundle exec rake test:ecosystem
 
+# The reference Python client. Two separate questions, and only one of them
+# needs pip: the tests import the client from `clients/python/src` via
+# `sys.path` (tests/test_client.py:15), so they run against a bare python3 with
+# nothing installed. Run them first and unconditionally — that is the
+# regression gate.
+#
+# `python3 -m pip install ./clients/python` answers the other question ("does
+# the package still build?") and must never be run against the active
+# interpreter: it mutates whatever environment the developer is in, and on a
+# PEP-668 box it does not even work. `command -v python3` does not imply a
+# usable pip, and the gap between them is the same false-verdict laundering the
+# bundler and redis guards above exist to prevent — a red `python-client build`
+# would tell an agent its diff broke something when the box is simply missing a
+# package. Measured on ovh-1b: python3 3.14.4 on PATH, `python3 -m pip` reports
+# "No module named pip", the stdlib carries EXTERNALLY-MANAGED, and
+# `python3 -m venv` produces a venv with no pip at all because python3-venv is
+# not installed. So: build in a throwaway venv, and when that venv cannot
+# bootstrap pip, say so and skip rather than fail.
+python_client_build() {
+  local venv rc=0
+  venv=$(mktemp -d)
+  python3 -m venv "$venv/v" >/dev/null 2>&1 || true
+  if [ -x "$venv/v/bin/python" ] && "$venv/v/bin/python" -m pip --version >/dev/null 2>&1; then
+    "$venv/v/bin/python" -m pip install --quiet ./clients/python || rc=$?
+  else
+    echo "    – skipped: python3 -m venv cannot bootstrap pip (install python3-venv)"
+  fi
+  rm -rf "$venv"
+  return "$rc"
+}
+
+if [ "$MODE" = full ]; then
+  if command -v python3 >/dev/null 2>&1; then
+    stage "python-client tests" python3 -m unittest discover -s clients/python/tests -v
+    stage "python-client build (isolated venv)" python_client_build
+  else
+    echo
+    echo "==> python-client skipped: python3 not found"
+  fi
+fi
+
 echo
 if [ ${#failed[@]} -eq 0 ]; then
   echo "bin/check ✓ all green in $(($(date +%s) - start))s"
