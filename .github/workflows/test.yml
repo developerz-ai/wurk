@@ -290,6 +290,10 @@ jobs:
       - name: download actionlint
         if: env.RUN == 'true'
         run: |
+          # The upstream script refuses a DIR that does not already exist
+          # ("Directory '/tmp/actionlint-bin' does not exist", then usage,
+          # exit 1) — it does not create it. Create it first.
+          mkdir -p /tmp/actionlint-bin
           curl -fsSL \
             "https://raw.githubusercontent.com/rhysd/actionlint/${ACTIONLINT_SHA}/scripts/download-actionlint.bash" \
             | bash -s -- "${ACTIONLINT_VERSION}" /tmp/actionlint-bin
