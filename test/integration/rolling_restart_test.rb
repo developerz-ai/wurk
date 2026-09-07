@@ -75,7 +75,6 @@ class RollingRestartTest < Wurk::Test::UnitCase
       shutdown_supervisor(parent_pid)
     end
   end
-  # rubocop:enable Minitest/MultipleAssertions
 
   private
 

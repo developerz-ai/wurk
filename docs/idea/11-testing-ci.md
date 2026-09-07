@@ -27,7 +27,7 @@ Tests that exercise the swarm itself fork real processes and need a Redis DB per
 
 ## Sidekiq parity tests
 
-For each public class we implement, the equivalent test from upstream Sidekiq is ported and adapted. The ported tests live under `test/parity/`. A pin file records the upstream Sidekiq SHA the parity tests were lifted from.
+The parity oracles under `test/parity/` are independently written against the documented Sidekiq behaviour — they are not copies of upstream test files (Sidekiq is LGPL-3.0, this repo is MIT). A pin file at `test/parity/.sidekiq_sha` records the upstream Sidekiq revision the oracles target.
 
 ## Ecosystem gem tests
 

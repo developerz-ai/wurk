@@ -1,0 +1,6 @@
+# Toolchain, as text: the fleet box provides `mise` and nothing per-language, and
+# `bin/setup` runs `mise install` (guarded, so a box without mise skips it). The
+# version is the one the Dockerfile and the pages/ecosystem CI lanes run; the main
+# test lane runs 4.0 — change this line, not a box, to move the fleet.
+[tools]
+ruby = "3.4"

@@ -66,6 +66,33 @@ class ReleaseHelpersTest < Wurk::Test::UnitCase
     end
   end
 
+  # --- changelog_unreleased_link_current! -------------------------------
+
+  def test_unreleased_link_current_passes
+    changelog = "## [Unreleased]\n\n" \
+                "[Unreleased]: https://github.com/developerz-ai/wurk/compare/v1.7.5...HEAD\n"
+    ReleaseHelpers.changelog_unreleased_link_current!(changelog, '1.7.5')
+  end
+
+  def test_unreleased_link_accepts_prerelease_tag_form
+    changelog = "[Unreleased]: https://github.com/developerz-ai/wurk/compare/v1.8.0-rc1...HEAD\n"
+    ReleaseHelpers.changelog_unreleased_link_current!(changelog, '1.8.0.rc1')
+  end
+
+  def test_unreleased_link_left_at_older_version_aborts
+    changelog = "[Unreleased]: https://github.com/developerz-ai/wurk/compare/v1.7.3...HEAD\n"
+    err = assert_raises(SystemExit) do
+      silence_stderr { ReleaseHelpers.changelog_unreleased_link_current!(changelog, '1.7.5') }
+    end
+    refute_predicate err, :success?
+  end
+
+  def test_unreleased_link_missing_aborts
+    assert_raises(SystemExit) do
+      silence_stderr { ReleaseHelpers.changelog_unreleased_link_current!("## [1.7.5]\n", '1.7.5') }
+    end
+  end
+
   # --- dashboard_bundle_present! ---------------------------------------
 
   def test_bundle_present_passes

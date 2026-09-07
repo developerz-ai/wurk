@@ -1,4 +1,7 @@
-# Pin the upstream Sidekiq SHA that the parity tests were lifted from.
+# Pin the upstream Sidekiq SHA whose documented behaviour the parity oracles
+# were written against. The oracles are not copies of upstream test files (see
+# test/parity/README.md); the pin marks the Sidekiq revision the assertions
+# target.
 # Bump this only after reviewing the diff and re-running the parity suite.
 sha: e1f808a08645f9b8a194852a171b5667f5f877bd
 date: 2026-08-03

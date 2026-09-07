@@ -82,7 +82,8 @@ jobs:
     env:
       BUNDLE_GEMFILE: ${{ github.workspace }}/Gemfile
       # Pinned so a floating Rails resolve can't perturb the numbers, and so this
-      # job reuses the gem cache test.yml's 8.0 legs already populated.
+      # job reuses the gem cache that test.yml's `test` job already populates
+      # (cache-version: rails-8.1 in both).
       RAILS_VERSION: "8.1"
       BENCH_RUNS: 3
     steps:

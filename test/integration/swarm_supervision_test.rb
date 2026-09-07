@@ -274,7 +274,16 @@ class SwarmSupervisionTest < Wurk::Test::UnitCase
 
     intervals = timestamps.each_cons(2).map { |a, b| b - a }
 
-    assert_operator intervals[1], :>=, intervals[0] * 1.5,
+    # Each interval is the slot's respawn delay (1 s, then 2 s — Backoff has no
+    # jitter) PLUS one fork + boot, and the boot is the noise: on a loaded CI
+    # runner it ran ~1 s, so [2.07, 2.94] failed a `>= 1.5x` ratio while the
+    # schedule underneath had doubled exactly (2026-09-03). Assert the two
+    # facts the schedule guarantees: the second interval cannot be shorter than
+    # the second delay, and it grew by the delay's own step, less half a step
+    # of boot jitter.
+    assert_operator intervals[1], :>=, Wurk::Swarm::RESPAWN_BACKOFF * 2,
+                    "second respawn must wait the doubled delay: #{intervals.inspect}"
+    assert_operator intervals[1] - intervals[0], :>=, Wurk::Swarm::RESPAWN_BACKOFF * 0.5,
                     "respawn backoff must grow across crashes: #{intervals.inspect}"
   end
 

@@ -8,7 +8,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 Three pillars, all must stay true:
 
-1. **100% drop-in.** Same Redis key schema, same job JSON, same Ruby DSL. Existing Sidekiq jobs and Redis data keep working on a one-line gem swap. Third-party gems (sidekiq-cron, sidekiq-unique-jobs, sidekiq-scheduler, sidekiq-status, sidekiq-failures, sidekiq-throttled, etc.) pass their own test suites against Wurk.
+1. **100% drop-in.** Same Redis key schema, same job JSON, same Ruby DSL. Existing Sidekiq jobs and Redis data keep working on a one-line gem swap. sidekiq-cron passes its own test suite against Wurk; the rest (sidekiq-unique-jobs, sidekiq-scheduler, sidekiq-status, sidekiq-failures, sidekiq-throttled) are tracked in `docs/idea/14-ecosystem-compat.md`.
 2. **Free.** Pro + Ent feature parity in the same gem. No tiers, no flags gating Ent behavior, no license checks.
 3. **Measured.** Two suites, different jobs. `rake bench` is the REGRESSION gate (wurk vs its own past self; >5% on enqueue / fetch+execute / bulk enqueue / swarm boot / memory blocks merge). `rake bench:vs_sidekiq` is the COMPARISON vs stock Sidekiq. A green gate says nothing about Sidekiq. Wurk is currently SLOWER than stock Sidekiq (0.87x–1.02x depending on workload, with parity on CPU/IO but still behind on noop and boot, see `docs/benchmarks.md`) — do not add a "faster" claim to the README, site, or llms.txt until that doc's numbers support it.
 
@@ -21,7 +21,7 @@ Three pillars, all must stay true:
 | Full test suite (parallel) | `bin/rake test` |
 | Single file | `bin/rake test TEST=test/path/to/file_test.rb` |
 | Single test by name | `bin/rake test TEST=test/foo_test.rb TESTOPTS="--name=/pattern/"` |
-| Parity tests (lifted from Sidekiq) | `bin/rake test:parity` |
+| Parity tests (independently written oracles) | `bin/rake test:parity` |
 | Ecosystem compat | `bin/rake test:ecosystem` |
 | Benchmarks | `bin/rake bench` |
 | Dummy app | `cd test/dummy && bin/rails s` |
@@ -92,7 +92,7 @@ Skip step 3 → leaked sockets in children. Skip step 5 → children corrupt eac
 
 - **Minitest**, parallel runner. Each class opts in via `parallelize_me!`.
 - **Per-worker Redis DB isolation.** Each `minitest-parallel_fork` worker runs against its own Redis logical DB (1–14, with 15 reserved for fixed-DB tests; never DB 0), assigned in `test_helper`'s `after_parallel_fork` hook; `teardown` runs `FLUSHDB` so each test gets a clean slate. Tests that build a pool explicitly use `Wurk::Test.redis_url`. Required for parallel safety — concurrent test classes never see each other's keys.
-- **Layers:** unit · engine (boots `test/dummy/`) · integration (real forks + real Redis) · parity (`test/parity/`, lifted from Sidekiq, SHA-pinned) · ecosystem (third-party gem suites run against Wurk) · benchmarks.
+- **Layers:** unit · engine (boots `test/dummy/`) · integration (real forks + real Redis) · parity (`test/parity/`, independently written oracles for the documented Sidekiq behaviour, pinned to the upstream revision in test/parity/.sidekiq_sha) · ecosystem (third-party gem suites run against Wurk) · benchmarks.
 - **Parity tests are oracles.** When Wurk diverges from a parity test, Wurk is wrong unless the divergence is explicitly documented as intentional.
 - **Never mock Redis** in integration or parity tests. Real Redis, unique namespace.
 - **Coverage gate.** SimpleCov **line** and **branch** coverage on `lib/` must both stay ≥90% (blocking; `minimum_coverage line: 90, branch: 90`). Branch was ratcheted from ~78% to ≥90% in #67 — keep new code at parity. The Cobertura report is still uploaded for per-file inspection. Coverage runs merge across the `minitest-parallel_fork` workers via `SimpleCov.at_fork`.
