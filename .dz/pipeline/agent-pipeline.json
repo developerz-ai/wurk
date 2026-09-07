@@ -1,0 +1,10 @@
+{
+  "repo": "developerz-ai/wurk",
+  "merge": {
+    "reviewGate": "ci-only",
+    "standingAuthorization": true
+  },
+  "policy": {
+    "defaultTier": "GREEN"
+  }
+}
