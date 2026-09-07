@@ -266,7 +266,9 @@ jobs:
   # Workflow lint via actionlint. Closes the gap left by CodeRabbit's advisory
   # actionlint pass (.coderabbit.yml + .dz/maintainer/maintainer.yml setting
   # `request_changes: false` for the review lane), which never blocks a merge.
-  # actionlint embeds shellcheck for `run:` blocks, so no separate install.
+  # actionlint does NOT embed shellcheck: it shells out to the external
+  # `shellcheck` executable for `run:` blocks. ubuntu-latest preinstalls it,
+  # and the `run actionlint` step below refuses to run without it.
   # Not wired into the ruleset's required checks in this PR.
   actionlint:
     name: actionlint (workflow lint)
@@ -301,7 +303,19 @@ jobs:
           /tmp/actionlint-bin/actionlint -version
       - name: run actionlint
         if: env.RUN == 'true'
-        run: /tmp/actionlint-bin/actionlint -color
+        run: |
+          # actionlint's shellcheck integration is silent when the executable
+          # is absent: it skips every `run:` block and still exits 0. Measured
+          # with actionlint 1.7.12 on a workflow whose `run:` contains an
+          # unquoted `rm -rf $FOO/bar` — no shellcheck: zero diagnostics,
+          # exit 0; shellcheck on PATH: SC2086, exit 1. So a runner image that
+          # drops shellcheck would turn this job green while silently linting
+          # less than it claims. Refuse instead.
+          command -v shellcheck >/dev/null || {
+            echo "shellcheck is not on PATH; actionlint would skip every run: block" >&2
+            exit 1
+          }
+          /tmp/actionlint-bin/actionlint -color
 
   # Ruby linting — bin/check already runs it; surfaced here so every PR that
   # touches Ruby paths carries a visible verdict. Paired with the `frontend`
