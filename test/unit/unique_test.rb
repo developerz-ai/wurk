@@ -606,7 +606,7 @@ class UniqueTest < Wurk::Test::UnitCase
     ENABLE_MUTEX.synchronize do
       Wurk::Unique.enable!
       job = build_job(jid: 'kill-1', ttl: 600, queue: "kill#{@suffix}")
-      key = seed_locked_retry_entry(job)
+      key = seed_locked_retry_entry(job, due: false)
       # FLUSHDB only runs per test class, so the DEAD zset can already hold
       # entries from earlier `die_unretryable` tests — assert the delta.
       before = redis_call('ZCARD', Wurk::Keys::DEAD)
@@ -626,7 +626,7 @@ class UniqueTest < Wurk::Test::UnitCase
     ENABLE_MUTEX.synchronize do
       Wurk::Unique.enable!
       job = build_job(jid: 'kill-2', ttl: 600, queue: "kill2#{@suffix}")
-      key = seed_locked_retry_entry(job)
+      key = seed_locked_retry_entry(job, due: false)
 
       observe_death_handlers do |observed|
         Wurk::RetrySet.new.find_job('kill-2').kill
@@ -929,12 +929,19 @@ class UniqueTest < Wurk::Test::UnitCase
   # Simulate a failed `unique_until: :success` job: the enqueue-time lock is
   # still held by its own jid while the payload waits in `retry`. Returns the
   # lock key (tracked for teardown).
-  def seed_locked_retry_entry(job)
+  #
+  # `due:` decides the score. A test that PROMOTES the entry needs it due; a
+  # test that looks it up by jid must NOT seed it due — this worker's Redis DB
+  # is shared with every class in the process, and a due entry is exactly what
+  # a scheduled poller left running by an earlier class pops before
+  # `find_job` runs ("undefined method 'kill' for nil", 2026-09-03).
+  def seed_locked_retry_entry(job, due: true)
     key = Wurk::Unique.lock_key_for(job)
     @keys << key
+    score = due ? ::Time.now.to_f - 1 : ::Time.now.to_f + 3600
     Wurk.redis do |c|
       c.call('SET', key, job['jid'], 'EX', 3600)
-      c.call('ZADD', Wurk::Keys::RETRY, (::Time.now.to_f - 1).to_s, Wurk.dump_json(job))
+      c.call('ZADD', Wurk::Keys::RETRY, score.to_s, Wurk.dump_json(job))
     end
     key
   end

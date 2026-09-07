@@ -138,7 +138,6 @@ class MiddlewareExpiryTest < Wurk::Test::UnitCase
       assert_equal ['class:MyJob'], tags
     end
   end
-  # rubocop:enable Minitest/MultipleAssertions
 
   def test_no_statsd_call_on_non_expired_job
     future = ::Time.now.to_f + 60

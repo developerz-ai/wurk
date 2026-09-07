@@ -45,7 +45,8 @@ Sidekiq has no equivalent for any of these, and each is Wurk-only: using it ties
 
 - `sidekiq-cron` → native `config.periodic { |mgr| mgr.register("*/5 * * * *", MyJob) }`. There is no `Sidekiq::Cron::Job` shim by design.
 - `sidekiq-unique-jobs` → native uniqueness: call `Sidekiq::Enterprise.unique!` once, then `sidekiq_options unique_for: 600, unique_until: :success` (`:start` releases the lock at perform start). Customize the dedup key with `self.sidekiq_unique_context(job)`.
-- `sidekiq-scheduler`, `sidekiq-status`, `sidekiq-failures`, `sidekiq-throttled` work unchanged; their upstream suites run against Wurk in CI.
+- `sidekiq-cron` is exercised by its own upstream suite against Wurk in CI ([`test/ecosystem/sidekiq-cron/PIN`](https://github.com/developerz-ai/wurk/blob/main/test/ecosystem/sidekiq-cron/PIN)).
+- `sidekiq-scheduler`, `sidekiq-status`, `sidekiq-failures`, `sidekiq-throttled` work unchanged; their suites are target additions tracked in [docs/idea/14-ecosystem-compat.md](https://github.com/developerz-ai/wurk/blob/main/docs/idea/14-ecosystem-compat.md).
 - `sentry-sidekiq` is **incompatible** — its gemspec declares `add_dependency "sidekiq"`, so bundling it reinstalls real Sidekiq alongside Wurk and `require "sidekiq"` loads a broken hybrid. Use the built-in integration: `require "wurk/sentry"` then `Wurk.configure_server { |config| Wurk::Sentry.install!(config) }`.
 
 ## Error reporting (the trap)

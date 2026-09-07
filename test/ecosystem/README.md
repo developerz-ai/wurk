@@ -25,7 +25,7 @@ Current matrix:
 - sidekiq-cron (v2.4.0)
 
 A harness lands here only once it is green. A suite that cannot pass yet is a
-red required check on every PR in the repo, which buys nothing and hides real
+red check on every PR in the repo, which buys nothing and hides real
 regressions — so the pin, and what still blocks it, is recorded in
 `docs/idea/14-ecosystem-compat.md` until the gap is closed.
 

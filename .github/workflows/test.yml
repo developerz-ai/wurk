@@ -18,7 +18,7 @@ concurrency:
 
 jobs:
   # Which parts of the repo does this change touch? Everything below keys off
-  # these outputs, so a docs-only PR stops paying for the full Ruby matrix.
+  # these outputs, so a docs-only PR stops paying for the full Ruby suite.
   #
   # PULL REQUESTS ONLY. On push-to-main every job runs unconditionally: main is
   # what `release:check` and the tag build trust, so its history stays fully
@@ -41,6 +41,7 @@ jobs:
       frontend: ${{ steps.filter.outputs.frontend }}
       python: ${{ steps.filter.outputs.python }}
       specdocs: ${{ steps.filter.outputs.specdocs }}
+      workflows: ${{ steps.filter.outputs.workflows }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -79,6 +80,9 @@ jobs:
             specdocs:
               - 'docs/target/**'
               - '.github/workflows/test.yml'
+            workflows:
+              - '.github/workflows/**'
+              - '.github/actionlint.yaml'
 
   # ONE full run of the Ruby suite, on the newest Ruby and the newest Rails,
   # with the coverage gate folded into it.
@@ -144,7 +148,7 @@ jobs:
       - uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2
         if: env.RUN == 'true'
         with:
-          bun-version: "1.3.14"
+          bun-version: "1.4.0"
       # Pin Node too. Bun runs the scripts, but vitest executes test files in
       # Node worker threads and Vite's toolchain resolves against Node — so an
       # unpinned Node is a silent, moving dependency of every frontend run. It
@@ -158,12 +162,12 @@ jobs:
         with:
           node-version: "24"
       # Cache Bun's global download cache so `bun install --frozen-lockfile`
-      # (run here directly in `frontend`, and via `rake frontend:build` in the
-      # test/coverage legs) reuses tarballs instead of re-fetching them each run.
-      # Best-effort by design: actions/cache warns and continues on a restore
-      # miss or a save failure, so this step can never fail the job. Keyed on the
-      # frontend lockfile; the shared key is intentional so every matrix leg and
-      # job reuses one cache.
+      # (run here via `rake frontend:build`, and directly in the `frontend`
+      # job) reuses tarballs instead of re-fetching them each run. Best-effort
+      # by design: actions/cache warns and continues on a restore miss or a
+      # save failure, so this step can never fail the job. Keyed on the
+      # frontend lockfile; the shared key is intentional so the `test` job and
+      # the `frontend` job reuse one cache.
       - name: cache bun install cache
         if: env.RUN == 'true'
         uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
@@ -222,11 +226,12 @@ jobs:
         if: env.RUN == 'true'
         run: python -m unittest discover -s clients/python/tests -v
 
-  # Oracle suite lifted from upstream Sidekiq (SHA-pinned in
-  # test/parity/.sidekiq_sha). Its own dedicated job so a parity divergence is
-  # legible at a glance rather than buried in the main suite's output. Needs
-  # neither the dashboard bundle nor a Node toolchain, which is why it stays a
-  # 4vcpu job that finishes in well under a minute.
+  # Oracle suite: independently written oracles for the documented Sidekiq
+  # behaviour, pinned to the upstream revision in test/parity/.sidekiq_sha.
+  # Its own dedicated job so a parity divergence is legible at a glance rather
+  # than buried in the main suite's output. Needs neither the dashboard bundle
+  # nor a Node toolchain, which is why it stays a 4vcpu job that finishes in
+  # well under a minute.
   parity:
     name: parity (oracle)
     needs: detect
@@ -288,8 +293,63 @@ jobs:
             echo "✓ $file exists and is non-empty ($(wc -l < "$file") lines)"
           done
 
-  # Ruby linting — nothing runs rubocop today, so this closes that gap.
-  # Paired with the `frontend` and `spec-docs` jobs as quick, parallel checks.
+  # Workflow lint via actionlint. Closes the gap left by CodeRabbit's advisory
+  # actionlint pass (.coderabbit.yml + .dz/maintainer/maintainer.yml setting
+  # `request_changes: false` for the review lane), which never blocks a merge.
+  # actionlint does NOT embed shellcheck: it shells out to the external
+  # `shellcheck` executable for `run:` blocks. ubuntu-latest preinstalls it,
+  # and the `run actionlint` step below refuses to run without it.
+  # Not wired into the ruleset's required checks in this PR.
+  actionlint:
+    name: actionlint (workflow lint)
+    needs: detect
+    runs-on: ubuntu-latest
+    timeout-minutes: 3
+    env:
+      # Per-step gate so this job always reports a status even on a PR whose
+      # diff doesn't touch a workflow (see `test` job for the same pattern).
+      RUN: ${{ github.event_name != 'pull_request' || needs.detect.outputs.workflows == 'true' }}
+      # Triple pin: release version, download-script commit SHA, and the
+      # linux/amd64 binary's own SHA256. A silent upstream rewrite, a script
+      # change, or a tag repoint cannot reach main unobserved.
+      ACTIONLINT_VERSION: "1.7.12"
+      ACTIONLINT_SHA: "914e7df21a07ef503a81201c76d2b11c789d3fca"
+      ACTIONLINT_BINARY_SHA256: "c872d6db8c6bf83a8eaa704fc93999f027d55dffbc63b8a6abdccb47df5f4cd4"
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: download actionlint
+        if: env.RUN == 'true'
+        run: |
+          # The upstream script refuses a DIR that does not already exist
+          # ("Directory '/tmp/actionlint-bin' does not exist", then usage,
+          # exit 1) — it does not create it. Create it first.
+          mkdir -p /tmp/actionlint-bin
+          curl -fsSL \
+            "https://raw.githubusercontent.com/rhysd/actionlint/${ACTIONLINT_SHA}/scripts/download-actionlint.bash" \
+            | bash -s -- "${ACTIONLINT_VERSION}" /tmp/actionlint-bin
+          echo "${ACTIONLINT_BINARY_SHA256}  /tmp/actionlint-bin/actionlint" | sha256sum -c -
+          /tmp/actionlint-bin/actionlint -version
+      - name: run actionlint
+        if: env.RUN == 'true'
+        run: |
+          # actionlint's shellcheck integration is silent when the executable
+          # is absent: it skips every `run:` block and still exits 0. Measured
+          # with actionlint 1.7.12 on a workflow whose `run:` contains an
+          # unquoted `rm -rf $FOO/bar` — no shellcheck: zero diagnostics,
+          # exit 0; shellcheck on PATH: SC2086, exit 1. So a runner image that
+          # drops shellcheck would turn this job green while silently linting
+          # less than it claims. Refuse instead.
+          command -v shellcheck >/dev/null || {
+            echo "shellcheck is not on PATH; actionlint would skip every run: block" >&2
+            exit 1
+          }
+          /tmp/actionlint-bin/actionlint -color
+
+  # Ruby linting — bin/check already runs it; surfaced here so every PR that
+  # touches Ruby paths carries a visible verdict. Paired with the `frontend`
+  # and `spec-docs` jobs as quick, parallel checks.
   lint:
     name: lint (rubocop)
     needs: detect
@@ -323,11 +383,11 @@ jobs:
       - name: rubocop
         run: bundle exec rubocop --parallel
 
-  # The matrix `test` and `coverage` jobs only *build* the SPA (tsc + vite) via
-  # `rake frontend:build`; hand-written frontend types can typecheck clean yet
-  # null-render at runtime (#272), so the build alone is not a regression gate.
-  # This dedicated Node-only job runs the dashboard's Vitest suite on every PR
-  # (no Ruby/Redis needed; the suite is fast). Closes #273.
+  # The `test` job only *builds* the SPA (tsc + vite) via `rake frontend:build`;
+  # hand-written frontend types can typecheck clean yet null-render at runtime
+  # (#272), so the build alone is not a regression gate. This dedicated
+  # Node-only job runs the dashboard's Vitest suite on every PR (no Ruby/Redis
+  # needed; the suite is fast). Closes #273.
   frontend:
     name: frontend (vitest)
     needs: detect
@@ -340,19 +400,19 @@ jobs:
           persist-credentials: false
       - uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2
         with:
-          bun-version: "1.3.14"
+          bun-version: "1.4.0"
       # See the `test` job for why Node is pinned alongside Bun. This is the
       # job that actually runs vitest, so it is the one the pin exists for.
       - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
         with:
           node-version: "24"
       # Cache Bun's global download cache so `bun install --frozen-lockfile`
-      # (run here directly in `frontend`, and via `rake frontend:build` in the
-      # test/coverage legs) reuses tarballs instead of re-fetching them each run.
-      # Best-effort by design: actions/cache warns and continues on a restore
-      # miss or a save failure, so this step can never fail the job. Keyed on the
-      # frontend lockfile; the shared key is intentional so every matrix leg and
-      # job reuses one cache.
+      # (run here directly, and via `rake frontend:build` in the `test` job)
+      # reuses tarballs instead of re-fetching them each run. Best-effort by
+      # design: actions/cache warns and continues on a restore miss or a save
+      # failure, so this step can never fail the job. Keyed on the frontend
+      # lockfile; the shared key is intentional so the `test` job and the
+      # `frontend` job reuse one cache.
       - name: cache bun install cache
         uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
