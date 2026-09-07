@@ -213,7 +213,6 @@ class StatsTest < Wurk::Test::UnitCase
     assert_kind_of Float,   summary.latency
     assert_includes [true, false], summary.paused?
   end
-  # rubocop:enable Minitest/MultipleAssertions
 
   def test_queue_summary_latency_uses_oldest_enqueued_at_ms
     push_my_job(enqueued_at: ms_now - 5_000)

@@ -21,7 +21,7 @@ Three pillars, all must stay true:
 | Full test suite (parallel) | `bin/rake test` |
 | Single file | `bin/rake test TEST=test/path/to/file_test.rb` |
 | Single test by name | `bin/rake test TEST=test/foo_test.rb TESTOPTS="--name=/pattern/"` |
-| Parity tests (lifted from Sidekiq) | `bin/rake test:parity` |
+| Parity tests (independently written oracles) | `bin/rake test:parity` |
 | Ecosystem compat | `bin/rake test:ecosystem` |
 | Benchmarks | `bin/rake bench` |
 | Dummy app | `cd test/dummy && bin/rails s` |
@@ -92,7 +92,7 @@ Skip step 3 → leaked sockets in children. Skip step 5 → children corrupt eac
 
 - **Minitest**, parallel runner. Each class opts in via `parallelize_me!`.
 - **Per-worker Redis DB isolation.** Each `minitest-parallel_fork` worker runs against its own Redis logical DB (1–14, with 15 reserved for fixed-DB tests; never DB 0), assigned in `test_helper`'s `after_parallel_fork` hook; `teardown` runs `FLUSHDB` so each test gets a clean slate. Tests that build a pool explicitly use `Wurk::Test.redis_url`. Required for parallel safety — concurrent test classes never see each other's keys.
-- **Layers:** unit · engine (boots `test/dummy/`) · integration (real forks + real Redis) · parity (`test/parity/`, lifted from Sidekiq, SHA-pinned) · ecosystem (third-party gem suites run against Wurk) · benchmarks.
+- **Layers:** unit · engine (boots `test/dummy/`) · integration (real forks + real Redis) · parity (`test/parity/`, independently written oracles for the documented Sidekiq behaviour, pinned to the upstream revision in test/parity/.sidekiq_sha) · ecosystem (third-party gem suites run against Wurk) · benchmarks.
 - **Parity tests are oracles.** When Wurk diverges from a parity test, Wurk is wrong unless the divergence is explicitly documented as intentional.
 - **Never mock Redis** in integration or parity tests. Real Redis, unique namespace.
 - **Coverage gate.** SimpleCov **line** and **branch** coverage on `lib/` must both stay ≥90% (blocking; `minimum_coverage line: 90, branch: 90`). Branch was ratcheted from ~78% to ≥90% in #67 — keep new code at parity. The Cobertura report is still uploaded for per-file inspection. Coverage runs merge across the `minitest-parallel_fork` workers via `SimpleCov.at_fork`.

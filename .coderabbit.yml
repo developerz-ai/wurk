@@ -49,9 +49,11 @@ reviews:
         stock Sidekiq. Same for Redis key schema and job JSON shape.
     - path: 'test/parity/**'
       instructions: >
-        Parity tests lifted from Sidekiq's own suite. Flag any modification
-        to assertions — these are the source of truth for "drop-in." Adding
-        skips needs a justification linking to a tracked compat issue.
+        Independently written oracles for the documented Sidekiq behaviour,
+        pinned to the upstream revision in test/parity/.sidekiq_sha. Flag any
+        modification to assertions — these are the source of truth for
+        "drop-in." Adding skips needs a justification linking to a tracked
+        compat issue.
     - path: 'bench/**'
       instructions: >
         Performance benchmarks. Flag any change that removes a bench or weakens

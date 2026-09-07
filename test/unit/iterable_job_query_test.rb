@@ -36,7 +36,6 @@ class IterableJobQueryTest < Wurk::Test::UnitCase
     assert_in_delta 12.5, state.runtime
     assert_equal [42, 'page'], state.cursor
   end
-  # rubocop:enable Minitest/MultipleAssertions
 
   def test_cancelled_is_nil_when_not_cancelled
     jid = seed(ex: 1, rt: 0.0, cursor: nil)

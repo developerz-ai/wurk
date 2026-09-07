@@ -388,7 +388,6 @@ class MiddlewareBuiltinsTest < Wurk::Test::UnitCase
     assert_equal 'queue:mine', key
     assert_equal job, ::JSON.parse(payload)
   end
-  # rubocop:enable Minitest/MultipleAssertions
 
   def test_interrupt_handler_raises_skip_subclass_of_handled
     assert_operator Wurk::JobRetry::Skip, :<, Wurk::JobRetry::Handled
