@@ -1,0 +1,185 @@
+# yaml-language-server: $schema=https://developerz.ai/schemas/maintainer.v1.json
+# developerz.ai maintainer policy — developerz-ai/wurk
+#
+# Dogfood pass with coding handoff live. The bot triages (qualifies, labels,
+# asks reporters for repro) and, once a task is ready, dispatches coding to the
+# fleet (handoff.mode: fleet). Auto-merge is ON as of 2026-09-01 — see the pr:
+# block for the history and for what stands behind it. It is NOT this file: the
+# live `main-protection` ruleset now carries a required_status_checks rule
+# (dz#2798), so CI green is enforced by the repo, not by a line in here. That
+# sentence has been rewritten twice for the same reason and the reason is worth
+# keeping: a note here claiming what protects `main` goes stale the moment
+# someone edits the ruleset, and a stale one reads as a guarantee. Read the
+# ruleset before trusting any sentence in this file about it —
+# `gh api repos/developerz-ai/wurk/rulesets`. (Prior wrong versions: "legacy
+# branch protection exists (1 required review + the test matrix)", false from
+# 2026-08-07 when the ruleset replaced it — wurk#445 flagged it, wurk#388 was
+# the outage it caused; then "no required-status-checks rule", false from
+# 2026-09-01T05:12Z.) We still wait
+# for reviewer bots (coderabbit/copilot) to settle before acting. The native
+# review: block below activates the developerz review lane alongside CodeRabbit
+# (force: true, advisory — never requests changes, never approves). Everything
+# not set here uses the schema defaults. release: is now declared explicitly
+# (see the release: block) rather than inherited, because the inherited default
+# described a lane this repo does not run.
+version: 1
+
+# THE SERVICES THIS REPO'S OWN GATE NEEDS BEFORE IT CAN GRADE A DIFF
+# (developerz-ai/developerz.ai#2918, mechanism in #2919).
+#
+# `bin/check` refuses without a Redis on 127.0.0.1:6379 -- integration and parity
+# tests use a real server, never a mock -- and that refusal is correct. What was
+# wrong is what happened next: every box in the fleet claimed this repo's coding
+# work, the agent produced the correct edit, passed its own guard, and the gate
+# discarded it in 60 ms for want of a service the box never had. Three attempts,
+# three times, each one filed as a bad diff.
+#
+# Declaring it turns "claimed and thrown away" into "claimed by a box that can
+# actually grade it". The platform mints a `service:redis` capability token into
+# the claim gate's requirement set, and a box adverts that token only by opening
+# a real connection to the port -- so this line routes the work rather than
+# describing an intention. A task no box can serve is HELD with
+# `no_service_capacity` naming the gap (#2920), instead of sitting pending and
+# silent.
+#
+# CLOSED VOCABULARY (`redis` | `postgres`): this key can never name an image or a
+# command, which is what keeps a `.maintainer.yml` from being a way to start a
+# process on somebody's box.
+services: [redis]
+
+tone:
+  voice: friendly
+  language: en
+
+triage:
+  ask_for_repro: true
+  required_fields: [steps, expected, actual, version]
+  qualify_into: [bug, feature, dupe, question]
+  # Dogfood: lower than the 0.6 default so a moderately-scoped plan hands off to
+  # the coding fleet instead of escalating for review (exercises the handoff loop).
+  confidence_threshold: 0.4
+
+handoff:
+  # `fleet`, not `webhook`: both grant HandoffWebhook
+  # (developerz-ai/developerz.ai packages/tools/src/policy-gate.ts:83) but `fleet`
+  # needs no `webhook_ref` (packages/policy/src/validate.ts:130, dz#1026), and the
+  # `wh_fleet_placeholder` ref that used to sit here resolved to no row and threw
+  # WebhookRefNotFoundError — the org account has zero registered webhooks, so
+  # the ingest graded the WHOLE file INVALID and served defaultPolicy instead
+  # (wurk#432). Every declared value below only takes effect once this is gone.
+  # This key is also the opt-in for the autonomous scout backlog-drain
+  # (apps/worker/src/cron/scout-backlog-drain.ts:22-29), which stays inert until
+  # dz#1249 and dz#1530 close. Enrolling wurk was authorized by Ivan (ivndev001)
+  # 2026-08-21 on wurk#445.
+  mode: fleet
+  ask_reporter_first: false
+
+pr:
+  wait_for_other_bots: [coderabbit, copilot]
+  # UNPINNED 2026-09-01, on the exit condition the pin itself named: "restored
+  # only behind a ruleset or a fresh explicit operator decision". Both arrived.
+  #
+  # HISTORY, kept because it is why this line was ever `false`. Pinned off
+  # 2026-08-01 (operator decision, developerz-ai/wurk#345): until wurk#432/#445
+  # the file was semantically invalid (handoff.webhook_ref named no registered
+  # webhook), so the platform discarded it whole and ran defaultPolicy — whose
+  # pr.auto_merge is false. Activating the file with the previously declared
+  # `true` would have flipped auto-merge ON with nothing behind it, because the
+  # `main-protection` ruleset then required zero approving reviews AND no status
+  # checks. That is no longer true, and leaving the old sentence here would be a
+  # comment asserting a state the repo no longer has.
+  #
+  # WHAT IS BEHIND IT NOW (dz#2798, ruleset 20556704, updated 2026-09-01T05:12Z,
+  # read back before this change): a `required_status_checks` rule requiring
+  # `test + coverage (latest ruby/rails)`, `lint (rubocop)` and `parity (oracle)`
+  # — the three the 15-PR inventory found ALWAYS created, so none can wedge a PR
+  # by never reporting. `strict_required_status_checks_policy: false`, so `main`
+  # moving does not force a rebase on every open PR. Still no classic branch
+  # protection behind the ruleset (404), so the ruleset IS the gate.
+  #
+  # WHAT IS STILL NOT BEHIND IT, stated rather than assumed:
+  # `required_approving_review_count` is 0. Merges are gated by MACHINES — CI
+  # green plus the ruleset — not by a human review, which is the platform's
+  # documented auto-merge posture and not an oversight. The shape wurk#450 got
+  # through (a red `test + coverage`, merged 24 seconds later) is no longer
+  # expressible.
+  #
+  # ONE EXCEPTION the count of 0 hides (wurk#488): the ruleset's pull_request
+  # rule sets `require_extra_approval_for_unattributed_changes: true` (read
+  # back via `gh api repos/developerz-ai/wurk/rulesets/20556704`, ruleset id
+  # stable since 2026-08-07), so a PR whose commits include any not attributed
+  # to a GitHub account needs one human approval before the bot's auto-merge
+  # will fire. Every squash on main to date is attributed (author.login
+  # non-null on the last 40), so this has not gated a PR yet — the day a fleet
+  # box commits with an email not linked to a GitHub account, that PR silently
+  # parks and the bot cannot move it. CONTRIBUTING.md tells contributors to
+  # commit with a GitHub-linked email for exactly this reason. The rule here
+  # (.maintainer.yml:10-14) says this file must not assert a ruleset state it
+  # does not have, and the count-of-0 sentence above would be one of those
+  # assertions without this caveat.
+  # NOTE (wurk#347): this governs the platform BOT only. Non-major Dependabot
+  # updates are also targeted by a separate GitHub-native GHA lane
+  # (.github/workflows/dependabot-automerge.yml, dz#789) that this policy does
+  # not govern. Repo auto-merge is enabled, so that lane is not inert by config.
+  # `auto_merge` here scopes the platform BOT; it does not control the GHA lane,
+  # and flipping it to `true` did not change that lane's behaviour either way.
+  auto_merge: true
+
+review:
+  enabled: true
+  force: true                 # CodeRabbit is active on wurk; without this we defer forever
+  depth: inline               # not deep — no checkout guarantee, avoids review.depth_unservable
+  profile: chill
+  request_changes: false      # first live pass must not block a merge
+  approval: false             # first live pass must not APPROVE
+  high_level_summary: true
+  learnings: false            # no KB write-back on a public repo yet
+  chat_auto_reply: true       # keep on — the reply lane is the positive control
+  auto_review:
+    enabled: true
+    incremental: true
+    drafts: false
+    base_branches: [main]     # verified: wurk's default branch is main
+    ignore_title_keywords: [WIP, "DO NOT MERGE"]
+  anti_noise:
+    severity_floor: minor
+    max_comments: 10          # DELIBERATE — pins defaultAntiNoise's 10, defeats the schema's 30
+    dedupe: true
+  path_filters: []
+  path_instructions: []
+
+release:
+  # DECLARED, not inherited (wurk#328). The schema default is
+  # manager: release-please, which implies batched release PRs driven by
+  # release-please-config.json + .release-please-manifest.json. Neither file
+  # exists here and no release PR has ever been opened, so the inherited
+  # default described a lane this repo does not run.
+  #
+  # What actually cuts a release:
+  #   1. a version bump to lib/wurk/version.rb lands on main
+  #   2. .github/workflows/release.yml fires on that path, publishes to RubyGems
+  #      via OIDC trusted publishing, and only then cuts the tag + GitHub Release
+  #      from the CHANGELOG section
+  #
+  # `none` is the only value in the enum (release-please | none) that describes
+  # that, and it means "no release MANAGER" — it does not govern the agent's
+  # note generation, which the schema does not model at all.
+  manager: none
+  # EMPTIED 2026-08-11 (wurk#420). `manager: none` did NOT stop the agent from
+  # cutting releases — `channels: [github-release]` did that independently, and
+  # it fired on feature merges with Wurk::VERSION unbumped. Six times (v1.2.1,
+  # v1.5.0, v1.6.0, v1.7.0, v1.8.0, v1.7.1, v1.7.2) that produced a tag and a
+  # GitHub Release marked "Latest" with no gem behind it, while `gem install
+  # wurk` kept serving the previous version — and a red release run each time.
+  # release.yml owns the whole lane end to end (gem first, then tag + Release
+  # from the CHANGELOG), so there is no channel left for the agent to publish on.
+  # The registry channels (incl. rubygems) are reserved and REJECTED at
+  # validation time regardless; RubyGems is declared by release.yml's OIDC step.
+  channels: []
+
+escalate:
+  always: [security, license, cla]
+  ask_before_acting: [breaking_change, major_dep_bump, first_time_contributor, large_pr]
+
+limits:
+  max_comments_per_issue_per_day: 10
