@@ -23,7 +23,9 @@ class ClaudeMdClaimsTest < Minitest::Test
   # `ecosystem` CI job", "on every push") are included so a copy-paste from
   # those files into CLAUDE.md is gated here too. Tracked additions phrase
   # themselves as "tracked in ..." and do not trigger this regex.
-  CI_CLAIM = /\b(?:passes? \w+ own test suite against Wurk|in CI|in the `ecosystem` CI job|on every push)\b/
+  # The `\[?` allows the job name to appear as a markdown link
+  # ("in the [`ecosystem` CI job](...)"), the form README.md:300 uses.
+  CI_CLAIM = /\b(?:passes? \w+ own test suite against Wurk|in CI|in the \[?`ecosystem` CI job|on every push)\b/
 
   def setup
     @text = File.read(CLAUDE_MD)

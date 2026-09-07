@@ -46,7 +46,9 @@ class LlmsTxtTest < Minitest::Test
   # Variants used by the docs today: "in CI", "in the `ecosystem` CI job",
   # "on every push". Each one means "this gem's upstream suite runs on every
   # PR"; anything in that phrasing has to point at a harness on disk.
-  CI_CLAIM = /\b(?:in CI|in the `ecosystem` CI job|on every push)\b/
+  # The `\[?` allows the job name to appear as a markdown link
+  # ("in the [`ecosystem` CI job](...)"), the form README.md:300 uses.
+  CI_CLAIM = /\b(?:in CI|in the \[?`ecosystem` CI job|on every push)\b/
 
   def test_every_sidekiq_gem_claimed_to_run_in_ci_has_a_pin
     # llms.txt is the map agents consume. If it claims a sidekiq-* gem runs
@@ -54,9 +56,17 @@ class LlmsTxtTest < Minitest::Test
     # (test/ecosystem/<gem>/PIN) — otherwise the doc is making a promise
     # CI doesn't keep. Target additions phrase themselves as "target
     # addition" or "tracked in docs/idea/14-ecosystem-compat.md" and do not
-    # trigger this regex.
-    claimed = @text.lines.grep(CI_CLAIM)
-                   .flat_map { |line| line.scan(/sidekiq-[\w-]+/) }.uniq
+    # trigger this regex. Only gems that appear up to the end of the
+    # CI_CLAIM match are considered, matching readme_claims_test.rb and
+    # claude_md_claims_test.rb; a tracked list that follows the claim on the
+    # same line ("sidekiq-cron runs in CI; sidekiq-foo is tracked in ...") is
+    # not itself a CI claim.
+    claimed = @text.lines.flat_map do |line|
+      match = CI_CLAIM.match(line)
+      next [] unless match
+
+      line[0...match.end(0)].scan(/sidekiq-[\w-]+/)
+    end.uniq
 
     missing = claimed.reject { |gem| File.file?(File.join(ROOT, 'test', 'ecosystem', gem, 'PIN')) }
 
