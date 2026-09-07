@@ -150,7 +150,13 @@ module Wurk
         version = Integer(envelope['v'])
         cipher = build_decrypt_cipher(envelope, key_for(version))
         plain = cipher.update(::Base64.strict_decode64(envelope['ct'])) + cipher.final
-        ::JSON.parse(plain, quirks_mode: true)
+        # No `quirks_mode:` — an encrypted arg may be a bare scalar ("hi", 42,
+        # null), and every json the gemspec's `>= 3.2` floor can resolve parses
+        # those at the top level by default (RFC 7159, json >= 2.0). The option
+        # was therefore already a no-op, and json 3.0.0 removed it outright:
+        # passing it raises ArgumentError and every encrypted job dies in the
+        # server middleware.
+        ::JSON.parse(plain)
       end
 
       # @return [Boolean] true if `value` looks like a Wurk crypto envelope.

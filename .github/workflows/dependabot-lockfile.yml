@@ -4,8 +4,8 @@ name: dependabot lockfile
 # (#373): its npm ecosystem understands package-lock.json / yarn.lock /
 # pnpm-lock.yaml, not bun's lockfile. So every frontend dependency PR arrives
 # with a bumped package.json and a stale bun.lock, and CI's
-# `bun install --frozen-lockfile` (the frontend job, the three Ruby matrix legs,
-# and coverage all build the SPA) goes red before a test runs. #300, #304, #371
+# `bun install --frozen-lockfile` (the `test` job and the `frontend` job both
+# build the SPA) goes red before a test runs. #300, #304, #371
 # and #372 each needed a human to push a "regenerate bun.lock" commit; this does
 # that step instead.
 #
