@@ -7,7 +7,7 @@
 # argument to bin/demo-entrypoint.
 
 # ---- Stage 1: build the dashboard SPA (no Node/bun at runtime) ----
-FROM oven/bun:1.4.0-slim AS spa
+FROM oven/bun:1.4.2-slim AS spa
 WORKDIR /src
 COPY frontend/package.json frontend/bun.lock ./frontend/
 RUN cd frontend && bun install --frozen-lockfile
