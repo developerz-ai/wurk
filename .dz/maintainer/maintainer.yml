@@ -178,7 +178,6 @@ release:
   channels: []
 
 escalate:
-  always: [security, license, cla]
   ask_before_acting: [breaking_change, major_dep_bump, first_time_contributor, large_pr]
 
 limits:
