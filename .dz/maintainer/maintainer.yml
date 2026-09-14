@@ -68,9 +68,9 @@ handoff:
   # the ingest graded the WHOLE file INVALID and served defaultPolicy instead
   # (wurk#432). Every declared value below only takes effect once this is gone.
   # This key is also the opt-in for the autonomous scout backlog-drain
-  # (apps/worker/src/cron/scout-backlog-drain.ts:22-29), which stays inert until
-  # dz#1249 and dz#1530 close. Enrolling wurk was authorized by Ivan (ivndev001)
-  # 2026-08-21 on wurk#445.
+  # (apps/worker/src/cron/scout-backlog-drain.ts:22-29), which is operational
+  # and has fired 814 times in the last 30 days. Enrolling wurk was authorized
+  # by Ivan (ivndev001) 2026-08-21 on wurk#445.
   mode: fleet
   ask_reporter_first: false
 
