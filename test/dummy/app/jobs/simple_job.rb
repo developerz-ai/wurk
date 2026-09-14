@@ -5,6 +5,6 @@ class SimpleJob < ActiveJob::Base
   queue_as :default
 
   def perform(*args)
-    # TODO: write a sentinel to Redis the integration test can poll for.
+    ::Wurk.redis { |c| c.call('SET', "simple_job:#{args.first}", ::Process.pid.to_s, 'EX', 60) }
   end
 end
