@@ -67,9 +67,8 @@ handoff:
   # WebhookRefNotFoundError — the org account has zero registered webhooks, so
   # the ingest graded the WHOLE file INVALID and served defaultPolicy instead
   # (wurk#432). Every declared value below only takes effect once this is gone.
-  # This key is also the opt-in for the autonomous scout backlog-drain
-  # (apps/worker/src/cron/scout-backlog-drain.ts:22-29), which stays inert until
-  # dz#1249 and dz#1530 close. Enrolling wurk was authorized by Ivan (ivndev001)
+  # This key is also the opt-in for the autonomous scout backlog-drain, which
+  # is operational. Enrolling wurk was authorized by Ivan (ivndev001)
   # 2026-08-21 on wurk#445.
   mode: fleet
   ask_reporter_first: false
