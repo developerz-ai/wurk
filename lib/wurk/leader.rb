@@ -89,7 +89,7 @@ module Wurk
     # doesn't lapse. On any follower → leader transition, INCR the global
     # `leader-token` so the new token is strictly greater than every prior
     # leader's, then dispatch the `:leader` lifecycle event.
-    def acquire # rubocop:disable Naming/PredicateMethod
+    def acquire
       return false if disabled?
 
       transition = run_set_or_refresh

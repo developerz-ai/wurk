@@ -101,6 +101,35 @@ Naming/VariableNumber:
   Exclude:
     - "test/**/*"
 
+# Sidekiq public API - names are the wire contract, return value is the
+# documented boolean.
+Naming/PredicateMethod:
+  AllowBangMethods: true
+  AllowedPatterns:
+    - '\Await_(for|until)'
+  AllowedMethods:
+    - pause!
+    - unpause!
+    - clear
+    - delete_by_value
+    - delete_by_jid
+    - trim
+    - kill_raw
+    - kill
+    - delete
+    - write
+    - enable!
+    - enable
+    - abandon
+    - acquire
+    - release
+    - reset
+    - set_paused
+    - claim_exit
+    - reset_after_fork!
+    - reliable_push!
+    - reliable_push_drainer
+
 # The limiter tests measure the limiter itself: `limiter.within_limit { }` with an
 # empty body IS the assertion, because any work in the block pollutes the timing.
 Lint/EmptyBlock:

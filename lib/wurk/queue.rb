@@ -62,14 +62,14 @@ module Wurk
 
     # Pause new fetches against this queue. Idempotent — `SADD` returns
     # 0 when the name was already present. In-flight jobs are untouched.
-    def pause! # rubocop:disable Naming/PredicateMethod
+    def pause!
       Wurk.redis(idempotent: true) { |conn| conn.call('SADD', Keys::PAUSED_SET, @name) }
       Fetcher::Reliable.invalidate_paused_cache!
       true
     end
 
     # Resume fetches. Idempotent.
-    def unpause! # rubocop:disable Naming/PredicateMethod
+    def unpause!
       Wurk.redis(idempotent: true) { |conn| conn.call('SREM', Keys::PAUSED_SET, @name) }
       Fetcher::Reliable.invalidate_paused_cache!
       true
@@ -102,7 +102,7 @@ module Wurk
     #
     # Unlike pause!/unpause!, this one can't claim apply-safety: a replay after
     # a lost reply would UNLINK whatever a producer enqueued in between.
-    def clear # rubocop:disable Naming/PredicateMethod
+    def clear
       Wurk.redis do |conn|
         conn.pipelined do |pipe|
           pipe.call('UNLINK', @rname)

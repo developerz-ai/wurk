@@ -176,7 +176,7 @@ module Wurk
       # the flow record is the authority, not the return value.
       #
       # @return [Boolean] true when this call abandoned the flow.
-      def abandon(fid) # rubocop:disable Naming/PredicateMethod
+      def abandon(fid)
         now = ::Process.clock_gettime(::Process::CLOCK_REALTIME).to_s
         released = Wurk.redis(idempotent: true) do |conn|
           Wurk::Lua::Loader.eval_cached(
