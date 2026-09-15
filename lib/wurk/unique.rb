@@ -98,7 +98,7 @@ module Wurk
         @enabled == true
       end
 
-      def enable! # rubocop:disable Naming/PredicateMethod
+      def enable!
         @enabled = true
         register_middleware!
         true

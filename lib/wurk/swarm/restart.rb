@@ -53,7 +53,7 @@ module Wurk
       # so the swarm skips crash-respawn for it. A replacement is only claimed
       # while awaiting its heartbeat — once it takes over the slot (await_exit),
       # its death is an ordinary crash the swarm respawns.
-      def claim_exit(pid) # rubocop:disable Naming/PredicateMethod
+      def claim_exit(pid)
         return false unless @current
 
         if pid == @current[:old_pid]

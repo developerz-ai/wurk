@@ -151,7 +151,7 @@ module Wurk
         #
         # Deliberately unsynchronized: the child has exactly one thread here,
         # and waiting on the very mutex being replaced is what would hang it.
-        def reset_after_fork! # rubocop:disable Naming/PredicateMethod
+        def reset_after_fork!
           return false if @owner_pid == ::Process.pid
 
           @owner_pid             = ::Process.pid
@@ -499,7 +499,7 @@ module Wurk
       # Activate reliable_push! mode globally. Idempotent — call from the
       # top level of an initializer (NOT inside Wurk.configure_*). Spec:
       # docs/target/sidekiq-pro.md §5.
-      def reliable_push! # rubocop:disable Naming/PredicateMethod
+      def reliable_push!
         Buffered.install!
         true
       end
@@ -531,7 +531,7 @@ module Wurk
       # next push — this is a Wurk extension for issue #19's "Background
       # drain thread flushes on reconnect" so producer-stopped-mid-outage
       # buffers don't sit idle until next push.
-      def reliable_push_drainer(interval: Buffered::Drainer::DEFAULT_INTERVAL) # rubocop:disable Naming/PredicateMethod
+      def reliable_push_drainer(interval: Buffered::Drainer::DEFAULT_INTERVAL)
         Buffered.install!
         Buffered.start_drainer!(interval: interval)
         true

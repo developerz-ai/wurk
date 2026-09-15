@@ -200,7 +200,7 @@ class GracefulShutdownTest < Wurk::Test::UnitCase
     end
   end
 
-  def wait_for_key(key) # rubocop:disable Naming/PredicateMethod
+  def wait_for_key(key)
     deadline = monotonic_now + POLL_TIMEOUT
     while monotonic_now < deadline
       return true if @observer.call('GET', key)

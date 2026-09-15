@@ -202,7 +202,7 @@ module Wurk
       # @param token [String] holder, defaults to this thread's
       # @param pool [#with, nil] defaults to this process's pool
       # @return [Boolean] true when the caller now holds a slot
-      def acquire(queue, capacity:, ttl: TTL_SECONDS, token: self.token, pool: nil) # rubocop:disable Naming/PredicateMethod
+      def acquire(queue, capacity:, ttl: TTL_SECONDS, token: self.token, pool: nil)
         limit = positive_integer!(:capacity, capacity)
         seconds = positive_integer!(:ttl, ttl)
 
@@ -220,7 +220,7 @@ module Wurk
       # frees nothing that belongs to anyone else.
       #
       # @return [Boolean] true when the caller's hold was still live
-      def release(queue, token: self.token, pool: nil) # rubocop:disable Naming/PredicateMethod
+      def release(queue, token: self.token, pool: nil)
         with_pool(pool, idempotent: true) { |conn| conn.call('ZREM', key_for(queue), token) } == 1
       end
 
