@@ -13,6 +13,13 @@ if [ ! -f "$gemfile" ]; then
   exit 1
 fi
 
+# Same gate CI runs (`release.yml`'s "release gate" step). Without it, an out-
+# of-band local push could ship a .gem that never passed `release:check` and
+# the lane that exists to forbid it would have leaked right past itself.
+# `set -euo pipefail` above means a failing gate aborts before `gem push`.
+echo "==> Running release:check (the same gate CI runs before publishing)"
+bundle exec rake release:check
+
 echo "==> Pushing ${gemfile} to rubygems.org"
 if [ "${1:-}" != "" ]; then
   gem push "$gemfile" --otp "$1"

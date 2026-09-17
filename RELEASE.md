@@ -176,10 +176,3 @@ pointing at:
 
 The workflow already requests `permissions: id-token: write`, which is what the
 OIDC exchange needs.
-
-## Local one-shot publish (maintainers, fallback only)
-
-`rake release:full` chains `frontend:build → build → push` and pushes with a
-local API key (`bin/gem-login` first; MFA enforced via `rubygems_mfa_required`).
-Prefer the CI flow above; use this only for an out-of-band manual push when CI is
-unavailable.

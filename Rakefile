@@ -1,6 +1,5 @@
 # frozen_string_literal: true
 
-require 'bundler/gem_tasks'
 require 'rake/testtask'
 require_relative 'lib/wurk/version'
 require_relative 'tasks/release_helpers'
@@ -242,8 +241,41 @@ namespace :release do
     puts "release:package ✓ #{File.basename(gem_path)} ships the dashboard bundle"
   end
 
-  desc 'Build frontend, bake into vendor/assets, build the gem, push to RubyGems'
-  task full: ['frontend:build', 'build', 'push']
+  # Bundler used to wire `push` and `release` here. We do not let any local
+  # task tag or push: the gate is the OIDC-backed `release` workflow, and a
+  # stray local publish has to look like a bug instead of a shortcut. Each of
+  # these aborts with the same canonical message — define it once at the top
+  # level so the namespaced tasks and the top-level `release` task all quote
+  # the same string, and RELEASE.md / the unit test can match on a single
+  # substring that includes the literal `RELEASE.md`.
+  abort_release_locally = lambda do
+    abort "rake release ✗ #{RELEASE_ABORT_MESSAGE}"
+  end
+
+  # No `desc` here on purpose. `rake -T` only lists tasks that have a
+  # description, so leaving these task bodies naked keeps them invokable
+  # (so `bundle exec rake release:source_control_push` exits non-zero with
+  # the canonical RELEASE.md message, exactly as CI demands) without showing
+  # up in `rake -T | grep release` alongside `release:check`,
+  # `release:package`, and the aborting top-level `release`.
+  task :source_control_push do # rubocop:disable Rake/Desc
+    abort_release_locally.call
+  end
+
+  task :rubygem_push do # rubocop:disable Rake/Desc
+    abort_release_locally.call
+  end
+end
+
+# Top-level aborting `release` task: same canonical message as the namespaced
+# ones, same intent. Bundler used to wire this to `release:source_control_push`
+# + `release:rubygem_push`; both are now aborters above.
+RELEASE_ABORT_MESSAGE = "release is a CI-only lane — see RELEASE.md for the " \
+                        'Trusted Publishing flow that ships a new version.' # rubocop:disable Style/MutableConstant
+
+desc '[disabled] Bundler wired a top-level `release` task here; removed — see RELEASE.md'
+task :release do
+  abort "rake release ✗ #{RELEASE_ABORT_MESSAGE}"
 end
 
 desc 'Lint the gem'
