@@ -94,7 +94,7 @@ module Wurk
       end
 
       # @return [Boolean] true when a row was actually removed.
-      def delete(jid, pool: nil) # rubocop:disable Naming/PredicateMethod
+      def delete(jid, pool: nil)
         with_pool(pool) { |conn| conn.call('UNLINK', key(jid)) }.to_i.positive?
       end
 
@@ -109,7 +109,7 @@ module Wurk
       # fall away.
       #
       # @return [Boolean] true when the row was written.
-      def write(jid, ttl: nil, create: true, pool: nil, **fields) # rubocop:disable Naming/PredicateMethod
+      def write(jid, ttl: nil, create: true, pool: nil, **fields)
         validate_state!(fields[:state])
         argv = flatten(fields)
         return false if argv.empty?

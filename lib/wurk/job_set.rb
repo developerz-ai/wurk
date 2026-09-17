@@ -50,7 +50,7 @@ module Wurk
 
     # UNLINK over the whole set. Idempotent. Method name is Sidekiq
     # wire-compat — `clear?` would break the alias.
-    def clear # rubocop:disable Naming/PredicateMethod
+    def clear
       Wurk.redis { |conn| conn.call('UNLINK', @name) }
       true
     end
@@ -170,7 +170,7 @@ module Wurk
 
     # ZREM by exact bytes. Returns true when ≥1 element was removed. Method
     # name is Sidekiq wire-compat — `delete_by_value?` would break the alias.
-    def delete_by_value(name, value) # rubocop:disable Naming/PredicateMethod
+    def delete_by_value(name, value)
       removed = Wurk.redis { |conn| conn.call('ZREM', name, value) }
       removed.to_i.positive?
     end
@@ -179,7 +179,7 @@ module Wurk
     # Returns true on success. Aliased as `delete` for Sidekiq wire-compat.
     # Per-row JSON rescue so a single malformed entry can't shadow a valid
     # match at the same score.
-    def delete_by_jid(score, jid) # rubocop:disable Naming/PredicateMethod
+    def delete_by_jid(score, jid)
       Wurk.redis do |conn|
         rows = conn.call('ZRANGEBYSCORE', @name, score.to_f, score.to_f)
         rows.each do |raw|
