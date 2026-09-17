@@ -30,7 +30,7 @@ Three pillars, all must stay true:
 | Dashboard tests | `bun run test` in `frontend/` (vitest) |
 | Dashboard lint | `bun run lint` in `frontend/` (oxlint, not eslint — typescript-eslint can't parse TS 7) |
 | Dashboard HMR dev | `WURK_VITE_DEV=1` then boot dummy |
-| Release | `bin/rake release` (Vite build → `vendor/assets/` → gem build → push) |
+| Release | CI only — bump `lib/wurk/version.rb` on `main`; `release.yml` publishes via trusted publishing (see RELEASE.md) |
 
 `WURK_DISABLED=1`, Rails console, and Rails test env all skip the railtie's auto-fork.
 

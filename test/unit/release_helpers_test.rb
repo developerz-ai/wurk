@@ -139,6 +139,24 @@ class ReleaseHelpersTest < Wurk::Test::UnitCase
     end
   end
 
+  # --- top-level release task ------------------------------------------
+  # The Rakefile no longer loads bundler/gem_tasks; the top-level `release`
+  # task (and `release:source_control_push` / `release:rubygem_push`) now abort
+  # locally so a stray `rake release` cannot tag or push without the gate.
+  # This test pins that contract: an in-process Rakefile load + invoke must
+  # raise SystemExit with a non-zero status and a message naming RELEASE.md.
+  # We `require 'rake'` here so the load is self-contained — the existing
+  # helper tests above don't need it.
+  def test_release_task_aborts_and_points_at_RELEASE_md
+    require 'rake'
+    load File.expand_path('../../Rakefile', __dir__)
+    err = assert_raises(SystemExit) do
+      silence_stderr { Rake::Task['release'].invoke }
+    end
+    refute_predicate err, :success?
+    assert_includes err.message, 'RELEASE.md'
+  end
+
   private
 
   def write_bundle(dir, js_content: 'console.log(1)')

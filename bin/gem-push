@@ -1,7 +1,9 @@
 #!/usr/bin/env bash
-# Push the built gem to rubygems.org. Requires `bin/gem-login` first.
-# MFA is enforced (rubygems_mfa_required), so this prompts for an OTP at push
-# time — pass one non-interactively with: bin/gem-push 123456
+# Push the built gem to rubygems.org. Runs `bundle exec rake release:check`
+# first so this local path goes through the same gate CI does; aborts
+# (non-zero) if the gate fails — the push is never attempted. MFA is enforced
+# (rubygems_mfa_required), so this prompts for an OTP at push time — pass one
+# non-interactively with: bin/gem-push 123456
 set -euo pipefail
 cd "$(dirname "$0")/.."
 
@@ -12,6 +14,12 @@ if [ ! -f "$gemfile" ]; then
   echo "✗ $gemfile not found — run bin/gem-build first." >&2
   exit 1
 fi
+
+# Gate: every local push path must go through `rake release:check` or abort
+# (see RELEASE.md — the tag is an output, never an input). If the gate fails,
+# set -e carries the non-zero exit; we never reach `gem push`.
+echo "==> Running release:check before push"
+bundle exec rake release:check
 
 echo "==> Pushing ${gemfile} to rubygems.org"
 if [ "${1:-}" != "" ]; then

@@ -1,6 +1,5 @@
 # frozen_string_literal: true
 
-require 'bundler/gem_tasks'
 require 'rake/testtask'
 require_relative 'lib/wurk/version'
 require_relative 'tasks/release_helpers'
@@ -241,9 +240,32 @@ namespace :release do
     ReleaseHelpers.gem_contains_dashboard!(gem_path)
     puts "release:package ✓ #{File.basename(gem_path)} ships the dashboard bundle"
   end
+end
 
-  desc 'Build frontend, bake into vendor/assets, build the gem, push to RubyGems'
-  task full: ['frontend:build', 'build', 'push']
+# --- local release paths -------------------------------------------------
+# bundler/gem_tasks is intentionally NOT loaded: it would silently expose
+# `release`, `release:source_control_push`, and `release:rubygem_push` as real
+# tasks, each of which tags / pushes without going through the CI gate. The
+# one rule (see RELEASE.md) is "the tag is an output, never an input" — every
+# local path must go through `rake release:check` or abort. CI is the only
+# path that publishes a release; these stubs exist only so that an accidental
+# `rake release` / `rake release:source_control_push` / `rake release:rubygem_push`
+# fails loudly here instead of reaching RubyGems or creating a stray tag.
+desc 'Cut a release and publish — DISABLED locally; CI owns this (see RELEASE.md)'
+task :release do
+  abort 'release ✗ disabled locally: the tag is an output, never an input. ' \
+        'Releases publish from CI via trusted publishing (OIDC). ' \
+        'See RELEASE.md for the supported workflow.'
+end
+namespace :release do
+  task :source_control_push do
+    abort 'release:source_control_push ✗ disabled locally: the tag is an output, never an input. ' \
+          'CI is the only path that cuts the tag. See RELEASE.md.'
+  end
+  task :rubygem_push do
+    abort 'release:rubygem_push ✗ disabled locally: gem push is gated by the release workflow ' \
+          '(trusted publishing, OIDC). See RELEASE.md.'
+  end
 end
 
 desc 'Lint the gem'
