@@ -10,5 +10,6 @@
 # re-introduces the unpinned-toolchain failure this file exists to prevent.
 [tools]
 ruby = "3.4"
+# bun and node are pinned to match .github/workflows/test.yml — that file is the other copy of these pins; keep both in sync or a fresh fleet box will drift from CI.
 bun = "1.4.0"
 node = "24"
