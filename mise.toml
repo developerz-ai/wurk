@@ -1,6 +1,14 @@
 # Toolchain, as text: the fleet box provides `mise` and nothing per-language, and
 # `bin/setup` runs `mise install` (guarded, so a box without mise skips it). The
-# version is the one the Dockerfile and the pages/ecosystem CI lanes run; the main
-# test lane runs 4.0 — change this line, not a box, to move the fleet.
+# ruby version is the one the Dockerfile and the pages/ecosystem CI lanes run;
+# the main test lane runs 4.0 — change this line, not a box, to move the fleet.
+#
+# bun and node MUST stay in lock-step with the pins in .github/workflows/test.yml
+# (`bun-version:` on the `oven-sh/setup-bun` steps and `node-version:` on the
+# `actions/setup-node` steps under the `test` and `frontend` jobs). Bumping one
+# without the other leaves the fleet and CI on different runtimes and silently
+# re-introduces the unpinned-toolchain failure this file exists to prevent.
 [tools]
 ruby = "3.4"
+bun = "1.4.0"
+node = "24"
