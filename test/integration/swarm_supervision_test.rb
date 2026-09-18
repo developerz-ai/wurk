@@ -73,30 +73,34 @@ class SwarmSupervisionTest < Wurk::Test::UnitCase
 
   # --- what the waits below depend on -------------------------------------
 
-  # A host that is merely SLOW must not end a wait. Progress arriving steadily
-  # for longer, in total, than one idle budget keeps this wait alive; under the
-  # total-deadline shape it replaced, this case returns nil after `idle`. That
-  # difference is this file's whole history on the platform's coding boxes: the
-  # assertions above are about supervision, and a total budget made every one of
-  # them a bet on how fast the host forks and boots a Ruby child
-  # (developerz-ai/developerz.ai#4386).
+  # A host that is merely SLOW must not end a wait. Progress arrives BETWEEN
+  # polls — from the passage of (fake) time, never from the probe — and the run
+  # outlasts several idle budgets in total, which a single total deadline could
+  # not survive. That difference is this file's whole history on the platform's
+  # coding boxes: the assertions above are about supervision, and a total budget
+  # made every one of them a bet on how fast the host forks and boots a Ruby
+  # child (developerz-ai/developerz.ai#4386).
+  #
+  # No threads and no real sleeping: the clock is a local, so the case proves the
+  # arithmetic rather than racing the scheduler it is about.
   def test_a_wait_follows_progress_rather_than_elapsed_time
-    idle = 0.3
+    idle = 1.0
+    now = 0.0
     ticks = 0
-    mover = ::Thread.new do
-      8.times do
-        sleep idle * 0.5
+    found = wait_while_progressing(
+      progress: -> { ticks },
+      idle_timeout: idle,
+      clock: -> { now },
+      # One poll costs three quarters of an idle budget, and the thing being
+      # waited on moves once per poll.
+      nap: lambda { |_|
+        now += idle * 0.75
         ticks += 1
-      end
-    end
-    started = monotonic_now
-    found = wait_while_progressing(progress: -> { ticks }, idle_timeout: idle, interval: 0.02) do
-      ticks >= 8 ? ticks : nil
-    end
-    mover.join
+      }
+    ) { ticks >= 8 ? ticks : nil }
 
     assert_equal 8, found, 'a wait must survive a host too slow to finish inside one idle budget'
-    assert_operator monotonic_now - started, :>, idle,
+    assert_operator now, :>, idle * 4,
                     'this case is only a test if it outlasts the budget it is meant to survive'
   end
 
@@ -104,12 +108,21 @@ class SwarmSupervisionTest < Wurk::Test::UnitCase
   # idle budget of its last move — the property a total deadline also had, and
   # the reason the replacement is not simply a bigger number.
   def test_a_wait_gives_up_on_a_supervisor_that_stopped_moving
-    idle = 0.3
-    started = monotonic_now
-    found = wait_while_progressing(progress: -> { 0 }, idle_timeout: idle, interval: 0.02) { nil }
+    idle = 1.0
+    now = 0.0
+    polls = 0
+    found = wait_while_progressing(
+      progress: -> { 0 },
+      idle_timeout: idle,
+      clock: -> { now },
+      nap: lambda { |_|
+        now += idle * 0.25
+        polls += 1
+      }
+    ) { nil }
 
     assert_nil found, 'a stalled supervisor must fail the wait'
-    assert_operator monotonic_now - started, :<, idle * 5, 'and must fail promptly once it stops'
+    assert_operator polls, :<=, 4, 'and must fail within one idle budget of its last move'
   end
 
   # --- rolling restart: replacement dies before heartbeat -----------------
@@ -446,9 +459,15 @@ class SwarmSupervisionTest < Wurk::Test::UnitCase
   # the host happens to be doing. So a slow host makes this poll LONGER and never
   # changes its verdict, while a supervisor that has genuinely stopped moving
   # still fails within POLL_TIMEOUT of its last move.
-  def wait_while_progressing(progress:, idle_timeout: POLL_TIMEOUT, interval: POLL_INTERVAL)
+  # `clock` and `nap` are the host, injected ONLY by the two cases that test this
+  # helper's own deadline arithmetic. Every other caller takes the real pair. A
+  # test of a timing rule that depends on the scheduler to produce its timing is
+  # the very class of flake this file is fixing, and a real mover thread can be
+  # descheduled past the idle budget it is meant to beat.
+  def wait_while_progressing(progress:, idle_timeout: POLL_TIMEOUT, interval: POLL_INTERVAL,
+                             clock: method(:monotonic_now), nap: method(:sleep))
     seen = progress.call
-    deadline = monotonic_now + idle_timeout
+    deadline = clock.call + idle_timeout
     loop do
       found = yield
       return found if found
@@ -456,11 +475,11 @@ class SwarmSupervisionTest < Wurk::Test::UnitCase
       now = progress.call
       if now != seen
         seen = now
-        deadline = monotonic_now + idle_timeout
+        deadline = clock.call + idle_timeout
       end
-      return nil if monotonic_now >= deadline
+      return nil if clock.call >= deadline
 
-      sleep interval
+      nap.call(interval)
     end
   end
 
