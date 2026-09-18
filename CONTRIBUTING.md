@@ -113,6 +113,16 @@ starts failing on wall clock rather than on assertions. `NCPU=<n>` raises it if
 your machine has headroom (ceiling 14, the number of isolated DBs); `NCPU=1` is
 how to chase an ordering flake.
 
+**Lower it on a machine that is doing something else.** The default is below core
+count for a machine this suite has to itself, and a 4-core host that is also
+running other work is not that machine: four workers there is one per core before
+the competition, and the suite starts reporting the host's load as red tests. The
+measured case is the platform's coding boxes — 4 cores at 1.80 GHz, several agent
+sessions at once, this suite taking 366-734s against 209s on a quiet machine, and
+a baseline on the unmodified checkout going red while CI on the same SHA was green
+(developerz-ai/developerz.ai#4386). `NCPU=2` is the lever there, and it belongs in
+that host's environment rather than in this repo, which cannot see it.
+
 The engine tests render the dashboard shell, which needs the precompiled SPA.
 That bundle is built rather than committed, so a fresh clone has none — the
 first `bin/rake test` builds it once (roughly 4s) and says so. Later runs skip

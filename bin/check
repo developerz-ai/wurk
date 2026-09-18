@@ -10,7 +10,7 @@
 # PR will get.
 #
 # Env knobs:
-#   NCPU=<n>   parallel test workers (default: core count, capped at 14)
+#   NCPU=<n>   parallel test workers (default 4, ceiling 14 — CONTRIBUTING.md "Worker count")
 #   SKIP_LINT=1 / SKIP_PARITY=1 / SKIP_FRONTEND=1   drop a stage
 set -euo pipefail
 
