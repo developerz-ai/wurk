@@ -43,7 +43,19 @@ module Wurk
     # wrong shape for this suite; the flat 4 that used to live there WAS one per
     # core on the 4-core fleet boxes that run `bin/check` as a merge gate, which
     # is the class of red this scales away from (dz#4386, #522).
-    DEFAULT_NCPU = (Etc.nprocessors / 2).clamp(1, 4)
+    #
+    # A FUNCTION OF THE CORE COUNT, not a constant derived from this machine's:
+    # a test can then state what the rule DOES across machines (1 -> 1, 4 -> 2,
+    # 8 -> 4, 64 -> 4) instead of re-deriving the same expression the constant
+    # already holds, which is an assertion that cannot fail.
+    # The historical default, and the ceiling the rule never exceeds.
+    WORKER_CAP = 4
+
+    def self.default_ncpu(cores)
+      (cores / 2).clamp(1, WORKER_CAP)
+    end
+
+    DEFAULT_NCPU = default_ncpu(Etc.nprocessors)
 
     class << self
       attr_accessor :redis_url
