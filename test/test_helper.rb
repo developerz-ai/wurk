@@ -18,6 +18,8 @@ end
 
 $LOAD_PATH.unshift(File.expand_path('../lib', __dir__))
 
+require 'etc'
+
 # --- Per-worker Redis DB isolation -----------------------------------------
 # Tests must never touch the base Redis DB (0): teardown runs FLUSHDB, which
 # would wipe a developer's real data. Each minitest-parallel_fork worker instead
@@ -35,6 +37,13 @@ module Wurk
     REDIS_DATABASES = 15
     WORKER_DATABASES = REDIS_DATABASES - 1 # 14 → DBs 1..14 for parallel workers
     DEDICATED_DB = REDIS_DATABASES         # 15 → fixed-DB tests only
+
+    # Parallel worker default — HALF the cores, floored at 1, never above the
+    # historical 4. Read the NCPU block below for why one worker per core is the
+    # wrong shape for this suite; the flat 4 that used to live there WAS one per
+    # core on the 4-core fleet boxes that run `bin/check` as a merge gate, which
+    # is the class of red this scales away from (dz#4386, #522).
+    DEFAULT_NCPU = (Etc.nprocessors / 2).clamp(1, 4)
 
     class << self
       attr_accessor :redis_url
@@ -84,21 +93,26 @@ require 'minitest/autorun'
 # of the #84 batch-TTL and #73 periodic-leader flakes. Cap the worker count to
 # the number of worker DBs so every worker gets a unique one.
 #
-# The default stays 4 — deliberately below the core count of most machines that
-# run this. The suite looks like a pure fan-out of independent classes, but the
-# integration layer isn't: a single test boots a swarm of 4 children × 5 threads,
+# The default is half the cores, capped at the historical 4 — deliberately below
+# the core count, which is what this paragraph always argued for and what a flat
+# 4 stopped delivering the moment the suite ran on a 4-core machine. The suite
+# looks like a pure fan-out of independent classes, but the integration layer
+# isn't: a single test boots a swarm of 4 children × 5 threads,
 # several use real BLMOVE timeouts, and some pools carry a 1s read timeout. One
 # worker per core therefore oversubscribes badly, and the failures it produces
 # are wall-clock ones (a drain that doesn't finish, a socket read that times out)
 # rather than honest assertion failures. Measured on a 12-core box: `NCPU=12`
-# bought ~20% wall clock and cost a red build.
+# bought ~20% wall clock and cost a red build. Measured on 4 cores (2026-09-19,
+# `taskset -c 0-3 ./bin/check` at main): 4m57s at NCPU=4 against 5m24s at
+# NCPU=2 — halving the workers costs 9%, because this suite waits far more than
+# it computes.
 #
 # `NCPU` is the knob for a machine with headroom to spare, and `NCPU=1` is how
 # to chase an ordering flake. Clamped rather than merely capped so a typo'd
 # `NCPU=` (`to_i` → 0) can't fork zero workers; the ceiling is the number of
 # isolated Redis DBs, since two workers sharing one would FLUSHDB each other
 # mid-test (the root cause of the #84 and #73 flakes).
-ENV['NCPU'] = (ENV['NCPU'] || 4).to_i.clamp(1, Wurk::Test::WORKER_DATABASES).to_s
+ENV['NCPU'] = (ENV['NCPU'] || Wurk::Test::DEFAULT_NCPU).to_i.clamp(1, Wurk::Test::WORKER_DATABASES).to_s
 
 begin
   require 'minitest/parallel_fork'
