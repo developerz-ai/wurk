@@ -69,13 +69,13 @@ treating it as unknown:
 
 | Exit | Trigger | Source |
 |---|---|---|
-| `0` | Every stage passed, OR `-h` / `--help` / `help` printed the help block without running any stage. | `bin/check:201-204`, `bin/check:23-26` |
-| `1` | At least one stage reported failure. | `bin/check:206-207` |
+| `0` | Every stage passed, OR `-h` / `--help` / `help` printed the help block without running any stage. | `bin/check:210-213`, `bin/check:23-26` |
+| `1` | At least one stage reported failure. | `bin/check:215-216` |
 | `64` | Unrecognised mode argument — anything other than `''`, `pr`, `fast`, `full`, `-h`, `--help`, or `help`. | `bin/check:27-30` |
 | `75` | No bundler on `PATH` — the environment cannot run the Ruby gate at all. | `bin/check:62-66` |
 | `75` | Bundler is on `PATH` but the gems are not installed — `bin/setup` has never run here. | `bin/check:80-84` |
-| `75` | No Redis on `127.0.0.1:6379`. | `bin/check:92-96` |
-| `75` | No `bun` on `PATH` — frontend gate cannot execute. | `bin/check:104-109` |
+| `75` | No Redis at `REDIS_URL` (default `redis://localhost:6379/0`). | `bin/check:101-105` |
+| `75` | No `bun` on `PATH` — frontend gate cannot execute. | `bin/check:113-118` |
 
 `75` is the platform's "preconditions unmet" code, and all four triggers share it
 on purpose: none of them says anything about the diff. A gate that cannot reach its Redis,
@@ -86,9 +86,9 @@ nobody wrote.
 
 ### Env knobs
 
-- `SKIP_LINT=1` — drop the rubocop stage (`bin/check:125`).
-- `SKIP_PARITY=1` — drop the parity oracles stage (`bin/check:153`).
-- `SKIP_FRONTEND=1` — drop the frontend stage (typecheck + oxlint + vitest in `frontend/`; `bin/check:144-145`).
+- `SKIP_LINT=1` — drop the rubocop stage (`bin/check:134`).
+- `SKIP_PARITY=1` — drop the parity oracles stage (`bin/check:162`).
+- `SKIP_FRONTEND=1` — drop the frontend stage (typecheck + oxlint + vitest in `frontend/`; `bin/check:153-154`).
 - `NCPU=<n>` — see [Worker count](#worker-count) below for the trade-off (ceiling 14).
 
 The individual tasks, when you want one:

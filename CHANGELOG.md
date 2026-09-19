@@ -4,6 +4,10 @@ All notable changes to Wurk are recorded here. Format: [Keep a Changelog](https:
 
 ## [Unreleased]
 
+### Changed
+
+- **`bin/check` probes the Redis at `REDIS_URL`, not a pinned `127.0.0.1:6379`.** The guard now checks the server the suite actually connects to (`REDIS_URL`, which `test_helper` and `RedisPool` already read), and falls back to the suite's own default, `redis://localhost:6379/0`, when it is unset, so nothing changes for a local run. `bin/test-ecosystem` uses DB 15 of the same server. A developerz.ai box can now run this gate against a Redis on a private port, which leaves 6379 free for another repo's own store on the same box.
+
 ## [1.7.6] - 2026-09-07
 
 One runtime fix that matters to anyone using encrypted jobs — on json 3.0.0, every one of them failed — plus the repo hygiene that had accumulated since 1.7.5: the gate a contributor runs before opening a PR now checks what CI checks, the docs stopped claiming things the tree does not do, and three timing-sensitive tests stopped failing for reasons that were never the code. No Redis key, command sequence, job-JSON field, or public API changed: a 1.7.5 worker and a 1.7.6 worker can drain the same queue.

@@ -10,7 +10,7 @@ set -euo pipefail
 #             suite installs NO real sidekiq and runs entirely on wurk.
 #
 # Checkouts are cloned (cached) into test/ecosystem/.checkouts/ (gitignored).
-# The gem's suite hits real Redis; default DB 15 — override with
+# The gem's suite hits real Redis; DB 15 of REDIS_URL's server — override with
 # ECOSYSTEM_REDIS_URL. The DB is the suite's to trash; don't point it at
 # data you care about.
 
@@ -19,7 +19,9 @@ ROOT=$(pwd)
 
 ECOSYSTEM_DIR="test/ecosystem"
 CHECKOUTS="$ROOT/$ECOSYSTEM_DIR/.checkouts"
-REDIS_URL="${ECOSYSTEM_REDIS_URL:-redis://127.0.0.1:6379/15}"
+# DB 15 on the same server the rest of the gate uses (REDIS_URL), not a pinned port.
+redis_base="${REDIS_URL:-redis://localhost:6379/0}"
+REDIS_URL="${ECOSYSTEM_REDIS_URL:-$(printf '%s' "$redis_base" | sed -E 's#/[0-9]*$##')/15}"
 
 ran=0
 failures=0
