@@ -74,7 +74,7 @@ treating it as unknown:
 | `64` | Unrecognised mode argument — anything other than `''`, `pr`, `fast`, `full`, `-h`, `--help`, or `help`. | `bin/check:27-30` |
 | `75` | No bundler on `PATH` — the environment cannot run the Ruby gate at all. | `bin/check:62-66` |
 | `75` | Bundler is on `PATH` but the gems are not installed — `bin/setup` has never run here. | `bin/check:80-84` |
-| `75` | No Redis at `REDIS_URL` (default `redis://127.0.0.1:6379/0`). | `bin/check:101-105` |
+| `75` | No Redis at `REDIS_URL` (default `redis://localhost:6379/0`). | `bin/check:101-105` |
 | `75` | No `bun` on `PATH` — frontend gate cannot execute. | `bin/check:113-118` |
 
 `75` is the platform's "preconditions unmet" code, and all four triggers share it

@@ -20,7 +20,7 @@ ROOT=$(pwd)
 ECOSYSTEM_DIR="test/ecosystem"
 CHECKOUTS="$ROOT/$ECOSYSTEM_DIR/.checkouts"
 # DB 15 on the same server the rest of the gate uses (REDIS_URL), not a pinned port.
-redis_base="${REDIS_URL:-redis://127.0.0.1:6379/0}"
+redis_base="${REDIS_URL:-redis://localhost:6379/0}"
 REDIS_URL="${ECOSYSTEM_REDIS_URL:-$(printf '%s' "$redis_base" | sed -E 's#/[0-9]*$##')/15}"
 
 ran=0

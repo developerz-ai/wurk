@@ -91,7 +91,7 @@ fi
 # the gate a REDIS_URL on a private port, because 6379 belongs to whatever repo
 # stack the box also runs. Locally, `docker run --rm -p 6379:6379 redis:7.4` is
 # the supported path.
-redis_addr="${REDIS_URL:-redis://127.0.0.1:6379/0}"
+redis_addr="${REDIS_URL:-redis://localhost:6379/0}"
 redis_addr="${redis_addr#*://}"
 redis_addr="${redis_addr##*@}"
 redis_addr="${redis_addr%%/*}"
@@ -99,7 +99,7 @@ redis_host="${redis_addr%:*}"
 redis_port="${redis_addr##*:}"
 [ "$redis_host" != "$redis_addr" ] || redis_port=6379
 if ! (exec 3<>"/dev/tcp/${redis_host}/${redis_port}") 2>/dev/null; then
-  echo "bin/check: no Redis on ${redis_host}:${redis_port} (REDIS_URL, default redis://127.0.0.1:6379/0)." >&2
+  echo "bin/check: no Redis on ${redis_host}:${redis_port} (REDIS_URL, default redis://localhost:6379/0)." >&2
   echo "  start one with:  docker run --rm -p 6379:6379 redis:7.4" >&2
   exit 75
 fi

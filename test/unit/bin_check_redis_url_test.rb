@@ -43,6 +43,23 @@ class BinCheckRedisUrlTest < Minitest::Test
     assert_includes err, "127.0.0.1:#{port}"
   end
 
+  # The unset-REDIS_URL fallback must be the suite's own default, byte for byte: a
+  # guard that probes `127.0.0.1` while RedisPool connects to `localhost` can pass
+  # or refuse over a server the suite never uses. Read, not run — the real 6379
+  # on the box would otherwise decide the answer.
+  def test_the_unset_fallback_is_the_suites_own_default
+    suite_default = File.read(File.expand_path('../../lib/wurk/redis_pool.rb', __dir__))[
+      /DEFAULT_URL\s*=\s*ENV\.fetch\('REDIS_URL', '([^']+)'\)/, 1
+    ]
+
+    refute_nil suite_default, 'RedisPool::DEFAULT_URL must still read REDIS_URL with a literal fallback'
+    %w[bin/check bin/test-ecosystem].each do |script|
+      fallback = File.read(File.expand_path("../../#{script}", __dir__))[/\$\{REDIS_URL:-([^}]+)\}/, 1]
+
+      assert_equal suite_default, fallback, "#{script} must fall back to the suite's own default"
+    end
+  end
+
   def test_runs_the_gate_when_the_redis_url_server_answers
     server = TCPServer.new('127.0.0.1', 0)
     begin

@@ -6,7 +6,7 @@ All notable changes to Wurk are recorded here. Format: [Keep a Changelog](https:
 
 ### Changed
 
-- **`bin/check` probes the Redis at `REDIS_URL`, not a pinned `127.0.0.1:6379`.** The guard now checks the server the suite actually connects to (`REDIS_URL`, which `test_helper` and `RedisPool` already read), and falls back to `redis://127.0.0.1:6379/0` when it is unset, so nothing changes for a local run. `bin/test-ecosystem` uses DB 15 of the same server. A developerz.ai box can now run this gate against a Redis on a private port, which leaves 6379 free for another repo's own store on the same box.
+- **`bin/check` probes the Redis at `REDIS_URL`, not a pinned `127.0.0.1:6379`.** The guard now checks the server the suite actually connects to (`REDIS_URL`, which `test_helper` and `RedisPool` already read), and falls back to the suite's own default, `redis://localhost:6379/0`, when it is unset, so nothing changes for a local run. `bin/test-ecosystem` uses DB 15 of the same server. A developerz.ai box can now run this gate against a Redis on a private port, which leaves 6379 free for another repo's own store on the same box.
 
 ## [1.7.6] - 2026-09-07
 
