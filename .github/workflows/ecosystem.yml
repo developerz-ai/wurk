@@ -78,7 +78,7 @@ jobs:
       # the `job` context is unavailable there.
       - name: resolve redis port
         run: echo "ECOSYSTEM_REDIS_URL=redis://localhost:${{ job.services.redis.ports['6379'] }}/15" >> "$GITHUB_ENV"
-      - uses: ruby/setup-ruby@bec3f19a76460dbe12f60def7d1a77585f07516c # v1
+      - uses: ruby/setup-ruby@e8944e80fb94b20106697132f8c20c665fab29e9 # v1
         with:
           # NOT the newest Ruby, deliberately. This job's subject is third-party
           # gems at pinned upstream SHAs, so it has to run a Ruby *they* support:
