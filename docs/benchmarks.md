@@ -9,7 +9,7 @@ Two different benchmark suites live in `bench/`. They answer different questions
 | `bench/*.rb` | Did *this PR* slow wurk down vs `main`? | `rake bench` | Flags only — [`.github/workflows/bench.yml`](../.github/workflows/bench.yml) comments a regression beyond both runs' error bounds plus `BENCH_REGRESSION_PCT` (default 5%) on the PR; not a required check |
 | `bench/vs_sidekiq.rb` | Is wurk faster than *stock Sidekiq*? | `rake bench:vs_sidekiq` | No |
 
-The regression gate can be fully green while wurk is slower than Sidekiq. It measures wurk against its own past self. Do not read `rake bench` as a competitive result.
+The regression check can be fully green while wurk is slower than Sidekiq. It measures wurk against its own past self. Do not read `rake bench` as a competitive result.
 
 ## Throughput vs stock Sidekiq
 

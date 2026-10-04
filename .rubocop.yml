@@ -108,7 +108,7 @@ Naming/VariableNumber:
     - "test/**/*"
 
 # AllowedMethods matches a bare name repo-wide (no per-path parameters exist), so
-# only Sidekiq-spec'd names whose boolean return is the documented contract go
+# only Sidekiq-spec'd names whose return value is fixed by the spec (we cannot rename them) go
 # here (docs/target/sidekiq-{free,pro,ent}.md: Queue#pause!/#unpause!/#clear,
 # JobSet#clear/#delete_by_value/#delete_by_jid, DeadSet#trim/#kill,
 # JobRecord#delete, Status#delete/#write, Unique.enable!, Encryption.enable,
