@@ -21,7 +21,7 @@
 
 Wurk is wire-compatible with Sidekiq — same Redis keys, same job JSON, same Ruby DSL. Swap one line in your `Gemfile` and your existing jobs, batches, limiters, cron entries, and live Redis data keep working untouched. The Pro and Enterprise feature sets ship in the same free gem, with no license check and no tiers.
 
-**In production:** Wurk runs the background work at [developerz.ai](https://developerz.ai) and at partner deployments — millions of jobs an hour, across many servers, on the fork-based swarm described below. It is not a preview.
+**In production:** Wurk runs the background work at [developerz.ai](https://developerz.ai) and at partner deployments, across many servers, on the fork-based swarm described below. It is not a preview. Throughput numbers from those deployments are not published yet; what has been measured is in [docs/benchmarks.md](docs/benchmarks.md).
 
 **At scale:** Wurk is built for fleets, not just for one box. Kubernetes `/live` + `/ready` probes are a config line, not a sidecar; a bearer-scoped [HTTP API](docs/api-http.md) lets non-Ruby services enqueue and inspect; [OpenTelemetry](docs/telemetry.md) traces propagate client → server; per-queue [global concurrency caps](docs/rate-limiting.md) hold cluster-wide limits; and monitoring is the dashboard you already mount — live SSE, charts, per-job progress, no separate stack to run. See [Wurk extras](#wurk-extras).
 
@@ -298,6 +298,8 @@ Wurk is MIT and stays that way. If what you need is a commercial support contrac
 ```
 
 `bundle install && restart`. Wurk reads and writes the same Redis schema, so a rolling deploy can run Sidekiq and Wurk against the same Redis during the cutover. sidekiq-cron's upstream suite runs against Wurk in the [`ecosystem` CI job](https://github.com/developerz-ai/wurk/blob/main/.github/workflows/ecosystem.yml) (see [`test/ecosystem/`](https://github.com/developerz-ai/wurk/tree/main/test/ecosystem)). sidekiq-unique-jobs, sidekiq-scheduler, sidekiq-status, sidekiq-failures and sidekiq-throttled are target additions tracked in [docs/idea/14-ecosystem-compat.md](https://github.com/developerz-ai/wurk/blob/main/docs/idea/14-ecosystem-compat.md).
+
+**Keeping a `sidekiq-*` add-on gem?** Those gems declare `add_dependency "sidekiq"`, which would reinstall real Sidekiq next to Wurk. Satisfy it with Wurk's git-only [`sidekiq` shim gem](https://github.com/developerz-ai/wurk/tree/main/ecosystem/sidekiq-shim) instead: `gem "sidekiq", github: "developerz-ai/wurk", glob: "ecosystem/sidekiq-shim/*.gemspec"`. Only sidekiq-cron is exercised that way on every PR; treat the others as untested.
 
 Full walkthrough — config side-by-side, the Redis key/`sidekiq_options` mapping, known incompatibilities, and a one-page cutover checklist: **[docs/migrate-from-sidekiq.md](https://github.com/developerz-ai/wurk/blob/main/docs/migrate-from-sidekiq.md)**.
 

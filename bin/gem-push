@@ -1,4 +1,5 @@
 #!/usr/bin/env bash
+# Break-glass only — releases normally publish from release.yml (RELEASE.md).
 # Push the built gem to rubygems.org. Requires `bin/gem-login` first.
 # MFA is enforced (rubygems_mfa_required), so this prompts for an OTP at push
 # time — pass one non-interactively with: bin/gem-push 123456
@@ -12,6 +13,19 @@ if [ ! -f "$gemfile" ]; then
   echo "✗ $gemfile not found — run bin/gem-build first." >&2
   exit 1
 fi
+
+# release:check only enforces main under CI (GITHUB_REF); a local break-glass
+# push must still publish exactly what main holds.
+git fetch -q origin main
+if [ "$(git rev-parse --abbrev-ref HEAD)" != "main" ] || [ "$(git rev-parse HEAD)" != "$(git rev-parse origin/main)" ]; then
+  echo "✗ check out main at origin/main before a manual push (RELEASE.md)." >&2
+  exit 1
+fi
+
+# The same gate release.yml runs before its push. A RubyGems version can never
+# be re-pushed, so a gem that skipped it would be burned for good.
+echo "==> rake release:check"
+bundle exec rake release:check
 
 echo "==> Pushing ${gemfile} to rubygems.org"
 if [ "${1:-}" != "" ]; then

@@ -184,9 +184,13 @@ class WebExtensionsTest < Wurk::Test::EngineCase
     payload['jid']
   end
 
+  # Scored an hour OUT, never due: search matches on the payload, not the
+  # clock, and a due `retry` entry is what a scheduled poller leaked from an
+  # earlier class pops before the request lands — `["retry"]` expected, `[]`
+  # got (#522). Same precedent as api_mutations_test.rb's `push_to_zset`.
   def push_to_zset(name, args)
     payload = job_payload(args)
-    Wurk.redis { |c| c.call('ZADD', name, ::Time.now.to_f.to_s, Wurk.dump_json(payload)) }
+    Wurk.redis { |c| c.call('ZADD', name, (::Time.now.to_f + 3600).to_s, Wurk.dump_json(payload)) }
     payload['jid']
   end
 

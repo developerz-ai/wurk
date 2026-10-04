@@ -33,7 +33,14 @@ matters more than it sounds.
 
 1. **Bump the version** in `lib/wurk/version.rb` (e.g. `1.0.0` → `1.1.0`). For a
    prerelease use RubyGems' dot form: `1.0.0.rc1` (not `1.0.0-rc1`) — CI converts
-   it to git's hyphenated `v1.0.0-rc1` for the tag.
+   it to git's hyphenated `v1.0.0-rc1` for the tag. Then **re-lock the demo**:
+   ```bash
+   bundle exec rake release:relock_demo   # rewrites demo/Gemfile.lock's wurk (path) version
+   ```
+   The demo image installs `demo/Gemfile.lock` frozen, and that lock pins the
+   path-sourced `wurk` at `Wurk::VERSION`. A stale lock would fail the demo
+   build inside the release run — *after* the gem is already published — so
+   `release:check` refuses it up front. Commit the lock with the bump.
 
 2. **Update `CHANGELOG.md`.** Add a dated section whose header matches the new
    version exactly — `## [1.1.0] - YYYY-MM-DD` — with changes grouped under the
@@ -48,12 +55,17 @@ matters more than it sounds.
    bundle exec rake release:package   # builds the .gem, asserts the SPA is inside it
    ```
 
-4. **Commit** the version + CHANGELOG bump on a branch, open a PR, and merge to
-   `main` once green.
+4. **Commit** the version + CHANGELOG + demo-lock bump on a branch, open a PR,
+   and merge to `main` once green.
 
 **That's it.** Merging step 4 is the release. The `release` workflow fires on
 `push: branches: [main], paths: ["lib/wurk/version.rb"]` and does the rest,
 end-to-end, with no human-held secret and no tag to push.
+
+No rake task publishes. `rake release`, `rake release:source_control_push`
+and `rake release:rubygem_push` (Bundler's tag-and-push tasks) are redefined to
+abort with a pointer back here, because each would cut a tag or push a gem from
+a workstation — the input-tag path this lane exists to close.
 
 Keep the version bump in its own PR, or at least its own commit — anything that
 touches `lib/wurk/version.rb` on `main` wakes the release lane.
@@ -85,10 +97,12 @@ run failed after the bump was already merged.
 
 | Check | Detail |
 |---|---|
+| **On `main`** | In CI (`GITHUB_REF` set), the ref must be `refs/heads/main` — backs up release.yml's own main-only guard so a hand-dispatched run from a branch can't publish it. No-ops locally. |
 | **Tag ↔ version** | The workflow passes its derived tag as `WURK_RELEASE_TAG`; it must match `Wurk::VERSION`. Git's hyphenated prerelease (`v1.0.0-rc1`) maps to RubyGems' dotted form (`1.0.0.rc1`). Falls back to `GITHUB_REF_NAME`, and no-ops for local runs. |
 | **Dashboard bundle present** | `vendor/assets/dashboard/` has `index.html`, a non-empty `wurk-manifest.json`, and a non-empty `assets/*.js`. Run `rake frontend:build` if missing. |
 | **Version ↔ CHANGELOG** | `CHANGELOG.md` contains a `## [<Wurk::VERSION>]` section header. |
 | **Unreleased link** | `CHANGELOG.md`'s `[Unreleased]:` compare link starts at `v<Wurk::VERSION>` (the tag about to be cut). |
+| **Demo lock ↔ version** | `demo/Gemfile.lock` pins the path-sourced `wurk` at `Wurk::VERSION`. Run `rake release:relock_demo` if not. |
 | **Clean tree** | `git status --porcelain` is empty, ignoring `vendor/assets/` (built output). |
 | **Tests green** | `rake test` (unit + integration + engine) passes. |
 
@@ -177,9 +191,15 @@ pointing at:
 The workflow already requests `permissions: id-token: write`, which is what the
 OIDC exchange needs.
 
-## Local one-shot publish (maintainers, fallback only)
+## Break-glass manual publish (maintainers only)
 
-`rake release:full` chains `frontend:build → build → push` and pushes with a
-local API key (`bin/gem-login` first; MFA enforced via `rubygems_mfa_required`).
-Prefer the CI flow above; use this only for an out-of-band manual push when CI is
-unavailable.
+Only when CI is unavailable and a release cannot wait. `bin/gem-build` builds the
+dashboard and the `.gem`; `bin/gem-push` then runs `rake release:check` (the same
+gate CI runs) and only on green pushes with a local API key (`bin/gem-login`
+first; MFA enforced via `rubygems_mfa_required`).
+
+The version must still be bumped on `main` first, exactly as above. Once the gem
+is on RubyGems, the release lane's preflight treats the version as already
+released and no-ops, so it will **not** cut the tag or GitHub Release — create
+them by hand from that `main` commit (`gh release create vX.Y.Z --target <sha>`
+with the CHANGELOG section as notes and the `.gem` attached).

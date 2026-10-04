@@ -121,7 +121,7 @@ class JobRetryTest < Wurk::Test::UnitCase
 
   # Plain class (no Worker mixin) → does not respond to the block accessors,
   # so wrapped_block returns nil and falls back to the instance block.
-  class PlainWrapped; end # rubocop:disable Lint/EmptyClass
+  class PlainWrapped; end
 
   # Exception whose #backtrace is nil even after being raised — exercises the
   # nil-backtrace guard in stamp_backtrace.

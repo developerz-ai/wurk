@@ -499,7 +499,7 @@ module Wurk
       # Activate reliable_push! mode globally. Idempotent — call from the
       # top level of an initializer (NOT inside Wurk.configure_*). Spec:
       # docs/target/sidekiq-pro.md §5.
-      def reliable_push! # rubocop:disable Naming/PredicateMethod
+      def reliable_push!
         Buffered.install!
         true
       end

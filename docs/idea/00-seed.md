@@ -8,9 +8,9 @@
 
 ## Three pillars (all must be true)
 
-1. **100% drop-in.** Same Ruby API, same Redis wire format, same DSL. Migration is a one-line gem swap. Third-party gems built on Sidekiq (sidekiq-cron, sidekiq-unique-jobs, sidekiq-scheduler, sidekiq-status, etc.) work unchanged. We prove this in CI by running each ecosystem gem's own test suite against Wurk.
+1. **100% drop-in.** Same Ruby API, same Redis wire format, same DSL. Migration is a one-line gem swap. Third-party gems built on Sidekiq (sidekiq-cron, sidekiq-unique-jobs, sidekiq-scheduler, sidekiq-status, etc.) should work unchanged. We prove it in CI by running each ecosystem gem's own test suite against Wurk — sidekiq-cron today, the rest tracked in `14-ecosystem-compat.md`.
 2. **Free.** Pro + Enterprise feature parity built in. No license tiers, no paid features.
-3. **Measured.** Real multi-process parallelism via fork. Optimized Redis path. Precompiled assets. Hot loops tuned. Two benchmark suites, and only one of them gates: `rake bench` compares Wurk against its own past self and blocks merge on a >5% regression; `rake bench:vs_sidekiq` compares against stock Sidekiq and gates nothing. Wurk is **not** currently faster than stock Sidekiq — it runs at roughly 0.45×–0.86× depending on workload shape and process configuration. See `docs/benchmarks.md` for the numbers and the reproduction command.
+3. **Measured.** Real multi-process parallelism via fork. Optimized Redis path. Precompiled assets. Hot loops tuned. Two benchmark suites, and only one of them gates: `rake bench` compares Wurk against its own past self and flags a >5% regression on the PR (bench bot comment; not a required check); `rake bench:vs_sidekiq` compares against stock Sidekiq and gates nothing. Wurk is **not** currently faster than stock Sidekiq — it runs at roughly 0.87×–1.02× depending on workload shape and process configuration. See `docs/benchmarks.md` for the numbers and the reproduction command.
 
 ## Shape
 
@@ -20,7 +20,7 @@
 - Includes a dummy Rails app at `test/dummy/` for engine integration testing.
 - Modern dashboard: right-side menu, mobile-friendly, dark + light themes, i18n with extensible locales.
 - Minitest with multi-CPU parallel runner.
-- GitHub Actions, on whichever runner `vars.WURK_CI_RUNNER` / `vars.WURK_BENCH_RUNNER` names (`ubuntu-latest` when unset).
+- GitHub Actions on GitHub-hosted `ubuntu-latest` (free for a public repo; no self-hosted runners).
 - Public docs site on GitHub Pages.
 
 ## Doc index

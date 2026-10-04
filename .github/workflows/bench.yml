@@ -5,7 +5,7 @@ name: bench
 # `rake bench:vs_sidekiq`, which takes minutes per shape and never gates.
 #
 # Deleted in #296 for cost, restored here in a cheaper shape. The old workflow
-# ran the suite 7x across TWO 8vcpu jobs and duplicated the whole thing on every
+# ran the suite 7x across TWO large-runner jobs and duplicated it on every
 # push to main. This is one PR-only job that runs it 6x (best-of-3 per side) and
 # only when a bench input actually moved. A full `rake bench` is ~1 min, so
 # best-of-3 costs minutes rather than the 45 the old timeout implied — and
@@ -24,20 +24,22 @@ concurrency:
 
 jobs:
   # `rake bench` measures Ruby throughput only, so only Ruby/bench inputs can
-  # move it. Gate the 8vcpu job on those paths so docs-, frontend- and test-only
+  # move it. Gate the bench job on those paths so docs-, frontend- and test-only
   # PRs never spin a bench runner. A JOB-level `if` is correct here, unlike the
   # step-level gate test.yml uses: bench is deliberately not a required check, so
-  # a skipped job leaves no pending status parked on the PR.
+  # "skipped" is an honest answer. If it ever becomes required, switch it to
+  # test.yml's per-step RUN pattern first — GitHub counts a skipped required
+  # check as passing (#469).
   #
   # Gemfile.lock is deliberately absent from the filter — it is gitignored
   # (.gitignore:5) and can never appear in a diff; `Gemfile` and the gemspec are
   # what actually move dependencies.
-  # Runner selection is a repository variable (see test.yml's `detect` for the
-  # full rationale); `compare` reads its own so the bench box can be sized
-  # independently of the suite box.
+  #
+  # Hosted `ubuntu-latest` is noisy shared hardware — hence the interleaved
+  # best-of-N below rather than a single sample per side.
   detect:
     name: detect changed paths
-    runs-on: ${{ github.event.pull_request.head.repo.fork && 'ubuntu-latest' || vars.WURK_CI_RUNNER || 'ubuntu-latest' }}
+    runs-on: ubuntu-latest
     timeout-minutes: 5
     outputs:
       bench: ${{ steps.filter.outputs.bench }}
@@ -63,7 +65,7 @@ jobs:
     name: bench vs base
     needs: detect
     if: needs.detect.outputs.bench == 'true'
-    runs-on: ${{ github.event.pull_request.head.repo.fork && 'ubuntu-latest' || vars.WURK_BENCH_RUNNER || 'ubuntu-latest' }}
+    runs-on: ubuntu-latest
     timeout-minutes: 45
     permissions:
       contents: read
@@ -158,8 +160,8 @@ jobs:
               run_side head "$i"
             fi
           done
-      # Gate rule lives in bin/bench-compare (:72-75 noise band, :102 fail_gate,
-      # :115 exit) — this step only transports its verdict.
+      # Gate rule lives in bin/bench-compare (its noise band, `fail_gate` and
+      # final `exit`) — this step only transports its verdict.
       - name: compare, comment, gate
         env:
           GH_TOKEN: ${{ github.token }}
@@ -170,7 +172,7 @@ jobs:
           /tmp/bench-compare /tmp/bench-base.txt /tmp/bench-head.txt > /tmp/bench-comment.md || code=$?
           tee -a "$GITHUB_STEP_SUMMARY" < /tmp/bench-comment.md
 
-          # Sticky comment: bin/bench-compare:27 prints its marker as the first
+          # Sticky comment: bin/bench-compare prints its MARKER as the first
           # line, so a prior comment is matched by prefix and edited in place
           # instead of stacking one per push.
           #

@@ -251,7 +251,7 @@ class FlowThreeLevelSwarmTest < Wurk::Test::UnitCase
     flow
   end
 
-  def wait_until # rubocop:disable Naming/PredicateMethod
+  def wait_until
     deadline = monotonic_now + POLL_TIMEOUT
     until monotonic_now > deadline
       return true if yield

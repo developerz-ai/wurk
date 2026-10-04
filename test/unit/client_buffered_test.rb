@@ -554,7 +554,7 @@ class ClientBufferedTest < Wurk::Test::UnitCase
   # Stands in for a Wurk::Client in the drainer's run loop. drain! calls
   # pop_head (empty buffer → nil → no replay), so push is never reached;
   # this just satisfies the factory contract without hitting Redis.
-  class NoopDrainClient; end # rubocop:disable Lint/EmptyClass
+  class NoopDrainClient; end
 
   # Statsd singletons are process-global — serialize against every other test
   # class that also rewrites `Wurk::Metrics::Statsd.increment`.

@@ -111,6 +111,11 @@ class LivenessProbeTest < Wurk::Test::UnitCase
 
     assert_equal 503, body[:status_code]
     assert_equal 'stopping', body[:json]['reason']
+  ensure
+    # `@done` is #quiet's single-shot guard, and #quiet is what terminates the
+    # scheduler poller: left set, teardown's #stop skips it and the poller
+    # outlives the test, promoting due entries under the next class (#522).
+    @launcher&.instance_variable_set(:@done, false)
   end
 
   private

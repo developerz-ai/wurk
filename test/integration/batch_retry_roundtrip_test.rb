@@ -142,7 +142,7 @@ class BatchRetryRoundtripTest < Wurk::Test::UnitCase
   # The headline regression (plan 04, "Done when"): batch of 2, one job fails
   # once then succeeds on retry. `:success` must fire exactly once, `total`
   # stays 2 (never re-incremented by the retry re-push), `pending` ends at 0.
-  def test_batch_with_one_flaky_job_retries_to_success_once_with_correct_counters # rubocop:disable Metrics/MethodLength
+  def test_batch_with_one_flaky_job_retries_to_success_once_with_correct_counters
     marker_a     = "#{@ns}-marker-a"
     attempts_key = "#{@ns}-attempts"
     marker_b     = "#{@ns}-marker-b"
@@ -227,7 +227,7 @@ class BatchRetryRoundtripTest < Wurk::Test::UnitCase
   # Wurk::Limiter::Rescheduled — neither success nor failure. The outer Batch
   # middleware must skip BOTH acks (no premature success, no spurious retry
   # bookkeeping) until the job actually runs to completion.
-  def test_limiter_reschedule_inside_batch_does_not_fire_premature_ack # rubocop:disable Metrics/MethodLength
+  def test_limiter_reschedule_inside_batch_does_not_fire_premature_ack
     limiter_name = "#{@ns}-limiter"
     running_key  = "#{@ns}-running"
     release_key  = "#{@ns}-release"

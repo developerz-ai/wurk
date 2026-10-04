@@ -27,8 +27,10 @@ version: 1
 # THE SERVICES THIS REPO'S OWN GATE NEEDS BEFORE IT CAN GRADE A DIFF
 # (developerz-ai/developerz.ai#2918, mechanism in #2919).
 #
-# `bin/check` refuses without a Redis on 127.0.0.1:6379 -- integration and parity
-# tests use a real server, never a mock -- and that refusal is correct. What was
+# `bin/check` refuses without a reachable Redis at `REDIS_URL` (falling back to
+# redis://localhost:6379/0 when unset; since wurk#538 it no longer pins
+# 127.0.0.1:6379) -- integration and parity tests use a real server, never a
+# mock -- and that refusal is correct. What was
 # wrong is what happened next: every box in the fleet claimed this repo's coding
 # work, the agent produced the correct edit, passed its own guard, and the gate
 # discarded it in 60 ms for want of a service the box never had. Three attempts,
@@ -67,10 +69,15 @@ handoff:
   # WebhookRefNotFoundError — the org account has zero registered webhooks, so
   # the ingest graded the WHOLE file INVALID and served defaultPolicy instead
   # (wurk#432). Every declared value below only takes effect once this is gone.
-  # This key is also the opt-in for the autonomous scout backlog-drain
-  # (apps/worker/src/cron/scout-backlog-drain.ts:22-29), which stays inert until
-  # dz#1249 and dz#1530 close. Enrolling wurk was authorized by Ivan (ivndev001)
-  # 2026-08-21 on wurk#445.
+  # This key is also the opt-in for the autonomous scout backlog-drain. That
+  # drain is LIVE, not inert (wurk#488): as of developerz.ai `b4cfe94d76e9`
+  # (2026-09-14) it is an attached lane, registered at
+  # apps/worker/src/wiring/lanes.generated.ts:121, and it fired 814 times
+  # fleet-wide in the 30 days to 2026-09-14, 8 of them on this repo. A previous
+  # version of this comment said it "stays inert until dz#1249 and dz#1530
+  # close"; that was false. Re-check against developerz.ai main before relying
+  # on either the date or the counts. Enrolling wurk was authorized by Ivan
+  # (ivndev001) 2026-08-21 on wurk#445.
   mode: fleet
   ask_reporter_first: false
 
@@ -91,9 +98,20 @@ pr:
   #
   # WHAT IS BEHIND IT NOW (dz#2798, ruleset 20556704, updated 2026-09-01T05:12Z,
   # read back before this change): a `required_status_checks` rule requiring
-  # `test + coverage (latest ruby/rails)`, `lint (rubocop)` and `parity (oracle)`
-  # — the three the 15-PR inventory found ALWAYS created, so none can wedge a PR
-  # by never reporting. `strict_required_status_checks_policy: false`, so `main`
+  # `test + coverage (latest ruby/rails)`, `lint (rubocop)` and `parity (oracle)`.
+  # HOW THEY STAY HONEST (wurk#469, wurk#541, as of 2026-10-04): none of the three
+  # jobs carries a job-level `if:` — GitHub counts a SKIPPED required job as
+  # passing, so a job-level skip was a pass that ran nothing. Each job is always
+  # created and always reports; a per-step `RUN` env (event is not a PR, or the
+  # PR touched a path the job grades) decides whether its steps do work, and
+  # the paths filter covers the docs the doc-claim tests read. The other wedge —
+  # a bun.lock reconcile pushed by GITHUB_TOKEN, which triggers no workflows and
+  # so left the new head with no required checks at all (wurk#527 sat BLOCKED on
+  # it) — is gone with its workflow: dependabot's `bun` ecosystem updates
+  # bun.lock in its own commit, which runs CI like any other push. Verify with
+  # `gh pr checks <n>` on a docs-only PR: all three contexts must appear, and
+  # a SKIPPED one means this paragraph has gone stale.
+  # `strict_required_status_checks_policy: false`, so `main`
   # moving does not force a rebase on every open PR. Still no classic branch
   # protection behind the ruleset (404), so the ruleset IS the gate.
   #
@@ -109,12 +127,12 @@ pr:
   # back via `gh api repos/developerz-ai/wurk/rulesets/20556704`, ruleset id
   # stable since 2026-08-07), so a PR whose commits include any not attributed
   # to a GitHub account needs one human approval before the bot's auto-merge
-  # will fire. Every squash on main to date is attributed (author.login
-  # non-null on the last 40), so this has not gated a PR yet — the day a fleet
+  # will fire. Every squash on main is attributed (author.login non-null on
+  # the last 40, re-checked 2026-10-04), so this has not gated a PR yet — the day a fleet
   # box commits with an email not linked to a GitHub account, that PR silently
   # parks and the bot cannot move it. CONTRIBUTING.md tells contributors to
-  # commit with a GitHub-linked email for exactly this reason. The rule here
-  # (.maintainer.yml:10-14) says this file must not assert a ruleset state it
+  # commit with a GitHub-linked email for exactly this reason. The rule in this
+  # file's header says it must not assert a ruleset state it
   # does not have, and the count-of-0 sentence above would be one of those
   # assertions without this caveat.
   # NOTE (wurk#347): this governs the platform BOT only. Non-major Dependabot

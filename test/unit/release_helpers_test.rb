@@ -54,6 +54,23 @@ class ReleaseHelpersTest < Wurk::Test::UnitCase
     refute_predicate err, :success?
   end
 
+  # --- ref_is_main! ----------------------------------------------------
+
+  def test_ref_main_passes
+    ReleaseHelpers.ref_is_main!('refs/heads/main')
+  end
+
+  def test_ref_unset_is_a_local_run_and_passes
+    ReleaseHelpers.ref_is_main!('')
+  end
+
+  def test_ref_other_branch_or_tag_aborts
+    %w[refs/heads/feature refs/tags/v1.7.6 refs/pull/1/merge refs/heads/main-ish].each do |ref|
+      err = assert_raises(SystemExit) { silence_stderr { ReleaseHelpers.ref_is_main!(ref) } }
+      refute_predicate err, :success?, ref
+    end
+  end
+
   # --- changelog_has_version! ------------------------------------------
 
   def test_changelog_present
@@ -121,6 +138,38 @@ class ReleaseHelpersTest < Wurk::Test::UnitCase
     end
   end
 
+  # --- demo_lock_matches_version! --------------------------------------
+
+  def test_demo_lock_at_version_passes
+    ReleaseHelpers.demo_lock_matches_version!(demo_lock('1.7.6'), '1.7.6')
+    ReleaseHelpers.demo_lock_matches_version!(demo_lock('2.0.0.rc1'), '2.0.0.rc1')
+  end
+
+  def test_demo_lock_left_at_older_version_aborts
+    err = assert_raises(SystemExit) do
+      silence_stderr { ReleaseHelpers.demo_lock_matches_version!(demo_lock('1.7.6'), '1.7.7') }
+    end
+    refute_predicate err, :success?
+  end
+
+  # A wurk pinned from RubyGems (`gem "wurk"` instead of `path: ".."`) is not
+  # the lock the image builds against the checkout, so it must not pass either.
+  def test_demo_lock_without_path_sourced_wurk_aborts
+    lock = "GEM\n  remote: https://rubygems.org/\n  specs:\n    wurk (1.7.6)\n"
+    assert_raises(SystemExit) do
+      silence_stderr { ReleaseHelpers.demo_lock_matches_version!(lock, '1.7.6') }
+    end
+  end
+
+  # The real guard, not a fixture: runs in every suite so a bump PR that forgets
+  # `rake release:relock_demo` goes red before merge, not inside release.yml
+  # after the gem is already live.
+  def test_committed_demo_lock_pins_the_current_version
+    require_relative '../../lib/wurk/version'
+    lock = File.read(File.expand_path('../../demo/Gemfile.lock', __dir__))
+    ReleaseHelpers.demo_lock_matches_version!(lock, Wurk::VERSION)
+  end
+
   # --- gem_contains_dashboard! -----------------------------------------
 
   def test_gem_with_dashboard_passes
@@ -140,6 +189,11 @@ class ReleaseHelpersTest < Wurk::Test::UnitCase
   end
 
   private
+
+  def demo_lock(version)
+    "PATH\n  remote: ..\n  specs:\n    wurk (#{version})\n      connection_pool (>= 2.4)\n\n" \
+      "GEM\n  remote: https://rubygems.org/\n  specs:\n    rake (13.3.0)\n"
+  end
 
   def write_bundle(dir, js_content: 'console.log(1)')
     FileUtils.mkdir_p(File.join(dir, 'assets'))

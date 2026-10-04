@@ -92,7 +92,7 @@ module Wurk
     # Removes exactly this payload's bytes from the queue list. Returns
     # true when LREM removed ≥1 entry. Idempotent. Method name is
     # Sidekiq wire-compat — renaming would break `JobRecord#delete`.
-    def delete # rubocop:disable Naming/PredicateMethod
+    def delete
       removed = Wurk.redis { |c| c.call('LREM', Keys.queue(@queue), 1, value) }
       removed.to_i.positive?
     end

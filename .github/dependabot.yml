@@ -4,12 +4,19 @@
 # test/dummy, demo, and test/ecosystem Gemfiles are fixtures, not shipped deps.
 # Gem bumps wait 14 days after a version is published (cooldown) so brand-new
 # releases can be yanked/fixed upstream before we pick them up. The docker
-# ecosystem watches the Dockerfile's pinned base images alongside bundler, npm,
+# ecosystem watches the Dockerfile's pinned base images alongside bundler, bun,
 # and github-actions.
 version: 2
 updates:
   - package-ecosystem: bundler
     directory: "/"
+    # The Gemfile pins dev tools tightly (rubocop & co. at `~> X.Y.0`). With a
+    # gemspec and no committed lockfile, the default `auto` strategy treats this
+    # as a library and WIDENS such a pin (`>= X.Y, < X.Z+1`) instead of moving
+    # it, which silently un-pins the linter. `increase` rewrites the pin to the
+    # new version. Gemspec runtime requirements are handled separately by
+    # dependabot (only touched when they exclude the new version).
+    versioning-strategy: increase
     schedule:
       interval: weekly
     open-pull-requests-limit: 5
@@ -20,7 +27,12 @@ updates:
         update-types:
           - minor
           - patch
-  - package-ecosystem: npm
+  # `bun`, not `npm`: the frontend's lockfile is frontend/bun.lock, which the
+  # npm ecosystem cannot read (it failed every run with misconfigured_tooling
+  # and froze frontend deps). The bun ecosystem updates package.json AND
+  # bun.lock in the same PR, so `bun install --frozen-lockfile` in CI passes
+  # without the old post-hoc lockfile-reconcile workflow (#541, #470).
+  - package-ecosystem: bun
     directory: "/frontend"
     schedule:
       interval: weekly
@@ -40,12 +52,13 @@ updates:
         update-types:
           - minor
           - patch
-  # docker covers Dockerfile:13 (oven/bun:1.3.14-slim) and Dockerfile:24
-  # (ruby:3.4-slim-bookworm). When dependabot bumps the bun tag, the matching
-  # `bun-version` input must move with it in all four workflow sites — it
-  # cannot edit those, so the human merging the docker PR updates them by
-  # hand: test.yml:143, test.yml:313, release.yml:120, dependabot-lockfile.yml:59.
-  # Ruby major updates are ignored: release.yml:112-116 holds release on 3.4
+  # docker covers the Dockerfile's two base images (oven/bun and
+  # ruby:3.4-slim-bookworm). When dependabot bumps the oven/bun tag, every other
+  # bun pin must move with it — it cannot edit those, so the human merging the
+  # docker PR updates them by hand: the `bun-version:` inputs in
+  # .github/workflows/test.yml and .github/workflows/release.yml, and `bun` in
+  # mise.toml. `grep -rn 'bun-version\|^bun' .github mise.toml` finds them all.
+  # Ruby major updates are ignored: release.yml holds the release job on 3.4
   # on purpose, so a major bump would break the gem publish job until pages/
   # release are revisited.
   - package-ecosystem: docker

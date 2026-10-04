@@ -41,10 +41,10 @@ Not throughput. A stock Sidekiq user reaches multi-core by running N processes �
 
 | Suite | Question | Gates merges |
 |---|---|---|
-| `bin/rake bench` | Did this PR slow Wurk down vs its own past self? | Yes — >5% blocks |
+| `bin/rake bench` | Did this PR slow Wurk down vs its own past self? | Flags only — a regression beyond both runs' error bounds plus 5% is commented on the PR; not a required check |
 | `bin/rake bench:vs_sidekiq` | How does Wurk compare to stock Sidekiq? | No |
 
-A green `rake bench` says **nothing** about Sidekiq. It is a regression gate against Wurk's own history.
+A green `rake bench` says **nothing** about Sidekiq. It is a regression check against Wurk's own history.
 
 ## Reproduce it
 

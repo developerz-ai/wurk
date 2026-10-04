@@ -11,30 +11,28 @@ on:
 permissions:
   contents: read
   pull-requests: read
+  # `detect`'s dup step reads the merged PR's workflow runs (read-only).
+  actions: read
 
 concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}
-  cancel-in-progress: true
+  # Supersede stale PR runs, but never cancel main's own runs: back-to-back
+  # merges would otherwise leave "is main green?" without an answer.
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 jobs:
   # Which parts of the repo does this change touch? Everything below keys off
   # these outputs, so a docs-only PR stops paying for the full Ruby suite.
   #
-  # PULL REQUESTS ONLY. On push-to-main every job runs unconditionally: main is
-  # what `release:check` and the tag build trust, so its history stays fully
-  # verified regardless of what a given commit touched.
-  # Runner selection is a repository variable rather than a hard-coded label, so
-  # pointing CI at different hardware — or rolling back — is a settings change
-  # with no PR and no merge. Two properties of the expression are load-bearing.
-  # The fork guard comes first: wurk is public, a fork PR runs attacker-authored
-  # code, and GitHub's own guidance is never to let that reach self-hosted
-  # hardware. And an unset variable falls through to hosted compute, so a
-  # cleared or typo'd variable degrades to working CI rather than to a job that
-  # can never be scheduled. On `push` events the fork operand is null (falsy),
-  # which lands on the same fallback.
+  # Path filtering is for PULL REQUESTS ONLY. On push-to-main every job runs
+  # regardless of paths — main is what `release:check` trusts — unless `dup`
+  # proves the pushed tree already passed this workflow on the PR head.
+  #
+  # Every job runs on GitHub-hosted `ubuntu-latest`: wurk is public, so hosted
+  # minutes are free, and no self-hosted machine ever runs fork-PR code.
   detect:
     name: detect changed paths
-    runs-on: ${{ github.event.pull_request.head.repo.fork && 'ubuntu-latest' || vars.WURK_CI_RUNNER || 'ubuntu-latest' }}
+    runs-on: ubuntu-latest
     timeout-minutes: 5
     outputs:
       ruby: ${{ steps.filter.outputs.ruby }}
@@ -42,20 +40,37 @@ jobs:
       python: ${{ steps.filter.outputs.python }}
       specdocs: ${{ steps.filter.outputs.specdocs }}
       workflows: ${{ steps.filter.outputs.workflows }}
+      # `true` only on a push whose tree a green PR run already covered
+      # (bin/ci-dup-push); every gated job then skips instead of re-running it.
+      dup: ${{ steps.dup.outputs.dup }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
+      - name: duplicate of an already-green PR head (dup)
+        id: dup
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          dup="$(bin/ci-dup-push)"
+          [ "$dup" = "true" ] || dup=false
+          echo "dup=$dup" >> "$GITHUB_OUTPUT"
       - uses: dorny/paths-filter@ceb8a2b8f2d89434be7ff52d3de7ec3738c5cc9d # v4.0.3
         id: filter
         with:
           filters: |
             ruby:
-              # docs/wiki/** is source for the public wiki and its only gate is
-              # test/unit/wiki_pages_test.rb, inside this suite. Without it here
-              # a wiki-only PR skips the Ruby job and reports green having never
-              # run the guard — and merging goes on to publish the page.
-              - 'docs/wiki/**'
+              # Everything the Ruby suite or rubocop READS, not just what it
+              # loads. The doc-guard tests (readme/claude_md/llms_txt claims,
+              # contributing line refs, docs links, wiki pages, site code
+              # blocks, spec docs) read README.md, CLAUDE.md, CONTRIBUTING.md,
+              # CHANGELOG.md, docs/**, bench/** and test/ecosystem/*/PIN; a path
+              # missing here lets a PR that breaks one of those guards report
+              # green without running it (and docs/wiki/** is then published).
+              # `*.md` is root-level markdown only.
+              - '*.md'
+              - 'docs/**'
+              - 'bench/**'
               - 'lib/**'
               - 'app/**'
               - 'exe/**'
@@ -64,9 +79,13 @@ jobs:
               - 'tasks/**'
               - 'config/**'
               - 'frontend/**'
-              # Gemfile.lock is deliberately absent from the filter — it is gitignored
-              # (.gitignore:5) and can never appear in a diff; `Gemfile` and the gemspec are
-              # what actually move dependencies.
+              # The sidekiq shim gem: linted by rubocop, run by the ecosystem lane.
+              - 'ecosystem/**'
+              # Rubocop's own config moves the lint verdict without touching Ruby.
+              - '.rubocop.yml'
+              # Gemfile.lock is deliberately absent from the filter — it is
+              # gitignored and can never appear in a diff; `Gemfile` and the
+              # gemspec are what actually move dependencies.
               - 'Gemfile'
               - 'Rakefile'
               - '*.gemspec'
@@ -82,7 +101,6 @@ jobs:
               - '.github/workflows/test.yml'
             workflows:
               - '.github/workflows/**'
-              - '.github/actionlint.yaml'
 
   # ONE full run of the Ruby suite, on the newest Ruby and the newest Rails,
   # with the coverage gate folded into it.
@@ -95,23 +113,18 @@ jobs:
   # Rails; the floor in the gemspec (>= 3.2) is held by rubocop's
   # `TargetRubyVersion: 3.2`, which rejects syntax and APIs newer than it.
   #
-  # Stays 4 vCPU: the suite forks 4 parallel workers (test_helper's NCPU
-  # default, which is deliberately below core count — its integration layer
-  # boots real swarms, so one worker per core oversubscribes and turns
-  # wall-clock pressure into red builds). A bigger box would idle.
+  # Workers: test_helper's Wurk::Test::DEFAULT_NCPU (half the cores, 1..4), so
+  # 2 on ubuntu-latest's 4 vCPU. NCPU overrides it.
   test:
     name: test + coverage (latest ruby/rails)
     needs: detect
-    runs-on: ${{ github.event.pull_request.head.repo.fork && 'ubuntu-latest' || vars.WURK_CI_RUNNER || 'ubuntu-latest' }}
+    runs-on: ubuntu-latest
     timeout-minutes: 25
     services:
       redis:
         image: redis:7.4
-        # Container port only: Docker binds a free HOST port and the job reads
-        # it back below. A hosted runner owns its VM, so 6379 is always free
-        # there; several self-hosted runners sharing one Docker daemon make the
-        # second concurrent job die on `port is already allocated`, which
-        # surfaces as flaky CI rather than as an obvious misconfiguration.
+        # Container port only: Docker binds a free host port and the
+        # `resolve redis port` step reads it back, so nothing assumes 6379.
         ports: ["6379"]
         options: >-
           --health-cmd "redis-cli ping"
@@ -124,13 +137,17 @@ jobs:
       RUBY_VERSION: "4.0"
       RAILS_VERSION: "8.1"
       COVERAGE: "1"
-      # Gated per STEP, not per job, so this job always reports a status even on
-      # a docs-only PR: a job-level `if:` reports "skipped", and anything that
-      # later marks this check required would park such a PR on "Expected —
-      # waiting for status" forever. On an irrelevant change it just does nothing.
-      RUN: ${{ github.event_name != 'pull_request' || needs.detect.outputs.ruby == 'true' }}
+      # Gated per STEP, not per job (#469). A job-level `if:` that evaluates
+      # false reports the check as "skipped", and GitHub counts a skipped
+      # required check as SATISFIED — so a PR outside the filter would merge
+      # with the gate never having run. Per-step gating makes the job run and
+      # report a real success; on an irrelevant change it just does nothing.
+      # Every path-gated job in this file (parity, spec-docs, actionlint, lint,
+      # frontend, python-client) uses this same RUN pattern; keep it that way.
+      RUN: ${{ needs.detect.outputs.dup != 'true' && (github.event_name != 'pull_request' || needs.detect.outputs.ruby == 'true') }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        if: env.RUN == 'true'
         with:
           persist-credentials: false
       # Must be a STEP: the `job` context is available in
@@ -148,7 +165,7 @@ jobs:
       - uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2
         if: env.RUN == 'true'
         with:
-          bun-version: "1.4.0"
+          bun-version: "1.4.2"
       # Pin Node too. Bun runs the scripts, but vitest executes test files in
       # Node worker threads and Vite's toolchain resolves against Node — so an
       # unpinned Node is a silent, moving dependency of every frontend run. It
@@ -199,20 +216,22 @@ jobs:
           name: coverage
           path: coverage/coverage.xml
           if-no-files-found: warn
+          # For per-file inspection of a recent run, not an archive.
+          retention-days: 7
 
   python-client:
     name: python-client (${{ matrix.python-version }})
     needs: detect
-    runs-on: >-
-      ${{ github.event.pull_request.head.repo.fork && 'ubuntu-latest' || vars.WURK_CI_RUNNER || 'ubuntu-latest' }}
+    runs-on: ubuntu-latest
     timeout-minutes: 5
     strategy:
       matrix:
         python-version: ["3.9", "3.13"]
     env:
-      RUN: ${{ github.event_name != 'pull_request' || needs.detect.outputs.python == 'true' }}
+      RUN: ${{ needs.detect.outputs.dup != 'true' && (github.event_name != 'pull_request' || needs.detect.outputs.python == 'true') }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        if: env.RUN == 'true'
         with:
           persist-credentials: false
       - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
@@ -230,13 +249,11 @@ jobs:
   # behaviour, pinned to the upstream revision in test/parity/.sidekiq_sha.
   # Its own dedicated job so a parity divergence is legible at a glance rather
   # than buried in the main suite's output. Needs neither the dashboard bundle
-  # nor a Node toolchain, which is why it stays a 4vcpu job that finishes in
-  # well under a minute.
+  # nor a Node toolchain, so it finishes in well under a minute.
   parity:
     name: parity (oracle)
     needs: detect
-    if: github.event_name != 'pull_request' || needs.detect.outputs.ruby == 'true'
-    runs-on: ${{ github.event.pull_request.head.repo.fork && 'ubuntu-latest' || vars.WURK_CI_RUNNER || 'ubuntu-latest' }}
+    runs-on: ubuntu-latest
     timeout-minutes: 25
     services:
       redis:
@@ -251,20 +268,26 @@ jobs:
     env:
       BUNDLE_GEMFILE: ${{ github.workspace }}/Gemfile
       RAILS_VERSION: "8.1"
+      # Per-step gate — see the `test` job (#469).
+      RUN: ${{ needs.detect.outputs.dup != 'true' && (github.event_name != 'pull_request' || needs.detect.outputs.ruby == 'true') }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        if: env.RUN == 'true'
         with:
           persist-credentials: false
       # STEP, not job-level `env:` — see the `test` job above.
       - name: resolve redis port
+        if: env.RUN == 'true'
         run: echo "REDIS_URL=redis://localhost:${{ job.services.redis.ports['6379'] }}/0" >> "$GITHUB_ENV"
       - uses: ruby/setup-ruby@14594264cd68ce8a2345dd349bc3d138a4ef85c8 # v1
+        if: env.RUN == 'true'
         with:
           ruby-version: "4.0"
           bundler-cache: true
           # Same key the `test` job populates, so this job installs from cache.
-          cache-version: rails-8.1
+          cache-version: rails-${{ env.RAILS_VERSION }}
       - name: rake test:parity
+        if: env.RUN == 'true'
         run: bundle exec rake test:parity
 
   # Guard against deleted/truncated spec docs (the authoritative oracles for
@@ -272,14 +295,20 @@ jobs:
   spec-docs:
     name: spec docs (exist + non-empty)
     needs: detect
-    if: github.event_name != 'pull_request' || needs.detect.outputs.specdocs == 'true'
     runs-on: ubuntu-latest
-    timeout-minutes: 1
+    timeout-minutes: 2
+    env:
+      # Per-step gate — see the `test` job (#469).
+      RUN: ${{ needs.detect.outputs.dup != 'true' && (github.event_name != 'pull_request' || needs.detect.outputs.specdocs == 'true') }}
     steps:
+      # Sparse: this job reads three files, not the repo.
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        if: env.RUN == 'true'
         with:
           persist-credentials: false
+          sparse-checkout: docs/target
       - name: check spec docs
+        if: env.RUN == 'true'
         run: |
           for file in docs/target/sidekiq-free.md docs/target/sidekiq-pro.md docs/target/sidekiq-ent.md; do
             if [ ! -f "$file" ]; then
@@ -299,7 +328,7 @@ jobs:
   # actionlint does NOT embed shellcheck: it shells out to the external
   # `shellcheck` executable for `run:` blocks. ubuntu-latest preinstalls it,
   # and the `run actionlint` step below refuses to run without it.
-  # Not wired into the ruleset's required checks in this PR.
+  # Not (yet) one of the ruleset's required checks.
   actionlint:
     name: actionlint (workflow lint)
     needs: detect
@@ -308,7 +337,7 @@ jobs:
     env:
       # Per-step gate so this job always reports a status even on a PR whose
       # diff doesn't touch a workflow (see `test` job for the same pattern).
-      RUN: ${{ github.event_name != 'pull_request' || needs.detect.outputs.workflows == 'true' }}
+      RUN: ${{ needs.detect.outputs.dup != 'true' && (github.event_name != 'pull_request' || needs.detect.outputs.workflows == 'true') }}
       # Triple pin: release version, download-script commit SHA, and the
       # linux/amd64 binary's own SHA256. A silent upstream rewrite, a script
       # change, or a tag repoint cannot reach main unobserved.
@@ -317,6 +346,7 @@ jobs:
       ACTIONLINT_BINARY_SHA256: "c872d6db8c6bf83a8eaa704fc93999f027d55dffbc63b8a6abdccb47df5f4cd4"
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        if: env.RUN == 'true'
         with:
           persist-credentials: false
       - name: download actionlint
@@ -353,17 +383,18 @@ jobs:
   lint:
     name: lint (rubocop)
     needs: detect
-    if: github.event_name != 'pull_request' || needs.detect.outputs.ruby == 'true'
-    runs-on: ${{ github.event.pull_request.head.repo.fork && 'ubuntu-latest' || vars.WURK_CI_RUNNER || 'ubuntu-latest' }}
+    runs-on: ubuntu-latest
     timeout-minutes: 10
-    concurrency:
-      group: ${{ github.workflow }}-${{ github.ref }}:lint
-      cancel-in-progress: true
+    env:
+      # Per-step gate — see the `test` job (#469).
+      RUN: ${{ needs.detect.outputs.dup != 'true' && (github.event_name != 'pull_request' || needs.detect.outputs.ruby == 'true') }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        if: env.RUN == 'true'
         with:
           persist-credentials: false
       - uses: ruby/setup-ruby@14594264cd68ce8a2345dd349bc3d138a4ef85c8 # v1
+        if: env.RUN == 'true'
         with:
           ruby-version: "4.0"
           bundler-cache: true
@@ -373,6 +404,7 @@ jobs:
       # Best-effort: actions/cache warns and continues on a miss, so this step
       # can never fail lint.
       - name: cache rubocop results
+        if: env.RUN == 'true'
         uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
           path: ~/.cache/rubocop_cache
@@ -381,6 +413,7 @@ jobs:
             ${{ runner.os }}-rubocop-${{ hashFiles('.rubocop.yml', 'Gemfile') }}-
             ${{ runner.os }}-rubocop-
       - name: rubocop
+        if: env.RUN == 'true'
         run: bundle exec rubocop --parallel
 
   # The `test` job only *builds* the SPA (tsc + vite) via `rake frontend:build`;
@@ -391,19 +424,24 @@ jobs:
   frontend:
     name: frontend (vitest)
     needs: detect
-    if: github.event_name != 'pull_request' || needs.detect.outputs.frontend == 'true'
-    runs-on: ${{ github.event.pull_request.head.repo.fork && 'ubuntu-latest' || vars.WURK_CI_RUNNER || 'ubuntu-latest' }}
+    runs-on: ubuntu-latest
     timeout-minutes: 25
+    env:
+      # Per-step gate — see the `test` job (#469).
+      RUN: ${{ needs.detect.outputs.dup != 'true' && (github.event_name != 'pull_request' || needs.detect.outputs.frontend == 'true') }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        if: env.RUN == 'true'
         with:
           persist-credentials: false
       - uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2
+        if: env.RUN == 'true'
         with:
-          bun-version: "1.4.0"
+          bun-version: "1.4.2"
       # See the `test` job for why Node is pinned alongside Bun. This is the
       # job that actually runs vitest, so it is the one the pin exists for.
       - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        if: env.RUN == 'true'
         with:
           node-version: "24"
       # Cache Bun's global download cache so `bun install --frozen-lockfile`
@@ -414,6 +452,7 @@ jobs:
       # lockfile; the shared key is intentional so the `test` job and the
       # `frontend` job reuse one cache.
       - name: cache bun install cache
+        if: env.RUN == 'true'
         uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
           path: ~/.bun/install/cache
@@ -421,9 +460,11 @@ jobs:
           restore-keys: |
             ${{ runner.os }}-bun-
       - name: install dashboard deps
+        if: env.RUN == 'true'
         run: bun install --frozen-lockfile
         working-directory: frontend
       - name: typecheck
+        if: env.RUN == 'true'
         run: bun run typecheck
         working-directory: frontend
       # oxlint, not eslint: typescript-eslint peer-depends on
@@ -433,8 +474,10 @@ jobs:
       # has no `typescript` peer at all. `--deny-warnings` is what makes it a
       # gate rather than a report; enabled rules live in frontend/.oxlintrc.json.
       - name: lint
+        if: env.RUN == 'true'
         run: bun run lint
         working-directory: frontend
       - name: vitest
+        if: env.RUN == 'true'
         run: bun run test
         working-directory: frontend

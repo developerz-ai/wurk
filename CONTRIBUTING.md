@@ -106,22 +106,24 @@ The individual tasks, when you want one:
 
 ### Worker count
 
-The suite forks 4 parallel workers, each on its own Redis logical DB. That is
-deliberately below most machines' core count: the integration layer boots real
+The suite forks half the machine's cores as parallel workers — floored at 1,
+capped at 4 (`Wurk::Test::DEFAULT_NCPU` in `test/test_helper.rb`) — each on its
+own Redis logical DB. That is deliberately below the core count: the integration layer boots real
 swarms (4 children × 5 threads apiece), so one worker per core oversubscribes and
 starts failing on wall clock rather than on assertions. `NCPU=<n>` raises it if
 your machine has headroom (ceiling 14, the number of isolated DBs); `NCPU=1` is
 how to chase an ordering flake.
 
-**Lower it on a machine that is doing something else.** The default is below core
-count for a machine this suite has to itself, and a 4-core host that is also
-running other work is not that machine: four workers there is one per core before
-the competition, and the suite starts reporting the host's load as red tests. The
+**Lower it on a machine that is doing something else.** The default is sized for
+a machine this suite has to itself, and a host that is also running other work is
+not that machine: the cores the default leaves free are already taken, and the
+suite starts reporting the host's load as red tests. The
 measured case is the platform's coding boxes — 4 cores at 1.80 GHz, several agent
 sessions at once, this suite taking 366-734s against 209s on a quiet machine, and
 a baseline on the unmodified checkout going red while CI on the same SHA was green
-(developerz-ai/developerz.ai#4386). `NCPU=2` is the lever there, and it belongs in
-that host's environment rather than in this repo, which cannot see it.
+(developerz-ai/developerz.ai#4386, measured at the old flat 4 workers). The default
+now resolves to 2 there; `NCPU=1` lowers it further, and that belongs in the host's
+environment rather than in this repo, which cannot see it.
 
 The engine tests render the dashboard shell, which needs the precompiled SPA.
 That bundle is built rather than committed, so a fresh clone has none — the

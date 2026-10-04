@@ -38,9 +38,11 @@ COPY . /wurk
 COPY --from=spa /src/vendor/assets/dashboard /wurk/vendor/assets/dashboard
 
 # Install the demo app's bundle, prepare its DB, then hand the tree to the
-# non-root runtime user.
+# non-root runtime user. Frozen: install exactly demo/Gemfile.lock (locked with
+# this image's Bundler) or fail — never re-resolve at build time. A version bump
+# needs `rake release:relock_demo` first; release:check refuses a stale lock.
 WORKDIR /wurk/demo
-RUN bundle install --jobs 4 --retry 3 && \
+RUN BUNDLE_FROZEN=1 bundle install --jobs 4 --retry 3 && \
     SECRET_KEY_BASE=build bin/rails db:prepare && \
     chown -R wurk:wurk /wurk
 

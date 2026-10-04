@@ -92,7 +92,7 @@ module Wurk
         # named limiter while keeping its metadata + LIST membership so the
         # row remains in the UI. Mirrors the §1.5 `#reset` surface — the
         # name is wire-compat, so the trailing-? rule doesn't apply here.
-        def reset(name) # rubocop:disable Naming/PredicateMethod
+        def reset(name)
           limiter = rebuild(name)
           # Reconstruct the limiter and delegate: only the type itself knows
           # its state keys. A bucket's counter lives at `lmtr-b:<name>:<epoch>`,

@@ -10,9 +10,9 @@ Reasons:
 
 ## Parallel execution (multi-CPU)
 
-Minitest's parallel executor forks `NCPU` workers, which `test_helper` defaults to 4 — deliberately below core count, because the integration layer boots real swarms and one worker per core oversubscribes into wall-clock failures. `NCPU` is the knob for a box with headroom. Each test class opts in via `parallelize_me!`. Per-test Redis namespace isolation prevents cross-test interference — each test gets a unique key prefix tied to PID plus object id, cleaned up in teardown.
+Minitest's parallel executor forks `NCPU` workers, which `test_helper` defaults to half the cores, floored at 1 and capped at 4 (`Wurk::Test::DEFAULT_NCPU`) — deliberately below core count, because the integration layer boots real swarms and one worker per core oversubscribes into wall-clock failures. `NCPU` is the knob for a box with headroom. Each test class opts in via `parallelize_me!`. Per-worker Redis DB isolation prevents cross-test interference — each worker owns a logical DB and `teardown` runs `FLUSHDB`.
 
-Tests that exercise the swarm itself fork real processes and need a Redis DB per worker. CI runs one Redis service container and hands each worker its own logical DB (1-15, never DB 0), assigned in `test_helper`'s `after_parallel_fork` hook — which is also why `NCPU` is capped at 15.
+Tests that exercise the swarm itself fork real processes and need a Redis DB per worker. CI runs one Redis service container and hands each worker its own logical DB (1-14, with 15 reserved for fixed-DB tests; never DB 0), assigned in `test_helper`'s `after_parallel_fork` hook — which is also why `NCPU` is capped at 14.
 
 ## Test layers
 
@@ -31,11 +31,11 @@ The parity oracles under `test/parity/` are independently written against the do
 
 ## Ecosystem gem tests
 
-A dedicated CI job runs the test suites of widely-used Sidekiq ecosystem gems (sidekiq-cron, sidekiq-unique-jobs, sidekiq-scheduler, etc.) against Wurk. See `14-ecosystem-compat.md`. These are the strongest possible drop-in proof.
+A dedicated CI job runs the test suites of widely-used Sidekiq ecosystem gems against Wurk. Today that is sidekiq-cron only; the other targets (sidekiq-unique-jobs, sidekiq-scheduler, …) and their blockers are in `14-ecosystem-compat.md`. These are the strongest possible drop-in proof.
 
 ## CI: GitHub Actions
 
-Runner selection is a repository variable, not a hard-coded label: `vars.WURK_CI_RUNNER` for the detect, test, parity, lint, frontend, and ecosystem jobs, `vars.WURK_BENCH_RUNNER` for the benchmark job. Both fall through to stock `ubuntu-latest` when unset, and fork PRs are pinned to `ubuntu-latest` unconditionally. Release, deploy-demo, pages, and dependabot workflows stay on `ubuntu-latest` by design (credential containment), as does test.yml's `spec-docs` job, which needs neither Ruby nor Redis. The headline suites:
+Every job runs on GitHub-hosted `ubuntu-latest` (free for a public repo). There are no self-hosted runners and no runner variables, so a fork PR never reaches persistent hardware; outside contributors' runs still wait on the repo's approval policy. In test.yml and ecosystem.yml the `detect` job runs `bin/ci-dup-push`: a push to `main` whose tree byte-equals a PR head that already passed the workflow skips the gated jobs, and any doubt falls open to a full run. PR runs cancel in progress; `main` runs never do. The headline suites:
 
 - Test suite (one full run on the newest Ruby + newest Rails, coverage gate folded in — no version matrix)
 - Ecosystem compat suite
@@ -51,7 +51,7 @@ The test workflow's suite job:
 - Runs the dummy app setup.
 - Runs the full Minitest suite in parallel mode, with the coverage gate folded into the same invocation (`COVERAGE=1`).
 
-The benchmark job runs wherever `vars.WURK_BENCH_RUNNER` points and publishes the delta vs the PR's base to the job summary and a sticky PR comment, on PRs that touch a bench input (`lib/`, `exe/`, `bench/`, `bin/bench-compare`, the Rakefile, Gemfile/gemspec, or the workflow itself). Regressions greater than 5% flag the PR.
+The benchmark job runs on `ubuntu-latest` and publishes the delta vs the PR's base to the job summary and a sticky PR comment, on PRs that touch a bench input (`lib/`, `exe/`, `bench/`, `bin/bench-compare`, the Rakefile, Gemfile/gemspec, or the workflow itself). Regressions past the threshold flag the PR in that comment; bench is not a required check, and hosted-runner noise is why.
 
 ## Coverage
 

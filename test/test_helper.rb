@@ -188,6 +188,7 @@ require_relative 'support/redis_namespace'
 require_relative 'support/swarm_teardown'
 require_relative 'support/command_spy'
 require_relative 'support/recording_pool'
+require_relative 'support/thread_leak_guard'
 
 module Wurk
   module Test
