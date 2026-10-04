@@ -29,7 +29,7 @@ module Wurk
     # `max_jobs:` / `timeout:` override the global config for this call.
     # Lets parallel tests run trim with isolated limits without mutating
     # `Wurk.configuration` (which is process-global and races across threads).
-    def trim(max_jobs: nil, timeout: nil) # rubocop:disable Naming/PredicateMethod
+    def trim(max_jobs: nil, timeout: nil)
       config = Wurk.configuration
       max_jobs ||= config[:dead_max_jobs] || 10_000
       timeout ||= config[:dead_timeout_in_seconds] || (180 * 24 * 60 * 60)
@@ -65,7 +65,7 @@ module Wurk
     # synthesized RuntimeError when callers don't have one) — death handlers
     # receive `(job, ex)`. `max_jobs:` / `timeout:` propagate to the auto-trim;
     # see `#trim` for the rationale.
-    def kill(message, opts = {}) # rubocop:disable Naming/PredicateMethod
+    def kill(message, opts = {})
       notify = opts.fetch(:notify_failure, true)
       do_trim = opts.fetch(:trim, true)
       ex = opts[:ex] || RuntimeError.new(API_KILL_MESSAGE).tap { |e| e.set_backtrace(caller) }

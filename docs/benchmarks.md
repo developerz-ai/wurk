@@ -6,7 +6,7 @@ Two different benchmark suites live in `bench/`. They answer different questions
 
 | Suite | Question | Command | Gates merges |
 |---|---|---|---|
-| `bench/*.rb` | Did *this PR* slow wurk down vs `main`? | `rake bench` | Yes — [`.github/workflows/bench.yml`](../.github/workflows/bench.yml), >5% regression blocks |
+| `bench/*.rb` | Did *this PR* slow wurk down vs `main`? | `rake bench` | Flags only — [`.github/workflows/bench.yml`](../.github/workflows/bench.yml) comments a >5% regression on the PR; not a required check |
 | `bench/vs_sidekiq.rb` | Is wurk faster than *stock Sidekiq*? | `rake bench:vs_sidekiq` | No |
 
 The regression gate can be fully green while wurk is slower than Sidekiq. It measures wurk against its own past self. Do not read `rake bench` as a competitive result.
@@ -220,7 +220,7 @@ child worker's environment (`bench/vs_sidekiq/child_env.rb`) — read by
 
 ### The regression benches
 
-`bin/rake bench` runs the harnesses the merge gate reads. Each takes its size
+`bin/rake bench` runs the harnesses the regression check reads. Each takes its size
 from the environment, so a slow laptop can shrink a run without editing the
 harness:
 

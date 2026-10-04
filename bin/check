@@ -10,7 +10,7 @@
 # PR will get.
 #
 # Env knobs:
-#   NCPU=<n>   parallel test workers (default 4, ceiling 14 — CONTRIBUTING.md "Worker count")
+#   NCPU=<n>   parallel test workers (default half the cores, 1..4; ceiling 14 — test_helper.rb)
 #   SKIP_LINT=1 / SKIP_PARITY=1 / SKIP_FRONTEND=1   drop a stage
 set -euo pipefail
 
@@ -73,7 +73,7 @@ fi
 # the change". It did not. Same laundering as the two guards either side of this
 # one, one layer further in.
 #
-# `bundle check` is the probe `bin/setup:18` already trusts for this exact
+# `bundle check` is the probe `bin/setup` already trusts for this exact
 # question (`bundle check >/dev/null 2>&1 || bundle install`), so this adds no
 # new technique and no new dependency — it asks the question the setup script
 # asks, at the moment the gate needs the answer.
@@ -167,7 +167,7 @@ fi
 
 # The reference Python client. Two separate questions, and only one of them
 # needs pip: the tests import the client from `clients/python/src` via
-# `sys.path` (tests/test_client.py:15), so they run against a bare python3 with
+# `sys.path` (tests/test_client.py), so they run against a bare python3 with
 # nothing installed. Run them first and unconditionally — that is the
 # regression gate.
 #

@@ -44,6 +44,24 @@ mappings, and a one-page cutover.
 bundle install
 ```
 
+> ⚠️ **Do you depend on any `sidekiq-*` add-on gem?** Almost every one (sidekiq-cron,
+> sidekiq-unique-jobs, sidekiq-status, …) declares `add_dependency "sidekiq"`, so
+> `bundle install` quietly pulls **real Sidekiq back in** next to Wurk and
+> `require "sidekiq"` loads a broken hybrid of the two. Either drop the add-on for
+> Wurk's native equivalent ([§6](#6-third-party-gem-mappings)), or satisfy the
+> dependency with Wurk's `sidekiq` shim gem — a git-only gem, never published to
+> rubygems.org:
+>
+> ```ruby
+> gem "wurk"
+> gem "sidekiq", github: "developerz-ai/wurk", glob: "ecosystem/sidekiq-shim/*.gemspec"
+> gem "sidekiq-cron"   # any add-on you keep
+> ```
+>
+> Check with `bundle info sidekiq`: its path must point into the wurk git
+> checkout (`ecosystem/sidekiq-shim`), not a released `sidekiq-x.y.z` gem. Details:
+> [`ecosystem/sidekiq-shim/README.md`](../ecosystem/sidekiq-shim/README.md).
+
 That's it for code. Every public `Sidekiq::*` name resolves to its Wurk
 implementation (`Sidekiq::Worker`, `Sidekiq::Job`, `Sidekiq::Batch`,
 `Sidekiq::Limiter`, `Sidekiq.configure_server`, `Sidekiq::Client`, …), so your jobs,
@@ -342,7 +360,7 @@ Define jobs exactly as before — `include Sidekiq::Job` (or `Sidekiq::Worker`) 
 | `pool:` | ✅ | selects the client Redis pool; stripped from the stored payload |
 | `track:` (`true` / `false`) | ➕ Wurk extra | opt into `Wurk::Status` — a `status:<jid>` row carrying state, progress, timings, result and error. Default `false`: a class that doesn't opt in writes nothing and costs nothing. Lifetime via `status_ttl` / `status_retention`. A worker that also sets `encrypt: true` records everything but the result — see [encryption](encryption.md#interactions) |
 | `collapse:` (`{ policy: :debounce, wait:, max_wait: }` / `{ policy: :throttle, slot: }`) | ➕ Wurk extra | collapse repeat enqueues of one identity: **debounce** keeps the *last* payload and fires after `wait` seconds of quiet (capped at `max_wait` from the first enqueue), **throttle** admits one per epoch-aligned `slot` and drops the rest. `perform_async` returns `nil` for every debounced push and for a dropped throttled one; an admitted throttled push returns its jid as usual. The policy is stripped from the stored payload, so a promoted or retried job is enqueued rather than judged a second time. Mutually exclusive with `unique_for:`, rejected at class definition; not available on `perform_bulk` |
-| `lock:` | ⚠️ not native | Wurk's native uniqueness uses `unique_for:` / `unique_until:` (see [§6](#6-third-party-gem-mappings)). The `sidekiq-unique-jobs` gem and its `lock:` option also run against Wurk in the ecosystem CI suite |
+| `lock:` | ⚠️ not native | Wurk's native uniqueness uses `unique_for:` / `unique_until:` (see [§6](#6-third-party-gem-mappings)). The `sidekiq-unique-jobs` gem (and its `lock:` option) is **not tested** against Wurk yet — tracked in [`docs/idea/14-ecosystem-compat.md`](idea/14-ecosystem-compat.md) |
 
 Custom retry hooks are unchanged: `sidekiq_retry_in { |count, ex, msg| … }` and
 `sidekiq_retries_exhausted { |msg, ex| … }`. The retry backoff formula matches
@@ -365,9 +383,16 @@ Sidekiq: `count**4 + 15 + rand(10 * (count + 1))` seconds.
 ## 6. Third-party gem mappings
 
 Wurk ships native replacements for the most common add-on gems, so you can **drop the
-gem** and use the built-in feature — or keep the gem, since its upstream test suite is
-run against Wurk in the [`ecosystem` CI job](../.github/workflows/ecosystem.yml). The
-native path is recommended (fewer dependencies, first-class dashboard support).
+gem** and use the built-in feature. The native path is recommended: fewer
+dependencies, first-class dashboard support, and it is what Wurk's own suite tests.
+
+Keeping an add-on gem instead needs the `sidekiq` shim gem (see the warning under
+[TL;DR](#tldr--flip-the-switch)). Only one add-on has its upstream suite run against
+Wurk on every PR: **`sidekiq-cron`**, in the
+[`ecosystem` CI job](../.github/workflows/ecosystem.yml) (harness in
+[`test/ecosystem/`](../test/ecosystem/README.md)). Every other add-on below is
+**untested** on Wurk — the pins researched and the known blockers are tracked in
+[`docs/idea/14-ecosystem-compat.md`](idea/14-ecosystem-compat.md).
 
 ### `sidekiq-cron` → native periodic jobs
 
@@ -419,10 +444,10 @@ Mapping from `sidekiq-unique-jobs`:
 
 ### `sentry-sidekiq` → native `Wurk::Sentry`
 
-`sentry-sidekiq` is the one common add-on that **cannot be installed alongside
-Wurk at all**: its gemspec declares `add_dependency "sidekiq"`, so `bundle
-install` pulls real Sidekiq back in and `require "sidekiq"` loads a hybrid of
-the two. Use the built-in integration instead — no extra gem:
+`sentry-sidekiq` declares `add_dependency "sidekiq"`, so without the shim gem
+`bundle install` pulls real Sidekiq back in and `require "sidekiq"` loads a hybrid
+of the two — and even with the shim its error reporting is wrong on Wurk (see
+[docs/sentry.md](sentry.md)). Use the built-in integration instead — no extra gem:
 
 ```ruby
 # Gemfile: keep sentry-ruby, drop sentry-sidekiq
@@ -449,18 +474,19 @@ loop. Full setup, options, and a `sentry-sidekiq` migration table:
 
 ### Quick reference — other ecosystem gems
 
-These run their own upstream suites against Wurk in CI; most work unchanged because
-they only touch the Sidekiq API surface and Redis keys Wurk already mirrors.
+Keeping any of these requires the [`sidekiq` shim gem](../ecosystem/sidekiq-shim/README.md).
+"Untested" means exactly that: nobody has run the gem's suite against Wurk, so treat it
+as unknown and verify it in staging before production.
 
 | Gem | Status on Wurk | Notes |
 |---|---|---|
-| `sidekiq-scheduler` | ✅ works unchanged | uses the standard schedule ZSET |
-| `sidekiq-status` | ✅ works unchanged | rides the standard job lifecycle + middleware. Coexists with Wurk's native `track:` — the gem keeps `Sidekiq::Status` and its `sidekiq:status:<jid>` rows, Wurk uses `Wurk::Status` and `status:<jid>`, and neither reads the other |
-| `sidekiq-failures` | ✅ works unchanged | reads the standard `retry`/`dead` sets |
-| `sidekiq-throttled` | ✅ works unchanged | client/server middleware contract is identical |
-| `sidekiq-cron` | ⚠️ prefer native | works in CI, but native `config.periodic` is recommended (no `Sidekiq::Cron::Job` constant) |
-| `sidekiq-unique-jobs` | ⚠️ prefer native | works in CI, but native `unique_for:` is recommended |
-| `sentry-sidekiq` | ❌ incompatible | its gemspec depends on `sidekiq`, so bundling it reinstalls real Sidekiq. Use [`Wurk::Sentry`](sentry.md) |
+| `sidekiq-cron` | ✅ upstream suite runs on every PR · ⚠️ prefer native | pinned in `test/ecosystem/sidekiq-cron/PIN`; native `config.periodic` is still recommended (no `Sidekiq::Cron::Job` constant) |
+| `sidekiq-unique-jobs` | ❓ untested · prefer native | native `unique_for:` is the supported path; harness tracked in `docs/idea/14-ecosystem-compat.md` |
+| `sidekiq-status` | ❓ untested · known blocker | its web extension mutates `Sidekiq::WebHelpers`, which Wurk's SPA dashboard does not expose (see `docs/idea/14-ecosystem-compat.md`). Wurk's native `track:` (`Wurk::Status`, `status:<jid>`) is the supported path; the two use different keys and never read each other |
+| `sidekiq-scheduler` | ❓ untested | prefer native `config.periodic` |
+| `sidekiq-failures` | ❓ untested | the dashboard already shows the standard `retry`/`dead` sets |
+| `sidekiq-throttled` | ❓ untested | it patches Sidekiq's fetch classes to requeue throttled jobs, and Wurk's reliable fetcher is not one of them; prefer native [rate limiting](rate-limiting.md) |
+| `sentry-sidekiq` | ❌ don't | reports the wrong errors on Wurk even with the shim. Use [`Wurk::Sentry`](sentry.md) |
 
 ---
 

@@ -146,7 +146,7 @@ class ReaperKill9Test < Wurk::Test::UnitCase
     nil
   end
 
-  def wait_for_drain # rubocop:disable Naming/PredicateMethod
+  def wait_for_drain
     deadline = monotonic_now + DRAIN_TIMEOUT
     while monotonic_now < deadline
       return true if done_count >= JOB_COUNT

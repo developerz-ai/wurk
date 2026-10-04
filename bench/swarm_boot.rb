@@ -51,7 +51,7 @@ end
 observer = RedisClient.config(url: REDIS_URL).new_client
 topology = Wurk::Topology.flat(count: CHILDREN, queues: %w[default], concurrency: 1)
 
-def wait_for_boot(observer, count) # rubocop:disable Naming/PredicateMethod
+def wait_for_boot(observer, count)
   deadline = monotonic + BOOT_TIMEOUT
   while monotonic < deadline
     return true if observer.call('LLEN', BOOT_MARKER).to_i >= count

@@ -598,7 +598,7 @@ class SwarmSupervisionTest < Wurk::Test::UnitCase
     nil
   end
 
-  def wait_until_dead(pid, timeout) # rubocop:disable Naming/PredicateMethod
+  def wait_until_dead(pid, timeout)
     deadline = monotonic_now + timeout
     while monotonic_now < deadline
       return true unless pid_alive?(pid)

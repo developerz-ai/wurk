@@ -9,6 +9,14 @@ require 'rubygems/package'
 module ReleaseHelpers
   module_function
 
+  CI_ONLY_MESSAGE = <<~MSG
+    ✗ Releases are not cut from a workstation.
+      A release IS merging a lib/wurk/version.rb bump (plus its CHANGELOG.md
+      section) to main: release.yml then gates, publishes the gem, and cuts the
+      tag + GitHub Release itself. The tag is an output, never an input.
+      See RELEASE.md ("Cutting a release").
+  MSG
+
   # Files the precompiled SPA must ship — consumers never run Node, so the gem is
   # broken without all three. Paths are relative to the gem root (as packaged).
   DASHBOARD_REQUIRED_FILES = [
@@ -50,6 +58,16 @@ module ReleaseHelpers
     abort "release:check ✗ tag #{tag} does not match Wurk::VERSION #{version} (expected v#{version})"
   end
 
+  # Second line behind release.yml's own main-only guard: a workflow_dispatch
+  # from a feature branch must never publish that branch's code as a gem. Keyed
+  # on GITHUB_REF, which Actions always sets; empty means a local run, where
+  # there is no publish to guard.
+  def ref_is_main!(ref = ENV.fetch('GITHUB_REF', ''))
+    return if ref.empty? || ref == 'refs/heads/main'
+
+    abort "release:check ✗ releases publish only from refs/heads/main (running on #{ref})"
+  end
+
   def changelog_has_version!(changelog, version)
     return if changelog.match?(/^## \[#{Regexp.escape(version)}\]/)
 
@@ -67,6 +85,18 @@ module ReleaseHelpers
     found = link ? "it reads #{link}" : 'there is no [Unreleased] reference line'
     abort "release:check ✗ CHANGELOG.md [Unreleased] link must compare from #{tag}...HEAD " \
           "(#{found})"
+  end
+
+  # demo/Gemfile.lock pins the path-sourced wurk at the version it was locked
+  # against; the Dockerfile installs it frozen, so a bump without a re-lock
+  # breaks the demo image build — after the gem is already live.
+  def demo_lock_matches_version!(lockfile, version)
+    locked = lockfile[/^PATH\n  remote: \.\.\n  specs:\n    wurk \(([^)]+)\)$/, 1]
+    return if locked == version
+
+    found = locked ? "it pins wurk #{locked}" : 'it has no path-sourced wurk entry'
+    abort "release:check ✗ demo/Gemfile.lock is stale for Wurk::VERSION #{version} (#{found}) — " \
+          'run `bundle exec rake release:relock_demo` and commit the lock'
   end
 
   # Read the packaged file list straight out of the built .gem (no install) and

@@ -75,7 +75,7 @@ class BatchNestedCallbacksTest < Wurk::Test::UnitCase
     super
   end
 
-  def test_parent_callbacks_wait_for_running_child_batch_under_real_forks # rubocop:disable Metrics/MethodLength
+  def test_parent_callbacks_wait_for_running_child_batch_under_real_forks
     parent, child = enqueue_nested_batches
     swarm = Wurk::Swarm.new(topology: topology, config: @config, shutdown_timeout: 5)
     supervisor = nil
@@ -159,7 +159,7 @@ class BatchNestedCallbacksTest < Wurk::Test::UnitCase
     @observer.call('HGET', "b-#{batch.bid}", field)
   end
 
-  def wait_until # rubocop:disable Naming/PredicateMethod
+  def wait_until
     deadline = monotonic_now + POLL_TIMEOUT
     until monotonic_now > deadline
       return true if yield

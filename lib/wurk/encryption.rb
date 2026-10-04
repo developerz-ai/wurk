@@ -89,7 +89,7 @@ module Wurk
       #
       # Idempotent: re-calling rebinds the resolver and rebuilds the cache.
       # Middleware is installed at most once per chain.
-      def enable(active_version:, &resolver) # rubocop:disable Naming/PredicateMethod
+      def enable(active_version:, &resolver)
         raise ArgumentError, 'active_version is required' unless active_version
         raise ArgumentError, 'block returning the key bytes is required' unless resolver
 

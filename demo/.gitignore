@@ -3,4 +3,6 @@
 /tmp/*
 /storage/*
 /.bundle
-Gemfile.lock
+# The repo root ignores Gemfile.lock (a gem doesn't commit one); the demo is an
+# app that ships as an image built with a frozen bundle, so its lock is tracked.
+!/Gemfile.lock

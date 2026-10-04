@@ -6,6 +6,18 @@ require_relative 'lib/wurk/version'
 require_relative 'tasks/release_helpers'
 
 GEM_ROOT = File.expand_path(__dir__)
+DEMO_DIR = File.join(GEM_ROOT, 'demo')
+
+# bundler/gem_tasks is kept for `build` / `install`, but its publishing tasks
+# would tag and push from a workstation — the exact bypass of the CI-only lane
+# that RELEASE.md exists to forbid (the tag is an output of release.yml, never
+# an input). Redefine them to refuse instead of deleting them, so muscle memory
+# gets a pointer rather than "Don't know how to build task".
+%w[release release:source_control_push release:rubygem_push].each do |name|
+  Rake::Task[name].clear
+  desc 'Refuses: releases are cut by CI when a lib/wurk/version.rb bump merges to main (see RELEASE.md)'
+  task(name) { abort ReleaseHelpers::CI_ONLY_MESSAGE }
+end
 FRONTEND_DIR = File.join(GEM_ROOT, 'frontend')
 VENDOR_ASSETS_DIR = File.join(GEM_ROOT, 'vendor', 'assets')
 DASHBOARD_BUNDLE_DIR = File.join(VENDOR_ASSETS_DIR, 'dashboard')
@@ -177,7 +189,7 @@ namespace :frontend do
     sh 'bun', 'install', '--frozen-lockfile', chdir: FRONTEND_DIR
     sh 'bun', 'run', 'build', chdir: FRONTEND_DIR
     # Vite's --emptyOutDir wipes the tracked .keep; restore it so the dir stays
-    # in git and `rake release`'s guard_clean sees a clean tree.
+    # in git and release:check's clean-tree check sees a clean tree.
     touch File.join(VENDOR_ASSETS_DIR, 'dashboard', '.keep')
   end
 
@@ -216,15 +228,18 @@ task test: 'frontend:ensure_build' # rubocop:disable Rake/Desc
 task 'test:engine' => 'frontend:ensure_build' # rubocop:disable Rake/Desc
 
 namespace :release do
-  desc 'Pre-release gate: tag matches version, bundle present, version matches CHANGELOG, clean tree, tests green'
+  desc 'Pre-release gate: on main (in CI), tag matches version, bundle present, ' \
+       'version matches CHANGELOG + demo lock, clean tree, tests green'
   task :check do
     version = Wurk::VERSION
     puts "release:check — Wurk #{version}"
+    ReleaseHelpers.ref_is_main!
     ReleaseHelpers.tag_matches_version!(version)
     ReleaseHelpers.dashboard_bundle_present!(DASHBOARD_BUNDLE_DIR)
     changelog = File.read(File.join(GEM_ROOT, 'CHANGELOG.md'))
     ReleaseHelpers.changelog_has_version!(changelog, version)
     ReleaseHelpers.changelog_unreleased_link_current!(changelog, version)
+    ReleaseHelpers.demo_lock_matches_version!(File.read(File.join(DEMO_DIR, 'Gemfile.lock')), version)
     release_tree_clean!
     puts 'release:check — static checks passed; running tests…'
     Rake::Task['test'].invoke
@@ -242,8 +257,18 @@ namespace :release do
     puts "release:package ✓ #{File.basename(gem_path)} ships the dashboard bundle"
   end
 
-  desc 'Build frontend, bake into vendor/assets, build the gem, push to RubyGems'
-  task full: ['frontend:build', 'build', 'push']
+  # The demo image installs with a frozen bundle, and demo/Gemfile.lock pins the
+  # path-sourced wurk at Wurk::VERSION — so a version bump that skips this leaves
+  # the lock stale and the image build (deploy-demo, called by release.yml AFTER
+  # the gem is already published) fails. release:check refuses the stale lock.
+  # Plain `bundle lock` is enough: a path gem's version is re-read from its
+  # gemspec on every resolve, and no other gem is unlocked.
+  desc 'Re-lock demo/Gemfile.lock after a lib/wurk/version.rb bump'
+  task :relock_demo do
+    Bundler.with_unbundled_env { sh 'bundle', 'lock', chdir: DEMO_DIR }
+    ReleaseHelpers.demo_lock_matches_version!(File.read(File.join(DEMO_DIR, 'Gemfile.lock')), Wurk::VERSION)
+    puts "release:relock_demo ✓ demo/Gemfile.lock pins wurk #{Wurk::VERSION}"
+  end
 end
 
 desc 'Lint the gem'

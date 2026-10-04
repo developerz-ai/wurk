@@ -151,7 +151,7 @@ class InterruptHandlerAutoregisterTest < Wurk::Test::UnitCase
     end
   end
 
-  def wait_for_key(key) # rubocop:disable Naming/PredicateMethod
+  def wait_for_key(key)
     deadline = monotonic_now + POLL_TIMEOUT
     while monotonic_now < deadline
       return true if @observer.call('GET', key)
@@ -164,7 +164,7 @@ class InterruptHandlerAutoregisterTest < Wurk::Test::UnitCase
   # The job is pushed before the fork, so the public queue draining to zero is
   # the first observable proof the child booted and its fetcher ran a BLMOVE.
   # (A completed job also leaves the queue empty, so a fast run passes trivially.)
-  def wait_for_fetch # rubocop:disable Naming/PredicateMethod
+  def wait_for_fetch
     deadline = monotonic_now + BOOT_TIMEOUT
     while monotonic_now < deadline
       return true if @observer.call('LLEN', "queue:#{@queue_name}").to_i.zero?

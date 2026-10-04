@@ -34,22 +34,25 @@ class DemoProducer
   def initialize(logger: nil, interval: nil)
     @logger = logger
     @interval = interval || (ENV["DEMO_PRODUCER_INTERVAL"]&.to_f&.nonzero?) || DEFAULT_INTERVAL
-    @stop = false
     @last_batch_at = nil # nil → first tick always rolls a batch; BATCH_INTERVAL spaces the rest
     @tick = 0
   end
 
+  # Deliberately installs no signal traps: `trap` is process-wide, so one here
+  # replaced puma's INT/TERM handlers in the web pod. In puma the thread just
+  # dies with the process; under `rails demo:workload` Ctrl-C raises Interrupt
+  # (not a StandardError) straight out of the loop.
   def run
-    %w[INT TERM].each { |sig| trap(sig) { @stop = true } }
     log "demo producer starting"
-    until @stop
+    loop do
       begin
         tick!
       rescue StandardError => e
         log "tick error (continuing): #{e.class}: #{e.message}"
       end
-      sleep @interval unless @stop
+      sleep @interval
     end
+  ensure
     log "demo producer stopped"
   end
 

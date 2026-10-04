@@ -52,6 +52,17 @@ jobs:
       tag: ${{ steps.resolve.outputs.tag }}
       proceed: ${{ steps.resolve.outputs.proceed }}
     steps:
+      # `workflow_dispatch` accepts any branch or tag, and everything past here
+      # ends in an irreversible `gem push` plus a tag cut at $GITHUB_SHA. Only
+      # main is releasable. A FAILING step, not a job-level `if:` — a skipped
+      # preflight would skip `release` too and leave a green run that published
+      # nothing and said nothing.
+      - name: refuse any ref but main
+        run: |
+          if [ "$GITHUB_REF" != "refs/heads/main" ]; then
+            echo "::error::release runs only from refs/heads/main, not ${GITHUB_REF}."
+            exit 1
+          fi
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
@@ -117,7 +128,7 @@ jobs:
           bundler-cache: true
       - uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2
         with:
-          bun-version: "1.4.0"
+          bun-version: "1.4.2"
 
       # Precompile the SolidJS SPA into vendor/assets/ (bun install + vite build).
       - name: build dashboard SPA
@@ -143,8 +154,15 @@ jobs:
       - name: configure RubyGems trusted publishing
         uses: rubygems/configure-rubygems-credentials@dc5a8d8553e6ee01fc26761a49e99e733d17954a # v2.1.0
 
+      # Belt and braces on the irreversible step: preflight already refused a
+      # non-main ref, but this job must not depend on that staying true.
       - name: gem push
-        run: gem push "pkg/wurk-${VERSION}.gem"
+        run: |
+          if [ "$GITHUB_REF" != "refs/heads/main" ]; then
+            echo "::error::refusing to publish from ${GITHUB_REF}; only refs/heads/main releases."
+            exit 1
+          fi
+          gem push "pkg/wurk-${VERSION}.gem"
 
       - name: await RubyGems propagation
         run: gem exec rubygems-await "pkg/wurk-${VERSION}.gem"

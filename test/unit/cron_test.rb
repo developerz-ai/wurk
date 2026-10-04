@@ -10,17 +10,17 @@ class CronTest < Wurk::Test::UnitCase
 
   # Workers used by ConfigTester resolution checks. Bodies stay empty —
   # the test only needs the constant to resolve, not actual perform logic.
-  class FooWorker # rubocop:disable Lint/EmptyClass
+  class FooWorker
   end
 
-  class BarWorker # rubocop:disable Lint/EmptyClass
+  class BarWorker
   end
 
-  class DSTWorker # rubocop:disable Lint/EmptyClass
+  class DSTWorker
   end
 
   # Resolvable constant for the ConfigTester pruning checks.
-  class PruneWorker # rubocop:disable Lint/EmptyClass
+  class PruneWorker
   end
 
   def setup

@@ -11,3 +11,8 @@ test/dummy/db/*.sqlite3
 node_modules
 frontend/node_modules
 .claude
+demo/.bundle
+demo/db/*.sqlite3
+demo/log/*
+demo/tmp/*
+demo/storage/*

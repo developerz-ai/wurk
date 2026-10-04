@@ -355,7 +355,7 @@ class SwarmBootTest < Wurk::Test::UnitCase
                 'queue' => @queue_name)
   end
 
-  def wait_for_key(key) # rubocop:disable Naming/PredicateMethod
+  def wait_for_key(key)
     deadline = monotonic_now + POLL_TIMEOUT
     while monotonic_now < deadline
       return true if @observer_pool.call('EXISTS', key) == 1
@@ -403,7 +403,7 @@ class SwarmBootTest < Wurk::Test::UnitCase
     false
   end
 
-  def wait_until_dead(pid) # rubocop:disable Naming/PredicateMethod
+  def wait_until_dead(pid)
     deadline = monotonic_now + POLL_TIMEOUT
     while monotonic_now < deadline
       return true unless pid_alive?(pid)

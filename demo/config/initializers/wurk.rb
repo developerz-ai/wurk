@@ -41,10 +41,13 @@ if ENV["WURK_DEMO"] == "1"
   # `high` drains before `default`, which drains before `low`.
   Wurk.configuration.queues = %w[high default low]
 
-  # Web side (non-forking process): run the traffic producer in a background
-  # thread. Gated off the swarm so its Redis connection can't be inherited
-  # across a fork (CLAUDE.md boot order). The worker process drains the traffic.
-  if ENV["WURK_DISABLED"] == "1"
+  # Web side only: run the traffic producer in a background thread. Gated on its
+  # own flag, set solely by bin/demo-entrypoint's `web` branch. It used to key
+  # off WURK_DISABLED=1, but the worker sets that too (it runs supervise itself),
+  # so the swarm PARENT grew a Redis-holding producer thread and then forked —
+  # a shared socket across forks, and doubled traffic. The reset CronJob also
+  # sets WURK_DISABLED=1 and so started a producer in a one-shot pod.
+  if ENV["WURK_DEMO_PRODUCER"] == "1"
     Rails.application.config.after_initialize do
       Thread.new do
         Thread.current.name = "demo-producer"

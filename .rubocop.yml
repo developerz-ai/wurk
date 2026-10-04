@@ -1,5 +1,7 @@
 AllCops:
   TargetRubyVersion: 3.2
+  # New cops arrive only when the Gemfile's `~> X.Y.0` rubocop pin is bumped, so
+  # "enable" takes effect in that bump PR, never on an upstream release (#471).
   NewCops: enable
   Exclude:
     - "test/dummy/db/**/*"
@@ -36,6 +38,10 @@ Style/FormatStringToken:
 
 Metrics/MethodLength:
   Max: 30
+  # Same harness rationale as Metrics/AbcSize below: an integration test that
+  # forks a swarm and asserts its end state is long and linear by nature.
+  Exclude:
+    - "test/**/*"
 
 # A 30-line method (see above) lands around 9-10 branches naturally; the default
 # 7/8 would flag ordinary Sidekiq-compat option handling as complexity.
@@ -101,9 +107,48 @@ Naming/VariableNumber:
   Exclude:
     - "test/**/*"
 
+# AllowedMethods matches a bare name repo-wide (no per-path parameters exist), so
+# only Sidekiq-spec'd names whose boolean return is the documented contract go
+# here (docs/target/sidekiq-{free,pro,ent}.md: Queue#pause!/#unpause!/#clear,
+# JobSet#clear/#delete_by_value/#delete_by_jid, DeadSet#trim/#kill,
+# JobRecord#delete, Status#delete/#write, Unique.enable!, Encryption.enable,
+# Limiter #reset, Client.reliable_push!). Wurk-internal names (acquire, release,
+# claim_exit, reset_after_fork!, ...) keep a site-scoped inline disable instead.
+# AllowBangMethods stays false for the same reason: true would exempt every
+# future `!` method. `wait_for*`/`wait_until*` are test polling helpers that
+# return the polled condition. `call` (the default) is merged, not replaced.
+Naming/PredicateMethod:
+  Enabled: true
+  inherit_mode:
+    merge:
+      - AllowedMethods
+  AllowBangMethods: false
+  AllowedPatterns:
+    - '\Await_(for|until)'
+  AllowedMethods:
+    - pause!
+    - unpause!
+    - clear
+    - delete_by_value
+    - delete_by_jid
+    - trim
+    - kill
+    - delete
+    - write
+    - enable!
+    - enable
+    - reset
+    - reliable_push!
+
 # The limiter tests measure the limiter itself: `limiter.within_limit { }` with an
 # empty body IS the assertion, because any work in the block pollutes the timing.
 Lint/EmptyBlock:
+  Exclude:
+    - "test/**/*"
+
+# Tests define empty classes as constant fixtures (a worker class name to
+# resolve, a stand-in that lacks a method). Their emptiness is the point.
+Lint/EmptyClass:
   Exclude:
     - "test/**/*"
 
