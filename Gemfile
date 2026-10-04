@@ -14,7 +14,7 @@ group :development, :test do
   # these deliberately (dependabot opens the PR) and fix new offenses in it.
   gem 'rubocop', '~> 1.90.0', require: false
   gem 'rubocop-minitest', '~> 0.40.0', require: false
-  gem 'rubocop-rake', '~> 0.7.0', require: false
+  gem 'rubocop-rake', '~> 0.7.1', require: false
   # Pin to the 0.x line. SimpleCov 1.0 rewrote subprocess handling: the default
   # `at_fork` proc now ignores the name argument and labels every child
   # `(subprocess: #{subprocess_serial})`. Our parallel_fork coverage merge
