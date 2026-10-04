@@ -32,10 +32,20 @@ pr_head="$(jq -r '.head.sha // empty' <<<"$pr_json")"
 pr_tree="$(gh api "repos/$repo/commits/$pr_head" --jq '.commit.tree.sha' 2>/dev/null)" || no "head $pr_head unreadable"
 [ "$pr_tree" = "$head_tree" ] || no "tree moved: HEAD $head_tree vs PR #$pr head $pr_tree"
 
-green="$(gh api "repos/$repo/actions/runs?head_sha=$pr_head&per_page=100" \
-  --jq "[.workflow_runs[] | select(.path == \"$workflow\" and .conclusion == \"success\")] | length" 2>/dev/null)" \
+# GitHub may suffix `path` with `@<ref>`; compare the file part only.
+run_id="$(gh api "repos/$repo/actions/runs?head_sha=$pr_head&per_page=100" \
+  --jq "[.workflow_runs[] | select((.path | split(\"@\")[0]) == \"$workflow\" and .conclusion == \"success\")][0].id // empty" 2>/dev/null)" \
   || no "run list for $pr_head unreadable"
-[ "${green:-0}" -gt 0 ] 2>/dev/null || no "no green $workflow run on PR #$pr head $pr_head"
+[ -n "$run_id" ] || no "no green $workflow run on PR #$pr head $pr_head"
+
+# A green PR run whose path-gated steps were skipped (e.g. a docs-only PR)
+# proves nothing about the gates main would run. Every conditional step in
+# these workflows is RUN-gated, so a run that executed every gate has zero
+# skipped steps.
+skipped="$(gh api "repos/$repo/actions/runs/$run_id/jobs?per_page=100" \
+  --jq '[.jobs[].steps[] | select(.conclusion == "skipped")] | length' 2>/dev/null)" \
+  || no "jobs for run $run_id unreadable"
+[ "$skipped" = "0" ] || no "PR run $run_id skipped $skipped gated steps"
 
 echo "ci-dup-push: tree $head_tree already passed $workflow on PR #$pr head $pr_head — skipping" >&2
 echo true

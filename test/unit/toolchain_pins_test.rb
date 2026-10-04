@@ -1,6 +1,7 @@
 # frozen_string_literal: true
 
 require 'minitest/autorun'
+require 'yaml'
 
 # bun is pinned in four places nobody edits together: the `bun-version:`
 # inputs in the CI workflows, mise.toml (the fleet box), and the Dockerfile's
@@ -12,12 +13,20 @@ class ToolchainPinsTest < Minitest::Test
 
   ROOT = File.expand_path('../..', __dir__)
 
-  def workflow_pins(input)
-    Dir[File.join(ROOT, '.github', 'workflows', '*.yml')].each_with_object({}) do |path, pins|
-      File.read(path).scan(/#{input}:\s*"?([\w.]+)"?/).flatten.each_with_index do |version, i|
-        pins["#{File.basename(path)}##{i + 1}"] = version
+  # Parsed per step, so a pin left in a comment or on another step can't stand
+  # in for a step that lost its own `with:` input.
+  def setup_steps(action)
+    Dir[File.join(ROOT, '.github', 'workflows', '*.yml')].flat_map do |path|
+      jobs = YAML.load_file(path).fetch('jobs', {})
+      jobs.flat_map do |job, spec|
+        Array(spec['steps']).select { |step| step['uses'].to_s.start_with?("#{action}@") }
+                            .map { |step| ["#{File.basename(path)}:#{job}", step] }
       end
     end
+  end
+
+  def workflow_pins(action, input)
+    setup_steps(action).each_with_index.to_h { |(site, step), i| ["#{site}##{i + 1}", step.dig('with', input)&.to_s] }
   end
 
   def mise_pin(tool)
@@ -40,21 +49,17 @@ class ToolchainPinsTest < Minitest::Test
   # Without a pin, setup-bun falls back to package.json or latest, which the
   # agreement check below cannot see.
   def test_every_setup_bun_step_is_pinned
-    Dir[File.join(ROOT, '.github', 'workflows', '*.yml')].each do |path|
-      text = File.read(path)
-      steps = text.scan(%r{uses:\s*oven-sh/setup-bun@}).size
-      pins = text.scan('bun-version:').size
+    unpinned = workflow_pins('oven-sh/setup-bun', 'bun-version').select { |_, v| v.nil? }
 
-      assert_equal steps, pins, "#{File.basename(path)}: #{steps} setup-bun steps but #{pins} bun-version pins"
-    end
+    assert_empty unpinned.keys, 'setup-bun steps without a bun-version pin'
   end
 
   def test_every_bun_pin_names_the_same_version
-    assert_one_version('bun', workflow_pins('bun-version'),
+    assert_one_version('bun', workflow_pins('oven-sh/setup-bun', 'bun-version'),
                        'mise.toml' => mise_pin('bun'), 'Dockerfile' => dockerfile_bun_pin)
   end
 
   def test_every_node_pin_names_the_same_version
-    assert_one_version('node', workflow_pins('node-version'), 'mise.toml' => mise_pin('node'))
+    assert_one_version('node', workflow_pins('actions/setup-node', 'node-version'), 'mise.toml' => mise_pin('node'))
   end
 end
