@@ -524,11 +524,24 @@ class LeaderTest < Wurk::Test::UnitCase
   # The campaign must not run at tick zero. A booting process's opening Redis
   # round trips belong to its fetcher — every leader-gated consumer waits out a
   # 30-60s interval before its own first tick, so nothing observes the gap.
+  #
+  # Waits for the loop to PARK rather than sleeping a fixed 0.2 s, which passed
+  # vacuously on a loaded host whose loop thread had not run at all yet. A parked
+  # loop that never called #acquire is parked in the initial wait; one that
+  # campaigned first would be parked in wait_next with a campaign on record.
   def test_start_defers_the_first_campaign_by_initial_wait
     ldr = build_leader(initial_wait: 30, renew_interval: 0.05, follower_interval: 0.05)
-    ldr.start
-    sleep 0.2
+    campaigns = []
+    ldr.define_singleton_method(:acquire) do
+      campaigns << true
+      super()
+    end
+    loop_thread = ldr.start
+    deadline = ::Process.clock_gettime(::Process::CLOCK_MONOTONIC) + 10
+    sleep 0.01 until loop_thread.status == 'sleep' || ::Process.clock_gettime(::Process::CLOCK_MONOTONIC) > deadline
 
+    assert_equal 'sleep', loop_thread.status, 'the leader loop never parked'
+    assert_empty campaigns, 'the loop must park in initial_wait before its first campaign'
     refute_predicate ldr, :leader?
     assert_nil(Wurk.redis { |c| c.call('GET', @key) }, 'the campaign must wait out initial_wait')
   end

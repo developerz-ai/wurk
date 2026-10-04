@@ -35,7 +35,7 @@ A dedicated CI job runs the test suites of widely-used Sidekiq ecosystem gems ag
 
 ## CI: GitHub Actions
 
-Runner selection is a repository variable, not a hard-coded label: `vars.WURK_CI_RUNNER` for the detect, test, parity, lint, frontend, and ecosystem jobs, `vars.WURK_BENCH_RUNNER` for the benchmark job. Both fall through to stock `ubuntu-latest` when unset, and fork PRs are pinned to `ubuntu-latest` in the YAML — a guard the fork can edit, so the actual boundary is the repo's approval policy for outside contributors' runs. Release, deploy-demo, pages, and dependabot workflows stay on `ubuntu-latest` by design (credential containment), as does test.yml's `spec-docs` job, which needs neither Ruby nor Redis. The headline suites:
+Every job runs on GitHub-hosted `ubuntu-latest` (free for a public repo). There are no self-hosted runners and no runner variables, so a fork PR never reaches persistent hardware; outside contributors' runs still wait on the repo's approval policy. In test.yml and ecosystem.yml the `detect` job runs `bin/ci-dup-push`: a push to `main` whose tree byte-equals a PR head that already passed the workflow skips the gated jobs, and any doubt falls open to a full run. PR runs cancel in progress; `main` runs never do. The headline suites:
 
 - Test suite (one full run on the newest Ruby + newest Rails, coverage gate folded in — no version matrix)
 - Ecosystem compat suite
@@ -51,7 +51,7 @@ The test workflow's suite job:
 - Runs the dummy app setup.
 - Runs the full Minitest suite in parallel mode, with the coverage gate folded into the same invocation (`COVERAGE=1`).
 
-The benchmark job runs wherever `vars.WURK_BENCH_RUNNER` points and publishes the delta vs the PR's base to the job summary and a sticky PR comment, on PRs that touch a bench input (`lib/`, `exe/`, `bench/`, `bin/bench-compare`, the Rakefile, Gemfile/gemspec, or the workflow itself). Regressions greater than 5% flag the PR.
+The benchmark job runs on `ubuntu-latest` and publishes the delta vs the PR's base to the job summary and a sticky PR comment, on PRs that touch a bench input (`lib/`, `exe/`, `bench/`, `bin/bench-compare`, the Rakefile, Gemfile/gemspec, or the workflow itself). Regressions past the threshold flag the PR in that comment; bench is not a required check, and hosted-runner noise is why.
 
 ## Coverage
 

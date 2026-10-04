@@ -26,6 +26,7 @@ class LauncherTest < Wurk::Test::UnitCase
     @config[:tag] = @ns
     @cleanup_keys = []
     @threads = []
+    @launchers = []
   end
 
   # Resolved per call, never captured: #stop disconnects the capsule's pools and
@@ -37,7 +38,10 @@ class LauncherTest < Wurk::Test::UnitCase
 
   def teardown
     # Before the key sweep, not after: a heartbeat thread left running would
-    # SADD its identity back in behind us.
+    # SADD its identity back in behind us. Every launched launcher is stopped:
+    # a `scheduler` poller left running promotes due retry/schedule entries in
+    # this worker's Redis DB under whichever class runs next (#522).
+    @launchers.each(&:stop)
     @threads.each(&:kill)
     pool.with do |c|
       @cleanup_keys.each do |k|
@@ -133,7 +137,7 @@ class LauncherTest < Wurk::Test::UnitCase
     launcher = Wurk::Launcher.new(@config)
     stub_managers(launcher)
 
-    launcher.run(async_beat: false)
+    launch(launcher, async_beat: false)
 
     assert_predicate @config, :frozen?
   end
@@ -145,7 +149,7 @@ class LauncherTest < Wurk::Test::UnitCase
     launcher = Wurk::Launcher.new(@config)
     stub_managers(launcher)
 
-    launcher.run(async_beat: false)
+    launch(launcher, async_beat: false)
 
     assert_instance_of Wurk::Fetcher::Reliable, @config.default_capsule.fetcher
   end
@@ -156,7 +160,7 @@ class LauncherTest < Wurk::Test::UnitCase
     started = false
     launcher.instance_variable_get(:@leader).define_singleton_method(:start) { started = true }
 
-    launcher.run(async_beat: false)
+    launch(launcher, async_beat: false)
 
     assert started, 'run should start the cluster leader'
   end
@@ -167,7 +171,7 @@ class LauncherTest < Wurk::Test::UnitCase
     started = false
     launcher.cron_poller.define_singleton_method(:start) { started = true }
 
-    launcher.run(async_beat: false)
+    launch(launcher, async_beat: false)
 
     assert started, 'run should start the periodic (cron) poller'
   end
@@ -178,7 +182,7 @@ class LauncherTest < Wurk::Test::UnitCase
     started = false
     launcher.metrics_rollup.define_singleton_method(:start) { started = true }
 
-    launcher.run(async_beat: false)
+    launch(launcher, async_beat: false)
 
     assert started, 'run should start the metrics rollup'
   end
@@ -189,7 +193,7 @@ class LauncherTest < Wurk::Test::UnitCase
     started = false
     launcher.instance_variable_get(:@reaper).define_singleton_method(:start) { started = true }
 
-    launcher.run(async_beat: false)
+    launch(launcher, async_beat: false)
 
     assert started, 'run should start the reliable-fetch reaper'
   end
@@ -202,7 +206,7 @@ class LauncherTest < Wurk::Test::UnitCase
     reaper.define_singleton_method(:start) {} # don't spawn the loop thread
     reaper.define_singleton_method(:reclaim!) { reclaimed = true }
 
-    launcher.run(async_beat: false)
+    launch(launcher, async_beat: false)
     # boot_reclaim runs on a background thread; assert the join actually
     # returns (a bare join(1.0) whose result is ignored could time out under a
     # slow scheduler and check `reclaimed` before reclaim! ran).
@@ -226,7 +230,7 @@ class LauncherTest < Wurk::Test::UnitCase
     started = []
     launcher.managers.each { |m| m.define_singleton_method(:start) { started << self } }
 
-    launcher.run(async_beat: false)
+    launch(launcher, async_beat: false)
 
     assert_equal launcher.managers, started
   end
@@ -241,7 +245,7 @@ class LauncherTest < Wurk::Test::UnitCase
     launcher = Wurk::Launcher.new(@config)
     seen = record_boot_order(launcher)
 
-    launcher.run(async_beat: false)
+    launch(launcher, async_beat: false)
 
     assert_equal %i[manager reaper poller leader cron_poller metrics_rollup queue_rollup metrics_flusher], seen
   end
@@ -250,7 +254,7 @@ class LauncherTest < Wurk::Test::UnitCase
     launcher = Wurk::Launcher.new(@config)
     stub_managers(launcher)
 
-    launcher.run(async_beat: false)
+    launch(launcher, async_beat: false)
 
     assert_nil launcher.heartbeat_thread
   end
@@ -260,7 +264,7 @@ class LauncherTest < Wurk::Test::UnitCase
     stub_managers(launcher)
     silence_beat(launcher)
 
-    launcher.run(async_beat: true)
+    launch(launcher, async_beat: true)
     thread = launcher.heartbeat_thread
     # Thread.new returns before the block sets its name; poll briefly.
     50.times do
@@ -287,7 +291,7 @@ class LauncherTest < Wurk::Test::UnitCase
     launcher.metrics_rollup = nil
     launcher.metrics_flusher = nil
 
-    launcher.run(async_beat: false)
+    launch(launcher, async_beat: false)
 
     # Reaching here without a NoMethodError proves the safe-nav nil sides ran.
     assert_predicate @config, :frozen?
@@ -413,7 +417,7 @@ class LauncherTest < Wurk::Test::UnitCase
     silence_beat(launcher)
     track(launcher_identity(launcher))
 
-    launcher.run(async_beat: true)
+    launch(launcher, async_beat: true)
     thread = launcher.heartbeat_thread
 
     assert_predicate thread, :alive?, 'heartbeat thread should be running after boot'
@@ -433,7 +437,7 @@ class LauncherTest < Wurk::Test::UnitCase
     launcher.define_singleton_method(:heartbeat) { beats << true }
     track(launcher_identity(launcher))
 
-    launcher.run(async_beat: true)
+    launch(launcher, async_beat: true)
 
     assert beats.pop(timeout: 5), "the first beat must not wait out BEAT_PAUSE (#{Wurk::Launcher::BEAT_PAUSE}s)"
   ensure
@@ -447,7 +451,7 @@ class LauncherTest < Wurk::Test::UnitCase
     launcher, thread, gate = boot_with_a_beat_in_flight
 
     stopper = track_thread(Thread.new { launcher.send(:stop_heartbeat) })
-    sleep 0.1 # the stop signal now lands on a beat in flight, not on a sleeping thread
+    wait_until_stop_heartbeat_is_joining(launcher, stopper) # lands on a beat in flight, not a sleeping thread
     gate << true
 
     assert stopper.join(2), 'stop_heartbeat must not wait out a whole beat interval'
@@ -462,7 +466,7 @@ class LauncherTest < Wurk::Test::UnitCase
     launcher, _thread, gate = boot_with_a_beat_in_flight
 
     stopper = track_thread(Thread.new { launcher.stop })
-    sleep 0.1
+    wait_until_stop_heartbeat_is_joining(launcher, stopper)
     gate << true # the released beat SADDs the identity while #stop is tearing down
 
     assert stopper.join(5), 'stop must not outlive the heartbeat thread'
@@ -611,7 +615,7 @@ class LauncherTest < Wurk::Test::UnitCase
     silence_boot(launcher)
     silence_beat(launcher)
     track(launcher_identity(launcher))
-    launcher.run(async_beat: false)
+    launch(launcher, async_beat: false)
     before = @config.default_capsule.redis_pool
 
     launcher.stop
@@ -1261,6 +1265,27 @@ class LauncherTest < Wurk::Test::UnitCase
     thread
   end
 
+  # Every #run goes through here so teardown can stop what it started.
+  def launch(launcher, async_beat:)
+    @launchers << launcher
+    launcher.run(async_beat: async_beat)
+  end
+
+  # The stopper has terminated the beat timer and is now blocked joining the
+  # heartbeat thread — the point at which a fixed `sleep 0.1` used to guess the
+  # stop signal had landed. Terminate comes immediately before that join in
+  # #stop_heartbeat, so `@done` plus a sleeping stopper is that state exactly.
+  def wait_until_stop_heartbeat_is_joining(launcher, stopper)
+    timer = launcher.instance_variable_get(:@beat_timer)
+    monotonic = -> { ::Process.clock_gettime(::Process::CLOCK_MONOTONIC) }
+    deadline = monotonic.call + 10
+    until timer.instance_variable_get(:@done) && stopper.status == 'sleep'
+      raise Minitest::Assertion, 'the stopper never reached the heartbeat join' if monotonic.call > deadline
+
+      sleep 0.01
+    end
+  end
+
   def stub_managers(launcher)
     launcher.managers.each { |m| m.define_singleton_method(:start) { nil } }
     # Don't campaign for the global `dear-leader` lock during unit run-tests.
@@ -1351,7 +1376,7 @@ class LauncherTest < Wurk::Test::UnitCase
       gate.pop
       beat.call
     end
-    launcher.run(async_beat: true)
+    launch(launcher, async_beat: true)
 
     assert entered.pop(timeout: 5), 'the heartbeat thread should have entered its first beat'
 

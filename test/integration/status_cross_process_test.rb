@@ -18,10 +18,14 @@ class StatusCrossProcessWorker
 
   def perform(redis_url, sentinel_key, release_key)
     client = RedisClient.config(url: redis_url).new_client
-    client.call('SET', sentinel_key, ::Process.pid.to_s, 'EX', 60)
+    # Progress first, sentinel second: the test reads the row as soon as the
+    # sentinel appears, and the reverse order raced the progress write — a
+    # loaded runner saw `running` with progress nil (run 37239492449). The job
+    # still blocks on the release flag below, so the read stays mid-run.
     status&.at(1, 2, 'halfway')
+    client.call('SET', sentinel_key, ::Process.pid.to_s, 'EX', 60)
 
-    deadline = ::Process.clock_gettime(::Process::CLOCK_MONOTONIC) + 20
+    deadline = ::Process.clock_gettime(::Process::CLOCK_MONOTONIC) + StatusCrossProcessTest::POLL_TIMEOUT
     sleep POLL_INTERVAL until client.call('EXISTS', release_key) == 1 ||
                               ::Process.clock_gettime(::Process::CLOCK_MONOTONIC) > deadline
 
@@ -37,7 +41,9 @@ end
 class StatusCrossProcessTest < Wurk::Test::UnitCase
   parallelize_me!
 
-  POLL_TIMEOUT = 20.0
+  # Generous: these are deadlines for a forked child to boot on a loaded
+  # runner, not performance budgets — a healthy run returns in well under 1 s.
+  POLL_TIMEOUT = 60.0
   POLL_INTERVAL = 0.1
 
   def setup

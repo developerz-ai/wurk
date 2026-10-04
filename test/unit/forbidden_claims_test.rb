@@ -22,7 +22,9 @@ class ForbiddenClaimsTest < Minitest::Test
   # and quoted mentions ('"Faster" is meaningless…') are talk about the claim,
   # not the claim.
   SPEED_CLAIM = /\bfaster\b/i
-  NEGATION = /\b(?:not|no|never|isn't|aren't|nor)\b/i
+  # The negation must govern "faster" itself (within two words before it):
+  # "not only free but faster" is still a claim.
+  NEGATED_SPEED = /\b(?:not|no|never|isn't|aren't|nor)\W+(?:\w+\W+){0,2}faster\b/i
 
   # No production throughput numbers are published (audit R11). Reintroduce a
   # scale figure only together with the soak numbers in docs/benchmarks.md, and
@@ -53,6 +55,7 @@ class ForbiddenClaimsTest < Minitest::Test
     assert speed_claim?('Faster.'), 'the wiki once shipped "Free forever. Faster."'
     assert speed_claim?('Faster than stock Sidekiq')
     refute speed_claim?('Wurk is not currently faster than stock Sidekiq')
+    assert speed_claim?('Wurk is not only free but faster than Sidekiq')
   end
 
   private
@@ -81,6 +84,6 @@ class ForbiddenClaimsTest < Minitest::Test
     return false if sentence.rstrip.end_with?('?')
 
     unquoted = sentence.gsub(/["“][^"”]*["”]/, '')
-    unquoted.match?(SPEED_CLAIM) && !unquoted.match?(NEGATION)
+    unquoted.match?(SPEED_CLAIM) && !unquoted.match?(NEGATED_SPEED)
   end
 end

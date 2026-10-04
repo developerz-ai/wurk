@@ -55,7 +55,7 @@ Precompiled dashboard assets ship inside the gem — see 09-precompiled-assets.m
 4. Swarm boot time, Rails-app baseline.
 5. Memory per worker post-boot, Rails-app baseline.
 
-The benchmark job runs in CI wherever the `vars.WURK_BENCH_RUNNER` repository variable points (`ubuntu-latest` when unset; fork PRs are pinned to `ubuntu-latest`, and the job only runs when a bench input changed). Results are published to the job summary and a sticky PR comment showing the delta vs the PR's base. Greater than 5% regression flags the PR.
+The benchmark job runs in CI on GitHub-hosted `ubuntu-latest`, and only when a bench input changed. Shared hosted runners are noisy, which is part of why the result is advisory. Results are published to the job summary and a sticky PR comment showing the delta vs the PR's base. Greater than 5% regression flags the PR.
 
 ## What actually gates a merge
 

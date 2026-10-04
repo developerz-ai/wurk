@@ -11,28 +11,40 @@ permissions:
   contents: read
   # paths-filter reads the PR's changed-file list on pull_request events.
   pull-requests: read
+  # `detect`'s dup step reads the merged PR's workflow runs (read-only).
+  actions: read
 
 concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}
-  cancel-in-progress: true
+  # Never cancel main's own runs (see test.yml).
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 jobs:
   # 45 minutes of third-party suites is far too much to pay for a docs edit.
-  # Gate it — but on pull requests ONLY: push-to-main keeps main verifiable, and
-  # the weekly schedule has no base commit to diff against, so filtering there
-  # would silently skip the run it exists for.
-  # Runner selection is a repository variable — see test.yml's `detect` for the
-  # full rationale, including why the fork guard comes first.
+  # Gate it — but on pull requests ONLY: push-to-main keeps main verifiable
+  # (minus `dup` pushes, see test.yml), and the weekly schedule has no base
+  # commit to diff against, so filtering there would silently skip the run it
+  # exists for.
   detect:
     name: detect changed paths
-    runs-on: ${{ github.event.pull_request.head.repo.fork && 'ubuntu-latest' || vars.WURK_CI_RUNNER || 'ubuntu-latest' }}
+    runs-on: ubuntu-latest
     timeout-minutes: 5
     outputs:
       ruby: ${{ steps.filter.outputs.ruby }}
+      dup: ${{ steps.dup.outputs.dup }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
+      # Push whose tree already passed this workflow on the PR head → skip.
+      - name: duplicate of an already-green PR head (dup)
+        id: dup
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          dup="$(bin/ci-dup-push .github/workflows/ecosystem.yml)"
+          [ "$dup" = "true" ] || dup=false
+          echo "dup=$dup" >> "$GITHUB_OUTPUT"
       - uses: dorny/paths-filter@ceb8a2b8f2d89434be7ff52d3de7ec3738c5cc9d # v4.0.3
         id: filter
         with:
@@ -57,14 +69,12 @@ jobs:
 
   ecosystem:
     needs: detect
-    runs-on: ${{ github.event.pull_request.head.repo.fork && 'ubuntu-latest' || vars.WURK_CI_RUNNER || 'ubuntu-latest' }}
+    runs-on: ubuntu-latest
     timeout-minutes: 45
     services:
       redis:
         image: redis:7.4
         # Container port only — Docker binds a free host port. See test.yml.
-        # This job's concurrency group is per-ref, so a PR run, a push-to-main
-        # run and the weekly schedule can be in flight against one host at once.
         ports: ["6379"]
         options: >-
           --health-cmd "redis-cli ping"
@@ -72,7 +82,7 @@ jobs:
     env:
       # Per-step gate, not a job-level `if:` — a skipped job reports as a
       # satisfied check. See test.yml's `test` job (#469).
-      RUN: ${{ github.event_name != 'pull_request' || needs.detect.outputs.ruby == 'true' }}
+      RUN: ${{ needs.detect.outputs.dup != 'true' && (github.event_name != 'pull_request' || needs.detect.outputs.ruby == 'true') }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         if: env.RUN == 'true'

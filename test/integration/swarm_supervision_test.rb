@@ -58,7 +58,7 @@ class SwarmSupervisionTest < Wurk::Test::UnitCase
       supervisor = Thread.new { swarm.supervise }
 
       assert_growing_backoff(key)
-      assert_drains_promptly_while_backoff_pending(swarm)
+      assert_drains_promptly_while_backoff_pending(swarm, supervisor, key)
     ensure
       # A failed assertion must not leave the crash-loop respawning forever;
       # shutdown is idempotent so the happy path's drain isn't double-counted.
@@ -341,13 +341,44 @@ class SwarmSupervisionTest < Wurk::Test::UnitCase
                     "respawn backoff must grow across crashes: #{intervals.inspect}"
   end
 
-  def assert_drains_promptly_while_backoff_pending(swarm)
-    drain_started = monotonic_now
-    swarm.shutdown(timeout: SHUTDOWN_TIMEOUT)
-    drain_elapsed = monotonic_now - drain_started
+  # The drain is measured against the delay it would otherwise sit out, never
+  # against a fixed wall-clock budget. A flat `< 1.0` failed at 1.28 s on a
+  # loaded runner (run 37239492449) without a backoff in sight: the crash log
+  # entry lands BEFORE the child's `exit!`, so the drain began while the third
+  # crasher was still alive in its startup hook, TERMed it, and waited out its
+  # exception unwinding. So: first wait for the state the test is about — no
+  # live child, a respawn armed for the future — then drain, and require that
+  # both `shutdown` and the supervise loop finished BEFORE that respawn was due
+  # (a loop sleeping the delay inline wakes exactly at it), and that the armed
+  # respawn never fired.
+  def assert_drains_promptly_while_backoff_pending(swarm, supervisor, key)
+    due_at = wait_for_armed_respawn(swarm, swarm.instance_variable_get(:@respawn_backoff), key)
 
-    assert_operator drain_elapsed, :<, 1.0,
-                    "shutdown must not block on a pending crash-loop backoff, took #{drain_elapsed}s"
+    assert due_at, "never saw an empty fleet with a respawn armed: children=#{swarm.children.keys.inspect}"
+
+    crashes_before = @observer.call('LLEN', key).to_i
+    swarm.shutdown(timeout: SHUTDOWN_TIMEOUT)
+
+    assert_operator monotonic_now, :<, due_at, 'shutdown must not block on a pending crash-loop backoff'
+    assert supervisor.join([due_at - monotonic_now, 0].max), 'the supervise loop must not sit out the pending backoff'
+    assert_empty swarm.children, 'the armed respawn must not fire once the drain has begun'
+    assert_equal crashes_before, @observer.call('LLEN', key).to_i, 'no child may boot after the drain'
+  end
+
+  # Slot 0 is the only slot. Answers the armed respawn's due time once the
+  # fleet is empty and at least half of its delay (base * 2^(streak-1), so
+  # >= 2 s after three crashes) is still ahead — room for the drain to finish
+  # first on a loaded host. Under load the window can be missed — the respawn
+  # fires first — but the delay doubles every crash, so the next one is longer.
+  def wait_for_armed_respawn(swarm, backoff, key)
+    progress = -> { [@observer.call('LLEN', key).to_i, swarm.children.keys.sort] }
+    wait_while_progressing(progress: progress) do
+      next unless swarm.children.empty? && backoff.pending?(0)
+
+      armed = Wurk::Swarm::RESPAWN_BACKOFF * (2**(backoff.instance_variable_get(:@streak)[0] - 1))
+      due_at = backoff.instance_variable_get(:@due_at)[0].to_f
+      due_at if due_at - monotonic_now >= armed / 2
+    end
   end
 
   def kill_the_replacement(swarm, original)

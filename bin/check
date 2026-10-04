@@ -18,7 +18,7 @@ cd "$(dirname "$0")/.."
 
 MODE="${1:-}"
 case "$MODE" in
-  ''|pr) MODE=pr ;;
+  ''|pr) MODE="pr" ;;
   fast|full) ;;
   -h|--help|help)
     sed -n '2,14p' "$0" | sed 's/^# \{0,1\}//'

@@ -41,9 +41,8 @@ jobs:
   # version, so its presence is the one idempotency key that cannot drift. This
   # makes the workflow safe to re-run and makes a no-op edit to version.rb (a
   # comment, a revert) resolve to "nothing to do" instead of a failure.
-  # Hosted compute, not the runner variable: this workflow holds the RubyGems
-  # publish credential and runs rarely, so keeping it off shared CI hardware
-  # keeps that secret on a VM that is destroyed after the job.
+  # GitHub-hosted: the RubyGems credential lives only on a VM that is
+  # destroyed after the job.
   preflight:
     runs-on: ubuntu-latest
     timeout-minutes: 10
@@ -93,8 +92,7 @@ jobs:
   release:
     needs: preflight
     if: needs.preflight.outputs.proceed == 'true'
-    # Hosted compute — see `preflight`. One VM per job, so this job's redis
-    # service keeps its fixed 6379 host mapping and can never collide.
+    # One VM per job, so the redis service's fixed 6379 mapping cannot collide.
     runs-on: ubuntu-latest
     timeout-minutes: 30
     services:

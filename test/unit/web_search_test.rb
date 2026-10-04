@@ -12,6 +12,13 @@ class WebSearchTest < Wurk::Test::UnitCase
   # Batching keeps every command small at a cost of a few dozen round trips.
   SEED_CHUNK = 1_000
 
+  # Sorted-set fixtures are scored this far OUT, never due. Search matches on
+  # the payload, not the clock, and a due retry/schedule entry is what a
+  # scheduled poller leaked from an earlier class in this worker's Redis DB
+  # pops before the search runs — `retry` missing from
+  # test_search_default_covers_every_store on main (run 34148124735, #522).
+  NOT_DUE = 3600
+
   def setup
     super
     @ns = "wurksrch:#{Process.pid}:#{object_id}"
@@ -19,12 +26,13 @@ class WebSearchTest < Wurk::Test::UnitCase
     @class_a = "JobAlpha@#{@ns}"
     @class_b = "JobBeta@#{@ns}"
     @needle = "marker-#{@ns}"
+    @siblings = []
   end
 
   def teardown
     Wurk.redis do |c|
       c.call('DEL', "queue:#{@queue}")
-      c.call('SREM', 'queues', @queue)
+      c.call('SREM', 'queues', @queue, *@siblings)
       cleanup_zset(c, 'retry')
       cleanup_zset(c, 'schedule')
       cleanup_zset(c, 'dead')
@@ -167,6 +175,10 @@ class WebSearchTest < Wurk::Test::UnitCase
   # full-walk the LIST: round trips stay bounded by the scan cap, not the
   # queue's real size. Thread-local Thread.current[:wurk_capsule] override (not
   # a global monkeypatch) so counting is safe under this class's parallelize_me!.
+  #
+  # Bounded against THIS test's queue key, never the request's total: the total
+  # also carries one LLEN per member of the shared `queues` SET, which this test
+  # does not own — a flat `2 + 100` failed at 104 on main (#522).
   def test_search_bounds_round_trips_on_a_huge_no_match_queue
     seed_queue(10_000)
     counter = RoundTripCounter.new(Wurk.redis_pool)
@@ -177,12 +189,35 @@ class WebSearchTest < Wurk::Test::UnitCase
 
     assert_empty hits
     assert_predicate search, :truncated?
-    # Queue.all (1 SMEMBERS) + LLEN (1) + one LRANGE per QUEUE_PAGE up to
-    # SCAN_LIMIT_PER_QUEUE — never proportional to the queue's real size (10k
-    # would need ~200 LRANGE calls to full-walk instead of the capped ~100).
-    max_round_trips = 2 + (Wurk::Web::Search::SCAN_LIMIT_PER_QUEUE / Wurk::Web::Search::QUEUE_PAGE)
+    assert_queue_scan_capped(counter)
+  ensure
+    Thread.current[:wurk_capsule] = nil
+  end
 
-    assert_operator counter.count, :<=, max_round_trips
+  # The same bound holds however many OTHER queues exist, including ones that
+  # appear while the search runs: each sibling costs its own LLEN, and none of
+  # them moves the cap on this test's queue.
+  def test_search_queue_bound_ignores_sibling_queues
+    seed_queue(10_000)
+    @siblings = Array.new(20) { |i| "#{@ns}-sib-#{i}" }
+    early, late = @siblings.each_slice(10).to_a
+    Wurk.redis { |c| c.call('SADD', 'queues', *early) }
+    counter = RoundTripCounter.new(Wurk.redis_pool)
+
+    search = Wurk::Web::Search.new("absent-#{@ns}", kinds: ['queues'])
+    hits = with_queues_added_during(late) do
+      Thread.current[:wurk_capsule] = counter
+      search.to_a
+    end
+
+    assert_empty hits
+    assert_queue_scan_capped(counter)
+    @siblings.each do |name|
+      assert_operator counter.calls_against(Wurk::Keys.queue(name)).size, :<=, 1,
+                      "an empty sibling queue costs at most its LLEN: #{name}"
+    end
+    assert(early.all? { |name| counter.calls_against(Wurk::Keys.queue(name)).any? },
+           'siblings present when the search started must be scanned')
   ensure
     Thread.current[:wurk_capsule] = nil
   end
@@ -252,23 +287,65 @@ class WebSearchTest < Wurk::Test::UnitCase
 
   private
 
-  # Delegating pool that counts checkouts (one per `Wurk.redis` block). Doubles
-  # as its own `Thread.current[:wurk_capsule]` binding (`#redis_pool` returns
-  # self) so a test can measure round trips without a global monkeypatch.
+  # Delegating pool that counts checkouts (one per `Wurk.redis` block) and
+  # records every command as [command, key]. Doubles as its own
+  # `Thread.current[:wurk_capsule]` binding (`#redis_pool` returns self) so a
+  # test can measure round trips without a global monkeypatch.
   class RoundTripCounter
-    attr_reader :count
+    attr_reader :count, :calls
 
     def initialize(pool)
       @pool = pool
       @count = 0
+      @calls = []
     end
 
-    def with(&)
+    def with
       @count += 1
-      @pool.with(&)
+      @pool.with { |conn| yield Recorder.new(conn, @calls) }
     end
+
+    def calls_against(key) = @calls.select { |_, k| k == key }
 
     def redis_pool = self
+
+    # Search only ever issues `call`; anything else should fail loudly here
+    # rather than slip past the count.
+    Recorder = Struct.new(:conn, :calls) do
+      def call(*args, **, &)
+        calls << [args[0].to_s.upcase, args[1]]
+        conn.call(*args, **, &)
+      end
+    end
+  end
+
+  # One LLEN plus one LRANGE per QUEUE_PAGE up to SCAN_LIMIT_PER_QUEUE against
+  # this test's queue — never proportional to its real size (10k would need
+  # ~200 LRANGEs to full-walk) — and the queue list read exactly once.
+  def assert_queue_scan_capped(counter)
+    pages = Wurk::Web::Search::SCAN_LIMIT_PER_QUEUE / Wurk::Web::Search::QUEUE_PAGE
+    mine = counter.calls_against(Wurk::Keys.queue(@queue))
+
+    assert_equal 1, mine.count { |cmd, _| cmd == 'LLEN' }, mine.inspect
+    assert_operator mine.count { |cmd, _| cmd == 'LRANGE' }, :<=, pages, 'the scan must stop at the per-queue cap'
+    assert_equal 1, counter.calls.count { |cmd, _| cmd == 'SMEMBERS' }, 'the queue list is read once'
+  end
+
+  # Runs the block while another thread SADDs `names` into the shared queue
+  # list, the way an unrelated process would. The adder races the search on
+  # purpose — the assertions must hold whichever adds land before the
+  # SMEMBERS — and it has no capsule binding, so none of its round trips land
+  # on the block's counter.
+  def with_queues_added_during(names)
+    started = ::Thread::Queue.new
+    adder = Thread.new do
+      started << true
+      names.each { |name| Wurk.redis { |c| c.call('SADD', 'queues', name) } }
+    end
+    started.pop
+    yield
+  ensure
+    adder&.join
   end
 
   # Bulk-seed a queue with `count` non-matching payloads so the scan-cap tests
@@ -288,7 +365,8 @@ class WebSearchTest < Wurk::Test::UnitCase
   # unique jid, so no two members collide.
   def seed_zset(name, count)
     filler = "SearchFiller@#{@ns}"
-    members = Array.new(count) { |i| [i, Wurk.dump_json(bare_payload(filler, ['filler']))] }
+    base = ::Time.now.to_f + NOT_DUE
+    members = Array.new(count) { |i| [base + i, Wurk.dump_json(bare_payload(filler, ['filler']))] }
     Wurk.redis do |c|
       members.each_slice(SEED_CHUNK) { |batch| c.call('ZADD', name, *batch.flatten) }
     end
@@ -321,7 +399,7 @@ class WebSearchTest < Wurk::Test::UnitCase
 
   def push_bare_to_zset(name, klass, args)
     payload = bare_payload(klass, args)
-    Wurk.redis { |c| c.call('ZADD', name, ::Time.now.to_f.to_s, Wurk.dump_json(payload)) }
+    Wurk.redis { |c| c.call('ZADD', name, (::Time.now.to_f + NOT_DUE).to_s, Wurk.dump_json(payload)) }
     payload['jid']
   end
 
@@ -346,7 +424,7 @@ class WebSearchTest < Wurk::Test::UnitCase
 
   def push_to_zset(name, klass, args)
     payload = job_payload(klass, args)
-    Wurk.redis { |c| c.call('ZADD', name, ::Time.now.to_f.to_s, Wurk.dump_json(payload)) }
+    Wurk.redis { |c| c.call('ZADD', name, (::Time.now.to_f + NOT_DUE).to_s, Wurk.dump_json(payload)) }
     payload['jid']
   end
 

@@ -37,6 +37,18 @@ class ToolchainPinsTest < Minitest::Test
                  "#{pins.map { |site, v| "#{site}=#{v.inspect}" }.join(', ')}"
   end
 
+  # Without a pin, setup-bun falls back to package.json or latest, which the
+  # agreement check below cannot see.
+  def test_every_setup_bun_step_is_pinned
+    Dir[File.join(ROOT, '.github', 'workflows', '*.yml')].each do |path|
+      text = File.read(path)
+      steps = text.scan(%r{uses:\s*oven-sh/setup-bun@}).size
+      pins = text.scan('bun-version:').size
+
+      assert_equal steps, pins, "#{File.basename(path)}: #{steps} setup-bun steps but #{pins} bun-version pins"
+    end
+  end
+
   def test_every_bun_pin_names_the_same_version
     assert_one_version('bun', workflow_pins('bun-version'),
                        'mise.toml' => mise_pin('bun'), 'Dockerfile' => dockerfile_bun_pin)
