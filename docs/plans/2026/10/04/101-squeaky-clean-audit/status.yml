@@ -1,0 +1,48 @@
+plan: 101-squeaky-clean-audit
+title: Squeaky-clean audit → production-grade Wurk
+status: not_started
+created_by: sebi
+worked_by: ""
+owner: sebi
+percent: 0
+current_focus: "Wave 0: 01 H1 restore docs/target, 05 C1–C4 + C7, file new issues per 12"
+slices:
+  - file: 01-repo-hygiene.md
+    status: not_started
+    percent: 0
+  - file: 02-core-runtime.md
+    status: not_started
+    percent: 0
+  - file: 03-pro-ent-api.md
+    status: not_started
+    percent: 0
+  - file: 04-web-dashboard.md
+    status: not_started
+    percent: 0
+  - file: 05-ci-gates.md
+    status: not_started
+    percent: 0
+  - file: 06-release-lane.md
+    status: not_started
+    percent: 0
+  - file: 07-lint.md
+    status: not_started
+    percent: 0
+  - file: 08-test-hygiene.md
+    status: not_started
+    percent: 0
+  - file: 09-production-readiness.md
+    status: not_started
+    percent: 0
+  - file: 10-infrastructure.md
+    status: not_started
+    percent: 0
+  - file: 11-human-actions.md
+    status: not_started
+    percent: 0
+  - file: 12-issue-closure-map.md
+    status: not_started
+    percent: 0
+evidence: []
+notes: "Audit 2026-10-04 @ 8126e42 (v1.7.6), 9 read-only passes. Infra-repo items (10 X*) are edited from developerz-ai/infrastructure. Human-gated items tracked in 11."
+last_updated: 2026-10-04
