@@ -15,7 +15,7 @@ $ARGUMENTS
 
 1. **Resolve path.** Run `date +%Y`, `date +%m`, `date +%d`. Dir = `docs/plans/<YYYY>/<MM>/<DD>/`. `Glob docs/plans/<YYYY>/<MM>/<DD>/1*` → next number = highest existing `1NN-*` + 1, else `101`. Slug = kebab-case title, max 5 words. Final plan dir: `docs/plans/<YYYY>/<MM>/<DD>/<1NN>-<slug>/`.
 
-2. **Explore.** `Task` (subagent_type=Explore, thoroughness="very thorough"): existing patterns + files to touch (`file:line`), the right workspace(s) under `apps/*` / `packages/*`, tests (unit vs integration), shared contracts in `@developerz/domain`, SQL in `@developerz/db`, policy schema in `@developerz/policy`, audit hooks in `@developerz/audit`, gotchas. Prefer `codegraph_*` for structural lookups. Skip only for trivial asks.
+2. **Explore.** At most 4 `Task` agents at once, spawned only by you; tell each it may not spawn its own (no `fork`). More ground to cover → fatter briefs or a second wave, never a fifth agent. `Task` (subagent_type=Explore, thoroughness="very thorough"): existing patterns + files to touch (`file:line`), the right workspace(s) under `apps/*` / `packages/*`, tests (unit vs integration), shared contracts in `@developerz/domain`, SQL in `@developerz/db`, policy schema in `@developerz/policy`, audit hooks in `@developerz/audit`, gotchas. Prefer `codegraph_*` for structural lookups. Skip only for trivial asks.
 
 3. **Write the plan as multiple files** in the plan dir — never one big `plan.md`. Always produce an `overview.md` index plus one `<NN>-<aspect>.md` per separable area (e.g. `01-data-model.md`, `02-policy-schema.md`, `03-tool.md`, `04-api-routes.md`, `05-dashboard.md`, `06-tests.md`). Split by area of work so each file is independently executable and stays short. Match the existing house style in `docs/idea/` — terse fragments, `file:line` refs, tables.
 
@@ -92,6 +92,8 @@ last_updated: <YYYY-MM-DD>
 - Self-contained: executor reads only `overview.md`, the slice it's on, and the files those cite.
 - Respect `CLAUDE.md` + `docs/idea/principles.md`: thin orchestrator (coding happens in the user's agent, not ours), BYOK only (never resell tokens), audit-first (if it isn't logged, it didn't happen), bot always discloses, no bot-on-bot loops, auto-merge default-on (only through machine gates: CI green + review + branch protections). No hardcoded state machines for policy — policy = prompt + tools. No abstractions before consumers; default to deletion.
 - Stack rules: TS strict, no `any`, no `as` without a why-comment. Biome (no ESLint/Prettier). Zod at every boundary (webhook, env, yml, API request). Drizzle for SQL — all of it in `@developerz/db`. Path alias `@developerz/<pkg>`. `apps/*` import packages, never each other; packages never import apps. `domain` imports nothing internal.
+- Parallel execution in the plan obeys the same cap: any slice that splits work across agents names **≤4 agents per wave**, each with a disjoint file set (one checkout, no worktrees — the file set is the lock).
+- Big work → multiple waves and multiple PRs, executed **one PR at a time** (build → PR → merged → pull → clean tree → next). Size each PR ≤100 changed files; when a slice is bigger, the slice lists its PR sequence (shared piece first). Never split a compile unit.
 - Cross-app or cross-repo work (`../infrastructure`, `sebyx07/infrastructure/stacks/`) → one `<NN>-<aspect>.md` per repo/app; note `../infrastructure` is edited from its own repo, not here.
 
 ## Output

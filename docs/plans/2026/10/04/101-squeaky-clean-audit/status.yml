@@ -44,5 +44,5 @@ slices:
     status: not_started
     percent: 0
 evidence: []
-notes: "Audit 2026-10-04 @ 8126e42 (v1.7.6), 9 read-only passes. Infra-repo items (10 X*) are edited from developerz-ai/infrastructure. Human-gated items tracked in 11."
+notes: "Audit 2026-10-04 @ 8126e42 (v1.7.6), 9 read-only passes. Infra-repo items (10 X*) are edited from developerz-ai/infrastructure. Human-gated items tracked in 11. Execution cap: ≤4 concurrent agents per wave (hive rules in .claude/commands/feature.md)."
 last_updated: 2026-10-04

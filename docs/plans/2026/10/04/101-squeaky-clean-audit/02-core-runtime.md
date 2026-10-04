@@ -48,13 +48,14 @@ Batch/cron/API-iteration items found by these passes live in [`03`](03-pro-ent-a
 | K28 | `lua/loader.rb:67` comment false (pipeline NOSCRIPT partially applies); `sorted_entry.rb:51` ZINCRBY resurrects promoted member (upstream same) | Fix comment; `ZADD XX` for reschedule. |
 | K29 | `api_controller.rb:184-193,213-221` → `job_set.rb:218-244` retry_all/kill_all loop `until size.zero?` (refailing jobs pin a Puma thread) | Snapshot like `drain_set` (`:516`). |
 
-## Steps (agent split — disjoint files)
-1. Agent A (processor/retry/job_util/logger): K2, K3, K4, K9, K10.
-2. Agent B (scheduled/lua/leader/heartbeat): K1 (+ thread-loop audit), K6, K21, K25.
-3. Agent C (swarm/child_boot/restart/rails_boot/launcher/manager): K5 launcher half, K7, K12, K13, K16, K17, K22, K23, K26, K27.
-4. Agent D (redis_pool/redis_options/client/buffered/fetcher): K5 reaper half, K8, K11, K14, K15, K24.
-5. Agent E (setter/sorted_entry/idempotency/api_controller): K18, K19, K20, K28, K29.
-- Each PR: tests with code; `bin/check`; `rake bench` must not regress >5% (K5, K11, K24 touch hot paths).
+## Steps (hive: ≤4 agents per wave, disjoint files, coordinator spawns, agents never spawn)
+- **Wave 1 (4 agents):**
+  1. Agent A (processor/retry/job_util/logger): K2, K3, K4, K9, K10.
+  2. Agent B (scheduled/lua/leader/heartbeat): K1 (+ thread-loop audit), K6, K21, K25.
+  3. Agent C (swarm/child_boot/restart/rails_boot/launcher/manager): K5 launcher half, K7, K12, K13, K16, K17, K22, K23, K26, K27.
+  4. Agent D (redis_pool/redis_options/client/buffered/fetcher): K5 reaper half, K8, K11, K14, K15, K24.
+- **Wave 2:** K18, K19, K20, K28, K29 (setter/sorted_entry/idempotency/api_controller) → `SendMessage` to whichever wave-1 agent finishes first (re-task, don't spawn a 5th). `api_controller.rb` is also touched by [`04`](04-web-dashboard.md) — never concurrently.
+- Agents: `bin/rake test TEST=<own files>` with `NCPU=1`, `bundle exec rubocop <own files>`, no git. Coordinator: `bin/check` once per PR; `rake bench` must not regress >5% (K5, K11, K24 touch hot paths).
 
 ## Done when
 - K1–K20 fixed + tested; K21–K29 fixed or recorded as intentional in `docs/idea/parity-divergences.md`.
