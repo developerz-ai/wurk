@@ -39,8 +39,9 @@ internet ──►│                                                     ├─
 holds no cluster credentials. The in-cluster **ArgoCD Image Updater** selects the
 newest DOCR tag matching `^sha-[0-9a-f]{7}$` and syncs the deployment
 automatically; the pushed digest
-*is* the deploy trigger. It runs two ways — `workflow_dispatch` by hand, or
-called by `release.yml` after it publishes the gem for a
+*is* the deploy trigger. It runs three ways — automatically on every push
+to `main` that changes what the image runs (lib/app/frontend/demo/Dockerfile;
+the demo tracks main), `workflow_dispatch` by hand, or called by `release.yml` after it publishes the gem for a
 `lib/wurk/version.rb` bump landing on `main` (the tag is an output there, cut
 last; see [RELEASE.md](../RELEASE.md)) — and is gated three ways so only the
 org can ship an image:

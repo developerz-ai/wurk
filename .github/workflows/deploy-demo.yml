@@ -1,8 +1,8 @@
 name: deploy-demo
 
-# Deploy of the public demo (wurk.demo.developerz.ai) — run it by hand, or let
-# release.yml call it after publishing the gem for a `lib/wurk/version.rb` bump
-# landing on main (the tag is an output there, cut last).
+# Deploy of the public demo (wurk.demo.developerz.ai) — automatic on every
+# push to main that changes what the image runs, called by release.yml after
+# publishing a gem, or run by hand.
 #
 # DEPLOY MODEL: this workflow only BUILDS + PUSHES the image. Infra deploys it
 # via the in-cluster ArgoCD Image Updater, which selects the newest DOCR tag
@@ -15,8 +15,8 @@ name: deploy-demo
 #      *write* access (org members) — external forks/users cannot.
 #   2. the `authorize` job rejects anyone not in the DEMO_DEPLOYERS repo
 #      variable (comma-separated GitHub usernames). This guards the
-#      workflow_dispatch door only — release.yml passes `trusted: true` and is
-#      exempt, because it has already published this commit's gem. See the job.
+#      workflow_dispatch door only — a push to main and release.yml (`trusted:
+#      true`) are exempt: both deploy a commit that passed branch protection.
 #   3. the `build` job targets the protected `demo` environment — add Required
 #      Reviewers there so the build (which produces the deploy-triggering image
 #      digest) waits for a named approver. The gate sits on `build` precisely
@@ -24,6 +24,24 @@ name: deploy-demo
 # See docs/demo-deploy.md for the one-time setup and the infra requirements.
 
 on:
+  # Main already passed branch protection, so the demo tracks it continuously.
+  # The version file is excluded because release.yml deploys that commit itself
+  # once the gem is published.
+  push:
+    branches: [main]
+    paths:
+      - 'lib/**'
+      - '!lib/wurk/version.rb'
+      - 'app/**'
+      - 'config/**'
+      - 'exe/**'
+      - 'frontend/**'
+      - 'demo/**'
+      - 'Dockerfile'
+      - 'bin/demo-entrypoint'
+      - 'wurk.gemspec'
+      - 'Gemfile'
+      - '.github/workflows/deploy-demo.yml'
   workflow_dispatch:
     inputs:
       ref:
@@ -101,6 +119,10 @@ jobs:
           TRUSTED: ${{ inputs.trusted }}
           CALLER: ${{ github.workflow }}
         run: |
+          if [ "$GITHUB_EVENT_NAME" = "push" ] && [ "$GITHUB_REF" = "refs/heads/main" ]; then
+            echo "Push to main (passed branch protection) — actor allowlist does not apply."
+            exit 0
+          fi
           if [ "$TRUSTED" = "true" ]; then
             if [ "$CALLER" = "release" ] && [ "$GITHUB_REF" = "refs/heads/main" ]; then
               echo "Called by the release lane on main, which already published this commit's gem — actor allowlist does not apply."
