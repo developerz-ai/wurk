@@ -55,7 +55,7 @@
 
 Overlaps confirmed by multiple passes: E2 (Queue#each), E15 (server_middleware rescue), E16 (remove_jobs).
 
-## Steps
+## Steps (hive: ≤4 agents per wave, disjoint files; batch cluster = 1 agent, cron cluster = 1 agent)
 1. E5 first (secret leak).
 2. E10 + E12 (cheap, unblock ecosystem gems + boot).
 3. Batch cluster E3/E4/E13/E15–E19/E25–E27/E29/E30 as one PR series (shared files; one agent).

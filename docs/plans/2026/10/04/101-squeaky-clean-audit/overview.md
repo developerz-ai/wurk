@@ -9,7 +9,8 @@ A big customer is about to run Wurk in production, likely migrating live from Si
 - Baseline that is healthy: main CI green since 2026-09-07; coverage 97.67% line / 92.58% branch; frontend lint + 282 vitest green; reliable fetch + reaper + kill -9 tests; bounded key growth; no TODO/FIXME in `lib/`.
 - Commands: `bin/check` (`fast`/`full`), `bin/rake test TEST=…`, `bin/rake test:parity`, `bin/rake test:ecosystem`, `bin/rake bench`, `cd frontend && bun run test && bun run lint`.
 - Rules for every PR: tests written with the code; never mock Redis in integration/parity; never change key schema/JSON unless *restoring* Sidekiq's format (E8); bench ≤5% regression; Sidekiq aliases intact; intentional divergences go in `docs/idea/parity-divergences.md`.
-- Team execution: CLAUDE.md says no worktrees — parallel agents split by **disjoint files** (splits given in [`02`](02-core-runtime.md) Steps and [`03`](03-pro-ent-api.md) Steps).
+- Team execution = hive mind (`.claude/commands/feature.md`): **≤4 agents at once, only the coordinator spawns, agents never spawn agents**; one checkout, no worktrees, each agent owns a disjoint file set (splits in [`02`](02-core-runtime.md) and [`03`](03-pro-ent-api.md) Steps). More work → fatter briefs or another wave. Agents run only their own tests (`NCPU=1`); coordinator runs `bin/check`.
+- **PR discipline:** one PR in flight at a time — build → PR → merged → `git pull` → clean tree → next. ≤100 changed files per PR; bigger slices (02, 03, 09) ship as several sequenced PRs, shared piece first. A wave = a PR.
 - Audit side-note: the Pro/Ent pass flushed Redis DB 13 during repros — rerun any suite that was running then.
 
 ## Headline (what would hurt the customer first)
@@ -39,7 +40,7 @@ A big customer is about to run Wurk in production, likely migrating live from Si
 11. [`11-human-actions.md`](11-human-actions.md) — U1–U13: ruleset, release env, decisions, Pro/Ent dump from customer, support/SLA.
 12. [`12-issue-closure-map.md`](12-issue-closure-map.md) — every open issue/PR → slice/batch; #488, #537 details; new issues to file.
 
-## Suggested sequencing (waves)
+## Suggested sequencing (waves — each wave ≤4 concurrent agents; PRs land one at a time, ≤100 files)
 - **Wave 0 (day 1):** 01 H1; 05 C1–C4, C7; file new issues per 12.
 - **Wave 1 (P0, week 1):** 02 K1, K2, K6, K10; 03 E5, E10, E12; 04 W1, W2, W7; 09 R5 doc truth, R9, R12.
 - **Wave 2 (P1):** rest of 02 P1; 03 batch + cron clusters; 04 W3–W6; 06; 07; 08 #522/#486.
