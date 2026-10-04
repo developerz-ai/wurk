@@ -1,0 +1,62 @@
+# 02 — Core runtime bugs (swarm · manager · fetcher · processor · client · retry · scheduler · redis)
+
+> Part of [`overview.md`](overview.md). Depends on: [`01`](01-repo-hygiene.md). Source: three independent passes on 2026-10-04 — area audit, top-down (entry point → leaf), bottom-up (primitive → callers). Rows found by ≥2 passes are marked ★ (highest confidence). Sidekiq reference = installed 8.1.6 gem + `docs/target/`. No TODO/FIXME/XXX/HACK in `lib/` or `exe/`.
+
+Batch/cron/API-iteration items found by these passes live in [`03`](03-pro-ent-api.md) (E25–E31); web-controller items in [`04`](04-web-dashboard.md).
+
+## P0 / P1 — job loss, double-run, silent failure, drop-in correctness
+
+| ID | Sev | Where | Defect → scenario | Fix | Test |
+|---|---|---|---|---|---|
+| K1 | P0 | `lib/wurk/scheduled.rb:229-233,260-279` `Poller#wait` | `random_poll_interval → process_count → cleanup` does unrescued Redis I/O; only `enqueue` is rescued. Any outage spanning a tick kills the `scheduler` thread **permanently** → retries + scheduled jobs never promoted again in that process, silently. Sidekiq rescues in `wait` + sleeps 5s. | Rescue `StandardError` in `wait`: `handle_exception`, fall back to `average_scheduled_poll_interval`, continue. Audit every long-lived thread loop (heartbeat, reaper, leader, cron poller, metrics flusher, buffer drainer) for the same pattern — each top-level loop must survive a Redis error. | Stub `cleanup` raise once → thread alive, `enqueue` called again. One such test per long-lived thread. |
+| K2 ★★★ | P0 | `lib/wurk/processor.rb:249-253` | `rescue JobRetry::Handled` swallows; never `handle_exception(h.cause \|\| h, context: 'Job raised exception', job:)`. Honeybadger/Rollbar/Bugsnag/Airbrake/AppSignal/custom `error_handlers` see **zero** job failures (runtime-verified). Admitted only in `docs/migrate-from-sidekiq.md` item 10 + `docs/sentry.md:88`. | Call `handle_exception` in that arm; ensure Sentry middleware doesn't double-report (skip in handler if already captured). Delete the migration/sentry footnotes. | Parity oracle: failing job → each handler called once, original exception class, `ctx[:job]` set. |
+| K3 ★★★ | P1 | `lib/wurk/job_retry.rb:209-224` `delay_for` | Only `Float#to_i`; `Integer === 10.minutes` false → `sidekiq_retry_in { 10.minutes * c }` / `"60"` silently use default backoff. | `rv = rv.to_i if rv.respond_to?(:to_i)` (Symbols lack `to_i` → `:kill`/`:discard` intact). Also: wrapped-class block fallback (`wrapped_block \|\| block`) → nil like upstream. | Duration + String → retry score ≈ now+600 (+jitter). |
+| K4 | P1 | `lib/wurk/job_util.rb:163,171` `wrap_options` | AJ wrapper defaults (`retry: true, queue: 'default'`) beat wrapped class `sidekiq_options` (Sidekiq: wrapped wins) → AJ `retry: false` retries 25×. `test/unit/job_util_test.rb:304` pins the wrong behaviour. | `class_defaults.merge(wrapped.get_sidekiq_options).merge(item)`; fix test. | AJ class `retry: false` → `retry == false` in payload; `retry: 3` → 3. |
+| K5 ★★ | P1 | `lib/wurk/fetcher/reaper.rb:129-147,307-317`; `lib/wurk/launcher.rb:103-104` | Managers fetch before first heartbeat; `live_owners` snapshotted before a long SCAN; `boot_reclaim` runs lock-free on every boot → another process reclaims a live worker's in-flight job → **double run**. | Write first heartbeat synchronously before `@managers.each(&:start)`; re-check owner liveness (HGET info) per identity right before `drain`; skip private lists younger than a grace period. | Integration: owner added to `processes` mid-scan → no reclaim; boot writes beat before first fetch. |
+| K6 ★★ | P1 | `lib/wurk/lua.rb:78-95` (`RELIABLE_SCHEDULE_PROMOTE`), `scheduled.rb:138` | Undecodable member or nil `queue` aborts script at same member forever (`ZRANGEBYSCORE -inf`); `SETS = %w[retry schedule]` → bad `retry` member starves `schedule` cluster-wide under `reliable_scheduler!`. | `pcall(cjson.decode)` + `type(q)=='string'`; on failure move member to `dead`, continue. | garbage member (lower score) + valid → valid promoted, garbage in dead. |
+| K7 ★★ | P1 | `lib/wurk/rails_boot.rb:82-88,237-243` `skip_boot?` | `rails runner` / `rails generate` / other one-off commands fork a full swarm, fetch jobs, `at_exit` drain cuts in-flight. | Allowlist: boot only under `Rails::Server`/Puma/explicit opt-in (`WURK_EMBED=1`); keep `WURK_DISABLED`. Document. | RailsBoot: runner/generator defined → skip; server → boot. |
+| K8 | P1 | `lib/wurk/redis_pool.rb:107`; `redis_options.rb:24,116` (`POOL_KEYS` has `:name`); `configuration.rb:907` | `{sentinels: [...], name: 'mymaster'}` — `name` eaten as pool name, never reaches `RedisClient.sentinel`; default `url` dropped → wrong/no master. Sidekiq uses `pool_name`. | `name` is a client key when `sentinels` present; pool label = `pool_name`. | Options builder test; Sentinel integration in [`09`](09-production-readiness.md) R7. |
+| K9 | P1 | `lib/wurk/processor.rb:186`; `lib/wurk.rb:146-148` | `Thread.current[:wurk_capsule]` never set → `Sidekiq.redis` in a non-default-capsule job uses default pool (sized for default concurrency) → pool timeouts under load. | Set at top of `run`. | job in capsule x → `Wurk.redis_pool.equal?(cap_x.redis_pool)`. |
+| K10 | P1 | `processor.rb:186-199` (process ensure); `fetcher/reliable.rb:386-392`; `job_logger.rb:50-56`; `wurk.gemspec:60` | Non-`Handled` exception from retry layer (retry ZADD on blip) or from `JobLogger#prepare` (`with_level` missing on logger <1.6 / SemanticLogger; `prepare` outside `retrier.global`) kills thread with job un-ACKed in a **live** owner's private list → stuck until restart. | On escape: requeue the UoW via `reliable_requeue` Lua before thread exits. Guard `respond_to?(:with_level)`; gemspec `logger >= 1.6`; move `prepare` inside `retrier.global`. | Retry ZADD raises → job back in public queue; logger w/o `with_level` → job runs + acks. |
+
+## P2 — robustness
+
+| ID | Where | Defect → scenario | Fix | Test |
+|---|---|---|---|---|
+| K11 ★★ | `lib/wurk/redis_pool.rb:124-138` `#with` | Retries entire block on `ConnectionPool::TimeoutError` even if raised by a *nested* checkout inside it → non-idempotent INCR/LPUSH replayed. | Flag on block entry; retry only if block never entered. | outer INCR + inner starved size-1 pool → counter 1. |
+| K12 ★★ | `lib/wurk/manager.rb:145-165` `hard_shutdown`; `fetcher/reliable.rb:201` | `bulk_requeue` raises (Redis down) before `cleanup.each(&:kill)` → embedded mode: jobs keep running after `stop` over reset pools. | `ensure cleanup.each(&:kill)`. | `bulk_requeue` raises → all processors killed. |
+| K13 | `lib/wurk/swarm/restart.rb:56-68,141-143,174-183`; `swarm.rb:441-453` | USR1: old + replacement both die in `await_heartbeat` → `retry_slot` requeues dead pid → slot never respawned; swarm one child short forever. | `old_exited` → hand slot to respawn backoff. | fakes: both exits claimed → spawn scheduled for index. |
+| K14 | `lib/wurk/client/buffered.rb:176-186,420-429` | Outage buffer process-global, no origin pool → sharded `Client.via(poolA)` jobs replayed into poolB. | Buffer `[pool, payload]` / per-pool buffer. | buffer via A, push via B → lands on A. |
+| K15 | `lib/wurk/fetcher/unit_of_work.rb:101` `#requeue`; `compat.rb:104` (`BasicFetch` → `Reliable`) | RPUSH without LREM of private copy → sidekiq-throttled requeue leaves job in both lists → reaper double-runs later. | Use `reliable_requeue` Lua. Verify against sidekiq-throttled source when adding its harness ([`09`](09-production-readiness.md) R5). | requeue → private list empty, public has 1. |
+| K16 ★★ | `lib/wurk/swarm/child_boot.rb:97-98`; `swarm.rb:215-218,374-377` | TSTP reset to DEFAULT until handlers installed (covers reconnect + `:fork`/`:startup` hooks) → relayed quiet **suspends** child (kernel stop) or is dropped; no TSTP re-relay (TERM has `RETERM_INTERVAL`). | Trap TSTP to flag immediately post-fork, replay after install; re-relay TSTP while `@quieted`. | TSTP in boot window → child quiet, not stopped. |
+| K17 | `lib/wurk/swarm.rb:318-321` `fork_child` | Respawn/rolling-restart forks skip boot step 3 (`close_parent_sockets` only in `boot`); railtie parent is a live web process w/ reopened pools → TLS close_notify on parent's `rediss://` session. Violates CLAUDE.md boot ordering. | `@config.reset_redis_pools!` (+ AR disconnect) in `fork_child`. | integration: parent opens pool, respawn → child sees no inherited socket fds (count `/proc/self/fd`). |
+| K18 | `lib/wurk/worker/setter.rb:89-95,120-125` | Numeric `wait_until` treated relative (Sidekiq: ≥1e9 = absolute) → schedules ~54 years out; `perform_at(DateTime)` raises (Sidekiq accepts). | Mirror upstream `at()` rules. | epoch → score ≈ epoch; DateTime accepted. |
+| K19 | `lib/wurk/api/idempotency.rb:102-110` | Idempotency-Key released on any raise incl. unknown outcome (lost reply after LPUSH) → client retry double-enqueues. | Release only on errors known pre-apply; unknown → keep key (pending) w/ TTL. | lost-reply simulation → second request returns original jid. |
+| K20 | `lib/wurk/sorted_entry.rb:58-83,95-101`; `job_util.rb:130-138`; `scheduled.rb` `Enq#push_promoted` | Remove-then-push: Wurk-only validation rejects stock-Sidekiq payloads (`timeout`/`deadline`/`track`) → entry gone, push failed; controller (`api_controller.rb:449,465`) 500s mid-loop; promoter drops such payloads permanently. | Atomic Lua move, or re-ZADD on push failure; relax validation for keys stock Sidekiq writes (validate only Wurk-originated). | stock payload w/ odd `timeout` → retry succeeds or entry preserved. |
+
+## P3 — divergence / cleanup
+
+| ID | Where | Fix |
+|---|---|---|
+| K21 ★★ | `heartbeat.rb:167-169`, `process_set.rb:236-240` — signal queue LIFO (LPOP) vs Sidekiq RPOP | RPOP. Test TSTP,TERM order. |
+| K22 | `launcher.rb:364-371` — TTIN (dashboard "dump threads") unhandled | Handle TTIN (thread dump to log) + re-deliver unknown like Sidekiq 8 `launcher.rb:194`. |
+| K23 | `swarm/child_boot.rb:79-86,185-193`; `reaper.rb:85-91`; `leader.rb:140-150` — TERM before `launcher.run` → `run` resets `@done`, leader campaigns, ghost process entry | `run` no-op once ShutdownGate claimed. |
+| K24 | `redis_pool.rb:54,63` `reconnect_attempts: 1` — redis-client replays below RedisPool safety (ZPOPBYSCORE lost reply = lost job; matches Sidekiq #3303). Comments at `client.rb:294-300`, `scheduled.rb:68-77`, `heartbeat.rb:156-163` overclaim. | Prefer `reconnect_attempts: 0` + RedisPool owns replay (measure in `rake bench`); else fix comments. |
+| K25 ★ | `leader.rb:159-197`, `tick_once` — GET+EXPIRE non-atomic; `stop` releases after join timeout; outage rescue keeps `@held` | CAS-refresh Lua; release after confirmed join; clear `@held` on error. |
+| K26 | `swarm.rb:513-519`, `heartbeat.rb:276-281` — RSS = pages×4KB | `Etc.sysconf(Etc::SC_PAGESIZE)`. |
+| K27 | `rails_boot.rb:56-61`, `configuration.rb:717` — swarm-booting web process runs as server; `configure_client` dropped for web-side enqueues | Run `configure_client` blocks in the parent (client role) before fork, or document in `docs/idea/parity-divergences.md`. Recommend fix. |
+| K28 | `lua/loader.rb:67` comment false (pipeline NOSCRIPT partially applies); `sorted_entry.rb:51` ZINCRBY resurrects promoted member (upstream same) | Fix comment; `ZADD XX` for reschedule. |
+| K29 | `api_controller.rb:184-193,213-221` → `job_set.rb:218-244` retry_all/kill_all loop `until size.zero?` (refailing jobs pin a Puma thread) | Snapshot like `drain_set` (`:516`). |
+
+## Steps (agent split — disjoint files)
+1. Agent A (processor/retry/job_util/logger): K2, K3, K4, K9, K10.
+2. Agent B (scheduled/lua/leader/heartbeat): K1 (+ thread-loop audit), K6, K21, K25.
+3. Agent C (swarm/child_boot/restart/rails_boot/launcher/manager): K5 launcher half, K7, K12, K13, K16, K17, K22, K23, K26, K27.
+4. Agent D (redis_pool/redis_options/client/buffered/fetcher): K5 reaper half, K8, K11, K14, K15, K24.
+5. Agent E (setter/sorted_entry/idempotency/api_controller): K18, K19, K20, K28, K29.
+- Each PR: tests with code; `bin/check`; `rake bench` must not regress >5% (K5, K11, K24 touch hot paths).
+
+## Done when
+- K1–K20 fixed + tested; K21–K29 fixed or recorded as intentional in `docs/idea/parity-divergences.md`.
+- Every long-lived thread has a "survives Redis error" test.
+- `bin/check full` green; coverage ≥90/90; bench no >5% regression.
