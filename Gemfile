@@ -12,7 +12,7 @@ group :development, :test do
   # Gemfile.lock is gitignored: a floating rubocop plus `NewCops: enable` let an
   # upstream release redden main with no PR at fault (1.90, #450, #471). Bump
   # these deliberately (dependabot opens the PR) and fix new offenses in it.
-  gem 'rubocop', '~> 1.90.0', require: false
+  gem 'rubocop', '~> 1.91.0', require: false
   gem 'rubocop-minitest', '~> 0.40.0', require: false
   gem 'rubocop-rake', '~> 0.7.0', require: false
   # Pin to the 0.x line. SimpleCov 1.0 rewrote subprocess handling: the default
