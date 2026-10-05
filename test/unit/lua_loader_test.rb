@@ -139,6 +139,26 @@ class LuaLoaderTest < Wurk::Test::UnitCase
     end
   end
 
+  # K28: a pipeline is not a transaction — when its EVALSHA hits NOSCRIPT,
+  # the plain commands queued beside it have already been applied, and the
+  # replay runs them again. That is the replay-safety contract callers rely
+  # on. A SHA nobody ever loaded yields a real NOSCRIPT without flushing the
+  # cache the parallel workers share.
+  def test_pipelined_eval_noscript_leaves_the_rest_of_the_pipeline_applied
+    key = "#{@ns}:pipelined"
+    runs = []
+    @pool.with do |real|
+      Wurk::Lua::Loader.pipelined_eval(real) do |pipe, eval_method|
+        runs << eval_method
+        pipe.call('INCR', key)
+        pipe.call('EVALSHA', '0' * 40, 0) if eval_method == :eval_cached
+      end
+
+      assert_equal %i[eval_cached eval_with_source], runs
+      assert_equal '2', real.call('GET', key), 'the first, failed pipeline still applied its INCR'
+    end
+  end
+
   def test_eval_cached_passes_through_non_noscript_errors_without_retry
     conn = FakeErrorConn.new(message: 'ERR wrong number of arguments')
     err = assert_raises(RedisClient::CommandError) do

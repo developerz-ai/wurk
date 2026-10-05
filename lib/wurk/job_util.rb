@@ -112,8 +112,7 @@ module Wurk
     # created_at → strip transient keys. Returns the canonical payload.
     def normalize_item(item)
       validate(item)
-      normalized = class_defaults_for(item['class']).merge(item)
-      normalized = wrap_options(normalized)
+      normalized = defaults_for(item).merge(item)
       stringify_identity!(normalized, item['class'])
       finalize(normalized)
     end
@@ -130,12 +129,23 @@ module Wurk
     def validate_option_values(item)
       raise(ArgumentError, "Job tags must be an Array: `#{item}`") unless valid_tags?(item)
 
-      JobUtil.validate_track!(item['track'], item)
-      JobUtil.validate_bounds!(item)
+      unless repush?(item)
+        JobUtil.validate_track!(item['track'], item)
+        JobUtil.validate_bounds!(item)
+      end
       return if valid_retry_for?(item)
 
       raise(ArgumentError, "Job retry_for over #{RETRY_FOR_MAX} is unreasonable: `#{item}`")
     end
+
+    # A payload that already carries `jid` + `created_at` was built by some
+    # client before — a retry, a scheduled promotion, a dead-set re-run, quite
+    # possibly written by stock Sidekiq. `track` / `timeout` / `deadline` are
+    # Wurk's own options and are checked where Wurk writes them; rejecting them
+    # here would drop a job stock Sidekiq accepted (the caller has already
+    # removed it from its set). Middleware::Timeout and Status ignore values
+    # they cannot use, so nothing downstream depends on the check.
+    def repush?(item) = item.key?('jid') && item.key?('created_at')
 
     def valid_shape?(item) = item.is_a?(Hash) && item.key?('class') && item.key?('args')
     def valid_class?(klass) = klass.is_a?(Class) || klass.is_a?(String)
@@ -168,9 +178,12 @@ module Wurk
       klass.is_a?(Class) && klass.respond_to?(:get_sidekiq_options)
     end
 
-    def wrap_options(normalized)
-      wrapped = normalized['wrapped']
-      respondable_class?(wrapped) ? wrapped.get_sidekiq_options.merge(normalized) : normalized
+    # A wrapped class's `sidekiq_options` (an ActiveJob's `retry: false`) beat
+    # the wrapper's defaults; the item's own keys beat both (Sidekiq's order).
+    def defaults_for(item)
+      defaults = class_defaults_for(item['class'])
+      wrapped = item['wrapped']
+      respondable_class?(wrapped) ? defaults.merge(wrapped.get_sidekiq_options) : defaults
     end
 
     def stringify_identity!(normalized, job_class)

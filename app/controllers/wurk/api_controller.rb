@@ -125,12 +125,11 @@ module Wurk
 
     def scheduled_all
       set = ::Wurk::ScheduledSet.new
-      count = case params[:cmd].to_s
-              when 'delete'       then clear_set(set)
-              when 'add_to_queue' then drain_set(set, :add_to_queue)
-              else return render(json: { error: 'unknown action' }, status: :bad_request)
-              end
-      render json: { ok: true, count: count }
+      case params[:cmd].to_s
+      when 'delete'       then render json: { ok: true, count: clear_set(set) }
+      when 'add_to_queue' then drain_set(set, :add_to_queue)
+      else render(json: { error: 'unknown action' }, status: :bad_request)
+      end
     end
 
     # --- Dead set mutations --------------------------------------------------
@@ -373,27 +372,48 @@ module Wurk
       entries = entries_for(set, [params[:key]])
       return render(json: { error: 'unknown job' }, status: :not_found) if entries.empty?
 
-      entries.each { |entry| entry.public_send(method) }
-      render json: { ok: true, count: entries.size }
+      render_applied(entries.size, apply_each(entries, method))
     end
 
     # Bulk variant: `keys[]` + a single `cmd` applied to every resolved entry.
-    def bulk_entry_action(set, actions) # rubocop:disable Metrics/AbcSize
+    def bulk_entry_action(set, actions)
       method = actions[params[:cmd].to_s]
       return render(json: { error: 'unknown action' }, status: :bad_request) unless method
 
-      count = 0
       keys = Array(params[:keys]).map(&:to_s).uniq
       # Each key costs a ZRANGEBYSCORE plus per-entry mutations; an uncapped
       # list lets one POST issue tens of thousands of round-trips. The UI
       # selects at most a page (200).
       return render(json: { error: 'too many keys (max 1000)' }, status: :bad_request) if keys.size > 1000
 
-      entries_for(set, keys).each do |entry|
+      entries = entries_for(set, keys)
+      render_applied(entries.size, apply_each(entries, method))
+    end
+
+    # One entry the client rejects (a payload failing validation, a raising
+    # middleware) must not 500 the request with every later entry unapplied.
+    # SortedEntry has already put a failed entry back in its set, so the
+    # failure is reported per key and the loop moves on. A Redis error is not
+    # per-entry — it propagates to the 503 handler instead of failing every
+    # remaining key one by one.
+    def apply_each(entries, method)
+      entries.each_with_object([]) do |entry, failures|
         entry.public_send(method)
-        count += 1
+      rescue *::Wurk::Configuration::REDIS_ERROR_CLASSES
+        raise
+      rescue StandardError => e
+        ::Wurk.configuration.handle_exception(e, context: "Wurk::ApiController##{method}", jid: entry.jid)
+        failures << { key: entry.id, error: "#{e.class}: #{e.message}" }
       end
-      render json: { ok: true, count: count }
+    end
+
+    # 422 when any entry failed, so the SPA's error toast fires; `count` is
+    # what was applied either way.
+    def render_applied(total, failures)
+      body = { ok: failures.empty?, count: total - failures.size }
+      return render(json: body) if failures.empty?
+
+      render json: body.merge(failed: failures), status: 422
     end
 
     # Sends `method` (:quiet! / :stop!) to one process by identity, or to every
@@ -442,8 +462,7 @@ module Wurk
     # Entries removed concurrently no-op their apply.
     def drain_set(set, method)
       entries = set.to_a
-      entries.each { |entry| entry.public_send(method) }
-      entries.size
+      render_applied(entries.size, apply_each(entries, method))
     end
 
     def render_sorted_set(set)

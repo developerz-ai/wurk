@@ -52,7 +52,7 @@ Sidekiq has no equivalent for any of these, and each is Wurk-only: using it ties
 
 ## Error reporting (the trap)
 
-Job failures do NOT reach `config.error_handlers`. `Wurk::JobRetry#local` rescues the exception, books the retry, and raises `Wurk::JobRetry::Handled`, which `Wurk::Processor#process` swallows. Error handlers only see fetch-loop errors (`context: "Error fetching job"`), shutdown errors (`"!shutdown"`), invalid JSON, and retry-machinery meta-errors. Any error reporter wired only into `error_handlers` reports nothing from your jobs — it also needs a **server middleware**. `Wurk::Sentry` registers both, reports only the terminal failure (not all 25 retry attempts), never sends job `args`, and filters self-healing Redis/connection-pool blips out of the fetch loop.
+Job failures reach `config.error_handlers` once each, with `context: "Job raised exception"` and the job hash, as in Sidekiq — any reporter wired into `error_handlers` (Honeybadger, Rollbar, Bugsnag, Airbrake, custom) sees them. `Wurk::Sentry` registers a server middleware plus a handler, reports only the terminal failure (not all 25 retry attempts) without double-reporting, never sends job `args`, and filters self-healing Redis/connection-pool blips out of the fetch loop.
 
 ## Docs
 

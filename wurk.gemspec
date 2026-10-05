@@ -57,7 +57,8 @@ Gem::Specification.new do |spec|
   # A Rails app pulls them in transitively, but a standalone (non-Rails) consumer
   # has neither — without these, `require "wurk"` raises LoadError on Ruby 3.4+.
   spec.add_dependency 'base64', '>= 0.1', '< 1'
-  spec.add_dependency 'logger', '>= 1.5', '< 2'
+  # >= 1.6 for Logger#with_level, which a job's `log_level` runs through.
+  spec.add_dependency 'logger', '>= 1.6', '< 2'
   # fiddle left the default gems in Ruby 4.0. The swarm's Linux PR_SET_PDEATHSIG
   # orphan-guard fast-path (lib/wurk/swarm/orphan_guard.rb) requires it; without
   # the dep it silently degrades to the getppid watchdog on Ruby 4.0 (and the

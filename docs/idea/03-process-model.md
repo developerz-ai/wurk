@@ -24,7 +24,9 @@ This is the same model as Sidekiq Enterprise's swarm, except it's built in and t
 5. Each child reconnects DB and creates a fresh Redis pool, then starts fetching.
 6. Parent enters its supervision loop.
 
-Skipping step 3 leaves inherited sockets open in children — a classic post-fork bug. Skipping step 5 means children share a socket and corrupt each other's responses.
+Skipping step 3 leaves inherited sockets open in children — a classic post-fork bug. Skipping step 5 means children share a socket and corrupt each other's responses. Step 3 repeats before every respawn and rolling-restart fork, not just the first boot.
+
+**When the railtie boots workers.** Wurk boots its workers from `after_initialize` only when it is running inside a web server: `rails server`, Puma, Passenger or Unicorn. One-off commands load the app without starting workers: `rails runner`, `rails generate`, rake tasks, and scripts that require `config/environment`. To boot under another server, set `WURK_EMBED=1`. `WURK_DISABLED=1` always disables boot, and consoles and the test environment never boot.
 
 ## Worker topology (Wurk extension)
 

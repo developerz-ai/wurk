@@ -340,6 +340,72 @@ class JobSetTest < Wurk::Test::UnitCase
     @pool.with { |c| c.call('DEL', private_set) }
   end
 
+  # K29: a job that re-fails straight back into the set (same jid, new bytes)
+  # used to keep `until size.zero?` spinning, pinning the dashboard's Puma
+  # thread. Each job is now retried once per call.
+  def test_retry_all_retries_a_job_that_refails_at_once_only_once
+    queue = unique_queue
+    private_set = test_private_set
+    seed_private(private_set, [[10, "rf-0-#{@ns}", { 'queue' => queue }], [11, "rf-1-#{@ns}", { 'queue' => queue }]])
+    set = refailing_job_set(private_set)
+
+    assert_equal 2, set.retry_all
+    assert_equal(2, @pool.with { |c| c.call('LLEN', "queue:#{queue}") })
+    assert_equal 2, set.size, 'the re-failed copies wait for the next retry_all'
+  ensure
+    @pool.with { |c| c.call('DEL', private_set, "queue:#{queue}") }
+  end
+
+  # K20 follow-up: one entry the push rejects (remove_job restores it and
+  # re-raises) must not 500 "Retry All" with the rest of the set untouched.
+  def test_retry_all_skips_a_rejected_entry_and_finishes_the_rest
+    queue = unique_queue
+    private_set = test_private_set
+    rows = (0...3).map { |i| [10 + i, "rj-#{i}-#{@ns}", { 'queue' => queue }] }
+    seed_private(private_set, rows)
+    set = rejecting_job_set(private_set, "rj-1-#{@ns}") { raise ArgumentError, 'rejected by client' }
+    reported = capture_handled_exceptions { assert_equal 2, set.retry_all }
+
+    assert_equal(2, @pool.with { |c| c.call('LLEN', "queue:#{queue}") })
+    assert_equal ["rj-1-#{@ns}"], set.map(&:jid), 'the rejected entry is back in the set'
+    assert_equal [ArgumentError], reported.map(&:class)
+  ensure
+    @pool.with { |c| c.call('DEL', private_set, "queue:#{queue}") }
+  end
+
+  # A lost connection fails every later entry the same way, so it still raises.
+  def test_retry_all_lets_a_connection_error_propagate
+    private_set = test_private_set
+    seed_private(private_set, [[10, "ce-0-#{@ns}"]])
+    set = rejecting_job_set(private_set, "ce-0-#{@ns}") { raise RedisClient::ConnectionError, 'gone' }
+
+    assert_raises(RedisClient::ConnectionError) { set.retry_all }
+  ensure
+    @pool.with { |c| c.call('DEL', private_set) }
+  end
+
+  def test_kill_all_skips_an_entry_whose_kill_fails
+    private_set = test_private_set
+    payloads = seed_private(private_set, [[10, "kf-0-#{@ns}"], [11, "kf-1-#{@ns}"]])
+    @dead_members.concat(payloads)
+    set = private_job_set(private_set)
+    failing = "kf-0-#{@ns}"
+    set.define_singleton_method(:each) do |&blk|
+      super() do |entry|
+        entry.define_singleton_method(:remove_job) { raise ArgumentError, 'refused' } if entry.jid == failing
+        blk.call(entry)
+      end
+    end
+    count = nil
+    reported = capture_handled_exceptions { count = set.kill_all(notify_failure: false) }
+
+    assert_equal 1, count
+    assert_equal [failing], set.map(&:jid), 'the failed entry stays in its set'
+    assert_equal [ArgumentError], reported.map(&:class)
+  ensure
+    @pool.with { |c| c.call('DEL', private_set) }
+  end
+
   # --- kill_all ----------------------------------------------------------
 
   def test_kill_all_moves_entries_to_dead
@@ -426,6 +492,52 @@ class JobSetTest < Wurk::Test::UnitCase
 
   def private_job_set(set_name)
     Class.new(Wurk::JobSet) { define_method(:initialize) { super(set_name) } }.new
+  end
+
+  # A private set whose entries, once retried, land straight back in the set
+  # with a bumped retry_count — what a job that raises on its first line does
+  # between two pages of a retry_all.
+  def refailing_job_set(set_name)
+    pool = @pool
+    set = private_job_set(set_name)
+    set.define_singleton_method(:each) do |&blk|
+      super() do |entry|
+        entry.define_singleton_method(:retry) do
+          super()
+          refailed = Wurk.load_json(value).merge('retry_count' => (item['retry_count'] || 0) + 1)
+          pool.with { |c| c.call('ZADD', set_name, score + 100, Wurk.dump_json(refailed)) }
+        end
+        blk.call(entry)
+      end
+    end
+    set
+  end
+
+  # A private set whose entry `jid` fails its retry the way a rejected push
+  # does: removed, then the push raises inside remove_job (which restores it).
+  def rejecting_job_set(set_name, jid, &failure)
+    set = private_job_set(set_name)
+    set.define_singleton_method(:each) do |&blk|
+      super() do |entry|
+        entry.define_singleton_method(:retry) { send(:remove_job, &failure) } if entry.jid == jid
+        blk.call(entry)
+      end
+    end
+    set
+  end
+
+  # Errors JobSet reports through handle_exception, from this test's sets only
+  # (the handler list is process-global and this class is parallel).
+  def capture_handled_exceptions
+    reported = []
+    handler = ->(ex, ctx, _cfg) { reported << ex if ctx[:context].to_s.include?(@ns) }
+    Wurk::Test::GLOBAL_STATE_MUTEX.synchronize do
+      Wurk.configuration.error_handlers << handler
+      yield
+    ensure
+      Wurk.configuration.error_handlers.delete(handler)
+    end
+    reported
   end
 
   def test_private_set

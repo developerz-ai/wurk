@@ -83,26 +83,30 @@ doubles a report.
 
 Two things are registered, and both are necessary.
 
-**1. Server middleware** (`Wurk::Sentry::Middleware`) — job failures.
+**1. Server middleware** (`Wurk::Sentry::Middleware`) — job failures, in scope.
 
-A job failure never reaches `config.error_handlers` in Wurk. `JobRetry#local`
-rescues the exception, books the retry, and raises `Wurk::JobRetry::Handled`,
-which `Processor#process` swallows to ack the unit of work. An error handler
-alone therefore sees **no job exceptions at all** — this is the trap any
-Sidekiq-era error-reporting setup falls into on Wurk. The middleware runs
-*inside* `JobRetry#local` (see `Processor#dispatch`), which is the only place
-the raw exception is still in flight, so that is where the capture lives. The
+The middleware wraps every job in a Sentry scope (transaction name, `queue` /
+`jid` tags, the `wurk` context) and captures the job's terminal failure while
+that scope is still open, so the event carries the job's identity. The
 exception is always re-raised: Wurk's retry pipeline, not Sentry, owns the
 failure.
 
 **2. Error handler** (`Wurk::Sentry::ErrorHandler`) — everything else.
 
-`config.error_handlers` still fires for the failures that are *not* a job:
+As on Sidekiq, every job failure also reaches `config.error_handlers`, once,
+with the job's own exception and `context: "Job raised exception"`. The
+middleware claims each exception it saw, so the handler does not report those a
+second time; it reports a job failure only when the exception never passed
+through the middleware (the job class failed to load, the Rails reloader or an
+earlier middleware raised), under the same terminal-attempt rule and job scope.
+It also reports the failures that are *not* a job:
 
 | `context:` | Raised by |
 |---|---|
+| `"Job raised exception"` | a job failure the middleware never saw (see above) |
 | `"Error fetching job"` | the fetch loop (`Processor#fetch`) |
 | `"!shutdown"` | an exception escaping the processor run loop |
+| `"Internal exception!"` | an error escaping the retry layer itself (the job is requeued) |
 | `"Invalid JSON"` | an unparseable payload, on its way to the dead set |
 | `"Error calling retries_exhausted"` / `"Failure scheduling retry via \`sidekiq_retry_in\`"` / `"Error calling death handler"` | a raising host callback inside the retry machinery |
 

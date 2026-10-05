@@ -109,35 +109,23 @@ module Wurk
       end
     end
 
-    # Re-enqueues every job in this set via the client. Lossy on errors
-    # mid-iteration; callers expecting transactional behavior should
-    # batch the work themselves.
+    # Re-enqueues every job in this set via the client. Returns how many were
+    # re-enqueued; a job the push rejects stays in the set (see #sweep_once).
     def retry_all
-      count = 0
-      until size.zero?
-        each do |entry|
-          entry.retry
-          count += 1
-        end
-      end
-      count
+      sweep_once(&:retry)
     end
 
     # Moves every job in this set to the dead set. Death handlers fire per
     # entry by default — `each(&:kill)` equivalence with Sidekiq; pass
-    # `notify_failure: false` to suppress. Returns the count of jobs moved.
+    # `notify_failure: false` to suppress. Returns the count of jobs moved; a
+    # job that could not be moved stays in this set (see #sweep_once).
     def kill_all(notify_failure: true, ex: nil)
-      count = 0
       dead = DeadSet.new
-      until size.zero?
-        each do |entry|
-          entry.send(:remove_job) do |message|
-            dead.kill(Wurk.dump_json(message), notify_failure: notify_failure, ex: ex)
-          end
-          count += 1
+      sweep_once do |entry|
+        entry.send(:remove_job) do |message|
+          dead.kill(Wurk.dump_json(message), notify_failure: notify_failure, ex: ex)
         end
       end
-      count
     end
 
     # O(score) lookup. `score` accepts Time, Numeric, or a Range of either.
@@ -198,6 +186,46 @@ module Wurk
     alias delete delete_by_jid
 
     private
+
+    # Yields each job at most once and returns how many it yielded. Upstream
+    # loops `while size > 0`, re-paging because every removal shifts the ranks
+    # `each` pages by — so a job that re-fails straight back into this set
+    # (a retry_all of a job that raises at once) keeps the set non-empty and
+    # pins the caller, a Puma thread for the dashboard's "Retry All", until the
+    # job finally dies. Keyed on jid: a re-failed job comes back as different
+    # bytes (retry_count, error fields) but the same jid. Passes repeat only
+    # while they still find jobs not yet seen.
+    #
+    # One entry's failure is that entry's: SortedEntry#remove_job has already
+    # put it back, so it is reported and the sweep moves on rather than 500ing
+    # the dashboard with the rest of the set untouched. A lost connection is
+    # everyone's — every later entry would fail the same way — so it raises.
+    # Returns the entries processed without error.
+    def sweep_once
+      seen = ::Set.new
+      done = 0
+      loop do
+        fresh = 0
+        each do |entry|
+          next unless seen.add?(entry.jid || entry.value)
+
+          fresh += 1
+          done += 1 if sweep_entry(entry) { yield entry }
+        end
+        break if fresh.zero?
+      end
+      done
+    end
+
+    def sweep_entry(entry)
+      yield
+      true
+    rescue ::RedisClient::ConnectionError, ::ConnectionPool::TimeoutError
+      raise
+    rescue StandardError => e
+      Wurk.configuration.handle_exception(e, { context: "#{@name} sweep", jid: entry.jid })
+      false
+    end
 
     # Translates ZRANGEBYSCORE input shapes (Time, Numeric, Range) to the
     # `min max` pair Redis expects.

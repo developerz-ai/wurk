@@ -88,6 +88,24 @@ class JobRetryTest < Wurk::Test::UnitCase
     def perform; end
   end
 
+  # `10.minutes * (count + 1)` in an app: an ActiveSupport::Duration, which is
+  # not an Integer.
+  class DurationDelayJob
+    include Wurk::Worker
+
+    sidekiq_retry_in { |count, _ex, _msg| ActiveSupport::Duration.minutes(10) * (count + 1) }
+
+    def perform; end
+  end
+
+  class StringDelayJob
+    include Wurk::Worker
+
+    sidekiq_retry_in { '60' }
+
+    def perform; end
+  end
+
   # Stands in for an ActiveJob-style wrapper target referenced via msg["wrapped"].
   # It exposes the per-class retry blocks the wrapped lookup prefers.
   class WrappedTarget
@@ -120,7 +138,7 @@ class JobRetryTest < Wurk::Test::UnitCase
   end
 
   # Plain class (no Worker mixin) → does not respond to the block accessors,
-  # so wrapped_block returns nil and falls back to the instance block.
+  # so a wrapped job carrying it runs with no retry block at all.
   class PlainWrapped; end
 
   # Exception whose #backtrace is nil even after being raised — exercises the
@@ -604,6 +622,21 @@ class JobRetryTest < Wurk::Test::UnitCase
     assert_operator score, :<=, before + 12 + 10
   end
 
+  def test_local_honours_a_duration_returned_by_retry_in
+    require 'active_support/duration'
+    score, before = retry_score_for(DurationDelayJob.new)
+
+    assert_operator score, :>=, before + 600
+    assert_operator score, :<=, before + 600 + 10
+  end
+
+  def test_local_honours_a_numeric_string_returned_by_retry_in
+    score, before = retry_score_for(StringDelayJob.new)
+
+    assert_operator score, :>=, before + 60
+    assert_operator score, :<=, before + 60 + 10
+  end
+
   # --- branch coverage: non-positive Integer delay → default (line 210 else)
 
   def test_local_falls_back_to_default_when_retry_in_returns_zero
@@ -641,9 +674,11 @@ class JobRetryTest < Wurk::Test::UnitCase
     assert_operator score, :<=, before + 7 + 10
   end
 
-  # --- branch coverage: wrapped class lacks accessor (line 258 else) ----
+  # --- wrapped class lacks accessor ---------------------------------------
+  # Sidekiq's rule: a wrapped job uses the wrapped class's block or none. The
+  # wrapper's own block (CustomDelayJob here, 42s) must not leak in.
 
-  def test_wrapped_lookup_falls_back_when_target_not_a_worker
+  def test_wrapped_job_ignores_the_wrapper_block_when_target_has_none
     inst = CustomDelayJob.new
     job = base_msg(retry: true, 'wrapped' => 'JobRetryTest::PlainWrapped')
     before = ::Time.now.to_f
@@ -654,10 +689,9 @@ class JobRetryTest < Wurk::Test::UnitCase
     @added << payload
     score = @pool.with { |c| c.call('ZSCORE', Wurk::Keys::RETRY, payload).to_f }
 
-    # PlainWrapped does not respond to the accessor → nil → fall back to the
-    # instance's CustomDelayJob block (42 + count=0 = 42).
-    assert_operator score, :>=, before + 42
-    assert_operator score, :<=, before + 42 + 11
+    # PlainWrapped has no block → default delay 0**4 + 15 (+0..9 jitter).
+    assert_operator score, :>=, before + 15
+    assert_operator score, :<=, before + 15 + 10
   end
 
   # --- branch coverage: wrapped retry_in block raises with nil jobinst --
@@ -692,6 +726,17 @@ class JobRetryTest < Wurk::Test::UnitCase
     assert_includes WrappedTarget.exhausted_received, job['jid'], 'wrapped exhausted block ran'
   end
 
+  def test_wrapped_job_ignores_the_wrapper_exhausted_block_when_target_has_none
+    ExhaustedJob.callbacks.clear
+    job = base_msg(retry: 0, 'retry_count' => 0, 'wrapped' => 'JobRetryTest::PlainWrapped')
+    assert_raises(Wurk::JobRetry::Handled) do
+      @retrier.local(ExhaustedJob.new, Wurk.dump_json(job), @queue) { raise 'final' }
+    end
+    @added << find_payload(Wurk::Keys::DEAD, job['jid'])
+
+    assert_empty ExhaustedJob.callbacks
+  end
+
   # --- branch coverage: inner_config_get fallback (line 317 else) ------
 
   def test_initialize_uses_default_max_retries_when_config_lacks_bracket
@@ -717,6 +762,17 @@ class JobRetryTest < Wurk::Test::UnitCase
       'jid' => "#{@ns}-#{SecureRandom.hex(8)}",
       'created_at' => ::Time.now.to_f
     }.merge(extra.transform_keys(&:to_s))
+  end
+
+  def retry_score_for(inst)
+    job = base_msg(retry: true)
+    before = ::Time.now.to_f
+    assert_raises(Wurk::JobRetry::Handled) do
+      @retrier.local(inst, Wurk.dump_json(job), @queue) { raise 'boom' }
+    end
+    payload = find_payload(Wurk::Keys::RETRY, job['jid'])
+    @added << payload
+    [@pool.with { |c| c.call('ZSCORE', Wurk::Keys::RETRY, payload).to_f }, before]
   end
 
   def jobstr(extra = {})

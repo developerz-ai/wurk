@@ -714,8 +714,11 @@ module Wurk
       yield self if block && server?
     end
 
+    # A web process that also boots the swarm (Wurk::RailsBoot) is flagged
+    # server, yet every enqueue it makes from a request is client work, so
+    # `client_in_server` lets its configure_client blocks run too.
     def configure_client(&block)
-      yield self if block && !server?
+      yield self if block && (!server? || @options[:client_in_server])
     end
 
     def server?
@@ -897,15 +900,15 @@ module Wurk
       logger
     end
 
-    # `size`/`name` are pool-structural (the caller owns them); every other
-    # key the host set via `config.redis = {...}` — url, the split timeouts,
-    # reconnect_attempts, driver, … — flows through to RedisPool verbatim.
-    # `overrides` win over the host config (the web pool pins its own
-    # pool_timeout this way). Every pool built here is wired to the redis-error
-    # telemetry dispatcher.
+    # `size` and the pool label are structural (the caller owns them); every
+    # other key the host set via `config.redis = {...}` — url, the split
+    # timeouts, reconnect_attempts, driver, a Sentinel `name:` … — flows through
+    # to RedisPool (see RedisOptions.pool_kwargs). `overrides` win over the
+    # host config (the web pool pins its own pool_timeout this way). Every pool
+    # built here is wired to the redis-error telemetry dispatcher.
     def build_redis_pool(size:, name:, **overrides)
       RedisPool.new(size: size, name: name, on_error: method(:dispatch_redis_error),
-                    **@redis_config.except(:size, :name), **overrides)
+                    **RedisOptions.pool_kwargs(@redis_config), **overrides)
     end
 
     # Fan a RedisPool retry/give-up event out to the registered handlers. A

@@ -6,7 +6,7 @@ module Wurk
   # up, and prepares the thread-local context hash (jid, class, plus
   # config[:logged_job_attributes]).
   #
-  # Two entry points, called from Processor#process in this order:
+  # Two entry points, called from Processor#dispatch in this order:
   #   1. prepare(job_hash) { ... }  → sets thread-local context, applies
   #      per-job log_level, yields to the rest of dispatch.
   #   2. call(item, queue) { ... }  → wraps the actual perform with the
@@ -24,6 +24,10 @@ module Wurk
       # #context_hash runs it per job only to walk a list that cannot change
       # after boot (Configuration freezes at launch).
       @logged_attributes = Array(@config[:logged_job_attributes]).map { |attr| [attr, attr.to_sym] }.freeze
+      # A host logger need not be a ::Logger >= 1.6 (SemanticLogger, a
+      # broadcast wrapper): without #with_level a per-job `log_level` is
+      # ignored rather than failing the job it was meant to annotate.
+      @with_level = @logger.respond_to?(:with_level)
       @skip = !!@config[:skip_default_job_logging]
     end
 
@@ -49,7 +53,7 @@ module Wurk
 
       level = job_hash['log_level']
       Wurk::Context.with(h) do
-        if level
+        if level && @with_level
           @logger.with_level(level, &block)
         else
           yield

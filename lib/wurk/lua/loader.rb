@@ -55,15 +55,18 @@ module Wurk
         #
         # A pipelined EVALSHA surfaces NOSCRIPT only when the pipeline finalizes
         # — never to #eval_cached's inline rescue, which has already returned by
-        # then — and the pipeline applies none of itself when it does. So
-        # recovery is one SCRIPT LOAD and a replay of the same block through
-        # source-embedded EVAL, which cannot raise NOSCRIPT at all.
+        # then. A pipeline is not a transaction: by the time that error is
+        # raised, every *other* command in it has already been applied; only
+        # the EVALSHAs failed. Recovery is one SCRIPT LOAD and a replay of the
+        # whole block through source-embedded EVAL, which cannot raise NOSCRIPT
+        # at all — so the plain commands run a second time.
         #
-        # The block is handed the pipeline and the eval method to route through,
-        # and must be replay-safe: it may run twice. Both of Fetcher::Reliable's
-        # callers pipeline commands that are (a replayed LREM removes nothing, a
-        # replayed reliable_requeue is LREM-guarded, a replayed fetch_slot claims
-        # a different job into the same private list).
+        # That is why the block must be replay-safe: it is handed the pipeline
+        # and the eval method to route through, and may run twice. Both of
+        # Fetcher::Reliable's callers pipeline commands that are (a replayed LREM
+        # removes nothing, a replayed reliable_requeue is LREM-guarded, a
+        # replayed fetch_slot claims a different job into the same private
+        # list), and so is Heartbeat's beat (every write converges).
         def pipelined_eval(redis)
           redis.pipelined { |pipe| yield pipe, :eval_cached }
         rescue RedisClient::CommandError => e

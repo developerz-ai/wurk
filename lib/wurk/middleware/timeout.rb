@@ -56,16 +56,16 @@ module Wurk
     class Timeout
       include Wurk::Middleware::ServerMiddleware
 
-      # The block is passed on rather than taken as `&block`: reifying it would
-      # allocate a Proc for every job in the process, bounded or not.
-      def call(_worker, job, _queue)
+      # A named block, not `&`: Ruby 3.3.0 rejects an anonymous block forwarded
+      # from inside another block (fixed in 3.3.1, but within the gem's floor).
+      def call(_worker, job, _queue, &block)
         attempt = bound_for(job)
         remaining = deadline_for(job)
         timer = (attempt || remaining) && watchdog
         return yield unless timer
 
         within_deadline(timer, job, remaining) do
-          within_attempt(timer, job, attempt) { yield } # rubocop:disable Style/ExplicitBlockArgument
+          within_attempt(timer, job, attempt, &block)
         end
       end
 
@@ -77,16 +77,16 @@ module Wurk
       # `watch` frames encloses the other is not load-bearing (each masks only
       # its own exception class, so both stay deliverable inside the job either
       # way); the absolute one is written outside to match the scopes they name.
-      def within_deadline(timer, job, remaining)
+      def within_deadline(timer, job, remaining, &)
         return yield unless remaining
 
-        timer.watch(remaining, ::Wurk::Job::DeadlineExceeded, deadline_message(job)) { yield } # rubocop:disable Style/ExplicitBlockArgument
+        timer.watch(remaining, ::Wurk::Job::DeadlineExceeded, deadline_message(job), &)
       end
 
-      def within_attempt(timer, job, seconds)
+      def within_attempt(timer, job, seconds, &)
         return yield unless seconds
 
-        timer.watch(seconds, ::Wurk::Job::TimedOut, timeout_message(job, seconds)) { yield } # rubocop:disable Style/ExplicitBlockArgument
+        timer.watch(seconds, ::Wurk::Job::TimedOut, timeout_message(job, seconds), &)
       end
 
       # A bound written through Wurk is type-checked at declaration, where the

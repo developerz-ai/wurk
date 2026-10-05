@@ -9,6 +9,11 @@ module Wurk
     # creation or batch-context pushes (`bid` on payload): BATCH_PUSH has
     # atomic counter side-effects we can't safely replay.
     #
+    # One buffer serves every pool, so each entry remembers the Redis it was
+    # headed for (its {Origin}) and is only ever replayed there: a sharded app
+    # pushing through `Client.via(shard_a)` must not have its outage backlog
+    # land on shard B because B's producer happened to push next.
+    #
     # Spec: docs/target/sidekiq-pro.md §5.
     module Buffered
       DEFAULT_BUFFER_CAP = 1_000
@@ -40,6 +45,31 @@ module Wurk
       # Returned by the append helpers when everything fit.
       NOTHING_UNDELIVERED = [].freeze
 
+      Entry = Struct.new(:payload, :origin)
+
+      # Where a buffered payload has to be replayed. What must NOT be captured
+      # is a pool object the config hands out: `reset_redis_pools!` — every
+      # fork, every embedded teardown — disconnects it and drops it for a
+      # lazily rebuilt one, and ConnectionPool#shutdown is terminal, so a
+      # pinned instance replays into dead sockets for the rest of the process's
+      # life. For such a pool the config (a Configuration or a Capsule, which
+      # survives the rebuild) is kept and asked again at replay time. A pool
+      # the config does not own — `Client.new(pool:)`, `Client.via(pool)` — is
+      # a second Redis nothing else can produce, so that one stays pinned,
+      # stale or not: replaying it anywhere else writes to the wrong server.
+      Origin = Struct.new(:config, :pool) do
+        def self.for(client)
+          pool = client.send(:pool)
+          config = client.instance_variable_get(:@config)
+          owned = config.respond_to?(:redis_pool) && config.redis_pool.equal?(pool)
+          owned ? new(config, nil) : new(nil, pool)
+        end
+
+        def resolve
+          config ? config.redis_pool : pool
+        end
+      end
+
       # Eagerly initialized: `||=` inside an accessor is not atomic — two
       # threads racing first-touch could end up holding distinct Mutex
       # instances and lose all synchronization on the shared buffer.
@@ -60,8 +90,6 @@ module Wurk
       @owner_pid = ::Process.pid
 
       class << self
-        attr_accessor :buffer_client_factory
-
         # Idempotent. Prepends the wrapper module into Wurk::Client so push /
         # push_bulk drain the buffer before each call and raw_push catches
         # connection errors. Safe to call from multiple threads.
@@ -117,11 +145,9 @@ module Wurk
             @buffer = []
             @buffer_cap = nil
             @overflow_mode = nil
-            @buffer_client_factory = nil
           end
-          # Stop before dropping: an unstopped drainer thread survives with
-          # its factory nil'd out from under it and ticks forever against
-          # nothing, leaking the thread and everything its closure retains.
+          # Stop before dropping: an unstopped drainer thread would otherwise
+          # tick on forever, unreachable, leaking the thread.
           install_mutex.synchronize do
             @drainer&.stop
             @drainer = nil
@@ -146,8 +172,7 @@ module Wurk
         # `@drainer` is dropped, never `stop`ped — its `@lock` carries the same
         # inherited-mutex hazard. A parent-configured drainer is replaced by an
         # equivalent fresh one so an opted-in child keeps flushing the buffer it
-        # fills itself; the captured client factory goes with it, since it
-        # closes over the parent's pre-fork Redis pool.
+        # fills itself.
         #
         # Deliberately unsynchronized: the child has exactly one thread here,
         # and waiting on the very mutex being replaced is what would hang it.
@@ -158,7 +183,6 @@ module Wurk
           @install_mutex         = Mutex.new
           @buffer_mutex          = Mutex.new
           @buffer                = []
-          @buffer_client_factory = nil
           interval               = @drainer&.interval
           @drainer               = nil
           start_drainer!(interval: interval) if interval
@@ -172,62 +196,30 @@ module Wurk
         #                                    raises one Overflow carrying every
         #                                    payload that did not fit.
         # Drops batched payloads — caller is expected to re-raise for those.
-        # If client is provided, captures its pool for drainer to use by default.
-        def enbuffer(payloads, client: nil)
-          capture_pool_from_client(client)
+        # `client` is the one whose push failed; every payload is tagged with
+        # the Redis that client was writing to (see Origin).
+        def enbuffer(payloads, client:)
+          origin = Origin.for(client)
+          entries = payloads.map { |payload| Entry.new(payload, origin) }
 
           cap  = buffer_cap
           mode = overflow_mode
           undelivered = buffer_mutex.synchronize do
-            mode == :raise ? append_within_capacity(payloads, cap) : append_dropping_oldest(payloads, cap)
+            mode == :raise ? append_within_capacity(entries, cap) : append_dropping_oldest(entries, cap)
           end
 
-          raise Overflow, undelivered unless undelivered.empty?
+          raise Overflow, undelivered.map(&:payload) unless undelivered.empty?
         end
 
         private
 
-        # Remember how the buffering client reaches Redis, so the drainer
-        # replays into the same server it was pushed to unless explicitly
-        # overridden.
-        def capture_pool_from_client(client)
-          return unless client && !buffer_client_factory
-
-          pool = client.instance_variable_get(:@redis_pool)
-          # A nil capture must not install a factory: it would pin the drainer
-          # to the DEFAULT pool forever (the `!buffer_client_factory` guard
-          # blocks any later, correct capture) — wrong Redis for jobs pushed
-          # through an explicit-pool client. A pool-less client already resolves
-          # its config at push time, and so does the fallback factory.
-          return unless pool
-
-          resolver = pool_resolver(client, pool)
-          self.buffer_client_factory = -> { Wurk::Client.new(pool: resolver.call) }
-        end
-
-        # What must NOT be captured is the pool object. `reset_redis_pools!` —
-        # every fork, every embedded teardown — disconnects a pool and drops it
-        # for a lazily rebuilt one, and ConnectionPool#shutdown is terminal, so
-        # a pinned instance leaves the drainer replaying into dead sockets for
-        # the rest of the process's life. The config (a Configuration or a
-        # Capsule) is what survives that rebuild, so ask it again at drain time
-        # whenever the client's pool is the one it hands out. A pool the config
-        # does not own is a second Redis nothing else can produce — that one
-        # stays pinned, stale or not, because replaying it anywhere else writes
-        # to the wrong server.
-        def pool_resolver(client, pool)
-          config = client.instance_variable_get(:@config)
-          config_owns = config.respond_to?(:redis_pool) && config.redis_pool.equal?(pool)
-          config_owns ? -> { config.redis_pool } : -> { pool }
-        end
-
-        # Both append helpers run with buffer_mutex held and return the payloads
+        # Both append helpers run with buffer_mutex held and return the entries
         # they could not take.
 
-        def append_dropping_oldest(payloads, cap)
-          payloads.each do |p|
+        def append_dropping_oldest(entries, cap)
+          entries.each do |entry|
             buffer.shift if buffer.size >= cap
-            buffer << p
+            buffer << entry
           end
           NOTHING_UNDELIVERED
         end
@@ -238,54 +230,61 @@ module Wurk
         # negative when the cap was lowered after the buffer filled — clamped,
         # so an over-full buffer rejects the whole call instead of raising on
         # `first`/`drop`.
-        def append_within_capacity(payloads, cap)
-          room = (cap - buffer.size).clamp(0, payloads.size)
-          if room == payloads.size
-            buffer.concat(payloads)
+        def append_within_capacity(entries, cap)
+          room = (cap - buffer.size).clamp(0, entries.size)
+          if room == entries.size
+            buffer.concat(entries)
             return NOTHING_UNDELIVERED
           end
 
-          buffer.concat(payloads.first(room))
-          payloads.drop(room)
+          buffer.concat(entries.first(room))
+          entries.drop(room)
         end
 
         public
 
-        # Drain payloads through `raw_push` on the given client. Stops on
-        # the first transient failure (ConnectionError past the pool's own
-        # retries, or a starved checkout), preserving order at the head of
-        # the buffer so the next push retries the same payload. Emits statsd
-        # `jobs.recovered.push` per drained payload, plus the `jobs.enqueued`
-        # the buffering push deliberately did not emit — the replay is where
-        # the job actually reaches Redis, so a buffered-then-drained job counts
-        # once as enqueued and once as recovered.
+        # Replay, through `raw_push` on `client`, the buffered payloads headed
+        # for the Redis that client writes to — oldest first; entries for any
+        # other Redis are left in place, so a push to a healthy shard neither
+        # misroutes nor waits on a dead one's backlog. Stops on the first
+        # transient failure (ConnectionError past the pool's own retries, or a
+        # starved checkout) and puts that payload back at the head, so the next
+        # push retries it first. Emits statsd `jobs.recovered.push` per drained
+        # payload, plus the `jobs.enqueued` the buffering push deliberately did
+        # not emit — the replay is where the job actually reaches Redis, so a
+        # buffered-then-drained job counts once as enqueued and once as
+        # recovered.
         def drain!(client)
+          return 0 if buffer_mutex.synchronize { buffer.empty? }
+
+          target = client.send(:pool)
           drained = 0
-          while (payload = pop_head)
-            begin
-              replayed = attempt_replay(client, payload)
-            rescue StandardError
-              # Non-connection failures (OOM, LOADING, READONLY…) must not
-              # drop the popped payload — restore it before propagating, or
-              # a recovering-but-not-ready Redis silently eats one buffered
-              # job per drain tick.
-              buffer_mutex.synchronize { buffer.unshift(payload) }
-              raise
-            end
+          while (entry = take_next(target))
+            break unless replay(client, entry)
 
-            unless replayed
-              buffer_mutex.synchronize { buffer.unshift(payload) }
-              break
-            end
-
-            client.send(:emit_enqueued, [payload])
-            Wurk::Metrics::Statsd.increment('jobs.recovered.push')
             drained += 1
           end
           drained
         end
 
-        # Internal — visible for tests. Treat as private.
+        # The background drainer's pass: every origin in the buffer, each
+        # through a client of its own, so one Redis still down does not hold
+        # back another that has recovered. Returns the total replayed; the
+        # first non-transient error is re-raised after every origin had its turn.
+        def drain_all!
+          failure = nil
+          drained = buffered_pools.sum do |pool|
+            drain!(Wurk::Client.new(pool: pool))
+          rescue StandardError => e
+            failure ||= e
+            0
+          end
+          raise failure if failure
+
+          drained
+        end
+
+        # Internal — visible for tests. Treat as private. Holds Entry structs.
         def buffer
           @buffer ||= []
         end
@@ -296,11 +295,10 @@ module Wurk
         # requirement: "Background drain thread flushes on reconnect" —
         # handles the case where push activity stops mid-outage so the
         # passive (drain-on-next-push) path never fires.
-        def start_drainer!(interval: Drainer::DEFAULT_INTERVAL, client_factory: nil)
+        def start_drainer!(interval: Drainer::DEFAULT_INTERVAL)
           install_mutex.synchronize do
             @drainer&.stop
-            factory = client_factory || buffer_client_factory || -> { Wurk::Client.new }
-            @drainer = Drainer.new(interval: interval, client_factory: factory)
+            @drainer = Drainer.new(interval: interval)
             @drainer.start
           end
         end
@@ -320,8 +318,45 @@ module Wurk
 
         attr_reader :install_mutex, :buffer_mutex
 
-        def pop_head
-          buffer_mutex.synchronize { buffer.shift }
+        # The oldest entry bound for `target`, removed from the buffer.
+        def take_next(target)
+          buffer_mutex.synchronize do
+            index = buffer.index { |entry| entry.origin.resolve.equal?(target) }
+            index && buffer.delete_at(index)
+          end
+        end
+
+        def buffered_pools
+          buffer_mutex.synchronize { buffer.map { |entry| entry.origin.resolve } }.uniq(&:object_id)
+        end
+
+        # The entry once it is in Redis, nil when it went back to the buffer.
+        # Same-origin order is all that matters (other entries go to another
+        # server), so a payload that could not be replayed goes back at the
+        # absolute head: ahead of every later entry for its own Redis.
+        def replay(client, entry)
+          begin
+            replayed = attempt_replay(client, entry.payload)
+          rescue StandardError
+            # Non-connection failures (OOM, LOADING, READONLY…) must not drop
+            # the taken payload — restore it before propagating, or a
+            # recovering-but-not-ready Redis silently eats one buffered job per
+            # drain tick.
+            restore(entry)
+            raise
+          end
+          unless replayed
+            restore(entry)
+            return
+          end
+
+          client.send(:emit_enqueued, [entry.payload])
+          Wurk::Metrics::Statsd.increment('jobs.recovered.push')
+          entry
+        end
+
+        def restore(entry)
+          buffer_mutex.synchronize { buffer.unshift(entry) }
         end
 
         # Drain marks the thread so our prepended raw_push re-raises the
@@ -338,12 +373,12 @@ module Wurk
         end
       end
 
-      # Background drain thread. Wakes every `interval` seconds and tries
-      # `Buffered.drain!` against a fresh Wurk::Client. drain! already
-      # short-circuits on the first transient failure, so a still-down Redis
-      # just leaves the buffer alone for this tick — no exponential
-      # backoff or explicit "reconnect detection" needed; the inner
-      # connection retry already lives inside `client.raw_push`.
+      # Background drain thread. Wakes every `interval` seconds and runs
+      # `Buffered.drain_all!`. drain! already short-circuits on the first
+      # transient failure, so a still-down Redis just leaves its entries alone
+      # for this tick — no exponential backoff or explicit "reconnect
+      # detection" needed; the inner connection retry already lives inside
+      # `client.raw_push`.
       class Drainer
         DEFAULT_INTERVAL = 2.0
         STOP_JOIN_TIMEOUT = 5.0
@@ -352,13 +387,12 @@ module Wurk
         # rebuild an equivalent one in the child without touching its lock.
         attr_reader :interval
 
-        def initialize(interval: DEFAULT_INTERVAL, client_factory: -> { Wurk::Client.new })
+        def initialize(interval: DEFAULT_INTERVAL)
           unless interval.is_a?(Numeric) && interval.positive?
             raise ArgumentError, 'interval must be a positive Numeric'
           end
 
           @interval = interval
-          @client_factory = client_factory
           @done = false
           @thread = nil
           @wake = ConditionVariable.new
@@ -397,13 +431,23 @@ module Wurk
             wait_interval
             break if @done
 
-            begin
-              Buffered.drain!(@client_factory.call)
-            rescue StandardError
-              # Swallow — next tick retries. Don't let a transient blow up
-              # the daemon thread.
-            end
+            tick
           end
+        end
+
+        # A raise must not end the thread — the next tick retries — but it is
+        # reported: a transient outage never gets here (drain! absorbs it), so
+        # whatever does is something an operator needs to see.
+        def tick
+          Buffered.drain_all!
+        rescue StandardError => e
+          report(e)
+        end
+
+        def report(error)
+          Wurk.configuration.handle_exception(error, { context: 'reliable_push drainer' })
+        rescue StandardError
+          nil
         end
 
         # Mutex+ConditionVariable lets `stop` wake the thread immediately

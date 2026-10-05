@@ -85,8 +85,10 @@ module Wurk
     end
 
     # SET NX EX. If the key already holds *our* owner string (rare — same
-    # process re-entering after a hiccup), refresh via EXPIRE so leadership
-    # doesn't lapse. On any follower → leader transition, INCR the global
+    # process re-entering after a hiccup), refresh its TTL so leadership
+    # doesn't lapse — both in one script (lua/leader_campaign.lua), so the
+    # refresh can't land on a lock a follower took in between. On any
+    # follower → leader transition, INCR the global
     # `leader-token` so the new token is strictly greater than every prior
     # leader's, then dispatch the `:leader` lifecycle event.
     def acquire # rubocop:disable Naming/PredicateMethod
@@ -150,19 +152,26 @@ module Wurk
     end
 
     # Bounded at TimerLoop::JOIN_TIMEOUT like every other periodic component: a
-    # tick parked on a wedged Redis (the campaign is a `SET NX EX`, so it waits
-    # out the socket timeouts) must not hold the whole process's teardown open —
-    # the swarm parent SIGKILLs a child that overruns its shutdown grace. The
-    # CAS release below runs either way; the loop's own trailing release makes
-    # a straggler's second attempt a no-op. A straggler also stays referenced,
-    # so a restart after a timed-out stop can't campaign twice in parallel.
+    # tick parked on a wedged Redis (the campaign waits out the socket
+    # timeouts) must not hold the whole process's teardown open — the swarm
+    # parent SIGKILLs a child that overruns its shutdown grace.
+    #
+    # Releases only once the loop is confirmed gone. A straggler still inside
+    # its campaign could otherwise re-take the lock right after this release,
+    # leaving a stopping process as leader for a full TTL; the straggler's own
+    # trailing release (#run_loop) covers that case instead, and the TTL
+    # covers a straggler that never comes back. A straggler also stays
+    # referenced, so a restart after a timed-out stop can't campaign twice in
+    # parallel.
     def stop
       thread = @mutex.synchronize do
         @done = true
         @sleeper.signal
         @thread
       end
-      @mutex.synchronize { @thread = nil } if thread.nil? || thread.join(TimerLoop::JOIN_TIMEOUT)
+      return unless thread.nil? || thread.join(TimerLoop::JOIN_TIMEOUT)
+
+      @mutex.synchronize { @thread = nil }
       release
     end
 
@@ -176,25 +185,22 @@ module Wurk
     # if another process currently holds the key. Sets `@held` accordingly
     # so `leader?` reflects the latest state regardless of branch.
     def run_set_or_refresh
-      redis_call do |c|
-        result = c.call('SET', @key, @owner, 'NX', 'EX', @ttl)
-        if result == 'OK'
-          outcome = @held ? :held : :gained
-          @held = true
-          return outcome
-        end
-
-        if c.call('GET', @key) == @owner
-          c.call('EXPIRE', @key, @ttl)
-          outcome = @held ? :held : :gained
-          @held = true
-          return outcome
-        end
-
-        @held = false
-        @token = nil
-        nil
+      won = redis_call do |c|
+        Wurk::Lua::Loader.eval_cached(c, :leader_campaign, keys: [@key], argv: [@owner, @ttl])
       end
+      if won.to_i == 1
+        outcome = @held ? :held : :gained
+        @held = true
+        return outcome
+      end
+
+      step_down
+      nil
+    end
+
+    def step_down
+      @held = false
+      @token = nil
     end
 
     def dispatch_leader_event
@@ -248,7 +254,16 @@ module Wurk
         tick_once
         wait_next
       end
+      release_on_exit
+    end
+
+    # The thread is exiting either way; a Redis error here is reported, not
+    # left to kill the thread silently (report_on_exception is off). The lock
+    # then lapses on its TTL.
+    def release_on_exit
       release
+    rescue StandardError => e
+      report(e)
     end
 
     # Same condvar as #wait_next, so a `stop` landing inside the pre-campaign
@@ -258,10 +273,20 @@ module Wurk
       wait_for(@initial_wait) if @initial_wait.positive?
     end
 
+    # An unconfirmed campaign means we can't claim the lock: keeping @held
+    # would leave every leader-gated consumer acting as leader through an
+    # outage long enough for a follower to take over, and would keep this loop
+    # on the short renew cadence. Stepping down makes the next success a fresh
+    # gain — a new fencing token and a re-fired `:leader` event.
     def tick_once
       acquire
     rescue StandardError => e
-      @config.handle_exception(e, context: THREAD_NAME) if @config.respond_to?(:handle_exception)
+      step_down
+      report(e)
+    end
+
+    def report(error)
+      @config.handle_exception(error, context: THREAD_NAME) if @config.respond_to?(:handle_exception)
     end
 
     def wait_next

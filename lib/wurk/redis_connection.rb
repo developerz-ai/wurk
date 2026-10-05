@@ -10,8 +10,9 @@ module Wurk
   # (connection_pool-backed, redis-client adapter), which is `.with`-compatible
   # with everything that expects a Sidekiq pool.
   #
-  # Accepts Sidekiq's option keys (`url`, `size`, `pool_timeout`, `name`) plus
-  # the socket knobs (`connect_timeout`/`read_timeout`/`write_timeout`/
+  # Accepts Sidekiq's option keys (`url`, `size`, `pool_timeout`, `pool_name`,
+  # and `name` — the Sentinel master next to `sentinels:`) plus the socket
+  # knobs (`connect_timeout`/`read_timeout`/`write_timeout`/
   # `reconnect_attempts`/`driver`), string- or symbol-keyed. Anything omitted
   # falls back to RedisPool's defaults (URL = ENV["REDIS_URL"] or
   # redis://localhost:6379/0).
@@ -21,7 +22,9 @@ module Wurk
 
     def self.create(options = {})
       opts = options.transform_keys(&:to_sym)
-      RedisPool.new(size: opts.delete(:size) || DEFAULT_POOL_SIZE, **opts)
+      RedisPool.new(size: opts[:size] || DEFAULT_POOL_SIZE,
+                    name: opts[:pool_name] || RedisPool::DEFAULT_NAME,
+                    **RedisOptions.pool_kwargs(opts))
     end
   end
 end

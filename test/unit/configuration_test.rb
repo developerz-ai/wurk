@@ -755,6 +755,17 @@ class ConfigurationTest < Wurk::Test::UnitCase
     refute yielded
   end
 
+  # K27: a serving web process that boots the swarm is server-flagged, but its
+  # request-path enqueues are client work.
+  def test_configure_client_yields_in_a_server_process_flagged_client_in_server
+    @config[:server] = true
+    @config[:client_in_server] = true
+    yielded = nil
+    @config.configure_client { |c| yielded = c }
+
+    assert_same @config, yielded
+  end
+
   # --- freeze! -----------------------------------------------------------
 
   def test_freeze_locks_options

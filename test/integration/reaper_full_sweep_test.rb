@@ -21,7 +21,9 @@ class ReaperFullSweepTest < Wurk::Test::UnitCase
     @config.logger = ::Logger.new(IO::NULL)
     @config.default_capsule.queues = ["#{@ns}-served"]
     @observer  = RedisClient.config(url: Wurk::Test.redis_url).new_client
-    @reaper    = Wurk::Fetcher::Reaper.new(@config, lock_key: "rf:#{@ns}", full_lock_key: "rff:#{@ns}")
+    # grace: 0 — the legacy case below seeds a heartbeat-judged list and
+    # reclaims it at once; the grace has its own cases in FetcherReaperTest.
+    @reaper    = Wurk::Fetcher::Reaper.new(@config, lock_key: "rf:#{@ns}", full_lock_key: "rff:#{@ns}", grace: 0)
     @child_pid = nil
   end
 

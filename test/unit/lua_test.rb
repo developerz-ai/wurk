@@ -37,7 +37,7 @@ class LuaTest < Wurk::Test::UnitCase
       %i[zpopbyscore bulk_push reliable_schedule_promote reliable_requeue
          batch_push batch_schedule batch_ack_success batch_ack_failed batch_ack_complete batch_invalidate
          batch_append_callback
-         fast_delete_job fast_delete_by_class release_if_owner cron_claim_fire
+         fast_delete_job fast_delete_by_class release_if_owner leader_campaign cron_claim_fire
          limiter_register limiter_list_sweep
          limiter_concurrent_acquire limiter_concurrent_release
          limiter_bucket_acquire limiter_window_acquire limiter_window_status limiter_leaky_acquire
@@ -138,7 +138,8 @@ class LuaTest < Wurk::Test::UnitCase
       c.call('ZADD', sset, 100, '{"queue":"alpha","jid":"a"}', 150, '{"queue":"beta","jid":"b"}',
              900, '{"queue":"alpha","jid":"future"}')
       count = Wurk::Lua::Loader.eval_cached(
-        c, :reliable_schedule_promote, keys: [sset, qset], argv: [500, "#{@ns}:queue:", 1_700_000_000_000, 500]
+        c, :reliable_schedule_promote,
+        keys: [sset, qset, "#{@ns}:dead"], argv: [500, "#{@ns}:queue:", 1_700_000_000_000, 500]
       )
 
       assert_equal 2, count
@@ -162,7 +163,7 @@ class LuaTest < Wurk::Test::UnitCase
     @pool.with do |c|
       c.call('ZADD', sset, 100, '{"queue":"alpha","jid":"a"}')
       Wurk::Lua::Loader.eval_cached(
-        c, :reliable_schedule_promote, keys: [sset, qset], argv: [500, "#{@ns}:queue:", now_ms, 500]
+        c, :reliable_schedule_promote, keys: [sset, qset, "#{@ns}:dead"], argv: [500, "#{@ns}:queue:", now_ms, 500]
       )
       promoted = Wurk.load_json(c.call('LRANGE', "#{@ns}:queue:alpha", 0, -1).first)
 
@@ -206,6 +207,25 @@ class LuaTest < Wurk::Test::UnitCase
       assert_equal 1_700_000_000_000, Wurk.load_json(raw)['enqueued_at'], 'stamp must be replaced in place'
       assert_equal 1, raw.scan('"enqueued_at"').size, 'replace must not leave a duplicate key'
       c.call('DEL', "#{@ns}:queue:beta")
+    end
+  end
+
+  # K6: a poison member scored below a valid one used to abort the script at
+  # the same member on every sweep. It must land in dead (scored `now`) while
+  # the valid member behind it still promotes.
+  def test_reliable_schedule_promote_moves_poison_members_to_dead_and_continues
+    sset = "#{@ns}:retry"
+    dead = "#{@ns}:dead"
+    poison = ['not json {', '42', '{"jid":"noq"}', '{"queue":7,"jid":"numq"}', '{"queue":null,"jid":"nullq"}']
+    @pool.with do |c|
+      poison.each_with_index { |m, i| c.call('ZADD', sset, 10 + i, m) }
+      c.call('ZADD', sset, 100, '{"queue":"alpha","jid":"ok"}')
+
+      assert_equal 6, promote(c, sset)
+      assert_equal 0, c.call('ZCARD', sset)
+      assert_equal(['ok'], c.call('LRANGE', "#{@ns}:queue:alpha", 0, -1).map { |raw| Wurk.load_json(raw)['jid'] })
+      assert_equal poison.sort, c.call('ZRANGE', dead, 0, -1).sort
+      assert_equal([500.0], poison.map { |m| c.call('ZSCORE', dead, m).to_f }.uniq)
     end
   end
 
@@ -576,7 +596,8 @@ class LuaTest < Wurk::Test::UnitCase
 
   def promote(conn, sset, now_ms = 1_700_000_000_000)
     Wurk::Lua::Loader.eval_cached(
-      conn, :reliable_schedule_promote, keys: [sset, "#{@ns}:queues"], argv: [500, "#{@ns}:queue:", now_ms, 500]
+      conn, :reliable_schedule_promote,
+      keys: [sset, "#{@ns}:queues", "#{@ns}:dead"], argv: [500, "#{@ns}:queue:", now_ms, 500]
     )
   end
 end

@@ -66,6 +66,10 @@ class ChildBootTest < Wurk::Test::UnitCase
     def quiet
       @events << :quiet
     end
+
+    def dump_threads
+      @events << :dump_threads
+    end
   end
 
   def setup
@@ -108,8 +112,39 @@ class ChildBootTest < Wurk::Test::UnitCase
     assert_equal [:stop], launcher.events
   end
 
+  def test_dispatch_signals_dumps_threads_on_ttin_then_stops
+    launcher = drive_dispatch('TTIN', 'TERM')
+
+    assert_equal %i[dump_threads stop], launcher.events
+  end
+
+  # K16, in a real fork: a quiet relayed into the boot window (reconnect,
+  # `:fork` / `:startup` hooks — before install_signal_handlers) used to hit
+  # TSTP's default disposition and SUSPEND the child. It must be held and
+  # replayed as a quiet once the handlers are in.
+  def test_tstp_in_the_boot_window_quiets_instead_of_suspending
+    read, write = ::IO.pipe
+    pid = ::Process.fork do
+      read.close
+      write.write(quiet_after_boot_window_tstp ? 'quiet' : 'not-quiet')
+      exit!(0)
+    end
+    write.close
+    _, status = ::Process.waitpid2(pid, ::Process::WUNTRACED)
+    if status.stopped?
+      ::Process.kill('KILL', pid)
+      ::Process.waitpid(pid)
+
+      flunk 'a TSTP in the boot window suspended the child'
+    end
+
+    assert_equal 'quiet', read.read
+  ensure
+    read&.close
+  end
+
   def test_install_signal_handlers_wires_self_pipe_dispatch
-    with_saved_traps(%w[TERM INT TSTP USR2]) do
+    with_saved_traps(%w[TERM INT TSTP USR2 TTIN]) do
       launcher = FakeLauncher.new
       @boot.send(:install_signal_handlers, launcher)
 
@@ -231,6 +266,17 @@ class ChildBootTest < Wurk::Test::UnitCase
   ensure
     r&.close
     w&.close
+  end
+
+  # Runs in the forked child: TSTP after the inherited traps are reset but
+  # before the real handlers exist, then the handlers go in.
+  def quiet_after_boot_window_tstp
+    @boot.send(:reset_inherited_signals)
+    ::Process.kill('TSTP', ::Process.pid)
+    sleep 0.05
+    launcher = FakeLauncher.new
+    @boot.send(:install_signal_handlers, launcher)
+    wait_until { launcher.events.include?(:quiet) }
   end
 
   def with_saved_traps(signals)

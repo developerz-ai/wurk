@@ -79,19 +79,6 @@ class ClientBufferedForkTest < Wurk::Test::UnitCase
     assert_equal 0, Wurk::Client::Buffered.buffer_size
   end
 
-  # The captured factory closes over the parent's pre-fork pool — the child
-  # must build a client against its own.
-  def test_reset_drops_the_captured_client_factory
-    buffer_payloads(1)
-
-    refute_nil Wurk::Client::Buffered.buffer_client_factory
-
-    simulate_fork!
-    Wurk::Client::Buffered.reset_after_fork!
-
-    assert_nil Wurk::Client::Buffered.buffer_client_factory
-  end
-
   # --- inherited mutexes -------------------------------------------------
 
   def test_reset_replaces_both_mutexes
@@ -136,7 +123,7 @@ class ClientBufferedForkTest < Wurk::Test::UnitCase
   end
 
   def test_reset_re_arms_an_equivalent_drainer
-    Wurk::Client::Buffered.start_drainer!(interval: 0.05, client_factory: idle_factory)
+    Wurk::Client::Buffered.start_drainer!(interval: 0.05)
     inherited = drainer
     kill_drainer_thread(inherited)
     simulate_fork!
@@ -147,19 +134,21 @@ class ClientBufferedForkTest < Wurk::Test::UnitCase
     assert_predicate Wurk::Client, :reliable_push_drainer_running?
   end
 
-  # End-to-end: the re-armed drainer must flush the buffer the *child* fills,
-  # through the child's own pool — not the failing one the parent pinned.
+  # End-to-end: the re-armed drainer must flush the buffer the *child* fills —
+  # and only that one: the payload inherited from the parent is gone with the
+  # reset, so it never reaches Redis from here.
   def test_re_armed_drainer_drains_the_childs_own_buffer
-    Wurk::Client::Buffered.start_drainer!(interval: 0.02, client_factory: idle_factory)
+    Wurk::Client::Buffered.start_drainer!(interval: 0.02)
     kill_drainer_thread(drainer)
-    buffer_payloads(1)
+    buffer_payloads(1, args: ['pre-fork'])
     simulate_fork!
     Wurk::Client::Buffered.reset_after_fork!
 
-    buffer_payloads(1, args: ['post-fork'])
+    child_pool = buffer_payloads(1, args: ['post-fork'])
+    child_pool.recover!
 
     assert(eventually? { queued_args == [['post-fork']] },
-           'the re-armed drainer never flushed the buffer through the default pool')
+           'the re-armed drainer never flushed the child\'s own buffer')
   end
 
   # --- statsd memo: fork + reconfigure (Plan 04/S8) -----------------------
@@ -219,12 +208,6 @@ class ClientBufferedForkTest < Wurk::Test::UnitCase
     Wurk::Client::Buffered.instance_variable_get(:@drainer)
   end
 
-  # Satisfies the drainer's factory contract without touching Redis: drain!
-  # pops nothing from an empty buffer, so no method on the client is called.
-  def idle_factory
-    -> { Object.new }
-  end
-
   def mutexes
     %i[@install_mutex @buffer_mutex].map { |ivar| Wurk::Client::Buffered.instance_variable_get(ivar) }
   end
@@ -238,10 +221,13 @@ class ClientBufferedForkTest < Wurk::Test::UnitCase
   end
 
   # Payloads reach the buffer the production way — a push against a dead pool —
-  # so the pinned client factory is captured just like it is in a real outage.
+  # so each carries the origin a real outage tags it with. Returns that pool;
+  # `recover!` brings it back.
   def buffer_payloads(count, args: [])
-    client = Wurk::Client.new(pool: failing_pool)
+    pool = RecoverablePool.new(@pool)
+    client = Wurk::Client.new(pool: pool)
     count.times { client.push({ 'class' => @class_name, 'args' => args, 'queue' => @queue }) }
+    pool
   end
 
   def lock_buffer_mutex
@@ -292,10 +278,20 @@ class ClientBufferedForkTest < Wurk::Test::UnitCase
     @pool.with { |c| c.call('LRANGE', "queue:#{@queue}", 0, -1) }.map { |s| JSON.parse(s)['args'] }
   end
 
-  def failing_pool
-    pool = Object.new
-    pool.define_singleton_method(:with) { |&blk| blk.call(FailingConn.new) }
-    pool
+  # Down until `recover!`, then the real pool.
+  class RecoverablePool
+    def initialize(real)
+      @real = real
+      @down = true
+    end
+
+    def recover! = @down = false
+
+    def with(&)
+      return yield FailingConn.new if @down
+
+      @real.with(&)
+    end
   end
 
   class FailingConn

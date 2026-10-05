@@ -814,6 +814,7 @@ Job lifecycle inside `#process`:
    - `@retrier.local(instance, jobstr, queue)`
 4. Server middleware chain → `execute_job(instance, args)` → `instance.perform(*args)`
 5. `uow.acknowledge` on success (or `Skip`/`Handled`); on `Shutdown` do NOT ack (job will be requeued).
+6. On `Handled` (not `Skip`): `handle_exception(h.cause || h, context: "Job raised exception", job: job_hash)` — every `config.error_handlers` entry sees each job failure once — then re-raise the original exception.
 
 ---
 

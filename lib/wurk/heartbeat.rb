@@ -22,7 +22,7 @@ module Wurk
   #   EXPIRE <identity>:work     60                  (only if WORK_STATE non-empty)
   #   EVALSHA refresh_slots      <held slots>        (only if QueueSlot::HELD non-empty)
   # then the signal drain:
-  #   LPOP   <identity>-signals  × BEAT_PAUSE
+  #   RPOP   <identity>-signals  × BEAT_PAUSE
   # Two rather than one because only the first is safe to replay — see
   # #pipelined_beat and #drain_signals.
   #
@@ -44,6 +44,20 @@ module Wurk
     # Cadence in seconds. Key TTL is 60s — a process is dead after ~6 misses.
     BEAT_PAUSE = 10
     TTL_SECONDS = 60
+    FALLBACK_PAGE_SIZE = 4096
+
+    # statm counts pages, and a page is not 4 KB everywhere: arm64 kernels
+    # commonly run 16 KB or 64 KB pages, where a hard-coded ×4 under-reports
+    # RSS by 4–16×.
+    def self.page_size(etc = Etc)
+      size = etc.sysconf(Etc::SC_PAGESIZE)
+      size.is_a?(Integer) && size.positive? ? size : FALLBACK_PAGE_SIZE
+    # NotImplementedError (a ScriptError) is what Etc raises without sysconf.
+    rescue StandardError, NotImplementedError
+      FALLBACK_PAGE_SIZE
+    end
+
+    PAGE_SIZE = page_size
 
     attr_reader :identity, :rtt_us, :last_beat_at
 
@@ -153,19 +167,24 @@ module Wurk
       pipe.call('EXPIRE', work_key, TTL_SECONDS)
     end
 
-    # Its own checkout, and never an idempotent one: LPOP is destructive and
+    # Its own checkout, and never an idempotent one: RPOP is destructive and
     # carries its result in the reply, so a replay after a lost reply discards
     # whatever the first attempt already popped — and a discarded entry is a
-    # dashboard TERM or TSTP this process never acts on. Fused into the beat
-    # pipeline it would have dragged those writes down to the same no-replay
-    # default, or worse, invited a later sweep to claim the LPOPs alongside
-    # them. Runs after the beat so a signal only leaves Redis once the write
+    # dashboard TERM or TSTP this process never acts on. The pool never
+    # replays it; redis-client's own single re-send on a dropped socket
+    # (RedisPool::DEFAULT_RECONNECT_ATTEMPTS) still can, and an entry popped by
+    # the lost first attempt is a signal this process never acts on — the same
+    # exposure Sidekiq has. Fused into the beat pipeline it would have dragged
+    # those writes down to the same no-replay default, or worse, invited a
+    # later sweep to claim the RPOPs alongside them. Runs after the beat so a signal only leaves Redis once the write
     # that reports us alive has landed.
     #
-    # LPOP one entry per second of cadence so a flood of queued signals
-    # can't stall the beat; anything older drains on the next beat.
+    # RPOP because ProcessSet::Process#signal LPUSHes: signals run in the
+    # order they were sent (Sidekiq's launcher pops the same end). One entry
+    # per second of cadence so a flood of queued signals can't stall the beat;
+    # anything newer drains on the next beat.
     def drain_signals
-      redis { |conn| conn.pipelined { |pipe| BEAT_PAUSE.times { pipe.call('LPOP', "#{@identity}-signals") } } }
+      redis { |conn| conn.pipelined { |pipe| BEAT_PAUSE.times { pipe.call('RPOP', "#{@identity}-signals") } } }
     end
 
     def info_hash
@@ -270,17 +289,21 @@ module Wurk
       end
     end
 
-    # Linux first via /proc/self/statm[1] (resident pages × 4 KB);
+    # Linux first via /proc/self/statm[1] (resident pages × page size);
     # `ps` fallback for macOS/BSD test runners. Zero on failure — the
     # dashboard shows "—" rather than crashing.
     def memory_usage_kb
       if ::File.exist?('/proc/self/statm')
-        ::File.read('/proc/self/statm').split[1].to_i * 4
+        statm_rss_kb(::File.read('/proc/self/statm'))
       else
         `ps -o rss= -p #{::Process.pid}`.to_i
       end
     rescue StandardError
       0
+    end
+
+    def statm_rss_kb(statm)
+      statm.split[1].to_i * PAGE_SIZE / 1024
     end
   end
 end

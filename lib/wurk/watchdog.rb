@@ -71,10 +71,10 @@ module Wurk
     # The mask only contains a raise that is issued while this frame is on the
     # stack; #tick is what guarantees that, by taking the same @lock #disarm
     # takes and holding it across the raise.
-    def watch(seconds, exception, message = nil)
+    def watch(seconds, exception, message = nil, &block)
       bound_id = arm(seconds, exception, message)
       Thread.handle_interrupt(exception => :never) do
-        Thread.handle_interrupt(exception => :immediate) { yield } # rubocop:disable Style/ExplicitBlockArgument
+        Thread.handle_interrupt(exception => :immediate, &block)
       ensure
         # Masked against everything, not just `exception`: a job holding two
         # bounds runs this inside the other one's `:immediate` scope, and a raise

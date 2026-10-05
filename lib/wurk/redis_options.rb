@@ -68,11 +68,28 @@ module Wurk
         validate!(opts)
         opts = translate(opts)
 
-        # A default `url` is meaningless next to a sentinel set and actively
-        # harmful: SentinelConfig derives the master name and db from it.
-        defaults = defaults.except(:url) if sentinel?(opts)
-
+        # The default `url` survives next to a sentinel set, as in Sidekiq
+        # (`url ||= REDIS_URL`): SentinelConfig reads the db and credentials off
+        # it and falls back to its host for the master name, so
+        # REDIS_URL=redis://mymaster/2 plus `sentinels:` is a working config.
+        # An explicit `name:` still wins over the url's host.
         defaults.merge(split_timeouts(opts), opts.except(*UMBRELLA_TIMEOUT_KEYS))
+      end
+
+      # The keyword set a `config.redis`-shaped hash hands to RedisPool.new,
+      # whose own `name:` is its telemetry label (Sidekiq's `pool_name:`).
+      # Sidekiq spells the Sentinel master `name:`, so next to `sentinels:` it is
+      # carried as `master_name` — otherwise it would collide with the label
+      # and never reach RedisClient.sentinel. An explicit `master_name` wins,
+      # as it does in Sidekiq's own translation. Without sentinels `name` has no
+      # redis-client meaning and is dropped; `size` and `pool_name` are the
+      # caller's to place.
+      def pool_kwargs(options)
+        opts = symbolize(options)
+        name = opts[:name]
+        opts = opts.except(:size, :name, :pool_name)
+        opts[:master_name] = name if name && sentinel?(opts) && !opts.key?(:master_name)
+        opts
       end
 
       # Raises for anything redis-client would reject. Cheap and pure, so it runs

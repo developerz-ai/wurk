@@ -126,6 +126,24 @@ class RedisPoolTest < Wurk::Test::UnitCase
     assert_instance_of RedisClient::SentinelConfig, @pool.send(:redis_client_config)
   end
 
+  # K8: the Sidekiq-shaped Sentinel hash, through both pool builders.
+  def test_sentinel_name_reaches_redis_client_through_redis_connection
+    @pool = Wurk::RedisConnection.create(sentinels: [{ host: '127.0.0.1', port: 26_379 }], name: 'mymaster',
+                                         pool_name: 'shard-a')
+
+    assert_equal 'mymaster', @pool.send(:redis_client_config).name
+    assert_equal 'shard-a', @pool.name
+  end
+
+  def test_sentinel_name_reaches_redis_client_through_the_configuration
+    config = Wurk::Configuration.new
+    config.redis = { sentinels: [{ host: '127.0.0.1', port: 26_379 }], name: 'mymaster' }
+    @pool = config.new_redis_pool(1, 'custom')
+
+    assert_equal 'mymaster', @pool.send(:redis_client_config).name
+    assert_equal 'custom', @pool.name
+  end
+
   def test_unsupported_option_raises_naming_the_key
     error = assert_raises(ArgumentError) { Wurk::RedisPool.new(size: 1, namespace: 'app') }
 
@@ -399,6 +417,33 @@ class RedisPoolTest < Wurk::Test::UnitCase
     assert_equal([true, false], events.map { |e| e[:retried] })
   end
 
+  # K11: a starved checkout of a *different* pool from inside the block raises
+  # the same ConnectionPool::TimeoutError class our own checkout does. The
+  # outer block already ran its INCR, so replaying it would count twice.
+  def test_nested_checkout_timeout_does_not_replay_the_outer_block
+    @pool = build_pool(size: 1, name: 'outer')
+    inner = build_pool(size: 1, pool_timeout: 0.05, name: 'inner')
+    key = "k11:#{object_id}"
+    hog = hold_checkout(inner)
+
+    no_checkout_sleep(@pool) do
+      no_checkout_sleep(inner) do
+        assert_raises(ConnectionPool::TimeoutError) do
+          @pool.with do |conn|
+            conn.call('INCR', key)
+            inner.with { |c| c.call('PING') }
+          end
+        end
+      end
+    end
+
+    assert_equal('1', @pool.with { |c| c.call('GET', key) })
+  ensure
+    release_checkout(hog)
+    @pool&.with { |c| c.call('DEL', key) }
+    inner&.disconnect!
+  end
+
   # --- backoff timing formulas ---
 
   def test_backoff_delay_grows_exponentially_within_jitter
@@ -461,6 +506,28 @@ class RedisPoolTest < Wurk::Test::UnitCase
 
   def build_pool(size: 1, pool_timeout: 1, name: 'test')
     Wurk::RedisPool.new(size: size, url: Wurk::Test.redis_url, pool_timeout: pool_timeout, name: name)
+  end
+
+  # Parks a thread holding `pool`'s only slot until released.
+  def hold_checkout(pool)
+    gate = Queue.new
+    held = Queue.new
+    thread = Thread.new do
+      pool.with do
+        held << true
+        gate.pop
+      end
+    end
+    held.pop
+    [thread, gate]
+  end
+
+  def release_checkout(hog)
+    return unless hog
+
+    thread, gate = hog
+    gate << true
+    thread.join(5)
   end
 
   def pool_wrapping(conn, on_error: nil)

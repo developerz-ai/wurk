@@ -104,7 +104,7 @@ module Wurk
                     Wurk::RedisPool.new(
                       size: @redis[:size] || 10,
                       name: 'limiter',
-                      **@redis.except(:size, :name)
+                      **Wurk::RedisOptions.pool_kwargs(@redis)
                     )
                   else
                     raise ArgumentError, "Limiter.config.redis must be Hash or RedisPool, got #{@redis.class}"

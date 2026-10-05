@@ -6,7 +6,7 @@ PATH
       concurrent-ruby (~> 1.2)
       connection_pool (>= 2.4, < 4)
       fiddle (>= 1.0, < 2)
-      logger (>= 1.5, < 2)
+      logger (>= 1.6, < 2)
       rack (>= 2.2, < 4)
       redis-client (~> 0.22)
 

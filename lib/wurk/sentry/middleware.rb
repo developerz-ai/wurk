@@ -2,21 +2,19 @@
 
 require_relative '../middleware'
 require_relative '../job_retry'
+require_relative 'error_handler'
 require_relative 'job_context'
 require_relative 'retry_policy'
 
 module Wurk
   module Sentry
     # Server middleware: scopes every job for Sentry, and reports the job's
-    # terminal failure.
+    # terminal failure while that scope is still open.
     #
-    # Both halves are needed because a *job* failure never reaches
-    # `config.error_handlers`. `JobRetry#local` rescues the exception, books
-    # the retry, and raises `JobRetry::Handled`, which `Processor#process`
-    # swallows — so an error handler alone sees fetch-loop errors and nothing
-    # else. The middleware runs *inside* `JobRetry#local` (see
-    # `Processor#dispatch`), which is the only place the raw exception is
-    # still in flight.
+    # The same failure then reaches `config.error_handlers` as
+    # `"Job raised exception"`; the middleware marks every exception it saw
+    # (captured or not) so {ErrorHandler} leaves it alone and reports only the
+    # job failures that never passed through here.
     #
     # The exception is always re-raised: Wurk's retry pipeline, not this
     # middleware, owns the failure.
@@ -49,6 +47,7 @@ module Wurk
       rescue Exception => e # rubocop:disable Lint/RescueException
         raise if caused_by_shutdown?(e)
 
+        ErrorHandler.seen_by_middleware!(e)
         ::Sentry.capture_exception(e) if RetryPolicy.terminal?(job, instance, config)
         raise
       end

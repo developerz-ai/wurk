@@ -45,11 +45,13 @@ module Wurk
       end
     end
 
-    # ZINCRBY to shift the score; positive deltas reschedule into the future.
-    # Sidekiq passes the absolute target time; we compute the delta here so
-    # the call survives clock skew between caller and Redis.
+    # Shifts the score by the delta to `at`, returning the new score like
+    # Sidekiq's ZINCRBY does. `ZADD XX INCR` is that ZINCRBY minus its one
+    # surprise: on a member already promoted or deleted it returns nil instead
+    # of re-creating it, so a stale dashboard row can't resurrect a job that
+    # has since run.
     def reschedule(at)
-      Wurk.redis { |conn| conn.call('ZINCRBY', @parent.name, at.to_f - @score, value) }
+      Wurk.redis { |conn| conn.call('ZADD', @parent.name, 'XX', 'INCR', at.to_f - @score, value) }
     end
 
     # Removes this entry and re-enqueues it via the client with the payload
@@ -92,11 +94,20 @@ module Wurk
     # Returns nil without yielding when the parent removal fails — prevents
     # duplicate side effects (e.g. retry pushing twice) if another caller
     # already removed the entry.
+    #
+    # Remove-then-push: a push that raises (client validation, a middleware,
+    # Redis) would otherwise leave the job in neither place. The original
+    # bytes go back at the original score before the error propagates.
     def remove_job
       message = item.dup
       return nil unless @parent.remove_job(self)
 
-      yield message
+      begin
+        yield message
+      rescue StandardError
+        Wurk.redis { |conn| conn.call('ZADD', @parent.name, @score, value) }
+        raise
+      end
       message
     end
   end

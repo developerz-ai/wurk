@@ -80,6 +80,23 @@ class MetricsFlusherTest < Wurk::Test::UnitCase
     refute_predicate @acc, :empty?
   end
 
+  # K1: the flush thread itself outlives repeated Redis failures — the failed
+  # window stays merged back and every tick tries again.
+  def test_flush_thread_survives_a_redis_error
+    @acc.add(BrokenPool.new, @klass, @at.to_i / 60, 1, true)
+    flusher = build_flusher
+    flusher.instance_variable_set(:@timer, Wurk::TimerLoop.new(0.01))
+
+    thread = flusher.start
+    deadline = ::Process.clock_gettime(::Process::CLOCK_MONOTONIC) + 2
+    sleep 0.01 while @reported.size < 3 && ::Process.clock_gettime(::Process::CLOCK_MONOTONIC) < deadline
+
+    assert_operator @reported.size, :>=, 3
+    assert_predicate thread, :alive?
+  ensure
+    flusher&.terminate
+  end
+
   # The signed-off cost is that a *hard* kill drops the unflushed window. A
   # graceful stop must not: terminate stops the only thread that would have
   # written it, so it writes it itself on the way out.

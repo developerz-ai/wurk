@@ -411,3 +411,113 @@ resetting it.
 **Anchor:** `lib/wurk/job_util.rb:205-219`, `lib/wurk/middleware/timeout.rb`,
 `lib/wurk/middleware/expiry.rb`, `lib/wurk/job.rb` (`Job::TimedOut`,
 `Job::DeadlineExceeded`).
+
+## Scheduler wait falls back to one average interval, not a fixed 5s sleep
+
+**Wurk:** when the Redis read that sizes the poll interval fails, `Scheduled::Poller#wait` reports the error (`scheduler_wait`) and waits one plain average interval on its own wake-up signal.
+
+**Spec:** Sidekiq rescues in `wait` and sleeps a fixed 5 seconds.
+
+**Why:** the wait stays interruptible, so `terminate` is not held up by a sleep; the thread survives either way, which is the behaviour that matters.
+
+**Anchor:** `lib/wurk/scheduled.rb`.
+
+## Unpromotable scheduled/retry members go to the dead set without trimming or death handlers
+
+**Wurk:** a member the promoter cannot decode or push (reliable Lua path or default `Enq#push_promoted`) is moved to `dead` as a plain ZADD with its original bytes, scored now.
+
+**Spec:** Sidekiq's promoter has no poison handling; one undecodable member blocks the set.
+
+**Why:** a poison member must not starve the rest of `retry`/`schedule`. Running death handlers for a payload that never ran as a job would report a job failure that did not happen.
+
+**Anchor:** `lib/wurk/lua.rb` (`RELIABLE_SCHEDULE_PROMOTE`), `lib/wurk/scheduled.rb`.
+
+## Leader re-announces after stepping down on an error
+
+**Wurk:** a Redis error during a leader campaign drops leadership and clears the token; the next successful campaign counts as a fresh win (new token, `:leader` fires again).
+
+**Spec:** Ent's leader election keeps its claim across transient errors until the TTL lapses.
+
+**Why:** after an error the process cannot know whether it still holds the lock; stepping down is the safe reading, and a duplicate `:leader` event is harmless where a stale "I am leader" is not.
+
+**Anchor:** `lib/wurk/leader.rb`, `lib/wurk/lua/leader_campaign.lua`.
+
+## `SortedEntry#reschedule` returns nil for a removed job instead of re-creating it
+
+**Wurk:** `reschedule` uses `ZADD XX INCR`; a member that was already promoted or deleted stays gone and the call returns nil.
+
+**Spec:** upstream's `ZINCRBY` re-creates the member.
+
+**Why:** resurrecting a job that already ran (or was deleted on purpose) double-runs it.
+
+**Anchor:** `lib/wurk/sorted_entry.rb`.
+
+## Dashboard bulk actions report per-entry failures with HTTP 422
+
+**Wurk:** retry / add-to-queue / kill actions continue past a rejected entry, put it back in its set, and answer `422 {ok: false, count, failed: [{key, error}]}`; Redis errors still answer 503.
+
+**Spec:** Sidekiq's Web stops at the first exception (500).
+
+**Why:** one bad payload must not block the rest of a bulk action or lose the entry it failed on.
+
+**Anchor:** `app/controllers/wurk/api_controller.rb`, `lib/wurk/job_set.rb`.
+
+## A lost-reply Idempotency-Key stays pending until its TTL
+
+**Wurk:** the REST API releases an `Idempotency-Key` only when the error proves the write never applied; an unknown outcome (lost reply) keeps the key pending until its TTL (1h default), so a client retry gets 409 "in progress" rather than a second enqueue.
+
+**Spec:** no upstream equivalent (Wurk REST API).
+
+**Why:** releasing on an unknown outcome is exactly how a retry double-enqueues.
+
+**Anchor:** `lib/wurk/api/idempotency.rb`, `lib/wurk/client.rb`.
+
+## `reconnect_attempts: 1` is kept — same exposure as Sidekiq #3303
+
+**Wurk:** redis-client re-sends the one in-flight command once on a dropped socket (Sidekiq's setting). `RedisPool` never replays a block whose connection was handed out.
+
+**Spec:** identical to Sidekiq.
+
+**Why:** with 0, every stale socket after a Redis restart or failover surfaces as an enqueue error the pool cannot safely replay. A lost reply on the re-sent pop is the residual risk upstream accepts too.
+
+**Anchor:** `lib/wurk/redis_pool.rb`.
+
+## `JobLogger#prepare` runs inside `retrier.global`
+
+**Wurk:** the job logger's context setup runs inside the global retry handler.
+
+**Spec:** §14 lists `prepare` before `retrier.global`.
+
+**Why:** an exception from `prepare` (a logger without `with_level`, a SemanticLogger quirk) would otherwise escape with the job un-ACKed in a live process's private list, stuck until restart.
+
+**Anchor:** `lib/wurk/processor.rb`.
+
+## An internal exception requeues the job and keeps the processor thread
+
+**Wurk:** a non-`Handled` exception escaping the retry layer (e.g. the retry ZADD fails on a blip) is reported as `Internal exception!`, the unit of work is requeued (LREM private + RPUSH public), and the processor thread continues.
+
+**Spec:** the exception kills the processor thread and the job stays in the private list until the process restarts (reaped then).
+
+**Why:** a live owner's private list is never reaped, so upstream's behaviour strands the job for the life of the process. Residual risk: a job that fails the same way every time cycles through requeue, reported each time.
+
+**Anchor:** `lib/wurk/processor.rb`.
+
+## `set(wait:)` / `perform_in` reject String intervals
+
+**Wurk:** a String interval raises `ArgumentError`.
+
+**Spec:** upstream coerces with `to_f`, so `"soon"` silently means now.
+
+**Why:** a silent "run now" for a typo is worse than an error at enqueue.
+
+**Anchor:** `lib/wurk/worker/setter.rb`.
+
+## A logger without `with_level` ignores a job's `log_level`
+
+**Wurk:** `JobLogger` checks `respond_to?(:with_level)` once; without it the job runs at the logger's level.
+
+**Spec:** upstream calls `with_level` unconditionally and raises.
+
+**Why:** a logging capability must not decide whether a job runs.
+
+**Anchor:** `lib/wurk/job_logger.rb`.

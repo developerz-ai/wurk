@@ -6,10 +6,34 @@ All notable changes to Wurk are recorded here. Format: [Keep a Changelog](https:
 
 ### Changed
 
+- **The Rails railtie boots workers only inside a web server.** `rails server`, Puma, Passenger or Unicorn boot the swarm; `rails runner`, `rails generate`, rake tasks and scripts that require `config/environment` no longer fork one (they used to fetch jobs and cut them off at exit). Other servers (Falcon, Thin, Pitchfork, a custom rackup) opt in with `WURK_EMBED=1`. `WURK_DISABLED=1` still disables boot.
+- **A Rails web process that runs Wurk workers also runs `Sidekiq.configure_client` blocks**, so web-side enqueues get client middleware and settings.
+- **CI runs entirely on free GitHub-hosted runners**; a push to `main` whose tree already passed on its PR skips the duplicate run; the demo auto-deploys on every push to `main` that changes the image.
+- **Concurrent suite runs on one Redis can isolate themselves with `WURK_TEST_DB_OFFSET=<k>`.**
 - **`bin/check` probes the Redis at `REDIS_URL`, not a pinned `127.0.0.1:6379`.** The guard now checks the server the suite actually connects to (`REDIS_URL`, which `test_helper` and `RedisPool` already read), and falls back to the suite's own default, `redis://localhost:6379/0`, when it is unset, so nothing changes for a local run. `bin/test-ecosystem` uses DB 15 of the same server. A developerz.ai box can now run this gate against a Redis on a private port, which leaves 6379 free for another repo's own store on the same box.
 
 ### Fixed
 
+- **Job exceptions reach `config.error_handlers` again.** Honeybadger, Rollbar, Bugsnag, Airbrake and custom handlers were never told about job failures (Sentry's middleware was); each handler now gets every failure once, with `context: "Job raised exception"` and the job hash, like Sidekiq.
+- **A Redis blip no longer kills the scheduler thread for good.** Retries and scheduled jobs stopped being promoted in that process after any outage that spanned a poll tick. Every long-lived thread loop (scheduler, heartbeat, leader, metrics flush/rollups/history, reaper, buffer drainer, swarm supervisor) now survives a Redis error, with a test each.
+- **The reaper can no longer re-run a live worker's job.** A worker writes its first heartbeat before fetching, and the reaper re-checks the owner's heartbeat and requires the private list to be idle for a grace period (30s) right before reclaiming it.
+- **One undecodable retry/scheduled member no longer wedges promotion cluster-wide** under `reliable_scheduler!`; it goes to the dead set and the rest promote.
+- **`sidekiq_retry_in` returning an `ActiveSupport::Duration` or String is honoured** instead of silently falling back to the default backoff.
+- **ActiveJob classes' own `sidekiq_options` (e.g. `retry: false`) win over the wrapper defaults**, as in Sidekiq.
+- **Sentinel configs work:** `name:` reaches redis-client as the master name and the default URL is kept.
+- **`Sidekiq.redis` inside a job uses that job's capsule pool**, not the default one.
+- **A job is never stranded in a live process's private list** when the retry layer or job logger raises; it is requeued before the thread exits.
+- **`RedisPool#with` no longer replays a non-idempotent block** when a nested checkout of another pool times out.
+- **Outage-buffered jobs replay into the Redis they were pushed to** (`Client.via` shards).
+- **`UnitOfWork#requeue` removes the private copy**, so a requeued job cannot be reclaimed and run twice later.
+- **Retry/scheduled entries are never lost when re-pushing them fails**, and stock-Sidekiq payloads with Wurk-only keys are no longer rejected on retry or promotion.
+- **Dashboard "Retry all" / "Kill all" finish the set** instead of 500ing on one bad entry or spinning on jobs that fail again at once.
+- **Rolling restart no longer loses a slot** when both the old and the replacement child die; respawned children no longer inherit the parent's Redis or database sockets; a TSTP during child boot quiets instead of suspending; TTIN dumps threads instead of stopping the process; a TERM during boot leaves no leader campaign or stale process entry; hard shutdown kills processors even when the requeue fails.
+- **Memory-based recycling and heartbeat RSS read the real kernel page size** (16KB/64KB-page arm64 hosts).
+- **`perform_at` accepts an absolute epoch and `DateTime`** like Sidekiq.
+- **The REST API keeps an `Idempotency-Key` pending when a write's outcome is unknown**, so a client retry cannot double-enqueue.
+- **Limiter Sentinel configs pass `name:` as the master name.**
+- **The leader lock is refreshed atomically** and released only after its loop has stopped.
 - **The migration guide no longer says untested add-on gems "work unchanged".** Only sidekiq-cron has its upstream suite run against Wurk on every PR; sidekiq-unique-jobs, sidekiq-scheduler, sidekiq-status, sidekiq-failures and sidekiq-throttled are now marked untested, with their blockers tracked in `docs/idea/14-ecosystem-compat.md`. The `sidekiq` shim gem — which any kept add-on needs, or its `add_dependency "sidekiq"` reinstalls real Sidekiq next to Wurk — is now documented up front in the guide, the README and llms.txt rather than only in `docs/sentry.md`.
 - **The README, site and llms.txt drop "millions of jobs an hour".** No production throughput numbers are published to back it; the measured numbers are in `docs/benchmarks.md`.
 

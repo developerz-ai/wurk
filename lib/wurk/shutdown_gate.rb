@@ -1,5 +1,7 @@
 # frozen_string_literal: true
 
+require 'monitor'
+
 module Wurk
   # The two rules a process teardown obeys: it runs exactly once, and it never
   # waits on a thread without a bound. Same reason TimerLoop exists — the
@@ -26,14 +28,35 @@ module Wurk
   # already under way without deadlocking against it.
   class ShutdownGate
     def initialize
+      # Reentrant: a boot that fails rolls itself back by calling the teardown
+      # from inside #boot, on the same thread.
+      @boot_lock = ::Monitor.new
       @mutex = ::Mutex.new
       @owner = nil
       @runner = nil
       @done = ::Queue.new
     end
 
+    # Runs the boot block unless a shutdown has already been claimed, and
+    # returns whether it ran. A teardown requested from another thread while
+    # the boot is in progress waits for it to finish rather than releasing
+    # components the boot is still starting (a leader campaign, a listener)
+    # behind its back.
+    def boot
+      @boot_lock.synchronize do
+        return false if claimed?
+
+        yield
+        true
+      end
+    end
+
+    def claimed?
+      @mutex.synchronize { !@owner.nil? }
+    end
+
     def run
-      return await unless claim
+      return await unless @boot_lock.synchronize { claim }
 
       begin
         yield

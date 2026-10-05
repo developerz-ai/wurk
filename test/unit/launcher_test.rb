@@ -1,6 +1,7 @@
 # frozen_string_literal: true
 
 require_relative '../test_helper'
+require 'stringio'
 
 # Drives Wurk::Launcher against real Redis. Each test owns a unique
 # identity (override at the instance level) so parallel runs can't collide
@@ -442,6 +443,101 @@ class LauncherTest < Wurk::Test::UnitCase
     assert beats.pop(timeout: 5), "the first beat must not wait out BEAT_PAUSE (#{Wurk::Launcher::BEAT_PAUSE}s)"
   ensure
     launcher&.send(:stop_heartbeat)
+  end
+
+  # K5: a booting sibling's reclaim sweep treats a private list whose owner is
+  # missing from `processes` as orphaned. A manager that fetched before the
+  # first beat landed left its in-flight job looking abandoned — reclaimed and
+  # run twice. The first beat is written synchronously, before any fetch.
+  def test_first_beat_is_written_before_any_manager_starts
+    launcher = build_isolated_launcher
+    silence_boot(launcher)
+    id = launcher_identity(launcher)
+    track(id)
+    listed_at_start = []
+    probe = -> { listed?(id) }
+    launcher.managers.each { |m| m.define_singleton_method(:start) { listed_at_start << probe.call } }
+
+    launch(launcher, async_beat: true)
+
+    assert_equal [1] * launcher.managers.size, listed_at_start,
+                 'a manager started fetching before this process was in `processes`'
+  end
+
+  # K1 pattern: one beat that raises must not end the heartbeat thread — a
+  # process that stops beating expires out of `processes` while it still runs
+  # jobs, and the reaper then reclaims them.
+  def test_heartbeat_thread_survives_a_raising_beat
+    launcher = build_isolated_launcher
+    silence_boot(launcher)
+    track(launcher_identity(launcher))
+    launcher.instance_variable_set(:@beat_timer, Wurk::TimerLoop.new(0.01))
+    beats = Queue.new
+    calls = 0
+    launcher.define_singleton_method(:heartbeat) do
+      calls += 1
+      raise RedisClient::CannotConnectError, 'redis down' if calls == 2
+
+      beats << calls
+    end
+    reported = capture_reported_errors
+
+    launch(launcher, async_beat: true)
+
+    assert_equal 1, beats.pop(timeout: 5), 'the synchronous first beat'
+    assert_equal 3, beats.pop(timeout: 5), 'the beat after the raising one must still run'
+    assert_predicate launcher.heartbeat_thread, :alive?
+    assert_includes reported, ['redis down', 'heartbeat']
+  end
+
+  # K23: a TERM landing between the child installing its traps and calling
+  # #run drains first. #run must then be a no-op — booting anyway left a
+  # leader campaign and a `processes` entry that nothing would ever stop.
+  def test_run_after_stop_is_a_no_op
+    @config[:timeout] = 0
+    launcher = build_isolated_launcher
+    id = launcher_identity(launcher)
+    track(id)
+    started = []
+    launcher.managers.each { |m| m.define_singleton_method(:start) { started << :manager } }
+    launcher.instance_variable_get(:@leader).define_singleton_method(:start) { started << :leader }
+    launcher.stop
+
+    launch(launcher, async_beat: true)
+
+    assert_empty started
+    assert_nil launcher.heartbeat_thread
+    assert_equal 0, listed?(id), 'a stopped launcher must not register a process entry'
+  end
+
+  # The other half of the race: a stop requested from another thread while
+  # #run is mid-boot waits for the boot to finish, so teardown never releases
+  # components that are still being started behind it.
+  def test_stop_requested_mid_boot_waits_for_the_boot_to_finish
+    @config[:timeout] = 0
+    launcher = build_isolated_launcher
+    silence_boot(launcher)
+    silence_beat(launcher)
+    track(launcher_identity(launcher))
+    events = Queue.new
+    release = Queue.new
+    launcher.managers.first.define_singleton_method(:start) do
+      events << :boot_started
+      release.pop
+      events << :boot_finished
+    end
+    launcher.managers.first.define_singleton_method(:quiet) { events << :quiet }
+    booter = track_thread(Thread.new { launch(launcher, async_beat: false) })
+
+    assert_equal :boot_started, events.pop(timeout: 5)
+    stopper = track_thread(Thread.new { launcher.stop })
+
+    refute stopper.join(0.2), 'stop must wait for the in-progress boot'
+    release << true
+
+    assert stopper.join(5)
+    assert booter.join(5)
+    assert_equal %i[boot_finished quiet], [events.pop(timeout: 1), events.pop(timeout: 1)]
   end
 
   # F11: `Thread#wakeup` does nothing to a thread that isn't sleeping, so a beat
@@ -1085,6 +1181,52 @@ class LauncherTest < Wurk::Test::UnitCase
     refute_predicate launcher, :stopping?
   end
 
+  # K22: the dashboard's "dump threads" queues TTIN. Re-delivering it would
+  # STOP a swarm child (TTIN's default disposition; the child doesn't trap it),
+  # so it is answered in-process by logging every thread's backtrace.
+  def test_heartbeat_dumps_threads_on_ttin_without_redelivering
+    launcher = build_isolated_launcher
+    track(launcher_identity(launcher))
+    io = StringIO.new
+    launcher.instance_variable_get(:@config).logger = ::Logger.new(io)
+    redelivered = []
+    launcher.define_singleton_method(:redeliver) { |s| redelivered << s }
+    queue_signal(launcher, 'TTIN')
+
+    launcher.heartbeat
+
+    assert_empty redelivered
+    assert_match(/Thread TID-\S+/, io.string)
+    assert_includes io.string, __method__.to_s, 'the dump must carry the backtraces'
+  end
+
+  # K22, Sidekiq 8 launcher parity: any other signal is re-delivered to the
+  # process so its own traps (e.g. a USR2 log reopen) see dashboard signals.
+  def test_heartbeat_redelivers_other_signals_standalone
+    launcher = build_isolated_launcher
+    track(launcher_identity(launcher))
+    redelivered = []
+    launcher.define_singleton_method(:redeliver) { |s| redelivered << s }
+    queue_signal(launcher, 'USR2')
+
+    launcher.heartbeat
+
+    assert_equal ['USR2'], redelivered
+  end
+
+  # Embedded owns no traps: a re-delivered signal would hit the host's.
+  def test_heartbeat_never_redelivers_other_signals_when_embedded
+    launcher = build_isolated_launcher(embedded: true)
+    track(launcher_identity(launcher))
+    redelivered = []
+    launcher.define_singleton_method(:redeliver) { |s| redelivered << s }
+    queue_signal(launcher, 'USR2')
+
+    launcher.heartbeat
+
+    assert_empty redelivered
+  end
+
   # Branch coverage: when beat! returns nil (Redis blip), #beat must not
   # attempt to iterate signals. Exercises the else side of `sigs&.each`
   # (line 185).
@@ -1371,9 +1513,16 @@ class LauncherTest < Wurk::Test::UnitCase
     entered = Queue.new
     gate = Queue.new
     beat = launcher.method(:heartbeat)
+    booting = Thread.current
+    # #run's first beat is synchronous, on the booting thread; it is the
+    # heartbeat THREAD's beat this helper parks, so let that one through and
+    # tick the loop fast enough to reach a beat of its own.
+    launcher.instance_variable_set(:@beat_timer, Wurk::TimerLoop.new(0.01))
     launcher.define_singleton_method(:heartbeat) do
-      entered << true
-      gate.pop
+      unless Thread.current == booting
+        entered << true
+        gate.pop
+      end
       beat.call
     end
     launch(launcher, async_beat: true)

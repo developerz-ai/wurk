@@ -184,15 +184,25 @@ module Wurk
     end
 
     def run
+      # Wurk.redis / Sidekiq.redis inside a job resolve the pool through this
+      # thread-local, so a job running in a non-default capsule checks out of
+      # its own capsule's pool (sized for its concurrency), not the default's.
+      # Restored on the way out for a caller that drives #run on its own thread.
+      outer_capsule = Thread.current[:wurk_capsule]
+      Thread.current[:wurk_capsule] = @capsule
       begin
         process_one until @done
       ensure
         flush_acks
+        Thread.current[:wurk_capsule] = outer_capsule
       end
       @callback&.call(self)
     rescue Wurk::Shutdown
       @callback&.call(self)
     rescue Exception => e # rubocop:disable Lint/RescueException
+      # Sidekiq hands the error to the manager (processor.rb `@callback.call(
+      # self, ex)`); reporting it here keeps it visible, and the re-raise ends
+      # the thread so the Manager's replacement starts clean.
       handle_exception(e, { context: '!shutdown' })
       @callback&.call(self)
       raise
@@ -226,14 +236,18 @@ module Wurk
       nil
     end
 
-    # The protected frame opens before the payload is parsed, not after: parsing
-    # a malformed payload writes it to the morgue, which is a Redis round trip,
-    # and `Wurk::Shutdown` can land anywhere in it. Left outside, that raise
-    # would take the job's global-concurrency slot with it — the private-list
-    # entry is recovered by the reaper either way, but the slot would sit out
-    # its whole TTL, and on a low-capacity queue that is the cluster refusing
-    # work for a minute. Inside, every exit reaches the `ensure` below.
+    # The whole frame runs with Wurk::Shutdown deferred; only the perform
+    # itself (#run_job) lets it in. Parsing a malformed payload writes it to
+    # the morgue — a Redis round trip — and the ACK in the `ensure` is another:
+    # a raise landing in either would take the job's global-concurrency slot
+    # with it, or skip the ACK of a job that already finished. A Shutdown that
+    # arrives while deferred is delivered when this frame returns, after the
+    # outcome is booked.
     def process(uow)
+      Thread.handle_interrupt(IGNORE_SHUTDOWN_INTERRUPTS) { process_deferred(uow) }
+    end
+
+    def process_deferred(uow)
       jobstr = uow.job
       queue  = uow.queue_name
 
@@ -246,13 +260,23 @@ module Wurk
         job_hash = parse_or_kill(jobstr)
         run_job(uow, job_hash, queue, jobstr) if job_hash
         ack = true
-      rescue Wurk::JobRetry::Handled
-        # Handled / JobRetry::Skip (incl. Limiter::Rescheduled, where the
-        # limiter middleware already re-enqueued the job) — the retry layer or
-        # a middleware booked the outcome and recorded no retry; ack the UoW.
+      rescue Wurk::JobRetry::Skip
+        # A middleware booked the outcome itself (Limiter::Rescheduled, the
+        # interrupt handler's re-push, Encryption's dead routing) — not a
+        # failure, so nothing to report.
         ack = true
+      rescue Wurk::JobRetry::Handled => e
+        ack = true
+        report_job_failure(e, job_hash)
       rescue Wurk::Shutdown
         # Don't ack — UoW stays in private list and is reclaimed on reboot.
+      rescue Exception => e # rubocop:disable Lint/RescueException
+        # Escaped the retry layer (its ZADD hit a Redis blip, a logger raised in
+        # JobLogger#prepare): no retry was booked. This owner is alive, so the
+        # reaper will never reclaim its private list — put the job back now or
+        # it sits there until the process restarts.
+        handle_exception(e, { context: 'Internal exception!', job: job_hash, jobstr: jobstr })
+        requeue(uow)
       ensure
         # This frame is the one every exit path passes through, which is why a
         # global-concurrency slot is given back from here and nowhere else: a
@@ -262,12 +286,10 @@ module Wurk
         # forgotten one strands cluster-wide capacity for the whole slot TTL.
         #
         # One call on either branch, never a release on its own line after the
-        # ACK: an async raise can land inside this frame (SharedWorkState#track
-        # has the same hazard), and a second statement here is one that
-        # sometimes does not run. So the ACK carries the slot's ZREM in its own
-        # pipeline, and only the path that deliberately does not ACK — the
-        # shutdown, whose payload goes back to the queue for someone else to run
-        # — releases by itself.
+        # ACK: the ACK carries the slot's ZREM in its own pipeline, and only the
+        # paths that deliberately do not ACK — the shutdown and the requeue,
+        # whose payload goes back to the queue for someone else to run —
+        # release by themselves.
         if ack
           uow.acknowledge
         elsif uow.respond_to?(:release_slot)
@@ -276,10 +298,26 @@ module Wurk
       end
     end
 
-    # The dispatch half of #process, split out so the frame above stays one
-    # readable begin/rescue/ensure. Shutdown is deferred for the whole onion and
-    # allowed only around the perform itself, which is what lets a job finish
-    # its middleware unwind before the raise lands.
+    # Sidekiq's contract (processor.rb, "Job raised exception"): every job
+    # failure the retry layer handled reaches config.error_handlers once, with
+    # the job's own exception — `Handled` is raised from inside the retry
+    # layer's rescue, so its cause is what the job threw.
+    def report_job_failure(handled, job_hash)
+      handle_exception(handled.cause || handled, { context: 'Job raised exception', job: job_hash })
+    end
+
+    # Reported, never raised: we are already handling an internal error, and
+    # a Redis that refused the retry ZADD may refuse this too — the job then
+    # stays in the private list, which is where it was before this ran.
+    def requeue(uow)
+      uow.requeue
+    rescue StandardError => e
+      handle_exception(e, { context: 'Error requeueing a job after an internal exception' })
+    end
+
+    # The dispatch half of #process. Shutdown is deferred for the whole onion
+    # (by #process) and allowed only around the perform itself, which is what
+    # lets a job finish its middleware unwind before the raise lands.
     def run_job(uow, job_hash, queue, jobstr)
       # The fetcher never parses, so hand it the jid we just read: the ACK
       # retires this job's poison-pill recovery counter inside the round trip
@@ -287,11 +325,9 @@ module Wurk
       # slot and simply ACKs — the counter then ages out on its 72h TTL.
       uow.jid = job_hash['jid'] if uow.respond_to?(:jid=)
 
-      Thread.handle_interrupt(IGNORE_SHUTDOWN_INTERRUPTS) do
-        dispatch(job_hash, queue, jobstr) do |instance|
-          Thread.handle_interrupt(ALLOW_SHUTDOWN_INTERRUPTS) do
-            execute_job(instance, job_hash, queue)
-          end
+      dispatch(job_hash, queue, jobstr) do |instance|
+        Thread.handle_interrupt(ALLOW_SHUTDOWN_INTERRUPTS) do
+          execute_job(instance, job_hash, queue)
         end
       end
     end
@@ -318,12 +354,14 @@ module Wurk
       nil
     end
 
-    # Wraps the actual perform in the dispatch onion: logger.prepare →
-    # retrier.global → logger.call → stats → reloader → instantiate
-    # → retrier.local → (yield to caller for middleware + perform).
+    # Wraps the actual perform in the dispatch onion: retrier.global →
+    # logger.prepare → logger.call → stats → reloader → instantiate →
+    # retrier.local → (yield to caller for middleware + perform). `prepare`
+    # sits inside `global` (Sidekiq has it outside) so a logger that raises
+    # there books a retry instead of escaping the retry layer.
     def dispatch(job_hash, queue, jobstr)
-      @job_logger.prepare(job_hash) do
-        @retrier.global(jobstr, queue) do
+      @retrier.global(jobstr, queue) do
+        @job_logger.prepare(job_hash) do
           @job_logger.call(job_hash, queue) do
             stats(jobstr, queue) do
               Wurk::Profiler.call(job_hash) do

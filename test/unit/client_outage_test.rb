@@ -71,10 +71,7 @@ class ClientOutageTest < Wurk::Test::UnitCase
 
     assert_equal 3, Wurk::Client::Buffered.buffer_size
 
-    Wurk::Client::Buffered.start_drainer!(
-      interval: 0.02,
-      client_factory: -> { Wurk::Client.new(pool: @real_pool) }
-    )
+    Wurk::Client::Buffered.start_drainer!(interval: 0.02)
     pool.recover!
 
     deadline = ::Process.clock_gettime(::Process::CLOCK_MONOTONIC) + 3.0

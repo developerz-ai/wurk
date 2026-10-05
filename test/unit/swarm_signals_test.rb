@@ -96,6 +96,48 @@ class SwarmSignalsTest < Wurk::Test::UnitCase
     assert_equal ['TSTP'], swarm.relayed
   end
 
+  # K16: a TSTP relayed into a child's post-fork window lands on the inert
+  # inherited parent trap and is lost, so once quieted the supervisor keeps
+  # re-relaying on a cadence, like the drain's RETERM.
+  def test_quieted_swarm_re_relays_tstp_on_a_cadence
+    swarm = booted
+    swarm.quiet_swarm
+
+    swarm.send(:requiet_children)
+
+    assert_equal ['TSTP'], swarm.relayed, 'no re-relay before the interval elapses'
+
+    swarm.instance_variable_set(:@requiet_at, 0)
+    swarm.send(:requiet_children)
+
+    assert_equal %w[TSTP TSTP], swarm.relayed
+  end
+
+  def test_re_relay_is_off_until_quieted_and_once_stopping
+    swarm = booted
+    swarm.send(:requiet_children)
+
+    assert_empty swarm.relayed
+
+    swarm.quiet_swarm
+    swarm.instance_variable_set(:@stopping, true)
+    swarm.instance_variable_set(:@requiet_at, 0)
+    swarm.send(:requiet_children)
+
+    assert_equal ['TSTP'], swarm.relayed, 'a draining swarm relays TERM, not quiet'
+  end
+
+  # TTIN's default disposition stops the supervisor; trapped, a thread-dump
+  # request is relayed to the children, which each log their own threads.
+  def test_ttin_signal_is_relayed_to_the_children
+    swarm = booted
+    feed(swarm, 'TTIN')
+
+    swarm.send(:drain_signals)
+
+    assert_equal ['TTIN'], swarm.relayed
+  end
+
   def test_usr1_signal_enqueues_a_rolling_restart
     swarm = booted
     feed(swarm, 'USR1')

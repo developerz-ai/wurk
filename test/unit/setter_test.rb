@@ -91,6 +91,33 @@ class SetterTest < Wurk::Test::UnitCase
     assert_operator SpyWorker.captured_item['at'], :<=, Time.now.to_f + 0.5 + 30
   end
 
+  # Sidekiq's `at` rule applies to wait/wait_until too: a number at or above
+  # 1e9 is an epoch, not ~54 years of seconds from now.
+  def test_wait_until_numeric_epoch_is_absolute
+    target = Time.now.to_f + 600
+    Wurk::Worker::Setter.new(SpyWorker, wait_until: target).perform_async
+
+    assert_in_delta target, SpyWorker.captured_item['at'], 0.01
+  end
+
+  def test_set_wait_until_numeric_epoch_is_absolute
+    target = Time.now.to_f + 600
+    SpyWorker.set(wait_until: target).perform_async
+
+    assert_in_delta target, SpyWorker.captured_item['at'], 0.01
+  end
+
+  def test_wait_until_accepts_datetime
+    target = Time.now + 600
+    Wurk::Worker::Setter.new(SpyWorker, wait_until: target.to_datetime).perform_async
+
+    assert_in_delta target.to_f, SpyWorker.captured_item['at'], 0.01
+  end
+
+  def test_wait_rejects_garbage
+    assert_raises(ArgumentError) { Wurk::Worker::Setter.new(SpyWorker, wait: 'soon') }
+  end
+
   # --- perform_async --------------------------------------------------
 
   def test_perform_async_builds_class_args_payload
@@ -164,6 +191,13 @@ class SetterTest < Wurk::Test::UnitCase
     Wurk::Worker::Setter.new(SpyWorker, {}).perform_at(Time.now.to_f - 60, 'q')
 
     refute SpyWorker.captured_item.key?('at')
+  end
+
+  def test_perform_at_accepts_datetime
+    target = Time.now + 3600
+    Wurk::Worker::Setter.new(SpyWorker, {}).perform_at(target.to_datetime, 'y')
+
+    assert_in_delta target.to_f, SpyWorker.captured_item['at'], 0.01
   end
 
   def test_perform_at_alias_of_perform_in

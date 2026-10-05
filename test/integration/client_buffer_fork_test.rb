@@ -83,7 +83,8 @@ class ClientBufferForkTest < Wurk::Test::UnitCase
     # would otherwise hold that payload while the push below drains.
     Wurk::Client.reliable_push_drainer_stop!
 
-    push('parent-drain') # drains the parent's buffer on the way through
+    @outage_pool.recover!
+    @outage_client.push(item('parent-drain')) # drains the parent's buffer on the way through
 
     assert_equal (BUFFERED + CHILDREN + ['parent-drain']).sort, queued_args.sort
   end
@@ -91,14 +92,16 @@ class ClientBufferForkTest < Wurk::Test::UnitCase
   private
 
   def buffer_during_outage
-    failing = Wurk::Client.new(pool: failing_pool)
-    BUFFERED.each { |tag| failing.push(item(tag)) }
+    @outage_pool = RecoverablePool.new(@pool)
+    @outage_client = Wurk::Client.new(pool: @outage_pool)
+    BUFFERED.each { |tag| @outage_client.push(item(tag)) }
   end
 
   # A real second thread, mid-drain-loop, at the moment of the fork — the
-  # production shape of the bug. It inherits the failing pool captured while
-  # buffering, so the parent's own buffer can never drain out from under the
-  # assertions; only the explicit push through the default pool replays it.
+  # production shape of the bug. The buffered payloads are bound for the
+  # outage pool, which stays down until the test recovers it, so the parent's
+  # own buffer can never drain out from under the assertions; only the
+  # explicit push through that pool replays it.
   def start_parent_drainer
     Wurk::Client::Buffered.start_drainer!(interval: 0.05)
   end
@@ -180,10 +183,21 @@ class ClientBufferForkTest < Wurk::Test::UnitCase
     @pool.with { |c| c.call('LRANGE', "queue:#{@queue}", 0, -1) }.flat_map { |s| JSON.parse(s)['args'] }
   end
 
-  def failing_pool
-    pool = Object.new
-    pool.define_singleton_method(:with) { |&blk| blk.call(FailingConn.new) }
-    pool
+  # Down until `recover!`, then the real pool. A child forked while it is down
+  # inherits a copy and drops the buffered payloads bound for it anyway.
+  class RecoverablePool
+    def initialize(real)
+      @real = real
+      @down = true
+    end
+
+    def recover! = @down = false
+
+    def with(&)
+      return yield FailingConn.new if @down
+
+      @real.with(&)
+    end
   end
 
   class FailingConn

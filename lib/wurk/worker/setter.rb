@@ -1,5 +1,6 @@
 # frozen_string_literal: true
 
+require 'date'
 require_relative '../job_util'
 
 module Wurk
@@ -85,13 +86,23 @@ module Wurk
         ran ? true : nil
       end
 
+      # Sidekiq's `Setter#at` rule, shared by `perform_in`/`perform_at` and
+      # `set(wait:)`/`set(wait_until:)`: a number below 1e9 is seconds from now,
+      # anything at or above it is already an epoch timestamp. A Date/DateTime
+      # is converted through #to_time — stock Ruby gives DateTime no #to_f.
+      # Strings are refused rather than read through #to_f, where `"soon"`
+      # would silently mean "now".
       def absolute_at(interval)
-        unless interval.is_a?(Numeric) || interval.is_a?(Time)
-          raise ArgumentError, "interval must be Numeric or Time, got #{interval.class}"
-        end
-
-        seconds = interval.to_f
+        seconds = interval_seconds(interval)
         seconds < Wurk::Worker::SCHEDULED_THRESHOLD ? now_seconds + seconds : seconds
+      end
+
+      def interval_seconds(interval)
+        case interval
+        when Numeric, Time then interval.to_f
+        when Date then interval.to_time.to_f
+        else raise ArgumentError, "interval must be Numeric, Time or DateTime, got #{interval.class}"
+        end
       end
 
       def now_seconds
@@ -109,20 +120,12 @@ module Wurk
             # Sidekiq drops `at` when the target is not in the future, so
             # set(wait: 0) / an elapsed wait_until enqueues immediately
             # instead of parking in the schedule ZSET for up to a poll tick.
-            ts = wait_to_seconds(v)
+            ts = absolute_at(v)
             result['at'] = ts if ts > now_seconds
           else result[key] = v
           end
         end
         result
-      end
-
-      def wait_to_seconds(value)
-        case value
-        when Time then value.to_f
-        when Numeric then ::Process.clock_gettime(::Process::CLOCK_REALTIME) + value.to_f
-        else raise ArgumentError, "wait/wait_until must be Numeric or Time, got #{value.class}"
-        end
       end
     end
   end

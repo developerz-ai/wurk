@@ -71,11 +71,47 @@ class RedisOptionsTest < Wurk::Test::UnitCase
     refute config.key?(:master_name)
   end
 
-  def test_sentinel_config_drops_the_default_url
+  # K8: Sidekiq keeps `url ||= REDIS_URL` next to a sentinel set, and
+  # SentinelConfig reads the db (and, without a `name:`, the master) off it.
+  def test_sentinel_config_keeps_the_default_url
     config = normalize(sentinels: [{ host: 'h', port: 26_379 }], master_name: 'mymaster')
 
-    refute config.key?(:url), 'SentinelConfig derives the master name and db from :url — a default would poison it'
+    assert_equal DEFAULTS[:url], config[:url]
     assert Wurk::RedisOptions.sentinel?(config)
+  end
+
+  def test_sentinel_master_falls_back_to_the_url_host
+    config = RedisClient.sentinel(**normalize(sentinels: [{ host: 'h', port: 26_379 }],
+                                              url: 'redis://mymaster/3'))
+
+    assert_equal 'mymaster', config.name
+    assert_equal 3, config.db
+  end
+
+  # --- pool_kwargs: `name:` is the Sentinel master, not the pool label (K8) ---
+
+  def test_pool_kwargs_carries_a_sentinel_name_as_the_master
+    kwargs = Wurk::RedisOptions.pool_kwargs(sentinels: [{ host: 'h', port: 26_379 }], name: 'mymaster',
+                                            size: 5, pool_name: 'label')
+
+    assert_equal 'mymaster', kwargs[:master_name]
+    refute_includes kwargs.keys, :name
+    refute_includes kwargs.keys, :size
+    refute_includes kwargs.keys, :pool_name
+    assert_equal 'mymaster', RedisClient.sentinel(**normalize(kwargs)).name
+  end
+
+  def test_pool_kwargs_lets_an_explicit_master_name_win
+    kwargs = Wurk::RedisOptions.pool_kwargs('sentinels' => [{ host: 'h', port: 26_379 }],
+                                            'name' => 'ignored', 'master_name' => 'mymaster')
+
+    assert_equal 'mymaster', kwargs[:master_name]
+  end
+
+  def test_pool_kwargs_drops_name_without_sentinels
+    kwargs = Wurk::RedisOptions.pool_kwargs(url: 'redis://example:6379/0', name: 'label')
+
+    assert_equal({ url: 'redis://example:6379/0' }, kwargs)
   end
 
   def test_sentinel_predicate_is_false_for_a_plain_url_config

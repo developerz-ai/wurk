@@ -33,7 +33,10 @@ class FetcherReaperTest < Wurk::Test::UnitCase
     @salt         = SecureRandom.hex(8)
     @lock_key      = "#{Wurk::Fetcher::Reaper::LOCK_KEY}:#{@ns}"
     @full_lock_key = "#{Wurk::Fetcher::Reaper::FULL_LOCK_KEY}:#{@ns}"
-    @reaper        = Wurk::Fetcher::Reaper.new(@config, interval: 1, lock_key: @lock_key, full_lock_key: @full_lock_key)
+    # grace: 0 — these cases seed a list and reclaim it in the same breath; the
+    # idle-time guard has its own cases below.
+    @reaper        = Wurk::Fetcher::Reaper.new(@config, interval: 1, lock_key: @lock_key,
+                                                        full_lock_key: @full_lock_key, grace: 0)
     # Keys created outside @public_queue (full-sweep tests use foreign queues);
     # the whole-keyspace scan would see leftovers from prior tests otherwise.
     @extra_keys    = []
@@ -211,6 +214,61 @@ class FetcherReaperTest < Wurk::Test::UnitCase
     assert_equal 1, @reaper.reclaim!, 'the heartbeat has to match the full identity, not just host:pid'
   ensure
     unregister_process(other_host, DEAD_PID)
+  end
+
+  # --- K5: re-check before a heartbeat-judged drain ----------------------
+
+  # A booting process claims before its first heartbeat lands. Its list was
+  # touched a moment ago, so it is left alone however dead the snapshot says
+  # the owner is.
+  def test_a_recently_touched_heartbeat_orphan_is_left_alone
+    key = seed_private_list(DEAD_PID, %w[booting], host: 'other-host.example', nonce: SecureRandom.hex(6))
+
+    assert_equal 0, graced_reaper.reclaim!
+    assert_equal 1, llen(key)
+  end
+
+  def test_a_heartbeat_orphan_idle_past_the_grace_is_reclaimed
+    key = seed_private_list(DEAD_PID, %w[stale], host: 'other-host.example', nonce: SecureRandom.hex(6))
+    age(key, 120)
+
+    assert_equal 1, graced_reaper.reclaim!
+    assert_equal 0, llen(key)
+  end
+
+  def test_the_full_sweep_honours_the_grace_too
+    key = seed_private_list(DEAD_PID, %w[booting], host: 'other-host.example', nonce: SecureRandom.hex(6))
+
+    assert_equal 0, graced_reaper.reclaim_full!
+    assert_equal 1, llen(key)
+  end
+
+  # Our own incarnation is judged by kill(0), not a snapshot — no grace needed.
+  def test_own_incarnation_skips_the_grace
+    seed_private_list(DEAD_PID, %w[sibling])
+
+    assert_equal 1, graced_reaper.reclaim!
+  end
+
+  # Under an LFU maxmemory policy OBJECT IDLETIME is refused; the liveness
+  # re-check then decides alone rather than stranding every orphan.
+  def test_an_idle_time_refusal_falls_back_to_the_liveness_recheck
+    seed_private_list(DEAD_PID, %w[lfu], host: 'other-host.example', nonce: SecureRandom.hex(6))
+    reaper = graced_reaper
+    reaper.define_singleton_method(:redis) do |**kw, &blk|
+      super(**kw) do |conn|
+        lfu = Object.new
+        lfu.define_singleton_method(:call) do |*args|
+          raise RedisClient::CommandError, 'ERR An LFU maxmemory policy is selected' if args.first == 'OBJECT'
+
+          conn.call(*args)
+        end
+        lfu.define_singleton_method(:pipelined) { |&b| conn.pipelined(&b) }
+        blk.call(lfu)
+      end
+    end
+
+    assert_equal 1, reaper.reclaim!
   end
 
   # --- liveness: same host, foreign PID namespace ------------------------
@@ -510,6 +568,27 @@ class FetcherReaperTest < Wurk::Test::UnitCase
     reaper.stop
   end
 
+  # K1 pattern: a Redis error in one sweep must not end the loop thread, or
+  # orphans are never reclaimed again for the life of the process.
+  def test_loop_survives_a_redis_error_and_sweeps_again
+    reaper = Wurk::Fetcher::Reaper.new(@config, interval: 0.02, lock_key: "#{Wurk::Fetcher::Reaper::LOCK_KEY}:#{@ns}-err")
+    ticks = Queue.new
+    calls = 0
+    reaper.define_singleton_method(:reap) do
+      calls += 1
+      raise RedisClient::ConnectionError, 'redis went away' if calls == 1
+
+      ticks << calls
+    end
+
+    reaper.start
+
+    assert_equal 2, ticks.pop(timeout: 5), 'the sweep after the failing one still ran'
+    assert_predicate reaper, :running?
+  ensure
+    reaper.stop
+  end
+
   # --- tick_once exception forwarding ------------------------------------
 
   # tick_once swallows a sweep error and forwards it via handle_exception when
@@ -578,7 +657,7 @@ class FetcherReaperTest < Wurk::Test::UnitCase
   # cannot arise through reclaim! (SCAN MATCHes `<public_q>|*`), so it is
   # exercised directly: the THEN side of `return [nil, nil] if suffix == key`.
   def test_parse_owner_rejects_a_key_without_the_public_queue_prefix
-    host, pid = @reaper.send(:parse_owner, @public_queue, 'an-unrelated-key')
+    host, pid = Wurk::Fetcher::PrivateListKey.parse_owner(@public_queue, 'an-unrelated-key')
 
     assert_nil host
     assert_nil pid
@@ -589,6 +668,19 @@ class FetcherReaperTest < Wurk::Test::UnitCase
   # A pid this process can be sure is not running, distinct per test so the
   # heartbeat one test registers under it can never make a peer's orphan read
   # as live (the `processes` SET is global to the worker's Redis DB).
+  def graced_reaper
+    Wurk::Fetcher::Reaper.new(@config, interval: 1, lock_key: @lock_key, full_lock_key: @full_lock_key)
+  end
+
+  # RESTORE ... IDLETIME is the one way to give a key an idle time without
+  # waiting it out.
+  def age(key, seconds)
+    @pool.with do |c|
+      dump = c.call('DUMP', key)
+      c.call('RESTORE', key, 0, dump, 'REPLACE', 'IDLETIME', seconds)
+    end
+  end
+
   def unowned_pid
     @unowned_pid ||= 990_000 + (object_id % 9_000)
   end

@@ -37,6 +37,23 @@ class ApiIdempotencyTest < Wurk::Test::UnitCase
     def call(*) = nil
   end
 
+  # Stands in for the producer's Redis pool: raises `error` either before the
+  # push reaches Redis or after it applied (a lost reply).
+  class FaultyPool
+    def initialize(real, phase, error = RedisClient::ProtocolError)
+      @real = real
+      @phase = phase
+      @error = error
+    end
+
+    def with(...)
+      raise @error, 'simulated' if @phase == :before
+
+      @real.with(...)
+      raise @error, 'simulated lost reply'
+    end
+  end
+
   def setup
     super
     @ns = "#{Process.pid}_#{object_id}"
@@ -186,6 +203,60 @@ class ApiIdempotencyTest < Wurk::Test::UnitCase
     assert_equal 201, status
   end
 
+  # K19: the push landed and its reply was lost. Releasing the key here let
+  # the client's retry enqueue a second copy; it now stays pending.
+  #
+  # The faults below are ProtocolError / CommandError rather than the
+  # connection errors a real outage raises: once any test class has called
+  # `reliable_push!`, its prepend is process-wide and turns a ConnectionError
+  # into a buffered success before this layer ever sees it.
+  def test_a_lost_reply_keeps_the_key_pending
+    status, = Wurk::Client.via(FaultyPool.new(@pool, :after)) { post('/v1/jobs', job, key: 'k1') }
+
+    assert_equal 500, status
+    assert_equal 1, queued_payloads.size, 'the push applied before the reply was lost'
+
+    status, _headers, body = post('/v1/jobs', job, key: 'k1')
+
+    assert_equal 409, status
+    assert_equal 'request_in_progress', body['type']
+    assert_equal 1, queued_payloads.size, 'the retry did not enqueue a second copy'
+  end
+
+  # A write that died with no usable reply is just as unknown, even when it in
+  # fact never applied — nothing on the wire tells the two apart.
+  def test_a_write_with_no_usable_reply_keeps_the_key_pending
+    status, = Wurk::Client.via(FaultyPool.new(@pool, :before)) { post('/v1/jobs', job, key: 'k1') }
+
+    assert_equal 500, status
+    assert_equal 1, idempotency_keys.size
+  end
+
+  # Redis answered and refused the write: provably nothing applied, so the
+  # retry gets a real attempt.
+  def test_a_rejected_write_releases_the_key
+    refusing = FaultyPool.new(@pool, :before, RedisClient::CommandError)
+    status, = Wurk::Client.via(refusing) { post('/v1/jobs', job, key: 'k1') }
+
+    assert_equal 500, status
+    assert_empty idempotency_keys
+
+    status, = post('/v1/jobs', job, key: 'k1')
+
+    assert_equal 201, status
+    assert_equal 1, queued_payloads.size
+  end
+
+  def test_only_pre_apply_errors_release_a_write_in_flight
+    state_key = Wurk::Client::WRITE_STATE_KEY
+    verdicts = { clean: RedisClient::ReadTimeoutError, attempted: RedisClient::CannotConnectError }
+               .to_h { |state, klass| [state, unknown_after?(state_key, state, klass.new('x'))] }
+    verdicts[:attempted_timeout] = unknown_after?(state_key, :attempted, RedisClient::ReadTimeoutError.new('x'))
+    verdicts[:applied] = unknown_after?(state_key, :applied, RedisClient::CannotConnectError.new('x'))
+
+    assert_equal({ clean: false, attempted: false, attempted_timeout: true, applied: true }, verdicts)
+  end
+
   # A middleware-halted push is a real, successful outcome — the producer's own
   # policy working — so it is replayed like any other 2xx.
   def test_a_halted_push_is_recorded_like_any_other_success
@@ -278,6 +349,13 @@ class ApiIdempotencyTest < Wurk::Test::UnitCase
     digest = Digest::SHA256.hexdigest(JSON.generate(payload))
     record = Wurk::API::Idempotency.encode(Wurk::API::Idempotency::PENDING, digest, '')
     @pool.with { |conn| conn.call('SET', slot_for(key), record, 'EX', 60) }
+  end
+
+  def unknown_after?(state_key, state, error)
+    Thread.current[state_key] = state
+    Wurk::API::Idempotency.outcome_unknown?(error)
+  ensure
+    Thread.current[state_key] = nil
   end
 
   def with_client_middleware(klass)

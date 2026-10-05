@@ -61,12 +61,9 @@ module Wurk
       # inside the window and is a child; later attempts, pushed out by
       # exponential backoff, land outside it and are roots carrying a link back.
       # Neither is ever an unrelated root.
-      def call(_worker, job, queue)
+      def call(_worker, job, queue, &)
         span = start(job, queue)
-        # `yield` rather than taking the chain's block as `&block`: capturing it
-        # allocates a Proc for every job in the process, and this frame runs on
-        # every one of them.
-        ::OpenTelemetry::Trace.with_span(span) { yield } # rubocop:disable Style/ExplicitBlockArgument
+        ::OpenTelemetry::Trace.with_span(span, &)
       rescue Wurk::JobRetry::Handled, Wurk::Job::Interrupted
         # The canonical not-an-error list (see Batch::ServerMiddleware): a
         # cooperative interruption, and every `Handled` — which is where
