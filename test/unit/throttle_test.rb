@@ -199,13 +199,16 @@ class ThrottleTest < Wurk::Test::UnitCase
 
   # --- atomicity -------------------------------------------------------
 
-  def test_the_whole_decision_costs_one_round_trip
+  # Two round trips: Redis's TIME, then the decision. The key is resolved from
+  # that clock caller-side so the script only touches a declared key (E23); the
+  # SET NX + read-the-winner pair is still the one script.
+  def test_the_whole_decision_costs_one_script_after_reading_the_redis_clock
     spy = Wurk::Test::CommandSpy.new(@pool)
     Thread.current[:wurk_capsule] = spy
     Wurk::Throttle.admit(job(jid: jid('a')), slot: SLOT)
     Thread.current[:wurk_capsule] = nil
 
-    assert_equal 1, spy.count, 'SET NX then read-the-winner is one script, not two commands'
+    assert_equal 2, spy.count, 'TIME, then SET NX + read-the-winner as one script'
   ensure
     Thread.current[:wurk_capsule] = nil
   end

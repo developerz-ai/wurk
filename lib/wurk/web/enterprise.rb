@@ -40,8 +40,12 @@ module Wurk
         # row with nothing behind it. The liveness probe rides along with the
         # SMEMBERS the listing already pays for — both are O(set) — and once the
         # sweep has run the set is back down to live limiters.
-        def list(filter: nil)
-          names = sweep(Wurk.redis(idempotent: true) { |c| c.call('SMEMBERS', Wurk::Limiter::LIST_KEY) }).sort
+        #
+        # A read-only dashboard is a viewer, so it filters the dead names out of
+        # what it returns but leaves the SET alone: GET must not write.
+        def list(filter: nil, sweep: !Wurk::Web.config.read_only?)
+          members = Wurk.redis(idempotent: true) { |c| c.call('SMEMBERS', Wurk::Limiter::LIST_KEY) }
+          names = (sweep ? sweep(members) : live(members)).sort
           return names if filter.nil? || filter.to_s.empty?
 
           needle = filter.to_s.downcase
@@ -51,6 +55,10 @@ module Wurk
         # Drop the names whose metadata is gone, return the ones still live.
         def sweep(names)
           names.each_slice(SWEEP_BATCH).flat_map { |slice| sweep_slice(slice) }
+        end
+
+        def live(names)
+          names.each_slice(SWEEP_BATCH).flat_map { |slice| partition_live(slice).first }
         end
 
         def sweep_slice(names)
@@ -73,8 +81,8 @@ module Wurk
           Wurk.redis(idempotent: true) do |c|
             Wurk::Lua::Loader.eval_cached(
               c, :limiter_list_sweep,
-              keys: [Wurk::Limiter::LIST_KEY],
-              argv: ['lmtr:', *names]
+              keys: [Wurk::Limiter::LIST_KEY, *names.map { |n| meta_key(n) }],
+              argv: names
             )
           end
         end
@@ -146,19 +154,15 @@ module Wurk
           set_paused(lid, '0')
         end
 
-        # Spec §2.4 "enqueue-now": pushes a one-off run with the loop's
-        # configured klass/queue/args/retry. Returns the new jid, or nil
+        # Spec §2.4 "enqueue-now": pushes a one-off run exactly as a tick would
+        # (Cron::Loop#job_item) — the worker's sidekiq_options, under the loop's
+        # own queue/retry. Returns the new jid, or nil
         # when the loop doesn't exist.
         def enqueue_now(lid)
           loop_obj = fetch(lid)
           return nil unless loop_obj
 
-          Wurk::Client.new.push(
-            'class' => loop_obj.klass,
-            'args' => loop_obj.args,
-            'queue' => loop_obj.queue,
-            'retry' => loop_obj.retry_value
-          )
+          Wurk::Client.new.push(loop_obj.job_item)
         end
 
         # Spec §8.0.1+: per-loop history list at `loop-history:{lid}`. Each
@@ -180,11 +184,10 @@ module Wurk
       end
 
       # Historical tab — per-class and per-queue gauges over a recent window.
-      # The minute / hour HASH layout comes from `Wurk::Metrics::History`;
-      # `Query.for_job` / `Query.top_jobs` already does the fan-out. The
-      # wrapper here is a stable entry point so the controller doesn't reach
-      # into the `Query` module directly (and so we have one place to layer
-      # additional aggregations on later — global gauges across all classes).
+      # The minute / 10-minute HASH layout comes from `Wurk::Metrics::History`;
+      # the class-level `Query.for_job` / `Query.top_jobs` (Metrics::DashboardSeries)
+      # already do the fan-out. The wrapper here is a stable entry point so the
+      # controller doesn't reach into `Query` directly.
       module Historical
         module_function
 

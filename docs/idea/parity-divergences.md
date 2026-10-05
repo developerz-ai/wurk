@@ -521,3 +521,77 @@ resetting it.
 **Why:** a logging capability must not decide whether a job runs.
 
 **Anchor:** `lib/wurk/job_logger.rb`.
+
+## A `jobs` block holds the batch open with a sentinel member
+
+**Wurk:** while a `Batch#jobs` block is open, a `hold:<id>` member sits in `b-<bid>-jids` and adds 1 to `pending`; it is released at block exit. If the block that created the batch raises, the hold stays and the batch never fires (nothing was enqueued). A re-entrant block that adds nothing gets no `Empty` job.
+
+**Spec:** Pro §2.3 says the block is atomic; the mechanism is not specified.
+
+**Why:** without a sentinel, a job that finishes before the next one is pushed lets the batch fire early, and never again.
+
+**Anchor:** `lib/wurk/batch.rb`, `lib/wurk/lua/batch_hold.lua`.
+
+## Child-batch success/complete callbacks count toward the parent batch
+
+**Wurk:** a child batch's `:complete`/`:success` callback jobs are pushed into the parent batch (`bid` = parent) and count toward its `total`/`pending`/`failures`; a dead child callback suppresses the parent's `:success`. `:death` callbacks stay outside. The callback job class is `Wurk::Batch::CallbackJob`.
+
+**Spec:** Pro §2.9 requires the parent to wait for the child's callbacks; Pro's mechanism and class name are not in the spec.
+
+**Why:** it is the only way the §2.9 step workflow can observe step N+1 before the parent fires.
+
+**Anchor:** `lib/wurk/batch/callbacks.rb`.
+
+## Jobs of an invalidated batch skip `perform`
+
+**Wurk:** the batch server middleware skips `perform` for jobs of an invalidated batch and acks them as successes.
+
+**Spec:** Pro §2.6 implies jobs check `valid_within_batch?` themselves.
+
+**Why:** pre-existing behaviour, kept; the outcome (no work done, batch completes) is the same.
+
+**Anchor:** `lib/wurk/batch/server_middleware.rb`.
+
+## Batch "fired" markers use `b-<bid>-success`/`-complete`
+
+**Wurk:** `b-<bid>-complete`/`-success`/`-death` are `"1"` markers meaning "already fired" (complete/success written after the enqueue, death claimed before), and callback specs live in a `callbacks` field on `b-<bid>`.
+
+**Spec:** Pro §2.8 lists `-success`/`-complete` as "callbacks pending" and `-notify`/`-cbsucc` for queued/dedup — contents unspecified.
+
+**Why:** unverifiable without a real Pro dump (plan 101, U8 → R2). Risk: a Pro batch in flight at the swap may skip its callbacks. Revisit with a dump.
+
+**Anchor:** `lib/wurk/batch/callbacks.rb`.
+
+## Encrypted job hashes are re-sealed after the chain unwinds
+
+**Wurk:** the encryption server middleware decrypts in place for `perform`, then restores the envelope in an `ensure`; middleware outside it sees ciphertext again.
+
+**Spec:** Ent §4.1 — `perform` sees plaintext; what outer middleware sees afterwards is unspecified.
+
+**Why:** any later re-push of the hash must never carry plaintext.
+
+**Anchor:** `lib/wurk/encryption.rb`.
+
+## Periodic: late slots skipped, bare-hash `args` is one argument
+
+**Wurk:** a periodic slot more than max(90s, 1.5× tick) late is claimed, logged as missed and not enqueued; a non-Array `args:` is passed as a single argument; `Loop#queue` reports the worker's queue when the loop sets none.
+
+**Spec:** Ent §2.6 says no backfill (threshold unspecified); Ent splats `args`.
+
+**Why:** a hash splatted into keyword-ish positional args silently changes the call.
+
+**Anchor:** `lib/wurk/cron.rb`.
+
+## Throttle admission costs two round trips
+
+**Wurk:** `TIME` is read in Ruby and the aligned slot key passed via `KEYS`.
+
+**Why:** a key built inside Lua breaks Redis Cluster and Dragonfly.
+
+**Anchor:** `lib/wurk/throttle.rb`, `lib/wurk/lua/throttle_slot.lua`.
+
+## Flow nodes with `at:` carry an `at` field and show `enqueued` once released
+
+**Wurk:** flow node records gain a Wurk-only `at` field; a node released onto `schedule` reports state `enqueued`.
+
+**Anchor:** `lib/wurk/flow/creation.rb`.

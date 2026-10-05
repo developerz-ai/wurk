@@ -59,19 +59,44 @@ module Wurk
       # spent: a replay after a lost reply finds the node already out of the
       # state it claims from and writes nothing, so the pool may retry a
       # connection error rather than give up on a callback that fires once.
+      #
+      # The graph around the node is read first so the script is handed every
+      # key it may write as a declared key (Redis Cluster and Dragonfly refuse
+      # one built inside Lua). Safe to read ahead: a node's jid, its
+      # dependents, and their bids and queues are all fixed at creation; the
+      # counters and states the decision turns on are read inside the script.
       def advance(fid, index)
         Wurk.redis(idempotent: true) do |conn|
+          node_key = Keys.flow_node(fid, index)
+          jid, dependents = conn.call('HMGET', node_key, 'jid', 'dependents')
+          deps = dependents ? Wurk.load_json(dependents) : []
           Wurk::Lua::Loader.eval_cached(
             conn, :flow_advance,
-            keys: [Keys.flow(fid), 'queues'],
-            argv: [index, now_seconds, now_millis, Keys::STATUS_PREFIX]
+            keys: [Keys.flow(fid), 'queues', Keys::SCHEDULE, Keys.flow_dead(fid), node_key,
+                   Keys.status(jid.to_s), *dependent_keys(conn, fid, deps)],
+            argv: [index, now_seconds, now_millis, *deps.map(&:to_s)]
           )
+        end
+      end
+
+      # Four keys per dependent, in `deps` order: its record, its batch, the
+      # batch's live-jid set, and the queue it is released onto.
+      def dependent_keys(conn, fid, deps)
+        return [] if deps.empty?
+
+        rows = conn.pipelined { |pipe| deps.each { |d| pipe.call('HMGET', Keys.flow_node(fid, d), 'bid', 'queue') } }
+        deps.zip(rows).flat_map do |d, (bid, queue)|
+          [Keys.flow_node(fid, d), "b-#{bid}", "b-#{bid}-jids", Keys.queue(queue)]
         end
       end
 
       def mark_dead(fid, index)
         Wurk.redis(idempotent: true) do |conn|
-          Wurk::Lua::Loader.eval_cached(conn, :flow_fail, keys: [Keys.flow(fid)], argv: [index, now_seconds])
+          Wurk::Lua::Loader.eval_cached(
+            conn, :flow_fail,
+            keys: [Keys.flow(fid), Keys.flow_node(fid, index), Keys.flow_dead(fid)],
+            argv: [index, now_seconds]
+          )
         end
       end
 

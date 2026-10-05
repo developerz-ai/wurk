@@ -4,6 +4,7 @@ require 'json'
 require 'securerandom'
 require_relative 'lua'
 require_relative 'batch/buffer'
+require_relative 'batch/callbacks'
 
 module Wurk
   # Sidekiq Pro Batches. Group jobs, attach success/complete/death callbacks,
@@ -26,12 +27,14 @@ module Wurk
   #      or callback only). `mutable?` is false because reopening implies the
   #      first flush already happened.
   #   3. `#jobs { ... }` collects `Job.perform_async` calls via the client
-  #      middleware (Thread.current[:wurk_current_batch] is the signal),
-  #      atomically registering each via BATCH_PUSH.
+  #      middleware (Thread.current[:wurk_current_batch] is the signal) and
+  #      pushes them at block exit, each registered via BATCH_PUSH. A hold
+  #      keeps the batch from draining while the block is open.
   #   4. Workers ack on success → BATCH_ACK_SUCCESS → pending--.
   #      Death handler acks on permanent failure → BATCH_ACK_COMPLETE.
-  #   5. When live jids hits zero → fire `:complete`. When pending also
-  #      hits zero with zero deaths → fire `:success`.
+  #   5. When live jids and pending child batches both hit zero → fire
+  #      `:complete`. When pending also hits zero with zero deaths → fire
+  #      `:success`.
   #
   # Nested batches: a job opening its OWN batch (`batch.jobs { ... }`)
   # increments live counters on the existing batch. A callback opening its
@@ -82,10 +85,21 @@ module Wurk
 
     THREAD_KEY = :wurk_current_batch
 
+    EMPTY_JOB = 'Sidekiq::Batch::Empty'
+
     # Set on the current thread (to a Buffer) only inside an autoflush
     # `#jobs` block. Client#raw_push reads it: when present, batched pushes
     # accumulate here instead of round-tripping per job.
     BUFFER_KEY = :wurk_batch_buffer
+
+    # Bids whose `#jobs` hold this thread already owns, so a block nested in
+    # another block of the same batch neither takes a second hold nor drops
+    # the outer one when it exits.
+    HOLDS_KEY = :wurk_batch_holds
+
+    # Prefix of the hold sentinel's member in `b-<bid>-jids`. Real jids are
+    # hex, so a sentinel can never collide with one.
+    HOLD_PREFIX = 'hold:'
 
     attr_reader :bid, :parent_bid, :linger, :callback_class
     attr_accessor :description, :callback_queue, :autoflush
@@ -93,6 +107,29 @@ module Wurk
     def self.keys_for(bid)
       base = "b-#{bid}"
       [base, *KEY_SUFFIXES.map { |s| "#{base}-#{s}" }]
+    end
+
+    # Runs the block with `batch` as the thread's active batch (the client
+    # middleware stamps its bid) and `buffer` collecting batched pushes —
+    # either may be nil — restoring whatever an enclosing block had set.
+    def self.with_thread_batch(batch, buffer)
+      previous    = Thread.current[THREAD_KEY]
+      prev_buffer = Thread.current[BUFFER_KEY]
+      Thread.current[THREAD_KEY] = batch
+      Thread.current[BUFFER_KEY] = buffer
+      yield
+    ensure
+      Thread.current[THREAD_KEY] = previous
+      Thread.current[BUFFER_KEY] = prev_buffer
+    end
+
+    # BATCH_ACK_SUCCESS for `jid`, as Integers: [removed, pending, live, kids].
+    # The last three are the fire-gate inputs `Callbacks.maybe_fire` takes.
+    def self.ack_success(conn, bid, jid)
+      Wurk::Lua::Loader.eval_cached(
+        conn, :batch_ack_success,
+        keys: ["b-#{bid}", "b-#{bid}-jids", "b-#{bid}-failed", "b-#{bid}-pkids"], argv: [jid]
+      ).map(&:to_i)
     end
 
     # Two-axis trim of a batch index ZSET (`batches`, `dead-batches`), in the
@@ -199,22 +236,25 @@ module Wurk
     end
 
     # Remove jobs from the batch. Decrements pending/total by exactly the
-    # count of jids actually removed (idempotent for repeated calls).
+    # count of jids actually removed (idempotent for repeated calls), in one
+    # atomic script. Removing the last live jid drains the batch like an ack
+    # would, so the callbacks fire here rather than never.
     def remove_jobs(*jids)
       return 0 if jids.empty?
 
-      Wurk.redis do |conn|
-        removed = conn.call('SREM', "b-#{@bid}-jids", *jids).to_i
-        if removed.positive?
-          conn.call('HINCRBY', "b-#{@bid}", 'pending', -removed)
-          conn.call('HINCRBY', "b-#{@bid}", 'total', -removed)
-        end
-        removed
-      end
+      removed, pending, live, kids = Wurk.redis do |conn|
+        Wurk::Lua::Loader.eval_cached(
+          conn, :batch_remove_jobs,
+          keys: ["b-#{@bid}", "b-#{@bid}-jids", "b-#{@bid}-failed", "b-#{@bid}-pkids"], argv: jids
+        )
+      end.map(&:to_i)
+      Callbacks.maybe_fire(@bid, pending: pending, live: live, kids: kids) if removed.positive?
+      removed
     end
 
     # Mark batch invalid. Pending jobs still exist in their queues; the
-    # server middleware short-circuits them when it observes the flag.
+    # server middleware short-circuits them when it observes the flag and acks
+    # them as successes (spec §12), so the batch still drains and fires.
     # Cascades to descendant batches via b-<bid>-kids.
     def invalidate_all
       cascade_invalidate(@bid)
@@ -253,23 +293,35 @@ module Wurk
       self
     end
 
-    # Atomic enqueue block. Inside the block, `Job.perform_async` finds
-    # this batch via Thread.current[THREAD_KEY] and stamps `bid` onto the
-    # payload — the client middleware then uses BATCH_PUSH to register and
-    # push atomically. Empty blocks synthesise a Batch::Empty no-op so
-    # callbacks still fire.
+    # Atomic enqueue block (spec §2.3). Inside the block, `Job.perform_async`
+    # finds this batch via Thread.current[THREAD_KEY] and stamps `bid` onto the
+    # payload; the pushes are collected and flushed at block exit, each
+    # through BATCH_PUSH. A block that raises pushes nothing it collected.
+    # `autoflush = N` flushes every N jobs instead, trading that atomicity for
+    # bounded memory. A block that creates the batch and adds nothing to it —
+    # no job, no child batch — synthesises a Batch::Empty no-op (spec §2.3);
+    # a block re-entering an existing batch needs none, the batch already has
+    # members (or drains when the hold is released).
+    #
+    # For the whole block the batch carries a hold (BATCH_HOLD), so a job
+    # pushed early — a flushed autoflush slice, a scheduled job, a nested
+    # child batch — cannot ack the batch empty and fire its callbacks before
+    # the rest is in. The hold is released at block exit through the same ack
+    # path as a job. When the block that *created* the batch raises, the hold
+    # stays: nothing the block collected was pushed, and a batch that fired
+    # for whatever slipped out early would be the partial batch §2.3 rules
+    # out. A block re-entering an existing batch releases it either way, or
+    # the batch's own jobs could never fire it.
     def jobs(&block)
       raise ArgumentError, 'jobs requires a block' unless block
 
+      threshold = autoflush_threshold
+      created   = !@flushed_once
       ensure_first_flush!
-      pre_count = job_count
-      collect_jobs(&block)
-      # By the time we check, the buffer (if any) has flushed, so `total`
-      # reflects everything the block pushed — a flat count is reliable.
-      # Scheduled (`perform_in`) jobs count here too: BATCH_SCHEDULE moves
-      # `total` at creation, so a scheduled-only block does not misfire the
-      # marker as if it were empty.
-      enqueue_empty_marker if job_count == pre_count
+      with_hold(release_on_error: !created) do
+        collect_jobs(threshold, &block)
+        enqueue_empty_marker if created && untouched?
+      end
       @mutable = false
       self
     end
@@ -277,41 +329,70 @@ module Wurk
     private
 
     # Runs the block with this batch active so the client middleware stamps
-    # the bid. With autoflush on, batched pushes accumulate in a Buffer and
-    # flush once at exit; the per-N flushing happens in Client#raw_push.
-    def collect_jobs
-      previous    = Thread.current[THREAD_KEY]
-      prev_buffer = Thread.current[BUFFER_KEY]
-      buffer      = new_buffer
-      Thread.current[THREAD_KEY] = self
-      Thread.current[BUFFER_KEY] = buffer
-      begin
+    # the bid. Batched pushes accumulate in a Buffer and flush once at exit
+    # (only on a normal exit); the per-N flushing happens in Client#raw_push.
+    def collect_jobs(threshold)
+      buffer = Buffer.new([], threshold)
+      Batch.with_thread_batch(self, buffer) do
         yield
-        flush_buffer(buffer) if buffer
-      ensure
-        Thread.current[THREAD_KEY] = previous
-        Thread.current[BUFFER_KEY] = prev_buffer
+        flush_buffer(buffer)
       end
     end
 
-    # Buffering is opt-in via `autoflush`: `true` buffers the whole block and
-    # flushes once at exit; a positive Integer flushes every N jobs. Anything
-    # falsy keeps the default per-job immediate push.
-    def new_buffer
-      return nil unless @autoflush
-
-      Buffer.new([], autoflush_threshold)
-    end
-
-    # `true` → buffer the whole block (nil threshold, drained at exit);
-    # positive Integer → flush every N. Any other truthy value is a config
-    # typo (`0`, `-1`, `"5"`) — fail fast instead of silently degrading to
-    # "flush at block exit".
+    # Unset (or `true`/`false`) → buffer the whole block (nil threshold,
+    # drained at exit); positive Integer → flush every N. Any other value is
+    # a config typo (`0`, `-1`, `"5"`) — fail fast instead of silently
+    # degrading to "flush at block exit". Checked before anything touches
+    # Redis, so a typo never leaves a batch created and held.
     def autoflush_threshold
-      return nil if @autoflush == true
+      return nil if @autoflush.nil? || @autoflush == true || @autoflush == false
       return @autoflush if @autoflush.is_a?(Integer) && @autoflush.positive?
 
       raise ArgumentError, "autoflush must be true or a positive Integer, got #{@autoflush.inspect}"
+    end
+
+    def with_hold(release_on_error:)
+      holds     = (Thread.current[HOLDS_KEY] ||= {})
+      outermost = !holds.key?(@bid)
+      sentinel  = take_hold if outermost
+      holds[@bid] = true if outermost
+      completed = false
+      begin
+        yield
+        completed = true
+      ensure
+        holds.delete(@bid) if outermost
+        release_hold(sentinel) if sentinel && (completed || release_on_error)
+      end
+    end
+
+    # Named after the running job when there is one, so a job reclaimed after
+    # a SIGKILL mid-block re-takes the *same* hold (BATCH_HOLD's SADD guard
+    # makes that a no-op) and its release clears the one the dead run left.
+    def take_hold
+      sentinel = "#{HOLD_PREFIX}#{Wurk::Context.current[:jid] || SecureRandom.hex(12)}"
+      Wurk.redis do |conn|
+        Wurk::Lua::Loader.eval_cached(conn, :batch_hold,
+                                      keys: ["b-#{@bid}", "b-#{@bid}-jids"], argv: [sentinel, @expires_in])
+      end
+      sentinel
+    end
+
+    # The ack is retried and raises if Redis stays down — a hold left behind
+    # means the batch never fires, which the caller has to hear about. The
+    # fire after it is reported, not raised: every job is already pushed, and
+    # a caller retrying the block would push them all twice.
+    def release_hold(sentinel)
+      _removed, pending, live, kids = Callbacks.retrying do
+        Wurk.redis { |conn| Batch.ack_success(conn, @bid, sentinel) }
+      end
+      fire_after_release(pending, live, kids)
+    end
+
+    def fire_after_release(pending, live, kids)
+      Callbacks.retrying { Callbacks.maybe_fire(@bid, pending: pending, live: live, kids: kids) }
+    rescue StandardError => e
+      Wurk.configuration.handle_exception(e, { context: "batch #{@bid}: firing callbacks at #jobs exit", bid: @bid })
     end
 
     def flush_buffer(buffer)
@@ -384,14 +465,23 @@ module Wurk
     # Only `b-#{@bid}` is stamped here — none of the sub-keys exist yet at first
     # flush (BATCH_PUSH/BATCH_SCHEDULE create `-jids`, the acks create
     # `-failed`/`-died`), and EXPIRE on a missing key is a no-op. Each key is
-    # stamped `NX` where it is created instead; see BATCH_PUSH in lua.rb.
+    # stamped `NX` where it is created instead; see lua/batch_push.lua.
     def pipelined_first_flush(pipe, now)
       pipe.call('HSET', "b-#{@bid}", *first_flush_hash(now).flatten)
       pipe.call('EXPIRE', "b-#{@bid}", @expires_in)
       pipe.call('ZADD', 'batches', now.to_s, @bid)
       Batch.trim_index(pipe, 'batches')
-      @tags.each { |t| pipe.call('SADD', "tags:#{t}", @bid) }
+      @tags.each { |t| index_tag(pipe, "tags:#{t}") }
       link_to_parent(pipe) if current_parent_bid
+    end
+
+    # The reverse index is shared by every batch carrying the tag, so it must
+    # outlive the longest-lived of them: NX gives a fresh (or legacy TTL-less)
+    # set a clock, GT only ever extends it. `Status#delete` SREMs the bid.
+    def index_tag(pipe, key)
+      pipe.call('SADD', key, @bid)
+      pipe.call('EXPIRE', key, @expires_in, 'NX')
+      pipe.call('EXPIRE', key, @expires_in, 'GT')
     end
 
     def first_flush_hash(now)
@@ -432,24 +522,33 @@ module Wurk
       pipe.call('EXPIRE', "#{parent_key}-pkids", DEFAULT_EXPIRY_SECONDS, 'NX')
     end
 
-    def job_count
-      Wurk.redis { |conn| conn.call('HGET', "b-#{@bid}", 'total') }.to_i
+    # Read after the buffer flushed, so `total` reflects everything the block
+    # pushed. Scheduled (`perform_in`) jobs count too: BATCH_SCHEDULE moves
+    # `total` at creation, so a scheduled-only block is not mistaken for an
+    # empty one.
+    def untouched?
+      total, kids = Wurk.redis do |conn|
+        conn.pipelined do |pipe|
+          pipe.call('HGET', "b-#{@bid}", 'total')
+          pipe.call('SCARD', "b-#{@bid}-kids")
+        end
+      end
+      total.to_i.zero? && kids.to_i.zero?
     end
 
+    # Pushed straight through, never into an enclosing batch's buffer: it has
+    # to be live before this block's hold is released. The payload names the
+    # class `Sidekiq::Batch::Empty`, the spec's wire name (§2.3) — the alias
+    # resolves it here, and Sidekiq Pro can still run it after a swap back.
     def enqueue_empty_marker
-      require_relative 'batch/empty'
-      previous = Thread.current[THREAD_KEY]
-      Thread.current[THREAD_KEY] = self
-      begin
-        Wurk::Batch::Empty.perform_async
-      ensure
-        Thread.current[THREAD_KEY] = previous
+      Batch.with_thread_batch(self, nil) do
+        Wurk::Client.push('class' => EMPTY_JOB, 'args' => [], 'queue' => 'default', 'retry' => false)
       end
     end
 
     def cascade_invalidate(bid)
       Wurk.redis do |conn|
-        Wurk::Lua::Loader.eval_cached(conn, :batch_invalidate, keys: ["b-#{bid}", "b-#{bid}-jids"], argv: [])
+        Wurk::Lua::Loader.eval_cached(conn, :batch_invalidate, keys: ["b-#{bid}"], argv: [])
         kids = conn.call('SMEMBERS', "b-#{bid}-kids") || []
         kids.each { |child| cascade_invalidate(child) }
       end

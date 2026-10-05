@@ -160,10 +160,21 @@ module Wurk
       # pool may retry a connection error that a non-idempotent write would have
       # to give up on.
       def write(payloads)
-        keys = [Keys.flow(@flow.fid), Keys::FLOWS_SET, 'batches', 'queues']
+        keys = [Keys.flow(@flow.fid), Keys::FLOWS_SET, 'batches', 'queues', Keys::SCHEDULE, *node_keys(payloads)]
         argv = script_argv(payloads)
         Wurk.redis(idempotent: true) do |conn|
           Wurk::Lua::Loader.eval_cached(conn, :flow_create, keys: keys, argv: argv)
+        end
+      end
+
+      # Four declared keys per node, in the same topological order as the
+      # envelopes in {#script_argv}: its record, its batch, the batch's live-jid
+      # set, and its queue.
+      def node_keys(payloads)
+        @flow.nodes.flat_map do |node|
+          payload = payloads[node.index]
+          bid = payload['bid']
+          [Keys.flow_node(@flow.fid, node.index), "b-#{bid}", "b-#{bid}-jids", Keys.queue(payload['queue'])]
         end
       end
 
@@ -185,16 +196,21 @@ module Wurk
       # `enqueued_at` marks arrival on an immediate queue, so only the nodes
       # this write actually queues carry one. A waiting node's stored payload
       # gets its stamp from the push that releases it.
+      #
+      # A node declared with `at:` is deferred, root or not, so its payload is
+      # stored as the `schedule` member Client#push would write — `at` is the
+      # score, and the promoter stamps `enqueued_at` — and the epoch rides
+      # beside it for whichever script releases the node.
       def envelope(node, payload)
-        payload['enqueued_at'] = now_in_millis if node.root?
+        payload['enqueued_at'] = now_in_millis if node.root? && !payload.key?('at')
         Wurk.dump_json(node_fields(node, payload).merge(edge_fields(node)))
       end
 
       def node_fields(node, payload)
-        json = Wurk.dump_json(payload)
+        json = payload.key?('at') ? JobUtil.scheduled_member(payload) : Wurk.dump_json(payload)
         { 'i' => node.index.to_s, 'name' => node.name.to_s, 'class' => payload['class'],
           'queue' => payload['queue'], 'jid' => payload['jid'], 'bid' => payload['bid'],
-          'state' => node.root? ? ENQUEUED : WAITING, 'payload' => json,
+          'state' => node.root? ? ENQUEUED : WAITING, 'payload' => json, 'at' => payload['at'].to_s,
           'desc' => node.label, 'cb' => callbacks_json(node), 'pipe' => pipe_field(node, json) }
       end
 

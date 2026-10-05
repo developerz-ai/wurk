@@ -56,6 +56,17 @@ class FlowAbandonTest < Wurk::Test::UnitCase
     assert_equal(0, subkeys.sum { |key| exists(key) })
   end
 
+  # A node record already gone (expired, deleted by hand) has no bid to name
+  # its batch by; the rest of the graph is still released.
+  def test_a_missing_node_record_does_not_stop_the_rest_being_released
+    flow = diamond.run
+    @pool.with { |conn| conn.call('DEL', Wurk::Keys.flow_node(flow.fid, 0)) }
+
+    assert flow.abandon
+    assert_equal([0, 0], flow.bids[1, 2].map { |bid| exists("b-#{bid}") })
+    assert_equal 'abandoned', flow_record(flow)['state']
+  end
+
   def test_abandoning_takes_the_node_batches_out_of_both_batch_indexes
     flow = diamond.run
     @pool.with { |conn| conn.call('ZADD', 'dead-batches', 1, flow.bids[0]) }

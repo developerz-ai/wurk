@@ -4,8 +4,14 @@ All notable changes to Wurk are recorded here. Format: [Keep a Changelog](https:
 
 ## [Unreleased]
 
+### Security
+
+- **Encrypted jobs no longer leak their decrypted argument back into Redis.** When an encrypted (`encrypt: true`) IterableJob was interrupted, or the limiter dead-routed a rate-limited encrypted job, the re-pushed payload carried the plaintext secret into the queue/dead set. The server middleware now restores the envelope once the chain unwinds, and every re-push site seals a copy.
+
 ### Changed
 
+- **`Batch#jobs` is atomic (Pro §2.3).** Pushes are buffered and flushed at block exit; a block that raises enqueues nothing, and a batch cannot fire while its `jobs` block is open. `autoflush = N` still flushes every N jobs; use `autoflush = 1` for push-per-job.
+- **A child batch's `:complete`/`:success` callback jobs run inside the parent batch**, so the parent waits for them (the §2.9 step workflow now works). Their payloads carry the parent's `bid`.
 - **The Rails railtie boots workers only inside a web server.** `rails server`, Puma, Passenger or Unicorn boot the swarm; `rails runner`, `rails generate`, rake tasks and scripts that require `config/environment` no longer fork one (they used to fetch jobs and cut them off at exit). Other servers (Falcon, Thin, Pitchfork, a custom rackup) opt in with `WURK_EMBED=1`. `WURK_DISABLED=1` still disables boot.
 - **A Rails web process that runs Wurk workers also runs `Sidekiq.configure_client` blocks**, so web-side enqueues get client middleware and settings.
 - **CI runs entirely on free GitHub-hosted runners**; a push to `main` whose tree already passed on its PR skips the duplicate run; the demo auto-deploys on every push to `main` that changes the image.
@@ -14,6 +20,12 @@ All notable changes to Wurk are recorded here. Format: [Keep a Changelog](https:
 
 ### Fixed
 
+- **Batches:** `invalidate_all` no longer strands a batch (cancelled jobs count as successes, callbacks fire); `remove_jobs` is atomic and fires when it removes the last job; `Status#delete` detaches the batch from its parent and tag indexes; `tags:<tag>` indexes expire; parent callbacks fire exactly once when siblings finish together; a Redis error while firing callbacks no longer retries a job that succeeded; a failed callback enqueue is reported and fires on the next attempt instead of being marked fired; the death handler's batch ack is retried; late-registered callbacks no longer corrupt stored callback options (17-digit integers, `[]` vs `{}`, `/`); the empty-batch marker is enqueued as `Sidekiq::Batch::Empty` again.
+- **Periodic jobs honour the worker's `sidekiq_options`** (`queue`, `retry`, `unique_for`, `encrypt`, `expires_in`), on ticks and on the dashboard's "Enqueue Now"; a loop registered `paused: true` can be unpaused; missed runs are no longer backfilled after an outage (Ent §2.6); one failing loop no longer stops the loops after it; `args: { ... }` is passed as one argument.
+- **Bucket limiter counters expire after two intervals** instead of 90 days.
+- **Flow nodes declared with `at:` are scheduled** instead of enqueued immediately.
+- **Every standalone Lua script passes its keys through `KEYS`** (throttle, flows, limiter sweep), so they work on Redis Cluster and Dragonfly; a test now fails on any script that builds a key inside Lua.
+- **Read-only dashboards and read-only REST mounts no longer write when listing limiters.**
 - **Job exceptions reach `config.error_handlers` again.** Honeybadger, Rollbar, Bugsnag, Airbrake and custom handlers were never told about job failures (Sentry's middleware was); each handler now gets every failure once, with `context: "Job raised exception"` and the job hash, like Sidekiq.
 - **A Redis blip no longer kills the scheduler thread for good.** Retries and scheduled jobs stopped being promoted in that process after any outage that spanned a poll tick. Every long-lived thread loop (scheduler, heartbeat, leader, metrics flush/rollups/history, reaper, buffer drainer, swarm supervisor) now survives a Redis error, with a test each.
 - **The reaper can no longer re-run a live worker's job.** A worker writes its first heartbeat before fetching, and the reaper re-checks the owner's heartbeat and requires the private list to be idle for a grace period (30s) right before reclaiming it.

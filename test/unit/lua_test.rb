@@ -36,7 +36,7 @@ class LuaTest < Wurk::Test::UnitCase
     assert_equal(
       %i[zpopbyscore bulk_push reliable_schedule_promote reliable_requeue
          batch_push batch_schedule batch_ack_success batch_ack_failed batch_ack_complete batch_invalidate
-         batch_append_callback
+         batch_append_callback batch_hold batch_kid_done batch_remove_jobs batch_delete
          fast_delete_job fast_delete_by_class release_if_owner leader_campaign cron_claim_fire
          limiter_register limiter_list_sweep
          limiter_concurrent_acquire limiter_concurrent_release
@@ -394,22 +394,40 @@ class LuaTest < Wurk::Test::UnitCase
   def test_batch_ack_success_decrements_pending_only_for_known_jid
     bkey = "#{@ns}:b-y"
     jids = "#{@ns}:b-y-jids"
-    failed = "#{@ns}:b-y-failed"
     @pool.with do |c|
       c.call('HSET', bkey, 'total', 2, 'pending', 2)
       c.call('SADD', jids, 'A', 'B')
 
-      pending, live = Wurk::Lua::Loader.eval_cached(c, :batch_ack_success, keys: [bkey, jids, failed], argv: ['A'])
-
-      assert_equal 1, pending
-      assert_equal 1, live
+      assert_equal [1, 1, 1, 0], ack_success(c, "#{@ns}:b-y", 'A')
       assert_equal '1', c.call('HGET', bkey, 'pending')
 
-      pending, live = Wurk::Lua::Loader.eval_cached(c, :batch_ack_success, keys: [bkey, jids, failed], argv: ['ZZZ'])
+      # A jid that is no longer live removed nothing but still reports the
+      # batch's current state — the re-run re-drive reads it.
+      assert_equal [0, 1, 1, 0], ack_success(c, "#{@ns}:b-y", 'ZZZ')
+      assert_equal '1', c.call('HGET', bkey, 'pending')
+    end
+  end
 
-      assert_equal(-1, pending)
+  def test_batch_ack_success_reports_pending_child_batches
+    base = "#{@ns}:b-yk"
+    @pool.with do |c|
+      c.call('HSET', base, 'total', 1, 'pending', 1)
+      c.call('SADD', "#{base}-jids", 'A')
+      c.call('SADD', "#{base}-pkids", 'child')
+
+      assert_equal [1, 0, 0, 1], ack_success(c, base, 'A')
+    end
+  end
+
+  # A straggler acking into a deleted batch must never look drained, or the
+  # recovery fire would resurrect the hash.
+  def test_batch_ack_success_reports_a_missing_batch_as_not_drained
+    @pool.with do |c|
+      _removed, _pending, live, kids = ack_success(c, "#{@ns}:b-ygone", 'A')
+
       assert_equal(-1, live)
-      assert_equal '1', c.call('HGET', bkey, 'pending')
+      assert_equal(-1, kids)
+      assert_equal 0, c.call('EXISTS', "#{@ns}:b-ygone")
     end
   end
 
@@ -424,7 +442,7 @@ class LuaTest < Wurk::Test::UnitCase
       c.call('SADD', jids, 'A')
       c.call('SADD', failed, 'A')
 
-      Wurk::Lua::Loader.eval_cached(c, :batch_ack_success, keys: [bkey, jids, failed], argv: ['A'])
+      Wurk::Lua::Loader.eval_cached(c, :batch_ack_success, keys: [bkey, jids, failed, "#{bkey}-pkids"], argv: ['A'])
 
       assert_equal '0', c.call('HGET', bkey, 'failures')
       assert_equal 0, c.call('SISMEMBER', failed, 'A')
@@ -456,7 +474,7 @@ class LuaTest < Wurk::Test::UnitCase
       c.call('SADD', jids, 'A', 'B')
 
       live, died_n, first = Wurk::Lua::Loader.eval_cached(
-        c, :batch_ack_complete, keys: [bkey, jids, died, failed], argv: ['A', TTL]
+        c, :batch_ack_complete, keys: [bkey, jids, died, failed, "#{bkey}-pkids"], argv: ['A', TTL]
       )
 
       assert_equal 1, live
@@ -469,7 +487,7 @@ class LuaTest < Wurk::Test::UnitCase
       assert_equal 0, c.call('SISMEMBER', failed, 'A')
 
       _live, _died_n, second_first = Wurk::Lua::Loader.eval_cached(
-        c, :batch_ack_complete, keys: [bkey, jids, died, failed], argv: ['B', TTL]
+        c, :batch_ack_complete, keys: [bkey, jids, died, failed, "#{bkey}-pkids"], argv: ['B', TTL]
       )
 
       assert_equal 0, second_first
@@ -488,7 +506,8 @@ class LuaTest < Wurk::Test::UnitCase
       c.call('SADD', jids, 'A')
       c.call('SADD', failed, 'A')
 
-      Wurk::Lua::Loader.eval_cached(c, :batch_ack_complete, keys: [bkey, jids, died, failed], argv: ['A', TTL])
+      Wurk::Lua::Loader.eval_cached(c, :batch_ack_complete, keys: [bkey, jids, died, failed, "#{bkey}-pkids"],
+                                                            argv: ['A', TTL])
 
       assert_equal '0', c.call('HGET', bkey, 'failures')
       assert_equal 0, c.call('SISMEMBER', failed, 'A')
@@ -496,17 +515,95 @@ class LuaTest < Wurk::Test::UnitCase
     end
   end
 
-  def test_batch_invalidate_clears_jids_and_flags_hash
+  # Spec §12: cancelled jobs count as successes, so they must still ack out
+  # of the live set — invalidating may only flag the batch, never drop jids.
+  def test_batch_invalidate_flags_hash_and_keeps_jids
     bkey = "#{@ns}:b-z"
     jids = "#{@ns}:b-z-jids"
     @pool.with do |c|
       c.call('HSET', bkey, 'total', 3, 'pending', 3)
       c.call('SADD', jids, 'A', 'B', 'C')
 
-      Wurk::Lua::Loader.eval_cached(c, :batch_invalidate, keys: [bkey, jids], argv: [])
-
-      assert_equal 0, c.call('EXISTS', jids)
+      assert_equal 1, Wurk::Lua::Loader.eval_cached(c, :batch_invalidate, keys: [bkey], argv: [])
+      assert_equal 3, c.call('SCARD', jids)
       assert_equal '1', c.call('HGET', bkey, 'invalidated')
+    end
+  end
+
+  def test_batch_invalidate_refuses_a_missing_batch
+    @pool.with do |c|
+      assert_equal 0, Wurk::Lua::Loader.eval_cached(c, :batch_invalidate, keys: ["#{@ns}:b-zgone"], argv: [])
+      assert_equal 0, c.call('EXISTS', "#{@ns}:b-zgone")
+    end
+  end
+
+  def test_batch_hold_counts_pending_once_per_sentinel
+    base = "#{@ns}:b-h"
+    @pool.with do |c|
+      c.call('HSET', base, 'pending', 0)
+
+      assert_equal 1, hold(c, base, 'hold:x')
+      assert_equal 0, hold(c, base, 'hold:x')
+      assert_equal '1', c.call('HGET', base, 'pending')
+      assert_equal %w[hold:x], c.call('SMEMBERS', "#{base}-jids")
+      assert_operator c.call('TTL', "#{base}-jids"), :>, 0
+    end
+  end
+
+  def test_batch_kid_done_removes_the_child_and_reports_parent_state
+    base = "#{@ns}:b-p"
+    @pool.with do |c|
+      c.call('HSET', base, 'pending', 0)
+      c.call('SADD', "#{base}-pkids", 'k1', 'k2')
+
+      assert_equal [0, 0, 1], kid_done(c, base, 'k1')
+      assert_equal [0, 0, 0], kid_done(c, base, 'k2')
+      assert_equal [0, 0, 0], kid_done(c, base, 'k2'), 'a re-run still reports the drained parent'
+    end
+  end
+
+  def test_batch_kid_done_reports_a_missing_parent_as_not_drained
+    @pool.with { |c| assert_equal [0, -1, -1], kid_done(c, "#{@ns}:b-pgone", 'k1') }
+  end
+
+  def test_batch_remove_jobs_moves_counters_by_the_jids_actually_removed
+    base = "#{@ns}:b-r"
+    @pool.with do |c|
+      c.call('HSET', base, 'total', 3, 'pending', 3, 'failures', 1)
+      c.call('SADD', "#{base}-jids", 'A', 'B', 'C')
+      c.call('SADD', "#{base}-failed", 'B')
+
+      assert_equal [2, 1, 1, 0], remove_jobs(c, base, 'A', 'B', 'NOPE')
+      assert_equal %w[1 1 0], c.call('HMGET', base, 'total', 'pending', 'failures')
+      assert_equal [0, 1, 1, 0], remove_jobs(c, base, 'A')
+    end
+  end
+
+  def test_batch_delete_detaches_from_parent_and_tags
+    child  = "#{@ns}:b-dc"
+    parent = "#{@ns}:b-dp"
+    tag    = "#{@ns}:tags:t"
+    @pool.with do |c|
+      c.call('HSET', child, 'total', 1)
+      c.call('SADD', "#{child}-jids", 'A')
+      c.call('HSET', parent, 'pending', 0)
+      c.call('SADD', "#{parent}-kids", 'dc')
+      c.call('SADD', "#{parent}-pkids", 'dc')
+      c.call('SADD', tag, 'dc', 'other')
+      c.call('ZADD', "#{@ns}:batches", 1, 'dc')
+
+      result = Wurk::Lua::Loader.eval_cached(
+        c, :batch_delete,
+        keys: [child, "#{child}-jids", "#{@ns}:batches", "#{@ns}:dead-batches",
+               parent, "#{parent}-jids", "#{parent}-pkids", "#{parent}-kids", tag],
+        argv: ['dc', 2, '1']
+      )
+
+      assert_equal [0, 0, 0], result
+      assert_equal 0, c.call('EXISTS', child, "#{child}-jids")
+      assert_equal 0, c.call('SCARD', "#{parent}-kids")
+      assert_equal %w[other], c.call('SMEMBERS', tag)
+      assert_equal 0, c.call('ZCARD', "#{@ns}:batches")
     end
   end
 
@@ -526,9 +623,8 @@ class LuaTest < Wurk::Test::UnitCase
     end
   end
 
-  # The seeded list is Ruby's `to_json` (what first flush writes), the appends
-  # go through cjson — the dedup only holds because both sides are normalised
-  # through the same encoder before comparison.
+  # The seeded list is Ruby's `to_json` (what first flush writes) and so is
+  # each appended entry, so a byte-for-byte entry comparison is the dedup.
   def test_batch_append_callback_skips_an_identical_triple
     bkey = "#{@ns}:b-cb2"
     entry = ['success', 'A', { 'shard' => 1 }]
@@ -575,6 +671,35 @@ class LuaTest < Wurk::Test::UnitCase
     end
   end
 
+  # E30: the append must splice the stored text, never cjson round-trip it —
+  # that rewrote 17-digit integers as doubles, `[]` as `{}` and escaped `/`,
+  # in every entry already there, not just the new one.
+  def test_batch_append_callback_preserves_stored_entries_byte_for_byte
+    bkey = "#{@ns}:b-cb-exact"
+    first = ['complete', 'A', { 'id' => 12_345_678_901_234_567, 'list' => [], 'url' => 'a/b', 'e' => '"q\\' }]
+    second = ['success', 'B', { 'id' => 98_765_432_109_876_543, 'empty' => {}, 'nested' => [[]] }]
+    @pool.with do |c|
+      c.call('HSET', bkey, 'callbacks', JSON.generate([first]))
+
+      append_callback(c, bkey, second)
+
+      assert_equal JSON.generate([first, second]), c.call('HGET', bkey, 'callbacks')
+      assert_equal [first, second], callbacks(c, bkey)
+    end
+  end
+
+  def test_batch_append_callback_starts_an_empty_or_missing_array
+    @pool.with do |c|
+      ['[]', ''].each_with_index do |seed, i|
+        bkey = "#{@ns}:b-cb-seed#{i}"
+        c.call('HSET', bkey, 'callbacks', seed)
+        append_callback(c, bkey, ['success', 'A', { 'x' => [] }])
+
+        assert_equal '[["success","A",{"x":[]}]]', c.call('HGET', bkey, 'callbacks')
+      end
+    end
+  end
+
   # -1 (gone) and -2 (capped) are distinct sentinels; the caller raises on one
   # and logs on the other.
   def test_batch_append_callback_refuses_a_missing_batch_hash
@@ -592,6 +717,25 @@ class LuaTest < Wurk::Test::UnitCase
 
   def callbacks(conn, bkey)
     JSON.parse(conn.call('HGET', bkey, 'callbacks'))
+  end
+
+  def ack_success(conn, base, jid)
+    Wurk::Lua::Loader.eval_cached(conn, :batch_ack_success,
+                                  keys: [base, "#{base}-jids", "#{base}-failed", "#{base}-pkids"], argv: [jid])
+  end
+
+  def hold(conn, base, sentinel)
+    Wurk::Lua::Loader.eval_cached(conn, :batch_hold, keys: [base, "#{base}-jids"], argv: [sentinel, TTL])
+  end
+
+  def kid_done(conn, base, child)
+    Wurk::Lua::Loader.eval_cached(conn, :batch_kid_done,
+                                  keys: [base, "#{base}-jids", "#{base}-pkids"], argv: [child])
+  end
+
+  def remove_jobs(conn, base, *jids)
+    Wurk::Lua::Loader.eval_cached(conn, :batch_remove_jobs,
+                                  keys: [base, "#{base}-jids", "#{base}-failed", "#{base}-pkids"], argv: jids)
   end
 
   def promote(conn, sset, now_ms = 1_700_000_000_000)

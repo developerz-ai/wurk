@@ -34,7 +34,7 @@ module Wurk
   #   end
   #
   # Wire format (per docs/target/sidekiq-ent.md §4.4): the last arg becomes
-  # a plain JSON Hash `{"v"=>N, "iv"=>b64(iv), "ct"=>b64(ct), "tag"=>b64(tag)}`
+  # a plain JSON Hash `{"__wurk_enc__"=>true, "v"=>N, "iv"=>…, "ct"=>…, "tag"=>…}`
   # — *not* a base64 blob of a binary envelope — so the args array stays
   # valid JSON for inspectors that don't know about encryption.
   #
@@ -167,6 +167,25 @@ module Wurk
           value.key?('v') && value.key?('iv') && value.key?('ct') && value.key?('tag')
       end
 
+      # `args` with its last element enveloped, unless it already is one. The
+      # single sealing rule shared by the client middleware and every server
+      # path that writes a payload back to Redis (InterruptHandler, limiter
+      # dead-routing): a job hash seen mid-chain may hold decrypted args.
+      def seal_args(args)
+        return args unless args.is_a?(::Array) && !args.empty? && !envelope?(args.last)
+
+        args[0..-2] + [encrypt(args.last)]
+      end
+
+      # `job` safe to write back to Redis: a copy with the last arg re-sealed
+      # when crypto is on and the job opted in, otherwise `job` itself.
+      def seal(job)
+        return job unless enabled? && job['encrypt']
+
+        sealed = seal_args(job['args'])
+        sealed.equal?(job['args']) ? job : job.merge('args' => sealed)
+      end
+
       # Web UI display helper (§4.7). Given a job hash, returns the args
       # array with the last element replaced by the literal `"<encrypted>"`
       # when the job opted in. Cleartext preceding args are untouched so
@@ -240,17 +259,16 @@ module Wurk
       include Wurk::Middleware::ClientMiddleware
 
       def call(_worker, job, _queue, _redis_pool)
-        return yield unless Wurk::Encryption.enabled? && job['encrypt']
-
-        args = job['args']
-        if args.is_a?(::Array) && !args.empty? && !Wurk::Encryption.envelope?(args.last)
-          job['args'] = args[0..-2] + [Wurk::Encryption.encrypt(args.last)]
-        end
+        job['args'] = Wurk::Encryption.seal_args(job['args']) if Wurk::Encryption.enabled? && job['encrypt']
         yield
       end
     end
 
-    # Server middleware — peels the envelope before perform runs. A decrypt
+    # Server middleware — peels the envelope before perform runs and puts it
+    # back once the chain unwinds, success or failure. The job hash is shared
+    # with every outer middleware and the processor; leaving plaintext in it
+    # let any of them write the secret back to Redis (InterruptHandler's
+    # re-push, limiter dead-routing) or hand it to an error reporter. A decrypt
     # failure (missing/rotated key, bad tag) is terminal and non-retryable,
     # so rather than let it bubble into the 25× retry pipeline we route the
     # job straight to the dead set tagged `encryption_error` and ACK it via
@@ -262,8 +280,13 @@ module Wurk
       def call(_worker, job, _queue)
         return yield unless Wurk::Encryption.enabled? && job['encrypt']
 
+        sealed = job['args']
         decrypt_last_arg!(job)
-        yield
+        begin
+          yield
+        ensure
+          job['args'] = sealed
+        end
       end
 
       private

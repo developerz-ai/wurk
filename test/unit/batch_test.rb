@@ -304,12 +304,14 @@ class BatchTest < Wurk::Test::UnitCase
     refute_predicate batch, :valid?
   end
 
-  def test_invalidate_all_clears_live_jids_set
+  # E4: cancelled jobs still have to ack out of the live set (spec §12), so
+  # invalidating keeps their membership.
+  def test_invalidate_all_keeps_live_jids_set
     batch = track(Wurk::Batch.new)
     batch.jobs { 2.times { perform_one(batch) } }
     batch.invalidate_all
 
-    assert_equal(0, @pool.with { |c| c.call('SCARD', "b-#{batch.bid}-jids") })
+    assert_equal(2, @pool.with { |c| c.call('SCARD', "b-#{batch.bid}-jids") })
   end
 
   def test_valid_default_true

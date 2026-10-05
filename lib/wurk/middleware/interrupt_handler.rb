@@ -3,6 +3,7 @@
 require_relative '../middleware'
 require_relative '../job'
 require_relative '../job_retry'
+require_relative '../encryption'
 
 module Wurk
   module Middleware
@@ -16,7 +17,10 @@ module Wurk
     # one to be fetched: the fetcher's LMOVE pops from the RIGHT (tail),
     # so this job is fetched ahead of fresh LPUSH'd enqueues. The job
     # JSON is unchanged: cursor state lives in the `it-<jid>` HASH (see
-    # IterableJob persistence), not in the payload.
+    # IterableJob persistence), not in the payload. An `encrypt: true` job
+    # is re-sealed before the push — Encryption::ServerMiddleware restores
+    # the envelope on unwind, but a chain where it sits *outside* this
+    # handler would otherwise hand us decrypted args (ent §4.3).
     #
     # Auto-registered at the top of the server chain when this file is
     # required. Top-of-chain is important: a downstream middleware must
@@ -36,7 +40,7 @@ module Wurk
       private
 
       def repush(job, queue)
-        payload = Wurk.dump_json(job)
+        payload = Wurk.dump_json(Wurk::Encryption.seal(job))
         redis_pool.with { |conn| conn.call('RPUSH', "queue:#{queue}", payload) }
       end
     end

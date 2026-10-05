@@ -9,7 +9,7 @@
 -- KEYS[1] = lmtr-b:<name>:<epoch>
 -- ARGV[1] = limit (max count per epoch)
 -- ARGV[2] = used (units to charge; 1 by default)
--- ARGV[3] = ttl seconds
+-- ARGV[3] = key ttl seconds: 2 x interval, outliving the epoch it counts
 -- ARGV[4] = seconds to next boundary (returned verbatim for the caller's sleep)
 -- Returns {acquired, current, seconds_to_next_boundary}.
 local key = KEYS[1]
