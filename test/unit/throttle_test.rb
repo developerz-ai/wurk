@@ -157,8 +157,13 @@ class ThrottleTest < Wurk::Test::UnitCase
 
     assert_predicate first, :admitted?
     extra = Wurk::Throttle.admit(job(jid: jid('b')), slot: 1)
-    # Only a box stalled past the 1s boundary may admit the extra.
-    assert(extra.dropped? || Time.now.to_f >= first.slot_ends_at, 'an extra inside the slot must be dropped')
+    # Only a box stalled past the 1s boundary may admit the extra, and then
+    # only into a later slot — never a second admission in the first one.
+    if extra.admitted?
+      assert_operator extra.slot_ends_at, :>, first.slot_ends_at, 'an extra inside the slot must be dropped'
+    else
+      assert_predicate extra, :dropped?
+    end
 
     sleep([first.slot_ends_at - Time.now.to_f, 0].max + 0.1)
     second = Wurk::Throttle.admit(job(jid: jid('c')), slot: 1)

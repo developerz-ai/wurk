@@ -107,6 +107,22 @@ the private list, where orphan reclaim picks it up.
 **Anchor:** `lib/wurk/fetcher/reliable.rb` (`bulk_requeue`,
 `requeue_pipelined`), PR2 (`fix/shutdown-requeue`), free §15, Pro §3.2.
 
+## Limiter `ttl` below 24h is raised to 24h
+
+**Wurk:** `Limiter::Base#initialize` clamps `ttl` to `MIN_TTL` (86 400s), so
+no limiter key lives shorter than a day. A shorter value is accepted, not
+rejected.
+
+**Spec:** Ent §1.7 lists the `ttl` option with "Minimum: 24h". Sidekiq Ent
+7.3's own `Limiter::Base#ttl` applies no floor at all.
+
+**Why:** the floor is what the spec documents — keys that expire mid-job
+orphan concurrent slots. Clamping rather than raising keeps an app that passes
+a short `ttl` (legal in Sidekiq Ent) booting after the gem swap.
+
+**Anchor:** `lib/wurk/limiter/base.rb` (`initialize`, `MIN_TTL`), Ent §1.7,
+`test/parity/limiter_test.rb` (`test_no_key_lives_shorter_than_the_24h_minimum`).
+
 ## Rolling restart drives itself from the supervise loop; no einhorn
 
 **Wurk:** `SIGUSR1` on the swarm parent enqueues every live child into

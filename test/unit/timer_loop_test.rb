@@ -13,9 +13,10 @@ class TimerLoopTest < Wurk::Test::UnitCase
   def test_run_waits_before_first_tick
     timer = Wurk::TimerLoop.new(0.05)
     ticks = []
-    started = ::Process.clock_gettime(::Process::CLOCK_MONOTONIC)
+    started = nil
 
     thread = Thread.new do
+      started = ::Process.clock_gettime(::Process::CLOCK_MONOTONIC)
       timer.run do
         ticks << (::Process.clock_gettime(::Process::CLOCK_MONOTONIC) - started)
         timer.terminate

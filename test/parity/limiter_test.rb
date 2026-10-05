@@ -327,12 +327,15 @@ class LimiterParityTest < Wurk::Test::UnitCase
     assert_in_delta 2 * DAY, redis('TTL', "lmtr:#{@name}"), 60
   end
 
+  # §1.7 "Minimum: 24h". Sidekiq Ent accepts any ttl, so a short one is raised
+  # to the floor rather than rejected — an app passing one keeps booting.
   def test_no_key_lives_shorter_than_the_24h_minimum
     Sidekiq::Limiter.window(@name, 2, :minute, wait_timeout: 0, ttl: 60).within_limit { nil }
-  rescue ArgumentError
-    pass # rejecting a sub-minimum ttl also honours the 24h floor
-  else
-    scan("*#{@name}*").each { |key| assert_operator redis('TTL', key), :>=, DAY - 60, key }
+
+    keys = scan("*#{@name}*")
+
+    refute_empty keys
+    keys.each { |key| assert_operator redis('TTL', key), :>=, DAY - 60, key }
   end
 
   # --- §1.4 server middleware --------------------------------------------

@@ -122,6 +122,17 @@ class JobRecordTest < Wurk::Test::UnitCase
     assert_nil Wurk::JobRecord.new(item, @qname).created_at
   end
 
+  def test_every_timestamp_shape_parses_to_utc
+    [1_700_000_000_123, 1_700_000_000_123.0, 1_700_000_000.5, 1_700_000_000].each do |ts|
+      record = Wurk::JobRecord.new(base_item.merge('enqueued_at' => ts, 'created_at' => ts,
+                                                   'failed_at' => ts, 'retried_at' => ts), @qname)
+
+      %i[enqueued_at created_at failed_at retried_at].each do |field|
+        assert_predicate record.public_send(field), :utc?, "#{field} from #{ts.inspect}"
+      end
+    end
+  end
+
   def test_failed_at_retried_at_return_time_when_set
     failed = ms_now - 1000
     retried = ms_now - 500

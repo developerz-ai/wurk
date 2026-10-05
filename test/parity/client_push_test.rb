@@ -70,7 +70,7 @@ class ClientPushParityTest < Wurk::Test::UnitCase
     assert_equal 'ClientPushParityTest::PlainJob', payload['class']
     assert_equal @queue, payload['queue']
     assert_equal [1, 'two'], payload['args']
-    assert(payload['retry'], 'retry defaults to true')
+    assert_equal true, payload['retry'], 'retry defaults to true' # rubocop:disable Minitest/AssertTruthy
     assert_kind_of Integer, payload['created_at'], 'created_at is Integer epoch ms (Sidekiq 8)'
     assert_kind_of Integer, payload['enqueued_at'], 'enqueued_at is Integer epoch ms (Sidekiq 8)'
     assert_operator payload['created_at'], :>=, before_ms
@@ -90,7 +90,7 @@ class ClientPushParityTest < Wurk::Test::UnitCase
     payload = only_queued_job
 
     assert_equal 'Some::Remote::Job', payload['class']
-    assert(payload['retry'])
+    assert_equal true, payload['retry'] # rubocop:disable Minitest/AssertTruthy
   end
 
   def test_default_queue_is_default

@@ -196,15 +196,16 @@ module Wurk
       end
     end
 
-    # Parse Sidekiq's mixed time formats (Float secs, Integer ms) into Time.
+    # Parse Sidekiq's mixed time formats (Float secs, Integer ms) into a UTC
+    # Time, whatever the branch, so callers never see the host's zone.
     # Integer ms is split into whole seconds + ms rather than divided as a
     # Float, which would round some timestamps a millisecond off.
     def parse_time(value)
       return nil if value.nil?
       return ::Time.at(value).utc if value < 10_000_000_000
-      return ::Time.at(value / 1_000.0) unless value.is_a?(Integer)
+      return ::Time.at(value / 1_000.0).utc unless value.is_a?(Integer)
 
-      ::Time.at(value / 1_000, value % 1_000, :millisecond)
+      ::Time.at(value / 1_000, value % 1_000, :millisecond).utc
     end
   end
 end

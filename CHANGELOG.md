@@ -13,6 +13,7 @@ All notable changes to Wurk are recorded here. Format: [Keep a Changelog](https:
 
 ### Changed
 
+- **Limiter `ttl:` values under 24h are raised to 24h** instead of raising `ArgumentError` (Sidekiq Enterprise accepts any ttl; the 24h floor is kept).
 - **Poison-pill threshold matches Sidekiq Pro**: an orphaned job is requeued on its first three recoveries and dead-set on the fourth (was the third).
 - **Encrypted args are masked as `"[encrypted data]"`** in the data API and dashboard, the string Sidekiq's `JobRecord#display_args` uses (was `"<encrypted>"`).
 - **`Queue#delete_job(jid)` returns the deleted job's JSON, or nil when nothing matched**, as Sidekiq Pro does (was an Integer count, where 0 is truthy).
@@ -38,6 +39,7 @@ All notable changes to Wurk are recorded here. Format: [Keep a Changelog](https:
 
 ### Fixed
 
+- **`JobRecord#enqueued_at` / `#created_at` / `#failed_at` / `#retried_at` always return UTC times**, whatever timestamp format the payload holds.
 - **A bucket limiter on a short interval (`:second`) sleeps until the real boundary** using Redis `TIME` microseconds, instead of a whole second that could overshoot by ~1s and eat `wait_timeout`.
 - **Data API parity:** `JobRecord#queue` falls back to the payload's `queue`; invalid-JSON payloads read as `{}` with the raw bytes as `args`; `created_at` falls back to `enqueued_at`; `latency` falls back to `created_at`; Integer-ms timestamps convert without float rounding; `display_class` honours a `display_class` field; ActiveJob `display_args` unwraps GlobalIDs and strips `_aj_*` keys, and `MailDeliveryJob` shows `[params, args]`.
 - **`Client#push` raises `ArgumentError` for a `class` without `sidekiq_options`**, as Sidekiq does.

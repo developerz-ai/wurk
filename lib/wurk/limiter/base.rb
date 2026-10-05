@@ -15,6 +15,8 @@ module Wurk
     # available? }`. Subclasses supply the three values via `build_status`;
     # Concurrent additionally merges its metric counters.
     class Base
+      MIN_TTL = 86_400
+
       attr_reader :name, :options
 
       # `register:` defaults true so constructing a limiter publishes its
@@ -26,13 +28,14 @@ module Wurk
           raise ArgumentError, "limiter name must match #{NAME_PATTERN.inspect} (got #{name.inspect})"
         end
 
-        ttl = options[:ttl] || DEFAULT_TTL
         # Spec §1.2: ttl floor of 24h. Anything tighter risks losing the
-        # metadata hash mid-job and orphaning slots that read it.
-        raise ArgumentError, 'ttl must be >= 86_400' if ttl < 86_400
+        # metadata hash mid-job and orphaning slots that read it. Raised to
+        # the floor rather than rejected: Sidekiq Ent accepts any ttl, so an
+        # app passing a short one must keep booting after the gem swap.
+        ttl = [options[:ttl] || DEFAULT_TTL, MIN_TTL].max
 
         @name = name.dup.freeze
-        @options = options
+        @options = options.merge(ttl: ttl)
         register! if register
       end
 

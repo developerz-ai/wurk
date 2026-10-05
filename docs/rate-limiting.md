@@ -38,8 +38,9 @@ one-line gem swap; use either name.
 | `unlimited` | Nothing | Tests, or swapping a limiter out at a call site | `unlimited(*ignored, **ignored)` |
 
 `ttl` (default `90 * 24 * 3600`) is the Redis TTL on the limiter's keys, refreshed on
-every use. **Values under `86_400` raise `ArgumentError`** — a metadata hash that
-expires mid-job orphans slots.
+every use. **Values under `86_400` are raised to `86_400`** — a metadata hash that
+expires mid-job orphans slots. (Earlier releases raised `ArgumentError`; Sidekiq
+Enterprise accepts any value, so a short `ttl` must not break boot.)
 
 ### concurrent
 

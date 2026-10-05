@@ -75,20 +75,23 @@ class ExpiringParityTest < Wurk::Test::UnitCase
     job = queued.first
 
     assert_kind_of Float, job['expiry']
-    assert_in_delta (job['created_at'] / 1000.0) + 3600, job['expiry'], 1
-    assert_in_delta Time.now.to_f + 3600, job['expiry'], 5
+    assert_in_delta (job['created_at'] / 1000.0) + 3600, job['expiry'], 0.01
   end
 
   def test_set_override_replaces_the_worker_duration
     ExpiringJob.set(queue: @queue, expires_in: 86_400).perform_async(@token)
 
-    assert_in_delta Time.now.to_f + 86_400, queued.first['expiry'], 5
+    job = queued.first
+
+    assert_in_delta (job['created_at'] / 1000.0) + 86_400, job['expiry'], 0.01
   end
 
   def test_set_override_on_a_worker_without_the_option
     PlainJob.set(queue: @queue, expires_in: 60).perform_async(@token)
 
-    assert_in_delta Time.now.to_f + 60, queued.first['expiry'], 5
+    job = queued.first
+
+    assert_in_delta (job['created_at'] / 1000.0) + 60, job['expiry'], 0.01
   end
 
   def test_no_expiry_without_the_option
@@ -102,9 +105,9 @@ class ExpiringParityTest < Wurk::Test::UnitCase
   # duration counts from the time the job is due on its queue.
   def test_scheduled_job_expires_duration_after_it_is_due
     jid = ExpiringJob.set(queue: @queue).perform_in(7200, @token)
-    job = Sidekiq::ScheduledSet.new.find_job(jid).item
+    entry = Sidekiq::ScheduledSet.new.find_job(jid)
 
-    assert_in_delta Time.now.to_f + 7200 + 3600, job['expiry'], 5
+    assert_in_delta entry.score + 3600, entry.item['expiry'], 0.01
   end
 
   # --- §7 execution -------------------------------------------------------
