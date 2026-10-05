@@ -1,12 +1,19 @@
 # frozen_string_literal: true
 
+require_relative 'histogram'
+
 module Wurk
   module Metrics
     # The in-memory half of Wurk::Metrics::History. Every execution folds into a
-    # `{pool => {minute => {class => [processed, failed, ms]}}}` tree under one
-    # mutex; Wurk::Metrics::Flusher drains it into Redis on a timer. `HINCRBY`
-    # is additive, so N folded executions leave Redis in the same state as the N
-    # individual pipelines the hot path used to send.
+    # `{pool => {minute => {class => [processed, failed, ms, histogram]}}}` tree
+    # under one mutex; Wurk::Metrics::Flusher drains it into Redis on a timer.
+    # `HINCRBY` / `BITFIELD INCRBY` are additive, so N folded executions leave
+    # Redis in the same state as N individual writes.
+    #
+    # Counting follows Sidekiq's ExecutionTracker: `processed` counts every
+    # execution, `failed` the ones that raised, and `ms` plus the histogram
+    # (an Array of Histogram::SIZE counters, nil until the first success) only
+    # the ones that did not — a failed job's runtime is noise.
     #
     # Knows nothing about Redis — History owns the write, this owns the counts.
     #
@@ -37,11 +44,8 @@ module Wurk
       # Hot path. Three hash lookups under the mutex; allocates only the first
       # time a (pool, minute, class) triple is seen.
       def add(pool, klass, minute, ms, success)
-        @lock.synchronize do
-          counts = (((@pools[pool] ||= {})[minute] ||= {})[klass] ||= [0, 0, 0])
-          counts[success ? 0 : 1] += 1
-          counts[2] += ms
-        end
+        bucket = Histogram.index_for(ms) if success
+        @lock.synchronize { fold(((@pools[pool] ||= {})[minute] ||= {})[klass] ||= [0, 0, 0, nil], ms, bucket) }
       end
 
       # Hands the whole tree over and starts a fresh one, so recording never
@@ -72,16 +76,33 @@ module Wurk
 
       private
 
+      # `bucket` is the success's histogram slot, nil for a failure.
+      def fold(counts, ms, bucket)
+        counts[0] += 1
+        return counts[1] += 1 unless bucket
+
+        counts[2] += ms
+        (counts[3] ||= Array.new(Histogram::SIZE, 0))[bucket] += 1
+      end
+
       def merge_minute(into, minute, classes)
         target = (into[minute] ||= {})
         classes.each do |klass, counts|
           existing = target[klass]
           if existing
-            counts.each_with_index { |count, i| existing[i] += count }
+            merge_counts(existing, counts)
           else
             target[klass] = counts
           end
         end
+      end
+
+      def merge_counts(into, counts)
+        3.times { |i| into[i] += counts[i] }
+        return unless counts[3]
+
+        hist = (into[3] ||= Array.new(Histogram::SIZE, 0))
+        counts[3].each_with_index { |n, i| hist[i] += n }
       end
 
       def trim(minutes)

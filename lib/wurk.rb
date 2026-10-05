@@ -365,9 +365,8 @@ Wurk.configuration.server_middleware.add(Wurk::Metrics::History)
 # dies is decided in JobRetry, one frame outside any middleware.
 require_relative 'wurk/middleware/status'
 
-# Pro Fast API: Lua-backed Queue#delete_job / #delete_by_class plus
-# SortedSet#scan { |JobRecord| … }. Mixed in via include/prepend on the
-# existing data API classes so the surface is wire-compat with Sidekiq Pro.
+# Pro Fast API: Lua-backed Queue#delete_job / #delete_by_class, mixed into
+# Queue so the surface is wire-compat with Sidekiq Pro.
 # Spec: docs/target/sidekiq-pro.md §11.
 require_relative 'wurk/api/fast'
 

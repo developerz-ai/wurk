@@ -86,6 +86,18 @@ class TestingModesTest < Wurk::Test::UnitCase
     assert_kind_of Integer, job['enqueued_at']
   end
 
+  # Production reads every job back out of Redis as JSON; fake mode must hand
+  # tests the same string-keyed shape, not the symbol-keyed hash they pushed.
+  def test_fake_push_round_trips_through_json
+    payload = { 'class' => FakeJob.name, 'queue' => 'testq', 'jid' => 'a' * 24, 'args' => [{ user: :ann }] }
+    Wurk::Testing.fake_push([payload])
+    job = FakeJob.jobs.first
+
+    assert_equal [{ 'user' => 'ann' }], job['args']
+    refute_same payload, job
+    refute payload.key?('enqueued_at'), 'the caller-owned payload is left untouched'
+  end
+
   def test_drain_runs_and_clears
     Wurk::Testing.fake! do
       FakeJob.perform_async(1)
@@ -123,6 +135,13 @@ class TestingModesTest < Wurk::Test::UnitCase
 
     assert_equal [42], FakeJob.ran
     assert_empty FakeJob.jobs
+  end
+
+  def test_inline_push_round_trips_through_json
+    payload = { 'class' => FakeJob.name, 'queue' => 'testq', 'jid' => 'b' * 24, 'args' => [{ user: :ann }] }
+    Wurk::Testing.inline_push([payload])
+
+    assert_equal [{ 'user' => 'ann' }], FakeJob.ran
   end
 
   def test_inline_propagates_job_errors

@@ -376,9 +376,10 @@ exactly `reschedule` attempts, then dead.
 distribution. It calls `safe_client` first and yields straight through when
 `config.dogstatsd` is unset, so leaving it registered costs nothing.
 
-`History` records per-class processed / failed / total-ms into Redis time
-buckets (`j|YYYYMMDD|…`) so the dashboard history pane has data on a default
-boot. Both wrap their bookkeeping in a rescue — a metrics write failure never
+`History` records per-class processed / failed / total-ms into the same Redis
+time buckets Sidekiq 8.1 uses (`j|YYMMDD|H:MM` per minute, `j|YYMMDD|H:M` per
+10 minutes, plus an `h|…` runtime histogram) so the dashboard history pane has
+data on a default boot. Both wrap their bookkeeping in a rescue — a metrics write failure never
 propagates into the job result. `Wurk::Metrics::Middleware` is an alias of
 `History`, matching `Sidekiq::Metrics::Middleware`.
 

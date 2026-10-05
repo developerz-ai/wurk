@@ -147,13 +147,18 @@ module Wurk
     end
 
     # `enqueued_at` may be Float (epoch secs, legacy) or Integer (epoch ms,
-    # current). Spec §5 calls out the dual format; handle both. Malformed
-    # JSON or non-numeric `enqueued_at` shouldn't crash a dashboard read —
-    # fall back to 0.
+    # current). Spec §5 calls out the dual format; handle both. Like upstream's
+    # calculate_latency, a payload without `enqueued_at` is timed from
+    # `created_at`. Malformed JSON or a non-numeric stamp shouldn't crash a
+    # dashboard read — fall back to 0.
     def compute_latency(payload_json, now_ms)
       return 0.0 if payload_json.nil?
 
-      enq = Float(Wurk.load_json(payload_json)['enqueued_at'] || 0)
+      job = Wurk.load_json(payload_json)
+      stamp = job['enqueued_at'] || job['created_at']
+      return 0.0 if stamp.nil?
+
+      enq = Float(stamp)
       enq_ms = enq < 10_000_000_000 ? enq * 1_000 : enq
       diff = (now_ms - enq_ms) / 1_000.0
       diff.negative? ? 0.0 : diff

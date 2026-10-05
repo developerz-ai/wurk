@@ -19,8 +19,10 @@ class MetricsFlusherTest < Wurk::Test::UnitCase
 
   def teardown
     Wurk.redis do |c|
-      c.call('UNLINK', Wurk::Metrics::History.hour_key(@klass, @at))
-      c.call('HDEL', minute_key, "#{@klass}|p", "#{@klass}|f", "#{@klass}|ms")
+      c.call('UNLINK', Wurk::Metrics::Histogram.key(@klass, @at))
+      [minute_key, Wurk::Metrics::History.ten_minute_key(@at)].each do |key|
+        c.call('HDEL', key, "#{@klass}|p", "#{@klass}|f", "#{@klass}|ms")
+      end
     end
   ensure
     super

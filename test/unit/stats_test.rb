@@ -228,6 +228,32 @@ class StatsTest < Wurk::Test::UnitCase
     assert_in_delta 3.0, summary.latency, 1.5
   end
 
+  # Upstream's ApiUtils#calculate_latency falls back to `created_at` when a
+  # payload carries no `enqueued_at`.
+  def test_queue_summary_latency_falls_back_to_created_at
+    payload = Wurk.dump_json('class' => @class_name, 'args' => [], 'queue' => @queue,
+                             'jid' => SecureRandom.hex(12), 'created_at' => ms_now - 4_000)
+    @pool.with do |c|
+      c.call('SADD', 'queues', @queue)
+      c.call('LPUSH', "queue:#{@queue}", payload)
+    end
+    summary = Wurk::Stats.new.queue_summaries.find { |s| s.name == @queue }
+
+    assert_in_delta 4.0, summary.latency, 1.5
+  end
+
+  # No timestamp at all reads as 0.0, not as the time since the epoch.
+  def test_queue_summary_latency_is_zero_without_any_timestamp
+    payload = Wurk.dump_json('class' => @class_name, 'args' => [], 'queue' => @queue, 'jid' => SecureRandom.hex(12))
+    @pool.with do |c|
+      c.call('SADD', 'queues', @queue)
+      c.call('LPUSH', "queue:#{@queue}", payload)
+    end
+    summary = Wurk::Stats.new.queue_summaries.find { |s| s.name == @queue }
+
+    assert_in_delta 0.0, summary.latency
+  end
+
   def test_queue_summary_paused_reflects_paused_set
     push_my_job
     @pool.with { |c| c.call('SADD', 'paused', @queue) }

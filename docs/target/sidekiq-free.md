@@ -105,26 +105,31 @@ cancelled : timestamp (int) if cancelled
 
 ### 1.6 Metrics
 
+Written by the server-side execution tracker (Sidekiq 8.1, internal), read by `Sidekiq::Metrics::Query` (§20). All times UTC.
+
 | Key | Type | Purpose |
 |---|---|---|
-| `j\|<YYYYMMDD>\|<H>:<M>` | HASH | per-minute job execution metrics, TTL = `MID_TERM` (3 days). Same key Sidekiq writes, so migrated data resolves unchanged |
-| `<klass>-<YYYYMMDD>-<H>` | HASH | hourly histogram per class |
+| `j\|<YYMMDD>\|<H>:<MM>` | HASH | per-minute job execution metrics (`strftime("j\|%y%m%d\|%-H:%M")`), TTL = `SHORT_TERM` (8 hours) |
+| `j\|<YYMMDD>\|<H>:<M>` | HASH | 10-minute bucket: the minute key with its last digit chopped (`14:05` → `14:0`), TTL = `MID_TERM` (3 days). Read by `Query` for `hours:` windows |
+| `h\|<klass>-<D>-<H>:<M>` | BITFIELD | per-minute runtime histogram per class (`strftime("%-d-%-H:%-M")`, 26 `u16` buckets), TTL = 8 hours |
 | `<YYYYMMDD>-marks` | HASH | deploy marks for day, field=iso8601 ts, value=label, TTL = 90 days |
 | `deploylock-<label>` | STRING | per-label deploy mark lock, EX 60 NX |
 
-Per-minute bucket hash fields per job class:
+Every bucket TTL is re-set (`EXPIRE`) on each write. Bucket hash fields per job class (`<klass>` is `job["wrapped"] || job["class"]`):
 ```
-<klass>|p   : processed count
-<klass>|f   : failed count
-<klass>|ms  : total ms spent
+<klass>|p   : executions, failures included
+<klass>|f   : failed executions
+<klass>|ms  : total ms of executions that did not fail (only these feed the histogram)
 ```
+
+*Erratum:* earlier revisions of this section listed `j|<YYYYMMDD>|<H>:<M>` with a 3-day TTL and an hourly `<klass>-<YYYYMMDD>-<H>` hash. Sidekiq 8.1 writes neither: the date is two-digit-year (matching the §20 `ROLLUPS` formats), the per-minute key lives 8 hours, and the 3-day key is the 10-minute bucket.
 
 ### 1.7 Profiles (v8.0+)
 
 | Key | Type | Purpose |
 |---|---|---|
-| `profiles` | ZSET | profile records, score = expiry timestamp |
-| `<token>-<jid>` | HASH | profile data (`data`, `sid` fields) |
+| `profiles` | ZSET | member = `<token>-<jid>`, score = expiry timestamp (`now + EXPIRY`, 1 day) |
+| `<token>-<jid>` | HASH | `started_at`, `token` (the job's `profile` value), `type` (`wrapped \|\| class`), `jid`, `elapsed` (Float seconds), `size` (gzipped bytes), `data` (gzipped gecko JSON); `sid` is added later by the Web UI — the profile-store id cached after the first upload |
 
 ### 1.8 Lua Scripts
 

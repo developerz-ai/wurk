@@ -147,7 +147,7 @@ module Wurk
       def call(_worker, job, queue) # rubocop:disable Metrics/AbcSize
         return yield if self.class.safe_client.nil?
 
-        klass = job['class']
+        klass = job['wrapped'] || job['class']
         opts  = per_job_options(klass, job, queue)
         tags  = opts[:tags]
         rate  = opts.fetch(:sample_rate, DEFAULT_SAMPLE_RATE)

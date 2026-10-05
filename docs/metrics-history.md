@@ -8,7 +8,7 @@ resulting Redis footprint, which is **bounded entirely by TTL**.
 ## How it works
 
 Every job execution already lands in a per-class minute bucket
-(`j|YYYYMMDD|H:M`, see `Wurk::Metrics::History` — each worker folds executions in
+(`j|YYMMDD|H:MM`, see `Wurk::Metrics::History` — each worker folds executions in
 memory and flushes them within
 [5 seconds](metrics.md#write-cadence-and-what-a-hard-kill-costs), attributed to
 the minute the job ran in, not the minute it flushed). Once per minute the elected
@@ -74,9 +74,9 @@ zero):
 ## Gaps and self-healing
 
 Each tick re-rolls the last `LOOKBACK_MINUTES` (15) completed source minutes,
-idempotently. Because the source `j|…` minute buckets live `MID_TERM` (3 days),
-a leadership failover or restart shorter than that window self-heals on the next
-tick — the gap minutes are re-read from source and folded back into `jr|…`. Only
+idempotently. The source `j|…` minute buckets live `SHORT_TERM` (8 hours), far
+longer than the lookback, so a leadership failover or restart shorter than the
+lookback self-heals on the next tick — the gap minutes are re-read from source and folded back into `jr|…`. Only
 an outage **longer than the 15-minute lookback** leaves a hole, which then ages
 out with the bucket's TTL (best-effort metrics).
 

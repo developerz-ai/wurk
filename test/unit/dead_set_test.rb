@@ -1,6 +1,7 @@
 # frozen_string_literal: true
 
 require_relative '../test_helper'
+require_relative '../support/batch_spy'
 require 'securerandom'
 
 # DeadSet-specific behaviors: trim (two-axis), kill (notify_failure default,
@@ -146,6 +147,13 @@ class DeadSetTest < Wurk::Test::UnitCase
     survivors = @pool.with { |c| c.call('ZRANGE', @dead, 0, -1) }
 
     assert_equal [raw], survivors
+  end
+
+  def test_trim_runs_both_axes_in_one_multi
+    log = Wurk::Test::BatchSpy.record { dead_set.trim(max_jobs: 3, timeout: 60) }
+
+    assert_equal [%i[multi multi], %w[ZREMRANGEBYSCORE ZREMRANGEBYRANK]],
+                 [log.map(&:first), log.map { |_, cmd| cmd.first }]
   end
 
   def test_trim_evicts_expired_by_score

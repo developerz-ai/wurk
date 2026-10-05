@@ -25,9 +25,10 @@ samples.each do |type, ms, mins_ago|
   Wurk::Profiler.store(
     jid: SecureRandom.hex(12),
     type: type,
+    token: 'demo',
     gecko_json: gecko,
     started_at: now - (mins_ago * 60),
-    elapsed_ms: ms
+    elapsed: ms / 1000.0
   )
 end
 

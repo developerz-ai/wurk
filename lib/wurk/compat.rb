@@ -5,6 +5,8 @@
 #
 # Spec: docs/target/sidekiq-{free,pro,ent}.md.
 
+require_relative 'loader'
+
 # The `Sidekiq::*` compatibility namespace. Every public Wurk class is exposed
 # here under its Sidekiq name so an existing Sidekiq/Pro/Enterprise app runs on
 # Wurk after a one-line gem swap. `Sidekiq::Job` / `Sidekiq::Worker` are
@@ -136,10 +138,15 @@ module Sidekiq
   JobLogger        = Wurk::JobLogger
   JobRecord        = Wurk::JobRecord
   JobRetry         = Wurk::JobRetry
+  # sidekiq-unique-jobs reopens these with `class Sidekiq::JobSet` to prepend
+  # its lock release; without the alias that defines a fresh, unused class and
+  # deleted jobs never give their locks back.
+  JobSet           = Wurk::JobSet
   JobUtil          = Wurk::JobUtil
   Keys             = Wurk::Keys
   Launcher         = Wurk::Launcher
   Limiter          = Wurk::Limiter
+  Loader           = Wurk::Loader
   Logger           = Wurk::Logger
   Manager          = Wurk::Manager
   Metrics          = Wurk::Metrics
@@ -160,6 +167,7 @@ module Sidekiq
   ScheduledSet     = Wurk::ScheduledSet
   Shutdown         = Wurk::Shutdown
   SortedEntry      = Wurk::SortedEntry
+  SortedSet        = Wurk::SortedSet
   Stats            = Wurk::Stats
   # No `Sidekiq::Status` alias on purpose, same reason as `Sidekiq::Cron`
   # (#204): the sidekiq-status gem owns that namespace and opens it with
@@ -212,5 +220,10 @@ module Sidekiq
     def testing? = Wurk.testing?
     def load_json(str) = Wurk.load_json(str)
     def dump_json(obj) = Wurk.dump_json(obj)
+    def loader = Wurk.loader
   end
 end
+
+# Upstream fires this at the end of sidekiq/api.rb; Wurk's API is fully loaded
+# by the time its aliases are.
+Wurk.loader.run_load_hooks(:api)

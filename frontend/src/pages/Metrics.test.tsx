@@ -101,13 +101,14 @@ describe('Metrics page', () => {
       mockFetch({
         stats: { processed: 100, failed: 5, latency: 1.2, processes: 4 },
         topJobs: [
-          { klass: 'App::FooJob', processed: 80, failed: 20, runtime_ms: 0 },
+          { klass: 'App::FooJob', processed: 100, failed: 20, runtime_ms: 0 },
           { klass: 'BarJob', processed: 50, failed: 0, runtime_ms: 0 },
         ],
       }),
     );
     renderMetrics();
-    // foo = 100, bar = 50, total = 150 → 67% / 33%.
+    // `processed` already counts failures (Sidekiq's `p`), so volume is
+    // processed alone: foo = 100, bar = 50, total = 150 → 67% / 33%.
     expect(await screen.findByText('FooJob')).toBeInTheDocument();
     expect(screen.getByText('67%')).toBeInTheDocument();
     expect(screen.getByText('33%')).toBeInTheDocument();

@@ -51,6 +51,14 @@ class JobSetTest < Wurk::Test::UnitCase
     assert_equal 0, @set.size
   end
 
+  def test_bomb_aliases_clear
+    add_member
+
+    assert @set.public_send(:💣)
+    assert_equal 0, @set.size
+    assert_equal Wurk::SortedSet.instance_method(:clear), Wurk::SortedSet.instance_method(:💣)
+  end
+
   def test_default_name_is_retry
     assert_equal 'retry', Wurk::RetrySet.new.name
   end
@@ -65,50 +73,40 @@ class JobSetTest < Wurk::Test::UnitCase
 
   # --- scan --------------------------------------------------------------
 
-  def test_scan_yields_matching_payloads
+  def test_scan_yields_matching_entries
     jid = SecureRandom.hex(12)
-    add_member(jid: jid)
+    add_member(jid: jid, score: 42.0)
     yielded = []
-    @set.scan(jid) { |value, score| yielded << [value, score] }
+    @set.scan(jid) { |entry| yielded << entry }
 
-    assert_equal 1, yielded.size
-    refute_nil yielded.first.last
+    assert_equal [jid], yielded.map(&:jid)
+    assert_kind_of Wurk::SortedEntry, yielded.first
+    assert_in_delta 42.0, yielded.first.score
   end
 
   def test_scan_returns_enumerator_without_block
     assert_kind_of Enumerator, @set.scan('nonexistent')
   end
 
-  # Drives the no-block Enumerator returned by scan, which re-enters the base
-  # SortedSet#scan *with* a block — covering the line 38 else-branch
-  # (block_given? true → fall through to the ZSCAN loop).
-  def test_scan_enumerator_iterates_payloads
+  # E31: the Enumerator form used to yield raw [json, score] pairs, so
+  # `scan('Foo').each(&:retry)` raised NoMethodError on an Array.
+  def test_scan_enumerator_yields_sorted_entries
     jid = SecureRandom.hex(12)
     add_member(jid: jid)
 
-    pairs = @set.scan(jid).to_a
-
-    assert_equal 1, pairs.size
-    assert_kind_of Float, pairs.first.last
+    assert_equal [jid], @set.scan(jid).map(&:jid)
   end
 
-  # Line 38 then-branch (`return enum_for(:scan, ...)` in the base
-  # SortedSet#scan) is unreachable through the public API: Wurk prepends
-  # Wurk::API::Fast::SortedSetExt onto SortedSet, and its #scan handles the
-  # no-block case itself (its own `return enum_for unless block`), so it only
-  # ever calls `super` *with* a block. The base scan therefore always sees
-  # block_given? == true and never executes its own enum_for guard.
-  def test_base_scan_enum_for_guard_is_shadowed_by_prepended_ext
-    ancestors = Wurk::SortedSet.ancestors
+  def test_scan_keeps_a_caller_supplied_glob
+    add_member(jid: 'globAAAtail')
+    add_member(jid: 'globBBBtail')
+    add_member(jid: 'nomatch')
 
-    assert_operator ancestors.index(Wurk::API::Fast::SortedSetExt),
-                    :<,
-                    ancestors.index(Wurk::SortedSet),
-                    'prepend order regressed; base scan no-block guard may now be reachable'
-    skip 'base SortedSet#scan no-block guard is shadowed by the prepended SortedSetExt#scan'
+    assert_equal %w[globAAAtail globBBBtail], @set.scan('*"glob*tail"*').map(&:jid).sort
+    assert_empty @set.scan('*AAA').to_a, 'a glob is passed through, not re-wrapped in *…*'
   end
 
-  # Covers line 46 else-branch: ZSCAN returns a non-zero cursor (multi-page)
+  # ZSCAN returns a non-zero cursor (multi-page)
   # once the ZSET exceeds Redis's listpack encoding threshold
   # (zset-max-listpack-entries default 128), so the loop iterates without
   # breaking on the first page.
@@ -139,13 +137,13 @@ class JobSetTest < Wurk::Test::UnitCase
     assert_equal scores.sort.reverse, scores
   end
 
-  # Covers line 76 then-branch: each with no block returns an Enumerator
+  # Each with no block returns an Enumerator
   # rather than iterating.
   def test_each_returns_enumerator_without_block
     assert_kind_of Enumerator, @set.each
   end
 
-  # Covers line 88 else-branch: a first page that is exactly PAGE_SIZE full
+  # A first page that is exactly PAGE_SIZE full
   # forces a second ZRANGE page (slice.size < PAGE_SIZE is false), so the
   # loop increments the page counter instead of breaking.
   def test_each_pages_past_first_full_page
@@ -156,6 +154,27 @@ class JobSetTest < Wurk::Test::UnitCase
 
     assert_equal total, count
     assert_equal total, @set.to_a.size
+  end
+
+  # E1: removing yielded entries shifts later ranks up; the fixed-offset pager
+  # used to skip a page's worth per page (120 → 50 left behind).
+  [Wurk::RetrySet, Wurk::ScheduledSet, Wurk::DeadSet].each do |klass|
+    define_method(:"test_each_delete_empties_a_#{klass.name.split('::').last}") do
+      set = klass.new("#{klass.name.split('::').last.downcase}-#{@ns}")
+      @pool.with do |c|
+        120.times { |i| c.call('ZADD', set.name, i, Wurk.dump_json(base_item('jid' => format('del%03d', i)))) }
+      end
+      seen = []
+      set.each do |entry|
+        seen << entry.jid
+        entry.delete
+      end
+
+      assert_equal 0, set.size
+      assert_equal 120, seen.uniq.size
+    ensure
+      @pool.with { |c| c.call('UNLINK', set.name) }
+    end
   end
 
   # --- schedule ----------------------------------------------------------
@@ -255,7 +274,7 @@ class JobSetTest < Wurk::Test::UnitCase
     assert_nil @set.find_job('deadbeef' * 3)
   end
 
-  # Covers line 159 else-branch: ZSCAN MATCH glob matches a payload because
+  # ZSCAN MATCH glob matches a payload because
   # the search string appears as a substring (here inside args), but that
   # entry's actual jid field differs, so the `return entry if ...` guard is
   # false and the scan continues — ultimately returning nil.
@@ -302,7 +321,7 @@ class JobSetTest < Wurk::Test::UnitCase
     refute @set.delete_by_jid(0.123, 'never')
   end
 
-  # Covers line 190 then-branch deterministically: a single row sits at the
+  # A single row sits at the
   # requested score, it parses cleanly, but its jid differs from the one we ask
   # to delete — so `next unless parsed && parsed['jid'] == jid` fires `next`,
   # the loop exhausts, and delete_by_jid returns false. (Equal-score ZREM
@@ -421,19 +440,41 @@ class JobSetTest < Wurk::Test::UnitCase
     @pool.with { |c| c.call('DEL', private_set) }
   end
 
-  # `each(&:kill)` equivalence with Sidekiq (#207): one death-handler call
-  # per entry by default.
-  def test_kill_all_fires_death_handlers_per_entry
+  # notify_failure: true is `each(&:kill)`: one death-handler call per entry.
+  def test_kill_all_notify_true_fires_death_handlers_per_entry
     private_set = seed_killable_set('kadh')
 
     with_death_handler do |received|
-      private_job_set(private_set).kill_all
+      private_job_set(private_set).kill_all(notify_failure: true)
 
       mine = received.select { |jid, _| jid.end_with?(@ns) }
 
       assert_equal 2, mine.size
       assert(mine.values.all? { |ex| ex.message == Wurk::DeadSet::API_KILL_MESSAGE })
     end
+  ensure
+    @pool.with { |c| c.call('DEL', private_set) } if private_set
+  end
+
+  # E7: Sidekiq 8 defaults notify_failure to false (spec §19.5); the
+  # dashboard's Kill All used to fire every death handler once per job.
+  def test_kill_all_defaults_to_no_death_handlers
+    private_set = seed_killable_set('kadf')
+
+    with_death_handler do |received|
+      assert_equal 2, private_job_set(private_set).kill_all
+
+      assert_empty(received.select { |jid, _| jid.end_with?(@ns) })
+    end
+  ensure
+    @pool.with { |c| c.call('DEL', private_set) } if private_set
+  end
+
+  def test_kill_all_trims_the_dead_set_once
+    private_set = seed_killable_set('kat')
+    trims = count_dead_set_trims { private_job_set(private_set).kill_all }
+
+    assert_equal 1, trims
   ensure
     @pool.with { |c| c.call('DEL', private_set) } if private_set
   end
@@ -562,6 +603,26 @@ class JobSetTest < Wurk::Test::UnitCase
     yield received
   ensure
     Wurk.configuration.death_handlers.delete(handler)
+  end
+
+  # Counts DeadSet#trim calls on every DeadSet built during the block.
+  def count_dead_set_trims
+    trims = 0
+    original_new = Wurk::DeadSet.method(:new)
+    Wurk::Test::GLOBAL_STATE_MUTEX.synchronize do
+      Wurk::DeadSet.define_singleton_method(:new) do |*args|
+        original_new.call(*args).tap do |dead|
+          dead.define_singleton_method(:trim) do |**kw|
+            trims += 1
+            super(**kw)
+          end
+        end
+      end
+      yield
+    ensure
+      Wurk::DeadSet.singleton_class.send(:remove_method, :new)
+    end
+    trims
   end
 
   def unique_queue

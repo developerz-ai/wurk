@@ -37,13 +37,13 @@ require_relative 'support'
 #
 # Two costs that used to show here are already gone: an SMEMBERS of the paused
 # set per fetch pass (Fetcher::Reliable now reads that SET once per PAUSED_TTL)
-# and 6 Metrics::History writes per job (Metrics::Accumulator folds them in
+# and the Metrics::History writes per job (Metrics::Accumulator folds them in
 # memory; Metrics::Flusher drains them every FLUSH_INTERVAL).
 #
 # Those metrics writes are ZERO here, not amortized: this loop runs no Launcher,
-# so no flusher ticks inside the window. A real worker pays one 6-command
-# pipeline per (class, minute) every 5 seconds no matter its throughput, which
-# rounds to nothing per job at any rate this bench would measure — but the
+# so no flusher ticks inside the window. A real worker pays one pipeline of
+# eight commands (ten with failures) per (class, minute) every 5 seconds no
+# matter its throughput, which rounds to nothing per job at any rate this bench would measure — but the
 # table below is a per-job budget, and that cost is not in it.
 #
 # Only the drain is counted. Enqueue happens before CONFIG RESETSTAT — it is

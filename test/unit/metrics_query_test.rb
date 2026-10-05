@@ -15,6 +15,9 @@ class MetricsQueryTest < Wurk::Test::UnitCase
     @now = ::Time.utc(2026, 5, 21, 14, 37, 12)
   end
 
+  # Wurk::Metrics::Query is Sidekiq::Metrics::Query (compat aliases the module).
+  def query(**) = Sidekiq::Metrics::Query.new(now: @now, **)
+
   def teardown
     Wurk.redis do |c|
       cursor = '0'
@@ -36,8 +39,9 @@ class MetricsQueryTest < Wurk::Test::UnitCase
   # Per-class fields only — never DEL the shared minute buckets, or other
   # parallel tests for the same minute will lose their writes.
   def delete_class_fields(conn)
-    [@now, @now - 60, @now - 120, @now - 180, @now - 240, @now - 300, @now - 360, @now - 420].each do |t|
-      key = Wurk::Metrics::History.minute_key(t)
+    times = [@now, @now - 60, @now - 120, @now - 180, @now - 240, @now - 300, @now - 360, @now - 420]
+    keys = times.flat_map { |t| [Wurk::Metrics::History.minute_key(t), Wurk::Metrics::History.ten_minute_key(t)] }
+    keys.uniq.each do |key|
       [@klass_a, @klass_b].each do |kls|
         conn.call('HDEL', key, "#{kls}|p", "#{kls}|f", "#{kls}|ms", "#{kls}|x", "#{kls}nodelim")
       end
@@ -105,15 +109,14 @@ class MetricsQueryTest < Wurk::Test::UnitCase
     rows = Wurk::Metrics::Query.top_jobs(minutes: 5, now: @now)
     found = rows.to_h
 
-    assert_equal({ p: 1, f: 1, ms: 300 }, found[@klass_a])
+    assert_equal({ p: 2, f: 1, ms: 100 }, found[@klass_a])
     assert_equal({ p: 1, f: 0, ms: 50 }, found[@klass_b])
   end
 
-  # Regression (#metrics-double-count): before the fix, a job at minute x1..x9
-  # was also written into that decade's x0 key (the old 10-min rollup), so a
-  # window spanning the x0 minute summed each job twice. @now is 14:37; these
-  # three land at 14:31/32/33 (all in decade 14:30), and a 10-minute window
-  # reaches back over 14:30. The total must be 3, not 6.
+  # Regression (#metrics-double-count): a minute window must never read the
+  # 10-minute bucket. @now is 14:37; these three land at 14:31/32/33 (all in
+  # 10-minute bucket `14:3`), and a 10-minute window reaches back over 14:30.
+  # The total must be 3, not 6.
   def test_top_jobs_does_not_double_count_across_the_rollup_boundary
     [31, 32, 33].each do |m|
       Wurk::Metrics::History.record(@klass_a, 100, success: true, at: ::Time.utc(2026, 5, 21, 14, m, 0))
@@ -200,7 +203,8 @@ class MetricsQueryTest < Wurk::Test::UnitCase
 
     rows = Wurk::Metrics::Query.for_job(@klass_a, hours: 2, now: @now)
 
-    assert_equal 2, rows.size
+    assert_equal 12, rows.size, 'one row per 10-minute bucket'
+    assert_equal ::Time.utc(2026, 5, 21, 14, 30), rows.last[:at]
     assert_equal 1, rows.last[:p]
     assert_equal 99, rows.last[:ms]
   end
@@ -239,32 +243,104 @@ class MetricsQueryTest < Wurk::Test::UnitCase
     refute_includes found.keys, "#{@klass_a}nodelim"
   end
 
-  # ---- floor_to :hour branch (line 154) -----------------------------------
+  # ---- spec-shaped instance API (§20) ------------------------------------
 
-  def test_floor_to_hour_truncates_to_hour_boundary
-    floored = Wurk::Metrics::Query.floor_to(@now, :hour)
+  def test_new_top_jobs_returns_a_result_keyed_by_class
+    Wurk::Metrics::History.record(@klass_a, 100, success: true, at: @now)
+    Wurk::Metrics::History.record(@klass_a, 300, success: false, at: @now - 60)
+    Wurk::Metrics::History.flush
 
-    assert_equal ::Time.utc(2026, 5, 21, 14), floored
-    assert_equal 0, floored.min
-    assert_equal 0, floored.sec
+    result = query.top_jobs(minutes: 5)
+    job = result.job_results[@klass_a]
+
+    assert_kind_of Sidekiq::Metrics::Query::Result, result
+    assert_kind_of Sidekiq::Metrics::Query::JobResult, job
+    assert_equal :minutely, result.granularity
+    assert_equal [@now, @now - 300], [result.ends_at, result.starts_at]
+    assert_equal [2, 1, 100, 0.1], job.totals.values_at('p', 'f', 'ms', 's')
+    assert_equal 1, job.series['p']['2026-05-21T14:37:00Z']
+    assert_in_delta 100.0, job.total_avg
   end
 
-  # The case/when in floor_to has an implicit else (unit neither :min nor
-  # :hour) that returns nil. Unreachable through the public API — only :min
-  # and :hour are ever passed internally — but floor_to is a module_function,
-  # so we exercise the no-match fall-through directly for branch coverage.
-  def test_floor_to_unknown_unit_returns_nil
-    assert_nil Wurk::Metrics::Query.floor_to(@now, :day)
+  def test_new_top_jobs_filters_with_a_regexp
+    Wurk::Metrics::History.record(@klass_a, 1, success: true, at: @now)
+    Wurk::Metrics::History.record(@klass_b, 1, success: true, at: @now)
+    Wurk::Metrics::History.flush
+
+    keys = query.top_jobs(class_filter: /\AAlpha/, minutes: 1).job_results.keys
+
+    assert_includes keys, @klass_a
+    refute_includes keys, @klass_b
   end
 
-  # ---- empty-key pipeline short-circuits (lines 161, 167 then) ------------
+  # Upstream clamps silently: minutes > 480 falls back to 60, hours to 72.
+  def test_new_clamps_windows_like_upstream
+    assert_equal @now - 3600, query.top_jobs(minutes: 481).starts_at
+    result = query.top_jobs(hours: 99)
 
-  def test_pipeline_hgetall_empty_keys_returns_empty
-    assert_equal [], Wurk::Metrics::Query.pipeline_hgetall([])
+    assert_equal :hourly, result.granularity
+    assert_equal @now - (72 * 3600), result.starts_at
   end
 
-  def test_pipeline_hmget_empty_keys_returns_empty
-    assert_equal [], Wurk::Metrics::Query.pipeline_hmget([], %w[p f ms])
+  def test_new_hourly_reads_ten_minute_buckets
+    Wurk::Metrics::History.record(@klass_a, 10, success: true, at: @now - 120)
+    Wurk::Metrics::History.record(@klass_a, 30, success: true, at: @now - 600)
+    Wurk::Metrics::History.flush
+
+    job = query.for_job(@klass_a, hours: 1).job_results[@klass_a]
+
+    assert_equal 2, job.totals['p']
+    assert_equal({ '2026-05-21T14:30:00Z' => 1, '2026-05-21T14:20:00Z' => 1 }, job.series['p'])
+    assert_empty job.hist, 'histograms are only fetched for minute windows'
+  end
+
+  def test_new_for_job_carries_totals_series_and_histograms
+    Wurk::Metrics::History.record(@klass_a, 25, success: true, at: @now)
+    Wurk::Metrics::History.record(@klass_a, 5, success: false, at: @now)
+    Wurk::Metrics::History.flush
+
+    job = query.for_job(@klass_a, minutes: 2).job_results[@klass_a]
+    hist = job.hist['2026-05-21T14:37:00Z']
+
+    assert_equal [2, 1, 25], job.totals.values_at('p', 'f', 'ms')
+    assert_equal({ '2026-05-21T14:37:00Z' => 25.0 }, job.series_avg)
+    assert_equal Wurk::Metrics::Histogram::SIZE, hist.size
+    assert_equal 1, hist.reverse[1], 'reversed, as upstream: 25ms is the 30ms bucket'
+    assert_equal 2, job.hist.size
+  end
+
+  def test_new_attaches_deploy_marks_inside_the_window
+    Wurk::Deploy.new.mark!(label: "v1#{@suffix}", at: @now - 120)
+    Wurk::Deploy.new.mark!(label: "v0#{@suffix}", at: @now - 7200)
+
+    marks = query.top_jobs(minutes: 10).marks
+
+    assert_equal ["v1#{@suffix}"], marks.map(&:label)
+    assert_equal '2026-05-21T14:35:00Z', marks.first.bucket
+  ensure
+    Wurk.redis { |c| c.call('DEL', '20260521-marks') }
+  end
+
+  def test_bkt_time_s_truncates_to_the_granularity
+    assert_equal '2026-05-21T14:37:00Z', Sidekiq::Metrics::Query.bkt_time_s(@now, :minutely)
+    assert_equal '2026-05-21T14:30:00Z', Sidekiq::Metrics::Query.bkt_time_s(@now, :hourly)
+  end
+
+  # Data Sidekiq 8.1 wrote before the swap resolves unchanged.
+  def test_new_reads_sidekiq_written_buckets
+    Wurk.redis do |c|
+      c.call('HSET', 'j|260521|14:37', "#{@klass_a}|p", 4, "#{@klass_a}|f", 1, "#{@klass_a}|ms", 90)
+      c.call('HSET', 'j|260521|14:3', "#{@klass_b}|p", 9)
+    end
+
+    assert_equal 4, query.top_jobs(minutes: 1).job_results[@klass_a].totals['p']
+    assert_equal 9, query.top_jobs(hours: 1).job_results[@klass_b].totals['p']
+  ensure
+    Wurk.redis { |c| c.call('HDEL', 'j|260521|14:3', "#{@klass_b}|p") }
+  end
+
+  def test_history_with_window_under_one_step_is_empty
+    assert_equal [], Wurk::Metrics::Query.history('5m', 60, now: @now)
   end
 
   # ---- queue_history reader (per-queue size/latency gauges) ----------------

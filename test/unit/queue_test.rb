@@ -1,6 +1,7 @@
 # frozen_string_literal: true
 
 require_relative '../test_helper'
+require_relative '../support/batch_spy'
 require 'securerandom'
 
 # Drives Wurk::Queue against real Redis. The queues set is shared globally;
@@ -121,6 +122,27 @@ class QueueTest < Wurk::Test::UnitCase
     assert_equal total, Wurk::Queue.new(@qname).count
   end
 
+  # E2: deleting a yielded record shifts every later index down; the
+  # fixed-offset pager used to skip a page's worth per page.
+  def test_each_delete_empties_the_queue
+    120.times { push_job }
+    queue = Wurk::Queue.new(@qname)
+    seen = []
+    queue.each do |record|
+      seen << record.jid
+      record.delete
+    end
+
+    assert_equal 0, queue.size
+    assert_equal 120, seen.uniq.size
+  end
+
+  def test_each_returns_enumerator_without_block
+    push_job
+
+    assert_equal 1, Wurk::Queue.new(@qname).each.to_a.size
+  end
+
   # --- find_job ----------------------------------------------------------
 
   def test_find_job_returns_record_for_known_jid
@@ -151,6 +173,20 @@ class QueueTest < Wurk::Test::UnitCase
     Wurk::Queue.new(@qname).clear
 
     refute_includes @pool.with { |c| c.call('SMEMBERS', 'queues') }, @qname
+  end
+
+  def test_clear_runs_in_one_multi
+    push_job
+    log = Wurk::Test::BatchSpy.record { Wurk::Queue.new(@qname).clear }
+
+    assert_equal [[:multi, ['UNLINK', @rqname]], [:multi, ['SREM', 'queues', @qname]]], log
+  end
+
+  def test_bomb_aliases_clear
+    push_job
+
+    assert Wurk::Queue.new(@qname).public_send(:💣)
+    assert_equal(0, @pool.with { |c| c.call('LLEN', @rqname) })
   end
 
   # --- all ---------------------------------------------------------------

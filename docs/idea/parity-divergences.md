@@ -595,3 +595,25 @@ resetting it.
 **Wurk:** flow node records gain a Wurk-only `at` field; a node released onto `schedule` reports state `enqueued`.
 
 **Anchor:** `lib/wurk/flow/creation.rb`.
+
+## Sidekiq Enterprise / web internals not provided
+
+**Wurk:** `Sidekiq::Enterprise::VERSION` is undefined (Wurk advertises as OSS: `Sidekiq.pro?`/`ent?` are false), and upstream's ERB dashboard internals (`Sidekiq::Web::Action`, `Route`, `Router`, `WebHelpers`) and `Sidekiq::TestingClient` are not provided.
+
+**Why:** the dashboard is a SolidJS SPA, and advertising Ent would make gems take Ent-only code paths that call licensed internals.
+
+**Anchor:** `lib/wurk/compat.rb`, `test/unit/spec_constants_test.rb`.
+
+## Old Wurk metrics keys are not read after the format restore
+
+**Wurk:** per-class metrics written by earlier Wurk versions (`j|YYYYMMDD|…`, `<klass>-YYYYMMDD-H`) are not read; they expire within 3 days.
+
+**Why:** no backwards-compat shims (CLAUDE.md); the restore makes Wurk read Sidekiq's own history, which is what a migration needs.
+
+**Anchor:** `lib/wurk/metrics/history.rb`.
+
+## Metrics/profiler details
+
+**Wurk:** `Sidekiq::Metrics::Histogram` is a module of bucket constants and the key format, not upstream's instance API; the profiler does not store upstream's `filename` field (a deleted temp path); `ProfileSet` skips a record whose hash has expired instead of raising; `JobSet#each` / `Queue#each` offsets never go below 0.
+
+**Anchor:** `lib/wurk/metrics/histogram.rb`, `lib/wurk/profiler.rb`, `lib/wurk/profile_set.rb`, `lib/wurk/job_set.rb`.

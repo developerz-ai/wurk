@@ -77,16 +77,24 @@ module Wurk
 
     # Paged LRANGE traversal. Yields JobRecord per payload. Continues
     # paging until Redis returns < PAGE_SIZE rows.
+    #
+    # Deleting a yielded record shifts every later index down by one; like
+    # upstream, each page start is pulled back by how much the list shrank
+    # since iteration began, so `each(&:delete)` empties the queue instead of
+    # skipping every other page.
     def each
+      return enum_for(:each) unless block_given?
+
+      initial_size = size
+      shrunk = 0
       page = 0
       loop do
-        start  = page * PAGE_SIZE
-        stop   = start + PAGE_SIZE - 1
-        slice  = Wurk.redis(idempotent: true) { |conn| conn.call('LRANGE', @rname, start, stop) }
+        slice = page_from([(page * PAGE_SIZE) - shrunk, 0].max)
         slice.each { |value| yield JobRecord.new(value, @name) }
         break if slice.size < PAGE_SIZE
 
         page += 1
+        shrunk = initial_size - size
       end
     end
 
@@ -96,24 +104,31 @@ module Wurk
       nil
     end
 
-    # UNLINK the list + drop the queue from the `queues` set. Pipelined
-    # so a partial failure leaves at most one of the two ops applied.
+    # UNLINK the list + drop the queue from the `queues` set in one MULTI, as
+    # upstream does, so no reader sees the queue listed but gone.
     # Method name is Sidekiq wire-compat — `clear?` would break the alias.
     #
     # Unlike pause!/unpause!, this one can't claim apply-safety: a replay after
     # a lost reply would UNLINK whatever a producer enqueued in between.
     def clear
       Wurk.redis do |conn|
-        conn.pipelined do |pipe|
-          pipe.call('UNLINK', @rname)
-          pipe.call('SREM', Keys::QUEUES_SET, @name)
+        conn.multi do |tx|
+          tx.call('UNLINK', @rname)
+          tx.call('SREM', Keys::QUEUES_SET, @name)
         end
       end
       true
     end
+    alias 💣 clear # rubocop:disable Naming/AsciiIdentifiers, Naming/MethodName
 
     def as_json(_options = nil)
       { name: @name }
+    end
+
+    private
+
+    def page_from(start)
+      Wurk.redis(idempotent: true) { |conn| conn.call('LRANGE', @rname, start, start + PAGE_SIZE - 1) }
     end
   end
 end

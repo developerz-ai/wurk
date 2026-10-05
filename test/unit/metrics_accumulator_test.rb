@@ -19,11 +19,22 @@ class MetricsAccumulatorTest < Wurk::Test::UnitCase
     assert_empty @acc.drain
   end
 
+  # Upstream ExecutionTracker counting: processed includes failures; ms and
+  # the histogram cover successes only.
   def test_add_folds_successes_failures_and_runtime
     3.times { add(ms: 10) }
     2.times { add(ms: 5, success: false) }
 
-    assert_equal({ nil => { MINUTE => { 'FooJob' => [3, 2, 40] } } }, @acc.drain)
+    hist = Array.new(Wurk::Metrics::Histogram::SIZE, 0)
+    hist[0] = 3
+
+    assert_equal({ nil => { MINUTE => { 'FooJob' => [5, 2, 30, hist] } } }, @acc.drain)
+  end
+
+  def test_add_leaves_the_histogram_nil_until_a_success
+    add(ms: 5, success: false)
+
+    assert_equal [1, 1, 0, nil], @acc.drain[nil][MINUTE]['FooJob']
   end
 
   # A multi-capsule process records through more than one pool, and each pool's
@@ -58,7 +69,7 @@ class MetricsAccumulatorTest < Wurk::Test::UnitCase
 
     @acc.add(nil, 'FooJob', MINUTE, 1, true)
 
-    assert_equal [1, 0, 7], drained[nil][MINUTE]['FooJob']
+    assert_equal [1, 0, 7], drained[nil][MINUTE]['FooJob'].first(3)
   end
 
   # A failed write puts its counts back, and the counts that arrived while it
@@ -72,7 +83,10 @@ class MetricsAccumulatorTest < Wurk::Test::UnitCase
 
     @acc.merge_back(nil, failed[nil])
 
-    assert_equal({ 'FooJob' => [1, 1, 13], 'BarJob' => [1, 0, 1] }, @acc.drain[nil][MINUTE])
+    drained = @acc.drain[nil][MINUTE]
+
+    assert_equal({ 'FooJob' => [2, 1, 10], 'BarJob' => [1, 0, 1] }, drained.transform_values { |c| c.first(3) })
+    assert_equal 1, drained['FooJob'][3].sum
   end
 
   def test_merge_back_restores_a_pool_and_minute_that_no_longer_exist

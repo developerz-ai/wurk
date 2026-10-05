@@ -233,14 +233,14 @@ module Wurk
 
     private
 
-    # LPUSH to `<identity>-signals` + EXPIRE 60s. Pipelined so a crashed
-    # caller can't leave a stray key behind without a TTL.
+    # LPUSH to `<identity>-signals` + EXPIRE 60s in one MULTI, as upstream, so
+    # a dropped connection can't leave the key behind without a TTL.
     def signal(sig)
       key = "#{identity}-signals"
       Wurk.redis do |c|
-        c.pipelined do |pipe|
-          pipe.call('LPUSH', key, sig)
-          pipe.call('EXPIRE', key, 60)
+        c.multi do |tx|
+          tx.call('LPUSH', key, sig)
+          tx.call('EXPIRE', key, 60)
         end
       end
     end

@@ -29,22 +29,32 @@ one-line gem swap.
 
 `Wurk::Metrics::History` is a server middleware added to the default chain when
 `wurk` is required, so a stock boot already records metrics. It times every job
-and accumulates the result in memory; a timer flushes the accumulator into two
-Redis hashes (see
+and accumulates the result in memory; a timer flushes the accumulator into the
+same keys Sidekiq 8.1's `ExecutionTracker` writes (see
 [Write cadence](#write-cadence-and-what-a-hard-kill-costs)):
 
 | Key | Type | Fields | TTL |
 |-----|------|--------|-----|
-| `j\|<YYYYMMDD>\|<H>:<M>` | HASH | `<klass>\|p`, `<klass>\|f`, `<klass>\|ms` | 3 days (`MID_TERM`) |
-| `<klass>-<YYYYMMDD>-<H>` | HASH | `p`, `f`, `ms` | 3 days |
+| `j\|<YYMMDD>\|<H>:<MM>` (minute, e.g. `j\|261004\|9:05`) | HASH | `<klass>\|p`, `<klass>\|f`, `<klass>\|ms` | 8 hours (`SHORT_TERM`) |
+| `j\|<YYMMDD>\|<H>:<M>` (10 minutes: the minute's tens digit, e.g. `j\|261004\|9:0`) | HASH | same fields | 3 days (`MID_TERM`) |
+| `h\|<klass>-<D>-<H>:<M>` | BITFIELD | 26 `u16` runtime-histogram counters | 8 hours |
 
-- `p` counts *processed* attempts — those that returned cleanly plus those cut
-  short by a cooperative interruption (see below) — `f` counts raised ones, and
-  `ms` accumulates total wall-clock milliseconds for **both** outcomes.
+- `p` counts **every** execution, failures included; `f` counts the ones that
+  raised; `ms` is the total wall-clock milliseconds of the executions that did
+  **not** fail, and only those land in the histogram. A failed job's runtime is
+  noise, so average runtime is `ms / (p - f)`.
+- ActiveJob payloads are recorded under the wrapped class (`job["wrapped"]`),
+  not `Sidekiq::ActiveJob::Wrapper`, as upstream.
 - Timestamps are UTC. The TTL is re-set on every write, so a class that keeps
-  running keeps its bucket for 3 days measured from the *last* write.
-- The key format is Sidekiq's, so metrics written by Sidekiq before the swap
-  keep resolving afterwards.
+  running keeps its buckets for 8 hours / 3 days measured from the *last* write.
+- The key format is Sidekiq 8.1's, so metrics written by Sidekiq before the swap
+  keep resolving afterwards, and Sidekiq's own Web UI reads what Wurk writes.
+  The minute key always has a two-digit minute and the 10-minute key a single
+  digit, so the two never collide.
+- Older Wurk releases wrote `j|<YYYYMMDD>|<H>:<M>` and a per-class hourly
+  `<klass>-<YYYYMMDD>-<H>` hash. Neither is written or read any more; leftover
+  keys age out on their 3-day TTL, and the dashboard's per-class history starts
+  fresh from the upgrade.
 - Writes are best-effort: a Redis failure during the metrics write is passed to
   your error handler and never changes the job's outcome.
 - An **interrupted** run — an `IterableJob` cut by `Wurk::Shutdown` or a
@@ -65,8 +75,11 @@ Wurk does **not** write to Redis per job. Each worker process accumulates
 `processed` / `failed` / `ms` in memory, keyed by job class and by the minute
 bucket the job ran in, and flushes the whole accumulator every **≤5 seconds** in
 one pipeline per Redis pool — the same `HINCRBY` / `EXPIRE` commands against the
-same keys and fields, six per (class, minute) bucket inside that pool's
-pipeline. `HINCRBY` is additive, so a flushed batch of N executions leaves Redis
+same keys and fields, up to ten per (class, minute) inside that pool's
+pipeline: `HINCRBY` of `p`, `f` (only when something failed) and `ms` (only when
+something succeeded) plus an `EXPIRE` on each of the two `j|` buckets, then a
+`BITFIELD` and an `EXPIRE` on the histogram — eight in the common all-success
+case. `HINCRBY` is additive, so a flushed batch of N executions leaves Redis
 in byte-identical state to N individual writes. It also flushes on a graceful
 stop.
 
@@ -91,21 +104,38 @@ explicitly best-effort (a Redis failure during a metrics write has always been
 swallowed into your error handler). For anything that must reconcile exactly,
 they were never the right source; use your own job-level bookkeeping.
 
-Two further divergences from Sidekiq worth knowing:
-
-- Wurk does **not** write the `H:m0` 10-minute rollup. Its key format collides
-  with the real minute-0 bucket, which would make that minute read back as a
-  decade total. Sidekiq doesn't keep it either (the rollup is commented out
-  upstream); the read side sums per-minute keys instead.
-- The date component is a 4-digit year (`YYYYMMDD`), matching
-  `docs/target/sidekiq-free.md` §1.6.
+The key layout itself has no divergence from Sidekiq 8.1: two-digit year, the
+10-minute bucket included, the histogram included.
 
 ---
 
 ## 2. Reading metrics back — `Wurk::Metrics::Query`
 
-`Wurk::Metrics::Query` is a **module** of module functions, not an
-instantiable class. Call it directly:
+`Wurk::Metrics::Query` (alias `Sidekiq::Metrics::Query`) has two faces.
+
+**The instance API is Sidekiq's** (`docs/target/sidekiq-free.md` §20), so code
+written against `Sidekiq::Metrics::Query` runs unchanged:
+
+```ruby
+q = Wurk::Metrics::Query.new(now: Time.now)   # pool: is optional
+result = q.top_jobs(minutes: 60)              # or class_filter: /Billing/, hours: 24
+result.job_results["FooJob"].totals           # {"p" => 1200, "f" => 3, "ms" => 48_000, "s" => 48.0}
+
+job = q.for_job("FooJob", hours: 24).job_results["FooJob"]
+job.series["p"]          # {"2026-10-04T09:00:00Z" => 12, …}, keyed by bucket start
+job.hist                 # per-minute runtime histogram (minutes: windows only)
+job.total_avg("ms")      # ms per successful execution
+q.for_job("FooJob").marks  # [MarkResult(time, label, bucket)] — today's deploy marks in the window
+```
+
+`top_jobs` / `for_job` return a `Result` (`granularity`, `starts_at`, `ends_at`,
+`job_results`, `marks`) whose `job_results[klass]` is a `JobResult` (`series`,
+`hist`, `totals`). `minutes:` windows read the per-minute buckets; `hours:`
+windows read the 10-minute buckets. Like upstream, an oversized window clamps
+silently: more than 480 minutes falls back to 60, more than 72 hours to 72.
+
+**The class-level functions back Wurk's dashboard JSON API**: flat rows,
+gap-filled with zeros, and `WindowTooWide` instead of a silent clamp:
 
 ```ruby
 # Top job classes by volume over the last hour.
@@ -114,6 +144,7 @@ Wurk::Metrics::Query.top_jobs(minutes: 60)
 Wurk::Metrics::Query.top_jobs(minutes: 60, class_filter: "Billing")
 
 # Per-class time-series, oldest→newest. Pass exactly one of minutes:/hours:.
+# minutes: gives one row per minute, hours: one per 10-minute bucket.
 # → [{at: <Time>, p: 12, f: 0, ms: 430}, …]
 Wurk::Metrics::Query.for_job("FooJob", minutes: 60)
 Wurk::Metrics::Query.for_job("FooJob", hours: 24)
@@ -133,10 +164,10 @@ Window caps (`WindowTooWide < ArgumentError` when exceeded):
 
 | Call | Cap | Reads |
 |------|-----|-------|
-| `top_jobs(minutes:)` | `MAX_MINUTES` = 480 (8h) | per-minute `j\|…` buckets |
-| `top_jobs(hours:)` | `MAX_HOURS` = 72 (3d), matching the per-minute bucket retention | per-minute buckets |
+| `top_jobs(minutes:)` | `MAX_MINUTES` = 480 (8h), matching the per-minute bucket retention | per-minute `j\|…` buckets |
+| `top_jobs(hours:)` | `MAX_HOURS` = 72 (3d), matching the 10-minute bucket retention | 10-minute `j\|…` buckets |
 | `for_job(minutes:)` | 480 | per-minute buckets |
-| `for_job(hours:)` | 72 (3d) | per-class hourly buckets |
+| `for_job(hours:)` | 72 (3d) | 10-minute buckets |
 | `history` / `queue_history` | window clamped to the bucket's TTL (24h / 7d / 30d) | `jr\|…` / `qm\|…` |
 
 A wider window has no data to read anyway — the source buckets are TTL'd out —
@@ -145,15 +176,6 @@ so `top_jobs` and `for_job` raise rather than return silently sparse results.
 or a non-positive window raises `ArgumentError`. `queue_history` returns at
 most `MAX_QUEUE_SERIES` (25) queues, taken in sorted order, to bound the
 payload.
-
-**Divergence from `docs/target/sidekiq-free.md` §20.** Sidekiq's
-`Sidekiq::Metrics::Query` is a class (`Query.new(pool:, now:)`) returning
-`Result` / `JobResult` / `MarkResult` structs with `series`, `hist`, `totals`,
-and `marks`. Wurk's is a module returning plain arrays and hashes, with no
-histogram (`hist`) data and no deploy-mark overlay. The `MAX_MINUTES` / `MAX_HOURS`
-DoS caps match the spec; the object model does not. `Sidekiq::Metrics::Query`
-resolves to this module via the alias, so code that only calls `top_jobs` /
-`for_job` at the module level works — code that calls `.new` does not.
 
 ### Rollups and queue gauges
 
@@ -411,9 +433,9 @@ Wurk::Deploy.new.fetch(Date.today)        # → {"2026-07-20T10:31:00Z" => "abc1
 
 Marks land in `<YYYYMMDD>-marks` (HASH, TTL 90 days), deduped per label by a
 60-second `deploylock-<label>` lock so a fleet-wide deploy writes one row rather
-than one per process. **Divergence:** Wurk records marks but does not yet render
-them — no dashboard overlay and no `marks` field on any query result. Read them
-with `Deploy#fetch`.
+than one per process. The instance `Query` results carry them in `marks`, as
+upstream; the dashboard does not draw them yet. Read them directly with
+`Deploy#fetch`.
 
 ---
 
@@ -424,8 +446,9 @@ without limit.
 
 | Key | Written by | Retention | Steady-state size |
 |-----|-----------|-----------|-------------------|
-| `j\|<YYYYMMDD>\|<H>:<M>` | every worker, ≤5s | 3 days from last write | ≤ 4 320 keys; 3 fields × active job classes each |
-| `<klass>-<YYYYMMDD>-<H>` | every worker, ≤5s | 3 days from last write | 72 keys × active job classes; 3 fields each |
+| `j\|<YYMMDD>\|<H>:<MM>` | every worker, ≤5s | 8 hours from last write | ≤ 480 keys; 3 fields × active job classes each |
+| `j\|<YYMMDD>\|<H>:<M>` | every worker, ≤5s | 3 days from last write | ≤ 432 keys; 3 fields × active job classes each |
+| `h\|<klass>-<D>-<H>:<M>` | every worker, ≤5s | 8 hours from last write | ≤ 480 keys × active job classes; 52 bytes each |
 | `jr\|{1m,5m,1h}\|<epoch>` | rollup leader | 24h / 7d / 30d | ≈ 4 176 keys total — see [Metrics history](metrics-history.md) |
 | `qm\|{1m,5m,1h}\|<epoch>` | queue-rollup leader | 24h / 7d / 30d | ≈ 4 176 keys; 2 fields × live queues each |
 | `history:metrics` | `retain_history` snapshotter | capped at ~10 000 entries | ~3.5 days at the 30s default |
@@ -433,7 +456,7 @@ without limit.
 
 The per-class keys are the only ones that scale with job-class cardinality —
 an app that generates dynamic class names (thousands of distinct `class`
-values) pays for it in the minute and hourly buckets. Everything else is
+values) pays for it in the minute, 10-minute and histogram keys. Everything else is
 bounded by time and queue count. Empty rollup buckets are skipped, so an idle
 cluster writes nothing.
 
