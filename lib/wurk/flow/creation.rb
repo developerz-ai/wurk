@@ -207,11 +207,15 @@ module Wurk
       end
 
       def node_fields(node, payload)
-        json = payload.key?('at') ? JobUtil.scheduled_member(payload) : Wurk.dump_json(payload)
+        json = stored_payload(payload)
         { 'i' => node.index.to_s, 'name' => node.name.to_s, 'class' => payload['class'],
           'queue' => payload['queue'], 'jid' => payload['jid'], 'bid' => payload['bid'],
           'state' => node.root? ? ENQUEUED : WAITING, 'payload' => json, 'at' => payload['at'].to_s,
           'desc' => node.label, 'cb' => callbacks_json(node), 'pipe' => pipe_field(node, json) }
+      end
+
+      def stored_payload(payload)
+        payload.key?('at') ? JobUtil.scheduled_member(payload) : Wurk.dump_json(payload)
       end
 
       # Empty for an ordinary node, and the sentinel — exactly as it appears in
