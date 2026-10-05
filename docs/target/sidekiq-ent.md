@@ -451,7 +451,7 @@ Overhead: ~150 bytes + ~30% size growth from base64.
 
 ### 4.7 Web UI
 
-Encrypted payloads stay opaque in the Web UI args column until executed (rendered as `"<encrypted>"`). Error backtraces are plaintext.
+Encrypted payloads stay opaque in the Web UI args column until executed (rendered as `"[encrypted data]"`, the mask upstream `JobRecord#display_args` writes; an earlier revision of this line said `"<encrypted>"`, which no Sidekiq release uses). Error backtraces are plaintext.
 
 ### 4.8 Constraints
 

@@ -117,7 +117,7 @@ module Wurk
         raise Error, 'Wurk::Encryption not enabled' unless enabled?
 
         @key_cache ||= {}
-        @key_cache[version] ||= validate_key!(version, @resolver.call(version))
+        @key_cache[version] ||= validate_key!(version, resolve(version))
       end
 
       # Encrypt `value` (any JSON-serializable Ruby value) under
@@ -187,7 +187,7 @@ module Wurk
       end
 
       # Web UI display helper (§4.7). Given a job hash, returns the args
-      # array with the last element replaced by the literal `"<encrypted>"`
+      # array with the last element replaced by the literal `"[encrypted data]"`
       # when the job opted in. Cleartext preceding args are untouched so
       # operators can still triage on user_id / object_id / etc.
       #
@@ -200,7 +200,7 @@ module Wurk
         return args if args.empty?
         return args unless job['encrypt'] || job[:encrypt] || envelope?(args.last)
 
-        args[0..-2] + ['<encrypted>']
+        args[0..-2] + ['[encrypted data]']
       end
 
       # A decryption failure means the key is gone (rotated away) or the
@@ -229,6 +229,16 @@ module Wurk
         cipher.iv = ::Base64.strict_decode64(envelope['iv'])
         cipher.auth_tag = ::Base64.strict_decode64(envelope['tag'])
         cipher
+      end
+
+      # A resolver built on `keys.fetch(v)` / `ENV.fetch(...)` raises KeyError
+      # (an IndexError) for a rotated-away version where a Hash#[] resolver
+      # returns nil. Both mean "no key for this version", so both must take
+      # the same dead-set path; a bare KeyError would bubble into 25 retries.
+      def resolve(version)
+        @resolver.call(version)
+      rescue ::IndexError => e
+        raise KeyMissingError, "key resolver has no key for version #{version} (#{e.class}: #{e.message})"
       end
 
       def validate_key!(version, bytes)

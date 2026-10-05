@@ -49,7 +49,8 @@ module Wurk
       payload = Wurk.redis(idempotent: true) { |conn| conn.call('LRANGE', @rname, -1, -1).first }
       return 0.0 if payload.nil?
 
-      JobRecord.latency_from(Wurk.load_json(payload)['enqueued_at'])
+      job = Wurk.load_json(payload)
+      JobRecord.latency_from(job['enqueued_at'] || job['created_at'])
     rescue ::JSON::ParserError
       0.0
     end
@@ -60,19 +61,20 @@ module Wurk
       Wurk.redis(idempotent: true) { |conn| conn.call('SISMEMBER', Keys::PAUSED_SET, @name) } == 1
     end
 
-    # Pause new fetches against this queue. Idempotent — `SADD` returns
-    # 0 when the name was already present. In-flight jobs are untouched.
+    # Pause new fetches against this queue. Idempotent; like Pro, returns
+    # true only when this call paused it (`SADD` added the name), false when
+    # it was already paused. In-flight jobs are untouched.
     def pause!
-      Wurk.redis(idempotent: true) { |conn| conn.call('SADD', Keys::PAUSED_SET, @name) }
+      added = Wurk.redis(idempotent: true) { |conn| conn.call('SADD', Keys::PAUSED_SET, @name) }
       Fetcher::Reliable.invalidate_paused_cache!
-      true
+      added == 1
     end
 
-    # Resume fetches. Idempotent.
+    # Resume fetches. Idempotent; true only when this call unpaused it.
     def unpause!
-      Wurk.redis(idempotent: true) { |conn| conn.call('SREM', Keys::PAUSED_SET, @name) }
+      removed = Wurk.redis(idempotent: true) { |conn| conn.call('SREM', Keys::PAUSED_SET, @name) }
       Fetcher::Reliable.invalidate_paused_cache!
-      true
+      removed == 1
     end
 
     # Paged LRANGE traversal. Yields JobRecord per payload. Continues

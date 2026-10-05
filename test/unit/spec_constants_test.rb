@@ -74,7 +74,8 @@ class SpecConstantsTest < Wurk::Test::UnitCase
   def test_every_spec_constant_resolves_to_its_wurk_class
     out, err, status = Open3.capture3(
       { 'BUNDLE_GEMFILE' => File.join(ROOT, 'Gemfile') },
-      RbConfig.ruby, '-rbundler/setup', '-rjson', '-I', File.join(ROOT, 'lib'), '-e', PROBE,
+      RbConfig.ruby, '-rbundler/setup', *Wurk::Test::SUBPROCESS_COVERAGE,
+      '-rjson', '-I', File.join(ROOT, 'lib'), '-e', PROBE,
       *(CONSTANTS - NOT_PROVIDED.keys)
     )
 

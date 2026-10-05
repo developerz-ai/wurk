@@ -131,8 +131,8 @@ class FetcherReaperTest < Wurk::Test::UnitCase
     jid = SecureRandom.hex(12)
     pill = nil
     @config.super_fetch! { |_jobstr, p| pill = p if p }
-    # Two prior recoveries on record; this reclaim is the 3rd → poison.
-    Wurk.redis { |c| c.call('SET', recovery_key(jid), '2') }
+    # Three prior recoveries on record; this reclaim is the 4th → poison.
+    Wurk.redis { |c| c.call('SET', recovery_key(jid), '3') }
     @pool.with { |c| c.call('RPUSH', private_list(DEAD_PID), payload('poison', jid: jid)) }
 
     @reaper.reclaim!
@@ -140,7 +140,7 @@ class FetcherReaperTest < Wurk::Test::UnitCase
     refute_nil pill, 'a poison kill hands the recovery block a pill'
     assert_equal jid, pill.jid
     assert_equal 'ReaperTestJob', pill.klass
-    assert_equal 3, pill.count
+    assert_equal 4, pill.count
     assert_equal @queue_name, pill.queue
   ensure
     Wurk.redis { |c| c.call('DEL', recovery_key(jid)) }
@@ -151,8 +151,8 @@ class FetcherReaperTest < Wurk::Test::UnitCase
   def test_recovery_past_threshold_kills_to_dead_set_instead_of_requeue
     jid = SecureRandom.hex(12)
     job = payload('poison', jid: jid)
-    # Two prior recoveries on record; this reclaim is the 3rd → poison.
-    Wurk.redis { |c| c.call('SET', recovery_key(jid), '2') }
+    # Three prior recoveries on record; this reclaim is the 4th → poison.
+    Wurk.redis { |c| c.call('SET', recovery_key(jid), '3') }
     @pool.with { |c| c.call('RPUSH', private_list(DEAD_PID), job) }
 
     reclaimed = @reaper.reclaim!

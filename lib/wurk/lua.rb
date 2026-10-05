@@ -143,17 +143,20 @@ module Wurk
     # O(N) round-trips; this is O(1) round-trip with O(N) Lua work.
     # KEYS = [queue:<name>]
     # ARGV = [jid]
-    # Returns the number of payloads removed (0 or 1; can be >1 in pathological
-    # duplicate-jid corruption — caller doesn't rely on the value).
+    # Returns the first payload removed, or nil (Lua false) when none matched —
+    # Pro's `delete_job` return value. Every match is removed, so a
+    # duplicate-jid corruption is cleaned up in the same pass.
     FAST_DELETE_JOB = <<~LUA
       local items = redis.call("lrange", KEYS[1], 0, -1)
-      local removed = 0
+      local deleted = false
       for i = 1, #items do
         if string.find(items[i], '"jid":"' .. ARGV[1] .. '"', 1, true) then
-          removed = removed + redis.call("lrem", KEYS[1], 1, items[i])
+          if redis.call("lrem", KEYS[1], 1, items[i]) > 0 and not deleted then
+            deleted = items[i]
+          end
         end
       end
-      return removed
+      return deleted
     LUA
 
     # Pro Fast API (§11): server-side LRANGE+LREM removing every payload whose

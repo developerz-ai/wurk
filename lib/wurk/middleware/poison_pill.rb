@@ -11,8 +11,9 @@ module Wurk
     # Pro parity (§3.2): poison-pill detection for reliable-fetch orphans.
     # When a job is recovered out of a dead process's private list, we
     # INCR a per-jid counter at `super_fetch:recovered:<jid>` with a 72h
-    # TTL. Once the counter crosses RECOVERY_THRESHOLD (3) the next recovery
-    # is treated as a poison pill: the payload is moved to the dead set,
+    # TTL. Recoveries up to RECOVERY_THRESHOLD (3) requeue; the one that takes
+    # the counter past it (the 4th orphaning) is the poison pill, matching
+    # super_fetch's `count <= max_recoveries` recover_orphan script: the payload is moved to the dead set,
     # `jobs.poison` is emitted to statsd, and recovery callbacks fire so
     # operators can be paged.
     #
@@ -72,7 +73,7 @@ module Wurk
         emit('jobs.recovered.fetch', klass, queue)
 
         count = bump_counter(jid) if jid && !jid.empty?
-        if count && count >= RECOVERY_THRESHOLD
+        if count && count > RECOVERY_THRESHOLD
           mark_poison(payload, job, queue: queue, count: count)
           fire_super_fetch(config, payload, Pill.new(jid: jid, klass: klass, count: count, queue: queue))
           :poison
@@ -212,7 +213,7 @@ module Wurk
       end
 
       def poisoned_error(klass, count)
-        message = "#{klass || 'job'} was recovered #{count} times without completing"
+        message = "#{klass || 'job'} was orphaned #{count} times without completing"
         Poisoned.new(message).tap { |e| e.set_backtrace(caller) }
       end
 

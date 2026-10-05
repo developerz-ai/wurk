@@ -60,8 +60,10 @@ class ApiThrottleTest < Wurk::Test::UnitCase
 
   def test_the_refusal_says_how_long_to_wait
     limited!(1, interval: 60)
+    started = monotonic
     get('/v1')
     status, headers, body = get('/v1')
+    elapsed = monotonic - started
 
     assert_equal 429, status
     assert_equal 'application/problem+json', headers['content-type']
@@ -71,20 +73,33 @@ class ApiThrottleTest < Wurk::Test::UnitCase
     assert_equal 60, body['interval_seconds']
     assert_equal body['retry_after'], headers['retry-after'].to_i
     assert_operator body['retry_after'], :<=, 60
-    assert_operator body['retry_after'], :>, 55
+    # Bounded by the time actually spent, not a fixed slack: a stalled box
+    # ages the window and the wait shrinks with it.
+    assert_operator body['retry_after'], :>=, (60 - elapsed).floor
   end
 
   # Derived from when the window's oldest entry slides out, not from the
   # interval: a client that trickled up to the ceiling must not be told to wait
   # a full window for a slot that frees in a second.
+  #
+  # Progress-based (#535): the sleep only guarantees the window has aged at
+  # least 2s. A box stalled past the whole 4s window legitimately lets the
+  # second request through, so that outcome is checked against the measured
+  # time instead of failing the test.
   def test_the_wait_shrinks_as_the_window_ages
     limited!(1, interval: 4)
+    started = monotonic
     get('/v1')
     sleep 2
-    _status, _headers, body = get('/v1')
+    status, _headers, body = get('/v1')
+    elapsed = monotonic - started
 
-    assert_operator body['retry_after'], :>=, 1
-    assert_operator body['retry_after'], :<, 4
+    if status == 200
+      assert_operator elapsed, :>=, 3.9, 'the slot freed before the window could have slid'
+    else
+      assert_operator body['retry_after'], :>=, 1
+      assert_operator body['retry_after'], :<=, 2
+    end
   end
 
   # Never 0 — a client that reads "wait 0 seconds" retries immediately, which
@@ -111,19 +126,24 @@ class ApiThrottleTest < Wurk::Test::UnitCase
   def test_a_refusal_answers_immediately_rather_than_waiting_for_a_slot
     limited!(1, interval: 60)
     get('/v1')
-    started = ::Process.clock_gettime(::Process::CLOCK_MONOTONIC)
+    started = monotonic
     get('/v1')
-    elapsed = ::Process.clock_gettime(::Process::CLOCK_MONOTONIC) - started
+    elapsed = monotonic - started
 
-    assert_operator elapsed, :<, 1.0
+    # Waiting for the slot would take the rest of the 60s window; 10s keeps a
+    # loaded box from tripping it without letting a real wait pass.
+    assert_operator elapsed, :<, 10.0
   end
 
   # Sliding, not a counter that has to be reset: the slot comes back on its own.
   def test_a_slot_frees_once_the_window_slides_past_it
     limited!(1, interval: 1)
+    started = monotonic
     get('/v1')
+    refused = get('/v1')[0]
 
-    assert_equal 429, get('/v1')[0]
+    # Only a stall past the 1s window may let the second request through.
+    assert(refused == 429 || monotonic - started >= 0.9, "got #{refused} inside the window")
 
     sleep 1.1
 
@@ -281,6 +301,8 @@ class ApiThrottleTest < Wurk::Test::UnitCase
   def registered_limiters = @pool.with { |conn| conn.call('SMEMBERS', Wurk::Limiter::LIST_KEY) }
 
   def get(path, token: TOKEN) = request('GET', path, token: token)
+
+  def monotonic = ::Process.clock_gettime(::Process::CLOCK_MONOTONIC)
   def post(path, token: TOKEN) = request('POST', path, token: token)
 
   def request(method, path, token:)

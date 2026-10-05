@@ -117,8 +117,10 @@ class LimiterTest < Wurk::Test::UnitCase
     assert_raises(ArgumentError) { Wurk::Limiter.concurrent('bad name with spaces', 1) }
   end
 
-  def test_constructor_rejects_ttl_under_24h
-    assert_raises(ArgumentError) { Wurk::Limiter.concurrent("ttl-#{@suffix}", 1, ttl: 60) }
+  def test_constructor_raises_ttl_under_24h_to_the_floor
+    limiter = Wurk::Limiter.concurrent("ttl-#{@suffix}", 1, ttl: 60)
+
+    assert_equal 86_400, limiter.options[:ttl]
   end
 
   # ----- registration in lmtr-list -------------------------------------

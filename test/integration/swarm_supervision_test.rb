@@ -387,7 +387,11 @@ class SwarmSupervisionTest < Wurk::Test::UnitCase
     assert replacement, 'replacement child was never spawned for the restart'
 
     ::Process.kill('KILL', replacement)
-    sleep POLL_INTERVAL * 3 # let the reaper observe the death before asserting survival
+    # Survival is only meaningful once the supervisor has reaped the death.
+    deadline = monotonic_now + POLL_TIMEOUT
+    sleep POLL_INTERVAL while swarm.children.key?(replacement) && monotonic_now < deadline
+
+    refute swarm.children.key?(replacement), "the supervisor never reaped the killed replacement #{replacement}"
     replacement
   end
 

@@ -8,22 +8,24 @@ require_relative '../test_helper'
 class TimerLoopTest < Wurk::Test::UnitCase
   parallelize_me!
 
+  # Measured, not slept: when the tick lands is compared against when the
+  # loop started, so a stalled box can't make an on-time tick look early.
   def test_run_waits_before_first_tick
     timer = Wurk::TimerLoop.new(0.05)
     ticks = []
+    started = nil
 
     thread = Thread.new do
+      started = ::Process.clock_gettime(::Process::CLOCK_MONOTONIC)
       timer.run do
-        ticks << :tick
+        ticks << (::Process.clock_gettime(::Process::CLOCK_MONOTONIC) - started)
         timer.terminate
       end
     end
-    sleep(0.01)
-
-    assert_empty ticks, 'must not tick before the first interval elapses'
     thread.join(2.0)
 
-    assert_equal [:tick], ticks
+    assert_equal 1, ticks.size
+    assert_operator ticks.first, :>=, 0.05, 'must not tick before the first interval elapses'
   ensure
     timer&.terminate
     thread&.join(2.0)

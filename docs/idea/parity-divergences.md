@@ -56,47 +56,72 @@ and never causes a queue pileup the spec's re-raise path would risk.
 ## Orphan reclaim uses `LMOVE private public RIGHT RIGHT`, not `RPOPLPUSH`
 
 **Wurk:** `Fetcher::Reaper#drain` moves each job with
-`LMOVE private_list public_q RIGHT RIGHT` (`lib/wurk/fetcher/reaper.rb:272`).
+`LMOVE private_list public_q RIGHT RIGHT` (`lib/wurk/fetcher/reaper.rb`,
+`drain`). The job is pushed onto the public queue's **fetch end** (the head of
+the line), so a recovered job runs before the jobs already waiting.
 
-**Spec:** Pro §3.2 documents `RPOPLPUSH private_list public_q` for orphan
-private-list reclamation.
+**Spec:** Pro §3.2 documents `RPOPLPUSH private_list public_q`. `RPOPLPUSH` is
+`LMOVE source dest RIGHT LEFT`: it pushes onto the public queue's *enqueue*
+end, so in Pro a recovered job goes to the back of the line. Pro 7.3's
+`recover_orphan` script does exactly that (`lmove … 'right', 'left'`).
 
-**Why:** `RPOPLPUSH` is a deprecated alias for `LMOVE source dest RIGHT
-LEFT`/`RIGHT RIGHT` depending on read direction; Redis itself recommends
-`LMOVE` for all new code (`RPOPLPUSH` stays only for backward compat).
-`LMOVE ... RIGHT RIGHT` reproduces the exact same source-pop/dest-push
-semantics and ordering as `RPOPLPUSH`, so wire behavior (list membership,
-element order, atomicity) is unchanged — it's a syntax substitution, not a
-behavior change. No parity test asserts the literal command name.
+**Why:** a recovered job has already waited its turn once and was interrupted
+by a crash, not by anything it did; sending it to the back of a deep queue
+adds a second full queue-wait to its latency. Putting it at the head mirrors
+how free Sidekiq treats interrupted work (`bulk_requeue` RPUSHes, §31 gotcha
+11). Membership and atomicity are identical to Pro's: one atomic move per job,
+never in zero or two lists. Only position differs — and, because jobs are
+moved one at a time from the private list's oldest end onto the head, several
+recovered jobs from one list end up in reverse fetch order relative to each
+other. No documented contract pins the position; the parity oracle
+(`test/parity/reliable_fetch_test.rb`) asserts only that a recovered job is
+back in its public queue exactly once.
 
-**Anchor:** `lib/wurk/fetcher/reaper.rb:272`, Pro §3.2.
+**Anchor:** `lib/wurk/fetcher/reaper.rb` (`drain`), Pro §3.2.
 
-## `bulk_requeue` atomically moves private → public; Pro retains in private
+## `bulk_requeue` moves still-parked jobs to the queue head; Pro moves them to the tail
 
 **Wurk:** `Fetcher::Reliable#bulk_requeue` (landed in PR2, shutdown/requeue
 safety fix) does an atomic per-job `LREM private 1 job` +
 `RPUSH public_q job`, conditioned so the job lands in exactly one list — see
-`lib/wurk/fetcher/reliable.rb` `requeue_pipelined`.
+`lib/wurk/fetcher/reliable.rb` `requeue_pipelined`. Only jobs handed in as
+in-progress and still parked (not yet acked) are moved, onto the queue's
+fetch end, so interrupted work runs next.
 
-**Spec:** Pro's `super_fetch` leaves in-flight jobs in the private list on
-shutdown and relies solely on next-boot orphan reclamation
-(`fetcher/reaper.rb`) to requeue them.
+**Spec:** free Sidekiq's `BasicFetch#bulk_requeue` RPUSHes in-progress jobs
+back to the head of their queue (free §15, §31 gotcha 11). Pro 7.3's
+`super_fetch#bulk_requeue` ignores the in-progress argument and drains the
+whole private list with `LMOVE private public RIGHT LEFT` — immediately, at
+shutdown — so its requeued jobs go to the *tail* (back of the line).
+(Earlier revisions of this entry said Pro leaves jobs in the private list for
+next-boot reclaim; Pro 7.3's source does not.)
 
-**Why:** leaving jobs parked in the private list until the *next* boot means
-a job interrupted by a graceful-but-timed-out shutdown sits unprocessed
-until the process restarts — worse latency, and if the process never comes
-back (scaled down, box replaced) the reaper on a *different* process has to
-find and adopt an orphaned list before the job runs at all. Requeuing
-immediately and atomically at shutdown closes that gap without weakening
-delivery guarantees: the LREM/RPUSH pair is only executed at process exit
-for jobs that are provably still in the private list (not yet acked), so a
-job is never counted twice and never silently dropped if the process dies
-mid-move (worst case it's still in the private list, caught by orphan
-reclaim as before, wire-identical to the previous fallback path).
+**Why:** Wurk exposes this fetcher as `Sidekiq::BasicFetch`, and free
+Sidekiq's head-of-queue requeue is the behaviour that name promises; it also
+keeps a job interrupted by a deploy from waiting behind the whole backlog a
+second time. Like Pro, nothing waits for the next boot. A job is never counted
+twice and never dropped if the process dies mid-move: the LREM/RPUSH pair runs
+only for jobs provably still parked, and the worst case is the job staying in
+the private list, where orphan reclaim picks it up.
 
 **Anchor:** `lib/wurk/fetcher/reliable.rb` (`bulk_requeue`,
-`requeue_pipelined`), PR2 (`fix/shutdown-requeue`), Pro §3.2 (super_fetch
-shutdown behavior).
+`requeue_pipelined`), PR2 (`fix/shutdown-requeue`), free §15, Pro §3.2.
+
+## Limiter `ttl` below 24h is raised to 24h
+
+**Wurk:** `Limiter::Base#initialize` clamps `ttl` to `MIN_TTL` (86 400s), so
+no limiter key lives shorter than a day. A shorter value is accepted, not
+rejected.
+
+**Spec:** Ent §1.7 lists the `ttl` option with "Minimum: 24h". Sidekiq Ent
+7.3's own `Limiter::Base#ttl` applies no floor at all.
+
+**Why:** the floor is what the spec documents — keys that expire mid-job
+orphan concurrent slots. Clamping rather than raising keeps an app that passes
+a short `ttl` (legal in Sidekiq Ent) booting after the gem swap.
+
+**Anchor:** `lib/wurk/limiter/base.rb` (`initialize`, `MIN_TTL`), Ent §1.7,
+`test/parity/limiter_test.rb` (`test_no_key_lives_shorter_than_the_24h_minimum`).
 
 ## Rolling restart drives itself from the supervise loop; no einhorn
 
@@ -625,3 +650,21 @@ resetting it.
 **Why:** cross-site GETs must not trigger third-party uploads; the rest follow from the SPA architecture.
 
 **Anchor:** `app/controllers/wurk/profiles_controller.rb`, `lib/wurk/web/extension.rb`, `lib/wurk/health.rb`.
+
+## A job whose encrypted argument cannot be decrypted goes straight to the dead set
+
+**Wurk:** a decrypt failure (unknown key version, a key resolver that returns nil or raises, a corrupt envelope) raises `Wurk::Encryption::DecryptionError`, increments `jobs.encryption_error`, and moves the job to the dead set without retries. The envelope is kept, so the job can be retried from the dashboard once the key is restored.
+
+**Spec:** Ent §4.6 routes a failed decrypt through the normal retry pipeline with `OpenSSL::Cipher::CipherError`.
+
+**Why:** 25 retries over ~21 days cannot bring a missing key back, and each one re-logs the same failure; the dead set is where an operator looks, and a manual retry works the moment the key is back. Documented for users in `docs/encryption.md`.
+
+**Anchor:** `lib/wurk/encryption.rb`, `test/parity/encryption_test.rb` (spec-routing case skipped with this pointer).
+
+## Scheduled job expiry counts from the scheduled time
+
+**Wurk:** `expires_in` on a scheduled job is measured from its scheduled run time (2h delay + 1h `expires_in` → expires 3h after enqueue).
+
+**Spec:** Pro §7 says "the clock starts at enqueue" but its own worked example gives 3h; Wurk follows the example.
+
+**Anchor:** `lib/wurk/job_util.rb`, `test/parity/expiring_test.rb`.

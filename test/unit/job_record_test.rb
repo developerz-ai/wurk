@@ -106,11 +106,31 @@ class JobRecordTest < Wurk::Test::UnitCase
     assert_in_delta secs, record.enqueued_at.to_f, 0.1
   end
 
-  def test_created_at_returns_nil_when_missing
+  def test_created_at_falls_back_to_enqueued_at
     item = base_item
     item.delete('created_at')
+    item['enqueued_at'] = 1_700_000_000_123
+
+    assert_equal 1_700_000_000_123, (Wurk::JobRecord.new(item, @qname).created_at.to_r * 1000).to_i
+  end
+
+  def test_created_at_returns_nil_when_both_timestamps_missing
+    item = base_item
+    item.delete('created_at')
+    item.delete('enqueued_at')
 
     assert_nil Wurk::JobRecord.new(item, @qname).created_at
+  end
+
+  def test_every_timestamp_shape_parses_to_utc
+    [1_700_000_000_123, 1_700_000_000_123.0, 1_700_000_000.5, 1_700_000_000].each do |ts|
+      record = Wurk::JobRecord.new(base_item.merge('enqueued_at' => ts, 'created_at' => ts,
+                                                   'failed_at' => ts, 'retried_at' => ts), @qname)
+
+      %i[enqueued_at created_at failed_at retried_at].each do |field|
+        assert_predicate record.public_send(field), :utc?, "#{field} from #{ts.inspect}"
+      end
+    end
   end
 
   def test_failed_at_retried_at_return_time_when_set
@@ -201,14 +221,14 @@ class JobRecordTest < Wurk::Test::UnitCase
     assert_same first, record.display_args
   end
 
-  # §4.7: an encryption envelope as the last arg renders as "<encrypted>" so
+  # §4.7: an encryption envelope as the last arg renders as "[encrypted data]" so
   # ciphertext never reaches the dashboard. Keyed on envelope shape, so it
   # fires even when the stored hash lacks the `encrypt` flag (as here).
   def test_display_args_masks_encrypted_envelope_last_arg
     item = base_item.merge('args' => [7, encryption_envelope])
     record = Wurk::JobRecord.new(item, @qname)
 
-    assert_equal [7, '<encrypted>'], record.display_args
+    assert_equal [7, '[encrypted data]'], record.display_args
   end
 
   # Cleartext preceding args stay visible for triage; only the envelope hides.
@@ -216,7 +236,7 @@ class JobRecordTest < Wurk::Test::UnitCase
     item = base_item.merge('args' => ['user-42', 'order-7', encryption_envelope])
     record = Wurk::JobRecord.new(item, @qname)
 
-    assert_equal ['user-42', 'order-7', '<encrypted>'], record.display_args
+    assert_equal ['user-42', 'order-7', '[encrypted data]'], record.display_args
   end
 
   # display_class memoization must survive a nil unwrap result so the second

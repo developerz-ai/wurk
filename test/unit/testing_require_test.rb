@@ -15,7 +15,7 @@ class TestingRequireTest < Wurk::Test::UnitCase
   LIB = File.expand_path('../../lib', __dir__)
 
   def ruby(code)
-    IO.popen([RbConfig.ruby, '-I', LIB, '-e', code], err: %i[child out], &:read)
+    IO.popen([RbConfig.ruby, *Wurk::Test::SUBPROCESS_COVERAGE, '-I', LIB, '-e', code], err: %i[child out], &:read)
   end
 
   def test_require_sidekiq_testing_enables_fake_mode

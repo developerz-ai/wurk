@@ -37,14 +37,14 @@ class APIFastTest < Wurk::Test::UnitCase
 
     removed = Wurk::Queue.new(@qname).delete_job(jid)
 
-    assert_equal 1, removed
+    assert_equal jid, Wurk.load_json(removed)['jid'], 'returns the deleted payload, as Pro does'
     assert_equal 1, queue_size
   end
 
-  def test_delete_job_returns_zero_when_jid_absent
+  def test_delete_job_returns_nil_when_jid_absent
     push_job
 
-    assert_equal 0, Wurk::Queue.new(@qname).delete_job(SecureRandom.hex(12))
+    assert_nil Wurk::Queue.new(@qname).delete_job(SecureRandom.hex(12))
     assert_equal 1, queue_size
   end
 
@@ -54,7 +54,7 @@ class APIFastTest < Wurk::Test::UnitCase
   end
 
   def test_delete_job_handles_empty_queue
-    assert_equal 0, Wurk::Queue.new(@qname).delete_job(SecureRandom.hex(12))
+    assert_nil Wurk::Queue.new(@qname).delete_job(SecureRandom.hex(12))
   end
 
   # --- Queue#delete_by_class ---------------------------------------------

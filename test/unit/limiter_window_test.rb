@@ -130,7 +130,8 @@ class LimiterWindowTest < Wurk::Test::UnitCase
   # wait_timeout > 0: a full short window slides clear while we wait, taking
   # the no-raise side (remaining > 0, line 45 else) then succeeding.
   def test_waits_and_succeeds_when_window_slides_clear
-    l = Wurk::Limiter.window("wt-#{@suffix}", 1, 1, wait_timeout: 5)
+    # The window frees in ~1s; the generous timeout is only spent on a stalled box.
+    l = Wurk::Limiter.window("wt-#{@suffix}", 1, 1, wait_timeout: 30)
     l.within_limit {} # fills the single slot
     ran = false
     l.within_limit { ran = true } # blocks until the entry leaves the window

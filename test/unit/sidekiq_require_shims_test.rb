@@ -111,6 +111,7 @@ class SidekiqRequireShimsTest < Wurk::Test::UnitCase
 
   def probe_script(script, *)
     env = { 'BUNDLE_GEMFILE' => File.join(ROOT, 'Gemfile') }
-    Open3.capture3(env, RbConfig.ruby, '-rbundler/setup', '-rjson', '-I', LIB, '-e', script, *)
+    Open3.capture3(env, RbConfig.ruby, '-rbundler/setup', *Wurk::Test::SUBPROCESS_COVERAGE,
+                   '-rjson', '-I', LIB, '-e', script, *)
   end
 end

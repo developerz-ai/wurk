@@ -10,7 +10,8 @@
 -- ARGV[1] = limit (max count per epoch)
 -- ARGV[2] = used (units to charge; 1 by default)
 -- ARGV[3] = key ttl seconds: 2 x interval, outliving the epoch it counts
--- ARGV[4] = seconds to next boundary (returned verbatim for the caller's sleep)
+-- ARGV[4] = seconds to next boundary, possibly fractional (echoed back; Redis
+--           truncates it to an integer, so the caller keeps its own copy)
 -- Returns {acquired, current, seconds_to_next_boundary}.
 local key = KEYS[1]
 local limit = tonumber(ARGV[1])

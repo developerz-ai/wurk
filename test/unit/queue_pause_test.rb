@@ -47,8 +47,9 @@ class QueuePauseTest < Wurk::Test::UnitCase
     assert_predicate q, :paused?
   end
 
-  def test_pause_returns_true
+  def test_pause_reports_whether_it_paused
     assert(Wurk::Queue.new(@qname).pause!)
+    refute(Wurk::Queue.new(@qname).pause!, 'already paused: Pro returns false')
   end
 
   def test_pause_is_idempotent
@@ -75,12 +76,14 @@ class QueuePauseTest < Wurk::Test::UnitCase
     refute_predicate q, :paused?
   end
 
-  def test_unpause_returns_true
+  def test_unpause_reports_whether_it_unpaused
+    Wurk::Queue.new(@qname).pause!
+
     assert(Wurk::Queue.new(@qname).unpause!)
   end
 
   def test_unpause_is_idempotent_when_not_paused
-    assert(Wurk::Queue.new(@qname).unpause!)
+    refute(Wurk::Queue.new(@qname).unpause!, 'not paused: Pro returns false')
     refute_predicate Wurk::Queue.new(@qname), :paused?
   end
 

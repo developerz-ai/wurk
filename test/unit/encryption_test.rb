@@ -84,6 +84,18 @@ class EncryptionTest < Wurk::Test::UnitCase
     end
   end
 
+  def test_key_for_maps_a_raising_resolver_to_key_missing
+    ENABLE_MUTEX.synchronize do
+      # KeyError from Hash#fetch / ENV.fetch, plain IndexError from Array#fetch.
+      [->(_v) { {}.fetch(1) }, ->(_v) { [].fetch(1) }].each do |resolver|
+        Wurk::Encryption.enable(active_version: 1, &resolver)
+
+        err = assert_raises(Wurk::Encryption::KeyMissingError) { Wurk::Encryption.key_for(1) }
+        assert_match(/no key for version 1 \((KeyError|IndexError)/, err.message)
+      end
+    end
+  end
+
   def test_key_for_raises_on_wrong_size
     ENABLE_MUTEX.synchronize do
       Wurk::Encryption.enable(active_version: 1) { |_v| 'shorty' }
@@ -481,6 +493,28 @@ class EncryptionTest < Wurk::Test::UnitCase
     end
   end
 
+  # A fetch-style resolver (KeyError for a rotated-away version) takes the
+  # same dead path as a nil one — not the 25x retry pipeline.
+  def test_raising_resolver_routes_to_dead_like_a_nil_one
+    ENABLE_MUTEX.synchronize do
+      Wurk::Encryption.enable(active_version: 1) { |_v| KEY_V1 }
+      env = Wurk::Encryption.encrypt('secret')
+      Wurk::Encryption.disable!
+      Wurk::Encryption.enable(active_version: 2) { |v| { 2 => KEY_V2 }.fetch(v) }
+      job = { 'class' => 'PrivJob', 'args' => ['uid', env], 'encrypt' => true, 'jid' => jid }
+
+      assert_raises(Wurk::JobRetry::Skip) { invoke_server(job) { :unreached } }
+      record = dead_record(jid)
+
+      refute_nil record
+      assert_equal Wurk::Encryption::DECRYPTION_ERROR_CLASS, record['error_class']
+      assert_match(/\Aencryption_error: Wurk::Encryption::KeyMissingError: .*KeyError/, record['error_message'])
+      assert Wurk::Encryption.envelope?(record['args'].last)
+    ensure
+      drain_dead(jid)
+    end
+  end
+
   def test_decryption_failure_fires_death_handlers
     ENABLE_MUTEX.synchronize do
       fired = []
@@ -651,7 +685,7 @@ class EncryptionTest < Wurk::Test::UnitCase
   def test_redact_args_replaces_last_arg_when_encrypted
     job = { 'args' => [1, { 'secret' => 'x' }], 'encrypt' => true }
 
-    assert_equal [1, '<encrypted>'], Wurk::Encryption.redact_args(job)
+    assert_equal [1, '[encrypted data]'], Wurk::Encryption.redact_args(job)
   end
 
   def test_redact_args_handles_empty_args
@@ -663,7 +697,7 @@ class EncryptionTest < Wurk::Test::UnitCase
   def test_redact_args_supports_symbol_keys
     job = { args: [1, 'secret'], encrypt: true }
 
-    assert_equal [1, '<encrypted>'], Wurk::Encryption.redact_args(job)
+    assert_equal [1, '[encrypted data]'], Wurk::Encryption.redact_args(job)
   end
 
   # The stored job hash doesn't always carry `encrypt` (it's a sidekiq_option,
@@ -674,7 +708,7 @@ class EncryptionTest < Wurk::Test::UnitCase
       Wurk::Encryption::ENVELOPE_MARKER => true, 'v' => 1, 'iv' => 'aXY=', 'ct' => 'Y3Q=', 'tag' => 'dGFn'
     }] }
 
-    assert_equal [1, '<encrypted>'], Wurk::Encryption.redact_args(job)
+    assert_equal [1, '[encrypted data]'], Wurk::Encryption.redact_args(job)
   end
 
   # A non-envelope Hash as the last arg (no flag) is left untouched — masking

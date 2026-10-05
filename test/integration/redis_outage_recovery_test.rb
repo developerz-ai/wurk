@@ -129,8 +129,15 @@ class RedisOutageRecoveryTest < Wurk::Test::UnitCase
     @observer.call('LPUSH', signals_key, 'TERM')
     heartbeat = Wurk::Heartbeat.new(identity: identity, config: @config)
 
-    blip = Thread.new { @proxy.blip!(BLIP_SECONDS) }
-    sleep 0.2 # let the outage start before the beat's first connection attempt hits it
+    # The outage starts on this thread, so the beat's first connection attempt
+    # is guaranteed to hit it; only the restore runs in the background. It
+    # keeps the beat's experience of the outage at what the old 0.2s head
+    # start left it (BLIP_SECONDS - 0.2), inside the retry budget.
+    @proxy.begin_outage!
+    blip = Thread.new do
+      sleep BLIP_SECONDS - 0.2
+      @proxy.end_outage!
+    end
 
     sigs = heartbeat.beat!
     blip.join
@@ -251,11 +258,19 @@ class RedisOutageRecoveryTest < Wurk::Test::UnitCase
     end
 
     def blip!(seconds)
+      begin_outage!
+      sleep seconds
+      end_outage!
+    end
+
+    def begin_outage!
       @mutex.synchronize do
         @outage = true
         drop_tracked_sockets
       end
-      sleep seconds
+    end
+
+    def end_outage!
       @mutex.synchronize { @outage = false }
     end
 

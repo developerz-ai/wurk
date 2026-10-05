@@ -2,6 +2,7 @@
 
 require_relative '../test_helper'
 require 'csv'
+require 'tempfile'
 
 # Pins the IterableJob enumerator builders (§6.4) — array / CSV / ActiveRecord
 # — used inside #build_enumerator. Cursor parity with Sidekiq: array & CSV use
@@ -86,6 +87,27 @@ class IterableEnumeratorsTest < Wurk::Test::UnitCase
     sizes = collect(@job.csv_batches_enumerator(CSV.new(rows), cursor: 1, batch_size: 2)) { |b, i| [b.size, i] }
 
     assert_equal [[2, 1], [1, 2]], sizes
+  end
+
+  # `size` is the whole file's row count (progress display), header excluded,
+  # so a resumed run reports the same total as a fresh one.
+  def test_csv_size_counts_file_rows_minus_the_header
+    Tempfile.create(['iter', '.csv']) do |f|
+      f.write("a,b\n1,2\n3,4\n5,6\n")
+      f.flush
+
+      File.open(f.path) do |io|
+        assert_equal 3, Wurk::IterableJob::CsvEnumerator.new(CSV.new(io, headers: true)).rows(cursor: 2).size
+      end
+      File.open(f.path) do |io|
+        assert_equal 2, Wurk::IterableJob::CsvEnumerator.new(CSV.new(io)).batches(cursor: 0, batch_size: 3).size
+      end
+    end
+  end
+
+  # An in-memory CSV has no path to count, so size is unknown rather than wrong.
+  def test_csv_size_is_nil_without_a_backing_file
+    assert_nil Wurk::IterableJob::CsvEnumerator.new(CSV.new("1\n2\n")).rows(cursor: 0).size
   end
 
   def test_csv_enumerator_rejects_non_csv
