@@ -1,48 +1,51 @@
 plan: 101-squeaky-clean-audit
 title: Squeaky-clean audit → production-grade Wurk
-status: not_started
+status: done
 created_by: sebi
-worked_by: ""
+worked_by: "claude (coordinator + hive), 2026-10-04/05"
 owner: sebi
-percent: 0
-current_focus: "Wave 0: 01 H1 restore docs/target, 05 C1–C4 + C7, file new issues per 12"
+percent: 100
+current_focus: "complete — released as 1.8.0"
 slices:
   - file: 01-repo-hygiene.md
-    status: not_started
-    percent: 0
+    status: done
+    percent: 100
   - file: 02-core-runtime.md
-    status: not_started
-    percent: 0
+    status: done
+    percent: 100
   - file: 03-pro-ent-api.md
-    status: not_started
-    percent: 0
+    status: done
+    percent: 100
   - file: 04-web-dashboard.md
-    status: not_started
-    percent: 0
+    status: done
+    percent: 100
   - file: 05-ci-gates.md
-    status: not_started
-    percent: 0
+    status: done
+    percent: 100
   - file: 06-release-lane.md
-    status: not_started
-    percent: 0
+    status: done
+    percent: 100
   - file: 07-lint.md
-    status: not_started
-    percent: 0
+    status: done
+    percent: 100
   - file: 08-test-hygiene.md
-    status: not_started
-    percent: 0
+    status: done
+    percent: 100
   - file: 09-production-readiness.md
-    status: not_started
-    percent: 0
+    status: done
+    percent: 100
   - file: 10-infrastructure.md
-    status: not_started
-    percent: 0
+    status: done
+    percent: 100
   - file: 11-human-actions.md
-    status: not_started
-    percent: 0
+    status: done
+    percent: 100
   - file: 12-issue-closure-map.md
-    status: not_started
-    percent: 0
-evidence: []
-notes: "Audit 2026-10-04 @ 8126e42 (v1.7.6), 9 read-only passes. Infra-repo items (10 X*) are edited from developerz-ai/infrastructure. Human-gated items tracked in 11. Execution cap: ≤4 concurrent agents per wave (hive rules in .claude/commands/feature.md)."
-last_updated: 2026-10-04
+    status: done
+    percent: 100
+evidence:
+  - "PRs (merged): #544 #553 #558 #559 #560 #561 #562 #563 #564 + release 1.8.0; infra developerz-ai/infrastructure#1804"
+  - "Issues closed: #545–#551 (wave children), #469 #470 #471 #477 #482 #486 #488 #491 #522 #537 #541, #530 + #441 (maintainer decisions), infra #1259 #800"
+  - "Parity oracles 3 → 14 files (239 runs); coverage 98.2% line / 93.2% branch with track_files; CI on free GitHub-hosted runners; self-hosted runners deregistered"
+notes: "Remaining human-only items (plan 11): U8 real Pro/Ent Redis dump (R2/R3/E13 validation), mixed-fleet proof (R4: drain cutover until then), U9 support/SLA, infra guest teardown of ci-1/ci-2 + revoke personal read:packages token. Audit 2026-10-04 @ 8126e42 (v1.7.6), 9 read-only passes. Infra-repo items (10 X*) are edited from developerz-ai/infrastructure. Human-gated items tracked in 11. Execution cap: ≤4 concurrent agents per wave (hive rules in .claude/commands/feature.md)."
+last_updated: 2026-10-05

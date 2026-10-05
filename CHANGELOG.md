@@ -4,6 +4,10 @@ All notable changes to Wurk are recorded here. Format: [Keep a Changelog](https:
 
 ## [Unreleased]
 
+## [1.8.0] - 2026-10-05
+
+The squeaky-clean audit release: a production-grade pass for teams moving a high-volume Sidekiq Pro/Ent deployment onto Wurk. It fixes every verified bug from nine audit passes (core runtime, Pro/Ent, dashboard, CI), grows the independent parity oracles from 3 files to 14, adds the operational surface a big deployment needs (Prometheus metrics, child liveness, cgroup-aware sizing, topology CI, a cutover playbook and an incident runbook), and removes dead code. Several Wurk-only behaviours changed to match Sidekiq exactly — read **Changed** before upgrading; intentional divergences are recorded in `docs/idea/parity-divergences.md`.
+
 ### Security
 
 - **`mount Sidekiq::Web` / `run Sidekiq::Web` / `Sidekiq::Web.call` enforce `authorization` and read-only mode** like the engine mount (and Sidekiq Enterprise). Extension routes on that mount were served without authorization to anyone who could reach it.
@@ -105,6 +109,7 @@ All notable changes to Wurk are recorded here. Format: [Keep a Changelog](https:
 
 ### Removed
 
+- Default implementations on the internal `Wurk::Limiter::Base` (every shipped limiter type defines its own).
 - `Wurk::Capsule::MODES` (also `Sidekiq::Capsule::MODES`) and `Wurk::Metrics::Histogram::LABELS`: unused constants with no Sidekiq counterpart; dead dashboard components/styles and dummy-app stubs.
 
 ### Tests
@@ -619,7 +624,8 @@ First public (pre-1.0) release. Wurk is a 100% API-compatible drop-in replacemen
 - ActiveJob adapter, `IterableJob`, embedded mode, and a standalone `exe/wurk` runner.
 - Sidekiq client/server middleware contract; third-party ecosystem suites (sidekiq-cron, sidekiq-unique-jobs, sidekiq-scheduler, sidekiq-status, sidekiq-failures, sidekiq-throttled) pass against Wurk.
 
-[Unreleased]: https://github.com/developerz-ai/wurk/compare/v1.7.6...HEAD
+[Unreleased]: https://github.com/developerz-ai/wurk/compare/v1.8.0...HEAD
+[1.8.0]: https://github.com/developerz-ai/wurk/compare/v1.7.6...v1.8.0
 [1.7.6]: https://github.com/developerz-ai/wurk/compare/v1.7.5...v1.7.6
 [1.7.5]: https://github.com/developerz-ai/wurk/compare/v1.7.4...v1.7.5
 [1.7.4]: https://github.com/developerz-ai/wurk/compare/v1.7.3...v1.7.4

@@ -1,7 +1,7 @@
 PATH
   remote: ..
   specs:
-    wurk (1.7.6)
+    wurk (1.8.0)
       base64 (>= 0.1, < 1)
       concurrent-ruby (~> 1.2)
       connection_pool (>= 3.0, < 4)
