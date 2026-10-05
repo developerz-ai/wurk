@@ -1,6 +1,8 @@
 # frozen_string_literal: true
 
 require 'json'
+require_relative '../lua'
+require_relative 'callbacks'
 
 module Wurk
   class Batch
@@ -10,7 +12,7 @@ module Wurk
     #
     # `#data` returns the JSON-friendly hash served by the polling endpoint.
     # `#join` blocks the current thread until `complete?` — test/util only.
-    # `#delete` UNLINKs every key associated with the batch.
+    # `#delete` removes the batch and every reference to it.
     class Status
       JOIN_POLL_INTERVAL = 0.5
 
@@ -47,7 +49,7 @@ module Wurk
       def complete?
         return true if @data['complete'] == '1'
 
-        total.positive? && live_jids_count.zero?
+        complete_with?(live_jids_count)
       end
 
       def failed_jids
@@ -81,8 +83,10 @@ module Wurk
       end
 
       # JSON-serializable snapshot used by the polling middleware / web UI.
-      # Field names are wire-compat with Sidekiq Pro's BatchStatus.
+      # Field names are wire-compat with Sidekiq Pro's BatchStatus. The four
+      # set reads it needs ride one pipeline.
       def data
+        failed, dead, kids, live = set_snapshot
         {
           'bid' => @bid,
           'total' => total,
@@ -92,14 +96,14 @@ module Wurk
           'complete_at' => complete_at,
           'success_at' => success_at,
           'death_at' => death_at,
-          'complete' => complete?,
+          'complete' => complete_with?(live.to_i),
           'invalidated' => invalidated?,
           'description' => description,
           'parent_bid' => parent_bid,
           'tags' => tags,
-          'failed_jids' => failed_jids,
-          'dead_jids' => dead_jids,
-          'child_count' => child_count
+          'failed_jids' => failed,
+          'dead_jids' => dead,
+          'child_count' => kids.to_i
         }
       end
 
@@ -115,15 +119,22 @@ module Wurk
         end
       end
 
-      # Nukes every key for this batch. Dangerous if jobs are still in flight
-      # — they'll succeed/fail without a batch to ack against, callbacks won't
-      # fire, and counts get permanently inconsistent. Caller's problem.
+      # Nukes every key for this batch, its index entries and tag indexes,
+      # and its membership in the parent's `-kids`/`-pkids` — one atomic
+      # script (BATCH_DELETE). Dangerous if jobs are still in flight: they'll
+      # succeed/fail without a batch to ack against and this batch's callbacks
+      # won't fire. The *parent* is not left waiting on a child that no longer
+      # exists: when this was the last thing it waited on, its callbacks fire
+      # here.
       def delete
-        Wurk.redis do |conn|
-          conn.call('UNLINK', *Batch.keys_for(@bid))
-          conn.call('ZREM', 'batches', @bid)
-          conn.call('ZREM', 'dead-batches', @bid)
-        end
+        reload!
+        parent = parent_bid.to_s
+        own    = Batch.keys_for(@bid)
+        pending, live, kids = Wurk.redis do |conn|
+          Wurk::Lua::Loader.eval_cached(conn, :batch_delete, keys: delete_keys(own, parent),
+                                                             argv: [@bid, own.size, parent.empty? ? '0' : '1'])
+        end.map(&:to_i)
+        Callbacks.maybe_fire(parent, pending: pending, live: live, kids: kids) unless parent.empty?
         nil
       end
 
@@ -134,6 +145,29 @@ module Wurk
       end
 
       private
+
+      # [failed jids, dead jids, child count, live count] in one round trip.
+      def set_snapshot
+        Wurk.redis do |conn|
+          conn.pipelined do |pipe|
+            pipe.call('SMEMBERS', "b-#{@bid}-failed")
+            pipe.call('SMEMBERS', "b-#{@bid}-died")
+            pipe.call('SCARD', "b-#{@bid}-kids")
+            pipe.call('SCARD', "b-#{@bid}-jids")
+          end
+        end
+      end
+
+      # KEYS layout BATCH_DELETE expects.
+      def delete_keys(own, parent)
+        keys = [*own, 'batches', 'dead-batches']
+        keys.push("b-#{parent}", "b-#{parent}-jids", "b-#{parent}-pkids", "b-#{parent}-kids") unless parent.empty?
+        keys.concat(tags.map { |t| "tags:#{t}" })
+      end
+
+      def complete_with?(live)
+        @data['complete'] == '1' || (total.positive? && live.zero?)
+      end
 
       def live_jids_count
         Wurk.redis { |conn| conn.call('SCARD', "b-#{@bid}-jids") }.to_i

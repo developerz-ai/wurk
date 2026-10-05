@@ -75,6 +75,9 @@ module Wurk
         # the client clock) and pass the single fully-qualified key. One declared
         # key is safe on both Redis Cluster (no CROSSSLOT) and Dragonfly (no
         # undeclared-key access) — see lua/limiter_bucket_acquire.lua (#91).
+        # The counter expires two intervals out, not after the limiter's `ttl`:
+        # that TTL is for the limiter's metadata, and an epoch counter is dead
+        # the moment its epoch ends — 90 days of them is one key per epoch.
         Wurk::Limiter.redis do |c|
           now = c.call('TIME').first.to_i
           epoch = now / interval_seconds
@@ -82,7 +85,7 @@ module Wurk
           Wurk::Lua::Loader.eval_cached(
             c, :limiter_bucket_acquire,
             keys: ["lmtr-b:#{@name}:#{epoch}"],
-            argv: [@options[:count], used, ttl, remaining]
+            argv: [@options[:count], used, interval_seconds * 2, remaining]
           )
         end
       end

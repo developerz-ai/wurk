@@ -107,13 +107,28 @@ module Wurk
         # Replay-safe: a re-run after a lost reply finds its own jid in the
         # slot and is admitted again, so a pool retry converges on "won"
         # instead of reporting a drop the caller never suffered.
+        prefix = key_prefix_for(job)
         raw = with_pool(pool, idempotent: true) do |conn|
-          Lua::Loader.eval_cached(conn, :throttle_slot, keys: [key_prefix_for(job)], argv: [seconds, jid])
+          key, ttl, ends = slot_for(conn, prefix, seconds)
+          Lua::Loader.eval_cached(conn, :throttle_slot, keys: [key], argv: [ttl, jid, ends])
         end
         Outcome.new(raw[0].to_i == 1, raw[1], raw[2].to_f)
       end
 
       private
+
+      # The live slot key, its EX, and when the slot closes — aligned on Redis's
+      # TIME so every producer agrees on the boundary whatever its own clock
+      # says. Integer arithmetic on microseconds: a Float index could print in
+      # scientific notation, and the key name must not.
+      def slot_for(conn, prefix, seconds)
+        sec, usec = conn.call('TIME')
+        now_us = (sec.to_i * 1_000_000) + usec.to_i
+        index = now_us / (seconds * 1_000_000)
+        ends_at = (index + 1) * seconds
+        ttl = [1, ((ends_at * 1_000_000) - now_us + 999_999) / 1_000_000].max
+        ["#{prefix}:#{index}", ttl, format('%.6f', ends_at)]
+      end
 
       # Whole seconds, because a slot boundary is a wall-clock landmark every
       # producer has to land on identically and `EX` cannot express a fraction

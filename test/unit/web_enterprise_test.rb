@@ -2,6 +2,14 @@
 
 require_relative '../test_helper'
 
+class WebEnterpriseOptionsJob
+  include Wurk::Worker
+
+  sidekiq_options queue: 'web-ent-low', retry: 5, unique_for: 300
+
+  def perform(*); end
+end
+
 class WebEnterpriseTest < Wurk::Test::UnitCase
   parallelize_me!
 
@@ -179,6 +187,26 @@ class WebEnterpriseTest < Wurk::Test::UnitCase
     assert_equal @class_name, Wurk.load_json(payload)['class']
   end
 
+  # Enqueue Now pushes what a tick pushes (ent §2.2): the worker's own
+  # sidekiq_options apply when the loop does not override them.
+  def test_periodic_enqueue_now_applies_the_worker_sidekiq_options
+    Wurk.redis do |c|
+      c.call('SADD', Wurk::Cron::PERIODIC_KEY, @lid)
+      c.call('HSET', "#{Wurk::Cron::LOOP_PREFIX}#{@lid}", 'schedule', '* * * * *',
+             'klass', WebEnterpriseOptionsJob.name, 'options', JSON.dump('args' => [1]), 'tz', '', 'paused', '0')
+    end
+
+    jid = Wurk::Web::Enterprise::Periodic.enqueue_now(@lid)
+    raw = Wurk.redis { |c| c.call('LRANGE', 'queue:web-ent-low', 0, -1) }.find { |j| j.include?(jid) }
+
+    refute_nil raw, "the job lands in the worker's queue"
+    job = Wurk.load_json(raw)
+
+    assert_equal [5, 300, [1]], job.values_at('retry', 'unique_for', 'args')
+  ensure
+    Wurk.redis { |c| c.call('LREM', 'queue:web-ent-low', 0, raw) } if raw
+  end
+
   def test_periodic_enqueue_now_unknown_returns_nil
     assert_nil Wurk::Web::Enterprise::Periodic.enqueue_now('no-such-lid')
   end
@@ -264,5 +292,40 @@ class WebEnterpriseTest < Wurk::Test::UnitCase
         'paused', paused
       )
     end
+  end
+end
+
+# W16: a read-only dashboard must not write, and listing limiters is a GET.
+# Not parallelize_me!: flips the process-global Wurk::Web.config.
+class WebEnterpriseReadOnlyTest < Wurk::Test::UnitCase
+  def setup
+    super
+    @live = "lmt-ro-#{Process.pid}-#{object_id}"
+    @ghost = "#{@live}-gone"
+    Wurk.redis do |c|
+      c.call('SADD', Wurk::Limiter::LIST_KEY, @live, @ghost)
+      c.call('HSET', "lmtr:#{@live}", 'type', 'concurrent', 'fingerprint', 'fp', 'options', '{"limit":5}')
+    end
+    @was = Wurk::Web.config.read_only?
+    Wurk::Web.config.read_only = true
+  end
+
+  def teardown
+    Wurk::Web.config.read_only = @was
+    Wurk.redis do |c|
+      c.call('SREM', Wurk::Limiter::LIST_KEY, @live, @ghost)
+      c.call('DEL', "lmtr:#{@live}")
+    end
+  ensure
+    super
+  end
+
+  def test_listing_in_read_only_mode_hides_dead_names_without_removing_them
+    names = Wurk::Web::Enterprise::Limits.list
+
+    assert_includes names, @live
+    refute_includes names, @ghost, 'a dead name is still not rendered'
+    assert_equal 1, Wurk.redis { |c| c.call('SISMEMBER', Wurk::Limiter::LIST_KEY, @ghost) }.to_i,
+                 'read-only must not SREM'
   end
 end

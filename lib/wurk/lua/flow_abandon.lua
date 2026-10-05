@@ -24,9 +24,13 @@
 -- KEYS[1] = flow:<fid>
 -- KEYS[2] = batches       index of every batch
 -- KEYS[3] = dead-batches  index of every batch holding a dead job
+-- KEYS[4..] = everything released: each node record, each node batch and its
+--             subkeys, the dead-node set. Resolved by the caller from the
+--             graph (node bids never change once created) so the script only
+--             touches declared keys — Redis Cluster and Dragonfly both refuse a
+--             key built inside Lua.
 -- ARGV[1] = now, epoch seconds — the flow clock, as `created_at` was written
--- ARGV[2..] = the batch key suffixes (Wurk::Batch::KEY_SUFFIXES), so the one
---             list of what a batch is made of stays in Ruby
+-- ARGV[2..] = the node bids, for the two batch indexes
 -- Returns the number of nodes released, or -1 when the flow was already
 -- terminal or was never there, in which case nothing was written.
 local flow_key, batches, dead_batches = KEYS[1], KEYS[2], KEYS[3]
@@ -37,29 +41,20 @@ if state ~= 'running' and state ~= 'failed' then
   return -1
 end
 
-local total = tonumber(redis.call('HGET', flow_key, 'total'))
-for i = 0, total - 1 do
-  -- '%d' rather than letting Lua render the number: creation spelled these key
-  -- names from an integer, and Lua's default float notation does not.
-  local node_key = flow_key .. ':' .. string.format('%d', i)
-  local bid = redis.call('HGET', node_key, 'bid')
-  if bid then
-    local base = 'b-' .. bid
-    local keys = { base }
-    for s = 2, #ARGV do
-      keys[#keys + 1] = base .. '-' .. ARGV[s]
-    end
-    redis.call('UNLINK', unpack(keys))
-    redis.call('ZREM', batches, bid)
-    redis.call('ZREM', dead_batches, bid)
-  end
-  redis.call('UNLINK', node_key)
+-- Sliced so a 1,000-node graph (~10 keys a node) never asks unpack for more
+-- values than the Lua stack holds.
+local SLICE = 500
+for from = 4, #KEYS, SLICE do
+  redis.call('UNLINK', unpack(KEYS, from, math.min(from + SLICE - 1, #KEYS)))
 end
-redis.call('UNLINK', flow_key .. ':dead')
+for i = 2, #ARGV do
+  redis.call('ZREM', batches, ARGV[i])
+  redis.call('ZREM', dead_batches, ARGV[i])
+end
 
 -- `failed_at` is left alone where there is one: when the flow broke is still
 -- true, and still the more useful of the two timestamps to an operator asking
 -- why anyone abandoned it.
 redis.call('HSET', flow_key, 'state', 'abandoned', 'abandoned_at', now)
 
-return total
+return tonumber(redis.call('HGET', flow_key, 'total'))

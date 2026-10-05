@@ -1,45 +1,73 @@
 # frozen_string_literal: true
 
 require 'json'
+require_relative '../lua'
 
 module Wurk
   class Batch
+    # Raised by `Callbacks.enqueue_callbacks` once every callback for the event
+    # has been attempted and at least one could not be enqueued, so the caller
+    # leaves the event's dedup marker unwritten and the next fire retries it.
+    class CallbackEnqueueError < StandardError; end
+
     # Fires batch callbacks (`:success`, `:complete`, `:death`) by enqueuing
-    # them as ordinary jobs on the batch's `callback_queue`. Dedup is via
-    # b-<bid>-notify so the same callback can't be enqueued twice even
-    # if multiple workers race to ack the final job.
+    # them as ordinary jobs on the batch's `callback_queue`.
     #
     # Callback wrapper job: Wurk::Batch::CallbackJob — given a target spec
     # ("Klass" or "Klass#method") and options hash, it instantiates and
     # invokes on_<event> (or the named method) with the Status snapshot.
+    #
+    # A child batch's `:complete` and `:success` callback jobs are enqueued
+    # *into its parent batch* (their payload carries the parent's `bid`), so
+    # they are live jids of the parent: the parent cannot drain until they
+    # have run. That is what makes the spec §2.9 step workflow work —
+    # `step1_done` reopens the parent and adds `step2` before the parent can
+    # fire. A callback job that fails counts against the parent like any of
+    # its jobs (a death suppresses the parent's `:success`). `:death`
+    # callbacks stay outside: they fire while the child is still running, and
+    # a notification must not hold or poison the parent.
     module Callbacks
       module_function
 
-      # Called from the server middleware after BATCH_ACK_SUCCESS (and from
-      # DeathHandler when a death drains the last live jid). Fires `:complete`
-      # when live jids hit 0; fires `:success` when pending also hits 0 and
-      # there have been no deaths.
+      # In-process re-drive for the fire and ack paths. Nothing else re-drives
+      # a fire once the job that drained the batch has acked, so a transient
+      # Redis error there would otherwise strand the callbacks for good.
+      REDRIVE_ATTEMPTS = 3
+      REDRIVE_BACKOFF = 0.05
+
+      # Runs on the post-state of a batch script that moved a member out of the
+      # live jids or pending-children set (see the gate note heading
+      # lua/batch_ack_success.lua). Fires `:complete` once both sets are empty, and
+      # `:success` when pending is also 0 and nothing in the subtree is dead;
+      # then hands the drain to the parent.
       #
-      # Both fires are additionally gated on `b-<bid>-pkids` being empty —
-      # children whose own subtree hasn't finished yet (#209). Spec §2.4:
-      # child `:complete`/`:success` fire before the parent's, so when the
-      # parent's *own* last job acks while a child batch is still running,
-      # nothing fires here; the last child's propagate_to_parent re-invokes
-      # this and fires then. The SREM in pkids_drained? happens before that
-      # re-invocation, so at most one of the racing paths reaches a fire and
-      # the callback markers absorb the rest (see `fire_complete` for the one
-      # window that can still duplicate).
-      def maybe_fire(bid, pending:, live:)
-        return unless live.zero?
-        return unless kids_finished?(bid)
+      # Spec §2.4: child `:complete`/`:success` fire before the parent's, so a
+      # parent whose own jobs are done while a child batch is still running
+      # waits here (kids > 0); the child's `propagate_to_parent` re-enters with
+      # the parent's fresh state when it finishes.
+      def maybe_fire(bid, pending:, live:, kids:)
+        return unless live.zero? && kids.zero?
 
         fire_complete(bid)
         fire_success(bid) if pending.zero? && !subtree_dead?(bid)
         propagate_to_parent(bid)
       end
 
-      def kids_finished?(bid)
-        Wurk.redis { |conn| conn.call('SCARD', "b-#{bid}-pkids") }.to_i.zero?
+      # Yields the attempt number (0-based) and retries a StandardError up to
+      # REDRIVE_ATTEMPTS times in total, re-raising the last one. Every block
+      # handed to it is idempotent: the ack scripts are SREM/SADD-guarded and
+      # the fires are marker-guarded.
+      def retrying(attempts: REDRIVE_ATTEMPTS)
+        attempt = 0
+        begin
+          yield attempt
+        rescue StandardError
+          attempt += 1
+          raise if attempt >= attempts
+
+          sleep(REDRIVE_BACKOFF * attempt)
+          retry
+        end
       end
 
       # Fired from Wurk::Batch::DeathHandler whenever a death makes the died
@@ -58,13 +86,20 @@ module Wurk
       # dashboard and `subtree_dead?` all still see a dead batch. `:complete`
       # and `:success` have no such fallback — the callback is their whole
       # signal — and this claim additionally gates `cascade_death`, which
-      # would otherwise re-walk the ancestor chain on every re-invocation.
+      # would otherwise re-walk the ancestor chain on every re-invocation. An
+      # enqueue that *raises* is different from a crash: the claim is handed
+      # back so the caller's re-drive fires `:death` again.
       def fire_death(bid)
         record_event(bid, 'death_at')
         index_dead(bid)
         return unless dedup_set(bid, 'death')
 
-        enqueue_callbacks(bid, 'death')
+        begin
+          enqueue_callbacks(bid, 'death')
+        rescue CallbackEnqueueError
+          Wurk.redis { |conn| conn.call('DEL', "b-#{bid}-death") }
+          raise
+        end
         cascade_death(bid)
       end
 
@@ -95,22 +130,19 @@ module Wurk
       end
 
       # `:complete` and `:success` mark their dedup key *after* the enqueue,
-      # never before (F16). Nothing re-drives a fire once the acking job's
-      # BATCH_ACK_SUCCESS has SREM'd its jid — that job's retry gets
-      # `pending == -1` and returns before maybe_fire — so a claim-then-enqueue
-      # ordering turns a crash in between into callbacks that are never
-      # enqueued by anyone, ever. Enqueuing first makes the durable side effect
-      # happen before the marker that suppresses it.
+      # never before (F16): a claim-then-enqueue ordering turns a crash in
+      # between into callbacks nobody ever enqueues. Enqueuing first makes the
+      # durable side effect happen before the marker that suppresses it, and an
+      # enqueue that raised leaves the marker unwritten so the re-drive (the
+      # caller's `retrying`, or a reclaimed re-run of the draining job) fires
+      # the event again.
       #
       # The accepted direction is a duplicate over a lost callback: callback
       # jobs retry like any other job and must already be idempotent (spec
       # §2.4, §12 "Callback retries"), so firing one twice is a cost the app
       # is required to absorb, while losing one silently strands the batch.
-      #
-      # `dedup_marked?` still collapses every *sequential* re-invocation — a
-      # reclaimed child re-running propagate_to_parent, a second DeathHandler
-      # pass — so the duplicate window is only two genuinely concurrent acks
-      # interleaving between each other's check and mark.
+      # Concurrent duplicates are confined to re-drives: the fire gate admits
+      # exactly one caller per drain transition.
       #
       # `record_event` stays ahead of the enqueue: the callback job reads a
       # Status snapshot and must see `complete_at`/`success_at` already set.
@@ -140,11 +172,8 @@ module Wurk
       # full success. `created_at` shares the CLOCK_REALTIME epoch we record it
       # with. No-op without a dogstatsd client.
       #
-      # Strictly best-effort: this runs on the acking job's thread ahead of the
-      # enqueue, and that ack already removed the jid, so a raise here (e.g. a
-      # Redis hiccup on the HGET) would abort `fire_success` with nothing left
-      # to re-drive it — the success callbacks and linger would be stranded for
-      # good. Swallow and log instead.
+      # Strictly best-effort: a raise here would abort `fire_success` ahead of
+      # the enqueue for the sake of a metric. Swallow and log instead.
       def emit_duration_metric(bid)
         created = Wurk.redis { |conn| conn.call('HGET', "b-#{bid}", 'created_at') }
         return if created.nil? || created.to_s.empty?
@@ -163,14 +192,13 @@ module Wurk
         raw     = Wurk.redis { |conn| conn.call('HGET', "b-#{bid}", 'linger') }
         seconds = raw.nil? || raw.to_s.empty? ? Batch::POST_SUCCESS_EXPIRY_SECONDS : raw.to_i
         Wurk.redis do |conn|
-          Batch.keys_for(bid).each { |key| conn.call('EXPIRE', key, seconds) }
+          conn.pipelined { |pipe| Batch.keys_for(bid).each { |key| pipe.call('EXPIRE', key, seconds) } }
         end
       end
 
       # True once `b-<bid>-<event>` exists, i.e. an enqueue pass for `event`
       # has completed. The read-side half of the enqueue-then-mark ordering in
-      # `fire_complete`/`fire_success`; `fire_death` needs no equivalent
-      # because its `dedup_set` still doubles as the claim.
+      # `fire_complete`/`fire_success`.
       def dedup_marked?(bid, event)
         Wurk.redis { |conn| conn.call('EXISTS', "b-#{bid}-#{event}") }.to_i == 1
       end
@@ -190,17 +218,17 @@ module Wurk
         end
       end
 
-      # The HSETs resurrect the hash when a callback fires for a batch whose keys
-      # already expired (a child batch outliving its parent's 30d window), so the
-      # write is followed by an NX stamp — without it the resurrected hash would
-      # have no clock at all. NX leaves a live batch's expiry, and the shorter
-      # post-success `linger` window, untouched.
+      # The HSET resurrects the hash when a callback fires for a batch whose keys
+      # already expired, so the write is followed by an NX stamp — without it the
+      # resurrected hash would have no clock at all. NX leaves a live batch's
+      # expiry, and the shorter post-success `linger` window, untouched.
       def record_event(bid, field)
         now = ::Process.clock_gettime(::Process::CLOCK_REALTIME)
         Wurk.redis do |conn|
-          conn.call('HSET', "b-#{bid}", field, now.to_s)
-          conn.call('HSET', "b-#{bid}", field.to_s.sub('_at', ''), '1')
-          conn.call('EXPIRE', "b-#{bid}", Batch::DEFAULT_EXPIRY_SECONDS, 'NX')
+          conn.pipelined do |pipe|
+            pipe.call('HSET', "b-#{bid}", field, now.to_s, field.delete_suffix('_at'), '1')
+            pipe.call('EXPIRE', "b-#{bid}", Batch::DEFAULT_EXPIRY_SECONDS, 'NX')
+          end
         end
       end
 
@@ -233,13 +261,13 @@ module Wurk
       # last dead job is manually retried back to success, the descendant
       # clears its OWN death mark (#212, in BATCH_PUSH) — but every ancestor
       # was marked by the death *cascade*, not by a jid in its own died set,
-      # so nothing here ever cleared them and the ancestor's `:success`
-      # stayed suppressed forever. Re-evaluate this batch: drop its durable
-      # death mark and `dead-batches` membership once its own died set is
-      # empty AND no child still carries a death mark. The `b-<bid>-death`
-      # notify dedup key is deliberately left intact, so a later re-death
-      # re-marks the batch (fire_death restores the flag before its own
-      # dedup guard) without ever re-enqueuing `:death`.
+      # so nothing there ever clears them. Re-evaluated whenever a child
+      # drains (propagate_to_parent): drop the durable death mark and
+      # `dead-batches` membership once the batch's own died set is empty AND
+      # no child still carries a death mark. The `b-<bid>-death` notify dedup
+      # key is deliberately left intact, so a later re-death re-marks the batch
+      # (fire_death restores the flag before its own dedup guard) without ever
+      # re-enqueuing `:death`.
       def clear_death_on_recovery(bid)
         return unless death_fired?(bid)
         return if own_died_remaining?(bid)
@@ -261,26 +289,46 @@ module Wurk
       end
 
       # Per-callback rescue: one bad spec or a transient enqueue failure must
-      # not strand the batch with the remaining callbacks for this event
-      # un-enqueued. Log and move on so every other callback still fires.
+      # not keep the remaining callbacks for this event from being attempted.
+      # Each failure reaches the error handlers; once all were attempted, any
+      # failure raises so the caller does not write the event's marker.
       def enqueue_callbacks(bid, event)
-        callbacks, queue = callback_specs_for(bid)
+        failed = callback_items(bid, event).count { |item| !push_callback(bid, event, item) }
+        return if failed.zero?
 
-        callbacks.each do |(cb_event, target, options)|
+        raise CallbackEnqueueError, "batch #{bid}: #{failed} #{event} callback(s) failed to enqueue"
+      end
+
+      def callback_items(bid, event)
+        callbacks, queue, parent_bid = callback_specs_for(bid)
+        parent_bid = nil if event == 'death'
+        callbacks.filter_map do |(cb_event, target, options)|
           next unless cb_event == event
 
-          enqueue_callback_job(bid, target, event, options, queue)
-        rescue StandardError => e
-          Wurk.logger.warn("batch #{bid}: #{event} callback #{target.inspect} enqueue failed: #{e.class}: #{e.message}")
+          item = callback_item(bid, target, event, options, queue)
+          item['bid'] = parent_bid if parent_bid
+          item
         end
       end
 
+      # True when the callback job was enqueued.
+      def push_callback(bid, event, item)
+        Batch.with_thread_batch(nil, nil) { Wurk::Client.push(item) }
+        true
+      rescue StandardError => e
+        Wurk.configuration.handle_exception(
+          e, { context: "batch #{bid}: #{event} callback #{item['args'][1].inspect} enqueue failed", bid: bid }
+        )
+        false
+      end
+
       def callback_specs_for(bid)
-        raw = Wurk.redis { |conn| conn.call('HMGET', "b-#{bid}", 'callbacks', 'callback_queue') }
-        callbacks_json, queue = raw
+        callbacks_json, queue, parent_bid = Wurk.redis do |conn|
+          conn.call('HMGET', "b-#{bid}", 'callbacks', 'callback_queue', 'parent_bid')
+        end
         queue = 'default' if queue.nil? || queue.empty?
-        parsed = parse_callbacks(callbacks_json)
-        [parsed, queue]
+        parent_bid = nil if parent_bid.nil? || parent_bid.empty?
+        [parse_callbacks(callbacks_json), queue, parent_bid]
       end
 
       def parse_callbacks(raw)
@@ -291,46 +339,49 @@ module Wurk
         []
       end
 
-      def enqueue_callback_job(bid, target, event, options, queue)
-        Wurk::Client.push(
+      # Pushed (by push_callback) with the batch thread-locals cleared: a
+      # fire can run on a thread that is inside some other batch's `#jobs`
+      # block (a hold released at the end of a nested block), and the client
+      # middleware would otherwise stamp that batch's bid over the parent bid
+      # — or the buffer would swallow the push until that block exits.
+      def callback_item(bid, target, event, options, queue)
+        {
           'class' => 'Wurk::Batch::CallbackJob',
           'args' => [bid, target, event, options],
           'queue' => queue,
           'retry' => true
-        )
+        }
       end
 
-      # When a child batch finishes (its live jids hit 0 — by success or
-      # death), remove it from the parent's pkids set so the parent's own
-      # callbacks wait on the full subtree. When the parent's pkids hits 0,
-      # re-run the parent's maybe_fire: if its own counts are already at
-      # zero (the parent-acks-first race), this is what finally fires it.
+      # When a child batch drains (by success or death), drop it from the
+      # parent's pending children and re-evaluate the parent with the state
+      # BATCH_KID_DONE read atomically alongside the SREM. A re-run of the
+      # child (a reclaimed job, a re-drive) removes nothing but still reports
+      # the parent's state, so a parent fire lost to a crash is re-driven too.
+      #
+      # A recovered child may have lifted the last death from the parent's
+      # subtree — clear the parent's cascaded mark first, so the parent's
+      # `:success` can fire whenever it next drains (here, or when this
+      # child's callback jobs ack into it). Harmless on the death path: the
+      # dying child still carries its mark, so any_child_dead? keeps the
+      # parent dead.
       def propagate_to_parent(bid)
         parent_bid = parent_bid_for(bid)
         return if parent_bid.nil? || parent_bid.empty?
-        return unless pkids_drained?(parent_bid, bid)
 
-        # A recovered child may have lifted the last death from the parent's
-        # subtree — clear the parent's cascaded mark before its gate runs, so
-        # `:success` can fire. Harmless on the death path: the dying child
-        # still carries its mark, so any_child_dead? keeps the parent dead.
         clear_death_on_recovery(parent_bid)
-        maybe_fire(parent_bid, pending: pending_for(parent_bid), live: live_for(parent_bid))
+        pending, live, kids = Wurk.redis do |conn|
+          Wurk::Lua::Loader.eval_cached(
+            conn, :batch_kid_done,
+            keys: ["b-#{parent_bid}", "b-#{parent_bid}-jids", "b-#{parent_bid}-pkids"], argv: [bid]
+          )
+        end
+        maybe_fire(parent_bid, pending: pending.to_i, live: live.to_i, kids: kids.to_i)
       end
 
       def parent_bid_for(bid)
         Wurk.redis { |conn| conn.call('HGET', "b-#{bid}", 'parent_bid') }
       end
-
-      def pkids_drained?(parent_bid, child_bid)
-        Wurk.redis do |conn|
-          conn.call('SREM', "b-#{parent_bid}-pkids", child_bid)
-          conn.call('SCARD', "b-#{parent_bid}-pkids").to_i.zero?
-        end
-      end
-
-      def pending_for(bid) = Wurk.redis { |conn| conn.call('HGET', "b-#{bid}", 'pending') }.to_i
-      def live_for(bid)    = Wurk.redis { |conn| conn.call('SCARD', "b-#{bid}-jids") }.to_i
     end
   end
 end

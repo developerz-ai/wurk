@@ -427,6 +427,19 @@ class CronTest < Wurk::Test::UnitCase
     assert_includes found, b.lid
   end
 
+  # E28: a loop whose stored options no longer parse is skipped, not allowed
+  # to end the iteration for every loop after it.
+  def test_loop_set_skips_a_loop_whose_hash_does_not_parse
+    broken = register_loop("CronTest::Corrupt#{@suffix}", queue: "cron-bad-#{@suffix}")
+    healthy = register_loop("CronTest::Fine#{@suffix}", queue: "cron-ok-#{@suffix}")
+    Wurk.redis { |c| c.call('HSET', "#{Wurk::Cron::LOOP_PREFIX}#{broken.lid}", 'options', '{not json') }
+
+    lids = Wurk::Cron::LoopSet.new.map(&:lid)
+
+    assert_includes lids, healthy.lid
+    refute_includes lids, broken.lid
+  end
+
   def test_loop_set_size_matches_registered_count
     mgr = Wurk::Cron::Manager.new
     lp = mgr.register('* * * * *', "CronTest::Sized#{@suffix}")
@@ -1251,33 +1264,26 @@ class CronTest < Wurk::Test::UnitCase
     assert_equal 0, len, 'a loop whose next fire is in the future must not enqueue'
   end
 
-  # 526 else: drift beyond MISSED_TICK_THRESHOLD → warn_missed_tick logs. We
-  # capture the logger output and assert the missed-tick warning is emitted.
-  def test_warn_missed_tick_logs_when_drift_exceeds_threshold
+  # E21: a slot older than the missed-tick threshold is advanced past with a
+  # warning instead of fired (ent §2.6, no backfill).
+  def test_skip_missed_logs_the_dropped_occurrence
     cfg = Wurk::Configuration.new
     io = StringIO.new
     cfg.logger = Logger.new(io)
     poller = Wurk::Cron::Poller.new(cfg)
     lp = Wurk::Cron::Loop.new(schedule: '0 4 * * *', klass: 'CronTest::Missed')
     now = ::Time.now.to_i
-    expected = now - (Wurk::Cron::MISSED_TICK_THRESHOLD + 60)
 
-    poller.send(:warn_missed_tick, lp, expected, now)
-
-    assert_match(/missed tick/, io.string)
+    assert_nil poller.send(:skip_missed, lp, now - (Wurk::Cron::MISSED_TICK_THRESHOLD + 60), now)
+    assert_match(/missed tick.*not backfilled/, io.string)
   end
 
-  def test_warn_missed_tick_silent_within_threshold
+  def test_missed_threshold_never_drops_below_a_tick_and_a_half
     cfg = Wurk::Configuration.new
-    io = StringIO.new
-    cfg.logger = Logger.new(io)
-    poller = Wurk::Cron::Poller.new(cfg)
-    lp = Wurk::Cron::Loop.new(schedule: '0 4 * * *', klass: 'CronTest::OnTime')
-    now = ::Time.now.to_i
+    cfg[:cron_tick_interval] = 300
 
-    poller.send(:warn_missed_tick, lp, now, now)
-
-    refute_match(/missed tick/, io.string)
+    assert_equal 450, Wurk::Cron::Poller.new(cfg).send(:missed_threshold)
+    assert_equal Wurk::Cron::MISSED_TICK_THRESHOLD, Wurk::Cron::Poller.new(Wurk::Configuration.new).send(:missed_threshold)
   end
 
   # 548 else: 'nf' is present and non-empty → read_fire_marks returns its

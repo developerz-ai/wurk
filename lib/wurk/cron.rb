@@ -271,7 +271,11 @@ module Wurk
     class Loop
       attr_reader :lid, :schedule, :klass, :options, :tz
 
-      def initialize(schedule:, klass:, options: {}, tz: nil, lid: nil)
+      # `paused:` is the loop HASH's `paused` field when read back from Redis —
+      # the runtime owns it (Web UI pause/unpause, ent §2.4). A code-declared
+      # `paused:` option only seeds that field at first registration, so it
+      # must not keep the loop paused once the field says otherwise.
+      def initialize(schedule:, klass:, options: {}, tz: nil, lid: nil, paused: nil)
         raise ArgumentError, 'klass must be a String' unless klass.is_a?(String) && !klass.empty?
 
         @schedule = schedule
@@ -280,6 +284,7 @@ module Wurk
         @tz = tz
         @parser = Parser.new(schedule)
         @lid = lid || Cron.lid(schedule, klass, @options)
+        @paused = paused.nil? ? [true, '1', 1].include?(@options['paused']) : paused
       end
 
       def parser
@@ -287,19 +292,51 @@ module Wurk
       end
 
       def paused?
-        @options['paused'].to_s == '1' || @options['paused'] == true
+        @paused
       end
 
+      # The queue a tick lands in: the loop's own `queue:`, else the worker's
+      # `sidekiq_options` queue, as `perform_async` would pick (ent §2.2).
       def queue
-        @options['queue'] || 'default'
+        @options['queue'] || worker_option('queue') || 'default'
       end
 
+      # `args:` is the static argument list splatted into perform. A bare value
+      # (a Hash most often) is one argument — `Array({ 'a' => 1 })` would turn
+      # it into `[['a', 1]]`.
       def args
-        Array(@options['args'])
+        value = @options['args']
+        return [] if value.nil?
+
+        value.is_a?(::Array) ? value : [value]
       end
 
+      # The loop's `retry:`, else the worker's, else Sidekiq's default `true`.
       def retry_value
-        @options.fetch('retry', true)
+        return @options['retry'] if @options.key?('retry')
+
+        worker_retry = worker_option('retry')
+        worker_retry.nil? || worker_retry
+      end
+
+      # The payload one tick pushes. Ent §2.2: a tick is `klass.perform_async(*args)`
+      # with the loop's `retry` / `queue` laid over the worker's own options, so
+      # the resolved class goes to the client — JobUtil#normalize_item merges its
+      # `get_sidekiq_options` (unique_for, encrypt, expires_in, …) only for a
+      # Class. Only the overrides the loop actually declares are set.
+      def job_item
+        worker = worker_class
+        item = { 'class' => worker.respond_to?(:get_sidekiq_options) ? worker : @klass, 'args' => args }
+        item['queue'] = @options['queue'] if @options.key?('queue')
+        item['retry'] = @options['retry'] if @options.key?('retry')
+        item
+      end
+
+      # The worker constant, or nil when it is not loadable in this process.
+      def worker_class
+        @klass.split('::').inject(::Object) { |mod, name| mod.const_get(name) }
+      rescue ::NameError
+        nil
       end
 
       def history
@@ -379,12 +416,17 @@ module Wurk
       def self.from_redis(lid, hash)
         h = hash.is_a?(Array) ? hash.each_slice(2).to_h : hash
         opts = h['options'] ? JSON.parse(h['options']) : {}
-        opts['paused'] = '1' if h['paused'] == '1'
         tz = h['tz'].to_s.empty? ? nil : h['tz']
-        new(lid: lid, schedule: h['schedule'], klass: h['klass'], options: opts, tz: tz)
+        new(lid: lid, schedule: h['schedule'], klass: h['klass'], options: opts, tz: tz,
+            paused: h['paused'] == '1')
       end
 
       private
+
+      def worker_option(key)
+        worker = worker_class
+        worker.get_sidekiq_options[key] if worker.respond_to?(:get_sidekiq_options)
+      end
 
       def stringify_options(opts)
         opts.transform_keys(&:to_s)
@@ -448,17 +490,22 @@ module Wurk
         @config = config
       end
 
+      # Loops are read up front and yielded with no connection held, so the
+      # caller's own Redis work (the poller's claim + push) never nests a second
+      # checkout. A loop whose stored hash no longer parses is skipped with a
+      # warning: one corrupt record must not hide every loop after it.
       def each
         return enum_for(:each) unless block_given?
 
-        redis do |c|
-          lids = c.call('SMEMBERS', PERIODIC_KEY)
-          lids.each do |lid|
+        rows = redis do |c|
+          c.call('SMEMBERS', PERIODIC_KEY).filter_map do |lid|
             h = c.call('HGETALL', "#{LOOP_PREFIX}#{lid}")
-            next if h.nil? || h.empty?
-
-            yield Loop.from_redis(lid, h)
+            [lid, h] unless h.nil? || h.empty?
           end
+        end
+        rows.each do |lid, h|
+          loop_obj = parse(lid, h)
+          yield loop_obj if loop_obj
         end
       end
 
@@ -477,6 +524,13 @@ module Wurk
       end
 
       private
+
+      def parse(lid, hash)
+        Loop.from_redis(lid, hash)
+      rescue JSON::ParserError, ArgumentError => e
+        Wurk.logger&.warn("[cron] skipping unreadable loop lid=#{lid}: #{e.class}: #{e.message}")
+        nil
+      end
 
       def redis(idempotent: false, &)
         @config ? @config.redis(idempotent:, &) : Wurk.redis(idempotent:, &)
@@ -513,9 +567,9 @@ module Wurk
     end
 
     # Once-per-minute tick driver. Only the cluster leader iterates the LoopSet
-    # and enqueues; non-leaders return early. Missed-tick warning when
-    # wall-clock has drifted more than `MISSED_TICK_THRESHOLD` seconds past the
-    # expected fire.
+    # and enqueues; non-leaders return early. A slot that wall-clock has passed
+    # by more than `MISSED_TICK_THRESHOLD` seconds is skipped with a warning,
+    # never backfilled.
     class Poller
       include Component
 
@@ -556,10 +610,18 @@ module Wurk
       # `dear-leader`): non-leaders return early and never iterate the LoopSet.
       # The Launcher owns the lock's renewal — the poller no longer runs (or
       # expires) its own.
+      #
+      # Rescued per loop: the LoopSet order is stable, so one loop that raises
+      # on every tick (a push its middleware refuses, a class that no longer
+      # loads) would otherwise starve every loop after it, forever.
       def tick
         return unless leader?
 
-        LoopSet.new(@config).each { |lp| enqueue_if_due(lp) }
+        LoopSet.new(@config).each do |lp|
+          enqueue_if_due(lp)
+        rescue StandardError => e
+          handle_exception(e, { context: 'cron-poller', lid: lp.lid, klass: lp.klass })
+        end
       rescue StandardError => e
         handle_exception(e, { context: 'cron-poller' })
       end
@@ -568,6 +630,10 @@ module Wurk
       # cached read, so a second poller can reach the same due loop for a few
       # seconds after a handover. Losing the CAS means another tick owns this
       # slot — enqueue nothing.
+      #
+      # A slot older than the missed-tick threshold is not backfilled (ent §2.6:
+      # no backfill on restart, missed ticks across a leader gap are dropped):
+      # the marks still advance past it, but nothing is pushed.
       def enqueue_if_due(loop_obj)
         return if loop_obj.paused?
 
@@ -577,8 +643,8 @@ module Wurk
 
         future = loop_obj.next_fire_after(slot, now)
         return unless claim_fire?(loop_obj, mark, now, future)
+        return skip_missed(loop_obj, slot, now) if now - slot > missed_threshold
 
-        warn_missed_tick(loop_obj, slot, now)
         jid = enqueue_claimed!(loop_obj)
         record_history(loop_obj, jid, now)
         jid
@@ -609,13 +675,18 @@ module Wurk
         [next_fire, mark || next_fire.to_s]
       end
 
-      def warn_missed_tick(loop_obj, expected, now)
-        return if now - expected <= MISSED_TICK_THRESHOLD
+      # Never tighter than a tick and a half: a raised tick interval must not
+      # turn every on-time fire into a "missed" one.
+      def missed_threshold
+        [MISSED_TICK_THRESHOLD, @tick_interval * 1.5].max
+      end
 
+      def skip_missed(loop_obj, expected, now)
         logger.warn(
           "[cron] missed tick lid=#{loop_obj.lid} klass=#{loop_obj.klass} " \
-          "expected_at=#{expected} fired_at=#{now} drift=#{now - expected}s"
+          "expected_at=#{expected} now=#{now} drift=#{now - expected}s — skipped, not backfilled"
         )
+        nil
       end
 
       # Compare-and-swap the fire marks: only the tick still looking at the
@@ -647,30 +718,22 @@ module Wurk
       end
 
       def enqueue!(loop_obj)
-        aj = active_job_class(loop_obj.klass)
+        aj = active_job_class(loop_obj.worker_class)
         return enqueue_active_job(aj, loop_obj) if aj
 
-        @client.push(
-          'class' => loop_obj.klass,
-          'args' => loop_obj.args,
-          'queue' => loop_obj.queue,
-          'retry' => loop_obj.retry_value
-        )
+        @client.push(loop_obj.job_item)
       end
 
-      # Resolve a loop's class name to an ActiveJob::Base subclass, or nil when
+      # The loop's class when it is an ActiveJob::Base subclass, or nil when
       # ActiveJob isn't loaded (standalone wurk) or the class isn't one.
       # sidekiq-cron parity: a cron loop targeting an ActiveJob must enqueue
       # through the AJ adapter so the job runs via Sidekiq::ActiveJob::Wrapper
       # with full callbacks/serialization — a bare `client.push('class' => …)`
       # would make the processor call `Klass.new.perform`, skipping all of AJ.
-      def active_job_class(name)
+      def active_job_class(const)
         return nil unless defined?(::ActiveJob::Base)
 
-        const = name.split('::').inject(::Object) { |mod, c| mod.const_get(c) }
         const if const.is_a?(::Class) && const < ::ActiveJob::Base
-      rescue ::NameError
-        nil
       end
 
       # Enqueue via the AJ adapter (→ wurk). Only override the queue when the
@@ -679,7 +742,7 @@ module Wurk
       # doesn't apply here. Returns the wurk jid (provider_job_id) so the fire
       # history records it; nil if a before_enqueue callback halted the push.
       def enqueue_active_job(klass, loop_obj)
-        target = loop_obj.queue == 'default' ? klass : klass.set(queue: loop_obj.queue)
+        target = loop_obj.options.key?('queue') ? klass.set(queue: loop_obj.options['queue']) : klass
         job = target.perform_later(*loop_obj.args)
         job.provider_job_id if job.respond_to?(:provider_job_id)
       end

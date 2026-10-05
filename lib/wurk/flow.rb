@@ -179,13 +179,35 @@ module Wurk
       def abandon(fid) # rubocop:disable Naming/PredicateMethod
         now = ::Process.clock_gettime(::Process::CLOCK_REALTIME).to_s
         released = Wurk.redis(idempotent: true) do |conn|
+          bids = node_bids(conn, fid)
           Wurk::Lua::Loader.eval_cached(
             conn, :flow_abandon,
-            keys: [Keys.flow(fid), 'batches', 'dead-batches'],
-            argv: [now, *Wurk::Batch::KEY_SUFFIXES]
+            keys: [Keys.flow(fid), 'batches', 'dead-batches', *abandoned_keys(fid, bids)],
+            argv: [now, *bids.compact]
           )
         end
         released.to_i >= 0
+      end
+
+      private
+
+      # Every node's bid, in index order, nil where a record is gone. Read ahead
+      # of the script so it can be handed declared keys: a node's bid is fixed at
+      # creation, and the script's own state claim still decides whether
+      # anything is released.
+      def node_bids(conn, fid)
+        total = conn.call('HGET', Keys.flow(fid), 'total').to_i
+        return [] if total.zero?
+
+        conn.pipelined { |pipe| total.times { |i| pipe.call('HGET', Keys.flow_node(fid, i), 'bid') } }
+      end
+
+      def abandoned_keys(fid, bids)
+        keys = bids.each_with_index.flat_map do |bid, i|
+          batch = bid ? ["b-#{bid}", *Wurk::Batch::KEY_SUFFIXES.map { |suffix| "b-#{bid}-#{suffix}" }] : []
+          [Keys.flow_node(fid, i), *batch]
+        end
+        keys << Keys.flow_dead(fid)
       end
     end
 

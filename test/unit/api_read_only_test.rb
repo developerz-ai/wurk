@@ -3,6 +3,7 @@
 require_relative '../test_helper'
 require 'wurk/api/app'
 require 'json'
+require 'securerandom'
 require 'stringio'
 
 # Slice 07, task 49 — what `read-only` means once there are two planes.
@@ -150,6 +151,21 @@ class ApiReadOnlyTest < Wurk::Test::UnitCase
     status, = call('POST', "/v1/queues/#{@queue}/pause")
 
     assert_equal 403, status
+  end
+
+  # Listing limiters normally sweeps dead names out of `lmtr-list`; a
+  # read-only mount must not write, even for housekeeping.
+  def test_a_read_only_mount_lists_limiters_without_sweeping
+    @config = build_config { |cfg| cfg.api_read_only = true }
+    dead = "dead-#{SecureRandom.hex(4)}"
+    Wurk.redis { |conn| conn.call('SADD', Wurk::Limiter::LIST_KEY, dead) }
+
+    status, = call('GET', '/v1/limiters')
+
+    assert_equal 200, status
+    member = Wurk.redis { |conn| conn.call('SISMEMBER', Wurk::Limiter::LIST_KEY, dead) }
+
+    assert_equal 1, member
   end
 
   # The only door mode 3 has — `wurk api` reads no Ruby config file.

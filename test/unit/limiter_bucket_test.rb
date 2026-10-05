@@ -127,6 +127,24 @@ class LimiterBucketTest < Wurk::Test::UnitCase
     end
   end
 
+  # E14: a per-epoch counter is dead once its epoch passes. Giving it the
+  # limiter's metadata TTL (90 days) left one key per name per epoch alive for
+  # 90 days — millions of keys for a `:second` bucket.
+  def test_epoch_key_expires_within_two_intervals
+    name = "ttl-#{@suffix}"
+    Wurk::Limiter.bucket(name, 5, :second).within_limit {}
+    hourly = "ttlh-#{@suffix}"
+    Wurk::Limiter.bucket(hourly, 5, :hour).within_limit {}
+
+    @pool.with do |c|
+      second_ttl = c.call('TTL', c.call('KEYS', "lmtr-b:#{name}:*").first)
+      hour_ttl = c.call('TTL', c.call('KEYS', "lmtr-b:#{hourly}:*").first)
+
+      assert_includes 1..2, second_ttl
+      assert_includes 3601..7200, hour_ttl
+    end
+  end
+
   # wait_timeout spanning a second-boundary: an exhausted bucket sleeps until
   # the counter rolls to zero, taking the no-raise side (remaining > 0,
   # line 39 else) then succeeding on retry.

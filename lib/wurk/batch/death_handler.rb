@@ -10,32 +10,43 @@ module Wurk
     # carries a `bid`, we BATCH_ACK_COMPLETE → record the death → fire
     # `:death` callback exactly once per batch (first death only).
     #
+    # The retry layer runs this after the job is already in the morgue and
+    # acked off its private list, and swallows whatever it raises — nothing
+    # would ever deliver this death to the batch again. So the whole pass is
+    # re-driven in-process (`Callbacks.retrying`): the ack script is
+    # SREM/SADD-guarded and the fires are marker-guarded, so a replay is safe.
+    # A replay can't trust `first_death` (the lost attempt may already have
+    # moved the jid into the died set), so it falls back to the `:death`
+    # claim marker to decide whether `:death` still has to fire.
+    #
     # Spec: docs/target/sidekiq-pro.md §2.4 (`:death`).
     class DeathHandler
       def self.call(job, _exception)
         bid = job['bid']
         return unless bid
 
-        result = Wurk.redis do |conn|
+        Callbacks.retrying { |attempt| record(bid, job['jid'], replay: attempt.positive?) }
+      end
+
+      def self.record(bid, jid, replay:)
+        live, _died, first_death, kids, pending = Wurk.redis do |conn|
           Wurk::Lua::Loader.eval_cached(
             conn,
             :batch_ack_complete,
-            keys: ["b-#{bid}", "b-#{bid}-jids", "b-#{bid}-died", "b-#{bid}-failed"],
-            argv: [job['jid'], Batch::DEFAULT_EXPIRY_SECONDS]
+            keys: ["b-#{bid}", "b-#{bid}-jids", "b-#{bid}-died", "b-#{bid}-failed", "b-#{bid}-pkids"],
+            argv: [jid, Batch::DEFAULT_EXPIRY_SECONDS]
           )
-        end
-        live, _died, first_death = Array(result).map(&:to_i)
+        end.map(&:to_i)
 
         restamp_ttls(bid)
 
-        Wurk::Batch::Callbacks.fire_death(bid) if first_death == 1
-        return unless live.zero?
+        Callbacks.fire_death(bid) if first_death == 1 || (replay && !Callbacks.dedup_marked?(bid, 'death'))
 
         # Through the gated maybe_fire, not a direct fire_complete: this batch
         # may still have running child batches, and spec §2.4 ordering says
         # its `:complete` must wait for theirs (#209). `:success` stays
         # suppressed regardless — the death above set the durable death flag.
-        Wurk::Batch::Callbacks.maybe_fire(bid, pending: Wurk::Batch::Callbacks.pending_for(bid), live: 0)
+        Callbacks.maybe_fire(bid, pending: pending, live: live, kids: kids)
       end
 
       # BATCH_ACK_COMPLETE stamps the two keys it can itself resurrect; this

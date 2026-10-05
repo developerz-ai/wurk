@@ -226,7 +226,7 @@ class BatchKeyTtlTest < Wurk::Test::UnitCase
       Wurk::Lua::Loader.eval_cached(
         conn,
         :batch_ack_complete,
-        keys: ["b-#{bid}", "b-#{bid}-jids", "b-#{bid}-died", "b-#{bid}-failed"],
+        keys: ["b-#{bid}", "b-#{bid}-jids", "b-#{bid}-died", "b-#{bid}-failed", "b-#{bid}-pkids"],
         argv: [jid, Wurk::Batch::DEFAULT_EXPIRY_SECONDS]
       )
     end

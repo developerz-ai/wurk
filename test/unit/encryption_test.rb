@@ -239,11 +239,11 @@ class EncryptionTest < Wurk::Test::UnitCase
 
       assert_equal 2, v2_job['args'].last['v'], 'post-rotation push encrypts under v2'
 
-      invoke_server(v1_job) { :ok }
-      invoke_server(v2_job) { :ok }
+      v1_seen = invoke_server(v1_job) { v1_job['args'] }
+      v2_seen = invoke_server(v2_job) { v2_job['args'] }
 
-      assert_equal({ 'pan' => '4111' }, v1_job['args'].last, 'legacy v1 job decrypts')
-      assert_equal({ 'pan' => '5500' }, v2_job['args'].last, 'fresh v2 job decrypts')
+      assert_equal({ 'pan' => '4111' }, v1_seen.last, 'legacy v1 job decrypts')
+      assert_equal({ 'pan' => '5500' }, v2_seen.last, 'fresh v2 job decrypts')
     end
   end
 
@@ -352,10 +352,60 @@ class EncryptionTest < Wurk::Test::UnitCase
       Wurk::Encryption.enable(active_version: 1) { |_v| KEY_V1 }
       payload = { 'secret' => 'value' }
       job = { 'class' => 'X', 'args' => ['public', Wurk::Encryption.encrypt(payload)], 'encrypt' => true }
+      seen = invoke_server(job) { job['args'] }
+
+      assert_equal ['public', payload], seen
+    end
+  end
+
+  # E5: the job hash is shared with every outer middleware and the processor.
+  # Leaving plaintext in it after perform let InterruptHandler / limiter
+  # dead-routing write the secret back to Redis.
+  def test_server_middleware_restores_the_envelope_once_perform_returns
+    ENABLE_MUTEX.synchronize do
+      Wurk::Encryption.enable(active_version: 1) { |_v| KEY_V1 }
+      env = Wurk::Encryption.encrypt({ 'secret' => 'value' })
+      job = { 'class' => 'X', 'args' => ['public', env], 'encrypt' => true }
       invoke_server(job) { :ok }
 
-      assert_equal 'public', job['args'].first
-      assert_equal payload, job['args'].last
+      assert_equal ['public', env], job['args']
+    end
+  end
+
+  def test_server_middleware_restores_the_envelope_when_perform_raises
+    ENABLE_MUTEX.synchronize do
+      Wurk::Encryption.enable(active_version: 1) { |_v| KEY_V1 }
+      env = Wurk::Encryption.encrypt('secret')
+      job = { 'class' => 'X', 'args' => ['public', env], 'encrypt' => true }
+      assert_raises(Wurk::Job::Interrupted) { invoke_server(job) { raise Wurk::Job::Interrupted } }
+
+      assert_equal ['public', env], job['args']
+    end
+  end
+
+  def test_seal_reencrypts_decrypted_args_into_a_copy
+    ENABLE_MUTEX.synchronize do
+      Wurk::Encryption.enable(active_version: 1) { |_v| KEY_V1 }
+      job = { 'class' => 'X', 'args' => %w[public secret], 'encrypt' => true }
+      sealed = Wurk::Encryption.seal(job)
+
+      assert_equal %w[public secret], job['args'], 'the caller-held hash is not mutated'
+      assert Wurk::Encryption.envelope?(sealed['args'].last)
+      assert_equal 'secret', Wurk::Encryption.decrypt(sealed['args'].last)
+    end
+  end
+
+  def test_seal_returns_the_job_itself_when_nothing_needs_sealing
+    ENABLE_MUTEX.synchronize do
+      plain = { 'class' => 'X', 'args' => ['secret'] }
+
+      assert_same plain, Wurk::Encryption.seal(plain), 'crypto disabled'
+
+      Wurk::Encryption.enable(active_version: 1) { |_v| KEY_V1 }
+      sealed = { 'class' => 'X', 'args' => [Wurk::Encryption.encrypt('x')], 'encrypt' => true }
+
+      assert_same plain, Wurk::Encryption.seal(plain), 'job did not opt in'
+      assert_same sealed, Wurk::Encryption.seal(sealed), 'already enveloped'
     end
   end
 
@@ -483,9 +533,10 @@ class EncryptionTest < Wurk::Test::UnitCase
       refute_equal secret, job['args'].last
       assert Wurk::Encryption.envelope?(job['args'].last)
 
-      invoke_server(job) { :ok }
+      seen = invoke_server(job) { job['args'] }
 
-      assert_equal [42, secret], job['args']
+      assert_equal [42, secret], seen
+      assert Wurk::Encryption.envelope?(job['args'].last), 'the envelope is back once the chain unwinds'
     end
   end
 
@@ -580,9 +631,9 @@ class EncryptionTest < Wurk::Test::UnitCase
 
       assert Wurk::Encryption.envelope?(job['args'].last), 'the enqueued payload must be ciphertext'
 
-      invoke_server(job) { :ok }
+      seen = invoke_server(job) { job['args'] }
 
-      assert_equal [42, secret], job['args'],
+      assert_equal [42, secret], seen,
                    'a traceparent alongside encrypt: true must not break the envelope round-trip'
       assert_equal before_metadata, job.except('args'),
                    'traceparent/tracestate must be byte-identical before and after the whole round trip'

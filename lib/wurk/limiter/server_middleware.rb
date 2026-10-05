@@ -1,6 +1,7 @@
 # frozen_string_literal: true
 
 require_relative '../job_retry'
+require_relative '../encryption'
 
 module Wurk
   module Limiter
@@ -84,7 +85,7 @@ module Wurk
           'failed_at' => ::Process.clock_gettime(::Process::CLOCK_REALTIME, :millisecond)
         )
         Wurk::Metrics::Statsd.increment('jobs.rate_limited', tags: ["worker:#{job['class']}"])
-        Wurk::DeadSet.new.kill(Wurk.dump_json(record), ex: exc)
+        Wurk::DeadSet.new.kill(Wurk.dump_json(Wurk::Encryption.seal(record)), ex: exc)
         nil
       end
     end

@@ -273,10 +273,10 @@ module Wurk
       Array.new(count) { now + (rand * window) }
     end
 
-    # Inside an autoflush `Batch#jobs` block immediate batched pushes are
-    # accumulated in the buffer rather than written; it flushes every N jobs
-    # (when autoflush is an Integer) and Batch#jobs drains the remainder at
-    # block exit. Scheduled (`at`) or non-batched payloads bypass the buffer.
+    # Inside a `Batch#jobs` block immediate batched pushes are accumulated in
+    # the buffer rather than written; it flushes every N jobs (when autoflush
+    # is an Integer) and Batch#jobs drains the remainder at block exit.
+    # Scheduled (`at`) or non-batched payloads bypass the buffer.
     #
     # Adds happen one payload at a time so an `autoflush = N` actually bounds
     # the pipeline size — a bulk push of 100 with N=2 must flush 2/2/... not
@@ -321,7 +321,7 @@ module Wurk
       Thread.current[WRITE_STATE_KEY] = :applied if state
     end
 
-    # Batch autoflush path: accumulate each non-scheduled batched payload into
+    # Batch#jobs path: accumulate each non-scheduled batched payload into
     # the active buffer, flushing every N adds (when `buffer.ready?`).
     def buffer_add(buffer, payloads)
       payloads.each do |payload|

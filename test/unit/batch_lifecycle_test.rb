@@ -53,15 +53,108 @@ class BatchLifecycleTest < Wurk::Test::UnitCase
 
   # --- autoflush ---------------------------------------------------------
 
-  def test_default_jobs_block_pushes_each_job_immediately
+  # E25 / spec §2.3: the block is the atomic unit — nothing reaches Redis
+  # until it exits.
+  def test_default_jobs_block_buffers_until_block_exit
     batch = new_batch
     mid_total = nil
     batch.jobs do
-      perform_one
+      2.times { perform_one }
       mid_total = total(batch)
     end
 
-    assert_equal 1, mid_total
+    assert_equal 0, mid_total, 'jobs must stay buffered inside the block'
+    assert_equal 2, total(batch)
+  end
+
+  def test_raising_block_pushes_nothing_and_never_fires
+    batch = new_batch(complete: 'C', success: 'S')
+    assert_raises(RuntimeError) do
+      batch.jobs do
+        perform_one
+        raise 'mid-block'
+      end
+    end
+
+    assert_equal 0, total(batch)
+    assert_empty queued(@queue)
+    assert_equal 0, callbacks_fired(event: 'complete', bid: batch.bid)
+    assert_equal 1, live_count(batch), 'the creating block keeps its hold so the batch can never fire'
+  end
+
+  # The shape the hold exists for: with autoflush = 1 job A is in Redis (and
+  # can run) before B is even pushed; A's ack must not drain the batch.
+  def test_hold_keeps_an_early_ack_from_firing_before_the_block_exits
+    batch = new_batch(complete: 'C', success: 'S')
+    batch.autoflush = 1
+    first = nil
+    batch.jobs do
+      perform_one
+      first = jid_for(@queue, batch.bid)
+      ack_success(batch.bid, first)
+      perform_one
+    end
+
+    assert_equal 0, callbacks_fired(event: 'complete', bid: batch.bid), 'B is still pending'
+
+    ack_success(batch.bid, (jids_for(@queue, batch.bid) - [first]).first)
+
+    assert_equal 1, callbacks_fired(event: 'complete', bid: batch.bid)
+    assert_equal 1, callbacks_fired(event: 'success', bid: batch.bid)
+  end
+
+  # Every pushed job acked while the block was still open: the hold release
+  # at block exit is the drain, and it fires.
+  def test_hold_release_fires_when_every_job_already_acked
+    batch = new_batch(success: 'S')
+    batch.autoflush = 1
+    batch.jobs do
+      perform_one
+      ack_success(batch.bid, jid_for(@queue, batch.bid))
+    end
+
+    assert_equal 1, callbacks_fired(event: 'success', bid: batch.bid)
+    assert_equal 0, live_count(batch)
+    assert_equal 0, Wurk::Batch::Status.new(batch.bid).pending
+  end
+
+  # A job re-entering its own batch (spec §2.6) whose block raises must not
+  # strand the batch: the hold is released and the batch's own jobs drive it.
+  def test_reopened_block_that_raises_releases_its_hold
+    batch = new_batch(success: 'S')
+    batch.jobs { perform_one }
+    reopened = Wurk::Batch.new(batch.bid)
+    assert_raises(RuntimeError) { reopened.jobs { raise 'boom' } }
+
+    assert_equal 1, live_count(batch)
+    ack_success(batch.bid, jid_for(@queue, batch.bid))
+
+    assert_equal 1, callbacks_fired(event: 'success', bid: batch.bid)
+  end
+
+  def test_nested_block_of_the_same_batch_keeps_one_hold
+    batch = new_batch
+    inner_live = nil
+    batch.jobs do
+      batch.jobs { inner_live = live_count(batch) }
+      perform_one
+    end
+
+    assert_equal 1, inner_live, 'one hold for the outer block, none extra for the inner one'
+    assert_equal 1, total(batch), 'a re-entrant empty block adds no Empty marker'
+  end
+
+  # A reclaimed job re-entering its batch re-takes the hold its killed run left
+  # behind (same sentinel), so the release clears both.
+  def test_hold_is_named_after_the_running_job
+    batch = new_batch
+    batch.jobs { perform_one }
+    sentinel = "#{Wurk::Batch::HOLD_PREFIX}deadjid"
+    @pool.with { |c| c.call('SADD', "b-#{batch.bid}-jids", sentinel) }
+
+    Wurk::Context.with(jid: 'deadjid') { Wurk::Batch.new(batch.bid).jobs { perform_one } }
+
+    assert_equal(0, @pool.with { |c| c.call('SISMEMBER', "b-#{batch.bid}-jids", sentinel) })
   end
 
   def test_autoflush_true_buffers_until_block_exit
@@ -101,6 +194,7 @@ class BatchLifecycleTest < Wurk::Test::UnitCase
       err = assert_raises(ArgumentError) { batch.jobs { perform_one } }
       assert_match(/autoflush/, err.message)
     end
+    assert_equal 0, @pool.with { |c| c.call('EXISTS', "b-#{batch.bid}") }, 'a typo must not create the batch'
   end
 
   def test_autoflush_integer_bounds_bulk_push_pipeline
@@ -451,6 +545,11 @@ class BatchLifecycleTest < Wurk::Test::UnitCase
 
     ack_success(parent.bid, jid_for(@queue, parent.bid))
 
+    assert_equal 0, callbacks_fired(event: 'success', bid: parent.bid),
+                 "parent :success waits on the child's :success callback job (E3)"
+
+    ack_callbacks(parent)
+
     assert_equal 1, callbacks_fired(event: 'success', bid: parent.bid),
                  'parent :success fires once the recovered subtree and its own work are done'
     assert_equal 1, callbacks_fired(event: 'death', bid: parent.bid), 'parent :death must not re-fire'
@@ -517,6 +616,8 @@ class BatchLifecycleTest < Wurk::Test::UnitCase
     ack_success(child.bid, child_jid)
     ack_success(parent.bid, jid_for(@queue, parent.bid))
     ack_success(grand.bid, jid_for(@queue, grand.bid))
+    ack_callbacks(parent)
+    ack_callbacks(grand)
 
     assert_equal 1, callbacks_fired(event: 'success', bid: child.bid)
     assert_equal 1, callbacks_fired(event: 'success', bid: parent.bid)
@@ -555,10 +656,10 @@ class BatchLifecycleTest < Wurk::Test::UnitCase
   # been retried (BATCH_PUSH cleared the *child's* death mark and re-added the
   # jid to child.live) but BEFORE the worker actually runs it, the parent's
   # own job acks. The original death cascade already SREM'd the child from the
-  # parent's pkids set and BATCH_PUSH doesn't re-add it — so kids_finished?
-  # is true. But the parent's own cascaded death mark is untouched (BATCH_PUSH
-  # operates on the child bid only; clear_death_on_recovery only runs from a
-  # *successful* child drain via propagate_to_parent), so subtree_dead? is
+  # parent's pkids set and BATCH_PUSH doesn't re-add it — so the pkids gate
+  # is open. But the parent's own cascaded death mark is untouched (BATCH_PUSH
+  # operates on the child bid only; clear_death_on_recovery only runs when a
+  # child drains, via propagate_to_parent), so subtree_dead? is
   # still true and :success must stay suppressed until the retried job
   # actually succeeds.
   def test_parent_own_ack_in_retry_window_keeps_success_suppressed
@@ -580,6 +681,7 @@ class BatchLifecycleTest < Wurk::Test::UnitCase
                  ':success must not fire before the retried descendant job has actually succeeded'
 
     ack_success(child.bid, child_jid)
+    ack_callbacks(parent)
 
     assert_equal 1, callbacks_fired(event: 'success', bid: child.bid)
     assert_equal 1, callbacks_fired(event: 'success', bid: parent.bid),
@@ -623,9 +725,56 @@ class BatchLifecycleTest < Wurk::Test::UnitCase
       attempted << item['args'][1]
       raise 'boom' if attempted.size == 1
     end
-    with_push_override(raising_push) { Wurk::Batch::Callbacks.fire_complete(batch.bid) }
+    assert_raises(Wurk::Batch::CallbackEnqueueError) do
+      with_push_override(raising_push) { Wurk::Batch::Callbacks.fire_complete(batch.bid) }
+    end
 
     assert_equal %w[CbA CbB], attempted, 'both callbacks attempted despite the first raising'
+  end
+
+  # E27: a failed enqueue must leave the marker unwritten, so the next fire
+  # still enqueues the callback instead of treating the event as done.
+  def test_failed_callback_enqueue_fires_on_the_next_attempt
+    batch = new_batch(complete: 'C')
+    batch.jobs { perform_one }
+
+    assert_raises(Wurk::Batch::CallbackEnqueueError) do
+      with_push_override(->(_item) { raise 'redis down' }) { Wurk::Batch::Callbacks.fire_complete(batch.bid) }
+    end
+
+    assert_equal 0, exists("b-#{batch.bid}-complete"), 'no marker after a failed enqueue'
+
+    Wurk::Batch::Callbacks.fire_complete(batch.bid)
+
+    assert_equal 1, callbacks_fired(event: 'complete', bid: batch.bid)
+  end
+
+  def test_failed_callback_enqueue_reaches_the_error_handlers
+    batch = new_batch(complete: 'C')
+    batch.jobs { perform_one }
+    seen = []
+
+    with_error_handler(->(ex, ctx, _cfg) { seen << [ex.message, ctx[:bid]] }) do
+      assert_raises(Wurk::Batch::CallbackEnqueueError) do
+        with_push_override(->(_item) { raise 'redis down' }) { Wurk::Batch::Callbacks.fire_complete(batch.bid) }
+      end
+    end
+
+    assert_includes seen, ['redis down', batch.bid]
+  end
+
+  # The death claim is handed back when its enqueue raised, so the re-drive
+  # still enqueues `:death`.
+  def test_failed_death_enqueue_releases_the_claim
+    batch = new_batch(death: 'D')
+    batch.jobs { perform_one }
+
+    assert_raises(Wurk::Batch::CallbackEnqueueError) do
+      with_push_override(->(_item) { raise 'redis down' }) { Wurk::Batch::Callbacks.fire_death(batch.bid) }
+    end
+    Wurk::Batch::Callbacks.fire_death(batch.bid)
+
+    assert_equal 1, callbacks_fired(event: 'death', bid: batch.bid)
   end
 
   # --- callback dedup (second fire is a no-op) ---------------------------
@@ -820,6 +969,11 @@ class BatchLifecycleTest < Wurk::Test::UnitCase
     ack_success(child.bid, jid_for(@queue, child.bid))
 
     assert_equal 1, callbacks_fired(event: 'success', bid: child.bid)
+    assert_equal 0, callbacks_fired(event: 'complete', bid: parent.bid),
+                 "parent :complete waits on the child's :success callback job (E3)"
+
+    ack_callbacks(parent)
+
     assert_equal 1, callbacks_fired(event: 'complete', bid: parent.bid)
     assert_equal 1, callbacks_fired(event: 'success', bid: parent.bid)
   end
@@ -841,6 +995,7 @@ class BatchLifecycleTest < Wurk::Test::UnitCase
     parent, child = nested(parent_cbs: { success: 'ParentSuccess' }, child_cbs: { success: 'ChildSuccess' })
     ack_success(parent.bid, jid_for(@queue, parent.bid))
     ack_success(child.bid, jid_for(@queue, child.bid))
+    ack_callbacks(parent)
 
     child_at  = @pool.with { |c| c.call('HGET', "b-#{child.bid}", 'success_at') }.to_f
     parent_at = @pool.with { |c| c.call('HGET', "b-#{parent.bid}", 'success_at') }.to_f
@@ -1097,6 +1252,29 @@ class BatchLifecycleTest < Wurk::Test::UnitCase
 
   def total(batch)
     Wurk::Batch::Status.new(batch.bid).total
+  end
+
+  def live_count(batch)
+    @pool.with { |c| c.call('SCARD', "b-#{batch.bid}-jids") }
+  end
+
+  # A child's :complete/:success callback jobs ride in the parent batch (E3);
+  # ack them the way a worker running them would, so the parent can drain.
+  def ack_callbacks(parent)
+    queued(@cbq).select { |j| j['bid'] == parent.bid }.each { |j| ack_success(parent.bid, j['jid']) }
+  end
+
+  # Error handlers live on the process-global configuration; serialized with
+  # the logger swap for the same reason.
+  def with_error_handler(handler)
+    LOGGER_MUTEX.synchronize do
+      Wurk.configuration.error_handlers << handler
+      begin
+        yield
+      ensure
+        Wurk.configuration.error_handlers.delete(handler)
+      end
+    end
   end
 
   def ttl_after_success(batch)

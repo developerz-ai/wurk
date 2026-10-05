@@ -18,10 +18,17 @@
 -- by name, the acks read "failures" — so this is the same layout spelled the
 -- same way, and `Flow::Creation#batch_fields` is its counterpart in Ruby.
 --
+-- Every key is declared (Redis Cluster and Dragonfly refuse one built inside
+-- Lua): the caller resolves each node's record, batch, live-jid set and queue
+-- from the payloads it just built.
+--
 -- KEYS[1] = flow:<fid>
 -- KEYS[2] = flows          index of every flow
 -- KEYS[3] = batches        index of every batch; a node's batch is a batch
 -- KEYS[4] = queues         the set of known queue names
+-- KEYS[5] = schedule       where a root declared with `at:` goes
+-- KEYS[6..] = four per node, in ARGV[9..] order: flow:<fid>:<index>, b-<bid>,
+--             b-<bid>-jids, queue:<its queue>
 -- ARGV[1] = fid
 -- ARGV[2] = created_at, epoch seconds — the batch clock (Batch#first_flush_hash)
 -- ARGV[3] = seconds every key this script creates expires in
@@ -35,14 +42,14 @@
 --             job payload it carries is copied through verbatim rather than
 --             decoded — cjson maps JSON numbers to doubles, and a round trip
 --             would corrupt an integer argument past 2^53.
--- Returns the number of node jobs enqueued, or -1 when a flow already exists
+-- Returns the number of root jobs released (queued or scheduled), or -1 when a flow already exists
 -- under this fid and nothing was written.
-local flow_key, flows, batches, queues = KEYS[1], KEYS[2], KEYS[3], KEYS[4]
+local flow_key, flows, batches, queues, schedule = KEYS[1], KEYS[2], KEYS[3], KEYS[4], KEYS[5]
 local fid = ARGV[1]
 local now = ARGV[2]
 local expiry = ARGV[3]
 local callback_queue = ARGV[6]
-local FIRST_NODE = 9
+local FIRST_NODE, FIRST_NODE_KEY = 9, 6
 
 -- The claim. A creation whose reply was lost is retried on the pool's
 -- idempotent path, and the retry must not enqueue the roots a second time —
@@ -74,8 +81,8 @@ redis.call('EXPIRE', flow_key, expiry, 'NX')
 local enqueued = 0
 for i = FIRST_NODE, #ARGV do
   local node = cjson.decode(ARGV[i])
-  local node_key = flow_key .. ':' .. node.i
-  local batch_key = 'b-' .. node.bid
+  local k = FIRST_NODE_KEY + (i - FIRST_NODE) * 4
+  local node_key, batch_key, jids_key, queue_key = KEYS[k], KEYS[k + 1], KEYS[k + 2], KEYS[k + 3]
   -- A node with nothing to wait for is queued now; the rest are queued by the
   -- callback that observes their last dependency succeed. `state` is the whole
   -- difference, so the two paths cannot disagree about which nodes went out.
@@ -98,6 +105,10 @@ for i = FIRST_NODE, #ARGV do
     -- The sentinel a chain link's upstream result is spliced over, or empty
     -- for the ordinary node that is handed nothing.
     'pipe', node.pipe,
+    -- The epoch a node declared with `at:` is deferred to, or empty. Its
+    -- payload is then stored as the schedule member (no `at`, no
+    -- `enqueued_at`), the bytes Client#push would have put on `schedule`.
+    'at', node.at,
     'payload', node.payload)
   redis.call('EXPIRE', node_key, expiry, 'NX')
 
@@ -121,10 +132,14 @@ for i = FIRST_NODE, #ARGV do
   redis.call('ZADD', batches, now, node.bid)
 
   if queued then
-    redis.call('SADD', batch_key .. '-jids', node.jid)
-    redis.call('EXPIRE', batch_key .. '-jids', expiry, 'NX')
-    redis.call('SADD', queues, node.queue)
-    redis.call('LPUSH', 'queue:' .. node.queue, node.payload)
+    redis.call('SADD', jids_key, node.jid)
+    redis.call('EXPIRE', jids_key, expiry, 'NX')
+    if node.at ~= '' then
+      redis.call('ZADD', schedule, node.at, node.payload)
+    else
+      redis.call('SADD', queues, node.queue)
+      redis.call('LPUSH', queue_key, node.payload)
+    end
     enqueued = enqueued + 1
   end
 end

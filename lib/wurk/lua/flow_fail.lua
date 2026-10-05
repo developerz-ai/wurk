@@ -15,11 +15,13 @@
 -- `b-<bid>-died` sits beside a batch.
 --
 -- KEYS[1] = flow:<fid>
+-- KEYS[2] = flow:<fid>:<index>   the dying node's record
+-- KEYS[3] = flow:<fid>:dead      the dead-node set
 -- ARGV[1] = the dying node's index
 -- ARGV[2] = now, epoch seconds — the flow clock, as `created_at` was written
 -- Returns 1 when this call marked the node dead, 0 when the claim was refused
 -- and nothing was written.
-local flow_key = KEYS[1]
+local flow_key, node_key, dead_key = KEYS[1], KEYS[2], KEYS[3]
 local index, now = ARGV[1], ARGV[2]
 
 -- Same guard, and the same reason, as flow_advance: every write below creates
@@ -33,13 +35,11 @@ end
 -- The claim. `:death` is enqueued once per batch, but the callback job that
 -- carries it retries like any other, and a node already marked must not be
 -- re-attributed or re-added to the dead set.
-local node_key = flow_key .. ':' .. index
 if redis.call('HGET', node_key, 'state') ~= 'enqueued' then
   return 0
 end
 redis.call('HSET', node_key, 'state', 'dead')
 
-local dead_key = flow_key .. ':dead'
 redis.call('SADD', dead_key, index)
 redis.call('EXPIRE', dead_key, expiry, 'NX')
 

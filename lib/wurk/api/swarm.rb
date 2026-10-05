@@ -134,7 +134,7 @@ module Wurk
       def limiters(request)
         query = Page.query!(request)
         window = Page.window(query)
-        names = ::Wurk::Web::Enterprise::Limits.list(filter: filter!(query))
+        names = ::Wurk::Web::Enterprise::Limits.list(filter: filter!(query), sweep: !ReadOnly.enabled?(request))
         rows = Page.slice(names, window) { |name| limiter_row(name) }
         Response.json(200, total: names.size, page: window.page, count: window.count, limiters: rows)
       end
