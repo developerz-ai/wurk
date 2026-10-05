@@ -1,6 +1,8 @@
 import { useQuery, useMutation, useQueryClient } from '@tanstack/solid-query';
 import { createSignal, onMount, For, Show, Switch, Match } from 'solid-js';
-import { Pagination } from '../components/Pagination';
+import { useNavigate, useParams } from '@solidjs/router';
+import { Pagination, maxPageOf } from '../components/Pagination';
+import { useServedPage } from '../hooks/useServedPage';
 import { ArgsValue } from '../components/ArgsValue';
 import { SortableTh } from '../components/SortableTh';
 import { useSort, type Accessors } from '../hooks/useSort';
@@ -40,6 +42,7 @@ interface QueueDetail {
   latency: number;
   paused: boolean;
   page: number;
+  max_page?: number;
   count: number;
   jobs: QueueJob[];
 }
@@ -67,6 +70,8 @@ function QueueJobs(props: { name: string }) {
         `${basePath()}/api/queues/${encodeURIComponent(props.name)}?page=${page() - 1}&count=${PAGE_SIZE}`,
       ),
   }));
+
+  useServedPage(page, setPage, () => query.data);
 
   // Delete one job from the queue by jid (server LREMs the exact payload).
   const deleteJob = useMutation(() => ({
@@ -157,7 +162,7 @@ function QueueJobs(props: { name: string }) {
                     </tbody>
                   </table>
                 </div>
-                <Pagination page={page()} total={data().size} count={PAGE_SIZE} onChange={setPage} />
+                <Pagination page={page()} total={data().size} count={PAGE_SIZE} maxPage={maxPageOf(data())} onChange={setPage} />
               </>
             </Show>
             <JobDetailModal entry={selected()} onClose={() => setSelected(null)} />
@@ -176,7 +181,15 @@ const QUEUE_SORT: Accessors<QueueSummary> = {
 };
 
 export default function Queues() {
-  const [selectedQueue, setSelectedQueue] = createSignal<string | null>(null);
+  // `/queues/:name` (Sidekiq's queue page) deep-links straight into that
+  // queue's job list; closing it drops back to the plain /queues URL.
+  const params = useParams();
+  const navigate = useNavigate();
+  const [selectedQueue, setSelectedQueue] = createSignal<string | null>(params.name ?? null);
+  const closeQueue = () => {
+    setSelectedQueue(null);
+    if (params.name) navigate('/queues', { replace: true });
+  };
   const meta = useMeta();
   const readOnly = () => meta.data?.read_only ?? false;
   const qc = useQueryClient();
@@ -294,7 +307,7 @@ export default function Queues() {
 
             <Modal
               open={selectedQueue() !== null}
-              onClose={() => setSelectedQueue(null)}
+              onClose={closeQueue}
               title={selectedQueue() ?? ''}
               width={780}
             >

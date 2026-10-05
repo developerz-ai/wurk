@@ -19,12 +19,12 @@ module Wurk
     # `app.helpers SomeModule`. wurk's dashboard is a SolidJS SPA with no Sinatra
     # render path, so this module provides a minimal, Sidekiq-Web-compatible
     # renderer: it captures the routes, runs the matched block in an `Action`
-    # context (a `WebHelpers` subset + the ext's own helpers + `erb`), and
-    # returns the rendered HTML for the SPA's Extension page to embed.
+    # context (a `WebHelpers` subset, upstream's Action surface, and the ext's
+    # own helpers), and returns the response for the SPA's Extension page to
+    # embed.
     #
     # It does NOT depend on the `sidekiq` gem — extensions registered through
-    # wurk's own `Sidekiq::Web.register` alias render unchanged. (Running a
-    # real third-party gem unmodified additionally needs the shim in #204.)
+    # wurk's own `Sidekiq::Web.register` alias render unchanged.
     module Extension
       # Captures the routes + helpers an extension declares in `registered`.
       # Quacks like the slice of `Sidekiq::Web::Application` extensions touch.
@@ -163,14 +163,20 @@ module Wurk
       class Action
         include Helpers
 
-        # Internal-redirect signal carried out of a route block via throw/catch.
-        Redirect = ::Struct.new(:location)
+        # Redirect signal carried out of a route block via throw/catch.
+        # `external` marks `redirect_to` (upstream's off-site redirect), which
+        # skips the mount rewrite `redirect` gets.
+        Redirect = ::Struct.new(:location, :external)
+
+        JSON_HEADERS = { 'Content-Type' => 'application/json', 'Cache-Control' => 'private, no-store' }.freeze
+        TEXT_HEADERS = { 'Content-Type' => 'text/plain' }.freeze
 
         def initialize(env:, route_params:, ext:, mount:, embed: true)
           @env = env
           @request = ::Rack::Request.new(env)
           @route_params = route_params
           @ext_name = ext[:name].to_s
+          @ext_index = Array(ext[:index]).first.to_s
           @root_dir = ext[:root_dir]
           @ext_strings = ext[:strings]
           @mount = mount.to_s
@@ -186,7 +192,23 @@ module Wurk
         def route_params(key = nil) = key ? @route_params[key.to_sym] : @route_params
         def session = (@env['rack.session'] ||= {})
         def logger = ::Wurk.logger
-        def redirect(location) = throw(:wurk_ext_halt, Redirect.new(location))
+        def redirect(location) = throw(:halt, Redirect.new(location, false))
+        def redirect_to(url) = throw(:halt, Redirect.new(url, true))
+        def header(key, value) = (response_headers[key.to_s] = value.to_s)
+        def response_headers = (@response_headers ||= {})
+
+        # Upstream: `throw :halt, [code, text/plain, [code.to_s]]`.
+        def halt(res) = throw(:halt, [res, TEXT_HEADERS.dup, res.to_s])
+
+        # A route block that returns this Rack triple is served as JSON.
+        def json(payload) = [200, JSON_HEADERS.dup, ::JSON.generate(payload)]
+
+        # Back to the page the form was posted from. Standalone, that is the
+        # same-origin Referer like upstream; embedded, the Referer is the SPA's
+        # own URL, so the extension's index is the only page we can name.
+        def reload_page
+          redirect(reload_location)
+        end
 
         # Render an ERB template. `content` is either the template String (the
         # common path — the ext's own helper reads the file) or a Symbol naming
@@ -196,13 +218,27 @@ module Wurk
           ::ERB.new(template, trim_mode: '-').result(binding)
         end
 
-        # Run the route block in this context, capturing redirects. Returns the
-        # rendered HTML String, or a Redirect.
+        def render(engine, content, options = {})
+          raise ::ArgumentError, "Only erb templates are supported (got #{engine.inspect})" unless engine == :erb
+
+          erb(content, options)
+        end
+
+        # Run the route block in this context. Returns the rendered String, a
+        # Redirect, or a Rack triple from `halt`/`json`/the block itself.
         def run(block)
-          catch(:wurk_ext_halt) { instance_exec(&block) }
+          catch(:halt) { instance_exec(&block) }
         end
 
         private
+
+        def reload_location
+          return @ext_index if @embed
+
+          referer = @request.referer.to_s
+          base = "#{@request.base_url}/"
+          referer.start_with?(base) ? referer.delete_prefix(@request.base_url) : "#{@mount}/"
+        end
 
         def read_view(name)
           raise ::ArgumentError, "extension #{@ext_name} has no root_dir" unless @root_dir
@@ -218,12 +254,19 @@ module Wurk
         def symbolize(hash) = hash.to_h.transform_keys(&:to_sym)
       end
 
+      # A scheme ("https:", "javascript:") or a scheme-relative "//" — which
+      # browsers also spell `/\` or `\\` — names somewhere off this host.
+      OFF_SITE = %r{\A(?:[a-z][a-z0-9+.-]*:|[/\\]{2})}i
+
+      RACK_TRIPLE = ->(r) { r.is_a?(::Array) && r.size == 3 && r[0].is_a?(::Integer) }
+
       # Ties it together: finds a registered extension by name, captures its
       # routes once (`registered(app)`), matches the request, and renders.
       class Renderer
         class << self
           # @return [Array(Integer, Hash, String)] Rack-ish [status, headers,
-          #   body] — 200 HTML, 302 redirect, or 404 — or nil when no extension
+          #   body] — 200 HTML, 302 redirect, 404, or whatever triple the route
+          #   built with `halt`/`json` — or nil when no extension
           #   with `name` is registered (so the engine can fall through).
           # `embed: true` (the engine's ext/:name/* endpoint) rewrites links
           # and redirects into the embed URL space; `embed: false` (the
@@ -271,18 +314,32 @@ module Wurk
           # `ctx` is `{ mount:, embed: }` — the URL-space the response renders
           # into (engine embed vs standalone root).
           def render(ext, route_params, block, env, ctx)
-            result = action_for(ext, route_params, env, ctx).run(block)
-            if result.is_a?(Action::Redirect)
-              [302, { 'Location' => redirect_target(result.location, ext, ctx) }, '']
-            else
-              [200, html_headers, result.to_s]
-            end
+            action = action_for(ext, route_params, env, ctx)
+            respond(action.run(block), action, ext, ctx)
           rescue ::StandardError => e
             ::Wurk.configuration.handle_exception(e, context: 'web-extension-render')
             # Message stays server-side (handle_exception logs it): exception
             # text can carry file paths or Redis connection details, and every
             # dashboard viewer sees this body.
             [500, html_headers, 'Extension render error (see server logs)']
+          end
+
+          def respond(result, action, ext, ctx)
+            case result
+            when Action::Redirect
+              [302, { 'Location' => redirect_target(result, ext, ctx, action.request) }, '']
+            when RACK_TRIPLE
+              status, headers, body = result
+              [status.to_i, action.response_headers.merge(headers.to_h), body_string(body)]
+            else
+              [200, action.response_headers.merge(html_headers), result.to_s]
+            end
+          end
+
+          def body_string(body)
+            return body.to_s unless body.respond_to?(:each)
+
+            (+'').tap { |out| body.each { |chunk| out << chunk.to_s } }
           end
 
           def action_for(ext, route_params, env, ctx)
@@ -313,13 +370,32 @@ module Wurk
 
           # An ext's redirect target is relative to its mount ("locks" → the
           # embed endpoint; standalone → the app root, where root_path-built
-          # targets already carry the mount). Absolute URLs pass through.
-          def redirect_target(location, ext, ctx)
-            loc = location.to_s
-            return loc if loc.match?(%r{\A[a-z]+://}i)
-            return "#{ctx[:mount]}/ext/#{ext[:name]}/#{loc.sub(%r{\A/}, '')}" if ctx[:embed]
+          # targets already carry the mount). `redirect` never leaves the host,
+          # as upstream (which prepends base_url): an off-site or
+          # scheme-relative target collapses to the ext's root so a
+          # `redirect params[:back]` can't be turned into an open redirect.
+          # `redirect_to` is upstream's explicit off-site call and passes
+          # through standalone; embedded, the SPA fetches the response, so it
+          # can't follow one either.
+          def redirect_target(redirect, ext, ctx, request)
+            loc = redirect.location.to_s.delete("\t\n\r").sub(/\A[\x00-\x20]+/, '')
+            return loc if redirect.external && !ctx[:embed]
+
+            loc = same_origin_path(loc, request)
+            loc = '' if loc.match?(OFF_SITE)
+            return embed_target(loc, "#{ctx[:mount]}/ext/#{ext[:name]}/") if ctx[:embed]
 
             loc.start_with?('/') ? loc : "#{ctx[:mount]}/#{loc}"
+          end
+
+          # `redirect "#{root_path}x"` already carries the embed base.
+          def embed_target(loc, base)
+            loc.start_with?(base) ? loc : "#{base}#{loc.sub(%r{\A/}, '')}"
+          end
+
+          def same_origin_path(loc, request)
+            base = request.base_url
+            loc == base || loc.start_with?("#{base}/") ? loc.delete_prefix(base) : loc
           end
 
           # The ext's own root_dir/locales plus every dir appended to

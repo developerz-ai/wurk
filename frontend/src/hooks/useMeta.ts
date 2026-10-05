@@ -1,5 +1,6 @@
 import { useQuery } from '@tanstack/solid-query';
 import { basePath } from '../basePath';
+import { getJSON } from '../http';
 
 // A dashboard tab registered by a third-party gem via
 // Sidekiq::Web.register_extension. When ext_name is present, the Extension page
@@ -29,7 +30,7 @@ export interface Meta {
 export function useMeta() {
   return useQuery<Meta>(() => ({
     queryKey: ['meta'],
-    queryFn: () => fetch(`${basePath()}/api/meta`).then((r) => r.json() as Promise<Meta>),
+    queryFn: () => getJSON<Meta>(`${basePath()}/api/meta`),
     staleTime: Infinity,
   }));
 }

@@ -4,20 +4,90 @@ require_relative '../engine_test_helper'
 
 # Pins the self-healing half of the SSE concurrency cap (#101). A stream whose
 # thread is killed mid-flight never runs the `ensure` in #with_stream_slot, so
-# the guard has to reclaim the slot on its own — otherwise MAX_CONCURRENT_STREAMS
-# such deaths 503 `/api/stream` for the rest of the process's life.
+# the guard has to reclaim the slot on its own — otherwise a cap's worth of
+# such deaths 503 `/api/stream` for the rest of the process's life. Also pins
+# the cap itself (W2, #548): half the server's request threads, never more.
 class StreamConcurrencyGuardTest < Wurk::Test::EngineCase
   parallelize_me!
 
   GUARD = ::Wurk::StreamConcurrencyGuard
-  CAP = GUARD::MAX_CONCURRENT_STREAMS
+  SERVER_THREADS = 8
+  CAP = SERVER_THREADS / 2
+
+  def setup
+    super
+    @saved_threads = ENV.fetch('RAILS_MAX_THREADS', nil)
+    ENV['RAILS_MAX_THREADS'] = SERVER_THREADS.to_s
+  end
 
   # Slots are thread-scoped, so this drops everything this test thread holds
   # however the test exited; slots held by dead threads clean themselves up.
   def teardown
     CAP.times { GUARD.release }
+    ENV['RAILS_MAX_THREADS'] = @saved_threads
   ensure
     super
+  end
+
+  def test_cap_is_half_the_server_threads_floored_at_one
+    { '3' => 1, '5' => 2, '10' => 5, '1' => 1, 'many' => 1 }.each do |threads, cap|
+      ENV['RAILS_MAX_THREADS'] = threads
+
+      assert_equal cap, GUARD.max_streams, "RAILS_MAX_THREADS=#{threads}"
+    end
+  end
+
+  def test_cap_defaults_to_rails_puma_default_without_hints
+    ENV.delete('RAILS_MAX_THREADS')
+
+    assert_equal 1, GUARD.max_streams
+  end
+
+  def test_cap_prefers_puma_max_threads_over_the_environment
+    options = { max_threads: 16 }
+
+    with_puma_cli_config(Struct.new(:options).new(options)) do
+      assert_equal 8, GUARD.max_streams
+    end
+  end
+
+  def test_configured_max_streams_wins
+    config = ::Wurk::Web.config
+    config.define_singleton_method(:max_streams) { 7 }
+
+    assert_equal 7, GUARD.max_streams
+  ensure
+    config.singleton_class.send(:remove_method, :max_streams)
+  end
+
+  # The availability fix end to end: with every slot held by a live stream, a
+  # further stream is refused with 503 + Retry-After while an ordinary GET is
+  # still answered — streams can no longer take every request thread.
+  def test_full_cap_refuses_streams_but_still_answers_plain_requests
+    gate = Queue.new
+    ready = Queue.new
+    threads = Array.new(CAP) do
+      Thread.new do
+        ready << GUARD.acquire
+        gate.pop
+      ensure
+        GUARD.release
+      end
+    end
+
+    CAP.times { assert ready.pop }
+
+    get '/wurk/api/stream?max_duration=0&tick=0'
+
+    assert_equal 503, last_response.status
+    assert_equal GUARD::RETRY_AFTER_SECONDS.to_s, last_response.headers['Retry-After']
+
+    get '/wurk/api/stats'
+
+    assert_equal 200, last_response.status
+  ensure
+    CAP.times { gate << :go }
+    threads&.each(&:join)
   end
 
   def test_dead_holder_frees_its_slot
@@ -82,6 +152,23 @@ class StreamConcurrencyGuardTest < Wurk::Test::EngineCase
   end
 
   private
+
+  def with_puma_cli_config(cli_config)
+    defined_here = !defined?(::Puma)
+    Object.const_set(:Puma, Module.new) if defined_here
+    puma = ::Puma
+    had_reader = puma.respond_to?(:cli_config)
+    original = puma.cli_config if had_reader
+    puma.singleton_class.send(:attr_accessor, :cli_config) unless had_reader
+    puma.cli_config = cli_config
+    yield
+  ensure
+    if defined_here
+      Object.send(:remove_const, :Puma)
+    else
+      puma.cli_config = original
+    end
+  end
 
   # Reproduces the leak: each thread takes a slot and dies without releasing.
   def fill_cap_with_dead_holders

@@ -19,21 +19,22 @@ module Wurk
     NOT_FOUND_HEADERS = { 'Content-Type' => 'text/plain' }.freeze
 
     class << self
-      # Class-level Rack entry — wraps host-registered middleware (`Wurk::Web.use`)
-      # around the extensions dispatcher. INTENTIONALLY bypasses
-      # `Wurk::Web::Authorization` (`config.authorized?` + `config.read_only?`):
-      # the full dashboard with its auth/read-only enforcement is the
-      # engine-mounted SPA wired in `lib/wurk/engine.rb`, and the engine's
-      # middleware stack already includes `Authorization`. This standalone
-      # surface exists for ecosystem rack-test consumers (`Sidekiq::Web.call`)
-      # whose mounted-app expectations cover extension routes only — wrapping
-      # auth here would break `run Sidekiq::Web` / rack-test parity with
-      # upstream Sidekiq, which also doesn't auth-gate `Sidekiq::Web.call`.
+      # Class-level Rack entry: host middleware (`Wurk::Web.use`), then the
+      # same `authorization` + read-only gate the engine mount runs, then the
+      # extensions dispatcher. Sidekiq Enterprise gates `mount Sidekiq::Web`
+      # with exactly these, and Wurk ships Ent, so an app that swapped the gem
+      # keeps its authorization on this mount too.
       def call(env)
-        PoolScope.scope { config.rack_app(method(:dispatch)).call(env) }
+        PoolScope.scope { config.rack_app(standalone_app).call(env) }
       end
 
       private
+
+      # Memoized so `Config#rack_app`'s per-inner cache keeps hitting. No
+      # machine-API hand-off: Wurk::API is never served under this mount.
+      def standalone_app
+        @standalone_app ||= Authorization.new(method(:dispatch), api_handoff: false)
+      end
 
       def dispatch(env)
         return [403, NOT_FOUND_HEADERS.dup, ['Forbidden']] unless safe_request?(env)

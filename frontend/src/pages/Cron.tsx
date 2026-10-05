@@ -9,7 +9,7 @@ import { useMeta } from '../hooks/useMeta';
 import { SortableTh } from '../components/SortableTh';
 import { useSort, type Accessors } from '../hooks/useSort';
 import { basePath } from '../basePath';
-import { post } from '../http';
+import { getJSON, post } from '../http';
 import { notifyError } from '../toast';
 
 // Newest-first [fired_at, jid] tuples from GET <mount>/api/cron/:lid/history.
@@ -48,7 +48,7 @@ export default function Cron() {
 
   const q = useQuery<CronLoop[]>(() => ({
     queryKey: ['cron'],
-    queryFn: () => fetch(`${basePath()}/api/cron`).then((r) => r.json() as Promise<CronLoop[]>),
+    queryFn: () => getJSON<CronLoop[]>(`${basePath()}/api/cron`),
     refetchInterval: 15000,
   }));
 
@@ -72,9 +72,7 @@ export default function Cron() {
   const historyQ = useQuery<HistoryEntry[]>(() => ({
     queryKey: ['cron-history', historyLoop()?.lid],
     queryFn: () =>
-      fetch(`${basePath()}/api/cron/${historyLoop()!.lid}/history`)
-        .then((r) => r.json() as Promise<{ history: HistoryEntry[] }>)
-        .then((d) => d.history),
+      getJSON<{ history: HistoryEntry[] }>(`${basePath()}/api/cron/${historyLoop()!.lid}/history`).then((d) => d.history),
     enabled: historyLoop() !== null,
   }));
 

@@ -26,7 +26,9 @@ module Wurk
     include SseStreaming
 
     STREAM_TICK_SECONDS = 2.0
-    STREAM_MAX_DURATION = 120.0
+    # Short so a capped slot rotates: a tab parked on the dashboard gives its
+    # thread back every half-minute and has to win a slot again to reopen.
+    STREAM_MAX_DURATION = 30.0
     # Positive floor for `?tick=`: a zero/negative tick would `sleep 0` the SSE
     # loop into a tight Redis-read/write spin (Live runs it in a spawned thread)
     # for up to STREAM_MAX_DURATION. Clamp before it reaches drive_stream.
@@ -69,7 +71,7 @@ module Wurk
       jobs = ::Wurk::Api::Pagination.slice(q, page) { |rec| ::Wurk::Api::Serializers.job_record(rec) }
       render json: {
         name: q.name, size: q.size, latency: q.latency, paused: q.paused?,
-        page: page[:page], count: page[:count], jobs: jobs
+        **::Wurk::Api::Pagination.meta(page), jobs: jobs
       }
     end
 
@@ -169,7 +171,7 @@ module Wurk
       set = ::Wurk::BatchSet.new
       page = ::Wurk::Api::Pagination.window(params)
       rows = ::Wurk::Api::Pagination.slice(set, page) { |status| status.data.transform_keys(&:to_sym) }
-      render json: { total: set.size, page: page[:page], count: page[:count], batches: rows }
+      render json: { total: set.size, **::Wurk::Api::Pagination.meta(page), batches: rows }
     end
 
     def batch
@@ -185,7 +187,7 @@ module Wurk
       set = ::Wurk::FlowSet.new
       page = ::Wurk::Api::Pagination.window(params)
       rows = ::Wurk::Api::Pagination.slice(set, page) { |status| ::Wurk::Api::Serializers.flow_row(status) }
-      render json: { total: set.size, page: page[:page], count: page[:count], flows: rows }
+      render json: { total: set.size, **::Wurk::Api::Pagination.meta(page), flows: rows }
     end
 
     def flow
@@ -209,7 +211,7 @@ module Wurk
     def limiters
       names = ::Wurk::Web::Enterprise::Limits.list(filter: params[:substr])
       page = ::Wurk::Api::Pagination.window(params)
-      render json: { total: names.size, page: page[:page], count: page[:count], limiters: limiter_rows(names, page) }
+      render json: { total: names.size, **::Wurk::Api::Pagination.meta(page), limiters: limiter_rows(names, page) }
     end
 
     def reset_limiter
@@ -311,9 +313,12 @@ module Wurk
 
     # SSE: one `event: stats` per tick with a fresh Stats snapshot. Caps at
     # `STREAM_MAX_DURATION` so a stale browser tab can't tie a Rails worker
-    # forever — the client reconnects automatically when the stream closes.
-    # Bounded per process by StreamConcurrencyGuard (503 + Retry-After past the
-    # cap) so a burst of tabs can't pin every Puma thread.
+    # forever; a stream that closes normally is reopened by EventSource after
+    # the `retry:` interval sent below. Bounded per process by
+    # StreamConcurrencyGuard so a burst of tabs can't pin every Puma thread.
+    # Past the cap the answer is a 503, which EventSource treats as fatal and
+    # whose Retry-After it cannot read: the SPA reopens it itself, backing off
+    # from 3s and doubling to 30s (frontend/src/hooks/useSSE.ts).
     #
     # `?max_duration=` and `?tick=` are test/debug knobs; the SPA never sets
     # them. `?max_duration=0` emits one tick and closes.
@@ -469,7 +474,7 @@ module Wurk
       page = ::Wurk::Api::Pagination.window(params)
       total = set.size
       entries = ::Wurk::Api::Pagination.slice(set, page) { |entry| ::Wurk::Api::Serializers.sorted_entry(entry) }
-      render json: { total: total, page: page[:page], count: page[:count], entries: entries }
+      render json: { total: total, **::Wurk::Api::Pagination.meta(page), entries: entries }
     end
 
     # substr is already applied by Limits.list (matches on name), so slice the

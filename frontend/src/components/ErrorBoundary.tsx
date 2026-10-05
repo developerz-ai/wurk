@@ -6,9 +6,10 @@ import { t } from '../i18n';
 // chunk that a fresh deploy has already replaced) shows a recoverable message
 // instead of a blank white screen. Wraps the route <Suspense> in App.tsx.
 //
-// Solid ships a first-class <ErrorBoundary> (no class component needed); this
-// thin wrapper supplies the localized fallback + a full reload, which fetches
-// the current index.html and its up-to-date chunk manifest.
+// No reset wiring needed for navigation: @solidjs/router calls Solid's
+// resetErrorBoundaries() on every route transition, so leaving the broken page
+// clears this fallback (pinned by routing.test.tsx). The reload button covers
+// the stale-chunk case, where only a fresh index.html helps.
 export default function ErrorBoundary(props: ParentProps) {
   return (
     <SolidErrorBoundary

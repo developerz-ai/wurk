@@ -3,9 +3,9 @@ import { render, screen, fireEvent } from '@solidjs/testing-library';
 import { Pagination } from './Pagination';
 import { t } from '../i18n';
 
-function renderPagination(page: number, total: number, count: number) {
+function renderPagination(page: number, total: number, count: number, maxPage?: number) {
   const onChange = vi.fn();
-  render(() => <Pagination page={page} total={total} count={count} onChange={onChange} />);
+  render(() => <Pagination page={page} total={total} count={count} maxPage={maxPage} onChange={onChange} />);
   return { onChange };
 }
 
@@ -50,5 +50,16 @@ describe('Pagination', () => {
     expect(screen.getByText(`${t('common.page')} 1 ${t('common.of')} 1`)).toBeInTheDocument();
     expect(screen.getByRole('button', { name: t('actions.prev') })).toBeDisabled();
     expect(screen.getByRole('button', { name: t('actions.next') })).toBeDisabled();
+  });
+
+  it('caps the page count at the server max_page and disables Next there', () => {
+    renderPagination(1001, 100_000, 25, 1001);
+    expect(screen.getByText(`${t('common.page')} 1001 ${t('common.of')} 1001`)).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: t('actions.next') })).toBeDisabled();
+  });
+
+  it('ignores a max_page above the real page count', () => {
+    renderPagination(1, 95, 10, 1001);
+    expect(screen.getByText(`${t('common.page')} 1 ${t('common.of')} 10`)).toBeInTheDocument();
   });
 });

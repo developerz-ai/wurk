@@ -31,6 +31,7 @@ const Metrics = lazy(() => import('./pages/Metrics'));
 const Profiles = lazy(() => import('./pages/Profiles'));
 const Search = lazy(() => import('./pages/Search'));
 const Extension = lazy(() => import('./pages/Extension'));
+const NotFound = lazy(() => import('./pages/NotFound'));
 
 const qc = new QueryClient({
   defaultOptions: {
@@ -124,7 +125,7 @@ function Layout(props: ParentProps) {
           class="hamburger"
           style={{ position: 'fixed', top: '12px', 'inset-inline-start': '12px', 'z-index': 200 }}
           onClick={() => setNavOpen((o) => !o)}
-          aria-label="Toggle navigation"
+          aria-label={t('nav.toggle')}
         >
           <i class="fa-solid fa-bars" />
         </button>
@@ -162,14 +163,25 @@ function Layout(props: ParentProps) {
   );
 }
 
-export default function App() {
+// The route table, separate from <Router> so tests can mount it in a
+// MemoryRouter. Besides Wurk's own paths it answers Sidekiq::Web's (/morgue,
+// /queues/:name, /retries/:key, /scheduled/:key, /morgue/:key,
+// /metrics/:klass) so bookmarks and links from a Sidekiq install keep landing
+// on the matching page.
+export function AppRoutes() {
   return (
-    <Router root={Layout} base={basePath()}>
+    <>
       <Route path="/" component={Dashboard} />
       <Route path="/queues" component={Queues} />
+      <Route path="/queues/:name" component={Queues} />
       <Route path="/retries" component={Retries} />
+      <Route path="/retries/:key" component={Retries} />
       <Route path="/scheduled" component={Scheduled} />
+      <Route path="/scheduled/:key" component={Scheduled} />
       <Route path="/dead" component={Dead} />
+      <Route path="/dead/:key" component={Dead} />
+      <Route path="/morgue" component={Dead} />
+      <Route path="/morgue/:key" component={Dead} />
       <Route path="/busy" component={Busy} />
       <Route path="/batches" component={Batches} />
       <Route path="/batches/:bid" component={BatchDetail} />
@@ -178,9 +190,19 @@ export default function App() {
       <Route path="/limiters" component={Limiters} />
       <Route path="/cron" component={Cron} />
       <Route path="/metrics" component={Metrics} />
+      <Route path="/metrics/:klass" component={Metrics} />
       <Route path="/profiles" component={Profiles} />
       <Route path="/search" component={Search} />
       <Route path="/ext/:tab" component={Extension} />
+      <Route path="*" component={NotFound} />
+    </>
+  );
+}
+
+export default function App() {
+  return (
+    <Router root={Layout} base={basePath()}>
+      <AppRoutes />
     </Router>
   );
 }

@@ -5,6 +5,7 @@ import { t } from '../i18n';
 import { absoluteTime, formatNumber, hoverTime } from '../utils';
 import { timeZone } from '../tz';
 import { basePath } from '../basePath';
+import { getJSON } from '../http';
 
 // One row from GET <mount>/api/profiles (Wurk::Api::Serializers.profile_record).
 interface Profile {
@@ -31,11 +32,7 @@ export default function Profiles() {
 
   const q = useQuery<Profile[]>(() => ({
     queryKey: ['profiles'],
-    queryFn: async () => {
-      const r = await fetch(`${basePath()}/api/profiles`);
-      if (!r.ok) throw new Error(`profiles request failed: ${r.status}`);
-      return r.json() as Promise<Profile[]>;
-    },
+    queryFn: () => getJSON<Profile[]>(`${basePath()}/api/profiles`),
     refetchInterval: 5000,
   }));
 

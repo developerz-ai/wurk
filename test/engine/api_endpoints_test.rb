@@ -160,6 +160,58 @@ class ApiEndpointsTest < Wurk::Test::EngineCase
     assert_kind_of Float, entry[:score]
   end
 
+  # W5 (#548): a ?page= past MAX_PAGE is clamped; the response names the page
+  # actually served and the deepest one reachable so the SPA can adopt both.
+  def test_listing_reports_clamped_page_and_max_page
+    max = ::Wurk::Api::Pagination::MAX_PAGE
+    get "/wurk/api/retries?page=#{max + 4000}&count=5"
+
+    assert_ok
+    assert_equal max, json_body[:page]
+    assert_equal max, json_body[:max_page]
+
+    get "/wurk/api/queues/#{@queue}?page=#{max * 10}"
+
+    assert_equal max, json_body[:page]
+    assert_equal max, json_body[:max_page]
+  end
+
+  # W10 (#548): `total` stays the whole set (what the "… all" actions hit);
+  # a filtered list also reports how many rows matched.
+  def test_filtered_listing_reports_filtered_total
+    4.times { push_to_zset('retry') }
+    get "/wurk/api/retries?count=10&substr=#{CGI.escape(@class_name)}"
+
+    assert_ok
+    assert_equal 4, json_body[:filtered_total]
+    assert json_body[:filtered_total_exact], 'a fully walked set must report an exact count'
+    assert_operator json_body[:total], :>=, json_body[:filtered_total]
+  end
+
+  def test_filtered_total_is_a_lower_bound_when_the_page_fills
+    3.times { push_to_zset('retry') }
+    get "/wurk/api/retries?count=2&substr=#{CGI.escape(@class_name)}"
+
+    assert_equal 2, json_body[:entries].size
+    assert_equal 2, json_body[:filtered_total]
+    refute json_body[:filtered_total_exact]
+  end
+
+  def test_filtered_total_is_a_lower_bound_past_the_scan_limit
+    page = { page: 0, count: 5, substr: 'needle' }
+    rows = Array.new(::Wurk::Api::Pagination::FILTER_SCAN_LIMIT + 1) { { klass: 'Hay', jid: 'x' } }
+    ::Wurk::Api::Pagination.slice(rows, page) { |row| row }
+
+    assert_equal({ filtered_total: 0, filtered_total_exact: false },
+                 ::Wurk::Api::Pagination.meta(page).slice(:filtered_total, :filtered_total_exact))
+  end
+
+  def test_unfiltered_listing_omits_filtered_total
+    get '/wurk/api/retries?count=5'
+
+    refute json_body.key?(:filtered_total)
+  end
+
   def test_scheduled_returns_paged_envelope
     push_to_zset('schedule')
     get '/wurk/api/scheduled'
@@ -508,7 +560,7 @@ class ApiEndpointsTest < Wurk::Test::EngineCase
   # Retry-After instead of pinning another Puma thread. Slots are filled/freed
   # directly so the assertion is deterministic (no real concurrency needed).
   def test_stream_503_when_at_concurrent_cap
-    cap = ::Wurk::StreamConcurrencyGuard::MAX_CONCURRENT_STREAMS
+    cap = ::Wurk::StreamConcurrencyGuard.max_streams
     cap.times { ::Wurk::StreamConcurrencyGuard.acquire }
 
     get '/wurk/api/stream?max_duration=0&tick=0'

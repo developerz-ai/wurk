@@ -28,6 +28,13 @@ class ExtensionsTest < Wurk::Test::EngineCase
       app.delete '/list' do
         erb '<p>deleted</p>'
       end
+      app.get '/stats.json' do
+        header 'X-Ext', 'yes'
+        json(count: 3)
+      end
+      app.get '/missing' do
+        halt 404
+      end
     end
   end
 
@@ -61,6 +68,25 @@ class ExtensionsTest < Wurk::Test::EngineCase
 
     assert_equal 302, last_response.status
     assert_includes last_response.headers['Location'], "/wurk/ext/#{@name}/list"
+  end
+
+  # W9: the controller serves the extension's own content type instead of
+  # forcing HTML, and passes its headers through.
+  def test_json_route_is_served_as_json
+    get "/wurk/ext/#{@name}/stats.json"
+
+    assert_ok
+    assert_includes last_response.content_type, 'application/json'
+    assert_equal({ 'count' => 3 }, JSON.parse(last_response.body))
+    assert_equal 'yes', last_response.headers['X-Ext']
+  end
+
+  def test_halt_404_is_a_plain_text_404
+    get "/wurk/ext/#{@name}/missing"
+
+    assert_equal 404, last_response.status
+    assert_includes last_response.content_type, 'text/plain'
+    assert_equal '404', last_response.body
   end
 
   def test_unknown_route_renders_404_body

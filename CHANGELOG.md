@@ -6,10 +6,14 @@ All notable changes to Wurk are recorded here. Format: [Keep a Changelog](https:
 
 ### Security
 
+- **`mount Sidekiq::Web` / `run Sidekiq::Web` / `Sidekiq::Web.call` enforce `authorization` and read-only mode** like the engine mount (and Sidekiq Enterprise). Extension routes on that mount were served without authorization to anyone who could reach it.
+- **Extension `redirect` can no longer leave the host** (`//evil.com`, `/\evil.com`, absolute off-site and `javascript:` targets fall back to the extension root).
+- **`GET /profiles/:key` (Firefox profiler upload) refuses cross-site requests.**
 - **Encrypted jobs no longer leak their decrypted argument back into Redis.** When an encrypted (`encrypt: true`) IterableJob was interrupted, or the limiter dead-routed a rate-limited encrypted job, the re-pushed payload carried the plaintext secret into the queue/dead set. The server middleware now restores the envelope once the chain unwinds, and every re-push site seals a copy.
 
 ### Changed
 
+- **Dashboard listings return `max_page` and the page actually served**; filtered listings also return `filtered_total` / `filtered_total_exact`.
 - **Metrics and profiles use Sidekiq 8.1's wire format.** Minute buckets are `j|YYMMDD|H:MM` (8h), plus 10-minute buckets `j|YYMMDD|H:M` (3d) and `h|<klass>-D-H:M` runtime histograms; the `<klass>-YYYYMMDD-H` hash is no longer written. History written by Sidekiq before a swap now shows up, and Sidekiq reads what Wurk writes. `<klass>|p` counts failed executions too and `|ms` covers only executions that did not fail; ActiveJob jobs are recorded under the wrapped class. Per-class history from earlier Wurk versions (4-digit-year keys) is not shown and expires within 3 days. Profiles: `token` is the job's `profile` value, `type` the job class, `elapsed` float seconds, 1-day expiry, `sid` left for the Web UI's profile-store id.
 - **`JobSet#kill_all` defaults to `notify_failure: false`** (Sidekiq 8, spec §19.5) and trims the dead set once; dashboard "Kill All" no longer fires death handlers per job.
 - **`Queue#clear`, `DeadSet#trim` and `Process#signal` run in MULTI** like upstream.
@@ -30,6 +34,12 @@ All notable changes to Wurk are recorded here. Format: [Keep a Changelog](https:
 
 ### Fixed
 
+- **Dashboard SSE streams can no longer hang the host app.** The per-process cap is half the server's request threads (Puma `max_threads` / `RAILS_MAX_THREADS`, at least 1) instead of a fixed 10, which sat above Rails' default of 3 Puma threads; `config.web.max_streams` overrides it (0 = off). Streams recycle every 30s and the SPA reconnects with backoff after a 503.
+- **The health-check server can't be stalled by a slow or idle client**: each request head must arrive within 1s and 8KB, handled off the accept thread (up to 16 at once).
+- **Dashboard ids containing a dot** (limiters, cron loops, flows, batches, queue and job deep links) no longer 404.
+- **Dashboard:** a failing API response shows the page's error state instead of crashing the SPA; typing in the Retries/Scheduled/Dead filter keeps focus; pagination stops at the server's limit; Retry/Kill/Delete All are disabled while a filter is active and the match count is shown; partly failed bulk actions report applied/failed and refresh; Sidekiq URLs (`/morgue`, `/queues/:name`, `/retries/:key`, `/scheduled/:key`, `/metrics/:klass`) open the matching page and unknown paths show Not Found; Cmd/Ctrl/middle-click works inside extension views; accessibility labels are translated in all 8 locales.
+- **`Sidekiq::Web.locales`, `.views`, `.middlewares` exist**; web extensions support `halt`, `json`, `reload_page`, `redirect_to`, `header`, `render(:erb, …)` and Rack-triple returns with their own Content-Type; `redirect "#{root_path}…"` no longer doubles the extension prefix.
+- **Search `truncated` is accurate at the limit and duplicate ZSCAN hits are dropped**; the host middleware chain is cached per mount.
 - **`RetrySet`/`ScheduledSet`/`DeadSet#each` and `Queue#each` no longer skip entries when deleting during iteration.**
 - **`SortedSet#scan` returns `SortedEntry` in its Enumerator form too**, and a pattern that already contains `*` is passed through.
 - **`Sidekiq::Testing` fake and inline modes round-trip jobs through JSON**, so tests see string keys like production.

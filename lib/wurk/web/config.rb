@@ -141,6 +141,20 @@ module Wurk
         @default_theme = theme
       end
 
+      # Cap on concurrent live-update (SSE) streams per web process. Each open
+      # stream pins a server thread, so nil (the default) derives the cap from
+      # the server's thread count, leaving the rest for ordinary requests;
+      # 0 turns streaming off, and the SPA falls back to polling.
+      attr_reader :max_streams
+
+      def max_streams=(value)
+        unless value.nil? || (value.is_a?(::Integer) && value >= 0)
+          raise ArgumentError, "max_streams must be nil or an Integer >= 0 (got #{value.inspect})"
+        end
+
+        @max_streams = value
+      end
+
       # Host copy overrides for the dashboard, keyed by locale tag and
       # deep-merged over the shipped bundle by the SPA:
       #
@@ -168,6 +182,10 @@ module Wurk
       # `t()` reads en.yml from every listed dir. Wurk's own SPA i18n is
       # separate, so it starts empty.
       attr_reader :tabs, :extensions, :locales
+      # Upstream's ERB view-directory list. Wurk's dashboard is the SPA, and
+      # extension views resolve from their own root_dir, so appending here is
+      # accepted and ignored — it exists so gems doing `views << dir` boot.
+      attr_reader :views
       attr_accessor :custom_job_info_rows, :app_url, :assets_path
 
       # Matches Sidekiq::Web::Config#register_extension (aliased `register`,
@@ -236,28 +254,28 @@ module Wurk
       # request (i.e. from an initializer) — the chain is built once.
       def use(middleware, *args, &block)
         @middlewares << [middleware, args, block]
-        @rack_app = nil
       end
 
-      # Builds the host-middleware chain wrapping `inner`, memoized against
-      # `[inner, middlewares]` — `middlewares` is the live array (upstream
-      # surface), so direct mutation after the first request triggers a
-      # rebuild instead of silently serving the stale chain. Keying on
-      # `inner` too matters for the same reason: memoizing on the
-      # middleware list alone pins whichever `inner` app the *first* caller
-      # passed, forever — a second mount (e.g. per-test Rack app, or a
-      # second engine mount) would silently get served the first one's app.
-      # Production builds exactly once at boot; the per-request comparison
-      # is an == over a handful of entries plus one object identity check.
+      # Builds the host-middleware chain wrapping `inner`, cached per `inner`
+      # (by identity) against a snapshot of `middlewares`. Per inner because
+      # two callers live side by side — the engine's MiddlewareStack and the
+      # standalone `Sidekiq::Web.call` — and a single slot made each request
+      # on one evict the other's chain. The snapshot matters because
+      # `middlewares` is the live array (upstream surface): direct mutation
+      # after the first request triggers a rebuild instead of silently serving
+      # the stale chain. Steady state is one Hash lookup plus an == over a
+      # handful of entries.
       def rack_app(inner)
-        return @rack_app if @rack_app && @rack_app_key == [inner, @middlewares]
+        snapshot, app = @rack_apps[inner]
+        return app if app && snapshot == @middlewares
 
-        @rack_app_key = [inner, @middlewares.dup]
-        stack = @middlewares
-        @rack_app = ::Rack::Builder.new do
+        stack = @middlewares.dup
+        app = ::Rack::Builder.new do
           stack.each { |middleware, args, block| use(middleware, *args, &block) }
           run inner
         end.to_app
+        @rack_apps[inner] = [stack, app]
+        app
       end
 
       # Read-only mode. When on, the Authorization middleware blocks every
@@ -279,8 +297,9 @@ module Wurk
         @read_only = env_read_only?
         @read_only_message = nil
         @default_theme = nil
+        @max_streams = nil
         @middlewares = []
-        @rack_app = nil
+        @rack_apps = {}.compare_by_identity
         init_extensions!
         init_locales!
       end
@@ -305,6 +324,7 @@ module Wurk
         @tabs = DEFAULT_TABS.dup
         @extensions = []
         @locales = []
+        @views = []
         @custom_job_info_rows = []
         @app_url = nil
         @assets_path = nil
@@ -363,6 +383,18 @@ module Wurk
         config.tabs
       end
 
+      def locales
+        config.locales
+      end
+
+      def views
+        config.views
+      end
+
+      def middlewares
+        config.middlewares
+      end
+
       def custom_job_info_rows
         config.custom_job_info_rows
       end
@@ -400,8 +432,12 @@ module Wurk
       # Methods allowed while read-only. Anything else is a mutation and 403s.
       SAFE_METHODS = %w[GET HEAD OPTIONS].freeze
 
-      def initialize(app)
+      # `api_handoff: false` for a mount that never routes to Wurk::API (the
+      # standalone `Sidekiq::Web.call`), where a `/api/v1` path is just an
+      # extension path and read-only must refuse it here like any other.
+      def initialize(app, api_handoff: true)
         @app = app
+        @api_handoff = api_handoff
       end
 
       def call(env)
@@ -417,7 +453,7 @@ module Wurk
         # makes mount mode 1 (and nothing else) inherit `WURK_WEB_READ_ONLY`.
         # The host's `authorized?` block above still applies: it gates the
         # mount, and a machine client reaching this path chose that mount.
-        if ::Wurk::API.engine_serves?(path)
+        if @api_handoff && ::Wurk::API.engine_serves?(path)
           env[::Wurk::API::READ_ONLY_ENV] = true if config.read_only?
           return @app.call(env)
         end

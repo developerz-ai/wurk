@@ -1,4 +1,5 @@
 import { children, createEffect, createSignal, onCleanup, onMount, Show, type JSX } from 'solid-js';
+import { t } from '../i18n';
 
 // Matches --dur-slow (styles/abstracts/_variables.scss) — the modal's exit transition.
 const EXIT_DURATION_MS = 240;
@@ -78,7 +79,7 @@ export default function Modal(props: ModalProps) {
       <div class="modal-panel" style={{ 'max-width': `${props.width ?? 640}px` }}>
         <div class="modal-header">
           <h2 id={titleId} class="modal-title">{shown()?.title}</h2>
-          <button class="modal-close" onClick={() => props.onClose()} aria-label="Close">
+          <button class="modal-close" onClick={() => props.onClose()} aria-label={t('common.close')}>
             <i class="fa-solid fa-xmark" />
           </button>
         </div>

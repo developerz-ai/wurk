@@ -118,6 +118,41 @@ class WebSearchTest < Wurk::Test::UnitCase
     assert_equal 2, hits.size
   end
 
+  # Stopping at `limit` with more hits left is a partial result like any
+  # other bound — the UI must be told.
+  def test_search_stopping_at_limit_with_more_hits_is_truncated
+    3.times { push_to_zset('retry', @class_a, [@needle]) }
+
+    search = Wurk::Web::Search.new(@needle, kinds: ['retry'], limit: 2)
+
+    assert_equal 2, search.to_a.size
+    assert_predicate search, :truncated?
+  end
+
+  def test_search_with_exactly_limit_hits_is_not_truncated
+    2.times { push_to_zset('retry', @class_a, [@needle]) }
+
+    search = Wurk::Web::Search.new(@needle, kinds: ['retry'], limit: 2)
+
+    assert_equal 2, search.to_a.size
+    refute_predicate search, :truncated?
+  end
+
+  # ZSCAN guarantees every element is returned at least once, not exactly
+  # once (a rehash mid-scan repeats some). Replays the same member on two
+  # pages to prove the hit is reported once.
+  def test_search_drops_a_member_zscan_returns_twice
+    push_to_zset('retry', @class_a, [@needle])
+    real = Wurk.redis { |c| c.call('ZSCAN', 'retry', '0', 'COUNT', 1000) }[1]
+    Thread.current[:wurk_capsule] = RepeatingZscan.new(Wurk.redis_pool, real)
+
+    hits = Wurk::Web::Search.new(@needle, kinds: ['retry']).to_a
+
+    assert_equal 1, hits.size
+  ensure
+    Thread.current[:wurk_capsule] = nil
+  end
+
   def test_search_clamps_limit_to_max
     s = Wurk::Web::Search.new(@needle, limit: 99_999)
 
@@ -315,6 +350,29 @@ class WebSearchTest < Wurk::Test::UnitCase
       def call(*args, **, &)
         calls << [args[0].to_s.upcase, args[1]]
         conn.call(*args, **, &)
+      end
+    end
+  end
+
+  # Serves ZSCAN as two pages that both carry `page`, the shape Redis returns
+  # when the set rehashes between cursor calls.
+  class RepeatingZscan
+    def initialize(pool, page)
+      @pool = pool
+      @page = page
+    end
+
+    def redis_pool = self
+
+    def with
+      @pool.with { |conn| yield Conn.new(conn, @page) }
+    end
+
+    Conn = Struct.new(:conn, :page) do
+      def call(*args, **, &)
+        return conn.call(*args, **, &) unless args[0].to_s.casecmp?('ZSCAN')
+
+        [args[2] == '0' ? '7' : '0', page]
       end
     end
   end

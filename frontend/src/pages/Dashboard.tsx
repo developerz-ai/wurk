@@ -10,6 +10,7 @@ import { useSSE } from '../hooks/useSSE';
 import { formatBucket, formatDuration } from '../utils';
 import { timeZone } from '../tz';
 import { basePath } from '../basePath';
+import { getJSON } from '../http';
 
 interface StatsData {
   processed: number;
@@ -93,7 +94,7 @@ export default function Dashboard() {
 
   const statsQuery = useQuery(() => ({
     queryKey: ['stats'],
-    queryFn: () => fetch(`${basePath()}/api/stats`).then((r) => r.json() as Promise<StatsData>),
+    queryFn: () => getJSON<StatsData>(`${basePath()}/api/stats`),
     enabled: !sse.connected(),
     refetchInterval: sse.connected() ? false : 5000,
   }));
@@ -103,7 +104,7 @@ export default function Dashboard() {
   const historyQuery = useQuery(() => ({
     queryKey: ['history', range().bucket, range().window],
     queryFn: () =>
-      fetch(`${basePath()}/api/history/${range().bucket}?window=${range().window}`).then((r) => r.json() as Promise<HistoryResponse>),
+      getJSON<HistoryResponse>(`${basePath()}/api/history/${range().bucket}?window=${range().window}`),
     refetchInterval: 30000,
   }));
 
@@ -208,7 +209,7 @@ export default function Dashboard() {
                   <p class="obs-panel__sub">{t('dashboard.perf_subtitle', { range: t(range().desc_key) })}</p>
                 </div>
                 <div class="obs-panel__controls">
-                  <div class="obs-seg" role="tablist" aria-label="Time range">
+                  <div class="obs-seg" role="tablist" aria-label={t('metrics.time_range')}>
                     <For each={RANGES}>
                       {(r, i) => (
                         <button
