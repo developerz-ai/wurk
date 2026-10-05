@@ -1,6 +1,5 @@
 # frozen_string_literal: true
 
-require 'securerandom'
 require 'zlib'
 require 'stringio'
 require_relative 'keys'
@@ -12,53 +11,50 @@ module Wurk
   # Firefox-profiler (gecko) JSON is gzipped and stored so the dashboard can
   # hand it to https://profiler.firefox.com for flame-graph inspection.
   #
-  # Redis schema (spec §1.7), wire-compat with Sidekiq's Profiles pane:
+  # Redis schema (spec §1.7, §19.8), field-for-field Sidekiq 8.1's Profiler:
   #
-  #   profiles            ZSET   member = "<token>-<jid>", score = expiry epoch
-  #   <token>-<jid>       HASH   jid, type, token, started_at, elapsed, size,
-  #                              sid, data (gzipped gecko JSON)
+  #   profiles            ZSET   member = "<token>-<jid>", score = expiry epoch (float)
+  #   <token>-<jid>       HASH   started_at (int epoch), token (the job's
+  #                              `profile` value), type (wrapped || class), jid,
+  #                              elapsed (float seconds), size (bytes of data),
+  #                              data (gzipped gecko JSON)
+  #
+  # `sid` is not written here: it is the profile-store id the Web UI caches
+  # after its first upload, and a value in it makes the UI skip the upload.
   #
   # Capture is a no-op unless the `vernier` gem is loaded — profiling is an
   # opt-in, dev/staging tool, so vernier stays an optional dependency.
   module Profiler
-    # Stored profiles live this long (score = now + TTL); ProfileSet purges
-    # expired members on read.
-    TTL = 7 * 24 * 60 * 60 # 7 days
+    EXPIRY = 86_400
+    DEFAULT_OPTIONS = { mode: :wall }.freeze
 
     class << self
       # Server-side hook called from Processor#dispatch. Returns the perform
       # result. Only captures when the job opted in AND vernier is present —
-      # otherwise it's a plain `yield`. Crucially there is NO blanket rescue
-      # here: the job's own exceptions (a normal failure, or JobRetry::Skip
-      # from the interrupt/expiry middleware) must propagate untouched so the
-      # retry/skip flow works. Only the storage step is made failure-safe
-      # (see #safe_store).
+      # otherwise it's a plain `yield`. There is NO blanket rescue: the job's
+      # own exceptions (a normal failure, or JobRetry::Skip) must propagate
+      # untouched, and a failed job stores no profile (upstream behaviour).
+      # Only the storage step is made failure-safe (see #safe_store).
       # No `&block` parameter: every job passes through here, and declaring one
       # would reify the caller's block into a Proc even on the `yield`-straight-
-      # through path that opted-out jobs take. The capture path pays for its own
-      # block instead.
+      # through path that opted-out jobs take.
       def call(job_hash)
-        label = job_hash['profile']
-        return yield unless label && defined?(::Vernier)
+        return yield unless job_hash['profile'] && defined?(::Vernier)
 
-        capture(job_hash, label) { yield } # rubocop:disable Style/ExplicitBlockArgument
+        capture(job_hash) { yield } # rubocop:disable Style/ExplicitBlockArgument
       end
 
       # Persists a profile. Extracted from capture so it is unit-testable
-      # without vernier: tests pass a ready gecko JSON blob. The wide keyword
-      # list mirrors the HASH fields one-to-one — collapsing them into an
-      # options hash would just hide the schema.
-      def store(jid:, type:, gecko_json:, started_at:, elapsed_ms:, token: SecureRandom.hex(8),
-                sid: Wurk.configuration[:identity], pool: nil)
+      # without vernier: tests pass a ready gecko JSON blob.
+      def store(jid:, type:, token:, gecko_json:, started_at:, elapsed:, pool: nil)
         key = profile_key(token, jid)
         gz = gzip(gecko_json)
         with_pool(pool) do |conn|
-          conn.pipelined do |pipe|
-            pipe.call('HSET', key, 'jid', jid, 'type', type, 'token', token,
-                      'started_at', started_at.to_i, 'elapsed', elapsed_ms.to_i,
-                      'size', gz.bytesize, 'sid', sid.to_s, 'data', gz)
-            pipe.call('EXPIRE', key, TTL)
-            pipe.call('ZADD', Keys::PROFILES, (now + TTL).to_i, key)
+          conn.multi do |tx|
+            tx.call('ZADD', Keys::PROFILES, ::Time.now.to_f + EXPIRY, key)
+            tx.call('HSET', key, 'started_at', started_at.to_i, 'token', token, 'type', type, 'jid', jid,
+                    'elapsed', elapsed.to_f, 'data', gz, 'size', gz.bytesize)
+            tx.call('EXPIRE', key, EXPIRY)
           end
         end
         key
@@ -84,38 +80,44 @@ module Wurk
 
       # Wrap the block in a Vernier capture, write the gecko JSON to a tempfile
       # (Vernier serializes on block exit), then store it. Only reached when
-      # vernier is loaded.
-      def capture(job_hash, label)
+      # vernier is loaded. `elapsed` spans the whole capture, as upstream's
+      # does.
+      def capture(job_hash)
         retval = nil
-        started = now
-        elapsed_ms = nil
-        json = profile_to_json do
-          t0 = monotonic_ms
-          retval = yield
-          elapsed_ms = monotonic_ms - t0
-        end
-        safe_store(job_hash, label, json, started, elapsed_ms)
+        started = ::Time.now
+        t0 = monotonic
+        json = profile_to_json(profiler_options(job_hash)) { retval = yield }
+        safe_store(job_hash, json, started, monotonic - t0)
         retval
       end
 
       # The job already ran successfully by the time we get here; a Redis hiccup
       # persisting the profile must not turn a green job red. Job exceptions
       # never reach this method — they propagate out of `capture`'s yield.
-      def safe_store(job_hash, label, json, started, elapsed_ms)
-        store(jid: job_hash['jid'], type: label.to_s, gecko_json: json,
-              started_at: started, elapsed_ms: elapsed_ms)
+      def safe_store(job_hash, json, started, elapsed)
+        store(jid: job_hash['jid'], token: job_hash['profile'].to_s,
+              type: job_hash['wrapped'] || job_hash['class'], gecko_json: json,
+              started_at: started, elapsed: elapsed)
       rescue StandardError => e
         Wurk.configuration.handle_exception(e, context: 'Wurk::Profiler')
+      end
+
+      # The job's `profiler_options` hash is passed to Vernier.profile, over a
+      # `mode: :wall` default (upstream's DEFAULT_OPTIONS).
+      def profiler_options(job_hash)
+        opts = (job_hash['profiler_options'] || {}).transform_keys(&:to_sym)
+        opts[:mode] = opts[:mode].to_sym if opts[:mode]
+        DEFAULT_OPTIONS.merge(opts)
       end
 
       # `tempfile` (and the `tmpdir` it drags in) is ~19ms of `require "wurk"`,
       # spent only by an install that has vernier loaded AND profiling switched
       # on for a job. Everyone else was paying it at boot.
-      def profile_to_json(&)
+      def profile_to_json(options, &)
         require 'tempfile'
 
         Tempfile.create(['wurk-profile', '.json']) do |file|
-          ::Vernier.profile(out: file.path, &)
+          ::Vernier.profile(**options, out: file.path, &)
           File.read(file.path)
         end
       end
@@ -124,12 +126,8 @@ module Wurk
         pool ? PoolCheckout.with(pool, idempotent, &) : Wurk.redis(idempotent:, &)
       end
 
-      def now
-        ::Time.now.to_f
-      end
-
-      def monotonic_ms
-        ::Process.clock_gettime(::Process::CLOCK_MONOTONIC, :float_millisecond)
+      def monotonic
+        ::Process.clock_gettime(::Process::CLOCK_MONOTONIC)
       end
     end
   end

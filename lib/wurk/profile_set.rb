@@ -10,12 +10,12 @@ module Wurk
   class ProfileSet
     include Enumerable
 
-    # Snapshot the (non-expired) member keys at construction. ZREMRANGEBYSCORE
-    # drops members whose expiry score has passed before we read the rest.
+    # Snapshot the (non-expired) member keys at construction, newest first.
+    # ZREMRANGEBYSCORE drops members whose expiry score has passed.
     def initialize
       @keys = Wurk.redis do |conn|
-        conn.call('ZREMRANGEBYSCORE', Keys::PROFILES, '-inf', "(#{::Time.now.to_i}")
-        conn.call('ZRANGE', Keys::PROFILES, 0, -1)
+        conn.call('ZREMRANGEBYSCORE', Keys::PROFILES, '-inf', ::Time.now.to_f.to_s)
+        conn.call('ZRANGE', Keys::PROFILES, '+inf', 0, 'BYSCORE', 'REV')
       end
     end
 
@@ -23,8 +23,9 @@ module Wurk
 
     # HMGET of the metadata fields only, pipelined into one round-trip:
     # HGETALL would also pull each profile's `data` field — the multi-MB
-    # gzipped blob — through Redis for every list render.
-    METADATA_FIELDS = %w[jid type token size elapsed started_at].freeze
+    # gzipped blob — through Redis for every list render. Upstream's order,
+    # which ProfileRecord.new reads positionally.
+    METADATA_FIELDS = %w[started_at jid type token size elapsed].freeze
 
     def each
       return enum_for(:each) unless block_given?
@@ -34,17 +35,15 @@ module Wurk
           @keys.each { |key| pipe.call('HMGET', key, *METADATA_FIELDS) }
         end
       end
-      rows.each do |values|
-        hash = METADATA_FIELDS.zip(Array(values)).to_h
-        yield ProfileRecord.new(hash) unless hash['jid'].nil?
-      end
+      rows.each { |values| yield ProfileRecord.new(values) unless values.nil? || values[1].nil? }
     end
   end
 
   # One profile record: the metadata fields of a `<token>-<jid>` HASH plus
-  # lazy access to the gzipped gecko blob. Spec §19.8.
+  # lazy access to the gzipped gecko blob. Spec §19.8; `elapsed` is Float
+  # seconds and `started_at` a Time, as upstream.
   class ProfileRecord
-    attr_reader :jid, :type, :token, :size, :elapsed
+    attr_reader :started_at, :jid, :type, :token, :size, :elapsed
 
     # Fetch the stored gzipped blob for a profile storage key ("<token>-<jid>")
     # straight from Redis, without materializing the whole record — the Profiles
@@ -54,18 +53,14 @@ module Wurk
       Wurk.redis { |conn| conn.call('HGET', key, 'data') }
     end
 
-    def initialize(hash)
-      @hash = hash
-      @jid = hash['jid']
-      @type = hash['type']
-      @token = hash['token']
-      @size = hash['size'].to_i
-      @elapsed = hash['elapsed'].to_i
-    end
-
-    def started_at
-      ts = @hash['started_at']
-      ::Time.at(ts.to_i) unless ts.nil? || ts.empty?
+    # `arr` is the HMGET of ProfileSet::METADATA_FIELDS, in that order.
+    def initialize(arr)
+      @started_at = ::Time.at(Integer(arr[0]))
+      @jid = arr[1]
+      @type = arr[2]
+      @token = arr[3]
+      @size = Integer(arr[4])
+      @elapsed = Float(arr[5])
     end
 
     def key = Wurk::Profiler.profile_key(@token, @jid)

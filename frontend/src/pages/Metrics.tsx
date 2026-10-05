@@ -9,8 +9,9 @@ import { formatBucket, formatDuration, formatNumber, truncate } from '../utils';
 import { timeZone } from '../tz';
 import { basePath } from '../basePath';
 
-// Matches Wurk::Api::Serializers.metric_row — processed (successes), failed,
-// and total runtime ms across both.
+// Matches Wurk::Api::Serializers.metric_row — processed (every execution,
+// failures included, as Sidekiq counts it), failed, and runtime ms of the
+// executions that did not fail.
 interface TopJob {
   klass: string;
   processed: number;
@@ -222,7 +223,7 @@ export default function Metrics() {
   // the slice would let three jobs at 30/30/30 each report 33%.
   const allJobs = createMemo(() =>
     (metricsQuery.data?.top_jobs ?? [])
-      .map((j) => ({ klass: j.klass, count: j.processed + j.failed }))
+      .map((j) => ({ klass: j.klass, count: j.processed }))
       .sort((a, b) => b.count - a.count),
   );
   const jobsTotal = createMemo(() => allJobs().reduce((s, j) => s + j.count, 0));

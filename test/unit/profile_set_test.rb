@@ -19,9 +19,9 @@ class ProfileSetTest < Wurk::Test::UnitCase
     super
   end
 
-  def seed(jid:, token:, type: 'vernier', elapsed_ms: 5, at: ::Time.now)
-    Wurk::Profiler.store(jid: jid, type: type, gecko_json: GECKO,
-                         started_at: at, elapsed_ms: elapsed_ms, token: token)
+  def seed(jid:, token:, type: 'HardJob', elapsed: 0.005, at: ::Time.now)
+    Wurk::Profiler.store(jid: jid, type: type, token: token, gecko_json: GECKO,
+                         started_at: at, elapsed: elapsed)
   end
 
   def test_enumerates_stored_profiles
@@ -33,13 +33,14 @@ class ProfileSetTest < Wurk::Test::UnitCase
   end
 
   def test_record_exposes_metadata_and_lazy_data
-    seed(jid: 'a', token: 't1', type: 'wall', elapsed_ms: 99, at: ::Time.at(1_700_000_000))
+    seed(jid: 'a', token: 't1', type: 'wall', elapsed: 0.099, at: ::Time.at(1_700_000_000))
     rec = Wurk::ProfileSet.new.first
 
     assert_equal 'a', rec.jid
     assert_equal 'wall', rec.type
     assert_equal 't1', rec.token
-    assert_equal 99, rec.elapsed
+    assert_kind_of Float, rec.elapsed
+    assert_in_delta 0.099, rec.elapsed
     assert_operator rec.size, :>, 0
     assert_equal ::Time.at(1_700_000_000), rec.started_at
     assert_equal 't1-a', rec.key
@@ -61,6 +62,31 @@ class ProfileSetTest < Wurk::Test::UnitCase
     assert_includes keys, 'tlive-live'
     refute_includes keys, 'told-dead'
     assert_equal(1, Wurk.redis { |c| c.call('ZCARD', Wurk::Keys::PROFILES) })
+  end
+
+  # Upstream lists newest first (ZRANGE … BYSCORE REV on the expiry score).
+  def test_enumerates_newest_first
+    seed(jid: 'old', token: 't1')
+    seed(jid: 'new', token: 't2')
+    Wurk.redis { |c| c.call('ZADD', Wurk::Keys::PROFILES, ::Time.now.to_f + 10, 't1-old') }
+    Wurk.redis { |c| c.call('ZADD', Wurk::Keys::PROFILES, ::Time.now.to_f + 20, 't2-new') }
+
+    assert_equal %w[t2-new t1-old], Wurk::ProfileSet.new.map(&:key)
+  end
+
+  # A profile Sidekiq 8.1's Profiler wrote (its exact HSET field set,
+  # `filename` and `sid` included) reads back with upstream's types.
+  def test_reads_a_sidekiq_written_record
+    Wurk.redis do |c|
+      c.call('HSET', 'tok-jid9', 'started_at', 1_700_000_000, 'token', 'tok', 'type', 'HardJob', 'jid', 'jid9',
+             'filename', '/tmp/x.json.gz', 'elapsed', '1.25', 'data', 'gz', 'size', 2, 'sid', 'store-id')
+      c.call('ZADD', Wurk::Keys::PROFILES, ::Time.now.to_f + 60, 'tok-jid9')
+    end
+
+    rec = Wurk::ProfileSet.new.first
+
+    assert_equal ['jid9', 'HardJob', 'tok', 2, 1.25, ::Time.at(1_700_000_000)],
+                 [rec.jid, rec.type, rec.token, rec.size, rec.elapsed, rec.started_at]
   end
 
   def test_each_returns_enumerator_without_block

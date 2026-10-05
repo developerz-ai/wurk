@@ -10,6 +10,16 @@ All notable changes to Wurk are recorded here. Format: [Keep a Changelog](https:
 
 ### Changed
 
+- **Metrics and profiles use Sidekiq 8.1's wire format.** Minute buckets are `j|YYMMDD|H:MM` (8h), plus 10-minute buckets `j|YYMMDD|H:M` (3d) and `h|<klass>-D-H:M` runtime histograms; the `<klass>-YYYYMMDD-H` hash is no longer written. History written by Sidekiq before a swap now shows up, and Sidekiq reads what Wurk writes. `<klass>|p` counts failed executions too and `|ms` covers only executions that did not fail; ActiveJob jobs are recorded under the wrapped class. Per-class history from earlier Wurk versions (4-digit-year keys) is not shown and expires within 3 days. Profiles: `token` is the job's `profile` value, `type` the job class, `elapsed` float seconds, 1-day expiry, `sid` left for the Web UI's profile-store id.
+- **`JobSet#kill_all` defaults to `notify_failure: false`** (Sidekiq 8, spec §19.5) and trims the dead set once; dashboard "Kill All" no longer fires death handlers per job.
+- **`Queue#clear`, `DeadSet#trim` and `Process#signal` run in MULTI** like upstream.
+- **The two-argument `scan { |value, score| }` form is gone**: `SortedSet#scan` always yields `SortedEntry` (a two-parameter block gets `(entry, nil)`, as upstream).
+
+### Added
+
+- **`Sidekiq::Metrics::Query.new(now:)`** returning `Result`/`JobResult`/`MarkResult` per the Sidekiq API.
+- **`Sidekiq::JobSet` / `Sidekiq::SortedSet` aliases** (sidekiq-unique-jobs releases its locks again), `Sidekiq.loader`, and `💣` on `Queue`/`SortedSet`.
+- **Drop-in require paths**: `sidekiq-pro`, `sidekiq-ent`, `sidekiq-ent/web`, `sidekiq-ent/periodic/testing`, `sidekiq/pro/web`, `sidekiq/middleware/i18n`, `sidekiq/middleware/current_attributes`, `sidekiq/testing/inline`, `sidekiq/test_api`, `sidekiq/metrics/query`, `sidekiq/profiler`, and every other upstream 8.1 file whose constants Wurk provides — a test requires each in a process without the sidekiq gem.
 - **`Batch#jobs` is atomic (Pro §2.3).** Pushes are buffered and flushed at block exit; a block that raises enqueues nothing, and a batch cannot fire while its `jobs` block is open. `autoflush = N` still flushes every N jobs; use `autoflush = 1` for push-per-job.
 - **A child batch's `:complete`/`:success` callback jobs run inside the parent batch**, so the parent waits for them (the §2.9 step workflow now works). Their payloads carry the parent's `bid`.
 - **The Rails railtie boots workers only inside a web server.** `rails server`, Puma, Passenger or Unicorn boot the swarm; `rails runner`, `rails generate`, rake tasks and scripts that require `config/environment` no longer fork one (they used to fetch jobs and cut them off at exit). Other servers (Falcon, Thin, Pitchfork, a custom rackup) opt in with `WURK_EMBED=1`. `WURK_DISABLED=1` still disables boot.
@@ -20,6 +30,11 @@ All notable changes to Wurk are recorded here. Format: [Keep a Changelog](https:
 
 ### Fixed
 
+- **`RetrySet`/`ScheduledSet`/`DeadSet#each` and `Queue#each` no longer skip entries when deleting during iteration.**
+- **`SortedSet#scan` returns `SortedEntry` in its Enumerator form too**, and a pattern that already contains `*` is passed through.
+- **`Sidekiq::Testing` fake and inline modes round-trip jobs through JSON**, so tests see string keys like production.
+- **Opening a profile in the Firefox profiler works** (the JWT's `profileToken` is used and cached).
+- **Queue latency falls back to `created_at`** and reads 0 for a payload with no timestamp (was "since 1970"); the default `retain_history` emitter includes per-queue `sidekiq.queue.size`/`sidekiq.queue.latency` gauges; the statsd `worker:` tag uses the wrapped class.
 - **Batches:** `invalidate_all` no longer strands a batch (cancelled jobs count as successes, callbacks fire); `remove_jobs` is atomic and fires when it removes the last job; `Status#delete` detaches the batch from its parent and tag indexes; `tags:<tag>` indexes expire; parent callbacks fire exactly once when siblings finish together; a Redis error while firing callbacks no longer retries a job that succeeded; a failed callback enqueue is reported and fires on the next attempt instead of being marked fired; the death handler's batch ack is retried; late-registered callbacks no longer corrupt stored callback options (17-digit integers, `[]` vs `{}`, `/`); the empty-batch marker is enqueued as `Sidekiq::Batch::Empty` again.
 - **Periodic jobs honour the worker's `sidekiq_options`** (`queue`, `retry`, `unique_for`, `encrypt`, `expires_in`), on ticks and on the dashboard's "Enqueue Now"; a loop registered `paused: true` can be unpaused; missed runs are no longer backfilled after an outage (Ent §2.6); one failing loop no longer stops the loops after it; `args: { ... }` is passed as one argument.
 - **Bucket limiter counters expire after two intervals** instead of 90 days.

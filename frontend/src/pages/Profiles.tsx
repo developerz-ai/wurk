@@ -13,6 +13,7 @@ interface Profile {
   token: string;
   type: string;
   size: number;
+  // Float seconds, as Sidekiq's ProfileRecord#elapsed.
   elapsed: number;
   started_at: number | null;
 }
@@ -89,7 +90,7 @@ export default function Profiles() {
                                 {(startedAt) => <span title={hoverTime(startedAt(), timeZone)}>{absoluteTime(startedAt(), timeZone)}</span>}
                               </Show>
                             </td>
-                            <td>{formatNumber(p.elapsed)} {t('common.ms')}</td>
+                            <td>{formatNumber(Math.round(p.elapsed * 1000))} {t('common.ms')}</td>
                             <td>{fmtBytes(p.size)}</td>
                             <td style={{ 'text-align': 'end' }}>
                               {/* Full reload (not client-route): the backend POSTs the blob

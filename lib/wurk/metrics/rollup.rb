@@ -7,7 +7,7 @@ require_relative 'history'
 module Wurk
   module Metrics
     # Leader-only background thread that rolls the per-class minute buckets
-    # written by Wurk::Metrics::History (`j|YYYYMMDD|H:M`) up into compact,
+    # written by Wurk::Metrics::History (`j|YYMMDD|H:MM`) up into compact,
     # cluster-total time-series buckets the dashboard "throughput" / "failures"
     # charts read directly:
     #
@@ -43,7 +43,7 @@ module Wurk
       DEFAULT_TICK_SECONDS = 60
       # Re-roll the last N completed minutes from source on every tick
       # (idempotent). This self-heals a leadership failover / restart or a late
-      # metric write up to N minutes old — the source `j|…` buckets live 3 days,
+      # metric write up to N minutes old — the source `j|…` buckets live 8 hours,
       # so re-reading them folds the gap back in. Only outages longer than this
       # leave a hole that ages out with the bucket TTL (best-effort metrics).
       LOOKBACK_MINUTES = 15

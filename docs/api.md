@@ -268,7 +268,7 @@ tests operating on a namespaced ZSET. Production callers use the default.
 | `fetch(score, jid = nil)` | `Array<SortedEntry>` | `score` is `Time`, `Numeric`, or a `Range`; anything else raises `ArgumentError` |
 | `find_job(jid)` | `SortedEntry` or `nil` | `ZSCAN`-based, O(n) |
 | `retry_all` | `Integer` | re-enqueues every entry |
-| `kill_all(notify_failure: true, ex: nil)` | `Integer` | moves every entry to the dead set |
+| `kill_all(notify_failure: false, ex: nil)` | `Integer` | moves every entry to the dead set, trimming it once at the end |
 | `pop_each { \|json, score\| … }` | | `ZPOPMIN` loop until empty — destructive |
 | `remove_job(entry)` | `Boolean` | exact-value `ZREM`, falling back to a (score, jid) scan |
 | `delete_by_value(name, value)` | `Boolean` | `ZREM` by exact bytes |
@@ -667,10 +667,10 @@ globally rate-limited to once a minute but still costs an `SMEMBERS` plus a
 pipelined `HGET` per identity. Repeated snapshot reads should pass
 `ProcessSet.new(false)`.
 
-**`retry_all` / `kill_all` are unbounded and non-transactional.** They loop
-until the set is empty, one job at a time, firing death handlers per entry for
-`kill_all`. On a large dead set, chunk it yourself and expect it to take a
-while.
+**`retry_all` / `kill_all` are unbounded and non-transactional.** They sweep
+each entry once, one job at a time; an entry that fails is reported and left in
+its set while the sweep continues. On a large set, chunk it yourself and expect
+it to take a while.
 
 **Live data is lagged and racy.** `WorkSet` reflects the last heartbeat (up to
 10s stale). `ProcessSet#size` over-counts crashed processes until a cleanup.
@@ -691,11 +691,7 @@ deliberate differences:
 | Search | Pro; sorted sets only | free, and extended to cover queue LISTs, with explicit scan bounds and `truncated?` |
 | `Stats#expired` and `Stats::History#expired` | not in the OSS spec | present — Wurk tracks `expires_in` drops as a first-class counter |
 | `Stats#reset` default | `["processed", "failed"]` | also clears `expired` |
-| `JobSet#kill_all` | `notify_failure: false` default | `notify_failure: true` default, matching the per-entry `each(&:kill)` behavior so death handlers observe API kills |
-| `Queue#💣` / `SortedSet#💣` alias for `clear` | present | **not implemented** — use `clear` |
-| `Sidekiq::SortedSet` / `Sidekiq::JobSet` aliases | present | **not aliased** — the concrete sets (`Sidekiq::RetrySet`, …) are; reference `Wurk::SortedSet` / `Wurk::JobSet` for the base classes |
 | Leader fencing | none exposed, by design | `Wurk::Leader#token`, a best-effort monotonic fencing token |
-| `SortedEntry#queue` | — | `nil` on entries built from raw JSON (i.e. everything from `each` / `scan`); read `entry["queue"]` |
 
 ---
 

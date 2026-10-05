@@ -23,8 +23,7 @@ module Wurk
 
     # Two-axis trim: `ZREMRANGEBYSCORE` evicts entries older than
     # `dead_timeout_in_seconds`, `ZREMRANGEBYRANK 0 -dead_max_jobs` keeps
-    # the count bounded. Pipelined — partial failure leaves at most one
-    # axis applied (acceptable; trim is non-critical, runs again next kill).
+    # the count bounded. One MULTI, as upstream — both axes apply together.
     #
     # `max_jobs:` / `timeout:` override the global config for this call.
     # Lets parallel tests run trim with isolated limits without mutating
@@ -36,9 +35,9 @@ module Wurk
       cutoff = ::Process.clock_gettime(::Process::CLOCK_REALTIME) - timeout
 
       Wurk.redis do |conn|
-        conn.pipelined do |pipe|
-          pipe.call('ZREMRANGEBYSCORE', @name, '-inf', "(#{cutoff}")
-          pipe.call('ZREMRANGEBYRANK', @name, 0, -max_jobs)
+        conn.multi do |tx|
+          tx.call('ZREMRANGEBYSCORE', @name, '-inf', "(#{cutoff}")
+          tx.call('ZREMRANGEBYRANK', @name, 0, -max_jobs)
         end
       end
       true

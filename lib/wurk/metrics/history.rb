@@ -4,48 +4,39 @@ require_relative '../job'
 require_relative '../middleware'
 require_relative '../pool_checkout'
 require_relative 'accumulator'
+require_relative 'histogram'
 
 module Wurk
   module Metrics
-    # Ent feature parity (§5): server middleware that records per-job-class
-    # execution metrics into Redis time-buckets. The on-the-wire schema is
-    # wire-compat with Sidekiq's history pane — Sidekiq keys the per-minute
-    # HASH as `j|<YYYYMMDD>|<H>:<M>`, so dashboards (and Sidekiq data migrated
-    # in place) keep resolving against the same key after a drop-in swap.
+    # Server middleware that records per-job-class execution metrics into the
+    # same Redis buckets Sidekiq 8.1's ExecutionTracker writes, so history
+    # survives a swap in either direction and Sidekiq's own `Metrics::Query`
+    # reads what Wurk wrote (spec: docs/target/sidekiq-free.md §1.6, §20).
     #
-    # Bucket layout (spec: docs/target/sidekiq-free.md §1.6):
+    #   j|YYMMDD|H:MM   HASH  per-minute bucket, TTL = SHORT_TERM (8h)
+    #   j|YYMMDD|H:M    HASH  10-minute bucket (minute's tens digit), TTL = MID_TERM (3d)
+    #     <klass>|p     INT   executions, failures included
+    #     <klass>|f     INT   failures
+    #     <klass>|ms    INT   total ms of the executions that did not fail
+    #   h|<klass>-D-H:M BITFIELD per-minute runtime histogram (Metrics::Histogram)
     #
-    #   j|YYYYMMDD|H:M    HASH   per-minute bucket, TTL = MID_TERM (3 days)
-    #     <klass>|p       INT    processed count
-    #     <klass>|f       INT    failed count
-    #     <klass>|ms      INT    total ms spent
+    # The two `j|` shapes cannot collide: the minute is always two digits
+    # (`14:05`), the 10-minute bucket always one (`14:0`). `<klass>` is the
+    # `wrapped` class for ActiveJob payloads, like upstream.
     #
-    #   <klass>-YYYYMMDD-H  HASH per-class hourly histogram, TTL = MID_TERM
-    #
-    # We deliberately do NOT write a `H:m0` 10-minute rollup. Its key format
-    # collides with the real minute-0 bucket, so rolling x1..x9 into it turns
-    # that minute's value into a decade total — and the read side (Query) then
-    # sums the minute-0 bucket alongside x1..x9 and double-counts. Sidekiq
-    # itself doesn't keep that rollup (the daily/hourly rollups are commented
-    # out in its ExecutionTracker); Query reads the last N per-minute keys.
-    #
-    # Every bucket TTL is set on every write (not NX): as long as a class keeps
-    # running we keep its bucket around for the retention window measured from
-    # *last write*, not from first write. So we EXPIRE unconditionally.
+    # Every bucket TTL is set on every write (not NX), as upstream does.
     #
     # The middleware is hot-path — every job pays for it — so it does not touch
     # Redis at all. Each execution folds into a process-wide Accumulator and
-    # Wurk::Metrics::Flusher writes the whole tree out every FLUSH_INTERVAL, in
-    # the same 6-commands-per-(class, minute) shape the per-job pipeline sent.
+    # Wurk::Metrics::Flusher writes the whole tree out every FLUSH_INTERVAL.
     class History
       include Wurk::Middleware::ServerMiddleware
 
-      # Per spec §1.6 — naming mirrors the upstream constants so anyone
-      # grepping the Sidekiq source for `MID_TERM` lands here.
-      MID_TERM = 3 * 24 * 60 * 60      # 3 days, in seconds
+      # Upstream's ExecutionTracker constants, same names.
+      MID_TERM = 3 * 24 * 60 * 60
+      SHORT_TERM = 8 * 60 * 60
 
-      MINUTE_KEY_PREFIX = 'j|'
-      DATE_FORMAT = '%Y%m%d'           # YYYYMMDD — matches Sidekiq's j| key
+      MINUTE_KEY_FORMAT = 'j|%y%m%d|%-H:%M'
 
       # Ceiling on how stale an unflushed counter can be, in seconds. A
       # constant, never a config knob: it exists to bound the dashboard's lag,
@@ -60,11 +51,8 @@ module Wurk
       # and not to a job.
       ACCUMULATOR = Accumulator.new
 
-      # Hourly buckets are already class-scoped, so their fields are bare.
-      HOUR_FIELDS = %w[p f ms].freeze
-
       def call(_worker, job, _queue)
-        klass = job['class']
+        klass = job['wrapped'] || job['class']
         started = monotonic_ms
         success = false
         begin
@@ -108,10 +96,9 @@ module Wurk
       end
 
       class << self
-        # No Redis. `success: true` → `<klass>|p`; `success: false` →
-        # `<klass>|f`. `<klass>|ms` accumulates total runtime in milliseconds
-        # for *both* outcomes (so an operator can ask "how much wall-clock time
-        # has FooJob consumed?" without branching on outcome).
+        # No Redis. Every call books `<klass>|p`; `success: false` also books
+        # `<klass>|f`; `success: true` adds the runtime to `<klass>|ms` and the
+        # histogram (Accumulator has the why).
         #
         # `at:` defaults to nil rather than `::Time.now`: this runs once per job
         # and the bucket only needs whole UTC minutes, which #minute_bucket
@@ -164,13 +151,13 @@ module Wurk
         # Public formatters — Wurk::Metrics::Query reuses these so the two
         # cannot drift on bucket-naming convention.
         def minute_key(time)
-          t = time.utc
-          format("#{MINUTE_KEY_PREFIX}%s|%d:%d", t.strftime(DATE_FORMAT), t.hour, t.min)
+          time.utc.strftime(MINUTE_KEY_FORMAT)
         end
 
-        def hour_key(klass, time)
-          t = time.utc
-          "#{klass}-#{t.strftime(DATE_FORMAT)}-#{t.hour}"
+        # Upstream derives the 10-minute bucket by chopping the minute key's
+        # last digit: `j|250214|8:43` → `j|250214|8:4`.
+        def ten_minute_key(time)
+          minute_key(time).chop
         end
 
         private
@@ -188,30 +175,35 @@ module Wurk
             conn.pipelined do |pipe|
               minutes.each do |minute, classes|
                 at = ::Time.at(minute * 60).utc
-                key = minute_key(at)
-                classes.each { |klass, counts| write_class(pipe, key, at, klass, counts) }
+                short = minute_key(at)
+                keys = [short, short.chop]
+                classes.each { |klass, counts| write_class(pipe, keys, at, klass, counts) }
               end
             end
           end
         end
 
-        def write_class(pipe, bucket_key, at, klass, counts)
-          incr_bucket(pipe, bucket_key, ["#{klass}|p", "#{klass}|f", "#{klass}|ms"], counts)
-          incr_bucket(pipe, hour_key(klass, at), HOUR_FIELDS, counts)
+        # `keys` is [minute key, 10-minute key].
+        def write_class(pipe, keys, at, klass, counts)
+          fields = ["#{klass}|p", "#{klass}|f", "#{klass}|ms"]
+          incr_bucket(pipe, keys[1], fields, counts, MID_TERM)
+          incr_bucket(pipe, keys[0], fields, counts, SHORT_TERM)
+          return unless counts[3]
+
+          pipe.call(*Histogram.incr_command(klass, at, counts[3]))
+          pipe.call('EXPIRE', Histogram.key(klass, at), Histogram::HISTOGRAM_TTL)
         end
 
-        # `p`/`f` are emitted only when non-zero, so a bucket ends up with the
-        # exact field set the per-job path produced: `HINCRBY <field> 0` would
-        # materialize a counter no unbatched write ever created, and the read
-        # side would start reporting a `f: 0` series for classes that have never
-        # failed. `ms` is unconditional — the per-job path always incremented
-        # it, including by zero.
-        def incr_bucket(pipe, key, fields, counts)
+        # Upstream's tracker only ever creates the fields it has a count for:
+        # `f` when something failed, `ms` when something succeeded (by zero
+        # included). `HINCRBY <field> 0` beyond that would materialize a
+        # counter Sidekiq never writes.
+        def incr_bucket(pipe, key, fields, counts, ttl)
           processed, failed, ms = counts
-          pipe.call('HINCRBY', key, fields[0], processed) if processed.positive?
+          pipe.call('HINCRBY', key, fields[0], processed)
           pipe.call('HINCRBY', key, fields[1], failed) if failed.positive?
-          pipe.call('HINCRBY', key, fields[2], ms)
-          pipe.call('EXPIRE', key, MID_TERM)
+          pipe.call('HINCRBY', key, fields[2], ms) if processed > failed
+          pipe.call('EXPIRE', key, ttl)
         end
       end
 

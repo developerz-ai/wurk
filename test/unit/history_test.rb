@@ -20,14 +20,15 @@ class HistoryTest < Wurk::Test::UnitCase
 
   # Records every gauge so a test can assert the exact §5.2 metric set.
   class FakeClient
-    attr_reader :gauges
+    attr_reader :gauges, :tagged
 
     def initialize
       @gauges = []
+      @tagged = []
     end
 
-    def gauge(metric, value, **_opts)
-      @gauges << [metric, value]
+    def gauge(metric, value, tags: nil)
+      tags ? @tagged << [metric, value, tags] : @gauges << [metric, value]
     end
   end
 
@@ -89,6 +90,20 @@ class HistoryTest < Wurk::Test::UnitCase
 
     assert_equal SECTION_5_2.sort, emitted.keys.sort
     assert_equal 3, emitted['sidekiq.enqueued']
+  end
+
+  # §5.2's default set also carries the per-queue gauges, tagged `queue:<name>`.
+  def test_default_snapshot_emits_tagged_per_queue_size_and_latency
+    fake = FakeClient.new
+    Wurk.configuration.dogstatsd = fake
+    seed_queue('hq', 3)
+
+    history.snapshot
+    rows = fake.tagged.select { |(_m, _v, tags)| tags == ['queue:hq'] }
+
+    assert_equal %w[sidekiq.queue.latency sidekiq.queue.size], rows.map(&:first).sort
+    assert_equal 3, rows.find { |(m, _v, _t)| m == 'sidekiq.queue.size' }[1]
+    assert_kind_of Float, rows.find { |(m, _v, _t)| m == 'sidekiq.queue.latency' }[1]
   end
 
   # --- custom collector -------------------------------------------------

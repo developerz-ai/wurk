@@ -31,13 +31,11 @@ module Wurk
       # public demo) must not let any visitor exfiltrate profiling data.
       return head(:forbidden) if ::Wurk::Web.config.read_only?
 
-      blob = profile_blob(params[:key])
-      return head(:not_found) unless blob
+      sid = profile_sid(params[:key])
+      return head(:not_found) if sid == :missing
+      return head(:bad_gateway) unless sid
 
-      hash = upload_to_profiler(blob)
-      return head(:bad_gateway) unless hash
-
-      redirect_to(format(::Wurk::Web.config.profile_view_url, hash), allow_other_host: true)
+      redirect_to(format(::Wurk::Web.config.profile_view_url, sid), allow_other_host: true)
     end
 
     private
@@ -46,21 +44,43 @@ module Wurk
       ::Wurk::ProfileRecord.data_for(key)
     end
 
-    # POSTs the gzipped profile to the Firefox profiler's compressed-store.
-    # Returns the public hash (used to build the view URL) or nil on failure.
+    # The profile-store id, cached in the HASH's `sid` field after the first
+    # upload exactly as Sidekiq's Web UI does, so either UI reuses the other's
+    # upload. :missing when the profile is gone, nil when the upload failed.
+    def profile_sid(key)
+      sid = ::Wurk.redis { |c| c.call('HGET', key, 'sid') }
+      return sid if sid
+
+      blob = profile_blob(key)
+      return :missing unless blob
+
+      sid = upload_to_profiler(blob)
+      ::Wurk.redis { |c| c.call('HSET', key, 'sid', sid) } if sid
+      sid
+    end
+
+    # POSTs the gzipped profile to the Firefox profiler's compressed-store,
+    # which answers with a JWT whose payload carries the `profileToken` the
+    # view URL needs. Returns that token, or nil on failure.
     def upload_to_profiler(gzipped)
       uri = URI.parse(::Wurk::Web.config.profile_store_url)
       res = post_gzip(uri, gzipped)
-      res.is_a?(Net::HTTPSuccess) ? res.body.to_s.strip : nil
+      res.is_a?(Net::HTTPSuccess) ? profile_token(res.body.to_s) : nil
     rescue StandardError => e
       Wurk.configuration.handle_exception(e, context: 'Wurk::ProfilesController#upload')
       nil
+    end
+
+    def profile_token(jwt)
+      payload = jwt.strip.split('.')[1].to_s.tr('-_', '+/')
+      ::JSON.parse(payload.unpack1('m'))['profileToken']
     end
 
     def post_gzip(uri, body)
       req = Net::HTTP::Post.new(uri)
       req['Content-Encoding'] = 'gzip'
       req['Content-Type'] = 'application/json'
+      req['Accept'] = 'application/vnd.firefox-profiler+json;version=1.0'
       req.body = body
       # Explicit timeouts so a slow/unreachable profiler can't tie up the Rails
       # request thread for Ruby's ~60s defaults.

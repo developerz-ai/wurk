@@ -24,7 +24,7 @@ class MetricsHistoryTest < Wurk::Test::UnitCase
     super
   end
 
-  # Hourly buckets are class-named, so SCAN reaches them.
+  # Histogram keys are class-named, so SCAN reaches them.
   def drop_class_keys(conn)
     cursor = '0'
     loop do
@@ -41,7 +41,8 @@ class MetricsHistoryTest < Wurk::Test::UnitCase
   # Time.now). Matched by prefix, because some tests suffix @klass to compare
   # two class names inside one bucket.
   def drop_bucket_fields(conn)
-    keys = [@at, @at - 60, ::Time.now.utc].map { |t| Wurk::Metrics::History.minute_key(t) }
+    times = [@at, @at - 60, ::Time.now.utc]
+    keys = times.flat_map { |t| [Wurk::Metrics::History.minute_key(t), Wurk::Metrics::History.ten_minute_key(t)] }
     keys.uniq.each do |key|
       mine = conn.call('HKEYS', key).select { |f| f.start_with?(@klass) }
       conn.call('HDEL', key, *mine) unless mine.empty?
@@ -50,18 +51,24 @@ class MetricsHistoryTest < Wurk::Test::UnitCase
 
   # ---- bucket key formatting -----------------------------------------------
 
+  # Sidekiq 8.1's ExecutionTracker key: `j|%y%m%d|%-H:%M`.
   def test_minute_key_format
-    assert_equal 'j|20260521|14:37', Wurk::Metrics::History.minute_key(@at)
+    assert_equal 'j|260521|14:37', Wurk::Metrics::History.minute_key(@at)
   end
 
-  def test_hour_key_format
-    assert_equal 'FooJob-20260521-14', Wurk::Metrics::History.hour_key('FooJob', @at)
+  def test_minute_key_pads_the_minute_and_not_the_hour
+    assert_equal 'j|260521|8:05', Wurk::Metrics::History.minute_key(::Time.utc(2026, 5, 21, 8, 5))
+  end
+
+  def test_ten_minute_key_format
+    assert_equal 'j|260521|14:3', Wurk::Metrics::History.ten_minute_key(@at)
+    assert_equal 'j|260521|8:0', Wurk::Metrics::History.ten_minute_key(::Time.utc(2026, 5, 21, 8, 5))
   end
 
   def test_minute_key_uses_utc
-    local_time = ::Time.utc(2026, 5, 21, 23, 30) + 60
+    local_time = ::Time.new(2026, 5, 22, 1, 31, 0, '+02:00')
 
-    assert_equal 'j|20260521|23:31', Wurk::Metrics::History.minute_key(local_time)
+    assert_equal 'j|260521|23:31', Wurk::Metrics::History.minute_key(local_time)
   end
 
   # ---- record() writes to both buckets -------------------------------------
@@ -86,66 +93,77 @@ class MetricsHistoryTest < Wurk::Test::UnitCase
     assert_equal '1', val
   end
 
-  def test_record_accumulates_ms_across_success_and_failure
+  # Upstream's ExecutionTracker: `p` counts every execution, `f` the failures,
+  # and `ms` only the executions that did not fail.
+  def test_record_counts_failures_in_processed_and_times_only_successes
     Wurk::Metrics::History.record(@klass, 10, success: true, at: @at)
     Wurk::Metrics::History.record(@klass, 25, success: false, at: @at)
     Wurk::Metrics::History.flush
 
-    minute = Wurk::Metrics::History.minute_key(@at)
-    val = Wurk.redis { |c| c.call('HGET', minute, "#{@klass}|ms") }
-
-    assert_equal '35', val
+    assert_equal({ 'p' => '2', 'f' => '1', 'ms' => '10' }, minute_fields(@klass))
   end
 
-  # Regression (#metrics-double-count): we must NOT write a `H:m0` 10-minute
-  # rollup. Its key would coincide with the minute-0 bucket, so a write at any
-  # minute x1..x9 would inflate the minute-0 value into a decade total — which
-  # the read side then sums alongside x1..x9 and double-counts. A minute x1..x9
-  # write must touch its own minute key and nothing in that decade's x0 key.
-  def test_record_does_not_write_a_ten_minute_rollup_bucket
-    at = ::Time.utc(2026, 5, 21, 14, 37, 0)
-    x0 = ::Time.utc(2026, 5, 21, 14, 30, 0)
-    Wurk::Metrics::History.record(@klass, 5, success: true, at: at)
+  # An all-failure class/minute has no `ms` field, as upstream (track_time
+  # never ran).
+  def test_record_writes_no_ms_field_when_every_execution_failed
+    Wurk::Metrics::History.record(@klass, 25, success: false, at: @at)
     Wurk::Metrics::History.flush
 
-    x0_val = Wurk.redis { |c| c.call('HGET', Wurk::Metrics::History.minute_key(x0), "#{@klass}|p") }
-
-    assert_nil x0_val, 'x1..x9 write must not bleed into the decade x0 bucket'
-  ensure
-    Wurk.redis { |c| c.call('HDEL', Wurk::Metrics::History.minute_key(x0), "#{@klass}|p") }
+    assert_equal({ 'p' => '1', 'f' => '1' }, minute_fields(@klass))
   end
 
-  def test_record_writes_hourly_bucket
+  # The 10-minute bucket (`j|YYMMDD|H:<tens>`) carries the same fields; a
+  # minute-only key format never collides with it (`14:3` vs `14:03`).
+  def test_record_writes_the_ten_minute_rollup_bucket
     Wurk::Metrics::History.record(@klass, 20, success: true, at: @at)
+    Wurk::Metrics::History.record(@klass, 30, success: true, at: @at - 60)
     Wurk::Metrics::History.record(@klass, 30, success: false, at: @at)
     Wurk::Metrics::History.flush
 
-    hour = Wurk::Metrics::History.hour_key(@klass, @at)
-    p, f, ms = Wurk.redis { |c| c.call('HMGET', hour, 'p', 'f', 'ms') }
+    p, f, ms = Wurk.redis { |c| c.call('HMGET', 'j|260521|14:3', "#{@klass}|p", "#{@klass}|f", "#{@klass}|ms") }
 
-    assert_equal '1', p
-    assert_equal '1', f
-    assert_equal '50', ms
+    assert_equal %w[3 1 50], [p, f, ms]
+    assert_nil(Wurk.redis { |c| c.call('HGET', 'j|260521|14:03', "#{@klass}|p") })
   end
 
-  def test_record_sets_minute_ttl_to_mid_term
+  def test_record_sets_upstream_ttls
     Wurk::Metrics::History.record(@klass, 1, success: true, at: @at)
     Wurk::Metrics::History.flush
 
-    ttl = Wurk.redis { |c| c.call('TTL', Wurk::Metrics::History.minute_key(@at)) }
+    short, mid, hist = Wurk.redis do |c|
+      [Wurk::Metrics::History.minute_key(@at), Wurk::Metrics::History.ten_minute_key(@at),
+       Wurk::Metrics::Histogram.key(@klass, @at)].map { |k| c.call('TTL', k) }
+    end
 
-    assert_operator ttl, :>, Wurk::Metrics::History::MID_TERM - 60
-    assert_operator ttl, :<=, Wurk::Metrics::History::MID_TERM
+    assert_in_delta Wurk::Metrics::History::SHORT_TERM, short, 60
+    assert_in_delta Wurk::Metrics::History::MID_TERM, mid, 60
+    assert_in_delta Wurk::Metrics::Histogram::HISTOGRAM_TTL, hist, 60
   end
 
-  def test_record_sets_hourly_ttl_to_mid_term
-    Wurk::Metrics::History.record(@klass, 1, success: true, at: @at)
+  # `h|<klass>-D-H:M` u16 counters, one per Histogram::BUCKET_INTERVALS slot;
+  # successes only.
+  def test_record_writes_the_runtime_histogram
+    Wurk::Metrics::History.record(@klass, 5, success: true, at: @at)
+    Wurk::Metrics::History.record(@klass, 19, success: true, at: @at)
+    Wurk::Metrics::History.record(@klass, 280, success: true, at: @at)
+    Wurk::Metrics::History.record(@klass, 999, success: false, at: @at)
     Wurk::Metrics::History.flush
 
-    ttl = Wurk.redis { |c| c.call('TTL', Wurk::Metrics::History.hour_key(@klass, @at)) }
+    key = "h|#{@klass}-21-14:37"
+    counts = Wurk.redis { |c| c.call('BITFIELD_RO', key, *Wurk::Metrics::Histogram::FETCH) }
 
-    assert_operator ttl, :>, Wurk::Metrics::History::MID_TERM - 60
-    assert_operator ttl, :<=, Wurk::Metrics::History::MID_TERM
+    assert_equal 2, counts[0]
+    assert_equal 1, counts[7]
+    assert_equal 3, counts.sum
+  end
+
+  # ActiveJob payloads are keyed by the job they wrap, not the adapter class.
+  def test_middleware_keys_activejob_payloads_by_the_wrapped_class
+    before = ::Time.now.utc
+    build_middleware.call(nil, { 'class' => 'Sidekiq::ActiveJob::Wrapper', 'wrapped' => @klass }, 'default') { :ok }
+    Wurk::Metrics::History.flush
+
+    assert_equal '1', middleware_fields(before, ::Time.now.utc)['p']
   end
 
   # Asserted on the fields a blank name would write, not on the bucket's
@@ -155,18 +173,18 @@ class MetricsHistoryTest < Wurk::Test::UnitCase
   # (`|p`) and to an hour key with an empty class segment; no real class name
   # reaches either.
   def test_record_ignores_blank_klass
-    hour = Wurk::Metrics::History.hour_key('', @at)
+    hist = Wurk::Metrics::Histogram.key('', @at)
     Wurk::Metrics::History.record(nil, 1, success: true, at: @at)
     Wurk::Metrics::History.record('', 1, success: true, at: @at)
     Wurk::Metrics::History.flush
 
     fields = Wurk.redis { |c| c.call('HKEYS', Wurk::Metrics::History.minute_key(@at)) }
-    hour_exists = Wurk.redis { |c| c.call('EXISTS', hour) }
+    hist_exists = Wurk.redis { |c| c.call('EXISTS', hist) }
 
     assert_empty fields.grep(/\A\|/), 'a blank class must not write a bare-pipe field'
-    assert_equal 0, hour_exists
+    assert_equal 0, hist_exists
   ensure
-    Wurk.redis { |c| c.call('DEL', hour) }
+    Wurk.redis { |c| c.call('DEL', hist) }
   end
 
   def test_record_clamps_negative_duration_to_zero
@@ -214,9 +232,10 @@ class MetricsHistoryTest < Wurk::Test::UnitCase
     fold { |acc| 10.times { |i| execution(acc, batched, i) } }
     10.times { |i| fold { |acc| execution(acc, per_job, i) } }
 
-    assert_equal({ 'p' => '7', 'f' => '3', 'ms' => '82' }, hour_fields(per_job))
-    assert_equal hour_fields(per_job), hour_fields(batched)
+    assert_equal({ 'p' => '10', 'f' => '3', 'ms' => '70' }, minute_fields(per_job))
     assert_equal minute_fields(per_job), minute_fields(batched)
+    assert_equal ten_minute_fields(per_job), ten_minute_fields(batched)
+    assert_equal histogram(per_job), histogram(batched)
   end
 
   # `HINCRBY <field> 0` would materialize a counter the per-job path never
@@ -225,7 +244,7 @@ class MetricsHistoryTest < Wurk::Test::UnitCase
   def test_flush_omits_an_outcome_that_never_happened
     fold { |acc| 3.times { acc.add(nil, @klass, bucket, 5, true) } }
 
-    assert_equal %w[ms p], hour_fields(@klass).keys.sort
+    assert_equal %w[ms p], ten_minute_fields(@klass).keys.sort
     assert_equal %w[ms p], minute_fields(@klass).keys.sort
   end
 
@@ -243,16 +262,17 @@ class MetricsHistoryTest < Wurk::Test::UnitCase
     end
   end
 
-  # 6 commands per (class, minute) per flush — the same 6 the hot path used to
-  # send per job. 100 executions must not cost 600.
-  def test_a_flush_costs_six_commands_regardless_of_execution_count
+  # 8 commands per (class, minute) per flush: HINCRBY p + ms + EXPIRE on each
+  # `j|` bucket, BITFIELD + EXPIRE on the histogram. 100 executions must not
+  # cost 800.
+  def test_a_flush_costs_eight_commands_regardless_of_execution_count
     spy = Wurk::Test::CommandSpy.new(Wurk.redis_pool)
     acc = Wurk::Metrics::Accumulator.new
     100.times { acc.add(spy, @klass, bucket, 5, true) }
 
     Wurk::Metrics::History.flush(acc)
 
-    assert_equal 6, spy.count
+    assert_equal 8, spy.count
   end
 
   # An idle worker must not spend a round trip every FLUSH_INTERVAL just to say
@@ -461,7 +481,7 @@ class MetricsHistoryTest < Wurk::Test::UnitCase
 
   # Guard against the rescue widening in the other direction: a real error
   # through the full chain (not just the isolated middleware) still books
-  # `f`, never `p`.
+  # `f` (and `p`, which counts every execution) but no runtime.
   def test_genuine_failure_through_the_real_chain_still_books_f
     before = ::Time.now.utc
     job = { 'class' => @klass, 'args' => [], 'jid' => SecureRandom.hex(12), 'queue' => 'default' }
@@ -473,8 +493,7 @@ class MetricsHistoryTest < Wurk::Test::UnitCase
     Wurk::Metrics::History.flush
     fields = middleware_fields(before, ::Time.now.utc)
 
-    assert_equal '1', fields['f']
-    assert_nil fields['p']
+    assert_equal({ 'p' => '1', 'f' => '1' }, fields)
   end
 
   # Chain-order invariant behind 00-semantics-signoff.md §1's "Limiter::
@@ -529,7 +548,7 @@ class MetricsHistoryTest < Wurk::Test::UnitCase
     fields = middleware_fields(before, ::Time.now.utc)
 
     assert_equal '1', fields['f'], 'OverLimit currently unwinds through History before Limiter converts it'
-    assert_nil fields['p']
+    assert_nil fields['ms']
   end
 
   # Recording is in-memory, so the failure the middleware has to swallow is no
@@ -584,16 +603,23 @@ class MetricsHistoryTest < Wurk::Test::UnitCase
     Wurk::Metrics::Accumulator.new.tap { |acc| acc.add(FlakyPool.new(Wurk.redis_pool), @klass, bucket, 9, true) }
   end
 
-  def hour_fields(klass)
-    hgetall(Wurk::Metrics::History.hour_key(klass, @at))
+  # This class's fields out of a shared bucket, prefix stripped, so two class
+  # names in the same bucket compare directly.
+  def minute_fields(klass)
+    class_fields(Wurk::Metrics::History.minute_key(@at), klass)
   end
 
-  # This class's fields out of the shared minute bucket, prefix stripped, so two
-  # class names in the same bucket compare directly.
-  def minute_fields(klass)
-    hgetall(Wurk::Metrics::History.minute_key(@at))
-      .select { |field, _| field.start_with?("#{klass}|") }
-      .transform_keys { |field| field.split('|', 2).last }
+  def ten_minute_fields(klass)
+    class_fields(Wurk::Metrics::History.ten_minute_key(@at), klass)
+  end
+
+  def class_fields(key, klass)
+    hgetall(key).select { |field, _| field.start_with?("#{klass}|") }
+                .transform_keys { |field| field.split('|', 2).last }
+  end
+
+  def histogram(klass)
+    Wurk.redis { |c| c.call('BITFIELD_RO', Wurk::Metrics::Histogram.key(klass, @at), *Wurk::Metrics::Histogram::FETCH) }
   end
 
   # redis-client returns HGETALL as a Hash or a flat Array depending on version.

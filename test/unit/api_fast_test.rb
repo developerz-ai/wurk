@@ -6,8 +6,7 @@ require 'securerandom'
 # Lua-backed Pro fast API:
 #   Queue#delete_job(jid)
 #   Queue#delete_by_class(klass)
-#   SortedSet#scan(pattern) { |SortedEntry| … }   # arity-1 form
-#   SortedSet#scan(pattern) { |value, score| … }  # legacy arity-2 form (unchanged)
+#   SortedSet#scan(pattern) { |SortedEntry| … }
 #
 # Spec: docs/target/sidekiq-pro.md §11.
 class APIFastTest < Wurk::Test::UnitCase
@@ -92,9 +91,9 @@ class APIFastTest < Wurk::Test::UnitCase
     assert_raises(ArgumentError) { Wurk::Queue.new(@qname).delete_by_class('') }
   end
 
-  # --- SortedSet#scan (arity-1 sorted entry form) ------------------------
+  # --- SortedSet#scan ----------------------------------------------------
 
-  def test_scan_yields_sorted_entry_for_arity_one_block
+  def test_scan_yields_sorted_entry
     jid = SecureRandom.hex(12)
     add_member(jid: jid)
     yielded = []
@@ -105,24 +104,26 @@ class APIFastTest < Wurk::Test::UnitCase
     assert_equal jid, yielded.first.jid
   end
 
-  def test_scan_arity_one_entry_can_be_deleted
+  def test_scan_entry_can_be_deleted
     jid = SecureRandom.hex(12)
     add_member(jid: jid)
-    # rubocop:disable-next Style/SymbolProc -- explicit 1-arg block exercises arity dispatch.
-    @set.scan(jid) { |entry| entry.delete }
+    @set.scan(jid, &:delete)
 
     assert_equal 0, @set.size
   end
 
-  def test_scan_legacy_arity_two_block_still_yields_value_score
+  # Upstream yields one SortedEntry; a two-parameter block destructures
+  # nothing out of it, so the second parameter is nil — not a score.
+  def test_scan_two_parameter_block_gets_the_entry_like_upstream
     jid = SecureRandom.hex(12)
     add_member(jid: jid, score: 1234.5)
     yielded = []
-    @set.scan(jid) { |value, score| yielded << [value, score] }
+    @set.scan(jid) { |entry, extra| yielded << [entry, extra] }
 
     assert_equal 1, yielded.size
-    refute_nil yielded.first[0]
-    assert_in_delta 1234.5, yielded.first[1], 0.0001
+    assert_kind_of Wurk::SortedEntry, yielded.first[0]
+    assert_in_delta 1234.5, yielded.first[0].score, 0.0001
+    assert_nil yielded.first[1]
   end
 
   def test_scan_without_block_returns_enumerator

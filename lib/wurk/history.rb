@@ -157,13 +157,19 @@ module Wurk
     end
 
     # §5.2 default gauge set carries the `sidekiq.` prefix so a dashboard built
-    # for Sidekiq Ent reads it unchanged. A custom collector replaces it.
+    # for Sidekiq Ent reads it unchanged, plus the per-queue size/latency
+    # gauges tagged `queue:<name>`. A custom collector replaces it all.
     def emit_statsd(values)
       client = Wurk::Metrics::Statsd.client
       return if client.nil?
       return @collector.call(client) if @collector
 
       values.each { |field, value| client.gauge("sidekiq.#{field}", value) }
+      Wurk::Stats.new.queue_summaries.each do |q|
+        tags = ["queue:#{q.name}"]
+        client.gauge('sidekiq.queue.size', q.size, tags: tags)
+        client.gauge('sidekiq.queue.latency', q.latency, tags: tags)
+      end
     end
   end
 end

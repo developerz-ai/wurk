@@ -469,6 +469,16 @@ class MetricsStatsdTest < Wurk::Test::UnitCase
     assert_equal ['worker:MyJob', 'queue:critical'], count_call[2][:tags]
   end
 
+  # Pro's Statsd middleware tags the job ActiveJob wraps, not the adapter.
+  def test_worker_tag_uses_the_wrapped_class
+    fake = FakeClient.new
+    Wurk.configuration.dogstatsd = fake
+    build_middleware.call(nil, { 'class' => 'Sidekiq::ActiveJob::Wrapper', 'wrapped' => 'MailJob' }, 'q') { :ok }
+    count_call = fake.calls.find { |c| c[1] == 'sidekiq.jobs.count' }
+
+    assert_equal ['worker:MailJob', 'queue:q'], count_call[2][:tags]
+  end
+
   # line 97 else: configuration object that doesn't respond to #dogstatsd
   # yields a nil client (clean no-op), without raising.
   def test_client_nil_when_configuration_lacks_dogstatsd

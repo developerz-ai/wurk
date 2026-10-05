@@ -34,8 +34,9 @@ gem "vernier", require: true, group: :development
 ```
 
 Then set the `profile` option on the push. The value is a free-form label —
-it's stored as the profile's `type` and is what you see in the dashboard's
-**Type** column, so name it after what you're investigating:
+it's stored as the profile's `token` (and is the first half of its key), so
+name it after what you're investigating. The profile's `type` is the job class
+(the wrapped class for ActiveJob), as in Sidekiq 8.1:
 
 ```ruby
 # one push only — the usual way to profile
@@ -104,24 +105,25 @@ The profile is Firefox-profiler ("gecko") JSON, gzipped, written to two keys:
 | Key | Type | Contents |
 |-----|------|----------|
 | `profiles` | ZSET | member = `"<token>-<jid>"`, score = expiry epoch seconds |
-| `<token>-<jid>` | HASH | `jid`, `type`, `token`, `started_at`, `elapsed`, `size`, `sid`, `data` |
+| `<token>-<jid>` | HASH | `jid`, `type`, `token`, `started_at`, `elapsed`, `size`, `data`, and later `sid` |
 
-- `token` is `SecureRandom.hex(8)`, so profiling the same `jid` twice (a retry)
-  yields two distinct records rather than clobbering one.
-- `type` is the label you passed as `profile`.
-- `started_at` is epoch **seconds**; `elapsed` is the job's wall time in
-  **milliseconds**.
+- `token` is the job's `profile` value, so a second capture of the same `jid`
+  under the same label (a retry) overwrites the first.
+- `type` is the job class (`wrapped` for ActiveJob payloads).
+- `started_at` is epoch **seconds**; `elapsed` is the capture's wall time in
+  **seconds**, as a Float.
 - `size` is the **gzipped** byte count — the same number the dashboard shows.
-- `sid` is the capturing process's identity (`Wurk.configuration[:identity]`).
-  It's stored but not surfaced in the JSON API.
+- `sid` is not written at capture: it is the profile-store id the dashboard
+  caches after its first upload to the Firefox profiler, so later views skip
+  the upload.
 - `data` is the gzipped gecko JSON itself.
 
-**Retention is 7 days** (`Wurk::Profiler::TTL`), enforced twice: an `EXPIRE` on
-the HASH, and a ZSET score of `now + TTL` that `ProfileSet` purges with
+**Retention is 1 day** (`Wurk::Profiler::EXPIRY`), enforced twice: an `EXPIRE`
+on the HASH, and a ZSET score of `now + EXPIRY` that `ProfileSet` purges with
 `ZREMRANGEBYSCORE` on every read. There is no configuration knob for it.
 
 Footprint: a gecko profile is genuinely large — hundreds of KB to several MB
-gzipped for a long job. That lives in Redis memory for a week. Profile a
+gzipped for a long job. That lives in Redis memory for a day. Profile a
 handful of pushes, not a queue.
 
 ---
@@ -134,10 +136,10 @@ set.size                      # => Integer
 
 set.each do |rec|
   rec.jid         # String
-  rec.type        # String — the label you passed as `profile`
-  rec.token       # String
+  rec.type        # String — the job class
+  rec.token       # String — the label you passed as `profile`
   rec.size        # Integer, gzipped bytes
-  rec.elapsed     # Integer, ms
+  rec.elapsed     # Float, seconds
   rec.started_at  # Time, or nil if the field is absent/blank
   rec.key         # "<token>-<jid>" — the id used by the web routes
   rec.data        # gzipped gecko JSON bytes, or nil if the HASH expired
@@ -163,8 +165,8 @@ json = Wurk::Profiler.gunzip(rec.data)
 File.write("profile.json", json)
 ```
 
-`Wurk::Profiler.store(jid:, type:, gecko_json:, started_at:, elapsed_ms:,
-token:, sid:, pool:)` is public and writes a record directly — useful for
+`Wurk::Profiler.store(jid:, type:, token:, gecko_json:, started_at:, elapsed:,
+pool: nil)` is public (`elapsed` in seconds) and writes a record directly — useful for
 seeding a demo or storing a profile you captured yourself. It returns the
 storage key.
 
@@ -228,7 +230,7 @@ authentication gates the mount.
   when the gem isn't loaded in the worker process. Loading it in your web dyno
   does nothing; it has to be in the process that runs jobs.
 - **`sidekiq_options profile:` on a hot class is a Redis-filling foot-gun.**
-  Every successful push stores a multi-MB blob for 7 days. Prefer
+  Every successful push stores a multi-MB blob for a day. Prefer
   `set(profile: …)` on individual pushes.
 - **Don't leave profiling on in production.** Sampling overhead per job plus a
   serialize-and-gzip after every one is real, and profiles are unredacted stack
@@ -239,11 +241,11 @@ authentication gates the mount.
 - **`elapsed` is not your job's latency metric.** It's wall time inside the
   capture block, measured with a monotonic clock, and includes the server
   middleware chain. Use [Metrics](metrics-history.md) for real latency.
-- **Profiles disappear after 7 days**, and the record may vanish between
+- **Profiles disappear after 1 day**, and the record may vanish between
   listing it and reading `#data` (`nil` / 404). Download anything you care
   about.
 - **The Profiles tab lists everything captured cluster-wide**, not just the
-  local process — `sid` records which process captured it but isn't shown.
+  local process; no field records which process captured a profile.
 
 ---
 

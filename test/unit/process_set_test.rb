@@ -1,6 +1,7 @@
 # frozen_string_literal: true
 
 require_relative '../test_helper'
+require_relative '../support/batch_spy'
 
 # Drives Wurk::ProcessSet + Wurk::Process against real Redis. The `processes`
 # SET is globally shared, so tests use uniquely-named identities and assert
@@ -313,6 +314,15 @@ class ProcessSetTest < Wurk::Test::UnitCase
 
     assert_operator ttl, :>, 0
     assert_operator ttl, :<=, 60
+  end
+
+  def test_process_signal_pushes_and_expires_in_one_multi
+    register!(info: base_info)
+    process = Wurk::ProcessSet[@identity]
+    log = Wurk::Test::BatchSpy.record { process.quiet! }
+    key = "#{@identity}-signals"
+
+    assert_equal [[:multi, ['LPUSH', key, 'TSTP']], [:multi, ['EXPIRE', key, 60]]], log
   end
 
   def test_process_quiet_bang_raises_when_embedded

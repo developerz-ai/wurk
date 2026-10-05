@@ -31,18 +31,19 @@ module Wurk
       Wurk.redis { |conn| conn.call('ZCARD', @name) }
     end
 
-    # Streams every (value, score) pair through ZSCAN. `match` is wrapped in
-    # `*` glob characters — callers pass a jid or class name fragment.
-    # @yield [String, Float] raw JSON payload and its score.
+    # ZSCAN, yielding a SortedEntry per match. `match` is wrapped in `*` glob
+    # characters unless it already carries one — callers pass a jid or class
+    # name fragment, or their own pattern.
     def scan(match, count = 100)
       return enum_for(:scan, match, count) unless block_given?
 
+      match = match.to_s
+      pattern = match.include?('*') ? match : "*#{match}*"
       cursor = '0'
-      pattern = "*#{match}*"
       Wurk.redis do |conn|
         loop do
           cursor, pairs = conn.call('ZSCAN', @name, cursor, 'MATCH', pattern, 'COUNT', count)
-          pairs.each_slice(2) { |value, score| yield value, score.to_f }
+          pairs.each_slice(2) { |value, score| yield SortedEntry.new(self, score, value) }
           break if cursor == '0'
         end
       end
@@ -54,6 +55,7 @@ module Wurk
       Wurk.redis { |conn| conn.call('UNLINK', @name) }
       true
     end
+    alias 💣 clear # rubocop:disable Naming/AsciiIdentifiers, Naming/MethodName
 
     def as_json(_options = nil) = { name: @name }
   end
@@ -73,30 +75,29 @@ module Wurk
     end
 
     # Newest-first paged ZRANGE. Yields a SortedEntry per row.
+    #
+    # Removing a yielded entry shifts every later rank up by one, so a plain
+    # `page * PAGE_SIZE` offset would skip a row per removal — `each(&:delete)`
+    # over 120 entries used to leave 50 behind. Like upstream, the offset is
+    # pulled back by the removals made through this set (#removed) since the
+    # iteration started.
     def each
       return enum_for(:each) unless block_given?
 
-      page  = 0
-      added = 0
+      baseline = removed
+      page = 0
       loop do
-        start = page * PAGE_SIZE
-        stop  = start + PAGE_SIZE - 1
-        slice = Wurk.redis { |conn| conn.call('ZRANGE', @name, start, stop, 'REV', 'WITHSCORES') }
-        slice.each do |value, score|
-          yield SortedEntry.new(self, score, value)
-          added += 1
-        end
-        break if slice.size < PAGE_SIZE
+        slice = newest_page(page, baseline)
+        slice.each { |value, score| yield SortedEntry.new(self, score, value) }
+        return (page * PAGE_SIZE) + slice.size if slice.size < PAGE_SIZE
 
         page += 1
       end
-      added
     end
 
     # ZPOPMIN loop. Each iteration pops the single oldest member (lowest
     # score, e.g. earliest scheduled-at) and yields the raw JSON + score.
-    # Used by the scheduled-poller: it enqueues each popped job through the
-    # client. Stops when the set is empty.
+    # Stops when the set is empty.
     def pop_each
       loop do
         result = Wurk.redis { |conn| conn.call('ZPOPMIN', @name, 1) }
@@ -115,16 +116,21 @@ module Wurk
       sweep_once(&:retry)
     end
 
-    # Moves every job in this set to the dead set. Death handlers fire per
-    # entry by default — `each(&:kill)` equivalence with Sidekiq; pass
-    # `notify_failure: false` to suppress. Returns the count of jobs moved; a
-    # job that could not be moved stays in this set (see #sweep_once).
-    def kill_all(notify_failure: true, ex: nil)
+    # Moves every job in this set to the dead set. Death handlers stay quiet
+    # unless `notify_failure: true` — Sidekiq 8's default (spec §19.5), so the
+    # dashboard's "Kill All" doesn't page an error tracker once per job. The
+    # dead set is trimmed once at the end rather than per entry. Returns the
+    # count of jobs moved; a job that could not be moved stays in this set
+    # (see #sweep_once).
+    def kill_all(notify_failure: false, ex: nil)
       dead = DeadSet.new
-      sweep_once do |entry|
-        entry.send(:remove_job) do |message|
-          dead.kill(Wurk.dump_json(message), notify_failure: notify_failure, ex: ex)
+      opts = { notify_failure: notify_failure, ex: ex, trim: false }
+      begin
+        sweep_once do |entry|
+          entry.send(:remove_job) { |message| dead.kill(Wurk.dump_json(message), opts) }
         end
+      ensure
+        dead.trim
       end
     end
 
@@ -143,10 +149,7 @@ module Wurk
     # or nil. O(n) on the ZSET — callers iterating many jids should switch
     # to per-jid hashes or the score-based fetch.
     def find_job(jid)
-      scan(jid) do |value, score|
-        entry = SortedEntry.new(self, score, value)
-        return entry if entry.jid == jid
-      end
+      scan(jid) { |entry| return entry if entry.jid == jid }
       nil
     end
 
@@ -159,8 +162,9 @@ module Wurk
     # ZREM by exact bytes. Returns true when ≥1 element was removed. Method
     # name is Sidekiq wire-compat — `delete_by_value?` would break the alias.
     def delete_by_value(name, value)
-      removed = Wurk.redis { |conn| conn.call('ZREM', name, value) }
-      removed.to_i.positive?
+      gone = Wurk.redis { |conn| conn.call('ZREM', name, value) }.to_i.positive?
+      note_removal if gone && name == @name
+      gone
     end
 
     # Scan the score bracket for a jid match, ZREM the exact bytes once found.
@@ -178,7 +182,9 @@ module Wurk
           end
           next unless parsed && parsed['jid'] == jid
 
-          return conn.call('ZREM', @name, raw).to_i.positive?
+          gone = conn.call('ZREM', @name, raw).to_i.positive?
+          note_removal if gone
+          return gone
         end
       end
       false
@@ -186,6 +192,20 @@ module Wurk
     alias delete delete_by_jid
 
     private
+
+    # Page `page` of a newest-first walk, pulled back by the removals made
+    # since `baseline` (see #each).
+    def newest_page(page, baseline)
+      start = [(page * PAGE_SIZE) - (removed - baseline), 0].max
+      Wurk.redis { |conn| conn.call('ZRANGE', @name, start, start + PAGE_SIZE - 1, 'REV', 'WITHSCORES') }
+    end
+
+    # Members this instance has removed, the offset #each compensates by.
+    def removed = @removed || 0
+
+    def note_removal
+      @removed = removed + 1
+    end
 
     # Yields each job at most once and returns how many it yielded. Upstream
     # loops `while size > 0`, re-paging because every removal shifts the ranks

@@ -91,21 +91,31 @@ module Wurk
       end
 
       # Collect payloads into the in-memory store. `enqueued_at` is stamped now
-      # unless the job is scheduled (`at`), mirroring the real client.
+      # unless the job is scheduled (`at`), mirroring the real client. Each
+      # payload goes through a JSON round-trip first, as upstream does, so a
+      # test sees exactly what production would read back from Redis: string
+      # keys, JSON-native args — not the symbols or objects it pushed.
       def fake_push(payloads)
         now = ::Process.clock_gettime(::Process::CLOCK_REALTIME, :millisecond)
         payloads.each do |payload|
-          payload['enqueued_at'] = now unless payload['at']
-          ::Wurk::Queues.push(payload['queue'], payload['class'], payload)
+          job = round_trip(payload)
+          job['enqueued_at'] = now unless job['at']
+          ::Wurk::Queues.push(job['queue'], job['class'], job)
         end
         payloads.last['jid']
       end
 
-      # Execute each payload immediately through the inline server chain.
+      # Execute each payload immediately through the inline server chain,
+      # after the same JSON round-trip as #fake_push.
       def inline_push(payloads)
-        payloads.each { |payload| ::Object.const_get(payload['class'].to_s).process_job(payload) }
+        payloads.each do |payload|
+          job = round_trip(payload)
+          ::Object.const_get(job['class'].to_s).process_job(job)
+        end
         payloads.last['jid']
       end
+
+      def round_trip(payload) = ::Wurk.load_json(::Wurk.dump_json(payload))
 
       # Run every fake job across all classes until the store is empty.
       def drain_all
