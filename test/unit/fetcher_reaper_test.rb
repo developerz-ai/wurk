@@ -13,6 +13,8 @@ require 'securerandom'
 class FetcherReaperTest < Wurk::Test::UnitCase
   parallelize_me!
 
+  SHORT_GRACE = 0.3
+
   DEAD_PID = 999_999 # never a running pid in CI/dev
 
   # Linear fixture wiring, no branching.
@@ -250,49 +252,67 @@ class FetcherReaperTest < Wurk::Test::UnitCase
     assert_equal 1, graced_reaper.reclaim!
   end
 
-  # Under an LFU maxmemory policy OBJECT IDLETIME is refused; the liveness
-  # re-check then decides alone rather than stranding every orphan.
-  def test_an_idle_time_refusal_falls_back_to_the_liveness_recheck
-    seed_private_list(DEAD_PID, %w[lfu], host: 'other-host.example', nonce: SecureRandom.hex(6))
-    reaper = graced_reaper
-    reaper.define_singleton_method(:redis) do |**kw, &blk|
-      super(**kw) do |conn|
-        lfu = Object.new
-        lfu.define_singleton_method(:call) do |*args|
-          raise RedisClient::CommandError, 'ERR An LFU maxmemory policy is selected' if args.first == 'OBJECT'
+  # Under an LFU maxmemory policy OBJECT IDLETIME is refused. The grace must
+  # not vanish with it: a remote worker that claimed before its first beat
+  # would be drained mid-job. The reaper keeps its own clock instead — the
+  # first sweep only starts it, a sweep `grace` seconds later drains.
+  def test_an_idle_time_refusal_keeps_the_grace_on_the_reapers_own_clock
+    key = seed_private_list(DEAD_PID, %w[lfu], host: 'other-host.example', nonce: SecureRandom.hex(6))
+    refuse_object('ERR An LFU maxmemory policy is selected')
+    reaper = short_grace_reaper
 
-          conn.call(*args)
-        end
-        lfu.define_singleton_method(:pipelined) { |&b| conn.pipelined(&b) }
-        blk.call(lfu)
-      end
-    end
+    assert_equal 0, reaper.reclaim!, 'a list first seen orphaned this sweep is left alone'
+    assert_equal 1, llen(key)
+
+    sleep SHORT_GRACE + 0.05
 
     assert_equal 1, reaper.reclaim!
   end
 
-  # The grace re-check silently switching off is worth one line, not one per
-  # orphan per sweep — and the liveness re-check still has to run.
+  # The booting owner's case: by the time the clock runs out it has beaten,
+  # and the heartbeat re-check spares it.
+  def test_without_idle_time_an_owner_that_beats_inside_the_grace_is_spared
+    nonce = SecureRandom.hex(6)
+    key = seed_private_list(DEAD_PID, %w[booting], host: 'other-host.example', nonce: nonce)
+    identity = "other-host.example:#{DEAD_PID}:#{nonce}"
+    @extra_keys << identity
+    refuse_object("ERR unknown command 'OBJECT'")
+    reaper = short_grace_reaper
+
+    assert_equal 0, reaper.reclaim!
+    @pool.with do |c|
+      c.call('SADD', Wurk::Keys::PROCESSES, identity)
+      c.call('HSET', identity, 'info', '{}')
+    end
+    sleep SHORT_GRACE + 0.05
+
+    assert_equal 0, reaper.reclaim!
+    assert_equal 1, llen(key)
+  ensure
+    @pool.with { |c| c.call('SREM', Wurk::Keys::PROCESSES, identity) }
+  end
+
   def test_an_idle_time_refusal_warns_once_per_reaper
     log = capture_reaper_log
-    reaper = graced_reaper
-    reaper.define_singleton_method(:redis) do |**kw, &blk|
-      super(**kw) do |conn|
-        no_object = Object.new
-        no_object.define_singleton_method(:call) do |*args|
-          raise RedisClient::CommandError, "ERR unknown command 'OBJECT'" if args.first == 'OBJECT'
-
-          conn.call(*args)
-        end
-        no_object.define_singleton_method(:pipelined) { |&b| conn.pipelined(&b) }
-        blk.call(no_object)
-      end
-    end
+    refuse_object("ERR unknown command 'OBJECT'")
+    reaper = short_grace_reaper
     2.times { |i| seed_private_list(DEAD_PID + i, %w[x], host: 'other-host.example', nonce: SecureRandom.hex(6)) }
+
+    reaper.reclaim!
+    sleep SHORT_GRACE + 0.05
 
     assert_equal 2, reaper.reclaim!
     assert_equal 1, log.string.scan('OBJECT IDLETIME is unavailable').size
     assert_includes log.string, "unknown command 'OBJECT'"
+  end
+
+  def test_fallback_clock_memory_is_bounded
+    grace = Wurk::Fetcher::OrphanGrace.new(@config, 60)
+    grace.instance_variable_set(:@idletime, false)
+    Wurk::Fetcher::OrphanGrace::MEMORY.times { |i| grace.recent?("k#{i}") }
+
+    assert grace.recent?('one-more')
+    assert_equal 1, grace.instance_variable_get(:@first_seen).size
   end
 
   # --- liveness: same host, foreign PID namespace ------------------------
@@ -756,6 +776,29 @@ class FetcherReaperTest < Wurk::Test::UnitCase
   # A pid this process can be sure is not running, distinct per test so the
   # heartbeat one test registers under it can never make a peer's orphan read
   # as live (the `processes` SET is global to the worker's Redis DB).
+  def short_grace_reaper
+    Wurk::Fetcher::Reaper.new(@config, interval: 1, lock_key: @lock_key, full_lock_key: @full_lock_key,
+                                       grace: SHORT_GRACE)
+  end
+
+  # Every checkout from @config refuses OBJECT the way `message` says.
+  def refuse_object(message)
+    config = @config
+    real = config.method(:redis)
+    config.define_singleton_method(:redis) do |**kw, &blk|
+      real.call(**kw) do |conn|
+        proxy = Object.new
+        proxy.define_singleton_method(:call) do |*args|
+          raise RedisClient::CommandError, message if args.first == 'OBJECT'
+
+          conn.call(*args)
+        end
+        proxy.define_singleton_method(:pipelined) { |&b| conn.pipelined(&b) }
+        blk.call(proxy)
+      end
+    end
+  end
+
   def graced_reaper
     Wurk::Fetcher::Reaper.new(@config, interval: 1, lock_key: @lock_key, full_lock_key: @full_lock_key)
   end

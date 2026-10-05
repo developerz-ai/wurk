@@ -412,8 +412,8 @@ module Wurk
           end
           return unless dropped
 
-          dropped.size.times { Wurk::Metrics::Statsd.increment('jobs.dropped.push') }
           log(dropped.first, cap) if announce
+          dropped.size.times { count_drop }
         end
 
         # A replay reached Redis, so the outage that filled the buffer is over:
@@ -423,6 +423,15 @@ module Wurk
         end
 
         private
+
+        # Runs in Buffered.enbuffer's `ensure`: anything raised here would
+        # replace the push's own result (its return, or the Overflow it is
+        # raising), so the metric is strictly best-effort.
+        def count_drop
+          Wurk::Metrics::Statsd.increment('jobs.dropped.push')
+        rescue StandardError
+          nil
+        end
 
         def log(first, cap)
           Wurk.configuration.logger.error do

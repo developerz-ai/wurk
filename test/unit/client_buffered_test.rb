@@ -317,6 +317,22 @@ class ClientBufferedTest < Wurk::Test::UnitCase
     assert_equal 2, log.scan('reliable_push buffer full').size
   end
 
+  def test_a_raising_statsd_neither_fails_the_push_nor_hides_the_error_log
+    Wurk::Client.reliable_push_buffer = 1
+    failing = build_client(failing_pool)
+    jids = []
+    log = Wurk::Test::STATSD_MUTEX.synchronize do
+      with_stand_in_client do
+        with_raising_increment do
+          capture_wurk_log { 3.times { jids << failing.push(base_item) } }
+        end
+      end
+    end
+
+    assert_equal 3, jids.compact.size, 'every push still returns its jid'
+    assert_includes log, 'reliable_push buffer full'
+  end
+
   def test_no_drop_no_log_and_no_count
     log = nil
     calls = with_statsd_capture { log = capture_wurk_log { build_client(failing_pool).push(base_item) } }
@@ -687,6 +703,15 @@ class ClientBufferedTest < Wurk::Test::UnitCase
     yield
   ensure
     Wurk.configuration.dogstatsd = prev
+  end
+
+  def with_raising_increment
+    Wurk::Metrics::Statsd.singleton_class.alias_method(:__increment_real, :increment)
+    Wurk::Metrics::Statsd.define_singleton_method(:increment) { |*, **| raise IOError, 'statsd down' }
+    yield
+  ensure
+    Wurk::Metrics::Statsd.singleton_class.send(:alias_method, :increment, :__increment_real)
+    Wurk::Metrics::Statsd.singleton_class.send(:remove_method, :__increment_real)
   end
 
   def with_increment_stub(calls)

@@ -33,7 +33,7 @@ All notable changes to Wurk are recorded here. Format: [Keep a Changelog](https:
 - **Prometheus `GET /metrics`** on the health listener (queue size/latency, busy, processed/failed totals, retry/dead/scheduled sizes, process count, per-child RSS, build info); no new Redis keys.
 - **The swarm parent replaces a child whose heartbeat stalls** (`swarm_heartbeat_timeout`, default 60s): TERM, then KILL, then respawn.
 - **`config.redact_args`** — redacts job args in the job logger, error-handler fallback logs, dashboard/API JSON and search (via `JobRecord#display_args`); Redis and `perform` are untouched.
-- **`rake wurk:import:cron`** imports sidekiq-cron schedules as native periodic loops (dry run by default, `APPLY=1` writes; sidekiq-cron keys are never touched).
+- **`rake wurk:import:cron`** imports sidekiq-cron schedules as native periodic loops (dry run by default, `APPLY=1` writes; sidekiq-cron keys are never touched; same-named entries in different namespaces stay separate loops, labelled `<namespace>/<name>`).
 - **Redis topology CI** (`topology` workflow): parity + core integration on Valkey 8, and integration tests on TLS, an ACL user, and a Sentinel failover while a fetcher is blocked in BLMOVE (no job lost or duplicated).
 - **Docs:** production cutover + rollback playbook (`docs/migrate-from-sidekiq.md` §9), incident runbook (`docs/runbook.md`), supported Redis backends matrix (`docs/deployment.md`).
 - **`Sidekiq::Metrics::Query.new(now:)`** returning `Result`/`JobResult`/`MarkResult` per the Sidekiq API.
@@ -49,6 +49,7 @@ All notable changes to Wurk are recorded here. Format: [Keep a Changelog](https:
 
 ### Fixed
 
+- **The reaper keeps its boot grace when `OBJECT IDLETIME` is unavailable** (LFU eviction policy, Dragonfly) by timing it itself across sweeps, so a worker that claims before its first heartbeat is never reclaimed mid-job.
 - **WARN at worker boot when the ActiveRecord pool is smaller than job concurrency.**
 - **Outage-buffer `:drop_oldest` overflow logs one ERROR per drop burst** and counts each drop in statsd `jobs.dropped.push` (was silent).
 - **The reaper WARNs once per unreadable `queue:*|*` key** (e.g. Sidekiq Pro super_fetch lists it cannot reclaim) and once when `OBJECT IDLETIME` is unavailable; the hourly full sweep uses `SCAN COUNT 1000`.

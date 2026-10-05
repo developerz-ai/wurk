@@ -3,7 +3,13 @@
 What to do when Wurk misbehaves in production. Each entry goes **symptom → check →
 fix**, using three tools you already have: the dashboard, `bin/rails runner` (the
 `Sidekiq::*` API answers under Wurk, so these snippets also work against a Sidekiq
-fleet), and `redis-cli`. The commands assume `redis-cli -u "$REDIS_URL"`.
+fleet), and `redis-cli`. Run the shell snippets in bash. Every Redis command goes
+through one wrapper so it always hits the Redis your workers use; define it once per
+shell:
+
+```bash
+r() { redis-cli -u "$REDIS_URL" "$@"; }
+```
 
 How the guarantees behind these steps work (reliable fetch, the reaper, the
 scheduler, at-least-once) is in [reliability](reliability.md). Signals, probes and
@@ -38,7 +44,7 @@ queues drain normally. Its latency keeps rising.
 **Check.**
 
 1. Is it paused? The **Queues** page shows a paused badge; or
-   `redis-cli SISMEMBER paused <queue>` answers `1`.
+   `r SISMEMBER paused <queue>` answers `1`.
 2. Does any running process listen to it?
 
    ```bash
@@ -69,24 +75,30 @@ queues drain normally. Its latency keeps rising.
 
 ## Orphaned private lists
 
-**Symptom.** `redis-cli --scan --pattern 'queue:*|*' | wc -l` stays well above
+**Symptom.** The count of private lists (the check below) stays well above
 processes × queues, or jobs that were running when a worker died never ran again.
 
 **Check.** List the private lists and their owners:
 
+A `queue:*|*` name is only a private list when it is not a public queue (a queue may
+be called `has|pipe`, so check the `queues` SET first):
+
 ```bash
-redis-cli --scan --pattern 'queue:*|*' | while read -r k; do echo "$k len=$(redis-cli LLEN "$k")"; done
-redis-cli SMEMBERS processes
+r --scan --pattern 'queue:*|*' | while read -r k; do
+  [ "$(r SISMEMBER queues "${k#queue:}")" = 1 ] && continue   # a public queue with | in its name
+  echo "$k len=$(r LLEN "$k")"
+done
+r SMEMBERS processes
 ```
 
 A Wurk list is named `queue:<q>|<host>|<pid>|<nonce>|<index>`, and its owner's
-process key is `<host>:<pid>:<nonce>`. `redis-cli EXISTS <host>:<pid>:<nonce>`
+process key is `<host>:<pid>:<nonce>`. `r EXISTS <host>:<pid>:<nonce>`
 answering `0` means the owner is no longer heartbeating. A Sidekiq Pro list is
 `queue:<q>|<host>|<pid>|<index>`.
 
 The reaper reclaims a dead owner's list within one sweep (every 60s per process,
 plus a full keyspace scan hourly), once the owner's heartbeat (60s TTL) has expired.
-Only one process sweeps at a time: `redis-cli TTL super_fetch:reaper` shows the
+Only one process sweeps at a time: `r TTL super_fetch:reaper` shows the
 current lock.
 
 **Fix.**
@@ -102,8 +114,8 @@ current lock.
 
   ```bash
   k='queue:default|web-1|4242|3f9c0e1a|0'      # the orphaned list
-  q="${k%%|*}"
-  while [ -n "$(redis-cli LMOVE "$k" "$q" RIGHT RIGHT)" ]; do :; done
+  q='queue:default'                             # its public queue: the longest queues-SET name the key starts with
+  while [ -n "$(r LMOVE "$k" "$q" RIGHT RIGHT)" ]; do :; done
   ```
 
 - A steady stream of new orphans means workers are dying with jobs in flight
@@ -128,7 +140,7 @@ still completing.
    long jobs pinning every thread looks like saturation.
 3. Database: `ActiveRecord::ConnectionTimeoutError` in the logs means the DB pool is
    smaller than `concurrency` ([migration §2](migrate-from-sidekiq.md#2-concurrency-vs-parallelism-read-this)).
-4. Redis: `redis-cli --latency` (sub-millisecond is normal) and `redis-cli SLOWLOG GET 20`.
+4. Redis: `r --latency` (sub-millisecond is normal) and `r SLOWLOG GET 20`.
 5. Caps: a `global_concurrency` entry or a limiter deliberately holds a queue back.
 
 **Fix.**
@@ -137,7 +149,7 @@ still completing.
   DB-pool and memory arithmetic. Move slow work onto its own queue and topology slot so
   it cannot hold up fast work.
 - Pause a non-critical queue to free capacity while you scale.
-- Redis slow: look for big keys (`redis-cli --bigkeys`) and expensive commands in the
+- Redis slow: look for big keys (`r --bigkeys`) and expensive commands in the
   slowlog. Dashboard pages that page through huge sets are visible there too.
 
 ## Leader stuck (periodic not firing)
@@ -147,9 +159,9 @@ still completing.
 **Check.**
 
 ```bash
-redis-cli GET dear-leader        # identity of the current leader, host:pid:nonce
-redis-cli TTL dear-leader        # 0–30 while a leader renews it
-redis-cli EXISTS "$(redis-cli GET dear-leader)"   # 1 if that process still heartbeats
+r GET dear-leader        # identity of the current leader, host:pid:nonce
+r TTL dear-leader        # 0–30 while a leader renews it
+r EXISTS "$(r GET dear-leader)"   # 1 if that process still heartbeats
 ```
 
 - No leader (`nil`): every process may be opted out with `WURK_LEADER=false` /
@@ -158,7 +170,7 @@ redis-cli EXISTS "$(redis-cli GET dear-leader)"   # 1 if that process still hear
 - Leader identity not heartbeating: it died without releasing the lock. The 30s TTL
   frees it.
 - Leader healthy, one loop silent: is the loop paused on the **Cron** tab? Read its
-  marks with `redis-cli HGETALL loops:<lid>`: `nf` is the next fire as epoch seconds.
+  marks with `r HGETALL loops:<lid>`: `nf` is the next fire as epoch seconds.
   An empty `nf` means the schedule can never match again (`0 0 30 2 *`).
 - Logs: `[cron] missed tick` (a fire more than 90s late was skipped) and
   `[cron] fire lost` (the push failed after the slot was claimed).
@@ -166,7 +178,7 @@ redis-cli EXISTS "$(redis-cli GET dear-leader)"   # 1 if that process still hear
 **Fix.**
 
 - Opted out everywhere: let at least one pool campaign (unset `WURK_LEADER`).
-- Lock held with no TTL (`TTL` answers `-1`, which Wurk never writes): `redis-cli DEL dear-leader`.
+- Lock held with no TTL (`TTL` answers `-1`, which Wurk never writes): `r DEL dear-leader`.
 - Paused: **Unpause** on the **Cron** tab.
 - Fire a missed occurrence by hand: **Enqueue** on the **Cron** tab, or
   `bin/rails runner 'Wurk::Cron.fire!("<lid>")'` (also advances the fire marks).
@@ -221,8 +233,8 @@ replays them when Redis returns ([reliability](reliability.md)).
 
 **Check.**
 
-1. `redis-cli PING` from a worker host, and `redis-cli INFO replication` (`role:master`).
-2. With Sentinel: `redis-cli -p 26379 SENTINEL get-master-addr-by-name <name>`.
+1. `r PING` from a worker host, and `r INFO replication` (`role:master`).
+2. With Sentinel: `redis-cli -u "$SENTINEL_URL" SENTINEL get-master-addr-by-name <name>` (a Sentinel, not the data node).
 3. Persistent `READONLY` errors mean clients are still talking to a node that is now a
    replica. That happens with a static URL pointing at one node rather than at
    Sentinel or a failover-aware endpoint.
@@ -257,10 +269,10 @@ the job classes running at the time.
 **Check (Redis).**
 
 ```bash
-redis-cli INFO memory | grep -E 'used_memory_human|maxmemory_human|maxmemory_policy'
-redis-cli --bigkeys
+r INFO memory | grep -E 'used_memory_human|maxmemory_human|maxmemory_policy'
+r --bigkeys
 for p in 'queue:*' 'b-*' 'status:*' 'unique:*' 'uniquejobs:*' 'cron_job*'; do
-  printf '%-14s %s\n' "$p" "$(redis-cli --scan --pattern "$p" | wc -l)"
+  printf '%-14s %s\n' "$p" "$(r --scan --pattern "$p" | wc -l)"
 done
 ```
 
@@ -285,9 +297,9 @@ done
 
 ```bash
 bin/rails runner 's = Sidekiq::Batch::Status.new("<bid>"); p(total: s.total, pending: s.pending, failures: s.failures, invalidated: s.invalidated?)'
-redis-cli SMEMBERS b-<bid>-jids          # jids still outstanding
-redis-cli SMEMBERS b-<bid>-failed        # jids currently failing
-redis-cli SMEMBERS b-<bid>-died          # jids that went to the dead set
+r SMEMBERS b-<bid>-jids          # jids still outstanding
+r SMEMBERS b-<bid>-failed        # jids currently failing
+r SMEMBERS b-<bid>-died          # jids that went to the dead set
 ```
 
 Read the result against how batches count ([batches](batches.md#failure-handling)):

@@ -8,7 +8,7 @@ This is testable, and it's the strongest possible proof of compat.
 
 | Gem | Upstream suite runs against Wurk in CI? |
 |---|---|
-| sidekiq-cron | **Yes** — on every PR, in the [`ecosystem` job](../../.github/workflows/ecosystem.yml), pinned in [`test/ecosystem/sidekiq-cron/PIN`](../../test/ecosystem/sidekiq-cron/PIN) |
+| sidekiq-cron | **Yes** — on PRs that change a filtered path (the workflow is path-gated), in the [`ecosystem` job](../../.github/workflows/ecosystem.yml), pinned in [`test/ecosystem/sidekiq-cron/PIN`](../../test/ecosystem/sidekiq-cron/PIN) |
 | every other gem below | **No** — untested on Wurk. Pins and blockers for sidekiq-status and sidekiq-unique-jobs are recorded [further down](#not-yet-in-the-matrix--pin-researched-blocker-known); the rest have not been attempted |
 
 Keeping any add-on gem needs the git-only [`sidekiq` shim gem](../../ecosystem/sidekiq-shim/README.md), because every one of them declares `add_dependency "sidekiq"`. A user keeping an untested gem should prove it in staging before production. The native replacements Wurk ships (periodic loops, `unique_for:`, `track:`, rate limiters) are the supported path, and the migration guide documents how to move live sidekiq-cron schedules and sidekiq-unique-jobs locks across a cutover ([`docs/migrate-from-sidekiq.md` §6](../migrate-from-sidekiq.md#6-third-party-gem-mappings)).

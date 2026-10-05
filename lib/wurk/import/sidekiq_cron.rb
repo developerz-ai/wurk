@@ -173,11 +173,20 @@ module Wurk
       def options_for(hash, message, entry)
         add_warnings(hash, entry)
         args = args_for(hash['args'])
-        opts = { 'label' => hash['name'].to_s }
+        opts = { 'label' => label_for(entry) }
         opts['args'] = args unless args.empty?
         opts.merge!(message_options(message))
         opts['paused'] = true if hash['status'] == 'disabled'
         opts
+      end
+
+      # The label is part of the loop's lid, so it has to carry the namespace:
+      # sidekiq-cron keys an entry by namespace + name, and `nightly` in
+      # `billing` and in `default` are two jobs that must stay two loops. The
+      # default namespace (and the pre-namespace legacy set) keeps the bare
+      # name, so an entry imported before this keeps its lid on re-import.
+      def label_for(entry)
+        entry.namespace == 'default' ? entry.name : "#{entry.namespace}/#{entry.name}"
       end
 
       # sidekiq-cron pushes the queue and retry frozen into `message` when the

@@ -19,6 +19,7 @@ class ApiRedactionTest < Wurk::Test::EngineCase
     @original = ::Wurk.configuration.instance_variable_get(:@options)
     @options = @original.merge(redact_args: REDACTOR)
     ::Wurk.configuration.instance_variable_set(:@options, @options)
+    @retry_members = []
   end
 
   def teardown
@@ -26,7 +27,8 @@ class ApiRedactionTest < Wurk::Test::EngineCase
     ::Wurk.redis do |c|
       c.call('DEL', "queue:#{@queue}")
       c.call('SREM', 'queues', @queue)
-      c.call('DEL', 'retry')
+      # `retry` is shared with every other test on this DB; only our own member goes.
+      c.call('ZREM', 'retry', *@retry_members) unless @retry_members.empty?
     end
   ensure
     super
@@ -77,6 +79,7 @@ class ApiRedactionTest < Wurk::Test::EngineCase
         c.call('LPUSH', "queue:#{@queue}", raw)
       else
         c.call('ZADD', 'retry', Time.now.to_f.to_s, raw)
+        @retry_members << raw
       end
     end
     raw

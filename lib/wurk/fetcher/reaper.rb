@@ -6,6 +6,7 @@ require_relative '../middleware/poison_pill'
 require_relative '../timer_loop'
 require_relative 'private_list_key'
 require_relative 'unparseable_keys'
+require_relative 'orphan_grace'
 
 module Wurk
   class Fetcher
@@ -86,11 +87,6 @@ module Wurk
       # 1,000 calls instead of 10,000. Still small enough that one call never
       # holds Redis for more than a fraction of a millisecond.
       FULL_SCAN_COUNT = 1000
-
-      NO_IDLETIME_WARNING = 'reaper: OBJECT IDLETIME is unavailable on this Redis (%s); the boot-grace ' \
-                            're-check before reclaiming a private list is off, and only the heartbeat re-check ' \
-                            'guards it. Expected under an LFU maxmemory policy or on servers without OBJECT ' \
-                            '(e.g. Dragonfly).'
       THREAD_NAME = 'wurk-reaper'
 
       attr_reader :interval
@@ -99,7 +95,7 @@ module Wurk
                      full_interval: FULL_INTERVAL, full_lock_key: FULL_LOCK_KEY, grace: DEFAULT_GRACE)
         @config = config
         @interval = interval
-        @grace = grace
+        @grace = OrphanGrace.new(config, grace)
         @lock_key = lock_key
         @full_interval = full_interval
         @full_lock_key = full_lock_key
@@ -267,34 +263,10 @@ module Wurk
       # SCAN. Only reached for lists the snapshot already called orphaned, so
       # its round trips are paid per orphan, never per live list.
       def settled_orphan?(key, host, pid, nonce)
-        return false if recently_touched?(key)
+        return false if @grace.recent?(key)
         return !live_owners.include?(owner_key(host, pid, nil)) unless nonce
 
         redis(idempotent: true) { |c| c.call('HGET', owner_key(host, pid, nonce), 'info') }.nil?
-      end
-
-      # nil IDLETIME is a list that is already gone — nothing to drain. Under an
-      # LFU maxmemory policy Redis does not track idle time and refuses the
-      # command; the liveness re-check then decides alone.
-      def recently_touched?(key)
-        return false unless @grace.positive?
-
-        idle = redis(idempotent: true) { |c| c.call('OBJECT', 'IDLETIME', key) }
-        idle.nil? || idle < @grace
-      rescue RedisClient::CommandError => e
-        warn_no_idletime(e)
-        false
-      end
-
-      # Once per reaper (one per process): the boot-grace half of the re-check
-      # is off for good on this server, and the operator should know the
-      # heartbeat re-check is now the only guard against reclaiming a booting
-      # owner's list.
-      def warn_no_idletime(error)
-        return if @idletime_warned
-
-        @idletime_warned = true
-        logger.warn { format(NO_IDLETIME_WARNING, error.message.lines.first&.strip) }
       end
 
       def local_pid_alive?(pid)

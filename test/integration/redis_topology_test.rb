@@ -159,12 +159,25 @@ module RedisTopologyChecks
 
   def cleanup_topology_keys
     @config&.redis do |conn|
-      privs = conn.call('SCAN', '0', 'MATCH', "queue:#{@queue}|*", 'COUNT', '1000').last
+      privs = private_list_keys(conn)
       conn.call('DEL', "queue:#{@queue}", @schedule_set, *privs)
       conn.call('SREM', 'queues', @queue)
     end
   rescue StandardError
     nil
+  end
+
+  # Every private list of this test's queue, across the whole SCAN: a single
+  # page can come back short (or empty) on a big keyspace.
+  def private_list_keys(conn)
+    keys = []
+    cursor = '0'
+    loop do
+      cursor, page = conn.call('SCAN', cursor, 'MATCH', "queue:#{@queue}|*", 'COUNT', '1000')
+      keys.concat(page)
+      break if cursor == '0'
+    end
+    keys.uniq
   end
 
   def monotonic
@@ -366,7 +379,7 @@ class RedisTopologySentinelTest < Wurk::Test::UnitCase
   end
 
   def private_list_lengths(conn)
-    conn.call('SCAN', '0', 'MATCH', "queue:#{@queue}|*", 'COUNT', '1000').last.map { |k| conn.call('LLEN', k) }
+    private_list_keys(conn).map { |k| conn.call('LLEN', k) }
   end
 
   def wait_until(what)

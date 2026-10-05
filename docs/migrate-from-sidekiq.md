@@ -466,11 +466,16 @@ procedure:
    is the recommended home: the schedule is reviewed in pull requests and survives a
    Redis flush. Entries your app created at runtime (`Sidekiq::Cron::Job.create`)
    and does not want in code can go straight into Redis with
-   `APPLY=1 bin/rails wurk:import:cron`. The two routes write the **same** lid for an
-   entry, so importing now and pasting later converges on one loop. Don't import an
-   entry into Redis for a class your `config.periodic` block also registers under a
-   different schedule: the per-class prune at boot treats the imported loop as
-   superseded and drops it ([periodic jobs](periodic-jobs.md#deploys-what-happens-when-a-schedule-changes)).
+   `APPLY=1 bin/rails wurk:import:cron`. The printed block registers exactly the lid
+   the import writes, so importing now and pasting that block unchanged later
+   converges on one loop. Combining the two routes for one class is safe **only when
+   both produce the same loop ID** (lid). The lid hashes the schedule, the class and
+   every option (`args`, `queue`, `retry`, `label`, …), so the same schedule with
+   different args or queue is a different loop. At boot, a process that registers a
+   class in `config.periodic` prunes every other loop of that class, so an imported
+   loop whose lid your code does not register is dropped
+   ([periodic jobs](periodic-jobs.md#deploys-what-happens-when-a-schedule-changes)).
+   Compare the `lid` the dry run prints with the **Cron** tab after deploying the code.
 3. **Fix what was skipped.** The task skips, with the reason, anything a native loop
    cannot reproduce unchanged: fugit natural-language or seconds-field schedules,
    `date_as_argument`, and GlobalID-serialized args. It warns (and imports) when an
@@ -483,7 +488,7 @@ procedure:
 5. **Verify, then clean up later.** After cutover the dashboard's **Cron** tab lists
    every loop with its next fire. The import never touches sidekiq-cron's keys, so
    a rollback still finds the schedule. Once you are past your rollback window:
-   `redis-cli --scan --pattern 'cron_job*' | xargs -r -n 500 redis-cli UNLINK`.
+   `redis-cli -u "$REDIS_URL" --scan --pattern 'cron_job*' | xargs -r -n 500 redis-cli -u "$REDIS_URL" UNLINK`.
 
 Outside Rails the same task is available after `require "wurk/rake_tasks"` in your
 `Rakefile`; it uses the Redis connection your client config points at.
@@ -534,7 +539,7 @@ What that means during the drain cutover:
   class's scheduled and retry entries before the cutover, or make the job idempotent
   ([reliability](reliability.md#idempotency-is-yours)).
 - Leftover gem locks do nothing once the gem is gone. Clean them up after the cutover:
-  `redis-cli --scan --pattern 'uniquejobs:*' | xargs -r -n 500 redis-cli UNLINK`.
+  `redis-cli -u "$REDIS_URL" --scan --pattern 'uniquejobs:*' | xargs -r -n 500 redis-cli -u "$REDIS_URL" UNLINK`.
 
 ### `sentry-sidekiq` → native `Wurk::Sentry`
 
@@ -684,9 +689,15 @@ also how Sidekiq Enterprise behaves.
 > ([divergence](idea/parity-divergences.md#batch-fired-markers-use-b-bid-success-complete)).
 > This section will add a mixed-fleet path when an integration test proves one.
 
-All `redis-cli` commands below assume `REDIS_URL` style access to the production
-Redis (`redis-cli -u "$REDIS_URL" …`); the `bin/rails runner` commands work under
-either gem, because Wurk answers to the same `Sidekiq::*` API.
+Run these in bash. Every Redis command goes through one wrapper, so it always targets
+the production Redis; define it once per shell:
+
+```bash
+r() { redis-cli -u "$REDIS_URL" "$@"; }
+```
+
+The `bin/rails runner` commands work under either gem, because Wurk answers to the
+same `Sidekiq::*` API.
 
 ### 9.1 Pre-flight checklist
 
@@ -694,13 +705,13 @@ Do this days ahead, not on the night.
 
 **Redis**
 
-- [ ] Version ≥ 7.0: `redis-cli INFO server | grep redis_version`.
+- [ ] Version ≥ 7.0: `r INFO server | grep redis_version`.
 - [ ] Topology Wurk supports: standalone or Sentinel. Redis Cluster is not supported
       (`nodes:` raises). Hosted and Redis-compatible backends: see
       [deployment](deployment.md).
 - [ ] No `redis-namespace`: Wurk has no namespacing (`namespace:` raises). A
       namespaced Sidekiq dataset needs its own Redis DB or instance first.
-- [ ] `redis-cli CONFIG GET maxmemory-policy` answers `noeviction`. An evicting policy
+- [ ] `r CONFIG GET maxmemory-policy` answers `noeviction`. An evicting policy
       can silently drop queue lists and private lists.
 
 **Gems**
@@ -800,8 +811,8 @@ crossing the boundary are covered only by your staging dry run.
 2. **Wait until nothing is busy.**
 
    ```bash
-   redis-cli SMEMBERS processes | while read -r p; do
-     printf '%s quiet=%s busy=%s\n' "$p" "$(redis-cli HGET "$p" quiet)" "$(redis-cli HGET "$p" busy)"
+   r SMEMBERS processes | while read -r p; do
+     printf '%s quiet=%s busy=%s\n' "$p" "$(r HGET "$p" quiet)" "$(r HGET "$p" busy)"
    done
    bin/rails runner 'puts Sidekiq::Workers.new.size'    # 0 when drained
    ```
@@ -812,13 +823,32 @@ crossing the boundary are covered only by your staging dry run.
    at-least-once contract.
 
 3. **Stop Sidekiq.** `kill -TERM` each process (or scale the worker deployment to zero)
-   and wait for exit. `redis-cli SCARD processes` drops to `0`; a process that was
+   and wait for exit. `r SCARD processes` drops to `0`; a process that was
    SIGKILLed lingers there for up to 60s until its heartbeat expires.
 
 4. **Confirm no private lists are left.**
 
+   A name matching `queue:*|*` is a private list only if it is not itself a public
+   queue: a queue may legally be called `has|pipe`, which makes `queue:has|pipe` a
+   public queue whose name `has|pipe` is a member of the `queues` SET. The helpers below skip those, and recover each private
+   list's public queue as the longest `queues` member it starts with (a `|` inside a
+   queue name makes a plain split on `|` wrong).
+
    ```bash
-   redis-cli --scan --pattern 'queue:*|*' | while read -r k; do echo "$k $(redis-cli LLEN "$k")"; done
+   private_lists() {   # queue:*|* keys that are not public queues
+     r --scan --pattern 'queue:*|*' | while read -r k; do
+       [ "$(r SISMEMBER queues "${k#queue:}")" = 1 ] || echo "$k"
+     done
+   }
+   public_queue_of() { # longest queue:<name> prefix of $1 whose name is in the queues SET
+     local best="" q
+     while read -r q; do
+       case "$1" in "queue:$q|"*) [ ${#q} -gt ${#best} ] && best="$q" ;; esac
+     done < <(r SMEMBERS queues)
+     [ -n "$best" ] && echo "queue:$best"
+   }
+
+   private_lists | while read -r k; do echo "$k $(r LLEN "$k")"; done
    ```
 
    Expect no output: OSS Sidekiq never creates these, and Pro's super_fetch empties
@@ -828,9 +858,9 @@ crossing the boundary are covered only by your staging dry run.
    worker of either kind running**:
 
    ```bash
-   for k in $(redis-cli --scan --pattern 'queue:*|*'); do
-     q="${k%%|*}"
-     while [ -n "$(redis-cli LMOVE "$k" "$q" RIGHT RIGHT)" ]; do :; done
+   private_lists | while read -r k; do
+     q="$(public_queue_of "$k")" || { echo "skip $k: no matching queue in the queues SET, move it by hand"; continue; }
+     while [ -n "$(r LMOVE "$k" "$q" RIGHT RIGHT)" ]; do :; done
    done
    ```
 
@@ -840,7 +870,7 @@ crossing the boundary are covered only by your staging dry run.
 ### 9.3 Start Wurk
 
 Start the workers (`bundle exec wurkswarm -e production`, or roll out the worker
-deployment). Within a few seconds `redis-cli SMEMBERS processes` lists the new
+deployment). Within a few seconds `r SMEMBERS processes` lists the new
 identities and the dashboard's **Busy** page shows them.
 
 ### 9.4 Verify
@@ -854,10 +884,10 @@ Work through this in the first fifteen minutes:
 | A canary per queue | `bin/rails runner 'Sidekiq::Queue.all.each { \|q\| CanaryJob.set(queue: q.name).perform_async(q.name) }'` with a trivial job that logs its argument | One log line per queue, `Sidekiq::Stats.new.processed` rising |
 | Scheduled and retry | Dashboard **Scheduled** / **Retries** | Counts stable or falling; due entries promote |
 | Dead set | Dashboard **Dead**, `bin/rails runner 'p Sidekiq::DeadSet.new.size'` | No jump. A jump is the [poison-job storm](runbook.md#poison-job-storm) runbook |
-| Periodic leader | `redis-cli GET dear-leader`, or `bin/rails runner 'p Sidekiq::ProcessSet.new.leader'` | A Wurk identity within about 60s of boot; the next tick appears as **last fire** on the **Cron** tab |
+| Periodic leader | `r GET dear-leader`, or `bin/rails runner 'p Sidekiq::ProcessSet.new.leader'` | A Wurk identity within about 60s of boot; the next tick appears as **last fire** on the **Cron** tab |
 | Batches | Dashboard **Batches**; `bin/rails runner 'p Sidekiq::Batch::Status.new("<bid>").data'` for one that was in flight | In-flight batches complete and fire their callbacks |
 | Error reporting | Enqueue a job that raises | It reaches every reporter in `config.error_handlers` |
-| Private lists | `redis-cli --scan --pattern 'queue:*\|*' \| wc -l` | About processes × queues, not growing |
+| Private lists | `private_lists \| wc -l` (§9.2 step 4) | About processes × queues, not growing |
 | Metrics and probes | Per [deployment](deployment.md) and [metrics](metrics.md) | Green |
 
 ### 9.5 Rollback

@@ -853,12 +853,12 @@ end
 - `port` must be `0..65535`, `ready_window` must be `> 0`, `bind` non-empty —
   all validated at call time. Full signature:
   `health_check(port:, bind:, ready_window:, metrics: true, min_ready: nil)`.
+- The listener starts last in the boot sequence and is closed during shutdown.
 
 The swarm parent also replaces a child whose heartbeat has not moved for
 `config.swarm_heartbeat_timeout` seconds (default 60, minimum 20, `false`
 disables): TERM, then KILL after `shutdown_timeout + 5s`, then the normal
 respawn. See [deployment](deployment.md).
-- The listener starts last in the boot sequence and is closed during shutdown.
 
 ---
 

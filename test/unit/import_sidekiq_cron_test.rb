@@ -56,6 +56,19 @@ class ImportSidekiqCronTest < Wurk::Test::UnitCase
     assert_equal [%w[billing a], %w[default b], %w[default old]], names
   end
 
+  # sidekiq-cron keys an entry by namespace + name; the same name in two
+  # namespaces is two jobs and must become two native loops, not one.
+  def test_the_same_name_in_two_namespaces_becomes_two_loops
+    seed('nightly', cron: '0 3 * * *', namespace: 'default')
+    seed('nightly', cron: '0 3 * * *', namespace: 'billing')
+
+    written = importer.apply!
+
+    assert_equal %w[billing/nightly nightly], written.map { |e| e.loop.options['label'] }.sort
+    assert_equal 2, written.map { |e| e.loop.lid }.uniq.size
+    written.each { |e| assert importer.registered?(e.loop.lid) }
+  end
+
   def test_disabled_entry_is_imported_paused
     seed('off', cron: '0 0 * * *', status: 'disabled')
 
