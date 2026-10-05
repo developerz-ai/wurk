@@ -153,13 +153,12 @@ module Wurk
 
     def initialize(options = {})
       @options = deep_dup_defaults.merge(options)
-      RedisPool.validate_idle_timeout(@options[:redis_idle_timeout])
       # Through the same door `global_concurrency=` uses, so a cap passed to
       # `Configuration.new` is validated rather than trusted, and the default
       # Hash arrives frozen: the fetch path resolves caps once at boot, so a
       # Hash still mutable here is one a caller can add a queue to and have
       # nothing read it. FrozenError is the honest answer to that.
-      @options[:global_concurrency] = normalize_global_concurrency(@options[:global_concurrency])
+      validate_constructor_options!
       @options[:error_handlers] << ERROR_HANDLER if @options[:error_handlers].empty?
       @capsules = {}
       @directory = {}
@@ -868,6 +867,11 @@ module Wurk
     end
 
     private
+
+    def validate_constructor_options!
+      @options[:global_concurrency] = normalize_global_concurrency(@options[:global_concurrency])
+      RedisPool.validate_idle_timeout(@options[:redis_idle_timeout])
+    end
 
     # One flat fork running the default capsule's queues + concurrency. The
     # railtie boots this when a Rails host mounts the engine without declaring
