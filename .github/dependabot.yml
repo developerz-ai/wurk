@@ -1,5 +1,7 @@
 # Dependabot config. Minor+patch grouped per ecosystem to keep PR noise low
-# (majors still open individually — they need their own review). The shipped
+# (majors still open individually — except the github-actions group, which
+# also takes majors; a group carrying a major is still left for human review by
+# dependabot-automerge.yml, which reads the group's highest update type). The shipped
 # gem's deps and the dashboard's move weekly; the CI actions and the Dockerfile
 # base images move monthly, because a weekly cadence there was mostly one PR per
 # setup-ruby patch release (#534, #540) for no change in what CI runs.

@@ -4,8 +4,6 @@
 # unless the deployment sets WURK_DEMO_REPORT_ERRORS=1; SENTRY_DSN is injected
 # by the cluster.
 if ENV["WURK_DEMO_REPORT_ERRORS"] == "1"
-  require "sentry-ruby"
-  require "sentry-rails"
   require "wurk/sentry"
 
   # BrokenJob and FlakyWebhookJob fail on purpose so the Dead and Retries pages

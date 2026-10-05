@@ -10,8 +10,10 @@ name: bench
 # only when a bench input actually moved. Best-of-N is exactly what keeps the
 # noisiest benches from false-positiving the gate (#250): `wurk swarm boot`
 # reports +/-24% run to run. Six full runs at the scripts' own ips windows took
-# 6.2 min of a 6.6 min job and made this the slowest check on every PR, so the
-# windows are capped below (WURK_BENCH_MAX_*, bench/support.rb).
+# 6.2 min of a 6.6 min job. The WURK_BENCH_MAX_* window caps (bench/support.rb)
+# are NOT applied here: run_side runs each revision's own scripts, and a base
+# revision predating the caps would keep its longer windows — unequal error
+# bars widen the comparator's cutoff and could hide a >5% regression.
 on:
   pull_request:
 
@@ -89,12 +91,6 @@ jobs:
       # (cache-version: rails-8.1 in both).
       RAILS_VERSION: "8.1"
       BENCH_RUNS: 3
-      # Warmup 2s -> 1s and timed window 5s -> 4s on the ips benches: ~10s off
-      # each of the six runs. Nothing here runs YJIT, so a second warmup
-      # second buys no steadier number; the shorter timed window is paid for in
-      # a wider "± X%", which bin/bench-compare already adds to the threshold.
-      WURK_BENCH_MAX_TIME: 4
-      WURK_BENCH_MAX_WARMUP: 1
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:

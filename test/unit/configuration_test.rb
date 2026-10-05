@@ -1271,6 +1271,8 @@ class ConfigurationTest < Wurk::Test::UnitCase
     config[:redis_idle_timeout] = 30
 
     assert_equal 30, config[:redis_idle_timeout]
+    assert_raises(ArgumentError) { Wurk::Configuration.new(redis_idle_timeout: 0) }
+    assert_raises(ArgumentError) { config.merge!(redis_idle_timeout: -1) }
   end
 
   private

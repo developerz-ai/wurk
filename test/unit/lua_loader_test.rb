@@ -52,6 +52,30 @@ class LuaLoaderTest < Wurk::Test::UnitCase
 
   # --- load_missing ---------------------------------------------------
 
+  # An ACL that allows SCRIPT LOAD but denies SCRIPT EXISTS must not stop a
+  # child from booting: it falls back to uploading every script.
+  def test_load_missing_falls_back_to_a_full_upload_when_exists_is_denied
+    conn = Class.new do
+      attr_reader :loads
+
+      def initialize = @loads = 0
+
+      def call(*args)
+        raise RedisClient::PermissionError, 'NOPERM' if args.first(2) == %w[SCRIPT EXISTS]
+      end
+
+      def pipelined
+        pipe = Object.new
+        counter = self
+        pipe.define_singleton_method(:call) { |*_| counter.instance_variable_set(:@loads, counter.loads + 1) }
+        yield pipe
+      end
+    end.new
+
+    assert_equal Wurk::Lua::Loader::SOURCE_LIST.size, Wurk::Lua::Loader.load_missing(conn)
+    assert_equal Wurk::Lua::Loader::SOURCE_LIST.size, conn.loads
+  end
+
   def test_load_missing_uploads_nothing_when_the_cache_is_warm
     @pool.with do |c|
       Wurk::Lua::Loader.script_load_all(c)

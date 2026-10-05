@@ -32,11 +32,16 @@ module Wurk
         # SHAs instead of ~70KB of source — per swarm child, on the
         # boot-critical path. A cold cache (new or flushed server) costs one
         # more round trip for the loads. Returns how many were uploaded.
+        # An ACL may allow SCRIPT LOAD yet deny SCRIPT EXISTS; such a user gets
+        # the full upload it had before rather than a child that cannot boot.
         def load_missing(redis)
           present = redis.call('SCRIPT', 'EXISTS', *SHA_LIST)
           missing = SOURCE_LIST.reject.with_index { |_, i| present[i] == 1 }
           redis.pipelined { |pipe| missing.each { |src| pipe.call('SCRIPT', 'LOAD', src) } } unless missing.empty?
           missing.size
+        rescue RedisClient::PermissionError
+          script_load_all(redis)
+          SOURCE_LIST.size
         end
 
         # @param redis [RedisClient] a single connection (not a pool)

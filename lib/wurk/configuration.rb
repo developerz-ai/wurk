@@ -153,6 +153,7 @@ module Wurk
 
     def initialize(options = {})
       @options = deep_dup_defaults.merge(options)
+      RedisPool.validate_idle_timeout(@options[:redis_idle_timeout])
       # Through the same door `global_concurrency=` uses, so a cap passed to
       # `Configuration.new` is validated rather than trusted, and the default
       # Hash arrives frozen: the fetch path resolves caps once at boot, so a
@@ -187,6 +188,7 @@ module Wurk
     alias has_key? key?
     def merge!(other)
       guard_frozen!
+      RedisPool.validate_idle_timeout(other[:redis_idle_timeout]) if other.key?(:redis_idle_timeout)
       @options.merge!(other)
     end
 
