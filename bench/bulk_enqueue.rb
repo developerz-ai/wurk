@@ -43,7 +43,7 @@ end
 
 begin
   Benchmark.ips do |x|
-    x.config(time: 5, warmup: 2)
+    x.config(**bench_ips_window(time: 5, warmup: 2))
 
     x.report("wurk push_bulk(#{BULK_SIZE})") { client.push_bulk(items) }
   end

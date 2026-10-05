@@ -14,7 +14,7 @@ One image (`Dockerfile`), two roles via `bin/demo-entrypoint`:
 | Role | Process | Notes |
 |---|---|---|
 | `web` | puma serving the read-only dashboard **+** the workload generator | `WURK_DISABLED=1` keeps the swarm out of this process; `WURK_DEMO_PRODUCER=1` — set by this branch only — starts the generator thread (a Redis-holding thread must never be forked). |
-| `worker` | the Wurk swarm that drains the generated jobs | `WURK_DISABLED=1` too, so the railtie stays out; the entrypoint runs `Wurk::Swarm#boot` + `#supervise` itself on the main thread so SIGTERM drains promptly. `WURK_COUNT` defaults to 2 (the node's core count would be 6 inside a 100m-request pod). |
+| `worker` | the Wurk swarm that drains the generated jobs | `WURK_DISABLED=1` too, so the railtie stays out; the entrypoint runs `Wurk::Swarm#boot` + `#supervise` itself on the main thread so SIGTERM drains promptly. `WURK_COUNT` defaults to 2: core detection reads the cgroup's CPU *limit*, and a CPU request alone leaves it unbounded, so the default would be the node's 6 cores. |
 
 Any other argument is exec'd verbatim from `demo/` with neither swarm nor
 generator — that is how the reset CronJob runs `bundle exec rails demo:reset`.
@@ -71,19 +71,20 @@ org can ship an image:
 
 No `ARGOCD_*` secrets are needed — CI never talks to the cluster.
 
-### Registries
+### Registry
 
-The image is pushed to **two** registries from one build:
+The image is pushed to `registry.digitalocean.com/developerz-ai/wurk-demo`
+only, tagged `sha-<7>` (what Image Updater selects on), `<sha>`, and `latest`
+(the last two are for humans and rollback). Infra moved the demo off GHCR on
+2026-07-12 (infra #803); `stacks/apps/wurk-demo/manifests/kustomization.yml`
+rewrites every image ref onto DOCR.
 
-| Registry | Tag | Role |
-|---|---|---|
-| `registry.digitalocean.com/developerz-ai/wurk-demo` | `sha-<7>` + `latest` + `<sha>` | **Deploy-critical.** Image Updater selects on `sha-<7>`; the other two are for humans and rollback. |
-| `ghcr.io/developerz-ai/wurk-demo` | `sha-<7>` + `latest` + `<sha>` | Mirror, so the manifests' literal `ghcr.io` image ref still resolves. |
+### Error reporting
 
-Infra moved the demo to DOCR on 2026-07-12 (infra #803) after a dead GHCR org
-token broke fresh pulls; `stacks/apps/wurk-demo/manifests/kustomization.yml`
-rewrites the `ghcr.io` name onto DOCR. **Pushing only to GHCR is a silent
-no-op** — the build succeeds and the demo never changes.
+`WURK_DEMO_REPORT_ERRORS=1` turns on Sentry (`demo/config/initializers/sentry.rb`,
+DSN from `SENTRY_DSN`): web errors through `sentry-rails`, job failures through
+`Wurk::Sentry`. `BrokenJob` and `FlakyWebhookJob` fail on purpose, so their
+events are dropped in `before_send`. Unset, the SDK is never loaded.
 
 ## ✅ Infra requirements
 
@@ -96,7 +97,7 @@ also the rebuild recipe. Items marked **(app)** live in this repo.
 - [x] **(app)** Read-only dashboard (`WURK_WEB_READ_ONLY=1`) + live data generator.
 - [x] **Redis** — a small managed/in-cluster Redis (7.x) reachable from both pods, exposed as `REDIS_URL`. Demo data only; safe to flush.
 - [x] **`SECRET_KEY_BASE`** — a strong random value injected at runtime (k8s secret) so the Rails app boots in production. Not baked into the image.
-- [x] **Registry pull access** — sealed `docr-pull` / `ghcr-pull` imagePullSecrets in ns `wurk-demo`.
+- [x] **Registry pull access** — a sealed `docr-pull` imagePullSecret in ns `wurk-demo`.
 - [x] **ArgoCD Application `wurk-demo`** in `../infrastructure` — Deployments for `web` (cmd `web`) and `worker` (cmd `worker`), a Service, and the Redis dependency.
 - [x] **ArgoCD Image Updater** watching `registry.digitalocean.com/developerz-ai/wurk-demo` with `update-strategy: newest-build` and `allow-tags: regexp:^sha-[0-9a-f]{7}$` so a pushed image auto-syncs. The `sha-<7>` tag format is the contract — if CI stops emitting it, Image Updater silently has no candidate and the demo freezes on its current digest (this happened, and is what #418 fixes). CI holds no cluster credentials, so there are no `ARGOCD_*` secrets.
 - [x] **DNS** — `wurk.demo.developerz.ai` → the cluster ingress / Traefik.

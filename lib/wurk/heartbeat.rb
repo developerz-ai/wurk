@@ -59,12 +59,16 @@ module Wurk
 
     PAGE_SIZE = page_size
 
+    # Resident KB from a /proc/<pid>/statm line (field 1 is resident pages).
+    # Shared with Swarm, which reads its children's statm to recycle bloat.
+    def self.statm_rss_kb(statm)
+      statm.split[1].to_i * PAGE_SIZE / 1024
+    end
+
     attr_reader :identity, :rtt_us, :last_beat_at
 
     # `quiet:` is a callable so Launcher can keep ownership of its `@done`
-    # flag without an awkward setter contract. `info_overrides:` lets the
-    # caller (Launcher#embedded, tests) inject fields without forcing
-    # Heartbeat to know about every flag the host process tracks.
+    # flag without an awkward setter contract.
     def initialize(identity:, config:, started_at: nil, embedded: false, quiet: nil)
       @identity = identity
       @config = config
@@ -294,16 +298,12 @@ module Wurk
     # dashboard shows "—" rather than crashing.
     def memory_usage_kb
       if ::File.exist?('/proc/self/statm')
-        statm_rss_kb(::File.read('/proc/self/statm'))
+        Heartbeat.statm_rss_kb(::File.read('/proc/self/statm'))
       else
         `ps -o rss= -p #{::Process.pid}`.to_i
       end
     rescue StandardError
       0
-    end
-
-    def statm_rss_kb(statm)
-      statm.split[1].to_i * PAGE_SIZE / 1024
     end
   end
 end

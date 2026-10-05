@@ -13,7 +13,7 @@
 [![Live Demo](https://img.shields.io/badge/live%20demo-wurk.demo.developerz.ai-22c55e?logo=googlechrome&logoColor=white)](https://wurk.demo.developerz.ai/wurk)
 [![Gem Version](https://img.shields.io/gem/v/wurk.svg)](https://rubygems.org/gems/wurk)
 [![CI](https://github.com/developerz-ai/wurk/actions/workflows/test.yml/badge.svg)](https://github.com/developerz-ai/wurk/actions/workflows/test.yml)
-[![Coverage gate](https://img.shields.io/badge/coverage%20gate-line%20%E2%89%A590%25-brightgreen.svg)](https://github.com/developerz-ai/wurk/actions/workflows/test.yml)
+[![Coverage gate](https://img.shields.io/badge/coverage%20gate-line%20%2B%20branch%20%E2%89%A590%25-brightgreen.svg)](https://github.com/developerz-ai/wurk/actions/workflows/test.yml)
 [![Ruby](https://img.shields.io/badge/ruby-%E2%89%A5%203.2-CC342D.svg)](https://www.ruby-lang.org)
 [![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
 

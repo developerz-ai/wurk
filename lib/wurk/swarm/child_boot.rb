@@ -80,20 +80,20 @@ module Wurk
 
       private
 
-      # Boot the launcher and block until shutdown. wait_loop joins the
-      # signal-dispatch thread, so the child can't fall through to `exit 0`
-      # mid-drain. Orphan protection is armed right AFTER launcher.run — the
-      # TERM handler is in place (so pdeathsig / the watchdog drain gracefully)
-      # and the managers are up (so a self-TERM can't race launcher.run). A
-      # parent that died during boot is still caught immediately: the watchdog's
-      # first getppid check sees the reparent and drains at once.
+      # Boot the launcher and block until shutdown. Joining the signal-dispatch
+      # thread means the child can't fall through to `exit 0` mid-drain. Orphan
+      # protection is armed right AFTER launcher.run — the TERM handler is in
+      # place (so pdeathsig / the watchdog drain gracefully) and the managers
+      # are up (so a self-TERM can't race launcher.run). A parent that died
+      # during boot is still caught immediately: the watchdog's first getppid
+      # check sees the reparent and drains at once.
       def run_launcher
         launcher = Wurk::Launcher.new(@config)
         install_signal_handlers(launcher)
         launcher.run
         launcher.quiet if @start_quiet
         arm_orphan_guard
-        wait_loop(launcher)
+        @dispatcher.join
       end
 
       def arm_orphan_guard
@@ -140,28 +140,23 @@ module Wurk
       end
 
       # Prove the child's fresh Redis socket reaches a live server before it
-      # starts fetching: one PING through RedisPool#with, which owns the
-      # retry+backoff (production incident #101), so a transient blip during
-      # boot rides out instead of racing straight into a dead pool. A PING that
-      # still fails past the wrapper's retries propagates and crashes the child
-      # (the swarm respawns it) rather than booting a worker that can't reach
-      # Redis.
+      # starts fetching, through RedisPool#with, which owns the retry+backoff
+      # (production incident #101), so a transient blip during boot rides out
+      # instead of racing straight into a dead pool. A check that still fails
+      # past the wrapper's retries propagates and crashes the child (the swarm
+      # respawns it) rather than booting a worker that can't reach Redis.
       #
-      # The PING rides in the same pipeline as the eager Lua upload, so the whole
-      # check is one round trip and the child's first EVALSHA hits a warm cache.
+      # The probe is the Lua cache check itself (Loader.load_missing): its
+      # `SCRIPT EXISTS` round trip proves the socket as well as a PING would,
+      # and against a warm server cache it is the only round trip. Idempotent
+      # (SCRIPT LOAD is), so a cold cache's second trip may be replayed too.
       #
       # #101 boot-audit: hoisting the upload into the parent (one server-global
-      # `SCRIPT LOAD` for the whole fleet, children PING only) was measured and
-      # REJECTED — see Swarm#boot. Children reconnect in parallel, so the upload
-      # they pay here overlaps; the parent's would have been serial, ahead of
-      # every fork.
+      # `SCRIPT LOAD` for the whole fleet) was measured and REJECTED — see
+      # Swarm#boot. Children reconnect in parallel, so the check they pay here
+      # overlaps; the parent's would have been serial, ahead of every fork.
       def validate_redis!
-        @config.redis_pool.with do |conn|
-          conn.pipelined do |pipe|
-            pipe.call('PING')
-            Wurk::Lua::Loader.queue_script_loads(pipe)
-          end
-        end
+        @config.redis_pool.with(idempotent: true) { |conn| Wurk::Lua::Loader.load_missing(conn) }
       end
 
       # AR reconnect is best-effort — a Redis-only worker with no database still
@@ -221,7 +216,7 @@ module Wurk
       end
 
       # TSTP/USR2 keep looping; TERM/INT run the full launcher.stop
-      # (which blocks on manager drain) and then return — wait_loop
+      # (which blocks on manager drain) and then return — run_launcher
       # joins this thread, so the main child thread can't `exit 0`
       # mid-drain. Otherwise quiet would flip launcher.stopping? true
       # and the main thread would race past the unfinished managers.
@@ -247,10 +242,6 @@ module Wurk
         log.reopen if log.respond_to?(:reopen)
       rescue StandardError
         nil
-      end
-
-      def wait_loop(_launcher)
-        @dispatcher.join
       end
     end
   end

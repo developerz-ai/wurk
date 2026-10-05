@@ -468,20 +468,6 @@
     grid-template-columns: 1fr;
   }
 }
-.obs-panel__menu {
-  background: none;
-  border: none;
-  color: var(--obs-muted);
-  cursor: pointer;
-  font-size: to-rem(16);
-  padding: to-rem(2) to-rem(8);
-  border-radius: to-rem(4);
-  line-height: 1;
-}
-.obs-panel__menu:hover {
-  color: var(--obs-text);
-  background: var(--obs-surface-2);
-}
 .obs-jobdot {
   width: to-rem(8);
   height: to-rem(8);

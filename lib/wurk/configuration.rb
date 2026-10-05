@@ -46,7 +46,7 @@ module Wurk
       reloader: proc { |&b| b.call },
       backtrace_cleaner: ->(bt) { bt },
       logged_job_attributes: %w[bid tags],
-      redis_idle_timeout: nil,
+      redis_idle_timeout: nil, # seconds; RedisPool closes connections idle this long
       redis_error_handlers: [],
       # Wurk extras, appended after the mirrored keys so the Sidekiq prefix
       # above stays byte-for-byte what a gem reading @options expects.
@@ -158,7 +158,7 @@ module Wurk
       # Hash arrives frozen: the fetch path resolves caps once at boot, so a
       # Hash still mutable here is one a caller can add a queue to and have
       # nothing read it. FrozenError is the honest answer to that.
-      @options[:global_concurrency] = normalize_global_concurrency(@options[:global_concurrency])
+      validate_constructor_options!
       @options[:error_handlers] << ERROR_HANDLER if @options[:error_handlers].empty?
       @capsules = {}
       @directory = {}
@@ -178,6 +178,7 @@ module Wurk
 
     def []=(key, val)
       guard_frozen!
+      RedisPool.validate_idle_timeout(val) if key == :redis_idle_timeout
       @options[key] = val
     end
 
@@ -186,6 +187,7 @@ module Wurk
     alias has_key? key?
     def merge!(other)
       guard_frozen!
+      RedisPool.validate_idle_timeout(other[:redis_idle_timeout]) if other.key?(:redis_idle_timeout)
       @options.merge!(other)
     end
 
@@ -249,6 +251,12 @@ module Wurk
       guard_frozen!
       RedisOptions.validate!(hash)
       @redis_config = @redis_config.merge(hash.transform_keys(&:to_sym))
+    end
+
+    # Sidekiq's setter for `:redis_idle_timeout`; read when a pool is built, so
+    # call it in the initializer.
+    def reap_idle_redis_connections(timeout = 60)
+      self[:redis_idle_timeout] = timeout
     end
 
     def redis_pool
@@ -860,6 +868,11 @@ module Wurk
 
     private
 
+    def validate_constructor_options!
+      @options[:global_concurrency] = normalize_global_concurrency(@options[:global_concurrency])
+      RedisPool.validate_idle_timeout(@options[:redis_idle_timeout])
+    end
+
     # One flat fork running the default capsule's queues + concurrency. The
     # railtie boots this when a Rails host mounts the engine without declaring
     # a topology. queue_specs (not queues) so weights survive the round-trip.
@@ -1022,6 +1035,7 @@ module Wurk
     # built here is wired to the redis-error telemetry dispatcher.
     def build_redis_pool(size:, name:, **overrides)
       RedisPool.new(size: size, name: name, on_error: method(:dispatch_redis_error),
+                    redis_idle_timeout: @options[:redis_idle_timeout],
                     **RedisOptions.pool_kwargs(@redis_config), **overrides)
     end
 

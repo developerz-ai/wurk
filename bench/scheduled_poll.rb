@@ -28,7 +28,7 @@ pool.with { |c| c.call('DEL', 'schedule', 'retry') }
 enq = Wurk::Scheduled::Enq.new(config)
 
 Benchmark.ips do |x|
-  x.config(time: 5, warmup: 2)
+  x.config(**bench_ips_window(time: 5, warmup: 2))
 
   x.report('wurk idle scheduler sweep') do
     enq.enqueue_jobs

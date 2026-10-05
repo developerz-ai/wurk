@@ -20,15 +20,34 @@ module Wurk
         base.extend(ClassMethods)
       end
 
+      # Also the options half of {Wurk::Worker::ClassMethods}, so an ActiveJob
+      # class configuring a Wurk option is told about a bad value at the same
+      # place a plain worker is.
       module ClassMethods
-        # Deliberately identical to Wurk::Worker::ClassMethods#sidekiq_options,
-        # validation included: an ActiveJob class configuring a Wurk option
-        # must be told about a bad value at the same place a plain worker is.
+        # Set per-class job options (merged over any inherited options).
+        #
+        # @example
+        #   sidekiq_options queue: "mailers", retry: 3, unique_for: 10.minutes
+        # @example Opt into Wurk::Status tracking
+        #   sidekiq_options track: true
+        # @example Bound one attempt, and the job as a whole
+        #   sidekiq_options timeout: 30, deadline: 5.minutes
+        # @example Collapse a burst of enqueues into one job
+        #   sidekiq_options collapse: { policy: :debounce, wait: 5, max_wait: 60 }
+        # @param opts [Hash] any of `queue:`, `retry:`, `dead:`, `backtrace:`,
+        #   `expires_in:`, `tags:`, `pool:`, `unique_for:`, `track:`, `timeout:`,
+        #   `deadline:`, `collapse:`, … (see the migration guide's sidekiq_options
+        #   table for the full set)
+        # @return [Hash] the merged, string-keyed options hash
         def sidekiq_options(opts = {})
           stringified = opts.transform_keys(&:to_s)
           Wurk::JobUtil.validate_track!(stringified['track'], stringified) if stringified.key?('track')
           Wurk::JobUtil.validate_bounds!(stringified)
           merged = get_sidekiq_options.merge(stringified)
+          # On the merged options rather than the new ones, and before the
+          # assign: a subclass adding `collapse:` to a parent's `unique_for:`
+          # has declared both, and only the merge can see it. Raising first
+          # leaves the class holding the options it had.
           Wurk::Collapse.policy_for(merged)
           @sidekiq_options_hash = merged
         end

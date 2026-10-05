@@ -13,6 +13,9 @@ All notable changes to Wurk are recorded here. Format: [Keep a Changelog](https:
 
 ### Changed
 
+- **Swarm children upload only the Lua scripts Redis is missing** (`SCRIPT EXISTS` first) instead of ~70KB of source per boot (~14% faster child boot measured locally).
+- **wurk requires `connection_pool >= 3.0`**, the same as Sidekiq 8.1.
+- **The demo image goes to DOCR only** (GHCR mirror removed).
 - **Many-queue fetch takes two Redis round trips instead of one per queue** (100 queues: 100 → 2; ~13× faster to reach a job on queue #100); single-queue and busy-first-queue fetch are unchanged.
 - **The default swarm size follows the container's cgroup CPU quota** (v2 `cpu.max`, v1 CFS) capped at the host core count, and is logged at boot.
 - **In a swarm, `/ready` needs half the children (configurable `min_ready`) with fresh heartbeats**, not just the port owner.
@@ -30,6 +33,8 @@ All notable changes to Wurk are recorded here. Format: [Keep a Changelog](https:
 
 ### Added
 
+- **`:redis_idle_timeout` is honoured** and `config.reap_idle_redis_connections(seconds = 60)` sets it: pooled Redis connections unused that long are closed and re-dialed on the next checkout, in every process (off by default, no thread when nil); a bad value fails at configuration time in the parent. (#537)
+- **Demo error reporting** to Sentry behind `WURK_DEMO_REPORT_ERRORS=1` (#502).
 - **Prometheus `GET /metrics`** on the health listener (queue size/latency, busy, processed/failed totals, retry/dead/scheduled sizes, process count, per-child RSS, build info); no new Redis keys.
 - **The swarm parent replaces a child whose heartbeat stalls** (`swarm_heartbeat_timeout`, default 60s): TERM, then KILL, then respawn.
 - **`config.redact_args`** — redacts job args in the job logger, error-handler fallback logs, dashboard/API JSON and search (via `JobRecord#display_args`); Redis and `perform` are untouched.
@@ -97,6 +102,10 @@ All notable changes to Wurk are recorded here. Format: [Keep a Changelog](https:
 - **The leader lock is refreshed atomically** and released only after its loop has stopped.
 - **The migration guide no longer says untested add-on gems "work unchanged".** Only sidekiq-cron has its upstream suite run against Wurk on every PR; sidekiq-unique-jobs, sidekiq-scheduler, sidekiq-status, sidekiq-failures and sidekiq-throttled are now marked untested, with their blockers tracked in `docs/idea/14-ecosystem-compat.md`. The `sidekiq` shim gem — which any kept add-on needs, or its `add_dependency "sidekiq"` reinstalls real Sidekiq next to Wurk — is now documented up front in the guide, the README and llms.txt rather than only in `docs/sentry.md`.
 - **The README, site and llms.txt drop "millions of jobs an hour".** No production throughput numbers are published to back it; the measured numbers are in `docs/benchmarks.md`.
+
+### Removed
+
+- `Wurk::Capsule::MODES` (also `Sidekiq::Capsule::MODES`) and `Wurk::Metrics::Histogram::LABELS`: unused constants with no Sidekiq counterpart; dead dashboard components/styles and dummy-app stubs.
 
 ### Tests
 

@@ -96,7 +96,7 @@ end
 
 begin
   Benchmark.ips do |x|
-    x.config(time: 5, warmup: 2)
+    x.config(**bench_ips_window(time: 5, warmup: 2))
 
     x.report('wurk fetch+execute') do
       processor.process_one

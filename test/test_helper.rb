@@ -111,6 +111,34 @@ Wurk.configuration.logger = Logger.new(IO::NULL)
 
 require 'minitest/autorun'
 
+# Registered before the worker-reaping hook below so it runs after it (Minitest
+# runs after_run hooks in reverse): fold each subprocess probe's private
+# resultset (test/support/subprocess_coverage.rb) into the shared one just
+# before SimpleCov's own at-exit merge reads it.
+# Minitest's after_run hooks are inherited by every forked parallel worker, so
+# each hook here must check it is the parent: a worker that ran the reap hook
+# raised on any leftover non-zero test child, exited with that error, and
+# SimpleCov then skipped storing the worker's result — the intermittent
+# "worker-1 missing, coverage < 90%" CI failure.
+COVERAGE_PARENT_PID = Process.pid
+
+if ENV['COVERAGE'] && defined?(SimpleCov)
+  require 'fileutils'
+  require 'json'
+  Minitest.after_run do
+    next unless Process.pid == COVERAGE_PARENT_PID
+
+    Dir[File.join(SimpleCov.coverage_path, 'subprocess', '*', '.resultset.json')].each do |path|
+      SimpleCov::Result.from_hash(JSON.parse(File.read(path))).each do |result|
+        SimpleCov::ResultMerger.store_result(result)
+      end
+    rescue JSON::ParserError
+      warn "skipping unreadable subprocess coverage #{path}"
+    end
+    FileUtils.rm_rf(File.join(SimpleCov.coverage_path, 'subprocess'))
+  end
+end
+
 # minitest-parallel_fork forks ENV["NCPU"] workers — and it forks that many
 # regardless of how many suites there are, so idle extra workers run their
 # startup FLUSHDB too. Each worker is isolated on its own Redis logical DB
@@ -175,7 +203,7 @@ if Minitest.respond_to?(:after_parallel_fork)
   # ECHILD once none remain, so nil means "poll again", not "done" — only ECHILD
   # ends the loop, and only a blown deadline is an error.
   Minitest.after_run do
-    if ENV['COVERAGE'] && defined?(SimpleCov)
+    if ENV.fetch('COVERAGE', nil) && defined?(SimpleCov) && Process.pid == COVERAGE_PARENT_PID
       deadline = Process.clock_gettime(Process::CLOCK_MONOTONIC) + 10.0
       loop do
         begin

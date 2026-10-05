@@ -38,14 +38,17 @@ run_id="$(gh api "repos/$repo/actions/runs?head_sha=$pr_head&per_page=100" \
   || no "run list for $pr_head unreadable"
 [ -n "$run_id" ] || no "no green $workflow run on PR #$pr head $pr_head"
 
-# A green PR run whose path-gated steps were skipped (e.g. a docs-only PR)
-# proves nothing about the gates main would run. Every conditional step in
-# these workflows is RUN-gated, so a run that executed every gate has zero
-# skipped steps.
-skipped="$(gh api "repos/$repo/actions/runs/$run_id/jobs?per_page=100" \
-  --jq '[.jobs[].steps[] | select(.conclusion == "skipped")] | length' 2>/dev/null)" \
-  || no "jobs for run $run_id unreadable"
-[ "$skipped" = "0" ] || no "PR run $run_id skipped $skipped gated steps"
+# The PR run skipped the gates its diff didn't touch. That diff is exactly
+# main's diff here (same tree, and the squash's parent is the PR's base), so
+# those untouched areas are only covered if main's parent itself passed this
+# workflow — a red or unverified parent means a full run.
+parent="$(gh api "repos/$repo/commits/$head_sha" --jq '.parents[0].sha // empty' 2>/dev/null)" \
+  || no "parent of $head_sha unreadable"
+[ -n "$parent" ] || no "$head_sha has no parent"
+parent_green="$(gh api "repos/$repo/actions/runs?head_sha=$parent&per_page=100" \
+  --jq "[.workflow_runs[] | select((.path | split(\"@\")[0]) == \"$workflow\" and .event == \"push\" and .conclusion == \"success\")] | length" 2>/dev/null)" \
+  || no "run list for parent $parent unreadable"
+[ "${parent_green:-0}" -gt 0 ] 2>/dev/null || no "parent $parent has no green push run of $workflow"
 
 echo "ci-dup-push: tree $head_tree already passed $workflow on PR #$pr head $pr_head — skipping" >&2
 echo true

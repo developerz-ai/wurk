@@ -6,7 +6,7 @@
 //   base/       — reset, typography, scrollbars, the reduced-motion policy.
 //   components/ — one file per reusable UI atom (button, badge, card, modal…).
 //   layout/     — structural regions (shell, nav, page header).
-//   pages/      — page-scoped systems (dashboard hero, Obsidian, search…).
+//   pages/      — page-scoped systems (Obsidian, search, extension).
 // ───────────────────────────────────────────────────────────────────────────
 // Tailwind + daisyUI live in the sibling `tailwind.css` (loaded first in
 // main.tsx). This file owns everything hand-authored; its `:root` token block
@@ -46,7 +46,6 @@
 @use 'layout/page-header';
 
 // — Pages —
-@use 'pages/dashboard';
 @use 'pages/search';
 @use 'pages/extension';
 @use 'pages/obsidian';

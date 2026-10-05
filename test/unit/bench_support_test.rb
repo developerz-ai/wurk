@@ -46,6 +46,19 @@ class BenchSupportTest < Wurk::Test::UnitCase
     assert_invalid_override 'abc'
   end
 
+  def test_ips_window_is_the_scripts_own_without_a_cap
+    with_env('WURK_BENCH_MAX_TIME' => nil, 'WURK_BENCH_MAX_WARMUP' => nil) do
+      assert_equal({ time: 5, warmup: 2 }, bench_ips_window(time: 5, warmup: 2))
+    end
+  end
+
+  def test_ips_window_cap_shortens_but_never_lengthens
+    with_env('WURK_BENCH_MAX_TIME' => '4', 'WURK_BENCH_MAX_WARMUP' => '1') do
+      assert_equal({ time: 4.0, warmup: 1.0 }, bench_ips_window(time: 5, warmup: 2))
+      assert_equal({ time: 3, warmup: 1 }, bench_ips_window(time: 3, warmup: 1))
+    end
+  end
+
   private
 
   def assert_invalid_override(value)

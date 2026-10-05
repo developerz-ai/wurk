@@ -132,9 +132,9 @@ class SwarmTest < Wurk::Test::UnitCase
   # — the cache is server-global, so one upload could serve the whole fleet —
   # and MEASURED SLOWER (`bench:swarm_boot` 152 -> 95 i/s). Step 3 has just
   # closed every parent socket, so the upload had to open its own connection,
-  # serially, ahead of every fork. The children reconnect in parallel and carry
-  # the upload in a PING each one already sends (ChildBoot#validate_redis!), so
-  # the parent's boot path stays free of Redis entirely.
+  # serially, ahead of every fork. The children reconnect in parallel and warm
+  # the cache in their own first round trip (ChildBoot#validate_redis!), so the
+  # parent's boot path stays free of Redis entirely.
   def test_boot_puts_no_redis_round_trip_on_the_fork_path
     swarm = boot_traffic_probe_swarm(slots: 3)
 
@@ -365,18 +365,12 @@ class SwarmTest < Wurk::Test::UnitCase
 
   # --- memory recycle: RSS units (K26) ------------------------------
 
-  def test_page_size_comes_from_the_kernel
-    skip 'no SC_PAGESIZE on this platform' unless defined?(Etc::SC_PAGESIZE)
-
-    assert_equal Etc.sysconf(Etc::SC_PAGESIZE) / 1024, Wurk::Swarm::PAGE_SIZE_KB
-  end
-
   # statm counts pages; on a 16KB-page arm64 kernel a hard-coded 4KB read RSS
   # at a quarter of its size and the memory limit never recycled anything.
   def test_pid_rss_kb_scales_statm_pages_by_the_kernel_page_size
     swarm = bare_swarm
     statm = '/proc/4242/statm'
-    with_page_size_kb(16) do
+    with_page_size(16_384) do
       with_stubbed_file(statm, "900 50 10 1 0 40 0\n") do
         assert_equal 800, swarm.send(:pid_rss_kb, 4242)
       end
@@ -435,14 +429,14 @@ class SwarmTest < Wurk::Test::UnitCase
     owner_swarm.tap { |swarm| swarm.instance_variable_set(:@owner_pid, ::Process.pid + 1) }
   end
 
-  def with_page_size_kb(size_kb)
-    original = Wurk::Swarm::PAGE_SIZE_KB
-    Wurk::Swarm.send(:remove_const, :PAGE_SIZE_KB)
-    Wurk::Swarm.const_set(:PAGE_SIZE_KB, size_kb)
+  def with_page_size(bytes)
+    original = Wurk::Heartbeat::PAGE_SIZE
+    Wurk::Heartbeat.send(:remove_const, :PAGE_SIZE)
+    Wurk::Heartbeat.const_set(:PAGE_SIZE, bytes)
     yield
   ensure
-    Wurk::Swarm.send(:remove_const, :PAGE_SIZE_KB)
-    Wurk::Swarm.const_set(:PAGE_SIZE_KB, original)
+    Wurk::Heartbeat.send(:remove_const, :PAGE_SIZE)
+    Wurk::Heartbeat.const_set(:PAGE_SIZE, original)
   end
 
   # `path` exists and reads as `content`; every other path is untouched.

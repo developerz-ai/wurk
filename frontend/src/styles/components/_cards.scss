@@ -24,15 +24,3 @@
   animation: fade-up var(--dur-page) var(--ease-standard) both;
   animation-delay: 50ms;
 }
-
-// Interactive stat cards: a subtle border + lift on hover, no glow.
-.card--stat {
-  overflow: hidden;
-  @include transition((transform, border-color, background), 'base');
-
-  &:hover {
-    transform: translateY(to-rem(-1));
-    border-color: var(--border-strong);
-    background: var(--surface-hover);
-  }
-}

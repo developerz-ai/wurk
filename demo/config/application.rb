@@ -14,6 +14,13 @@ Bundler.require(*Rails.groups)
 
 require "wurk/rails"
 
+# sentry-rails registers its middleware and Active Job hooks through Railtie
+# initializers, so it must load at boot — not from config/initializers.
+if ENV["WURK_DEMO_REPORT_ERRORS"] == "1"
+  require "sentry-ruby"
+  require "sentry-rails"
+end
+
 module WurkDemo
   # The public demo app: a tiny Rails 8 host that runs Wurk as its job backend
   # and mounts the dashboard read-only. All the interesting behavior lives in

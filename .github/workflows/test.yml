@@ -254,7 +254,7 @@ jobs:
     name: parity (oracle)
     needs: detect
     runs-on: ubuntu-latest
-    timeout-minutes: 25
+    timeout-minutes: 10
     services:
       redis:
         image: redis:7.4
@@ -328,7 +328,7 @@ jobs:
   # actionlint does NOT embed shellcheck: it shells out to the external
   # `shellcheck` executable for `run:` blocks. ubuntu-latest preinstalls it,
   # and the `run actionlint` step below refuses to run without it.
-  # Not (yet) one of the ruleset's required checks.
+  # One of the main-protection ruleset's required checks.
   actionlint:
     name: actionlint (workflow lint)
     needs: detect
@@ -425,7 +425,7 @@ jobs:
     name: frontend (vitest)
     needs: detect
     runs-on: ubuntu-latest
-    timeout-minutes: 25
+    timeout-minutes: 10
     env:
       # Per-step gate — see the `test` job (#469).
       RUN: ${{ needs.detect.outputs.dup != 'true' && (github.event_name != 'pull_request' || needs.detect.outputs.frontend == 'true') }}

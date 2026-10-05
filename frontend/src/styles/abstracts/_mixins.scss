@@ -19,12 +19,6 @@
   }
 }
 
-@mixin flex-center {
-  display: flex;
-  align-items: center;
-  justify-content: center;
-}
-
 // Single-line ellipsis truncation.
 @mixin truncate {
   overflow: hidden;

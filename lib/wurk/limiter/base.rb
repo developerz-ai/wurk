@@ -6,10 +6,10 @@ require 'securerandom'
 
 module Wurk
   module Limiter
-    # Shared base for every limiter type. Holds the public introspection
-    # contract documented in §1.5 — name / type / options / size / status /
-    # reset / delete plus the `within_limit(...) { ... }` block. Subclasses
-    # override the acquire path and the per-type metric/size methods.
+    # Shared base for every limiter type: name / options / reset / delete /
+    # fingerprint and the metadata registration. Each subclass supplies the
+    # rest of the §1.5 introspection contract — `type`, `size`, `status`,
+    # `within_limit(...) { ... }` — plus the `state_keys` reset/delete clear.
     #
     # `status` is uniform across types (#16): `{ used:, limit:, reset_at:,
     # available? }`. Subclasses supply the three values via `build_status`;
@@ -37,24 +37,6 @@ module Wurk
         @name = name.dup.freeze
         @options = options.merge(ttl: ttl)
         register! if register
-      end
-
-      def type
-        raise NotImplementedError
-      end
-
-      def within_limit(**, &)
-        raise NotImplementedError
-      end
-
-      def size
-        0
-      end
-
-      # Uniform across types (#16). Subclasses override to fill in real
-      # numbers; the default reports an idle, unlimited shape.
-      def status
-        build_status(used: 0, limit: nil, reset_at: nil)
       end
 
       def reset
@@ -91,10 +73,6 @@ module Wurk
 
       def meta_key
         "lmtr:#{@name}"
-      end
-
-      def state_keys
-        []
       end
 
       def serializable_options

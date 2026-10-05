@@ -167,8 +167,9 @@ class StaticAssetsTest < Wurk::Test::EngineCase
 
     content = index.read
     # Verify hashed filenames are present (Vite hash format: -XXXX.js/.css)
-    assert_match(/-[A-Za-z0-9_]+\.js/, content, 'Should contain hashed JS filenames')
-    assert_match(/-[A-Za-z0-9_]+\.css/, content, 'Should contain hashed CSS filenames')
+    # Vite hashes are base64url, so `-` can appear inside (or end) the hash.
+    assert_match(/-[A-Za-z0-9_-]+\.js/, content, 'Should contain hashed JS filenames')
+    assert_match(/-[A-Za-z0-9_-]+\.css/, content, 'Should contain hashed CSS filenames')
   end
 
   def test_asset_files_exist_in_directory
