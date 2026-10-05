@@ -142,29 +142,36 @@ module Wurk
     # thread, so a Processor can ACK between this map and the requeue — but
     # bulk_requeue's LREM guard skips the RPUSH on a miss, so a job that
     # finished in that window is not resurrected onto the public queue.
-    def hard_shutdown # rubocop:disable Metrics/AbcSize
+    #
+    # The kill sits in an `ensure`: a bulk_requeue that raises (Redis down
+    # mid-drain) must not leave the processors running — embedded, the host
+    # keeps living after #stop, and those threads would carry on executing jobs
+    # over pools the launcher is about to reset. The requeue error still
+    # propagates to the caller, which reports it.
+    def hard_shutdown
       cleanup = workers_snapshot
-
-      if cleanup.any?
-        jobs = cleanup.map(&:job).compact
-
-        logger.warn { "Terminating #{cleanup.size} busy threads" }
-        logger.debug { "Jobs still in progress #{jobs.inspect}" }
-
-        # `&.` like #quiet: a TERM in the pre-prepare! window (traps install
-        # before launcher.run) reaches here with no fetcher built yet.
-        capsule.fetcher&.bulk_requeue(jobs)
+      requeue_in_flight(cleanup)
+    ensure
+      if cleanup
+        cleanup.each(&:kill)
+        # The caller typically `exit`s immediately after we return; give
+        # threads a brief window to run their `ensure` blocks.
+        wait_for(::Process.clock_gettime(::Process::CLOCK_MONOTONIC) + 3) { workers_empty? }
       end
-
-      cleanup.each(&:kill)
-
-      # The caller typically `exit`s immediately after we return; give
-      # threads a brief window to run their `ensure` blocks.
-      deadline = ::Process.clock_gettime(::Process::CLOCK_MONOTONIC) + 3
-      wait_for(deadline) { workers_empty? }
     end
 
     private
+
+    def requeue_in_flight(cleanup)
+      return if cleanup.empty?
+
+      jobs = cleanup.map(&:job).compact
+      logger.warn { "Terminating #{cleanup.size} busy threads" }
+      logger.debug { "Jobs still in progress #{jobs.inspect}" }
+      # `&.` like #quiet: a TERM in the pre-prepare! window (traps install
+      # before launcher.run) reaches here with no fetcher built yet.
+      capsule.fetcher&.bulk_requeue(jobs)
+    end
 
     # The @workers Set is mutated from Processor threads (processor_result)
     # while the lifecycle methods read/iterate it from the manager thread.

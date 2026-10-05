@@ -34,7 +34,7 @@ module Wurk
   # keys carry `STATS_TTL` so old days expire automatically.
   #
   # Spec: docs/target/sidekiq-free.md §12 (Sidekiq::Launcher).
-  class Launcher
+  class Launcher # rubocop:disable Metrics/ClassLength
     include Component
 
     # 5 years, in seconds. Per-day `stat:processed:YYYY-MM-DD` /
@@ -76,12 +76,16 @@ module Wurk
     #      A swarm child finds the slot-independent half already frozen by its
     #      parent (Configuration#prepare_for_fork!); what closes here is the
     #      capsules, which stayed open for this child's slot and pools.
-    #   2. start the managers FIRST. They are the only thing here on the
-    #      time-to-first-job path (the number bench/vs_sidekiq.rb measures);
-    #      everything below is periodic background work whose first tick is
-    #      seconds away, so it has nothing to gain from going ahead of them.
-    #   3. spawn the heartbeat thread, so the dashboard sees the process
-    #      right after it can pick up jobs.
+    #   2. write the first heartbeat SYNCHRONOUSLY, then spawn the beat thread.
+    #      Ahead of the managers on purpose: the moment a manager fetches, this
+    #      process holds jobs in its private list, and a booting sibling's
+    #      reclaim sweep decides whether those are orphans by whether the owner
+    #      is in `processes`. Fetching before the first beat lands let a live
+    #      worker's in-flight job be reclaimed and run twice. One pipelined
+    #      round trip on the time-to-first-job path is the price.
+    #   3. start the managers. Everything below is periodic background work
+    #      whose first tick is seconds away, so it has nothing to gain from
+    #      going ahead of them.
     #   4. start the reaper and the boot-time reclaim sweep — kill-9 recovery,
     #      not decoration: a SIGKILLed sibling's in-flight jobs wait on this,
     #      so it stays ahead of the periodic loops.
@@ -93,29 +97,16 @@ module Wurk
     #      non-leader tick just returns early.
     #   6. start the health probe server LAST so the listener doesn't
     #      accept k8s probes until the rest of the launcher is up.
-    def run(async_beat: true) # rubocop:disable Metrics/AbcSize
-      @started_at = Time.now.to_f
-      # Default each capsule's fetcher + materialize its lazy pools/middleware
-      # before the config freezes. Every entry point (swarm child, standalone
-      # CLI, embedded) runs through here, so none boots with a nil fetcher.
-      @config.capsules.each_value(&:prepare!)
-      @config.freeze!
-      @managers.each(&:start)
-      @heartbeat_thread = safe_thread('heartbeat', &method(:start_heartbeat)) if async_beat
-      @reaper.start
-      # Run on a background thread so /ready probe isn't delayed by a large
-      # orphan sweep (reaper.reclaim! is atomic, but can scan many entries).
-      @boot_reclaim_thread = safe_thread('boot-reclaim', &method(:boot_reclaim))
-      start_periodic_components
-      @health_server&.start
-    rescue StandardError
-      # Boot is not atomic: whatever raised (a health-check port already bound,
-      # ThreadError at the OS thread limit) leaves the steps before it holding
-      # threads, sockets and a leader campaign — and the caller is about to drop
-      # its only reference to us, so nothing else can ever release them. Guarded,
-      # because the caller must see the boot failure, not a rollback failure.
-      teardown_step('boot-rollback') { stop }
-      raise
+    #
+    # A no-op once a shutdown has been claimed: a TERM that lands between the
+    # child installing its traps and calling this used to have its drain
+    # finish first, after which `run` booted anyway — a leader campaign and a
+    # process entry nobody would ever stop. A shutdown requested from another
+    # thread mid-boot waits for the boot to finish (ShutdownGate#boot), so the
+    # teardown never races half-started components.
+    def run(async_beat: true)
+      @shutdown_gate.boot { boot(async_beat) }
+      nil
     end
 
     # Idempotent. Flips `stopping?` true, halts fetching across every
@@ -199,7 +190,46 @@ module Wurk
     # Sidekiq public surface.
     attr_reader :heartbeat_thread
 
+    # Logs every thread's backtrace — Sidekiq's TTIN, which the dashboard's
+    # "dump threads" queues. Handled in-process rather than re-delivered: a
+    # swarm child or embedded host may not trap TTIN, and its default
+    # disposition stops the whole process.
+    def dump_threads
+      Thread.list.each do |thread|
+        logger.warn "Thread TID-#{(thread.object_id ^ ::Process.pid).to_s(36)} #{thread.name}"
+        logger.warn(thread.backtrace ? thread.backtrace.join("\n") : '<no backtrace available>')
+      end
+    end
+
     private
+
+    def boot(async_beat) # rubocop:disable Metrics/AbcSize
+      @started_at = Time.now.to_f
+      # Default each capsule's fetcher + materialize its lazy pools/middleware
+      # before the config freezes. Every entry point (swarm child, standalone
+      # CLI, embedded) runs through here, so none boots with a nil fetcher.
+      @config.capsules.each_value(&:prepare!)
+      @config.freeze!
+      if async_beat
+        heartbeat
+        @heartbeat_thread = safe_thread('heartbeat', &method(:start_heartbeat))
+      end
+      @managers.each(&:start)
+      @reaper.start
+      # Run on a background thread so /ready probe isn't delayed by a large
+      # orphan sweep (reaper.reclaim! is atomic, but can scan many entries).
+      @boot_reclaim_thread = safe_thread('boot-reclaim', &method(:boot_reclaim))
+      start_periodic_components
+      @health_server&.start
+    rescue StandardError
+      # Boot is not atomic: whatever raised (a health-check port already bound,
+      # ThreadError at the OS thread limit) leaves the steps before it holding
+      # threads, sockets and a leader campaign — and the caller is about to drop
+      # its only reference to us, so nothing else can ever release them. Guarded,
+      # because the caller must see the boot failure, not a rollback failure.
+      teardown_step('boot-rollback') { stop }
+      raise
+    end
 
     # Teardown tail, driven from #stop's ensure. Every release is guarded on
     # its own because they are independent: a Redis blip in one (leader CAS
@@ -344,14 +374,19 @@ module Wurk
       thread.join
     end
 
-    # Heartbeat thread loop. `safe_thread` already wraps exceptions. Beats once up
-    # front — TimerLoop#run waits before its first yield, and the dashboard has to
-    # see this process the moment it can pick up jobs — then ticks until #stop
-    # terminates the timer. Note it does NOT stop on `@done`: a *quieted* process
-    # keeps beating so it publishes `quiet=true` instead of vanishing (#236).
+    # Heartbeat thread loop; the first beat already ran synchronously in #boot.
+    # Ticks until #stop terminates the timer. Note it does NOT stop on `@done`:
+    # a *quieted* process keeps beating so it publishes `quiet=true` instead of
+    # vanishing (#236). Each tick is rescued on its own — a raise escaping one
+    # beat (a signal re-delivery the kernel refuses, a hook) would otherwise end
+    # the thread, and a process that stops beating expires out of `processes`
+    # while still running jobs, which the reaper then reclaims.
     def start_heartbeat
-      heartbeat
-      @beat_timer.run { heartbeat }
+      @beat_timer.run do
+        heartbeat
+      rescue StandardError => e
+        handle_exception(e, { context: 'heartbeat' })
+      end
       logger.info('Heartbeat stopping...')
     end
 
@@ -360,14 +395,23 @@ module Wurk
     # that wakes the main thread (CLI self-pipe / child dispatcher) so the
     # process actually exits instead of stopping its managers and then parking
     # forever. Embedded mode owns no traps (and self-TERM would kill the host
-    # app), so quiet applies directly.
+    # app), so quiet applies directly. Anything else is re-delivered as-is,
+    # like Sidekiq 8's launcher, so a host's own traps see dashboard signals.
     def dispatch_signal(sig)
       case sig
       when 'TSTP' then @embedded ? quiet : redeliver(sig)
       when 'TERM' then request_shutdown
-      else
-        logger.warn { "Unknown signal in #{identity}-signals: #{sig.inspect}" }
+      when 'TTIN' then dump_threads
+      else redeliver_other(sig)
       end
+    end
+
+    def redeliver_other(sig)
+      return logger.warn { "Ignoring #{sig.inspect} from #{identity}-signals: embedded" } if @embedded
+
+      redeliver(sig)
+    rescue ArgumentError
+      logger.warn { "Unknown signal in #{identity}-signals: #{sig.inspect}" }
     end
 
     # The one way anything inside this process asks it to shut down gracefully:

@@ -4,6 +4,7 @@ require_relative '../component'
 require_relative '../keys'
 require_relative '../middleware/poison_pill'
 require_relative '../timer_loop'
+require_relative 'private_list_key'
 
 module Wurk
   class Fetcher
@@ -29,6 +30,15 @@ module Wurk
     #     trust the heartbeat: the owner is alive iff its identity is a live
     #     `processes` member (one whose `info` hash still exists). Such reclaim
     #     therefore waits out the 60s heartbeat TTL, exactly as the spec says.
+    #
+    # The heartbeat verdict is a snapshot taken before a SCAN that can run for
+    # a long time on a big keyspace, and a booting process can claim jobs a
+    # moment before its first beat lands. Draining on that snapshot alone
+    # reclaims a live worker's in-flight job — a double run. So a heartbeat-
+    # judged orphan is re-checked right before its drain: its list must have
+    # sat untouched for `grace` seconds (OBJECT IDLETIME; a live owner touches
+    # it on every claim and ACK), and its identity must still have no `info`
+    # hash. Our own incarnation skips both: kill(0) is not a snapshot.
     #
     # Re-pushed jobs run through Wurk::Middleware::PoisonPill, which caps a
     # job at RECOVERY_THRESHOLD recoveries within 72h: past the cap the job
@@ -59,6 +69,12 @@ module Wurk
       # the fleet, since a global SCAN is far costlier than the scoped pass.
       FULL_INTERVAL = 3600
 
+      # Seconds a heartbeat-judged private list must have sat idle before it is
+      # drained. Far below the heartbeat TTL a dead owner's list already waits
+      # out, so it never delays a real reclaim; well above the gap between a
+      # booting process's first claim and its first beat.
+      DEFAULT_GRACE = 30
+
       LOCK_KEY = 'super_fetch:reaper'
       FULL_LOCK_KEY = 'super_fetch:reaper:full'
       SCAN_COUNT = 100
@@ -67,9 +83,10 @@ module Wurk
       attr_reader :interval
 
       def initialize(config, interval: DEFAULT_INTERVAL, lock_key: LOCK_KEY,
-                     full_interval: FULL_INTERVAL, full_lock_key: FULL_LOCK_KEY)
+                     full_interval: FULL_INTERVAL, full_lock_key: FULL_LOCK_KEY, grace: DEFAULT_GRACE)
         @config = config
         @interval = interval
+        @grace = grace
         @lock_key = lock_key
         @full_interval = full_interval
         @full_lock_key = full_lock_key
@@ -139,7 +156,7 @@ module Wurk
         owners = live_owners
         reclaimed = 0
         each_full_private_list do |key, public_q, host, pid, nonce|
-          next if owner_alive?(host, pid, nonce, owners)
+          next unless orphaned?(key, host, pid, nonce, owners)
 
           reclaimed += drain(key, public_q)
         end
@@ -162,7 +179,7 @@ module Wurk
       def reclaim_queue(public_q, owners)
         reclaimed = 0
         each_private_list(public_q) do |key, host, pid, nonce|
-          next if owner_alive?(host, pid, nonce, owners)
+          next unless orphaned?(key, host, pid, nonce, owners)
 
           reclaimed += drain(key, public_q)
         end
@@ -179,7 +196,7 @@ module Wurk
             c.call('SCAN', cursor, 'MATCH', "#{public_q}|*", 'COUNT', SCAN_COUNT)
           end
           keys.each do |key|
-            host, pid, nonce = parse_owner(public_q, key)
+            host, pid, nonce = PrivateListKey.parse_owner(public_q, key)
             yield key, host, pid, nonce if pid
           end
           break if cursor == '0'
@@ -188,7 +205,7 @@ module Wurk
 
       # Yields [private_list_key, public_q, host, pid, nonce] for every list in
       # the keyspace. MATCH `queue:*|*` matches only private lists (public queue
-      # keys carry no `|`); parse_full_key drops anything that isn't a
+      # keys carry no `|`); PrivateListKey.parse_full drops anything that isn't a
       # well-formed `queue:<public>|<host>|<pid>|<nonce>|<idx>`.
       def each_full_private_list
         cursor = '0'
@@ -197,72 +214,11 @@ module Wurk
             c.call('SCAN', cursor, 'MATCH', "#{Keys::QUEUE_PREFIX}*|*", 'COUNT', SCAN_COUNT)
           end
           keys.each do |key|
-            parsed = parse_full_key(key)
+            parsed = PrivateListKey.parse_full(key)
             yield key, *parsed if parsed
           end
           break if cursor == '0'
         end
-      end
-
-      # `queue:<public>|<host>|<pid>|<nonce>|<idx>` → [public_q, host, pid,
-      # nonce], parsed from the right so a `|` inside the queue name is
-      # tolerated. nil when the key isn't a well-formed private list.
-      #
-      # With no known prefix to split on, both owner shapes are tried in
-      # preference order and the first one leaving a real public queue behind
-      # wins. The narrow reading is what saves a pre-nonce key from an all-digit
-      # host (`queue:q|123456789012|<pid>|<idx>` — a bare Docker hostname is 12
-      # hex chars): read wide, its host segment eats the whole queue name.
-      def parse_full_key(key)
-        parts = key.split('|')
-        owner_tails(parts).each do |host, pid, nonce, width|
-          public_q = parts[0...-width].join('|')
-          next unless public_q.start_with?(Keys::QUEUE_PREFIX) && public_q != Keys::QUEUE_PREFIX
-
-          return [public_q, host, pid, nonce]
-        end
-        nil
-      end
-
-      # `<public_q>|<host>|<pid>|<nonce>|<idx>` → [host, pid, nonce] (pid as
-      # Integer), or all-nil when the suffix isn't a well-formed owner tail.
-      # Splitting the suffix off the known public-queue prefix tolerates a `|`
-      # inside the queue name itself, and leaves the tail unambiguous: exactly
-      # 4 segments for the current shape, exactly 3 for the pre-nonce one.
-      def parse_owner(public_q, key)
-        suffix = key.delete_prefix("#{public_q}|")
-        return [nil, nil, nil] if suffix == key
-
-        host, pid, nonce = owner_tails(suffix.split('|')).first
-        [host, pid, nonce]
-      end
-
-      # Owner segments of a private-list key, taken from the right, as
-      # [host, pid, nonce, segment_count] readings in preference order (empty
-      # when nothing parses). The wide shape is preferred: an all-digit nonce is
-      # rare but reachable, and reading such a key narrow would take the pid for
-      # the host and the nonce for the pid — draining a live owner's list out
-      # from under it.
-      def owner_tails(parts)
-        return [] unless parts.size >= 3 && integer?(parts[-1])
-
-        [wide_tail(parts), narrow_tail(parts)].compact
-      end
-
-      # `<host>|<pid>|<nonce>|<idx>` — the shape every current process writes.
-      def wide_tail(parts)
-        [parts[-4], parts[-3].to_i, parts[-2], 4] if parts.size >= 4 && integer?(parts[-3])
-      end
-
-      # `<host>|<pid>|<idx>` — written before the nonce existed. Such a list can
-      # still hold a pre-upgrade process's in-flight jobs across a rolling
-      # upgrade, so it stays reclaimable even though nothing writes it anymore.
-      def narrow_tail(parts)
-        [parts[-3], parts[-2].to_i, nil, 3] if integer?(parts[-2])
-      end
-
-      def integer?(str)
-        str.is_a?(String) && str.match?(/\A\d+\z/)
       end
 
       # `Process.kill(0, pid)` answers "does this pid exist *in my PID
@@ -281,11 +237,38 @@ module Wurk
       # Every other owner goes through the namespace-blind heartbeat — alive iff
       # its identity is a live `processes` member. A pre-nonce key can only be
       # matched on the `<host>:<pid>` prefix of that identity.
-      def owner_alive?(host, pid, nonce, owners)
-        return local_pid_alive?(pid) if nonce == process_nonce && host == hostname
-        return owners.include?("#{host}:#{pid}:#{nonce}") if nonce
+      def orphaned?(key, host, pid, nonce, owners)
+        return !local_pid_alive?(pid) if nonce == process_nonce && host == hostname
+        return false if owners.include?(owner_key(host, pid, nonce))
 
-        owners.include?("#{host}:#{pid}")
+        settled_orphan?(key, host, pid, nonce)
+      end
+
+      def owner_key(host, pid, nonce)
+        nonce ? "#{host}:#{pid}:#{nonce}" : "#{host}:#{pid}"
+      end
+
+      # The re-check right before a heartbeat-judged drain (see the class doc):
+      # the `owners` snapshot may predate the owner's first beat, or the whole
+      # SCAN. Only reached for lists the snapshot already called orphaned, so
+      # its round trips are paid per orphan, never per live list.
+      def settled_orphan?(key, host, pid, nonce)
+        return false if recently_touched?(key)
+        return !live_owners.include?(owner_key(host, pid, nil)) unless nonce
+
+        redis(idempotent: true) { |c| c.call('HGET', owner_key(host, pid, nonce), 'info') }.nil?
+      end
+
+      # nil IDLETIME is a list that is already gone — nothing to drain. Under an
+      # LFU maxmemory policy Redis does not track idle time and refuses the
+      # command; the liveness re-check then decides alone.
+      def recently_touched?(key)
+        return false unless @grace.positive?
+
+        idle = redis(idempotent: true) { |c| c.call('OBJECT', 'IDLETIME', key) }
+        idle.nil? || idle < @grace
+      rescue RedisClient::CommandError
+        false
       end
 
       def local_pid_alive?(pid)

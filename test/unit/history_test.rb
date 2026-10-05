@@ -171,6 +171,25 @@ class HistoryTest < Wurk::Test::UnitCase
     assert_nil snapshotter.instance_variable_get(:@thread)
   end
 
+  # K1: a Redis error inside a snapshot is reported and the loop keeps
+  # snapshotting — one blip must not stop history for the process's lifetime.
+  def test_snapshot_thread_survives_a_redis_error
+    snapshotter = history(interval: 0.01)
+    snapshotter.define_singleton_method(:leader?) { true }
+    snapshotter.define_singleton_method(:snapshot) do
+      @snaps = (@snaps || 0) + 1
+      raise RedisClient::CannotConnectError, 'redis down' if @snaps == 1
+    end
+
+    thread = snapshotter.start
+    poll_until(2.0) { snapshotter.instance_variable_get(:@snaps).to_i >= 3 }
+
+    assert_operator snapshotter.instance_variable_get(:@snaps), :>=, 3
+    assert_predicate thread, :alive?
+  ensure
+    snapshotter&.terminate
+  end
+
   # A cleared @thread would be pointless if the timer stayed terminated —
   # start has to re-arm it, not spawn a thread that exits immediately.
   def test_start_after_terminate_snapshots_again

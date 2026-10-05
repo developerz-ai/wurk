@@ -195,6 +195,12 @@ the tail, so the reclaimed job is fetched *next*, ahead of fresh enqueues.
 else: a `kill -9`, a segfault, an OOM kill, a vanished host. Those leave private
 lists nobody will ever ACK.
 
+Before draining a list judged orphaned, the reaper re-checks its owner: the
+owner's heartbeat must still be missing, and the list must have been idle for a
+grace period (30s by default, via `OBJECT IDLETIME`) — a live owner touches its
+list on every claim and ACK, so a worker that started fetching just before its
+first heartbeat is never reclaimed from under it.
+
 Every worker process runs a reaper thread (`wurk-reaper`). It does two passes:
 
 | Pass | Scope | Cadence | Redis lock key |
@@ -408,8 +414,11 @@ once a queue group is acknowledged the pool stops replaying the block whatever
 the error, so a push that dies partway can never double the group it already
 delivered.
 
-**Flush behavior.** Every subsequent `push` / `push_bulk` drains the buffer
-oldest-first *before* pushing the new job. Draining stops at the first transient
+**Flush behavior.** Every buffered payload remembers the Redis pool it was
+headed for. Every subsequent `push` / `push_bulk` drains the entries bound for
+its own pool oldest-first *before* pushing the new job, so a sharded
+`Client.via(pool)` backlog never replays into another shard; the background
+drainer drains each origin in turn. Draining stops at the first transient
 failure and un-shifts the payload back to the head, so order is preserved and
 the same job is retried next time. Non-transient errors (OOM, LOADING, READONLY)
 also restore the payload before propagating, so a recovering-but-not-ready Redis
@@ -487,9 +496,7 @@ What the reset does, in a child:
   above, so the inherited drainer is discarded rather than shut down. If the
   parent had one running (`interval` was set), the child gets an equivalent
   fresh drainer on its own interval, so a child that keeps buffering jobs
-  still flushes them. The captured `buffer_client_factory` is cleared with it,
-  since it closes over the parent's pre-fork Redis pool — the next buffered
-  push in the child recaptures a factory scoped to its own pool.
+  still flushes them.
 
 Net effect: after a fork, each process — parent and every child — owns an
 independent buffer, drainer, and pair of mutexes, and only ever replays jobs

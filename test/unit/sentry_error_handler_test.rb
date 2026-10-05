@@ -4,9 +4,9 @@ require_relative '../test_helper'
 require_relative '../support/fake_sentry'
 require 'wurk/sentry'
 
-# Wurk::Sentry::ErrorHandler — the half of the integration that sees the
-# failures which are *not* job failures: the fetch loop, the shutdown path,
-# unparseable payloads, and the retry machinery's own meta-errors.
+# Wurk::Sentry::ErrorHandler — the `config.error_handlers` half of the
+# integration: the fetch loop, the shutdown path, unparseable payloads, the
+# retry machinery's own meta-errors, and the job failures Middleware never saw.
 class SentryErrorHandlerTest < Wurk::Test::UnitCase
   include SentryConstantSwap
 
@@ -159,6 +159,88 @@ class SentryErrorHandlerTest < Wurk::Test::UnitCase
 
   def test_exposes_its_filter_list
     assert_equal [Boom], handler(filtered_error_classes: [Boom]).filtered_error_classes
+  end
+
+  # =====================================================================
+  # Job failures ("Job raised exception") — Middleware's unless it never saw them
+  # =====================================================================
+
+  def job_failure(job) = { context: 'Job raised exception', job: job }
+
+  def terminal_job = { 'class' => 'MyJob', 'jid' => 'j1', 'queue' => 'critical', 'retry' => false, 'args' => [] }
+
+  def test_skips_a_job_failure_the_middleware_already_saw
+    error = Boom.new
+    Wurk::Sentry::ErrorHandler.seen_by_middleware!(error)
+    handler.call(error, job_failure(terminal_job))
+
+    assert_empty FakeSentry.captured
+  end
+
+  def test_the_middleware_claim_is_consumed
+    error = Boom.new
+    Wurk::Sentry::ErrorHandler.seen_by_middleware!(error)
+    handler.call(error, job_failure(terminal_job))
+
+    assert_nil Thread.current[Wurk::Sentry::ErrorHandler::SEEN_BY_MIDDLEWARE]
+  end
+
+  def test_captures_a_terminal_job_failure_the_middleware_never_saw
+    Wurk::Sentry::ErrorHandler.seen_by_middleware!(Boom.new('another job'))
+    error = Boom.new('class failed to load')
+    handler.call(error, job_failure(terminal_job))
+
+    assert_equal [error], FakeSentry.captured_exceptions
+    assert_equal 'Wurk/MyJob', FakeSentry.last_scope.transaction_name
+  ensure
+    Thread.current[Wurk::Sentry::ErrorHandler::SEEN_BY_MIDDLEWARE] = nil
+  end
+
+  def test_skips_an_unseen_job_failure_that_will_be_retried
+    handler.call(Boom.new, job_failure(terminal_job.merge('retry' => true)))
+
+    assert_empty FakeSentry.captured
+  end
+
+  def test_the_transport_filter_does_not_hide_a_dead_job
+    handler.call(redis_error, job_failure(terminal_job))
+
+    assert_equal 1, FakeSentry.captured.size
+  end
+
+  def test_a_job_failure_without_a_job_hash_is_reported_as_is
+    handler.call(Boom.new, { context: 'Job raised exception' })
+
+    assert_equal 1, FakeSentry.captured.size
+  end
+
+  # End to end through a real Processor: the middleware captures the terminal
+  # attempt inside the job's scope, and the processor's error_handlers dispatch
+  # of the same failure must not add a second event.
+  def test_a_failed_job_is_reported_exactly_once_through_the_processor
+    config = Wurk::Configuration.new
+    config.logger = Logger.new(IO::NULL)
+    Wurk::Sentry.install!(config)
+    queue = "seh-#{Process.pid}-#{SecureRandom.hex(4)}"
+    capsule = Wurk::Capsule.new('sentry', config)
+    capsule.queues = [queue]
+    capsule.fetcher = Wurk::Fetcher::Reliable.new(capsule)
+    klass = Class.new do
+      include Wurk::Worker
+
+      def perform = raise(SentryErrorHandlerTest::Boom, 'terminal')
+    end
+    Object.const_set("SEH_Worker_#{Process.pid}_#{SecureRandom.hex(4)}", klass)
+    payload = { 'class' => klass.name, 'args' => [], 'queue' => queue, 'jid' => SecureRandom.hex(12), 'retry' => false }
+    capsule.redis_pool.with { |c| c.call('LPUSH', "queue:#{queue}", Wurk.dump_json(payload)) }
+
+    Wurk::Processor.new(capsule).process_one
+    capsule.fetcher.flush_pending_acks
+
+    assert_equal 1, FakeSentry.captured.size
+    assert_equal 'terminal', FakeSentry.captured_exceptions.first.message
+  ensure
+    capsule&.redis_pool&.with { |c| c.call('DEL', "queue:#{queue}") }
   end
 
   # =====================================================================

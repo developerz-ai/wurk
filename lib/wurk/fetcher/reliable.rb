@@ -72,7 +72,7 @@ module Wurk
       # namespaces are in play: a restarted container reuses both, so the
       # reaper's `kill(0)` liveness check would read a dead owner's list as
       # live (jobs stranded) or a live owner's as dead (job run twice). Keys
-      # written before the nonce existed stay reclaimable — Reaper#parse_owner
+      # written before the nonce existed stay reclaimable — PrivateListKey
       # accepts both shapes.
       def self.private_queue_name(public_queue, index = 0)
         host = ENV['DYNO'] || Socket.gethostname

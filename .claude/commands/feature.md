@@ -43,7 +43,7 @@ $ARGUMENTS
 | lint | `bundle exec rubocop <files it edited>`; `cd frontend && bun run lint` only if it owns frontend files | `bin/check` |
 | tests | `bin/rake test TEST=<its own test files>` with `NCPU=1` | `bin/check` (`full` when ecosystem/parity paths touched) |
 
-**Concurrency 1 per agent** — 4 agents each forking the default worker count oversubscribe the box and the timeouts read as real failures. **Redis isolation is the harness's job** (`test_helper` assigns per-worker DBs): never brief an agent to set `REDIS_URL` or pick a DB, and read any cross-test Redis failure with cross-talk in mind.
+**Concurrency 1 per agent** — 4 agents each forking the default worker count oversubscribe the box and the timeouts read as real failures. **Redis isolation:** `test_helper` assigns per-worker DBs, but every `NCPU=1` run lands on DB 1 — so give each concurrent agent its own `WURK_TEST_DB_OFFSET=<k>` (k = 0..3, one per agent) on every test command. Never set `REDIS_URL`. Read any cross-test Redis failure with cross-talk in mind.
 
 ### Only the coordinator can do these
 

@@ -208,7 +208,9 @@ module Wurk
     # Caller branches on strategy; seconds is meaningful only for :default.
     def delay_for(jobinst, count, exception, msg)
       rv = run_retry_in_block(jobinst, count, exception, msg)
-      rv = rv.to_i if rv.is_a?(::Float)
+      # `10.minutes * count` (a Duration), `"60"` and `30.0` all mean seconds;
+      # Symbols have no #to_i, so `:kill` / `:discard` pass through intact.
+      rv = rv.to_i if rv.respond_to?(:to_i)
       default_delay = (count**4) + 15
 
       case rv
@@ -224,8 +226,7 @@ module Wurk
     end
 
     def run_retry_in_block(jobinst, count, exception, msg)
-      block = jobinst&.class&.sidekiq_retry_in_block
-      block = wrapped_block(msg, :sidekiq_retry_in_block) || block if msg['wrapped']
+      block = msg['wrapped'] ? wrapped_block(msg, :sidekiq_retry_in_block) : jobinst&.class&.sidekiq_retry_in_block
       block&.call(count, exception, msg)
     rescue ::Exception => e # rubocop:disable Lint/RescueException
       handle_exception(e, context: "Failure scheduling retry via `sidekiq_retry_in` on #{jobinst&.class&.name}")
@@ -249,8 +250,11 @@ module Wurk
     end
 
     def run_exhausted_block(jobinst, msg, exception)
-      block = jobinst&.class&.sidekiq_retries_exhausted_block
-      block = wrapped_block(msg, :sidekiq_retries_exhausted_block) || block if msg['wrapped']
+      block = if msg['wrapped']
+                wrapped_block(msg, :sidekiq_retries_exhausted_block)
+              else
+                jobinst&.class&.sidekiq_retries_exhausted_block
+              end
       block&.call(msg, exception)
     rescue ::Exception => e # rubocop:disable Lint/RescueException
       handle_exception(e, context: 'Error calling retries_exhausted', job: msg)
@@ -258,7 +262,9 @@ module Wurk
     end
 
     # Wrappers (ActiveJob, custom) expose retry blocks on the wrapped class
-    # via `msg["wrapped"]`. We look up the constant and prefer its block.
+    # via `msg["wrapped"]`. A wrapped job uses the wrapped class's block or
+    # none — never the wrapper's (Sidekiq's rule): the wrapper is shared by
+    # every wrapped class, so its block would apply to all of them.
     def wrapped_block(msg, attr)
       wrapped = ::Object.const_get(msg['wrapped'])
       wrapped.respond_to?(attr) ? wrapped.public_send(attr) : nil

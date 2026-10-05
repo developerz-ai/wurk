@@ -20,12 +20,18 @@ module Wurk
   #     one never reached a server and cannot have applied; close and retry with
   #     exponential backoff up to CONN_MAX_ATTEMPTS, then raise.
   #   * Read-/WriteTimeout and bare ConnectionError — the command may already
-  #     have applied server-side, so these raise. Replaying would double-push a
-  #     job, double-count a stat, or drop a member ZPOPed by the lost reply.
-  #     Blocks that are safe to re-run (pure reads, an LMOVE the reaper reclaims,
-  #     owner-CAS scripts) opt back into the backoff with `with(idempotent: true)`.
+  #     have applied server-side, so the pool does not replay the block. That
+  #     bounds block replay only: by the time one of these reaches the pool,
+  #     redis-client has already re-sent the in-flight command once on a fresh
+  #     socket (reconnect_attempts, see DEFAULT_RECONNECT_ATTEMPTS), so a lost
+  #     reply can still double-apply that one command. Blocks that are safe to
+  #     re-run (pure reads, an LMOVE the reaper reclaims, owner-CAS scripts) opt
+  #     back into the backoff with `with(idempotent: true)`.
   #   * ConnectionPool::TimeoutError — checkout starved; retry once after a
-  #     short jittered pause, then raise (sizing is the fix, not queuing).
+  #     short jittered pause, then raise (sizing is the fix, not queuing). Only
+  #     a checkout of *this* pool that never handed out a connection retries: the
+  #     same error escaping a nested checkout of another pool from inside the
+  #     block is raised as-is, because the block's earlier commands have run.
   # Those proofs are about the command that raised, not the block around it: a
   # block is several round trips, and redis-client re-dials mid-block, so a
   # CannotConnect can surface on the second pipeline of a block whose first one
@@ -45,9 +51,17 @@ module Wurk
     # wait above. read/write are deliberately wider than connect so a briefly-
     # slow-but-alive Redis (RDB fork pause, a large BLMOVE payload) doesn't
     # spuriously ReadTimeout — the production incident (#101) the single
-    # dual-use timeout caused. reconnect_attempts re-dials a dropped socket once;
-    # note that redis-client's re-dial also re-sends the one in-flight command,
-    # so the apply-safety split below bounds block replay, not command replay.
+    # dual-use timeout caused.
+    #
+    # reconnect_attempts: 1 is Sidekiq's own `reconnect_attempts ||= 1`. It
+    # re-dials a dropped socket once and re-sends the one in-flight command,
+    # which is what lets every pooled connection survive a Redis restart, a
+    # failover or an idle-socket reap without surfacing an error. The price is
+    # that a reply lost mid-command (a ReadTimeout included) can apply that
+    # command twice: a duplicate LPUSH, a double INCR, or a ZPOPBYSCORE whose
+    # first pop is lost with its reply (Sidekiq #3303 — same exposure upstream).
+    # 0 would close that window but turn every stale socket into an error the
+    # pool cannot replay for a non-idempotent block, so it stays at parity.
     DEFAULT_CONNECT_TIMEOUT    = 1.0
     DEFAULT_READ_TIMEOUT       = 2.5
     DEFAULT_WRITE_TIMEOUT      = 2.5
@@ -114,18 +128,28 @@ module Wurk
       @pool          = ConnectionPool.new(size: size, timeout: @pool_timeout) { build_client }
     end
 
-    # Checkout a connection and run the block. ConnectionPool::TimeoutError is
-    # raised by @pool.with *before* the block runs, so it is caught out here
-    # (the in-block #run rescue never sees it) — one retry, then raise.
+    # Checkout a connection and run the block. Our own checkout raises
+    # ConnectionPool::TimeoutError *before* the block runs, so it is caught out
+    # here (the in-block #run rescue never sees it) — one retry, then raise.
+    # `entered` tells that apart from the same class escaping the block — a
+    # nested checkout of another, starved pool — where the block's earlier
+    # commands already ran and a replay would re-issue them (an INCR counted
+    # twice, a job pushed twice).
     #
     # `idempotent: true` asserts the block can be re-run after a command may
     # already have applied server-side, which buys back the full ConnectionError
     # backoff. Only claim it for pure reads or writes whose repeat is a no-op.
     def with(idempotent: false, &block)
       checkout_retried = false
+      entered = false
       begin
-        @pool.with { |conn| run(conn, idempotent, &block) }
+        @pool.with do |conn|
+          entered = true
+          run(conn, idempotent, &block)
+        end
       rescue ConnectionPool::TimeoutError => e
+        raise if entered
+
         if checkout_retried
           notify_error(e, attempt: 2, retried: false)
           raise

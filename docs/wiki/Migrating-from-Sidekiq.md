@@ -41,7 +41,6 @@ There is **no `WURK_CONCURRENCY`** env var, and `WURK_COUNT` only applies to the
 ## Gotchas worth knowing before you cut over
 
 - **Set `WURK_DISABLED=1` on the web role.** Otherwise clustered Puma forks a duplicate swarm behind every web worker.
-- **Job exceptions never reach `config.error_handlers`.** The retry machinery swallows them, so an error reporter wired only there reports nothing from your jobs — it needs a server middleware too. `Wurk::Sentry` registers both.
 - **`sentry-sidekiq` cannot be installed** (its gemspec pulls in real Sidekiq, producing a broken hybrid). Use `require "wurk/sentry"`.
 - **`Sidekiq.pro?` / `Sidekiq.ent?` return `false`** even though the Pro and Enterprise features are all present. Don't gate behaviour on them.
 - **`config.super_fetch!` is an accepted no-op** — reliable fetch is already the only mode. `config.reliable_scheduler!` is *not* a no-op; keep it.

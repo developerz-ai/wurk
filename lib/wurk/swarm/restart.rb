@@ -11,14 +11,17 @@ module Wurk
     #
     # The reaper reports child exits via `claim_exit`, so a replacement that
     # dies before it heartbeats is seen as dead (not "slow"): the old child is
-    # kept, a per-slot backoff applied, and the slot retried. `abort` drops
+    # kept, a per-slot backoff applied, and the slot retried. If the old child
+    # is gone too, nothing is left holding the slot: it is handed to the
+    # swarm's crash-respawn backoff (`respawn`) instead of being requeued
+    # behind a dead pid, which `next_ready_pid` would drop. `abort` drops
     # everything — the swarm's TERM handler then drains the in-flight
     # replacement + old as ordinary children.
     #
     # Collaborators are injected (Config) so the machine is decoupled from the
     # swarm's fork/kill/Redis internals and unit-testable against fakes.
     class Restart
-      Config = Struct.new(:spawn, :kill, :heartbeat, :describe, :now, :logger,
+      Config = Struct.new(:spawn, :kill, :heartbeat, :describe, :respawn, :now, :logger,
                           :heartbeat_wait, :drain_timeout, :backoff, keyword_init: true)
 
       def initialize(config)
@@ -26,6 +29,7 @@ module Wurk
         @kill = config.kill              # ->(pid, sig)
         @heartbeat = config.heartbeat    # ->(pid) => truthy once the child has beaten
         @describe = config.describe      # ->(pid) => { slot:, index: } | nil
+        @respawn = config.respawn        # ->(idx) => delay; arms the swarm's crash respawn for the slot
         @now = config.now                # -> monotonic seconds
         @logger = config.logger
         @heartbeat_wait = config.heartbeat_wait
@@ -140,7 +144,7 @@ module Wurk
 
       def advance_await_heartbeat
         cur = @current
-        return retry_slot if cur[:replacement_dead]
+        return replacement_died if cur[:replacement_dead]
 
         seen = @heartbeat.call(cur[:replacement])
         timed_out = now >= cur[:deadline]
@@ -178,6 +182,23 @@ module Wurk
         @logger.warn do
           "swarm: replacement #{cur[:replacement]} for slot #{cur[:index]} died; " \
             "keeping #{cur[:old_pid]}, retry in #{delay}s"
+        end
+        @current = nil
+      end
+
+      def replacement_died
+        @current[:old_exited] ? release_slot : retry_slot
+      end
+
+      # Both children of the slot are dead — each exit was claimed here, so the
+      # swarm scheduled no respawn for either. Hand the slot back to it.
+      def release_slot
+        cur = @current
+        @backoff.clear(cur[:index])
+        delay = @respawn.call(cur[:index])
+        @logger.warn do
+          "swarm: replacement #{cur[:replacement]} and old #{cur[:old_pid]} for slot #{cur[:index]} both died; " \
+            "respawning slot in #{delay}s"
         end
         @current = nil
       end

@@ -57,7 +57,7 @@ class RedisIdempotentCallSitesTest < Wurk::Test::UnitCase
   end
 
   # Connection decorator that logs each command verb into its checkout's log.
-  # Only the three entry points Wurk's own code uses are intercepted; anything
+  # Only the entry points Wurk's own code uses are intercepted; anything
   # else a block reaches for is forwarded untouched.
   class RecordingConn
     def initialize(conn, log)
@@ -77,6 +77,10 @@ class RedisIdempotentCallSitesTest < Wurk::Test::UnitCase
 
     def pipelined
       @conn.pipelined { |pipe| yield RecordingConn.new(pipe, @log) }
+    end
+
+    def multi
+      @conn.multi { |tx| yield RecordingConn.new(tx, @log) }
     end
 
     def respond_to_missing?(name, include_private = false)
@@ -304,13 +308,13 @@ class RedisIdempotentCallSitesTest < Wurk::Test::UnitCase
   end
 
   # The beat is the one split call site: its writes converge on the same
-  # identity hash and keep the backoff, while the signal LPOPs — a dashboard
+  # identity hash and keep the backoff, while the signal RPOPs — a dashboard
   # TERM/TSTP each — get their own checkout that must never replay.
   def test_heartbeat_write_claims_apply_safety_but_the_signal_drain_does_not
     Wurk::Heartbeat.new(identity: "#{@ns}:1:x", config: @config).beat!
 
     assert_equal [true], @main.claims_for('HSET')
-    assert_equal [false], @main.claims_for('LPOP')
+    assert_equal [false], @main.claims_for('RPOP')
   end
 
   # Poison-pill recovery counter: an over-count kills a healthy job.

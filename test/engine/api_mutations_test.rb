@@ -150,6 +150,54 @@ class ApiMutationsTest < Wurk::Test::EngineCase
     assert_empty fetch_set('retry')
   end
 
+  # K20: one entry the client rejects (tags not an Array — stock Sidekiq rejects
+  # it too) must not 500 the request with the rest of the batch unapplied. The
+  # bad entry stays in its set and is reported; the good one is retried.
+  def test_bulk_retry_reports_a_rejected_entry_and_applies_the_rest
+    bad = push_to_zset('retry', tags: 'not-an-array')
+    good = push_to_zset('retry')
+    post '/wurk/api/retries', { keys: [bad, good].map { |sc, jid| "#{sc}|#{jid}" }, cmd: 'retry' }
+
+    assert_equal 422, last_response.status
+    assert_equal 1, json_body[:count]
+    assert_equal(["#{bad[0]}|#{bad[1]}"], json_body[:failed].map { |f| f[:key] })
+    assert_equal([bad[1]], fetch_set('retry').map { |j| j['jid'] }, 'the rejected entry must stay in its set')
+    assert queue_has_jid?(good[1])
+  end
+
+  def test_single_retry_of_a_rejected_entry_is_422_and_keeps_it
+    score, jid = push_to_zset('retry', tags: 'not-an-array')
+    post "/wurk/api/retries/#{ekey(score, jid)}", { cmd: 'retry' }
+
+    assert_equal 422, last_response.status
+    assert_equal 0, json_body[:count]
+    assert_equal([jid], fetch_set('retry').map { |j| j['jid'] })
+  end
+
+  def test_scheduled_all_add_to_queue_continues_past_a_rejected_entry
+    bad = push_to_zset('schedule', tags: 'not-an-array')
+    good = push_to_zset('schedule')
+    post '/wurk/api/scheduled/all/add_to_queue'
+
+    assert_equal 422, last_response.status
+    assert_equal([bad[1]], fetch_set('schedule').map { |j| j['jid'] })
+    assert queue_has_jid?(good[1])
+  end
+
+  # A Redis error is not a per-entry failure: it still reaches the 503 handler
+  # rather than being reported against every remaining key.
+  def test_bulk_redis_error_is_503_not_a_per_entry_failure
+    score, jid = push_to_zset('retry')
+    ::Wurk::SortedEntry.alias_method(:__orig_retry, :retry)
+    ::Wurk::SortedEntry.define_method(:retry) { raise RedisClient::CannotConnectError, 'down' }
+    post '/wurk/api/retries', { keys: ["#{score}|#{jid}"], cmd: 'retry' }
+
+    assert_equal 503, last_response.status
+  ensure
+    ::Wurk::SortedEntry.alias_method(:retry, :__orig_retry)
+    ::Wurk::SortedEntry.remove_method(:__orig_retry)
+  end
+
   # --- Scheduled ----------------------------------------------------------
 
   def test_scheduled_add_to_queue_single
@@ -301,8 +349,8 @@ class ApiMutationsTest < Wurk::Test::EngineCase
   # worker's shared Redis DB is exactly what a scheduled poller still running
   # from an earlier class pops before the request lands — `count: 0` on
   # `test_bulk_deduplicates_repeated_keys` on main, 2026-09-03.
-  def push_to_zset(name)
-    payload = job_payload
+  def push_to_zset(name, **extra)
+    payload = job_payload.merge(extra.transform_keys(&:to_s))
     score = ::Time.now.to_f + 3600
     ::Wurk.redis { |c| c.call('ZADD', name, score.to_s, ::Wurk.dump_json(payload)) }
     [score, payload['jid']]

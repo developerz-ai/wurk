@@ -95,17 +95,40 @@ module Wurk
         reserved ? nil : existing.to_s
       end
 
+      # Errors that prove the write they interrupted never applied: refused
+      # while dialing, a starved checkout, or a reply in which Redis itself
+      # rejected the command.
+      PRE_APPLY_ERRORS = [
+        ::RedisClient::CannotConnectError, ::RedisClient::FailoverError,
+        ::RedisClient::CommandError, ::ConnectionPool::TimeoutError
+      ].freeze
+
       # Only a success is worth replaying. A rejected body is a request the
-      # client should be able to correct and send again under the same key, and
-      # a raise is a request whose outcome nobody knows — both release the key
-      # rather than pinning an answer to it.
+      # client should be able to correct and send again under the same key, so
+      # it releases. A raise releases only when nothing can have reached Redis
+      # — before any write went out, or on an error that proves the one in
+      # flight never applied. Anything else (a lost reply, a bulk request that
+      # died after an earlier slice landed) is an outcome nobody knows: the key
+      # stays pending until its TTL, so the client's retry is told "in flight"
+      # instead of enqueueing a second copy.
       def settle(slot, fingerprint)
+        Thread.current[::Wurk::Client::WRITE_STATE_KEY] = :clean
         response = yield
         response[0] < 300 ? record(slot, fingerprint, response) : release(slot)
         response
-      rescue StandardError
-        release(slot)
+      rescue StandardError => e
+        release(slot) unless outcome_unknown?(e)
         raise
+      ensure
+        Thread.current[::Wurk::Client::WRITE_STATE_KEY] = nil
+      end
+
+      def outcome_unknown?(error)
+        case Thread.current[::Wurk::Client::WRITE_STATE_KEY]
+        when :applied then true
+        when :attempted then PRE_APPLY_ERRORS.none? { |klass| error.is_a?(klass) }
+        else false
+        end
       end
 
       # KEEPTTL so the window is the first request's, not this write's, and XX

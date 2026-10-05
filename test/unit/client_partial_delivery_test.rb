@@ -95,7 +95,9 @@ class ClientPartialDeliveryTest < Wurk::Test::UnitCase
 
     assert_raises(RedisClient::ConnectionError) { client.send(:raw_push, payloads) }
 
-    Wurk::Client.new(pool: @pool).push(item(args: ['c'], jid: 'j-c'))
+    # The drop has passed, so the same pool — the one these payloads were
+    # headed for — now delivers, and the push replays the backlog first.
+    client.push(item(args: ['c'], jid: 'j-c'))
 
     assert_equal 0, Wurk::Client::Buffered.buffer_size
     assert_equal [['a'], ['c']], queued_args(@queue).reverse
@@ -169,7 +171,7 @@ class ClientPartialDeliveryTest < Wurk::Test::UnitCase
   end
 
   def buffered_args
-    Wurk::Client::Buffered.buffer.map { |p| p['args'] }
+    Wurk::Client::Buffered.buffer.map { |entry| entry.payload['args'] }
   end
 
   def queued_args(queue)

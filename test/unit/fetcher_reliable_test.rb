@@ -390,6 +390,39 @@ class FetcherReliableTest < Wurk::Test::UnitCase
     assert_equal payload, lindex(@public_queue, 0)
   end
 
+  # K15: the private copy leaves with the requeue, or the job is in both lists
+  # and the reaper runs it a second time later.
+  def test_requeue_moves_the_job_out_of_the_private_list
+    payload = enqueue('req')
+    uow = @fetcher.retrieve_work
+    uow.requeue
+
+    assert_equal 0, llen(private_queue)
+    assert_equal [payload], lrange(@public_queue)
+  end
+
+  # The caller owns the unit, so a requeue after the ACK went out still puts
+  # the job back rather than dropping it.
+  def test_requeue_after_a_flushed_ack_still_requeues
+    payload = enqueue('req')
+    uow = @fetcher.retrieve_work
+    uow.acknowledge
+    @fetcher.flush_pending_acks
+    uow.requeue
+
+    assert_equal 0, llen(private_queue)
+    assert_equal [payload], lrange(@public_queue)
+  end
+
+  def test_basic_fetch_alias_requeue_clears_the_private_copy
+    enqueue('req')
+    uow = Sidekiq::BasicFetch.new(@capsule).retrieve_work
+    uow.requeue
+
+    assert_equal 0, llen(private_queue)
+    assert_equal 1, llen(@public_queue)
+  end
+
   # --- bulk_requeue (atomic private→public move) ---------------------
 
   # The reliable-fetch recovery path: a job still in the private list at

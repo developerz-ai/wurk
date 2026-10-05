@@ -21,11 +21,16 @@ module Wurk
     # gate on `config.server?` (still false) and are silently dropped. A process
     # that won't run workers (skip_boot?, or one that refuses to boot under a
     # preforking web server) is not a server.
+    #
+    # It is a client as well: its web requests enqueue, so the app's
+    # `Sidekiq.configure_client` blocks (client middleware, the client's Redis)
+    # must apply here too instead of being skipped because server? is true.
     def enter_server_mode_if_serving(app = ::Rails.application)
       return if skip_boot?
       return if boot_action(app) == :refuse
 
       Wurk.enter_server_mode
+      Wurk.configuration[:client_in_server] = true
     end
 
     # Invoked from after_initialize, once the host app has fully initialized.
@@ -47,12 +52,39 @@ module Wurk
     # host app itself and then runs a Launcher in this very process, so forking
     # a swarm here as well would put two independent workers on one queue and
     # run every job — every cron tick included — twice.
+    #
+    # Everything above is a denylist; `serving?` is the allowlist that backs it.
     def skip_boot?
       ENV['WURK_DISABLED'] == '1' ||
         Wurk.worker_boot_claimed? ||
         building? ||
         defined?(::Rails::Console) ||
-        ::Rails.env.test?
+        ::Rails.env.test? ||
+        !serving?
+    end
+
+    # Boot only inside a web server, or where the host opted in. Every Rails
+    # process runs after_initialize — `rails runner`, `rails generate`, a
+    # custom script that requires config/environment — and a denylist can
+    # never name them all: each one forked a full swarm that fetched jobs, and
+    # its at_exit drain then cut those jobs off when the one-off command
+    # finished. The markers are constants only a running server defines
+    # (Bundler.require of the puma gem loads `Puma`, never `Puma::Launcher`).
+    # Any other server (Falcon, Thin, Pitchfork, a bespoke rackup) opts in
+    # with WURK_EMBED=1.
+    def serving?
+      return true if ENV['WURK_EMBED'] == '1'
+      return true if defined?(::Rails::Server) || defined?(::Puma::Launcher) || defined?(::PhusionPassenger)
+
+      unicorn_server?
+    end
+
+    # `require 'unicorn'` (a Gemfile entry) defines the constant in every
+    # process, so the program name is what tells the server apart.
+    def unicorn_server?
+      return false unless defined?(::Unicorn)
+
+      ::File.basename($PROGRAM_NAME.to_s).start_with?('unicorn')
     end
 
     # What boot should do once skip_boot? is false. Pure — reads env / loaded

@@ -174,6 +174,64 @@ class LeaderTest < Wurk::Test::UnitCase
     assert_operator ttl_after, :>, ttl_before - 5
   end
 
+  # K25: GET + EXPIRE as two commands can extend a lock a follower took in
+  # between. The win-or-refresh is one server-side step.
+  def test_campaign_is_a_single_atomic_command
+    pool = ProbePool.new('leader-campaign')
+    ldr = Wurk::Leader.new(key: @key, pool: pool)
+    ldr.acquire
+    warm_script_cache(pool)
+    pool.commands.clear
+    ldr.acquire
+
+    assert_equal(['EVALSHA', Wurk::Lua::SHAS.fetch(:leader_campaign), 1, @key, ldr.owner, ldr.ttl],
+                 pool.commands.first)
+    assert_equal ['EVALSHA'], pool.commands.map(&:first), 'the refresh must not be GET-then-EXPIRE'
+  ensure
+    pool&.disconnect!
+  end
+
+  def test_refresh_never_extends_a_competitors_lock
+    ldr = build_leader(ttl: 30)
+    ldr.acquire
+    Wurk.redis { |c| c.call('SET', @key, 'competitor', 'EX', 5) }
+
+    refute ldr.acquire
+    refute_predicate ldr, :leader?
+    assert_operator(Wurk.redis { |c| c.call('TTL', @key) }, :<=, 5)
+  end
+
+  # K25: a campaign that raised can't confirm the lock; keeping @held would
+  # leave leader-gated consumers acting as leader through the outage.
+  def test_tick_error_steps_down
+    ldr = build_leader
+    ldr.acquire
+    ldr.instance_variable_set(:@pool, raising_pool)
+
+    ldr.send(:tick_once)
+
+    refute_predicate ldr, :leader?
+    assert_nil ldr.token
+  ensure
+    ldr&.instance_variable_set(:@pool, nil)
+  end
+
+  # The loop's trailing release hitting a dead Redis is reported; the thread
+  # still exits cleanly instead of dying with the error unseen.
+  def test_loop_exit_release_error_is_reported
+    seen = Queue.new
+    cfg = reporting_config { |ex, ctx| seen << [ex.message, ctx] }
+    ldr = Wurk::Leader.new(key: @key, pool: raising_pool, config: cfg, initial_wait: 0,
+                           renew_interval: 5, follower_interval: 5)
+    thread = ldr.start
+    wait_for_dequeue(seen) # first campaign failed
+    stop_quietly(ldr)
+
+    assert thread.join(5)
+    assert_equal false, thread.status, 'the loop must exit normally, not die with the error' # rubocop:disable Minitest/RefuteFalse
+    assert_equal ['pool-down', Wurk::Leader::THREAD_NAME], wait_for_dequeue(seen)
+  end
+
   def test_release_drops_key_when_owner
     ldr = build_leader
     ldr.acquire
@@ -581,7 +639,21 @@ class LeaderTest < Wurk::Test::UnitCase
     assert_equal [Wurk::TimerLoop::JOIN_TIMEOUT], wedged.joins, 'the join must carry a timeout'
     assert_same wedged, ldr.instance_variable_get(:@thread),
                 'a straggler stays referenced so a restart cannot campaign twice in parallel'
-    assert_nil(Wurk.redis { |c| c.call('GET', @key) }, 'the CAS release runs even when the join times out')
+  end
+
+  # K25: a straggler still inside its campaign could re-take the lock right
+  # after an early release, leaving a stopping process as leader for a full
+  # TTL. Release waits for a confirmed join; the straggler's own exit releases.
+  def test_stop_does_not_release_while_the_loop_is_still_running
+    ldr = build_leader
+    ldr.acquire
+    ldr.instance_variable_set(:@thread, never_joins_thread)
+
+    ldr.stop
+
+    assert_equal(ldr.owner, Wurk.redis { |c| c.call('GET', @key) })
+  ensure
+    ldr&.instance_variable_set(:@thread, nil)
   end
 
   def test_stop_releases_and_clears_thread

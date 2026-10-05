@@ -50,6 +50,13 @@ module Wurk
     # pays a single nil check per write phase.
     DELIVERED_KEY = :wurk_client_delivered
 
+    # Thread-local write-progress marker for a caller that has to know whether
+    # a failed push may already be in Redis — {API::Idempotency} opens it at
+    # :clean around a produce request. #raw_push moves it to :attempted when a
+    # write goes out and to :applied once one lands; nil (no caller watching)
+    # costs one lookup per write phase.
+    WRITE_STATE_KEY = :wurk_client_write_state
+
     attr_accessor :redis_pool
 
     def initialize(pool: nil, config: nil, chain: nil)
@@ -293,13 +300,25 @@ module Wurk
 
       # No apply-safety claim: every command below appends (LPUSH, ZADD, the
       # batch Lua's counters), so a block replayed after a lost reply is a
-      # second copy of the job. A post-write timeout raises out of here instead
-      # — {Client::Buffered} turns that into an outage-buffer entry, and a plain
-      # Client hands it to whoever called `perform_async`. The pool's pre-apply
-      # retry only fires while this block has landed nothing, so a queue group
-      # that already went out is never re-pushed by a replay.
-      pool.with { |conn| atomic_push(conn, payloads) }
+      # second copy of the job. The pool's pre-apply retry only fires while this
+      # block has landed nothing, so a queue group that already went out is
+      # never re-pushed by a block replay. That is the pool's guarantee, not the
+      # socket's: redis-client re-sends the one in-flight pipeline once on a
+      # dropped connection (RedisPool::DEFAULT_RECONNECT_ATTEMPTS, Sidekiq's
+      # setting too), so a reply lost mid-pipeline can still land that group
+      # twice. Only an error that outlasts that re-send raises out of here —
+      # {Client::Buffered} turns it into an outage-buffer entry, and a plain
+      # Client hands it to whoever called `perform_async`.
+      tracked_push(payloads)
       nil
+    end
+
+    # The write itself, moving WRITE_STATE_KEY along for a caller watching it.
+    def tracked_push(payloads)
+      state = Thread.current[WRITE_STATE_KEY]
+      Thread.current[WRITE_STATE_KEY] = :attempted if state == :clean
+      pool.with { |conn| atomic_push(conn, payloads) }
+      Thread.current[WRITE_STATE_KEY] = :applied if state
     end
 
     # Batch autoflush path: accumulate each non-scheduled batched payload into
@@ -527,6 +546,7 @@ module Wurk
     # ledger.
     def mark_delivered(payloads)
       Thread.current[DELIVERED_KEY]&.concat(payloads)
+      Thread.current[WRITE_STATE_KEY] &&= :applied
     end
 
     # Best-effort `sidekiq.jobs.enqueued` counter — one increment per payload

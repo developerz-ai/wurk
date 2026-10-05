@@ -93,13 +93,13 @@ class ClientBufferedTest < Wurk::Test::UnitCase
   end
 
   def test_buffered_payloads_drain_on_next_successful_push
-    failing = build_client(failing_pool)
-    3.times { |i| failing.push(base_item('args' => [i])) }
+    client, pool = outage_client
+    3.times { |i| client.push(base_item('args' => [i])) }
 
     assert_equal 3, Wurk::Client::Buffered.buffer_size
 
-    good = Wurk::Client.new
-    good.push(base_item('args' => [99]))
+    pool.recover!
+    client.push(base_item('args' => [99]))
 
     assert_equal 0, Wurk::Client::Buffered.buffer_size
     # 3 buffered + 1 new = 4 jobs in queue
@@ -107,12 +107,13 @@ class ClientBufferedTest < Wurk::Test::UnitCase
   end
 
   def test_drain_preserves_oldest_first_order
-    failing = build_client(failing_pool)
-    failing.push(base_item('args' => ['first']))
-    failing.push(base_item('args' => ['second']))
-    failing.push(base_item('args' => ['third']))
+    client, pool = outage_client
+    client.push(base_item('args' => ['first']))
+    client.push(base_item('args' => ['second']))
+    client.push(base_item('args' => ['third']))
 
-    Wurk::Client.new.push(base_item('args' => ['fourth']))
+    pool.recover!
+    client.push(base_item('args' => ['fourth']))
 
     # LPUSH puts newest at head → reversing gives push order:
     assert_equal [['first'], ['second'], ['third'], ['fourth']], queued_args.reverse
@@ -120,10 +121,11 @@ class ClientBufferedTest < Wurk::Test::UnitCase
 
   def test_drain_emits_statsd_per_job
     calls = with_statsd_capture do
-      failing = build_client(failing_pool)
-      failing.push(base_item)
-      failing.push(base_item)
-      Wurk::Client.new.push(base_item)
+      client, pool = outage_client
+      client.push(base_item)
+      client.push(base_item)
+      pool.recover!
+      client.push(base_item)
     end
 
     assert_equal %w[jobs.recovered.push jobs.recovered.push], calls.grep('jobs.recovered.push')
@@ -152,10 +154,11 @@ class ClientBufferedTest < Wurk::Test::UnitCase
   # counts itself as it lands, then the live push counts its own.
   def test_drain_emits_jobs_enqueued_as_each_payload_lands
     calls = with_statsd_capture do
-      failing = build_client(failing_pool)
-      failing.push(base_item('args' => [1]))
-      failing.push(base_item('args' => [2]))
-      Wurk::Client.new.push(base_item('args' => [3]))
+      client, pool = outage_client
+      client.push(base_item('args' => [1]))
+      client.push(base_item('args' => [2]))
+      pool.recover!
+      client.push(base_item('args' => [3]))
     end
 
     assert_equal %w[jobs.enqueued jobs.recovered.push jobs.enqueued jobs.recovered.push jobs.enqueued],
@@ -167,28 +170,29 @@ class ClientBufferedTest < Wurk::Test::UnitCase
   def test_cap_evicted_payload_is_never_counted_as_enqueued
     Wurk::Client.reliable_push_buffer = 1
     calls = with_statsd_capture do
-      failing = build_client(failing_pool)
-      failing.push(base_item('args' => ['evicted']))
-      failing.push(base_item('args' => ['kept']))
-      Wurk::Client.new.push(base_item('args' => ['live']))
+      client, pool = outage_client
+      client.push(base_item('args' => ['evicted']))
+      client.push(base_item('args' => ['kept']))
+      pool.recover!
+      client.push(base_item('args' => ['live']))
     end
 
     assert_equal 2, calls.grep('jobs.enqueued').size
   end
 
-  # --- drain pool resolution (plan 03/S12) -------------------------------
+  # --- drain pool resolution (plan 03/S12, K14) --------------------------
 
   # Capturing the pool object pinned it for the life of the process:
   # `reset_redis_pools!` shuts that instance down and builds a replacement, and
-  # a ConnectionPool shutdown is terminal, so the drainer would replay into
-  # dead sockets forever. The config is asked again at drain time instead.
-  def test_captured_factory_follows_a_config_pool_rebuild
+  # a ConnectionPool shutdown is terminal, so a replay would go into dead
+  # sockets forever. The config is asked again at replay time instead.
+  def test_origin_follows_a_config_pool_rebuild
     config = isolated_config
     stale  = config.redis_pool
     Wurk::Client::Buffered.enbuffer([base_item], client: Wurk::Client.new(pool: stale, config: config))
 
     config.reset_redis_pools!
-    resolved = Wurk::Client::Buffered.buffer_client_factory.call.redis_pool
+    resolved = Wurk::Client::Buffered.buffer.first.origin.resolve
 
     refute_same stale, resolved
     assert_same config.redis_pool, resolved
@@ -197,20 +201,60 @@ class ClientBufferedTest < Wurk::Test::UnitCase
   # A pool the config does not hand out is a second Redis nothing else can
   # produce — replaying it anywhere else would write to the wrong server, so
   # that one stays pinned.
-  def test_captured_factory_pins_a_pool_the_config_does_not_own
+  def test_origin_pins_a_pool_the_config_does_not_own
     foreign = failing_pool
     Wurk::Client::Buffered.enbuffer([base_item], client: build_client(foreign))
 
-    assert_same foreign, Wurk::Client::Buffered.buffer_client_factory.call.redis_pool
+    assert_same foreign, Wurk::Client::Buffered.buffer.first.origin.resolve
   end
 
-  # A pool-less client resolves its config on every push already, and so does
-  # the drainer's fallback factory — capturing here would pin the drainer to
-  # this client's Redis and misroute a later explicit-pool client's payloads.
-  def test_pool_less_client_captures_no_factory
-    Wurk::Client::Buffered.enbuffer([base_item], client: Wurk::Client.new)
+  # K14: the outage buffer is process-global, but a sharded app's backlog is
+  # not. A job pushed through `Client.via(shard_a)` must replay into shard A,
+  # never into whichever pool pushes next.
+  def test_a_via_push_replays_into_its_own_pool_not_the_next_pushers
+    shard_a = TogglablePool.new(@pool)
+    shard_a.fail!
+    Wurk::Client.via(shard_a) { Wurk::Client.new.push(base_item('args' => ['for-a'])) }
 
-    assert_nil Wurk::Client::Buffered.buffer_client_factory
+    Wurk::Client.new.push(base_item('args' => ['via-default']))
+
+    assert_equal [['for-a']], buffered_args, 'a push through another pool must not take shard A\'s backlog'
+    assert_equal 0, shard_a.writes
+
+    shard_a.recover!
+    Wurk::Client.via(shard_a) { Wurk::Client.new.push(base_item('args' => ['a-live'])) }
+
+    assert_equal 0, Wurk::Client::Buffered.buffer_size
+    assert_equal 2, shard_a.writes, 'the backlog and the live push both went through shard A'
+  end
+
+  # Entries for a pool that is still down do not stop another pool's drain.
+  def test_drain_skips_entries_bound_for_another_pool
+    down = TogglablePool.new(@pool)
+    down.fail!
+    build_client(down).push(base_item('args' => ['stuck']))
+    up, = outage_client
+    up.push(base_item('args' => ['queued']))
+    up.instance_variable_get(:@redis_pool).recover!
+
+    up.push(base_item('args' => ['live']))
+
+    assert_equal [['stuck']], buffered_args
+    assert_equal [['queued'], ['live']], queued_args.reverse
+  end
+
+  def test_drain_all_replays_every_origin_and_reports_the_first_failure
+    broken = TogglablePool.new(@pool)
+    broken.fail!
+    build_client(broken).push(base_item('args' => ['broken']))
+    healthy, = outage_client
+    healthy.push(base_item('args' => ['healthy']))
+    healthy.instance_variable_get(:@redis_pool).recover!
+    broken.explode!
+
+    assert_raises(RuntimeError) { Wurk::Client::Buffered.drain_all! }
+    assert_equal [['healthy']], queued_args, 'the healthy origin drained despite the broken one'
+    assert_equal [['broken']], buffered_args, 'the broken payload is restored, not dropped'
   end
 
   # --- ring cap ----------------------------------------------------------
@@ -227,12 +271,13 @@ class ClientBufferedTest < Wurk::Test::UnitCase
 
   def test_drain_after_cap_eviction_replays_surviving_entries
     Wurk::Client.reliable_push_buffer = 2
-    failing = build_client(failing_pool)
-    failing.push(base_item('args' => ['oldest']))
-    failing.push(base_item('args' => ['middle']))
-    failing.push(base_item('args' => ['newest']))
+    client, pool = outage_client
+    client.push(base_item('args' => ['oldest']))
+    client.push(base_item('args' => ['middle']))
+    client.push(base_item('args' => ['newest']))
 
-    Wurk::Client.new.push(base_item('args' => ['fresh']))
+    pool.recover!
+    client.push(base_item('args' => ['fresh']))
 
     queued = queued_args
 
@@ -264,7 +309,7 @@ class ClientBufferedTest < Wurk::Test::UnitCase
     failing.push(base_item('args' => [3]))
 
     assert_equal 3, Wurk::Client::Buffered.buffer_size
-    assert_equal [[1], [2], [3]], Wurk::Client::Buffered.buffer.map { |p| p['args'] } # rubocop:disable Lint/AmbiguousBlockAssociation
+    assert_equal [[1], [2], [3]], buffered_args
   end
 
   # --- overflow mode (issue #19, opt-in raise on cap) --------------------
@@ -310,7 +355,7 @@ class ClientBufferedTest < Wurk::Test::UnitCase
     failing.push(base_item('args' => ['keep']))
     assert_raises(Wurk::Client::Buffered::Overflow) { failing.push(base_item('args' => ['reject'])) }
 
-    assert_equal [['keep']], Wurk::Client::Buffered.buffer.map { |p| p['args'] } # rubocop:disable Lint/AmbiguousBlockAssociation
+    assert_equal [['keep']], buffered_args
   end
 
   # The cap splits a single bulk push: what fits is buffered, the rest rides on
@@ -433,11 +478,9 @@ class ClientBufferedTest < Wurk::Test::UnitCase
     refute_predicate Wurk::Client, :reliable_push_drainer_running?
   end
 
-  # Regression: reset! used to swap the buffer/cap/overflow-mode/factory
-  # ivars but leave `@drainer` running — the thread survived reset! and
-  # kept ticking against a client_factory that was never nil'd directly
-  # but whose captured pool/state reset! had just discarded, i.e. a
-  # surviving thread retaining stale closure state indefinitely.
+  # Regression: reset! used to swap the buffer/cap/overflow-mode ivars but
+  # leave `@drainer` running — the thread survived reset! and kept ticking,
+  # unreachable, for the life of the process.
   def test_reset_stops_a_running_drainer
     Wurk::Client.reliable_push_drainer(interval: 0.02)
 
@@ -450,19 +493,16 @@ class ClientBufferedTest < Wurk::Test::UnitCase
   end
 
   def test_drainer_drains_buffer_against_recovering_pool
-    pool = togglable_pool
-    failing_client = build_client(pool.failing_facade)
-    failing_client.push(base_item('args' => ['a']))
-    failing_client.push(base_item('args' => ['b']))
+    client, pool = outage_client
+    client.push(base_item('args' => ['a']))
+    client.push(base_item('args' => ['b']))
 
     assert_equal 2, Wurk::Client::Buffered.buffer_size
 
-    # Background drainer points at the real Redis pool — once it ticks,
-    # both queued payloads should land in the live queue.
+    # Once the pool recovers and the drainer ticks, both payloads land in the
+    # live queue without another push.
     Wurk::Client::Buffered.start_drainer!(interval: 0.02)
-    Wurk::Client::Buffered.instance_variable_get(:@drainer).instance_variable_set(
-      :@client_factory, -> { Wurk::Client.new(pool: @pool) }
-    )
+    pool.recover!
 
     deadline = ::Process.clock_gettime(::Process::CLOCK_MONOTONIC) + 3.0
     until Wurk::Client::Buffered.buffer_size.zero? || ::Process.clock_gettime(::Process::CLOCK_MONOTONIC) > deadline
@@ -471,6 +511,28 @@ class ClientBufferedTest < Wurk::Test::UnitCase
 
     assert_equal 0, Wurk::Client::Buffered.buffer_size, 'drainer did not flush buffer within 3s'
     assert_equal [['a'], ['b']], queued_args.reverse
+  end
+
+  # K1 pattern: a drain that raises is reported and the thread keeps ticking.
+  def test_drainer_survives_a_raising_drain_and_reports_it
+    reported = Queue.new
+    handler = ->(ex, ctx, _cfg) { reported << ex if ctx[:context] == 'reliable_push drainer' }
+    pool = TogglablePool.new(@pool)
+    pool.fail!
+    build_client(pool).push(base_item('args' => ['x']))
+    pool.explode!
+
+    Wurk::Test::GLOBAL_STATE_MUTEX.synchronize do
+      Wurk.configuration.error_handlers << handler
+      Wurk::Client::Buffered.start_drainer!(interval: 0.02)
+
+      assert_instance_of RuntimeError, reported.pop(timeout: 5)
+      assert_instance_of RuntimeError, reported.pop(timeout: 5), 'the next tick ran too'
+      assert_predicate Wurk::Client, :reliable_push_drainer_running?
+    ensure
+      Wurk::Client.reliable_push_drainer_stop!
+      Wurk.configuration.error_handlers.delete(handler)
+    end
   end
 
   def test_drainer_rejects_non_positive_interval
@@ -509,9 +571,7 @@ class ClientBufferedTest < Wurk::Test::UnitCase
   # skipped and the method returns immediately rather than parking for the
   # 30s interval. Driven directly so it's deterministic — no thread timing.
   def test_wait_interval_skips_wait_when_already_done
-    drainer = Wurk::Client::Buffered::Drainer.new(
-      interval: 30.0, client_factory: -> { NoopDrainClient.new }
-    )
+    drainer = Wurk::Client::Buffered::Drainer.new(interval: 30.0)
     drainer.instance_variable_set(:@done, true)
 
     t0 = ::Process.clock_gettime(::Process::CLOCK_MONOTONIC)
@@ -524,9 +584,7 @@ class ClientBufferedTest < Wurk::Test::UnitCase
   # Complementary then-side: @done false → wait_interval parks on the
   # ConditionVariable, and a broadcast (what stop sends) wakes it back up.
   def test_wait_interval_parks_until_broadcast_when_not_done
-    drainer = Wurk::Client::Buffered::Drainer.new(
-      interval: 30.0, client_factory: -> { NoopDrainClient.new }
-    )
+    drainer = Wurk::Client::Buffered::Drainer.new(interval: 30.0)
     waiter = Thread.new { drainer.send(:wait_interval) }
 
     started = ::Process.clock_gettime(::Process::CLOCK_MONOTONIC)
@@ -543,18 +601,11 @@ class ClientBufferedTest < Wurk::Test::UnitCase
 
   private
 
-  # Drainer with a long interval and a no-op client so the run loop never
-  # touches Redis; lets us assert start/stop/running? control flow directly.
+  # Drainer with a long interval so the run loop never ticks; lets us assert
+  # start/stop/running? control flow directly.
   def idle_drainer
-    Wurk::Client::Buffered::Drainer.new(
-      interval: 30.0, client_factory: -> { NoopDrainClient.new }
-    )
+    Wurk::Client::Buffered::Drainer.new(interval: 30.0)
   end
-
-  # Stands in for a Wurk::Client in the drainer's run loop. drain! calls
-  # pop_head (empty buffer → nil → no replay), so push is never reached;
-  # this just satisfies the factory contract without hitting Redis.
-  class NoopDrainClient; end
 
   # Statsd singletons are process-global — serialize against every other test
   # class that also rewrites `Wurk::Metrics::Statsd.increment`.
@@ -592,7 +643,7 @@ class ClientBufferedTest < Wurk::Test::UnitCase
   end
 
   def buffered_args
-    payload_args(Wurk::Client::Buffered.buffer)
+    payload_args(Wurk::Client::Buffered.buffer.map(&:payload))
   end
 
   def payload_args(payloads)
@@ -629,23 +680,38 @@ class ClientBufferedTest < Wurk::Test::UnitCase
     pool
   end
 
-  # A togglable pool wrapper for the drainer integration test. Exposes
-  # `failing_facade` for the producer (raises ConnectionError) and the
-  # real pool stays untouched for the drainer to recover into.
-  def togglable_pool
-    real_pool = @pool
-    TogglablePoolPair.new(real_pool)
+  # A client over a pool that is down until `recover!` — the same pool object
+  # before and after, as a real outage-then-recovery is.
+  def outage_client
+    pool = TogglablePool.new(@pool)
+    pool.fail!
+    [build_client(pool), pool]
   end
 
-  class TogglablePoolPair
+  # Fronts the real pool: fails like a dead socket while `fail!`ed, raises a
+  # non-connection error while `explode!`d, and counts the blocks it let
+  # through to Redis.
+  class TogglablePool
+    attr_reader :writes
+
     def initialize(real_pool)
       @real_pool = real_pool
+      @mode = :up
+      @writes = 0
     end
 
-    def failing_facade
-      facade = Object.new
-      facade.define_singleton_method(:with) { |&blk| blk.call(FailingConn.new) }
-      facade
+    def fail! = @mode = :down
+    def recover! = @mode = :up
+    def explode! = @mode = :broken
+
+    def with(&)
+      case @mode
+      when :down then yield FailingConn.new
+      when :broken then raise 'not a connection error'
+      else
+        @writes += 1
+        @real_pool.with(&)
+      end
     end
   end
 

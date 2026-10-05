@@ -285,11 +285,14 @@ class HeartbeatTest < Wurk::Test::UnitCase
 
   # --- signal drain ----------------------------------------------------
 
-  def test_beat_drains_signal_list_and_returns_signals
+  # K21: ProcessSet::Process#signal LPUSHes, so the drain must RPOP (as
+  # Sidekiq's launcher does) to act on signals in the order they were sent —
+  # a dashboard "quiet" then "stop" must not run as stop-then-quiet.
+  def test_beat_drains_signals_in_the_order_they_were_sent
     sig_key = "#{@identity}-signals"
     @pool.with do |c|
-      c.call('LPUSH', sig_key, 'TERM')
       c.call('LPUSH', sig_key, 'TSTP')
+      c.call('LPUSH', sig_key, 'TERM')
     end
     hb = build_heartbeat
 
@@ -386,6 +389,32 @@ class HeartbeatTest < Wurk::Test::UnitCase
       assert_includes recorder.map { |m| m[1] }, 'sidekiq.busy'
       refute_includes recorder.map { |m| m[1] }, 'sidekiq.queue.size'
     end
+  end
+
+  # --- page size (K26) -------------------------------------------------
+
+  FakeEtc = Struct.new(:value) do
+    def sysconf(_name) = value.is_a?(Exception) ? raise(value) : value
+  end
+
+  def test_page_size_reads_sysconf
+    assert_equal 16_384, Wurk::Heartbeat.page_size(FakeEtc.new(16_384))
+  end
+
+  def test_page_size_falls_back_when_sysconf_is_unusable
+    [nil, -1, NotImplementedError.new('no sysconf'), ArgumentError.new('bad')].each do |v|
+      assert_equal Wurk::Heartbeat::FALLBACK_PAGE_SIZE, Wurk::Heartbeat.page_size(FakeEtc.new(v))
+    end
+  end
+
+  def test_page_size_constant_matches_this_host
+    assert_equal Etc.sysconf(Etc::SC_PAGESIZE), Wurk::Heartbeat::PAGE_SIZE
+  end
+
+  def test_statm_rss_uses_the_host_page_size_not_four_kb
+    rss_kb = build_heartbeat.send(:statm_rss_kb, "1000 256 50 1 0 100 0\n")
+
+    assert_equal 256 * Wurk::Heartbeat::PAGE_SIZE / 1024, rss_kb
   end
 
   # --- memory_usage_kb ps fallback -------------------------------------

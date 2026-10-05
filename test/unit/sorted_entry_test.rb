@@ -128,6 +128,40 @@ class SortedEntryTest < Wurk::Test::UnitCase
     assert_in_delta 500.0, actual.to_f
   end
 
+  def test_reschedule_returns_the_new_score
+    entry = add_entry(score: 100.0)
+
+    assert_in_delta 500.0, entry.reschedule(::Time.at(500.0)).to_f
+  end
+
+  # K28: ZINCRBY on a member that was promoted or deleted re-creates it; a
+  # stale dashboard row must not resurrect a job that has since run.
+  def test_reschedule_does_not_resurrect_a_removed_member
+    entry = add_entry(score: 100.0)
+    @pool.with { |c| c.call('ZREM', @parent.name, entry.value) }
+
+    assert_nil entry.reschedule(::Time.at(500.0))
+    assert_equal(0, @pool.with { |c| c.call('ZCARD', @parent.name) })
+  end
+
+  # --- push failure keeps the entry (K20) --------------------------------
+
+  # Tags that are not an Array are rejected by the client (stock Sidekiq does
+  # the same), so the push raises after the entry was already removed.
+  def test_retry_restores_the_entry_when_the_push_raises
+    entry = add_entry(score: 123.0, item: base_item('tags' => 'not-an-array', 'retry_count' => 2))
+
+    assert_raises(ArgumentError) { entry.retry }
+    assert_in_delta(123.0, @pool.with { |c| c.call('ZSCORE', @parent.name, entry.value) }.to_f)
+  end
+
+  def test_add_to_queue_restores_the_entry_when_the_push_raises
+    entry = add_entry(score: 77.0, item: base_item('tags' => 'not-an-array'))
+
+    assert_raises(ArgumentError) { entry.add_to_queue }
+    assert_equal([entry.value], @pool.with { |c| c.call('ZRANGE', @parent.name, 0, -1) })
+  end
+
   # --- add_to_queue ------------------------------------------------------
 
   def test_add_to_queue_removes_and_pushes_to_queue

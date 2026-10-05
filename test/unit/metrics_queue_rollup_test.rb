@@ -135,6 +135,27 @@ class MetricsQueueRollupTest < Wurk::Test::UnitCase
     assert_operator qr.instance_variable_get(:@ticks).to_i, :>, 0
   end
 
+  # K1: a Redis error inside a sample is reported and the loop keeps sampling.
+  def test_queue_metrics_thread_survives_a_redis_error
+    config = Wurk::Configuration.new
+    config.logger = ::Logger.new(IO::NULL)
+    config[:metrics_rollup_interval] = 0.01
+    qr = Wurk::Metrics::QueueRollup.new(config)
+    qr.define_singleton_method(:leader?) { true }
+    qr.define_singleton_method(:sample) do |_now = ::Time.now|
+      @ticks = (@ticks || 0) + 1
+      raise RedisClient::CannotConnectError, 'redis down' if @ticks == 1
+    end
+
+    thread = qr.start
+    poll_until(2.0) { qr.instance_variable_get(:@ticks).to_i >= 3 }
+
+    assert_operator qr.instance_variable_get(:@ticks).to_i, :>=, 3
+    assert_predicate thread, :alive?
+  ensure
+    qr&.terminate
+  end
+
   # terminate is a barrier: the launcher releases the cluster lock right after
   # it returns, so a sample still in flight would write the same buckets as the
   # next leader's first one.

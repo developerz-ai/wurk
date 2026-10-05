@@ -1,18 +1,36 @@
 # frozen_string_literal: true
 
 require_relative '../configuration'
+require_relative 'job_context'
+require_relative 'retry_policy'
 
 module Wurk
   module Sentry
-    # `config.error_handlers` entry: reports the failures that never become a
-    # job failure — fetch-loop errors (`context: "Error fetching job"`),
-    # shutdown-path errors (`"!shutdown"`), unparseable payloads
-    # (`"Invalid JSON"`), and the retry machinery's own meta-errors (a raising
-    # `sidekiq_retry_in` / `sidekiq_retries_exhausted` block, a raising death
-    # handler). {Middleware} covers job failures; these are the rest.
+    # `config.error_handlers` entry. Reports fetch-loop errors
+    # (`context: "Error fetching job"`), shutdown-path errors (`"!shutdown"`),
+    # unparseable payloads (`"Invalid JSON"`), the retry machinery's own
+    # meta-errors, and job failures (`"Job raised exception"`).
+    #
+    # A job failure is {Middleware}'s to report whenever the exception passed
+    # through it: the middleware holds the job's scope and has already applied
+    # the terminal-attempt policy, so reporting it here too would double it.
+    # What reaches this handler unseen raised outside the middleware — the
+    # class failed to load, the reloader or an earlier middleware raised — and
+    # gets the same policy and scope here.
     #
     # Handler signature is Sidekiq's: `call(exception, context_hash, config)`.
     class ErrorHandler
+      JOB_FAILURE = 'Job raised exception'
+
+      # Thread-local handshake with {Middleware}: the exception it last saw on
+      # this thread. Error handlers run synchronously on the processor thread
+      # that raised, so the slot is never read across threads.
+      SEEN_BY_MIDDLEWARE = :wurk_sentry_seen_by_middleware
+
+      def self.seen_by_middleware!(exception)
+        Thread.current[SEEN_BY_MIDDLEWARE] = exception
+      end
+
       # Transport blips the pool already retried before re-raising. Wurk's
       # default handler logs these at WARN precisely because they are
       # self-healing (`Configuration::REDIS_ERROR_CLASSES`), and the fetch loop
@@ -29,9 +47,12 @@ module Wurk
         @filtered_error_classes = (filtered_error_classes || DEFAULT_FILTERED_ERROR_CLASSES).to_a.freeze
       end
 
-      def call(exception, context = {}, _config = nil)
+      def call(exception, context = {}, config = nil)
         return nil unless Wurk::Sentry.enabled?
         return nil if exception.is_a?(Wurk::Shutdown)
+        # Ahead of the transport filter: that filter quiets the infrastructure
+        # loop, and a job that died on a Redis error is still a dead job.
+        return capture_job_failure(exception, context, config) if job_failure?(context)
         return nil if filtered?(exception)
 
         ::Sentry.capture_exception(exception, extra: extra_for(context), tags: tags_for(context))
@@ -45,6 +66,31 @@ module Wurk
       end
 
       private
+
+      def job_failure?(context)
+        context.is_a?(::Hash) && context[:context] == JOB_FAILURE && context[:job].is_a?(::Hash)
+      end
+
+      def capture_job_failure(exception, context, config)
+        return nil if claimed_by_middleware?(exception)
+
+        job = context[:job]
+        return nil unless RetryPolicy.terminal?(job, nil, config)
+
+        ::Sentry.with_scope do |scope|
+          JobContext.apply(scope, job, job['queue'])
+          ::Sentry.capture_exception(exception, extra: extra_for(context), tags: tags_for(context))
+        end
+        nil
+      end
+
+      def claimed_by_middleware?(exception)
+        seen = Thread.current[SEEN_BY_MIDDLEWARE]
+        return false unless seen.equal?(exception)
+
+        Thread.current[SEEN_BY_MIDDLEWARE] = nil
+        true
+      end
 
       # Same rule as {JobContext}: job arguments never reach Sentry. `jobstr`
       # (the raw payload of an unparseable job) is dropped wholesale — it *is*

@@ -247,6 +247,7 @@ is the drop-in alias and is checked second (native wins).
 | `WURK_COUNT` / `SIDEKIQ_COUNT` | `Configuration#default_child_count` | Swarm child processes. Whole number = absolute count; fractional = CPU multiplier (`0.5` → half the cores, rounded). Floored at 1. Unparseable → CPU count. Default `Etc.nprocessors` |
 | `WURK_MAXMEM_MB` / `SIDEKIQ_MAXMEM_MB` | `Configuration#memory_limit_mb` | Parent TERMs + respawns any child whose RSS exceeds this. Unset/unparseable → recycling off |
 | `WURK_DISABLED` | `RailsBoot.skip_boot?` | `=1` skips both server mode and the swarm boot in a Rails host |
+| `WURK_EMBED` | `RailsBoot.skip_boot?` | `=1` boots workers in a Rails process that is not a recognised web server (Falcon, Thin, a custom rackup); `rails runner`/`generate`/rake never boot without it |
 | `WURK_LEADER` / `SIDEKIQ_LEADER` | `Leader.opted_out?` | `=false` (case-insensitive) makes this process never campaign for leadership |
 | `WURK_PRELOAD` / `SIDEKIQ_PRELOAD` | `CLI#preload_groups` | Comma-separated Bundler groups `Bundler.require`d in the swarm parent before fork. Default `default`; an explicit empty value disables the preload |
 | `WURK_PRELOAD_APP` / `SIDEKIQ_PRELOAD_APP` | `CLI#preload_app?` | `=1` eager-loads the whole Rails app in the swarm parent before forking (more copy-on-write sharing, slower parent boot) |

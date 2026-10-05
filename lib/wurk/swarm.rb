@@ -1,5 +1,6 @@
 # frozen_string_literal: true
 
+require 'etc'
 require 'monitor'
 
 require_relative 'component'
@@ -54,6 +55,11 @@ module Wurk
     SUPERVISOR_POOL_SIZE = 1
     SUPERVISOR_POOL_NAME = 'swarm-supervisor'
 
+    # /proc/<pid>/statm counts pages, not KB. 4KB is only the x86 default —
+    # arm64 kernels commonly run 16KB or 64KB pages, where a hard-coded 4 would
+    # under-read RSS 4-16x and the memory limit would never recycle anything.
+    PAGE_SIZE_KB = ((defined?(Etc::SC_PAGESIZE) && Etc.sysconf(Etc::SC_PAGESIZE)) || 4096) / 1024
+
     # Poll budget for the post-SIGKILL reap sweep (250ms). Deliberately far
     # shorter than any drain deadline — it runs after the fleet is already dead
     # and races a kernel teardown measured in microseconds.
@@ -84,10 +90,19 @@ module Wurk
     # until reaped and so can never be a recycled pid.
     RETERM_INTERVAL = 1.0
 
+    # Quiet has the same blind spot: a TSTP relayed into that window is
+    # written to the inherited (now inert) parent trap and dropped, and the
+    # child boots fetching mid-maintenance. Once quieted, the supervisor keeps
+    # re-relaying TSTP on this cadence for the rest of its life — quiet is
+    # one-way and idempotent in the child, so repeats cost one syscall each.
+    REQUIET_INTERVAL = RETERM_INTERVAL
+
     # USR2 is relayed (log reopen) — without a trap, a logrotate config that
     # signals the master pid would hit USR2's default disposition and kill the
-    # whole swarm.
-    SWARM_SIGNALS = { 'TERM' => :term, 'INT' => :term, 'TSTP' => :tstp, 'USR1' => :usr1, 'USR2' => :usr2 }.freeze
+    # whole swarm. TTIN likewise: its default disposition stops the
+    # supervisor, so a thread-dump request is relayed to the children instead.
+    SWARM_SIGNALS = { 'TERM' => :term, 'INT' => :term, 'TSTP' => :tstp, 'USR1' => :usr1, 'USR2' => :usr2,
+                      'TTIN' => :ttin }.freeze
 
     attr_reader :topology
 
@@ -111,6 +126,7 @@ module Wurk
       @stopping = false
       @shutdown_requested = false
       @quieted = false
+      @requiet_at = 0
       @last_memory_check = 0
       @respawn_backoff = Backoff.new(base: RESPAWN_BACKOFF)
       @restart = build_restart
@@ -165,12 +181,7 @@ module Wurk
       return unless owner?
 
       until done?
-        drain_signals
-        shutdown if @shutdown_requested && !@stopping
-        reap_children
-        spawn_due_respawns
-        advance_restart unless @stopping
-        check_memory_pressure
+        supervise_tick
         sleep SUPERVISE_TICK
       end
     end
@@ -214,6 +225,7 @@ module Wurk
     # already-quieted (see ChildBoot start_quiet).
     def quiet_swarm
       @quieted = true
+      @requiet_at = monotonic + REQUIET_INTERVAL
       relay_signal('TSTP')
     end
 
@@ -238,6 +250,23 @@ module Wurk
       @supervisor_pool = nil
     end
 
+    # One pass of the supervise loop, rescued as a whole: this loop is the only
+    # thing that reaps, respawns and relays for the life of the fleet, so an
+    # error escaping it (a Redis blip in a probe, an unexpected errno) must not
+    # end it — embedded, the supervisor thread would die and crashed children
+    # would never be respawned again.
+    def supervise_tick
+      drain_signals
+      shutdown if @shutdown_requested && !@stopping
+      reap_children
+      spawn_due_respawns
+      advance_restart unless @stopping
+      requiet_children
+      check_memory_pressure
+    rescue StandardError => e
+      handle_exception(e, { context: 'swarm-supervise' })
+    end
+
     def advance_restart
       @lock.synchronize { @restart.advance }
     end
@@ -260,6 +289,7 @@ module Wurk
                     kill: method(:safe_kill),
                     heartbeat: method(:heartbeat_seen?),
                     describe: ->(pid) { child_meta(pid) },
+                    respawn: ->(idx) { @respawn_backoff.fail(idx, lifetime: 0.0) },
                     now: method(:monotonic),
                     logger: logger,
                     heartbeat_wait: HEARTBEAT_WAIT,
@@ -312,11 +342,17 @@ module Wurk
     # after fork (getppid in the child could already return the reaper). The
     # child's OrphanGuard compares live getppid against it.
     #
-    # The supervisor pool closes here rather than in `close_parent_sockets`
-    # because that runs once, at boot: every later respawn / rolling-restart
-    # fork happens after the heartbeat probe has reopened it.
+    # Step 3 runs again here, not only in `boot`: every later respawn /
+    # rolling-restart / recycle fork happens after the parent has had time to
+    # reopen sockets — the heartbeat probe reopens the supervisor pool, and a
+    # railtie parent is a live web process whose enqueues reopen the capsule
+    # and web pools. A child inheriting those shares the parent's socket (and,
+    # over `rediss://`, its TLS session — the child's close sends close_notify
+    # on the parent's live connection). Idempotent at boot, where the pools
+    # were just reset.
     def fork_child(slot, idx)
       parent_pid = ::Process.pid
+      close_parent_sockets
       close_supervisor_pool
       pid = ::Process.fork
       return pid if pid
@@ -390,6 +426,7 @@ module Wurk
         when :usr2
           reopen_logs
           relay_signal('USR2')
+        when :ttin then relay_signal('TTIN')
         end
       end
     end
@@ -488,6 +525,16 @@ module Wurk
       logger.warn { "swarm: respawn of slot #{idx} failed (#{e.class}: #{e.message}); retrying in #{delay}s" }
     end
 
+    def requiet_children
+      return unless @quieted && !@stopping
+
+      now = monotonic
+      return if now < @requiet_at
+
+      @requiet_at = now + REQUIET_INTERVAL
+      relay_signal('TSTP')
+    end
+
     def check_memory_pressure
       return unless @memory_limit
 
@@ -513,7 +560,7 @@ module Wurk
     def pid_rss_kb(pid)
       return nil unless ::File.exist?("/proc/#{pid}/statm")
 
-      ::File.read("/proc/#{pid}/statm").split[1].to_i * 4
+      ::File.read("/proc/#{pid}/statm").split[1].to_i * PAGE_SIZE_KB
     rescue StandardError
       nil
     end

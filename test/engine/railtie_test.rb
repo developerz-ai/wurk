@@ -64,6 +64,93 @@ class RailtieTest < Wurk::Test::EngineCase
     Wurk.server = original_server
   end
 
+  # --- server allowlist (K7) ---
+  #
+  # `rails runner`, `rails generate` and any script requiring
+  # config/environment run after_initialize too. Each forked a full swarm that
+  # fetched jobs, and the one-off command's at_exit drain then cut them off.
+  # Only a running server (or an explicit WURK_EMBED=1) boots the workers.
+
+  def test_skip_boot_outside_a_server_such_as_rails_runner
+    without_server_markers do
+      with_nothing_else_suppressing_boot do
+        with_env('WURK_EMBED' => nil) do
+          assert_predicate Wurk::RailsBoot, :skip_boot?, 'a runner/generator process must never fork the swarm'
+        end
+      end
+    end
+  end
+
+  def test_rails_server_boots
+    without_server_markers do
+      with_nothing_else_suppressing_boot do
+        with_env('WURK_EMBED' => nil) do
+          with_nested_const(::Rails, :Server, Class.new) { refute_predicate Wurk::RailsBoot, :skip_boot? }
+        end
+      end
+    end
+  end
+
+  def test_a_puma_server_boots
+    without_server_markers do
+      with_puma do
+        with_nested_const(::Puma, :Launcher, Class.new) { assert_predicate Wurk::RailsBoot, :serving? }
+      end
+    end
+  end
+
+  # Bundler.require of the puma gem defines `Puma` in every process — that
+  # alone is no server.
+  def test_the_puma_gem_alone_is_not_a_server
+    without_server_markers do
+      with_env('WURK_EMBED' => nil) do
+        with_puma { refute_predicate Wurk::RailsBoot, :serving? }
+      end
+    end
+  end
+
+  def test_wurk_embed_opts_any_process_in
+    without_server_markers do
+      with_env('WURK_EMBED' => '1') { assert_predicate Wurk::RailsBoot, :serving? }
+    end
+  end
+
+  def test_unicorn_counts_only_as_the_running_server
+    without_server_markers do
+      with_env('WURK_EMBED' => nil) do
+        with_const(:Unicorn, Module.new) do
+          refute_predicate Wurk::RailsBoot, :serving?, 'a unicorn Gemfile entry is not the unicorn server'
+          with_program_name('/app/bin/unicorn') { assert_predicate Wurk::RailsBoot, :serving? }
+        end
+      end
+    end
+  end
+
+  # The opt-in widens where Wurk may boot; it never overrides a console.
+  def test_wurk_embed_never_boots_a_console
+    skip '::Rails::Console already defined outside this test' if defined?(::Rails::Console)
+
+    with_nothing_else_suppressing_boot do
+      with_nested_const(::Rails, :Console, Class.new) { assert_predicate Wurk::RailsBoot, :skip_boot? }
+    end
+  end
+
+  # K27: the swarm-forking web process enqueues from its requests, so it is a
+  # client too — its configure_client blocks must not be skipped because the
+  # railtie entered server mode before initializers ran.
+  def test_a_serving_web_process_is_flagged_as_a_client_too
+    config = Wurk.configuration
+    skip 'global configuration already frozen' if config.frozen?
+
+    with_server_mode_restored(config) do
+      with_nothing_else_suppressing_boot do
+        with_env('WEB_CONCURRENCY' => nil) { Wurk::RailsBoot.enter_server_mode_if_serving(fake_app(embed: nil)) }
+      end
+
+      assert config[:client_in_server]
+    end
+  end
+
   # `rails console` defines ::Rails::Console before initializers run — a console
   # session is not a server and must never fork the swarm.
   def test_skip_boot_is_true_in_rails_console
@@ -391,6 +478,40 @@ class RailtieTest < Wurk::Test::EngineCase
     Object.send(:remove_const, name) if !existed && Object.const_defined?(name, false)
   end
 
+  def with_server_mode_restored(config)
+    original = [Wurk.server?, config[:server], config[:client_in_server]]
+    yield
+  ensure
+    Wurk.server = original[0]
+    config[:server] = original[1]
+    config[:client_in_server] = original[2]
+  end
+
+  def with_nested_const(owner, name, value)
+    existed = owner.const_defined?(name, false)
+    owner.const_set(name, value) unless existed
+    yield
+  ensure
+    owner.send(:remove_const, name) if !existed && owner.const_defined?(name, false)
+  end
+
+  # The allowlist tests assert what a marker turns ON, so none may already be
+  # on in this process (a test runner that booted puma, say).
+  def without_server_markers
+    if defined?(::Rails::Server) || defined?(::Puma::Launcher) || defined?(::PhusionPassenger)
+      skip 'a server marker is already defined in this test process'
+    end
+    yield
+  end
+
+  def with_program_name(name)
+    original = $PROGRAM_NAME
+    $PROGRAM_NAME = name
+    yield
+  ensure
+    $PROGRAM_NAME = original
+  end
+
   def with_puma(&)
     return yield if defined?(::Puma)
 
@@ -423,7 +544,7 @@ class RailtieTest < Wurk::Test::EngineCase
   # measure exactly one of them. Without this the suite's own Rails.env.test?
   # short-circuits the predicate and the assertion proves nothing.
   def with_nothing_else_suppressing_boot(&)
-    with_env('WURK_DISABLED' => nil, 'SECRET_KEY_BASE_DUMMY' => nil) do
+    with_env('WURK_DISABLED' => nil, 'SECRET_KEY_BASE_DUMMY' => nil, 'WURK_EMBED' => '1') do
       with_rake_application(fake_rake([])) do
         with_rails_env('production') do
           Wurk.worker_boot_claimed = false

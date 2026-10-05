@@ -37,6 +37,10 @@ module Wurk
     REDIS_DATABASES = 15
     WORKER_DATABASES = REDIS_DATABASES - 1 # 14 → DBs 1..14 for parallel workers
     DEDICATED_DB = REDIS_DATABASES         # 15 → fixed-DB tests only
+    # Shifts every worker's DB so concurrent suite runs on one Redis (several
+    # agents or terminals, each at NCPU=1) don't all land on DB 1 and FLUSHDB
+    # each other: run k uses WURK_TEST_DB_OFFSET=k.
+    DB_OFFSET = Integer(ENV.fetch('WURK_TEST_DB_OFFSET', '0'))
 
     # Parallel worker default — HALF the cores, floored at 1, never above the
     # historical 4. Read the NCPU block below for why one worker per core is the
@@ -74,9 +78,11 @@ module Wurk
       # is capped to WORKER_DATABASES below, so this raises only if that cap is
       # ever bypassed — loud beats silent cross-contamination.
       def assign_redis_db(worker_index)
+        worker_index += DB_OFFSET
         if worker_index >= WORKER_DATABASES
           raise "test worker #{worker_index} has no isolated Redis DB " \
-                "(only #{WORKER_DATABASES} for parallel workers); cap NCPU at #{WORKER_DATABASES}"
+                "(only #{WORKER_DATABASES} for parallel workers); " \
+                "keep NCPU + WURK_TEST_DB_OFFSET <= #{WORKER_DATABASES}"
         end
 
         self.redis_url = redis_url_for_db(worker_index + 1)

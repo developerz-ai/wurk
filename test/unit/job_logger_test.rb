@@ -184,6 +184,21 @@ class JobLoggerTest < Wurk::Test::UnitCase
     assert_equal ::Logger::WARN, inside
   end
 
+  # SemanticLogger and broadcast wrappers have no #with_level; a job carrying
+  # `log_level` must still run rather than die on NoMethodError.
+  class LevelLessLogger
+    def info(*); end
+    def debug?(*) = false
+  end
+
+  def test_prepare_runs_the_job_when_the_logger_has_no_with_level
+    @config.logger = LevelLessLogger.new
+    ran = false
+    Wurk::JobLogger.new(@config).prepare('jid' => 'a', 'class' => 'J', 'log_level' => 'debug') { ran = true }
+
+    assert ran
+  end
+
   # --- sidekiq alias --------------------------------------------------
 
   def test_aliased_under_sidekiq_namespace

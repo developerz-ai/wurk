@@ -98,8 +98,26 @@ module Wurk
           config.redis(idempotent: true) { |conn| conn.call('ZREM', slot_key, slot_token) }
         end
 
+        # Puts a claimed job back without running it — the public half of the
+        # Sidekiq UnitOfWork contract that throttling/rate-limiting gems call
+        # (sidekiq-throttled's requeue path, anything holding a BasicFetch UoW,
+        # which is this one under the `Sidekiq::BasicFetch` alias). Sidekiq's
+        # BasicFetch has no private list, so its bare RPUSH is the whole move;
+        # here the private copy has to go in the same step, or the job sits in
+        # both lists and runs twice — once from the public queue, once when the
+        # reaper reclaims this process's private list.
+        #
+        # LREM then RPUSH in one MULTI, unconditionally: unlike bulk_requeue
+        # (which races a Processor ACKing the same UoW and so guards the push on
+        # the LREM), the caller here owns the unit, and a job whose ACK already
+        # went out must still be re-queued rather than dropped.
         def requeue
-          config.redis { |conn| conn.call('RPUSH', queue, job) }
+          config.redis do |conn|
+            conn.multi do |tx|
+              tx.call('LREM', private_queue, LREM_COUNT, job)
+              tx.call('RPUSH', queue, job)
+            end
+          end
         end
       end
     end

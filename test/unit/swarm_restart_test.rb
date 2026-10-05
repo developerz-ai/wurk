@@ -19,6 +19,7 @@ class SwarmRestartTest < Wurk::Test::UnitCase
     @beating = []
     @spawns = []
     @kills = []
+    @respawns = []
     @backoff = Wurk::Swarm::Backoff.new(base: 1.0, cap: 30.0, reset_after: 60.0, clock: -> { @t[0] })
     @restart = Wurk::Swarm::Restart.new(config)
   end
@@ -68,6 +69,45 @@ class SwarmRestartTest < Wurk::Test::UnitCase
 
   # A fork/resource failure while spawning the replacement must requeue the
   # slot (not drop the restart work item) and must not escape `advance`.
+  # K13: the old child exits (OOM, crash) while the replacement is still
+  # booting, then the replacement dies too. Both exits were claimed here, so
+  # the swarm armed no respawn — requeuing the dead old pid used to drop the
+  # slot for good and leave the swarm one child short forever.
+  def test_old_and_replacement_both_dying_hands_the_slot_to_respawn
+    @restart.enqueue([100])
+    @restart.advance # spawn replacement
+
+    reap(100)
+    reap(@spawns.first[:pid])
+    @restart.advance
+
+    assert_equal [0], @respawns, 'the slot must be handed to the swarm crash-respawn backoff'
+    assert_predicate @restart, :idle?
+    assert_empty @kills
+  end
+
+  def test_both_dying_in_either_order_hands_the_slot_to_respawn
+    @restart.enqueue([100])
+    @restart.advance
+
+    reap(@spawns.first[:pid])
+    reap(100)
+    @restart.advance
+
+    assert_equal [0], @respawns
+    assert_predicate @restart, :idle?
+    assert_equal 1, @spawns.size, 'the restart machine must not retry a slot it handed off'
+  end
+
+  def test_replacement_death_alone_never_hands_the_slot_to_respawn
+    @restart.enqueue([100])
+    @restart.advance
+    reap(@spawns.first[:pid])
+    @restart.advance
+
+    assert_empty @respawns
+  end
+
   def test_spawn_failure_requeues_slot_and_retries_after_backoff
     fail_next = [true]
     spawner = lambda do |slot, idx|
@@ -206,6 +246,10 @@ class SwarmRestartTest < Wurk::Test::UnitCase
       kill: ->(pid, sig) { @kills << [pid, sig] },
       heartbeat: ->(pid) { @beating.include?(pid) },
       describe: ->(pid) { @children[pid] },
+      respawn: lambda { |idx|
+        @respawns << idx
+        1.0
+      },
       now: -> { @t[0] },
       logger: ::Logger.new(IO::NULL),
       heartbeat_wait: 30,

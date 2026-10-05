@@ -22,7 +22,10 @@ module Wurk
     class ChildBoot
       include Component
 
-      CHILD_SIGNALS = { 'TERM' => :term, 'INT' => :term, 'TSTP' => :tstp, 'USR2' => :usr2 }.freeze
+      # TTIN is trapped because its default disposition STOPS the process: an
+      # operator's `kill -TTIN <child>` asking for a thread dump would suspend
+      # the worker instead.
+      CHILD_SIGNALS = { 'TERM' => :term, 'INT' => :term, 'TSTP' => :tstp, 'USR2' => :usr2, 'TTIN' => :ttin }.freeze
 
       # `parent_pid` is captured by the swarm before it forks (race-free) and
       # threaded through so OrphanGuard can tell "still supervised" from
@@ -31,8 +34,9 @@ module Wurk
       # `start_quiet:` — the swarm was TSTP-quieted before this child was
       # forked (respawn/recycle during maintenance); boot the launcher already
       # quieted so the replacement doesn't resume fetching. Delivered as a
-      # constructor flag, not a post-fork TSTP, because the signal would race
-      # the trap-reset window (default TSTP disposition suspends the child).
+      # constructor flag, not a post-fork TSTP: a signal landing before this
+      # child resets its traps hits the parent's inherited (inert) handler and
+      # is dropped — the supervisor's TSTP re-relay is only the backstop.
       def initialize(config, slot, index, parent_pid: ::Process.ppid, start_quiet: false)
         @config = config
         @slot = slot
@@ -41,6 +45,7 @@ module Wurk
         @start_quiet = start_quiet
         @signal_read = nil
         @signal_write = nil
+        @pending_tstp = false
       end
 
       def run
@@ -92,10 +97,16 @@ module Wurk
 
       # Parent installed traps for TERM/INT/TSTP — the child needs its own
       # behavior, not the parent's. USR2 too: the child owns log-reopen.
-      # USR1 (rolling restart) is a no-op in the child — trap it with a log
-      # so stray USR1s don't trigger default termination.
+      #
+      # TSTP is the exception to DEFAULT: its default disposition is a kernel
+      # stop, and the boot window (reconnect, `:fork` / `:startup` hooks) runs
+      # before install_signal_handlers. A relayed quiet landing there would
+      # SUSPEND the child — a stopped worker holding its slot — so it is
+      # recorded instead and replayed once the real handler is in place. A
+      # bare ivar write is all a trap may safely do here.
       def reset_inherited_signals
-        %w[TERM INT TSTP USR2].each { |s| ::Signal.trap(s, 'DEFAULT') }
+        %w[TERM INT USR2].each { |s| ::Signal.trap(s, 'DEFAULT') }
+        ::Signal.trap('TSTP') { @pending_tstp = true }
         # A genuine no-op in the child (rolling restart is the parent's job) —
         # trap it empty so a stray USR1 can't fall through to default
         # termination. Must NOT log: Logger synchronizes writes and would
@@ -190,6 +201,7 @@ module Wurk
           nil
         end
         @dispatcher = Thread.new { dispatch_signals(launcher) }
+        emit_signal('TSTP') if @pending_tstp
       end
 
       # Non-blocking self-pipe write from trap context: a blocking `puts` could
@@ -219,6 +231,7 @@ module Wurk
             break
           when :tstp then launcher.quiet
           when :usr2 then reopen_logs
+          when :ttin then launcher.dump_threads
           end
         end
       end

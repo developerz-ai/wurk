@@ -19,6 +19,55 @@ class ShutdownGateTest < Wurk::Test::UnitCase
     super
   end
 
+  # --- boot: never after, never alongside, a teardown (K23) -------------
+
+  def test_boot_runs_and_reports_true_before_any_teardown
+    ran = false
+
+    assert(@gate.boot { ran = true })
+    assert ran
+  end
+
+  def test_boot_is_skipped_once_a_teardown_has_been_claimed
+    @gate.run { nil }
+    ran = false
+
+    refute(@gate.boot { ran = true })
+    refute ran
+    assert_predicate @gate, :claimed?
+  end
+
+  def test_a_teardown_requested_mid_boot_waits_for_the_boot
+    booting = Queue.new
+    release = Queue.new
+    order = Queue.new
+    booter = spawn_thread do
+      @gate.boot do
+        booting << true
+        release.pop
+        order << :booted
+      end
+    end
+    booting.pop
+    stopper = spawn_thread { @gate.run { order << :torn_down } }
+
+    refute stopper.join(0.1), 'the teardown must wait for the boot in progress'
+    release << true
+    [booter, stopper].each(&:join)
+
+    assert_equal %i[booted torn_down], [order.pop, order.pop]
+  end
+
+  # A boot that fails rolls itself back through the teardown, on its own
+  # thread, from inside #boot.
+  def test_a_boot_may_tear_itself_down
+    torn_down = false
+
+    @gate.boot { @gate.run { torn_down = true } }
+
+    assert torn_down
+  end
+
   # --- run: single-shot -------------------------------------------------
 
   def test_run_yields_to_the_first_caller

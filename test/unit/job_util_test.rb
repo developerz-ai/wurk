@@ -270,14 +270,13 @@ class JobUtilTest < Wurk::Test::UnitCase
   # --- normalize_item: byte-identical payload shape (Plan 04/S8) -------
   #
   # Pins #normalize_item's output shape against the merge trim in
-  # #normalize_item / #wrap_options (Plan 04/S7 — merge only when wrapping
+  # #normalize_item / #defaults_for (Plan 04/S7 — merge only when wrapping
   # actually applies): fewer intermediate Hash#merge calls must never change
   # which keys land in the final payload or their values. Six representative
   # shapes exercise every branch: bare class default, per-class
   # `get_sidekiq_options`, an explicit key overriding both, a `wrapped`
-  # class (whose own options are shadowed once outer class defaults already
-  # set `queue`/`retry` — verified against the real implementation, not
-  # hand-derived), tags + `retry_for` coercion, and `at` + `expires_in`
+  # class (whose own options beat the wrapper's defaults, as in Sidekiq's
+  # JobUtil#normalize_item), tags + `retry_for` coercion, and `at` + `expires_in`
   # stamping. `created_at` is excluded — it is a clock read, not merge output.
   def test_normalize_item_payload_shape_is_unchanged_for_representative_jobs
     jid = 'a' * 24
@@ -301,7 +300,7 @@ class JobUtilTest < Wurk::Test::UnitCase
                            'args' => [], 'jid' => jid },
       explicit_override: { 'queue' => 'override', 'retry' => false, 'class' => 'JobUtilTest::StubWorker',
                            'args' => [], 'jid' => jid },
-      wrapped_class: { 'queue' => 'default', 'retry' => true, 'class' => 'ActiveJob::Adapter',
+      wrapped_class: { 'queue' => 'critical', 'retry' => 5, 'class' => 'ActiveJob::Adapter',
                        'wrapped' => StubWorker, 'args' => [1], 'jid' => jid },
       with_tags_and_retry_for: { 'retry' => true, 'queue' => 'default', 'class' => 'X', 'args' => [],
                                  'tags' => ['a'], 'retry_for' => 30, 'jid' => jid },
@@ -310,6 +309,48 @@ class JobUtilTest < Wurk::Test::UnitCase
     }
 
     assert_equal expected, actual
+  end
+
+  # --- re-pushed payloads (retry / promotion / dead re-run) -------------
+  # A payload written by stock Sidekiq may carry values Wurk would refuse at
+  # first push; by the time it is re-pushed it has already left its sorted set.
+
+  def test_a_repushed_stock_payload_with_odd_wurk_options_is_accepted
+    item = { 'class' => 'X', 'args' => [], 'jid' => 'a' * 24, 'created_at' => 1_700_000_000_000,
+             'timeout' => '5 minutes', 'deadline' => -1, 'track' => 'yes' }
+
+    normalized = @host.normalize_item(item)
+
+    assert_equal '5 minutes', normalized['timeout']
+    refute normalized.key?('deadline_at')
+  end
+
+  def test_a_first_push_with_odd_wurk_options_is_still_refused
+    assert_raises(ArgumentError) do
+      @host.normalize_item('class' => 'X', 'args' => [], 'jid' => 'a' * 24, 'timeout' => '5 minutes')
+    end
+  end
+
+  # --- wrapped class options (ActiveJob) -------------------------------
+  # An ActiveJob declaring `sidekiq_options retry: false` must not be retried
+  # 25 times because the wrapper class's defaults say `retry: true`.
+
+  class NoRetryWrapped
+    def self.get_sidekiq_options = { 'retry' => false, 'queue' => 'aj' } # rubocop:disable Naming/AccessorMethodName
+  end
+
+  def test_wrapped_class_options_beat_the_wrapper_defaults
+    item = @host.normalize_item('class' => 'Sidekiq::ActiveJob::Wrapper', 'wrapped' => NoRetryWrapped, 'args' => [])
+
+    assert_equal false, item['retry'] # rubocop:disable Minitest/RefuteFalse
+    assert_equal 'aj', item['queue']
+  end
+
+  def test_item_keys_beat_the_wrapped_class_options
+    item = @host.normalize_item('class' => 'Sidekiq::ActiveJob::Wrapper', 'wrapped' => NoRetryWrapped,
+                                'args' => [], 'retry' => 3)
+
+    assert_equal 3, item['retry']
   end
 
   # --- now_in_millis ---------------------------------------------------

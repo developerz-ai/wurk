@@ -360,6 +360,21 @@ class ManagerTest < Wurk::Test::UnitCase
     assert_equal workers.sort_by(&:object_id), killed.sort_by(&:object_id)
   end
 
+  # K12: Redis down mid-drain makes bulk_requeue raise. The processors must
+  # still be killed — embedded, the host outlives #stop and live threads would
+  # keep running jobs over the pools the launcher resets next.
+  def test_hard_shutdown_kills_every_processor_even_when_bulk_requeue_raises
+    mgr = Wurk::Manager.new(@capsule)
+    workers = mgr.workers.to_a
+    workers.each { |w| w.define_singleton_method(:job) { nil } }
+    killed = []
+    workers.each { |w| w.define_singleton_method(:kill) { killed << self } }
+    @capsule.fetcher.define_singleton_method(:bulk_requeue) { |_| raise RedisClient::CannotConnectError, 'down' }
+
+    assert_raises(RedisClient::CannotConnectError) { mgr.hard_shutdown }
+    assert_equal workers.sort_by(&:object_id), killed.sort_by(&:object_id)
+  end
+
   def test_hard_shutdown_skips_bulk_requeue_when_no_workers
     mgr = Wurk::Manager.new(@capsule)
     mgr.workers.clear

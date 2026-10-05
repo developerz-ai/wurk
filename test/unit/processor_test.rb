@@ -394,6 +394,127 @@ class ProcessorTest < Wurk::Test::UnitCase
     assert_equal 0, llen(private_queue)
   end
 
+  # --- job failures reach config.error_handlers (Sidekiq "Job raised exception")
+
+  class JobBoom < StandardError; end
+
+  def test_a_failed_job_reaches_every_error_handler_once
+    first = []
+    second = []
+    @config.error_handlers.replace([->(ex, ctx, _cfg) { first << [ex, ctx] },
+                                    ->(ex, ctx, _cfg) { second << [ex, ctx] }])
+    klass = define_worker_raising(JobBoom, 'kaboom')
+    payload = enqueue(class: klass.name, args: [], retry: true)
+
+    @processor.process_one
+    take_retry_entry_for(payload['jid'])
+
+    [first, second].each do |calls|
+      assert_equal 1, calls.size
+      ex, ctx = calls.first
+
+      assert_instance_of JobBoom, ex
+      assert_equal 'Job raised exception', ctx[:context]
+      assert_equal payload['jid'], ctx[:job]['jid']
+    end
+  end
+
+  def test_a_job_with_retries_disabled_is_reported_too
+    seen = []
+    @config.error_handlers.replace([->(ex, ctx, _cfg) { seen << [ex.class, ctx[:context]] }])
+    klass = define_worker_raising(JobBoom, 'kaboom')
+    payload = enqueue(class: klass.name, args: [], retry: false)
+
+    @processor.process_one
+
+    assert_equal [[JobBoom, 'Job raised exception']], seen
+    assert_equal 0, dead_count_for(payload['jid'])
+  end
+
+  def test_a_skip_is_not_reported
+    seen = []
+    @config.error_handlers.replace([->(ex, _ctx, _cfg) { seen << ex }])
+    klass = define_worker_raising(Wurk::JobRetry::Skip, 'skip')
+    enqueue(class: klass.name, args: [])
+
+    @processor.process_one
+
+    assert_empty seen
+  end
+
+  # --- capsule thread-local --------------------------------------------
+
+  def test_a_job_resolves_wurk_redis_to_its_own_capsule_pool
+    klass = base_worker
+    klass.class_eval { define_method(:perform) { |*| self.class.sink << Wurk.redis_pool } }
+    enqueue(class: klass.name, args: [])
+    @processor.start
+    deadline = Process.clock_gettime(Process::CLOCK_MONOTONIC) + 5
+    Thread.pass while klass.sink.empty? && Process.clock_gettime(Process::CLOCK_MONOTONIC) < deadline
+    @processor.terminate(true)
+
+    assert_same @capsule.redis_pool, klass.sink.first
+  end
+
+  def test_run_restores_the_callers_capsule_thread_local
+    @processor.terminate
+    Thread.current[:wurk_capsule] = :outer
+
+    @processor.send(:run)
+
+    assert_equal :outer, Thread.current[:wurk_capsule]
+  ensure
+    Thread.current[:wurk_capsule] = nil
+  end
+
+  # --- an exception that escapes the retry layer -------------------------
+  # The owner is alive, so the reaper never reclaims its private list; a job
+  # left there sits until the process restarts.
+
+  def test_a_retry_layer_failure_requeues_the_job
+    errors = []
+    @config.error_handlers.replace([->(ex, ctx, _cfg) { errors << [ex.class, ctx[:context]] }])
+    retrier = @processor.instance_variable_get(:@retrier)
+    retrier.define_singleton_method(:schedule_retry) { |*| raise RedisClient::ConnectionError, 'blip' }
+    klass = define_worker_raising(JobBoom, 'kaboom')
+    payload = enqueue(class: klass.name, args: [], retry: true)
+
+    @processor.process_one
+    settle_acks
+
+    assert_equal 1, llen(@public_queue), 'job back on its public queue'
+    assert_equal 0, llen(private_queue), 'and out of the live owner\'s private list'
+    assert_equal payload['jid'], Wurk.load_json(@pool.with { |c| c.call('LINDEX', @public_queue, 0) })['jid']
+    assert_equal [[RedisClient::ConnectionError, 'Internal exception!']], errors
+  end
+
+  def test_a_failed_requeue_is_reported_not_raised
+    errors = []
+    @config.error_handlers.replace([->(_ex, ctx, _cfg) { errors << ctx[:context] }])
+    @processor.instance_variable_get(:@retrier).define_singleton_method(:global) { |*| raise 'retry layer down' }
+    uow = Struct.new(:job, :queue_name) do
+      def requeue = raise(RedisClient::ConnectionError, 'still down')
+      def acknowledge = raise('must not ack')
+    end.new(json_for(base_worker), @queue_name)
+
+    @processor.send(:process, uow)
+
+    assert_equal ['Internal exception!', 'Error requeueing a job after an internal exception'], errors
+  end
+
+  def test_a_job_whose_log_level_the_logger_cannot_apply_still_runs
+    @config.logger = Class.new(::Logger) { undef_method :with_level }.new(IO::NULL)
+    processor = new_processor
+    klass = define_worker_recording
+    enqueue(class: klass.name, args: [1], log_level: 'debug')
+
+    processor.process_one
+    settle_acks
+
+    assert_equal [[1]], klass.sink
+    assert_equal 0, llen(private_queue)
+  end
+
   # --- malformed JSON --------------------------------------------------
 
   def test_process_one_routes_unparseable_payload_to_dead_set

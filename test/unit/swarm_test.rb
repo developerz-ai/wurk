@@ -306,6 +306,83 @@ class SwarmTest < Wurk::Test::UnitCase
     assert_raises(ConnectionPool::PoolShuttingDownError) { pool.with { |c| c.call('PING') } }
   end
 
+  # K17: every fork — not only boot's — runs step 3. A respawn happens long
+  # after boot, in a parent (the railtie's web process) whose enqueues have
+  # reopened the capsule pool; the child must never inherit that socket.
+  def test_respawn_fork_resets_the_parent_redis_pools_first
+    swarm = bare_swarm
+    pool = @config.redis_pool
+    pool.with { |c| c.call('PING') }
+    pools_at_fork = :never_forked
+    fake_fork = lambda {
+      pools_at_fork = @config.default_capsule.instance_variable_get(:@pools).dup
+      9001
+    }
+
+    with_stubbed_fork(fake_fork) { swarm.send(:spawn_child, topology.assignments.first, 0) }
+
+    assert_empty pools_at_fork, 'the parent still held capsule pools at fork time'
+    assert_raises(ConnectionPool::PoolShuttingDownError) { pool.with { |c| c.call('PING') } }
+  end
+
+  # K13, wired end to end through the swarm: the restart machine claims both
+  # exits, so the swarm itself scheduled nothing — the hand-off has to land in
+  # its crash-respawn backoff or the slot is gone.
+  def test_restart_losing_both_children_arms_the_slot_respawn
+    swarm = owner_swarm
+    old = swarm.children.keys.first
+    swarm.rolling_restart
+    swarm.send(:advance_restart)
+    replacement = (swarm.children.keys - [old]).first
+
+    swarm.send(:on_child_exit, old, nil)
+    swarm.send(:on_child_exit, replacement, nil)
+    swarm.send(:advance_restart)
+
+    assert_empty swarm.children
+    assert swarm.instance_variable_get(:@respawn_backoff).pending?(0), 'slot 0 was never scheduled for respawn'
+  end
+
+  # K1 pattern: the supervise loop is the only thing that reaps and respawns
+  # for the life of the fleet; an error escaping one tick must not end it.
+  def test_supervise_survives_a_tick_that_raises
+    swarm = bare_swarm
+    swarm.instance_variable_set(:@owner_pid, ::Process.pid)
+    ticks = 0
+    swarm.define_singleton_method(:reap_children) do
+      ticks += 1
+      raise RedisClient::CannotConnectError, 'redis down'
+    end
+    swarm.define_singleton_method(:done?) { ticks >= 2 }
+    reported = []
+    @config.error_handlers << ->(ex, ctx, _cfg) { reported << [ex.message, ctx[:context]] }
+
+    swarm.supervise
+
+    assert_equal 2, ticks, 'the loop must keep ticking past a raising tick'
+    assert_equal [['redis down', 'swarm-supervise']] * 2, reported
+  end
+
+  # --- memory recycle: RSS units (K26) ------------------------------
+
+  def test_page_size_comes_from_the_kernel
+    skip 'no SC_PAGESIZE on this platform' unless defined?(Etc::SC_PAGESIZE)
+
+    assert_equal Etc.sysconf(Etc::SC_PAGESIZE) / 1024, Wurk::Swarm::PAGE_SIZE_KB
+  end
+
+  # statm counts pages; on a 16KB-page arm64 kernel a hard-coded 4KB read RSS
+  # at a quarter of its size and the memory limit never recycled anything.
+  def test_pid_rss_kb_scales_statm_pages_by_the_kernel_page_size
+    swarm = bare_swarm
+    statm = '/proc/4242/statm'
+    with_page_size_kb(16) do
+      with_stubbed_file(statm, "900 50 10 1 0 40 0\n") do
+        assert_equal 800, swarm.send(:pid_rss_kb, 4242)
+      end
+    end
+  end
+
   # --- includes -----------------------------------------------------
 
   def test_includes_component
@@ -356,6 +433,29 @@ class SwarmTest < Wurk::Test::UnitCase
   # `@children` map, a different PID.
   def non_owner_swarm
     owner_swarm.tap { |swarm| swarm.instance_variable_set(:@owner_pid, ::Process.pid + 1) }
+  end
+
+  def with_page_size_kb(size_kb)
+    original = Wurk::Swarm::PAGE_SIZE_KB
+    Wurk::Swarm.send(:remove_const, :PAGE_SIZE_KB)
+    Wurk::Swarm.const_set(:PAGE_SIZE_KB, size_kb)
+    yield
+  ensure
+    Wurk::Swarm.send(:remove_const, :PAGE_SIZE_KB)
+    Wurk::Swarm.const_set(:PAGE_SIZE_KB, original)
+  end
+
+  # `path` exists and reads as `content`; every other path is untouched.
+  def with_stubbed_file(path, content)
+    exist = ::File.method(:exist?)
+    read = ::File.method(:read)
+    sc = ::File.singleton_class
+    sc.define_method(:exist?) { |p, *a| p == path || exist.call(p, *a) }
+    sc.define_method(:read) { |p, *a, **k| p == path ? content : read.call(p, *a, **k) }
+    yield
+  ensure
+    sc.define_method(:exist?) { |*a| exist.call(*a) }
+    sc.define_method(:read) { |*a, **k| read.call(*a, **k) }
   end
 
   # Minitest 6 dropped minitest/mock; this hand-rolled stub swaps Process.fork

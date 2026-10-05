@@ -4,10 +4,10 @@ require_relative '../test_helper'
 require_relative '../support/fake_sentry'
 require 'wurk/sentry'
 
-# Wurk::Sentry::Middleware — the half of the integration that sees job
-# failures. Job failures never reach `config.error_handlers` (JobRetry#local
-# swallows them behind `Handled`), so everything asserted here is the only
-# path a job exception has to Sentry.
+# Wurk::Sentry::Middleware — scopes every job and reports its terminal
+# failure inside that scope. The same failure then reaches
+# `config.error_handlers`; the middleware claims what it saw so
+# Wurk::Sentry::ErrorHandler does not report it a second time.
 class SentryMiddlewareTest < Wurk::Test::UnitCase
   include SentryConstantSwap
 
@@ -302,6 +302,28 @@ class SentryMiddlewareTest < Wurk::Test::UnitCase
     assert_raises(Boom) { run_job(terminal_job) { raise outer } }
 
     assert_equal 1, FakeSentry.captured.size
+  end
+
+  # =====================================================================
+  # Claim handshake with ErrorHandler
+  # =====================================================================
+
+  def test_claims_a_failure_it_did_not_report
+    error = Boom.new
+    assert_raises(Boom) { run_job(job('retry' => true)) { raise error } }
+
+    assert_same error, Thread.current[Wurk::Sentry::ErrorHandler::SEEN_BY_MIDDLEWARE]
+  ensure
+    Thread.current[Wurk::Sentry::ErrorHandler::SEEN_BY_MIDDLEWARE] = nil
+  end
+
+  def test_claims_a_failure_it_reported
+    error = Boom.new
+    assert_raises(Boom) { run_job(terminal_job) { raise error } }
+
+    assert_same error, Thread.current[Wurk::Sentry::ErrorHandler::SEEN_BY_MIDDLEWARE]
+  ensure
+    Thread.current[Wurk::Sentry::ErrorHandler::SEEN_BY_MIDDLEWARE] = nil
   end
 
   # =====================================================================

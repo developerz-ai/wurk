@@ -67,9 +67,13 @@ module Wurk
 
       # ZPOPBYSCORE is destructive and carries its result in the reply, so this
       # block never claims apply-safety: a replay discards whatever the lost
-      # reply already removed. The pool therefore raises on a Read-/WriteTimeout,
-      # which leaves the outcome of *this* pop unknown — a due job may or may not
-      # have come off the ZSET. Report it and end this set's drain (the nil makes
+      # reply already removed. That bounds block replay only — redis-client
+      # itself re-sends the one in-flight EVALSHA once on a dropped socket
+      # (RedisPool::DEFAULT_RECONNECT_ATTEMPTS, Sidekiq's setting too), so a
+      # reply lost mid-pop can still pop a second job while the first is lost
+      # with its reply (Sidekiq #3303). An error that outlasts that re-send
+      # reaches here and leaves the outcome of *this* pop unknown — a due job
+      # may or may not have come off the ZSET. Report it and end this set's drain (the nil makes
       # #drain_set break) rather than pop again blind; a job caught in that window
       # falls into the same pop→push loss the default scheduler already documents
       # on #push_promoted, and `reliable_scheduler!` (ReliableEnq) is the loss-free
@@ -82,16 +86,31 @@ module Wurk
         nil
       end
 
-      # A raising `@client.push` (bad payload, transient Redis error) must not
-      # abort the drain and strand the remaining due jobs until the next poll —
-      # rescue per-job, report, continue. The already-popped job IS lost here
-      # (ZPOPBYSCORE removed it); that pop→push loss window is the default
-      # scheduler's known tradeoff — `reliable_scheduler!` (ReliableEnq) is the
-      # loss-free fix, so we don't re-engineer around it here.
+      # A raising `@client.push` must not abort the drain and strand the
+      # remaining due jobs until the next poll — rescue per-job, report,
+      # continue. ZPOPBYSCORE already removed the member, so it is written back
+      # rather than dropped (see #restore_promoted). A crash between the pop and
+      # the push still loses the job: that window is the default scheduler's
+      # known tradeoff, and `reliable_scheduler!` (ReliableEnq) is the loss-free fix.
       def push_promoted(jobstr, sset)
         @client.push(Wurk.load_json(jobstr))
       rescue StandardError => e
         handle_exception(e, { context: 'scheduler_promote', set: sset })
+        restore_promoted(jobstr, sset, e)
+      end
+
+      # A Redis error is transient: the member goes back into its own set,
+      # scored `now` — past this drain's captured window, so it waits for the
+      # next poll instead of spinning here. Anything else (undecodable JSON, a
+      # payload the client rejects, a raising middleware) fails the same way on
+      # every retry, so it goes to the dead set, scored `now` like a kill and
+      # byte-identical to what was popped — the same place ReliableEnq's script
+      # puts a member it cannot promote.
+      def restore_promoted(jobstr, sset, error)
+        target = error.is_a?(RedisClient::Error) ? sset : Keys::DEAD
+        @config.redis { |conn| conn.call('ZADD', target, real_time.to_s, jobstr) }
+      rescue StandardError => e
+        handle_exception(e, { context: 'scheduler_restore', set: sset })
       end
 
       def real_time
@@ -138,7 +157,7 @@ module Wurk
           promoted = Wurk::Lua::Loader.eval_cached(
             conn,
             :reliable_schedule_promote,
-            keys: [sset, Keys::QUEUES_SET],
+            keys: [sset, Keys::QUEUES_SET, Keys::DEAD],
             argv: [real_time.to_s, Keys::QUEUE_PREFIX, real_ms.to_s, PROMOTE_BATCH.to_s]
           ).to_i
           break if promoted < PROMOTE_BATCH || @done
@@ -227,9 +246,23 @@ module Wurk
       end
 
       def wait
+        interval = poll_interval_or_fallback
         @mutex.synchronize do
-          @sleeper.wait(@mutex, random_poll_interval) unless @done
+          @sleeper.wait(@mutex, interval) unless @done
         end
+      end
+
+      # The interval reads the process count from Redis (SCARD / ProcessSet
+      # prune), so a blip here would otherwise kill the scheduler thread for
+      # good — retries and scheduled jobs then never promote again in this
+      # process. Report it and sleep one unscaled average instead; the next
+      # wake retries the read. Computed outside the mutex so #terminate is never
+      # held behind a Redis timeout.
+      def poll_interval_or_fallback
+        random_poll_interval
+      rescue StandardError => e
+        handle_exception(e, { context: 'scheduler_wait' })
+        poll_interval_average(1)
       end
 
       # interval = process_count * average_scheduled_poll_interval

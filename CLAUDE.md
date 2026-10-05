@@ -91,7 +91,7 @@ Skip step 3 → leaked sockets in children. Skip step 5 → children corrupt eac
 ## Testing
 
 - **Minitest**, parallel runner. Each class opts in via `parallelize_me!`.
-- **Per-worker Redis DB isolation.** Each `minitest-parallel_fork` worker runs against its own Redis logical DB (1–14, with 15 reserved for fixed-DB tests; never DB 0), assigned in `test_helper`'s `after_parallel_fork` hook; `teardown` runs `FLUSHDB` so each test gets a clean slate. Tests that build a pool explicitly use `Wurk::Test.redis_url`. Required for parallel safety — concurrent test classes never see each other's keys.
+- **Per-worker Redis DB isolation.** Each `minitest-parallel_fork` worker runs against its own Redis logical DB (1–14, with 15 reserved for fixed-DB tests; never DB 0), assigned in `test_helper`'s `after_parallel_fork` hook; `teardown` runs `FLUSHDB` so each test gets a clean slate. Tests that build a pool explicitly use `Wurk::Test.redis_url`. Required for parallel safety — concurrent test classes never see each other's keys. Concurrent suite runs on one Redis (several agents or terminals) each set `WURK_TEST_DB_OFFSET=<k>` so their workers don't share DBs.
 - **Layers:** unit · engine (boots `test/dummy/`) · integration (real forks + real Redis) · parity (`test/parity/`, independently written oracles for the documented Sidekiq behaviour, pinned to the upstream revision in test/parity/.sidekiq_sha) · ecosystem (third-party gem suites run against Wurk) · benchmarks.
 - **Parity tests are oracles.** When Wurk diverges from a parity test, Wurk is wrong unless the divergence is explicitly documented as intentional.
 - **Never mock Redis** in integration or parity tests. Real Redis, unique namespace.

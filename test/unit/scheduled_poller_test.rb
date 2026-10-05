@@ -105,6 +105,23 @@ class ScheduledPollerTest < Wurk::Test::UnitCase
     end
   end
 
+  # K6: an undecodable retry member used to abort the promote script on every
+  # sweep, and because `retry` drains first it starved `schedule` cluster-wide.
+  def test_reliable_enq_poison_retry_member_goes_dead_without_starving_schedule
+    @pool.with { |c| c.call('ZADD', @retry, (Time.now.to_f - 50).to_s, 'garbage{') }
+    schedule_job(set: @retry, at: Time.now.to_f - 10)
+    schedule_job(set: @schedule, at: Time.now.to_f - 5)
+
+    Wurk::Scheduled::ReliableEnq.new(@config).enqueue_jobs([@retry, @schedule])
+
+    @pool.with do |c|
+      assert_equal 0, c.call('ZCARD', @retry)
+      assert_equal 0, c.call('ZCARD', @schedule)
+      assert_equal 2, c.call('LLEN', @queue_list)
+      assert_equal ['garbage{'], c.call('ZRANGE', Wurk::Keys::DEAD, 0, -1)
+    end
+  end
+
   # Reliable promotion stamps a fresh integer enqueued_at, matching the default
   # Enq path (whose client push restamps it). Both schedulers emit wire-identical
   # promoted payloads (spec §7.1).
@@ -175,8 +192,6 @@ class ScheduledPollerTest < Wurk::Test::UnitCase
 
   # A raising push on one due job must not abort the drain: the remaining due
   # jobs still get promoted, and the failure is reported to the error handlers.
-  # (The popped-then-failed job is lost — the default scheduler's known pop→push
-  # tradeoff; ReliableEnq is the loss-free path.)
   def test_drain_continues_after_a_failing_push_and_reports_it
     2.times { |i| schedule_job(set: @schedule, at: Time.now.to_f - 10 + i) }
     captured = []
@@ -201,6 +216,89 @@ class ScheduledPollerTest < Wurk::Test::UnitCase
     assert_equal 1, pushed.size, 'the second job must still be pushed after the first raises'
     assert_equal 1, captured.size
     assert_equal 'push blew up', captured.first.message
+  end
+
+  # K20: a non-Redis push failure is permanent (it fails the same way on every
+  # retry), so the popped member lands in dead byte-for-byte instead of vanishing.
+  def test_permanently_failing_push_moves_the_member_to_dead
+    job = schedule_job(set: @schedule, at: Time.now.to_f - 5)
+    raw = Wurk.dump_json(job)
+    capture_errors
+    enq = enq_with_push { |_| raise ArgumentError, 'rejected payload' }
+
+    enq.enqueue_jobs([@schedule])
+
+    @pool.with do |c|
+      assert_equal 0, c.call('ZCARD', @schedule)
+      assert_equal [raw], c.call('ZRANGE', Wurk::Keys::DEAD, 0, -1)
+    end
+  end
+
+  # A Redis error on the push is transient: the member goes back into its own
+  # set, past this drain's window, so the next poll retries it.
+  def test_push_failing_on_redis_puts_the_member_back_in_its_set
+    job = schedule_job(set: @schedule, at: Time.now.to_f - 5)
+    capture_errors
+    calls = 0
+    enq = enq_with_push do |_|
+      calls += 1
+      raise RedisClient::CannotConnectError, 'blip'
+    end
+
+    enq.enqueue_jobs([@schedule])
+
+    assert_equal 1, calls, 'the restored member must not be re-popped within the same drain'
+    @pool.with do |c|
+      assert_equal [Wurk.dump_json(job)], c.call('ZRANGE', @schedule, 0, -1)
+      assert_equal 0, c.call('ZCARD', Wurk::Keys::DEAD)
+    end
+  end
+
+  # When the write-back itself fails, both failures are reported and the drain
+  # carries on.
+  def test_restore_failure_is_reported_not_raised
+    schedule_job(set: @schedule, at: Time.now.to_f - 5)
+    captured = capture_errors
+    enq = enq_with_push { |_| raise 'push failed' }
+    real = @config
+    failing = Object.new
+    failing.define_singleton_method(:redis) do |**kw, &blk|
+      @n = (@n || 0) + 1
+      raise RedisClient::CannotConnectError, 'down' if @n == 2
+
+      real.redis(**kw, &blk)
+    end
+    failing.define_singleton_method(:handle_exception) { |ex, ctx| real.handle_exception(ex, ctx) }
+    enq.instance_variable_set(:@config, failing)
+
+    enq.enqueue_jobs([@schedule])
+
+    assert_equal(%w[scheduler_promote scheduler_restore], captured.map { |(_, ctx)| ctx[:context] })
+  end
+
+  # K20: a payload stock Sidekiq wrote (Wurk-only option keys with values Wurk's
+  # client validation rejects) must never be dropped by the promoter — it is
+  # either promoted or preserved in dead.
+  def test_stock_sidekiq_payload_with_odd_timeout_is_not_lost_by_the_promoter
+    job = { 'class' => 'Worker', 'args' => [1], 'jid' => SecureRandom.hex(12), 'queue' => @queue,
+            'retry' => true, 'timeout' => '30', 'track' => 'yes' }
+    @pool.with { |c| c.call('ZADD', @schedule, (Time.now.to_f - 5).to_s, Wurk.dump_json(job)) }
+    capture_errors
+
+    Wurk::Scheduled::Enq.new(@config).enqueue_jobs([@schedule])
+
+    @pool.with do |c|
+      assert_equal 0, c.call('ZCARD', @schedule)
+      assert_equal 1, c.call('LLEN', @queue_list) + c.call('ZCARD', Wurk::Keys::DEAD)
+    end
+  end
+
+  def enq_with_push(&)
+    enq = Wurk::Scheduled::Enq.new(@config)
+    client = Object.new
+    client.define_singleton_method(:push, &)
+    enq.instance_variable_set(:@client, client)
+    enq
   end
 
   # ZPOPBYSCORE claims no apply-safety, so a read timeout reaches #drain_set
@@ -401,6 +499,44 @@ class ScheduledPollerTest < Wurk::Test::UnitCase
   ensure
     poller&.instance_variable_set(:@thread, nil)
     thread&.kill
+  end
+
+  # K1: the interval read (SCARD / ProcessSet prune) is Redis I/O outside
+  # #enqueue's rescue. A blip there used to kill the scheduler thread for good;
+  # it must be reported and the loop must sweep again on the next wake.
+  def test_scheduler_thread_survives_a_redis_error_in_wait
+    @config[:scheduler_initial_wait] = 0.01
+    @config[:poll_interval_average] = 0.02
+    captured = capture_errors
+    poller = Wurk::Scheduled::Poller.new(@config)
+    sweeps = Queue.new
+    poller.define_singleton_method(:enqueue) { sweeps << :s }
+    blips = 0
+    poller.define_singleton_method(:cleanup) do
+      blips += 1
+      raise RedisClient::CannotConnectError, 'redis down' if blips == 1
+
+      1
+    end
+
+    thread = poller.start
+
+    3.times { refute_nil sweeps.pop(timeout: 5), 'the scheduler must keep sweeping after the blip' }
+
+    assert_predicate thread, :alive?
+    assert_equal(['scheduler_wait'], captured.map { |(_, ctx)| ctx[:context] })
+    assert_instance_of RedisClient::CannotConnectError, captured.dig(0, 0)
+  ensure
+    poller&.terminate
+  end
+
+  def test_wait_falls_back_to_the_unscaled_average_when_the_count_read_fails
+    @config[:average_scheduled_poll_interval] = 7
+    capture_errors
+    poller = Wurk::Scheduled::Poller.new(@config)
+    poller.define_singleton_method(:cleanup) { raise RedisClient::CannotConnectError, 'redis down' }
+
+    assert_equal 7, poller.send(:poll_interval_or_fallback)
   end
 
   private

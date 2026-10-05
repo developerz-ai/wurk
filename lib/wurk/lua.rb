@@ -63,9 +63,16 @@ module Wurk
     # retry member whose user args embed a numeric key literally named
     # `enqueued_at` ahead of the top-level one patches the arg instead --
     # vanishingly rare, and still strictly safer than round-tripping every arg.)
-    # KEYS = [sorted_set, queues_set]
-    # ARGV = [now, queue_prefix, now_ms]
-    # Returns the number of jobs promoted.
+    # A member that is not a JSON object naming a string `queue` (garbage bytes,
+    # a bare scalar, a nil/numeric queue) can never be promoted. Raising on it
+    # would abort the script at the same lowest-scored member on every sweep —
+    # and since one Ruby call drains `retry` before `schedule`, a single poison
+    # retry would starve the whole cluster's scheduled jobs. It is moved to the
+    # dead set (scored `now`, like a kill) so it stays inspectable, and the
+    # sweep continues. pcall keeps a failed decode from raising out of the script.
+    # KEYS = [sorted_set, queues_set, dead_set]
+    # ARGV = [now, queue_prefix, now_ms, batch]
+    # Returns the number of members handled (promoted or moved to dead).
     # Order matters: decode + push BEFORE zrem. Redis Lua has no rollback,
     # so a failed cjson.decode after a zrem would lose the job. Decode first;
     # push first; only then remove from the sorted set — and zrem the ORIGINAL
@@ -79,16 +86,16 @@ module Wurk
       local jobs = redis.call("zrangebyscore", KEYS[1], "-inf", ARGV[1], "LIMIT", 0, tonumber(ARGV[4]))
       for i = 1, #jobs do
         local job = jobs[i]
-        local decoded = cjson.decode(job)
-        local q = decoded["queue"]
-        local stamped
-        if decoded["enqueued_at"] == nil then
-          stamped = string.gsub(job, "^{", '{"enqueued_at":' .. ARGV[3] .. ",", 1)
+        local ok, decoded = pcall(cjson.decode, job)
+        local q = ok and type(decoded) == "table" and decoded["queue"]
+        if type(q) == "string" then
+          local pat, rep = '"enqueued_at":%-?%d[%d.eE+-]*', '"enqueued_at":' .. ARGV[3]
+          if decoded["enqueued_at"] == nil then pat, rep = "^{", "{" .. rep .. "," end
+          redis.call("sadd", KEYS[2], q)
+          redis.call("lpush", ARGV[2] .. q, (string.gsub(job, pat, rep, 1)))
         else
-          stamped = string.gsub(job, '"enqueued_at":%-?%d[%d.eE+-]*', '"enqueued_at":' .. ARGV[3], 1)
+          redis.call("zadd", KEYS[3], ARGV[1], job)
         end
-        redis.call("sadd", KEYS[2], q)
-        redis.call("lpush", ARGV[2] .. q, stamped)
         redis.call("zrem", KEYS[1], job)
       end
       return #jobs
