@@ -6,7 +6,7 @@ require 'securerandom'
 # Pins Wurk::Middleware::PoisonPill:
 #   * INCR + EXPIRE 72h at `super_fetch:recovered:<jid>` per orphan
 #   * <3 → return :recovered, emit `jobs.recovered.fetch`
-#   * ≥3 → kill into dead set, emit `jobs.poison`, fire callbacks
+#   * >3 (the 4th orphaning, as Pro) → kill into dead set, emit `jobs.poison`, fire callbacks
 #
 # Spec: docs/target/sidekiq-pro.md §3.2.
 class MiddlewarePoisonPillTest < Wurk::Test::UnitCase
@@ -50,17 +50,17 @@ class MiddlewarePoisonPillTest < Wurk::Test::UnitCase
     assert_operator ttl, :>=, Wurk::Middleware::PoisonPill::RECOVERY_TTL - 5
   end
 
-  def test_second_recovery_does_not_yet_poison
-    2.times { Wurk::Middleware::PoisonPill.track!(payload_json, queue: @queue) }
+  def test_third_recovery_does_not_yet_poison
+    3.times { Wurk::Middleware::PoisonPill.track!(payload_json, queue: @queue) }
 
-    assert_equal 2, Wurk::Middleware::PoisonPill.recovery_count(@jid)
+    assert_equal 3, Wurk::Middleware::PoisonPill.recovery_count(@jid)
     # jid-scoped: a global ZCARD races other parallel tests / stray dead jobs.
     assert_equal 0, dead_for_jid_count, 'a job below the poison threshold must not be in the dead set'
   end
 
-  def test_third_recovery_returns_poison_and_writes_to_dead
+  def test_fourth_recovery_returns_poison_and_writes_to_dead
     json = payload_json
-    2.times { Wurk::Middleware::PoisonPill.track!(json, queue: @queue) }
+    3.times { Wurk::Middleware::PoisonPill.track!(json, queue: @queue) }
     result = Wurk::Middleware::PoisonPill.track!(json, queue: @queue)
 
     assert_equal :poison, result
@@ -157,7 +157,7 @@ class MiddlewarePoisonPillTest < Wurk::Test::UnitCase
   def test_emits_jobs_poison_on_threshold_crossing
     json = payload_json
     metrics = with_statsd_recorder do
-      3.times { Wurk::Middleware::PoisonPill.track!(json, queue: @queue) }
+      4.times { Wurk::Middleware::PoisonPill.track!(json, queue: @queue) }
     end
 
     poison = metrics.select { |m| m[0] == 'jobs.poison' }
@@ -183,7 +183,7 @@ class MiddlewarePoisonPillTest < Wurk::Test::UnitCase
   def test_emits_poison_with_nil_tags_and_hash_payload
     hash = { 'jid' => @jid }
     metrics = with_statsd_recorder do
-      3.times { Wurk::Middleware::PoisonPill.track!(hash, queue: nil) }
+      4.times { Wurk::Middleware::PoisonPill.track!(hash, queue: nil) }
     end
 
     poison = metrics.select { |m| m[0] == 'jobs.poison' }
@@ -201,14 +201,14 @@ class MiddlewarePoisonPillTest < Wurk::Test::UnitCase
     received = []
     Wurk.configuration.death_handlers << ->(job, ex) { received << [job['jid'], ex] }
     json = payload_json
-    3.times { Wurk::Middleware::PoisonPill.track!(json, queue: @queue) }
+    4.times { Wurk::Middleware::PoisonPill.track!(json, queue: @queue) }
 
     assert_equal 1, received.size, 'only the kill notifies — sub-threshold recoveries are not deaths'
     jid, ex = received.first
 
     assert_equal @jid, jid
     assert_instance_of Wurk::Middleware::PoisonPill::Poisoned, ex
-    assert_equal 'PoisonPillTestJob was recovered 3 times without completing', ex.message
+    assert_equal 'PoisonPillTestJob was orphaned 4 times without completing', ex.message
     refute_nil ex.backtrace, 'error services expect a backtrace'
   end
 
@@ -217,9 +217,9 @@ class MiddlewarePoisonPillTest < Wurk::Test::UnitCase
     received = []
     Wurk.configuration.death_handlers << ->(_job, ex) { received << ex.message }
     hash = { 'jid' => @jid }
-    3.times { Wurk::Middleware::PoisonPill.track!(hash, queue: nil) }
+    4.times { Wurk::Middleware::PoisonPill.track!(hash, queue: nil) }
 
-    assert_equal ['job was recovered 3 times without completing'], received
+    assert_equal ['job was orphaned 4 times without completing'], received
   end
 
   # --- callback hooks -----------------------------------------------------
@@ -230,13 +230,13 @@ class MiddlewarePoisonPillTest < Wurk::Test::UnitCase
     pill = nil
     Wurk::Middleware::PoisonPill.on_poison { |p| pill = p }
     json = payload_json
-    3.times { Wurk::Middleware::PoisonPill.track!(json, queue: @queue) }
+    4.times { Wurk::Middleware::PoisonPill.track!(json, queue: @queue) }
 
     refute_nil pill
     assert_equal @jid, pill[:jid]
     assert_equal 'PoisonPillTestJob', pill[:klass]
     assert_equal @queue, pill[:queue]
-    assert_equal 3, pill[:count]
+    assert_equal 4, pill[:count]
   end
 
   def test_on_poison_swallows_callback_errors
@@ -244,7 +244,7 @@ class MiddlewarePoisonPillTest < Wurk::Test::UnitCase
     json = payload_json
 
     assert_silent do
-      3.times { Wurk::Middleware::PoisonPill.track!(json, queue: @queue) }
+      4.times { Wurk::Middleware::PoisonPill.track!(json, queue: @queue) }
     end
   end
 
@@ -261,7 +261,7 @@ class MiddlewarePoisonPillTest < Wurk::Test::UnitCase
     callback = proc { calls += 1 }
     3.times { Wurk::Middleware::PoisonPill.on_poison(&callback) }
     json = payload_json
-    3.times { Wurk::Middleware::PoisonPill.track!(json, queue: @queue) }
+    4.times { Wurk::Middleware::PoisonPill.track!(json, queue: @queue) }
 
     assert_equal 1, calls, 'the same Proc registered repeatedly must fire once per poison, not N times'
   end
@@ -273,7 +273,7 @@ class MiddlewarePoisonPillTest < Wurk::Test::UnitCase
     calls = 0
     2.times { Wurk::Middleware::PoisonPill.on_poison { calls += 1 } }
     json = payload_json
-    3.times { Wurk::Middleware::PoisonPill.track!(json, queue: @queue) }
+    4.times { Wurk::Middleware::PoisonPill.track!(json, queue: @queue) }
 
     assert_equal 2, calls
   end
@@ -283,7 +283,7 @@ class MiddlewarePoisonPillTest < Wurk::Test::UnitCase
     registration = Wurk::Middleware::PoisonPill.on_poison { calls += 1 }
     registration.remove!
     json = payload_json
-    3.times { Wurk::Middleware::PoisonPill.track!(json, queue: @queue) }
+    4.times { Wurk::Middleware::PoisonPill.track!(json, queue: @queue) }
 
     assert_equal 0, calls, 'a removed registration must not fire'
   end
@@ -315,17 +315,17 @@ class MiddlewarePoisonPillTest < Wurk::Test::UnitCase
     recorded = []
     cfg = recovery_config { |jobstr, pill| recorded << [jobstr, pill] }
     json = payload_json
-    3.times { Wurk::Middleware::PoisonPill.track!(json, queue: @queue, config: cfg) }
+    4.times { Wurk::Middleware::PoisonPill.track!(json, queue: @queue, config: cfg) }
 
-    assert_equal 3, recorded.size, 'the block fires once per recovery'
-    assert(recorded[0..1].all? { |_, pill| pill.nil? }, 'sub-threshold recoveries carry no pill')
+    assert_equal 4, recorded.size, 'the block fires once per recovery'
+    assert(recorded[0..2].all? { |_, pill| pill.nil? }, 'sub-threshold recoveries carry no pill')
 
     jobstr, pill = recorded.last
 
     assert_equal json, jobstr
     assert_equal @jid, pill.jid
     assert_equal 'PoisonPillTestJob', pill.klass
-    assert_equal 3, pill.count
+    assert_equal 4, pill.count
     assert_equal @queue, pill.queue
   end
 
@@ -338,7 +338,7 @@ class MiddlewarePoisonPillTest < Wurk::Test::UnitCase
     Wurk::Middleware::PoisonPill.on_poison { |h| on_poison_hash = h }
     json = payload_json
 
-    3.times { Wurk::Middleware::PoisonPill.track!(json, queue: @queue, config: cfg) }
+    4.times { Wurk::Middleware::PoisonPill.track!(json, queue: @queue, config: cfg) }
 
     assert_equal @jid, super_pill&.jid, 'super_fetch block saw the pill'
     assert_equal @jid, on_poison_hash&.[](:jid), 'legacy on_poison Hash still fires'

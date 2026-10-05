@@ -135,8 +135,10 @@ class LimiterPointsTest < Wurk::Test::UnitCase
   # After consuming below the cap with a positive refill, status.reset_at is
   # when the bucket refills to full (available < cap && refill positive,
   # line 49 then).
+  # Refill 1/s leaves the 40-point hole open for 40s, so a stalled box can't
+  # refill it to full (reset_at nil) between the charge and the read.
   def test_status_reset_at_when_consumed_with_positive_refill
-    l = Wurk::Limiter.points("sr-#{@suffix}", 100, 5)
+    l = Wurk::Limiter.points("sr-#{@suffix}", 100, 1)
     l.within_limit(estimate: 40) { |_h| }
     s = l.status
 

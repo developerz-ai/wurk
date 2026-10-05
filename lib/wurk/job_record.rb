@@ -22,8 +22,8 @@ module Wurk
       ActionMailer::Parameterized::DeliveryJob
       ActionMailer::MailDeliveryJob
     ].freeze
-
-    attr_reader :queue
+    AJ_PREFIX = '_aj_'
+    AJ_GLOBALID = '_aj_globalid'
 
     # @param item [String, Hash] raw JSON payload or pre-parsed hash.
     # @param queue_name [String, nil] queue this record came from.
@@ -35,12 +35,21 @@ module Wurk
         @item = item
         @value = nil
       end
-      @queue = queue_name || (@item && @item['queue'])
+      @queue = queue_name
     end
 
-    # Lazily parsed payload. Memoized; never re-parses.
+    def queue = @queue || item['queue']
+
+    # Lazily parsed payload. Memoized; never re-parses. Invalid JSON reads as
+    # an empty hash whose raw bytes become `args`, as upstream does, so one
+    # corrupt payload can't break a dashboard page or a Queue#each walk.
     def item
-      @item ||= Wurk.load_json(@value)
+      @item ||= begin
+        Wurk.load_json(@value)
+      rescue ::JSON::ParserError
+        @invalid_args = [@value]
+        {}
+      end
     end
 
     # Lazily serialized payload. When constructed from a Hash, we
@@ -50,9 +59,13 @@ module Wurk
     end
 
     def klass         = item['class']
-    def args          = item['args']
     def jid           = item['jid']
     def bid           = item['bid']
+
+    def args
+      parsed = item
+      @invalid_args || parsed['args']
+    end
 
     # IterableJob progress for this job, or nil for a non-iterable job (no
     # `it-<jid>` HASH). Spec §19.3. Reads via the IterableJobQuery data API.
@@ -64,7 +77,9 @@ module Wurk
 
     def tags          = item['tags'] || []
     def enqueued_at   = parse_time(item['enqueued_at'])
-    def created_at    = parse_time(item['created_at'])
+    # Falls back to enqueued_at as upstream does; nil (not upstream's epoch 0)
+    # only when both are absent, so a dashboard shows "unknown", not 1970.
+    def created_at    = parse_time(item['created_at'] || item['enqueued_at'])
     def failed_at     = parse_time(item['failed_at'])
     def retried_at    = parse_time(item['retried_at'])
 
@@ -86,7 +101,7 @@ module Wurk
     # current integer-ms `enqueued_at` shapes. Returns 0.0 when missing
     # or somehow in the future (clock skew).
     def latency
-      JobRecord.latency_from(item['enqueued_at'])
+      JobRecord.latency_from(item['enqueued_at'] || item['created_at'])
     end
 
     # Removes exactly this payload's bytes from the queue list. Returns
@@ -102,11 +117,11 @@ module Wurk
     def display_class
       return @display_class if defined?(@display_class)
 
-      @display_class = active_job_wrapper? ? unwrap_class : klass
+      @display_class = item['display_class'] || (active_job_wrapper? ? unwrap_class : klass)
     end
 
     # UI-facing args. Encrypted jobs (§4.7) get their envelope last arg
-    # masked as "<encrypted>" so ciphertext never reaches the dashboard;
+    # masked as "[encrypted data]" so ciphertext never reaches the dashboard;
     # redaction keys off the envelope shape, so it fires whether or not the
     # stored hash carried the `encrypt` flag. Cleartext preceding args stay
     # visible for triage. Display-only — the stored payload is untouched.
@@ -151,21 +166,45 @@ module Wurk
       "#{mailer_args[0]}##{mailer_args[1]}"
     end
 
+    # ActiveJob serializes GlobalID args as {"_aj_globalid" => gid} and tags
+    # hashes with `_aj_*` bookkeeping keys; upstream shows the gid string and
+    # drops the bookkeeping. ActionMailer payloads lead with
+    # [mailer, method, "deliver_now"]; MailDeliveryJob's real args are the
+    # trailing {"params", "args"} hash.
     def unwrap_args
-      job_args = args.dig(0, 'arguments') || []
-      wrapped = item['wrapped']
-      return job_args unless ACTION_MAILER_JOBS.include?(wrapped)
+      job_args = deserialize_aj(args.dig(0, 'arguments') || [])
+      case item['wrapped']
+      when *ACTION_MAILER_JOBS then mailer_args(item['wrapped'], job_args.drop(3))
+      else job_args
+      end
+    end
 
-      # ActionMailer payloads start with [mailer, method, "deliver_now", *real_args]
-      job_args.drop(3)
+    def mailer_args(wrapped, rest)
+      return rest unless wrapped == 'ActionMailer::MailDeliveryJob' && rest.first.is_a?(Hash)
+
+      rest.first.values_at('params', 'args')
+    end
+
+    def deserialize_aj(arg)
+      case arg
+      when Array then arg.map { |a| deserialize_aj(a) }
+      when Hash
+        return arg[AJ_GLOBALID] if arg.size == 1 && arg.key?(AJ_GLOBALID)
+
+        arg.reject { |k, _| k.start_with?(AJ_PREFIX) }.transform_values { |v| deserialize_aj(v) }
+      else arg
+      end
     end
 
     # Parse Sidekiq's mixed time formats (Float secs, Integer ms) into Time.
+    # Integer ms is split into whole seconds + ms rather than divided as a
+    # Float, which would round some timestamps a millisecond off.
     def parse_time(value)
       return nil if value.nil?
+      return ::Time.at(value).utc if value < 10_000_000_000
+      return ::Time.at(value / 1_000.0) unless value.is_a?(Integer)
 
-      ms = value < 10_000_000_000 ? value * 1_000 : value
-      ::Time.at(ms / 1_000.0)
+      ::Time.at(value / 1_000, value % 1_000, :millisecond)
     end
   end
 end

@@ -310,7 +310,8 @@ job runs through `Wurk::Middleware::PoisonPill`:
   normally, it just leaves its counter to expire on the 72h TTL rather than
   clearing it early. Nothing is deleted on a blank jid: the key it would build
   is the bare prefix, which is shared rather than per-job.
-- At `RECOVERY_THRESHOLD` (**3**) the job is killed into the dead set and
+- Past `RECOVERY_THRESHOLD` (**3**) recoveries — the 4th orphaning, as in
+  Sidekiq Pro — the job is killed into the dead set and
   `LREM`'d back off the public queue so it isn't also re-run.
 - The kill fires **death handlers** (`ex` is a
   `Wurk::Middleware::PoisonPill::Poisoned`), so `:death` batch callbacks and

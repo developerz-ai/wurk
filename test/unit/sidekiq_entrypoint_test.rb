@@ -46,7 +46,7 @@ class SidekiqEntrypointTest < Wurk::Test::UnitCase
   def test_require_sidekiq_cold_loads_wurk
     lib = File.expand_path('../../lib', __dir__)
     ok = system(
-      RbConfig.ruby, '-I', lib, '-e',
+      RbConfig.ruby, *Wurk::Test::SUBPROCESS_COVERAGE, '-I', lib, '-e',
       'require "sidekiq"; exit(defined?(Sidekiq::Client) && defined?(Wurk) ? 0 : 1)'
     )
 
@@ -59,7 +59,7 @@ class SidekiqEntrypointTest < Wurk::Test::UnitCase
   def test_require_sidekiq_cli_enters_server_mode
     lib = File.expand_path('../../lib', __dir__)
     ok = system(
-      RbConfig.ruby, '-I', lib, '-e',
+      RbConfig.ruby, *Wurk::Test::SUBPROCESS_COVERAGE, '-I', lib, '-e',
       'require "sidekiq"; exit 1 if Sidekiq.server?; ' \
       'require "sidekiq/cli"; ' \
       'fired = false; Sidekiq.configure_server { fired = true }; ' \
@@ -77,7 +77,7 @@ class SidekiqEntrypointTest < Wurk::Test::UnitCase
     # Same load set as sidekiq-cron's test helper: active_job brings the
     # ActiveSupport core-exts railtie.rb needs; ActionDispatch stays absent.
     ok = system(
-      RbConfig.ruby, '-I', lib, '-e',
+      RbConfig.ruby, *Wurk::Test::SUBPROCESS_COVERAGE, '-I', lib, '-e',
       'require "active_job"; require "rails/railtie"; require "sidekiq/rails"; ' \
       'exit(defined?(Wurk::Railtie) && !defined?(Wurk::Engine) && !defined?(ActionDispatch) ? 0 : 1)'
     )

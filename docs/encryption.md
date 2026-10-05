@@ -11,7 +11,7 @@ The whole feature is a client/server middleware pair:
 |-------|--------------|-------|
 | Push | `args.last` is replaced by a JSON envelope `{v, iv, ct, tag}` | `Wurk::Encryption::ClientMiddleware` |
 | Storage | Redis holds the envelope; no cleartext is ever written | `queue:*`, `retry`, `schedule`, `dead` |
-| Dashboard | The envelope renders as the literal string `"<encrypted>"` | `Wurk::Encryption.redact_args` |
+| Dashboard | The envelope renders as the literal string `"[encrypted data]"` | `Wurk::Encryption.redact_args` |
 | Execute | The envelope is opened back into the original Ruby value | `Wurk::Encryption::ServerMiddleware` |
 
 Aliases (`lib/wurk/compat.rb`): `Sidekiq::Enterprise::Crypto.enable/.enabled?`
@@ -29,7 +29,7 @@ downstream of Redis:
 - `redis-cli LRANGE queue:default 0 -1`, a Redis-side `MONITOR`, or any
   third-party tool that reads the queue sees the envelope only.
 - The Wurk dashboard — including everyone you granted read access — sees
-  `"<encrypted>"`.
+  `"[encrypted data]"`.
 - A retry or dead-set record keeps the ciphertext, so the secret is not
   re-exposed by a failure days later.
 
@@ -137,6 +137,13 @@ The resolver's return value is validated on first use per version:
 
 - `nil` → `Wurk::Encryption::KeyMissingError` ("key resolver returned nil for
   version N").
+- The resolver *raising* `KeyError` / `IndexError` (a `keys.fetch(v)` or
+  `ENV.fetch(...)` resolver asked for a rotated-away version) →
+  `Wurk::Encryption::KeyMissingError` ("key resolver has no key for version
+  N (KeyError: …)"). A raising resolver and a `nil` one are the same failure
+  and take the same dead-set path below. Any other exception the resolver
+  raises (a KMS timeout, say) is left alone and goes through normal retries,
+  since it may heal.
 - Wrong length → `Wurk::Encryption::Error` ("key for version N must be 32
   bytes, got X").
 - The bytes are duped and forced to `ASCII-8BIT`, so an encoding-tagged String
@@ -264,7 +271,7 @@ bad key rather than discovering it on the first push.
 ## What the dashboard shows
 
 `Wurk::Encryption.redact_args` replaces the last argument with the literal
-string `"<encrypted>"` in every args column the API serves: queue listings,
+string `"[encrypted data]"` in every args column the API serves: queue listings,
 retries, scheduled, dead, the busy/working table, and search results
 (`JobRecord#display_args`).
 

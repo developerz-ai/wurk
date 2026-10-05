@@ -112,7 +112,7 @@ class ApiEndpointsTest < Wurk::Test::EngineCase
     assert_ok
     job = json_body[:jobs].find { |j| j[:klass] == @class_name }
 
-    assert_equal [99, '<encrypted>'], job[:args]
+    assert_equal [99, '[encrypted data]'], job[:args]
     assert_no_envelope_leak
   end
 
@@ -123,7 +123,7 @@ class ApiEndpointsTest < Wurk::Test::EngineCase
     assert_ok
     entry = json_body[:entries].find { |e| e[:klass] == @class_name }
 
-    assert_equal [99, '<encrypted>'], entry[:args]
+    assert_equal [99, '[encrypted data]'], entry[:args]
     assert_no_envelope_leak
   end
 
@@ -135,7 +135,7 @@ class ApiEndpointsTest < Wurk::Test::EngineCase
     hit = json_body[:hits].find { |h| h[:jid] == jid }
 
     refute_nil hit
-    assert_equal [99, '<encrypted>'], hit[:args]
+    assert_equal [99, '[encrypted data]'], hit[:args]
     assert_no_envelope_leak
   end
 

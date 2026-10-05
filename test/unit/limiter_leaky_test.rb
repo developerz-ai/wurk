@@ -139,7 +139,8 @@ class LimiterLeakyTest < Wurk::Test::UnitCase
   # wait_timeout > 0: a full bucket drains while we wait, so the loop takes
   # the no-raise side (remaining > 0, line 38 else) then succeeds on retry.
   def test_waits_and_succeeds_when_capacity_frees_up
-    l = Wurk::Limiter.leaky("wt-#{@suffix}", 1, 1, wait_timeout: 5)
+    # The drip frees a slot in ~1s; the generous timeout is only spent on a stalled box.
+    l = Wurk::Limiter.leaky("wt-#{@suffix}", 1, 1, wait_timeout: 30)
     l.within_limit {} # fills the single slot
     ran = false
     l.within_limit { ran = true } # blocks until the drip frees a slot

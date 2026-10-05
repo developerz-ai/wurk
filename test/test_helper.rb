@@ -11,6 +11,9 @@ if ENV['COVERAGE']
     primary_coverage :line
     add_filter '/test/'
     add_filter '/bench/'
+    # Count lib files no test ever requires, so an untested file reads as 0%
+    # instead of silently dropping out of the denominator.
+    track_files 'lib/**/*.rb'
     minimum_coverage line: 90, branch: 90
     formatter SimpleCov::Formatter::CoberturaFormatter
   end
@@ -60,6 +63,11 @@ module Wurk
     end
 
     DEFAULT_NCPU = default_ncpu(Etc.nprocessors)
+
+    # Extra `ruby` arguments for a test-spawned subprocess so the lib code it
+    # runs counts toward coverage (test/support/subprocess_coverage.rb).
+    SUBPROCESS_COVERAGE =
+      (ENV['COVERAGE'] ? ['-r', File.expand_path('support/subprocess_coverage', __dir__)] : []).freeze
 
     class << self
       attr_accessor :redis_url

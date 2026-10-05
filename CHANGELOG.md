@@ -13,6 +13,10 @@ All notable changes to Wurk are recorded here. Format: [Keep a Changelog](https:
 
 ### Changed
 
+- **Poison-pill threshold matches Sidekiq Pro**: an orphaned job is requeued on its first three recoveries and dead-set on the fourth (was the third).
+- **Encrypted args are masked as `"[encrypted data]"`** in the data API and dashboard, the string Sidekiq's `JobRecord#display_args` uses (was `"<encrypted>"`).
+- **`Queue#delete_job(jid)` returns the deleted job's JSON, or nil when nothing matched**, as Sidekiq Pro does (was an Integer count, where 0 is truthy).
+- **`Queue#pause!` / `#unpause!` return true only when the call changed state**, as in Sidekiq Pro.
 - **Dashboard listings return `max_page` and the page actually served**; filtered listings also return `filtered_total` / `filtered_total_exact`.
 - **Metrics and profiles use Sidekiq 8.1's wire format.** Minute buckets are `j|YYMMDD|H:MM` (8h), plus 10-minute buckets `j|YYMMDD|H:M` (3d) and `h|<klass>-D-H:M` runtime histograms; the `<klass>-YYYYMMDD-H` hash is no longer written. History written by Sidekiq before a swap now shows up, and Sidekiq reads what Wurk writes. `<klass>|p` counts failed executions too and `|ms` covers only executions that did not fail; ActiveJob jobs are recorded under the wrapped class. Per-class history from earlier Wurk versions (4-digit-year keys) is not shown and expires within 3 days. Profiles: `token` is the job's `profile` value, `type` the job class, `elapsed` float seconds, 1-day expiry, `sid` left for the Web UI's profile-store id.
 - **`JobSet#kill_all` defaults to `notify_failure: false`** (Sidekiq 8, spec §19.5) and trims the dead set once; dashboard "Kill All" no longer fires death handlers per job.
@@ -34,6 +38,10 @@ All notable changes to Wurk are recorded here. Format: [Keep a Changelog](https:
 
 ### Fixed
 
+- **A bucket limiter on a short interval (`:second`) sleeps until the real boundary** using Redis `TIME` microseconds, instead of a whole second that could overshoot by ~1s and eat `wait_timeout`.
+- **Data API parity:** `JobRecord#queue` falls back to the payload's `queue`; invalid-JSON payloads read as `{}` with the raw bytes as `args`; `created_at` falls back to `enqueued_at`; `latency` falls back to `created_at`; Integer-ms timestamps convert without float rounding; `display_class` honours a `display_class` field; ActiveJob `display_args` unwraps GlobalIDs and strips `_aj_*` keys, and `MailDeliveryJob` shows `[params, args]`.
+- **`Client#push` raises `ArgumentError` for a `class` without `sidekiq_options`**, as Sidekiq does.
+- **An encryption key resolver that raises `KeyError`/`IndexError`** for a rotated-away version now dead-sets the job like a resolver returning nil, instead of retrying it 25 times.
 - **Dashboard SSE streams can no longer hang the host app.** The per-process cap is half the server's request threads (Puma `max_threads` / `RAILS_MAX_THREADS`, at least 1) instead of a fixed 10, which sat above Rails' default of 3 Puma threads; `config.web.max_streams` overrides it (0 = off). Streams recycle every 30s and the SPA reconnects with backoff after a 503.
 - **The health-check server can't be stalled by a slow or idle client**: each request head must arrive within 1s and 8KB, handled off the accept thread (up to 16 at once).
 - **Dashboard ids containing a dot** (limiters, cron loops, flows, batches, queue and job deep links) no longer 404.
@@ -73,6 +81,11 @@ All notable changes to Wurk are recorded here. Format: [Keep a Changelog](https:
 - **The leader lock is refreshed atomically** and released only after its loop has stopped.
 - **The migration guide no longer says untested add-on gems "work unchanged".** Only sidekiq-cron has its upstream suite run against Wurk on every PR; sidekiq-unique-jobs, sidekiq-scheduler, sidekiq-status, sidekiq-failures and sidekiq-throttled are now marked untested, with their blockers tracked in `docs/idea/14-ecosystem-compat.md`. The `sidekiq` shim gem — which any kept add-on needs, or its `add_dependency "sidekiq"` reinstalls real Sidekiq next to Wurk — is now documented up front in the guide, the README and llms.txt rather than only in `docs/sentry.md`.
 - **The README, site and llms.txt drop "millions of jobs an hour".** No production throughput numbers are published to back it; the measured numbers are in `docs/benchmarks.md`.
+
+### Tests
+
+- **The parity oracle suite grew from 3 files to 14** (≈240 runs): client push wire format, reliable fetch with real SIGKILLed workers, the Data API, error handlers, batches, periodic jobs, metrics query, Ent limiters, unique jobs, encryption and Pro expiration — each written from the spec and upstream source before reading Wurk's code.
+- **Coverage counts every `lib/**/*.rb` file** (`track_files`), including the `require "sidekiq/…"` shims probed in subprocesses; a thread-leak guard fails any test that leaks a Wurk thread; timing-sensitive tests assert measured progress instead of fixed sleeps.
 
 ## [1.7.6] - 2026-09-07
 

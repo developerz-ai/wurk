@@ -500,7 +500,7 @@ Lua scripts are loaded with `SCRIPT LOAD` at boot and cached via `EVALSHA`. Wurk
 - **Expired jobs** — count as **success** within a batch. Same for jobs cancelled via `invalidate_all`.
 - **24h vs 30d expiries** — see §2.8. The 30d TTL on `b-<bid>-notify` / `b-<bid>-cbsucc` is intentional (lets late-arriving Redis replicas observe callback dedupe) but tunable in Pro 8.
 - **Reliable push buffer** — drains lazily, only on the next `push`. Idle clients can stall.
-- **Poison pill detection** — counter lives at `super_fetch:recovered:<jid>` with 72h TTL. Threshold 3.
+- **Poison pill detection** — counter lives at `super_fetch:recovered:<jid>` with 72h TTL. Threshold 3: recoveries while the counter is ≤ 3 requeue, so the job is killed on its 4th orphaning. *Note:* Pro 7.3's own `recover_orphan` Lua script names the counter `orphan-<jid>`; Wurk follows this spec's `super_fetch:recovered:<jid>`.
 - **Callback retries** — callback jobs themselves retry with the same retry chain as ordinary jobs. A failing `:complete` callback re-runs until it succeeds or dies; this can lead to duplicate side effects → callbacks must be idempotent.
 - **Sharded batches** — BID encodes shard hint; `Sidekiq::Batch.new(bid)` routes to the right Redis based on BID prefix. Wurk single-shard MVP can ignore this and treat all BIDs as local.
 

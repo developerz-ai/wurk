@@ -151,7 +151,7 @@ class ApiQueuesTest < Wurk::Test::UnitCase
 
     _status, _headers, body = get("/v1/queues/#{@queue}")
 
-    assert_equal ['plain', '<encrypted>'], body['jobs'].fetch(0)['args']
+    assert_equal ['plain', '[encrypted data]'], body['jobs'].fetch(0)['args']
   end
 
   def test_queue_job_rows_carry_the_enqueue_timestamps

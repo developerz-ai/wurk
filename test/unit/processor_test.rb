@@ -290,14 +290,14 @@ class ProcessorTest < Wurk::Test::UnitCase
     assert_equal 0, Wurk::Middleware::PoisonPill.recovery_count(payload['jid'])
   end
 
-  # The F6 loss scenario end to end: two reclaims, one healthy run, a third
-  # reclaim. Without the clear the third crosses RECOVERY_THRESHOLD and the
+  # The F6 loss scenario end to end: three reclaims, one healthy run, a fourth
+  # reclaim. Without the clear the fourth crosses RECOVERY_THRESHOLD and the
   # job is silently dead-set even though it has never failed.
   def test_reclaims_around_a_successful_run_do_not_reach_the_poison_threshold
     klass = define_worker_recording
     payload = enqueue(class: klass.name, args: [])
     json = Wurk.dump_json(payload)
-    2.times { Wurk::Middleware::PoisonPill.track!(json, queue: @queue_name) }
+    3.times { Wurk::Middleware::PoisonPill.track!(json, queue: @queue_name) }
 
     @processor.process_one
     settle_acks

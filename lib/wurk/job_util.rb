@@ -170,8 +170,14 @@ module Wurk
       end
     end
 
+    # A String class name takes the global defaults; a Class must carry
+    # `sidekiq_options`, since a bare Class can never run as a job (Sidekiq's
+    # normalized_hash raises the same way).
     def class_defaults_for(job_class)
-      respondable_class?(job_class) ? job_class.get_sidekiq_options : Wurk.default_job_options
+      return Wurk.default_job_options unless job_class.is_a?(Class)
+      return job_class.get_sidekiq_options if job_class.respond_to?(:get_sidekiq_options)
+
+      raise(ArgumentError, "Message must include a Sidekiq::Job class, not class name: #{job_class.ancestors.inspect}")
     end
 
     def respondable_class?(klass)

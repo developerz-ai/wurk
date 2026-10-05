@@ -152,9 +152,9 @@ q.paused?     # => false
 | `clear` | `true` | `UNLINK` the list + `SREM` from the `queues` set |
 | `as_json` | `{name: …}` | |
 | `paused?` | `Boolean` | membership in the `paused` SET |
-| `pause!` | `true` | `SADD paused` — idempotent |
-| `unpause!` | `true` | `SREM paused` — idempotent |
-| `delete_job(jid)` | `Integer` | Lua; see [§ Fast Lua API](#fast-lua-api) |
+| `pause!` | `Boolean` | `SADD paused` — idempotent; `true` only if this call paused it |
+| `unpause!` | `Boolean` | `SREM paused` — idempotent; `true` only if this call unpaused it |
+| `delete_job(jid)` | `String` or `nil` | Lua; see [§ Fast Lua API](#fast-lua-api) |
 | `delete_by_class(klass)` | `Integer` | Lua; see [§ Fast Lua API](#fast-lua-api) |
 
 ### Pausing a queue
@@ -214,7 +214,7 @@ never inspect.
 | `[](name)` | any — raw payload field, for anything not listed above |
 | `iterable_state` | iterable-job progress, or `nil` for a non-iterable job |
 | `display_class` | `String` — unwraps ActiveJob / ActionMailer wrappers |
-| `display_args` | `Array` — same unwrapping, with encrypted args masked as `"<encrypted>"` |
+| `display_args` | `Array` — same unwrapping, with encrypted args masked as `"[encrypted data]"` |
 | `delete` | `Boolean` — `LREM queue:<q> 1 value`; `true` when ≥1 entry went away |
 
 `display_class` / `display_args` are **UI-facing**: they unwrap
@@ -450,7 +450,7 @@ time — there is nothing to require or enable.
 
 | Method | Returns | Notes |
 |---|---|---|
-| `Queue#delete_job(jid)` | `Integer` | payloads removed; `ArgumentError` on a blank jid |
+| `Queue#delete_job(jid)` | `String` or `nil` | the deleted job's JSON, `nil` when no job has that jid (Pro's contract); `ArgumentError` on a blank jid |
 | `Queue#delete_by_class(klass)` | `Integer` | accepts a `Class`, `String`, or `Symbol`; `ArgumentError` on a blank name |
 | `SortedSet#scan(match) { \|SortedEntry\| … }` | | one-argument block form |
 | `SortedSet#scan(match) { \|value, score\| … }` | | two-argument block form — the raw pairs |

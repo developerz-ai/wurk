@@ -166,6 +166,7 @@ class LimiterBucketTest < Wurk::Test::UnitCase
   def test_wait_sleeps_toward_the_boundary_not_a_fixed_poll_floor
     align_to_top_of_second
     l = Wurk::Limiter.bucket("pb-#{@suffix}", 1, :second, wait_timeout: 3)
+    exhausted_in = Time.now.to_i # read first: the epoch charged below is this one or later
     l.within_limit {} # exhausts the current second right after it started
 
     slept = []
@@ -177,9 +178,15 @@ class LimiterBucketTest < Wurk::Test::UnitCase
     l.within_limit { ran = true }
 
     assert ran
-    refute_empty slept
-    assert slept.first.between?(0.051, 1.0),
-           "first sleep (#{slept.first}) must target the boundary distance, not the 0.05 poll floor"
+    # A box stalled past the boundary acquires without sleeping at all — the
+    # one outcome the alignment above can't rule out, so check it honestly
+    # rather than failing it.
+    if slept.empty?
+      assert_operator Time.now.to_i, :>, exhausted_in, 'acquired without sleeping inside the exhausted second'
+    else
+      assert slept.first.between?(0.051, 1.0),
+             "first sleep (#{slept.first}) must target the boundary distance, not the 0.05 poll floor"
+    end
   end
 
   private

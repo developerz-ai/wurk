@@ -447,7 +447,8 @@ reliable-fetch reaper / `bulk_requeue` paths via
 
 Each recovery of a job out of a dead process's private list `INCR`s
 `super_fetch:recovered:<jid>` (72h TTL — wire-compatible with Sidekiq Pro's
-tooling). At `RECOVERY_THRESHOLD` (3) the payload is moved to the dead set,
+tooling). Recoveries up to `RECOVERY_THRESHOLD` (3) requeue; the next one (the 4th
+orphaning, as in Sidekiq Pro) moves the payload to the dead set,
 `jobs.poison` is emitted, death handlers fire with a
 `PoisonPill::Poisoned` error, and callbacks fire. `track!` returns `:poison` or
 `:recovered`.

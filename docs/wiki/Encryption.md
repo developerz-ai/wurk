@@ -38,4 +38,4 @@ Sidekiq::Enterprise::Crypto.enable(active_version: 2) { |v| KEYS.fetch(v) }
 
 ## Graceful failure
 
-A job that can't be decrypted (key rotated away, corrupt ciphertext) goes **straight to the dead set in under a second** rather than crash-looping through 25 retries, with the still-encrypted payload preserved for replay. The dashboard renders encrypted args as `"<encrypted>"`; cleartext is never written to Redis.
+A job that can't be decrypted (key rotated away, corrupt ciphertext) goes **straight to the dead set in under a second** rather than crash-looping through 25 retries, with the still-encrypted payload preserved for replay. The dashboard renders encrypted args as `"[encrypted data]"`; cleartext is never written to Redis.

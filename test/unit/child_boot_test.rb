@@ -273,7 +273,9 @@ class ChildBootTest < Wurk::Test::UnitCase
   def quiet_after_boot_window_tstp
     @boot.send(:reset_inherited_signals)
     ::Process.kill('TSTP', ::Process.pid)
-    sleep 0.05
+    # The trap runs on the main thread at its next interrupt check; wait for
+    # its write rather than guessing how long that takes.
+    wait_until { @boot.instance_variable_get(:@pending_tstp) }
     launcher = FakeLauncher.new
     @boot.send(:install_signal_handlers, launcher)
     wait_until { launcher.events.include?(:quiet) }

@@ -1546,8 +1546,8 @@ All but `:beat` are oneshot (cleared after firing).
 
 ## 28. ActiveJob integration
 
-ActiveJob adapter class: `ActiveJob::QueueAdapters::SidekiqAdapter::JobWrapper` (also aliased `Sidekiq::ActiveJob::Wrapper`). Job hash has:
-- `class` = `"ActiveJob::QueueAdapters::SidekiqAdapter::JobWrapper"`
+ActiveJob wrapper class: `Sidekiq::ActiveJob::Wrapper` (Sidekiq 8.1; `ActiveJob::QueueAdapters::SidekiqAdapter::JobWrapper` is kept as an alias of it for jobs enqueued by older releases). Job hash has:
+- `class` = `"Sidekiq::ActiveJob::Wrapper"` (pre-8 payloads carry `"ActiveJob::QueueAdapters::SidekiqAdapter::JobWrapper"`; readers accept both)
 - `wrapped` = real job class name
 - `args` = `[{ "job_class": ..., "arguments": [...], ... }]`
 

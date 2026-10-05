@@ -12,10 +12,11 @@ module Wurk
     # We don't reimplement `Queue#size` (already LLEN, unchanged per spec).
     module Fast
       # Extension to Wurk::Queue. Pure server-side delete by jid / class — no
-      # network round-trips per match. Returns the count of payloads removed.
+      # network round-trips per match.
       module QueueExt
-        # @return [Integer] payloads removed (0 when jid absent; >0 only in
-        #   the corner case of duplicate-jid corruption).
+        # @return [String, nil] the deleted job's JSON, or nil when no job in
+        #   the queue has that jid — Pro's contract, so `if q.delete_job(jid)`
+        #   branches on whether anything was removed.
         def delete_job(jid)
           raise ArgumentError, 'jid required' if jid.nil? || jid.to_s.empty?
 
@@ -26,7 +27,7 @@ module Wurk
               keys: [Keys.queue(name)],
               argv: [jid.to_s]
             )
-          end.to_i
+          end
         end
 
         # @param klass [Class, String, Symbol]

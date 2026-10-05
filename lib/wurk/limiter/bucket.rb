@@ -78,15 +78,21 @@ module Wurk
         # The counter expires two intervals out, not after the limiter's `ttl`:
         # that TTL is for the limiter's metadata, and an epoch counter is dead
         # the moment its epoch ends — 90 days of them is one key per epoch.
+        #
+        # The boundary distance keeps TIME's microseconds: whole seconds made a
+        # :second bucket sleep a full 1.0s with the boundary 0.1s away. It is
+        # returned from here, not from the script, because Redis truncates a
+        # Lua number reply to an integer.
         Wurk::Limiter.redis do |c|
-          now = c.call('TIME').first.to_i
-          epoch = now / interval_seconds
-          remaining = ((epoch + 1) * interval_seconds) - now
-          Wurk::Lua::Loader.eval_cached(
+          secs, usecs = c.call('TIME').map(&:to_i)
+          epoch = secs / interval_seconds
+          remaining = ((epoch + 1) * interval_seconds) - secs - (usecs / 1_000_000.0)
+          ok, current, = Wurk::Lua::Loader.eval_cached(
             c, :limiter_bucket_acquire,
             keys: ["lmtr-b:#{@name}:#{epoch}"],
             argv: [@options[:count], used, interval_seconds * 2, remaining]
           )
+          [ok, current, remaining]
         end
       end
     end
