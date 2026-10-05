@@ -4,9 +4,18 @@ Drop-in for Sidekiq is not just the Sidekiq gem itself. A 100% drop-in claim mea
 
 This is testable, and it's the strongest possible proof of compat.
 
-## What we test against
+## Status today
 
-The gems below are widely used and depend on Sidekiq's public surface in ways that exercise different parts of the API. If they work, Wurk is genuinely drop-in.
+| Gem | Upstream suite runs against Wurk in CI? |
+|---|---|
+| sidekiq-cron | **Yes** — on PRs that change a filtered path (the workflow is path-gated), in the [`ecosystem` job](../../.github/workflows/ecosystem.yml), pinned in [`test/ecosystem/sidekiq-cron/PIN`](../../test/ecosystem/sidekiq-cron/PIN) |
+| every other gem below | **No** — untested on Wurk. Pins and blockers for sidekiq-status and sidekiq-unique-jobs are recorded [further down](#not-yet-in-the-matrix--pin-researched-blocker-known); the rest have not been attempted |
+
+Keeping any add-on gem needs the git-only [`sidekiq` shim gem](../../ecosystem/sidekiq-shim/README.md), because every one of them declares `add_dependency "sidekiq"`. A user keeping an untested gem should prove it in staging before production. The native replacements Wurk ships (periodic loops, `unique_for:`, `track:`, rate limiters) are the supported path, and the migration guide documents how to move live sidekiq-cron schedules and sidekiq-unique-jobs locks across a cutover ([`docs/migrate-from-sidekiq.md` §6](../migrate-from-sidekiq.md#6-third-party-gem-mappings)).
+
+## What we aim to test against
+
+The gems below are widely used and depend on Sidekiq's public surface in ways that exercise different parts of the API. If they work, Wurk is genuinely drop-in. This is the target matrix, not the current one — see [Status today](#status-today).
 
 | Gem | What it exercises |
 |---|---|
@@ -63,4 +72,4 @@ Already closed by this work: `require "sidekiq/processor"`, `"sidekiq/manager"` 
 
 ## Tracking
 
-A status page on the docs site lists every gem in the matrix, its current pass/fail state, and the Wurk version it last passed against. Green badges build trust faster than any benchmark chart.
+Planned, not built: a status page on the docs site listing every gem in the matrix, its current pass/fail state, and the Wurk version it last passed against. Until it exists, [Status today](#status-today) above and `test/ecosystem/` are the record.

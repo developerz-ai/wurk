@@ -2,6 +2,7 @@
 
 require 'socket'
 require 'json'
+require_relative 'metrics/prometheus'
 
 module Wurk
   # Thin HTTP listener for k8s liveness/readiness probes. Optional, off by
@@ -10,7 +11,12 @@ module Wurk
   # Endpoints:
   #   * GET /live  → 200 while the Launcher is running (not in quiet/stop).
   #   * GET /ready → 200 only when Redis is reachable AND the heartbeat has
-  #                  fired within `ready_window` seconds. 503 otherwise.
+  #                  fired within `ready_window` seconds AND, inside a swarm
+  #                  child, enough of the swarm's children have (see
+  #                  Health::Fleet). 503 otherwise.
+  #   * GET /metrics → Prometheus text exposition (Wurk::Metrics::Prometheus).
+  #                  On whenever the listener is; `metrics: false` in
+  #                  `:health_check_options` turns it into a 404.
   # Anything else returns 404 JSON.
   #
   # The server uses a raw TCPServer, one accept thread and a short-lived
@@ -24,6 +30,19 @@ module Wurk
     DEFAULT_PORT          = 7433
     DEFAULT_BIND          = '0.0.0.0'
     DEFAULT_READY_WINDOW  = 30
+    JSON_TYPE             = 'application/json'
+
+    class << self
+      # Children the swarm was configured with, set by Swarm::ChildBoot inside
+      # each child (inherited from nowhere: the parent never runs a listener).
+      # nil outside a swarm child — standalone and embedded processes are a
+      # fleet of one and /ready judges them on their own heartbeat alone.
+      attr_accessor :fleet_size
+
+      def json(status, **extra)
+        ::JSON.generate({ status: status }.merge(extra))
+      end
+    end
 
     # The HTTP listener. Owns one TCPServer + one accept thread. Idempotent
     # start/stop; safe to call from Launcher#run / Launcher#stop.
@@ -57,6 +76,7 @@ module Wurk
         @done           = false
         @slots          = ::Mutex.new
         @connections    = 0
+        @fleet          = nil
       end
 
       def start
@@ -197,8 +217,8 @@ module Wurk
         return if request_line.nil?
 
         method, path, = request_line.strip.split(' ', 3)
-        body, status = response_for(method, path)
-        write_response(client, status, body)
+        body, status, type = response_for(method, path)
+        write_response(client, status, body, type || JSON_TYPE)
       rescue ::StandardError => e
         logger&.error { "Wurk::Health request: #{e.class}: #{e.message}" }
       ensure
@@ -241,8 +261,17 @@ module Wurk
         case path
         when '/live'  then live_response
         when '/ready' then ready_response
-        else [json('error', message: 'not found', path: path), 404]
+        when '/metrics' then fleet.metrics_response || not_found(path)
+        else not_found(path)
         end
+      end
+
+      def not_found(path)
+        [json('error', message: 'not found', path: path), 404]
+      end
+
+      def fleet
+        @fleet ||= Fleet.new(@config, @ready_window)
       end
 
       def live_response
@@ -254,15 +283,10 @@ module Wurk
       end
 
       def ready_response
-        redis_ok = ping_redis
-        beat_fresh = heartbeat_fresh?
+        return [json('down', check: 'ready', reason: 'redis unreachable'), 503] unless ping_redis
+        return [json('down', check: 'ready', reason: 'heartbeat stale'), 503] unless heartbeat_fresh?
 
-        if redis_ok && beat_fresh
-          [json('ok', check: 'ready'), 200]
-        else
-          reason = redis_ok ? 'heartbeat stale' : 'redis unreachable'
-          [json('down', check: 'ready', reason: reason), 503]
-        end
+        fleet.ready_response
       end
 
       def ping_redis
@@ -281,15 +305,13 @@ module Wurk
         (::Time.now.to_f - last) < @ready_window
       end
 
-      def json(status, **extra)
-        ::JSON.generate({ status: status }.merge(extra))
-      end
+      def json(...) = Health.json(...)
 
-      def write_response(client, status, body)
+      def write_response(client, status, body, type = JSON_TYPE)
         reason = REASONS.fetch(status, 'Status')
         client.write(
           "HTTP/1.1 #{status} #{reason}\r\n" \
-          "Content-Type: application/json\r\n" \
+          "Content-Type: #{type}\r\n" \
           "Content-Length: #{body.bytesize}\r\n" \
           "Connection: close\r\n\r\n" \
           "#{body}"
@@ -298,6 +320,68 @@ module Wurk
 
       def logger
         @config&.logger
+      end
+    end
+
+    # The swarm-wide half of the listener: the /metrics body and the fleet
+    # check behind /ready. One Prometheus collector serves both, so a scrape and
+    # a probe landing in the same second cost one Redis refresh between them.
+    #
+    # A swarm pod is one probe target however many children it runs, and the
+    # listener lives in whichever child won the port. Judging readiness on that
+    # child alone said "ready" while its siblings crash-looped. Ready now also
+    # needs `min_ready` children (default: half the fleet, rounded up) with a
+    # heartbeat inside `ready_window` — a majority-ish bar rather than all, so
+    # one slot in respawn backoff does not pull a pod that is still doing most
+    # of its work out of a rollout. /live stays local on purpose: failing it
+    # restarts the whole pod, and replacing one wedged child is the swarm
+    # parent's job (Swarm::Liveness).
+    class Fleet
+      def initialize(config, ready_window)
+        @config = config
+        @ready_window = ready_window
+        @collector = nil
+      end
+
+      # [body, status, content type]; nil when `metrics: false`.
+      def metrics_response
+        return nil if option(:metrics) == false
+
+        body = collector.render(expected_children: Health.fleet_size, fresh_window: @ready_window)
+        [body, 200, Metrics::Prometheus::CONTENT_TYPE]
+      end
+
+      # The /ready answer once the local checks (Redis, own heartbeat) passed.
+      def ready_response
+        expected = Health.fleet_size
+        return [Health.json('ok', check: 'ready'), 200] unless expected
+
+        needed = min_ready(expected)
+        fresh = collector.fresh_local(collector.snapshot, @ready_window).size
+        if fresh >= needed
+          [Health.json('ok', check: 'ready', children: fresh, expected: expected), 200]
+        else
+          [Health.json('down', check: 'ready', reason: 'too few live children', children: fresh,
+                               needed: needed, expected: expected), 503]
+        end
+      end
+
+      private
+
+      def collector
+        @collector ||= Metrics::Prometheus.new(@config)
+      end
+
+      def min_ready(expected)
+        configured = option(:min_ready)
+        return [Integer(configured), expected].min if configured
+
+        (expected / 2.0).ceil
+      end
+
+      def option(key)
+        opts = @config.respond_to?(:[]) ? @config[:health_check_options] : nil
+        opts.is_a?(Hash) ? opts[key] : nil
       end
     end
   end

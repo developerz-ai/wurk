@@ -1,0 +1,152 @@
+name: topology
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+permissions:
+  contents: read
+  pull-requests: read
+  actions: read
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  # Never cancel main's own runs (see test.yml).
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+jobs:
+  # Same gate as ecosystem.yml: path-filter pull requests only, skip a push
+  # whose tree already passed on the PR head.
+  detect:
+    name: detect changed paths
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    outputs:
+      ruby: ${{ steps.filter.outputs.ruby }}
+      dup: ${{ steps.dup.outputs.dup }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: duplicate of an already-green PR head (dup)
+        id: dup
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          dup="$(bin/ci-dup-push .github/workflows/topology.yml)"
+          [ "$dup" = "true" ] || dup=false
+          echo "dup=$dup" >> "$GITHUB_OUTPUT"
+      - uses: dorny/paths-filter@ceb8a2b8f2d89434be7ff52d3de7ec3738c5cc9d # v4.0.3
+        id: filter
+        with:
+          filters: |
+            ruby:
+              - 'lib/**'
+              - 'test/test_helper.rb'
+              - 'test/support/**'
+              - 'test/integration/**'
+              - 'test/parity/**'
+              - 'test/unit/client*'
+              - 'test/unit/fetcher*'
+              - 'test/unit/lua*'
+              - 'test/unit/scheduled*'
+              - 'Gemfile'
+              - 'Rakefile'
+              - '*.gemspec'
+              - '.github/workflows/topology.yml'
+
+  # Redis topologies the main suite never sees (#550 R7): Valkey 8 as the plain
+  # backend for the parity oracles + the core integration subset, and a TLS
+  # server, an ACL user and a Sentinel set (primary + replica + one sentinel)
+  # for test/integration/redis_topology_test.rb, which skips without them.
+  # Host networking so Sentinel's announced 127.0.0.1 addresses are the ones
+  # the client dials. Not a required check.
+  topology:
+    needs: detect
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    services:
+      valkey:
+        image: valkey/valkey:8
+        ports: ["6379"]
+        options: >-
+          --health-cmd "valkey-cli ping"
+          --health-interval 2s
+          --health-timeout 2s
+          --health-retries 10
+    env:
+      RUBY_VERSION: "4.0"
+      RAILS_VERSION: "8.1"
+      # Per-step gate, not a job-level `if:` (#469, see test.yml).
+      RUN: ${{ needs.detect.outputs.dup != 'true' && (github.event_name != 'pull_request' || needs.detect.outputs.ruby == 'true') }}
+      WURK_TEST_TLS_URL: rediss://localhost:16380/0
+      WURK_TEST_ACL_URL: redis://wurk:s3cret@localhost:16381/0
+      WURK_TEST_SENTINEL_HOSTS: 127.0.0.1:26382
+      WURK_TEST_SENTINEL_MASTER: wurkmaster
+      # A missing server fails redis_topology_test instead of skipping it.
+      WURK_TEST_TOPOLOGY_REQUIRED: "1"
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        if: env.RUN == 'true'
+        with:
+          persist-credentials: false
+      - name: resolve valkey port
+        if: env.RUN == 'true'
+        run: |
+          echo "REDIS_URL=redis://localhost:${{ job.services.valkey.ports['6379'] }}/0" >> "$GITHUB_ENV"
+          echo "WURK_TEST_TLS_CA_FILE=$RUNNER_TEMP/tls/ca.crt" >> "$GITHUB_ENV"
+      - name: start TLS, ACL and Sentinel servers
+        if: env.RUN == 'true'
+        run: |
+          set -euo pipefail
+          tls="$RUNNER_TEMP/tls"
+          mkdir -p "$tls" && cd "$tls"
+          openssl req -x509 -newkey rsa:2048 -nodes -days 2 -subj /CN=wurk-test-ca -keyout ca.key -out ca.crt
+          openssl req -newkey rsa:2048 -nodes -subj /CN=localhost -keyout redis.key -out redis.csr
+          printf 'subjectAltName=DNS:localhost,IP:127.0.0.1\n' > san.ext
+          openssl x509 -req -in redis.csr -CA ca.crt -CAkey ca.key -CAcreateserial -days 2 -extfile san.ext -out redis.crt
+          chmod 644 ./*.key
+          docker run -d --name tls --network host -v "$tls:/tls:ro" redis:7.4 redis-server --port 0 --tls-port 16380 \
+            --tls-cert-file /tls/redis.crt --tls-key-file /tls/redis.key --tls-ca-cert-file /tls/ca.crt --tls-auth-clients no
+          docker run -d --name acl --network host redis:7.4 redis-server --port 16381 --user default off \
+            --user wurk on '>s3cret' '~*' '&*' '+@all' '-@dangerous' '+info'
+          docker run -d --name primary --network host redis:7.4 redis-server --port 16382
+          docker run -d --name replica --network host redis:7.4 redis-server --port 16383 --replicaof 127.0.0.1 16382
+          docker run -d --name sentinel --network host redis:7.4 sh -c 'printf "port 26382\nsentinel monitor wurkmaster 127.0.0.1 16382 1\nsentinel down-after-milliseconds wurkmaster 1000\nsentinel failover-timeout wurkmaster 5000\n" > /tmp/s.conf && exec redis-sentinel /tmp/s.conf'
+          for _ in $(seq 1 30); do
+            if docker exec tls redis-cli --tls --cacert /tls/ca.crt -p 16380 ping >/dev/null 2>&1 &&
+               docker exec acl redis-cli -p 16381 --user wurk --pass s3cret --no-auth-warning ping >/dev/null 2>&1 &&
+               docker exec replica redis-cli -p 16383 info replication | grep -q 'master_link_status:up' &&
+               docker exec sentinel redis-cli -p 26382 sentinel replicas wurkmaster | grep -q 16383; then
+              exit 0
+            fi
+            sleep 1
+          done
+          docker ps -a
+          for c in tls acl primary replica sentinel; do docker logs "$c" 2>&1 | tail -20; done
+          exit 1
+      - uses: ruby/setup-ruby@14594264cd68ce8a2345dd349bc3d138a4ef85c8 # v1
+        if: env.RUN == 'true'
+        with:
+          ruby-version: ${{ env.RUBY_VERSION }}
+          bundler-cache: true
+          cache-version: rails-${{ env.RAILS_VERSION }}
+      - name: parity oracles on Valkey 8
+        if: env.RUN == 'true'
+        run: bundle exec rake test:parity
+      - name: core integration subset on Valkey 8 + topology tests
+        if: env.RUN == 'true'
+        run: |
+          files=""
+          for f in integration/redis_topology integration/scheduled_promotion integration/graceful_shutdown \
+                   integration/reaper_kill9 integration/reaper_full_sweep integration/reaper_owner_race \
+                   integration/swarm_boot integration/redis_options_fork integration/batch_retry_roundtrip \
+                   integration/batch_nested_callbacks integration/limiter_stress integration/periodic_leader \
+                   integration/global_concurrency integration/debounce_concurrent integration/rolling_restart \
+                   unit/client_push unit/client unit/client_batch_pipeline unit/fetcher_reliable \
+                   unit/fetcher_reaper unit/fetcher_capped unit/lua_loader unit/lua unit/lua_declared_keys \
+                   unit/scheduled_poller; do
+            files="${files:+$files,}test/${f}_test.rb"
+          done
+          bundle exec rake test:integration TEST="$files"

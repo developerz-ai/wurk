@@ -331,6 +331,8 @@ file to require; `ConfigTester` ships loaded with the rest of `Wurk::Cron`.
 
 ### From `sidekiq-cron`
 
+`rake wurk:import:cron` reads sidekiq-cron's schedule from Redis and registers the same loops natively (dry run by default; `APPLY=1` writes). See the migration guide's cutover section.
+
 Drop `config/schedule.yml` and the gem; move each entry into a
 `config.periodic` block. There is no `Sidekiq::Cron::Job` shim by design — real
 Sidekiq never defined that constant, so faking it would break the drop-in

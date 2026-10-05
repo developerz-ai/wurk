@@ -7,6 +7,7 @@ require_relative '../keys'
 require_relative '../lua'
 require_relative '../fetcher'
 require_relative 'capped'
+require_relative 'many_queues'
 
 module Wurk
   class Fetcher
@@ -23,10 +24,13 @@ module Wurk
     # the paths that must send a held ACK before they stop fetching, and
     # docs/idea/parity-divergences.md for the window that widens.
     #
-    # Priority handling: iterate queues_cmd in order with non-blocking
-    # LMOVE, then fall back to a blocking BLMOVE on the first queue so an
-    # empty poll doesn't spin Redis. BLMOVE has no multi-key form, so
-    # blocking on a single queue is the best Redis gives us. The block
+    # Priority handling: walk queues_cmd in order with a non-blocking claim —
+    # an LMOVE on the first queue, then one fetch_first script call over all
+    # the others (ManyQueues) — then fall back to a blocking BLMOVE
+    # on the first queue so an empty poll doesn't spin Redis. BLMOVE has no
+    # multi-key form, so blocking on a single queue is the best Redis gives us:
+    # a job landing on a later queue while every thread is parked waits for
+    # the next pass, at most one block timeout. The block
     # timeout defaults to TIMEOUT (2s) and is overridable per the Pro
     # super_fetch §3.3 `config.fetch_poll_interval` knob.
     #
@@ -40,6 +44,7 @@ module Wurk
       # that caps nothing, which is a stronger guarantee that the unconfigured
       # path is unchanged than a second loop kept in step by hand.
       prepend Capped
+      include ManyQueues
 
       # Default BLMOVE block timeout; overridable via config.fetch_poll_interval.
       TIMEOUT = 2
@@ -112,6 +117,7 @@ module Wurk
         @queue_keys_pid = ::Process.pid
         @prefixed_queues = nil
         @prefixed_source = nil
+        @claim_keys = nil
       end
 
       # Take custody of a finished job's LREM instead of sending it now. One
@@ -246,20 +252,20 @@ module Wurk
         config.config.handle_exception(ex, ctx)
       end
 
-      # Non-blocking pass over the fetchable queues. The pending ACK rides the
-      # first LMOVE and only the first: the walk is one fetch, so a second copy
-      # of the same LREM would be a wasted command on every queue we find
-      # empty. By the time we fall through to BLMOVE this thread is holding
-      # nothing — which is the point, since a blocking call can't join a
-      # pipeline and would strand the ACK for a whole poll interval.
+      # Non-blocking pass over the fetchable queues, then the blocking
+      # fall-through. The pending ACK rides the first LMOVE and only the first.
+      # By the time we fall through to BLMOVE this thread is holding nothing —
+      # which is the point, since a blocking call can't join a pipeline and
+      # would strand the ACK for a whole poll interval.
+      #
+      # The first queue is always a bare LMOVE, so the busy-first-queue steady
+      # state (and the one-queue capsule `rake bench` gates) costs exactly what
+      # it did. Only a miss there pays for the rest — see ManyQueues.
       def walk(queues)
         ack = take_pending_ack
-        queues.each do |public_q|
-          uow = lmove(public_q, ack)
-          ack = nil
-          return uow if uow
-        end
-        blmove(queues.first)
+        uow = lmove(queues.first, ack)
+        uow ||= claim_rest(queues) if queues.size > 1
+        uow || blmove(queues.first)
       end
 
       # Exactly one, even when a failed flush left this thread holding two: the

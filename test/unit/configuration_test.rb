@@ -626,8 +626,160 @@ class ConfigurationTest < Wurk::Test::UnitCase
   def test_health_check_stores_options
     @config.health_check(port: 9001, bind: '127.0.0.1', ready_window: 15)
 
-    assert_equal({ port: 9001, bind: '127.0.0.1', ready_window: 15 },
+    assert_equal({ port: 9001, bind: '127.0.0.1', ready_window: 15, metrics: true, min_ready: nil },
                  @config[:health_check_options])
+  end
+
+  def test_health_check_stores_metrics_and_min_ready
+    @config.health_check(port: 9001, metrics: false, min_ready: 2)
+
+    assert_equal [false, 2], @config[:health_check_options].values_at(:metrics, :min_ready)
+  end
+
+  def test_health_check_rejects_a_non_boolean_metrics
+    assert_raises(ArgumentError) { @config.health_check(port: 9001, metrics: 'yes') }
+  end
+
+  def test_health_check_rejects_a_bad_min_ready
+    [0, -1, 1.5, '2'].each do |bad|
+      assert_raises(ArgumentError, bad.inspect) { @config.health_check(port: 9001, min_ready: bad) }
+    end
+  end
+
+  # --- R10: ActiveRecord pool vs concurrency ------------------------------
+
+  FakeRecord = Data.define(:size) do
+    def connection_pool = self
+  end
+
+  def test_warns_when_the_db_pool_is_smaller_than_concurrency
+    log = StringIO.new
+    @config.logger = ::Logger.new(log)
+    @config.concurrency = 10
+
+    @config.send(:warn_on_small_db_pool, FakeRecord.new(5))
+
+    assert_includes log.string, 'WARN'
+    assert_includes log.string, 'pool size (5) is smaller than'
+    assert_includes log.string, 'concurrency (10)'
+  end
+
+  def test_counts_every_capsule_against_the_pool
+    log = StringIO.new
+    @config.logger = ::Logger.new(log)
+    @config.concurrency = 5
+    @config.capsule('bulk') { |c| c.concurrency = 5 }
+
+    @config.send(:warn_on_small_db_pool, FakeRecord.new(5))
+
+    assert_includes log.string, 'concurrency (10)'
+  end
+
+  def test_silent_when_the_db_pool_is_large_enough
+    log = StringIO.new
+    @config.logger = ::Logger.new(log)
+    @config.concurrency = 5
+
+    @config.send(:warn_on_small_db_pool, FakeRecord.new(5))
+
+    assert_empty log.string
+  end
+
+  def test_silent_without_active_record_or_when_the_pool_cannot_be_read
+    log = StringIO.new
+    @config.logger = ::Logger.new(log)
+    broken = Object.new
+    broken.define_singleton_method(:connection_pool) { raise 'no database' }
+
+    @config.send(:warn_on_small_db_pool, nil)
+    @config.send(:warn_on_small_db_pool, broken)
+
+    assert_empty log.string
+  end
+
+  def test_freeze_runs_the_pool_check
+    called = false
+    @config.define_singleton_method(:warn_on_small_db_pool) { |*| called = true }
+
+    @config.freeze!
+
+    assert called
+  end
+
+  # --- redact_args / swarm_heartbeat_timeout -------------------------------
+
+  def test_redact_args_accepts_a_callable_or_nil
+    hook = ->(_job) { [] }
+    @config.redact_args = hook
+
+    assert_same hook, @config[:redact_args]
+    assert_same hook, @config.redact_args
+    @config.redact_args = nil
+
+    assert_nil @config[:redact_args]
+  end
+
+  def test_redact_args_rejects_a_non_callable
+    assert_raises(ArgumentError) { @config.redact_args = 'filter' }
+  end
+
+  def test_swarm_heartbeat_timeout_accepts_off_and_numbers_at_the_floor
+    [false, 0, 20, 20.0, 90].each do |ok|
+      @config.swarm_heartbeat_timeout = ok
+
+      assert_equal ok, @config[:swarm_heartbeat_timeout]
+    end
+  end
+
+  def test_swarm_heartbeat_timeout_rejects_values_below_the_floor_or_not_numbers
+    [19, 19.9, -5, true, nil, '30'].each do |bad|
+      assert_raises(ArgumentError, bad.inspect) { @config.swarm_heartbeat_timeout = bad }
+    end
+  end
+
+  def test_fallback_error_log_redacts_job_args_when_a_hook_is_set
+    log = StringIO.new
+    @config.logger = ::Logger.new(log)
+    @config.error_handlers.clear
+    @config.redact_args = ->(job) { [job['args'].first, '[FILTERED]'] }
+    job = { 'class' => 'X', 'args' => %w[id-1 secret-token] }
+
+    @config.handle_exception(RuntimeError.new('boom'), { job: job })
+
+    refute_includes log.string, 'secret-token'
+    assert_includes log.string, '[FILTERED]'
+    assert_equal %w[id-1 secret-token], job['args'], 'the real job must not be touched'
+  end
+
+  def test_fallback_error_log_is_unchanged_without_a_hook
+    log = StringIO.new
+    @config.logger = ::Logger.new(log)
+    @config.error_handlers.clear
+
+    @config.handle_exception(RuntimeError.new('boom'), { job: { 'args' => ['visible'] } })
+
+    assert_includes log.string, 'visible'
+  end
+
+  def test_default_error_handler_tags_the_context_with_redacted_args
+    seen = nil
+    @config.redact_args = ->(_job) { ['[FILTERED]'] }
+    @config.logger = ::Logger.new(IO::NULL)
+    @config.logger.define_singleton_method(:info) { |*| seen = Wurk::Context.current[:job]['args'] }
+
+    @config.handle_exception(RuntimeError.new('boom'), { job: { 'args' => ['real'] } })
+
+    assert_equal ['[FILTERED]'], seen
+  end
+
+  def test_error_handlers_still_receive_the_real_args
+    seen = nil
+    @config.redact_args = ->(_job) { ['[FILTERED]'] }
+    @config.error_handlers << ->(_ex, ctx, _cfg) { seen = ctx[:job]['args'] }
+
+    @config.handle_exception(RuntimeError.new('boom'), { job: { 'args' => ['real'] } })
+
+    assert_equal ['real'], seen
   end
 
   def test_health_check_rejects_port_above_range
@@ -864,7 +1016,7 @@ class ConfigurationTest < Wurk::Test::UnitCase
 
     slot = @config.topology.slots.first
 
-    assert_equal Etc.nprocessors, @config.topology.total_processes
+    assert_equal Wurk::CpuCount.detect.count, @config.topology.total_processes
     assert_equal %w[critical default], slot.queues
     assert_equal 7, slot.concurrency
   end
@@ -878,7 +1030,7 @@ class ConfigurationTest < Wurk::Test::UnitCase
   def test_topology_count_fractional_sidekiq_count_multiplies_cpu
     ENV['SIDEKIQ_COUNT'] = '0.5'
 
-    assert_equal [(0.5 * Etc.nprocessors).round, 1].max, @config.topology.total_processes
+    assert_equal [(0.5 * Wurk::CpuCount.detect.count).round, 1].max, @config.topology.total_processes
   end
 
   def test_topology_count_wurk_count_takes_precedence_over_sidekiq_count
@@ -891,7 +1043,48 @@ class ConfigurationTest < Wurk::Test::UnitCase
   def test_topology_count_invalid_value_falls_back_to_cpu
     ENV['SIDEKIQ_COUNT'] = 'not-a-number'
 
-    assert_equal Etc.nprocessors, @config.topology.total_processes
+    assert_equal Wurk::CpuCount.detect.count, @config.topology.total_processes
+  end
+
+  # R9: an operator reading the boot log can tell why the swarm is the size it is.
+  def test_default_child_count_logs_the_count_and_its_source
+    log = StringIO.new
+    @config.logger = ::Logger.new(log)
+    ENV['WURK_COUNT'] = '3'
+
+    @config.topology
+
+    assert_includes log.string, 'forking 3 children (WURK_COUNT=3)'
+  end
+
+  def test_default_child_count_logs_the_cpu_source_without_an_env
+    log = StringIO.new
+    @config.logger = ::Logger.new(log)
+    cpus = Wurk::CpuCount.detect
+
+    @config.topology
+
+    assert_match(/forking #{cpus.count} child(ren)? \(#{Regexp.escape(cpus.source)}\)/, log.string)
+  end
+
+  def test_fractional_count_logs_the_multiplier_and_cpu_source
+    log = StringIO.new
+    @config.logger = ::Logger.new(log)
+    ENV['SIDEKIQ_COUNT'] = '0.5'
+
+    @config.topology
+
+    assert_includes log.string, "(SIDEKIQ_COUNT=0.5 x #{Wurk::CpuCount.detect.count} CPUs from "
+  end
+
+  def test_unparseable_count_logs_why_it_was_ignored
+    log = StringIO.new
+    @config.logger = ::Logger.new(log)
+    ENV['SIDEKIQ_COUNT'] = 'lots'
+
+    @config.topology
+
+    assert_includes log.string, 'SIDEKIQ_COUNT="lots" is not a number'
   end
 
   def test_topology_count_is_floored_at_one

@@ -46,7 +46,7 @@ class FetcherReliableTest < Wurk::Test::UnitCase
 
   def teardown
     @pool.with do |conn|
-      conn.call('DEL', @public_queue, private_queue)
+      conn.call('DEL', @public_queue, private_queue, *@many_queue_keys)
     end
   ensure
     super
@@ -377,6 +377,150 @@ class FetcherReliableTest < Wurk::Test::UnitCase
     @fetcher.flush_pending_acks
 
     refute_includes lrange(private_queue), held, 'a flush drains every thread'
+  end
+
+  # --- many queues: one round trip per pass (R8) ----------------------
+
+  # A sparse capsule used to pay one LMOVE round trip per queue before it
+  # reached a job on its last queue — 100 queues, 100 trips. Now the first
+  # queue's LMOVE plus one script call over the other 99.
+  def test_a_job_on_the_last_of_a_hundred_queues_costs_two_round_trips
+    fetcher, queues = many_queue_fetcher(100)
+    payload = push_to(queues.last, 'on-q100')
+    fetcher.queues_cmd
+    spy = install_command_spy
+
+    uow = fetcher.retrieve_work
+
+    assert_equal payload, uow.job
+    assert_equal queues.last, uow.queue
+    assert_equal queues.last.delete_prefix(Wurk::Keys::QUEUE_PREFIX), uow.queue_name
+    assert_equal 2, spy.trips
+    assert_equal [payload], lrange(Wurk::Fetcher::Reliable.private_queue_name(queues.last))
+  end
+
+  def test_strict_order_takes_the_earliest_non_empty_queue
+    fetcher, queues = many_queue_fetcher(10)
+    push_to(queues[7], 'later')
+    early = push_to(queues[2], 'earlier')
+
+    assert_equal early, fetcher.retrieve_work.job
+  end
+
+  def test_a_paused_queue_is_skipped_even_when_it_is_first
+    fetcher, queues = many_queue_fetcher(5)
+    push_to(queues[0], 'paused-job')
+    open_job = push_to(queues[3], 'open-job')
+    Wurk::Queue.new(queues[0].delete_prefix(Wurk::Keys::QUEUE_PREFIX)).pause!
+
+    assert_equal open_job, fetcher.retrieve_work.job
+    assert_equal 1, llen(queues[0])
+  ensure
+    @pool.with { |c| c.call('SREM', Wurk::Keys::PAUSED_SET, queues[0].delete_prefix(Wurk::Keys::QUEUE_PREFIX)) }
+  end
+
+  # Weighted mode hands the script a shuffled list; whichever queue it starts
+  # on, the job still comes out of the queue it was pushed to, tagged with it.
+  def test_weighted_mode_claims_from_whichever_queue_holds_the_job
+    fetcher, queues = many_queue_fetcher(20, mode: :weighted)
+    payloads = queues.first(5).map { |q| push_to(q, "w-#{q}") }
+
+    claimed = Array.new(5) { fetcher.retrieve_work }
+
+    assert_equal payloads.sort, claimed.map(&:job).sort
+    claimed.each { |uow| assert_equal uow.job, "w-#{uow.queue}" }
+  end
+
+  # The busy-first-queue steady state is untouched: one pipelined trip, the
+  # held ACK in front of the LMOVE, no script.
+  def test_a_busy_first_queue_costs_one_trip_with_the_held_ack
+    fetcher, queues = many_queue_fetcher(10)
+    push_to(queues[0], 'first')
+    second = push_to(queues[0], 'second')
+    done = fetcher.retrieve_work
+    done.acknowledge
+    spy = install_command_spy
+
+    assert_equal second, fetcher.retrieve_work.job
+    assert_equal 1, spy.trips
+    assert_equal [second], lrange(done.private_queue), 'the ACK must have been sent in the same pipeline'
+  end
+
+  def test_the_held_ack_is_sent_with_the_first_queue_not_the_script
+    fetcher, queues = many_queue_fetcher(3)
+    push_to(queues[1], 'first')
+    second = push_to(queues[2], 'second')
+    done = fetcher.retrieve_work
+    done.acknowledge
+    spy = install_command_spy
+
+    assert_equal second, fetcher.retrieve_work.job
+    assert_equal 2, spy.trips
+    assert_equal 0, llen(done.private_queue)
+  end
+
+  def test_two_queues_fall_through_to_a_second_lmove
+    fetcher, queues = many_queue_fetcher(2)
+    payload = push_to(queues[1], 'second-queue')
+
+    uow = fetcher.retrieve_work
+
+    assert_equal payload, uow.job
+    assert_equal queues[1], uow.queue
+  end
+
+  # A miss on queue 1 handed to the script: the reply index is relative to the
+  # queues it was given, and must map back onto the right public queue.
+  def test_the_script_reply_maps_back_to_the_queue_it_claimed_from
+    fetcher, queues = many_queue_fetcher(5)
+    payload = push_to(queues[1], 'second-of-five')
+
+    uow = fetcher.retrieve_work
+
+    assert_equal queues[1], uow.queue
+    assert_equal [payload], lrange(Wurk::Fetcher::Reliable.private_queue_name(queues[1]))
+  end
+
+  def test_a_failed_many_queue_claim_hands_the_held_ack_back
+    fetcher, queues = many_queue_fetcher(3)
+    push_to(queues[1], 'blip')
+    done = fetcher.retrieve_work
+    done.acknowledge
+    fetcher.queues_cmd
+
+    with_dead_redis { assert_raises(DeadRedis) { fetcher.retrieve_work } }
+    fetcher.flush_pending_acks
+
+    assert_equal 0, llen(done.private_queue)
+  end
+
+  # Nothing anywhere: the walk falls through to the BLMOVE on the first queue.
+  def test_an_empty_many_queue_pass_blocks_on_the_first_queue
+    fetcher, queues = many_queue_fetcher(3)
+    box = captured_blmove_args
+
+    assert_nil fetcher.retrieve_work
+    assert_equal queues.first, box[2]
+  end
+
+  # The strict steady state reuses one KEYS array; a fork rebuilds it so a child
+  # never claims into a private list stamped with its parent's pid.
+  def test_claim_keys_are_reused_and_rebuilt_when_the_pid_moves
+    fetcher, = many_queue_fetcher(3)
+    queues = fetcher.queues_cmd
+    keys = fetcher.send(:claim_keys, queues)
+
+    assert_same keys, fetcher.send(:claim_keys, queues)
+
+    skip 'needs fork' unless Process.respond_to?(:fork)
+
+    child = fork do
+      rebuilt = fetcher.send(:claim_keys, queues)
+      exit!(!rebuilt.equal?(keys) && rebuilt[1].include?("|#{Process.pid}|") ? 0 : 1)
+    end
+    _, status = Process.wait2(child)
+
+    assert_predicate status, :success?, 'the child must rebuild KEYS around its own pid'
   end
 
   # --- requeue (single) ----------------------------------------------
@@ -733,6 +877,25 @@ class FetcherReliableTest < Wurk::Test::UnitCase
 
   def private_queue
     Wurk::Fetcher::Reliable.private_queue_name(@public_queue)
+  end
+
+  # A capsule serving `count` queues of its own; every key it can touch is
+  # registered for teardown.
+  def many_queue_fetcher(count, mode: :strict)
+    names = Array.new(count) { |i| "#{@queue_name}-m#{i}" }
+    capsule = Wurk::Capsule.new("many-#{count}", @config)
+    capsule.queues = mode == :strict ? names : names.each_with_index.map { |n, i| "#{n},#{(i % 3) + 1}" }
+    queues = names.map { |n| "#{Wurk::Keys::QUEUE_PREFIX}#{n}" }
+    @many_queue_keys = (@many_queue_keys || []) + queues.flat_map do |q|
+      [q, Wurk::Fetcher::Reliable.private_queue_name(q)]
+    end
+    @capsule = capsule
+    [Wurk::Fetcher::Reliable.new(capsule), queues]
+  end
+
+  def push_to(queue, payload)
+    @pool.with { |c| c.call('LPUSH', queue, payload) }
+    payload
   end
 
   def enqueue(payload)

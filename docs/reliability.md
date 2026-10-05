@@ -130,10 +130,13 @@ widened window is a reclaim, not a drop.
 
 ### Fetch order and polling
 
-Wurk walks the served queues in order with non-blocking `LMOVE`, then falls back
-to a blocking `BLMOVE` on the first queue so an idle worker doesn't spin Redis.
-`BLMOVE` has no multi-key form, so single-queue blocking is the best Redis
-offers.
+Each fetch tries a non-blocking `LMOVE` on the first queue (in strict or
+weighted order, skipping paused queues); on a miss, one `fetch_first` Lua call
+claims from the first non-empty queue among the rest — two round trips however
+many queues a capsule serves — and only then blocks with `BLMOVE` on the first
+queue so an idle worker doesn't spin Redis. `BLMOVE` has no multi-key form, so a
+job arriving on a later queue while every thread is parked waits up to one poll
+interval.
 
 ```ruby
 # config/initializers/wurk.rb
@@ -182,10 +185,11 @@ between the snapshot and the move: LREM removes 0 → RPUSH is skipped → a
 finished job is never resurrected. `RPUSH` (tail) is deliberate — `LMOVE` pops
 the tail, so the reclaimed job is fetched *next*, ahead of fresh enqueues.
 
-> **Divergence from Sidekiq Pro.** Pro's `super_fetch` leaves in-flight jobs in
-> the private list until the process boots again. Wurk moves them back to the
-> public queue immediately, so a rolling deploy recovers the work without
-> waiting for a restart.
+> **Divergence from Sidekiq Pro.** Pro 7.3's `super_fetch` also requeues at
+> shutdown, but it drains the whole private list onto the *back* of the queue.
+> Wurk moves only the jobs still parked, onto the *front*, so work interrupted
+> by a deploy runs next instead of waiting behind the backlog a second time
+> ([parity divergences](idea/parity-divergences.md#bulk_requeue-moves-still-parked-jobs-to-the-queue-head-pro-moves-them-to-the-tail)).
 
 ---
 
@@ -598,7 +602,7 @@ changes a key, a field, or a guarantee class, and none is behind a flag:
 |---|---|---|---|
 | [ACK timing](#the-ack-rides-the-next-fetch) | `LREM` right after success or retry handling | Same ordering, pipelined with the next fetch; flushed before every idle, quiet, stop, or shutdown | A hard kill can re-run an already-finished job for longer. At-least-once either way |
 | [Paused-queue visibility](#fetch-order-and-polling) | `SMEMBERS paused` per fetch pass | Cached 2s per fetcher; in-process pause is immediate | Cross-process pause lands within 2s. Unchanged fleet-wide worst case |
-| [Shutdown requeue](#graceful-shutdown) | In-flight jobs stay in the private list until the process boots again | Moved back to the public queue immediately | None — a rolling deploy recovers the work without waiting for a restart |
+| [Shutdown requeue](#graceful-shutdown) | Whole private list drained to the back of the queue at shutdown | Still-parked jobs moved to the front of the queue at shutdown | None — interrupted work runs next instead of queueing behind the backlog again |
 
 The full argument for each, the conditions they were accepted under, and what
 would reverse them: [parity divergences](idea/parity-divergences.md) and
@@ -641,7 +645,9 @@ Anything whose `<host>|<pid>` doesn't correspond to a live process should
 disappear within one reaper interval (60s same-host) or one heartbeat TTL
 (~60s cross-host). If it doesn't, check that reaper threads are actually
 running and that no process is holding the `super_fetch:reaper` lock without
-sweeping.
+sweeping. The step-by-step version, including how to move a list back by hand
+safely, is the [orphaned private lists](runbook.md#orphaned-private-lists)
+runbook entry.
 
 ### Idempotency is yours
 
@@ -666,8 +672,12 @@ There is no such setting, and losing jobs is worse.
 
 ## Related
 
+See also the [incident runbook](runbook.md) — symptom → check → fix for the
+failure modes this page describes, from a stuck queue to a rollback to Sidekiq.
+
 - [Deployment](deployment.md) — signals, rolling restarts, and what a graceful
   drain actually waits for.
 - [Running Wurk](running.md) — process topology, queues, and concurrency.
 - [Migrating from Sidekiq](migrate-from-sidekiq.md) — what changes on the
-  one-line gem swap.
+  one-line gem swap, and the
+  [production cutover](migrate-from-sidekiq.md#9-production-cutover) procedure.

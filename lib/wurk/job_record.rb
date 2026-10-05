@@ -2,6 +2,7 @@
 
 require 'base64'
 require 'zlib'
+require_relative 'redact'
 
 module Wurk
   # One job payload viewed from the data API (Queue#each / JobSet#each).
@@ -125,8 +126,16 @@ module Wurk
     # redaction keys off the envelope shape, so it fires whether or not the
     # stored hash carried the `encrypt` flag. Cleartext preceding args stay
     # visible for triage. Display-only — the stored payload is untouched.
+    #
+    # A host `redact_args` hook (Wurk::Redact) replaces all of that: it sees
+    # the whole job and decides what is shown. This is the single choke point
+    # for every surface that renders a job — dashboard JSON, search, the /v1
+    # machine API, Sidekiq::Web-style views.
     def display_args
       return @display_args if defined?(@display_args)
+
+      hook = Wurk::Redact.hook
+      return @display_args = Wurk::Redact.args(item, hook) if hook
 
       base = active_job_wrapper? ? unwrap_args : args
       @display_args = Wurk::Encryption.redact_args('args' => base, 'encrypt' => item['encrypt'])

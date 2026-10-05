@@ -245,6 +245,7 @@ third-party dashboards built for Sidekiq Pro work unchanged).
 | `sidekiq.jobs.poison` | counter | `class:`, `queue:` | poison-pill detector kills a repeatedly-crashing job |
 | `sidekiq.jobs.recovered.fetch` | counter | `class:`, `queue:` | a job is recovered from a dead process's private list |
 | `sidekiq.jobs.recovered.push` | counter | — | the buffered client replays a push after a Redis outage |
+| `sidekiq.jobs.dropped.push` | counter | — | the buffered client drops a job because the outage buffer overflowed (`:drop_oldest`); one ERROR log per drop burst |
 | `sidekiq.batch.created` | counter | — | a batch's first flush |
 | `sidekiq.batch.duration_dist` | distribution | — | batch success — seconds from creation |
 | `sidekiq.busy` | gauge | `process:<identity>` | every heartbeat — this process's in-flight jobs |
@@ -464,8 +465,23 @@ cluster writes nothing.
 
 ## 7. Exporting to an external system
 
-Wurk ships **no** Prometheus exporter, no OpenTelemetry bridge, and no
-push-gateway integration. There are exactly two supported export paths:
+Three supported export paths:
+
+**Prometheus (pull, built in).** Enable the health listener
+(`config.health_check(port: 7433)`) and scrape `GET /metrics` (text format
+0.0.4); pass `metrics: false` to `health_check` to turn it off. Families:
+`wurk_build_info`, `wurk_redis_up`, `wurk_processed_total`, `wurk_failed_total`,
+`wurk_queue_size{queue}`, `wurk_queue_latency_seconds{queue}`,
+`wurk_scheduled_size`, `wurk_retry_size`, `wurk_dead_size`, `wurk_processes`,
+`wurk_busy`, `wurk_concurrency`, `wurk_swarm_children_expected`,
+`wurk_swarm_children_fresh`, and per process (`{pid}`) `wurk_process_busy`,
+`wurk_process_concurrency`, `wurk_process_rss_bytes`,
+`wurk_process_heartbeat_age_seconds`, `wurk_process_quiet`. Cluster families
+come from shared Redis and are identical on every pod — aggregate with `max`,
+not `sum`; `wurk_process_*` and `wurk_swarm_children_*` describe the scraped
+pod's own swarm. Values are cached for 1s and one scrape costs one Redis
+checkout; `wurk_redis_up 0` means the last refresh could not read Redis. No new
+Redis keys.
 
 **Statsd / DogStatsD (push).** Set `config.dogstatsd` to anything responding to
 `increment` / `gauge` / `distribution` and the metrics in §3 flow to it
@@ -475,7 +491,7 @@ Wurk's side is the one-line client assignment. Use `config.retain_history` on
 top of it for the cluster-wide gauges in §4, and a custom collector block for
 anything else you want sampled on a fixed interval.
 
-**Query API (pull).** For a Prometheus-style scrape, expose your own endpoint
+**Query API (pull, custom).** For per-class series the built-in exporter doesn't carry, expose your own endpoint
 in your app and build the response from `Wurk::Metrics::Query` and
 `Wurk::Stats`:
 

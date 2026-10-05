@@ -5,6 +5,7 @@ require_relative '../launcher'
 require_relative '../client/buffered'
 require_relative '../fetcher/reliable'
 require_relative '../lua'
+require_relative '../health'
 require_relative 'orphan_guard'
 
 module Wurk
@@ -37,10 +38,14 @@ module Wurk
       # constructor flag, not a post-fork TSTP: a signal landing before this
       # child resets its traps hits the parent's inherited (inert) handler and
       # is dropped — the supervisor's TSTP re-relay is only the backstop.
-      def initialize(config, slot, index, parent_pid: ::Process.ppid, start_quiet: false)
+      # `fleet_size:` — slots in the swarm's topology, published to
+      # Health.fleet_size so this child's health listener (if it wins the
+      # port) can judge /ready on the whole swarm, not just itself.
+      def initialize(config, slot, index, parent_pid: ::Process.ppid, start_quiet: false, fleet_size: nil)
         @config = config
         @slot = slot
         @index = index
+        @fleet_size = fleet_size
         @parent_pid = parent_pid
         @start_quiet = start_quiet
         @signal_read = nil
@@ -52,6 +57,7 @@ module Wurk
         reset_inherited_signals
         reconnect_after_fork
         Wurk.server = true
+        Wurk::Health.fleet_size = @fleet_size
         # :fork runs in each child after our internal AR/Redis reconnect and
         # before fetching, so apps can reopen sockets / restart threads /
         # reconnect non-fork-safe libs (Ent §7.4). It never fires in the parent

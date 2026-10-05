@@ -1,12 +1,12 @@
 # frozen_string_literal: true
 
-require 'etc'
 require 'logger'
 require_relative 'middleware/chain'
 require_relative 'capsule'
 require_relative 'pool_checkout'
 require_relative 'context'
 require_relative 'topology'
+require_relative 'cpu_count'
 require_relative 'redis_options'
 require_relative 'keys'
 
@@ -121,6 +121,7 @@ module Wurk
     # Spec: docs/target/sidekiq-free.md §4.3.
     ERROR_HANDLER = lambda do |ex, ctx, cfg = Wurk.configuration|
       safe_ctx = ctx || {}
+      safe_ctx = cfg.redacted_context(safe_ctx) if cfg.respond_to?(:redacted_context)
       Wurk::Context.with(safe_ctx) do
         dev = $DEBUG || ENV['WURK_DEBUG'] || cfg.logger.debug?
         msg = dev ? ex.full_message : ex.detailed_message
@@ -358,6 +359,40 @@ module Wurk
 
     def fetch_poll_interval
       @options[:fetch_poll_interval]
+    end
+
+    # Display-side argument redaction (Wurk::Redact): a callable taking a deep
+    # copy of the job Hash and returning the args to show in logs, the
+    # dashboard and the fallback error log. nil (default) shows args as-is.
+    def redact_args=(hook)
+      raise ArgumentError, 'redact_args must be nil or respond to #call' unless hook.nil? || hook.respond_to?(:call)
+
+      @options[:redact_args] = hook
+    end
+
+    def redact_args
+      @options[:redact_args]
+    end
+
+    # Seconds a swarm child may go without a heartbeat before the parent
+    # replaces it (Swarm::Liveness). false or 0 turns the check off. The floor
+    # sits above the heartbeat's own cadence so a child that is merely busy is
+    # never read as hung.
+    SWARM_HEARTBEAT_TIMEOUT_FLOOR = 20
+
+    def swarm_heartbeat_timeout=(seconds)
+      unless seconds == false || seconds == 0 || # rubocop:disable Style/NumericPredicate
+             ((seconds.is_a?(Integer) || seconds.is_a?(Float)) && seconds >= SWARM_HEARTBEAT_TIMEOUT_FLOOR)
+        raise ArgumentError,
+              "swarm_heartbeat_timeout must be false, 0, or a number >= #{SWARM_HEARTBEAT_TIMEOUT_FLOOR} " \
+              "(got #{seconds.inspect})"
+      end
+
+      @options[:swarm_heartbeat_timeout] = seconds
+    end
+
+    def swarm_heartbeat_timeout
+      @options[:swarm_heartbeat_timeout]
     end
 
     # --- Reliability (Sidekiq Pro drop-in toggles) -----------------------
@@ -664,7 +699,11 @@ module Wurk
     #
     # Off by default — call this in a `configure_server` block to enable.
     # Spec: docs/target/sidekiq-ent.md §7.1.2.
-    def health_check(port:, bind: '0.0.0.0', ready_window: 30)
+    #
+    # `metrics:` serves the Prometheus scrape on the same listener (on by
+    # default). `min_ready:` — children with a fresh heartbeat required for
+    # /ready inside a swarm; nil means half the swarm, rounded up.
+    def health_check(port:, bind: '0.0.0.0', ready_window: 30, metrics: true, min_ready: nil)
       guard_frozen!
       p = Integer(port)
       rw = Integer(ready_window)
@@ -674,7 +713,9 @@ module Wurk
       b = bind.to_s
       raise ArgumentError, 'bind must be a non-empty string' if b.empty?
 
-      @options[:health_check_options] = { port: p, bind: b, ready_window: rw }
+      @options[:health_check_options] = { port: p, bind: b, ready_window: rw,
+                                          metrics: health_check_metrics(metrics),
+                                          min_ready: health_check_min_ready(min_ready) }
     end
 
     # --- Lifecycle hooks --------------------------------------------------
@@ -698,7 +739,7 @@ module Wurk
 
     def handle_exception(ex, ctx = {})
       if error_handlers.empty?
-        logger.error("#{ctx} #{ex.class}: #{ex.message}")
+        logger.error("#{redacted_context(ctx)} #{ex.class}: #{ex.message}")
       else
         error_handlers.each do |handler|
           handler.call(ex, ctx, self)
@@ -706,6 +747,20 @@ module Wurk
           logger.error("error_handler raised: #{e.class}: #{e.message}")
         end
       end
+    end
+
+    # The error context with the job's args passed through the `redact_args`
+    # hook, for the two reporters that print or tag the whole context: the
+    # fallback log line and the default ERROR_HANDLER (whose Wurk::Context a
+    # JSON log formatter emits). Host-registered error handlers still receive
+    # the real ctx — they are the host's own code.
+    def redacted_context(ctx)
+      hook = @options[:redact_args]
+      job = ctx.is_a?(Hash) ? ctx[:job] : nil
+      return ctx unless hook && job.is_a?(Hash) && job.key?('args')
+
+      require_relative 'redact'
+      ctx.merge(job: job.merge('args' => Wurk::Redact.args(job, hook)))
     end
 
     # --- Configure blocks (Sidekiq.configure_server / _client) -----------
@@ -791,6 +846,7 @@ module Wurk
       prepare_for_fork!
       @capsules.each_value(&:freeze)
       @capsules.freeze
+      warn_on_small_db_pool
       self
     end
 
@@ -813,20 +869,78 @@ module Wurk
     end
 
     # Number of swarm children when the host hasn't declared a topology
-    # (Sidekiq Ent §7.2). Defaults to the CPU count. A whole number is an
-    # absolute count; a fractional value is a CPU multiplier (e.g. `0.5` → half
-    # the cores, rounded), supported since Sidekiq 8.0.2. WURK_COUNT is the
-    # native name, SIDEKIQ_COUNT the drop-in alias. Unparseable input falls back
-    # to the CPU count; the result is floored at 1 so the swarm always forks.
+    # (Sidekiq Ent §7.2). Defaults to the usable CPU count — the cgroup quota
+    # when one is tighter than the host's cores (Wurk::CpuCount). A whole number
+    # is an absolute count; a fractional value is a CPU multiplier (e.g. `0.5`
+    # → half the usable CPUs, rounded), supported since Sidekiq 8.0.2.
+    # WURK_COUNT is the native name, SIDEKIQ_COUNT the drop-in alias.
+    # Unparseable input falls back to the CPU count; the result is floored at 1
+    # so the swarm always forks. Logged once, with where the number came from:
+    # a pod that forks the wrong number of children is otherwise only visible
+    # as throttling or memory pressure.
     def default_child_count
-      raw = ENV['WURK_COUNT'] || ENV.fetch('SIDEKIQ_COUNT', nil)
-      return Etc.nprocessors if raw.nil? || raw.strip.empty?
+      count, source = child_count_and_source
+      logger.info { "Wurk swarm: forking #{count} #{count == 1 ? 'child' : 'children'} (#{source})" }
+      count
+    end
 
+    def child_count_and_source
+      name = ENV['WURK_COUNT'] ? 'WURK_COUNT' : 'SIDEKIQ_COUNT'
+      raw = ENV.fetch(name, nil)
+      cpus = Wurk::CpuCount.detect
+      return [cpus.count, cpus.source] if raw.nil? || raw.strip.empty?
+
+      env_child_count(name, raw, cpus)
+    end
+
+    def env_child_count(name, raw, cpus)
       value = Float(raw)
-      count = (value % 1).zero? ? value.to_i : (value * Etc.nprocessors).round
-      [count, 1].max
+      return [[value.to_i, 1].max, "#{name}=#{raw}"] if (value % 1).zero?
+
+      [[(value * cpus.count).round, 1].max, "#{name}=#{raw} x #{cpus.count} CPUs from #{cpus.source}"]
     rescue ArgumentError, TypeError
-      Etc.nprocessors
+      [cpus.count, "#{cpus.source}; #{name}=#{raw.inspect} is not a number"]
+    end
+
+    def health_check_metrics(value)
+      raise ArgumentError, "metrics must be true or false (got #{value.inspect})" unless [true, false].include?(value)
+
+      value
+    end
+
+    def health_check_min_ready(value)
+      return nil if value.nil?
+      unless value.is_a?(Integer) && value.positive?
+        raise ArgumentError, "min_ready must be nil or an Integer >= 1 (got #{value.inspect})"
+      end
+
+      value
+    end
+
+    # Runs where every worker process settles its capsules — a swarm child
+    # after its slot is applied, `wurk`, embedded — so the concurrency compared
+    # is the one that process will actually run. Every job thread that touches
+    # the database checks out its own connection; a pool smaller than the
+    # thread count turns into ActiveRecord::ConnectionTimeoutError under load,
+    # long after boot. A warning rather than a raise: a job set that never
+    # touches the database is a legitimate reason to run a small pool.
+    def warn_on_small_db_pool(record_class = (::ActiveRecord::Base if defined?(::ActiveRecord::Base)))
+      return unless record_class
+
+      size = record_class.connection_pool.size
+      threads = total_concurrency
+      return if size >= threads
+
+      logger.warn do
+        "ActiveRecord connection pool size (#{size}) is smaller than this process's job concurrency " \
+          "(#{threads}); jobs that use the database will wait for connections and may raise " \
+          'ActiveRecord::ConnectionTimeoutError. Raise `pool:` in config/database.yml to at least ' \
+          "#{threads} (plus any other threads that use the database)."
+      end
+    rescue StandardError
+      # No database configured, or an adapter that cannot report its pool:
+      # nothing to compare.
+      nil
     end
 
     # SIDEKIQ_MAXMEM_MB is the drop-in name; WURK_MAXMEM_MB the native alias.

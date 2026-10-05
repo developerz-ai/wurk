@@ -201,6 +201,64 @@ class JobLoggerTest < Wurk::Test::UnitCase
 
   # --- sidekiq alias --------------------------------------------------
 
+  # --- redact_args ------------------------------------------------------
+
+  def test_logged_args_go_through_redact_args
+    @config[:logged_job_attributes] = %w[args]
+    @config[:redact_args] = lambda { |job|
+      job['args'][1]['password'] = 'mutated' # must not reach the real job
+      [job['args'].first, '[FILTERED]']
+    }
+    job = { 'jid' => 'a', 'class' => 'J', 'args' => ['u-1', { 'password' => 's3cret' }] }
+    seen = nil
+    Wurk::JobLogger.new(@config).prepare(job) { seen = Wurk::Context.current.dup }
+
+    assert_equal ['u-1', '[FILTERED]'], seen[:args]
+    assert_equal 's3cret', job['args'][1]['password'], 'the payload perform receives is untouched'
+  end
+
+  def test_logged_args_unchanged_without_a_hook
+    @config[:logged_job_attributes] = %w[args]
+    seen = nil
+    Wurk::JobLogger.new(@config).prepare('jid' => 'a', 'class' => 'J', 'args' => [1, 2]) do
+      seen = Wurk::Context.current.dup
+    end
+
+    assert_equal [1, 2], seen[:args]
+  end
+
+  def test_redact_args_ignored_when_args_are_not_logged
+    @config[:redact_args] = ->(_job) { raise 'never called' }
+    seen = nil
+    Wurk::JobLogger.new(@config).prepare('jid' => 'a', 'class' => 'J', 'args' => [1]) do
+      seen = Wurk::Context.current.dup
+    end
+
+    refute seen.key?(:args)
+  end
+
+  def test_raising_redact_hook_fails_closed
+    @config[:logged_job_attributes] = %w[args]
+    @config[:redact_args] = ->(_job) { raise 'boom' }
+    seen = nil
+    Wurk::JobLogger.new(@config).prepare('jid' => 'a', 'class' => 'J', 'args' => ['s3cret']) do
+      seen = Wurk::Context.current.dup
+    end
+
+    assert_equal Wurk::Redact::FAILED, seen[:args]
+  end
+
+  def test_non_array_redact_result_is_wrapped
+    @config[:logged_job_attributes] = %w[args]
+    @config[:redact_args] = ->(_job) { '[ALL FILTERED]' }
+    seen = nil
+    Wurk::JobLogger.new(@config).prepare('jid' => 'a', 'class' => 'J', 'args' => ['x']) do
+      seen = Wurk::Context.current.dup
+    end
+
+    assert_equal ['[ALL FILTERED]'], seen[:args]
+  end
+
   def test_aliased_under_sidekiq_namespace
     assert_same Wurk::JobLogger, Sidekiq::JobLogger
   end

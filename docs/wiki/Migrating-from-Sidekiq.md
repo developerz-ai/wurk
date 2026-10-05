@@ -14,9 +14,9 @@ Then `bundle install && restart`. Your job classes, initializers, and live Redis
 Wurk reads and writes the **same Redis schema** Sidekiq does — same keys, same job JSON, same sorted-set score formats. So:
 
 - Jobs already enqueued under Sidekiq run on Wurk unchanged.
-- A rolling deploy can run Sidekiq and Wurk against the **same Redis** during the cutover, one process at a time.
+- No data migration, but running Sidekiq and Wurk workers on one Redis at the same time is untested: cut over by draining (stop Sidekiq's workers, confirm nothing is in flight, start Wurk). See the production cutover section of docs/migrate-from-sidekiq.md.
 - Every public `Wurk::*` class is exposed under its `Sidekiq::*` name, so `Sidekiq::Worker`, `Sidekiq::Batch`, `Sidekiq::Limiter`, `Sidekiq.configure_server` all resolve.
-- Rollback is reverting the `Gemfile` line. No schema change was made.
+- Rollback is the same drain in reverse, plus confirming Wurk's `queue:*|*` private lists are empty before Sidekiq starts. No schema change was made.
 
 ## The one thing that needs real thought: processes × threads
 

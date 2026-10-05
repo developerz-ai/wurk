@@ -28,6 +28,7 @@ module WurkDocs
       docs/batches.md
       docs/rate-limiting.md
       docs/periodic-jobs.md
+      docs/runbook.md
       docs/unique-jobs.md
       docs/iterable-jobs.md
       docs/reliability.md

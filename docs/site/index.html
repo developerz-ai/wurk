@@ -531,8 +531,8 @@ mount Wurk::Engine =&gt; <span class="add">"/wurk"</span></pre>
       <section id="migrate" class="reveal">
         <h2>Migrating from Sidekiq</h2>
         <p class="section-lede">
-          Wurk reads and writes the same Redis schema, so a rolling deploy can run Sidekiq and Wurk
-          against the same Redis during cutover. Swap the gems, add one line:
+          Wurk reads and writes the same Redis schema, so there is no data migration: drain
+          Sidekiq's workers, then start Wurk's. Swap the gems, add one line:
         </p>
         <div class="codeblock">
 <pre tabindex="0"><span class="del">- gem "sidekiq"</span>

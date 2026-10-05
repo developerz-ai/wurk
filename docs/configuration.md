@@ -247,6 +247,7 @@ is the drop-in alias and is checked second (native wins).
 | `WURK_COUNT` / `SIDEKIQ_COUNT` | `Configuration#default_child_count` | Swarm child processes. Whole number = absolute count; fractional = CPU multiplier (`0.5` → half the cores, rounded). Floored at 1. Unparseable → CPU count. Default `Etc.nprocessors` |
 | `WURK_MAXMEM_MB` / `SIDEKIQ_MAXMEM_MB` | `Configuration#memory_limit_mb` | Parent TERMs + respawns any child whose RSS exceeds this. Unset/unparseable → recycling off |
 | `WURK_DISABLED` | `RailsBoot.skip_boot?` | `=1` skips both server mode and the swarm boot in a Rails host |
+| `APPLY` | `rake wurk:import:cron` (`lib/wurk/rake_tasks.rb`) | `=1` writes the imported sidekiq-cron loops to Redis; anything else is a dry run. Read only by that task |
 | `WURK_EMBED` | `RailsBoot.skip_boot?` | `=1` boots workers in a Rails process that is not a recognised web server (Falcon, Thin, a custom rackup); `rails runner`/`generate`/rake never boot without it |
 | `WURK_LEADER` / `SIDEKIQ_LEADER` | `Leader.opted_out?` | `=false` (case-insensitive) makes this process never campaign for leadership |
 | `WURK_PRELOAD` / `SIDEKIQ_PRELOAD` | `CLI#preload_groups` | Comma-separated Bundler groups `Bundler.require`d in the swarm parent before fork. Default `default`; an explicit empty value disables the preload |
@@ -685,6 +686,14 @@ Wurk already reconnects ActiveRecord and opens a fresh Redis pool in each child
 
 ## Logging
 
+**Argument redaction.** `config.redact_args = ->(job) { [job['args'].first, '[FILTERED]'] }`
+sets the args shown in the job logger (when `args` is in
+`logged_job_attributes`), in error-handler context, and in dashboard / API JSON.
+The hook gets a deep copy of the job — Redis and `perform` are never affected —
+and a hook that raises shows `[REDACTED: redact_args raised]`. For ActiveJob
+jobs `job['args']` is the wrapper hash. Set it outside `configure_server` (or in
+`configure_client` too) so the web process sees it.
+
 The default logger is `Wurk::Logger.new($stdout)` at level `INFO`.
 
 ```ruby
@@ -836,9 +845,20 @@ end
 - `GET /live` → 200 while the process is not stopping.
 - `GET /ready` → 200 only when Redis is reachable **and** a heartbeat fired
   within `ready_window` seconds.
+- Inside a swarm, `/ready` also needs at least `min_ready` local children
+  (default: half the fleet, rounded up) with a heartbeat inside `ready_window`;
+  the 503 body reports `children`, `needed` and `expected`.
+- `GET /metrics` → Prometheus text exposition (see [metrics](metrics.md#7-exporting-to-an-external-system));
+  `metrics: false` makes it a 404.
 - `port` must be `0..65535`, `ready_window` must be `> 0`, `bind` non-empty —
-  all validated at call time.
+  all validated at call time. Full signature:
+  `health_check(port:, bind:, ready_window:, metrics: true, min_ready: nil)`.
 - The listener starts last in the boot sequence and is closed during shutdown.
+
+The swarm parent also replaces a child whose heartbeat has not moved for
+`config.swarm_heartbeat_timeout` seconds (default 60, minimum 20, `false`
+disables): TERM, then KILL after `shutdown_timeout + 5s`, then the normal
+respawn. See [deployment](deployment.md).
 
 ---
 

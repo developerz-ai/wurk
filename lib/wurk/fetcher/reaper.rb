@@ -5,6 +5,8 @@ require_relative '../keys'
 require_relative '../middleware/poison_pill'
 require_relative '../timer_loop'
 require_relative 'private_list_key'
+require_relative 'unparseable_keys'
+require_relative 'orphan_grace'
 
 module Wurk
   class Fetcher
@@ -78,6 +80,13 @@ module Wurk
       LOCK_KEY = 'super_fetch:reaper'
       FULL_LOCK_KEY = 'super_fetch:reaper:full'
       SCAN_COUNT = 100
+
+      # The hourly sweep walks the whole keyspace, where almost nothing
+      # matches: COUNT is the work per SCAN call, so a bigger batch is the
+      # same server work in a tenth of the round trips — a million keys is
+      # 1,000 calls instead of 10,000. Still small enough that one call never
+      # holds Redis for more than a fraction of a millisecond.
+      FULL_SCAN_COUNT = 1000
       THREAD_NAME = 'wurk-reaper'
 
       attr_reader :interval
@@ -86,7 +95,7 @@ module Wurk
                      full_interval: FULL_INTERVAL, full_lock_key: FULL_LOCK_KEY, grace: DEFAULT_GRACE)
         @config = config
         @interval = interval
-        @grace = grace
+        @grace = OrphanGrace.new(config, grace)
         @lock_key = lock_key
         @full_interval = full_interval
         @full_lock_key = full_lock_key
@@ -94,6 +103,7 @@ module Wurk
         @done = false
         @mutex = ::Mutex.new
         @sleeper = ::ConditionVariable.new
+        @unparseable = UnparseableKeys.new(config)
       end
 
       # Spawns the sweep loop. Idempotent. The loop waits one interval before
@@ -197,7 +207,7 @@ module Wurk
           end
           keys.each do |key|
             host, pid, nonce = PrivateListKey.parse_owner(public_q, key)
-            yield key, host, pid, nonce if pid
+            pid ? yield(key, host, pid, nonce) : @unparseable.report(key)
           end
           break if cursor == '0'
         end
@@ -211,11 +221,11 @@ module Wurk
         cursor = '0'
         loop do
           cursor, keys = redis(idempotent: true) do |c|
-            c.call('SCAN', cursor, 'MATCH', "#{Keys::QUEUE_PREFIX}*|*", 'COUNT', SCAN_COUNT)
+            c.call('SCAN', cursor, 'MATCH', "#{Keys::QUEUE_PREFIX}*|*", 'COUNT', FULL_SCAN_COUNT)
           end
           keys.each do |key|
             parsed = PrivateListKey.parse_full(key)
-            yield key, *parsed if parsed
+            parsed ? yield(key, *parsed) : @unparseable.report(key)
           end
           break if cursor == '0'
         end
@@ -253,22 +263,10 @@ module Wurk
       # SCAN. Only reached for lists the snapshot already called orphaned, so
       # its round trips are paid per orphan, never per live list.
       def settled_orphan?(key, host, pid, nonce)
-        return false if recently_touched?(key)
+        return false if @grace.recent?(key)
         return !live_owners.include?(owner_key(host, pid, nil)) unless nonce
 
         redis(idempotent: true) { |c| c.call('HGET', owner_key(host, pid, nonce), 'info') }.nil?
-      end
-
-      # nil IDLETIME is a list that is already gone — nothing to drain. Under an
-      # LFU maxmemory policy Redis does not track idle time and refuses the
-      # command; the liveness re-check then decides alone.
-      def recently_touched?(key)
-        return false unless @grace.positive?
-
-        idle = redis(idempotent: true) { |c| c.call('OBJECT', 'IDLETIME', key) }
-        idle.nil? || idle < @grace
-      rescue RedisClient::CommandError
-        false
       end
 
       def local_pid_alive?(pid)

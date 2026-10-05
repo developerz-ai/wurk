@@ -13,6 +13,10 @@ All notable changes to Wurk are recorded here. Format: [Keep a Changelog](https:
 
 ### Changed
 
+- **Many-queue fetch takes two Redis round trips instead of one per queue** (100 queues: 100 → 2; ~13× faster to reach a job on queue #100); single-queue and busy-first-queue fetch are unchanged.
+- **The default swarm size follows the container's cgroup CPU quota** (v2 `cpu.max`, v1 CFS) capped at the host core count, and is logged at boot.
+- **In a swarm, `/ready` needs half the children (configurable `min_ready`) with fresh heartbeats**, not just the port owner.
+- **Docs no longer promise a mixed Sidekiq + Wurk fleet or an undrained rollback**: drain cutover is the supported path until a mixed fleet is proven.
 - **Limiter `ttl:` values under 24h are raised to 24h** instead of raising `ArgumentError` (Sidekiq Enterprise accepts any ttl; the 24h floor is kept).
 - **Poison-pill threshold matches Sidekiq Pro**: an orphaned job is requeued on its first three recoveries and dead-set on the fourth (was the third).
 - **Encrypted args are masked as `"[encrypted data]"`** in the data API and dashboard, the string Sidekiq's `JobRecord#display_args` uses (was `"<encrypted>"`).
@@ -26,6 +30,12 @@ All notable changes to Wurk are recorded here. Format: [Keep a Changelog](https:
 
 ### Added
 
+- **Prometheus `GET /metrics`** on the health listener (queue size/latency, busy, processed/failed totals, retry/dead/scheduled sizes, process count, per-child RSS, build info); no new Redis keys.
+- **The swarm parent replaces a child whose heartbeat stalls** (`swarm_heartbeat_timeout`, default 60s): TERM, then KILL, then respawn.
+- **`config.redact_args`** — redacts job args in the job logger, error-handler fallback logs, dashboard/API JSON and search (via `JobRecord#display_args`); Redis and `perform` are untouched.
+- **`rake wurk:import:cron`** imports sidekiq-cron schedules as native periodic loops (dry run by default, `APPLY=1` writes; sidekiq-cron keys are never touched; same-named entries in different namespaces stay separate loops, labelled `<namespace>/<name>`).
+- **Redis topology CI** (`topology` workflow): parity + core integration on Valkey 8, and integration tests on TLS, an ACL user, and a Sentinel failover while a fetcher is blocked in BLMOVE (no job lost or duplicated).
+- **Docs:** production cutover + rollback playbook (`docs/migrate-from-sidekiq.md` §9), incident runbook (`docs/runbook.md`), supported Redis backends matrix (`docs/deployment.md`).
 - **`Sidekiq::Metrics::Query.new(now:)`** returning `Result`/`JobResult`/`MarkResult` per the Sidekiq API.
 - **`Sidekiq::JobSet` / `Sidekiq::SortedSet` aliases** (sidekiq-unique-jobs releases its locks again), `Sidekiq.loader`, and `💣` on `Queue`/`SortedSet`.
 - **Drop-in require paths**: `sidekiq-pro`, `sidekiq-ent`, `sidekiq-ent/web`, `sidekiq-ent/periodic/testing`, `sidekiq/pro/web`, `sidekiq/middleware/i18n`, `sidekiq/middleware/current_attributes`, `sidekiq/testing/inline`, `sidekiq/test_api`, `sidekiq/metrics/query`, `sidekiq/profiler`, and every other upstream 8.1 file whose constants Wurk provides — a test requires each in a process without the sidekiq gem.
@@ -39,6 +49,10 @@ All notable changes to Wurk are recorded here. Format: [Keep a Changelog](https:
 
 ### Fixed
 
+- **The reaper keeps its boot grace when `OBJECT IDLETIME` is unavailable** (LFU eviction policy, Dragonfly) by timing it itself across sweeps, so a worker that claims before its first heartbeat is never reclaimed mid-job.
+- **WARN at worker boot when the ActiveRecord pool is smaller than job concurrency.**
+- **Outage-buffer `:drop_oldest` overflow logs one ERROR per drop burst** and counts each drop in statsd `jobs.dropped.push` (was silent).
+- **The reaper WARNs once per unreadable `queue:*|*` key** (e.g. Sidekiq Pro super_fetch lists it cannot reclaim) and once when `OBJECT IDLETIME` is unavailable; the hourly full sweep uses `SCAN COUNT 1000`.
 - **`JobRecord#enqueued_at` / `#created_at` / `#failed_at` / `#retried_at` always return UTC times**, whatever timestamp format the payload holds.
 - **A bucket limiter on a short interval (`:second`) sleeps until the real boundary** using Redis `TIME` microseconds, instead of a whole second that could overshoot by ~1s and eat `wait_timeout`.
 - **Data API parity:** `JobRecord#queue` falls back to the payload's `queue`; invalid-JSON payloads read as `{}` with the raw bytes as `args`; `created_at` falls back to `enqueued_at`; `latency` falls back to `created_at`; Integer-ms timestamps convert without float rounding; `display_class` honours a `display_class` field; ActiveJob `display_args` unwraps GlobalIDs and strips `_aj_*` keys, and `MailDeliveryJob` shows `[params, args]`.

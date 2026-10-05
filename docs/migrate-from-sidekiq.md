@@ -8,7 +8,8 @@ Pro/Enterprise features ship in the same free gem with no license check.
 
 This guide covers what stays the same, the two knobs that surprise people
 (parallelism vs concurrency), how to run a dedicated worker, the third-party gem
-mappings, and a one-page cutover.
+mappings, a one-page checklist, and the [production cutover](#9-production-cutover)
+playbook for moving a live Sidekiq Pro/Enterprise fleet.
 
 > **Before you migrate.** The API this guide teaches you to keep is *Sidekiq's*,
 > funded by its paid tiers and human-maintained. Moving to Wurk is a bet on a
@@ -80,9 +81,15 @@ Optionally scaffold an initializer:
 bin/rails g wurk:install          # writes config/initializers/wurk.rb
 ```
 
-**Because the Redis schema is identical, a rolling deploy is safe** — Sidekiq and Wurk
-processes can run against the same Redis during cutover, each picking up the other's
-enqueued jobs. Roll back by reverting the `Gemfile` line; no data migration either way.
+**Because the Redis schema is identical, there is no data migration** — Wurk picks up
+the queues, schedules, retries, batches and periodic loops Sidekiq left in Redis, and
+going back is the same move in reverse. What is *not* proven yet is running Sidekiq
+and Wurk worker processes against one Redis **at the same time**: no test runs a mixed
+fleet, and two places are known to need care (Wurk's private lists are a shape stock
+Sidekiq never reclaims, and Enterprise leader election and unique locks have not been
+exercised across the two). So the supported production path is a **drain cutover** —
+stop Sidekiq's workers, then start Wurk's — not a rolling mix. The procedure, with the
+exact commands, is [§9](#9-production-cutover).
 
 > ⚠️ **The one thing to size before you ship:** Wurk forks one worker process *per CPU
 > core* by default, each running its own thread pool — so a single Sidekiq process
@@ -336,8 +343,19 @@ error_backtrace` (base64+zlib), plus the optional Pro/Ent fields (`bid, tags,
 expiry, …`). The dead set is trimmed by `dead_max_jobs` (default 10,000) and
 `dead_timeout_in_seconds` (default 180 days), same as Sidekiq.
 
-**Implication:** a mixed fleet (some Sidekiq, some Wurk) on one Redis is safe, and
-the Sidekiq web UI / `redis-cli` introspection you already use keeps working.
+**Implication:** Wurk reads what Sidekiq wrote, and the Sidekiq web UI / `redis-cli`
+introspection you already use keeps working. One key family differs: Wurk names its
+reliable-fetch private lists `queue:<q>|<host>|<pid>|<nonce>|<index>` (five segments,
+the nonce disambiguates PID-namespace reuse), where Sidekiq Pro uses
+`queue:<q>|<host>|<pid>|<index>`. Wurk reclaims Pro's shape; stock Sidekiq does not
+reclaim Wurk's. That asymmetry is one reason a mixed fleet is not the supported path
+yet — see [§9](#9-production-cutover).
+
+Pro/Enterprise key formats (batches, `lmtr*` limiters, `unique:<digest>` locks,
+`dear-leader`, `loops:<lid>`) are implemented against the documented spec in
+[`docs/target/`](target/sidekiq-ent.md), not yet validated against a dump taken from a
+real Pro/Enterprise deployment. The staging dry run in [§9](#9-production-cutover) is
+how you close that gap for your own data before production.
 
 ---
 
@@ -415,6 +433,66 @@ contract.
 worker class; `tz:` sets the timezone. Periodic state lives in the `periodic` / `loops:<lid>`
 Redis keys and is visible in the dashboard.
 
+#### Moving a live sidekiq-cron schedule
+
+sidekiq-cron keeps its schedule in Redis — `cron_jobs:<namespace>` SETs of
+`cron_job:<namespace>:<name>` HASHes (one `cron_jobs` SET of `cron_job:<name>` on
+releases before namespaces) — while Wurk's loops live in `periodic` / `loops:<lid>`.
+Neither reads the other's keys, so the only way to double-fire a schedule is to run
+both pollers at once, and the only way to lose one is to forget an entry. The
+procedure:
+
+1. **Inventory.** `bin/rails wurk:import:cron` reads every sidekiq-cron entry and
+   prints what each becomes. It is a dry run: it writes nothing.
+
+   ```text
+   sidekiq-cron entries: 3 (2 importable, 1 skipped)
+
+     import  default/nightly_report  "0 3 * * *" NightlyReportJob  -> lid 3f9c0e1a7b2d4c55 (new)
+     import  default/sync  "*/10 * * * *" SyncJob  -> lid 8a1b2c3d4e5f6071 (new)
+     skip    default/heartbeat  unsupported schedule "*/30 * * * * *" (...); Wurk takes a 5-field crontab or an @alias, not fugit seconds or natural language
+
+   To keep these in code (recommended), paste into config/initializers/wurk.rb:
+
+   Wurk.configure_server do |config|
+     config.periodic do |mgr|
+       mgr.register("0 3 * * *", "NightlyReportJob", label: "nightly_report", queue: "default", retry: true)
+       mgr.register("*/10 * * * *", "SyncJob", label: "sync", queue: "default", retry: true)
+     end
+   end
+   ```
+
+2. **Choose where each entry lives.** Pasting the printed block into an initializer
+   is the recommended home: the schedule is reviewed in pull requests and survives a
+   Redis flush. Entries your app created at runtime (`Sidekiq::Cron::Job.create`)
+   and does not want in code can go straight into Redis with
+   `APPLY=1 bin/rails wurk:import:cron`. The printed block registers exactly the lid
+   the import writes, so importing now and pasting that block unchanged later
+   converges on one loop. Combining the two routes for one class is safe **only when
+   both produce the same loop ID** (lid). The lid hashes the schedule, the class and
+   every option (`args`, `queue`, `retry`, `label`, …), so the same schedule with
+   different args or queue is a different loop. At boot, a process that registers a
+   class in `config.periodic` prunes every other loop of that class, so an imported
+   loop whose lid your code does not register is dropped
+   ([periodic jobs](periodic-jobs.md#deploys-what-happens-when-a-schedule-changes)).
+   Compare the `lid` the dry run prints with the **Cron** tab after deploying the code.
+3. **Fix what was skipped.** The task skips, with the reason, anything a native loop
+   cannot reproduce unchanged: fugit natural-language or seconds-field schedules,
+   `date_as_argument`, and GlobalID-serialized args. It warns (and imports) when an
+   ActiveJob `queue_name_prefix` or `symbolize_args` would not carry over. A trailing
+   timezone (`0 5 * * * Europe/Paris`) becomes `tz:`; a `disabled` entry is imported
+   paused; the entry's name becomes the loop's `label`.
+4. **Remove the gem in the release that starts Wurk.** No process should run
+   sidekiq-cron's poller next to Wurk's for the same entries. If you keep sidekiq-cron
+   for a while (through the shim gem), don't import the entries it still owns.
+5. **Verify, then clean up later.** After cutover the dashboard's **Cron** tab lists
+   every loop with its next fire. The import never touches sidekiq-cron's keys, so
+   a rollback still finds the schedule. Once you are past your rollback window:
+   `redis-cli -u "$REDIS_URL" --scan --pattern 'cron_job*' | xargs -r -n 500 redis-cli -u "$REDIS_URL" UNLINK`.
+
+Outside Rails the same task is available after `require "wurk/rake_tasks"` in your
+`Rakefile`; it uses the Redis connection your client config points at.
+
 ### `sidekiq-unique-jobs` → native `unique_for:` / `unique_until:`
 
 Activate Enterprise uniqueness once, then declare it per worker:
@@ -441,6 +519,27 @@ Mapping from `sidekiq-unique-jobs`:
 
 > ⚠️ Unique jobs and encryption are **mutually exclusive on the same worker** — each
 > encryption produces different ciphertext, which defeats the uniqueness digest.
+
+#### Moving off sidekiq-unique-jobs during a cutover
+
+There is no import for sidekiq-unique-jobs, by design. Its locks live under
+`uniquejobs:*` with its own digest algorithm, Wurk's under `unique:<digest>`; they
+are disjoint, and Wurk never reads or releases the gem's locks. Translating them
+would be guesswork, and most of them are short-lived anyway.
+
+What that means during the drain cutover:
+
+- Jobs that were enqueued under a gem lock and are still sitting in a queue, in
+  `schedule` or in `retry` run normally on Wurk. The gem's `lock*` fields in their
+  payload are inert.
+- A new enqueue under Wurk's `unique_for:` takes a fresh `unique:` lock, so it does
+  not see a duplicate that was enqueued under the gem's lock before the cutover. Worst
+  case: one extra run per identity, once, across the cutover.
+- If even that is unacceptable for a class (payments, outbound messages), drain that
+  class's scheduled and retry entries before the cutover, or make the job idempotent
+  ([reliability](reliability.md#idempotency-is-yours)).
+- Leftover gem locks do nothing once the gem is gone. Clean them up after the cutover:
+  `redis-cli -u "$REDIS_URL" --scan --pattern 'uniquejobs:*' | xargs -r -n 500 redis-cli -u "$REDIS_URL" UNLINK`.
 
 ### `sentry-sidekiq` → native `Wurk::Sentry`
 
@@ -494,8 +593,12 @@ as unknown and verify it in staging before production.
 
 Wurk aims for 100% drop-in. A couple of Sidekiq Pro-isms simply no-op or alias
 (items 1–2 — there to reassure, not to fix); the rest are genuine differences worth
-knowing. Hit something on a real migration that isn't listed here? **Please open an
-issue** — that feedback is part of the v1.0.0 acceptance gate for this guide.
+knowing. The complete, maintained list of every place Wurk deliberately behaves
+differently from the spec is
+[`docs/idea/parity-divergences.md`](idea/parity-divergences.md); the ones that matter
+on cutover day are summarized in [§9](#behaviour-differences-to-know-before-cutover).
+Hit something on a real migration that isn't listed? **Please open an issue** — real
+migrations are what this guide is checked against.
 
 1. **`config.super_fetch!` does nothing** (accepted no-op). Wurk's fetcher is
    *always* reliable (atomic `BLMOVE` to a per-process private list, with orphan
@@ -556,13 +659,285 @@ issue** — that feedback is part of the v1.0.0 acceptance gate for this guide.
 6. **Map any add-on gems** — swap `sidekiq-cron` → `config.periodic` and
    `sidekiq-unique-jobs` → `unique_for:` if you want the native path. See
    [§6](#6-third-party-gem-mappings).
-7. **Verify on the same Redis** — enqueue a test job, watch it run, and confirm the
-   dashboard + your existing `redis-cli` checks look normal. Because the schema is
-   shared, you can roll one process at a time.
-8. **Roll back anytime** — revert the `Gemfile` line. No schema changes were made.
+7. **Rehearse on a copy of production Redis** — run the cutover in staging against a
+   restored snapshot first. See [§9](#9-production-cutover).
+8. **Cut over by draining, not by mixing** — quiet and stop every Sidekiq worker,
+   confirm nothing is in flight, then start Wurk. Rolling back is the same drain in
+   reverse plus one extra check (Wurk's private lists must be empty). Both procedures
+   are in [§9](#9-production-cutover). No schema change is made in either direction.
+
+---
+
+## 9. Production cutover
+
+This is the playbook for moving a **live** Sidekiq fleet (OSS, Pro or Enterprise) to
+Wurk without losing a job. It is a **drain cutover**: every Sidekiq worker stops
+before the first Wurk worker starts. Enqueuing never stops (web processes keep
+pushing, and the jobs wait in Redis), but nothing is *processed* between the last
+Sidekiq worker exiting and the first Wurk worker fetching. That gap is normally
+seconds to a minute. Periodic ticks that fall inside it are not backfilled, which is
+also how Sidekiq Enterprise behaves.
+
+> **Why not a rolling mix?** Running Sidekiq and Wurk workers against one Redis at
+> the same time has not been tested, and these known gaps make it unsafe until it is:
+> stock Sidekiq never reclaims Wurk's five-segment private lists ([§4](#4-redis-key-layout-identical-no-namespace)), so a job in
+> one when its Wurk process dies is stranded; Enterprise leader election
+> (`dear-leader`) and unique locks (`unique:<digest>`) have not been exercised across
+> the two implementations, so an overlap risks a doubled or missed cron tick and
+> duplicate unique jobs; and Wurk's batch "already fired" markers are implemented
+> from the spec, not checked against a real Pro batch
+> ([divergence](idea/parity-divergences.md#batch-fired-markers-use-b-bid-success-complete)).
+> This section will add a mixed-fleet path when an integration test proves one.
+
+Run these in bash. Every Redis command goes through one wrapper, so it always targets
+the production Redis; define it once per shell:
+
+```bash
+r() { redis-cli -u "$REDIS_URL" "$@"; }
+```
+
+The `bin/rails runner` commands work under either gem, because Wurk answers to the
+same `Sidekiq::*` API.
+
+### 9.1 Pre-flight checklist
+
+Do this days ahead, not on the night.
+
+**Redis**
+
+- [ ] Version ≥ 7.0: `r INFO server | grep redis_version`.
+- [ ] Topology Wurk supports: standalone or Sentinel. Redis Cluster is not supported
+      (`nodes:` raises). Hosted and Redis-compatible backends: see
+      [deployment](deployment.md).
+- [ ] No `redis-namespace`: Wurk has no namespacing (`namespace:` raises). A
+      namespaced Sidekiq dataset needs its own Redis DB or instance first.
+- [ ] `r CONFIG GET maxmemory-policy` answers `noeviction`. An evicting policy
+      can silently drop queue lists and private lists.
+
+**Gems**
+
+- [ ] `Gemfile`: `sidekiq`, `sidekiq-pro`, `sidekiq-ent` (and their private gem
+      sources) replaced by `wurk`.
+- [ ] Each `sidekiq-*` add-on either replaced by its native equivalent
+      ([§6](#6-third-party-gem-mappings)) or kept with the `sidekiq` shim gem. Only
+      sidekiq-cron's own suite runs against Wurk in CI; every other add-on is
+      untested, so exercise it in the staging dry run.
+- [ ] `bundle info sidekiq` points into the wurk checkout (`ecosystem/sidekiq-shim`)
+      or reports no such gem, never a released `sidekiq-x.y.z`.
+
+**Configuration** (existing initializers keep working; check these explicitly)
+
+- [ ] `config.reliable_scheduler!` is **on**. The default scheduler pops due jobs and
+      then pushes them, so a process death between the two loses the job
+      ([reliability](reliability.md#the-reliable-scheduler)). `config.super_fetch!`
+      can stay; it is a no-op because reliable fetch is always on.
+- [ ] `Sidekiq::Enterprise.unique!` and `Sidekiq::Enterprise::Crypto.enable(...)` kept,
+      with the **same** encryption keys. A job Wurk cannot decrypt goes straight to
+      the dead set, without retries.
+- [ ] `config.periodic` blocks kept as they are; sidekiq-cron entries moved
+      ([§6](#moving-a-live-sidekiq-cron-schedule)).
+- [ ] Process command lines: `sidekiq` → `wurk` or `wurkswarm` (there is no `sidekiq`
+      binary; `sidekiqswarm` is an alias). `config/sidekiq.yml` is still discovered.
+      `SIDEKIQ_MAXMEM_MB`, `SIDEKIQ_LEADER` and `SIDEKIQ_COUNT` are honoured.
+- [ ] `WURK_COUNT × concurrency` sized against your DB connection limit and memory
+      ([§2](#2-concurrency-vs-parallelism-read-this)). How the default process count
+      is derived inside a container, and supported deployment shapes: see
+      [deployment](deployment.md).
+- [ ] Web role runs with `WURK_DISABLED=1` so clustered Puma does not fork swarms
+      ([§3](#clustered-puma--the-embedded-swarm-important)), and the dashboard mount
+      is behind your app's auth ([authentication](authentication.md)).
+
+**Error reporting**
+
+- [ ] Every reporter you rely on is wired through `config.error_handlers` (Honeybadger,
+      Rollbar, Bugsnag, Airbrake, Datadog, a custom notifier). Wurk calls each one once
+      per job failure with `context: "Job raised exception"`, as Sidekiq does.
+- [ ] `sentry-sidekiq` replaced by `Wurk::Sentry` ([sentry](sentry.md)).
+
+**Code that behaves differently** (the full list is
+[below](#behaviour-differences-to-know-before-cutover))
+
+- [ ] `grep -rn 'perform_in("' app lib`, plus `set(wait: "…")` and the like: a String
+      interval raises `ArgumentError` in Wurk instead of silently meaning "now".
+- [ ] Nothing branches on `Sidekiq.pro?` / `Sidekiq.ent?` (both `false`) or reads
+      `Sidekiq::Enterprise::VERSION` (undefined).
+- [ ] No custom fetcher subclassing `Sidekiq::BasicFetch`, and no Sidekiq Web
+      extension that depends on the ERB helpers (`Sidekiq::WebHelpers`).
+
+**Operations**
+
+- [ ] Probes, metrics and alerts in place before the switch: health checks and
+      metrics endpoints per [deployment](deployment.md) and [metrics](metrics.md); an
+      alert on dead-set growth and on `queue:*|*` key count. Keep
+      [the runbook](runbook.md) open on the night.
+
+**Staging dry run against a copy of production Redis.** This is the step that
+matters most, because it is the only check of Pro/Enterprise data formats against
+*your* data ([§4](#4-redis-key-layout-identical-no-namespace)).
+
+1. Restore a recent production snapshot into a staging Redis
+   (`redis-cli -u "$PROD_REDIS_URL" --rdb dump.rdb`, then load it into the staging
+   instance).
+2. Point a staging Wurk release at it, with **staging** databases and credentials and
+   outbound side effects (mail, payments, webhooks) disabled: the restored jobs will
+   execute.
+3. Check, in order: queues drain; scheduled and retry jobs promote; at least one batch
+   that was in flight in the snapshot completes and fires its callbacks; limiters
+   admit and throttle; every periodic loop shows in the **Cron** tab with the right
+   next fire; a unique job enqueued twice runs once; an encrypted job decrypts; a
+   deliberately failing job reaches your error reporter.
+4. Run the drain and rollback below against staging once, end to end, with a stopwatch.
+
+### 9.2 Drain Sidekiq
+
+Ship the release that swaps the gem to web and workers together; the worker side does
+the following. While web processes roll, jobs from both clients land in the same
+queues and wait for whichever worker fleet is running. Plain job JSON is
+interchangeable in both directions (the parity suite runs stock Sidekiq's dispatch
+on Wurk payloads and a Wurk swarm on Sidekiq-shaped ones); Enterprise client features
+crossing the boundary are covered only by your staging dry run.
+
+1. **Quiet every Sidekiq process.** Each one stops fetching and finishes what it has.
+
+   ```bash
+   kill -TSTP <sidekiq pid>        # per process, or the sidekiqswarm parent
+   # or, cluster-wide from a console on the OLD release:
+   bin/rails runner 'Sidekiq::ProcessSet.new.each(&:quiet!)'
+   ```
+
+   Sidekiq Web's **Busy → Quiet All** does the same. A quieted Enterprise leader keeps
+   enqueueing periodic jobs; that is fine, they wait in the queue for Wurk.
+
+2. **Wait until nothing is busy.**
+
+   ```bash
+   r SMEMBERS processes | while read -r p; do
+     printf '%s quiet=%s busy=%s\n' "$p" "$(r HGET "$p" quiet)" "$(r HGET "$p" busy)"
+   done
+   bin/rails runner 'puts Sidekiq::Workers.new.size'    # 0 when drained
+   ```
+
+   Every process should read `quiet=true busy=0`. A job that outlives your patience is
+   not lost: at stop, Sidekiq pushes unfinished work back to its queue (and Pro's
+   super_fetch drains its private list), and it runs again on Wurk. That is the normal
+   at-least-once contract.
+
+3. **Stop Sidekiq.** `kill -TERM` each process (or scale the worker deployment to zero)
+   and wait for exit. `r SCARD processes` drops to `0`; a process that was
+   SIGKILLed lingers there for up to 60s until its heartbeat expires.
+
+4. **Confirm no private lists are left.**
+
+   A name matching `queue:*|*` is a private list only if it is not itself a public
+   queue: a queue may legally be called `has|pipe`, which makes `queue:has|pipe` a
+   public queue whose name `has|pipe` is a member of the `queues` SET. The helpers below skip those, and recover each private
+   list's public queue as the longest `queues` member it starts with (a `|` inside a
+   queue name makes a plain split on `|` wrong).
+
+   ```bash
+   private_lists() {   # queue:*|* keys that are not public queues
+     r --scan --pattern 'queue:*|*' | while read -r k; do
+       [ "$(r SISMEMBER queues "${k#queue:}")" = 1 ] || echo "$k"
+     done
+   }
+   public_queue_of() { # longest queue:<name> prefix of $1 whose name is in the queues SET
+     local best="" q
+     while read -r q; do
+       case "$1" in "queue:$q|"*) [ ${#q} -gt ${#best} ] && best="$q" ;; esac
+     done < <(r SMEMBERS queues)
+     [ -n "$best" ] && echo "queue:$best"
+   }
+
+   private_lists | while read -r k; do echo "$k $(r LLEN "$k")"; done
+   ```
+
+   Expect no output: OSS Sidekiq never creates these, and Pro's super_fetch empties
+   them on a clean stop. If any remain (a SIGKILLed Pro process), move them back
+   before starting Wurk. Wurk reclaims Pro's exact `queue:<q>|<host>|<pid>|<index>`
+   shape once the owner's heartbeat has expired, but skips any other shape. With **no
+   worker of either kind running**:
+
+   ```bash
+   private_lists | while read -r k; do
+     q="$(public_queue_of "$k")" || { echo "skip $k: no matching queue in the queues SET, move it by hand"; continue; }
+     while [ -n "$(r LMOVE "$k" "$q" RIGHT RIGHT)" ]; do :; done
+   done
+   ```
+
+   `RIGHT RIGHT` puts each job back at the fetch end of its queue, so recovered work
+   runs first, which is what Wurk's own reaper does.
+
+### 9.3 Start Wurk
+
+Start the workers (`bundle exec wurkswarm -e production`, or roll out the worker
+deployment). Within a few seconds `r SMEMBERS processes` lists the new
+identities and the dashboard's **Busy** page shows them.
+
+### 9.4 Verify
+
+Work through this in the first fifteen minutes:
+
+| Check | How | Healthy |
+|---|---|---|
+| Processes and capacity | Dashboard **Busy**, or `bin/rails runner 'p Sidekiq::ProcessSet.new.total_concurrency'` | `WURK_COUNT × concurrency` per host |
+| Queues draining | Dashboard **Queues**, or `bin/rails runner 'Sidekiq::Queue.all.each { \|q\| puts "#{q.name} #{q.size} #{q.latency.round(1)}s" }'` | Sizes and latency falling toward your normal |
+| A canary per queue | `bin/rails runner 'Sidekiq::Queue.all.each { \|q\| CanaryJob.set(queue: q.name).perform_async(q.name) }'` with a trivial job that logs its argument | One log line per queue, `Sidekiq::Stats.new.processed` rising |
+| Scheduled and retry | Dashboard **Scheduled** / **Retries** | Counts stable or falling; due entries promote |
+| Dead set | Dashboard **Dead**, `bin/rails runner 'p Sidekiq::DeadSet.new.size'` | No jump. A jump is the [poison-job storm](runbook.md#poison-job-storm) runbook |
+| Periodic leader | `r GET dear-leader`, or `bin/rails runner 'p Sidekiq::ProcessSet.new.leader'` | A Wurk identity within about 60s of boot; the next tick appears as **last fire** on the **Cron** tab |
+| Batches | Dashboard **Batches**; `bin/rails runner 'p Sidekiq::Batch::Status.new("<bid>").data'` for one that was in flight | In-flight batches complete and fire their callbacks |
+| Error reporting | Enqueue a job that raises | It reaches every reporter in `config.error_handlers` |
+| Private lists | `private_lists \| wc -l` (§9.2 step 4) | About processes × queues, not growing |
+| Metrics and probes | Per [deployment](deployment.md) and [metrics](metrics.md) | Green |
+
+### 9.5 Rollback
+
+Rolling back is the same drain in reverse, plus one check that is not optional.
+
+1. **Have the old release ready** (the `Gemfile` revert, built and deployable).
+2. **Quiet Wurk.** `kill -TSTP <wurkswarm parent pid>` (the parent relays it to every
+   child), or the dashboard's **Busy → Quiet**. Wait for `busy=0` with the same loop
+   as §9.2 step 2.
+3. **Stop Wurk.** `kill -TERM`. Anything still running at the shutdown timeout is
+   moved back to the front of its queue before the process exits.
+4. **Make sure Wurk's private lists are empty.** Run the §9.2 step 4 scan. Stock
+   Sidekiq never reclaims private lists, and Sidekiq Pro's handling of Wurk's
+   five-segment names (`queue:<q>|<host>|<pid>|<nonce>|<index>`) has not been
+   verified, so a job left in one would sit there forever. After a clean stop the scan
+   prints nothing; if it prints anything (a SIGKILLed Wurk process), move it back with
+   the same `LMOVE` loop, with no worker running.
+5. **Start Sidekiq.**
+6. **Know what does not carry back.** Wurk-only features (`collapse:` debounce and
+   throttle, flows, `config.global_concurrency`, `track:`, `timeout:` / `deadline:`)
+   are not honoured by Sidekiq; their extra job-JSON keys are inert to it. Periodic
+   loops Wurk registered sit in Enterprise's own `periodic` schema; a sidekiq-cron
+   schedule is still where it was, because the import never deletes it. Unique locks
+   Wurk took expire on their `unique_for` TTL. Wurk-only Redis keys are ignored by
+   Sidekiq ([compatibility](compatibility.md)).
+
+### Behaviour differences to know before cutover
+
+The deliberate differences from Sidekiq Pro/Enterprise that you can observe in
+production. Each one links to its full rationale in
+[`parity-divergences.md`](idea/parity-divergences.md).
+
+| Difference | What you see | What to do |
+|---|---|---|
+| Reliable fetch is always on, and recovered or requeued jobs go to the **front** of their queue (Pro: the back) | A job interrupted by a crash or deploy runs before the backlog | Nothing |
+| The ACK rides the next fetch | A hard kill (`SIGKILL`, OOM) can re-run a job that had just finished | Keep jobs idempotent, as at-least-once already requires |
+| Paused queues are read from a 2s cache | A pause takes up to 2s to stop fetching | Nothing |
+| Limiter reschedule cap goes to the dead set, tagged `rate_limited`, instead of the retry cycle; limiter `ttl` below 24h is raised to 24h | Over-limit jobs land in **Dead** after `reschedule` attempts | Alert on dead-set growth; retry from the dashboard |
+| An undecryptable job goes straight to the dead set | Missing or wrong key → **Dead**, no retries | Configure the same keys before starting; retry once fixed |
+| Periodic slots more than max(90s, 1.5× tick) late are skipped and logged; a Hash `args:` is passed as one argument (Ent splats it) | A long leader outage skips rather than fires late | Check loops registered with Hash `args` |
+| Batch "already fired" markers and child-batch callback accounting follow the spec, unverified against a real Pro batch | A batch in flight at the swap could miss a callback | Let critical batches finish before the cutover, or prove it in the dry run |
+| A poison kill (3 crash-reclaims in 72h) fires death handlers, and the counter resets on ACK | The job lands in **Dead**; its batch sees a death | Nothing; see the [runbook](runbook.md#poison-job-storm) |
+| `:leader` can fire again after a Redis error | A leader hook runs twice | Make `on(:leader)` hooks idempotent |
+| String intervals to `perform_in` / `set(wait:)` raise | `ArgumentError` at enqueue | Pass numbers or durations |
+| `SortedEntry#reschedule` returns nil for a job that is already gone | No resurrection of a promoted or deleted job | Nothing |
+| A scheduled job's `expires_in` counts from its scheduled time | Follows the spec's worked example | Nothing |
+| `Sidekiq.pro?` / `.ent?` are false; `Sidekiq::Enterprise::VERSION` and the ERB Web internals don't exist | Code gated on them takes the OSS branch | Remove the gates |
 
 ---
 
 *Found a blocker not covered here? File an issue at
-<https://github.com/developerz-ai/wurk/issues> — closing the loop on real migrations
-is how this guide earns its v1.0.0 sign-off.*
+<https://github.com/developerz-ai/wurk/issues>.*
