@@ -15,6 +15,13 @@ end
 
 SimpleCov.command_name "subprocess-#{Process.pid}"
 SimpleCov.root File.expand_path('../..', __dir__)
+# Each probe writes its own resultset under coverage/subprocess/<pid>/, never
+# the shared one: ~100 probes rewriting coverage/.resultset.json raced the
+# worker processes, and one probe killed mid-write left a truncated file that
+# the next writer read as {} — wiping a worker's entry and sinking the gate
+# below 90%. test_helper imports these into the shared resultset once, after
+# every worker has exited.
+SimpleCov.coverage_dir "coverage/subprocess/#{Process.pid}"
 SimpleCov.start do
   enable_coverage :branch
   primary_coverage :line
