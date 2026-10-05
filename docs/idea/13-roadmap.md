@@ -85,14 +85,28 @@ decisions, and measurements: `docs/plans/2026/08/07/101-beyond-sidekiq/`.
 
 ## M6 — 1.0
 
-- Migration guide finalized.
-- Benchmark suite published with comparisons to stock Sidekiq.
-- Full YARD API reference auto-generated to the docs site.
-- Tag 1.0.0, push to RubyGems.
+1.0.0 was tagged and published to RubyGems on 2026-06-11 (`CHANGELOG.md`); the
+1.x line has shipped continuously since. Where each original exit criterion
+actually stands:
+
+- Benchmark suite published with comparisons to stock Sidekiq — **done**
+  (`docs/benchmarks.md`, `rake bench:vs_sidekiq`; the numbers show Wurk at
+  roughly 0.87×–1.02× of stock Sidekiq, not faster).
+- Full YARD API reference auto-generated to the docs site — **done**
+  (<https://developerz-ai.github.io/wurk/api/>).
+- Tag 1.0.0, push to RubyGems — **done**.
+- Migration guide finalized — **not yet**. The guide carries a production
+  cutover and rollback procedure (drain cutover), but two proofs it depends on
+  are still open: Pro/Enterprise Redis formats validated against a dump from a
+  real Pro/Ent deployment, and a mixed Sidekiq + Wurk fleet on one Redis. Until
+  both exist the guide supports drain cutover only. Tracked in
+  `docs/plans/2026/10/04/101-squeaky-clean-audit/09-production-readiness.md`
+  (R2, R4).
 
 ## Stretch (post-1.0)
 
-- Worker topology DSL (specialized swarm slots).
+- Worker topology DSL (specialized swarm slots) — shipped early as
+  `Wurk::Topology` / `config.topology`.
 - io_uring fetch path on Linux.
 - ActiveJob adapter beyond the default.
 - Helm chart and Kubernetes operator.

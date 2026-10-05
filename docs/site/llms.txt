@@ -71,6 +71,7 @@ Job failures reach `config.error_handlers` once each, with `context: "Job raised
 - [Periodic (cron) jobs](https://github.com/developerz-ai/wurk/blob/main/docs/periodic-jobs.md): `config.periodic`, cron syntax, timezones, leader-gated single fire, missed windows.
 - [Unique jobs](https://github.com/developerz-ai/wurk/blob/main/docs/unique-jobs.md): `unique_for`/`unique_until`, lock-key derivation, `sidekiq_unique_context`, what it does not guarantee.
 - [Iterable jobs](https://github.com/developerz-ai/wurk/blob/main/docs/iterable-jobs.md): `build_enumerator`/`each_iteration`, cursors, interruption and resumption, cancellation.
+- [Runbook](https://github.com/developerz-ai/wurk/blob/main/docs/runbook.md): incident playbook — stuck queue, orphaned private lists, latency spike, stuck leader, poison-job storm, Redis failover, memory growth, stuck batch, dead-set growth, rollback to Sidekiq.
 - [Reliability](https://github.com/developerz-ai/wurk/blob/main/docs/reliability.md): the delivery guarantee and its limits, reliable fetch, the orphan reaper, `reliable_scheduler!` (NOT a no-op), client-side outage buffering, transaction-aware client.
 - [Middleware](https://github.com/developerz-ai/wurk/blob/main/docs/middleware.md): client vs server chains, `call` signatures, registration and ordering, the built-ins.
 - [Data API](https://github.com/developerz-ai/wurk/blob/main/docs/api.md): `Stats`, `Queue` (incl. pause/unpause), `JobRecord`, the sorted sets, `ProcessSet`/`WorkSet`, the fast Lua paths, leader election.

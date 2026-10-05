@@ -11,11 +11,13 @@ require_relative 'swarm/child_boot'
 require_relative 'swarm/backoff'
 require_relative 'swarm/restart'
 require_relative 'swarm/orphan_guard'
+require_relative 'swarm/liveness'
 
 module Wurk
   # Parent supervisor. Forks N children per the worker topology, monitors
   # PIDs, relays signals, respawns crashed children with per-slot exponential
-  # backoff, handles rolling restart on SIGUSR1, recycles RSS-bloated children.
+  # backoff, handles rolling restart on SIGUSR1, recycles RSS-bloated children,
+  # and replaces children whose heartbeat has stopped moving (Swarm::Liveness).
   #
   # The supervise loop never sleeps on behalf of a respawn or a restart: crash
   # backoff is tracked as per-slot due-times (Swarm::Backoff) and rolling
@@ -106,8 +108,11 @@ module Wurk
 
     attr_reader :topology
 
+    # `heartbeat_timeout:` — seconds a child's heartbeat may stand still before
+    # it is replaced (Swarm::Liveness). Defaults to `config.swarm_heartbeat_timeout`,
+    # then 60; false or 0 turns supervision off.
     def initialize(topology:, config: Wurk.configuration, memory_limit: config.memory_limit_kb,
-                   shutdown_timeout: DEFAULT_SHUTDOWN_TIMEOUT)
+                   shutdown_timeout: DEFAULT_SHUTDOWN_TIMEOUT, heartbeat_timeout: config.swarm_heartbeat_timeout)
       @topology = topology
       @config = config
       @memory_limit = memory_limit
@@ -130,6 +135,7 @@ module Wurk
       @last_memory_check = 0
       @respawn_backoff = Backoff.new(base: RESPAWN_BACKOFF)
       @restart = build_restart
+      @liveness = build_liveness(heartbeat_timeout)
       init_fork_unsafe_handles
     end
 
@@ -261,6 +267,7 @@ module Wurk
       reap_children
       spawn_due_respawns
       advance_restart unless @stopping
+      check_liveness unless @stopping
       requiet_children
       check_memory_pressure
     rescue StandardError => e
@@ -296,6 +303,31 @@ module Wurk
                     drain_timeout: @shutdown_timeout + SHUTDOWN_GRACE,
                     backoff: Backoff.new(base: RESPAWN_BACKOFF)
                   ))
+    end
+
+    def build_liveness(configured)
+      timeout = Liveness.timeout_from(configured)
+      return nil unless timeout
+
+      Liveness.new(Liveness::Config.new(
+                     beats: method(:child_beats),
+                     kill: method(:safe_kill),
+                     now: method(:monotonic),
+                     logger: logger,
+                     timeout: timeout,
+                     kill_after: @shutdown_timeout + SHUTDOWN_GRACE,
+                     boot_grace: HEARTBEAT_WAIT
+                   ))
+    end
+
+    # Quiet and an in-flight restart/recycle pause judging (see Liveness): the
+    # former is maintenance an operator asked for, the latter already owns the
+    # slots it is churning.
+    def check_liveness
+      return unless @liveness
+
+      paused = @quieted || !@lock.synchronize { @restart.idle? }
+      @liveness.tick(child_pids, paused: paused)
     end
 
     # Step 3.
@@ -362,7 +394,8 @@ module Wurk
       # would surface in the PARENT's supervise loop (an operator TERMing one
       # child pid would drain the whole swarm). Dropped, the trap write no-ops.
       close_signal_pipe
-      ChildBoot.new(@config, slot, idx, parent_pid: parent_pid, start_quiet: @quieted).run
+      ChildBoot.new(@config, slot, idx, parent_pid: parent_pid, start_quiet: @quieted,
+                                        fleet_size: @assignments.size).run
       exit 0 # unreachable; ChildBoot exits explicitly
     end
 
@@ -479,6 +512,8 @@ module Wurk
       @lock.synchronize do
         meta = @children.delete(pid)
         return unless meta
+
+        @liveness&.forget(pid)
         return if @restart.claim_exit(pid)
 
         if @stopping
@@ -642,10 +677,23 @@ module Wurk
     # transient error can't crash the supervisor — the restart deadline still
     # forces progress.
     def heartbeat_seen?(pid)
-      identity = "#{hostname}:#{pid}:#{Component::PROCESS_NONCE}"
-      supervisor_pool.with { |c| c.call('SISMEMBER', Keys::PROCESSES, identity) } == 1
+      supervisor_pool.with { |c| c.call('SISMEMBER', Keys::PROCESSES, child_identity(pid)) } == 1
     rescue StandardError
       false
+    end
+
+    # Each child's last `beat` field, one pipeline for the whole fleet. Raises
+    # on a Redis error on purpose: Liveness must tell "unreadable" from "no
+    # beat" (an expired identity hash answers nil).
+    def child_beats(pids)
+      beats = supervisor_pool.with(idempotent: true) do |conn|
+        conn.pipelined { |pipe| pids.each { |pid| pipe.call('HGET', child_identity(pid), 'beat') } }
+      end
+      pids.zip(beats).to_h
+    end
+
+    def child_identity(pid)
+      "#{hostname}:#{pid}:#{Component::PROCESS_NONCE}"
     end
 
     def supervisor_pool

@@ -1,5 +1,7 @@
 # frozen_string_literal: true
 
+require_relative 'redact'
+
 module Wurk
   # Wraps the per-job execution span. Logs "start"/"done"/"fail" at INFO,
   # pushes :elapsed into Wurk::Context so the logger formatter can pick it
@@ -28,7 +30,10 @@ module Wurk
       # broadcast wrapper): without #with_level a per-job `log_level` is
       # ignored rather than failing the job it was meant to annotate.
       @with_level = @logger.respond_to?(:with_level)
-      @skip = !!@config[:skip_default_job_logging]
+      @skip = @config[:skip_default_job_logging] ? true : false
+      # Only consulted when `args` is a logged attribute — the one place this
+      # logger prints arguments. See Wurk::Redact.
+      @redact = @logged_attributes.any? { |attr, _| attr == 'args' } ? @config[:redact_args] : nil
     end
 
     def call(_item, _queue)
@@ -79,6 +84,7 @@ module Wurk
       @logged_attributes.each do |attr, sym|
         h[sym] = job_hash[attr] if job_hash.key?(attr)
       end
+      h[:args] = Redact.args(job_hash, @redact) if @redact && job_hash.key?('args')
       h
     end
   end

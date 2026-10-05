@@ -146,6 +146,7 @@ module Wurk
             @buffer_cap = nil
             @overflow_mode = nil
           end
+          @drops = DropLog.new
           # Stop before dropping: an unstopped drainer thread would otherwise
           # tick on forever, unreachable, leaking the thread.
           install_mutex.synchronize do
@@ -183,6 +184,7 @@ module Wurk
           @install_mutex         = Mutex.new
           @buffer_mutex          = Mutex.new
           @buffer                = []
+          @drops                 = DropLog.new
           interval               = @drainer&.interval
           @drainer               = nil
           start_drainer!(interval: interval) if interval
@@ -209,6 +211,8 @@ module Wurk
           end
 
           raise Overflow, undelivered.map(&:payload) unless undelivered.empty?
+        ensure
+          drops.report(cap)
         end
 
         private
@@ -218,7 +222,7 @@ module Wurk
 
         def append_dropping_oldest(entries, cap)
           entries.each do |entry|
-            buffer.shift if buffer.size >= cap
+            drops.record(buffer.shift.payload) if buffer.size >= cap
             buffer << entry
           end
           NOTHING_UNDELIVERED
@@ -264,6 +268,7 @@ module Wurk
 
             drained += 1
           end
+          drops.end_burst if drained.positive?
           drained
         end
 
@@ -288,6 +293,8 @@ module Wurk
         def buffer
           @buffer ||= []
         end
+
+        attr_reader :drops
 
         # Start a background drain thread that wakes every `interval`
         # seconds and tries to flush the buffer. Idempotent — replaces
@@ -372,6 +379,67 @@ module Wurk
           Thread.current[DRAINING_KEY] = false
         end
       end
+
+      # The jobs `:drop_oldest` evicts. A drop is a job the caller was told was
+      # enqueued and that will now never run, so it must never be silent. One
+      # ERROR per burst — the first drop since a replay last reached Redis —
+      # because an outage that outlasts the cap drops on every push, and a line
+      # per job would bury the one that says what happened. Every drop still
+      # counts, as the statsd `jobs.dropped.push` counter.
+      #
+      # #record runs under the buffer's mutex; #report runs after it is
+      # released, so neither the log write nor statsd holds up other pushes.
+      class DropLog
+        def initialize
+          @lock = Mutex.new
+          @pending = []
+          @burst = false
+        end
+
+        def record(payload)
+          @lock.synchronize { @pending << payload }
+        end
+
+        def report(cap)
+          dropped, announce = @lock.synchronize do
+            next [nil, false] if @pending.empty?
+
+            taken = @pending
+            @pending = []
+            first = !@burst
+            @burst = true
+            [taken, first]
+          end
+          return unless dropped
+
+          dropped.size.times { Wurk::Metrics::Statsd.increment('jobs.dropped.push') }
+          log(dropped.first, cap) if announce
+        end
+
+        # A replay reached Redis, so the outage that filled the buffer is over:
+        # the next overflow is a new incident and gets its own ERROR.
+        def end_burst
+          @lock.synchronize { @burst = false }
+        end
+
+        private
+
+        def log(first, cap)
+          Wurk.configuration.logger.error do
+            "reliable_push buffer full (cap=#{cap}): dropping the oldest buffered jobs to make room — " \
+              "#{first['class']} jid=#{first['jid']} is the first of this burst and will never run. " \
+              'Further drops are counted in statsd jobs.dropped.push until Redis takes a replay. Raise ' \
+              '`Wurk::Client.reliable_push_buffer`, or set `reliable_push_overflow = :raise` to handle ' \
+              'overflow yourself.'
+          end
+        rescue StandardError
+          nil
+        end
+      end
+
+      # Eager for the reason the mutexes are: a lazy `||=` could hand two
+      # racing first pushes different logs.
+      @drops = DropLog.new
 
       # Background drain thread. Wakes every `interval` seconds and runs
       # `Buffered.drain_all!`. drain! already short-circuits on the first

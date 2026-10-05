@@ -287,6 +287,56 @@ class ClientBufferedTest < Wurk::Test::UnitCase
     assert_includes queued, ['fresh']
   end
 
+  # --- R12: drops are never silent ----------------------------------------
+
+  def test_each_drop_counts_and_a_burst_logs_one_error
+    Wurk::Client.reliable_push_buffer = 2
+    failing = build_client(failing_pool)
+    log = nil
+    calls = with_statsd_capture do
+      log = capture_wurk_log { 5.times { |i| failing.push(base_item('args' => [i])) } }
+    end
+
+    assert_equal 3, calls.count('jobs.dropped.push'), 'one count per dropped job'
+    assert_equal 1, log.scan('reliable_push buffer full').size, 'one ERROR per burst, not per drop'
+    assert_includes log, 'ERROR'
+    assert_includes log, @class_name
+  end
+
+  def test_a_replay_ends_the_burst_so_the_next_overflow_logs_again
+    Wurk::Client.reliable_push_buffer = 1
+    client, pool = outage_client
+    log = capture_wurk_log do
+      2.times { client.push(base_item) }
+      pool.recover!
+      client.push(base_item)
+      pool.fail!
+      2.times { client.push(base_item) }
+    end
+
+    assert_equal 2, log.scan('reliable_push buffer full').size
+  end
+
+  def test_no_drop_no_log_and_no_count
+    log = nil
+    calls = with_statsd_capture { log = capture_wurk_log { build_client(failing_pool).push(base_item) } }
+
+    assert_empty calls.grep('jobs.dropped.push')
+    refute_includes log, 'buffer full'
+  end
+
+  def test_raise_mode_never_counts_a_drop
+    Wurk::Client.reliable_push_buffer = 1
+    Wurk::Client.reliable_push_overflow = :raise
+    failing = build_client(failing_pool)
+    calls = with_statsd_capture do
+      failing.push(base_item)
+      assert_raises(Wurk::Client::Buffered::Overflow) { failing.push(base_item) }
+    end
+
+    assert_empty calls.grep('jobs.dropped.push')
+  end
+
   # --- batch bypass ------------------------------------------------------
 
   def test_batched_payload_does_not_buffer_and_re_raises
@@ -605,6 +655,16 @@ class ClientBufferedTest < Wurk::Test::UnitCase
   # start/stop/running? control flow directly.
   def idle_drainer
     Wurk::Client::Buffered::Drainer.new(interval: 30.0)
+  end
+
+  def capture_wurk_log
+    io = StringIO.new
+    prev = Wurk.configuration.logger
+    Wurk.configuration.logger = ::Logger.new(io)
+    yield
+    io.string
+  ensure
+    Wurk.configuration.logger = prev
   end
 
   # Statsd singletons are process-global — serialize against every other test

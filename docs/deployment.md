@@ -380,10 +380,11 @@ end
 | Method + path | 200 when | 503 when |
 |---|---|---|
 | `GET /live` | The launcher is running. | The launcher is stopping — i.e. after `quiet` (`TSTP`) or `stop` (`TERM`). Body: `{"status":"down","check":"live","reason":"stopping"}` |
-| `GET /ready` | Redis answers `PING` **and** the heartbeat fired within `ready_window` (default **30s**). | Either check fails. Body carries `"reason":"redis unreachable"` or `"reason":"heartbeat stale"`. |
+| `GET /ready` | Redis answers `PING` **and** the heartbeat fired within `ready_window` (default **30s**). In a swarm: at least `min_ready` children have a heartbeat inside `ready_window` (see [Health and supervision](#health-and-supervision)). | Either check fails. Body carries `"reason":"redis unreachable"` or `"reason":"heartbeat stale"`. |
+| `GET /metrics` | Prometheus text format 0.0.4, served by the same listener unless `health_check(..., metrics: false)`. | — |
 
-Anything else returns `404` JSON; any non-`GET` returns `405`. All responses are
-`Content-Type: application/json` with `Connection: close`.
+Anything else returns `404` JSON; any non-`GET` returns `405`. Every response except
+`/metrics` is `Content-Type: application/json`; all carry `Connection: close`.
 
 Knobs (`Wurk::Configuration#health_check`): `port:` (required, 0–65535 — `0` lets the
 kernel pick), `bind:` (default `"0.0.0.0"`), `ready_window:` (default `30`, must be
@@ -395,6 +396,27 @@ accepted until pollers, managers, and the reaper are up.
 > owning child exits (crash-respawn, rolling restart, memory recycle) a survivor picks
 > the port up within ~5s, so probes ride out ordinary child churn instead of going
 > dark. Probes therefore report *a* child in the pod, not every child.
+
+### Health and supervision
+
+- **`/ready` counts the fleet.** In a swarm, `/ready` is 200 only when at least
+  `min_ready` children have a heartbeat inside `ready_window`. The default is half the
+  fleet, rounded up (`WURK_COUNT=4` → 2, `WURK_COUNT=5` → 3). Override it with
+  `config.health_check(port: 7433, min_ready: N)`.
+- **`/live` reflects only the port-owning child.** Keep it as the `livenessProbe`: a
+  probe that restarted the pod whenever *any* child was slow would turn one stuck job
+  into a pod restart. Unhealthy children are the parent's job (next point).
+- **The parent replaces a child whose heartbeat stops moving.** If a child's heartbeat
+  has not advanced for `swarm_heartbeat_timeout` seconds (default **60**, minimum
+  **20**, `false` disables), the parent sends `TERM`, then `KILL` after
+  `shutdown_timeout + 5s`, then respawns the slot as usual. A child that has never
+  beaten gets 30s extra to boot. The check pauses while the swarm is quiet (`TSTP`),
+  during a rolling restart or memory recycle, and while the parent itself can't reach
+  Redis (so a Redis outage does not trigger a fleet-wide kill).
+- **`GET /metrics`** serves Prometheus text format 0.0.4 on the probe port. Disable it
+  with `health_check(..., metrics: false)`. Cluster-wide families are read from Redis
+  and are **identical on every pod**: aggregate them with `max`, not `sum`, or a
+  10-pod deployment reports 10× the backlog.
 
 > ⚠️ **`/live` goes 503 on quiet.** `TSTP` sets `stopping?`. If `/live` is wired to
 > `livenessProbe`, quieting a pod makes the kubelet restart it. That's usually what you
@@ -489,6 +511,56 @@ parent — leave `maxUnavailable` at its default and let the new ReplicaSet come
 
 ---
 
+## Supported Redis backends
+
+Wurk needs **one Redis-protocol server, version 7.0 or newer**, with
+`maxmemory-policy noeviction` — the same requirement as Sidekiq. Any eviction policy
+can silently delete queued jobs; an LFU policy additionally makes Redis refuse
+`OBJECT IDLETIME`, which turns off the reaper's boot-grace re-check (see the
+Dragonfly row).
+
+| Backend | Status | Notes |
+|---|---|---|
+| Redis 7.x | **Tested** — the whole suite, every PR | CI runs `redis:7.4`. |
+| Valkey 8 | **Tested in CI** | The `topology` workflow runs the parity oracles and the core integration subset (push, reliable fetch, reaper, schedulers, swarm boot, rolling restart, batches, limiters, Lua) against `valkey/valkey:8`. |
+| Redis Sentinel | **Tested in CI**, including a failover | `SENTINEL FAILOVER` while a fetcher is parked in `BLMOVE`: every job pushed before and after is fetched exactly once and both pools reconnect to the new primary. |
+| TLS (`rediss://`) | **Tested in CI** | Self-signed CA via `ssl_params: { ca_file: }`; a server the CA didn't sign is refused. |
+| ACL users | **Tested in CI** | `redis://user:pass@host` with `~* &* +@all -@dangerous +info` is enough: `INFO` (heartbeat, dashboard) is the only `@dangerous` command anywhere in `lib/`. |
+| AWS ElastiCache (Redis OSS / Valkey), **cluster mode disabled** | Expected compatible, not tested against AWS | Use the primary endpoint. Set `maxmemory-policy` to `noeviction` in the parameter group — the default (`volatile-lru`) is wrong for a job queue. In-transit encryption is the TLS row (`rediss://`); RBAC/AUTH is the ACL row. A failover is a DNS flip: the pool redials on `READONLY` and on dropped connections. |
+| ElastiCache **cluster mode enabled**, ElastiCache Serverless, Amazon MemoryDB | **Not supported** | All three speak the Cluster protocol (Serverless and MemoryDB always do, even with one shard), which rejects multi-key commands across hash slots — see Redis Cluster. |
+| Dragonfly | **Not supported for production**; works with flags | Needs `--default_lua_flags=allow-undeclared-keys`: Dragonfly refuses a Lua script that touches a key it was not passed in `KEYS`, and `reliable_scheduler!`'s promote script (`RELIABLE_SCHEDULE_PROMOTE` in `lib/wurk/lua.rb`) pushes to `queue:<name>` read from each job's payload. Dragonfly also has no `OBJECT` command, so the reaper's re-check that skips a private list touched within the grace period is off and a process that claims a job before its first heartbeat can have it reclaimed (one possible double run per boot race). Checked locally against Dragonfly 2.0 with the flag; not in CI. |
+| Redis Cluster | **Not supported** | `config.redis[:nodes]` raises at boot. Wurk, like Sidekiq, runs `MULTI` and multi-key Lua across a job's queue, the `queues` set, `schedule`/`retry`/`dead` and batch keys, which live in different hash slots. `RELIABLE_SCHEDULE_PROMOTE` also builds its target keys from payload data, which Cluster cannot route at all. |
+
+Wiring each one through `config.redis` (the same hash Sidekiq takes):
+
+```ruby
+# TLS with a private CA
+config.redis = { url: "rediss://redis.internal:6380/0", ssl_params: { ca_file: "/etc/ssl/redis-ca.pem" } }
+
+# ACL user (or username:/password: keys)
+config.redis = { url: "redis://wurk:#{ENV.fetch("REDIS_PASSWORD")}@redis.internal:6379/0" }
+
+# Sentinel: `name:` is the master, as in Sidekiq
+config.redis = {
+  url: "redis://mymaster/0",
+  name: "mymaster",
+  sentinels: [{ host: "sentinel-1", port: 26379 }, { host: "sentinel-2", port: 26379 }],
+  role: :master
+  # sentinel_password: "…" when the sentinels themselves require AUTH
+}
+```
+
+Two failover behaviours to know, both identical to Sidekiq:
+
+- Redis replication is asynchronous. A job acknowledged by the old primary in the
+  instant before a failover may not have reached the replica and is lost with it.
+  `WAIT`-based durability is not something Sidekiq or Wurk do on push.
+- `reconnect_attempts: 1` (the default) re-sends the one in-flight command on a fresh
+  socket, so a reply lost mid-failover can apply that command twice — a duplicate
+  push, at worst. See `RedisPool` for exactly which errors are replayed.
+
+---
+
 ## Capacity and sizing
 
 Two independent knobs, and the total is their product. Full treatment, including the
@@ -498,7 +570,7 @@ the deploy-time summary:
 
 | Knob | Controls | How to set it | Default |
 |---|---|---|---|
-| **Parallelism** | Forked worker **processes** per host/pod | `WURK_COUNT` env var (`SIDEKIQ_COUNT` alias) | CPU core count (`Etc.nprocessors`) |
+| **Parallelism** | Forked worker **processes** per host/pod | `WURK_COUNT` env var (`SIDEKIQ_COUNT` alias) | `min(Etc.nprocessors, ceil(cgroup CPU quota / period))`, logged at boot |
 | **Concurrency** | **Threads** per process | `config.concurrency`, `-c`, YAML `:concurrency`, or `RAILS_MAX_THREADS` | `5` |
 
 ```text
@@ -514,9 +586,13 @@ DB connections per host = WURK_COUNT × pool     (each fork opens its own pool)
   it. There is no `WURK_CONCURRENCY` env var.
 - **The default is aggressive on a big box.** 16 cores × 5 threads = 80 in-flight jobs
   and 80 DB connections from one host. Pin `WURK_COUNT` explicitly in production
-  rather than inheriting the core count from whatever instance type you land on —
-  especially in containers, where `nprocessors` may report the *node's* cores, not your
-  CPU limit.
+  rather than inheriting the core count from whatever instance type you land on.
+- **The default respects the container's CPU limit.** `nprocessors` reports the
+  *node's* cores inside a container, so the default is capped by the cgroup quota
+  (v2 `cpu.max`, v1 `cpu.cfs_quota_us` / `cpu.cfs_period_us`), rounded up and floored
+  at 1: a pod with `limits.cpu: 2` on a 64-core node forks 2 children, not 64. No
+  quota (`max`) means the core count. The chosen count and where it came from are
+  logged at boot — check that line after the first deploy.
 - Size each process's DB pool to cover `concurrency`, then check
   `WURK_COUNT × pool ≤ your database's spare connections`.
 - Rule of thumb: `concurrency: 5` and `WURK_COUNT` = cores you want to dedicate to

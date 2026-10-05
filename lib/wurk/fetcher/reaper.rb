@@ -5,6 +5,7 @@ require_relative '../keys'
 require_relative '../middleware/poison_pill'
 require_relative '../timer_loop'
 require_relative 'private_list_key'
+require_relative 'unparseable_keys'
 
 module Wurk
   class Fetcher
@@ -78,6 +79,18 @@ module Wurk
       LOCK_KEY = 'super_fetch:reaper'
       FULL_LOCK_KEY = 'super_fetch:reaper:full'
       SCAN_COUNT = 100
+
+      # The hourly sweep walks the whole keyspace, where almost nothing
+      # matches: COUNT is the work per SCAN call, so a bigger batch is the
+      # same server work in a tenth of the round trips — a million keys is
+      # 1,000 calls instead of 10,000. Still small enough that one call never
+      # holds Redis for more than a fraction of a millisecond.
+      FULL_SCAN_COUNT = 1000
+
+      NO_IDLETIME_WARNING = 'reaper: OBJECT IDLETIME is unavailable on this Redis (%s); the boot-grace ' \
+                            're-check before reclaiming a private list is off, and only the heartbeat re-check ' \
+                            'guards it. Expected under an LFU maxmemory policy or on servers without OBJECT ' \
+                            '(e.g. Dragonfly).'
       THREAD_NAME = 'wurk-reaper'
 
       attr_reader :interval
@@ -94,6 +107,7 @@ module Wurk
         @done = false
         @mutex = ::Mutex.new
         @sleeper = ::ConditionVariable.new
+        @unparseable = UnparseableKeys.new(config)
       end
 
       # Spawns the sweep loop. Idempotent. The loop waits one interval before
@@ -197,7 +211,7 @@ module Wurk
           end
           keys.each do |key|
             host, pid, nonce = PrivateListKey.parse_owner(public_q, key)
-            yield key, host, pid, nonce if pid
+            pid ? yield(key, host, pid, nonce) : @unparseable.report(key)
           end
           break if cursor == '0'
         end
@@ -211,11 +225,11 @@ module Wurk
         cursor = '0'
         loop do
           cursor, keys = redis(idempotent: true) do |c|
-            c.call('SCAN', cursor, 'MATCH', "#{Keys::QUEUE_PREFIX}*|*", 'COUNT', SCAN_COUNT)
+            c.call('SCAN', cursor, 'MATCH', "#{Keys::QUEUE_PREFIX}*|*", 'COUNT', FULL_SCAN_COUNT)
           end
           keys.each do |key|
             parsed = PrivateListKey.parse_full(key)
-            yield key, *parsed if parsed
+            parsed ? yield(key, *parsed) : @unparseable.report(key)
           end
           break if cursor == '0'
         end
@@ -267,8 +281,20 @@ module Wurk
 
         idle = redis(idempotent: true) { |c| c.call('OBJECT', 'IDLETIME', key) }
         idle.nil? || idle < @grace
-      rescue RedisClient::CommandError
+      rescue RedisClient::CommandError => e
+        warn_no_idletime(e)
         false
+      end
+
+      # Once per reaper (one per process): the boot-grace half of the re-check
+      # is off for good on this server, and the operator should know the
+      # heartbeat re-check is now the only guard against reclaiming a booting
+      # owner's list.
+      def warn_no_idletime(error)
+        return if @idletime_warned
+
+        @idletime_warned = true
+        logger.warn { format(NO_IDLETIME_WARNING, error.message.lines.first&.strip) }
       end
 
       def local_pid_alive?(pid)

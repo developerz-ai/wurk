@@ -13,6 +13,15 @@ require 'stringio' # capture the refuse-boot log line
 # swarm and flip Sidekiq.server? on every engine run. The policy lives in
 # RailsBoot (asserted directly below); the config namespace is the Railtie's.
 class RailtieTest < Wurk::Test::EngineCase
+  # The gemspec ships no .rake files, so the railtie must load the tasks
+  # itself for `bin/rails wurk:import:cron` to exist in a host app.
+  def test_rake_tasks_register_the_cron_import
+    app = Rake::Application.new
+    Rake.with_application(app) { Wurk::Railtie.instance.send(:run_tasks_blocks, Rails.application) }
+
+    assert app.lookup('wurk:import:cron'), 'wurk:import:cron is not defined'
+  end
+
   def test_skip_boot_is_true_in_test_environment
     assert_predicate ::Rails.env, :test?, 'precondition: engine tests run under the test env'
     assert_predicate Wurk::RailsBoot, :skip_boot?, 'test env must never auto-boot the swarm or enter server mode'

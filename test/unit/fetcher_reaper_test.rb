@@ -271,6 +271,30 @@ class FetcherReaperTest < Wurk::Test::UnitCase
     assert_equal 1, reaper.reclaim!
   end
 
+  # The grace re-check silently switching off is worth one line, not one per
+  # orphan per sweep — and the liveness re-check still has to run.
+  def test_an_idle_time_refusal_warns_once_per_reaper
+    log = capture_reaper_log
+    reaper = graced_reaper
+    reaper.define_singleton_method(:redis) do |**kw, &blk|
+      super(**kw) do |conn|
+        no_object = Object.new
+        no_object.define_singleton_method(:call) do |*args|
+          raise RedisClient::CommandError, "ERR unknown command 'OBJECT'" if args.first == 'OBJECT'
+
+          conn.call(*args)
+        end
+        no_object.define_singleton_method(:pipelined) { |&b| conn.pipelined(&b) }
+        blk.call(no_object)
+      end
+    end
+    2.times { |i| seed_private_list(DEAD_PID + i, %w[x], host: 'other-host.example', nonce: SecureRandom.hex(6)) }
+
+    assert_equal 2, reaper.reclaim!
+    assert_equal 1, log.string.scan('OBJECT IDLETIME is unavailable').size
+    assert_includes log.string, "unknown command 'OBJECT'"
+  end
+
   # --- liveness: same host, foreign PID namespace ------------------------
 
   # F2(a): a container restarting under a fixed hostname comes back in a fresh
@@ -663,7 +687,71 @@ class FetcherReaperTest < Wurk::Test::UnitCase
     assert_nil pid
   end
 
+  # --- R3: unparseable private lists are reported, once ------------------
+
+  def test_scoped_sweep_warns_once_per_unparseable_key
+    key = "#{@public_queue}|sq|some-pro-identity"
+    @pool.with { |c| c.call('LPUSH', key, payload('stranded')) }
+    log = capture_reaper_log
+
+    2.times { @reaper.reclaim! }
+
+    assert_equal 1, log.string.scan(key).size, 'one WARN per key, not one per sweep'
+    assert_includes log.string, 'WARN'
+    assert_includes log.string, 'its 1 job(s) will not be recovered'
+    assert_equal 1, llen(key), 'the list is reported, never touched'
+  end
+
+  def test_full_sweep_warns_about_an_unparseable_foreign_key
+    key = Wurk::Keys.queue("#{@ns}-foreign|odd")
+    @extra_keys << key
+    @pool.with { |c| c.call('LPUSH', key, payload('stranded')) }
+    log = capture_reaper_log
+
+    2.times { @reaper.reclaim_full! }
+
+    assert_equal 1, log.string.scan(key).size
+  end
+
+  # A public queue whose own name holds a `|` matches the same SCAN pattern.
+  def test_a_public_queue_with_a_pipe_in_its_name_is_not_reported
+    name = "#{@ns}-has|pipe"
+    key = Wurk::Keys.queue(name)
+    @extra_keys << key
+    @pool.with do |c|
+      c.call('LPUSH', key, payload('real-job'))
+      c.call('SADD', Wurk::Keys::QUEUES_SET, name)
+    end
+    log = capture_reaper_log
+
+    @reaper.reclaim_full!
+
+    refute_includes log.string, key
+  ensure
+    @pool.with { |c| c.call('SREM', Wurk::Keys::QUEUES_SET, name) }
+  end
+
+  def test_unparseable_key_memory_is_bounded
+    reporter = Wurk::Fetcher::UnparseableKeys.new(@config)
+    log = capture_reaper_log
+    key = "#{@public_queue}|odd"
+    @pool.with { |c| c.call('LPUSH', key, payload('x')) }
+
+    reporter.report(key)
+    Wurk::Fetcher::UnparseableKeys::MEMORY.times { |i| reporter.instance_variable_get(:@reported) << "filler-#{i}" }
+    reporter.report("#{key}-other")
+    reporter.report(key)
+
+    assert_equal 2, log.string.scan("#{key.inspect} looks like").size, 'a full memory forgets and reports again'
+  end
+
   private
+
+  def capture_reaper_log
+    io = StringIO.new
+    @config.logger = ::Logger.new(io)
+    io
+  end
 
   # A pid this process can be sure is not running, distinct per test so the
   # heartbeat one test registers under it can never make a peer's orphan read
