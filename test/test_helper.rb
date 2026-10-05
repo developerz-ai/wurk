@@ -195,7 +195,18 @@ if Minitest.respond_to?(:after_parallel_fork)
     # must drop it, mirroring Swarm#close_parent_sockets, or workers corrupt
     # each other's queries on the shared SQLite handle.
     ActiveRecord::Base.connection_handler.clear_all_connections! if defined?(ActiveRecord::Base)
-    SimpleCov.at_fork.call("worker-#{worker}") if ENV['COVERAGE'] && defined?(SimpleCov)
+    if ENV['COVERAGE'] && defined?(SimpleCov)
+      SimpleCov.at_fork.call("worker-#{worker}")
+      # Store this worker's result first thing at exit (at_exit is LIFO, and
+      # this is the newest handler): SimpleCov's own handler skips storing when
+      # the process exits non-zero, and workers inherit at_exit handlers —
+      # Minitest's, Wurk's — any of which can end the worker non-zero, which
+      # silently dropped that worker's whole coverage from the merge.
+      # Pid-guarded: processes a test forks from this worker (a swarm
+      # supervisor, its children) inherit the handler and must exit fast.
+      worker_pid = Process.pid
+      at_exit { SimpleCov::ResultMerger.store_result(SimpleCov.result) if Process.pid == worker_pid }
+    end
   end
   # Reap every worker before the parent's at-exit SimpleCov merge, without the
   # unbounded Process.waitall that would hang the suite on a stuck child.
