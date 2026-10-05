@@ -412,7 +412,7 @@ class HeartbeatTest < Wurk::Test::UnitCase
   end
 
   def test_statm_rss_uses_the_host_page_size_not_four_kb
-    rss_kb = build_heartbeat.send(:statm_rss_kb, "1000 256 50 1 0 100 0\n")
+    rss_kb = Wurk::Heartbeat.statm_rss_kb("1000 256 50 1 0 100 0\n")
 
     assert_equal 256 * Wurk::Heartbeat::PAGE_SIZE / 1024, rss_kb
   end

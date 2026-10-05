@@ -22,3 +22,16 @@ def bench_redis_url(default_db)
   uri.path = "/#{db}"
   uri.to_s
 end
+
+# benchmark/ips window for one report: each script passes the window it was
+# tuned for, and `WURK_BENCH_MAX_TIME` / `WURK_BENCH_MAX_WARMUP` (seconds) cap
+# every script at once. bench.yml sets them because it pays for six full runs
+# per PR. A shorter window widens each report's "± X%", and bin/bench-compare
+# adds both sides' error to the regression threshold, so the gate's noise band
+# widens with it instead of the gate turning flaky.
+def bench_ips_window(time:, warmup:)
+  {
+    time: [time, Float(ENV.fetch('WURK_BENCH_MAX_TIME', time))].min,
+    warmup: [warmup, Float(ENV.fetch('WURK_BENCH_MAX_WARMUP', warmup))].min
+  }
+end

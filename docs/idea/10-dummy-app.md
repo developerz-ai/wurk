@@ -6,9 +6,9 @@ Standard Rails engine convention: a minimal Rails app embedded in the gem repo a
 
 A skeletal Rails app with:
 
-- Database configured for SQLite by default, Postgres for CI matrix.
+- SQLite.
 - ActiveJob configured with the Wurk adapter.
-- A handful of example jobs covering common patterns (simple perform, batched jobs, scheduled jobs, jobs that use limiters, jobs that use unique constraints, jobs that use encryption).
+- `SimpleJob` for the engine tests, plus the `WURK_DEMO=1` workload (`app/jobs/demo/`, `app/workloads/demo/`) and a demo Web extension (`lib/demo_ext/`) that keep every dashboard page populated during local development.
 - The Wurk engine mounted at `/wurk` in the dummy app's routes.
 - A bare `application.rb` that requires `wurk/rails`.
 - No host-app business logic. Nothing beyond what the tests need.
@@ -29,4 +29,4 @@ A dummy app gives us a real Rails::Application instance with a real boot lifecyc
 
 - The dummy app is gitignored from the gem's file list — it doesn't ship to RubyGems.
 - The dummy's Gemfile points to the parent gem via `gem "wurk", path: "../.."`.
-- The dummy's Rails version tracks the lowest Rails we support. Multi-version Rails matrix in CI uses bundler overrides rather than multiple dummy apps.
+- CI runs one Rails, the newest; there is no version matrix.

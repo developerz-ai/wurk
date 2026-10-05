@@ -6,15 +6,15 @@ import { formatNumber } from '../../utils';
 // literal: SVG presentation attributes resolve `var()` the same way CSS
 // declarations do, so charts re-paint on a theme flip with no JS involved.
 
-export const AXIS_TICK = 'var(--mono-4)';
-export const GRID = 'var(--chart-grid)';
+const AXIS_TICK = 'var(--mono-4)';
+const GRID = 'var(--chart-grid)';
 export const MONO = 'var(--font-mono)';
 export const CURSOR = 'var(--chart-cursor)';
 export const BAR_CURSOR = 'var(--chart-band)';
-export const TOOLTIP_BG = 'var(--surface)';
-export const TOOLTIP_BORDER = 'var(--border)';
-export const TOOLTIP_FG = 'var(--text)';
-export const TOOLTIP_LABEL = 'var(--text-muted)';
+const TOOLTIP_BG = 'var(--surface)';
+const TOOLTIP_BORDER = 'var(--border)';
+const TOOLTIP_FG = 'var(--text)';
+const TOOLTIP_LABEL = 'var(--text-muted)';
 export const DOT_STROKE = 'var(--bg)';
 
 export interface Datum {
@@ -118,7 +118,7 @@ export function yScale(maxVal: number, allowDecimals = true): { max: number; tic
   return { max, ticks };
 }
 
-export function fmtTick(v: number): string {
+function fmtTick(v: number): string {
   return Number.isInteger(v) ? formatNumber(v) : v.toFixed(v < 10 ? 2 : 1);
 }
 

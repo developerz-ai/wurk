@@ -1,5 +1,8 @@
-# Dependabot config. Weekly cadence, minor+patch grouped per ecosystem to keep
-# PR noise low (majors still open individually — they need their own review).
+# Dependabot config. Minor+patch grouped per ecosystem to keep PR noise low
+# (majors still open individually — they need their own review). The shipped
+# gem's deps and the dashboard's move weekly; the CI actions and the Dockerfile
+# base images move monthly, because a weekly cadence there was mostly one PR per
+# setup-ruby patch release (#534, #540) for no change in what CI runs.
 # Bundler is scoped to the root Gemfile (the shipped gem via the gemspec);
 # test/dummy, demo, and test/ecosystem Gemfiles are fixtures, not shipped deps.
 # Gem bumps wait 14 days after a version is published (cooldown) so brand-new
@@ -42,16 +45,19 @@ updates:
         update-types:
           - minor
           - patch
+  # Every action is SHA-pinned and reviewed as one diff, so majors join the
+  # group too: the July 2026 batch was four separate major PRs (#330-#333) for
+  # one afternoon's review. dependabot-automerge.yml still leaves a group that
+  # carries a major for a human.
   - package-ecosystem: github-actions
     directory: "/"
     schedule:
-      interval: weekly
+      interval: monthly
     open-pull-requests-limit: 5
     groups:
-      minor-and-patch:
-        update-types:
-          - minor
-          - patch
+      actions:
+        patterns:
+          - "*"
   # docker covers the Dockerfile's two base images (oven/bun and
   # ruby:3.4-slim-bookworm). When dependabot bumps the oven/bun tag, every other
   # bun pin must move with it — it cannot edit those, so the human merging the
@@ -64,7 +70,7 @@ updates:
   - package-ecosystem: docker
     directory: "/"
     schedule:
-      interval: weekly
+      interval: monthly
     open-pull-requests-limit: 5
     groups:
       minor-and-patch:

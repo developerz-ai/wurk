@@ -9,7 +9,6 @@
   // Decorative entrances + the live-dot's continuous pulse are stilled; the
   // elements stay fully visible, just without the motion.
   .page-header,
-  .dash-hero,
   .table-wrapper,
   .search-empty,
   .toast,
@@ -18,7 +17,6 @@
     animation: none;
   }
 
-  .card--stat,
   .obs-card {
     transition: none;
   }

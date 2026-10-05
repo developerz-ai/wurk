@@ -12,26 +12,31 @@ module Wurk
     # Spec: docs/target/sidekiq-free.md §20 (Lua script caching).
     class Loader
       NOSCRIPT_PREFIX = 'NOSCRIPT'
+      SHA_LIST = SHAS.values.freeze
+      SOURCE_LIST = SCRIPTS.values.freeze
 
       class << self
-        # Eagerly upload every registered script to the given connection in a
-        # single pipelined round-trip (all SCRIPT LOADs, one RTT — not one per
-        # script). Idempotent on the Redis side: `SCRIPT LOAD` of the same source
-        # returns the same SHA no matter how often it runs. ChildBoot calls this
-        # once per child right after the post-fork reconnect so the first real
-        # EVALSHA hits a warm cache instead of paying a NOSCRIPT reload. Transient
-        # connection errors are the pool wrapper's job (Wurk::RedisPool#with);
-        # this only ships the loads.
+        # Upload every registered script in a single pipelined round-trip (all
+        # SCRIPT LOADs, one RTT — not one per script). Idempotent on the Redis
+        # side: `SCRIPT LOAD` of the same source returns the same SHA no matter
+        # how often it runs. Transient connection errors are the pool wrapper's
+        # job (Wurk::RedisPool#with); this only ships the loads.
         def script_load_all(redis)
-          redis.pipelined { |pipe| queue_script_loads(pipe) }
+          redis.pipelined { |pipe| SOURCE_LIST.each { |src| pipe.call('SCRIPT', 'LOAD', src) } }
         end
 
-        # The same loads, queued onto a pipeline the caller already owns, for a
-        # caller with other work to batch with them: ChildBoot pairs them with
-        # its liveness PING so a child's whole Redis validation costs one round
-        # trip instead of two, on the boot-critical path.
-        def queue_script_loads(pipe)
-          SCRIPTS.each_value { |src| pipe.call('SCRIPT', 'LOAD', src) }
+        # Upload only the scripts the server's cache lacks, so the first real
+        # EVALSHA hits a warm cache instead of paying a NOSCRIPT reload. The
+        # cache is server-global: after the first boot against a server every
+        # SHA is already there, and this is one `SCRIPT EXISTS` carrying the
+        # SHAs instead of ~70KB of source — per swarm child, on the
+        # boot-critical path. A cold cache (new or flushed server) costs one
+        # more round trip for the loads. Returns how many were uploaded.
+        def load_missing(redis)
+          present = redis.call('SCRIPT', 'EXISTS', *SHA_LIST)
+          missing = SOURCE_LIST.reject.with_index { |_, i| present[i] == 1 }
+          redis.pipelined { |pipe| missing.each { |src| pipe.call('SCRIPT', 'LOAD', src) } } unless missing.empty?
+          missing.size
         end
 
         # @param redis [RedisClient] a single connection (not a pool)

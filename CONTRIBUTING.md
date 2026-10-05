@@ -63,19 +63,17 @@ It refuses to start without a local Redis and tells you how to get one. A green
 `bin/check` exits with one of four codes — CI treats anything but `0` as a
 failed run.
 
-With no argument, mode defaults to `pr` (the same path `bin/check pr` takes) —
-the case dispatch at `bin/check:20-31` matches `''` to `pr` rather than
-treating it as unknown:
+With no argument, mode defaults to `pr` (the same path `bin/check pr` takes).
 
-| Exit | Trigger | Source |
-|---|---|---|
-| `0` | Every stage passed, OR `-h` / `--help` / `help` printed the help block without running any stage. | `bin/check:210-213`, `bin/check:23-26` |
-| `1` | At least one stage reported failure. | `bin/check:215-216` |
-| `64` | Unrecognised mode argument — anything other than `''`, `pr`, `fast`, `full`, `-h`, `--help`, or `help`. | `bin/check:27-30` |
-| `75` | No bundler on `PATH` — the environment cannot run the Ruby gate at all. | `bin/check:62-66` |
-| `75` | Bundler is on `PATH` but the gems are not installed — `bin/setup` has never run here. | `bin/check:80-84` |
-| `75` | No Redis at `REDIS_URL` (default `redis://localhost:6379/0`). | `bin/check:101-105` |
-| `75` | No `bun` on `PATH` — frontend gate cannot execute. | `bin/check:113-118` |
+| Exit | Trigger |
+|---|---|
+| `0` | Every stage passed, OR `-h` / `--help` / `help` printed the help block without running any stage. |
+| `1` | At least one stage reported failure. |
+| `64` | Unrecognised mode argument — anything other than `''`, `pr`, `fast`, `full`, `-h`, `--help`, or `help`. |
+| `75` | No bundler on `PATH` — the environment cannot run the Ruby gate at all. |
+| `75` | Bundler is on `PATH` but the gems are not installed — `bin/setup` has never run here. |
+| `75` | No Redis at `REDIS_URL` (default `redis://localhost:6379/0`). |
+| `75` | No `bun` on `PATH` — frontend gate cannot execute. |
 
 `75` is the platform's "preconditions unmet" code, and all four triggers share it
 on purpose: none of them says anything about the diff. A gate that cannot reach its Redis,
@@ -86,9 +84,9 @@ nobody wrote.
 
 ### Env knobs
 
-- `SKIP_LINT=1` — drop the rubocop stage (`bin/check:134`).
-- `SKIP_PARITY=1` — drop the parity oracles stage (`bin/check:162`).
-- `SKIP_FRONTEND=1` — drop the frontend stage (typecheck + oxlint + vitest in `frontend/`; `bin/check:153-154`).
+- `SKIP_LINT=1` — drop the rubocop stage.
+- `SKIP_PARITY=1` — drop the parity oracles stage.
+- `SKIP_FRONTEND=1` — drop the frontend stage (typecheck + oxlint + vitest in `frontend/`).
 - `NCPU=<n>` — see [Worker count](#worker-count) below for the trade-off (ceiling 14).
 
 The individual tasks, when you want one:
@@ -155,8 +153,10 @@ Test layers:
   is explicitly documented as intentional.
 - **ecosystem** — third-party Sidekiq gem suites run against Wurk.
 
-Never mock Redis in integration or parity tests. Each test uses a unique Redis
-key namespace so the parallel runner stays safe.
+Never mock Redis in integration or parity tests. Each parallel worker runs on
+its own Redis logical DB (1–14; 15 is reserved for fixed-DB tests, 0 is never
+touched) and `teardown` runs `FLUSHDB`, so concurrent test classes never see
+each other's keys.
 
 ## Conventions
 

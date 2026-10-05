@@ -108,7 +108,12 @@ module Wurk
     POOL_RETRY_MIN    = 0.1
     POOL_RETRY_SPREAD = 0.2
 
-    attr_reader :size, :url, :name, :pool_timeout, :client_config
+    # Idle reaping (`:redis_idle_timeout`) sweeps at half the timeout, so a
+    # connection is closed within 1.5x of going idle, but never less often than
+    # this — Sidekiq reaps on its 10s heartbeat.
+    REAP_MAX_INTERVAL = 10.0
+
+    attr_reader :size, :url, :name, :pool_timeout, :client_config, :redis_idle_timeout
 
     # Takes the standard Sidekiq `config.redis` hash: `pool_timeout` tunes the
     # ConnectionPool checkout; `connect_timeout`/`read_timeout`/`write_timeout`/
@@ -118,14 +123,24 @@ module Wurk
     # a key redis-client would reject raises there with the key named.
     # `on_error` is an optional callable fired per retry / final give-up with
     # { error:, attempt:, retried:, pool: }.
-    def initialize(size:, name: DEFAULT_NAME, on_error: nil, **options)
-      @size          = size
-      @name          = name
-      @on_error      = on_error
-      @pool_timeout  = options.fetch(:pool_timeout, DEFAULT_POOL_TIMEOUT)
-      @client_config = build_client_config(options)
-      @url           = @client_config[:url]
-      @pool          = ConnectionPool.new(size: size, timeout: @pool_timeout) { build_client }
+    #
+    # `redis_idle_timeout` (seconds, Wurk::Configuration[:redis_idle_timeout])
+    # closes a checked-in connection once it has sat unused that long; the next
+    # checkout dials a fresh one. It is not redis-client's own `idle_timeout`,
+    # which only re-validates a stale socket with a PING and stays a
+    # `config.redis` key.
+    def initialize(size:, name: DEFAULT_NAME, on_error: nil, redis_idle_timeout: nil, **options)
+      @size               = size
+      @name               = name
+      @on_error           = on_error
+      @redis_idle_timeout = self.class.validate_idle_timeout(redis_idle_timeout)
+      @pool_timeout       = options.fetch(:pool_timeout, DEFAULT_POOL_TIMEOUT)
+      @client_config      = build_client_config(options)
+      @url                = @client_config[:url]
+      @pool               = ConnectionPool.new(size: size, timeout: @pool_timeout) { build_client }
+      @reaper_lock        = Thread::Mutex.new
+      @reaper             = nil
+      @reaper_closed      = false
     end
 
     # Checkout a connection and run the block. Our own checkout raises
@@ -140,6 +155,7 @@ module Wurk
     # already have applied server-side, which buys back the full ConnectionError
     # backoff. Only claim it for pure reads or writes whose repeat is a no-op.
     def with(idempotent: false, &block)
+      ensure_reaper if @redis_idle_timeout
       checkout_retried = false
       entered = false
       begin
@@ -162,6 +178,7 @@ module Wurk
     end
 
     def disconnect!
+      stop_reaper
       @pool.shutdown { |conn| safe_close(conn) }
     end
 
@@ -175,8 +192,26 @@ module Wurk
 
     # Free (unchecked-out) slots right now. Local and cheap — no Redis round
     # trip — so a monitor can poll it without perturbing the pool.
+    # A reaped connection's slot stays free, so reaping leaves this count where
+    # it was; #idle is the number that drops.
     def available
       @pool.available
+    end
+
+    # Open connections sitting checked in — what idle reaping closes.
+    def idle
+      @pool.idle
+    end
+
+    # Checked here as well as by connection_pool, whose own ArgumentError would
+    # only surface inside the reaper thread and silently end it. Configuration
+    # calls it too, so a bad value fails in the parent instead of crash-looping
+    # every forked child.
+    def self.validate_idle_timeout(seconds)
+      return nil if seconds.nil?
+      return seconds if seconds.is_a?(Numeric) && seconds.positive?
+
+      raise ArgumentError, "redis_idle_timeout must be a positive number of seconds or nil, got #{seconds.inspect}"
     end
 
     private
@@ -210,6 +245,45 @@ module Wurk
       conn.close
     rescue StandardError
       nil
+    end
+
+    # Started lazily on the first checkout rather than in #initialize, so it
+    # always runs in the process that owns the connections: a thread does not
+    # survive fork (an inherited reaper reads as dead in the child), and a pool
+    # a child inherited — whose connections connection_pool drops after fork —
+    # gets a reaper of its own. Thread#alive? rather than a pid compare keeps
+    # the per-checkout cost off a getpid syscall.
+    def ensure_reaper
+      return if @reaper&.alive?
+
+      @reaper_lock.synchronize do
+        return if @reaper_closed || @reaper&.alive?
+
+        @reaper_stop = Thread::Queue.new
+        @reaper      = Thread.new(@reaper_stop) { |stop| reap_loop(stop) }
+        @reaper.name = "wurk-redis-reaper-#{@name}"
+      end
+    end
+
+    def stop_reaper
+      reaper = @reaper_lock.synchronize do
+        @reaper_closed = true
+        next unless @reaper&.alive?
+
+        @reaper_stop << true
+        @reaper
+      end
+      reaper&.join
+    end
+
+    # connection_pool removes each expired connection from the idle stack under
+    # its own lock before yielding it, so the close can never race a checkout:
+    # a checked-out connection is not on that stack to be found. #disconnect!
+    # joins this thread before shutting the pool down, so a sweep never meets a
+    # pool mid-shutdown.
+    def reap_loop(stop)
+      interval = [@redis_idle_timeout / 2.0, REAP_MAX_INTERVAL].min
+      @pool.reap(idle_seconds: @redis_idle_timeout) { |conn| safe_close(conn) } until stop.pop(timeout: interval)
     end
 
     # Runs the block on the checked-out `conn`, retrying transient RedisClient

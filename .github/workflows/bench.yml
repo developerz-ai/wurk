@@ -7,10 +7,11 @@ name: bench
 # Deleted in #296 for cost, restored here in a cheaper shape. The old workflow
 # ran the suite 7x across TWO large-runner jobs and duplicated it on every
 # push to main. This is one PR-only job that runs it 6x (best-of-3 per side) and
-# only when a bench input actually moved. A full `rake bench` is ~1 min, so
-# best-of-3 costs minutes rather than the 45 the old timeout implied — and
-# best-of-N is exactly what keeps the noisiest benches from false-positiving the
-# gate (#250): `wurk swarm boot` reports +/-24% run to run.
+# only when a bench input actually moved. Best-of-N is exactly what keeps the
+# noisiest benches from false-positiving the gate (#250): `wurk swarm boot`
+# reports +/-24% run to run. Six full runs at the scripts' own ips windows took
+# 6.2 min of a 6.6 min job and made this the slowest check on every PR, so the
+# windows are capped below (WURK_BENCH_MAX_*, bench/support.rb).
 on:
   pull_request:
 
@@ -66,7 +67,7 @@ jobs:
     needs: detect
     if: needs.detect.outputs.bench == 'true'
     runs-on: ubuntu-latest
-    timeout-minutes: 45
+    timeout-minutes: 20
     permissions:
       contents: read
       pull-requests: write # sticky delta comment
@@ -88,6 +89,12 @@ jobs:
       # (cache-version: rails-8.1 in both).
       RAILS_VERSION: "8.1"
       BENCH_RUNS: 3
+      # Warmup 2s -> 1s and timed window 5s -> 4s on the ips benches: ~10s off
+      # each of the six runs. Nothing here runs YJIT, so a second warmup
+      # second buys no steadier number; the shorter timed window is paid for in
+      # a wider "± X%", which bin/bench-compare already adds to the threshold.
+      WURK_BENCH_MAX_TIME: 4
+      WURK_BENCH_MAX_WARMUP: 1
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:

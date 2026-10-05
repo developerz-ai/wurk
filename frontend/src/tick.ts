@@ -2,11 +2,10 @@ import { createSignal, onCleanup, onMount } from 'solid-js';
 
 // One interval for the whole app, driving every relative label on screen.
 // Relative times are read per cell and a single table can render hundreds of
-// them (VirtualList.tsx keeps the DOM short, not the data), so a timer per cell
-// would mean hundreds of timers to observe one second passing. The timer is
-// instead a module singleton ref-counted across consumers — the same shape as
-// the SSE stream in hooks/useSSE.ts: started on the first mount, cleared when
-// the last consumer unmounts, never two at once.
+// them, so a timer per cell would mean hundreds of timers to observe one second
+// passing. The timer is instead a module singleton ref-counted across
+// consumers — the same shape as the SSE stream in hooks/useSSE.ts: started on
+// the first mount, cleared when the last consumer unmounts, never two at once.
 
 // One second: below the smallest unit any label renders, so a "3 seconds ago"
 // cell is never visibly behind the clock, and the work per tick is one integer.

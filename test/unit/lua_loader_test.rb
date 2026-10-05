@@ -50,20 +50,14 @@ class LuaLoaderTest < Wurk::Test::UnitCase
            "expected only SCRIPT LOADs, got #{conn.loaded.inspect}")
   end
 
-  # --- queue_script_loads ---------------------------------------------
+  # --- load_missing ---------------------------------------------------
 
-  # The pipeline-filling half, for the caller that already owns a pipeline:
-  # ChildBoot batches these behind its liveness PING so the child's Redis
-  # validation is one round trip instead of two. It must queue exactly what
-  # `script_load_all` sends and open no pipeline of its own — one that did
-  # would put the second RTT straight back.
-  def test_queue_script_loads_queues_every_load_onto_the_callers_pipeline
-    conn = FakePipelineConn.new
+  def test_load_missing_uploads_nothing_when_the_cache_is_warm
+    @pool.with do |c|
+      Wurk::Lua::Loader.script_load_all(c)
 
-    conn.pipelined { |pipe| Wurk::Lua::Loader.queue_script_loads(pipe) }
-
-    assert_equal 1, conn.pipeline_count, 'queue_script_loads must not open a pipeline of its own'
-    assert_equal Wurk::Lua::SCRIPTS.values.map { |src| ['SCRIPT', 'LOAD', src] }, conn.loaded
+      assert_equal 0, Wurk::Lua::Loader.load_missing(c)
+    end
   end
 
   # --- eval_cached happy path ----------------------------------------

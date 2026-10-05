@@ -13,8 +13,6 @@ module Wurk
   #
   # Spec: docs/target/sidekiq-free.md §5 (Sidekiq::Capsule).
   class Capsule
-    MODES = %i[strict weighted random].freeze
-
     attr_reader :name, :queues, :mode, :weights, :config, :watchdog
     attr_accessor :concurrency, :fetcher
 

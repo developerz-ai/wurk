@@ -2,6 +2,7 @@
 
 require 'benchmark/ips'
 require 'wurk'
+require_relative 'support'
 
 # Command normalization — the per-command tax every Redis round trip pays
 # before a byte reaches the socket. redis-client's default builder splices Hash
@@ -38,7 +39,7 @@ HSET = ['HSET', 'wurk:proc:worker-1', { 'busy' => '3', 'beat' => '1786000000.1' 
 builder = Wurk::CommandBuilder
 
 Benchmark.ips do |x|
-  x.config(time: 3, warmup: 1)
+  x.config(**bench_ips_window(time: 3, warmup: 1))
 
   x.report('wurk cmd ack (LREM)')    { builder.generate(ACK) }
   x.report('wurk cmd fetch (LMOVE)') { builder.generate(FETCH) }

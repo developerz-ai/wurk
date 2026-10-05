@@ -44,15 +44,3 @@
     background-position: 250% 0;
   }
 }
-
-// Fallback breathing pulse for skeletons where a sweeping gradient is overkill
-// (small chips, single cells) and for reduced-motion-tolerant subtle life.
-@keyframes skeleton-pulse {
-  0%,
-  100% {
-    opacity: 1;
-  }
-  50% {
-    opacity: 0.55;
-  }
-}

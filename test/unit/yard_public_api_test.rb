@@ -47,7 +47,7 @@ class YardPublicApiTest < Minitest::Test
     Wurk::Worker::ClassMethods#perform_in
     Wurk::Worker::ClassMethods#perform_bulk
     Wurk::Worker::ClassMethods#set
-    Wurk::Worker::ClassMethods#sidekiq_options
+    Wurk::Job::Options::ClassMethods#sidekiq_options
     Wurk::Configuration#periodic
     Wurk::Batch
     Wurk::Limiter

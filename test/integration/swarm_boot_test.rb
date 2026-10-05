@@ -221,11 +221,11 @@ class SwarmBootTest < Wurk::Test::UnitCase
     end
   end
 
-  # #101 boot-audit: each child uploads every script ONCE, in the pipeline of
-  # the liveness PING it already sends after its fork (ChildBoot), and the
-  # parent's boot path stays off Redis entirely — hoisting the upload there was
-  # measured slower. That the child sends exactly one PING + upload round trip
-  # and the parent sends nothing is pinned deterministically in
+  # #101 boot-audit: each child warms the script cache in the liveness round
+  # trip it already pays after its fork (ChildBoot), and the parent's boot path
+  # stays off Redis entirely — hoisting the upload there was measured slower.
+  # What the child sends and that the parent sends nothing is pinned
+  # deterministically in
   # test/unit/child_boot_test.rb and test/unit/swarm_test.rb; what only a real
   # fork can show is the consequence: by the time a child runs its first job, a
   # single EVALSHA against its own warmed cache is enough — no reload — and if

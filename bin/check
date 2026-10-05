@@ -154,6 +154,11 @@ if [ "$MODE" != fast ] && [ -z "${SKIP_FRONTEND:-}" ]; then
   stage "frontend" run_frontend_stage
 fi
 
+# Subprocess coverage entries are keyed by pid, so a coverage/ left by earlier
+# runs keeps growing; once it reaches hundreds of MB the forked workers miss
+# test_helper's 10s reap deadline. Each gate starts its coverage from zero.
+[ -n "${COVERAGE:-}" ] && rm -rf coverage
+
 case "$MODE" in
   fast) stage "unit tests" bundle exec rake test:unit ;;
   *)    stage "test suite (unit + integration + engine)" bundle exec rake test ;;

@@ -43,7 +43,7 @@ pool.with { |c| c.call('FLUSHDB') }
 pool.with { |c| Wurk::Lua::Loader.script_load_all(c) }
 
 Benchmark.ips do |x|
-  x.config(time: 5, warmup: 2)
+  x.config(**bench_ips_window(time: 5, warmup: 2))
 
   x.report('wurk enqueue (no policy)') do
     client.push(plain.dup)

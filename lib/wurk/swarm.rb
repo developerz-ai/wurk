@@ -1,9 +1,9 @@
 # frozen_string_literal: true
 
-require 'etc'
 require 'monitor'
 
 require_relative 'component'
+require_relative 'heartbeat'
 require_relative 'launcher'
 require_relative 'fetcher/reliable'
 require_relative 'keys'
@@ -56,11 +56,6 @@ module Wurk
     # ever sees a parent socket.
     SUPERVISOR_POOL_SIZE = 1
     SUPERVISOR_POOL_NAME = 'swarm-supervisor'
-
-    # /proc/<pid>/statm counts pages, not KB. 4KB is only the x86 default —
-    # arm64 kernels commonly run 16KB or 64KB pages, where a hard-coded 4 would
-    # under-read RSS 4-16x and the memory limit would never recycle anything.
-    PAGE_SIZE_KB = ((defined?(Etc::SC_PAGESIZE) && Etc.sysconf(Etc::SC_PAGESIZE)) || 4096) / 1024
 
     # Poll budget for the post-SIGKILL reap sweep (250ms). Deliberately far
     # shorter than any drain deadline — it runs after the fleet is already dead
@@ -156,13 +151,14 @@ module Wurk
     #
     # Nothing else belongs between steps 3 and 4. #101 boot-audit: a pre-fork
     # `SCRIPT LOAD` was tried here (the cache is server-global, so one upload
-    # could serve the whole fleet and children would only PING) and MEASURED
-    # SLOWER — `bench:swarm_boot` 152 -> 95 i/s, a 36.7% regression. Step 3 has
-    # just closed every parent socket, so the upload has to open its own
-    # connection, and it lands serially ahead of the first fork: ~2ms of a
-    # ~10ms boot, on every child's path. The per-child upload it replaced cost
-    # far less — the children reconnect in parallel, and it rides in the
-    # pipeline of a PING each one already sends (ChildBoot#validate_redis!).
+    # could serve the whole fleet) and MEASURED SLOWER — `bench:swarm_boot`
+    # 152 -> 95 i/s, a 36.7% regression. Step 3 has just closed every parent
+    # socket, so the upload has to open its own connection, and it lands
+    # serially ahead of the first fork: ~2ms of a ~10ms boot, on every child's
+    # path. Re-measured in 2026-10 (a parent PING before step 3, warming the
+    # client code the children inherit): still slower. The children reconnect
+    # in parallel and check the cache in their own first round trip
+    # (ChildBoot#validate_redis!).
     def boot(install_signals: true)
       raise 'Wurk::Swarm already booted' unless @assignments.empty?
       raise ArgumentError, 'Topology has no slots' if @topology.empty?
@@ -595,7 +591,7 @@ module Wurk
     def pid_rss_kb(pid)
       return nil unless ::File.exist?("/proc/#{pid}/statm")
 
-      ::File.read("/proc/#{pid}/statm").split[1].to_i * PAGE_SIZE_KB
+      Heartbeat.statm_rss_kb(::File.read("/proc/#{pid}/statm"))
     rescue StandardError
       nil
     end

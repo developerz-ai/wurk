@@ -315,7 +315,8 @@ again. That is intentional, matches upstream's own double-counting of a second
 in `docs/plans/2026/08/07/101-beyond-sidekiq/00-semantics-signoff.md` §1.
 Implementation: `lib/wurk/metrics/history.rb:68-73` and
 `lib/wurk/metrics/statsd.rb:148-153` both rescue and re-raise `Job::Interrupted`.
-Chain order verified in `test/unit/metrics_agreement_test.rb:79-82`.
+Chain order verified in `test/unit/metrics_history_test.rb` and
+`test/unit/metrics_statsd_test.rb` (the #394 real-chain tests).
 
 **Anchor:** `lib/wurk/metrics/history.rb:65-86`,
 `lib/wurk/metrics/statsd.rb:145-169,191-196`,

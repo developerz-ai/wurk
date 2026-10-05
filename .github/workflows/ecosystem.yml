@@ -20,8 +20,8 @@ concurrency:
   cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 jobs:
-  # 45 minutes of third-party suites is far too much to pay for a docs edit.
-  # Gate it — but on pull requests ONLY: push-to-main keeps main verifiable
+  # Third-party suites have nothing to say about a docs edit. Gate them — but
+  # on pull requests ONLY: push-to-main keeps main verifiable
   # (minus `dup` pushes, see test.yml), and the weekly schedule has no base
   # commit to diff against, so filtering there would silently skip the run it
   # exists for.
@@ -70,7 +70,8 @@ jobs:
   ecosystem:
     needs: detect
     runs-on: ubuntu-latest
-    timeout-minutes: 45
+    # Measured: ~1 min on a PR, 3-4 min on the cold weekly run.
+    timeout-minutes: 15
     services:
       redis:
         image: redis:7.4

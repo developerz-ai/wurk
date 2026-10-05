@@ -1263,6 +1263,16 @@ class ConfigurationTest < Wurk::Test::UnitCase
     assert_equal 'Wurk::Configuration is frozen', err.message
   end
 
+  def test_bad_redis_idle_timeout_fails_in_the_parent
+    config = Wurk::Configuration.new
+
+    assert_raises(ArgumentError) { config[:redis_idle_timeout] = 'soon' }
+    assert_raises(ArgumentError) { config.reap_idle_redis_connections(0) }
+    config[:redis_idle_timeout] = 30
+
+    assert_equal 30, config[:redis_idle_timeout]
+  end
+
   private
 
   # Opting in warns whenever opentelemetry-api is absent, which it is in this

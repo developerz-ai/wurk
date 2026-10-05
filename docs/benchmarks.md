@@ -233,6 +233,8 @@ harness:
 | `WURK_BENCH_MEM_JOBS` | `2000` | `bench/memory.rb` | jobs executed per RSS sample |
 | `WURK_BENCH_MEM_SAMPLES` | `5` | `bench/memory.rb` | RSS samples taken |
 | `WURK_BENCH_SWARM_CHILDREN` | `2` | `bench/swarm_boot.rb` | children forked per boot sample |
+| `WURK_BENCH_MAX_TIME` | unset | every benchmark/ips harness | ceiling on each script's timed window, seconds (can shorten, never lengthen; CI bench sets 4) |
+| `WURK_BENCH_MAX_WARMUP` | unset | every benchmark/ips harness | ceiling on each script's warmup, seconds (CI bench sets 1) |
 | `WURK_BENCH_SWARM_SAMPLES` | `8` | `bench/swarm_boot.rb` | boot samples taken |
 
 ### Comparing two runs

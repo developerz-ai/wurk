@@ -75,18 +75,14 @@ concurrency:
   group: deploy-demo
   cancel-in-progress: false
 
-# Least privilege at the workflow level; the build job opts into packages:write.
 permissions:
   contents: read
 
 env:
-  # DOCR is the deploy-critical registry: infra's Image Updater watches
-  # `registry.digitalocean.com/developerz-ai/wurk-demo` and the demo's
-  # kustomization rewrites the manifests' ghcr.io ref onto it (infra #803 —
-  # moved off GHCR 2026-07-12 when a dead org token broke fresh pulls). GHCR
-  # stays a mirror so the manifests' literal image ref keeps resolving.
+  # The only registry: infra's Image Updater watches this repository (infra
+  # #803 moved the demo off GHCR on 2026-07-12), and the demo's kustomization
+  # rewrites every image ref onto it.
   IMAGE: registry.digitalocean.com/developerz-ai/wurk-demo
-  MIRROR: ghcr.io/developerz-ai/wurk-demo
 
 jobs:
   authorize:
@@ -154,7 +150,6 @@ jobs:
       url: https://wurk.demo.developerz.ai
     permissions:
       contents: read
-      packages: write # push the demo image to GHCR
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -187,14 +182,6 @@ jobs:
           registry: registry.digitalocean.com
           username: ${{ secrets.DOCR_TOKEN }}
           password: ${{ secrets.DOCR_TOKEN }}
-      - uses: docker/login-action@dbcb813823bdd20940b903addbd779551569679f # v4.6.0
-        with:
-          registry: ghcr.io
-          # Not github.actor: the token is what authenticates, and pinning the
-          # username to the owner keeps the login independent of who triggered
-          # the run (a bot merging a release PR is an actor like any other).
-          username: ${{ github.repository_owner }}
-          password: ${{ secrets.GITHUB_TOKEN }}
       - uses: docker/build-push-action@c3c9e263c25d99ce0380d002d59b67737d91b0dc # v7.4.0
         with:
           context: .
@@ -204,45 +191,18 @@ jobs:
             ${{ env.IMAGE }}:${{ steps.built.outputs.short }}
             ${{ env.IMAGE }}:${{ steps.built.outputs.sha }}
             ${{ env.IMAGE }}:latest
-            ${{ env.MIRROR }}:${{ steps.built.outputs.short }}
-            ${{ env.MIRROR }}:${{ steps.built.outputs.sha }}
-            ${{ env.MIRROR }}:latest
           cache-from: type=gha
           cache-to: type=gha,mode=max
 
-      # Prune old wurk-demo images so GHCR storage doesn't grow unbounded — each
-      # deploy pushes a fresh digest (tagged :sha + :latest) and every prior
-      # build keeps its :sha tag forever otherwise. Keep the newest few (current
-      # + a rollback window; the Image Updater serves the demo by digest, and the
-      # newest version is the one :latest points at, so it is always retained).
-      # Non-blocking: a cleanup hiccup (e.g. GITHUB_TOKEN lacking package-delete
-      # on the org package — then provision a PAT) must never fail a deploy.
-      - name: prune old GHCR images
-        continue-on-error: true
-        uses: actions/delete-package-versions@e5bc658cc4c965c472efe991f8beea3981499c55 # v5
-        with:
-          owner: developerz-ai
-          package-name: wurk-demo
-          package-type: container
-          min-versions-to-keep: 5
-          token: ${{ secrets.GITHUB_TOKEN }}
-
-      # Guard against a "successful but destructive" prune. min-versions-to-keep
-      # is version-based, not digest-aware, so it can orphan a child manifest
-      # still referenced by a tag we meant to keep — a failure continue-on-error
-      # above would silently hide. imagetools inspect resolves the full manifest
-      # (and children) from GHCR without pulling layers, so this fails the run
-      # loudly if the deploy-critical :latest or the just-pushed :sha stopped
-      # resolving. Not continue-on-error: a broken :latest breaks the Image
-      # Updater deploy, so it must surface. DOCR is checked first and for the
-      # same reason — it is the registry Image Updater actually watches.
-      - name: verify retained images still resolve
+      # Resolve each pushed tag's manifest from DOCR (no layer pull): a tag that
+      # does not resolve leaves Image Updater without a candidate, and the demo
+      # freezes silently on its current digest.
+      - name: verify pushed tags resolve
         env:
           SHA: ${{ steps.built.outputs.sha }}
           SHORT: ${{ steps.built.outputs.short }}
         run: |
-          for ref in "${IMAGE}:${SHORT}" "${IMAGE}:latest" "${IMAGE}:${SHA}" \
-                     "${MIRROR}:${SHORT}" "${MIRROR}:latest" "${MIRROR}:${SHA}"; do
+          for ref in "${IMAGE}:${SHORT}" "${IMAGE}:latest" "${IMAGE}:${SHA}"; do
             echo "==> inspecting $ref"
             docker buildx imagetools inspect "$ref" >/dev/null
           done

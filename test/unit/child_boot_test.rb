@@ -4,38 +4,39 @@ require_relative '../test_helper'
 
 # ChildBoot#reconnect_after_fork runs inside forked swarm children; the real
 # fork path is proven end-to-end by swarm_boot_test. Here we drive its Redis
-# side in-process (no fork) against real Redis so the post-fork PING + eager
-# pipelined script-load logic is exercised directly. `send` reaches the private
+# side in-process (no fork) against real Redis so the post-fork liveness check
+# + Lua cache warm-up is exercised directly. `send` reaches the private
 # reconnect because there is no public entry that runs it without the launcher.
 class ChildBootTest < Wurk::Test::UnitCase
   parallelize_me!
 
-  # Counts round trips — one per pipeline, one per direct call — and nothing
-  # else; a `PING` plus a separate pipelined upload sends the same commands and
-  # returns the same replies, so only the count can tell the one-trip form from
-  # the two-trip one. What is actually sent is asserted against real Redis.
-  class RoundTripCountingConn
-    attr_reader :round_trips
+  # A server whose script cache holds only `cached` SHAs. The real cache is
+  # server-global and shared by every parallel worker, so a cold one can't be
+  # staged against real Redis without a SCRIPT FLUSH racing the other tests.
+  # Counts round trips — one per pipeline, one per direct call.
+  class ScriptCacheConn
+    attr_reader :round_trips, :loaded
 
-    def initialize
+    def initialize(cached)
+      @cached = cached
       @round_trips = 0
+      @loaded = []
     end
 
-    def call(*_args)
+    def call(*args)
       @round_trips += 1
-      nil
+      raise ArgumentError, "unexpected #{args.inspect}" unless args.first(2) == %w[SCRIPT EXISTS]
+
+      args.drop(2).map { |sha| @cached.include?(sha) ? 1 : 0 }
     end
 
     def pipelined
       @round_trips += 1
-      yield Pipe.new
-      []
+      yield self.class::Pipe.new(@loaded)
     end
 
-    # Buffered commands cost nothing on their own — the enclosing pipeline is
-    # the round trip.
-    class Pipe
-      def call(*_args) = nil
+    Pipe = Struct.new(:loaded) do
+      def call(*args) = loaded << args
     end
   end
 
@@ -181,40 +182,41 @@ class ChildBootTest < Wurk::Test::UnitCase
     Wurk::Metrics::Statsd.reset!
   end
 
-  def test_validate_redis_pings_the_fresh_pool
-    assert_equal 'PONG', @boot.send(:validate_redis!).first
+  def test_validate_redis_leaves_every_lua_script_cached
+    @boot.send(:validate_redis!)
+
+    present = @config.redis { |c| c.call('SCRIPT', 'EXISTS', *Wurk::Lua::SHAS.values) }
+
+    assert_equal [1] * Wurk::Lua::SHAS.size, present
   end
 
-  # The child's whole Redis validation is ONE round trip: the liveness PING and
-  # the eager Lua upload ride in the same pipeline. `SCRIPT EXISTS` can't catch
-  # a regression here — every parallel worker shares one server-global script
-  # cache — so assert on what the child actually sends, and on the single batch
-  # of replies that comes back (two round trips can't produce one).
+  # Against a warm server cache — every child after a fleet's first, every
+  # boot after the first against a server — the child's whole Redis validation
+  # is ONE round trip carrying SHAs only: no script source rides the
+  # boot-critical path.
   #
-  # #101 boot-audit: hoisting the upload into the parent (children PING only)
-  # was measured and REJECTED — see Swarm#boot. Children reconnect in parallel;
-  # the parent's upload would have been serial, ahead of every fork.
-  def test_validate_redis_uploads_every_lua_script_in_the_ping_round_trip
-    replies = nil
-    sent = record_capsule_commands { replies = @boot.send(:validate_redis!) }
+  # #101 boot-audit: hoisting the upload into the parent was measured and
+  # REJECTED — see Swarm#boot. Children reconnect in parallel; the parent's
+  # upload would have been serial, ahead of every fork.
+  def test_validate_redis_against_a_warm_cache_sends_one_script_exists
+    @config.redis { |c| Wurk::Lua::Loader.script_load_all(c) }
 
-    assert_equal %w[PING], sent.first
-    assert_equal Wurk::Lua::SCRIPTS.size + 1, sent.size, 'nothing else may ride the boot-critical round trip'
-    assert_equal ['PONG', *Wurk::Lua::SHAS.values], replies,
-                 'the PING reply and every uploaded SHA must come back together'
+    sent = record_capsule_commands { @boot.send(:validate_redis!) }
+
+    assert_equal [['SCRIPT', 'EXISTS', *Wurk::Lua::SHAS.values]], sent
   end
 
-  # The saving itself: the child's whole Redis validation costs ONE round trip.
-  # A separate `PING` ahead of the upload sends the same commands and returns
-  # the same replies, so the test above cannot see the difference — this can.
-  def test_validate_redis_costs_a_single_round_trip
-    conn = RoundTripCountingConn.new
-    capsule = @config.default_capsule
-    capsule.instance_variable_get(:@pools)[:main] = StubPool.new(conn)
+  def test_validate_redis_against_a_cold_cache_uploads_only_what_is_missing
+    cached = Wurk::Lua::SHAS.values.each_slice(2).map(&:first)
+    conn = ScriptCacheConn.new(cached)
+    @config.default_capsule.instance_variable_get(:@pools)[:main] = StubPool.new(conn)
 
     @boot.send(:validate_redis!)
 
-    assert_equal 1, conn.round_trips
+    missing = Wurk::Lua::SCRIPTS.values.reject { |src| cached.include?(Digest::SHA1.hexdigest(src)) }
+
+    assert_equal 2, conn.round_trips
+    assert_equal(missing.map { |src| ['SCRIPT', 'LOAD', src] }, conn.loaded)
   ensure
     @config.reset_redis_pools!
   end

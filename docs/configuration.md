@@ -144,7 +144,7 @@ Verbatim from `Wurk::Configuration::DEFAULTS`.
 | `:reloader` | callable | `proc { |&b| b.call }` | Wraps each job execution (Rails sets the code reloader) |
 | `:backtrace_cleaner` | callable | `->(bt) { bt }` | Filters backtraces stored on the retry/dead payload |
 | `:logged_job_attributes` | Array\<String\> | `["bid", "tags"]` | Job hash keys copied into the log context |
-| `:redis_idle_timeout` | Integer / nil | `nil` | Accepted for drop-in compatibility; **not consumed by Wurk** |
+| `:redis_idle_timeout` | Numeric / nil | `nil` | Seconds a checked-in Redis connection may sit unused before its pool closes it; the next checkout dials a fresh one. Applies to every pool the configuration builds (capsule main + fetch, web, swarm supervisor), in each process that uses it. `nil` reaps nothing and runs no reaper thread. Set with `config.reap_idle_redis_connections(seconds)` (default 60) or `config[:redis_idle_timeout] = seconds`, before any pool is built. Not redis-client's `idle_timeout` (a PING re-check of a stale socket, set via `config.redis`) |
 | `:redis_error_handlers` | Array | `[]` | Registered via `config.on_redis_error`; receives one Hash |
 | `:status_ttl` | Integer | `Keys::STATUS_TTL` | `status:<jid>` (`Wurk::Status`) row lifetime, re-stamped on every write |
 | `:status_retention` | Integer / nil | `nil` | Extra lifetime a `complete` status row gets past `status_ttl`; `nil` keeps the same clock as a running job, `0` matches Sidekiq's own behavior (nothing left behind) |
@@ -244,7 +244,7 @@ is the drop-in alias and is checked second (native wins).
 | Variable | Read by | Effect |
 |---|---|---|
 | `REDIS_URL` | `Configuration#initialize`, `RedisPool::DEFAULT_URL` | Redis URL. Default `redis://localhost:6379/0` |
-| `WURK_COUNT` / `SIDEKIQ_COUNT` | `Configuration#default_child_count` | Swarm child processes. Whole number = absolute count; fractional = CPU multiplier (`0.5` → half the cores, rounded). Floored at 1. Unparseable → CPU count. Default `Etc.nprocessors` |
+| `WURK_COUNT` / `SIDEKIQ_COUNT` | `Configuration#default_child_count` | Swarm child processes. Whole number = absolute count; fractional = CPU multiplier (`0.5` → half the cores, rounded). Floored at 1. Unparseable → CPU count. Default: detected CPU count (cgroup CPU limit, else `Etc.nprocessors`) |
 | `WURK_MAXMEM_MB` / `SIDEKIQ_MAXMEM_MB` | `Configuration#memory_limit_mb` | Parent TERMs + respawns any child whose RSS exceeds this. Unset/unparseable → recycling off |
 | `WURK_DISABLED` | `RailsBoot.skip_boot?` | `=1` skips both server mode and the swarm boot in a Rails host |
 | `APPLY` | `rake wurk:import:cron` (`lib/wurk/rake_tasks.rb`) | `=1` writes the imported sidekiq-cron loops to Redis; anything else is a dry run. Read only by that task |
@@ -490,7 +490,7 @@ Two independent knobs. Consistent with
 
 | Knob | Controls | Set with | Default |
 |---|---|---|---|
-| **Parallelism** | Forked worker **processes** | `WURK_COUNT` (alias `SIDEKIQ_COUNT`), or an explicit `config.topology` | CPU core count (`Etc.nprocessors`) |
+| **Parallelism** | Forked worker **processes** | `WURK_COUNT` (alias `SIDEKIQ_COUNT`), or an explicit `config.topology` | Detected CPU count (cgroup CPU limit, else `Etc.nprocessors`) |
 | **Concurrency** | **Threads per process** | `config.concurrency`, `-c`, YAML `:concurrency`, `RAILS_MAX_THREADS` | `5` |
 
 ```text
@@ -592,7 +592,7 @@ end
 | `#empty?` | No slots declared |
 
 When you don't assign a topology, `config.topology` builds
-`Topology.flat(count: <WURK_COUNT or Etc.nprocessors>, queues: <default capsule queue_specs>, concurrency: <default capsule concurrency>)`.
+`Topology.flat(count: <WURK_COUNT or the detected CPU count>, queues: <default capsule queue_specs>, concurrency: <default capsule concurrency>)`.
 An explicit topology therefore **supersedes `WURK_COUNT`** — the process count
 comes from the slots.
 
@@ -872,7 +872,7 @@ differs from `docs/target/sidekiq-free.md`:
 | Extra lifecycle events | Wurk's `LIFECYCLE_EVENTS` adds `:fork` (Ent §7.4) and `:leader` (Ent §6) to the free-spec set |
 | Extra default key | `:redis_error_handlers` is in `DEFAULTS`; there is no Sidekiq equivalent (`config.on_redis_error`) |
 | Pool sizing | Spec: per-capsule pool = `concurrency`, internal = 10. Wurk: main pool = `max(concurrency + 5, 10)`, **plus** a dedicated fetch pool of `concurrency` and a dedicated web pool of `web_pool_size` |
-| `reap_idle_redis_connections` | Not implemented. `:redis_idle_timeout` is accepted (it is in `DEFAULTS`) but never consumed |
+| `reap_idle_redis_connections` | Same observable behaviour, different driver: Sidekiq reaps on the 10s heartbeat; each Wurk pool runs its own reaper thread, sweeping every `min(timeout / 2, 10)` seconds, so pools outside the launcher (web, supervisor) are reaped too. Requires connection_pool >= 3.0, as Sidekiq 8.1 does |
 | `Config#redis_info` / `#to_json` | Not implemented on the configuration object. `Wurk::RedisPool#info` returns parsed `INFO` merged with the pool's `size`/`available` |
 | `:max_iteration_runtime` | Accepted for drop-in compatibility; not consumed by `Wurk::IterableJob` |
 | `thread_priority` | Stored and readable (default `-1`) but not applied to worker threads |

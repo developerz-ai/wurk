@@ -15,11 +15,7 @@ module Wurk
   class Topology
     # `:count` shadows Struct#count by design — Slot is a kw-init data
     # carrier and the slot's child-count is the field users read.
-    Slot = Struct.new(:count, :queues, :concurrency, keyword_init: true) do # rubocop:disable Lint/StructNewOverride
-      def to_h
-        { count: count, queues: queues, concurrency: concurrency }
-      end
-    end
+    Slot = Struct.new(:count, :queues, :concurrency, keyword_init: true) # rubocop:disable Lint/StructNewOverride
 
     def initialize
       @slots = []

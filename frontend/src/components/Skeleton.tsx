@@ -36,7 +36,7 @@ export function Skeleton(props: SkeletonProps) {
 }
 
 /** A single line of placeholder text. `width` gives a natural ragged edge. */
-export function SkeletonText(props: { width?: Size; style?: JSX.CSSProperties }) {
+function SkeletonText(props: { width?: Size; style?: JSX.CSSProperties }) {
   return <span aria-hidden="true" class="skeleton skeleton--text" style={{ width: px(props.width ?? '100%'), ...props.style }} />;
 }
 

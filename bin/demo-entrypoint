@@ -27,10 +27,10 @@ case "$role" in
     # then run supervise on the MAIN thread so SIGTERM drains and exits promptly
     # instead of being stuck in a sleep until SIGKILL.
     #
-    # Without WURK_COUNT the swarm forks one child per *node* core (Etc.nprocessors
-    # sees the host, not the pod's cgroup) — 6 children in a pod requesting 100m
-    # CPU under a 768Mi memory limit. Two is plenty for the demo's trickle; the
-    # deployment env can still override.
+    # Without WURK_COUNT the swarm forks one child per detected core. Detection
+    # honours a cgroup CPU *limit*, but a pod that only requests 100m CPU has
+    # none, so it would fork the node's 6 under a 768Mi memory limit. Two is
+    # plenty for the demo's trickle; the deployment env can still override.
     export WURK_DISABLED=1 WURK_COUNT="${WURK_COUNT:-2}"
     exec bundle exec rails runner "
       swarm = Wurk::Swarm.new(topology: Wurk.configuration.topology)

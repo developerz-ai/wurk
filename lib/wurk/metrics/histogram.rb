@@ -23,14 +23,6 @@ module Wurk
         65_000, 100_000, 150_000, 225_000, 335_000,
         1e20
       ].freeze
-      LABELS = %w[
-        20ms 30ms 45ms 65ms 100ms
-        150ms 225ms 335ms 500ms 750ms
-        1.1s 1.7s 2.5s 3.8s 5.75s
-        8.5s 13s 20s 30s 45s
-        65s 100s 150s 225s 335s
-        Slow
-      ].freeze
       SIZE = BUCKET_INTERVALS.size
       FETCH = (0...SIZE).flat_map { |i| ['GET', 'u16', "##{i}"] }.freeze
       HISTOGRAM_TTL = 8 * 60 * 60
