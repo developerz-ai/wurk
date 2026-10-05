@@ -617,3 +617,11 @@ resetting it.
 **Wurk:** `Sidekiq::Metrics::Histogram` is a module of bucket constants and the key format, not upstream's instance API; the profiler does not store upstream's `filename` field (a deleted temp path); `ProfileSet` skips a record whose hash has expired instead of raising; `JobSet#each` / `Queue#each` offsets never go below 0.
 
 **Anchor:** `lib/wurk/metrics/histogram.rb`, `lib/wurk/profiler.rb`, `lib/wurk/profile_set.rb`, `lib/wurk/job_set.rb`.
+
+## Dashboard and web extension differences
+
+**Wurk:** `GET /profiles/:key` requires same-origin, a typed URL, or a same-host Referer (Sidekiq answers any GET); extension `redirect_to` inside the SPA falls back to the extension root for off-site targets (the SPA loads extensions with `fetch`, which cannot follow cross-origin redirects); `reload_page` inside the SPA goes to the extension index; `Sidekiq::Web.views` is an accepted, ignored array; read-only mode answers TRACE with 403 on the standalone mount; the health server closes connections past 16 concurrent unanswered.
+
+**Why:** cross-site GETs must not trigger third-party uploads; the rest follow from the SPA architecture.
+
+**Anchor:** `app/controllers/wurk/profiles_controller.rb`, `lib/wurk/web/extension.rb`, `lib/wurk/health.rb`.

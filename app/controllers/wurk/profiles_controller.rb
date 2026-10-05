@@ -30,6 +30,7 @@ module Wurk
       # Firefox profiler store is a side effect — read-only deploys (e.g. the
       # public demo) must not let any visitor exfiltrate profiling data.
       return head(:forbidden) if ::Wurk::Web.config.read_only?
+      return head(:forbidden) unless navigated_from_dashboard?
 
       sid = profile_sid(params[:key])
       return head(:not_found) if sid == :missing
@@ -39,6 +40,21 @@ module Wurk
     end
 
     private
+
+    # The upload is a side effect behind a GET, so a cross-site `<img src>`
+    # could trigger it with the operator's session. Allow the dashboard's own
+    # link (same-origin) and a typed URL or bookmark (`none`). A browser too
+    # old to send Sec-Fetch-Site still sends a Referer, which must then be
+    # this host.
+    def navigated_from_dashboard?
+      site = request.headers['Sec-Fetch-Site']
+      return %w[same-origin none].include?(site) if site
+
+      referer = URI.parse(request.referer.to_s)
+      referer.host == request.host && referer.port == request.port
+    rescue URI::InvalidURIError
+      false
+    end
 
     def profile_blob(key)
       ::Wurk::ProfileRecord.data_for(key)

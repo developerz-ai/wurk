@@ -18,12 +18,13 @@
     "expand": "Développer",
     "language": "Langue",
     "language_current": "Langue : {name}",
-    "timezone": "Fuseau horaire",
     "timezone_current": "Fuseau horaire : {name}",
     "theme_current": "Thème : {name}",
     "theme_next": "Passer au thème {name}",
     "status_active": "État du système : Actif",
-    "status_inactive": "État du système : Déconnecté"
+    "status_inactive": "État du système : Déconnecté",
+    "home_label": "Wurk — accueil du tableau de bord",
+    "toggle": "Afficher ou masquer la navigation"
   },
   "dashboard": {
     "processed": "Traités",
@@ -35,8 +36,6 @@
     "scheduled": "Planifiés",
     "dead": "Morts",
     "processes": "Processus",
-    "latency": "Latence",
-    "live": "En direct",
     "paused": "En pause",
     "strapline": "Wurk, wurk. Prêt à travailler. Zug zug.",
     "tagline": "Un remplacement 100% compatible avec Sidekiq + Sidekiq Pro + Sidekiq Enterprise. Gratuit pour toujours.",
@@ -68,9 +67,6 @@
     "enqueued_at": "Mis en file à",
     "message": "Message",
     "count": "Nombre",
-    "score": "Score",
-    "next_run": "Prochaine exécution",
-    "last_run": "Dernière exécution",
     "status": "Statut",
     "total": "Total",
     "pending": "En attente",
@@ -79,7 +75,6 @@
     "concurrency": "Concurrence",
     "busy": "Occupé",
     "queues": "Files",
-    "hostname": "Hôte",
     "name": "Nom",
     "type": "Type",
     "used": "Utilisé",
@@ -128,7 +123,8 @@
     "running_since": "En cours depuis",
     "no_running": "Aucune tâche en cours sur ce processus",
     "leader": "Leader",
-    "leader_title": "Ce processus détient le verrou de leader du cluster"
+    "leader_title": "Ce processus détient le verrou de leader du cluster",
+    "heartbeat_ok": "Battement de cœur OK"
   },
   "cron": {
     "history_title": "Historique d'exécution",
@@ -186,7 +182,6 @@
     "prev": "Précédent",
     "next": "Suivant",
     "search": "Rechercher",
-    "refresh": "Actualiser",
     "all_suffix": "Tout",
     "selected": "{n} sélectionnés",
     "select_hint": "Sélectionnez des tâches sur lesquelles agir",
@@ -198,7 +193,9 @@
     "confirm": "{action} {scope} ? Cette action est irréversible.",
     "confirm_clear_queue": "Vider toutes les tâches de « {name} » ? Cette action est irréversible.",
     "reset": "Réinitialiser",
-    "enqueue": "Mettre en file"
+    "enqueue": "Mettre en file",
+    "matching": "{n} correspondent au filtre",
+    "all_filtered_hint": "« Tout » agit sur l’ensemble complet, pas seulement sur les lignes filtrées. Effacez le filtre pour l’utiliser."
   },
   "readonly": {
     "banner": "Mode lecture seule"
@@ -209,7 +206,8 @@
     "gone": "Cette tâche avait déjà disparu — elle a peut-être été exécutée ou supprimée.",
     "unavailable": "Redis est indisponible pour le moment. Réessayez dans un instant.",
     "dismiss": "Ignorer",
-    "region": "Notifications"
+    "region": "Notifications",
+    "partial": "{count} appliqués, {failed} en échec. La liste a été actualisée."
   },
   "common": {
     "loading": "Chargement…",
@@ -218,12 +216,12 @@
     "page": "Page",
     "of": "sur",
     "ms": "ms",
-    "ago": "il y a",
-    "in": "dans",
     "load_failed": "Impossible de charger cette page",
     "load_failed_hint": "L'application a peut-être été mise à jour depuis son ouverture. Recharger récupérera la dernière version.",
     "reload": "Recharger",
-    "filter_placeholder": "Filtrer par classe ou JID…"
+    "filter_placeholder": "Filtrer par classe ou JID…",
+    "matching": "{n} correspondances",
+    "close": "Fermer"
   },
   "limiters": {
     "exhausted": "épuisé",
@@ -301,5 +299,10 @@
     "light": "Clair",
     "dark": "Sombre",
     "system": "Système"
+  },
+  "notfound": {
+    "title": "Page introuvable",
+    "hint": "Ce tableau de bord n’a aucune page à cette adresse.",
+    "home": "Retour au tableau de bord"
   }
 }

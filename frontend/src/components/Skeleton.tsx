@@ -1,4 +1,5 @@
 import { Index, type JSX } from 'solid-js';
+import { t } from '../i18n';
 
 // Content-shaped loading placeholders. Prefer these over a lone spinner: they
 // hint at the layout that's coming, so the swap to real data doesn't shift the
@@ -42,7 +43,7 @@ export function SkeletonText(props: { width?: Size; style?: JSX.CSSProperties })
 /** Table placeholder that mirrors `.table-wrapper` chrome for a seamless swap. */
 export function SkeletonTable(props: { rows?: number; cols?: number }) {
   return (
-    <div class="skeleton-table" role="status" aria-busy="true" aria-label="Loading">
+    <div class="skeleton-table" role="status" aria-busy="true" aria-label={t('common.loading')}>
       <Index each={Array.from({ length: props.rows ?? 6 })}>
         {() => (
           <div class="skeleton-table__row">
@@ -59,7 +60,7 @@ export function SkeletonTable(props: { rows?: number; cols?: number }) {
 /** Grid of metric-card placeholders for dashboard-style stat rows. */
 export function SkeletonCards(props: { count?: number }) {
   return (
-    <div class="skeleton-cards" role="status" aria-busy="true" aria-label="Loading">
+    <div class="skeleton-cards" role="status" aria-busy="true" aria-label={t('common.loading')}>
       <Index each={Array.from({ length: props.count ?? 4 })}>
         {() => (
           <div class="skeleton-card">
@@ -75,7 +76,7 @@ export function SkeletonCards(props: { count?: number }) {
 /** Generic full-page fallback: header + table. Used as a route Suspense boundary. */
 export function PageSkeleton() {
   return (
-    <div role="status" aria-busy="true" aria-label="Loading">
+    <div role="status" aria-busy="true" aria-label={t('common.loading')}>
       <div class="page-header" style={{ animation: 'none' }}>
         <Skeleton width="2.75rem" height="2.75rem" radius="var(--radius)" />
         <div class="skeleton-stack" style={{ flex: 1, 'max-width': '18rem' }}>

@@ -36,6 +36,31 @@ class DashboardRoutesTest < Wurk::Test::EngineCase
     assert_includes last_response.body, '<div id="wurk-root">'
   end
 
+  # Client routes carry user-chosen dots; Rails must not read the tail as a
+  # format and 404 before the SPA loads.
+  def test_dotted_deep_links_serve_the_spa_shell
+    %w[/wurk/retries/1700000000.5-jid /wurk/queues/emails.critical].each do |path|
+      get path, {}, 'HTTP_ACCEPT' => 'text/html,application/xhtml+xml'
+
+      assert_equal 200, last_response.status, path
+      assert_includes last_response.body, '<div id="wurk-root">', path
+    end
+  end
+
+  def test_static_file_paths_are_not_answered_with_the_shell
+    get '/wurk/assets/stale-chunk.js', {}, 'HTTP_ACCEPT' => '*/*'
+
+    assert_equal 404, last_response.status
+  end
+
+  def test_api_routes_still_answer_json_beside_the_catch_all
+    get '/wurk/api/queues/emails.critical', {}, 'HTTP_ACCEPT' => 'text/html'
+
+    assert_equal 200, last_response.status
+    assert_match %r{application/json}, last_response.content_type.to_s
+    assert_equal 'emails.critical', ::JSON.parse(last_response.body)['name']
+  end
+
   # The SPA builds every API URL and its router base from window.__WURK_BASE__,
   # injected from the engine's mount prefix (request.script_name). Proves the
   # dashboard is mount-agnostic: the /sidekiq mount (test/dummy routes) serves

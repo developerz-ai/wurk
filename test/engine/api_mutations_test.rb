@@ -307,6 +307,44 @@ class ApiMutationsTest < Wurk::Test::EngineCase
     assert_equal 1, fetch_set('retry').size, 'read-only must not mutate'
   end
 
+  # W6 (#548): user-chosen ids containing a dot must reach the action, not
+  # 404 as a route miss with `.b` swallowed as a format.
+  def test_reset_limiter_accepts_a_dotted_name
+    name = "#{@ns}.limiter"
+    ::Wurk.redis { |c| c.call('SET', "lmtr-cs:#{name}", '1') }
+
+    post "/wurk/api/limiters/#{name}/reset"
+
+    assert_equal 200, last_response.status, last_response.body[0, 300]
+    assert_equal(0, ::Wurk.redis { |c| c.call('EXISTS', "lmtr-cs:#{name}") })
+  end
+
+  def test_cron_routes_accept_a_dotted_loop_id
+    lid = "#{@ns}.loop"
+    %w[pause unpause enqueue].each do |cmd|
+      post "/wurk/api/cron/#{lid}/#{cmd}"
+
+      assert_equal 'unknown loop', json_body[:error], "cron/:lid/#{cmd} did not reach the action"
+    end
+    get "/wurk/api/cron/#{lid}/history"
+
+    assert_equal lid, json_body[:lid]
+  end
+
+  def test_flow_and_batch_routes_accept_a_dotted_id
+    get "/wurk/api/flows/#{@ns}.f"
+
+    assert_equal 'unknown flow', json_body[:error]
+
+    post "/wurk/api/flows/#{@ns}.f/abandon"
+
+    assert_equal 'unknown flow', json_body[:error]
+
+    get "/wurk/api/batches/#{@ns}.b"
+
+    assert_equal 'unknown batch', json_body[:error]
+  end
+
   private
 
   def json_body = ::JSON.parse(last_response.body, symbolize_names: true)

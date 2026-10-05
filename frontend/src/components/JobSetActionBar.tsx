@@ -15,6 +15,12 @@ interface JobSetActionBarProps {
   all: ActionDef[];
   selectedCount: number;
   total: number;
+  // A filter is narrowing the table. The "all" endpoints act on the whole
+  // set regardless (POST /api/<set>/all/<cmd> takes no filter), so they are
+  // disabled rather than let "Delete All" read as "delete what I see".
+  filtered?: boolean;
+  // Rows matching the active filter, preformatted ("1,204" / "20,000+").
+  matching?: string;
   pending: boolean;
   onBulk: (cmd: string) => void;
   onAll: (cmd: string) => void;
@@ -31,7 +37,11 @@ export default function JobSetActionBar(props: JobSetActionBarProps) {
     <div class="action-bar">
       <div class="action-bar-group">
         <span class="action-bar-count">
-          {props.selectedCount > 0 ? t('actions.selected', { n: props.selectedCount }) : t('actions.select_hint')}
+          {props.selectedCount > 0
+            ? t('actions.selected', { n: props.selectedCount })
+            : props.filtered && props.matching !== undefined
+              ? t('actions.matching', { n: props.matching })
+              : t('actions.select_hint')}
         </span>
         <For each={props.bulk}>
           {(a) => (
@@ -50,7 +60,8 @@ export default function JobSetActionBar(props: JobSetActionBarProps) {
           {(a) => (
             <button
               class={`btn btn-sm btn-ghost${a.danger ? ' btn-danger' : ''}`}
-              disabled={props.pending || props.total === 0}
+              disabled={props.pending || props.total === 0 || props.filtered}
+              title={props.filtered ? t('actions.all_filtered_hint') : undefined}
               onClick={() => confirmDanger(a, t('actions.scope_all')) && props.onAll(a.cmd)}
             >
               {`${a.label} ${t('actions.all_suffix')}`}

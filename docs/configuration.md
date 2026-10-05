@@ -728,6 +728,28 @@ end
 (`""`, `"0"`, `"false"`, `"no"`, `"off"` mean off). Authorization hooks, Rack
 middleware, and CSRF are covered in [authentication.md](authentication.md).
 
+### Live-update streams
+
+Every dashboard tab holds one server-sent-events stream for live updates, and
+each open stream occupies a web-server thread for as long as it lasts. To keep
+a handful of open tabs from taking every thread your app has, Wurk caps
+concurrent streams per web process:
+
+```ruby
+Wurk.configure_server do |config|
+  config.web.max_streams = 4   # nil (default) = derive; 0 = streaming off
+end
+```
+
+| Value | Cap |
+|---|---|
+| `nil` (default) | Half the server's threads, at least 1. Threads come from Puma's `max_threads` when Puma booted the app, else `RAILS_MAX_THREADS`, else 3 |
+| Integer `> 0` | That many streams per process |
+| `0` | No streams; the dashboard polls instead |
+
+A stream request over the cap gets `503`; the tab keeps working by polling.
+Anything other than `nil` or an Integer `>= 0` raises `ArgumentError`.
+
 ### Language
 
 The dashboard ships copy for `en es fr de pt-BR ja zh-CN ar` and picks one per

@@ -13,7 +13,8 @@ module Wurk
   #                  fired within `ready_window` seconds. 503 otherwise.
   # Anything else returns 404 JSON.
   #
-  # The server uses a raw TCPServer and one accept thread. No Rack, no
+  # The server uses a raw TCPServer, one accept thread and a short-lived
+  # thread per connection (bounded, deadline-capped). No Rack, no
   # dependencies — it lives inside every worker process where Rails may or
   # may not exist (standalone CLI, Embedded, swarm child). Bound to a
   # dedicated port so it does not collide with the host application's HTTP.
@@ -32,6 +33,13 @@ module Wurk
       # that probes come back quickly after the owner dies, long enough not to
       # spin. See #start_retry_loop.
       RETRY_INTERVAL = 5
+      # Overall budget for one request head. A kubelet probe sends its head in
+      # one segment; anything slower is broken or hostile.
+      REQUEST_TIMEOUT   = 1.0
+      MAX_REQUEST_BYTES = 8192
+      MAX_CONNECTIONS   = 16
+      REASONS = { 200 => 'OK', 404 => 'Not Found', 405 => 'Method Not Allowed',
+                  503 => 'Service Unavailable' }.freeze
 
       attr_reader :port, :bind
 
@@ -47,6 +55,8 @@ module Wurk
         @thread         = nil
         @retry_thread   = nil
         @done           = false
+        @slots          = ::Mutex.new
+        @connections    = 0
       end
 
       def start
@@ -133,7 +143,7 @@ module Wurk
 
           begin
             client, _addr = @server.accept_nonblock(exception: false)
-            handle(client) if client
+            dispatch(client) if client
           rescue ::IO::WaitReadable
             next
           rescue ::StandardError => e
@@ -145,29 +155,84 @@ module Wurk
         # Server was closed during shutdown — expected.
       end
 
-      def handle(client) # rubocop:disable Metrics/AbcSize
-        return unless client.wait_readable(1.0)
+      # Each connection gets its own short-lived thread so a client that
+      # dribbles bytes (slowloris) cannot hold the accept loop — and with it
+      # every kubelet probe — hostage. Past MAX_CONNECTIONS the socket is
+      # closed unanswered rather than queued: a probe that loses that race
+      # retries, an attacker gains nothing.
+      def dispatch(client)
+        return client.close unless claim_slot
 
-        request_line = client.gets("\r\n")
+        spawn_handler(client)
+      rescue ::ThreadError
+        release_slot
+        client.close
+      end
+
+      def spawn_handler(client)
+        ::Thread.new(client) do |sock|
+          ::Thread.current.name = 'wurk-health-conn'
+          ::Thread.current.report_on_exception = false
+          handle(sock)
+        ensure
+          release_slot
+        end
+      end
+
+      def claim_slot
+        @slots.synchronize do
+          return false if @connections >= MAX_CONNECTIONS
+
+          @connections += 1
+          true
+        end
+      end
+
+      def release_slot
+        @slots.synchronize { @connections -= 1 }
+      end
+
+      def handle(client)
+        request_line = read_request_line(client)
         return if request_line.nil?
 
         method, path, = request_line.strip.split(' ', 3)
-        # Drain remaining headers; ignore the body (probes don't send one).
-        # Wait for readability before each gets so a stalled client can't
-        # block the single accept thread mid-headers.
-        loop do
-          break unless client.wait_readable(1.0)
-
-          line = client.gets("\r\n")
-          break if line.nil? || line == "\r\n"
-        end
-
         body, status = response_for(method, path)
         write_response(client, status, body)
       rescue ::StandardError => e
         logger&.error { "Wurk::Health request: #{e.class}: #{e.message}" }
       ensure
         client&.close
+      end
+
+      # Reads the head under one overall deadline and a MAX_REQUEST_BYTES cap.
+      # Headers are read only to drain them (closing a socket with unread bytes
+      # makes the kernel answer RST, which can eat the response); the answer
+      # depends on the request line alone, so a client that sends that line
+      # and then stalls is still answered when the deadline expires.
+      def read_request_line(client)
+        buffer = +''
+        deadline = monotonic + REQUEST_TIMEOUT
+        until buffer.include?("\r\n\r\n") || buffer.bytesize >= MAX_REQUEST_BYTES
+          chunk = read_chunk(client, MAX_REQUEST_BYTES - buffer.bytesize, deadline)
+          break unless chunk
+
+          buffer << chunk
+        end
+        buffer[/\A[^\r\n]*(?=\r\n)/]
+      end
+
+      # nil once the deadline passes or the peer closes.
+      def read_chunk(client, max_bytes, deadline)
+        remaining = deadline - monotonic
+        return unless remaining.positive? && client.wait_readable(remaining)
+
+        chunk = client.read_nonblock(max_bytes, exception: false)
+        chunk == :wait_readable ? '' : chunk
+      end
+
+      def monotonic
+        ::Process.clock_gettime(::Process::CLOCK_MONOTONIC)
       end
 
       def response_for(method, path)
@@ -221,14 +286,7 @@ module Wurk
       end
 
       def write_response(client, status, body)
-        reason = case status
-                 when 200 then 'OK'
-                 when 404 then 'Not Found'
-                 when 405 then 'Method Not Allowed'
-                 when 503 then 'Service Unavailable'
-                 else 'Status'
-                 end
-
+        reason = REASONS.fetch(status, 'Status')
         client.write(
           "HTTP/1.1 #{status} #{reason}\r\n" \
           "Content-Type: application/json\r\n" \

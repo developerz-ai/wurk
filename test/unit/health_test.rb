@@ -360,6 +360,103 @@ class HealthTest < Wurk::Test::UnitCase
     assert_equal 200, parse_response(raw)[:status_code]
   end
 
+  # --- W7: slowloris-safe request handling --------------------------------
+
+  def test_stalled_client_does_not_block_a_second_probe
+    launcher = FakeLauncher.new(config: FakeConfig.new)
+    @server = build_server(launcher)
+    @server.start
+
+    stalled = ::TCPSocket.open('127.0.0.1', @server.port)
+    stalled.write('G')
+    started = ::Process.clock_gettime(::Process::CLOCK_MONOTONIC)
+    raw = ::TCPSocket.open('127.0.0.1', @server.port) do |s|
+      s.write("GET /live HTTP/1.1\r\nHost: x\r\n\r\n")
+      s.read
+    end
+    elapsed = ::Process.clock_gettime(::Process::CLOCK_MONOTONIC) - started
+
+    assert_equal 200, parse_response(raw)[:status_code]
+    assert_operator elapsed, :<, 0.5, "second probe waited #{elapsed}s behind a stalled client"
+  ensure
+    stalled&.close
+  end
+
+  def test_dribbling_client_is_cut_off_at_the_overall_deadline
+    launcher = FakeLauncher.new(config: FakeConfig.new)
+    @server = build_server(launcher)
+    @server.start
+
+    sock = ::TCPSocket.open('127.0.0.1', @server.port)
+    started = ::Process.clock_gettime(::Process::CLOCK_MONOTONIC)
+    closed = false
+    until closed || ::Process.clock_gettime(::Process::CLOCK_MONOTONIC) - started > 4
+      begin
+        sock.write('X')
+        sleep 0.1
+      rescue ::Errno::EPIPE, ::Errno::ECONNRESET
+        closed = true
+      end
+      closed ||= sock.wait_readable(0) && sock.read_nonblock(1, exception: false).nil?
+    end
+    elapsed = ::Process.clock_gettime(::Process::CLOCK_MONOTONIC) - started
+
+    assert closed, 'server never dropped a client trickling one byte every 100ms'
+    assert_operator elapsed, :<, Wurk::Health::Server::REQUEST_TIMEOUT + 1
+  ensure
+    sock&.close
+  end
+
+  def test_oversized_head_stops_being_read_at_the_cap
+    launcher = FakeLauncher.new(config: FakeConfig.new)
+    @server = build_server(launcher)
+    @server.start
+    reads = []
+    @server.define_singleton_method(:read_request_line) do |client|
+      super(client).tap { |line| reads << line }
+    end
+
+    ::TCPSocket.open('127.0.0.1', @server.port) do |s|
+      s.write("GET /live HTTP/1.1\r\nX-Pad: #{'a' * (Wurk::Health::Server::MAX_REQUEST_BYTES * 4)}")
+      s.read
+    rescue ::Errno::ECONNRESET, ::Errno::EPIPE
+      nil
+    end
+
+    assert(wait_until { reads.any? })
+    assert_equal 'GET /live HTTP/1.1', reads.first
+    assert_equal 200, get_from_running('/live')[:status_code]
+  end
+
+  def test_connections_past_the_cap_are_closed_unanswered
+    launcher = FakeLauncher.new(config: FakeConfig.new)
+    @server = build_server(launcher)
+    @server.start
+    @server.instance_variable_set(:@connections, Wurk::Health::Server::MAX_CONNECTIONS)
+
+    leftover = ::TCPSocket.open('127.0.0.1', @server.port) do |s|
+      s.write("GET /live HTTP/1.1\r\n\r\n")
+      s.read
+    rescue ::Errno::ECONNRESET
+      ''
+    end
+
+    assert_empty leftover
+    @server.instance_variable_set(:@connections, 0)
+
+    assert_equal 200, get_from_running('/live')[:status_code]
+  end
+
+  def test_thread_exhaustion_releases_the_slot_and_closes_the_client
+    server = build_server(FakeLauncher.new(config: FakeConfig.new))
+    client = StringIO.new
+    server.define_singleton_method(:spawn_handler) { |_| raise ::ThreadError, 'cannot create thread' }
+    server.send(:dispatch, client)
+
+    assert_predicate client, :closed?
+    assert_equal 0, server.instance_variable_get(:@connections)
+  end
+
   private
 
   # Spins long enough for the accept thread to traverse multiple
@@ -398,6 +495,14 @@ class HealthTest < Wurk::Test::UnitCase
       s.read
     end
     parse_response(raw_response)
+  end
+
+  def get_from_running(path)
+    raw = ::TCPSocket.open('127.0.0.1', @server.port) do |s|
+      s.write("GET #{path} HTTP/1.1\r\n\r\n")
+      s.read
+    end
+    parse_response(raw)
   end
 
   def parse_response(raw)

@@ -1,7 +1,8 @@
 import { useMutation, useQueryClient } from '@tanstack/solid-query';
 import { basePath } from '../basePath';
-import { post } from '../http';
-import { notifyError } from '../toast';
+import { partialFailure, post } from '../http';
+import { notifyError, pushToast } from '../toast';
+import { t } from '../i18n';
 
 // The three mutable sorted-set views. The string doubles as the API path
 // segment (`<mount>/api/<set>`) and the query key the pages cache under.
@@ -19,6 +20,8 @@ export function entryKey(e: { score: number; jid: string }): string {
 // the UI reflects the change without a manual refresh. `post` throws on a
 // non-2xx (read-only 403, gone 404, Redis-down 503), so `notifyError` raises a
 // status-aware toast for every call site without each page wiring its own.
+// A 422 is a partial failure — some entries DID apply — so it gets its own
+// count-bearing toast and still refreshes the list.
 // solid-query's useMutation takes an options accessor; call `single.mutate(...)`.
 export function useJobSetActions(set: JobSetName) {
   const qc = useQueryClient();
@@ -27,24 +30,31 @@ export function useJobSetActions(set: JobSetName) {
     qc.invalidateQueries({ queryKey: ['stats'] });
   };
 
+  const onError = (err: unknown) => {
+    const partial = partialFailure(err);
+    if (!partial) return notifyError(err);
+    pushToast(t('toast.partial', { count: partial.count, failed: partial.failed.length }), 'error');
+    invalidate();
+  };
+
   const single = useMutation(() => ({
     mutationFn: ({ key, cmd }: { key: string; cmd: string }) =>
       post(`${basePath()}/api/${set}/${encodeURIComponent(key)}`, { cmd }),
     onSuccess: invalidate,
-    onError: notifyError,
+    onError,
   }));
 
   const bulk = useMutation(() => ({
     mutationFn: ({ keys, cmd }: { keys: string[]; cmd: string }) =>
       post(`${basePath()}/api/${set}`, { keys, cmd }),
     onSuccess: invalidate,
-    onError: notifyError,
+    onError,
   }));
 
   const all = useMutation(() => ({
     mutationFn: (cmd: string) => post(`${basePath()}/api/${set}/all/${cmd}`),
     onSuccess: invalidate,
-    onError: notifyError,
+    onError,
   }));
 
   return { single, bulk, all };

@@ -34,6 +34,18 @@ module Wurk
         }
       end
 
+      # The paging fields every listing answers with. `page` is the page
+      # actually served (an out-of-range ?page= is clamped, so the SPA must
+      # adopt it) and `max_page` the deepest page the server will walk to.
+      # A filtered slice adds `filtered_total` — matching rows found — and
+      # `filtered_total_exact`; when false the count is a lower bound.
+      def meta(page)
+        fields = { page: page[:page], count: page[:count], max_page: MAX_PAGE }
+        return fields unless page.key?(:matched)
+
+        fields.merge(filtered_total: page[:matched], filtered_total_exact: page[:exhausted])
+      end
+
       def clamp_int(value, min, max, default)
         Integer(value, 10).clamp(min, max)
       rescue ::ArgumentError, ::TypeError
@@ -85,24 +97,30 @@ module Wurk
 
       # Filtered path: the offset counts MATCHING rows, so page boundaries
       # stay stable (raw-index offsets re-emit or skip matches across pages).
+      # Records the matches seen in `page[:matched]` and whether the set was
+      # walked to its end in `page[:exhausted]`: stopping once the page fills
+      # is what keeps a filtered request cheap, so the count is only exact
+      # when nothing was left unread.
       def slice_filtered(enumerable, offset, page)
         results = []
         matched = 0
         examined = 0
         enumerable.each do |member|
-          examined += 1
-          break if examined > FILTER_SCAN_LIMIT
+          break if (examined += 1) > FILTER_SCAN_LIMIT
 
           payload = yield(member)
           next unless payload && match?(payload, page[:substr])
 
-          if matched >= offset
-            results << payload
-            break if results.size >= page[:count]
-          end
-          matched += 1
+          results << payload if (matched += 1) > offset
+          break if results.size >= page[:count]
         end
+        record_match_count(page, matched, examined, results.size)
         results
+      end
+
+      def record_match_count(page, matched, examined, served)
+        page[:matched] = matched
+        page[:exhausted] = examined <= FILTER_SCAN_LIMIT && served < page[:count]
       end
 
       def match?(payload, substr)

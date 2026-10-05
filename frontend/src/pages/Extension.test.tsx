@@ -108,4 +108,62 @@ describe('Extension', () => {
     await new Promise((r) => setTimeout(r, 0));
     expect(screen.queryByText('Late')).not.toBeInTheDocument();
   });
+
+  describe('link interception', () => {
+    const meta = {
+      read_only: false,
+      read_only_message: null,
+      custom_tabs: [{ name: 'Demo Locks', path: 'locks/', ext_name: 'demo_locks' }],
+    };
+    const html = '<a href="/wurk/ext/demo_locks/locks/abc">detail</a><a href="/wurk/ext/demo_locks/locks/x" target="_blank">ext</a>';
+
+    async function setup() {
+      const fetchMock = mockFetch(meta, html);
+      vi.stubGlobal('fetch', fetchMock);
+      renderAt('/ext/locks');
+      await waitFor(() => expect(screen.getByText('detail')).toBeInTheDocument());
+      const extCalls = () => fetchMock.mock.calls.map((c) => String(c[0])).filter((u) => u.includes('/ext/'));
+      return { extCalls };
+    }
+
+    // Records whether the SPA claimed the click, then cancels it at the window
+    // so jsdom doesn't attempt (and log) a real navigation for the ones it left.
+    function click(el: Element, init: MouseEventInit) {
+      let defaultPrevented = false;
+      const sink = (e: Event) => {
+        defaultPrevented = e.defaultPrevented;
+        e.preventDefault();
+      };
+      window.addEventListener('click', sink, { once: true });
+      el.dispatchEvent(new MouseEvent('click', { bubbles: true, cancelable: true, ...init }));
+      return { defaultPrevented };
+    }
+
+    it('intercepts a plain primary click and loads in place', async () => {
+      const { extCalls } = await setup();
+      const ev = click(screen.getByText('detail'), { button: 0 });
+      expect(ev.defaultPrevented).toBe(true);
+      await waitFor(() => expect(extCalls()).toContain('/wurk/ext/demo_locks/locks/abc'));
+    });
+
+    it.each([
+      ['meta', { metaKey: true }],
+      ['ctrl', { ctrlKey: true }],
+      ['shift', { shiftKey: true }],
+      ['alt', { altKey: true }],
+      ['middle button', { button: 1 }],
+    ])('leaves a %s click to the browser', async (_label, init) => {
+      const { extCalls } = await setup();
+      const before = extCalls().length;
+      const ev = click(screen.getByText('detail'), { button: 0, ...init });
+      expect(ev.defaultPrevented).toBe(false);
+      expect(extCalls().length).toBe(before);
+    });
+
+    it('leaves a target=_blank link to the browser', async () => {
+      await setup();
+      const ev = click(screen.getByText('ext'), { button: 0 });
+      expect(ev.defaultPrevented).toBe(false);
+    });
+  });
 });

@@ -8,7 +8,7 @@ import { relativeTime, hoverTime, formatKb, formatDuration, formatArgs, nowSecon
 import { useMeta } from '../hooks/useMeta';
 import { SkeletonCards } from '../components/Skeleton';
 import { basePath } from '../basePath';
-import { post } from '../http';
+import { getJSON, post } from '../http';
 import { notifyError } from '../toast';
 
 interface Process {
@@ -98,7 +98,7 @@ const statLabelStyle = {
 function ProcessDetail(props: { proc: Process }) {
   const work = useQuery<WorkRow[]>(() => ({
     queryKey: ['workers'],
-    queryFn: () => fetch(`${basePath()}/api/workers`).then((r) => r.json() as Promise<WorkRow[]>),
+    queryFn: () => getJSON<WorkRow[]>(`${basePath()}/api/workers`),
     refetchInterval: 5000,
   }));
   const rows = () => (work.data ?? []).filter((w) => w.process_id === props.proc.identity);
@@ -224,7 +224,7 @@ export default function Busy() {
 
   const query = useQuery<Process[]>(() => ({
     queryKey: ['processes'],
-    queryFn: () => fetch(`${basePath()}/api/processes`).then((r) => r.json() as Promise<Process[]>),
+    queryFn: () => getJSON<Process[]>(`${basePath()}/api/processes`),
     refetchInterval: 5000,
   }));
 
@@ -321,7 +321,7 @@ export default function Busy() {
                                   </div>
                                 </div>
                                 <div style={{ display: 'flex', gap: '0.375rem' }}>
-                                  <Show when={isRecent}><span class="live-dot" title="Heartbeat OK" /></Show>
+                                  <Show when={isRecent}><span class="live-dot" title={t('busy.heartbeat_ok')} /></Show>
                                   <Show when={proc.leader}>
                                     <span class="badge badge-accent" title={t('busy.leader_title')}>
                                       <i class="fa-solid fa-crown" style={{ 'margin-right': '0.3rem' }} />

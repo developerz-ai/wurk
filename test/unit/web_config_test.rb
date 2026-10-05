@@ -121,6 +121,20 @@ class WebConfigTest < Wurk::Test::UnitCase
     assert_equal ['second'], body
   end
 
+  # The engine's MiddlewareStack and the standalone `Sidekiq::Web.call` each
+  # pass their own inner app; with one cache slot every alternating request
+  # rebuilt the other's chain.
+  def test_rack_app_caches_each_inner_side_by_side
+    engine_inner = ->(_env) { [200, {}, ['engine']] }
+    standalone_inner = ->(_env) { [200, {}, ['standalone']] }
+
+    engine_app = Wurk::Web.config.rack_app(engine_inner)
+    standalone_app = Wurk::Web.config.rack_app(standalone_inner)
+
+    assert_same engine_app, Wurk::Web.config.rack_app(engine_inner)
+    assert_same standalone_app, Wurk::Web.config.rack_app(standalone_inner)
+  end
+
   # --- Rack middleware --------------------------------------------------
 
   def test_middleware_returns_200_when_authorized
@@ -353,6 +367,56 @@ class WebConfigTest < Wurk::Test::UnitCase
 
     assert_includes paths, 'locks'
     assert_includes paths, 'expiry'
+  end
+
+  # Gems call these straight off `Sidekiq::Web` at boot (upstream class
+  # methods); they must be the live config collections, not copies.
+  def test_sidekiq_web_locales_views_middlewares_delegate_to_config
+    cfg = Wurk::Web.config
+
+    assert_same cfg.locales, Sidekiq::Web.locales
+    assert_same cfg.middlewares, Sidekiq::Web.middlewares
+    assert_same cfg.views, Sidekiq::Web.views
+    Sidekiq::Web.views << '/gem/views'
+
+    assert_equal ['/gem/views'], cfg.views
+  end
+
+  def test_reset_clears_views
+    Wurk::Web.views << '/gem/views'
+    Wurk::Web.reset_config!
+
+    assert_empty Wurk::Web.views
+  end
+
+  def test_max_streams_defaults_to_nil_so_the_cap_is_derived
+    assert_nil Wurk::Web.config.max_streams
+  end
+
+  def test_max_streams_accepts_nil_zero_and_positive_integers
+    cfg = Wurk::Web.config
+    cfg.max_streams = 4
+
+    assert_equal 4, cfg.max_streams
+    cfg.max_streams = 0
+
+    assert_equal 0, cfg.max_streams
+    cfg.max_streams = nil
+
+    assert_nil cfg.max_streams
+  end
+
+  def test_max_streams_rejects_negative_and_non_integer_values
+    [-1, '4', 2.5, true].each do |value|
+      assert_raises(ArgumentError, value.inspect) { Wurk::Web.config.max_streams = value }
+    end
+  end
+
+  def test_reset_clears_max_streams
+    Wurk::Web.config.max_streams = 2
+    Wurk::Web.reset_config!
+
+    assert_nil Wurk::Web.config.max_streams
   end
 
   def test_locale_settings_default_to_the_shipped_bundles

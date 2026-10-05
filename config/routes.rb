@@ -25,6 +25,17 @@ Wurk::Engine.routes.draw do
     # against the per-set whitelist and returns a JSON 400 for an unknown action,
     # matching the single/bulk contract. A route-level constraint would turn that
     # into a 404 route miss instead.
+    #
+    # Responses: 200 `{ ok: true, count }`; 400 `{ error }` for an unknown cmd
+    # or too many keys; 404 `{ error: 'unknown job' }` when a single key is
+    # gone. The single (`<set>/:key`), bulk (`<set>`) and
+    # `scheduled/all/add_to_queue` paths apply entry by entry and answer 422
+    # `{ ok: false, count, failed: [{ key, error }] }` when any entry raised —
+    # `count` is what WAS applied, so the client must refetch the list.
+    # Listings answer `{ total, page, count, max_page, entries }`; `page` is
+    # the page actually served (clamped to `max_page`), and a `?substr=`
+    # listing adds `filtered_total` + `filtered_total_exact` (false: lower
+    # bound).
     get  'retries',          to: 'api#retries'
     post 'retries',          to: 'api#retries_bulk',   as: :api_retries_bulk
     post 'retries/all/:cmd', to: 'api#retries_all',    as: :api_retries_all
@@ -51,17 +62,20 @@ Wurk::Engine.routes.draw do
     # read-only mode 403s it via the Authorization middleware, no guard needed
     # here.
     get  'flows',            to: 'api#flows'
-    get  'flows/:fid',       to: 'api#flow', as: :api_flow
-    post 'flows/:fid/abandon', to: 'api#abandon_flow', as: :api_abandon_flow
+    get  'flows/:fid',       to: 'api#flow', as: :api_flow, constraints: { fid: %r{[^/]+} }
+    post 'flows/:fid/abandon', to: 'api#abandon_flow', as: :api_abandon_flow, constraints: { fid: %r{[^/]+} }
     get  'batches',          to: 'api#batches'
-    get  'batches/:bid',     to: 'api#batch', as: :api_batch
+    get  'batches/:bid',     to: 'api#batch', as: :api_batch, constraints: { bid: %r{[^/]+} }
     get  'limiters',         to: 'api#limiters'
-    post 'limiters/:name/reset', to: 'api#reset_limiter', as: :api_reset_limiter
+    # Limiter names, loop ids, flow and batch ids are user-chosen and may carry
+    # dots; without the segment constraint Rails reads `.b` as a format and the
+    # route 404s.
+    post 'limiters/:name/reset', to: 'api#reset_limiter', as: :api_reset_limiter, constraints: { name: %r{[^/]+} }
     get  'cron',             to: 'api#cron'
-    post 'cron/:lid/pause',  to: 'api#pause_cron', as: :api_pause_cron
-    post 'cron/:lid/unpause', to: 'api#unpause_cron', as: :api_unpause_cron
-    post 'cron/:lid/enqueue', to: 'api#enqueue_cron', as: :api_enqueue_cron
-    get  'cron/:lid/history', to: 'api#cron_history', as: :api_cron_history
+    post 'cron/:lid/pause',  to: 'api#pause_cron', as: :api_pause_cron, constraints: { lid: %r{[^/]+} }
+    post 'cron/:lid/unpause', to: 'api#unpause_cron', as: :api_unpause_cron, constraints: { lid: %r{[^/]+} }
+    post 'cron/:lid/enqueue', to: 'api#enqueue_cron', as: :api_enqueue_cron, constraints: { lid: %r{[^/]+} }
+    get  'cron/:lid/history', to: 'api#cron_history', as: :api_cron_history, constraints: { lid: %r{[^/]+} }
     get  'metrics',          to: 'api#metrics'
     get  'metrics/:klass',   to: 'api#metrics_for_job', as: :api_metrics_for_job, constraints: { klass: %r{[^/]+} }
     get  'history/snapshots', to: 'api#history_snapshots', as: :api_history_snapshots
@@ -109,6 +123,13 @@ Wurk::Engine.routes.draw do
   get 'ext-assets/:name/*file', to: 'extensions#asset', as: :extension_asset,
                                 format: false, constraints: { name: %r{[^/]+} }
 
-  # SPA catch-all — let the SolidJS router handle the rest.
-  get '*path', to: 'dashboard#index', constraints: ->(req) { req.format == :html }
+  # SPA catch-all — let the SolidJS router handle the rest. `format: false`
+  # because client routes carry user-chosen dots (`/queues/emails.critical`,
+  # `/retries/1700000000.5-jid`) that Rails would otherwise read as a format
+  # and 404 before the SPA loads; the HTML check then runs on Accept alone. A
+  # path ending in a static-file extension still 404s, so a stale asset or
+  # source-map URL doesn't come back as a 200 HTML page.
+  static_file = /\.(?:js|mjs|css|map|json|png|jpe?g|gif|svg|ico|webp|woff2?|ttf|txt)\z/i
+  get '*path', to: 'dashboard#index', format: false,
+               constraints: ->(req) { req.format == :html && !req.path.match?(static_file) }
 end

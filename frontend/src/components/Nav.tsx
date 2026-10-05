@@ -91,7 +91,7 @@ export default function Nav(props: NavProps) {
             href="/"
             end
             onClick={handleNavClick}
-            aria-label="Wurk — dashboard home"
+            aria-label={t('nav.home_label')}
             style={{
               color: 'var(--text)',
               'text-decoration': 'none',

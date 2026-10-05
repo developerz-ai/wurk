@@ -37,11 +37,17 @@ module Wurk
     private
 
     def respond_with((status, headers, body))
-      return redirect_to(headers['Location'], allow_other_host: false) if status == 302
+      return redirect_to(headers['Location'], allow_other_host: false) if status == 302 && headers['Location']
 
+      content_type = 'text/html; charset=utf-8'
+      headers.each do |key, value|
+        next content_type = value if key.casecmp?('content-type')
+
+        response.headers[key] = value
+      end
       # Extension output is host-registered server code, same trust model as
       # Sidekiq::Web rendering its extensions — not user input.
-      render html: body.html_safe, layout: false, status: status
+      render body: body, content_type: content_type, status: status
     end
   end
 end

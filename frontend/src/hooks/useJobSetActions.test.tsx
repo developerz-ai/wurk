@@ -2,7 +2,7 @@ import { describe, it, expect, vi, afterEach } from 'vitest';
 import { render, screen, fireEvent, waitFor } from '@solidjs/testing-library';
 import { QueryClient, QueryClientProvider } from '@tanstack/solid-query';
 import { entryKey, useJobSetActions, type JobSetName } from './useJobSetActions';
-import { Toasts } from '../toast';
+import { Toasts, toasts, dismissToast } from '../toast';
 import { t } from '../i18n';
 
 describe('entryKey', () => {
@@ -11,12 +11,12 @@ describe('entryKey', () => {
   });
 });
 
-function mockFetch(status: number) {
+function mockFetch(status: number, body: unknown = {}) {
   return vi.fn((_url: string, _init?: RequestInit) => {
     if (status >= 200 && status < 300) {
-      return Promise.resolve({ ok: true, status, json: () => Promise.resolve({}) } as Response);
+      return Promise.resolve({ ok: true, status, json: () => Promise.resolve(body) } as Response);
     }
-    return Promise.resolve({ ok: false, status, json: () => Promise.resolve({}) } as Response);
+    return Promise.resolve({ ok: false, status, json: () => Promise.resolve(body) } as Response);
   });
 }
 
@@ -39,8 +39,8 @@ function Harness(props: { set: JobSetName }) {
   );
 }
 
-function renderHarness(set: JobSetName, status: number) {
-  const fetchMock = mockFetch(status);
+function renderHarness(set: JobSetName, status: number, body?: unknown) {
+  const fetchMock = mockFetch(status, body);
   vi.stubGlobal('fetch', fetchMock);
   const client = new QueryClient({ defaultOptions: { queries: { retry: false }, mutations: { retry: false } } });
   const invalidateSpy = vi.spyOn(client, 'invalidateQueries');
@@ -53,7 +53,12 @@ function renderHarness(set: JobSetName, status: number) {
 }
 
 describe('useJobSetActions', () => {
-  afterEach(() => vi.unstubAllGlobals());
+  afterEach(() => {
+    vi.unstubAllGlobals();
+    // The toast list is module-global; a leftover from one case would satisfy
+    // the next case's findByText before its own mutation settles.
+    for (const toast of toasts()) dismissToast(toast.id);
+  });
 
   it('single.mutate POSTs to /api/<set>/<encoded key> with the cmd body', async () => {
     const { fetchMock } = renderHarness('retries', 200);
@@ -114,5 +119,26 @@ describe('useJobSetActions', () => {
     renderHarness('dead', 503);
     fireEvent.click(screen.getByText('all'));
     expect(await screen.findByText(t('toast.unavailable'))).toBeInTheDocument();
+  });
+
+  it.each(['single', 'bulk', 'all'])('a 422 partial failure from %s toasts the counts and still refreshes the list', async (btn) => {
+    const { invalidateSpy } = renderHarness('retries', 422, {
+      ok: false,
+      count: 3,
+      failed: [{ key: '1|j1', error: 'RuntimeError: boom' }, { key: '2|j2', error: 'RuntimeError: boom' }],
+    });
+    fireEvent.click(screen.getByText(btn));
+
+    expect(await screen.findByText(t('toast.partial', { count: 3, failed: 2 }))).toBeInTheDocument();
+    expect(invalidateSpy).toHaveBeenCalledWith({ queryKey: ['retries'] });
+    expect(invalidateSpy).toHaveBeenCalledWith({ queryKey: ['stats'] });
+  });
+
+  it('treats a 422 without the partial-failure shape as a plain failure', async () => {
+    const { invalidateSpy } = renderHarness('retries', 422, { error: 'nope' });
+    fireEvent.click(screen.getByText('bulk'));
+
+    expect(await screen.findByText(t('toast.failed'))).toBeInTheDocument();
+    expect(invalidateSpy).not.toHaveBeenCalled();
   });
 });

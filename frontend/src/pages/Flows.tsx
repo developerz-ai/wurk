@@ -1,7 +1,8 @@
 import { useQuery } from '@tanstack/solid-query';
 import { onMount, For, Switch, Match, Show } from 'solid-js';
 import { A } from '@solidjs/router';
-import { Pagination } from '../components/Pagination';
+import { Pagination, maxPageOf } from '../components/Pagination';
+import { useServedPage } from '../hooks/useServedPage';
 import { SortableTh } from '../components/SortableTh';
 import { useSort, type Accessors } from '../hooks/useSort';
 import { usePageParam } from '../hooks/usePageParam';
@@ -31,6 +32,7 @@ export interface FlowRow {
 interface FlowsResponse {
   total: number;
   page: number;
+  max_page?: number;
   count: number;
   flows: FlowRow[];
 }
@@ -59,6 +61,8 @@ export default function Flows() {
     queryFn: () => getJSON<FlowsResponse>(`${basePath()}/api/flows?page=${page() - 1}&count=${PAGE_SIZE}`),
     refetchInterval: 5000,
   }));
+
+  useServedPage(page, setPage, () => q.data);
 
   useResetPageOnEmpty(page, setPage, () => !q.isPending && !!q.data, () => (q.data?.flows.length ?? 0) === 0);
 
@@ -142,7 +146,7 @@ export default function Flows() {
                   </tbody>
                 </table>
               </div>
-              <Pagination page={page()} total={data().total} count={PAGE_SIZE} onChange={setPage} />
+              <Pagination page={page()} total={data().total} count={PAGE_SIZE} maxPage={maxPageOf(data())} onChange={setPage} />
             </Show>
           </div>
         )}

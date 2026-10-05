@@ -30,6 +30,24 @@ class WebRackAppTest < Wurk::Test::UnitCase
     end
   end
 
+  module ApiShapedExt
+    def self.registered(app)
+      app.post '/api/v1/thing' do
+        'mutated'
+      end
+    end
+  end
+
+  class WardenStub
+    def initialize(app)
+      @app = app
+    end
+
+    def call(env)
+      @app.call(env.merge('warden.user' => 'admin'))
+    end
+  end
+
   # Tags responses so tests can prove the host middleware chain ran.
   class StampMiddleware
     def initialize(app)
@@ -87,6 +105,73 @@ class WebRackAppTest < Wurk::Test::UnitCase
 
     assert_equal 404, status
     refute_empty body.join
+  end
+
+  # --- W1: the standalone mount runs the same gates as the engine ---------
+
+  def test_authorization_denial_is_403_on_get_through_sidekiq_web
+    Sidekiq::Web.configure { |c| c.authorization { |_env, _method, _path| false } }
+
+    status, _headers, body = Sidekiq::Web.call(env_for('GET', '/standalone'))
+
+    assert_equal 403, status
+    assert_equal 'Forbidden', body.join
+  end
+
+  # A forged Sec-Fetch-Site passes the CSRF check (curl can set any header);
+  # it must not pass authorization.
+  def test_authorization_denial_is_403_on_forged_same_origin_post
+    Sidekiq::Web.configure { |c| c.authorization { |_env, _method, _path| false } }
+    env = env_for('POST', '/standalone/poke').merge('HTTP_SEC_FETCH_SITE' => 'same-origin')
+
+    status, _headers, body = Sidekiq::Web.call(env)
+
+    assert_equal 403, status
+    assert_equal 'Forbidden', body.join
+  end
+
+  def test_authorization_sees_method_and_mount_relative_path
+    seen = nil
+    Sidekiq::Web.configure { |c| c.authorization { |_env, method, path| seen = [method, path] } }
+
+    Sidekiq::Web.call(env_for('GET', '/standalone').merge('SCRIPT_NAME' => '/sidekiq'))
+
+    assert_equal ['GET', '/standalone'], seen
+  end
+
+  def test_read_only_refuses_post_and_still_serves_get
+    Sidekiq::Web.configure { |c| c.read_only = true }
+    env = env_for('POST', '/standalone/poke').merge('HTTP_SEC_FETCH_SITE' => 'same-origin')
+
+    status, _headers, body = Sidekiq::Web.call(env)
+
+    assert_equal 403, status
+    assert_equal 'Read-only mode', body.join
+    assert_equal 200, Sidekiq::Web.call(env_for('GET', '/standalone'))[0]
+  end
+
+  # The machine API never lives under this mount, so an /api/v1 path is just
+  # an extension path — read-only must not hand it off and wave it through.
+  def test_read_only_refuses_api_shaped_extension_path
+    Wurk::Web.register(ApiShapedExt, name: 'apishaped', tab: 'ApiShaped', index: 'api/v1/thing')
+    Sidekiq::Web.configure { |c| c.read_only = true }
+    env = env_for('POST', '/api/v1/thing').merge('HTTP_SEC_FETCH_SITE' => 'same-origin')
+
+    token = 'standalone-gate-token-0123456789abcdef'
+    Wurk.configuration.api_token(token, scopes: %i[admin])
+
+    assert_equal 403, Sidekiq::Web.call(env)[0]
+  ensure
+    Wurk.configuration.api_tokens.delete(token)
+  end
+
+  # Host middleware runs outside the gate, so its env (e.g. warden) reaches
+  # the authorization hook, as on the engine mount.
+  def test_host_middleware_runs_before_authorization
+    Sidekiq::Web.use(WardenStub)
+    Sidekiq::Web.configure { |c| c.authorization { |env, _method, _path| env['warden.user'] == 'admin' } }
+
+    assert_equal 200, Sidekiq::Web.call(env_for('GET', '/standalone'))[0]
   end
 
   # `middlewares` is the live array (upstream surface): mutating it after the

@@ -1,6 +1,7 @@
 # frozen_string_literal: true
 
 require_relative '../engine_test_helper'
+require 'net/http'
 
 # Drives the Profiles endpoints (#162) against the booted dummy app via
 # Rack::Test: the JSON list (/api/profiles) and the raw gzipped blob
@@ -10,6 +11,12 @@ class ProfilesEndpointsTest < Wurk::Test::EngineCase
   parallelize_me!
 
   GECKO = '{"meta":{"interval":1},"threads":[]}'
+
+  # The dashboard's own link to /profiles/:key is a same-origin navigation.
+  def setup
+    super
+    header 'Sec-Fetch-Site', 'same-origin'
+  end
 
   def teardown
     ::Wurk.redis do |c|
@@ -99,6 +106,49 @@ class ProfilesEndpointsTest < Wurk::Test::EngineCase
     get '/wurk/profiles/nope-missing'
 
     assert_equal 404, last_response.status
+  end
+
+  # W15 (#548): a cross-site page must not be able to trigger the upload with
+  # the operator's session (`<img src=".../profiles/<key>">`).
+  def test_profile_show_refuses_a_cross_site_request
+    key = seed(jid: 'x', token: 't9')
+    header 'Sec-Fetch-Site', 'cross-site'
+
+    stub_http_start(->(*) { flunk 'uploaded for a cross-site request' }) { get "/wurk/profiles/#{key}" }
+
+    assert_equal 403, last_response.status
+  end
+
+  def test_profile_show_allows_a_typed_url
+    key = seed(jid: 'y', token: 't10')
+    ::Wurk.redis { |c| c.call('HSET', key, 'sid', 'cached') }
+    header 'Sec-Fetch-Site', 'none'
+
+    get "/wurk/profiles/#{key}"
+
+    assert_equal 302, last_response.status
+  end
+
+  def test_profile_show_without_fetch_metadata_requires_a_same_host_referer
+    key = seed(jid: 'z', token: 't11')
+    ::Wurk.redis { |c| c.call('HSET', key, 'sid', 'cached') }
+    header 'Sec-Fetch-Site', nil
+
+    get "/wurk/profiles/#{key}", {}, 'HTTP_REFERER' => 'https://evil.example/page'
+
+    assert_equal 403, last_response.status
+
+    get "/wurk/profiles/#{key}"
+
+    assert_equal 403, last_response.status
+
+    get "/wurk/profiles/#{key}", {}, 'HTTP_REFERER' => 'http://example.org/wurk/profiles'
+
+    assert_equal 302, last_response.status
+
+    get "/wurk/profiles/#{key}", {}, 'HTTP_REFERER' => 'http://exa mple.org/'
+
+    assert_equal 403, last_response.status
   end
 
   private

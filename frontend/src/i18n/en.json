@@ -18,12 +18,13 @@
     "expand": "Expand",
     "language": "Language",
     "language_current": "Language: {name}",
-    "timezone": "Timezone",
     "timezone_current": "Timezone: {name}",
     "theme_current": "Theme: {name}",
     "theme_next": "Switch to {name} theme",
     "status_active": "System Status: Active",
-    "status_inactive": "System Status: Disconnected"
+    "status_inactive": "System Status: Disconnected",
+    "home_label": "Wurk — dashboard home",
+    "toggle": "Toggle navigation"
   },
   "dashboard": {
     "processed": "Processed",
@@ -35,8 +36,6 @@
     "scheduled": "Scheduled",
     "dead": "Dead",
     "processes": "Processes",
-    "latency": "Latency",
-    "live": "Live",
     "paused": "Paused",
     "strapline": "Wurk, wurk. Ready to work. Zug zug.",
     "tagline": "A 100% drop-in replacement for Sidekiq + Sidekiq Pro + Sidekiq Enterprise. Free forever.",
@@ -68,9 +67,6 @@
     "enqueued_at": "Enqueued At",
     "message": "Message",
     "count": "Count",
-    "score": "Score",
-    "next_run": "Next Run",
-    "last_run": "Last Run",
     "status": "Status",
     "total": "Total",
     "pending": "Pending",
@@ -79,7 +75,6 @@
     "concurrency": "Concurrency",
     "busy": "Busy",
     "queues": "Queues",
-    "hostname": "Hostname",
     "name": "Name",
     "type": "Type",
     "used": "Used",
@@ -128,7 +123,8 @@
     "running_since": "Running Since",
     "no_running": "No jobs currently running on this process",
     "leader": "Leader",
-    "leader_title": "This process holds the cluster leader lock"
+    "leader_title": "This process holds the cluster leader lock",
+    "heartbeat_ok": "Heartbeat OK"
   },
   "cron": {
     "history_title": "Execution history",
@@ -186,7 +182,6 @@
     "prev": "Previous",
     "next": "Next",
     "search": "Search",
-    "refresh": "Refresh",
     "all_suffix": "All",
     "selected": "{n} selected",
     "select_hint": "Select jobs to act on",
@@ -198,7 +193,9 @@
     "confirm": "{action} {scope}? This cannot be undone.",
     "confirm_clear_queue": "Clear all jobs from \"{name}\"? This cannot be undone.",
     "reset": "Reset",
-    "enqueue": "Enqueue"
+    "enqueue": "Enqueue",
+    "matching": "{n} match the filter",
+    "all_filtered_hint": "\"All\" acts on the whole set, not just the filtered rows. Clear the filter to use it."
   },
   "readonly": {
     "banner": "Read-only mode"
@@ -209,7 +206,8 @@
     "gone": "That job was already gone — it may have run or been removed.",
     "unavailable": "Redis is unavailable right now. Try again in a moment.",
     "dismiss": "Dismiss",
-    "region": "Notifications"
+    "region": "Notifications",
+    "partial": "{count} applied, {failed} failed. The list has been refreshed."
   },
   "common": {
     "loading": "Loading…",
@@ -218,12 +216,12 @@
     "page": "Page",
     "of": "of",
     "ms": "ms",
-    "ago": "ago",
-    "in": "in",
     "load_failed": "Couldn't load this page",
     "load_failed_hint": "The app may have updated since you opened it. Reloading will fetch the latest version.",
     "reload": "Reload",
-    "filter_placeholder": "Filter by class or JID…"
+    "filter_placeholder": "Filter by class or JID…",
+    "matching": "{n} matching",
+    "close": "Close"
   },
   "limiters": {
     "exhausted": "exhausted",
@@ -301,5 +299,10 @@
     "light": "Light",
     "dark": "Dark",
     "system": "System"
+  },
+  "notfound": {
+    "title": "Page not found",
+    "hint": "This dashboard has no page at that address.",
+    "home": "Back to the dashboard"
   }
 }

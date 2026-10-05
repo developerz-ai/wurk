@@ -1,5 +1,6 @@
 import { useQuery } from '@tanstack/solid-query';
 import { createSignal, createMemo, onMount, For, Show } from 'solid-js';
+import { useNavigate, useParams } from '@solidjs/router';
 import { AreaChart, BarChart, LineChart, type Datum } from '../components/charts';
 import { PageHeader } from '../components/PageHeader';
 import { Skeleton } from '../components/Skeleton';
@@ -8,6 +9,7 @@ import { t } from '../i18n';
 import { formatBucket, formatDuration, formatNumber, truncate } from '../utils';
 import { timeZone } from '../tz';
 import { basePath } from '../basePath';
+import { getJSON } from '../http';
 
 // Matches Wurk::Api::Serializers.metric_row — processed (every execution,
 // failures included, as Sidekiq counts it), failed, and runtime ms of the
@@ -155,7 +157,14 @@ function ChartLoader(props: { height: number }) {
 
 export default function Metrics() {
   const [rangeIdx, setRangeIdx] = createSignal(2); // default 7d, matching the mock
-  const [drilldownKlass, setDrilldownKlass] = createSignal<string | null>(null);
+  // `/metrics/:klass` (Sidekiq's per-job metrics page) opens the drill-down.
+  const params = useParams();
+  const navigate = useNavigate();
+  const [drilldownKlass, setDrilldownKlass] = createSignal<string | null>(params.klass ?? null);
+  const closeDrilldown = () => {
+    setDrilldownKlass(null);
+    if (params.klass) navigate('/metrics', { replace: true });
+  };
   const range = () => RANGES[rangeIdx()];
 
   onMount(() => {
@@ -164,30 +173,26 @@ export default function Metrics() {
 
   const statsQuery = useQuery(() => ({
     queryKey: ['stats'],
-    queryFn: () => fetch(`${basePath()}/api/stats`).then((r) => r.json() as Promise<StatsData>),
+    queryFn: () => getJSON<StatsData>(`${basePath()}/api/stats`),
     refetchInterval: 5000,
   }));
 
   const historyQuery = useQuery(() => ({
     queryKey: ['history', range().bucket, range().window],
     queryFn: () =>
-      fetch(`${basePath()}/api/history/${range().bucket}?window=${range().window}`).then((r) => r.json() as Promise<HistoryResponse>),
+      getJSON<HistoryResponse>(`${basePath()}/api/history/${range().bucket}?window=${range().window}`),
     refetchInterval: 30000,
   }));
 
   const metricsQuery = useQuery(() => ({
     queryKey: ['metrics', range().minutes],
-    queryFn: () => fetch(`${basePath()}/api/metrics?minutes=${range().minutes}`).then((r) => r.json() as Promise<MetricsResponse>),
+    queryFn: () => getJSON<MetricsResponse>(`${basePath()}/api/metrics?minutes=${range().minutes}`),
     refetchInterval: 30000,
   }));
 
   const queueQuery = useQuery(() => ({
     queryKey: ['queue-history', range().bucket, range().window],
-    queryFn: async () => {
-      const r = await fetch(`${basePath()}/api/queue-history/${range().bucket}?window=${range().window}`);
-      if (!r.ok) throw new Error(`queue-history failed (${r.status})`);
-      return r.json() as Promise<QueueHistoryResponse>;
-    },
+    queryFn: () => getJSON<QueueHistoryResponse>(`${basePath()}/api/queue-history/${range().bucket}?window=${range().window}`),
     refetchInterval: 30000,
   }));
 
@@ -409,7 +414,7 @@ export default function Metrics() {
       <QueueLatencyHistory range={range()} />
       <HistoricalSnapshots />
 
-      <JobMetricsModal klass={drilldownKlass()} minutes={range().minutes} onClose={() => setDrilldownKlass(null)} />
+      <JobMetricsModal klass={drilldownKlass()} minutes={range().minutes} onClose={closeDrilldown} />
     </div>
   );
 }
@@ -420,11 +425,7 @@ export default function Metrics() {
 function JobMetricsModal(props: { klass: string | null; minutes: number; onClose: () => void }) {
   const data = useQuery(() => ({
     queryKey: ['metrics-job', props.klass, props.minutes],
-    queryFn: async () => {
-      const r = await fetch(`${basePath()}/api/metrics/${encodeURIComponent(props.klass!)}?minutes=${props.minutes}`);
-      if (!r.ok) throw new Error(`metrics-job failed (${r.status})`);
-      return r.json() as Promise<JobMetricsResponse>;
-    },
+    queryFn: () => getJSON<JobMetricsResponse>(`${basePath()}/api/metrics/${encodeURIComponent(props.klass!)}?minutes=${props.minutes}`),
     enabled: props.klass !== null,
   }));
 
@@ -481,11 +482,7 @@ function JobMetricsModal(props: { klass: string | null; minutes: number; onClose
 function QueueLatencyHistory(props: { range: (typeof RANGES)[number] }) {
   const data = useQuery(() => ({
     queryKey: ['queue-history-lat', props.range.bucket, props.range.window],
-    queryFn: async () => {
-      const r = await fetch(`${basePath()}/api/queue-history/${props.range.bucket}?window=${props.range.window}`);
-      if (!r.ok) throw new Error(`queue-history failed (${r.status})`);
-      return r.json() as Promise<QueueHistoryResponse>;
-    },
+    queryFn: () => getJSON<QueueHistoryResponse>(`${basePath()}/api/queue-history/${props.range.bucket}?window=${props.range.window}`),
     refetchInterval: 30000,
   }));
 
@@ -530,11 +527,7 @@ const CUMULATIVE_FIELDS = new Set(['processed', 'failures']);
 function HistoricalSnapshots() {
   const data = useQuery(() => ({
     queryKey: ['history-snapshots'],
-    queryFn: async () => {
-      const r = await fetch(`${basePath()}/api/history/snapshots?limit=1000`);
-      if (!r.ok) throw new Error(`history snapshots request failed (${r.status})`);
-      return r.json() as Promise<{ snapshots: Snapshot[] }>;
-    },
+    queryFn: () => getJSON<{ snapshots: Snapshot[] }>(`${basePath()}/api/history/snapshots?limit=1000`),
     refetchInterval: 30000,
   }));
 

@@ -22,7 +22,8 @@ Everything here is Sidekiq-compatible: `Sidekiq::Web.use(...)` and
 keeps working on the one-line gem swap.
 
 > **Scope.** These hooks affect only requests routed **under the engine
-> mount**. Your app's own controllers are untouched.
+> mount** (or a [standalone `Sidekiq::Web` mount](#the-standalone-sidekiqweb-mount)).
+> Your app's own controllers are untouched.
 
 ---
 
@@ -328,13 +329,31 @@ is served by the JSON API, which **is** gated by all four controls above.
 If compliance requires that even the *existence* of the bundle stay secret, put
 a reverse-proxy rule in front of `/wurk-assets` — don't rely on the engine.
 
-**`Sidekiq::Web.call` (the standalone Rack surface) intentionally bypasses the
-`authorization` hook and read-only mode.** It exists for ecosystem gems'
-rack-test suites and serves registered third-party extension routes only —
-matching upstream Sidekiq, which doesn't auth-gate `Sidekiq::Web.call` either.
-The full dashboard is the engine mount, where enforcement lives. If you mount
-that standalone app in production, gate it yourself (`Wurk::Web.use` applies
-there; the route/authorization layers do not).
+---
+
+## The standalone `Sidekiq::Web` mount
+
+`mount Sidekiq::Web => "/sidekiq"`, `run Sidekiq::Web` and `Sidekiq::Web.call(env)`
+reach a smaller Rack app than the engine: it serves registered third-party
+extension routes (sidekiq-cron's `/cron`, …) at their own paths and 404s
+everything else — the full dashboard is the engine mount.
+
+It is gated exactly like the engine. Sidekiq Enterprise puts `authorization`
+and read-only in front of `mount Sidekiq::Web`, and Wurk ships Enterprise, so an
+app that swapped the gem keeps its gates on that mount:
+
+| Control | Standalone mount |
+|---------|------------------|
+| Route-level gate | Yes — wrap the `mount` in `authenticate`/`constraints` as in §1 |
+| `Wurk::Web.use` | Yes — runs first, so its `env` reaches `authorization` |
+| `authorization` | Yes — `path` is relative to the mount (`/cron`, not `/sidekiq/cron`) |
+| `read_only` | Yes — every non-`GET`/`HEAD`/`OPTIONS` request is `403 Read-only mode` |
+| Same-origin CSRF | Yes — see [§ CSRF](#csrf) |
+
+The CSRF check is not authentication: `curl` can send `Sec-Fetch-Site:
+same-origin` itself. Anything that must stay private on this mount needs a
+route gate, `Wurk::Web.use`, or an `authorization` block, the same as the
+engine.
 
 ---
 

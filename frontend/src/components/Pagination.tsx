@@ -4,11 +4,20 @@ interface PaginationProps {
   page: number;
   total: number;
   count: number;
+  // Deepest 1-indexed page the server will serve (API `max_page` + 1). Past it
+  // the server clamps, so offering "Next" would re-show the same rows.
+  maxPage?: number;
   onChange: (p: number) => void;
 }
 
+// 1-indexed page cap from a listing response's 0-indexed `max_page`.
+export function maxPageOf(data: { max_page?: number } | undefined): number | undefined {
+  const max = data?.max_page;
+  return typeof max === 'number' ? max + 1 : undefined;
+}
+
 export function Pagination(props: PaginationProps) {
-  const totalPages = () => Math.max(1, Math.ceil(props.total / props.count));
+  const totalPages = () => Math.max(1, Math.min(Math.ceil(props.total / props.count), props.maxPage ?? Infinity));
 
   return (
     <div class="pagination">

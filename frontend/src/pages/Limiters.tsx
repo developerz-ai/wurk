@@ -1,6 +1,7 @@
 import { useQuery, useMutation, useQueryClient } from '@tanstack/solid-query';
 import { onMount, For, Switch, Match, Show } from 'solid-js';
-import { Pagination } from '../components/Pagination';
+import { Pagination, maxPageOf } from '../components/Pagination';
+import { useServedPage } from '../hooks/useServedPage';
 import { SortableTh } from '../components/SortableTh';
 import { useSort, type Accessors } from '../hooks/useSort';
 import { usePageParam } from '../hooks/usePageParam';
@@ -36,6 +37,7 @@ interface Limiter {
 interface LimitersResponse {
   total: number;
   page: number;
+  max_page?: number;
   count: number;
   limiters: Limiter[];
 }
@@ -72,6 +74,8 @@ export default function Limiters() {
       getJSON<LimitersResponse>(`${basePath()}/api/limiters?page=${page() - 1}&count=${PAGE_SIZE}`),
     refetchInterval: 5000,
   }));
+
+  useServedPage(page, setPage, () => q.data);
 
   // Drops the limiter's stats/state keys (counters → 0); skips CSRF, see
   // ApiController#skip_forgery_protection.
@@ -187,7 +191,7 @@ export default function Limiters() {
                   </tbody>
                 </table>
               </div>
-              <Pagination page={page()} total={data().total} count={PAGE_SIZE} onChange={setPage} />
+              <Pagination page={page()} total={data().total} count={PAGE_SIZE} maxPage={maxPageOf(data())} onChange={setPage} />
             </Show>
           </div>
         )}

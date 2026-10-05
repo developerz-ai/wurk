@@ -18,12 +18,13 @@
     "expand": "展開",
     "language": "言語",
     "language_current": "言語: {name}",
-    "timezone": "タイムゾーン",
     "timezone_current": "タイムゾーン: {name}",
     "theme_current": "テーマ: {name}",
     "theme_next": "{name}テーマに切り替える",
     "status_active": "システム状態: 稼働中",
-    "status_inactive": "システム状態: 切断"
+    "status_inactive": "システム状態: 切断",
+    "home_label": "Wurk — ダッシュボードのホーム",
+    "toggle": "ナビゲーションを切り替え"
   },
   "dashboard": {
     "processed": "処理済み",
@@ -35,8 +36,6 @@
     "scheduled": "スケジュール済み",
     "dead": "デッド",
     "processes": "プロセス",
-    "latency": "レイテンシ",
-    "live": "ライブ",
     "paused": "一時停止",
     "strapline": "Wurk, wurk. 準備完了。Zug zug.",
     "tagline": "Sidekiq + Sidekiq Pro + Sidekiq Enterpriseと100%互換の代替品。永久無料。",
@@ -68,9 +67,6 @@
     "enqueued_at": "投入時刻",
     "message": "メッセージ",
     "count": "回数",
-    "score": "スコア",
-    "next_run": "次回実行",
-    "last_run": "前回実行",
     "status": "状態",
     "total": "合計",
     "pending": "保留中",
@@ -79,7 +75,6 @@
     "concurrency": "同時実行数",
     "busy": "実行中",
     "queues": "キュー",
-    "hostname": "ホスト名",
     "name": "名前",
     "type": "種類",
     "used": "使用中",
@@ -128,7 +123,8 @@
     "running_since": "実行開始",
     "no_running": "このプロセスで実行中のジョブはありません",
     "leader": "リーダー",
-    "leader_title": "このプロセスはクラスターリーダーロックを保持しています"
+    "leader_title": "このプロセスはクラスターリーダーロックを保持しています",
+    "heartbeat_ok": "ハートビート正常"
   },
   "cron": {
     "history_title": "実行履歴",
@@ -186,7 +182,6 @@
     "prev": "前へ",
     "next": "次へ",
     "search": "検索",
-    "refresh": "更新",
     "all_suffix": "すべて",
     "selected": "{n} 件選択中",
     "select_hint": "操作するジョブを選択してください",
@@ -198,7 +193,9 @@
     "confirm": "{action} {scope}? この操作は取り消せません。",
     "confirm_clear_queue": "\"{name}\"のすべてのジョブをクリアしますか?この操作は取り消せません。",
     "reset": "リセット",
-    "enqueue": "エンキュー"
+    "enqueue": "エンキュー",
+    "matching": "{n} 件がフィルターに一致",
+    "all_filtered_hint": "「すべて」はフィルター結果だけでなくセット全体に作用します。使うにはフィルターを解除してください。"
   },
   "readonly": {
     "banner": "読み取り専用モード"
@@ -209,7 +206,8 @@
     "gone": "そのジョブはすでに存在しませんでした — 実行済みか削除された可能性があります。",
     "unavailable": "現在Redisが利用できません。しばらくしてから再度お試しください。",
     "dismiss": "閉じる",
-    "region": "通知"
+    "region": "通知",
+    "partial": "{count} 件を適用、{failed} 件が失敗しました。一覧を更新しました。"
   },
   "common": {
     "loading": "読み込み中…",
@@ -218,12 +216,12 @@
     "page": "ページ",
     "of": "/",
     "ms": "ms",
-    "ago": "前",
-    "in": "後",
     "load_failed": "このページを読み込めませんでした",
     "load_failed_hint": "アプリを開いてから更新された可能性があります。再読み込みすると最新版を取得します。",
     "reload": "再読み込み",
-    "filter_placeholder": "クラスまたはJIDで絞り込み…"
+    "filter_placeholder": "クラスまたはJIDで絞り込み…",
+    "matching": "{n} 件一致",
+    "close": "閉じる"
   },
   "limiters": {
     "exhausted": "枯渇",
@@ -301,5 +299,10 @@
     "light": "ライト",
     "dark": "ダーク",
     "system": "システム"
+  },
+  "notfound": {
+    "title": "ページが見つかりません",
+    "hint": "このダッシュボードにはそのアドレスのページはありません。",
+    "home": "ダッシュボードに戻る"
   }
 }

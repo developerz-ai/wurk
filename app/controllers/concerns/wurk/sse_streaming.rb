@@ -30,7 +30,8 @@ module Wurk
       # Headers are already flushed by the time a tick hits Redis, so the
       # 503 ApplicationController's rescue_from renders for a plain request
       # can't happen here — emit a structured SSE event instead and close;
-      # the SPA's EventSource reconnects and gets a fresh chance at Redis.
+      # the closed stream is reopened by EventSource after the `retry:`
+      # interval and gets a fresh chance at Redis.
       logger.warn("wurk web: stream redis unavailable (#{e.class}: #{e.message})")
       sse.write({ error: 'redis_unavailable' }, event: 'error')
     ensure

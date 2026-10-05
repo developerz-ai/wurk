@@ -10,6 +10,7 @@ class StubEventSource {
   onopen: (() => void) | null = null;
   onerror: (() => void) | null = null;
   closed = false;
+  readyState = 0;
   private listeners: Record<string, Array<(e: MessageEvent) => void>> = {};
 
   constructor(url: string) {
@@ -25,6 +26,7 @@ class StubEventSource {
 
   close(): void {
     this.closed = true;
+    this.readyState = 2;
   }
 
   emit(type: string, event: Partial<MessageEvent>): void {
@@ -71,7 +73,7 @@ describe('useSSE', () => {
     expect(result.stats()).toBeNull();
   });
 
-  it('flips connected true on open and false again on error', async () => {
+  it('flips connected true on open and false again on a terminal (CLOSED) error', async () => {
     vi.stubGlobal('EventSource', StubEventSource);
     const { result } = renderHook(() => useSSE());
     await waitFor(() => expect(StubEventSource.instances).toHaveLength(1));
@@ -80,8 +82,42 @@ describe('useSSE', () => {
     es.onopen?.();
     expect(result.connected()).toBe(true);
 
+    es.readyState = 2;
     es.onerror?.();
     expect(result.connected()).toBe(false);
+  });
+
+  it('rides out a routine stream rotation without dropping connected', async () => {
+    vi.stubGlobal('EventSource', StubEventSource);
+    const { result } = renderHook(() => useSSE());
+    await waitFor(() => expect(StubEventSource.instances).toHaveLength(1));
+    vi.useFakeTimers();
+    const es = StubEventSource.instances[0];
+    es.onopen?.();
+
+    es.onerror?.(); // server ended the stream; browser is reconnecting
+    vi.advanceTimersByTime(1000);
+    expect(result.connected()).toBe(true);
+    es.onopen?.();
+    vi.advanceTimersByTime(10_000);
+    expect(result.connected()).toBe(true);
+    vi.useRealTimers();
+  });
+
+  it('drops connected once a browser reconnect stays down past the grace period', async () => {
+    vi.stubGlobal('EventSource', StubEventSource);
+    const { result } = renderHook(() => useSSE());
+    await waitFor(() => expect(StubEventSource.instances).toHaveLength(1));
+    vi.useFakeTimers();
+    const es = StubEventSource.instances[0];
+    es.onopen?.();
+
+    es.onerror?.();
+    vi.advanceTimersByTime(4999);
+    expect(result.connected()).toBe(true);
+    vi.advanceTimersByTime(1);
+    expect(result.connected()).toBe(false);
+    vi.useRealTimers();
   });
 
   it('parses a "stats" message into the stats signal', async () => {
@@ -145,5 +181,81 @@ describe('useSSE', () => {
     await waitFor(() => expect(StubEventSource.instances).toHaveLength(1));
     expect(result.connected()).toBe(false);
     expect(result.stats()).toBeNull();
+  });
+
+  describe('reconnect', () => {
+    afterEach(() => vi.useRealTimers());
+
+    it('leaves a CONNECTING stream to the browser’s own retry', async () => {
+      vi.stubGlobal('EventSource', StubEventSource);
+      renderHook(() => useSSE());
+      await waitFor(() => expect(StubEventSource.instances).toHaveLength(1));
+      vi.useFakeTimers();
+
+      StubEventSource.instances[0].onerror?.();
+      vi.advanceTimersByTime(60_000);
+      expect(StubEventSource.instances).toHaveLength(1);
+      expect(StubEventSource.instances[0].closed).toBe(false);
+    });
+
+    it('reopens a CLOSED stream (e.g. a 503) with exponential backoff, reset on open', async () => {
+      vi.stubGlobal('EventSource', StubEventSource);
+      const { result } = renderHook(() => useSSE());
+      await waitFor(() => expect(StubEventSource.instances).toHaveLength(1));
+      vi.useFakeTimers();
+
+      const fail = (i: number) => {
+        StubEventSource.instances[i].readyState = 2;
+        StubEventSource.instances[i].onerror?.();
+      };
+
+      // First retry honours the server's `Retry-After: 3`, then doubles.
+      fail(0);
+      vi.advanceTimersByTime(2999);
+      expect(StubEventSource.instances).toHaveLength(1);
+      vi.advanceTimersByTime(1);
+      expect(StubEventSource.instances).toHaveLength(2);
+
+      fail(1);
+      vi.advanceTimersByTime(5999);
+      expect(StubEventSource.instances).toHaveLength(2);
+      vi.advanceTimersByTime(1);
+      expect(StubEventSource.instances).toHaveLength(3);
+
+      StubEventSource.instances[2].onopen?.();
+      expect(result.connected()).toBe(true);
+      fail(2);
+      expect(result.connected()).toBe(false);
+      vi.advanceTimersByTime(3000);
+      expect(StubEventSource.instances).toHaveLength(4);
+    });
+
+    it('caps the backoff at 30s', async () => {
+      vi.stubGlobal('EventSource', StubEventSource);
+      renderHook(() => useSSE());
+      await waitFor(() => expect(StubEventSource.instances).toHaveLength(1));
+      vi.useFakeTimers();
+
+      for (let i = 0; i < 8; i++) {
+        const es = StubEventSource.instances[i];
+        es.readyState = 2;
+        es.onerror?.();
+        vi.advanceTimersByTime(30_000);
+        expect(StubEventSource.instances).toHaveLength(i + 2);
+      }
+    });
+
+    it('does not reopen after the last consumer unmounts', async () => {
+      vi.stubGlobal('EventSource', StubEventSource);
+      const { cleanup: dispose } = renderHook(() => useSSE());
+      await waitFor(() => expect(StubEventSource.instances).toHaveLength(1));
+      vi.useFakeTimers();
+
+      StubEventSource.instances[0].readyState = 2;
+      StubEventSource.instances[0].onerror?.();
+      dispose();
+      vi.advanceTimersByTime(60_000);
+      expect(StubEventSource.instances).toHaveLength(1);
+    });
   });
 });

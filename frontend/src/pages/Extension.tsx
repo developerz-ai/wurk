@@ -4,6 +4,7 @@ import { PageHeader } from '../components/PageHeader';
 import { Skeleton, SkeletonTable } from '../components/Skeleton';
 import { useMeta } from '../hooks/useMeta';
 import { basePath } from '../basePath';
+import { fetchText } from '../http';
 import { t } from '../i18n';
 
 // Renders a third-party extension tab registered via
@@ -49,11 +50,10 @@ function NativeExtension(props: { extName: string; indexPath: string; title: str
     const id = ++seq;
     controller = new AbortController();
     try {
-      const res = await fetch(base + path, { ...init, signal: controller.signal });
-      const text = await res.text();
+      const res = await fetchText(base + path, { ...init, signal: controller.signal });
       if (id !== seq) return;
       setError(!res.ok && res.status !== 404);
-      setHtml(text);
+      setHtml(res.text);
     } catch (err) {
       if (err instanceof DOMException && err.name === 'AbortError') return;
       if (id === seq) setError(true);
@@ -69,10 +69,15 @@ function NativeExtension(props: { extName: string; indexPath: string; title: str
   // Keep extension-internal navigation inside this page: anchors and forms
   // whose target resolves under our embed base are fetched instead of
   // navigating the whole browser away from the SPA. Redirects (delete → list)
-  // are followed by fetch transparently.
+  // are followed by fetch transparently. Modified or non-primary clicks
+  // (Cmd/Ctrl/Shift/Alt, middle button) and `target`/`download` links keep the
+  // browser's own behaviour so "open in new tab" still works.
   const onClick = (e: MouseEvent) => {
+    if (e.defaultPrevented || e.button !== 0 || e.metaKey || e.ctrlKey || e.shiftKey || e.altKey) return;
     const a = (e.target as HTMLElement).closest('a');
-    if (!a?.getAttribute('href')) return;
+    if (!a?.getAttribute('href') || a.hasAttribute('download')) return;
+    const target = a.getAttribute('target');
+    if (target && target !== '_self') return;
     const url = new URL(a.href, window.location.origin);
     if (url.origin !== window.location.origin || !url.pathname.startsWith(base)) return;
     e.preventDefault();
@@ -111,7 +116,10 @@ function NativeExtension(props: { extName: string; indexPath: string; title: str
           onClick={onClick}
           onSubmit={onSubmit}
           // Extension HTML is rendered server-side from host-registered gem
-          // code — the same trust model as Sidekiq::Web rendering it.
+          // code — the same trust model as Sidekiq::Web rendering it. Inserted
+          // via innerHTML, so <script> tags in an extension view (inline or
+          // src=) never execute — unlike stock Sidekiq::Web, where the view is
+          // the whole page. Styles and links work; per-view JS does not.
           innerHTML={html()!}
         />
       </Show>

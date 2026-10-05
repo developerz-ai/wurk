@@ -1,6 +1,7 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { render, screen, waitFor, fireEvent } from '@solidjs/testing-library';
 import { QueryClient, QueryClientProvider } from '@tanstack/solid-query';
+import { MemoryRouter, Route, createMemoryHistory } from '@solidjs/router';
 import Metrics from './Metrics';
 
 // Stub the hand-rolled SVG charts so chart logic (one series per queue/field,
@@ -29,11 +30,16 @@ vi.mock('../components/charts', () => {
   };
 });
 
-function renderMetrics() {
+function renderMetrics(path = '/metrics') {
   const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+  const history = createMemoryHistory();
+  history.set({ value: path, replace: true });
   return render(() => (
     <QueryClientProvider client={client}>
-      <Metrics />
+      <MemoryRouter history={history}>
+        <Route path="/metrics" component={Metrics} />
+        <Route path="/metrics/:klass" component={Metrics} />
+      </MemoryRouter>
     </QueryClientProvider>
   ));
 }

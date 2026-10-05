@@ -18,12 +18,13 @@
     "expand": "Ausklappen",
     "language": "Sprache",
     "language_current": "Sprache: {name}",
-    "timezone": "Zeitzone",
     "timezone_current": "Zeitzone: {name}",
     "theme_current": "Design: {name}",
     "theme_next": "Zu Design {name} wechseln",
     "status_active": "Systemstatus: Aktiv",
-    "status_inactive": "Systemstatus: Getrennt"
+    "status_inactive": "Systemstatus: Getrennt",
+    "home_label": "Wurk — Dashboard-Startseite",
+    "toggle": "Navigation ein-/ausblenden"
   },
   "dashboard": {
     "processed": "Verarbeitet",
@@ -35,8 +36,6 @@
     "scheduled": "Geplant",
     "dead": "Tot",
     "processes": "Prozesse",
-    "latency": "Latenz",
-    "live": "Live",
     "paused": "Pausiert",
     "strapline": "Wurk, wurk. Bereit zur Arbeit. Zug zug.",
     "tagline": "Ein 100% kompatibler Ersatz für Sidekiq + Sidekiq Pro + Sidekiq Enterprise. Für immer kostenlos.",
@@ -68,9 +67,6 @@
     "enqueued_at": "Eingereiht um",
     "message": "Nachricht",
     "count": "Anzahl",
-    "score": "Bewertung",
-    "next_run": "Nächste Ausführung",
-    "last_run": "Letzte Ausführung",
     "status": "Status",
     "total": "Gesamt",
     "pending": "Ausstehend",
@@ -79,7 +75,6 @@
     "concurrency": "Nebenläufigkeit",
     "busy": "Beschäftigt",
     "queues": "Warteschlangen",
-    "hostname": "Hostname",
     "name": "Name",
     "type": "Typ",
     "used": "Verwendet",
@@ -128,7 +123,8 @@
     "running_since": "Läuft seit",
     "no_running": "Auf diesem Prozess laufen derzeit keine Jobs",
     "leader": "Leader",
-    "leader_title": "Dieser Prozess hält die Cluster-Leader-Sperre"
+    "leader_title": "Dieser Prozess hält die Cluster-Leader-Sperre",
+    "heartbeat_ok": "Heartbeat OK"
   },
   "cron": {
     "history_title": "Ausführungsverlauf",
@@ -186,7 +182,6 @@
     "prev": "Zurück",
     "next": "Weiter",
     "search": "Suchen",
-    "refresh": "Aktualisieren",
     "all_suffix": "Alle",
     "selected": "{n} ausgewählt",
     "select_hint": "Jobs auswählen, um sie zu bearbeiten",
@@ -198,7 +193,9 @@
     "confirm": "{action} {scope}? Dies kann nicht rückgängig gemacht werden.",
     "confirm_clear_queue": "Alle Jobs aus \"{name}\" löschen? Dies kann nicht rückgängig gemacht werden.",
     "reset": "Zurücksetzen",
-    "enqueue": "Einreihen"
+    "enqueue": "Einreihen",
+    "matching": "{n} passen zum Filter",
+    "all_filtered_hint": "„Alle\" wirkt auf die gesamte Menge, nicht nur auf die gefilterten Zeilen. Filter löschen, um es zu verwenden."
   },
   "readonly": {
     "banner": "Nur-Lese-Modus"
@@ -209,7 +206,8 @@
     "gone": "Dieser Job war bereits weg — er wurde möglicherweise ausgeführt oder entfernt.",
     "unavailable": "Redis ist derzeit nicht verfügbar. Versuche es gleich noch einmal.",
     "dismiss": "Verwerfen",
-    "region": "Benachrichtigungen"
+    "region": "Benachrichtigungen",
+    "partial": "{count} angewendet, {failed} fehlgeschlagen. Die Liste wurde aktualisiert."
   },
   "common": {
     "loading": "Lädt…",
@@ -218,12 +216,12 @@
     "page": "Seite",
     "of": "von",
     "ms": "ms",
-    "ago": "vor",
-    "in": "in",
     "load_failed": "Diese Seite konnte nicht geladen werden",
     "load_failed_hint": "Die App wurde möglicherweise seit dem Öffnen aktualisiert. Neu laden holt die neueste Version.",
     "reload": "Neu laden",
-    "filter_placeholder": "Nach Klasse oder JID filtern…"
+    "filter_placeholder": "Nach Klasse oder JID filtern…",
+    "matching": "{n} Treffer",
+    "close": "Schließen"
   },
   "limiters": {
     "exhausted": "erschöpft",
@@ -301,5 +299,10 @@
     "light": "Hell",
     "dark": "Dunkel",
     "system": "System"
+  },
+  "notfound": {
+    "title": "Seite nicht gefunden",
+    "hint": "Unter dieser Adresse gibt es im Dashboard keine Seite.",
+    "home": "Zurück zum Dashboard"
   }
 }

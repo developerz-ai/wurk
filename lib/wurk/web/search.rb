@@ -45,13 +45,14 @@ module Wurk
         @scanned = 0
       end
 
-      # True when a scan stopped at a bound (a queue's per-queue cap, a sorted
-      # set's page loop, or the shared per-request budget) with elements left
-      # unexamined — the hit list may be incomplete. Meaningful only after
-      # `each`/`to_a` has driven the scan.
+      # True when the hit list may be incomplete: a scan stopped at a bound (a
+      # queue's per-queue cap, a sorted set's page loop, or the shared
+      # per-request budget) with elements left unexamined, or a hit beyond
+      # `limit` exists. Meaningful only after `each`/`to_a` has driven the scan.
       def truncated? = @truncated
 
-      # Streams matching hits across every selected store. Stops at `limit`.
+      # Streams matching hits across every selected store. Stops at `limit`,
+      # after peeking for one more hit so `truncated?` is exact there.
       # Yields Hashes shaped like sorted_entry payloads with an extra
       # `:kind` discriminator + `:name` (queue name or set name).
       def each(&)
@@ -62,9 +63,12 @@ module Wurk
         @truncated = false
         emitted = 0
         each_hit do |row|
+          if emitted >= @limit
+            @truncated = true
+            break
+          end
           yield row
           emitted += 1
-          break if emitted >= @limit
         end
       end
 
@@ -134,10 +138,11 @@ module Wurk
       # yet wrapped back to 0).
       def search_sorted_set(kind, &)
         set = sorted_set_for(kind)
+        seen = {}
         cursor = '0'
         loop do
           cursor, page = Wurk.redis(idempotent: true) { |c| c.call('ZSCAN', set.name, cursor, 'COUNT', ZSCAN_PAGE) }
-          emit_sorted_hits(kind, set, page, &)
+          emit_sorted_hits(kind, set, page, seen, &)
           @scanned += page.size / 2
           break if cursor == '0'
           next if @scanned < SCAN_BUDGET
@@ -149,9 +154,14 @@ module Wurk
 
       # Yields a sorted_row for each element on this ZSCAN page whose raw JSON
       # contains the literal substring (client-side filter — see the class note).
-      def emit_sorted_hits(kind, set, page)
+      # ZSCAN may return an element more than once across pages (a rehash
+      # mid-scan), so `seen` drops repeat hits.
+      def emit_sorted_hits(kind, set, page, seen)
         page.each_slice(2) do |value, score|
           next unless value.include?(@substring)
+          next if seen.key?(value)
+
+          seen[value] = true
 
           yield sorted_row(kind, set.name, SortedEntry.new(set, score.to_f, value))
         end
