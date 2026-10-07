@@ -1,113 +1,175 @@
 name: ecosystem
 
+# Watcher: list sidekiq/sidekiq releases weekly and on workflow_dispatch,
+# file one deduplicated ask per release newer than the last one handled,
+# via the developerz.ai platform API. Idempotency is keyed on the upstream
+# version: the platform rejects a second ask for the same (repo, version)
+# with HTTP 409, which the watcher treats as the "last handled" boundary
+# and stops at. Drafts, prereleases, and non-semver tags are skipped at
+# parse time.
+#
+# The third-party-suite CI job that used to live here is now in
+# test-ecosystem.yml on the same triggers and schedule, so the ruleset's
+# required checks are unchanged (the suite was advisory/weekly either way).
 on:
-  push:
-    branches: [main]
-  pull_request:
   schedule:
     - cron: "0 7 * * 1" # weekly
+  workflow_dispatch:
+    inputs:
+      dry-run:
+        description: List the releases this run would file asks for, and file none.
+        required: false
+        type: boolean
+        default: false
 
+# Read-only: the watcher never writes to the repo, opens issues, or opens
+# PRs. The sidekiq/sidekiq release list is on the public GitHub API and
+# fetched without a credential (the unauthenticated 60/hr-per-IP limit
+# is well above what a weekly run needs), so no other secret is read
+# either. DEVELOPERZ_API_KEY reaches the platform only via the
+# Authorization header built from the env var (never argv, never echoed:
+# `set -x` is off, curl is not run with `-v`, and the response body is
+# captured to a file rather than streamed to the log).
 permissions:
   contents: read
-  # paths-filter reads the PR's changed-file list on pull_request events.
-  pull-requests: read
-  # `detect`'s dup step reads the merged PR's workflow runs (read-only).
   actions: read
 
 concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}
-  # Never cancel main's own runs (see test.yml).
+  # The watcher is not a deploy/publish lane, so the value matches
+  # test.yml / topology.yml: cancel only on pull_request. The expression
+  # never fires here (no PR trigger), but the workflow stays consistent
+  # with the rest of the repo's read-only workflows.
   cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 jobs:
-  # Third-party suites have nothing to say about a docs edit. Gate them — but
-  # on pull requests ONLY: push-to-main keeps main verifiable
-  # (minus `dup` pushes, see test.yml), and the weekly schedule has no base
-  # commit to diff against, so filtering there would silently skip the run it
-  # exists for.
-  detect:
-    name: detect changed paths
+  watch:
+    name: watch sidekiq/sidekiq releases
     runs-on: ubuntu-latest
     timeout-minutes: 5
-    outputs:
-      ruby: ${{ steps.filter.outputs.ruby }}
-      dup: ${{ steps.dup.outputs.dup }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
-      # Push whose tree already passed this workflow on the PR head → skip.
-      - name: duplicate of an already-green PR head (dup)
-        id: dup
-        env:
-          GH_TOKEN: ${{ github.token }}
-        run: |
-          dup="$(bin/ci-dup-push .github/workflows/ecosystem.yml)"
-          [ "$dup" = "true" ] || dup=false
-          echo "dup=$dup" >> "$GITHUB_OUTPUT"
-      - uses: dorny/paths-filter@ceb8a2b8f2d89434be7ff52d3de7ec3738c5cc9d # v4.0.3
-        id: filter
-        with:
-          filters: |
-            ruby:
-              - 'lib/**'
-              - 'app/**'
-              - 'exe/**'
-              - 'test/**'
-              - 'tasks/**'
-              # bin/test-ecosystem is the harness driver; ecosystem/** is the
-              # sidekiq shim gem every harness Gemfile resolves `sidekiq` to.
-              - 'bin/**'
-              - 'ecosystem/**'
-              # Gemfile.lock is deliberately absent from the filter — it is
-              # gitignored and can never appear in a diff; `Gemfile` and the
-              # gemspec are what actually move dependencies.
-              - 'Gemfile'
-              - 'Rakefile'
-              - '*.gemspec'
-              - '.github/workflows/ecosystem.yml'
 
-  ecosystem:
-    needs: detect
-    runs-on: ubuntu-latest
-    # Measured: ~1 min on a PR, 3-4 min on the cold weekly run.
-    timeout-minutes: 15
-    services:
-      redis:
-        image: redis:7.4
-        # Container port only — Docker binds a free host port. See test.yml.
-        ports: ["6379"]
-        options: >-
-          --health-cmd "redis-cli ping"
-          --health-interval 5s
-    env:
-      # Per-step gate, not a job-level `if:` — a skipped job reports as a
-      # satisfied check. See test.yml's `test` job (#469).
-      RUN: ${{ needs.detect.outputs.dup != 'true' && (github.event_name != 'pull_request' || needs.detect.outputs.ruby == 'true') }}
-    steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-        if: env.RUN == 'true'
-        with:
-          persist-credentials: false
-      # ECOSYSTEM_REDIS_URL, not REDIS_URL: bin/test-ecosystem resolves
-      # `REDIS_URL="${ECOSYSTEM_REDIS_URL:-...}"` and exports its own value to
-      # every harness, so a REDIS_URL set here would be overwritten and never
-      # reach them. DB index 15 is what that script already uses — this change
-      # is about the port, not the namespace. STEP, not job-level `env:`, since
-      # the `job` context is unavailable there.
-      - name: resolve redis port
-        if: env.RUN == 'true'
-        run: echo "ECOSYSTEM_REDIS_URL=redis://localhost:${{ job.services.redis.ports['6379'] }}/15" >> "$GITHUB_ENV"
-      - uses: ruby/setup-ruby@14594264cd68ce8a2345dd349bc3d138a4ef85c8 # v1
-        if: env.RUN == 'true'
-        with:
-          # NOT the newest Ruby, deliberately. This job's subject is third-party
-          # gems at pinned upstream SHAs, so it has to run a Ruby *they* support:
-          # Ruby 4.0 dropped `benchmark` from the default gems and sidekiq-cron's
-          # own test suite requires it, which fails the job on something that is
-          # not about Wurk at all. Bump when the pinned suites do.
-          ruby-version: "3.4"
-          bundler-cache: true
-      - name: rake test:ecosystem
-        if: env.RUN == 'true'
-        run: bundle exec rake test:ecosystem
+      # Pull the sidekiq/sidekiq release list (newest first). 100 per
+      # page is well above the count of published Sidekiq releases, so
+      # one page covers the whole history without a follow-up cursor.
+      - name: list sidekiq/sidekiq releases
+        id: list
+        run: |
+          # No credential: sidekiq/sidekiq's releases are public, and the
+          # unauthenticated GitHub API rate-limit (60/hr per IP) is far
+          # above what a weekly watcher needs. `gh` would use
+          # GITHUB_TOKEN by default; `curl` keeps the env clean.
+          curl -fsS \
+            "https://api.github.com/repos/sidekiq/sidekiq/releases?per_page=100" \
+            -H "Accept: application/vnd.github+json" \
+            | jq '[.[] | {tag: .tag_name, html_url: .html_url, body: (.body // ""), published_at: (.published_at // ""), draft: .draft, prerelease: .prerelease}]' \
+            > /tmp/releases.json
+          got=$(jq 'length' /tmp/releases.json)
+          echo "got=${got} releases from sidekiq/sidekiq"
+          echo "got=${got}" >> "$GITHUB_OUTPUT"
+
+      # File one deduplicated ask per release newer than the last one
+      # we handled. The platform keys asks on (repo, version) — a POST
+      # for an already-filed version returns 409, which we treat as the
+      # "last handled" boundary and break on. Any other non-2xx is a
+      # real failure and fails the job loudly. The ask body carries the
+      # release link, what changed upstream (release notes), and a
+      # request for a Wurk parity check against docs/target/sidekiq-*.md.
+      # Dry-run lists what would be filed and files none (no API call).
+      - name: file one ask per unhandled release
+        env:
+          # env: only — never argv, never echoed. Curl reads the
+          # variable as the Authorization header; `set -x` is not on, so
+          # the header is never expanded into a trace line, and the
+          # response is captured to /tmp rather than streamed to the log.
+          DEVELOPERZ_API_KEY: ${{ secrets.DEVELOPERZ_API_KEY }}
+          DRY_RUN: ${{ inputs.dry-run }}
+        run: |
+          set -euo pipefail
+
+          dry_run="${DRY_RUN:-false}"
+          if [ "$dry_run" != "true" ] && [ -z "${DEVELOPERZ_API_KEY:-}" ]; then
+            echo "DEVELOPERZ_API_KEY is not set on the repository; the developerz.ai platform API is unreachable. Nothing to file."
+            exit 0
+          fi
+
+          # Newest-first stable version list. `sort -V` orders semver
+          # correctly; the grep enforces the shape so a tag like "edge"
+          # or a branch ref never reaches the ask body. Drafts and
+          # prereleases are dropped at parse time, not after the API
+          # call, so the watcher never files noise for a release that
+          # isn't the next shipping version.
+          mapfile -t versions < <(jq -r '.[] | select(.draft == false and .prerelease == false) | .tag' /tmp/releases.json \
+            | sed 's/^v//' \
+            | grep -E '^[0-9]+\.[0-9]+\.[0-9]+$' \
+            | sort -V -r)
+
+          if [ "${#versions[@]}" -eq 0 ]; then
+            echo "no stable sidekiq/sidekiq releases found; nothing to file"
+            exit 0
+          fi
+
+          if [ "$dry_run" = "true" ]; then
+            echo "dry-run: no API call made, no asks filed"
+            echo "would file (newest first):"
+            for v in "${versions[@]}"; do
+              echo "  - sidekiq ${v}"
+            done
+            exit 0
+          fi
+
+          filed=0
+          for version in "${versions[@]}"; do
+            release="$(jq --arg v "$version" '.[] | select(.tag == ("v" + $v))' /tmp/releases.json)"
+            url="$(jq -r '.html_url' <<<"$release")"
+            body="$(jq -r '.body // ""' <<<"$release")"
+            published_at="$(jq -r '.published_at // ""' <<<"$release")"
+
+            # Ask body: release link, what changed upstream, and a
+            # Wurk parity-check request. Keyed on (repo, version) so the
+            # platform rejects duplicates with 409.
+            ask_body="$(jq -n \
+              --arg version "$version" \
+              --arg url "$url" \
+              --arg body "$body" \
+              --arg published_at "$published_at" \
+              '{
+                key: ("sidekiq-" + $version),
+                repo: "developerz-ai/wurk",
+                version: $version,
+                title: ("sidekiq " + $version + " — parity check requested"),
+                body: ("sidekiq/sidekiq released " + $version + " on " + $published_at + ".\n\nRelease notes:\n\n" + $body + "\n\nRelease link: " + $url + "\n\nRequest: a Wurk parity check against this Sidekiq release, so docs/target/sidekiq-{free,pro,ent}.md reflect every behaviour change."),
+                source: "ecosystem-watcher"
+              }')"
+
+            http_code="$(curl -sS -o /tmp/ask-resp.json -w "%{http_code}" \
+              -X POST \
+              -H "Authorization: Bearer ${DEVELOPERZ_API_KEY}" \
+              -H "Content-Type: application/json" \
+              -H "Accept: application/json" \
+              --data-binary "$ask_body" \
+              "https://api.developerz.ai/v1/asks")"
+
+            case "$http_code" in
+              2*)
+                echo "filed ask for sidekiq ${version} (HTTP ${http_code})"
+                filed=$((filed + 1))
+                ;;
+              409)
+                echo "sidekiq ${version} already on the platform (HTTP 409) — stopping at the last handled"
+                break
+                ;;
+              *)
+                echo "::error::unexpected HTTP ${http_code} filing ask for sidekiq ${version}"
+                # The response body is from the platform, not from us —
+                # safe to surface for triage. Never echo the API key.
+                cat /tmp/ask-resp.json || true
+                exit 1
+                ;;
+            esac
+          done
+
+          echo "filed ${filed} ask(s)"
