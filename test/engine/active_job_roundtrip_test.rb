@@ -28,6 +28,7 @@ class ActiveJobRoundtripEngineTest < Wurk::Test::EngineCase
 
   def teardown
     ::Wurk.redis { |c| c.call('DEL', @key) }
+    Object.send(:remove_const, @aj_const_name) if @aj_const_name && Object.const_defined?(@aj_const_name)
   ensure
     super
   end
@@ -41,5 +42,50 @@ class ActiveJobRoundtripEngineTest < Wurk::Test::EngineCase
 
     assert_equal ::Process.pid.to_s, value
     assert_operator ttl, :>, 0
+  end
+
+  # AJ server `options:` regression: an ActiveJob class with
+  # `sidekiq_options queue: 'priority', retry: 3` must see those values
+  # in the executed payload. The queue flows from the AJ's `queue_name`
+  # (which `queue_as` sets — the WurkAdapter passes `job.queue_name` to
+  # the wrapper's `set(queue: ...)`); the retry flows from the wrapped
+  # class's `sidekiq_options` via `JobUtil#defaults_for`'s merge chain
+  # (`class_defaults` → `wrapped.get_sidekiq_options` → `item`).
+  #
+  # The wrapper's `perform(job_data)` runs through
+  # `capsule.server_middleware` (Processor#execute_job) with the
+  # resolved payload, then `ActiveJob::Base.execute(job_data)` rebuilds
+  # the AJ instance — `queue_name` is set on the instance from the
+  # payload, and the class's `get_sidekiq_options['retry']` is what
+  # `JobRetry#local` reads when the job fails.
+  def test_sidekiq_options_survive_the_perform_path
+    options_key = "aj_options_job:#{@arg}"
+    klass = Class.new(::ActiveJob::Base) do
+      def perform(arg)
+        # self.queue_name is set by AJ from the wrapper's job_data['queue'];
+        # the wrapped class's sidekiq_options flowed into the payload via
+        # JobUtil#defaults_for.
+        ::Wurk.redis do |c|
+          c.call('HSET', "aj_options_job:#{arg}",
+                 'queue', queue_name,
+                 'retry', self.class.get_sidekiq_options['retry'])
+        end
+      end
+    end
+    klass.queue_as :priority
+    klass.queue_adapter = :wurk
+    klass.sidekiq_options 'retry' => 3
+    name = "AJOptsEngineJob_#{::Process.pid}_#{object_id}_#{rand(1 << 32)}"
+    Object.const_set(name, klass)
+    @aj_const_name = name
+
+    ::Wurk::Testing.inline! { klass.perform_later(@arg) }
+
+    queue, retry_val = ::Wurk.redis { |c| c.call('HMGET', options_key, 'queue', 'retry') }
+
+    assert_equal 'priority', queue, 'queue_as :priority must flow into the executed payload'
+    assert_equal '3', retry_val, 'sidekiq_options retry: 3 must flow into the executed payload'
+  ensure
+    ::Wurk.redis { |c| c.call('DEL', options_key) } if defined?(options_key)
   end
 end

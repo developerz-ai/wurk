@@ -148,6 +148,8 @@ module Wurk
     # keeps living after #stop, and those threads would carry on executing jobs
     # over pools the launcher is about to reset. The requeue error still
     # propagates to the caller, which reports it.
+    # K12 regression: the `ensure` is the property — pinned by
+    # `test_hard_shutdown_kills_every_processor_even_when_bulk_requeue_raises`.
     def hard_shutdown
       cleanup = workers_snapshot
       requeue_in_flight(cleanup)

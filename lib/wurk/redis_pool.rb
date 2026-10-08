@@ -53,19 +53,20 @@ module Wurk
     # spuriously ReadTimeout — the production incident (#101) the single
     # dual-use timeout caused.
     #
-    # reconnect_attempts: 1 is Sidekiq's own `reconnect_attempts ||= 1`. It
-    # re-dials a dropped socket once and re-sends the one in-flight command,
-    # which is what lets every pooled connection survive a Redis restart, a
-    # failover or an idle-socket reap without surfacing an error. The price is
-    # that a reply lost mid-command (a ReadTimeout included) can apply that
-    # command twice: a duplicate LPUSH, a double INCR, or a ZPOPBYSCORE whose
-    # first pop is lost with its reply (Sidekiq #3303 — same exposure upstream).
-    # 0 would close that window but turn every stale socket into an error the
-    # pool cannot replay for a non-idempotent block, so it stays at parity.
+    # 0 closes the duplicate-application window. With 1 (Sidekiq's setting,
+    # mirrored upstream) a reply lost mid-command is re-sent onto a fresh
+    # socket by redis-client and can land that one command twice: a duplicate
+    # LPUSH, a double INCR, a ZPOPBYSCORE whose first pop is lost with its
+    # reply (Sidekiq #3303 — the same upstream exposure the default has).
+    # A stale socket now surfaces as a connect-phase ConnectionError, which
+    # the pool's pre-apply retry (the same backoff a `:failover` or
+    # `idempotent: true` block uses) replays onto a fresh socket. Diverges
+    # from Sidekiq's `reconnect_attempts ||= 1`; pinned here so a rethink
+    # has to break this comment AND `test_default_reconnect_attempts`.
     DEFAULT_CONNECT_TIMEOUT    = 1.0
     DEFAULT_READ_TIMEOUT       = 2.5
     DEFAULT_WRITE_TIMEOUT      = 2.5
-    DEFAULT_RECONNECT_ATTEMPTS = 1
+    DEFAULT_RECONNECT_ATTEMPTS = 0
 
     # The floor every pool starts from; any key the host passed wins over it —
     # including `command_builder`, so an app that has its own keeps it.

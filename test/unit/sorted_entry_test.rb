@@ -144,22 +144,66 @@ class SortedEntryTest < Wurk::Test::UnitCase
     assert_equal(0, @pool.with { |c| c.call('ZCARD', @parent.name) })
   end
 
-  # --- push failure keeps the entry (K20) --------------------------------
+  # K28: two successive reschedules on the same member converge on the second
+  # `at` value. Without the `@score` tracking the second delta would compute
+  # against the original 100.0, leaving the score cumulative rather than
+  # absolute — ZADD XX INCR with `at - @score` would shift twice.
+  def test_reschedule_called_twice_uses_zadd_xx_each_time
+    entry = add_entry(score: 100.0)
 
-  # Tags that are not an Array are rejected by the client (stock Sidekiq does
-  # the same), so the push raises after the entry was already removed.
-  def test_retry_restores_the_entry_when_the_push_raises
-    entry = add_entry(score: 123.0, item: base_item('tags' => 'not-an-array', 'retry_count' => 2))
-
-    assert_raises(ArgumentError) { entry.retry }
-    assert_in_delta(123.0, @pool.with { |c| c.call('ZSCORE', @parent.name, entry.value) }.to_f)
+    assert_in_delta(500.0, entry.reschedule(::Time.at(500.0)).to_f, 0.001,
+                    'first call must shift to the target')
+    assert_in_delta(700.0, entry.reschedule(::Time.at(700.0)).to_f, 0.001,
+                    'second call must shift from the new score, not the original')
+    assert_in_delta(700.0, @pool.with { |c| c.call('ZSCORE', @parent.name, entry.value) }.to_f, 0.001,
+                    'ZADD XX INCR must keep the member at the most recent target')
   end
 
-  def test_add_to_queue_restores_the_entry_when_the_push_raises
-    entry = add_entry(score: 77.0, item: base_item('tags' => 'not-an-array'))
+  # --- push failure keeps the entry (K20) --------------------------------
 
-    assert_raises(ArgumentError) { entry.add_to_queue }
-    assert_equal([entry.value], @pool.with { |c| c.call('ZRANGE', @parent.name, 0, -1) })
+  # K20 update: SortedEntry now writes JSON straight to Redis instead of
+  # routing through Client#push, so Client validation (the original
+  # ArgumentError trigger) no longer fires here. The remove-then-push rescue
+  # is still in place — now keyed on the LPUSH itself raising, e.g. WRONGTYPE
+  # when something else wrote a non-list value at the queue key.
+  def test_retry_restores_the_entry_when_the_lpush_raises
+    queue = unique_queue
+    @pool.with { |c| c.call('SET', "queue:#{queue}", 'not-a-list') }
+    entry = add_entry(score: 123.0, item: base_item('queue' => queue, 'retry_count' => 2))
+
+    assert_raises(RedisClient::CommandError) { entry.retry }
+    assert_in_delta(123.0, @pool.with { |c| c.call('ZSCORE', @parent.name, entry.value) }.to_f, 0.001,
+                    'the entry must be restored when the LPUSH raises')
+  end
+
+  def test_add_to_queue_restores_the_entry_when_the_lpush_raises
+    queue = unique_queue
+    @pool.with { |c| c.call('SET', "queue:#{queue}", 'not-a-list') }
+    entry = add_entry(score: 77.0, item: base_item('queue' => queue))
+
+    assert_raises(RedisClient::CommandError) { entry.add_to_queue }
+    assert_equal([entry.value], @pool.with { |c| c.call('ZRANGE', @parent.name, 0, -1) },
+                 'the entry must be restored when the LPUSH raises')
+  end
+
+  # K20: a stock-Sidekiq payload may carry `timeout`/`deadline`/`track` without
+  # `jid`/`created_at` — the shape Sidekiq has always accepted. Routing such a
+  # payload through Client#push would reject it; SortedEntry's promote flow
+  # writes the JSON straight to the public queue, so the payload survives the
+  # round-trip from another client.
+  def test_add_to_queue_accepts_a_stock_sidekiq_payload_with_timeout_without_jid_or_created_at
+    queue = unique_queue
+    payload = { 'class' => 'SomeJob', 'args' => [], 'queue' => queue, 'timeout' => 30 }
+    payload_json = Wurk.dump_json(payload)
+    @pool.with { |c| c.call('ZADD', @parent.name, 50.0, payload_json) }
+    entry = Wurk::SortedEntry.new(@parent, 50.0, payload_json)
+
+    entry.add_to_queue
+
+    assert_equal 0, @pool.with { |c| c.call('ZSCORE', @parent.name, payload_json) }.to_i,
+                 'the entry must leave the parent set'
+    assert_equal 1, @pool.with { |c| c.call('LLEN', "queue:#{queue}") },
+                 'the stock-Sidekiq payload must be LPUSHed to the public queue'
   end
 
   # --- add_to_queue ------------------------------------------------------

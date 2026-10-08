@@ -76,6 +76,22 @@ class RedisPoolTest < Wurk::Test::UnitCase
     assert_equal expected, @pool.client_config.slice(*SOCKET_KEYS)
   end
 
+  # K24: pin the chosen value. 0 closes the duplicate-application window
+  # redis-client opens at 1 — a reply lost mid-command is re-sent onto a
+  # fresh socket and can land that one command twice (a duplicate LPUSH, a
+  # double INCR, a ZPOPBYSCORE whose first pop is lost with its reply,
+  # Sidekiq #3303). A stale socket then surfaces as a connect-phase
+  # ConnectionError, which the pool's pre-apply retry replays onto a fresh
+  # socket. Diverges from Sidekiq's `reconnect_attempts ||= 1`; pinned here
+  # so a rethink has to break this test and the comment in
+  # DEFAULT_RECONNECT_ATTEMPTS together.
+  def test_default_reconnect_attempts_closes_duplicate_application_window
+    assert_equal 0, Wurk::RedisPool::DEFAULT_RECONNECT_ATTEMPTS
+
+    @pool = build_pool
+    assert_equal 0, @pool.client_config[:reconnect_attempts]
+  end
+
   def test_read_write_defaults_are_wider_than_connect_and_checkout
     assert_operator Wurk::RedisPool::DEFAULT_READ_TIMEOUT, :>, Wurk::RedisPool::DEFAULT_CONNECT_TIMEOUT
     assert_operator Wurk::RedisPool::DEFAULT_WRITE_TIMEOUT, :>, Wurk::RedisPool::DEFAULT_POOL_TIMEOUT

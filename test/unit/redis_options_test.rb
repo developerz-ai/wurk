@@ -108,6 +108,47 @@ class RedisOptionsTest < Wurk::Test::UnitCase
     assert_equal 'mymaster', kwargs[:master_name]
   end
 
+  # K8: same flow as the hash-sentinels test above, but with the URL-string
+  # form redis-client also accepts. Locks down the second shape so a refactor
+  # of `pool_kwargs` that special-cases hashes would be caught here, and pins
+  # the wire-level destination: the master name reaches RedisClient.sentinel,
+  # the pool's own label is `pool_name`, not the master.
+  def test_pool_kwargs_carries_a_sentinel_master_name_with_string_sentinels
+    kwargs = Wurk::RedisOptions.pool_kwargs(sentinels: ['redis://a:26379'], name: 'mymaster',
+                                            size: 5, pool_name: 'shard-a')
+
+    assert_equal 'mymaster', kwargs[:master_name]
+    refute_includes kwargs.keys, :name
+    refute_includes kwargs.keys, :size
+    refute_includes kwargs.keys, :pool_name
+    assert_equal 'mymaster', RedisClient.sentinel(**normalize(kwargs)).name
+  end
+
+  def test_string_sentinel_master_name_does_not_become_the_pool_label
+    pool = Wurk::RedisConnection.create(sentinels: ['redis://a:26379'], name: 'mymaster',
+                                        pool_name: 'shard-a')
+
+    assert_equal 'mymaster', pool.send(:redis_client_config).name
+    assert_equal 'shard-a', pool.name
+  end
+
+  # K8: Sidekiq parity for the full {sentinels:, name:, pool_name:} Sentinel
+  # hash at the normalize layer. The master name the host wrote under `name:`
+  # reaches RedisClient.sentinel as `:name`; `pool_name:` is the pool's own
+  # label and never appears in the wire-side config. The pool-level assertion
+  # lives above; this one is the input-stage counterpart that catches a
+  # future refactor of `pool_kwargs` that special-cases the pool builder and
+  # forgets normalize's contract.
+  def test_k8_normalize_routes_string_sentinel_master_name_and_keeps_pool_label_out
+    config = normalize(sentinels: ['redis://a:26379'], name: 'mymaster', pool_name: 'shard-a')
+
+    assert_equal 'mymaster', config[:name]
+    refute_includes config.keys, :master_name, 'master_name is a redis_options spelling, never in the wire config'
+    refute_includes config.keys, :pool_name, 'pool_name is the pool label, never a redis-client keyword'
+    assert Wurk::RedisOptions.sentinel?(config)
+    assert_equal 'mymaster', RedisClient.sentinel(**config).name
+  end
+
   def test_pool_kwargs_drops_name_without_sentinels
     kwargs = Wurk::RedisOptions.pool_kwargs(url: 'redis://example:6379/0', name: 'label')
 

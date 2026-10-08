@@ -243,6 +243,34 @@ class ClientBufferedTest < Wurk::Test::UnitCase
     assert_equal [['queued'], ['live']], queued_args.reverse
   end
 
+  # K14: pinned replay routing at the drainer layer. Two shards, each with
+  # its own buffer entry. Recovery is independent; `drain_all!` must replay
+  # each entry through its own origin pool, never misroute one shard's
+  # backlog onto the other. Without the per-pool binding this would either
+  # (a) replay both through one pool, or (b) leave one shard's backlog
+  # undrained because the other's pool drained first.
+  def test_k14_drain_all_replays_each_pool_through_its_own_origin
+    shard_a = TogglablePool.new(@pool)
+    shard_a.fail!
+    shard_b = TogglablePool.new(@pool)
+    shard_b.fail!
+
+    build_client(shard_a).push(base_item('args' => ['for-a']))
+    build_client(shard_b).push(base_item('args' => ['for-b']))
+
+    assert_equal 2, Wurk::Client::Buffered.buffer_size
+
+    shard_a.recover!
+    shard_b.recover!
+
+    drained = Wurk::Client::Buffered.drain_all!
+
+    assert_equal 2, drained
+    assert_equal 0, Wurk::Client::Buffered.buffer_size
+    assert_equal 1, shard_a.writes, 'shard A backlog replayed through shard A'
+    assert_equal 1, shard_b.writes, 'shard B backlog replayed through shard B'
+  end
+
   def test_drain_all_replays_every_origin_and_reports_the_first_failure
     broken = TogglablePool.new(@pool)
     broken.fail!

@@ -63,13 +63,14 @@ module Wurk
         # Run a pipeline that contains EVALSHAs, recovering from a flushed script
         # cache the way a pipeline forces us to.
         #
-        # A pipelined EVALSHA surfaces NOSCRIPT only when the pipeline finalizes
-        # — never to #eval_cached's inline rescue, which has already returned by
-        # then. A pipeline is not a transaction: by the time that error is
-        # raised, every *other* command in it has already been applied; only
-        # the EVALSHAs failed. Recovery is one SCRIPT LOAD and a replay of the
-        # whole block through source-embedded EVAL, which cannot raise NOSCRIPT
-        # at all — so the plain commands run a second time.
+        # A pipelined EVALSHA only surfaces NOSCRIPT when the pipeline
+        # finalizes — #eval_cached's inline rescue sees only NON-pipelined
+        # calls, so by the time the error raises, every non-EVAL command in the
+        # batch has been applied to the server and only the EVALSHAs failed.
+        # Recovery loads the missing scripts and replays the whole block as
+        # source-embedded EVAL, which cannot raise NOSCRIPT — so the plain
+        # commands in the block run a second time, and the EVAL commands run
+        # via EVAL (source) instead of EVALSHA.
         #
         # That is why the block must be replay-safe: it is handed the pipeline
         # and the eval method to route through, and may run twice. Both of

@@ -50,16 +50,30 @@ module Wurk
     # surprise: on a member already promoted or deleted it returns nil instead
     # of re-creating it, so a stale dashboard row can't resurrect a job that
     # has since run.
+    #
+    # Tracks `@score` so a second call computes its delta against the new
+    # score rather than the original one (without this the two-call sequence
+    # would cumulatively shift, leaving the member at the wrong time).
     def reschedule(at)
-      Wurk.redis { |conn| conn.call('ZADD', @parent.name, 'XX', 'INCR', at.to_f - @score, value) }
+      new_score = Wurk.redis { |conn| conn.call('ZADD', @parent.name, 'XX', 'INCR', at.to_f - @score, value) }
+      @score = new_score.to_f if new_score
+      new_score
     end
 
     # Removes this entry and re-enqueues it via the client with the payload
     # untouched. Backs the scheduled/dead "add to queue" actions — Sidekiq's
     # add_to_queue does not touch `retry_count`.
+    #
+    # Writes the JSON straight to the queue rather than routing through
+    # Client#push: Client#push validates and rejects payloads that lack both
+    # `jid` and `created_at` yet carry `timeout`/`deadline`/`track`, the
+    # shape stock Sidekiq has always accepted. The remove-then-push rescue
+    # still restores the entry on a Redis-side failure — validation no
+    # longer fires here because there is no validation to fire.
     def add_to_queue
       remove_job do |message|
-        Client.new.push(message)
+        json = Wurk.dump_json(message)
+        Wurk.redis { |c| c.call('LPUSH', "queue:#{message['queue']}", json) }
       end
     end
 
@@ -70,7 +84,8 @@ module Wurk
     def retry
       remove_job do |message|
         message['retry_count'] = message['retry_count'].to_i - 1 if message['retry_count']
-        Client.new.push(message)
+        json = Wurk.dump_json(message)
+        Wurk.redis { |c| c.call('LPUSH', "queue:#{message['queue']}", json) }
       end
     end
 

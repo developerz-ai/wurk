@@ -397,6 +397,10 @@ module Wurk
     # forever. Embedded mode owns no traps (and self-TERM would kill the host
     # app), so quiet applies directly. Anything else is re-delivered as-is,
     # like Sidekiq 8's launcher, so a host's own traps see dashboard signals.
+    # K22: a re-delivered TTIN would STOP a swarm child (its default
+    # disposition; the child never traps TTIN), so the dashboard's "dump
+    # threads" is answered in-process via #dump_threads instead. Pinned by
+    # launcher_test.rb's `test_heartbeat_dumps_threads_on_ttin_without_redelivering`.
     def dispatch_signal(sig)
       case sig
       when 'TSTP' then @embedded ? quiet : redeliver(sig)

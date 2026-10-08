@@ -545,9 +545,11 @@ class FetcherReliableTest < Wurk::Test::UnitCase
     assert_equal [payload], lrange(@public_queue)
   end
 
-  # The caller owns the unit, so a requeue after the ACK went out still puts
-  # the job back rather than dropping it.
-  def test_requeue_after_a_flushed_ack_still_requeues
+  # K15: a unit whose ACK already flushed is retired — LREM in the
+  # RELIABLE_REQUEUE Lua returns 0 and the RPUSH is skipped, so requeue is
+  # a no-op. Re-pushing a finished job is the double-run the LREM guard
+  # exists to prevent; this test pins that.
+  def test_requeue_after_a_flushed_ack_does_not_repush
     payload = enqueue('req')
     uow = @fetcher.retrieve_work
     uow.acknowledge
@@ -555,7 +557,29 @@ class FetcherReliableTest < Wurk::Test::UnitCase
     uow.requeue
 
     assert_equal 0, llen(private_queue)
-    assert_equal [payload], lrange(@public_queue)
+    assert_empty lrange(@public_queue),
+                 'a unit whose ACK flushed is retired — requeue must not resurrect it'
+  end
+
+  # K15: drive the reaper's path. A previous run crashed mid-fetch, leaving
+  # its claim stuck in this process's private list. The reaper surfaces it
+  # back to the public queue by calling #requeue on a UoW built for the
+  # stuck payload. The RELIABLE_REQUEUE Lua's LREM clears the private copy
+  # and the RPUSH lands the job on public, all in one hop — no double-run.
+  def test_requeue_after_reaper_finds_stuck_job_lands_in_public_only
+    payload = SecureRandom.hex(12)
+    @pool.with { |c| c.call('RPUSH', private_queue, payload) }
+    uow = Wurk::Fetcher::Reliable::UnitOfWork.new(
+      queue: @public_queue, queue_name: @queue_name, private_queue: private_queue,
+      job: payload, config: @capsule, fetcher: @fetcher
+    )
+
+    uow.requeue
+
+    assert_equal 0, llen(private_queue),
+                 'requeue must LREM the stuck private copy atomically'
+    assert_equal [payload], lrange(@public_queue),
+                 'the job lands in public exactly once — never in both lists'
   end
 
   def test_basic_fetch_alias_requeue_clears_the_private_copy

@@ -353,6 +353,27 @@ class JobUtilTest < Wurk::Test::UnitCase
     assert_equal 3, item['retry']
   end
 
+  # K4: Sidekiq's option-merge order is
+  #   class_defaults → wrapped.get_sidekiq_options → item
+  # with each layer's keys winning over the one before. The wrapper's
+  # own defaults (`Wurk.default_job_options` — `queue: 'default',
+  # `retry: true`) are the floor; the wrapped AJ's options (`queue: 'aj'`,
+  # `retry: false`) beat the floor; the item's explicit keys (`retry: 3`,
+  # `args: [1, 2, 3]`) beat the wrapped. Single test asserts the full
+  # precedence chain in one shape.
+  def test_normalize_item_merge_order_is_class_defaults_then_wrapped_then_item
+    item = @host.normalize_item(
+      'class' => 'Sidekiq::ActiveJob::Wrapper',
+      'wrapped' => NoRetryWrapped,
+      'args' => [1, 2, 3],
+      'retry' => 3
+    )
+
+    assert_equal 'aj', item['queue'], 'wrapped queue wins over class defaults'
+    assert_equal 3, item['retry'], 'item retry wins over wrapped retry: false'
+    assert_equal [1, 2, 3], item['args'], 'item args win over both'
+  end
+
   # --- now_in_millis ---------------------------------------------------
 
   def test_now_in_millis_returns_integer

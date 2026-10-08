@@ -375,6 +375,22 @@ class ManagerTest < Wurk::Test::UnitCase
     assert_equal workers.sort_by(&:object_id), killed.sort_by(&:object_id)
   end
 
+  # K12: same property, broader parent class. The `ensure` clause the brief pins
+  # must hold for ANY RedisClient::ConnectionError — not just CannotConnectError.
+  # A subclass-only test could be green while TimeoutError (also a ConnectionError
+  # in some redis-client releases) lets the kill block skip.
+  def test_hard_shutdown_kills_every_processor_even_when_bulk_requeue_raises_connection_error
+    mgr = Wurk::Manager.new(@capsule)
+    workers = mgr.workers.to_a
+    workers.each { |w| w.define_singleton_method(:job) { nil } }
+    killed = []
+    workers.each { |w| w.define_singleton_method(:kill) { killed << self } }
+    @capsule.fetcher.define_singleton_method(:bulk_requeue) { |_| raise RedisClient::ConnectionError, 'down' }
+
+    assert_raises(RedisClient::ConnectionError) { mgr.hard_shutdown }
+    assert_equal workers.sort_by(&:object_id), killed.sort_by(&:object_id)
+  end
+
   def test_hard_shutdown_skips_bulk_requeue_when_no_workers
     mgr = Wurk::Manager.new(@capsule)
     mgr.workers.clear

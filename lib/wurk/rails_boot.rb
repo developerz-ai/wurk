@@ -72,6 +72,9 @@ module Wurk
     # (Bundler.require of the puma gem loads `Puma`, never `Puma::Launcher`).
     # Any other server (Falcon, Thin, Pitchfork, a bespoke rackup) opts in
     # with WURK_EMBED=1.
+    # K7: this allowlist is what keeps `rails runner` and `rails generate`
+    # from forking a swarm that fetches jobs and then at_exits mid-drain.
+    # Pinned by test/engine/railtie_test.rb (`server allowlist (K7)` block).
     def serving?
       return true if ENV['WURK_EMBED'] == '1'
       return true if defined?(::Rails::Server) || defined?(::Puma::Launcher) || defined?(::PhusionPassenger)

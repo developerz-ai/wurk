@@ -192,6 +192,12 @@ module Wurk
 
       # Both children of the slot are dead — each exit was claimed here, so the
       # swarm scheduled no respawn for either. Hand the slot back to it.
+      # K13: the claim fence (old_exited vs replacement_dead) keeps the slot
+      # alive on the swarm's crash-respawn backoff rather than requeuing a
+      # dead old pid behind a recycled one — the dead pid would never have
+      # been waited on, the respawn would have populated a slot that now
+      # belongs to whoever inherited the PID, and the swarm would run one
+      # child short forever.
       def release_slot
         cur = @current
         @backoff.clear(cur[:index])

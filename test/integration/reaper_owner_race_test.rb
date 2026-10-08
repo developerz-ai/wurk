@@ -81,6 +81,25 @@ class ReaperOwnerRaceTest < Wurk::Test::UnitCase
     assert_equal 1, @observer.call('LLEN', priv)
   end
 
+  # The per-identity `settled_orphan?` re-check is the gate that spares an
+  # in-flight job whose owner beats in the seam between the liveness snapshot
+  # and the SCAN. Stubbing the re-check to ignore the fresh info hash lets the
+  # stale snapshot's verdict stand — and the live owner's list is drained,
+  # proving the safety was the only thing protecting the job.
+  def test_disabling_the_per_identity_recheck_lets_the_stale_snapshot_reclaim
+    nonce = SecureRandom.hex(6)
+    priv = seed_private_list('remote-host.example', nonce)
+    reaper = beat_after_snapshot(grace: 0) { register('remote-host.example', nonce) }
+    # settled_orphan? is private; the singleton override replaces it on this
+    # reaper, and `orphaned?` reaches it via implicit-self method lookup.
+    reaper.define_singleton_method(:settled_orphan?) { |*_args| true }
+
+    assert_equal 1, reaper.reclaim!,
+                 'without the re-check the stale snapshot reclaims the live owner'
+    assert_equal 0, @observer.call('LLEN', priv), 'private list drained by the stale snapshot'
+    assert_equal 1, @observer.call('LLEN', @public_q), 'in-flight job re-queued — would run twice'
+  end
+
   private
 
   # A Reaper whose liveness snapshot runs the block right after it is taken —
