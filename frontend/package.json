@@ -19,7 +19,7 @@
     "@fontsource/jetbrains-mono": "^5.3.0",
     "@fortawesome/fontawesome-free": "^7.3.1",
     "@solidjs/router": "^1.0.0",
-    "@tanstack/solid-query": "^5.104.0",
+    "@tanstack/solid-query": "^5.104.1",
     "solid-js": "^1.9.15"
   },
   "devDependencies": {
@@ -28,8 +28,8 @@
     "@testing-library/dom": "^10.4.2",
     "@testing-library/jest-dom": "^7.0.1",
     "daisyui": "^5.7.47",
-    "jsdom": "^30.1.1",
-    "oxlint": "^1.86.0",
+    "jsdom": "^30.1.2",
+    "oxlint": "^1.87.0",
     "sass": "^1.105.1",
     "tailwindcss": "^4.3.3",
     "typescript": "^7.0.2",
