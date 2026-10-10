@@ -142,20 +142,8 @@ if ENV['COVERAGE'] && defined?(SimpleCov)
     FileUtils.rm_rf(File.join(SimpleCov.coverage_path, 'subprocess'))
 
     # Last thing before SimpleCov's at-exit merge: every worker has been reaped
-    # and has stored, so an entry missing now is missing from the merge. Fail
-    # on that by name, and stop SimpleCov (its at-exit hook does nothing once
-    # `running` is false) so it prints no percentage for a partial suite.
-    next unless Minitest.respond_to?(:parallel_fork_number)
-
-    missing = Wurk::Test::CoverageMerge.missing_workers(
-      SimpleCov::ResultMerger.read_resultset,
-      base: SimpleCov.command_name, workers: Minitest.parallel_fork_number,
-      since: COVERAGE_STARTED_AT, now: Time.now.to_i, merge_timeout: SimpleCov.merge_timeout
-    )
-    next if missing.empty?
-
-    SimpleCov.running = false
-    abort Wurk::Test::CoverageMerge.failure_message(missing)
+    # and has stored, so an entry missing now is missing from the merge.
+    Wurk::Test::CoverageMerge.verify!(since: COVERAGE_STARTED_AT) if Minitest.respond_to?(:parallel_fork_number)
   end
 end
 

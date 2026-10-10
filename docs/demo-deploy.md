@@ -43,8 +43,11 @@ automatically; the pushed digest
 to `main` that changes what the image runs (lib/app/frontend/demo/Dockerfile;
 the demo tracks main), `workflow_dispatch` by hand, or called by `release.yml` after it publishes the gem for a
 `lib/wurk/version.rb` bump landing on `main` (the tag is an output there, cut
-last; see [RELEASE.md](../RELEASE.md)) — and is gated two ways so only the
-org can ship an image, with a third gate available but not configured:
+last; see [RELEASE.md](../RELEASE.md)). The hand-dispatched door is gated two
+ways so only approved deployers (the `DEMO_DEPLOYERS` list) can ship an image
+through it, with a third gate available but not configured; the other two
+doors skip the allowlist because the commit already passed branch protection
+on `main`:
 
 1. **Public repo + `workflow_dispatch`** → only users with *write* access (org
    members) can trigger it; external forks cannot.

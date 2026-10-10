@@ -92,4 +92,60 @@ class CoverageMergeTest < Minitest::Test
 
     assert_match(/\Acoverage merge incomplete: missing worker-0, worker-3\b/, message)
   end
+
+  # The wiring test_helper's after_run hook calls. Needs a real coverage run to
+  # have SimpleCov and the fork count; CI's one suite run is COVERAGE=1.
+  def verify_against(resultset)
+    skip 'needs SimpleCov and minitest-parallel_fork (COVERAGE=1)' unless verifiable?
+
+    stopped = []
+    status = nil
+    read = resultset.call
+    _, err = capture_io do
+      swap(SimpleCov::ResultMerger, :read_resultset, -> { read }) do
+        swap(SimpleCov, :running=, ->(value) { stopped << value }) do
+          Merge.verify!(since: Time.now.to_i - 1)
+        rescue SystemExit => e
+          status = e
+        end
+      end
+    end
+    [status, stopped, err]
+  end
+
+  # Minitest 6 dropped minitest/mock; swap one singleton method and restore it.
+  def swap(target, name, replacement)
+    original = target.method(name)
+    target.define_singleton_method(name, &replacement)
+    yield
+  ensure
+    target.define_singleton_method(name, original)
+  end
+
+  def complete_resultset
+    Array.new(Minitest.parallel_fork_number) do |worker|
+      [Merge.worker_command_name(SimpleCov.command_name, worker), entry(Time.now.to_i)]
+    end.to_h
+  end
+
+  def verifiable?
+    defined?(SimpleCov) && Minitest.respond_to?(:parallel_fork_number)
+  end
+
+  def test_verify_fails_the_run_by_name_and_stops_simplecov_reporting
+    status, stopped, err = verify_against(-> { {} })
+
+    refute_nil status, 'an incomplete merge must abort the run'
+    refute_predicate status, :success?
+    assert_equal [false], stopped
+    assert_match(/\Acoverage merge incomplete: missing worker-0\b/, err)
+  end
+
+  def test_verify_leaves_a_complete_merge_to_simplecov
+    status, stopped, err = verify_against(-> { complete_resultset })
+
+    assert_nil status
+    assert_empty stopped
+    assert_empty err
+  end
 end

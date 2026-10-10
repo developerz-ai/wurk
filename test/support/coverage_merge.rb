@@ -8,8 +8,10 @@ module Wurk
     # entry reports ~85% and fails as if the code were under-tested — a verdict
     # on data nobody collected (#566 failed that way on a fully green suite).
     # test_helper asks this before SimpleCov reports and fails the run by name
-    # instead. Pure functions over the parsed coverage/.resultset.json, so the
-    # rule is testable without a coverage run.
+    # instead. The rule is pure functions over the parsed
+    # coverage/.resultset.json; `verify!` is the only part that touches
+    # SimpleCov and the process, and coverage_merge_test.rb drives it against
+    # the live run's SimpleCov with the resultset read stubbed.
     module CoverageMerge
       module_function
 
@@ -28,6 +30,23 @@ module Wurk
           stored_at = resultset.dig(worker_command_name(base, worker), 'timestamp')
           stored_at && stored_at >= since && now - stored_at < merge_timeout
         end
+      end
+
+      # The gate itself, run in the parent once every worker has been reaped
+      # and has stored: fail the run by name, and stop SimpleCov first — its
+      # at-exit hook does nothing once `running` is false — so no percentage
+      # is printed for a partial suite. Called from Minitest.after_run, i.e.
+      # inside Minitest's own at_exit, where `abort` sets the exit status.
+      def verify!(since:)
+        missing = missing_workers(
+          SimpleCov::ResultMerger.read_resultset,
+          base: SimpleCov.command_name, workers: Minitest.parallel_fork_number,
+          since: since, now: Time.now.to_i, merge_timeout: SimpleCov.merge_timeout
+        )
+        return if missing.empty?
+
+        SimpleCov.running = false
+        abort failure_message(missing)
       end
 
       def failure_message(missing)

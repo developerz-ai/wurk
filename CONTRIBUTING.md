@@ -193,10 +193,12 @@ These are non-negotiable — they're what keep Wurk a true drop-in:
 4. Run `bin/check` (or `bin/check full` if you touched the compat surface).
 5. Open the PR — CI runs one Ruby suite on the newest Ruby + Rails with the
    coverage gate folded in, plus the parity oracles, rubocop, the frontend
-   suite, and benchmarks. The bench bot comments per-benchmark deltas and flags
-   a regression past the noise-adjusted 5% threshold in that comment. Bench is
-   advisory, not a required check: hosted-runner noise would make a hard gate
-   flaky, so a flagged regression is yours to explain or fix, not a red status.
+   suite, and benchmarks. The bench bot comments per-benchmark deltas. A
+   regression past the noise-adjusted 5% threshold (or a baseline benchmark
+   missing on head) is flagged in that comment and fails the `bench vs base`
+   job, so the PR shows a red job. Bench is advisory all the same: that job is
+   not a required check, because hosted-runner noise would make a hard gate
+   flaky, so it does not block the merge — it is yours to explain or fix.
 6. Don't `--no-verify` past a failing hook — fix the hook.
 
 By contributing you agree your work is licensed under the project's
