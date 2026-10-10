@@ -182,7 +182,7 @@ jobs:
       # `webidl.util.markAsUncloneable`, and all 17 vitest workers failed to
       # boot. Floor comes from jsdom's `engines.node`; mirrored in
       # frontend/package.json so a local `bun install` warns on a mismatch.
-      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         if: env.RUN == 'true'
         with:
           node-version: "24"
@@ -219,7 +219,7 @@ jobs:
         run: bundle exec rake test
       - name: upload coverage report
         if: always() && env.RUN == 'true'
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7
         with:
           name: coverage
           path: coverage/coverage.xml
@@ -448,7 +448,7 @@ jobs:
           bun-version: "1.4.2"
       # See the `test` job for why Node is pinned alongside Bun. This is the
       # job that actually runs vitest, so it is the one the pin exists for.
-      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         if: env.RUN == 'true'
         with:
           node-version: "24"
