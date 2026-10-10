@@ -121,6 +121,10 @@ require 'minitest/autorun'
 # SimpleCov then skipped storing the worker's result — the intermittent
 # "worker-1 missing, coverage < 90%" CI failure.
 COVERAGE_PARENT_PID = Process.pid
+# Resultset timestamps are whole seconds, so this is too.
+COVERAGE_STARTED_AT = Time.now.to_i
+
+require_relative 'support/coverage_merge'
 
 if ENV['COVERAGE'] && defined?(SimpleCov)
   require 'fileutils'
@@ -136,6 +140,10 @@ if ENV['COVERAGE'] && defined?(SimpleCov)
       warn "skipping unreadable subprocess coverage #{path}"
     end
     FileUtils.rm_rf(File.join(SimpleCov.coverage_path, 'subprocess'))
+
+    # Last thing before SimpleCov's at-exit merge: every worker has been reaped
+    # and has stored, so an entry missing now is missing from the merge.
+    Wurk::Test::CoverageMerge.verify!(since: COVERAGE_STARTED_AT) if Minitest.respond_to?(:parallel_fork_number)
   end
 end
 

@@ -62,4 +62,30 @@ class ToolchainPinsTest < Minitest::Test
   def test_every_node_pin_names_the_same_version
     assert_one_version('node', workflow_pins('actions/setup-node', 'node-version'), 'mise.toml' => mise_pin('node'))
   end
+
+  # The patterns that decide whether a pull request runs this suite at all.
+  def ruby_filter_patterns
+    detect = YAML.load_file(File.join(ROOT, '.github', 'workflows', 'test.yml')).dig('jobs', 'detect', 'steps')
+    filters = detect.find { |step| step['id'] == 'filter' }.dig('with', 'filters')
+    YAML.safe_load(filters).fetch('ruby')
+  end
+
+  # Every file a pin is read from, repo-relative.
+  def pin_sites
+    workflows = (setup_steps('oven-sh/setup-bun') + setup_steps('actions/setup-node'))
+                .map { |site, _| ".github/workflows/#{site.split(':').first}" }
+    (%w[Dockerfile mise.toml] + workflows).uniq
+  end
+
+  # The agreement checks above only gate a PR that runs them. A pin site
+  # missing from test.yml's `ruby` paths-filter lets a PR that moves that one
+  # pin (dependabot's docker bump edits only the Dockerfile) skip the suite and
+  # report green with the pins disagreeing.
+  def test_a_change_to_any_pin_site_runs_this_suite
+    patterns = ruby_filter_patterns
+    unwatched = pin_sites.reject { |path| patterns.any? { |glob| File.fnmatch?(glob, path, File::FNM_PATHNAME) } }
+
+    assert_empty unwatched, "test.yml's `ruby` paths-filter must list every pin site; a PR touching only " \
+                            "#{unwatched.join(', ')} would skip the test that checks the pins agree"
+  end
 end

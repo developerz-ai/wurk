@@ -89,7 +89,15 @@ jobs:
               - 'Gemfile'
               - 'Rakefile'
               - '*.gemspec'
-              - '.github/workflows/test.yml'
+              # The bun/node pin sites test/unit/toolchain_pins_test.rb reads
+              # and requires to agree. Dependabot's docker bump edits the
+              # Dockerfile and nothing else: without these, that PR skipped the
+              # Ruby suite and merged green with the pins disagreeing. The
+              # workflows glob also covers this file (a filter change must
+              # re-run the suite it gates).
+              - 'Dockerfile'
+              - 'mise.toml'
+              - '.github/workflows/*.yml'
             frontend:
               - 'frontend/**'
               - '.github/workflows/test.yml'
