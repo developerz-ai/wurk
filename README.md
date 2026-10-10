@@ -25,7 +25,7 @@ Wurk is wire-compatible with Sidekiq — same Redis keys, same job JSON, same Ru
 
 **At scale:** Wurk is built for fleets, not just for one box. Kubernetes `/live` + `/ready` probes are a config line, not a sidecar; a bearer-scoped [HTTP API](docs/api-http.md) lets non-Ruby services enqueue and inspect; [OpenTelemetry](docs/telemetry.md) traces propagate client → server; per-queue [global concurrency caps](docs/rate-limiting.md) hold cluster-wide limits; and monitoring is the dashboard you already mount — live SSE, charts, per-job progress, no separate stack to run. See [Wurk extras](#wurk-extras).
 
-**AI-managed:** Wurk is a 100% AI-managed project. Issues, pull requests and dependency updates are triaged, reviewed, merged or closed by the [developerz.ai](https://developerz.ai) maintainer agent, which asks a human only for security, legal and breaking-change decisions. New features are still built by us, humans and AI together — see [CONTRIBUTING.md](CONTRIBUTING.md).
+**AI-managed:** Wurk is a 100% AI-managed project. Issues, pull requests and dependency updates are triaged, reviewed, merged or closed by the [developerz.ai](https://developerz.ai) maintainer agent, which asks a human only for security reports, license questions and breaking changes. New features are still built by us, humans and AI together — see [CONTRIBUTING.md](CONTRIBUTING.md).
 
 **On Sidekiq:** Wurk implements Sidekiq's API because it is a genuinely good API. Sidekiq is human-maintained and funds that work through its paid tiers; Wurk is AI-maintained, which is what lets the same surface be free software. Wurk is independent and not affiliated with or endorsed by Sidekiq or its maintainers — see [Why Wurk exists](#why-wurk-exists).
 

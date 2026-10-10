@@ -189,10 +189,11 @@ every comment it posts is marked as coming from a bot. What that means for you:
   closes the issue at 14. Answer on the closed issue and it reopens. An issue
   that has been confirmed is never closed by a clock.
 - **Pull requests.** A PR merges when the six required checks are green and the
-  review has nothing left open; nobody has to click. When the next move is
-  yours (a red required check, an open review thread, a conflict), the agent
-  pings at 7 and 14 days and closes the PR at 21 (28 for a draft). Push or reply
-  and it picks the PR back up.
+  review has nothing left open; nobody has to click, provided every commit is
+  attributed to a GitHub account (step 1 under [Pull requests](#pull-requests)).
+  When the next move is yours (a red required check, an open review thread, a
+  conflict), the agent pings at 7 and 14 days and closes the PR at 21 (28 for a
+  draft). Push or reply and it picks the PR back up.
 - **A "no" comes early and with a reason.** A change the project will not take
   (see [Conventions](#conventions) and the `non_goals` list in
   `.dz/maintainer/maintainer.yml`) is closed with the rule it ran into, not left

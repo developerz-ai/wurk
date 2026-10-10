@@ -74,14 +74,19 @@ triage:
   # reporter's silence is timed; a confirmed or accepted issue is never closed
   # by a clock.
   close_unanswered_repro_after_days: 14
-  # What this project will not do (CLAUDE.md, "Never"). A pull request that
-  # matches one is closed with the entry quoted; an issue is answered with it.
+  # What this project will not take, from CLAUDE.md's "Never" list: the entries
+  # that describe a change someone could propose. The two left out
+  # (`--no-verify`, force-pushing `main`) are rules for how to work, not
+  # proposals. A pull request that matches an entry is closed with it quoted;
+  # an issue is answered with it.
   non_goals:
     - "Changing a Redis key, the job JSON format, or a sorted-set score format: wire compatibility with Sidekiq is the contract"
     - "MessagePack or any other non-JSON job format"
     - "A license check, a paid tier, or a flag that gates a Pro or Enterprise feature"
     - "Breaking a Sidekiq::* alias or diverging from the documented Sidekiq API"
     - "Mocking Redis in integration or parity tests"
+    - "Sharing a Redis socket across forks"
+    - "Backwards-compatibility shims, dead-code comments, or speculative abstractions"
 
 handoff:
   # `fleet`, not `webhook`: both grant HandoffWebhook
