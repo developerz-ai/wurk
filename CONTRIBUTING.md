@@ -178,6 +178,33 @@ These are non-negotiable — they're what keep Wurk a true drop-in:
   `test/test_helper.rb`). Branch was ratcheted from ~78% to ≥90% in #67 —
   keep new code at parity.
 
+## How this project is maintained
+
+Wurk is AI-managed. The [developerz.ai](https://developerz.ai) maintainer agent
+triages issues, reviews and merges pull requests, and lands dependency updates;
+every comment it posts is marked as coming from a bot. What that means for you:
+
+- **Issues.** A bug report needs steps, expected, actual and version. If the
+  agent asks for one of them and hears nothing, it reminds you at 7 days and
+  closes the issue at 14. Answer on the closed issue and it reopens. An issue
+  that has been confirmed is never closed by a clock.
+- **Pull requests.** A PR merges when the six required checks are green and the
+  review has nothing left open; nobody has to click. When the next move is
+  yours (a red required check, an open review thread, a conflict), the agent
+  pings at 7 and 14 days and closes the PR at 21 (28 for a draft). Push or reply
+  and it picks the PR back up.
+- **A "no" comes early and with a reason.** A change the project will not take
+  (see [Conventions](#conventions) and the `non_goals` list in
+  `.dz/maintainer/maintainer.yml`) is closed with the rule it ran into, not left
+  open.
+- **Not every comment gets a reply.** A "+1" or a thanks is read and left alone.
+- **A human is asked** for security reports, license questions and breaking
+  changes. Report a vulnerability privately through the repository's Security
+  tab, not in an issue.
+
+New features are still designed and built by the team, humans and AI together.
+Open an issue before a large feature PR so the direction is agreed first.
+
 ## Pull requests
 
 1. Commit with an email linked to your GitHub account
