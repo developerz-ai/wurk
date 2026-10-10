@@ -557,8 +557,10 @@ mount Wurk::Engine =&gt; <span class="add">"/wurk"</span></pre>
         <p style="color:var(--muted);margin-top:14px">
           What makes that hard is maintenance: someone has to be paid to do it. Sidekiq funds a
           decade of <i>human</i> maintenance through its paid tiers, which is an honest trade. Wurk
-          makes a different one — it is maintained <b>AI-first</b>: implementation, parity suite,
-          docs, and benchmarks written and kept current by AI agents under human review. A fix, a doc
+          makes a different one — it is <b>100% AI-managed</b>: issues, pull requests and dependency
+          updates are handled end to end by a maintainer agent, which asks a human only for
+          security reports, license questions and breaking changes, and new features and releases
+          are shipped by humans and AI together. A fix, a doc
           update, or a version bump no longer costs somebody a week, which is what makes it practical
           to ship the whole Pro + Enterprise surface for free, to verify parity mechanically on every
           push (Sidekiq's own tests as an oracle, third-party gems' upstream suites run against
