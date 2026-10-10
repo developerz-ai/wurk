@@ -43,8 +43,11 @@ automatically; the pushed digest
 to `main` that changes what the image runs (lib/app/frontend/demo/Dockerfile;
 the demo tracks main), `workflow_dispatch` by hand, or called by `release.yml` after it publishes the gem for a
 `lib/wurk/version.rb` bump landing on `main` (the tag is an output there, cut
-last; see [RELEASE.md](../RELEASE.md)) — and is gated three ways so only the
-org can ship an image:
+last; see [RELEASE.md](../RELEASE.md)). The hand-dispatched door is gated two
+ways so only approved deployers (the `DEMO_DEPLOYERS` list) can ship an image
+through it, with a third gate available but not configured; the other two
+doors skip the allowlist because the commit already passed branch protection
+on `main`:
 
 1. **Public repo + `workflow_dispatch`** → only users with *write* access (org
    members) can trigger it; external forks cannot.
@@ -53,21 +56,25 @@ org can ship an image:
    door only: a run called by `release.yml` passes `trusted: true`, which waives
    the allowlist (honoured only from the `release` workflow on `main`) — by then
    that caller has already published this commit's gem.
-3. **Protected `demo` environment** → add Required Reviewers. The gate sits on the
-   `build` job (not a separate deploy job) because the digest push is what
-   triggers the deploy, so approval must pause the run *before* the image ships.
+3. **`demo` environment** → not a gate today: it carries no protection rules
+   (`gh api repos/developerz-ai/wurk/environments/demo` returns
+   `protection_rules: []`), so no run waits for an approver. Adding Required
+   Reviewers would make it one. The environment sits on the `build` job (not a
+   separate deploy job) because the digest push is what triggers the deploy, so
+   approval would have to pause the run *before* the image ships.
 
 ### One-time GitHub setup (repo admin)
 
 - **Settings → Secrets and variables → Actions → Variables:** add
   `DEMO_DEPLOYERS` = e.g. `sebyx07,din-handle,ivann-handle`.
-- **Settings → Environments → `demo`:** create it, add the deployer(s) as
-  *Required reviewers*, and (optionally) restrict the deployment branch to `main`.
+- **Settings → Environments → `demo`:** create it. Optional and not applied
+  on this repo today: add the deployer(s) as *Required reviewers*, and restrict
+  the deployment branch to `main`.
 
 - **Settings → Environments → `demo` → Environment secrets:** add `DOCR_TOKEN`
   (a DigitalOcean token with registry write). It lives on the environment, not
-  the repo, so only the reviewer-gated `build` job can read it — this repo is
-  public.
+  the repo, so only the `build` job, which enters that environment, can read it —
+  this repo is public.
 
 No `ARGOCD_*` secrets are needed — CI never talks to the cluster.
 

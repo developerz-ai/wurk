@@ -17,7 +17,7 @@ a repo carries both.
 Two agent configs stay at the repository root, because the tools that read
 them look there and nowhere else:
 
-- `.coderabbit.yaml`: CodeRabbit (https://docs.coderabbit.ai/configure-coderabbit)
+- `.coderabbit.yml`: CodeRabbit (https://docs.coderabbit.ai/configure-coderabbit)
 - `.mcp.json`: Claude Code (https://code.claude.com/docs/en/mcp)
 
 Docs: https://developerz.ai/docs/maintainer-yml

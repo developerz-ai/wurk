@@ -187,15 +187,20 @@ These are non-negotiable — they're what keep Wurk a true drop-in:
    in your PR not attributed to a GitHub account adds a human approval
    requirement on top of the zero the ruleset otherwise asks for — this repo
    otherwise never asks for one, so the PR will silently park instead of
-   auto-merging. See `.maintainer.yml` for the ruleset citation.
+   auto-merging. See `.dz/maintainer/maintainer.yml` for the ruleset citation.
 2. Branch off `main`.
 3. Keep the change focused; add tests at the right layer.
 4. Run `bin/check` (or `bin/check full` if you touched the compat surface).
 5. Open the PR — CI runs one Ruby suite on the newest Ruby + Rails with the
    coverage gate folded in, plus the parity oracles, rubocop, the frontend
-   suite, and benchmarks. The bench bot comments per-benchmark deltas; a real
-   regression fails the check.
+   suite, and benchmarks. The bench bot comments per-benchmark deltas. A
+   regression past the noise-adjusted 5% threshold (or a baseline benchmark
+   missing on head) is flagged in that comment and fails the `bench vs base`
+   job, so the PR shows a red job. Bench is advisory all the same: that job is
+   not a required check, because hosted-runner noise would make a hard gate
+   flaky, so it does not block the merge — it is yours to explain or fix.
 6. Don't `--no-verify` past a failing hook — fix the hook.
 
 By contributing you agree your work is licensed under the project's
-[MIT License](LICENSE).
+[MIT License](LICENSE), and to follow the
+[Code of Conduct](CODE_OF_CONDUCT.md).

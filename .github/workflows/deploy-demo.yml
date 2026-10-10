@@ -10,17 +10,20 @@ name: deploy-demo
 # syncs automatically — CI holds NO cluster credentials (infra repo rule).
 # There is no ArgoCD step here, and no ARGOCD_* secrets.
 #
-# WHO CAN RUN IT — three layers, only-the-org by construction:
+# WHO CAN RUN IT — two layers in force, a third available but not configured:
 #   1. workflow_dispatch on a PUBLIC repo can only be triggered by users with
 #      *write* access (org members) — external forks/users cannot.
 #   2. the `authorize` job rejects anyone not in the DEMO_DEPLOYERS repo
 #      variable (comma-separated GitHub usernames). This guards the
 #      workflow_dispatch door only — a push to main and release.yml (`trusted:
 #      true`) are exempt: both deploy a commit that passed branch protection.
-#   3. the `build` job targets the protected `demo` environment — add Required
-#      Reviewers there so the build (which produces the deploy-triggering image
-#      digest) waits for a named approver. The gate sits on `build` precisely
-#      because the digest push IS the deploy trigger under Image Updater.
+#   3. the `build` job targets the `demo` environment. NOT A GATE TODAY: the
+#      environment carries no protection rules (`gh api
+#      repos/developerz-ai/wurk/environments/demo` → `protection_rules: []`), so
+#      nothing waits for an approver. Adding Required Reviewers there would make
+#      the build (which produces the deploy-triggering image digest) wait for
+#      one; the environment sits on `build` precisely because the digest push
+#      IS the deploy trigger under Image Updater.
 # See docs/demo-deploy.md for the one-time setup and the infra requirements.
 
 on:
@@ -50,8 +53,8 @@ on:
         default: main
   # release.yml calls this after a successful publish so a new gem version
   # reaches the demo without a second manual step. `build` still enters the
-  # protected `demo` environment; the actor allowlist is waived via `trusted`
-  # (see the authorize job for why).
+  # `demo` environment (no protection rules today, see the header); the actor
+  # allowlist is waived via `trusted` (see the authorize job for why).
   workflow_call:
     inputs:
       ref:
@@ -142,9 +145,9 @@ jobs:
     needs: authorize
     runs-on: ubuntu-latest
     timeout-minutes: 30
-    # The required-reviewer gate lives here: under the Image Updater model the
-    # pushed digest is the deploy trigger, so approval must pause the run BEFORE
-    # the image ships, not after.
+    # Where a required-reviewer gate would live (none is configured today):
+    # under the Image Updater model the pushed digest is the deploy trigger, so
+    # approval must pause the run BEFORE the image ships, not after.
     environment:
       name: demo
       url: https://wurk.demo.developerz.ai

@@ -1,6 +1,7 @@
 # frozen_string_literal: true
 
 require 'minitest/autorun'
+require 'fileutils'
 require 'open3'
 require 'socket'
 require 'tmpdir'
@@ -23,9 +24,18 @@ class BinCheckRedisUrlTest < Minitest::Test
       stub = File.join(dir, 'bundle')
       File.write(stub, "#!/usr/bin/env bash\nexit 0\n")
       File.chmod(0o755, stub)
-      env = { 'PATH' => "#{dir}:#{ENV.fetch('PATH')}", 'REDIS_URL' => redis_url }
-      Open3.capture3(env, CHECK, 'fast')
+      Open3.capture3(check_env(dir, redis_url), CHECK, 'fast')
     end
+  end
+
+  # COVERAGE is unset for the child on purpose. Past the guards the real script
+  # runs `rm -rf coverage` in the repo root whenever COVERAGE is set, and under
+  # CI's COVERAGE=1 that repo root holds the resultsets of the suite running
+  # this very test: inheriting it deleted every entry stored so far — a whole
+  # worker's, if the other one had already finished — and the coverage gate then
+  # failed a green suite at ~85%, depending on where the shuffle put this class.
+  def check_env(dir, redis_url)
+    { 'PATH' => "#{dir}:#{ENV.fetch('PATH')}", 'REDIS_URL' => redis_url, 'COVERAGE' => nil }
   end
 
   def closed_port
@@ -69,5 +79,26 @@ class BinCheckRedisUrlTest < Minitest::Test
     ensure
       server.close
     end
+  end
+
+  # Bites under COVERAGE=1 (CI), which is the only time the script deletes: a
+  # file standing in the live coverage dir must outlive a gate run that gets
+  # past the guards.
+  def test_driving_the_gate_leaves_the_live_coverage_dir_alone
+    coverage = File.expand_path('../../coverage', __dir__)
+    created = !File.directory?(coverage)
+    FileUtils.mkdir_p(coverage)
+    sentinel = File.join(coverage, ".bin-check-sentinel-#{Process.pid}")
+    File.write(sentinel, '')
+    server = TCPServer.new('127.0.0.1', 0)
+
+    _out, err, status = run_check("redis://127.0.0.1:#{server.addr[1]}/3")
+
+    assert_equal 0, status.exitstatus, err
+    assert_path_exists sentinel, "bin/check deleted the repo's coverage/ while the suite was writing to it"
+  ensure
+    server&.close
+    FileUtils.rm_f(sentinel) if sentinel
+    Dir.rmdir(coverage) if created && Dir.exist?(coverage) && Dir.empty?(coverage)
   end
 end
