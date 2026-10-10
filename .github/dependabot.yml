@@ -62,10 +62,13 @@ updates:
           - "*"
   # docker covers the Dockerfile's two base images (oven/bun and
   # ruby:3.4-slim-bookworm). When dependabot bumps the oven/bun tag, every other
-  # bun pin must move with it — it cannot edit those, so the human merging the
-  # docker PR updates them by hand: the `bun-version:` inputs in
-  # .github/workflows/test.yml and .github/workflows/release.yml, and `bun` in
-  # mise.toml. `grep -rn 'bun-version\|^bun' .github mise.toml` finds them all.
+  # bun pin must move with it, and dependabot cannot edit those: the
+  # `bun-version:` inputs in .github/workflows/test.yml and
+  # .github/workflows/release.yml, and `bun` in mise.toml
+  # (`grep -rn 'bun-version\|^bun' .github mise.toml` finds them all).
+  # test/unit/toolchain_pins_test.rb fails the docker PR until every pin names
+  # the same version, so the PR stays red until whoever or whatever is fixing
+  # it pushes the matching pin edits to the dependabot branch.
   # Ruby major updates are ignored: release.yml holds the release job on 3.4
   # on purpose, so a major bump would break the gem publish job until pages/
   # release are revisited.

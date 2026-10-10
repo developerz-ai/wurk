@@ -88,7 +88,7 @@ publishes and deploys exactly as one merged by a human.
 | 5 | **build & verify gem** | `rake release:package` packages into `pkg/` and asserts the precompiled dashboard is *inside* the `.gem`. |
 | 6 | **publish** | `rubygems/configure-rubygems-credentials` exchanges the OIDC token, then `gem push`, then `rubygems-await` blocks on propagation. |
 | 7 | **tag & GitHub Release** | `gh release create <tag> --target <sha>` creates the tag *and* the Release in one call, with the CHANGELOG section as notes and the `.gem` attached (marked pre-release automatically for `Gem::Version#prerelease?`). **Last, deliberately** — see [the one rule](#the-one-rule-the-tag-is-an-output-not-an-input). |
-| 8 | **`demo`** | Ships the released tag to `wurk.demo.developerz.ai` via the protected `demo` environment. It passes `trusted: true`, which waives deploy-demo's `DEMO_DEPLOYERS` actor allowlist — that allowlist guards the hand-dispatched door, and has nothing to add once this workflow has already published the commit's gem. Waiving it is also what lets a release merged by the developerz.ai bot deploy the demo, rather than stranding it after the irreversible publish. The waiver is honoured only from the `release` workflow running on `main`; anything else passing `trusted: true` is rejected. |
+| 8 | **`demo`** | Ships the released tag to `wurk.demo.developerz.ai` via the `demo` environment (a deployment record and URL; it carries no protection rules, so nothing pauses for a reviewer). It passes `trusted: true`, which waives deploy-demo's `DEMO_DEPLOYERS` actor allowlist — that allowlist guards the hand-dispatched door, and has nothing to add once this workflow has already published the commit's gem. Waiving it is also what lets a release merged by the developerz.ai bot deploy the demo, rather than stranding it after the irreversible publish. The waiver is honoured only from the `release` workflow running on `main`; anything else passing `trusted: true` is rejected. |
 
 `workflow_dispatch` runs the same lane by hand — use it to retry a release whose
 run failed after the bump was already merged.
@@ -131,7 +131,7 @@ It happened seven times in three weeks — v1.2.1, v1.5.0, v1.6.0, v1.7.0, v1.8.
 v1.7.1, v1.7.2 — which is what moved it from "incident" to "design defect". Two
 changes retired it:
 
-- **`.maintainer.yml`** sets `release.channels: []`. `manager: none` was *not*
+- **`.dz/maintainer/maintainer.yml`** sets `release.channels: []`. `manager: none` was *not*
   enough on its own: the `github-release` channel authorized the agent to cut
   releases independently of the manager setting.
 - **`release.yml`** no longer listens to tags at all. Even if the agent (or

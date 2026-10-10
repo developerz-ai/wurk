@@ -216,7 +216,9 @@ jobs:
   # nothing to add once this workflow has published the commit's gem, and
   # enforcing it would break every release merged by the developerz.ai bot (the
   # actor would be the bot, not a listed human) at the worst point — after the
-  # irreversible publish. The protected `demo` environment gate still applies.
+  # irreversible publish. deploy-demo's `build` job still enters the `demo`
+  # environment, which today carries no protection rules (no required
+  # reviewers), so it records the deployment and gates nothing.
   demo:
     needs: [preflight, release]
     uses: ./.github/workflows/deploy-demo.yml
