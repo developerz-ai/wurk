@@ -1,7 +1,8 @@
 # Dependabot config. Minor+patch grouped per ecosystem to keep PR noise low
 # (majors still open individually — except the github-actions group, which
-# also takes majors). Every Dependabot PR is reviewed, fixed and merged by the
-# developerz.ai maintainer agent (.dz/maintainer/maintainer.yml). The shipped
+# also takes majors). The developerz.ai maintainer agent reviews and fixes
+# Dependabot PRs, then merges them when ready
+# (.dz/maintainer/maintainer.yml); one it does not act on stays open. The shipped
 # gem's deps and the dashboard's move weekly; the CI actions and the Dockerfile
 # base images move monthly, because a weekly cadence there was mostly one PR per
 # setup-ruby patch release (#534, #540) for no change in what CI runs.
