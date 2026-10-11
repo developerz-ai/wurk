@@ -163,14 +163,12 @@ pr:
   # file's header says it must not assert a ruleset state it
   # does not have, and the count-of-0 sentence above would be one of those
   # assertions without this caveat.
-  # NOTE (wurk#347): this governs the platform BOT only. Non-major Dependabot
-  # updates are also targeted by a separate GitHub-native GHA lane
-  # (.github/workflows/dependabot-automerge.yml, dz#789) that this policy does
-  # not govern. Repo auto-merge is enabled, so that lane is not inert by config.
-  # `auto_merge` here scopes the platform BOT; it does not control the GHA lane,
-  # and flipping it to `true` did not change that lane's behaviour either way.
-  # The GHA lane stays until the platform has merged a Dependabot PR here on
-  # its own; it arms GitHub's auto-merge, which the same required checks gate.
+  # Dependabot pull requests merge through this lane too, and only this lane: the
+  # GitHub Actions workflow that armed GitHub's native auto-merge on them
+  # (dependabot-automerge.yml, wurk#347) was removed 2026-10-11, because a second
+  # merger beside the agent is one that skips its review. A major bump is not
+  # held for a human (`escalate.ask_before_acting` below lists `breaking_change`
+  # only); the six required checks and the agent's review are what gate it.
   auto_merge: true
   # The `main-protection` ruleset's six, named here so the agent knows which red
   # check is the author's to fix. The ruleset is still the gate; this list is
