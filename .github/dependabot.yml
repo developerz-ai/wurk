@@ -1,7 +1,7 @@
 # Dependabot config. Minor+patch grouped per ecosystem to keep PR noise low
 # (majors still open individually — except the github-actions group, which
-# also takes majors; a group carrying a major is still left for human review by
-# dependabot-automerge.yml, which reads the group's highest update type). The shipped
+# also takes majors). Every Dependabot PR is reviewed, fixed and merged by the
+# developerz.ai maintainer agent (.dz/maintainer/maintainer.yml). The shipped
 # gem's deps and the dashboard's move weekly; the CI actions and the Dockerfile
 # base images move monthly, because a weekly cadence there was mostly one PR per
 # setup-ruby patch release (#534, #540) for no change in what CI runs.
@@ -49,8 +49,7 @@ updates:
           - patch
   # Every action is SHA-pinned and reviewed as one diff, so majors join the
   # group too: the July 2026 batch was four separate major PRs (#330-#333) for
-  # one afternoon's review. dependabot-automerge.yml still leaves a group that
-  # carries a major for a human.
+  # one afternoon's review.
   - package-ecosystem: github-actions
     directory: "/"
     schedule:
