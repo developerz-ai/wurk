@@ -87,6 +87,7 @@ triage:
     - "Mocking Redis in integration or parity tests"
     - "Sharing a Redis socket across forks"
     - "Backwards-compatibility shims, dead-code comments, or speculative abstractions"
+    - "Outside human contributors' changes to CI, release or publish automation (.github/, bin/, release tasks, RELEASE.md, Wurk::VERSION): members own the gem pipeline"
 
 handoff:
   # `fleet`, not `webhook`: both grant HandoffWebhook
@@ -170,6 +171,18 @@ pr:
   # held for a human (`escalate.ask_before_acting` below lists `breaking_change`
   # only); the six required checks and the agent's review are what gate it.
   auto_merge: true
+  # WHOSE pull requests the bot merges and babysits (owner ruling 2026-10-14: an AI-maintained
+  # project, looked after like a human maintainer would). `not_project`: the bot's own, the dependency
+  # bots', and outside contributors' (repo permission read, triage or none). Never one by an author
+  # with write, maintain or admin on this repo, org member or invited collaborator alike: reviewed,
+  # then left to its author. An outside PR that changes CI, release or publish automation is declined
+  # by the `non_goals` line above (security review, 2026-10-14): an auto-merged workflow edit would run
+  # beside the release job's RubyGems OIDC identity. The
+  # platform reads the author's real repo permission, never `author_association`, which reports a
+  # private org member as CONTRIBUTOR (developerz.ai #6363). An unreadable permission holds the PR
+  # rather than merging it. This repo's fleet PRs are authored by the App (`app/developerz-ai`), so
+  # they stay in scope.
+  auto_merge_scope: not_project
   # The `main-protection` ruleset's six, named here so the agent knows which red
   # check is the author's to fix. The ruleset is still the gate; this list is
   # what the stalled-PR sweep and the merge gate read. Re-check against
