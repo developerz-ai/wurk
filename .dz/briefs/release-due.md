@@ -11,18 +11,21 @@ last=$(git describe --tags --abbrev=0 --match 'v[0-9]*' origin/main)
 git log --format='%h %cI %s' "$last"..origin/main -- 'lib/**/*.rb' 'lib/**/*.lua' 'app/**/*.rb' 'config/**' 'exe/*' 'frontend/src/**' wurk.gemspec
 ```
 
-Those paths are `wurk.gemspec`'s `spec.files` (the dashboard bundle is built from `frontend/src`).
-Tests, docs, CI, the demo and benchmarks ship nothing.
+Those paths are `wurk.gemspec`'s `spec.files`, with two deliberate differences. The dashboard bundle
+(`vendor/assets/dashboard/**`) is built at release and git-ignored, so its source, `frontend/src`, is
+what a commit changes. `README.md` and `LICENSE` ship but are excluded on purpose: prose alone never
+owes a release. Tests, CI, the demo and the benchmarks ship nothing.
 
 | Window | Do |
 |---|---|
 | empty | nothing |
 | `Wurk::VERSION` already ahead of `$last` | nothing — a release is in flight (`release.yml`) |
 | the oldest shipping commit is under 24 h old | nothing — an org member may still release their own work |
-| a **Breaking** change under `## [Unreleased]` | nothing, unless no open issue says a major is pending: then one, for a maintainer |
+| a **Breaking** change under `## [Unreleased]` | no release ask, ever: a major is a maintainer's. If no open issue says a major is pending, file one, for a maintainer, with no release steps |
 | otherwise | one ask, **Release `<next>`**, listing the commits |
 
-`<next>`: `### Added` under `[Unreleased]`, or a `feat` subject → minor; anything else → patch.
+`<next>` (only ever reached without a breaking change): `### Added` under `[Unreleased]`, or a `feat`
+subject → minor; anything else → patch.
 
 ## The ask, when due
 

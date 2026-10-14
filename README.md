@@ -330,7 +330,7 @@ TypeScript end to end, MIT, and as measured about its own claims as this file is
 | Dependabot | driven to green and merged |
 | a breaking change | never merged unattended: the drop-in contract is the one promise a revert cannot take back |
 
-Releases follow the work, not a calendar. When a shipping fix has merged and nobody has released it, the bot bumps `Wurk::VERSION`, and merging that bump publishes the gem ([RELEASE.md](RELEASE.md)). The bot's policy is committed in [`.dz/maintainer/maintainer.yml`](.dz/maintainer/maintainer.yml).
+Releases follow the work, not a calendar. A weekday checkup asks whether a shipping fix has merged and nobody has released it. When one has, the bot files a release request, its coding fleet opens the `Wurk::VERSION` bump PR, and merging that PR publishes the gem ([RELEASE.md](RELEASE.md)). The bot's policy is committed in [`.dz/maintainer/maintainer.yml`](.dz/maintainer/maintainer.yml).
 
 ## Contributing
 
