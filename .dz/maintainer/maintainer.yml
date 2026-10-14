@@ -170,6 +170,15 @@ pr:
   # held for a human (`escalate.ask_before_acting` below lists `breaking_change`
   # only); the six required checks and the agent's review are what gate it.
   auto_merge: true
+  # WHOSE pull requests the bot merges and babysits (owner ruling 2026-10-14: an AI-maintained
+  # project, looked after like a human maintainer would). `not_project`: the bot's own, the dependency
+  # bots', and outside contributors' (repo permission read or none). Never an org member's or a
+  # collaborator's (write, maintain, admin): those are reviewed, then left to their author. The
+  # platform reads the author's real repo permission, never `author_association`, which reports a
+  # private org member as CONTRIBUTOR (developerz.ai #6363). An unreadable permission holds the PR
+  # rather than merging it. This repo's fleet PRs are authored by the App (`app/developerz-ai`), so
+  # they stay in scope.
+  auto_merge_scope: not_project
   # The `main-protection` ruleset's six, named here so the agent knows which red
   # check is the author's to fix. The ruleset is still the gate; this list is
   # what the stalled-PR sweep and the merge gate read. Re-check against
