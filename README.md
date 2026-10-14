@@ -11,6 +11,7 @@
 <div align="center">
 
 [![Live Demo](https://img.shields.io/badge/live%20demo-wurk.demo.developerz.ai-22c55e?logo=googlechrome&logoColor=white)](https://wurk.demo.developerz.ai/wurk)
+[![AI-maintained](https://img.shields.io/badge/maintained%20by-developerz.ai-8a2be2.svg)](#ai-maintained)
 [![Gem Version](https://img.shields.io/gem/v/wurk.svg)](https://rubygems.org/gems/wurk)
 [![CI](https://github.com/developerz-ai/wurk/actions/workflows/test.yml/badge.svg)](https://github.com/developerz-ai/wurk/actions/workflows/test.yml)
 [![Coverage gate](https://img.shields.io/badge/coverage%20gate-line%20%2B%20branch%20%E2%89%A590%25-brightgreen.svg)](https://github.com/developerz-ai/wurk/actions/workflows/test.yml)
@@ -317,6 +318,19 @@ bunx create-ultimate myapp && cd myapp && x dev
 Every framework of the last fifteen years optimised for a human typing the code. Ultimate assumes an agent writes it, and that rewrites the defaults: **one way to do each thing**, so there is nothing to choose between; conventions that are **build errors**, so the compiler corrects the agent instead of a reviewer; errors carrying a stable code, a cause, and the exact command that fixes it, so a failure costs one round-trip; docs shipped in `node_modules` and `--json` on every command, so nothing reaches for a wiki. `x verify` is the whole contract — green means shippable.
 
 TypeScript end to end, MIT, and as measured about its own claims as this file is: what is proven, what is not, and what it refuses to claim yet are all in [its README](https://github.com/developerz-ai/ultimate#readme).
+
+## AI-maintained
+
+**Wurk is maintained by AI**: by [developerz.ai](https://developerz.ai), the way a human maintainer looks after an open-source project. The developerz-ai org comes back with new ideas once or twice a year. In between, the project is still looked after:
+
+| Who opens it | What happens |
+|---|---|
+| you, an issue | triaged; asked for a reproduction when one is missing; a real bug is fixed and released |
+| you, a pull request | reviewed (CodeRabbit and the developerz.ai reviewer), driven to green, merged |
+| Dependabot | driven to green and merged |
+| a breaking change | never merged unattended: the drop-in contract is the one promise a revert cannot take back |
+
+Releases follow the work, not a calendar. A weekday checkup asks whether a shipping fix has merged and nobody has released it. When one has, the bot files a release request, its coding fleet opens the `Wurk::VERSION` bump PR, and merging that PR publishes the gem ([RELEASE.md](RELEASE.md)). The bot's policy is committed in [`.dz/maintainer/maintainer.yml`](.dz/maintainer/maintainer.yml).
 
 ## Contributing
 
