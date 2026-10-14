@@ -328,7 +328,8 @@ TypeScript end to end, MIT, and as measured about its own claims as this file is
 | you, an issue | triaged; asked for a reproduction when one is missing; a real bug is fixed and released |
 | you, a pull request | reviewed (CodeRabbit and the developerz.ai reviewer), driven to green, merged |
 | Dependabot | driven to green and merged |
-| a developerz-ai org member's pull request | reviewed, then left to its author to merge |
+| a pull request by anyone with write access (org members, collaborators) | reviewed, then left to its author to merge |
+| an outside change to CI, release or publish automation | declined: members maintain the pipeline that publishes the gem |
 | a breaking change | never merged unattended: the drop-in contract is the one promise a revert cannot take back |
 
 Releases follow the work, not a calendar. A weekday checkup asks whether a shipping fix has merged and nobody has released it. When one has, the bot files a release request, its coding fleet opens the `Wurk::VERSION` bump PR, and merging that PR publishes the gem ([RELEASE.md](RELEASE.md)). The bot's policy is committed in [`.dz/maintainer/maintainer.yml`](.dz/maintainer/maintainer.yml).
