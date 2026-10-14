@@ -246,3 +246,16 @@ escalate:
   # asks a human first: the drop-in contract is the one promise this project
   # cannot take back with a revert.
   ask_before_acting: [breaking_change]
+
+# The checkups nothing else triggers (owner, 2026-10-14: maintained so nobody has to watch it). Is a
+# release owed, and is the project healthy. Bot-authored alarm issues never pass intake, so a red
+# `main` or a release run that did not publish reaches the bot only through `health`.
+schedules:
+  - name: release-due
+    days: [mon, tue, wed, thu, fri]
+    hours_utc: [6]
+    brief_file: .dz/briefs/release-due.md
+  - name: health
+    days: [mon, tue, wed, thu, fri, sat, sun]
+    hours_utc: [7]
+    brief_file: .dz/briefs/health.md
