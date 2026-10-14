@@ -87,7 +87,7 @@ triage:
     - "Mocking Redis in integration or parity tests"
     - "Sharing a Redis socket across forks"
     - "Backwards-compatibility shims, dead-code comments, or speculative abstractions"
-    - "Outside changes to CI, release or publish automation (.github/, bin/gem-*, RELEASE.md): members maintain the pipeline that publishes the gem"
+    - "Outside human contributors' changes to CI, release or publish automation (.github/, bin/, release tasks, RELEASE.md, Wurk::VERSION): members own the gem pipeline"
 
 handoff:
   # `fleet`, not `webhook`: both grant HandoffWebhook
