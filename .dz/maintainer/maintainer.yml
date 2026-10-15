@@ -1,13 +1,14 @@
 # yaml-language-server: $schema=https://developerz.ai/schemas/maintainer.v1.json
 # developerz.ai maintainer policy — developerz-ai/wurk
 #
-# AI-MANAGED (2026-10-10). The agent handles issues, pull requests and
-# dependency updates end to end: it triages, answers or stays silent, reviews,
-# declines with a reason, merges on green, and closes what has stalled on its
-# reporter or author. A human is asked only for what `escalate` names below
-# plus the platform's hardcoded categories (security, license, CLA). New
-# features and the releases that carry them are still shipped by the team:
-# `release.manager` stays `none`.
+# AI-MANAGED (2026-10-10; scoped 2026-10-14). For outside contributors and the dependency bots, the
+# agent handles issues, pull requests and updates end to end: it triages, answers or stays silent,
+# reviews, declines with a reason, merges on green, and closes what has stalled on its reporter or
+# author. An issue or pull request by anyone with write access (`skip_project_members`,
+# `auto_merge_scope: not_project`) is left to its author: a PR is still reviewed, and an @-mention is
+# answered. A human is asked only for what `escalate` names below plus the platform's hardcoded
+# categories (security, license, CLA). Releases follow the work: the `release-due` checkup files the
+# bump when a shipping fix has waited, and release.yml publishes; `release.manager` stays `none`.
 #
 # Dogfood pass with coding handoff live. The bot triages (qualifies, labels,
 # asks reporters for repro) and, once a task is ready, dispatches coding to the
