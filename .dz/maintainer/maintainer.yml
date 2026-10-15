@@ -1,13 +1,14 @@
 # yaml-language-server: $schema=https://developerz.ai/schemas/maintainer.v1.json
 # developerz.ai maintainer policy — developerz-ai/wurk
 #
-# AI-MANAGED (2026-10-10). The agent handles issues, pull requests and
-# dependency updates end to end: it triages, answers or stays silent, reviews,
-# declines with a reason, merges on green, and closes what has stalled on its
-# reporter or author. A human is asked only for what `escalate` names below
-# plus the platform's hardcoded categories (security, license, CLA). New
-# features and the releases that carry them are still shipped by the team:
-# `release.manager` stays `none`.
+# AI-MANAGED (2026-10-10; scoped 2026-10-14). For outside contributors and the dependency bots, the
+# agent handles issues, pull requests and updates end to end: it triages, answers or stays silent,
+# reviews, declines with a reason, merges on green, and closes what has stalled on its reporter or
+# author. An issue or pull request by anyone with write access (`skip_project_members`,
+# `auto_merge_scope: not_project`) is left to its author: a PR is still reviewed, and an @-mention is
+# answered. A human is asked only for what `escalate` names below plus the platform's hardcoded
+# categories (security, license, CLA). Releases follow the work: the `release-due` checkup files the
+# bump when a shipping fix has waited, and release.yml publishes; `release.manager` stays `none`.
 #
 # Dogfood pass with coding handoff live. The bot triages (qualifies, labels,
 # asks reporters for repro) and, once a task is ready, dispatches coding to the
@@ -63,6 +64,12 @@ tone:
   language: en
 
 triage:
+  # An issue opened by anyone with write, maintain or admin on this repo (an org member or an invited
+  # collaborator) is theirs: no intake ask, no labels, comments or close, no backlog pickup, no stale
+  # sweep. Only an @-mention of the bot wakes it there, and it answers only that mention
+  # (developerz.ai #6372, deployed 2026-10-15). Membership is the same repo-permission read
+  # `pr.auto_merge_scope: not_project` uses; outsiders' issues are handled as before.
+  skip_project_members: true
   ask_for_repro: true
   required_fields: [steps, expected, actual, version]
   qualify_into: [bug, feature, dupe, question]
