@@ -328,7 +328,7 @@ TypeScript end to end, MIT, and as measured about its own claims as this file is
 | you, an issue | triaged; asked for a reproduction when one is missing; a real bug is fixed and released |
 | you, a pull request | reviewed (CodeRabbit and the developerz.ai reviewer), driven to green, merged |
 | Dependabot | driven to green and merged |
-| a pull request by anyone with write access (org members, collaborators) | reviewed, then left to its author to merge |
+| an issue or pull request by anyone with write access (org members, collaborators) | left to its author; a pull request is still reviewed, and an @-mention of the bot is answered |
 | an outside change to CI, release or publish automation | declined: members maintain the pipeline that publishes the gem |
 | a breaking change | never merged unattended: the drop-in contract is the one promise a revert cannot take back |
 

@@ -63,6 +63,12 @@ tone:
   language: en
 
 triage:
+  # An issue opened by anyone with write, maintain or admin on this repo (an org member or an invited
+  # collaborator) is theirs: no intake ask, no labels, comments or close, no backlog pickup, no stale
+  # sweep. Only an @-mention of the bot wakes it there, and it answers only that mention
+  # (developerz.ai #6372, deployed 2026-10-15). Membership is the same repo-permission read
+  # `pr.auto_merge_scope: not_project` uses; outsiders' issues are handled as before.
+  skip_project_members: true
   ask_for_repro: true
   required_fields: [steps, expected, actual, version]
   qualify_into: [bug, feature, dupe, question]
