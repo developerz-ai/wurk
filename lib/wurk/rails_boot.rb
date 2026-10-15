@@ -68,15 +68,25 @@ module Wurk
     # custom script that requires config/environment — and a denylist can
     # never name them all: each one forked a full swarm that fetched jobs, and
     # its at_exit drain then cut those jobs off when the one-off command
-    # finished. The markers are constants only a running server defines
-    # (Bundler.require of the puma gem loads `Puma`, never `Puma::Launcher`).
+    # finished. The markers are constants only a running server defines.
     # Any other server (Falcon, Thin, Pitchfork, a bespoke rackup) opts in
     # with WURK_EMBED=1.
     def serving?
       return true if ENV['WURK_EMBED'] == '1'
-      return true if defined?(::Rails::Server) || defined?(::Puma::Launcher) || defined?(::PhusionPassenger)
+      return true if defined?(::Rails::Server) || puma_launcher_loaded? || defined?(::PhusionPassenger)
 
       unicorn_server?
+    end
+
+    # Bundler.require of the puma gem defines `Puma` in every process, and
+    # puma >= 6 registers `autoload :Launcher` in lib/puma.rb — `defined?`
+    # reports an autoload as "constant" without loading it, so the bare check
+    # was true in `rails runner` / a console and forked a swarm there. Only a
+    # running server has actually loaded the launcher.
+    def puma_launcher_loaded?
+      return false unless defined?(::Puma::Launcher)
+
+      !::Puma.autoload?(:Launcher)
     end
 
     # `require 'unicorn'` (a Gemfile entry) defines the constant in every
