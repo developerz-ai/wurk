@@ -109,7 +109,11 @@ tools can act on them without re-spending a budget.
 - `demo/Gemfile.lock:4` — pins `wurk (1.8.0)` (per the coordinator's team context; locked against
   the same source as the library version).
 - `.git/refs/tags/v1.8.0` → `2917967b5abb3ece75a5726d5cbd41c6c2518902` (file content; loose tag,
-  not in `packed-refs`). This is the v1.8.0 release commit the brief points at.
+  not in `packed-refs`). This is the SHA stored in the loose-ref file; for an annotated tag
+  it is the tag object, not the commit the tag peels to, and for a lightweight tag it is the
+  commit directly. Without `git cat-file -p v1.8.0` (refused here, release-due.md:45-95) the
+  form cannot be determined and the commit the tag is actually placed at is not knowable
+  from this seat. Recording it as "the v1.8.0 release commit" is therefore unsafe.
 - `.git/packed-refs` — most recent `v*` tag it lists is `88c0631abb4460c8d8a694d1dc8fa4a42664d323`
   for `refs/tags/v1.7.6`. The v1.8.0 entry is held in the loose-refs file above, not in
   `packed-refs`, so `git for-each-ref` would find it, but `git` cannot be invoked here.
@@ -117,64 +121,83 @@ tools can act on them without re-spending a budget.
   i.e. the working branch this editor sits on, not `refs/heads/main` and not a remote tracking
   ref.
 - `.git/refs/remotes/origin/main` → `261b9fd92c77334704873ea2db726bd5089d61b2` (read directly
-  as a file, no `git` needed). This SHA is **different** from the v1.8.0 tag SHA above:
-  the loose-ref for `origin/main` is past the v1.8.0 release commit, which is the signal the
-  brief asks this seat to record.
+  as a file, no `git` needed). This SHA differs from the tag's stored SHA above; whether
+  `origin/main` is past, equal to, or behind the v1.8.0 release commit is not decidable
+  without peeling the tag (see "v1.8.0 disposition" below).
 
 ### v1.8.0 disposition vs `Wurk::VERSION` and the 1.8.0 release commit (CHANGELOG.md:7)
 
-**Flagged stray.** The disposition is *not* "confirmed sitting on the release commit":
+**Placement of `refs/tags/v1.8.0` is unverified from this seat.** The tag's *peeled target*
+(the commit SHA it actually points at) cannot be resolved without `git cat-file -p v1.8.0`,
+and `gh` is also unavailable (release-due.md:45-95). What is in hand:
 
-- `Wurk::VERSION = '1.8.0'` (lib/wurk/version.rb:4) equals `$last = v1.8.0`
-  (.git/refs/tags/v1.8.0) — the version string is **not** ahead of the last tag.
+- `lib/wurk/version.rb:4` reads `Wurk::VERSION = '1.8.0'`; `CHANGELOG.md:7` carries
+  `## [1.8.0] - 2026-10-05` as the dated heading. Together these are the in-tree signals
+  that a v1.8.0 release commit exists on `main`; whether the tag is placed *at* that commit
+  is what the next seat (with `git`) must verify.
 - `.git/refs/remotes/origin/main` resolves to
-  `261b9fd92c77334704873ea2db726bd5089d61b2`, which is **not** the v1.8.0 release commit
-  `2917967b5abb3ece75a5726d5cbd41c6c2518902` (.git/refs/tags/v1.8.0).
+  `261b9fd92c77334704873ea2db726bd5089d61b2`, which differs from the tag's stored SHA above.
+  Whether `origin/main` is past, equal to, or behind the v1.8.0 release commit cannot be
+  decided without peeling the tag.
 
-Reason: `origin/main` has moved past the v1.8.0 release commit while `Wurk::VERSION` still
-reads `1.8.0`. The v1.8.0 release commit is therefore an ancestor of `origin/main`, and there
-are shipping commits between `v1.8.0` and `origin/main` that have not been released — the v1.8.0
-string in `lib/wurk/version.rb` is not the working tree's current `origin/main` HEAD. Because
-`Wurk::VERSION` is not ahead of `$last`, this is **not** "a release is in flight" (row 2 of the
-table); the next-release decision falls to the action below.
+**A correctly placed release tag remains valid while `origin/main` advances.** The release
+PR bumps `lib/wurk/version.rb` to the next version, merges to `main`, and `release.yml`
+publishes the gem and only then cuts the tag (RELEASE.md, "The one rule"). After the tag
+is cut, `origin/main` continues to receive new commits in the normal course of
+development; that is the steady post-release state, not an indicator that intervening
+commits are "unreleased". Calling that state "stray" or claiming "shipping commits that
+have not been released" (as the prior draft of this section did) would falsely flag a
+normal post-release tree as overdue, and the SHA difference between tag and `origin/main`
+does not establish that the v1.8.0 release commit is even an ancestor of `origin/main`
+without peeling the tag.
+
+**The path-filtered window's emptiness is not decided by a SHA difference.** The Decide
+section's filter (release-due.md:11) restricts the window to `lib/**/*.rb`, `lib/**/*.lua`,
+`app/**/*.rb`, `config/**`, `exe/*`, `frontend/src/**`, and `wurk.gemspec`. Commits that
+touch only excluded paths (e.g. `CHANGELOG.md`, `docs/**`, prose `*.md`, the release PR's
+own `lib/wurk/version.rb` bump) leave the *filtered* window empty even when the unfiltered
+`v1.8.0..origin/main` revision walk is non-empty. A difference between the tag SHA and
+`origin/main` therefore does not establish that the filtered window is non-empty.
 
 ### Decision-table action (release-due.md:19-25)
 
-Action: **row 5 — `otherwise` → one ask, `Release <next>`, listing the commits** (verbatim
-text from release-due.md:25). Reasoning per row:
+Action: **blocked — pending the filtered `git log` and the oldest commit's date.** Reasoning
+per row:
 
-- Row 1 (`empty`) — **does not apply**: `.git/refs/remotes/origin/main`
-  (`261b9fd92c77334704873ea2db726bd5089d61b2`) is not the v1.8.0 tag SHA
-  (`2917967b5abb3ece75a5726d5cbd41c6c2518902`), so the `v1.8.0..origin/main` window is
-  non-empty.
+- Row 1 (`empty`) — **not decidable from this seat**: the path-filtered window's emptiness
+  cannot be inferred from a SHA difference (see "v1.8.0 disposition" above). The Decide
+  command at release-due.md:11 is the only source that resolves this row, and the runner
+  refuses `git` (release-due.md:65). Recorded as "not applied, unverifiable".
 - Row 2 (`Wurk::VERSION` already ahead of `$last`) — **does not apply**:
-  `Wurk::VERSION = '1.8.0'` equals `$last = v1.8.0`, not ahead.
-- Row 3 (the oldest shipping commit is under 24 h old) — **could not be verified from this
-  seat**: the runner refuses `git`, so `git log --format='%h %cI %s' "$last"..origin/main` cannot
-  run and no commit date is reachable. Recorded as "not applied, unverifiable" rather than
-  "applied".
-- Row 4 (Breaking change under `## [Unreleased]`) — **does not apply**: CHANGELOG.md:5-6 shows
-  `## [Unreleased]` is the heading on line 5 with no `###` subsection following it (line 6 is
-  blank, line 7 is the dated `## [1.8.0]` heading), so there is no Breaking change to block the
-  ask.
-- Row 5 (`otherwise`) — **applies**: with rows 1, 2 and 4 ruled out by in-tree signals and
-  row 3 unverifiable from this seat, the table's `otherwise` branch is the resulting action.
-  The brief instructs this seat to commit to one row, and row 5 is the only row the in-tree
-  evidence supports.
-
-`<next>` (release-due.md:27-28) is not derivable from this seat: `git log` cannot run, so the
-commit subjects are unreadable, and `## [Unreleased]` is empty so no `### Added` cue is present.
-The handoff below names it as work for the seat that re-runs the Decide commands.
+  `Wurk::VERSION = '1.8.0'` (lib/wurk/version.rb:4) equals `$last = v1.8.0`
+  (.git/refs/tags/v1.8.0), not ahead.
+- Row 3 (the oldest shipping commit is under 24 h old) — **not decidable from this seat**:
+  `git log --format='%h %cI %s' "$last"..origin/main -- …` cannot run from this seat
+  (release-due.md:71-75), so no commit date is reachable. Recorded as "not applied,
+  unverifiable".
+- Row 4 (Breaking change under `## [Unreleased]`) — **does not apply**: CHANGELOG.md:5-6
+  shows `## [Unreleased]` is the heading on line 5 with no `###` subsection following it
+  (line 6 is blank, line 7 is the dated `## [1.8.0]` heading), so there is no Breaking change
+  to block the ask.
+- Row 5 (`otherwise`) — **not applied**: row 1 and row 3 are both unverifiable from this
+  seat, and either could be the controlling row if the next seat can run `git log`. The
+  table instructs the seat to commit to one row only when the others are ruled out; here,
+  two rows are not ruled out, so row 5 is not the resulting action. The action is **blocked
+  pending the filtered log and commit dates** rather than a release ask.
 
 ### Handoff
 
-The verifier (the seat that can run `git log v1.8.0..origin/main` against the file paths in
-release-due.md:11) must:
+The verifier (the seat that can run `git log v1.8.0..origin/main -- …` against the file
+paths in release-due.md:11) must:
 
-1. Confirm `v1.8.0..origin/main` is non-empty (already strongly indicated by the SHA
-   difference `261b9fd9… ≠ 2917967b…`).
-2. Read the oldest commit's date; if it is under 24 h, row 3 supersedes the row-5 ask above
-   and no release ask is filed yet.
-3. Pick `<next>` per release-due.md:27-28 from the actual commit subjects (`feat` → minor,
+1. Peel `refs/tags/v1.8.0` (`git cat-file -p v1.8.0`) and confirm the peeled target is the
+   commit that introduces `## [1.8.0] - 2026-10-05` in `CHANGELOG.md:7`. If it is not, the
+   tag is misplaced; surface that as a finding rather than continuing.
+2. Run the filtered `git log` from release-due.md:11 and decide row 1 (empty vs not) from
+   that output. SHA difference alone does not settle this row (see "v1.8.0 disposition"
+   above).
+3. Read the oldest filtered commit's date; if it is under 24 h old, row 3 supersedes and
+   no release ask is filed yet.
+4. Pick `<next>` per release-due.md:27-28 from the actual commit subjects (`feat` → minor,
    else patch; `### Added` under `[Unreleased]` was not present here so its cue is absent).
-4. Confirm there is no open `Release …` ask already (release-due.md:41).
+5. Confirm there is no open `Release …` ask already (release-due.md:41).
