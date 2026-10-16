@@ -118,6 +118,22 @@ class RailtieTest < Wurk::Test::EngineCase
     end
   end
 
+  # The real puma gem (>= 6) registers `autoload :Launcher` on require, and
+  # `defined?` reports an unloaded autoload as "constant": `rails runner` under
+  # a Gemfile with puma must still not count as a server.
+  def test_an_unloaded_puma_launcher_autoload_is_not_a_server
+    without_server_markers do
+      with_env('WURK_EMBED' => nil) do
+        puma = Module.new
+        puma.autoload(:Launcher, '/nonexistent/puma/launcher')
+        with_const(:Puma, puma) do
+          assert_equal 'constant', defined?(::Puma::Launcher)
+          refute_predicate Wurk::RailsBoot, :serving?
+        end
+      end
+    end
+  end
+
   def test_wurk_embed_opts_any_process_in
     without_server_markers do
       with_env('WURK_EMBED' => '1') { assert_predicate Wurk::RailsBoot, :serving? }
@@ -496,18 +512,23 @@ class RailtieTest < Wurk::Test::EngineCase
     config[:client_in_server] = original[2]
   end
 
+  # A pending autoload (the real puma gem's `Puma::Launcher`) counts as defined
+  # but is not the loaded constant the test needs: displace it, then restore it.
   def with_nested_const(owner, name, value)
+    autoload_path = owner.autoload?(name, false)
+    owner.send(:remove_const, name) if autoload_path
     existed = owner.const_defined?(name, false)
     owner.const_set(name, value) unless existed
     yield
   ensure
     owner.send(:remove_const, name) if !existed && owner.const_defined?(name, false)
+    owner.autoload(name, autoload_path) if autoload_path
   end
 
   # The allowlist tests assert what a marker turns ON, so none may already be
   # on in this process (a test runner that booted puma, say).
   def without_server_markers
-    if defined?(::Rails::Server) || defined?(::Puma::Launcher) || defined?(::PhusionPassenger)
+    if defined?(::Rails::Server) || Wurk::RailsBoot.puma_launcher_loaded? || defined?(::PhusionPassenger)
       skip 'a server marker is already defined in this test process'
     end
     yield

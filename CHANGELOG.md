@@ -4,6 +4,10 @@ All notable changes to Wurk are recorded here. Format: [Keep a Changelog](https:
 
 ## [Unreleased]
 
+### Fixed
+
+- **`rails runner`, `rails console` and other one-off commands no longer fork a swarm under puma >= 6.** puma's `lib/puma.rb` registers `autoload :Launcher`, and `defined?(::Puma::Launcher)` reports an unloaded autoload as defined, so every process with puma in its Gemfile counted as a running server. The server check now requires the launcher to actually be loaded.
+
 ## [1.8.0] - 2026-10-05
 
 The squeaky-clean audit release: a production-grade pass for teams moving a high-volume Sidekiq Pro/Ent deployment onto Wurk. It fixes every verified bug from nine audit passes (core runtime, Pro/Ent, dashboard, CI), grows the independent parity oracles from 3 files to 14, adds the operational surface a big deployment needs (Prometheus metrics, child liveness, cgroup-aware sizing, topology CI, a cutover playbook and an incident runbook), and removes dead code. Several Wurk-only behaviours changed to match Sidekiq exactly — read **Changed** before upgrading; intentional divergences are recorded in `docs/idea/parity-divergences.md`.
