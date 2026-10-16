@@ -154,8 +154,8 @@ without peeling the tag.
 **The path-filtered window's emptiness is not decided by a SHA difference.** The Decide
 section's filter (release-due.md:11) restricts the window to `lib/**/*.rb`, `lib/**/*.lua`,
 `app/**/*.rb`, `config/**`, `exe/*`, `frontend/src/**`, and `wurk.gemspec`. Commits that
-touch only excluded paths (e.g. `CHANGELOG.md`, `docs/**`, prose `*.md`, the release PR's
-own `lib/wurk/version.rb` bump) leave the *filtered* window empty even when the unfiltered
+touch only excluded paths (e.g. `CHANGELOG.md`, `docs/**`, prose `*.md`) leave the *filtered*
+window empty even when the unfiltered
 `v1.8.0..origin/main` revision walk is non-empty. A difference between the tag SHA and
 `origin/main` therefore does not establish that the filtered window is non-empty.
 
