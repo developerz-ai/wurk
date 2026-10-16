@@ -216,6 +216,39 @@ class LeaderTest < Wurk::Test::UnitCase
     ldr&.instance_variable_set(:@pool, nil)
   end
 
+  # K25: after the failed campaign above clears @held, the next tick must
+  # re-acquire the lock and re-fire :leader so leader-gated consumers see
+  # the recovery. Without that, the outage silently demotes the process for
+  # the rest of its lifetime.
+  def test_tick_error_clears_held_and_next_tick_reacquires_firing_event
+    config = build_config
+    fired = 0
+    config.on(:leader) { fired += 1 }
+    ldr = build_leader(config: config)
+
+    assert ldr.acquire
+    assert_predicate ldr, :leader?
+    assert_equal 1, fired
+
+    calls = 0
+    original_acquire = ldr.method(:acquire)
+    ldr.define_singleton_method(:acquire) do
+      calls += 1
+      raise 'blip' if calls == 1
+
+      original_acquire.call
+    end
+
+    ldr.send(:tick_once)
+
+    refute_predicate ldr, :leader?, '@held must be false after the error'
+
+    ldr.send(:tick_once)
+
+    assert_predicate ldr, :leader?, 'leader must be re-acquired after the blip'
+    assert_equal 2, fired, 'the leader event must fire on re-acquisition'
+  end
+
   # The loop's trailing release hitting a dead Redis is reported; the thread
   # still exits cleanly instead of dying with the error unseen.
   def test_loop_exit_release_error_is_reported

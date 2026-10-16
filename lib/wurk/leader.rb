@@ -259,11 +259,16 @@ module Wurk
 
     # The thread is exiting either way; a Redis error here is reported, not
     # left to kill the thread silently (report_on_exception is off). The lock
-    # then lapses on its TTL.
+    # then lapses on its TTL. `@held`/`@token` clear in `ensure` so a
+    # mid-release Redis error doesn't leave the local state claiming leadership
+    # the cluster already gave away (or is about to on TTL).
     def release_on_exit
       release
     rescue StandardError => e
       report(e)
+    ensure
+      @held = false
+      @token = nil
     end
 
     # Same condvar as #wait_next, so a `stop` landing inside the pre-campaign

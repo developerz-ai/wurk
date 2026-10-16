@@ -780,6 +780,14 @@ module Wurk
     # A web process that also boots the swarm (Wurk::RailsBoot) is flagged
     # server, yet every enqueue it makes from a request is client work, so
     # `client_in_server` lets its configure_client blocks run too.
+    #
+    # K27: a web process flagged server does NOT run configure_client by
+    # default — `client_in_server: true` is the explicit opt-in. Silently
+    # defaulting it on would re-run configure_client in processes the host
+    # didn't intend (e.g., a Puma worker that didn't set the flag), so the
+    # off-by-default is deliberate. Documented divergence from Sidekiq's
+    # own auto-enable for the equivalent scenario. See
+    # `docs/idea/parity-divergences.md` (K27).
     def configure_client(&block)
       yield self if block && (!server? || @options[:client_in_server])
     end

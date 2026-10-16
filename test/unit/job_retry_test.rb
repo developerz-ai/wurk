@@ -106,6 +106,21 @@ class JobRetryTest < Wurk::Test::UnitCase
     def perform; end
   end
 
+  # K3: `ActiveSupport::Duration.seconds(30)` is a Duration, not an
+  # Integer. The `to_i` guard in `delay_for` must read it as 30 (seconds) —
+  # the default backoff is 0**4 + 15 = 15, so a coerced-or-missing delay
+  # would land the retry at now+15s instead of now+30s. Uses the explicit
+  # `Duration.seconds(30)` form rather than `30.seconds` so the test does
+  # not depend on `active_support/core_ext/numeric/time` being loaded by
+  # the test environment.
+  class ThirtySecondDelayJob
+    include Wurk::Worker
+
+    sidekiq_retry_in { ActiveSupport::Duration.seconds(30) }
+
+    def perform; end
+  end
+
   # Stands in for an ActiveJob-style wrapper target referenced via msg["wrapped"].
   # It exposes the per-class retry blocks the wrapped lookup prefers.
   class WrappedTarget
@@ -635,6 +650,46 @@ class JobRetryTest < Wurk::Test::UnitCase
 
     assert_operator score, :>=, before + 60
     assert_operator score, :<=, before + 60 + 10
+  end
+
+  def test_local_honours_a_thirty_second_duration_returned_by_retry_in
+    score, before = retry_score_for(ThirtySecondDelayJob.new)
+
+    # delay 30 (count=0) + 0..9 jitter; not the default (0**4 + 15 = 15).
+    assert_operator score, :>=, before + 30
+    assert_operator score, :<=, before + 30 + 10
+  end
+
+  # K3: the :kill and :discard symbols must pass through `delay_for`'s
+  # `to_i` guard intact — coercion would turn them into 0, which is
+  # non-positive and falls through to the default delay. A coerced
+  # :kill would land in the retry set with a 15s delay instead of in
+  # the morgue. A coerced :discard would too.
+  def test_delay_for_does_not_coerce_kill_symbol_to_zero
+    inst = KillJob.new
+    job = base_msg(retry: true)
+    assert_raises(Wurk::JobRetry::Handled) do
+      @retrier.local(inst, Wurk.dump_json(job), @queue) { raise 'boom' }
+    end
+
+    refute find_payload(Wurk::Keys::RETRY, job['jid']),
+           ':kill must not ZADD into retry (would mean it was coerced to 0 and fell through to the default)'
+    payload = find_payload(Wurk::Keys::DEAD, job['jid'])
+    @added << payload
+    assert payload, ':kill must ZADD into dead (retries_exhausted)'
+  end
+
+  def test_delay_for_does_not_coerce_discard_symbol_to_zero
+    inst = DiscardJob.new
+    job = base_msg(retry: true)
+    assert_raises(Wurk::JobRetry::Handled) do
+      @retrier.local(inst, Wurk.dump_json(job), @queue) { raise 'boom' }
+    end
+
+    refute find_payload(Wurk::Keys::RETRY, job['jid']),
+           ':discard must not ZADD into retry (would mean it was coerced to 0 and fell through to the default)'
+    refute find_payload(Wurk::Keys::DEAD, job['jid']),
+           ':discard must not ZADD into dead (drops with death handlers, not morgue)'
   end
 
   # --- branch coverage: non-positive Integer delay → default (line 210 else)

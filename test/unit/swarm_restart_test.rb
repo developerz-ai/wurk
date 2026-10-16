@@ -108,6 +108,38 @@ class SwarmRestartTest < Wurk::Test::UnitCase
     assert_empty @respawns
   end
 
+  # K13 regression: when only the replacement dies in :await_heartbeat (the
+  # old child is still alive and serving jobs), the restart machine must
+  # requeue the slot with a per-slot backoff — NOT hand it to the swarm's
+  # crash-respawn. requeuing keeps the live old child, retries the slot
+  # once the backoff elapses, and never produces a free-standing replacement
+  # whose pid the slot no longer owns.
+  def test_replacement_dying_in_await_heartbeat_requeues_old_with_backoff
+    @restart.enqueue([100])
+    @restart.advance # spawn replacement
+
+    replacement_pid = @spawns.first[:pid]
+    reap(replacement_pid)
+    @restart.advance # replacement_died → retry_slot
+
+    assert_empty @respawns, 'no swarm crash-respawn when only the replacement dies'
+    assert_empty @kills, 'the surviving old child must not be killed'
+
+    queue = @restart.instance_variable_get(:@queue)
+
+    assert_equal 1, queue.size,
+                 'the slot must be requeued (retry_slot) so the next tick can spawn again'
+    assert_equal 100, queue.first, 'the requeued head must be the original old pid'
+    assert_nil @restart.instance_variable_get(:@current),
+               'retry_slot clears the in-flight restart so the swarm stays in :idle'
+    refute_predicate @restart, :idle?, 'a requeued slot keeps the machine non-idle'
+
+    @t[0] += 1.0
+    @restart.advance # backoff elapsed → another replacement spawns
+
+    assert_equal 2, @spawns.size, 'the slot retries once the per-slot backoff elapses'
+  end
+
   def test_spawn_failure_requeues_slot_and_retries_after_backoff
     fail_next = [true]
     spawner = lambda do |slot, idx|
