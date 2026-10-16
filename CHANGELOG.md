@@ -4,6 +4,8 @@ All notable changes to Wurk are recorded here. Format: [Keep a Changelog](https:
 
 ## [Unreleased]
 
+## [1.8.1] - 2026-10-16
+
 ### Fixed
 
 - **`rails runner`, `rails console` and other one-off commands no longer fork a swarm under puma >= 6.** puma's `lib/puma.rb` registers `autoload :Launcher`, and `defined?(::Puma::Launcher)` reports an unloaded autoload as defined, so every process with puma in its Gemfile counted as a running server. The server check now requires the launcher to actually be loaded.
@@ -628,7 +630,8 @@ First public (pre-1.0) release. Wurk is a 100% API-compatible drop-in replacemen
 - ActiveJob adapter, `IterableJob`, embedded mode, and a standalone `exe/wurk` runner.
 - Sidekiq client/server middleware contract; third-party ecosystem suites (sidekiq-cron, sidekiq-unique-jobs, sidekiq-scheduler, sidekiq-status, sidekiq-failures, sidekiq-throttled) pass against Wurk.
 
-[Unreleased]: https://github.com/developerz-ai/wurk/compare/v1.8.0...HEAD
+[Unreleased]: https://github.com/developerz-ai/wurk/compare/v1.8.1...HEAD
+[1.8.1]: https://github.com/developerz-ai/wurk/compare/v1.8.0...v1.8.1
 [1.8.0]: https://github.com/developerz-ai/wurk/compare/v1.7.6...v1.8.0
 [1.7.6]: https://github.com/developerz-ai/wurk/compare/v1.7.5...v1.7.6
 [1.7.5]: https://github.com/developerz-ai/wurk/compare/v1.7.4...v1.7.5
