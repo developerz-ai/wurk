@@ -11,10 +11,11 @@ last=$(git describe --tags --abbrev=0 --match 'v[0-9]*' origin/main)
 git log --format='%h %cI %s' "$last"..origin/main -- 'lib/**/*.rb' 'lib/**/*.lua' 'app/**/*.rb' 'config/**' 'exe/*' 'frontend/src/**' wurk.gemspec
 ```
 
-Those paths are `wurk.gemspec`'s `spec.files`, with two deliberate differences. The dashboard bundle
+Those paths are `wurk.gemspec`'s `spec.files`, with three deliberate differences. The dashboard bundle
 (`vendor/assets/dashboard/**`) is built at release and git-ignored, so its source, `frontend/src`, is
-what a commit changes. `README.md` and `LICENSE` ship but are excluded on purpose: prose alone never
-owes a release. Tests, CI, the demo and the benchmarks ship nothing.
+what a commit changes. `wurk.gemspec` itself is in the window but not in `spec.files`: dependency bumps
+live there, never in the gem. `README.md` and `LICENSE` ship but are excluded on purpose: prose alone
+never owes a release. Tests, CI, the demo and the benchmarks ship nothing.
 
 | Window | Do |
 |---|---|
