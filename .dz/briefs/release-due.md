@@ -19,6 +19,7 @@ never owes a release. Tests, CI, the demo and the benchmarks ship nothing.
 
 | Window | Do |
 |---|---|
+| Decide git commands cannot run (worktree-only .git, no object store) | unknown — surface the failure, do not collapse the missing-window case to an empty verdict |
 | empty | nothing |
 | `Wurk::VERSION` already ahead of `$last` | nothing — a release is in flight (`release.yml`) |
 | the oldest shipping commit is under 24 h old | nothing — an org member may still release their own work |
