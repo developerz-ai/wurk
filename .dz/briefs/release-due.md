@@ -10,7 +10,7 @@ is `RELEASE.md`; this brief only decides *when*.
 # Local tags may be stale; resolve $last via the GitHub API for the canonical value,
 # then verify the ref, the release, and the diff window against main.
 # $last currently resolves to v1.8.0.
-last=$(gh api repos/developerz-ai/wurk/git/ref/tags \
+last=$(gh api repos/developerz-ai/wurk/git/matching-refs/tags/ \
   | jq -r '.[] | select(.ref | startswith("refs/tags/v")) | .ref | sub("^refs/tags/"; "")' \
   | sort -V \
   | tail -1)
@@ -18,7 +18,10 @@ gh api "repos/developerz-ai/wurk/git/ref/tags/$last"
 gh release view "$last"
 gh api "repos/developerz-ai/wurk/compare/$last...main"
 
-last=$(git describe --tags --abbrev=0 --match 'v[0-9]*' origin/main)
+# Local fast path: a stale checkout can disagree with the API on the last v* tag,
+# so keep its result in its own variable and let the window below stay anchored to
+# the verified $last.
+local_last=$(git describe --tags --abbrev=0 --match 'v[0-9]*' origin/main)
 git log --format='%h %cI %s' "$last"..origin/main -- 'lib/**/*.rb' 'lib/**/*.lua' 'app/**/*.rb' 'config/**' 'exe/*' 'frontend/src/**' wurk.gemspec
 ```
 
