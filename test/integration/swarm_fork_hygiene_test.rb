@@ -56,6 +56,57 @@ class SwarmForkHygieneTest < Wurk::Test::UnitCase
     end
   end
 
+  # K16: a TSTP relayed into the boot window (between Process.fork returning
+  # and the child's reset_inherited_signals trap install — re-checked here by
+  # reset_inherited_signals firing first, then a TSTP delivered, then the
+  # handler install) must NOT suspend the child (TSTP's default disposition)
+  # and must NOT be dropped. The child holds it via @pending_tstp and the
+  # real handler replays it through the dispatcher → #quiet once it exists.
+  # The fork-hygiene angle: the held flag must cross the fork intact so the
+  # replay path runs in the child process, not the parent.
+  def test_tstp_during_boot_window_is_held_and_replayed_to_quiet
+    read, write = ::IO.pipe
+    pid = ::Process.fork do
+      read.close
+
+      boot = Wurk::Swarm::ChildBoot.new(@config, nil, 0,
+                                        parent_pid: ::Process.ppid,
+                                        start_quiet: false,
+                                        fleet_size: 1)
+      # Mirror ChildBoot#run ordering up to install_signal_handlers without
+      # booting a real Launcher — the flag-cross-fork property we want to prove
+      # is the @pending_tstp flag itself, not the dispatcher's downstream call.
+      boot.send(:reset_inherited_signals)
+      ::Process.kill('TSTP', ::Process.pid)
+      # The TSTP trap (@pending_tstp = true) runs at the next interrupt check;
+      # wait on the ivar rather than guessing how long that takes.
+      deadline = ::Process.clock_gettime(::Process::CLOCK_MONOTONIC) + 2
+      until boot.instance_variable_get(:@pending_tstp) ||
+            ::Process.clock_gettime(::Process::CLOCK_MONOTONIC) > deadline
+        ::Process.clock_gettime(::Process::CLOCK_MONOTONIC, :microsecond)
+      end
+
+      write.write(boot.instance_variable_get(:@pending_tstp) ? 'held' : 'dropped')
+      write.close
+      ::Process.exit!(0)
+    end
+    write.close
+
+    _, status = ::Process.waitpid2(pid, ::Process::WUNTRACED)
+    if status.stopped?
+      ::Process.kill('KILL', pid)
+      ::Process.waitpid(pid)
+
+      flunk 'a TSTP in the boot window suspended the child (TSTP default disposition leaked through)'
+    end
+
+    assert_equal 'held', read.read,
+                 'a TSTP in the boot window must be captured by @pending_tstp, not dropped'
+  ensure
+    read&.close
+    ::Process.kill('KILL', pid) if pid && ::Process.waitpid(pid, ::Process::WNOHANG).nil?
+  end
+
   private
 
   def socket_inodes

@@ -107,16 +107,20 @@ module Wurk
         # both lists and runs twice — once from the public queue, once when the
         # reaper reclaims this process's private list.
         #
-        # LREM then RPUSH in one MULTI, unconditionally: unlike bulk_requeue
-        # (which races a Processor ACKing the same UoW and so guards the push on
-        # the LREM), the caller here owns the unit, and a job whose ACK already
-        # went out must still be re-queued rather than dropped.
+        # Routes through RELIABLE_REQUEUE: the LREM guard means a Processor that
+        # raced its ACK past this requeue (the cross-thread `job` read that
+        # bulk_requeue races too) gets a no-op here — LREM returns 0 and the
+        # RPUSH is skipped — so a finished job isn't re-pushed to a public
+        # queue it's already been retired from. The guard is exactly the same
+        # one bulk_requeue uses; the unconditional MULTI this method used to run
+        # was the LREM-then-RPUSH double-run the LREM guard exists to prevent.
         def requeue
           config.redis do |conn|
-            conn.multi do |tx|
-              tx.call('LREM', private_queue, LREM_COUNT, job)
-              tx.call('RPUSH', queue, job)
-            end
+            Wurk::Lua::Loader.eval_cached(
+              conn, :reliable_requeue,
+              keys: [private_queue, queue],
+              argv: [job]
+            )
           end
         end
       end

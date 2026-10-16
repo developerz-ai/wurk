@@ -177,6 +177,25 @@ class LuaLoaderTest < Wurk::Test::UnitCase
     end
   end
 
+  # K28 comment-fix coverage: the post-fix comment pins the recovery shape —
+  # the replay pass must hand the user block :eval_with_source (source-embedded
+  # EVAL), never :eval_cached again. Otherwise the recovery itself could
+  # re-NOSCRIPT under heavy CI load. Pinning that the SECOND invocation is
+  # :eval_with_source is the visible half of the contract; the actual EVAL
+  # command shape is pinned separately by `test_eval_with_source_*`.
+  def test_pipelined_eval_recovery_routes_user_block_through_eval_with_source
+    runs = []
+
+    Wurk::Lua::Loader.pipelined_eval(NoscriptBlastConn.new) do |pipe, eval_method|
+      runs << eval_method
+      pipe.call('EVALSHA', '0' * 40, 0) if eval_method == :eval_cached
+    end
+
+    assert_equal %i[eval_cached eval_with_source], runs,
+                 'the recovery pass must hand the user block :eval_with_source, ' \
+                 'never :eval_cached again (would re-NOSCRIPT under load)'
+  end
+
   def test_eval_cached_passes_through_non_noscript_errors_without_retry
     conn = FakeErrorConn.new(message: 'ERR wrong number of arguments')
     err = assert_raises(RedisClient::CommandError) do
@@ -340,6 +359,25 @@ class LuaLoaderTest < Wurk::Test::UnitCase
       @command_log << args[0]
       @last_script_source = args[1] if args[0] == 'EVAL'
       @eventual_result
+    end
+  end
+
+  # Stand-in connection that supports `#pipelined` and blows NOSCRIPT on
+  # every queued EVALSHA — used to drive `pipelined_eval` straight onto its
+  # rescue path without needing a real (or fake-flushable) Redis. The pipe
+  # swallows any other command (the recovery's SCRIPT LOAD, the replay's
+  # EVAL) because this test only asserts the eval-method routing the user
+  # block sees, not the wire traffic.
+  class NoscriptBlastConn
+    def pipelined
+      pipe = Object.new
+      pipe.define_singleton_method(:call) do |*args|
+        if args[0] == 'EVALSHA'
+          raise RedisClient::CommandError, "NOSCRIPT No matching script. Use EVAL. #{args[1]}"
+        end
+      end
+      yield pipe
+      []
     end
   end
 end

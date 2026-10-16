@@ -211,6 +211,47 @@ class SetterTest < Wurk::Test::UnitCase
     end
   end
 
+  # K18: the absolute-vs-relative threshold is 1e9 epoch seconds; below it
+  # the input is a delta-from-now, above it is already an epoch timestamp.
+  # Stock Sidekiq enforces the same boundary on `perform_in`/`perform_at`.
+
+  def test_perform_in_with_60_seconds_sets_relative_future_at
+    before = Time.now.to_f
+    Wurk::Worker::Setter.new(SpyWorker, {}).perform_in(60)
+
+    assert_operator(SpyWorker.captured_item['at'], :>=, before + 59.9)
+    assert_operator(SpyWorker.captured_item['at'], :<, before + 61)
+  end
+
+  # K18: 1_700_000_000 (well above SCHEDULED_THRESHOLD = 1e9) is preserved
+  # as an absolute epoch timestamp rather than re-interpreted as ~54 years
+  # of seconds from now. In any run after Nov 2023 that absolute epoch is
+  # already past, so perform_in's past-guard drops 'at' — which is itself
+  # the proof: the relative-delta interpretation would have set 'at' to
+  # ~now + 1.7B (~54 years out).
+  def test_perform_in_above_absolute_epoch_threshold_drops_past_epoch
+    Wurk::Worker::Setter.new(SpyWorker, {}).perform_in(1_700_000_000)
+
+    refute SpyWorker.captured_item.key?('at'),
+           'perform_in(1_700_000_000) must drop `at` rather than fire ~54y ahead — ' \
+           'if `at` is set, the value was read as a relative delta, which means ' \
+           'absolute_at() misread the input as below SCHEDULED_THRESHOLD'
+  end
+
+  # K18: DateTime inputs are accepted via perform_in (not only perform_at).
+  # Ruby's case/when uses DateTime's Date ancestor for the match, so the
+  # Date branch in interval_seconds applies — converted to a Time, then to_f.
+  # DateTime#+ adds days; +1 means tomorrow, ~now + 86400 in epoch terms,
+  # which is well above 1e9 and so absolute_at passes it through unchanged.
+  def test_perform_in_accepts_datetime_input_via_date_branch
+    before_epoch = Time.now.to_f
+    Wurk::Worker::Setter.new(SpyWorker, {}).perform_in(DateTime.now + 1)
+
+    expected = before_epoch + 86_400
+
+    assert_in_delta(expected, SpyWorker.captured_item['at'], 60)
+  end
+
   # --- perform_bulk ---------------------------------------------------
 
   def test_perform_bulk_constructs_single_payload_with_args_array

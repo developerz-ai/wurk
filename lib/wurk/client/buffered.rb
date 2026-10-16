@@ -57,6 +57,15 @@ module Wurk
       # the config does not own — `Client.new(pool:)`, `Client.via(pool)` — is
       # a second Redis nothing else can produce, so that one stays pinned,
       # stale or not: replaying it anywhere else writes to the wrong server.
+      #
+      # K14: this struct is the per-pool binding. The buffer is process-global
+      # in storage but never in routing: every entry resolves to exactly one
+      # pool, and `Buffered.drain!(client)` matches `client.pool` against
+      # `origin.resolve` before replaying. A backlog buffered through
+      # `Client.via(poolA)` is replayed into poolA on the next push — even if
+      # the next push comes through the default pool. Without this, a sharded
+      # app's outage backlog would land on whichever shard pushed next,
+      # corrupting the cluster's per-Redis queue counts.
       Origin = Struct.new(:config, :pool) do
         def self.for(client)
           pool = client.send(:pool)

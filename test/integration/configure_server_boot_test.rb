@@ -50,6 +50,33 @@ class ConfigureServerBootTest < Wurk::Test::UnitCase
     end
   end
 
+  # K7 regression: WURK_DISABLED=1 must skip the boot entirely. The
+  # configure_server block then never fires — neither its module-flag SET
+  # nor the :startup hook — and `Sidekiq.server?` is never flipped to true
+  # inside this process. A worker pollutes the queue's semantics differently
+  # from a client process, so the flag must observe the disabled state before
+  # any Redis round-trip.
+  def test_wurk_disabled_skips_configure_server_block
+    write_boot_file
+    pid = spawn_worker(wurk_disabled: true)
+    deadline = monotonic_now + BOOT_TIMEOUT
+
+    # WURK_DISABLED workers exit immediately without booting. Give them a
+    # generous window so a slow CI box isn't a false positive, then assert
+    # that NO server-side side-effects ever landed.
+    until monotonic_now > deadline
+      break unless pid_alive?(pid)
+
+      sleep POLL_INTERVAL
+    end
+    stop(pid)
+
+    assert_nil @observer.call('GET', @server_key),
+               'configure_server { on(:startup) } must not fire when WURK_DISABLED=1'
+    assert_nil @observer.call('GET', @module_flag_key),
+               'Sidekiq.server? must never have been evaluated inside a WURK_DISABLED process'
+  end
+
   private
 
   # The `-r` initializer: registers a server hook + a client block, both writing
@@ -84,10 +111,12 @@ class ConfigureServerBootTest < Wurk::Test::UnitCase
     RUBY
   end
 
-  def spawn_worker
+  def spawn_worker(wurk_disabled: false)
     exe = ::File.expand_path('../../exe/wurk', __dir__)
+    env = { 'REDIS_URL' => Wurk::Test.redis_url }
+    env['WURK_DISABLED'] = '1' if wurk_disabled
     ::Process.spawn(
-      { 'REDIS_URL' => Wurk::Test.redis_url },
+      env,
       'bundle', 'exec', exe,
       '-r', @boot_file, '-q', "#{@ns}-q", '-c', '1', '-e', 'production', '-t', BOOT_TIMEOUT.to_s,
       chdir: ::File.expand_path('../..', __dir__), out: ::IO::NULL, err: ::IO::NULL

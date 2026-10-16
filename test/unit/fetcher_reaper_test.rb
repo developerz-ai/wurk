@@ -440,6 +440,21 @@ class FetcherReaperTest < Wurk::Test::UnitCase
     assert_equal 2, @reaper.reap
   end
 
+  # K5 acceptance: each tick processes each expired entry exactly once, and the
+  # cluster lock prevents a second tick from racing the first on the same data.
+  # Two reap calls in quick succession — the first sets the cluster lock and
+  # drains the one expired entry; the second finds both locks still held
+  # (`@reaper` was built with `interval: 1`) and bails out. The entry comes
+  # back onto the public queue exactly once, never twice.
+  def test_reap_processes_a_tick_exactly_once_under_the_cluster_lock
+    seed_private_list(DEAD_PID, %w[a])
+
+    assert_equal 1, @reaper.reap, 'first tick drains the one expired entry'
+    assert_equal 0, @reaper.reap, 'second tick is gated by both cluster locks'
+    assert_equal 1, llen(@public_queue), 'the entry was re-queued exactly once'
+    assert_equal 0, llen(private_list(DEAD_PID))
+  end
+
   # Losing the scoped lock but winning the (separate) hourly lock still runs the
   # full sweep — the two gates are independent.
   def test_reap_runs_full_sweep_when_only_scoped_lock_is_held
