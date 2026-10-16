@@ -69,17 +69,16 @@ class ReleaseDueBriefTest < Minitest::Test
     # (or scatters the token across multiple lines) breaks this gate.
     occurrences = @text.lines.each_with_index.select { |line, _| line.include?('unknown') }
 
-    refute_empty occurrences,
-                 '.dz/briefs/release-due.md must contain at least one "unknown" token'
+    assert_equal 1, occurrences.size,
+                 '"unknown" must appear exactly once in the brief; found ' \
+                 "#{occurrences.size} at line(s) #{occurrences.map { |_, i| i + 1 }.join(', ')}"
 
-    table_rows = occurrences.select do |line, lineno|
-      line_no = lineno + 1
-      line.strip.match?(ROW_RE) && table_line?(line_no)
-    end
+    line, lineno = occurrences.first
+    line_no = lineno + 1
 
-    assert_equal 1, table_rows.size,
-                 "\"unknown\" must live on exactly one table row; found #{table_rows.size}: " \
-                 "#{table_rows.map { |_, i| i + 1 }.join(', ')}"
+    assert line.strip.match?(ROW_RE) && table_line?(line_no),
+           "the single \"unknown\" occurrence (line #{line_no}) must be the " \
+           'unknown-verdict table row, not prose elsewhere'
   end
 
   private
