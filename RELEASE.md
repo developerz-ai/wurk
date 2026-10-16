@@ -171,6 +171,34 @@ gh release view vX.Y.Z --json author,assets                      # github-action
 An `author` of `developerz-ai[bot]` with zero assets means you are looking at a
 gem-less release, not a real one.
 
+### v1.8.0: stray tag reconciliation
+
+v1.8.0 is listed at line 130 as one of the seven pre-2026-08-11 stray tags the
+`developerz-ai[bot]` agent cut on feature merges with `Wurk::VERSION` unbumped.
+The legitimate `## [1.8.0] - 2026-10-05` release landed on `main` that day.
+Verifying which one survives on the remote, by reading the tag ref against the
+release record:
+
+```
+$ gh api repos/developerz-ai/wurk/git/ref/tags/v1.8.0
+{"ref":"refs/tags/v1.8.0","node_id":"REF_kwDOSi_O67ByZWZzL3RhZ3MvdjEuOC4w","url":"https://api.github.com/repos/developerz-ai/wurk/git/refs/tags/v1.8.0","object":{"sha":"2917967b5abb3ece75a5726d5cbd41c6c2518902","type":"commit","url":"https://api.github.com/repos/developerz-ai/wurk/git/commits/2917967b5abb3ece75a5726d5cbd41c6c2518902"}}
+
+$ gh release view v1.8.0 --json targetCommitish,author,assets
+{"assets":[{"apiUrl":"https://api.github.com/repos/developerz-ai/wurk/releases/assets/612064341","contentType":"application/x-tar","createdAt":"2026-10-05T09:09:48Z","digest":"sha256:9479e3a6905347f4f7a07d7f776fa8f27e79d4f86eb79afafef5eea75707705d","downloadCount":0,"id":"RA_kwDOSi_O684ke1xV","label":"","name":"wurk-1.8.0.gem","size":1726464,"state":"uploaded","updatedAt":"2026-10-05T09:09:48Z","url":"https://github.com/developerz-ai/wurk/releases/download/v1.8.0/wurk-1.8.0.gem"}],"author":{"id":"MDM6Qm90NDE4OTgyODI=","login":"github-actions[bot]"},"targetCommitish":"2917967b5abb3ece75a5726d5cbd41c6c2518902"}
+```
+
+**Outcome: clean.** The tag's object SHA `2917967b5abb3ece75a5726d5cbd41c6c2518902`
+matches the release's `targetCommitish`; the author is `github-actions[bot]`
+(`MDM6Qm90NDE4OTgyODI=`); and `assets` contains `wurk-1.8.0.gem`
+(`RA_kwDOSi_O684ke1xV`, 1,726,464 bytes, `sha256:9479e3a6…770705d`). All three
+of the 2026-10-05 release conditions hold: the tag points at the 2026-10-05
+release commit, the release was authored by the release workflow, and the
+gem asset is attached. The 2026-10-05 release lane therefore succeeded — the
+older stray-tag SHA is no longer on the remote and the earlier `release:check`
+refusals are superseded by the legitimate publication. Per `release.yml:201-205`,
+because the gem is on RubyGems the lane's preflight would now treat `1.8.0` as
+already released and no-op on any rerun, so the stray tag has no future effect.
+
 ## Trusted publishing setup (one-time, already configured)
 
 The RubyGems trusted publisher for the `wurk` gem is **already registered** to
