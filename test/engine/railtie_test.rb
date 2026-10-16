@@ -512,12 +512,17 @@ class RailtieTest < Wurk::Test::EngineCase
     config[:client_in_server] = original[2]
   end
 
+  # A pending autoload (the real puma gem's `Puma::Launcher`) counts as defined
+  # but is not the loaded constant the test needs: displace it, then restore it.
   def with_nested_const(owner, name, value)
+    autoload_path = owner.autoload?(name, false)
+    owner.send(:remove_const, name) if autoload_path
     existed = owner.const_defined?(name, false)
     owner.const_set(name, value) unless existed
     yield
   ensure
     owner.send(:remove_const, name) if !existed && owner.const_defined?(name, false)
+    owner.autoload(name, autoload_path) if autoload_path
   end
 
   # The allowlist tests assert what a marker turns ON, so none may already be
