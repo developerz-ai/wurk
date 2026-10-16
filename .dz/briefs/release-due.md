@@ -7,6 +7,17 @@ is `RELEASE.md`; this brief only decides *when*.
 ## Decide
 
 ```bash
+# Local tags may be stale; resolve $last via the GitHub API for the canonical value,
+# then verify the ref, the release, and the diff window against main.
+# $last currently resolves to v1.8.0.
+last=$(gh api repos/developerz-ai/wurk/git/ref/tags \
+  | jq -r '.[] | select(.ref | startswith("refs/tags/v")) | .ref | sub("^refs/tags/"; "")' \
+  | sort -V \
+  | tail -1)
+gh api "repos/developerz-ai/wurk/git/ref/tags/$last"
+gh release view "$last"
+gh api "repos/developerz-ai/wurk/compare/$last...main"
+
 last=$(git describe --tags --abbrev=0 --match 'v[0-9]*' origin/main)
 git log --format='%h %cI %s' "$last"..origin/main -- 'lib/**/*.rb' 'lib/**/*.lua' 'app/**/*.rb' 'config/**' 'exe/*' 'frontend/src/**' wurk.gemspec
 ```
