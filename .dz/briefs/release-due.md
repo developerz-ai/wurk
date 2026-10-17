@@ -34,6 +34,8 @@ what a commit changes. `wurk.gemspec` itself is in the window but not in `spec.f
 live there, never in the gem. `README.md` and `LICENSE` ship but are excluded on purpose: prose alone
 never owes a release. Tests, CI, the demo and the benchmarks ship nothing.
 
+The window misses most Dependabot edit sites by construction. Bundler only surfaces through `wurk.gemspec` itself — `Gemfile.lock` is git-ignored and the `Gemfile` is outside the pathspec — so dev-only pins never reach the window. Bun's `frontend/package.json` and `frontend/bun.lock` fall outside the pathspec entirely, so a dashboard bump yields an empty window. The same applies to `.github/workflows/*.yml` and `Dockerfile`: a Dependabot PR there is invisible to the window.
+
 | Window | Do |
 |---|---|
 | Decide git commands cannot run (worktree-only .git, no object store) | unknown — surface the failure, do not collapse the missing-window case to an empty verdict |
@@ -49,8 +51,9 @@ subject → minor; anything else → patch.
 ## The ask, when due
 
 1. Re-check the window on fresh `main`; still due, or stop.
-2. `## [Unreleased]` empty (a Dependabot-only window)? Add a `### Changed` line per bumped runtime
-   dependency first.
+2. `## [Unreleased]` empty? Read merged Dependabot PRs since `$last` (ecosystem + target file).
+   Owe a `### Changed` line only when a merged PR touched `wurk.gemspec`; other ecosystems
+   (Gemfile dev pins, bun's `frontend/package.json` + `bun.lock`, github-actions, docker) owe nothing.
 3. `RELEASE.md` → *Cutting a release*: bump `lib/wurk/version.rb`, `bundle exec rake
    release:relock_demo`, move `[Unreleased]` under `## [<next>] - <today>`, `bin/check`.
 4. One PR, `release: <next>`, nothing else in it. It merges on green like any PR.
