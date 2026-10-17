@@ -66,6 +66,15 @@ module Wurk
       def normalize(options, defaults: {})
         opts = symbolize(options)
         validate!(opts)
+        # K8: Sidekiq parity. With sentinels in scope, the host's `name:` is
+        # the master name (RedisClient.sentinel reads it). Route it to
+        # `master_name:` here so callers that feed `normalize` directly — not
+        # just the path through `pool_kwargs` — hit the same wire identity.
+        # `pool_kwargs` runs the same test first; a second pass here is a
+        # no-op because the explicit `master_name:` is in place.
+        if opts.key?(:sentinels) && opts.key?(:name) && !opts.key?(:master_name)
+          opts[:master_name] = opts.delete(:name)
+        end
         opts = translate(opts)
 
         # The default `url` survives next to a sentinel set, as in Sidekiq
@@ -84,6 +93,15 @@ module Wurk
       # as it does in Sidekiq's own translation. Without sentinels `name` has no
       # redis-client meaning and is dropped; `size` and `pool_name` are the
       # caller's to place.
+      #
+      # K8: this is the Sidekiq parity boundary. The hash
+      # `{sentinels: [...], name: 'mymaster', pool_name: 'shard-a'}` lands
+      # `master_name: 'mymaster'` in the kwargs that reach RedisPool.new (and
+      # from there `RedisClient.sentinel`), while `pool_name: 'shard-a'`
+      # becomes the pool's own telemetry label set by RedisConnection.create
+      # / Configuration. Nothing about this is a per-call decision — the
+      # routing fires whenever `sentinels:` is in scope, just as Sidekiq's
+      # `client_opts` does.
       def pool_kwargs(options)
         opts = symbolize(options)
         name = opts[:name]

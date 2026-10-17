@@ -380,6 +380,11 @@ module Wurk
     # were just reset.
     def fork_child(slot, idx)
       parent_pid = ::Process.pid
+      # K17: every fork drains parent-opened sockets before it. close_parent_sockets
+      # calls @config.reset_redis_pools!; close_supervisor_pool drops the signal
+      # independent supervisor pool. The chain that follows (Process.fork -> in-the-
+      # child Drop the parent's self-pipe) is the only thing standing between a
+      # child and the parent's live TLS session over `rediss://`.
       close_parent_sockets
       close_supervisor_pool
       pid = ::Process.fork
@@ -588,6 +593,11 @@ module Wurk
       @lock.synchronize { @restart.enqueue([pid]) }
     end
 
+    # K26: arm64 kernels commonly run 16 KB or 64 KB pages, where a hard-coded
+    # ×4 under-reports RSS by 4–16×. Heartbeat::PAGE_SIZE is cached from
+    # Etc.sysconf(Etc::SC_PAGESIZE) at load time and falls back to 4096 on
+    # platforms without sysconf, so the bloat recycle threshold here stays
+    # meaningful across architectures.
     def pid_rss_kb(pid)
       return nil unless ::File.exist?("/proc/#{pid}/statm")
 

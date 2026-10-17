@@ -67,10 +67,51 @@ class ReaperFullSweepTest < Wurk::Test::UnitCase
     assert_equal 1, @observer.call('LLEN', @orphan_q), 'job re-queued onto its public queue'
   end
 
+  # K5 (full sweep): the per-identity `settled_orphan?` re-check has to run
+  # here too, not only in the scoped sweep. A private list in an unserved
+  # queue, owned by a foreign-host process that lands its heartbeat in the
+  # seam between the liveness snapshot and the SCAN, must be spared —
+  # otherwise a slow SCAN drains a live owner's in-flight job, and the job
+  # runs twice.
+  def test_full_sweep_rechecks_per_identity_for_a_heartbeat_landing_mid_scan
+    nonce = SecureRandom.hex(6)
+    host  = 'remote-host.example'
+    priv  = "#{@orphan_q}|#{host}|#{DEAD_PID}|#{nonce}|0"
+    @observer.call('RPUSH', priv, payload("fsr-#{nonce}"))
+    reaper = beat_after_snapshot_reaper { register_foreign(host, nonce) }
+
+    assert_equal 0, reaper.reclaim_full!,
+                 'per-identity re-check spares the in-flight job in an unserved queue'
+    assert_equal 1, @observer.call('LLEN', priv), 'private list untouched'
+  end
+
   private
 
   def payload(jid)
     Wurk.dump_json('class' => 'NoOp', 'args' => [], 'queue' => "#{@ns}-orphan", 'jid' => jid)
+  end
+
+  # Same shape as reaper_owner_race_test.rb's helper, keyed to this file's
+  # lock namespaces. The wrapped live_owners runs the block right after the
+  # snapshot — the seam a slow SCAN leaves open for a booting process's
+  # first beat to land in.
+  def beat_after_snapshot_reaper(grace: 0, &after)
+    reaper = Wurk::Fetcher::Reaper.new(@config, lock_key: "rf:#{@ns}", full_lock_key: "rff:#{@ns}", grace: grace)
+    snapshot = reaper.method(:live_owners)
+    reaper.define_singleton_method(:live_owners) do
+      owners = snapshot.call
+      after.call
+      owners
+    end
+    reaper
+  end
+
+  # Registers a heartbeat for the given foreign host/pid/nonce. The worker
+  # DB's FLUSHDB sweeps the entry at teardown; no per-test cleanup needed.
+  def register_foreign(host, nonce)
+    identity = "#{host}:#{DEAD_PID}:#{nonce}"
+    @observer.call('SADD', Wurk::Keys::PROCESSES, identity)
+    @observer.call('HSET', identity, 'info', '{}')
   end
 
   # Forks a child that does a genuine reliable-fetch BLMOVE (same command + key

@@ -90,6 +90,11 @@ module Wurk
       def run_launcher
         launcher = Wurk::Launcher.new(@config)
         install_signal_handlers(launcher)
+        # K23: a TERM that landed between trap install and this call would,
+        # absent the shutdown gate, have its drain finish — after which `run`
+        # boots anyway and leaves a launcher nobody ever asked to stop. The
+        # gate inside Launcher#run is the single claim for the boot, so this
+        # order (install child traps → call run) is the contract.
         launcher.run
         launcher.quiet if @start_quiet
         arm_orphan_guard

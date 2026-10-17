@@ -442,6 +442,39 @@ class ProcessorTest < Wurk::Test::UnitCase
     assert_empty seen
   end
 
+  # K2: every registered error_handler is called once with the original
+  # exception class, and `ctx[:job]` is the full parsed payload (not a
+  # re-parse of the raw string, not a jid reference). The retry layer
+  # re-raises `Handled`; `report_job_failure` forwards `handled.cause` —
+  # the original exception the job threw.
+  def test_a_failed_job_reports_the_full_parsed_payload_to_error_handlers
+    seen = []
+    @config.error_handlers.replace([->(ex, ctx, _cfg) { seen << [ex, ctx] }])
+    klass = define_worker_raising(JobBoom, 'kaboom')
+    payload = enqueue(
+      class: klass.name,
+      args: [{ 'nested' => 'arg' }],
+      retry: true,
+      queue: @queue_name
+    )
+
+    @processor.process_one
+    take_retry_entry_for(payload['jid'])
+
+    assert_equal 1, seen.size
+    ex, ctx = seen.first
+
+    assert_instance_of JobBoom, ex
+    assert_equal 'Job raised exception', ctx[:context]
+    # Processor#parse_or_kill runs once per job; `ctx[:job]` is that single
+    # parse, not a re-dump from the retry ZSET (which would re-parse the
+    # raw string JobRetry ZADD'd).
+    assert_equal payload['jid'], ctx[:job]['jid']
+    assert_equal klass.name, ctx[:job]['class']
+    assert_equal @queue_name, ctx[:job]['queue']
+    assert_equal [{ 'nested' => 'arg' }], ctx[:job]['args']
+  end
+
   # --- capsule thread-local --------------------------------------------
 
   def test_a_job_resolves_wurk_redis_to_its_own_capsule_pool
@@ -465,6 +498,34 @@ class ProcessorTest < Wurk::Test::UnitCase
     assert_equal :outer, Thread.current[:wurk_capsule]
   ensure
     Thread.current[:wurk_capsule] = nil
+  end
+
+  # K9: a non-default capsule's thread-local is published for the duration
+  # of `run`, so a job running under that capsule sees its own capsule
+  # (not the default) through `Wurk.redis_pool`. The existing test above
+  # exercises the same path; this one asserts the thread-local is set
+  # *and* `Wurk.redis_pool` resolves through it, side by side.
+  def test_run_publishes_wurk_capsule_thread_local_for_a_non_default_capsule
+    klass = base_worker
+    klass.class_eval do
+      define_method(:perform) do |*|
+        self.class.sink << [
+          Thread.current[:wurk_capsule],
+          Wurk.redis_pool
+        ]
+      end
+    end
+    enqueue(class: klass.name, args: [])
+    @processor.start
+    deadline = Process.clock_gettime(Process::CLOCK_MONOTONIC) + 5
+    Thread.pass while klass.sink.empty? && Process.clock_gettime(Process::CLOCK_MONOTONIC) < deadline
+    @processor.terminate(true)
+
+    refute_empty klass.sink
+    capsule, pool = klass.sink.first
+
+    assert_same @capsule, capsule, 'thread-local must be the Processor\'s capsule'
+    assert_same @capsule.redis_pool, pool, 'Wurk.redis_pool must resolve through the thread-local'
   end
 
   # --- an exception that escapes the retry layer -------------------------
@@ -500,6 +561,29 @@ class ProcessorTest < Wurk::Test::UnitCase
     @processor.send(:process, uow)
 
     assert_equal ['Internal exception!', 'Error requeueing a job after an internal exception'], errors
+  end
+
+  # K10: the retry layer can fail for reasons other than a Redis blip on
+  # the ZADD — a logger raised in JobLogger#prepare, the reloader blew up,
+  # a middleware above the retry layer threw. The processor's
+  # `rescue Exception` requeues the UoW so the job survives in the public
+  # queue for someone else to run. The existing test above covers the
+  # ZADD path; this one covers a non-Redis source.
+  def test_a_retry_layer_failure_from_a_non_redis_source_requeues_the_job
+    errors = []
+    @config.error_handlers.replace([->(ex, ctx, _cfg) { errors << [ex.class, ctx[:context]] }])
+    @processor.instance_variable_get(:@retrier)
+              .define_singleton_method(:global) { |*| raise StandardError, 'retry layer down' }
+    klass = define_worker_recording
+    payload = enqueue(class: klass.name, args: [])
+
+    @processor.process_one
+    settle_acks
+
+    assert_equal 1, llen(@public_queue), 'job back on its public queue after non-Redis retry-layer failure'
+    assert_equal 0, llen(private_queue), 'and out of the live owner\'s private list'
+    assert_equal payload['jid'], Wurk.load_json(@pool.with { |c| c.call('LINDEX', @public_queue, 0) })['jid']
+    assert_equal [[StandardError, 'Internal exception!']], errors
   end
 
   def test_a_job_whose_log_level_the_logger_cannot_apply_still_runs

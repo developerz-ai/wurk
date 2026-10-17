@@ -216,6 +216,39 @@ class LeaderTest < Wurk::Test::UnitCase
     ldr&.instance_variable_set(:@pool, nil)
   end
 
+  # K25: after the failed campaign above clears @held, the next tick must
+  # re-acquire the lock and re-fire :leader so leader-gated consumers see
+  # the recovery. Without that, the outage silently demotes the process for
+  # the rest of its lifetime.
+  def test_tick_error_clears_held_and_next_tick_reacquires_firing_event
+    config = build_config
+    fired = 0
+    config.on(:leader) { fired += 1 }
+    ldr = build_leader(config: config)
+
+    assert ldr.acquire
+    assert_predicate ldr, :leader?
+    assert_equal 1, fired
+
+    calls = 0
+    original_acquire = ldr.method(:acquire)
+    ldr.define_singleton_method(:acquire) do
+      calls += 1
+      raise 'blip' if calls == 1
+
+      original_acquire.call
+    end
+
+    ldr.send(:tick_once)
+
+    refute_predicate ldr, :leader?, '@held must be false after the error'
+
+    ldr.send(:tick_once)
+
+    assert_predicate ldr, :leader?, 'leader must be re-acquired after the blip'
+    assert_equal 2, fired, 'the leader event must fire on re-acquisition'
+  end
+
   # The loop's trailing release hitting a dead Redis is reported; the thread
   # still exits cleanly instead of dying with the error unseen.
   def test_loop_exit_release_error_is_reported
@@ -577,6 +610,28 @@ class LeaderTest < Wurk::Test::UnitCase
     sleep 0.05 until ldr.leader? || Time.now > deadline
 
     assert_predicate ldr, :leader?
+  end
+
+  # K25: the loop's inter-tick wait follows `@held`: `renew_interval` while
+  # leader (the lock must be re-acquired before its TTL lapses), `follower_interval`
+  # while follower (no urgency; cheaper to stay quiet). Driving the branch with a
+  # long follower and a short renew makes a wrong selection unambiguous.
+  def test_renew_interval_holds_while_leader_and_follower_interval_while_follower
+    waits = []
+    ldr = build_leader(renew_interval: 0.5, follower_interval: 5)
+    ldr.define_singleton_method(:wait_for) { |interval| waits << interval }
+
+    ldr.send(:wait_next)
+
+    assert_equal [5], waits, 'no leader → wait_next must pass follower_interval'
+
+    ldr.acquire
+
+    assert_predicate ldr, :leader?
+
+    ldr.send(:wait_next)
+
+    assert_equal [5, 0.5], waits, 'leader → wait_next must pass renew_interval'
   end
 
   # The campaign must not run at tick zero. A booting process's opening Redis
