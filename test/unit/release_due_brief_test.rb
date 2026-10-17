@@ -147,10 +147,17 @@ class ReleaseDueBriefTest < Minitest::Test
 
       assert_predicate status, :success?,
                        "jq filter must compile and run for ship-spec path `#{pathspec}`: #{err}"
-      assert_includes out, "shipping #{pathspec}",
-                      "commit touching ship-spec path `#{pathspec}` must be emitted"
-      assert_includes out, 'a' * 7,
-                      'commit short SHA (first 7 chars) must be emitted'
+
+      # Assert the exact output row — `<7-sha> <date> <first line>` — rather
+      # than a substring of the message and a substring of the SHA. A filter
+      # that emitted an empty date or appended the commit body would still
+      # pass the substring checks; only the exact-row check pins the row
+      # shape the `<next>` classifier depends on.
+      expected_row = "#{'a' * 7} 2026-01-15T10:00:00Z feat: shipping #{pathspec}"
+
+      assert_equal expected_row, out.strip,
+                   "commit touching ship-spec path `#{pathspec}` must emit " \
+                   'exact row `<7-sha> <date> <first line>`, not the message body'
     end
 
     # A docs-only commit (only non-ship-spec files in its per-commit diff)
@@ -252,6 +259,30 @@ class ReleaseDueBriefTest < Minitest::Test
     assert_match(/not\s+a?\s*substitute/i, decide_block,
                  'the brief must explicitly note that `since=<release-date>` ' \
                  'is not a substitute for the Compare endpoint')
+  end
+
+  def test_per_commit_gh_api_failure_aborts_decision
+    decide_block = extract_decide_block
+
+    # A rate-limited or 4xx `gh api .../commits/$sha` returns an error
+    # object without `.files[]`. The filter's `(.files // [])` would then
+    # yield an empty array, silently dropping the commit — so a shipping
+    # commit would NOT be reported, and the agent would treat the window
+    # as smaller than it is. The per-commit call must be guarded by an
+    # exit-status check that aborts the Decide script on failure rather
+    # than accepting an incomplete window.
+    assert_match(
+      %r{if\s+!.*?commits/\$\{?sha\}?}m,
+      decide_block,
+      'the per-commit `gh api .../commits/$sha` call must be guarded by an ' \
+      '`if ! ...` exit-status check so a failure aborts the decision'
+    )
+    assert_match(
+      /exit\s+1/,
+      decide_block,
+      'the failure branch must `exit 1` so the abort propagates to the ' \
+      'Decide script (not just the per-commit subshell)'
+    )
   end
 
   private

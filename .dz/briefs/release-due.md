@@ -31,23 +31,36 @@ gh release view "$last"
 # the seven ship-spec paths (lib/**/*.rb, lib/**/*.lua, app/**/*.rb, config/**,
 # exe/*, frontend/src/**, wurk.gemspec) — row 5's `<next>` cue classifies the
 # subjects.
-gh api "repos/developerz-ai/wurk/compare/$last...main" \
-  | jq -r '.commits[].sha' \
-  | while read -r sha; do
-      gh api "repos/developerz-ai/wurk/commits/$sha" \
-        | jq -r '
-            (
-              (.files // [])
-              | map(select(.filename | test("^lib/.*\\.rb$|^lib/.*\\.lua$|^app/.*\\.rb$|^config(/.*)?$|^exe/[^/]+$|^frontend/src(/.*)?$|^wurk\\.gemspec$")))
-              | length > 0
-            ) as $is_shipping
-            | if $is_shipping then
-                "\(.sha[0:7]) \(.commit.committer.date) \(.commit.message | split("\n")[0])"
-              else
-                empty
-              end
-          '
-    done
+#
+# A per-commit `gh api` that fails (rate-limited, 4xx) returns an error
+# object without `.files[]`. The filter's `(.files // [])` would then yield
+# an empty array and the commit would be silently dropped — a shipping
+# commit would NOT be reported, and the agent would treat the window as
+# smaller than it is. Check the exit status of each per-commit call and
+# abort the decision (with a message to stderr) on failure rather than
+# accepting an incomplete window. Process substitution keeps the `exit` in
+# the current shell so the abort propagates — `while read` from a pipe
+# runs in a subshell, where `exit` would only exit the loop, not the
+# Decide script.
+while read -r sha; do
+    if ! body=$(gh api "repos/developerz-ai/wurk/commits/$sha"); then
+      echo "ERROR: gh api for $sha failed (rate-limited or 4xx); aborting rather than treating a missing commit as not-shipping" >&2
+      exit 1
+    fi
+    printf '%s\n' "$body" \
+      | jq -r '
+          (
+            (.files // [])
+            | map(select(.filename | test("^lib/.*\\.rb$|^lib/.*\\.lua$|^app/.*\\.rb$|^config(/.*)?$|^exe/[^/]+$|^frontend/src(/.*)?$|^wurk\\.gemspec$")))
+            | length > 0
+          ) as $is_shipping
+          | if $is_shipping then
+              "\(.sha[0:7]) \(.commit.committer.date) \(.commit.message | split("\n")[0])"
+            else
+              empty
+            end
+        '
+done < <(gh api "repos/developerz-ai/wurk/compare/$last...main" | jq -r '.commits[].sha')
 
 # Local fast path: a stale checkout can disagree with the API on the last v* tag,
 # so keep its result in its own variable and let the window below stay anchored to
