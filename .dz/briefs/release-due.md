@@ -16,7 +16,73 @@ last=$(gh api repos/developerz-ai/wurk/git/matching-refs/tags/ \
   | tail -1)
 gh api "repos/developerz-ai/wurk/git/ref/tags/$last"
 gh release view "$last"
-gh api "repos/developerz-ai/wurk/compare/$last...main"
+# Compare is still the right anchor for the ancestry window $last..main —
+# `gh api .../commits?since=<release-date>&sha=main` is NOT a substitute: that
+# commits-list endpoint returns commits by committer date, not by ancestry
+# from $last, so it cannot reproduce the row-1 ("empty") verdict against
+# $last..main. But Compare's aggregate `.files[]` is also NOT a path filter:
+# a Ruby change followed by its revert leaves no matching files in the net
+# diff, so the window would report empty even though `git log -- 'lib/**/*.rb'`
+# lists both shipping commits — and a docs-only `feat` commit would otherwise
+# be emitted alongside a Ruby fix, leading to a wrong `<next>` classification.
+# So for each commit in the Compare window, fetch its individual API response
+# (which DOES include the per-commit `.files[]`) and emit short SHA, committer
+# date, and first-line subject iff ANY of that commit's files matches one of
+# the seven ship-spec paths (lib/**/*.rb, lib/**/*.lua, app/**/*.rb, config/**,
+# exe/*, frontend/src/**, wurk.gemspec) — row 5's `<next>` cue classifies the
+# subjects.
+#
+# A per-commit `gh api` that fails (rate-limited, 4xx) returns an error
+# object without `.files[]`. The filter's `(.files // [])` would then yield
+# an empty array and the commit would be silently dropped — a shipping
+# commit would NOT be reported, and the agent would treat the window as
+# smaller than it is. Check the exit status of each per-commit call and
+# abort the decision (with a message to stderr) on failure rather than
+# accepting an incomplete window.
+#
+# Fetch and validate the Compare response AND its `.commits[].sha`
+# extraction in the CURRENT shell before the loop. `< <(gh api ... | jq
+# -r ...)` process substitution hides the inner pipeline's exit status
+# — a failed Compare would let the loop succeed with no input, so an
+# unreadable window would appear empty. Feed the loop with a here-string
+# `<<<"$compare_shas"` so the SHA source lives in the current shell too:
+# a `| cmd | while read` would run the loop in a subshell, and `exit 1`
+# inside it would only exit the loop, not the Decide script.
+compare_body=$(gh api "repos/developerz-ai/wurk/compare/$last...main") || {
+    echo "ERROR: Compare request for $last..main failed (rate-limited or 4xx); aborting rather than treating the window as empty" >&2
+    exit 1
+}
+compare_shas=$(printf '%s\n' "$compare_body" | jq -r '.commits[].sha') || {
+    echo "ERROR: extracting SHAs from Compare response for $last..main failed; aborting rather than treating the window as empty" >&2
+    exit 1
+}
+
+# An empty Compare response (`commits: []`) leaves `compare_shas=""`,
+# but `<<<""` still feeds the loop a single blank line that `read` would
+# consume as `sha=""`. Without the guard below, the per-commit call
+# would request `gh api repos/.../commits/` (no SHA) and abort on a 404
+# unrelated to the actual decision. Skip blank SHAs so the empty window
+# comes out cleanly and the loop terminates without a bogus request.
+while read -r sha; do
+    [[ -z "$sha" ]] && continue
+    if ! body=$(gh api "repos/developerz-ai/wurk/commits/$sha"); then
+      echo "ERROR: gh api for $sha failed (rate-limited or 4xx); aborting rather than treating a missing commit as not-shipping" >&2
+      exit 1
+    fi
+    printf '%s\n' "$body" \
+      | jq -r '
+          (
+            (.files // [])
+            | map(select(.filename | test("^lib/.*\\.rb$|^lib/.*\\.lua$|^app/.*\\.rb$|^config(/.*)?$|^exe/[^/]+$|^frontend/src(/.*)?$|^wurk\\.gemspec$")))
+            | length > 0
+          ) as $is_shipping
+          | if $is_shipping then
+              "\(.sha[0:7]) \(.commit.committer.date) \(.commit.message | split("\n")[0])"
+            else
+              empty
+            end
+        '
+done <<<"$compare_shas"
 
 # Local fast path: a stale checkout can disagree with the API on the last v* tag,
 # so keep its result in its own variable and let the window below stay anchored to
