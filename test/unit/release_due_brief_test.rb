@@ -81,7 +81,119 @@ class ReleaseDueBriefTest < Minitest::Test
            'unknown-verdict table row, not prose elsewhere'
   end
 
+  def test_gh_only_compare_call_is_piped_through_jq
+    decide_block = extract_decide_block
+
+    # The compare call must be piped through `jq` — an un-filtered
+    # `gh api ... compare/$last...main` would not satisfy the row-1
+    # "empty" verdict (the path filter would be missing) or row 5's
+    # `<next>` cue (no per-commit date / subject to read).
+    assert_match(
+      %r{compare/[^"]+"\s*(?:\\?\n)?\s*\| jq},
+      decide_block,
+      'gh-only `gh api ... compare/$last...main` must be piped through ' \
+      '`jq` to drive the path filter and emit commits'
+    )
+  end
+
+  def test_jq_filter_restricts_files_to_seven_ship_spec_paths
+    decide_block = extract_decide_block
+
+    # The jq filter must select `.files[].filename`.
+    assert_match(/\.files\b/, decide_block,
+                 'the jq filter must reference `.files[]`')
+
+    assert_match(/\bfilename\b/, decide_block,
+                 'the jq filter must extract `.filename` from each .files[] entry')
+
+    # The jq filter must restrict to all seven ship-spec paths. Each
+    # pathspec must appear in jq-regex form (e.g. `lib/.*\.rb`) inside
+    # the filter — the pathspec form (`lib/**/*.rb`) used in the local
+    # fast path is not a substitute, since git pathspecs and jq regex
+    # are different DSLs.
+    needles = {
+      'lib/**/*.rb' => 'lib/.*\.rb',
+      'lib/**/*.lua' => 'lib/.*\.lua',
+      'app/**/*.rb' => 'app/.*\.rb',
+      'config/**' => 'config(/.*)?',
+      'exe/*' => 'exe/[^/]+',
+      'frontend/src/**' => 'frontend/src(/.*)?',
+      'wurk.gemspec' => 'wurk\.gemspec'
+    }
+
+    needles.each do |pathspec, jq_form|
+      assert_match(/#{Regexp.escape(jq_form)}/, decide_block,
+                   'the jq filter must restrict to the ship-spec path ' \
+                   "`#{pathspec}` (in jq-regex form: `#{jq_form}`)")
+    end
+  end
+
+  def test_jq_filter_extracts_per_commit_dates_and_first_line_subjects
+    decide_block = extract_decide_block
+
+    # Per-commit iteration: `.commits[]` produces a stream of commits;
+    # `.commit.committer.date` then extracts each commit's committer
+    # date. Together these form the `.commits[].commit.committer.date`
+    # access the brief describes — they don't have to appear as a
+    # contiguous literal in the jq filter (the typical jq form splits
+    # them across the iteration and the field access).
+    assert_match(/\.commits\[\]/, decide_block,
+                 'per-commit iteration must come from `.commits[]`')
+
+    assert_match(/\.commit\.committer\.date/, decide_block,
+                 'per-commit dates must come from `.commit.committer.date` ' \
+                 '(after `.commits[]` iteration)')
+
+    # Commit subjects come from `.commit.message`.
+    assert_match(/\.commit\.message/, decide_block,
+                 'commit subjects must come from `.commit.message` so ' \
+                 "row 5's `<next>` cue can classify them")
+
+    # The first-line subject is extracted via something like
+    # `split("\n")[0]`, so each row's subject is the conventional first
+    # line of the commit message, not the body.
+    assert_match(/split\("\\n"\)\[0\]/, decide_block,
+                 'the first line of `.commit.message` must be ' \
+                 'emitted via `split("\\n")[0]` so each row\'s subject is ' \
+                 'the conventional first line, not the body')
+  end
+
+  def test_brief_notes_since_is_not_a_substitute_for_compare
+    decide_block = extract_decide_block
+
+    # The brief must mention `since=<release-date>` in the context of the
+    # Compare endpoint — otherwise a future edit could silently swap the
+    # Compare call for the commits-list endpoint and lose the row-1
+    # "empty" verdict's anchor to $last.
+    assert_match(/since/, decide_block,
+                 'the brief must mention `since=` in the context of the ' \
+                 'Compare endpoint to note it is not a substitute')
+
+    # And it must convey "not a substitute" — bare `since=` is not enough.
+    assert_match(/not\s+a?\s*substitute/i, decide_block,
+                 'the brief must explicitly note that `since=<release-date>` ' \
+                 'is not a substitute for the Compare endpoint')
+  end
+
   private
+
+  def extract_decide_block
+    return @extract_decide_block if defined?(@extract_decide_block)
+
+    lines = @text.lines
+    decide_idx = lines.index { |l| l.strip == '## Decide' }
+    return @extract_decide_block = '' unless decide_idx
+
+    open_idx = lines[decide_idx..].index { |l| l.start_with?('```bash') }
+    return @extract_decide_block = '' unless open_idx
+
+    abs_open = decide_idx + open_idx
+    close_idx = lines[(abs_open + 1)..].index { |l| l.strip == '```' }
+    return @extract_decide_block = '' unless close_idx
+
+    abs_close = abs_open + 1 + close_idx
+    @extract_decide_block = lines[(abs_open + 1)...abs_close].join
+  end
 
   def parse_table_rows
     return @parse_table_rows if defined?(@parse_table_rows)
