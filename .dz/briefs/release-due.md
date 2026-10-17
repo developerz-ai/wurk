@@ -16,31 +16,38 @@ last=$(gh api repos/developerz-ai/wurk/git/matching-refs/tags/ \
   | tail -1)
 gh api "repos/developerz-ai/wurk/git/ref/tags/$last"
 gh release view "$last"
-# The Compare endpoint is the only one that returns BOTH the file list (for
-# the path filter) and the commit list (for row 5's oldest-commit date and
-# the `<next>` cue). `gh api .../commits?since=<release-date>&sha=main`
-# is NOT a substitute: that commits-list endpoint returns commits by
-# committer date, not by ancestry from $last, so it cannot reproduce the
-# filtered window's emptiness against $last..main — the row-1 ("empty")
-# verdict would become unanchored. Pipe Compare through `jq` to filter
-# `.files[].filename` against the seven ship-spec paths (lib/**/*.rb,
-# lib/**/*.lua, app/**/*.rb, config/**, exe/*, frontend/src/**,
-# wurk.gemspec) and emit each commit's short SHA, committer date, and
-# the first line of its message so row 5's `<next>` cue can classify
-# the subjects.
+# Compare is still the right anchor for the ancestry window $last..main —
+# `gh api .../commits?since=<release-date>&sha=main` is NOT a substitute: that
+# commits-list endpoint returns commits by committer date, not by ancestry
+# from $last, so it cannot reproduce the row-1 ("empty") verdict against
+# $last..main. But Compare's aggregate `.files[]` is also NOT a path filter:
+# a Ruby change followed by its revert leaves no matching files in the net
+# diff, so the window would report empty even though `git log -- 'lib/**/*.rb'`
+# lists both shipping commits — and a docs-only `feat` commit would otherwise
+# be emitted alongside a Ruby fix, leading to a wrong `<next>` classification.
+# So for each commit in the Compare window, fetch its individual API response
+# (which DOES include the per-commit `.files[]`) and emit short SHA, committer
+# date, and first-line subject iff ANY of that commit's files matches one of
+# the seven ship-spec paths (lib/**/*.rb, lib/**/*.lua, app/**/*.rb, config/**,
+# exe/*, frontend/src/**, wurk.gemspec) — row 5's `<next>` cue classifies the
+# subjects.
 gh api "repos/developerz-ai/wurk/compare/$last...main" \
-  | jq -r '
-      . as $root
-      | (.files // []) | map(.filename
-          | select(test("^lib/.*\.rb$|^lib/.*\.lua$|^app/.*\.rb$|^config(/.*)?$|^exe/[^/]+$|^frontend/src(/.*)?$|^wurk\.gemspec$"))
-        ) as $matching
-      | if ($matching | length) > 0 then
-          $root.commits[] |
-          "\(.sha[0:7]) \(.commit.committer.date) \(.commit.message | split("\n")[0])"
-        else
-          empty
-        end
-    '
+  | jq -r '.commits[].sha' \
+  | while read -r sha; do
+      gh api "repos/developerz-ai/wurk/commits/$sha" \
+        | jq -r '
+            (
+              (.files // [])
+              | map(select(.filename | test("^lib/.*\\.rb$|^lib/.*\\.lua$|^app/.*\\.rb$|^config(/.*)?$|^exe/[^/]+$|^frontend/src(/.*)?$|^wurk\\.gemspec$")))
+              | length > 0
+            ) as $is_shipping
+            | if $is_shipping then
+                "\(.sha[0:7]) \(.commit.committer.date) \(.commit.message | split("\n")[0])"
+              else
+                empty
+              end
+          '
+    done
 
 # Local fast path: a stale checkout can disagree with the API on the last v* tag,
 # so keep its result in its own variable and let the window below stay anchored to
