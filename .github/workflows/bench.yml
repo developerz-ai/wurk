@@ -28,11 +28,15 @@ concurrency:
 jobs:
   # `rake bench` measures Ruby throughput only, so only Ruby/bench inputs can
   # move it. Gate the bench job on those paths so docs-, frontend- and test-only
-  # PRs never spin a bench runner. A JOB-level `if` is correct here, unlike the
-  # step-level gate test.yml uses: bench is deliberately not a required check, so
-  # "skipped" is an honest answer. If it ever becomes required, switch it to
-  # test.yml's per-step RUN pattern first — GitHub counts a skipped required
-  # check as passing (#469).
+  # PRs never spin a bench runner. Per-step RUN gating — the same pattern every
+  # path-gated job in test.yml uses (#469) — makes the job run and report a
+  # real success on a PR whose diff doesn't touch a bench input, so the bench
+  # check shows up green in the PR's checks list instead of "skipped". Bench
+  # is deliberately not a required check today, so a job-level skip would
+  # also be an honest answer, but the per-step form is the lane's uniform
+  # shape (see test.yml's comment above the `test` job) and keeps the gate
+  # visible as a real run rather than a skip-counter if it ever does become
+  # required.
   #
   # Gemfile.lock is deliberately absent from the filter — it is gitignored
   # (.gitignore:5) and can never appear in a diff; `Gemfile` and the gemspec are
@@ -67,7 +71,6 @@ jobs:
   compare:
     name: bench vs base
     needs: detect
-    if: needs.detect.outputs.bench == 'true'
     runs-on: ubuntu-latest
     timeout-minutes: 20
     permissions:
@@ -91,16 +94,23 @@ jobs:
       # (cache-version: rails-8.1 in both).
       RAILS_VERSION: "8.1"
       BENCH_RUNS: 3
+      # Per-step RUN gate — same one test.yml uses on every path-gated job
+      # (#469). See the comment above `detect` for why. Bench.yml only fires
+      # on pull_request, so no dup/output-changed on main to fold in.
+      RUN: ${{ needs.detect.outputs.bench == 'true' }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        if: env.RUN == 'true'
         with:
           fetch-depth: 0 # the base run checks out base.sha, which shallow lacks
           persist-credentials: false
       # STEP, not job-level `env:` — see test.yml. Both sides of the comparison
       # sample this one runner, so both read the same resolved port.
       - name: resolve redis port
+        if: env.RUN == 'true'
         run: echo "REDIS_URL=redis://localhost:${{ job.services.redis.ports['6379'] }}/0" >> "$GITHUB_ENV"
       - uses: ruby/setup-ruby@14594264cd68ce8a2345dd349bc3d138a4ef85c8 # v1
+        if: env.RUN == 'true'
         with:
           ruby-version: "4.0"
           bundler-cache: true
@@ -108,6 +118,7 @@ jobs:
       # The base checkouts below rewind the working tree. Keep the PR's
       # comparator so the gate rule under review is the one that runs.
       - name: stage comparator
+        if: env.RUN == 'true'
         run: cp bin/bench-compare /tmp/bench-compare
       # Interleaved, not batched per side — the two sides have to sample the
       # same runner, and a runner is not the same machine minute to minute. It
@@ -127,6 +138,7 @@ jobs:
       # damps what is left: a contended window costs each side one sample rather
       # than every sample that side has.
       - name: bench head vs base, interleaved
+        if: env.RUN == 'true'
         env:
           BASE_SHA: ${{ github.event.pull_request.base.sha }}
         run: |
@@ -166,6 +178,7 @@ jobs:
       # Gate rule lives in bin/bench-compare (its noise band, `fail_gate` and
       # final `exit`) — this step only transports its verdict.
       - name: compare, comment, gate
+        if: env.RUN == 'true'
         env:
           GH_TOKEN: ${{ github.token }}
           PR: ${{ github.event.pull_request.number }}
