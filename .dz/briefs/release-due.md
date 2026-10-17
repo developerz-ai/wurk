@@ -7,22 +7,22 @@ is `RELEASE.md`; this brief only decides *when*.
 ## Decide
 
 ```bash
-# Local tags may be stale; resolve $last via the GitHub API for the canonical value,
-# then verify the ref, the release, and the diff window against main.
-# $last currently resolves to v1.8.0.
+# Resolve $last via the GitHub API for the canonical value, then verify the ref (peel to a commit), the release (gem-less marker), and the diff window against main. $last currently resolves to v1.8.0.
 last=$(gh api repos/developerz-ai/wurk/git/matching-refs/tags/ \
   | jq -r '.[] | select(.ref | startswith("refs/tags/v")) | .ref | sub("^refs/tags/"; "")' \
   | sort -V \
   | tail -1)
-gh api "repos/developerz-ai/wurk/git/ref/tags/$last"
-gh release view "$last"
+# Peel the tag ref to its commit SHA. Annotated tags store the commit under
+# the tag object's .object.sha; lightweight tags have object.type=commit and .object.sha is the SHA itself.
+tag_sha=$(gh api "repos/developerz-ai/wurk/git/ref/tags/$last" | jq -r '.object.sha')
+commit_sha=$(gh api "repos/developerz-ai/wurk/git/tags/$tag_sha" | jq -r '.object.sha // .sha')
+[ "$commit_sha" != "null" ] && [ -n "$commit_sha" ] || { echo "::error::tag $last does not resolve to a commit"; exit 1; }
+# Verify the release: gem-less marker = author=developerz-ai[bot] OR assets.length=0 (RELEASE.md:165-172).
+rel=$(gh release view "$last" --json author,assets); author=$(echo "$rel" | jq -r '.author.login'); nassets=$(echo "$rel" | jq -r '.assets | length')
+[ "$author" != "developerz-ai[bot]" ] && [ "$nassets" != "0" ] || { echo "::error::release $last is gem-less (author=$author, assets=$nassets)"; exit 1; }
 gh api "repos/developerz-ai/wurk/compare/$last...main"
 
-# Local fast path: a stale checkout can disagree with the API on the last v* tag,
-# so keep its result in its own variable and let the window below stay anchored to
-# the verified $last. Fetch that tag first — a stale checkout won't have it yet,
-# and `git log` against a revision it doesn't know would fail with a bad-revision
-# error. The fetch is silent so its diff noise doesn't drown the window.
+# Local fast path: a stale checkout can disagree with the API on $last; the fetch is silent so its diff noise doesn't drown the window.
 local_last=$(git describe --tags --abbrev=0 --match 'v[0-9]*' origin/main)
 git fetch --quiet origin tag "$last"
 git log --format='%h %cI %s' "$last"..origin/main -- 'lib/**/*.rb' 'lib/**/*.lua' 'app/**/*.rb' 'config/**' 'exe/*' 'frontend/src/**' wurk.gemspec
