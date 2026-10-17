@@ -70,6 +70,14 @@ triage:
   # (developerz.ai #6372, deployed 2026-10-15). Membership is the same repo-permission read
   # `pr.auto_merge_scope: not_project` uses; outsiders' issues are handled as before.
   skip_project_members: true
+  # Which deployments count as "the fix was deployed" for the error-fix confirmation
+  # (developerz.ai #5657, owner ruling 2026-10-16). The default is `[production]`, and this
+  # repo never deploys to an environment by that name: its deployments are `demo` (the
+  # wurk-demo app, built from `main`) and `github-pages` (the docs site). Only `demo` runs
+  # the code, so only `demo` counts; a docs deploy must not confirm a fix. Read back
+  # 2026-10-17: developerz.ai has recorded 16 `demo` and 22 `github-pages` success verdicts
+  # for this repo, and the last three `demo` deployments were `main` commits.
+  error_fix_confirm_environments: [demo]
   ask_for_repro: true
   required_fields: [steps, expected, actual, version]
   qualify_into: [bug, feature, dupe, question]
