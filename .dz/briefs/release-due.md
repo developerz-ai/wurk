@@ -57,7 +57,14 @@ compare_shas=$(printf '%s\n' "$compare_body" | jq -r '.commits[].sha') || {
     exit 1
 }
 
+# An empty Compare response (`commits: []`) leaves `compare_shas=""`,
+# but `<<<""` still feeds the loop a single blank line that `read` would
+# consume as `sha=""`. Without the guard below, the per-commit call
+# would request `gh api repos/.../commits/` (no SHA) and abort on a 404
+# unrelated to the actual decision. Skip blank SHAs so the empty window
+# comes out cleanly and the loop terminates without a bogus request.
 while read -r sha; do
+    [[ -z "$sha" ]] && continue
     if ! body=$(gh api "repos/developerz-ai/wurk/commits/$sha"); then
       echo "ERROR: gh api for $sha failed (rate-limited or 4xx); aborting rather than treating a missing commit as not-shipping" >&2
       exit 1

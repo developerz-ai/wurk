@@ -307,7 +307,10 @@ class ReleaseDueBriefTest < Minitest::Test
     assert_decide_aborts_before_local_fast_path(
       stub_gh: per_commit_failing_stub_gh,
       failing_curl: 'the per-commit `gh api commits/<sha>` stub fails',
-      failure_message: 'per-commit `gh api commits/<sha>` failure must abort the Decide script'
+      failure_message: 'per-commit `gh api commits/<sha>` failure must abort the Decide script',
+      # The brief's per-commit diagnostic expands `$sha` to the actual
+      # commit SHA at runtime, so pin the SHA-stable tail of the line.
+      expected_stderr: 'aborting rather than treating a missing commit as not-shipping'
     )
   end
 
@@ -319,8 +322,63 @@ class ReleaseDueBriefTest < Minitest::Test
     assert_decide_aborts_before_local_fast_path(
       stub_gh: compare_failing_stub_gh,
       failing_curl: 'the Compare `gh api compare/...` stub fails',
-      failure_message: 'Compare request failure must abort the Decide script'
+      failure_message: 'Compare request failure must abort the Decide script',
+      expected_stderr: 'ERROR: Compare request for'
     )
+  end
+
+  # Empty Compare response (`{"commits":[]}`) must surface as a clean
+  # empty window — the loop is fed by a here-string `<<<"$compare_shas"`,
+  # which still supplies one blank line for an empty variable, and `read`
+  # would consume it as `sha=""`. Without the `[[ -z "$sha" ]]` guard,
+  # the per-commit call would request `gh api repos/.../commits/` (no
+  # SHA) and abort on a 404 unrelated to the actual decision. Drive the
+  # bash against a stub `gh` whose Compare endpoint returns an empty
+  # commits list and whose per-commit branch prints `PER_COMMIT_CALLED`
+  # to stderr before exiting 1. The success-status assertion catches a
+  # here-string regression that lets the 404 bubble up to the script;
+  # the stderr-PER_COMMIT_CALLED assertion catches the pipeline-into-
+  # while regression where the per-commit subshell exits but the outer
+  # script continues with status 0. Together they pin that the per-commit
+  # loop never iterates a blank SHA, no matter how the SHA stream is
+  # shaped. The brief's local fast path uses the marker-writing `git`
+  # stub so real `git` doesn't leak real commits into stdout and mask a
+  # regression by inflating the row count the assert has to compare
+  # against.
+  def test_empty_compare_response_runs_cleanly
+    run_decide_under_stubs(empty_compare_stub_gh) do |(out, err, status), _tmpdir|
+      assert_predicate status, :success?,
+                       'empty Compare response must run cleanly ' \
+                       "(status=#{status.inspect}, stdout=#{out.inspect}, " \
+                       "stderr=#{err.inspect}); the [[ -z \"$sha\" ]] guard " \
+                       'inside the while loop must skip the blank SHA ' \
+                       'produced by `<<<"$compare_shas"` for an empty SHA stream'
+
+      refute_match(/PER_COMMIT_CALLED/, err,
+                   'empty Compare must not call `gh api .../commits/<sha>`; ' \
+                   'the stub emitted PER_COMMIT_CALLED on stderr when its ' \
+                   'per-commit branch fired, which means the [[ -z "$sha" ]] ' \
+                   "guard is missing — stderr=#{err.inspect}")
+
+      # No commit row (the `<7-sha> <date> <first-line>` shape the
+      # per-commit loop emits) should be present — the per-commit loop
+      # must terminate without iterating the blank SHA. The brief's
+      # un-captured `gh api .../git/ref/tags/$last` and `gh release
+      # view` verify calls both return `{}` from the stub, so the only
+      # stdout the script emits is those two `{}` lines.
+      lines = out.lines.map(&:chomp).reject(&:empty?)
+
+      assert_equal ['{}', '{}'], lines,
+                   'empty Compare response must produce only the two ' \
+                   'un-captured `{}` responses from the tag/ref and ' \
+                   'release verify calls on stdout; any other line is ' \
+                   'a regression in the per-commit loop'
+
+      refute lines.any? { |line| line.match?(/\A[0-9a-f]{7} /) },
+             'no line of stdout should be a per-commit row shaped like ' \
+             '`<7-sha> <date> <first line>` — an empty Compare response ' \
+             'means the per-commit loop must not iterate any SHA at all'
+    end
   end
 
   private
@@ -424,6 +482,56 @@ class ReleaseDueBriefTest < Minitest::Test
   SHELL
   private_constant :COMPARE_FAILING_STUB_GH
 
+  # Stub `gh` whose Compare response is `{"commits":[]}`. Every other
+  # endpoint succeeds, so the brief bash reaches the per-commit loop
+  # with an empty SHA stream. A per-commit call is a regression —
+  # `<<<"$empty_var"` still feeds the loop a blank line and `read`
+  # would consume it as `sha=""`, so the [[ -z "$sha" ]] guard is
+  # what surfaces the empty window cleanly. The per-commit branch
+  # prints `PER_COMMIT_CALLED` to stderr and exits 1, so a regression
+  # that drops the guard surfaces via BOTH the script's exit status
+  # (caught by `assert status.success?`) AND a unique substring on
+  # stderr (caught by `refute_match /PER_COMMIT_CALLED/, err`) — the
+  # second gate catches the pipeline-into-while regression where the
+  # subshell exit leaves the script running with status 0.
+  EMPTY_COMPARE_STUB_GH = <<~'SHELL'
+    #!/usr/bin/env bash
+    case "$1" in
+      api)
+        shift
+        url="${1:-}"
+        case "$url" in
+          *git/matching-refs/tags/*)
+            printf '%s\n' '[{"ref":"refs/tags/v1.8.0"}]'
+            ;;
+          *git/ref/tags/v1.8.0)
+            printf '%s\n' '{}'
+            ;;
+          *compare/v1.8.0...main)
+            printf '%s\n' '{"commits":[]}'
+            ;;
+          *commits/*)
+            printf 'PER_COMMIT_CALLED\n' >&2
+            printf 'ERROR: stub gh api: per-commit endpoint must not be called for an empty Compare response\n' >&2
+            exit 1
+            ;;
+          *)
+            printf 'ERROR: stub gh api: unexpected URL: %s\n' "$url" >&2
+            exit 1
+            ;;
+        esac
+        ;;
+      release)
+        printf '%s\n' '{}'
+        ;;
+      *)
+        printf 'ERROR: stub gh: unexpected command: %s\n' "$*" >&2
+        exit 1
+        ;;
+    esac
+  SHELL
+  private_constant :EMPTY_COMPARE_STUB_GH
+
   # Stub `git` whose `describe` invocation writes a marker file. Every
   # other subcommand is a silent success — the brief's bash reads only
   # `describe`/`fetch`/`log`, and the marker is the signal the test
@@ -446,26 +554,29 @@ class ReleaseDueBriefTest < Minitest::Test
     COMPARE_FAILING_STUB_GH
   end
 
-  # Write `stub_gh` and a marker-writing `git` stub into a temp bin dir,
-  # prepend that bin dir to PATH, and run the Decide block as a
-  # stand-alone Bash script with `set -euo pipefail`. The marker is
-  # empty unless the script reaches the local fast path's `git describe`
-  # (the first git command after the per-commit loop). A regression that
-  # lets a per-commit or Compare failure fall through to the local fast
-  # path would write the marker; a regression that runs the while loop
-  # in a subshell (e.g. piping the SHA stream into `read`) would let
-  # `exit 1` exit only the subshell and the marker would still be
-  # written. The two assertions together pin that the abort propagates
-  # to the Decide script AND that it propagates BEFORE the local fast
-  # path runs.
-  def assert_decide_aborts_before_local_fast_path(stub_gh:, failing_curl:, failure_message:)
+  def empty_compare_stub_gh
+    EMPTY_COMPARE_STUB_GH
+  end
+
+  # End-to-end execution helper. Writes `stub_gh` and the marker-writing
+  # `git` stub into a temp bin dir, prepends that bin dir to PATH, and
+  # runs the Decide block as a stand-alone Bash script. The script is
+  # NOT prefixed with `set -euo pipefail` — the brief does not enable
+  # any shell options, and injecting them would mask a regression that
+  # pipes the SHA stream into the loop (the inner pipeline's `exit 1`
+  # would propagate via `pipefail`, hiding the fact that the subshell
+  # exit only reached the subshell). Yields the captured (out, err,
+  # status) tuple and the temp dir so callers can assert on stdout,
+  # stderr, exit status, and the local-fast-path marker file inside
+  # the same `Dir.mktmpdir` scope (the marker is auto-cleaned at block
+  # end, so post-yield marker checks would see a deleted file).
+  def run_decide_under_stubs(stub_gh)
     decide_block = extract_decide_block
     skip 'no Decide block' if decide_block.empty?
 
     Dir.mktmpdir('wurk-brief-stub-') do |tmpdir|
       bin_dir = File.join(tmpdir, 'bin')
       Dir.mkdir(bin_dir)
-      fast_path_marker = File.join(tmpdir, 'local_fast_path_reached')
 
       gh_path = File.join(bin_dir, 'gh')
       git_path = File.join(bin_dir, 'git')
@@ -474,19 +585,39 @@ class ReleaseDueBriefTest < Minitest::Test
       File.chmod(0o755, gh_path, git_path)
 
       script_path = File.join(tmpdir, 'decide.sh')
-      File.write(script_path, "#!/usr/bin/env bash\nset -euo pipefail\n#{decide_block}\n")
+      File.write(script_path, "#!/usr/bin/env bash\n#{decide_block}\n")
       File.chmod(0o755, script_path)
 
       env = {
         'PATH' => "#{bin_dir}:#{ENV.fetch('PATH', '')}",
-        'WURK_TEST_FAST_PATH_MARKER' => fast_path_marker
+        'WURK_TEST_FAST_PATH_MARKER' => File.join(tmpdir, 'local_fast_path_reached')
       }
-      out, err, status = Open3.capture3(env, script_path)
+
+      result = Open3.capture3(env, script_path)
+      yield(result, tmpdir)
+    end
+  end
+
+  # Drives an abort-path test: the script must exit non-zero AND emit
+  # the abort path's stderr diagnostic AND not reach the local fast
+  # path's `git describe`. The diagnostic substring pin prevents an
+  # unrelated early exit (a regression that drops the abort path
+  # entirely, or one where a downstream step fails) from satisfying
+  # `refute status.success?` — only the abort path prints this line.
+  def assert_decide_aborts_before_local_fast_path(stub_gh:, failing_curl:, failure_message:, expected_stderr:)
+    run_decide_under_stubs(stub_gh) do |(out, err, status), tmpdir|
+      fast_path_marker = File.join(tmpdir, 'local_fast_path_reached')
 
       refute_predicate status, :success?,
                        "#{failure_message} (status=#{status.inspect}, " \
                        "failing_curl=#{failing_curl}); " \
                        "stdout=#{out.inspect}; stderr=#{err.inspect}"
+
+      assert_includes err, expected_stderr,
+                      "#{failure_message}: the abort path's expected stderr " \
+                      "diagnostic `#{expected_stderr.inspect}` must be present " \
+                      'so an unrelated early exit cannot satisfy this assertion; ' \
+                      "got stderr=#{err.inspect}"
 
       refute fast_path_reached?(fast_path_marker),
              "#{failure_message} before the local fast path; " \
