@@ -38,10 +38,25 @@ gh release view "$last"
 # commit would NOT be reported, and the agent would treat the window as
 # smaller than it is. Check the exit status of each per-commit call and
 # abort the decision (with a message to stderr) on failure rather than
-# accepting an incomplete window. Process substitution keeps the `exit` in
-# the current shell so the abort propagates — `while read` from a pipe
-# runs in a subshell, where `exit` would only exit the loop, not the
-# Decide script.
+# accepting an incomplete window.
+#
+# Fetch and validate the Compare response AND its `.commits[].sha`
+# extraction in the CURRENT shell before the loop. `< <(gh api ... | jq
+# -r ...)` process substitution hides the inner pipeline's exit status
+# — a failed Compare would let the loop succeed with no input, so an
+# unreadable window would appear empty. Feed the loop with a here-string
+# `<<<"$compare_shas"` so the SHA source lives in the current shell too:
+# a `| cmd | while read` would run the loop in a subshell, and `exit 1`
+# inside it would only exit the loop, not the Decide script.
+compare_body=$(gh api "repos/developerz-ai/wurk/compare/$last...main") || {
+    echo "ERROR: Compare request for $last..main failed (rate-limited or 4xx); aborting rather than treating the window as empty" >&2
+    exit 1
+}
+compare_shas=$(printf '%s\n' "$compare_body" | jq -r '.commits[].sha') || {
+    echo "ERROR: extracting SHAs from Compare response for $last..main failed; aborting rather than treating the window as empty" >&2
+    exit 1
+}
+
 while read -r sha; do
     if ! body=$(gh api "repos/developerz-ai/wurk/commits/$sha"); then
       echo "ERROR: gh api for $sha failed (rate-limited or 4xx); aborting rather than treating a missing commit as not-shipping" >&2
@@ -60,7 +75,7 @@ while read -r sha; do
               empty
             end
         '
-done < <(gh api "repos/developerz-ai/wurk/compare/$last...main" | jq -r '.commits[].sha')
+done <<<"$compare_shas"
 
 # Local fast path: a stale checkout can disagree with the API on the last v* tag,
 # so keep its result in its own variable and let the window below stay anchored to
