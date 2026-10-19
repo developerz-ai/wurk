@@ -201,10 +201,16 @@ jobs:
           set -euo pipefail
           mkdir -p state
 
+          # Fail the step on a lookup error: silently treating the failure as
+          # "no artifact found" would re-POST every previously-handled release
+          # and double-file known versions on the next schedule. `archive_url`
+          # is empty ONLY on a clean slate (no prior artifact uploaded yet);
+          # the `if [ -n "$archive_url" ]` branch below handles that case
+          # without overwriting any marker from an earlier run.
           archive_url=$(gh api \
             "/repos/${GITHUB_REPOSITORY}/actions/artifacts?name=${STATE_ARTIFACT}&per_page=10" \
             --jq '.artifacts[] | .archive_download_url' \
-            | head -n1) || archive_url=
+            | head -n1)
 
           if [ -n "$archive_url" ]; then
             # `archive_download_url` returns 302 to a GitHub-routed S3 URL;
@@ -248,27 +254,36 @@ jobs:
 
           # Sidekiq ships frequently. The most recent 30 releases is a
           # generous horizon: anything older than that should already be in
-          # the marker once the repo has any history at all. Per_page
-          # caps the slice; --paginate leaves room for the future without
-          # needing a code change if Sidekiq ever bursts > 30/week.
-          gh api --paginate "/repos/sidekiq/sidekiq/releases?per_page=30" \
-            --jq '.[] | [.tag_name, .html_url, .name, .body] | @tsv' \
-            > /tmp/releases.tsv
+          # the marker once the repo has any history of uploads. `per_page`
+          # caps the slice; WITHOUT `--paginate` the call returns exactly
+          # the first page — the bounded backlog this step advertises
+          # (the API would happily hand us the entire release history
+          # otherwise, and a fresh marker would file every one of them).
+          # `jq -c '{…}'` (compact JSON, one record per line) preserves
+          # every field verbatim — an empty `name` lands as `"name":null`
+          # rather than as a missing TSV column that shifts `body` into
+          # the `name` slot when Bash collapses adjacent tab separators.
+          gh api "/repos/sidekiq/sidekiq/releases?per_page=30" \
+            --jq '.[] | {tag:.tag_name, url:.html_url, name:.name, notes:.body}' \
+            > /tmp/releases.json
 
           filed=0
           skipped=0
 
-          while IFS=$'\t' read -r tag url name notes; do
+          while IFS= read -r row; do
+            [ -n "$row" ] || continue
+            # jq -e exits non-zero on a missing/null field, which `set -e`
+            # turns into a clean skip rather than reading literal `null`
+            # as the tag value.
+            tag=$(jq -er .tag <<<"$row")
             [ -n "$tag" ] || continue
             version=${tag#v}
-
-            # Decode the literal `\n` sequences jq `@tsv` emits for real
-            # newlines in `.body` (release notes are markdown paragraphs).
-            # Without this, `--arg notes "$notes"` hands `\n` to jq, which
-            # JSON-escapes the backslash and lands `\\n` in the POST body,
-            # corrupting the markdown. `${var//\\n/$'\n'}` swaps the literal
-            # for a real LF.
-            notes=${notes//\\n/$'\n'}
+            url=$(jq -r .url <<<"$row")
+            # `.name // ""` so a release with no title reads as empty in
+            # the loop (and lands as `"name":""` in the POST body) rather
+            # than as the literal string `null`. Same for `.notes`.
+            name=$(jq -r '.name // ""' <<<"$row")
+            notes=$(jq -r '.notes // ""' <<<"$row")
 
             # Already known → skip silently.
             if grep -qxF "$version" state/marker.txt; then
@@ -276,10 +291,13 @@ jobs:
               continue
             fi
 
-            # Dry run: announce, record (so the next real run doesn't
-            # re-announce), but POST nothing.
+            # Dry run: announce and count, but POST nothing AND leave
+            # marker.txt untouched. A dry run is a verification, not a
+            # forward step — recording unposted versions in the marker
+            # would make the next real run skip them permanently, so any
+            # version this run announces must be re-announced by the
+            # next real run too.
             if [ "${DRY_RUN}" = "true" ]; then
-              printf '%s\n' "$version" >> state/marker.txt
               filed=$((filed + 1))
               echo "  [dry-run] would file: ${version} — ${name}"
               continue
@@ -291,7 +309,10 @@ jobs:
             # update happens for this version, so it retries next week.
             # `body` carries the upstream release notes (the GitHub `.body`
             # field) and `kind: parity-check` is the explicit identifier
-            # this watcher attaches to every ask it files.
+            # this watcher attaches to every ask it files. `--arg notes`
+            # hands the value to jq verbatim — tabs, backslashes, and real
+            # newlines in the release notes land intact in the POST body
+            # without shell-level unescaping.
             body=$(jq -nc \
               --arg title "Sidekiq v${version} released" \
               --arg url "$url" \
@@ -311,7 +332,7 @@ jobs:
             printf '%s\n' "$version" >> state/marker.txt
             filed=$((filed + 1))
             echo "  filed: ${version} (${name})"
-          done < /tmp/releases.tsv
+          done < /tmp/releases.json
 
           sort -u state/marker.txt -o state/marker.txt
           echo "Summary: filed=${filed} skipped=${skipped} dry_run=${DRY_RUN:-false}."
