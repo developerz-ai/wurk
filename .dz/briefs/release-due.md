@@ -114,13 +114,14 @@ subject → minor; anything else → patch.
 
 ## The ask, when due
 
-1. Re-check the window on fresh `main`; still due, or stop.
-2. `## [Unreleased]` empty (a Dependabot-only window)? Add a `### Changed` line per bumped runtime
+1. **Pre-flight guard (gh-capable lane only).** The lane running this brief MUST be a `gh`-capable execution surface — the only surface eligible to file a `Release <next>` ask. Verify capability with `gh auth status`: no `gh` binary, or a non-zero exit, means the lane is not gh-capable, and a lane without `gh` MUST skip this ask entirely. Once eligible, retrieve every open title from BOTH lists — `gh api --paginate "repos/developerz-ai/wurk/issues?state=open" | jq -r '.[] | select(.pull_request == null) | .title'` and `gh api --paginate "repos/developerz-ai/wurk/pulls?state=open" | jq -r '.[].title'`. The list commands `gh issue list` and `gh pr list` reject `--paginate` outright, so a paginated list call would abort on the very flag meant to cover the long tail of open titles; `gh api --paginate` follows the API's link headers through every page so the title guard sees every open issue and PR, not just the newest 30, and is required here, not optional. (The `.pull_request == null` filter on the issues endpoint matches what `gh issue list` returned: GitHub's `/issues` route returns pull requests alongside issues, while `gh issue list` excluded them.) With every page covered, if any title matches `^Release|^release:`, MUST skip the Release ask (standing prohibition, line 127 below — never file a second ask while one titled `Release …` is open).
+2. Re-check the window on fresh `main`; still due, or stop.
+3. `## [Unreleased]` empty (a Dependabot-only window)? Add a `### Changed` line per bumped runtime
    dependency first.
-3. `RELEASE.md` → *Cutting a release*: bump `lib/wurk/version.rb`, `bundle exec rake
+4. `RELEASE.md` → *Cutting a release*: bump `lib/wurk/version.rb`, `bundle exec rake
    release:relock_demo`, move `[Unreleased]` under `## [<next>] - <today>`, `bin/check`.
-4. One PR, `release: <next>`, nothing else in it. It merges on green like any PR.
-5. Merging it is the release: `release.yml` publishes the gem, then tags. Never tag, never
+5. One PR, `release: <next>`, nothing else in it. It merges on green like any PR.
+6. Merging it is the release: `release.yml` publishes the gem, then tags. Never tag, never
    `gem push` by hand.
 
 Never file a second ask while one titled `Release …` is open.
