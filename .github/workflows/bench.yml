@@ -28,7 +28,8 @@ concurrency:
 jobs:
   # `rake bench` measures Ruby throughput only, so only Ruby/bench inputs can
   # move it. Gate the bench job on those paths so docs-, frontend- and test-only
-  # PRs never spin a bench runner.
+  # PRs skip the benchmark steps. The compare runner and Redis service still
+  # start on those PRs — only the per-step `if:` below skips.
   #
   # Per-step RUN, not job-level `if:` (#469) — the same shape test.yml uses.
   # Bench vs base is intended but not yet required, so a job-level `if:`
