@@ -6,12 +6,30 @@ on:
   pull_request:
   schedule:
     - cron: "0 7 * * 1" # weekly
+  workflow_dispatch:
+    # Manual one-off for the watcher. dry_run='true' lists releases the
+    # watcher would file and POSTs none — the only safe way to verify the
+    # dedup + URL + body schema end-to-end before the schedule fires real
+    # traffic. dry_run='false' (the default) is the real run. The watcher
+    # job's `if:` is what actually restricts execution to schedule +
+    # dispatch, so this input is harmless on every other trigger.
+    inputs:
+      dry_run:
+        description: 'List releases the watcher would file without POSTing to the API.'
+        required: false
+        default: 'false'
+        type: choice
+        options:
+          - 'true'
+          - 'false'
 
 permissions:
   contents: read
   # paths-filter reads the PR's changed-file list on pull_request events.
   pull-requests: read
   # `detect`'s dup step reads the merged PR's workflow runs (read-only).
+  # `watcher` reads the prior `wurk-watcher-state` artifact from its own
+  # previous run to dedupe against already-filed upstream versions.
   actions: read
 
 concurrency:
@@ -98,7 +116,7 @@ jobs:
       - name: resolve redis port
         if: env.RUN == 'true'
         run: echo "ECOSYSTEM_REDIS_URL=redis://localhost:${{ job.services.redis.ports['6379'] }}/15" >> "$GITHUB_ENV"
-      - uses: ruby/setup-ruby@14594264cd68ce8a2345dd349bc3d138a4ef85c8 # v1
+      - uses: ruby/setup-ruby@651ff0d62c5c79bed6d53ec518387aae20e72c1a # v1.329.0
         if: env.RUN == 'true'
         with:
           # NOT the newest Ruby, deliberately. This job's subject is third-party
@@ -111,3 +129,203 @@ jobs:
       - name: rake test:ecosystem
         if: env.RUN == 'true'
         run: bundle exec rake test:ecosystem
+
+  # Watcher for upstream Sidekiq releases. Posts one developerz.ai ask per
+  # release we have not seen before, deduped against the `wurk-watcher-state`
+  # artifact marker uploaded at the end of every prior run. Fires ONLY on
+  # `schedule` (weekly) or `workflow_dispatch` (manual) — the per-job `if:`
+  # is what enforces that, not the trigger list, so push and PR events are
+  # guaranteed never to invoke it.
+  #
+  # The REST endpoint URL and the POST body schema are NOT verified from this
+  # checkout — .mcp.json documents only the MCP endpoint at /v1/mcp, the REST
+  # `asks` route is external to this repo. The defaults below are documented
+  # placeholders to be confirmed against developerz.ai docs before this fires
+  # real traffic; both are environment-overridable so a wrong default can be
+  # fixed in repo vars without a code change. Run a `workflow_dispatch` with
+  # `dry_run=true` first to verify end-to-end without POSTing.
+  watcher:
+    name: sidekiq release watcher
+    if: github.event_name == 'schedule' || github.event_name == 'workflow_dispatch'
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    env:
+      GH_TOKEN: ${{ github.token }}
+      # The secret is read into env ONLY. Every `run:` block below consumes
+      # `${API_KEY}` in shell — never on a curl argv token, never echoed,
+      # never logged via `set -x`. The Authorization header is sent via
+      # `curl -H @-` so the literal token never appears in `ps` either.
+      API_KEY: ${{ secrets.DEVELOPERZ_API_KEY }}
+      # Overridable: a wrong default is a 1-line var fix, no code change.
+      # Path guesses at /v1/asks to match the /v1/mcp shape in .mcp.json.
+      API_URL: ${{ vars.DEVELOPERZ_API_URL || 'https://api.developerz.ai/v1/asks' }}
+      STATE_ARTIFACT: wurk-watcher-state
+      # 'true' ONLY on a workflow_dispatch call that set the input to the
+      # literal string 'true'. Under `schedule` the dispatch branch is false
+      # and `inputs.*` is empty here, so the whole AND collapses to '' —
+      # false, the real run.
+      DRY_RUN: ${{ github.event_name == 'workflow_dispatch' && inputs.dry_run == 'true' }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      # Belt-and-braces for the "secret unset" case. GitHub resolves an
+      # absent secret to literal empty text in ${{ secrets.X }}, not to
+      # '***', so a plain -z test is the only honest check. Exit 0 with an
+      # explicit message rather than failing — a schedule that's missing a
+      # secret should surface as a red job, but a manually-dispatched one
+      # should be a clean skip. Either way the next schedule fires and
+      # retries the check.
+      - name: exit 0 if DEVELOPERZ_API_KEY is missing
+        env:
+          API_KEY: ${{ secrets.DEVELOPERZ_API_KEY }}
+        run: |
+          if [ -z "${API_KEY:-}" ]; then
+            echo "DEVELOPERZ_API_KEY missing — watcher skipped (exit 0; schedule/dispatch will rerun once the secret is added)."
+            exit 0
+          fi
+
+      # Read the prior marker via `gh api` rather than a separate action:
+      # there's no SHA-pinned `download-artifact` step already in the repo,
+      # adding one would invent a SHA, and `gh api` against the workflow's
+      # own GITHUB_TOKEN already has access to its past artifacts under the
+      # workflow-level `actions: read`. The artifact name is unique to
+      # this job, so a name filter is sufficient — no workflow_id lookup.
+      - name: read prior marker artifact
+        if: env.API_KEY != ''
+        env:
+          GH_TOKEN: ${{ github.token }}
+          STATE_ARTIFACT: ${{ env.STATE_ARTIFACT }}
+        run: |
+          set -euo pipefail
+          mkdir -p state
+
+          archive_url=$(gh api \
+            "/repos/${GITHUB_REPOSITORY}/actions/artifacts?name=${STATE_ARTIFACT}&per_page=10" \
+            --jq '.artifacts[] | .archive_download_url' \
+            | head -n1) || archive_url=
+
+          if [ -n "$archive_url" ]; then
+            # `archive_download_url` returns 302 to a GitHub-routed S3 URL;
+            # curl -L follows it with the same Authorization header. gh api
+            # historically doesn't follow external redirects cleanly here.
+            curl -fsSL \
+              -H "Authorization: token ${GH_TOKEN}" \
+              "$archive_url" \
+              > state/prior.zip
+            # `actions/upload-artifact` archives sit at the zip root, so a
+            # flat extract places marker.txt directly under state/.
+            unzip -o -q state/prior.zip -d state/
+            rm -f state/prior.zip
+          fi
+
+          if [ -s state/marker.txt ]; then
+            # Normalize so the dedup `grep -qxF` below is reliable.
+            sort -u state/marker.txt -o state/marker.txt
+            echo "Loaded $(wc -l < state/marker.txt) known version(s) from prior marker."
+          else
+            : > state/marker.txt
+            echo "No prior marker — first run will POST every fetched release."
+          fi
+
+      # List, dedupe, and POST.
+      # Dedup rule: skip anything already in marker.txt. An empty marker
+      # (first run) POSTs every release — the API returns the 30 most
+      # recent, so the backlog is bounded and a brand-new repo is the
+      # right place to surface them. POST body and field names are not
+      # verifiable from this repo (.mcp.json documents MCP only); they
+      # assume the most common ask shape and will need adjustment if
+      # developerz.ai docs disagree.
+      - name: list releases and POST one ask per unhandled release
+        if: env.API_KEY != ''
+        env:
+          API_KEY: ${{ secrets.DEVELOPERZ_API_KEY }}
+          API_URL: ${{ env.API_URL }}
+          DRY_RUN: ${{ env.DRY_RUN }}
+        run: |
+          set -euo pipefail
+
+          # Sidekiq ships frequently. The most recent 30 releases is a
+          # generous horizon: anything older than that should already be in
+          # the marker once the repo has any history at all. Per_page
+          # caps the slice; --paginate leaves room for the future without
+          # needing a code change if Sidekiq ever bursts > 30/week.
+          gh api --paginate "/repos/sidekiq/sidekiq/releases?per_page=30" \
+            --jq '.[] | [.tag_name, .html_url, .name, .body] | @tsv' \
+            > /tmp/releases.tsv
+
+          filed=0
+          skipped=0
+
+          while IFS=$'\t' read -r tag url name notes; do
+            [ -n "$tag" ] || continue
+            version=${tag#v}
+
+            # Decode the literal `\n` sequences jq `@tsv` emits for real
+            # newlines in `.body` (release notes are markdown paragraphs).
+            # Without this, `--arg notes "$notes"` hands `\n` to jq, which
+            # JSON-escapes the backslash and lands `\\n` in the POST body,
+            # corrupting the markdown. `${var//\\n/$'\n'}` swaps the literal
+            # for a real LF.
+            notes=${notes//\\n/$'\n'}
+
+            # Already known → skip silently.
+            if grep -qxF "$version" state/marker.txt; then
+              skipped=$((skipped + 1))
+              continue
+            fi
+
+            # Dry run: announce, record (so the next real run doesn't
+            # re-announce), but POST nothing.
+            if [ "${DRY_RUN}" = "true" ]; then
+              printf '%s\n' "$version" >> state/marker.txt
+              filed=$((filed + 1))
+              echo "  [dry-run] would file: ${version} — ${name}"
+              continue
+            fi
+
+            # Real POST. Body schema is a best-guess; revise if the API
+            # rejects the shape — a 4xx surfaces as a curl non-zero exit,
+            # `set -e` then fails the step and the run, and no marker
+            # update happens for this version, so it retries next week.
+            # `body` carries the upstream release notes (the GitHub `.body`
+            # field) and `kind: parity-check` is the explicit identifier
+            # this watcher attaches to every ask it files.
+            body=$(jq -nc \
+              --arg title "Sidekiq v${version} released" \
+              --arg url "$url" \
+              --arg name "$name" \
+              --arg notes "$notes" \
+              --arg src "wurk-watcher" \
+              '{title:$title,url:$url,name:$name,source:$src,body:$notes,kind:"parity-check"}')
+
+            # Header on stdin so the token never appears in argv — only in
+            # the pipe to curl, which doesn't expose argv to `ps`.
+            printf 'Authorization: Bearer %s\nContent-Type: application/json\n' \
+              "${API_KEY}" \
+            | curl -fsSL -X POST -H @- --data "${body}" "${API_URL}"
+
+            # Only mark on success (curl -f exits non-zero on 4xx/5xx,
+            # which `set -e` propagates so this line never runs).
+            printf '%s\n' "$version" >> state/marker.txt
+            filed=$((filed + 1))
+            echo "  filed: ${version} (${name})"
+          done < /tmp/releases.tsv
+
+          sort -u state/marker.txt -o state/marker.txt
+          echo "Summary: filed=${filed} skipped=${skipped} dry_run=${DRY_RUN:-false}."
+
+      # Always re-upload the marker — even on a fresh start, an empty file
+      # is still a valid marker for the next run. `always()` so a POST
+      # failure path preserves the partial progress (versions successfully
+      # POSTed are already in marker.txt from the previous step).
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        if: always()
+        with:
+          name: wurk-watcher-state
+          path: state/marker.txt
+          if-no-files-found: warn
+          # GitHub default is 90 days. Re-uploading every run keeps the
+          # marker fresh indefinitely; no retention knob needed.
+          retention-days: 90
