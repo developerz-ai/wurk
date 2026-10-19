@@ -278,12 +278,19 @@ jobs:
             tag=$(jq -er .tag <<<"$row")
             [ -n "$tag" ] || continue
             version=${tag#v}
-            url=$(jq -r .url <<<"$row")
-            # `.name // ""` so a release with no title reads as empty in
-            # the loop (and lands as `"name":""` in the POST body) rather
-            # than as the literal string `null`. Same for `.notes`.
+            # `name` is the only field the loop reads as a shell variable —
+            # the dry-run announce line below. `url`, `notes`, and the body
+            # itself are extracted directly from the JSON record by jq via
+            # `--argjson row`, so a release whose notes end in `\n` round-trips
+            # verbatim into the POST body. The previous `notes=$(jq ...)` /
+            # `--arg notes "$notes"` path silently truncated trailing newlines:
+            # command substitution is documented to strip every trailing
+            # newline from the captured command's stdout, so jq's output
+            # `Details.\n` arrived at `--arg` as `Details.` (PRRT_kwDOSi_O686t9dul).
+            # `.name // ""` so a release with no title reads as empty in the
+            # loop (and lands as `"name":""` in the dry-run announce) rather
+            # than as the literal string `null`.
             name=$(jq -r '.name // ""' <<<"$row")
-            notes=$(jq -r '.notes // ""' <<<"$row")
 
             # Already known → skip silently.
             if grep -qxF "$version" state/marker.txt; then
@@ -309,17 +316,17 @@ jobs:
             # update happens for this version, so it retries next week.
             # `body` carries the upstream release notes (the GitHub `.body`
             # field) and `kind: parity-check` is the explicit identifier
-            # this watcher attaches to every ask it files. `--arg notes`
-            # hands the value to jq verbatim — tabs, backslashes, and real
-            # newlines in the release notes land intact in the POST body
-            # without shell-level unescaping.
+            # this watcher attaches to every ask it files. `--argjson row`
+            # hands the upstream record to jq as a JSON value, so each
+            # field (including embedded `\n` in `.notes`) round-trips
+            # through jq's string machinery and lands verbatim in the POST
+            # body — the prior `--arg notes "$notes"` path lost any
+            # trailing newline in the upstream notes (PRRT_kwDOSi_O686t9dul).
             body=$(jq -nc \
               --arg title "Sidekiq v${version} released" \
-              --arg url "$url" \
-              --arg name "$name" \
-              --arg notes "$notes" \
               --arg src "wurk-watcher" \
-              '{title:$title,url:$url,name:$name,source:$src,body:$notes,kind:"parity-check"}')
+              --argjson row "$row" \
+              '{title:$title,url:$row.url,name:($row.name // ""),source:$src,body:($row.notes // ""),kind:"parity-check"}')
 
             # Header on stdin so the token never appears in argv — only in
             # the pipe to curl, which doesn't expose argv to `ps`.

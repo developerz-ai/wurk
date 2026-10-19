@@ -25,12 +25,13 @@ class EcosystemWatcherTest < Wurk::Test::UnitCase
   ROOT = File.expand_path('../..', __dir__)
   WORKFLOW = File.join(ROOT, '.github/workflows/ecosystem.yml')
 
-  # Three releases the stub `gh` returns as compact JSON — the shape the
+  # Four releases the stub `gh` returns as compact JSON — the shape the
   # workflow's `gh api ... --jq '.[] | {tag:..., url:..., name:..., notes:...}'`
   # filter produces. Each record lands on one line so `while read -r row`
   # gets exactly one JSON object per release. The `notes` field mixes real
   # newlines, a TAB, and a backslash so the test can prove the workflow
-  # ships the body through `--arg` rather than partial shell unescaping.
+  # ships the body through jq's JSON-parsing path rather than partial shell
+  # unescaping.
   RELEASES = [
     {
       tag: 'v7.3.0',
@@ -52,6 +53,22 @@ class EcosystemWatcherTest < Wurk::Test::UnitCase
       url: 'https://github.com/sidekiq/sidekiq/releases/tag/v7.1.3',
       name: '',
       notes: 'Notes only — no release title.'
+    },
+    # Trailing-newline fixture pins PRRT_kwDOSi_O686t9dul: a release whose
+    # `notes` ends in `\n`. Under the previous `notes=$(jq ...)` then
+    # `--arg notes "$notes"` path, command substitution stripped the
+    # trailing newline and the POST body silently arrived with the newline
+    # truncated. The current `--argjson row` path round-trips every byte
+    # of `.notes` verbatim, including the trailing `\n`. The round-trip
+    # assertion in test_post_body_preserves_notes_url_kind_and_empty_name
+    # checks `body == release[:notes]` byte-for-byte, so this fixture
+    # would fail any regression that re-introduces the command-substitution
+    # path or otherwise drops the trailing byte.
+    {
+      tag: 'v7.0.9',
+      url: 'https://github.com/sidekiq/sidekiq/releases/tag/v7.0.9',
+      name: 'Release 7.0.9',
+      notes: "Trailing-newline fixture.\n"
     }
   ].freeze
   VERSIONS = RELEASES.map { |r| r[:tag].sub(/\Av/, '') }.freeze
@@ -342,13 +359,17 @@ class EcosystemWatcherTest < Wurk::Test::UnitCase
   end
 
   # Pin the POST body schema in the YAML itself. The real `jq` (no stub)
-  # turns `--arg notes "$notes"` and the surrounding template into the
+  # turns `--argjson row "$row"` and the surrounding template into the
   # JSON body that lands in the curl log, which means branches 1/2/4 cannot
-  # detect a regression that drops `kind:"parity-check"`, `body:$notes`, or
-  # `--arg notes` from the jq template at ecosystem.yml:301-307 — curl
-  # would still POST, but the API would receive a body without the release
-  # notes or the parity-check identifier. Mirror the per-step gate regex
-  # pattern used in branch 3.
+  # detect a regression that drops `kind:"parity-check"`, `body:($row.notes // "")`,
+  # or `--argjson row` from the jq template — curl would still POST, but the
+  # API would receive a body without the release notes or the parity-check
+  # identifier. The `--argjson row` form (instead of `--arg notes "$notes"`)
+  # is what preserves a release-notes value that ends in `\n`: command
+  # substitution `notes=$(jq ...)` strips trailing newlines from the
+  # captured output, so the previous `--arg notes` path silently truncated
+  # upstream notes that ended in a newline (PRRT_kwDOSi_O686t9dul). Mirror
+  # the per-step gate regex pattern used in branch 3.
   def test_post_step_run_block_includes_kind_notes_and_notes_arg
     yaml = File.read(WORKFLOW)
     step_block = yaml.match(
@@ -361,8 +382,8 @@ class EcosystemWatcherTest < Wurk::Test::UnitCase
 
     [
       'kind:\s*"parity-check"',
-      'body:\$notes',
-      '--arg notes'
+      'body:\(\$row\.notes // ""\)',
+      '--argjson row'
     ].each do |needle|
       assert_match(/#{needle}/, step_block[0],
                    "POST step's run block must contain /#{needle}/ so the API " \
