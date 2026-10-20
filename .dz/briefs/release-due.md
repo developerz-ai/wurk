@@ -100,6 +100,8 @@ what a commit changes. `wurk.gemspec` itself is in the window but not in `spec.f
 live there, never in the gem. `README.md` and `LICENSE` ship but are excluded on purpose: prose alone
 never owes a release. Tests, CI, the demo and the benchmarks ship nothing.
 
+The window misses most Dependabot edit sites by construction. Bundler only surfaces through `wurk.gemspec` itself — `Gemfile.lock` is git-ignored and the `Gemfile` is outside the pathspec — so dev-only pins never reach the window. Bun's `frontend/package.json` and `frontend/bun.lock` fall outside the pathspec entirely, so a dashboard bump yields an empty window. The same applies to `.github/workflows/*.yml` and `Dockerfile`: a Dependabot PR there is invisible to the window.
+
 | Window | Do |
 |---|---|
 | Decide git commands cannot run (worktree-only .git, no object store) | unknown — surface the failure, do not collapse the missing-window case to an empty verdict |
@@ -114,10 +116,25 @@ subject → minor; anything else → patch.
 
 ## The ask, when due
 
-1. **Pre-flight guard (gh-capable lane only).** The lane running this brief MUST be a `gh`-capable execution surface — the only surface eligible to file a `Release <next>` ask. Verify capability with `gh auth status`: no `gh` binary, or a non-zero exit, means the lane is not gh-capable, and a lane without `gh` MUST skip this ask entirely. Once eligible, retrieve every open title from BOTH lists — `gh api --paginate "repos/developerz-ai/wurk/issues?state=open" | jq -r '.[] | select(.pull_request == null) | .title'` and `gh api --paginate "repos/developerz-ai/wurk/pulls?state=open" | jq -r '.[].title'`. The list commands `gh issue list` and `gh pr list` reject `--paginate` outright, so a paginated list call would abort on the very flag meant to cover the long tail of open titles; `gh api --paginate` follows the API's link headers through every page so the title guard sees every open issue and PR, not just the newest 30, and is required here, not optional. (The `.pull_request == null` filter on the issues endpoint matches what `gh issue list` returned: GitHub's `/issues` route returns pull requests alongside issues, while `gh issue list` excluded them.) With every page covered, if any title matches `^Release|^release:`, MUST skip the Release ask (standing prohibition, line 127 below — never file a second ask while one titled `Release …` is open).
+1. **Pre-flight guard (gh-capable lane only).** The lane running this brief MUST be a `gh`-capable execution surface — the only surface eligible to file a `Release <next>` ask. Verify capability with `gh auth status`: no `gh` binary, or a non-zero exit, means the lane is not gh-capable, and a lane without `gh` MUST skip this ask entirely. Once eligible, retrieve every open title from BOTH lists — `gh api --paginate "repos/developerz-ai/wurk/issues?state=open" | jq -r '.[] | select(.pull_request == null) | .title'` and `gh api --paginate "repos/developerz-ai/wurk/pulls?state=open" | jq -r '.[].title'`. The list commands `gh issue list` and `gh pr list` reject `--paginate` outright, so a paginated list call would abort on the very flag meant to cover the long tail of open titles; `gh api --paginate` follows the API's link headers through every page so the title guard sees every open issue and PR, not just the newest 30, and is required here, not optional. (The `.pull_request == null` filter on the issues endpoint matches what `gh issue list` returned: GitHub's `/issues` route returns pull requests alongside issues, while `gh issue list` excluded them.) With every page covered, if any title matches `^Release|^release:`, MUST skip the Release ask (standing prohibition, line 144 below — never file a second ask while one titled `Release …` is open).
 2. Re-check the window on fresh `main`; still due, or stop.
-3. `## [Unreleased]` empty (a Dependabot-only window)? Add a `### Changed` line per bumped runtime
-   dependency first.
+3. `## [Unreleased]` empty? Read the Dependabot PRs merged in the `$last..main`
+   window only — the same window the Decide block walks, and nothing older.
+   Bound the call by date, because `--state merged` alone is not a window: with
+   no time or ref bound it returns the repo's whole merged history, so the
+   reader would owe `### Changed` lines for gemspec bumps that shipped in
+   earlier releases. Take `$last_date` from the release verified in the Decide
+   block (`gh release view "$last" --json publishedAt -q .publishedAt`) and run
+   `gh pr list --app dependabot --state merged --search "merged:>=$last_date"`
+   (or an equivalent PR-list call carrying the same bound) — a bound that names
+   `$last..main`, never the repo's full merged history. Note that
+   ecosystem-bump conclusions do NOT come from the Decide window, which is empty
+   for Dependabot edits by construction (the Decide path filter excludes most
+   Dependabot edit sites, so the window cannot see them). For each in-window
+   merged Dependabot PR, record ecosystem + target file. Owe a `### Changed`
+   line only when an in-window merged PR touched `wurk.gemspec`; other
+   ecosystems (Gemfile dev pins, bun's `frontend/package.json` + `bun.lock`,
+   github-actions, docker) owe nothing.
 4. `RELEASE.md` → *Cutting a release*: bump `lib/wurk/version.rb`, `bundle exec rake
    release:relock_demo`, move `[Unreleased]` under `## [<next>] - <today>`, `bin/check`.
 5. One PR, `release: <next>`, nothing else in it. It merges on green like any PR.
