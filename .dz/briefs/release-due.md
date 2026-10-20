@@ -9,8 +9,7 @@ is `RELEASE.md`; this brief only decides *when*.
 ```bash
 # Local tags may be stale; resolve $last via the GitHub API for the canonical value,
 # then verify the ref, the release, and the diff window against main.
-# $last currently resolves to v1.8.0.
-last=$(gh api repos/developerz-ai/wurk/git/matching-refs/tags/ \
+last=$(gh api repos/developerz-ai/wurk/git/matching-refs/tags/ --paginate \
   | jq -r '.[] | select(.ref | startswith("refs/tags/v")) | .ref | sub("^refs/tags/"; "")' \
   | sort -V \
   | tail -1)

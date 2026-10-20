@@ -381,6 +381,39 @@ class ReleaseDueBriefTest < Minitest::Test
     end
   end
 
+  def test_matching_refs_tags_call_paginates
+    # `gh api` paginates only with --paginate; a repo past the page-1
+    # tag cap resolves $last against only the first page and `tail -1`
+    # lands on whatever that page happens to end with. The Day loop
+    # relies on $last being the canonical latest, so the flag is the
+    # guard against a silently stale $last.
+    block = matching_refs_tags_block
+
+    refute_nil block,
+               'expected a `gh api .../git/matching-refs/tags/` call in ' \
+               '.dz/briefs/release-due.md to gate against a stale $last'
+
+    assert_includes block, '--paginate',
+                    'the matching-refs/tags gh api call must carry --paginate so ' \
+                    'a tag-heavy repo does not silently resolve $last to a stale ' \
+                    'first-page tag'
+  end
+
+  def test_no_hardcoded_last_resolves_prose
+    # A `$last (currently) resolves to vX.Y.Z` line ages the moment a
+    # release ships; the canonical $last resolution lives in the gh api
+    # call above it, not in a stale version constant. Pin the absence
+    # so future edits cannot reintroduce the practice.
+    offenders = @text.lines.each_with_index.filter_map do |line, idx|
+      idx if line.match?(/\$last\b[^\n]*\bresolves?\s+to\s+v\d+\.\d+\.\d+/)
+    end
+
+    assert_empty offenders,
+                 'the brief must not hard-code `$last (currently) resolves to vX.Y.Z`; ' \
+                 'offending line numbers: ' +
+                 (offenders.empty? ? 'none' : offenders.map { |i| "L#{i + 1}" }.join(', '))
+  end
+
   private
 
   # The per-commit filter is the `jq -r '...'` invocation immediately after
@@ -687,5 +720,17 @@ class ReleaseDueBriefTest < Minitest::Test
 
   def table_line?(line_no)
     find_table_line_numbers.include?(line_no)
+  end
+
+  def matching_refs_tags_block
+    lines = @text.lines
+    start_idx = lines.index { |l| l.include?('matching-refs/tags') }
+    return nil unless start_idx
+
+    # Collect the backslash-continued `last=$(gh api ...)` block up to
+    # the `)` that closes the command substitution, so a later
+    # `gh api .../git/ref/tags/$last` does not have its flags credited
+    # to the matching-refs call.
+    lines.drop(start_idx).take_while { |l| !l.rstrip.end_with?(')') }.join
   end
 end
