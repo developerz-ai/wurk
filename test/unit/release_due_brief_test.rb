@@ -327,6 +327,63 @@ class ReleaseDueBriefTest < Minitest::Test
     )
   end
 
+  # The window's RIGHT bound is `origin/main`, and nothing else in the Decide
+  # block updates refs/remotes/origin/main — so without a fetch that moves
+  # refs/heads/main onto it, the right bound is whatever the clone last
+  # fetched. Commits merged since then are invisible, every git command still
+  # succeeds, and the window reads empty: a release that is due is reported as
+  # "nothing" with no error anywhere to notice. Position, not presence, is
+  # what this test pins — a fetch placed after the `git log`, or a `git
+  # describe` that ran before it, leaves the same stale right bound while
+  # satisfying every other assertion in this file.
+  def test_main_fetch_precedes_describe_and_the_log_window
+    decide_block = extract_decide_block
+
+    fetch_at = decide_block.index(%r{^git fetch[^\n]*'\+refs/heads/main:refs/remotes/origin/main'})
+
+    refute_nil fetch_at,
+               'the local fast path must fetch `main` with an explicit ' \
+               "'+refs/heads/main:refs/remotes/origin/main' refspec; no other " \
+               'command in the Decide block updates refs/remotes/origin/main, so ' \
+               "without it the window's right bound stays at whatever the clone " \
+               'last fetched and merged commits are invisible'
+
+    describe_at = decide_block.index(/^local_last=\$\(git describe\b/)
+
+    refute_nil describe_at,
+               'the local fast path must still resolve the last tag locally with ' \
+               '`git describe ... origin/main`'
+
+    log_at = decide_block.index(/^git log\b/)
+
+    refute_nil log_at,
+               'the local fast path must still window with `git log "$last"..origin/main`'
+
+    assert_operator fetch_at, :<, describe_at,
+                    'the `origin/main` fetch must run BEFORE `git describe`, which ' \
+                    'reads the very ref the fetch refreshes'
+
+    assert_operator fetch_at, :<, log_at,
+                    'the `origin/main` fetch must run BEFORE the `git log "$last"..origin/main` ' \
+                    'window, or the right bound is stale and the window reads empty'
+  end
+
+  # The text-pattern test above cannot tell a GUARDED fetch from a bare one:
+  # with a bare `git fetch`, a failing fetch leaves the block to run `git log`
+  # against whatever origin/main the clone already had — the empty-window
+  # "nothing" verdict — with only git's own error text to notice. Drive the
+  # real block against a `git` stub that fails `fetch` and still writes the
+  # fast-path marker on `describe`: the abort must land before that runs.
+  def test_main_fetch_failure_aborts_decision_before_local_fast_path
+    assert_decide_aborts_before_local_fast_path(
+      stub_gh: empty_compare_stub_gh,
+      stub_git: fetch_failing_stub_git,
+      failing_curl: 'the `git fetch` stub fails',
+      failure_message: 'a failing `git fetch` in the local fast path must abort the Decide script',
+      expected_stderr: 'ERROR: fetching'
+    )
+  end
+
   # Empty Compare response (`{"commits":[]}`) must surface as a clean
   # empty window — the loop is fed by a here-string `<<<"$compare_shas"`,
   # which still supplies one blank line for an empty variable, and `read`
@@ -579,6 +636,25 @@ class ReleaseDueBriefTest < Minitest::Test
   SHELL
   private_constant :STUB_GIT
 
+  # Stub `git` whose `fetch` invocation always fails. `describe` still writes
+  # the fast-path marker, so the abort test can tell "the fetch failed and the
+  # script stopped" from "the fetch failed and the script windowed a stale
+  # origin/main anyway". The stderr line deliberately avoids the word ERROR:
+  # the assertion on the brief's diagnostic must not be satisfiable by this
+  # stub's own noise.
+  FETCH_FAILING_STUB_GIT = <<~'SHELL'
+    #!/usr/bin/env bash
+    if [[ "$1" == "fetch" ]]; then
+      printf 'stub git fetch: failing on purpose\n' >&2
+      exit 1
+    fi
+    if [[ "$1" == "describe" ]]; then
+      printf 'LOCAL_FAST_PATH_REACHED\n' > "$WURK_TEST_FAST_PATH_MARKER"
+    fi
+    exit 0
+  SHELL
+  private_constant :FETCH_FAILING_STUB_GIT
+
   def per_commit_failing_stub_gh
     PER_COMMIT_FAILING_STUB_GH
   end
@@ -591,10 +667,15 @@ class ReleaseDueBriefTest < Minitest::Test
     EMPTY_COMPARE_STUB_GH
   end
 
-  # End-to-end execution helper. Writes `stub_gh` and the marker-writing
-  # `git` stub into a temp bin dir, prepends that bin dir to PATH, and
-  # runs the Decide block as a stand-alone Bash script. The script is
-  # NOT prefixed with `set -euo pipefail` — the brief does not enable
+  def fetch_failing_stub_git
+    FETCH_FAILING_STUB_GIT
+  end
+
+  # End-to-end execution helper. Writes `stub_gh` and `stub_git` (the
+  # marker-writing `git` stub unless a caller substitutes its own) into a temp
+  # bin dir, prepends that bin dir to PATH, and runs the Decide block as a
+  # stand-alone Bash script. The script is NOT prefixed with
+  # `set -euo pipefail` — the brief does not enable
   # any shell options, and injecting them would mask a regression that
   # pipes the SHA stream into the loop (the inner pipeline's `exit 1`
   # would propagate via `pipefail`, hiding the fact that the subshell
@@ -603,7 +684,7 @@ class ReleaseDueBriefTest < Minitest::Test
   # stderr, exit status, and the local-fast-path marker file inside
   # the same `Dir.mktmpdir` scope (the marker is auto-cleaned at block
   # end, so post-yield marker checks would see a deleted file).
-  def run_decide_under_stubs(stub_gh)
+  def run_decide_under_stubs(stub_gh, stub_git: STUB_GIT)
     decide_block = extract_decide_block
     skip 'no Decide block' if decide_block.empty?
 
@@ -614,7 +695,7 @@ class ReleaseDueBriefTest < Minitest::Test
       gh_path = File.join(bin_dir, 'gh')
       git_path = File.join(bin_dir, 'git')
       File.write(gh_path, stub_gh)
-      File.write(git_path, STUB_GIT)
+      File.write(git_path, stub_git)
       File.chmod(0o755, gh_path, git_path)
 
       script_path = File.join(tmpdir, 'decide.sh')
@@ -637,8 +718,9 @@ class ReleaseDueBriefTest < Minitest::Test
   # unrelated early exit (a regression that drops the abort path
   # entirely, or one where a downstream step fails) from satisfying
   # `refute status.success?` — only the abort path prints this line.
-  def assert_decide_aborts_before_local_fast_path(stub_gh:, failing_curl:, failure_message:, expected_stderr:)
-    run_decide_under_stubs(stub_gh) do |(out, err, status), tmpdir|
+  def assert_decide_aborts_before_local_fast_path(stub_gh:, failing_curl:, failure_message:, expected_stderr:,
+                                                  stub_git: STUB_GIT)
+    run_decide_under_stubs(stub_gh, stub_git: stub_git) do |(out, err, status), tmpdir|
       fast_path_marker = File.join(tmpdir, 'local_fast_path_reached')
 
       refute_predicate status, :success?,
@@ -654,9 +736,9 @@ class ReleaseDueBriefTest < Minitest::Test
 
       refute fast_path_reached?(fast_path_marker),
              "#{failure_message} before the local fast path; " \
-             'the stub `git describe` was reached, which means the ' \
-             'while loop ran in a subshell and its `exit 1` did not ' \
-             'propagate to the Decide script'
+             'the stub `git describe` was reached, which means the script ran on ' \
+             'past its abort — the failure was confined to a subshell or pipeline ' \
+             'and its `exit 1` did not propagate to the Decide script'
     end
   end
 
