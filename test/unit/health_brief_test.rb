@@ -9,9 +9,11 @@ require 'tmpdir'
 # green, `the last release published`, `topology and ecosystem lanes`) the way
 # release_due_brief_test.rb gates release-due.md: these commands run unattended
 # on a schedule, and a verdict they cannot actually establish must never be
-# printed as a green one. Three properties, all pinned by RUNNING the extracted
-# command cells as bash against a PATH-stubbed `gh` — a substring match over the
-# brief's text would accept a guard that never fires:
+# printed as a green one. Four properties — the first three all pinned by
+# RUNNING the extracted command cells as bash against a PATH-stubbed `gh` (a
+# substring match over the brief's text would accept a guard that never fires),
+# the fourth pinned byte-for-byte on the brief's text plus by running the
+# extracted issues lookup:
 #
 #   1. FAIL CLOSED. `gh api .../actions/runs/<id>/jobs` is the only thing
 #      between a `gh` error and a false green: with the read empty the row falls
@@ -25,6 +27,11 @@ require 'tmpdir'
 #      success + `release` skipped and names that a no-op. A run still
 #      executing (`conclusion=null`) is reported in flight and graded by
 #      nobody.
+#   4. The filing rule's ask dedupe is executable and mirrors release-due.md:
+#      the paragraph carries the byte-identical issues lookup, the lookup
+#      really drops PR entries, and ask titles are stable per signal — exact
+#      equality on a title that embeds the run's headSha or version can never
+#      hit, so the ask would be re-filed on every checkup.
 #
 # Reads the brief and runs its own extracted commands; no network, no Redis,
 # no shared state.
@@ -33,6 +40,7 @@ class HealthBriefTest < Minitest::Test
 
   ROOT = File.expand_path('../..', __dir__)
   BRIEF = File.join(ROOT, '.dz', 'briefs', 'health.md')
+  RELEASE_DUE_BRIEF = File.join(ROOT, '.dz', 'briefs', 'release-due.md')
   RELEASE_WORKFLOW = File.join(ROOT, '.github', 'workflows', 'release.yml')
 
   SHA_DUP        = 'd' * 40
@@ -397,6 +405,77 @@ class HealthBriefTest < Minitest::Test
                     'release.yml:80-90 must be where the release job reads the proceed signal'
   end
 
+  def test_filing_paragraph_carries_the_release_due_issues_lookup
+    para = filing_paragraph
+
+    assert_includes para, lookup_command,
+                    'the filing paragraph must name the issues lookup verbatim, in one ' \
+                    "backtick span; got #{para.inspect}"
+
+    release_text = File.read(RELEASE_DUE_BRIEF)
+
+    assert_includes release_text, "`#{lookup_command}`",
+                    'health.md must dedupe against the byte-identical issues lookup ' \
+                    'release-due.md runs: two briefs deduping against different lists means ' \
+                    "one lane's guard never sees what the other filed"
+  end
+
+  def test_issues_lookup_drops_pull_requests_from_the_open_list
+    # GitHub's /issues route returns pull requests alongside issues, so the
+    # `.pull_request == null` filter is load-bearing: without it a PR title
+    # would read as a filed ask and suppress one nobody has filed. Pinned by
+    # RUNNING the extracted command against a stubbed gh, not by substring.
+    issues = JSON.generate(
+      [{ 'number' => 7, 'title' => 'main is red' },
+       { 'number' => 8, 'title' => 'swarm: stop leaking parent sockets on fork',
+         'pull_request' => { 'url' => 'https://api.github.com/repos/developerz-ai/wurk/pulls/8' } }]
+    )
+
+    out, err, status = run_command(lookup_command, jobs_fail: false) do |fixtures|
+      write_fixture(fixtures, 'issues.json', issues)
+    end
+
+    assert_predicate status, :success?,
+                     'the dedupe lookup must run cleanly against the stubbed gh ' \
+                     "(status=#{status.inspect}, stdout=#{out.inspect}, stderr=#{err.inspect})"
+
+    assert_includes out, 'main is red',
+                    'an open issue titled exactly like the signal must come back from the ' \
+                    'lookup, or a real ask could never be deduped against it; ' \
+                    "got stdout=#{out.inspect}, stderr=#{err.inspect}"
+
+    refute_includes out, 'swarm: stop leaking parent sockets on fork',
+                    'the entry carrying a pull_request key is a PR, not an issue: the filter ' \
+                    'must drop it or its title would stand in for an ask that was never filed; ' \
+                    "got stdout=#{out.inspect}"
+  end
+
+  def test_ask_titles_are_stable_per_signal
+    para = filing_paragraph
+
+    ['`main is red`', '`main is green only via a dup\'d push`',
+     '`release did not publish`'].each do |title|
+      assert_includes para, title,
+                      'the dedupe match is exact equality on the title, so every title the ' \
+                      'brief gives must be the signal\'s stable name, identical on every ' \
+                      "occurrence; the filing paragraph is missing #{title}"
+    end
+
+    ['`main is red at <sha>`',
+     '`main is green only via a dup\'d push at <sha>`',
+     '`release <v> did not publish`'].each do |old_title|
+      refute_includes para, old_title,
+                      "#{old_title} embeds what changes run to run, so an exact-match dedupe " \
+                      'against it can never hit and the ask is re-filed on every checkup'
+    end
+
+    %w[<sha> <v>].each do |token|
+      refute_includes para, token,
+                      "#{token} is run-specific and may name no part of a title: refer to it " \
+                      'in prose (headSha, version) and carry the value in the body'
+    end
+  end
+
   private
 
   # The brief's step-3 bullet — the one reading `preflight` success + `release`
@@ -463,6 +542,26 @@ class HealthBriefTest < Minitest::Test
     raise "no closing backtick for the Command cell on the #{signal.inspect} row" if close_at.nil?
 
     row[(open_at + 1)...close_at].gsub('\\|', '|')
+  end
+
+  # The brief's filing paragraph — the one saying when a signal files an ask
+  # and how the open-issue dedupe runs. One paragraph, so a title assertion
+  # cannot be satisfied by a mention somewhere else in the file.
+  def filing_paragraph
+    para = @text.split(/\n\s*\n/).find { |candidate| candidate.include?('file one ask') }
+    raise 'health.md has no filing paragraph saying when to file one ask' if para.nil?
+
+    para
+  end
+
+  # The backticked issues lookup the filing paragraph requires before any ask
+  # is filed — the dedupe guard's executable core, extracted so the tests can
+  # RUN it rather than trust its spelling.
+  def lookup_command
+    command = @text[/`([^`]*issues\?state=open[^`]*)`/, 1]
+    raise 'health.md carries no backticked issues?state=open lookup' if command.nil?
+
+    command
   end
 
   def run_row8(jobs:, conclusion:, sha:, jobs_fail: false)
@@ -532,6 +631,9 @@ class HealthBriefTest < Minitest::Test
 
   # Stub `gh`. Every answer is read from the fixture dir the test wrote, so
   # the brief's command runs against a fixed jobs list instead of the API.
+  # The issues lookup is answered BEFORE the failure gate below: it is not the
+  # jobs call, and jobs-fail mode exists to break exactly one call, not the
+  # dedupe lookup beside it.
   # `WURK_TEST_JOBS_FAIL=1` makes ONLY the jobs call fail, leaving the run
   # list readable — that is the exact shape of the false green this file
   # pins: a `conclusion` the brief can see, and a jobs list it cannot.
@@ -559,6 +661,18 @@ class HealthBriefTest < Minitest::Test
         printf 'wurk-owner/wurk\n'
         ;;
       api)
+        for arg in "$@"; do
+          case "$arg" in
+            *"issues?state=open"*)
+              if [ ! -s "$fixdir/issues.json" ]; then
+                printf 'stub gh api: no issues fixture for %s\n' "$arg" >&2
+                exit 1
+              fi
+              cat "$fixdir/issues.json"
+              exit 0
+              ;;
+          esac
+        done
         if [ "$WURK_TEST_JOBS_FAIL" = "1" ]; then
           printf 'stub gh api: the jobs call fails on purpose (rate limited or 4xx)\n' >&2
           exit 1

@@ -35,8 +35,9 @@ still reports `conclusion=success` with nothing having run, so rows 8 and 12 rea
    run grades on its own `conclusion`, which is what actually explains why nothing ran.
 3. **Otherwise grade on `conclusion`**, printing `<conclusion> <sha>`.
 
-A dup'd push grades **Unhealthy whatever its `conclusion`**, and the ask must name the dup'd
-`headSha`: that coverage came from the PR run, so main has no fresh signal of its own. Row 12 runs
+A dup'd push grades **Unhealthy whatever its `conclusion`**, and the ask's body must name the dup'd
+`headSha` — the title stays stable, so the body is where the run gets identified: that coverage
+came from the PR run, so main has no fresh signal of its own. Row 12 runs
 the same three-step read over both workflows and names the offending one. Keep rows 8 and 12 on one
 read shape — dropping the jobs call reopens a `main` that certifies green having run no tests at all,
 and dropping the `detect` check misreads a failed run as a dup'd one.
@@ -63,25 +64,31 @@ cannot be read directly, and its cheapest exit is a run that publishes nothing a
 4. **Otherwise grade on `conclusion`**, printing `<conclusion> <sha>`.
 
 A no-op is **not Unhealthy and files no ask**: proceed=false means that version is already live on
-RubyGems, so nothing was owed. Take `<v>` for an ask title from `lib/wurk/version.rb`, not from the
-shell; row 10 owns the RubyGems cross-check. A run that genuinely went red stays Unhealthy and grades
+RubyGems, so nothing was owed. A red release's ask carries the version in its body, still taken
+from `lib/wurk/version.rb`, never from the shell; row 10 owns the RubyGems cross-check. A run that
+genuinely went red stays Unhealthy and grades
 on its own `conclusion` — `release` failed, or `preflight` failed the non-main refusal
 (release.yml:55-60). That second case skips every dependent through `needs:` and comes back with the
 same all-skipped list a no-op produces, which is why step 3 requires `preflight` itself to have
 concluded `success`.
 
-For each unhealthy signal, file one ask unless an open issue already names it. The title names the
-signal (`main is red at <sha>`, `main is green only via a dup'd push at <sha>`,
-`release <v> did not publish`), and the body carries the command, its output and the run URL. A red
-`main` comes first: nothing releases from it. Recovery is `RELEASE.md`'s *If a release
-fails*. For a gem-less release, follow that runbook's *Recovering a gem-less release*:
-`gh release delete vX.Y.Z --cleanup-tag --yes`, then `git fetch --prune-tags`,
-then let CI re-cut the tag from the version bump. That cleanup is the sanctioned
-path here, not a workaround — never manually re-tag over an existing `vX.Y.Z`
-(force-moving a tag to a different commit), never `gem push` from a workstation as a
-replacement for the CI publish lane, and never force a version already on
-RubyGems down the publish lane a second time; the only version number that may
-be published for a given `<v>` is the one CI published. Break-glass hand-cutting
-a release when CI is unavailable, as RELEASE.md's *Break-glass manual publish*
-prescribes, is not re-tagging or force-moving — it runs only because the gem has
-already shipped and the lane can no longer act.
+For each unhealthy signal, file one ask unless an open issue already names it. Filing an ask
+requires FIRST running, exactly, `gh api --paginate "repos/developerz-ai/wurk/issues?state=open" | jq -r '.[] | select(.pull_request == null) | .title'`
+— the same lookup release-due's ask guard runs, for the reasons argued there: `gh issue list`
+rejects `--paginate` and truncates at 30, and the `/issues` route returns pull requests alongside
+issues, hence the filter. If any returned title equals the signal's title exactly, the ask already
+exists — never file a second ask while one with this title is open. Because the dedupe match is
+exact equality on the title, the title is the signal's stable name, identical on every occurrence
+(`main is red`, `main is green only via a dup'd push`, `release did not publish`); nothing that
+changes run to run may appear in it. The body carries the command, its output, the run URL, the
+headSha and the version. A red `main` comes first: nothing releases from it. Recovery is
+`RELEASE.md`'s *If a release fails*. For a gem-less release, follow that runbook's *Recovering a
+gem-less release*: `gh release delete vX.Y.Z --cleanup-tag --yes`, then `git fetch --prune-tags`,
+then let CI re-cut the tag from the version bump. That cleanup is the sanctioned path here, not a
+workaround — never manually re-tag over an existing `vX.Y.Z` (force-moving a tag to a different
+commit), never `gem push` from a workstation as a replacement for the CI publish lane, and never
+force a version already on RubyGems down the publish lane a second time; the only version number
+that may be published for a given release is the one CI published. Break-glass hand-cutting a
+release when CI is unavailable, as RELEASE.md's *Break-glass manual publish* prescribes, is not
+re-tagging or force-moving — it runs only because the gem has already shipped and the lane can no
+longer act.
