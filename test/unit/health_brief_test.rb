@@ -5,13 +5,13 @@ require 'json'
 require 'open3'
 require 'tmpdir'
 
-# Gates the three job-list-aware rows of .dz/briefs/health.md (`main` is
-# green, `the last release published`, `topology and ecosystem lanes`) the way
-# release_due_brief_test.rb gates release-due.md: these commands run unattended
-# on a schedule, and a verdict they cannot actually establish must never be
-# printed as a green one. Three properties, all pinned by RUNNING the extracted
-# command cells as bash against a PATH-stubbed `gh` — a substring match over the
-# brief's text would accept a guard that never fires:
+# Gates the four graded rows of .dz/briefs/health.md (`main` is green, `the
+# last release published`, `topology and ecosystem lanes`, `Dependabot is not
+# stuck`) the way release_due_brief_test.rb gates release-due.md: these
+# commands run unattended on a schedule, and a verdict they cannot actually
+# establish must never be printed as a green one. Four properties, all pinned by
+# RUNNING the extracted command cells as bash against a PATH-stubbed `gh` — a
+# substring match over the brief's text would accept a guard that never fires:
 #
 #   1. FAIL CLOSED. `gh api .../actions/runs/<id>/jobs` is the only thing
 #      between a `gh` error and a false green: with the read empty the row falls
@@ -25,6 +25,13 @@ require 'tmpdir'
 #      success + `release` skipped and names that a no-op. A run still
 #      executing (`conclusion=null`) is reported in flight and graded by
 #      nobody.
+#   4. Row 13 reads the shape `gh` actually emits. `--json statusCheckRollup`
+#      is a LIST of CheckRun/StatusContext entries to roll up, never a state on
+#      the PR, so a fixture shaped `{"state": "FAILURE"}` agrees with a read the
+#      CLI cannot satisfy and grades a 35-day-old failing PR as "" — the row
+#      then prints nothing and reports no stuck dependabot PR, ever. Every
+#      fixture below is CLI-shaped for that reason: it is the only thing that
+#      lets the stuck assertions fail.
 #
 # Reads the brief and runs its own extracted commands; no network, no Redis,
 # no shared state.
@@ -269,14 +276,16 @@ class HealthBriefTest < Minitest::Test
   # derives each budget from dependabot.yml's own `schedule.interval` and
   # bundler's `cooldown.default-days`, plus a 7-day margin: 28d bundler
   # (7 weekly + 14 cooldown + 7), 14d bun (7+0+7), 37d github-actions
-  # (30+0+7), 37d docker (30+0+7). A PR whose `statusCheckRollup.state` is
-  # FAILURE and whose age in days is strictly greater than its budget IS
-  # stuck; a FAILURE younger than its budget is not (the docker case in
-  # dependabot.yml:63-72 is the headline example); a SUCCESS or PENDING is
-  # never stuck. These three tests pin the three properties one at a time,
-  # each with a single PR whose title is shaped for one ecosystem.
+  # (30+0+7), 37d docker (30+0+7). A PR whose statusCheckRollup — the LIST of
+  # CheckRun/StatusContext entries `gh` emits, rolled up as health.md's step 3
+  # reads it — grades FAILURE, and whose age in days is strictly greater than
+  # its budget, IS stuck; a red rollup younger than its budget is not (the
+  # docker case in dependabot.yml:63-72 is the headline example); SUCCESS or
+  # PENDING is never stuck. The fixtures are CLI-shaped on purpose: shaped
+  # `{"state": ...}` they agreed with a rollup read off the PR that `gh` never
+  # sends, so these tests passed while the row reported nothing at all.
   def test_monthly_ecosystem_pr_aged_under_budget_is_not_stuck
-    # github-actions: 30-day-old PR with FAILURE. Budget is 37d
+    # github-actions: 30-day-old PR with a failed check run. Budget is 37d
     # (monthly interval + 7d margin). 30 < 37, so it is red but young, and
     # MUST NOT be reported stuck.
     now = Time.now.utc
@@ -285,7 +294,7 @@ class HealthBriefTest < Minitest::Test
       'title' => 'Bump actions/checkout from 4 to 5 in /',
       'createdAt' => (now - (30 * 86_400)).iso8601,
       'isDraft' => false,
-      'statusCheckRollup' => { 'state' => 'FAILURE' }
+      'statusCheckRollup' => [check_run('FAILURE')]
     }
     out, _err, status = run_row13(prs: [pr])
 
@@ -318,7 +327,7 @@ class HealthBriefTest < Minitest::Test
       'title' => 'Bump oven/bun from 1.4.1 to 1.4.2 in /',
       'createdAt' => (now - (5 * 86_400)).iso8601,
       'isDraft' => false,
-      'statusCheckRollup' => { 'state' => 'FAILURE' }
+      'statusCheckRollup' => [check_run('FAILURE')]
     }
     out, _err, status = run_row13(prs: [pr])
 
@@ -334,18 +343,18 @@ class HealthBriefTest < Minitest::Test
   end
 
   def test_pr_past_ecosystem_budget_and_red_is_reported_stuck
-    # bundler: 35-day-old PR (FAILURE). Budget is 28d
+    # bundler: 35-day-old PR whose check run concluded FAILURE. Budget is 28d
     # (weekly interval + 14d cooldown + 7d margin, dependabot.yml:27-30). The
     # PR has run past its entire grace window — it IS stuck. The row must
     # print one `Unhealthy: Dependabot is stuck on #<n>` line naming the
-    # number, so the ask can link the PR (cf. health.md:82-86 in the brief).
+    # number, so the ask can link the PR (cf. health.md:103-107).
     now = Time.now.utc
     pr = {
       'number' => 7203,
       'title' => 'Bump rubocop from 2.0.0 to 2.1.0 in /',
       'createdAt' => (now - (35 * 86_400)).iso8601,
       'isDraft' => false,
-      'statusCheckRollup' => { 'state' => 'FAILURE' }
+      'statusCheckRollup' => [check_run('FAILURE')]
     }
     out, _err, status = run_row13(prs: [pr])
 
@@ -379,7 +388,7 @@ class HealthBriefTest < Minitest::Test
       'title' => 'Bump @types/node from 20.0.0 to 20.1.0 in /frontend',
       'createdAt' => (now - (20 * 86_400)).iso8601,
       'isDraft' => false,
-      'statusCheckRollup' => { 'state' => 'FAILURE' }
+      'statusCheckRollup' => [check_run('FAILURE')]
     }
     out, _err, status = run_row13(prs: [stuck])
 
@@ -406,7 +415,7 @@ class HealthBriefTest < Minitest::Test
       'title' => 'Bump @types/node from 20.0.0 to 20.1.0 in /frontend',
       'createdAt' => (now - (5 * 86_400)).iso8601,
       'isDraft' => false,
-      'statusCheckRollup' => { 'state' => 'FAILURE' }
+      'statusCheckRollup' => [check_run('FAILURE')]
     }
     out, _err, status = run_row13(prs: [pr])
 
@@ -432,7 +441,7 @@ class HealthBriefTest < Minitest::Test
       'title' => 'Bump the github-actions group with 4 updates',
       'createdAt' => (now - (40 * 86_400)).iso8601,
       'isDraft' => false,
-      'statusCheckRollup' => { 'state' => 'FAILURE' }
+      'statusCheckRollup' => [check_run('FAILURE')]
     }
     out, _err, status = run_row13(prs: [pr])
 
@@ -450,17 +459,18 @@ class HealthBriefTest < Minitest::Test
   end
 
   def test_past_budget_but_green_pr_is_not_stuck
-    # health.md:80's first half: a PR past its budget that is SUCCESS is not
-    # stuck — an old green is just an old human-pending merge, not a regression
-    # dependabot can fix on its own. This is the same 35d/28d bundler shape as
-    # the stuck test, differing only in state.
+    # health.md:101's first half: a PR past its budget whose checks all
+    # concluded SUCCESS is not stuck — an old green is just an old
+    # human-pending merge, not a regression dependabot can fix on its own.
+    # This is the same 35d/28d bundler shape as the stuck test, differing
+    # only in what the rollup grades.
     now = Time.now.utc
     pr = {
       'number' => 7307,
       'title' => 'Bump rubocop from 2.0.0 to 2.1.0 in /',
       'createdAt' => (now - (35 * 86_400)).iso8601,
       'isDraft' => false,
-      'statusCheckRollup' => { 'state' => 'SUCCESS' }
+      'statusCheckRollup' => [check_run('SUCCESS')]
     }
     out, _err, status = run_row13(prs: [pr])
 
@@ -468,21 +478,25 @@ class HealthBriefTest < Minitest::Test
                      "row 13's command must run cleanly (status=#{status.inspect})"
 
     assert_equal [], out.lines.map(&:chomp),
-                 'a past-budget PR whose checks are SUCCESS is an old green pending ' \
-                 'merge, not stuck (health.md:80); the row must print nothing ' \
+                 'a past-budget PR whose checks all concluded SUCCESS is an old green ' \
+                 'pending merge, not stuck (health.md:101); the row must print nothing ' \
                  "(stdout=#{out.inspect})"
   end
 
   def test_past_budget_but_pending_pr_is_not_stuck
-    # health.md:80's second half: a PENDING PR is still in flight, so it is not
-    # stuck either. Same 35d/28d bundler shape, state PENDING.
+    # health.md:101's second half: a rollup that is still PENDING is in flight,
+    # so it is not stuck either. Same 35d/28d bundler shape, one check concluded
+    # and one still running — Actions sends `conclusion: null` for a job in
+    # progress. A rollup that is neither clean nor red must not be graded
+    # FAILURE: that would file an ask on every dependabot PR whose CI happens
+    # to be mid-run.
     now = Time.now.utc
     pr = {
       'number' => 7308,
       'title' => 'Bump rubocop from 2.0.0 to 2.1.0 in /',
       'createdAt' => (now - (35 * 86_400)).iso8601,
       'isDraft' => false,
-      'statusCheckRollup' => { 'state' => 'PENDING' }
+      'statusCheckRollup' => [check_run('SUCCESS'), running_check_run]
     }
     out, _err, status = run_row13(prs: [pr])
 
@@ -490,8 +504,112 @@ class HealthBriefTest < Minitest::Test
                      "row 13's command must run cleanly (status=#{status.inspect})"
 
     assert_equal [], out.lines.map(&:chomp),
-                 'a past-budget PR whose checks are PENDING is still in flight, not ' \
-                 "stuck (health.md:80); the row must print nothing (stdout=#{out.inspect})"
+                 'a past-budget PR with a check still running is in flight, not ' \
+                 "stuck (health.md:101); the row must print nothing (stdout=#{out.inspect})"
+  end
+
+  def test_one_failed_check_makes_the_whole_rollup_red
+    # The shape a rollup read off the PR cannot grade at all: `gh` sends a LIST,
+    # so the entries have to be rolled UP. A green job and a still-running job
+    # alongside one failed commit status is a red PR, and it is 40d into
+    # github-actions' 37d budget — it must print stuck. Reading
+    # `.statusCheckRollup.state` instead of aggregating prints nothing here, and
+    # that is the whole defect: the row reported no stuck PR, ever.
+    now = Time.now.utc
+    pr = {
+      'number' => 7309,
+      'title' => 'Bump the github-actions group with 4 updates',
+      'createdAt' => (now - (40 * 86_400)).iso8601,
+      'isDraft' => false,
+      'statusCheckRollup' => [check_run('SUCCESS'), running_check_run, status_context('FAILURE')]
+    }
+    out, _err, status = run_row13(prs: [pr])
+
+    assert_predicate status, :success?,
+                     "row 13's command must run cleanly (status=#{status.inspect})"
+
+    assert_equal 1, out.lines.size,
+                 "one stuck PR prints one line; got #{out.lines.inspect}"
+
+    stuck = out.lines.map(&:chomp).first
+
+    assert_match(/\AUnhealthy: Dependabot is stuck on #7309\b/, stuck,
+                 'one failed entry makes the whole PR red, however green or ' \
+                 "still-running the rest of the rollup is; got #{out.inspect}")
+
+    assert_match(/\(age 40d > 37d budget for github-actions\)\z/, stuck,
+                 "the ecosystem still comes from the title, not the rollup; got #{stuck.inspect}")
+  end
+
+  def test_a_timed_out_check_counts_as_a_failure
+    # health.md's step-3 failure vocabulary: Actions reports nine CheckRun
+    # conclusions and six of them block a merge as hard as FAILURE. A PR wedged
+    # on a job that kept timing out is exactly the regression this row exists to
+    # notice, so grading for the literal string "FAILURE" is not enough.
+    now = Time.now.utc
+    pr = {
+      'number' => 7311,
+      'title' => 'Bump rubocop from 2.0.0 to 2.1.0 in /',
+      'createdAt' => (now - (35 * 86_400)).iso8601,
+      'isDraft' => false,
+      'statusCheckRollup' => [check_run('SUCCESS'), check_run('TIMED_OUT')]
+    }
+    out, _err, status = run_row13(prs: [pr])
+
+    assert_predicate status, :success?,
+                     "row 13's command must run cleanly (status=#{status.inspect})"
+
+    assert_match(/\AUnhealthy: Dependabot is stuck on #7311\b/, out.lines.map(&:chomp).first.to_s,
+                 'a TIMED_OUT check blocks a merge exactly as hard as FAILURE; ' \
+                 "got #{out.inspect}")
+  end
+
+  def test_non_actions_status_context_failure_is_stuck
+    # The other half of the union: a check from an app outside Actions carries
+    # `state` and no conclusion at all. Reading conclusions alone grades this PR
+    # SUCCESS and never reports it, so the rollup must read both entry types.
+    now = Time.now.utc
+    pr = {
+      'number' => 7312,
+      'title' => 'Bump rubocop from 2.0.0 to 2.1.0 in /',
+      'createdAt' => (now - (35 * 86_400)).iso8601,
+      'isDraft' => false,
+      'statusCheckRollup' => [check_run('SUCCESS'), status_context('ERROR')]
+    }
+    out, _err, status = run_row13(prs: [pr])
+
+    assert_predicate status, :success?,
+                     "row 13's command must run cleanly (status=#{status.inspect})"
+
+    assert_match(/\(age 35d > 28d budget for bundler\)\z/, out.lines.map(&:chomp).first.to_s,
+                 'a StatusContext of ERROR is a failure too; got ' \
+                 "#{out.inspect}")
+  end
+
+  def test_nothing_to_wait_on_is_not_a_failure
+    # SKIPPED and NEUTRAL conclusions decide no merge, and a PR carrying no
+    # checks at all — the empty rollup — has nothing red in it. Both are past
+    # the budget; neither may print stuck.
+    now = Time.now.utc
+    rollups = [[check_run('SUCCESS'), check_run('SKIPPED')], []]
+
+    rollups.each_with_index do |rollup, i|
+      pr = {
+        'number' => 7313 + i,
+        'title' => 'Bump rubocop from 2.0.0 to 2.1.0 in /',
+        'createdAt' => (now - (35 * 86_400)).iso8601,
+        'isDraft' => false,
+        'statusCheckRollup' => rollup
+      }
+      out, _err, status = run_row13(prs: [pr])
+
+      assert_predicate status, :success?,
+                       "row 13's command must run cleanly (status=#{status.inspect})"
+
+      assert_equal [], out.lines.map(&:chomp),
+                   "rollup #{rollup.inspect} has nothing red in it, so the row must " \
+                   "print nothing at 35d (stdout=#{out.inspect})"
+    end
   end
 
   def test_unreadable_dependabot_pr_list_fails_closed
@@ -592,6 +710,32 @@ class HealthBriefTest < Minitest::Test
     JSON.generate('total_count' => jobs.size, 'jobs' => jobs)
   end
 
+  # One `CheckRun` entry exactly as `gh pr list --json statusCheckRollup` emits
+  # it. The rollup is the GraphQL union `StatusCheckRollupContext`, so it
+  # arrives as a LIST of these and of `status_context` entries — never as an
+  # object carrying a `.state` on the PR itself.
+  def check_run(conclusion, status: 'COMPLETED', name: 'test + coverage (latest ruby/rails)')
+    entry = { '__typename' => 'CheckRun', 'name' => name, 'status' => status,
+              'conclusion' => conclusion, 'workflowName' => 'CI',
+              'startedAt' => '2026-01-01T00:00:00Z',
+              'detailsUrl' => 'https://github.com/wurk-owner/wurk/actions/runs/1' }
+    entry['completedAt'] = '2026-01-01T00:04:12Z' if status == 'COMPLETED'
+    entry
+  end
+
+  # Actions sends `conclusion: null` while a job runs — the shape the rollup has
+  # to read as PENDING rather than as a missing verdict.
+  def running_check_run(name: 'lint (rubocop)')
+    check_run(nil, status: 'IN_PROGRESS', name: name)
+  end
+
+  # A check from an app outside Actions: the other half of the union, carrying
+  # `state` and no conclusion.
+  def status_context(state, context: 'verify')
+    { '__typename' => 'StatusContext', 'context' => context, 'state' => state,
+      'targetUrl' => 'https://example.test/checks/1' }
+  end
+
   def write_fixture(dir, name, body)
     File.write(File.join(dir, name), body)
   end
@@ -652,7 +796,8 @@ class HealthBriefTest < Minitest::Test
   # dependabot.yml (28d bundler, 14d bun, 37d github-actions, 37d docker). The
   # stub `gh` answers `gh pr list --app dependabot --json ...` from
   # $WURK_TEST_FIXTURES/dependabot.prs, so the command runs against fixed
-  # fixtures instead of the API. `jobs_fail` is ignored — row 13 does not call
+  # fixtures instead of the API — fixtures shaped like the list `gh` really
+  # emits, rollup included. `jobs_fail` is ignored — row 13 does not call
   # `gh api .../jobs`, so there is no separate failure-shape to pin here.
   def run_row13(prs:, jobs_fail: false)
     run_command(command_cell('Dependabot is not stuck', gh_command: 'gh pr list'), jobs_fail: jobs_fail) do |fixtures|
