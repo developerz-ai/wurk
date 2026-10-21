@@ -10,7 +10,7 @@ so that nobody has to watch it. This brief covers the failures no issue or PR an
 | RubyGems serves `Wurk::VERSION` | `gem list wurk --remote --exact` vs `lib/wurk/version.rb` | equal, or a release run is in flight |
 | the demo deployed | `run=$(gh run list --workflow deploy-demo.yml --limit 1 --json databaseId,headSha,conclusion,url \| jq -c '.[0]'); jq -r '.conclusion + " " + .headSha + " " + .url' <<<"$run"` | `success` |
 | topology and ecosystem lanes | `for wf in topology.yml ecosystem.yml; do run=$(gh run list --workflow $wf --branch main --event push --limit 1 --json databaseId,headSha,conclusion,url \| jq -c '.[0]'); sha=$(jq -r .headSha <<<"$run"); url=$(jq -r .url <<<"$run"); v=$(gh api "repos/$(gh repo view --json nameWithOwner -q .nameWithOwner)/actions/runs/$(jq -r .databaseId <<<"$run")/jobs" \| jq -r '[.jobs[]?] as $all \| [$all[] \| select(.name != "detect changed paths" and .name != "sidekiq release watcher")] as $g \| [$all[] \| select(.name == "detect changed paths")] as $d \| if ($all \| length) == 0 then "unreadable" elif ($d \| length) == 1 and ($d[0].conclusion == "success") and ($g \| length) > 0 and all($g[]; .conclusion == "skipped") then "dup" else "graded" end' 2>/dev/null); case "$v" in dup) echo "Unhealthy: $wf at $sha is a dup'd push run ($url)" ;; graded) echo "$wf $(jq -r .conclusion <<<"$run") $sha $url" ;; *) echo "$wf verdict unknown $sha $url" ;; esac; done` | `success` on both, and `detect.dup=false` on both |
-| Dependabot is not stuck | `gh pr list --app dependabot --json number,createdAt` | none older than 7 days |
+| Dependabot is not stuck | `prs=$(gh pr list --app dependabot --json number,title,createdAt,isDraft,statusCheckRollup 2>/dev/null); if [ -z "$prs" ] \|\| ! printf '%s' "$prs" \| jq -e 'type == "array"' >/dev/null 2>&1; then echo "verdict unknown dependabot: gh pr list failed or returned non-array"; exit 0; fi; printf '%s' "$prs" \| jq -r --argjson now "$(date -u +%s)" 'def eco: if test(" group with .* updates$") or test("^Bump actions/") or test("^Bump github-actions/") then "github-actions" elif test(" in /frontend") then "bun" elif test(" in /Dockerfile") or test("^Bump [^ ]+/[^ ]+ from") then "docker" else "bundler" end; def budget: {"github-actions":37,"docker":37,"bundler":28,"bun":14}; def state: [.statusCheckRollup[]? \| select(type=="object") \| if has("state") then .state elif (.conclusion\|type)=="string" then .conclusion else "PENDING" end] as $c \| if any($c[]; test("^(FAILURE\|ERROR\|TIMED_OUT\|CANCELLED\|ACTION_REQUIRED\|STALE\|STARTUP_FAILURE)$")) then "FAILURE" elif any($c[]; test("^(PENDING\|EXPECTED)$")) then "PENDING" else "SUCCESS" end; map(. as $p \| ($now - ($p.createdAt\|fromdateiso8601)) as $sec \| ($sec/86400\|floor) as $age \| ($p.title\|eco) as $e \| ($p\|state) as $s \| {n:$p.number,age:$age,b:budget[$e],e:$e,s:$s,stuck:($age>budget[$e] and $s=="FAILURE")}) \| (map(select(.stuck)) \| if length==0 then empty else .[] \| "Unhealthy: Dependabot is stuck on #\(.n) (age \(.age)d > \(.b)d budget for \(.e))" end)'` | one `Unhealthy: Dependabot is stuck on #<n> (age Xd > Yd budget for <ecosystem>)` line per stuck PR; nothing when every dependabot PR is under its ecosystem's `interval (+ 14d bundler cooldown) + 7d` margin |
 
 **Grading a dup'd push.** `bin/ci-dup-push` lets a push to main skip a workflow's gated jobs when the
 pushed tree already passed that workflow on the merged PR's head — `detect.dup=true`. Such a run
@@ -84,6 +84,36 @@ on its own `conclusion` — `release` failed, or `preflight` failed the non-main
 same all-skipped list a no-op produces, which is why step 3 requires `preflight` itself to have
 concluded `success`.
 
+**Grading dependabot.** Row 13 calls `gh pr list --app dependabot --json number,title,createdAt,isDraft,statusCheckRollup` and grades each open PR against the budget its ecosystem's dependabot.yml block sets: `bundler` (lines 17-35, weekly interval + 14-day cooldown), `bun` (lines 41-49, weekly), `github-actions` (lines 54-61, monthly), `docker` (lines 76-89, monthly). A PR is stuck when its `statusCheckRollup` — the list of checks `gh` sends, rolled up per step 3 below — grades `FAILURE` past `interval + (14d cooldown if bundler) + 7d margin` days; those budgets in days are 28 (bundler), 14 (bun), 37 (github-actions), 37 (docker). Grading reads the JSON the command emits and prints nothing when every PR is under its budget, or one `Unhealthy: Dependabot is stuck on #<n> ...` line per stuck PR.
+
+1. **An unreadable list grades `verdict unknown`.** The `gh pr list` call is the only thing between a rate limit, an empty pipe, or a non-array payload and a verdict the row cannot establish; an empty string from `gh`, or input that is not a JSON array (`jq -e 'type == "array"'` exits non-zero), short-circuits *before* any PR is graded, and the next checkup re-runs it. Match the dup and release rules: a row that cannot read its list is not green and not red.
+2. **Ecosystem detection reads the title.** Dependabot titles carry the directory and dep name — dependabot.yml's `directory` field is not in `gh pr list` output, so the title is the only signal. `… in /frontend` is `bun`; `Bump <image>/<name> from …` (the `oven/bun` form, with a slash in the dep name) is `docker`; `Bump the github-actions group with N updates` and `Bump actions/…` are `github-actions`; the default — `… in /` for a gem-shaped name like `rubocop` — is `bundler`. Both docker and github-actions have `directory: "/"` in dependabot.yml (lines 76-78, 54-55), so neither ever ends `… in /Dockerfile`; the load-bearing docker marker is the slash-in-the-dep-name form (`^Bump [^ ]+/[^ ]+ from`), and the github-actions group/owner forms are tested first so `Bump actions/checkout` is not mis-classified as docker by that same rule.
+3. **`statusCheckRollup` is a LIST of checks, not a state on the PR.** `--json statusCheckRollup`
+   returns the GraphQL union `StatusCheckRollupContext` as one object per check, and the PR carries
+   no `.state` of its own to read: a `CheckRun` entry has `status` and `conclusion`, a
+   `StatusContext` entry — a check from a non-Actions app — has `state`. There is no third shape,
+   and a row that reads a rollup state off the PR grades every real PR `""` and reports no stuck
+   dependabot PR, ever. Roll the entries up the way the Checks tab does:
+   1. **One entry → one verdict.** An entry with a `state` is a StatusContext and reports it; an
+      entry with a string `conclusion` is a concluded CheckRun and reports that; an entry with
+      neither is a CheckRun still running, `PENDING` (Actions sends `conclusion: null` with
+      `status` `QUEUED`/`IN_PROGRESS`/`WAITING`). `__typename` is not consulted — the two entry
+      types are told apart by the field each one actually carries.
+   2. **`FAILURE` outranks `PENDING`.** One failing entry makes the PR red however many others are
+      still going, so a red-and-running PR is stuck and a still-running PR is not.
+   3. **Every CheckRun conclusion that is not clean is a failure**: `FAILURE`, `TIMED_OUT`,
+      `CANCELLED`, `ACTION_REQUIRED`, `STALE`, `STARTUP_FAILURE`. A `StatusContext` of `ERROR` or
+      `FAILURE` is one too. Grading for the literal string `FAILURE` alone misses a check that
+      timed out, which blocks a merge exactly as hard.
+   4. **No red and no pending left is `SUCCESS`** — including `SKIPPED` and `NEUTRAL` conclusions,
+      which decide nothing, and including a PR with no checks at all (`[]`): nothing is red.
+      Entries that are not objects are dropped, so a malformed rollup grades like a PR with no
+      checks instead of taking the whole `jq` down and silencing every PR in the list.
+4. **Red and young is not stuck.** A docker bump that dependabot cannot finish on its own (dependabot.yml:63-72 — dependabot bumps the Dockerfile's `oven/bun` tag but cannot edit the `bun-version:` inputs in .github/workflows/test.yml or release.yml, nor `bun` in mise.toml) stays `FAILURE` until the matching pin edits land on the dependabot branch; `test/unit/toolchain_pins_test.rb` (lines 57-60) fails the PR until all four pins agree. The row does not call a PR younger than its ecosystem budget a stuck one — that expected-red is the headline of dependabot.yml:63-72, not a regression.
+5. **Past budget and red is stuck.** A PR whose rollup grades `FAILURE` under step 3 and an age in days strictly greater than its ecosystem's budget is stuck: print `Unhealthy: Dependabot is stuck on #<n> (age <Xd> > <Yd> budget for <ecosystem>)`. The line names the signal and the PR number so the ask can link it (cf. health.md:105-114); multiple stuck PRs in one run print one line each.
+
+A PR past budget that rolls up `SUCCESS` or `PENDING` is not stuck: an old green is just an old human-pending merge, not a regression dependabot can fix on its own, and a pending one is still in flight. `isDraft` is requested but not consulted — a past-budget red draft PR is graded here like any other and printed stuck; the stuck-ness is a property of age + a `FAILURE` rollup, not of draft status.
+
 For each unhealthy signal, file one ask unless an open issue already names it. Filing an ask
 requires FIRST running, exactly, `gh api --paginate "repos/developerz-ai/wurk/issues?state=open" | jq -r '.[] | select(.pull_request == null) | .title'`
 — the same lookup release-due's ask guard runs, for the reasons argued there: `gh issue list`
@@ -93,7 +123,14 @@ exists — never file a second ask while one with this title is open. Because th
 exact equality on the title, the title is the signal's stable name, identical on every occurrence
 (`main is red`, `main is green only via a dup'd push`, `release did not publish`); nothing that
 changes run to run may appear in it. The body carries the command, its output, the run URL, the
-headSha and the version.
-
-A red `main` comes first: nothing releases from it. Recovery is
-`RELEASE.md`'s *If a release fails*. Never delete a tag, re-run a publish or `gem push` from here.
+headSha and the version. A red `main` comes first: nothing releases from it. Recovery is
+`RELEASE.md`'s *If a release fails*. For a gem-less release, follow that runbook's *Recovering a
+gem-less release*: `gh release delete vX.Y.Z --cleanup-tag --yes`, then `git fetch --prune-tags`,
+then let CI re-cut the tag from the version bump. That cleanup is the sanctioned path here, not a
+workaround — never manually re-tag over an existing `vX.Y.Z` (force-moving a tag to a different
+commit), never `gem push` from a workstation as a replacement for the CI publish lane, and never
+force a version already on RubyGems down the publish lane a second time; the only version number
+that may be published for a given release is the one CI published. Break-glass hand-cutting a
+release when CI is unavailable, as RELEASE.md's *Break-glass manual publish* prescribes, is not
+re-tagging or force-moving — it runs only because the gem has already shipped and the lane can no
+longer act.
