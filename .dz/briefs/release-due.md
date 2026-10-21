@@ -13,18 +13,29 @@ last=$(gh api repos/developerz-ai/wurk/git/matching-refs/tags/ \
   | sort -V \
   | tail -1)
 
-# Peel the tag ref to its commit SHA. Annotated tags store the commit under the tag object's .object.sha; lightweight tags have object.type=commit and .object.sha is the SHA itself.
-tag_sha=$(gh api "repos/developerz-ai/wurk/git/ref/tags/$last" | jq -r '.object.sha')
-commit_sha=$(gh api "repos/developerz-ai/wurk/git/tags/$tag_sha" | jq -r '.object.sha // .sha')
+# Peel the tag ref to its commit SHA. Branch on the ref object's type: a lightweight tag's ref object IS the commit (object.type=commit, .object.sha the SHA itself — calling /git/tags/ with it would 404), so its SHA is reused directly; an annotated tag points at a tag object, whose /git/tags/<tag object> entry carries the commit under .object.sha.
+ref_json=$(gh api "repos/developerz-ai/wurk/git/ref/tags/$last")
+tag_type=$(echo "$ref_json" | jq -r '.object.type')
+tag_sha=$(echo "$ref_json" | jq -r '.object.sha')
+if [ "$tag_type" = "commit" ]; then
+  commit_sha=$tag_sha
+elif [ -n "$tag_sha" ] && [ "$tag_sha" != "null" ]; then
+  commit_sha=$(gh api "repos/developerz-ai/wurk/git/tags/$tag_sha" | jq -r '.object.sha')
+else
+  commit_sha=""
+fi
 [ "$commit_sha" != "null" ] && [ -n "$commit_sha" ] || { echo "::error::tag $last does not resolve to a commit"; exit 1; }
-# Verify the release: gem-less marker = author=developerz-ai[bot] OR assets.length=0 (RELEASE.md:165-172).
-rel=$(gh release view "$last" --json author,assets); author=$(echo "$rel" | jq -r '.author.login'); nassets=$(echo "$rel" | jq -r '.assets | length')
+# Verify the release: gem-less marker = author=developerz-ai[bot] OR assets.length=0 (RELEASE.md:165-172). Verify the lookup and its fields before the marker check: with both fields empty (a failed `gh release view`, a missing release), both marker comparisons would pass vacuously and an unverified tag would anchor the decision.
+rel=$(gh release view "$last" --json author,assets) || { echo "::error::release lookup for $last failed"; exit 1; }
+author=$(echo "$rel" | jq -r '.author.login')
+nassets=$(echo "$rel" | jq -r '.assets | length')
+[ -n "$author" ] && [ "$author" != "null" ] && [ -n "$nassets" ] && [ "$nassets" != "null" ] || { echo "::error::release $last lookup returned no parsable author/assets"; exit 1; }
 [ "$author" != "developerz-ai[bot]" ] && [ "$nassets" != "0" ] || { echo "::error::release $last is gem-less (author=$author, assets=$nassets)"; exit 1; }
 gh api "repos/developerz-ai/wurk/compare/$last...main"
 
-# Local fast path: a stale checkout can disagree with the API on $last; the fetch is silent so its diff noise doesn't drown the window.
+# Local fast path: fetch both the tag AND current main before scanning. The Compare call above is display-only, so this scan is the decision's only window — against a stale origin/main, newly merged shipping commits are invisible and the window collapses to empty. The fetch is quiet so its diff noise doesn't drown the window, and its failure aborts: a window computed against a stale ref is worse than none.
+git fetch --quiet origin tag "$last" main:refs/remotes/origin/main || { echo "::error::git fetch of tag $last / origin main failed"; exit 1; }
 local_last=$(git describe --tags --abbrev=0 --match 'v[0-9]*' origin/main)
-git fetch --quiet origin tag "$last"
 git log --format='%h %cI %s' "$last"..origin/main -- 'lib/**/*.rb' 'lib/**/*.lua' 'app/**/*.rb' 'config/**' 'exe/*' 'frontend/src/**' wurk.gemspec
 ```
 
