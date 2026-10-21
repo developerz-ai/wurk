@@ -265,6 +265,255 @@ class HealthBriefTest < Minitest::Test
                     'proceed=false requires preflight itself to have succeeded'
   end
 
+  # Row 13 grades dependabot PRs against per-ecosystem budgets. The brief
+  # derives each budget from dependabot.yml's own `schedule.interval` and
+  # bundler's `cooldown.default-days`, plus a 7-day margin: 28d bundler
+  # (7 weekly + 14 cooldown + 7), 14d bun (7+0+7), 37d github-actions
+  # (30+0+7), 37d docker (30+0+7). A PR whose `statusCheckRollup.state` is
+  # FAILURE and whose age in days is strictly greater than its budget IS
+  # stuck; a FAILURE younger than its budget is not (the docker case in
+  # dependabot.yml:63-72 is the headline example); a SUCCESS or PENDING is
+  # never stuck. These three tests pin the three properties one at a time,
+  # each with a single PR whose title is shaped for one ecosystem.
+  def test_monthly_ecosystem_pr_aged_under_budget_is_not_stuck
+    # github-actions: 30-day-old PR with FAILURE. Budget is 37d
+    # (monthly interval + 7d margin). 30 < 37, so it is red but young, and
+    # MUST NOT be reported stuck.
+    now = Time.now.utc
+    pr = {
+      'number' => 7001,
+      'title' => 'Bump actions/checkout from 4 to 5 in /',
+      'createdAt' => (now - (30 * 86_400)).iso8601,
+      'isDraft' => false,
+      'statusCheckRollup' => { 'state' => 'FAILURE' }
+    }
+    out, _err, status = run_row13(prs: [pr])
+
+    assert_predicate status, :success?,
+                     "row 13's command must run cleanly (status=#{status.inspect})"
+
+    refute_includes out, '#7001',
+                    'a github-actions PR aged 30d is under its 37d budget ' \
+                    '(dependabot.yml:54-61) even when FAILURE — the row must not ' \
+                    "name it stuck (stdout=#{out.inspect})"
+    refute_includes out, 'Dependabot is stuck',
+                    'no PR was past budget AND FAILURE — nothing is stuck ' \
+                    "(stdout=#{out.inspect})"
+    refute_includes out, 'Unhealthy',
+                    'no PR passed its budget and FAILURE — nothing is Unhealthy ' \
+                    "(stdout=#{out.inspect})"
+  end
+
+  def test_red_docker_pr_under_budget_waiting_on_bun_pins_is_not_stuck
+    # dependabot.yml:63-72: docker bumps the Dockerfile's oven/bun tag but
+    # cannot edit the bun-version: inputs in test.yml/release.yml nor bun in
+    # mise.toml, so test/unit/toolchain_pins_test.rb (lines 11, 84-90) keeps
+    # the PR red until a human (or the maintainer agent) pushes matching pin
+    # edits. The PR is FAILURE and only 5 days old; budget is 37d. A row
+    # that names this stuck would file a false-positive ask on the
+    # expected-red state.
+    now = Time.now.utc
+    pr = {
+      'number' => 7102,
+      'title' => 'Bump oven/bun from 1.4.1 to 1.4.2 in /',
+      'createdAt' => (now - (5 * 86_400)).iso8601,
+      'isDraft' => false,
+      'statusCheckRollup' => { 'state' => 'FAILURE' }
+    }
+    out, _err, status = run_row13(prs: [pr])
+
+    assert_predicate status, :success?,
+                     "row 13's command must run cleanly (status=#{status.inspect})"
+
+    refute_includes out, '#7102',
+                    'a red docker PR aged 5d is exactly the expected-red shape of ' \
+                    "dependabot.yml:63-72; it must NOT print the PR number (stdout=#{out.inspect})"
+    refute_includes out, 'Unhealthy',
+                    'an expected-red PR is the headline of dependabot.yml:63-72, not a ' \
+                    "regression the row should file (stdout=#{out.inspect})"
+  end
+
+  def test_pr_past_ecosystem_budget_and_red_is_reported_stuck
+    # bundler: 35-day-old PR (FAILURE). Budget is 28d
+    # (weekly interval + 14d cooldown + 7d margin, dependabot.yml:27-30). The
+    # PR has run past its entire grace window — it IS stuck. The row must
+    # print one `Unhealthy: Dependabot is stuck on #<n>` line naming the
+    # number, so the ask can link the PR (cf. health.md:82-86 in the brief).
+    now = Time.now.utc
+    pr = {
+      'number' => 7203,
+      'title' => 'Bump rubocop from 2.0.0 to 2.1.0 in /',
+      'createdAt' => (now - (35 * 86_400)).iso8601,
+      'isDraft' => false,
+      'statusCheckRollup' => { 'state' => 'FAILURE' }
+    }
+    out, _err, status = run_row13(prs: [pr])
+
+    assert_predicate status, :success?,
+                     "row 13's command must run cleanly (status=#{status.inspect})"
+
+    lines = out.lines.map(&:chomp)
+
+    assert_equal 1, lines.size,
+                 'one stuck PR prints one line — the row names per-PR, not a ' \
+                 "summary (stdout=#{out.inspect})"
+
+    assert_match(/\AUnhealthy: Dependabot is stuck on #7203\b/, lines.first,
+                 'the stuck line must name the signal and the PR number so the ask ' \
+                 "can link it (got #{lines.first.inspect})")
+
+    assert_match(/\(age 35d > 28d budget for bundler\)\z/, lines.first,
+                 'the line must carry the age and the bundler budget, so a reader can ' \
+                 "see WHY this is stuck without re-running the command (got #{lines.first.inspect})")
+  end
+
+  def test_bun_pr_in_frontend_uses_the_bun_budget_not_bundlers
+    # The ` in /frontend` elif is the only thing separating bun's 14d budget
+    # from bundler's 28d: both titles end ` in /<dir>`, and a bun PR that fell
+    # through to the bundler default would be under budget for another 14 days.
+    # A 20d red bun PR is past bun's 14d (weekly + 7d margin,
+    # dependabot.yml:41-49) and must therefore print stuck.
+    now = Time.now.utc
+    stuck = {
+      'number' => 7304,
+      'title' => 'Bump @types/node from 20.0.0 to 20.1.0 in /frontend',
+      'createdAt' => (now - (20 * 86_400)).iso8601,
+      'isDraft' => false,
+      'statusCheckRollup' => { 'state' => 'FAILURE' }
+    }
+    out, _err, status = run_row13(prs: [stuck])
+
+    assert_predicate status, :success?,
+                     "row 13's command must run cleanly (status=#{status.inspect})"
+
+    assert_includes out, 'budget for bun',
+                    'a red PR titled `… in /frontend` must grade against bun\'s 14d ' \
+                    'budget (dependabot.yml:41-49), NOT the 28d bundler default — ' \
+                    "at 20d it is past bun's budget and must print stuck (stdout=#{out.inspect})"
+
+    refute_includes out, 'budget for bundler',
+                    'the title names /frontend, so this is a bun PR; grading it ' \
+                    "bundler would hide it for another 14 days (stdout=#{out.inspect})"
+  end
+
+  def test_bun_pr_under_budget_is_not_stuck
+    # The counterweight to the case above: the same bun title at 15d is past the
+    # 14d budget and stuck, but at 5d it is red-and-young. This is the shape a
+    # weekly ecosystem normally produces — most of the time it is under budget.
+    now = Time.now.utc
+    pr = {
+      'number' => 7305,
+      'title' => 'Bump @types/node from 20.0.0 to 20.1.0 in /frontend',
+      'createdAt' => (now - (5 * 86_400)).iso8601,
+      'isDraft' => false,
+      'statusCheckRollup' => { 'state' => 'FAILURE' }
+    }
+    out, _err, status = run_row13(prs: [pr])
+
+    assert_predicate status, :success?,
+                     "row 13's command must run cleanly (status=#{status.inspect})"
+
+    assert_equal [], out.lines.map(&:chomp),
+                 'a red bun PR aged 5d is under its 14d budget (dependabot.yml:41-49); ' \
+                 "the row must print nothing at all (stdout=#{out.inspect})"
+  end
+
+  def test_github_actions_group_pr_uses_the_github_actions_budget
+    # dependabot.yml:60-62 groups every action into one `actions` PR titled
+    # `Bump the github-actions group with N updates` — not the per-action
+    # `Bump actions/…` form the other test pins. Without the ` group with .*
+    # updates$` pattern that title falls through to `bundler` (28d) instead of
+    # `github-actions` (37d). At 40d it is past the correct 37d budget, so a
+    # misclassification as bundler would silently hide it — this must print the
+    # github-actions budget.
+    now = Time.now.utc
+    pr = {
+      'number' => 7306,
+      'title' => 'Bump the github-actions group with 4 updates',
+      'createdAt' => (now - (40 * 86_400)).iso8601,
+      'isDraft' => false,
+      'statusCheckRollup' => { 'state' => 'FAILURE' }
+    }
+    out, _err, status = run_row13(prs: [pr])
+
+    assert_predicate status, :success?,
+                     "row 13's command must run cleanly (status=#{status.inspect})"
+
+    assert_includes out, 'budget for github-actions',
+                    'the grouped `Bump the github-actions group with N updates` title ' \
+                    "(dependabot.yml:60-62) must map to github-actions' 37d budget, " \
+                    "not the 28d bundler default (stdout=#{out.inspect})"
+
+    refute_includes out, 'budget for bundler',
+                    'a grouped github-actions PR is not a bundler PR; grading it ' \
+                    "bundler would apply the wrong budget (stdout=#{out.inspect})"
+  end
+
+  def test_past_budget_but_green_pr_is_not_stuck
+    # health.md:80's first half: a PR past its budget that is SUCCESS is not
+    # stuck — an old green is just an old human-pending merge, not a regression
+    # dependabot can fix on its own. This is the same 35d/28d bundler shape as
+    # the stuck test, differing only in state.
+    now = Time.now.utc
+    pr = {
+      'number' => 7307,
+      'title' => 'Bump rubocop from 2.0.0 to 2.1.0 in /',
+      'createdAt' => (now - (35 * 86_400)).iso8601,
+      'isDraft' => false,
+      'statusCheckRollup' => { 'state' => 'SUCCESS' }
+    }
+    out, _err, status = run_row13(prs: [pr])
+
+    assert_predicate status, :success?,
+                     "row 13's command must run cleanly (status=#{status.inspect})"
+
+    assert_equal [], out.lines.map(&:chomp),
+                 'a past-budget PR whose checks are SUCCESS is an old green pending ' \
+                 'merge, not stuck (health.md:80); the row must print nothing ' \
+                 "(stdout=#{out.inspect})"
+  end
+
+  def test_past_budget_but_pending_pr_is_not_stuck
+    # health.md:80's second half: a PENDING PR is still in flight, so it is not
+    # stuck either. Same 35d/28d bundler shape, state PENDING.
+    now = Time.now.utc
+    pr = {
+      'number' => 7308,
+      'title' => 'Bump rubocop from 2.0.0 to 2.1.0 in /',
+      'createdAt' => (now - (35 * 86_400)).iso8601,
+      'isDraft' => false,
+      'statusCheckRollup' => { 'state' => 'PENDING' }
+    }
+    out, _err, status = run_row13(prs: [pr])
+
+    assert_predicate status, :success?,
+                     "row 13's command must run cleanly (status=#{status.inspect})"
+
+    assert_equal [], out.lines.map(&:chomp),
+                 'a past-budget PR whose checks are PENDING is still in flight, not ' \
+                 "stuck (health.md:80); the row must print nothing (stdout=#{out.inspect})"
+  end
+
+  def test_unreadable_dependabot_pr_list_fails_closed
+    # If the stub cannot serve `gh pr list --app dependabot --json ...`, the
+    # brief command must not fall through to printing a green verdict. The
+    # stub's `pr` arm errors out without a fixture, so `gh` writes nothing to
+    # stdout; the brief's `jq -e 'type == "array"'` check then sees an empty
+    # string and the row prints `verdict unknown dependabot` so the next
+    # checkup re-runs it. Same shape as rows 8 and 9's fail-closed rule.
+    out, _err, _status = run_command(
+      command_cell('Dependabot is not stuck', gh_command: 'gh pr list'),
+      jobs_fail: false
+    ) { |_fixtures| } # no dependabot.prs fixture is written
+
+    refute_includes out, 'Dependabot is stuck on ',
+                    'an unreadable pr list cannot have produced a stuck verdict ' \
+                    "(stdout=#{out.inspect})"
+    assert_includes out, 'verdict unknown',
+                    'an unreadable pr list must surface as `verdict unknown`, the same ' \
+                    "fail-closed shape rows 8 and 9 use (stdout=#{out.inspect})"
+  end
+
   def test_brief_cites_one_contiguous_range_for_the_proceed_signal
     # The no-op step used to split its evidence across two anchors
     # (release.yml:80-86 for the emit, release.yml:88-90 for the gate), leaving
@@ -347,17 +596,19 @@ class HealthBriefTest < Minitest::Test
     File.write(File.join(dir, name), body)
   end
 
-  # The `Command` cell of the row whose Signal cell contains `signal`.
-  # Cells are `|`-separated and both of these commands are full of shell
-  # pipes, so the cell is cut at its backticks instead: the command opens at
-  # the last backtick before its own `gh run list` and closes at the next one
-  # after it. `\|` is markdown's escape for a literal pipe inside a cell.
-  def command_cell(signal)
-    row = @text.lines.find { |line| line.include?(signal) && line.include?('gh run list') }
-    raise "health.md has no row for #{signal.inspect} that calls `gh run list`" if row.nil?
+  # The `Command` cell of the row whose Signal cell contains `signal`. Cells
+  # are `|`-separated and the commands are full of shell pipes, so the cell is
+  # cut at its backticks instead: the command opens at the last backtick before
+  # its own `gh_command` token and closes at the next one after it. `\|` is
+  # markdown's escape for a literal pipe inside a cell. `gh_command` defaults
+  # to `gh run list` for the run-list rows; row 13 grades dependabot via
+  # `gh pr list`, so it asks for that token explicitly.
+  def command_cell(signal, gh_command: 'gh run list')
+    row = @text.lines.find { |line| line.include?(signal) && line.include?(gh_command) }
+    raise "health.md has no row for #{signal.inspect} that calls `#{gh_command}`" if row.nil?
 
-    open_at = row.rindex('`', row.index('gh run list'))
-    raise "no opening backtick before `gh run list` on the #{signal.inspect} row" if open_at.nil?
+    open_at = row.rindex('`', row.index(gh_command))
+    raise "no opening backtick before `#{gh_command}` on the #{signal.inspect} row" if open_at.nil?
 
     close_at = row.index('`', open_at + 1)
     raise "no closing backtick for the Command cell on the #{signal.inspect} row" if close_at.nil?
@@ -394,6 +645,18 @@ class HealthBriefTest < Minitest::Test
       write_fixture(fixtures, 'ecosystem.yml.sha', SHA_ECOSYSTEM)
       write_fixture(fixtures, 'ecosystem.yml.conclusion', 'success')
       write_fixture(fixtures, 'dbid-102.jobs', jobs_json(detect: 'success', gated: 'success'))
+    end
+  end
+
+  # Row 13 grades dependabot PRs against per-ecosystem budgets derived from
+  # dependabot.yml (28d bundler, 14d bun, 37d github-actions, 37d docker). The
+  # stub `gh` answers `gh pr list --app dependabot --json ...` from
+  # $WURK_TEST_FIXTURES/dependabot.prs, so the command runs against fixed
+  # fixtures instead of the API. `jobs_fail` is ignored — row 13 does not call
+  # `gh api .../jobs`, so there is no separate failure-shape to pin here.
+  def run_row13(prs:, jobs_fail: false)
+    run_command(command_cell('Dependabot is not stuck', gh_command: 'gh pr list'), jobs_fail: jobs_fail) do |fixtures|
+      write_fixture(fixtures, 'dependabot.prs', JSON.generate(prs))
     end
   end
 
@@ -454,6 +717,24 @@ class HealthBriefTest < Minitest::Test
           "$(cat "$fixdir/$wf.dbid")" \
           "$(cat "$fixdir/$wf.sha")" \
           "$(cat "$fixdir/$wf.conclusion")"
+        ;;
+      pr)
+        # Match `gh pr list --app dependabot --json ...` only — anything else
+        # under `pr` is unexpected, exits 1, so a regression that calls e.g.
+        # `gh pr view` cannot silently pass by reusing the run-row code path.
+        # The dependabot.prs fixture is whatever JSON the test wrote; the
+        # `--json` field list is not inspected, because the brief itself does
+        # not pin it (a regression that adds/removes a field still parses).
+        if [ "${2:-}" = "list" ] && [ "${3:-}" = "--app" ] && [ "${4:-}" = "dependabot" ]; then
+          if [ ! -s "$fixdir/dependabot.prs" ]; then
+            printf 'stub gh pr: no dependabot.prs fixture for: %s\n' "$*" >&2
+            exit 1
+          fi
+          cat "$fixdir/dependabot.prs"
+        else
+          printf 'stub gh pr: only `gh pr list --app dependabot` is stubbed (got: %s)\n' "$*" >&2
+          exit 1
+        fi
         ;;
       repo)
         printf 'wurk-owner/wurk\n'
