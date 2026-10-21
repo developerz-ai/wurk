@@ -40,7 +40,7 @@ fi
 # Local fast path: the Compare call above is display-only, so this scan is the decision's only window. Both bounds of `$last..origin/main` go stale on a stale checkout: the tag, because the checkout may not have it yet and `git log` against a revision it doesn't know fails; and `origin/main`, because no command above this point updates refs/remotes/origin/main — commits merged since the clone last fetched are invisible, every git command still succeeds, and the window then reads empty, so a release that is due is missed with no error anywhere. Fetch the tag AND main together, before anything reads either revision, with an explicit `+refs/heads/main:refs/remotes/origin/main` refspec so the right bound moves even when the remote's configured fetch refspec differs. The fetch is quiet so its diff noise doesn't drown the window, and its failure aborts: a window computed against a stale ref is worse than none.
 git fetch --quiet origin tag "$last" '+refs/heads/main:refs/remotes/origin/main' || { echo "::error::git fetch of tag $last / origin main failed"; exit 1; }
 local_last=$(git describe --tags --abbrev=0 --match 'v[0-9]*' origin/main)
-git log --format='%h %cI %s' "$last"..origin/main -- 'lib/**/*.rb' 'lib/**/*.lua' 'app/**/*.rb' 'config/**' 'exe/*' 'frontend/src/**' wurk.gemspec
+git log --format='%h %cI %s' "$last"..origin/main -- ':(glob)lib/**/*.rb' ':(glob)lib/**/*.lua' ':(glob)app/**/*.rb' 'config/**' 'exe/*' 'frontend/src/**' wurk.gemspec
 ```
 
 Those paths are `wurk.gemspec`'s `spec.files`, with three deliberate differences. The dashboard bundle

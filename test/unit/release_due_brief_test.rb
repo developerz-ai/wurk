@@ -435,26 +435,22 @@ class ReleaseDueBriefTest < Minitest::Test
       build_window_repo(tmpdir)
       env = hermetic_git_env(tmpdir)
 
-      out_ship = query_brief_window_log(env, ['lib/foo.rb'])
+      window = query_brief_window_log(env)
 
-      assert_predicate out_ship[:status], :success?, out_ship[:message]
-      assert_match(/shipping commit on lib/, out_ship[:stdout],
-                   "shipping commit (lib/foo.rb) must be in the window: #{out_ship[:stdout].inspect}")
-      refute_match(/docs-only commit/, out_ship[:stdout],
-                   'docs-only commit (README.md) must NOT be in the window when the pathspec ' \
-                   "filters to lib/foo.rb: #{out_ship[:stdout].inspect}")
-
-      out_pair = query_brief_window_log(env, ['lib/bar.rb'])
-
-      assert_predicate out_pair[:status], :success?, out_pair[:message]
-      assert_match(/bar add commit/, out_pair[:stdout],
+      assert_predicate window[:status], :success?, window[:message]
+      assert_match(/shipping commit on lib/, window[:stdout],
+                   "shipping commit (lib/foo.rb) must be in the window: #{window[:stdout].inspect}")
+      refute_match(/docs-only commit/, window[:stdout],
+                   'docs-only commit (README.md) must NOT be in the window when the brief\'s ' \
+                   "shipping pathspecs are applied: #{window[:stdout].inspect}")
+      assert_match(/bar add commit/, window[:stdout],
                    'the change half of a change+revert pair (lib/bar.rb add) must be in the ' \
-                   'window: ' + out_pair[:stdout].inspect)
-      assert_match(/bar revert commit/, out_pair[:stdout],
+                   'window: ' + window[:stdout].inspect)
+      assert_match(/bar revert commit/, window[:stdout],
                    'the revert half of a change+revert pair (lib/bar.rb revert) must be in the ' \
                    'window too — `git log -- <pathspec>` does not net a change against its revert, ' \
                    'so dropping the revert from the listing would require using `git diff` instead, ' \
-                   "and the brief uses `git log`: #{out_pair[:stdout].inspect}")
+                   "and the brief uses `git log`: #{window[:stdout].inspect}")
     end
   end
 
@@ -1092,24 +1088,23 @@ class ReleaseDueBriefTest < Minitest::Test
     find_table_line_numbers.include?(line_no)
   end
 
-  # Thin wrapper around `git log` mirroring the brief's window-scan
-  # command: `git log --format='%h %cI %s' v1.0.0..origin/main -- <pathspecs>`.
-  # Returns a hash so the test can pull the stdout / status / a
-  # friendly error message without paying for a variable per call —
-  # the brief-style command is already three lines (status, format,
-  # range, `--`, paths), and inlining it once per assertion bloats
-  # the test past the rubocop block-length budget.
-  def query_brief_window_log(env, pathspecs)
+  # Execute the brief's command verbatim so its pathspecs, not a test-owned
+  # copy, determine the window. Only the release base comes from the fixture.
+  def query_brief_window_log(env)
+    command = extract_decide_block.lines.find { |line| line.start_with?('git log ') }
+
+    refute_nil command, 'the Decide block must contain a window-scan command'
+
     stdout, stderr, status = Open3.capture3(
-      env, 'git', 'log', '--format=%h %cI %s',
-      'v1.0.0..origin/main', '--', *pathspecs
+      env.merge('last' => 'v1.0.0'), 'bash', '-c', command,
+      chdir: env.fetch('GIT_WORK_TREE')
     )
 
     {
       stdout: stdout,
       stderr: stderr,
       status: status,
-      message: 'brief-style `git log` query must succeed on a real repo; ' \
+      message: 'extracted brief window command must succeed on a real repo; ' \
                "stderr=#{stderr.inspect}"
     }
   end
