@@ -174,6 +174,106 @@ class HealthBriefTest < Minitest::Test
                     "its own sha; got #{lines.inspect}"
   end
 
+  # Pins the recovery paragraph in .dz/briefs/health.md — the prose a
+  # red-main or release-failure ask points the responder at. RELEASE.md owns
+  # the recovery runbook; this paragraph is a pointer, not a re-write. Two
+  # properties have to hold so it does not silently forbid something the
+  # runbook prescribes:
+  #
+  #   1. The paragraph NAMES the runbook steps it points at: both
+  #      headings — *If a release fails* and *Recovering a gem-less
+  #      release* — and the two commands the gem-less subsection actually
+  #      prescribes (`gh release delete ... --cleanup-tag`, then
+  #      `git fetch --prune-tags`). Pin them with a substring assertion
+  #      over the joined paragraph — markdown italic can wrap across a
+  #      line break, so the assertion reads the paragraph as one string.
+  #   2. The paragraph does NOT forbid the sanctioned steps the rest of
+  #      the runbook prescribes: the `workflow_dispatch` retry (used to
+  #      re-run a release whose run failed after the bump was merged) and
+  #      the break-glass hand create (only when CI is unavailable). A
+  #      "Never ... workflow_dispatch" or "Never ... break-glass" sentence
+  #      would shadow the runbook it claims to point at. Pin the absence.
+  #
+  # Reads only the brief as text — no shell, no fixtures.
+  def test_recovery_paragraph_follows_release_md_runbook
+    assert_recovery_paragraph(@text)
+  end
+
+  def test_recovery_guard_rejects_a_prohibition_at_the_end_of_the_paragraph
+    text = "Extra introductory paragraph.\n\n#{@text.rstrip} Never use break-glass.\n"
+
+    error = assert_raises(Minitest::Assertion) { assert_recovery_paragraph(text) }
+    assert_includes error.message, 'must not forbid the break-glass'
+  end
+
+  def test_recovery_guard_rejects_wrapped_workflow_dispatch_prohibition
+    text = @text.sub('That cleanup', "Never\nuse workflow_dispatch. That cleanup")
+
+    error = assert_raises(Minitest::Assertion) { assert_recovery_paragraph(text) }
+    assert_includes error.message, 'must not forbid the `workflow_dispatch`'
+  end
+
+  def test_recovery_guard_rejects_wrapped_break_glass_prohibition
+    text = @text.sub('That cleanup', "Never\nuse break-glass. That cleanup")
+
+    error = assert_raises(Minitest::Assertion) { assert_recovery_paragraph(text) }
+    assert_includes error.message, 'must not forbid the break-glass'
+  end
+
+  def test_recovery_guard_accepts_the_paragraph_after_line_numbers_change
+    assert_recovery_paragraph("Extra introductory paragraph.\n\n#{@text}")
+  end
+
+  def assert_recovery_paragraph(text)
+    paragraph = text.split(/\n[ \t]*\n/).find { |part| part.include?('Recovery is') }
+
+    refute_nil paragraph, 'health.md must contain the recovery paragraph'
+
+    # Markdown wrapping must not hide a prohibition, but a "never" in an
+    # earlier sentence must not forbid a later, sanctioned recovery step.
+    paragraph = paragraph.gsub(/\s+/, ' ')
+
+    assert_includes paragraph, 'If a release',
+                    'recovery paragraph in health.md must name the ' \
+                    "'If a release ... ' heading reference so the reader knows " \
+                    "where to go; got paragraph=#{paragraph.inspect}"
+
+    assert_match(/fails\*\./, paragraph,
+                 'recovery paragraph in health.md must close the ' \
+                 "'... fails*' italic heading reference; got paragraph=#{paragraph.inspect}")
+
+    assert_includes paragraph, 'Recovering a gem-less release',
+                    'recovery paragraph in health.md must name RELEASE.md\'s ' \
+                    "'Recovering a gem-less release' heading — the subsection that " \
+                    'actually prescribes the cleanup commands; ' \
+                    "got paragraph=#{paragraph.inspect}"
+
+    assert_match(/gh release delete v[^`\s]+ --cleanup-tag/,
+                 paragraph,
+                 'recovery paragraph in health.md must name ' \
+                 '`gh release delete ... --cleanup-tag` — the first command in ' \
+                 "RELEASE.md's gem-less cleanup; got paragraph=#{paragraph.inspect}")
+
+    assert_includes paragraph, 'git fetch --prune-tags',
+                    'recovery paragraph in health.md must name ' \
+                    '`git fetch --prune-tags` — the second command in RELEASE.md\'s ' \
+                    "gem-less cleanup; got paragraph=#{paragraph.inspect}"
+
+    refute_match(/never\b[^.!?]*workflow_dispatch/i,
+                 paragraph,
+                 'recovery paragraph in health.md must not forbid the ' \
+                 '`workflow_dispatch` retry RELEASE.md prescribes for a release run ' \
+                 "that failed after the bump was merged; got paragraph=#{paragraph.inspect}")
+
+    refute_match(/never\b[^.!?]*break-glass/i,
+                 paragraph,
+                 'recovery paragraph in health.md must not forbid the break-glass ' \
+                 'hand create RELEASE.md prescribes when CI is unavailable; ' \
+                 "got paragraph=#{paragraph.inspect}")
+  end
+
+  private :assert_recovery_paragraph
+
   def test_release_run_that_published_nothing_is_a_named_no_op
     # release.yml:80-90 emits proceed=false when the version is already on
     # RubyGems and gates `release` on it; `demo` needs both
