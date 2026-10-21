@@ -5,21 +5,26 @@ require 'json'
 require 'open3'
 require 'tmpdir'
 
-# Gates the two dup-aware rows of .dz/briefs/health.md (`main` is green,
-# `topology and ecosystem lanes`) the way release_due_brief_test.rb gates
-# release-due.md: these commands run unattended on a schedule, and a verdict
-# they cannot actually establish must never be printed as a green one. Two
-# properties, both pinned by RUNNING the extracted command cells as bash
-# against a PATH-stubbed `gh` — a substring match over the brief's text would
-# accept a guard that never fires:
+# Gates the three job-list-aware rows of .dz/briefs/health.md (`main` is
+# green, `the last release published`, `topology and ecosystem lanes`) the way
+# release_due_brief_test.rb gates release-due.md: these commands run unattended
+# on a schedule, and a verdict they cannot actually establish must never be
+# printed as a green one. Three properties, all pinned by RUNNING the extracted
+# command cells as bash against a PATH-stubbed `gh` — a substring match over the
+# brief's text would accept a guard that never fires:
 #
 #   1. FAIL CLOSED. `gh api .../actions/runs/<id>/jobs` is the only thing
-#      between a `gh` error and a false green: with the read empty,
-#      `[ "$dup" = true ]` is false and the row falls through to grading on
-#      `conclusion`, printing `success <sha>` for a run that executed nothing.
+#      between a `gh` error and a false green: with the read empty the row falls
+#      through to grading on `conclusion`, printing `success <sha>` for a run
+#      it knows nothing about.
 #   2. The dup signature REQUIRES `detect changed paths` to conclude success.
 #      A failed or cancelled detect publishes no outputs, `needs:` skips every
 #      dependent, and the job list comes back all-skipped with no dup in it.
+#   3. A release run that published NOTHING still concludes success — the jobs
+#      that were skipped do not fail the run — so row 9 reads `preflight`
+#      success + `release` skipped and names that a no-op. A run still
+#      executing (`conclusion=null`) is reported in flight and graded by
+#      nobody.
 #
 # Reads the brief and runs its own extracted commands; no network, no Redis,
 # no shared state.
@@ -28,11 +33,16 @@ class HealthBriefTest < Minitest::Test
 
   ROOT = File.expand_path('../..', __dir__)
   BRIEF = File.join(ROOT, '.dz', 'briefs', 'health.md')
+  RELEASE_WORKFLOW = File.join(ROOT, '.github', 'workflows', 'release.yml')
 
-  SHA_DUP       = 'd' * 40
-  SHA_GREEN     = 'a' * 40
-  SHA_TOPOLOGY  = 'c' * 40
-  SHA_ECOSYSTEM = 'e' * 40
+  SHA_DUP        = 'd' * 40
+  SHA_GREEN      = 'a' * 40
+  SHA_TOPOLOGY   = 'c' * 40
+  SHA_ECOSYSTEM  = 'e' * 40
+  SHA_PUBLISHED  = 'b' * 40
+  SHA_NOOP       = 'f' * 40
+  SHA_REFUSED    = '9' * 40
+  SHA_INFLIGHT   = '1' * 40
 
   def setup
     @text = File.read(BRIEF)
@@ -149,7 +159,7 @@ class HealthBriefTest < Minitest::Test
                     "its own sha; got #{lines.inspect}"
   end
 
-  # Pins the recovery paragraph at .dz/briefs/health.md:47-53 — the prose a
+  # Pins the recovery paragraph at .dz/briefs/health.md:76-87 — the prose a
   # red-main or release-failure ask points the responder at. RELEASE.md owns
   # the recovery runbook; this paragraph is a pointer, not a re-write. Two
   # properties have to hold so it does not silently forbid something the
@@ -172,50 +182,203 @@ class HealthBriefTest < Minitest::Test
   # Reads only the brief as text — no shell, no fixtures.
   def test_recovery_paragraph_follows_release_md_runbook
     lines = @text.lines
-    paragraph = lines[46..52].join # 1-based 47..53 -> 0-based 46..52
+    paragraph = lines[75..86].join # 1-based 76..87 -> 0-based 75..86
 
     # markdown italic wraps across a line break, so the heading reference
     # `*If a release` and `fails*` land on different joined lines.
     assert_includes paragraph, 'If a release',
-                    'recovery paragraph at health.md:47-53 must name the ' \
+                    'recovery paragraph at health.md:76-87 must name the ' \
                     "'If a release ... ' heading reference so the reader knows " \
                     "where to go; got paragraph=#{paragraph.inspect}"
 
     assert_match(/fails\*\./, paragraph,
-                 'recovery paragraph at health.md:47-53 must close the ' \
+                 'recovery paragraph at health.md:76-87 must close the ' \
                  "'... fails*' italic heading reference; got paragraph=#{paragraph.inspect}")
 
     assert_includes paragraph, 'Recovering a gem-less release',
-                    'recovery paragraph at health.md:47-53 must name RELEASE.md\'s ' \
+                    'recovery paragraph at health.md:76-87 must name RELEASE.md\'s ' \
                     "'Recovering a gem-less release' heading — the subsection that " \
                     'actually prescribes the cleanup commands; ' \
                     "got paragraph=#{paragraph.inspect}"
 
     assert_match(/gh release delete v[^`\s]+ --cleanup-tag/,
                  paragraph,
-                 'recovery paragraph at health.md:47-53 must name ' \
+                 'recovery paragraph at health.md:76-87 must name ' \
                  '`gh release delete ... --cleanup-tag` — the first command in ' \
                  "RELEASE.md's gem-less cleanup; got paragraph=#{paragraph.inspect}")
 
     assert_includes paragraph, 'git fetch --prune-tags',
-                    'recovery paragraph at health.md:47-53 must name ' \
+                    'recovery paragraph at health.md:76-87 must name ' \
                     '`git fetch --prune-tags` — the second command in RELEASE.md\'s ' \
                     "gem-less cleanup; got paragraph=#{paragraph.inspect}"
 
     refute_match(/never\b[^\n]*workflow_dispatch/i,
                  paragraph,
-                 'recovery paragraph at health.md:47-53 must not forbid the ' \
+                 'recovery paragraph at health.md:76-87 must not forbid the ' \
                  '`workflow_dispatch` retry RELEASE.md prescribes for a release run ' \
                  "that failed after the bump was merged; got paragraph=#{paragraph.inspect}")
 
     refute_match(/never\b[^\n]*break-glass/i,
                  paragraph,
-                 'recovery paragraph at health.md:47-53 must not forbid the break-glass ' \
+                 'recovery paragraph at health.md:76-87 must not forbid the break-glass ' \
                  'hand create RELEASE.md prescribes when CI is unavailable; ' \
                  "got paragraph=#{paragraph.inspect}")
   end
 
+  def test_release_run_that_published_nothing_is_a_named_no_op
+    # release.yml:80-90 emits proceed=false when the version is already on
+    # RubyGems and gates `release` on it; `demo` needs both
+    # (release.yml:222-228). A skipped job does not fail a run, so this run
+    # concludes `success` having published nothing — and `--json conclusion`
+    # alone reports exactly that green as the last release published.
+    out, err, status = run_row9(jobs: release_jobs_json(preflight: 'success', release: 'skipped', demo: 'skipped'),
+                                conclusion: 'success', sha: SHA_NOOP)
+
+    assert_predicate status, :success?,
+                     "row 9's command must run cleanly (status=#{status.inspect}, " \
+                     "stdout=#{out.inspect}, stderr=#{err.inspect})"
+
+    lines = out.lines.map(&:chomp)
+
+    assert_equal 1, lines.size,
+                 "row 9 must print one line naming the no-op; got #{lines.inspect}"
+
+    assert_match(/\Ano-op #{SHA_NOOP}\b/, lines.first,
+                 'a proceed=false run must be named as a no-op carrying its headSha, so ' \
+                 "the ask can link the run; got #{lines.inspect}")
+
+    refute_includes out, "success #{SHA_NOOP}",
+                    'a run that published nothing is NOT a green publish — printing ' \
+                    "`success #{SHA_NOOP}` is the false green this row must not emit " \
+                    "(stdout=#{out.inspect})"
+
+    refute_includes out, 'Unhealthy',
+                    'proceed=false means nothing was owed, so this is not Unhealthy'
+  end
+
+  def test_release_run_that_published_grades_on_conclusion
+    out, err, status = run_row9(jobs: release_jobs_json(preflight: 'success', release: 'success', demo: 'success'),
+                                conclusion: 'success', sha: SHA_PUBLISHED)
+
+    assert_predicate status, :success?,
+                     "row 9's command must run cleanly (status=#{status.inspect}, " \
+                     "stdout=#{out.inspect}, stderr=#{err.inspect})"
+
+    assert_equal ["success #{SHA_PUBLISHED}"], out.lines.map(&:chomp),
+                 'a run that really pushed the gem and cut the tag is an ordinary ' \
+                 'publish: grade on conclusion and print exactly `success <sha>`'
+
+    refute_includes out, 'no-op',
+                    'the no-op signature is release SKIPPED; a release that ran is not one'
+  end
+
+  def test_unreadable_release_jobs_list_never_grades_success
+    out, err, _status = run_row9(jobs: release_jobs_json(preflight: 'success', release: 'skipped', demo: 'skipped'),
+                                 conclusion: 'success', sha: SHA_PUBLISHED, jobs_fail: true)
+
+    refute_includes out, "success #{SHA_PUBLISHED}",
+                    'the `gh api .../jobs` stub failed, so the row cannot tell a ' \
+                    'publish from a proceed=false no-op and must not print a green; ' \
+                    "got stdout=#{out.inspect}, stderr=#{err.inspect}"
+
+    assert_includes out, 'verdict unknown',
+                    'an unreadable jobs list must fail closed as `verdict unknown`; ' \
+                    "got stdout=#{out.inspect}"
+
+    assert_includes out, SHA_PUBLISHED,
+                    '`verdict unknown` must still name the sha it could not grade; ' \
+                    "got stdout=#{out.inspect}"
+  end
+
+  def test_release_run_still_in_flight_is_not_graded
+    # An executing run reports conclusion=null and a half-built job list: the
+    # no-op signature would be a guess about jobs that have not concluded.
+    out, err, status = run_row9(jobs: release_jobs_json(preflight: 'success', release: nil, demo: nil),
+                                conclusion: 'null', sha: SHA_INFLIGHT)
+
+    assert_predicate status, :success?,
+                     "row 9's command must run cleanly (status=#{status.inspect}, " \
+                     "stdout=#{out.inspect}, stderr=#{err.inspect})"
+
+    assert_equal ["in flight #{SHA_INFLIGHT}"], out.lines.map(&:chomp),
+                 'a run with a null conclusion has not finished; report it in flight ' \
+                 "and grade nothing (stdout=#{out.inspect})"
+
+    refute_includes out, 'Unhealthy',
+                    'still running is not a red release'
+    refute_includes out, "success #{SHA_INFLIGHT}",
+                    'a run that has not concluded cannot be a green publish'
+  end
+
+  def test_failed_preflight_is_not_read_as_a_no_op
+    # release.yml:55-60 refuses any ref but main with a FAILING step, not a
+    # job-level `if:` — a skipped preflight would leave a green run that
+    # published nothing and said nothing. `needs:` then skips release and demo,
+    # so the job list is the same all-skipped shape a proceed=false run
+    # produces; only preflight's own conclusion tells the two apart.
+    out, err, status = run_row9(jobs: release_jobs_json(preflight: 'failure', release: 'skipped', demo: 'skipped'),
+                                conclusion: 'failure', sha: SHA_REFUSED)
+
+    assert_predicate status, :success?,
+                     "row 9's command must run cleanly (status=#{status.inspect}, " \
+                     "stdout=#{out.inspect}, stderr=#{err.inspect})"
+
+    assert_equal ["failure #{SHA_REFUSED}"], out.lines.map(&:chomp),
+                 'a refused release published nothing and was red; it grades on its ' \
+                 "own conclusion, not as a no-op (stdout=#{out.inspect})"
+
+    refute_includes out, 'no-op',
+                    'proceed=false requires preflight itself to have succeeded'
+  end
+
+  def test_brief_cites_one_contiguous_range_for_the_proceed_signal
+    # The no-op step used to split its evidence across two anchors
+    # (release.yml:80-86 for the emit, release.yml:88-90 for the gate), leaving
+    # the one thing a maintainer goes to read — where proceed=false comes from
+    # — to be assembled from two places. One range fixes that, and the range
+    # must still hold both halves: an anchor naming lines that no longer decide
+    # proceed points a reader at nothing.
+    step = no_op_step
+
+    assert_includes step, 'release.yml:80-90',
+                    'the no-op step must cite ONE contiguous range for the proceed ' \
+                    "signal; got the step as #{step.inspect}"
+
+    %w[release.yml:80-86 release.yml:88-90].each do |split|
+      refute_includes step, split,
+                      "the proceed signal is still cited as #{split} and something else; " \
+                      'the row must name one range a reader can open'
+    end
+
+    workflow = File.readlines(RELEASE_WORKFLOW)
+
+    assert_operator workflow.size, :>=, 90,
+                    'release.yml no longer has the lines the brief anchor cites'
+
+    cited = workflow[79..89].join
+
+    assert_includes cited, 'proceed=false',
+                    'release.yml:80-90 must be where preflight writes proceed=false'
+    assert_includes cited, "needs.preflight.outputs.proceed == 'true'",
+                    'release.yml:80-90 must be where the release job reads the proceed signal'
+  end
+
   private
+
+  # The brief's step-3 bullet — the one reading `preflight` success + `release`
+  # skipped as a no-op — as one string, so an assertion about the anchor cannot
+  # be satisfied by that anchor appearing somewhere else in the file.
+  def no_op_step
+    lines = @text.lines.map(&:chomp)
+    first = lines.index { |line| line.start_with?('3. **') && line.include?('no-op') }
+
+    raise 'health.md has no step 3 reading preflight+release-skipped as a no-op' if first.nil?
+
+    last = ((first + 1)...lines.size).find { |i| lines[i].start_with?('4. **') }
+    raise 'health.md step 3 is not followed by a step 4' if last.nil?
+
+    lines[first...last].join("\n")
+  end
 
   # A `gh api repos/.../actions/runs/<id>/jobs` response shaped like the real
   # one: `detect changed paths` plus the gated jobs reading
@@ -227,6 +390,21 @@ class HealthBriefTest < Minitest::Test
             { 'name' => 'test + coverage (latest ruby/rails)', 'conclusion' => gated },
             { 'name' => 'lint (rubocop)', 'conclusion' => gated },
             { 'name' => 'sidekiq release watcher', 'conclusion' => 'skipped' }]
+
+    JSON.generate('total_count' => jobs.size, 'jobs' => jobs)
+  end
+
+  # release.yml's job list, not the detect/lint shape: the `preflight` cheap
+  # gate, the `release` job gated on `needs.preflight.outputs.proceed`, and the
+  # `demo` job that needs both (release.yml:222). The names are the ones the
+  # workflow declares — `demo` is the caller job's own key, a reusable-workflow
+  # call, not a slash-joined "demo / deploy-demo". A `nil` conclusion is a job
+  # that exists and has not concluded yet — what a run still executing looks
+  # like.
+  def release_jobs_json(preflight:, release:, demo:)
+    jobs = [{ 'name' => 'preflight', 'conclusion' => preflight },
+            { 'name' => 'release', 'conclusion' => release },
+            { 'name' => 'demo', 'conclusion' => demo }]
 
     JSON.generate('total_count' => jobs.size, 'jobs' => jobs)
   end
@@ -259,6 +437,15 @@ class HealthBriefTest < Minitest::Test
       write_fixture(fixtures, 'test.yml.sha', sha)
       write_fixture(fixtures, 'test.yml.conclusion', conclusion)
       write_fixture(fixtures, 'dbid-1.jobs', jobs)
+    end
+  end
+
+  def run_row9(jobs:, conclusion:, sha:, jobs_fail: false)
+    run_command(command_cell('the last release published'), jobs_fail: jobs_fail) do |fixtures|
+      write_fixture(fixtures, 'release.yml.dbid', '201')
+      write_fixture(fixtures, 'release.yml.sha', sha)
+      write_fixture(fixtures, 'release.yml.conclusion', conclusion)
+      write_fixture(fixtures, 'dbid-201.jobs', jobs)
     end
   end
 

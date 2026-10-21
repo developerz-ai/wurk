@@ -35,7 +35,7 @@ A dedicated CI job runs the test suites of widely-used Sidekiq ecosystem gems ag
 
 ## CI: GitHub Actions
 
-Every job runs on GitHub-hosted `ubuntu-latest` (free for a public repo). There are no self-hosted runners and no runner variables, so a fork PR never reaches persistent hardware; outside contributors' runs still wait on the repo's approval policy. In test.yml and ecosystem.yml the `detect` job runs `bin/ci-dup-push`: a push to `main` whose tree byte-equals a PR head that already passed the workflow skips the gated jobs, and any doubt falls open to a full run. PR runs cancel in progress; `main` runs never do. The headline suites:
+Every job runs on GitHub-hosted `ubuntu-latest` (free for a public repo). There are no self-hosted runners and no runner variables, so a fork PR never reaches persistent hardware; outside contributors' runs still wait on the repo's approval policy. In test.yml, ecosystem.yml, and topology.yml the `detect` job evaluates the dup-push short-circuit independently per workflow — test.yml calls `bin/ci-dup-push`, while ecosystem.yml and topology.yml each pass their own workflow path (`bin/ci-dup-push .github/workflows/<name>.yml`). A push to `main` whose tree byte-equals a PR head that already passed that workflow skips the gated jobs, and any doubt falls open to a full run. PR runs cancel in progress; `main` runs never do. The headline suites:
 
 - Test suite (one full run on the newest Ruby + newest Rails, coverage gate folded in — no version matrix)
 - Ecosystem compat suite
