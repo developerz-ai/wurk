@@ -8,7 +8,7 @@ so that nobody has to watch it. This brief covers the failures no issue or PR an
 | `main` is green | `run=$(gh run list --workflow test.yml --branch main --event push --limit 1 --json databaseId,headSha,conclusion \| jq -c '.[0]'); sha=$(jq -r .headSha <<<"$run"); v=$(gh api "repos/$(gh repo view --json nameWithOwner -q .nameWithOwner)/actions/runs/$(jq -r .databaseId <<<"$run")/jobs" \| jq -r '[.jobs[]?] as $all \| [$all[] \| select(.name != "detect changed paths")] as $g \| [$all[] \| select(.name == "detect changed paths")] as $d \| if ($all \| length) == 0 then "unreadable" elif ($d \| length) == 1 and ($d[0].conclusion == "success") and ($g \| length) > 0 and all($g[]; .conclusion == "skipped") then "dup" else "graded" end' 2>/dev/null); case "$v" in dup) echo "Unhealthy: $sha is a dup'd push run" ;; graded) echo "$(jq -r .conclusion <<<"$run") $sha" ;; *) echo "verdict unknown $sha" ;; esac` | `success`, and `detect.dup=false` |
 | the last release published | `run=$(gh run list --workflow release.yml --limit 1 --json databaseId,headSha,conclusion \| jq -c '.[0]'); sha=$(jq -r .headSha <<<"$run"); c=$(jq -r .conclusion <<<"$run"); v=$(gh api "repos/$(gh repo view --json nameWithOwner -q .nameWithOwner)/actions/runs/$(jq -r .databaseId <<<"$run")/jobs" \| jq -r '[.jobs[]?] as $all \| [$all[] \| select(.name == "preflight")] as $p \| [$all[] \| select(.name == "release")] as $r \| if ($all \| length) == 0 then "unreadable" elif ($p \| length) == 1 and ($p[0].conclusion == "success") and ($r \| length) == 1 and ($r[0].conclusion == "skipped") then "noop" else "graded" end' 2>/dev/null); if [ "$c" = "null" ]; then echo "in flight $sha"; else case "$v" in noop) echo "no-op $sha, preflight passed with proceed=false: nothing was owed, that version is already on RubyGems" ;; graded) echo "$c $sha" ;; *) echo "verdict unknown $sha" ;; esac; fi` | `success`, or a named `no-op <sha>` (proceed=false, nothing owed) |
 | RubyGems serves `Wurk::VERSION` | `gem list wurk --remote --exact` vs `lib/wurk/version.rb` | equal, or a release run is in flight |
-| the demo deployed | `gh run list --workflow deploy-demo.yml --limit 1 --json conclusion` | `success` |
+| the demo deployed | `run=$(gh run list --workflow deploy-demo.yml --limit 1 --json databaseId,headSha,conclusion \| jq -c '.[0]'); sha=$(jq -r .headSha <<<"$run"); c=$(jq -r .conclusion <<<"$run"); repo=$(gh repo view --json nameWithOwner -q .nameWithOwner); jobs=$(gh api "repos/$repo/actions/runs/$(jq -r .databaseId <<<"$run")/jobs" 2>/dev/null); if [ -z "$jobs" ] \|\| [ "$jobs" = "null" ]; then v=unreadable; else job_id=$(printf '%s' "$jobs" \| jq -r '.jobs[]? \| select(.name == "build") \| .id' 2>/dev/null \| head -1); log=$(gh run view "$(jq -r .databaseId <<<"$run")" --job "$job_id" --log 2>/dev/null); if [ -z "$log" ]; then v=unreadable; else v=$(printf '%s' "$log" \| grep -oE 'sha-[0-9a-f]{7}' \| head -1); if [ -z "$v" ]; then v=unresolved; fi; fi; fi; if [ "$v" = unreadable ]; then echo "verdict unknown $sha"; elif [ "$v" = unresolved ]; then echo "Unhealthy: deploy-demo built no sha-<7> image tag at $sha, so Image Updater has no candidate and the demo is frozen on its current digest"; else echo "$c $sha tagged $v"; fi` | `success`, and a `sha-<7>` image tag the `resolve built commit` step wrote |
 | topology and ecosystem lanes | `for wf in topology.yml ecosystem.yml; do run=$(gh run list --workflow $wf --branch main --event push --limit 1 --json databaseId,headSha,conclusion \| jq -c '.[0]'); sha=$(jq -r .headSha <<<"$run"); v=$(gh api "repos/$(gh repo view --json nameWithOwner -q .nameWithOwner)/actions/runs/$(jq -r .databaseId <<<"$run")/jobs" \| jq -r '[.jobs[]?] as $all \| [$all[] \| select(.name != "detect changed paths" and .name != "sidekiq release watcher")] as $g \| [$all[] \| select(.name == "detect changed paths")] as $d \| if ($all \| length) == 0 then "unreadable" elif ($d \| length) == 1 and ($d[0].conclusion == "success") and ($g \| length) > 0 and all($g[]; .conclusion == "skipped") then "dup" else "graded" end' 2>/dev/null); case "$v" in dup) echo "Unhealthy: $wf at $sha is a dup'd push run" ;; graded) echo "$wf $(jq -r .conclusion <<<"$run") $sha" ;; *) echo "$wf verdict unknown $sha" ;; esac; done` | `success` on both, and `detect.dup=false` on both |
 | Dependabot is not stuck | `gh pr list --app dependabot --json number,createdAt` | none older than 7 days |
 
@@ -70,8 +70,43 @@ on its own `conclusion` — `release` failed, or `preflight` failed the non-main
 same all-skipped list a no-op produces, which is why step 3 requires `preflight` itself to have
 concluded `success`.
 
+**Grading a demo deploy.** Row 11 reads `databaseId,headSha,conclusion` *and* the job list from
+`gh api repos/$repo/actions/runs/<databaseId>/jobs`, then reads the `build` job's full log via
+`gh run view <databaseId> --job <build.id> --log` and grades in three steps. The reason is the
+deploy model: deploy-demo.yml only BUILDS and PUSHES the image (deploy-demo.yml:7-11). Nothing in
+the workflow deploys it — infra's ArgoCD Image Updater picks the newest DOCR tag matching
+`^sha-[0-9a-f]{7}$` and syncs on its own. So a green run is a claim about a pushed tag, not about
+what the demo is serving, and the only place that tag is recorded is in the `resolve built
+commit` step's log line (the jobs API does not carry step logs).
+
+1. **An unreadable jobs list OR an unreadable `build` job log grades `verdict unknown <sha>`**,
+   never a colour — the same fail-closed rule rows 8, 9 and 12 use. `gh api`/`gh run view` cannot
+   reach `wurk.demo.developerz.ai/wurk/api/meta`, so there is no second source for this row: if the
+   jobs read or the log read fails, the next checkup re-runs it rather than the row guessing from
+   `conclusion`.
+2. **A green run with no `sha-[0-9a-f]{7}` in the `resolve built commit` step's log is Unhealthy**,
+   whatever the `conclusion`. `resolve built commit` (deploy-demo.yml:173-180) writes
+   `short=sha-<7>` to `$GITHUB_OUTPUT` from `git rev-parse HEAD`, and `steps.built.outputs.short` is
+   the first tag `build-push-action` pushes. No tag in that exact format means no Image Updater
+   candidate, which is precisely how the demo silently sat on an old digest across several
+   releases (deploy-demo.yml:165-172). An older version still being served is a deployment
+   failure, so the verdict names it: the ask is to fix the tag, not to re-run the deploy.
+3. **Otherwise grade on `conclusion`**, printing `<conclusion> <sha> tagged sha-<7>`.
+
+**Green is necessary, not sufficient.** This row proves the image was built and pushed under the
+tag shape Image Updater selects. It does **not** prove the demo serves it — the sync, the rollout
+and the in-cluster health of the app all live in the infrastructure repo, out of reach here. There
+is also no in-run probe of the served version: the demo's `version:` comes from
+`app/controllers/wurk/api_controller.rb:53` (`::Wurk::VERSION` in the `/wurk/api/meta` payload),
+and an allowlisted command cannot reach `wurk.demo.developerz.ai/wurk/api/meta` — both `gh api` and
+`gh run view` scope to GitHub's API, so that gap is a fact about this brief, not a failure to fix
+later. A green verdict on this row is therefore "a deployable image was pushed, and nothing here
+can see whether it is live." Treat a demo that visibly lags main as an ask against the tag from
+step 3, and say plainly which half of the signal is missing.
+
 For each unhealthy signal, file one ask unless an open issue already names it. The title names the
-signal (`main is red at <sha>`, `main is green only via a dup'd push at <sha>`,
+signal (`main is red at <sha>`, `main is green only via a dup'd push at <sha>`, `demo frozen: no
+sha-<7> image tag at <sha>`,
 `release <v> did not publish`), and the body carries the command, its output and the run URL. A red
 `main` comes first: nothing releases from it. Recovery is
 `RELEASE.md`'s *If a release fails*. Never delete a tag, re-run a publish or `gem push` from here.

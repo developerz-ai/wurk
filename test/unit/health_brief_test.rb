@@ -25,6 +25,12 @@ require 'tmpdir'
 #      success + `release` skipped and names that a no-op. A run still
 #      executing (`conclusion=null`) is reported in flight and graded by
 #      nobody.
+#   4. A green deploy-demo run proves a pushed image, not a served one: the
+#      row reads the `resolve built commit` step log for the `sha-<7>` tag
+#      infra's Image Updater selects, and a green run carrying no such tag is
+#      Unhealthy — it leaves the demo frozen on an old digest while reporting
+#      green. The brief must also name the gap it cannot close: no allowlisted
+#      command reaches the demo's own `/wurk/api/meta`.
 #
 # Reads the brief and runs its own extracted commands; no network, no Redis,
 # no shared state.
@@ -43,6 +49,10 @@ class HealthBriefTest < Minitest::Test
   SHA_NOOP       = 'f' * 40
   SHA_REFUSED    = '9' * 40
   SHA_INFLIGHT   = '1' * 40
+  SHA_DEMO       = '7' * 40
+  SHA_DEMO_FROZEN = '4' * 40
+  DEMO_TAG       = 'sha-7777777'
+  API_CONTROLLER = File.join(ROOT, 'app', 'controllers', 'wurk', 'api_controller.rb')
 
   def setup
     @text = File.read(BRIEF)
@@ -265,6 +275,134 @@ class HealthBriefTest < Minitest::Test
                     'proceed=false requires preflight itself to have succeeded'
   end
 
+  def test_demo_deploy_grades_on_conclusion_when_the_step_log_names_the_tag
+    out, err, status = run_row11(jobs: demo_jobs_json,
+                                 log: resolve_log(short: DEMO_TAG),
+                                 conclusion: 'success', sha: SHA_DEMO)
+
+    assert_predicate status, :success?,
+                     "row 11's command must run cleanly (status=#{status.inspect}, " \
+                     "stdout=#{out.inspect}, stderr=#{err.inspect})"
+
+    assert_equal ["success #{SHA_DEMO} tagged #{DEMO_TAG}"], out.lines.map(&:chomp),
+                 'a run whose `resolve built commit` step wrote the sha-<7> tag ' \
+                 'Image Updater selects is an ordinary deploy: grade on conclusion ' \
+                 "and name the tag; got stdout=#{out.inspect}"
+
+    refute_includes out, 'Unhealthy',
+                    'a readable tag means the deploy produced a candidate'
+    refute_includes out, 'verdict unknown',
+                    'a readable jobs list is a verdict, not an unknown'
+  end
+
+  def test_green_demo_deploy_without_a_resolvable_tag_is_unhealthy
+    # deploy-demo.yml:7-11 only BUILDS and PUSHES. Infra's Image Updater selects
+    # the newest tag matching ^sha-[0-9a-f]{7}$; a green run that wrote no such
+    # tag leaves the demo on its old digest and says nothing. That is how it
+    # silently went stale across several releases (deploy-demo.yml:165-172).
+    out, err, status = run_row11(jobs: demo_jobs_json,
+                                 log: resolve_log(short: nil),
+                                 conclusion: 'success', sha: SHA_DEMO_FROZEN)
+
+    assert_predicate status, :success?,
+                     "row 11's command must run cleanly (status=#{status.inspect}, " \
+                     "stdout=#{out.inspect}, stderr=#{err.inspect})"
+
+    assert_includes out, 'Unhealthy',
+                    'a green run with no sha-[0-9a-f]{7} tag in `resolve built ' \
+                    'commit` gives Image Updater no candidate — Unhealthy; got ' \
+                    "stdout=#{out.inspect}"
+
+    refute_includes out, "success #{SHA_DEMO_FROZEN}",
+                    'an unresolvable tag is NOT a green deploy: printing `success ' \
+                    '<sha>` is the false green this row must not emit ' \
+                    "(stdout=#{out.inspect})"
+
+    assert_includes out, SHA_DEMO_FROZEN,
+                    'the Unhealthy verdict must surface the headSha so the ask ' \
+                    "can link the run; got stdout=#{out.inspect}"
+  end
+
+  def test_unreadable_demo_jobs_list_never_grades_success
+    out, err, _status = run_row11(jobs: demo_jobs_json,
+                                  log: resolve_log(short: DEMO_TAG),
+                                  conclusion: 'success', sha: SHA_DEMO, jobs_fail: true)
+
+    refute_includes out, "success #{SHA_DEMO}",
+                    'the `gh api .../jobs` stub failed, so the row cannot see the ' \
+                    '`resolve built commit` step and must not fall through to ' \
+                    'grading on conclusion; ' \
+                    "got stdout=#{out.inspect}, stderr=#{err.inspect}"
+
+    assert_includes out, 'verdict unknown',
+                    'an unreadable jobs list must fail closed as `verdict unknown`; ' \
+                    "got stdout=#{out.inspect}"
+
+    assert_includes out, SHA_DEMO,
+                    '`verdict unknown` must still name the sha it could not grade, ' \
+                    "so the next checkup can re-run it; got stdout=#{out.inspect}"
+  end
+
+  def test_unreadable_demo_log_never_grades_success
+    # Row 11 reads the `build` job log separately (`gh run view ... --job ... --log`)
+    # because step logs are not carried on the jobs API. If that read fails — a
+    # rate-limit, a 4xx, or a 5xx — the jobs list is fine but the tag is unknowable,
+    # so the row must fail closed exactly the way an unreadable jobs list does:
+    # `verdict unknown <sha>`, never `success <sha>`.
+    out, err, _status = run_row11(jobs: demo_jobs_json,
+                                  log: resolve_log(short: DEMO_TAG),
+                                  conclusion: 'success', sha: SHA_DEMO, log_fail: true)
+
+    refute_includes out, "success #{SHA_DEMO}",
+                    'the `gh run view --log` stub failed, so the row cannot see the ' \
+                    '`sha-<7>` tag and must not fall through to grading on conclusion; ' \
+                    "got stdout=#{out.inspect}, stderr=#{err.inspect}"
+
+    refute_includes out, "tagged #{DEMO_TAG}",
+                    'an unreadable log cannot read a tag — printing `tagged ' \
+                    "#{DEMO_TAG}` would be lying about a tag the row did not read; " \
+                    "got stdout=#{out.inspect}"
+
+    assert_includes out, 'verdict unknown',
+                    'an unreadable log must fail closed as `verdict unknown`, the ' \
+                    'same fail-closed rule an unreadable jobs list uses; ' \
+                    "got stdout=#{out.inspect}"
+
+    assert_includes out, SHA_DEMO,
+                    '`verdict unknown` must still name the sha it could not grade, ' \
+                    "so the next checkup can re-run it; got stdout=#{out.inspect}"
+  end
+
+  def test_demo_row_names_the_served_version_probe_gap
+    # The row can only prove an image was pushed. Whether the demo SERVES it
+    # lives in infra, and the obvious probe is out of reach: no allowlisted
+    # command can fetch wurk.demo.developerz.ai/wurk/api/meta. The brief has to
+    # say so, at the anchor where the served version is produced
+    # (api_controller.rb:53, `version: ::Wurk::VERSION`) — a green verdict read
+    # as "the demo is live" is the false green this block exists to prevent.
+    block = demo_block
+
+    assert_includes block, 'api_controller.rb:53',
+                    'the served-version probe gap must name the anchor that ' \
+                    "produces the demo's `version:`; got #{block.inspect}"
+
+    assert_includes block, 'wurk.demo.developerz.ai/wurk/api/meta',
+                    'the gap must name the endpoint that cannot be reached; got ' \
+                    "#{block.inspect}"
+
+    assert_match(/not sufficient/,
+                 block,
+                 'the block must say green is necessary, not sufficient, or the ' \
+                 "reader takes a pushed tag as proof the demo is live; got #{block.inspect}")
+
+    cited = File.readlines(API_CONTROLLER)
+
+    assert_includes cited[52],
+                    'version: ::Wurk::VERSION',
+                    'api_controller.rb:53 must be where the demo reports its ' \
+                    "version; it now reads #{cited[52].inspect}"
+  end
+
   def test_brief_cites_one_contiguous_range_for_the_proceed_signal
     # The no-op step used to split its evidence across two anchors
     # (release.yml:80-86 for the emit, release.yml:88-90 for the gate), leaving
@@ -298,6 +436,22 @@ class HealthBriefTest < Minitest::Test
   end
 
   private
+
+  # The "Grading a demo deploy" prose block — row 11's graded convention, from
+  # its heading up to the filing convention that follows it. Bounded on that
+  # paragraph, not on the next `**`, so the "Green is necessary, not
+  # sufficient" sub-heading stays inside the block it belongs to.
+  def demo_block
+    lines = @text.lines.map(&:chomp)
+    first = lines.index { |line| line.start_with?('**Grading a demo deploy') }
+
+    raise 'health.md has no "Grading a demo deploy" block' if first.nil?
+
+    last = ((first + 1)...lines.size).find { |i| lines[i].start_with?('For each unhealthy signal') }
+    raise 'the demo block is not followed by the filing convention' if last.nil?
+
+    lines[first...last].join("\n")
+  end
 
   # The brief's step-3 bullet — the one reading `preflight` success + `release`
   # skipped as a no-op — as one string, so an assertion about the anchor cannot
@@ -343,6 +497,38 @@ class HealthBriefTest < Minitest::Test
     JSON.generate('total_count' => jobs.size, 'jobs' => jobs)
   end
 
+  # deploy-demo.yml's job list — the `authorize` allowlist job and the `build`
+  # job whose steps do the actual work. Real jobs API shape: step objects carry
+  # name/status/conclusion/number/timestamps only — NO `log` field. The log is
+  # read separately via `gh run view <id> --job <id> --log` (see stub below);
+  # row 11 feeds each test's log content in via the `log:` fixture instead of
+  # inventing a `log` key on the step that the real API would never return.
+  def demo_jobs_json
+    jobs = [{ 'name' => 'authorize', 'conclusion' => 'success', 'steps' => [] },
+            { 'name' => 'build', 'id' => 9999, 'conclusion' => 'success',
+              'steps' => [{ 'name' => 'Set up job', 'conclusion' => 'success' },
+                          { 'name' => 'resolve built commit', 'conclusion' => 'success' },
+                          { 'name' => 'verify pushed tags resolve', 'conclusion' => 'success' }] }]
+
+    JSON.generate('total_count' => jobs.size, 'jobs' => jobs)
+  end
+
+  # What the `resolve built commit` step's log looks like: the shell that writes
+  # `sha=` and `short=sha-<7>` to $GITHUB_OUTPUT is echoed into the job log, so
+  # the tag is recoverable only by reading the log text (deploy-demo.yml:173-180).
+  # A nil `short` is the regression the comment there records: the step ran and
+  # wrote no tag Image Updater's ^sha-[0-9a-f]{7}$ can select.
+  def resolve_log(short:)
+    lines = ['Run git rev-parse HEAD',
+             '  7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7',
+             'Run {',
+             '    echo "sha=$sha"',
+             "    echo \"short=#{short}\"",
+             '  } >> "$GITHUB_OUTPUT"']
+
+    "#{lines.join("\n")}\n"
+  end
+
   def write_fixture(dir, name, body)
     File.write(File.join(dir, name), body)
   end
@@ -383,6 +569,16 @@ class HealthBriefTest < Minitest::Test
     end
   end
 
+  def run_row11(jobs:, log:, conclusion:, sha:, jobs_fail: false, log_fail: false)
+    run_command(command_cell('the demo deployed'), jobs_fail: jobs_fail, log_fail: log_fail) do |fixtures|
+      write_fixture(fixtures, 'deploy-demo.yml.dbid', '301')
+      write_fixture(fixtures, 'deploy-demo.yml.sha', sha)
+      write_fixture(fixtures, 'deploy-demo.yml.conclusion', conclusion)
+      write_fixture(fixtures, 'dbid-301.jobs', jobs)
+      write_fixture(fixtures, 'dbid-301.job-9999.log', log)
+    end
+  end
+
   def run_row12(jobs_fail: false)
     run_command(command_cell('topology and ecosystem lanes'), jobs_fail: jobs_fail) do |fixtures|
       write_fixture(fixtures, 'topology.yml.dbid', '101')
@@ -403,7 +599,7 @@ class HealthBriefTest < Minitest::Test
   # swallows the failing `gh api` inside a pipeline. Yields the fixtures dir
   # before the script runs so the caller can write the job lists the stub
   # serves, then returns Open3's [stdout, stderr, status].
-  def run_command(command, jobs_fail:)
+  def run_command(command, jobs_fail:, log_fail: false)
     Dir.mktmpdir('wurk-health-brief-') do |tmpdir|
       fixtures = File.join(tmpdir, 'fixtures')
       bin_dir = File.join(tmpdir, 'bin')
@@ -423,7 +619,8 @@ class HealthBriefTest < Minitest::Test
       env = {
         'PATH' => "#{bin_dir}:#{ENV.fetch('PATH', '')}",
         'WURK_TEST_FIXTURES' => fixtures,
-        'WURK_TEST_JOBS_FAIL' => jobs_fail ? '1' : '0'
+        'WURK_TEST_JOBS_FAIL' => jobs_fail ? '1' : '0',
+        'WURK_TEST_LOG_FAIL' => log_fail ? '1' : '0'
       }
 
       Open3.capture3(env, script_path)
@@ -435,25 +632,75 @@ class HealthBriefTest < Minitest::Test
   # `WURK_TEST_JOBS_FAIL=1` makes ONLY the jobs call fail, leaving the run
   # list readable — that is the exact shape of the false green this file
   # pins: a `conclusion` the brief can see, and a jobs list it cannot.
+  # `WURK_TEST_LOG_FAIL=1` is the analog for row 11's `gh run view --log`
+  # read — jobs readable, log unreadable, and the row must still fail
+  # closed as `verdict unknown <sha>`.
   STUB_GH = <<~'SHELL'
     #!/usr/bin/env bash
     fixdir="$WURK_TEST_FIXTURES"
     case "${1:-}" in
       run)
-        wf=""
-        for arg in "$@"; do
-          case "$arg" in
-            *.yml) wf="$arg" ;;
-          esac
-        done
-        if [ -z "$wf" ]; then
-          printf 'stub gh run: no --workflow argument in: %s\n' "$*" >&2
-          exit 1
-        fi
-        printf '[{"databaseId":%s,"headSha":"%s","conclusion":"%s"}]\n' \
-          "$(cat "$fixdir/$wf.dbid")" \
-          "$(cat "$fixdir/$wf.sha")" \
-          "$(cat "$fixdir/$wf.conclusion")"
+        case "${2:-}" in
+          view)
+            # `gh run view <dbid> --job <jobid> --log` is how row 11 reads the
+            # `resolve built commit` step's log; the jobs API carries no step
+            # logs, so the row has to fetch them separately. Args: run id is
+            # the first non-flag arg, the job id is the arg after `--job`.
+            if [ "$WURK_TEST_LOG_FAIL" = "1" ]; then
+              printf 'stub gh run view --log: the log read fails on purpose (rate limited or 4xx)\n' >&2
+              exit 1
+            fi
+            prev=""
+            dbid=""
+            jobid=""
+            want_log=""
+            for arg in "$@"; do
+              case "$prev" in
+                --job) jobid="$arg" ;;
+              esac
+              case "$arg" in
+                --log) want_log="1" ;;
+                [0-9]*)
+                  if [ -z "$dbid" ] && [ "$arg" != "$prev" ]; then
+                    dbid="$arg"
+                  fi
+                  ;;
+              esac
+              prev="$arg"
+            done
+            if [ -z "$want_log" ]; then
+              printf 'stub gh run view: only the --log form is stubbed here, got: %s\n' "$*" >&2
+              exit 1
+            fi
+            if [ -z "$dbid" ] || [ -z "$jobid" ]; then
+              printf 'stub gh run view --log: need a run id and a --job id, got: %s\n' "$*" >&2
+              exit 1
+            fi
+            fixture="$fixdir/dbid-$dbid.job-$jobid.log"
+            if [ ! -s "$fixture" ]; then
+              printf 'stub gh run view --log: no log fixture for run %s job %s (looked for %s)\n' \
+                "$dbid" "$jobid" "$fixture" >&2
+              exit 1
+            fi
+            cat "$fixture"
+            ;;
+          *)
+            wf=""
+            for arg in "$@"; do
+              case "$arg" in
+                *.yml) wf="$arg" ;;
+              esac
+            done
+            if [ -z "$wf" ]; then
+              printf 'stub gh run: no --workflow argument in: %s\n' "$*" >&2
+              exit 1
+            fi
+            printf '[{"databaseId":%s,"headSha":"%s","conclusion":"%s"}]\n' \
+              "$(cat "$fixdir/$wf.dbid")" \
+              "$(cat "$fixdir/$wf.sha")" \
+              "$(cat "$fixdir/$wf.conclusion")"
+            ;;
+        esac
         ;;
       repo)
         printf 'wurk-owner/wurk\n'
