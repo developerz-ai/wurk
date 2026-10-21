@@ -136,7 +136,7 @@ class ReleaseDueBriefTest < Minitest::Test
 
   # The brief must verify that `$last` is a real, gem-bearing release —
   # the gem-less marker is `author=developerz-ai[bot]` (the maintainer
-  # agent's auto-cut) AND/OR `assets.length=0` (RELEASE.md:165-172). The
+  # agent's auto-cut) AND/OR `assets.length=0` (RELEASE.md:167-174). The
   # marker arose in the past when a stray tag was reused by the
   # maintainer agent and the GitHub Release was created gem-less. Without
   # this guard, the diff window would be computed against a non-release
@@ -264,7 +264,7 @@ class ReleaseDueBriefTest < Minitest::Test
   end
 
   # The gem-less marker is an OR (author=developerz-ai[bot] OR
-  # assets.length=0, RELEASE.md:165-172), but the shared gem-less fixture
+  # assets.length=0, RELEASE.md:167-174), but the shared gem-less fixture
   # sets BOTH markers — a guard reduced to either half alone would still
   # pass it. Each fixture below sets exactly one marker and pins that it
   # alone aborts before the local fast path.
@@ -597,7 +597,7 @@ class ReleaseDueBriefTest < Minitest::Test
         esac
         ;;
       release)
-        # gem-less marker: author=developerz-ai[bot], assets=[] (RELEASE.md:165-172).
+        # gem-less marker: author=developerz-ai[bot], assets=[] (RELEASE.md:167-174).
         printf '%s\n' '{"author":{"login":"developerz-ai[bot]"},"assets":[]}'
         ;;
       *)
