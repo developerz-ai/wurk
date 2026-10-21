@@ -84,460 +84,389 @@ class ReleaseDueBriefTest < Minitest::Test
            'unknown-verdict table row, not prose elsewhere'
   end
 
-  def test_compare_response_extracted_via_jq_in_current_shell
+  # The brief must peel `$last` to a commit SHA before computing the diff
+  # window. The ref object behind $last is either a tag object (annotated
+  # tag: the commit lives under the tag object's .object.sha) or the
+  # commit itself (lightweight tag: object.type=commit and .object.sha IS
+  # the commit SHA), and a non-commit ref (a tree, blob, or stray
+  # non-commit object) leaves the peel unresolved. The peel branches on
+  # .object.type because /git/tags/<commit sha> 404s — resolving a
+  # lightweight tag through the tag-object endpoint would reject a valid
+  # release base. The `gh release view` verify and the Compare fetch both
+  # happen AFTER the peel, so a failed peel aborts the Decide script
+  # before either runs.
+  def test_brief_peels_tag_ref_to_commit
     decide_block = extract_decide_block
 
-    # The Compare response must be filtered through `jq` to drive the
-    # while loop's SHA stream — an un-filtered response would not
-    # expose the `.commits[]` anchors the per-commit path filter walks,
-    # so row-1's "empty" verdict and row-5's `<next>` cue would both be
-    # unreachable. The extraction lives in the CURRENT shell (not as
-    # part of a `< <(...)` process substitution piped into the loop)
-    # so a failed Compare aborts the script instead of letting the
-    # loop run with no input.
     assert_match(
-      %r{compare/[^\s"]+},
+      %r{git/ref/tags/\$last},
       decide_block,
-      'the Compare endpoint `compare/$last...main` must be referenced'
+      'the brief must call `gh api "repos/.../git/ref/tags/$last"` to peel the tag ref'
     )
     assert_match(
-      /\.commits\[\]\.sha/,
+      %r{git/tags/},
       decide_block,
-      'the Compare response must be filtered via `jq -r ".commits[].sha"`'
+      'the brief must follow the ref peel with a `gh api "repos/.../git/tags/$tag_sha"` ' \
+      'to resolve to a commit'
     )
+
+    # The peel must branch on `.object.type`: a lightweight tag's
+    # `.object.sha` IS the commit and must be reused directly (a
+    # `/git/tags/<commit sha>` call 404s), while an annotated tag peels
+    # through the tag object. A jq-fallback regex cannot pin this —
+    # `.object.sha` matches `/\.sha\b/` too, so dropping the lightweight
+    # path kept that assertion green — hence the branch-shape matches
+    # below plus the executable lightweight case
+    # (`test_lightweight_tag_peel_reaches_local_fast_path`).
+    assert_match(/\.object\.type/, decide_block,
+                 'the peel must branch on the ref object `.object.type`')
+    assert_match(/\.object\.sha/, decide_block,
+                 'the jq filter must reference `.object.sha` (the ref or tag object SHA)')
+    assert_match(/commit_sha=\$tag_sha/, decide_block,
+                 'the lightweight path (object.type=commit) must reuse `$tag_sha` as the commit SHA directly')
+
+    # The peel must abort (not silently continue) when it cannot resolve
+    # to a commit, with a `::error::` GitHub Actions diagnostic so the
+    # abort is visible in the workflow log.
+    assert_match(/::error::tag/, decide_block,
+                 'a failed tag-peel must emit `::error::tag ...` so the abort surfaces in the workflow log')
+    assert_match(/exit\s+1/, decide_block,
+                 'the tag-peel guard must `exit 1` so the abort propagates to the Decide script')
   end
 
-  def test_per_commit_jq_filter_emits_only_commits_touching_ship_spec_paths
-    per_commit_filter = extract_per_commit_jq_filter
+  # The brief must verify that `$last` is a real, gem-bearing release —
+  # the gem-less marker is `author=developerz-ai[bot]` (the maintainer
+  # agent's auto-cut) AND/OR `assets.length=0` (RELEASE.md:165-172). The
+  # marker arose in the past when a stray tag was reused by the
+  # maintainer agent and the GitHub Release was created gem-less. Without
+  # this guard, the diff window would be computed against a non-release
+  # anchor and the agent would file a `Release <next>` ask on top of
+  # work that was never actually shipped.
+  def test_brief_verifies_release_gem_less_marker
+    decide_block = extract_decide_block
 
-    refute_nil per_commit_filter,
-               '.dz/briefs/release-due.md must contain a per-commit jq filter ' \
-               '(a `jq -r` invocation after `gh api ".../commits/$sha"`) so ' \
-               'the window is anchored on a per-commit `.files[]` check ' \
-               "rather than Compare's aggregate `.files[]`"
+    assert_match(
+      /gh\s+release\s+view\s+"\$last"\s+--json\s+author,assets/,
+      decide_block,
+      'the brief must call `gh release view "$last" --json author,assets` to fetch the release marker'
+    )
+    assert_match(/\.author\.login/, decide_block,
+                 'the release author must be extracted via `.author.login`')
+    assert_match(/\.assets\s*\|\s*length/, decide_block,
+                 'the assets count must be extracted via `.assets | length`')
 
-    # The filter must reference `.files[]` and `.filename` — its inputs are a
-    # single commit's GitHub API response, not Compare's aggregate response.
-    assert_match(/\.files\b/, per_commit_filter,
-                 'the per-commit filter must reference `.files[]` from the ' \
-                 'single-commit API response')
-    assert_match(/\bfilename\b/, per_commit_filter,
-                 'the per-commit filter must extract `.filename` from each ' \
-                 '.files[] entry')
+    # The bot's GitHub login is the gem-less author marker; pin it as a
+    # literal so a future refactor cannot replace the literal with a
+    # variable without explicit thought.
+    assert_match(/developerz-ai\[bot\]/, decide_block,
+                 'the gem-less author marker must be the literal `developerz-ai[bot]`')
 
-    # Each of the seven ship-spec paths (the local fast path's git pathspecs,
-    # which the brief transcribes into jq-regex form) must trigger emission
-    # when present in a commit's per-commit `.files[]`. Drive the real jq
-    # against a JSON fixture shaped like one commit's API response so the
-    # assertions exercise the filter as it actually runs — substring matches
-    # would accept the jq-invalid `\.` escape AND reject the valid `\\.`
-    # replacement, which is the regression this test pins.
-    shipping_paths = {
-      'lib/**/*.rb' => 'lib/foo.rb',
-      'lib/**/*.lua' => 'lib/foo.lua',
-      'app/**/*.rb' => 'app/foo.rb',
-      'config/**' => 'config/foo.yml',
-      'exe/*' => 'exe/wurk',
-      'frontend/src/**' => 'frontend/src/index.tsx',
-      'wurk.gemspec' => 'wurk.gemspec'
-    }
+    # And the guard must abort (not silently continue) when the release
+    # is gem-less, with a `::error::` GitHub Actions diagnostic.
+    assert_match(/::error::release/, decide_block,
+                 'a gem-less release must emit `::error::release ...` so the abort surfaces in the workflow log')
+  end
 
-    shipping_paths.each do |pathspec, sample|
-      fixture = JSON.generate(
-        sha: 'a' * 40,
-        commit: {
-          committer: { date: '2026-01-15T10:00:00Z' },
-          message: "feat: shipping #{pathspec}\n\nbody"
-        },
-        files: [{ filename: sample }]
-      )
-
-      out, err, status = run_jq(per_commit_filter, fixture)
+  # In the new brief, the Compare request (`gh api "repos/.../compare/$last...main"`)
+  # is un-captured — there is no `|| { ... exit 1; }` guard, and the diff
+  # window itself comes from the local fast path's `git log`. So a Compare
+  # failure is NOT an abort path: the script falls through to the local
+  # fast path, which uses local git data against `$last..origin/main`.
+  # This test pins that contract — a regression that re-adds the OURS-era
+  # Compare guard would either change the script's exit status (the
+  # guard's `exit 1`) or skip the local fast path (the guard's `exit 1`
+  # happens before `git describe`), both of which this test catches. The
+  # name retains the OURS-era "aborts" framing as a historical reference;
+  # the actual contract pinned here is the OPPOSITE — Compare failure
+  # must NOT abort, and the local fast path must still be reached.
+  def test_compare_request_failure_aborts_decision_before_local_fast_path
+    run_decide_under_stubs(compare_failing_stub_gh) do |(out, err, status), tmpdir|
+      fast_path_marker = File.join(tmpdir, 'local_fast_path_reached')
 
       assert_predicate status, :success?,
-                       "jq filter must compile and run for ship-spec path `#{pathspec}`: #{err}"
+                       'Compare failure must fall through to the local fast path ' \
+                       "(status=#{status.inspect}, stdout=#{out.inspect}, " \
+                       "stderr=#{err.inspect}); the new brief does not guard Compare, " \
+                       'so a Compare failure is not an abort path'
 
-      # Assert the exact output row — `<7-sha> <date> <first line>` — rather
-      # than a substring of the message and a substring of the SHA. A filter
-      # that emitted an empty date or appended the commit body would still
-      # pass the substring checks; only the exact-row check pins the row
-      # shape the `<next>` classifier depends on.
-      expected_row = "#{'a' * 7} 2026-01-15T10:00:00Z feat: shipping #{pathspec}"
-
-      assert_equal expected_row, out.strip,
-                   "commit touching ship-spec path `#{pathspec}` must emit " \
-                   'exact row `<7-sha> <date> <first line>`, not the message body'
+      assert fast_path_reached?(fast_path_marker),
+             'Compare failure must reach the local fast path (marker not set); ' \
+             'the stub `git describe` should have been reached. ' \
+             "stdout=#{out.inspect} stderr=#{err.inspect}"
     end
-
-    # A docs-only commit (only non-ship-spec files in its per-commit diff)
-    # must NOT be emitted — otherwise a docs-only `feat` would dominate the
-    # `<next>` classification alongside a real Ruby fix.
-    docs_fixture = JSON.generate(
-      sha: 'b' * 40,
-      commit: {
-        committer: { date: '2026-01-15T11:00:00Z' },
-        message: 'docs: typo'
-      },
-      files: [{ filename: 'README.md' }, { filename: 'CHANGELOG.md' }]
-    )
-    out, err, status = run_jq(per_commit_filter, docs_fixture)
-
-    assert_predicate status, :success?, "jq filter must compile and run for docs-only fixture: #{err}"
-    assert_equal '', out.strip,
-                 'docs-only commit must NOT be emitted (no ship-spec path touched)'
-
-    # A commit with no `.files[]` at all (e.g. a revert whose per-commit
-    # diff is empty once aggregated, or any commit the API returns files=null
-    # for) must NOT be emitted — the filter is `(.files // [])`, so a null
-    # `.files` becomes an empty array.
-    no_files_fixture = JSON.generate(
-      sha: 'c' * 40,
-      commit: {
-        committer: { date: '2026-01-15T12:00:00Z' },
-        message: 'feat: revert'
-      },
-      files: []
-    )
-    out, err, status = run_jq(per_commit_filter, no_files_fixture)
-
-    assert_predicate status, :success?, "jq filter must compile and run for empty-files fixture: #{err}"
-    assert_equal '', out.strip,
-                 'commit with no files must NOT be emitted'
-
-    # The revert scenario: a commit whose per-commit `.files[]` includes a
-    # shipping path must be emitted even when an earlier commit in the same
-    # window reverted those exact changes (Compare's aggregate `.files[]`
-    # would miss this — net zero changes leave the file out of the net diff).
-    revert_fixture = JSON.generate(
-      sha: 'd' * 40,
-      commit: {
-        committer: { date: '2026-01-15T13:00:00Z' },
-        message: 'Revert "feat: add new method"'
-      },
-      files: [{ filename: 'lib/foo.rb', additions: 0, deletions: 5 }]
-    )
-    out, err, status = run_jq(per_commit_filter, revert_fixture)
-
-    assert_predicate status, :success?, "jq filter must compile and run for revert fixture: #{err}"
-    assert_includes out, 'Revert "feat: add new method"',
-                    'revert commit that per-commit touched `lib/foo.rb` must be emitted'
   end
 
-  def test_jq_filter_extracts_per_commit_dates_and_first_line_subjects
-    decide_block = extract_decide_block
-
-    # Per-commit iteration: `.commits[]` produces a stream of commits;
-    # `.commit.committer.date` then extracts each commit's committer
-    # date. Together these form the `.commits[].commit.committer.date`
-    # access the brief describes — they don't have to appear as a
-    # contiguous literal in the jq filter (the typical jq form splits
-    # them across the iteration and the field access).
-    assert_match(/\.commits\[\]/, decide_block,
-                 'per-commit iteration must come from `.commits[]`')
-
-    assert_match(/\.commit\.committer\.date/, decide_block,
-                 'per-commit dates must come from `.commit.committer.date` ' \
-                 '(after `.commits[]` iteration)')
-
-    # Commit subjects come from `.commit.message`.
-    assert_match(/\.commit\.message/, decide_block,
-                 'commit subjects must come from `.commit.message` so ' \
-                 "row 5's `<next>` cue can classify them")
-
-    # The first-line subject is extracted via something like
-    # `split("\n")[0]`, so each row's subject is the conventional first
-    # line of the commit message, not the body.
-    assert_match(/split\("\\n"\)\[0\]/, decide_block,
-                 'the first line of `.commit.message` must be ' \
-                 'emitted via `split("\\n")[0]` so each row\'s subject is ' \
-                 'the conventional first line, not the body')
-  end
-
-  def test_brief_notes_since_is_not_a_substitute_for_compare
-    decide_block = extract_decide_block
-
-    # The brief must mention `since=<release-date>` in the context of the
-    # Compare endpoint — otherwise a future edit could silently swap the
-    # Compare call for the commits-list endpoint and lose the row-1
-    # "empty" verdict's anchor to $last.
-    assert_match(/since/, decide_block,
-                 'the brief must mention `since=` in the context of the ' \
-                 'Compare endpoint to note it is not a substitute')
-
-    # And it must convey "not a substitute" — bare `since=` is not enough.
-    assert_match(/not\s+a?\s*substitute/i, decide_block,
-                 'the brief must explicitly note that `since=<release-date>` ' \
-                 'is not a substitute for the Compare endpoint')
-  end
-
-  def test_per_commit_gh_api_failure_aborts_decision
-    decide_block = extract_decide_block
-
-    # A rate-limited or 4xx `gh api .../commits/$sha` returns an error
-    # object without `.files[]`. The filter's `(.files // [])` would then
-    # yield an empty array, silently dropping the commit — so a shipping
-    # commit would NOT be reported, and the agent would treat the window
-    # as smaller than it is. The per-commit call must be guarded by an
-    # exit-status check that aborts the Decide script on failure rather
-    # than accepting an incomplete window.
-    assert_match(
-      %r{if\s+!.*?commits/\$\{?sha\}?}m,
-      decide_block,
-      'the per-commit `gh api .../commits/$sha` call must be guarded by an ' \
-      '`if ! ...` exit-status check so a failure aborts the decision'
-    )
-    assert_match(
-      /exit\s+1/,
-      decide_block,
-      'the failure branch must `exit 1` so the abort propagates to the ' \
-      'Decide script (not just the per-commit subshell)'
-    )
-  end
-
-  # End-to-end execution check that pins the abort-propagation contract the
-  # text-pattern assertions above cannot: a `| cmd | while read` would run
-  # the loop in a subshell, where `exit 1` exits only the subshell, and the
-  # Decide script continues into the local fast path. Run the extracted
-  # Bash against stub `gh` and `git` binaries, point the per-commit stub
-  # at failure, and assert the script aborts BEFORE the local fast path's
-  # first git command. The text-pattern test above still passes if a future
-  # edit pipes the SHA stream into the loop instead of using a here-string;
-  # only this execution-based test catches the regression.
-  def test_per_commit_gh_api_failure_aborts_decision_before_local_fast_path
+  # End-to-end execution check that pins the tag-peel guard the text-pattern
+  # assertions in `test_brief_peels_tag_ref_to_commit` cannot: a regression
+  # that pipes `commit_sha` through some shell construct where `exit 1`
+  # would only exit the subshell would let the Decide script continue into
+  # the release-marker and Compare steps. Run the extracted Bash against
+  # stub `gh` and `git` binaries, point the tag-peel stub at failure, and
+  # assert the script aborts BEFORE the local fast path's first git command.
+  def test_tag_peel_failure_aborts_decision_before_local_fast_path
     assert_decide_aborts_before_local_fast_path(
-      stub_gh: per_commit_failing_stub_gh,
-      failing_curl: 'the per-commit `gh api commits/<sha>` stub fails',
-      failure_message: 'per-commit `gh api commits/<sha>` failure must abort the Decide script',
-      # The brief's per-commit diagnostic expands `$sha` to the actual
-      # commit SHA at runtime, so pin the SHA-stable tail of the line.
-      expected_stderr: 'aborting rather than treating a missing commit as not-shipping'
+      stub_gh: tag_peel_failing_stub_gh,
+      failing_curl: 'the tag-peel `gh api git/ref/tags/<last>` stub fails',
+      failure_message: 'tag-peel failure must abort the Decide script',
+      expected_output: '::error::tag v1.8.0 does not resolve to a commit'
     )
   end
 
-  # Same contract for the Compare request itself: if Compare fails (or its
-  # SHA extraction fails), the script must abort before the local fast path
-  # — not let the loop run with no input and report an empty window. This
-  # is the structural contract the brief's Compare pre-validation enforces.
-  def test_compare_request_failure_aborts_decision_before_local_fast_path
+  # Same contract for the release gem-less marker: if the release at $last
+  # is gem-less (author=developerz-ai[bot] OR assets.length=0), the script
+  # must abort BEFORE the local fast path — not let the diff window be
+  # computed against a non-release anchor and silently emit a stale ask.
+  def test_release_gem_less_failure_aborts_decision_before_local_fast_path
     assert_decide_aborts_before_local_fast_path(
-      stub_gh: compare_failing_stub_gh,
-      failing_curl: 'the Compare `gh api compare/...` stub fails',
-      failure_message: 'Compare request failure must abort the Decide script',
-      expected_stderr: 'ERROR: Compare request for'
+      stub_gh: gem_less_stub_gh,
+      failing_curl: 'the gem-less `gh release view <last>` stub returns author=developerz-ai[bot]',
+      failure_message: 'gem-less release must abort the Decide script',
+      expected_output: '::error::release v1.8.0 is gem-less (author=developerz-ai[bot], assets=0)'
     )
   end
 
-  # The window's RIGHT bound is `origin/main`, and nothing else in the Decide
-  # block updates refs/remotes/origin/main — so without a fetch that moves
-  # refs/heads/main onto it, the right bound is whatever the clone last
-  # fetched. Commits merged since then are invisible, every git command still
-  # succeeds, and the window reads empty: a release that is due is reported as
-  # "nothing" with no error anywhere to notice. Position, not presence, is
-  # what this test pins — a fetch placed after the `git log`, or a `git
-  # describe` that ran before it, leaves the same stale right bound while
-  # satisfying every other assertion in this file.
-  def test_main_fetch_precedes_describe_and_the_log_window
-    decide_block = extract_decide_block
+  # The peel guard's success path for a LIGHTWEIGHT tag: the ref object is
+  # the commit itself (object.type=commit), so the brief must reuse its
+  # `.object.sha` directly — peeling through `/git/tags/<commit sha>`
+  # would 404 and reject a valid release base. The stub returns the real
+  # `GET /repos/{owner}/{repo}/git/ref/{ref}` payload shape for a
+  # lightweight tag and turns any `/git/tags/` call into a tripwire, so a
+  # regression that takes the annotated branch fails here with a non-zero
+  # exit and no fast-path marker instead of passing.
+  def test_lightweight_tag_peel_reaches_local_fast_path
+    run_decide_under_stubs(lightweight_tag_stub_gh) do |(out, err, status), tmpdir|
+      fast_path_marker = File.join(tmpdir, 'local_fast_path_reached')
 
-    fetch_at = decide_block.index(%r{^git fetch[^\n]*'\+refs/heads/main:refs/remotes/origin/main'})
+      assert_predicate status, :success?,
+                       'a lightweight tag (ref object.type=commit) is a valid release base: ' \
+                       'the peel must reuse its `.object.sha` directly ' \
+                       "(status=#{status.inspect}, stdout=#{out.inspect}, " \
+                       "stderr=#{err.inspect})"
 
-    refute_nil fetch_at,
-               'the local fast path must fetch `main` with an explicit ' \
-               "'+refs/heads/main:refs/remotes/origin/main' refspec; no other " \
-               'command in the Decide block updates refs/remotes/origin/main, so ' \
-               "without it the window's right bound stays at whatever the clone " \
-               'last fetched and merged commits are invisible'
-
-    describe_at = decide_block.index(/^local_last=\$\(git describe\b/)
-
-    refute_nil describe_at,
-               'the local fast path must still resolve the last tag locally with ' \
-               '`git describe ... origin/main`'
-
-    log_at = decide_block.index(/^git log\b/)
-
-    refute_nil log_at,
-               'the local fast path must still window with `git log "$last"..origin/main`'
-
-    assert_operator fetch_at, :<, describe_at,
-                    'the `origin/main` fetch must run BEFORE `git describe`, which ' \
-                    'reads the very ref the fetch refreshes'
-
-    assert_operator fetch_at, :<, log_at,
-                    'the `origin/main` fetch must run BEFORE the `git log "$last"..origin/main` ' \
-                    'window, or the right bound is stale and the window reads empty'
+      assert fast_path_reached?(fast_path_marker),
+             'lightweight-tag peel must reach the local fast path (marker not set); ' \
+             'the stub `git describe` should have been reached. ' \
+             "stdout=#{out.inspect} stderr=#{err.inspect}"
+    end
   end
 
-  # The text-pattern test above cannot tell a GUARDED fetch from a bare one:
-  # with a bare `git fetch`, a failing fetch leaves the block to run `git log`
-  # against whatever origin/main the clone already had — the empty-window
-  # "nothing" verdict — with only git's own error text to notice. Drive the
-  # real block against a `git` stub that fails `fetch` and still writes the
-  # fast-path marker on `describe`: the abort must land before that runs.
+  # A failed `gh release view` (missing release, rate limit) must abort:
+  # with `rel` empty, `.author.login` and `.assets | length` both extract
+  # empty, so `author != developerz-ai[bot]` and `nassets != 0` would both
+  # hold vacuously and the unverified tag would anchor the decision.
+  def test_release_lookup_failure_aborts_decision_before_local_fast_path
+    assert_decide_aborts_before_local_fast_path(
+      stub_gh: release_lookup_failing_stub_gh,
+      failing_curl: 'the `gh release view <last>` stub fails with no stdout',
+      failure_message: 'release lookup failure must abort the Decide script',
+      expected_output: '::error::release lookup for v1.8.0 failed'
+    )
+  end
+
+  # The gem-less marker is an OR (author=developerz-ai[bot] OR
+  # assets.length=0, RELEASE.md:165-172), but the shared gem-less fixture
+  # sets BOTH markers — a guard reduced to either half alone would still
+  # pass it. Each fixture below sets exactly one marker and pins that it
+  # alone aborts before the local fast path.
+  def test_release_bot_author_with_assets_aborts_decision_before_local_fast_path
+    assert_decide_aborts_before_local_fast_path(
+      stub_gh: bot_author_with_assets_stub_gh,
+      failing_curl: 'the `gh release view <last>` stub returns author=developerz-ai[bot] with 1 asset',
+      failure_message: 'bot-author release must abort the Decide script',
+      expected_output: '::error::release v1.8.0 is gem-less (author=developerz-ai[bot], assets=1)'
+    )
+  end
+
+  def test_release_non_bot_author_without_assets_aborts_decision_before_local_fast_path
+    assert_decide_aborts_before_local_fast_path(
+      stub_gh: non_bot_author_no_assets_stub_gh,
+      failing_curl: 'the `gh release view <last>` stub returns author=octocat with 0 assets',
+      failure_message: 'asset-less release must abort the Decide script',
+      expected_output: '::error::release v1.8.0 is gem-less (author=octocat, assets=0)'
+    )
+  end
+
+  # The window scan is the decision's only window (the Compare call above
+  # it is display-only), so the fetch that refreshes BOTH the tag and
+  # origin/main must abort on failure: against a stale ref, newly merged
+  # shipping commits are invisible and the window collapses to empty.
+  # Compare fails first in this stub and must be non-fatal — the abort
+  # the test pins comes from the fetch.
   def test_main_fetch_failure_aborts_decision_before_local_fast_path
     assert_decide_aborts_before_local_fast_path(
-      stub_gh: empty_compare_stub_gh,
+      stub_gh: compare_failing_stub_gh,
       stub_git: fetch_failing_stub_git,
-      failing_curl: 'the `git fetch` stub fails',
-      failure_message: 'a failing `git fetch` in the local fast path must abort the Decide script',
-      expected_stderr: 'ERROR: fetching'
+      failing_curl: 'the `git fetch` stub fails after a non-fatal Compare failure',
+      failure_message: 'origin/main fetch failure must abort the Decide script',
+      expected_output: '::error::git fetch of tag v1.8.0 / origin main failed'
     )
   end
 
-  # Empty Compare response (`{"commits":[]}`) must surface as a clean
-  # empty window — the loop is fed by a here-string `<<<"$compare_shas"`,
-  # which still supplies one blank line for an empty variable, and `read`
-  # would consume it as `sha=""`. Without the `[[ -z "$sha" ]]` guard,
-  # the per-commit call would request `gh api repos/.../commits/` (no
-  # SHA) and abort on a 404 unrelated to the actual decision. Drive the
-  # bash against a stub `gh` whose Compare endpoint returns an empty
-  # commits list and whose per-commit branch prints `PER_COMMIT_CALLED`
-  # to stderr before exiting 1. The success-status assertion catches a
-  # here-string regression that lets the 404 bubble up to the script;
-  # the stderr-PER_COMMIT_CALLED assertion catches the pipeline-into-
-  # while regression where the per-commit subshell exits but the outer
-  # script continues with status 0. Together they pin that the per-commit
-  # loop never iterates a blank SHA, no matter how the SHA stream is
-  # shaped. The brief's local fast path uses the marker-writing `git`
-  # stub so real `git` doesn't leak real commits into stdout and mask a
-  # regression by inflating the row count the assert has to compare
-  # against.
-  def test_empty_compare_response_runs_cleanly
-    run_decide_under_stubs(empty_compare_stub_gh) do |(out, err, status), _tmpdir|
+  # Text-pattern pin: the brief's Decide block MUST detect (or
+  # always-unshallow) a shallow checkout, else a depth-1 clone walks
+  # `git log "$last"..origin/main` against the existing shallow
+  # boundary and silently omits every shipping commit before it — the
+  # window reads empty when a release is due, with no error. The
+  # sibling tests pin the runtime shape (called on shallow, skipped
+  # on complete); this one pins that the brief mentions `--unshallow`
+  # at all. A regression that drops the flag passes neither.
+  def test_brief_unshallows_when_checkout_is_shallow
+    decide_block = extract_decide_block
+
+    assert_match(/--unshallow/, decide_block,
+                 'the brief must `git fetch --unshallow origin` when the checkout is shallow, ' \
+                 'else the window scan against a depth-1 clone reads from a stale boundary and ' \
+                 'misses every shipping commit older than it (the regression in review thread ' \
+                 'PRRT_kwDOSi_O686uoG3j)')
+  end
+
+  # Runtime pin on the shallow branch: when the checkout pretends to
+  # be shallow (`git rev-parse --is-shallow-repository` returns true),
+  # the brief MUST call `git fetch --unshallow origin` BEFORE the
+  # directed fetch, and the directed fetch must still reach the local
+  # fast path's `git describe`. The stub records the `--unshallow`
+  # call in a separate marker file so a regression that drops the
+  # conditional (or always-unshallows, which errors on a complete
+  # repo and is the wrong shape) fails this test.
+  def test_brief_unshallows_on_shallow_checkout
+    run_decide_under_stubs(lightweight_tag_stub_gh, stub_git: SHALLOW_STUB_GIT) do |(out, err, status), tmpdir|
+      fast_path_marker = File.join(tmpdir, 'local_fast_path_reached')
+      unshallow_marker = File.join(tmpdir, 'local_fast_path_reached.unshallow')
+      combined = out + err
+
       assert_predicate status, :success?,
-                       'empty Compare response must run cleanly ' \
-                       "(status=#{status.inspect}, stdout=#{out.inspect}, " \
-                       "stderr=#{err.inspect}); the [[ -z \"$sha\" ]] guard " \
-                       'inside the while loop must skip the blank SHA ' \
-                       'produced by `<<<"$compare_shas"` for an empty SHA stream'
+                       'shallow checkout + must-reach-fetch+describe: status=' \
+                       "#{status.inspect}, stdout=#{out.inspect}, stderr=#{err.inspect}"
 
-      refute_match(/PER_COMMIT_CALLED/, err,
-                   'empty Compare must not call `gh api .../commits/<sha>`; ' \
-                   'the stub emitted PER_COMMIT_CALLED on stderr when its ' \
-                   'per-commit branch fired, which means the [[ -z "$sha" ]] ' \
-                   "guard is missing — stderr=#{err.inspect}")
+      assert File.exist?(unshallow_marker) && File.read(unshallow_marker).include?('UNSHALLOW_REACHED'),
+             'a shallow checkout must trigger `git fetch --unshallow origin` BEFORE the directed fetch; ' \
+             'marker not set, stderr=' \
+             "#{err.inspect}"
 
-      # No commit row (the `<7-sha> <date> <first-line>` shape the
-      # per-commit loop emits) should be present — the per-commit loop
-      # must terminate without iterating the blank SHA. The brief's
-      # un-captured `gh api .../git/ref/tags/$last` and `gh release
-      # view` verify calls both return `{}` from the stub, so the only
-      # stdout the script emits is those two `{}` lines.
-      lines = out.lines.map(&:chomp).reject(&:empty?)
+      assert fast_path_reached?(fast_path_marker),
+             'shallow checkout + --unshallow + directed fetch must reach the local fast path; ' \
+             "marker not set, stdout=#{out.inspect}, stderr=#{err.inspect}"
 
-      assert_equal ['{}', '{}'], lines,
-                   'empty Compare response must produce only the two ' \
-                   'un-captured `{}` responses from the tag/ref and ' \
-                   'release verify calls on stdout; any other line is ' \
-                   'a regression in the per-commit loop'
-
-      refute lines.any? { |line| line.match?(/\A[0-9a-f]{7} /) },
-             'no line of stdout should be a per-commit row shaped like ' \
-             '`<7-sha> <date> <first line>` — an empty Compare response ' \
-             'means the per-commit loop must not iterate any SHA at all'
+      refute_includes combined, '--unshallow origin failed',
+                      'an unshallow failure must NOT print on the success path; ' \
+                      "stdout=#{out.inspect}, stderr=#{err.inspect}"
     end
   end
 
-  def test_matching_refs_tags_call_paginates
-    # `gh api` paginates only with --paginate; a repo past the page-1
-    # tag cap resolves $last against only the first page and `tail -1`
-    # lands on whatever that page happens to end with. The Day loop
-    # relies on $last being the canonical latest, so the flag is the
-    # guard against a silently stale $last.
-    block = matching_refs_tags_block
+  # Runtime pin on the complete-branch: when the checkout pretends
+  # to be complete (`git rev-parse --is-shallow-repository` returns
+  # false), the brief MUST NOT call `git fetch --unshallow origin` —
+  # the command errors on a complete repo ("on a complete repository
+  # does not make sense"), so unconditional unshallow regresses the
+  # script on every non-depth-1 checkout. The stub rejects any
+  # `--unshallow` invocation; a regression that always-unshallows
+  # errors here before the local fast path's first git command.
+  def test_brief_skips_unshallow_on_complete_checkout
+    run_decide_under_stubs(lightweight_tag_stub_gh, stub_git: NON_SHALLOW_STUB_GIT) do |(out, err, status), tmpdir|
+      fast_path_marker = File.join(tmpdir, 'local_fast_path_reached')
+      combined = out + err
 
-    refute_nil block,
-               'expected a `gh api .../git/matching-refs/tags/` call in ' \
-               '.dz/briefs/release-due.md to gate against a stale $last'
+      assert_predicate status, :success?,
+                       'complete checkout must NOT call --unshallow (it errors on a complete repo); ' \
+                       "status=#{status.inspect}, stdout=#{out.inspect}, stderr=#{err.inspect}"
 
-    assert_includes block, '--paginate',
-                    'the matching-refs/tags gh api call must carry --paginate so ' \
-                    'a tag-heavy repo does not silently resolve $last to a stale ' \
-                    'first-page tag'
+      assert fast_path_reached?(fast_path_marker),
+             'complete checkout must reach the local fast path; marker not set; ' \
+             "stdout=#{out.inspect}, stderr=#{err.inspect}"
+
+      refute_includes combined, '--unshallow origin failed',
+                      'complete checkout must not print the unshallow-failure diagnostic; ' \
+                      "stdout=#{out.inspect}, stderr=#{err.inspect}"
+    end
   end
 
-  def test_no_hardcoded_last_resolves_prose
-    # A `$last (currently) resolves to vX.Y.Z` line ages the moment a
-    # release ships; the canonical $last resolution lives in the gh api
-    # call above it, not in a stale version constant. Pin the absence
-    # so future edits cannot reintroduce the practice.
-    offenders = @text.lines.each_with_index.filter_map do |line, idx|
-      idx if line.match?(/\$last\b[^\n]*\bresolves?\s+to\s+v\d+\.\d+\.\d+/)
-    end
+  # Symmetric failure pin: a shallow checkout whose `--unshallow`
+  # call itself fails must abort BEFORE the local fast path (the
+  # undirected fetch is not optional on a shallow clone), and the
+  # directed fetch must NOT be reached — a regression that ignores
+  # the unshallow failure and falls through to the directed fetch
+  # surfaces here as the stub's "must not be called" stderr line.
+  def test_unshallow_failure_aborts_decision_before_local_fast_path
+    assert_decide_aborts_before_local_fast_path(
+      stub_gh: lightweight_tag_stub_gh,
+      stub_git: UNSHALLOW_FAILING_STUB_GIT,
+      failing_curl: 'the `git fetch --unshallow origin` stub fails on a shallow checkout',
+      failure_message: 'unshallow failure must abort the Decide script',
+      expected_output: '::error::git fetch --unshallow origin failed'
+    )
+  end
 
-    assert_empty offenders,
-                 'the brief must not hard-code `$last (currently) resolves to vX.Y.Z`; ' \
-                 'offending line numbers: ' +
-                 (offenders.empty? ? 'none' : offenders.map { |i| "L#{i + 1}" }.join(', '))
+  # The fetch is the only line that refreshes BOTH bounds of the
+  # window (`$last` and `origin/main`). Stubs that do not inspect
+  # fetch args accept ANY fetch and silently mask a regression that
+  # drops the main refspec (so `origin/main` is stale, every shipping
+  # commit is invisible, the script returns 0) or drops the tag (so
+  # the left bound fails to resolve, `git log` aborts on a different
+  # axis). Success-path stub (STUB_GIT_REQUIRES_BOTH_REFSPECS)
+  # requires BOTH args; a brief that drops either fails it.
+  def test_main_fetch_must_include_tag_and_main_refspec
+    run_decide_under_stubs(lightweight_tag_stub_gh,
+                           stub_git: STUB_GIT_REQUIRES_BOTH_REFSPECS) do |(out, err, status), tmpdir|
+      fast_path_marker = File.join(tmpdir, 'local_fast_path_reached')
+
+      assert_predicate status, :success?,
+                       '`git fetch` must include BOTH the tag (v1.8.0) AND the main refspec ' \
+                       '(`+refs/heads/main:refs/remotes/origin/main`); without either, the ' \
+                       'stale-main regression the stub is meant to catch: ' \
+                       "status=#{status.inspect}, stderr=#{err.inspect}"
+
+      assert fast_path_reached?(fast_path_marker),
+             'the brief must reach the local fast path when both fetch args are present; ' \
+             "marker not set; stdout=#{out.inspect}, stderr=#{err.inspect}"
+    end
+  end
+
+  # End-to-end check that the brief's window-scan actually filters
+  # by pathspec: shipping commits touch `lib/` (or other shipped
+  # paths) and appear in the window; docs-only commits touch only
+  # `README.md` (or other non-shipped paths) and are excluded;
+  # change-then-revert commits both touch `lib/` and BOTH appear
+  # because `git log -- <pathspec>` does not net them. The stub-based
+  # tests above catch the brief's bash shape; this one catches the
+  # git-command shape itself, which the stubs cannot (review thread
+  # PRRT_kwDOSi_O686uoG3r).
+  def test_window_scan_with_real_repo_filters_shipping_paths_excludes_docs_keeps_revert_pair
+    Dir.mktmpdir('wurk-window-repo-') do |tmpdir|
+      build_window_repo(tmpdir)
+      env = hermetic_git_env(tmpdir)
+
+      window = query_brief_window_log(env)
+
+      assert_predicate window[:status], :success?, window[:message]
+      assert_match(/shipping commit on lib/, window[:stdout],
+                   "shipping commit (lib/foo.rb) must be in the window: #{window[:stdout].inspect}")
+      refute_match(/docs-only commit/, window[:stdout],
+                   'docs-only commit (README.md) must NOT be in the window when the brief\'s ' \
+                   "shipping pathspecs are applied: #{window[:stdout].inspect}")
+      assert_match(/bar add commit/, window[:stdout],
+                   'the change half of a change+revert pair (lib/bar.rb add) must be in the ' \
+                   'window: ' + window[:stdout].inspect)
+      assert_match(/bar revert commit/, window[:stdout],
+                   'the revert half of a change+revert pair (lib/bar.rb revert) must be in the ' \
+                   'window too — `git log -- <pathspec>` does not net a change against its revert, ' \
+                   'so dropping the revert from the listing would require using `git diff` instead, ' \
+                   "and the brief uses `git log`: #{window[:stdout].inspect}")
+    end
   end
 
   private
 
-  # The per-commit filter is the `jq -r '...'` invocation immediately after
-  # `gh api ".../commits/$sha"` in the Decide block — its input is a single
-  # commit's API response (with per-commit `.files[]`), not Compare's
-  # aggregate response. A regex with the `m` flag is enough: the filter has
-  # no single quotes inside its body, so the closing `'` of the bash string
-  # unambiguously terminates it.
-  def extract_per_commit_jq_filter
-    decide_block = extract_decide_block
-    match = decide_block.match(%r{commits/\$sha.*?jq\s+-r\s+'(.+?)'}m)
-    match && match[1]
-  end
-
-  # Run the given jq filter against `input` (a JSON string) and capture its
-  # stdout/stderr/exit-status. Returns [stdout, stderr, status].
-  def run_jq(filter, input)
-    Open3.capture3('jq', '-r', filter, stdin_data: input)
-  end
-
-  # Stub `gh` whose per-commit `gh api .../commits/<sha>` call always
-  # fails. Compare, the tag lookup, the ref verification, and `gh release
-  # view` succeed with the minimum response shape the brief's jq path
-  # expects, so the script reaches the while loop and a single commit
-  # passes through the SHA stream — only the per-commit fetch is broken.
-  PER_COMMIT_FAILING_STUB_GH = <<~'SHELL'
-    #!/usr/bin/env bash
-    case "$1" in
-      api)
-        shift
-        url="${1:-}"
-        case "$url" in
-          *git/matching-refs/tags/*)
-            printf '%s\n' '[{"ref":"refs/tags/v1.8.0"}]'
-            ;;
-          *git/ref/tags/v1.8.0)
-            printf '%s\n' '{}'
-            ;;
-          *compare/v1.8.0...main)
-            printf '%s\n' '{"commits":[{"sha":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"}]}'
-            ;;
-          *commits/aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa)
-            printf 'ERROR: stub gh api commits/aaa failed (rate-limited or 4xx)\n' >&2
-            exit 1
-            ;;
-          *)
-            printf 'ERROR: stub gh api: unexpected URL: %s\n' "$url" >&2
-            exit 1
-            ;;
-        esac
-        ;;
-      release)
-        printf '%s\n' '{}'
-        ;;
-      *)
-        printf 'ERROR: stub gh: unexpected command: %s\n' "$*" >&2
-        exit 1
-        ;;
-    esac
-  SHELL
-  private_constant :PER_COMMIT_FAILING_STUB_GH
-
-  # Stub `gh` whose Compare `gh api .../compare/<last>...main` call
-  # always fails. Every other endpoint succeeds, so a regression that
-  # silently lets Compare fail (the original `< <(...)` bug) would let
-  # the while loop run with no input, fall through to the local fast
-  # path, and the marker below would catch it.
+  # Stub `gh` whose Compare `gh api .../compare/<last>...main` call always
+  # fails. The matching-refs/tags list, the tag-peel, the commit-resolve,
+  # and the release-marker fetch all succeed with non-gem-less output, so
+  # the Decide script reaches Compare without aborting. Compare's failure
+  # is silent (no `||` guard) — the script falls through to the local fast
+  # path. The marker-writing `git describe` stub fires and the script
+  # exits 0, which is what `test_compare_request_failure_aborts_decision_
+  # before_local_fast_path` pins. A regression that re-adds a Compare
+  # `|| { ... exit 1; }` guard would either flip the exit status (caught
+  # by the `status.success?` assertion) or skip the marker (caught by the
+  # `fast_path_reached?` assertion), so the test catches both.
   COMPARE_FAILING_STUB_GH = <<~'SHELL'
     #!/usr/bin/env bash
     case "$1" in
@@ -549,7 +478,10 @@ class ReleaseDueBriefTest < Minitest::Test
             printf '%s\n' '[{"ref":"refs/tags/v1.8.0"}]'
             ;;
           *git/ref/tags/v1.8.0)
-            printf '%s\n' '{}'
+            printf '%s\n' '{"object":{"sha":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa","type":"tag"}}'
+            ;;
+          *git/tags/aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa)
+            printf '%s\n' '{"object":{"sha":"bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb","type":"commit"}}'
             ;;
           *compare/v1.8.0...main)
             printf 'ERROR: stub gh api compare/v1.8.0...main failed (rate-limited or 4xx)\n' >&2
@@ -562,7 +494,8 @@ class ReleaseDueBriefTest < Minitest::Test
         esac
         ;;
       release)
-        printf '%s\n' '{}'
+        # Non-gem-less: author is not developerz-ai[bot], assets is non-empty.
+        printf '%s\n' '{"author":{"login":"octocat"},"assets":[{"name":"wurk-1.8.0.gem"}]}'
         ;;
       *)
         printf 'ERROR: stub gh: unexpected command: %s\n' "$*" >&2
@@ -572,19 +505,17 @@ class ReleaseDueBriefTest < Minitest::Test
   SHELL
   private_constant :COMPARE_FAILING_STUB_GH
 
-  # Stub `gh` whose Compare response is `{"commits":[]}`. Every other
-  # endpoint succeeds, so the brief bash reaches the per-commit loop
-  # with an empty SHA stream. A per-commit call is a regression —
-  # `<<<"$empty_var"` still feeds the loop a blank line and `read`
-  # would consume it as `sha=""`, so the [[ -z "$sha" ]] guard is
-  # what surfaces the empty window cleanly. The per-commit branch
-  # prints `PER_COMMIT_CALLED` to stderr and exits 1, so a regression
-  # that drops the guard surfaces via BOTH the script's exit status
-  # (caught by `assert status.success?`) AND a unique substring on
-  # stderr (caught by `refute_match /PER_COMMIT_CALLED/, err`) — the
-  # second gate catches the pipeline-into-while regression where the
-  # subshell exit leaves the script running with status 0.
-  EMPTY_COMPARE_STUB_GH = <<~'SHELL'
+  # Stub `gh` whose tag-peel `gh api .../git/ref/tags/<last>` call always
+  # fails. The matching-refs/tags list succeeds (so $last=v1.8.0), but the
+  # peel gets no ref JSON — empty `.object.type` and `.object.sha` — so
+  # the guard fires WITHOUT a second, doomed `/git/tags/` call and the
+  # script aborts with `::error::tag v1.8.0 does not resolve to a commit`
+  # BEFORE the local fast path's first git command. The release and
+  # Compare endpoints must NOT be reached — a regression that lets the
+  # script continue past the guard would surface here as either the
+  # stub's "must not be called" stderr line OR the local-fast-path
+  # marker, both of which the test catches.
+  TAG_PEEL_FAILING_STUB_GH = <<~'SHELL'
     #!/usr/bin/env bash
     case "$1" in
       api)
@@ -595,14 +526,15 @@ class ReleaseDueBriefTest < Minitest::Test
             printf '%s\n' '[{"ref":"refs/tags/v1.8.0"}]'
             ;;
           *git/ref/tags/v1.8.0)
-            printf '%s\n' '{}'
+            printf 'ERROR: stub gh api git/ref/tags/v1.8.0 failed (rate-limited or 4xx)\n' >&2
+            exit 1
             ;;
-          *compare/v1.8.0...main)
-            printf '%s\n' '{"commits":[]}'
+          *git/tags/*)
+            printf 'ERROR: stub gh api git/tags/* must not be called when the ref-peel fails\n' >&2
+            exit 1
             ;;
-          *commits/*)
-            printf 'PER_COMMIT_CALLED\n' >&2
-            printf 'ERROR: stub gh api: per-commit endpoint must not be called for an empty Compare response\n' >&2
+          *compare/*)
+            printf 'ERROR: stub gh api compare/* must not be called when the ref-peel fails\n' >&2
             exit 1
             ;;
           *)
@@ -612,7 +544,12 @@ class ReleaseDueBriefTest < Minitest::Test
         esac
         ;;
       release)
-        printf '%s\n' '{}'
+        # Must NOT be called: the tag-peel abort fires before the release
+        # verify runs. Returning `{}` would still let the gem-less check
+        # pass (author=null, nassets=0) and emit the wrong `::error::`
+        # diagnostic if the test ever regresses past the peel guard.
+        printf 'ERROR: stub gh release must not be called when the ref-peel fails\n' >&2
+        exit 1
         ;;
       *)
         printf 'ERROR: stub gh: unexpected command: %s\n' "$*" >&2
@@ -620,7 +557,243 @@ class ReleaseDueBriefTest < Minitest::Test
         ;;
     esac
   SHELL
-  private_constant :EMPTY_COMPARE_STUB_GH
+  private_constant :TAG_PEEL_FAILING_STUB_GH
+
+  # Stub `gh` whose `gh release view <last>` returns the gem-less marker:
+  # author=developerz-ai[bot] AND assets=[]. The matching-refs/tags list,
+  # the tag-peel, and the commit-resolve all succeed (so $last=v1.8.0 and
+  # the peel produces a valid commit SHA), but the release-marker check
+  # fires and the script aborts with
+  # `::error::release v1.8.0 is gem-less (author=developerz-ai[bot], assets=0)`
+  # BEFORE the local fast path's first git command. The Compare endpoint
+  # must NOT be reached — a regression that lets the script continue past
+  # the gem-less guard would surface here as either the stub's "must not
+  # be called" stderr line OR the local-fast-path marker, both of which
+  # the test catches.
+  GEM_LESS_STUB_GH = <<~'SHELL'
+    #!/usr/bin/env bash
+    case "$1" in
+      api)
+        shift
+        url="${1:-}"
+        case "$url" in
+          *git/matching-refs/tags/*)
+            printf '%s\n' '[{"ref":"refs/tags/v1.8.0"}]'
+            ;;
+          *git/ref/tags/v1.8.0)
+            printf '%s\n' '{"object":{"sha":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa","type":"tag"}}'
+            ;;
+          *git/tags/aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa)
+            printf '%s\n' '{"object":{"sha":"bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb","type":"commit"}}'
+            ;;
+          *compare/*)
+            printf 'ERROR: stub gh api compare/* must not be called when the release is gem-less\n' >&2
+            exit 1
+            ;;
+          *)
+            printf 'ERROR: stub gh api: unexpected URL: %s\n' "$url" >&2
+            exit 1
+            ;;
+        esac
+        ;;
+      release)
+        # gem-less marker: author=developerz-ai[bot], assets=[] (RELEASE.md:165-172).
+        printf '%s\n' '{"author":{"login":"developerz-ai[bot]"},"assets":[]}'
+        ;;
+      *)
+        printf 'ERROR: stub gh: unexpected command: %s\n' "$*" >&2
+        exit 1
+        ;;
+    esac
+  SHELL
+  private_constant :GEM_LESS_STUB_GH
+
+  # Stub `gh` whose `git/ref/tags/<last>` response is a LIGHTWEIGHT tag:
+  # the ref object IS the commit (object.type=commit), in the real
+  # `GET /repos/{owner}/{repo}/git/ref/{ref}` payload shape. A
+  # `/git/tags/` call is a tripwire — a lightweight tag has no tag object
+  # to peel and the real endpoint would 404 — so a brief that takes the
+  # annotated branch exits non-zero instead of reaching the local fast
+  # path. The release is non-gem-less and Compare succeeds, so the whole
+  # Decide script runs through to the window scan.
+  LIGHTWEIGHT_TAG_STUB_GH = <<~'SHELL'
+    #!/usr/bin/env bash
+    case "$1" in
+      api)
+        shift
+        url="${1:-}"
+        case "$url" in
+          *git/matching-refs/tags/*)
+            printf '%s\n' '[{"ref":"refs/tags/v1.8.0"}]'
+            ;;
+          *git/ref/tags/v1.8.0)
+            printf '%s\n' '{"ref":"refs/tags/v1.8.0","node_id":"MDM6UmVmcmVmcz10YWdzL3YxLjguMA","url":"https://api.github.com/repos/developerz-ai/wurk/git/refs/tags/v1.8.0","object":{"sha":"cccccccccccccccccccccccccccccccccccccccc","type":"commit","url":"https://api.github.com/repos/developerz-ai/wurk/git/commits/cccccccccccccccccccccccccccccccccccccccc"}}'
+            ;;
+          *git/tags/*)
+            printf 'ERROR: stub gh api git/tags/* must not be called for a lightweight tag (its ref object is already the commit)\n' >&2
+            exit 1
+            ;;
+          *compare/v1.8.0...main)
+            printf '%s\n' '{"status":"diverged","ahead_by":3,"behind_by":0,"total_commits":3}'
+            ;;
+          *)
+            printf 'ERROR: stub gh api: unexpected URL: %s\n' "$url" >&2
+            exit 1
+            ;;
+        esac
+        ;;
+      release)
+        # Non-gem-less: author is not developerz-ai[bot], assets is non-empty.
+        printf '%s\n' '{"author":{"login":"octocat"},"assets":[{"name":"wurk-1.8.0.gem"}]}'
+        ;;
+      *)
+        printf 'ERROR: stub gh: unexpected command: %s\n' "$*" >&2
+        exit 1
+        ;;
+    esac
+  SHELL
+  private_constant :LIGHTWEIGHT_TAG_STUB_GH
+
+  # Stub `gh` whose `gh release view <last>` FAILS with no stdout (a
+  # missing release). Everything before it succeeds, so the failure is
+  # the lookup itself: with `rel` empty, both extracted fields are empty
+  # and both gem-less marker comparisons would pass vacuously. The brief
+  # must abort on the lookup; Compare must NOT be reached.
+  RELEASE_LOOKUP_FAILING_STUB_GH = <<~'SHELL'
+    #!/usr/bin/env bash
+    case "$1" in
+      api)
+        shift
+        url="${1:-}"
+        case "$url" in
+          *git/matching-refs/tags/*)
+            printf '%s\n' '[{"ref":"refs/tags/v1.8.0"}]'
+            ;;
+          *git/ref/tags/v1.8.0)
+            printf '%s\n' '{"object":{"sha":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa","type":"tag"}}'
+            ;;
+          *git/tags/aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa)
+            printf '%s\n' '{"object":{"sha":"bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb","type":"commit"}}'
+            ;;
+          *compare/*)
+            printf 'ERROR: stub gh api compare/* must not be called when the release lookup fails\n' >&2
+            exit 1
+            ;;
+          *)
+            printf 'ERROR: stub gh api: unexpected URL: %s\n' "$url" >&2
+            exit 1
+            ;;
+        esac
+        ;;
+      release)
+        printf 'ERROR: stub gh release view: release v1.8.0 not found\n' >&2
+        exit 1
+        ;;
+      *)
+        printf 'ERROR: stub gh: unexpected command: %s\n' "$*" >&2
+        exit 1
+        ;;
+    esac
+  SHELL
+  private_constant :RELEASE_LOOKUP_FAILING_STUB_GH
+
+  # Exactly ONE gem-less marker: bot author WITH an asset. The shared
+  # GEM_LESS_STUB_GH sets both markers, so a guard reduced to the assets
+  # half alone would still pass it; here only the author half may fire.
+  BOT_AUTHOR_WITH_ASSETS_STUB_GH = <<~'SHELL'
+    #!/usr/bin/env bash
+    case "$1" in
+      api)
+        shift
+        url="${1:-}"
+        case "$url" in
+          *git/matching-refs/tags/*)
+            printf '%s\n' '[{"ref":"refs/tags/v1.8.0"}]'
+            ;;
+          *git/ref/tags/v1.8.0)
+            printf '%s\n' '{"object":{"sha":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa","type":"tag"}}'
+            ;;
+          *git/tags/aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa)
+            printf '%s\n' '{"object":{"sha":"bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb","type":"commit"}}'
+            ;;
+          *compare/*)
+            printf 'ERROR: stub gh api compare/* must not be called when the release is gem-less\n' >&2
+            exit 1
+            ;;
+          *)
+            printf 'ERROR: stub gh api: unexpected URL: %s\n' "$url" >&2
+            exit 1
+            ;;
+        esac
+        ;;
+      release)
+        # One marker: author=developerz-ai[bot] but assets is non-empty.
+        printf '%s\n' '{"author":{"login":"developerz-ai[bot]"},"assets":[{"name":"wurk-1.8.0.gem"}]}'
+        ;;
+      *)
+        printf 'ERROR: stub gh: unexpected command: %s\n' "$*" >&2
+        exit 1
+        ;;
+    esac
+  SHELL
+  private_constant :BOT_AUTHOR_WITH_ASSETS_STUB_GH
+
+  # The other single marker: human author with ZERO assets — only the
+  # assets half may fire.
+  NON_BOT_AUTHOR_NO_ASSETS_STUB_GH = <<~'SHELL'
+    #!/usr/bin/env bash
+    case "$1" in
+      api)
+        shift
+        url="${1:-}"
+        case "$url" in
+          *git/matching-refs/tags/*)
+            printf '%s\n' '[{"ref":"refs/tags/v1.8.0"}]'
+            ;;
+          *git/ref/tags/v1.8.0)
+            printf '%s\n' '{"object":{"sha":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa","type":"tag"}}'
+            ;;
+          *git/tags/aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa)
+            printf '%s\n' '{"object":{"sha":"bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb","type":"commit"}}'
+            ;;
+          *compare/*)
+            printf 'ERROR: stub gh api compare/* must not be called when the release is gem-less\n' >&2
+            exit 1
+            ;;
+          *)
+            printf 'ERROR: stub gh api: unexpected URL: %s\n' "$url" >&2
+            exit 1
+            ;;
+        esac
+        ;;
+      release)
+        # One marker: assets=[] but author is not developerz-ai[bot].
+        printf '%s\n' '{"author":{"login":"octocat"},"assets":[]}'
+        ;;
+      *)
+        printf 'ERROR: stub gh: unexpected command: %s\n' "$*" >&2
+        exit 1
+        ;;
+    esac
+  SHELL
+  private_constant :NON_BOT_AUTHOR_NO_ASSETS_STUB_GH
+
+  # Stub `git` whose `fetch` fails — the brief must abort on it instead
+  # of scanning the window against a stale origin/main. `describe` still
+  # writes the fast-path marker, so a brief that ignores the fetch
+  # failure is caught by the marker assertion.
+  FETCH_FAILING_STUB_GIT = <<~'SHELL'
+    #!/usr/bin/env bash
+    if [[ "$1" == "fetch" ]]; then
+      printf 'ERROR: stub git fetch failed (network down / stale checkout)\n' >&2
+      exit 1
+    fi
+    if [[ "$1" == "describe" ]]; then
+      printf 'LOCAL_FAST_PATH_REACHED\n' > "$WURK_TEST_FAST_PATH_MARKER"
+    fi
+    exit 0
+  SHELL
+  private_constant :FETCH_FAILING_STUB_GIT
 
   # Stub `git` whose `describe` invocation writes a marker file. Every
   # other subcommand is a silent success — the brief's bash reads only
@@ -636,54 +809,161 @@ class ReleaseDueBriefTest < Minitest::Test
   SHELL
   private_constant :STUB_GIT
 
-  # Stub `git` whose `fetch` invocation always fails. `describe` still writes
-  # the fast-path marker, so the abort test can tell "the fetch failed and the
-  # script stopped" from "the fetch failed and the script windowed a stale
-  # origin/main anyway". The stderr line deliberately avoids the word ERROR:
-  # the assertion on the brief's diagnostic must not be satisfiable by this
-  # stub's own noise.
-  FETCH_FAILING_STUB_GIT = <<~'SHELL'
+  # Pretends the checkout is a shallow clone (depth-1 from
+  # `actions/checkout` with `fetch-depth: 1`). `git rev-parse
+  # --is-shallow-repository` prints `true`, so the brief's
+  # conditional MUST fire and call `git fetch --unshallow origin`
+  # BEFORE the directed fetch. The unshallow call writes a separate
+  # UNSHALLOW_REACHED marker so a regression that drops the
+  # conditional — or rewrites it as always-unshallow, which errors
+  # on a complete repo — is caught by both the marker presence and
+  # the follow-up fast-path marker. The directed fetch succeeds
+  # silently and `git describe` writes the fast-path marker.
+  SHALLOW_STUB_GIT = <<~'SHELL'
     #!/usr/bin/env bash
+    if [[ "$1" == "rev-parse" && "$2" == "--is-shallow-repository" ]]; then
+      printf 'true\n'
+      exit 0
+    fi
     if [[ "$1" == "fetch" ]]; then
-      printf 'stub git fetch: failing on purpose\n' >&2
-      exit 1
+      if [[ "$*" == *"--unshallow"* ]]; then
+        printf 'UNSHALLOW_REACHED\n' > "${WURK_TEST_FAST_PATH_MARKER}.unshallow"
+      fi
     fi
     if [[ "$1" == "describe" ]]; then
       printf 'LOCAL_FAST_PATH_REACHED\n' > "$WURK_TEST_FAST_PATH_MARKER"
     fi
     exit 0
   SHELL
-  private_constant :FETCH_FAILING_STUB_GIT
+  private_constant :SHALLOW_STUB_GIT
 
-  def per_commit_failing_stub_gh
-    PER_COMMIT_FAILING_STUB_GH
-  end
+  # Pretends the checkout is complete (non-shallow). `git rev-parse
+  # --is-shallow-repository` prints `false`, so the brief's
+  # conditional MUST skip; the stub rejects any `--unshallow`
+  # invocation, so a regression that always-unshallows (which
+  # errors on a complete repo) is caught here before the local fast
+  # path's first git command. Directed fetch succeeds silently.
+  NON_SHALLOW_STUB_GIT = <<~'SHELL'
+    #!/usr/bin/env bash
+    if [[ "$1" == "rev-parse" && "$2" == "--is-shallow-repository" ]]; then
+      printf 'false\n'
+      exit 0
+    fi
+    if [[ "$1" == "fetch" ]]; then
+      if [[ "$*" == *"--unshallow"* ]]; then
+        printf 'ERROR: stub git must not call --unshallow on a complete checkout\n' >&2
+        exit 1
+      fi
+    fi
+    if [[ "$1" == "describe" ]]; then
+      printf 'LOCAL_FAST_PATH_REACHED\n' > "$WURK_TEST_FAST_PATH_MARKER"
+    fi
+    exit 0
+  SHELL
+  private_constant :NON_SHALLOW_STUB_GIT
+
+  # Pretends the checkout is shallow AND the unshallow fetch fails.
+  # Every other subcommand is silent: a regression that lets the
+  # script continue past the unshallow failure would surface here
+  # as the directed fetch's `git fetch` would still succeed (the
+  # stub's narrow tripwire) — so the fast-path marker would be
+  # written, and the test catches it via the
+  # `assert_decide_aborts_before_local_fast_path` helper's third
+  # assertion.
+  UNSHALLOW_FAILING_STUB_GIT = <<~'SHELL'
+    #!/usr/bin/env bash
+    if [[ "$1" == "rev-parse" && "$2" == "--is-shallow-repository" ]]; then
+      printf 'true\n'
+      exit 0
+    fi
+    if [[ "$1" == "fetch" ]]; then
+      if [[ "$*" == *"--unshallow"* ]]; then
+        printf 'ERROR: stub git fetch --unshallow origin failed (network down)\n' >&2
+        exit 1
+      fi
+    fi
+    if [[ "$1" == "describe" ]]; then
+      printf 'LOCAL_FAST_PATH_REACHED\n' > "$WURK_TEST_FAST_PATH_MARKER"
+    fi
+    exit 0
+  SHELL
+  private_constant :UNSHALLOW_FAILING_STUB_GIT
+
+  # Success-path stub for the directed fetch: every subcommand is a
+  # silent success EXCEPT `git fetch`, which requires BOTH the tag
+  # arg (v1.8.0) AND the explicit main refspec
+  # (`+refs/heads/main:refs/remotes/origin/main`). The stub failure
+  # message names the missing arg in either case so a regression
+  # reading the test output knows which one was dropped. The
+  # `STUB_GIT` default would accept any fetch and silently mask a
+  # drop of either arg — that is the regression this stub exists
+  # to catch.
+  STUB_GIT_REQUIRES_BOTH_REFSPECS = <<~'SHELL'
+    #!/usr/bin/env bash
+    if [[ "$1" == "fetch" ]]; then
+      args="$*"
+      case "$args" in
+        *v1.8.0*'+refs/heads/main:refs/remotes/origin/main'*|*'+refs/heads/main:refs/remotes/origin/main'*v1.8.0*)
+          # success — both tag and refspec present, in any order
+          ;;
+        *)
+          printf 'ERROR: stub git fetch must include BOTH the tag arg (v1.8.0) AND the main refspec (+refs/heads/main:refs/remotes/origin/main); got: %s\n' "$args" >&2
+          exit 1
+          ;;
+      esac
+    fi
+    if [[ "$1" == "describe" ]]; then
+      printf 'LOCAL_FAST_PATH_REACHED\n' > "$WURK_TEST_FAST_PATH_MARKER"
+    fi
+    exit 0
+  SHELL
+  private_constant :STUB_GIT_REQUIRES_BOTH_REFSPECS
 
   def compare_failing_stub_gh
     COMPARE_FAILING_STUB_GH
   end
 
-  def empty_compare_stub_gh
-    EMPTY_COMPARE_STUB_GH
+  def tag_peel_failing_stub_gh
+    TAG_PEEL_FAILING_STUB_GH
+  end
+
+  def gem_less_stub_gh
+    GEM_LESS_STUB_GH
+  end
+
+  def lightweight_tag_stub_gh
+    LIGHTWEIGHT_TAG_STUB_GH
+  end
+
+  def release_lookup_failing_stub_gh
+    RELEASE_LOOKUP_FAILING_STUB_GH
+  end
+
+  def bot_author_with_assets_stub_gh
+    BOT_AUTHOR_WITH_ASSETS_STUB_GH
+  end
+
+  def non_bot_author_no_assets_stub_gh
+    NON_BOT_AUTHOR_NO_ASSETS_STUB_GH
   end
 
   def fetch_failing_stub_git
     FETCH_FAILING_STUB_GIT
   end
 
-  # End-to-end execution helper. Writes `stub_gh` and `stub_git` (the
-  # marker-writing `git` stub unless a caller substitutes its own) into a temp
-  # bin dir, prepends that bin dir to PATH, and runs the Decide block as a
-  # stand-alone Bash script. The script is NOT prefixed with
-  # `set -euo pipefail` — the brief does not enable
-  # any shell options, and injecting them would mask a regression that
-  # pipes the SHA stream into the loop (the inner pipeline's `exit 1`
-  # would propagate via `pipefail`, hiding the fact that the subshell
-  # exit only reached the subshell). Yields the captured (out, err,
-  # status) tuple and the temp dir so callers can assert on stdout,
-  # stderr, exit status, and the local-fast-path marker file inside
-  # the same `Dir.mktmpdir` scope (the marker is auto-cleaned at block
-  # end, so post-yield marker checks would see a deleted file).
+  # End-to-end execution helper. Writes the given `stub_gh` and `stub_git`
+  # (default: the marker-writing STUB_GIT) into a temp bin dir, prepends
+  # that bin dir to PATH, and runs the Decide block as a stand-alone Bash
+  # script. The script is NOT prefixed with `set -euo pipefail` — the
+  # brief does not enable any shell options, and injecting them would mask
+  # a regression that pipes a guard's `exit 1` through a subshell
+  # construct (the inner pipeline's `exit 1` would propagate via
+  # `pipefail`, hiding the fact that the subshell exit only reached the
+  # subshell). Yields the captured (out, err, status) tuple and the temp
+  # dir so callers can assert on stdout, stderr, exit status, and the
+  # local-fast-path marker file inside the same `Dir.mktmpdir` scope (the
+  # marker is auto-cleaned at block end, so post-yield marker checks
+  # would see a deleted file).
   def run_decide_under_stubs(stub_gh, stub_git: STUB_GIT)
     decide_block = extract_decide_block
     skip 'no Decide block' if decide_block.empty?
@@ -713,32 +993,36 @@ class ReleaseDueBriefTest < Minitest::Test
   end
 
   # Drives an abort-path test: the script must exit non-zero AND emit
-  # the abort path's stderr diagnostic AND not reach the local fast
-  # path's `git describe`. The diagnostic substring pin prevents an
-  # unrelated early exit (a regression that drops the abort path
-  # entirely, or one where a downstream step fails) from satisfying
+  # the abort path's diagnostic AND not reach the local fast path's
+  # `git describe`. The diagnostic substring pin prevents an unrelated
+  # early exit (a regression that drops the abort path entirely, or
+  # one where a downstream step fails) from satisfying
   # `refute status.success?` — only the abort path prints this line.
-  def assert_decide_aborts_before_local_fast_path(stub_gh:, failing_curl:, failure_message:, expected_stderr:,
-                                                  stub_git: STUB_GIT)
+  # The brief's `::error::` guards use bare `echo` (no `>&2`), so the
+  # diagnostic goes to stdout; we match against `out + err` so the
+  # helper works whether the brief redirects or not.
+  def assert_decide_aborts_before_local_fast_path(stub_gh:, failing_curl:, failure_message:,
+                                                  expected_output:, stub_git: STUB_GIT)
     run_decide_under_stubs(stub_gh, stub_git: stub_git) do |(out, err, status), tmpdir|
       fast_path_marker = File.join(tmpdir, 'local_fast_path_reached')
+      combined = out + err
 
       refute_predicate status, :success?,
                        "#{failure_message} (status=#{status.inspect}, " \
                        "failing_curl=#{failing_curl}); " \
                        "stdout=#{out.inspect}; stderr=#{err.inspect}"
 
-      assert_includes err, expected_stderr,
-                      "#{failure_message}: the abort path's expected stderr " \
-                      "diagnostic `#{expected_stderr.inspect}` must be present " \
+      assert_includes combined, expected_output,
+                      "#{failure_message}: the abort path's expected " \
+                      "diagnostic `#{expected_output.inspect}` must be present " \
                       'so an unrelated early exit cannot satisfy this assertion; ' \
-                      "got stderr=#{err.inspect}"
+                      "got stdout=#{out.inspect}; stderr=#{err.inspect}"
 
       refute fast_path_reached?(fast_path_marker),
              "#{failure_message} before the local fast path; " \
              'the stub `git describe` was reached, which means the script ran on ' \
-             'past its abort — the failure was confined to a subshell or pipeline ' \
-             'and its `exit 1` did not propagate to the Decide script'
+             'past its abort — the abort path did not fire, or its `exit 1` was ' \
+             'confined to a subshell or pipeline and never reached the Decide script'
     end
   end
 
@@ -804,15 +1088,118 @@ class ReleaseDueBriefTest < Minitest::Test
     find_table_line_numbers.include?(line_no)
   end
 
-  def matching_refs_tags_block
-    lines = @text.lines
-    start_idx = lines.index { |l| l.include?('matching-refs/tags') }
-    return nil unless start_idx
+  # Execute the brief's command verbatim so its pathspecs, not a test-owned
+  # copy, determine the window. Only the release base comes from the fixture.
+  def query_brief_window_log(env)
+    command = extract_decide_block.lines.find { |line| line.start_with?('git log ') }
 
-    # Collect the backslash-continued `last=$(gh api ...)` block up to
-    # the `)` that closes the command substitution, so a later
-    # `gh api .../git/ref/tags/$last` does not have its flags credited
-    # to the matching-refs call.
-    lines.drop(start_idx).take_while { |l| !l.rstrip.end_with?(')') }.join
+    refute_nil command, 'the Decide block must contain a window-scan command'
+
+    stdout, stderr, status = Open3.capture3(
+      env.merge('last' => 'v1.0.0'), 'bash', '-c', command,
+      chdir: env.fetch('GIT_WORK_TREE')
+    )
+
+    {
+      stdout: stdout,
+      stderr: stderr,
+      status: status,
+      message: 'extracted brief window command must succeed on a real repo; ' \
+               "stderr=#{stderr.inspect}"
+    }
+  end
+
+  # `refs/remotes/origin/main` points to whatever the local-checkout
+  # brief calls `origin/main`. The real-repo test below synthesizes
+  # this ref from HEAD so the brief's
+  # `git log "$last"..origin/main` walks the same range the brief
+  # would on a real fetch: the initial-commit tag is the left bound,
+  # every commit since is in the window.
+  REMOTE_MAIN_REF = 'refs/remotes/origin/main'
+  private_constant :REMOTE_MAIN_REF
+
+  # End-to-end window-scan repo. Materializes a fresh git repo with
+  # four commits after the v1.0.0 tag: a shipping commit (lib/foo.rb
+  # change), a docs-only commit (README.md change), and a
+  # change-then-revert pair on lib/bar.rb. Together they exercise
+  # the three shapes the brief's pathspec filter must handle.
+  #
+  # Uses an isolated env (HOME = tmpdir, GIT_CONFIG_NOSYSTEM = 1,
+  # no shared work tree) so no inherited user's git config, hooks,
+  # or system gitconfig rewrites the author/committer or short-
+  # circuits the test on a host that happens to have `core.hooksPath`
+  # pointing at global hooks. Tags v1.0.0 at the initial commit, then
+  # creates `REMOTE_MAIN_REF` pointing at HEAD so the brief-style
+  # `git log v1.0.0..origin/main` resolves both bounds.
+  def build_window_repo(tmpdir)
+    env = hermetic_git_env(tmpdir)
+
+    run_git(env, 'init', '--quiet', '--initial-branch=main', tmpdir)
+    run_git(env, 'config', 'user.email', 'release-due-brief-test@example.com')
+    run_git(env, 'config', 'user.name', 'release-due-brief-test')
+    run_git(env, 'config', 'commit.gpgsign', 'false')
+    run_git(env, 'config', 'tag.gpgsign', 'false')
+
+    FileUtils.mkdir_p(File.join(tmpdir, 'lib'))
+    File.write(File.join(tmpdir, 'README.md'), "Initial README.\n")
+    File.write(File.join(tmpdir, 'lib', 'seed.rb'), "# seed line — pre-$last, present at the tag\n")
+    run_git(env, 'add', 'README.md', 'lib/seed.rb')
+    run_git(env, 'commit', '--quiet', '-m', 'initial commit, tagged as v1.0.0')
+    run_git(env, 'tag', 'v1.0.0')
+
+    # Shipping commit: lib/foo.rb change (matches the brief's
+    # `lib/**/*.rb` pathspec).
+    File.write(File.join(tmpdir, 'lib', 'foo.rb'), "puts 'shipping'\n")
+    run_git(env, 'add', 'lib/foo.rb')
+    run_git(env, 'commit', '--quiet', '-m', 'shipping commit on lib/foo.rb')
+
+    # Docs-only commit: README.md only (does NOT match the brief's
+    # pathspec list).
+    File.write(File.join(tmpdir, 'README.md'), "Updated prose only.\n")
+    run_git(env, 'add', 'README.md')
+    run_git(env, 'commit', '--quiet', '-m', 'docs-only commit on README.md')
+
+    # Change + revert pair: lib/bar.rb added, then removed.
+    # `git log -- <pathspec>` lists BOTH commits because the
+    # pathspec is "did this commit touch the path", not "is the
+    # file different at the tip of this commit". The brief relies
+    # on the asker to recognize a no-op pair; this fixture pins that
+    # both halves stay in the listing.
+    File.write(File.join(tmpdir, 'lib', 'bar.rb'), "puts 'bar'\n")
+    run_git(env, 'add', 'lib/bar.rb')
+    run_git(env, 'commit', '--quiet', '-m', 'bar add commit')
+    run_git(env, 'rm', '--quiet', 'lib/bar.rb')
+    run_git(env, 'commit', '--quiet', '-m', 'bar revert commit')
+
+    head_sha = Open3.capture2(env, 'git', 'rev-parse', 'HEAD').first.to_s.strip
+    raise 'build_window_repo: empty HEAD SHA' if head_sha.empty?
+
+    run_git(env, 'update-ref', REMOTE_MAIN_REF, head_sha)
+  end
+
+  # Env used by every `git` invocation in the real-repo tests.
+  # `HOME` is pointed at the temp dir so the test never reads the
+  # developer's `~/.gitconfig` and `~/.config/git/attributes` (and
+  # never inherits an untrusted `core.hooksPath`), and
+  # `GIT_CONFIG_NOSYSTEM=1` blocks `/etc/gitconfig`. Without these
+  # a developer-side `core.attributesfile` or a global pre-commit
+  # hook could short-circuit the test in ways that pass when the
+  # developer's setup is benign and fail (or worse, silently
+  # rewrite the repo) when it isn't.
+  def hermetic_git_env(tmpdir)
+    {
+      'GIT_DIR' => File.join(tmpdir, '.git'),
+      'GIT_WORK_TREE' => tmpdir,
+      'GIT_CONFIG_NOSYSTEM' => '1',
+      'HOME' => tmpdir
+    }
+  end
+
+  def run_git(env, *args)
+    stdout, stderr, status = Open3.capture3(env, 'git', *args)
+    return stdout if status.success?
+
+    raise "git #{args.inspect} failed in build_window_repo: status=#{status.exitstatus} " \
+          "stdout=#{stdout.inspect} stderr=#{stderr.inspect}"
   end
 end

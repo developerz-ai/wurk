@@ -7,100 +7,40 @@ is `RELEASE.md`; this brief only decides *when*.
 ## Decide
 
 ```bash
-# Local tags may be stale; resolve $last via the GitHub API for the canonical value,
-# then verify the ref, the release, and the diff window against main.
-last=$(gh api repos/developerz-ai/wurk/git/matching-refs/tags/ --paginate \
+# Resolve $last via the GitHub API for the canonical value, then verify the ref (peel to a commit), the release (gem-less marker), and the diff window against main. $last currently resolves to v1.8.0.
+last=$(gh api repos/developerz-ai/wurk/git/matching-refs/tags/ \
   | jq -r '.[] | select(.ref | startswith("refs/tags/v")) | .ref | sub("^refs/tags/"; "")' \
   | sort -V \
   | tail -1)
-gh api "repos/developerz-ai/wurk/git/ref/tags/$last"
-gh release view "$last"
-# Compare is still the right anchor for the ancestry window $last..main —
-# `gh api .../commits?since=<release-date>&sha=main` is NOT a substitute: that
-# commits-list endpoint returns commits by committer date, not by ancestry
-# from $last, so it cannot reproduce the row-1 ("empty") verdict against
-# $last..main. But Compare's aggregate `.files[]` is also NOT a path filter:
-# a Ruby change followed by its revert leaves no matching files in the net
-# diff, so the window would report empty even though `git log -- 'lib/**/*.rb'`
-# lists both shipping commits — and a docs-only `feat` commit would otherwise
-# be emitted alongside a Ruby fix, leading to a wrong `<next>` classification.
-# So for each commit in the Compare window, fetch its individual API response
-# (which DOES include the per-commit `.files[]`) and emit short SHA, committer
-# date, and first-line subject iff ANY of that commit's files matches one of
-# the seven ship-spec paths (lib/**/*.rb, lib/**/*.lua, app/**/*.rb, config/**,
-# exe/*, frontend/src/**, wurk.gemspec) — row 5's `<next>` cue classifies the
-# subjects.
-#
-# A per-commit `gh api` that fails (rate-limited, 4xx) returns an error
-# object without `.files[]`. The filter's `(.files // [])` would then yield
-# an empty array and the commit would be silently dropped — a shipping
-# commit would NOT be reported, and the agent would treat the window as
-# smaller than it is. Check the exit status of each per-commit call and
-# abort the decision (with a message to stderr) on failure rather than
-# accepting an incomplete window.
-#
-# Fetch and validate the Compare response AND its `.commits[].sha`
-# extraction in the CURRENT shell before the loop. `< <(gh api ... | jq
-# -r ...)` process substitution hides the inner pipeline's exit status
-# — a failed Compare would let the loop succeed with no input, so an
-# unreadable window would appear empty. Feed the loop with a here-string
-# `<<<"$compare_shas"` so the SHA source lives in the current shell too:
-# a `| cmd | while read` would run the loop in a subshell, and `exit 1`
-# inside it would only exit the loop, not the Decide script.
-compare_body=$(gh api "repos/developerz-ai/wurk/compare/$last...main") || {
-    echo "ERROR: Compare request for $last..main failed (rate-limited or 4xx); aborting rather than treating the window as empty" >&2
-    exit 1
-}
-compare_shas=$(printf '%s\n' "$compare_body" | jq -r '.commits[].sha') || {
-    echo "ERROR: extracting SHAs from Compare response for $last..main failed; aborting rather than treating the window as empty" >&2
-    exit 1
-}
 
-# An empty Compare response (`commits: []`) leaves `compare_shas=""`,
-# but `<<<""` still feeds the loop a single blank line that `read` would
-# consume as `sha=""`. Without the guard below, the per-commit call
-# would request `gh api repos/.../commits/` (no SHA) and abort on a 404
-# unrelated to the actual decision. Skip blank SHAs so the empty window
-# comes out cleanly and the loop terminates without a bogus request.
-while read -r sha; do
-    [[ -z "$sha" ]] && continue
-    if ! body=$(gh api "repos/developerz-ai/wurk/commits/$sha"); then
-      echo "ERROR: gh api for $sha failed (rate-limited or 4xx); aborting rather than treating a missing commit as not-shipping" >&2
-      exit 1
-    fi
-    printf '%s\n' "$body" \
-      | jq -r '
-          (
-            (.files // [])
-            | map(select(.filename | test("^lib/.*\\.rb$|^lib/.*\\.lua$|^app/.*\\.rb$|^config(/.*)?$|^exe/[^/]+$|^frontend/src(/.*)?$|^wurk\\.gemspec$")))
-            | length > 0
-          ) as $is_shipping
-          | if $is_shipping then
-              "\(.sha[0:7]) \(.commit.committer.date) \(.commit.message | split("\n")[0])"
-            else
-              empty
-            end
-        '
-done <<<"$compare_shas"
+# Peel the tag ref to its commit SHA. Branch on the ref object's type: a lightweight tag's ref object IS the commit (object.type=commit, .object.sha the SHA itself — calling /git/tags/ with it would 404), so its SHA is reused directly; an annotated tag points at a tag object, whose /git/tags/<tag object> entry carries the commit under .object.sha.
+ref_json=$(gh api "repos/developerz-ai/wurk/git/ref/tags/$last")
+tag_type=$(echo "$ref_json" | jq -r '.object.type')
+tag_sha=$(echo "$ref_json" | jq -r '.object.sha')
+if [ "$tag_type" = "commit" ]; then
+  commit_sha=$tag_sha
+elif [ -n "$tag_sha" ] && [ "$tag_sha" != "null" ]; then
+  commit_sha=$(gh api "repos/developerz-ai/wurk/git/tags/$tag_sha" | jq -r '.object.sha')
+else
+  commit_sha=""
+fi
+[ "$commit_sha" != "null" ] && [ -n "$commit_sha" ] || { echo "::error::tag $last does not resolve to a commit"; exit 1; }
+# Verify the release: gem-less marker = author=developerz-ai[bot] OR assets.length=0 (RELEASE.md:165-172). Verify the lookup and its fields before the marker check: with both fields empty (a failed `gh release view`, a missing release), both marker comparisons would pass vacuously and an unverified tag would anchor the decision.
+rel=$(gh release view "$last" --json author,assets) || { echo "::error::release lookup for $last failed"; exit 1; }
+author=$(echo "$rel" | jq -r '.author.login')
+nassets=$(echo "$rel" | jq -r '.assets | length')
+[ -n "$author" ] && [ "$author" != "null" ] && [ -n "$nassets" ] && [ "$nassets" != "null" ] || { echo "::error::release $last lookup returned no parsable author/assets"; exit 1; }
+[ "$author" != "developerz-ai[bot]" ] && [ "$nassets" != "0" ] || { echo "::error::release $last is gem-less (author=$author, assets=$nassets)"; exit 1; }
+gh api "repos/developerz-ai/wurk/compare/$last...main"
 
-# Local fast path: a stale checkout can disagree with the API on the last v* tag,
-# so keep its result in its own variable and let the window below stay anchored to
-# the verified $last. BOTH bounds of `$last..origin/main` go stale: the tag,
-# because a stale checkout won't have it yet and `git log` against a revision it
-# doesn't know fails with a bad-revision error; and `origin/main`, because no
-# command above this point updates refs/remotes/origin/main — commits merged
-# since the clone last fetched are invisible, every git command still succeeds,
-# and the window then reads empty, so a release that is due is missed with no
-# error anywhere. Fetch the tag AND main together, before anything reads either
-# revision, and abort if that fetch fails rather than windowing whatever
-# origin/main the clone happened to have. The fetch is silent so its diff noise
-# doesn't drown the window.
-git fetch --quiet origin tag "$last" '+refs/heads/main:refs/remotes/origin/main' || {
-    echo "ERROR: fetching $last and main failed; aborting rather than windowing a stale origin/main" >&2
-    exit 1
-}
+# Detect a shallow checkout (depth-1 from `actions/checkout` with `fetch-depth: 1`, e.g.) and unshallow before any window-bound fetch. `git fetch` deepens only up to the existing shallow boundary, so a tag older than the boundary is fetched without its full ancestry and `git log "$last"..origin/main` walks an incomplete graph — every shipping commit before the boundary is invisible and the window reads empty even when a release is due. `--unshallow` is rejected on a complete repo ("on a complete repository does not make sense"), so the conditional is required and unconditional unshallow is wrong: a complete checkout would error instead of falling through.
+if [ "$(git rev-parse --is-shallow-repository 2>/dev/null)" = "true" ]; then
+  git fetch --quiet --unshallow origin || { echo "::error::git fetch --unshallow origin failed"; exit 1; }
+fi
+# Local fast path: the Compare call above is display-only, so this scan is the decision's only window. Both bounds of `$last..origin/main` go stale on a stale checkout: the tag, because the checkout may not have it yet and `git log` against a revision it doesn't know fails; and `origin/main`, because no command above this point updates refs/remotes/origin/main — commits merged since the clone last fetched are invisible, every git command still succeeds, and the window then reads empty, so a release that is due is missed with no error anywhere. Fetch the tag AND main together, before anything reads either revision, with an explicit `+refs/heads/main:refs/remotes/origin/main` refspec so the right bound moves even when the remote's configured fetch refspec differs. The fetch is quiet so its diff noise doesn't drown the window, and its failure aborts: a window computed against a stale ref is worse than none.
+git fetch --quiet origin tag "$last" '+refs/heads/main:refs/remotes/origin/main' || { echo "::error::git fetch of tag $last / origin main failed"; exit 1; }
 local_last=$(git describe --tags --abbrev=0 --match 'v[0-9]*' origin/main)
-git log --format='%h %cI %s' "$last"..origin/main -- 'lib/**/*.rb' 'lib/**/*.lua' 'app/**/*.rb' 'config/**' 'exe/*' 'frontend/src/**' wurk.gemspec
+git log --format='%h %cI %s' "$last"..origin/main -- ':(glob)lib/**/*.rb' ':(glob)lib/**/*.lua' ':(glob)app/**/*.rb' 'config/**' 'exe/*' 'frontend/src/**' wurk.gemspec
 ```
 
 Those paths are `wurk.gemspec`'s `spec.files`, with three deliberate differences. The dashboard bundle
