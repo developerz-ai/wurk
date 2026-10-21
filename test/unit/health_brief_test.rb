@@ -29,8 +29,12 @@ require 'tmpdir'
 #      row reads the `resolve built commit` step log for the `sha-<7>` tag
 #      infra's Image Updater selects, and a green run carrying no such tag is
 #      Unhealthy — it leaves the demo frozen on an old digest while reporting
-#      green. The brief must also name the gap it cannot close: no allowlisted
-#      command reaches the demo's own `/wurk/api/meta`.
+#      green. That read is scoped and exact, because a whole `build` job log is
+#      full of `sha-<7>`-shaped strings that are not tags: only the named step's
+#      lines count, and the match must be a whole token, or the 8-hex full-sha
+#      shape wins by prefix and names a tag nothing can ever select. The brief
+#      must also name the gap it cannot close: no allowlisted command reaches
+#      the demo's own `/wurk/api/meta`.
 #
 # Reads the brief and runs its own extracted commands; no network, no Redis,
 # no shared state.
@@ -53,6 +57,14 @@ class HealthBriefTest < Minitest::Test
   SHA_DEMO_FROZEN = '4' * 40
   DEMO_TAG       = 'sha-7777777'
   API_CONTROLLER = File.join(ROOT, 'app', 'controllers', 'wurk', 'api_controller.rb')
+
+  # deploy-demo.yml's step names. `gh run view --log` carries one in field 3 of
+  # every line it prints, and row 11 keeps only the first one's lines.
+  RESOLVE_STEP = 'resolve built commit'
+  VERIFY_STEP = 'verify pushed tags resolve'
+  # A `verify pushed tags resolve` line naming the ref it inspected
+  # (deploy-demo.yml:207-209) — the shape a whole-log grep reads as a tag.
+  DECOY_REF = '==> inspecting registry.digitalocean.com/developerz-ai/wurk-demo:sha-1234567'
 
   def setup
     @text = File.read(BRIEF)
@@ -323,6 +335,60 @@ class HealthBriefTest < Minitest::Test
                     "can link the run; got stdout=#{out.inspect}"
   end
 
+  def test_a_tag_from_another_step_does_not_buy_this_row_a_green
+    # The row reads the whole `build` job log, and a docker build is full of
+    # `sha-<7>`-shaped strings that are not tags at all. Only the
+    # `resolve built commit` step's own output is evidence for this row, so a
+    # token over in `verify pushed tags resolve` must leave the run Unhealthy:
+    # the tag this step never wrote gives Image Updater no candidate either.
+    out, err, status = run_row11(jobs: demo_jobs_json,
+                                 log: resolve_log(short: nil, decoys: { VERIFY_STEP => [DECOY_REF] }),
+                                 conclusion: 'success', sha: SHA_DEMO_FROZEN)
+
+    assert_predicate status, :success?,
+                     "row 11's command must run cleanly (status=#{status.inspect}, " \
+                     "stdout=#{out.inspect}, stderr=#{err.inspect})"
+
+    refute_includes out, "success #{SHA_DEMO_FROZEN}",
+                    'the only sha-<7> in the log belongs to another step, so this ' \
+                    'step resolved nothing; a green printed off it is the false ' \
+                    "green this row must not emit (stdout=#{out.inspect})"
+
+    refute_includes out, 'tagged sha-1234567',
+                    'a tag `resolve built commit` never wrote must never be named ' \
+                    "as the tag it resolved (stdout=#{out.inspect})"
+
+    assert_includes out, 'Unhealthy',
+                    'with nothing resolved in the named step the demo has no ' \
+                    "Image Updater candidate; got stdout=#{out.inspect}"
+  end
+
+  def test_eight_hex_tag_is_not_the_short_sha_tag_image_updater_selects
+    # `sha-12345678` is the 8-hex full-sha shape: it does NOT match Image
+    # Updater's ^sha-[0-9a-f]{7}$, so a match that takes the first seven
+    # characters and stops prints a green naming a tag nothing can ever select —
+    # the demo stays frozen while the row certifies it.
+    out, err, status = run_row11(jobs: demo_jobs_json,
+                                 log: resolve_log(short: 'sha-12345678'),
+                                 conclusion: 'success', sha: SHA_DEMO_FROZEN)
+
+    assert_predicate status, :success?,
+                     "row 11's command must run cleanly (status=#{status.inspect}, " \
+                     "stdout=#{out.inspect}, stderr=#{err.inspect})"
+
+    refute_includes out, "success #{SHA_DEMO_FROZEN}",
+                    "a tag Image Updater's ^sha-[0-9a-f]{7}$ cannot select leaves " \
+                    'the demo frozen, so it is not a green deploy; got ' \
+                    "stdout=#{out.inspect}"
+
+    refute_includes out, 'tagged sha-1234567',
+                    'the 8-hex tag must not pass by matching its first seven ' \
+                    "characters; got stdout=#{out.inspect}"
+
+    assert_includes out, 'Unhealthy',
+                    "got stdout=#{out.inspect}"
+  end
+
   def test_unreadable_demo_jobs_list_never_grades_success
     out, err, _status = run_row11(jobs: demo_jobs_json,
                                   log: resolve_log(short: DEMO_TAG),
@@ -513,18 +579,31 @@ class HealthBriefTest < Minitest::Test
     JSON.generate('total_count' => jobs.size, 'jobs' => jobs)
   end
 
+  # `gh run view <id> --job <id> --log` prints one tab-separated line per log
+  # line: `<timestamp>\t<job>\t<step>\t<message>`. Row 11 picks the step out of
+  # field 3, so the fixture has to carry that shape — a bare message column is
+  # not what `gh` prints.
+  def log_lines(step, messages)
+    messages.map { |message| "2026-01-01T00:00:00.0000000Z\tbuild\t#{step}\t#{message}" }
+  end
+
   # What the `resolve built commit` step's log looks like: the shell that writes
   # `sha=` and `short=sha-<7>` to $GITHUB_OUTPUT is echoed into the job log, so
   # the tag is recoverable only by reading the log text (deploy-demo.yml:173-180).
   # A nil `short` is the regression the comment there records: the step ran and
-  # wrote no tag Image Updater's ^sha-[0-9a-f]{7}$ can select.
-  def resolve_log(short:)
-    lines = ['Run git rev-parse HEAD',
-             '  7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7',
-             'Run {',
-             '    echo "sha=$sha"',
-             "    echo \"short=#{short}\"",
-             '  } >> "$GITHUB_OUTPUT"']
+  # wrote no tag Image Updater's ^sha-[0-9a-f]{7}$ can select. `decoys` add lines
+  # belonging to OTHER steps of the same `build` job: a `sha-<7>`-shaped string
+  # over there is not the tag this step resolved.
+  def resolve_log(short:, decoys: {})
+    lines = log_lines(RESOLVE_STEP,
+                      ['Run git rev-parse HEAD',
+                       '  7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7',
+                       'Run {',
+                       '    echo "sha=$sha"',
+                       "    echo \"short=#{short}\"",
+                       '  } >> "$GITHUB_OUTPUT"'])
+
+    decoys.each { |step, messages| lines.concat log_lines(step, messages) }
 
     "#{lines.join("\n")}\n"
   end
