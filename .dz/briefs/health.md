@@ -44,5 +44,15 @@ and dropping the `detect` check misreads a failed run as a dup'd one.
 For each unhealthy signal, file one ask unless an open issue already names it. The title names the
 signal (`main is red at <sha>`, `main is green only via a dup'd push at <sha>`,
 `release <v> did not publish`), and the body carries the command, its output and the run URL. A red
-`main` comes first: nothing releases from it. Recovery is
-`RELEASE.md`'s *If a release fails*. Never delete a tag, re-run a publish or `gem push` from here.
+`main` comes first: nothing releases from it. Recovery is `RELEASE.md`'s *If a release
+fails*. For a gem-less release, follow that runbook's *Recovering a gem-less release*:
+`gh release delete vX.Y.Z --cleanup-tag --yes`, then `git fetch --prune-tags`,
+then let CI re-cut the tag from the version bump. That cleanup is the sanctioned
+path here, not a workaround — never manually re-tag over an existing `vX.Y.Z`
+(force-moving a tag to a different commit), never `gem push` from a workstation as a
+replacement for the CI publish lane, and never force a version already on
+RubyGems down the publish lane a second time; the only version number that may
+be published for a given `<v>` is the one CI published. Break-glass hand-cutting
+a release when CI is unavailable, as RELEASE.md's *Break-glass manual publish*
+prescribes, is not re-tagging or force-moving — it runs only because the gem has
+already shipped and the lane can no longer act.

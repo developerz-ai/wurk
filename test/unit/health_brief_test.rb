@@ -149,6 +149,72 @@ class HealthBriefTest < Minitest::Test
                     "its own sha; got #{lines.inspect}"
   end
 
+  # Pins the recovery paragraph at .dz/briefs/health.md:47-53 — the prose a
+  # red-main or release-failure ask points the responder at. RELEASE.md owns
+  # the recovery runbook; this paragraph is a pointer, not a re-write. Two
+  # properties have to hold so it does not silently forbid something the
+  # runbook prescribes:
+  #
+  #   1. The paragraph NAMES the runbook steps it points at: both
+  #      headings — *If a release fails* and *Recovering a gem-less
+  #      release* — and the two commands the gem-less subsection actually
+  #      prescribes (`gh release delete ... --cleanup-tag`, then
+  #      `git fetch --prune-tags`). Pin them with a substring assertion
+  #      over the joined paragraph — markdown italic can wrap across a
+  #      line break, so the assertion reads the paragraph as one string.
+  #   2. The paragraph does NOT forbid the sanctioned steps the rest of
+  #      the runbook prescribes: the `workflow_dispatch` retry (used to
+  #      re-run a release whose run failed after the bump was merged) and
+  #      the break-glass hand create (only when CI is unavailable). A
+  #      "Never ... workflow_dispatch" or "Never ... break-glass" sentence
+  #      would shadow the runbook it claims to point at. Pin the absence.
+  #
+  # Reads only the brief as text — no shell, no fixtures.
+  def test_recovery_paragraph_follows_release_md_runbook
+    lines = @text.lines
+    paragraph = lines[46..52].join # 1-based 47..53 -> 0-based 46..52
+
+    # markdown italic wraps across a line break, so the heading reference
+    # `*If a release` and `fails*` land on different joined lines.
+    assert_includes paragraph, 'If a release',
+                    'recovery paragraph at health.md:47-53 must name the ' \
+                    "'If a release ... ' heading reference so the reader knows " \
+                    "where to go; got paragraph=#{paragraph.inspect}"
+
+    assert_match(/fails\*\./, paragraph,
+                 'recovery paragraph at health.md:47-53 must close the ' \
+                 "'... fails*' italic heading reference; got paragraph=#{paragraph.inspect}")
+
+    assert_includes paragraph, 'Recovering a gem-less release',
+                    'recovery paragraph at health.md:47-53 must name RELEASE.md\'s ' \
+                    "'Recovering a gem-less release' heading — the subsection that " \
+                    'actually prescribes the cleanup commands; ' \
+                    "got paragraph=#{paragraph.inspect}"
+
+    assert_match(/gh release delete v[^`\s]+ --cleanup-tag/,
+                 paragraph,
+                 'recovery paragraph at health.md:47-53 must name ' \
+                 '`gh release delete ... --cleanup-tag` — the first command in ' \
+                 "RELEASE.md's gem-less cleanup; got paragraph=#{paragraph.inspect}")
+
+    assert_includes paragraph, 'git fetch --prune-tags',
+                    'recovery paragraph at health.md:47-53 must name ' \
+                    '`git fetch --prune-tags` — the second command in RELEASE.md\'s ' \
+                    "gem-less cleanup; got paragraph=#{paragraph.inspect}"
+
+    refute_match(/never\b[^\n]*workflow_dispatch/i,
+                 paragraph,
+                 'recovery paragraph at health.md:47-53 must not forbid the ' \
+                 '`workflow_dispatch` retry RELEASE.md prescribes for a release run ' \
+                 "that failed after the bump was merged; got paragraph=#{paragraph.inspect}")
+
+    refute_match(/never\b[^\n]*break-glass/i,
+                 paragraph,
+                 'recovery paragraph at health.md:47-53 must not forbid the break-glass ' \
+                 'hand create RELEASE.md prescribes when CI is unavailable; ' \
+                 "got paragraph=#{paragraph.inspect}")
+  end
+
   private
 
   # A `gh api repos/.../actions/runs/<id>/jobs` response shaped like the real
