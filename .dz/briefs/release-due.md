@@ -9,8 +9,7 @@ is `RELEASE.md`; this brief only decides *when*.
 ```bash
 # Local tags may be stale; resolve $last via the GitHub API for the canonical value,
 # then verify the ref, the release, and the diff window against main.
-# $last currently resolves to v1.8.0.
-last=$(gh api repos/developerz-ai/wurk/git/matching-refs/tags/ \
+last=$(gh api repos/developerz-ai/wurk/git/matching-refs/tags/ --paginate \
   | jq -r '.[] | select(.ref | startswith("refs/tags/v")) | .ref | sub("^refs/tags/"; "")' \
   | sort -V \
   | tail -1)
@@ -86,11 +85,21 @@ done <<<"$compare_shas"
 
 # Local fast path: a stale checkout can disagree with the API on the last v* tag,
 # so keep its result in its own variable and let the window below stay anchored to
-# the verified $last. Fetch that tag first — a stale checkout won't have it yet,
-# and `git log` against a revision it doesn't know would fail with a bad-revision
-# error. The fetch is silent so its diff noise doesn't drown the window.
+# the verified $last. BOTH bounds of `$last..origin/main` go stale: the tag,
+# because a stale checkout won't have it yet and `git log` against a revision it
+# doesn't know fails with a bad-revision error; and `origin/main`, because no
+# command above this point updates refs/remotes/origin/main — commits merged
+# since the clone last fetched are invisible, every git command still succeeds,
+# and the window then reads empty, so a release that is due is missed with no
+# error anywhere. Fetch the tag AND main together, before anything reads either
+# revision, and abort if that fetch fails rather than windowing whatever
+# origin/main the clone happened to have. The fetch is silent so its diff noise
+# doesn't drown the window.
+git fetch --quiet origin tag "$last" '+refs/heads/main:refs/remotes/origin/main' || {
+    echo "ERROR: fetching $last and main failed; aborting rather than windowing a stale origin/main" >&2
+    exit 1
+}
 local_last=$(git describe --tags --abbrev=0 --match 'v[0-9]*' origin/main)
-git fetch --quiet origin tag "$last"
 git log --format='%h %cI %s' "$last"..origin/main -- 'lib/**/*.rb' 'lib/**/*.lua' 'app/**/*.rb' 'config/**' 'exe/*' 'frontend/src/**' wurk.gemspec
 ```
 
@@ -116,46 +125,44 @@ subject → minor; anything else → patch.
 
 ## The ask, when due
 
-1. **Pre-flight guard (gh-capable lane only).** The lane running this brief MUST be a `gh`-capable execution surface — the only surface eligible to file a `Release <next>` ask. Verify capability with `gh auth status`: no `gh` binary, or a non-zero exit, means the lane is not gh-capable, and a lane without `gh` MUST skip this ask entirely. Once eligible, retrieve every open title from BOTH lists — `gh api --paginate "repos/developerz-ai/wurk/issues?state=open" | jq -r '.[] | select(.pull_request == null) | .title'` and `gh api --paginate "repos/developerz-ai/wurk/pulls?state=open" | jq -r '.[].title'`. The list commands `gh issue list` and `gh pr list` reject `--paginate` outright, so a paginated list call would abort on the very flag meant to cover the long tail of open titles; `gh api --paginate` follows the API's link headers through every page so the title guard sees every open issue and PR, not just the newest 30, and is required here, not optional. (The `.pull_request == null` filter on the issues endpoint matches what `gh issue list` returned: GitHub's `/issues` route returns pull requests alongside issues, while `gh issue list` excluded them.) With every page covered, if any title matches `^Release|^release:`, MUST skip the Release ask (standing prohibition, line 144 below — never file a second ask while one titled `Release …` is open).
-2. Re-check the window on fresh `main`; still due, or stop.
-3. `## [Unreleased]` empty? Read the Dependabot PRs merged in the `$last..main`
-   window only — the same window the Decide block walks, and nothing older.
-   Bound the call by date, because `--state merged` alone is not a window: with
-   no time or ref bound it returns the repo's whole merged history, so the
-   reader would owe `### Changed` lines for gemspec bumps that shipped in
-   earlier releases. Bind to the TAGGED COMMIT, never to the release's
-   publication timestamp: the ancestry boundary of `$last..main` is the commit
-   `$last` points at, while `publishedAt` is when the release was published and
-   can postdate it — a Dependabot PR merged in that gap is inside the window,
-   yet a `publishedAt` filter drops it, losing its gemspec changelog entry. The
-   bound itself is the tagged commit's committer date — `$last` is verified in
-   the Decide block; fetch the commit it points at and take
-   `.commit.committer.date` (`gh api "repos/developerz-ai/wurk/commits/$last"
-   --jq .commit.committer.date`) as `$last_commit_date`. Settle any candidate
-   whose `merged_at` sits near that bound by ancestry, not by timestamp — its
-   `merge_commit_sha` must be one of the Compare window's `compare_shas`
-   (every commit in `$last..main`, shipping or not). List exhaustively —
-   `gh pr list` cannot: it returns its default 30 results and rejects
-   `--paginate` (the reason the title guard uses `gh api --paginate`), so the
-   31st in-window Dependabot PR would silently vanish from the changelog. Walk
-   the pulls endpoint instead:
-   `gh api --paginate "repos/developerz-ai/wurk/pulls?state=closed&per_page=100"`,
-   keeping each PR whose `.user.login == "dependabot[bot]"` (the account
-   `--app dependabot` resolves), `.merged_at != null` and
-   `.merged_at >= $last_commit_date` (pass the date as `--arg`; GitHub's
-   RFC3339 stamps compare correctly as strings). Note that ecosystem-bump
-   conclusions do NOT come from the Decide window: it is empty for Dependabot
-   edits OUTSIDE the seven ship-spec paths by construction — the Decide path
-   filter cannot see the `Gemfile`, bun's `frontend/package.json` +
-   `bun.lock`, `.github/workflows/*.yml` or the `Dockerfile`, so those bumps
-   leave no trace there. `wurk.gemspec` IS one of the seven paths, so a
-   Dependabot PR touching it yields a NON-empty window — that is exactly the
-   bump which owes a `### Changed` line below, and its conclusion (ecosystem,
-   target file, versions) still comes from this PR list, not from the window's
-   subject line. For each in-window merged Dependabot PR, record ecosystem +
-   target file. Owe a `### Changed` line only when an in-window merged PR
-   touched `wurk.gemspec`; other ecosystems (Gemfile dev pins, bun's
-   `frontend/package.json` + `bun.lock`, github-actions, docker) owe nothing.
+1. **Pre-flight guard (gh-capable lane only).** The lane running this brief MUST be a `gh`-capable execution surface — the only surface eligible to file a `Release <next>` ask. Verify capability with `gh auth status`: no `gh` binary, or a non-zero exit, means the lane is not gh-capable, and a lane without `gh` MUST skip this ask entirely. Once eligible, retrieve every open title from BOTH lists — `gh api --paginate "repos/developerz-ai/wurk/issues?state=open" | jq -r '.[] | select(.pull_request == null) | .title'` and `gh api --paginate "repos/developerz-ai/wurk/pulls?state=open" | jq -r '.[].title'`. The list commands `gh issue list` and `gh pr list` reject `--paginate` outright, so a paginated list call would abort on the very flag meant to cover the long tail of open titles; `gh api --paginate` follows the API's link headers through every page so the title guard sees every open issue and PR, not just the newest 30, and is required here, not optional. (The `.pull_request == null` filter on the issues endpoint matches what `gh issue list` returned: GitHub's `/issues` route returns pull requests alongside issues, while `gh issue list` excluded them.) With every page covered, if any title matches `^Release|^release:`, MUST skip the Release ask (standing prohibition, last line of this section — never file a second ask while one titled `Release …` is open).
+2. Re-check the window on fresh `main` — the Decide block's local fast path is what fetches it
+   (`git fetch --quiet origin tag "$last" '+refs/heads/main:refs/remotes/origin/main'`), so re-run that block rather than
+   reading this checkout's `origin/main` as-is; still due, or stop.
+3. `## [Unreleased]` empty (a Dependabot-only window)? Add a `### Changed` line per bumped runtime
+   dependency first. Read the Dependabot PRs merged in the `$last..main` window only —
+   the same window the Decide block walks, and nothing older. Bound the call by date, because
+   `--state merged` alone is not a window: with no time or ref bound it returns the repo's
+   whole merged history, so the reader would owe `### Changed` lines for gemspec bumps that
+   shipped in earlier releases. Bind to the TAGGED COMMIT, never to the release's publication
+   timestamp: the ancestry boundary of `$last..main` is the commit `$last` points at, while
+   `publishedAt` is when the release was published and can postdate it — a Dependabot PR
+   merged in that gap is inside the window, yet a `publishedAt` filter drops it, losing its
+   gemspec changelog entry. The bound itself is the tagged commit's committer date —
+   `$last` is verified in the Decide block; fetch the commit it points at and take
+   `.commit.committer.date` (`gh api "repos/developerz-ai/wurk/commits/$last" --jq
+   .commit.committer.date`) as `$last_commit_date`. Settle any candidate whose `merged_at`
+   sits near that bound by ancestry, not by timestamp — its `merge_commit_sha` must be one
+   of the Compare window's `compare_shas` (every commit in `$last..main`, shipping or not).
+   List exhaustively — `gh pr list` cannot: it returns its default 30 results and rejects
+   `--paginate` (the reason the title guard uses `gh api --paginate`), so the 31st in-window
+   Dependabot PR would silently vanish from the changelog. Walk the pulls endpoint instead:
+   `gh api --paginate "repos/developerz-ai/wurk/pulls?state=closed&per_page=100"`, keeping
+   each PR whose `.user.login == "dependabot[bot]"` (the account `--app dependabot`
+   resolves), `.merged_at != null` and `.merged_at >= $last_commit_date` (pass the date as
+   `--arg`; GitHub's RFC3339 stamps compare correctly as strings). Note that ecosystem-bump
+   conclusions do NOT come from the Decide window: it is empty for Dependabot edits
+   OUTSIDE the seven ship-spec paths by construction — the Decide path filter cannot see
+   the `Gemfile`, bun's `frontend/package.json` + `bun.lock`, `.github/workflows/*.yml` or
+   the `Dockerfile`, so those bumps leave no trace there. `wurk.gemspec` IS one of the
+   seven paths, so a Dependabot PR touching it yields a NON-empty window — that is exactly
+   the bump which owes a `### Changed` line below, and its conclusion (ecosystem, target
+   file, versions) still comes from this PR list, not from the window's subject line. For
+   each in-window merged Dependabot PR, record ecosystem + target file. Owe a `### Changed`
+   line only when an in-window merged PR touched `wurk.gemspec`; other ecosystems
+   (`Gemfile` dev pins, bun's `frontend/package.json` + `bun.lock`, github-actions, docker)
+   owe nothing.
+
 4. `RELEASE.md` → *Cutting a release*: bump `lib/wurk/version.rb`, `bundle exec rake
    release:relock_demo`, move `[Unreleased]` under `## [<next>] - <today>`, `bin/check`.
 5. One PR, `release: <next>`, nothing else in it. It merges on green like any PR.
