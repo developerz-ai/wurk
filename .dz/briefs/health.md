@@ -5,18 +5,20 @@ so that nobody has to watch it. This brief covers the failures no issue or PR an
 
 | Signal | Command | Healthy |
 |---|---|---|
-| `main` is green | `run=$(gh run list --workflow test.yml --branch main --event push --limit 1 --json databaseId,headSha,conclusion \| jq -c '.[0]'); sha=$(jq -r .headSha <<<"$run"); v=$(gh api "repos/$(gh repo view --json nameWithOwner -q .nameWithOwner)/actions/runs/$(jq -r .databaseId <<<"$run")/jobs" \| jq -r '[.jobs[]?] as $all \| [$all[] \| select(.name != "detect changed paths")] as $g \| [$all[] \| select(.name == "detect changed paths")] as $d \| if ($all \| length) == 0 then "unreadable" elif ($d \| length) == 1 and ($d[0].conclusion == "success") and ($g \| length) > 0 and all($g[]; .conclusion == "skipped") then "dup" else "graded" end' 2>/dev/null); case "$v" in dup) echo "Unhealthy: $sha is a dup'd push run" ;; graded) echo "$(jq -r .conclusion <<<"$run") $sha" ;; *) echo "verdict unknown $sha" ;; esac` | `success`, and `detect.dup=false` |
-| the last release published | `run=$(gh run list --workflow release.yml --limit 1 --json databaseId,headSha,conclusion \| jq -c '.[0]'); sha=$(jq -r .headSha <<<"$run"); c=$(jq -r .conclusion <<<"$run"); v=$(gh api "repos/$(gh repo view --json nameWithOwner -q .nameWithOwner)/actions/runs/$(jq -r .databaseId <<<"$run")/jobs" \| jq -r '[.jobs[]?] as $all \| [$all[] \| select(.name == "preflight")] as $p \| [$all[] \| select(.name == "release")] as $r \| if ($all \| length) == 0 then "unreadable" elif ($p \| length) == 1 and ($p[0].conclusion == "success") and ($r \| length) == 1 and ($r[0].conclusion == "skipped") then "noop" else "graded" end' 2>/dev/null); if [ "$c" = "null" ]; then echo "in flight $sha"; else case "$v" in noop) echo "no-op $sha, preflight passed with proceed=false: nothing was owed, that version is already on RubyGems" ;; graded) echo "$c $sha" ;; *) echo "verdict unknown $sha" ;; esac; fi` | `success`, or a named `no-op <sha>` (proceed=false, nothing owed) |
+| `main` is green | `run=$(gh run list --workflow test.yml --branch main --event push --limit 1 --json databaseId,headSha,conclusion,url \| jq -c '.[0]'); sha=$(jq -r .headSha <<<"$run"); url=$(jq -r .url <<<"$run"); v=$(gh api "repos/$(gh repo view --json nameWithOwner -q .nameWithOwner)/actions/runs/$(jq -r .databaseId <<<"$run")/jobs" \| jq -r '[.jobs[]?] as $all \| [$all[] \| select(.name != "detect changed paths")] as $g \| [$all[] \| select(.name == "detect changed paths")] as $d \| if ($all \| length) == 0 then "unreadable" elif ($d \| length) == 1 and ($d[0].conclusion == "success") and ($g \| length) > 0 and all($g[]; .conclusion == "skipped") then "dup" else "graded" end' 2>/dev/null); case "$v" in dup) echo "Unhealthy: $sha is a dup'd push run ($url)" ;; graded) echo "$(jq -r .conclusion <<<"$run") $sha $url" ;; *) echo "verdict unknown $sha $url" ;; esac` | `success`, and `detect.dup=false` |
+| the last release published | `run=$(gh run list --workflow release.yml --limit 1 --json databaseId,headSha,conclusion,url \| jq -c '.[0]'); sha=$(jq -r .headSha <<<"$run"); url=$(jq -r .url <<<"$run"); c=$(jq -r .conclusion <<<"$run"); v=$(gh api "repos/$(gh repo view --json nameWithOwner -q .nameWithOwner)/actions/runs/$(jq -r .databaseId <<<"$run")/jobs" \| jq -r '[.jobs[]?] as $all \| [$all[] \| select(.name == "preflight")] as $p \| [$all[] \| select(.name == "release")] as $r \| if ($all \| length) == 0 then "unreadable" elif ($p \| length) == 1 and ($p[0].conclusion == "success") and ($r \| length) == 1 and ($r[0].conclusion == "skipped") then "noop" else "graded" end' 2>/dev/null); if [ "$c" = "null" ]; then echo "in flight $sha $url"; else case "$v" in noop) echo "no-op $sha, preflight passed with proceed=false: nothing was owed, that version is already on RubyGems ($url)" ;; graded) echo "$c $sha $url" ;; *) echo "verdict unknown $sha $url" ;; esac; fi` | `success`, or a named `no-op <sha>` (proceed=false, nothing owed) |
 | RubyGems serves `Wurk::VERSION` | `gem list wurk --remote --exact` vs `lib/wurk/version.rb` | equal, or a release run is in flight |
-| the demo deployed | `gh run list --workflow deploy-demo.yml --limit 1 --json conclusion` | `success` |
-| topology and ecosystem lanes | `for wf in topology.yml ecosystem.yml; do run=$(gh run list --workflow $wf --branch main --event push --limit 1 --json databaseId,headSha,conclusion \| jq -c '.[0]'); sha=$(jq -r .headSha <<<"$run"); v=$(gh api "repos/$(gh repo view --json nameWithOwner -q .nameWithOwner)/actions/runs/$(jq -r .databaseId <<<"$run")/jobs" \| jq -r '[.jobs[]?] as $all \| [$all[] \| select(.name != "detect changed paths" and .name != "sidekiq release watcher")] as $g \| [$all[] \| select(.name == "detect changed paths")] as $d \| if ($all \| length) == 0 then "unreadable" elif ($d \| length) == 1 and ($d[0].conclusion == "success") and ($g \| length) > 0 and all($g[]; .conclusion == "skipped") then "dup" else "graded" end' 2>/dev/null); case "$v" in dup) echo "Unhealthy: $wf at $sha is a dup'd push run" ;; graded) echo "$wf $(jq -r .conclusion <<<"$run") $sha" ;; *) echo "$wf verdict unknown $sha" ;; esac; done` | `success` on both, and `detect.dup=false` on both |
+| the demo deployed | `run=$(gh run list --workflow deploy-demo.yml --limit 1 --json databaseId,headSha,conclusion,url \| jq -c '.[0]'); jq -r '.conclusion + " " + .headSha + " " + .url' <<<"$run"` | `success` |
+| topology and ecosystem lanes | `for wf in topology.yml ecosystem.yml; do run=$(gh run list --workflow $wf --branch main --event push --limit 1 --json databaseId,headSha,conclusion,url \| jq -c '.[0]'); sha=$(jq -r .headSha <<<"$run"); url=$(jq -r .url <<<"$run"); v=$(gh api "repos/$(gh repo view --json nameWithOwner -q .nameWithOwner)/actions/runs/$(jq -r .databaseId <<<"$run")/jobs" \| jq -r '[.jobs[]?] as $all \| [$all[] \| select(.name != "detect changed paths" and .name != "sidekiq release watcher")] as $g \| [$all[] \| select(.name == "detect changed paths")] as $d \| if ($all \| length) == 0 then "unreadable" elif ($d \| length) == 1 and ($d[0].conclusion == "success") and ($g \| length) > 0 and all($g[]; .conclusion == "skipped") then "dup" else "graded" end' 2>/dev/null); case "$v" in dup) echo "Unhealthy: $wf at $sha is a dup'd push run ($url)" ;; graded) echo "$wf $(jq -r .conclusion <<<"$run") $sha $url" ;; *) echo "$wf verdict unknown $sha $url" ;; esac; done` | `success` on both, and `detect.dup=false` on both |
 | Dependabot is not stuck | `gh pr list --app dependabot --json number,createdAt` | none older than 7 days |
 
 **Grading a dup'd push.** `bin/ci-dup-push` lets a push to main skip a workflow's gated jobs when the
 pushed tree already passed that workflow on the merged PR's head — `detect.dup=true`. Such a run
 still reports `conclusion=success` with nothing having run, so rows 8 and 12 read
-`databaseId,headSha,conclusion` *and* the job list from
-`gh api repos/$repo/actions/runs/<databaseId>/jobs`, and grade it in three steps.
+`databaseId,headSha,conclusion,url` *and* the job list from
+`gh api repos/$repo/actions/runs/<databaseId>/jobs`, and grade it in three steps. Every verdict the
+rows print carries the run's `url` alongside its `sha`, so the ask can link the run without a second
+`gh` call.
 
 1. **An unreadable job list grades `verdict unknown <sha>`**, never a colour. The `gh api` call is
    the only thing standing between a rate limit or 4xx and a verdict the row cannot actually
@@ -33,7 +35,17 @@ still reports `conclusion=success` with nothing having run, so rows 8 and 12 rea
    all-skipped then means dup and nothing else (`sidekiq release watcher` is excluded; it is a
    `schedule`/`workflow_dispatch` job, never gated on dup). A `detect` that failed is not a dup: the
    run grades on its own `conclusion`, which is what actually explains why nothing ran.
-3. **Otherwise grade on `conclusion`**, printing `<conclusion> <sha>`.
+3. **Otherwise grade on `conclusion`**, printing `<conclusion> <sha> <url>`.
+
+**Confirming the signature against the run.** The runtime signature is what the row grades on, so
+read it back off the run itself when a verdict needs checking. In the `detect changed paths` job,
+the log step `duplicate of an already-green PR head (dup)` runs `bin/ci-dup-push`, which writes
+`ci-dup-push: …` to STDERR on both its paths: a dup prints
+`ci-dup-push: tree <tree> already passed <workflow> on PR #<n> head <sha> — skipping` (dup=true),
+and anything else prints `ci-dup-push: <reason> — full run` (dup=false). So
+`gh run view <id> --log | grep 'ci-dup-push:'` on that job reads `— skipping` for a dup and
+`— full run` with the reason it did not skip. This confirms the signature; it does not change it —
+a failed `detect` still does not grade as a dup, whatever its log says.
 
 A dup'd push grades **Unhealthy whatever its `conclusion`**, and the ask must name the dup'd
 `headSha`: that coverage came from the PR run, so main has no fresh signal of its own. Row 12 runs
@@ -41,7 +53,7 @@ the same three-step read over both workflows and names the offending one. Keep r
 read shape — dropping the jobs call reopens a `main` that certifies green having run no tests at all,
 and dropping the `detect` check misreads a failed run as a dup'd one.
 
-**Grading a release run that published nothing.** Row 9 reads `databaseId,headSha,conclusion` *and*
+**Grading a release run that published nothing.** Row 9 reads `databaseId,headSha,conclusion,url` *and*
 the job list from `gh api repos/$repo/actions/runs/<databaseId>/jobs`, and grades in three steps, for
 the reason the dup rows do: the jobs API carries no step *outputs*, so what release.yml decided
 cannot be read directly, and its cheapest exit is a run that publishes nothing and still reports
@@ -60,7 +72,7 @@ cannot be read directly, and its cheapest exit is a run that publishes nothing a
    skipped — and the run still concludes `success`, because a skipped job does not fail a run. Print
    `no-op <sha>`. Grading this row on `--json conclusion` alone reports that green as the last
    release published, which it is not.
-4. **Otherwise grade on `conclusion`**, printing `<conclusion> <sha>`.
+4. **Otherwise grade on `conclusion`**, printing `<conclusion> <sha> <url>`.
 
 A no-op is **not Unhealthy and files no ask**: proceed=false means that version is already live on
 RubyGems, so nothing was owed. Take `<v>` for an ask title from `lib/wurk/version.rb`, not from the

@@ -26,6 +26,15 @@ require 'tmpdir'
 #      executing (`conclusion=null`) is reported in flight and graded by
 #      nobody.
 #
+# A fourth property, added with the run URLs: every job-list row must request
+# BOTH `url` and `databaseId` and print the URL on EVERY verdict — dup,
+# graded, unknown, no-op, in flight. The brief's filing rule says an ask's body
+# carries "the command, its output and the run URL", so the rows have to carry
+# the URL themselves; a `--json` list that silently lost `url` would leave
+# `jq -r .url` printing the string `null`, and the ask would link nowhere.
+# STUB_GH therefore serves a fixture-backed `url` — otherwise the row under test
+# would print a bogus URL and the exact-stdout assertions would be pinning it.
+#
 # Reads the brief and runs its own extracted commands; no network, no Redis,
 # no shared state.
 class HealthBriefTest < Minitest::Test
@@ -43,6 +52,11 @@ class HealthBriefTest < Minitest::Test
   SHA_NOOP       = 'f' * 40
   SHA_REFUSED    = '9' * 40
   SHA_INFLIGHT   = '1' * 40
+
+  URL_TEST        = 'https://github.com/wurk-owner/wurk/actions/runs/1'
+  URL_RELEASE     = 'https://github.com/wurk-owner/wurk/actions/runs/201'
+  URL_TOPOLOGY    = 'https://github.com/wurk-owner/wurk/actions/runs/101'
+  URL_ECOSYSTEM   = 'https://github.com/wurk-owner/wurk/actions/runs/102'
 
   def setup
     @text = File.read(BRIEF)
@@ -79,9 +93,9 @@ class HealthBriefTest < Minitest::Test
                      "row 8's command must run cleanly (status=#{status.inspect}, " \
                      "stdout=#{out.inspect}, stderr=#{err.inspect})"
 
-    assert_equal ["success #{SHA_GREEN}"], out.lines.map(&:chomp),
+    assert_equal ["success #{SHA_GREEN} #{URL_TEST}"], out.lines.map(&:chomp),
                  'gated jobs that really ran make this an ordinary main run: the ' \
-                 'row grades on conclusion and prints exactly `success <sha>`'
+                 'row grades on conclusion and prints `success <sha> <url>`'
 
     refute_includes out, 'Unhealthy',
                     'a run whose gated jobs succeeded is not a dup'
@@ -121,7 +135,7 @@ class HealthBriefTest < Minitest::Test
                      "row 8's command must run cleanly (status=#{status.inspect}, " \
                      "stdout=#{out.inspect}, stderr=#{err.inspect})"
 
-    assert_equal ["failure #{SHA_DUP}"], out.lines.map(&:chomp),
+    assert_equal ["failure #{SHA_DUP} #{URL_TEST}"], out.lines.map(&:chomp),
                  'a failed `detect` skips every dependent via `needs:` and yields ' \
                  'the same all-skipped job list, so the dup signature must require ' \
                  "detect's own success; got stdout=#{out.inspect}"
@@ -154,9 +168,9 @@ class HealthBriefTest < Minitest::Test
                     "the Unhealthy line must carry topology.yml's own headSha; got " \
                     "#{unhealthy.first.inspect}"
 
-    assert_includes lines, "ecosystem.yml success #{SHA_ECOSYSTEM}",
+    assert_includes lines, "ecosystem.yml success #{SHA_ECOSYSTEM} #{URL_ECOSYSTEM}",
                     'the healthy lane still grades on its own conclusion and reports ' \
-                    "its own sha; got #{lines.inspect}"
+                    "its own sha and run url; got #{lines.inspect}"
   end
 
   def test_release_run_that_published_nothing_is_a_named_no_op
@@ -198,9 +212,9 @@ class HealthBriefTest < Minitest::Test
                      "row 9's command must run cleanly (status=#{status.inspect}, " \
                      "stdout=#{out.inspect}, stderr=#{err.inspect})"
 
-    assert_equal ["success #{SHA_PUBLISHED}"], out.lines.map(&:chomp),
+    assert_equal ["success #{SHA_PUBLISHED} #{URL_RELEASE}"], out.lines.map(&:chomp),
                  'a run that really pushed the gem and cut the tag is an ordinary ' \
-                 'publish: grade on conclusion and print exactly `success <sha>`'
+                 'publish: grade on conclusion and print `success <sha> <url>`'
 
     refute_includes out, 'no-op',
                     'the no-op signature is release SKIPPED; a release that ran is not one'
@@ -234,7 +248,7 @@ class HealthBriefTest < Minitest::Test
                      "row 9's command must run cleanly (status=#{status.inspect}, " \
                      "stdout=#{out.inspect}, stderr=#{err.inspect})"
 
-    assert_equal ["in flight #{SHA_INFLIGHT}"], out.lines.map(&:chomp),
+    assert_equal ["in flight #{SHA_INFLIGHT} #{URL_RELEASE}"], out.lines.map(&:chomp),
                  'a run with a null conclusion has not finished; report it in flight ' \
                  "and grade nothing (stdout=#{out.inspect})"
 
@@ -257,7 +271,7 @@ class HealthBriefTest < Minitest::Test
                      "row 9's command must run cleanly (status=#{status.inspect}, " \
                      "stdout=#{out.inspect}, stderr=#{err.inspect})"
 
-    assert_equal ["failure #{SHA_REFUSED}"], out.lines.map(&:chomp),
+    assert_equal ["failure #{SHA_REFUSED} #{URL_RELEASE}"], out.lines.map(&:chomp),
                  'a refused release published nothing and was red; it grades on its ' \
                  "own conclusion, not as a no-op (stdout=#{out.inspect})"
 
@@ -297,7 +311,135 @@ class HealthBriefTest < Minitest::Test
                     'release.yml:80-90 must be where the release job reads the proceed signal'
   end
 
+  def test_each_job_list_row_requests_url_and_database_id
+    # The ask rule (bottom of the brief) says the body's carry the command, its
+    # output AND the run URL. The rows can only print that URL if they ask for
+    # it, and a `--json` list that loses `url` (or the `databaseId` the jobs
+    # call is built from) silently degrades to a bare `jq -r .url` printing the
+    # string `null` — a filed link that goes nowhere. Pin the field list per row.
+    ['`main` is green',
+     'the last release published',
+     'the demo deployed',
+     'topology and ecosystem lanes'].each do |signal|
+      command = command_cell(signal)
+      json_list = command[/--json ([a-zA-Z,]+)/, 1]
+
+      refute_nil json_list,
+                 "the #{signal.inspect} row must pass an explicit `--json` field " \
+                 'list to `gh run list`; without one there is no field to pin'
+
+      %w[url databaseId].each do |field|
+        assert_includes json_list.split(','), field,
+                        "the #{signal.inspect} row must request `#{field}` from " \
+                        "`gh run list --json #{json_list}`: the ask needs the run URL " \
+                        'and the jobs call is built from the databaseId'
+      end
+    end
+  end
+
+  def test_job_list_rows_print_the_run_url_with_every_verdict
+    # The URL has to survive into every branch, not just the green one: a dup,
+    # an unknown and a no-op are exactly the lines that become an ask.
+    out, = run_row8(jobs: jobs_json(detect: 'success', gated: 'skipped'),
+                    conclusion: 'success', sha: SHA_DUP)
+
+    assert_includes out, URL_TEST,
+                    "a dup verdict must carry the run url too; got #{out.inspect}"
+
+    out, = run_row8(jobs: jobs_json(detect: 'success', gated: 'skipped'),
+                    conclusion: 'success', sha: SHA_DUP, jobs_fail: true)
+
+    assert_includes out, URL_TEST,
+                    'an ungraded (`verdict unknown`) line must still carry the run ' \
+                    "url; got #{out.inspect}"
+
+    out, = run_row9(jobs: release_jobs_json(preflight: 'success', release: 'skipped', demo: 'skipped'),
+                    conclusion: 'success', sha: SHA_NOOP)
+
+    assert_includes out, URL_RELEASE,
+                    "a no-op line must carry the run url; got #{out.inspect}"
+
+    out, = run_row12
+
+    assert_includes out, URL_TOPOLOGY,
+                    "the dup'd lane's Unhealthy line must carry its run url; got #{out.inspect}"
+    assert_includes out, URL_ECOSYSTEM,
+                    "the healthy lane's line must carry its own run url; got #{out.inspect}"
+  end
+
+  def test_brief_documents_how_to_confirm_the_dup_signature
+    # The rows grade the dup from a runtime signature, so a reader has to be
+    # able to check it against the run. The confirm-against-the-run paragraph
+    # must name the job and step that prints it, the grep, and both outcomes —
+    # `— skipping` (dup) versus `— full run` with a reason (not a dup). Every
+    # assertion reads THAT paragraph, so a phrase sitting elsewhere in the brief
+    # cannot stand in for documentation that was never written.
+    para = dup_confirmation
+
+    assert_includes para, 'duplicate of an already-green PR head (dup)',
+                    'the confirm-the-dup paragraph must name the log step that runs ' \
+                    'bin/ci-dup-push, so a reader knows which log to open'
+
+    assert_includes para, 'bin/ci-dup-push',
+                    'the paragraph must name the script whose stderr carries the verdict'
+
+    assert_includes para, 'gh run view',
+                    'the paragraph must give the command that reads the run log'
+    assert_includes para, 'ci-dup-push:',
+                    'the paragraph must give the grep the reader runs over that log'
+
+    assert_includes para, '— skipping',
+                    'dup=true must be readable as `— skipping`'
+    assert_includes para, '— full run',
+                    'dup=false must be readable as `— full run`, and the paragraph ' \
+                    'must say it carries the reason the run did not skip'
+    assert_match(/— full run[^.]*reason|reason[^.]*— full run/, para,
+                 'dup=false must be distinguishable from dup=true by more than the ' \
+                 "em dash alone; got #{para.inspect}")
+
+    assert_includes para, 'detect changed paths',
+                    'the paragraph must anchor the log read to the `detect changed paths` job'
+
+    assert_match(/grading it does not change|does not change it|still does not grade as a dup/,
+                 para,
+                 'the paragraph confirms the signature and must say so without ' \
+                 "weakening the grading; got #{para.inspect}")
+  end
+
+  def test_dup_grading_stays_fail_closed_after_the_documentation
+    # The confirm-the-dup paragraph must not have relaxed the grading it
+    # documents: a failed detect is still not a dup, and an unreadable job
+    # list is still `verdict unknown`.
+    out, = run_row8(jobs: jobs_json(detect: 'failure', gated: 'skipped'),
+                    conclusion: 'failure', sha: SHA_DUP)
+
+    refute_includes out, 'Unhealthy',
+                    'documenting the dup signature must not turn a failed detect into ' \
+                    "a dup; got #{out.inspect}"
+
+    out, = run_row8(jobs: jobs_json(detect: 'success', gated: 'skipped'),
+                    conclusion: 'success', sha: SHA_DUP, jobs_fail: true)
+
+    assert_includes out, 'verdict unknown',
+                    "the fail-closed unknown grade must survive; got #{out.inspect}"
+  end
+
   private
+
+  # The brief's paragraph telling a reader how to confirm a dup'd push against
+  # the run itself — the one anchored to the `duplicate of an already-green PR
+  # head (dup)` log step. Scoping the assertions to it keeps a phrase elsewhere
+  # in the brief from satisfying them.
+  def dup_confirmation
+    lines = @text.lines.map(&:chomp)
+    first = lines.index { |line| line.include?('Confirming the signature') }
+
+    raise 'health.md has no paragraph documenting how to confirm the dup signature' if first.nil?
+
+    last = ((first + 1)...lines.size).find { |i| lines[i].start_with?('**') } || lines.size
+
+    lines[first...last].join("\n")
+  end
 
   # The brief's step-3 bullet — the one reading `preflight` success + `release`
   # skipped as a no-op — as one string, so an assertion about the anchor cannot
@@ -370,6 +512,7 @@ class HealthBriefTest < Minitest::Test
       write_fixture(fixtures, 'test.yml.dbid', '1')
       write_fixture(fixtures, 'test.yml.sha', sha)
       write_fixture(fixtures, 'test.yml.conclusion', conclusion)
+      write_fixture(fixtures, 'test.yml.url', URL_TEST)
       write_fixture(fixtures, 'dbid-1.jobs', jobs)
     end
   end
@@ -379,6 +522,7 @@ class HealthBriefTest < Minitest::Test
       write_fixture(fixtures, 'release.yml.dbid', '201')
       write_fixture(fixtures, 'release.yml.sha', sha)
       write_fixture(fixtures, 'release.yml.conclusion', conclusion)
+      write_fixture(fixtures, 'release.yml.url', URL_RELEASE)
       write_fixture(fixtures, 'dbid-201.jobs', jobs)
     end
   end
@@ -388,11 +532,13 @@ class HealthBriefTest < Minitest::Test
       write_fixture(fixtures, 'topology.yml.dbid', '101')
       write_fixture(fixtures, 'topology.yml.sha', SHA_TOPOLOGY)
       write_fixture(fixtures, 'topology.yml.conclusion', 'success')
+      write_fixture(fixtures, 'topology.yml.url', URL_TOPOLOGY)
       write_fixture(fixtures, 'dbid-101.jobs', jobs_json(detect: 'success', gated: 'skipped'))
 
       write_fixture(fixtures, 'ecosystem.yml.dbid', '102')
       write_fixture(fixtures, 'ecosystem.yml.sha', SHA_ECOSYSTEM)
       write_fixture(fixtures, 'ecosystem.yml.conclusion', 'success')
+      write_fixture(fixtures, 'ecosystem.yml.url', URL_ECOSYSTEM)
       write_fixture(fixtures, 'dbid-102.jobs', jobs_json(detect: 'success', gated: 'success'))
     end
   end
@@ -432,6 +578,10 @@ class HealthBriefTest < Minitest::Test
 
   # Stub `gh`. Every answer is read from the fixture dir the test wrote, so
   # the brief's command runs against a fixed jobs list instead of the API.
+  # The run list also serves `url`, from a per-workflow `<wf>.url` fixture and
+  # falling back to a run-URL derived from the databaseId — the brief asks for
+  # `url` by name, so a stub that dropped it would hand the row a literal
+  # `null` and let a broken row pass.
   # `WURK_TEST_JOBS_FAIL=1` makes ONLY the jobs call fail, leaving the run
   # list readable — that is the exact shape of the false green this file
   # pins: a `conclusion` the brief can see, and a jobs list it cannot.
@@ -450,10 +600,11 @@ class HealthBriefTest < Minitest::Test
           printf 'stub gh run: no --workflow argument in: %s\n' "$*" >&2
           exit 1
         fi
-        printf '[{"databaseId":%s,"headSha":"%s","conclusion":"%s"}]\n' \
+        printf '[{"databaseId":%s,"headSha":"%s","conclusion":"%s","url":"%s"}]\n' \
           "$(cat "$fixdir/$wf.dbid")" \
           "$(cat "$fixdir/$wf.sha")" \
-          "$(cat "$fixdir/$wf.conclusion")"
+          "$(cat "$fixdir/$wf.conclusion")" \
+          "$(if [ -s "$fixdir/$wf.url" ]; then cat "$fixdir/$wf.url"; else printf 'https://github.com/wurk-owner/wurk/actions/runs/%s' "$(cat "$fixdir/$wf.dbid")"; fi)"
         ;;
       repo)
         printf 'wurk-owner/wurk\n'
