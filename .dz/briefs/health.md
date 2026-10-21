@@ -133,4 +133,14 @@ exact equality on the title, the title is the signal's stable name, identical on
 command, its output, the run URL, the headSha and the version.
 
 A red `main` comes first: nothing releases from it. Recovery is
-`RELEASE.md`'s *If a release fails*. Never delete a tag, re-run a publish or `gem push` from here.
+`RELEASE.md`'s *If a release fails*. For a gem-less release, follow that runbook's *Recovering a
+gem-less release*: `gh release delete vX.Y.Z --cleanup-tag --yes`, then `git fetch --prune-tags`,
+then let CI re-cut the tag from the version bump. That cleanup is the sanctioned path here, not a
+workaround — never manually re-tag over an existing `vX.Y.Z` (force-moving a tag to a different
+commit), never `gem push` from a workstation as a replacement for the CI publish lane, and never
+force a version already on RubyGems down the publish lane a second time; the only version number
+that may be published for a given release is the one CI published. Break-glass hand-cutting a
+release when CI is unavailable, as RELEASE.md's *Break-glass manual publish* prescribes, is not
+re-tagging or force-moving — it runs only because the gem has already shipped and the lane can no
+longer act. Beyond that sanctioned cleanup, never delete a tag, re-run a publish or `gem push`
+from here.
