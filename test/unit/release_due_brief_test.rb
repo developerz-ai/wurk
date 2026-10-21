@@ -302,6 +302,162 @@ class ReleaseDueBriefTest < Minitest::Test
     )
   end
 
+  # Text-pattern pin: the brief's Decide block MUST detect (or
+  # always-unshallow) a shallow checkout, else a depth-1 clone walks
+  # `git log "$last"..origin/main` against the existing shallow
+  # boundary and silently omits every shipping commit before it — the
+  # window reads empty when a release is due, with no error. The
+  # sibling tests pin the runtime shape (called on shallow, skipped
+  # on complete); this one pins that the brief mentions `--unshallow`
+  # at all. A regression that drops the flag passes neither.
+  def test_brief_unshallows_when_checkout_is_shallow
+    decide_block = extract_decide_block
+
+    assert_match(/--unshallow/, decide_block,
+                 'the brief must `git fetch --unshallow origin` when the checkout is shallow, ' \
+                 'else the window scan against a depth-1 clone reads from a stale boundary and ' \
+                 'misses every shipping commit older than it (the regression in review thread ' \
+                 'PRRT_kwDOSi_O686uoG3j)')
+  end
+
+  # Runtime pin on the shallow branch: when the checkout pretends to
+  # be shallow (`git rev-parse --is-shallow-repository` returns true),
+  # the brief MUST call `git fetch --unshallow origin` BEFORE the
+  # directed fetch, and the directed fetch must still reach the local
+  # fast path's `git describe`. The stub records the `--unshallow`
+  # call in a separate marker file so a regression that drops the
+  # conditional (or always-unshallows, which errors on a complete
+  # repo and is the wrong shape) fails this test.
+  def test_brief_unshallows_on_shallow_checkout
+    run_decide_under_stubs(lightweight_tag_stub_gh, stub_git: SHALLOW_STUB_GIT) do |(out, err, status), tmpdir|
+      fast_path_marker = File.join(tmpdir, 'local_fast_path_reached')
+      unshallow_marker = File.join(tmpdir, 'local_fast_path_reached.unshallow')
+      combined = out + err
+
+      assert_predicate status, :success?,
+                       'shallow checkout + must-reach-fetch+describe: status=' \
+                       "#{status.inspect}, stdout=#{out.inspect}, stderr=#{err.inspect}"
+
+      assert File.exist?(unshallow_marker) && File.read(unshallow_marker).include?('UNSHALLOW_REACHED'),
+             'a shallow checkout must trigger `git fetch --unshallow origin` BEFORE the directed fetch; ' \
+             'marker not set, stderr=' \
+             "#{err.inspect}"
+
+      assert fast_path_reached?(fast_path_marker),
+             'shallow checkout + --unshallow + directed fetch must reach the local fast path; ' \
+             "marker not set, stdout=#{out.inspect}, stderr=#{err.inspect}"
+
+      refute_includes combined, '--unshallow origin failed',
+                      'an unshallow failure must NOT print on the success path; ' \
+                      "stdout=#{out.inspect}, stderr=#{err.inspect}"
+    end
+  end
+
+  # Runtime pin on the complete-branch: when the checkout pretends
+  # to be complete (`git rev-parse --is-shallow-repository` returns
+  # false), the brief MUST NOT call `git fetch --unshallow origin` —
+  # the command errors on a complete repo ("on a complete repository
+  # does not make sense"), so unconditional unshallow regresses the
+  # script on every non-depth-1 checkout. The stub rejects any
+  # `--unshallow` invocation; a regression that always-unshallows
+  # errors here before the local fast path's first git command.
+  def test_brief_skips_unshallow_on_complete_checkout
+    run_decide_under_stubs(lightweight_tag_stub_gh, stub_git: NON_SHALLOW_STUB_GIT) do |(out, err, status), tmpdir|
+      fast_path_marker = File.join(tmpdir, 'local_fast_path_reached')
+      combined = out + err
+
+      assert_predicate status, :success?,
+                       'complete checkout must NOT call --unshallow (it errors on a complete repo); ' \
+                       "status=#{status.inspect}, stdout=#{out.inspect}, stderr=#{err.inspect}"
+
+      assert fast_path_reached?(fast_path_marker),
+             'complete checkout must reach the local fast path; marker not set; ' \
+             "stdout=#{out.inspect}, stderr=#{err.inspect}"
+
+      refute_includes combined, '--unshallow origin failed',
+                      'complete checkout must not print the unshallow-failure diagnostic; ' \
+                      "stdout=#{out.inspect}, stderr=#{err.inspect}"
+    end
+  end
+
+  # Symmetric failure pin: a shallow checkout whose `--unshallow`
+  # call itself fails must abort BEFORE the local fast path (the
+  # undirected fetch is not optional on a shallow clone), and the
+  # directed fetch must NOT be reached — a regression that ignores
+  # the unshallow failure and falls through to the directed fetch
+  # surfaces here as the stub's "must not be called" stderr line.
+  def test_unshallow_failure_aborts_decision_before_local_fast_path
+    assert_decide_aborts_before_local_fast_path(
+      stub_gh: lightweight_tag_stub_gh,
+      stub_git: UNSHALLOW_FAILING_STUB_GIT,
+      failing_curl: 'the `git fetch --unshallow origin` stub fails on a shallow checkout',
+      failure_message: 'unshallow failure must abort the Decide script',
+      expected_output: '::error::git fetch --unshallow origin failed'
+    )
+  end
+
+  # The fetch is the only line that refreshes BOTH bounds of the
+  # window (`$last` and `origin/main`). Stubs that do not inspect
+  # fetch args accept ANY fetch and silently mask a regression that
+  # drops the main refspec (so `origin/main` is stale, every shipping
+  # commit is invisible, the script returns 0) or drops the tag (so
+  # the left bound fails to resolve, `git log` aborts on a different
+  # axis). Success-path stub (STUB_GIT_REQUIRES_BOTH_REFSPECS)
+  # requires BOTH args; a brief that drops either fails it.
+  def test_main_fetch_must_include_tag_and_main_refspec
+    run_decide_under_stubs(lightweight_tag_stub_gh,
+                           stub_git: STUB_GIT_REQUIRES_BOTH_REFSPECS) do |(out, err, status), tmpdir|
+      fast_path_marker = File.join(tmpdir, 'local_fast_path_reached')
+
+      assert_predicate status, :success?,
+                       '`git fetch` must include BOTH the tag (v1.8.0) AND the main refspec ' \
+                       '(`+refs/heads/main:refs/remotes/origin/main`); without either, the ' \
+                       'stale-main regression the stub is meant to catch: ' \
+                       "status=#{status.inspect}, stderr=#{err.inspect}"
+
+      assert fast_path_reached?(fast_path_marker),
+             'the brief must reach the local fast path when both fetch args are present; ' \
+             "marker not set; stdout=#{out.inspect}, stderr=#{err.inspect}"
+    end
+  end
+
+  # End-to-end check that the brief's window-scan actually filters
+  # by pathspec: shipping commits touch `lib/` (or other shipped
+  # paths) and appear in the window; docs-only commits touch only
+  # `README.md` (or other non-shipped paths) and are excluded;
+  # change-then-revert commits both touch `lib/` and BOTH appear
+  # because `git log -- <pathspec>` does not net them. The stub-based
+  # tests above catch the brief's bash shape; this one catches the
+  # git-command shape itself, which the stubs cannot (review thread
+  # PRRT_kwDOSi_O686uoG3r).
+  def test_window_scan_with_real_repo_filters_shipping_paths_excludes_docs_keeps_revert_pair
+    Dir.mktmpdir('wurk-window-repo-') do |tmpdir|
+      build_window_repo(tmpdir)
+      env = hermetic_git_env(tmpdir)
+
+      out_ship = query_brief_window_log(env, ['lib/foo.rb'])
+
+      assert_predicate out_ship[:status], :success?, out_ship[:message]
+      assert_match(/shipping commit on lib/, out_ship[:stdout],
+                   "shipping commit (lib/foo.rb) must be in the window: #{out_ship[:stdout].inspect}")
+      refute_match(/docs-only commit/, out_ship[:stdout],
+                   'docs-only commit (README.md) must NOT be in the window when the pathspec ' \
+                   "filters to lib/foo.rb: #{out_ship[:stdout].inspect}")
+
+      out_pair = query_brief_window_log(env, ['lib/bar.rb'])
+
+      assert_predicate out_pair[:status], :success?, out_pair[:message]
+      assert_match(/bar add commit/, out_pair[:stdout],
+                   'the change half of a change+revert pair (lib/bar.rb add) must be in the ' \
+                   'window: ' + out_pair[:stdout].inspect)
+      assert_match(/bar revert commit/, out_pair[:stdout],
+                   'the revert half of a change+revert pair (lib/bar.rb revert) must be in the ' \
+                   'window too — `git log -- <pathspec>` does not net a change against its revert, ' \
+                   'so dropping the revert from the listing would require using `git diff` instead, ' \
+                   "and the brief uses `git log`: #{out_pair[:stdout].inspect}")
+    end
+  end
+
   private
 
   # Stub `gh` whose Compare `gh api .../compare/<last>...main` call always
@@ -657,6 +813,116 @@ class ReleaseDueBriefTest < Minitest::Test
   SHELL
   private_constant :STUB_GIT
 
+  # Pretends the checkout is a shallow clone (depth-1 from
+  # `actions/checkout` with `fetch-depth: 1`). `git rev-parse
+  # --is-shallow-repository` prints `true`, so the brief's
+  # conditional MUST fire and call `git fetch --unshallow origin`
+  # BEFORE the directed fetch. The unshallow call writes a separate
+  # UNSHALLOW_REACHED marker so a regression that drops the
+  # conditional — or rewrites it as always-unshallow, which errors
+  # on a complete repo — is caught by both the marker presence and
+  # the follow-up fast-path marker. The directed fetch succeeds
+  # silently and `git describe` writes the fast-path marker.
+  SHALLOW_STUB_GIT = <<~'SHELL'
+    #!/usr/bin/env bash
+    if [[ "$1" == "rev-parse" && "$2" == "--is-shallow-repository" ]]; then
+      printf 'true\n'
+      exit 0
+    fi
+    if [[ "$1" == "fetch" ]]; then
+      if [[ "$*" == *"--unshallow"* ]]; then
+        printf 'UNSHALLOW_REACHED\n' > "${WURK_TEST_FAST_PATH_MARKER}.unshallow"
+      fi
+    fi
+    if [[ "$1" == "describe" ]]; then
+      printf 'LOCAL_FAST_PATH_REACHED\n' > "$WURK_TEST_FAST_PATH_MARKER"
+    fi
+    exit 0
+  SHELL
+  private_constant :SHALLOW_STUB_GIT
+
+  # Pretends the checkout is complete (non-shallow). `git rev-parse
+  # --is-shallow-repository` prints `false`, so the brief's
+  # conditional MUST skip; the stub rejects any `--unshallow`
+  # invocation, so a regression that always-unshallows (which
+  # errors on a complete repo) is caught here before the local fast
+  # path's first git command. Directed fetch succeeds silently.
+  NON_SHALLOW_STUB_GIT = <<~'SHELL'
+    #!/usr/bin/env bash
+    if [[ "$1" == "rev-parse" && "$2" == "--is-shallow-repository" ]]; then
+      printf 'false\n'
+      exit 0
+    fi
+    if [[ "$1" == "fetch" ]]; then
+      if [[ "$*" == *"--unshallow"* ]]; then
+        printf 'ERROR: stub git must not call --unshallow on a complete checkout\n' >&2
+        exit 1
+      fi
+    fi
+    if [[ "$1" == "describe" ]]; then
+      printf 'LOCAL_FAST_PATH_REACHED\n' > "$WURK_TEST_FAST_PATH_MARKER"
+    fi
+    exit 0
+  SHELL
+  private_constant :NON_SHALLOW_STUB_GIT
+
+  # Pretends the checkout is shallow AND the unshallow fetch fails.
+  # Every other subcommand is silent: a regression that lets the
+  # script continue past the unshallow failure would surface here
+  # as the directed fetch's `git fetch` would still succeed (the
+  # stub's narrow tripwire) — so the fast-path marker would be
+  # written, and the test catches it via the
+  # `assert_decide_aborts_before_local_fast_path` helper's third
+  # assertion.
+  UNSHALLOW_FAILING_STUB_GIT = <<~'SHELL'
+    #!/usr/bin/env bash
+    if [[ "$1" == "rev-parse" && "$2" == "--is-shallow-repository" ]]; then
+      printf 'true\n'
+      exit 0
+    fi
+    if [[ "$1" == "fetch" ]]; then
+      if [[ "$*" == *"--unshallow"* ]]; then
+        printf 'ERROR: stub git fetch --unshallow origin failed (network down)\n' >&2
+        exit 1
+      fi
+    fi
+    if [[ "$1" == "describe" ]]; then
+      printf 'LOCAL_FAST_PATH_REACHED\n' > "$WURK_TEST_FAST_PATH_MARKER"
+    fi
+    exit 0
+  SHELL
+  private_constant :UNSHALLOW_FAILING_STUB_GIT
+
+  # Success-path stub for the directed fetch: every subcommand is a
+  # silent success EXCEPT `git fetch`, which requires BOTH the tag
+  # arg (v1.8.0) AND the explicit main refspec
+  # (`+refs/heads/main:refs/remotes/origin/main`). The stub failure
+  # message names the missing arg in either case so a regression
+  # reading the test output knows which one was dropped. The
+  # `STUB_GIT` default would accept any fetch and silently mask a
+  # drop of either arg — that is the regression this stub exists
+  # to catch.
+  STUB_GIT_REQUIRES_BOTH_REFSPECS = <<~'SHELL'
+    #!/usr/bin/env bash
+    if [[ "$1" == "fetch" ]]; then
+      args="$*"
+      case "$args" in
+        *v1.8.0*'+refs/heads/main:refs/remotes/origin/main'*|*'+refs/heads/main:refs/remotes/origin/main'*v1.8.0*)
+          # success — both tag and refspec present, in any order
+          ;;
+        *)
+          printf 'ERROR: stub git fetch must include BOTH the tag arg (v1.8.0) AND the main refspec (+refs/heads/main:refs/remotes/origin/main); got: %s\n' "$args" >&2
+          exit 1
+          ;;
+      esac
+    fi
+    if [[ "$1" == "describe" ]]; then
+      printf 'LOCAL_FAST_PATH_REACHED\n' > "$WURK_TEST_FAST_PATH_MARKER"
+    fi
+    exit 0
+  SHELL
+  private_constant :STUB_GIT_REQUIRES_BOTH_REFSPECS
+
   def compare_failing_stub_gh
     COMPARE_FAILING_STUB_GH
   end
@@ -824,5 +1090,121 @@ class ReleaseDueBriefTest < Minitest::Test
 
   def table_line?(line_no)
     find_table_line_numbers.include?(line_no)
+  end
+
+  # Thin wrapper around `git log` mirroring the brief's window-scan
+  # command: `git log --format='%h %cI %s' v1.0.0..origin/main -- <pathspecs>`.
+  # Returns a hash so the test can pull the stdout / status / a
+  # friendly error message without paying for a variable per call —
+  # the brief-style command is already three lines (status, format,
+  # range, `--`, paths), and inlining it once per assertion bloats
+  # the test past the rubocop block-length budget.
+  def query_brief_window_log(env, pathspecs)
+    stdout, stderr, status = Open3.capture3(
+      env, 'git', 'log', '--format=%h %cI %s',
+      'v1.0.0..origin/main', '--', *pathspecs
+    )
+
+    {
+      stdout: stdout,
+      stderr: stderr,
+      status: status,
+      message: 'brief-style `git log` query must succeed on a real repo; ' \
+               "stderr=#{stderr.inspect}"
+    }
+  end
+
+  # `refs/remotes/origin/main` points to whatever the local-checkout
+  # brief calls `origin/main`. The real-repo test below synthesizes
+  # this ref from HEAD so the brief's
+  # `git log "$last"..origin/main` walks the same range the brief
+  # would on a real fetch: the initial-commit tag is the left bound,
+  # every commit since is in the window.
+  REMOTE_MAIN_REF = 'refs/remotes/origin/main'
+  private_constant :REMOTE_MAIN_REF
+
+  # End-to-end window-scan repo. Materializes a fresh git repo with
+  # four commits after the v1.0.0 tag: a shipping commit (lib/foo.rb
+  # change), a docs-only commit (README.md change), and a
+  # change-then-revert pair on lib/bar.rb. Together they exercise
+  # the three shapes the brief's pathspec filter must handle.
+  #
+  # Uses an isolated env (HOME = tmpdir, GIT_CONFIG_NOSYSTEM = 1,
+  # no shared work tree) so no inherited user's git config, hooks,
+  # or system gitconfig rewrites the author/committer or short-
+  # circuits the test on a host that happens to have `core.hooksPath`
+  # pointing at global hooks. Tags v1.0.0 at the initial commit, then
+  # creates `REMOTE_MAIN_REF` pointing at HEAD so the brief-style
+  # `git log v1.0.0..origin/main` resolves both bounds.
+  def build_window_repo(tmpdir)
+    env = hermetic_git_env(tmpdir)
+
+    run_git(env, 'init', '--quiet', '--initial-branch=main', tmpdir)
+    run_git(env, 'config', 'user.email', 'release-due-brief-test@example.com')
+    run_git(env, 'config', 'user.name', 'release-due-brief-test')
+    run_git(env, 'config', 'commit.gpgsign', 'false')
+    run_git(env, 'config', 'tag.gpgsign', 'false')
+
+    FileUtils.mkdir_p(File.join(tmpdir, 'lib'))
+    File.write(File.join(tmpdir, 'README.md'), "Initial README.\n")
+    File.write(File.join(tmpdir, 'lib', 'seed.rb'), "# seed line — pre-$last, present at the tag\n")
+    run_git(env, 'add', 'README.md', 'lib/seed.rb')
+    run_git(env, 'commit', '--quiet', '-m', 'initial commit, tagged as v1.0.0')
+    run_git(env, 'tag', 'v1.0.0')
+
+    # Shipping commit: lib/foo.rb change (matches the brief's
+    # `lib/**/*.rb` pathspec).
+    File.write(File.join(tmpdir, 'lib', 'foo.rb'), "puts 'shipping'\n")
+    run_git(env, 'add', 'lib/foo.rb')
+    run_git(env, 'commit', '--quiet', '-m', 'shipping commit on lib/foo.rb')
+
+    # Docs-only commit: README.md only (does NOT match the brief's
+    # pathspec list).
+    File.write(File.join(tmpdir, 'README.md'), "Updated prose only.\n")
+    run_git(env, 'add', 'README.md')
+    run_git(env, 'commit', '--quiet', '-m', 'docs-only commit on README.md')
+
+    # Change + revert pair: lib/bar.rb added, then removed.
+    # `git log -- <pathspec>` lists BOTH commits because the
+    # pathspec is "did this commit touch the path", not "is the
+    # file different at the tip of this commit". The brief relies
+    # on the asker to recognize a no-op pair; this fixture pins that
+    # both halves stay in the listing.
+    File.write(File.join(tmpdir, 'lib', 'bar.rb'), "puts 'bar'\n")
+    run_git(env, 'add', 'lib/bar.rb')
+    run_git(env, 'commit', '--quiet', '-m', 'bar add commit')
+    run_git(env, 'rm', '--quiet', 'lib/bar.rb')
+    run_git(env, 'commit', '--quiet', '-m', 'bar revert commit')
+
+    head_sha = Open3.capture2(env, 'git', 'rev-parse', 'HEAD').first.to_s.strip
+    raise 'build_window_repo: empty HEAD SHA' if head_sha.empty?
+
+    run_git(env, 'update-ref', REMOTE_MAIN_REF, head_sha)
+  end
+
+  # Env used by every `git` invocation in the real-repo tests.
+  # `HOME` is pointed at the temp dir so the test never reads the
+  # developer's `~/.gitconfig` and `~/.config/git/attributes` (and
+  # never inherits an untrusted `core.hooksPath`), and
+  # `GIT_CONFIG_NOSYSTEM=1` blocks `/etc/gitconfig`. Without these
+  # a developer-side `core.attributesfile` or a global pre-commit
+  # hook could short-circuit the test in ways that pass when the
+  # developer's setup is benign and fail (or worse, silently
+  # rewrite the repo) when it isn't.
+  def hermetic_git_env(tmpdir)
+    {
+      'GIT_DIR' => File.join(tmpdir, '.git'),
+      'GIT_WORK_TREE' => tmpdir,
+      'GIT_CONFIG_NOSYSTEM' => '1',
+      'HOME' => tmpdir
+    }
+  end
+
+  def run_git(env, *args)
+    stdout, stderr, status = Open3.capture3(env, 'git', *args)
+    return stdout if status.success?
+
+    raise "git #{args.inspect} failed in build_window_repo: status=#{status.exitstatus} " \
+          "stdout=#{stdout.inspect} stderr=#{stderr.inspect}"
   end
 end
