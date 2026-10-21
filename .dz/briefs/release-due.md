@@ -123,18 +123,39 @@ subject → minor; anything else → patch.
    Bound the call by date, because `--state merged` alone is not a window: with
    no time or ref bound it returns the repo's whole merged history, so the
    reader would owe `### Changed` lines for gemspec bumps that shipped in
-   earlier releases. Take `$last_date` from the release verified in the Decide
-   block (`gh release view "$last" --json publishedAt -q .publishedAt`) and run
-   `gh pr list --app dependabot --state merged --search "merged:>=$last_date"`
-   (or an equivalent PR-list call carrying the same bound) — a bound that names
-   `$last..main`, never the repo's full merged history. Note that
-   ecosystem-bump conclusions do NOT come from the Decide window, which is empty
-   for Dependabot edits by construction (the Decide path filter excludes most
-   Dependabot edit sites, so the window cannot see them). For each in-window
-   merged Dependabot PR, record ecosystem + target file. Owe a `### Changed`
-   line only when an in-window merged PR touched `wurk.gemspec`; other
-   ecosystems (Gemfile dev pins, bun's `frontend/package.json` + `bun.lock`,
-   github-actions, docker) owe nothing.
+   earlier releases. Bind to the TAGGED COMMIT, never to the release's
+   publication timestamp: the ancestry boundary of `$last..main` is the commit
+   `$last` points at, while `publishedAt` is when the release was published and
+   can postdate it — a Dependabot PR merged in that gap is inside the window,
+   yet a `publishedAt` filter drops it, losing its gemspec changelog entry. The
+   bound itself is the tagged commit's committer date — `$last` is verified in
+   the Decide block; fetch the commit it points at and take
+   `.commit.committer.date` (`gh api "repos/developerz-ai/wurk/commits/$last"
+   --jq .commit.committer.date`) as `$last_commit_date`. Settle any candidate
+   whose `merged_at` sits near that bound by ancestry, not by timestamp — its
+   `merge_commit_sha` must be one of the Compare window's `compare_shas`
+   (every commit in `$last..main`, shipping or not). List exhaustively —
+   `gh pr list` cannot: it returns its default 30 results and rejects
+   `--paginate` (the reason the title guard uses `gh api --paginate`), so the
+   31st in-window Dependabot PR would silently vanish from the changelog. Walk
+   the pulls endpoint instead:
+   `gh api --paginate "repos/developerz-ai/wurk/pulls?state=closed&per_page=100"`,
+   keeping each PR whose `.user.login == "dependabot[bot]"` (the account
+   `--app dependabot` resolves), `.merged_at != null` and
+   `.merged_at >= $last_commit_date` (pass the date as `--arg`; GitHub's
+   RFC3339 stamps compare correctly as strings). Note that ecosystem-bump
+   conclusions do NOT come from the Decide window: it is empty for Dependabot
+   edits OUTSIDE the seven ship-spec paths by construction — the Decide path
+   filter cannot see the `Gemfile`, bun's `frontend/package.json` +
+   `bun.lock`, `.github/workflows/*.yml` or the `Dockerfile`, so those bumps
+   leave no trace there. `wurk.gemspec` IS one of the seven paths, so a
+   Dependabot PR touching it yields a NON-empty window — that is exactly the
+   bump which owes a `### Changed` line below, and its conclusion (ecosystem,
+   target file, versions) still comes from this PR list, not from the window's
+   subject line. For each in-window merged Dependabot PR, record ecosystem +
+   target file. Owe a `### Changed` line only when an in-window merged PR
+   touched `wurk.gemspec`; other ecosystems (Gemfile dev pins, bun's
+   `frontend/package.json` + `bun.lock`, github-actions, docker) owe nothing.
 4. `RELEASE.md` → *Cutting a release*: bump `lib/wurk/version.rb`, `bundle exec rake
    release:relock_demo`, move `[Unreleased]` under `## [<next>] - <today>`, `bin/check`.
 5. One PR, `release: <next>`, nothing else in it. It merges on green like any PR.
