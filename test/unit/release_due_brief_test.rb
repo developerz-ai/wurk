@@ -758,8 +758,9 @@ class ReleaseDueBriefTest < Minitest::Test
 
       refute fast_path_reached?(fast_path_marker),
              "#{failure_message} before the local fast path; " \
-             'the stub `git describe` was reached, which means the ' \
-             'abort path did not fire and the script fell through'
+             'the stub `git describe` was reached, which means the script ran on ' \
+             'past its abort — the abort path did not fire, or its `exit 1` was ' \
+             'confined to a subshell or pipeline and never reached the Decide script'
     end
   end
 
