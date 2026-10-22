@@ -5,15 +5,16 @@ require 'json'
 require 'open3'
 require 'tmpdir'
 
-# Gates the four graded rows of .dz/briefs/health.md (`main` is green, `the
-# last release published`, `topology and ecosystem lanes`, `Dependabot is not
-# stuck`) the way release_due_brief_test.rb gates release-due.md: these
-# commands run unattended on a schedule, and a verdict they cannot actually
-# establish must never be printed as a green one. Five properties — the first
-# four all pinned by RUNNING the extracted command cells as bash against a
-# PATH-stubbed `gh` (a substring match over the brief's text would accept a
-# guard that never fires), the fifth pinned byte-for-byte on the brief's text
-# plus by running the extracted issues lookup:
+# Gates the five graded rows of .dz/briefs/health.md (`main` is green, `the
+# last release published`, `the demo deployed`, `topology and ecosystem
+# lanes`, `Dependabot is not stuck`) the way release_due_brief_test.rb gates
+# release-due.md: these commands run unattended on a schedule, and a verdict
+# they cannot actually establish must never be printed as a green one. Six
+# properties — the first five all pinned by RUNNING the extracted command
+# cells as bash against a PATH-stubbed `gh` (a substring match over the
+# brief's text would accept a guard that never fires), the sixth pinned
+# byte-for-byte on the brief's text plus by running the extracted issues
+# lookup:
 #
 #   1. FAIL CLOSED. `gh api .../actions/runs/<id>/jobs` is the only thing
 #      between a `gh` error and a false green: with the read empty the row falls
@@ -27,20 +28,30 @@ require 'tmpdir'
 #      success + `release` skipped and names that a no-op. A run still
 #      executing (`conclusion=null`) is reported in flight and graded by
 #      nobody.
-#   4. Row 13 reads the shape `gh` actually emits. `--json statusCheckRollup`
+#   4. A green deploy-demo run proves a pushed image, not a served one: the
+#      row reads the `resolve built commit` step log for the `sha-<7>` tag
+#      infra's Image Updater selects, and a green run carrying no such tag is
+#      Unhealthy — it leaves the demo frozen on an old digest while reporting
+#      green. That read is scoped and exact, because a whole `build` job log is
+#      full of `sha-<7>`-shaped strings that are not tags: only the named step's
+#      lines count, and the match must be a whole token, or the 8-hex full-sha
+#      shape wins by prefix and names a tag nothing can ever select. The brief
+#      must also name the gap it cannot close: no allowlisted command reaches
+#      the demo's own `/wurk/api/meta`.
+#   5. Row 13 reads the shape `gh` actually emits. `--json statusCheckRollup`
 #      is a LIST of CheckRun/StatusContext entries to roll up, never a state on
 #      the PR, so a fixture shaped `{"state": "FAILURE"}` agrees with a read the
 #      CLI cannot satisfy and grades a 35-day-old failing PR as "" — the row
 #      then prints nothing and reports no stuck dependabot PR, ever. Every
 #      fixture below is CLI-shaped for that reason: it is the only thing that
 #      lets the stuck assertions fail.
-#   5. The filing rule's ask dedupe is executable and mirrors release-due.md:
+#   6. The filing rule's ask dedupe is executable and mirrors release-due.md:
 #      the paragraph carries the byte-identical issues lookup, the lookup
 #      really drops PR entries, and ask titles are stable per signal — exact
 #      equality on a title that embeds the run's headSha or version can never
 #      hit, so the ask would be re-filed on every checkup.
 #
-# A fourth property, added with the run URLs: every job-list row must request
+# One more property, added with the run URLs: every job-list row must request
 # BOTH `url` and `databaseId` and print the URL on EVERY verdict — dup,
 # graded, unknown, no-op, in flight. The brief's filing rule says an ask's body
 # carries "the command, its output and the run URL", so the rows have to carry
@@ -67,9 +78,22 @@ class HealthBriefTest < Minitest::Test
   SHA_NOOP       = 'f' * 40
   SHA_REFUSED    = '9' * 40
   SHA_INFLIGHT   = '1' * 40
+  SHA_DEMO       = '7' * 40
+  SHA_DEMO_FROZEN = '4' * 40
+  DEMO_TAG       = 'sha-7777777'
+  API_CONTROLLER = File.join(ROOT, 'app', 'controllers', 'wurk', 'api_controller.rb')
+
+  # deploy-demo.yml's step names. `gh run view --log` carries one in field 2 of
+  # every line it prints, and row 11 keeps only the first one's lines.
+  RESOLVE_STEP = 'resolve built commit'
+  VERIFY_STEP = 'verify pushed tags resolve'
+  # A `verify pushed tags resolve` line naming the ref it inspected
+  # (deploy-demo.yml:207-209) — the shape a whole-log grep reads as a tag.
+  DECOY_REF = '==> inspecting registry.digitalocean.com/developerz-ai/wurk-demo:sha-1234567'
 
   URL_TEST        = 'https://github.com/wurk-owner/wurk/actions/runs/1'
   URL_RELEASE     = 'https://github.com/wurk-owner/wurk/actions/runs/201'
+  URL_DEMO        = 'https://github.com/wurk-owner/wurk/actions/runs/301'
   URL_TOPOLOGY    = 'https://github.com/wurk-owner/wurk/actions/runs/101'
   URL_ECOSYSTEM   = 'https://github.com/wurk-owner/wurk/actions/runs/102'
 
@@ -392,6 +416,228 @@ class HealthBriefTest < Minitest::Test
 
     refute_includes out, 'no-op',
                     'proceed=false requires preflight itself to have succeeded'
+  end
+
+  def test_demo_deploy_grades_on_conclusion_when_the_step_log_names_the_tag
+    out, err, status = run_row11(jobs: demo_jobs_json,
+                                 log: resolve_log(short: DEMO_TAG),
+                                 conclusion: 'success', sha: SHA_DEMO)
+
+    assert_predicate status, :success?,
+                     "row 11's command must run cleanly (status=#{status.inspect}, " \
+                     "stdout=#{out.inspect}, stderr=#{err.inspect})"
+
+    assert_equal ["success #{SHA_DEMO} #{URL_DEMO} tagged #{DEMO_TAG}"], out.lines.map(&:chomp),
+                 'a run whose `resolve built commit` step wrote the sha-<7> tag ' \
+                 'Image Updater selects is an ordinary deploy: grade on conclusion ' \
+                 "and name the tag; got stdout=#{out.inspect}"
+
+    refute_includes out, 'Unhealthy',
+                    'a readable tag means the deploy produced a candidate'
+    refute_includes out, 'verdict unknown',
+                    'a readable jobs list is a verdict, not an unknown'
+  end
+
+  def test_green_demo_deploy_without_a_resolvable_tag_is_unhealthy
+    # deploy-demo.yml:7-11 only BUILDS and PUSHES. Infra's Image Updater selects
+    # the newest tag matching ^sha-[0-9a-f]{7}$; a green run that wrote no such
+    # tag leaves the demo on its old digest and says nothing. That is how it
+    # silently went stale across several releases (deploy-demo.yml:165-172).
+    out, err, status = run_row11(jobs: demo_jobs_json,
+                                 log: resolve_log(short: nil),
+                                 conclusion: 'success', sha: SHA_DEMO_FROZEN)
+
+    assert_predicate status, :success?,
+                     "row 11's command must run cleanly (status=#{status.inspect}, " \
+                     "stdout=#{out.inspect}, stderr=#{err.inspect})"
+
+    assert_includes out, 'Unhealthy',
+                    'a green run with no sha-[0-9a-f]{7} tag in `resolve built ' \
+                    'commit` gives Image Updater no candidate — Unhealthy; got ' \
+                    "stdout=#{out.inspect}"
+
+    refute_includes out, "success #{SHA_DEMO_FROZEN}",
+                    'an unresolvable tag is NOT a green deploy: printing `success ' \
+                    '<sha>` is the false green this row must not emit ' \
+                    "(stdout=#{out.inspect})"
+
+    assert_includes out, SHA_DEMO_FROZEN,
+                    'the Unhealthy verdict must surface the headSha so the ask ' \
+                    "can link the run; got stdout=#{out.inspect}"
+  end
+
+  def test_a_tag_from_another_step_does_not_buy_this_row_a_green
+    # The row reads the whole `build` job log, and a docker build is full of
+    # `sha-<7>`-shaped strings that are not tags at all. Only the
+    # `resolve built commit` step's own output is evidence for this row, so a
+    # token over in `verify pushed tags resolve` must leave the run Unhealthy:
+    # the tag this step never wrote gives Image Updater no candidate either.
+    out, err, status = run_row11(jobs: demo_jobs_json,
+                                 log: resolve_log(short: nil, decoys: { VERIFY_STEP => [DECOY_REF] }),
+                                 conclusion: 'success', sha: SHA_DEMO_FROZEN)
+
+    assert_predicate status, :success?,
+                     "row 11's command must run cleanly (status=#{status.inspect}, " \
+                     "stdout=#{out.inspect}, stderr=#{err.inspect})"
+
+    refute_includes out, "success #{SHA_DEMO_FROZEN}",
+                    'the only sha-<7> in the log belongs to another step, so this ' \
+                    'step resolved nothing; a green printed off it is the false ' \
+                    "green this row must not emit (stdout=#{out.inspect})"
+
+    refute_includes out, 'tagged sha-1234567',
+                    'a tag `resolve built commit` never wrote must never be named ' \
+                    "as the tag it resolved (stdout=#{out.inspect})"
+
+    assert_includes out, 'Unhealthy',
+                    'with nothing resolved in the named step the demo has no ' \
+                    "Image Updater candidate; got stdout=#{out.inspect}"
+  end
+
+  def test_eight_hex_tag_is_not_the_short_sha_tag_image_updater_selects
+    # `sha-12345678` is the 8-hex full-sha shape: it does NOT match Image
+    # Updater's ^sha-[0-9a-f]{7}$, so a match that takes the first seven
+    # characters and stops prints a green naming a tag nothing can ever select —
+    # the demo stays frozen while the row certifies it.
+    out, err, status = run_row11(jobs: demo_jobs_json,
+                                 log: resolve_log(short: 'sha-12345678'),
+                                 conclusion: 'success', sha: SHA_DEMO_FROZEN)
+
+    assert_predicate status, :success?,
+                     "row 11's command must run cleanly (status=#{status.inspect}, " \
+                     "stdout=#{out.inspect}, stderr=#{err.inspect})"
+
+    refute_includes out, "success #{SHA_DEMO_FROZEN}",
+                    "a tag Image Updater's ^sha-[0-9a-f]{7}$ cannot select leaves " \
+                    'the demo frozen, so it is not a green deploy; got ' \
+                    "stdout=#{out.inspect}"
+
+    refute_includes out, 'tagged sha-1234567',
+                    'the 8-hex tag must not pass by matching its first seven ' \
+                    "characters; got stdout=#{out.inspect}"
+
+    assert_includes out, 'Unhealthy',
+                    "got stdout=#{out.inspect}"
+  end
+
+  # The row's step filter, this file's fixture and `gh`'s own layout are one
+  # convention, and only the last of the three is real: shaped
+  # `<timestamp>\t<job>\t<step>\t<message>`, the fixture agreed with a row that
+  # filtered field 3, every other test in this file stayed green, and the row
+  # running against an actual log kept no line at all — grading a correctly
+  # tagged deploy Unhealthy. So pin the layout `gh run view --log` really emits
+  # (job, step, then the log line's own `<timestamp> <message>`) and require the
+  # row's awk to read the step out of THAT column.
+  def test_row11_reads_the_step_out_of_the_column_gh_prints
+    fields = log_lines(RESOLVE_STEP, ['short=sha-7777777']).first.split("\t")
+
+    assert_equal 3, fields.size,
+                 '`gh run view --log` prints `<job>\t<step>\t<timestamp> <message>`, ' \
+                 "three columns; got #{fields.inspect}"
+
+    assert_equal 'build', fields[0],
+                 'the job name comes first; got ' \
+                 "#{fields.inspect}"
+
+    assert_equal RESOLVE_STEP, fields[1],
+                 'the step name is the second column, the one row 11 filters; got ' \
+                 "#{fields.inspect}"
+
+    assert_match(/\A\d{4}-\d{2}-\d{2}T[\d:.]+Z \S/, fields[2],
+                 "the log line's timestamp and message share the last column; got " \
+                 "#{fields.inspect}")
+
+    cell = command_cell('the demo deployed')
+    field = cell[/[$](\d) == "?resolve built commit"?/, 1]
+
+    refute_nil field,
+               'row 11 must select the resolve step\'s own lines out of the job log; ' \
+               "got #{cell.inspect}"
+
+    assert_equal '2', field,
+                 'the row must read field 2, the column `gh` prints the step in: ' \
+                 'any other column keeps no real log line, so a deploy that wrote its ' \
+                 'tag is graded Unhealthy'
+  end
+
+  def test_unreadable_demo_jobs_list_never_grades_success
+    out, err, _status = run_row11(jobs: demo_jobs_json,
+                                  log: resolve_log(short: DEMO_TAG),
+                                  conclusion: 'success', sha: SHA_DEMO, jobs_fail: true)
+
+    refute_includes out, "success #{SHA_DEMO}",
+                    'the `gh api .../jobs` stub failed, so the row cannot see the ' \
+                    '`resolve built commit` step and must not fall through to ' \
+                    'grading on conclusion; ' \
+                    "got stdout=#{out.inspect}, stderr=#{err.inspect}"
+
+    assert_includes out, 'verdict unknown',
+                    'an unreadable jobs list must fail closed as `verdict unknown`; ' \
+                    "got stdout=#{out.inspect}"
+
+    assert_includes out, SHA_DEMO,
+                    '`verdict unknown` must still name the sha it could not grade, ' \
+                    "so the next checkup can re-run it; got stdout=#{out.inspect}"
+  end
+
+  def test_unreadable_demo_log_never_grades_success
+    # Row 11 reads the `build` job log separately (`gh run view ... --job ... --log`)
+    # because step logs are not carried on the jobs API. If that read fails — a
+    # rate-limit, a 4xx, or a 5xx — the jobs list is fine but the tag is unknowable,
+    # so the row must fail closed exactly the way an unreadable jobs list does:
+    # `verdict unknown <sha>`, never `success <sha>`.
+    out, err, _status = run_row11(jobs: demo_jobs_json,
+                                  log: resolve_log(short: DEMO_TAG),
+                                  conclusion: 'success', sha: SHA_DEMO, log_fail: true)
+
+    refute_includes out, "success #{SHA_DEMO}",
+                    'the `gh run view --log` stub failed, so the row cannot see the ' \
+                    '`sha-<7>` tag and must not fall through to grading on conclusion; ' \
+                    "got stdout=#{out.inspect}, stderr=#{err.inspect}"
+
+    refute_includes out, "tagged #{DEMO_TAG}",
+                    'an unreadable log cannot read a tag — printing `tagged ' \
+                    "#{DEMO_TAG}` would be lying about a tag the row did not read; " \
+                    "got stdout=#{out.inspect}"
+
+    assert_includes out, 'verdict unknown',
+                    'an unreadable log must fail closed as `verdict unknown`, the ' \
+                    'same fail-closed rule an unreadable jobs list uses; ' \
+                    "got stdout=#{out.inspect}"
+
+    assert_includes out, SHA_DEMO,
+                    '`verdict unknown` must still name the sha it could not grade, ' \
+                    "so the next checkup can re-run it; got stdout=#{out.inspect}"
+  end
+
+  def test_demo_row_names_the_served_version_probe_gap
+    # The row can only prove an image was pushed. Whether the demo SERVES it
+    # lives in infra, and the obvious probe is out of reach: no allowlisted
+    # command can fetch wurk.demo.developerz.ai/wurk/api/meta. The brief has to
+    # say so, at the anchor where the served version is produced
+    # (api_controller.rb:53, `version: ::Wurk::VERSION`) — a green verdict read
+    # as "the demo is live" is the false green this block exists to prevent.
+    block = demo_block
+
+    assert_includes block, 'api_controller.rb:53',
+                    'the served-version probe gap must name the anchor that ' \
+                    "produces the demo's `version:`; got #{block.inspect}"
+
+    assert_includes block, 'wurk.demo.developerz.ai/wurk/api/meta',
+                    'the gap must name the endpoint that cannot be reached; got ' \
+                    "#{block.inspect}"
+
+    assert_match(/not sufficient/,
+                 block,
+                 'the block must say green is necessary, not sufficient, or the ' \
+                 "reader takes a pushed tag as proof the demo is live; got #{block.inspect}")
+
+    cited = File.readlines(API_CONTROLLER)
+
+    assert_includes cited[52],
+                    'version: ::Wurk::VERSION',
+                    'api_controller.rb:53 must be where the demo reports its ' \
+                    "version; it now reads #{cited[52].inspect}"
   end
 
   # Row 13 grades dependabot PRs against per-ecosystem budgets. The brief
@@ -910,6 +1156,13 @@ class HealthBriefTest < Minitest::Test
                     "the dup'd lane's Unhealthy line must carry its run url; got #{out.inspect}"
     assert_includes out, URL_ECOSYSTEM,
                     "the healthy lane's line must carry its own run url; got #{out.inspect}"
+
+    out, = run_row11(jobs: demo_jobs_json, log: resolve_log(short: DEMO_TAG),
+                     conclusion: 'success', sha: SHA_DEMO)
+
+    assert_includes out, URL_DEMO,
+                    "row 11's graded verdict must carry the run url too, like every " \
+                    "other job-list row's; got #{out.inspect}"
   end
 
   def test_brief_documents_how_to_confirm_the_dup_signature
@@ -1042,6 +1295,22 @@ class HealthBriefTest < Minitest::Test
 
   private
 
+  # The "Grading a demo deploy" prose block — row 11's graded convention, from
+  # its heading up to the filing convention that follows it. Bounded on that
+  # paragraph, not on the next `**`, so the "Green is necessary, not
+  # sufficient" sub-heading stays inside the block it belongs to.
+  def demo_block
+    lines = @text.lines.map(&:chomp)
+    first = lines.index { |line| line.start_with?('**Grading a demo deploy') }
+
+    raise 'health.md has no "Grading a demo deploy" block' if first.nil?
+
+    last = ((first + 1)...lines.size).find { |i| lines[i].start_with?('For each unhealthy signal') }
+    raise 'the demo block is not followed by the filing convention' if last.nil?
+
+    lines[first...last].join("\n")
+  end
+
   # The brief's paragraph telling a reader how to confirm a dup'd push against
   # the run itself — the one anchored to the `duplicate of an already-green PR
   # head (dup)` log step. Scoping the assertions to it keeps a phrase elsewhere
@@ -1115,6 +1384,53 @@ class HealthBriefTest < Minitest::Test
             { 'name' => 'demo', 'conclusion' => demo }]
 
     JSON.generate('total_count' => jobs.size, 'jobs' => jobs)
+  end
+
+  # deploy-demo.yml's job list — the `authorize` allowlist job and the `build`
+  # job whose steps do the actual work. Real jobs API shape: step objects carry
+  # name/status/conclusion/number/timestamps only — NO `log` field. The log is
+  # read separately via `gh run view <id> --job <id> --log` (see stub below);
+  # row 11 feeds each test's log content in via the `log:` fixture instead of
+  # inventing a `log` key on the step that the real API would never return.
+  def demo_jobs_json
+    jobs = [{ 'name' => 'authorize', 'conclusion' => 'success', 'steps' => [] },
+            { 'name' => 'build', 'id' => 9999, 'conclusion' => 'success',
+              'steps' => [{ 'name' => 'Set up job', 'conclusion' => 'success' },
+                          { 'name' => 'resolve built commit', 'conclusion' => 'success' },
+                          { 'name' => 'verify pushed tags resolve', 'conclusion' => 'success' }] }]
+
+    JSON.generate('total_count' => jobs.size, 'jobs' => jobs)
+  end
+
+  # `gh run view <id> --job <id> --log` prints one tab-separated line per log
+  # line: `<job>\t<step>\t<timestamp> <message>` — the job and step names are
+  # columns ahead of the log line's own timestamp and text, which share one.
+  # Row 11 picks the step out of field 2, so the fixture has to carry that
+  # shape — a bare message column, or a timestamp in front of the step, is not
+  # what `gh` prints.
+  def log_lines(step, messages)
+    messages.map { |message| "build\t#{step}\t2026-01-01T00:00:00.0000000Z #{message}" }
+  end
+
+  # What the `resolve built commit` step's log looks like: the shell that writes
+  # `sha=` and `short=sha-<7>` to $GITHUB_OUTPUT is echoed into the job log, so
+  # the tag is recoverable only by reading the log text (deploy-demo.yml:173-180).
+  # A nil `short` is the regression the comment there records: the step ran and
+  # wrote no tag Image Updater's ^sha-[0-9a-f]{7}$ can select. `decoys` add lines
+  # belonging to OTHER steps of the same `build` job: a `sha-<7>`-shaped string
+  # over there is not the tag this step resolved.
+  def resolve_log(short:, decoys: {})
+    lines = log_lines(RESOLVE_STEP,
+                      ['Run git rev-parse HEAD',
+                       '  7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7',
+                       'Run {',
+                       '    echo "sha=$sha"',
+                       "    echo \"short=#{short}\"",
+                       '  } >> "$GITHUB_OUTPUT"'])
+
+    decoys.each { |step, messages| lines.concat log_lines(step, messages) }
+
+    "#{lines.join("\n")}\n"
   end
 
   # One `CheckRun` entry exactly as `gh pr list --json statusCheckRollup` emits
@@ -1207,6 +1523,17 @@ class HealthBriefTest < Minitest::Test
     end
   end
 
+  def run_row11(jobs:, log:, conclusion:, sha:, jobs_fail: false, log_fail: false)
+    run_command(command_cell('the demo deployed'), jobs_fail: jobs_fail, log_fail: log_fail) do |fixtures|
+      write_fixture(fixtures, 'deploy-demo.yml.dbid', '301')
+      write_fixture(fixtures, 'deploy-demo.yml.sha', sha)
+      write_fixture(fixtures, 'deploy-demo.yml.conclusion', conclusion)
+      write_fixture(fixtures, 'deploy-demo.yml.url', URL_DEMO)
+      write_fixture(fixtures, 'dbid-301.jobs', jobs)
+      write_fixture(fixtures, 'dbid-301.job-9999.log', log)
+    end
+  end
+
   def run_row12(jobs_fail: false)
     run_command(command_cell('topology and ecosystem lanes'), jobs_fail: jobs_fail) do |fixtures|
       write_fixture(fixtures, 'topology.yml.dbid', '101')
@@ -1242,7 +1569,7 @@ class HealthBriefTest < Minitest::Test
   # swallows the failing `gh api` inside a pipeline. Yields the fixtures dir
   # before the script runs so the caller can write the job lists the stub
   # serves, then returns Open3's [stdout, stderr, status].
-  def run_command(command, jobs_fail:)
+  def run_command(command, jobs_fail:, log_fail: false)
     Dir.mktmpdir('wurk-health-brief-') do |tmpdir|
       fixtures = File.join(tmpdir, 'fixtures')
       bin_dir = File.join(tmpdir, 'bin')
@@ -1262,7 +1589,8 @@ class HealthBriefTest < Minitest::Test
       env = {
         'PATH' => "#{bin_dir}:#{ENV.fetch('PATH', '')}",
         'WURK_TEST_FIXTURES' => fixtures,
-        'WURK_TEST_JOBS_FAIL' => jobs_fail ? '1' : '0'
+        'WURK_TEST_JOBS_FAIL' => jobs_fail ? '1' : '0',
+        'WURK_TEST_LOG_FAIL' => log_fail ? '1' : '0'
       }
 
       Open3.capture3(env, script_path)
@@ -1281,26 +1609,76 @@ class HealthBriefTest < Minitest::Test
   # `WURK_TEST_JOBS_FAIL=1` makes ONLY the jobs call fail, leaving the run
   # list readable — that is the exact shape of the false green this file
   # pins: a `conclusion` the brief can see, and a jobs list it cannot.
+  # `WURK_TEST_LOG_FAIL=1` is the analog for row 11's `gh run view --log`
+  # read — jobs readable, log unreadable, and the row must still fail
+  # closed as `verdict unknown <sha>`.
   STUB_GH = <<~'SHELL'
     #!/usr/bin/env bash
     fixdir="$WURK_TEST_FIXTURES"
     case "${1:-}" in
       run)
-        wf=""
-        for arg in "$@"; do
-          case "$arg" in
-            *.yml) wf="$arg" ;;
-          esac
-        done
-        if [ -z "$wf" ]; then
-          printf 'stub gh run: no --workflow argument in: %s\n' "$*" >&2
-          exit 1
-        fi
-        printf '[{"databaseId":%s,"headSha":"%s","conclusion":"%s","url":"%s"}]\n' \
-          "$(cat "$fixdir/$wf.dbid")" \
-          "$(cat "$fixdir/$wf.sha")" \
-          "$(cat "$fixdir/$wf.conclusion")" \
-          "$(if [ -s "$fixdir/$wf.url" ]; then cat "$fixdir/$wf.url"; else printf 'https://github.com/wurk-owner/wurk/actions/runs/%s' "$(cat "$fixdir/$wf.dbid")"; fi)"
+        case "${2:-}" in
+          view)
+            # `gh run view <dbid> --job <jobid> --log` is how row 11 reads the
+            # `resolve built commit` step's log; the jobs API carries no step
+            # logs, so the row has to fetch them separately. Args: run id is
+            # the first non-flag arg, the job id is the arg after `--job`.
+            if [ "$WURK_TEST_LOG_FAIL" = "1" ]; then
+              printf 'stub gh run view --log: the log read fails on purpose (rate limited or 4xx)\n' >&2
+              exit 1
+            fi
+            prev=""
+            dbid=""
+            jobid=""
+            want_log=""
+            for arg in "$@"; do
+              case "$prev" in
+                --job) jobid="$arg" ;;
+              esac
+              case "$arg" in
+                --log) want_log="1" ;;
+                [0-9]*)
+                  if [ -z "$dbid" ] && [ "$arg" != "$prev" ]; then
+                    dbid="$arg"
+                  fi
+                  ;;
+              esac
+              prev="$arg"
+            done
+            if [ -z "$want_log" ]; then
+              printf 'stub gh run view: only the --log form is stubbed here, got: %s\n' "$*" >&2
+              exit 1
+            fi
+            if [ -z "$dbid" ] || [ -z "$jobid" ]; then
+              printf 'stub gh run view --log: need a run id and a --job id, got: %s\n' "$*" >&2
+              exit 1
+            fi
+            fixture="$fixdir/dbid-$dbid.job-$jobid.log"
+            if [ ! -s "$fixture" ]; then
+              printf 'stub gh run view --log: no log fixture for run %s job %s (looked for %s)\n' \
+                "$dbid" "$jobid" "$fixture" >&2
+              exit 1
+            fi
+            cat "$fixture"
+            ;;
+          *)
+            wf=""
+            for arg in "$@"; do
+              case "$arg" in
+                *.yml) wf="$arg" ;;
+              esac
+            done
+            if [ -z "$wf" ]; then
+              printf 'stub gh run: no --workflow argument in: %s\n' "$*" >&2
+              exit 1
+            fi
+            printf '[{"databaseId":%s,"headSha":"%s","conclusion":"%s","url":"%s"}]\n' \
+              "$(cat "$fixdir/$wf.dbid")" \
+              "$(cat "$fixdir/$wf.sha")" \
+              "$(cat "$fixdir/$wf.conclusion")" \
+              "$(if [ -s "$fixdir/$wf.url" ]; then cat "$fixdir/$wf.url"; else printf 'https://github.com/wurk-owner/wurk/actions/runs/%s' "$(cat "$fixdir/$wf.dbid")"; fi)"
+            ;;
+        esac
         ;;
       pr)
         # Match `gh pr list --app dependabot --json ...` only — anything else
