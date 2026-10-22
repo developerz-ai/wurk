@@ -786,6 +786,76 @@ class HealthBriefTest < Minitest::Test
                     'release.yml:80-90 must be where the release job reads the proceed signal'
   end
 
+  def test_brief_cites_one_contiguous_range_for_the_non_main_refusal
+    # The non-main refusal is one of two failure modes the no-op paragraph
+    # distinguishes from a proceed=false no-op: preflight failing the
+    # `refs/heads/main` guard produces the same all-skipped signature as a
+    # no-op, and the brief grounds that on the exact step that refuses. The
+    # cite must still land on a FAILING step (exit 1), not on a job-level
+    # `if:` — a skipped preflight would skip release too and leave a green
+    # run that published nothing and said nothing. Insert lines above the
+    # cite and the slice no longer matches.
+    para = non_main_refusal_step
+
+    assert_includes para, 'release.yml:55-60',
+                    'the non-main refusal paragraph must cite the step by ' \
+                    "one contiguous range; got the paragraph as #{para.inspect}"
+
+    workflow = File.readlines(RELEASE_WORKFLOW)
+
+    assert_operator workflow.size, :>=, 60,
+                    'release.yml no longer has the lines the brief anchor cites'
+
+    cited = workflow[54..59].join
+
+    assert_equal '- name: refuse any ref but main', workflow[54].strip,
+                 'release.yml:55-60 must LAND on the step line itself — a comment or ' \
+                 'blank line inserted above the cite shifts the slice but the step name ' \
+                 'would still match inside it, so the top edge must be pinned to the step, ' \
+                 'not a comment one above it'
+    assert_includes cited, '- name: refuse any ref but main',
+                    'release.yml:55-60 must name the step that refuses a non-main ref'
+    assert_includes cited, 'refs/heads/main',
+                    'release.yml:55-60 must hold the ref guard — otherwise a non-main ref could pass'
+    assert_includes cited, 'exit 1',
+                    'release.yml:55-60 must terminate in a failing exit, not a job-level `if:` — ' \
+                    'a skipped preflight would skip release too and leave a green run that ' \
+                    'published nothing and said nothing'
+  end
+
+  def test_no_op_step_cites_one_contiguous_range_for_the_demo_needs
+    # The no-op step also grounds the `demo skipped` arm of the signature on
+    # `demo` needing `[preflight, release]`. The cited range must still hold
+    # the demo caller and its needs list — a maintainer reads that line to
+    # understand why the demo slot is quiet on a proceed=false run, and the
+    # only reason it is quiet is `release` being gated on the proceed signal.
+    # Insert lines above this anchor and the demo caller is pushed out of
+    # the slice.
+    step = no_op_step
+
+    assert_includes step, 'release.yml:222-228',
+                    'the no-op step must cite the demo call by one contiguous ' \
+                    "range; got the step as #{step.inspect}"
+
+    workflow = File.readlines(RELEASE_WORKFLOW)
+
+    assert_operator workflow.size, :>=, 228,
+                    'release.yml no longer has the lines the brief anchor cites'
+
+    cited = workflow[221..227].join
+
+    assert_equal 'demo:', workflow[221].strip,
+                 'release.yml:222-228 must LAND on the demo caller itself — a comment or ' \
+                 'blank line inserted above the cite shifts the slice but `demo:` and its ' \
+                 '`needs:` line still match inside it, so the top edge must be pinned to ' \
+                 'the job header, not a comment one above it'
+    assert_includes cited, 'demo:',
+                    'release.yml:222-228 must begin on the demo caller job'
+    assert_includes cited, 'needs: [preflight, release]',
+                    "release.yml:222-228 must hold the demo caller's needs list — " \
+                    'that is what makes its slot quiet when preflight returns proceed=false'
+  end
+
   def test_each_job_list_row_requests_url_and_database_id
     # The ask rule (bottom of the brief) says the body's carry the command, its
     # output AND the run URL. The rows can only print that URL if they ask for
@@ -998,6 +1068,22 @@ class HealthBriefTest < Minitest::Test
 
     last = ((first + 1)...lines.size).find { |i| lines[i].start_with?('4. **') }
     raise 'health.md step 3 is not followed by a step 4' if last.nil?
+
+    lines[first...last].join("\n")
+  end
+
+  # The brief's "a run that genuinely went red stays Unhealthy" paragraph —
+  # the one naming the non-main refusal failure mode (release.yml:55-60) that
+  # produces the same all-skipped signature as a proceed=false no-op. Scoping
+  # the assertion here keeps a `release.yml:55-60` citation elsewhere in the
+  # file from satisfying it.
+  def non_main_refusal_step
+    lines = @text.lines.map(&:chomp)
+    first = lines.index { |line| line.include?('non-main refusal') }
+
+    raise 'health.md has no paragraph documenting the non-main refusal' if first.nil?
+
+    last = ((first + 1)...lines.size).find { |i| lines[i].start_with?('**') } || lines.size
 
     lines[first...last].join("\n")
   end
