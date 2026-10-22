@@ -83,7 +83,7 @@ class HealthBriefTest < Minitest::Test
   DEMO_TAG       = 'sha-7777777'
   API_CONTROLLER = File.join(ROOT, 'app', 'controllers', 'wurk', 'api_controller.rb')
 
-  # deploy-demo.yml's step names. `gh run view --log` carries one in field 3 of
+  # deploy-demo.yml's step names. `gh run view --log` carries one in field 2 of
   # every line it prints, and row 11 keeps only the first one's lines.
   RESOLVE_STEP = 'resolve built commit'
   VERIFY_STEP = 'verify pushed tags resolve'
@@ -518,6 +518,46 @@ class HealthBriefTest < Minitest::Test
 
     assert_includes out, 'Unhealthy',
                     "got stdout=#{out.inspect}"
+  end
+
+  # The row's step filter, this file's fixture and `gh`'s own layout are one
+  # convention, and only the last of the three is real: shaped
+  # `<timestamp>\t<job>\t<step>\t<message>`, the fixture agreed with a row that
+  # filtered field 3, every other test in this file stayed green, and the row
+  # running against an actual log kept no line at all — grading a correctly
+  # tagged deploy Unhealthy. So pin the layout `gh run view --log` really emits
+  # (job, step, then the log line's own `<timestamp> <message>`) and require the
+  # row's awk to read the step out of THAT column.
+  def test_row11_reads_the_step_out_of_the_column_gh_prints
+    fields = log_lines(RESOLVE_STEP, ['short=sha-7777777']).first.split("\t")
+
+    assert_equal 3, fields.size,
+                 '`gh run view --log` prints `<job>\t<step>\t<timestamp> <message>`, ' \
+                 "three columns; got #{fields.inspect}"
+
+    assert_equal 'build', fields[0],
+                 'the job name comes first; got ' \
+                 "#{fields.inspect}"
+
+    assert_equal RESOLVE_STEP, fields[1],
+                 'the step name is the second column, the one row 11 filters; got ' \
+                 "#{fields.inspect}"
+
+    assert_match(/\A\d{4}-\d{2}-\d{2}T[\d:.]+Z \S/, fields[2],
+                 "the log line's timestamp and message share the last column; got " \
+                 "#{fields.inspect}")
+
+    cell = command_cell('the demo deployed')
+    field = cell[/[$](\d) == "?resolve built commit"?/, 1]
+
+    refute_nil field,
+               'row 11 must select the resolve step\'s own lines out of the job log; ' \
+               "got #{cell.inspect}"
+
+    assert_equal '2', field,
+                 'the row must read field 2, the column `gh` prints the step in: ' \
+                 'any other column keeps no real log line, so a deploy that wrote its ' \
+                 'tag is graded Unhealthy'
   end
 
   def test_unreadable_demo_jobs_list_never_grades_success
@@ -1277,11 +1317,13 @@ class HealthBriefTest < Minitest::Test
   end
 
   # `gh run view <id> --job <id> --log` prints one tab-separated line per log
-  # line: `<timestamp>\t<job>\t<step>\t<message>`. Row 11 picks the step out of
-  # field 3, so the fixture has to carry that shape — a bare message column is
-  # not what `gh` prints.
+  # line: `<job>\t<step>\t<timestamp> <message>` — the job and step names are
+  # columns ahead of the log line's own timestamp and text, which share one.
+  # Row 11 picks the step out of field 2, so the fixture has to carry that
+  # shape — a bare message column, or a timestamp in front of the step, is not
+  # what `gh` prints.
   def log_lines(step, messages)
-    messages.map { |message| "2026-01-01T00:00:00.0000000Z\tbuild\t#{step}\t#{message}" }
+    messages.map { |message| "build\t#{step}\t2026-01-01T00:00:00.0000000Z #{message}" }
   end
 
   # What the `resolve built commit` step's log looks like: the shell that writes
