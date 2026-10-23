@@ -213,19 +213,29 @@ class HealthBriefTest < Minitest::Test
   end
 
   # Pins the recovery paragraph in .dz/briefs/health.md — the prose a
-  # red-main or release-failure ask points the responder at. RELEASE.md owns
-  # the recovery runbook; this paragraph is a pointer, not a re-write. Two
-  # properties have to hold so it does not silently forbid something the
-  # runbook prescribes:
+  # red-main or release-failure ask points the responder at. The checkup
+  # lane's ONLY admissible response to a red signal is filing one deduped ask
+  # for a maintainer (health.md's filing rule); RELEASE.md owns the recovery
+  # runbook, and this paragraph is a pointer at it, never a command list this
+  # lane runs. Four properties have to hold so it neither re-arms the checkup
+  # nor silently forbids something the runbook prescribes:
   #
-  #   1. The paragraph NAMES the runbook steps it points at: both
+  #   1. The paragraph names filing (or deduping) an ask as the checkup's
+  #      admissible response. A paragraph that drops that framing hands the
+  #      unattended checkup lane the recovery commands to run itself — the
+  #      defect this pin was added with.
+  #   2. The paragraph SCOPES its prohibitions to the checkup lane (a "from
+  #      this lane" / "the checkup never" framing). An unscoped "never
+  #      re-tag / never gem push" reads as forbidding the maintainer's own
+  #      runbook steps, shadowing the very runbook the ask points at.
+  #   3. The paragraph NAMES the runbook steps it points at: both
   #      headings — *If a release fails* and *Recovering a gem-less
   #      release* — and the two commands the gem-less subsection actually
   #      prescribes (`gh release delete ... --cleanup-tag`, then
   #      `git fetch --prune-tags`). Pin them with a substring assertion
   #      over the joined paragraph — markdown italic can wrap across a
   #      line break, so the assertion reads the paragraph as one string.
-  #   2. The paragraph does NOT forbid the sanctioned steps the rest of
+  #   4. The paragraph does NOT forbid the sanctioned steps the rest of
   #      the runbook prescribes: the `workflow_dispatch` retry (used to
   #      re-run a release whose run failed after the bump was merged) and
   #      the break-glass hand create (only when CI is unavailable). A
@@ -270,6 +280,20 @@ class HealthBriefTest < Minitest::Test
     # Markdown wrapping must not hide a prohibition, but a "never" in an
     # earlier sentence must not forbid a later, sanctioned recovery step.
     paragraph = paragraph.gsub(/\s+/, ' ')
+
+    assert_match(/file\b[^.!?]*\b(?:one )?ask\b|\bask\b[^.!?]*\bfile\b/i,
+                 paragraph,
+                 'recovery paragraph in health.md must name filing one (deduped) ask as ' \
+                 'the checkup lane\'s admissible response to a red signal — without that ' \
+                 'framing the paragraph hands the unattended lane the recovery commands ' \
+                 "to run itself; got paragraph=#{paragraph.inspect}")
+
+    assert_match(/from this lane|the checkup\b[^.!?]*\bnever/i,
+                 paragraph,
+                 'recovery paragraph in health.md must scope its prohibitions to the ' \
+                 'checkup lane (a "from this lane" / "the checkup never" framing) — an ' \
+                 'unscoped "never re-tag / never gem push" reads as forbidding the ' \
+                 "maintainer's own runbook steps; got paragraph=#{paragraph.inspect}")
 
     assert_includes paragraph, 'If a release',
                     'recovery paragraph in health.md must name the ' \

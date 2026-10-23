@@ -179,15 +179,18 @@ exact equality on the title, the title is the signal's stable name, identical on
 `release did not publish`); nothing that changes run to run may appear in it. The body carries the
 command, its output, the run URL, the headSha and the version.
 
-A red `main` comes first: nothing releases from it. Recovery is
-`RELEASE.md`'s *If a release fails*. For a gem-less release, follow that runbook's *Recovering a
-gem-less release*: `gh release delete vX.Y.Z --cleanup-tag --yes`, then `git fetch --prune-tags`,
-then let CI re-cut the tag from the version bump. That cleanup is the sanctioned path here, not a
-workaround — never manually re-tag over an existing `vX.Y.Z` (force-moving a tag to a different
+A red `main` comes first: nothing releases from it. The checkup lane's ONLY admissible
+response to a red `main` or a failed release is the filing rule above: file one deduped ask for a
+maintainer. Recovery is a maintainer's manual runbook, `RELEASE.md`'s *If a release fails*. The
+ask points there — this lane never executes it. For a gem-less release the ask points at that
+runbook's *Recovering a gem-less release*: `gh release delete vX.Y.Z --cleanup-tag --yes`, then
+`git fetch --prune-tags`, then let CI re-cut the tag from the version bump — all maintainer-run
+steps, never commands this lane runs. That cleanup is the sanctioned path, not a workaround — from
+this lane, never manually re-tag over an existing `vX.Y.Z` (force-moving a tag to a different
 commit), never `gem push` from a workstation as a replacement for the CI publish lane, and never
 force a version already on RubyGems down the publish lane a second time; the only version number
 that may be published for a given release is the one CI published. Break-glass hand-cutting a
 release when CI is unavailable, as RELEASE.md's *Break-glass manual publish* prescribes, is not
-re-tagging or force-moving — it runs only because the gem has already shipped and the lane can no
-longer act. Beyond that sanctioned cleanup, never delete a tag, re-run a publish or `gem push`
-from here.
+re-tagging or force-moving — a maintainer runs it only because the gem has already shipped and the
+lane can no longer act. Beyond pointing at that sanctioned cleanup in the ask, the checkup never
+deletes a tag, re-runs a publish or pushes a gem.
