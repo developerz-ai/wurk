@@ -25,7 +25,10 @@ require 'yaml'
 #     SECRET_KEY_BASE. SECRET_KEY_BASE_DUMMY is Wurk's "this is a build step"
 #     marker (RailsBoot#building?), not the secret Rails reads in production;
 #   * WURK_DISABLED=1 lands only on the processes that must not fork a swarm
-#     of their own — the swarm process itself must not carry it.
+#     of their own — the swarm process itself must not carry it, by any of
+#     the routes an environment variable travels: job- or step-level `env:`,
+#     a persistent `export` in the run body, or an inline command prefix.
+#     Mutation cases prove each route is rejected.
 #
 # Reads files; touches no Redis, no network and no shared state.
 class ReleaseSmokeWorkflowTest < Minitest::Test
@@ -185,16 +188,83 @@ class ReleaseSmokeWorkflowTest < Minitest::Test
   # WURK_DISABLED=1 silences the railtie's own swarm boot. The web process
   # and the one-off `rails runner` must not fork a swarm of their own; the
   # swarm process itself must NOT carry the flag, or it never runs a worker.
+  #
+  # The flag reaches a process three ways: the job-level `env:` (every step
+  # inherits it), a persistent `export`/assignment in the run body (every
+  # later command in that shell inherits it), or an inline prefix on one
+  # command line. A line-by-line grep sees only the third: an
+  # `export WURK_DISABLED=1` line names no `wurkswarm`, yet everything the
+  # step boots after it — the standalone swarm included — inherits the flag.
+  # So the check reads each swarm-running step whole, and the mutation cases
+  # below prove each route is rejected.
   def test_wurk_disabled_is_set_only_where_a_swarm_must_not_fork
-    disabled_lines = executable_content.lines.grep(/WURK_DISABLED=1/).map(&:strip)
+    refute_empty executable_content.scan('WURK_DISABLED=1'),
+                 'the web process must carry WURK_DISABLED=1 so it does not fork a swarm'
 
-    refute_empty disabled_lines, 'the web process must carry WURK_DISABLED=1 so it does not fork a swarm'
+    violations = wurk_disabled_violations(smoke_job)
 
-    disabled_lines.each do |line|
-      refute_match(/wurkswarm/, line,
-                   'the wurkswarm process must NOT carry WURK_DISABLED=1 — it is the swarm, ' \
-                   'and the flag would silence it')
+    assert_empty violations, violations.join("\n")
+  end
+
+  # The mutation this gate exists for: the exported line carries no
+  # `wurkswarm`, so a per-line grep passes it while the flag silences the
+  # swarm booted on the very next line of the same shell.
+  def test_a_mutated_export_of_wurk_disabled_before_the_standalone_swarm_is_rejected
+    job = smoke_job_copy
+    step = swarm_step(job)
+    step['run'] = step['run'].sub(/^\s*bundle exec wurkswarm\b/) do |swarm_line|
+      "export WURK_DISABLED=1\n#{swarm_line}"
     end
+
+    assert_includes step['run'], 'export WURK_DISABLED=1',
+                    'the mutation did not apply — release-smoke.yml no longer boots ' \
+                    'the swarm via `bundle exec wurkswarm`'
+
+    violations = wurk_disabled_violations(job)
+
+    assert_equal 1, violations.length, violations.join("\n")
+    assert_match(/export WURK_DISABLED=1/, violations.first)
+  end
+
+  # The same poison, prefixed onto the swarm command itself: the flag is
+  # scoped to one command, and that command is the swarm.
+  def test_a_mutated_wurk_disabled_prefix_on_the_swarm_command_itself_is_rejected
+    job = smoke_job_copy
+    step = swarm_step(job)
+    step['run'] = step['run'].sub(/^\s*bundle exec wurkswarm\b/) { |swarm_line| "WURK_DISABLED=1 #{swarm_line}" }
+
+    assert_includes step['run'], 'WURK_DISABLED=1 bundle exec wurkswarm',
+                    'the mutation did not apply — release-smoke.yml no longer boots ' \
+                    'the swarm via `bundle exec wurkswarm`'
+
+    violations = wurk_disabled_violations(job)
+
+    assert_equal 1, violations.length, violations.join("\n")
+    assert_match(/WURK_DISABLED=1/, violations.first)
+  end
+
+  # The inherited routes: a job-level `env:` reaches every process the job
+  # boots — the swarm included — and a step-level one reaches the swarm
+  # step's own shell. Neither writes a `WURK_DISABLED` line a run-body grep
+  # could see.
+  def test_a_mutated_job_level_wurk_disabled_inherited_by_the_swarm_is_rejected
+    job = smoke_job_copy
+    job.fetch('env')['WURK_DISABLED'] = '1'
+
+    violations = wurk_disabled_violations(job)
+
+    assert_equal 1, violations.length, violations.join("\n")
+    assert_match(/job-level/, violations.first)
+  end
+
+  def test_a_mutated_step_level_wurk_disabled_on_the_swarm_step_is_rejected
+    job = smoke_job_copy
+    swarm_step(job)['env'] = { 'WURK_DISABLED' => '1' }
+
+    violations = wurk_disabled_violations(job)
+
+    assert_equal 1, violations.length, violations.join("\n")
+    assert_match(/step-level/, violations.first)
   end
 
   # --- release.yml's caller job -------------------------------------------
@@ -230,9 +300,96 @@ class ReleaseSmokeWorkflowTest < Minitest::Test
            'the release lane must never cancel in progress — a cancelled publish leaves a burned version'
   end
 
+  # --- WURK_DISABLED gate ---------------------------------------------------
+
+  # The step whose run body boots the standalone swarm.
+  SWARM_STEP_NAME = 'wurkswarm executes a real job'
+  SWARM_INVOCATION = /\bbundle exec wurkswarm\b/
+
+  # A persistent assignment: `export WURK_DISABLED=1` or a bare
+  # `WURK_DISABLED=1` line leaves the flag in the step's shell for every
+  # later command. An inline `WURK_DISABLED=1 <command>` prefix scopes the
+  # flag to that one command and is matched by WURK_DISABLED_PREFIX below —
+  # note this regex does not match it, because text follows the `=1`.
+  PERSISTENT_WURK_DISABLED = /\A(?:export\s+)?WURK_DISABLED=1\s*(?:#.*)?\z/
+  WURK_DISABLED_PREFIX = /\AWURK_DISABLED=1\b/
+
   # --- helpers -------------------------------------------------------------
 
   private
+
+  # Every way WURK_DISABLED can reach the standalone swarm in the smoke job:
+  # the job-level `env:` (every step inherits it), a step-level `env:` on
+  # the swarm step, a persistent assignment in the swarm step's run body,
+  # or an inline prefix on the swarm command line itself. Returns one
+  # human-readable violation per unmet condition, empty when clean.
+  def wurk_disabled_violations(job)
+    violations = []
+
+    if job.fetch('env', {}).key?('WURK_DISABLED')
+      violations << 'the job-level `env:` sets WURK_DISABLED — every process the job boots, ' \
+                    'the standalone swarm included, inherits it'
+    end
+
+    job.fetch('steps').each do |step|
+      violations.concat(wurk_disabled_step_violations(step))
+    end
+
+    violations
+  end
+
+  # Only steps that boot the standalone swarm can violate the contract: a
+  # persistent assignment or step env elsewhere (the web step's `export`)
+  # is exactly where the flag belongs.
+  def wurk_disabled_step_violations(step)
+    run = step.fetch('run', '')
+
+    return [] unless run.match?(SWARM_INVOCATION)
+
+    violations = []
+
+    if step.fetch('env', {}).key?('WURK_DISABLED')
+      violations << "the step #{step['name'].inspect} sets WURK_DISABLED in its step-level `env:` — " \
+                    'the standalone swarm it boots inherits it'
+    end
+
+    violations.concat(wurk_disabled_run_violations(step, run))
+
+    violations
+  end
+
+  def wurk_disabled_run_violations(step, run)
+    run.lines.filter_map do |line|
+      stripped = line.strip
+
+      if stripped.match?(PERSISTENT_WURK_DISABLED)
+        "the step #{step['name'].inspect} sets WURK_DISABLED persistently (#{stripped.inspect}) — " \
+          'every later command in the step, the standalone swarm included, inherits it'
+      elsif stripped.match?(WURK_DISABLED_PREFIX) && stripped.match?(SWARM_INVOCATION)
+        "the step #{step['name'].inspect} prefixes the standalone swarm command itself " \
+          "with WURK_DISABLED=1 (#{stripped.inspect})"
+      end
+    end
+  end
+
+  # The smoke job as a mutable copy, for the mutation cases above: the real
+  # file stays untouched while the gate is proven to reject a regression.
+  def smoke_job_copy
+    deep_dup(smoke_job)
+  end
+
+  def swarm_step(job)
+    job.fetch('steps').find { |candidate| candidate['name'] == SWARM_STEP_NAME } ||
+      raise("release-smoke.yml lost its #{SWARM_STEP_NAME.inspect} step")
+  end
+
+  def deep_dup(object)
+    case object
+    when Hash then object.to_h { |key, value| [key, deep_dup(value)] }
+    when Array then object.map { |value| deep_dup(value) }
+    else object
+    end
+  end
 
   # YAML 1.1 reads a bare `on:` key as the boolean `true`, so the trigger
   # block is under that key, not under "on".
