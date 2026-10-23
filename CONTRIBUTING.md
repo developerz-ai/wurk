@@ -199,9 +199,9 @@ every comment it posts is marked as coming from a bot. What that means for you:
   `.dz/maintainer/maintainer.yml`) is closed with the rule it ran into, not left
   open.
 - **Not every comment gets a reply.** A "+1" or a thanks is read and left alone.
-- **A human is asked** for security reports, license questions and breaking
-  changes. Report a vulnerability privately through the repository's Security
-  tab, not in an issue.
+- **A human is asked** for security reports and license questions. Report a
+  vulnerability privately through the repository's Security tab, not in an
+  issue.
 
 New features are still designed and built by the team, humans and AI together.
 Open an issue before a large feature PR so the direction is agreed first.

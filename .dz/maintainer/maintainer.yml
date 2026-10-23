@@ -1,14 +1,14 @@
 # yaml-language-server: $schema=https://developerz.ai/schemas/maintainer.v1.json
 # developerz.ai maintainer policy — developerz-ai/wurk
 #
-# AI-MANAGED (2026-10-10; scoped 2026-10-14). For outside contributors and the dependency bots, the
-# agent handles issues, pull requests and updates end to end: it triages, answers or stays silent,
-# reviews, declines with a reason, merges on green, and closes what has stalled on its reporter or
-# author. An issue or pull request by anyone with write access (`skip_project_members`,
-# `auto_merge_scope: not_project`) is left to its author: a PR is still reviewed, and an @-mention is
-# answered. A human is asked only for what `escalate` names below plus the platform's hardcoded
-# categories (security, license, CLA). Releases follow the work: the `release-due` checkup files the
-# bump when a shipping fix has waited, and release.yml publishes; `release.manager` stays `none`.
+# FULLY AI-MAINTAINED (2026-10-10; the 2026-10-14 members split reversed 2026-10-23, owner ruling:
+# "wurk and ultimate should be full ai maintained"). For everyone, org members and collaborators
+# included, and for the dependency bots, the agent handles issues, pull requests and updates end to
+# end: it triages, answers or stays silent, reviews, declines with a reason, merges on green, and
+# closes what has stalled on its reporter or author. `escalate` names nothing, so a human is asked
+# only for the platform's hardcoded categories (security, license, CLA). Releases follow the work:
+# the `release-due` checkup files the bump when a shipping fix has waited, and release.yml
+# publishes; `release.manager` stays `none`.
 #
 # Dogfood pass with coding handoff live. The bot triages (qualifies, labels,
 # asks reporters for repro) and, once a task is ready, dispatches coding to the
@@ -64,12 +64,10 @@ tone:
   language: en
 
 triage:
-  # An issue opened by anyone with write, maintain or admin on this repo (an org member or an invited
-  # collaborator) is theirs: no intake ask, no labels, comments or close, no backlog pickup, no stale
-  # sweep. Only an @-mention of the bot wakes it there, and it answers only that mention
-  # (developerz.ai #6372, deployed 2026-10-15). Membership is the same repo-permission read
-  # `pr.auto_merge_scope: not_project` uses; outsiders' issues are handled as before.
-  skip_project_members: true
+  # No `skip_project_members` (schema default false; owner ruling 2026-10-23: "wurk and ultimate
+  # should be full ai maintained"). An issue opened by an org member or an invited collaborator is
+  # triaged, picked up from the backlog and stale-swept like anyone's; the 2026-10-14 rule that left
+  # it to its author is reversed.
   # Which deployments count as "the fix was deployed" for the error-fix confirmation
   # (developerz.ai #5657, owner ruling 2026-10-16). The default is `[production]`, and this
   # repo never deploys to an environment by that name: its deployments are `demo` (the
@@ -183,21 +181,18 @@ pr:
   # GitHub Actions workflow that armed GitHub's native auto-merge on them
   # (dependabot-automerge.yml, wurk#347) was removed 2026-10-11, because a second
   # merger beside the agent is one that skips its review. A major bump is not
-  # held for a human (`escalate.ask_before_acting` below lists `breaking_change`
-  # only); the six required checks and the agent's review are what gate it.
+  # held for a human (`escalate.ask_before_acting` below is empty); the six
+  # required checks and the agent's review are what gate it.
   auto_merge: true
-  # WHOSE pull requests the bot merges and babysits (owner ruling 2026-10-14: an AI-maintained
-  # project, looked after like a human maintainer would). `not_project`: the bot's own, the dependency
-  # bots', and outside contributors' (repo permission read, triage or none). Never one by an author
-  # with write, maintain or admin on this repo, org member or invited collaborator alike: reviewed,
-  # then left to its author. An outside PR that changes CI, release or publish automation is declined
-  # by the `non_goals` line above (security review, 2026-10-14): an auto-merged workflow edit would run
-  # beside the release job's RubyGems OIDC identity. The
-  # platform reads the author's real repo permission, never `author_association`, which reports a
-  # private org member as CONTRIBUTOR (developerz.ai #6363). An unreadable permission holds the PR
-  # rather than merging it. This repo's fleet PRs are authored by the App (`app/developerz-ai`), so
-  # they stay in scope.
-  auto_merge_scope: not_project
+  # WHOSE pull requests the bot merges and babysits: every author's (owner ruling 2026-10-23: "wurk
+  # and ultimate should be full ai maintained"; it reverses the 2026-10-14 `not_project` scope that
+  # left members' PRs to their authors). `any`: the bot's own, the dependency bots', outside
+  # contributors', and org members' and collaborators' alike: reviewed, babysat, merged on green.
+  # An OUTSIDE PR that changes CI, release or publish automation is still declined by the
+  # `non_goals` line above (security review, 2026-10-14): an auto-merged workflow edit would run
+  # beside the release job's RubyGems OIDC identity. Whether an author is outside is the platform's
+  # read of their real repo permission, never `author_association` (developerz.ai #6363).
+  auto_merge_scope: any
   # The `main-protection` ruleset's six, named here so the agent knows which red
   # check is the author's to fix. The ruleset is still the gate; this list is
   # what the stalled-PR sweep and the merge gate read. Re-check against
@@ -268,12 +263,14 @@ release:
   channels: []
 
 escalate:
-  # Narrowed 2026-10-10 from the schema's four. A major dependency bump, a
-  # first-time contributor's pull request and a large pull request are now the
-  # agent's to judge and merge on green, like any other. A breaking change still
-  # asks a human first: the drop-in contract is the one promise this project
-  # cannot take back with a revert.
-  ask_before_acting: [breaking_change]
+  # Narrowed 2026-10-10 from the schema's four to `breaking_change`, emptied
+  # 2026-10-23 (owner ruling: "wurk and ultimate should be full ai maintained").
+  # A breaking change, a major dependency bump, a first-time contributor's pull
+  # request and a large pull request are all the agent's to judge: the drop-in
+  # contract is its to keep, and a change that breaks it is declined by the
+  # `non_goals` above, not parked for a human. The platform's hardcoded asks
+  # (security, license, CLA) still apply; this list cannot remove them.
+  ask_before_acting: []
 
 # The checkups nothing else triggers (owner, 2026-10-14: maintained so nobody has to watch it). Is a
 # release owed, and is the project healthy. Bot-authored alarm issues never pass intake, so a red

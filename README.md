@@ -26,7 +26,7 @@ Wurk is wire-compatible with Sidekiq — same Redis keys, same job JSON, same Ru
 
 **At scale:** Wurk is built for fleets, not just for one box. Kubernetes `/live` + `/ready` probes are a config line, not a sidecar; a bearer-scoped [HTTP API](docs/api-http.md) lets non-Ruby services enqueue and inspect; [OpenTelemetry](docs/telemetry.md) traces propagate client → server; per-queue [global concurrency caps](docs/rate-limiting.md) hold cluster-wide limits; and monitoring is the dashboard you already mount — live SSE, charts, per-job progress, no separate stack to run. See [Wurk extras](#wurk-extras).
 
-**AI-managed:** Wurk is a 100% AI-managed project. Outside contributors' issues and pull requests, and dependency updates, are triaged, reviewed, merged or closed by the [developerz.ai](https://developerz.ai) maintainer agent, which asks a human only for security reports, license questions and breaking changes, and cuts a release when a shipped fix has waited for one. New features are still built by us, humans and AI together — see [CONTRIBUTING.md](CONTRIBUTING.md) and [AI-maintained](#ai-maintained).
+**AI-managed:** Wurk is a 100% AI-managed project. Every author's issues and pull requests, org members' included, and dependency updates, are triaged, reviewed, merged or closed by the [developerz.ai](https://developerz.ai) maintainer agent, which asks a human only for security reports and license questions, and cuts a release when a shipped fix has waited for one. New features are still built by us, humans and AI together — see [CONTRIBUTING.md](CONTRIBUTING.md) and [AI-maintained](#ai-maintained).
 
 **On Sidekiq:** Wurk implements Sidekiq's API because it is a genuinely good API. Sidekiq is human-maintained and funds that work through its paid tiers; Wurk is AI-maintained, which is what lets the same surface be free software. Wurk is independent and not affiliated with or endorsed by Sidekiq or its maintainers — see [Why Wurk exists](#why-wurk-exists).
 
@@ -279,7 +279,7 @@ There is no native Prometheus `/metrics` endpoint — the StatsD export or the `
 
 Infrastructure this basic should be free software. A Rails app shouldn't need a licence key to get reliable fetch, batches, rate limiting, or cron — those are table stakes, not a premium tier, and the free-software tradition is that the best tools belong to everyone who runs them.
 
-What has made that hard is maintenance: someone has to be paid to do it. Sidekiq funds a decade of *human* maintenance through its paid tiers, which is an honest trade. Wurk makes a different one — it is maintained **by AI**: outside contributors' issues and pull requests, and dependency updates, are handled end to end by a maintainer agent (the team's own are left to them, their pull requests still reviewed), and the implementation, parity suite, docs, and benchmarks are written and kept current by AI agents working with the team, which still builds the features and cuts the releases. A fix, a doc update, or a version bump is no longer somebody's week, which is what makes it practical to:
+What has made that hard is maintenance: someone has to be paid to do it. Sidekiq funds a decade of *human* maintenance through its paid tiers, which is an honest trade. Wurk makes a different one — it is maintained **by AI**: every author's issues and pull requests, the team's own included, and dependency updates, are handled end to end by a maintainer agent, and the implementation, parity suite, docs, and benchmarks are written and kept current by AI agents working with the team, which still builds the features and cuts the releases. A fix, a doc update, or a version bump is no longer somebody's week, which is what makes it practical to:
 
 - ship the entire Pro + Enterprise surface with no tier, no flag gate, and no license check;
 - keep parity honest mechanically rather than by hand — an independently written parity oracle suite, pinned to a documented Sidekiq revision, plus sidekiq-cron's upstream suite running against Wurk on every push ([docs/idea/14-ecosystem-compat.md](https://github.com/developerz-ai/wurk/blob/main/docs/idea/14-ecosystem-compat.md) tracks the rest);
@@ -321,16 +321,16 @@ TypeScript end to end, MIT, and as measured about its own claims as this file is
 
 ## AI-maintained
 
-**Wurk is maintained by AI**: by [developerz.ai](https://developerz.ai), the way a human maintainer looks after an open-source project. The developerz-ai org comes back with new ideas once or twice a year. In between, the project is still looked after:
+**Wurk is fully maintained by AI**: by [developerz.ai](https://developerz.ai), the way a human maintainer looks after an open-source project, for every author, org members included (owner ruling, 2026-10-23). The developerz-ai org comes back with new ideas once or twice a year. In between, the project is still looked after:
 
 | Who opens it | What happens |
 |---|---|
 | you, an issue | triaged; asked for a reproduction when one is missing; a real bug is fixed and released |
 | you, a pull request | reviewed (CodeRabbit and the developerz.ai reviewer), driven to green, merged |
 | Dependabot | driven to green and merged |
-| an issue or pull request by anyone with write access (org members, collaborators) | left to its author; a pull request is still reviewed, and an @-mention of the bot is answered |
+| an issue or pull request by anyone with write access (org members, collaborators) | handled like anyone's: triaged, reviewed, driven to green, merged |
 | an outside change to CI, release or publish automation | declined: members maintain the pipeline that publishes the gem |
-| a breaking change | never merged unattended: the drop-in contract is the one promise a revert cannot take back |
+| a breaking change | the bot's call, not a human's; a change that breaks the drop-in Sidekiq contract is declined, since a revert cannot take that promise back |
 
 Releases follow the work, not a calendar. A weekday checkup asks whether a shipping fix has merged and nobody has released it. When one has, the bot files a release request, its coding fleet opens the `Wurk::VERSION` bump PR, and merging that PR publishes the gem ([RELEASE.md](RELEASE.md)). The bot's policy is committed in [`.dz/maintainer/maintainer.yml`](.dz/maintainer/maintainer.yml).
 
