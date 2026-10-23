@@ -280,6 +280,16 @@ jobs:
       # on the number of attempts. An unbounded loop would hang the job
       # until the job timeout killed it, with no status recorded.
       #
+      # Each request is deadline-bounded too. A demo that accepts the TCP
+      # connection but stalls the response would otherwise block curl until
+      # the JOB timeout killed the step — which runs after `mark deployment
+      # in progress`, leaving the Deployment in_progress with no failure
+      # status and no last-version diagnostic. --connect-timeout bounds the
+      # handshake, --max-time the whole request, so an attempt costs at most
+      # 5s of request + 10s of sleep and the loop's worst case is
+      # 40 × 15s = 10 minutes even when the demo hangs on every try (a
+      # responsive demo polls for ~7 minutes).
+      #
       # The bound must fit inside the job's `timeout-minutes: 30` alongside
       # the image build and push, so it is deliberately short: Image Updater
       # syncs within a couple of minutes, and a demo that has not caught up
@@ -293,8 +303,8 @@ jobs:
           set -euo pipefail
           last_version="(none)"
           matched=""
-          for attempt in $(seq 1 60); do
-            body="$(curl -fsS https://wurk.demo.developerz.ai/wurk/api/meta 2>/dev/null || true)"
+          for attempt in $(seq 1 40); do
+            body="$(curl -fsS --connect-timeout 2 --max-time 5 https://wurk.demo.developerz.ai/wurk/api/meta 2>/dev/null || true)"
             # A rollout can answer with HTML or an empty body for a moment, and
             # a JSON parse error must not abort the probe — it must read as
             # "no version yet" and retry.

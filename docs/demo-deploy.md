@@ -85,7 +85,13 @@ across several releases. After the image push, the `build` job therefore:
    reported `version` against the version the built image bundles. The loop
    has an explicit upper bound on attempts (with a sleep between them), so a
    demo that never catches up fails the run with a recorded status instead of
-   hanging until the job timeout.
+   hanging until the job timeout. Every poll is also deadline-bounded
+   (`--connect-timeout` / `--max-time`): a demo that accepts the connection
+   but stalls the response costs its request deadline per attempt instead of
+   blocking until the job timeout — which would leave the Deployment
+   `in_progress` with no failure status and no last-version diagnostic. The
+   window the loop can cover includes request time, so its worst case stays
+   inside the job's timeout alongside the image build and push.
 
 The probe compares **versions, not commit SHAs**. The demo serves the *gem*
 version: `/wurk/api/meta` renders `::Wurk::VERSION`

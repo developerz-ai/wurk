@@ -2,6 +2,9 @@
 
 require 'minitest/autorun'
 require 'yaml'
+require 'fileutils'
+require 'open3'
+require 'tmpdir'
 
 # Gates the contract of .github/workflows/deploy-demo.yml — the workflow that
 # ships the public demo (wurk.demo.developerz.ai).
@@ -24,6 +27,11 @@ require 'yaml'
 #     against the version bundled by the built demo image, and its two exits
 #     set the deployment status to `success` / `failure` respectively — with
 #     the timeout exit failing the job;
+#   * the probe is also EXECUTED with stubbed curl/gh/sleep on PATH: a version
+#     that never matches must exhaust every retry, post `failure` and exit
+#     nonzero, a matching one must post `success` and exit 0. Reading the
+#     script's shape alone cannot catch the comparison turning always-true,
+#     which would mark a stale demo successful;
 #   * the `authorize` job's DEMO_DEPLOYERS allowlist and its `trusted` waiver
 #     are UNCHANGED — they are the door this workflow hangs, and a silent
 #     loosening of them would not be caught by any other test here.
@@ -126,7 +134,7 @@ class DeployDemoWorkflowTest < Minitest::Test
     step = probe_step
     run = step.fetch('run')
 
-    assert_match(%r{curl -fsS https://wurk\.demo\.developerz\.ai/wurk/api/meta}, run,
+    assert_match(%r{curl [^\n]*https://wurk\.demo\.developerz\.ai/wurk/api/meta}, run,
                  'the probe must read the demo version from /wurk/api/meta')
     assert_match(/\["version"\]/, run,
                  'the probe must read the `version` field of /wurk/api/meta')
@@ -181,24 +189,50 @@ class DeployDemoWorkflowTest < Minitest::Test
                  'the probe must wait between attempts rather than busy-looping')
   end
 
+  # A demo that accepts the TCP connection but stalls the response must not
+  # block curl until the JOB timeout killed the step: the probe runs after
+  # `mark deployment in progress`, so a hang there leaves the Deployment
+  # in_progress with no failure status and no last-version diagnostic. Each
+  # request is therefore bounded twice — handshake and total — and the
+  # budget test below charges the total to the probe's window.
+  def test_the_probe_curl_requests_carry_connection_and_total_deadlines
+    curl_line = probe_step.fetch('run')[/curl [^\n]+/]
+
+    refute_nil curl_line, 'the probe must fetch /wurk/api/meta with curl'
+
+    connect_seconds = curl_line[/--connect-timeout (\d+)/, 1].to_i
+    request_seconds = curl_line[/--max-time (\d+)/, 1].to_i
+
+    assert_operator connect_seconds, :>, 0, 'curl must bound the TCP connection'
+    assert_operator request_seconds, :>, 0, 'curl must bound the whole request'
+    assert_operator connect_seconds, :<, request_seconds,
+                    'the connection deadline must sit inside the total request deadline'
+  end
+
   # The bound has to fit inside the job's own timeout: the build and push
   # happen first, so a probe window that cannot fit would make every run fail
-  # on timeout rather than on a real mismatch.
+  # on timeout rather than on a real mismatch. A stalled request burns its
+  # --max-time before the sleep, so the request deadline is part of the
+  # per-attempt cost and of the window.
   def test_the_probe_window_fits_inside_the_job_timeout
     run = probe_step.fetch('run')
 
     attempts = run[/for\s+\w+\s+in\s+\$\(seq 1 (\d+)\)/, 1].to_i
     sleep_seconds = run[/sleep (\d+)/, 1].to_i
+    request_seconds = run[/--max-time (\d+)/, 1].to_i
 
     assert_operator attempts, :>, 0, 'the probe must allow at least one attempt'
     assert_operator sleep_seconds, :>, 0, 'the probe must sleep between attempts'
+    assert_operator request_seconds, :>, 0, 'the probe must bound each request in time'
 
-    window_minutes = (attempts * sleep_seconds) / 60.0
+    window_minutes = (attempts * (sleep_seconds + request_seconds)) / 60.0
     timeout_minutes = build_job.fetch('timeout-minutes')
 
-    assert_operator window_minutes, :<, timeout_minutes,
-                    "the probe window (#{window_minutes.round(1)} min) must fit inside the " \
-                    "job timeout (#{timeout_minutes} min)"
+    # Half, not merely less than: the image build and push run in the same
+    # job before the probe, so the window must leave real room for them.
+    assert_operator window_minutes, :<=, timeout_minutes / 2.0,
+                    "the probe's worst-case window (#{window_minutes.round(1)} min) must leave " \
+                    "room for the image build and push inside the job timeout (#{timeout_minutes} min)"
   end
 
   # A rollout can answer /wurk/api/meta with HTML or an empty body for a
@@ -268,6 +302,71 @@ class DeployDemoWorkflowTest < Minitest::Test
 
     assert_includes states, 'success', 'the probe must set a `success` status'
     assert_includes states, 'failure', 'the probe must set a `failure` status'
+  end
+
+  # --- the probe executed, not just read ------------------------------------
+
+  # The shape tests above pass even if the version comparison is replaced by
+  # an always-true condition — the exact regression that would mark a stale
+  # demo successful. These tests EXECUTE the step's run block with stubbed
+  # curl/gh/sleep first on PATH and assert the probe's actual behaviour at
+  # both exits.
+
+  # The demo never reports the expected version: every retry must run, the
+  # Deployment must be marked failure (never success), the step must exit
+  # nonzero, and the log must say what the demo was serving.
+  def test_executed_probe_exhausts_retries_posts_failure_and_exits_nonzero_on_a_stale_version
+    result = run_probe(expected_version: '9.9.9', served_version: '1.2.3')
+
+    assert_equal probe_loop_bound, result[:curl_calls].length,
+                 'a version that never matches must exhaust every retry, not give up early'
+
+    status_calls = result[:gh_calls].grep(%r{deployments/.*/statuses})
+
+    assert_equal 1, status_calls.length, 'exactly one terminal status must be posted'
+    assert_includes status_calls.first, 'state=failure'
+    refute_includes result[:gh_calls].join("\n"), 'state=success',
+                    'a stale demo must never be marked successful'
+
+    refute_predicate result[:status], :success?, 'the probe must exit nonzero'
+    assert_equal 1, result[:status].exitstatus
+    assert_includes result[:stdout], '1.2.3',
+                    'the diagnostic must name the last version the demo served'
+  end
+
+  def test_executed_probe_posts_success_and_exits_zero_on_a_matching_version
+    result = run_probe(expected_version: '9.9.9', served_version: '9.9.9')
+
+    assert_equal 1, result[:curl_calls].length,
+                 'a first-attempt match must not poll again'
+    assert_includes result[:gh_calls].join("\n"), 'state=success'
+    refute_includes result[:gh_calls].join("\n"), 'state=failure'
+
+    assert result[:status].success? || false
+    assert_predicate result[:status], :success?, 'a matching version must leave the step (and job) green'
+  end
+
+  # A mismatch on attempt N is the normal rollout state — Image Updater has
+  # not synced yet. The probe must keep polling until the version matches,
+  # not fail on the first stale answer.
+  def test_executed_probe_keeps_polling_until_the_demo_reports_the_expected_version
+    result = run_probe(expected_version: '9.9.9', served_version: '1.2.3', match_after: 5)
+
+    assert_equal 5, result[:curl_calls].length
+    assert_predicate result[:status], :success?
+    assert_includes result[:gh_calls].join("\n"), 'state=success'
+  end
+
+  # Executed companion to test_a_non_json_body_does_not_abort_the_probe: a
+  # HTML/empty body reads as "no version yet" and the loop retries until a
+  # real JSON version shows up.
+  def test_executed_probe_retries_a_non_json_body_until_the_demo_reports_the_version
+    result = run_probe(expected_version: '9.9.9', served_version: '9.9.9',
+                       served_body: '<html>rolling</html>', match_after: 3)
+
+    assert_equal 3, result[:curl_calls].length
+    assert_predicate result[:status], :success?
+    assert_includes result[:gh_calls].join("\n"), 'state=success'
   end
 
   # --- the authorize door is unchanged --------------------------------------
@@ -349,6 +448,94 @@ class DeployDemoWorkflowTest < Minitest::Test
 
   def probe_step
     build_step('wait for the demo to report the new version')
+  end
+
+  def probe_loop_bound
+    probe_step.fetch('run')[/for\s+\w+\s+in\s+\$\(seq 1 (\d+)\)/, 1].to_i
+  end
+
+  # Runs the probe step's run block with `curl`, `gh` and `sleep` stubbed
+  # onto PATH: curl serves the scripted answer and counts its calls, gh logs
+  # every invocation, sleep is a no-op so a full retry bound costs nothing —
+  # the retry COUNT is asserted, not its pace.
+  def run_probe(expected_version:, served_version:, served_body: nil, match_after: nil)
+    Dir.mktmpdir('deploy-demo-probe') do |dir|
+      stub_dir = File.join(dir, 'bin')
+      state_dir = File.join(dir, 'state')
+      Dir.mkdir(stub_dir)
+      Dir.mkdir(state_dir)
+      write_probe_stubs(stub_dir)
+
+      script_path = File.join(dir, 'probe.sh')
+      File.write(script_path, probe_step.fetch('run'))
+
+      env = probe_env(
+        stub_dir, state_dir,
+        expected_version: expected_version,
+        served_version: served_version,
+        served_body: served_body,
+        match_after: match_after
+      )
+      stdout, stderr, status = Open3.capture3(env, 'bash', script_path)
+
+      {
+        status: status,
+        stdout: stdout,
+        stderr: stderr,
+        curl_calls: read_stub_lines(File.join(state_dir, 'curl_calls')),
+        gh_calls: read_stub_lines(File.join(state_dir, 'gh_calls'))
+      }
+    end
+  end
+
+  # The stubs hold no `#{` and no backslash escapes, so the unquoted
+  # heredocs stay literal — bash `$VAR`s pass through untouched.
+  def write_probe_stubs(stub_dir)
+    write_stub(stub_dir, 'curl', <<~BASH)
+      #!/usr/bin/env bash
+      n=$(($(cat "$STUB_STATE_DIR/curl_count" 2>/dev/null || echo 0) + 1))
+      echo "$n" > "$STUB_STATE_DIR/curl_count"
+      echo "$n" >> "$STUB_STATE_DIR/curl_calls"
+      if [ -n "$STUB_MATCH_AFTER" ] && [ "$n" -ge "$STUB_MATCH_AFTER" ]; then
+        printf '{"version":"%s"}' "$STUB_EXPECTED"
+      elif [ -n "$STUB_BODY" ]; then
+        printf '%s' "$STUB_BODY"
+      else
+        printf '{"version":"%s"}' "$STUB_SERVED"
+      fi
+    BASH
+    write_stub(stub_dir, 'gh', <<~BASH)
+      #!/usr/bin/env bash
+      echo "gh $*" >> "$STUB_STATE_DIR/gh_calls"
+    BASH
+    write_stub(stub_dir, 'sleep', <<~BASH)
+      #!/usr/bin/env bash
+      # No-op: the probe's sleeps must not slow these tests.
+    BASH
+  end
+
+  def probe_env(stub_dir, state_dir, expected_version:, served_version:, served_body:, match_after:)
+    {
+      'PATH' => "#{stub_dir}:#{ENV.fetch('PATH', nil)}",
+      'VERSION' => expected_version,
+      'DEPLOYMENT_ID' => '42',
+      'GITHUB_REPOSITORY' => 'developerz-ai/wurk',
+      'STUB_STATE_DIR' => state_dir,
+      'STUB_SERVED' => served_version,
+      'STUB_BODY' => served_body.to_s,
+      'STUB_MATCH_AFTER' => match_after.to_s,
+      'STUB_EXPECTED' => expected_version
+    }
+  end
+
+  def write_stub(dir, name, body)
+    path = File.join(dir, name)
+    File.write(path, body)
+    FileUtils.chmod(0o755, path)
+  end
+
+  def read_stub_lines(path)
+    File.file?(path) ? File.readlines(path, chomp: true) : []
   end
 
   def authorize_run
