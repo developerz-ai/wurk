@@ -35,8 +35,11 @@ internet ──►│                                                     ├─
 
 ## Deploy: who can trigger it
 
-`.github/workflows/deploy-demo.yml` **builds and pushes the image only** — it
-holds no cluster credentials. The in-cluster **ArgoCD Image Updater** selects the
+`.github/workflows/deploy-demo.yml` **builds and pushes the image** — it holds
+no cluster credentials — and then **records the deploy as a GitHub Deployment
+object and waits, bounded, for the demo to serve the new version** (see
+[Deployment record and version probe](#deployment-record-and-version-probe)).
+The in-cluster **ArgoCD Image Updater** selects the
 newest DOCR tag matching `^sha-[0-9a-f]{7}$` and syncs the deployment
 automatically; the pushed digest
 *is* the deploy trigger. It runs three ways — automatically on every push
@@ -62,6 +65,60 @@ on `main`:
    Reviewers would make it one. The environment sits on the `build` job (not a
    separate deploy job) because the digest push is what triggers the deploy, so
    approval would have to pause the run *before* the image ships.
+
+### Deployment record and version probe
+
+The deploy is **indirect**: CI pushes an image and Image Updater syncs the
+newest digest. Nothing in CI observed the result, so a demo could sit on a
+stale digest for weeks with every run green — which is how it went stale
+across several releases. After the image push, the `build` job therefore:
+
+1. **Records a GitHub Deployment** for the `demo` environment whose `ref` is
+   the built commit (`steps.built.outputs.sha` — the SHA of the checked-out
+   ref, not `github.sha`, which is the SHA the *workflow* was loaded from).
+   `gh api repos/{owner}/{repo}/deployments` then lists a `demo` deployment at
+   that commit, and the demo environment's deployments tab shows it. The
+   pushed digest is what actually deploys, so this object records the intent
+   and its outcome — it triggers nothing.
+2. **Waits, bounded, for the demo to serve the image's bundled version**: it
+   polls `https://wurk.demo.developerz.ai/wurk/api/meta` and compares the
+   reported `version` against the version the built image bundles. The loop
+   has an explicit upper bound on attempts (with a sleep between them), so a
+   demo that never catches up fails the run with a recorded status instead of
+   hanging until the job timeout.
+
+The probe compares **versions, not commit SHAs**. The demo serves the *gem*
+version: `/wurk/api/meta` renders `::Wurk::VERSION`
+([`app/controllers/wurk/api_controller.rb`](../app/controllers/wurk/api_controller.rb)),
+and the image installs the demo app's bundle from
+[`demo/Gemfile.lock`](../demo/Gemfile.lock) frozen. The expected side is read
+from that lock's path-sourced `wurk (...)` version — the version the built
+image actually bundles — rather than from the checkout's
+[`lib/wurk/version.rb`](../lib/wurk/version.rb), which can differ on an
+ordinary push that changes app or lib code without a version bump. Reading
+the expected side from the bundle keeps the probe aligned with what the
+running image serves; a hardcoded version would pass while the demo served
+another one. There is no endpoint on the demo that reports a commit SHA, so
+the Deployment's commit ref and the served-version probe are deliberately
+different checks: the first records what CI built, the second proves what the
+demo is actually running.
+
+The outcome is written back to the Deployment:
+
+| Probe result | Deployment status | Job |
+|---|---|---|
+| the reported version matches | `success` | green |
+| the bound is exhausted | `failure` | red — the run log prints the last version the demo reported, so the reader knows what it was actually serving |
+
+A rollout can answer `/wurk/api/meta` with HTML or an empty body for a
+moment; that reads as "no version yet" and the probe retries rather than
+aborting on a transient blip.
+
+**Permissions.** The `build` job holds `contents: read` plus
+`deployments: write` — the second is the only growth, and it exists solely to
+create the Deployment and post its statuses. The workflow-level block and the
+`authorize` job are unchanged (`contents: read`): no `id-token`, no
+`actions: write`.
 
 ### One-time GitHub setup (repo admin)
 
