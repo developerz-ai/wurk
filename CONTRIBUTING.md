@@ -221,9 +221,11 @@ Open an issue before a large feature PR so the direction is agreed first.
 2. Branch off `main`.
 3. Keep the change focused; add tests at the right layer.
 4. Run `bin/check` (or `bin/check full` if you touched the compat surface).
-5. Open the PR — CI runs one Ruby suite on the newest Ruby + Rails with the
-   coverage gate folded in, plus the parity oracles, rubocop, the frontend
-   suite, and benchmarks. The bench bot comments per-benchmark deltas. A
+5. Open the PR — the required suite is one Ruby run on the newest Ruby +
+   Rails with the coverage gate folded in, plus the parity oracles, rubocop,
+   the frontend suite, and benchmarks. Alongside it, non-required compat legs
+   (gemspec Ruby floor, oldest supported Rails 7.1, and a Valkey backend) run
+   the same suite and report without gating merges. The bench bot comments per-benchmark deltas. A
    regression past the noise-adjusted 5% threshold (or a baseline benchmark
    missing on head) is flagged in that comment and fails the `bench vs base`
    job, so the PR shows a red job. Bench is advisory all the same: that job is

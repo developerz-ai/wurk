@@ -232,6 +232,109 @@ jobs:
           # For per-file inspection of a recent run, not an archive.
           retention-days: 7
 
+  # Support-window legs the single `test` job cannot answer: the gemspec floor
+  # (Ruby 3.2.x, pinned to a full patch so the leg doesn't silently move
+  # between runs) on current Rails, and the oldest supported Rails (7.1.x)
+  # on newest Ruby — plus the same latest-Ruby/latest-Rails config against
+  # Valkey instead of Redis. `test` covers latest × latest on Redis 7.4, so
+  # that leg is not repeated here. Runs the same full suite, but with no
+  # COVERAGE=1: the 90% SimpleCov gate is measured by the `test` job alone,
+  # and a coverage merge across legs would be one more moving part. Not a
+  # required check — same as topology.yml — so these legs report without
+  # gating merges. No continue-on-error: a leg failure is a real signal.
+  #
+  # The dummy app's Gemfile floats `rails >= 7.1`, so the 7.1 leg must pin the
+  # series itself. `cd test/dummy && bundle install` runs under Bundler
+  # ≥ 2.5's auto-switching: BUNDLE_GEMFILE is set job-wide to the ROOT
+  # Gemfile, so Bundler switches to test/dummy/Gemfile and re-evaluates the
+  # root Gemfile's RAILS_VERSION pin against that Gemfile's own dependency
+  # set — `~> 7.1.0` then constrains the dummy app too.
+  #
+  # Versions looked up 2026-08 (ruby-builder-versions.json / rubygems.org /
+  # hub.docker.com): ruby 3.2.11, 4.0.9; rails series 8.1 (8.1.4), 7.1 (7.1.6);
+  # redis:7.4 = 7.4.11; valkey/valkey:8.1 = 8.1.10.
+  compat:
+    name: compat (ruby ${{ matrix.ruby }}, rails ${{ matrix.rails }}, ${{ matrix.backend }})
+    needs: detect
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    strategy:
+      # A red leg is a real support-window break; surface it next to the
+      # others instead of cancelling the remaining legs.
+      fail-fast: false
+      matrix:
+        include:
+          - ruby: "3.2.11"
+            rails: "8.1"
+            backend: redis
+            image: redis:7.4
+            ping: redis-cli ping
+          - ruby: "4.0.9"
+            rails: "7.1"
+            backend: redis
+            image: redis:7.4
+            ping: redis-cli ping
+          - ruby: "4.0.9"
+            rails: "8.1"
+            backend: valkey
+            image: valkey/valkey:8.1
+            ping: valkey-cli ping
+    services:
+      store:
+        image: ${{ matrix.image }}
+        ports: ["6379"]
+        options: >-
+          --health-cmd "${{ matrix.ping }}"
+          --health-interval 2s
+          --health-timeout 2s
+          --health-retries 10
+          --health-start-period 1s
+    env:
+      BUNDLE_GEMFILE: ${{ github.workspace }}/Gemfile
+      RAILS_VERSION: ${{ matrix.rails }}
+      # Per-step gate, not a job-level `if:` (#469) — see the `test` job.
+      # Matrix expression, so the job-level `env:` block below CAN read it
+      # (unlike `job.services.*`, which is only visible in steps).
+      RUN: ${{ needs.detect.outputs.dup != 'true' && (github.event_name != 'pull_request' || needs.detect.outputs.ruby == 'true') }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        if: env.RUN == 'true'
+        with:
+          persist-credentials: false
+      # Must be a STEP: `job.services.*` is not visible in job-level `env:` —
+      # see the `test` job.
+      - name: resolve store port
+        if: env.RUN == 'true'
+        run: echo "REDIS_URL=redis://localhost:${{ job.services.store.ports['6379'] }}/0" >> "$GITHUB_ENV"
+      - uses: ruby/setup-ruby@14594264cd68ce8a2345dd349bc3d138a4ef85c8 # v1
+        if: env.RUN == 'true'
+        with:
+          ruby-version: ${{ matrix.ruby }}
+          bundler-cache: true
+          cache-version: rails-${{ matrix.rails }}
+      - uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2
+        if: env.RUN == 'true'
+        with:
+          bun-version: "1.4.2"
+      # Pinned alongside Bun for the same reason as the `test` job: vitest and
+      # Vite's toolchain execute against Node.
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        if: env.RUN == 'true'
+        with:
+          node-version: "24"
+      - name: build dashboard SPA
+        if: env.RUN == 'true'
+        run: bundle exec rake frontend:build
+      - name: dummy app setup
+        if: env.RUN == 'true'
+        run: |
+          cd test/dummy
+          bundle install
+          bin/rails db:prepare
+      - name: rake test
+        if: env.RUN == 'true'
+        run: bundle exec rake test
+
   python-client:
     name: python-client (${{ matrix.python-version }})
     needs: detect

@@ -165,6 +165,8 @@ Method, per-invocation records, workload definitions, and the separate `rake ben
 | Ruby | `>= 3.2.0` |
 | Redis | `>= 7.0.0` |
 
+The full test suite also runs as a non-required `compat` workflow job across Ruby 3.2.x and the newest Ruby on the current Rails series, the oldest supported Rails series on the newest Ruby, and Valkey 8 as a drop-in store alongside Redis 7.x.
+
 JRuby, TruffleRuby, and Windows fall back to threads-only mode (no fork) — behaviorally equivalent to stock Sidekiq.
 
 ## Running the workers
