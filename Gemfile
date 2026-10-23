@@ -13,7 +13,7 @@ group :development, :test do
   # upstream release redden main with no PR at fault (1.90, #450, #471). Bump
   # these deliberately (dependabot opens the PR) and fix new offenses in it.
   gem 'rubocop', '~> 1.91.0', require: false
-  gem 'rubocop-minitest', '~> 0.40.0', require: false
+  gem 'rubocop-minitest', '~> 0.41.0', require: false
   gem 'rubocop-rake', '~> 0.7.1', require: false
   # Pin to the 0.x line. SimpleCov 1.0 rewrote subprocess handling: the default
   # `at_fork` proc now ignores the name argument and labels every child
