@@ -1,0 +1,182 @@
+name: release-smoke
+
+# End-to-end smoke of a PUBLISHED wurk gem: installs the given version into a
+# throwaway minimal Rails app, serves the mounted engine, boots a standalone
+# wurkswarm that must execute a real job, and checks the live demo reports the
+# same version. Called by release.yml after `demo`, and dispatchable by hand
+# with an explicit `version` for ad-hoc verification of any published release.
+#
+# This is bounded post-publish evidence, not a gate: it only ever runs after
+# the irreversible `gem push`, so a failure here rolls nothing back — no
+# rollback is implemented anywhere in the release lane.
+on:
+  workflow_call:
+    inputs:
+      version:
+        required: true
+        type: string
+    outputs:
+      smoke_ok:
+        value: ${{ jobs.smoke.outputs.smoke_ok }}
+  workflow_dispatch:
+    inputs:
+      version:
+        required: true
+        type: string
+        description: Published wurk version to smoke-test (must already exist on RubyGems)
+
+permissions:
+  contents: read
+
+concurrency:
+  group: release-smoke-${{ inputs.version }}
+  cancel-in-progress: false
+
+jobs:
+  smoke:
+    # One VM per job, so the redis service's fixed 6379 mapping cannot collide.
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    outputs:
+      smoke_ok: ${{ steps.result.outputs.ok }}
+    env:
+      REDIS_URL: redis://localhost:6379/0
+      VERSION: ${{ inputs.version }}
+    services:
+      redis:
+        image: redis:7.4
+        ports: ["6379:6379"]
+        options: >-
+          --health-cmd "redis-cli ping"
+          --health-interval 2s
+          --health-timeout 2s
+          --health-retries 10
+          --health-start-period 1s
+    steps:
+      - uses: ruby/setup-ruby@14594264cd68ce8a2345dd349bc3d138a4ef85c8 # v1
+        with:
+          ruby-version: "3.4"
+          # No repo checkout and no Gemfile yet — the consumer app is built below.
+          bundler-cache: false
+
+      # The one hard precondition: there is no smoke without a published gem.
+      - name: verify the version exists on RubyGems
+        run: |
+          if ! curl -fsS -o /dev/null "https://rubygems.org/api/v2/rubygems/wurk/versions/${VERSION}.json"; then
+            echo "::error::wurk ${VERSION} is not on RubyGems — a smoke test needs a published gem."
+            exit 1
+          fi
+
+      # Consumer-side install: what `gem "wurk", "<version>"` in a fresh Rails
+      # app's Gemfile actually resolves to. Deliberately NOT a checkout of this
+      # repo — the point is to test what RubyGems serves to a real consumer.
+      - name: build throwaway consumer app
+        run: |
+          set -euo pipefail
+          gem install rails --no-document
+          rails new smoke-app --minimal --skip-git --skip-bundle
+          cd smoke-app
+          printf '\ngem "wurk", "= %s"\n' "${VERSION}" >> Gemfile
+          bundle install --jobs 2
+          sed -i 's|Rails.application.routes.draw do|&\n  mount Wurk::Engine => "/wurk"|' config/routes.rb
+          mkdir -p app/workers
+          cat > app/workers/smoke_worker.rb <<'RUBY'
+          class SmokeWorker
+            include Sidekiq::Worker
+
+            def perform
+              Sidekiq.redis { |conn| conn.set("wurk:smoke:done", "1") }
+            end
+          end
+          RUBY
+
+      # The user-facing half of the drop-in contract: the mounted engine must
+      # serve the SPA shell. WURK_DISABLED=1 keeps the railtie from forking a
+      # swarm inside the web process — the swarm gets its own step below.
+      #
+      # SECRET_KEY_BASE is a REAL secret here (>= 64 hex chars). Rails reads it
+      # in production; SECRET_KEY_BASE_DUMMY is only Wurk's "this is a build
+      # step" marker (RailsBoot#building?), never a substitute for it — the
+      # repo's own production image bakes `SECRET_KEY_BASE=build` for the
+      # build-time db:prepare and injects a real one at runtime
+      # (docs/demo-deploy.md).
+      - name: engine serves /wurk
+        run: |
+          set -euo pipefail
+          cd smoke-app
+          secret_key_base="$(ruby -rsecurerandom -e 'print SecureRandom.hex(64)')"
+          export SECRET_KEY_BASE="$secret_key_base"
+          export WURK_DISABLED=1
+          RAILS_ENV=production bin/rails db:prepare
+          bin/rails server -e production --port 3000 > rails-server.log 2>&1 &
+          server_pid=$!
+          up=""
+          for _ in $(seq 1 60); do
+            if curl -fsS -o /dev/null http://localhost:3000/up 2>/dev/null; then
+              up=1
+              break
+            fi
+            sleep 1
+          done
+          if [ -z "$up" ]; then
+            echo "::error::consumer app did not boot within 60s — cannot check the engine mount."
+            cat rails-server.log
+            kill -KILL "$server_pid" 2>/dev/null || true
+            exit 1
+          fi
+          code="$(curl -s -o /dev/null -w '%{http_code}' http://localhost:3000/wurk)"
+          kill -TERM "$server_pid" 2>/dev/null || true
+          if [ "$code" != "200" ]; then
+            echo "::error::GET /wurk returned HTTP ${code}, expected 200 — the engine mount is broken in wurk ${VERSION}."
+            exit 1
+          fi
+
+      # The worker-side half: enqueue through the Sidekiq-compatible client,
+      # boot the standalone swarm against the app, and require the job to land
+      # its Redis marker inside a bounded poll.
+      - name: wurkswarm executes a real job
+        run: |
+          set -euo pipefail
+          cd smoke-app
+          secret_key_base="$(ruby -rsecurerandom -e 'print SecureRandom.hex(64)')"
+          export SECRET_KEY_BASE="$secret_key_base"
+          # Only the enqueuing process must not fork a swarm of its own —
+          # `rails runner` is not a server, so the railtie must not boot one.
+          WURK_DISABLED=1 bundle exec rails runner -e production 'SmokeWorker.perform_async'
+          # The swarm itself: it claims the worker boot, so it MUST NOT carry
+          # WURK_DISABLED — that flag is what silences the railtie's own boot.
+          bundle exec wurkswarm -r . -e production > wurkswarm.log 2>&1 &
+          swarm_pid=$!
+          found=""
+          for _ in $(seq 1 60); do
+            if bundle exec ruby -e 'require "redis-client"; exit(RedisClient.config(url: ENV.fetch("REDIS_URL")).new_client.call("GET", "wurk:smoke:done") == "1" ? 0 : 1)'; then
+              found=1
+              break
+            fi
+            sleep 2
+          done
+          kill -TERM "$swarm_pid" 2>/dev/null || true
+          if [ -z "$found" ]; then
+            echo "::error::wurk:smoke:done marker absent in Redis within 120s — wurkswarm ${VERSION} never executed the enqueued job."
+            cat wurkswarm.log
+            exit 1
+          fi
+
+      # The demo tracks the released version; its meta endpoint is the public
+      # witness that what RubyGems serves is what the demo actually runs.
+      - name: demo reports the released version
+        run: |
+          set -euo pipefail
+          if ! body="$(curl -fsS https://wurk.demo.developerz.ai/wurk/api/meta)"; then
+            echo "::error::https://wurk.demo.developerz.ai/wurk/api/meta did not respond — cannot verify the deployed demo version."
+            exit 1
+          fi
+          actual="$(printf '%s' "$body" | ruby -rjson -e 'print JSON.parse(STDIN.read).fetch("version")')"
+          if [ "$actual" != "${VERSION}" ]; then
+            echo "::error::demo /wurk/api/meta reports version ${actual}, expected ${VERSION}."
+            exit 1
+          fi
+
+      - name: record smoke result
+        id: result
+        run: echo "ok=true" >> "$GITHUB_OUTPUT"

@@ -25,7 +25,7 @@ else
   commit_sha=""
 fi
 [ "$commit_sha" != "null" ] && [ -n "$commit_sha" ] || { echo "::error::tag $last does not resolve to a commit"; exit 1; }
-# Verify the release: gem-less marker = author=developerz-ai[bot] OR assets.length=0 (RELEASE.md:167-174). Verify the lookup and its fields before the marker check: with both fields empty (a failed `gh release view`, a missing release), both marker comparisons would pass vacuously and an unverified tag would anchor the decision.
+# Verify the release: gem-less marker = author=developerz-ai[bot] OR assets.length=0 (RELEASE.md:180-194). Verify the lookup and its fields before the marker check: with both fields empty (a failed `gh release view`, a missing release), both marker comparisons would pass vacuously and an unverified tag would anchor the decision.
 rel=$(gh release view "$last" --json author,assets) || { echo "::error::release lookup for $last failed"; exit 1; }
 author=$(echo "$rel" | jq -r '.author.login')
 nassets=$(echo "$rel" | jq -r '.assets | length')
