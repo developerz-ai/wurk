@@ -91,9 +91,38 @@ publishes and deploys exactly as one merged by a human.
 | 8 | **`await RubyGems propagation`** | `gem exec rubygems-await "pkg/wurk-${VERSION}.gem"` blocks until RubyGems serves the version — without the wait, the next step can race the publication and create a tag with no gem behind it. |
 | 9 | **`tag & create GitHub Release`** | `gh release create <tag> --target <sha>` creates the tag *and* the Release in one call, with the CHANGELOG section as notes (`bin/changelog-section`) and the `.gem` attached (marked pre-release automatically for `Gem::Version#prerelease?`). When a release for the tag already exists (gem push above is irreversible), the reconcile branch (release.yml:194-209) finishes it via `gh release edit` + `upload --clobber` instead of abandoning — the one case that still aborts is a tag already pointing at a different commit. **Last, deliberately** — see [the one rule](#the-one-rule-the-tag-is-an-output-not-an-input). |
 | 10 | **`demo`** | Ships the released tag to `wurk.demo.developerz.ai` via the `demo` environment (a deployment record and URL; it carries no protection rules, so nothing pauses for a reviewer). It passes `trusted: true`, which waives deploy-demo's `DEMO_DEPLOYERS` actor allowlist — that allowlist guards the hand-dispatched door, and has nothing to add once this workflow has already published the commit's gem. Waiving it is also what lets a release merged by the developerz.ai bot deploy the demo, rather than stranding it after the irreversible publish. The waiver is honoured only from the `release` workflow running on `main`; anything else passing `trusted: true` is rejected. |
+| 11 | **`smoke`** | Calls the reusable `release-smoke.yml` workflow with the released version. It installs that version into a throwaway minimal Rails app, asserts the mounted engine serves `/wurk` with HTTP 200, boots `wurkswarm` and requires an enqueued job to land its Redis marker, and checks the demo's `/wurk/api/meta` reports the same version. This is bounded post-publish evidence, not a gate: it runs only after the irreversible `gem push`, so a failure changes nothing — no rollback or compensation is implemented. |
+
+### Smoke-checking a published release
+
+After `demo`, release.yml calls the reusable `release-smoke.yml` workflow: it installs the
+released version into a throwaway minimal Rails app, asserts the mounted engine serves `/wurk`
+with HTTP 200, boots `wurkswarm` and requires an enqueued job to land a Redis marker, and
+checks the demo's `/wurk/api/meta` reports the same version. It is bounded post-publish
+evidence, not a gate — it only runs after the irreversible `gem push`, so a failure rolls
+nothing back (no rollback is implemented). `release-smoke.yml` also accepts `workflow_dispatch`
+with an explicit `version`, so any published release can be smoke-checked ad hoc.
 
 `workflow_dispatch` runs the same lane by hand — use it to retry a release whose
 run failed after the bump was already merged.
+
+To smoke-check a published release by hand, dispatch `release-smoke.yml` with the
+exact released version as the `version` input (for example `1.7.6`). The workflow
+first queries RubyGems for that version, then installs it into the throwaway
+consumer app and performs the engine, worker and demo checks above.
+
+Verifiable inputs and expected diagnostics:
+
+- `1.7.6` is a published version, so the RubyGems versions API returns it and the
+  smoke workflow proceeds to the consumer-app checks.
+- A nonexistent version has no RubyGems version record, so the workflow stops at
+  that precondition with the exact diagnostic
+  `::error::wurk <version> is not on RubyGems — a smoke test needs a published gem.`
+
+A `workflow_dispatch` run uses the workflow definition on the default branch, so
+these checks can only be executed after this workflow has merged there. This
+document records the procedure and expected diagnostics; it does not claim an
+Actions run URL, run id or log excerpt.
 
 ## What `rake release:check` validates
 
@@ -159,6 +188,10 @@ Then release normally: bump `lib/wurk/version.rb` + `CHANGELOG.md`, merge to
 Deleting and re-cutting is only safe because **no gem was ever published** for
 that version — RubyGems forbids re-pushing a version, so once a `.gem` is live
 that number is burned and the next release must take the following one.
+
+The gem-less marker above (`gh release view` showing `author=developerz-ai[bot]`
+with zero assets) is how the scheduled release-due checkup recognises one of
+these: it reads that as a gem-less release, not a real one.
 
 ### Verifying a release actually shipped
 

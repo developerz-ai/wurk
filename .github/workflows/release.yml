@@ -226,3 +226,22 @@ jobs:
       ref: ${{ needs.preflight.outputs.tag }}
       trusted: true
     secrets: inherit
+
+  # Bounded post-publish evidence, not a gate: smoke only runs after the
+  # irreversible `gem push`, so a failure here rolls nothing back — no rollback
+  # is implemented anywhere in this lane. No `if:` re-check on
+  # preflight.proceed: `release` already gates on it and `demo` needs `release`,
+  # so a no-op preflight skips smoke transitively (correct — nothing new was
+  # published, so there is nothing new to verify).
+  smoke:
+    needs: [preflight, release, demo]
+    # Least privilege for the caller: this job only curls RubyGems and the
+    # live demo. It must not inherit the workflow-level `contents: write` +
+    # `id-token: write` — the id-token permission is what the RubyGems
+    # trusted-publishing exchange in the `release` job needs, and a smoke
+    # check has no business holding it.
+    permissions:
+      contents: read
+    uses: ./.github/workflows/release-smoke.yml
+    with:
+      version: ${{ needs.preflight.outputs.version }}
