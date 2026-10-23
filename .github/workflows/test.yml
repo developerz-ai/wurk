@@ -4,6 +4,9 @@ on:
   push:
     branches: [main]
   pull_request:
+  schedule:
+    - cron: "15 5 * * *"
+  workflow_dispatch:
 
 # Least privilege: every job here only reads the repo (artifact upload doesn't
 # need a broader GITHUB_TOKEN scope). pull-requests:read is for the `detect`
