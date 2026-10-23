@@ -146,7 +146,7 @@ second holds regardless of whether it does.
 ### Recovering a gem-less release
 
 Should one appear anyway, it is cosmetic (no gem shipped) but it lies about the
-latest version, so clear it:
+latest version, so clear it — a maintainer-only manual runbook the scheduled health checkup only ever points at via a filed ask; the checkup reports, it never executes:
 
 ```bash
 gh release delete vX.Y.Z --cleanup-tag --yes   # drops the Release and the remote tag
@@ -233,3 +233,8 @@ is on RubyGems, the release lane's preflight treats the version as already
 released and no-ops, so it will **not** cut the tag or GitHub Release — create
 them by hand from that `main` commit (`gh release create vX.Y.Z --target <sha>`
 with the CHANGELOG section as notes and the `.gem` attached).
+
+Every step in this section is a maintainer-only manual action. The scheduled
+health checkup only ever points at this runbook via a filed ask — the checkup
+reports; it never executes a publish, a tag operation or a release create
+itself.
