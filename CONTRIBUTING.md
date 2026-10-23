@@ -186,8 +186,10 @@ every comment it posts is marked as coming from a bot. What that means for you:
 
 - **Issues.** A bug report needs steps, expected, actual and version. If the
   agent asks for one of them and hears nothing, it reminds you at 7 days and
-  closes the issue at 14. Answer on the closed issue and it reopens. An issue
-  that has been confirmed is never closed by a clock.
+  closes the issue at 14. Answer on the closed issue and it reopens. Separately,
+  issues quiet for 30 days are swept: the agent posts a comment before closing,
+  never closes first. As the reporter, reply to keep your issue open.
+  <!-- Updated by editor:policy[bot]. -->
 - **Pull requests.** A PR merges when the six required checks are green and the
   review has nothing left open; nobody has to click, provided every commit is
   attributed to a GitHub account (step 1 under [Pull requests](#pull-requests)).

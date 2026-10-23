@@ -63,7 +63,11 @@ tone:
   voice: friendly
   language: en
 
+# Quiet issues are swept after 30 days: post a comment before closing, never close
+# first. A reporter can keep an issue open by replying. — editor:policy[bot]
 triage:
+  stale_after_days: 30
+  stale_action: comment_then_close
   # No `skip_project_members` (schema default false; owner ruling 2026-10-23: "wurk and ultimate
   # should be full ai maintained"). An issue opened by an org member or an invited collaborator is
   # triaged, picked up from the backlog and stale-swept like anyone's; the 2026-10-14 rule that left
@@ -83,9 +87,8 @@ triage:
   # the coding fleet instead of escalating for review (exercises the handoff loop).
   confidence_threshold: 0.4
   # An issue waiting on its reporter for the repro fields is reminded at 7 days
-  # and closed at 14, with the missing items and the way to reopen. Only the
-  # reporter's silence is timed; a confirmed or accepted issue is never closed
-  # by a clock.
+  # and closed at 14, with the missing items and the way to reopen. This repro
+  # lifecycle is separate from the general 30-day quiet-issue sweep above. — editor:policy[bot]
   close_unanswered_repro_after_days: 14
   # What this project will not take, from CLAUDE.md's "Never" list: the entries
   # that describe a change someone could propose. The two left out
