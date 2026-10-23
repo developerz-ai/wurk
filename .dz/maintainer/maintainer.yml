@@ -278,6 +278,10 @@ escalate:
 # The checkups nothing else triggers (owner, 2026-10-14: maintained so nobody has to watch it). Is a
 # release owed, and is the project healthy. Bot-authored alarm issues never pass intake, so a red
 # `main` or a release run that did not publish reaches the bot only through `health`.
+#
+# The last three entries are READ-ONLY SCOUTS: they read the repo and report a finding, and never
+# edit a file, commit, push or open a pull request. Their briefs live in .dz/schedules/; the two
+# checkups above keep theirs in .dz/briefs/.
 schedules:
   - name: release-due
     days: [mon, tue, wed, thu, fri]
@@ -287,3 +291,15 @@ schedules:
     days: [mon, tue, wed, thu, fri, sat, sun]
     hours_utc: [7]
     brief_file: .dz/briefs/health.md
+  - name: coverage-gaps
+    days: [tue]
+    hours_utc: [8]
+    brief_file: .dz/schedules/coverage-gaps.md
+  - name: docs-drift
+    days: [thu]
+    hours_utc: [9]
+    brief_file: .dz/schedules/docs-drift.md
+  - name: sidekiq-parity
+    days: [sat]
+    hours_utc: [10]
+    brief_file: .dz/schedules/sidekiq-parity.md
