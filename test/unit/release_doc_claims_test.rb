@@ -309,6 +309,55 @@ class ReleaseDocClaimsTest < Minitest::Test
                     'a readable 404 and a readable run list are a verdict, not an unknown'
   end
 
+  def test_row10_newer_rejected_dispatch_does_not_alarm_for_inflight_or_absent_primary
+    primary = { headBranch: 'main', event: 'push', headSha: SHA_VERSION_HEAD,
+                conclusion: nil, url: URL_RELEASE_RUN }
+    rejected_url = "#{URL_RELEASE_RUN}0"
+    rejected = primary.merge(headBranch: 'topic', event: 'workflow_dispatch',
+                             conclusion: 'failure', url: rejected_url)
+    [[rejected, primary], [rejected]].each do |runs|
+      out, err, status = run_row10(http_status: 404, release_run: JSON.generate(runs))
+
+      assert_predicate status, :success?, err
+      refute_includes out, 'Unhealthy'
+      refute_includes out, rejected_url
+      assert_includes out, runs.length == 2 ? 'in flight' : 'verdict unknown'
+      assert_includes out, URL_RELEASE_RUN if runs.length == 2
+    end
+  end
+
+  def test_row10_each_primary_filter_prevents_a_false_404_alarm
+    primary = { headBranch: 'main', event: 'push', headSha: SHA_VERSION_HEAD,
+                conclusion: nil, url: URL_RELEASE_RUN }
+    # Separate decoys make each filter necessary independently of the other.
+    retry_url = "#{URL_RELEASE_RUN}1"
+    off_main_url = "#{URL_RELEASE_RUN}2"
+    decoys = [primary.merge(event: 'workflow_dispatch', conclusion: 'failure', url: retry_url),
+              primary.merge(headBranch: 'topic', conclusion: 'failure', url: off_main_url)]
+
+    runs = JSON.generate([*decoys, primary])
+    out, err, status = run_row10(http_status: 404, release_run: runs)
+
+    assert_predicate status, :success?, err
+    assert_includes out, 'in flight'
+    assert_includes out, URL_RELEASE_RUN
+    refute_includes out, retry_url
+    refute_includes out, off_main_url
+    refute_includes out, 'Unhealthy'
+
+    ['--branch main ', '--event push '].each do |filter|
+      command = row10_command.sub(filter, '')
+
+      refute_equal row10_command, command
+      out, err, status = run_row10(http_status: 404, release_run: runs, command: command)
+
+      assert_predicate status, :success?, err
+      assert_includes out, 'Unhealthy', "removing #{filter} must expose the false alarm"
+      assert_includes out, 'release did not publish'
+      assert_includes out, filter == '--branch main ' ? off_main_url : retry_url
+    end
+  end
+
   def test_row10_http_404_with_an_unreadable_release_run_fails_closed
     out, err, _status = run_row10(http_status: 404, gh_fail: true)
 
@@ -410,8 +459,13 @@ class ReleaseDocClaimsTest < Minitest::Test
   # version_at_head: :repo serves the checkout's own lib/wurk/version.rb at
   # the version-carrying commit; a String serves those bytes; nil serves
   # nothing, so the contents read fails the way a rate limit or a 4xx would.
-  def run_row10(http_status:, release_run: nil, gh_fail: false, version_at_head: :repo)
-    command = row10_command
+  def run_row10(http_status:, release_run: nil, gh_fail: false, version_at_head: :repo, command: nil)
+    command ||= row10_command
+    if release_run
+      release_run = JSON.generate(JSON.parse(release_run).map do |run|
+        { 'headBranch' => 'main', 'event' => 'push' }.merge(run)
+      end)
+    end
     at_head =
       case version_at_head
       when :repo then File.read(File.join(ROOT, 'lib', 'wurk', 'version.rb'))
@@ -511,8 +565,9 @@ class ReleaseDocClaimsTest < Minitest::Test
   # (`gh api .../commits?path=lib/wurk/version.rb...`), the file AT that
   # commit (`gh api .../contents/lib/wurk/version.rb?ref=<sha>` — the
   # version of record, not the checkout's own copy), and the release.yml
-  # run BOUND to it (`gh run list --workflow release.yml --commit <sha>`
-  # ...`). The run list is served only for the version's own sha: a row that
+  # primary main-push run BOUND to it (branch, event and commit filters).
+  # Branch/event filters select from newest-first fixtures, just as gh does.
+  # The run list is served only for the version's own sha: a row that
   # dropped the --commit filter would be reading the newest run of any shape,
   # which says nothing about this version, so the stub refuses to answer it.
   # Anything else exits 1, so a regression that reaches for gh on another
@@ -546,10 +601,14 @@ class ReleaseDocClaimsTest < Minitest::Test
         exit 1
       fi
       commit=""
+      branch=""
+      event=""
       prev=""
       for arg in "$@"; do
         case "$prev" in
           --commit) commit="$arg" ;;
+          --branch) branch="$arg" ;;
+          --event) event="$arg" ;;
         esac
         prev="$arg"
       done
@@ -558,10 +617,14 @@ class ReleaseDocClaimsTest < Minitest::Test
         exit 1
       fi
       if [ "$commit" != "$WURK_TEST_VERSION_SHA" ]; then
-        printf 'stub gh run list: no run for commit %s (the version own sha is %s)\n' "$commit" "$WURK_TEST_VERSION_SHA" >&2
+        printf 'stub gh run list: no run for commit %s (the version own sha is %s)\n' \
+          "$commit" "$WURK_TEST_VERSION_SHA" >&2
         exit 1
       fi
-      printf '%s' "$WURK_TEST_RELEASE_RUN"
+      printf '%s' "$WURK_TEST_RELEASE_RUN" | jq --arg commit "$commit" --arg branch "$branch" --arg event "$event" \
+        '[.[] | select(($commit == "" or .headSha == $commit)
+          and ($branch == "" or .headBranch == $branch)
+          and ($event == "" or .event == $event))] | .[:1]'
       exit 0
     fi
     printf 'stub gh: unexpected command: %s\n' "$*" >&2
