@@ -62,7 +62,10 @@ module Wurk
         rescue Wurk::Job::Interrupted, Wurk::Job::DeadlineExceeded
           # Neither is the job failing. A cooperative interruption is not a
           # failure: InterruptHandler self-prepends, so it sits *outside* this
-          # middleware, Interrupted passes through here before it becomes a
+          # middleware (registered by
+          # `Wurk.configuration.server_middleware.prepend(Wurk::Middleware::InterruptHandler)`
+          # in lib/wurk/middleware/interrupt_handler.rb:50); Interrupted passes
+          # through here before it becomes a
           # JobRetry::Skip, and without this arm one interrupted IterableJob
           # books a spurious `<klass>|f` (#394). Upstream's
           # ExecutionTracker#track books `p` + `ms` for that Skip and reserves
@@ -72,7 +75,9 @@ module Wurk
           # docs/plans/2026/08/07/101-beyond-sidekiq/00-semantics-signoff.md §1.
           #
           # A job cut by its absolute deadline lands in the same bucket for a
-          # plainer reason: Middleware::Expiry, also outside this one, catches
+          # plainer reason: Middleware::Expiry, also outside this one (registered
+          # by `Wurk.configuration.server_middleware.add(Wurk::Middleware::Expiry)`
+          # in lib/wurk/middleware/expiry.rb:111), catches
           # that raise and books the job `expired`. Booking `f` here too would
           # put one abandoned job in two of the three counts an operator
           # subtracts (executed = processed - failed - expired), and would make
