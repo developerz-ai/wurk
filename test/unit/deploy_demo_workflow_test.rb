@@ -101,7 +101,7 @@ class DeployDemoWorkflowTest < Minitest::Test
   def test_executed_create_step_sends_an_empty_required_contexts_and_records_the_id
     result = run_create_deployment(sha: 'abc1234def')
 
-    assert result[:status].success?, "create deployment failed: #{result[:stderr]}"
+    assert_predicate result[:status], :success?, "create deployment failed: #{result[:stderr]}"
     assert_includes result[:gh_argv], 'repos/developerz-ai/wurk/deployments'
     assert_equal({ 'ref' => 'abc1234def', 'environment' => 'demo', 'auto_merge' => false,
                    'required_contexts' => [] }, JSON.parse(result[:gh_stdin]),
