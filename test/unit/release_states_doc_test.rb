@@ -165,6 +165,31 @@ class ReleaseStatesDocTest < Minitest::Test
                  "#{runbook_rows.map { |row| row[:state] }.inspect}"
   end
 
+  # The zero-asset row is the only one the runbook may touch, and even there
+  # the probe must confirm NON-publication first: release.yml pushes the gem
+  # before it creates the Release and uploads the asset, so a succeeded push
+  # with a failed upload leaves zero assets on a version RubyGems has
+  # already burned — deleting on the asset count alone would strip a real
+  # release's tag and Latest pointer (review thread PRRT_kwDOSi_O686v4LZ6).
+  def test_zero_asset_recovery_is_gated_behind_probe_confirmed_non_publication
+    row = row_matching(/zero assets/i)
+
+    refute_nil row, 'the release-state table must keep the zero-asset row'
+
+    recovery = row[:recovery]
+
+    assert_match(/rubygems\s+probe/i, recovery,
+                 "the zero-asset row's recovery cell must require the RubyGems probe; got " \
+                 "#{recovery.inspect}")
+    assert_match(/only after|before/i, recovery,
+                 "the zero-asset row's recovery cell must sequence the probe BEFORE the " \
+                 "runbook, not alongside it; got #{recovery.inspect}")
+    assert_match(/no gem was published|never published|non-publication/i, recovery,
+                 "the zero-asset row's recovery cell must require the probe to confirm " \
+                 'non-publication — zero assets alone is also the shape of a succeeded gem ' \
+                 "push whose asset upload failed; got #{recovery.inspect}")
+  end
+
   # Neither the author nor the absence of a Release establishes publication.
   # RubyGems is the authority.
   def test_section_states_that_neither_author_nor_absence_establishes_publication

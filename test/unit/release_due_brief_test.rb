@@ -311,6 +311,64 @@ class ReleaseDueBriefTest < Minitest::Test
                     'defined'
   end
 
+  # Zero assets is the gem-less MARKER, but not by itself proof that no gem
+  # shipped: release.yml pushes the gem BEFORE it creates the Release and
+  # uploads the `.gem` asset, so a succeeded push followed by a failed
+  # asset upload leaves a zero-asset Release on a version RubyGems has
+  # already burned. The deletion runbook's own safety argument ("only safe
+  # because no gem was ever published") therefore needs the per-version
+  # RubyGems probe to confirm non-publication first — the precondition
+  # RELEASE.md's "Release states" table puts on the zero-asset row (review
+  # thread PRRT_kwDOSi_O686v4LZ6). A diagnostic that names the runbook on
+  # the asset count alone directs the reader at a destructive recovery a
+  # published version must never take.
+  def test_gem_less_diagnostic_requires_rubygems_probe_before_the_deletion_runbook
+    decide_block = extract_decide_block
+
+    guard_line = decide_block.lines.find do |line|
+      line.include?('::error::release') && line.include?('is gem-less')
+    end
+
+    refute_nil guard_line, 'the Decide block must keep the gem-less guard'
+
+    assert_includes guard_line, 'rubygems.org/api/v2/rubygems/wurk/versions/',
+                    'the gem-less diagnostic must require the per-version RubyGems probe: ' \
+                    'zero assets is also the shape of a succeeded gem push whose Release ' \
+                    'asset upload failed, so the destructive runbook needs non-publication ' \
+                    'confirmed before it is named'
+
+    assert_match(/never published|shows no gem|not been published/, guard_line,
+                 'the gem-less diagnostic must make confirmed non-publication — not the ' \
+                 'asset count alone — the runbook precondition')
+  end
+
+  # The prose carries the same precondition: zero assets is the marker the
+  # checkup aborts on, while the deletion runbook it points at stays gated
+  # behind probe-confirmed non-publication. The retired sentence ("zero
+  # assets is the gem-less marker: no gem shipped") asserted the very
+  # inference the push-then-failed-upload window breaks.
+  def test_prose_gates_the_deletion_runbook_behind_probe_confirmed_non_publication
+    after_fence = @text.split(/^```\s*$/, 2)[1] || ''
+    paragraph = after_fence.split(/\n\s*\n/).find { |p| p.include?('release-deletion runbook') }
+
+    refute_nil paragraph,
+               'the brief\'s prose must keep the paragraph naming the release-deletion runbook'
+
+    assert_match(/not proof|not by itself proof|not evidence/i, paragraph,
+                 'the prose must state that zero assets alone does not establish that no ' \
+                 'gem shipped: release.yml pushes the gem before it creates the Release and ' \
+                 'uploads the asset, so a succeeded push with a failed upload leaves zero ' \
+                 'assets on a version RubyGems has already burned')
+
+    assert_match(/probe/i, paragraph,
+                 'the prose must gate the release-deletion runbook behind the per-version ' \
+                 'RubyGems probe')
+
+    assert_match(/never published|not been published|no gem was published/, paragraph,
+                 'the prose must require the probe to confirm non-publication before the ' \
+                 'release-deletion runbook applies')
+  end
+
   # The gem-less trigger is the ASSET COUNT alone. A Release authored by
   # `developerz-ai[bot]` that CARRIES the .gem is the sanctioned break-glass
   # manual publish — a real release — so it must NOT abort: the script has
