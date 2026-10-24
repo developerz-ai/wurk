@@ -14,6 +14,8 @@ All notable changes to Wurk are recorded here. Format: [Keep a Changelog](https:
 
 The squeaky-clean audit release: a production-grade pass for teams moving a high-volume Sidekiq Pro/Ent deployment onto Wurk. It fixes every verified bug from nine audit passes (core runtime, Pro/Ent, dashboard, CI), grows the independent parity oracles from 3 files to 14, adds the operational surface a big deployment needs (Prometheus metrics, child liveness, cgroup-aware sizing, topology CI, a cutover playbook and an incident runbook), and removes dead code. Several Wurk-only behaviours changed to match Sidekiq exactly — read **Changed** before upgrading; intentional divergences are recorded in `docs/idea/parity-divergences.md`.
 
+**Release disposition.** The current remote `v1.8.0` tag ref peels to commit `2917967b5abb3ece75a5726d5cbd41c6c2518902`; the GitHub Release for `v1.8.0` targets that same commit, is authored by `github-actions[bot]`, and includes the `wurk-1.8.0.gem` asset. This establishes the present published release state. It does **not** prove whether the earlier stray `v1.8.0` tag was cleaned up before the 2026-10-05 release: the historical cleanup timing cannot be established from the repository evidence available in this checkout.
+
 ### Security
 
 - **`mount Sidekiq::Web` / `run Sidekiq::Web` / `Sidekiq::Web.call` enforce `authorization` and read-only mode** like the engine mount (and Sidekiq Enterprise). Extension routes on that mount were served without authorization to anyone who could reach it.
