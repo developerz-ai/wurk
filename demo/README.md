@@ -32,6 +32,34 @@ WURK_DEMO=1 WURK_DISABLED=1 WURK_DEMO_PRODUCER=1 bin/rails server
 web process, never on the worker (the swarm parent forks, and a Redis-holding
 thread must not be forked). `bin/demo-entrypoint` does this for the image.
 
+## Dormant demo fault canary
+
+`DemoCanaryJob` is a demo-only fault probe, dormant by default. `perform` returns
+nil unless `WURK_DEMO_CANARY` equals exactly `'1'`; only then does it raise
+`DemoCanaryJob::CanaryFault` with the message
+`DEMO-ONLY CANARY: DemoCanaryJob fault probe`. It has zero retries (`retry: 0`),
+no I/O or SDK dependency, and no enqueue, producer, cron, or schedule integration.
+Reporting belongs to the existing Wurk Sentry middleware, not the job.
+
+The canary flag does not enable reporting. The independent reporting gate still
+requires `WURK_DEMO_REPORT_ERRORS` to equal `'1'` and a nonblank `SENTRY_DSN`.
+Surviving canary events receive `canary=demo_fault` alongside existing tags;
+they are not classified as intentional failures or soak events. Soak-marked
+canary events are still dropped, and normal credential/PII scrubbing and
+fail-closed handling remain active.
+
+This PR does not arm or deploy the canary. Any later canary repair must remain
+under `demo/`, use the `chore(demo):` commit prefix, and require no gem/version
+release.
+
+Run its SDK-double tests from the repository root (no network reporting):
+
+```sh
+NCPU=1 bin/rake test:unit TEST=demo/test/demo_canary_test.rb
+```
+
+The explicit selection is required: default test globs omit `demo/test/`.
+
 ## Gemfile.lock
 
 `Gemfile.lock` is committed and the image installs it frozen. It pins the
