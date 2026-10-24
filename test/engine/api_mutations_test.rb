@@ -150,6 +150,58 @@ class ApiMutationsTest < Wurk::Test::EngineCase
     assert_empty fetch_set('retry')
   end
 
+  # --- Bulk key-count cap (bulk_entry_action: > 1000 keys) -----------------
+
+  # Over the cap must 400 with the exact error and apply nothing — the cap is
+  # checked before any entry is resolved or touched, so one REAL key rides
+  # along with the junk keys and must survive the request.
+  def test_bulk_over_cap_is_400_and_applies_nothing
+    score, jid = push_to_zset('retry')
+    post '/wurk/api/retries', { keys: junk_keys + ["#{score}|#{jid}"], cmd: 'delete' }
+
+    assert_equal 400, last_response.status
+    assert_equal 'too many keys (max 1000)', json_body[:error]
+    assert_equal [jid], fetch_set('retry').map { |j| j['jid'] }, 'a capped request must not mutate'
+  end
+
+  # Exactly at the cap must be applied, not rejected: the boundary is `>`, and
+  # the whole batch (the UI can select across several pages) goes through.
+  def test_bulk_exactly_at_cap_is_applied
+    entries = Array.new(1000) do
+      payload = job_payload
+      score = ::Time.now.to_f + 3600
+      [score, payload['jid'], ::Wurk.dump_json(payload)]
+    end
+    ::Wurk.redis do |conn|
+      entries.each { |score, _jid, raw| conn.call('ZADD', 'retry', score.to_s, raw) }
+    end
+    post '/wurk/api/retries', { keys: entries.map { |score, jid, _raw| "#{score}|#{jid}" }, cmd: 'retry' }
+
+    assert_ok
+    assert json_body[:ok]
+    assert_equal 1000, json_body[:count]
+    assert_empty fetch_set('retry')
+    assert_equal 1000, ::Wurk::Queue.new(@queue).size, 'the whole batch must land on its queue'
+  end
+
+  def test_scheduled_bulk_over_cap_is_400
+    score, jid = push_to_zset('schedule')
+    post '/wurk/api/scheduled', { keys: junk_keys + ["#{score}|#{jid}"], cmd: 'delete' }
+
+    assert_equal 400, last_response.status
+    assert_equal 'too many keys (max 1000)', json_body[:error]
+    assert_equal [jid], fetch_set('schedule').map { |j| j['jid'] }, 'a capped request must not mutate'
+  end
+
+  def test_dead_bulk_over_cap_is_400
+    score, jid = push_to_zset('dead')
+    post '/wurk/api/dead', { keys: junk_keys + ["#{score}|#{jid}"], cmd: 'delete' }
+
+    assert_equal 400, last_response.status
+    assert_equal 'too many keys (max 1000)', json_body[:error]
+    assert_equal [jid], fetch_set('dead').map { |j| j['jid'] }, 'a capped request must not mutate'
+  end
+
   # K20: one entry the client rejects (tags not an Array — stock Sidekiq rejects
   # it too) must not 500 the request with the rest of the batch unapplied. The
   # bad entry stays in its set and is reported; the good one is retried.
@@ -225,6 +277,52 @@ class ApiMutationsTest < Wurk::Test::EngineCase
     assert_equal 400, last_response.status
   end
 
+  # --- Scheduled: bulk (POST /wurk/api/scheduled) --------------------------
+
+  # The bulk collection POST shares the retries contract: repeated keys are
+  # deduplicated, so the entry is acted on once and counted once.
+  def test_scheduled_bulk_deduplicates_repeated_keys
+    score, jid = push_to_zset('schedule')
+    key = "#{score}|#{jid}"
+    post '/wurk/api/scheduled', { keys: [key, key], cmd: 'add_to_queue' }
+
+    assert_ok
+    assert_equal 1, json_body[:count], 'duplicate keys must act on the entry once'
+    assert_empty fetch_set('schedule')
+    assert_equal 1, ::Wurk::Queue.new(@queue).size, 'the entry must be enqueued exactly once'
+    assert queue_has_jid?(jid)
+  end
+
+  # One entry the client rejects (tags not an Array — stock Sidekiq rejects
+  # it too) must not 500 the request with the rest of the batch unapplied.
+  # The bad entry stays in its set and is reported; the good one is applied.
+  def test_scheduled_bulk_reports_a_rejected_entry_and_applies_the_rest
+    bad = push_to_zset('schedule', tags: 'not-an-array')
+    good = push_to_zset('schedule')
+    post '/wurk/api/scheduled', { keys: [bad, good].map { |sc, jid| "#{sc}|#{jid}" }, cmd: 'add_to_queue' }
+
+    assert_equal 422, last_response.status
+    refute json_body[:ok]
+    assert_equal 1, json_body[:count]
+    assert_equal(["#{bad[0]}|#{bad[1]}"], json_body[:failed].map { |f| f[:key] })
+    assert_equal([bad[1]], fetch_set('schedule').map { |j| j['jid'] }, 'the rejected entry must stay in its set')
+    assert queue_has_jid?(good[1])
+  end
+
+  # An unknown key resolves to nothing and is skipped silently — the same
+  # contract the retries bulk route has: no error, and `count` reports only
+  # the entries that actually resolved.
+  def test_scheduled_bulk_skips_unknown_keys
+    score, jid = push_to_zset('schedule')
+    post '/wurk/api/scheduled', { keys: ["#{score}|#{jid}", '9999999999.0|nosuchjid'], cmd: 'add_to_queue' }
+
+    assert_ok
+    assert json_body[:ok]
+    assert_equal 1, json_body[:count], 'count must report only the resolved entry'
+    assert_empty fetch_set('schedule')
+    assert queue_has_jid?(jid)
+  end
+
   # --- Dead (morgue) ------------------------------------------------------
 
   def test_dead_retry_single_requeues
@@ -242,6 +340,52 @@ class ApiMutationsTest < Wurk::Test::EngineCase
 
     assert_ok
     assert_empty fetch_set('dead')
+  end
+
+  # --- Dead: bulk (POST /wurk/api/dead) ------------------------------------
+
+  # The bulk collection POST shares the retries contract: repeated keys are
+  # deduplicated, so the entry is acted on once and counted once.
+  def test_dead_bulk_deduplicates_repeated_keys
+    score, jid = push_to_zset('dead')
+    key = "#{score}|#{jid}"
+    post '/wurk/api/dead', { keys: [key, key], cmd: 'retry' }
+
+    assert_ok
+    assert_equal 1, json_body[:count], 'duplicate keys must act on the entry once'
+    assert_empty fetch_set('dead')
+    assert_equal 1, ::Wurk::Queue.new(@queue).size, 'the entry must be enqueued exactly once'
+    assert queue_has_jid?(jid)
+  end
+
+  # One entry the client rejects (tags not an Array — stock Sidekiq rejects
+  # it too) must not 500 the request with the rest of the batch unapplied.
+  # The bad entry stays in its set and is reported; the good one is applied.
+  def test_dead_bulk_reports_a_rejected_entry_and_applies_the_rest
+    bad = push_to_zset('dead', tags: 'not-an-array')
+    good = push_to_zset('dead')
+    post '/wurk/api/dead', { keys: [bad, good].map { |sc, jid| "#{sc}|#{jid}" }, cmd: 'retry' }
+
+    assert_equal 422, last_response.status
+    refute json_body[:ok]
+    assert_equal 1, json_body[:count]
+    assert_equal(["#{bad[0]}|#{bad[1]}"], json_body[:failed].map { |f| f[:key] })
+    assert_equal([bad[1]], fetch_set('dead').map { |j| j['jid'] }, 'the rejected entry must stay in its set')
+    assert queue_has_jid?(good[1])
+  end
+
+  # An unknown key resolves to nothing and is skipped silently — the same
+  # contract the retries bulk route has: no error, and `count` reports only
+  # the entries that actually resolved.
+  def test_dead_bulk_skips_unknown_keys
+    score, jid = push_to_zset('dead')
+    post '/wurk/api/dead', { keys: ["#{score}|#{jid}", '9999999999.0|nosuchjid'], cmd: 'retry' }
+
+    assert_ok
+    assert json_body[:ok]
+    assert_equal 1, json_body[:count], 'count must report only the resolved entry'
+    assert_empty fetch_set('dead')
+    assert queue_has_jid?(jid)
   end
 
   # --- Queues -------------------------------------------------------------
@@ -352,6 +496,15 @@ class ApiMutationsTest < Wurk::Test::EngineCase
   # URL-encodes the "<score>|<jid>" route key exactly as the SPA does
   # (encodeURIComponent) so the `|` survives Rack::Test's URI parser.
   def ekey(score, jid) = ::CGI.escape("#{score}|#{jid}")
+
+  # 1000 unique never-seeded "<score>|<jid>" strings, one short of the bulk
+  # cap (the tests append a real key to cross it). Unique because the
+  # controller dedups `keys` BEFORE checking the cap — duplicates would shrink
+  # the list under it and turn the request into a small, allowed batch.
+  def junk_keys
+    base = ::Time.now.to_f + 3600
+    Array.new(1000) { |i| "#{base + i}|#{SecureRandom.hex(12)}" }
+  end
 
   def assert_ok
     assert_equal 200, last_response.status, "non-200 response: body=#{last_response.body[0, 500]}"

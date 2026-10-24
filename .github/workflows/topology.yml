@@ -126,7 +126,7 @@ jobs:
           docker ps -a
           for c in tls acl primary replica sentinel; do docker logs "$c" 2>&1 | tail -20; done
           exit 1
-      - uses: ruby/setup-ruby@14594264cd68ce8a2345dd349bc3d138a4ef85c8 # v1
+      - uses: ruby/setup-ruby@b1da4809b005e0178fe08a1d57317bffc00b7b4c # v1
         if: env.RUN == 'true'
         with:
           ruby-version: ${{ env.RUBY_VERSION }}

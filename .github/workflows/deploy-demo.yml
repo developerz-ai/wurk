@@ -256,10 +256,13 @@ jobs:
           SHA: ${{ steps.built.outputs.sha }}
         run: |
           set -euo pipefail
-          response="$(gh api --method POST "repos/${GITHUB_REPOSITORY}/deployments" \
-            -f ref="${SHA}" \
-            -f environment=demo \
-            -F auto_merge=false)"
+          # required_contexts is an explicit []: omitted, the API requires every
+          # status context on the ref to have succeeded and answers 409 "Commit
+          # status checks failed" while CI is still running. This workflow is
+          # itself the demo's gate, so it waits on no other context. `gh api -f`
+          # cannot send an empty array, hence the JSON body on stdin.
+          response="$(printf '{"ref":"%s","environment":"demo","auto_merge":false,"required_contexts":[]}' "${SHA}" \
+            | gh api --method POST "repos/${GITHUB_REPOSITORY}/deployments" --input -)"
           deployment_id="$(printf '%s' "$response" | ruby -rjson -e 'print JSON.parse(STDIN.read).fetch("id")')"
           echo "id=${deployment_id}" >> "$GITHUB_OUTPUT"
           echo "Deployment ${deployment_id} created for demo at ${SHA}."

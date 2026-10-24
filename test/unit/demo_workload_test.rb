@@ -8,12 +8,11 @@ DEMO_APP = File.expand_path('../dummy/app', __dir__)
 Dir[File.join(DEMO_APP, 'jobs/demo/*.rb')].each { |f| require f }
 require File.join(DEMO_APP, 'workloads/demo/workload.rb')
 
-# Exercises the enqueue/seed side of the demo workload generator (#33) against an
-# isolated Redis DB: one `tick!` must light up every dashboard surface that is
-# observable without a running worker — queues, scheduled, batches, limiters,
-# cron — and the generator must be idempotent and self-heal after a flush. The
-# retry/dead/throughput surfaces need a real worker and are covered by
-# test/qa/demo_workload_driver.rb.
+# Exercises the demo workload generator (#33) against an isolated Redis DB:
+# one `tick!` must light up every dashboard surface — queues, scheduled,
+# batches, limiters, cron — and the generator must be idempotent and self-heal
+# after a flush. The retry, dead, and throughput surfaces are exercised below
+# with a real Processor driving the demo jobs, in this same file.
 class DemoWorkloadTest < Wurk::Test::UnitCase
   # Isolation here is by dedicated Redis DB, NOT by the per-test key namespace
   # the rest of the suite uses. The generator and the Stats/Queue/Set classes it
@@ -40,6 +39,10 @@ class DemoWorkloadTest < Wurk::Test::UnitCase
   end
 
   def teardown
+    # The `rand` override on Demo::FlakyJob is a method on the class itself:
+    # left behind, it would decide the demo job's fate for every other test
+    # class that happens to run in this worker afterwards.
+    Demo::FlakyJob.class_eval { remove_method(:rand) } if Demo::FlakyJob.method_defined?(:rand, false)
     Wurk.redis { |c| c.call('FLUSHDB') }
     Wurk.instance_variable_set(:@configuration, @prev_config)
     super
@@ -95,5 +98,88 @@ class DemoWorkloadTest < Wurk::Test::UnitCase
 
     assert_operator Wurk::Queue.new('default').size, :>, 0
     assert_includes Wurk.redis { |c| c.call('SMEMBERS', 'lmtr-list') }, 'demo-emails'
+  end
+
+  def test_a_real_worker_moves_demo_failures_into_retry_and_dead_sets
+    flaky_jid = Demo::FlakyJob.perform_async
+    poison_jid = Demo::PoisonJob.perform_async
+    processor = build_processor
+
+    # Demo::FlakyJob raises only when `rand < 0.5`, so a single attempt would
+    # put it in the retry set only half the time. Pin the coin so the run is
+    # the same every time — without it this test is a coin flip that fails
+    # the suite roughly one run in six.
+    force_flaky_job_to_fail
+    2.times { processor.process_one }
+
+    retry_entry = Wurk::RetrySet.new.find_job(flaky_jid)
+    dead_entry = Wurk::DeadSet.new.find_job(poison_jid)
+
+    assert retry_entry, 'the flaky demo job must land in the retry set'
+    assert_equal 'Demo::FlakyJob', retry_entry.klass
+    assert dead_entry, 'the poison demo job must land in the dead set'
+    assert_equal 'Demo::PoisonJob', dead_entry.klass
+  end
+
+  # The complement of the test above: the same demo job, forced to SUCCEED,
+  # must reach neither the retry set nor the dead set. Without this the retry
+  # assertion could pass for the wrong reason (a job that lands in the retry
+  # set no matter what it does) and would not be evidence of anything.
+  def test_a_real_worker_leaves_a_succeeding_flaky_job_out_of_the_failure_sets
+    flaky_jid = Demo::FlakyJob.perform_async
+    processor = build_processor
+
+    force_flaky_job_to_succeed
+    processor.process_one
+
+    assert_nil Wurk::RetrySet.new.find_job(flaky_jid),
+               'a demo job that succeeded must not land in the retry set'
+    assert_nil Wurk::DeadSet.new.find_job(flaky_jid),
+               'a demo job that succeeded must not land in the dead set'
+  end
+
+  def test_a_real_worker_raises_the_processed_throughput_counter
+    Demo::FastJob.perform_async
+    processor = build_processor
+
+    # Processor::PROCESSED is a process-global singleton, so a sibling test
+    # class in this worker could have left a count behind and the assertion
+    # below would pass without this job ever running. Reset under the
+    # suite-wide counter mutex (see Wurk::Test::PROCESSOR_COUNTER_MUTEX).
+    Wurk::Test::PROCESSOR_COUNTER_MUTEX.synchronize do
+      Wurk::Processor::PROCESSED.reset
+      Wurk::Processor::FAILURE.reset
+
+      processor.process_one
+      Wurk::Launcher.new(Wurk.configuration).flush_stats
+
+      assert_operator Wurk::Stats.new.processed, :>, 0
+    end
+  end
+
+  private
+
+  # Demo::FlakyJob decides whether to raise with `rand < 0.5`. Overriding `rand`
+  # ON THE CLASS (not as a singleton method — a class's singleton class is not
+  # in its instances' ancestor chain, so a singleton override would never be
+  # reached) pins that decision without touching the global PRNG. `teardown`
+  # removes the override so the class behaves like the demo again for every
+  # other test in this worker.
+  def force_flaky_job_to_fail
+    Demo::FlakyJob.class_eval { def rand = 0.1 }
+  end
+
+  def force_flaky_job_to_succeed
+    Demo::FlakyJob.class_eval { def rand = 0.9 }
+  end
+
+  def build_processor
+    config = Wurk::Configuration.new
+    config.logger = Logger.new(IO::NULL)
+    config.redis = { url: Wurk.configuration.redis_config[:url] }
+    config.queues = ['default']
+    capsule = config.default_capsule
+    capsule.prepare!
+    Wurk::Processor.new(capsule)
   end
 end
