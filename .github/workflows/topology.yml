@@ -138,7 +138,7 @@ jobs:
       - name: core integration subset on Valkey 8 + topology tests
         if: env.RUN == 'true'
         run: |
-          files=""
+          stems=""
           for f in integration/redis_topology integration/scheduled_promotion integration/graceful_shutdown \
                    integration/reaper_kill9 integration/reaper_full_sweep integration/reaper_owner_race \
                    integration/swarm_boot integration/redis_options_fork integration/batch_retry_roundtrip \
@@ -147,6 +147,6 @@ jobs:
                    unit/client_push unit/client unit/client_batch_pipeline unit/fetcher_reliable \
                    unit/fetcher_reaper unit/fetcher_capped unit/lua_loader unit/lua unit/lua_declared_keys \
                    unit/scheduled_poller; do
-            files="${files:+$files,}test/${f}_test.rb"
+            stems="${stems:+$stems,}${f}"
           done
-          bundle exec rake test:integration TEST="$files"
+          bundle exec rake test:integration TEST="test/{$stems}_test.rb"
