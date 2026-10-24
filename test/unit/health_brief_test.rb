@@ -1203,6 +1203,334 @@ class HealthBriefTest < Minitest::Test
                     "regression the row should file (stdout=#{out.inspect})"
   end
 
+  # The docker pin carve-out: a PAST-BUDGET docker PR whose only red check is
+  # the toolchain-pins assertion is the expected-red shape of dependabot.yml:
+  # 63-72 — dependabot bumps the Dockerfile's oven/bun tag and cannot edit the
+  # matching pins elsewhere, so the pins assertion stays red until the pin
+  # edits land. It is not a stuck PR. The discriminator needs a second read:
+  # `statusCheckRollup` carries job-level names only, and the pins assertion
+  # runs inside the same `test + coverage (latest ruby/rails)` job as every
+  # other Ruby failure, so the rollup alone cannot tell this from an unrelated
+  # failure. The second read is the failing CI JOB's own log — `gh run view
+  # <id> --job <job id> --log-failed` — and the discriminator is the failing
+  # test FILE it names.
+  def test_past_budget_docker_pr_whose_only_red_check_is_the_pins_assertion_is_awaiting_pin_edits
+    pr = dependabot_pr(number: 7701, title: 'Bump oven/bun from 1.4.1 to 1.4.2 in /',
+                       branch: 'dependabot/docker/oven/bun', age_days: 40, sha: SHA_DOCKER)
+
+    out, err, status = run_row14(prs: [pr], runs: { SHA_DOCKER => failed_run_log(
+      'Failure: test_every_bun_pin_names_the_same_version [test/unit/toolchain_pins_test.rb:73]:'
+    ) })
+
+    assert_predicate status, :success?,
+                     "row 14's command must run cleanly (status=#{status.inspect}, " \
+                     "stdout=#{out.inspect}, stderr=#{err.inspect})"
+
+    assert_includes out, 'Dependabot #7701 is awaiting matching pin edits',
+                    'a past-budget docker PR whose only red check is the ' \
+                    'toolchain-pins assertion is awaiting matching pin edits, not ' \
+                    "stuck (stdout=#{out.inspect})"
+
+    refute_includes out, 'Dependabot is stuck on #7701',
+                    'the carve-out must print NO stuck line for the expected-red ' \
+                    "docker shape (stdout=#{out.inspect})"
+
+    refute_includes out, 'Unhealthy',
+                    "the expected-red docker PR files no ask (stdout=#{out.inspect})"
+  end
+
+  # The carve-out names ONE expected-red shape and swallows nothing else: a
+  # docker PR with any other red check still grades as stuck, with the same
+  # line shape as every other stuck PR.
+  def test_past_budget_docker_pr_with_any_other_red_check_is_still_stuck
+    pr = dependabot_pr(number: 7702, title: 'Bump oven/bun from 1.4.1 to 1.4.2 in /',
+                       branch: 'dependabot/docker/oven/bun', age_days: 40, sha: SHA_DOCKER)
+
+    out, err, status = run_row14(prs: [pr], runs: { SHA_DOCKER => failed_run_log(
+      'Failure: test_something_else [test/unit/some_other_test.rb:12]:'
+    ) })
+
+    assert_predicate status, :success?,
+                     "row 14's command must run cleanly (status=#{status.inspect}, " \
+                     "stdout=#{out.inspect}, stderr=#{err.inspect})"
+
+    assert_match(/\AUnhealthy: Dependabot is stuck on #7702 \(age 40d > 37d budget for docker\)\z/,
+                 out.lines.map(&:chomp).find { |line| line.start_with?('Unhealthy:') }.to_s,
+                 'a docker PR with any OTHER red check keeps the stuck verdict ' \
+                 "(stdout=#{out.inspect})")
+
+    refute_includes out, 'awaiting matching pin edits',
+                    'the pin carve-out must not swallow an unrelated failure ' \
+                    "(stdout=#{out.inspect})"
+  end
+
+  # A READABLE failed log that names NO test file is unreadable evidence, not
+  # a green one: the row cannot tell the pins assertion from any other
+  # failure, so it fails closed as `verdict unknown` — never stuck (it has no
+  # evidence of an unrelated failure) and never the pin-edit verdict (it has
+  # no evidence of the pins assertion either).
+  def test_past_budget_docker_pr_whose_failed_log_names_no_test_file_fails_closed
+    pr = dependabot_pr(number: 7710, title: 'Bump oven/bun from 1.4.1 to 1.4.2 in /',
+                       branch: 'dependabot/docker/oven/bun', age_days: 40, sha: SHA_DOCKER)
+
+    out, err, status = run_row14(prs: [pr], runs: { SHA_DOCKER => failed_run_log(
+      'Error: the workflow could not start: the job was cancelled before any test ran'
+    ) })
+
+    assert_predicate status, :success?,
+                     "row 14's command must run cleanly (status=#{status.inspect}, " \
+                     "stdout=#{out.inspect}, stderr=#{err.inspect})"
+
+    assert_includes out, 'verdict unknown',
+                    'a readable failed log that names no test file is unreadable ' \
+                    "evidence and must fail closed (stdout=#{out.inspect})"
+
+    refute_includes out, 'awaiting matching pin edits',
+                    'no failing test file named means no evidence of the pins ' \
+                    "assertion — the carve-out must not fire (stdout=#{out.inspect})"
+
+    refute_includes out, 'Dependabot is stuck on #7710',
+                    'no failing test file named means no evidence of an unrelated ' \
+                    "failure either — the row must not guess stuck (stdout=#{out.inspect})"
+
+    refute_includes out, 'Unhealthy',
+                    "an unreadable discriminator read files no ask (stdout=#{out.inspect})"
+  end
+
+  # The discriminator reads the `test + coverage (latest ruby/rails)` JOB's
+  # failed log, not the run's. A docker PR also runs `parity (oracle)`
+  # (test.yml:381-419) and `lint (rubocop)`, and a run-level `--log-failed`
+  # mixes every failed job of the run into one log — so a sibling job's
+  # failure would name a second test file and the carve-out could never fire
+  # for the shape it exists for. The stub serves the two logs separately, so
+  # a brief that dropped the --job binding reads the aggregate and grades
+  # this PR as STUCK.
+  def test_the_docker_pin_discriminator_reads_the_test_coverage_job_not_the_whole_run
+    pr = dependabot_pr(number: 7711, title: 'Bump oven/bun from 1.4.1 to 1.4.2 in /',
+                       branch: 'dependabot/docker/oven/bun', age_days: 40, sha: SHA_DOCKER)
+
+    out, err, status = run_row14(prs: [pr], runs: { SHA_DOCKER => failed_run_log(
+      'Failure: test_every_bun_pin_names_the_same_version [test/unit/toolchain_pins_test.rb:73]:'
+    ) })
+
+    assert_predicate status, :success?,
+                     "row 14's command must run cleanly (status=#{status.inspect}, " \
+                     "stdout=#{out.inspect}, stderr=#{err.inspect})"
+
+    assert_includes out, 'Dependabot #7711 is awaiting matching pin edits',
+                    'the pins assertion failed inside the `test + coverage ' \
+                    '(latest ruby/rails)` job, so the carve-out fires whatever ' \
+                    "the run's other jobs did (stdout=#{out.inspect})"
+
+    refute_includes out, 'Dependabot is stuck on #7711',
+                    'a sibling job\'s failure must not poison the discriminator ' \
+                    "into a stuck verdict (stdout=#{out.inspect})"
+  end
+
+  # The discriminator\'s run read is bound to the CI workflow. `bench.yml` and
+  # `topology.yml` also fire on `pull_request`, so an unfiltered read takes
+  # the FIRST failed run for the commit across all of them — a run whose
+  # failed output names no Ruby test file, which can never clear the
+  # carve-out. The stub refuses the unbound request, so the row fails closed.
+  def test_stub_refuses_a_discriminator_read_without_the_ci_workflow
+    cell = command_cell('Dependabot is not stuck', gh_command: 'gh pr list')
+    mutated = cell.sub('gh run list --workflow test.yml --commit "$sha"', 'gh run list --commit "$sha"')
+
+    refute_equal cell, mutated, 'the mutation must actually drop the --workflow filter'
+
+    pr = dependabot_pr(number: 7712, title: 'Bump oven/bun from 1.4.1 to 1.4.2 in /',
+                       branch: 'dependabot/docker/oven/bun', age_days: 40, sha: SHA_DOCKER)
+
+    out, err, _status = run_row14(prs: [pr], runs: { SHA_DOCKER => failed_run_log(
+      'Failure: test_every_bun_pin_names_the_same_version [test/unit/toolchain_pins_test.rb:73]:'
+    ) }, cell: mutated)
+
+    assert_includes out, 'verdict unknown',
+                    'a discriminator read that is not bound to the CI workflow is ' \
+                    'not the read the row depends on, and the stub refuses it ' \
+                    "(stdout=#{out.inspect}, stderr=#{err.inspect})"
+
+    refute_includes out, 'Dependabot is stuck on #7712',
+                    "a refused read cannot have produced a stuck verdict (stdout=#{out.inspect})"
+
+    refute_includes out, 'awaiting matching pin edits',
+                    "a refused read cannot have cleared the PR (stdout=#{out.inspect})"
+  end
+
+  # The run's JOB LIST is the second of the three reads. An unreadable one
+  # leaves the row with no job to read the failing output from, so it fails
+  # closed as `verdict unknown` — never stuck, never cleared.
+  def test_an_unreadable_docker_job_list_fails_closed
+    pr = dependabot_pr(number: 7713, title: 'Bump oven/bun from 1.4.1 to 1.4.2 in /',
+                       branch: 'dependabot/docker/oven/bun', age_days: 40, sha: SHA_DOCKER)
+
+    out, err, status = run_row14(prs: [pr], jobs_fail: true, runs: { SHA_DOCKER => failed_run_log(
+      'Failure: test_every_bun_pin_names_the_same_version [test/unit/toolchain_pins_test.rb:73]:'
+    ) })
+
+    assert_predicate status, :success?,
+                     "row 14's command must run cleanly (status=#{status.inspect}, " \
+                     "stdout=#{out.inspect}, stderr=#{err.inspect})"
+
+    assert_includes out, 'verdict unknown',
+                    'an unreadable job list leaves no job to read the failing ' \
+                    "output from, so the row must fail closed (stdout=#{out.inspect})"
+
+    refute_includes out, 'Dependabot is stuck on #7713',
+                    "an unreadable job list cannot have produced a stuck verdict (stdout=#{out.inspect})"
+
+    refute_includes out, 'awaiting matching pin edits',
+                    "an unreadable job list cannot have cleared the PR (stdout=#{out.inspect})"
+  end
+
+  # The discriminator read fails CLOSED. An unreadable read is neither a
+  # stuck verdict nor a cleared one: it grades `verdict unknown`, never
+  # `Unhealthy` and never the pin-edit verdict.
+  def test_unreadable_docker_pin_discriminator_fails_closed
+    pr = dependabot_pr(number: 7703, title: 'Bump oven/bun from 1.4.1 to 1.4.2 in /',
+                       branch: 'dependabot/docker/oven/bun', age_days: 40, sha: SHA_DOCKER)
+
+    out, err, status = run_row14(prs: [pr], runs: { SHA_DOCKER => nil })
+
+    assert_predicate status, :success?,
+                     "row 14's command must run cleanly (status=#{status.inspect}, " \
+                     "stdout=#{out.inspect}, stderr=#{err.inspect})"
+
+    assert_includes out, 'verdict unknown',
+                    'an unreadable discriminator read must fail closed as ' \
+                    "`verdict unknown` (stdout=#{out.inspect})"
+
+    refute_includes out, 'Dependabot is stuck on #7703',
+                    'an unreadable discriminator read must never guess a stuck ' \
+                    "verdict (stdout=#{out.inspect})"
+
+    refute_includes out, 'awaiting matching pin edits',
+                    'an unreadable discriminator read must never guess the ' \
+                    "pin-edit verdict (stdout=#{out.inspect})"
+
+    refute_includes out, 'Unhealthy',
+                    "an unreadable discriminator read files no ask (stdout=#{out.inspect})"
+  end
+
+  # Mutation guard for the stub itself: the discriminator read is bound to the
+  # PR's head commit (`gh run list --workflow test.yml --commit <sha>`), and a
+  # stub that answered it without the commit would serve one PR's failing run
+  # to another. The read is refused instead, so a brief that dropped or
+  # narrowed it fails closed.
+  def test_stub_refuses_a_discriminator_read_without_the_head_commit
+    cell = command_cell('Dependabot is not stuck', gh_command: 'gh pr list')
+    mutated = cell.sub('gh run list --workflow test.yml --commit "$sha"', 'gh run list --workflow test.yml')
+
+    refute_equal cell, mutated, 'the mutation must actually drop the --commit filter'
+
+    pr = dependabot_pr(number: 7704, title: 'Bump oven/bun from 1.4.1 to 1.4.2 in /',
+                       branch: 'dependabot/docker/oven/bun', age_days: 40, sha: SHA_DOCKER)
+
+    out, err, _status = run_row14(prs: [pr], runs: { SHA_DOCKER => failed_run_log(
+      'Failure: test_every_bun_pin_names_the_same_version [test/unit/toolchain_pins_test.rb:73]:'
+    ) }, cell: mutated)
+
+    assert_includes out, 'verdict unknown',
+                    'a discriminator read without the head commit is not the read ' \
+                    'the row depends on, and the stub refuses it ' \
+                    "(stdout=#{out.inspect}, stderr=#{err.inspect})"
+
+    refute_includes out, 'Dependabot is stuck on #7704',
+                    "a refused read cannot have produced a stuck verdict (stdout=#{out.inspect})"
+
+    refute_includes out, 'awaiting matching pin edits',
+                    "a refused read cannot have cleared the PR (stdout=#{out.inspect})"
+  end
+
+  # The discriminator is read PER PR, not once for the whole list: two docker
+  # PRs must not share one verdict. Here the first PR failed only the pins
+  # assertion and the second failed something else; each PR is graded off its
+  # OWN failing run and its OWN job log.
+  def test_the_docker_pin_discriminator_is_read_per_pr
+    pins_only = dependabot_pr(number: 7705, title: 'Bump oven/bun from 1.4.1 to 1.4.2 in /',
+                              branch: 'dependabot/docker/oven/bun', age_days: 40, sha: SHA_DOCKER)
+    other = dependabot_pr(number: 7706, title: 'Bump ruby:3.4-slim-bookworm from 3.4 to 3.5 in /',
+                          branch: 'dependabot/docker/ruby', age_days: 40, sha: SHA_PR)
+
+    pins_log = failed_run_log(
+      'Failure: test_every_bun_pin_names_the_same_version ' \
+      '[test/unit/toolchain_pins_test.rb:73]:'
+    )
+
+    out, err, status = run_row14(prs: [pins_only, other], runs: {
+                                   SHA_DOCKER => pins_log,
+                                   SHA_PR => failed_run_log(
+                                     'Failure: test_something_else [test/unit/some_other_test.rb:12]:'
+                                   )
+                                 })
+
+    assert_predicate status, :success?,
+                     "row 14's command must run cleanly (status=#{status.inspect}, " \
+                     "stdout=#{out.inspect}, stderr=#{err.inspect})"
+
+    assert_includes out, 'Dependabot #7705 is awaiting matching pin edits',
+                    'the PR whose own failing run names only the pins assertion is ' \
+                    "awaiting pin edits (stdout=#{out.inspect})"
+
+    assert_includes out, 'Unhealthy: Dependabot is stuck on #7706',
+                    "the other PR keeps the stuck verdict (stdout=#{out.inspect})"
+
+    refute_includes out, 'Dependabot is stuck on #7705',
+                    'one PR\'s failing run must not grade another PR ' \
+                    "(stdout=#{out.inspect})"
+  end
+
+  # The brief has to DOCUMENT the discriminator, not just run it: a reader
+  # must be able to see WHICH read decides the carve-out, that it fails
+  # closed, and that the carve-out is a description of expected red CI and
+  # never permission to merge or to bypass a gate. It must also point at the
+  # platform lane's stalled-PR sweep instead of adding a second one.
+  def test_the_docker_pin_carve_out_prose_names_its_read_and_its_limits
+    para = dependabot_grading_block
+
+    assert_includes para, 'gh run list --workflow test.yml --commit',
+                    'the prose must name the read that binds the discriminator to ' \
+                    'the PR\'s own head commit AND to the CI workflow that runs ' \
+                    "the pins assertion; got #{para.inspect}"
+
+    assert_includes para, 'gh run view',
+                    'the prose must name the read that carries the failing check\'s ' \
+                    "own output; got #{para.inspect}"
+
+    assert_includes para, '--log-failed',
+                    'the prose must name the failed-output read the discriminator ' \
+                    "depends on; got #{para.inspect}"
+
+    assert_includes para, '--job',
+                    'the prose must name the JOB the failed output is read from — ' \
+                    'a run-level read mixes every failed job of the run into one ' \
+                    "log; got #{para.inspect}"
+
+    assert_includes para, 'test + coverage (latest ruby/rails)',
+                    'the prose must name the job the pins assertion runs in — ' \
+                    "the discriminator is bound to it; got #{para.inspect}"
+
+    assert_includes para, 'test/unit/toolchain_pins_test.rb',
+                    'the prose must name the assertion whose failure is the ' \
+                    "expected-red shape; got #{para.inspect}"
+
+    assert_includes para, 'FAILS CLOSED',
+                    'the prose must say the discriminator fails closed; ' \
+                    "got #{para.inspect}"
+
+    assert_match(/never permission to merge/i, para,
+                 'the carve-out describes expected red CI — it must never read as ' \
+                 "permission to merge; got #{para.inspect}")
+
+    assert_includes para, 'close_awaiting_author_after_days: 21',
+                    'the prose must point at the platform lane\'s stalled-PR sweep ' \
+                    "instead of adding a second one; got #{para.inspect}"
+
+    assert_match(/no second age-based/i, para,
+                 'the prose must say it adds no second age-based ping or close; ' \
+                 "got #{para.inspect}")
+  end
+
   def test_pr_past_ecosystem_budget_and_red_is_reported_stuck
     # bundler: 35-day-old PR whose check run concluded FAILURE. Budget is 28d
     # (weekly interval + 14d cooldown + 7d margin, dependabot.yml:27-30). The
@@ -1835,7 +2163,13 @@ class HealthBriefTest < Minitest::Test
                       "it (stdout=#{out.inspect})"
 
       past_budget = dependabot_pr(number: 7601, title: title, branch: branch, age_days: budget + 1, sha: SHA_PR)
-      out, _err, _status = run_row14(prs: [past_budget])
+      # A past-budget docker PR is graded through the pin discriminator read, so
+      # that read has to be readable here: an unrelated failing test keeps the
+      # stuck verdict (and the budget line) intact.
+      runs = { SHA_PR => failed_run_log(
+        'Failure: test_something_else [test/unit/some_other_test.rb:12]:'
+      ) }
+      out, _err, _status = run_row14(prs: [past_budget], runs: runs)
 
       assert_match(/\(age #{budget + 1}d > #{budget}d budget for #{Regexp.escape(eco)}\)/, out,
                    "a #{eco} PR aged #{budget + 1}d is past its #{budget}d budget, and " \
@@ -2205,6 +2539,21 @@ class HealthBriefTest < Minitest::Test
 
     last = ((first + 1)...lines.size).find { |i| lines[i].start_with?('For each unhealthy signal') }
     raise 'the demo block is not followed by the filing convention' if last.nil?
+
+    lines[first...last].join("\n")
+  end
+
+  # The brief's "Grading dependabot" block — the prose that says how each open
+  # PR is graded, what the rollup means, and what the docker pin carve-out
+  # depends on. Bounded on the next '**'-starting line, so the filing
+  # convention that follows stays out of it.
+  def dependabot_grading_block
+    lines = @text.lines.map(&:chomp)
+    first = lines.index { |line| line.start_with?('**Grading dependabot') }
+
+    raise 'health.md has no "Grading dependabot" block' if first.nil?
+
+    last = ((first + 1)...lines.size).find { |i| lines[i].start_with?('**') } || lines.size
 
     lines[first...last].join("\n")
   end
@@ -2606,15 +2955,65 @@ class HealthBriefTest < Minitest::Test
   # $WURK_TEST_FIXTURES/dependabot.prs, so the command runs against fixed
   # fixtures instead of the API — fixtures shaped like the list `gh` really
   # emits, rollup included. `prs: nil` writes no fixture at all, so the read
-  # fails the way a rate limit or a 4xx would. `cell:` lets a test run a
-  # mutated cell. `jobs_fail` is ignored — row 14 does not call
-  # `gh api .../jobs`, so there is no separate failure-shape to pin here.
-  def run_row14(prs:, jobs_fail: false, cell: nil)
+  # fails the way a rate limit or a 4xx would. `runs:` serves the SECOND read
+  # the docker pin carve-out depends on — the failing CI JOB's OWN log — keyed
+  # by the PR's head sha: `gh run list --workflow test.yml --commit <sha>`
+  # names the failed run, the run's job list names the `test + coverage
+  # (latest ruby/rails)` job inside it, and `gh run view <id> --job <job id>
+  # --log-failed` reads that job's failing output. A nil value writes no
+  # fixture, so the read is unreadable and the row must fail closed. `cell:`
+  # lets a test run a mutated cell. `jobs_fail` breaks the run's JOB LIST
+  # read — the second of the three reads — so the row must fail closed on an
+  # unreadable job list too.
+  def run_row14(prs:, jobs_fail: false, cell: nil, runs: {})
     cell ||= command_cell('Dependabot is not stuck', gh_command: 'gh pr list')
 
     run_command(cell, jobs_fail: jobs_fail) do |fixtures|
       write_fixture(fixtures, 'dependabot.prs', JSON.generate(prs)) if prs
+      runs.each_with_index do |(sha, log), index|
+        dbid = 9001 + index
+        job_id = 9101 + index
+        write_fixture(fixtures, "commit-#{sha}.runs",
+                      JSON.generate([{ 'databaseId' => dbid, 'conclusion' => 'failure' }]))
+        write_fixture(fixtures, "dbid-#{dbid}.jobs", ci_jobs_json(job_id))
+        write_fixture(fixtures, "dbid-#{dbid}.job-#{job_id}.log-failed", log) if log
+        # The run-level aggregate `gh run view <id> --log-failed` prints
+        # WITHOUT --job: every failed job of the run in one log. It names a
+        # DIFFERENT test file on purpose, so a brief that dropped the
+        # --job binding reads it and grades the pins-only PR as stuck —
+        # the binding stays falsifiable instead of merely documented.
+        aggregate = failed_run_log(
+          'Failure: test_a_sibling_job_failure [test/unit/sibling_job_test.rb:12]:'
+        )
+        write_fixture(fixtures, "dbid-#{dbid}.log-failed", aggregate) if log
+      end
     end
+  end
+
+  # The job list of the CI run the docker pin discriminator reads: the
+  # `test + coverage (latest ruby/rails)` job the pins assertion runs in
+  # (carrying the `id` `gh run view --job` takes) beside the run's other
+  # jobs. The row picks the pins job BY NAME, so a run that renamed it
+  # finds no job and fails closed.
+  def ci_jobs_json(job_id)
+    jobs = [
+      { 'id' => job_id, 'name' => 'test + coverage (latest ruby/rails)',
+        'conclusion' => 'failure', 'steps' => [] },
+      { 'id' => job_id + 1, 'name' => 'parity (oracle)',
+        'conclusion' => 'failure', 'steps' => [] },
+      { 'id' => job_id + 2, 'name' => 'lint (rubocop)',
+        'conclusion' => 'success', 'steps' => [] }
+    ]
+    JSON.generate('total_count' => jobs.size, 'jobs' => jobs)
+  end
+
+  # The failing CI JOB's log — what `gh run view <id> --job <job id>
+  # --log-failed` prints. The discriminator reads the FAILING TEST FILE out
+  # of it, so the fixture has to carry minitest's own failure line
+  # (`Failure: test_x [test/unit/<file>_test.rb:<line>]:`); the rollup
+  # alone never can.
+  def failed_run_log(*lines)
+    "#{lines.join("\n")}\n"
   end
 
   # Runs a brief command as a stand-alone Bash script with a stub `gh` first
@@ -2683,6 +3082,16 @@ class HealthBriefTest < Minitest::Test
             # `resolve built commit` step's log; the jobs API carries no step
             # logs, so the row has to fetch them separately. Args: run id is
             # the first non-flag arg, the job id is the arg after `--job`.
+            # `gh run view <dbid> --job <jobid> --log-failed` is the THIRD read
+            # row 14's docker pin carve-out depends on: the failing CI JOB's
+            # own output, which is the only place the failing TEST FILE is
+            # named. It is JOB-BOUND: a run-level `--log-failed` (no --job)
+            # mixes every failed job of the run into one log, so a sibling
+            # job's failure would name a second test file and the carve-out
+            # could never fire. The unbound form is served from its own
+            # fixture, so a brief that dropped the --job binding reads
+            # DIFFERENT (aggregate) output and fails the row's own assertions
+            # instead of quietly passing.
             if [ "$WURK_TEST_LOG_FAIL" = "1" ]; then
               printf 'stub gh run view --log: the log read fails on purpose (rate limited or 4xx)\n' >&2
               exit 1
@@ -2691,12 +3100,14 @@ class HealthBriefTest < Minitest::Test
             dbid=""
             jobid=""
             want_log=""
+            want_failed=""
             for arg in "$@"; do
               case "$prev" in
                 --job) jobid="$arg" ;;
               esac
               case "$arg" in
                 --log) want_log="1" ;;
+                --log-failed) want_failed="1" ;;
                 [0-9]*)
                   if [ -z "$dbid" ] && [ "$arg" != "$prev" ]; then
                     dbid="$arg"
@@ -2705,9 +3116,27 @@ class HealthBriefTest < Minitest::Test
               esac
               prev="$arg"
             done
-            if [ -z "$want_log" ]; then
-              printf 'stub gh run view: only the --log form is stubbed here, got: %s\n' "$*" >&2
+            if [ -z "$want_log" ] && [ -z "$want_failed" ]; then
+              printf 'stub gh run view: only the --log and --log-failed forms are stubbed here, got: %s\n' "$*" >&2
               exit 1
+            fi
+            if [ -n "$want_failed" ]; then
+              if [ -z "$dbid" ]; then
+                printf 'stub gh run view --log-failed: need a run id, got: %s\n' "$*" >&2
+                exit 1
+              fi
+              if [ -n "$jobid" ]; then
+                fixture="$fixdir/dbid-$dbid.job-$jobid.log-failed"
+              else
+                fixture="$fixdir/dbid-$dbid.log-failed"
+              fi
+              if [ ! -s "$fixture" ]; then
+                printf 'stub gh run view --log-failed: no failed-log fixture for run %s job %s (looked for %s)\n' \
+                  "$dbid" "$jobid" "$fixture" >&2
+                exit 1
+              fi
+              cat "$fixture"
+              exit 0
             fi
             if [ -z "$dbid" ] || [ -z "$jobid" ]; then
               printf 'stub gh run view --log: need a run id and a --job id, got: %s\n' "$*" >&2
@@ -2724,6 +3153,7 @@ class HealthBriefTest < Minitest::Test
           *)
             wf=""
             commit=""
+            json=""
             prev=""
             for arg in "$@"; do
               case "$arg" in
@@ -2731,9 +3161,40 @@ class HealthBriefTest < Minitest::Test
               esac
               case "$prev" in
                 --commit) commit="$arg" ;;
+                --json) json="$arg" ;;
               esac
               prev="$arg"
             done
+            # Row 14's docker pin discriminator read: `gh run list --workflow
+            # test.yml --commit <head sha> --json databaseId,conclusion`
+            # names the PR's failing CI run, whose `test + coverage (latest
+            # ruby/rails)` job's failed log the row reads next. It is
+            # COMMIT-BOUND: a read without --commit would name some other run,
+            # and one PR's failing run must never grade another PR, so the
+            # stub refuses the request instead of serving a fixture. It is
+            # WORKFLOW-BOUND too: `bench.yml` and `topology.yml` also fire on
+            # pull_request, so an unfiltered read takes the first failed run
+            # for the commit across ALL of them - a run whose failed output
+            # names no Ruby test file at all, which can never clear the
+            # carve-out. The stub refuses the unbound request too, so a brief
+            # that dropped the filter fails closed.
+            if [ "$json" = "databaseId,conclusion" ]; then
+              if [ -z "$commit" ]; then
+                printf 'stub gh run list: the docker pin discriminator read is commit-bound, refusing a request without --commit: %s\n' "$*" >&2
+                exit 1
+              fi
+              if [ "$wf" != "test.yml" ]; then
+                printf 'stub gh run list: the docker pin discriminator read is workflow-bound to test.yml, refusing a request for %s: %s\n' "${wf:-<none>}" "$*" >&2
+                exit 1
+              fi
+              fixture="$fixdir/commit-$commit.runs"
+              if [ ! -s "$fixture" ]; then
+                printf 'stub gh run list: no runs fixture for commit %s (looked for %s)\n' "$commit" "$fixture" >&2
+                exit 1
+              fi
+              cat "$fixture"
+              exit 0
+            fi
             # The release rows are commit-bound: the only release.yml run a
             # row may grade is the one for the version's own sha, requested
             # with --commit. A release.yml request WITHOUT --commit is a row
