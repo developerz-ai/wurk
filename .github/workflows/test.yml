@@ -261,6 +261,10 @@ jobs:
   # release for ubuntu-24.04 was 4.0.7, so setup-ruby failed both 4.0 legs
   # with "Unknown version 4.0.9" (#618). The 3.2 floor stays full-pinned: a
   # floor that floats could stop testing the gemspec's actual minimum.
+  #
+  # The 7.1 leg also depends on the root Gemfile's json < 3 pin (ActiveSupport
+  # 7.1 passes the quirks_mode: keyword json 3 removed) — set there, keyed on
+  # the same RAILS_VERSION this job exports.
   compat:
     name: compat (ruby ${{ matrix.ruby }}, rails ${{ matrix.rails }}, ${{ matrix.backend }})
     needs: detect
