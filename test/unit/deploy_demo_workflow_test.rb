@@ -2,6 +2,7 @@
 
 require 'minitest/autorun'
 require 'yaml'
+require 'json'
 require 'fileutils'
 require 'open3'
 require 'tmpdir'
@@ -87,12 +88,25 @@ class DeployDemoWorkflowTest < Minitest::Test
 
     assert_match(%r{gh api --method POST "repos/\$\{GITHUB_REPOSITORY\}/deployments"}, run,
                  'the workflow must create a Deployment through the deployments API')
-    assert_match(/-f\s+environment=demo\b/, run,
-                 'the Deployment must target the `demo` environment')
-    assert_match(/-f\s+ref="\$\{SHA\}"/, run,
-                 'the Deployment ref must be the built commit SHA')
     assert_equal '${{ steps.built.outputs.sha }}', step.dig('env', 'SHA'),
                  'the Deployment ref must come from steps.built.outputs.sha'
+  end
+
+  # The step EXECUTED with a stubbed `gh`: the request body it sends is the
+  # contract. `required_contexts` must be an explicit empty array — omitted,
+  # the API defaults it to every status context on the ref and answers 409
+  # "Commit status checks failed" while CI is still running or anything is
+  # red, which failed every push to main from 2026-10-23. This workflow is
+  # itself the gate on the demo serving, so it waits on no other context.
+  def test_executed_create_step_sends_an_empty_required_contexts_and_records_the_id
+    result = run_create_deployment(sha: 'abc1234def')
+
+    assert_predicate result[:status], :success?, "create deployment failed: #{result[:stderr]}"
+    assert_includes result[:gh_argv], 'repos/developerz-ai/wurk/deployments'
+    assert_equal({ 'ref' => 'abc1234def', 'environment' => 'demo', 'auto_merge' => false,
+                   'required_contexts' => [] }, JSON.parse(result[:gh_stdin]),
+                 'the Deployment body must target `demo` at the built SHA with no required contexts')
+    assert_equal "id=7\n", result[:github_output], 'the step must record the created Deployment id'
   end
 
   # `gh api` needs a token. The workflow's own token is the only one that can
@@ -484,6 +498,40 @@ class DeployDemoWorkflowTest < Minitest::Test
         stderr: stderr,
         curl_calls: read_stub_lines(File.join(state_dir, 'curl_calls')),
         gh_calls: read_stub_lines(File.join(state_dir, 'gh_calls'))
+      }
+    end
+  end
+
+  # Runs the create step with `gh` stubbed: it records its argv and stdin and
+  # answers the API's shape (`{"id":7}`).
+  def run_create_deployment(sha:)
+    Dir.mktmpdir('deploy-demo-create') do |dir|
+      stub_dir = File.join(dir, 'bin')
+      Dir.mkdir(stub_dir)
+      write_stub(stub_dir, 'gh', <<~BASH)
+        #!/usr/bin/env bash
+        printf '%s\n' "$@" > "$STUB_STATE_DIR/gh_argv"
+        cat > "$STUB_STATE_DIR/gh_stdin"
+        printf '{"id":7}'
+      BASH
+      script_path = File.join(dir, 'create.sh')
+      File.write(script_path, deployment_step.fetch('run'))
+      output_path = File.join(dir, 'github_output')
+      env = {
+        'PATH' => "#{stub_dir}:#{ENV.fetch('PATH', nil)}",
+        'SHA' => sha,
+        'GITHUB_REPOSITORY' => 'developerz-ai/wurk',
+        'GITHUB_OUTPUT' => output_path,
+        'STUB_STATE_DIR' => dir
+      }
+      _stdout, stderr, status = Open3.capture3(env, 'bash', script_path)
+
+      {
+        status: status,
+        stderr: stderr,
+        gh_argv: read_stub_lines(File.join(dir, 'gh_argv')),
+        gh_stdin: File.file?(File.join(dir, 'gh_stdin')) ? File.read(File.join(dir, 'gh_stdin')) : '',
+        github_output: File.file?(output_path) ? File.read(output_path) : ''
       }
     end
   end
