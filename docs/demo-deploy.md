@@ -180,7 +180,11 @@ Comparing the two gives exactly three verdicts:
 An unreachable probe is explicitly **not** healthy: "I could not tell" is not
 "it is fine", and it must never be reported as a match. The mismatch verdict
 names both sides because the two numbers are the whole diagnosis — the version
-being served and the version that was expected.
+being served and the version that was expected. The probe itself is
+deadline-bounded (`--max-time 5`), the same per-request bound the CI probe
+carries: a demo that accepts the connection but stalls the response costs its
+request deadline and grades `verdict unknown` like any other transport failure,
+instead of blocking the scheduled checkup.
 
 **This check is READ-ONLY.** It holds no cluster credentials, no `DOCR_TOKEN`
 and no `ARGOCD_*` secret; it needs no GitHub token and no deployment

@@ -978,16 +978,21 @@ class HealthBriefTest < Minitest::Test
   # and it is why the stub prints the body on every status.
   def test_demo_served_version_unreadable_probe_grades_verdict_unknown
     [
-      ['transport failure', nil, 7],
-      ['non-200 response', JSON.generate('version' => checkout_version), 404],
-      ['non-200 response carrying a stale version', JSON.generate('version' => '0.0.1'), 503],
-      ['non-JSON body', '<html>not found</html>', 200],
-      ['JSON without a version key', JSON.generate('read_only' => true), 200]
-    ].each do |label, body, status_code|
+      ['transport failure', nil, 7, 7],
+      # A demo that accepts the connection but never finishes the response:
+      # curl kills the request at its --max-time and exits 28 with no body
+      # and no HTTP status. The same unreadable shape as any other transport
+      # failure — and the reason the probe has to be bounded in time at all.
+      ['response deadline exceeded', nil, 28, 28],
+      ['non-200 response', JSON.generate('version' => checkout_version), 404, 0],
+      ['non-200 response carrying a stale version', JSON.generate('version' => '0.0.1'), 503, 0],
+      ['non-JSON body', '<html>not found</html>', 200, 0],
+      ['JSON without a version key', JSON.generate('read_only' => true), 200, 0]
+    ].each do |label, body, status_code, curl_exit|
       out, err, status = run_served_version_row(
         body: body,
         http_status: status_code,
-        curl_exit: body.nil? ? 7 : 0
+        curl_exit: curl_exit
       )
 
       assert_predicate status, :success?,
@@ -1034,6 +1039,38 @@ class HealthBriefTest < Minitest::Test
     refute_includes out, 'Unhealthy',
                     'an unparseable body is not evidence of a mismatch either; ' \
                     "got stdout=#{out.inspect}"
+  end
+
+  # The probes must be bounded in TIME. The checkup runs unattended: a curl
+  # without a total deadline never returns when the server accepts the
+  # connection but stalls the response — the row prints no verdict and every
+  # signal after it goes unread. All three rows whose command leaves `gh` for
+  # curl (row 9's publication cross-check, row 10's availability probe, row
+  # 13's demo probe) must bound the whole request with `--max-time`; the
+  # runtime half of the property — curl exit 28 grades `verdict unknown` — is
+  # pinned by running the demo row against the stubbed curl above.
+  def test_probe_curls_carry_a_total_deadline
+    [command_cell('the last release published'),
+     command_cell('RubyGems serves `Wurk::VERSION`', gh_command: 'gh api'),
+     served_version_command].each do |cell|
+      # An invocation — always `$(curl …` in these rows — not a prose mention
+      # of curl inside an echo string (`... failed (curl rc=$rc ...)`).
+      invocations = cell.scan(/\$\(curl [^;|)]*/).map { |match| match.delete_prefix('$(') }
+
+      refute_empty invocations,
+                   "#{cell.inspect} must probe with curl for this guard to mean anything"
+
+      invocations.each do |invocation|
+        seconds = invocation[/--max-time (\d+)/, 1].to_i
+
+        assert_operator seconds, :>, 0,
+                        'every probe curl must bound the WHOLE request with --max-time: an ' \
+                        'unbounded curl never returns when the server accepts the connection ' \
+                        'but stalls the response, so the scheduled checkup blocks without ' \
+                        'printing a verdict and the signals after it never run; got ' \
+                        "#{invocation.inspect}"
+      end
+    end
   end
 
   # Row 15 grades dependabot PRs against per-ecosystem budgets. The brief
@@ -2735,8 +2772,9 @@ class HealthBriefTest < Minitest::Test
   #     body whatever the status, so a row that graded the body alone would
   #     read a 404's JSON as a served version; a stub that withheld the body
   #     on a non-200 would let exactly that defect pass.
-  #     `WURK_TEST_CURL_EXIT` simulates a transport failure, which is the only
-  #     way real curl exits non-zero here.
+  #     `WURK_TEST_CURL_EXIT` simulates a transport failure — connection
+  #     refused (7), or the probe's `--max-time` deadline exceeded (28) —
+  #     which is the only way real curl exits non-zero here.
   #
   # curl's status placeholder is assembled from two shell parts instead of
   # being written out: RuboCop parses a Ruby heredoc's body as Ruby, and
