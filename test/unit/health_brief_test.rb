@@ -675,7 +675,12 @@ class HealthBriefTest < Minitest::Test
   #
   #   * a matching version -> healthy, naming the version;
   #   * a different version -> Unhealthy, naming served AND expected;
-  #   * an unreadable probe -> `verdict unknown`, never green.
+  #   * an unreadable probe -> `verdict unknown`, never green. Unreadable
+  #     includes an HTTP 200 whose body is a matching version object
+  #     followed by invalid text: jq parses a STREAM of JSON values, emits
+  #     the version, and only then fails on the trailing garbage — so the
+  #     row must check jq's exit status and validate the body as one single
+  #     JSON object before it grades anything.
   def test_demo_served_version_match_grades_success
     out, err, status = run_served_version_row(body: JSON.generate('version' => checkout_version))
 
@@ -755,6 +760,36 @@ class HealthBriefTest < Minitest::Test
                       "#{label}: an unavailable probe is not evidence of a mismatch; " \
                       "got stdout=#{out.inspect}"
     end
+  end
+
+  # The false green jq's stream semantics can print: on a body shaped
+  # `{"version":"<expected>"}<garbage>` jq emits the version FIRST and only
+  # then fails to parse the trailing text, so a row that captures jq's stdout
+  # and ignores its exit status grades that body a healthy success — on the
+  # old command this fixture printed `success: the demo serves <version>`
+  # while jq exited 5. The row must check jq's status and validate the body
+  # as one single JSON object before grading.
+  def test_matching_version_followed_by_trailing_garbage_is_not_a_success
+    body = "#{JSON.generate('version' => checkout_version)} trailing garbage"
+    out, err, status = run_served_version_row(body: body)
+
+    assert_predicate status, :success?,
+                     "the served-version row must run cleanly (status=#{status.inspect}, " \
+                     "stdout=#{out.inspect}, stderr=#{err.inspect})"
+
+    assert_includes out, 'verdict unknown',
+                    'an HTTP 200 whose body is a matching version object followed by invalid ' \
+                    'text is not a readable answer: jq fails to parse the trailing garbage ' \
+                    'after emitting the version, so a green printed off that body is exactly ' \
+                    "the false green this row must never print; got stdout=#{out.inspect}"
+
+    refute_includes out, 'success',
+                    'trailing garbage after the version object must not buy the row a success ' \
+                    "verdict (stdout=#{out.inspect})"
+
+    refute_includes out, 'Unhealthy',
+                    'an unparseable body is not evidence of a mismatch either; ' \
+                    "got stdout=#{out.inspect}"
   end
 
   # Row 13 grades dependabot PRs against per-ecosystem budgets. The brief
