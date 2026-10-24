@@ -299,7 +299,7 @@ usable template for a worker image. The shape that matters:
 # Dockerfile
 # Stage 1 — build the dashboard SPA. Only needed if you build Wurk from source;
 # consumers installing the gem get the precompiled bundle in vendor/assets.
-FROM oven/bun:1.4.2-slim AS spa
+FROM oven/bun:1.4.3-slim AS spa
 WORKDIR /src
 COPY frontend/package.json frontend/bun.lock ./frontend/
 RUN cd frontend && bun install --frozen-lockfile
