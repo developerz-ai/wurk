@@ -44,8 +44,21 @@ function renderMetrics(path = '/metrics') {
   ));
 }
 
-// Route the component's fetches by URL. Defaults render an empty-but-valid page;
-// each test overrides the payload it cares about.
+// The Metrics toolbar's four range tabs, as the exact URLs they request.
+// The mock dispatches on the whole URL string, so a corrupted bucket or a
+// dropped query parameter lands on an unmapped URL instead of quietly
+// matching a substring — the panel it feeds stays empty and the test fails.
+const RANGE_URLS = [
+  { bucket: '1m', window: '24h', windowSeconds: 86_400, minutes: 60 },
+  { bucket: '1m', window: '24h', windowSeconds: 86_400, minutes: 1_440 },
+  { bucket: '5m', window: '7d', windowSeconds: 604_800, minutes: 10_080 },
+  { bucket: '1h', window: '30d', windowSeconds: 2_592_000, minutes: 43_200 },
+];
+
+// Route the component's fetches by their exact URL. Defaults render an
+// empty-but-valid page; each test overrides the payload it cares about.
+// Every requested URL is recorded on `urls`, so a test can pin the strings
+// the page asks for rather than only what it renders.
 function mockFetch(
   opts: {
     queueHistory?: unknown;
@@ -56,16 +69,27 @@ function mockFetch(
   } = {},
 ) {
   const { queueHistory = { bucket: '1m', window: 86400, queues: [] }, snapshots = [], topJobs = [], series = [], stats = {} } = opts;
-  return vi.fn((url: string) => {
-    let body: unknown = {};
-    // /history/snapshots must be matched before the /history/ rollup route.
-    if (url.includes('/history/snapshots')) body = { snapshots };
-    else if (url.includes('/queue-history/')) body = queueHistory;
-    else if (url.includes('/history/')) body = { bucket: '1m', window: 86400, series };
-    else if (url.includes('/metrics')) body = { minutes: 60, top_jobs: topJobs };
-    else if (url.includes('/stats')) body = stats;
+
+  const bodies = new Map<string, unknown>([
+    ['/wurk/api/stats', stats],
+    ['/wurk/api/history/snapshots?limit=1000', { snapshots }],
+  ]);
+  for (const r of RANGE_URLS) {
+    bodies.set(`/wurk/api/history/${r.bucket}?window=${r.window}`, { bucket: r.bucket, window: r.windowSeconds, series });
+    bodies.set(`/wurk/api/metrics?minutes=${r.minutes}`, { minutes: r.minutes, top_jobs: topJobs });
+    bodies.set(`/wurk/api/queue-history/${r.bucket}?window=${r.window}`, queueHistory);
+  }
+
+  const urls: string[] = [];
+  const fetchMock = vi.fn((url: string) => {
+    urls.push(url);
+    // An unmapped URL is one the page should never ask for (or one whose
+    // shape drifted): answer with an empty body so nothing renders from it
+    // and the recorded-URL assertion reports the mismatch.
+    const body = bodies.get(url) ?? {};
     return Promise.resolve({ ok: true, status: 200, json: () => Promise.resolve(body) } as Response);
   });
+  return Object.assign(fetchMock, { urls });
 }
 
 describe('Metrics page', () => {
@@ -191,5 +215,62 @@ describe('Metrics — historical snapshots', () => {
     expect(lines).toContain('dead');
     expect(lines).not.toContain('processed');
     expect(lines).not.toContain('failures');
+  });
+});
+
+describe('Metrics — requested API URLs', () => {
+  afterEach(() => {
+    vi.unstubAllGlobals();
+  });
+
+  it('requests the queue history with the range bucket and the window parameter', async () => {
+    const at = 1_781_000_000;
+    const fetchMock = mockFetch({
+      stats: { processed: 1, failed: 0, latency: 0, processes: 1 },
+      queueHistory: {
+        bucket: '5m',
+        window: 604_800,
+        queues: [{ name: 'default', points: [{ at, size: 5, latency: 1.2 }] }],
+      },
+    });
+    vi.stubGlobal('fetch', fetchMock);
+    renderMetrics();
+    // Wait for both independent queue-history queries to land. The assertions
+    // below are about the recorded URLs, so their render gates must not be
+    // able to suppress them when the requested URL is wrong.
+    await screen.findByText('Queue Latency (seconds)');
+    await waitFor(() => expect(screen.getByTestId('barchart')).toBeInTheDocument());
+
+    const urls = fetchMock.urls;
+    // Two call sites ask for the queue history — the depth panel and the
+    // latency panel — and both must ask for the same exact URL: the range's
+    // bucket interpolated into the path, with the window as a parameter.
+    expect(urls.filter((u) => u.startsWith('/wurk/api/queue-history/'))).toEqual([
+      '/wurk/api/queue-history/5m?window=7d',
+      '/wurk/api/queue-history/5m?window=7d',
+    ]);
+    // Nothing else the default range requests may drift either.
+    expect([...new Set(urls)].sort()).toEqual([
+      '/wurk/api/history/5m?window=7d',
+      '/wurk/api/history/snapshots?limit=1000',
+      '/wurk/api/metrics?minutes=10080',
+      '/wurk/api/queue-history/5m?window=7d',
+      '/wurk/api/stats',
+    ]);
+  });
+
+  it('requests the historical snapshots with their limit parameter', async () => {
+    const fetchMock = mockFetch({
+      stats: { processed: 1, failed: 0, latency: 0, processes: 1 },
+      snapshots: [{ at: 1_781_000_000, processed: 100, failures: 2, enqueued: 5, dead: 1 }],
+    });
+    vi.stubGlobal('fetch', fetchMock);
+    renderMetrics();
+    // The panel renders only after the snapshots response lands.
+    expect(await screen.findByText('Historical Snapshots')).toBeInTheDocument();
+
+    expect(fetchMock.urls.filter((u) => u.startsWith('/wurk/api/history/snapshots'))).toEqual([
+      '/wurk/api/history/snapshots?limit=1000',
+    ]);
   });
 });
