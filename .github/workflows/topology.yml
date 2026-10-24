@@ -138,7 +138,15 @@ jobs:
       - name: core integration subset on Valkey 8 + topology tests
         if: env.RUN == 'true'
         run: |
-          stems=""
+          # rake 13.4 (locked in Gemfile.lock) splits ENV["TEST"] on commas
+          # BEFORE any globbing (Rake::TestTask#file_list), and FileList
+          # silently drops a glob pattern that matches nothing — so the brace
+          # glob this lane carried at 7621a10 reached rake_test_loader as
+          # bare-stem chunks and died with "File does not exist" before a
+          # single test ran. Comma-joined explicit paths, no glob magic, is
+          # the one shape the split cannot mangle (guarded by
+          # test/unit/topology_workflow_test.rb).
+          files=""
           for f in integration/redis_topology integration/scheduled_promotion integration/graceful_shutdown \
                    integration/reaper_kill9 integration/reaper_full_sweep integration/reaper_owner_race \
                    integration/swarm_boot integration/redis_options_fork integration/batch_retry_roundtrip \
@@ -147,6 +155,6 @@ jobs:
                    unit/client_push unit/client unit/client_batch_pipeline unit/fetcher_reliable \
                    unit/fetcher_reaper unit/fetcher_capped unit/lua_loader unit/lua unit/lua_declared_keys \
                    unit/scheduled_poller; do
-            stems="${stems:+$stems,}${f}"
+            files="${files:+$files,}test/${f}_test.rb"
           done
-          bundle exec rake test:integration TEST="test/{$stems}_test.rb"
+          bundle exec rake test:integration TEST="$files"
