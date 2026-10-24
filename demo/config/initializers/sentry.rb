@@ -33,4 +33,8 @@ if DemoSentryPolicy.enabled?
   # wurk.rb: the worker boots with server? == false, so configure_server never
   # runs.
   Wurk::Sentry.install!(Wurk.configuration)
+  if ENV["WURK_DEMO"] == "1"
+    require_relative "../../app/jobs/soak_job"
+    Wurk.configuration.server_middleware.insert_after(Wurk::Sentry::Middleware, SoakJob::SentryTagging)
+  end
 end

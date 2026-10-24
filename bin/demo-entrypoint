@@ -22,6 +22,7 @@ case "$role" in
     exec bundle exec rails server -b 0.0.0.0 -p "${PORT:-3000}"
     ;;
   worker)
+    unset WURK_DEMO_PRODUCER
     # Load the Rails app (so the demo job classes + the WURK_DEMO server
     # middleware are present) but keep the railtie from backgrounding the swarm,
     # then run supervise on the MAIN thread so SIGTERM drains and exits promptly
@@ -39,6 +40,7 @@ case "$role" in
     "
     ;;
   *)
+    unset WURK_DEMO_PRODUCER
     exec "$@"
     ;;
 esac
