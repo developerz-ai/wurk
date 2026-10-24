@@ -251,8 +251,16 @@ jobs:
   # set — `~> 7.1.0` then constrains the dummy app too.
   #
   # Versions looked up 2026-08 (ruby-builder-versions.json / rubygems.org /
-  # hub.docker.com): ruby 3.2.11, 4.0.9; rails series 8.1 (8.1.4), 7.1 (7.1.6);
+  # hub.docker.com): ruby 3.2.11; rails series 8.1 (8.1.4), 7.1 (7.1.6);
   # redis:7.4 = 7.4.11; valkey/valkey:8.1 = 8.1.10.
+  #
+  # The newest-Ruby legs float on the "4.0" series, spelled the same way as
+  # the `test`, `parity` and `lint` jobs: setup-ruby resolves it to the
+  # newest 4.0.x it has builds for. A full patch here can outrun the
+  # builders — 4.0.9 was read off rubygems.org, but the newest builder
+  # release for ubuntu-24.04 was 4.0.7, so setup-ruby failed both 4.0 legs
+  # with "Unknown version 4.0.9" (#618). The 3.2 floor stays full-pinned: a
+  # floor that floats could stop testing the gemspec's actual minimum.
   compat:
     name: compat (ruby ${{ matrix.ruby }}, rails ${{ matrix.rails }}, ${{ matrix.backend }})
     needs: detect
@@ -269,12 +277,12 @@ jobs:
             backend: redis
             image: redis:7.4
             ping: redis-cli ping
-          - ruby: "4.0.9"
+          - ruby: "4.0"
             rails: "7.1"
             backend: redis
             image: redis:7.4
             ping: redis-cli ping
-          - ruby: "4.0.9"
+          - ruby: "4.0"
             rails: "8.1"
             backend: valkey
             image: valkey/valkey:8.1
