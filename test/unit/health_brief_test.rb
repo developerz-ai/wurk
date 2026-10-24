@@ -30,9 +30,11 @@ require 'tmpdir'
 #      `detect changed paths` job's conclusion, every gated job's conclusion
 #      and every gated job's STEP conclusions. CI gates those jobs per STEP
 #      (test.yml:153-157), so a dup'd push reports the gated jobs as
-#      `success` with every step `skipped` — a job-level `skipped` is a shape
-#      no CI run emits, and a classifier reading it graded every dup as a run
-#      that executed its gates. The dup signature REQUIRES `detect changed
+#      `success` with every gated step `skipped` — the runner's own `Set up
+#      job` and `Complete job` steps excepted, which conclude `success` on a
+#      job that did nothing. A job-level `skipped` is a shape no CI run
+#      emits, and a classifier reading it graded every dup as a run that
+#      executed its gates. The dup signature REQUIRES `detect changed
 #      paths` to conclude success. A failed or cancelled detect publishes no
 #      outputs, `needs:` skips every dependent before it starts, and the job
 #      list comes back with the gated jobs skipped and carrying no steps.
@@ -123,8 +125,10 @@ class HealthBriefTest < Minitest::Test
 
   def test_dup_push_run_with_every_gated_step_skipped_is_duplicate_skipped
     # A run whose `detect changed paths` concluded success and whose every
-    # gated job reported `success` with every one of its steps `skipped`
-    # reused a tree that already passed that workflow. CI gates those jobs per
+    # gated job reported `success` with every one of its steps `skipped` —
+    # the runner's own `Set up job` and `Complete job` excepted, both of
+    # which conclude `success` on a job whose gate never ran — reused a tree
+    # that already passed that workflow. CI gates those jobs per
     # STEP (test.yml:153-157), so that — not a job-level `skipped` — is the
     # shape a dup'd push produces. It is neither a green the row did not earn
     # nor a failure: the verdict names the reuse and the push files no ask.
@@ -1685,8 +1689,11 @@ class HealthBriefTest < Minitest::Test
   # job PER STEP (`RUN: needs.detect.outputs.dup != 'true'` with
   # `if: env.RUN == 'true'` on each step — test.yml:153-157), so a job whose
   # gate did not run still reports `success` and every one of its steps reports
-  # `skipped`. That is the shape a dup'd push produces; the job-level
-  # `skipped` this fixture used to fabricate never occurs.
+  # `skipped` — except the runner's own `Set up job` and `Complete job`, the
+  # steps bracketing every job, which conclude `success` even here. That is
+  # the shape a dup'd push produces; the job-level `skipped` this fixture
+  # used to fabricate never occurs, and a `gate_steps` filter excepting only
+  # `Set up job` graded a dup'd run that carries `Complete job` as `executed`.
   # `gate:` is what the gated jobs' own step concluded — `skipped` when the
   # gate did not run, `success` when it did — and the job's own conclusion
   # follows it, except for a skipped gate: a job whose steps were all skipped
@@ -1698,7 +1705,8 @@ class HealthBriefTest < Minitest::Test
   def jobs_json(detect:, gate:, watcher: false)
     job = gate == 'failure' ? 'failure' : 'success'
     steps = [{ 'name' => 'Set up job', 'conclusion' => 'success' },
-             { 'name' => 'run the gate', 'conclusion' => gate }]
+             { 'name' => 'run the gate', 'conclusion' => gate },
+             { 'name' => 'Complete job', 'conclusion' => 'success' }]
 
     jobs = [{ 'name' => 'detect changed paths', 'conclusion' => detect },
             { 'name' => 'test + coverage (latest ruby/rails)', 'conclusion' => job, 'steps' => steps },
