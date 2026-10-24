@@ -55,6 +55,11 @@ module DemoSentryPolicy
   # A VALUE that is personal data: an email address.
   PERSONAL_DATA = /[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}/
 
+  # A request field holds credential material and the scrubbed copy cannot be
+  # written back onto the request. before_send rescues it and drops the event:
+  # an event that cannot be scrubbed is not sent.
+  class UnscrubbedRequest < StandardError; end
+
   module_function
 
   # --- The gate -----------------------------------------------------------
@@ -134,11 +139,31 @@ module DemoSentryPolicy
     request = field(event, :request)
     return unless request
 
-    headers = field(request, :headers)
-    request.headers = scrub_map(headers) if headers.is_a?(::Hash) && request.respond_to?(:headers=)
+    scrub_request_field(request, :headers)
+    scrub_request_field(request, :cookies)
+  end
 
-    cookies = field(request, :cookies)
-    request.cookies = scrub_map(cookies) if cookies.is_a?(::Hash) && request.respond_to?(:cookies=)
+  # One request field, in whichever shape the request arrives: the SDK's
+  # request object, or a plain hash — an event reconstructed from JSON has a
+  # hash where the SDK would put its request object, and its Authorization
+  # header must be scrubbed all the same. `field` reads only methods, so the
+  # hash shape is read and written by key.
+  def scrub_request_field(request, name)
+    values = request.is_a?(::Hash) ? dig_key(request, name) : field(request, name)
+    return unless values.is_a?(::Hash)
+
+    scrubbed = scrub_map(values)
+    return if scrubbed == values || write_request_field(request, name, scrubbed)
+
+    raise UnscrubbedRequest, "cannot write the scrubbed #{name} back onto #{request.class}"
+  end
+
+  def write_request_field(request, name, value)
+    return replace_key(request, name, value) if request.is_a?(::Hash)
+    return unless request.respond_to?(:"#{name}=")
+
+    request.public_send(:"#{name}=", value)
+    value
   end
 
   # Header and cookie maps share one rule: a credential-looking name or a

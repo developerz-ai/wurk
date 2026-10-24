@@ -37,6 +37,18 @@ class DemoSentryTest < Wurk::Test::UnitCase
     end
   end
 
+  # A request object that only reads: the policy can see the credentials but
+  # has nowhere to put the scrubbed copy, so the event must be dropped rather
+  # than sent with them (fail closed).
+  class ReadOnlyRequest
+    attr_reader :headers, :cookies
+
+    def initialize(headers, cookies)
+      @headers = headers
+      @cookies = cookies
+    end
+  end
+
   # A stand-in for the sentry-ruby SDK: it records what the initializer asked
   # it to do, so a test can assert the SDK was never initialized.
   module FakeSdk
@@ -246,6 +258,58 @@ class DemoSentryTest < Wurk::Test::UnitCase
     scrubbed = DemoSentryPolicy.before_send(event)
 
     assert_equal({ 'theme' => 'dark' }, scrubbed.request.cookies)
+  end
+
+  # =====================================================================
+  # Scrubbing: a hash-shaped request
+  #
+  # An event reconstructed from JSON carries its request as a plain hash,
+  # not the SDK's request object — its credentials must be scrubbed all the
+  # same, even though `field` reads only methods.
+  # =====================================================================
+
+  def test_scrubs_a_hash_shaped_request
+    event = event_for('SendReceiptJob')
+    event.request = {
+      'headers' => { 'Authorization' => 'Bearer abcdef', 'Accept' => 'application/json' },
+      'cookies' => { 'session' => 'abc123', 'theme' => 'dark' }
+    }
+
+    scrubbed = DemoSentryPolicy.before_send(event)
+
+    assert_equal({ 'Accept' => 'application/json' }, scrubbed.request['headers'])
+    assert_equal({ 'theme' => 'dark' }, scrubbed.request['cookies'])
+  end
+
+  def test_scrubs_a_hash_shaped_request_keyed_by_symbols
+    event = event_for('SendReceiptJob')
+    event.request = { headers: { 'X-Api-Key' => 'k', 'Accept' => 'text/html' } }
+
+    scrubbed = DemoSentryPolicy.before_send(event)
+
+    assert_equal({ 'Accept' => 'text/html' }, scrubbed.request[:headers])
+  end
+
+  def test_keeps_a_hash_shaped_request_with_nothing_to_scrub
+    event = event_for('SendReceiptJob')
+    event.request = { 'headers' => { 'Accept' => 'application/json' }, 'cookies' => { 'theme' => 'dark' } }
+
+    assert_same event, DemoSentryPolicy.before_send(event)
+    assert_equal({ 'Accept' => 'application/json' }, event.request['headers'])
+  end
+
+  def test_drops_an_event_whose_read_only_request_holds_credentials
+    event = event_for('SendReceiptJob')
+    event.request = ReadOnlyRequest.new({ 'Authorization' => 'Bearer abcdef' }, {})
+
+    assert_nil DemoSentryPolicy.before_send(event)
+  end
+
+  def test_keeps_an_event_whose_read_only_request_holds_nothing_sensitive
+    event = event_for('SendReceiptJob')
+    event.request = ReadOnlyRequest.new({ 'Accept' => 'application/json' }, {})
+
+    assert_same event, DemoSentryPolicy.before_send(event)
   end
 
   # =====================================================================
