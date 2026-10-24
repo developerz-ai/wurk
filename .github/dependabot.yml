@@ -69,9 +69,9 @@ updates:
   # (`grep -rn 'bun-version\|^bun' .github mise.toml` plus
   # `grep -rn 'oven/bun' docs/deployment.md` finds them all).
   # test/unit/toolchain_pins_test.rb fails the docker PR until every pin names
-  # the same version (test.yml's `ruby` paths-filter lists the Dockerfile, so
-  # the suite runs on it), so the PR stays red until whoever or whatever is
-  # fixing it pushes the matching pin edits to the dependabot branch.
+  # the same version (test.yml's `ruby` paths-filter pulls in the Dockerfile).
+  # The PR stays red until the maintainer agent (.dz/maintainer/maintainer.yml)
+  # pushes the matching pin edits: waiting on us, never author inactivity.
   # Ruby major updates are ignored: release.yml holds the release job on 3.4
   # on purpose, so a major bump would break the gem publish job until pages/
   # release are revisited.

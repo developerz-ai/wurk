@@ -121,6 +121,18 @@ require 'fileutils'
 #      array is inspected, so a half-failed read (the stub's `error-empty` and
 #      `error-run` shapes) grades `verdict unknown`: never the named `no run:`
 #      outcome, never a verdict graded off the emitted bytes.
+#  11. A past-budget red DOCKER bump whose title matches a bun-pin shape
+#      (`^Bump <dep>/<name> from` or ` group with .* updates$`) is WAITING ON
+#      US, not stuck: dependabot cannot edit the four matching bun pin sites
+#      (dependabot.yml:63-74 — the bun-version inputs in test.yml and
+#      release.yml, bun in mise.toml, the oven/bun FROM in docs/deployment.md),
+#      so the row prints `Unhealthy: Docker bump #<n> is waiting on us: ...`
+#      and suppresses the stuck line for that PR — the ask names the owner
+#      (the maintainer agent pushes the pin edits to the branch) instead of
+#      filing author-inactivity against the actor that cannot act. The
+#      predicate still requires the FAILURE rollup and the strictly-past age,
+#      so a young red docker PR prints neither verdict, and a red docker PR
+#      with a non-matching title stays genuinely stuck.
 #
 # One more property, added with the run URLs: every job-list row must request
 # BOTH `url` and `databaseId` and print the URL on EVERY verdict — dup,
@@ -1930,6 +1942,97 @@ class HealthBriefTest < Minitest::Test
     refute_includes out, 'Unhealthy',
                     'an expected-red PR is the headline of dependabot.yml:63-72, not a ' \
                     "regression the row should file (stdout=#{out.inspect})"
+
+    refute_includes out, 'is waiting on us',
+                    'waiting-on-us requires the age to be strictly PAST the budget: a 5d red ' \
+                    'docker PR prints neither verdict — not stuck, and not waiting on us ' \
+                    "(stdout=#{out.inspect})"
+  end
+
+  def test_past_budget_red_docker_bump_with_a_bun_pin_title_is_waiting_on_us
+    # dependabot.yml:63-74: the docker bump moves the Dockerfile's oven/bun
+    # FROM, but the four matching bun pins (bun-version: in test.yml and
+    # release.yml, bun in mise.toml, the oven/bun FROM in docs/deployment.md)
+    # are sites dependabot cannot edit, so toolchain_pins_test.rb keeps the PR
+    # red until the maintainer agent pushes the pin edits to the branch. Past
+    # the 37d budget that is not author-inactivity for dependabot to fix — it
+    # is waiting on US — and the row must say so instead of printing stuck.
+    pr = dependabot_pr(number: 7701, title: 'Bump oven/bun from 1.4.1 to 1.4.2 in /',
+                       branch: 'dependabot/docker/oven/bun', age_days: 40, sha: SHA_DOCKER)
+    out, _err, status = run_row15(prs: [pr])
+
+    assert_predicate status, :success?,
+                     "row 15's command must run cleanly (status=#{status.inspect})"
+
+    assert_includes out, 'Unhealthy: Docker bump #7701 is waiting on us',
+                    'a 40d red docker PR whose title matches the bun-pin shape is waiting on ' \
+                    "us, not stuck (stdout=#{out.inspect})"
+
+    assert_includes out, 'push the pin edits to the branch',
+                    'the waiting verdict must name the next action — the maintainer agent ' \
+                    "pushes the matching pin edits to the dependabot branch (stdout=#{out.inspect})"
+
+    assert_includes out, '(age 40d > 37d budget for docker)',
+                    'the waiting line must carry the age and the docker budget, so a reader ' \
+                    "can see WHY without re-running the command (stdout=#{out.inspect})"
+
+    refute_includes out, 'Dependabot is stuck on #7701',
+                    'the waiting classification must SUPPRESS the stuck line for the same PR: ' \
+                    'one verdict per PR, and this PR is not author-inactivity ' \
+                    "(stdout=#{out.inspect})"
+  end
+
+  def test_past_budget_red_docker_bump_without_a_matching_title_is_stuck
+    # The waiting predicate needs the title shape as well as the age and the
+    # red rollup: `Bump ruby from 3.4.1 to 3.4.2 in /` names a dependency with
+    # no slash in it and no group, so nothing about the PR is waiting on us —
+    # dependabot could fix a red ruby bump itself. Past budget and red, it is
+    # genuinely stuck.
+    pr = dependabot_pr(number: 7702, title: 'Bump ruby from 3.4.1 to 3.4.2 in /',
+                       branch: 'dependabot/docker/ruby', age_days: 40, sha: SHA_DOCKER)
+    out, _err, status = run_row15(prs: [pr])
+
+    assert_predicate status, :success?,
+                     "row 15's command must run cleanly (status=#{status.inspect})"
+
+    stuck = out.lines.map(&:chomp).select { |line| line.start_with?('Unhealthy:') }
+
+    assert_equal 1, stuck.size,
+                 "one stuck PR prints one Unhealthy line; got #{out.lines.inspect}"
+
+    assert_match(/\AUnhealthy: Dependabot is stuck on #7702\b/, stuck.first,
+                 'a red docker PR past its budget whose title matches neither bun-pin shape ' \
+                 "is genuinely stuck; got #{stuck.first.inspect}")
+
+    assert_match(/\(age 40d > 37d budget for docker\)\z/, stuck.first,
+                 'the stuck line still carries the age and the docker budget; ' \
+                 "got #{stuck.first.inspect}")
+
+    refute_includes out, 'is waiting on us',
+                    'a non-bun-pin docker PR must not classify waiting-on-us; ' \
+                    "(stdout=#{out.inspect})"
+  end
+
+  def test_a_grouped_docker_bump_is_waiting_on_us
+    # The docker ecosystem is grouped (dependabot.yml:83-87), and dependabot
+    # titles the group PR after the ecosystem: `Bump the docker group with N
+    # updates`. That title matches the ` group with .* updates$` waiting
+    # shape, so a 40d red grouped docker bump classifies waiting-on-us exactly
+    # like the `oven/bun` form.
+    pr = dependabot_pr(number: 7703, title: 'Bump the docker group with 2 updates',
+                       branch: 'dependabot/docker/minor-and-patch', age_days: 40, sha: SHA_DOCKER)
+    out, _err, status = run_row15(prs: [pr])
+
+    assert_predicate status, :success?,
+                     "row 15's command must run cleanly (status=#{status.inspect})"
+
+    assert_includes out, 'Unhealthy: Docker bump #7703 is waiting on us',
+                    'the grouped title matches the second bun-pin shape, so the PR classifies ' \
+                    "waiting-on-us; got stdout=#{out.inspect}"
+
+    refute_includes out, 'Dependabot is stuck on #7703',
+                    'a waiting-on-us PR never prints the stuck line ' \
+                    "(stdout=#{out.inspect})"
   end
 
   def test_pr_past_ecosystem_budget_and_red_is_reported_stuck
@@ -3466,7 +3569,9 @@ class HealthBriefTest < Minitest::Test
   # Row 15 grades dependabot PRs against per-ecosystem budgets derived from
   # dependabot.yml (28d bundler, 14d bun, 37d github-actions, 37d docker) and
   # REPORTS what it read: a summary line, one line per open PR, and one
-  # `Unhealthy:` line per stuck PR. The stub `gh` answers
+  # `Unhealthy:` line per red PR past its budget — `Docker bump #<n> is
+  # waiting on us` for a docker bump whose title matches the bun-pin shape,
+  # `Dependabot is stuck on #<n>` otherwise. The stub `gh` answers
   # `gh pr list --state open --app dependabot --json ...` from
   # $WURK_TEST_FIXTURES/dependabot.prs, so the command runs against fixed
   # fixtures instead of the API — fixtures shaped like the list `gh` really
