@@ -417,8 +417,11 @@ class MetricsStatsdTest < Wurk::Test::UnitCase
   end
 
   # Same invariant as MetricsHistoryTest's — see that file for the full
-  # `Chain#traverse` reasoning. Limiter (`lib/wurk.rb:291`) is added before
-  # Statsd (`:299`), so Limiter is OUTER: `Wurk::Limiter::Rescheduled`, raised
+  # `Chain#traverse` reasoning. Limiter is added at `lib/wurk.rb` —
+  # `Wurk.configuration.server_middleware.add(Wurk::Limiter::ServerMiddleware)`
+  # (:335) — before Statsd at `lib/wurk.rb` —
+  # `Wurk.configuration.server_middleware.add(Wurk::Metrics::Statsd)` (:351).
+  # Limiter is OUTER: `Wurk::Limiter::Rescheduled`, raised
   # fresh from Limiter's own `rescue`, is already outside Statsd's stack frame
   # by the time it exists and can never be the exception Statsd#call sees.
   def test_limiter_middleware_is_registered_outer_of_metrics_statsd

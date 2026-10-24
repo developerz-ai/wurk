@@ -502,7 +502,10 @@ class MetricsHistoryTest < Wurk::Test::UnitCase
   # way *out* (`lib/wurk/middleware/chain.rb#traverse`), so the entry with the
   # *lower* index sees an exception *last*, only after every higher-index
   # entry it wraps has already run its own rescue/ensure. Limiter is added at
-  # `lib/wurk.rb:291`, History at `:306` — Limiter's index is lower, so
+  # `lib/wurk.rb` — `Wurk.configuration.server_middleware.add(Wurk::Limiter::ServerMiddleware)`
+  # (:335) — and History at `lib/wurk.rb` —
+  # `Wurk.configuration.server_middleware.add(Wurk::Metrics::History)` (:358).
+  # Limiter's index is lower, so
   # `Wurk::Limiter::Rescheduled`, raised fresh from inside Limiter's own
   # `rescue` clause, is already outside History's (and Statsd's) stack frame
   # and can never be the exception their `call` sees. Reorder History ahead
