@@ -7,7 +7,7 @@ is `RELEASE.md`; this brief only decides *when*.
 ## Decide
 
 ```bash
-# Resolve $last via the GitHub API for the canonical value, then verify the ref (peel to a commit), the release (gem-less marker), the release baseline (the peeled commit IS the release commit for the tag's version), and the diff window against main. The tag listing is PAGINATED: `git/matching-refs` returns its refs in pages, and `--paginate` is what makes the listing complete — it follows the API's link headers through every page and merges them into one array, so a matching tag that sits on a later page is still enumerated before `sort -V | tail -1` picks the highest version. Without it only the first page is returned and the highest tag SEEN may not be the highest tag that EXISTS.
+# Resolve $last via the GitHub API for the canonical value, then verify the ref (peel to a commit), the release state (zero assets => gem-less => abort), the release baseline (the peeled commit IS the release commit for the tag's version), and the diff window against main. The tag listing is PAGINATED: `git/matching-refs` returns its refs in pages, and `--paginate` is what makes the listing complete — it follows the API's link headers through every page and merges them into one array, so a matching tag that sits on a later page is still enumerated before `sort -V | tail -1` picks the highest version. Without it only the first page is returned and the highest tag SEEN may not be the highest tag that EXISTS.
 last=$(gh api --paginate repos/developerz-ai/wurk/git/matching-refs/tags/ \
   | jq -r '.[] | select(.ref | startswith("refs/tags/v")) | .ref | sub("^refs/tags/"; "")' \
   | sort -V \
@@ -25,12 +25,12 @@ else
   commit_sha=""
 fi
 [ "$commit_sha" != "null" ] && [ -n "$commit_sha" ] || { echo "::error::tag $last does not resolve to a commit"; exit 1; }
-# Verify the release: gem-less marker = author=developerz-ai[bot] OR assets.length=0 (RELEASE.md:180-194). Verify the lookup and its fields before the marker check: with both fields empty (a failed `gh release view`, a missing release), both marker comparisons would pass vacuously and an unverified tag would anchor the decision.
-rel=$(gh release view "$last" --json author,assets) || { echo "::error::release lookup for $last failed"; exit 1; }
+# Verify the release state (RELEASE.md:180-194). The defect trigger is the ASSET COUNT, not the author: a Release with ZERO assets is gem-less (the only state the release-deletion runbook may touch — and only once the RubyGems per-version probe confirms the version was never published, since a succeeded gem push whose Release asset upload failed also leaves zero assets), and a Release that CARRIES the .gem is a real release whatever wrote it — including a `developerz-ai[bot]`-authored one, which is the sanctioned break-glass manual publish (RELEASE.md's "Break-glass manual publish"). The author is read for CONTEXT ONLY and never decides the verdict: treating a bot author as gem-less aborts on a perfectly good release and hides the window behind a false defect. Verify the lookup and its fields before the asset check: with both fields empty (a failed `gh release view`, a missing release), the asset comparison would pass vacuously and an unverified tag would anchor the decision.
+rel=$(gh release view "$last" --json author,assets) || { echo "::error::release lookup for $last failed — no GitHub Release was read, so its state is UNCLASSIFIED: either a release.yml preflight no-op (the version is already on RubyGems), a break-glass manual publish (RELEASE.md's 'Break-glass manual publish'), or a failure before the Release was created. RubyGems is the authority — probe https://rubygems.org/api/v2/rubygems/wurk/versions/<version>.json and read the last release.yml run before concluding anything; RELEASE.md's 'Release states' section classifies each state and names the destructive-recovery runbook"; exit 1; }
 author=$(echo "$rel" | jq -r '.author.login')
 nassets=$(echo "$rel" | jq -r '.assets | length')
 [ -n "$author" ] && [ "$author" != "null" ] && [ -n "$nassets" ] && [ "$nassets" != "null" ] || { echo "::error::release $last lookup returned no parsable author/assets"; exit 1; }
-[ "$author" != "developerz-ai[bot]" ] && [ "$nassets" != "0" ] || { echo "::error::release $last is gem-less (author=$author, assets=$nassets)"; exit 1; }
+[ "$nassets" != "0" ] || { echo "::error::release $last is gem-less (assets=$nassets, author=$author) — zero assets is the gem-less marker but not proof nothing shipped: a succeeded gem push whose Release asset upload failed leaves zero assets too. The release-deletion runbook in RELEASE.md applies to this state ONLY after the RubyGems per-version probe (https://rubygems.org/api/v2/rubygems/wurk/versions/<version>.json) confirms the version was never published"; exit 1; }
 # Verify the release baseline before any window work: the peeled commit must be the RELEASE commit for the tag's version. A tag alone proves little — a re-used or hand-cut tag points at a commit that never shipped a version, and every window computed from it is a window since the wrong baseline. The version is the tag without its leading `v`, with git's hyphenated prerelease separator mapped to RubyGems' dot (the same mapping `tag_matches_version!` applies, so the two cannot disagree). The version's dated CHANGELOG heading `## [<version>] - <date>` must be present at the peeled commit, carry that commit's own committer date, and be absent at the commit's first parent — the commit introduced it. Every failure, including a read that cannot run, aborts here, before the Compare call and the local fast path, so no window is ever computed on an unverified baseline.
 version=$(printf '%s' "${last#v}" | tr '-' '.')
 commit_json=$(gh api "repos/developerz-ai/wurk/commits/$commit_sha") || { echo "::error::baseline commit $commit_sha of $last could not be read"; exit 1; }
@@ -67,6 +67,23 @@ carry the version's dated CHANGELOG heading, the heading's date must be that com
 committer date, and the heading must be absent at the commit's first parent — the commit
 introduced it. A baseline that cannot be verified aborts the block before any window is computed,
 so the decision falls to the unreadable-window row of the table below, never to an empty window.
+
+The release check classifies the Release's state instead of guessing at it. Zero assets is the
+gem-less marker and the only state the release-deletion runbook in RELEASE.md may ever touch —
+but zero assets alone is not proof that no gem shipped: release.yml pushes the gem BEFORE it
+creates the Release and uploads the `.gem` asset, so a push that succeeded and an upload that
+failed leave a zero-asset Release on a version RubyGems has already burned, voiding the
+runbook's own safety argument. The runbook therefore applies to this state only after the
+per-version RubyGems probe has confirmed the version was never published — the precondition
+RELEASE.md's "Release states" table puts on the zero-asset row. A Release that carries the `.gem`
+is a real release whoever authored it, and a `developerz-ai[bot]`-authored one is the sanctioned
+break-glass manual publish, not a defect. The author is read for context only; it never decides
+the verdict, because a false "gem-less" abort would hide the window behind a defect that does not
+exist. When no Release can be read at all, the state stays unclassified: a release.yml preflight
+no-op (the version is already on RubyGems), a break-glass publication, and a failure before the
+Release was created are all still open. RubyGems is the authority — probe the per-version endpoint
+and read the last release.yml run before concluding anything, and never treat the absence of a
+Release as proof that nothing was published.
 
 `$last` is resolved from a PAGINATED listing, and the pagination is the whole reason the listing is
 complete. `git/matching-refs/tags` serves its refs in pages; `gh api --paginate` follows the API's
