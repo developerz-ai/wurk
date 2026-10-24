@@ -109,6 +109,16 @@ the Deployment's commit ref and the served-version probe are deliberately
 different checks: the first records what CI built, the second proves what the
 demo is actually running.
 
+**This is the CI probe's expected side, and it is not the only one.** The
+standalone read-only check in [The served-version check
+(read-only)](#the-served-version-check-read-only) answers a different
+question — "does the demo serve *this checkout's* version?" — and therefore
+reads its expected side from `lib/wurk/version.rb` instead of the lock. The
+two disagree by design: CI asks whether the *image it just built* is the one
+being served, the standalone check asks whether the *checkout* is what the
+demo runs. A push that changes app or lib code without a version bump moves
+the two apart, and that gap is exactly what each one is there to report.
+
 The outcome is written back to the Deployment:
 
 | Probe result | Deployment status | Job |
@@ -125,6 +135,63 @@ aborting on a transient blip.
 create the Deployment and post its statuses. The workflow-level block and the
 `authorize` job are unchanged (`contents: read`): no `id-token`, no
 `actions: write`.
+
+### The served-version check (read-only)
+
+This is a second, independent check — not the CI probe above. The CI probe
+compares the demo against the version the *image it just built* bundles; this
+one compares the demo against the version *this checkout* declares. The demo's
+own endpoint answers both:
+
+```text
+GET https://wurk.demo.developerz.ai/wurk/api/meta
+```
+
+It is **public, unauthenticated, and GET-only** — no token, no session, no
+header. It answers with the running gem's version: `/wurk/api/meta` renders
+`version: ::Wurk::VERSION`
+([`app/controllers/wurk/api_controller.rb`](../app/controllers/wurk/api_controller.rb),
+line 53), so the payload reports the version the *running* process booted with.
+
+The expected side is read from this checkout's
+[`lib/wurk/version.rb`](../lib/wurk/version.rb) — the same extraction the
+release check uses, so the two never drift apart:
+
+```bash
+grep -oE "[\"'][0-9][^\"']*[\"']" lib/wurk/version.rb | head -1 | tr -d "\"'"
+```
+
+That is deliberately **not** the CI probe's expected side. The CI probe reads
+the version out of [`demo/Gemfile.lock`](../demo/Gemfile.lock) — the gem the
+built image actually installs — because it asks whether the image it built is
+the one being served. This check asks whether the *checkout* is what the demo
+runs, so it reads `lib/wurk/version.rb`. A push that changes app or lib code
+without a version bump moves the two apart, and each check reports the gap
+from its own side.
+
+Comparing the two gives exactly three verdicts:
+
+| Verdict | What it means | Grade |
+|---|---|---|
+| **match** — the reported `version` equals the extracted one | the demo is serving this checkout's version | healthy (`success`) |
+| **mismatch** — the probe answered with a parsable `version` that differs | the demo is serving a *different* version than the checkout — a stale digest, or a deploy that never landed | **not healthy** (`Unhealthy`), naming both the served version and the expected one |
+| **unavailable / invalid** — the transport failed, the status was not 200, the body was not exactly one JSON object (leading or trailing garbage included), or the JSON carried no usable `version` | the probe could not establish anything | `verdict unknown` — **never** a green and never a success; the next checkup re-runs it |
+
+An unreachable probe is explicitly **not** healthy: "I could not tell" is not
+"it is fine", and it must never be reported as a match. The mismatch verdict
+names both sides because the two numbers are the whole diagnosis — the version
+being served and the version that was expected.
+
+**This check is READ-ONLY.** It holds no cluster credentials, no `DOCR_TOKEN`
+and no `ARGOCD_*` secret; it needs no GitHub token and no deployment
+authority, and it grants none. It reads one public JSON endpoint and grades
+what came back — it cannot build an image, push a tag, sync an ArgoCD
+Application, or change anything the demo serves. The demo app is read-only in
+the same sense: `c.read_only = true`
+([`demo/config/initializers/wurk.rb`](../demo/config/initializers/wurk.rb))
+plus `WURK_WEB_READ_ONLY=1` makes every mutating endpoint 403 at the
+middleware layer, so even a request that tried to mutate the demo would be
+refused. The health checkup that runs this probe sends a GET and nothing else.
 
 ### One-time GitHub setup (repo admin)
 
