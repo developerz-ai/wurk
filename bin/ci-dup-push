@@ -7,7 +7,7 @@
 #
 # Every failure path prints `false` (run everything): a wrong `true` would
 # skip the only gate a direct push to main ever gets. `set -e` is deliberately
-# NOT used. Needs `gh` (preinstalled on GitHub runners) and GH_TOKEN.
+# NOT used. Needs `gh` and `jq` (both preinstalled on GitHub runners) and GH_TOKEN.
 set -uo pipefail
 
 workflow="${1:-.github/workflows/test.yml}"
