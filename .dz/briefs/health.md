@@ -174,10 +174,17 @@ requires FIRST running, exactly, `gh api --paginate "repos/developerz-ai/wurk/is
 rejects `--paginate` and truncates at 30, and the `/issues` route returns pull requests alongside
 issues, hence the filter. If any returned title equals the signal's title exactly, the ask already
 exists — never file a second ask while one with this title is open. Because the dedupe match is
-exact equality on the title, the title is the signal's stable name, identical on every occurrence
-(`main is red`, `main is green only via a dup'd push`, `demo frozen: no sha-<7> image tag`,
-`release did not publish`); nothing that changes run to run may appear in it. The body carries the
-command, its output, the run URL, the headSha and the version.
+exact equality on the title, every signal's title is a stable name, identical on every occurrence;
+nothing that changes run to run (sha, run URL, version, PR age) may appear in it — those
+live in the body. The stable titles are: row 8 files `main is red` or
+`main is green only via a dup'd push`; row 9 files `release did not publish`; row 10 files
+`RubyGems does not serve Wurk::VERSION` (the constant's name, never its value); row 11 files
+`demo frozen: no sha-<7> image tag`; row 12 files per workflow so the two lanes stay
+distinguishable — `topology.yml is red` / `topology.yml is green only via a dup'd push`
+and `ecosystem.yml is red` / `ecosystem.yml is green only via a dup'd push`; row 13 files
+one ask per stuck PR titled `Dependabot is stuck on #<n>`, where the PR number is stable for
+the lifetime of that stuck PR and keeps distinct stuck PRs distinguishable. The body carries
+the command, its output, the run URL, the headSha, the version and the PR age.
 
 A red `main` comes first: nothing releases from it. The checkup lane's ONLY admissible
 response to a red `main` or a failed release is the filing rule above: file one deduped ask for a
