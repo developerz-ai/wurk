@@ -72,6 +72,6 @@ Before filing, run exactly:
 gh api --paginate "repos/developerz-ai/wurk/issues?state=open" | jq -r '.[] | select(.pull_request == null) | .title'
 ```
 
-the same lookup `.dz/briefs/health.md:171-180` uses — `gh issue list` truncates at 30 and cannot
-paginate. If a returned title equals the ask's title exactly, the ask already exists: do not file
-a second one.
+the same lookup the filing rule in `.dz/briefs/health.md` runs — `gh issue list` truncates at 30
+and cannot paginate. If a returned title equals the ask's title exactly, the ask already exists:
+do not file a second one.
