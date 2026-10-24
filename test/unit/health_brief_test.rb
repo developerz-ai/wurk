@@ -1942,14 +1942,18 @@ class HealthBriefTest < Minitest::Test
   # other Ruby failure, so the rollup alone cannot tell this from an unrelated
   # failure. The second read is the failing CI JOB's own log — `gh run view
   # <id> --job <job id> --log-failed` — and the discriminator is the failing
-  # test FILE it names.
+  # test FILE it names. The run's SIBLING jobs are clean here (`parity:,
+  # lint:` success): the pins assertion must be the run's ONLY red check for
+  # the carve-out to fire at all.
   def test_past_budget_docker_pr_whose_only_red_check_is_the_pins_assertion_is_awaiting_pin_edits
     pr = dependabot_pr(number: 7701, title: 'Bump oven/bun from 1.4.1 to 1.4.2 in /',
                        branch: 'dependabot/docker/oven/bun', age_days: 40, sha: SHA_DOCKER)
 
-    out, err, status = run_row15(prs: [pr], runs: { SHA_DOCKER => failed_run_log(
+    pins_log = failed_run_log(
       'Failure: test_every_bun_pin_names_the_same_version [test/unit/toolchain_pins_test.rb:73]:'
-    ) })
+    )
+    out, err, status = run_row15(prs: [pr], parity: 'success', lint: 'success',
+                                 runs: { SHA_DOCKER => pins_log })
 
     assert_predicate status, :success?,
                      "row 15's command must run cleanly (status=#{status.inspect}, " \
@@ -2026,19 +2030,16 @@ class HealthBriefTest < Minitest::Test
                     "an unreadable discriminator read files no ask (stdout=#{out.inspect})"
   end
 
-  # The discriminator reads the `test + coverage (latest ruby/rails)` JOB's
-  # failed log, not the run's. A docker PR also runs `parity (oracle)`
-  # (test.yml:381-419) and `lint (rubocop)`, and a run-level `--log-failed`
-  # mixes every failed job of the run into one log — so a sibling job's
-  # failure would name a second test file and the carve-out could never fire
-  # for the shape it exists for. The stub serves the two logs separately, so
-  # a brief that dropped the --job binding reads the aggregate and grades
-  # this PR as STUCK.
-  def test_the_docker_pin_discriminator_reads_the_test_coverage_job_not_the_whole_run
+  # The carve-out fires only when the pins assertion is the run's ONLY red
+  # check. This fixture keeps the job-bound log pins-only but marks `parity
+  # (oracle)` FAILED in the run's job list: a second red check the rollup
+  # already counts, which the row must NOT swallow into the pin-edit
+  # verdict — the PR keeps the stuck verdict and files the Unhealthy ask.
+  def test_past_budget_docker_pr_with_a_failed_parity_job_is_still_stuck
     pr = dependabot_pr(number: 7711, title: 'Bump oven/bun from 1.4.1 to 1.4.2 in /',
                        branch: 'dependabot/docker/oven/bun', age_days: 40, sha: SHA_DOCKER)
 
-    out, err, status = run_row15(prs: [pr], runs: { SHA_DOCKER => failed_run_log(
+    out, err, status = run_row15(prs: [pr], parity: 'failure', runs: { SHA_DOCKER => failed_run_log(
       'Failure: test_every_bun_pin_names_the_same_version [test/unit/toolchain_pins_test.rb:73]:'
     ) })
 
@@ -2046,14 +2047,71 @@ class HealthBriefTest < Minitest::Test
                      "row 15's command must run cleanly (status=#{status.inspect}, " \
                      "stdout=#{out.inspect}, stderr=#{err.inspect})"
 
-    assert_includes out, 'Dependabot #7711 is awaiting matching pin edits',
-                    'the pins assertion failed inside the `test + coverage ' \
-                    '(latest ruby/rails)` job, so the carve-out fires whatever ' \
-                    "the run's other jobs did (stdout=#{out.inspect})"
+    assert_includes out, 'Unhealthy: Dependabot is stuck on #7711',
+                    'a failed `parity (oracle)` job is a second red check the ' \
+                    'carve-out must not swallow — the PR keeps the stuck verdict ' \
+                    "(stdout=#{out.inspect})"
 
-    refute_includes out, 'Dependabot is stuck on #7711',
-                    'a sibling job\'s failure must not poison the discriminator ' \
-                    "into a stuck verdict (stdout=#{out.inspect})"
+    refute_includes out, 'awaiting matching pin edits',
+                    'a sibling job\'s failure must not clear the PR ' \
+                    "(stdout=#{out.inspect})"
+  end
+
+  # The sibling read is not parity-specific: ANY other red check in the run —
+  # `lint (rubocop)` here — keeps the stuck verdict, with the job-bound log
+  # still naming only the pins assertion.
+  def test_past_budget_docker_pr_with_a_failed_lint_job_is_still_stuck
+    pr = dependabot_pr(number: 7707, title: 'Bump oven/bun from 1.4.1 to 1.4.2 in /',
+                       branch: 'dependabot/docker/oven/bun', age_days: 40, sha: SHA_DOCKER)
+
+    out, err, status = run_row15(prs: [pr], lint: 'failure', runs: { SHA_DOCKER => failed_run_log(
+      'Failure: test_every_bun_pin_names_the_same_version [test/unit/toolchain_pins_test.rb:73]:'
+    ) })
+
+    assert_predicate status, :success?,
+                     "row 15's command must run cleanly (status=#{status.inspect}, " \
+                     "stdout=#{out.inspect}, stderr=#{err.inspect})"
+
+    assert_includes out, 'Unhealthy: Dependabot is stuck on #7707',
+                    'a failed `lint (rubocop)` job is a second red check the ' \
+                    'carve-out must not swallow — the PR keeps the stuck verdict ' \
+                    "(stdout=#{out.inspect})"
+
+    refute_includes out, 'awaiting matching pin edits',
+                    "a red sibling job must not clear the PR (stdout=#{out.inspect})"
+  end
+
+  # The discriminator reads the `test + coverage (latest ruby/rails)` JOB's
+  # failed log, not the run's. A docker PR also runs `parity (oracle)`
+  # (test.yml:381-419) and `lint (rubocop)`, and a run-level `--log-failed`
+  # mixes every failed job of the run into one log — so the stub serves the
+  # two logs separately, with the aggregate naming a DIFFERENT test file.
+  # The sibling jobs are clean here, so the job-bound read clears the PR and
+  # a brief that dropped the --job binding reads the aggregate and grades
+  # this pins-only PR STUCK — the binding stays falsifiable instead of
+  # merely documented.
+  def test_the_docker_pin_discriminator_reads_the_test_coverage_job_not_the_whole_run
+    pr = dependabot_pr(number: 7708, title: 'Bump oven/bun from 1.4.1 to 1.4.2 in /',
+                       branch: 'dependabot/docker/oven/bun', age_days: 40, sha: SHA_DOCKER)
+
+    pins_log = failed_run_log(
+      'Failure: test_every_bun_pin_names_the_same_version [test/unit/toolchain_pins_test.rb:73]:'
+    )
+    out, err, status = run_row15(prs: [pr], parity: 'success', lint: 'success',
+                                 runs: { SHA_DOCKER => pins_log })
+
+    assert_predicate status, :success?,
+                     "row 15's command must run cleanly (status=#{status.inspect}, " \
+                     "stdout=#{out.inspect}, stderr=#{err.inspect})"
+
+    assert_includes out, 'Dependabot #7708 is awaiting matching pin edits',
+                    'the pins assertion failed inside the `test + coverage ' \
+                    '(latest ruby/rails)` job and no sibling job went red, so ' \
+                    "the carve-out fires (stdout=#{out.inspect})"
+
+    refute_includes out, 'Dependabot is stuck on #7708',
+                    'with clean siblings the carve-out fires and no stuck line ' \
+                    "is printed (stdout=#{out.inspect})"
   end
 
   # The discriminator\'s run read is bound to the CI workflow. `bench.yml` and
@@ -3829,8 +3887,12 @@ class HealthBriefTest < Minitest::Test
   # fixture, so the read is unreadable and the row must fail closed. `cell:`
   # lets a test run a mutated cell. `jobs_fail` breaks the run's JOB LIST
   # read — the second of the three reads — so the row must fail closed on an
-  # unreadable job list too.
-  def run_row15(prs:, jobs_fail: false, cell: nil, runs: {})
+  # unreadable job list too. `parity:` / `lint:` set the SIBLING jobs'
+  # conclusions in that job list; they default to `success`, because the
+  # pins-only happy path is the expected-red shape only when the run's OTHER
+  # jobs are clean — a red sibling is a second red check the rollup already
+  # counts, and the row must grade the PR stuck instead of clearing it.
+  def run_row15(prs:, jobs_fail: false, cell: nil, runs: {}, parity: 'success', lint: 'success')
     cell ||= command_cell('Dependabot is not stuck', gh_command: 'gh pr list')
 
     run_command(cell, jobs_fail: jobs_fail) do |fixtures|
@@ -3840,7 +3902,7 @@ class HealthBriefTest < Minitest::Test
         job_id = 9101 + index
         write_fixture(fixtures, "commit-#{sha}.runs",
                       JSON.generate([{ 'databaseId' => dbid, 'conclusion' => 'failure' }]))
-        write_fixture(fixtures, "dbid-#{dbid}.jobs", ci_jobs_json(job_id))
+        write_fixture(fixtures, "dbid-#{dbid}.jobs", ci_jobs_json(job_id, parity: parity, lint: lint))
         write_fixture(fixtures, "dbid-#{dbid}.job-#{job_id}.log-failed", log) if log
         # The run-level aggregate `gh run view <id> --log-failed` prints
         # WITHOUT --job: every failed job of the run in one log. It names a
@@ -3859,15 +3921,19 @@ class HealthBriefTest < Minitest::Test
   # `test + coverage (latest ruby/rails)` job the pins assertion runs in
   # (carrying the `id` `gh run view --job` takes) beside the run's other
   # jobs. The row picks the pins job BY NAME, so a run that renamed it
-  # finds no job and fails closed.
-  def ci_jobs_json(job_id)
+  # finds no job and fails closed. `parity:` / `lint:` set the SIBLING
+  # jobs' conclusions; they default to `success` — the carve-out fires
+  # only when the pins assertion is the run's ONLY red check, so the
+  # pins-only shape a test expects to clear the PR needs clean siblings,
+  # and a red sibling is the unrelated-red shape that must stay stuck.
+  def ci_jobs_json(job_id, parity: 'success', lint: 'success')
     jobs = [
       { 'id' => job_id, 'name' => 'test + coverage (latest ruby/rails)',
         'conclusion' => 'failure', 'steps' => [] },
       { 'id' => job_id + 1, 'name' => 'parity (oracle)',
-        'conclusion' => 'failure', 'steps' => [] },
+        'conclusion' => parity, 'steps' => [] },
       { 'id' => job_id + 2, 'name' => 'lint (rubocop)',
-        'conclusion' => 'success', 'steps' => [] }
+        'conclusion' => lint, 'steps' => [] }
     ]
     JSON.generate('total_count' => jobs.size, 'jobs' => jobs)
   end
