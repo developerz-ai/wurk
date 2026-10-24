@@ -25,8 +25,11 @@ require 'yaml'
 #      them: a fenced pull request still needs every one of them green.
 #   5. The `triage:`, `review:`, `release:` and `escalate:` blocks are
 #      unchanged — the fence is a new lane, not a rewrite of the policy.
-#   6. The merge-lane behaviour: a `.github/workflows/**` change is
-#      human-merge-gated, a `lib/`-only change stays auto-eligible.
+#   6. The merge-lane behaviour, exercised through the fence the policy
+#      actually carries — the parsed `pr.human_merge.paths`, not the
+#      FENCE_PATHS constant: a `.github/workflows/**` change is
+#      human-merge-gated, a `lib/`-only change stays auto-eligible, and a
+#      pull request mixing the two is gated by the fenced one.
 #   7. The glob semantics the fence is written against: `**` descends into
 #      nested directories (so `.dz/**` really does fence the agent's own
 #      policy file), `*` stays inside one path segment.
@@ -172,7 +175,7 @@ class HumanMergeLaneTest < Minitest::Test
     UNFENCED_PATHS.each do |path|
       assert_empty fenced_paths(path),
                    "#{path} must match none of the fence patterns " \
-                   "(#{FENCE_PATHS.join(', ')}); a fence that holds it would hold " \
+                   "(#{@paths.join(', ')}); a fence that holds it would hold " \
                    'the release lane or ordinary maintenance'
     end
   end
@@ -248,9 +251,22 @@ class HumanMergeLaneTest < Minitest::Test
   def test_a_workflow_change_is_human_merge_gated
     changed = ['.github/workflows/release.yml']
 
+    # Runs against the parsed `@paths`: if the policy ever drops
+    # `.github/workflows/**`, nothing matches and this fails.
     assert human_merge_gated?(changed),
            'a pull request that touches .github/workflows/** must wait for a ' \
-           'human approving review'
+           'human approving review; the parsed fence matched ' \
+           "#{fenced_paths(changed.first).inspect}"
+  end
+
+  def test_a_pr_that_mixes_fenced_and_unfenced_paths_is_human_merge_gated
+    # The lane's rule is `any?`: one fenced path gates the whole pull request,
+    # however ordinary the rest of it is.
+    changed = ['lib/wurk/client.rb', '.github/workflows/test.yml']
+
+    assert human_merge_gated?(changed),
+           'one fenced path is enough: a pull request that mixes lib/ with a ' \
+           'workflow edit waits for a human approving review'
   end
 
   def test_a_change_to_the_agents_own_policy_is_human_merge_gated
@@ -277,7 +293,22 @@ class HumanMergeLaneTest < Minitest::Test
 
   private
 
-  # The patterns that fence a path, under the matcher this repo checks with.
+  # The patterns from the PARSED POLICY that fence a path — `@paths`, never
+  # the FENCE_PATHS constant, so every lane assertion below exercises the
+  # fence the policy actually carries. Drop `.github/workflows/**` from the
+  # policy and the workflow test fails; add `lib/**` to it and the
+  # auto-eligible test fails. FENCE_PATHS has one job left: the expected
+  # value the parsed fence is pinned against.
+  #
+  # The matcher itself is still this test's, because no shared one exists to
+  # call: the policy is read by the platform, whose matcher is not in this
+  # repo, and neither Ruby matcher speaks the fence's dialect — under
+  # `FNM_PATHNAME` `File.fnmatch?`'s trailing `**` stays inside one segment,
+  # and `Dir.glob`'s trailing `**` does not reach files nested deeper than
+  # one directory. The fence is written against the `gitignore` / GitHub
+  # Actions `paths:` reading, where `dir/**` descends; the two
+  # glob-semantics tests pin that reading so the matcher cannot drift from
+  # it silently.
   #
   # `**` is RECURSIVE here: it crosses directory boundaries. That is the
   # standard path-aware glob (`gitignore`, GitHub Actions `paths:`, the
@@ -293,7 +324,7 @@ class HumanMergeLaneTest < Minitest::Test
   # other pattern is left to `File.fnmatch?`, which keeps `*` inside a single
   # path segment: `*.gemspec` matches `wurk.gemspec` but not `a/b.gemspec`.
   def fenced_paths(path)
-    FENCE_PATHS.select { |pattern| fence_match?(pattern, path) }
+    @paths.select { |pattern| fence_match?(pattern, path) }
   end
 
   # One pattern against one path.
