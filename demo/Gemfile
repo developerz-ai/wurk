@@ -6,10 +6,11 @@ gem "rails", "~> 8.0"
 gem "sqlite3"
 gem "puma"
 
-# Error reporting, required only when WURK_DEMO_REPORT_ERRORS=1
-# (config/initializers/sentry.rb).
-gem "sentry-ruby", require: false
-gem "sentry-rails", require: false
+# Error reporting for the demo, optional. The SDK is loaded only when BOTH
+# WURK_DEMO_REPORT_ERRORS=1 and SENTRY_DSN are set (config/initializers/sentry.rb).
+# Demo-only: the Wurk gem itself never depends on these.
+gem "sentry-ruby", "~> 7.1.0", require: false
+gem "sentry-rails", "~> 7.1.0", require: false
 
 # The whole point of the demo: run on Wurk. Uses the gem from this repo so the
 # demo always tracks the code it's demoing. Swap to `gem "wurk"` to pin a release.
