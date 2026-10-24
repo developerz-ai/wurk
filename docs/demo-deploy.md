@@ -222,10 +222,47 @@ rewrites every image ref onto DOCR.
 
 ### Error reporting
 
-`WURK_DEMO_REPORT_ERRORS=1` turns on Sentry (`demo/config/initializers/sentry.rb`,
-DSN from `SENTRY_DSN`): web errors through `sentry-rails`, job failures through
-`Wurk::Sentry`. `BrokenJob` and `FlakyWebhookJob` fail on purpose, so their
-events are dropped in `before_send`. Unset, the SDK is never loaded.
+The demo reports errors to Sentry, and only when it is told to. Reporting turns
+on **only** when `WURK_DEMO_REPORT_ERRORS=1` *and* `SENTRY_DSN` is set to a
+non-empty value. With the flag alone, the DSN alone, or neither, the demo never
+requires the SDK, never initialises Sentry and never installs the Wurk
+integration — Wurk's server middleware and error handlers stay exactly as they
+were, and the demo's bundle carries `sentry-ruby` / `sentry-rails` without ever
+loading them.
+
+When it is on, web errors go through `sentry-rails` and job failures through
+[`Wurk::Sentry`](sentry.md), installed straight onto `Wurk.configuration` in
+[`demo/config/initializers/sentry.rb`](../demo/config/initializers/sentry.rb) —
+the demo's worker boots with `server?` false, so `Wurk.configure_server` never
+runs there. The policy lives in the demo app
+([`demo/lib/demo_sentry_policy.rb`](../demo/lib/demo_sentry_policy.rb)), not in
+the gem: the gem ships the integration, the demo decides what it is allowed to
+send.
+
+**Dropped events.** Three rules, and nothing else:
+
+1. `BrokenJob` and `FlakyWebhookJob` — both fail on purpose so the Dead and
+   Retries pages are never empty, so their events would bury every real error
+   under a steady stream of intended ones.
+2. Soak-tagged events: a soak or load run marks its own events with a `soak`
+   tag, and those are dropped too.
+3. Everything else is sent.
+
+The job-class list is exactly those two. Other demo failures that are by-design
+are not on it — the nightly export chunk fails a slice of its runs on purpose —
+so those still report.
+
+**Scrubbed material.** Everything that is sent has its sensitive parts removed
+first. Request headers and cookies lose any entry whose name or whose value
+looks like a credential — an `Authorization` or `Cookie` header, an API key, a
+bearer token, a session cookie — while ordinary headers and cookies survive. A
+header or cookie field in any shape but a Hash — a serialized cookie String,
+as a raw request env arrives — has no entries to scrub, so nothing in it can
+be vouched for: a populated one drops the whole event. Job arguments lose any
+argument whose key looks like a credential, or whose value looks like a
+credential or like personal data (an email address); ordinary arguments
+survive. An event that cannot be scrubbed is dropped rather than sent: the
+demo fails closed.
 
 ## ✅ Infra requirements
 
