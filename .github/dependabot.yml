@@ -64,8 +64,10 @@ updates:
   # ruby:3.4-slim-bookworm). When dependabot bumps the oven/bun tag, every other
   # bun pin must move with it, and dependabot cannot edit those: the
   # `bun-version:` inputs in .github/workflows/test.yml and
-  # .github/workflows/release.yml, and `bun` in mise.toml
-  # (`grep -rn 'bun-version\|^bun' .github mise.toml` finds them all).
+  # .github/workflows/release.yml, `bun` in mise.toml, and the `oven/bun` base
+  # image in docs/deployment.md
+  # (`grep -rn 'bun-version\|^bun' .github mise.toml` plus
+  # `grep -rn 'oven/bun' docs/deployment.md` finds them all).
   # test/unit/toolchain_pins_test.rb fails the docker PR until every pin names
   # the same version (test.yml's `ruby` paths-filter lists the Dockerfile, so
   # the suite runs on it), so the PR stays red until whoever or whatever is

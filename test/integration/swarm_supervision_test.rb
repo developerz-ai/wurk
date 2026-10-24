@@ -15,6 +15,8 @@ class SwarmSupervisionTest < Wurk::Test::UnitCase
   POLL_TIMEOUT = 20.0
   POLL_INTERVAL = 0.1
   SHUTDOWN_TIMEOUT = 5
+  # How long a cleanup reap waits for a child this case forked to be taken.
+  REAP_BUDGET = 5
 
   # A host subprocess exits with a status only the host could care about; each
   # round gives the supervise loop several ticks to steal it.
@@ -130,6 +132,20 @@ class SwarmSupervisionTest < Wurk::Test::UnitCase
   # Killing the replacement while it's still awaiting heartbeat must NOT take
   # the old (still-healthy) child down with it, and the slot must be retried
   # (a fresh replacement spawned) once the restart's own backoff elapses.
+  #
+  # The premise is "the replacement dies before the supervisor sees its
+  # heartbeat", and the supervisor reads that heartbeat out of the
+  # `processes` set — it TERMs the old child as soon as the replacement is
+  # in there. A kill issued by the test cannot be timed against the
+  # supervisor's tick: the poll that finds the new pid can be descheduled
+  # past it, and when it loses, the machine does exactly what it does for
+  # a replacement that DID beat — it hands the slot over and TERMs the old
+  # child — so the case goes red on a timing accident rather than on a
+  # defect (that is how it went red on a loaded box). So the premise is
+  # made true by construction instead: `processes` is a string while this
+  # test runs, so every SADD fails with WRONGTYPE, no heartbeat is ever
+  # visible to the supervisor, and the killed replacement is claimed while
+  # the machine is still awaiting one. Nothing else about the case moves.
   def test_kill_replacement_mid_restart_keeps_old_child_and_retries_slot
     swarm = Wurk::Swarm.new(topology: topology_n(1), config: @config, shutdown_timeout: SHUTDOWN_TIMEOUT)
     supervisor = nil
@@ -137,6 +153,7 @@ class SwarmSupervisionTest < Wurk::Test::UnitCase
     begin
       original = swarm.boot(install_signals: false).first
       supervisor = Thread.new { swarm.supervise }
+      freeze_process_registration!
 
       swarm.rolling_restart
       replacement = kill_the_replacement(swarm, original)
@@ -153,6 +170,7 @@ class SwarmSupervisionTest < Wurk::Test::UnitCase
         nil
       end
       stop_supervisor_thread(supervisor, 10)
+      thaw_process_registration!
     end
   end
 
@@ -284,6 +302,67 @@ class SwarmSupervisionTest < Wurk::Test::UnitCase
     reap(straggler) if straggler
   end
 
+  # The ECHILD the supervisor has to survive has to be the KERNEL's, not a
+  # stub's: a pid somebody else already reaped has no exit status left to
+  # hand out, so `Process.wait2` answers ECHILD where it would otherwise
+  # answer with a status. The unit suite (test/unit/swarm_reaping_test.rb)
+  # pins the wiring around a STUBBED ECHILD; this pins the rescue against the
+  # OS's own answer, on a real child, with no `Process.wait2` stub anywhere in
+  # the case.
+  #
+  # The ORDER is what makes it deterministic rather than lucky: the child is
+  # killed AND reaped by the test BEFORE the supervise loop starts, so the
+  # supervisor's first tick meets a pid the kernel has already forgotten. It
+  # cannot answer with a status even if it wanted to — there is none left.
+  def test_supervise_retires_a_slot_whose_pid_was_reaped_elsewhere
+    swarm = Wurk::Swarm.new(topology: topology_n(1), config: @config, shutdown_timeout: SHUTDOWN_TIMEOUT)
+    supervisor = nil
+    victim = nil
+    replacement = nil
+
+    begin
+      victim = swarm.boot(install_signals: false).first
+
+      assert victim, 'the swarm booted no child to retire'
+      victim_index = swarm.children[victim][:index]
+
+      assert_child_is_running(victim)
+
+      ::Process.kill('KILL', victim)
+
+      assert reaped_out_of_band?(victim), "the killed child #{victim} was never reaped"
+      assert_kernel_forgets_the_pid(victim)
+
+      supervisor = Thread.new { swarm.supervise }
+
+      replacement = wait_for_new_child(swarm, exclude: [victim])
+
+      assert replacement, 'the slot was never refilled after the ECHILD'
+      assert wait_for_heartbeat(swarm, replacement), "the replacement #{replacement} never came up"
+
+      children = swarm.children
+
+      refute_includes children.keys, victim, 'a pid reaped elsewhere must leave the child table'
+      assert_equal victim_index, children.dig(replacement, :index),
+                   'the replacement must take the slot the reaped pid held'
+      assert pid_alive?(replacement), 'the replacement must be a live child'
+    ensure
+      # The live list is taken BEFORE the drain: `shutdown` ends in
+      # `hard_kill_stragglers`, which CLEARS the child table, so a pid the
+      # swarm drops without reaping is gone from that table — and invisible to
+      # the cleanup below, which would leave it behind as a zombie.
+      live = swarm.children.keys
+      begin
+        swarm.shutdown(timeout: SHUTDOWN_TIMEOUT)
+      rescue StandardError
+        nil
+      end
+      stop_supervisor_thread(supervisor, 10)
+      leftovers = reap_every_child(swarm, live + [victim, replacement])
+      assert_empty leftovers, "the case left children behind: #{leftovers.inspect}" if $ERROR_INFO.nil?
+    end
+  end
+
   # --- orphan self-termination ---------------------------------------------
 
   # SIGKILL'ing the supervisor must not leave the children fetching forever:
@@ -395,6 +474,25 @@ class SwarmSupervisionTest < Wurk::Test::UnitCase
     replacement
   end
 
+  # The `processes` set every worker registers itself in — and the set the
+  # supervisor's restart machine reads to decide a replacement is up. While
+  # the key holds a string, every SADD fails with WRONGTYPE: no worker
+  # registers, the supervisor's SISMEMBER raises and is read as "not seen
+  # yet" (Swarm#heartbeat_seen? rescues), and the machine keeps awaiting
+  # the replacement's heartbeat. The liveness check is untouched by it:
+  # that one reads each child's own identity hash (`<identity>`), not the
+  # set, so the beat it measures stays fresh and the old child is not
+  # replaced for going quiet.
+  def freeze_process_registration!
+    @observer.call('DEL', Wurk::Keys::PROCESSES)
+    @observer.call('SET', Wurk::Keys::PROCESSES, 'frozen-by-swarm-supervision-test')
+  end
+
+  # DEL, not a conversion back: the next worker's SADD recreates the set.
+  def thaw_process_registration!
+    @observer.call('DEL', Wurk::Keys::PROCESSES)
+  end
+
   def assert_request_drained(swarm, supervisor, children)
     assert supervisor.join(SHUTDOWN_TIMEOUT + 5), 'supervise must return once it observes the drain request'
     assert_empty swarm.children, 'the supervise thread must have drained the fleet'
@@ -441,6 +539,99 @@ class SwarmSupervisionTest < Wurk::Test::UnitCase
     end
 
     assert_equal :reaped, outcome, "straggler #{pid} was left behind: #{outcome.inspect}"
+  end
+
+  # The child must be ALIVE here, not a zombie that died on its own: a
+  # non-blocking wait answers nil for a running child and a STATUS for a dead
+  # one — and answering means reaping, which is the very state this case is
+  # about to create on purpose. A boot failure must not be able to pass for
+  # the case's own out-of-band reap.
+  def assert_child_is_running(pid)
+    status = ::Process.wait2(pid, ::Process::WNOHANG)
+
+    assert_nil status, "the child #{pid} was already dead before the case killed it"
+  end
+
+  # Take the exit status the way an embedder's own wildcard reaper would: the
+  # test reaps the pid, so the kernel has nothing left to hand the
+  # supervisor. Bounded — SIGKILL is asynchronous, so the child needs a
+  # moment to die.
+  def reaped_out_of_band?(pid)
+    deadline = monotonic_now + POLL_TIMEOUT
+    while monotonic_now < deadline
+      begin
+        return true if ::Process.wait2(pid, ::Process::WNOHANG)
+      rescue Errno::ECHILD
+        return false
+      end
+      sleep POLL_INTERVAL
+    end
+    false
+  end
+
+  # The kernel's answer to "what became of this pid?": ECHILD, because the
+  # test already took its exit status. A zombie would still answer with a
+  # status, so this proves the child is not merely dead but FORGOTTEN — and
+  # it is the very answer the supervisor's own wait2 is about to get.
+  def assert_kernel_forgets_the_pid(pid)
+    answer = begin
+      ::Process.wait2(pid, ::Process::WNOHANG)
+      :answered
+    rescue Errno::ECHILD
+      :echild
+    end
+
+    assert_equal :echild, answer, "the kernel still has an answer for #{pid}: #{answer.inspect}"
+  end
+
+  # The child's own "I am up" signal: its first heartbeat puts its identity in
+  # the `processes` set, and the supervisor reads it back with the same probe
+  # its restart machine uses. Waiting for it proves the replacement is a
+  # WORKING child and not merely a forked pid — and that it is past its boot
+  # window, so the drain that follows lands on a child that can answer a TERM
+  # instead of one still wiring up its Redis socket.
+  def wait_for_heartbeat(swarm, pid)
+    wait_while_progressing(progress: -> { swarm.children.keys.sort }) do
+      pid if swarm.children.key?(pid) && swarm.send(:heartbeat_seen?, pid)
+    end
+  end
+
+  # Nothing this case forked may outlive it: whatever is left is killed and
+  # its exit status taken, so the case leaves behind neither a live child nor
+  # a zombie. Returns the pids it could not take.
+  #
+  # `pids` is the live child list taken BEFORE the drain: `shutdown` ends in
+  # `hard_kill_stragglers`, which clears the child table, so a pid the swarm
+  # dropped without reaping is invisible there — and this case still has to
+  # take it, or it outlives the case as a zombie.
+  def reap_every_child(swarm, pids)
+    leftovers = []
+    (pids.compact + swarm.children.keys).uniq.each do |pid|
+      kill_if_alive(pid)
+      leftovers << pid unless reaped?(pid)
+    end
+    leftovers
+  end
+
+  def kill_if_alive(pid)
+    ::Process.kill('KILL', pid) if pid_alive?(pid)
+  rescue Errno::ESRCH, Errno::EPERM
+    nil
+  end
+
+  # Bounded: a pid the kernel already forgot answers ECHILD, and one that was
+  # still alive was killed a moment ago, so this never blocks for long.
+  def reaped?(pid)
+    deadline = monotonic_now + REAP_BUDGET
+    while monotonic_now < deadline
+      begin
+        return true if ::Process.wait2(pid, ::Process::WNOHANG)
+      rescue Errno::ECHILD
+        return true
+      end
+      sleep POLL_INTERVAL
+    end
+    false
   end
 
   def assert_old_child_survives(swarm, original)
