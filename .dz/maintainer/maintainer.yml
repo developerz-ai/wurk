@@ -125,6 +125,29 @@ handoff:
   mode: fleet
   ask_reporter_first: false
 
+# THE PATHS A HUMAN STILL SIGNS FOR — `pr.human_merge.paths` below.
+#
+# WHY THESE PATHS AND NOT OTHERS. The fenced set is CI and release automation
+# (`.github/workflows/**`), packaging and the release helpers (`*.gemspec`,
+# `Dockerfile`, `bin/gem-*`, `tasks/release_helpers.rb`), and the agent's own
+# policy directory (`.dz/**`). Those are the paths that run BESIDE the release
+# job's RubyGems OIDC identity and the gem-publish path, and the agent's own
+# policy is the file that decides what the agent may do next. A mistake in any
+# of them is not something a green suite undoes: a green suite says the code
+# works, not that the workflow that publishes the gem still points at the gem,
+# and a wrong publish path is not revertible by pushing another commit. So a
+# pull request that touches one of these waits for a human approving review.
+#
+# WHAT THIS IS NOT. The fence is a LANE, not a gate bypass: the six required
+# checks below and the `review:` lane still apply to every pull request,
+# fenced or not, and `pr.auto_merge` stays on for everything outside the
+# fence. Nothing here lets a red check merge.
+#
+# WHY IT IS THIS SIZE. This is the STARTING set, not a permanent wall. The
+# fence shrinks as proofs accumulate — every path here gets narrowed once it
+# has been shown to be safe to change without a human, and a path that never
+# earns that proof stays fenced. A fence that only ever grows is a fence that
+# stops being read.
 pr:
   wait_for_other_bots: [coderabbit, copilot]
   # UNPINNED 2026-09-01, on the exit condition the pin itself named: "restored
@@ -183,9 +206,13 @@ pr:
   # Dependabot pull requests merge through this lane too, and only this lane: the
   # GitHub Actions workflow that armed GitHub's native auto-merge on them
   # (dependabot-automerge.yml, wurk#347) was removed 2026-10-11, because a second
-  # merger beside the agent is one that skips its review. A major bump is not
-  # held for a human (`escalate.ask_before_acting` below is empty); the six
-  # required checks and the agent's review are what gate it.
+  # merger beside the agent is one that skips its review. A dependency major bump
+  # is not held for a human (`escalate.ask_before_acting` below is empty); the six
+  # required checks and the agent's review are what gate it. The exception is a
+  # dependency pull request that touches a fenced path: dependabot's `github-actions`
+  # ecosystem includes major action bumps and edits `.github/workflows/**`, and its
+  # `docker` ecosystem edits the `Dockerfile`, so those pull requests wait for a
+  # human approving review too.
   auto_merge: true
   # WHOSE pull requests the bot merges and babysits: every author's (owner ruling 2026-10-23: "wurk
   # and ultimate should be full ai maintained"; it reverses the 2026-10-14 `not_project` scope that
@@ -212,6 +239,24 @@ pr:
   # 14 days and closed at 21 (a draft at 28), with the reason and the way to
   # reopen. One waiting on us, on a reviewer, or on CI is never timed.
   close_awaiting_author_after_days: 21
+  # THE FENCE — see the comment block above `pr:` for why these paths, what
+  # this lane is not, and why the set shrinks as proofs accumulate.
+  #
+  # These are the paths whose pull requests wait for a human approving review.
+  # Every other pull request stays auto-eligible: `auto_merge` above is still
+  # `true` and `auto_merge_scope` is still `any`.
+  #
+  # `lib/wurk/version.rb`, `CHANGELOG.md` and `.github/dependabot.yml` are
+  # deliberately NOT fenced: the release lane's version bump must keep
+  # auto-merging, and dependabot's config is ordinary maintenance.
+  human_merge:
+    paths:
+      - ".github/workflows/**"
+      - "*.gemspec"
+      - ".dz/**"
+      - "Dockerfile"
+      - "bin/gem-*"
+      - "tasks/release_helpers.rb"
 
 review:
   enabled: true

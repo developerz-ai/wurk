@@ -191,11 +191,19 @@ every comment it posts is marked as coming from a bot. What that means for you:
   never closes first. As the reporter, reply to keep your issue open.
   <!-- Updated by editor:policy[bot]. -->
 - **Pull requests.** A PR merges when the six required checks are green and the
-  review has nothing left open; nobody has to click, provided every commit is
-  attributed to a GitHub account (step 1 under [Pull requests](#pull-requests)).
+  review has nothing left open. The six required checks apply to every PR, and
+  one exception waits for a human: a PR that touches a fenced path — CI
+  workflows (`.github/workflows/`), the gemspec, `.dz/`, `Dockerfile`,
+  `bin/gem-*` or `tasks/release_helpers.rb` — needs a human approving review
+  before it merges, because those paths run beside the release job's RubyGems
+  publish identity and a green suite cannot undo a mistake in them. Every other
+  PR still merges on green with nobody clicking, provided every commit is
+  attributed to a GitHub account (step 1 under
+  [Pull requests](#pull-requests)).
   When the next move is yours (a red required check, an open review thread, a
   conflict), the agent pings at 7 and 14 days and closes the PR at 21 (28 for a
   draft). Push or reply and it picks the PR back up.
+  <!-- Updated by editor:policy[bot]. -->
 - **A "no" comes early and with a reason.** A change the project will not take
   (see [Conventions](#conventions) and the `non_goals` list in
   `.dz/maintainer/maintainer.yml`) is closed with the rule it ran into, not left
@@ -216,8 +224,12 @@ Open an issue before a large feature PR so the direction is agreed first.
    sets `require_extra_approval_for_unattributed_changes: true`, so any commit
    in your PR not attributed to a GitHub account adds a human approval
    requirement on top of the zero the ruleset otherwise asks for — this repo
-   otherwise never asks for one, so the PR will silently park instead of
-   auto-merging. See `.dz/maintainer/maintainer.yml` for the ruleset citation.
+   otherwise asks for none, so the PR will silently park instead of
+   auto-merging. A PR that touches a fenced path (CI workflows
+   (`.github/workflows/`), the gemspec, `.dz/`, `Dockerfile`, `bin/gem-*` or
+   `tasks/release_helpers.rb`) also waits for a human approving review, while
+   the six required checks still apply to every PR. See
+   `.dz/maintainer/maintainer.yml` for the ruleset citation.
 2. Branch off `main`.
 3. Keep the change focused; add tests at the right layer.
 4. Run `bin/check` (or `bin/check full` if you touched the compat surface).

@@ -4,6 +4,12 @@ All notable changes to Wurk are recorded here. Format: [Keep a Changelog](https:
 
 ## [Unreleased]
 
+### Changed
+
+- **Pull requests touching a fenced path now wait for a human approving review.** The maintainer policy gained a `pr.human_merge.paths` lane covering `.github/workflows/**`, `*.gemspec`, `.dz/**`, `Dockerfile`, `bin/gem-*` and `tasks/release_helpers.rb`: a PR that touches one of them is no longer auto-merged on green and waits for a human approving review, because those paths run beside the release job's RubyGems publish identity and a mistake in them is not undone by a green suite. The fence is a lane, not a gate bypass — the six required checks and the review lane apply to every PR, fenced or not, and the set is meant to shrink as each path earns proof that it can change without a human.
+
+  Nothing else about the merge posture moved: auto-merge is still on for every author, the six required checks are still the six (`test + coverage (latest ruby/rails)`, `lint (rubocop)`, `parity (oracle)`, `spec docs (exist + non-empty)`, `frontend (vitest)`, `actionlint (workflow lint)`), and the triage, review, escalate and release lanes are unchanged. `lib/wurk/version.rb`, `CHANGELOG.md` and `.github/dependabot.yml` are deliberately outside the fence, so the release lane's version bump keeps merging on its own.
+
 ## [1.8.1] - 2026-10-16
 
 ### Fixed
