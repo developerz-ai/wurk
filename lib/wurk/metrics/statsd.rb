@@ -164,6 +164,14 @@ module Wurk
           # into a JobRetry::Skip, and a job cut by its deadline passes through
           # before Middleware::Expiry books it `expired` — both sit outside this
           # middleware, and without this arm either one emits `jobs.failure`.
+          # Their registrations are
+          # `Wurk.configuration.server_middleware.prepend(Wurk::Middleware::InterruptHandler)`
+          # (lib/wurk/middleware/interrupt_handler.rb:50) and
+          # `Wurk.configuration.server_middleware.add(Wurk::Middleware::Expiry)`
+          # (lib/wurk/middleware/expiry.rb:111); this middleware is added at
+          # `Wurk.configuration.server_middleware.add(Wurk::Metrics::Statsd)`
+          # (lib/wurk.rb:351), after Limiter's add at lib/wurk.rb:335 and before
+          # History's add at lib/wurk.rb:358.
           # Pro's statsd emitter is closed source, so the oracle is the free
           # ExecutionTracker plus the rule that the two Wurk emitters must never
           # classify one event differently. Signed off in
