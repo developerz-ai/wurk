@@ -11,7 +11,7 @@ require 'fileutils'
 # deployed`, `the demo serves the checkout version`, `topology and ecosystem
 # lanes`, `Dependabot is not stuck`) the way release_due_brief_test.rb gates
 # release-due.md: these commands run unattended on a schedule, and a verdict
-# they cannot actually establish must never be printed as a green one. Ten
+# they cannot actually establish must never be printed as a green one. Twelve
 # properties — the first five all pinned by RUNNING the extracted command
 # cells as bash against a PATH-stubbed `gh` or `curl` (a substring match over
 # the brief's text would accept a guard that never fires), the sixth pinned
@@ -133,6 +133,17 @@ require 'fileutils'
 #      predicate still requires the FAILURE rollup and the strictly-past age,
 #      so a young red docker PR prints neither verdict, and a red docker PR
 #      with a non-matching title stays genuinely stuck.
+#  12. The waiting-on-us classification VERIFIES an outstanding pin mismatch
+#      at the PR's head before it claims the title shape. A title plus a red
+#      rollup cannot tell "the pins are still outstanding" from "the pin
+#      edits already landed and something else is red" — graded on the title
+#      alone, an old oven/bun PR with matching pins prints `push the pin
+#      edits` forever and suppresses the stuck verdict indefinitely, so the
+#      row reads the five bun pin sites at headRefOid through the contents
+#      API and classifies waiting-on-us only when they still disagree. Pins
+#      agreeing at the head fall through to stuck (the regression fixture:
+#      pins fixed, CI still red); a failed pin read verifies nothing and
+#      prints `verdict unknown ... not readable`, filing no ask for that PR.
 #
 # One more property, added with the run URLs: every job-list row must request
 # BOTH `url` and `databaseId` and print the URL on EVERY verdict — dup,
@@ -171,6 +182,11 @@ class HealthBriefTest < Minitest::Test
   SHA_ACTIONS    = '3' * 40
   SHA_DOCKER     = '2' * 40
   SHA_PR         = '0' * 40
+  # The bun versions the row-15 pin fixtures carry: BUN_OLD is what every
+  # non-Dockerfile site still names on a dependabot-only head, BUN_NEW what
+  # the pushed pin edits land.
+  BUN_OLD        = '1.4.1'
+  BUN_NEW        = '1.4.2'
   # A sha that is NOT the commit carrying Wurk::VERSION: the release run
   # that carries it says nothing about this version's release, so the row
   # must refuse it.
@@ -2035,6 +2051,175 @@ class HealthBriefTest < Minitest::Test
                     "(stdout=#{out.inspect})"
   end
 
+  # THE regression fixture for the waiting predicate: the pin edits have
+  # already been pushed — every bun pin at the head agrees with the Dockerfile
+  # bump — but another check still fails, so the PR is red past its budget.
+  # Graded on the title shape alone it printed `push the pin edits` forever
+  # and suppressed the stuck verdict indefinitely; the row now reads the five
+  # pin sites at headRefOid, sees agreement, and lets step 5 grade it stuck.
+  def test_pins_already_pushed_but_ci_still_red_grades_stuck_not_waiting
+    pr = dependabot_pr(number: 7704, title: 'Bump oven/bun from 1.4.1 to 1.4.2 in /',
+                       branch: 'dependabot/docker/oven/bun', age_days: 40, sha: SHA_DOCKER)
+    out, _err, status = run_row15(prs: [pr], pins: :agree)
+
+    assert_predicate status, :success?,
+                     "row 15's command must run cleanly (status=#{status.inspect})"
+
+    stuck = out.lines.map(&:chomp).select { |line| line.start_with?('Unhealthy:') }
+
+    assert_equal 1, stuck.size,
+                 "one stuck PR prints one Unhealthy line; got #{out.lines.inspect}"
+
+    assert_match(/\AUnhealthy: Dependabot is stuck on #7704 \(age 40d > 37d budget for docker\)\z/,
+                 stuck.first,
+                 'a red past-budget docker PR whose head pins agree is NOT waiting on us — the ' \
+                 'pin edits are pushed, so the ask must be the stuck one; ' \
+                 "got #{stuck.first.inspect}")
+
+    refute_includes out, 'is waiting on us',
+                    'waiting-on-us requires a VERIFIED outstanding pin mismatch; a head whose ' \
+                    'pins agree must never print it ' \
+                    "(stdout=#{out.inspect})"
+
+    refute_includes out, 'push the pin edits',
+                    'an instruction the branch already satisfies must never be printed: the pin ' \
+                    "edits are on the branch and something else is red (stdout=#{out.inspect})"
+  end
+
+  # The verification is over EVERY pin site: one workflow still carrying the
+  # old bun-version fails the pins check exactly as hard as the site
+  # dependabot moved, and the agent can still fix it — the PR is waiting on
+  # us. A row that compared only the Dockerfile against mise.toml would read
+  # this head as agreeing and file author-inactivity against dependabot.
+  def test_one_stale_pin_site_is_still_an_outstanding_mismatch
+    pr = dependabot_pr(number: 7705, title: 'Bump oven/bun from 1.4.1 to 1.4.2 in /',
+                       branch: 'dependabot/docker/oven/bun', age_days: 40, sha: SHA_DOCKER)
+    out, _err, status = run_row15(
+      prs: [pr],
+      pins: { 'Dockerfile' => BUN_NEW, 'mise.toml' => BUN_NEW, 'docs/deployment.md' => BUN_NEW,
+              '.github/workflows/test.yml' => BUN_OLD, '.github/workflows/release.yml' => BUN_NEW }
+    )
+
+    assert_predicate status, :success?,
+                     "row 15's command must run cleanly (status=#{status.inspect})"
+
+    assert_includes out, 'Unhealthy: Docker bump #7705 is waiting on us',
+                    'one stale pin site is an outstanding mismatch — the row must classify the ' \
+                    "PR waiting-on-us, not stuck (stdout=#{out.inspect})"
+
+    refute_includes out, 'Dependabot is stuck on #7705',
+                    'a PR the agent can still unblock by pushing the missing pin is not ' \
+                    "author-inactivity (stdout=#{out.inspect})"
+  end
+
+  # A pin-site read that fails verifies nothing, and a verdict the row cannot
+  # establish is never a colour: neither waiting-on-us (the classification
+  # that suppresses stuck indefinitely) nor stuck (author-inactivity on
+  # unreadable evidence) may be printed for that PR. The row names the read
+  # that failed and files no ask; the next checkup re-reads it.
+  def test_unreadable_head_pins_file_no_ask_and_print_verdict_unknown
+    pr = dependabot_pr(number: 7706, title: 'Bump oven/bun from 1.4.1 to 1.4.2 in /',
+                       branch: 'dependabot/docker/oven/bun', age_days: 40, sha: SHA_DOCKER)
+    out, _err, status = run_row15(prs: [pr], pins: nil)
+
+    assert_predicate status, :success?,
+                     "row 15's command must run cleanly (status=#{status.inspect})"
+
+    unknown = out.lines.map(&:chomp).select { |line| line.include?('verdict unknown') }
+
+    assert_equal 1, unknown.size,
+                 "the unreadable pin read prints one verdict-unknown line; got #{out.lines.inspect}"
+
+    assert_includes unknown.first, 'not readable',
+                    'the line must say the pins were NOT readable, the same fail-closed shape ' \
+                    "the unreadable-list outcome uses; got #{unknown.first.inspect}"
+
+    assert_includes unknown.first, '#7706',
+                    "the line must name the PR it could not grade; got #{unknown.first.inspect}"
+
+    assert_includes unknown.first, SHA_DOCKER,
+                    "the line must carry the head sha it could not read at; got #{unknown.first.inspect}"
+
+    refute_includes out, 'Unhealthy',
+                    "an unreadable pin read is no evidence for either verdict (stdout=#{out.inspect})"
+
+    refute_includes out, 'is waiting on us',
+                    'claiming waiting-on-us on an unreadable read is exactly the defect this ' \
+                    "pins (stdout=#{out.inspect})"
+
+    refute_includes out, 'Dependabot is stuck on #7706',
+                    "stuck on an unreadable read files author-inactivity on no evidence (stdout=#{out.inspect})"
+  end
+
+  # The pins are read AT THE HEAD (headRefOid — the only field a head SHA is
+  # ever read from): a candidate the list carries no head for cannot anchor
+  # the read, so it grades the same unreadable way instead of guessing.
+  def test_a_candidate_without_a_head_sha_cannot_be_graded_waiting
+    pr = dependabot_pr(number: 7707, title: 'Bump oven/bun from 1.4.1 to 1.4.2 in /',
+                       branch: 'dependabot/docker/oven/bun', age_days: 40)
+    out, _err, status = run_row15(prs: [pr])
+
+    assert_predicate status, :success?,
+                     "row 15's command must run cleanly (status=#{status.inspect})"
+
+    assert_includes out, 'verdict unknown',
+                    'no head sha means no anchored pin read, so the row fails closed ' \
+                    "(stdout=#{out.inspect})"
+
+    refute_includes out, 'Unhealthy',
+                    "neither verdict is printable without the head the read anchors to (stdout=#{out.inspect})"
+  end
+
+  # The stub refuses a pin read whose ref is not the PR's own head — the same
+  # commitment the release stub makes about `--commit`. A row that graded the
+  # pins at any other tree (main, a base branch) would read the pins as they
+  # were BEFORE the pin edits landed and classify a fixed PR waiting-on-us
+  # forever. Mutate the cell to read at main: the read must fail closed.
+  def test_stub_refuses_a_pin_read_that_is_not_head_bound
+    cell = command_cell('Dependabot is not stuck', gh_command: 'gh pr list')
+    mutated = cell.sub('contents/$1?ref=$2', 'contents/$1?ref=main')
+
+    refute_equal cell, mutated, 'the mutation must actually unbind the pin read from the head sha'
+
+    pr = dependabot_pr(number: 7708, title: 'Bump oven/bun from 1.4.1 to 1.4.2 in /',
+                       branch: 'dependabot/docker/oven/bun', age_days: 40, sha: SHA_DOCKER)
+    out, _err, status = run_row15(prs: [pr], pins: :agree, cell: mutated)
+
+    assert_predicate status, :success?,
+                     "row 15's command must run cleanly (status=#{status.inspect})"
+
+    assert_includes out, 'verdict unknown',
+                    'a pin read at the wrong ref is a failed read: the row must fail closed, ' \
+                    "not grade the mutated tree (stdout=#{out.inspect})"
+
+    refute_includes out, 'Unhealthy',
+                    "a failed read is no evidence for either verdict (stdout=#{out.inspect})"
+  end
+
+  # The graded step must document the verification it performs: the
+  # head-anchored pin read, the agreeing-pins-fall-through-to-stuck rule, and
+  # the no-ask rule for a read that failed. A brief that classified
+  # waiting-on-us on the title shape alone would re-arm the
+  # indefinite-suppression defect the runtime fixtures above pin.
+  def test_waiting_step_documents_the_head_pin_verification
+    step = waiting_step
+
+    assert_includes step, 'headRefOid',
+                    'step 6 must name the field the pin read is anchored to'
+
+    assert_match(/agree/, step,
+                 'step 6 must say what agreeing pins grade — stuck per step 5, not waiting-on-us')
+
+    assert_includes step, 'verdict unknown',
+                    'step 6 must name the outcome of a pin read that fails'
+
+    assert_match(/files no ask|no ask filed/, step,
+                 'step 6 must say the unreadable-pins PR files no ask')
+
+    assert_includes step, 'suppresses the stuck verdict indefinitely',
+                    'step 6 must name the defect the verification exists for'
+  end
+
   def test_pr_past_ecosystem_budget_and_red_is_reported_stuck
     # bundler: 35-day-old PR whose check run concluded FAILURE. Budget is 28d
     # (weekly interval + 14d cooldown + 7d margin, dependabot.yml:27-30). The
@@ -3144,6 +3329,20 @@ class HealthBriefTest < Minitest::Test
     lines[first...last].join("\n")
   end
 
+  # The brief's step-6 bullet — the waiting-on-us classification with its
+  # head-pins verification — as one string, so an assertion about the
+  # verification cannot be satisfied by prose somewhere else in the file.
+  def waiting_step
+    lines = @text.lines.map(&:chomp)
+    first = lines.index { |line| line.start_with?('6. **') && line.include?('waiting') }
+
+    raise 'health.md has no step 6 for the waiting-on-us classification' if first.nil?
+
+    last = ((first + 1)...lines.size).find { |i| lines[i].start_with?('A PR past budget') } || lines.size
+
+    lines[first...last].join("\n")
+  end
+
   # The brief's "a run that genuinely went red stays Unhealthy" paragraph —
   # the one naming the non-main refusal failure mode (release.yml:55-60) that
   # produces the same all-skipped signature as a proceed=false no-op. Scoping
@@ -3570,20 +3769,80 @@ class HealthBriefTest < Minitest::Test
   # dependabot.yml (28d bundler, 14d bun, 37d github-actions, 37d docker) and
   # REPORTS what it read: a summary line, one line per open PR, and one
   # `Unhealthy:` line per red PR past its budget — `Docker bump #<n> is
-  # waiting on us` for a docker bump whose title matches the bun-pin shape,
-  # `Dependabot is stuck on #<n>` otherwise. The stub `gh` answers
+  # waiting on us` for a docker bump whose title matches the bun-pin shape
+  # AND whose head still carries an outstanding pin mismatch, `Dependabot is
+  # stuck on #<n>` otherwise. The stub `gh` answers
   # `gh pr list --state open --app dependabot --json ...` from
   # $WURK_TEST_FIXTURES/dependabot.prs, so the command runs against fixed
   # fixtures instead of the API — fixtures shaped like the list `gh` really
   # emits, rollup included. `prs: nil` writes no fixture at all, so the read
   # fails the way a rate limit or a 4xx would. `cell:` lets a test run a
-  # mutated cell. `jobs_fail` is ignored — row 15 does not call
-  # `gh api .../jobs`, so there is no separate failure-shape to pin here.
-  def run_row15(prs:, jobs_fail: false, cell: nil)
+  # mutated cell. `pins:` drives what the row's five pin-site contents reads
+  # return for a waiting-shaped candidate: :mismatch is the dependabot-only
+  # head (the Dockerfile bumped, every other site still on BUN_OLD) and the
+  # default, since that is the state every candidate starts in; :agree is the
+  # head after the pin edits landed; a Hash sets sites individually, a String
+  # version or nil to drop that site's fixture so its read fails; nil serves
+  # nothing, so every pin read fails like a 4xx. The stub serves the pins
+  # only at the head sha the fixture names — the candidate's own headRefOid.
+  # `jobs_fail` is ignored — row 15's graded reads are the PR list and the
+  # pin sites, and their failure shapes come from `prs: nil` and `pins: nil`.
+  def run_row15(prs:, jobs_fail: false, cell: nil, pins: :mismatch)
     cell ||= command_cell('Dependabot is not stuck', gh_command: 'gh pr list')
 
     run_command(cell, jobs_fail: jobs_fail) do |fixtures|
       write_fixture(fixtures, 'dependabot.prs', JSON.generate(prs)) if prs
+      write_pin_fixtures(fixtures, prs, pins)
+    end
+  end
+
+  # The bun pin sites row 15 reads at a candidate PR's head, and the head the
+  # stub serves them at. Site keys are the repo-relative paths the row reads;
+  # fixture names map `/` to `_` exactly as the stub does.
+  def write_pin_fixtures(dir, prs, pins)
+    head = Array(prs).filter_map { |pr| pr['headRefOid'] }.first
+    write_fixture(dir, 'pin.head.sha', head) if head
+    return if pins.nil?
+
+    pin_fixture_versions(pins).each do |site, version|
+      next if version.nil?
+
+      write_fixture(dir, "pin.#{site.tr('/', '_')}", pin_site_content(site, version))
+    end
+  end
+
+  # :mismatch is the dependabot-only head — the Dockerfile bumped, every
+  # other site still on BUN_OLD. :agree is the head after the pin edits
+  # landed. A Hash overrides single sites on top of BUN_OLD; a nil value
+  # drops that site's fixture so its read fails.
+  def pin_fixture_versions(pins)
+    versions = { 'Dockerfile' => BUN_OLD, 'mise.toml' => BUN_OLD,
+                 'docs/deployment.md' => BUN_OLD,
+                 '.github/workflows/test.yml' => BUN_OLD,
+                 '.github/workflows/release.yml' => BUN_OLD }
+    case pins
+    when :agree
+      versions.transform_values! { |_old| BUN_NEW }
+    when :mismatch
+      versions['Dockerfile'] = BUN_NEW
+    when Hash
+      versions.merge!(pins)
+    end
+    versions
+  end
+
+  # The five pin sites' shapes, as toolchain_pins_test.rb reads them:
+  # `FROM oven/bun:<v>-slim` at line start in the Dockerfile and the
+  # deployment doc, `bun = "<v>"` in mise.toml, and a quoted `bun-version:`
+  # input in each workflow — the shapes the row's extraction has to parse.
+  def pin_site_content(site, version)
+    case site
+    when 'Dockerfile', 'docs/deployment.md'
+      "FROM ruby:3.4-slim-bookworm\nFROM oven/bun:#{version}-slim AS spa\n"
+    when 'mise.toml'
+      "[tools]\nnode = \"24\"\nbun = \"#{version}\"\n"
+    else
+      "steps:\n  - uses: oven-sh/setup-bun@v2\n    with:\n      bun-version: \"#{version}\"\n"
     end
   end
 
@@ -3872,6 +4131,31 @@ class HealthBriefTest < Minitest::Test
                 exit 1
               fi
               printf '[{"sha":"%s"}]\n' "$(cat "$fixdir/version-head.sha")"
+              exit 0
+              ;;
+            *"contents/Dockerfile"*|*"contents/mise.toml"*|*"contents/docs/deployment.md"*|*"contents/.github/workflows/"*)
+              # Row 15's pin verification: the five bun pin sites at a
+              # candidate PR's head, read to verify the mismatch is still
+              # outstanding before the PR classifies waiting-on-us. The read
+              # is head-bound — `ref=` has to name the sha the pin.head.sha
+              # fixture carries, the candidate's own headRefOid — so a row
+              # that graded some other tree (main, a base branch) fails
+              # closed. A site with no fixture is a failed read, what a 4xx
+              # is for real gh.
+              ref="${arg##*\?ref=}"
+              if [ ! -s "$fixdir/pin.head.sha" ] || [ "$ref" != "$(cat "$fixdir/pin.head.sha")" ]; then
+                printf 'stub gh api: pin sites are head-bound, refusing ref %s (head is %s)\n' \
+                  "$ref" "$(cat "$fixdir/pin.head.sha" 2>/dev/null)" >&2
+                exit 1
+              fi
+              path="${arg%%\?*}"
+              path="${path##*/contents/}"
+              fixture="$fixdir/pin.${path//\//_}"
+              if [ ! -s "$fixture" ]; then
+                printf 'stub gh api: no pin fixture for %s (looked for %s)\n' "$arg" "$fixture" >&2
+                exit 1
+              fi
+              cat "$fixture"
               exit 0
               ;;
           esac
