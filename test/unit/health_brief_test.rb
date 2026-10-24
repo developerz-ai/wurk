@@ -2081,6 +2081,95 @@ class HealthBriefTest < Minitest::Test
                     "a red sibling job must not clear the PR (stdout=#{out.inspect})"
   end
 
+  # `sib` inspects only the SELECTED test.yml run's own jobs. `bench.yml` and
+  # `topology.yml` also fire on `pull_request`, so their checks sit in the
+  # SAME statusCheckRollup — and a failed `bench vs base` job is a red entry
+  # the selected run's own job list can never account for. The carve-out is
+  # therefore granted only when EVERY red rollup entry names a FAILED job of
+  # the selected run: a pins-only test.yml failure beside a failed bench.yml
+  # or topology.yml check keeps the stuck verdict. The names are real check
+  # names: bench.yml names its job `bench vs base`, topology.yml's `topology`
+  # job takes its key as the check name.
+  def test_past_budget_docker_pr_with_a_failed_check_outside_the_selected_run_is_still_stuck
+    pins_log = failed_run_log(
+      'Failure: test_every_bun_pin_names_the_same_version [test/unit/toolchain_pins_test.rb:73]:'
+    )
+
+    [['bench vs base', 'bench'], ['topology', 'topology.yml']].each do |outside, wf|
+      pr = dependabot_pr(number: 7716, title: 'Bump oven/bun from 1.4.1 to 1.4.2 in /',
+                         branch: 'dependabot/docker/oven/bun', age_days: 40, sha: SHA_DOCKER,
+                         rollup: [check_run('FAILURE'),
+                                  check_run('FAILURE', name: outside, workflow: wf)])
+      out, err, status = run_row15(prs: [pr], runs: { SHA_DOCKER => pins_log })
+
+      assert_predicate status, :success?,
+                       "#{wf}: row 15's command must run cleanly (status=#{status.inspect}, " \
+                       "stdout=#{out.inspect}, stderr=#{err.inspect})"
+
+      assert_includes out, 'Unhealthy: Dependabot is stuck on #7716',
+                      "a failed #{outside} check is a red entry outside the selected test.yml " \
+                      'run — the carve-out must not swallow it and the PR keeps the stuck ' \
+                      "verdict (stdout=#{out.inspect})"
+
+      refute_includes out, 'awaiting matching pin edits',
+                      'a red entry the selected run does not account for must not clear the PR; ' \
+                      "got stdout=#{out.inspect}"
+    end
+  end
+
+  # The other half of the union: a red StatusContext names no run at all, so
+  # the selected run's failed jobs can never account for it. Same verdict as
+  # a cross-workflow check failure — the carve-out does not fire.
+  def test_past_budget_docker_pr_with_a_red_non_actions_status_is_still_stuck
+    pr = dependabot_pr(number: 7717, title: 'Bump oven/bun from 1.4.1 to 1.4.2 in /',
+                       branch: 'dependabot/docker/oven/bun', age_days: 40, sha: SHA_DOCKER,
+                       rollup: [check_run('FAILURE'), status_context('ERROR')])
+
+    out, err, status = run_row15(prs: [pr], runs: { SHA_DOCKER => failed_run_log(
+      'Failure: test_every_bun_pin_names_the_same_version [test/unit/toolchain_pins_test.rb:73]:'
+    ) })
+
+    assert_predicate status, :success?,
+                     "row 15's command must run cleanly (status=#{status.inspect}, " \
+                     "stdout=#{out.inspect}, stderr=#{err.inspect})"
+
+    assert_includes out, 'Unhealthy: Dependabot is stuck on #7717',
+                    'a red non-Actions status names no run, so the selected run cannot ' \
+                    "account for it and the PR keeps the stuck verdict (stdout=#{out.inspect})"
+
+    refute_includes out, 'awaiting matching pin edits',
+                    'a red entry outside the selected run must not clear the PR; ' \
+                    "got stdout=#{out.inspect}"
+  end
+
+  # The counterweight: only RED entries outside the selected run block the
+  # carve-out. A green `bench vs base` check beside the pins-only failure is
+  # still exactly the expected-red shape the carve-out exists for, and a
+  # cross-check that read every entry instead of the red ones would file a
+  # stuck ask on it.
+  def test_a_green_check_outside_the_selected_run_does_not_block_the_carve_out
+    pr = dependabot_pr(number: 7718, title: 'Bump oven/bun from 1.4.1 to 1.4.2 in /',
+                       branch: 'dependabot/docker/oven/bun', age_days: 40, sha: SHA_DOCKER,
+                       rollup: [check_run('FAILURE'),
+                                check_run('SUCCESS', name: 'bench vs base', workflow: 'bench')])
+
+    out, err, status = run_row15(prs: [pr], runs: { SHA_DOCKER => failed_run_log(
+      'Failure: test_every_bun_pin_names_the_same_version [test/unit/toolchain_pins_test.rb:73]:'
+    ) })
+
+    assert_predicate status, :success?,
+                     "row 15's command must run cleanly (status=#{status.inspect}, " \
+                     "stdout=#{out.inspect}, stderr=#{err.inspect})"
+
+    assert_includes out, 'Dependabot #7718 is awaiting matching pin edits',
+                    'a green check outside the selected run decides nothing — the pins-only ' \
+                    'failure is the expected-red shape and the carve-out fires ' \
+                    "(stdout=#{out.inspect})"
+
+    refute_includes out, 'Dependabot is stuck on #7718',
+                    "a green outside check must not grade the PR stuck (stdout=#{out.inspect})"
+  end
+
   # The discriminator reads the `test + coverage (latest ruby/rails)` JOB's
   # failed log, not the run's. A docker PR also runs `parity (oracle)`
   # (test.yml:381-419) and `lint (rubocop)`, and a run-level `--log-failed`
@@ -2316,6 +2405,40 @@ class HealthBriefTest < Minitest::Test
     assert_match(/no second age-based/i, para,
                  'the prose must say it adds no second age-based ping or close; ' \
                  "got #{para.inspect}")
+  end
+
+  # The brief has to DOCUMENT the rollup cross-check, not just run it: a
+  # reader must see that every red statusCheckRollup entry has to name a
+  # failed job of the selected run, that the bench.yml/topology.yml checks
+  # are the failures `sib` never sees, and that those keep the stuck
+  # verdict. Every assertion reads the step-5 bullet itself, so a phrase
+  # sitting elsewhere in the brief cannot stand in for it.
+  def test_the_docker_pin_carve_out_prose_names_the_rollup_cross_check
+    step = docker_pin_carve_out_step
+
+    assert_includes step, 'statusCheckRollup',
+                    'the carve-out prose must name the rollup the cross-check reads; ' \
+                    "got #{step.inspect}"
+
+    assert_match(/EVERY red (rollup )?entry/i, step,
+                 'the prose must state that every red rollup entry has to be accounted ' \
+                 "for before the carve-out fires; got #{step.inspect}")
+
+    assert_match(/names (one of those jobs|a failed job of the selected run)/, step,
+                 'the prose must say what accounts for a red entry — a failed job of the ' \
+                 "selected run; got #{step.inspect}")
+
+    assert_includes step, 'bench.yml',
+                    'the prose must name bench.yml, whose pull_request checks `sib` never sees; ' \
+                    "got #{step.inspect}"
+
+    assert_includes step, 'topology.yml',
+                    'the prose must name topology.yml, whose pull_request checks `sib` never ' \
+                    "sees; got #{step.inspect}"
+
+    assert_match(/keeps the stuck verdict/, step,
+                 'the prose must say a red entry outside the selected run keeps the stuck ' \
+                 "verdict; got #{step.inspect}")
   end
 
   def test_pr_past_ecosystem_budget_and_red_is_reported_stuck
@@ -3448,6 +3571,22 @@ class HealthBriefTest < Minitest::Test
     lines[first...last].join("\n")
   end
 
+  # The brief's step-5 bullet — the docker pin carve-out — as one string, so
+  # an assertion about its prose cannot be satisfied by a mention somewhere
+  # else in the file. The dup block also carries a step 5 (its `executed`
+  # verdict), so the line has to carry the carve-out's own word too.
+  def docker_pin_carve_out_step
+    lines = @text.lines.map(&:chomp)
+    first = lines.index { |line| line.start_with?('5. **') && line.include?('carve-out') }
+
+    raise 'health.md has no step-5 docker pin carve-out bullet' if first.nil?
+
+    last = ((first + 1)...lines.size).find { |i| lines[i].start_with?('6. **') }
+    raise 'health.md step 5 is not followed by a step 6' if last.nil?
+
+    lines[first...last].join("\n")
+  end
+
   # The brief's "a run that genuinely went red stays Unhealthy" paragraph —
   # the one naming the non-main refusal failure mode (release.yml:55-60) that
   # produces the same all-skipped signature as a proceed=false no-op. Scoping
@@ -3586,9 +3725,10 @@ class HealthBriefTest < Minitest::Test
   # it. The rollup is the GraphQL union `StatusCheckRollupContext`, so it
   # arrives as a LIST of these and of `status_context` entries — never as an
   # object carrying a `.state` on the PR itself.
-  def check_run(conclusion, status: 'COMPLETED', name: 'test + coverage (latest ruby/rails)')
+  def check_run(conclusion, status: 'COMPLETED', name: 'test + coverage (latest ruby/rails)',
+                workflow: 'CI')
     entry = { '__typename' => 'CheckRun', 'name' => name, 'status' => status,
-              'conclusion' => conclusion, 'workflowName' => 'CI',
+              'conclusion' => conclusion, 'workflowName' => workflow,
               'startedAt' => '2026-01-01T00:00:00Z',
               'detailsUrl' => 'https://github.com/wurk-owner/wurk/actions/runs/1' }
     entry['completedAt'] = '2026-01-01T00:04:12Z' if status == 'COMPLETED'
