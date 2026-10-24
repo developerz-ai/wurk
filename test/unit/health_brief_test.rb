@@ -21,10 +21,25 @@ require 'fileutils'
 #   1. FAIL CLOSED. `gh api .../actions/runs/<id>/jobs` is the only thing
 #      between a `gh` error and a false green: with the read empty the row falls
 #      through to grading on `conclusion`, printing `success <sha>` for a run
-#      it knows nothing about.
-#   2. The dup signature REQUIRES `detect changed paths` to conclude success.
-#      A failed or cancelled detect publishes no outputs, `needs:` skips every
-#      dependent, and the job list comes back all-skipped with no dup in it.
+#      it knows nothing about. The row's own word for that state is
+#      `evidence unavailable`, and it never reads as green.
+#   2. A successful push run grades into EXACTLY ONE named class, read off the
+#      job list: `executed` (a gated step ran), `duplicate-skipped` (the tree
+#      was reused) or `evidence unavailable` (the list could not be read, or
+#      carries no gated job). The conclusion alone cannot tell them apart — a
+#      reused tree concludes `success` having run nothing — so the brief has to
+#      name the classes AND the evidence they are read from: the job list, the
+#      `detect changed paths` job's conclusion, every gated job's conclusion
+#      and every gated job's STEP conclusions. CI gates those jobs per STEP
+#      (test.yml:153-157), so a dup'd push reports the gated jobs as
+#      `success` with every gated step `skipped` — the runner's own `Set up
+#      job` and `Complete job` steps excepted, which conclude `success` on a
+#      job that did nothing. A job-level `skipped` is a shape no CI run
+#      emits, and a classifier reading it graded every dup as a run that
+#      executed its gates. The dup signature REQUIRES `detect changed
+#      paths` to conclude success. A failed or cancelled detect publishes no
+#      outputs, `needs:` skips every dependent before it starts, and the job
+#      list comes back with the gated jobs skipped and carrying no steps.
 #   3. A release run that published NOTHING still concludes success — the jobs
 #      that were skipped do not fail the run — so row 9 reads `preflight`
 #      success + `release` skipped and names that a no-op. A run still
@@ -40,7 +55,7 @@ require 'fileutils'
 #      shape wins by prefix and names a tag nothing can ever select. The brief
 #      must also name the gap it cannot close: no allowlisted command reaches
 #      the demo's own `/wurk/api/meta`.
-#   5. Row 13 reads the shape `gh` actually emits. `--json statusCheckRollup`
+#   5. Row 14 reads the shape `gh` actually emits. `--json statusCheckRollup`
 #      is a LIST of CheckRun/StatusContext entries to roll up, never a state on
 #      the PR, so a fixture shaped `{"state": "FAILURE"}` agrees with a read the
 #      CLI cannot satisfy and grades a 35-day-old failing PR as "" — the row
@@ -120,6 +135,7 @@ class HealthBriefTest < Minitest::Test
 
   SHA_DUP        = 'd' * 40
   SHA_GREEN      = 'a' * 40
+  SHA_RED        = '8' * 40
   SHA_TOPOLOGY   = 'c' * 40
   SHA_ECOSYSTEM  = 'e' * 40
   SHA_PUBLISHED  = 'b' * 40
@@ -142,6 +158,12 @@ class HealthBriefTest < Minitest::Test
   DEMO_TAG       = 'sha-7777777'
   API_CONTROLLER = File.join(ROOT, 'app', 'controllers', 'wurk', 'api_controller.rb')
 
+  # The three classes a successful push run grades into, read off the job
+  # list. A verdict names EXACTLY ONE of them: the run's conclusion alone
+  # cannot tell them apart — a reused tree concludes `success` having run
+  # nothing at all.
+  CLASSIFICATIONS = ['executed', 'duplicate-skipped', 'evidence unavailable'].freeze
+
   # deploy-demo.yml's step names. `gh run view --log` carries one in field 2 of
   # every line it prints, and row 12 keeps only the first one's lines.
   RESOLVE_STEP = 'resolve built commit'
@@ -160,49 +182,78 @@ class HealthBriefTest < Minitest::Test
     @text = File.read(BRIEF)
   end
 
-  def test_dup_push_run_with_every_gated_job_skipped_grades_unhealthy
-    out, err, status = run_row8(jobs: jobs_json(detect: 'success', gated: 'skipped'),
+  def test_dup_push_run_with_every_gated_step_skipped_is_duplicate_skipped
+    # A run whose `detect changed paths` concluded success and whose every
+    # gated job reported `success` with every one of its steps `skipped` —
+    # the runner's own `Set up job` and `Complete job` excepted, both of
+    # which conclude `success` on a job whose gate never ran — reused a tree
+    # that already passed that workflow. CI gates those jobs per
+    # STEP (test.yml:153-157), so that — not a job-level `skipped` — is the
+    # shape a dup'd push produces. It is neither a green the row did not earn
+    # nor a failure: the verdict names the reuse and the push files no ask.
+    out, err, status = run_row8(jobs: jobs_json(detect: 'success', gate: 'skipped'),
                                 conclusion: 'success', sha: SHA_DUP)
 
     assert_predicate status, :success?,
                      "row 8's command must run cleanly (status=#{status.inspect}, " \
                      "stdout=#{out.inspect}, stderr=#{err.inspect})"
 
-    assert_includes out, 'Unhealthy',
+    assert_includes out, 'duplicate-skipped',
                     'a run whose `detect changed paths` concluded success and whose ' \
-                    'every other job came back `skipped` IS a dup\'d push — it must ' \
-                    'grade Unhealthy even though conclusion=success; ' \
-                    "got stdout=#{out.inspect}"
+                    'every gated step came back `skipped` reused a tree that already ' \
+                    "passed — the verdict must name that class; got stdout=#{out.inspect}"
+
+    assert_includes out, 'the gated steps were skipped; the tree already passed that workflow',
+                    'the verdict must NAME the reuse: a reused tree is neither "the ' \
+                    "tests executed\" nor a failure; got stdout=#{out.inspect}"
 
     assert_includes out, SHA_DUP,
-                    'the Unhealthy verdict must surface the dup\'d headSha: that ' \
-                    'coverage came from the PR run, so main has no signal of its ' \
-                    "own and the ask has to name the sha; got stdout=#{out.inspect}"
+                    'the verdict must surface the headSha of the run that reused the ' \
+                    "tree; got stdout=#{out.inspect}"
 
-    refute_includes out, 'verdict unknown',
-                    'a readable jobs list is a verdict, not an unknown'
+    assert_includes out, URL_TEST,
+                    "the verdict must carry the run url; got #{out.inspect}"
+
+    refute_includes out, 'Unhealthy',
+                    'a reused tree is not broken — the tree already passed that ' \
+                    "workflow, so the push files no ask; got stdout=#{out.inspect}"
+
+    refute_includes out, 'failure',
+                    "a reused tree is not a failure; got stdout=#{out.inspect}"
+
+    refute_match(/\bsuccess\b/, out,
+                 'the verdict must not print a green `success` it did not earn: the ' \
+                 "gated steps never ran; got stdout=#{out.inspect}")
+
+    assert_equal ['duplicate-skipped'], classifications(out),
+                 'a successful push grades exactly one class'
   end
 
-  def test_run_whose_gated_jobs_actually_ran_grades_on_conclusion
-    out, err, status = run_row8(jobs: jobs_json(detect: 'success', gated: 'success'),
+  def test_run_whose_gated_jobs_actually_ran_grades_executed
+    out, err, status = run_row8(jobs: jobs_json(detect: 'success', gate: 'success'),
                                 conclusion: 'success', sha: SHA_GREEN)
 
     assert_predicate status, :success?,
                      "row 8's command must run cleanly (status=#{status.inspect}, " \
                      "stdout=#{out.inspect}, stderr=#{err.inspect})"
 
-    assert_equal ["success #{SHA_GREEN} #{URL_TEST}"], out.lines.map(&:chomp),
-                 'gated jobs that really ran make this an ordinary main run: the ' \
-                 'row grades on conclusion and prints `success <sha> <url>`'
+    assert_equal ["executed: success #{SHA_GREEN} #{URL_TEST}"], out.lines.map(&:chomp),
+                 'gated jobs that really ran make this an ordinary main run: the row ' \
+                 'grades it `executed`, carrying the run\'s conclusion, sha and url'
 
     refute_includes out, 'Unhealthy',
                     'a run whose gated jobs succeeded is not a dup'
-    refute_includes out, 'verdict unknown',
+    refute_includes out, 'duplicate-skipped',
+                    'a run whose gated jobs succeeded is not a reused tree'
+    refute_includes out, 'evidence unavailable',
                     'a readable jobs list is a verdict, not an unknown'
+
+    assert_equal ['executed'], classifications(out),
+                 'a successful push grades exactly one class'
   end
 
-  def test_unreadable_jobs_list_never_grades_success
-    out, err, _status = run_row8(jobs: jobs_json(detect: 'success', gated: 'skipped'),
+  def test_unreadable_jobs_list_grades_evidence_unavailable
+    out, err, _status = run_row8(jobs: jobs_json(detect: 'success', gate: 'skipped'),
                                  conclusion: 'success', sha: SHA_DUP, jobs_fail: true)
 
     refute_includes out, "success #{SHA_DUP}",
@@ -211,22 +262,57 @@ class HealthBriefTest < Minitest::Test
                     'not fall through to grading on conclusion and print a false ' \
                     "green (stdout=#{out.inspect}, stderr=#{err.inspect})"
 
-    assert_includes out, 'verdict unknown',
-                    'an unreadable jobs list must surface as `verdict unknown` so ' \
-                    "the next checkup re-runs it; got stdout=#{out.inspect}"
+    assert_includes out, 'evidence unavailable',
+                    'an unreadable jobs list must surface as `evidence unavailable` ' \
+                    "so the next checkup re-runs it; got stdout=#{out.inspect}"
+
+    refute_match(/\bsuccess\b/, out,
+                 'an unreadable jobs list never reads as green; ' \
+                 "got stdout=#{out.inspect}")
 
     assert_includes out, SHA_DUP,
-                    '`verdict unknown` must still name the sha it could not grade, ' \
-                    "so the ask can link the run; got stdout=#{out.inspect}"
+                    '`evidence unavailable` must still name the sha it could not ' \
+                    "grade, so the ask can link the run; got stdout=#{out.inspect}"
+
+    assert_includes out, URL_TEST,
+                    '`evidence unavailable` must still carry the run url; ' \
+                    "got stdout=#{out.inspect}"
+
+    assert_equal ['evidence unavailable'], classifications(out),
+                 'a successful push grades exactly one class'
+  end
+
+  def test_a_successful_run_with_no_gated_job_grades_evidence_unavailable
+    # The job list was readable, but it carries no gated job at all: there is
+    # no evidence of execution in it, so the row must not certify the run on
+    # its conclusion alone.
+    out, err, status = run_row8(jobs: jobs_json_without_gated_jobs(detect: 'success'),
+                                conclusion: 'success', sha: SHA_GREEN)
+
+    assert_predicate status, :success?,
+                     "row 8's command must run cleanly (status=#{status.inspect}, " \
+                     "stdout=#{out.inspect}, stderr=#{err.inspect})"
+
+    assert_includes out, 'evidence unavailable',
+                    'a job list carrying no gated job holds no evidence of ' \
+                    "execution; got stdout=#{out.inspect}"
+
+    refute_match(/\bsuccess\b/, out,
+                 'a job list carrying no gated job never reads as green; ' \
+                 "got stdout=#{out.inspect}")
+
+    assert_equal ['evidence unavailable'], classifications(out),
+                 'a successful push grades exactly one class'
   end
 
   def test_failed_detect_is_not_read_as_a_dup
-    # The counterexample to "all-skipped means dup and nothing else": a `detect`
-    # that fails or is cancelled publishes no outputs, `needs:` then skips every
-    # dependent, and the job list comes back all-skipped with no dup anywhere in
-    # it. The run's own conclusion is `failure`, and that — not a dup'd PR run —
-    # is why nothing ran.
-    out, err, status = run_row8(jobs: jobs_json(detect: 'failure', gated: 'skipped'),
+    # The counterexample to "every gated step skipped means dup and nothing
+    # else": a `detect` that fails or is cancelled publishes no outputs,
+    # `needs:` then skips every dependent before it starts, and the job list
+    # comes back with the gated jobs reporting `skipped` and carrying no
+    # steps. The run's own conclusion is `failure`, and that — not a dup'd PR
+    # run — is why nothing ran.
+    out, err, status = run_row8(jobs: jobs_json_after_failed_detect,
                                 conclusion: 'failure', sha: SHA_DUP)
 
     assert_predicate status, :success?,
@@ -234,9 +320,34 @@ class HealthBriefTest < Minitest::Test
                      "stdout=#{out.inspect}, stderr=#{err.inspect})"
 
     assert_equal ["failure #{SHA_DUP} #{URL_TEST}"], out.lines.map(&:chomp),
-                 'a failed `detect` skips every dependent via `needs:` and yields ' \
-                 'the same all-skipped job list, so the dup signature must require ' \
-                 "detect's own success; got stdout=#{out.inspect}"
+                 'a failed `detect` skips every dependent via `needs:` before it ' \
+                 'starts, so the gated jobs report `skipped` and carry no steps, ' \
+                 "and the dup signature must require detect's own success; got stdout=#{out.inspect}"
+
+    refute_includes out, 'duplicate-skipped',
+                    'a failed `detect` is not a reused tree: the run grades on its own ' \
+                    "conclusion; got stdout=#{out.inspect}"
+  end
+
+  def test_a_red_run_grades_on_its_own_conclusion
+    # The classification only covers a green run: a red one grades on its own
+    # conclusion, exactly as it always did.
+    out, err, status = run_row8(jobs: jobs_json(detect: 'success', gate: 'failure'),
+                                conclusion: 'failure', sha: SHA_RED)
+
+    assert_predicate status, :success?,
+                     "row 8's command must run cleanly (status=#{status.inspect}, " \
+                     "stdout=#{out.inspect}, stderr=#{err.inspect})"
+
+    assert_equal ["failure #{SHA_RED} #{URL_TEST}"], out.lines.map(&:chomp),
+                 "a red run grades on its own conclusion (stdout=#{out.inspect})"
+
+    refute_includes out, 'executed',
+                    'a red run is not `executed`: the gated steps did not all pass'
+    refute_includes out, 'duplicate-skipped',
+                    'a red run is not a reused tree'
+    assert_includes out, URL_TEST,
+                    "a red run's verdict must still carry the run url; got #{out.inspect}"
   end
 
   # A READABLE but EMPTY run list is its own outcome, and it is not the
@@ -247,7 +358,7 @@ class HealthBriefTest < Minitest::Test
   # `verdict unknown null null`: a verdict naming nothing, carrying a run
   # that does not exist. The row now names the outcome and the workflow.
   def test_row8_empty_run_list_is_a_named_no_run_outcome
-    out, err, status = run_row8(jobs: jobs_json(detect: 'success', gated: 'skipped'),
+    out, err, status = run_row8(jobs: jobs_json(detect: 'success', gate: 'skipped'),
                                 conclusion: 'success', sha: SHA_GREEN, runs: :empty)
 
     assert_predicate status, :success?,
@@ -286,7 +397,7 @@ class HealthBriefTest < Minitest::Test
   # It is a different finding from the empty one above and must not look
   # like it.
   def test_row8_unreadable_run_list_grades_verdict_unknown_not_readable
-    out, err, status = run_row8(jobs: jobs_json(detect: 'success', gated: 'skipped'),
+    out, err, status = run_row8(jobs: jobs_json(detect: 'success', gate: 'skipped'),
                                 conclusion: 'success', sha: SHA_GREEN, runs: :fail)
 
     assert_predicate status, :success?,
@@ -320,10 +431,10 @@ class HealthBriefTest < Minitest::Test
                     "(stdout=#{out.inspect})"
   end
 
-  def test_row13_names_the_offending_workflow
-    # topology.yml is the dup'd lane, ecosystem.yml ran its gated job: the ask
-    # has to name WHICH lane went unverified, or the reader cannot tell which
-    # workflow to go look at.
+  def test_row13_classifies_both_lanes_and_names_each_workflow
+    # topology.yml reused a tree, ecosystem.yml ran its gated job: each line
+    # must name its own lane, its own class and its own run, or the reader
+    # cannot tell which workflow to go look at.
     out, err, status = run_row13
 
     assert_predicate status, :success?,
@@ -331,25 +442,140 @@ class HealthBriefTest < Minitest::Test
                      "stdout=#{out.inspect}, stderr=#{err.inspect})"
 
     lines = out.lines.map(&:chomp)
-    unhealthy = lines.select { |line| line.include?('Unhealthy') }
 
-    assert_equal 1, unhealthy.size,
-                 "exactly one of the two lanes must grade Unhealthy; got #{lines.inspect}"
+    assert_equal 2, lines.size,
+                 "row 13 prints one line per lane; got #{lines.inspect}"
 
-    assert_includes unhealthy.first, 'topology.yml',
-                    "the Unhealthy line must name topology.yml; got #{unhealthy.first.inspect}"
+    topology = lines.find { |line| line.start_with?('topology.yml') }
+    ecosystem = lines.find { |line| line.start_with?('ecosystem.yml') }
 
-    refute_includes unhealthy.first, 'ecosystem.yml',
-                    'the Unhealthy line must not name ecosystem.yml, which ran its ' \
-                    "gated job; got #{unhealthy.first.inspect}"
+    refute_nil topology,
+               "the topology.yml lane must print its own line; got #{lines.inspect}"
+    refute_nil ecosystem,
+               "the ecosystem.yml lane must print its own line; got #{lines.inspect}"
 
-    assert_includes unhealthy.first, SHA_TOPOLOGY,
-                    "the Unhealthy line must carry topology.yml's own headSha; got " \
-                    "#{unhealthy.first.inspect}"
+    assert_includes topology, 'duplicate-skipped',
+                    'topology.yml reused a tree, so its line must name that class; ' \
+                    "got #{topology.inspect}"
 
-    assert_includes lines, "ecosystem.yml success #{SHA_ECOSYSTEM} #{URL_ECOSYSTEM}",
-                    'the healthy lane still grades on its own conclusion and reports ' \
-                    "its own sha and run url; got #{lines.inspect}"
+    assert_includes topology, 'the gated steps were skipped; the tree already passed that workflow',
+                    "the topology.yml line must name the reuse, like row 8's verdict " \
+                    "does; got #{topology.inspect}"
+
+    assert_includes topology, SHA_TOPOLOGY,
+                    'the topology.yml line must carry its own headSha; ' \
+                    "got #{topology.inspect}"
+
+    assert_includes topology, URL_TOPOLOGY,
+                    "the topology.yml line must carry its own run url; got #{topology.inspect}"
+
+    assert_equal ['duplicate-skipped'], classifications(topology),
+                 'the topology.yml line grades exactly one class'
+
+    assert_includes ecosystem, 'executed',
+                    'ecosystem.yml ran its gated job, so its line must name that ' \
+                    "class; got #{ecosystem.inspect}"
+
+    assert_includes ecosystem, SHA_ECOSYSTEM,
+                    'the ecosystem.yml line must carry its own headSha; ' \
+                    "got #{ecosystem.inspect}"
+
+    assert_includes ecosystem, URL_ECOSYSTEM,
+                    "the ecosystem.yml line must carry its own run url; got #{ecosystem.inspect}"
+
+    assert_equal ['executed'], classifications(ecosystem),
+                 'the ecosystem.yml line grades exactly one class'
+
+    refute_includes out, 'Unhealthy',
+                    'a reused tree is not broken — neither lane files an ask for it; ' \
+                    "got #{out.inspect}"
+  end
+
+  def test_row13_fails_closed_when_the_jobs_list_is_unreadable
+    out, err, status = run_row13(jobs_fail: true)
+
+    assert_predicate status, :success?,
+                     "row 13's command must run cleanly (status=#{status.inspect}, " \
+                     "stdout=#{out.inspect}, stderr=#{err.inspect})"
+
+    lines = out.lines.map(&:chomp)
+
+    assert_equal 2, lines.size,
+                 "row 13 prints one line per lane; got #{lines.inspect}"
+
+    lines.each do |line|
+      assert_includes line, 'evidence unavailable',
+                      'an unreadable jobs list must grade `evidence unavailable`; ' \
+                      "got #{line.inspect}"
+
+      refute_match(/\bsuccess\b/, line,
+                   'an unreadable jobs list never reads as green; ' \
+                   "got #{line.inspect}")
+    end
+
+    assert_includes out, SHA_TOPOLOGY,
+                    'the topology.yml lane must still name its own sha; ' \
+                    "got #{out.inspect}"
+    assert_includes out, URL_TOPOLOGY,
+                    'the topology.yml lane must still carry its own run url; ' \
+                    "got #{out.inspect}"
+    assert_includes out, SHA_ECOSYSTEM,
+                    'the ecosystem.yml lane must still name its own sha; ' \
+                    "got #{out.inspect}"
+    assert_includes out, URL_ECOSYSTEM,
+                    'the ecosystem.yml lane must still carry its own run url; ' \
+                    "got #{out.inspect}"
+  end
+
+  def test_row13_fails_closed_when_a_lane_carries_no_gated_job
+    # `sidekiq release watcher` is ecosystem.yml's schedule/dispatch-only job:
+    # on a push it reports `skipped` with no steps, and row 13 excludes it by
+    # name because it is never gated on dup. A lane whose job list therefore
+    # carries no gated job at all holds no evidence of execution — the row
+    # must fail closed instead of reading the watcher's skip as a reuse.
+    out, err, status = run_row13(topology: jobs_json_without_gated_jobs(detect: 'success', watcher: true))
+
+    assert_predicate status, :success?,
+                     "row 13's command must run cleanly (status=#{status.inspect}, " \
+                     "stdout=#{out.inspect}, stderr=#{err.inspect})"
+
+    lines = out.lines.map(&:chomp)
+
+    assert_equal 2, lines.size,
+                 "row 13 prints one line per lane; got #{lines.inspect}"
+
+    topology = lines.find { |line| line.start_with?('topology.yml') }
+    ecosystem = lines.find { |line| line.start_with?('ecosystem.yml') }
+
+    assert_includes topology, 'evidence unavailable',
+                    'a lane whose job list carries no gated job holds no evidence of ' \
+                    "execution; got #{topology.inspect}"
+
+    assert_includes topology, 'the jobs list carries no gated job',
+                    'the excluded watcher is not a gated job, so the lane holds no ' \
+                    "evidence of execution at all; got #{topology.inspect}"
+
+    refute_match(/\bsuccess\b/, topology,
+                 'a lane with no gated job never reads as green; ' \
+                 "got #{topology.inspect}")
+
+    refute_includes topology, 'duplicate-skipped',
+                    'the excluded watcher is not a gated job, so its skip is not a ' \
+                    "reuse; got #{topology.inspect}"
+
+    assert_includes topology, SHA_TOPOLOGY,
+                    'the topology.yml line must still name its own sha; ' \
+                    "got #{topology.inspect}"
+
+    assert_includes topology, URL_TOPOLOGY,
+                    "the topology.yml line must still carry its own run url; got #{topology.inspect}"
+
+    assert_equal ['evidence unavailable'], classifications(topology),
+                 'the topology.yml line grades exactly one class'
+
+    assert_includes ecosystem, 'executed',
+                    "the other lane is unaffected by its neighbour's missing evidence; " \
+                    "got #{ecosystem.inspect}"
   end
 
   # Row 13 grades two lanes in one loop, so an empty run list has to be
@@ -445,9 +671,10 @@ class HealthBriefTest < Minitest::Test
     lines = out.lines.map(&:chomp)
 
     assert_equal ['no run: topology.yml has no matching run',
-                  "ecosystem.yml success #{SHA_ECOSYSTEM} #{URL_ECOSYSTEM}"], lines,
-                 'the empty lane names itself and the lane that has a run still grades ' \
-                 "on its own conclusion; got #{lines.inspect}"
+                  "ecosystem.yml executed: success #{SHA_ECOSYSTEM} #{URL_ECOSYSTEM}"], lines,
+                 'the empty lane names itself and the lane that has a run still grades — ' \
+                 'with the gated steps graded, the readable lane classifies as `executed` ' \
+                 "rather than printing its bare conclusion; got #{lines.inspect}"
 
     refute_includes out, 'Unhealthy',
                     "an empty lane is not a red lane (stdout=#{out.inspect})"
@@ -1084,7 +1311,7 @@ class HealthBriefTest < Minitest::Test
   end
 
   def test_unreadable_demo_log_never_grades_success
-    # Row 11 reads the `build` job log separately (`gh run view ... --job ... --log`)
+    # Row 12 reads the `build` job log separately (`gh run view ... --job ... --log`)
     # because step logs are not carried on the jobs API. If that read fails — a
     # rate-limit, a 4xx, or a 5xx — the jobs list is fine but the tag is unknowable,
     # so the row must fail closed exactly the way an unreadable jobs list does:
@@ -1297,7 +1524,8 @@ class HealthBriefTest < Minitest::Test
     # (weekly interval + 14d cooldown + 7d margin, dependabot.yml:27-30). The
     # PR has run past its entire grace window — it IS stuck. The row must
     # print one `Unhealthy: Dependabot is stuck on #<n>` line naming the
-    # number, so the ask can link the PR (cf. health.md:105-114).
+    # number, so the ask can link the PR (cf. the RubyGems row's `Unhealthy:`
+    # line, which names the missing version so the ask can link it).
     now = Time.now.utc
     pr = {
       'number' => 7203,
@@ -1419,7 +1647,7 @@ class HealthBriefTest < Minitest::Test
   end
 
   def test_past_budget_but_green_pr_is_not_stuck
-    # health.md:103's first half: a PR past its budget whose checks all
+    # the rollup rules' SUCCESS half: a PR past its budget whose checks all
     # concluded SUCCESS is not stuck — an old green is just an old
     # human-pending merge, not a regression dependabot can fix on its own.
     # This is the same 35d/28d bundler shape as the stuck test, differing
@@ -1447,7 +1675,7 @@ class HealthBriefTest < Minitest::Test
   end
 
   def test_past_budget_but_pending_pr_is_not_stuck
-    # health.md:103's second half: a rollup that is still PENDING is in flight,
+    # the rollup rules' PENDING half: a rollup that is still PENDING is in flight,
     # so it is not stuck either. Same 35d/28d bundler shape, one check concluded
     # and one still running — Actions sends `conclusion: null` for a job in
     # progress. A rollup that is neither clean nor red must not be graded
@@ -2060,19 +2288,20 @@ class HealthBriefTest < Minitest::Test
   end
 
   def test_job_list_rows_print_the_run_url_with_every_verdict
-    # The URL has to survive into every branch, not just the green one: a dup,
-    # an unknown and a no-op are exactly the lines that become an ask.
-    out, = run_row8(jobs: jobs_json(detect: 'success', gated: 'skipped'),
+    # The URL has to survive into every branch, not just the green one: a
+    # duplicate-skipped push, an ungraded line and a no-op are exactly the
+    # lines a reader has to follow back to the run.
+    out, = run_row8(jobs: jobs_json(detect: 'success', gate: 'skipped'),
                     conclusion: 'success', sha: SHA_DUP)
 
     assert_includes out, URL_TEST,
-                    "a dup verdict must carry the run url too; got #{out.inspect}"
+                    "a duplicate-skipped verdict must carry the run url too; got #{out.inspect}"
 
-    out, = run_row8(jobs: jobs_json(detect: 'success', gated: 'skipped'),
+    out, = run_row8(jobs: jobs_json(detect: 'success', gate: 'skipped'),
                     conclusion: 'success', sha: SHA_DUP, jobs_fail: true)
 
     assert_includes out, URL_TEST,
-                    'an ungraded (`verdict unknown`) line must still carry the run ' \
+                    'an ungraded (`evidence unavailable`) line must still carry the run ' \
                     "url; got #{out.inspect}"
 
     out, = run_row9(jobs: release_jobs_json(preflight: 'success', release: 'skipped', demo: 'skipped'),
@@ -2084,7 +2313,7 @@ class HealthBriefTest < Minitest::Test
     out, = run_row13
 
     assert_includes out, URL_TOPOLOGY,
-                    "the dup'd lane's Unhealthy line must carry its run url; got #{out.inspect}"
+                    "the reused lane's duplicate-skipped line must carry its run url; got #{out.inspect}"
     assert_includes out, URL_ECOSYSTEM,
                     "the healthy lane's line must carry its own run url; got #{out.inspect}"
 
@@ -2138,18 +2367,21 @@ class HealthBriefTest < Minitest::Test
   def test_dup_grading_stays_fail_closed_after_the_documentation
     # The confirm-the-dup paragraph must not have relaxed the grading it
     # documents: a failed detect is still not a dup, and an unreadable job
-    # list is still `verdict unknown`.
-    out, = run_row8(jobs: jobs_json(detect: 'failure', gated: 'skipped'),
+    # list is still `evidence unavailable`.
+    out, = run_row8(jobs: jobs_json_after_failed_detect,
                     conclusion: 'failure', sha: SHA_DUP)
 
     refute_includes out, 'Unhealthy',
                     'documenting the dup signature must not turn a failed detect into ' \
                     "a dup; got #{out.inspect}"
 
-    out, = run_row8(jobs: jobs_json(detect: 'success', gated: 'skipped'),
+    refute_includes out, 'duplicate-skipped',
+                    "a failed detect is not a reused tree; got #{out.inspect}"
+
+    out, = run_row8(jobs: jobs_json(detect: 'success', gate: 'skipped'),
                     conclusion: 'success', sha: SHA_DUP, jobs_fail: true)
 
-    assert_includes out, 'verdict unknown',
+    assert_includes out, 'evidence unavailable',
                     "the fail-closed unknown grade must survive; got #{out.inspect}"
   end
 
@@ -2225,8 +2457,7 @@ class HealthBriefTest < Minitest::Test
   def test_ask_titles_are_stable_per_signal
     para = filing_paragraph
 
-    ['`main is red`', '`main is green only via a dup\'d push`',
-     '`release did not publish`'].each do |title|
+    ['`main is red`', '`release did not publish`'].each do |title|
       assert_includes para, title,
                       'the dedupe match is exact equality on the title, so every title the ' \
                       'brief gives must be the signal\'s stable name, identical on every ' \
@@ -2234,7 +2465,6 @@ class HealthBriefTest < Minitest::Test
     end
 
     ['`main is red at <sha>`',
-     '`main is green only via a dup\'d push at <sha>`',
      '`release <v> did not publish`'].each do |old_title|
       refute_includes para, old_title,
                       "#{old_title} embeds what changes run to run, so an exact-match dedupe " \
@@ -2245,6 +2475,59 @@ class HealthBriefTest < Minitest::Test
       refute_includes para, token,
                       "#{token} is run-specific and may name no part of a title: refer to it " \
                       'in prose (headSha, version) and carry the value in the body'
+    end
+  end
+
+  def test_a_red_run_still_files_its_stable_ask_title
+    para = filing_paragraph
+
+    ['`main is red`', '`topology.yml is red`', '`ecosystem.yml is red`'].each do |title|
+      assert_includes para, title,
+                      'a red run still files one deduped ask, and its title is the ' \
+                      'signal\'s stable name, identical on every occurrence; the filing ' \
+                      "paragraph is missing #{title}"
+    end
+  end
+
+  def test_a_reused_tree_files_no_ask
+    para = filing_paragraph
+
+    ['`main is green only via a dup\'d push`',
+     '`topology.yml is green only via a dup\'d push`',
+     '`ecosystem.yml is green only via a dup\'d push`'].each do |title|
+      refute_includes para, title,
+                      'a duplicate-skipped push reused a tree that already passed that ' \
+                      'workflow, so it is neither a green nor a red signal: it files no ' \
+                      "ask, and the filing rule must not offer one (#{title})"
+    end
+  end
+
+  # The classification is only as good as the evidence the brief says it
+  # reads: the job list, the `detect changed paths` job's conclusion, every
+  # gated job's conclusion and every gated job's step conclusions. A reader who
+  # cannot see those cannot tell a reused tree from a run that ran nothing, and
+  # the brief must say that an unreadable list is not verified main health.
+  def test_the_dup_prose_names_the_evidence_the_classification_reads
+    para = dup_grading_block
+
+    assert_includes para, 'gh api repos/$repo/actions/runs/<databaseId>/jobs',
+                    'the dup prose must name the jobs list the classification reads'
+
+    assert_includes para, 'detect changed paths',
+                    "the classification reads the `detect changed paths` job's conclusion; " \
+                    "got #{para.inspect}"
+
+    assert_match(/every gated job/, para,
+                 "the classification reads every gated job's conclusion; got #{para.inspect}")
+
+    assert_includes para, 'not verified main health',
+                    'an unreadable job list is not verified main health, and the prose ' \
+                    "must say so; got #{para.inspect}"
+
+    CLASSIFICATIONS.each do |token|
+      assert_includes para, token,
+                      "the prose must name the #{token} verdict, or a reader cannot " \
+                      "tell the classes apart; got #{para.inspect}"
     end
   end
 
@@ -2264,6 +2547,27 @@ class HealthBriefTest < Minitest::Test
     raise 'the demo block is not followed by the filing convention' if last.nil?
 
     lines[first...last].join("\n")
+  end
+
+  # The brief's "Grading a dup'd push" block — the prose that says how a push
+  # run is classified and which evidence the classification is read from.
+  # Bounded on the next '**'-starting line, so the release paragraph that
+  # follows stays out of it.
+  def dup_grading_block
+    lines = @text.lines.map(&:chomp)
+    first = lines.index { |line| line.start_with?('**Grading a dup') }
+
+    raise 'health.md has no "Grading a dup\'d push" block' if first.nil?
+
+    last = ((first + 1)...lines.size).find { |i| lines[i].start_with?('**') } || lines.size
+
+    lines[first...last].join("\n")
+  end
+
+  # The classes a verdict names. A line carrying two of them (or none) is a
+  # classification the reader cannot act on.
+  def classifications(out)
+    CLASSIFICATIONS.select { |token| out.include?(token) }
   end
 
   # The brief's paragraph telling a reader how to confirm a dup'd push against
@@ -2313,15 +2617,57 @@ class HealthBriefTest < Minitest::Test
   end
 
   # A `gh api repos/.../actions/runs/<id>/jobs` response shaped like the real
-  # one: `detect changed paths` plus the gated jobs reading
-  # `needs.detect.outputs`. `sidekiq release watcher` is ecosystem.yml's
-  # schedule/dispatch-only job — it is skipped on every push, which is why
-  # row 13 excludes it by name.
-  def jobs_json(detect:, gated:)
+  # one: `detect changed paths` plus the gated jobs. These workflows gate every
+  # job PER STEP (`RUN: needs.detect.outputs.dup != 'true'` with
+  # `if: env.RUN == 'true'` on each step — test.yml:153-157), so a job whose
+  # gate did not run still reports `success` and every one of its steps reports
+  # `skipped` — except the runner's own `Set up job` and `Complete job`, the
+  # steps bracketing every job, which conclude `success` even here. That is
+  # the shape a dup'd push produces; the job-level `skipped` this fixture
+  # used to fabricate never occurs, and a `gate_steps` filter excepting only
+  # `Set up job` graded a dup'd run that carries `Complete job` as `executed`.
+  # `gate:` is what the gated jobs' own step concluded — `skipped` when the
+  # gate did not run, `success` when it did — and the job's own conclusion
+  # follows it, except for a skipped gate: a job whose steps were all skipped
+  # still concludes `success`.
+  # `sidekiq release watcher` is ecosystem.yml's schedule/dispatch-only job —
+  # it is skipped on every push (a job-level `if:`), which is why row 13
+  # excludes it by name. It belongs to ecosystem.yml's job list only, so
+  # `watcher:` adds it where it really runs.
+  def jobs_json(detect:, gate:, watcher: false)
+    job = gate == 'failure' ? 'failure' : 'success'
+    steps = [{ 'name' => 'Set up job', 'conclusion' => 'success' },
+             { 'name' => 'run the gate', 'conclusion' => gate },
+             { 'name' => 'Complete job', 'conclusion' => 'success' }]
+
     jobs = [{ 'name' => 'detect changed paths', 'conclusion' => detect },
-            { 'name' => 'test + coverage (latest ruby/rails)', 'conclusion' => gated },
-            { 'name' => 'lint (rubocop)', 'conclusion' => gated },
-            { 'name' => 'sidekiq release watcher', 'conclusion' => 'skipped' }]
+            { 'name' => 'test + coverage (latest ruby/rails)', 'conclusion' => job, 'steps' => steps },
+            { 'name' => 'lint (rubocop)', 'conclusion' => job, 'steps' => steps }]
+    jobs << { 'name' => 'sidekiq release watcher', 'conclusion' => 'skipped', 'steps' => [] } if watcher
+
+    JSON.generate('total_count' => jobs.size, 'jobs' => jobs)
+  end
+
+  # The job list a FAILED `detect` leaves behind: `needs:` skips every
+  # dependent before it starts, so the gated jobs report `skipped` and carry
+  # no steps at all.
+  def jobs_json_after_failed_detect
+    jobs = [{ 'name' => 'detect changed paths', 'conclusion' => 'failure' },
+            { 'name' => 'test + coverage (latest ruby/rails)', 'conclusion' => 'skipped', 'steps' => [] },
+            { 'name' => 'lint (rubocop)', 'conclusion' => 'skipped', 'steps' => [] },
+            { 'name' => 'sidekiq release watcher', 'conclusion' => 'skipped', 'steps' => [] }]
+
+    JSON.generate('total_count' => jobs.size, 'jobs' => jobs)
+  end
+
+  # A job list carrying no gated job at all — the detect job alone. There is
+  # no evidence of execution in it, so the row must not certify the run on
+  # its conclusion alone. `watcher` adds ecosystem.yml's schedule-only job:
+  # row 13 excludes it by name, so a lane carrying it and the detect job
+  # still carries no gated job.
+  def jobs_json_without_gated_jobs(detect:, watcher: false)
+    jobs = [{ 'name' => 'detect changed paths', 'conclusion' => detect }]
+    jobs << { 'name' => 'sidekiq release watcher', 'conclusion' => 'skipped', 'steps' => [] } if watcher
 
     JSON.generate('total_count' => jobs.size, 'jobs' => jobs)
   end
@@ -2360,7 +2706,7 @@ class HealthBriefTest < Minitest::Test
   # `gh run view <id> --job <id> --log` prints one tab-separated line per log
   # line: `<job>\t<step>\t<timestamp> <message>` — the job and step names are
   # columns ahead of the log line's own timestamp and text, which share one.
-  # Row 11 picks the step out of field 2, so the fixture has to carry that
+  # Row 12 picks the step out of field 2, so the fixture has to carry that
   # shape — a bare message column, or a timestamp in front of the step, is not
   # what `gh` prints.
   def log_lines(step, messages)
@@ -2598,8 +2944,9 @@ class HealthBriefTest < Minitest::Test
   # Row 13's command — the same read over both lanes. `runs:` drives the run
   # list's SHAPE per lane: a single mode (:default, :empty, :fail) applies to
   # both, a Hash keyed by workflow sets each lane's shape on its own, so one
-  # lane can be empty while the other still grades.
-  def run_row13(jobs_fail: false, runs: :default)
+  # lane can be empty while the other still grades. `topology:` and
+  # `ecosystem:` override a lane's job-list fixture.
+  def run_row13(jobs_fail: false, runs: :default, topology: nil, ecosystem: nil)
     modes = runs.is_a?(Hash) ? runs : { 'topology.yml' => runs, 'ecosystem.yml' => runs }
 
     run_command(command_cell('topology and ecosystem lanes'), jobs_fail: jobs_fail) do |fixtures|
@@ -2609,13 +2956,14 @@ class HealthBriefTest < Minitest::Test
       write_fixture(fixtures, 'topology.yml.sha', SHA_TOPOLOGY)
       write_fixture(fixtures, 'topology.yml.conclusion', 'success')
       write_fixture(fixtures, 'topology.yml.url', URL_TOPOLOGY)
-      write_fixture(fixtures, 'dbid-101.jobs', jobs_json(detect: 'success', gated: 'skipped'))
+      write_fixture(fixtures, 'dbid-101.jobs', topology || jobs_json(detect: 'success', gate: 'skipped'))
 
       write_fixture(fixtures, 'ecosystem.yml.dbid', '102')
       write_fixture(fixtures, 'ecosystem.yml.sha', SHA_ECOSYSTEM)
       write_fixture(fixtures, 'ecosystem.yml.conclusion', 'success')
       write_fixture(fixtures, 'ecosystem.yml.url', URL_ECOSYSTEM)
-      write_fixture(fixtures, 'dbid-102.jobs', jobs_json(detect: 'success', gated: 'success'))
+      ecosystem_jobs = ecosystem || jobs_json(detect: 'success', gate: 'success', watcher: true)
+      write_fixture(fixtures, 'dbid-102.jobs', ecosystem_jobs)
     end
   end
 
