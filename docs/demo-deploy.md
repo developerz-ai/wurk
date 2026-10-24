@@ -109,6 +109,16 @@ the Deployment's commit ref and the served-version probe are deliberately
 different checks: the first records what CI built, the second proves what the
 demo is actually running.
 
+**This is the CI probe's expected side, and it is not the only one.** The
+standalone read-only check in [The served-version check
+(read-only)](#the-served-version-check-read-only) answers a different
+question — "does the demo serve *this checkout's* version?" — and therefore
+reads its expected side from `lib/wurk/version.rb` instead of the lock. The
+two disagree by design: CI asks whether the *image it just built* is the one
+being served, the standalone check asks whether the *checkout* is what the
+demo runs. A push that changes app or lib code without a version bump moves
+the two apart, and that gap is exactly what each one is there to report.
+
 The outcome is written back to the Deployment:
 
 | Probe result | Deployment status | Job |
@@ -125,6 +135,67 @@ aborting on a transient blip.
 create the Deployment and post its statuses. The workflow-level block and the
 `authorize` job are unchanged (`contents: read`): no `id-token`, no
 `actions: write`.
+
+### The served-version check (read-only)
+
+This is a second, independent check — not the CI probe above. The CI probe
+compares the demo against the version the *image it just built* bundles; this
+one compares the demo against the version *this checkout* declares. The demo's
+own endpoint answers both:
+
+```text
+GET https://wurk.demo.developerz.ai/wurk/api/meta
+```
+
+It is **public, unauthenticated, and GET-only** — no token, no session, no
+header. It answers with the running gem's version: `/wurk/api/meta` renders
+`version: ::Wurk::VERSION`
+([`app/controllers/wurk/api_controller.rb`](../app/controllers/wurk/api_controller.rb),
+line 53), so the payload reports the version the *running* process booted with.
+
+The expected side is read from this checkout's
+[`lib/wurk/version.rb`](../lib/wurk/version.rb) — the same extraction the
+release check uses, so the two never drift apart:
+
+```bash
+grep -oE "[\"'][0-9][^\"']*[\"']" lib/wurk/version.rb | head -1 | tr -d "\"'"
+```
+
+That is deliberately **not** the CI probe's expected side. The CI probe reads
+the version out of [`demo/Gemfile.lock`](../demo/Gemfile.lock) — the gem the
+built image actually installs — because it asks whether the image it built is
+the one being served. This check asks whether the *checkout* is what the demo
+runs, so it reads `lib/wurk/version.rb`. A push that changes app or lib code
+without a version bump moves the two apart, and each check reports the gap
+from its own side.
+
+Comparing the two gives exactly three verdicts:
+
+| Verdict | What it means | Grade |
+|---|---|---|
+| **match** — the reported `version` equals the extracted one | the demo is serving this checkout's version | healthy (`success`) |
+| **mismatch** — the probe answered with a parsable `version` that differs | the demo is serving a *different* version than the checkout — a stale digest, or a deploy that never landed | **not healthy** (`Unhealthy`), naming both the served version and the expected one |
+| **unavailable / invalid** — the transport failed, the status was not 200, the body was not exactly one JSON object (leading or trailing garbage included), or the JSON carried no usable `version` | the probe could not establish anything | `verdict unknown` — **never** a green and never a success; the next checkup re-runs it |
+
+An unreachable probe is explicitly **not** healthy: "I could not tell" is not
+"it is fine", and it must never be reported as a match. The mismatch verdict
+names both sides because the two numbers are the whole diagnosis — the version
+being served and the version that was expected. The probe itself is
+deadline-bounded (`--max-time 5`), the same per-request bound the CI probe
+carries: a demo that accepts the connection but stalls the response costs its
+request deadline and grades `verdict unknown` like any other transport failure,
+instead of blocking the scheduled checkup.
+
+**This check is READ-ONLY.** It holds no cluster credentials, no `DOCR_TOKEN`
+and no `ARGOCD_*` secret; it needs no GitHub token and no deployment
+authority, and it grants none. It reads one public JSON endpoint and grades
+what came back — it cannot build an image, push a tag, sync an ArgoCD
+Application, or change anything the demo serves. The demo app is read-only in
+the same sense: `c.read_only = true`
+([`demo/config/initializers/wurk.rb`](../demo/config/initializers/wurk.rb))
+plus `WURK_WEB_READ_ONLY=1` makes every mutating endpoint 403 at the
+middleware layer, so even a request that tried to mutate the demo would be
+refused. The health checkup that runs this probe sends a GET and nothing else.
 
 ### One-time GitHub setup (repo admin)
 
@@ -151,10 +222,47 @@ rewrites every image ref onto DOCR.
 
 ### Error reporting
 
-`WURK_DEMO_REPORT_ERRORS=1` turns on Sentry (`demo/config/initializers/sentry.rb`,
-DSN from `SENTRY_DSN`): web errors through `sentry-rails`, job failures through
-`Wurk::Sentry`. `BrokenJob` and `FlakyWebhookJob` fail on purpose, so their
-events are dropped in `before_send`. Unset, the SDK is never loaded.
+The demo reports errors to Sentry, and only when it is told to. Reporting turns
+on **only** when `WURK_DEMO_REPORT_ERRORS=1` *and* `SENTRY_DSN` is set to a
+non-empty value. With the flag alone, the DSN alone, or neither, the demo never
+requires the SDK, never initialises Sentry and never installs the Wurk
+integration — Wurk's server middleware and error handlers stay exactly as they
+were, and the demo's bundle carries `sentry-ruby` / `sentry-rails` without ever
+loading them.
+
+When it is on, web errors go through `sentry-rails` and job failures through
+[`Wurk::Sentry`](sentry.md), installed straight onto `Wurk.configuration` in
+[`demo/config/initializers/sentry.rb`](../demo/config/initializers/sentry.rb) —
+the demo's worker boots with `server?` false, so `Wurk.configure_server` never
+runs there. The policy lives in the demo app
+([`demo/lib/demo_sentry_policy.rb`](../demo/lib/demo_sentry_policy.rb)), not in
+the gem: the gem ships the integration, the demo decides what it is allowed to
+send.
+
+**Dropped events.** Three rules, and nothing else:
+
+1. `BrokenJob` and `FlakyWebhookJob` — both fail on purpose so the Dead and
+   Retries pages are never empty, so their events would bury every real error
+   under a steady stream of intended ones.
+2. Soak-tagged events: a soak or load run marks its own events with a `soak`
+   tag, and those are dropped too.
+3. Everything else is sent.
+
+The job-class list is exactly those two. Other demo failures that are by-design
+are not on it — the nightly export chunk fails a slice of its runs on purpose —
+so those still report.
+
+**Scrubbed material.** Everything that is sent has its sensitive parts removed
+first. Request headers and cookies lose any entry whose name or whose value
+looks like a credential — an `Authorization` or `Cookie` header, an API key, a
+bearer token, a session cookie — while ordinary headers and cookies survive. A
+header or cookie field in any shape but a Hash — a serialized cookie String,
+as a raw request env arrives — has no entries to scrub, so nothing in it can
+be vouched for: a populated one drops the whole event. Job arguments lose any
+argument whose key looks like a credential, or whose value looks like a
+credential or like personal data (an email address); ordinary arguments
+survive. An event that cannot be scrubbed is dropped rather than sent: the
+demo fails closed.
 
 ## ✅ Infra requirements
 

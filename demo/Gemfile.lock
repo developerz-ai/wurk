@@ -252,8 +252,8 @@ PLATFORMS
 DEPENDENCIES
   puma
   rails (~> 8.0)
-  sentry-rails
-  sentry-ruby
+  sentry-rails (~> 7.1.0)
+  sentry-ruby (~> 7.1.0)
   sqlite3
   wurk!
 
