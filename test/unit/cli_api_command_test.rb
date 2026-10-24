@@ -88,6 +88,21 @@ class CLIApiCommandTest < Wurk::Test::UnitCase
     assert_equal 'puma', @cli.config[:api_server]
   end
 
+  # A fresh CLI per spelling keeps the short forms from inheriting values
+  # merged by the long-form parse.
+  def test_api_short_form_flags_produce_the_same_values_as_the_long_forms
+    long_form = fresh_cli.parse(%w[api --bind 127.0.0.1 --port 8080 --server puma]).config
+    short_form = fresh_cli.parse(%w[api -b 127.0.0.1 -p 8080 -s puma]).config
+
+    assert_equal '127.0.0.1', short_form[:api_bind]
+    assert_equal 8080, short_form[:api_port]
+    assert_instance_of Integer, short_form[:api_port]
+    assert_equal 'puma', short_form[:api_server]
+    assert_equal long_form[:api_bind], short_form[:api_bind]
+    assert_equal long_form[:api_port], short_form[:api_port]
+    assert_equal long_form[:api_server], short_form[:api_server]
+  end
+
   # The swarm binaries take no subcommand. Silently booting a job-consuming
   # swarm for someone who asked for an API server is the worst answer here.
   #
@@ -200,5 +215,14 @@ class CLIApiCommandTest < Wurk::Test::UnitCase
   def parse(args)
     @cli.config[:require] = ::File.expand_path('../../lib/wurk.rb', __dir__)
     @cli.parse(args)
+  end
+
+  def fresh_cli
+    cli = Wurk::CLI.new
+    cli.config = Wurk::Configuration.new
+    cli.config.logger = ::Logger.new(IO::NULL)
+    cli.config.redis = { url: Wurk::Test.redis_url }
+    cli.config[:require] = ::File.expand_path('../../lib/wurk.rb', __dir__)
+    cli
   end
 end

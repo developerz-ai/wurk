@@ -313,14 +313,16 @@ execution spanning an interruption produces two `p` increments and two summed
 again. That is intentional, matches upstream's own double-counting of a second
 `track` call, and is not to be "fixed" back toward single-counting. Full terms
 in `docs/plans/2026/08/07/101-beyond-sidekiq/00-semantics-signoff.md` §1.
-Implementation: `lib/wurk/metrics/history.rb:68-73` and
-`lib/wurk/metrics/statsd.rb:148-153` both rescue and re-raise `Job::Interrupted`.
+Implementation: `lib/wurk/metrics/history.rb:62-87` and
+`lib/wurk/metrics/statsd.rb:161-180` both rescue and re-raise `Job::Interrupted`.
 Chain order verified in `test/unit/metrics_history_test.rb` and
 `test/unit/metrics_statsd_test.rb` (the #394 real-chain tests).
 
-**Anchor:** `lib/wurk/metrics/history.rb:65-86`,
-`lib/wurk/metrics/statsd.rb:145-169,191-196`,
-`lib/wurk/middleware/interrupt_handler.rb:29-34,46`,
+**Anchor:** `lib/wurk/metrics/history.rb:62-87`,
+`lib/wurk/metrics/statsd.rb:161-180`, `lib/wurk/metrics/statsd.rb:213-218`,
+`lib/wurk/middleware/interrupt_handler.rb:35-37,50`,
+`lib/wurk/middleware/expiry.rb:62-64,111`,
+`lib/wurk.rb:335`, `lib/wurk.rb:351`, `lib/wurk.rb:358`,
 `docs/plans/2026/08/07/101-beyond-sidekiq/00-semantics-signoff.md` §1.
 
 ## OpenTelemetry adds `traceparent`/`tracestate` as top-level job-JSON keys, opt-in only

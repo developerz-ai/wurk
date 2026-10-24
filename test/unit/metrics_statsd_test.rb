@@ -417,8 +417,11 @@ class MetricsStatsdTest < Wurk::Test::UnitCase
   end
 
   # Same invariant as MetricsHistoryTest's — see that file for the full
-  # `Chain#traverse` reasoning. Limiter (`lib/wurk.rb:291`) is added before
-  # Statsd (`:299`), so Limiter is OUTER: `Wurk::Limiter::Rescheduled`, raised
+  # `Chain#traverse` reasoning. Limiter is added at `lib/wurk.rb` —
+  # `Wurk.configuration.server_middleware.add(Wurk::Limiter::ServerMiddleware)`
+  # (:335) — before Statsd at `lib/wurk.rb` —
+  # `Wurk.configuration.server_middleware.add(Wurk::Metrics::Statsd)` (:351).
+  # Limiter is OUTER: `Wurk::Limiter::Rescheduled`, raised
   # fresh from Limiter's own `rescue`, is already outside Statsd's stack frame
   # by the time it exists and can never be the exception Statsd#call sees.
   def test_limiter_middleware_is_registered_outer_of_metrics_statsd
@@ -429,6 +432,21 @@ class MetricsStatsdTest < Wurk::Test::UnitCase
     refute_nil limiter_i, 'Limiter::ServerMiddleware must be registered'
     refute_nil statsd_i, 'Metrics::Statsd must be registered'
     assert_operator limiter_i, :<, statsd_i, 'Limiter must be OUTER (registered before) Metrics::Statsd'
+  end
+
+  # Statsd is added in lib/wurk.rb before History, so Statsd is OUTER of
+  # History. Both book the same per-attempt outcome, and the outer one sees
+  # the exception first: a job that blows up unwinds through History and is
+  # recorded as failed before Statsd emits its own failure metric. Swapping
+  # the two would silently reorder which middleware books what.
+  def test_metrics_statsd_is_registered_outer_of_metrics_history
+    klasses = Wurk.configuration.server_middleware.map(&:klass)
+    statsd_i = klasses.index(Wurk::Metrics::Statsd)
+    history_i = klasses.index(Wurk::Metrics::History)
+
+    refute_nil statsd_i, 'Metrics::Statsd must be registered'
+    refute_nil history_i, 'Metrics::History must be registered'
+    assert_operator statsd_i, :<, history_i, 'Metrics::Statsd must be OUTER (registered before) Metrics::History'
   end
 
   # Mirrors MetricsHistoryTest's identical finding: `Rescheduled` itself is

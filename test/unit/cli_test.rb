@@ -5,8 +5,9 @@ require 'tempfile'
 require 'tmpdir'
 
 # Pure-Ruby CLI surface — option parsing, YAML loading, env detection,
-# validation, signal table. The actual `run` / `launch` paths fork the
-# process and are covered in test/integration/cli_boot_test.rb.
+# validation, signal table. The `run` boot path is covered in
+# test/integration/configure_server_boot_test.rb; the `launch`/swarm fork
+# path is covered in test/integration/swarm_cli_test.rb.
 class CLITest < Wurk::Test::UnitCase
   parallelize_me!
 
@@ -98,8 +99,22 @@ class CLITest < Wurk::Test::UnitCase
     assert_equal 12, @cli.config[:concurrency]
   end
 
+  # The long form must parse identically to -c; the table registers both.
+  def test_parse_concurrency_long_flag
+    with_require_set { @cli.parse(%w[--concurrency 12 --queue default]) }
+
+    assert_equal 12, @cli.config[:concurrency]
+  end
+
   def test_parse_queue_flag_repeatable
     with_require_set { @cli.parse(%w[-q critical,3 -q default]) }
+
+    assert_equal %w[critical default], @cli.config.default_capsule.weights.keys
+  end
+
+  # The long form must parse identically to -q, including repeatability.
+  def test_parse_queue_long_flag_repeatable
+    with_require_set { @cli.parse(%w[--queue critical,3 --queue default]) }
 
     assert_equal %w[critical default], @cli.config.default_capsule.weights.keys
   end
@@ -108,6 +123,17 @@ class CLITest < Wurk::Test::UnitCase
     prev = ENV.fetch('RAILS_ENV', nil)
     ENV['RAILS_ENV'] = 'staging'
     with_require_set { @cli.parse(%w[-e production -q default]) }
+
+    assert_equal 'production', @cli.environment
+  ensure
+    prev.nil? ? ENV.delete('RAILS_ENV') : ENV['RAILS_ENV'] = prev
+  end
+
+  # The long form must parse identically to -e.
+  def test_parse_environment_long_flag
+    prev = ENV.fetch('RAILS_ENV', nil)
+    ENV['RAILS_ENV'] = 'staging'
+    with_require_set { @cli.parse(%w[--environment production --queue default]) }
 
     assert_equal 'production', @cli.environment
   ensure
@@ -136,8 +162,22 @@ class CLITest < Wurk::Test::UnitCase
     assert_equal 'billing', @cli.config[:tag]
   end
 
+  # The long form must parse identically to -g.
+  def test_parse_tag_long_flag
+    with_require_set { @cli.parse(%w[--tag billing --queue default]) }
+
+    assert_equal 'billing', @cli.config[:tag]
+  end
+
   def test_parse_timeout_flag
     with_require_set { @cli.parse(%w[-t 60 -q default]) }
+
+    assert_equal 60, @cli.config[:timeout]
+  end
+
+  # The long form must parse identically to -t.
+  def test_parse_timeout_long_flag
+    with_require_set { @cli.parse(%w[--timeout 60 --queue default]) }
 
     assert_equal 60, @cli.config[:timeout]
   end
@@ -150,8 +190,20 @@ class CLITest < Wurk::Test::UnitCase
     assert_equal ::Logger::DEBUG, @cli.config.logger.level
   end
 
+  # The long form must set the same debug level as -v.
+  def test_parse_verbose_long_flag_sets_debug_level
+    with_require_set do
+      @cli.parse(%w[--verbose --queue default])
+    end
+
+    assert_equal ::Logger::DEBUG, @cli.config.logger.level
+  end
+
+  # The version flag must print the release before exiting, not only exit.
   def test_parse_version_exits
-    assert_raises(SystemExit) { capture_io { @cli.parse(['-V']) } }
+    out, _err = capture_io { assert_raises(SystemExit) { @cli.parse(['-V']) } }
+
+    assert_includes out, "Wurk #{Wurk::VERSION}"
   end
 
   def test_parse_help_exits
@@ -170,6 +222,23 @@ class CLITest < Wurk::Test::UnitCase
       YAML
       f.flush
       with_require_set { @cli.parse(['-C', f.path]) }
+
+      assert_equal 7, @cli.config[:concurrency]
+      assert_includes @cli.config.default_capsule.weights.keys, 'critical'
+    end
+  end
+
+  # The long form must load the same YAML config as -C.
+  def test_loads_yaml_config_via_long_config_flag
+    Tempfile.create(['wurk', '.yml']) do |f|
+      f.write(<<~YAML)
+        :concurrency: 7
+        :queues:
+          - critical
+          - default
+      YAML
+      f.flush
+      with_require_set { @cli.parse(['--config', f.path]) }
 
       assert_equal 7, @cli.config[:concurrency]
       assert_includes @cli.config.default_capsule.weights.keys, 'critical'

@@ -7,8 +7,8 @@ is `RELEASE.md`; this brief only decides *when*.
 ## Decide
 
 ```bash
-# Resolve $last via the GitHub API for the canonical value, then verify the ref (peel to a commit), the release (gem-less marker), and the diff window against main.
-last=$(gh api repos/developerz-ai/wurk/git/matching-refs/tags/ \
+# Resolve $last via the GitHub API for the canonical value, then verify the ref (peel to a commit), the release (gem-less marker), the release baseline (the peeled commit IS the release commit for the tag's version), and the diff window against main. The tag listing is PAGINATED: `git/matching-refs` returns its refs in pages, and `--paginate` is what makes the listing complete — it follows the API's link headers through every page and merges them into one array, so a matching tag that sits on a later page is still enumerated before `sort -V | tail -1` picks the highest version. Without it only the first page is returned and the highest tag SEEN may not be the highest tag that EXISTS.
+last=$(gh api --paginate repos/developerz-ai/wurk/git/matching-refs/tags/ \
   | jq -r '.[] | select(.ref | startswith("refs/tags/v")) | .ref | sub("^refs/tags/"; "")' \
   | sort -V \
   | tail -1)
@@ -31,6 +31,23 @@ author=$(echo "$rel" | jq -r '.author.login')
 nassets=$(echo "$rel" | jq -r '.assets | length')
 [ -n "$author" ] && [ "$author" != "null" ] && [ -n "$nassets" ] && [ "$nassets" != "null" ] || { echo "::error::release $last lookup returned no parsable author/assets"; exit 1; }
 [ "$author" != "developerz-ai[bot]" ] && [ "$nassets" != "0" ] || { echo "::error::release $last is gem-less (author=$author, assets=$nassets)"; exit 1; }
+# Verify the release baseline before any window work: the peeled commit must be the RELEASE commit for the tag's version. A tag alone proves little — a re-used or hand-cut tag points at a commit that never shipped a version, and every window computed from it is a window since the wrong baseline. The version is the tag without its leading `v`, with git's hyphenated prerelease separator mapped to RubyGems' dot (the same mapping `tag_matches_version!` applies, so the two cannot disagree). The version's dated CHANGELOG heading `## [<version>] - <date>` must be present at the peeled commit, carry that commit's own committer date, and be absent at the commit's first parent — the commit introduced it. Every failure, including a read that cannot run, aborts here, before the Compare call and the local fast path, so no window is ever computed on an unverified baseline.
+version=$(printf '%s' "${last#v}" | tr '-' '.')
+commit_json=$(gh api "repos/developerz-ai/wurk/commits/$commit_sha") || { echo "::error::baseline commit $commit_sha of $last could not be read"; exit 1; }
+commit_date=$(printf '%s' "$commit_json" | jq -r '.commit.committer.date // ""' | cut -c1-10)
+parent_sha=$(printf '%s' "$commit_json" | jq -r '.parents[0].sha // ""' || true)
+[ -n "$commit_date" ] && [ -n "$parent_sha" ] || { echo "::error::baseline commit $commit_sha of $last has no committer date or first parent"; exit 1; }
+heading_prefix="## [$version] - "
+changelog_at_commit=$(gh api "repos/developerz-ai/wurk/contents/CHANGELOG.md?ref=$commit_sha" -H "Accept: application/vnd.github.raw") || { echo "::error::baseline CHANGELOG.md at $commit_sha could not be read"; exit 1; }
+changelog_at_parent=$(gh api "repos/developerz-ai/wurk/contents/CHANGELOG.md?ref=$parent_sha" -H "Accept: application/vnd.github.raw") || { echo "::error::baseline CHANGELOG.md at $parent_sha could not be read"; exit 1; }
+heading_line=$(printf '%s\n' "$changelog_at_commit" | grep -F -m1 "$heading_prefix" || true)
+[ -n "$heading_line" ] || { echo "::error::baseline CHANGELOG.md at $commit_sha has no dated heading for $version"; exit 1; }
+heading_date=${heading_line##*- }
+[ "$heading_date" = "$commit_date" ] || { echo "::error::baseline $version heading date $heading_date does not match the committer date $commit_date of $commit_sha"; exit 1; }
+if printf '%s\n' "$changelog_at_parent" | grep -qF "$heading_prefix"; then
+  echo "::error::baseline $version heading is already present at the first parent $parent_sha"
+  exit 1
+fi
 gh api "repos/developerz-ai/wurk/compare/$last...main"
 
 # Detect a shallow checkout (depth-1 from `actions/checkout` with `fetch-depth: 1`, e.g.) and unshallow before any window-bound fetch. `git fetch` deepens only up to the existing shallow boundary, so a tag older than the boundary is fetched without its full ancestry and `git log "$last"..origin/main` walks an incomplete graph — every shipping commit before the boundary is invisible and the window reads empty even when a release is due. `--unshallow` is rejected on a complete repo ("on a complete repository does not make sense"), so the conditional is required and unconditional unshallow is wrong: a complete checkout would error instead of falling through.
@@ -43,6 +60,25 @@ local_last=$(git describe --tags --abbrev=0 --match 'v[0-9]*' origin/main)
 git log --format='%h %cI %s' "$last"..origin/main -- ':(glob)lib/**/*.rb' ':(glob)lib/**/*.lua' ':(glob)app/**/*.rb' 'config/**' 'exe/*' 'frontend/src/**' wurk.gemspec
 ```
 
+The baseline check is the difference between "the last release" and "the last tag". A tag on its
+own proves little: a re-used or hand-cut tag can point at a commit that never shipped a version,
+and a window computed from that tag is a window since the wrong anchor. The peeled commit must
+carry the version's dated CHANGELOG heading, the heading's date must be that commit's own
+committer date, and the heading must be absent at the commit's first parent — the commit
+introduced it. A baseline that cannot be verified aborts the block before any window is computed,
+so the decision falls to the unreadable-window row of the table below, never to an empty window.
+
+`$last` is resolved from a PAGINATED listing, and the pagination is the whole reason the listing is
+complete. `git/matching-refs/tags` serves its refs in pages; `gh api --paginate` follows the API's
+link headers through every page and merges the pages into one array, so every matching tag is
+enumerated before `sort -V | tail -1` selects the highest version. A listing that stops at the first
+page is not a smaller answer, it is a different one: the highest version SEEN is then only the
+highest version on that page, and a newer release whose ref sits on a later page is missed while
+the decision still looks complete. Completeness therefore comes from the pagination flag alone — a
+fixed page size is not a completeness argument, because no fixed size bounds how many refs the
+repository holds; the flag is what guarantees the walk reaches the end of the list. The same flag
+shapes the title guard further down, for the same reason.
+
 Those paths are `wurk.gemspec`'s `spec.files`, with three deliberate differences. The dashboard bundle
 (`vendor/assets/dashboard/**`) is built at release and git-ignored, so its source, `frontend/src`, is
 what a commit changes. `wurk.gemspec` itself is in the window but not in `spec.files`: dependency bumps
@@ -53,7 +89,7 @@ The window misses most Dependabot edit sites by construction. Bundler only surfa
 
 | Window | Do |
 |---|---|
-| Decide git commands cannot run (worktree-only .git, no object store) | unknown — surface the failure, do not collapse the missing-window case to an empty verdict |
+| Decide git commands cannot run (worktree-only .git, no object store) or the release baseline check fails | unknown — surface the failure, do not collapse the missing-window case to an empty verdict |
 | empty | nothing |
 | `Wurk::VERSION` already ahead of `$last` | nothing — a release is in flight (`release.yml`) |
 | the oldest shipping commit is under 24 h old | nothing — an org member may still release their own work |

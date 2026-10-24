@@ -136,7 +136,7 @@ class ReleaseDueBriefTest < Minitest::Test
 
   # The brief must verify that `$last` is a real, gem-bearing release —
   # the gem-less marker is `author=developerz-ai[bot]` (the maintainer
-  # agent's auto-cut) AND/OR `assets.length=0` (RELEASE.md:167-174). The
+  # agent's auto-cut) AND/OR `assets.length=0` (RELEASE.md:192-194). The
   # marker arose in the past when a stray tag was reused by the
   # maintainer agent and the GitHub Release was created gem-less. Without
   # this guard, the diff window would be computed against a non-release
@@ -264,7 +264,7 @@ class ReleaseDueBriefTest < Minitest::Test
   end
 
   # The gem-less marker is an OR (author=developerz-ai[bot] OR
-  # assets.length=0, RELEASE.md:167-174), but the shared gem-less fixture
+  # assets.length=0, RELEASE.md:192-194), but the shared gem-less fixture
   # sets BOTH markers — a guard reduced to either half alone would still
   # pass it. Each fixture below sets exactly one marker and pins that it
   # alone aborts before the local fast path.
@@ -421,6 +421,200 @@ class ReleaseDueBriefTest < Minitest::Test
     end
   end
 
+  # The tag listing is PAGINATED, and the pagination — not a page size —
+  # is the resolver's completeness argument. `git/matching-refs` serves
+  # its refs in pages; `gh api --paginate` follows the API's link
+  # headers through every page and merges them into one array, so a
+  # matching tag that sits on a later page is still enumerated before
+  # `sort -V | tail -1` picks the highest version. Without the flag only
+  # the first page comes back, and the highest version SEEN is then only
+  # the highest version on that page.
+  #
+  # This is a BEHAVIOURAL pin, not a text-shape check: the stub's
+  # listing depends on whether `--paginate` was passed, and its peel
+  # branch answers ONLY for the newer tag. A resolver that lost the flag
+  # selects the stale first-page tag, the peel of that tag is refused,
+  # and the Decide script aborts before the window scan — so the test
+  # fails. The stub returns the already-merged page set, so this pin
+  # proves that pagination is requested; it does not independently
+  # prove that a resolver merges pages returned by a different client.
+  def test_tag_listing_is_paginated_so_a_later_page_highest_tag_is_found
+    run_decide_under_stubs(paginated_tags_stub_gh) do |(out, err, status), tmpdir|
+      combined = out + err
+      window_marker = File.join(tmpdir, 'local_fast_path_reached.log')
+
+      refute_match(/v1\.8\.0/, combined,
+                   'the resolver must request the paginated tag listing and select its ' \
+                   'highest tag; it selected the stale first-page tag, so the tag listing ' \
+                   "was not paginated: stdout=#{out.inspect}, stderr=#{err.inspect}")
+
+      assert_predicate status, :success?,
+                       'the paginated tag listing must let the Decide script reach the ' \
+                       "window scan (status=#{status.inspect}, stdout=#{out.inspect}, " \
+                       "stderr=#{err.inspect})"
+
+      assert window_scan_reached?(window_marker),
+             'the Decide script must compute the window on the newest tag, which is ' \
+             'only reachable when the tag listing is paginated (marker not set); ' \
+             "stdout=#{out.inspect}, stderr=#{err.inspect}"
+    end
+  end
+
+  # Structural companion to the behavioural pin above: the resolver's
+  # listing call must carry `--paginate`, and its completeness must NOT
+  # rest on a fixed page size. `per_page` bounds one page, never the
+  # number of refs the repository holds, so a listing that asks for a
+  # large page is still an incomplete listing — the flag is what makes
+  # the walk reach the end of the list.
+  def test_brief_resolves_last_through_a_paginated_tag_listing
+    decide_block = extract_decide_block
+
+    assert_match(%r{gh\s+api\s+--paginate\s+repos/developerz-ai/wurk/git/matching-refs/tags/},
+                 decide_block,
+                 'the tag listing must be fetched with `gh api --paginate` so every page ' \
+                 'of matching refs is enumerated')
+
+    resolver_line = decide_block.lines.find { |line| line.include?('matching-refs/tags/') }
+
+    refute_nil resolver_line,
+               'the Decide block must resolve $last from the matching-refs listing'
+
+    refute_match(/per_page/, resolver_line,
+                 'a fixed page size is not a completeness argument: the listing is complete ' \
+                 'because it is paginated, not because it asks for a large page')
+  end
+
+  # The brief's own prose must carry the same argument: completeness of
+  # the tag listing comes from the pagination, and a fixed page size is
+  # explicitly not what makes it complete.
+  def test_brief_attributes_tag_listing_completeness_to_pagination
+    assert_match(/completeness[^.]*paginat/i, @text,
+                 'the brief must state that the tag listing is complete because it is ' \
+                 'paginated, not because of a page size')
+
+    refute_match(/per_page=[^\s`]*[^.]*proves/i, @text,
+                 'the brief must not claim that a fixed page size proves every matching ' \
+                 'tag was considered')
+  end
+
+  # The release baseline: the peeled commit must BE the release commit for
+  # the tag's version. A tag alone proves little — a re-used or hand-cut tag
+  # points at a commit that never shipped a version, and a window computed
+  # from it is a window since the wrong anchor. The baseline check therefore
+  # runs BEFORE any window work and aborts the block when it does not
+  # verify: the version's dated CHANGELOG heading must be present at the
+  # peeled commit, carry that commit's own committer date, and be absent at
+  # the commit's first parent (the commit introduced it).
+  #
+  # These tests RUN the extracted Decide block against stub `gh`/`git`
+  # binaries. The window scan is the decision's only window, so the stub
+  # `git log` marker is the signal that a window was computed at all: on
+  # every abort path it must stay unset.
+  def test_baseline_verified_reaches_window_for_annotated_tag
+    assert_baseline_reaches_window(baseline_stub_gh, shape: 'annotated')
+  end
+
+  # The same baseline, on the LIGHTWEIGHT tag shape: the ref object is the
+  # commit itself, so the check has to run on the commit the lightweight
+  # peel produced — a check pinned to the annotated path would leave this
+  # shape unverified.
+  def test_baseline_verified_reaches_window_for_lightweight_tag
+    assert_baseline_reaches_window(lightweight_tag_stub_gh, shape: 'lightweight')
+  end
+
+  # The heading's date and the commit's committer date must be the same
+  # day: a heading dated for another day means the commit is not the
+  # release commit the version was cut on.
+  def test_baseline_commit_date_mismatch_aborts_before_window_scan
+    assert_baseline_abort_before_window_scan(
+      mode: 'date-mismatch',
+      expected_output: '::error::baseline 1.8.0 heading date 2026-10-05 does not match ' \
+                       'the committer date 2026-10-06'
+    )
+  end
+
+  # The version's dated heading must be AT the peeled commit — a commit
+  # without it never shipped the version.
+  def test_baseline_heading_missing_at_commit_aborts_before_window_scan
+    assert_baseline_abort_before_window_scan(
+      mode: 'missing-heading',
+      expected_output: 'has no dated heading for 1.8.0'
+    )
+  end
+
+  # ...and it must be ABSENT at the commit's first parent: a heading that
+  # is already there means the tagged commit did not introduce the
+  # release, so it is not the release commit.
+  def test_baseline_heading_already_present_at_parent_aborts_before_window_scan
+    assert_baseline_abort_before_window_scan(
+      mode: 'parent-has-it',
+      expected_output: '::error::baseline 1.8.0 heading is already present at the first parent'
+    )
+  end
+
+  # A read that cannot run is a failed baseline, not a passed one: the
+  # check must abort rather than treat an unreadable CHANGELOG as a
+  # verified release commit.
+  def test_baseline_unreadable_changelog_aborts_before_window_scan
+    assert_baseline_abort_before_window_scan(
+      mode: 'unreadable',
+      expected_output: '::error::baseline CHANGELOG.md at'
+    )
+  end
+
+  # The baseline check must sit between the gem-less guard and the window
+  # work: a baseline that does not verify has to abort BEFORE the Compare
+  # call and the local fast path, so no window is computed on it — and a
+  # gem-less release must never get to establish a baseline at all.
+  def test_brief_verifies_the_baseline_before_any_window_work
+    decide_block = extract_decide_block
+
+    gemless_idx = decide_block.index('::error::release')
+    baseline_idx = decide_block.index('::error::baseline')
+    compare_idx = decide_block.index('compare/$last...main')
+    window_idx = decide_block.index('git log ')
+
+    refute_nil baseline_idx,
+               'the Decide block must guard the release baseline with an ' \
+               '`::error::baseline ...` diagnostic'
+    refute_nil gemless_idx, 'the Decide block must keep the gem-less guard'
+    refute_nil compare_idx, 'the Decide block must keep the Compare call'
+    refute_nil window_idx, 'the Decide block must keep the window scan'
+
+    assert_operator gemless_idx, :<, baseline_idx,
+                    'the baseline check must run AFTER the gem-less guard: a gem-less release ' \
+                    'must never establish the baseline'
+    assert_operator baseline_idx, :<, compare_idx,
+                    'the baseline check must run BEFORE the Compare call'
+    assert_operator baseline_idx, :<, window_idx,
+                    'the baseline check must run BEFORE the window scan: no window may be ' \
+                    'computed on an unverified baseline'
+  end
+
+  # The baseline is resolved and verified at RUN TIME: the brief names no
+  # concrete release tag, so a stale literal cannot pin the check to a
+  # version that was never released.
+  def test_brief_names_no_concrete_release_tag
+    matches = @text.scan(/\bv\d+\.\d+\.\d+\b/)
+
+    assert_empty matches,
+                 'the brief must resolve the release tag at run time, not name a ' \
+                 "concrete one: found #{matches.inspect}"
+  end
+
+  # The check READS the release; it never repairs it. A tag deletion (or
+  # any other remote-tag write) in the brief would turn a read-only
+  # checkup into a mutation of the release lane's own output.
+  def test_brief_adds_no_tag_deletion_or_remote_tag_operation
+    forbidden = ['gh release delete', '--cleanup-tag', 'git tag -d', 'git push --delete',
+                 'git push origin :refs/tags', 'git push --force']
+
+    found = forbidden.select { |operation| @text.include?(operation) }
+
+    assert_empty found,
+                 "the brief must not delete or rewrite a release tag: found #{found.inspect}"
+  end
+
   # End-to-end check that the brief's window-scan actually filters
   # by pathspec: shipping commits touch `lib/` (or other shipped
   # paths) and appear in the window; docs-only commits touch only
@@ -445,7 +639,7 @@ class ReleaseDueBriefTest < Minitest::Test
                    "shipping pathspecs are applied: #{window[:stdout].inspect}")
       assert_match(/bar add commit/, window[:stdout],
                    'the change half of a change+revert pair (lib/bar.rb add) must be in the ' \
-                   'window: ' + window[:stdout].inspect)
+                   "window: #{window[:stdout].inspect}")
       assert_match(/bar revert commit/, window[:stdout],
                    'the revert half of a change+revert pair (lib/bar.rb revert) must be in the ' \
                    'window too — `git log -- <pathspec>` does not net a change against its revert, ' \
@@ -472,7 +666,16 @@ class ReleaseDueBriefTest < Minitest::Test
     case "$1" in
       api)
         shift
-        url="${1:-}"
+        # The endpoint URL is the first NON-FLAG argument after `api`: a
+        # flag such as `--paginate` may precede it, and a header value
+        # may follow it.
+        url=""
+        for arg in "$@"; do
+          case "$arg" in
+            -*) ;;
+            *) url="$arg"; break ;;
+          esac
+        done
         case "$url" in
           *git/matching-refs/tags/*)
             printf '%s\n' '[{"ref":"refs/tags/v1.8.0"}]'
@@ -482,6 +685,23 @@ class ReleaseDueBriefTest < Minitest::Test
             ;;
           *git/tags/aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa)
             printf '%s\n' '{"object":{"sha":"bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb","type":"commit"}}'
+            ;;
+          *commits/bbbb*)
+            printf '%s\n' '{"sha":"bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb","commit":{"committer":{"date":"2026-10-05T09:00:00Z"}},"parents":[{"sha":"dddddddddddddddddddddddddddddddddddddddd"}]}'
+            ;;
+          *contents/CHANGELOG.md*)
+            case "$url" in
+              *ref=bbbb*)
+                printf '%s\n' '## [Unreleased]' '' '## [1.8.0] - 2026-10-05' '' '- the release commit'
+                ;;
+              *ref=dddd*)
+                printf '%s\n' '## [Unreleased]' '' '## [1.7.9] - 2026-09-30' '' '- an older release'
+                ;;
+              *)
+                printf 'ERROR: stub gh api: unexpected CHANGELOG ref: %s\n' "$url" >&2
+                exit 1
+                ;;
+            esac
             ;;
           *compare/v1.8.0...main)
             printf 'ERROR: stub gh api compare/v1.8.0...main failed (rate-limited or 4xx)\n' >&2
@@ -520,7 +740,16 @@ class ReleaseDueBriefTest < Minitest::Test
     case "$1" in
       api)
         shift
-        url="${1:-}"
+        # The endpoint URL is the first NON-FLAG argument after `api`: a
+        # flag such as `--paginate` may precede it, and a header value
+        # may follow it.
+        url=""
+        for arg in "$@"; do
+          case "$arg" in
+            -*) ;;
+            *) url="$arg"; break ;;
+          esac
+        done
         case "$url" in
           *git/matching-refs/tags/*)
             printf '%s\n' '[{"ref":"refs/tags/v1.8.0"}]'
@@ -575,7 +804,16 @@ class ReleaseDueBriefTest < Minitest::Test
     case "$1" in
       api)
         shift
-        url="${1:-}"
+        # The endpoint URL is the first NON-FLAG argument after `api`: a
+        # flag such as `--paginate` may precede it, and a header value
+        # may follow it.
+        url=""
+        for arg in "$@"; do
+          case "$arg" in
+            -*) ;;
+            *) url="$arg"; break ;;
+          esac
+        done
         case "$url" in
           *git/matching-refs/tags/*)
             printf '%s\n' '[{"ref":"refs/tags/v1.8.0"}]'
@@ -585,6 +823,10 @@ class ReleaseDueBriefTest < Minitest::Test
             ;;
           *git/tags/aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa)
             printf '%s\n' '{"object":{"sha":"bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb","type":"commit"}}'
+            ;;
+          *commits/*|*contents/CHANGELOG.md*)
+            printf 'ERROR: stub gh api: the release baseline must not be read when the release is gem-less\n' >&2
+            exit 1
             ;;
           *compare/*)
             printf 'ERROR: stub gh api compare/* must not be called when the release is gem-less\n' >&2
@@ -597,7 +839,7 @@ class ReleaseDueBriefTest < Minitest::Test
         esac
         ;;
       release)
-        # gem-less marker: author=developerz-ai[bot], assets=[] (RELEASE.md:167-174).
+        # gem-less marker: author=developerz-ai[bot], assets=[] (RELEASE.md:192-194).
         printf '%s\n' '{"author":{"login":"developerz-ai[bot]"},"assets":[]}'
         ;;
       *)
@@ -621,7 +863,16 @@ class ReleaseDueBriefTest < Minitest::Test
     case "$1" in
       api)
         shift
-        url="${1:-}"
+        # The endpoint URL is the first NON-FLAG argument after `api`: a
+        # flag such as `--paginate` may precede it, and a header value
+        # may follow it.
+        url=""
+        for arg in "$@"; do
+          case "$arg" in
+            -*) ;;
+            *) url="$arg"; break ;;
+          esac
+        done
         case "$url" in
           *git/matching-refs/tags/*)
             printf '%s\n' '[{"ref":"refs/tags/v1.8.0"}]'
@@ -632,6 +883,23 @@ class ReleaseDueBriefTest < Minitest::Test
           *git/tags/*)
             printf 'ERROR: stub gh api git/tags/* must not be called for a lightweight tag (its ref object is already the commit)\n' >&2
             exit 1
+            ;;
+          *commits/cccc*)
+            printf '%s\n' '{"sha":"cccccccccccccccccccccccccccccccccccccccc","commit":{"committer":{"date":"2026-10-05T09:00:00Z"}},"parents":[{"sha":"eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee"}]}'
+            ;;
+          *contents/CHANGELOG.md*)
+            case "$url" in
+              *ref=cccc*)
+                printf '%s\n' '## [Unreleased]' '' '## [1.8.0] - 2026-10-05' '' '- the release commit'
+                ;;
+              *ref=eeee*)
+                printf '%s\n' '## [Unreleased]' '' '## [1.7.9] - 2026-09-30' '' '- an older release'
+                ;;
+              *)
+                printf 'ERROR: stub gh api: unexpected CHANGELOG ref: %s\n' "$url" >&2
+                exit 1
+                ;;
+            esac
             ;;
           *compare/v1.8.0...main)
             printf '%s\n' '{"status":"diverged","ahead_by":3,"behind_by":0,"total_commits":3}'
@@ -654,6 +922,99 @@ class ReleaseDueBriefTest < Minitest::Test
   SHELL
   private_constant :LIGHTWEIGHT_TAG_STUB_GH
 
+  # One stub, five baseline outcomes, selected by $WURK_TEST_BASELINE_MODE:
+  #   ok              the baseline verifies (the tagged commit IS the release commit)
+  #   date-mismatch   the CHANGELOG heading's date != the commit's committer date
+  #   missing-heading the commit carries no dated heading for the version
+  #   parent-has-it   the heading is already present at the commit's first parent
+  #   unreadable      the CHANGELOG read at the commit fails
+  # The tag shape here is ANNOTATED (the ref object is a tag object, peeled
+  # through /git/tags/); the LIGHTWEIGHT shape is covered by
+  # LIGHTWEIGHT_TAG_STUB_GH, which carries the same baseline reads for the
+  # commit its lightweight peel produces.
+  BASELINE_STUB_GH = <<~'SHELL'
+    #!/usr/bin/env bash
+    mode="${WURK_TEST_BASELINE_MODE:-ok}"
+    case "$1" in
+      api)
+        shift
+        # The endpoint URL is the first NON-FLAG argument after `api`: a
+        # flag such as `--paginate` may precede it, and a header value
+        # may follow it.
+        url=""
+        for arg in "$@"; do
+          case "$arg" in
+            -*) ;;
+            *) url="$arg"; break ;;
+          esac
+        done
+        case "$url" in
+          *git/matching-refs/tags/*)
+            printf '%s\n' '[{"ref":"refs/tags/v1.8.0"}]'
+            ;;
+          *git/ref/tags/v1.8.0)
+            printf '%s\n' '{"object":{"sha":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa","type":"tag"}}'
+            ;;
+          *git/tags/aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa)
+            printf '%s\n' '{"object":{"sha":"bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb","type":"commit"}}'
+            ;;
+          *commits/bbbb*)
+            case "$mode" in
+              date-mismatch)
+                printf '%s\n' '{"sha":"bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb","commit":{"committer":{"date":"2026-10-06T09:00:00Z"}},"parents":[{"sha":"dddddddddddddddddddddddddddddddddddddddd"}]}'
+                ;;
+              *)
+                printf '%s\n' '{"sha":"bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb","commit":{"committer":{"date":"2026-10-05T09:00:00Z"}},"parents":[{"sha":"dddddddddddddddddddddddddddddddddddddddd"}]}'
+                ;;
+            esac
+            ;;
+          *contents/CHANGELOG.md*)
+            case "$url" in
+              *ref=bbbb*)
+                if [ "$mode" = "unreadable" ]; then
+                  printf 'ERROR: stub gh api: CHANGELOG.md at bbbb... is unreadable (rate-limited or 4xx)\n' >&2
+                  exit 1
+                fi
+                if [ "$mode" = "missing-heading" ]; then
+                  printf '%s\n' '## [Unreleased]' '' '## [1.7.9] - 2026-09-30' '' '- an older release'
+                else
+                  printf '%s\n' '## [Unreleased]' '' '## [1.8.0] - 2026-10-05' '' '- the release commit'
+                fi
+                ;;
+              *ref=dddd*)
+                if [ "$mode" = "parent-has-it" ]; then
+                  printf '%s\n' '## [Unreleased]' '' '## [1.8.0] - 2026-10-05' '' '- the release commit'
+                else
+                  printf '%s\n' '## [Unreleased]' '' '## [1.7.9] - 2026-09-30' '' '- an older release'
+                fi
+                ;;
+              *)
+                printf 'ERROR: stub gh api: unexpected CHANGELOG ref: %s\n' "$url" >&2
+                exit 1
+                ;;
+            esac
+            ;;
+          *compare/v1.8.0...main)
+            printf '%s\n' '{"status":"ahead","ahead_by":3,"behind_by":0,"total_commits":3}'
+            ;;
+          *)
+            printf 'ERROR: stub gh api: unexpected URL: %s\n' "$url" >&2
+            exit 1
+            ;;
+        esac
+        ;;
+      release)
+        # Non-gem-less: author is not developerz-ai[bot], assets is non-empty.
+        printf '%s\n' '{"author":{"login":"octocat"},"assets":[{"name":"wurk-1.8.0.gem"}]}'
+        ;;
+      *)
+        printf 'ERROR: stub gh: unexpected command: %s\n' "$*" >&2
+        exit 1
+        ;;
+    esac
+  SHELL
+  private_constant :BASELINE_STUB_GH
+
   # Stub `gh` whose `gh release view <last>` FAILS with no stdout (a
   # missing release). Everything before it succeeds, so the failure is
   # the lookup itself: with `rel` empty, both extracted fields are empty
@@ -664,7 +1025,16 @@ class ReleaseDueBriefTest < Minitest::Test
     case "$1" in
       api)
         shift
-        url="${1:-}"
+        # The endpoint URL is the first NON-FLAG argument after `api`: a
+        # flag such as `--paginate` may precede it, and a header value
+        # may follow it.
+        url=""
+        for arg in "$@"; do
+          case "$arg" in
+            -*) ;;
+            *) url="$arg"; break ;;
+          esac
+        done
         case "$url" in
           *git/matching-refs/tags/*)
             printf '%s\n' '[{"ref":"refs/tags/v1.8.0"}]'
@@ -705,7 +1075,16 @@ class ReleaseDueBriefTest < Minitest::Test
     case "$1" in
       api)
         shift
-        url="${1:-}"
+        # The endpoint URL is the first NON-FLAG argument after `api`: a
+        # flag such as `--paginate` may precede it, and a header value
+        # may follow it.
+        url=""
+        for arg in "$@"; do
+          case "$arg" in
+            -*) ;;
+            *) url="$arg"; break ;;
+          esac
+        done
         case "$url" in
           *git/matching-refs/tags/*)
             printf '%s\n' '[{"ref":"refs/tags/v1.8.0"}]'
@@ -715,6 +1094,10 @@ class ReleaseDueBriefTest < Minitest::Test
             ;;
           *git/tags/aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa)
             printf '%s\n' '{"object":{"sha":"bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb","type":"commit"}}'
+            ;;
+          *commits/*|*contents/CHANGELOG.md*)
+            printf 'ERROR: stub gh api: the release baseline must not be read when the release is gem-less\n' >&2
+            exit 1
             ;;
           *compare/*)
             printf 'ERROR: stub gh api compare/* must not be called when the release is gem-less\n' >&2
@@ -745,7 +1128,16 @@ class ReleaseDueBriefTest < Minitest::Test
     case "$1" in
       api)
         shift
-        url="${1:-}"
+        # The endpoint URL is the first NON-FLAG argument after `api`: a
+        # flag such as `--paginate` may precede it, and a header value
+        # may follow it.
+        url=""
+        for arg in "$@"; do
+          case "$arg" in
+            -*) ;;
+            *) url="$arg"; break ;;
+          esac
+        done
         case "$url" in
           *git/matching-refs/tags/*)
             printf '%s\n' '[{"ref":"refs/tags/v1.8.0"}]'
@@ -755,6 +1147,10 @@ class ReleaseDueBriefTest < Minitest::Test
             ;;
           *git/tags/aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa)
             printf '%s\n' '{"object":{"sha":"bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb","type":"commit"}}'
+            ;;
+          *commits/*|*contents/CHANGELOG.md*)
+            printf 'ERROR: stub gh api: the release baseline must not be read when the release is gem-less\n' >&2
+            exit 1
             ;;
           *compare/*)
             printf 'ERROR: stub gh api compare/* must not be called when the release is gem-less\n' >&2
@@ -778,6 +1174,95 @@ class ReleaseDueBriefTest < Minitest::Test
   SHELL
   private_constant :NON_BOT_AUTHOR_NO_ASSETS_STUB_GH
 
+  # Stub `gh` whose TAG LISTING depends on whether `--paginate` was
+  # passed — the behavioural pin on the resolver's completeness
+  # argument. `git/matching-refs` is a PAGINATED endpoint: `gh api
+  # --paginate` follows the API's link headers through every page and
+  # merges the pages into one array, so a matching tag that sits on a
+  # later page is enumerated too. Without the flag only the FIRST page
+  # comes back, the highest version SEEN is the older tag, and the peel
+  # is asked for a tag this stub refuses to answer — the Decide script
+  # aborts and the window scan is never reached. The peel branch
+  # therefore answers ONLY for the newer tag: an unpaginated resolver
+  # cannot fall back onto the stale one and pass by accident.
+  PAGINATED_TAGS_STUB_GH = <<~'SHELL'
+    #!/usr/bin/env bash
+    case "$1" in
+      api)
+        shift
+        paginated=0
+        # The endpoint URL is the first NON-FLAG argument after `api`;
+        # `--paginate` is a flag and precedes it.
+        url=""
+        for arg in "$@"; do
+          case "$arg" in
+            --paginate) paginated=1 ;;
+            -*) ;;
+            *) url="$arg"; break ;;
+          esac
+        done
+        case "$url" in
+          *git/matching-refs/tags/*)
+            if [ "$paginated" = "1" ]; then
+              # Every page merged: the newest tag lives on a later page.
+              printf '%s\n' '[{"ref":"refs/tags/v1.8.0"},{"ref":"refs/tags/v1.9.0"}]'
+            else
+              # First page only: the newest tag is NOT in this page.
+              printf '%s\n' '[{"ref":"refs/tags/v1.8.0"}]'
+            fi
+            ;;
+          *git/ref/tags/v1.9.0)
+            printf '%s\n' '{"object":{"sha":"ffffffffffffffffffffffffffffffffffffffff","type":"tag"}}'
+            ;;
+          *git/ref/tags/v1.8.0)
+            printf 'ERROR: stub gh api git/ref/tags/v1.8.0 must not be called: an unpaginated listing selected the stale tag\n' >&2
+            exit 1
+            ;;
+          *git/tags/ffffffffffffffffffffffffffffffffffffffff)
+            printf '%s\n' '{"object":{"sha":"1234567890abcdef1234567890abcdef12345678","type":"commit"}}'
+            ;;
+          *commits/1234567890abcdef*)
+            printf '%s\n' '{"sha":"1234567890abcdef1234567890abcdef12345678","commit":{"committer":{"date":"2026-10-07T09:00:00Z"}},"parents":[{"sha":"5678901234abcdef5678901234abcdef56789012"}]}'
+            ;;
+          *contents/CHANGELOG.md*)
+            case "$url" in
+              *ref=1234567890abcdef*)
+                printf '%s\n' '## [Unreleased]' '' '## [1.9.0] - 2026-10-07' '' '- the release commit'
+                ;;
+              *ref=5678901234abcdef*)
+                printf '%s\n' '## [Unreleased]' '' '## [1.8.0] - 2026-10-05' '' '- an older release'
+                ;;
+              *)
+                printf 'ERROR: stub gh api: unexpected CHANGELOG ref: %s\n' "$url" >&2
+                exit 1
+                ;;
+            esac
+            ;;
+          *compare/v1.9.0...main)
+            printf '%s\n' '{"status":"ahead","ahead_by":3,"behind_by":0,"total_commits":3}'
+            ;;
+          *compare/*)
+            printf 'ERROR: stub gh api compare/* must not be called with a stale tag\n' >&2
+            exit 1
+            ;;
+          *)
+            printf 'ERROR: stub gh api: unexpected URL: %s\n' "$url" >&2
+            exit 1
+            ;;
+        esac
+        ;;
+      release)
+        # Non-gem-less: author is not developerz-ai[bot], assets is non-empty.
+        printf '%s\n' '{"author":{"login":"octocat"},"assets":[{"name":"wurk-1.9.0.gem"}]}'
+        ;;
+      *)
+        printf 'ERROR: stub gh: unexpected command: %s\n' "$*" >&2
+        exit 1
+        ;;
+    esac
+  SHELL
+  private_constant :PAGINATED_TAGS_STUB_GH
+
   # Stub `git` whose `fetch` fails — the brief must abort on it instead
   # of scanning the window against a stale origin/main. `describe` still
   # writes the fast-path marker, so a brief that ignores the fetch
@@ -791,19 +1276,26 @@ class ReleaseDueBriefTest < Minitest::Test
     if [[ "$1" == "describe" ]]; then
       printf 'LOCAL_FAST_PATH_REACHED\n' > "$WURK_TEST_FAST_PATH_MARKER"
     fi
+    if [[ "$1" == "log" ]]; then
+      printf 'WINDOW_SCAN_REACHED\n' > "${WURK_TEST_FAST_PATH_MARKER}.log"
+    fi
     exit 0
   SHELL
   private_constant :FETCH_FAILING_STUB_GIT
 
-  # Stub `git` whose `describe` invocation writes a marker file. Every
-  # other subcommand is a silent success — the brief's bash reads only
-  # `describe`/`fetch`/`log`, and the marker is the signal the test
-  # uses to detect whether the Decide script reached the local fast
-  # path before aborting.
+  # Stub `git` whose `describe` invocation writes a marker file, and whose
+  # `log` invocation (the window scan) writes a second one. Every other
+  # subcommand is a silent success — the brief's bash reads only
+  # `describe`/`fetch`/`log`. The two markers are the signals the tests
+  # use: `describe` says the Decide script reached the local fast path,
+  # `log` says a release window was actually computed.
   STUB_GIT = <<~'SHELL'
     #!/usr/bin/env bash
     if [[ "$1" == "describe" ]]; then
       printf 'LOCAL_FAST_PATH_REACHED\n' > "$WURK_TEST_FAST_PATH_MARKER"
+    fi
+    if [[ "$1" == "log" ]]; then
+      printf 'WINDOW_SCAN_REACHED\n' > "${WURK_TEST_FAST_PATH_MARKER}.log"
     fi
     exit 0
   SHELL
@@ -833,6 +1325,9 @@ class ReleaseDueBriefTest < Minitest::Test
     if [[ "$1" == "describe" ]]; then
       printf 'LOCAL_FAST_PATH_REACHED\n' > "$WURK_TEST_FAST_PATH_MARKER"
     fi
+    if [[ "$1" == "log" ]]; then
+      printf 'WINDOW_SCAN_REACHED\n' > "${WURK_TEST_FAST_PATH_MARKER}.log"
+    fi
     exit 0
   SHELL
   private_constant :SHALLOW_STUB_GIT
@@ -857,6 +1352,9 @@ class ReleaseDueBriefTest < Minitest::Test
     fi
     if [[ "$1" == "describe" ]]; then
       printf 'LOCAL_FAST_PATH_REACHED\n' > "$WURK_TEST_FAST_PATH_MARKER"
+    fi
+    if [[ "$1" == "log" ]]; then
+      printf 'WINDOW_SCAN_REACHED\n' > "${WURK_TEST_FAST_PATH_MARKER}.log"
     fi
     exit 0
   SHELL
@@ -884,6 +1382,9 @@ class ReleaseDueBriefTest < Minitest::Test
     fi
     if [[ "$1" == "describe" ]]; then
       printf 'LOCAL_FAST_PATH_REACHED\n' > "$WURK_TEST_FAST_PATH_MARKER"
+    fi
+    if [[ "$1" == "log" ]]; then
+      printf 'WINDOW_SCAN_REACHED\n' > "${WURK_TEST_FAST_PATH_MARKER}.log"
     fi
     exit 0
   SHELL
@@ -915,6 +1416,9 @@ class ReleaseDueBriefTest < Minitest::Test
     if [[ "$1" == "describe" ]]; then
       printf 'LOCAL_FAST_PATH_REACHED\n' > "$WURK_TEST_FAST_PATH_MARKER"
     fi
+    if [[ "$1" == "log" ]]; then
+      printf 'WINDOW_SCAN_REACHED\n' > "${WURK_TEST_FAST_PATH_MARKER}.log"
+    fi
     exit 0
   SHELL
   private_constant :STUB_GIT_REQUIRES_BOTH_REFSPECS
@@ -935,6 +1439,10 @@ class ReleaseDueBriefTest < Minitest::Test
     LIGHTWEIGHT_TAG_STUB_GH
   end
 
+  def baseline_stub_gh
+    BASELINE_STUB_GH
+  end
+
   def release_lookup_failing_stub_gh
     RELEASE_LOOKUP_FAILING_STUB_GH
   end
@@ -945,6 +1453,10 @@ class ReleaseDueBriefTest < Minitest::Test
 
   def non_bot_author_no_assets_stub_gh
     NON_BOT_AUTHOR_NO_ASSETS_STUB_GH
+  end
+
+  def paginated_tags_stub_gh
+    PAGINATED_TAGS_STUB_GH
   end
 
   def fetch_failing_stub_git
@@ -964,7 +1476,7 @@ class ReleaseDueBriefTest < Minitest::Test
   # local-fast-path marker file inside the same `Dir.mktmpdir` scope (the
   # marker is auto-cleaned at block end, so post-yield marker checks
   # would see a deleted file).
-  def run_decide_under_stubs(stub_gh, stub_git: STUB_GIT)
+  def run_decide_under_stubs(stub_gh, stub_git: STUB_GIT, env: {})
     decide_block = extract_decide_block
     skip 'no Decide block' if decide_block.empty?
 
@@ -982,12 +1494,12 @@ class ReleaseDueBriefTest < Minitest::Test
       File.write(script_path, "#!/usr/bin/env bash\n#{decide_block}\n")
       File.chmod(0o755, script_path)
 
-      env = {
+      run_env = {
         'PATH' => "#{bin_dir}:#{ENV.fetch('PATH', '')}",
         'WURK_TEST_FAST_PATH_MARKER' => File.join(tmpdir, 'local_fast_path_reached')
-      }
+      }.merge(env)
 
-      result = Open3.capture3(env, script_path)
+      result = Open3.capture3(run_env, script_path)
       yield(result, tmpdir)
     end
   end
@@ -1005,6 +1517,7 @@ class ReleaseDueBriefTest < Minitest::Test
                                                   expected_output:, stub_git: STUB_GIT)
     run_decide_under_stubs(stub_gh, stub_git: stub_git) do |(out, err, status), tmpdir|
       fast_path_marker = File.join(tmpdir, 'local_fast_path_reached')
+      window_marker = File.join(tmpdir, 'local_fast_path_reached.log')
       combined = out + err
 
       refute_predicate status, :success?,
@@ -1023,11 +1536,81 @@ class ReleaseDueBriefTest < Minitest::Test
              'the stub `git describe` was reached, which means the script ran on ' \
              'past its abort — the abort path did not fire, or its `exit 1` was ' \
              'confined to a subshell or pipeline and never reached the Decide script'
+
+      assert_no_window_scan(window_marker, failure_message)
+    end
+  end
+
+  # The window scan must not have run: a window computed after an abort —
+  # or on a baseline that never verified — is a window since the wrong
+  # anchor, and the decision would grade it as a real one.
+  def assert_no_window_scan(window_marker, failure_message)
+    refute window_scan_reached?(window_marker),
+           "#{failure_message} before the window scan; " \
+           'the stub `git log` was reached, so a release window was computed on ' \
+           'an unverified baseline'
+  end
+
+  # A verified baseline must let the Decide script reach the window: the
+  # stub `git log` has to run (a window was computed) and no baseline
+  # diagnostic may be printed.
+  def assert_baseline_reaches_window(stub_gh, shape:)
+    run_decide_under_stubs(stub_gh) do |(out, err, status), tmpdir|
+      combined = out + err
+
+      assert_predicate status, :success?,
+                       "a verified release baseline must let the #{shape} tag reach the " \
+                       "window (status=#{status.inspect}, stdout=#{out.inspect}, " \
+                       "stderr=#{err.inspect})"
+
+      refute_includes combined, '::error::baseline',
+                      'a verified release baseline must not print a baseline diagnostic; ' \
+                      "stdout=#{out.inspect}, stderr=#{err.inspect}"
+
+      assert window_scan_reached?(File.join(tmpdir, 'local_fast_path_reached.log')),
+             'a verified release baseline must reach the window scan; the stub `git log` ' \
+             "was not reached (stdout=#{out.inspect}, stderr=#{err.inspect})"
+    end
+  end
+
+  # A baseline that cannot be verified must abort the Decide script with a
+  # `::error::baseline` diagnostic BEFORE the window scan: the window is the
+  # decision's only window, so a window computed on an unverified baseline is
+  # a window since the wrong anchor. The stub `git log` must stay unset.
+  def assert_baseline_abort_before_window_scan(mode:, expected_output:)
+    env = { 'WURK_TEST_BASELINE_MODE' => mode }
+
+    run_decide_under_stubs(baseline_stub_gh, env: env) do |(out, err, status), tmpdir|
+      combined = out + err
+
+      refute_predicate status, :success?,
+                       "the baseline check must abort the Decide script (mode=#{mode}, " \
+                       "status=#{status.inspect}, stdout=#{out.inspect}, stderr=#{err.inspect})"
+
+      assert_includes combined, '::error::baseline',
+                      'the baseline check must print a `::error::baseline` diagnostic so the ' \
+                      "abort surfaces in the workflow log (mode=#{mode}, " \
+                      "stdout=#{out.inspect}, stderr=#{err.inspect})"
+
+      assert_includes combined, expected_output,
+                      'the baseline check must name the violation it found (mode=' \
+                      "#{mode}, stdout=#{out.inspect}, stderr=#{err.inspect})"
+
+      assert_no_window_scan(File.join(tmpdir, 'local_fast_path_reached.log'),
+                            "the baseline check (#{mode})")
+
+      refute fast_path_reached?(File.join(tmpdir, 'local_fast_path_reached')),
+             'the baseline check must abort before the local fast path (mode=' \
+             "#{mode}, stdout=#{out.inspect}, stderr=#{err.inspect})"
     end
   end
 
   def fast_path_reached?(marker)
     File.exist?(marker) && File.read(marker).include?('LOCAL_FAST_PATH_REACHED')
+  end
+
+  def window_scan_reached?(marker)
+    File.exist?(marker) && File.read(marker).include?('WINDOW_SCAN_REACHED')
   end
 
   def extract_decide_block
