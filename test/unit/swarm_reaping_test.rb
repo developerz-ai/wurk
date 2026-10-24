@@ -12,6 +12,12 @@ require_relative '../test_helper'
 # Fork-free — `fork_child` hands back fake PIDs and `Process.wait2` is stubbed —
 # so the wiring is asserted deterministically. Real-fork proof:
 # test/integration/swarm_supervision_test.rb.
+#
+# The ECHILD case below is pinned against a STUB, so it is NOT covered by a
+# real fork: the proof that the supervisor really meets an OS-generated ECHILD
+# is that file's test_supervise_retires_a_slot_whose_pid_was_reaped_elsewhere,
+# where a real child is reaped out of band and the kernel's own answer is
+# what the supervisor's Process.wait2 hits.
 class SwarmReapingTest < Wurk::Test::UnitCase
   parallelize_me!
 
