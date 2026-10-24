@@ -82,12 +82,18 @@ class EcosystemWatcherTest < Wurk::Test::UnitCase
   SH
 
   # Stub `curl` appending each argv line to `$CURL_LOG`. The script pipes
-  # the `Authorization: Bearer …` header into curl's stdin via `-H @-`; this
-  # stub does not read stdin — only argv needs to land in the log so the
-  # test can count POSTs and read the `--data` body. Returns 0 so the
+  # the `Authorization: Bearer …` header into curl's stdin via `-H @-`, and
+  # real curl READS that header from stdin — so the stub drains it too. A
+  # stub that exits without reading leaves the writer's `printf` writing
+  # into a closed pipe: it takes SIGPIPE, `set -euo pipefail` turns that
+  # into a 141 exit for the whole step, and the case fails on a verdict
+  # the watcher never produced (measured: ~3% of POSTs, and the watcher
+  # POSTs four releases per run). Only argv needs to land in the log so
+  # the test can count POSTs and read the `--data` body. Returns 0 so the
   # script records the version in marker.txt after the curl call.
   STUB_CURL = <<~SH
     #!/usr/bin/env bash
+    if [ ! -t 0 ]; then cat > /dev/null; fi
     for arg in "$@"; do
       echo "$arg" >> "$CURL_LOG"
     done

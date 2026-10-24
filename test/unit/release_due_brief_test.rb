@@ -134,32 +134,40 @@ class ReleaseDueBriefTest < Minitest::Test
                  'the tag-peel guard must `exit 1` so the abort propagates to the Decide script')
   end
 
-  # The brief must verify that `$last` is a real, gem-bearing release —
-  # the gem-less marker is `author=developerz-ai[bot]` (the maintainer
-  # agent's auto-cut) AND/OR `assets.length=0` (RELEASE.md:192-194). The
-  # marker arose in the past when a stray tag was reused by the
-  # maintainer agent and the GitHub Release was created gem-less. Without
-  # this guard, the diff window would be computed against a non-release
-  # anchor and the agent would file a `Release <next>` ask on top of
-  # work that was never actually shipped.
-  def test_brief_verifies_release_gem_less_marker
+  # The brief must verify the release's STATE before it uses the release as
+  # the diff-window anchor. The state is read from `gh release view
+  # "$last" --json author,assets`: the ASSET COUNT is the defect trigger
+  # (zero assets => gem-less => abort), and the author is read for context
+  # only — a `developerz-ai[bot]`-authored Release that CARRIES the .gem is
+  # the sanctioned break-glass manual publish, not a defect, so the brief
+  # must NOT treat the author as a gem-less marker (RELEASE.md:180-194).
+  # Without this guard, the diff window would be computed against a
+  # non-release anchor and the agent would file a `Release <next>` ask on
+  # top of work that was never actually shipped.
+  #
+  # The trigger is pinned BEHAVIOURALLY by the stub-driven tests below
+  # (a zero-asset Release aborts; a bot-authored Release carrying the .gem
+  # reaches the window scan). No text pin demands the author literal in
+  # the Decide block: the author is context there, and a literal pin would
+  # re-introduce the rule this change retires.
+  def test_brief_verifies_release_state_before_using_it_as_the_anchor
     decide_block = extract_decide_block
 
     assert_match(
       /gh\s+release\s+view\s+"\$last"\s+--json\s+author,assets/,
       decide_block,
-      'the brief must call `gh release view "$last" --json author,assets` to fetch the release marker'
+      'the brief must call `gh release view "$last" --json author,assets` to fetch the release state'
     )
     assert_match(/\.author\.login/, decide_block,
                  'the release author must be extracted via `.author.login`')
     assert_match(/\.assets\s*\|\s*length/, decide_block,
                  'the assets count must be extracted via `.assets | length`')
 
-    # The bot's GitHub login is the gem-less author marker; pin it as a
-    # literal so a future refactor cannot replace the literal with a
-    # variable without explicit thought.
-    assert_match(/developerz-ai\[bot\]/, decide_block,
-                 'the gem-less author marker must be the literal `developerz-ai[bot]`')
+    # The assets count is the trigger: the guard must compare it against 0
+    # and abort when it IS 0.
+    assert_match(/\[ "\$nassets" != "0" \]/, decide_block,
+                 'the gem-less guard must trigger on the ASSET COUNT (`nassets` == 0), ' \
+                 'not on the author — a bot-authored Release carrying the .gem is a real release')
 
     # And the guard must abort (not silently continue) when the release
     # is gem-less, with a `::error::` GitHub Actions diagnostic.
@@ -212,16 +220,17 @@ class ReleaseDueBriefTest < Minitest::Test
     )
   end
 
-  # Same contract for the release gem-less marker: if the release at $last
-  # is gem-less (author=developerz-ai[bot] OR assets.length=0), the script
-  # must abort BEFORE the local fast path — not let the diff window be
-  # computed against a non-release anchor and silently emit a stale ask.
+  # Same contract for the gem-less state: if the release at $last carries
+  # ZERO assets (the gem-less marker), the script must abort BEFORE the
+  # local fast path — not let the diff window be computed against a
+  # non-release anchor and silently emit a stale ask. The author is
+  # context in the diagnostic, not the trigger.
   def test_release_gem_less_failure_aborts_decision_before_local_fast_path
     assert_decide_aborts_before_local_fast_path(
       stub_gh: gem_less_stub_gh,
-      failing_curl: 'the gem-less `gh release view <last>` stub returns author=developerz-ai[bot]',
+      failing_curl: 'the gem-less `gh release view <last>` stub returns zero assets',
       failure_message: 'gem-less release must abort the Decide script',
-      expected_output: '::error::release v1.8.0 is gem-less (author=developerz-ai[bot], assets=0)'
+      expected_output: '::error::release v1.8.0 is gem-less (assets=0, author=developerz-ai[bot])'
     )
   end
 
@@ -252,8 +261,15 @@ class ReleaseDueBriefTest < Minitest::Test
 
   # A failed `gh release view` (missing release, rate limit) must abort:
   # with `rel` empty, `.author.login` and `.assets | length` both extract
-  # empty, so `author != developerz-ai[bot]` and `nassets != 0` would both
-  # hold vacuously and the unverified tag would anchor the decision.
+  # empty, so the asset comparison would pass vacuously and the unverified
+  # tag would anchor the decision. The diagnostic must CLASSIFY the
+  # absent-Release state instead of reporting one undifferentiated error:
+  # no Release read means the state is unclassified, and the three open
+  # possibilities (a release.yml preflight no-op, a break-glass
+  # publication, a failure before the Release was created) all stay open
+  # until the RubyGems probe and the last release.yml run corroborate
+  # which one it was. RubyGems is the authority, not the absence of a
+  # Release.
   def test_release_lookup_failure_aborts_decision_before_local_fast_path
     assert_decide_aborts_before_local_fast_path(
       stub_gh: release_lookup_failing_stub_gh,
@@ -263,18 +279,120 @@ class ReleaseDueBriefTest < Minitest::Test
     )
   end
 
-  # The gem-less marker is an OR (author=developerz-ai[bot] OR
-  # assets.length=0, RELEASE.md:192-194), but the shared gem-less fixture
-  # sets BOTH markers — a guard reduced to either half alone would still
-  # pass it. Each fixture below sets exactly one marker and pins that it
-  # alone aborts before the local fast path.
-  def test_release_bot_author_with_assets_aborts_decision_before_local_fast_path
-    assert_decide_aborts_before_local_fast_path(
-      stub_gh: bot_author_with_assets_stub_gh,
-      failing_curl: 'the `gh release view <last>` stub returns author=developerz-ai[bot] with 1 asset',
-      failure_message: 'bot-author release must abort the Decide script',
-      expected_output: '::error::release v1.8.0 is gem-less (author=developerz-ai[bot], assets=1)'
-    )
+  # The classified diagnostic must name what the absent-Release state can
+  # be, and point at the evidence that settles it — otherwise the abort is
+  # an undifferentiated error and the reader is left to guess whether
+  # anything shipped.
+  def test_release_lookup_failure_diagnostic_classifies_the_absent_release_state
+    decide_block = extract_decide_block
+
+    assert_match(/release lookup for \$\{?last\}? failed/, decide_block,
+                 'the release lookup failure must name the tag it failed for')
+
+    ['preflight', 'break-glass', 'failure before the Release was created'].each do |possibility|
+      assert_includes decide_block, possibility,
+                      'the absent-Release diagnostic must name the possibility ' \
+                      "#{possibility.inspect} — an undifferentiated error leaves the " \
+                      'reader guessing whether anything shipped'
+    end
+
+    assert_includes decide_block, 'rubygems.org/api/v2/rubygems/wurk/versions/',
+                    'the absent-Release diagnostic must point at the RubyGems per-version ' \
+                    'probe: RubyGems is the authority on publication, not the absence of a Release'
+
+    assert_match(/release\.yml/, decide_block,
+                 'the absent-Release diagnostic must point at the last release.yml run as the ' \
+                 'other half of the corroboration')
+
+    assert_includes decide_block, 'Release states',
+                    "the absent-Release diagnostic must point at RELEASE.md's 'Release states' " \
+                    'section, which classifies each state and names the destructive-recovery ' \
+                    'runbook — a reader who hits this abort needs to know where the states are ' \
+                    'defined'
+  end
+
+  # Zero assets is the gem-less MARKER, but not by itself proof that no gem
+  # shipped: release.yml pushes the gem BEFORE it creates the Release and
+  # uploads the `.gem` asset, so a succeeded push followed by a failed
+  # asset upload leaves a zero-asset Release on a version RubyGems has
+  # already burned. The deletion runbook's own safety argument ("only safe
+  # because no gem was ever published") therefore needs the per-version
+  # RubyGems probe to confirm non-publication first — the precondition
+  # RELEASE.md's "Release states" table puts on the zero-asset row (review
+  # thread PRRT_kwDOSi_O686v4LZ6). A diagnostic that names the runbook on
+  # the asset count alone directs the reader at a destructive recovery a
+  # published version must never take.
+  def test_gem_less_diagnostic_requires_rubygems_probe_before_the_deletion_runbook
+    decide_block = extract_decide_block
+
+    guard_line = decide_block.lines.find do |line|
+      line.include?('::error::release') && line.include?('is gem-less')
+    end
+
+    refute_nil guard_line, 'the Decide block must keep the gem-less guard'
+
+    assert_includes guard_line, 'rubygems.org/api/v2/rubygems/wurk/versions/',
+                    'the gem-less diagnostic must require the per-version RubyGems probe: ' \
+                    'zero assets is also the shape of a succeeded gem push whose Release ' \
+                    'asset upload failed, so the destructive runbook needs non-publication ' \
+                    'confirmed before it is named'
+
+    assert_match(/never published|shows no gem|not been published/, guard_line,
+                 'the gem-less diagnostic must make confirmed non-publication — not the ' \
+                 'asset count alone — the runbook precondition')
+  end
+
+  # The prose carries the same precondition: zero assets is the marker the
+  # checkup aborts on, while the deletion runbook it points at stays gated
+  # behind probe-confirmed non-publication. The retired sentence ("zero
+  # assets is the gem-less marker: no gem shipped") asserted the very
+  # inference the push-then-failed-upload window breaks.
+  def test_prose_gates_the_deletion_runbook_behind_probe_confirmed_non_publication
+    after_fence = @text.split(/^```\s*$/, 2)[1] || ''
+    paragraph = after_fence.split(/\n\s*\n/).find { |p| p.include?('release-deletion runbook') }
+
+    refute_nil paragraph,
+               'the brief\'s prose must keep the paragraph naming the release-deletion runbook'
+
+    assert_match(/not proof|not by itself proof|not evidence/i, paragraph,
+                 'the prose must state that zero assets alone does not establish that no ' \
+                 'gem shipped: release.yml pushes the gem before it creates the Release and ' \
+                 'uploads the asset, so a succeeded push with a failed upload leaves zero ' \
+                 'assets on a version RubyGems has already burned')
+
+    assert_match(/probe/i, paragraph,
+                 'the prose must gate the release-deletion runbook behind the per-version ' \
+                 'RubyGems probe')
+
+    assert_match(/never published|not been published|no gem was published/, paragraph,
+                 'the prose must require the probe to confirm non-publication before the ' \
+                 'release-deletion runbook applies')
+  end
+
+  # The gem-less trigger is the ASSET COUNT alone. A Release authored by
+  # `developerz-ai[bot]` that CARRIES the .gem is the sanctioned break-glass
+  # manual publish — a real release — so it must NOT abort: the script has
+  # to go on to the local fast path and compute the window against it. An
+  # earlier rule treated the author as a marker of its own and aborted here,
+  # filing a false "gem-less" defect over a perfectly good release and
+  # hiding the window behind it.
+  def test_release_bot_author_with_assets_reaches_the_window_scan
+    run_decide_under_stubs(bot_author_with_assets_stub_gh) do |(out, err, status), tmpdir|
+      combined = out + err
+
+      assert_predicate status, :success?,
+                       'a bot-authored Release that carries the .gem is a sanctioned manual ' \
+                       'release, not a defect: it must NOT abort the Decide script ' \
+                       "(status=#{status.inspect}, stdout=#{out.inspect}, stderr=#{err.inspect})"
+
+      refute_includes combined, '::error::release',
+                      'a bot-authored Release carrying the .gem must not be reported as ' \
+                      "gem-less; stdout=#{out.inspect} stderr=#{err.inspect}"
+
+      assert window_scan_reached?(File.join(tmpdir, 'local_fast_path_reached.log')),
+             'a bot-authored Release carrying the .gem must reach the window scan; the stub ' \
+             "`git log` was not reached (stdout=#{out.inspect}, stderr=#{err.inspect})"
+    end
   end
 
   def test_release_non_bot_author_without_assets_aborts_decision_before_local_fast_path
@@ -282,7 +400,7 @@ class ReleaseDueBriefTest < Minitest::Test
       stub_gh: non_bot_author_no_assets_stub_gh,
       failing_curl: 'the `gh release view <last>` stub returns author=octocat with 0 assets',
       failure_message: 'asset-less release must abort the Decide script',
-      expected_output: '::error::release v1.8.0 is gem-less (author=octocat, assets=0)'
+      expected_output: '::error::release v1.8.0 is gem-less (assets=0, author=octocat)'
     )
   end
 
@@ -788,17 +906,17 @@ class ReleaseDueBriefTest < Minitest::Test
   SHELL
   private_constant :TAG_PEEL_FAILING_STUB_GH
 
-  # Stub `gh` whose `gh release view <last>` returns the gem-less marker:
-  # author=developerz-ai[bot] AND assets=[]. The matching-refs/tags list,
-  # the tag-peel, and the commit-resolve all succeed (so $last=v1.8.0 and
-  # the peel produces a valid commit SHA), but the release-marker check
-  # fires and the script aborts with
-  # `::error::release v1.8.0 is gem-less (author=developerz-ai[bot], assets=0)`
-  # BEFORE the local fast path's first git command. The Compare endpoint
-  # must NOT be reached — a regression that lets the script continue past
-  # the gem-less guard would surface here as either the stub's "must not
-  # be called" stderr line OR the local-fast-path marker, both of which
-  # the test catches.
+  # Stub `gh` whose `gh release view <last>` returns the gem-less state:
+  # ZERO assets, authored by developerz-ai[bot]. The matching-refs/tags
+  # list, the tag-peel, and the commit-resolve all succeed (so $last=v1.8.0
+  # and the peel produces a valid commit SHA), but the gem-less guard
+  # fires on the asset count and the script aborts with
+  # `::error::release v1.8.0 is gem-less (assets=0, author=developerz-ai[bot])`
+  # BEFORE the local fast path's first git command. The baseline reads and
+  # the Compare endpoint must NOT be reached — a regression that lets the
+  # script continue past the gem-less guard would surface here as either
+  # the stub's "must not be called" stderr line OR the local-fast-path
+  # marker, both of which the test catches.
   GEM_LESS_STUB_GH = <<~'SHELL'
     #!/usr/bin/env bash
     case "$1" in
@@ -839,7 +957,7 @@ class ReleaseDueBriefTest < Minitest::Test
         esac
         ;;
       release)
-        # gem-less marker: author=developerz-ai[bot], assets=[] (RELEASE.md:192-194).
+        # gem-less state: zero assets (RELEASE.md:180-194).
         printf '%s\n' '{"author":{"login":"developerz-ai[bot]"},"assets":[]}'
         ;;
       *)
@@ -1018,8 +1136,9 @@ class ReleaseDueBriefTest < Minitest::Test
   # Stub `gh` whose `gh release view <last>` FAILS with no stdout (a
   # missing release). Everything before it succeeds, so the failure is
   # the lookup itself: with `rel` empty, both extracted fields are empty
-  # and both gem-less marker comparisons would pass vacuously. The brief
-  # must abort on the lookup; Compare must NOT be reached.
+  # and the asset comparison would pass vacuously. The brief must abort
+  # on the lookup and classify the absent-Release state; Compare must NOT
+  # be reached.
   RELEASE_LOOKUP_FAILING_STUB_GH = <<~'SHELL'
     #!/usr/bin/env bash
     case "$1" in
@@ -1067,9 +1186,14 @@ class ReleaseDueBriefTest < Minitest::Test
   SHELL
   private_constant :RELEASE_LOOKUP_FAILING_STUB_GH
 
-  # Exactly ONE gem-less marker: bot author WITH an asset. The shared
-  # GEM_LESS_STUB_GH sets both markers, so a guard reduced to the assets
-  # half alone would still pass it; here only the author half may fire.
+  # A bot-authored Release that CARRIES the .gem: the sanctioned
+  # break-glass manual publish, and a real release. The asset count is
+  # non-zero, so the brief's guard must let it through — the whole point
+  # of the stub is that the script goes on to read the baseline and reach
+  # the window scan, so the baseline reads (commit, CHANGELOG at the
+  # commit and at its first parent) succeed here. The Compare endpoint
+  # succeeds too. A regression that reintroduces the author as a trigger
+  # aborts here with a gem-less diagnostic instead of reaching the window.
   BOT_AUTHOR_WITH_ASSETS_STUB_GH = <<~'SHELL'
     #!/usr/bin/env bash
     case "$1" in
@@ -1095,13 +1219,25 @@ class ReleaseDueBriefTest < Minitest::Test
           *git/tags/aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa)
             printf '%s\n' '{"object":{"sha":"bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb","type":"commit"}}'
             ;;
-          *commits/*|*contents/CHANGELOG.md*)
-            printf 'ERROR: stub gh api: the release baseline must not be read when the release is gem-less\n' >&2
-            exit 1
+          *commits/bbbb*)
+            printf '%s\n' '{"sha":"bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb","commit":{"committer":{"date":"2026-10-05T09:00:00Z"}},"parents":[{"sha":"dddddddddddddddddddddddddddddddddddddddd"}]}'
             ;;
-          *compare/*)
-            printf 'ERROR: stub gh api compare/* must not be called when the release is gem-less\n' >&2
-            exit 1
+          *contents/CHANGELOG.md*)
+            case "$url" in
+              *ref=bbbb*)
+                printf '%s\n' '## [Unreleased]' '' '## [1.8.0] - 2026-10-05' '' '- the release commit'
+                ;;
+              *ref=dddd*)
+                printf '%s\n' '## [Unreleased]' '' '## [1.7.9] - 2026-09-30' '' '- an older release'
+                ;;
+              *)
+                printf 'ERROR: stub gh api: unexpected CHANGELOG ref: %s\n' "$url" >&2
+                exit 1
+                ;;
+            esac
+            ;;
+          *compare/v1.8.0...main)
+            printf '%s\n' '{"status":"ahead","ahead_by":3,"behind_by":0,"total_commits":3}'
             ;;
           *)
             printf 'ERROR: stub gh api: unexpected URL: %s\n' "$url" >&2
@@ -1110,7 +1246,8 @@ class ReleaseDueBriefTest < Minitest::Test
         esac
         ;;
       release)
-        # One marker: author=developerz-ai[bot] but assets is non-empty.
+        # A bot-authored Release that CARRIES the .gem: a sanctioned manual
+        # release, not a defect.
         printf '%s\n' '{"author":{"login":"developerz-ai[bot]"},"assets":[{"name":"wurk-1.8.0.gem"}]}'
         ;;
       *)
@@ -1121,8 +1258,8 @@ class ReleaseDueBriefTest < Minitest::Test
   SHELL
   private_constant :BOT_AUTHOR_WITH_ASSETS_STUB_GH
 
-  # The other single marker: human author with ZERO assets — only the
-  # assets half may fire.
+  # The other gem-less shape: human author with ZERO assets — the assets
+  # half alone fires.
   NON_BOT_AUTHOR_NO_ASSETS_STUB_GH = <<~'SHELL'
     #!/usr/bin/env bash
     case "$1" in
@@ -1163,7 +1300,7 @@ class ReleaseDueBriefTest < Minitest::Test
         esac
         ;;
       release)
-        # One marker: assets=[] but author is not developerz-ai[bot].
+        # gem-less state: assets=[] but author is not developerz-ai[bot].
         printf '%s\n' '{"author":{"login":"octocat"},"assets":[]}'
         ;;
       *)
