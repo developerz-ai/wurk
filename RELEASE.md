@@ -84,14 +84,15 @@ publishes and deploys exactly as one merged by a human.
 | 1 | **`preflight`** | Reads `Wurk::VERSION`, derives the tag, and asks RubyGems whether that version already exists. If it does, the run stops here as a no-op — RubyGems forbids re-pushing a version, so its presence is the one idempotency key that cannot drift. This is what makes the workflow safe to re-run and makes a no-op edit to `version.rb` resolve to "nothing to do" instead of a failure. |
 | 2 | **checkout + Ruby + bun** | Ruby pinned to 3.4 (the `.gem` is pure Ruby and identical whichever interpreter packs it; the compatibility statement is made by the `test` job). Third-party actions pinned to commit SHAs — this job holds `id-token`. |
 | 3 | **build dashboard SPA** | Precompiles the Vite SPA into `vendor/assets/` (`rake frontend:build`). |
-| 4 | **release gate** | `rake release:check` — see the table below. |
-| 5 | **build & verify gem** | `rake release:package` packages into `pkg/` and asserts the precompiled dashboard is *inside* the `.gem`. |
-| 6 | **`configure RubyGems trusted publishing`** | Exchanges GitHub's short-lived OIDC token for a scoped RubyGems credential via `rubygems/configure-rubygems-credentials` — the `id-token: write` permission on this job is what makes that possible, no API key anywhere. |
-| 7 | **`gem push`** | Second `refs/heads/main` belt-and-braces guard (preflight already refused a non-main ref, but this job must not depend on that staying true), then `gem push "pkg/wurk-${VERSION}.gem"` against `pkg/`. Irreversible — once RubyGems accepts the version, that number is burned. |
-| 8 | **`await RubyGems propagation`** | `gem exec rubygems-await "pkg/wurk-${VERSION}.gem"` blocks until RubyGems serves the version — without the wait, the next step can race the publication and create a tag with no gem behind it. |
-| 9 | **`tag & create GitHub Release`** | `gh release create <tag> --target <sha>` creates the tag *and* the Release in one call, with the CHANGELOG section as notes (`bin/changelog-section`) and the `.gem` attached (marked pre-release automatically for `Gem::Version#prerelease?`). When a release for the tag already exists (gem push above is irreversible), the reconcile branch (release.yml:194-209) finishes it via `gh release edit` + `upload --clobber` instead of abandoning — the one case that still aborts is a tag already pointing at a different commit. **Last, deliberately** — see [the one rule](#the-one-rule-the-tag-is-an-output-not-an-input). |
-| 10 | **`demo`** | Ships the released tag to `wurk.demo.developerz.ai` via the `demo` environment (a deployment record and URL; it carries no protection rules, so nothing pauses for a reviewer). It passes `trusted: true`, which waives deploy-demo's `DEMO_DEPLOYERS` actor allowlist — that allowlist guards the hand-dispatched door, and has nothing to add once this workflow has already published the commit's gem. Waiving it is also what lets a release merged by the developerz.ai bot deploy the demo, rather than stranding it after the irreversible publish. The waiver is honoured only from the `release` workflow running on `main`; anything else passing `trusted: true` is rejected. |
-| 11 | **`smoke`** | Calls the reusable `release-smoke.yml` workflow with the released version. It installs that version into a throwaway minimal Rails app, asserts the mounted engine serves `/wurk` with HTTP 200, boots `wurkswarm` and requires an enqueued job to land its Redis marker, and checks the demo's `/wurk/api/meta` reports the same version. This is bounded post-publish evidence, not a gate: it runs only after the irreversible `gem push`, so a failure changes nothing — no rollback or compensation is implemented. |
+| 4 | **dummy app setup** | Installs the dummy application's bundle and prepares its database (`bundle install`, `bin/rails db:prepare`) before the release gate. |
+| 5 | **release gate** | `rake release:check` — see the table below. |
+| 6 | **build & verify gem** | `rake release:package` packages into `pkg/` and asserts the precompiled dashboard is *inside* the `.gem`. |
+| 7 | **configure RubyGems trusted publishing** | Exchanges GitHub's short-lived OIDC token for a scoped RubyGems credential via `rubygems/configure-rubygems-credentials` — the `id-token: write` permission on this job is what makes that possible, no API key anywhere. |
+| 8 | **gem push** | Second `refs/heads/main` belt-and-braces guard (preflight already refused a non-main ref, but this job must not depend on that staying true), then `gem push "pkg/wurk-${VERSION}.gem"` against `pkg/`. Irreversible — once RubyGems accepts the version, that number is burned. |
+| 9 | **await RubyGems propagation** | `gem exec rubygems-await "pkg/wurk-${VERSION}.gem"` blocks until RubyGems serves the version — without the wait, the next step can race the publication and create a tag with no gem behind it. |
+| 10 | **tag & create GitHub Release** | `gh release create <tag> --target <sha>` creates the tag *and* the Release in one call, with the CHANGELOG section as notes (`bin/changelog-section`) and the `.gem` attached (marked pre-release automatically for `Gem::Version#prerelease?`). When a release for the tag already exists (gem push above is irreversible), the reconcile branch (release.yml:194-209) finishes it via `gh release edit` + `upload --clobber` instead of abandoning — the one case that still aborts is a tag already pointing at a different commit. **Last, deliberately** — see [the one rule](#the-one-rule-the-tag-is-an-output-not-an-input). |
+| 11 | **`demo`** | Ships the released tag to `wurk.demo.developerz.ai` via the `demo` environment (a deployment record and URL; it carries no protection rules, so nothing pauses for a reviewer). It passes `trusted: true`, which waives deploy-demo's `DEMO_DEPLOYERS` actor allowlist — that allowlist guards the hand-dispatched door, and has nothing to add once this workflow has already published the commit's gem. Waiving it is also what lets a release merged by the developerz.ai bot deploy the demo, rather than stranding it after the irreversible publish. The waiver is honoured only from the `release` workflow running on `main`; anything else passing `trusted: true` is rejected. |
+| 12 | **`smoke`** | Calls the reusable `release-smoke.yml` workflow with the released version. It installs that version into a throwaway minimal Rails app, asserts the mounted engine serves `/wurk` with HTTP 200, boots `wurkswarm` and requires an enqueued job to land its Redis marker, and checks the demo's `/wurk/api/meta` reports the same version. This is bounded post-publish evidence, not a gate: it runs only after the irreversible `gem push`, so a failure changes nothing — no rollback or compensation is implemented. |
 
 ### Smoke-checking a published release
 
@@ -175,9 +176,11 @@ second holds regardless of whether it does.
 ### Recovering a gem-less release
 
 Should one appear anyway, it is cosmetic (no gem shipped) but it lies about the
-latest version, so clear it — a maintainer-only manual runbook the scheduled health checkup only ever points at via a filed ask; the checkup reports, it never executes:
+latest version, so clear it — a maintainer-only manual runbook the scheduled health checkup only ever points at via a filed ask; the checkup reports, it never executes. This is the gem-less release recovery path:
 
 ```bash
+# This removes a gem-less release: drops the Release and the remote tag,
+# then fetches tags so the local one is removed too.
 gh release delete vX.Y.Z --cleanup-tag --yes   # drops the Release and the remote tag
 git fetch --prune-tags                         # and the local one
 ```
@@ -192,6 +195,8 @@ that number is burned and the next release must take the following one.
 The gem-less marker above (`gh release view` showing `author=developerz-ai[bot]`
 with zero assets) is how the scheduled release-due checkup recognises one of
 these: it reads that as a gem-less release, not a real one.
+
+A release without a gem behind it is a gem-less release.
 
 ### Verifying a release actually shipped
 
