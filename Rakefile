@@ -68,7 +68,7 @@ namespace :test do
 
   Rake::TestTask.new(:parity) do |t|
     t.libs << 'test' << 'lib'
-    t.test_files = FileList['test/parity/**/*_test.rb']
+    t.test_files = FileList['test/parity/**/*_test.rb', 'test/conformance/**/*_test.rb']
     t.description = 'Run Sidekiq parity tests ' \
                     '(independently written oracles ' \
                     'for the documented Sidekiq behaviour, ' \
