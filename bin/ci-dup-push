@@ -7,7 +7,8 @@
 #
 # Every failure path prints `false` (run everything): a wrong `true` would
 # skip the only gate a direct push to main ever gets. `set -e` is deliberately
-# NOT used. Needs `gh` and `jq` (both preinstalled on GitHub runners) and GH_TOKEN.
+# NOT used. Needs `git`, `gh` and `jq` (`gh` and `jq` come preinstalled on
+# GitHub runners) and the `GH_TOKEN` environment variable.
 set -uo pipefail
 
 workflow="${1:-.github/workflows/test.yml}"
@@ -17,6 +18,8 @@ no() { echo "ci-dup-push: $1 — full run" >&2; echo false; exit 0; }
 [ "${GITHUB_EVENT_NAME:-}" = "push" ] || no "event '${GITHUB_EVENT_NAME:-}' is not a push"
 repo="${GITHUB_REPOSITORY:-}"
 [ -n "$repo" ] || no "GITHUB_REPOSITORY is empty"
+command -v gh >/dev/null 2>&1 || no "gh is not installed"
+command -v jq >/dev/null 2>&1 || no "jq is not installed"
 head_sha="$(git rev-parse HEAD 2>/dev/null)" || no "no HEAD sha"
 head_tree="$(git rev-parse 'HEAD^{tree}' 2>/dev/null)" || no "no HEAD tree"
 subject="$(git log -1 --format=%s 2>/dev/null)" || no "no subject"
