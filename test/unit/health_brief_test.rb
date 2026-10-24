@@ -11,12 +11,12 @@ require 'fileutils'
 # deployed`, `topology and ecosystem lanes`, `Dependabot is not stuck`) the
 # way release_due_brief_test.rb gates
 # release-due.md: these commands run unattended on a schedule, and a verdict
-# they cannot actually establish must never be printed as a green one. Seven
-# properties — the first six all pinned by RUNNING the extracted command
+# they cannot actually establish must never be printed as a green one. Eight
+# properties — the first five all pinned by RUNNING the extracted command
 # cells as bash against a PATH-stubbed `gh` (a substring match over the
-# brief's text would accept a guard that never fires), the seventh pinned
+# brief's text would accept a guard that never fires), the sixth pinned
 # byte-for-byte on the brief's text plus by running the extracted issues
-# lookup:
+# lookup, and the last two pinned by running the extracted cells as well:
 #
 #   1. FAIL CLOSED. `gh api .../actions/runs/<id>/jobs` is the only thing
 #      between a `gh` error and a false green: with the read empty the row falls
@@ -69,6 +69,16 @@ require 'fileutils'
 #      gem-less discriminator: an author of `developerz-ai[bot]` OR zero
 #      assets is a gem-less Latest Release, and an unreadable lookup grades
 #      `verdict unknown` — never a green, never Unhealthy.
+#   8. Row 14's read is pinned at runtime. `gh pr list` is asked for the
+#      OPEN PRs (`--state open`, never `gh pr list`'s default state) and for
+#      the fields the report prints — number, title, createdAt, headRefName,
+#      updatedAt, statusCheckRollup, headRefOid — and the stub REFUSES a
+#      request that drops either, so a brief that quietly narrowed the read
+#      fails closed instead of printing a summary it cannot fill. The report
+#      tells an unreadable list (`verdict unknown` AND `not readable`, one
+#      line) from a readable empty one (`dependabot: 0 open PRs`), reads the
+#      ecosystem off the BRANCH first and the title second, and grades the
+#      age off `createdAt` alone — `updatedAt` is reported, never graded.
 #
 # One more property, added with the run URLs: every job-list row must request
 # BOTH `url` and `databaseId` and print the URL on EVERY verdict — dup,
@@ -99,6 +109,13 @@ class HealthBriefTest < Minitest::Test
   SHA_INFLIGHT   = '1' * 40
   SHA_DEMO       = '7' * 40
   SHA_DEMO_FROZEN = '4' * 40
+  # Head SHAs for the dependabot PRs row 14 reports — one per ecosystem, so
+  # a report line can be told apart from the PR number it carries.
+  SHA_RUBOCOP    = '5' * 40
+  SHA_TYPES      = '6' * 40
+  SHA_ACTIONS    = '3' * 40
+  SHA_DOCKER     = '2' * 40
+  SHA_PR         = '0' * 40
   # A sha that is NOT the commit carrying Wurk::VERSION: the release run
   # that carries it says nothing about this version's release, so the row
   # must refuse it.
@@ -913,7 +930,6 @@ class HealthBriefTest < Minitest::Test
       'number' => 7001,
       'title' => 'Bump actions/checkout from 4 to 5 in /',
       'createdAt' => (now - (30 * 86_400)).iso8601,
-      'isDraft' => false,
       'statusCheckRollup' => [check_run('FAILURE')]
     }
     out, _err, status = run_row14(prs: [pr])
@@ -921,7 +937,7 @@ class HealthBriefTest < Minitest::Test
     assert_predicate status, :success?,
                      "row 14's command must run cleanly (status=#{status.inspect})"
 
-    refute_includes out, '#7001',
+    refute_includes out, 'Dependabot is stuck on #7001',
                     'a github-actions PR aged 30d is under its 37d budget ' \
                     '(dependabot.yml:54-61) even when FAILURE — the row must not ' \
                     "name it stuck (stdout=#{out.inspect})"
@@ -946,7 +962,6 @@ class HealthBriefTest < Minitest::Test
       'number' => 7102,
       'title' => 'Bump oven/bun from 1.4.1 to 1.4.2 in /',
       'createdAt' => (now - (5 * 86_400)).iso8601,
-      'isDraft' => false,
       'statusCheckRollup' => [check_run('FAILURE')]
     }
     out, _err, status = run_row14(prs: [pr])
@@ -954,7 +969,7 @@ class HealthBriefTest < Minitest::Test
     assert_predicate status, :success?,
                      "row 14's command must run cleanly (status=#{status.inspect})"
 
-    refute_includes out, '#7102',
+    refute_includes out, 'Dependabot is stuck on #7102',
                     'a red docker PR aged 5d is exactly the expected-red shape of ' \
                     "dependabot.yml:63-72; it must NOT print the PR number (stdout=#{out.inspect})"
     refute_includes out, 'Unhealthy',
@@ -973,7 +988,6 @@ class HealthBriefTest < Minitest::Test
       'number' => 7203,
       'title' => 'Bump rubocop from 2.0.0 to 2.1.0 in /',
       'createdAt' => (now - (35 * 86_400)).iso8601,
-      'isDraft' => false,
       'statusCheckRollup' => [check_run('FAILURE')]
     }
     out, _err, status = run_row14(prs: [pr])
@@ -982,18 +996,28 @@ class HealthBriefTest < Minitest::Test
                      "row 14's command must run cleanly (status=#{status.inspect})"
 
     lines = out.lines.map(&:chomp)
+    stuck = lines.select { |line| line.start_with?('Unhealthy: Dependabot is stuck on #7203') }
 
-    assert_equal 1, lines.size,
-                 'one stuck PR prints one line — the row names per-PR, not a ' \
-                 "summary (stdout=#{out.inspect})"
+    assert_equal 1, stuck.size,
+                 'one stuck PR prints one Unhealthy line — the row names per-PR, ' \
+                 "not a summary (stdout=#{out.inspect})"
 
-    assert_match(/\AUnhealthy: Dependabot is stuck on #7203\b/, lines.first,
+    assert_match(/\AUnhealthy: Dependabot is stuck on #7203\b/, stuck.first,
                  'the stuck line must name the signal and the PR number so the ask ' \
-                 "can link it (got #{lines.first.inspect})")
+                 "can link it (got #{stuck.first.inspect})")
 
-    assert_match(/\(age 35d > 28d budget for bundler\)\z/, lines.first,
+    assert_match(/\(age 35d > 28d budget for bundler\)\z/, stuck.first,
                  'the line must carry the age and the bundler budget, so a reader can ' \
-                 "see WHY this is stuck without re-running the command (got #{lines.first.inspect})")
+                 "see WHY this is stuck without re-running the command (got #{stuck.first.inspect})")
+
+    assert_includes lines, 'dependabot: 1 open PRs (bundler 1 FAILURE)',
+                    'the row reports what it read — the ecosystem, how many of its ' \
+                    'PRs are open and the state they rolled up to ' \
+                    "(stdout=#{out.inspect})"
+
+    assert(lines.any? { |line| line.start_with?('#7203 ') },
+           'the row reports every open PR — number, ecosystem, branch, head sha ' \
+           "and last update (stdout=#{out.inspect})")
   end
 
   def test_bun_pr_in_frontend_uses_the_bun_budget_not_bundlers
@@ -1007,7 +1031,6 @@ class HealthBriefTest < Minitest::Test
       'number' => 7304,
       'title' => 'Bump @types/node from 20.0.0 to 20.1.0 in /frontend',
       'createdAt' => (now - (20 * 86_400)).iso8601,
-      'isDraft' => false,
       'statusCheckRollup' => [check_run('FAILURE')]
     }
     out, _err, status = run_row14(prs: [stuck])
@@ -1034,7 +1057,6 @@ class HealthBriefTest < Minitest::Test
       'number' => 7305,
       'title' => 'Bump @types/node from 20.0.0 to 20.1.0 in /frontend',
       'createdAt' => (now - (5 * 86_400)).iso8601,
-      'isDraft' => false,
       'statusCheckRollup' => [check_run('FAILURE')]
     }
     out, _err, status = run_row14(prs: [pr])
@@ -1042,9 +1064,13 @@ class HealthBriefTest < Minitest::Test
     assert_predicate status, :success?,
                      "row 14's command must run cleanly (status=#{status.inspect})"
 
-    assert_equal [], out.lines.map(&:chomp),
-                 'a red bun PR aged 5d is under its 14d budget (dependabot.yml:41-49); ' \
-                 "the row must print nothing at all (stdout=#{out.inspect})"
+    refute_includes out, 'Dependabot is stuck',
+                    'a red bun PR aged 5d is under its 14d budget (dependabot.yml:41-49); ' \
+                    "the row must not report it stuck (stdout=#{out.inspect})"
+
+    assert_includes out, 'dependabot: 1 open PRs (bun 1 FAILURE)',
+                    'the row still reports what it read — a red but young PR is a line ' \
+                    "in the report, not a verdict (stdout=#{out.inspect})"
   end
 
   def test_github_actions_group_pr_uses_the_github_actions_budget
@@ -1060,7 +1086,6 @@ class HealthBriefTest < Minitest::Test
       'number' => 7306,
       'title' => 'Bump the github-actions group with 4 updates',
       'createdAt' => (now - (40 * 86_400)).iso8601,
-      'isDraft' => false,
       'statusCheckRollup' => [check_run('FAILURE')]
     }
     out, _err, status = run_row14(prs: [pr])
@@ -1089,7 +1114,6 @@ class HealthBriefTest < Minitest::Test
       'number' => 7307,
       'title' => 'Bump rubocop from 2.0.0 to 2.1.0 in /',
       'createdAt' => (now - (35 * 86_400)).iso8601,
-      'isDraft' => false,
       'statusCheckRollup' => [check_run('SUCCESS')]
     }
     out, _err, status = run_row14(prs: [pr])
@@ -1097,10 +1121,14 @@ class HealthBriefTest < Minitest::Test
     assert_predicate status, :success?,
                      "row 14's command must run cleanly (status=#{status.inspect})"
 
-    assert_equal [], out.lines.map(&:chomp),
-                 'a past-budget PR whose checks all concluded SUCCESS is an old green ' \
-                 'pending merge, not stuck (health.md:103); the row must print nothing ' \
-                 "(stdout=#{out.inspect})"
+    refute_includes out, 'Dependabot is stuck',
+                    'a past-budget PR whose checks all concluded SUCCESS is an old green ' \
+                    'pending merge, not stuck (health.md:103); the row must not report ' \
+                    "it stuck (stdout=#{out.inspect})"
+
+    assert_includes out, 'dependabot: 1 open PRs (bundler 1 SUCCESS)',
+                    'the row still reports what it read — an old green is a line in the ' \
+                    "report, not a verdict (stdout=#{out.inspect})"
   end
 
   def test_past_budget_but_pending_pr_is_not_stuck
@@ -1115,7 +1143,6 @@ class HealthBriefTest < Minitest::Test
       'number' => 7308,
       'title' => 'Bump rubocop from 2.0.0 to 2.1.0 in /',
       'createdAt' => (now - (35 * 86_400)).iso8601,
-      'isDraft' => false,
       'statusCheckRollup' => [check_run('SUCCESS'), running_check_run]
     }
     out, _err, status = run_row14(prs: [pr])
@@ -1123,9 +1150,13 @@ class HealthBriefTest < Minitest::Test
     assert_predicate status, :success?,
                      "row 14's command must run cleanly (status=#{status.inspect})"
 
-    assert_equal [], out.lines.map(&:chomp),
-                 'a past-budget PR with a check still running is in flight, not ' \
-                 "stuck (health.md:103); the row must print nothing (stdout=#{out.inspect})"
+    refute_includes out, 'Dependabot is stuck',
+                    'a past-budget PR with a check still running is in flight, not ' \
+                    "stuck (health.md:103); the row must not report it stuck (stdout=#{out.inspect})"
+
+    assert_includes out, 'dependabot: 1 open PRs (bundler 1 PENDING)',
+                    'the row still reports what it read — a PR still in flight is a line ' \
+                    "in the report, not a verdict (stdout=#{out.inspect})"
   end
 
   def test_one_failed_check_makes_the_whole_rollup_red
@@ -1140,7 +1171,6 @@ class HealthBriefTest < Minitest::Test
       'number' => 7309,
       'title' => 'Bump the github-actions group with 4 updates',
       'createdAt' => (now - (40 * 86_400)).iso8601,
-      'isDraft' => false,
       'statusCheckRollup' => [check_run('SUCCESS'), running_check_run, status_context('FAILURE')]
     }
     out, _err, status = run_row14(prs: [pr])
@@ -1148,17 +1178,18 @@ class HealthBriefTest < Minitest::Test
     assert_predicate status, :success?,
                      "row 14's command must run cleanly (status=#{status.inspect})"
 
-    assert_equal 1, out.lines.size,
-                 "one stuck PR prints one line; got #{out.lines.inspect}"
+    stuck = out.lines.map(&:chomp).select { |line| line.start_with?('Unhealthy:') }
 
-    stuck = out.lines.map(&:chomp).first
+    assert_equal 1, stuck.size,
+                 "one stuck PR prints one Unhealthy line; got #{out.lines.inspect}"
 
-    assert_match(/\AUnhealthy: Dependabot is stuck on #7309\b/, stuck,
+    assert_match(/\AUnhealthy: Dependabot is stuck on #7309\b/, stuck.first,
                  'one failed entry makes the whole PR red, however green or ' \
                  "still-running the rest of the rollup is; got #{out.inspect}")
 
-    assert_match(/\(age 40d > 37d budget for github-actions\)\z/, stuck,
-                 "the ecosystem still comes from the title, not the rollup; got #{stuck.inspect}")
+    assert_match(/\(age 40d > 37d budget for github-actions\)\z/, stuck.first,
+                 'the ecosystem comes from the branch (or the title), never from the ' \
+                 "rollup; got #{stuck.first.inspect}")
   end
 
   def test_a_timed_out_check_counts_as_a_failure
@@ -1171,7 +1202,6 @@ class HealthBriefTest < Minitest::Test
       'number' => 7311,
       'title' => 'Bump rubocop from 2.0.0 to 2.1.0 in /',
       'createdAt' => (now - (35 * 86_400)).iso8601,
-      'isDraft' => false,
       'statusCheckRollup' => [check_run('SUCCESS'), check_run('TIMED_OUT')]
     }
     out, _err, status = run_row14(prs: [pr])
@@ -1179,7 +1209,8 @@ class HealthBriefTest < Minitest::Test
     assert_predicate status, :success?,
                      "row 14's command must run cleanly (status=#{status.inspect})"
 
-    assert_match(/\AUnhealthy: Dependabot is stuck on #7311\b/, out.lines.map(&:chomp).first.to_s,
+    assert_match(/\AUnhealthy: Dependabot is stuck on #7311\b/,
+                 out.lines.map(&:chomp).select { |line| line.start_with?('Unhealthy:') }.first.to_s,
                  'a TIMED_OUT check blocks a merge exactly as hard as FAILURE; ' \
                  "got #{out.inspect}")
   end
@@ -1193,7 +1224,6 @@ class HealthBriefTest < Minitest::Test
       'number' => 7312,
       'title' => 'Bump rubocop from 2.0.0 to 2.1.0 in /',
       'createdAt' => (now - (35 * 86_400)).iso8601,
-      'isDraft' => false,
       'statusCheckRollup' => [check_run('SUCCESS'), status_context('ERROR')]
     }
     out, _err, status = run_row14(prs: [pr])
@@ -1201,7 +1231,8 @@ class HealthBriefTest < Minitest::Test
     assert_predicate status, :success?,
                      "row 14's command must run cleanly (status=#{status.inspect})"
 
-    assert_match(/\(age 35d > 28d budget for bundler\)\z/, out.lines.map(&:chomp).first.to_s,
+    assert_match(/\(age 35d > 28d budget for bundler\)\z/,
+                 out.lines.map(&:chomp).select { |line| line.start_with?('Unhealthy:') }.first.to_s,
                  'a StatusContext of ERROR is a failure too; got ' \
                  "#{out.inspect}")
   end
@@ -1218,7 +1249,6 @@ class HealthBriefTest < Minitest::Test
         'number' => 7313 + i,
         'title' => 'Bump rubocop from 2.0.0 to 2.1.0 in /',
         'createdAt' => (now - (35 * 86_400)).iso8601,
-        'isDraft' => false,
         'statusCheckRollup' => rollup
       }
       out, _err, status = run_row14(prs: [pr])
@@ -1226,30 +1256,364 @@ class HealthBriefTest < Minitest::Test
       assert_predicate status, :success?,
                        "row 14's command must run cleanly (status=#{status.inspect})"
 
-      assert_equal [], out.lines.map(&:chomp),
-                   "rollup #{rollup.inspect} has nothing red in it, so the row must " \
-                   "print nothing at 35d (stdout=#{out.inspect})"
+      refute_includes out, 'Dependabot is stuck',
+                      "rollup #{rollup.inspect} has nothing red in it, so the row must " \
+                      "not report it stuck at 35d (stdout=#{out.inspect})"
     end
   end
 
   def test_unreadable_dependabot_pr_list_fails_closed
-    # If the stub cannot serve `gh pr list --app dependabot --json ...`, the
-    # brief command must not fall through to printing a green verdict. The
-    # stub's `pr` arm errors out without a fixture, so `gh` writes nothing to
-    # stdout; the brief's `jq -e 'type == "array"'` check then sees an empty
-    # string and the row prints `verdict unknown dependabot` so the next
-    # checkup re-runs it. Same shape as rows 8 and 9's fail-closed rule.
+    # If the stub cannot serve the open-PR list, the brief command must not
+    # fall through to printing a green verdict. The stub's `pr` arm errors
+    # out without a fixture, so `gh` writes nothing to stdout; the brief's
+    # `jq -e 'type == "array"'` check then sees an empty string and the row
+    # prints `verdict unknown` so the next checkup re-runs it. Same shape as
+    # rows 8 and 9's fail-closed rule.
     out, _err, _status = run_command(
       command_cell('Dependabot is not stuck', gh_command: 'gh pr list'),
       jobs_fail: false
     ) { |_fixtures| } # no dependabot.prs fixture is written
 
+    lines = out.lines.map(&:chomp)
+
+    assert_equal 1, lines.size,
+                 'an unreadable pr list prints exactly one line and nothing else; ' \
+                 "got #{lines.inspect}"
+
+    assert_includes lines.first, 'verdict unknown',
+                    'an unreadable pr list must surface as `verdict unknown`, the same ' \
+                    "fail-closed shape rows 8 and 9 use (stdout=#{out.inspect})"
+
+    assert_includes lines.first, 'not readable',
+                    'the line must also say the list was NOT READABLE: an unreadable ' \
+                    'list and an empty one are different findings and must never look ' \
+                    "alike (stdout=#{out.inspect})"
+
     refute_includes out, 'Dependabot is stuck on ',
                     'an unreadable pr list cannot have produced a stuck verdict ' \
                     "(stdout=#{out.inspect})"
+
+    refute_includes out, '0 open PRs',
+                    'an unreadable list is not an empty one — that is the other ' \
+                    "outcome (stdout=#{out.inspect})"
+  end
+
+  # Row 14's read is one contract with its report: the OPEN PRs, and the
+  # fields the report prints. The stub refuses a `gh pr list` without
+  # `--state open`, so a brief that fell back to `gh pr list`'s default state
+  # fails closed instead of reporting whatever that state happened to be.
+  def test_stub_refuses_a_pr_list_without_the_state_open_filter
+    cell = command_cell('Dependabot is not stuck', gh_command: 'gh pr list')
+    mutated = cell.sub('--state open ', '')
+
+    refute_equal cell, mutated, 'the mutation must actually remove --state open'
+
+    out, err, _status = run_row14(
+      prs: [dependabot_pr(number: 7501, title: 'Bump rubocop from 2.0.0 to 2.1.0 in /',
+                          branch: 'dependabot/bundler/rubocop', age_days: 35,
+                          sha: SHA_RUBOCOP)],
+      cell: mutated
+    )
+
     assert_includes out, 'verdict unknown',
-                    'an unreadable pr list must surface as `verdict unknown`, the same ' \
-                    "fail-closed shape rows 8 and 9 use (stdout=#{out.inspect})"
+                    'a `gh pr list` without --state open is not the open-PR read the ' \
+                    'row grades, and the stub refuses it ' \
+                    "(stdout=#{out.inspect}, stderr=#{err.inspect})"
+
+    assert_includes out, 'not readable',
+                    "the refused read must say it is not readable (stdout=#{out.inspect})"
+
+    refute_includes out, 'Dependabot is stuck on ',
+                    "a refused read cannot have produced a stuck verdict (stdout=#{out.inspect})"
+  end
+
+  # The field list is the other half of the contract: the report prints the
+  # branch, the head SHA and the last update, so a request that does not ask
+  # for them is refused rather than answered with a report full of blanks.
+  def test_stub_refuses_a_pr_list_that_does_not_request_the_head_sha
+    cell = command_cell('Dependabot is not stuck', gh_command: 'gh pr list')
+    mutated = cell.sub(',headRefOid', '')
+
+    refute_equal cell, mutated, 'the mutation must actually drop headRefOid'
+
+    out, err, _status = run_row14(
+      prs: [dependabot_pr(number: 7502, title: 'Bump rubocop from 2.0.0 to 2.1.0 in /',
+                          branch: 'dependabot/bundler/rubocop', age_days: 35,
+                          sha: SHA_RUBOCOP)],
+      cell: mutated
+    )
+
+    assert_includes out, 'verdict unknown',
+                    'a request that does not ask for the head sha cannot fill the ' \
+                    "report's per-PR line, and the stub refuses it (stdout=#{out.inspect}, " \
+                    "stderr=#{err.inspect})"
+
+    assert_includes out, 'not readable',
+                    "the refused read must say it is not readable (stdout=#{out.inspect})"
+  end
+
+  # A readable but EMPTY list is a different finding from an unreadable one:
+  # it is the answer "there is nothing open", not "I could not read".
+  def test_readable_empty_pr_list_is_not_an_unknown
+    out, _err, status = run_row14(prs: [])
+
+    assert_predicate status, :success?,
+                     "row 14's command must run cleanly (status=#{status.inspect})"
+
+    assert_equal ['dependabot: 0 open PRs'], out.lines.map(&:chomp),
+                 'a readable but empty pr list is its own outcome — "0 open PRs" — ' \
+                 "not an unknown (stdout=#{out.inspect})"
+
+    refute_includes out, 'verdict unknown',
+                    'an empty list is a readable answer, not an unreadable one ' \
+                    "(stdout=#{out.inspect})"
+  end
+
+  # The row reports what it read: one line per open PR, carrying the number,
+  # the ecosystem, the branch, the head SHA and the last update.
+  def test_row14_reports_each_open_pr_with_its_branch_head_sha_and_last_update
+    pr = dependabot_pr(number: 7503, title: 'Bump rubocop from 2.0.0 to 2.1.0 in /',
+                       branch: 'dependabot/bundler/rubocop', age_days: 5,
+                       updated_days: 2, sha: SHA_RUBOCOP)
+    out, _err, status = run_row14(prs: [pr])
+
+    assert_predicate status, :success?,
+                     "row 14's command must run cleanly (status=#{status.inspect})"
+
+    line = out.lines.map(&:chomp).find { |candidate| candidate.start_with?('#7503') }
+
+    refute_nil line, "the row must report every open PR (stdout=#{out.inspect})"
+
+    assert_equal ['#7503', 'bundler', 'dependabot/bundler/rubocop', SHA_RUBOCOP,
+                  pr['updatedAt'], 'FAILURE'],
+                 line.split,
+                 'the per-PR line must carry the number, the ecosystem, the branch, ' \
+                 "the head sha, the last update and the rolled-up state (got #{line.inspect})"
+  end
+
+  # A field the list does not carry is reported as `unknown` — never as an
+  # empty slot and never as a literal `null`: the per-PR line has to stay
+  # readable, and a blank would read as a PR with no head SHA at all.
+  def test_row14_reports_unknown_for_a_field_the_list_does_not_carry
+    # No headRefOid: the head SHA is read from that field and from nowhere
+    # else, so a list that does not carry it can only report `unknown`.
+    no_sha = dependabot_pr(number: 7514, title: 'Bump rubocop from 2.0.0 to 2.1.0 in /',
+                           branch: 'dependabot/bundler/rubocop', age_days: 5)
+    out, _err, status = run_row14(prs: [no_sha])
+
+    assert_predicate status, :success?,
+                     "row 14's command must run cleanly (status=#{status.inspect})"
+
+    line = out.lines.map(&:chomp).find { |candidate| candidate.start_with?('#7514') }
+
+    refute_nil line, "the row must report every open PR (stdout=#{out.inspect})"
+
+    assert_equal ['#7514', 'bundler', 'dependabot/bundler/rubocop', 'unknown',
+                  no_sha['updatedAt'], 'FAILURE'],
+                 line.split,
+                 'a list that carries no head SHA must report `unknown` in the ' \
+                 "head-sha slot (got #{line.inspect})"
+
+    # No branch and no last update either: both slots read `unknown`, and
+    # the ecosystem falls back to the title.
+    bare = {
+      'number' => 7515,
+      'title' => 'Bump rubocop from 2.0.0 to 2.1.0 in /',
+      'createdAt' => (Time.now.utc - (5 * 86_400)).iso8601,
+      'statusCheckRollup' => [check_run('SUCCESS')]
+    }
+    out, _err, status = run_row14(prs: [bare])
+
+    assert_predicate status, :success?,
+                     "row 14's command must run cleanly (status=#{status.inspect})"
+
+    line = out.lines.map(&:chomp).find { |candidate| candidate.start_with?('#7515') }
+
+    refute_nil line, "the row must report every open PR (stdout=#{out.inspect})"
+
+    assert_equal ['#7515', 'bundler', 'unknown', 'unknown', 'unknown', 'SUCCESS'],
+                 line.split,
+                 'a list that carries no branch, no head SHA and no last update ' \
+                 "must report `unknown` in each of those slots (got #{line.inspect})"
+  end
+
+  # The summary counts the open PRs per ecosystem and carries each
+  # ecosystem's rolled-up state — the worst of its PRs' states.
+  def test_row14_summary_counts_every_ecosystem_that_has_an_open_pr
+    prs = [
+      dependabot_pr(number: 7504, title: 'Bump rubocop from 2.0.0 to 2.1.0 in /',
+                    branch: 'dependabot/bundler/rubocop', age_days: 5, sha: SHA_RUBOCOP),
+      dependabot_pr(number: 7505, title: 'Bump @types/node from 20.0.0 to 20.1.0 in /frontend',
+                    branch: 'dependabot/bun/@types/node', age_days: 5, sha: SHA_TYPES,
+                    rollup: [check_run('SUCCESS')]),
+      dependabot_pr(number: 7506, title: 'Bump actions/checkout from 4 to 5 in /',
+                    branch: 'dependabot/github_actions/actions/checkout', age_days: 5,
+                    sha: SHA_ACTIONS, rollup: [running_check_run])
+    ]
+    out, _err, status = run_row14(prs: prs)
+
+    assert_predicate status, :success?,
+                     "row 14's command must run cleanly (status=#{status.inspect})"
+
+    summary = out.lines.map(&:chomp).first
+
+    assert_match(/\Adependabot: 3 open PRs \(/, summary,
+                 "the first line reports what was read (got #{summary.inspect})")
+
+    ['bundler 1 FAILURE', 'bun 1 SUCCESS', 'github-actions 1 PENDING'].each do |entry|
+      assert_includes summary, entry,
+                      'the summary counts every ecosystem that has an open PR and ' \
+                      "carries its rolled-up state (got #{summary.inspect})"
+    end
+  end
+
+  # The summary carries each ecosystem's rolled-up state — the WORST of its
+  # PRs' states, FAILURE outranking PENDING. Two bundler PRs, one red and one
+  # green, roll up to `bundler 2 FAILURE`; one green and one still running
+  # roll up to `bundler 2 PENDING`. A summary that carried the last PR's
+  # state, or the best one, would report a red PR's ecosystem as green.
+  def test_row14_summary_rolls_an_ecosystems_prs_up_to_their_worst_state
+    green = dependabot_pr(number: 7511, title: 'Bump rake from 13.0.0 to 13.1.0 in /',
+                          branch: 'dependabot/bundler/rake', age_days: 5,
+                          sha: SHA_PR, rollup: [check_run('SUCCESS')])
+    red = dependabot_pr(number: 7512, title: 'Bump rubocop from 2.0.0 to 2.1.0 in /',
+                        branch: 'dependabot/bundler/rubocop', age_days: 5,
+                        sha: SHA_RUBOCOP)
+
+    out, _err, status = run_row14(prs: [green, red])
+
+    assert_predicate status, :success?,
+                     "row 14's command must run cleanly (status=#{status.inspect})"
+
+    assert_includes out, 'dependabot: 2 open PRs (bundler 2 FAILURE)',
+                    'one red PR among two makes the ecosystem FAILURE — the ' \
+                    "worst state of its PRs' (stdout=#{out.inspect})"
+
+    pending = dependabot_pr(number: 7513, title: 'Bump minitest from 5.0.0 to 5.1.0 in /',
+                            branch: 'dependabot/bundler/minitest', age_days: 5,
+                            sha: SHA_PR, rollup: [running_check_run])
+
+    out, _err, status = run_row14(prs: [green, pending])
+
+    assert_predicate status, :success?,
+                     "row 14's command must run cleanly (status=#{status.inspect})"
+
+    assert_includes out, 'dependabot: 2 open PRs (bundler 2 PENDING)',
+                    'a green PR and a still-running one roll up to PENDING, not ' \
+                    "to SUCCESS (stdout=#{out.inspect})"
+  end
+
+  # The branch carries the ecosystem (dependabot/<ecosystem>/...), so it is
+  # read FIRST; the title is the fallback for a branch with no ecosystem
+  # segment. Here the title would say bundler and the branch says docker:
+  # the branch wins.
+  def test_row14_reads_the_ecosystem_off_the_branch_first
+    pr = dependabot_pr(number: 7507, title: 'Bump rubocop from 2.0.0 to 2.1.0 in /',
+                       branch: 'dependabot/docker/oven/bun', age_days: 5, sha: SHA_DOCKER)
+    out, _err, status = run_row14(prs: [pr])
+
+    assert_predicate status, :success?,
+                     "row 14's command must run cleanly (status=#{status.inspect})"
+
+    assert_includes out, '#7507 docker dependabot/docker/oven/bun',
+                    'the ecosystem must be read off the branch first ' \
+                    "(stdout=#{out.inspect})"
+
+    refute_includes out, '#7507 bundler',
+                    'the title is the fallback, not the first read ' \
+                    "(stdout=#{out.inspect})"
+  end
+
+  # A grouped bun PR's title and its branch disagree about the ecosystem.
+  # Dependabot titles a grouped PR after the ecosystem ("Bump the bun group
+  # with N updates"), and the title rules read ` group with .* updates$` as
+  # github-actions — so a title-first read grades this PR against
+  # github-actions' 37d budget and never reports it. The branch is read
+  # FIRST: `dependabot/bun/...` is bun, whose 14d budget a 20d red PR is
+  # past, so the row must name bun's budget and print the PR stuck.
+  def test_row14_grades_a_grouped_bun_pr_off_its_branch_not_its_title
+    pr = dependabot_pr(number: 7510, title: 'Bump the bun group with 3 updates',
+                       branch: 'dependabot/bun/frontend-types-node', age_days: 20,
+                       sha: SHA_TYPES)
+    out, _err, status = run_row14(prs: [pr])
+
+    assert_predicate status, :success?,
+                     "row 14's command must run cleanly (status=#{status.inspect})"
+
+    assert_includes out, '(age 20d > 14d budget for bun)',
+                    'the branch carries the ecosystem, so a grouped bun PR is ' \
+                    "graded against bun's 14d budget (stdout=#{out.inspect})"
+
+    refute_includes out, 'budget for github-actions',
+                    'the title says "group with N updates", which the title ' \
+                    'rules read as github-actions; the branch is read first, so ' \
+                    "the github-actions budget must not be applied (stdout=#{out.inspect})"
+
+    assert_includes out, '#7510 bun dependabot/bun/frontend-types-node',
+                    'the per-PR line reports the branch the ecosystem was read ' \
+                    "from (stdout=#{out.inspect})"
+  end
+
+  def test_row14_falls_back_to_the_title_when_the_branch_carries_no_ecosystem
+    pr = dependabot_pr(number: 7508, title: 'Bump actions/checkout from 4 to 5 in /',
+                       branch: 'dependabot/renovate/actions/checkout', age_days: 5,
+                       sha: SHA_ACTIONS)
+    out, _err, status = run_row14(prs: [pr])
+
+    assert_predicate status, :success?,
+                     "row 14's command must run cleanly (status=#{status.inspect})"
+
+    assert_includes out, '#7508 github-actions dependabot/renovate/actions/checkout',
+                    'a branch that carries no ecosystem segment falls back to the ' \
+                    "title (stdout=#{out.inspect})"
+  end
+
+  # `updatedAt` is the PR's LAST UPDATE; the age a budget is graded against
+  # is `createdAt`. A PR opened yesterday and touched a year ago is young, and
+  # must never be graded on the update.
+  def test_row14_reports_updated_at_but_grades_the_age_off_created_at
+    pr = dependabot_pr(number: 7509, title: 'Bump rubocop from 2.0.0 to 2.1.0 in /',
+                       branch: 'dependabot/bundler/rubocop', age_days: 1,
+                       updated_days: 400, sha: SHA_RUBOCOP)
+    out, _err, status = run_row14(prs: [pr])
+
+    assert_predicate status, :success?,
+                     "row 14's command must run cleanly (status=#{status.inspect})"
+
+    refute_includes out, 'Dependabot is stuck on #7509',
+                    'the age is graded off createdAt, never off updatedAt ' \
+                    "(stdout=#{out.inspect})"
+
+    assert_includes out, pr['updatedAt'],
+                    'the last update is reported on the per-PR line ' \
+                    "(stdout=#{out.inspect})"
+  end
+
+  # The budget map is unchanged — bundler 28d, bun 14d, github-actions 37d,
+  # docker 37d — and a PR is stuck only when its age is STRICTLY past its
+  # ecosystem's budget: exactly at the budget is not past it.
+  def test_row14_budgets_are_unchanged_and_a_budget_is_strict
+    {
+      'bundler' => [28, 'Bump rubocop from 2.0.0 to 2.1.0 in /', 'dependabot/bundler/rubocop'],
+      'bun' => [14, 'Bump @types/node from 20.0.0 to 20.1.0 in /frontend', 'dependabot/bun/@types/node'],
+      'github-actions' => [37, 'Bump actions/checkout from 4 to 5 in /',
+                           'dependabot/github_actions/actions/checkout'],
+      'docker' => [37, 'Bump oven/bun from 1.4.1 to 1.4.2 in /', 'dependabot/docker/oven/bun']
+    }.each do |eco, (budget, title, branch)|
+      at_budget = dependabot_pr(number: 7600, title: title, branch: branch, age_days: budget, sha: SHA_PR)
+      out, _err, _status = run_row14(prs: [at_budget])
+
+      refute_includes out, 'Dependabot is stuck on ',
+                      "a #{eco} PR aged exactly #{budget}d is AT its budget, not past " \
+                      "it (stdout=#{out.inspect})"
+
+      past_budget = dependabot_pr(number: 7601, title: title, branch: branch, age_days: budget + 1, sha: SHA_PR)
+      out, _err, _status = run_row14(prs: [past_budget])
+
+      assert_match(/\(age #{budget + 1}d > #{budget}d budget for #{Regexp.escape(eco)}\)/, out,
+                   "a #{eco} PR aged #{budget + 1}d is past its #{budget}d budget, and " \
+                   "the line must name that budget (stdout=#{out.inspect})")
+    end
   end
 
   def test_brief_cites_one_contiguous_range_for_the_proceed_signal
@@ -1711,6 +2075,29 @@ class HealthBriefTest < Minitest::Test
       'targetUrl' => 'https://example.test/checks/1' }
   end
 
+  # A dependabot PR shaped like the one `gh pr list --json number,title,
+  # createdAt,headRefName,updatedAt,statusCheckRollup,headRefOid` emits.
+  # `branch:` is the dependabot branch (`dependabot/<ecosystem>/...`), left
+  # out when the fixture is title-only — that shape exercises the fallback
+  # to the title. `age_days:` is how long ago the PR was opened (the age a
+  # budget is graded against) and `updated_days:` how long ago it was last
+  # updated (reported, never graded).
+  def dependabot_pr(number:, title:, age_days:, branch: nil, sha: nil,
+                    updated_days: nil, updated_at: nil, rollup: nil)
+    now = Time.now.utc
+
+    pr = {
+      'number' => number,
+      'title' => title,
+      'createdAt' => (now - (age_days * 86_400)).iso8601,
+      'updatedAt' => updated_at || (now - ((updated_days || age_days) * 86_400)).iso8601,
+      'statusCheckRollup' => rollup || [check_run('FAILURE')]
+    }
+    pr['headRefName'] = branch if branch
+    pr['headRefOid'] = sha if sha
+    pr
+  end
+
   def write_fixture(dir, name, body)
     File.write(File.join(dir, name), body)
   end
@@ -1865,16 +2252,22 @@ class HealthBriefTest < Minitest::Test
     end
   end
 
-  # Row 13 grades dependabot PRs against per-ecosystem budgets derived from
-  # dependabot.yml (28d bundler, 14d bun, 37d github-actions, 37d docker). The
-  # stub `gh` answers `gh pr list --app dependabot --json ...` from
+  # Row 14 grades dependabot PRs against per-ecosystem budgets derived from
+  # dependabot.yml (28d bundler, 14d bun, 37d github-actions, 37d docker) and
+  # REPORTS what it read: a summary line, one line per open PR, and one
+  # `Unhealthy:` line per stuck PR. The stub `gh` answers
+  # `gh pr list --state open --app dependabot --json ...` from
   # $WURK_TEST_FIXTURES/dependabot.prs, so the command runs against fixed
   # fixtures instead of the API — fixtures shaped like the list `gh` really
-  # emits, rollup included. `jobs_fail` is ignored — row 14 does not call
+  # emits, rollup included. `prs: nil` writes no fixture at all, so the read
+  # fails the way a rate limit or a 4xx would. `cell:` lets a test run a
+  # mutated cell. `jobs_fail` is ignored — row 14 does not call
   # `gh api .../jobs`, so there is no separate failure-shape to pin here.
-  def run_row14(prs:, jobs_fail: false)
-    run_command(command_cell('Dependabot is not stuck', gh_command: 'gh pr list'), jobs_fail: jobs_fail) do |fixtures|
-      write_fixture(fixtures, 'dependabot.prs', JSON.generate(prs))
+  def run_row14(prs:, jobs_fail: false, cell: nil)
+    cell ||= command_cell('Dependabot is not stuck', gh_command: 'gh pr list')
+
+    run_command(cell, jobs_fail: jobs_fail) do |fixtures|
+      write_fixture(fixtures, 'dependabot.prs', JSON.generate(prs)) if prs
     end
   end
 
@@ -2030,20 +2423,45 @@ class HealthBriefTest < Minitest::Test
         esac
         ;;
       pr)
-        # Match `gh pr list --app dependabot --json ...` only — anything else
-        # under `pr` is unexpected, exits 1, so a regression that calls e.g.
-        # `gh pr view` cannot silently pass by reusing the run-row code path.
-        # The dependabot.prs fixture is whatever JSON the test wrote; the
-        # `--json` field list is not inspected, because the brief itself does
-        # not pin it (a regression that adds/removes a field still parses).
-        if [ "${2:-}" = "list" ] && [ "${3:-}" = "--app" ] && [ "${4:-}" = "dependabot" ]; then
+        # `gh pr list --state open --app dependabot --json <fields>` — the
+        # row's open-PR read. The arguments are matched POSITIONALLY, in the
+        # order the brief pins: a request WITHOUT `--state open` is a row
+        # that fell back to `gh pr list`'s default state, which says nothing
+        # about what is open — so the stub REFUSES it instead of serving the
+        # fixture, the way it refuses a release.yml run list without
+        # --commit. The `--json` field list is checked the same way: the
+        # report reads number, title, createdAt, headRefName, updatedAt,
+        # statusCheckRollup and headRefOid, and a request that asks for
+        # fewer fields than the report prints is refused too, so a brief
+        # that quietly narrowed the read fails closed instead of printing a
+        # summary it cannot fill. Anything else under `pr` is unexpected and
+        # exits 1, so a regression that calls e.g. `gh pr view` cannot
+        # silently pass by reusing the run-row code path.
+        if [ "${2:-}" = "list" ] && [ "${3:-}" = "--state" ] && [ "${4:-}" = "open" ] && [ "${5:-}" = "--app" ] && [ "${6:-}" = "dependabot" ]; then
+          json=""
+          prev=""
+          for arg in "$@"; do
+            case "$prev" in
+              --json) json="$arg" ;;
+            esac
+            prev="$arg"
+          done
+          for field in number title createdAt headRefName updatedAt statusCheckRollup headRefOid; do
+            case ",$json," in
+              *",$field,"*) ;;
+              *)
+                printf 'stub gh pr: the --json field list (%s) does not request %s\n' "$json" "$field" >&2
+                exit 1
+                ;;
+            esac
+          done
           if [ ! -s "$fixdir/dependabot.prs" ]; then
             printf 'stub gh pr: no dependabot.prs fixture for: %s\n' "$*" >&2
             exit 1
           fi
           cat "$fixdir/dependabot.prs"
         else
-          printf 'stub gh pr: only `gh pr list --app dependabot` is stubbed (got: %s)\n' "$*" >&2
+          printf 'stub gh pr: only `gh pr list --state open --app dependabot` is stubbed (got: %s)\n' "$*" >&2
           exit 1
         fi
         ;;
