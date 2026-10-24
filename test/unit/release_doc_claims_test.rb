@@ -26,6 +26,10 @@ class ReleaseDocClaimsTest < Minitest::Test
   HEALTH_BRIEF = File.join(ROOT, '.dz', 'briefs', 'health.md')
 
   SHA_RELEASE_RUN = 'b' * 40
+  # The commit that carries Wurk::VERSION. release.yml publishes the version
+  # that commit carries, so the run row 10 reads is the one BOUND to it - the
+  # same sha by construction.
+  SHA_VERSION_HEAD = SHA_RELEASE_RUN
   URL_RELEASE_RUN = 'https://github.com/wurk-owner/wurk/actions/runs/201'
 
   # The publish tail is derived from release.yml by structural position —
@@ -148,9 +152,8 @@ class ReleaseDocClaimsTest < Minitest::Test
     assert_match(/probe failed|PROBE failed/, section,
                  'the section must state a failed probe is not evidence the version is absent')
 
-    row = health_text.lines.find { |line| line.include?('RubyGems serves') }
+    row = health_rubygems_row
 
-    refute_nil row, "health.md must keep its 'RubyGems serves' row"
     refute_includes row, 'gem list wurk --remote',
                     "health.md's 'RubyGems serves' row must not carry " \
                     '`gem list wurk --remote` as its predicate'
@@ -165,9 +168,7 @@ class ReleaseDocClaimsTest < Minitest::Test
   # single-quoted `VERSION = '1.8.1'`), so the extraction is run against the
   # real file and must yield the constant's value.
   def test_health_row_version_extraction_matches_version_rb_quoting
-    row = File.read(HEALTH_BRIEF).lines.find { |line| line.include?('RubyGems serves') }
-
-    refute_nil row, "health.md must keep its 'RubyGems serves' row"
+    row = health_rubygems_row
 
     # `\|` is markdown's escape for a literal pipe inside a table cell; the
     # command must be unescaped before bash runs it, exactly as
@@ -186,7 +187,13 @@ class ReleaseDocClaimsTest < Minitest::Test
   #
   # The extraction test above proves the row can NAME the version; these pin
   # what it does with the probe's answer, by RUNNING the extracted command
-  # against a stubbed curl and gh. The row originally graded with
+  # against a stubbed curl and gh. The run the 404 branch reads is the
+  # release.yml run BOUND to the version's own commit (the newest main commit
+  # that touched lib/wurk/version.rb), not the newest run of any shape: a run
+  # for another sha says nothing about this version, so the stub serves the
+  # run list only for the version's own sha and a row that dropped the
+  # --commit filter cannot pass by reusing the fixture.
+  # The row originally graded with
   # `curl -f ... || echo "verdict unknown"`: `-f` makes every HTTP error exit
   # non-zero, so HTTP 404 — RELEASE.md's "the release did not ship" — and a
   # dead network collapsed into the same `verdict unknown`, and a genuinely
@@ -335,13 +342,22 @@ class ReleaseDocClaimsTest < Minitest::Test
   # markdown's escape for a literal pipe inside a table cell, unescaped here
   # exactly as health_brief_test.rb's command_cell does.
   def row10_command
-    row = File.read(HEALTH_BRIEF).lines.find { |line| line.include?('RubyGems serves') }
-    raise "health.md has no 'RubyGems serves' row" if row.nil?
+    row = health_rubygems_row
 
     spans = row.scan(/`([^`]*)`/).map(&:first)
     raise "the 'RubyGems serves' row carries no backticked command cell" if spans.length < 2
 
     spans[1].gsub('\\|', '|')
+  end
+
+  # The `RubyGems serves `Wurk::VERSION`` row, found by its Signal cell:
+  # another row's Healthy cell can carry the same words, and a lookup that
+  # grabs the first line mentioning them reads the wrong row's command.
+  def health_rubygems_row
+    row = File.read(HEALTH_BRIEF).lines.find { |line| line.include?('RubyGems serves `Wurk::VERSION`') }
+    raise "health.md has no 'RubyGems serves Wurk::VERSION' row" if row.nil?
+
+    row
   end
 
   def rubygems_version
@@ -370,6 +386,7 @@ class ReleaseDocClaimsTest < Minitest::Test
         'PATH' => "#{bin_dir}:#{ENV.fetch('PATH', '')}",
         'WURK_TEST_HTTP_STATUS' => http_status.to_s,
         'WURK_TEST_RELEASE_RUN' => release_run.to_s,
+        'WURK_TEST_VERSION_SHA' => SHA_VERSION_HEAD,
         'WURK_TEST_GH_FAIL' => gh_fail ? '1' : '0'
       }
 
@@ -428,16 +445,48 @@ class ReleaseDocClaimsTest < Minitest::Test
     esac
   SHELL
 
-  # Stub gh: answers only `gh run list --workflow release.yml ...`, row 10's
-  # 404-branch read of the last release run, from $WURK_TEST_RELEASE_RUN.
-  # Anything else exits 1, so a regression that reaches for gh on another path
-  # cannot pass by reusing this fixture; WURK_TEST_GH_FAIL=1 breaks exactly
-  # that read.
+  # Stub gh: answers the two reads row 10 makes — the version's own commit
+  # (`gh api .../commits?path=lib/wurk/version.rb...`) and the release.yml
+  # run BOUND to it (`gh run list --workflow release.yml --commit <sha>
+  # ...`). The run list is served only for the version's own sha: a row that
+  # dropped the --commit filter would be reading the newest run of any shape,
+  # which says nothing about this version, so the stub refuses to answer it.
+  # Anything else exits 1, so a regression that reaches for gh on another
+  # path cannot pass by reusing this fixture; WURK_TEST_GH_FAIL=1 breaks
+  # exactly the run read.
   STUB_GH_ROW10 = <<~'SHELL'
     #!/usr/bin/env bash
+    if [ "${1:-}" = "api" ]; then
+      for arg in "$@"; do
+        case "$arg" in
+          *lib/wurk/version.rb*)
+            printf '[{"sha":"%s"}]\n' "$WURK_TEST_VERSION_SHA"
+            exit 0
+            ;;
+        esac
+      done
+      printf 'stub gh api: unexpected path: %s\n' "$*" >&2
+      exit 1
+    fi
     if [ "${1:-}" = "run" ] && [ "${2:-}" = "list" ]; then
       if [ "$WURK_TEST_GH_FAIL" = "1" ]; then
         printf 'stub gh run list: the read fails on purpose (rate limited or 4xx)\n' >&2
+        exit 1
+      fi
+      commit=""
+      prev=""
+      for arg in "$@"; do
+        case "$prev" in
+          --commit) commit="$arg" ;;
+        esac
+        prev="$arg"
+      done
+      if [ -z "$commit" ]; then
+        printf 'stub gh run list: no --commit filter in: %s\n' "$*" >&2
+        exit 1
+      fi
+      if [ "$commit" != "$WURK_TEST_VERSION_SHA" ]; then
+        printf 'stub gh run list: no run for commit %s (the version own sha is %s)\n' "$commit" "$WURK_TEST_VERSION_SHA" >&2
         exit 1
       fi
       printf '%s' "$WURK_TEST_RELEASE_RUN"

@@ -5,14 +5,15 @@ require 'json'
 require 'open3'
 require 'tmpdir'
 
-# Gates the five graded rows of .dz/briefs/health.md (`main` is green, `the
-# last release published`, `the demo deployed`, `topology and ecosystem
-# lanes`, `Dependabot is not stuck`) the way release_due_brief_test.rb gates
+# Gates the six graded rows of .dz/briefs/health.md (`main` is green, `the
+# last release published`, `the GitHub Release carries the gem`, `the demo
+# deployed`, `topology and ecosystem lanes`, `Dependabot is not stuck`) the
+# way release_due_brief_test.rb gates
 # release-due.md: these commands run unattended on a schedule, and a verdict
-# they cannot actually establish must never be printed as a green one. Six
-# properties — the first five all pinned by RUNNING the extracted command
+# they cannot actually establish must never be printed as a green one. Seven
+# properties — the first six all pinned by RUNNING the extracted command
 # cells as bash against a PATH-stubbed `gh` (a substring match over the
-# brief's text would accept a guard that never fires), the sixth pinned
+# brief's text would accept a guard that never fires), the seventh pinned
 # byte-for-byte on the brief's text plus by running the extracted issues
 # lookup:
 #
@@ -50,6 +51,19 @@ require 'tmpdir'
 #      really drops PR entries, and ask titles are stable per signal — exact
 #      equality on a title that embeds the run's headSha or version can never
 #      hit, so the ask would be re-filed on every checkup.
+#   7. A release row grades a PUBLICATION, not a workflow run. release.yml
+#      concludes `success` on a proceed=false no-op, and a green run whose
+#      version never reached RubyGems is the same false green from the other
+#      side, so the row refuses to print `success` unless the canonical
+#      RubyGems probe serves that version (green + 404 is `Unhealthy: green
+#      but empty publication`). The run it grades is bound to the commit
+#      that carries Wurk::VERSION — the newest `main` commit that touched
+#      lib/wurk/version.rb — so the newest run of any shape can never be
+#      graded as this version's release, and a run whose headSha is another
+#      sha is refused outright. The GitHub Release is graded on RELEASE.md's
+#      gem-less discriminator: an author of `developerz-ai[bot]` OR zero
+#      assets is a gem-less Latest Release, and an unreadable lookup grades
+#      `verdict unknown` — never a green, never Unhealthy.
 #
 # One more property, added with the run URLs: every job-list row must request
 # BOTH `url` and `databaseId` and print the URL on EVERY verdict — dup,
@@ -80,11 +94,15 @@ class HealthBriefTest < Minitest::Test
   SHA_INFLIGHT   = '1' * 40
   SHA_DEMO       = '7' * 40
   SHA_DEMO_FROZEN = '4' * 40
+  # A sha that is NOT the commit carrying Wurk::VERSION: the release run
+  # that carries it says nothing about this version's release, so the row
+  # must refuse it.
+  SHA_OTHER      = '8' * 40
   DEMO_TAG       = 'sha-7777777'
   API_CONTROLLER = File.join(ROOT, 'app', 'controllers', 'wurk', 'api_controller.rb')
 
   # deploy-demo.yml's step names. `gh run view --log` carries one in field 2 of
-  # every line it prints, and row 11 keeps only the first one's lines.
+  # every line it prints, and row 12 keeps only the first one's lines.
   RESOLVE_STEP = 'resolve built commit'
   VERIFY_STEP = 'verify pushed tags resolve'
   # A `verify pushed tags resolve` line naming the ref it inspected
@@ -180,14 +198,14 @@ class HealthBriefTest < Minitest::Test
                  "detect's own success; got stdout=#{out.inspect}"
   end
 
-  def test_row12_names_the_offending_workflow
+  def test_row13_names_the_offending_workflow
     # topology.yml is the dup'd lane, ecosystem.yml ran its gated job: the ask
     # has to name WHICH lane went unverified, or the reader cannot tell which
     # workflow to go look at.
-    out, err, status = run_row12
+    out, err, status = run_row13
 
     assert_predicate status, :success?,
-                     "row 12's command must run cleanly (status=#{status.inspect}, " \
+                     "row 13's command must run cleanly (status=#{status.inspect}, " \
                      "stdout=#{out.inspect}, stderr=#{err.inspect})"
 
     lines = out.lines.map(&:chomp)
@@ -367,6 +385,10 @@ class HealthBriefTest < Minitest::Test
                     'proceed=false means nothing was owed, so this is not Unhealthy'
   end
 
+  # A green run only counts as a PUBLICATION when RubyGems serves the version:
+  # the probe answers 200 here (the run_command default), so this is the
+  # healthy verdict - and the 404 and unreadable-probe shapes below are what
+  # keep it honest.
   def test_release_run_that_published_grades_on_conclusion
     out, err, status = run_row9(jobs: release_jobs_json(preflight: 'success', release: 'success', demo: 'success'),
                                 conclusion: 'success', sha: SHA_PUBLISHED)
@@ -442,13 +464,144 @@ class HealthBriefTest < Minitest::Test
                     'proceed=false requires preflight itself to have succeeded'
   end
 
+  # The release row grades a PUBLICATION, not a workflow run. release.yml
+  # concludes `success` on a proceed=false no-op, and a green run whose
+  # version never reached RubyGems is the same false green from the other
+  # side. The run the row grades is bound to the commit that carries
+  # Wurk::VERSION, so a run for another sha is refused rather than graded.
+  def test_release_run_for_another_sha_is_refused
+    out, err, status = run_row9(jobs: release_jobs_json(preflight: 'success', release: 'success', demo: 'success'),
+                                conclusion: 'success', sha: SHA_PUBLISHED,
+                                version_sha: SHA_OTHER)
+
+    assert_predicate status, :success?,
+                     "row 9's command must run cleanly (status=#{status.inspect}, " \
+                     "stdout=#{out.inspect}, stderr=#{err.inspect})"
+
+    assert_includes out, 'verdict unknown',
+                    'a release.yml run whose headSha is not the commit that carries ' \
+                    "Wurk::VERSION says nothing about this version's release; got stdout=#{out.inspect}"
+
+    refute_includes out, "success #{SHA_PUBLISHED}",
+                    'a run for another commit cannot be graded as a publication of ' \
+                    "this version (stdout=#{out.inspect})"
+
+    refute_includes out, 'Unhealthy',
+                    'two reads that disagree establish nothing, so this is neither ' \
+                    "green nor red (stdout=#{out.inspect})"
+  end
+
+  def test_green_release_run_without_the_gem_is_unhealthy
+    out, err, status = run_row9(jobs: release_jobs_json(preflight: 'success', release: 'success', demo: 'success'),
+                                conclusion: 'success', sha: SHA_PUBLISHED, http_status: '404')
+
+    assert_predicate status, :success?,
+                     "row 9's command must run cleanly (status=#{status.inspect}, " \
+                     "stdout=#{out.inspect}, stderr=#{err.inspect})"
+
+    assert_includes out, 'Unhealthy',
+                    'a green release run whose version RubyGems does not serve is a ' \
+                    'false green: the gem was never published; ' \
+                    "got stdout=#{out.inspect}"
+
+    assert_includes out, 'green but empty publication',
+                    'the verdict must name the defect it found; ' \
+                    "got stdout=#{out.inspect}"
+
+    refute_includes out, "success #{SHA_PUBLISHED}",
+                    'a green workflow run is not a publication on its own; ' \
+                    "got stdout=#{out.inspect}"
+  end
+
+  def test_green_release_run_with_an_unreadable_probe_is_unknown
+    out, _err, _status = run_row9(jobs: release_jobs_json(preflight: 'success', release: 'success', demo: 'success'),
+                                  conclusion: 'success', sha: SHA_PUBLISHED, http_status: '000')
+
+    assert_includes out, 'verdict unknown',
+                    'a transport failure carries no HTTP status, so the row cannot ' \
+                    "call the run a publication (stdout=#{out.inspect})"
+
+    refute_includes out, 'Unhealthy',
+                    'an unreadable probe is not evidence the version is absent; ' \
+                    "got stdout=#{out.inspect}"
+
+    refute_includes out, "success #{SHA_PUBLISHED}",
+                    'an unreadable probe must not print a green; ' \
+                    "got stdout=#{out.inspect}"
+  end
+
+  # RELEASE.md's gem-less discriminator: an author of developerz-ai[bot] OR
+  # zero assets is a GitHub Release with no gem behind it - the shape that
+  # left seven stray releases standing as `Latest` while `gem install wurk`
+  # kept serving the previous version.
+  def test_gem_less_latest_release_is_unhealthy
+    out, err, status = run_row_release_artifact(author: 'developerz-ai[bot]', assets: [])
+
+    assert_predicate status, :success?,
+                     "row 11's command must run cleanly (status=#{status.inspect}, " \
+                     "stdout=#{out.inspect}, stderr=#{err.inspect})"
+
+    assert_includes out, 'Unhealthy',
+                    'a Latest Release cut by developerz-ai[bot] with no gem behind it ' \
+                    "is the gem-less release RELEASE.md describes; got stdout=#{out.inspect}"
+
+    assert_includes out, 'gem-less',
+                    'the verdict must name the defect it found; ' \
+                    "got stdout=#{out.inspect}"
+
+    refute_includes out, 'verdict unknown',
+                    'a readable release lookup is a verdict, not an unknown'
+  end
+
+  def test_latest_release_without_the_gem_asset_is_unhealthy
+    out, _err, status = run_row_release_artifact(author: 'github-actions[bot]', assets: [])
+
+    assert_predicate status, :success?,
+                     "row 11's command must run cleanly (status=#{status.inspect})"
+
+    assert_includes out, 'Unhealthy',
+                    'zero assets is a gem-less release whoever cut it; ' \
+                    "got stdout=#{out.inspect}"
+  end
+
+  def test_latest_release_carrying_the_gem_is_healthy
+    out, _err, status = run_row_release_artifact(author: 'github-actions[bot]',
+                                                 assets: [{ 'name' => 'wurk-1.9.0.gem' }])
+
+    assert_predicate status, :success?,
+                     "row 11's command must run cleanly (status=#{status.inspect})"
+
+    assert_includes out, 'success',
+                    'a Latest Release with the gem attached and a real author is the ' \
+                    "healthy verdict; got stdout=#{out.inspect}"
+
+    refute_includes out, 'Unhealthy', 'a release carrying the gem is not Unhealthy'
+    refute_includes out, 'verdict unknown', 'a readable release lookup is a verdict'
+  end
+
+  def test_unreadable_release_lookup_is_unknown
+    out, _err, _status = run_row_release_artifact(release: nil)
+
+    assert_includes out, 'verdict unknown',
+                    'an unreadable release lookup cannot tell a gem-less Latest ' \
+                    "Release from a real one, so it fails closed (stdout=#{out.inspect})"
+
+    refute_includes out, 'Unhealthy',
+                    'an unreadable lookup is not evidence of a gem-less release; ' \
+                    "got stdout=#{out.inspect}"
+
+    refute_includes out, 'success',
+                    'an unreadable lookup must not print a healthy verdict; ' \
+                    "got stdout=#{out.inspect}"
+  end
+
   def test_demo_deploy_grades_on_conclusion_when_the_step_log_names_the_tag
-    out, err, status = run_row11(jobs: demo_jobs_json,
+    out, err, status = run_row12(jobs: demo_jobs_json,
                                  log: resolve_log(short: DEMO_TAG),
                                  conclusion: 'success', sha: SHA_DEMO)
 
     assert_predicate status, :success?,
-                     "row 11's command must run cleanly (status=#{status.inspect}, " \
+                     "row 12's command must run cleanly (status=#{status.inspect}, " \
                      "stdout=#{out.inspect}, stderr=#{err.inspect})"
 
     assert_equal ["success #{SHA_DEMO} #{URL_DEMO} tagged #{DEMO_TAG}"], out.lines.map(&:chomp),
@@ -467,12 +620,12 @@ class HealthBriefTest < Minitest::Test
     # the newest tag matching ^sha-[0-9a-f]{7}$; a green run that wrote no such
     # tag leaves the demo on its old digest and says nothing. That is how it
     # silently went stale across several releases (deploy-demo.yml:165-172).
-    out, err, status = run_row11(jobs: demo_jobs_json,
+    out, err, status = run_row12(jobs: demo_jobs_json,
                                  log: resolve_log(short: nil),
                                  conclusion: 'success', sha: SHA_DEMO_FROZEN)
 
     assert_predicate status, :success?,
-                     "row 11's command must run cleanly (status=#{status.inspect}, " \
+                     "row 12's command must run cleanly (status=#{status.inspect}, " \
                      "stdout=#{out.inspect}, stderr=#{err.inspect})"
 
     assert_includes out, 'Unhealthy',
@@ -496,12 +649,12 @@ class HealthBriefTest < Minitest::Test
     # `resolve built commit` step's own output is evidence for this row, so a
     # token over in `verify pushed tags resolve` must leave the run Unhealthy:
     # the tag this step never wrote gives Image Updater no candidate either.
-    out, err, status = run_row11(jobs: demo_jobs_json,
+    out, err, status = run_row12(jobs: demo_jobs_json,
                                  log: resolve_log(short: nil, decoys: { VERIFY_STEP => [DECOY_REF] }),
                                  conclusion: 'success', sha: SHA_DEMO_FROZEN)
 
     assert_predicate status, :success?,
-                     "row 11's command must run cleanly (status=#{status.inspect}, " \
+                     "row 12's command must run cleanly (status=#{status.inspect}, " \
                      "stdout=#{out.inspect}, stderr=#{err.inspect})"
 
     refute_includes out, "success #{SHA_DEMO_FROZEN}",
@@ -523,12 +676,12 @@ class HealthBriefTest < Minitest::Test
     # Updater's ^sha-[0-9a-f]{7}$, so a match that takes the first seven
     # characters and stops prints a green naming a tag nothing can ever select —
     # the demo stays frozen while the row certifies it.
-    out, err, status = run_row11(jobs: demo_jobs_json,
+    out, err, status = run_row12(jobs: demo_jobs_json,
                                  log: resolve_log(short: 'sha-12345678'),
                                  conclusion: 'success', sha: SHA_DEMO_FROZEN)
 
     assert_predicate status, :success?,
-                     "row 11's command must run cleanly (status=#{status.inspect}, " \
+                     "row 12's command must run cleanly (status=#{status.inspect}, " \
                      "stdout=#{out.inspect}, stderr=#{err.inspect})"
 
     refute_includes out, "success #{SHA_DEMO_FROZEN}",
@@ -552,7 +705,7 @@ class HealthBriefTest < Minitest::Test
   # tagged deploy Unhealthy. So pin the layout `gh run view --log` really emits
   # (job, step, then the log line's own `<timestamp> <message>`) and require the
   # row's awk to read the step out of THAT column.
-  def test_row11_reads_the_step_out_of_the_column_gh_prints
+  def test_row12_reads_the_step_out_of_the_column_gh_prints
     fields = log_lines(RESOLVE_STEP, ['short=sha-7777777']).first.split("\t")
 
     assert_equal 3, fields.size,
@@ -564,7 +717,7 @@ class HealthBriefTest < Minitest::Test
                  "#{fields.inspect}"
 
     assert_equal RESOLVE_STEP, fields[1],
-                 'the step name is the second column, the one row 11 filters; got ' \
+                 'the step name is the second column, the one row 12 filters; got ' \
                  "#{fields.inspect}"
 
     assert_match(/\A\d{4}-\d{2}-\d{2}T[\d:.]+Z \S/, fields[2],
@@ -575,7 +728,7 @@ class HealthBriefTest < Minitest::Test
     field = cell[/[$](\d) == "?resolve built commit"?/, 1]
 
     refute_nil field,
-               'row 11 must select the resolve step\'s own lines out of the job log; ' \
+               'row 12 must select the resolve step\'s own lines out of the job log; ' \
                "got #{cell.inspect}"
 
     assert_equal '2', field,
@@ -585,7 +738,7 @@ class HealthBriefTest < Minitest::Test
   end
 
   def test_unreadable_demo_jobs_list_never_grades_success
-    out, err, _status = run_row11(jobs: demo_jobs_json,
+    out, err, _status = run_row12(jobs: demo_jobs_json,
                                   log: resolve_log(short: DEMO_TAG),
                                   conclusion: 'success', sha: SHA_DEMO, jobs_fail: true)
 
@@ -610,7 +763,7 @@ class HealthBriefTest < Minitest::Test
     # rate-limit, a 4xx, or a 5xx — the jobs list is fine but the tag is unknowable,
     # so the row must fail closed exactly the way an unreadable jobs list does:
     # `verdict unknown <sha>`, never `success <sha>`.
-    out, err, _status = run_row11(jobs: demo_jobs_json,
+    out, err, _status = run_row12(jobs: demo_jobs_json,
                                   log: resolve_log(short: DEMO_TAG),
                                   conclusion: 'success', sha: SHA_DEMO, log_fail: true)
 
@@ -688,10 +841,10 @@ class HealthBriefTest < Minitest::Test
       'isDraft' => false,
       'statusCheckRollup' => [check_run('FAILURE')]
     }
-    out, _err, status = run_row13(prs: [pr])
+    out, _err, status = run_row14(prs: [pr])
 
     assert_predicate status, :success?,
-                     "row 13's command must run cleanly (status=#{status.inspect})"
+                     "row 14's command must run cleanly (status=#{status.inspect})"
 
     refute_includes out, '#7001',
                     'a github-actions PR aged 30d is under its 37d budget ' \
@@ -721,10 +874,10 @@ class HealthBriefTest < Minitest::Test
       'isDraft' => false,
       'statusCheckRollup' => [check_run('FAILURE')]
     }
-    out, _err, status = run_row13(prs: [pr])
+    out, _err, status = run_row14(prs: [pr])
 
     assert_predicate status, :success?,
-                     "row 13's command must run cleanly (status=#{status.inspect})"
+                     "row 14's command must run cleanly (status=#{status.inspect})"
 
     refute_includes out, '#7102',
                     'a red docker PR aged 5d is exactly the expected-red shape of ' \
@@ -748,10 +901,10 @@ class HealthBriefTest < Minitest::Test
       'isDraft' => false,
       'statusCheckRollup' => [check_run('FAILURE')]
     }
-    out, _err, status = run_row13(prs: [pr])
+    out, _err, status = run_row14(prs: [pr])
 
     assert_predicate status, :success?,
-                     "row 13's command must run cleanly (status=#{status.inspect})"
+                     "row 14's command must run cleanly (status=#{status.inspect})"
 
     lines = out.lines.map(&:chomp)
 
@@ -782,10 +935,10 @@ class HealthBriefTest < Minitest::Test
       'isDraft' => false,
       'statusCheckRollup' => [check_run('FAILURE')]
     }
-    out, _err, status = run_row13(prs: [stuck])
+    out, _err, status = run_row14(prs: [stuck])
 
     assert_predicate status, :success?,
-                     "row 13's command must run cleanly (status=#{status.inspect})"
+                     "row 14's command must run cleanly (status=#{status.inspect})"
 
     assert_includes out, 'budget for bun',
                     'a red PR titled `… in /frontend` must grade against bun\'s 14d ' \
@@ -809,10 +962,10 @@ class HealthBriefTest < Minitest::Test
       'isDraft' => false,
       'statusCheckRollup' => [check_run('FAILURE')]
     }
-    out, _err, status = run_row13(prs: [pr])
+    out, _err, status = run_row14(prs: [pr])
 
     assert_predicate status, :success?,
-                     "row 13's command must run cleanly (status=#{status.inspect})"
+                     "row 14's command must run cleanly (status=#{status.inspect})"
 
     assert_equal [], out.lines.map(&:chomp),
                  'a red bun PR aged 5d is under its 14d budget (dependabot.yml:41-49); ' \
@@ -835,10 +988,10 @@ class HealthBriefTest < Minitest::Test
       'isDraft' => false,
       'statusCheckRollup' => [check_run('FAILURE')]
     }
-    out, _err, status = run_row13(prs: [pr])
+    out, _err, status = run_row14(prs: [pr])
 
     assert_predicate status, :success?,
-                     "row 13's command must run cleanly (status=#{status.inspect})"
+                     "row 14's command must run cleanly (status=#{status.inspect})"
 
     assert_includes out, 'budget for github-actions',
                     'the grouped `Bump the github-actions group with N updates` title ' \
@@ -864,10 +1017,10 @@ class HealthBriefTest < Minitest::Test
       'isDraft' => false,
       'statusCheckRollup' => [check_run('SUCCESS')]
     }
-    out, _err, status = run_row13(prs: [pr])
+    out, _err, status = run_row14(prs: [pr])
 
     assert_predicate status, :success?,
-                     "row 13's command must run cleanly (status=#{status.inspect})"
+                     "row 14's command must run cleanly (status=#{status.inspect})"
 
     assert_equal [], out.lines.map(&:chomp),
                  'a past-budget PR whose checks all concluded SUCCESS is an old green ' \
@@ -890,10 +1043,10 @@ class HealthBriefTest < Minitest::Test
       'isDraft' => false,
       'statusCheckRollup' => [check_run('SUCCESS'), running_check_run]
     }
-    out, _err, status = run_row13(prs: [pr])
+    out, _err, status = run_row14(prs: [pr])
 
     assert_predicate status, :success?,
-                     "row 13's command must run cleanly (status=#{status.inspect})"
+                     "row 14's command must run cleanly (status=#{status.inspect})"
 
     assert_equal [], out.lines.map(&:chomp),
                  'a past-budget PR with a check still running is in flight, not ' \
@@ -915,10 +1068,10 @@ class HealthBriefTest < Minitest::Test
       'isDraft' => false,
       'statusCheckRollup' => [check_run('SUCCESS'), running_check_run, status_context('FAILURE')]
     }
-    out, _err, status = run_row13(prs: [pr])
+    out, _err, status = run_row14(prs: [pr])
 
     assert_predicate status, :success?,
-                     "row 13's command must run cleanly (status=#{status.inspect})"
+                     "row 14's command must run cleanly (status=#{status.inspect})"
 
     assert_equal 1, out.lines.size,
                  "one stuck PR prints one line; got #{out.lines.inspect}"
@@ -946,10 +1099,10 @@ class HealthBriefTest < Minitest::Test
       'isDraft' => false,
       'statusCheckRollup' => [check_run('SUCCESS'), check_run('TIMED_OUT')]
     }
-    out, _err, status = run_row13(prs: [pr])
+    out, _err, status = run_row14(prs: [pr])
 
     assert_predicate status, :success?,
-                     "row 13's command must run cleanly (status=#{status.inspect})"
+                     "row 14's command must run cleanly (status=#{status.inspect})"
 
     assert_match(/\AUnhealthy: Dependabot is stuck on #7311\b/, out.lines.map(&:chomp).first.to_s,
                  'a TIMED_OUT check blocks a merge exactly as hard as FAILURE; ' \
@@ -968,10 +1121,10 @@ class HealthBriefTest < Minitest::Test
       'isDraft' => false,
       'statusCheckRollup' => [check_run('SUCCESS'), status_context('ERROR')]
     }
-    out, _err, status = run_row13(prs: [pr])
+    out, _err, status = run_row14(prs: [pr])
 
     assert_predicate status, :success?,
-                     "row 13's command must run cleanly (status=#{status.inspect})"
+                     "row 14's command must run cleanly (status=#{status.inspect})"
 
     assert_match(/\(age 35d > 28d budget for bundler\)\z/, out.lines.map(&:chomp).first.to_s,
                  'a StatusContext of ERROR is a failure too; got ' \
@@ -993,10 +1146,10 @@ class HealthBriefTest < Minitest::Test
         'isDraft' => false,
         'statusCheckRollup' => rollup
       }
-      out, _err, status = run_row13(prs: [pr])
+      out, _err, status = run_row14(prs: [pr])
 
       assert_predicate status, :success?,
-                       "row 13's command must run cleanly (status=#{status.inspect})"
+                       "row 14's command must run cleanly (status=#{status.inspect})"
 
       assert_equal [], out.lines.map(&:chomp),
                    "rollup #{rollup.inspect} has nothing red in it, so the row must " \
@@ -1174,18 +1327,18 @@ class HealthBriefTest < Minitest::Test
     assert_includes out, URL_RELEASE,
                     "a no-op line must carry the run url; got #{out.inspect}"
 
-    out, = run_row12
+    out, = run_row13
 
     assert_includes out, URL_TOPOLOGY,
                     "the dup'd lane's Unhealthy line must carry its run url; got #{out.inspect}"
     assert_includes out, URL_ECOSYSTEM,
                     "the healthy lane's line must carry its own run url; got #{out.inspect}"
 
-    out, = run_row11(jobs: demo_jobs_json, log: resolve_log(short: DEMO_TAG),
+    out, = run_row12(jobs: demo_jobs_json, log: resolve_log(short: DEMO_TAG),
                      conclusion: 'success', sha: SHA_DEMO)
 
     assert_includes out, URL_DEMO,
-                    "row 11's graded verdict must carry the run url too, like every " \
+                    "row 12's graded verdict must carry the run url too, like every " \
                     "other job-list row's; got #{out.inspect}"
   end
 
@@ -1319,7 +1472,7 @@ class HealthBriefTest < Minitest::Test
 
   private
 
-  # The "Grading a demo deploy" prose block — row 11's graded convention, from
+  # The "Grading a demo deploy" prose block — row 12's graded convention, from
   # its heading up to the filing convention that follows it. Bounded on that
   # paragraph, not on the next `**`, so the "Green is necessary, not
   # sufficient" sub-heading stays inside the block it belongs to.
@@ -1385,7 +1538,7 @@ class HealthBriefTest < Minitest::Test
   # one: `detect changed paths` plus the gated jobs reading
   # `needs.detect.outputs`. `sidekiq release watcher` is ecosystem.yml's
   # schedule/dispatch-only job — it is skipped on every push, which is why
-  # row 12 excludes it by name.
+  # row 13 excludes it by name.
   def jobs_json(detect:, gated:)
     jobs = [{ 'name' => 'detect changed paths', 'conclusion' => detect },
             { 'name' => 'test + coverage (latest ruby/rails)', 'conclusion' => gated },
@@ -1414,7 +1567,7 @@ class HealthBriefTest < Minitest::Test
   # job whose steps do the actual work. Real jobs API shape: step objects carry
   # name/status/conclusion/number/timestamps only — NO `log` field. The log is
   # read separately via `gh run view <id> --job <id> --log` (see stub below);
-  # row 11 feeds each test's log content in via the `log:` fixture instead of
+  # row 12 feeds each test's log content in via the `log:` fixture instead of
   # inventing a `log` key on the step that the real API would never return.
   def demo_jobs_json
     jobs = [{ 'name' => 'authorize', 'conclusion' => 'success', 'steps' => [] },
@@ -1492,7 +1645,7 @@ class HealthBriefTest < Minitest::Test
   # cut at its backticks instead: the command opens at the last backtick before
   # its own `gh_command` token and closes at the next one after it. `\|` is
   # markdown's escape for a literal pipe inside a cell. `gh_command` defaults
-  # to `gh run list` for the run-list rows; row 13 grades dependabot via
+  # to `gh run list` for the run-list rows; row 14 grades dependabot via
   # `gh pr list`, so it asks for that token explicitly.
   def command_cell(signal, gh_command: 'gh run list')
     row = @text.lines.find { |line| line.include?(signal) && line.include?(gh_command) }
@@ -1537,17 +1690,35 @@ class HealthBriefTest < Minitest::Test
     end
   end
 
-  def run_row9(jobs:, conclusion:, sha:, jobs_fail: false)
-    run_command(command_cell('the last release published'), jobs_fail: jobs_fail) do |fixtures|
+  def run_row9(jobs:, conclusion:, sha:, jobs_fail: false, version_sha: nil, http_status: '200')
+    cell = command_cell('the last release published')
+
+    run_command(cell, jobs_fail: jobs_fail, http_status: http_status) do |fixtures|
       write_fixture(fixtures, 'release.yml.dbid', '201')
       write_fixture(fixtures, 'release.yml.sha', sha)
       write_fixture(fixtures, 'release.yml.conclusion', conclusion)
       write_fixture(fixtures, 'release.yml.url', URL_RELEASE)
+      # The commit that carries Wurk::VERSION: the release run the row is
+      # allowed to grade is the one bound to it.
+      write_fixture(fixtures, 'version-head.sha', version_sha || sha)
       write_fixture(fixtures, 'dbid-201.jobs', jobs)
     end
   end
 
-  def run_row11(jobs:, log:, conclusion:, sha:, jobs_fail: false, log_fail: false)
+  # Row 11's command, run against a stub `gh` that serves the Latest
+  # GitHub Release from a fixture. `release: nil` writes no fixture, so the
+  # lookup fails the way a rate limit or a 4xx would.
+  def run_row_release_artifact(author: 'github-actions[bot]',
+                               assets: [{ 'name' => 'wurk-1.9.0.gem' }], release: :default)
+    body = release == :default ? JSON.generate('author' => { 'login' => author }, 'assets' => assets) : nil
+
+    run_command(command_cell('the GitHub Release carries the gem', gh_command: 'gh release view'),
+                jobs_fail: false) do |fixtures|
+      write_fixture(fixtures, 'release.json', body) if body
+    end
+  end
+
+  def run_row12(jobs:, log:, conclusion:, sha:, jobs_fail: false, log_fail: false)
     run_command(command_cell('the demo deployed'), jobs_fail: jobs_fail, log_fail: log_fail) do |fixtures|
       write_fixture(fixtures, 'deploy-demo.yml.dbid', '301')
       write_fixture(fixtures, 'deploy-demo.yml.sha', sha)
@@ -1558,7 +1729,7 @@ class HealthBriefTest < Minitest::Test
     end
   end
 
-  def run_row12(jobs_fail: false)
+  def run_row13(jobs_fail: false)
     run_command(command_cell('topology and ecosystem lanes'), jobs_fail: jobs_fail) do |fixtures|
       write_fixture(fixtures, 'topology.yml.dbid', '101')
       write_fixture(fixtures, 'topology.yml.sha', SHA_TOPOLOGY)
@@ -1579,9 +1750,9 @@ class HealthBriefTest < Minitest::Test
   # stub `gh` answers `gh pr list --app dependabot --json ...` from
   # $WURK_TEST_FIXTURES/dependabot.prs, so the command runs against fixed
   # fixtures instead of the API — fixtures shaped like the list `gh` really
-  # emits, rollup included. `jobs_fail` is ignored — row 13 does not call
+  # emits, rollup included. `jobs_fail` is ignored — row 14 does not call
   # `gh api .../jobs`, so there is no separate failure-shape to pin here.
-  def run_row13(prs:, jobs_fail: false)
+  def run_row14(prs:, jobs_fail: false)
     run_command(command_cell('Dependabot is not stuck', gh_command: 'gh pr list'), jobs_fail: jobs_fail) do |fixtures|
       write_fixture(fixtures, 'dependabot.prs', JSON.generate(prs))
     end
@@ -1593,7 +1764,7 @@ class HealthBriefTest < Minitest::Test
   # swallows the failing `gh api` inside a pipeline. Yields the fixtures dir
   # before the script runs so the caller can write the job lists the stub
   # serves, then returns Open3's [stdout, stderr, status].
-  def run_command(command, jobs_fail:, log_fail: false)
+  def run_command(command, jobs_fail:, log_fail: false, http_status: '200')
     Dir.mktmpdir('wurk-health-brief-') do |tmpdir|
       fixtures = File.join(tmpdir, 'fixtures')
       bin_dir = File.join(tmpdir, 'bin')
@@ -1602,9 +1773,11 @@ class HealthBriefTest < Minitest::Test
 
       yield fixtures
 
-      gh_path = File.join(bin_dir, 'gh')
-      File.write(gh_path, STUB_GH)
-      File.chmod(0o755, gh_path)
+      { 'gh' => STUB_GH, 'curl' => STUB_CURL }.each do |name, body|
+        path = File.join(bin_dir, name)
+        File.write(path, body)
+        File.chmod(0o755, path)
+      end
 
       script_path = File.join(tmpdir, 'health.sh')
       File.write(script_path, "#!/usr/bin/env bash\n#{command}\n")
@@ -1614,10 +1787,14 @@ class HealthBriefTest < Minitest::Test
         'PATH' => "#{bin_dir}:#{ENV.fetch('PATH', '')}",
         'WURK_TEST_FIXTURES' => fixtures,
         'WURK_TEST_JOBS_FAIL' => jobs_fail ? '1' : '0',
-        'WURK_TEST_LOG_FAIL' => log_fail ? '1' : '0'
+        'WURK_TEST_LOG_FAIL' => log_fail ? '1' : '0',
+        'WURK_TEST_HTTP_STATUS' => http_status.to_s
       }
 
-      Open3.capture3(env, script_path)
+      # The release rows read repo files (lib/wurk/version.rb), so the
+      # command runs from the checkout root, not from wherever the test
+      # process happens to sit.
+      Open3.capture3(env, script_path, chdir: ROOT)
     end
   end
 
@@ -1633,7 +1810,7 @@ class HealthBriefTest < Minitest::Test
   # `WURK_TEST_JOBS_FAIL=1` makes ONLY the jobs call fail, leaving the run
   # list readable — that is the exact shape of the false green this file
   # pins: a `conclusion` the brief can see, and a jobs list it cannot.
-  # `WURK_TEST_LOG_FAIL=1` is the analog for row 11's `gh run view --log`
+  # `WURK_TEST_LOG_FAIL=1` is the analog for row 12's `gh run view --log`
   # read — jobs readable, log unreadable, and the row must still fail
   # closed as `verdict unknown <sha>`.
   STUB_GH = <<~'SHELL'
@@ -1643,7 +1820,7 @@ class HealthBriefTest < Minitest::Test
       run)
         case "${2:-}" in
           view)
-            # `gh run view <dbid> --job <jobid> --log` is how row 11 reads the
+            # `gh run view <dbid> --job <jobid> --log` is how row 12 reads the
             # `resolve built commit` step's log; the jobs API carries no step
             # logs, so the row has to fetch them separately. Args: run id is
             # the first non-flag arg, the job id is the arg after `--job`.
@@ -1687,11 +1864,28 @@ class HealthBriefTest < Minitest::Test
             ;;
           *)
             wf=""
+            commit=""
+            prev=""
             for arg in "$@"; do
               case "$arg" in
                 *.yml) wf="$arg" ;;
               esac
+              case "$prev" in
+                --commit) commit="$arg" ;;
+              esac
+              prev="$arg"
             done
+            # The run list is served only for the commit the caller asked
+            # for, and only when that commit is the sha the version own
+            # commit fixture names. A row that dropped the --commit filter
+            # would read the newest run of any shape - a run that says
+            # nothing about this version - so the stub refuses to answer it.
+            if [ -n "$commit" ]; then
+              if [ ! -s "$fixdir/version-head.sha" ] || [ "$commit" != "$(cat "$fixdir/version-head.sha")" ]; then
+                printf 'stub gh run list: no run for commit %s (the version own sha is %s)\n' "$commit" "$(cat "$fixdir/version-head.sha" 2>/dev/null)" >&2
+                exit 1
+              fi
+            fi
             if [ -z "$wf" ]; then
               printf 'stub gh run: no --workflow argument in: %s\n' "$*" >&2
               exit 1
@@ -1736,6 +1930,17 @@ class HealthBriefTest < Minitest::Test
               cat "$fixdir/issues.json"
               exit 0
               ;;
+            *lib/wurk/version.rb*)
+              # The version own commit: the newest main commit that touched
+              # lib/wurk/version.rb. This is the sha a release run has to be
+              # bound to, so it is also what the run list is filtered by.
+              if [ ! -s "$fixdir/version-head.sha" ]; then
+                printf 'stub gh api: no version-head.sha fixture for %s\n' "$arg" >&2
+                exit 1
+              fi
+              printf '[{"sha":"%s"}]\n' "$(cat "$fixdir/version-head.sha")"
+              exit 0
+              ;;
           esac
         done
         if [ "$WURK_TEST_JOBS_FAIL" = "1" ]; then
@@ -1756,6 +1961,17 @@ class HealthBriefTest < Minitest::Test
         fi
         cat "$fixdir/dbid-$dbid.jobs"
         ;;
+      release)
+        # `gh release view --json author,assets` - the Latest GitHub
+        # Release. The release.json fixture is what gh would print; no
+        # fixture means the lookup failed (a rate limit, a 4xx, a repository
+        # with no release at all), which must grade `verdict unknown`.
+        if [ ! -s "$fixdir/release.json" ]; then
+          printf 'stub gh release view: no release.json fixture for: %s\n' "$*" >&2
+          exit 1
+        fi
+        cat "$fixdir/release.json"
+        ;;
       *)
         printf 'stub gh: unexpected command: %s\n' "$*" >&2
         exit 1
@@ -1763,4 +1979,29 @@ class HealthBriefTest < Minitest::Test
     esac
   SHELL
   private_constant :STUB_GH
+
+  # Stub curl: answers the RubyGems probe with the HTTP status the test
+  # names, so the probe never reaches the network from a test. 000 simulates
+  # a transport failure (no HTTP status at all), which the row grades
+  # `verdict unknown` rather than a colour.
+  STUB_CURL = <<~'SHELL'
+    #!/usr/bin/env bash
+    status="$WURK_TEST_HTTP_STATUS"
+    fmt=""
+    prev=""
+    for arg in "$@"; do
+      case "$prev" in
+        -w) fmt="$arg" ;;
+      esac
+      prev="$arg"
+    done
+    if [ "$status" = "000" ]; then
+      printf 'curl: (7) Failed to connect to rubygems.org port 443\\n' >&2
+      if [ -n "$fmt" ]; then printf '000'; fi
+      exit 7
+    fi
+    if [ -n "$fmt" ]; then printf '%s' "$status"; fi
+    exit 0
+  SHELL
+  private_constant :STUB_CURL
 end
