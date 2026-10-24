@@ -4,6 +4,10 @@ All notable changes to Wurk are recorded here. Format: [Keep a Changelog](https:
 
 ## [Unreleased]
 
+### Changed
+
+- **The demo's error reporting is opt-in and sanitized.** Sentry turns on only when `WURK_DEMO_REPORT_ERRORS=1` *and* `SENTRY_DSN` are both set; with either one missing the demo never loads the SDK, never initialises Sentry and never installs `Wurk::Sentry`, so Wurk's server middleware and error handlers stay exactly as they were. Events from the demo's two deliberately-failing jobs (`BrokenJob`, `FlakyWebhookJob`) and soak-tagged events are dropped, and request headers, cookies and job arguments are scrubbed of credential- and personal-data-shaped material before an event leaves the demo. The rules live in the demo app (`demo/lib/demo_sentry_policy.rb`), not in the gem: the gem ships the integration, the demo decides what it may send.
+
 ## [1.8.1] - 2026-10-16
 
 ### Fixed
