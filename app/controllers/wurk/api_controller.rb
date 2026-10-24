@@ -387,8 +387,10 @@ module Wurk
 
       keys = Array(params[:keys]).map(&:to_s).uniq
       # Each key costs a ZRANGEBYSCORE plus per-entry mutations; an uncapped
-      # list lets one POST issue tens of thousands of round-trips. The UI
-      # selects at most a page (200).
+      # list lets one POST issue tens of thousands of round-trips. The UI's
+      # per-row selections accumulate across pages (toggleAll works against
+      # the visible page's keys only) and the bulk POST sends the whole Set,
+      # so this cap — not the page size — is the bound.
       return render(json: { error: 'too many keys (max 1000)' }, status: :bad_request) if keys.size > 1000
 
       entries = entries_for(set, keys)
