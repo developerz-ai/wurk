@@ -195,11 +195,27 @@ these: it reads that as a gem-less release, not a real one.
 
 ### Verifying a release actually shipped
 
-A green run is necessary, not sufficient. The authority is RubyGems, not GitHub:
+A green run is necessary, not sufficient. The authority is RubyGems, not GitHub.
+
+There is ONE availability probe, and it is the same one the release lane itself
+runs (preflight in `release.yml`, the existence check in `release-smoke.yml`) —
+the RubyGems API v2 per-version endpoint:
 
 ```bash
-curl -s https://rubygems.org/api/v1/versions/wurk.json | head    # the version is there
-gem fetch wurk -v X.Y.Z                                          # and the gem ships the SPA
+curl -fsS https://rubygems.org/api/v2/rubygems/wurk/versions/<version>.json
+```
+
+- **HTTP 200** — RubyGems serves that exact version.
+- **HTTP 404** — RubyGems has no such version record (yet): the release did not
+  ship, or propagation has not finished.
+- **A curl/network failure** (no HTTP status at all) means the PROBE failed, not
+  that the version is absent — retry before concluding anything.
+
+The other commands answer different questions and are not availability checks:
+
+```bash
+curl -s https://rubygems.org/api/v1/versions/wurk.json | head    # human overview: every published version
+gem fetch wurk -v X.Y.Z                                          # artifact-content check: the gem ships the SPA
 gh release view vX.Y.Z --json author,assets                      # github-actions[bot], .gem attached
 ```
 

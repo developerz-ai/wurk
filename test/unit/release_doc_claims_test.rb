@@ -1,6 +1,7 @@
 # frozen_string_literal: true
 
 require 'minitest/autorun'
+require 'open3'
 
 # Gates the alignment between .github/workflows/release.yml's `release` job
 # publish tail (the `- name:` steps that follow `build & verify gem`) and
@@ -18,6 +19,7 @@ class ReleaseDocClaimsTest < Minitest::Test
   RELEASE_MD = File.join(ROOT, 'RELEASE.md')
   RELEASE_YML = File.join(ROOT, '.github', 'workflows', 'release.yml')
   BRIEF = File.join(ROOT, '.dz', 'briefs', 'release-due.md')
+  HEALTH_BRIEF = File.join(ROOT, '.dz', 'briefs', 'health.md')
 
   # The publish tail is derived from release.yml by structural position —
   # inside the `release:` job, every `- name:` step AFTER `build & verify
@@ -106,6 +108,82 @@ class ReleaseDocClaimsTest < Minitest::Test
 
       cells[1].sub(/\A\*\*(.*?)\*\*\z/, '\1').delete('`').strip
     end.compact
+  end
+
+  # Pins the availability probe so RELEASE.md and the health checkup brief
+  # cannot drift apart again: both must name the canonical RubyGems API v2
+  # per-version endpoint that release.yml's preflight and release-smoke.yml
+  # already run, RELEASE.md must present it as THE availability check (with
+  # interpretable results), and health.md's `RubyGems serves` row must use it
+  # as its predicate instead of `gem list wurk --remote`.
+  def test_availability_probe_is_canonical_and_aligned_across_docs
+    endpoint = 'rubygems.org/api/v2/rubygems/wurk/versions/'
+
+    release_text = File.read(RELEASE_MD)
+    health_text = File.read(HEALTH_BRIEF)
+
+    assert_includes release_text, endpoint,
+                    'RELEASE.md must name the canonical RubyGems API v2 per-version endpoint'
+    assert_includes health_text, endpoint,
+                    '.dz/briefs/health.md must name the same canonical endpoint'
+
+    section = verifying_section(release_text)
+
+    refute_nil section,
+               "RELEASE.md must keep its 'Verifying a release actually shipped' section"
+    assert_includes section, 'ONE availability probe',
+                    'the section must present the v2 probe as THE availability check, ' \
+                    'not one of several competing predicates'
+    assert_includes section, 'HTTP 200',
+                    'the section must give the probe an interpretable HTTP 200 result'
+    assert_includes section, 'HTTP 404',
+                    'the section must give the probe an interpretable HTTP 404 result'
+    assert_match(/probe failed|PROBE failed/, section,
+                 'the section must state a failed probe is not evidence the version is absent')
+
+    row = health_text.lines.find { |line| line.include?('RubyGems serves') }
+
+    refute_nil row, "health.md must keep its 'RubyGems serves' row"
+    refute_includes row, 'gem list wurk --remote',
+                    "health.md's 'RubyGems serves' row must not carry " \
+                    '`gem list wurk --remote` as its predicate'
+  end
+
+  # The row's `<version>` extraction is the half of the probe the endpoint
+  # assertions above cannot see: a grep class that matches no quoted string
+  # in lib/wurk/version.rb leaves $v empty, curl then fetches
+  # `.../versions/.json`, and the row can only ever print `verdict unknown`
+  # — while the row itself claims to read the version from that file. This
+  # exact defect shipped once (a `"…"`-only pattern against the
+  # single-quoted `VERSION = '1.8.1'`), so the extraction is run against the
+  # real file and must yield the constant's value.
+  def test_health_row_version_extraction_matches_version_rb_quoting
+    row = File.read(HEALTH_BRIEF).lines.find { |line| line.include?('RubyGems serves') }
+
+    refute_nil row, "health.md must keep its 'RubyGems serves' row"
+
+    # `\|` is markdown's escape for a literal pipe inside a table cell; the
+    # command must be unescaped before bash runs it, exactly as
+    # health_brief_test.rb's command_cell does.
+    out, = Open3.capture2('bash', '-c', row[/v=\$\((.*?)\)/, 1].gsub('\\|', '|'), chdir: ROOT)
+    version = File.read(File.join(ROOT, 'lib', 'wurk', 'version.rb'))[/VERSION = '([^']+)'/, 1]
+
+    refute_nil version, 'lib/wurk/version.rb must define VERSION'
+    assert_equal version, out.chomp,
+                 "health.md's 'RubyGems serves' row must extract #{version} from " \
+                 'lib/wurk/version.rb — an extraction that matches no quoted string ' \
+                 'leaves $v empty and the probe can only ever grade `verdict unknown`'
+  end
+
+  # The RELEASE.md block between the 'Verifying a release actually shipped'
+  # heading and the next heading of any level.
+  def verifying_section(text)
+    lines = text.lines
+    first = lines.index { |l| l.start_with?('### Verifying a release actually shipped') }
+    return nil unless first
+
+    last = ((first + 1)...lines.size).find { |i| lines[i].start_with?('#') } || lines.size
+    lines[first...last].join
   end
 
   BRIEF_RANGE = /RELEASE\.md:(\d+)-(\d+)/
