@@ -1,6 +1,7 @@
 # frozen_string_literal: true
 
 require_relative "boot"
+require_relative "../lib/demo_sentry_policy"
 
 require "rails"
 require "active_model/railtie"
@@ -16,7 +17,10 @@ require "wurk/rails"
 
 # sentry-rails registers its middleware and Active Job hooks through Railtie
 # initializers, so it must load at boot — not from config/initializers.
-if ENV["WURK_DEMO_REPORT_ERRORS"] == "1"
+#
+# Only when the demo is actually reporting: the flag AND a DSN. The gate is
+# DemoSentryPolicy's, so a demo without a DSN never loads the SDK at all.
+if DemoSentryPolicy.enabled?
   require "sentry-ruby"
   require "sentry-rails"
 end
