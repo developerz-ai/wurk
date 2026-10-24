@@ -85,6 +85,11 @@ module DemoSentryPolicy
   def before_send(event, _hint = nil)
     return nil if drop?(event)
 
+    if job_class(event) == 'DemoCanaryJob'
+      tags = field(event, :tags)
+      event.tags = (tags.is_a?(::Hash) ? tags : {}).merge('canary' => 'demo_fault')
+    end
+
     scrub(event)
   rescue StandardError
     # Fail closed: an event we cannot scrub is an event we cannot vouch for.
