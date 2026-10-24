@@ -132,6 +132,20 @@ class SwarmSupervisionTest < Wurk::Test::UnitCase
   # Killing the replacement while it's still awaiting heartbeat must NOT take
   # the old (still-healthy) child down with it, and the slot must be retried
   # (a fresh replacement spawned) once the restart's own backoff elapses.
+  #
+  # The premise is "the replacement dies before the supervisor sees its
+  # heartbeat", and the supervisor reads that heartbeat out of the
+  # `processes` set — it TERMs the old child as soon as the replacement is
+  # in there. A kill issued by the test cannot be timed against the
+  # supervisor's tick: the poll that finds the new pid can be descheduled
+  # past it, and when it loses, the machine does exactly what it does for
+  # a replacement that DID beat — it hands the slot over and TERMs the old
+  # child — so the case goes red on a timing accident rather than on a
+  # defect (that is how it went red on a loaded box). So the premise is
+  # made true by construction instead: `processes` is a string while this
+  # test runs, so every SADD fails with WRONGTYPE, no heartbeat is ever
+  # visible to the supervisor, and the killed replacement is claimed while
+  # the machine is still awaiting one. Nothing else about the case moves.
   def test_kill_replacement_mid_restart_keeps_old_child_and_retries_slot
     swarm = Wurk::Swarm.new(topology: topology_n(1), config: @config, shutdown_timeout: SHUTDOWN_TIMEOUT)
     supervisor = nil
@@ -139,6 +153,7 @@ class SwarmSupervisionTest < Wurk::Test::UnitCase
     begin
       original = swarm.boot(install_signals: false).first
       supervisor = Thread.new { swarm.supervise }
+      freeze_process_registration!
 
       swarm.rolling_restart
       replacement = kill_the_replacement(swarm, original)
@@ -155,6 +170,7 @@ class SwarmSupervisionTest < Wurk::Test::UnitCase
         nil
       end
       stop_supervisor_thread(supervisor, 10)
+      thaw_process_registration!
     end
   end
 
@@ -456,6 +472,25 @@ class SwarmSupervisionTest < Wurk::Test::UnitCase
 
     refute swarm.children.key?(replacement), "the supervisor never reaped the killed replacement #{replacement}"
     replacement
+  end
+
+  # The `processes` set every worker registers itself in — and the set the
+  # supervisor's restart machine reads to decide a replacement is up. While
+  # the key holds a string, every SADD fails with WRONGTYPE: no worker
+  # registers, the supervisor's SISMEMBER raises and is read as "not seen
+  # yet" (Swarm#heartbeat_seen? rescues), and the machine keeps awaiting
+  # the replacement's heartbeat. The liveness check is untouched by it:
+  # that one reads each child's own identity hash (`<identity>`), not the
+  # set, so the beat it measures stays fresh and the old child is not
+  # replaced for going quiet.
+  def freeze_process_registration!
+    @observer.call('DEL', Wurk::Keys::PROCESSES)
+    @observer.call('SET', Wurk::Keys::PROCESSES, 'frozen-by-swarm-supervision-test')
+  end
+
+  # DEL, not a conversion back: the next worker's SADD recreates the set.
+  def thaw_process_registration!
+    @observer.call('DEL', Wurk::Keys::PROCESSES)
   end
 
   def assert_request_drained(swarm, supervisor, children)
