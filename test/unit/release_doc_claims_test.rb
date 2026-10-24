@@ -233,7 +233,8 @@ class ReleaseDocClaimsTest < Minitest::Test
   # status (`curl -w '%{http_code}'`, no `-f`) and grades four verdicts, each
   # pinned by a test here: 200 -> success; 404 beside a concluded release run
   # -> Unhealthy; 404 beside an in-flight run -> in flight; 404 beside an
-  # unreadable run list, a 5xx, or a transport failure -> verdict unknown.
+  # empty or unreadable run list, a 5xx, or a transport failure -> verdict
+  # unknown.
 
   # Runs against the checkout's REAL lib/wurk/version.rb served at the
   # commit: the healthy verdict naming the constant's value is what keeps the
@@ -356,6 +357,37 @@ class ReleaseDocClaimsTest < Minitest::Test
       assert_includes out, 'release did not publish'
       assert_includes out, filter == '--branch main ' ? off_main_url : retry_url
     end
+  end
+
+  # gh succeeded and answered `[]` — a READABLE empty run list, not a failed
+  # read. No release.yml run exists for the version's own sha, so a 404
+  # beside it is neither a failed release (Unhealthy) nor a served one
+  # (success): the cell's existing `if type == "array" and length > 0` guard
+  # fails it closed. Row 10's command cell is untouched by this task (rows 8,
+  # 12 and 13 are the unguarded ones); this pin exists so the existing empty
+  # outcome cannot silently regress while its neighbouring rows are edited.
+  def test_row10_http_404_with_a_readable_empty_run_list_grades_unknown
+    out, err, status = run_row10(http_status: 404, release_run: '[]')
+
+    assert_predicate status, :success?,
+                     "row 10's command must run cleanly (status=#{status.inspect}, " \
+                     "stdout=#{out.inspect}, stderr=#{err.inspect})"
+
+    assert_includes out, 'verdict unknown',
+                    'a readable empty run list means no release run exists to grade ' \
+                    "against, so the row must fail closed; got stdout=#{out.inspect}"
+
+    assert_includes out, rubygems_version,
+                    '`verdict unknown` must still name the version it could not grade; ' \
+                    "got stdout=#{out.inspect}"
+
+    refute_includes out, 'Unhealthy',
+                    'with no run to conclude from, the 404 is not evidence the release ' \
+                    "failed; got stdout=#{out.inspect}"
+
+    refute_includes out, 'success',
+                    'anything but HTTP 200 is not a served version; ' \
+                    "got stdout=#{out.inspect}"
   end
 
   def test_row10_http_404_with_an_unreadable_release_run_fails_closed
