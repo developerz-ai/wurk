@@ -233,6 +233,21 @@ class MiddlewareExpiryTest < Wurk::Test::UnitCase
     assert_operator expiry_idx, :>, batch_idx, 'Expiry must follow Batch so batch ack_success still fires on skip'
   end
 
+  # Expiry is registered at require time (lib/wurk/middleware/expiry.rb), i.e.
+  # before Limiter is added in lib/wurk.rb — so Expiry is OUTER of Limiter.
+  # That is what keeps an already-expired job from being rescheduled: Expiry
+  # drops it by returning without yielding, so Limiter never sees it and never
+  # puts it back on the queue.
+  def test_registered_outer_of_limiter_server_middleware
+    klasses = Wurk.configuration.server_middleware.map(&:klass)
+    expiry_i = klasses.index(Wurk::Middleware::Expiry)
+    limiter_i = klasses.index(Wurk::Limiter::ServerMiddleware)
+
+    refute_nil expiry_i, 'Expiry must be registered'
+    refute_nil limiter_i, 'Limiter::ServerMiddleware must be registered'
+    assert_operator expiry_i, :<, limiter_i, 'Expiry must be OUTER (registered before) Limiter::ServerMiddleware'
+  end
+
   # =====================================================================
   # Client-side stamping (JobUtil#stamp_expiry)
   # =====================================================================

@@ -7,8 +7,8 @@ is `RELEASE.md`; this brief only decides *when*.
 ## Decide
 
 ```bash
-# Resolve $last via the GitHub API for the canonical value, then verify the ref (peel to a commit), the release state (zero assets => gem-less => abort), the release baseline (the peeled commit IS the release commit for the tag's version), and the diff window against main.
-last=$(gh api repos/developerz-ai/wurk/git/matching-refs/tags/ \
+# Resolve $last via the GitHub API for the canonical value, then verify the ref (peel to a commit), the release state (zero assets => gem-less => abort), the release baseline (the peeled commit IS the release commit for the tag's version), and the diff window against main. The tag listing is PAGINATED: `git/matching-refs` returns its refs in pages, and `--paginate` is what makes the listing complete — it follows the API's link headers through every page and merges them into one array, so a matching tag that sits on a later page is still enumerated before `sort -V | tail -1` picks the highest version. Without it only the first page is returned and the highest tag SEEN may not be the highest tag that EXISTS.
+last=$(gh api --paginate repos/developerz-ai/wurk/git/matching-refs/tags/ \
   | jq -r '.[] | select(.ref | startswith("refs/tags/v")) | .ref | sub("^refs/tags/"; "")' \
   | sort -V \
   | tail -1)
@@ -79,6 +79,17 @@ no-op (the version is already on RubyGems), a break-glass publication, and a fai
 Release was created are all still open. RubyGems is the authority — probe the per-version endpoint
 and read the last release.yml run before concluding anything, and never treat the absence of a
 Release as proof that nothing was published.
+
+`$last` is resolved from a PAGINATED listing, and the pagination is the whole reason the listing is
+complete. `git/matching-refs/tags` serves its refs in pages; `gh api --paginate` follows the API's
+link headers through every page and merges the pages into one array, so every matching tag is
+enumerated before `sort -V | tail -1` selects the highest version. A listing that stops at the first
+page is not a smaller answer, it is a different one: the highest version SEEN is then only the
+highest version on that page, and a newer release whose ref sits on a later page is missed while
+the decision still looks complete. Completeness therefore comes from the pagination flag alone — a
+fixed page size is not a completeness argument, because no fixed size bounds how many refs the
+repository holds; the flag is what guarantees the walk reaches the end of the list. The same flag
+shapes the title guard further down, for the same reason.
 
 Those paths are `wurk.gemspec`'s `spec.files`, with three deliberate differences. The dashboard bundle
 (`vendor/assets/dashboard/**`) is built at release and git-ignored, so its source, `frontend/src`, is

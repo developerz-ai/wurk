@@ -481,6 +481,82 @@ class ReleaseDueBriefTest < Minitest::Test
     end
   end
 
+  # The tag listing is PAGINATED, and the pagination — not a page size —
+  # is the resolver's completeness argument. `git/matching-refs` serves
+  # its refs in pages; `gh api --paginate` follows the API's link
+  # headers through every page and merges them into one array, so a
+  # matching tag that sits on a later page is still enumerated before
+  # `sort -V | tail -1` picks the highest version. Without the flag only
+  # the first page comes back, and the highest version SEEN is then only
+  # the highest version on that page.
+  #
+  # This is a BEHAVIOURAL pin, not a text-shape check: the stub's
+  # listing depends on whether `--paginate` was passed, and its peel
+  # branch answers ONLY for the newer tag. A resolver that lost the flag
+  # selects the stale first-page tag, the peel of that tag is refused,
+  # and the Decide script aborts before the window scan — so the test
+  # fails. The stub returns the already-merged page set, so this pin
+  # proves that pagination is requested; it does not independently
+  # prove that a resolver merges pages returned by a different client.
+  def test_tag_listing_is_paginated_so_a_later_page_highest_tag_is_found
+    run_decide_under_stubs(paginated_tags_stub_gh) do |(out, err, status), tmpdir|
+      combined = out + err
+      window_marker = File.join(tmpdir, 'local_fast_path_reached.log')
+
+      refute_match(/v1\.8\.0/, combined,
+                   'the resolver must request the paginated tag listing and select its ' \
+                   'highest tag; it selected the stale first-page tag, so the tag listing ' \
+                   "was not paginated: stdout=#{out.inspect}, stderr=#{err.inspect}")
+
+      assert_predicate status, :success?,
+                       'the paginated tag listing must let the Decide script reach the ' \
+                       "window scan (status=#{status.inspect}, stdout=#{out.inspect}, " \
+                       "stderr=#{err.inspect})"
+
+      assert window_scan_reached?(window_marker),
+             'the Decide script must compute the window on the newest tag, which is ' \
+             'only reachable when the tag listing is paginated (marker not set); ' \
+             "stdout=#{out.inspect}, stderr=#{err.inspect}"
+    end
+  end
+
+  # Structural companion to the behavioural pin above: the resolver's
+  # listing call must carry `--paginate`, and its completeness must NOT
+  # rest on a fixed page size. `per_page` bounds one page, never the
+  # number of refs the repository holds, so a listing that asks for a
+  # large page is still an incomplete listing — the flag is what makes
+  # the walk reach the end of the list.
+  def test_brief_resolves_last_through_a_paginated_tag_listing
+    decide_block = extract_decide_block
+
+    assert_match(%r{gh\s+api\s+--paginate\s+repos/developerz-ai/wurk/git/matching-refs/tags/},
+                 decide_block,
+                 'the tag listing must be fetched with `gh api --paginate` so every page ' \
+                 'of matching refs is enumerated')
+
+    resolver_line = decide_block.lines.find { |line| line.include?('matching-refs/tags/') }
+
+    refute_nil resolver_line,
+               'the Decide block must resolve $last from the matching-refs listing'
+
+    refute_match(/per_page/, resolver_line,
+                 'a fixed page size is not a completeness argument: the listing is complete ' \
+                 'because it is paginated, not because it asks for a large page')
+  end
+
+  # The brief's own prose must carry the same argument: completeness of
+  # the tag listing comes from the pagination, and a fixed page size is
+  # explicitly not what makes it complete.
+  def test_brief_attributes_tag_listing_completeness_to_pagination
+    assert_match(/completeness[^.]*paginat/i, @text,
+                 'the brief must state that the tag listing is complete because it is ' \
+                 'paginated, not because of a page size')
+
+    refute_match(/per_page=[^\s`]*[^.]*proves/i, @text,
+                 'the brief must not claim that a fixed page size proves every matching ' \
+                 'tag was considered')
+  end
+
   # The release baseline: the peeled commit must BE the release commit for
   # the tag's version. A tag alone proves little — a re-used or hand-cut tag
   # points at a commit that never shipped a version, and a window computed
@@ -650,7 +726,16 @@ class ReleaseDueBriefTest < Minitest::Test
     case "$1" in
       api)
         shift
-        url="${1:-}"
+        # The endpoint URL is the first NON-FLAG argument after `api`: a
+        # flag such as `--paginate` may precede it, and a header value
+        # may follow it.
+        url=""
+        for arg in "$@"; do
+          case "$arg" in
+            -*) ;;
+            *) url="$arg"; break ;;
+          esac
+        done
         case "$url" in
           *git/matching-refs/tags/*)
             printf '%s\n' '[{"ref":"refs/tags/v1.8.0"}]'
@@ -715,7 +800,16 @@ class ReleaseDueBriefTest < Minitest::Test
     case "$1" in
       api)
         shift
-        url="${1:-}"
+        # The endpoint URL is the first NON-FLAG argument after `api`: a
+        # flag such as `--paginate` may precede it, and a header value
+        # may follow it.
+        url=""
+        for arg in "$@"; do
+          case "$arg" in
+            -*) ;;
+            *) url="$arg"; break ;;
+          esac
+        done
         case "$url" in
           *git/matching-refs/tags/*)
             printf '%s\n' '[{"ref":"refs/tags/v1.8.0"}]'
@@ -770,7 +864,16 @@ class ReleaseDueBriefTest < Minitest::Test
     case "$1" in
       api)
         shift
-        url="${1:-}"
+        # The endpoint URL is the first NON-FLAG argument after `api`: a
+        # flag such as `--paginate` may precede it, and a header value
+        # may follow it.
+        url=""
+        for arg in "$@"; do
+          case "$arg" in
+            -*) ;;
+            *) url="$arg"; break ;;
+          esac
+        done
         case "$url" in
           *git/matching-refs/tags/*)
             printf '%s\n' '[{"ref":"refs/tags/v1.8.0"}]'
@@ -820,7 +923,16 @@ class ReleaseDueBriefTest < Minitest::Test
     case "$1" in
       api)
         shift
-        url="${1:-}"
+        # The endpoint URL is the first NON-FLAG argument after `api`: a
+        # flag such as `--paginate` may precede it, and a header value
+        # may follow it.
+        url=""
+        for arg in "$@"; do
+          case "$arg" in
+            -*) ;;
+            *) url="$arg"; break ;;
+          esac
+        done
         case "$url" in
           *git/matching-refs/tags/*)
             printf '%s\n' '[{"ref":"refs/tags/v1.8.0"}]'
@@ -886,7 +998,16 @@ class ReleaseDueBriefTest < Minitest::Test
     case "$1" in
       api)
         shift
-        url="${1:-}"
+        # The endpoint URL is the first NON-FLAG argument after `api`: a
+        # flag such as `--paginate` may precede it, and a header value
+        # may follow it.
+        url=""
+        for arg in "$@"; do
+          case "$arg" in
+            -*) ;;
+            *) url="$arg"; break ;;
+          esac
+        done
         case "$url" in
           *git/matching-refs/tags/*)
             printf '%s\n' '[{"ref":"refs/tags/v1.8.0"}]'
@@ -965,7 +1086,16 @@ class ReleaseDueBriefTest < Minitest::Test
     case "$1" in
       api)
         shift
-        url="${1:-}"
+        # The endpoint URL is the first NON-FLAG argument after `api`: a
+        # flag such as `--paginate` may precede it, and a header value
+        # may follow it.
+        url=""
+        for arg in "$@"; do
+          case "$arg" in
+            -*) ;;
+            *) url="$arg"; break ;;
+          esac
+        done
         case "$url" in
           *git/matching-refs/tags/*)
             printf '%s\n' '[{"ref":"refs/tags/v1.8.0"}]'
@@ -1011,7 +1141,16 @@ class ReleaseDueBriefTest < Minitest::Test
     case "$1" in
       api)
         shift
-        url="${1:-}"
+        # The endpoint URL is the first NON-FLAG argument after `api`: a
+        # flag such as `--paginate` may precede it, and a header value
+        # may follow it.
+        url=""
+        for arg in "$@"; do
+          case "$arg" in
+            -*) ;;
+            *) url="$arg"; break ;;
+          esac
+        done
         case "$url" in
           *git/matching-refs/tags/*)
             printf '%s\n' '[{"ref":"refs/tags/v1.8.0"}]'
@@ -1068,7 +1207,16 @@ class ReleaseDueBriefTest < Minitest::Test
     case "$1" in
       api)
         shift
-        url="${1:-}"
+        # The endpoint URL is the first NON-FLAG argument after `api`: a
+        # flag such as `--paginate` may precede it, and a header value
+        # may follow it.
+        url=""
+        for arg in "$@"; do
+          case "$arg" in
+            -*) ;;
+            *) url="$arg"; break ;;
+          esac
+        done
         case "$url" in
           *git/matching-refs/tags/*)
             printf '%s\n' '[{"ref":"refs/tags/v1.8.0"}]'
@@ -1104,6 +1252,95 @@ class ReleaseDueBriefTest < Minitest::Test
     esac
   SHELL
   private_constant :NON_BOT_AUTHOR_NO_ASSETS_STUB_GH
+
+  # Stub `gh` whose TAG LISTING depends on whether `--paginate` was
+  # passed — the behavioural pin on the resolver's completeness
+  # argument. `git/matching-refs` is a PAGINATED endpoint: `gh api
+  # --paginate` follows the API's link headers through every page and
+  # merges the pages into one array, so a matching tag that sits on a
+  # later page is enumerated too. Without the flag only the FIRST page
+  # comes back, the highest version SEEN is the older tag, and the peel
+  # is asked for a tag this stub refuses to answer — the Decide script
+  # aborts and the window scan is never reached. The peel branch
+  # therefore answers ONLY for the newer tag: an unpaginated resolver
+  # cannot fall back onto the stale one and pass by accident.
+  PAGINATED_TAGS_STUB_GH = <<~'SHELL'
+    #!/usr/bin/env bash
+    case "$1" in
+      api)
+        shift
+        paginated=0
+        # The endpoint URL is the first NON-FLAG argument after `api`;
+        # `--paginate` is a flag and precedes it.
+        url=""
+        for arg in "$@"; do
+          case "$arg" in
+            --paginate) paginated=1 ;;
+            -*) ;;
+            *) url="$arg"; break ;;
+          esac
+        done
+        case "$url" in
+          *git/matching-refs/tags/*)
+            if [ "$paginated" = "1" ]; then
+              # Every page merged: the newest tag lives on a later page.
+              printf '%s\n' '[{"ref":"refs/tags/v1.8.0"},{"ref":"refs/tags/v1.9.0"}]'
+            else
+              # First page only: the newest tag is NOT in this page.
+              printf '%s\n' '[{"ref":"refs/tags/v1.8.0"}]'
+            fi
+            ;;
+          *git/ref/tags/v1.9.0)
+            printf '%s\n' '{"object":{"sha":"ffffffffffffffffffffffffffffffffffffffff","type":"tag"}}'
+            ;;
+          *git/ref/tags/v1.8.0)
+            printf 'ERROR: stub gh api git/ref/tags/v1.8.0 must not be called: an unpaginated listing selected the stale tag\n' >&2
+            exit 1
+            ;;
+          *git/tags/ffffffffffffffffffffffffffffffffffffffff)
+            printf '%s\n' '{"object":{"sha":"1234567890abcdef1234567890abcdef12345678","type":"commit"}}'
+            ;;
+          *commits/1234567890abcdef*)
+            printf '%s\n' '{"sha":"1234567890abcdef1234567890abcdef12345678","commit":{"committer":{"date":"2026-10-07T09:00:00Z"}},"parents":[{"sha":"5678901234abcdef5678901234abcdef56789012"}]}'
+            ;;
+          *contents/CHANGELOG.md*)
+            case "$url" in
+              *ref=1234567890abcdef*)
+                printf '%s\n' '## [Unreleased]' '' '## [1.9.0] - 2026-10-07' '' '- the release commit'
+                ;;
+              *ref=5678901234abcdef*)
+                printf '%s\n' '## [Unreleased]' '' '## [1.8.0] - 2026-10-05' '' '- an older release'
+                ;;
+              *)
+                printf 'ERROR: stub gh api: unexpected CHANGELOG ref: %s\n' "$url" >&2
+                exit 1
+                ;;
+            esac
+            ;;
+          *compare/v1.9.0...main)
+            printf '%s\n' '{"status":"ahead","ahead_by":3,"behind_by":0,"total_commits":3}'
+            ;;
+          *compare/*)
+            printf 'ERROR: stub gh api compare/* must not be called with a stale tag\n' >&2
+            exit 1
+            ;;
+          *)
+            printf 'ERROR: stub gh api: unexpected URL: %s\n' "$url" >&2
+            exit 1
+            ;;
+        esac
+        ;;
+      release)
+        # Non-gem-less: author is not developerz-ai[bot], assets is non-empty.
+        printf '%s\n' '{"author":{"login":"octocat"},"assets":[{"name":"wurk-1.9.0.gem"}]}'
+        ;;
+      *)
+        printf 'ERROR: stub gh: unexpected command: %s\n' "$*" >&2
+        exit 1
+        ;;
+    esac
+  SHELL
+  private_constant :PAGINATED_TAGS_STUB_GH
 
   # Stub `git` whose `fetch` fails — the brief must abort on it instead
   # of scanning the window against a stale origin/main. `describe` still
@@ -1295,6 +1532,10 @@ class ReleaseDueBriefTest < Minitest::Test
 
   def non_bot_author_no_assets_stub_gh
     NON_BOT_AUTHOR_NO_ASSETS_STUB_GH
+  end
+
+  def paginated_tags_stub_gh
+    PAGINATED_TAGS_STUB_GH
   end
 
   def fetch_failing_stub_git
