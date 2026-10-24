@@ -12,6 +12,15 @@ These tests are **oracles**. When Wurk diverges from a parity test, Wurk is wron
 
 Run: `bin/rake test:parity`
 
+The [behavior conformance guide](../../docs/conformance.md) explains how to add
+stable, source-first cases to the [conformance inventory](../conformance/).
+Conformance extends this same command: it preserves every existing independently
+written oracle and the [upstream pin](.sidekiq_sha), rather than replacing them
+with a second test mechanism. Covered cases reference runnable oracle assertions;
+reported passes depend on their actual results, not just inventory declarations.
+Pending gaps are unproven claims, individually tracked with distinct future-work
+IDs, not passing compatibility. They cannot replace failing guards.
+
 To add a test:
 1. Write it from the documented behaviour — `docs/target/sidekiq-{free,pro,ent}.md` and the [Sidekiq wiki](https://github.com/sidekiq/sidekiq/wiki). Do not copy upstream test files; Sidekiq is LGPL-3.0 and this repository is MIT.
 2. Assert against the observable contract: payload fields, encodings, Redis key shapes, return values. Use the `Sidekiq::*` aliases, since that is what a drop-in app sees.
