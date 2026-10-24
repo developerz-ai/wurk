@@ -143,7 +143,13 @@ require 'fileutils'
 #      API and classifies waiting-on-us only when they still disagree. Pins
 #      agreeing at the head fall through to stuck (the regression fixture:
 #      pins fixed, CI still red); a failed pin read verifies nothing and
-#      prints `verdict unknown ... not readable`, filing no ask for that PR.
+#      prints `verdict unknown ... not readable`, filing no ask for that
+#      PR. A failed read includes the HALF-FAILED shape: on a 404 or a rate
+#      limit `gh api` emits a nonempty JSON error body and exits non-zero,
+#      so each site's exit status is captured beside its bytes and graded
+#      before them — a row that parsed the body alone would extract no pin
+#      from the error JSON and grade the failed read an outstanding
+#      mismatch, filing the false waiting-on-us ask.
 #
 # One more property, added with the run URLs: every job-list row must request
 # BOTH `url` and `databaseId` and print the URL on EVERY verdict — dup,
@@ -187,6 +193,11 @@ class HealthBriefTest < Minitest::Test
   # the pushed pin edits land.
   BUN_OLD        = '1.4.1'
   BUN_NEW        = '1.4.2'
+  # The stdout body a real `gh api` writes when a contents read fails — a
+  # 404 or a rate limit — BEFORE it exits non-zero. The pin-site stub serves
+  # it from a `pin.<site>.error` marker, so the row is pinned against the
+  # failed read that carries bytes, not only the silent empty one.
+  PIN_ERROR_BODY = '{"message":"Not Found","documentation_url":"https://docs.github.com/rest/contents"}'
   # A sha that is NOT the commit carrying Wurk::VERSION: the release run
   # that carries it says nothing about this version's release, so the row
   # must refuse it.
@@ -2151,6 +2162,82 @@ class HealthBriefTest < Minitest::Test
                     "stuck on an unreadable read files author-inactivity on no evidence (stdout=#{out.inspect})"
   end
 
+  # The failure a real contents 404 or rate limit produces carries BYTES:
+  # `gh api` emits its nonempty JSON error body on stdout and exits
+  # non-zero. A row that guarded the captured strings alone passed that
+  # body as a successful read, parsed no pin out of it, and graded the
+  # failed read an outstanding mismatch — the false `waiting on us` ask.
+  # Each site's exit status is captured beside its bytes and graded first,
+  # so the failed read names `verdict unknown ... not readable`, exactly
+  # like the empty-body failure above, and files no ask.
+  def test_pin_reads_failing_with_a_nonempty_error_body_are_not_graded_as_a_mismatch
+    pr = dependabot_pr(number: 7709, title: 'Bump oven/bun from 1.4.1 to 1.4.2 in /',
+                       branch: 'dependabot/docker/oven/bun', age_days: 40, sha: SHA_DOCKER)
+    out, _err, status = run_row15(prs: [pr], pins: :error_body)
+
+    assert_predicate status, :success?,
+                     "row 15's command must run cleanly (status=#{status.inspect})"
+
+    unknown = out.lines.map(&:chomp).select { |line| line.include?('verdict unknown') }
+
+    assert_equal 1, unknown.size,
+                 "the error-body pin read prints one verdict-unknown line; got #{out.lines.inspect}"
+
+    assert_includes unknown.first, 'not readable',
+                    'the line must say the pins were NOT readable — a read that exited non-zero ' \
+                    "is a failed read whatever bytes it left behind; got #{unknown.first.inspect}"
+
+    assert_includes unknown.first, '#7709',
+                    "the line must name the PR it could not grade; got #{unknown.first.inspect}"
+
+    assert_includes unknown.first, SHA_DOCKER,
+                    "the line must carry the head sha it could not read at; got #{unknown.first.inspect}"
+
+    refute_includes out, 'Unhealthy',
+                    'a failed read with a nonempty error body is no evidence for either verdict ' \
+                    "(stdout=#{out.inspect})"
+
+    refute_includes out, 'is waiting on us',
+                    'grading the error body as a read files exactly the false waiting-on-us ask ' \
+                    "this pins shut (stdout=#{out.inspect})"
+
+    refute_includes out, 'Dependabot is stuck on #7709',
+                    "a failed read files no ask in the other direction either (stdout=#{out.inspect})"
+  end
+
+  # ONE site 404ing with a nonempty error body while the other four still
+  # parse is the sharper shape: the pins are still genuinely mismatched, so
+  # a row that graded the bytes it did read — or checked only the first
+  # call's status — would read this head as an outstanding mismatch. Every
+  # site's exit status has to fail the read before anything is parsed.
+  def test_one_pin_site_failing_with_an_error_body_is_not_graded_as_a_mismatch
+    pr = dependabot_pr(number: 7710, title: 'Bump oven/bun from 1.4.1 to 1.4.2 in /',
+                       branch: 'dependabot/docker/oven/bun', age_days: 40, sha: SHA_DOCKER)
+    out, _err, status = run_row15(prs: [pr], pins: { 'mise.toml' => :error })
+
+    assert_predicate status, :success?,
+                     "row 15's command must run cleanly (status=#{status.inspect})"
+
+    unknown = out.lines.map(&:chomp).select { |line| line.include?('verdict unknown') }
+
+    assert_equal 1, unknown.size,
+                 "the single-site error-body read prints one verdict-unknown line; got #{out.lines.inspect}"
+
+    assert_includes unknown.first, '#7710',
+                    "the line must name the PR whose pin read failed; got #{unknown.first.inspect}"
+
+    refute_includes out, 'Unhealthy',
+                    'one failed read spoils the verification whatever the other four parsed ' \
+                    "(stdout=#{out.inspect})"
+
+    refute_includes out, 'is waiting on us',
+                    'the pins really are mismatched here, but the verification is over a failed ' \
+                    "read — a verdict built on it is the false waiting-on-us ask (stdout=#{out.inspect})"
+
+    refute_includes out, 'Dependabot is stuck on #7710',
+                    "a failed read files no ask (stdout=#{out.inspect})"
+  end
+
   # The pins are read AT THE HEAD (headRefOid — the only field a head SHA is
   # ever read from): a candidate the list carries no head for cannot anchor
   # the read, so it grades the same unreadable way instead of guessing.
@@ -2218,6 +2305,16 @@ class HealthBriefTest < Minitest::Test
 
     assert_includes step, 'suppresses the stuck verdict indefinitely',
                     'step 6 must name the defect the verification exists for'
+
+    assert_match(/exit status/i, step,
+                 'step 6 must say the failed read is graded off the exit status: gh api can emit ' \
+                 'a nonempty JSON error body and exit non-zero, which an empty-string guard alone ' \
+                 'reads as a successful read')
+
+    assert_includes step, 'nonempty JSON error body',
+                    'step 6 must name the shape that makes the exit status load-bearing — the ' \
+                    'error body is nonempty, so grading the captured bytes alone parses the error ' \
+                    'JSON and reads the failed read as a pin mismatch'
   end
 
   def test_pr_past_ecosystem_budget_and_red_is_reported_stuck
@@ -3780,8 +3877,10 @@ class HealthBriefTest < Minitest::Test
   # mutated cell. `pins:` drives what the row's five pin-site contents reads
   # return for a waiting-shaped candidate: :mismatch is the dependabot-only
   # head (the Dockerfile bumped, every other site still on BUN_OLD) and the
-  # default, since that is the state every candidate starts in; :agree is the
-  # head after the pin edits landed; a Hash sets sites individually, a String
+  #   default, since that is the state every candidate starts in; :agree is the
+  #   head after the pin edits landed; :error_body makes every pin read emit a
+  #   nonempty JSON error body and exit non-zero — the half-failed shape a real
+  #   404 or rate limit produces; a Hash sets sites individually, a String
   # version or nil to drop that site's fixture so its read fails; nil serves
   # nothing, so every pin read fails like a 4xx. The stub serves the pins
   # only at the head sha the fixture names — the candidate's own headRefOid.
@@ -3807,14 +3906,21 @@ class HealthBriefTest < Minitest::Test
     pin_fixture_versions(pins).each do |site, version|
       next if version.nil?
 
-      write_fixture(dir, "pin.#{site.tr('/', '_')}", pin_site_content(site, version))
+      if version == :error
+        write_fixture(dir, "pin.#{site.tr('/', '_')}.error", "#{PIN_ERROR_BODY}\n")
+      else
+        write_fixture(dir, "pin.#{site.tr('/', '_')}", pin_site_content(site, version))
+      end
     end
   end
 
   # :mismatch is the dependabot-only head — the Dockerfile bumped, every
   # other site still on BUN_OLD. :agree is the head after the pin edits
-  # landed. A Hash overrides single sites on top of BUN_OLD; a nil value
-  # drops that site's fixture so its read fails.
+  # landed. :error_body makes every site's read emit PIN_ERROR_BODY and exit
+  # non-zero — the shape a real 404 or rate limit leaves on stdout. A Hash
+  # overrides single sites on top of BUN_OLD; a nil value drops that site's
+  # fixture so its read fails silently, and an `:error` value makes that one
+  # read emit the error body and fail like a 4xx while the others serve.
   def pin_fixture_versions(pins)
     versions = { 'Dockerfile' => BUN_OLD, 'mise.toml' => BUN_OLD,
                  'docs/deployment.md' => BUN_OLD,
@@ -3825,6 +3931,8 @@ class HealthBriefTest < Minitest::Test
       versions.transform_values! { |_old| BUN_NEW }
     when :mismatch
       versions['Dockerfile'] = BUN_NEW
+    when :error_body
+      versions.transform_values! { :error }
     when Hash
       versions.merge!(pins)
     end
@@ -4141,7 +4249,11 @@ class HealthBriefTest < Minitest::Test
               # fixture carries, the candidate's own headRefOid — so a row
               # that graded some other tree (main, a base branch) fails
               # closed. A site with no fixture is a failed read, what a 4xx
-              # is for real gh.
+              # is for real gh. A `pin.<site>.error` marker makes that read
+              # print its error body on stdout and exit non-zero FIRST — the
+              # shape a real 404 or rate limit produces (bytes on stdout,
+              # then failure), which only a row that grades the exit status
+              # before the bytes reads as a failed read.
               ref="${arg##*\?ref=}"
               if [ ! -s "$fixdir/pin.head.sha" ] || [ "$ref" != "$(cat "$fixdir/pin.head.sha")" ]; then
                 printf 'stub gh api: pin sites are head-bound, refusing ref %s (head is %s)\n' \
@@ -4151,6 +4263,11 @@ class HealthBriefTest < Minitest::Test
               path="${arg%%\?*}"
               path="${path##*/contents/}"
               fixture="$fixdir/pin.${path//\//_}"
+              if [ -s "$fixture.error" ]; then
+                cat "$fixture.error"
+                printf 'stub gh api: the pin read for %s fails on purpose after emitting the error body (a 404 or a rate limit)\n' "$arg" >&2
+                exit 1
+              fi
               if [ ! -s "$fixture" ]; then
                 printf 'stub gh api: no pin fixture for %s (looked for %s)\n' "$arg" "$fixture" >&2
                 exit 1
