@@ -192,11 +192,30 @@ Deleting and re-cutting is only safe because **no gem was ever published** for
 that version — RubyGems forbids re-pushing a version, so once a `.gem` is live
 that number is burned and the next release must take the following one.
 
-The gem-less marker above (`gh release view` showing `author=developerz-ai[bot]`
-with zero assets) is how the scheduled release-due checkup recognises one of
+The gem-less marker above (`gh release view` showing **zero assets** — the author
+never decides it) is how the scheduled release-due checkup recognises one of
 these: it reads that as a gem-less release, not a real one.
 
-A release without a gem behind it is a gem-less release.
+### Release states
+
+A release without a gem behind it is a gem-less release. A GitHub Release for a
+`vX.Y.Z` tag can be in one of four states. The table below classifies each one
+and, in its own column, says what may be done to it. **Classification is not
+permission**: the first column says what the state IS, the second says what the
+runbook allows, and a state is never recoverable on the strength of its first
+column alone.
+
+| State | What it is | Destructive recovery |
+|---|---|---|
+| A Release exists, author `github-actions[bot]`, the `.gem` attached | A CI-published release — `release.yml` created the Release after RubyGems accepted the gem | **None.** A real release; leave it alone |
+| A Release exists, **zero assets**, any author | The gem-less stray release — the 2026-08-11 failure mode, or a Release whose upload never completed | **The only state the [gem-less runbook](#recovering-a-gem-less-release) may touch.** Maintainer-only, and only after the RubyGems probe below shows no gem was published |
+| A Release exists, the `.gem` attached, author `developerz-ai[bot]` (or a human) | A sanctioned manual / break-glass release — the [break-glass publish](#break-glass-manual-publish-maintainers-only) path | **None.** A real release; never delete it. Its author is not the defect |
+| No Release for the tag | **Unclassified** — one of three possibilities, not yet decided: (a) a `release.yml` preflight no-op (the version is already on RubyGems), (b) a break-glass publication (the gem went up by hand and the Release was never created), (c) a failure before the Release was created | **None until corroborated.** Probe RubyGems for the version and read the last `release.yml` run; only the zero-asset row above is ever recoverable |
+
+Two rules the table encodes, because both have been got wrong:
+
+- **Neither the author nor the mere absence of a Release establishes publication.** RubyGems is the authority: probe the v2 per-version endpoint below. A `developerz-ai[bot]`-authored Release that carries the `.gem` is a *sanctioned manual release*, not a defect — the author is never the trigger. And a tag with no Release at all does not mean nothing shipped: it is one of the three unclassified possibilities, and it must not be classified — or recovered — until the RubyGems probe and the last `release.yml` run corroborate which one it is.
+- **The asset count is the trigger.** A Release with zero assets is gem-less whichever author it carries; a Release with the `.gem` attached is real whichever author it carries.
 
 ### Verifying a release actually shipped
 
@@ -224,8 +243,8 @@ gem fetch wurk -v X.Y.Z                                          # artifact-cont
 gh release view vX.Y.Z --json author,assets                      # github-actions[bot], .gem attached
 ```
 
-An `author` of `developerz-ai[bot]` with zero assets means you are looking at a
-gem-less release, not a real one.
+Zero assets means you are looking at a gem-less release, not a real one; the
+author never decides it — a Release carrying the `.gem` is real, whoever wrote it.
 
 ### v1.8.0: stray tag reconciliation
 

@@ -5,8 +5,9 @@ require 'tempfile'
 require 'tmpdir'
 
 # Pure-Ruby CLI surface — option parsing, YAML loading, env detection,
-# validation, signal table. The actual `run` / `launch` paths fork the
-# process and are covered in test/integration/cli_boot_test.rb.
+# validation, signal table. The `run` boot path is covered in
+# test/integration/configure_server_boot_test.rb; the `launch`/swarm fork
+# path is covered in test/integration/swarm_cli_test.rb.
 class CLITest < Wurk::Test::UnitCase
   parallelize_me!
 
