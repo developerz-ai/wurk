@@ -212,6 +212,15 @@ pr:
   # 14 days and closed at 21 (a draft at 28), with the reason and the way to
   # reopen. One waiting on us, on a reviewer, or on CI is never timed.
   close_awaiting_author_after_days: 21
+  # OWNERSHIP — a dependabot docker bump that moves the oven/bun tag stays red on
+  # this repo's own toolchain-pins gate (test/unit/toolchain_pins_test.rb) until
+  # the matching pins land: the `bun-version:` inputs in
+  # .github/workflows/test.yml and .github/workflows/release.yml, `bun` in
+  # mise.toml, and the `oven/bun` FROM in docs/deployment.md
+  # (dependabot.yml:63-74). Dependabot cannot edit those files; the agent owns
+  # the pin edits and pushes them to the dependabot branch itself. Until they
+  # land the PR is waiting on us, never author inactivity — the sweep must not
+  # count it toward close_awaiting_author_after_days.
 
 review:
   enabled: true
