@@ -159,35 +159,67 @@ class ReleaseDocClaimsTest < Minitest::Test
                     '`gem list wurk --remote` as its predicate'
   end
 
-  # The row's `<version>` extraction is the half of the probe the endpoint
-  # assertions above cannot see: a grep class that matches no quoted string
-  # in lib/wurk/version.rb leaves $v empty, curl then fetches
-  # `.../versions/.json`, and the row can only ever print `verdict unknown`
-  # — while the row itself claims to read the version from that file. This
-  # exact defect shipped once (a `"…"`-only pattern against the
-  # single-quoted `VERSION = '1.8.1'`), so the extraction is run against the
-  # real file and must yield the constant's value.
-  def test_health_row_version_extraction_matches_version_rb_quoting
-    row = health_rubygems_row
+  # A lib/wurk/version.rb body carrying `version` — the shape the stubbed
+  # contents API serves for the version-carrying commit.
+  def version_rb_content(version)
+    <<~RUBY
+      # frozen_string_literal: true
 
-    # `\|` is markdown's escape for a literal pipe inside a table cell; the
-    # command must be unescaped before bash runs it, exactly as
-    # health_brief_test.rb's command_cell does.
-    out, = Open3.capture2('bash', '-c', row[/v=\$\((.*?)\)/, 1].gsub('\\|', '|'), chdir: ROOT)
-    version = File.read(File.join(ROOT, 'lib', 'wurk', 'version.rb'))[/VERSION = '([^']+)'/, 1]
+      module Wurk
+        VERSION = '#{version}'
+      end
+    RUBY
+  end
 
-    refute_nil version, 'lib/wurk/version.rb must define VERSION'
-    assert_equal version, out.chomp,
-                 "health.md's 'RubyGems serves' row must extract #{version} from " \
-                 'lib/wurk/version.rb — an extraction that matches no quoted string ' \
-                 'leaves $v empty and the probe can only ever grade `verdict unknown`'
+  # The row's `<version>` is read from lib/wurk/version.rb AT the
+  # version-carrying commit, never from the checkout's own copy of the file:
+  # a version bump that lands on main after the checkout must not let the
+  # row certify the newer release with the older gem's HTTP 200. The stub
+  # serves 9.9.9 at the commit and the curl stub answers 200 only for the
+  # version the URL asks for, so a row that slipped back to grepping the
+  # checkout's copy probes this checkout's own VERSION, gets a 404 (the real
+  # API's answer for an unserved version), and cannot print success.
+  def test_row10_probes_the_version_at_the_commit_not_the_checkouts_copy
+    out, err, status = run_row10(http_status: 200,
+                                 version_at_head: version_rb_content('9.9.9'))
+
+    assert_predicate status, :success?,
+                     "row 10's command must run cleanly (status=#{status.inspect}, " \
+                     "stdout=#{out.inspect}, stderr=#{err.inspect})"
+
+    assert_includes out, 'success: RubyGems serves 9.9.9',
+                    'the probe must ask for the version AT the version-carrying commit ' \
+                    '(9.9.9), not this checkout\'s own VERSION, which RubyGems need not ' \
+                    "serve; got stdout=#{out.inspect}"
+
+    refute_includes out, 'verdict unknown',
+                    'the commit carries a readable version, so the probe must find it'
+  end
+
+  # An unreadable version at the commit fails closed: without a version of
+  # record there is nothing to probe and nothing to grade.
+  def test_row10_version_unreadable_at_the_commit_fails_closed
+    out, err, _status = run_row10(http_status: 200, version_at_head: nil)
+
+    assert_includes out, 'verdict unknown',
+                    'the contents read failed, so there is no version of record to ' \
+                    "probe; got stdout=#{out.inspect}, stderr=#{err.inspect}"
+
+    refute_includes out, 'success',
+                    'no version, no probe, no green; ' \
+                    "got stdout=#{out.inspect}"
+
+    refute_includes out, 'Unhealthy',
+                    'an unreadable version is not evidence the release failed; ' \
+                    "got stdout=#{out.inspect}"
   end
 
   # ---- Row 10's verdicts ---------------------------------------------------
   #
-  # The extraction test above proves the row can NAME the version; these pin
-  # what it does with the probe's answer, by RUNNING the extracted command
-  # against a stubbed curl and gh. The run the 404 branch reads is the
+  # The version test above proves the row NAMES the version at the
+  # version-carrying commit; these pin what it does with the probe's answer,
+  # by RUNNING the extracted command against a stubbed curl and gh. The run
+  # the 404 branch reads is the
   # release.yml run BOUND to the version's own commit (the newest main commit
   # that touched lib/wurk/version.rb), not the newest run of any shape: a run
   # for another sha says nothing about this version, so the stub serves the
@@ -203,6 +235,11 @@ class ReleaseDocClaimsTest < Minitest::Test
   # -> Unhealthy; 404 beside an in-flight run -> in flight; 404 beside an
   # unreadable run list, a 5xx, or a transport failure -> verdict unknown.
 
+  # Runs against the checkout's REAL lib/wurk/version.rb served at the
+  # commit: the healthy verdict naming the constant's value is what keeps the
+  # extraction's grep class honest (a `"…"`-only pattern against the
+  # single-quoted VERSION once shipped and left $v empty — it now fails
+  # closed as `verdict unknown`, which the assertions below refuse).
   def test_row10_http_200_grades_success
     out, err, status = run_row10(http_status: 200)
 
@@ -370,8 +407,17 @@ class ReleaseDocClaimsTest < Minitest::Test
   # Runs the row's extracted command from the repo root with the stub curl and
   # gh first on PATH, so the probe answers from $WURK_TEST_HTTP_STATUS and the
   # release-run read from $WURK_TEST_RELEASE_RUN instead of the network.
-  def run_row10(http_status:, release_run: nil, gh_fail: false)
+  # version_at_head: :repo serves the checkout's own lib/wurk/version.rb at
+  # the version-carrying commit; a String serves those bytes; nil serves
+  # nothing, so the contents read fails the way a rate limit or a 4xx would.
+  def run_row10(http_status:, release_run: nil, gh_fail: false, version_at_head: :repo)
     command = row10_command
+    at_head =
+      case version_at_head
+      when :repo then File.read(File.join(ROOT, 'lib', 'wurk', 'version.rb'))
+      when String then version_at_head
+      else ''
+      end
     Dir.mktmpdir('wurk-row10-') do |tmpdir|
       bin_dir = File.join(tmpdir, 'bin')
       Dir.mkdir(bin_dir)
@@ -387,6 +433,7 @@ class ReleaseDocClaimsTest < Minitest::Test
         'WURK_TEST_HTTP_STATUS' => http_status.to_s,
         'WURK_TEST_RELEASE_RUN' => release_run.to_s,
         'WURK_TEST_VERSION_SHA' => SHA_VERSION_HEAD,
+        'WURK_TEST_VERSION_AT_HEAD' => at_head,
         'WURK_TEST_GH_FAIL' => gh_fail ? '1' : '0'
       }
 
@@ -410,12 +457,17 @@ class ReleaseDocClaimsTest < Minitest::Test
   # %{http_code} semantics, and -f turns a 4xx/5xx into exit 22 — so a
   # regression that re-adds `-f` fails these tests the way the defect shipped.
   # The HTTP status comes from $WURK_TEST_HTTP_STATUS; 000 simulates a
-  # transport failure (diagnostic on stderr, exit 7).
+  # transport failure (diagnostic on stderr, exit 7). The status is served
+  # only for the version carried by $WURK_TEST_VERSION_AT_HEAD — the file at
+  # the resolved commit; a URL for any other version is one RubyGems does
+  # not serve, so it answers 404 (with -f's exit 22), which keeps the
+  # version binding falsifiable.
   STUB_CURL = <<~'SHELL'
     #!/usr/bin/env bash
     status="$WURK_TEST_HTTP_STATUS"
     want_fail=""
     fmt=""
+    asked=""
     prev=""
     for arg in "$@"; do
       case "$prev" in
@@ -424,6 +476,10 @@ class ReleaseDocClaimsTest < Minitest::Test
       case "$arg" in
         -f) want_fail=1 ;;
         -w) ;;
+        */versions/*.json)
+          tail="${arg##*/versions/}"
+          asked="${tail%.json}"
+          ;;
       esac
       prev="$arg"
     done
@@ -431,6 +487,12 @@ class ReleaseDocClaimsTest < Minitest::Test
       printf 'curl: (7) Failed to connect to rubygems.org port 443\n' >&2
       if [ -n "$fmt" ]; then printf '000'; fi
       exit 7
+    fi
+    if [ -n "$asked" ] && [ -n "$WURK_TEST_VERSION_AT_HEAD" ]; then
+      served="$(printf '%s\n' "$WURK_TEST_VERSION_AT_HEAD" | grep -oE "["'][0-9][^"']*["']" | head -1 | tr -d "\"'")"
+      if [ -n "$served" ] && [ "$asked" != "$served" ]; then
+        status=404
+      fi
     fi
     if [ -n "$fmt" ]; then printf '%s' "$status"; fi
     case "$status" in
@@ -445,9 +507,11 @@ class ReleaseDocClaimsTest < Minitest::Test
     esac
   SHELL
 
-  # Stub gh: answers the two reads row 10 makes — the version's own commit
-  # (`gh api .../commits?path=lib/wurk/version.rb...`) and the release.yml
-  # run BOUND to it (`gh run list --workflow release.yml --commit <sha>
+  # Stub gh: answers the three reads row 10 makes — the version's own commit
+  # (`gh api .../commits?path=lib/wurk/version.rb...`), the file AT that
+  # commit (`gh api .../contents/lib/wurk/version.rb?ref=<sha>` — the
+  # version of record, not the checkout's own copy), and the release.yml
+  # run BOUND to it (`gh run list --workflow release.yml --commit <sha>`
   # ...`). The run list is served only for the version's own sha: a row that
   # dropped the --commit filter would be reading the newest run of any shape,
   # which says nothing about this version, so the stub refuses to answer it.
@@ -459,6 +523,14 @@ class ReleaseDocClaimsTest < Minitest::Test
     if [ "${1:-}" = "api" ]; then
       for arg in "$@"; do
         case "$arg" in
+          *"contents/lib/wurk/version.rb"*)
+            if [ -z "$WURK_TEST_VERSION_AT_HEAD" ]; then
+              printf 'stub gh api: no version-at-head payload for %s\n' "$arg" >&2
+              exit 1
+            fi
+            printf '%s\n' "$WURK_TEST_VERSION_AT_HEAD"
+            exit 0
+            ;;
           *lib/wurk/version.rb*)
             printf '[{"sha":"%s"}]\n' "$WURK_TEST_VERSION_SHA"
             exit 0

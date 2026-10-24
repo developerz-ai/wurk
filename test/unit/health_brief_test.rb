@@ -4,6 +4,7 @@ require 'minitest/autorun'
 require 'json'
 require 'open3'
 require 'tmpdir'
+require 'fileutils'
 
 # Gates the six graded rows of .dz/briefs/health.md (`main` is green, `the
 # last release published`, `the GitHub Release carries the gem`, `the demo
@@ -60,7 +61,11 @@ require 'tmpdir'
 #      that carries Wurk::VERSION — the newest `main` commit that touched
 #      lib/wurk/version.rb — so the newest run of any shape can never be
 #      graded as this version's release, and a run whose headSha is another
-#      sha is refused outright. The GitHub Release is graded on RELEASE.md's
+#      sha is refused outright. The version itself is read from that commit
+#      (the contents API at the sha), never from the checkout's own copy of
+#      the file: a version bump that lands on main after the checkout must
+#      not let the newer run certify itself with the older gem's HTTP 200.
+#      The GitHub Release is graded on RELEASE.md's
 #      gem-less discriminator: an author of `developerz-ai[bot]` OR zero
 #      assets is a gem-less Latest Release, and an unreadable lookup grades
 #      `verdict unknown` — never a green, never Unhealthy.
@@ -528,6 +533,76 @@ class HealthBriefTest < Minitest::Test
     refute_includes out, "success #{SHA_PUBLISHED}",
                     'an unreadable probe must not print a green; ' \
                     "got stdout=#{out.inspect}"
+  end
+
+  # The version a release row grades is read from the version-carrying
+  # commit, never from the checkout's own copy of lib/wurk/version.rb. The
+  # stale checkout here is the failure's exact shape: main bumped after the
+  # checkout, so the row binds the run to the NEWER version's commit while
+  # the working tree still carries 1.0.0. The fixtures put 9.9.9 at that
+  # commit and STUB_CURL answers 200 only for 9.9.9 — a row that grepped the
+  # checkout's copy would probe 1.0.0, get a 404, and print `Unhealthy:
+  # green but empty publication` instead of this green.
+  def test_release_row_grades_the_version_at_the_commit_not_the_checkouts_copy
+    out, err, status = run_row9(jobs: release_jobs_json(preflight: 'success', release: 'success', demo: 'success'),
+                                conclusion: 'success', sha: SHA_PUBLISHED,
+                                stale_version: '1.0.0')
+
+    assert_predicate status, :success?,
+                     "row 9's command must run cleanly (status=#{status.inspect}, " \
+                     "stdout=#{out.inspect}, stderr=#{err.inspect})"
+
+    assert_equal ["success #{SHA_PUBLISHED} #{URL_RELEASE}"], out.lines.map(&:chomp),
+                 'the green run is graded through the version AT THE COMMIT (9.9.9), ' \
+                 'not through the stale checkout\'s own VERSION, which RubyGems need ' \
+                 "not serve; got stdout=#{out.inspect}"
+  end
+
+  # The version read fails closed like every other read in the row: with the
+  # contents call unreadable there is no version to bind the run to, so
+  # nothing may be graded.
+  def test_version_unreadable_at_the_commit_fails_closed
+    out, err, _status = run_row9(jobs: release_jobs_json(preflight: 'success', release: 'success', demo: 'success'),
+                                 conclusion: 'success', sha: SHA_PUBLISHED,
+                                 version_at_head: nil)
+
+    refute_includes out, "success #{SHA_PUBLISHED}",
+                    'without a readable version at the commit the run cannot be ' \
+                    'certified as a publication; ' \
+                    "got stdout=#{out.inspect}, stderr=#{err.inspect}"
+
+    refute_includes out, 'Unhealthy',
+                    'an unreadable version is not evidence the release failed; ' \
+                    "got stdout=#{out.inspect}"
+
+    assert_includes out, 'verdict unknown',
+                    'the row must fail closed when the version at the commit cannot ' \
+                    "be read; got stdout=#{out.inspect}"
+  end
+
+  # Mutation guard for the stub itself: row 9's binding is the --commit
+  # filter, and a stub that answered a release.yml run list WITHOUT it would
+  # serve the fixture run to a row that dropped the filter — every verdict
+  # test above would keep passing with the binding gone. Strip the filter
+  # and run the mutated cell: the stub must refuse the request, and the row
+  # must fail closed instead of grading the run green.
+  def test_stub_refuses_a_release_run_list_without_the_commit_filter
+    cell = command_cell('the last release published')
+    mutated = cell.sub('--commit "$vsha" ', '')
+
+    refute_equal cell, mutated, 'the mutation must actually remove the --commit filter'
+
+    out, err, _status = run_row9(jobs: release_jobs_json(preflight: 'success', release: 'success', demo: 'success'),
+                                 conclusion: 'success', sha: SHA_PUBLISHED, cell: mutated)
+
+    refute_includes out, "success #{SHA_PUBLISHED}",
+                    'a release.yml run list without --commit is the newest run of any ' \
+                    'shape and must never be graded; ' \
+                    "got stdout=#{out.inspect}, stderr=#{err.inspect}"
+
+    assert_includes out, 'verdict unknown',
+                    'the row must fail closed when the stub refuses the unbound run ' \
+                    "list; got stdout=#{out.inspect}"
   end
 
   # RELEASE.md's gem-less discriminator: an author of developerz-ai[bot] OR
@@ -1690,19 +1765,64 @@ class HealthBriefTest < Minitest::Test
     end
   end
 
-  def run_row9(jobs:, conclusion:, sha:, jobs_fail: false, version_sha: nil, http_status: '200')
-    cell = command_cell('the last release published')
+  # A lib/wurk/version.rb body carrying `version` — the shape the stubbed
+  # contents API serves for the version-carrying commit, and the working
+  # tree the stale-checkout shape runs from.
+  def version_rb_content(version)
+    <<~RUBY
+      # frozen_string_literal: true
 
-    run_command(cell, jobs_fail: jobs_fail, http_status: http_status) do |fixtures|
-      write_fixture(fixtures, 'release.yml.dbid', '201')
-      write_fixture(fixtures, 'release.yml.sha', sha)
-      write_fixture(fixtures, 'release.yml.conclusion', conclusion)
-      write_fixture(fixtures, 'release.yml.url', URL_RELEASE)
-      # The commit that carries Wurk::VERSION: the release run the row is
-      # allowed to grade is the one bound to it.
-      write_fixture(fixtures, 'version-head.sha', version_sha || sha)
-      write_fixture(fixtures, 'dbid-201.jobs', jobs)
+      module Wurk
+        VERSION = '#{version}'
+      end
+    RUBY
+  end
+
+  # Row 9's command. The fixtures put version 9.9.9 AT the resolved commit
+  # (the stubbed contents API serves it) while this checkout carries its own
+  # older VERSION — deliberately, so every verdict assertion below only
+  # passes for a row that grades the commit's version. `version_at_head:
+  # nil` serves no fixture, so the contents read fails the way a rate limit
+  # or a 4xx would. `stale_version:` runs the command from a directory whose
+  # lib/wurk/version.rb carries that older version — the stale-checkout
+  # shape. `cell:` lets a test run a mutated cell.
+  def run_row9(jobs:, conclusion:, sha:, jobs_fail: false, version_sha: nil,
+               http_status: '200', version_at_head: version_rb_content('9.9.9'),
+               probe_version: '9.9.9', stale_version: nil, cell: nil)
+    cell ||= command_cell('the last release published')
+
+    if stale_version
+      Dir.mktmpdir('wurk-stale-checkout-') do |stale|
+        FileUtils.mkdir_p(File.join(stale, 'lib', 'wurk'))
+        File.write(File.join(stale, 'lib', 'wurk', 'version.rb'), version_rb_content(stale_version))
+
+        run_command(cell, jobs_fail: jobs_fail, http_status: http_status, chdir: stale) do |fixtures|
+          write_row9_fixtures(fixtures, conclusion: conclusion, jobs: jobs, sha: sha,
+                                        version_sha: version_sha, version_at_head: version_at_head,
+                                        probe_version: probe_version)
+        end
+      end
+    else
+      run_command(cell, jobs_fail: jobs_fail, http_status: http_status) do |fixtures|
+        write_row9_fixtures(fixtures, conclusion: conclusion, jobs: jobs, sha: sha,
+                                      version_sha: version_sha, version_at_head: version_at_head,
+                                      probe_version: probe_version)
+      end
     end
+  end
+
+  def write_row9_fixtures(fixtures, conclusion:, jobs:, sha:, version_sha:, version_at_head:, probe_version:)
+    write_fixture(fixtures, 'release.yml.dbid', '201')
+    write_fixture(fixtures, 'release.yml.sha', sha)
+    write_fixture(fixtures, 'release.yml.conclusion', conclusion)
+    write_fixture(fixtures, 'release.yml.url', URL_RELEASE)
+    # The commit that carries Wurk::VERSION: the release run the row is
+    # allowed to grade is the one bound to it.
+    write_fixture(fixtures, 'version-head.sha', version_sha || sha)
+    write_fixture(fixtures, 'dbid-201.jobs', jobs)
+    write_fixture(fixtures, 'version-at-head.rb', version_at_head) if version_at_head
+    # The one version STUB_CURL serves the configured HTTP status for.
+    write_fixture(fixtures, 'probe.version', probe_version)
   end
 
   # Row 11's command, run against a stub `gh` that serves the Latest
@@ -1764,7 +1884,7 @@ class HealthBriefTest < Minitest::Test
   # swallows the failing `gh api` inside a pipeline. Yields the fixtures dir
   # before the script runs so the caller can write the job lists the stub
   # serves, then returns Open3's [stdout, stderr, status].
-  def run_command(command, jobs_fail:, log_fail: false, http_status: '200')
+  def run_command(command, jobs_fail:, log_fail: false, http_status: '200', chdir: ROOT)
     Dir.mktmpdir('wurk-health-brief-') do |tmpdir|
       fixtures = File.join(tmpdir, 'fixtures')
       bin_dir = File.join(tmpdir, 'bin')
@@ -1791,10 +1911,10 @@ class HealthBriefTest < Minitest::Test
         'WURK_TEST_HTTP_STATUS' => http_status.to_s
       }
 
-      # The release rows read repo files (lib/wurk/version.rb), so the
-      # command runs from the checkout root, not from wherever the test
-      # process happens to sit.
-      Open3.capture3(env, script_path, chdir: ROOT)
+      # The extracted cells run from the checkout root, the way the brief's
+      # commands run in the checkup lane; the stale-checkout shape passes
+      # the directory that holds its own working tree.
+      Open3.capture3(env, script_path, chdir: chdir)
     end
   end
 
@@ -1875,6 +1995,17 @@ class HealthBriefTest < Minitest::Test
               esac
               prev="$arg"
             done
+            # The release rows are commit-bound: the only release.yml run a
+            # row may grade is the one for the version's own sha, requested
+            # with --commit. A release.yml request WITHOUT --commit is a row
+            # that dropped its binding - it would read the newest run of any
+            # shape - so the stub refuses it instead of serving the fixture.
+            # Rows 8, 12 and 13 list other workflows without --commit and are
+            # answered as usual.
+            if [ "$wf" = "release.yml" ] && [ -z "$commit" ]; then
+              printf 'stub gh run list: release.yml is commit-bound, refusing a request without --commit: %s\n' "$*" >&2
+              exit 1
+            fi
             # The run list is served only for the commit the caller asked
             # for, and only when that commit is the sha the version own
             # commit fixture names. A row that dropped the --commit filter
@@ -1930,6 +2061,18 @@ class HealthBriefTest < Minitest::Test
               cat "$fixdir/issues.json"
               exit 0
               ;;
+            *"contents/lib/wurk/version.rb"*)
+              # The version AT the resolved commit: `gh api -H "Accept:
+              # application/vnd.github.raw" .../contents/lib/wurk/version.rb?ref=<sha>`.
+              # This file — not the checkout's own copy — is what the release
+              # rows grade, so it is served from its own fixture.
+              if [ ! -s "$fixdir/version-at-head.rb" ]; then
+                printf 'stub gh api: no version-at-head.rb fixture for %s\n' "$arg" >&2
+                exit 1
+              fi
+              cat "$fixdir/version-at-head.rb"
+              exit 0
+              ;;
             *lib/wurk/version.rb*)
               # The version own commit: the newest main commit that touched
               # lib/wurk/version.rb. This is the sha a release run has to be
@@ -1983,13 +2126,28 @@ class HealthBriefTest < Minitest::Test
   # Stub curl: answers the RubyGems probe with the HTTP status the test
   # names, so the probe never reaches the network from a test. 000 simulates
   # a transport failure (no HTTP status at all), which the row grades
-  # `verdict unknown` rather than a colour.
+  # `verdict unknown` rather than a colour. The status is served ONLY for
+  # the version the probe.version fixture names - the version at the
+  # resolved commit; any other version is one RubyGems does not serve, and
+  # the stub answers 404 for it, the real API's answer for an unknown
+  # version. That is what makes the version binding falsifiable: a row that
+  # grades the commit's release run while probing the checkout's own copy of
+  # lib/wurk/version.rb probes a version RubyGems need not serve, and cannot
+  # grade green off it.
   STUB_CURL = <<~'SHELL'
     #!/usr/bin/env bash
+    fixdir="$WURK_TEST_FIXTURES"
     status="$WURK_TEST_HTTP_STATUS"
+    asked=""
     fmt=""
     prev=""
     for arg in "$@"; do
+      case "$arg" in
+        */versions/*.json)
+          tail="${arg##*/versions/}"
+          asked="${tail%.json}"
+          ;;
+      esac
       case "$prev" in
         -w) fmt="$arg" ;;
       esac
@@ -1999,6 +2157,18 @@ class HealthBriefTest < Minitest::Test
       printf 'curl: (7) Failed to connect to rubygems.org port 443\\n' >&2
       if [ -n "$fmt" ]; then printf '000'; fi
       exit 7
+    fi
+    if [ -z "$asked" ]; then
+      printf 'stub curl: no rubygems versions URL in: %s\n' "$*" >&2
+      exit 1
+    fi
+    if [ ! -s "$fixdir/probe.version" ]; then
+      printf 'stub curl: no probe.version fixture (asked for %s)\n' "$asked" >&2
+      exit 1
+    fi
+    if [ "$asked" != "$(cat "$fixdir/probe.version")" ]; then
+      if [ -n "$fmt" ]; then printf '404'; fi
+      exit 0
     fi
     if [ -n "$fmt" ]; then printf '%s' "$status"; fi
     exit 0
