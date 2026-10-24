@@ -5,14 +5,15 @@ require 'json'
 require 'open3'
 require 'tmpdir'
 
-# Gates the five graded rows of .dz/briefs/health.md (`main` is green, `the
-# last release published`, `the demo deployed`, `topology and ecosystem
-# lanes`, `Dependabot is not stuck`) the way release_due_brief_test.rb gates
+# Gates the six graded rows of .dz/briefs/health.md (`main` is green, `the
+# last release published`, `the demo deployed`, `the demo serves the checkout
+# version`, `topology and ecosystem lanes`, `Dependabot is not stuck`) the way
+# release_due_brief_test.rb gates
 # release-due.md: these commands run unattended on a schedule, and a verdict
-# they cannot actually establish must never be printed as a green one. Six
-# properties — the first five all pinned by RUNNING the extracted command
-# cells as bash against a PATH-stubbed `gh` (a substring match over the
-# brief's text would accept a guard that never fires), the sixth pinned
+# they cannot actually establish must never be printed as a green one. The
+# graded properties are pinned by RUNNING the extracted command cells as bash
+# against a PATH-stubbed `gh` or `curl` (a substring match over the brief's
+# text would accept a guard that never fires); the filing rule is pinned
 # byte-for-byte on the brief's text plus by running the extracted issues
 # lookup:
 #
@@ -35,9 +36,9 @@ require 'tmpdir'
 #      green. That read is scoped and exact, because a whole `build` job log is
 #      full of `sha-<7>`-shaped strings that are not tags: only the named step's
 #      lines count, and the match must be a whole token, or the 8-hex full-sha
-#      shape wins by prefix and names a tag nothing can ever select. The brief
-#      must also name the gap it cannot close: no allowlisted command reaches
-#      the demo's own `/wurk/api/meta`.
+#      shape wins by prefix and names a tag nothing can ever select. The
+#      served version is a separate row's job: it GETs the public demo's
+#      `/wurk/api/meta` and compares it with lib/wurk/version.rb.
 #   5. Row 13 reads the shape `gh` actually emits. `--json statusCheckRollup`
 #      is a LIST of CheckRun/StatusContext entries to roll up, never a state on
 #      the PR, so a fixture shaped `{"state": "FAILURE"}` agrees with a read the
@@ -634,27 +635,28 @@ class HealthBriefTest < Minitest::Test
                     "so the next checkup can re-run it; got stdout=#{out.inspect}"
   end
 
-  def test_demo_row_names_the_served_version_probe_gap
-    # The row can only prove an image was pushed. Whether the demo SERVES it
-    # lives in infra, and the obvious probe is out of reach: no allowlisted
-    # command can fetch wurk.demo.developerz.ai/wurk/api/meta. The brief has to
-    # say so, at the anchor where the served version is produced
-    # (api_controller.rb:53, `version: ::Wurk::VERSION`) — a green verdict read
-    # as "the demo is live" is the false green this block exists to prevent.
+  def test_demo_block_scopes_green_to_the_pushed_tag_and_names_the_served_probe
+    # Row 11 proves a pushed image tag, not a served version. The brief must
+    # say so and point at the separate served-version probe, whose endpoint is
+    # public and read-only.
     block = demo_block
 
     assert_includes block, 'api_controller.rb:53',
-                    'the served-version probe gap must name the anchor that ' \
+                    'the served-version prose must name the anchor that ' \
                     "produces the demo's `version:`; got #{block.inspect}"
 
     assert_includes block, 'wurk.demo.developerz.ai/wurk/api/meta',
-                    'the gap must name the endpoint that cannot be reached; got ' \
-                    "#{block.inspect}"
+                    'the served-version prose must name the endpoint the probe ' \
+                    "reads; got #{block.inspect}"
 
     assert_match(/not sufficient/,
                  block,
                  'the block must say green is necessary, not sufficient, or the ' \
                  "reader takes a pushed tag as proof the demo is live; got #{block.inspect}")
+
+    refute_match(/cannot reach/i, block,
+                 'the brief must no longer claim the served version cannot be ' \
+                 "probed; got #{block.inspect}")
 
     cited = File.readlines(API_CONTROLLER)
 
@@ -662,6 +664,97 @@ class HealthBriefTest < Minitest::Test
                     'version: ::Wurk::VERSION',
                     'api_controller.rb:53 must be where the demo reports its ' \
                     "version; it now reads #{cited[52].inspect}"
+  end
+
+  # ---- The demo served-version row -----------------------------------------
+  #
+  # This row answers a question row 11 cannot: what version does the PUBLIC,
+  # unauthenticated demo actually serve? The command is RUN here against a
+  # stubbed curl — a substring match over the brief would accept a guard that
+  # never fires. Three mutually exclusive verdicts are pinned:
+  #
+  #   * a matching version -> healthy, naming the version;
+  #   * a different version -> Unhealthy, naming served AND expected;
+  #   * an unreadable probe -> `verdict unknown`, never green.
+  def test_demo_served_version_match_grades_success
+    out, err, status = run_served_version_row(body: JSON.generate('version' => checkout_version))
+
+    assert_predicate status, :success?,
+                     "the served-version row must run cleanly (status=#{status.inspect}, " \
+                     "stdout=#{out.inspect}, stderr=#{err.inspect})"
+
+    assert_includes out, 'success',
+                    'a served version equal to the checkout must grade healthy; ' \
+                    "got stdout=#{out.inspect}"
+
+    assert_includes out, checkout_version,
+                    'the healthy verdict must name the version it found; ' \
+                    "got stdout=#{out.inspect}"
+
+    refute_includes out, 'Unhealthy', 'a matching version is not Unhealthy'
+    refute_includes out, 'verdict unknown', 'a readable match is a verdict'
+  end
+
+  def test_demo_served_version_mismatch_grades_unhealthy_naming_both_versions
+    served = '0.0.1'
+    out, err, status = run_served_version_row(body: JSON.generate('version' => served))
+
+    assert_predicate status, :success?,
+                     "the served-version row must run cleanly (status=#{status.inspect}, " \
+                     "stdout=#{out.inspect}, stderr=#{err.inspect})"
+
+    assert_includes out, 'Unhealthy',
+                    'a served version different from the checkout must grade Unhealthy; ' \
+                    "got stdout=#{out.inspect}"
+
+    assert_includes out, served,
+                    'the Unhealthy verdict must name the served version; ' \
+                    "got stdout=#{out.inspect}"
+
+    assert_includes out, checkout_version,
+                    'the Unhealthy verdict must name the expected version; ' \
+                    "got stdout=#{out.inspect}"
+
+    refute_includes out, 'success',
+                    "a mismatch is not a success; got stdout=#{out.inspect}"
+    refute_includes out, 'verdict unknown',
+                    'a readable mismatch is a verdict, not an unknown'
+  end
+
+  # The unreadable-probe cases. Every one of them must grade `verdict
+  # unknown` — never green, never a mismatch. The non-200 cases carry a BODY
+  # that would read as a perfectly good version: real `curl` without `-f`
+  # exits 0 and prints the body for a 404 too, so a row that graded the body
+  # alone would call these healthy. That is the shape the guard has to catch,
+  # and it is why the stub prints the body on every status.
+  def test_demo_served_version_unreadable_probe_grades_verdict_unknown
+    [
+      ['transport failure', nil, 7],
+      ['non-200 response', JSON.generate('version' => checkout_version), 404],
+      ['non-200 response carrying a stale version', JSON.generate('version' => '0.0.1'), 503],
+      ['non-JSON body', '<html>not found</html>', 200],
+      ['JSON without a version key', JSON.generate('read_only' => true), 200]
+    ].each do |label, body, status_code|
+      out, err, status = run_served_version_row(
+        body: body,
+        http_status: status_code,
+        curl_exit: body.nil? ? 7 : 0
+      )
+
+      assert_predicate status, :success?,
+                       "#{label}: the served-version row must run cleanly " \
+                       "(status=#{status.inspect}, stdout=#{out.inspect}, stderr=#{err.inspect})"
+
+      assert_includes out, 'verdict unknown',
+                      "#{label}: an unavailable or unreadable probe must grade " \
+                      "`verdict unknown`, never green; got stdout=#{out.inspect}"
+
+      refute_includes out, 'success',
+                      "#{label}: an unavailable probe is not healthy; got stdout=#{out.inspect}"
+      refute_includes out, 'Unhealthy',
+                      "#{label}: an unavailable probe is not evidence of a mismatch; " \
+                      "got stdout=#{out.inspect}"
+    end
   end
 
   # Row 13 grades dependabot PRs against per-ecosystem budgets. The brief
@@ -1487,6 +1580,12 @@ class HealthBriefTest < Minitest::Test
     File.write(File.join(dir, name), body)
   end
 
+  # The version this checkout expects — the same extraction shape the brief's
+  # command uses, so the test and the row compare the same value.
+  def checkout_version
+    File.read(File.join(ROOT, 'lib', 'wurk', 'version.rb'))[/VERSION = '([^']+)'/, 1]
+  end
+
   # The `Command` cell of the row whose Signal cell contains `signal`. Cells
   # are `|`-separated and the commands are full of shell pipes, so the cell is
   # cut at its backticks instead: the command opens at the last backtick before
@@ -1525,6 +1624,46 @@ class HealthBriefTest < Minitest::Test
     raise 'health.md carries no backticked issues?state=open lookup' if command.nil?
 
     command
+  end
+
+  # The demo served-version row's command cell. It calls `curl`, not `gh`, so
+  # it is located by its own signal text and the backticked command span.
+  def served_version_command
+    row = @text.lines.find { |line| line.include?('the demo serves the checkout version') }
+    raise 'health.md has no served-version row' if row.nil?
+
+    open_at = row.index('`')
+    close_at = row.index('`', open_at + 1)
+    raise 'the served-version row has no backticked Command cell' if open_at.nil? || close_at.nil?
+
+    row[(open_at + 1)...close_at].gsub('\\|', '|')
+  end
+
+  # Runs the served-version row as a stand-alone bash script with a stub curl
+  # first on PATH. The stub serves a JSON body and an HTTP status; `curl_exit`
+  # simulates a transport failure. No network access, no credentials.
+  def run_served_version_row(body:, http_status: 200, curl_exit: 0)
+    Dir.mktmpdir('wurk-health-served-version-') do |tmpdir|
+      bin_dir = File.join(tmpdir, 'bin')
+      Dir.mkdir(bin_dir)
+
+      curl_path = File.join(bin_dir, 'curl')
+      File.write(curl_path, STUB_CURL)
+      File.chmod(0o755, curl_path)
+
+      script_path = File.join(tmpdir, 'served-version.sh')
+      File.write(script_path, "#!/usr/bin/env bash\n#{served_version_command}\n")
+      File.chmod(0o755, script_path)
+
+      env = {
+        'PATH' => "#{bin_dir}:#{ENV.fetch('PATH', '')}",
+        'WURK_TEST_CURL_BODY' => body.to_s,
+        'WURK_TEST_CURL_STATUS' => http_status.to_s,
+        'WURK_TEST_CURL_EXIT' => curl_exit.to_s
+      }
+
+      Open3.capture3(env, script_path, chdir: ROOT)
+    end
   end
 
   def run_row8(jobs:, conclusion:, sha:, jobs_fail: false)
@@ -1763,4 +1902,47 @@ class HealthBriefTest < Minitest::Test
     esac
   SHELL
   private_constant :STUB_GH
+
+  # Stub curl for the demo served-version row. It serves the fixture body and
+  # status without touching the network, and it is faithful to the flags the
+  # row uses: `-w FORMAT` is honoured (with curl's own `\n` escape and the
+  # `%{http_code}` placeholder), and — because the row does NOT pass `-f` —
+  # the response body is printed for EVERY status, a 404 and a 503 included.
+  # That is the whole point of the stub: a real `curl -sS URL` exits 0 and
+  # prints the body whatever the status, so a row that graded the body alone
+  # would read a 404's JSON as a served version. A stub that withheld the body
+  # on a non-200 would let exactly that defect pass. `WURK_TEST_CURL_EXIT`
+  # simulates a transport failure, which is the only way real curl exits
+  # non-zero here.
+  #
+  # curl's status placeholder is assembled from two shell parts instead of
+  # being written out: RuboCop parses a Ruby heredoc's body as Ruby, and
+  # `Style/FormatStringToken` flags a `%{...}` template token inside any
+  # string literal it finds there — the shell script would have to carry a
+  # literal this Ruby can read, which is not what this stub is.
+  STUB_CURL = <<~'SHELL'
+    #!/usr/bin/env bash
+    status="${WURK_TEST_CURL_STATUS:-200}"
+    body="${WURK_TEST_CURL_BODY:-}"
+    fmt=""
+    prev=""
+    for arg in "$@"; do
+      case "$prev" in
+        -w) fmt="$arg" ;;
+      esac
+      prev="$arg"
+    done
+    if [ "${WURK_TEST_CURL_EXIT:-0}" != "0" ]; then
+      printf 'stub curl: transport failure on purpose\n' >&2
+      exit "${WURK_TEST_CURL_EXIT}"
+    fi
+    printf '%s' "$body"
+    if [ -n "$fmt" ]; then
+      placeholder='%'
+      placeholder="${placeholder}{http_code}"
+      printf '%b' "${fmt//"$placeholder"/$status}"
+    fi
+    exit 0
+  SHELL
+  private_constant :STUB_CURL
 end
