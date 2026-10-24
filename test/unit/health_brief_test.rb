@@ -1023,11 +1023,8 @@ class HealthBriefTest < Minitest::Test
   end
 
   def test_failed_preflight_is_not_read_as_a_no_op
-    # release.yml:55-60 refuses any ref but main with a FAILING step, not a
-    # job-level `if:` — a skipped preflight would leave a green run that
-    # published nothing and said nothing. `needs:` then skips release and demo,
-    # so the job list is the same all-skipped shape a proceed=false run
-    # produces; only preflight's own conclusion tells the two apart.
+    # A primary main push can fail preflight (for example on a probe error).
+    # Its skipped dependents do not make that failure a proceed=false no-op.
     out, err, status = run_row9(jobs: release_jobs_json(preflight: 'failure', release: 'skipped', demo: 'skipped'),
                                 conclusion: 'failure', sha: SHA_REFUSED)
 
@@ -1036,7 +1033,7 @@ class HealthBriefTest < Minitest::Test
                      "stdout=#{out.inspect}, stderr=#{err.inspect})"
 
     assert_equal ["failure #{SHA_REFUSED} #{URL_RELEASE}"], out.lines.map(&:chomp),
-                 'a refused release published nothing and was red; it grades on its ' \
+                 'a failed primary release published nothing and was red; it grades on its ' \
                  "own conclusion, not as a no-op (stdout=#{out.inspect})"
 
     refute_includes out, 'no-op',
@@ -1081,6 +1078,71 @@ class HealthBriefTest < Minitest::Test
   # version never reached RubyGems is the same false green from the other
   # side. The run the row grades is bound to the commit that carries
   # Wurk::VERSION, so a run for another sha is refused rather than graded.
+  def test_primary_release_selection_ignores_newer_dispatches_and_requires_both_filters
+    primary = { headBranch: 'main', event: 'push', headSha: SHA_PUBLISHED,
+                databaseId: 201, conclusion: 'success', url: URL_RELEASE }
+    rejected_url = "#{URL_RELEASE}0"
+    retry_url = "#{URL_RELEASE}1"
+    off_main_url = "#{URL_RELEASE}2"
+    off_main = primary.merge(headBranch: 'topic', event: 'workflow_dispatch',
+                             conclusion: 'failure', url: rejected_url)
+    main_retry = primary.merge(event: 'workflow_dispatch', conclusion: 'failure', url: retry_url)
+    # The off-main push isolates the branch filter from the event filter.
+    off_main_push = off_main.merge(event: 'push', url: off_main_url)
+    jobs = release_jobs_json(preflight: 'success', release: 'success', demo: 'success')
+    cell = command_cell('the last release published')
+    out, err, status = run_row9(jobs: jobs, conclusion: 'success', sha: SHA_PUBLISHED,
+                                runs: [off_main, main_retry, off_main_push, primary])
+
+    assert_predicate status, :success?, err
+    assert_equal "success #{SHA_PUBLISHED} #{URL_RELEASE}\n", out
+
+    ['--branch main ', '--event push '].each do |filter|
+      mutated = cell.sub(filter, '')
+
+      refute_equal cell, mutated
+      out, err, status = run_row9(jobs: jobs, conclusion: 'success', sha: SHA_PUBLISHED,
+                                  runs: [off_main, main_retry, off_main_push, primary], cell: mutated)
+
+      assert_predicate status, :success?, err
+      selected_url = filter == '--branch main ' ? off_main_url : retry_url
+
+      assert_equal "failure #{SHA_PUBLISHED} #{selected_url}\n", out,
+                   "removing #{filter} must expose the wrong run"
+    end
+  end
+
+  def test_rejected_dispatch_does_not_displace_an_inflight_or_absent_primary_release
+    primary = { headBranch: 'main', event: 'push', headSha: SHA_PUBLISHED,
+                databaseId: 201, conclusion: nil, url: URL_RELEASE }
+    rejected_url = "#{URL_RELEASE}0"
+    rejected = primary.merge(headBranch: 'topic', event: 'workflow_dispatch',
+                             conclusion: 'failure', url: rejected_url)
+    jobs = release_jobs_json(preflight: 'failure', release: 'skipped', demo: 'skipped')
+
+    [[rejected, primary], [rejected]].each do |runs|
+      out, err, status = run_row9(jobs: jobs, conclusion: 'failure', sha: SHA_PUBLISHED, runs: runs)
+
+      assert_predicate status, :success?, err
+      if runs.length == 2
+        assert_equal "in flight #{SHA_PUBLISHED} #{URL_RELEASE}\n", out
+      else
+        assert_includes out, 'verdict unknown'
+      end
+
+      refute_includes out, rejected_url
+      refute_includes out, 'failure'
+      refute_includes out, 'Unhealthy'
+    end
+  end
+
+  def test_brief_distinguishes_supported_main_retries_from_rejected_dispatches
+    assert_includes @text, 'Supported main-branch workflow_dispatch retries'
+    assert_includes @text, 'valid hand-dispatched retries, not primary main-push publication attempts'
+    assert_includes @text, 'off-main rejection alone must not trigger a publication alarm'
+    assert_includes @text, 'recovery remains filing-only'
+  end
+
   def test_release_run_for_another_sha_is_refused
     out, err, status = run_row9(jobs: release_jobs_json(preflight: 'success', release: 'success', demo: 'success'),
                                 conclusion: 'success', sha: SHA_PUBLISHED,
@@ -3302,7 +3364,7 @@ class HealthBriefTest < Minitest::Test
   # shape. `cell:` lets a test run a mutated cell.
   def run_row9(jobs:, conclusion:, sha:, jobs_fail: false, version_sha: nil,
                http_status: '200', version_at_head: version_rb_content('9.9.9'),
-               probe_version: '9.9.9', stale_version: nil, cell: nil, runs: :default)
+               probe_version: '9.9.9', stale_version: nil, cell: nil, runs: nil)
     cell ||= command_cell('the last release published')
 
     if stale_version
@@ -3314,7 +3376,7 @@ class HealthBriefTest < Minitest::Test
           write_runs_fixture(fixtures, 'release.yml', runs)
           write_row9_fixtures(fixtures, conclusion: conclusion, jobs: jobs, sha: sha,
                                         version_sha: version_sha, version_at_head: version_at_head,
-                                        probe_version: probe_version)
+                                        probe_version: probe_version, runs: runs)
         end
       end
     else
@@ -3322,12 +3384,16 @@ class HealthBriefTest < Minitest::Test
         write_runs_fixture(fixtures, 'release.yml', runs)
         write_row9_fixtures(fixtures, conclusion: conclusion, jobs: jobs, sha: sha,
                                       version_sha: version_sha, version_at_head: version_at_head,
-                                      probe_version: probe_version)
+                                      probe_version: probe_version, runs: runs)
       end
     end
   end
 
-  def write_row9_fixtures(fixtures, conclusion:, jobs:, sha:, version_sha:, version_at_head:, probe_version:)
+  def write_row9_fixtures(fixtures, conclusion:, jobs:, sha:, version_sha:, version_at_head:,
+                          probe_version:, runs: nil)
+    runs ||= [{ headBranch: 'main', event: 'push', headSha: sha,
+                databaseId: 201, conclusion: conclusion, url: URL_RELEASE }]
+    write_fixture(fixtures, 'release-runs.json', JSON.generate(runs))
     write_fixture(fixtures, 'release.yml.dbid', '201')
     write_fixture(fixtures, 'release.yml.sha', sha)
     write_fixture(fixtures, 'release.yml.conclusion', conclusion)
@@ -3541,6 +3607,8 @@ class HealthBriefTest < Minitest::Test
           *)
             wf=""
             commit=""
+            branch=""
+            event=""
             prev=""
             for arg in "$@"; do
               case "$arg" in
@@ -3548,6 +3616,8 @@ class HealthBriefTest < Minitest::Test
               esac
               case "$prev" in
                 --commit) commit="$arg" ;;
+                --branch) branch="$arg" ;;
+                --event) event="$arg" ;;
               esac
               prev="$arg"
             done
@@ -3572,6 +3642,14 @@ class HealthBriefTest < Minitest::Test
                 printf 'stub gh run list: no run for commit %s (the version own sha is %s)\n' "$commit" "$(cat "$fixdir/version-head.sha" 2>/dev/null)" >&2
                 exit 1
               fi
+            fi
+            if [ "$wf" = "release.yml" ]; then
+              jq --arg commit "$commit" --arg branch "$branch" --arg event "$event" \
+                '[.[] | select(($commit == "" or .headSha == $commit)
+                  and ($branch == "" or .headBranch == $branch)
+                  and ($event == "" or .event == $event))] | .[:1]' \
+                "$fixdir/release-runs.json"
+              exit 0
             fi
             if [ -z "$wf" ]; then
               printf 'stub gh run: no --workflow argument in: %s\n' "$*" >&2
