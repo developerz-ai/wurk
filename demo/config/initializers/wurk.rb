@@ -25,6 +25,20 @@ Sidekiq::Enterprise.unique!
 # Metrics stayed empty (see #100). The swarm forks AFTER this initializer, so the
 # children inherit the chain.
 if ENV["WURK_DEMO"] == "1"
+  require_relative "../../app/jobs/soak_job"
+  require_relative "../../app/workloads/demo_soak"
+  Wurk.configuration.client_middleware.add(SoakJob::Tagging)
+
+  if DemoSoak.enabled?
+    soak = DemoSoak.new(logger: Rails.logger)
+    Rails.application.config.after_initialize do
+      Thread.new do
+        Thread.current.name = "demo-soak"
+        soak.run
+      end
+    end
+  end
+
   unless Wurk.configuration.server_middleware.exists?(Wurk::Metrics::History)
     Wurk.configuration.server_middleware.add(Wurk::Metrics::History)
   end

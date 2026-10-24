@@ -18,11 +18,16 @@ if ENV["WURK_DEMO_REPORT_ERRORS"] == "1"
     config.background_worker_threads = 0
     config.before_send = lambda do |event, _hint|
       job_class = event.contexts.dig(Wurk::Sentry::JobContext::CONTEXT_KEY, "class")
-      intentional_failures.include?(job_class) ? nil : event
+      marked = event.tags["demo-soak"] == true || event.tags["demo-soak"] == "true"
+      (marked || intentional_failures.include?(job_class)) ? nil : event
     end
   end
 
   # Straight onto the chain for the same reason the History middleware is in
   # wurk.rb: the worker boots with server? == false, so configure_server never runs.
   Wurk::Sentry.install!(Wurk.configuration)
+  if ENV["WURK_DEMO"] == "1"
+    require_relative "../../app/jobs/soak_job"
+    Wurk.configuration.server_middleware.insert_after(Wurk::Sentry::Middleware, SoakJob::SentryTagging)
+  end
 end

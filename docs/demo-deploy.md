@@ -33,6 +33,89 @@ internet ──►│                                                     ├─
             └── worker (swarm) ──► drains jobs ───────────────────┘
 ```
 
+## Optional soak operation
+
+Soak is separate from the ordinary `DemoProducer` showcase described above.
+It is additive, never auto-enabled, and does not replace the hourly reset or
+change the showcase Retries target (4), Dead target (5), or the worker queue
+priority (`high`, `default`, `low`). See the [demo README](../demo/README.md#optional-soak-traffic)
+for the local command and cycle details.
+
+### Web-only opt-in
+
+To enable, add `WURK_DEMO_SOAK=1` to the **web Deployment only** and roll it out.
+Do not add it to shared image defaults, the worker Deployment, or reset jobs.
+The producer requires `WURK_DEMO=1`, `WURK_DISABLED=1`,
+`WURK_DEMO_PRODUCER=1`, and `WURK_DEMO_SOAK=1`, all exact string matches. Its
+process must be the nonforking web process: worker and passthrough roles and
+forked children cannot produce soak cycles. Workers only execute the jobs.
+The web entrypoint enables the ordinary showcase producer, not the soak opt-in.
+
+To disable, remove the soak flag from web and roll out web again. Values such
+as `0` or `true` do not enable it. Previously admitted work may still finish;
+disabling is not a purge. Leave the existing reset CronJob and showcase targets
+unchanged. With the flag absent, normal demo traffic and read-only dashboard
+behavior remain unchanged.
+
+### Work and safety envelope
+
+Each admitted cycle exercises recoverable retries, scheduling, cron, batches
+with complete/success callbacks, uniqueness, and bucket limiting. Soak failures
+are intended to recover, not permanently fill Dead. Cycle attempts are spaced
+by 60 seconds. Admission requires fewer than 40 queued/retry/scheduled entries
+in total and fewer than 10 tracked soak batches. A cycle submits one retry job,
+one job delayed by 2 seconds, two batch members, two identical unique-job
+submissions (30-second uniqueness), and three bucket-limited jobs, and registers
+the once-per-minute cron. The bucket allows two jobs per minute with at most
+two limiter reschedules. Bookkeeping, batch expiry/linger, and limiter retention
+use 300-second TTLs; later backlog checks prune expired tracked batch indexes.
+
+These limits live in [`demo_soak.rb`](../demo/app/workloads/demo_soak.rb) and
+[`soak_job.rb`](../demo/app/jobs/soak_job.rb). Treat these bounded budgets as
+part of capacity planning, not as permission to raise ordinary demo targets.
+
+Memory admission is fail-closed. Redis `used_memory` must be strictly below
+the smaller of 80% of configured `maxmemory` and 128 MiB (134,217,728 bytes).
+With `maxmemory=0`, the ceiling is 128 MiB; equality pauses admission too.
+The limits are
+producer admission guards, not changes to Redis eviction configuration. Failed
+or malformed memory probes pause new soak production just as memory pressure
+does. A later valid, below-threshold probe permits recovery once backlog is
+also within bounds. This pause does not stop workers draining existing jobs
+or disable `DemoProducer`; inspect Redis usage and backlog before increasing
+capacity, and do not bypass the guard to force traffic.
+
+The restart exercise is bounded to one registered worker via Wurk's process
+control, with replacement handled by swarm supervision. Reliable-fetch
+recovery must reclaim and execute the same tagged job/JID from the private
+list. Web does not send signals to foreign OS PIDs, restart every worker, or
+require access to the worker pod's PID namespace.
+
+Dashboard probes use a fixed local allowlist of **GET-only** Rails-mounted
+`/wurk/api` paths: stats, queues, retries, scheduled, dead, processes, batches,
+limiters, and cron. Requests go to `127.0.0.1` on `PORT` (default 3000), with
+1-second connect, read, and write timeouts and no redirect following. Only
+HTTP 200 with a JSON object or array passes; a failed probe prevents admission.
+They do not target the public host or configurable remote URLs, and
+`Wurk::Web.call` is not the dashboard API. No dashboard write endpoints or
+read-only exemptions are needed.
+
+### Marker and error suppression
+
+Every soak-generated job carries `tags` containing `demo-soak`: immediate,
+scheduled, cron, retried and batch members, plus generated callback wrappers.
+The marker is also passed in callback options. Demo-only middleware bridges
+that marker into the job's scoped Sentry tags, because Wurk's job-context
+allowlist does not forward payload tags. It applies only to the soak job
+family and wrappers targeting the soak callback, never all demo jobs.
+
+When `WURK_DEMO_REPORT_ERRORS=1`, the demo Sentry filter drops marked events.
+Unmarked errors retain the existing reporting policy, including suppression
+of the showcase's intentional `BrokenJob` and `FlakyWebhookJob` failures.
+Soak suppression does not disable error reporting globally. A memory-pressure
+pause or failed probe is an operational condition to inspect, not evidence
+that a cycle exercised all features successfully.
+
 ## Deploy: who can trigger it
 
 `.github/workflows/deploy-demo.yml` **builds and pushes the image** — it holds
