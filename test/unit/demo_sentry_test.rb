@@ -313,6 +313,47 @@ class DemoSentryTest < Wurk::Test::UnitCase
   end
 
   # =====================================================================
+  # Scrubbing: a request field that is not a Hash
+  #
+  # A raw request env arrives as a serialized cookie String where the SDK
+  # would put a Hash — no entries, so a per-entry scrub has nothing to work
+  # on. Nothing inside such a field can be vouched for, so a populated one
+  # fails closed: the event is dropped rather than sent with its session
+  # value intact.
+  # =====================================================================
+
+  def test_drops_an_event_whose_cookies_are_a_serialized_string
+    event = event_for('SendReceiptJob', cookies: 'session=abc123; theme=dark')
+
+    assert_nil DemoSentryPolicy.before_send(event)
+  end
+
+  def test_drops_an_event_whose_serialized_cookie_jar_has_nothing_sensitive
+    event = event_for('SendReceiptJob', cookies: 'theme=dark')
+
+    assert_nil DemoSentryPolicy.before_send(event)
+  end
+
+  def test_drops_an_event_whose_hash_request_holds_serialized_cookies
+    event = event_for('SendReceiptJob')
+    event.request = { 'headers' => { 'Accept' => 'application/json' }, 'cookies' => 'session=abc123' }
+
+    assert_nil DemoSentryPolicy.before_send(event)
+  end
+
+  def test_drops_an_event_whose_headers_are_a_serialized_string
+    event = event_for('SendReceiptJob', headers: 'Cookie: session=abc123')
+
+    assert_nil DemoSentryPolicy.before_send(event)
+  end
+
+  def test_keeps_an_event_with_an_empty_serialized_cookie_jar
+    event = event_for('SendReceiptJob', cookies: '')
+
+    assert_same event, DemoSentryPolicy.before_send(event)
+  end
+
+  # =====================================================================
   # Scrubbing: job arguments
   # =====================================================================
 

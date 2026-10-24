@@ -184,11 +184,14 @@ so those still report.
 **Scrubbed material.** Everything that is sent has its sensitive parts removed
 first. Request headers and cookies lose any entry whose name or whose value
 looks like a credential — an `Authorization` or `Cookie` header, an API key, a
-bearer token, a session cookie — while ordinary headers and cookies survive.
-Job arguments lose any argument whose key looks like a credential, or whose
-value looks like a credential or like personal data (an email address);
-ordinary arguments survive. An event that cannot be scrubbed is dropped rather
-than sent: the demo fails closed.
+bearer token, a session cookie — while ordinary headers and cookies survive. A
+header or cookie field in any shape but a Hash — a serialized cookie String,
+as a raw request env arrives — has no entries to scrub, so nothing in it can
+be vouched for: a populated one drops the whole event. Job arguments lose any
+argument whose key looks like a credential, or whose value looks like a
+credential or like personal data (an email address); ordinary arguments
+survive. An event that cannot be scrubbed is dropped rather than sent: the
+demo fails closed.
 
 ## ✅ Infra requirements
 

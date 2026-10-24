@@ -55,9 +55,11 @@ module DemoSentryPolicy
   # A VALUE that is personal data: an email address.
   PERSONAL_DATA = /[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}/
 
-  # A request field holds credential material and the scrubbed copy cannot be
-  # written back onto the request. before_send rescues it and drops the event:
-  # an event that cannot be scrubbed is not sent.
+  # A request field holds credential material that cannot be scrubbed: either
+  # the scrubbed copy cannot be written back onto the request, or the field
+  # arrived in a shape with no entries to scrub (a serialized cookie String).
+  # before_send rescues it and drops the event: an event that cannot be
+  # scrubbed is not sent.
   class UnscrubbedRequest < StandardError; end
 
   module_function
@@ -150,6 +152,8 @@ module DemoSentryPolicy
   # hash shape is read and written by key.
   def scrub_request_field(request, name)
     values = request.is_a?(::Hash) ? dig_key(request, name) : field(request, name)
+    raise UnscrubbedRequest, "cannot scrub #{name} held as #{values.class}" if inscrutable?(values)
+
     return unless values.is_a?(::Hash)
 
     scrubbed = scrub_map(values)
@@ -164,6 +168,17 @@ module DemoSentryPolicy
 
     request.public_send(:"#{name}=", value)
     value
+  end
+
+  # A header or cookie field in any shape but a Hash — a raw request env
+  # arrives as a serialized cookie String, "session=abc123; theme=dark" —
+  # has no entries, so a per-entry scrub has nothing to work on and nothing
+  # inside it can be vouched for. An empty one holds nothing and passes; a
+  # populated one fails closed.
+  def inscrutable?(values)
+    return false if values.nil? || values.is_a?(::Hash)
+
+    !values.to_s.strip.empty?
   end
 
   # Header and cookie maps share one rule: a credential-looking name or a
