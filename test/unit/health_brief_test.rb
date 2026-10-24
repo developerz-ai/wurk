@@ -11,12 +11,12 @@ require 'fileutils'
 # deployed`, `the demo serves the checkout version`, `topology and ecosystem
 # lanes`, `Dependabot is not stuck`) the way release_due_brief_test.rb gates
 # release-due.md: these commands run unattended on a schedule, and a verdict
-# they cannot actually establish must never be printed as a green one. Nine
+# they cannot actually establish must never be printed as a green one. Ten
 # properties — the first five all pinned by RUNNING the extracted command
 # cells as bash against a PATH-stubbed `gh` or `curl` (a substring match over
 # the brief's text would accept a guard that never fires), the sixth pinned
 # byte-for-byte on the brief's text plus by running the extracted issues
-# lookup, and the last three pinned by running the extracted cells as well:
+# lookup, and the last four pinned by running the extracted cells as well:
 #
 #   1. FAIL CLOSED. `gh api .../actions/runs/<id>/jobs` is the only thing
 #      between a `gh` error and a false green: with the read empty the row falls
@@ -113,6 +113,14 @@ require 'fileutils'
 #      `not readable`) from a readable empty one (`dependabot: 0 open PRs`).
 #      The stub serves both shapes from a per-workflow `<wf>.runs` fixture,
 #      so the four-fixture default path is unchanged.
+#  10. gh's EXIT STATUS is graded beside the list's shape. gh can fail after
+#      the array has already landed on stdout, so a perfectly good JSON array
+#      can be the bytes of a FAILED read — and the failed-read contract names
+#      the non-zero exit as its own unreadable shape. The rows capture the
+#      exit status out of the command substitution and test it BEFORE the
+#      array is inspected, so a half-failed read (the stub's `error-empty` and
+#      `error-run` shapes) grades `verdict unknown`: never the named `no run:`
+#      outcome, never a verdict graded off the emitted bytes.
 #
 # One more property, added with the run URLs: every job-list row must request
 # BOTH `url` and `databaseId` and print the URL on EVERY verdict — dup,
@@ -431,6 +439,78 @@ class HealthBriefTest < Minitest::Test
                     "(stdout=#{out.inspect})"
   end
 
+  # gh can fail AFTER the array has already landed on stdout, so the captured
+  # bytes can be a perfectly good JSON array from a read that failed — and the
+  # failed-read contract names the non-zero exit as its own unreadable shape.
+  # A row that inspected the array alone would print the named `no run:`
+  # outcome here: a readable-empty answer for a read that failed.
+  def test_row8_nonzero_exit_with_an_empty_json_stdout_is_not_a_no_run
+    out, err, status = run_row8(jobs: jobs_json(detect: 'success', gate: 'skipped'),
+                                conclusion: 'success', sha: SHA_GREEN, runs: 'error-empty')
+
+    assert_predicate status, :success?,
+                     "row 8's command must run cleanly (status=#{status.inspect}, " \
+                     "stdout=#{out.inspect}, stderr=#{err.inspect})"
+
+    lines = out.lines.map(&:chomp)
+
+    assert_equal 1, lines.size,
+                 "a half-failed read prints exactly one line; got #{lines.inspect}"
+
+    assert_includes lines.first, 'verdict unknown',
+                    'gh exited non-zero after emitting the list, so the read FAILED and the ' \
+                    "row must fail closed (stdout=#{out.inspect})"
+
+    assert_includes lines.first, 'not readable',
+                    'the line must say the list was not readable — the same finding as a read ' \
+                    "that wrote nothing (stdout=#{out.inspect})"
+
+    assert_includes lines.first, 'test.yml',
+                    'the line must name the workflow it could not read a run list for; ' \
+                    "got #{lines.first.inspect}"
+
+    refute_includes out, 'no run:',
+                    'a read that exited non-zero is not a readable empty list: printing the ' \
+                    'named `no run:` outcome for it contradicts the failed-read contract ' \
+                    "(stdout=#{out.inspect})"
+
+    refute_includes out, 'Unhealthy',
+                    "a failed read is not evidence that the run failed (stdout=#{out.inspect})"
+  end
+
+  # The same half-failed read with a run in it: the emitted bytes must not be
+  # graded, because their read failed — grading them would print the green the
+  # run's own exit status disowns.
+  def test_row8_nonzero_exit_with_a_json_array_grades_nothing
+    out, err, status = run_row8(jobs: jobs_json(detect: 'success', gate: 'success'),
+                                conclusion: 'success', sha: SHA_GREEN, runs: 'error-run')
+
+    assert_predicate status, :success?,
+                     "row 8's command must run cleanly (status=#{status.inspect}, " \
+                     "stdout=#{out.inspect}, stderr=#{err.inspect})"
+
+    lines = out.lines.map(&:chomp)
+
+    assert_equal 1, lines.size,
+                 "a half-failed read prints exactly one line; got #{lines.inspect}"
+
+    assert_includes lines.first, 'verdict unknown',
+                    'gh exited non-zero after emitting the run, so the read failed and nothing ' \
+                    "may be graded off its bytes (stdout=#{out.inspect})"
+
+    refute_match(/\bexecuted\b/, out,
+                 'the emitted run must not be classified: its read failed; ' \
+                 "(stdout=#{out.inspect})")
+
+    refute_includes out, "success #{SHA_GREEN}",
+                    'a half-failed read cannot certify a green main ' \
+                    "(stdout=#{out.inspect})"
+
+    refute_includes out, URL_TEST,
+                    'the emitted bytes are disowned by their failed read, so the url must not ' \
+                    "be printed as a verdict (stdout=#{out.inspect})"
+  end
+
   def test_row14_classifies_both_lanes_and_names_each_workflow
     # topology.yml reused a tree, ecosystem.yml ran its gated job: each line
     # must name its own lane, its own class and its own run, or the reader
@@ -655,6 +735,55 @@ class HealthBriefTest < Minitest::Test
 
     refute_includes out, ' success ',
                     'a run list the row could not read cannot certify a green lane; ' \
+                    "(stdout=#{out.inspect})"
+  end
+
+  # The half-failed read, per lane: a lane whose `gh run list` exits non-zero
+  # after emitting its list fails closed off the EXIT STATUS — the empty-`[]`
+  # lane must not print its named `no run:` outcome (topology.yml below), and
+  # the run-carrying lane must not grade the emitted run (ecosystem.yml below).
+  def test_row14_nonzero_exit_with_json_stdout_fails_closed_per_lane
+    out, err, status = run_row14(runs: { 'topology.yml' => 'error-empty',
+                                         'ecosystem.yml' => 'error-run' })
+
+    assert_predicate status, :success?,
+                     "row 14's command must run cleanly (status=#{status.inspect}, " \
+                     "stdout=#{out.inspect}, stderr=#{err.inspect})"
+
+    lines = out.lines.map(&:chomp)
+
+    assert_equal 2, lines.size,
+                 "row 14 prints one line per lane; got #{lines.inspect}"
+
+    topology = lines.find { |line| line.include?('topology.yml') }
+    ecosystem = lines.find { |line| line.include?('ecosystem.yml') }
+
+    refute_nil topology,
+               "the topology.yml lane must print its own line; got #{lines.inspect}"
+    refute_nil ecosystem,
+               "the ecosystem.yml lane must print its own line; got #{lines.inspect}"
+
+    assert_includes topology, 'verdict unknown',
+                    'gh exited non-zero after emitting the list, so the read FAILED and the ' \
+                    "lane must fail closed; got #{topology.inspect}"
+
+    assert_includes topology, 'not readable',
+                    "the line must say the list was not readable; got #{topology.inspect}"
+
+    refute_includes topology, 'no run:',
+                    'a read that exited non-zero is not a readable empty list; ' \
+                    "got #{topology.inspect}"
+
+    assert_includes ecosystem, 'verdict unknown',
+                    'gh exited non-zero after emitting the run, so nothing may be graded off ' \
+                    "its bytes; got #{ecosystem.inspect}"
+
+    refute_match(/\bexecuted\b/, ecosystem,
+                 'the emitted run must not be classified: its read failed; ' \
+                 "got #{ecosystem.inspect}")
+
+    refute_includes out, ' success ',
+                    'a half-failed read cannot certify a green lane; ' \
                     "(stdout=#{out.inspect})"
   end
 
@@ -1419,6 +1548,64 @@ class HealthBriefTest < Minitest::Test
     refute_includes out, "success #{SHA_DEMO}",
                     'a run list the row could not read cannot certify a green deploy; ' \
                     "(stdout=#{out.inspect})"
+  end
+
+  # The half-failed read for row 12: gh exits non-zero after emitting the list,
+  # so the row must grade the read `verdict unknown` off the EXIT STATUS — not
+  # print the named `no run:` outcome for the failed empty one, and not grade
+  # the emitted run's conclusion and tag.
+  def test_row12_nonzero_exit_with_json_stdout_is_unreadable_not_graded
+    out, err, status = run_row12(jobs: demo_jobs_json,
+                                 log: resolve_log(short: DEMO_TAG),
+                                 conclusion: 'success', sha: SHA_DEMO, runs: 'error-empty')
+
+    assert_predicate status, :success?,
+                     "row 12's command must run cleanly (status=#{status.inspect}, " \
+                     "stdout=#{out.inspect}, stderr=#{err.inspect})"
+
+    lines = out.lines.map(&:chomp)
+
+    assert_equal 1, lines.size,
+                 "a half-failed read prints exactly one line; got #{lines.inspect}"
+
+    assert_includes lines.first, 'verdict unknown',
+                    'gh exited non-zero after emitting the list, so the read FAILED and the ' \
+                    "row must fail closed (stdout=#{out.inspect})"
+
+    assert_includes lines.first, 'not readable',
+                    "the line must say the list was not readable (stdout=#{out.inspect})"
+
+    assert_includes lines.first, 'deploy-demo.yml',
+                    'the line must name the workflow it could not read a run list for; ' \
+                    "got #{lines.first.inspect}"
+
+    refute_includes out, 'no run:',
+                    'a read that exited non-zero is not a readable empty list: printing the ' \
+                    'named `no run:` outcome for it contradicts the failed-read contract ' \
+                    "(stdout=#{out.inspect})"
+
+    refute_includes out, 'Unhealthy',
+                    "a failed read is not evidence that the deploy failed (stdout=#{out.inspect})"
+
+    out, err, status = run_row12(jobs: demo_jobs_json,
+                                 log: resolve_log(short: DEMO_TAG),
+                                 conclusion: 'success', sha: SHA_DEMO, runs: 'error-run')
+
+    assert_predicate status, :success?,
+                     "row 12's command must run cleanly (status=#{status.inspect}, " \
+                     "stdout=#{out.inspect}, stderr=#{err.inspect})"
+
+    assert_includes out, 'verdict unknown',
+                    'gh exited non-zero after emitting the run, so nothing may be graded off ' \
+                    "its bytes (stdout=#{out.inspect})"
+
+    refute_includes out, "success #{SHA_DEMO}",
+                    'a half-failed read cannot certify a green deploy ' \
+                    "(stdout=#{out.inspect})"
+
+    refute_includes out, "tagged #{DEMO_TAG}",
+                    'the emitted bytes are disowned by their failed read, so the tag must not ' \
+                    "be read off them (stdout=#{out.inspect})"
   end
 
   def test_demo_block_scopes_green_to_the_pushed_tag_and_names_the_served_probe
@@ -2653,6 +2840,34 @@ class HealthBriefTest < Minitest::Test
     end
   end
 
+  # A failed run is graded on its own conclusion — rows 8, 9 and 14 print that
+  # conclusion beside the headSha and the run URL, with no `Unhealthy:` prefix
+  # on it — so a filing rule keyed to `Unhealthy:` lines alone never files the
+  # red-main, red-release or red-lane ask its own stable titles name. The rule
+  # must retain the failed-run conclusion line as a filing trigger beside the
+  # `Unhealthy:` verdicts, while every non-defect outcome stays unfiled.
+  def test_filing_rule_retains_a_failed_runs_conclusion_line
+    para = filing_paragraph.gsub(/\s+/, ' ')
+
+    assert_includes para, "a failed run's own conclusion line",
+                    'the filing paragraph must name the failed-run conclusion line as a filing ' \
+                    'trigger: rows 8, 9 and 14 grade a genuinely red run on its own conclusion, ' \
+                    'which prints no `Unhealthy:` prefix, so a rule keyed to `Unhealthy:` ' \
+                    'verdicts alone would file no ask for a red main, release or lane; ' \
+                    "got #{para.inspect}"
+
+    assert_includes para,
+                    'that line is the trigger `main is red`, `release did not publish`, ' \
+                    '`topology.yml is red` and `ecosystem.yml is red` are filed from',
+                    'the failed-run conclusion line must be tied to the red-run ask titles it is ' \
+                    "the trigger for; got #{para.inspect}"
+
+    assert_match(/Everything else a row can print[^.]*`no-op`[^.]*files nothing/, para,
+                 'the rule must keep every non-defect outcome unfiled beside the new trigger: ' \
+                 'a readable success, a reused tree, unreadable evidence and an in-flight or ' \
+                 "no-op run name no defect; got #{para.inspect}")
+  end
+
   def test_a_reused_tree_files_no_ask
     para = filing_paragraph
 
@@ -2953,7 +3168,9 @@ class HealthBriefTest < Minitest::Test
 
   # The run list's SHAPE for one workflow: :default writes no fixture (the
   # stub serves the four-fixture run), :empty serves a readable `[]`, :fail
-  # serves nothing at all (the rate-limit / 4xx shape).
+  # serves nothing at all (the rate-limit / 4xx shape), and 'error-empty' /
+  # 'error-run' emit their bytes and THEN exit non-zero — the half-failed
+  # read a row can only catch by checking gh's exit status.
   def write_runs_fixture(dir, workflow, mode)
     return if mode == :default
 
@@ -3048,8 +3265,9 @@ class HealthBriefTest < Minitest::Test
 
   # Row 8's command. `runs:` drives the run list's SHAPE: :default serves
   # the four-fixture run, :empty serves a readable `[]`, :fail serves nothing
-  # (the rate-limit / 4xx shape). The jobs list is written either way, so
-  # only the run-list read changes.
+  # (the rate-limit / 4xx shape), and 'error-empty'/'error-run' emit their
+  # bytes and then exit non-zero — the half-failed read. The jobs list is
+  # written either way, so only the run-list read changes.
   def run_row8(jobs:, conclusion:, sha:, jobs_fail: false, runs: :default)
     run_command(command_cell('`main` is green'), jobs_fail: jobs_fail) do |fixtures|
       write_runs_fixture(fixtures, 'test.yml', runs)
@@ -3138,7 +3356,8 @@ class HealthBriefTest < Minitest::Test
 
   # Row 12's command. `runs:` drives the run list's SHAPE: :default serves
   # the four-fixture run, :empty serves a readable `[]`, :fail serves nothing
-  # (the rate-limit / 4xx shape).
+  # (the rate-limit / 4xx shape), and 'error-empty'/'error-run' emit their
+  # bytes and then exit non-zero — the half-failed read.
   def run_row12(jobs:, log:, conclusion:, sha:, jobs_fail: false, log_fail: false, runs: :default)
     run_command(command_cell('the demo deployed'), jobs_fail: jobs_fail, log_fail: log_fail) do |fixtures|
       write_runs_fixture(fixtures, 'deploy-demo.yml', runs)
@@ -3152,9 +3371,10 @@ class HealthBriefTest < Minitest::Test
   end
 
   # Row 14's command — the same read over both lanes. `runs:` drives the run
-  # list's SHAPE per lane: a single mode (:default, :empty, :fail) applies to
-  # both, a Hash keyed by workflow sets each lane's shape on its own, so one
-  # lane can be empty while the other still grades. `topology:` and
+  # list's SHAPE per lane: a single mode (:default, :empty, :fail,
+  # 'error-empty', 'error-run') applies to both, a Hash keyed by workflow sets
+  # each lane's shape on its own, so one lane can be empty while the other
+  # still grades. `topology:` and
   # `ecosystem:` override a lane's job-list fixture.
   def run_row14(jobs_fail: false, runs: :default, topology: nil, ecosystem: nil)
     modes = runs.is_a?(Hash) ? runs : { 'topology.yml' => runs, 'ecosystem.yml' => runs }
@@ -3251,14 +3471,23 @@ class HealthBriefTest < Minitest::Test
   # `WURK_TEST_LOG_FAIL=1` is the analog for row 12's `gh run view --log`
   # read — jobs readable, log unreadable, and the row must still fail
   # closed as `verdict unknown <sha>`.
-  # The run list has two extra fixture-driven shapes, written per workflow
-  # as a `<wf>.runs` fixture holding `empty` or `fail`:
-  #   * `empty` serves `[]` — a READABLE list with no run in it. The row must
-  #     name that outcome (`no run: <workflow> has no matching run`) rather
-  #     than extract `null` fields off it.
+  # The run list has four extra fixture-driven shapes, written per workflow
+  # as a `<wf>.runs` fixture holding `empty`, `fail`, `error-empty` or
+  # `error-run`:
+  #   * `empty` serves `[]` and exits 0 — a READABLE list with no run in it.
+  #     The row must name that outcome (`no run: <workflow> has no matching
+  #     run`) rather than extract `null` fields off it.
   #   * `fail` writes nothing to stdout and exits non-zero — an UNREADABLE
   #     list (a rate limit, a 4xx). The row must say the list was not
   #     readable, never grade a colour off it.
+  #   * `error-empty` serves `[]` and THEN exits non-zero — a read that
+  #     failed after its bytes had already landed on stdout. Only a row that
+  #     captured and checked gh's exit status grades it `verdict unknown`;
+  #     one that inspected the array alone prints the named `no run:` outcome
+  #     for a read that failed.
+  #   * `error-run` serves the four-fixture list and THEN exits non-zero —
+  #     the same half-failed read with a run in it, which a row that ignored
+  #     the exit status would grade as a verdict the failed read never earned.
   # With no `<wf>.runs` fixture the four-fixture path below is unchanged.
   STUB_GH = <<~'SHELL'
     #!/usr/bin/env bash
@@ -3350,8 +3579,11 @@ class HealthBriefTest < Minitest::Test
             fi
             # The run-list SHAPE, before the fixtures below: `empty` serves a
             # readable list with no run in it, `fail` serves nothing at all
-            # (the rate-limit / 4xx shape). Both are per workflow, so row 14
-            # can have one lane empty and the other readable.
+            # (the rate-limit / 4xx shape), and `error-empty`/`error-run` emit
+            # their bytes and THEN fail — the half-failed read only a row that
+            # checks gh's exit status can catch. All are per workflow, so row
+            # 14 can mix shapes across its lanes.
+            runs_error=""
             if [ -s "$fixdir/$wf.runs" ]; then
               case "$(cat "$fixdir/$wf.runs")" in
                 empty) printf '[]\n'; exit 0 ;;
@@ -3359,6 +3591,12 @@ class HealthBriefTest < Minitest::Test
                   printf 'stub gh run list: the run list read fails on purpose (rate limited or 4xx)\n' >&2
                   exit 1
                   ;;
+                error-empty)
+                  printf '[]\n'
+                  printf 'stub gh run list: the read fails on purpose after emitting the empty list\n' >&2
+                  exit 1
+                  ;;
+                error-run) runs_error=1 ;;
               esac
             fi
             printf '[{"databaseId":%s,"headSha":"%s","conclusion":"%s","url":"%s"}]\n' \
@@ -3366,6 +3604,10 @@ class HealthBriefTest < Minitest::Test
               "$(cat "$fixdir/$wf.sha")" \
               "$(cat "$fixdir/$wf.conclusion")" \
               "$(if [ -s "$fixdir/$wf.url" ]; then cat "$fixdir/$wf.url"; else printf 'https://github.com/wurk-owner/wurk/actions/runs/%s' "$(cat "$fixdir/$wf.dbid")"; fi)"
+            if [ -n "$runs_error" ]; then
+              printf 'stub gh run list: the read fails on purpose after emitting the list\n' >&2
+              exit 1
+            fi
             ;;
         esac
         ;;
