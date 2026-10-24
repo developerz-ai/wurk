@@ -29,4 +29,4 @@ A dummy app gives us a real Rails::Application instance with a real boot lifecyc
 
 - The dummy app is gitignored from the gem's file list — it doesn't ship to RubyGems.
 - The dummy's Gemfile points to the parent gem via `gem "wurk", path: "../.."`.
-- CI runs one Rails, the newest; there is no version matrix.
+- CI runs the dummy app on the newest Rails (the required suite) and on the oldest supported Rails series (7.1) via the root Gemfile's `RAILS_VERSION` pin in the non-required `compat` leg.

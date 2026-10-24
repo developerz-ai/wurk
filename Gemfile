@@ -43,6 +43,11 @@ group :test do
   rails_version = ENV.fetch('RAILS_VERSION', nil)
   gem 'rack-test'
   gem 'rails', rails_version ? "~> #{rails_version}.0" : '>= 7.1'
+  # ActiveSupport 7.1's JSON encoder passes `quirks_mode:` to JSON.generate,
+  # and json 3 (the default gem on Ruby 4.0) removed that keyword, so the 7.1
+  # compat leg died with "unknown keyword: quirks_mode" in every `render json:`
+  # (#618). Cap json at 2.x for that leg only; json 2.x still runs on 4.0.
+  gem 'json', '< 3' if rails_version.to_s.start_with?('7.1')
   gem 'sqlite3'
   # Exercises Wurk::IterableJob::CsvEnumerator. Not a runtime dep — the gem
   # only touches CSV when the host has loaded it (`defined?(::CSV)` guard).
