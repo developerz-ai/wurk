@@ -95,9 +95,11 @@ the same module; `ClientMiddleware = ServerMiddleware`) gives you:
 | `redis(&)` | `config.redis(&)` — checkout + yield a connection |
 | `logger` | `config.logger` |
 
-`config=` is assigned by the chain at instantiation time
-(`Entry#make_new(config)`), only if the instance responds to it. Including the
-mixin is the supported way to get it.
+`config=` is assigned by the chain at instantiation time (`Entry#make_new`),
+only if the instance responds to it. The chain captures the config (or
+capsule) at registration and `copy_for` rebinds duplicated entries to the
+capsule, so middleware always resolve the capsule they run under. Including
+the mixin is the supported way to get it.
 
 ---
 
