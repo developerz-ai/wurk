@@ -741,6 +741,41 @@ CAS release, rather than waiting out the TTL.
 
 **Anchor:** `lib/wurk/metrics/histogram.rb`, `lib/wurk/profiler.rb`, `lib/wurk/profile_set.rb`, `lib/wurk/job_set.rb`.
 
+## Stats HTTP routes and payload parity are unsupported
+
+**Wurk:** the engine exposes `GET /api/stats` and `GET /api/queues`, relative
+ to the host application's mount (`config/routes.rb:6-10`).
+`ApiController#stats` renders `Serializers.stats_payload(Wurk::Stats.new)`
+(`app/controllers/wurk/api_controller.rb:60-62`): a flat object with
+`processed`, `failed`, `expired`, `enqueued`, `busy`, `scheduled`, `retries`,
+`dead`, `processes`, `latency`, and `queues`. Each queue summary contains
+`name`, `size`, `latency`, and `paused`
+(`app/controllers/wurk/api/serializers.rb:17-35`, `stats_payload` and
+`queue_summary`). `GET /api/queues` returns an array of those same summaries
+(`app/controllers/wurk/api_controller.rb:64-66`). Route and payload parity
+with the three stats routes below are unsupported: the flat stats response
+has no `sidekiq`/`redis`/`server_utc_time` envelope. HTML requests to those
+paths can reach the SPA catch-all (`config/routes.rb:126-134`), which is not
+the specified redirect or JSON handler.
+
+**Spec:** free [§25.4](../target/sidekiq-free.md#254-routes) specifies
+`GET /dashboard/stats` → 302 to `/stats`, `GET /stats` → JSON stats with
+`sidekiq`, `redis`, and `server_utc_time`, and `GET /stats/queues` → JSON
+queue sizes (`docs/target/sidekiq-free.md:1451-1453`).
+
+**Why:** the current endpoints serve the SolidJS SPA; `stats_payload` is
+shared by its landing page and SSE feed and renames canonical stats accessors
+for that dashboard's wire shape
+(`app/controllers/wurk/api/serializers.rb:12-16`). This explains the current
+SPA-specific surface, not compatibility with Sidekiq HTTP clients: callers
+expecting the spec's routes, redirect, or payload cannot use it as a drop-in
+replacement. This entry records that unsupported contract without treating
+the gap as proven safe or claiming the three spec rows are implemented.
+
+**Anchor:** free §25.4; `config/routes.rb:6-10,126-134`;
+`app/controllers/wurk/api_controller.rb:60-66` (`stats`, `queues`);
+`app/controllers/wurk/api/serializers.rb:12-35` (`stats_payload`, `queue_summary`).
+
 ## Dashboard and web extension differences
 
 **Wurk:** `GET /profiles/:key` requires same-origin, a typed URL, or a same-host Referer (Sidekiq answers any GET); extension `redirect_to` inside the SPA falls back to the extension root for off-site targets (the SPA loads extensions with `fetch`, which cannot follow cross-origin redirects); `reload_page` inside the SPA goes to the extension index; `Sidekiq::Web.views` is an accepted, ignored array; read-only mode answers TRACE with 403 on the standalone mount; the health server closes connections past 16 concurrent unanswered.
