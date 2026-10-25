@@ -650,6 +650,63 @@ CAS release, rather than waiting out the TTL.
 
 **Anchor:** `app/controllers/wurk/api_controller.rb`, `lib/wurk/job_set.rb`.
 
+## Dashboard job-set HTTP request shapes differ from Sidekiq Web
+
+**Status:** recorded compatibility gap, not an approved safe or deliberate
+exception. This entry concerns request paths and parameters, independently of
+the bulk-failure response behavior above; it changes no runtime behavior.
+
+**Spec versus Wurk:** all rows below are POSTs, relative to the Web/engine
+mount. Spec routes come from [free §25.4](../target/sidekiq-free.md#254-routes);
+Wurk routes add `/api` and rename `morgue` to `dead`.
+
+| Operation | Spec route and explicit detail | Wurk route and supported commands |
+|---|---|---|
+| Retries bulk | `/retries`: `key[]`, params `retry`/`delete`/`kill` | `/api/retries`: `retry`, `delete`, `kill` |
+| Retries single | `/retries/:key`: single action; parameters unspecified | `/api/retries/:key`: `retry`, `delete`, `kill` |
+| Retries all | `/retries/all/delete`, `/retries/all/retry`, `/retries/all/kill` | `/api/retries/all/:cmd`: `delete`, `retry`, `kill` |
+| Scheduled bulk | `/scheduled`: `delete`/`add_to_queue`; parameter names unspecified | `/api/scheduled`: `delete`, `add_to_queue` |
+| Scheduled single | `/scheduled/:key`: single; parameters unspecified | `/api/scheduled/:key`: `delete`, `add_to_queue` |
+| Scheduled all | `/scheduled/all/delete`, `/scheduled/all/add_to_queue` | `/api/scheduled/all/:cmd`: `delete`, `add_to_queue` |
+| Morgue/dead bulk | `/morgue`: bulk action; commands and parameters unspecified | `/api/dead`: `retry`, `delete` |
+| Morgue/dead single | `/morgue/:key`: single action; commands and parameters unspecified | `/api/dead/:key`: `retry`, `delete` |
+| Morgue/dead all | `/morgue/all/delete`, `/morgue/all/retry` | `/api/dead/all/:cmd`: `delete`, `retry` |
+
+**Wurk request bodies:** the SPA sends bulk `{ "keys": [key, ...], "cmd":
+command }` and single `{ "cmd": command }` as JSON with
+`Content-Type: application/json`. All-set requests put the command in the path
+and send no body. The controller reads `params[:cmd]` and, for bulk,
+`Array(params[:keys])`; it does not translate singular `key[]` or action-named
+parameters into that contract. A retries bulk request carrying only the spec's
+`key[]` plus a `retry`, `delete`, or `kill` parameter therefore has no recognized
+`cmd` and reaches the `400 { error: 'unknown action' }` branch, even if sent to
+Wurk's `/api/retries` path. Changing the path alone is not sufficient.
+
+**Key delimiters and evidence limits:** Wurk's shared frontend key builder uses
+`"<score>|<jid>"` for all three sets and URL-encodes it for single requests.
+The spec explicitly gives `"<score>-<jid>"` for the retry-detail GET row
+([line 1431](../target/sidekiq-free.md#L1431)); it does not explicitly define
+that delimiter for every other set or POST row. The reported upstream pattern
+of `key[]` plus action-named parameters is explicit in the spec only for
+retries bulk ([line 1432](../target/sidekiq-free.md#L1432)). The scheduled bulk
+row lists actions, not their parameter encoding, and the morgue bulk and
+single-action rows do not specify request shapes. Extending the reported
+pattern to those rows is not a verified upstream fact here: no stock upstream
+implementation was inspected and no compatibility test was executed for this
+entry. The JSON bodies described above are verified Wurk client behavior, not
+a claim that its controller accepts only JSON or that the spec requires a
+particular content type.
+
+**Anchor:** [Wurk route scope](../../config/routes.rb#L7) and
+[job-set routes](../../config/routes.rb#L39-L50),
+[command whitelists](../../app/controllers/wurk/api_controller.rb#L40-L45),
+[single/all dispatch](../../app/controllers/wurk/api_controller.rb#L110-L148),
+[bulk parameter lookup and rejection](../../app/controllers/wurk/api_controller.rb#L373-L397),
+[frontend key builder](../../frontend/src/hooks/useJobSetActions.ts#L11-L16),
+[single/bulk/all requests](../../frontend/src/hooks/useJobSetActions.ts#L40-L56),
+[JSON encoding](../../frontend/src/http.ts#L33-L41), and
+[spec retries/scheduled/morgue rows](../target/sidekiq-free.md#L1430-L1448).
+
 ## A lost-reply Idempotency-Key stays pending until its TTL
 
 **Wurk:** the REST API releases an `Idempotency-Key` only when the error proves the write never applied; an unknown outcome (lost reply) keeps the key pending until its TTL (1h default), so a client retry gets 409 "in progress" rather than a second enqueue.
