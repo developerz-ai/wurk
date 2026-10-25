@@ -49,6 +49,35 @@ class ClientPushParityTest < Wurk::Test::UnitCase
     end
   end
 
+  class RouteByFirstArgument
+    def call(_klass, job, _queue, _pool)
+      job['queue'] = job['args'].first
+      yield
+    end
+  end
+
+  # Only the transport boundary is faulted: forwarded pipelines execute against
+  # real Redis. Raising before yielding prevents any command in that pipeline
+  # from being sent; this does not model an ambiguous lost reply.
+  class PipelineTransport
+    def initialize(connection, fail_before: nil)
+      @connection = connection
+      @fail_before = fail_before
+      @pipelines = 0
+    end
+
+    def with
+      yield self
+    end
+
+    def pipelined(&)
+      @pipelines += 1
+      raise RedisClient::ConnectionError, 'pipeline not sent' if @pipelines == @fail_before
+
+      @connection.pipelined(&)
+    end
+  end
+
   def setup
     super
     @queue = "cpush-#{Process.pid}-#{object_id}"
@@ -303,6 +332,67 @@ class ClientPushParityTest < Wurk::Test::UnitCase
     end
   end
 
+  def test_push_bulk_registers_exactly_the_routed_queues_and_delivers_each_payload
+    queues = ["#{@queue}-a", "#{@queue}-b"]
+    existing_queue = "#{@queue}-existing"
+    redis('SADD', 'queues', existing_queue)
+    args = [[queues[0], 1], [queues[1], 2], [queues[0], 3], [queues[1], 4]]
+    chain = Sidekiq::Middleware::Chain.new.tap { |middleware| middleware.add RouteByFirstArgument }
+    connection = RedisClient.config(url: Wurk::Test.redis_url).new_client
+    client = Sidekiq::Client.new(pool: PipelineTransport.new(connection), chain: chain)
+
+    jids = client.push_bulk('class' => PlainJob, 'args' => args, 'queue' => @queue)
+
+    assert_equal 4, jids.uniq.size
+    assert_equal [*queues, existing_queue].sort, redis('SMEMBERS', 'queues').sort
+    assert_equal 0, redis('EXISTS', "queue:#{@queue}")
+    queues.each_with_index do |queue, index|
+      payloads = routed_payloads(queue)
+
+      assert_equal(args.values_at(index, index + 2), payloads.map { |payload| payload['args'] })
+      assert_equal(jids.values_at(index, index + 2), payloads.map { |payload| payload['jid'] })
+      assert_routed_payload_shape(payloads, queue)
+    end
+  ensure
+    connection&.close
+  end
+
+  # Intentional exception to free §7.1's upfront all-queue registration:
+  # docs/idea/parity-divergences.md. Only a provably unsent group is absent;
+  # neither this oracle nor pipelining promises atomic SADD + LPUSH execution.
+  def test_push_bulk_failure_before_second_group_leaves_only_first_queue_registered
+    first_queue = "#{@queue}-first"
+    unsent_queue = "#{@queue}-unsent"
+    existing_queue = "#{@queue}-existing"
+    redis('SADD', 'queues', existing_queue)
+
+    assert_equal 0, redis('SISMEMBER', 'queues', unsent_queue)
+    assert_equal 0, redis('EXISTS', "queue:#{unsent_queue}")
+
+    args = [[first_queue, 1], [unsent_queue, 2], [first_queue, 3], [unsent_queue, 4]]
+    chain = Sidekiq::Middleware::Chain.new.tap { |middleware| middleware.add RouteByFirstArgument }
+    connection = RedisClient.config(url: Wurk::Test.redis_url).new_client
+    client = Sidekiq::Client.new(pool: PipelineTransport.new(connection, fail_before: 2), chain: chain)
+
+    error = assert_raises(RedisClient::ConnectionError) do
+      client.push_bulk('class' => PlainJob, 'args' => args, 'queue' => @queue)
+    end
+
+    assert_equal 'pipeline not sent', error.message
+    assert_equal [first_queue, existing_queue].sort, redis('SMEMBERS', 'queues').sort
+    assert_equal 0, redis('SISMEMBER', 'queues', unsent_queue)
+    payloads = routed_payloads(first_queue)
+
+    assert_equal(args.values_at(0, 2), payloads.map { |payload| payload['args'] })
+    assert_equal 2, payloads.map { |payload| payload['jid'] }.uniq.size
+    assert_routed_payload_shape(payloads, first_queue)
+    assert_empty routed_payloads(unsent_queue)
+    assert_equal 0, redis('EXISTS', "queue:#{unsent_queue}")
+    assert_equal 0, redis('EXISTS', "queue:#{@queue}")
+  ensure
+    connection&.close
+  end
+
   def test_push_bulk_slices_by_batch_size
     jids = Sidekiq::Client.push_bulk('class' => PlainJob, 'args' => Array.new(7) { |i| [i] },
                                      'queue' => @queue, 'batch_size' => 3)
@@ -535,6 +625,22 @@ class ClientPushParityTest < Wurk::Test::UnitCase
       return score.to_f if Wurk.load_json(member)['jid'] == jid
     end
     nil
+  end
+
+  def routed_payloads(queue)
+    redis('LRANGE', "queue:#{queue}", 0, -1).reverse.map { |entry| JSON.parse(entry) }
+  end
+
+  def assert_routed_payload_shape(payloads, queue)
+    payloads.each do |payload|
+      assert_equal PLAIN_KEYS, payload.keys.sort
+      assert_equal PlainJob.name, payload['class']
+      assert_equal queue, payload['queue']
+      assert_equal true, payload['retry'] # rubocop:disable Minitest/AssertTruthy
+      assert_match JID, payload['jid']
+      assert_kind_of Integer, payload['created_at']
+      assert_kind_of Integer, payload['enqueued_at']
+    end
   end
 
   def halting_chain
