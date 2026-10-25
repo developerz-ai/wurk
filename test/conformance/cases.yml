@@ -173,7 +173,7 @@
 - id: batch.cancel
   area: batches
   behavior: Invalidated jobs count as success for batch completion.
-  source: docs/target/sidekiq-pro.md#L500
+  source: docs/target/sidekiq-pro.md#L512
   oracles: [BatchParityTest#test_jobs_cancelled_by_invalidate_all_count_as_success]
 - id: batch.callback-retry
   area: batches
@@ -289,7 +289,7 @@
 - id: fetch.poison
   area: reliable-fetch
   behavior: Three orphan recoveries requeue and the fourth orphaning kills the job.
-  source: docs/target/sidekiq-pro.md#L503
+  source: docs/target/sidekiq-pro.md#L515
   oracles: [ReliableFetchParityTest#test_poison_pill_allows_three_recoveries_and_kills_on_the_fourth_orphaning]
 - id: fetch.deferred-ack
   area: reliable-fetch

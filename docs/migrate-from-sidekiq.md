@@ -591,9 +591,10 @@ as unknown and verify it in staging before production.
 
 ## 7. Known incompatibilities — what *not* to expect
 
-Wurk aims for 100% drop-in. A couple of Sidekiq Pro-isms simply no-op or alias
-(items 1–2 — there to reassure, not to fix); the rest are genuine differences worth
-knowing. The complete, maintained list of every place Wurk deliberately behaves
+Wurk aims for 100% drop-in, but accepted no-ops and aliases do not imply full
+support for every upstream API. Item 1 explains the reliability configuration;
+item 2 identifies unsupported pool-bound multi-shard Web mounts. The remaining
+items cover other migration differences. The complete, maintained list of every place Wurk deliberately behaves
 differently from the spec is
 [`docs/idea/parity-divergences.md`](idea/parity-divergences.md); the ones that matter
 on cutover day are summarized in [§9](#behaviour-differences-to-know-before-cutover).
@@ -611,9 +612,10 @@ migrations are what this guide is checked against.
    promoter that closes it. See [`docs/reliability.md`](reliability.md).
    (`Wurk::Client.reliable_push!` also exists for client-side buffering during a
    Redis outage.)
-2. **`Sidekiq::Pro::Web` works** — it aliases the same dashboard as `Sidekiq::Web`,
-   so `mount Sidekiq::Pro::Web` (or `Sidekiq::Web`, or `Wurk::Engine`) all resolve to
-   the wurk dashboard.
+2. **`Sidekiq::Pro::Web` aliases the Wurk dashboard, with a limitation** — like
+   `Sidekiq::Web`, it aliases `Wurk::Web`. Pool-bound multi-shard mounts using
+   `.with(redis_pool:)` are **unsupported in Wurk**; the alias does not provide
+   that factory. See [Pro §10.2](target/sidekiq-pro.md#102-multi-shard).
 3. **`config.workers` / `config.shutdown_timeout` are not Configuration setters.**
    Use `config.concurrency` for threads-per-process and `config[:timeout]` for the
    shutdown grace; process/fork count is governed by `WURK_COUNT` and the swarm
