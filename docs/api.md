@@ -686,12 +686,12 @@ deliberate differences:
 
 | Area | Sidekiq | Wurk |
 |---|---|---|
-| `Queue#paused?` | always `false` in OSS; pause is a Pro feature | fully implemented, free — `pause!` / `unpause!` / `paused?`, with fetchers honoring the `paused` SET |
-| Fast Lua API | Pro only | included, loaded by default |
-| Search | Pro; sorted sets only | free, and extended to cover queue LISTs, with explicit scan bounds and `truncated?` |
-| `Stats#expired` and `Stats::History#expired` | not in the OSS spec | present — Wurk tracks `expires_in` drops as a first-class counter |
-| `Stats#reset` default | `["processed", "failed"]` | also clears `expired` |
-| Leader fencing | none exposed, by design | `Wurk::Leader#token`, a best-effort monotonic fencing token |
+| [`Queue#paused?`](idea/parity-divergences.md#paused-queues-are-read-from-a-2s-ttl-cache-not-on-every-fetch-pass) | always `false` in OSS; pause is a Pro feature | fully implemented, free — `pause!` / `unpause!` / `paused?`, with fetchers honoring the `paused` SET; a pause's fetch-path visibility is the recorded 2s-TTL-cache divergence, not a `paused?` behavior |
+| [Fast Lua API](idea/parity-divergences.md#fast-lua-api-ships-free-and-loads-by-default) | Pro only | included, loaded by default |
+| [Search](idea/parity-divergences.md#search-covers-queue-lists-too-with-explicit-scan-bounds) | Pro; sorted sets only | free, and extended to cover queue LISTs, with explicit scan bounds and `truncated?` |
+| [`Stats#expired` and `Stats::History#expired`](idea/parity-divergences.md#statsexpiredreset-extend-the-oss-stats-surface) | not in the OSS spec | present — Wurk tracks `expires_in` drops as a first-class counter |
+| [`Stats#reset` default](idea/parity-divergences.md#statsexpiredreset-extend-the-oss-stats-surface) | `["processed", "failed"]` | also clears `expired` |
+| [Leader fencing](idea/parity-divergences.md#leadertoken-exposes-a-fencing-token-ent-deliberately-omits) | none exposed, by design | `Wurk::Leader#token`, a best-effort monotonic fencing token |
 
 ---
 

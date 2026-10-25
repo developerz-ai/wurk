@@ -874,16 +874,20 @@ differs from `docs/target/sidekiq-free.md`:
 
 | Divergence | Detail |
 |---|---|
-| Extra lifecycle events | Wurk's `LIFECYCLE_EVENTS` adds `:fork` (Ent §7.4) and `:leader` (Ent §6) to the free-spec set |
-| Extra default key | `:redis_error_handlers` is in `DEFAULTS`; there is no Sidekiq equivalent (`config.on_redis_error`) |
-| Pool sizing | Spec: per-capsule pool = `concurrency`, internal = 10. Wurk: main pool = `max(concurrency + 5, 10)`, **plus** a dedicated fetch pool of `concurrency` and a dedicated web pool of `web_pool_size` |
-| `reap_idle_redis_connections` | Same observable behaviour, different driver: Sidekiq reaps on the 10s heartbeat; each Wurk pool runs its own reaper thread, sweeping every `min(timeout / 2, 10)` seconds, so pools outside the launcher (web, supervisor) are reaped too. Requires connection_pool >= 3.0, as Sidekiq 8.1 does |
-| `Config#redis_info` / `#to_json` | Not implemented on the configuration object. `Wurk::RedisPool#info` returns parsed `INFO` merged with the pool's `size`/`available` |
-| `:max_iteration_runtime` | Accepted for drop-in compatibility; not consumed by `Wurk::IterableJob` |
-| `USR2` | Spec marks it "Pro only". In Wurk it always reopens logs, and the swarm parent relays it to children |
-| Fetch mode | There is no "basic fetch". The default fetcher is always the reliable `BLMOVE` fetcher, so `config.super_fetch!` exists only so a Pro initializer drops in unchanged. `config.reliable_scheduler!` still does real work — keep it |
-| `WURK_PRELOAD_APP` | Sidekiq's `SIDEKIQ_PRELOAD_APP` defaults to off *and* controls whether the app loads in the parent. Wurk's swarm always loads the app entrypoint in the parent (children inherit it); this flag toggles only the extra Rails `eager_load!` |
-| YAML `:strict` | Silently dropped — strict fetch was removed in Sidekiq 8.x |
+| [Extra lifecycle events](idea/parity-divergences.md#fork-and-leader-extend-the-free-specs-lifecycle-events) | Wurk's `LIFECYCLE_EVENTS` adds `:fork` (Ent §7.4) and `:leader` (Ent §6) to the free-spec set |
+| [Extra default key](idea/parity-divergences.md#defaults-adds-redis_error_handlers) | `:redis_error_handlers` is in `DEFAULTS`; there is no Sidekiq equivalent (`config.on_redis_error`) |
+| [Pool sizing](idea/parity-divergences.md#pool-sizing-three-disjoint-pools-per-process) | Spec: per-capsule pool = `concurrency`, internal = 10. Wurk: main pool = `max(concurrency + 5, 10)`, **plus** a dedicated fetch pool of `concurrency` and a dedicated web pool of `web_pool_size` |
+| [`reap_idle_redis_connections`](idea/parity-divergences.md#reap_idle_redis_connections-sweeps-from-a-per-pool-reaper-thread-not-the-heartbeat) | Same observable behaviour, different driver: Sidekiq reaps on the 10s heartbeat; each Wurk pool runs its own reaper thread, sweeping every `min(timeout / 2, 10)` seconds, so pools outside the launcher (web, supervisor) are reaped too. Requires connection_pool >= 3.0, as Sidekiq 8.1 does |
+| [`Config#redis_info` / `#to_json`](idea/parity-divergences.md#configredis_info-and-configto_json-are-not-implemented) | Not implemented on the configuration object. `Wurk::RedisPool#info` returns parsed `INFO` merged with the pool's `size`/`available` |
+| [`:max_iteration_runtime`](idea/parity-divergences.md#max_iteration_runtime-is-accepted-but-not-consumed) | Accepted for drop-in compatibility; not consumed by `Wurk::IterableJob` |
+| [USR2](idea/parity-divergences.md#usr2-reopens-logs-rss-recycling-uses-the-rolling-restart-machine) | Spec marks it "Pro only". In Wurk it always reopens logs, and the swarm parent relays it to children |
+| [Fetch mode](idea/parity-divergences.md#reliable-fetch-is-the-only-mode-no-brpop) | There is no "basic fetch". The default fetcher is always the reliable `BLMOVE` fetcher, so `config.super_fetch!` exists only so a Pro initializer drops in unchanged. `config.reliable_scheduler!` still does real work — keep it |
+| [`WURK_PRELOAD_APP`](idea/parity-divergences.md#wurk_preload_app-toggles-eager-load-only-the-parent-always-loads-the-app) | Sidekiq's `SIDEKIQ_PRELOAD_APP` defaults to off *and* controls whether the app loads in the parent. Wurk's swarm always loads the app entrypoint in the parent (children inherit it); this flag toggles only the extra Rails `eager_load!` |
+
+The removed `YAML :strict` row was never a divergence: strict fetch was
+removed in Sidekiq 8.x itself, the spec's YAML config section
+(`docs/target/sidekiq-free.md:1230-1248`) defines no `:strict` key, and Wurk
+drops the key for parity (`lib/wurk/cli.rb:429`).
 
 ---
 
