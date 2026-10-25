@@ -1006,6 +1006,38 @@ the gap as proven safe or claiming the three spec rows are implemented.
 `app/controllers/wurk/api_controller.rb:60-66` (`stats`, `queues`);
 `app/controllers/wurk/api/serializers.rb:12-35` (`stats_payload`, `queue_summary`).
 
+## Busy-control HTTP request-shape parity is unsupported
+
+**Wurk:** the engine exposes `POST /api/busy/quiet` and
+`POST /api/busy/stop`, relative to the host application's mount
+(`config/routes.rb:7,57-58`). The action is selected by the path:
+`ApiController#quiet_process` calls `signal_processes(:quiet!)` and
+`#stop_process` calls `signal_processes(:stop!)`
+(`app/controllers/wurk/api_controller.rb:167-168`). The helper reads only
+`identity`: absent or empty, or `"all"`, targets every live non-embedded
+process; a named identity targets that process. An unknown identity returns
+404, and a named embedded process is not signalled and returns count 0
+(`app/controllers/wurk/api_controller.rb:430-441`). It does not select the
+action using `quiet` or `stop` request parameters.
+
+**Spec:** free [§25.4](../target/sidekiq-free.md#254-routes) specifies
+`POST /busy` with `identity`, `quiet`, and `stop` parameters (per-process or
+all), not split action-specific paths
+(`docs/target/sidekiq-free.md:1425`). That row does not define precedence
+between the action parameters.
+
+**Why:** the split endpoints serve the SPA's busy-page controls. Sharing
+quiet/stop functionality and identity targeting does not establish HTTP
+request compatibility: a client sending the specified `POST /busy` request
+cannot treat Wurk's action-in-path endpoints as an equivalent contract.
+This entry records unsupported request equivalence, not a proven-safe gap
+or a compatibility handler; it does not infer unspecified flag semantics.
+
+**Anchor:** free §25.4 (`docs/target/sidekiq-free.md:1425`);
+`config/routes.rb:7,53-58`;
+`app/controllers/wurk/api_controller.rb:167-168,430-441`
+(`quiet_process`, `stop_process`, `signal_processes`).
+
 ## `HEAD /` does not implement the Redis health probe
 
 **Wurk:** the dashboard root, relative to the host application's engine mount,
@@ -1067,3 +1099,46 @@ entry records the unsupported contract, not a claim that the gap is safe.
 **Spec:** Pro §7 says "the clock starts at enqueue" but its own worked example gives 3h; Wurk follows the example.
 
 **Anchor:** `lib/wurk/job_util.rb`, `test/parity/expiring_test.rb`.
+
+## Queue job-delete takes `jid`, not the spec's `key_val`
+
+**Wurk:** the dashboard API deletes a single job from a queue by `jid`.
+`POST /api/queues/:name/delete` is declared inside the engine's `scope :api`
+block, relative to whatever mount the host chose (`config/routes.rb:7,13`;
+the dummy app mounts the engine at `/wurk`, `test/dummy/config/routes.rb:10`).
+`ApiController#delete_queue_job` reads `params[:jid].to_s` and calls
+`Wurk::Queue#delete_job(jid)` (`app/controllers/wurk/api_controller.rb:86-91`):
+a matched jid answers `{ok: true, deleted: true}`; an unmatched one answers
+404 `{error: 'unknown job'}`. The supported request form is
+`POST <mount>/api/queues/<name>/delete` with a `jid` parameter — the SolidJS
+SPA posts JSON `{ jid }` (`frontend/src/pages/Queues.tsx:77-84`) and the
+engine tests pin form params (`test/engine/api_mutations_test.rb:401-414`,
+`test_delete_queue_job_by_jid`, `test_delete_queue_job_unknown_is_404`).
+
+**Spec:** free [§25.4](../target/sidekiq-free.md#254-routes) specifies
+`POST /queues/:name/delete` — "delete single job by `key_val`"
+(`docs/target/sidekiq-free.md:1429`). `key_val` occurs nowhere else in this
+repository: no code or test reads it.
+
+**Why:** the Ruby-level contract is parity — `Queue#delete_job(jid)` is Pro
+§11's exact surface (`docs/api.md:157,453`; `docs/target/sidekiq-pro.md:492`),
+so Ruby consumers drop in on the gem swap. Only clients scripted against
+upstream's web form, POSTing `key_val`, hit the gap: a key_val-only request
+leaves `params[:jid]` blank, so `delete_job('')` raises
+`ArgumentError, 'jid required'` before any Redis round-trip
+(`lib/wurk/api/fast.rb:21`), and the engine rescues only Redis errors there
+(`rescue_from(*REDIS_ERROR_CLASSES)` in
+`app/controllers/wurk/application_controller.rb:22`, class list at
+`lib/wurk/configuration.rb:114`) — an unhandled 500, not the
+`unknown job` 404, which is the unmatched-jid branch
+(`app/controllers/wurk/api_controller.rb:88`) and is reachable only when a
+jid was supplied. The endpoint is the SolidJS SPA's wire contract, not
+upstream's ERB web. This entry records the divergence; it is not a sign-off
+to add `key_val` support.
+
+**Anchor:** free §25.4 (`docs/target/sidekiq-free.md:1429`);
+`config/routes.rb:7,13`; `app/controllers/wurk/api_controller.rb:86-91`;
+`lib/wurk/api/fast.rb:20-31`;
+`app/controllers/wurk/application_controller.rb:22`;
+`lib/wurk/configuration.rb:114`; `frontend/src/pages/Queues.tsx:77-84`;
+`test/engine/api_mutations_test.rb:401-414`.

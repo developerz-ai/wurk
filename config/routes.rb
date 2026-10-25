@@ -50,10 +50,10 @@ Wurk::Engine.routes.draw do
     post 'dead/:key',        to: 'api#dead_job',       as: :api_dead_job, constraints: { key: %r{[^/]+} }
     get  'processes',        to: 'api#processes'
     get  'workers',          to: 'api#workers'
-    # Busy-page process control (quiet/stop). `identity` rides in the body (it
-    # contains ':' and '.', awkward as a path segment); absent or "all" signals
-    # every live process. Read-only mode 403s these via the Authorization
-    # middleware. Spec: docs/target/sidekiq-free.md §25.4 (POST /busy).
+    # Wurk uses split POST /api/busy/quiet and /api/busy/stop requests, not free
+    # spec §25.4 POST /busy with identity/quiet/stop params. Request-shape parity
+    # is unsupported; see docs/idea/parity-divergences.md#busy-control-http-request-shape-parity-is-unsupported.
+    # Read-only mode 403s these via the Authorization middleware.
     post 'busy/quiet', to: 'api#quiet_process', as: :api_quiet_process
     post 'busy/stop',  to: 'api#stop_process',  as: :api_stop_process
     # Flows (Wurk::Flow) read the way the batches below them do — a paged index

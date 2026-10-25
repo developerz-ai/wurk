@@ -69,7 +69,7 @@ module Wurk
     private
 
     def elapsed(start)
-      (::Process.clock_gettime(::Process::CLOCK_MONOTONIC) - start).round(3)
+      ((::Process.clock_gettime(::Process::CLOCK_MONOTONIC) - start) * 1000).round(3)
     end
 
     # The attribute list is a host setting (defaults to %w[bid tags]), so the
