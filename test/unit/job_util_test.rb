@@ -73,6 +73,38 @@ class JobUtilTest < Wurk::Test::UnitCase
     assert_raises(ArgumentError) { @host.validate(bad) }
   end
 
+  def test_validate_accepts_retry_for_at_and_below_the_cap
+    [Wurk::JobUtil::RETRY_FOR_MAX, Wurk::JobUtil::RETRY_FOR_MAX - 1].each do |value|
+      @host.validate({ 'class' => 'X', 'args' => [], 'retry_for' => value })
+    end
+  end
+
+  def test_validate_accepts_digit_string_retry_for
+    @host.validate({ 'class' => 'X', 'args' => [], 'retry_for' => '3600' })
+  end
+
+  def test_validate_rejects_digit_string_retry_for_over_the_cap
+    bad = { 'class' => 'X', 'args' => [], 'retry_for' => '1000000001' }
+    assert_raises(ArgumentError) { @host.validate(bad) }
+  end
+
+  def test_validate_rejects_decimal_string_retry_for
+    bad = { 'class' => 'X', 'args' => [], 'retry_for' => '12.5' }
+    assert_raises(ArgumentError) { @host.validate(bad) }
+  end
+
+  def test_validate_rejects_non_finite_numeric_retry_for
+    [Float::INFINITY, Float::NAN].each do |value|
+      bad = { 'class' => 'X', 'args' => [], 'retry_for' => value }
+      assert_raises(ArgumentError, value.inspect) { @host.validate(bad) }
+    end
+  end
+
+  def test_validate_rejects_non_real_numeric_retry_for
+    bad = { 'class' => 'X', 'args' => [], 'retry_for' => Complex(1, 1) }
+    assert_raises(ArgumentError) { @host.validate(bad) }
+  end
+
   def test_validate_accepts_valid_item
     @host.validate({ 'class' => 'X', 'args' => [1, 'a'] })
   end

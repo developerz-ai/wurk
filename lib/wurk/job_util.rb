@@ -152,6 +152,9 @@ module Wurk
     def valid_at?(item) = !item.key?('at') || item['at'].is_a?(Numeric)
     def valid_tags?(item) = !item.key?('tags') || item['tags'].is_a?(Array)
 
+    # The cap binds the COERCED value, not the raw one: 1_000_000_000.7 is
+    # valid and stores as 1_000_000_000 (§2.2 / §9: over 1_000_000_000 after
+    # coercion rejected; exactly 1_000_000_000 is valid).
     def valid_retry_for?(item)
       return true unless item.key?('retry_for')
 
@@ -165,7 +168,7 @@ module Wurk
     def numeric_retry_for(value)
       case value
       when Integer then value
-      when Numeric then value.to_i
+      when Numeric then (value.to_i if value.finite? && value.real?)
       when String then (Integer(value, 10) if value.match?(/\A-?\d+\z/))
       end
     end
