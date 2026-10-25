@@ -152,6 +152,55 @@ cycling, which the in-process state machine does (verified by
 **Anchor:** `lib/wurk/swarm.rb:238-240`, `lib/wurk/swarm/restart.rb`, PR3 (`fix/swarm-supervision`), Ent
 §8.
 
+## USR2 reopens logs; RSS recycling uses the rolling-restart machine
+
+**Wurk:** `USR2` in a swarm child dispatches to `reopen_logs`, calling the
+logger's `reopen` method if supported; it does not quiet, exit, or restart the
+child. On a signal-enabled swarm parent, `drain_signals` reopens the parent's
+own logger and relays `USR2` to every child. RSS checks instead call
+`recycle_if_bloated`, which enqueues the affected pid via
+`@restart.enqueue([pid])` — no `USR2` trigger.
+
+The shared `Swarm::Restart` machine forks a replacement before sending `TERM`
+to the old child. It waits for the replacement's heartbeat **or the heartbeat
+timeout** (logging a warning on timeout), then `TERM`s the old child and waits
+for its exit. An old child exceeding the drain deadline receives `KILL`; the
+machine waits for the reaper to confirm exit before moving on. A replacement
+observed dead during the heartbeat wait keeps the old child and retries with
+backoff, if the old child is still alive.
+
+For manual cycling, send `USR1` to a **signal-enabled swarm parent**
+(`wurkswarm` or a swarm booted with `install_signals: true`), which queues all
+live children. Never send `USR2` to a Wurk child expecting recycling. The Rails
+auto-boot swarm does not install the parent signal handlers; see
+[deployment: rolling restarts](../deployment.md#rolling-restarts) and
+[memory-based auto-restart](../deployment.md#memory-based-auto-restart).
+
+**Spec:** Ent [§7.5](../target/sidekiq-ent.md#75-memory-based-auto-restart)
+describes RSS recycling as parent sends `USR2` → child quiets, drains, and
+exits → parent forks a replacement. Ent
+[§7.6](../target/sidekiq-ent.md#76-signals-parent--children) assigns `USR2`
+to per-child graceful restart, whether memory-triggered or manual.
+
+**Why:** preserving `USR2` for logrotate lets operators reopen logs without
+cycling workers; signalling the parent reopens both parent and child loggers.
+RSS recycling reuses the existing replacement-before-`TERM` state machine
+rather than adding a second restart protocol. Its queue skips pids already
+queued or in flight (including the replacement), so repeated RSS checks and
+manual rolling restarts cannot double-enqueue the same work. This deliberately
+changes the signal and hand-off ordering, not the purpose of RSS recycling.
+
+**Anchor:** [ChildBoot signal table](../../lib/wurk/swarm/child_boot.rb#L29),
+[child dispatch and reopen](../../lib/wurk/swarm/child_boot.rb#L223-L244),
+[parent drain_signals](../../lib/wurk/swarm.rb#L447-L461),
+[parent reopen](../../lib/wurk/swarm.rb#L474-L478),
+[parent relay](../../lib/wurk/swarm.rb#L599-L601),
+[RSS check and recycle enqueue](../../lib/wurk/swarm.rb#L569-L588),
+[manual rolling_restart enqueue](../../lib/wurk/swarm.rb#L238-L240),
+[Restart deduplication](../../lib/wurk/swarm/restart.rb#L48-L54),
+[replacement spawn](../../lib/wurk/swarm/restart.rb#L99-L109), and
+[heartbeat/TERM/drain phases](../../lib/wurk/swarm/restart.rb#L145-L170).
+
 ## Reaper liveness has a residual local pid-reuse blind spot — shared with `super_fetch`, not fixed
 
 **Wurk:** `Fetcher::Reaper#orphaned?` fast-paths same-boot-generation
