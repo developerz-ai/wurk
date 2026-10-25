@@ -193,7 +193,7 @@ Key prefix: `b-<bid>`. Default expiries: hash 30d while pending, 24h post-succes
 | `dead-batches` | sorted set | batches that hit `:death` |
 | `tags:<tag>` | set | reverse index for `scan_tags` |
 
-All operations are implemented as Lua scripts for atomicity: `EVALSHA` against pre-loaded scripts named e.g. `batch_push.lua`, `batch_complete.lua`, `batch_invalidate.lua`.
+All operations are implemented as Lua scripts for atomicity: `EVALSHA` against pre-loaded scripts named e.g. `batch_push.lua`, `batch_ack_complete.lua`, `batch_invalidate.lua`.
 
 ### 2.9 Complex / nested workflows
 
