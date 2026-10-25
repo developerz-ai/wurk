@@ -203,6 +203,34 @@ class ClientPushTest < Wurk::Test::UnitCase
     assert_match(/'at' and 'spread_interval'/, err.message)
   end
 
+  def test_push_bulk_raises_argument_error_for_non_hash_items
+    err = assert_raises(ArgumentError) do
+      @client.push_bulk('nope')
+    end
+
+    assert_match(/Hash with 'class' and 'args'/, err.message)
+  end
+
+  # Same key rule as #push (test_push_raises_on_symbol_top_level_keys):
+  # symbol keys raise before any write, all-symbol or mixed.
+  def test_push_bulk_rejects_symbol_top_level_keys
+    err = assert_raises(ArgumentError) do
+      @client.push_bulk(class: @class_name, args: [[1]], queue: @queue)
+    end
+
+    assert_match(/String/, err.message)
+    assert_empty queued_args, 'nothing may be written before the raise'
+  end
+
+  def test_push_bulk_rejects_mixed_string_and_symbol_keys
+    err = assert_raises(ArgumentError) do
+      @client.push_bulk('class' => @class_name, 'queue' => @queue, args: [[1]])
+    end
+
+    assert_match(/String/, err.message)
+    assert_empty queued_args, 'nothing may be written before the raise'
+  end
+
   def test_push_bulk_with_scalar_at_schedules_all_at_same_time
     at = future_seconds(900)
     @client.push_bulk(base_item('args' => [[1], [2]], 'at' => at))
