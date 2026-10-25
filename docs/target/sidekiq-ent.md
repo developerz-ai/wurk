@@ -589,7 +589,7 @@ Flags **disallowed** (vs. plain `sidekiq`): `-d` (daemonize), `-L` (logfile), `-
 | Var                          | Default        | Effect                                                                                  |
 | ---------------------------- | -------------- | --------------------------------------------------------------------------------------- |
 | `SIDEKIQ_COUNT`              | CPU count      | Number of children. Fractional supported (8.0.2+): `0.5` × CPU.                         |
-| `SIDEKIQ_MAXMEM_MB`          | disabled       | RSS threshold; child exceeding it gets `USR2` (graceful) then is replaced.              |
+| `SIDEKIQ_MAXMEM_MB`          | disabled       | Ent: RSS threshold; child exceeding it gets `USR2` (graceful) then is replaced. Wurk uses the rolling-restart machine instead; see [§7.5](#75-memory-based-auto-restart). |
 | `SIDEKIQ_PRELOAD`            | `default`      | Comma-separated Bundler groups to load in parent. Empty (`SIDEKIQ_PRELOAD=`) disables preload. |
 | `SIDEKIQ_PRELOAD_APP`        | `0`            | `1` → `require` whole app in parent before fork (4.6.0+). Saves 20–30% RSS via CoW.     |
 | `SIDEKIQ_LEADER`             | `true`         | `false` makes process ineligible to lead.                                               |
@@ -624,14 +624,24 @@ end
 
 ### 7.5 Memory-based auto-restart
 
-When `SIDEKIQ_MAXMEM_MB` is set, parent polls each child's RSS (`get_process_mem` gem since 8.0.2). On exceeding threshold:
+**Upstream Ent behavior:** When `SIDEKIQ_MAXMEM_MB` is set, parent polls each child's RSS (`get_process_mem` gem since 8.0.2). On exceeding threshold:
 
 1. Parent sends `USR2` to that child.
 2. Child enters "quiet" → stops fetching, finishes in-flight jobs.
 3. Child exits cleanly.
 4. Parent forks a replacement.
 
+> **Wurk divergence:** RSS recycling enqueues the affected child pid into the
+> rolling-restart machine, not a `USR2` signal. It forks a replacement before
+> sending `TERM` to the old child, waiting for the replacement's heartbeat **or
+> the heartbeat timeout**, then allowing a bounded drain (with `KILL` on timeout).
+> `USR2` is reserved for log reopening. See the
+> [USR2/RSS divergence](../idea/parity-divergences.md#usr2-reopens-logs-rss-recycling-uses-the-rolling-restart-machine)
+> and [deployment guidance](../deployment.md#memory-based-auto-restart).
+
 ### 7.6 Signals (parent → children)
+
+**Upstream Ent behavior:**
 
 | Signal | Effect                                                                  |
 | ------ | ----------------------------------------------------------------------- |
@@ -641,6 +651,15 @@ When `SIDEKIQ_MAXMEM_MB` is set, parent polls each child's RSS (`get_process_mem
 | `USR1` | Forwarded to children (same as `TSTP` in modern Sidekiq).               |
 
 `TTIN` is **not** intercepted by the parent; if needed, send directly to a child PID.
+
+> **Wurk divergence:** `USR2` reopens logs, not workers: a child reopens its
+> logger, while the signal-enabled swarm parent reopens its own logger and
+> relays `USR2` to its children (where supported by the logger's `reopen` method).
+> For manual cycling, send `USR1` to a **signal-enabled swarm parent**
+> (`wurkswarm` or `boot(install_signals: true)`), never `USR2` to a child.
+> The Rails auto-boot swarm does not install these parent signal handlers.
+> See the [USR2/RSS divergence](../idea/parity-divergences.md#usr2-reopens-logs-rss-recycling-uses-the-rolling-restart-machine)
+> and [rolling-restart deployment guidance](../deployment.md#rolling-restarts).
 
 ### 7.7 Systemd
 
