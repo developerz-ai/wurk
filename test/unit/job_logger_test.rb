@@ -60,21 +60,66 @@ class JobLoggerTest < Wurk::Test::UnitCase
 
   # --- elapsed pushed into context -----------------------------------
 
-  def test_call_adds_elapsed_to_context_on_success
+  def test_call_adds_elapsed_milliseconds_to_context_on_success
     captured = nil
-    Wurk::Context.with({}) do
-      @logger.call({}, 'default') { captured = Wurk::Context.current.dup }
+    observations = []
+    @config.logger.formatter = lambda { |_severity, _time, _progname, message|
+      observations << [message, Sidekiq::Context.current[:elapsed]]
+      "#{message}\n"
+    }
+    times = [10.0, 11.234]
+    clock = lambda { |clock_id|
+      assert_equal Process::CLOCK_MONOTONIC, clock_id
+      times.shift
+    }
 
-      assert_kind_of Float, Wurk::Context.current[:elapsed]
+    Sidekiq::Context.with({}) do
+      with_monotonic_clock(clock) do
+        @logger.call({}, 'default') { captured = Sidekiq::Context.current.dup }
+      end
+
+      assert_kind_of Float, Sidekiq::Context.current[:elapsed]
+      assert_in_delta 1234.0, Sidekiq::Context.current[:elapsed], 0.001
     end
     refute captured.key?(:elapsed)
+    assert_equal [['start', nil], ['done', 1234.0]], observations
+    assert_empty times
   end
 
-  def test_call_adds_elapsed_to_context_on_failure
-    Wurk::Context.with({}) do
-      assert_raises(RuntimeError) { @logger.call({}, 'default') { raise 'x' } }
-      assert_kind_of Float, Wurk::Context.current[:elapsed]
+  def test_call_adds_elapsed_milliseconds_to_context_on_failure
+    observations = []
+    @config.logger.formatter = lambda { |_severity, _time, _progname, message|
+      observations << [message, Sidekiq::Context.current[:elapsed]]
+      "#{message}\n"
+    }
+    times = [10.0, 11.234]
+    clock = lambda { |clock_id|
+      assert_equal Process::CLOCK_MONOTONIC, clock_id
+      times.shift
+    }
+    error = RuntimeError.new('x')
+
+    Sidekiq::Context.with({}) do
+      raised = assert_raises(RuntimeError) do
+        with_monotonic_clock(clock) do
+          @logger.call({}, 'default') { raise error }
+        end
+      end
+
+      assert_same error, raised
+      assert_kind_of Float, Sidekiq::Context.current[:elapsed]
+      assert_in_delta 1234.0, Sidekiq::Context.current[:elapsed], 0.001
     end
+    assert_equal [['start', nil], ['fail', 1234.0]], observations
+    assert_empty times
+  end
+
+  def with_monotonic_clock(clock)
+    original = Process.method(:clock_gettime)
+    Process.define_singleton_method(:clock_gettime) { |clock_id| clock.call(clock_id) }
+    yield
+  ensure
+    Process.define_singleton_method(:clock_gettime, original)
   end
 
   # --- skip_default_job_logging --------------------------------------
