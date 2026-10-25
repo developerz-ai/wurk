@@ -473,6 +473,43 @@ resetting it.
 
 **Anchor:** `lib/wurk/leader.rb`, `lib/wurk/lua/leader_campaign.lua`.
 
+## Quiet does not step the leader down; full shutdown does
+
+**Wurk:** quiet is cluster-global and one-way, signalled with `TSTP`
+(`lib/wurk/swarm.rb:224-231`, `lib/wurk/api/swarm.rb:37`
+`QUIET_SIGNAL = 'TSTP'`, `lib/wurk/cli.rb:66-68`). `Launcher#quiet`
+(`lib/wurk/launcher.rb:115-125`) quiets every manager and the scheduled
+poller, deliberately leaves the cron poller running, and never touches
+`@leader` — the renewal loop keeps renewing the lock every 15s while held
+(`lib/wurk/leader.rb:251-258`) straight through a quiet. Leadership ends only
+on full shutdown: `Launcher#stop` → `release_components` →
+`stop_periodic_components` (`lib/wurk/launcher.rb:289-294`, `@leader&.stop`)
+→ `Leader#stop` (`lib/wurk/leader.rb:166-176`), which joins the campaign
+thread and then CAS-releases `dear-leader`.
+
+**Spec:** Ent §6.2 steps the leader down immediately on USR1 quiet (since
+2.2.3 — invalid leaders self-evict); a follower re-campaigns, so §2.6
+periodic keeps enqueuing.
+
+**Why:** Wurk never quiets with USR1 — USR1 is the swarm parent's rolling
+restart — so the Ent trigger does not exist here; Wurk's quiet signal is
+`TSTP` (free spec §21.3). Quiet pauses fetching without ending the process,
+and `Launcher#quiet` deliberately keeps the cron poller (Ent §2.6: a quieted
+leader still enqueues), which enqueues only under the single cluster leader —
+keeping the renewal makes `leader?` stay truthful on the quieted process
+instead of evicting and re-campaigning through every quiet. The failure Ent's
+2.2.3 change guards is covered anyway: a leader that cannot renew steps down
+on campaign loss or campaign error (`lib/wurk/leader.rb:197,281-286`). Full
+shutdown releases the lock deliberately, periodic loops stopped before the
+CAS release, rather than waiting out the TTL.
+
+**Anchor:** `lib/wurk/launcher.rb:115-125` (`#quiet`),
+`lib/wurk/launcher.rb:289-294` (`#stop_periodic_components`),
+`lib/wurk/leader.rb:166-176` (`#stop` join + release); pinned by
+`test/unit/launcher_test.rb` (`test_quiet_does_not_terminate_cron_poller`,
+`test_quiet_does_not_stop_the_cluster_leader`,
+`test_stop_stops_the_cluster_leader`).
+
 ## `SortedEntry#reschedule` returns nil for a removed job instead of re-creating it
 
 **Wurk:** `reschedule` uses `ZADD XX INCR`; a member that was already promoted or deleted stays gone and the call returns nil.
