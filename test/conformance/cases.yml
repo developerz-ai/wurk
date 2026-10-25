@@ -387,3 +387,171 @@
   source: docs/idea/parity-divergences.md#L493-L501
   reason: Lost-reply handling has no independently sourced parity oracle yet.
   future_work: oracle-api-idempotency-lost-reply
+- id: error-handlers.each-once
+  area: error-handlers
+  behavior: A failing job calls each configured error handler once.
+  source: docs/target/sidekiq-free.md#L823
+  oracles: [ErrorHandlersParityTest#test_a_failing_job_calls_each_handler_once]
+- id: error-handlers.original-exception
+  area: error-handlers
+  behavior: The handler receives the job's own exception class and message rather than a Handled wrapper.
+  source: docs/target/sidekiq-free.md#L823
+  oracles: [ErrorHandlersParityTest#test_the_handler_receives_the_jobs_own_exception]
+- id: error-handlers.context
+  area: error-handlers
+  behavior: Failure context says Job raised exception and carries the job's JID and queue.
+  source: docs/target/sidekiq-free.md#L823
+  oracles: [ErrorHandlersParityTest#test_the_context_names_the_job_failure_and_carries_the_job]
+- id: error-handlers.configuration
+  area: error-handlers
+  behavior: The handler's third argument is the same configuration object used by the processor.
+  source: docs/target/sidekiq-free.md#L334
+  oracles: [ErrorHandlersParityTest#test_the_handler_receives_the_configuration]
+- id: error-handlers.retry-disabled
+  area: error-handlers
+  behavior: A failing job with retries disabled reports its own exception once.
+  source: docs/target/sidekiq-free.md#L819-L823
+  oracles: [ErrorHandlersParityTest#test_a_job_without_retries_is_reported_once]
+- id: error-handlers.retry-exhausted
+  area: error-handlers
+  behavior: A failing job at retry exhaustion is reported once.
+  source: docs/target/sidekiq-free.md#L819-L823
+  oracles: [ErrorHandlersParityTest#test_an_exhausted_job_is_reported_once]
+- id: error-handlers.success-silent
+  area: error-handlers
+  behavior: A successful job does not call error handlers.
+  source: docs/target/sidekiq-free.md#L820-L823
+  oracles: [ErrorHandlersParityTest#test_a_successful_job_reports_nothing]
+- id: error-handlers.skip-silent
+  area: error-handlers
+  behavior: JobRetry::Skip does not call error handlers.
+  source: docs/target/sidekiq-free.md#L821-L823
+  oracles: [ErrorHandlersParityTest#test_a_skip_reports_nothing]
+- id: error-handlers.raising-handler
+  area: error-handlers
+  behavior: A raising error handler does not prevent the next handler from being called once.
+  source: docs/target/sidekiq-free.md#L334-L342
+  oracles: [ErrorHandlersParityTest#test_a_raising_handler_does_not_stop_the_next]
+- id: expiry.worker-option
+  area: expiration
+  behavior: >-
+    A worker's expires_in stores Float expiry seconds equal to created_at
+    milliseconds divided by 1000 plus the duration.
+  source: docs/target/sidekiq-pro.md#L328-L342
+  oracles: [ExpiringParityTest#test_worker_option_stores_expiry_as_created_at_plus_duration]
+- id: expiry.override
+  area: expiration
+  behavior: A per-push set override replaces the worker's expiration duration.
+  source: docs/target/sidekiq-pro.md#L336-L342
+  oracles: [ExpiringParityTest#test_set_override_replaces_the_worker_duration]
+- id: expiry.plain-worker-override
+  area: expiration
+  behavior: A per-push expires_in option sets expiry even when the worker has no expiration option.
+  source: docs/target/sidekiq-pro.md#L336-L342
+  oracles: [ExpiringParityTest#test_set_override_on_a_worker_without_the_option]
+- id: expiry.absent
+  area: expiration
+  behavior: Without expires_in the queued job has no expiry field.
+  source: docs/target/sidekiq-pro.md#L349-L353
+  oracles: [ExpiringParityTest#test_no_expiry_without_the_option]
+- id: expiry.scheduled
+  area: expiration
+  behavior: A scheduled job's expiry equals its due score plus the expiration duration.
+  source: docs/target/sidekiq-pro.md#L345
+  oracles: [ExpiringParityTest#test_scheduled_job_expires_duration_after_it_is_due]
+- id: expiry.timely-execution
+  area: expiration
+  behavior: A job still within its expiration time performs normally.
+  source: docs/target/sidekiq-pro.md#L342-L343
+  oracles: [ExpiringParityTest#test_job_in_time_runs]
+- id: expiry.expired-skip
+  area: expiration
+  behavior: >-
+    An expired job does not perform, leaves the public queue, and is absent
+    from retry and dead sets.
+  source: docs/target/sidekiq-pro.md#L343
+  oracles: [ExpiringParityTest#test_expired_job_is_skipped_and_not_retried]
+- id: expiry.batch-success
+  area: expiration
+  behavior: >-
+    An expired batch job skips perform and leaves the batch complete with zero
+    pending jobs and failures.
+  source: docs/target/sidekiq-pro.md#L512
+  oracles: [ExpiringParityTest#test_expired_job_counts_as_success_in_a_batch]
+- id: expiry.non-preemption
+  area: expiration
+  behavior: Expiry does not preempt a perform that started in time.
+  source: docs/target/sidekiq-pro.md#L344
+  reason: Existing expiration oracles do not advance past expiry during an in-flight perform.
+  future_work: oracle-expiry-in-flight-non-preemption
+- id: metrics.minute-totals
+  area: metrics
+  behavior: Minute-window queries sum p, f and ms within the window and expose ms totals as seconds.
+  source: docs/target/sidekiq-free.md#L1181-L1201
+  oracles: [MetricsQueryParityTest#test_minutely_buckets_feed_top_jobs_totals]
+- id: metrics.minute-result
+  area: metrics
+  behavior: >-
+    Minute queries return Result and JobResult objects with minutely granularity
+    and the supplied end time.
+  source: docs/target/sidekiq-free.md#L1184-L1197
+  oracles: [MetricsQueryParityTest#test_minutely_buckets_feed_top_jobs_totals]
+- id: metrics.averages
+  area: metrics
+  behavior: Total and series ms averages divide by completed executions, p minus f.
+  source: docs/target/sidekiq-free.md#L1196-L1201
+  oracles: [MetricsQueryParityTest#test_averages_divide_by_completed_executions]
+- id: metrics.hourly-buckets
+  area: metrics
+  behavior: Hour windows read ten-minute buckets with hourly granularity and bucket-aligned series timestamps.
+  source: docs/target/sidekiq-free.md#L1188
+  oracles: [MetricsQueryParityTest#test_hourly_reads_ten_minute_buckets]
+- id: metrics.for-job
+  area: metrics
+  behavior: for_job returns the requested class's seeded execution total as its only job result.
+  source: docs/target/sidekiq-free.md#L1192
+  oracles: [MetricsQueryParityTest#test_for_job_reads_one_class]
+- id: metrics.minute-cap
+  area: metrics
+  behavior: An oversized minute window starts no earlier than 480 minutes before now.
+  source: docs/target/sidekiq-free.md#L1207
+  oracles: [MetricsQueryParityTest#test_window_caps]
+- id: metrics.hour-cap
+  area: metrics
+  behavior: An oversized hour window starts no earlier than 72 hours before now.
+  source: docs/target/sidekiq-free.md#L1207
+  oracles: [MetricsQueryParityTest#test_window_caps]
+- id: metrics.day-marks
+  area: metrics
+  behavior: >-
+    Queries read labels from the day-marks hash into MarkResult objects with
+    the recorded time and bucket.
+  source: docs/target/sidekiq-free.md#L115-L1204
+  oracles: [MetricsQueryParityTest#test_marks_come_from_the_day_marks_hash]
+- id: metrics.execution-key
+  area: metrics
+  behavior: >-
+    A successful server middleware execution writes one class p count to the
+    canonical UTC minute key and is readable by Query.
+  source: docs/target/sidekiq-free.md#L106-L123
+  oracles: [MetricsQueryParityTest#test_executed_jobs_land_in_the_spec_minute_key]
+- id: sorted-entry.retry-count
+  area: data-api
+  behavior: SortedEntry retry enqueues a payload with retry_count decremented by one.
+  source: docs/target/sidekiq-free.md#L1054
+  oracles: [SortedEntryApiParityTest#test_retry_pushed_payload_matches_sidekiq]
+- id: sorted-entry.add-to-queue-count
+  area: data-api
+  behavior: >-
+    SortedEntry add_to_queue preserves retry_count in the enqueued payload,
+    contrary to the source comment that it decrements the count.
+  source: docs/target/sidekiq-free.md#L1053
+  oracles: [SortedEntryApiParityTest#test_add_to_queue_pushed_payload_matches_sidekiq]
+- id: sorted-entry.kill-exception
+  area: data-api
+  behavior: >-
+    SortedEntry kill notifies death handlers with a RuntimeError whose message
+    is Job killed by API.
+  source: docs/target/sidekiq-free.md#L1055-L1093
+  oracles: [SortedEntryApiParityTest#test_kill_fires_death_handlers_with_api_exception]
+

@@ -144,6 +144,104 @@ class ConformanceTest < Minitest::Test
                     'ClientPushParityTest#test_immediate_push_touches_only_queues_set_and_queue_list'
   end
 
+  def test_real_inventory_references_all_error_expiry_metrics_and_sorted_entry_oracles
+    loaded = Conformance::Inventory.load(File.expand_path('../conformance/cases.yml', __dir__))
+    references = loaded.covered.flat_map { |entry| entry.fetch('oracles') }
+
+    assert_equal 27, required_inventory_references.uniq.size
+    required_inventory_references.each { |reference| assert_includes references, reference }
+  end
+
+  def test_in_flight_expiration_remains_pending
+    loaded = Conformance::Inventory.load(File.expand_path('../conformance/cases.yml', __dir__))
+    entry = loaded.pending.find { |candidate| candidate.fetch('id') == 'expiry.non-preemption' }
+
+    refute_nil entry
+    assert_equal 'oracle-expiry-in-flight-non-preemption', entry.fetch('future_work')
+    refute_empty entry.fetch('reason')
+    refute_includes entry, 'oracles'
+  end
+
+  def test_real_inventory_accounts_for_successful_and_pending_results_exactly
+    loaded = Conformance::Inventory.load(File.expand_path('../conformance/cases.yml', __dir__))
+    references = loaded.covered.flat_map { |entry| entry.fetch('oracles') }.uniq
+    reporter = Conformance::Reporter.new(loaded, out: StringIO.new)
+
+    assert_equal({ passed: 0, pending: 0, failed: loaded.cases.size }, reporter.totals)
+    references.each { |reference| reporter.record(result(reference)) }
+
+    assert_equal({ passed: loaded.covered.size, pending: 0, failed: loaded.pending.size }, reporter.totals)
+
+    record_inventory_pending_skips(reporter, loaded)
+    expected = { passed: loaded.covered.size, pending: loaded.pending.size, failed: 0 }
+
+    assert_equal expected, reporter.totals
+    assert_predicate reporter, :passed?
+  end
+
+  def test_real_inventory_rejects_missing_failed_skipped_and_assertionless_results
+    loaded = Conformance::Inventory.load(File.expand_path('../conformance/cases.yml', __dir__))
+    references = loaded.covered.flat_map { |entry| entry.fetch('oracles') }.uniq
+    outcomes = [nil, { success: false }, { skipped: true }, { assertions: 0 }]
+
+    required_inventory_references.product(outcomes).each do |unsuccessful, outcome|
+      assert_inventory_rejects_unsuccessful_result(loaded, references, unsuccessful, outcome)
+    end
+  end
+
+  def assert_inventory_rejects_unsuccessful_result(loaded, references, unsuccessful, outcome)
+    failed_reporter = Conformance::Reporter.new(loaded, out: StringIO.new)
+    (references - [unsuccessful]).each { |reference| failed_reporter.record(result(reference)) }
+    failed_reporter.record(result(unsuccessful, **outcome)) if outcome
+    record_inventory_pending_skips(failed_reporter, loaded)
+    affected = loaded.covered.count { |entry| entry.fetch('oracles').include?(unsuccessful) }
+
+    expected = { passed: loaded.covered.size - affected, pending: loaded.pending.size, failed: affected }
+
+    assert_operator affected, :>, 0, unsuccessful
+    assert_equal expected, failed_reporter.totals, "#{unsuccessful}: #{outcome.inspect}"
+    refute_predicate failed_reporter, :passed?
+  end
+
+  def record_inventory_pending_skips(reporter, loaded)
+    loaded.pending.each do |entry|
+      reference = "ConformancePendingTest#test_pending_#{entry.fetch('id').tr('.-', '__')}"
+      reporter.record(result(reference, success: false, skipped: true, assertions: 0))
+    end
+  end
+
+  def required_inventory_references
+    %w[
+      ErrorHandlersParityTest#test_a_failing_job_calls_each_handler_once
+      ErrorHandlersParityTest#test_the_handler_receives_the_jobs_own_exception
+      ErrorHandlersParityTest#test_the_context_names_the_job_failure_and_carries_the_job
+      ErrorHandlersParityTest#test_the_handler_receives_the_configuration
+      ErrorHandlersParityTest#test_a_job_without_retries_is_reported_once
+      ErrorHandlersParityTest#test_an_exhausted_job_is_reported_once
+      ErrorHandlersParityTest#test_a_successful_job_reports_nothing
+      ErrorHandlersParityTest#test_a_skip_reports_nothing
+      ErrorHandlersParityTest#test_a_raising_handler_does_not_stop_the_next
+      ExpiringParityTest#test_worker_option_stores_expiry_as_created_at_plus_duration
+      ExpiringParityTest#test_set_override_replaces_the_worker_duration
+      ExpiringParityTest#test_set_override_on_a_worker_without_the_option
+      ExpiringParityTest#test_no_expiry_without_the_option
+      ExpiringParityTest#test_scheduled_job_expires_duration_after_it_is_due
+      ExpiringParityTest#test_job_in_time_runs
+      ExpiringParityTest#test_expired_job_is_skipped_and_not_retried
+      ExpiringParityTest#test_expired_job_counts_as_success_in_a_batch
+      MetricsQueryParityTest#test_minutely_buckets_feed_top_jobs_totals
+      MetricsQueryParityTest#test_averages_divide_by_completed_executions
+      MetricsQueryParityTest#test_hourly_reads_ten_minute_buckets
+      MetricsQueryParityTest#test_for_job_reads_one_class
+      MetricsQueryParityTest#test_window_caps
+      MetricsQueryParityTest#test_marks_come_from_the_day_marks_hash
+      MetricsQueryParityTest#test_executed_jobs_land_in_the_spec_minute_key
+      SortedEntryApiParityTest#test_retry_pushed_payload_matches_sidekiq
+      SortedEntryApiParityTest#test_add_to_queue_pushed_payload_matches_sidekiq
+      SortedEntryApiParityTest#test_kill_fires_death_handlers_with_api_exception
+    ]
+  end
+
   def test_parity_discovery_retains_every_oracle_and_adds_conformance
     script = <<~RUBY
       require 'rake'
