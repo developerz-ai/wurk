@@ -9,7 +9,7 @@ module Wurk
   # after a command may already have applied server-side (see RedisPool#with).
   # The object behind a wrapper is not always ours, though: the Sidekiq surface
   # Wurk drops into lets a host supply any ConnectionPool-shaped object
-  # (`Sidekiq::Client#redis_pool=`, `Sidekiq::Web.redis_pool=`, the `pool:`
+  # (`Sidekiq::Client#redis_pool=`, the `pool:`
   # kwarg on Stats::History / Deploy / Leader / Profiler / Metrics::History),
   # and a bare `def with; yield conn; end` decorator — the shape people reach
   # for to count or trace round trips — is a legal implementation of it. Handing
