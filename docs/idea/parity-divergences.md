@@ -807,6 +807,108 @@ particular content type.
 
 **Anchor:** `lib/wurk/batch/callbacks.rb`.
 
+## Batch `b-<bid>-failinfo` is not written or imported
+
+**Wurk:** batch failures record JIDs in `b-<bid>-failed` and update the
+hash's `failures` count; terminal deaths use the `-failed`/`-died` sets.
+No per-JID error JSON is persisted in `b-<bid>-failinfo`.
+`Batch::Status#failure_info` always returns `[]`, including for a migrated
+batch with an existing failinfo hash. Old failinfo payloads are not read or
+migrated into the current failure model.
+
+**Spec:** Pro [§2.8](../target/sidekiq-pro.md#28-redis-data-model-for-batches)
+lists `b-<bid>-failinfo` as a pre-Pro 8 hash of JID → error JSON and
+`b-<bid>-failed` as the Pro 8+ failed-JID set;
+[§2.5](../target/sidekiq-pro.md#25-sidekiqbatchstatus) marks `failure_info`
+deprecated (pre-Pro 8).
+
+**Why:** intentionally choosing the Pro-8 failure model keeps failed-JID
+tracking, not the older per-failure detail API. Migration therefore does not
+make old error details available through Wurk. Unlike the carried-over tag
+and callback keys, `failinfo` is absent from `Batch::KEY_SUFFIXES` and
+`keys_for`: the delete, post-success linger and death TTL sweeps do not
+include it. This is missing lifecycle sweeping, not a preservation guarantee;
+Wurk does not manage the old hash's retention or convert its contents.
+
+**Anchor:** [failure reader and empty compatibility method](../../lib/wurk/batch/status.rb#L55-L66),
+[current failure writer](../../lib/wurk/batch/server_middleware.rb#L97-L104),
+[JID-only Lua bookkeeping](../../lib/wurk/lua/batch_ack_failed.lua#L10-L17),
+[death writer](../../lib/wurk/batch/death_handler.rb#L31-L38), and
+[sweep key scope](../../lib/wurk/batch.rb#L70-L109).
+`test/unit/batch_status_test.rb`, `test_failure_info_returns_empty_array`,
+pins the empty return, not migration or retention of old failinfo hashes.
+
+## Batch tags use a JSON field and reverse indexes, not `b-<bid>-tags`
+
+**Wurk:** first flush writes tags as JSON in the `tags` field of `b-<bid>`
+and adds the BID to each `tags:<tag>` reverse-index set. It never writes the
+per-batch `b-<bid>-tags` set. Reopening a batch and reading status parse the
+hash field; `BatchSet#scan_tags` reads the reverse index. A carried-over
+per-batch tag set alone is neither imported nor fallback-read: without the
+JSON field, batch/status tags are empty; without the reverse index,
+`scan_tags` cannot discover that membership.
+
+**Spec:** Pro [§2.8](../target/sidekiq-pro.md#28-redis-data-model-for-batches)
+lists all three: the hash's `tags` field, the `b-<bid>-tags` applied-tags set,
+and the `tags:<tag>` reverse index.
+[§2.2](../target/sidekiq-pro.md#22-instance-api) dates the searchable-tags
+API to Pro 8.1+.
+
+**Why:** Wurk's chosen Pro-8-era model uses the JSON field and reverse indexes
+for tag reads and discovery, deliberately omitting the per-batch set writer.
+That is not full §2.8 format compatibility. `tags` remains in
+`KEY_SUFFIXES` for cleanup of datasets carried over from Pro: `Status#delete`
+unlinks the per-batch set, post-success `apply_linger` expires it to the
+linger window, and death `restamp_ttls` gives it a default TTL only if it has
+none (`EXPIRE NX`). These operations can expire or delete an existing set;
+cleanup does not promise preservation, import or synchronization with the
+JSON field and reverse indexes.
+
+**Anchor:** [JSON and reverse-index writers](../../lib/wurk/batch.rb#L469-L496),
+[reopen reader](../../lib/wurk/batch.rb#L557-L560),
+[status reader](../../lib/wurk/batch/status.rb#L76-L82),
+[reverse-index scan](../../lib/wurk/batch_set.rb#L41-L53),
+[carried-over cleanup suffixes](../../lib/wurk/batch.rb#L77-L84),
+[delete key selection](../../lib/wurk/batch/status.rb#L129-L135),
+[linger expiry](../../lib/wurk/batch/callbacks.rb#L191-L195), and
+[death NX expiry](../../lib/wurk/batch/death_handler.rb#L58-L61).
+`test/unit/batch_status_test.rb`, `test_tags_round_trips_json`, covers the
+JSON reader, not import of a Pro-shaped per-batch set.
+
+## Batch IDs are random; the legacy global `BID` counter is unused
+
+**Wurk:** a new batch uses `SecureRandom.urlsafe_base64(BID_BYTES)` with
+`BID_BYTES = 10`. It does not allocate an ID through the global Redis `BID`
+counter. A counter carried over from Pro is not consumed or advanced by this
+generator, and its value does not determine new batch IDs. Reopening by an
+explicit BID bypasses generation.
+
+**Spec:** Pro [§2.8](../target/sidekiq-pro.md#28-redis-data-model-for-batches)
+lists `BID` as a legacy string/global counter;
+[§2.1](../target/sidekiq-pro.md#21-creation) describes a URL-safe random BID.
+The spec labels the counter legacy but gives no upstream removal date.
+
+**Why:** the chosen Pro-8 model follows random BID creation rather than
+continuing a legacy allocation sequence. Existing data can still be addressed
+by its explicit BID, but migration does not continue the counter or make new
+BIDs monotonic. The Pro-8 model is a deliberate choice, not evidence that
+every older schema row remains supported or that the counter disappeared in
+a particular upstream release.
+
+**Anchor:** [random byte count](../../lib/wurk/batch.rb#L63-L66) and
+[batch ID generation/reopen](../../lib/wurk/batch.rb#L171-L173).
+
+### Scope of the existing batch §2.8 oracle
+
+[`test/parity/batch_test.rb`](../../test/parity/batch_test.rb#L280-L304),
+`test_batch_is_visible_under_the_documented_keys`, asserts the core hash's
+`description`, `total` and `pending`, live JIDs, membership in `batches`,
+`tags:<tag>` reverse lookup (including `scan_tags`), then drained
+`pending`/`success` hash state. It does not assert compatibility for
+`b-<bid>-failinfo`, `b-<bid>-tags` or legacy `BID`, nor does it cover every
+§2.8 schema row or import/retention of carried-over data. Its existence does
+not resolve the callback-marker/`notify`/`cbsucc` accounting above.
+
 ## Encrypted job hashes are re-sealed after the chain unwinds
 
 **Wurk:** the encryption server middleware decrypts in place for `perform`, then restores the envelope in an `ensure`; middleware outside it sees ciphertext again.

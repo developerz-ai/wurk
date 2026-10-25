@@ -931,7 +931,7 @@ production. Each one links to its full rationale in
 | Limiter reschedule cap goes to the dead set, tagged `rate_limited`, instead of the retry cycle; limiter `ttl` below 24h is raised to 24h | Over-limit jobs land in **Dead** after `reschedule` attempts | Alert on dead-set growth; retry from the dashboard |
 | An undecryptable job goes straight to the dead set | Missing or wrong key → **Dead**, no retries | Configure the same keys before starting; retry once fixed |
 | Periodic slots more than max(90s, 1.5× tick) late are skipped and logged; a Hash `args:` is passed as one argument (Ent splats it) | A long leader outage skips rather than fires late | Check loops registered with Hash `args` |
-| Batch "already fired" markers and child-batch callback accounting follow the spec, unverified against a real Pro batch | A batch in flight at the swap could miss a callback | Let critical batches finish before the cutover, or prove it in the dry run |
+| Wurk uses `b-<bid>-success`/`b-<bid>-complete` as "already fired" dedup markers (callbacks enqueued, not necessarily executed); Pro §2.8 describes them as "callbacks pending". Interoperability with a real Pro batch is unverified | A Pro batch in flight at the swap may miss callbacks | Let critical batches finish before the cutover, or prove it in the dry run |
 | A poison kill (3 crash-reclaims in 72h) fires death handlers, and the counter resets on ACK | The job lands in **Dead**; its batch sees a death | Nothing; see the [runbook](runbook.md#poison-job-storm) |
 | `:leader` can fire again after a Redis error | A leader hook runs twice | Make `on(:leader)` hooks idempotent |
 | String intervals to `perform_in` / `set(wait:)` raise | `ArgumentError` at enqueue | Pass numbers or durations |
