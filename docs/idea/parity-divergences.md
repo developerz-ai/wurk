@@ -847,6 +847,42 @@ the gap as proven safe or claiming the three spec rows are implemented.
 `app/controllers/wurk/api_controller.rb:60-66` (`stats`, `queues`);
 `app/controllers/wurk/api/serializers.rb:12-35` (`stats_payload`, `queue_summary`).
 
+## `HEAD /` does not implement the Redis health probe
+
+**Wurk:** the dashboard root, relative to the host application's engine mount,
+routes to `DashboardController#index`, which renders the SPA shell. `HEAD /`
+does not implement the spec's `LLEN queue:default` Redis health probe; a
+successful root response does not verify Redis connectivity.
+
+Worker health probes are instead opt-in via `config.health_check(port:)` in a
+`configure_server` block, on a separate TCP port rather than the dashboard
+mount. `GET /live` reports launcher liveness (200 unless stopping, then 503),
+without checking Redis. `GET /ready` requires Redis `PING`, a fresh local
+heartbeat, and, in a swarm, enough children with fresh heartbeats (200 when
+ready, otherwise 503). The listener rejects non-GET requests, including
+`HEAD`, with 405.
+
+**Spec:** free [§25.1](../target/sidekiq-free.md#251-entrypoint) specifies
+`HEAD /` calls `LLEN queue:default`;
+[§25.4](../target/sidekiq-free.md#254-routes) lists `HEAD /` as the Redis
+health-check route.
+
+**Why:** the SPA shell and the dedicated worker listener are separate surfaces.
+The listener distinguishes process liveness from Redis/heartbeat readiness,
+but its opt-in configuration, port, methods, paths, and Redis command differ
+from the specified dashboard probe. It is not wire-equivalent to `HEAD /` and
+does not make existing Sidekiq health-probe clients drop-in compatible. This
+entry records the unsupported contract, not a claim that the gap is safe.
+
+**Anchor:** free §25.1/§25.4 (`docs/target/sidekiq-free.md:1382,1422`);
+[root route](../../config/routes.rb#L4);
+[SPA root controller](../../app/controllers/wurk/dashboard_controller.rb#L39-L41);
+[opt-in configuration](../../lib/wurk/configuration.rb#L702-L726);
+[dedicated listener bind](../../lib/wurk/health.rb#L119-L123);
+[GET-only dispatch](../../lib/wurk/health.rb#L258-L266);
+[liveness and local readiness](../../lib/wurk/health.rb#L277-L305); and
+[swarm readiness](../../lib/wurk/health.rb#L354-L367).
+
 ## Dashboard and web extension differences
 
 **Wurk:** `GET /profiles/:key` requires same-origin, a typed URL, or a same-host Referer (Sidekiq answers any GET); extension `redirect_to` inside the SPA falls back to the extension root for off-site targets (the SPA loads extensions with `fetch`, which cannot follow cross-origin redirects); `reload_page` inside the SPA goes to the extension index; `Sidekiq::Web.views` is an accepted, ignored array; read-only mode answers TRACE with 403 on the standalone mount; the health server closes connections past 16 concurrent unanswered.
