@@ -9,6 +9,45 @@ and deliberate, and the anchor to revisit if the spec or upstream changes.
 An entry tagged *decided — pending implementation* is a signed-off target the
 code has not reached yet; its **Wurk:** paragraph states today's behavior.
 
+## Immediate plain multi-queue pushes register queues per group
+
+**Wurk:** immediate plain payloads are grouped by queue, and each group gets
+its own pipeline containing `SADD queues <queue>` followed by
+`LPUSH queue:<queue> ...`. After a successful push, `queues` SET membership
+and payload delivery are equivalent to registering all grouped queues upfront:
+all destination queues are registered and their jobs are queued, with existing
+SET members preserved. If a later group's pipeline fails **before its commands
+are sent to Redis**, earlier acknowledged groups retain both their delivered
+jobs and queue membership. A previously unregistered destination in that unsent
+group has neither queued jobs nor `queues` membership from this push.
+
+**Spec:** free [§7.1, lines 535–555](../target/sidekiq-free.md#L535-L555)
+specifies one upfront `SADD queues <all grouped keys>` before the per-queue
+`LPUSH` loop, rather than Wurk's per-group registration. Once that upfront
+`SADD` executes, even a later queue whose `LPUSH` is never sent is registered.
+
+**Why:** per-group pipelines let Wurk mark each group delivered as soon as its
+reply arrives, keeping acknowledged jobs out of the reliable-push replay buffer
+if a later group fails. The tradeoff is one round trip per distinct queue and
+a different queue-registration boundary on partial failure, not different
+membership after success. The pipeline is not a transaction: if `SADD` executes
+but `LPUSH` does not, the failed group's queue can be registered without its
+jobs being delivered. Only the provably unsent case above guarantees no changes
+from that group.
+A lost reply after commands may have reached Redis is ambiguous: the in-flight
+group may already have registered its queue and delivered jobs. It remains
+unmarked for replay under the at-least-once contract, so neither absence nor
+exactly-once delivery is guaranteed in that case. Existing queue membership is
+not removed when a group fails.
+
+**Anchor:** [delivery tracking and round-trip rationale](../../lib/wurk/client.rb#L421-L434),
+[plain grouping and per-group SADD/LPUSH](../../lib/wurk/client.rb#L440-L465),
+free [§7.1](../target/sidekiq-free.md#L535-L555), and the public `push_bulk`
+parity cases using routing middleware and real Redis:
+[`test_push_bulk_registers_exactly_the_routed_queues_and_delivers_each_payload`](../../test/parity/client_push_test.rb#L335)
+and
+[`test_push_bulk_failure_before_second_group_leaves_only_first_queue_registered`](../../test/parity/client_push_test.rb#L363).
+
 ## Reliable fetch is the only mode; no BRPOP
 
 **Wurk:** `Wurk::Fetcher::Reliable` (BLMOVE-based, private-list-per-process)
