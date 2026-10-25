@@ -650,6 +650,63 @@ CAS release, rather than waiting out the TTL.
 
 **Anchor:** `app/controllers/wurk/api_controller.rb`, `lib/wurk/job_set.rb`.
 
+## Dashboard job-set HTTP request shapes differ from Sidekiq Web
+
+**Status:** recorded compatibility gap, not an approved safe or deliberate
+exception. This entry concerns request paths and parameters, independently of
+the bulk-failure response behavior above; it changes no runtime behavior.
+
+**Spec versus Wurk:** all rows below are POSTs, relative to the Web/engine
+mount. Spec routes come from [free §25.4](../target/sidekiq-free.md#254-routes);
+Wurk routes add `/api` and rename `morgue` to `dead`.
+
+| Operation | Spec route and explicit detail | Wurk route and supported commands |
+|---|---|---|
+| Retries bulk | `/retries`: `key[]`, params `retry`/`delete`/`kill` | `/api/retries`: `retry`, `delete`, `kill` |
+| Retries single | `/retries/:key`: single action; parameters unspecified | `/api/retries/:key`: `retry`, `delete`, `kill` |
+| Retries all | `/retries/all/delete`, `/retries/all/retry`, `/retries/all/kill` | `/api/retries/all/:cmd`: `delete`, `retry`, `kill` |
+| Scheduled bulk | `/scheduled`: `delete`/`add_to_queue`; parameter names unspecified | `/api/scheduled`: `delete`, `add_to_queue` |
+| Scheduled single | `/scheduled/:key`: single; parameters unspecified | `/api/scheduled/:key`: `delete`, `add_to_queue` |
+| Scheduled all | `/scheduled/all/delete`, `/scheduled/all/add_to_queue` | `/api/scheduled/all/:cmd`: `delete`, `add_to_queue` |
+| Morgue/dead bulk | `/morgue`: bulk action; commands and parameters unspecified | `/api/dead`: `retry`, `delete` |
+| Morgue/dead single | `/morgue/:key`: single action; commands and parameters unspecified | `/api/dead/:key`: `retry`, `delete` |
+| Morgue/dead all | `/morgue/all/delete`, `/morgue/all/retry` | `/api/dead/all/:cmd`: `delete`, `retry` |
+
+**Wurk request bodies:** the SPA sends bulk `{ "keys": [key, ...], "cmd":
+command }` and single `{ "cmd": command }` as JSON with
+`Content-Type: application/json`. All-set requests put the command in the path
+and send no body. The controller reads `params[:cmd]` and, for bulk,
+`Array(params[:keys])`; it does not translate singular `key[]` or action-named
+parameters into that contract. A retries bulk request carrying only the spec's
+`key[]` plus a `retry`, `delete`, or `kill` parameter therefore has no recognized
+`cmd` and reaches the `400 { error: 'unknown action' }` branch, even if sent to
+Wurk's `/api/retries` path. Changing the path alone is not sufficient.
+
+**Key delimiters and evidence limits:** Wurk's shared frontend key builder uses
+`"<score>|<jid>"` for all three sets and URL-encodes it for single requests.
+The spec explicitly gives `"<score>-<jid>"` for the retry-detail GET row
+([line 1431](../target/sidekiq-free.md#L1431)); it does not explicitly define
+that delimiter for every other set or POST row. The reported upstream pattern
+of `key[]` plus action-named parameters is explicit in the spec only for
+retries bulk ([line 1432](../target/sidekiq-free.md#L1432)). The scheduled bulk
+row lists actions, not their parameter encoding, and the morgue bulk and
+single-action rows do not specify request shapes. Extending the reported
+pattern to those rows is not a verified upstream fact here: no stock upstream
+implementation was inspected and no compatibility test was executed for this
+entry. The JSON bodies described above are verified Wurk client behavior, not
+a claim that its controller accepts only JSON or that the spec requires a
+particular content type.
+
+**Anchor:** [Wurk route scope](../../config/routes.rb#L7) and
+[job-set routes](../../config/routes.rb#L39-L50),
+[command whitelists](../../app/controllers/wurk/api_controller.rb#L40-L45),
+[single/all dispatch](../../app/controllers/wurk/api_controller.rb#L110-L148),
+[bulk parameter lookup and rejection](../../app/controllers/wurk/api_controller.rb#L373-L397),
+[frontend key builder](../../frontend/src/hooks/useJobSetActions.ts#L11-L16),
+[single/bulk/all requests](../../frontend/src/hooks/useJobSetActions.ts#L40-L56),
+[JSON encoding](../../frontend/src/http.ts#L33-L41), and
+[spec retries/scheduled/morgue rows](../target/sidekiq-free.md#L1430-L1448).
+
 ## A lost-reply Idempotency-Key stays pending until its TTL
 
 **Wurk:** the REST API releases an `Idempotency-Key` only when the error proves the write never applied; an unknown outcome (lost reply) keeps the key pending until its TTL (1h default), so a client retry gets 409 "in progress" rather than a second enqueue.
@@ -846,6 +903,38 @@ the gap as proven safe or claiming the three spec rows are implemented.
 **Anchor:** free §25.4; `config/routes.rb:6-10,126-134`;
 `app/controllers/wurk/api_controller.rb:60-66` (`stats`, `queues`);
 `app/controllers/wurk/api/serializers.rb:12-35` (`stats_payload`, `queue_summary`).
+
+## Busy-control HTTP request-shape parity is unsupported
+
+**Wurk:** the engine exposes `POST /api/busy/quiet` and
+`POST /api/busy/stop`, relative to the host application's mount
+(`config/routes.rb:7,57-58`). The action is selected by the path:
+`ApiController#quiet_process` calls `signal_processes(:quiet!)` and
+`#stop_process` calls `signal_processes(:stop!)`
+(`app/controllers/wurk/api_controller.rb:167-168`). The helper reads only
+`identity`: absent or empty, or `"all"`, targets every live non-embedded
+process; a named identity targets that process. An unknown identity returns
+404, and a named embedded process is not signalled and returns count 0
+(`app/controllers/wurk/api_controller.rb:430-441`). It does not select the
+action using `quiet` or `stop` request parameters.
+
+**Spec:** free [§25.4](../target/sidekiq-free.md#254-routes) specifies
+`POST /busy` with `identity`, `quiet`, and `stop` parameters (per-process or
+all), not split action-specific paths
+(`docs/target/sidekiq-free.md:1425`). That row does not define precedence
+between the action parameters.
+
+**Why:** the split endpoints serve the SPA's busy-page controls. Sharing
+quiet/stop functionality and identity targeting does not establish HTTP
+request compatibility: a client sending the specified `POST /busy` request
+cannot treat Wurk's action-in-path endpoints as an equivalent contract.
+This entry records unsupported request equivalence, not a proven-safe gap
+or a compatibility handler; it does not infer unspecified flag semantics.
+
+**Anchor:** free §25.4 (`docs/target/sidekiq-free.md:1425`);
+`config/routes.rb:7,53-58`;
+`app/controllers/wurk/api_controller.rb:167-168,430-441`
+(`quiet_process`, `stop_process`, `signal_processes`).
 
 ## `HEAD /` does not implement the Redis health probe
 

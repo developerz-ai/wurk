@@ -394,11 +394,11 @@ Sidekiq::Middleware::Server::Statsd.options = ->(worker_class, job, queue) {
 }
 ```
 
-Disable Datadog extensions (use only base statsd):
+Wurk sends counters and gauges through the configured StatsD client, forwarding tags and sample rates.
+Distribution metrics use the client's `distribution` method when available, falling back to `histogram` if supported.
 
-```ruby
-Sidekiq.configure_server { |c| c[:use_datadog_extensions] = false }
-```
+Metric support is determined by the configured client's capabilities; Wurk has no configurable Datadog extension mode.
+Without a configured client, metrics are a no-op.
 
 ### 9.3 Emitted metrics
 
