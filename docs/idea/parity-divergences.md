@@ -53,6 +53,40 @@ and never causes a queue pileup the spec's re-raise path would risk.
 
 **Anchor:** `lib/wurk/limiter/server_middleware.rb:56-59,81-89`.
 
+## Private-list names include a process-image nonce
+
+**Wurk:** current private lists are named
+`queue:<public>|<host>|<pid>|<nonce>|<index>` — five parts rather than four.
+`<host>` is `ENV["DYNO"]` when set, otherwise `Socket.gethostname`.
+`Component::PROCESS_NONCE` is 12 hex characters from `SecureRandom.hex(6)`,
+minted once when the process image loads and inherited unchanged across
+`fork`; it is not regenerated for each child. The reaper's `PrivateListKey`
+parser accepts both current nonce-bearing keys and legacy nonce-free
+`queue:<public>|<host>|<pid>|<index>` keys, so pre-upgrade in-flight lists
+remain reclaimable across rolling upgrades.
+
+**Spec:** [Pro §3.2](../target/sidekiq-pro.md#32-algorithm) specifies
+`queue:<public>|<hostname>|<pid>|<index>` — four parts, with no nonce.
+
+**Why:** a restarted process image or container can reuse both host and pid.
+The nonce separates those incarnations, preventing an old private list from
+being mistaken for a new owner's list (or vice versa). The reaper uses local
+`Process.kill(0, pid)` only when both host and nonce match this boot; a
+different incarnation is checked against its full heartbeat identity instead.
+This is an intentional key-schema incompatibility: tooling that parses Pro's
+fixed four-part private-list names must adapt to Wurk's five-part shape.
+Legacy-key reclaim support does not make the current names byte-compatible
+with Pro. Nor does the nonce distinguish reused pids among children of the
+same boot, which inherit the same nonce: the
+[residual same-boot pid-reuse blind spot](#reaper-liveness-has-a-residual-local-pid-reuse-blind-spot--shared-with-super_fetch-not-fixed)
+remains unchanged.
+
+**Anchor:** [key generation](../../lib/wurk/fetcher/reliable.rb#L76-L84),
+[nonce lifetime](../../lib/wurk/component.rb#L20-L22),
+[current and legacy parsing](../../lib/wurk/fetcher/private_list_key.rb#L18-L29)
+and [tail shapes](../../lib/wurk/fetcher/private_list_key.rb#L59-L68),
+Pro §3.2 (`docs/target/sidekiq-pro.md:253`).
+
 ## Orphan reclaim uses `LMOVE private public RIGHT RIGHT`, not `RPOPLPUSH`
 
 **Wurk:** `Fetcher::Reaper#drain` moves each job with
