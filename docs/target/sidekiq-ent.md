@@ -545,7 +545,7 @@ end
 | Leader renew         | every 15s                                                          |
 | Follower check       | every 60s                                                          |
 | Lock TTL             | ~30s (2× renew)                                                    |
-| Step-down on quiesce | leader steps down immediately on USR1 quiet (since 2.2.3 — invalid leaders self-evict). Periodic still enqueues. |
+| Step-down on quiesce | Ent semantics: leader steps down immediately on USR1 quiet (since 2.2.3 — invalid leaders self-evict); a follower re-campaigns, so §2.6 periodic keeps enqueuing. **Wurk diverges** — see `docs/idea/parity-divergences.md` ("Quiet does not step the leader down; full shutdown does"): Wurk's quiet signal is cluster-global, one-way `TSTP` (free spec §21.3), `USR1` is the swarm parent's rolling restart and never quiets anything, and a quieted Wurk leader does NOT step down — `Launcher#quiet` leaves the 15s renewal and the cron poller running. |
 | Opt out              | `SIDEKIQ_LEADER=false` env on a process → never campaigns for leader. Useful for hot-standby pools. |
 
 ### 6.3 Events

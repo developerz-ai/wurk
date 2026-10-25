@@ -118,7 +118,7 @@ module Wurk
       @done = true
       @managers.each(&:quiet)
       @poller&.terminate
-      # The cron poller is intentionally NOT terminated here: a USR1-quieted
+      # The cron poller is intentionally NOT terminated here: a TSTP-quieted
       # leader still enqueues periodic jobs — it only stops fetching for itself.
       # Loops stop only on full shutdown (#stop). Spec: sidekiq-ent.md §2.6.
       fire_event(:quiet, reverse: true)
