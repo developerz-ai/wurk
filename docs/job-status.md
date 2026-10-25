@@ -170,7 +170,7 @@ record.result_truncated?
 record.result_withheld?
 record.error_class
 record.error_message
-record.to_h             # the same shape the HTTP API and dashboard serve
+record.to_h             # the same shape the HTTP API serves
 ```
 
 `Wurk::Status.delete(jid)` removes a row outright and returns `true` when one
@@ -300,7 +300,7 @@ anything; if the job declared its args a secret, the return value is dropped
 and the row gets `result_withheld: "1"` instead of a `result` field.
 
 Why withhold rather than encrypt the row: encrypting just the result would
-mean every reader of a status row — dashboard, HTTP API, a chain piping the
+mean every reader of a status row — the HTTP API, a chain piping the
 result onward — needs the crypto key, and the crypto contract is scoped to
 the last positional argument, not to arbitrary stored data. Withholding the
 result is a one-line answer that doesn't leak plaintext back in beside args
