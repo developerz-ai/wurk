@@ -847,6 +847,38 @@ the gap as proven safe or claiming the three spec rows are implemented.
 `app/controllers/wurk/api_controller.rb:60-66` (`stats`, `queues`);
 `app/controllers/wurk/api/serializers.rb:12-35` (`stats_payload`, `queue_summary`).
 
+## Busy-control HTTP request-shape parity is unsupported
+
+**Wurk:** the engine exposes `POST /api/busy/quiet` and
+`POST /api/busy/stop`, relative to the host application's mount
+(`config/routes.rb:7,57-58`). The action is selected by the path:
+`ApiController#quiet_process` calls `signal_processes(:quiet!)` and
+`#stop_process` calls `signal_processes(:stop!)`
+(`app/controllers/wurk/api_controller.rb:167-168`). The helper reads only
+`identity`: absent or empty, or `"all"`, targets every live non-embedded
+process; a named identity targets that process. An unknown identity returns
+404, and a named embedded process is not signalled and returns count 0
+(`app/controllers/wurk/api_controller.rb:430-441`). It does not select the
+action using `quiet` or `stop` request parameters.
+
+**Spec:** free [§25.4](../target/sidekiq-free.md#254-routes) specifies
+`POST /busy` with `identity`, `quiet`, and `stop` parameters (per-process or
+all), not split action-specific paths
+(`docs/target/sidekiq-free.md:1425`). That row does not define precedence
+between the action parameters.
+
+**Why:** the split endpoints serve the SPA's busy-page controls. Sharing
+quiet/stop functionality and identity targeting does not establish HTTP
+request compatibility: a client sending the specified `POST /busy` request
+cannot treat Wurk's action-in-path endpoints as an equivalent contract.
+This entry records unsupported request equivalence, not a proven-safe gap
+or a compatibility handler; it does not infer unspecified flag semantics.
+
+**Anchor:** free §25.4 (`docs/target/sidekiq-free.md:1425`);
+`config/routes.rb:7,53-58`;
+`app/controllers/wurk/api_controller.rb:167-168,430-441`
+(`quiet_process`, `stop_process`, `signal_processes`).
+
 ## Dashboard and web extension differences
 
 **Wurk:** `GET /profiles/:key` requires same-origin, a typed URL, or a same-host Referer (Sidekiq answers any GET); extension `redirect_to` inside the SPA falls back to the extension root for off-site targets (the SPA loads extensions with `fetch`, which cannot follow cross-origin redirects); `reload_page` inside the SPA goes to the extension index; `Sidekiq::Web.views` is an accepted, ignored array; read-only mode answers TRACE with 403 on the standalone mount; the health server closes connections past 16 concurrent unanswered.
