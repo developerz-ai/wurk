@@ -617,6 +617,8 @@ resetting it.
 
 **Wurk:** `TIME` is read in Ruby and the aligned slot key passed via `KEYS`.
 
+**Spec:** none — `Wurk::Throttle` is a Wurk extra, not a Sidekiq surface (`lib/wurk/throttle.rb`): nothing in the Sidekiq key schema (sidekiq-free.md §1) lives under `throttle:` (`lib/wurk/keys.rb`), sidekiq-throttled keys off a host-supplied strategy name and cannot collide, and Ent's only rate-limiting surface (`Sidekiq::Limiter`, ent §1) is the rolling window Throttle deliberately does not duplicate — there is no `Sidekiq::Throttle` alias.
+
 **Why:** a key built inside Lua breaks Redis Cluster and Dragonfly.
 
 **Anchor:** `lib/wurk/throttle.rb`, `lib/wurk/lua/throttle_slot.lua`.
@@ -624,6 +626,10 @@ resetting it.
 ## Flow nodes with `at:` carry an `at` field and show `enqueued` once released
 
 **Wurk:** flow node records gain a Wurk-only `at` field; a node released onto `schedule` reports state `enqueued`.
+
+**Spec:** none — `Wurk::Flow` is a Wurk extra, not parity (`lib/wurk/compat.rb`): Sidekiq has no DAG, so nothing in its key schema (sidekiq-free.md §1) answers to `flow:` (`lib/wurk/keys.rb`), and node records live in Wurk-only `flow:<fid>:<index>` hashes nothing outside Wurk reads. The one spec-adjacent surface is compatibility, not divergence: a released `at:` node lands on the standard `schedule` zset as the exact member Client#push writes, so Sidekiq's own scheduled-job semantics take over.
+
+**Why:** the `at` record field *is* the release score — `flow_advance.lua` HMGETs it and ZADDs the stored payload onto `schedule` with it at a release that can come long after creation; it is carried on the record (`creation.rb` writes it as a string and stores the payload as the schedule member) so the advance script never JSON-decodes the payload — the cjson rule — and the dashboard/API can show the fire time without decoding the schedule member. `enqueued` means out of the flow's hands: the script writes it before the `at:` branch, and a schedule-bound node's remaining wait is ordinary scheduler promotion, not flow state, while `waiting` would misreport already-satisfied dependencies as pending and stall every progress view reading state.
 
 **Anchor:** `lib/wurk/flow/creation.rb`.
 
