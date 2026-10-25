@@ -267,7 +267,9 @@ sidekiq -q critical -q default -q bulk        # strict order
 sidekiq -q critical,3 -q default,2 -q bulk,1  # weighted random
 ```
 
-Implementation: weights are exposed as `Sidekiq.options[:queues]` (array possibly with duplicates).
+Upstream Sidekiq removed `Sidekiq.options` in v7. Read `config.queues` for the default capsule's weight-expanded queue list (queue names may appear multiple times); this is not a lossless representation of the queue configuration.
+
+In Wurk, `capsule.queue_specs` preserves the lossless `name[,weight]` specs for round-tripping through `queues=`. Strict queues omit weights (for example, `"critical"`); weighted specs retain them (for example, `"critical,3"`). For the default capsule, use `config.default_capsule.queue_specs`.
 
 ### 3.5 Metrics
 
