@@ -30,6 +30,43 @@ by class identity still work since the alias resolves to a real class.
 
 **Anchor:** `lib/wurk/compat.rb:106`, `lib/wurk/fetcher/reliable.rb`.
 
+## Concurrent limiter polls instead of using XREAD waiter signalling
+
+**Wurk:** concurrent acquisition runs an atomic Lua script using Redis `TIME`
+to trim expired slots, check ZSET cardinality, and add a slot with score
+`now + lock_timeout` when capacity is available. On exhaustion it retries
+acquisition after `sleep(min(remaining_wait_time, 0.05))`, raising `OverLimit`
+when the wait budget is exhausted. `policy: :ignore` instead returns immediately
+after the first failed acquisition, silently skipping the block without sleeping.
+The release Lua script only `ZREM`s the slot; it sends no waiter notification.
+
+Wurk does not create, read, write, or refresh the TTL of `lmtr-cw:{name}`
+waiter streams. Concurrent `state_keys` contains only `lmtr-cs:{name}` and
+`lmtr-stats:{name}`: `reset` deletes those keys, while `delete` additionally
+removes metadata and list membership, not waiter streams. A stream left by
+migration from Ent remains untouched, with its existing expiry (if any).
+Successful acquisition refreshes only the slot and stats key TTLs.
+
+**Spec:** Ent [§1.3](../target/sidekiq-ent.md#13-within_limit-semantics)
+uses Redis stream `XREAD` waiter signalling when concurrent slots are exhausted;
+[§1.7](../target/sidekiq-ent.md#17-redis-keys-observed) lists
+`lmtr-cw:{name}` as the waiter stream and specifies `EXPIRE = ttl` for all keys.
+
+**Why:** polling deliberately avoids waiter-stream coordination while retaining
+atomic slot-capacity checks and the wait-timeout/ignore policies. The tradeoff
+is repeated Redis acquisition attempts under contention and possible extra
+wake-up delay after a slot is released. The 50ms bound is on each requested
+sleep, not a guarantee of scheduling or acquisition latency. This does not
+claim identical wake latency, FIFO ordering, or fairness relative to Ent.
+
+**Anchor:** [poll interval](../../lib/wurk/limiter/concurrent.rb#L16),
+[retry loop and immediate ignore](../../lib/wurk/limiter/concurrent.rb#L94-L103),
+[acquire/release key scope](../../lib/wurk/limiter/concurrent.rb#L106-L114),
+[atomic acquisition and TTLs](../../lib/wurk/lua/limiter_concurrent_acquire.lua#L15-L33),
+[ZREM-only release](../../lib/wurk/lua/limiter_concurrent_release.lua#L7),
+[concurrent lifecycle keys](../../lib/wurk/limiter/concurrent.rb#L55-L57), and
+[reset/delete scope](../../lib/wurk/limiter/base.rb#L42-L53).
+
 ## Limiter reschedule cap routes to the dead set, not re-raise
 
 **Wurk:** `Limiter::ServerMiddleware` reschedules an over-limit job up to

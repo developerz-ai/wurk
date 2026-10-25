@@ -100,7 +100,7 @@ Behavior matrix:
 
 | Type         | Acquire                                | On exhaustion                                                   | On block-exit                              |
 | ------------ | -------------------------------------- | --------------------------------------------------------------- | ------------------------------------------ |
-| `concurrent` | atomic slot in ZSET, score = now+lock_timeout | blocks via Redis stream `XREAD` until slot freed, then `OverLimit` after `wait_timeout` | slot deleted; if `lock_timeout` exceeded → "Reclaimed" metric and another waiter may have entered. |
+| `concurrent` | atomic slot in ZSET, score = now+lock_timeout (Wurk: Lua acquisition) | Ent: Redis stream `XREAD` waiter signalling; Wurk: retries atomic acquisition with sleeps bounded by 50ms and remaining wait time; `OverLimit` after `wait_timeout` ([divergence](../idea/parity-divergences.md#concurrent-limiter-polls-instead-of-using-xread-waiter-signalling)) | slot deleted; if `lock_timeout` exceeded → "Reclaimed" metric and another waiter may have entered. |
 | `bucket`     | INCR bucket key for current epoch unit | `sleep` until next boundary; `OverLimit` if `wait_timeout` < remaining | nothing (count decays at unit rollover)    |
 | `window`     | sliding ZSET trim                      | `sleep(0.5)` loop; `OverLimit` past `wait_timeout`              | nothing                                    |
 | `leaky`      | atomic leak-then-add                   | `sleep(wait_timeout)` retrying; `OverLimit` if still full       | nothing                                    |
@@ -169,7 +169,7 @@ Namespace prefix: `lmtr:` (Enterprise convention).
 | -------------------------------- | ------ | ---------------------------------------- |
 | `lmtr:{name}`                    | HASH   | Limiter metadata: `type`, `options` (JSON), `fingerprint` |
 | `lmtr-cs:{name}`                 | ZSET   | concurrent: held slots, score = expiry   |
-| `lmtr-cw:{name}`                 | STREAM | concurrent: waiter signalling stream     |
+| `lmtr-cw:{name}`                 | STREAM | Ent-only concurrent waiter signalling; unused by Wurk |
 | `lmtr-b:{name}:{epoch}`          | STRING | bucket: counter for current period       |
 | `lmtr-w:{name}`                  | ZSET   | window: timestamps within interval       |
 | `lmtr-l:{name}`                  | HASH   | leaky: `{level, last_drain_ts}`          |
@@ -177,7 +177,7 @@ Namespace prefix: `lmtr:` (Enterprise convention).
 | `lmtr-stats:{name}`              | HASH   | metric counters (concurrent only)        |
 | `lmtr-list`                      | SET    | all limiter names (Web UI listing)       |
 
-All keys carry `EXPIRE = ttl`. 8.0.0 switched fingerprinting from SHA1 → SHA256 (~10% larger encoding).
+Ent's target contract is that all keys carry `EXPIRE = ttl`. Wurk does not create, read, write, or refresh the TTL of `lmtr-cw:{name}`, nor remove it on limiter `reset`/`delete`. Migrated waiter streams remain untouched with their existing expiry, if any; see the [concurrent polling divergence](../idea/parity-divergences.md#concurrent-limiter-polls-instead-of-using-xread-waiter-signalling). Wurk's concurrent acquire script refreshes only slot and stats key TTLs on successful acquisition. 8.0.0 switched fingerprinting from SHA1 → SHA256 (~10% larger encoding).
 
 ### 1.8 Testing
 
