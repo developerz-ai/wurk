@@ -18,15 +18,26 @@ remain in place. The required CI check remains `parity (oracle)`.
    reviewable `source` anchor to the section that promises it. Describe one
    observable outcome, not an entire feature such as “batches work.” Keep the ID
    when promoting or moving the case; do not reuse it for a different promise.
-3. Search the existing oracles before adding assertions. They already guard
+3. Copy a `promise`: a verbatim excerpt from the anchored source lines,
+   mandatory on every case, covered and pending alike. Validation normalizes
+   whitespace (strip each line, drop blanks, join with one space) on both the
+   excerpt and the anchored range and requires the normalized excerpt to appear
+   in the normalized anchored text, so the `promise` pins the wording, not just
+   the file and lines: if the promised sentence is removed or rewritten in the
+   source document, the case stops validating even though the anchor still
+   resolves to an existing file and a nonblank line range. A missing, blank,
+   paraphrased, or relocated `promise` is an error, not a weaker case. Choose
+   the shortest excerpt that still names the promised behavior — a sentence or
+   clause, not the whole section.
+4. Search the existing oracles before adding assertions. They already guard
    behavior such as job JSON and Redis key names and types. Reuse those guards
    rather than replacing them or marking their behaviors pending.
-4. For a covered case, reference runnable oracle methods as
+5. For a covered case, reference runnable oracle methods as
    `Class#test_method`. Read their assertions: a matching method name alone is
    not evidence. One case may need several methods, and a method may establish
    several separately sourced cases. All referenced methods must prove the
    stated behavior.
-5. When no oracle establishes the promise, record a pending case with a concrete
+6. When no oracle establishes the promise, record a pending case with a concrete
    `reason` and a distinct `future_work` ID for that case. Identify what evidence
    or implementation is missing; a shared “implement compatibility” bucket is
    not individually tracked work.
@@ -70,3 +81,38 @@ Never delete, relax, skip, or convert an existing failing guard to pending to
 obtain green results. An intentional divergence needs explicit documentation and
 review, not relabeling in the inventory. Keep the upstream pin and its documented
 update process; adding cases is not a reason to move the pin.
+
+## Retire a withdrawn promise
+
+Because the `promise` is validated against the anchored lines, an edit to a
+source document surfaces here as a validation failure naming the case and its
+anchor. That failure is the mechanism working: the case claimed a documented
+promise, and the document no longer makes it. When a case's promise disappears,
+reconcile the case instead of weakening the check:
+
+1. **The same promise moved.** The behavior is still documented, but the text
+   now lives in a different section or file. Re-anchor the case: update the
+   `source` anchor and the `promise` excerpt to the new location, keeping the
+   case `id`, `behavior`, and oracles. This is a move, not a retirement.
+2. **The behavior is now an intentional divergence.** The source no longer
+   promises what Wurk does, and Wurk's behavior is a deliberate, reviewed
+   choice. Record the divergence in
+   [parity-divergences.md](idea/parity-divergences.md) first, then re-source the
+   case to that ledger entry: new `source` anchor and new `promise` excerpt
+   pointing at the divergence record, same `id`. The re-sourced `promise` must
+   quote the divergence entry's own sentence — the one that states Wurk's
+   divergent behavior — not any other section of the ledger: quoting an
+   unrelated entry validates against the anchor while claiming a promise the
+   ledger never made. The case keeps guarding the
+   behavior against the divergence ledger instead of the upstream spec.
+3. **The promise is withdrawn outright.** The behavior is no longer documented
+   anywhere and Wurk does not deliberately diverge — the case no longer
+   describes a claim anyone makes. Delete the case from the inventory. A
+   deleted case leaves the totals: passed, pending, and total counts shrink by
+   one and must never be propped back up with padding or placeholder entries.
+   Its `id` is never reused for a different promise; a later case about the
+   same area gets a fresh `id`.
+
+Never edit a `promise` to match drift in the source document without deciding
+which of the three paths applies — silently re-quoting weaker wording is how a
+withdrawn promise stays "covered."

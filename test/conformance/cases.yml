@@ -3,439 +3,627 @@
   area: client
   behavior: Arguments round-trip as JSON-native values.
   source: docs/target/sidekiq-free.md#L153-L162
+  promise: >-
+    | `class` | String | class name (stringified from `Class` if passed) |
   oracles: [ClientPushParityTest#test_args_round_trip_through_json]
 - id: client.jid
   area: client
   behavior: Generated JIDs are unique lowercase 24-character hex strings.
   source: docs/target/sidekiq-free.md#L198-L204
+  promise: >-
+    SecureRandom.hex(12)  # 24-char lowercase hex
   oracles: [ClientPushParityTest#test_jids_are_unique_lowercase_hex_24]
 - id: client.default-queue
   area: client
   behavior: An unspecified queue defaults to default.
   source: docs/target/sidekiq-free.md#L153-L162
+  promise: >-
+    | `queue` | String | required, non-empty |
   oracles: [ClientPushParityTest#test_default_queue_is_default]
 - id: client.precedence
   area: worker
   behavior: Per-call options override worker sidekiq_options.
   source: docs/target/sidekiq-free.md#L405-L430
+  promise: >-
+    - `sidekiq_options_hash` — merged options
   oracles: [ClientPushParityTest#test_sidekiq_options_are_merged_and_item_keys_win]
 - id: client.symbols
   area: client
   behavior: Symbol queues and Class objects are stringified for persistence.
   source: docs/target/sidekiq-free.md#L586-L611
+  promise: >-
+    # 2. merge defaults from klass.get_sidekiq_options (or Sidekiq.default_job_options)
   oracles: [ClientPushParityTest#test_symbol_queue_and_class_are_stringified]
 - id: client.pool
   area: client
   behavior: The connection pool option is not persisted in job JSON.
   source: docs/target/sidekiq-free.md#L535-L555
+  promise: >-
+    conn.lpush("queue:#{queue}", payloads)
   oracles: [ClientPushParityTest#test_pool_is_transient_and_never_persisted]
 - id: client.retry-for
   area: client
   behavior: retry_for accepts exactly 1_000_000_000, rejects values over it after coercion, coerces digit-only Strings base-10 to Integer.
   source: docs/target/sidekiq-free.md#L171
+  promise: >-
+    Values over 1_000_000_000 *after* coercion rejected — exactly 1_000_000_000 is valid. Stored as Integer
   oracles: [ClientPushParityTest#test_retry_for_at_and_below_the_cap_lands_on_the_queue_as_an_integer, ClientPushParityTest#test_retry_for_fraction_under_the_coerced_cap_is_accepted, ClientPushParityTest#test_retry_for_is_coerced_to_integer, ClientPushParityTest#test_digit_string_retry_for_lands_on_the_wire_as_an_integer]
 - id: redis.queues
   area: redis
   behavior: Immediate enqueue writes only the queues SET and queue LIST.
   source: docs/target/sidekiq-free.md#L19-L20
+  promise: >-
+    | `queues` | SET | set of all known queue names (without `queue:` prefix) |
   oracles: [ClientPushParityTest#test_immediate_push_touches_only_queues_set_and_queue_list]
 - id: redis.fifo
   area: redis
   behavior: Immediate pushes use LPUSH so the oldest job is fetched first.
   source: docs/target/sidekiq-free.md#L20
+  promise: >-
+    | `queue:<name>` | LIST | FIFO list of JSON job payloads. `LPUSH` to enqueue, `BRPOP`/`RPUSH` for fetch/requeue |
   oracles: [ClientPushParityTest#test_push_is_lpush_so_fetch_side_pops_oldest_first]
 - id: client.strict-args
   area: client
   behavior: Default strict mode rejects non-JSON-native arguments.
   source: docs/target/sidekiq-free.md#L586-L624
+  promise: >-
+    # JSON-native types only: Integer, Float, true, false, nil, String, Array, Hash<String,*>
   oracles: [ClientPushParityTest#test_non_json_native_args_raise_under_default_strict_mode]
 - id: client.middleware-halt
   area: client
   behavior: Halting client middleware returns nil without writing a job.
   source: docs/target/sidekiq-free.md#L654-L689
+  promise: >-
+    # returning falsy/nil halts the push
   oracles: [ClientPushParityTest#test_middleware_halt_returns_nil_and_writes_nothing]
 - id: client.bulk-jids
   area: client
   behavior: Bulk enqueue assigns a separate JID to each job.
   source: docs/target/sidekiq-free.md#L557-L567
+  promise: >-
+    Each job gets its own `SecureRandom.hex(12)` jid; runs through middleware individually; returns array of jids (may contain nils for middleware-halted entries).
   oracles: [ClientPushParityTest#test_push_bulk_gives_each_job_its_own_jid_and_preserves_fifo]
 - id: client.bulk-fifo
   area: client
   behavior: Bulk enqueue preserves FIFO ordering.
   source: docs/target/sidekiq-free.md#L20
+  promise: >-
+    FIFO list of JSON job payloads. `LPUSH` to enqueue, `BRPOP`/`RPUSH` for fetch/requeue
   oracles: [ClientPushParityTest#test_push_bulk_gives_each_job_its_own_jid_and_preserves_fifo]
 - id: client.bulk-slices
   area: client
   behavior: Bulk enqueue slices work by batch_size.
   source: docs/target/sidekiq-free.md#L557-L567
+  promise: >-
+    - `batch_size` — default 1000 (or 100 if scheduled)
   oracles: [ClientPushParityTest#test_push_bulk_slices_by_batch_size]
 - id: worker.enqueue-helpers
   area: worker
   behavior: Client enqueue helpers enqueue worker arguments.
   source: docs/target/sidekiq-free.md#L505-L533
+  promise: >-
+    self.enqueue_to_in(queue, interval, klass, *args)
   oracles: [ClientPushParityTest#test_client_enqueue_helpers]
 - id: worker.perform-bulk
   area: worker
   behavior: perform_bulk enqueues the supplied arrays of arguments.
   source: docs/target/sidekiq-free.md#L432-L447
+  promise: >-
+    HardJob.perform_bulk(items, **opts)
   oracles: [ClientPushParityTest#test_perform_bulk_dsl]
 - id: worker.active-job
   area: worker
   behavior: ActiveJob payloads use the Sidekiq wrapper class.
   source: docs/target/sidekiq-free.md#L1548-L1557
+  promise: >-
+    - `class` = `"Sidekiq::ActiveJob::Wrapper"` (pre-8 payloads carry `"ActiveJob::QueueAdapters::SidekiqAdapter::JobWrapper"`; readers accept both)
   oracles: [ClientPushParityTest#test_active_job_payload_uses_the_sidekiq_wrapper_class]
 - id: schedule.score
   area: scheduling
   behavior: Future jobs use schedule sorted-set scores in float epoch seconds.
   source: docs/target/sidekiq-free.md#L27
+  promise: >-
+    | `schedule` | jobs scheduled for future execution, score = `at` timestamp |
   oracles: [ClientPushParityTest#test_at_routes_to_schedule_zset_with_float_seconds_score]
 - id: schedule.strip-enqueued
   area: scheduling
   behavior: Scheduled pushes omit enqueued_at even if supplied.
   source: docs/target/sidekiq-free.md#L535-L555
+  promise: >-
+    hash = hash.except("enqueued_at", "at")
   oracles: [ClientPushParityTest#test_scheduled_push_strips_a_supplied_enqueued_at]
 - id: schedule.past
   area: scheduling
   behavior: perform_in with a past time enqueues immediately.
   source: docs/target/sidekiq-free.md#L432-L447
+  promise: >-
+    Past timestamps enqueued immediately (no `at` field).
   oracles: [ScheduledParityTest#test_perform_in_with_past_time_enqueues_immediately]
 - id: schedule.absolute
   area: scheduling
   behavior: perform_at uses the absolute supplied timestamp.
   source: docs/target/sidekiq-free.md#L432-L447
+  promise: >-
+    else absolute timestamp.
   oracles: [ScheduledParityTest#test_perform_at_uses_the_absolute_timestamp]
 - id: schedule.reliable-atomic
   area: scheduling
   behavior: Reliable scheduler promotion atomically removes and enqueues due jobs.
   source: docs/target/sidekiq-pro.md#L289-L292
+  promise: >-
+    Uses one Lua script that **atomically** `ZRANGEBYSCORE` + `ZREM` + `LPUSH` the due jobs into their queue.
   reason: Existing scheduling oracles do not exercise atomic promotion across a crash.
   future_work: oracle-schedule-atomic-promotion
 - id: retry.first
   area: retries
   behavior: The first failure stamps failed_at and retry_count zero.
   source: docs/target/sidekiq-free.md#L932-L944
+  promise: >-
+    failed_at         : ms epoch (set on first failure only)
   oracles: [JobRetryParityTest#test_first_failure_sets_failed_at_and_retry_count_zero]
 - id: retry.next
   area: retries
   behavior: Later failures increment retry_count and stamp retried_at.
   source: docs/target/sidekiq-free.md#L932-L944
+  promise: >-
+    retried_at        : ms epoch (set on retries)
   oracles: [JobRetryParityTest#test_subsequent_failure_increments_and_stamps_retried_at]
 - id: retry.backtrace
   area: retries
   behavior: Error backtraces are base64-encoded zlib-compressed JSON.
   source: docs/target/sidekiq-free.md#L932-L944
+  promise: >-
+    error_backtrace   : if msg["backtrace"]: base64(Zlib.deflate(JSON.dump(lines)))
   oracles: [JobRetryParityTest#test_error_backtrace_is_base64_zlib_json]
 - id: retry.disabled
   area: retries
   behavior: retry false skips both retry and morgue.
   source: docs/target/sidekiq-free.md#L891-L905
+  promise: >-
+    def local(jobinst, jobstr, queue) { yield }  # rescues Exception → process_retry; raises Handled
   oracles: [JobRetryParityTest#test_retry_false_skips_retry_and_morgue]
 - id: retry.exhausted
   area: retries
   behavior: Reaching the configured attempt count promotes to the morgue.
   source: docs/target/sidekiq-free.md#L923-L930
+  promise: >-
+    Triggered when `retry_count >= retry_attempts_from(msg["retry"], max_retries)`, or `retry_for` time exceeded.
   oracles: [JobRetryParityTest#test_retry_count_at_attempts_promotes_to_morgue]
 - id: dead.trim-age
   area: dead-set
   behavior: Dead-set trimming removes entries exceeding the configured age.
   source: docs/target/sidekiq-free.md#L1060-L1095
+  promise: >-
+    def trim                                  # within dead_max_jobs & dead_timeout
   oracles: [DataApiParityTest#test_dead_set_trim_by_age]
 - id: dead.trim-count
   area: dead-set
   behavior: Dead-set count trimming follows ZREMRANGEBYRANK 0 minus max.
   source: docs/target/sidekiq-free.md#L1060-L1095
+  promise: >-
+    def kill(message, opts = {})              # ZADD dead + trim + death_handlers
   oracles: [DataApiParityTest#test_dead_set_trim_by_max_jobs_matches_zremrangebyrank_0_minus_max]
 - id: batch.success
   area: batches
   behavior: Success fires once after all jobs succeed.
   source: docs/target/sidekiq-pro.md#L98
+  promise: >-
+    | `:success` | All jobs in batch (and all descendant batches) succeeded | Fires **once**. Never fires if any job died. |
   oracles: [BatchParityTest#test_success_and_complete_fire_once_with_their_options]
 - id: batch.complete
   area: batches
   behavior: Complete fires once even when a job dies.
   source: docs/target/sidekiq-pro.md#L99
+  promise: >-
+    | `:complete` | Every job executed at least once (success OR exhausted retries) | Fires once. May fire even with failures. |
   oracles: [BatchParityTest#test_a_dead_job_fires_death_and_complete_but_never_success]
 - id: batch.death
   area: batches
   behavior: A dead job fires death but not success.
   source: docs/target/sidekiq-pro.md#L100
+  promise: >-
+    | `:death` | First job in batch exhausts retries / `dead: false` and discards | Fires per-batch on the first death only. Independent of `:complete`. |
   oracles: [BatchParityTest#test_a_dead_job_fires_death_and_complete_but_never_success]
 - id: batch.options
   area: batches
   behavior: Callback options survive JSON serialization.
   source: docs/target/sidekiq-pro.md#L104
+  promise: >-
+    - `options` is JSON-serialised; only basic types allowed.
   oracles: [BatchParityTest#test_callback_options_survive_exactly]
 - id: batch.empty
   area: batches
   behavior: An empty jobs block synthesizes an empty job so callbacks fire.
   source: docs/target/sidekiq-pro.md#L71
+  promise: >-
+    - Empty `#jobs` block is legal as of Pro 7.1 — synthesises a `Sidekiq::Batch::Empty` no-op job so callbacks still fire.
   oracles: [BatchParityTest#test_an_empty_jobs_block_synthesises_an_empty_job_and_fires]
 - id: batch.child-order
   area: batches
   behavior: Child success fires before parent success.
   source: docs/target/sidekiq-pro.md#L107
+  promise: >-
+    - Child `:success` fires before parent `:success`. Child `:complete` fires before parent `:complete`. No ordering between child `:success` and parent `:complete`.
   oracles: [BatchParityTest#test_child_success_fires_before_parent_success]
 - id: batch.cancel
   area: batches
   behavior: Invalidated jobs count as success for batch completion.
   source: docs/target/sidekiq-pro.md#L512
+  promise: >-
+    - **Expired jobs** — count as **success** within a batch. Same for jobs cancelled via `invalidate_all`.
   oracles: [BatchParityTest#test_jobs_cancelled_by_invalidate_all_count_as_success]
 - id: batch.callback-retry
   area: batches
   behavior: Callback jobs retry on failure like ordinary jobs.
   source: docs/target/sidekiq-pro.md#L105
+  promise: >-
+    - Callbacks run as ordinary Sidekiq jobs on `callback_queue`; retry on failure like any job.
   reason: Callback parity assertions do not yet fail and retry a callback job.
   future_work: oracle-batch-callback-retry
 - id: unique.duplicate
   area: uniqueness
   behavior: A duplicate push returns nil while the lock is held.
   source: docs/target/sidekiq-ent.md#L361
+  promise: >-
+    | Push duplicate            | client middleware drops the duplicate (returns `nil` JID; logs "JID X holds lock"). |
   oracles: [UniqueParityTest#test_duplicate_push_returns_nil_while_locked]
 - id: unique.digest
   area: uniqueness
   behavior: The uniqueness lock key is SHA256 of the JSON context.
   source: docs/target/sidekiq-ent.md#L347
+  promise: >-
+    SHA256 of JSON-dumped context is the lock key (8.0.0+; SHA1 prior).
   oracles: [UniqueParityTest#test_lock_key_is_sha256_of_json_context_holding_the_jid_with_unique_for_ttl]
 - id: unique.owner
   area: uniqueness
   behavior: The uniqueness lock holds the owning JID.
   source: docs/target/sidekiq-ent.md#L377
+  promise: >-
+    | `unique:{sha256}`    | STR  | Holds owning JID; TTL = `unique_for` (+ `delay` if scheduled).  |
   oracles: [UniqueParityTest#test_lock_key_is_sha256_of_json_context_holding_the_jid_with_unique_for_ttl]
 - id: unique.ttl
   area: uniqueness
   behavior: An immediate uniqueness lock expires after unique_for.
   source: docs/target/sidekiq-ent.md#L360
+  promise: >-
+    | Push                      | SETNX lock with `unique_for` TTL                         | same                                                           |
   oracles: [UniqueParityTest#test_lock_key_is_sha256_of_json_context_holding_the_jid_with_unique_for_ttl]
 - id: unique.scheduled
   area: uniqueness
   behavior: Scheduled uniqueness locks cover delay plus unique_for.
   source: docs/target/sidekiq-ent.md#L329
+  promise: >-
+    `perform_in(delay, ...)` locks for **`delay + unique_for`** so the lock covers the wait + execution window.
   oracles: [UniqueParityTest#test_scheduled_lock_covers_delay_plus_unique_for]
 - id: unique.success
   area: uniqueness
   behavior: Success-mode locks release when the job succeeds.
   source: docs/target/sidekiq-ent.md#L364
+  promise: >-
+    | `perform` succeeds        | lock DELed                                               | (already gone)                                                 |
   oracles: [UniqueParityTest#test_until_success_releases_on_success]
 - id: unique.failure
   area: uniqueness
   behavior: Success-mode locks survive a failure while the job retries.
   source: docs/target/sidekiq-ent.md#L363
+  promise: >-
+    | `perform` raises          | lock retained → next retry can proceed once attempted    | lock already gone → duplicate can be enqueued                  |
   oracles: [UniqueParityTest#test_until_success_keeps_the_lock_through_a_failure_and_the_retry_runs]
 - id: unique.start
   area: uniqueness
   behavior: Start-mode locks release before perform.
   source: docs/target/sidekiq-ent.md#L362
+  promise: >-
+    | `perform` start           | lock retained                                            | lock DELed before `perform`                                    |
   oracles: [UniqueParityTest#test_until_start_drops_the_lock_before_perform]
 - id: limiter.ignore
   area: limiters
   behavior: Concurrent policy ignore silently skips an unavailable block.
   source: docs/target/sidekiq-ent.md#L110
+  promise: >-
+    `policy: :ignore` on `concurrent` causes the block to be **silently skipped** when slot unavailable (no exception, no reschedule). Default is `:raise`.
   oracles: [LimiterParityTest#test_concurrent_policy_ignore_skips_the_block_silently]
 - id: limiter.release
   area: limiters
   behavior: Concurrent slots are freed on normal block exit.
   source: docs/target/sidekiq-ent.md#L103
+  promise: >-
+    slot deleted; if `lock_timeout` exceeded → "Reclaimed" metric and another waiter may have entered.
   oracles: [LimiterParityTest#test_concurrent_slot_is_freed_on_block_exit]
 - id: limiter.release-error
   area: limiters
   behavior: Concurrent slots are freed when a block raises.
   source: docs/target/sidekiq-ent.md#L103
+  promise: >-
+    `OverLimit` after `wait_timeout`
   oracles: [LimiterParityTest#test_concurrent_slot_is_freed_when_the_block_raises]
 - id: limiter.bucket
   area: limiters
   behavior: Bucket permits its count per interval then raises OverLimit.
   source: docs/target/sidekiq-ent.md#L104
+  promise: >-
+    | `bucket`     | INCR bucket key for current epoch unit | `sleep` until next boundary; `OverLimit` if `wait_timeout` < remaining | nothing (count decays at unit rollover)    |
   oracles: [LimiterParityTest#test_bucket_allows_count_per_interval_then_over_limit]
 - id: limiter.window
   area: limiters
   behavior: Window permits its count then raises OverLimit with ZSET-backed state.
   source: docs/target/sidekiq-ent.md#L105
+  promise: >-
+    | `window`     | sliding ZSET trim                      | `sleep(0.5)` loop; `OverLimit` past `wait_timeout`              | nothing                                    |
   oracles: [LimiterParityTest#test_window_allows_count_then_over_limit_with_a_zset]
 - id: limiter.leaky
   area: limiters
   behavior: Leaky fills to bucket size then raises OverLimit.
   source: docs/target/sidekiq-ent.md#L106
+  promise: >-
+    | `leaky`      | atomic leak-then-add                   | `sleep(wait_timeout)` retrying; `OverLimit` if still full       | nothing                                    |
   oracles: [LimiterParityTest#test_leaky_fills_to_bucket_size_then_over_limit_with_a_hash]
 - id: limiter.points
   area: limiters
   behavior: Points rejects estimates exceeding the balance immediately.
   source: docs/target/sidekiq-ent.md#L107
+  promise: >-
+    | `points`     | DECRBY `estimate`                      | `OverLimit` immediately if insufficient                         | `handle.points_used(actual)` adjusts delta |
   oracles: [LimiterParityTest#test_points_raises_immediately_when_estimate_exceeds_balance]
 - id: limiter.unlimited
   area: limiters
   behavior: Unlimited always yields regardless of constructor arguments.
   source: docs/target/sidekiq-ent.md#L108
+  promise: >-
+    | `unlimited`  | no-op                                  | never                                                           | no-op                                      |
   oracles: [LimiterParityTest#test_unlimited_ignores_its_arguments_and_always_yields]
 - id: limiter.cap-divergence
   area: limiters
   behavior: Wurk sends reschedule-cap exhaustion directly to dead rather than ordinary retries.
-  source: docs/idea/parity-divergences.md#L33-L52
+  source: docs/idea/parity-divergences.md#L111-L114
+  promise: >-
+    once the cap is hit, the job goes straight
+    to the dead set tagged `rate_limited` instead of re-raising into the normal
+    retry pipeline
   oracles: [LimiterParityTest#test_reschedule_cap_default_twenty_ends_in_the_dead_set]
 - id: fetch.private
   area: reliable-fetch
   behavior: Fetch parks the exact payload outside the public queue until acknowledged.
   source: docs/target/sidekiq-pro.md#L254-L255
+  promise: >-
+    - Job remains in the private queue until the worker explicitly `LREM`s it after success or retry handling.
   oracles: [ReliableFetchParityTest#test_fetch_returns_the_exact_payload_and_parks_it_out_of_the_public_queue]
 - id: fetch.isolated
   area: reliable-fetch
   behavior: A fetched job is invisible to another fetcher.
   source: docs/target/sidekiq-pro.md#L254-L255
+  promise: >-
+    atomic move from public list tail to private list head.
   oracles: [ReliableFetchParityTest#test_fetched_job_is_invisible_to_other_fetchers]
 - id: fetch.pause
   area: reliable-fetch
   behavior: Paused queues are skipped until unpaused.
-  source: docs/target/sidekiq-pro.md#L320-L321
+  source: docs/target/sidekiq-pro.md#L323
+  promise: >-
+    Fetcher (`super_fetch` or basic_fetch in Pro mode) skips any queue listed in `paused`. Existing in-flight jobs continue.
   oracles: [ReliableFetchParityTest#test_paused_queue_is_skipped_until_unpaused]
 - id: fetch.recover
   area: reliable-fetch
   behavior: A killed process's in-flight job is recovered exactly once.
   source: docs/target/sidekiq-pro.md#L256
+  promise: >-
+    - Process death: heartbeat key `processes` expires after 60s.
   oracles: [ReliableFetchParityTest#test_killed_process_in_flight_job_is_recovered_exactly_once]
 - id: fetch.poison
   area: reliable-fetch
   behavior: Three orphan recoveries requeue and the fourth orphaning kills the job.
   source: docs/target/sidekiq-pro.md#L515
+  promise: >-
+    Threshold 3: recoveries while the counter is ≤ 3 requeue, so the job is killed on its 4th orphaning.
   oracles: [ReliableFetchParityTest#test_poison_pill_allows_three_recoveries_and_kills_on_the_fourth_orphaning]
 - id: fetch.deferred-ack
   area: reliable-fetch
   behavior: Successful acknowledgements are removed on the next fetch.
-  source: docs/idea/parity-divergences.md#L230-L236
+  source: docs/idea/parity-divergences.md#L390-L392
+  promise: >-
+    the `LREM
+    <private list> 1 <job JSON>` that retires it is held in the fetcher and sent in
+    the **next** fetch's pipeline
   oracles: [ReliableFetchParityTest#test_acknowledged_job_is_gone_after_the_next_fetch]
 - id: fetch.terminate-ack
   area: reliable-fetch
   behavior: Termination flushes deferred acknowledgements.
-  source: docs/idea/parity-divergences.md#L232-L236
+  source: docs/idea/parity-divergences.md#L393-L396
+  promise: >-
+    Any pending ACK is flushed — as its own round
+    trip — before the fetcher blocks in `BLMOVE`, before the all-paused/no-queues
+    early return, on `terminate` (quiet), on processor stop, and before
+    `bulk_requeue` at shutdown.
   oracles: [ReliableFetchParityTest#test_acknowledged_job_is_gone_after_terminate]
 - id: cron.payload
   area: cron
   behavior: A periodic tick enqueues the same payload as perform_async.
   source: docs/target/sidekiq-ent.md#L200-L240
+  promise: >-
+    `opts[:args]` is a **static** array evaluated once at boot; passed verbatim into `klass.perform_async(*args)` on every tick.
   oracles: [PeriodicParityTest#test_a_tick_enqueues_what_perform_async_would]
 - id: cron.options
   area: cron
   behavior: Loop retry and queue options override worker defaults.
   source: docs/target/sidekiq-ent.md#L200-L240
+  promise: >-
+    | `opts`  | `Hash`                          | Recognized: `retry`, `queue`, `args`, `tz`.               |
   oracles: [PeriodicParityTest#test_loop_retry_and_queue_override_the_worker]
 - id: cron.no-backfill
   area: cron
   behavior: Missed ticks are not backfilled after a gap.
   source: docs/target/sidekiq-ent.md#L268
+  promise: >-
+    Missed ticks during the gap are **not** backfilled.
   oracles: [PeriodicParityTest#test_missed_ticks_are_not_backfilled_after_a_gap]
 - id: cron.cluster-leader
   area: cron
   behavior: Wurk uses the single cluster leader rather than a separate cron lock.
   source: docs/target/sidekiq-ent.md#L282-L286
+  promise: >-
+    > **Wurk divergence (#15):** periodic enqueue is gated by the *single* cluster
+    > leader (§6, via `Component#leader?`), not a separate `cron-leader` lock.
   reason: Periodic oracles do not yet establish leadership with competing processes.
   future_work: oracle-cron-cluster-leader
 - id: crypto.envelope
   area: encryption
   behavior: Wurk uses the documented JSON GCM envelope rather than upstream binary crypto format.
   source: docs/target/sidekiq-ent.md#L423-L437
+  promise: >-
+    In Redis the job's last arg becomes a JSON Hash envelope (not a base64 blob of a
+    binary envelope — the args array stays valid JSON for inspectors):
   oracles: [EncryptionParityTest#test_envelope_fields_and_gcm_round_trip]
 - id: web.dashboard-auth
   area: dashboard
   behavior: A falsey authorization hook denies dashboard requests with 403.
   source: docs/dashboard.md#L71-L74
+  promise: >-
+    A falsey return short-circuits to `403`. `path` is engine-relative
+    (`/api/stats`, not the host's absolute `/wurk/api/stats`), matching Sidekiq's
+    contract.
   reason: No dashboard authorization oracle exists in the parity suite.
   future_work: oracle-dashboard-authorization
 - id: web.dashboard-readonly
   area: dashboard
   behavior: Read-only mode denies every non-GET request with 403.
   source: docs/dashboard.md#L78-L80
+  promise: >-
+    `WURK_WEB_READ_ONLY=1` — every non-`GET` request 403s and the SPA hides
+    destructive actions.
   reason: Dashboard read-only checks have not been promoted to source-first parity assertions.
   future_work: oracle-dashboard-readonly
 - id: web.dashboard-middleware
   area: dashboard
   behavior: Host middleware runs before the dashboard authorization hook.
   source: docs/dashboard.md#L22-L24
+  promise: >-
+    The two compose. `Wurk::Web.use` middleware runs **first** (outermost), so by
+    the time the `authorization` block runs, the host middleware has already
+    populated `env` (e.g. `env['warden']`).
   reason: Parity has no host middleware ordering oracle.
   future_work: oracle-dashboard-middleware-order
 - id: web.api-off
   area: machine-api
   behavior: Without a configured token the machine API is absent.
   source: docs/api-http.md#L8-L10
+  promise: >-
+    **Off unless a token is configured.** With no `config.api_token` registered,
+    none of this exists: no route is mounted, no port opens, nothing changes on
+    the hot path.
   reason: Machine API tests are not independently sourced parity oracles yet.
   future_work: oracle-api-disabled
 - id: web.api-bearer
   area: machine-api
   behavior: Bearer tokens are compared in constant time against every configured token.
   source: docs/api-http.md#L143-L145
+  promise: >-
+    time against every registered token — no early exit on a match — so timing
+    can't leak which token, or how much of one, a caller guessed right.
   reason: No parity oracle measures the machine API comparison contract.
   future_work: oracle-api-bearer-comparison
 - id: web.api-missing-token
   area: machine-api
   behavior: Missing credentials return 401 with a Bearer challenge.
   source: docs/api-http.md#L160
+  promise: >-
+    - **No token presented** → `401`, `WWW-Authenticate: Bearer realm="wurk"`.
   reason: No machine API authentication oracle is loaded by parity.
   future_work: oracle-api-missing-token
 - id: web.api-scope
   area: machine-api
   behavior: Valid credentials with insufficient scope return 403, not 404.
   source: docs/api-http.md#L162
+  promise: >-
+    - **Valid token, wrong scope** → `403` (`insufficient_scope`), `WWW-Authenticate` names the scope required
   reason: Scope checks have not been promoted to independently sourced parity assertions.
   future_work: oracle-api-insufficient-scope
 - id: web.api-admin
   area: machine-api
   behavior: Admin scope implies enqueue and read permissions plus destructive routes.
   source: docs/api-http.md#L153
+  promise: >-
+    | `admin` | everything — implies `enqueue` and `read`, plus the destructive routes (`DELETE /jobs/:jid`, queue pause/unpause, process quiet/stop) |
   reason: No parity oracle covers machine API scope implication.
   future_work: oracle-api-admin-implication
 - id: web.api-prefix
   area: machine-api
   behavior: Discovery URLs derive from the request mount prefix rather than a hardcoded path.
   source: docs/api-http.md#L48-L51
+  promise: >-
+    prefix — every URL it emits (including the discovery document's `url` field)
+    is derived from `SCRIPT_NAME`.
   reason: No parity oracle covers machine API mounting.
   future_work: oracle-api-mount-prefix
 - id: web.api-idempotency-divergence
   area: machine-api
   behavior: An unknown write outcome retains the pending idempotency key until TTL to avoid duplicate enqueue.
-  source: docs/idea/parity-divergences.md#L493-L501
+  source: docs/idea/parity-divergences.md#L749-L751
+  promise: >-
+    an unknown outcome (lost reply) keeps the key pending until its TTL (1h default), so a client retry gets 409 "in progress" rather than a second enqueue.
   reason: Lost-reply handling has no independently sourced parity oracle yet.
   future_work: oracle-api-idempotency-lost-reply
 - id: error-handlers.each-once
   area: error-handlers
   behavior: A failing job calls each configured error handler once.
   source: docs/target/sidekiq-free.md#L824
+  promise: >-
+    every `config.error_handlers` entry sees each job failure once
   oracles: [ErrorHandlersParityTest#test_a_failing_job_calls_each_handler_once]
 - id: error-handlers.original-exception
   area: error-handlers
   behavior: The handler receives the job's own exception class and message rather than a Handled wrapper.
   source: docs/target/sidekiq-free.md#L824
+  promise: >-
+    `handle_exception(h.cause || h, context: "Job raised exception", job: job_hash)`
   oracles: [ErrorHandlersParityTest#test_the_handler_receives_the_jobs_own_exception]
 - id: error-handlers.context
   area: error-handlers
   behavior: Failure context says Job raised exception and carries the job's JID and queue.
   source: docs/target/sidekiq-free.md#L824
+  promise: >-
+    context: "Job raised exception", job: job_hash
   oracles: [ErrorHandlersParityTest#test_the_context_names_the_job_failure_and_carries_the_job]
 - id: error-handlers.configuration
   area: error-handlers
   behavior: The handler's third argument is the same configuration object used by the processor.
   source: docs/target/sidekiq-free.md#L334
+  promise: >-
+    def error_handlers                # array of [ex, ctx, cfg] callables
   oracles: [ErrorHandlersParityTest#test_the_handler_receives_the_configuration]
 - id: error-handlers.retry-disabled
   area: error-handlers
   behavior: A failing job with retries disabled reports its own exception once.
   source: docs/target/sidekiq-free.md#L820-L824
+  promise: >-
+    6. On `Handled` (not `Skip`): `handle_exception(h.cause || h, context: "Job raised exception", job: job_hash)`
   oracles: [ErrorHandlersParityTest#test_a_job_without_retries_is_reported_once]
 - id: error-handlers.retry-exhausted
   area: error-handlers
   behavior: A failing job at retry exhaustion is reported once.
   source: docs/target/sidekiq-free.md#L820-L824
+  promise: >-
+    then return cleanly; nothing re-raises: the retry subsystem has already dealt with the failure, so the ack in step 5 is the exit.
   oracles: [ErrorHandlersParityTest#test_an_exhausted_job_is_reported_once]
 - id: error-handlers.success-silent
   area: error-handlers
   behavior: A successful job does not call error handlers.
   source: docs/target/sidekiq-free.md#L821-L824
+  promise: >-
+    5. `uow.acknowledge` on success (or `Skip`/`Handled`); on `Shutdown` do NOT ack (job will be requeued).
   oracles: [ErrorHandlersParityTest#test_a_successful_job_reports_nothing]
 - id: error-handlers.skip-silent
   area: error-handlers
   behavior: JobRetry::Skip does not call error handlers.
   source: docs/target/sidekiq-free.md#L822-L824
+  promise: >-
+    4. Server middleware chain → `execute_job(instance, args)` → `instance.perform(*args)`
   oracles: [ErrorHandlersParityTest#test_a_skip_reports_nothing]
 - id: error-handlers.raising-handler
   area: error-handlers
   behavior: A raising error handler does not prevent the next handler from being called once.
   source: docs/target/sidekiq-free.md#L334-L342
+  promise: >-
+    def handle_exception(ex, ctx = {})  # internal: dispatches to error_handlers
   oracles: [ErrorHandlersParityTest#test_a_raising_handler_does_not_stop_the_next]
 - id: expiry.worker-option
   area: expiration
@@ -443,31 +631,43 @@
     A worker's expires_in stores Float expiry seconds equal to created_at
     milliseconds divided by 1000 plus the duration.
   source: docs/target/sidekiq-pro.md#L328-L342
+  promise: >-
+    - `expires_in` is a **relative** duration. Internally stored as `created_at + duration` (epoch float) on the job hash under key `expiry`.
   oracles: [ExpiringParityTest#test_worker_option_stores_expiry_as_created_at_plus_duration]
 - id: expiry.override
   area: expiration
   behavior: A per-push set override replaces the worker's expiration duration.
   source: docs/target/sidekiq-pro.md#L336-L342
+  promise: >-
+    CacheRefreshJob.set(expires_in: 1.day).perform_async(key)
   oracles: [ExpiringParityTest#test_set_override_replaces_the_worker_duration]
 - id: expiry.plain-worker-override
   area: expiration
   behavior: A per-push expires_in option sets expiry even when the worker has no expiration option.
   source: docs/target/sidekiq-pro.md#L336-L342
+  promise: >-
+    # per-push override:
   oracles: [ExpiringParityTest#test_set_override_on_a_worker_without_the_option]
 - id: expiry.absent
   area: expiration
   behavior: Without expires_in the queued job has no expiry field.
   source: docs/target/sidekiq-pro.md#L349-L353
+  promise: >-
+    | `expires_in:` | `Duration` / `Numeric` (seconds) | drop job if not started before expiry |
   oracles: [ExpiringParityTest#test_no_expiry_without_the_option]
 - id: expiry.scheduled
   area: expiration
   behavior: A scheduled job's expiry equals its due score plus the expiration duration.
   source: docs/target/sidekiq-pro.md#L345
+  promise: >-
+    - For scheduled jobs the clock starts at enqueue, not at schedule time, i.e. `perform_in(2.hours)` + `expires_in: 1.hour` ⇒ expires 3h after enqueue.
   oracles: [ExpiringParityTest#test_scheduled_job_expires_duration_after_it_is_due]
 - id: expiry.timely-execution
   area: expiration
   behavior: A job still within its expiration time performs normally.
   source: docs/target/sidekiq-pro.md#L342-L343
+  promise: >-
+    - Job server middleware checks `expiry` immediately before `perform`; if `Time.now.to_f > expiry`, job is skipped (Statsd `jobs.expired`), counts as **success** for batch purposes, and is not retried.
   oracles: [ExpiringParityTest#test_job_in_time_runs]
 - id: expiry.expired-skip
   area: expiration
@@ -475,6 +675,8 @@
     An expired job does not perform, leaves the public queue, and is absent
     from retry and dead sets.
   source: docs/target/sidekiq-pro.md#L343
+  promise: >-
+    job is skipped (Statsd `jobs.expired`), counts as **success** for batch purposes, and is not retried.
   oracles: [ExpiringParityTest#test_expired_job_is_skipped_and_not_retried]
 - id: expiry.batch-success
   area: expiration
@@ -482,17 +684,23 @@
     An expired batch job skips perform and leaves the batch complete with zero
     pending jobs and failures.
   source: docs/target/sidekiq-pro.md#L512
+  promise: >-
+    count as **success** within a batch. Same for jobs cancelled via `invalidate_all`.
   oracles: [ExpiringParityTest#test_expired_job_counts_as_success_in_a_batch]
 - id: expiry.non-preemption
   area: expiration
   behavior: Expiry does not preempt a perform that started in time.
   source: docs/target/sidekiq-pro.md#L344
+  promise: >-
+    - Once `perform` starts, expiry does not preempt — long-running jobs that started in time finish.
   reason: Existing expiration oracles do not advance past expiry during an in-flight perform.
   future_work: oracle-expiry-in-flight-non-preemption
 - id: metrics.minute-totals
   area: metrics
   behavior: Minute-window queries sum p, f and ms within the window and expose ms totals as seconds.
   source: docs/target/sidekiq-free.md#L1182-L1202
+  promise: >-
+    ## 20. Metrics API — `Sidekiq::Metrics::Query`
   oracles: [MetricsQueryParityTest#test_minutely_buckets_feed_top_jobs_totals]
 - id: metrics.minute-result
   area: metrics
@@ -500,31 +708,43 @@
     Minute queries return Result and JobResult objects with minutely granularity
     and the supplied end time.
   source: docs/target/sidekiq-free.md#L1185-L1198
+  promise: >-
+    class Sidekiq::Metrics::Query::Result < Struct.new(:granularity, :starts_at, :ends_at, :size, :job_results, :marks)
   oracles: [MetricsQueryParityTest#test_minutely_buckets_feed_top_jobs_totals]
 - id: metrics.averages
   area: metrics
   behavior: Total and series ms averages divide by completed executions, p minus f.
   source: docs/target/sidekiq-free.md#L1197-L1202
+  promise: >-
+    def total_avg(metric = "ms")
   oracles: [MetricsQueryParityTest#test_averages_divide_by_completed_executions]
 - id: metrics.hourly-buckets
   area: metrics
   behavior: Hour windows read ten-minute buckets with hourly granularity and bucket-aligned series timestamps.
   source: docs/target/sidekiq-free.md#L1189
+  promise: >-
+    hourly:   [600, ->(time) { ... "j|%y%m%d|%-H:#{mins}" }]
   oracles: [MetricsQueryParityTest#test_hourly_reads_ten_minute_buckets]
 - id: metrics.for-job
   area: metrics
   behavior: for_job returns the requested class's seeded execution total as its only job result.
   source: docs/target/sidekiq-free.md#L1193
+  promise: >-
+    def for_job(klass, minutes: nil, hours: nil) → Result
   oracles: [MetricsQueryParityTest#test_for_job_reads_one_class]
 - id: metrics.minute-cap
   area: metrics
   behavior: An oversized minute window starts no earlier than 480 minutes before now.
   source: docs/target/sidekiq-free.md#L1208
+  promise: >-
+    DoS caps: `minutes <= 480` (8h), `hours <= 72`. Histograms only fetched for minute-grained queries.
   oracles: [MetricsQueryParityTest#test_window_caps]
 - id: metrics.hour-cap
   area: metrics
   behavior: An oversized hour window starts no earlier than 72 hours before now.
   source: docs/target/sidekiq-free.md#L1208
+  promise: >-
+    `hours <= 72`
   oracles: [MetricsQueryParityTest#test_window_caps]
 - id: metrics.day-marks
   area: metrics
@@ -532,6 +752,8 @@
     Queries read labels from the day-marks hash into MarkResult objects with
     the recorded time and bucket.
   source: docs/target/sidekiq-free.md#L115-L1205
+  promise: >-
+    | `<YYYYMMDD>-marks` | HASH | deploy marks for day, field=iso8601 ts, value=label, TTL = 90 days |
   oracles: [MetricsQueryParityTest#test_marks_come_from_the_day_marks_hash]
 - id: metrics.execution-key
   area: metrics
@@ -539,11 +761,15 @@
     A successful server middleware execution writes one class p count to the
     canonical UTC minute key and is readable by Query.
   source: docs/target/sidekiq-free.md#L106-L123
+  promise: >-
+    <klass>|p   : executions, failures included
   oracles: [MetricsQueryParityTest#test_executed_jobs_land_in_the_spec_minute_key]
 - id: sorted-entry.retry-count
   area: data-api
   behavior: SortedEntry retry enqueues a payload with retry_count decremented by one.
   source: docs/target/sidekiq-free.md#L1055
+  promise: >-
+    def retry                            # remove + Client.push, decrements retry_count
   oracles: [SortedEntryApiParityTest#test_retry_pushed_payload_matches_sidekiq]
 - id: sorted-entry.add-to-queue-count
   area: data-api
@@ -551,6 +777,8 @@
     SortedEntry add_to_queue preserves retry_count in the enqueued payload,
     contrary to the source comment that it decrements the count.
   source: docs/target/sidekiq-free.md#L1054
+  promise: >-
+    def add_to_queue                     # remove + Client.push (resets retry_count - 1)
   oracles: [SortedEntryApiParityTest#test_add_to_queue_pushed_payload_matches_sidekiq]
 - id: sorted-entry.kill-exception
   area: data-api
@@ -558,5 +786,6 @@
     SortedEntry kill notifies death handlers with a RuntimeError whose message
     is Job killed by API.
   source: docs/target/sidekiq-free.md#L1056-L1094
+  promise: >-
+    def kill(message, opts = {})              # ZADD dead + trim + death_handlers
   oracles: [SortedEntryApiParityTest#test_kill_fires_death_handlers_with_api_exception]
-

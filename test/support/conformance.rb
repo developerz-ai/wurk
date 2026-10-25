@@ -57,11 +57,11 @@ module Conformance
     def validate_case!(entry, ids, work)
       raise Invalid, 'case must be a mapping' unless entry.is_a?(Hash)
 
-      %w[id area behavior source].each do |key|
+      %w[id area behavior source promise].each do |key|
         raise Invalid, "missing #{key}: #{entry.inspect}" unless text?(entry[key])
       end
       require_unique_id!(entry, ids)
-      validate_source!(entry['source'])
+      validate_promise!(entry)
       if entry.key?('oracles')
         validate_oracles!(entry)
       else
@@ -107,9 +107,25 @@ module Conformance
       lines = File.readlines(path)
       first = match[2].to_i
       last = (match[3] || match[2]).to_i
-      return if last.between?(first, lines.size) && lines[(first - 1)..(last - 1)].any? { |line| !line.strip.empty? }
+      range = lines[(first - 1)..(last - 1)]
+      unless last.between?(first, lines.size) && range.any? { |line| !line.strip.empty? }
+        raise Invalid, "absent source lines #{source}"
+      end
 
-      raise Invalid, "absent source lines #{source}"
+      range
+    end
+
+    def normalize_whitespace(value)
+      value.lines.map(&:strip).reject(&:empty?).join(' ').squeeze(' ')
+    end
+
+    def validate_promise!(entry)
+      range = validate_source!(entry['source'])
+      promise = normalize_whitespace(entry['promise'])
+      anchored = normalize_whitespace(range.join)
+      return if anchored.include?(promise)
+
+      raise Invalid, "#{entry['id']}: promise withdrawn from #{entry['source']}"
     end
   end
 

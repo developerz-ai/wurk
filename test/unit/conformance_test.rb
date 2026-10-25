@@ -2,14 +2,17 @@
 
 require_relative '../test_helper'
 require_relative '../support/conformance'
+require 'fileutils'
 require 'open3'
 require 'rbconfig'
 require 'stringio'
+require 'tmpdir'
 
 class ConformanceTest < Minitest::Test
   parallelize_me!
 
   SOURCE = 'docs/target/sidekiq-free.md#L19'
+  PROMISE = 'set of all known queue names'
   # `skipped`, not `skip`: a member named skip shadows Minitest's raising #skip.
   Result = Struct.new(:klass, :name, :assertions, :success, :skipped) do
     def passed? = success
@@ -17,7 +20,8 @@ class ConformanceTest < Minitest::Test
   end
 
   def covered(key = 'sample', refs = ['ExampleOracle#test_guard'])
-    { 'id' => key, 'area' => 'redis', 'behavior' => 'Queues are a set.', 'source' => SOURCE, 'oracles' => refs }
+    { 'id' => key, 'area' => 'redis', 'behavior' => 'Queues are a set.', 'source' => SOURCE,
+      'promise' => PROMISE, 'oracles' => refs }
   end
 
   def pending(key = 'gap')
@@ -47,9 +51,36 @@ class ConformanceTest < Minitest::Test
     [[], {}, [nil]].each do |entries|
       assert_raises(Conformance::Invalid) { Conformance::Inventory.new(entries) }
     end
-    %w[id area behavior].each do |field|
+    %w[id area behavior promise].each do |field|
       assert_raises(Conformance::Invalid) { inventory(covered.except(field)) }
     end
+  end
+
+  def test_covered_case_is_rejected_when_its_promise_is_withdrawn
+    error = assert_promise_withdrawn(covered('torn'))
+
+    assert_match(%r{torn: promise withdrawn from docs/target/sidekiq-free\.md#L19}, error.message)
+  end
+
+  def test_pending_case_is_rejected_when_its_promise_is_withdrawn
+    error = assert_promise_withdrawn(pending('torn'))
+
+    assert_match(%r{torn: promise withdrawn from docs/target/sidekiq-free\.md#L19}, error.message)
+  end
+
+  def assert_promise_withdrawn(entry)
+    Dir.mktmpdir do |root|
+      target = File.join(root, 'docs', 'target')
+      FileUtils.mkdir_p(target)
+      File.write(File.join(target, 'sidekiq-free.md'), "still here, promise withdrawn\n" * 20)
+      assert_raises(Conformance::Invalid) { Conformance::Inventory.new([entry], root: root) }
+    end
+  end
+
+  def test_promise_matches_with_whitespace_normalized
+    promise = " | `queues` | SET |\n set of all known queue names  (without `queue:` prefix) |"
+
+    assert inventory(covered.merge('promise' => promise))
   end
 
   def test_oracles_must_be_nonempty_method_references
@@ -257,7 +288,8 @@ class ConformanceTest < Minitest::Test
         task.invoke
       end
     RUBY
-    output, status = Open3.capture2e({ 'COVERAGE' => nil }, RbConfig.ruby, '-e', script, chdir: Conformance::ROOT)
+    output, status = Open3.capture2e({ 'COVERAGE' => nil, 'TEST' => nil }, RbConfig.ruby, '-e', script,
+                                     chdir: Conformance::ROOT)
 
     assert_predicate status, :success?, output
     Dir['test/parity/**/*_test.rb'].each { |path| assert_includes output, path }
