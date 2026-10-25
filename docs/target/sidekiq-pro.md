@@ -441,6 +441,13 @@ Loading `sidekiq/pro/web` registers extra tabs/actions onto the existing `Sideki
 
 ### 10.2 Multi-shard
 
+**Unsupported in Wurk:** pool-bound multi-shard Web mounting via
+`Sidekiq::Pro::Web.with(redis_pool:)` is not implemented. `Sidekiq::Pro::Web` and
+`Sidekiq::Web` alias `Wurk::Web`, which has no `.with` factory; requests use the
+configured web pool, not a separate pool bound to each mount.
+
+**Upstream Sidekiq Pro example only — these pool-bound mounts do not work in Wurk:**
+
 ```ruby
 require "sidekiq-pro"
 require "sidekiq/pro/web"
@@ -453,7 +460,10 @@ mount Sidekiq::Pro::Web.with(redis_pool: POOL1),    at: "/sidekiq1"
 mount Sidekiq::Pro::Web.with(redis_pool: POOL2),    at: "/sidekiq2"
 ```
 
-`Sidekiq::Pro::Web.with(redis_pool:)` returns a new Rack app bound to that pool. Used to monitor multiple shards in one process.
+**Upstream Sidekiq Pro return contract only:**
+`Sidekiq::Pro::Web.with(redis_pool:)` returns a new Rack app bound to that pool,
+allowing multiple shards to be monitored in one process. Wurk does not implement
+this contract.
 
 ### 10.3 Polling endpoint
 
@@ -520,7 +530,7 @@ Lua scripts are loaded with `SCRIPT LOAD` at boot and cached via `EVALSHA`. Wurk
 | `Queue#pause!` etc. | `Wurk::Queue#pause!`, `paused` SET |
 | `expires_in` | `Wurk::Middleware::Server::Expiry` |
 | Statsd | `Wurk::Middleware::Server::Statsd` (dogstatsd) |
-| `Sidekiq::Pro::Web` | `Wurk::Web::Pro` mountable Rack/Sinatra app |
+| `Sidekiq::Pro::Web` | Alias of `Wurk::Web`; pool-bound multi-shard mounts via `.with(redis_pool:)` are unsupported (see [§10.2](#102-multi-shard)) |
 | `BatchStatus` polling middleware | `Wurk::Web::BatchStatus` Rack middleware |
 | Lua `delete_job`, `delete_by_class`, `scan` | `Wurk::API::Fast` |
 
