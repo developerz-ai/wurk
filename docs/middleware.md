@@ -133,8 +133,14 @@ gate on `config.server?`:
 
 ```ruby
 def configure_server(&block) = yield self if block && server?
-def configure_client(&block) = yield self if block && !server?
+def configure_client(&block) = yield self if block && (!server? || @options[:client_in_server])
 ```
+
+`client_in_server` covers a process that is both server and client: the railtie
+sets it whenever a Rails web process boots the swarm
+(`Wurk::RailsBoot.enter_server_mode_if_serving`, `lib/wurk/rails_boot.rb:33`),
+because that process's request-path enqueues are client work. Set
+`config[:client_in_server] = true` for the same behavior elsewhere.
 
 So:
 
