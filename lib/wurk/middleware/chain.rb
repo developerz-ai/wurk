@@ -7,7 +7,8 @@ module Wurk
     # pushes to index 0, `insert_before`/`insert_after` anchor relative to an
     # existing entry, `invoke` walks the chain handing the inner block to each.
     #
-    # Entries store klass + ctor args, not the live object: every job gets a
+    # Entries store klass + ctor args + the config they were registered with,
+    # not the live object: every job gets a
     # fresh instance per entry (`invoke` builds each as it reaches it, `retrieve`
     # builds them all up front). This keeps middleware thread-safe by
     # construction and matches Sidekiq's lifecycle.
@@ -27,12 +28,19 @@ module Wurk
 
       def each(&) = @entries.each(&)
 
-      # Bind a duplicate of this chain to `capsule`. Capsules share the parent
-      # config's entries by reference initially but mutate independently after
-      # the first `add`/`remove`/etc. (Array#dup on `@entries`).
+      # Bind a duplicate of this chain to `capsule`. Entries carry their
+      # config, so each is duplicated and only the duplicate rebound: the
+      # capsule's middleware resolve the capsule while the parent's entries
+      # keep the parent config. Array#dup on `@entries` keeps the two chains
+      # independent after the first `add`/`remove`/etc.
       def copy_for(capsule)
         copy = dup
         copy.instance_variable_set(:@config, capsule)
+        copy.entries.map! do |entry|
+          rebound = entry.dup
+          rebound.config = capsule
+          rebound
+        end
         copy
       end
 
@@ -42,24 +50,24 @@ module Wurk
 
       def add(klass, *)
         remove(klass)
-        @entries << Entry.new(klass, *)
+        @entries << make_entry(klass, *)
       end
 
       def prepend(klass, *)
         remove(klass)
-        @entries.unshift(Entry.new(klass, *))
+        @entries.unshift(make_entry(klass, *))
       end
 
       def insert_before(oldklass, newklass, *)
         i = @entries.index { |entry| entry.klass == newklass }
-        new_entry = i.nil? ? Entry.new(newklass, *) : @entries.delete_at(i)
+        new_entry = i.nil? ? make_entry(newklass, *) : @entries.delete_at(i)
         i = @entries.index { |entry| entry.klass == oldklass } || 0
         @entries.insert(i, new_entry)
       end
 
       def insert_after(oldklass, newklass, *)
         i = @entries.index { |entry| entry.klass == newklass }
-        new_entry = i.nil? ? Entry.new(newklass, *) : @entries.delete_at(i)
+        new_entry = i.nil? ? make_entry(newklass, *) : @entries.delete_at(i)
         i = @entries.index { |entry| entry.klass == oldklass } || (@entries.size - 1)
         @entries.insert(i + 1, new_entry)
       end
@@ -74,7 +82,7 @@ module Wurk
       end
 
       def retrieve
-        map { |entry| entry.make_new(@config) }
+        map(&:make_new)
       end
 
       def clear
@@ -101,7 +109,7 @@ module Wurk
       def traverse(entries, index, args, &block)
         return yield if index == entries.size
 
-        entries[index].make_new(@config).call(*args) do
+        entries[index].make_new.call(*args) do
           traverse(entries, index + 1, args, &block)
         end
       end
@@ -111,6 +119,14 @@ module Wurk
       def initialize_copy(orig)
         super
         @entries = orig.entries.dup
+      end
+
+      # Registration binds the entry to this chain's config/capsule so that
+      # `Entry#make_new` can stay zero-argument (spec §10.1).
+      def make_entry(klass, *)
+        entry = Entry.new(klass, *)
+        entry.config = @config
+        entry
       end
 
       # Holds the klass + ctor args for a registered middleware. Defers
@@ -127,6 +143,7 @@ module Wurk
       # a class that does not declare it still gets asked.
       class Entry
         attr_reader :klass
+        attr_accessor :config
 
         def initialize(klass, *args)
           @klass = klass
@@ -134,9 +151,9 @@ module Wurk
           @takes_config = klass.public_method_defined?(:config=)
         end
 
-        def make_new(config = nil)
+        def make_new
           instance = @klass.new(*@args)
-          instance.config = config if config && (@takes_config || instance.respond_to?(:config=))
+          instance.config = config if @takes_config || instance.respond_to?(:config=)
           instance
         end
       end
