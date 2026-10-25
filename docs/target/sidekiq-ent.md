@@ -167,7 +167,7 @@ Namespace prefix: `lmtr:` (Enterprise convention).
 
 | Key                              | Type   | Purpose                                  |
 | -------------------------------- | ------ | ---------------------------------------- |
-| `lmtr:{name}`                    | HASH   | Limiter metadata: type, count, interval, ttl, options |
+| `lmtr:{name}`                    | HASH   | Limiter metadata: `type`, `options` (JSON), `fingerprint` |
 | `lmtr-cs:{name}`                 | ZSET   | concurrent: held slots, score = expiry   |
 | `lmtr-cw:{name}`                 | STREAM | concurrent: waiter signalling stream     |
 | `lmtr-b:{name}:{epoch}`          | STRING | bucket: counter for current period       |

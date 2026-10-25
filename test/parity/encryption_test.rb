@@ -19,8 +19,10 @@ require 'securerandom'
 # - §4.1 the server middleware decrypts before `perform` sees the argument.
 # - §4.5 rotation: an old-version payload still decrypts after
 #   `active_version` moves, and new pushes carry the new version.
-# - §4.6 an unknown version or a forged tag fails the job into retry with
-#   the cleartext args intact for triage.
+# - §4.6 an unknown version or a forged tag goes straight to the dead set
+#   tagged as an encryption error — Wurk's documented divergence from Ent's
+#   retry routing (docs/idea/parity-divergences.md) — with the cleartext
+#   args intact for triage.
 #
 # The envelope shape is Wurk's documented divergence from Ent's binary blob
 # (§4.4); the oracle pins Wurk's declared format, not Ent's.
@@ -166,20 +168,33 @@ class EncryptionParityTest < Wurk::Test::UnitCase
     assert_failed_sealed(jid)
   end
 
-  # Spec §4.6 routes a decrypt failure through the ordinary retry pipeline
-  # with `OpenSSL::Cipher::CipherError` as the error class. Wurk instead dead-
-  # sets it at once as `Wurk::Encryption::DecryptionError` (docs/encryption.md
-  # "Decryption failures"), a deliberate design not yet recorded in
-  # docs/idea/parity-divergences.md.
-  def test_forged_tag_goes_to_retry_as_cipher_error
-    skip 'oracle-ent report: decrypt failure dead-sets instead of retrying; pending a parity-divergences entry'
+  # Spec §4.6 lets a failed decrypt bubble into the ordinary retry pipeline
+  # as `OpenSSL::Cipher::CipherError` — 25 retries over ~21 days for a
+  # condition no retry can fix. Wurk diverges: the job goes straight to the
+  # dead set — docs/idea/parity-divergences.md, "A job whose encrypted
+  # argument cannot be decrypted goes straight to the dead set"; user-facing
+  # docs/encryption.md "When decryption fails". The oracle asserts the
+  # documented literal strings, not Wurk's constants.
+  def test_forged_tag_dead_sets_as_encryption_error_without_retry
     jid = push('clear', { 'card' => SECRET })
     tamper_tag
-    run_one
-    entry = Sidekiq::RetrySet.new.find_job(jid)
 
-    refute_nil entry
-    assert_equal OpenSSL::Cipher::CipherError.name, entry.item['error_class']
+    metrics = capture_statsd { run_one }
+
+    assert_empty Log.entries
+    entry = Sidekiq::DeadSet.new.find_job(jid)
+
+    refute_nil entry, 'a decrypt failure must leave a dead record'
+
+    assert_equal 'Wurk::Encryption::DecryptionError', entry.item['error_class']
+    assert entry.item['error_message'].start_with?('encryption_error:'),
+           "expected an 'encryption_error:' prefix, got #{entry.item['error_message'].inspect}"
+    assert_includes metrics, ['jobs.encryption_error', ["worker:#{PrivateJob.name}"]]
+    assert_nil Sidekiq::RetrySet.new.find_job(jid), 'the job is ACKed, never retried'
+
+    assert_equal 'clear', entry.item['args'].first
+    assert envelope?(entry.item['args'].last)
+    refute_includes entry.value, SECRET
   end
 
   private
@@ -217,8 +232,30 @@ class EncryptionParityTest < Wurk::Test::UnitCase
     end
   end
 
-  # The job never reaches perform and its failure record (retry or dead,
-  # see the skipped routing test) keeps the envelope and the cleartext args.
+  # Mirrors test/unit/encryption_test.rb's capture_statsd (kept local on
+  # purpose): records jobs.* statsd increments for the duration of the
+  # block, under the suite-wide mutex because `increment` is a process-
+  # global singleton method.
+  def capture_statsd
+    Wurk::Test::STATSD_MUTEX.synchronize do
+      calls = []
+      real = Wurk::Metrics::Statsd.method(:increment)
+      Wurk::Metrics::Statsd.singleton_class.send(:define_method, :increment) do |metric, tags: nil, **_|
+        calls << [metric, tags]
+        nil
+      end
+      begin
+        yield
+        calls
+      ensure
+        Wurk::Metrics::Statsd.singleton_class.send(:define_method, :increment, real)
+      end
+    end
+  end
+
+  # The job never reaches perform and its dead record (both §4.6 failure
+  # cases route there, see the routing oracle below) keeps the envelope and
+  # the cleartext args.
   def assert_failed_sealed(jid)
     assert_empty Log.entries
     entry = Sidekiq::RetrySet.new.find_job(jid) || Sidekiq::DeadSet.new.find_job(jid)

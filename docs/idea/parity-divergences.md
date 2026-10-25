@@ -671,7 +671,7 @@ resetting it.
 
 **Why:** 25 retries over ~21 days cannot bring a missing key back, and each one re-logs the same failure; the dead set is where an operator looks, and a manual retry works the moment the key is back. Documented for users in `docs/encryption.md`.
 
-**Anchor:** `lib/wurk/encryption.rb`, `test/parity/encryption_test.rb` (spec-routing case skipped with this pointer).
+**Anchor:** `lib/wurk/encryption.rb`, `test/parity/encryption_test.rb` (`test_forged_tag_dead_sets_as_encryption_error_without_retry` pins the dead record tagged `encryption_error` and the absent retry entry).
 
 ## Scheduled job expiry counts from the scheduled time
 
