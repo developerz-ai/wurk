@@ -39,7 +39,7 @@
 ### P3 — cleanup
 
 - E23 `lib/wurk/lua/throttle_slot.lua`: builds key in Lua (undeclared key) — breaks Dragonfly/Cluster. Pass full key via `KEYS` (precedent #91). Also `lib/wurk/lua/flow_*.lua`, `limiter_list_sweep.lua` (production audit) — add a test that greps every `.lua` for `redis.call(` with a non-`KEYS[` key arg.
-- E24: `💣` alias for `clear` on `SortedSet`/`Queue`; `Sidekiq.loader` (spec §30); `Queue#clear` (`queue.rb:105`), `DeadSet#trim` (`dead_set.rb:37`), `Process#signal` use pipeline not MULTI; `SortedSet#scan` double-wraps `*`; `cron.rb:297` flattens `args: {hash}`; flow node `at:` enqueued immediately (`flow/creation.rb:127`, `flow_create.lua:381`); batch callback round-trips (`record_event`, 12 EXPIREs in `apply_linger`, `Status#data`) → pipeline.
+- E24: `💣` alias for `clear` on `SortedSet`/`Queue`; `Sidekiq.loader` (spec §30); `Queue#clear` (`queue.rb:105`), `DeadSet#trim` (`dead_set.rb:37`), `Process#signal` use pipeline not MULTI; `SortedSet#scan` double-wraps `*`; `cron.rb:297` flattens `args: {hash}`; flow node `at:` previously enqueued immediately — resolved: now honors `at:` scheduling (`lib/wurk/flow/creation.rb:200-218`, `lib/wurk/lua/flow_create.lua:134-142`); batch callback round-trips (`record_event`, 12 EXPIREs in `apply_linger`, `Status#data`) → pipeline.
 
 ### Found by top-down / bottom-up passes (same slice)
 
