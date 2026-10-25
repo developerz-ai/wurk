@@ -49,7 +49,7 @@ What it does **not** buy you:
 atomic move, never a destructive pop.
 
 ```
-LMOVE  queue:default  queue:default|web-1|4711|0  RIGHT LEFT
+LMOVE  queue:default  queue:default|web-1|4711|a1b2c3d4e5f6|0  RIGHT LEFT
 ```
 
 The destination is the **private list** — one per (public queue, process):
@@ -68,8 +68,11 @@ queue:<public queue name>|<host>|<pid>|<nonce>|<index>
   new process's private list against the old (dead) process's identity, or
   vice versa.
 - `<index>` is currently always `0` — one fetcher per capsule.
-- Pipe separators, matching Sidekiq Pro's `super_fetch` naming byte-for-byte, so
-  third-party tooling that parses these keys keeps working.
+- Pipe separators, as in Sidekiq Pro's `super_fetch`, but **not the same key
+  shape**: [Pro §3.2](target/sidekiq-pro.md#32-algorithm) specifies four parts,
+  `queue:<public>|<hostname>|<pid>|<index>`. Wurk adds the nonce as a fifth
+  part. Tooling that assumes Pro's fixed four-part shape must adapt; see the
+  [private-list naming divergence](idea/parity-divergences.md#private-list-names-include-a-process-image-nonce).
 
 > **Migration window.** Keys written before the nonce existed have the
 > 3-segment tail `<host>|<pid>|<index>` (no nonce). The reaper's parser
@@ -86,7 +89,7 @@ The job stays in that private list for the entire duration of `perform`, and
 past it. It leaves only on an ACK:
 
 ```
-LREM  queue:default|web-1|4711|0  1  <job JSON>
+LREM  queue:default|web-1|4711|a1b2c3d4e5f6|0  1  <job JSON>
 ```
 
 `count = 1` is safe because every payload carries a unique `jid`.
@@ -274,7 +277,7 @@ generation numbers the OS doesn't expose.
 Job by job, tail-to-tail:
 
 ```
-LMOVE  queue:default|dead-host|9182|0  queue:default  RIGHT RIGHT
+LMOVE  queue:default|dead-host|9182|b2c3d4e5f6a1|0  queue:default  RIGHT RIGHT
 ```
 
 The move happens **before** the poison-pill check, so a crash mid-drain leaves
@@ -587,19 +590,25 @@ here:
 | `config.fetch_poll_interval =` | **A real call.** Overrides the 2s `BLMOVE` block timeout. |
 | `retry: :reliable` | Accepted; the private-list-until-ack behavior it names is already how every job runs. |
 
-Key schema, counter keys, TTLs, lock names, and statsd metric names all match
-Pro exactly — external tooling built against `super_fetch:recovered:*`,
-`super_fetch:reaper`, `sidekiq.jobs.poison`, or the `queue:<q>|<host>|<pid>|<idx>`
-naming works unchanged.
+Recovery counter keys and their TTLs, reaper lock names, and statsd metric
+names retain the Pro spec's forms — tooling watching `super_fetch:recovered:*`,
+`super_fetch:reaper`, or `sidekiq.jobs.poison` needs no naming change.
+Private-list names are an intentional exception: Pro specifies
+`queue:<public>|<hostname>|<pid>|<index>`, while Wurk writes
+`queue:<public>|<host>|<pid>|<nonce>|<index>`. Tooling that assumes Pro's fixed
+four-part names must adapt to the nonce-bearing shape. Wurk's reaper still
+accepts legacy nonce-free keys; see the [migration window](#reliable-fetch).
 
 ### Intentional divergences
 
-Wire compatibility is absolute; *timing* is where Wurk deviates on purpose.
-Three deviations on this page are deliberate and recorded — none of them
-changes a key, a field, or a guarantee class, and none is behind a flag:
+Private-list naming, timing, and shutdown queue position deliberately differ
+from Pro. The four divergences below are recorded in the
+[parity ledger](idea/parity-divergences.md); all retain at-least-once delivery,
+and none is behind a flag:
 
 | Divergence | Pro behavior | Wurk behavior | Cost |
 |---|---|---|---|
+| [Private-list naming](idea/parity-divergences.md#private-list-names-include-a-process-image-nonce) | Four-part `queue:<public>\|<hostname>\|<pid>\|<index>` | Five-part `queue:<public>\|<host>\|<pid>\|<nonce>\|<index>`; legacy keys remain reclaimable | Fixed-four-part parsers must adapt; nonce separates process incarnations, not same-boot pid reuse |
 | [ACK timing](#the-ack-rides-the-next-fetch) | `LREM` right after success or retry handling | Same ordering, pipelined with the next fetch; flushed before every idle, quiet, stop, or shutdown | A hard kill can re-run an already-finished job for longer. At-least-once either way |
 | [Paused-queue visibility](#fetch-order-and-polling) | `SMEMBERS paused` per fetch pass | Cached 2s per fetcher; in-process pause is immediate | Cross-process pause lands within 2s. Unchanged fleet-wide worst case |
 | [Shutdown requeue](#graceful-shutdown) | Whole private list drained to the back of the queue at shutdown | Still-parked jobs moved to the front of the queue at shutdown | None — interrupted work runs next instead of queueing behind the backlog again |
