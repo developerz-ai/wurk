@@ -8,7 +8,7 @@ behaviour using Wurk's own helpers and class names.
 oracles were written against, so a maintainer can tell which version of the
 surface a given assertion targets.
 
-These tests are **oracles**. When Wurk diverges from a parity test, Wurk is wrong unless the divergence is explicitly documented as intentional in `docs/target/sidekiq-{free,pro,ent}.md`.
+These tests are **oracles**. When Wurk diverges from a parity test, Wurk is wrong unless the divergence is explicitly documented as intentional in `docs/idea/parity-divergences.md`.
 
 Run: `bin/rake test:parity`
 
