@@ -119,8 +119,8 @@ class RedisIdempotentForwardingTest < Wurk::Test::UnitCase
 
   # --- foreign pools ------------------------------------------------------
 
-  # The drop-in seam: `Sidekiq::Client#redis_pool=`, `Sidekiq::Web.redis_pool=`
-  # and the `pool:` kwargs all accept any ConnectionPool-shaped object, and
+  # The drop-in seam: `Sidekiq::Client#redis_pool=` and the `pool:` kwargs
+  # accept any ConnectionPool-shaped object, and
   # `def with; yield conn; end` is a legal one. Forwarding a keyword it never
   # declared is an ArgumentError, so PoolCheckout must drop the claim there —
   # a foreign pool keeps the conservative behavior it had before F5.
