@@ -22,13 +22,18 @@
 - id: client.symbols
   area: client
   behavior: Symbol queues and Class objects are stringified for persistence.
-  source: docs/target/sidekiq-free.md#L586-L610
+  source: docs/target/sidekiq-free.md#L586-L611
   oracles: [ClientPushParityTest#test_symbol_queue_and_class_are_stringified]
 - id: client.pool
   area: client
   behavior: The connection pool option is not persisted in job JSON.
   source: docs/target/sidekiq-free.md#L535-L555
   oracles: [ClientPushParityTest#test_pool_is_transient_and_never_persisted]
+- id: client.retry-for
+  area: client
+  behavior: retry_for accepts exactly 1_000_000_000, rejects values over it after coercion, coerces digit-only Strings base-10 to Integer.
+  source: docs/target/sidekiq-free.md#L171
+  oracles: [ClientPushParityTest#test_retry_for_at_and_below_the_cap_lands_on_the_queue_as_an_integer, ClientPushParityTest#test_retry_for_fraction_under_the_coerced_cap_is_accepted, ClientPushParityTest#test_retry_for_is_coerced_to_integer, ClientPushParityTest#test_digit_string_retry_for_lands_on_the_wire_as_an_integer]
 - id: redis.queues
   area: redis
   behavior: Immediate enqueue writes only the queues SET and queue LIST.
@@ -42,12 +47,12 @@
 - id: client.strict-args
   area: client
   behavior: Default strict mode rejects non-JSON-native arguments.
-  source: docs/target/sidekiq-free.md#L586-L623
+  source: docs/target/sidekiq-free.md#L586-L624
   oracles: [ClientPushParityTest#test_non_json_native_args_raise_under_default_strict_mode]
 - id: client.middleware-halt
   area: client
   behavior: Halting client middleware returns nil without writing a job.
-  source: docs/target/sidekiq-free.md#L654-L688
+  source: docs/target/sidekiq-free.md#L654-L689
   oracles: [ClientPushParityTest#test_middleware_halt_returns_nil_and_writes_nothing]
 - id: client.bulk-jids
   area: client
@@ -77,7 +82,7 @@
 - id: worker.active-job
   area: worker
   behavior: ActiveJob payloads use the Sidekiq wrapper class.
-  source: docs/target/sidekiq-free.md#L1547-L1556
+  source: docs/target/sidekiq-free.md#L1548-L1557
   oracles: [ClientPushParityTest#test_active_job_payload_uses_the_sidekiq_wrapper_class]
 - id: schedule.score
   area: scheduling
@@ -108,37 +113,37 @@
 - id: retry.first
   area: retries
   behavior: The first failure stamps failed_at and retry_count zero.
-  source: docs/target/sidekiq-free.md#L931-L943
+  source: docs/target/sidekiq-free.md#L932-L944
   oracles: [JobRetryParityTest#test_first_failure_sets_failed_at_and_retry_count_zero]
 - id: retry.next
   area: retries
   behavior: Later failures increment retry_count and stamp retried_at.
-  source: docs/target/sidekiq-free.md#L931-L943
+  source: docs/target/sidekiq-free.md#L932-L944
   oracles: [JobRetryParityTest#test_subsequent_failure_increments_and_stamps_retried_at]
 - id: retry.backtrace
   area: retries
   behavior: Error backtraces are base64-encoded zlib-compressed JSON.
-  source: docs/target/sidekiq-free.md#L931-L943
+  source: docs/target/sidekiq-free.md#L932-L944
   oracles: [JobRetryParityTest#test_error_backtrace_is_base64_zlib_json]
 - id: retry.disabled
   area: retries
   behavior: retry false skips both retry and morgue.
-  source: docs/target/sidekiq-free.md#L890-L904
+  source: docs/target/sidekiq-free.md#L891-L905
   oracles: [JobRetryParityTest#test_retry_false_skips_retry_and_morgue]
 - id: retry.exhausted
   area: retries
   behavior: Reaching the configured attempt count promotes to the morgue.
-  source: docs/target/sidekiq-free.md#L922-L929
+  source: docs/target/sidekiq-free.md#L923-L930
   oracles: [JobRetryParityTest#test_retry_count_at_attempts_promotes_to_morgue]
 - id: dead.trim-age
   area: dead-set
   behavior: Dead-set trimming removes entries exceeding the configured age.
-  source: docs/target/sidekiq-free.md#L1059-L1094
+  source: docs/target/sidekiq-free.md#L1060-L1095
   oracles: [DataApiParityTest#test_dead_set_trim_by_age]
 - id: dead.trim-count
   area: dead-set
   behavior: Dead-set count trimming follows ZREMRANGEBYRANK 0 minus max.
-  source: docs/target/sidekiq-free.md#L1059-L1094
+  source: docs/target/sidekiq-free.md#L1060-L1095
   oracles: [DataApiParityTest#test_dead_set_trim_by_max_jobs_matches_zremrangebyrank_0_minus_max]
 - id: batch.success
   area: batches
@@ -390,17 +395,17 @@
 - id: error-handlers.each-once
   area: error-handlers
   behavior: A failing job calls each configured error handler once.
-  source: docs/target/sidekiq-free.md#L823
+  source: docs/target/sidekiq-free.md#L824
   oracles: [ErrorHandlersParityTest#test_a_failing_job_calls_each_handler_once]
 - id: error-handlers.original-exception
   area: error-handlers
   behavior: The handler receives the job's own exception class and message rather than a Handled wrapper.
-  source: docs/target/sidekiq-free.md#L823
+  source: docs/target/sidekiq-free.md#L824
   oracles: [ErrorHandlersParityTest#test_the_handler_receives_the_jobs_own_exception]
 - id: error-handlers.context
   area: error-handlers
   behavior: Failure context says Job raised exception and carries the job's JID and queue.
-  source: docs/target/sidekiq-free.md#L823
+  source: docs/target/sidekiq-free.md#L824
   oracles: [ErrorHandlersParityTest#test_the_context_names_the_job_failure_and_carries_the_job]
 - id: error-handlers.configuration
   area: error-handlers
@@ -410,22 +415,22 @@
 - id: error-handlers.retry-disabled
   area: error-handlers
   behavior: A failing job with retries disabled reports its own exception once.
-  source: docs/target/sidekiq-free.md#L819-L823
+  source: docs/target/sidekiq-free.md#L820-L824
   oracles: [ErrorHandlersParityTest#test_a_job_without_retries_is_reported_once]
 - id: error-handlers.retry-exhausted
   area: error-handlers
   behavior: A failing job at retry exhaustion is reported once.
-  source: docs/target/sidekiq-free.md#L819-L823
+  source: docs/target/sidekiq-free.md#L820-L824
   oracles: [ErrorHandlersParityTest#test_an_exhausted_job_is_reported_once]
 - id: error-handlers.success-silent
   area: error-handlers
   behavior: A successful job does not call error handlers.
-  source: docs/target/sidekiq-free.md#L820-L823
+  source: docs/target/sidekiq-free.md#L821-L824
   oracles: [ErrorHandlersParityTest#test_a_successful_job_reports_nothing]
 - id: error-handlers.skip-silent
   area: error-handlers
   behavior: JobRetry::Skip does not call error handlers.
-  source: docs/target/sidekiq-free.md#L821-L823
+  source: docs/target/sidekiq-free.md#L822-L824
   oracles: [ErrorHandlersParityTest#test_a_skip_reports_nothing]
 - id: error-handlers.raising-handler
   area: error-handlers
@@ -487,46 +492,46 @@
 - id: metrics.minute-totals
   area: metrics
   behavior: Minute-window queries sum p, f and ms within the window and expose ms totals as seconds.
-  source: docs/target/sidekiq-free.md#L1181-L1201
+  source: docs/target/sidekiq-free.md#L1182-L1202
   oracles: [MetricsQueryParityTest#test_minutely_buckets_feed_top_jobs_totals]
 - id: metrics.minute-result
   area: metrics
   behavior: >-
     Minute queries return Result and JobResult objects with minutely granularity
     and the supplied end time.
-  source: docs/target/sidekiq-free.md#L1184-L1197
+  source: docs/target/sidekiq-free.md#L1185-L1198
   oracles: [MetricsQueryParityTest#test_minutely_buckets_feed_top_jobs_totals]
 - id: metrics.averages
   area: metrics
   behavior: Total and series ms averages divide by completed executions, p minus f.
-  source: docs/target/sidekiq-free.md#L1196-L1201
+  source: docs/target/sidekiq-free.md#L1197-L1202
   oracles: [MetricsQueryParityTest#test_averages_divide_by_completed_executions]
 - id: metrics.hourly-buckets
   area: metrics
   behavior: Hour windows read ten-minute buckets with hourly granularity and bucket-aligned series timestamps.
-  source: docs/target/sidekiq-free.md#L1188
+  source: docs/target/sidekiq-free.md#L1189
   oracles: [MetricsQueryParityTest#test_hourly_reads_ten_minute_buckets]
 - id: metrics.for-job
   area: metrics
   behavior: for_job returns the requested class's seeded execution total as its only job result.
-  source: docs/target/sidekiq-free.md#L1192
+  source: docs/target/sidekiq-free.md#L1193
   oracles: [MetricsQueryParityTest#test_for_job_reads_one_class]
 - id: metrics.minute-cap
   area: metrics
   behavior: An oversized minute window starts no earlier than 480 minutes before now.
-  source: docs/target/sidekiq-free.md#L1207
+  source: docs/target/sidekiq-free.md#L1208
   oracles: [MetricsQueryParityTest#test_window_caps]
 - id: metrics.hour-cap
   area: metrics
   behavior: An oversized hour window starts no earlier than 72 hours before now.
-  source: docs/target/sidekiq-free.md#L1207
+  source: docs/target/sidekiq-free.md#L1208
   oracles: [MetricsQueryParityTest#test_window_caps]
 - id: metrics.day-marks
   area: metrics
   behavior: >-
     Queries read labels from the day-marks hash into MarkResult objects with
     the recorded time and bucket.
-  source: docs/target/sidekiq-free.md#L115-L1204
+  source: docs/target/sidekiq-free.md#L115-L1205
   oracles: [MetricsQueryParityTest#test_marks_come_from_the_day_marks_hash]
 - id: metrics.execution-key
   area: metrics
@@ -538,20 +543,20 @@
 - id: sorted-entry.retry-count
   area: data-api
   behavior: SortedEntry retry enqueues a payload with retry_count decremented by one.
-  source: docs/target/sidekiq-free.md#L1054
+  source: docs/target/sidekiq-free.md#L1055
   oracles: [SortedEntryApiParityTest#test_retry_pushed_payload_matches_sidekiq]
 - id: sorted-entry.add-to-queue-count
   area: data-api
   behavior: >-
     SortedEntry add_to_queue preserves retry_count in the enqueued payload,
     contrary to the source comment that it decrements the count.
-  source: docs/target/sidekiq-free.md#L1053
+  source: docs/target/sidekiq-free.md#L1054
   oracles: [SortedEntryApiParityTest#test_add_to_queue_pushed_payload_matches_sidekiq]
 - id: sorted-entry.kill-exception
   area: data-api
   behavior: >-
     SortedEntry kill notifies death handlers with a RuntimeError whose message
     is Job killed by API.
-  source: docs/target/sidekiq-free.md#L1055-L1093
+  source: docs/target/sidekiq-free.md#L1056-L1094
   oracles: [SortedEntryApiParityTest#test_kill_fires_death_handlers_with_api_exception]
 

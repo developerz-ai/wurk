@@ -724,10 +724,10 @@ Wurk's `/api/retries` path. Changing the path alone is not sufficient.
 **Key delimiters and evidence limits:** Wurk's shared frontend key builder uses
 `"<score>|<jid>"` for all three sets and URL-encodes it for single requests.
 The spec explicitly gives `"<score>-<jid>"` for the retry-detail GET row
-([line 1431](../target/sidekiq-free.md#L1431)); it does not explicitly define
+([line 1432](../target/sidekiq-free.md#L1432)); it does not explicitly define
 that delimiter for every other set or POST row. The reported upstream pattern
 of `key[]` plus action-named parameters is explicit in the spec only for
-retries bulk ([line 1432](../target/sidekiq-free.md#L1432)). The scheduled bulk
+retries bulk ([line 1433](../target/sidekiq-free.md#L1433)). The scheduled bulk
 row lists actions, not their parameter encoding, and the morgue bulk and
 single-action rows do not specify request shapes. Extending the reported
 pattern to those rows is not a verified upstream fact here: no stock upstream
@@ -744,7 +744,7 @@ particular content type.
 [frontend key builder](../../frontend/src/hooks/useJobSetActions.ts#L11-L16),
 [single/bulk/all requests](../../frontend/src/hooks/useJobSetActions.ts#L40-L56),
 [JSON encoding](../../frontend/src/http.ts#L33-L41), and
-[spec retries/scheduled/morgue rows](../target/sidekiq-free.md#L1430-L1448).
+[spec retries/scheduled/morgue rows](../target/sidekiq-free.md#L1431-L1449).
 
 ## A lost-reply Idempotency-Key stays pending until its TTL
 

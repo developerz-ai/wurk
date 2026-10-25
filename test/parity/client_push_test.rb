@@ -198,6 +198,42 @@ class ClientPushParityTest < Wurk::Test::UnitCase
     assert_equal 3600, only_queued_job['retry_for']
   end
 
+  # §2.2 / §9: only retry_for OVER 1_000_000_000 raises — the cap itself is a
+  # legal stored value, and it lands on the wire as the same Integer.
+  def test_retry_for_at_and_below_the_cap_lands_on_the_queue_as_an_integer
+    [999_999_999, 1_000_000_000].each do |value|
+      Sidekiq::Client.push('class' => PlainJob, 'args' => [], 'queue' => @queue, 'retry_for' => value)
+      payload = only_queued_job
+
+      assert_equal value, payload['retry_for']
+      assert_kind_of Integer, payload['retry_for']
+      redis('LPOP', "queue:#{@queue}")
+    end
+  end
+
+  # §9 normalize step 7 coerces before the §2.2 bound is applied, so the cap
+  # binds the coerced value: 1_000_000_000.7 is accepted and stores 1_000_000_000.
+  def test_retry_for_fraction_under_the_coerced_cap_is_accepted
+    Sidekiq::Client.push('class' => PlainJob, 'args' => [], 'queue' => @queue, 'retry_for' => 1_000_000_000.7)
+    payload = only_queued_job
+
+    assert_equal 1_000_000_000, payload['retry_for'], 'the cap binds the coerced value, not the raw one'
+    assert_kind_of Integer, payload['retry_for']
+  end
+
+  # §2.2 / §9: a digit String is coerced base-10 and lands on the wire as an
+  # Integer; any other String is rejected (covered in the bad_items loop below).
+  def test_digit_string_retry_for_lands_on_the_wire_as_an_integer
+    %w[3600 1000000000].each do |value|
+      Sidekiq::Client.push('class' => PlainJob, 'args' => [], 'queue' => @queue, 'retry_for' => value)
+      payload = only_queued_job
+
+      assert_equal value.to_i, payload['retry_for']
+      assert_kind_of Integer, payload['retry_for']
+      redis('LPOP', "queue:#{@queue}")
+    end
+  end
+
   def test_pool_is_transient_and_never_persisted
     PlainJob.set(queue: @queue, pool: Wurk.configuration.redis_pool).perform_async(1)
 
@@ -231,6 +267,10 @@ class ClientPushParityTest < Wurk::Test::UnitCase
       'non-numeric at' => { 'class' => PlainJob, 'args' => [], 'at' => '1700000000' },
       'tags not an Array' => { 'class' => PlainJob, 'args' => [], 'tags' => 'x' },
       'absolute retry_for' => { 'class' => PlainJob, 'args' => [], 'retry_for' => 1_000_000_001 },
+      'retry_for String over the cap' => { 'class' => PlainJob, 'args' => [], 'retry_for' => '1000000001' },
+      'non-coercible retry_for String' => { 'class' => PlainJob, 'args' => [], 'retry_for' => 'soon' },
+      'decimal retry_for String' => { 'class' => PlainJob, 'args' => [], 'retry_for' => '12.5' },
+      'infinite retry_for' => { 'class' => PlainJob, 'args' => [], 'retry_for' => Float::INFINITY },
       'empty queue' => { 'class' => PlainJob, 'args' => [], 'queue' => '' },
       'class without sidekiq options' => { 'class' => NotAJob, 'args' => [] },
       'symbol keys' => { class: PlainJob, args: [] }
