@@ -38,7 +38,7 @@
 
 ### P3 — cleanup
 
-- E23 `lib/wurk/lua/throttle_slot.lua`: builds key in Lua (undeclared key) — breaks Dragonfly/Cluster. Pass full key via `KEYS` (precedent #91). Also `lib/wurk/lua/flow_*.lua`, `limiter_list_sweep.lua` (production audit) — add a test that greps every `.lua` for `redis.call(` with a non-`KEYS[` key arg.
+- **E23 — resolved (existing implementation and static guard).** [`Throttle.admit` / `slot_for`](../../../../../../lib/wurk/throttle.rb#L110-L130) resolve the full `throttle:<digest>:<slot index>` key caller-side from Redis `TIME` on the same connection and pass `keys: [key]`; [`throttle_slot.lua`](../../../../../../lib/wurk/lua/throttle_slot.lua#L28-L47) binds `local key = KEYS[1]` and uses it for `SET` / `GET`. The existing [`LuaDeclaredKeysTest#test_every_lua_file_touches_only_declared_keys`](../../../../../../test/unit/lua_declared_keys_test.rb#L29-L39) has an empty allowlist and statically scans every `*.lua` in the Lua directory, including `flow_*.lua` and `limiter_list_sweep.lua`. Its scanner checks both [`redis.call` and `redis.pcall`](../../../../../../test/unit/lua_declared_keys_test.rb#L127-L129), with [tests for rejecting constructed keys and accepting KEYS-derived locals/parameters](../../../../../../test/unit/lua_declared_keys_test.rb#L50-L71). No additional key-passing fix or duplicate scanner is needed. This is static guard evidence, not proof of a live Cluster/Dragonfly run.
 - E24: `💣` alias for `clear` on `SortedSet`/`Queue`; `Sidekiq.loader` (spec §30); `Queue#clear` (`queue.rb:105`), `DeadSet#trim` (`dead_set.rb:37`), `Process#signal` use pipeline not MULTI; `SortedSet#scan` double-wraps `*`; `cron.rb:297` flattens `args: {hash}`; flow node `at:` enqueued immediately (`flow/creation.rb:127`, `flow_create.lua:381`); batch callback round-trips (`record_event`, 12 EXPIREs in `apply_linger`, `Status#data`) → pipeline.
 
 ### Found by top-down / bottom-up passes (same slice)
@@ -62,12 +62,12 @@ Overlaps confirmed by multiple passes: E2 (Queue#each), E15 (server_middleware r
 4. Cron cluster E6/E20/E21/E28 (one agent).
 5. API iteration E1/E2/E7/E31/E24-atomics.
 6. Metrics E8/E9, profiler E22.
-7. E14, E23 Lua key audit.
+7. E14 (E23 Lua key audit already resolved; see evidence above).
 
 ## Tests
 - Every row has its test. Batch + cron tests go in `test/integration/` (real Redis) **and** an independent oracle in `test/parity/` per [`08`](08-test-hygiene.md).
 - `bin/rake test`, `bin/rake test:parity`, `bin/rake test:ecosystem` (unique-jobs relies on E10).
 
 ## Done when
-- E1–E22 + E25–E31 fixed with tests; E23–E24 fixed.
+- E1–E22 + E25–E31 fixed with tests; E24 fixed. E23 already resolved by the implementation and static guard linked above.
 - Any intentional divergence recorded in `docs/idea/parity-divergences.md`.
