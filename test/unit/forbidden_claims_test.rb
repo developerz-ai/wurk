@@ -7,8 +7,11 @@ require_relative '../../tasks/llms_full'
 # a reader or an agent treats as the project's pitch: README, the docs site,
 # the llms.txt map and its generated full dump, and the gem's own summary.
 # CLAUDE.md pillar 3 forbids a "faster" claim on any of them until
-# docs/benchmarks.md supports it, and a rule nothing reads only holds until the
-# next copy edit. Reads files and touches no Redis or shared state.
+# docs/benchmarks.md supports it; the shipped dashboard has no per-job progress
+# surface (status is machine-only, read through Wurk::Status and the /v1 jobs
+# endpoint), so that claim is pinned out here too — a rule nothing reads only
+# holds until the next copy edit. Reads files and touches no Redis or shared
+# state.
 class ForbiddenClaimsTest < Minitest::Test
   parallelize_me!
 
@@ -31,6 +34,11 @@ class ForbiddenClaimsTest < Minitest::Test
   # update this guard in the same change.
   SCALE_CLAIM = /millions of jobs|jobs an hour/i
 
+  # The shipped dashboard has no per-job progress surface: status is read
+  # through Wurk::Status / record.to_h and the bearer-scoped /v1 jobs endpoint.
+  # A dashboard progress claim is always wrong; name the machine reader instead.
+  DASHBOARD_PROGRESS_CLAIM = /per-job progress/i
+
   def test_no_public_surface_claims_wurk_is_faster
     offenders = surfaces.flat_map do |name, text|
       sentences(text).filter_map do |sentence|
@@ -51,12 +59,22 @@ class ForbiddenClaimsTest < Minitest::Test
                  "the numbers in docs/benchmarks.md first: #{offenders.join(', ')}"
   end
 
+  def test_no_public_surface_claims_a_per_job_progress_dashboard
+    offenders = surfaces.filter_map { |name, text| name if text.match?(DASHBOARD_PROGRESS_CLAIM) }
+
+    assert_empty offenders,
+                 'the shipped dashboard has no per-job progress surface; name the machine readers ' \
+                 "(Wurk::Status, /v1 GET /jobs/:jid) instead: #{offenders.join(', ')}"
+  end
+
   def test_the_guard_still_catches_a_bare_claim
     assert speed_claim?('Faster.'), 'the wiki once shipped "Free forever. Faster."'
     assert speed_claim?('Faster than stock Sidekiq')
     refute speed_claim?('Wurk is not currently faster than stock Sidekiq')
     assert speed_claim?('Wurk is not only free but faster than Sidekiq')
     assert speed_claim?('Wurk is not faster than Sidekiq, but it is faster than Resque')
+    assert_match DASHBOARD_PROGRESS_CLAIM, 'the dashboard shows a per-job progress bar',
+                 'the dashboard per-job-progress phrasing must stay guarded'
   end
 
   private
