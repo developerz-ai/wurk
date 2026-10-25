@@ -13,7 +13,7 @@ code has not reached yet; its **Wurk:** paragraph states today's behavior.
 
 **Wurk:** `Wurk::Fetcher::Reliable` (BLMOVE-based, private-list-per-process)
 is the sole and default fetcher. `Sidekiq::BasicFetch` is aliased straight to
-it (`lib/wurk/compat.rb:104`).
+it (`lib/wurk/compat.rb:106`).
 
 **Spec:** Free Sidekiq's default `BasicFetch` uses plain `BRPOP` — a job
 popped off the queue and lost mid-execution (crash, `SIGKILL`) is gone.
@@ -28,14 +28,14 @@ depends on BasicFetch's at-most-once gap, so there is no compat reason to
 offer a lossy mode. Third-party gems that special-case `Sidekiq::BasicFetch`
 by class identity still work since the alias resolves to a real class.
 
-**Anchor:** `lib/wurk/compat.rb:104`, `lib/wurk/fetcher/reliable.rb`.
+**Anchor:** `lib/wurk/compat.rb:106`, `lib/wurk/fetcher/reliable.rb`.
 
 ## Limiter reschedule cap routes to the dead set, not re-raise
 
 **Wurk:** `Limiter::ServerMiddleware` reschedules an over-limit job up to
 `reschedule` times (default 20); once the cap is hit, the job goes straight
 to the dead set tagged `rate_limited` instead of re-raising into the normal
-retry pipeline (`lib/wurk/limiter/server_middleware.rb:13-17,44`).
+retry pipeline (`lib/wurk/limiter/server_middleware.rb:56-59,81-89`).
 
 **Spec:** Ent §1.4 says a job that exhausts its rate-limit reschedule budget
 re-raises the original error and falls through to the standard
@@ -51,7 +51,7 @@ dead set with its own reason and death handlers, and it bumps
 observably different (dead-set reason, handler firing) but never loses a job
 and never causes a queue pileup the spec's re-raise path would risk.
 
-**Anchor:** `lib/wurk/limiter/server_middleware.rb:13-17,44`.
+**Anchor:** `lib/wurk/limiter/server_middleware.rb:56-59,81-89`.
 
 ## Orphan reclaim uses `LMOVE private public RIGHT RIGHT`, not `RPOPLPUSH`
 
@@ -128,8 +128,9 @@ a short `ttl` (legal in Sidekiq Ent) booting after the gem swap.
 **Wurk:** `SIGUSR1` on the swarm parent enqueues every live child into
 `Swarm#rolling_restart`, a state machine (`spawn_replacement → await
 heartbeat → SIGTERM old slot → await exit → next`) driven entirely by the
-existing non-blocking supervise loop (`lib/wurk/swarm.rb:104-108` and the
-`:usr1` case at the bottom of the signal dispatch).
+existing non-blocking supervise loop (`lib/wurk/swarm.rb:238-240`, the
+`:usr1` case at `lib/wurk/swarm.rb:454`, and the state machine in
+`lib/wurk/swarm/restart.rb`).
 
 **Spec:** Ent §8 describes rolling restarts via integration with
 [einhorn](https://github.com/asford/einhorn) (or a similar external process
@@ -148,16 +149,17 @@ cycling, which the in-process state machine does (verified by
 `test/integration/rolling_restart_test.rb` and
 `test/integration/swarm_supervision_test.rb`, PR3).
 
-**Anchor:** `lib/wurk/swarm.rb:104-108`, PR3 (`fix/swarm-supervision`), Ent
+**Anchor:** `lib/wurk/swarm.rb:238-240`, `lib/wurk/swarm/restart.rb`, PR3 (`fix/swarm-supervision`), Ent
 §8.
 
 ## Reaper liveness has a residual local pid-reuse blind spot — shared with `super_fetch`, not fixed
 
-**Wurk:** `Fetcher::Reaper#owner_alive?` fast-paths same-boot-generation
+**Wurk:** `Fetcher::Reaper#orphaned?` fast-paths same-boot-generation
 private lists (host **and** `Component::PROCESS_NONCE` match) straight to
-`Process.kill(0, pid)` (`lib/wurk/fetcher/reaper.rb:270-284`). The nonce is
+`Process.kill(0, pid)` (`#local_pid_alive?`,
+`lib/wurk/fetcher/reaper.rb:250-279`). The nonce is
 minted once per process image and inherited unchanged across `fork`
-(`lib/wurk/component.rb:19-21`), so this group is every process forked from
+(`lib/wurk/component.rb:20-22`), so this group is every process forked from
 the current swarm boot, not a single pid. If the OS hands a *replacement*
 child, forked from that same boot, the exact pid a just-reaped sibling held,
 `kill(0)` reads the new occupant as the old one — alive. Every other owner
@@ -182,13 +184,13 @@ component is bug-compatible with — carries the identical limitation, this is
 recorded as a deliberate, matched-parity gap rather than an intentional
 "improvement" left undone.
 
-**Anchor:** `lib/wurk/fetcher/reaper.rb:270-284`, `lib/wurk/component.rb:19-21`,
+**Anchor:** `lib/wurk/fetcher/reaper.rb:250-279`, `lib/wurk/component.rb:20-22`,
 `docs/reliability.md` (Reliable fetch → How "dead" is decided), Pro §3.2.
 
 ## Poison-pill counter resets on ACK, and a poison kill fires death handlers
 
 **Wurk:** the recovery counter at `super_fetch:recovered:<jid>` is deleted the
-moment the job acks — `Fetcher::Reliable::UnitOfWork#acknowledge` pipelines the
+moment the job acks — `Fetcher::Reliable::UnitOfWork#write_ack` pipelines the
 `DEL` next to its `LREM`, so an attempt that finished (returned, or raised and
 booked a retry) resets the count. Only reclaims of an attempt that never acked
 accumulate toward `RECOVERY_THRESHOLD`. When the threshold is crossed, the
@@ -221,7 +223,7 @@ the limiter's reschedule cap — notifies, and a poison kill is the same kind of
 event: the job is dead and is not coming back.
 
 **Anchor:** `lib/wurk/middleware/poison_pill.rb` (`clear_in`, `mark_poison`),
-`lib/wurk/fetcher/reliable.rb` (`UnitOfWork#acknowledge`),
+`lib/wurk/fetcher/unit_of_work.rb` (`UnitOfWork#acknowledge`, `write_ack`),
 `lib/wurk/processor.rb` (`process`), Pro §12.
 
 ## The ACK is deferred onto the next fetch, not sent when the job finishes
@@ -258,8 +260,9 @@ Sidekiq's `BRPOP` sends none of. Leaving it standalone means a permanent
 full terms in
 `docs/plans/2026/08/06/101-faster-than-sidekiq/00-semantics-signoff.md`.
 
-**Anchor:** `lib/wurk/fetcher/reliable.rb` (`UnitOfWork#acknowledge`,
-`retrieve_work`, `bulk_requeue`, `terminate`), `lib/wurk/manager.rb`
+**Anchor:** `lib/wurk/fetcher/unit_of_work.rb` (`UnitOfWork#acknowledge`),
+`lib/wurk/fetcher/reliable.rb` (`retrieve_work`, `bulk_requeue`,
+`terminate`), `lib/wurk/manager.rb`
 (`hard_shutdown`), Pro §3.2.
 
 ## Paused queues are read from a 2s-TTL cache, not on every fetch pass
@@ -414,7 +417,7 @@ simply never read, not a protocol violation.
 **Wurk:** `sidekiq_options timeout: <seconds>` writes `timeout` verbatim.
 `deadline:` is the *input option*: it too rides the wire verbatim, and push-time
 normalization derives an absolute `deadline_at` epoch-float from it
-(`JobUtil#stamp_deadline`, `lib/wurk/job_util.rb:205-223`). The two are not
+(`JobUtil#stamp_deadline`, `lib/wurk/job_util.rb:237-242`). The two are not
 interchangeable — `deadline` is a relative duration frozen at declaration,
 `deadline_at` the absolute cutoff every later attempt measures against, so a
 retry or an `IterableJob` resume reads `deadline_at` and never re-derives one
@@ -436,7 +439,7 @@ retries/`IterableJob` resumes re-push the same job hash, so `deadline_at`
 naturally carries the same absolute cutoff across every attempt rather than
 resetting it.
 
-**Anchor:** `lib/wurk/job_util.rb:205-219`, `lib/wurk/middleware/timeout.rb`,
+**Anchor:** `lib/wurk/job_util.rb:237-242`, `lib/wurk/middleware/timeout.rb`,
 `lib/wurk/middleware/expiry.rb`, `lib/wurk/job.rb` (`Job::TimedOut`,
 `Job::DeadlineExceeded`).
 
