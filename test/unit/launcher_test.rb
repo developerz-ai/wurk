@@ -343,7 +343,7 @@ class LauncherTest < Wurk::Test::UnitCase
     assert_equal launcher.managers, quieted
   end
 
-  # Spec sidekiq-ent.md §2.6: a USR1-quieted leader keeps enqueuing periodic
+  # Spec sidekiq-ent.md §2.6: a TSTP-quieted leader keeps enqueuing periodic
   # jobs — only full shutdown stops the loops. So quiet must NOT terminate it.
   def test_quiet_does_not_terminate_cron_poller
     launcher = Wurk::Launcher.new(@config)
@@ -354,6 +354,21 @@ class LauncherTest < Wurk::Test::UnitCase
     launcher.quiet
 
     refute terminated, 'quiet must leave the cron poller running (quieted leader still enqueues)'
+  end
+
+  # Divergence ledger, docs/idea/parity-divergences.md "Quiet does not step the
+  # leader down; full shutdown does": the Leader renewal loop runs straight
+  # through a quiet — only #stop's teardown tail (@leader&.stop) joins and
+  # CAS-releases it. So quiet must NOT call @leader.stop.
+  def test_quiet_does_not_stop_the_cluster_leader
+    launcher = Wurk::Launcher.new(@config)
+    launcher.managers.each { |m| m.define_singleton_method(:quiet) { nil } }
+    stopped = false
+    launcher.instance_variable_get(:@leader).define_singleton_method(:stop) { stopped = true }
+
+    launcher.quiet
+
+    refute stopped, 'quiet must leave the cluster leader renewing; only full shutdown steps it down'
   end
 
   # Branch coverage: #quiet's `@poller&.terminate` must tolerate a nil poller.
