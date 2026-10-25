@@ -283,6 +283,58 @@ class MiddlewareChainTest < Wurk::Test::UnitCase
     assert_equal [:one, 2, 'three'], instance.instance_variable_get(:@args)
   end
 
+  # Spec §10.1: `def make_new` — zero-argument. The entry carries the config
+  # it was registered with, so a direct build resolves the chain's config
+  # without the caller threading it back in.
+  def test_entry_make_new_is_zero_argument_and_builds_with_the_registered_config
+    cfg = Object.new
+    chain = Wurk::Middleware::Chain.new(cfg)
+    chain.add(WithConfig)
+    entry = chain.entries.first
+
+    assert_equal 0, entry.method(:make_new).arity
+
+    instance = entry.make_new
+
+    assert_kind_of WithConfig, instance
+    assert_same cfg, instance.config
+  end
+
+  # A direct make_new follows the same respondable rule as retrieve: the
+  # setter is found on the built instance even when only its singleton has it.
+  def test_entry_make_new_assigns_config_to_a_singleton_only_setter
+    cfg = Object.new
+    klass = Class.new do
+      def initialize = singleton_class.class_eval { attr_accessor :config }
+      def call(*_args) = yield
+    end
+    chain = Wurk::Middleware::Chain.new(cfg)
+    chain.add(klass)
+
+    assert_same cfg, chain.entries.first.make_new.config
+  end
+
+  # The documented rule has no config-truthiness gate: a config-less chain
+  # still assigns, so a recording writer sees nil rather than being skipped —
+  # the `:unset` sentinel proves the writer ran (a skipped assignment would
+  # leave it standing and fail this assert_nil).
+  def test_entry_make_new_assigns_nil_when_the_chain_has_no_config
+    klass = Class.new do
+      def initialize = @assigned = :unset
+      attr_reader :assigned
+
+      def config=(value)
+        @assigned = value
+      end
+
+      def call(*_args) = yield
+    end
+    chain = Wurk::Middleware::Chain.new
+    chain.add(klass)
+
+    assert_nil chain.entries.first.make_new.assigned
+  end
+
   # --- invoke ------------------------------------------------------------
 
   def test_invoke_without_block_raises_argument_error
@@ -463,6 +515,21 @@ class MiddlewareChainTest < Wurk::Test::UnitCase
 
     assert_equal [NoConfig], parent.entries.map(&:klass)
     assert_equal [NoConfig, WithConfig], copy.entries.map(&:klass)
+  end
+
+  # Entries carry their config, so copy_for duplicates each one and rebinds
+  # only the duplicate: the capsule's middleware resolve the capsule while
+  # the parent's entries keep the parent config (#69).
+  def test_copy_for_rebinds_entry_configs_without_touching_the_parent
+    parent_cfg = Object.new
+    parent = Wurk::Middleware::Chain.new(parent_cfg)
+    parent.add(WithConfig)
+    capsule = Object.new
+    copy = parent.copy_for(capsule)
+
+    assert_same capsule, copy.entries.first.config
+    assert_same parent_cfg, parent.entries.first.config
+    assert_same capsule, copy.retrieve.first.config
   end
 
   def test_dup_creates_separate_entries_array

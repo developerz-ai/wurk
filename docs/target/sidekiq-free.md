@@ -647,6 +647,7 @@ end
 
 class Sidekiq::Middleware::Chain::Entry
   attr_reader :klass
+  attr_accessor :config
   def make_new                        # klass.new(*args); sets .config= if respondable
 end
 ```

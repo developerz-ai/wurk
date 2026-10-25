@@ -1113,6 +1113,54 @@ entry records the unsupported contract, not a claim that the gap is safe.
 [liveness and local readiness](../../lib/wurk/health.rb#L277-L305); and
 [swarm readiness](../../lib/wurk/health.rb#L354-L367).
 
+## Queue `?direction=asc` is unimplemented
+
+**Wurk:** `GET /queues/:name?direction=asc` does not change queue-wide
+ordering or pagination. The queue API reads `page`, `count`, and `substr`,
+then slices jobs in enumeration order without reading `direction`. The SPA
+requests only `page` and `count`; its column sorting rearranges the fetched
+page, not the entire queue.
+
+**Spec:** free [§25.4 Routes](../target/sidekiq-free.md#254-routes),
+`GET /queues/:name` row, lists `?count=`, `?page=`, and `?direction=asc`
+for queue contents.
+
+**Why:** an operator following a link with `direction=asc` still gets normal
+queue pagination, not the requested queue-wide ordering. Sorting a column on
+one fetched page is not equivalent support: it does not change which jobs
+belong on each page. This entry records an unsupported contract, not a claim
+that the gap is safe.
+
+**Anchor:** [free §25.4 Routes](../target/sidekiq-free.md#254-routes)
+(`GET /queues/:name`, `docs/target/sidekiq-free.md:1427`);
+[queue API pagination](../../app/controllers/wurk/api_controller.rb#L68-L76);
+[accepted pagination parameters](../../app/controllers/wurk/api/pagination.rb#L29-L35);
+[enumeration-order slicing](../../app/controllers/wurk/api/pagination.rb#L70-L95);
+[SPA queue request](../../frontend/src/pages/Queues.tsx#L59-L72); and
+[page-local sorting](../../frontend/src/pages/Queues.tsx#L90).
+
+## Dashboard `?days=N` is unimplemented
+
+**Wurk:** `GET /?days=N` does not select the requested historical horizon.
+The dashboard defaults to a `1h` view and offers its own `1h`, `24h`, `7d`,
+and `30d` range controls. It requests history using the selected range's
+bucket and window, without reading `days`.
+
+**Spec:** free [§25.4 Routes](../target/sidekiq-free.md#254-routes),
+`GET /` dashboard row, specifies `?days=N` with `N` in `1..180`.
+
+**Why:** bookmarks and shared dashboard links carrying `days=N` do not open
+the requested horizon; operators instead see the default `1h` view and must
+use Wurk's existing range controls. Those controls are not support for the
+specified URL parameter or its full range. This entry records an unsupported
+contract, not a claim that the gap is safe.
+
+**Anchor:** [free §25.4 Routes](../target/sidekiq-free.md#254-routes)
+(`GET /`, `docs/target/sidekiq-free.md:1423`);
+[available dashboard ranges](../../frontend/src/pages/Dashboard.tsx#L60-L65);
+[default range and history request](../../frontend/src/pages/Dashboard.tsx#L86-L109);
+and [range controls](../../frontend/src/pages/Dashboard.tsx#L213-L219).
+
 ## Dashboard and web extension differences
 
 **Wurk:** `GET /profiles/:key` requires same-origin, a typed URL, or a same-host Referer (Sidekiq answers any GET); extension `redirect_to` inside the SPA falls back to the extension root for off-site targets (the SPA loads extensions with `fetch`, which cannot follow cross-origin redirects); `reload_page` inside the SPA goes to the extension index; `Sidekiq::Web.views` is an accepted, ignored array; read-only mode answers TRACE with 403 on the standalone mount; the health server closes connections past 16 concurrent unanswered.
