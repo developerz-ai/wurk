@@ -78,6 +78,22 @@ class ClientPushParityTest < Wurk::Test::UnitCase
     assert_operator payload['enqueued_at'], :>=, payload['created_at']
   end
 
+  # §2.2 and §10.3: supplied context must survive push, independent of middleware capture.
+  def test_push_preserves_supplied_optional_and_context_fields_on_wire
+    %i[immediate scheduled].each do |destination|
+      item = optional_context_item
+      item['at'] = Time.now.to_f + 600 if destination == :scheduled
+      jid = Sidekiq::Client.push(item)
+      payload = destination == :immediate ? only_queued_job : only_scheduled_job
+
+      assert_equal jid, payload['jid']
+      expected_optional_context.each do |key, value|
+        assert_includes payload, key, "#{destination} push must preserve the #{key} key"
+        assert_equal value, payload[key], "#{destination} push must preserve the supplied #{key} value"
+      end
+    end
+  end
+
   def test_jids_are_unique_lowercase_hex_24
     jids = Array.new(50) { Sidekiq::Client.push('class' => PlainJob, 'args' => [], 'queue' => @queue) }
 
@@ -433,6 +449,44 @@ class ClientPushParityTest < Wurk::Test::UnitCase
   end
 
   private
+
+  def optional_context_item
+    {
+      'class' => PlainJob, 'args' => [], 'queue' => @queue,
+      'retry_queue' => 'retry-low',
+      'tags' => %w[zebra alpha],
+      'display_class' => 'Reports::DisplayJob',
+      'dead' => false,
+      'log_level' => 'warn',
+      'locale' => 'fr-CA',
+      'cattr' => { 'tenant' => { 'id' => 42, 'roles' => %w[reader writer] } },
+      'cattr_1' => { 'request' => { 'trace' => 'trace-one', 'enabled' => false } },
+      'cattr_2' => { 'user' => { 'name' => 'Ada', 'preferences' => [nil, true, 2.5] } },
+      'profile' => 'profile-token-123'
+    }
+  end
+
+  def expected_optional_context
+    {
+      'retry_queue' => 'retry-low',
+      'tags' => %w[zebra alpha],
+      'display_class' => 'Reports::DisplayJob',
+      'dead' => false,
+      'log_level' => 'warn',
+      'locale' => 'fr-CA',
+      'cattr' => { 'tenant' => { 'id' => 42, 'roles' => %w[reader writer] } },
+      'cattr_1' => { 'request' => { 'trace' => 'trace-one', 'enabled' => false } },
+      'cattr_2' => { 'user' => { 'name' => 'Ada', 'preferences' => [nil, true, 2.5] } },
+      'profile' => 'profile-token-123'
+    }
+  end
+
+  def only_scheduled_job
+    entries = redis('ZRANGE', 'schedule', 0, -1)
+
+    assert_equal 1, entries.size
+    Wurk.load_json(entries.first)
+  end
 
   def redis(*cmd)
     Wurk.redis { |c| c.call(*cmd) }
