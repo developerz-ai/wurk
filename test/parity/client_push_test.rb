@@ -459,6 +459,7 @@ class ClientPushParityTest < Wurk::Test::UnitCase
   def test_push_bulk_validation_errors
     base = { 'class' => PlainJob, 'queue' => @queue }
     bad = {
+      'not a hash' => 'nope',
       'at Array size mismatch' => base.merge('args' => [[1], [2]], 'at' => [Time.now.to_f]),
       'empty at Array' => base.merge('args' => [[1]], 'at' => []),
       'non-numeric at' => base.merge('args' => [[1]], 'at' => 'soon'),
@@ -474,6 +475,28 @@ class ClientPushParityTest < Wurk::Test::UnitCase
       assert_raises(ArgumentError, "#{label} must raise") { Sidekiq::Client.push_bulk(items) }
     end
     assert_equal [], new_keys
+  end
+
+  # §31.1: symbol keys are forbidden in job payloads at push time. push and
+  # push_bulk are two doors to the same rule, so both must refuse the same
+  # item before anything reaches Redis.
+  def test_push_bulk_rejects_symbol_keys_like_push
+    item = { class: PlainJob, args: [[1], [2]], queue: @queue }
+
+    assert_raises(ArgumentError, 'push must raise on symbol keys (§31.1)') { Sidekiq::Client.push(item) }
+    assert_raises(ArgumentError, 'push_bulk must raise on symbol keys exactly like push') do
+      Sidekiq::Client.push_bulk(item)
+    end
+    assert_equal [], new_keys, 'neither entry point may write before validating'
+  end
+
+  def test_push_bulk_rejects_mixed_string_and_symbol_keys
+    items = { 'class' => PlainJob, 'queue' => @queue, args: [[1], [2]], at: Time.now.to_f + 60 }
+
+    assert_raises(ArgumentError, 'a half-stringified bulk is still a symbol-keyed payload') do
+      Sidekiq::Client.push_bulk(items)
+    end
+    assert_equal [], new_keys, 'the mixed bulk must raise before any Redis write'
   end
 
   def test_push_bulk_middleware_halt_yields_nil_entries

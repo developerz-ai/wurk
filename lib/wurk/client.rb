@@ -87,17 +87,17 @@ module Wurk
       payload['jid']
     end
 
-    # @param items [Hash] keys: class, args (Array<Array>), at?, spread_interval?, batch_size?, jid?
+    # @param items [Hash] String keys only: class, args (Array<Array>), at?, spread_interval?, batch_size?, jid?
     # @return [Array<String, nil>] jids in submission order; nil entries mark middleware-halted jobs.
     def push_bulk(items)
-      args = items['args'] || items[:args]
+      args = items['args']
       validate_bulk_shape!(items, args)
       return [] if args.empty?
 
       base      = bulk_base(items)
       reject_bulk_collapse!(base)
       at_values = expand_at(items, args.size)
-      batch_sz  = items['batch_size'] || items[:batch_size] || (at_values ? SCHEDULED_BATCH_SIZE : DEFAULT_BATCH_SIZE)
+      batch_sz  = items['batch_size'] || (at_values ? SCHEDULED_BATCH_SIZE : DEFAULT_BATCH_SIZE)
       flush_bulk(args, at_values, base, batch_sz)
     end
 
@@ -183,14 +183,19 @@ module Wurk
     end
 
     def validate_bulk_shape!(items, args)
+      raise ArgumentError, "Bulk items must be a Hash with 'class' and 'args' keys: `#{items}`" unless items.is_a?(Hash)
+
+      symbol_keys = items.keys.grep(Symbol)
+      # Symbol keys raise here exactly like #push does (spec §31.1) and are
+      # never stringified, so every read below can rely on String keys only.
+      raise ArgumentError, "Bulk push keys must be Strings: `#{symbol_keys.inspect}`" unless symbol_keys.empty?
       raise ArgumentError, "Bulk arguments must be an Array of Arrays: `#{args.inspect}`" unless valid_bulk_args?(args)
       raise ArgumentError, "Job 'jid' is only allowed with a single-job bulk" if explicit_jid?(items) && args.size > 1
       raise ArgumentError, "Cannot pass both 'at' and 'spread_interval'" if conflicting_schedule?(items)
     end
 
     def conflicting_schedule?(items)
-      (items.key?('at') || items.key?(:at)) &&
-        (items.key?('spread_interval') || items.key?(:spread_interval))
+      items.key?('at') && items.key?('spread_interval')
     end
 
     def valid_bulk_args?(args)
@@ -198,11 +203,11 @@ module Wurk
     end
 
     def explicit_jid?(items)
-      items.key?('jid') || items.key?(:jid)
+      items.key?('jid')
     end
 
     def bulk_base(items)
-      base = items.transform_keys(&:to_s)
+      base = items.dup
       %w[args at spread_interval batch_size].each { |k| base.delete(k) }
       base
     end
@@ -246,9 +251,9 @@ module Wurk
     end
 
     def expand_at(items, count)
-      return expand_spread(items, count) unless items.key?('at') || items.key?(:at)
+      return expand_spread(items, count) unless items.key?('at')
 
-      at = items['at'] || items[:at]
+      at = items['at']
       case at
       when Array
         raise ArgumentError, "'at' array size must match args" unless at.size == count
@@ -263,9 +268,9 @@ module Wurk
     end
 
     def expand_spread(items, count)
-      return nil unless items.key?('spread_interval') || items.key?(:spread_interval)
+      return nil unless items.key?('spread_interval')
 
-      spread = items['spread_interval'] || items[:spread_interval]
+      spread = items['spread_interval']
       raise ArgumentError, "'spread_interval' must be positive Numeric" unless spread.is_a?(Numeric) && spread.positive?
 
       window = [spread.to_f, SPREAD_INTERVAL_FLOOR].max
