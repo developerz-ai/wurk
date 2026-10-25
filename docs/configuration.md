@@ -89,13 +89,18 @@ Sidekiq.configure_client { |config| config.redis = { url: ENV["REDIS_URL"] } }
 - The block yields the **same** `Wurk::Configuration` singleton
   (`Wurk.configuration`) in both cases.
 - `configure_server` runs its block only when `config[:server] == true`;
-  `configure_client` only when it is not.
+  `configure_client` runs when the process is not a server **or**
+  `config[:client_in_server]` is set.
 - Server mode is entered **before** initializers load — by the
   `wurk.server_mode` railtie initializer in a Rails host, and by
   `Wurk.enter_server_mode` in `Wurk::CLI#run` / `#run_swarm` before the app is
   required. A Rails process that will not run workers (see `WURK_DISABLED`,
   Rails console, test env, a refused preforking boot) is *not* a server, so its
-  `configure_server` blocks are skipped and `configure_client` blocks run.
+  `configure_server` blocks are skipped and `configure_client` blocks run. A
+  Rails web process that boots the swarm is both server and client; the
+  railtie (`Wurk::RailsBoot.enter_server_mode_if_serving`) sets
+  `config[:client_in_server]` there so its request-path enqueues still run the
+  client blocks.
 - Both are safe to call multiple times; blocks accumulate side effects on the
   one config object.
 
@@ -211,7 +216,7 @@ Not in `DEFAULTS` — unset unless you assign them.
 | `config.handle_exception(ex, ctx = {})` | Dispatch to the error handlers |
 | `config.on(event) { … }` | Lifecycle hook |
 | `config.logger` / `= logger` | Process logger |
-| `config.thread_priority` / `= n` | Default `-1`; stored, **not applied** by Wurk |
+| `config.thread_priority` / `= n` | Default `-1`; applied to every component thread `safe_thread` spawns (an explicit `priority:` argument wins) |
 | `config.register(name, obj)` / `config.lookup(name, default_class = nil)` | Extension service locator |
 | `config.topology` / `= Wurk::Topology…` | Swarm layout |
 | `config.memory_limit_mb` / `= n` | RSS recycle threshold; `nil`/`0` disables |
@@ -875,7 +880,6 @@ differs from `docs/target/sidekiq-free.md`:
 | `reap_idle_redis_connections` | Same observable behaviour, different driver: Sidekiq reaps on the 10s heartbeat; each Wurk pool runs its own reaper thread, sweeping every `min(timeout / 2, 10)` seconds, so pools outside the launcher (web, supervisor) are reaped too. Requires connection_pool >= 3.0, as Sidekiq 8.1 does |
 | `Config#redis_info` / `#to_json` | Not implemented on the configuration object. `Wurk::RedisPool#info` returns parsed `INFO` merged with the pool's `size`/`available` |
 | `:max_iteration_runtime` | Accepted for drop-in compatibility; not consumed by `Wurk::IterableJob` |
-| `thread_priority` | Stored and readable (default `-1`) but not applied to worker threads |
 | `USR2` | Spec marks it "Pro only". In Wurk it always reopens logs, and the swarm parent relays it to children |
 | Fetch mode | There is no "basic fetch". The default fetcher is always the reliable `BLMOVE` fetcher, so `config.super_fetch!` exists only so a Pro initializer drops in unchanged. `config.reliable_scheduler!` still does real work — keep it |
 | `WURK_PRELOAD_APP` | Sidekiq's `SIDEKIQ_PRELOAD_APP` defaults to off *and* controls whether the app loads in the parent. Wurk's swarm always loads the app entrypoint in the parent (children inherit it); this flag toggles only the extra Rails `eager_load!` |
