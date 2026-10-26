@@ -242,8 +242,6 @@ module Wurk
       minutes = ::Wurk::Api::Pagination.clamp_int(params[:minutes], 1, ::Wurk::Metrics::Query::MAX_MINUTES, 60)
       rows = ::Wurk::Web::Enterprise::Historical.top(minutes: minutes, class_filter: params[:substr])
       render json: { minutes: minutes, top_jobs: rows.map { |(klass, totals)| ::Wurk::Api::Serializers.metric_row(klass, totals) } }
-    rescue ::Wurk::Metrics::Query::WindowTooWide => e
-      render json: { error: e.message }, status: :bad_request
     end
 
     def metrics_for_job

@@ -460,15 +460,28 @@ class ApiEndpointsTest < Wurk::Test::EngineCase
     assert_ok
     payload = json_body
 
+    assert_equal %i[minutes top_jobs], payload.keys.sort
     assert_equal 5, payload[:minutes]
     assert_kind_of Array, payload[:top_jobs]
   end
 
-  def test_metrics_clamps_oversize_window
-    get '/wurk/api/metrics?minutes=99999'
+  def test_metrics_clamps_minutes_and_ignores_hours
+    cases = [[nil, 60], ['', 60], ['invalid', 60], ['0', 1], ['-5', 1], ['1', 1], ['480', 480], ['99999', 480]]
+    cases.each do |minutes, expected|
+      [nil, '99999'].each do |hours|
+        params = {}
+        params[:minutes] = minutes unless minutes.nil?
+        params[:hours] = hours unless hours.nil?
+        get '/wurk/api/metrics', params
 
-    assert_ok
-    assert_equal ::Wurk::Metrics::Query::MAX_MINUTES, json_body[:minutes]
+        assert_ok
+        payload = json_body
+
+        assert_equal %i[minutes top_jobs], payload.keys.sort, params.inspect
+        assert_equal expected, payload[:minutes], params.inspect
+        assert_kind_of Array, payload[:top_jobs], params.inspect
+      end
+    end
   end
 
   def test_history_returns_recharts_series
