@@ -81,7 +81,7 @@ class BinCheckRedisUrlTest < Minitest::Test
     end
   end
 
-  def run_isolated_check(mode, coverage: nil, suite_exit: 0)
+  def run_isolated_check(mode, coverage: nil, suite_exit: 0, frontend_exit: 0)
     Dir.mktmpdir do |dir|
       FileUtils.mkdir_p(File.join(dir, 'bin'))
       FileUtils.mkdir_p(File.join(dir, 'frontend'))
@@ -92,7 +92,7 @@ class BinCheckRedisUrlTest < Minitest::Test
       server = TCPServer.new('127.0.0.1', 0)
       env = check_env(File.join(dir, 'bin'), "redis://127.0.0.1:#{server.addr[1]}/3").merge(
         'COVERAGE' => coverage, 'CHECK_ROOT' => dir, 'CHECK_LOG' => File.join(dir, 'commands.log'),
-        'SUITE_EXIT' => suite_exit.to_s,
+        'SUITE_EXIT' => suite_exit.to_s, 'FRONTEND_EXIT' => frontend_exit.to_s,
         'SKIP_LINT' => nil, 'SKIP_FRONTEND' => nil, 'SKIP_PARITY' => nil
       )
       out, err, status = Open3.capture3(env, File.join(dir, 'bin/check'), *Array(mode))
@@ -113,6 +113,9 @@ class BinCheckRedisUrlTest < Minitest::Test
         if [ "${0##*/} $*" = 'bundle exec rake test' ] && [ "${COVERAGE-unset}" = 1 ]; then
           exit "$SUITE_EXIT"
         fi
+        if [ "${0##*/} $*" = 'bun run test:coverage' ]; then
+          exit "$FRONTEND_EXIT"
+        fi
         exit 0
       BASH
       File.chmod(0o755, stub)
@@ -127,7 +130,7 @@ class BinCheckRedisUrlTest < Minitest::Test
       assert_includes commands, 'bundle exec rake test|1|absent'
       assert_includes commands, 'bundle exec rake test:parity|unset|absent'
       assert_includes commands, 'bundle exec rubocop --parallel|unset|present'
-      assert_includes commands, 'bun run test|unset|present'
+      assert_includes commands, 'bun run test:coverage|unset|present'
       other_stages = commands.reject { |line| line.start_with?('bundle exec rake test|') }
 
       assert_equal ['unset'], other_stages.map { |line| line.split('|')[1] }.uniq, commands.inspect
@@ -143,6 +146,16 @@ class BinCheckRedisUrlTest < Minitest::Test
     assert_includes out, '✗ test suite (unit + integration + engine)'
     assert_includes err, 'bin/check ✗ failed: test suite (unit + integration + engine)'
     assert_includes commands, 'bundle exec rake test:parity|unset|absent'
+  end
+
+  def test_frontend_coverage_failure_fails_the_gate
+    out, err, status, commands = run_isolated_check('pr', frontend_exit: 23)
+
+    assert_equal 1, status.exitstatus, "#{out}\n#{err}"
+    assert_includes commands, 'bun run test:coverage|unset|present'
+    assert_includes out, '✗ frontend'
+    assert_includes err, 'bin/check ✗ failed: frontend'
+    assert_includes commands, 'bundle exec rake test|1|absent'
   end
 
   def test_fast_coverage_remains_opt_in
@@ -171,6 +184,9 @@ class BinCheckRedisUrlTest < Minitest::Test
     _out, err, status, = run_isolated_check('pr')
 
     assert_equal 0, status.exitstatus, err
+    _out, err, status, = run_isolated_check('pr', frontend_exit: 23)
+
+    assert_equal 1, status.exitstatus, err
     assert_path_exists sentinel, "bin/check deleted the repo's coverage/ while the suite was writing to it"
   ensure
     server&.close

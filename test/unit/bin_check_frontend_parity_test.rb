@@ -1,6 +1,7 @@
 # frozen_string_literal: true
 
 require 'minitest/autorun'
+require 'json'
 
 # bin/check's frontend stage exists to mirror test.yml's `frontend (vitest)`
 # job, and the header of bin/check promises that a green local run is "the
@@ -71,10 +72,59 @@ class BinCheckFrontendParityTest < Minitest::Test
   end
 
   def test_bin_check_runs_exactly_the_ci_frontend_commands
+    [ci_bun_commands, check_bun_commands].each do |commands|
+      assert_includes commands, 'bun run test:coverage'
+    end
     assert_equal ci_bun_commands, check_bun_commands,
                  "bin/check's frontend stage must run the same bun commands, in the same order, " \
                  "as test.yml's `frontend (vitest)` job — otherwise a green bin/check is not the " \
                  'answer the PR will get'
+  end
+
+  def test_coverage_script_and_dependencies_are_pinned_together
+    manifest = JSON.parse(File.read(File.join(ROOT, 'frontend/package.json')))
+    lock = File.read(File.join(ROOT, 'frontend/bun.lock'))
+    workspace = lock.split('"packages":', 2).first
+
+    assert_equal 'vitest run', manifest.fetch('scripts').fetch('test')
+    assert_equal 'vitest run --coverage', manifest.fetch('scripts').fetch('test:coverage')
+
+    %w[vitest @vitest/coverage-v8].each do |package|
+      assert_equal '5.0.5', manifest.fetch('devDependencies').fetch(package)
+      assert_includes workspace, "\"#{package}\": \"5.0.5\""
+      assert_match(/"#{Regexp.escape(package)}": \["#{Regexp.escape(package)}@5\.0\.5"/, lock)
+    end
+  end
+
+  def test_v8_counts_all_source_with_global_floors
+    config = File.read(File.join(ROOT, 'frontend/vitest.config.ts'))
+    coverage = config[/coverage:\s*\{(.*?)\n    \},/m, 1]
+
+    refute_nil coverage
+    assert_match(/provider:\s*'v8'/, coverage)
+    assert_match(%r{include:\s*\['src/\*\*/\*\.\{ts,tsx\}'\]}, coverage)
+    assert_match(
+      %r{exclude:\s*\['src/\*\*/\*\.\{test,spec\}\.\{ts,tsx\}', 'src/test-setup\.ts'\]}, coverage
+    )
+    assert_match(/perFile:\s*false/, coverage)
+    assert_match(/lines:\s*83\s*,/, coverage)
+    assert_match(/branches:\s*66\s*,/, coverage)
+  end
+
+  def test_frontend_coverage_keeps_per_step_gating
+    job = frontend_job_lines.join
+    run = "${{ needs.detect.outputs.dup != 'true' && " \
+          "(github.event_name != 'pull_request' || needs.detect.outputs.frontend == 'true') }}"
+
+    steps = job.split(/^      - /).drop(1)
+    coverage_step = steps.find { |step| step.include?('run: bun run test:coverage') }
+
+    assert_includes job, "RUN: #{run}"
+    refute_match(/^    if:/, job)
+    refute_empty steps
+    steps.each { |step| assert_match(/^        if: env\.RUN == 'true'$/, step) }
+    refute_nil coverage_step
+    assert_includes coverage_step, 'working-directory: frontend'
   end
 
   def test_both_sides_run_in_the_frontend_directory

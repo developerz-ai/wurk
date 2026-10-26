@@ -218,6 +218,51 @@ describe('Extension', () => {
     expect(root.querySelector('style')).toBe(baseline);
   });
 
+  it.each(['https://example.org/wurk/ext/demo_locks/search', '/wurk/queues', ''])('leaves an out-of-base form action %s to the browser', async (action) => {
+    const fetchMock = mockFetch(registeredMeta, `<form action="${action}"><button>Submit</button></form>`);
+    vi.stubGlobal('fetch', fetchMock);
+    renderAt('/ext/locks');
+    await waitFor(() => expect(shadow().querySelector('form')).toBeTruthy());
+    const before = fetchMock.mock.calls.length;
+    const event = new Event('submit', { bubbles: true, cancelable: true });
+    shadow().querySelector('form')!.dispatchEvent(event);
+    expect(event.defaultPrevented).toBe(false);
+    expect(fetchMock).toHaveBeenCalledTimes(before);
+    expect(staticText('Submit')).toBeInTheDocument();
+  });
+
+  it('submits an empty GET form without appending a question mark', async () => {
+    const fetchMock = mockFetch(registeredMeta, '<form action="/wurk/ext/demo_locks/search"><button>Search</button></form>');
+    vi.stubGlobal('fetch', fetchMock);
+    renderAt('/ext/locks');
+    await waitFor(() => expect(shadow().querySelector('form')).toBeTruthy());
+    const before = fetchMock.mock.calls.length;
+    fetchMock.mockImplementation(async () => response('<p>Empty search result</p>'));
+    const event = new Event('submit', { bubbles: true, cancelable: true });
+    shadow().querySelector('form')!.dispatchEvent(event);
+    expect(event.defaultPrevented).toBe(true);
+    await waitFor(() => expect(staticText('Empty search result')).toBeInTheDocument());
+    expect(fetchMock).toHaveBeenCalledTimes(before + 1);
+    expect(fetchMock.mock.calls.at(-1)![0]).toBe('/wurk/ext/demo_locks/search');
+  });
+
+  it('ignores an AbortError rejection without replacing the current view with an error', async () => {
+    const fetchMock = mockFetch(registeredMeta, '<a href="/wurk/ext/demo_locks/next">Current view</a>');
+    vi.stubGlobal('fetch', fetchMock);
+    renderAt('/ext/locks');
+    await waitFor(() => expect(staticText('Current view')).toBeInTheDocument());
+    const before = fetchMock.mock.calls.length;
+    fetchMock.mockRejectedValue(new DOMException('Aborted', 'AbortError'));
+    const event = new MouseEvent('click', { bubbles: true, cancelable: true });
+    staticText('Current view').dispatchEvent(event);
+    expect(event.defaultPrevented).toBe(true);
+    await new Promise((done) => setTimeout(done, 0));
+    expect(fetchMock).toHaveBeenCalledTimes(before + 1);
+    expect(fetchMock.mock.calls.at(-1)![0]).toBe('/wurk/ext/demo_locks/next');
+    expect(staticText('Current view')).toBeInTheDocument();
+    expect(document.querySelector('.empty-state')).toBeNull();
+  });
+
   it('shows loading outside the shadow tree, then renders a 404 body', async () => {
     const pending = deferredResponse();
     const fetchMock = mockFetch(registeredMeta, '');
@@ -289,15 +334,16 @@ describe('Extension', () => {
       return { extCalls };
     }
 
-    // Records whether the SPA claimed the click, then cancels it at the window
-    // so jsdom doesn't attempt (and log) a real navigation for the ones it left.
+    // Record whether Extension claimed the click, then cancel it in the shadow
+    // root before the outer router or jsdom can navigate for an unclaimed click.
     function click(el: Element, init: MouseEventInit) {
       let defaultPrevented = false;
       const sink = (e: Event) => {
         defaultPrevented = e.defaultPrevented;
         e.preventDefault();
       };
-      window.addEventListener('click', sink, { once: true });
+      // Observe after Extension's listener, before the outer SPA router can claim it.
+      shadow().addEventListener('click', sink, { once: true });
       el.dispatchEvent(new MouseEvent('click', { bubbles: true, cancelable: true, composed: true, ...init }));
       return { defaultPrevented };
     }
@@ -321,6 +367,47 @@ describe('Extension', () => {
       const ev = click(staticText('detail'), { button: 0, ...init });
       expect(ev.defaultPrevented).toBe(false);
       expect(extCalls().length).toBe(before);
+    });
+
+    it.each([
+      ['missing href', '<a>Guarded</a>'],
+      ['download', '<a href="/wurk/ext/demo_locks/file" download>Guarded</a>'],
+      ['external origin', '<a href="https://example.org/wurk/ext/demo_locks/locks">Guarded</a>'],
+      ['outside base', '<a href="/wurk/queues">Guarded</a>'],
+      ['non-anchor', '<span>Guarded</span>'],
+    ])('leaves a %s click unclaimed', async (_label, markup) => {
+      const fetchMock = mockFetch(meta, markup);
+      vi.stubGlobal('fetch', fetchMock);
+      renderAt('/ext/locks');
+      await waitFor(() => expect(staticText('Guarded')).toBeInTheDocument());
+      const before = fetchMock.mock.calls.length;
+      expect(click(staticText('Guarded'), { button: 0 }).defaultPrevented).toBe(false);
+      expect(fetchMock).toHaveBeenCalledTimes(before);
+      expect(staticText('Guarded')).toBeInTheDocument();
+    });
+
+    it('does not fetch an already-prevented click', async () => {
+      const { extCalls } = await setup();
+      const before = extCalls().length;
+      const event = new MouseEvent('click', { bubbles: true, cancelable: true });
+      event.preventDefault();
+      staticText('detail').dispatchEvent(event);
+      expect(event.defaultPrevented).toBe(true);
+      expect(extCalls()).toHaveLength(before);
+      expect(staticText('detail')).toBeInTheDocument();
+    });
+
+    it('intercepts target=_self and replaces the view', async () => {
+      const fetchMock = mockFetch(meta, '<a href="/wurk/ext/demo_locks/self?q=one" target="_self">Self</a>');
+      vi.stubGlobal('fetch', fetchMock);
+      renderAt('/ext/locks');
+      await waitFor(() => expect(staticText('Self')).toBeInTheDocument());
+      const before = fetchMock.mock.calls.length;
+      fetchMock.mockImplementation(async () => response('<p>Self result</p>'));
+      expect(click(staticText('Self'), { button: 0 }).defaultPrevented).toBe(true);
+      await waitFor(() => expect(staticText('Self result')).toBeInTheDocument());
+      expect(fetchMock).toHaveBeenCalledTimes(before + 1);
+      expect(fetchMock.mock.calls.at(-1)![0]).toBe('/wurk/ext/demo_locks/self?q=one');
     });
 
     it('leaves a target=_blank link to the browser', async () => {
