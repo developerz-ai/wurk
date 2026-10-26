@@ -4,7 +4,7 @@ require 'digest'
 
 module Wurk
   # EVALSHA-cached Lua scripts. Loaded once per pool, never re-uploaded.
-  # Bulk enqueue, multi-pop, atomic schedule promotion, batch ops.
+  # Multi-pop, atomic schedule promotion, batch ops.
   #
   # Source strings are intentionally bare — the SHA1 of each is computed
   # at load time and is the same value Redis reports from `SCRIPT LOAD`.
@@ -22,18 +22,6 @@ module Wurk
         redis.call("zrem", key, jobs[1])
         return jobs[1]
       end
-    LUA
-
-    # Bulk enqueue to a single queue.
-    # KEYS = [queue_list, queues_set]
-    # ARGV = [queue_name, job_json, ...]
-    # Returns the number of jobs pushed.
-    BULK_PUSH = <<~LUA
-      redis.call("sadd", KEYS[2], ARGV[1])
-      for i = 2, #ARGV do
-        redis.call("lpush", KEYS[1], ARGV[i])
-      end
-      return #ARGV - 1
     LUA
 
     # Pro reliable scheduler: atomically promote all due jobs in a sorted
@@ -224,7 +212,6 @@ module Wurk
 
     SCRIPTS = {
       zpopbyscore: ZPOPBYSCORE,
-      bulk_push: BULK_PUSH,
       reliable_schedule_promote: RELIABLE_SCHEDULE_PROMOTE,
       reliable_requeue: RELIABLE_REQUEUE,
       fast_delete_job: FAST_DELETE_JOB,

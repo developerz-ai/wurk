@@ -41,14 +41,20 @@ Layers and ownership — one reason to change per class. Don't blur these.
 | Layer | Owns | Path |
 |---|---|---|
 | Engine | Dashboard mount, asset path, railtie | `lib/wurk/engine.rb`, `app/` |
-| Railtie | `after_initialize` hook that starts the swarm | `lib/wurk/railtie.rb` |
+| Railtie | Rails hooks only (config namespace, server_mode initializer, `after_initialize` that starts the swarm); every boot decision is delegated | `lib/wurk/railtie.rb` |
+| RailsBoot | Boot policy decisions: whether this process boots, whether it may fork the swarm, server-mode entry | `lib/wurk/rails_boot.rb` |
 | Swarm | Parent process; forks N children, PID supervision, rolling restart | `lib/wurk/swarm.rb` |
-| Manager | Inside each child: thread pool, lifecycle, heartbeat | `lib/wurk/manager.rb` |
+| Topology | Worker-topology slot DSL (count/queues/concurrency per fork kind); Swarm consumes its `assignments` | `lib/wurk/topology.rb` |
+| Launcher | Top-level supervisor inside each worker process: Manager pool (one per Capsule), scheduler poller, heartbeat thread | `lib/wurk/launcher.rb` |
+| Capsule | One processing unit: a set of threads + queues sharing a fetcher and a Redis pool | `lib/wurk/capsule.rb` |
+| Manager | Runs one Capsule: thread pool, lifecycle, heartbeat | `lib/wurk/manager.rb` |
 | Fetcher | Abstract base in `lib/wurk/fetcher.rb`; `Fetcher::Reliable` is the shipped implementation: BLMOVE reliable fetch, main queue → per-process private list. Supporting: `capped.rb` (global concurrency caps), `many_queues.rb` (one-round-trip multi-queue claim), `unit_of_work.rb` (ACK/requeue), `reaper.rb` + `private_list_key.rb` + `orphan_grace.rb` + `unparseable_keys.rb` (orphan reclamation) | `lib/wurk/fetcher.rb` (base), `lib/wurk/fetcher/reliable.rb` (impl), `lib/wurk/fetcher/` (support) |
 | Processor | Pops private list, runs middleware chain, invokes perform | `lib/wurk/processor.rb` |
 | Client | Enqueue, Lua bulk path, Redis-outage local buffer | `lib/wurk/client.rb` |
 | Middleware | Client + server chains (Sidekiq contract) | `lib/wurk/middleware/` |
-| Web | Rack app serving the precompiled SolidJS SPA + JSON APIs | `lib/wurk/web.rb`, `app/` |
+| Web | Rack app serving the precompiled SolidJS SPA + the dashboard JSON endpoints (`app/controllers/wurk/api_controller.rb` via `Wurk::Api::Serializers`). Distinct from the machine-facing `Wurk::API` plane below | `lib/wurk/web.rb`, `app/` |
+| API | Machine-facing HTTP API, versioned `/v1`, plain Rack with no Rails reference — one implementation serves all three mounts: engine-nested `<mount>/api/v1`, separately mounted `mount Wurk::API => '/wurk-api'`, standalone `run Wurk::API`. The namespace also holds API::Fast, the Pro data-API Lua extensions | `lib/wurk/api.rb`, `lib/wurk/api/` |
+| Compat | Sidekiq-alias layer (`Sidekiq::*` namespace — the drop-in contract) and the `require "sidekiq"` entrypoint | `lib/wurk/compat.rb`, `lib/sidekiq.rb` |
 | RedisPool | Per-process pool over redis-client | `lib/wurk/redis_pool.rb` |
 
 User-facing code (mount, controllers, views, generators, assets) lives in the engine. Non-user-facing (swarm, fetcher, processor, client, middleware) lives in plain Ruby under `lib/`. **Standalone mode must run without loading the engine.**

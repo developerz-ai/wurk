@@ -29,6 +29,8 @@ own, so this lane never re-reports a claim a gate already covers:
 |---|---|
 | `test/unit/readme_claims_test.rb:9` | README claims about a third-party gem's suite running in CI |
 | `test/unit/docs_links_test.rb:15` | anchors and links between the reference docs |
+| `test/unit/docs_links_test.rb:140` | `DocsEnvTableTest`: docs/configuration.md's "Every `ENV` read in `lib/`" claim — the env table staying complete |
+| `test/unit/toolchain_pins_test.rb:13` | `ToolchainPinsTest`: docs/deployment.md's `oven/bun` example Dockerfile pin — present and identical to the other pin sites |
 | `test/unit/claude_md_claims_test.rb:13` | the same claims as the README, in CLAUDE.md |
 | `test/unit/forbidden_claims_test.rb:12` | the pitch surfaces: README, docs site, llms.txt, the gem summary |
 | `test/unit/cutover_claims_test.rb:12` | promises about running Sidekiq and Wurk against one Redis |
