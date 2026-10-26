@@ -39,7 +39,8 @@ class MetricsQueryTest < Wurk::Test::UnitCase
   # Per-class fields only — never DEL the shared minute buckets, or other
   # parallel tests for the same minute will lose their writes.
   def delete_class_fields(conn)
-    times = [@now, @now - 60, @now - 120, @now - 180, @now - 240, @now - 300, @now - 360, @now - 420]
+    times = [@now, @now - 60, @now - 120, @now - 180, @now - 240, @now - 300, @now - 360, @now - 420,
+             @now - (497 * 60)]
     keys = times.flat_map { |t| [Wurk::Metrics::History.minute_key(t), Wurk::Metrics::History.ten_minute_key(t)] }
     keys.uniq.each do |key|
       [@klass_a, @klass_b].each do |kls|
@@ -77,6 +78,32 @@ class MetricsQueryTest < Wurk::Test::UnitCase
 
       assert_includes rows.map(&:first), @klass_a, "minutes: #{minutes}"
     end
+  end
+
+  # Regression (#726 review): a promoted window counts 10-minute buckets
+  # directly instead of rounding up to whole hours — 490 minutes is 49
+  # buckets starting 06:30, not 9 hours' 54 reaching back to 05:40.
+  def test_promoted_minute_window_is_bucket_precise
+    Wurk::Metrics::History.record(@klass_a, 5, success: true, at: @now)
+    Wurk::Metrics::History.flush
+
+    rows = Wurk::Metrics::Query.for_job(@klass_a, minutes: 490, now: @now)
+
+    assert_equal 49, rows.size
+    assert_equal ::Time.utc(2026, 5, 21, 6, 30), rows.first[:at]
+  end
+
+  # The aggregated totals must not include executions outside the requested
+  # window: the 06:20 write sits one bucket before where the 490-minute
+  # window starts (06:30), and the old hours-rounded window counted it.
+  def test_promoted_window_totals_exclude_data_outside_the_window
+    Wurk::Metrics::History.record(@klass_a, 5, success: true, at: @now)
+    Wurk::Metrics::History.record(@klass_a, 7, success: true, at: @now - (497 * 60))
+    Wurk::Metrics::History.flush
+
+    found = Wurk::Metrics::Query.top_jobs(minutes: 490, now: @now).to_h
+
+    assert_equal({ p: 1, f: 0, ms: 5 }, found[@klass_a])
   end
 
   def test_top_jobs_caps_hours

@@ -64,22 +64,29 @@ module Wurk
       # Bucket start times oldest→newest and their keys: one per minute for
       # `minutes`, one per 10 minutes for `hours` (which wins when both given).
       def window_buckets(minutes, hours, now)
-        minutes, hours = promote_minute_window(minutes, hours)
-        stride, keyproc = Query::ROLLUPS.fetch(hours ? :hourly : :minutely)
-        count = hours ? cap_hours!(hours) * 6 : cap_minutes!(minutes)
+        minutes, buckets = promote_minute_window(minutes, hours)
+        stride, keyproc = Query::ROLLUPS.fetch(buckets ? :hourly : :minutely)
+        count = buckets || cap_minutes!(minutes)
         stamps = bucket_starts(now, stride, count * stride).map { |s| ::Time.at(s).utc }
         [stamps, stamps.map(&keyproc)]
       end
 
-      # A minute window past MAX_MINUTES promotes onto the 10-minute buckets
-      # (whose 30-day retention covers it) instead of raising; it still
-      # WindowTooWides past MAX_HOURS * 60 minutes — checked in minutes first
-      # so the error names the unit the caller passed.
+      # 10-minute bucket counts for the requested window — nil stays on the
+      # per-minute buckets. An explicit `hours:` is six buckets per hour
+      # (cap_hours! still bounds it). A minute window past MAX_MINUTES
+      # promotes onto the 10-minute buckets (whose 30-day retention covers
+      # it) instead of raising; it still WindowTooWides past MAX_HOURS * 60
+      # minutes — checked in minutes first so the error names the unit the
+      # caller passed. The promoted window is counted in 10-minute buckets,
+      # ceil(minutes / 10), not rounded up to whole hours (#726): 490 minutes
+      # is 49 buckets, not 9 hours' 54, so the totals never reach past the
+      # window the caller asked for by more than the trailing partial bucket.
       def promote_minute_window(minutes, hours)
-        return [minutes, hours] unless hours.nil? && minutes && minutes > Query::MAX_MINUTES
+        return [minutes, cap_hours!(hours) * 6] unless hours.nil?
+        return [minutes, nil] unless minutes && minutes > Query::MAX_MINUTES
 
-        check_window!(Integer(minutes), Query::MAX_HOURS * 60, 'minutes')
-        [nil, (minutes / 60.0).ceil]
+        checked = check_window!(Integer(minutes), Query::MAX_HOURS * 60, 'minutes')
+        [nil, (checked / 10.0).ceil]
       end
 
       def sum_totals(hashes)

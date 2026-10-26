@@ -487,6 +487,36 @@ class ApiEndpointsTest < Wurk::Test::EngineCase
     assert_equal 43_200, json_body[:minutes]
   end
 
+  # Regression (#726 review): the promoted window must not reach past the
+  # minutes the response echoes. The write at now-497min lands one 10-minute
+  # bucket before where a 490-minute window starts; the old hours-rounded
+  # promotion (9h = 54 buckets) counted it, inflating top_jobs past the
+  # echoed 490 minutes.
+  def test_metrics_promoted_window_excludes_data_outside_the_window
+    klass = "PromotedWindowJob@#{@ns}"
+    now = ::Time.now
+    ::Wurk::Metrics::History.record(klass, 5, success: true, at: now)
+    ::Wurk::Metrics::History.record(klass, 7, success: true, at: now - (497 * 60))
+    ::Wurk::Metrics::History.flush
+
+    get '/wurk/api/metrics?minutes=490'
+
+    assert_ok
+    assert_equal 490, json_body[:minutes]
+    row = json_body[:top_jobs].find { |r| r[:klass] == klass }
+
+    refute_nil row, 'the in-window execution must surface in top_jobs'
+    assert_equal 1, row[:processed]
+  ensure
+    outside = now - (497 * 60)
+    keys = [now, outside].flat_map do |t|
+      [::Wurk::Metrics::History.minute_key(t), ::Wurk::Metrics::History.ten_minute_key(t)]
+    end.uniq
+    ::Wurk.redis do |c|
+      keys.each { |key| c.call('HDEL', key, "#{klass}|p", "#{klass}|f", "#{klass}|ms") }
+    end
+  end
+
   # A non-numeric `?minutes=` is not a client error: the endpoint serves the
   # 60-minute default (metrics_window_raw's rescue), same as no param at all.
   def test_metrics_falls_back_to_default_window_on_unparseable_minutes

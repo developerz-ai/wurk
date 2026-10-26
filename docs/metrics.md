@@ -173,8 +173,11 @@ Window caps (`WindowTooWide < ArgumentError` when exceeded):
 The class-level `top_jobs` / `for_job` never serve a silently clamped window:
 a `minutes:` value past `MAX_MINUTES` (480) is promoted onto the 10-minute
 buckets (whose 30-day retention covers it) rather than raising, and only a
-window past `MAX_HOURS` × 60 minutes (43200) raises `WindowTooWide`. Beyond
-that there is no data to read anyway — the source buckets are TTL'd out.
+window past `MAX_HOURS` × 60 minutes (43200) raises `WindowTooWide`. The
+promotion counts 10-minute buckets directly — 490 minutes reads 49 of them,
+not a rounded-up 9 hours' 54 — so the served data never reaches past the
+requested window by more than the trailing partial bucket. Beyond that there
+is no data to read anyway — the source buckets are TTL'd out.
 `history` and `queue_history` clamp instead of raising; an unknown bucket name
 or a non-positive window raises `ArgumentError`. `queue_history` returns at
 most `MAX_QUEUE_SERIES` (25) queues, taken in sorted order, to bound the
