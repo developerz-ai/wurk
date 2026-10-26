@@ -255,7 +255,7 @@ tests operating on a namespaced ZSET. Production callers use the default.
 |---|---|---|
 | `name` | `String` | the Redis key |
 | `size` | `Integer` | `ZCARD` — O(1) |
-| `scan(match, count = 100)` | enumerator, or yields | `ZSCAN` with the match wrapped in `*…*` |
+| `scan(match, count = 100) { \|SortedEntry\| … }` | enumerator, or yields | `ZSCAN` with the match wrapped in `*…*` |
 | `clear` | `true` | `UNLINK` the whole key |
 | `as_json` | `{name: …}` | |
 
@@ -452,8 +452,7 @@ time — there is nothing to require or enable.
 |---|---|---|
 | `Queue#delete_job(jid)` | `String` or `nil` | the deleted job's JSON, `nil` when no job has that jid (Pro's contract); `ArgumentError` on a blank jid |
 | `Queue#delete_by_class(klass)` | `Integer` | accepts a `Class`, `String`, or `Symbol`; `ArgumentError` on a blank name |
-| `SortedSet#scan(match) { \|SortedEntry\| … }` | | one-argument block form |
-| `SortedSet#scan(match) { \|value, score\| … }` | | two-argument block form — the raw pairs |
+| `SortedSet#scan(match) { \|SortedEntry\| … }` | | one SortedEntry per match |
 
 ```ruby
 Wurk::Queue.new("default").delete_job(jid)         # one round trip
@@ -463,11 +462,10 @@ Wurk::RetrySet.new.scan("NoMethodError") { |entry| entry.delete }
 Wurk::DeadSet.new.scan("CustomerJob")    { |entry| entry.retry }
 ```
 
-Which form `scan` yields is decided by **block arity**: a one-parameter block
-gets a `SortedEntry` (so you can call `delete` / `retry` / `kill` without
-re-parsing JSON); a two-parameter block gets `(value, score)` as the base
-`ZSCAN` surface does. With no block, `scan` returns an enumerator over the raw
-pairs.
+`scan` always yields one `SortedEntry` per match (so you can call `delete` /
+`retry` / `kill` without re-parsing JSON). A two-parameter block gets
+`(entry, nil)` — the same shape Sidekiq ships; the raw `ZSCAN` pairs are never
+surfaced. With no block, `scan` returns an enumerator over the entries.
 
 **Prefer the Lua paths on large sets.** `Queue#find_job(jid).delete` walks the
 list 50 payloads at a time over the network, parses JSON per candidate, then
