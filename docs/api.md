@@ -175,8 +175,11 @@ Wurk::Queue.new("bulk_export").unpause!
   pass. See [Reliability](reliability.md#fetch-order-and-polling).
 - **Only new fetches stop.** Jobs already running continue to completion.
 - Enqueueing is unaffected — the queue keeps growing while paused.
-- Both calls are idempotent and return `true` whether or not they changed
-  anything.
+- Both calls are idempotent, and each reports whether **this** call changed the
+  queue's paused state: `pause!` returns `true` only when it added the queue to
+  the `paused` SET (`false` when the queue was already paused), and `unpause!`
+  returns `true` only when it removed the queue from that SET (`false` when the
+  queue was not paused).
 
 ### Enumerating
 
