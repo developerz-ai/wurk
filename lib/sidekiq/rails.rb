@@ -7,4 +7,5 @@
 # engine (a wurk-native extra; `require "wurk/rails"` for that). Sidekiq::Web
 # stays mountable as a plain Rack app either way, exactly like upstream.
 require 'wurk'
+require 'rails'
 require 'wurk/railtie'
