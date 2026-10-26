@@ -990,7 +990,15 @@ not resolve the callback-marker/`notify`/`cbsucc` accounting above.
 
 ## Sidekiq Enterprise / web internals not provided
 
-**Wurk:** `Sidekiq::Enterprise::VERSION` is undefined (Wurk advertises as OSS: `Sidekiq.pro?`/`ent?` are false), and upstream's ERB dashboard internals (`Sidekiq::Web::Action`, `Route`, `Router`, `WebHelpers`) and `Sidekiq::TestingClient` are not provided.
+**Wurk:** `Sidekiq::Enterprise::VERSION` is undefined (Wurk advertises as OSS: `Sidekiq.pro?`/`ent?` are false), and upstream's ERB dashboard internals (`Sidekiq::Web::Action`, `Route`, `Router`, `WebHelpers`) and `Sidekiq::TestingClient` are not provided as upstream constants.
+This is distinct from the supported `Wurk::Web::Extension::App` router DSL,
+which Wurk does ship: `route(*methods, path, &block)` registers one route per
+method, the verb helpers (`head`, `get`, `post`, `put`, `patch`, `delete`)
+register a single method each, and `match(env)` returns a
+`Wurk::Web::Extension::Action` or `nil` without executing the block.
+See [dashboard extensions](../dashboard.md#custom-tabs--web-extensions) and the
+[authoritative free §25.5](../target/sidekiq-free.md#255-web-router-dsl).
+Supporting that DSL does not imply full upstream web-internals parity.
 
 **Why:** the dashboard is a SolidJS SPA, and advertising Ent would make gems take Ent-only code paths that call licensed internals.
 

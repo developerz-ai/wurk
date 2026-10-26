@@ -119,8 +119,40 @@ rows in the job-detail modal.
 
 **How native rendering works.** Sidekiq extensions declare routes in
 `registered(app)` (`app.get "/locks" do … erb :index end`) and ship ERB
-templates under `root_dir/views`. Wurk captures those routes at registration
-and serves them Sidekiq-Web-compatibly — no Sinatra involved:
+templates under `root_dir/views`. Wurk lazily calls `registered(app)` on the
+first rendering request for that extension, then caches the captured routes
+and helpers for subsequent requests — no Sinatra involved.
+
+The `app` is a `Wurk::Web::Extension::App`. Its supported router DSL follows
+[Sidekiq's authoritative §25.5](target/sidekiq-free.md#255-web-router-dsl):
+
+- `route(*methods, path, &block)` registers one route per method — the same path
+  and block under each listed HTTP method (`"GET"`, `"POST"`, …; methods are
+  upcased, so Symbols work too). The verb helpers `head`, `get`, `post`, `put`,
+  `patch`, and `delete` each register a single method with the same
+  path/block contract.
+- `match(env)` returns a `Wurk::Web::Extension::Action` for the first
+  registered route whose method and path match the request, or `nil` on a
+  method/path miss. Matching does **not** execute the route block; the block
+  runs when the action does. Named path captures are available through
+  `route_params(:name)`, whose keys are Symbols.
+
+For example, one route can serve both GET and POST:
+
+```ruby
+module MyGem::Web
+  def self.registered(app)
+    app.route("GET", "POST", "/locks/:digest") do
+      @digest = route_params(:digest)
+      erb :index
+    end
+  end
+end
+```
+
+This supports the extension App DSL, not the upstream
+`Sidekiq::Web::Router`, `Sidekiq::Web::Route`, or `Sidekiq::Web::Action`
+constants. Rendering and security constraints remain the same:
 
 - `GET/POST /<mount>/ext/<name>/<subpath>` matches the extension's route
   (route params like `/locks/:digest` included), runs the block in a
@@ -139,8 +171,13 @@ and serves them Sidekiq-Web-compatibly — no Sinatra involved:
 - Tabs added by bare `tabs["Label"] = "path"` mutation have no extension to
   render; those fall back to an Extension page that iframes the tab's own path
   (if the host mounts something reachable there, it renders in the frame).
-- Registration stays no-op-safe — a gem calling `register`/`register_extension`
-  (or mutating `tabs`) never crashes boot.
+- Calling `register`/`register_extension` (or mutating `tabs`) does not eagerly
+  execute `registered(app)`. If that callback raises a `StandardError` during
+  first-request capture, Wurk caches the failure and does not retry the callback
+  or serve partially captured routes. First and repeated rendering requests
+  report it through the error handlers with context `web-extension-registration`
+  and return a sanitized 500 body, `Extension render error (see server logs)`,
+  rather than exposing exception details or letting the error escape.
 
 **Scope note.** This renders extensions registered against wurk's
 `Sidekiq::Web` alias. Gems that literally `require "sidekiq"` still can't load
