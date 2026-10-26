@@ -541,6 +541,56 @@ class FetcherReaperTest < Wurk::Test::UnitCase
     assert_equal 1, llen(foreign_q), 'reclaimed onto the correctly-parsed public queue'
   end
 
+  # The one input the wide reading can swallow: a four-part (pre-nonce) key
+  # behind a pipe-bearing queue name and an all-digit host. Read wide, the
+  # queue truncates at its first pipe, the queue name's tail reads as the
+  # host and the real pid lands in the nonce slot — and a pid is never
+  # PROCESS_NONCE's 12-hex shape, which is what the wide_tail guard keys on.
+  def test_parse_full_and_parse_owner_agree_on_a_pre_nonce_key_behind_a_pipe_bearing_queue
+    key = 'queue:eu|jobs|123456789012|4242|0'
+
+    parsed = Wurk::Fetcher::PrivateListKey.parse_full(key)
+
+    assert_equal ['queue:eu|jobs', '123456789012', 4242, nil], parsed,
+                 'both queue segments kept, host/pid read from the narrow tail'
+    assert_equal parsed[1..3], Wurk::Fetcher::PrivateListKey.parse_owner('queue:eu|jobs', key),
+                 'both parsers must resolve the same [host, pid, nonce]'
+  end
+
+  # The misread end to end, dead owner: before the guard the job drained
+  # onto the queue truncated at the first pipe — a queue nobody serves —
+  # instead of the list's own public queue.
+  def test_reclaim_full_reclaims_a_pre_nonce_orphan_behind_a_pipe_bearing_queue
+    foreign_q = Wurk::Keys.queue("#{@ns}|legacy")
+    truncated_q = "#{Wurk::Keys::QUEUE_PREFIX}#{@ns}"
+    key = "#{foreign_q}|123456789012|#{DEAD_PID}|0"
+    @extra_keys.push(foreign_q, truncated_q, key)
+    @pool.with { |c| c.call('RPUSH', key, payload('legacy')) }
+
+    assert_equal 1, @reaper.reclaim_full!
+    assert_equal 1, llen(foreign_q), 'the job lands on the FULL queue name'
+    assert_equal 0, llen(truncated_q), 'the queue truncated at the first pipe stays empty'
+    assert_equal 0, llen(key), 'private list drained'
+  end
+
+  # Same shape, live owner: a pre-nonce heartbeat registered under the
+  # all-digit host. Read wide, that heartbeat is looked up under an identity
+  # nobody wrote ("<queue tail>:<host as pid>:<pid as nonce>") and the list
+  # is drained out from under the job still in flight.
+  def test_reclaim_full_leaves_a_live_pre_nonce_owner_behind_a_pipe_bearing_queue
+    host = '123456789012'
+    register_process(host, unowned_pid, info: true, nonce: nil)
+    foreign_q = Wurk::Keys.queue("#{@ns}|live")
+    key = "#{foreign_q}|#{host}|#{unowned_pid}|0"
+    @extra_keys.push(foreign_q, key)
+    @pool.with { |c| c.call('RPUSH', key, payload('in-flight')) }
+
+    assert_equal 0, @reaper.reclaim_full!, 'a beating pre-nonce owner keeps its jobs'
+    assert_equal 1, llen(key), 'in-flight job left alone'
+  ensure
+    unregister_process(host, unowned_pid)
+  end
+
   # --- thread lifecycle --------------------------------------------------
 
   def test_start_is_idempotent_and_stop_joins
@@ -763,6 +813,51 @@ class FetcherReaperTest < Wurk::Test::UnitCase
     reporter.report(key)
 
     assert_equal 2, log.string.scan("#{key.inspect} looks like").size, 'a full memory forgets and reports again'
+  end
+
+  # The dedup memory is per process, not per fleet: two reporters — two worker
+  # processes, or one worker and a fresh one — each log the key for themselves.
+  def test_two_separate_reporters_each_log_the_same_unparseable_key
+    key = "#{@public_queue}|sq|some-pro-identity"
+    @pool.with { |c| c.call('LPUSH', key, payload('stranded')) }
+    log = capture_reaper_log
+
+    Wurk::Fetcher::UnparseableKeys.new(@config).report(key)
+    Wurk::Fetcher::UnparseableKeys.new(@config).report(key)
+
+    assert_equal 2, log.string.scan(key).size, 'no cross-process dedup: each worker reports for itself'
+  end
+
+  # A restart replaces the in-memory set with an empty one, so the same key is
+  # reported again: the dedup memory does not outlive the process.
+  def test_a_fresh_reporter_logs_the_key_again
+    key = "#{@public_queue}|sq|some-pro-identity"
+    @pool.with { |c| c.call('LPUSH', key, payload('stranded')) }
+    log = capture_reaper_log
+    reporter = Wurk::Fetcher::UnparseableKeys.new(@config)
+
+    reporter.report(key)
+    reporter.report(key)
+
+    assert_equal 1, log.string.scan(key).size, 'one instance reports a key once'
+
+    Wurk::Fetcher::UnparseableKeys.new(@config).report(key)
+
+    assert_equal 2, log.string.scan(key).size, 'a fresh instance starts empty and reports the key again'
+  end
+
+  # The WARN line names its own scope, so an operator reading one line knows
+  # the dedup is per process and that a restart reports the key again.
+  def test_the_unparseable_warning_names_its_per_process_scope
+    key = "#{@public_queue}|sq|some-pro-identity"
+    @pool.with { |c| c.call('LPUSH', key, payload('stranded')) }
+    log = capture_reaper_log
+    scope = 'Reported once per process: every worker that sees the key logs it for itself, ' \
+            'and it is reported again after a restart.'
+
+    Wurk::Fetcher::UnparseableKeys.new(@config).report(key)
+
+    assert_includes log.string, scope
   end
 
   private

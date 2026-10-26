@@ -35,7 +35,13 @@ class SpecConstantsTest < Wurk::Test::UnitCase
     'Sidekiq::TestingClient' => :private_upstream_module,
     # Wurk advertises as OSS (`Sidekiq.ent?` is false, sidekiq-free.md §32): a
     # version stamp would tell gems the real Enterprise internals are there.
-    'Sidekiq::Enterprise::VERSION' => :advertises_as_oss
+    'Sidekiq::Enterprise::VERSION' => :advertises_as_oss,
+    # Wurk ships the Pro features free: there is no upstream Pro version or
+    # license value to mirror, and advertising one would push gems onto
+    # Pro-only paths (a gem reading `Sidekiq::Pro::VERSION` must gate on
+    # `Sidekiq::VERSION` instead).
+    'Sidekiq::Pro::VERSION' => :pro_ships_free,
+    'Sidekiq::Pro::LICENSE' => :pro_ships_free
   }.freeze
 
   PROBE = <<~'RUBY'

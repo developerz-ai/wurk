@@ -161,7 +161,7 @@ remains unchanged.
 [nonce lifetime](../../lib/wurk/component.rb#L20-L22),
 [current and legacy parsing](../../lib/wurk/fetcher/private_list_key.rb#L18-L29)
 and [tail shapes](../../lib/wurk/fetcher/private_list_key.rb#L59-L68),
-Pro §3.2 (`docs/target/sidekiq-pro.md:253`).
+Pro §3.2 (`docs/target/sidekiq-pro.md:257`).
 
 ## Orphan reclaim uses `LMOVE private public RIGHT RIGHT`, not `RPOPLPUSH`
 
@@ -239,7 +239,7 @@ a short `ttl` (legal in Sidekiq Ent) booting after the gem swap.
 `Swarm#rolling_restart`, a state machine (`spawn_replacement → await
 heartbeat → SIGTERM old slot → await exit → next`) driven entirely by the
 existing non-blocking supervise loop (`lib/wurk/swarm.rb:238-240`, the
-`:usr1` case at `lib/wurk/swarm.rb:454`, and the state machine in
+`:usr1` case at `lib/wurk/swarm.rb:447-461`, and the state machine in
 `lib/wurk/swarm/restart.rb`).
 
 **Spec:** Ent §8 describes rolling restarts via integration with
@@ -259,8 +259,8 @@ cycling, which the in-process state machine does (verified by
 `test/integration/rolling_restart_test.rb` and
 `test/integration/swarm_supervision_test.rb`, PR3).
 
-**Anchor:** `lib/wurk/swarm.rb:238-240`, `lib/wurk/swarm/restart.rb`, PR3 (`fix/swarm-supervision`), Ent
-§8.
+**Anchor:** `lib/wurk/swarm.rb:238-240`, `lib/wurk/swarm.rb:447-461`,
+`lib/wurk/swarm/restart.rb`, PR3 (`fix/swarm-supervision`), Ent §8.
 
 ## USR2 reopens logs; RSS recycling uses the rolling-restart machine
 
@@ -845,7 +845,7 @@ death claimed before), and callback specs live in a `callbacks` field on
 listed in `Batch::KEY_SUFFIXES` only so a dataset carried over from Pro gets
 swept.
 
-**Spec:** Pro [§2.8](../target/sidekiq-pro.md#L177-L190) types
+**Spec:** Pro [§2.8](../target/sidekiq-pro.md#L177-L191) types
 `b-<bid>-success` and `b-<bid>-complete` as **string/marker** — ":success
 callbacks pending" and ":complete callbacks pending" — and types
 `b-<bid>-notify` and `b-<bid>-cbsucc` as **sets**: the queued callbacks (30d
@@ -861,12 +861,19 @@ Pro batch are **lost silently** — no exception, no log line, `success_at` neve
 stamped. A second, independent path loses the same callbacks: Pro's §2.8 hash
 lists no `callbacks` field, so even a fired event finds no callback specs to
 enqueue. Whether Pro's marker really is a plain string, and where Pro keeps
-its callback specs, stays unverifiable without a real Pro dump (plan 101,
-U8 → R2). Revisit with a dump.
+its callback specs, stays unverifiable without a real Pro dump: R2 — Pro/Ent
+Redis formats never validated vs real Pro/Ent; the fix is a real Pro+Ent Redis
+dump (`docs/plans/2026/10/04/101-squeaky-clean-audit/09-production-readiness.md:12`);
+E13 — `b-<bid>-success`/`-complete` used as "fired" markers vs Pro §2.8
+"callbacks pending", and Pro batches lack Wurk's `callbacks` field, so validate
+with a real Pro dump (`docs/plans/2026/10/04/101-squeaky-clean-audit/03-pro-ent-api.md:23`);
+U8 — the human-only action that obtains that dump
+(`docs/plans/2026/10/04/101-squeaky-clean-audit/11-human-actions.md:14`). Risk:
+a Pro batch in flight at the swap may skip its callbacks. Revisit with a dump.
 
-**Anchor:** [marker gate and writer](../../lib/wurk/batch/callbacks.rb#L202-L219),
+**Anchor:** `lib/wurk/batch/callbacks.rb` — [marker gate and writer](../../lib/wurk/batch/callbacks.rb#L202-L219),
 [callback spec reader](../../lib/wurk/batch/callbacks.rb#L325-L339),
-[Pro §2.8 key types](../target/sidekiq-pro.md#L177-L190), and the parity
+[Pro §2.8 key types](../target/sidekiq-pro.md#L177-L191), and the parity
 oracle
 [`test_a_pro_shaped_success_marker_suppresses_the_success_callback`](../../test/parity/batch_test.rb),
 which pins the silent skip: a Pro-shaped string marker on `b-<bid>-success`
@@ -1025,9 +1032,36 @@ documents the silent skip; it does not resolve the callback-marker/`notify`/
 
 ## Sidekiq Enterprise / web internals not provided
 
-**Wurk:** `Sidekiq::Enterprise::VERSION` is undefined (Wurk advertises as OSS: `Sidekiq.pro?`/`ent?` are false), and upstream's ERB dashboard internals (`Sidekiq::Web::Action`, `Route`, `Router`, `WebHelpers`) and `Sidekiq::TestingClient` are not provided.
+**Wurk:** `Sidekiq::Enterprise::VERSION` is undefined (Wurk advertises as OSS: `Sidekiq.pro?`/`ent?` are false), and upstream's ERB dashboard internals (`Sidekiq::Web::Action`, `Route`, `Router`, `WebHelpers`) and `Sidekiq::TestingClient` are not provided as upstream constants.
+This is distinct from the supported `Wurk::Web::Extension::App` router DSL,
+which Wurk does ship: `route(*methods, path, &block)` registers one route per
+method, the verb helpers (`head`, `get`, `post`, `put`, `patch`, `delete`)
+register a single method each, and `match(env)` returns a
+`Wurk::Web::Extension::Action` or `nil` without executing the block.
+See [dashboard extensions](../dashboard.md#custom-tabs--web-extensions) and the
+[authoritative free §25.5](../target/sidekiq-free.md#255-web-router-dsl).
+Supporting that DSL does not imply full upstream web-internals parity.
 
 **Why:** the dashboard is a SolidJS SPA, and advertising Ent would make gems take Ent-only code paths that call licensed internals.
+
+**Anchor:** `lib/wurk/compat.rb`, `test/unit/spec_constants_test.rb`.
+
+## Sidekiq Pro version and license constants not provided
+
+**Wurk:** `Sidekiq::Pro::VERSION` and `Sidekiq::Pro::LICENSE` are undefined.
+Wurk's `Sidekiq::Pro` provides the Statsd accessor pair (`dogstatsd`,
+`dogstatsd=`) as its module-level API, and never runs upstream's boot-time
+license check.
+
+**Spec:** Pro §1 lists `Sidekiq::Pro::VERSION` and `Sidekiq::Pro::LICENSE` in
+the upstream module surface, and upstream raises at boot when the license is
+missing or invalid (`docs/target/sidekiq-pro.md:9-28`).
+
+**Why:** there is no upstream Pro version or license value to mirror — Wurk
+ships the Pro features free and never runs a license check — and advertising a
+stamp would push gems onto Pro-only paths. The version-gating consequence: a
+gem that reads `Sidekiq::Pro::VERSION` raises `NameError` and must gate on
+`Sidekiq::VERSION` instead.
 
 **Anchor:** `lib/wurk/compat.rb`, `test/unit/spec_constants_test.rb`.
 
@@ -1243,7 +1277,7 @@ engine tests pin form params (`test/engine/api_mutations_test.rb:401-414`,
 repository: no code or test reads it.
 
 **Why:** the Ruby-level contract is parity — `Queue#delete_job(jid)` is Pro
-§11's exact surface (`docs/api.md:157,453`; `docs/target/sidekiq-pro.md:492`),
+§11's exact surface (`docs/api.md:157,453`; `docs/target/sidekiq-pro.md:496`),
 so Ruby consumers drop in on the gem swap. Only clients scripted against
 upstream's web form, POSTing `key_val`, hit the gap: a key_val-only request
 leaves `params[:jid]` blank, so `delete_job('')` raises
@@ -1464,10 +1498,10 @@ the deleted payload's JSON or nil and raises `ArgumentError` on a blank jid
 
 **Spec:** Pro §11 replaces the O(N)-in-Ruby methods with server-side Lua —
 `q.delete_job(jid)`, `q.delete_by_class(MyJob)`
-(`docs/target/sidekiq-pro.md:492-493`), `scan` over every Pro SortedSet
-subclass (`docs/target/sidekiq-pro.md:501`) — loaded at boot and cached via
-`EVALSHA` (`docs/target/sidekiq-pro.md:503`), with the implementation map
-assigning the surface to `Wurk::API::Fast` (`docs/target/sidekiq-pro.md:535`).
+(`docs/target/sidekiq-pro.md:496-497`), `scan` over every Pro SortedSet
+subclass (`docs/target/sidekiq-pro.md:505`) — loaded at boot and cached via
+`EVALSHA` (`docs/target/sidekiq-pro.md:507`), with the implementation map
+assigning the surface to `Wurk::API::Fast` (`docs/target/sidekiq-pro.md:539`).
 
 **Why:** the divergence is inclusion, not behavior: names, arities, and return
 contracts match Pro §11 exactly, so Pro-gated consumer code drops in. Giving it
@@ -1477,8 +1511,8 @@ script's `LRANGE` blocking Redis for its duration, which is why it is an admin
 action, not a loop primitive.
 
 **Anchor:** `lib/wurk/api/fast.rb:21`, `lib/wurk/api/fast.rb:53`;
-`lib/wurk/api.rb:5`; Pro §11 (`docs/target/sidekiq-pro.md:486-503`) and the
-implementation map (`docs/target/sidekiq-pro.md:535`).
+`lib/wurk/api.rb:5`; Pro §11 (`docs/target/sidekiq-pro.md:490-507`) and the
+implementation map (`docs/target/sidekiq-pro.md:539`).
 
 ## Search covers queue LISTs too, with explicit scan bounds
 
@@ -1491,7 +1525,7 @@ bound stops the scan with elements unexamined (`lib/wurk/web/search.rb:52`).
 
 **Spec:** Pro's search is the dashboard search box on the Retry / Scheduled /
 Dead pages, substring over job payloads via `ZSCAN`
-(`docs/target/sidekiq-pro.md:438`); the free WebHelper of the same name serves
+(`docs/target/sidekiq-pro.md:442`); the free WebHelper of the same name serves
 that box (`search(jobset, substr)`, `docs/target/sidekiq-free.md:1508`). Neither
 spec defines queue-LIST coverage, a standalone Ruby class, or scan bounds.
 
@@ -1503,7 +1537,7 @@ wrong. The result shape is a sorted-set row plus a `:kind` discriminator and
 additive.
 
 **Anchor:** `lib/wurk/web/search.rb:24-35`, `lib/wurk/web/search.rb:52`; Pro
-web search (`docs/target/sidekiq-pro.md:438`); free WebHelpers
+web search (`docs/target/sidekiq-pro.md:442`); free WebHelpers
 (`docs/target/sidekiq-free.md:1508`).
 
 ## `Stats#expired`/`reset` extend the OSS Stats surface
@@ -1523,7 +1557,7 @@ reader exists anywhere in the free spec's API surface — its sole use of the
 word, `docs/target/sidekiq-free.md:1594`, is prose about `ProcessSet#cleanup`
 pruning identities whose TTL ran out, not a Stats reader. Pro tracks an expiry
 as a Statsd `jobs.expired` event when the job is skipped
-(`docs/target/sidekiq-pro.md:342`), not as a queryable counter.
+(`docs/target/sidekiq-pro.md:347`), not as a queryable counter.
 
 **Why:** the server already counted expiry drops, but nothing in the Data API
 could answer "where did my jobs go" without shell access to Redis; the counter
@@ -1536,7 +1570,7 @@ unchanged, and the readers are new methods.
 **Anchor:** `lib/wurk/stats.rb:27`, `lib/wurk/stats.rb:104-107`,
 `lib/wurk/stats.rb:190`; `lib/wurk/middleware/expiry.rb:28-40`; free Stats
 (`docs/target/sidekiq-free.md:969-985`, `docs/target/sidekiq-free.md:984`); Pro
-§7 (`docs/target/sidekiq-pro.md:342`).
+§7 (`docs/target/sidekiq-pro.md:347`).
 
 ## `Leader#token` exposes a fencing token Ent deliberately omits
 

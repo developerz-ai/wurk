@@ -56,10 +56,14 @@ class SidekiqRequireShimsTest < Wurk::Test::UnitCase
 
   # What each path has to leave defined beyond the alias layer itself.
   EXPECTED = UPSTREAM.merge(
+    'sidekiq/api' => 'Sidekiq::WorkSet',
+    'sidekiq/cli' => 'Sidekiq::CLI',
     'sidekiq/middleware/i18n' => 'Sidekiq::Middleware::I18n::Client',
     'sidekiq/middleware/current_attributes' => 'Sidekiq::CurrentAttributes::Save',
     'sidekiq/middleware/server/statsd' => 'Sidekiq::Middleware::Server::Statsd',
     'sidekiq/pro/web' => 'Sidekiq::Pro::Web',
+    'sidekiq/testing' => 'Sidekiq::Testing',
+    'sidekiq/web' => 'Sidekiq::Web',
     'sidekiq-ent/web' => 'Sidekiq::Web',
     'sidekiq-ent/periodic/testing' => 'Sidekiq::Periodic::ConfigTester'
   ).freeze

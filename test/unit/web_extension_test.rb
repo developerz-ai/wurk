@@ -8,7 +8,8 @@ require 'wurk/web/extension'
 # Pins the Web-extension renderer (#187): Sinatra-style route capture from
 # `Ext.registered(app)`, the Action context (params/erb/redirect + the
 # WebHelpers subset), and Renderer dispatch (render / redirect rewrite / 404 /
-# unknown-ext nil / asset lookup with traversal guard).
+# unknown-ext nil / failing-registration 500 / asset lookup with traversal
+# guard).
 #
 # Registers into the process-global Wurk::Web.config under a per-test unique
 # name and removes it in teardown, so parallel test classes never collide.
@@ -97,6 +98,63 @@ class WebExtensionTest < Wurk::Test::UnitCase
     Wurk::Web.config.tabs.delete("Demo #{@name}")
   ensure
     super
+  end
+
+  def test_app_route_matches_multiple_methods_without_running_the_block
+    app = Wurk::Web::Extension::App.new
+    calls = 0
+    block = proc do
+      calls += 1
+      route_params(:id)
+    end
+    app.route('GET', :post, '/items/:id', &block)
+
+    %w[GET POST].each do |method|
+      env = env_for(method, '').merge('PATH_INFO' => '/items/a%20b')
+      action = app.match(env)
+
+      assert_instance_of Wurk::Web::Extension::Action, action
+      assert_same env, action.env
+      assert_same block, action.block
+      assert_equal({ id: 'a b' }, action.route_params)
+      assert_equal 0, calls
+    end
+    assert_equal 'a b', app.match(env_for('GET', '').merge('PATH_INFO' => '/items/a%20b')).run
+    assert_equal 1, calls
+  end
+
+  def test_app_match_returns_nil_for_method_and_path_misses
+    app = Wurk::Web::Extension::App.new
+    app.get('/items/:id') { 'matched' }
+
+    assert_nil app.match(env_for('POST', '').merge('PATH_INFO' => '/items/1'))
+    assert_nil app.match(env_for('GET', '').merge('PATH_INFO' => '/elsewhere'))
+  end
+
+  def test_app_match_uses_registration_order_and_run_accepts_an_explicit_block
+    app = Wurk::Web::Extension::App.new
+    app.get('/items/:id') { 'first' }
+    app.get('/items/special') { 'second' }
+    action = app.match(env_for('GET', '').merge('PATH_INFO' => '/items/special'))
+
+    assert_equal 'first', action.run
+    assert_equal 'override', action.run(proc { 'override' })
+  end
+
+  def test_verb_helpers_delegate_to_route
+    app = Wurk::Web::Extension::App.new
+    calls = []
+    app.define_singleton_method(:route) { |*args, &block| calls << [args, block] }
+    block = proc { 'ok' }
+    %i[head get post put patch delete].each { |verb| app.public_send(verb, '/path', &block) }
+
+    verbs = calls.map { |args, _| args.first }
+
+    assert_equal %i[head get post put patch delete], verbs
+    calls.each do |args, captured|
+      assert_equal '/path', args.last
+      assert_same block, captured
+    end
   end
 
   # --- rendering ---------------------------------------------------------
@@ -260,6 +318,121 @@ class WebExtensionTest < Wurk::Test::UnitCase
     refute_includes body, 'kaboom', 'exception messages must stay server-side'
   end
 
+  # A raising `registered(app)` used to re-run on every request (`||=` never
+  # assigns past the raise) and its exception escaped Renderer into the host
+  # Rack server.
+  def test_failing_registration_is_a_500_on_every_request_and_runs_once
+    calls = 0
+    executions = 0
+    reports = []
+    handler = registration_report_handler(reports)
+    broken = Module.new do
+      define_singleton_method(:registered) do |app|
+        calls += 1
+        app.get('/listed') do
+          executions += 1
+          'should never render'
+        end
+        raise 'registration detonated'
+      end
+    end
+    name = "broken-#{::Process.pid}-#{object_id}"
+    begin
+      Wurk::Web.config.register_extension(broken, name: name, tab: ["Broken #{name}"], index: ["#{name}/"])
+
+      # `Wurk.configuration.error_handlers` is process-global and
+      # `handle_exception` fans out to every handler on it, so this handler
+      # keeps only this extension's registration reports and the count below
+      # is exactly this extension's two registrations. — editor:tests[bot]
+      Wurk::Test::GLOBAL_STATE_MUTEX.synchronize do
+        Wurk.configuration.error_handlers << handler
+
+        first_status, _headers, first_body = render_call('GET', '/listed', name: name)
+
+        assert_equal 500, first_status
+        assert_equal 'Extension render error (see server logs)', first_body
+        refute_includes first_body, 'registration detonated', 'exception messages must stay server-side'
+
+        second_status, _headers, second_body = render_call('GET', '/listed', name: name)
+
+        assert_equal 500, second_status
+        assert_equal 'Extension render error (see server logs)', second_body
+        refute_includes second_body, 'registration detonated'
+      ensure
+        Wurk.configuration.error_handlers.delete(handler)
+      end
+
+      assert_equal 1, calls, 'registered(app) must run exactly once despite raising'
+      assert_equal 0, executions
+      assert_equal 2, reports.size
+      assert_same reports.first[0], reports.last[0]
+      reports.each do |error, context|
+        assert_equal 'registration detonated', error.message
+        assert_equal({ context: 'web-extension-registration' }, context)
+      end
+    ensure
+      Wurk::Web.config.extensions.reject! { |e| e[:name] == name }
+      Wurk::Web.config.tabs.delete("Broken #{name}")
+    end
+  end
+
+  # `handle_exception` fans out to every handler on the process-global
+  # `Wurk.configuration.error_handlers` list, so the registration handler must
+  # drop a report that belongs to another error — a background thread
+  # reporting while it is installed must not land in the collection the
+  # failing-registration test counts. — editor:tests[bot]
+  def test_registration_report_handler_ignores_unrelated_error_reports
+    reports = []
+    handler = registration_report_handler(reports)
+
+    handler.call(StandardError.new('another test failed'), { context: 'some-other-context' }, nil)
+
+    assert_empty reports
+
+    error = StandardError.new('registration detonated')
+    handler.call(error, { context: 'web-extension-registration' }, nil)
+
+    assert_equal [[error, { context: 'web-extension-registration' }]], reports
+  end
+
+  def test_successful_registration_runs_exactly_once_across_requests
+    calls = 0
+    ext = Module.new do
+      define_singleton_method(:registered) do |app|
+        calls += 1
+        app.helpers(Module.new { define_method(:greeting) { 'hello' } })
+        app.route('GET', 'POST', '/once/:id') do
+          erb '<%= greeting %> <%= h(route_params(:id)) %> <%= root_path %> <%= current_path %>'
+        end
+      end
+    end
+    name = "once-#{::Process.pid}-#{object_id}"
+    begin
+      Wurk::Web.config.register_extension(ext, name: name, tab: ["Once #{name}"], index: ["#{name}/"])
+
+      env = env_for('GET', '').merge('PATH_INFO' => "/wurk/ext/#{name}/once/42")
+      first_status, _headers, first_body = render_call('GET', '/once/42', name: name, env: env)
+
+      assert_equal 200, first_status
+      assert_equal "hello 42 /wurk/ext/#{name}/ once/42", first_body
+
+      second_status, _headers, second_body = render_call('POST', '/once/43', name: name)
+
+      assert_equal 200, second_status
+      assert_equal "hello 43 /wurk/ext/#{name}/ once/43", second_body
+
+      status, _headers, body = render_call('GET', '/once/44', name: name, embed: false)
+
+      assert_equal 200, status
+      assert_equal 'hello 44 /wurk/ once/44', body
+
+      assert_equal 1, calls
+    ensure
+      Wurk::Web.config.extensions.reject! { |e| e[:name] == name }
+      Wurk::Web.config.tabs.delete("Once #{name}")
+    end
+  end
+
   # --- assets ----------------------------------------------------------------
 
   def test_asset_file_resolves_with_cache_for
@@ -313,9 +486,19 @@ class WebExtensionTest < Wurk::Test::UnitCase
 
   private
 
-  def render_call(method, subpath, query: '', embed: true, env: env_for(method, query))
+  # Collects only this extension's registration reports: `handle_exception`
+  # hands every error to every handler on the global list, so an unrelated
+  # report must not reach the collection the count assertions read.
+  # — editor:tests[bot]
+  def registration_report_handler(reports)
+    proc do |error, context, _config|
+      reports << [error, context] if context[:context].to_s == 'web-extension-registration'
+    end
+  end
+
+  def render_call(method, subpath, query: '', embed: true, env: env_for(method, query), name: @name)
     Wurk::Web::Extension::Renderer.call(
-      name: @name, method: method, subpath: subpath, env: env, mount: '/wurk', embed: embed
+      name: name, method: method, subpath: subpath, env: env, mount: '/wurk', embed: embed
     )
   end
 

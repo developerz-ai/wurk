@@ -14,7 +14,7 @@ module Wurk
     # reads what Wurk wrote (spec: docs/target/sidekiq-free.md §1.6, §20).
     #
     #   j|YYMMDD|H:MM   HASH  per-minute bucket, TTL = SHORT_TERM (8h)
-    #   j|YYMMDD|H:M    HASH  10-minute bucket (minute's tens digit), TTL = MID_TERM (3d)
+    #   j|YYMMDD|H:M    HASH  10-minute bucket (minute's tens digit), TTL = MID_TERM (30d)
     #     <klass>|p     INT   executions, failures included
     #     <klass>|f     INT   failures
     #     <klass>|ms    INT   total ms of the executions that did not fail
@@ -32,8 +32,11 @@ module Wurk
     class History
       include Wurk::Middleware::ServerMiddleware
 
-      # Upstream's ExecutionTracker constants, same names.
-      MID_TERM = 3 * 24 * 60 * 60
+      # Upstream's ExecutionTracker constants, same names. MID_TERM diverges:
+      # upstream TTLs the 10-minute buckets at 3 days, but Wurk's dashboard
+      # serves 7d/30d tabs off them (Query::MAX_HOURS = 720), so they must
+      # live 30 days. Longer retention changes no key, field, or score.
+      MID_TERM = 30 * 24 * 60 * 60
       SHORT_TERM = 8 * 60 * 60
 
       MINUTE_KEY_FORMAT = 'j|%y%m%d|%-H:%M'
