@@ -1,66 +1,58 @@
 # Performance — How Wurk Is Measured
 
-Speed is measured, not claimed. Wurk is **not** currently faster than stock Sidekiq: it runs at roughly 0.45×–0.86× depending on workload shape and process configuration, because reliable fetch and per-job metrics cost extra Redis round-trips. The numbers, the method, and the reproduction command live in `docs/benchmarks.md`.
+Speed is measured, not claimed. The latest published paired comparison, measured 2026-08-07, put Wurk at roughly **0.87×–1.02×** of stock Sidekiq depending on workload and topology: parity on CPU and I/O, behind on noop and boot. This is dated evidence, not a current-release guarantee. The six paired medians, spread, environment and reproduction commands live in [docs/benchmarks.md](../benchmarks.md).
 
-The optimizations below are real and worth keeping — they are why the gap is not larger — but they have not added up to beating stock Sidekiq, and this document does not claim they have.
+Metrics now accumulate in memory and flush periodically to Redis, rather than writing per job. ACK commands ride the next fetch's pipeline: the measured busy uncapped path costs 3 Redis commands in one round trip, versus stock Sidekiq's single BRPOP. Reliability still costs commands; batching does not mean zero overhead. A hard kill can lose unflushed metrics and re-run an already-finished job awaiting ACK.
 
 ## Redis path
 
-| Optimization | Rationale |
+| Mechanism | Scope and tradeoff |
 |---|---|
-| BLMOVE instead of BRPOPLPUSH | Single atomic op, Redis 6.2+ |
-| Lua bulk enqueue | N jobs in 1 roundtrip vs N MULTI/EXEC |
-| Lua bulk fetch | Pop K jobs into private list in 1 op vs K BLMOVEs |
-| Pipelined heartbeat | Heartbeat + stat counters in one pipeline |
-| Per-fork connection pools | No cross-process socket contention |
-| redis-client, not the legacy redis gem | Removes the redis-gem abstraction tax |
-| EVALSHA caching | Scripts loaded once per pool, never re-uploaded |
+| Reliable LMOVE / BLMOVE | Atomic move to a private list; blocking BLMOVE is the empty-queue fallback, not the busy-path command |
+| Lua bulk enqueue | Batches enqueue work; no claim of a measured speedup for every payload size |
+| Multi-queue Lua claim | Claims one job across remaining queues; not a K-job bulk fetch |
+| Pipelined heartbeat | Publishes process state and buffered counters together |
+| Per-fork connection pools | Fresh child sockets; parent connections must not survive fork |
+| redis-client | The Redis client used by Wurk; not a standalone throughput result |
+| EVALSHA caching | Uses cached scripts, reloading after a Redis script-cache miss |
 
 ## Process model
 
-| Optimization | Rationale |
+| Mechanism | Scope and tradeoff |
 |---|---|
-| Fork-based real parallelism | One GVL per child, not one shared across all threads |
-| Copy-on-write Rails boot | Children share read-only memory with the parent |
-| Specialized worker topology | Critical-queue forks don't fight bulk-queue forks |
-| Embedded mode | One process tree — fewer context switches than Rails + separate Sidekiq daemon |
+| Fork-based parallelism | One GVL per child on MRI |
+| Copy-on-write boot | Children initially share parent memory; writes can make pages private |
+| Specialized worker topology | Separates queue/thread assignments by fork role; no universal speedup claimed |
+| Embedded mode | Deployment option, not evidence of fewer context switches or higher throughput |
 
-## Hot-loop micro-optimizations
+## Hot-loop work
 
-| Optimization | Rationale |
+| Mechanism | Shipped behavior |
 |---|---|
-| Frozen string literals everywhere | Less GC churn in the fetch + execute loop |
-| Lazy job-args deserialization | JSON.parse only when middleware demands it |
-| Middleware short-circuit | Jobs can opt out of the full chain when they don't need it |
-| Pre-allocated context objects | Reuse the same buffer object across job runs in a thread |
-| Concurrent::Promises for batch callbacks | Cheaper than thread-per-callback |
+| Frozen string literals | Avoids mutable literal allocations |
+| Parse once, carry raw JSON | Processor parses before execution and retains the raw payload for retry/stats paths |
+| Cached logger attribute list | JobLogger caches configuration, but creates a fresh context hash per job |
+| Queued batch callbacks | Ordinary jobs on the callback queue, not Concurrent::Promises or thread-per-callback |
+| Lazy argument parsing (unshipped proposal) | Processor still parses before execution; compatibility review and measurement required |
+| Per-job middleware opt-out (unshipped proposal) | The configured server middleware chain still runs |
+| Reusable per-job contexts (unshipped proposal) | JobLogger still creates a fresh context hash per job |
+
+The three unshipped proposals above are **not shipped optimizations**; they require compatibility review and measurement.
 
 ## Asset path
 
-Precompiled dashboard assets ship inside the gem — see 09-precompiled-assets.md. No runtime asset compilation, no Sprockets reach for the SolidJS bundle. The dashboard loads as a static file from the gem's path.
+Precompiled dashboard assets ship inside the gem — see [09-precompiled-assets.md](09-precompiled-assets.md). Consumers do not compile the SolidJS bundle at runtime.
 
 ## Things explicitly NOT done
 
-- io_uring — interesting, not until benchmarks demand it.
-- MessagePack job format — would break wire compat. Never.
+- io_uring — not justified by published measurements.
+- MessagePack job format — would break wire compatibility. Never.
 - Custom Redis fork — never.
 
-## Benchmark suite (required)
+## Benchmark suites and advisory policy
 
-`rake bench` covers, and must not regress on, five shapes. It runs per PR (`bench.yml`), not per release — nothing in `rake release:check` invokes it:
+`bin/rake bench` runs the regression harnesses, including enqueue, fetch+execute, bulk enqueue, swarm boot, memory/allocation and CommandBuilder checks. It compares Wurk against **its own past self**, not stock Sidekiq. The CI job runs when benchmark inputs change, not for each release. Results appear in the job summary and sticky PR comment. A slowdown beyond both runs' error bounds plus `BENCH_REGRESSION_PCT` (default 5%) is flagged; the job is advisory, not a required merge check. A green run is not proof of no regression, nor evidence about Sidekiq.
 
-1. Enqueue throughput, single-client, single-queue.
-2. Fetch + execute throughput, no-op perform.
-3. Bulk enqueue throughput, 1000 jobs at a time.
-4. Swarm boot time, Rails-app baseline.
-5. Memory per worker post-boot, Rails-app baseline.
+`bin/rake bench:vs_sidekiq` is the separate comparison against stock Sidekiq; `WURK_BENCH_VS_PROCESSES=4 bin/rake bench:vs_sidekiq` compares four processes per side. `bin/rake bench:command_count` counts Redis commands. These tasks need local Redis. See [the benchmark guide](../benchmarks.md#running-it) for environment controls and isolation of the stock Sidekiq bundle.
 
-The benchmark job runs in CI on GitHub-hosted `ubuntu-latest`, and only when a bench input changed. Shared hosted runners are noisy, which is part of why the result is advisory. Results are published to the job summary and a sticky PR comment showing the delta vs the PR's base. Greater than 5% regression flags the PR.
-
-## What actually gates a merge
-
-`rake bench` is the regression gate: it compares Wurk against **its own past self** on enqueue, fetch+execute, bulk enqueue, swarm boot, and memory. A regression greater than 5% on any of those is what the gate is for — though `bench.yml` is deliberately not a required check, so in CI it flags the PR rather than mechanically blocking the merge button.
-
-`rake bench:vs_sidekiq` is the comparison suite against stock Sidekiq. It gates nothing. A green CI run says nothing about how Wurk compares to Sidekiq — only that Wurk has not regressed by more than 5% against its own baseline on the measured metrics. A 4% regression still passes.
-
-There is deliberately no "must beat Sidekiq to release" rule. One previously stood here and was not followed — v1.5.0 shipped on 2026-08-06 while slower — so it is removed rather than left as a policy releases ignore. Closing the gap is tracked as ordinary performance work, and `docs/benchmarks.md` is the place the current numbers are published.
+There is no "must beat Sidekiq to release" rule. Closing the gap is ordinary performance work. Published historical results stay dated until another paired comparison is recorded; no benchmark was rerun for this prose correction.

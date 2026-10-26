@@ -163,7 +163,7 @@ module Wurk
       @capsules = {}
       @directory = {}
       @client_chain = Middleware::Chain.new
-      @server_chain = Middleware::Chain.new
+      @server_chain = Middleware::Chain.new(on_registration: method(:warn_on_late_server_registration))
       @redis_config = { url: ENV.fetch('REDIS_URL', 'redis://localhost:6379/0') }
       @web_redis_pool = nil
       @logger = nil
@@ -705,7 +705,26 @@ module Wurk
     # (200 only when Redis is reachable AND heartbeat fired within
     # `ready_window` seconds).
     #
-    # Off by default — call this in a `configure_server` block to enable.
+    # Off by default. Put this in Rails `config/initializers/wurk.rb` loaded
+    # by the worker boot, or in the Ruby boot file loaded via `-r` by `wurk`,
+    # `wurkswarm`, or `sidekiqswarm`:
+    #
+    #   Wurk.configure_server do |config|
+    #     config.health_check(port: 7433)
+    #   end
+    #
+    # `configure_server` executes its block only when the current process is
+    # already in server mode. Configuration is process-local: configuring a
+    # separate web/client process cannot enable the worker's probes.
+    #
+    # For explicit embedding, configure the embedded worker directly before
+    # calling `run`; `configure_embed` does not enter server mode:
+    #
+    #   embedded = Wurk.configure_embed do |config|
+    #     config.health_check(port: 7433)
+    #   end
+    #   embedded.run
+    #
     # Spec: docs/target/sidekiq-ent.md §7.1.2.
     #
     # `metrics:` serves the Prometheus scrape on the same listener (on by
@@ -868,6 +887,19 @@ module Wurk
     end
 
     private
+
+    def warn_on_late_server_registration(klass)
+      affected = @capsules.each_value.filter_map do |capsule|
+        capsule.name if capsule.prepared? && capsule.server_middleware_missing?(klass)
+      end
+      return if affected.empty?
+
+      logger.warn do
+        "Global server middleware #{klass} registered after preparation for capsules: #{affected.join(', ')}; " \
+          'existing worker snapshots remain unchanged. Register middleware before worker boot, then restart workers. ' \
+          'This diagnostic only inspects capsules in this process.'
+      end
+    end
 
     # Registrations run against the singleton when wurk is loaded, not when a
     # host constructs a Configuration. Resolve classes here to avoid making

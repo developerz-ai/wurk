@@ -28,11 +28,9 @@ export default defineConfig({
     // accessible name per row. That lands around a second locally and has timed
     // out at 5s on a loaded shared runner — a real hang still fails, just later.
     testTimeout: 20_000,
-    // Stylesheets are stubbed to `""` by default, which silently empties a
-    // `?raw` import too — styles/palette.test.ts greps the SCSS source and
-    // would pass by scanning nothing. Letting `?raw` through hands it to Vite's
-    // asset loader (which skips the CSS pipeline for that query), so it gets
-    // the file verbatim; plain stylesheet imports stay stubbed.
-    css: { include: [/\?raw/] },
+    // Keep source-inspection imports and the shadow view's compiled local CSS
+    // real; other stylesheet imports stay stubbed. An empty ?inline stub would
+    // silently remove the baseline these isolation tests need to inspect.
+    css: { include: [/\?raw/, /pages\/_extension\.scss\?inline/] },
   },
 });

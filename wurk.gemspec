@@ -48,7 +48,6 @@ Gem::Specification.new do |spec|
   # Bounded ranges (not pessimistic `~>`) where a newer major is already in
   # use: connection_pool 3.x and rack 3.x (Rails 7.1+/8) must both be allowed,
   # so cap at the *next* untested major rather than the current one.
-  spec.add_dependency 'concurrent-ruby', '~> 1.2'
   spec.add_dependency 'connection_pool', '>= 3.0', '< 4'
   spec.add_dependency 'rack', '>= 2.2', '< 4'
   spec.add_dependency 'redis-client', '~> 0.22'

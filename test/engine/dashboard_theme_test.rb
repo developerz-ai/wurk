@@ -16,12 +16,14 @@ class DashboardThemeTest < Wurk::Test::EngineCase
 
   def setup
     super
-    skip 'dashboard build missing (run `bin/rake frontend:build`)' unless INDEX.exist?
+    @previous_theme_env = ENV.delete('WURK_WEB_DEFAULT_THEME')
     Wurk::Web.reset_config!
+    skip 'dashboard build missing (run `bin/rake frontend:build`)' unless INDEX.exist?
   end
 
   def teardown
     Wurk::Web.reset_config!
+    ENV['WURK_WEB_DEFAULT_THEME'] = @previous_theme_env
     super
   end
 
@@ -33,6 +35,38 @@ class DashboardThemeTest < Wurk::Test::EngineCase
 
     assert_equal 200, last_response.status
     refute_match THEME_SCRIPT, last_response.body
+  end
+
+  def test_env_default_is_emitted_before_pre_paint_without_server_configuration
+    %w[light dark system].each do |theme|
+      with_env('WURK_WEB_DEFAULT_THEME', theme) do
+        Wurk::Web.reset_config!
+        get '/wurk'
+
+        assert_equal 200, last_response.status
+        assert_equal theme.to_json, last_response.body[THEME_SCRIPT, 1]
+        assert_operator last_response.body.index(THEME_SCRIPT), :<,
+                        last_response.body.index("localStorage.getItem('wurk.theme')")
+      end
+    end
+  end
+
+  def test_web_configure_overrides_env_default_and_nil_removes_hint
+    with_env('WURK_WEB_DEFAULT_THEME', 'dark') do
+      assert_equal 'dark', Wurk::Web.config.default_theme
+
+      Wurk::Web.configure { |c| c.default_theme = 'light' }
+      get '/wurk'
+
+      assert_equal 200, last_response.status
+      assert_equal '"light"', last_response.body[THEME_SCRIPT, 1]
+
+      Wurk::Web.configure { |c| c.default_theme = nil }
+      get '/wurk'
+
+      assert_equal 200, last_response.status
+      refute_match THEME_SCRIPT, last_response.body
+    end
   end
 
   def test_configured_default_is_emitted
@@ -62,5 +96,16 @@ class DashboardThemeTest < Wurk::Test::EngineCase
     assert_includes last_response.body, '<script>window.__WURK_BASE__ = "/wurk";</script>'
     assert_includes last_response.body, 'data-locale="ja"'
     assert_equal '"light"', last_response.body[THEME_SCRIPT, 1]
+  end
+
+  private
+
+  def with_env(key, value)
+    previous = ENV.fetch(key, nil)
+    ENV[key] = value
+    yield
+  ensure
+    previous.nil? ? ENV.delete(key) : ENV[key] = previous
+    Wurk::Web.reset_config!
   end
 end

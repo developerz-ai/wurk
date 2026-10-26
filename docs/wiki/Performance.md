@@ -1,8 +1,8 @@
 # Performance
 
-**Wurk is not ahead of stock Sidekiq on throughput.** Measured at **0.87×–1.02×** depending on workload: parity on CPU- and IO-bound jobs, behind on empty jobs and on boot. Ratios below 1.00 mean Wurk is slower.
+**The latest published paired comparison does not put Wurk ahead of stock Sidekiq on throughput.** The 2026-08-07 measurement was **0.87×–1.02×** depending on workload: parity on CPU- and IO-bound jobs, behind on empty jobs and on boot. This is dated evidence, not a current-release guarantee. Ratios below 1.00 mean Wurk is slower.
 
-wurk 1.5.0 · sidekiq 8.1.6 · ruby 3.4.7 · local Redis 7.4.10 · 5000 jobs/run · 12 runs per topology, paired per-run ratio. Measured 2026-08-07.
+wurk 1.4.0 · sidekiq 8.1.6 · ruby 3.4.7 · local Redis 7.4.10 · 5000 jobs/run · 12 runs per topology, paired per-run ratio. Measured 2026-08-07.
 
 **1 process × 5 threads**
 

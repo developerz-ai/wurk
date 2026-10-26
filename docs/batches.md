@@ -254,9 +254,9 @@ snapshot unless noted. A blank bid raises `ArgumentError`.
 waiting on Redis and defeats the point of asynchronous batches.
 
 `#delete` while jobs are in flight leaves those jobs acking against a batch that
-no longer exists: callbacks won't fire and counts stay inconsistent. It also
-leaves the `SET NX` callback dedup keys behind (they carry their own 30-day
-TTL), so a recreated batch under the same bid would not re-fire.
+no longer exists: callbacks won't fire and counts stay inconsistent. Deletion
+also removes the callback dedup markers (`-complete`, `-success`, `-death`)
+via `UNLINK`; it does not leave them behind to expire.
 
 `failures` is a gauge, not a counter: it goes up when a job raises and down when
 that job's retry finally succeeds or when it dies. A batch where every failure
@@ -398,29 +398,49 @@ by `GET /api/batches` and `GET /api/batches/:bid`.
 |---|---|---|
 | Pending (from first flush) | 30 days | `Batch::DEFAULT_EXPIRY_SECONDS`, override per batch with `expires_in` |
 | After `:success` fires | 24 hours | `Batch::POST_SUCCESS_EXPIRY_SECONDS`, override per batch with `linger=` |
-| Callback dedup markers | 30 days | `Batch::CALLBACK_NOTIFY_TTL` |
+| Callback dedup markers at creation | 30 days (replaced by linger on success) | `Batch::CALLBACK_NOTIFY_TTL` |
 
 A batch costs one hash (`b-<bid>`) plus the sub-keys it actually needs —
 `-jids`, `-failed`, `-died`, `-kids`, `-pkids`, plus the three callback dedup
 markers (`-complete`, `-success`, `-death`) — each holding at most one entry
-per job, child, or fired event. **Every sub-key is TTL'd at the site that
-creates it**, not swept later:
+per job, child, or fired event. **The sub-keys Wurk writes get TTLs at their
+creation sites**, independently of later lifecycle cleanup:
 
-- `BATCH_PUSH`, `BATCH_SCHEDULE`, `BATCH_ACK_FAILED` and `BATCH_ACK_COMPLETE`
-  (the Lua scripts in `lib/wurk/lua.rb`) each `EXPIRE … NX` the sub-key(s) they
-  create, using `Batch::DEFAULT_EXPIRY_SECONDS`.
+- `lib/wurk/lua/batch_push.lua`, `lib/wurk/lua/batch_schedule.lua`,
+  `lib/wurk/lua/batch_ack_failed.lua` and `lib/wurk/lua/batch_ack_complete.lua`
+  each `EXPIRE … NX` the sub-key(s) they create, using
+  `Batch::DEFAULT_EXPIRY_SECONDS`.
 - `link_to_parent` stamps `-kids`/`-pkids` the same way when a child batch first
   links to its parent.
 - `Callbacks#record_event` stamps `b-<bid>` itself `NX` when a callback fires,
   since a child batch outliving its parent's window can resurrect that hash
   with an `HSET`.
-- `Callbacks#dedup_set` writes the dedup markers with `SET … EX` directly
-  (`CALLBACK_NOTIFY_TTL`), so they never need a separate stamp.
+- `Callbacks#dedup_set` creates dedup markers with `SET … NX EX`
+  (`CALLBACK_NOTIFY_TTL`), giving each new marker its own initial expiry.
 
-`NX` everywhere means only a key with *no* TTL gets one — a live batch's clock,
-and the shorter post-success `linger` window, are never overwritten. The
-footprint is bounded entirely by TTL: Wurk never sweeps a whole batch, Redis
-expires the pieces individually as they age out.
+These creation/resurrection `EXPIRE … NX` stamps only give a key a TTL if it
+has none; they do not overwrite a live key's clock or its post-success linger
+window. Lifecycle operations separately walk `Batch.keys_for(bid)` (the core
+hash and the suffixes in `Batch::KEY_SUFFIXES`):
+
+- `Status#delete` uses `UNLINK` in `lib/wurk/lua/batch_delete.lua` to remove
+  those keys, including callback dedup markers. This deletes keys, not stamps
+  TTLs; Redis later reclaims their memory asynchronously.
+- Post-success `Callbacks#apply_linger` uses unconditional `EXPIRE` on every
+  existing key in that list, replacing its TTL with `linger` (24 hours by
+  default). Existing dedup markers also receive this window, including the
+  success marker written before linger is applied.
+- On death, `DeathHandler.restamp_ttls` uses `EXPIRE … NX` over the same list
+  with `DEFAULT_EXPIRY_SECONDS`: only existing keys without a TTL get one,
+  leaving existing expiries, including linger, unchanged.
+
+The list includes carried-over Pro `b-<bid>-notify`, `-cbsucc` and `-tags`
+keys that Wurk never writes. They have no Wurk creation-time TTL guarantee,
+but are subject to these delete, linger and death cleanup operations if they
+exist. Cleanup does not import or preserve their contents. Legacy
+`b-<bid>-failinfo` is not in `keys_for`; Wurk does not manage its retention
+(see [the divergence ledger](idea/parity-divergences.md#batch-b-bid-failinfo-is-not-written-or-imported)).
+Outside explicit deletion, Redis expires the TTL-managed pieces individually.
 
 The two index ZSETs — `batches` (all batches, scored by creation time) and
 `dead-batches` (batches that fired `:death`, scored by death time) — are
@@ -443,10 +463,10 @@ enumerated by `BatchSet` or `DeadSet`.
 
 Two behaviours worth knowing:
 
-- A job that dies **after** its batch keys expired would recreate them with no
-  TTL. The death handler (`DeathHandler.restamp_ttls`) re-stamps every sub-key
-  with `EXPIRE … NX` on death — the one moment the batch is known to be
-  winding down — so resurrected keys get a clock and live batches keep theirs.
+- A job that dies **after** its batch keys expired can recreate batch state.
+  The ack script stamps the keys it recreates; the death handler's
+  `restamp_ttls` pass covers the rest of `keys_for` as described above, so
+  existing TTL-less keys get a clock and live keys keep theirs.
 - `linger=` on an already-flushed batch writes straight to Redis, so it works on
   a batch reopened by bid. `description=`, `callback_queue=`, `callback_class=`,
   `tags=` and `expires_in` do **not** — they are only persisted by the first
@@ -493,7 +513,7 @@ whole feature is Lua-script atomicity.
 
 ## Divergences from Sidekiq Pro
 
-Wurk implements the batch surface in `docs/target/sidekiq-pro.md` §2. Three
+Wurk implements the batch surface in `docs/target/sidekiq-pro.md` §2. Five
 deliberate differences:
 
 - **`Status#failure_info` always returns `[]`.** The Pro 8 data model drops the
@@ -503,6 +523,15 @@ deliberate differences:
 - **`#autoflush` accepts `true` as well as a positive Integer.** `true` buffers
   the whole `#jobs` block and flushes once at exit; an Integer flushes every N.
   Values Pro would silently accept (`0`, `"5"`) raise `ArgumentError`.
+- **Wurk does not write Pro's `b-<bid>-tags` set.** First flush stores tags as
+  JSON in the `tags` field of the `b-<bid>` hash and adds the bid to each
+  `tags:<tag>` reverse-index set instead. Legacy per-batch tag sets are neither
+  imported nor fallback-read; this is not full Pro batch-schema compatibility
+  ([divergence](idea/parity-divergences.md#batch-tags-use-a-json-field-and-reverse-indexes-not-b-bid-tags)).
+- **The legacy global `BID` counter is unused.** New IDs are URL-safe base64
+  of 10 random bytes, without consuming or advancing that counter. Reopening
+  with an explicit bid bypasses generation
+  ([divergence](idea/parity-divergences.md#batch-ids-are-random-the-legacy-global-bid-counter-is-unused)).
 - **The "already fired" markers are Wurk's own.** Wurk writes
   `b-<bid>-success`, `b-<bid>-complete` and `b-<bid>-death` as Redis strings
   holding `"1"`, meaning "already fired". Pro §2.8 types `b-<bid>-success` and

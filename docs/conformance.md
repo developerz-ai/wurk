@@ -49,6 +49,31 @@ encodings, Redis structures, or HTTP responses. Use real Redis with the existing
 per-worker isolation helpers, not Redis mocks. Head oracle files with the spec
 section they enforce.
 
+## Register every oracle class
+
+Registration is checked in both directions: every inventory `Class#test_method`
+reference must resolve to a runnable method, and every runnable oracle class
+defined in `test/parity/` must appear in at least one `oracles` entry in
+`test/conformance/cases.yml` or in `Conformance::ORACLE_CLASS_EXEMPTIONS`, the
+explicit class-name-to-reason map in `test/support/conformance.rb`. Discovery uses
+the class's definition location and runnable test methods, not a `ParityTest`
+naming suffix. Job/helper classes that are not runnable oracles and unrelated
+unit or conformance test classes are outside this reverse-registration check.
+
+An unregistered, non-exempt class raises `Conformance::Invalid` with its class
+name and guidance to register or exempt it. Resolve that error by reading the
+oracle's assertions and mapping an appropriate method to a source-first case,
+following the requirements above. If the class cannot yet be mapped, add its
+class name and a concrete reason to the exemption map instead. Do not invent a
+behavior case or attach an unrelated oracle just to satisfy registration.
+
+This is **class registration, not exhaustive method coverage**: one valid
+reference registers a class, but does not establish that all its methods or
+behaviors are inventoried. An exemption does not create a covered or pending
+case, change conformance totals, or stop the oracle from running. It also does
+not waive forward validation: any `Class#test_method` reference to an exempt
+class must still resolve, and a dangling reference remains an error.
+
 ## Run and interpret results
 
 ```sh

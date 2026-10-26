@@ -350,8 +350,8 @@ gem <span class="add">"wurk"</span></pre>
           <div class="pillar">
             <span class="ic"><i class="fa-solid fa-bolt" aria-hidden="true"></i></span>
             <h3>Parallel</h3>
-            <p>Enterprise's forking swarm, in the free gem. Every release benchmarked against stock
-              Sidekiq &mdash; <a href="https://github.com/developerz-ai/wurk/blob/main/docs/benchmarks.md">published numbers</a>, not claims.</p>
+            <p>Enterprise's forking swarm, in the free gem. The latest published comparison against stock
+              Sidekiq is dated 2026-08-07 &mdash; <a href="https://github.com/developerz-ai/wurk/blob/main/docs/benchmarks.md">numbers and reproduction commands</a>, not a current-release guarantee.</p>
           </div>
         </div>
       </section>
@@ -563,11 +563,12 @@ mount Wurk::Engine =&gt; <span class="add">"/wurk"</span></pre>
           are shipped by humans and AI together. A fix, a doc
           update, or a version bump no longer costs somebody a week, which is what makes it practical
           to ship the whole Pro + Enterprise surface for free, to verify parity mechanically on every
-          push (Sidekiq's own tests as an oracle, third-party gems' upstream suites run against
-          Wurk), and to keep adding surface Sidekiq doesn't have. It also means the claims stay
-          measured:
-          <a href="https://github.com/developerz-ai/wurk/blob/main/docs/benchmarks.md">published numbers</a>
-          against stock Sidekiq every release, including the unflattering ones.
+          push (independently written oracles for documented Sidekiq behavior,
+          third-party gems' upstream suites run against Wurk), and to keep adding surface
+          Sidekiq doesn't have. It also means the claims stay measured:
+          <a href="https://github.com/developerz-ai/wurk/blob/main/docs/benchmarks.md">the latest published paired comparison</a>
+          against stock Sidekiq is dated 2026-08-07, including the unflattering results.
+          It is a historical measurement, not a comparison run for each release.
         </p>
         <p style="color:var(--muted);margin-top:14px">
           Wurk is MIT and stays that way. If what you need is a commercial support contract and a

@@ -5,7 +5,7 @@ authoritative source for each row is `lib/wurk/configuration.rb`,
 `lib/wurk/capsule.rb`, `lib/wurk/cli.rb`, `lib/wurk/redis_pool.rb`, and
 `lib/wurk/logger.rb`.
 
-Configuration arrives from four places:
+Configuration arrives from five places:
 
 | # | Source | Applies to | Where |
 |---|--------|-----------|-------|
@@ -56,10 +56,11 @@ the env/flag yourself in the initializer, or don't set the value in Ruby.
 
 Env vars that have no Ruby/CLI/YAML equivalent (`WURK_COUNT`, `WURK_DISABLED`,
 `WURK_PRELOAD*`, `WURK_LEADER`) are read directly at the point of use and are
-not part of this chain. Two env vars *are* overridable from Ruby, and there the
+not part of this chain. Some env vars *are* overridable from Ruby, and there the
 explicit Ruby value wins: `SIDEKIQ_MAXMEM_MB`/`WURK_MAXMEM_MB` (beaten by
-`config.memory_limit_mb =`) and `WURK_WEB_READ_ONLY` (beaten by a later
-`config.web.read_only =`).
+`config.memory_limit_mb =`), `WURK_WEB_READ_ONLY` (beaten by a later
+`config.web.read_only =`), and `WURK_WEB_DEFAULT_THEME` (beaten by a later
+`config.web.default_theme =`, including `nil`, after a valid seed).
 
 ---
 
@@ -258,6 +259,7 @@ is the drop-in alias and is checked second (native wins).
 | `WURK_PRELOAD` / `SIDEKIQ_PRELOAD` | `CLI#preload_groups` | Comma-separated Bundler groups `Bundler.require`d in the swarm parent before fork. Default `default`; an explicit empty value disables the preload |
 | `WURK_PRELOAD_APP` / `SIDEKIQ_PRELOAD_APP` | `CLI#preload_app?` | `=1` eager-loads the whole Rails app in the swarm parent before forking (more copy-on-write sharing, slower parent boot) |
 | `WURK_WEB_READ_ONLY` | `Web::Config#env_read_only?` | `=1` boots the dashboard in read-only mode |
+| `WURK_WEB_DEFAULT_THEME` | `Web::Config#reset!` | Seeds the dashboard theme hint: exactly `light`, `dark`, or `system`; unset emits no hint. Later Ruby assignment wins |
 | `WURK_API_READ_ONLY` | `Configuration#api_read_only?` | `=1` boots the HTTP API in read-only mode — every write route answers 403. Not inherited from `WURK_WEB_READ_ONLY`; see [HTTP API](api-http.md#read-only-mode). `config.api_read_only` wins when set |
 | `WURK_DEBUG` | `Configuration::ERROR_HANDLER` | Any value makes the default error handler log `full_message` (with backtrace) instead of `detailed_message` |
 | `WURK_VITE_DEV` | `Engine`, `DashboardController` | `=1` serves the SPA from the Vite dev server instead of the precompiled bundle |
@@ -700,12 +702,15 @@ jobs `job['args']` is the wrapper hash. Set it outside `configure_server` (or in
 `configure_client` too) so the web process sees it.
 
 The default logger is `Wurk::Logger.new($stdout)` at level `INFO`.
+Logger level and formatter are process-wide Wurk settings. Set them unconditionally
+in a shared initializer, outside `configure_server`, so both web and worker
+processes apply them. Non-server web processes skip `configure_server`; reserve
+that block for worker-only configuration.
 
 ```ruby
-Wurk.configure_server do |config|
-  config.logger.level = Logger::WARN
-  config.logger.formatter = Wurk::Logger::Formatters::JSON.new   # NDJSON for log aggregators
-end
+# config/initializers/wurk.rb
+Wurk.logger.level = Logger::WARN
+Wurk.logger.formatter = Wurk::Logger::Formatters::JSON.new   # NDJSON for log aggregators
 ```
 
 | Concern | Behavior |
@@ -813,11 +818,40 @@ source first:
 4. `system` — follows `prefers-color-scheme`, live: it flips if the OS does,
    without a reload.
 
+For a web-only deployment (no workers or `configure_server` required):
+
+```bash
+WURK_DISABLED=1 WURK_WEB_DEFAULT_THEME=dark bin/rails server
+```
+
+`WURK_WEB_DEFAULT_THEME` accepts exactly `light`, `dark`, or `system`. Any
+other string raises `ArgumentError`, including an empty string, mixed-case
+values (`Dark`), or whitespace-padded values (` dark `); values are not trimmed
+or case-normalized. An invalid seed prevents initialization: correct or unset
+it before configuring the Web object; a later Ruby override cannot bypass that
+failure. The same validation applies to Ruby assignments.
+
+The environment is sampled when `Wurk::Web.config` is first initialized and on
+each `Wurk::Web.config.reset!`, not on every request. Changing the environment
+alone does not update an existing config. A later explicit assignment wins over
+a valid environment seed; assigning `nil` clears the hint. Resetting samples the
+current environment again and discards that override. With the variable absent,
+the default is `nil`: no hint is emitted and the browser falls back to `system`.
+
+For Ruby overrides in a web-only process, configure the Web object directly,
+**outside** `configure_server` (whose block may not run there):
+
 ```ruby
-Wurk.configure_server do |config|
-  config.web.default_theme = "dark" # "light" | "dark" | "system" (the built-in default)
+# config/initializers/wurk.rb
+Wurk::Web.configure do |web|
+  web.default_theme = "light" # overrides WURK_WEB_DEFAULT_THEME=dark
+  # web.default_theme = nil  # clear the host hint, even when the env var is set
 end
 ```
+
+These settings are only host defaults: the visitor's in-session toggle and
+stored `localStorage` preference still outrank the hint. Both the shell's
+pre-paint script and the SPA respect the stored preference.
 
 Dark is the palette on the bare `:root`; light is a full second palette, not a
 filter — see [`docs/benchmarks.md`](benchmarks.md) for none of this affects
