@@ -438,14 +438,14 @@
 - id: cron.payload
   area: cron
   behavior: A periodic tick enqueues the same payload as perform_async.
-  source: docs/target/sidekiq-ent.md#L200-L240
+  source: docs/target/sidekiq-ent.md#L217-L225
   promise: >-
     `opts[:args]` is a **static** array evaluated once at boot; passed verbatim into `klass.perform_async(*args)` on every tick.
   oracles: [PeriodicParityTest#test_a_tick_enqueues_what_perform_async_would]
 - id: cron.options
   area: cron
   behavior: Loop retry and queue options override worker defaults.
-  source: docs/target/sidekiq-ent.md#L200-L240
+  source: docs/target/sidekiq-ent.md#L217-L223
   promise: >-
     | `opts`  | `Hash`                          | Recognized: `retry`, `queue`, `args`, `tz`.               |
   oracles: [PeriodicParityTest#test_loop_retry_and_queue_override_the_worker]
