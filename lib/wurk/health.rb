@@ -6,7 +6,11 @@ require_relative 'metrics/prometheus'
 
 module Wurk
   # Thin HTTP listener for k8s liveness/readiness probes. Optional, off by
-  # default — opt in with `config.health_check(port: 7433)`.
+  # default — opt in with `config.health_check(port: 7433)`, then scrape
+  # GET /metrics on that configured port (7433 in this example).
+  # Mounting Wurk::Engine does not expose Prometheus metrics: this deliberate
+  # separation keeps internal metrics off the host application's HTTP surface
+  # so access can be restricted independently on the dedicated listener port.
   #
   # Endpoints:
   #   * GET /live  → 200 while the Launcher is running (not in quiet/stop).
