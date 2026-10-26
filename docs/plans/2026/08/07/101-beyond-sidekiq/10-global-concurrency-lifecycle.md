@@ -1,7 +1,9 @@
 # 10 — Global per-queue concurrency: what happens to a slot after the fetch
 
 > Settles steps 4, 5 and 6 of [`10-global-concurrency.md`](10-global-concurrency.md).
-> Written after implementing them, so every claim below is one a test pins.
+> Written after implementing them, so most claims below are ones a test pins.
+> The exceptions — a bound that holds by construction but that no test
+> exercises — are named where they appear.
 
 The slot model (`lib/wurk/lua/queue_slot.lua`) and the gated fetch
 (`lib/wurk/fetcher/capped.rb`) decide who is *admitted*. This is the other half:
@@ -105,13 +107,14 @@ Neither alternative is better:
   cannot tell a leaked unit from a busy one, so a child SIGKILLed mid-handover
   takes the capacity with it forever.
 
-The excess is bounded three ways, and each bound is a test rather than a claim:
+The excess is bounded three ways. Two of those bounds are properties of how
+the restart sequence is written rather than results a test proves:
 
-| Bound | Pinned by |
+| Bound | Evidence |
 |---|---|
-| The old child's in-flight job count — one child, one generation of overlap, never a fan-out | `swarm_restart_test.rb#test_happy_path_replaces_slot_then_drains_old` (spawn → heartbeat → TERM → drain, one slot at a time) and `#test_enqueue_skips_in_flight_slot` |
-| One `drain_timeout` | `swarm_restart_test.rb#test_overrunning_old_is_killed_after_drain_timeout` |
-| The 60s hold TTL, if that child is SIGKILLed rather than drained | `global_concurrency_test.rb#test_a_sigkilled_slot_holder_recovers_its_capacity_within_the_ttl` (real fork, real kill) |
+| The old child's in-flight job count — one child, one generation of overlap, never a fan-out | **No test.** `swarm_restart_test.rb#test_happy_path_replaces_slot_then_drains_old` (spawn → heartbeat → TERM → drain, one slot at a time) and `#test_enqueue_skips_in_flight_slot` cover the restart *sequence* only: the replacement spawns and heartbeats before the old child is TERMed, and a slot already in flight is not restarted twice. Every collaborator in that file is a fake — no forks, no Redis, no cap — so cap-during-restart over-admission is covered by no test. |
+| One `drain_timeout` | **No test.** `swarm_restart_test.rb#test_overrunning_old_is_killed_after_drain_timeout` covers the drain window of that same sequence — TERM, then KILL once `drain_timeout` has passed — against those fake collaborators, so the bound rests on how the sequence is built rather than on proof, and cap-during-restart over-admission is covered by no test. |
+| The 60s hold TTL, if that child is SIGKILLed rather than drained | Proved by `global_concurrency_test.rb#test_a_sigkilled_slot_holder_recovers_its_capacity_within_the_ttl` (real fork, real kill) |
 
 So the contract in [`10-global-concurrency.md`](10-global-concurrency.md) reads
 "at most N running cluster-wide" with this one named exception, not without it. A
