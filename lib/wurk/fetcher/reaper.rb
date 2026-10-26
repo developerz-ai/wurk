@@ -23,15 +23,15 @@ module Wurk
     # Liveness is decided per owner:
     #   * our own host and nonce — the pid was minted in our PID namespace, so
     #     the OS is authoritative: `Process.kill(0, pid)`. This is instant and
-    #     ignores a stale `processes` SET entry whose 60s TTL hasn't lapsed
-    #     yet, so a `kill -9`ed sibling is reclaimed the moment the supervisor
-    #     reaps it rather than 60s later. (Pid reuse by an unrelated process in
-    #     the same tree is the one blind spot — the supervisor respawns with a
-    #     fresh pid, so it does not arise in practice.)
+    #     ignores a stale `processes` SET member — the SET carries no TTL, so
+    #     the member lingers after its heartbeat hash expires (60s) until
+    #     `ProcessSet#cleanup` prunes it. A `kill -9`ed sibling is reclaimed
+    #     the moment the supervisor reaps it, not 60s later. (Pid reuse by an
+    #     unrelated process in the same tree is the one blind spot — the
+    #     supervisor respawns with a fresh pid, so it does not arise in practice.)
     #   * any other incarnation — its pid means nothing in our namespace, so we
-    #     trust the heartbeat: the owner is alive iff its identity is a live
-    #     `processes` member (one whose `info` hash still exists). Such reclaim
-    #     therefore waits out the 60s heartbeat TTL, exactly as the spec says.
+    #     trust the heartbeat: the owner is alive iff its identity's `info`
+    #     hash still exists. Such reclaim waits out the 60s heartbeat TTL.
     #
     # The heartbeat verdict is a snapshot taken before a SCAN that can run for
     # a long time on a big keyspace, and a booting process can claim jobs a
@@ -245,8 +245,11 @@ module Wurk
       # The nonce settles it: minted once per process image and inherited across
       # fork, so a key carrying ours provably came from this very process tree.
       # Every other owner goes through the namespace-blind heartbeat — alive iff
-      # its identity is a live `processes` member. A pre-nonce key can only be
-      # matched on the `<host>:<pid>` prefix of that identity.
+      # its identity's `info` hash still exists. `processes` membership is not
+      # liveness: the SET carries no TTL, so a member outlives the hash that
+      # proves it alive, and a nonce-bearing identity is alive on its hash
+      # alone even once it has been pruned from the SET. A pre-nonce key can
+      # only be matched on the `<host>:<pid>` prefix of that identity.
       def orphaned?(key, host, pid, nonce, owners)
         return !local_pid_alive?(pid) if nonce == process_nonce && host == hostname
         return false if owners.include?(owner_key(host, pid, nonce))

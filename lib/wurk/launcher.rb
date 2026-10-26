@@ -379,8 +379,9 @@ module Wurk
     # a *quieted* process keeps beating so it publishes `quiet=true` instead of
     # vanishing (#236). Each tick is rescued on its own — a raise escaping one
     # beat (a signal re-delivery the kernel refuses, a hook) would otherwise end
-    # the thread, and a process that stops beating expires out of `processes`
-    # while still running jobs, which the reaper then reclaims.
+    # the thread, and a process that stops beating is still running jobs but
+    # stops being LIVE: its heartbeat hash lapses (60s TTL), so the reaper
+    # reclaims its jobs, and cleanup prunes its stale `processes` entry.
     def start_heartbeat
       @beat_timer.run do
         heartbeat
