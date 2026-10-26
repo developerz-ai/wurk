@@ -838,13 +838,39 @@ particular content type.
 
 ## Batch "fired" markers use `b-<bid>-success`/`-complete`
 
-**Wurk:** `b-<bid>-complete`/`-success`/`-death` are `"1"` markers meaning "already fired" (complete/success written after the enqueue, death claimed before), and callback specs live in a `callbacks` field on `b-<bid>`.
+**Wurk:** `b-<bid>-complete`/`-success`/`-death` are Redis strings holding
+`"1"` and meaning "already fired" (complete/success written after the enqueue,
+death claimed before), and callback specs live in a `callbacks` field on
+`b-<bid>`. Wurk never writes `b-<bid>-notify` or `b-<bid>-cbsucc`; they are
+listed in `Batch::KEY_SUFFIXES` only so a dataset carried over from Pro gets
+swept.
 
-**Spec:** Pro §2.8 lists `-success`/`-complete` as "callbacks pending" and `-notify`/`-cbsucc` for queued/dedup — contents unspecified.
+**Spec:** Pro [§2.8](../target/sidekiq-pro.md#L177-L190) types
+`b-<bid>-success` and `b-<bid>-complete` as **string/marker** — ":success
+callbacks pending" and ":complete callbacks pending" — and types
+`b-<bid>-notify` and `b-<bid>-cbsucc` as **sets**: the queued callbacks (30d
+ttl) and the success-callback dedup marker.
 
-**Why:** unverifiable without a real Pro dump (plan 101, U8 → R2). Risk: a Pro batch in flight at the swap may skip its callbacks. Revisit with a dump.
+**Why:** the two colliding keys are the *same* Redis type on both sides — a
+string — with *opposite* meanings: Wurk's `"1"` says "already fired", Pro's
+says "callbacks pending". Redis raises no `WRONGTYPE`, so the collision is
+invisible to Redis and to the operator. Wurk's `EXISTS` gate on
+`b-<bid>-success` sees Pro's "callbacks pending" marker, returns before
+`enqueue_callbacks`, and the `:success`/`:complete` callbacks of an in-flight
+Pro batch are **lost silently** — no exception, no log line, `success_at` never
+stamped. A second, independent path loses the same callbacks: Pro's §2.8 hash
+lists no `callbacks` field, so even a fired event finds no callback specs to
+enqueue. Whether Pro's marker really is a plain string, and where Pro keeps
+its callback specs, stays unverifiable without a real Pro dump (plan 101,
+U8 → R2). Revisit with a dump.
 
-**Anchor:** `lib/wurk/batch/callbacks.rb`.
+**Anchor:** [marker gate and writer](../../lib/wurk/batch/callbacks.rb#L202-L219),
+[callback spec reader](../../lib/wurk/batch/callbacks.rb#L325-L339),
+[Pro §2.8 key types](../target/sidekiq-pro.md#L177-L190), and the parity
+oracle
+[`test_a_pro_shaped_success_marker_suppresses_the_success_callback`](../../test/parity/batch_test.rb),
+which pins the silent skip: a Pro-shaped string marker on `b-<bid>-success`
+makes Wurk skip the `:success` callback while `:complete` still fires.
 
 ## Batch `b-<bid>-failinfo` is not written or imported
 
@@ -947,6 +973,15 @@ a particular upstream release.
 `b-<bid>-failinfo`, `b-<bid>-tags` or legacy `BID`, nor does it cover every
 §2.8 schema row or import/retention of carried-over data. Its existence does
 not resolve the callback-marker/`notify`/`cbsucc` accounting above.
+
+The second §2.8 oracle,
+[`test_a_pro_shaped_success_marker_suppresses_the_success_callback`](../../test/parity/batch_test.rb),
+pins the collision itself: it seeds a Pro-shaped string marker on
+`b-<bid>-success` and shows the `:success` callback suppressed while
+`:complete` still fires, with no error raised and no `success_at` stamped. It
+documents the silent skip; it does not resolve the callback-marker/`notify`/
+`cbsucc` accounting above, and it does not stand in for a real Pro dump
+(plan 101, U8 → R2).
 
 ## Encrypted job hashes are re-sealed after the chain unwinds
 

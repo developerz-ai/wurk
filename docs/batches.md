@@ -184,8 +184,8 @@ Multiple callbacks per event are fine; they run as independent jobs.
 - A death cascades **up** the parent chain: every ancestor gets `:death` and
   loses its chance at `:success` until the subtree recovers.
 - At-most-once is enforced with `SET NX` marker keys (`b-<bid>-success`,
-  `-complete`, `-death`), so racing workers acking the last job can't
-  double-fire.
+  `-complete`, `-death`) — Redis strings holding `"1"` — so racing workers
+  acking the last job can't double-fire.
 
 ### How callbacks run
 
@@ -493,7 +493,7 @@ whole feature is Lua-script atomicity.
 
 ## Divergences from Sidekiq Pro
 
-Wurk implements the batch surface in `docs/target/sidekiq-pro.md` §2. Two
+Wurk implements the batch surface in `docs/target/sidekiq-pro.md` §2. Three
 deliberate differences:
 
 - **`Status#failure_info` always returns `[]`.** The Pro 8 data model drops the
@@ -503,6 +503,15 @@ deliberate differences:
 - **`#autoflush` accepts `true` as well as a positive Integer.** `true` buffers
   the whole `#jobs` block and flushes once at exit; an Integer flushes every N.
   Values Pro would silently accept (`0`, `"5"`) raise `ArgumentError`.
+- **The "already fired" markers are Wurk's own.** Wurk writes
+  `b-<bid>-success`, `b-<bid>-complete` and `b-<bid>-death` as Redis strings
+  holding `"1"`, meaning "already fired". Pro §2.8 types `b-<bid>-success` and
+  `b-<bid>-complete` as string markers too, but there they mean "callbacks
+  pending", and Pro keeps its callback state in the `b-<bid>-notify` and
+  `b-<bid>-cbsucc` sets Wurk never writes. A Pro batch in flight at the gem
+  swap therefore matches on type, collides on meaning, and loses its
+  `:success`/`:complete` callbacks silently — no Redis type error, no log
+  ([divergence](idea/parity-divergences.md#batch-fired-markers-use-b-bid-success-complete)).
 
 ---
 

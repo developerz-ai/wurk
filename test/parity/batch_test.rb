@@ -303,6 +303,59 @@ class BatchParityTest < Wurk::Test::UnitCase
     Sidekiq.redis { |c| c.call('DEL', "tags:#{tag}") }
   end
 
+  # §2.8 marker collision: Pro types `b-<bid>-success` as a string/marker that
+  # means ":success callbacks pending"; Wurk writes the same key as a string
+  # that means "already fired". The Redis types match, so nothing raises
+  # WRONGTYPE — the meanings collide, and the `:success` callback of a Pro
+  # batch in flight at the swap is skipped silently.
+  def test_a_pro_shaped_success_marker_suppresses_the_success_callback
+    batch = new_batch
+    batch.on(:success, Recorder, 'token' => @token)
+    batch.on(:complete, Recorder, 'token' => @token)
+    batch.jobs { ok(1) }
+
+    pro_marker = "b-#{batch.bid}-success"
+    Sidekiq.redis { |c| c.call('SET', pro_marker, '1', 'EX', 3600) }
+
+    errors = []
+    handlers = Sidekiq.default_configuration.error_handlers
+    previous = handlers.dup
+    handlers.replace([->(ex, ctx, _cfg) { errors << [ex, ctx] }])
+
+    drain
+
+    assert_equal 1, events_named('complete').size, 'the :complete callback must still fire'
+    assert_empty events_named('success'), 'a Pro-shaped marker must suppress the :success callback'
+    assert_empty errors, 'the collision must raise nothing and report nothing'
+    assert_includes Log.events(@token), '1', 'the job itself must have run'
+
+    status = Sidekiq::Batch::Status.new(batch.bid)
+
+    refute_nil status.complete_at, 'the batch completed'
+    assert_nil status.success_at, 'the skipped :success must not stamp success_at'
+    assert_equal 0, status.failures
+    assert_empty status.dead_jids
+
+    Sidekiq.redis do |c|
+      assert_equal 0, c.call('ZCARD', 'retry')
+      assert_equal 0, c.call('ZCARD', 'dead')
+      assert_equal 'string', c.call('TYPE', pro_marker), 'Pro and Wurk agree on the Redis type'
+    end
+
+    # A batch Wurk fired itself writes the same Redis type, so the collision is
+    # the meaning of the key, not its type.
+    normal = new_batch
+    normal.on(:success, Recorder, 'token' => @token)
+    normal.jobs { ok(2) }
+    drain
+
+    assert_equal 1, events_named('success').size
+    Sidekiq.redis { |c| assert_equal 'string', c.call('TYPE', "b-#{normal.bid}-success") }
+  ensure
+    handlers.replace(previous) if handlers && previous
+    Sidekiq.redis { |c| c.call('DEL', pro_marker) } if pro_marker
+  end
+
   private
 
   def new_batch

@@ -260,6 +260,19 @@
     - Callbacks run as ordinary Sidekiq jobs on `callback_queue`; retry on failure like any job.
   reason: Callback parity assertions do not yet fail and retry a callback job.
   future_work: oracle-batch-callback-retry
+- id: batch.marker-collision
+  area: batches
+  behavior: >-
+    A Pro-shaped string marker on b-<bid>-success has the same Redis type as
+    Wurk's "already fired" marker but the opposite meaning, so the :success
+    callback is lost silently while the :complete callback still fires.
+  source: docs/idea/parity-divergences.md#L839-L873
+  promise: >-
+    Wurk's `EXISTS` gate on `b-<bid>-success` sees Pro's "callbacks pending"
+    marker, returns before `enqueue_callbacks`, and the `:success`/`:complete`
+    callbacks of an in-flight Pro batch are **lost silently** — no exception,
+    no log line, `success_at` never stamped.
+  oracles: [BatchParityTest#test_a_pro_shaped_success_marker_suppresses_the_success_callback]
 - id: unique.duplicate
   area: uniqueness
   behavior: A duplicate push returns nil while the lock is held.
@@ -476,7 +489,7 @@
 - id: crypto.decrypt-failure
   area: encryption
   behavior: A decrypt failure dead-sets the job tagged with Wurk::Encryption::DecryptionError and never retries it.
-  source: docs/idea/parity-divergences.md#L1172-L1180
+  source: docs/idea/parity-divergences.md#L1207-L1215
   promise: >-
     a decrypt failure (unknown key version, a key resolver that returns nil or
     raises, a corrupt envelope) raises `Wurk::Encryption::DecryptionError`,

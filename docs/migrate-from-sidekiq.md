@@ -687,7 +687,13 @@ also how Sidekiq Enterprise behaves.
 > (`dear-leader`) and unique locks (`unique:<digest>`) have not been exercised across
 > the two implementations, so an overlap risks a doubled or missed cron tick and
 > duplicate unique jobs; and Wurk's batch "already fired" markers are implemented
-> from the spec, not checked against a real Pro batch
+> from the spec, not checked against a real Pro batch — Pro §2.8 types
+> `b-<bid>-success`/`b-<bid>-complete` as string/marker too, but there they mean
+> "callbacks pending" where Wurk means "already fired", and Pro keeps its
+> callback state in the `b-<bid>-notify`/`b-<bid>-cbsucc` sets Wurk never
+> writes. A Pro batch in flight at the swap therefore matches on type and
+> collides on meaning: it loses its `:success`/`:complete` callbacks silently
+> (no Redis type error, no log)
 > ([divergence](idea/parity-divergences.md#batch-fired-markers-use-b-bid-success-complete)).
 > This section will add a mixed-fleet path when an integration test proves one.
 
@@ -931,7 +937,7 @@ production. Each one links to its full rationale in
 | Limiter reschedule cap goes to the dead set, tagged `rate_limited`, instead of the retry cycle; limiter `ttl` below 24h is raised to 24h | Over-limit jobs land in **Dead** after `reschedule` attempts | Alert on dead-set growth; retry from the dashboard |
 | An undecryptable job goes straight to the dead set | Missing or wrong key → **Dead**, no retries | Configure the same keys before starting; retry once fixed |
 | Periodic slots more than max(90s, 1.5× tick) late are skipped and logged; a Hash `args:` is passed as one argument (Ent splats it) | A long leader outage skips rather than fires late | Check loops registered with Hash `args` |
-| Wurk uses `b-<bid>-success`/`b-<bid>-complete` as "already fired" dedup markers (callbacks enqueued, not necessarily executed); Pro §2.8 describes them as "callbacks pending". Interoperability with a real Pro batch is unverified | A Pro batch in flight at the swap may miss callbacks | Let critical batches finish before the cutover, or prove it in the dry run |
+| Wurk uses `b-<bid>-success`/`b-<bid>-complete` as Redis strings holding `"1"` meaning "already fired" (callbacks enqueued, not necessarily executed). Pro §2.8 types the same two keys as string/marker too, but there they mean "callbacks pending" where Wurk means "already fired", and Pro keeps its callback state in the `b-<bid>-notify`/`b-<bid>-cbsucc` sets Wurk never writes. The keys match on type and collide on meaning, so nothing errors | A Pro batch in flight at the swap loses its `:success`/`:complete` callbacks **silently**: no Redis type error, no log line, no `success_at` | Drain critical batches before the cutover, or prove it in the dry run |
 | A poison kill (3 crash-reclaims in 72h) fires death handlers, and the counter resets on ACK | The job lands in **Dead**; its batch sees a death | Nothing; see the [runbook](runbook.md#poison-job-storm) |
 | `:leader` can fire again after a Redis error | A leader hook runs twice | Make `on(:leader)` hooks idempotent |
 | String intervals to `perform_in` / `set(wait:)` raise | `ArgumentError` at enqueue | Pass numbers or durations |
