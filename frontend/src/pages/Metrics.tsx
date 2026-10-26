@@ -93,13 +93,13 @@ const JOB_DOTS = ['var(--mono-1)', 'var(--mono-2)', 'var(--mono-3)', 'var(--mono
 
 // Range buttons → rollup bucket + retention window. "1h" reuses the 1m/24h
 // rollup and slices client-side; the rest map 1:1 to a stored window.
-// `minutes` is the corresponding /api/metrics window so Top Job Types tracks
+// `hours` is the corresponding /api/metrics window so Top Job Types tracks
 // the toolbar instead of being permanently pinned to the last hour.
 const RANGES = [
-  { key: '1h', bucket: '1m', window: '24h', slice: 60, minutes: 60 },
-  { key: '24h', bucket: '1m', window: '24h', minutes: 24 * 60 },
-  { key: '7d', bucket: '5m', window: '7d', minutes: 7 * 24 * 60 },
-  { key: '30d', bucket: '1h', window: '30d', minutes: 30 * 24 * 60 },
+  { key: '1h', bucket: '1m', window: '24h', slice: 60, hours: 1 },
+  { key: '24h', bucket: '1m', window: '24h', hours: 24 },
+  { key: '7d', bucket: '5m', window: '7d', hours: 7 * 24 },
+  { key: '30d', bucket: '1h', window: '30d', hours: 30 * 24 },
 ] as const;
 
 function deltaPct(series: HistoryPoint[], key: 'processed' | 'failed'): number | null {
@@ -185,8 +185,8 @@ export default function Metrics() {
   }));
 
   const metricsQuery = useQuery(() => ({
-    queryKey: ['metrics', range().minutes],
-    queryFn: () => getJSON<MetricsResponse>(`${basePath()}/api/metrics?minutes=${range().minutes}`),
+    queryKey: ['metrics', range().hours],
+    queryFn: () => getJSON<MetricsResponse>(`${basePath()}/api/metrics?hours=${range().hours}`),
     refetchInterval: 30000,
   }));
 
@@ -414,7 +414,7 @@ export default function Metrics() {
       <QueueLatencyHistory range={range()} />
       <HistoricalSnapshots />
 
-      <JobMetricsModal klass={drilldownKlass()} minutes={range().minutes} onClose={closeDrilldown} />
+      <JobMetricsModal klass={drilldownKlass()} hours={range().hours} onClose={closeDrilldown} />
     </div>
   );
 }
@@ -422,10 +422,10 @@ export default function Metrics() {
 // Per-job-class drill-down (#29): clicking a Top Job Types row opens this
 // modal, which hits the previously-unused GET /api/metrics/:klass with the
 // same window as the toolbar range so the chart matches what's on screen.
-function JobMetricsModal(props: { klass: string | null; minutes: number; onClose: () => void }) {
+function JobMetricsModal(props: { klass: string | null; hours: number; onClose: () => void }) {
   const data = useQuery(() => ({
-    queryKey: ['metrics-job', props.klass, props.minutes],
-    queryFn: () => getJSON<JobMetricsResponse>(`${basePath()}/api/metrics/${encodeURIComponent(props.klass!)}?minutes=${props.minutes}`),
+    queryKey: ['metrics-job', props.klass, props.hours],
+    queryFn: () => getJSON<JobMetricsResponse>(`${basePath()}/api/metrics/${encodeURIComponent(props.klass!)}?hours=${props.hours}`),
     enabled: props.klass !== null,
   }));
 

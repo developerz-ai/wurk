@@ -465,23 +465,90 @@ class ApiEndpointsTest < Wurk::Test::EngineCase
     assert_kind_of Array, payload[:top_jobs]
   end
 
-  def test_metrics_clamps_minutes_and_ignores_hours
-    cases = [[nil, 60], ['', 60], ['invalid', 60], ['0', 1], ['-5', 1], ['1', 1], ['480', 480], ['99999', 480]]
-    cases.each do |minutes, expected|
-      [nil, '99999'].each do |hours|
-        params = {}
-        params[:minutes] = minutes unless minutes.nil?
-        params[:hours] = hours unless hours.nil?
-        get '/wurk/api/metrics', params
+  # Past the 30-day ceiling (43200 minutes) the answer is 400, not a
+  # silently clamped window.
+  def test_metrics_rejects_window_past_thirty_days
+    get '/wurk/api/metrics?minutes=99999'
 
-        assert_ok
-        payload = json_body
+    assert_equal 400, last_response.status
+    assert_match(/minutes/, json_body[:error])
+  end
 
-        assert_equal %i[minutes top_jobs], payload.keys.sort, params.inspect
-        assert_equal expected, payload[:minutes], params.inspect
-        assert_kind_of Array, payload[:top_jobs], params.inspect
-      end
+  # The dashboard's 7d/30d tabs: the requested window is served (promoted
+  # onto the 10-minute buckets) and echoed back, not clamped to 8 hours.
+  def test_metrics_serves_seven_and_thirty_day_windows
+    get '/wurk/api/metrics?minutes=10080'
+
+    assert_ok
+    assert_equal 10_080, json_body[:minutes]
+
+    get '/wurk/api/metrics?minutes=43200'
+
+    assert_ok
+    assert_equal 43_200, json_body[:minutes]
+  end
+
+  # Regression (#726 review): the promoted window must not reach past the
+  # minutes the response echoes. The write at now-497min lands one 10-minute
+  # bucket before where a 490-minute window starts; the old hours-rounded
+  # promotion (9h = 54 buckets) counted it, inflating top_jobs past the
+  # echoed 490 minutes.
+  def test_metrics_promoted_window_excludes_data_outside_the_window
+    klass = "PromotedWindowJob@#{@ns}"
+    now = ::Time.now
+    ::Wurk::Metrics::History.record(klass, 5, success: true, at: now)
+    ::Wurk::Metrics::History.record(klass, 7, success: true, at: now - (497 * 60))
+    ::Wurk::Metrics::History.flush
+
+    get '/wurk/api/metrics?minutes=490'
+
+    assert_ok
+    assert_equal 490, json_body[:minutes]
+    row = json_body[:top_jobs].find { |r| r[:klass] == klass }
+
+    refute_nil row, 'the in-window execution must surface in top_jobs'
+    assert_equal 1, row[:processed]
+  ensure
+    outside = now - (497 * 60)
+    keys = [now, outside].flat_map do |t|
+      [::Wurk::Metrics::History.minute_key(t), ::Wurk::Metrics::History.ten_minute_key(t)]
+    end.uniq
+    ::Wurk.redis do |c|
+      keys.each { |key| c.call('HDEL', key, "#{klass}|p", "#{klass}|f", "#{klass}|ms") }
     end
+  end
+
+  # A non-numeric `?minutes=` is not a client error: the endpoint serves the
+  # 60-minute default (metrics_window_raw's rescue), same as no param at all.
+  def test_metrics_falls_back_to_default_window_on_unparseable_minutes
+    get '/wurk/api/metrics?minutes=abc'
+
+    assert_ok
+    assert_equal 60, json_body[:minutes]
+  end
+
+  # docs/metrics.md promises a non-positive window answers 400, not a 500
+  # from the Query layer's "minutes must be positive" guard.
+  def test_metrics_rejects_non_positive_window
+    get '/wurk/api/metrics?minutes=0'
+
+    assert_equal 400, last_response.status
+    assert_match(/positive/, json_body[:error])
+
+    get '/wurk/api/metrics?minutes=-5'
+
+    assert_equal 400, last_response.status
+    assert_match(/positive/, json_body[:error])
+  end
+
+  # `?hours=` is the window parameter the SPA's Metrics page sends; the
+  # response echoes the requested hours and their minutes equivalent.
+  def test_metrics_serves_hours_window
+    get '/wurk/api/metrics?hours=24'
+
+    assert_ok
+    assert_equal 1440, json_body[:minutes]
+    assert_equal 24, json_body[:hours]
   end
 
   def test_history_returns_recharts_series

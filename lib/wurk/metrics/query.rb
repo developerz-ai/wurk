@@ -20,7 +20,11 @@ module Wurk
     # dashboard JSON API.
     class Query
       MAX_MINUTES = 480
-      MAX_HOURS = 72
+      # Class-level dashboard cap: the 10-minute buckets live MID_TERM
+      # (30 days), so a 720-hour window is fully backed by data. The
+      # instance-side clamp below keeps upstream's 72h cap — Sidekiq parity
+      # is pinned by test/parity/metrics_query_test.rb.
+      MAX_HOURS = 720
       MAX_QUEUE_SERIES = 25
 
       class WindowTooWide < ::ArgumentError; end
@@ -129,10 +133,13 @@ module Wurk
 
       # Upstream's DoS caps: an oversized minute window falls back to the
       # 60-minute default, an oversized hour window to the 72h ceiling.
+      # The 72 is upstream's literal, not MAX_HOURS: the class-level cap
+      # moved to 720 with the 30-day bucket retention, but this Sidekiq-
+      # compatible instance API must keep clamping at 72h.
       def clamp(minutes, hours)
         minutes = 60 unless minutes || hours
         minutes = 60 if minutes && minutes > MAX_MINUTES
-        [minutes, hours && [hours, MAX_HOURS].min]
+        [minutes, hours && [hours, 72].min]
       end
 
       def add_bucket(result, time, hash, class_filter)

@@ -5,7 +5,12 @@ module Wurk
   # we ship and the only one we recommend — BLMOVE-based reliable fetch.
   # No "basic fetch" mode.
   class Fetcher
-    def retrieve_work; end
+    # Instant nil spins Processor#run, which immediately fetches again. Concrete
+    # implementations must block or back off before returning nil when empty.
+    def retrieve_work
+      raise NotImplementedError, "#{self.class} must override #retrieve_work and block or back off when empty"
+    end
+
     def bulk_requeue(in_progress); end
 
     # Quiet hook: Manager#quiet calls this so retrieve_work can short-circuit
