@@ -65,15 +65,25 @@ module Wurk
   #     of, and it is why a live holder has to keep saying so — {HELD} is the
   #     ledger the heartbeat refreshes from (see {refresh_in}).
   #
-  # A rolling restart is the one case where a queue can briefly run over its
-  # cap: `Swarm::Restart` boots the replacement before it TERMs the old child,
-  # so for the length of one drain both generations hold slots. That is
-  # deliberate and left alone. Fixing it would mean either starving the
-  # replacement until the old child's last job finished — the deploy stalls
-  # behind the slowest job on the queue — or handing capacity between processes,
-  # which needs the counter this ledger exists to avoid. The excess is bounded
-  # by the old child's in-flight count, lasts at most one `drain_timeout`, and
-  # is TTL-bounded even if that child is SIGKILLed instead of draining.
+  # A rolling restart does not run a queue over its cap. `Swarm::Restart` boots
+  # the replacement before it TERMs the old child, but both generations' holds
+  # are members of the one ZSET and `fetch_slot.lua` refuses a fresh claim once
+  # its ZCARD reaches capacity — so the overlap throttles the replacement. The
+  # ledger stays honest through the drain: a quieted child keeps beating
+  # (Launcher#quiet deliberately leaves the heartbeat running), so its holds
+  # stay refreshed until each job's own release takes it off. The one hold
+  # that leaves while its job is still in flight is the drain-deadline
+  # hand-back — a drain that overruns its deadline bulk-requeues the payload
+  # and raises `Wurk::Shutdown`, and the unwind's `ensure` reaches
+  # `UnitOfWork#release_slot` while the job is still unwinding. That is a
+  # slot-for-slot hand-back, not an extra admission: the re-run spends the
+  # freed capacity on its own fresh admission. A child SIGKILLed instead of
+  # draining releases nothing, so its holds stay counted until the TTL
+  # reclaims them — a refusal window, at most one `drain_timeout` or
+  # {TTL_SECONDS} long, never an over-run. What remains deliberate: booting
+  # the replacement warm instead of starving it behind the old child's last
+  # job, and never handing capacity between processes — that would need the
+  # counter this ledger exists to avoid.
   module QueueSlot
     # How long a hold survives with nobody refreshing it. Deliberately the same
     # as `Heartbeat::TTL_SECONDS` (pinned by a test): a hold is refreshed on the
