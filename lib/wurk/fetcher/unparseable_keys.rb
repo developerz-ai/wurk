@@ -5,10 +5,21 @@ require_relative '../keys'
 module Wurk
   class Fetcher
     # The Reaper's report on a `queue:*|*` key that is not a private list it
-    # can read the owner of — a Sidekiq Pro super_fetch list in a shape Wurk
-    # does not write, say, left behind by a live migration. Nothing will ever
-    # reclaim its jobs, so it is said once per key per process (WARN, with the
-    # list's length) rather than skipped in silence on every sweep.
+    # can read the owner of — a list whose owner tail does not parse, say
+    # `queue:<queue>|<host>|not-a-pid|<index>`, left behind by a producer that
+    # is not Wurk. Sidekiq Pro's four-part shape
+    # (`queue:<queue>|<host>|<pid>|<index>`) parses as the pre-nonce tail and
+    # is reclaimed, so Pro's lists are not reported. Nothing will ever reclaim
+    # the jobs of an unparseable list, so it is said once per key per process
+    # (WARN, with the list's length) rather than skipped in silence on every
+    # sweep.
+    #
+    # The dedup memory is an in-memory ::Set in THIS process only: one
+    # UnparseableKeys per Reaper, one Reaper per Launcher, one Launcher per
+    # worker process, all of them built after the fork. Nothing about it
+    # reaches Redis — no key, no TTL, nothing shared — so there is no
+    # fleet-wide suppression: every worker that sweeps the key logs it for
+    # itself, and a restart starts with an empty set and reports it again.
     #
     # A public queue whose own name contains `|` matches the same SCAN pattern,
     # so a key whose name is in the `queues` SET is not reported.
@@ -35,7 +46,10 @@ module Wurk
           "reaper: #{key.inspect} looks like a reliable-fetch private list but matches neither " \
             'queue:<queue>|<host>|<pid>|<nonce>|<index> nor the pre-nonce ' \
             "queue:<queue>|<host>|<pid>|<index>; its #{size} job(s) will not be recovered " \
-            'automatically. Inspect it and LMOVE them back onto their queue by hand if they belong to a dead process.'
+            'automatically. Inspect it and LMOVE them back onto their queue by hand ' \
+            'if they belong to a dead process. ' \
+            'Reported once per process: every worker that sees the key logs it for itself, ' \
+            'and it is reported again after a restart.'
         end
       rescue StandardError => e
         @config.handle_exception(e, context: 'wurk-reaper')

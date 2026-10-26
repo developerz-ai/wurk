@@ -476,7 +476,7 @@
 - id: crypto.decrypt-failure
   area: encryption
   behavior: A decrypt failure dead-sets the job tagged with Wurk::Encryption::DecryptionError and never retries it.
-  source: docs/idea/parity-divergences.md#L1191-L1199
+  source: docs/idea/parity-divergences.md#L1199-L1207
   promise: >-
     a decrypt failure (unknown key version, a key resolver that returns nil or
     raises, a corrupt envelope) raises `Wurk::Encryption::DecryptionError`,

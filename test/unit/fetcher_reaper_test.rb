@@ -817,6 +817,51 @@ class FetcherReaperTest < Wurk::Test::UnitCase
     assert_equal 2, log.string.scan("#{key.inspect} looks like").size, 'a full memory forgets and reports again'
   end
 
+  # The dedup memory is per process, not per fleet: two reporters — two worker
+  # processes, or one worker and a fresh one — each log the key for themselves.
+  def test_two_separate_reporters_each_log_the_same_unparseable_key
+    key = "#{@public_queue}|sq|some-pro-identity"
+    @pool.with { |c| c.call('LPUSH', key, payload('stranded')) }
+    log = capture_reaper_log
+
+    Wurk::Fetcher::UnparseableKeys.new(@config).report(key)
+    Wurk::Fetcher::UnparseableKeys.new(@config).report(key)
+
+    assert_equal 2, log.string.scan(key).size, 'no cross-process dedup: each worker reports for itself'
+  end
+
+  # A restart replaces the in-memory set with an empty one, so the same key is
+  # reported again: the dedup memory does not outlive the process.
+  def test_a_fresh_reporter_logs_the_key_again
+    key = "#{@public_queue}|sq|some-pro-identity"
+    @pool.with { |c| c.call('LPUSH', key, payload('stranded')) }
+    log = capture_reaper_log
+    reporter = Wurk::Fetcher::UnparseableKeys.new(@config)
+
+    reporter.report(key)
+    reporter.report(key)
+
+    assert_equal 1, log.string.scan(key).size, 'one instance reports a key once'
+
+    Wurk::Fetcher::UnparseableKeys.new(@config).report(key)
+
+    assert_equal 2, log.string.scan(key).size, 'a fresh instance starts empty and reports the key again'
+  end
+
+  # The WARN line names its own scope, so an operator reading one line knows
+  # the dedup is per process and that a restart reports the key again.
+  def test_the_unparseable_warning_names_its_per_process_scope
+    key = "#{@public_queue}|sq|some-pro-identity"
+    @pool.with { |c| c.call('LPUSH', key, payload('stranded')) }
+    log = capture_reaper_log
+    scope = 'Reported once per process: every worker that sees the key logs it for itself, ' \
+            'and it is reported again after a restart.'
+
+    Wurk::Fetcher::UnparseableKeys.new(@config).report(key)
+
+    assert_includes log.string, scope
+  end
+
   private
 
   def capture_reaper_log
