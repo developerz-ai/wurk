@@ -163,7 +163,16 @@ module Wurk
       # Keyed rather than flat because the negotiated hint is not the last
       # word — a `?locale=` link or a stored pick outranks it — so the entry
       # has to be chosen in the browser, against the locale actually rendered.
-      attr_accessor :translations
+      attr_reader :translations
+
+      def translations=(value)
+        raise ArgumentError, "translations must be a Hash (got #{value.class})" unless value.is_a?(::Hash)
+
+        value.each do |locale, copy|
+          validate_translation_hash!(copy, "translations[#{locale.inspect}]")
+        end
+        @translations = value
+      end
 
       # Registers a `(env, method, path) -> truthy/falsey` block. Re-calling
       # overwrites; the spec exposes a single hook, not a chain.
@@ -279,7 +288,7 @@ module Wurk
       end
 
       # Read-only mode. When on, the Authorization middleware blocks every
-      # non-GET request (retry/kill/requeue/delete/pause/resume/clear) with
+      # non-GET request (retry/kill/add_to_queue/delete/pause/unpause/clear) with
       # 403, and the SPA hides destructive actions via the /api/meta flag.
       # Defaults from WURK_WEB_READ_ONLY=1 so a viewer-only deploy (e.g. the
       # public demo) needs no Ruby config.
@@ -315,6 +324,22 @@ module Wurk
       end
 
       private
+
+      def validate_translation_hash!(copy, path)
+        raise ArgumentError, "#{path} must be a Hash (got #{copy.class})" unless copy.is_a?(::Hash)
+
+        copy.each do |key, value|
+          child_path = "#{path}[#{key.inspect}]"
+          case value
+          when ::Hash
+            validate_translation_hash!(value, child_path)
+          when ::String
+            next
+          else
+            raise ArgumentError, "#{child_path} must be a String or Hash (got #{value.class})"
+          end
+        end
+      end
 
       def env_read_only?
         ENV['WURK_WEB_READ_ONLY'] == '1'

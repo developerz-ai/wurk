@@ -841,11 +841,11 @@ class Sidekiq::BasicFetch
   def initialize(capsule)
   def retrieve_work → UnitOfWork|nil   # BRPOP queues_cmd
   def bulk_requeue(inprogress)         # pipelined RPUSH grouped by queue
-  def queues_cmd                       # strict: @queues; else shuffle.uniq
+  def terminate                        # Manager#quiet/terminate calls it unconditionally
 end
 ```
 
-Pluggable via `config[:fetch_class]` + `config[:fetch_setup]`.
+Pluggable via `config[:fetch_class]` + `config[:fetch_setup]`. A plug-in fetcher must respond to `initialize(capsule)`, `retrieve_work`, `bulk_requeue(inprogress)` and `terminate` — Wurk's runtime calls all four unconditionally (capsule.rb, processor.rb, manager.rb). `flush_pending_acks` is optional: `Wurk::Processor` calls it only behind `respond_to?` and the abstract `Wurk::Fetcher` base no-ops it. `queues_cmd` (strict: `@queues`; else `shuffle.uniq`) is private to the shipped fetch implementation (`Fetcher::Reliable`) — internal, never called from outside the fetcher, and not part of the plug-in contract.
 
 ---
 
@@ -1620,28 +1620,42 @@ For reference: features above are sometimes invoked from OSS code paths (gracefu
 
 ## 33. Minimum implementation checklist for wire-compat
 
-- [ ] All Redis keys above with exact names and types
-- [ ] JSON payload format with all required + commonly-used optional fields
-- [ ] `Sidekiq` top-level module with `redis`, `redis_pool`, `default_configuration`, `configure_server/client/embed`, `default_job_options`, `dump_json/load_json`, `strict_args!`, `Shutdown` exception
-- [ ] `Sidekiq::Job` mixin + `sidekiq_options` + `perform_async/in/at/bulk/inline` + `Setter`
-- [ ] `Sidekiq::Client` with `push`, `push_bulk`, `via`, `enqueue*`
-- [ ] Atomic push (LPUSH for queue, ZADD for schedule) — exact serialization
-- [ ] `Sidekiq::Middleware::Chain` with `add/prepend/insert_before/insert_after/remove/invoke`
-- [ ] Server processing loop: BRPOP → JSON parse (or → dead) → middleware → perform → retry/ack
-- [ ] Retry algorithm: `count**4 + 15 + jitter`, `retry_queue`, `retry_for`, `sidekiq_retry_in`, `sidekiq_retries_exhausted`
-- [ ] Dead set trim (max_jobs + timeout)
-- [ ] Scheduler poll with Lua zpopbyscore
-- [ ] Heartbeat (10s) writing `<identity>` HASH + `<identity>:work` + `processes` SADD + `<identity>-signals` LIST drain
-- [ ] Per-day stats counters with 5y TTL
-- [ ] `stat:processed` / `stat:failed` aggregate counters
-- [ ] Capsule abstraction (concurrency, queues, weights, modes)
-- [ ] CLI with same options + sidekiq.yml format
-- [ ] Data API (`Sidekiq::Stats`, `Queue`, `JobRecord`, `RetrySet`, `ScheduledSet`, `DeadSet`, `ProcessSet`, `WorkSet`)
-- [ ] Web UI routes (table in §25.4)
-- [ ] Lifecycle events + handlers (`error_handlers`, `death_handlers`, `on(:startup/...)`)
-- [ ] Testing API (`Sidekiq.testing!`, `Sidekiq::Job.{jobs,clear,drain,perform_one}`, `Sidekiq::Queues`)
-- [ ] ActiveJob unwrap support in API
-- [ ] Iterable job state in `it-<jid>` HASH with TTL
+This list defines minimum wire-compatibility contract requirements, not an
+implementation backlog or a completion report. Bullets indicate neither missing
+nor completed implementation.
+
+For behavior-level evidence and status, see the [parity oracle guide](../../test/parity/README.md)
+and [conformance result guidance](../conformance.md#run-and-interpret-results).
+A green parity run does not prove pending or unresolved requirements, nor does it
+establish full compatibility. As scoped enqueue evidence,
+[`test_push_writes_canonical_payload_to_queue_list`](../../test/parity/client_push_test.rb#L89-L107)
+asserts a plain push's canonical payload fields and integer millisecond timestamps;
+it does not establish every payload variant, Redis key, or API requirement below.
+
+After this guidance, the contract requirements remain:
+
+- All Redis keys above with exact names and types
+- JSON payload format with all required + commonly-used optional fields
+- `Sidekiq` top-level module with `redis`, `redis_pool`, `default_configuration`, `configure_server/client/embed`, `default_job_options`, `dump_json/load_json`, `strict_args!`, `Shutdown` exception
+- `Sidekiq::Job` mixin + `sidekiq_options` + `perform_async/in/at/bulk/inline` + `Setter`
+- `Sidekiq::Client` with `push`, `push_bulk`, `via`, `enqueue*`
+- Atomic push (LPUSH for queue, ZADD for schedule) — exact serialization
+- `Sidekiq::Middleware::Chain` with `add/prepend/insert_before/insert_after/remove/invoke`
+- Server processing loop: BRPOP → JSON parse (or → dead) → middleware → perform → retry/ack
+- Retry algorithm: `count**4 + 15 + jitter`, `retry_queue`, `retry_for`, `sidekiq_retry_in`, `sidekiq_retries_exhausted`
+- Dead set trim (max_jobs + timeout)
+- Scheduler poll with Lua zpopbyscore
+- Heartbeat (10s) writing `<identity>` HASH + `<identity>:work` + `processes` SADD + `<identity>-signals` LIST drain
+- Per-day stats counters with 5y TTL
+- `stat:processed` / `stat:failed` aggregate counters
+- Capsule abstraction (concurrency, queues, weights, modes)
+- CLI with same options + sidekiq.yml format
+- Data API (`Sidekiq::Stats`, `Queue`, `JobRecord`, `RetrySet`, `ScheduledSet`, `DeadSet`, `ProcessSet`, `WorkSet`)
+- Web UI routes (table in §25.4)
+- Lifecycle events + handlers (`error_handlers`, `death_handlers`, `on(:startup/...)`)
+- Testing API (`Sidekiq.testing!`, `Sidekiq::Job.{jobs,clear,drain,perform_one}`, `Sidekiq::Queues`)
+- ActiveJob unwrap support in API
+- Iterable job state in `it-<jid>` HASH with TTL
 
 ---
 

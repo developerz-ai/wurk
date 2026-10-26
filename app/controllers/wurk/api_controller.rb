@@ -248,8 +248,12 @@ module Wurk
     def metrics
       minutes, hours = metrics_window_raw(params)
       rows = ::Wurk::Web::Enterprise::Historical.top(minutes: minutes, hours: hours, class_filter: params[:substr])
-      render json: { minutes: hours ? hours * 60 : minutes, hours: hours,
-                     top_jobs: rows.map { |(klass, totals)| ::Wurk::Api::Serializers.metric_row(klass, totals) } }
+      payload = { minutes: hours ? hours * 60 : minutes,
+                  top_jobs: rows.map { |(klass, totals)| ::Wurk::Api::Serializers.metric_row(klass, totals) } }
+      # hours is echoed only when the request used it, so a minutes request
+      # keeps the two-key shape (minutes + top_jobs) it has always had.
+      payload[:hours] = hours if hours
+      render json: payload
     rescue ::ArgumentError, ::Wurk::Metrics::Query::WindowTooWide => e
       render json: { error: e.message }, status: :bad_request
     end

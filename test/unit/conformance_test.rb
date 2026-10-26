@@ -83,6 +83,85 @@ class ConformanceTest < Minitest::Test
     assert inventory(covered.merge('promise' => promise))
   end
 
+  BOUNDARY_DOC = <<~MARKDOWN
+    # Queues
+
+    Queues are the set of all known queue names.
+    and more prose on a second line.
+
+    ## Queue API
+
+    The API keeps insertion order irrelevant.
+  MARKDOWN
+
+  def test_multiline_range_must_open_a_file_heading_or_paragraph
+    rejected = {
+      'docs/target/sidekiq-free.md#L4-L6' => 'mid-paragraph',
+      'docs/target/sidekiq-free.md#L5-L7' => 'blank line'
+    }
+    accepted = {
+      'docs/target/sidekiq-free.md#L1-L2' => 'Queues',
+      'docs/target/sidekiq-free.md#L3-L4' => 'set of all known queue names',
+      'docs/target/sidekiq-free.md#L6-L8' => 'insertion order irrelevant',
+      'docs/target/sidekiq-free.md#L4' => 'more prose on a second line'
+    }
+
+    Dir.mktmpdir do |root|
+      write_doc(root, 'target/sidekiq-free.md', BOUNDARY_DOC)
+      rejected.each do |source, where|
+        error = assert_raises(Conformance::Invalid) { inventory_with_source(root, source, PROMISE) }
+
+        assert_match(/not at a heading or paragraph start/, error.message, "#{where}: #{source}")
+      end
+      accepted.each { |source, promise| assert inventory_with_source(root, source, promise), "accepted: #{source}" }
+    end
+  end
+
+  LEDGER_DOC = <<~MARKDOWN
+    # Divergence ledger
+
+    ## First divergence
+
+    First divergence body: reliable fetch moves jobs atomically.
+
+    ## Second divergence
+
+    Second divergence body: the deferred acknowledgement window is bounded.
+  MARKDOWN
+
+  def test_ledger_range_must_span_its_own_entry_heading
+    rejected = {
+      'docs/idea/parity-divergences.md#L5' => 'body only, single-line',
+      'docs/idea/parity-divergences.md#L5-L9' => 'headed only by the second entry',
+      'docs/idea/../idea/parity-divergences.md#L5-L9' => 'non-canonical path spelling'
+    }
+
+    Dir.mktmpdir do |root|
+      write_doc(root, 'idea/parity-divergences.md', LEDGER_DOC)
+      rejected.each do |source, where|
+        error = assert_raises(Conformance::Invalid) do
+          inventory_with_source(root, source, 'reliable fetch moves jobs atomically')
+        end
+
+        assert_equal("ledger source range omits its entry heading: #{source}", error.message, where)
+      end
+      assert inventory_with_source(root, 'docs/idea/parity-divergences.md#L3-L5',
+                                   'reliable fetch moves jobs atomically')
+      assert inventory_with_source(root, 'docs/idea/parity-divergences.md#L7-L9',
+                                   'deferred acknowledgement window is bounded')
+    end
+  end
+
+  def inventory_with_source(root, source, promise)
+    Conformance::Inventory.new([covered.merge('source' => source, 'promise' => promise)], root: root)
+  end
+
+  def write_doc(root, relative, content)
+    path = File.join(root, 'docs', relative)
+    FileUtils.mkdir_p(File.dirname(path))
+    File.write(path, content)
+  end
+
   def test_oracles_must_be_nonempty_method_references
     [nil, [], ['test_guard'], ['Example#helper'], ['Example#test_guard', 'Example#test_guard']].each do |refs|
       assert_raises(Conformance::Invalid) { inventory(covered('sample', refs)) }

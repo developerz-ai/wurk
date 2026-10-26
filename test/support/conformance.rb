@@ -5,6 +5,9 @@ require 'minitest'
 
 module Conformance
   ROOT = File.expand_path('../..', __dir__)
+  # The divergence ledger (docs/conformance.md): one '##' entry per documented
+  # divergence. Its source ranges must span the heading of the entry they quote.
+  LEDGER = 'docs/idea/parity-divergences.md'
   class Invalid < StandardError; end
 
   class Inventory
@@ -112,7 +115,20 @@ module Conformance
         raise Invalid, "absent source lines #{source}"
       end
 
+      validate_boundary!(source, lines, first) if last > first
+
       range
+    end
+
+    # A multi-line quote must open where a reader could have started reading:
+    # the file's first line, a heading, or a fresh paragraph. A mid-paragraph,
+    # blank-line, mid-list, mid-table or code-fence-tail start anchors nothing.
+    def validate_boundary!(source, lines, first)
+      opening = lines[first - 1]
+      return if first == 1 || opening.start_with?('#') ||
+                (!opening.strip.empty? && lines[first - 2].strip.empty?)
+
+      raise Invalid, "source range not at a heading or paragraph start #{source}"
     end
 
     def normalize_whitespace(value)
@@ -123,9 +139,21 @@ module Conformance
       range = validate_source!(entry['source'])
       promise = normalize_whitespace(entry['promise'])
       anchored = normalize_whitespace(range.join)
-      return if anchored.include?(promise)
+      raise Invalid, "#{entry['id']}: promise withdrawn from #{entry['source']}" unless anchored.include?(promise)
 
-      raise Invalid, "#{entry['id']}: promise withdrawn from #{entry['source']}"
+      validate_ledger_heading!(entry, range, promise)
+    end
+
+    # A ledger range quoting one entry's body must also span that entry's own
+    # '##' heading, else the promise is presented under another entry's.
+    def validate_ledger_heading!(entry, range, promise)
+      doc = entry['source'].split('#').first
+      return unless File.expand_path(doc, @root) == File.expand_path(LEDGER, @root)
+
+      headed = range.each_with_index.any? do |line, index|
+        line.start_with?('## ') && normalize_whitespace(range[index..].join).include?(promise)
+      end
+      raise Invalid, "ledger source range omits its entry heading: #{entry['source']}" unless headed
     end
   end
 

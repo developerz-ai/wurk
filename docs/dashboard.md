@@ -76,7 +76,7 @@ contract. Path-scoped examples and how the SPA learns its own capability:
 ### Read-only mode
 
 To ship a viewer-only deploy (e.g. a public demo) with **no Ruby config**, set
-`WURK_WEB_READ_ONLY=1` — every non-`GET` request 403s and the SPA hides
+`WURK_WEB_READ_ONLY=1` — every mutating request 403s and the SPA hides
 destructive actions. Equivalent in Ruby:
 
 ```ruby

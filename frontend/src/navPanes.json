@@ -1,0 +1,15 @@
+[
+  { "to": "/", "labelKey": "nav.dashboard", "icon": "fa-gauge-high", "end": true },
+  { "to": "/queues", "labelKey": "nav.queues", "icon": "fa-layer-group", "end": false },
+  { "to": "/retries", "labelKey": "nav.retries", "icon": "fa-rotate-right", "end": false },
+  { "to": "/scheduled", "labelKey": "nav.scheduled", "icon": "fa-clock", "end": false },
+  { "to": "/dead", "labelKey": "nav.dead", "icon": "fa-skull", "end": false },
+  { "to": "/busy", "labelKey": "nav.busy", "icon": "fa-gears", "end": false },
+  { "to": "/batches", "labelKey": "nav.batches", "icon": "fa-table-cells-large", "end": false },
+  { "to": "/flows", "labelKey": "nav.flows", "icon": "fa-diagram-project", "end": false },
+  { "to": "/limiters", "labelKey": "nav.limiters", "icon": "fa-gauge", "end": false },
+  { "to": "/cron", "labelKey": "nav.cron", "icon": "fa-stopwatch", "end": false },
+  { "to": "/metrics", "labelKey": "nav.metrics", "icon": "fa-chart-line", "end": false },
+  { "to": "/profiles", "labelKey": "nav.profiles", "icon": "fa-fire", "end": false },
+  { "to": "/search", "labelKey": "nav.search", "icon": "fa-magnifying-glass", "end": false }
+]

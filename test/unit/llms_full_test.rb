@@ -103,8 +103,8 @@ class LlmsFullTest < Minitest::Test
 
   def test_inlines_real_guide_content
     # Anchor on distinctive strings so an empty/placeholder doc is caught.
-    assert_includes @text, 'Concurrency vs parallelism', 'migration-guide body missing'
-    assert_includes @text, 'queue_adapter = :wurk', 'active-job guide body missing'
+    assert_includes @text, 'sidekiq-cron entries: 3 (2 importable, 1 skipped)', 'migration-guide body missing'
+    assert_includes @text, "so you never dispatch a job whose row hasn't landed.", 'active-job guide body missing'
   end
 
   def test_map_source_is_present

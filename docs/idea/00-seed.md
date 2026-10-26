@@ -18,7 +18,7 @@
 - Forks workers after the host app boots, copy-on-write memory savings.
 - Ships precompiled dashboard assets — no Node toolchain required by consumers.
 - Includes a dummy Rails app at `test/dummy/` for engine integration testing.
-- Modern dashboard: right-side menu, mobile-friendly, dark + light themes, i18n with extensible locales.
+- Modern dashboard: left-rail navigation, mobile-friendly, dark + light themes, i18n with extensible locales.
 - Minitest with multi-CPU parallel runner.
 - GitHub Actions on GitHub-hosted `ubuntu-latest` (free for a public repo; no self-hosted runners).
 - Public docs site on GitHub Pages.
@@ -34,7 +34,7 @@
 | 05-features.md | Parity map: Sidekiq OSS / Pro / Ent → Wurk modules |
 | 06-performance.md | Every optimization, with rationale |
 | 07-rails-engine.md | Mountable engine, configurable mount point |
-| 08-dashboard.md | SolidJS SPA, right-side menu, mobile, dark theme, i18n, AI |
+| 08-dashboard.md | SolidJS SPA, left-rail navigation, mobile, dark theme, i18n, AI |
 | 09-precompiled-assets.md | Assets baked into the gem at build time |
 | 10-dummy-app.md | `test/dummy/` Rails app for engine tests |
 | 11-testing-ci.md | Minitest parallel + GitHub Actions CI |

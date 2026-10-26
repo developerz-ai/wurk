@@ -16,7 +16,7 @@ Wurk::Engine.routes.draw do
     post 'queues/:name/pause',   to: 'api#pause_queue',   as: :api_pause_queue,   constraints: { name: %r{[^/]+} }
     post 'queues/:name/unpause', to: 'api#unpause_queue', as: :api_unpause_queue, constraints: { name: %r{[^/]+} }
 
-    # Job-set mutations (retry/delete/kill/requeue/clear). The SPA posts to
+    # Job-set mutations (retry/delete/kill/add_to_queue/clear). The SPA posts to
     # these; the Authorization middleware 403s every non-GET in read-only mode,
     # so they need no extra guard. `:key` is "<score>|<jid>" (Wurk::SortedEntry#id);
     # `all/:cmd` operates over the whole set; the bare collection POST is a bulk
@@ -96,13 +96,21 @@ Wurk::Engine.routes.draw do
   # version reaches the app and comes back as the same `unsupported_api_version`
   # problem document the other two mounts answer with.
   #
-  # Nested here it also inherits the engine's middleware — the host's
-  # `Wurk::Web.use` chain and the read-only gate — so a dashboard behind Devise
-  # keeps gating this path too. A machine client that cannot pass a browser
-  # login wants mode 2 instead: `mount Wurk::API => '/wurk-api'` in the host's
-  # own routes, declared BEFORE the engine when its path extends the engine's —
-  # Rails matches a mounted app by bare string prefix, so `mount Wurk::Engine =>
-  # '/wurk'` declared first swallows every `/wurk-api/...` request.
+  # Nested here it also inherits both engine middlewares — the host's
+  # `Wurk::Web.use` chain, then `Wurk::Web::Authorization`
+  # (lib/wurk/engine.rb) — so a dashboard behind Devise keeps gating this path
+  # too. The `Wurk::Web.configure` authorization hook (403 on falsey,
+  # sidekiq-ent §9.2) and the read-only gate both live in Authorization, and
+  # the hook runs before the machine-API handoff (lib/wurk/web/config.rb):
+  # the host hook gates `/v1` paths too, and a valid machine bearer token does
+  # NOT bypass it — bearer auth lives only inside `Wurk::API::App#handle`
+  # (lib/wurk/api/app.rb), downstream of both middlewares, so a session-bound
+  # hook (`env['warden']&.user`) 403s before the token is ever consulted. A
+  # machine client that cannot pass a browser login wants mode 2 instead:
+  # `mount Wurk::API => '/wurk-api'` in the host's own routes, declared BEFORE
+  # the engine when its path extends the engine's — Rails matches a mounted app
+  # by bare string prefix, so `mount Wurk::Engine => '/wurk'` declared first
+  # swallows every `/wurk-api/...` request.
   mount Wurk::API => Wurk::API::ENGINE_MOUNT, constraints: ->(request) { Wurk::API.serves?(request.path_info) }
 
   # Profiles (v8.0+) — not under /api: `:key/data` streams the gzipped gecko

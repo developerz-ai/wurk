@@ -5,10 +5,12 @@ require_relative 'redis_pool'
 module Wurk
   # Sidekiq-compatible pool constructor. `Sidekiq::RedisConnection.create(...)`
   # is the documented way to build a standalone Redis pool (spec §26) — it's the
-  # default pool for `Sidekiq::Deploy` (§23) and the constructor for per-shard
-  # pools in multi-shard web mounts (Pro §10.2). Returns a `Wurk::RedisPool`
+  # default pool for `Sidekiq::Deploy` (§23). Returns a `Wurk::RedisPool`
   # (connection_pool-backed, redis-client adapter), which is `.with`-compatible
   # with everything that expects a Sidekiq pool.
+  #
+  # Pro §10.2 pool-bound multi-shard web mounts (`Sidekiq::Pro::Web.with`) are
+  # unsupported: `Wurk::Web` has no `.with` factory.
   #
   # Accepts Sidekiq's option keys (`url`, `size`, `pool_timeout`, `pool_name`,
   # and `name` — the Sentinel master next to `sentinels:`) plus the socket

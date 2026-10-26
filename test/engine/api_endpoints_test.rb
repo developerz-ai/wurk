@@ -460,6 +460,7 @@ class ApiEndpointsTest < Wurk::Test::EngineCase
     assert_ok
     payload = json_body
 
+    assert_equal %i[minutes top_jobs], payload.keys.sort
     assert_equal 5, payload[:minutes]
     assert_kind_of Array, payload[:top_jobs]
   end
