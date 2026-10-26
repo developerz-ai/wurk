@@ -2,6 +2,7 @@
 
 require 'minitest/autorun'
 require 'ripper'
+require 'tmpdir'
 
 # The gate on links between the reference docs in docs/*.md.
 #
@@ -119,6 +120,180 @@ class DocsLinksTest < Minitest::Test
 
     assert_empty broken.map { |l| "#{l[:doc]}:#{l[:line]} -> #{l[:href]}" },
                  'a link into another doc must name a heading that exists there'
+  end
+end
+
+class DocsDivergenceTableTest < Minitest::Test
+  parallelize_me!
+
+  SECTION = '## Divergences from the Sidekiq spec'
+  LEDGER = File.join(DocsLinksTest::DOCS, 'idea/parity-divergences.md')
+
+  def self.cells(line)
+    line.strip.delete_prefix('|').delete_suffix('|').split(/(?<!\\)\|/).map(&:strip)
+  end
+
+  def self.table_separator?(text)
+    cells(text).all? { |cell| cell.match?(/\A:?-{3,}:?\z/) }
+  end
+
+  def self.divergence_rows(path)
+    lines = DocsLinksTest.prose_lines(path)
+    start = lines.index { |(_number, text)| text.strip == SECTION }
+    return [[], ["#{path}:1: missing #{SECTION}"]] unless start
+
+    section = lines[(start + 1)..].take_while { |(_number, text)| !text.match?(/^\#{1,2}\s/) }
+    rows = []
+    in_table = false
+    section.each_with_index do |(number, text), index|
+      unless text.lstrip.start_with?('|')
+        in_table = false
+        next
+      end
+
+      if table_separator?(text)
+        in_table = index.positive? && section[index - 1][1].lstrip.start_with?('|')
+        next
+      end
+      rows << [number, text] if in_table
+    end
+    errors = rows.empty? ? ["#{path}:#{lines[start][0]}: missing divergence table data rows"] : []
+    [rows, errors]
+  end
+
+  def self.ledger_entries(ledger)
+    return Set.new unless File.file?(ledger)
+
+    DocsLinksTest.prose_lines(ledger).filter_map do |(_number, text)|
+      heading = text.match(/^##\s+(.+?)\s*$/)
+      DocsLinksTest.slug(heading[1]) if heading
+    end.to_set
+  end
+
+  def self.coverage_errors(path, ledger)
+    rows, errors = divergence_rows(path)
+    entries = ledger_entries(ledger)
+    rows.each do |number, text|
+      label = cells(text).first.to_s
+      linked = text.gsub(/`[^`]*`/, '``').scan(DocsLinksTest::LINK).flatten.any? do |href|
+        target, anchor = href.split('#', 2)
+        File.expand_path(target, File.dirname(path)) == File.expand_path(ledger) && entries.include?(anchor)
+      end
+      next if linked || entries.include?(DocsLinksTest.slug(label))
+
+      errors << "#{path}:#{number}: no ledger entry for #{label} (expected #{ledger} heading or entry-specific link)"
+    end
+    errors
+  end
+
+  def test_every_divergence_row_has_a_ledger_entry
+    errors = %w[configuration.md api.md].flat_map do |doc|
+      self.class.coverage_errors(File.join(DocsLinksTest::DOCS, doc), LEDGER)
+    end
+
+    assert_empty errors
+  end
+
+  def fixture_errors(rows, ledger: "# Ledger\n\n## Recorded difference\n", document: nil)
+    Dir.mktmpdir('docs-divergence') do |dir|
+      source = File.join(dir, 'configuration.md')
+      target = File.join(dir, 'parity-divergences.md')
+      File.write(source, document || "#{SECTION}\n\n| Area | Detail |\n|---|---|\n#{rows}")
+      File.write(target, ledger) if ledger
+      File.write(File.join(dir, 'other.md'), "## Recorded difference\n")
+      self.class.coverage_errors(source, target)
+    end
+  end
+
+  def test_valid_entry_links_and_exact_normalized_headings_pass
+    rows = <<~MARKDOWN
+      | [Short label](parity-divergences.md#recorded-difference) | Detail |
+      | **Recorded difference** | Detail |
+    MARKDOWN
+    assert_empty fixture_errors(rows)
+  end
+
+  def test_an_appended_unrepresented_row_fails_at_its_source_line
+    rows = <<~MARKDOWN
+      | Recorded difference | Detail |
+      | New difference | Detail |
+    MARKDOWN
+    errors = fixture_errors(rows)
+
+    assert_equal 1, errors.size
+    assert_match(/configuration\.md:6:.*New difference/, errors.first)
+  end
+
+  def test_missing_ledger_file_fails_even_with_a_matching_label
+    errors = fixture_errors('| Recorded difference | Detail |', ledger: nil)
+
+    assert_equal 1, errors.size
+    assert_match(/configuration\.md:5:.*parity-divergences\.md/, errors.first)
+  end
+
+  def test_missing_heading_target_fails
+    errors = fixture_errors('| [Short label](parity-divergences.md#missing) | Detail |')
+
+    assert_equal 1, errors.size
+    assert_match(/configuration\.md:5:.*Short label/, errors.first)
+  end
+
+  def test_unrelated_links_and_non_entry_anchors_do_not_cover_a_row
+    [
+      'other.md#recorded-difference',
+      'parity-divergences.md',
+      'parity-divergences.md#ledger',
+      'parity-divergences.md#implementation',
+      'https://example.org/parity-divergences.md#recorded-difference'
+    ].each do |href|
+      errors = fixture_errors("| [Short label](#{href}) | Detail |",
+                              ledger: "# Ledger\n## Recorded difference\n### Implementation\n")
+
+      assert_equal 1, errors.size, href
+    end
+  end
+
+  def test_heading_correspondence_is_not_a_substring_match
+    errors = fixture_errors('| Recorded | Detail |')
+
+    assert_equal 1, errors.size
+  end
+
+  def test_headers_other_sections_and_fenced_examples_are_not_rows
+    document = <<~MARKDOWN
+      ## Unrelated
+      | Unknown | Detail |
+      |---|---|
+      | Not recorded | Detail |
+      #{SECTION}
+      ```markdown
+      | Unknown | Detail |
+      |---|---|
+      | Not recorded | Detail |
+      ```
+      | Area | Detail |
+      |---|---|
+      | Recorded difference | Detail |
+      ## Related
+      | Unknown | Detail |
+      |---|---|
+      | Not recorded | Detail |
+    MARKDOWN
+    assert_empty fixture_errors(nil, document: document)
+  end
+
+  def test_missing_section_or_table_fails_instead_of_passing_vacuously
+    [
+      "## Related\n",
+      "#{SECTION}\nNo table\n",
+      "#{SECTION}\n| Area | Detail |\n|---|---|\n",
+      "```markdown\n#{SECTION}\n| Area | Detail |\n|---|---|\n| Recorded difference | Detail |\n```\n"
+    ].each do |document|
+      errors = fixture_errors(nil, document: document)
+
+      assert_equal 1, errors.size
+      assert_match(/configuration\.md:\d+: missing/, errors.first)
+    end
   end
 end
 
