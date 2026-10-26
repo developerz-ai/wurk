@@ -6,6 +6,7 @@ import { useMeta } from '../hooks/useMeta';
 import { basePath } from '../basePath';
 import { fetchText } from '../http';
 import { t } from '../i18n';
+import extensionCss from '../styles/pages/_extension.scss?inline';
 
 // Renders a third-party extension tab registered via
 // Sidekiq::Web.register_extension. When the tab maps to a registered extension
@@ -111,20 +112,37 @@ function NativeExtension(props: { extName: string; indexPath: string; title: str
         </div>
       </Show>
       <Show when={html() !== null && !error()}>
-        <div
-          class="card ext-view"
-          onClick={onClick}
-          onSubmit={onSubmit}
-          // Extension HTML is rendered server-side from host-registered gem
-          // code — the same trust model as Sidekiq::Web rendering it. Inserted
-          // via innerHTML, so <script> tags in an extension view (inline or
-          // src=) never execute — unlike stock Sidekiq::Web, where the view is
-          // the whole page. Styles and links work; per-view JS does not.
-          innerHTML={html()!}
-        />
+        <ShadowExtensionView html={html()!} onClick={onClick} onSubmit={onSubmit} />
       </Show>
     </>
   );
+}
+
+function ShadowExtensionView(props: { html: string; onClick: (e: MouseEvent) => void; onSubmit: (e: Event) => void }) {
+  let content!: HTMLDivElement;
+  const attach = (host: HTMLDivElement) => {
+    const shadow = host.attachShadow({ mode: 'open' });
+    const style = document.createElement('style');
+    style.textContent = extensionCss;
+    content = document.createElement('div');
+    content.className = 'ext-view';
+    shadow.append(style, content);
+    // Listen before events cross the shadow boundary and their targets retarget
+    // to the host, hiding the actual link/form from delegation.
+    const click = (event: Event) => props.onClick(event as MouseEvent);
+    shadow.addEventListener('click', click);
+    shadow.addEventListener('submit', props.onSubmit);
+    onCleanup(() => {
+      shadow.removeEventListener('click', click);
+      shadow.removeEventListener('submit', props.onSubmit);
+    });
+  };
+  createEffect(() => {
+    // Host-registered server HTML has Sidekiq::Web's trust model, not a sandbox.
+    // innerHTML keeps inline/src script tags inert; never recreate the scripts.
+    content.innerHTML = props.html;
+  });
+  return <div class="card" data-extension-view ref={attach} />;
 }
 
 function IframeExtension(props: { tab: string; title: string }) {

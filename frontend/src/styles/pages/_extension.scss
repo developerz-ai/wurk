@@ -1,12 +1,38 @@
 // ── Server-rendered extension views (#187) ───────────────────────────────────
 // Third-party Web-extension ERB ships plain markup (tables/forms/links); give
-// the common elements just enough theme to sit in the dashboard without
-// importing Sidekiq's CSS.
+// the common elements a shadow-local baseline without dashboard utility CSS.
+// Loaded via ?inline by Extension.tsx, never from the global entry point.
 
 @use '../abstracts' as *;
 
 .ext-view {
+  // Shadow boundaries stop selectors, not inherited presentation. Keep theme
+  // custom properties but reset ordinary inherited properties at this root.
+  all: initial;
+  display: block;
+  min-width: 0;
+  color: var(--text);
+  background: var(--surface);
+  font-family: var(--font-sans, sans-serif);
+  font-size: to-rem(14);
+  line-height: 1.5;
+  text-align: start;
   overflow-x: auto;
+
+  &,
+  *,
+  *::before,
+  *::after {
+    box-sizing: border-box;
+  }
+
+  input,
+  select,
+  textarea,
+  button {
+    font-family: inherit;
+    line-height: inherit;
+  }
 
   table {
     width: 100%;
@@ -40,6 +66,8 @@
 
   form {
     display: inline-flex;
+    flex-wrap: wrap;
+    max-width: 100%;
     gap: to-rem(8);
     align-items: center;
     margin: to-rem(8) 0;
