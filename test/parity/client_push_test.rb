@@ -372,6 +372,17 @@ class ClientPushParityTest < Wurk::Test::UnitCase
     end
   end
 
+  def test_push_bulk_touches_only_queues_set_and_queue_list
+    jids = Sidekiq::Client.push_bulk('class' => PlainJob, 'args' => [[1], [2], [3]], 'queue' => @queue)
+
+    assert_equal 3, jids.compact.size
+    assert_equal ['queues', "queue:#{@queue}"].sort, new_keys
+    assert_equal 'list', redis('TYPE', "queue:#{@queue}")
+    assert_equal 'set', redis('TYPE', 'queues')
+    assert_equal [@queue], redis('SMEMBERS', 'queues')
+    assert_equal 3, redis('LLEN', "queue:#{@queue}")
+  end
+
   def test_push_bulk_registers_exactly_the_routed_queues_and_delivers_each_payload
     queues = ["#{@queue}-a", "#{@queue}-b"]
     existing_queue = "#{@queue}-existing"
@@ -386,6 +397,8 @@ class ClientPushParityTest < Wurk::Test::UnitCase
     assert_equal 4, jids.uniq.size
     assert_equal [*queues, existing_queue].sort, redis('SMEMBERS', 'queues').sort
     assert_equal 0, redis('EXISTS', "queue:#{@queue}")
+    # 'queues' is in new_keys because the SADD above created it, not the push.
+    assert_equal ['queues', "queue:#{queues[0]}", "queue:#{queues[1]}"].sort, new_keys
     queues.each_with_index do |queue, index|
       payloads = routed_payloads(queue)
 
