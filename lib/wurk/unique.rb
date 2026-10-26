@@ -98,9 +98,12 @@ module Wurk
         @enabled == true
       end
 
-      def enable!
+      # `config` selects the chains and death handlers, installed once each;
+      # the enabled flag remains process-global, including for other configs
+      # whose chains already carry the middleware.
+      def enable!(config = Wurk.configuration)
         @enabled = true
-        register_middleware!
+        register_middleware!(config)
         true
       end
 
@@ -188,12 +191,12 @@ module Wurk
         nil
       end
 
-      def register_middleware!
-        Wurk.configuration.client_middleware.add(ClientMiddleware) \
-          unless Wurk.configuration.client_middleware.exists?(ClientMiddleware)
-        Wurk.configuration.server_middleware.add(ServerMiddleware) \
-          unless Wurk.configuration.server_middleware.exists?(ServerMiddleware)
-        handlers = Wurk.configuration.death_handlers
+      def register_middleware!(config)
+        client_chain = config.client_middleware
+        server_chain = config.server_middleware
+        client_chain.add(ClientMiddleware) unless client_chain.exists?(ClientMiddleware)
+        server_chain.add(ServerMiddleware) unless server_chain.exists?(ServerMiddleware)
+        handlers = config.death_handlers
         handlers << DEATH_HANDLER unless handlers.include?(DEATH_HANDLER)
       end
     end

@@ -273,11 +273,65 @@ class UniqueTest < Wurk::Test::UnitCase
       Wurk::Unique.enable!
       Wurk::Unique.enable!
 
-      client_count = Wurk.configuration.client_middleware.entries.count { |e| e.klass == Wurk::Unique::ClientMiddleware }
-      server_count = Wurk.configuration.server_middleware.entries.count { |e| e.klass == Wurk::Unique::ServerMiddleware }
+      client_count = Wurk.configuration.client_middleware.entries.count do |entry|
+        entry.klass == Wurk::Unique::ClientMiddleware
+      end
+      server_count = Wurk.configuration.server_middleware.entries.count do |entry|
+        entry.klass == Wurk::Unique::ServerMiddleware
+      end
 
       assert_equal 1, client_count
       assert_equal 1, server_count
+    end
+  end
+
+  def test_enable_on_supplied_config_registers_once_without_changing_other_configs
+    ENABLE_MUTEX.synchronize do
+      target = Wurk::Configuration.new
+      unrelated = Wurk::Configuration.new
+      untouched = [Wurk.configuration, unrelated].map do |config|
+        [config.client_middleware.entries.dup, config.server_middleware.entries.dup, config.death_handlers.dup]
+      end
+      handler = ->(*) {}
+      target.death_handlers << handler
+
+      2.times { assert Wurk::Unique.enable!(target) }
+
+      assert_predicate Wurk::Unique, :enabled?
+      assert_equal(1, target.client_middleware.entries.count { |e| e.klass == Wurk::Unique::ClientMiddleware })
+      assert_equal(1, target.server_middleware.entries.count { |e| e.klass == Wurk::Unique::ServerMiddleware })
+      assert_equal [handler, Wurk::Unique::DEATH_HANDLER], target.death_handlers
+      [Wurk.configuration, unrelated].zip(untouched) do |config, before|
+        after = [config.client_middleware.entries, config.server_middleware.entries, config.death_handlers]
+
+        assert_equal before, after
+      end
+
+      Wurk::Unique.enable!(unrelated)
+
+      assert unrelated.client_middleware.exists?(Wurk::Unique::ClientMiddleware)
+      assert unrelated.server_middleware.exists?(Wurk::Unique::ServerMiddleware)
+      assert_equal 1, unrelated.death_handlers.count(Wurk::Unique::DEATH_HANDLER)
+    end
+  end
+
+  def test_supplied_config_client_chain_suppresses_duplicates
+    ENABLE_MUTEX.synchronize do
+      target = Wurk::Configuration.new
+      Wurk::Unique.enable!(target)
+      first = build_job(jid: 'target-1', ttl: 60)
+      second = build_job(jid: 'target-2', ttl: 60)
+      track_key(first)
+      pool = Wurk.configuration.redis_pool
+      enqueued = []
+
+      accepted = target.client_middleware.invoke(nil, first, first['queue'], pool) { enqueued << first['jid'] }
+      duplicate = target.client_middleware.invoke(nil, second, second['queue'], pool) { enqueued << second['jid'] }
+
+      assert accepted
+      assert_nil duplicate
+      assert_equal ['target-1'], enqueued
+      assert_equal 'target-1', redis_call('GET', Wurk::Unique.lock_key_for(first))
     end
   end
 

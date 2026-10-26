@@ -64,12 +64,141 @@ class EncryptionTest < Wurk::Test::UnitCase
       Wurk::Encryption.enable(active_version: 1) { |_v| KEY_V1 }
       Wurk::Encryption.enable(active_version: 1) { |_v| KEY_V1 }
 
-      client_count = Wurk.configuration.client_middleware.entries.count { |e| e.klass == Wurk::Encryption::ClientMiddleware }
-      server_count = Wurk.configuration.server_middleware.entries.count { |e| e.klass == Wurk::Encryption::ServerMiddleware }
+      client_count = Wurk.configuration.client_middleware.entries.count do |entry|
+        entry.klass == Wurk::Encryption::ClientMiddleware
+      end
+      server_count = Wurk.configuration.server_middleware.entries.count do |entry|
+        entry.klass == Wurk::Encryption::ServerMiddleware
+      end
 
       assert_equal 1, client_count
       assert_equal 1, server_count
     end
+  end
+
+  def test_enable_on_supplied_config_registers_once_without_changing_other_configs
+    ENABLE_MUTEX.synchronize do
+      target = Wurk::Configuration.new
+      unrelated = Wurk::Configuration.new
+      untouched = [Wurk.configuration, unrelated].map do |config|
+        [config.client_middleware.entries.dup, config.server_middleware.entries.dup, config.death_handlers.dup]
+      end
+      handlers = target.death_handlers.dup
+
+      2.times { assert Wurk::Encryption.enable(target, active_version: 1) { |_v| KEY_V1 } }
+
+      assert_predicate Wurk::Encryption, :enabled?
+      assert_equal KEY_V1, Wurk::Encryption.key_for(1)
+      assert_equal(1, target.client_middleware.entries.count { |e| e.klass == Wurk::Encryption::ClientMiddleware })
+      assert_equal(1, target.server_middleware.entries.count { |e| e.klass == Wurk::Encryption::ServerMiddleware })
+      assert_equal handlers, target.death_handlers
+      [Wurk.configuration, unrelated].zip(untouched) do |config, before|
+        after = [config.client_middleware.entries, config.server_middleware.entries, config.death_handlers]
+
+        assert_equal before, after
+      end
+
+      Wurk::Encryption.enable(unrelated, active_version: 2) { |_v| KEY_V2 }
+
+      assert unrelated.client_middleware.exists?(Wurk::Encryption::ClientMiddleware)
+      assert unrelated.server_middleware.exists?(Wurk::Encryption::ServerMiddleware)
+      assert_equal 2, Wurk::Encryption.active_version
+      assert_equal KEY_V2, Wurk::Encryption.key_for(2)
+    end
+  end
+
+  def test_supplied_config_chains_encrypt_and_decrypt
+    ENABLE_MUTEX.synchronize do
+      target = Wurk::Configuration.new
+      Wurk::Encryption.enable(target, active_version: 1) { |_v| KEY_V1 }
+      capsule = target.capsule('target-roundtrip')
+      capsule.prepare_shared!
+      secret = { 'card' => '4111' }
+      job = { 'class' => 'X', 'args' => [42, secret], 'queue' => 'default', 'encrypt' => true }
+      pool = Wurk.configuration.redis_pool
+
+      assert target.client_middleware.invoke(nil, job, job['queue'], pool) { true }
+      envelope = job['args'].last
+
+      assert Wurk::Encryption.envelope?(envelope)
+      assert_equal 42, job['args'].first
+      refute_equal secret, envelope
+      seen = capsule.server_middleware.invoke(nil, job, job['queue']) { job['args'] }
+
+      assert_equal [42, secret], seen
+      assert_same envelope, job['args'].last
+    end
+  end
+
+  def test_supplied_config_guard_refuses_before_enabling_or_installing_middleware
+    ENABLE_MUTEX.synchronize do
+      target = Wurk::Configuration.new
+      capsule = target.capsule('target-unsafe')
+      capsule.prepare_shared!
+      before = [target.client_middleware.entries.dup, target.server_middleware.entries.dup]
+
+      error = assert_raises(Wurk::Encryption::UnsafeEnablementError) do
+        Wurk::Encryption.enable(target, active_version: 1) { |_v| KEY_V1 }
+      end
+
+      assert_includes error.message, capsule.name
+      refute_predicate Wurk::Encryption, :enabled?
+      assert_nil Wurk::Encryption.active_version
+      assert_equal before, [target.client_middleware.entries, target.server_middleware.entries]
+    end
+  end
+
+  def test_supplied_config_guard_preserves_existing_resolver_and_cache_on_refusal
+    ENABLE_MUTEX.synchronize do
+      safe = Wurk::Configuration.new
+      calls = []
+      Wurk::Encryption.enable(safe, active_version: 1) do |version|
+        calls << version
+        KEY_V1
+      end
+      cached = Wurk::Encryption.key_for(1)
+      unsafe = Wurk::Configuration.new
+      unsafe.capsule('target-unsafe').prepare_shared!
+
+      assert_raises(Wurk::Encryption::UnsafeEnablementError) do
+        Wurk::Encryption.enable(unsafe, active_version: 2) { |_v| KEY_V2 }
+      end
+
+      assert_predicate Wurk::Encryption, :enabled?
+      assert_equal 1, Wurk::Encryption.active_version
+      assert_same cached, Wurk::Encryption.key_for(1)
+      assert_equal [1], calls
+      assert_equal KEY_V1, Wurk::Encryption.key_for(2)
+      assert_equal [1, 2], calls
+      refute unsafe.client_middleware.exists?(Wurk::Encryption::ClientMiddleware)
+      refute unsafe.server_middleware.exists?(Wurk::Encryption::ServerMiddleware)
+    end
+  end
+
+  def test_supplied_config_ignores_unrelated_capsules_and_allows_safe_rotation
+    capsule = nil
+    ENABLE_MUTEX.synchronize do
+      capsule = prepared_capsule
+      unrelated = Wurk::Configuration.new
+      unrelated.capsule('unrelated-unsafe').prepare_shared!
+      target = Wurk::Configuration.new
+      keys = { 1 => KEY_V1, 2 => KEY_V2 }
+
+      Wurk::Encryption.enable(target, active_version: 1) { |v| keys.fetch(v) }
+      legacy = Wurk::Encryption.encrypt('old data')
+      target_capsule = target.capsule('target-safe')
+      target_capsule.prepare_shared!
+      Wurk::Encryption.enable(target, active_version: 2) { |v| keys.fetch(v) }
+
+      assert target_capsule.server_middleware.exists?(Wurk::Encryption::ServerMiddleware)
+      assert_equal 2, Wurk::Encryption.active_version
+      assert_equal 'old data', Wurk::Encryption.decrypt(legacy)
+      assert_equal 2, Wurk::Encryption.encrypt('new data')['v']
+      refute capsule.server_middleware.exists?(Wurk::Encryption::ServerMiddleware)
+      refute unrelated.server_middleware.exists?(Wurk::Encryption::ServerMiddleware)
+    end
+  ensure
+    release_capsule(capsule)
   end
 
   # ---- late enablement: the boot-order guard ----------------------------
@@ -830,8 +959,6 @@ class EncryptionTest < Wurk::Test::UnitCase
   # A capsule of the global configuration, prepared the way a worker prepares
   # it: the server middleware chain it runs is copied from the Configuration
   # and frozen there — a middleware registered afterwards cannot reach it.
-  # The guard reads the capsules of the configuration the middleware is
-  # registered on, so the scenario has to be built on the global one.
   def prepared_capsule
     capsule = Wurk.configuration.capsule("enc-guard-#{Process.pid}-#{object_id}")
     capsule.prepare_shared!
