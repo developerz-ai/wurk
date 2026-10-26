@@ -95,18 +95,20 @@ module Wurk
       # keys for any older in-flight versions so they decrypt.
       #
       # Idempotent: re-calling rebinds the resolver and rebuilds the cache.
-      # Middleware is installed at most once per chain.
-      def enable(active_version:, &resolver)
+      # Middleware is installed at most once per chain. `config` selects the
+      # chains and capsules to check, not a separate crypto context: enabled
+      # state, active version, resolver and key cache remain process-global.
+      def enable(config = Wurk.configuration, active_version:, &resolver)
         raise ArgumentError, 'active_version is required' unless active_version
         raise ArgumentError, 'block returning the key bytes is required' unless resolver
 
-        refuse_unreachable_enablement!
+        refuse_unreachable_enablement!(config)
 
         @active_version = Integer(active_version)
         @resolver = resolver
         @key_cache = {}
         @enabled = true
-        register_middleware!
+        register_middleware!(config)
         true
       end
 
@@ -245,8 +247,8 @@ module Wurk
       # producer in another process that enabled crypto while some worker
       # never enabled it at all is a different misconfiguration — enable
       # everywhere, not just on workers.
-      def refuse_unreachable_enablement!
-        unreachable = Wurk.configuration.capsules.values.select do |capsule|
+      def refuse_unreachable_enablement!(config)
+        unreachable = config.capsules.values.select do |capsule|
           capsule.prepared? && capsule.server_middleware_missing?(ServerMiddleware)
         end
         return if unreachable.empty?
@@ -289,11 +291,11 @@ module Wurk
         bytes
       end
 
-      def register_middleware!
-        Wurk.configuration.client_middleware.add(ClientMiddleware) \
-          unless Wurk.configuration.client_middleware.exists?(ClientMiddleware)
-        Wurk.configuration.server_middleware.add(ServerMiddleware) \
-          unless Wurk.configuration.server_middleware.exists?(ServerMiddleware)
+      def register_middleware!(config)
+        client_chain = config.client_middleware
+        server_chain = config.server_middleware
+        client_chain.add(ClientMiddleware) unless client_chain.exists?(ClientMiddleware)
+        server_chain.add(ServerMiddleware) unless server_chain.exists?(ServerMiddleware)
       end
     end
 
