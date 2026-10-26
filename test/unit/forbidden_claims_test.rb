@@ -1,6 +1,7 @@
 # frozen_string_literal: true
 
 require 'minitest/autorun'
+require 'json'
 require_relative '../../tasks/llms_full'
 
 # The public surfaces outside docs/wiki/ (which wiki_pages_test.rb gates) that
@@ -77,7 +78,105 @@ class ForbiddenClaimsTest < Minitest::Test
                  'the dashboard per-job-progress phrasing must stay guarded'
   end
 
+  PANE_INVENTORIES = %w[feature-panes dashboard-panes].freeze
+
+  def test_both_site_inventories_match_shipped_dashboard_panes
+    panes = shipped_panes
+    site = File.read(File.join(ROOT, 'docs/site/index.html'))
+
+    PANE_INVENTORIES.each { |id| assert_inventory(site, id, panes) }
+  end
+
+  def test_inventory_guard_rejects_every_omission_including_flows_profiles_and_search
+    panes = shipped_panes
+    panes.each do |pane|
+      PANE_INVENTORIES.each do |id|
+        incomplete = inventory_markup(id, panes - [pane])
+        assert_raises(Minitest::Assertion, "#{id} must reject missing #{pane}") do
+          assert_inventory(incomplete, id, panes)
+        end
+      end
+    end
+  end
+
+  def test_inventory_guard_rejects_extras_duplicates_empty_and_missing_markers
+    panes = shipped_panes
+    PANE_INVENTORIES.each do |id|
+      [panes + ['Unshipped pane'], panes + [panes.first], []].each do |invalid|
+        assert_raises(Minitest::Assertion) { assert_inventory(inventory_markup(id, invalid), id, panes) }
+      end
+      ['', panes.join(', '), "<span>#{panes.join(', ')}</span>"].each do |unmarked|
+        assert_raises(Minitest::Assertion) { assert_inventory(unmarked, id, panes) }
+      end
+      duplicate = inventory_markup(id, panes) * 2
+      assert_raises(Minitest::Assertion) { assert_inventory(duplicate, id, panes) }
+      assert_raises(Minitest::Assertion) { assert_inventory(inventory_markup(id, panes), id, []) }
+    end
+  end
+
+  def test_shipped_pane_extraction_rejects_empty_or_unrecognized_navigation
+    labels = { 'dashboard' => 'Dashboard' }
+
+    ['', 'const LINKS = [];', 'const LINKS = [{ destination: "/" }];'].each do |nav|
+      assert_raises(Minitest::Assertion) { extract_panes(nav, labels, '<Route path="/" />') }
+    end
+    nav = "const LINKS = [{ to: '/', label: t('nav.dashboard') }];"
+    assert_raises(Minitest::Assertion) { extract_panes(nav, labels, '') }
+    assert_raises(Minitest::Assertion) { extract_panes(nav, {}, '<Route path="/" />') }
+  end
+
   private
+
+  def shipped_panes
+    nav = File.read(File.join(ROOT, 'frontend/src/components/Nav.tsx'))
+    labels = JSON.parse(File.read(File.join(ROOT, 'frontend/src/i18n/en.json'))).fetch('nav')
+    routes = File.read(File.join(ROOT, 'frontend/src/App.tsx'))
+    extract_panes(nav, labels, routes)
+  end
+
+  def extract_panes(nav, labels, app)
+    links = nav[/\bconst LINKS\s*=\s*\[(.*?)\];/m, 1]
+
+    refute_nil links, 'Nav.tsx LINKS must be extractable'
+    entries = links.scan(/\{[^{}]*\}/)
+
+    refute_empty entries, 'Nav.tsx LINKS must contain built-in panes'
+    routes = app.scan(/<Route\s+path="([^"]+)"/).flatten
+
+    refute_empty routes, 'App.tsx routes must be extractable'
+    panes = entries.map do |entry|
+      match = entry.match(/to:\s*'([^']+)',\s*label:\s*t\('nav\.([^']+)'\)/)
+
+      refute_nil match, "unrecognized LINKS entry: #{entry}"
+      path, key = match.captures
+
+      assert_includes routes, path, "built-in pane #{key} must have an App route"
+      label = labels[key]
+
+      assert_kind_of String, label, "missing English nav label: #{key}"
+      refute_empty label.strip, "empty English nav label: #{key}"
+      label
+    end
+
+    assert_equal panes.uniq, panes, 'built-in pane labels must be unique'
+    panes
+  end
+
+  def inventory_markup(marker, panes)
+    "<span id=\"#{marker}\">#{panes.join(', ')}</span>"
+  end
+
+  def assert_inventory(site, marker, panes)
+    refute_empty panes, 'expected panes must not be empty'
+    inventories = site.scan(%r{<span\s+id="#{Regexp.escape(marker)}"\s*>([^<]*)</span>}m).flatten
+
+    assert_equal 1, inventories.length, "expected exactly one marked inventory: #{marker}"
+    actual = inventories.first.split(',').map(&:strip)
+
+    refute_empty actual, "#{marker} must not be empty"
+    assert_equal actual.uniq, actual, "#{marker} must not duplicate panes"
+    assert_equal panes.sort, actual.sort, "#{marker} must list exactly the shipped pane names"
+  end
 
   def surfaces
     @surfaces ||= FILES.to_h { |rel| [rel, File.read(File.join(ROOT, rel))] }.merge(
