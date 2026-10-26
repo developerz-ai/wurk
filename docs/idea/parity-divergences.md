@@ -1524,3 +1524,46 @@ unchanged.
 
 **Anchor:** `lib/wurk/leader.rb:35`, `lib/wurk/leader.rb:101`,
 `lib/wurk/leader.rb:280`; Ent §6 (`docs/target/sidekiq-ent.md:510`).
+
+## Standalone `Sidekiq::Web.call` routes extensions only
+
+**Wurk:** the standalone Rack entrypoint `Sidekiq::Web.call(env)` (including
+`run Sidekiq::Web`) dispatches only registered Web extensions at their own
+route paths. It does not provide the built-in dashboard routes such as
+`GET /`, `/busy`, `/queues`, or `/retries`. After host middleware,
+authorization, and read-only gates allow a request through, an unmatched
+safe-method path returns 404 from the extension dispatcher. Safe methods are
+`GET`, `HEAD`, `OPTIONS`, and `TRACE`; unsafe requests reaching the dispatcher
+without `Sec-Fetch-Site: same-origin` return 403. Supplying that header permits
+routing, not automatic success or a bypass of the outer gates.
+
+**Spec:** free [§25.1](../target/sidekiq-free.md#251-entrypoint) exposes
+`run Sidekiq::Web` through the class-level `call(env)` and specifies the CSRF
+check. Free [§25.4](../target/sidekiq-free.md#254-routes) lists the built-in
+routes, including the dashboard, busy, queues, and retries pages, as part of
+that Web surface.
+
+**Why:** Wurk deliberately separates the engine-mounted dashboard SPA from the
+standalone extension renderer rather than half-serving the SPA without its
+engine. The engine supplies the dashboard root, dashboard JSON endpoints,
+`/ext/:name` embedding, and SPA catch-all; standalone extension routes instead
+use their own paths. This is a compatibility limitation: `run Sidekiq::Web`
+is not a drop-in replacement for the specified built-in Web routes. The
+separate [`HEAD /` health-probe divergence](#head--does-not-implement-the-redis-health-probe)
+describes the engine dashboard and worker health listener, not standalone
+route-miss behavior.
+
+**Anchor:** [standalone scope and safe methods](../../lib/wurk/web/rack_app.rb#L8-L18),
+[outer gates](../../lib/wurk/web/rack_app.rb#L27-L36),
+[CSRF check](../../lib/wurk/web/rack_app.rb#L39-L48), and
+[extension dispatch](../../lib/wurk/web/rack_app.rb#L53-L70);
+[engine root and JSON routes](../../config/routes.rb#L4-L11) and
+[extension embedding and SPA catch-all](../../config/routes.rb#L116-L134).
+Existing routing tests in
+[`WebRackAppTest`](../../test/unit/web_rack_app_test.rb#L74-L107) pin
+`test_get_serves_extension_route_at_its_own_path`,
+`test_unsafe_method_without_same_origin_header_is_denied`,
+`test_unsafe_method_with_same_origin_header_routes`, and
+`test_unknown_path_is_404`;
+[authorization and read-only tests](../../test/unit/web_rack_app_test.rb#L112-L150)
+pin the outer gates. Spec: `docs/target/sidekiq-free.md:1370-1384,1420-1458`.
