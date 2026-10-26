@@ -6,5 +6,10 @@
 # alone, no ActionDispatch — so this maps to the railtie, NOT the dashboard
 # engine (a wurk-native extra; `require "wurk/rails"` for that). Sidekiq::Web
 # stays mountable as a plain Rack app either way, exactly like upstream.
+# A first require without ActiveJob preloaded needs ActiveSupport's core
+# extensions before rails/railtie. Requiring rails for that bootstrap would
+# also load ActionDispatch, breaking the railtie-only integration boundary.
 require 'wurk'
+require 'active_support'
+require 'active_support/core_ext'
 require 'wurk/railtie'
