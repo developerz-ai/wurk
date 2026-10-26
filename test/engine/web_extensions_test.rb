@@ -160,9 +160,18 @@ class WebExtensionsTest < Wurk::Test::EngineCase
   def test_metrics_for_job_rejects_oversize_minutes
     get "/wurk/api/metrics/#{@class_name}?minutes=99999"
 
-    # clamped to MAX_MINUTES — no error.
+    # clamped to MAX_HOURS hours, served from the 10-minute buckets.
     assert_ok
-    assert_equal Wurk::Metrics::Query::MAX_MINUTES, json_body[:series].size
+    assert_equal Wurk::Metrics::Query::MAX_HOURS * 6, json_body[:series].size
+  end
+
+  # Seven days of minutes promotes onto the 10-minute buckets end-to-end:
+  # 168 hours at one row per 10 minutes.
+  def test_metrics_for_job_promotes_seven_day_minute_window
+    get "/wurk/api/metrics/#{@class_name}?minutes=10080"
+
+    assert_ok
+    assert_equal 168 * 6, json_body[:series].size
   end
 
   private
