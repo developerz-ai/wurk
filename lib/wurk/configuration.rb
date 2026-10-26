@@ -163,7 +163,7 @@ module Wurk
       @capsules = {}
       @directory = {}
       @client_chain = Middleware::Chain.new
-      @server_chain = Middleware::Chain.new
+      @server_chain = Middleware::Chain.new(on_registration: method(:warn_on_late_server_registration))
       @redis_config = { url: ENV.fetch('REDIS_URL', 'redis://localhost:6379/0') }
       @web_redis_pool = nil
       @logger = nil
@@ -868,6 +868,19 @@ module Wurk
     end
 
     private
+
+    def warn_on_late_server_registration(klass)
+      affected = @capsules.each_value.filter_map do |capsule|
+        capsule.name if capsule.prepared? && capsule.server_middleware_missing?(klass)
+      end
+      return if affected.empty?
+
+      logger.warn do
+        "Global server middleware #{klass} registered after preparation for capsules: #{affected.join(', ')}; " \
+          'existing worker snapshots remain unchanged. Register middleware before worker boot, then restart workers. ' \
+          'This diagnostic only inspects capsules in this process.'
+      end
+    end
 
     # Registrations run against the singleton when wurk is loaded, not when a
     # host constructs a Configuration. Resolve classes here to avoid making

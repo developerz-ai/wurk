@@ -121,9 +121,28 @@ The boot order is:
 
 **Late global server registration does not update a running worker's server
 chain.** The processor uses its capsule's prepared copy, not the mutable global
-`config.server_middleware`. Registering on the global chain from inside a job
-body therefore does not add middleware to that worker's execution chain, let
-alone to its siblings.
+`config.server_middleware`. Calling `add`, `prepend`, `insert_before`, or
+`insert_after` on the global server chain warns when a prepared capsule snapshot
+in the current process lacks the registered middleware. The warning identifies
+the middleware class and affected capsules. Registration still succeeds on the
+global chain, but existing worker snapshots remain unchanged: invoking an
+affected worker's chain will not execute the added middleware.
+
+Register global server middleware in an initializer **before worker boot and
+preparation**, then **restart workers** to pick up the corrected configuration.
+The warning is diagnostic only: it does not install middleware into existing
+workers, discover snapshots in other processes, or synchronize other processes.
+Registering from inside a job body therefore does not update that worker's
+execution chain, let alone its siblings.
+
+An early capsule copy is not yet a final worker snapshot: preparation refreshes
+it with newly registered global classes (see [Capsules](#capsules)). Registering
+before preparation remains supported and does not trigger this warning. The
+diagnostic applies only to the global server chain, not global client chains,
+standalone `Wurk::Middleware::Chain` instances, or capsule-local live chains.
+Copies made with `dup` or `copy_for` do not inherit the global server diagnostic.
+A capsule-local registration changes that capsule's chain in the current process;
+it does not update other capsules or processes.
 
 Client middleware differs: by default, `Wurk::Client.new` keeps a reference to
 `config.client_middleware`, not a snapshot. Mutating that live chain can affect
