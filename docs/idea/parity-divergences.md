@@ -463,7 +463,7 @@ false. A resumed run that later completes books a second `p`/`ms` on top of the 
 
 **Spec:** `docs/target/sidekiq-free.md` does not pin the interrupted case (no
 divergence to measure against it). The applicable oracle is upstream
-`Sidekiq::Metrics::ExecutionTracker#track` (`lib/sidekiq/metrics/tracking.rb`),
+`Sidekiq::Metrics::ExecutionTracker#track` (`lib/sidekiq/metrics/tracking.rb` in the upstream Sidekiq source tree, not this checkout),
 whose `rescue JobRetry::Skip` arm — the exact analog of Wurk's
 `Wurk::Job::Interrupted` — calls `track_time` (books `ms`) and always reaches
 the outer `ensure` (books `p`), never the `rescue Exception` arm that books
