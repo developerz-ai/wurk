@@ -259,8 +259,8 @@ module Wurk
       # that wraps the dashboard, in front of the authorization hook, so a
       # host app can gate the UI with Devise/Warden/Sorcery/Rack::Auth::Basic
       # without writing its own middleware. `args` and an optional block pass
-      # straight through to the middleware's `new`. Call before the first
-      # request (i.e. from an initializer) — the chain is built once.
+      # straight through to the middleware's `new`. Each inner app's chain is
+      # cached until the middleware configuration changes.
       def use(middleware, *args, &block)
         @middlewares << [middleware, args, block]
       end
@@ -272,13 +272,15 @@ module Wurk
       # on one evict the other's chain. The snapshot matters because
       # `middlewares` is the live array (upstream surface): direct mutation
       # after the first request triggers a rebuild instead of silently serving
-      # the stale chain. Steady state is one Hash lookup plus an == over a
-      # handful of entries.
+      # the stale chain. Copy triples and positional-argument lists so edits
+      # cannot mutate the snapshot too; argument objects and blocks retain
+      # their identities (their internal mutations are not tracked). Steady
+      # state is one Hash lookup plus an == over a handful of entries.
       def rack_app(inner)
         snapshot, app = @rack_apps[inner]
         return app if app && snapshot == @middlewares
 
-        stack = @middlewares.dup
+        stack = middleware_snapshot
         app = ::Rack::Builder.new do
           stack.each { |middleware, args, block| use(middleware, *args, &block) }
           run inner
@@ -324,6 +326,10 @@ module Wurk
       end
 
       private
+
+      def middleware_snapshot
+        @middlewares.map { |middleware, args, block| [middleware, args.dup, block] }
+      end
 
       def validate_translation_hash!(copy, path)
         raise ArgumentError, "#{path} must be a Hash (got #{copy.class})" unless copy.is_a?(::Hash)
