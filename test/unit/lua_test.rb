@@ -9,6 +9,8 @@ class LuaTest < Wurk::Test::UnitCase
   # stamps on the keys it can create.
   TTL = Wurk::Batch::DEFAULT_EXPIRY_SECONDS
 
+  LIB = File.expand_path('../../lib', __dir__)
+
   def setup
     super
     @pool = Wurk::RedisPool.new(size: 1, url: Wurk::Test.redis_url, timeout: 2, name: 'lua-test')
@@ -34,7 +36,7 @@ class LuaTest < Wurk::Test::UnitCase
 
   def test_scripts_registry_holds_expected_keys
     assert_equal(
-      %i[zpopbyscore bulk_push reliable_schedule_promote reliable_requeue
+      %i[zpopbyscore reliable_schedule_promote reliable_requeue
          batch_push batch_schedule batch_ack_success batch_ack_failed batch_ack_complete batch_invalidate
          batch_append_callback batch_hold batch_kid_done batch_remove_jobs batch_delete
          fast_delete_job fast_delete_by_class release_if_owner leader_campaign cron_claim_fire
@@ -70,6 +72,23 @@ class LuaTest < Wurk::Test::UnitCase
 
   def test_shas_is_frozen
     assert_predicate Wurk::Lua::SHAS, :frozen?, 'SHAS must be frozen'
+  end
+
+  # A registered script with no caller under lib/ is a phantom registration:
+  # dead Lua shipped in every process and a SHA kept warm for nothing.
+  # lib/wurk/lua.rb is excluded — it declares the 7 inline names as SCRIPTS
+  # hash keys — and lib/wurk/lua/** is excluded too: its Loader consumes
+  # SCRIPTS generically (SCRIPTS.fetch / SOURCE_LIST / script_load_all /
+  # load_missing), so neither can ever prove a caller exists.
+  def test_every_registered_script_has_a_ruby_caller_under_lib
+    registry = File.join(LIB, 'wurk', 'lua.rb')
+    loader = File.join(LIB, 'wurk', 'lua') + File::SEPARATOR
+    sources = Dir.glob(File.join(LIB, '**', '*.rb'))
+                 .reject { |path| path == registry || path.start_with?(loader) }
+                 .map { |path| File.read(path) }
+    orphaned = Wurk::Lua::SCRIPTS.keys.reject { |name| sources.any? { |src| src.match?(/:#{name}\b/) } }
+
+    assert_empty orphaned, "no :name caller under lib/ for: #{orphaned.sort.join(', ')}"
   end
 
   # --- zpopbyscore: verbatim from sidekiq-free.md §1.8 ---------------
@@ -112,22 +131,6 @@ class LuaTest < Wurk::Test::UnitCase
 
       assert_nil result
       assert_equal 1, c.call('ZCARD', set_key)
-    end
-  end
-
-  def test_bulk_push_lpushes_all_jobs_and_registers_queue
-    qname = "#{@ns}:q"
-    list  = "queue:#{qname}"
-    qset  = "#{@ns}:queues"
-    @pool.with do |c|
-      count = Wurk::Lua::Loader.eval_cached(
-        c, :bulk_push, keys: [list, qset], argv: [qname, '{"jid":"1"}', '{"jid":"2"}', '{"jid":"3"}']
-      )
-
-      assert_equal 3, count
-      assert_equal 3, c.call('LLEN', list)
-      assert_equal 1, c.call('SISMEMBER', qset, qname)
-      c.call('DEL', list, qset)
     end
   end
 
