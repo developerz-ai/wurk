@@ -5,6 +5,21 @@ own**. It never authenticates anyone — it reads the identity your app already
 established and decides whether that request may proceed. Gating it is the
 first thing every production deploy does.
 
+> **Warning: host controller filters do not protect the dashboard.**
+> `Wurk::ApplicationController` inherits from `ActionController::Base`, not your
+> host application's `ApplicationController`. The dashboard controllers therefore
+> do not inherit host filters: a `before_action :authenticate_user!` in your
+> `ApplicationController` does **not** protect a bare `mount Wurk::Engine`.
+>
+> Controller callbacks are separate from Rack middleware: the host's middleware
+> still runs, and an existing session or Warden identity can be available, but
+> that alone does not enforce dashboard access. Explicitly gate the mount with
+> [route-level `authenticate` or `constraints`](#1-route-level-gate-the-mount),
+> [`Wurk::Web.use` middleware](#2-wurkwebuse--rack-middleware), or
+> [`config.authorization`](#3-authorization--per-request-method--and-path-aware)
+> using the existing identity. Read-only mode and CSRF checks are not
+> authentication.
+
 There are four independent controls, applied in this order:
 
 | # | Control | Answers | Where |
