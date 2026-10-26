@@ -700,12 +700,15 @@ jobs `job['args']` is the wrapper hash. Set it outside `configure_server` (or in
 `configure_client` too) so the web process sees it.
 
 The default logger is `Wurk::Logger.new($stdout)` at level `INFO`.
+Logger level and formatter are process-wide Wurk settings. Set them unconditionally
+in a shared initializer, outside `configure_server`, so both web and worker
+processes apply them. Non-server web processes skip `configure_server`; reserve
+that block for worker-only configuration.
 
 ```ruby
-Wurk.configure_server do |config|
-  config.logger.level = Logger::WARN
-  config.logger.formatter = Wurk::Logger::Formatters::JSON.new   # NDJSON for log aggregators
-end
+# config/initializers/wurk.rb
+Wurk.logger.level = Logger::WARN
+Wurk.logger.formatter = Wurk::Logger::Formatters::JSON.new   # NDJSON for log aggregators
 ```
 
 | Concern | Behavior |
