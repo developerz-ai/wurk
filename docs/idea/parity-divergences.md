@@ -21,7 +21,8 @@ are sent to Redis**, earlier acknowledged groups retain both their delivered
 jobs and queue membership. A previously unregistered destination in that unsent
 group has neither queued jobs nor `queues` membership from this push.
 
-**Spec:** free [§7.1, lines 535–555](../target/sidekiq-free.md#L535-L555)
+**Spec:** free
+[§7.1 `atomic_push` semantics](../target/sidekiq-free.md#71-atomic_push-semantics-critical-for-wire-compat)
 specifies one upfront `SADD queues <all grouped keys>` before the per-queue
 `LPUSH` loop, rather than Wurk's per-group registration. Once that upfront
 `SADD` executes, even a later queue whose `LPUSH` is never sent is registered.
@@ -42,7 +43,8 @@ not removed when a group fails.
 
 **Anchor:** [delivery tracking and round-trip rationale](../../lib/wurk/client.rb#L421-L434),
 [plain grouping and per-group SADD/LPUSH](../../lib/wurk/client.rb#L440-L465),
-free [§7.1](../target/sidekiq-free.md#L535-L555), and the public `push_bulk`
+free [§7.1 `atomic_push` semantics](../target/sidekiq-free.md#71-atomic_push-semantics-critical-for-wire-compat),
+and the public `push_bulk`
 parity cases using routing middleware and real Redis:
 [`test_push_bulk_registers_exactly_the_routed_queues_and_delivers_each_payload`](../../test/parity/client_push_test.rb#L335)
 and
@@ -161,7 +163,7 @@ remains unchanged.
 [nonce lifetime](../../lib/wurk/component.rb#L20-L22),
 [current and legacy parsing](../../lib/wurk/fetcher/private_list_key.rb#L18-L29)
 and [tail shapes](../../lib/wurk/fetcher/private_list_key.rb#L59-L68),
-Pro §3.2 (`docs/target/sidekiq-pro.md:257`).
+Pro §3.2 ([Pro §3.2 Algorithm — private queue naming](../target/sidekiq-pro.md#32-algorithm)).
 
 ## Orphan reclaim uses `LMOVE private public RIGHT RIGHT`, not `RPOPLPUSH`
 
@@ -724,10 +726,10 @@ Wurk's `/api/retries` path. Changing the path alone is not sufficient.
 **Key delimiters and evidence limits:** Wurk's shared frontend key builder uses
 `"<score>|<jid>"` for all three sets and URL-encodes it for single requests.
 The spec explicitly gives `"<score>-<jid>"` for the retry-detail GET row
-([line 1432](../target/sidekiq-free.md#L1432)); it does not explicitly define
+([§25.4 Routes — `GET /retries/:key`](../target/sidekiq-free.md#254-routes)); it does not explicitly define
 that delimiter for every other set or POST row. The reported upstream pattern
 of `key[]` plus action-named parameters is explicit in the spec only for
-retries bulk ([line 1433](../target/sidekiq-free.md#L1433)). The scheduled bulk
+retries bulk ([§25.4 Routes — `POST /retries`](../target/sidekiq-free.md#254-routes)). The scheduled bulk
 row lists actions, not their parameter encoding, and the morgue bulk and
 single-action rows do not specify request shapes. Extending the reported
 pattern to those rows is not a verified upstream fact here: no stock upstream
@@ -744,7 +746,7 @@ particular content type.
 [frontend key builder](../../frontend/src/hooks/useJobSetActions.ts#L11-L16),
 [single/bulk/all requests](../../frontend/src/hooks/useJobSetActions.ts#L40-L56),
 [JSON encoding](../../frontend/src/http.ts#L33-L41), and
-[spec retries/scheduled/morgue rows](../target/sidekiq-free.md#L1431-L1449).
+[free §25.4 Routes — retries/scheduled/morgue rows](../target/sidekiq-free.md#254-routes).
 
 ## A lost-reply Idempotency-Key stays pending until its TTL
 
@@ -845,7 +847,7 @@ death claimed before), and callback specs live in a `callbacks` field on
 listed in `Batch::KEY_SUFFIXES` only so a dataset carried over from Pro gets
 swept.
 
-**Spec:** Pro [§2.8](../target/sidekiq-pro.md#L177-L191) types
+**Spec:** Pro [§2.8 Redis data model for batches](../target/sidekiq-pro.md#28-redis-data-model-for-batches) types
 `b-<bid>-success` and `b-<bid>-complete` as **string/marker** — ":success
 callbacks pending" and ":complete callbacks pending" — and types
 `b-<bid>-notify` and `b-<bid>-cbsucc` as **sets**: the queued callbacks (30d
@@ -878,7 +880,7 @@ with a dump.
 
 **Anchor:** `lib/wurk/batch/callbacks.rb` — [marker gate and writer](../../lib/wurk/batch/callbacks.rb#L202-L219),
 [callback spec reader](../../lib/wurk/batch/callbacks.rb#L325-L339),
-[Pro §2.8 key types](../target/sidekiq-pro.md#L177-L191), and the parity
+[Pro §2.8 batch callback-marker key types](../target/sidekiq-pro.md#28-redis-data-model-for-batches), and the parity
 oracle
 [`test_a_pro_shaped_success_marker_suppresses_the_success_callback`](../../test/parity/batch_test.rb),
 which pins the silent skip: a Pro-shaped string marker on `b-<bid>-success`
@@ -1060,7 +1062,7 @@ license check.
 
 **Spec:** Pro §1 lists `Sidekiq::Pro::VERSION` and `Sidekiq::Pro::LICENSE` in
 the upstream module surface, and upstream raises at boot when the license is
-missing or invalid (`docs/target/sidekiq-pro.md:9-28`).
+missing or invalid ([Pro §1 Top-level constants & module — constants and license gate](../target/sidekiq-pro.md#1-top-level-constants--module)).
 
 **Why:** there is no upstream Pro version or license value to mirror — Wurk
 ships the Pro features free and never runs a license check — and advertising a
@@ -1104,7 +1106,7 @@ the specified redirect or JSON handler.
 **Spec:** free [§25.4](../target/sidekiq-free.md#254-routes) specifies
 `GET /dashboard/stats` → 302 to `/stats`, `GET /stats` → JSON stats with
 `sidekiq`, `redis`, and `server_utc_time`, and `GET /stats/queues` → JSON
-queue sizes (`docs/target/sidekiq-free.md:1451-1453`).
+queue sizes ([free §25.4 Routes — stats endpoints](../target/sidekiq-free.md#254-routes)).
 
 **Why:** the current endpoints serve the SolidJS SPA; `stats_payload` is
 shared by its landing page and SSE feed and renames canonical stats accessors
@@ -1136,7 +1138,7 @@ action using `quiet` or `stop` request parameters.
 **Spec:** free [§25.4](../target/sidekiq-free.md#254-routes) specifies
 `POST /busy` with `identity`, `quiet`, and `stop` parameters (per-process or
 all), not split action-specific paths
-(`docs/target/sidekiq-free.md:1425`). That row does not define precedence
+([free §25.4 Routes — `POST /busy`](../target/sidekiq-free.md#254-routes)). That row does not define precedence
 between the action parameters.
 
 **Why:** the split endpoints serve the SPA's busy-page controls. Sharing
@@ -1146,7 +1148,7 @@ cannot treat Wurk's action-in-path endpoints as an equivalent contract.
 This entry records unsupported request equivalence, not a proven-safe gap
 or a compatibility handler; it does not infer unspecified flag semantics.
 
-**Anchor:** free §25.4 (`docs/target/sidekiq-free.md:1425`);
+**Anchor:** free §25.4 ([free §25.4 Routes — `POST /busy`](../target/sidekiq-free.md#254-routes));
 `config/routes.rb:7,53-58`;
 `app/controllers/wurk/api_controller.rb:167-168,430-441`
 (`quiet_process`, `stop_process`, `signal_processes`).
@@ -1178,7 +1180,7 @@ from the specified dashboard probe. It is not wire-equivalent to `HEAD /` and
 does not make existing Sidekiq health-probe clients drop-in compatible. This
 entry records the unsupported contract, not a claim that the gap is safe.
 
-**Anchor:** free §25.1/§25.4 (`docs/target/sidekiq-free.md:1382,1422`);
+**Anchor:** free §25.1/§25.4 ([free §25.1 Entrypoint — `HEAD /` probe](../target/sidekiq-free.md#251-entrypoint) and [§25.4 Routes — `HEAD /`](../target/sidekiq-free.md#254-routes));
 [root route](../../config/routes.rb#L4);
 [SPA root controller](../../app/controllers/wurk/dashboard_controller.rb#L39-L41);
 [opt-in configuration](../../lib/wurk/configuration.rb#L702-L726);
@@ -1206,7 +1208,7 @@ belong on each page. This entry records an unsupported contract, not a claim
 that the gap is safe.
 
 **Anchor:** [free §25.4 Routes](../target/sidekiq-free.md#254-routes)
-(`GET /queues/:name`, `docs/target/sidekiq-free.md:1427`);
+(`GET /queues/:name` query parameters);
 [queue API pagination](../../app/controllers/wurk/api_controller.rb#L68-L76);
 [accepted pagination parameters](../../app/controllers/wurk/api/pagination.rb#L29-L35);
 [enumeration-order slicing](../../app/controllers/wurk/api/pagination.rb#L70-L95);
@@ -1230,7 +1232,7 @@ specified URL parameter or its full range. This entry records an unsupported
 contract, not a claim that the gap is safe.
 
 **Anchor:** [free §25.4 Routes](../target/sidekiq-free.md#254-routes)
-(`GET /`, `docs/target/sidekiq-free.md:1423`);
+(`GET /` dashboard `?days=N`);
 [available dashboard ranges](../../frontend/src/pages/Dashboard.tsx#L60-L65);
 [default range and history request](../../frontend/src/pages/Dashboard.tsx#L86-L109);
 and [range controls](../../frontend/src/pages/Dashboard.tsx#L213-L219).
@@ -1278,11 +1280,11 @@ engine tests pin form params (`test/engine/api_mutations_test.rb:401-414`,
 
 **Spec:** free [§25.4](../target/sidekiq-free.md#254-routes) specifies
 `POST /queues/:name/delete` — "delete single job by `key_val`"
-(`docs/target/sidekiq-free.md:1429`). `key_val` occurs nowhere else in this
+([free §25.4 Routes — `POST /queues/:name/delete`](../target/sidekiq-free.md#254-routes)). `key_val` occurs nowhere else in this
 repository: no code or test reads it.
 
 **Why:** the Ruby-level contract is parity — `Queue#delete_job(jid)` is Pro
-§11's exact surface (`docs/api.md:157,453`; `docs/target/sidekiq-pro.md:496`),
+§11's exact surface (`docs/api.md:157,453`; [Pro §11 Fast Lua API extensions — `Queue#delete_job`](../target/sidekiq-pro.md#11-fast-lua-api-extensions)),
 so Ruby consumers drop in on the gem swap. Only clients scripted against
 upstream's web form, POSTing `key_val`, hit the gap: a key_val-only request
 leaves `params[:jid]` blank, so `delete_job('')` raises
@@ -1297,7 +1299,7 @@ jid was supplied. The endpoint is the SolidJS SPA's wire contract, not
 upstream's ERB web. This entry records the divergence; it is not a sign-off
 to add `key_val` support.
 
-**Anchor:** free §25.4 (`docs/target/sidekiq-free.md:1429`);
+**Anchor:** free §25.4 ([free §25.4 Routes — `POST /queues/:name/delete`](../target/sidekiq-free.md#254-routes));
 `config/routes.rb:7,13`; `app/controllers/wurk/api_controller.rb:86-91`;
 `lib/wurk/api/fast.rb:20-31`;
 `app/controllers/wurk/application_controller.rb:22`;
@@ -1316,8 +1318,8 @@ returns parsed `INFO` merged with the pool's `size`/`available`
 (`lib/wurk/redis_pool.rb:188-190`). `Wurk::Configuration` defines no `to_json`.
 
 **Spec:** free defines both on the Config surface: `def to_json(*)`
-(`docs/target/sidekiq-free.md:301`) and `def redis_info # parses INFO command`
-(`docs/target/sidekiq-free.md:323`).
+([free §4.2 Public methods — `Config#to_json`](../target/sidekiq-free.md#42-public-methods)) and `def redis_info # parses INFO command`
+([free §4.2 Public methods — `Config#redis_info`](../target/sidekiq-free.md#42-public-methods)).
 
 **Why:** no supported flow in this repository serializes the configuration or
 reads `INFO` off the config object — the heartbeat and health probe consume
@@ -1326,8 +1328,8 @@ is additive (two delegating methods); until then, a ported caller that touched
 either method needs a one-line shim of its own.
 
 **Anchor:** `lib/wurk/cli.rb:353`; `lib/wurk/redis_pool.rb:188-190`; free
-Config surface (`docs/target/sidekiq-free.md:301`,
-`docs/target/sidekiq-free.md:323`).
+Config surface ([free §4.2 Public methods — `Config#to_json`](../target/sidekiq-free.md#42-public-methods),
+[free §4.2 Public methods — `Config#redis_info`](../target/sidekiq-free.md#42-public-methods)).
 
 ## `:max_iteration_runtime` is accepted but not consumed
 
@@ -1340,8 +1342,8 @@ accepted for drop-in compatibility and not consumed. Assigning it succeeds and
 changes nothing.
 
 **Spec:** free carries the key in its DEFAULTS
-(`docs/target/sidekiq-free.md:269`) while the §6.4 `IterableJob` surface
-(`docs/target/sidekiq-free.md:465-501`) documents no reader for it — this
+([free §4.1 DEFAULTS — `max_iteration_runtime`](../target/sidekiq-free.md#41-defaults)) while the §6.4 `IterableJob` surface
+([free §6.4 `Sidekiq::IterableJob`](../target/sidekiq-free.md#64-sidekiqiterablejob)) documents no reader for it — this
 revision of the spec defines the option without an enforcement point.
 
 **Why:** there is no oracle to match: implementing a time-box would mean
@@ -1351,8 +1353,8 @@ needs an explicit deadline check in `each_iteration` (or `:timeout`); the gap
 should close only when upstream pins what the key promises.
 
 **Anchor:** `lib/wurk/configuration.rb:31`; `docs/configuration.md:143`; free
-DEFAULTS (`docs/target/sidekiq-free.md:269`) and §6.4
-(`docs/target/sidekiq-free.md:465-501`).
+DEFAULTS ([free §4.1 DEFAULTS — `max_iteration_runtime`](../target/sidekiq-free.md#41-defaults)) and §6.4
+([free §6.4 `Sidekiq::IterableJob`](../target/sidekiq-free.md#64-sidekiqiterablejob)).
 
 ## `WURK_PRELOAD_APP` toggles eager-load only; the parent always loads the app
 
@@ -1363,9 +1365,9 @@ comment at `lib/wurk/cli.rb:516-520`); `preload_app?` reads
 `WURK_PRELOAD_APP`/`SIDEKIQ_PRELOAD_APP` at `lib/wurk/cli.rb:534-535`.
 
 **Spec:** Ent §7.2 — `SIDEKIQ_PRELOAD_APP=1` means "require whole app in parent
-before fork" (`docs/target/sidekiq-ent.md:594`), and the process-model notes
+before fork" ([Ent §7.2 Environment variables — `SIDEKIQ_PRELOAD_APP`](../target/sidekiq-ent.md#72-environment-variables)), and the process-model notes
 make the parent's app load conditional on the flag
-(`docs/target/sidekiq-ent.md:608`); Ent's default `0` loads the app only in the
+([Ent §7.3 Process model — conditional parent app load](../target/sidekiq-ent.md#73-process-model)); Ent's default `0` loads the app only in the
 children.
 
 **Why:** Wurk has no unloaded-parent mode to offer. A parent that skipped the
@@ -1376,8 +1378,8 @@ trade (more CoW sharing against slower parent boot); what changed is only that
 the floor is "entrypoint loaded", not "nothing loaded".
 
 **Anchor:** `lib/wurk/cli.rb:511-535`; Ent §7.2 env table
-(`docs/target/sidekiq-ent.md:594`) and §7.3 process model
-(`docs/target/sidekiq-ent.md:608`).
+([Ent §7.2 Environment variables — `SIDEKIQ_PRELOAD_APP`](../target/sidekiq-ent.md#72-environment-variables)) and §7.3 process model
+([Ent §7.3 Process model — conditional parent app load](../target/sidekiq-ent.md#73-process-model)).
 
 ## `:fork` and `:leader` extend the free spec's lifecycle events
 
@@ -1386,11 +1388,11 @@ the floor is "entrypoint loaded", not "nothing loaded".
 event still raises `ArgumentError` (`lib/wurk/configuration.rb:733-734`).
 
 **Spec:** free's `on()` set is exactly `[:startup, :quiet, :shutdown, :exit,
-:heartbeat, :beat]` (`docs/target/sidekiq-free.md:337-338`; the same set in
-DEFAULTS, `docs/target/sidekiq-free.md:272-274`). `:fork` is Ent §7.4
-(`docs/target/sidekiq-ent.md:612-616`); `:leader` is Ent §6.3
-(`docs/target/sidekiq-ent.md:551`), shipped 0.7.7 per the version map
-(`docs/target/sidekiq-ent.md:783`).
+:heartbeat, :beat]` ([free §4.2 Public methods — `on(event)`](../target/sidekiq-free.md#42-public-methods); the same set in
+DEFAULTS, [free §4.1 DEFAULTS — lifecycle events](../target/sidekiq-free.md#41-defaults)). `:fork` is Ent §7.4
+([Ent §7.4 Fork callback](../target/sidekiq-ent.md#74-fork-callback)); `:leader` is Ent §6.3
+([Ent §6.3 Events — `:leader`](../target/sidekiq-ent.md#63-events)), shipped 0.7.7 per the version map
+([Ent §11 Version Map — 0.7.7 leader event](../target/sidekiq-ent.md#11-version-map-of-notable-api-additions)).
 
 **Why:** both additions are Ent conformance, not free-scope drift — a drop-in
 for Ent code needs `on(:fork)` to reopen non-fork-safe sockets in each child
@@ -1398,14 +1400,14 @@ and `on(:leader)` to fire on follower→leader transitions. The set is additive:
 every free event keeps its free meaning, and a free-only consumer cannot
 collide with a name it never registers. Ent's `SIDEKIQ_FORK_PER_PROCESS_HOOK`
 is not modeled separately — the spec itself names `on(:fork)` as its API
-(`docs/target/sidekiq-ent.md:596`).
+([Ent §7.2 Environment variables — `SIDEKIQ_FORK_PER_PROCESS_HOOK`](../target/sidekiq-ent.md#72-environment-variables)).
 
 **Anchor:** `lib/wurk/configuration.rb:106`,
 `lib/wurk/configuration.rb:733-734`; free `on()`
-(`docs/target/sidekiq-free.md:337-338`) and DEFAULTS
-(`docs/target/sidekiq-free.md:272-274`); Ent §7.4
-(`docs/target/sidekiq-ent.md:612-616`) and §6.3
-(`docs/target/sidekiq-ent.md:551`, `docs/target/sidekiq-ent.md:783`).
+([free §4.2 Public methods — `on(event)`](../target/sidekiq-free.md#42-public-methods)) and DEFAULTS
+([free §4.1 DEFAULTS — lifecycle events](../target/sidekiq-free.md#41-defaults)); Ent §7.4
+([Ent §7.4 Fork callback](../target/sidekiq-ent.md#74-fork-callback)) and §6.3
+([Ent §6.3 Events — `:leader`](../target/sidekiq-ent.md#63-events), [Ent §11 Version Map — 0.7.7 leader event](../target/sidekiq-ent.md#11-version-map-of-notable-api-additions)).
 
 ## DEFAULTS adds `:redis_error_handlers`
 
@@ -1416,7 +1418,7 @@ mirrored keys" block), populated by `config.on_redis_error { |info| … }`
 (`lib/wurk/configuration.rb:1046`), which logs and skips a raising handler.
 Each handler gets one Hash: `{error:, attempt:, retried:, pool:}`.
 
-**Spec:** free's DEFAULTS (`docs/target/sidekiq-free.md:265-276`) has no
+**Spec:** free's DEFAULTS ([free §4.1 DEFAULTS — handler keys](../target/sidekiq-free.md#41-defaults)) has no
 equivalent key, and upstream surfaces pool-level retries and give-ups nowhere —
 `handle_exception` sees job and lifecycle failures, not what the pool wrapper
 already absorbed.
@@ -1430,7 +1432,7 @@ introspecting the config hash see no change.
 
 **Anchor:** `lib/wurk/configuration.rb:50`, `lib/wurk/configuration.rb:348`,
 `lib/wurk/configuration.rb:1046`; free DEFAULTS
-(`docs/target/sidekiq-free.md:265-276`).
+([free §4.1 DEFAULTS — handler keys](../target/sidekiq-free.md#41-defaults)).
 
 ## Pool sizing: three disjoint pools per process
 
@@ -1441,10 +1443,16 @@ exactly `concurrency` (`lib/wurk/capsule.rb:143`), and a dedicated web pool of
 `web_pool_size` (default 5; `lib/wurk/configuration.rb:286,296,313`).
 `config.redis[:size]` still pins the main pool only.
 
-**Spec:** free sizes one pool per capsule at `cap.concurrency` plus an
-internal/housekeeping pool of 10 (`docs/target/sidekiq-free.md:1528`); the
-per-capsule pool ≥ concurrency boot validation is kept
-(`docs/target/sidekiq-free.md:1266`).
+**Spec:** free [§26 `Sidekiq::RedisConnection`](../target/sidekiq-free.md#26-sidekiqredisconnection)
+states per-capsule = `cap.concurrency` plus an internal/housekeeping pool of
+10. That conflicts with [§5 `Sidekiq::Capsule`](../target/sidekiq-free.md#5-sidekiqcapsule),
+whose `redis_pool` is `max(concurrency + 5, 10)` and whose separate
+`fetch_redis_pool` is `concurrency`, matching Wurk's main/fetch sizing.
+The three-pool topology (including the dedicated web pool) remains recorded
+here; main/fetch sizing is not a divergence from §5. The per-capsule pool ≥
+concurrency validation in [§21.4 Lifecycle](../target/sidekiq-free.md#214-lifecycle-clirun)
+is kept. These conflicting sizing passages do not define one unambiguous
+upstream pool topology.
 
 **Why:** the #101 `0/N` pool-exhaustion incident: fetch's blocking `BLMOVE`
 drew from the same pool as every background loop, so an idle worker could hold
@@ -1454,12 +1462,13 @@ connections" true again
 (`docs/plans/2026/07/17/101-redis-resilience-audit-fixes/01-redis-resilience.md:43`);
 the +5 headroom names the background loops it covers. Sizes stay overridable
 (`config.redis[:size]`, `config.web_pool_size`), so a host can still approach
-the spec's two-pool shape.
+§26's stated sizes, without eliminating the dedicated fetch/web topology.
 
 **Anchor:** `lib/wurk/capsule.rb:126-131`, `lib/wurk/capsule.rb:143`,
 `lib/wurk/capsule.rb:248-249`; `lib/wurk/configuration.rb:286,296,313`; free
-pool sizing (`docs/target/sidekiq-free.md:1528`) and boot validation
-(`docs/target/sidekiq-free.md:1266`).
+[§26 RedisConnection pool defaults](../target/sidekiq-free.md#26-sidekiqredisconnection),
+[§5 Capsule main/fetch pools](../target/sidekiq-free.md#5-sidekiqcapsule), and
+[§21.4 Lifecycle pool-size validation](../target/sidekiq-free.md#214-lifecycle-clirun).
 
 ## `reap_idle_redis_connections` sweeps from a per-pool reaper thread, not the heartbeat
 
@@ -1472,8 +1481,8 @@ Pools outside the launcher — web, swarm supervisor — are reaped too, because
 the sweep is not tied to any heartbeat.
 
 **Spec:** free DEFAULTS carries `redis_idle_timeout: nil`
-(`docs/target/sidekiq-free.md:282`) and the Config surface defines
-`reap_idle_redis_connections(timeout = 60)` (`docs/target/sidekiq-free.md:320`);
+([free §4.1 DEFAULTS — `redis_idle_timeout`](../target/sidekiq-free.md#41-defaults)) and the Config surface defines
+`reap_idle_redis_connections(timeout = 60)` ([free §4.2 Public methods — `reap_idle_redis_connections`](../target/sidekiq-free.md#42-public-methods));
 the spec pins the knob and its default but not the driver. Upstream Sidekiq
 sweeps from its 10-second heartbeat, which is the ceiling Wurk's
 `REAP_MAX_INTERVAL = 10.0` mirrors (`lib/wurk/redis_pool.rb:111-114`).
@@ -1487,8 +1496,8 @@ connection_pool >= 3.0 for `#reap` (`wurk.gemspec:52`), as Sidekiq 8.1 does.
 
 **Anchor:** `lib/wurk/configuration.rb:258-259`; `lib/wurk/redis_pool.rb:111-114`,
 `lib/wurk/redis_pool.rb:256-265`, `lib/wurk/redis_pool.rb:284-286`; free Config
-surface (`docs/target/sidekiq-free.md:320`) and DEFAULTS
-(`docs/target/sidekiq-free.md:282`).
+surface ([free §4.2 Public methods — `reap_idle_redis_connections`](../target/sidekiq-free.md#42-public-methods)) and DEFAULTS
+([free §4.1 DEFAULTS — `redis_idle_timeout`](../target/sidekiq-free.md#41-defaults)).
 
 ## Fast Lua API ships free and loads by default
 
@@ -1503,10 +1512,10 @@ the deleted payload's JSON or nil and raises `ArgumentError` on a blank jid
 
 **Spec:** Pro §11 replaces the O(N)-in-Ruby methods with server-side Lua —
 `q.delete_job(jid)`, `q.delete_by_class(MyJob)`
-(`docs/target/sidekiq-pro.md:496-497`), `scan` over every Pro SortedSet
-subclass (`docs/target/sidekiq-pro.md:505`) — loaded at boot and cached via
-`EVALSHA` (`docs/target/sidekiq-pro.md:507`), with the implementation map
-assigning the surface to `Wurk::API::Fast` (`docs/target/sidekiq-pro.md:539`).
+([Pro §11 queue deletion methods](../target/sidekiq-pro.md#11-fast-lua-api-extensions)), `scan` over every Pro SortedSet
+subclass ([Pro §11 SortedSet `scan`](../target/sidekiq-pro.md#11-fast-lua-api-extensions)) — loaded at boot and cached via
+`EVALSHA` ([Pro §11 script loading and caching](../target/sidekiq-pro.md#11-fast-lua-api-extensions)), with the implementation map
+assigning the surface to `Wurk::API::Fast` ([Pro §13 implementation mapping — Lua API](../target/sidekiq-pro.md#13-wurk-implementation-checklist-mapping)).
 
 **Why:** the divergence is inclusion, not behavior: names, arities, and return
 contracts match Pro §11 exactly, so Pro-gated consumer code drops in. Giving it
@@ -1516,8 +1525,8 @@ script's `LRANGE` blocking Redis for its duration, which is why it is an admin
 action, not a loop primitive.
 
 **Anchor:** `lib/wurk/api/fast.rb:21`, `lib/wurk/api/fast.rb:53`;
-`lib/wurk/api.rb:5`; Pro §11 (`docs/target/sidekiq-pro.md:490-507`) and the
-implementation map (`docs/target/sidekiq-pro.md:539`).
+`lib/wurk/api.rb:5`; Pro §11 ([Pro §11 Fast Lua API extensions](../target/sidekiq-pro.md#11-fast-lua-api-extensions)) and the
+implementation map ([Pro §13 implementation mapping — Lua API](../target/sidekiq-pro.md#13-wurk-implementation-checklist-mapping)).
 
 ## Search covers queue LISTs too, with explicit scan bounds
 
@@ -1530,8 +1539,8 @@ bound stops the scan with elements unexamined (`lib/wurk/web/search.rb:52`).
 
 **Spec:** Pro's search is the dashboard search box on the Retry / Scheduled /
 Dead pages, substring over job payloads via `ZSCAN`
-(`docs/target/sidekiq-pro.md:442`); the free WebHelper of the same name serves
-that box (`search(jobset, substr)`, `docs/target/sidekiq-free.md:1508`). Neither
+([Pro §10.1 Mount — Retry/Scheduled/Dead search box](../target/sidekiq-pro.md#101-mount)); the free WebHelper of the same name serves
+that box (`search(jobset, substr)`, [free §25.7 WebHelpers — `search(jobset, substr)`](../target/sidekiq-free.md#257-sidekiqwebhelpers-included-in-action-via-webapplicationhelpers)). Neither
 spec defines queue-LIST coverage, a standalone Ruby class, or scan bounds.
 
 **Why:** a LIST has no SCAN, so covering queues naively would let a keystroke
@@ -1542,8 +1551,8 @@ wrong. The result shape is a sorted-set row plus a `:kind` discriminator and
 additive.
 
 **Anchor:** `lib/wurk/web/search.rb:24-35`, `lib/wurk/web/search.rb:52`; Pro
-web search (`docs/target/sidekiq-pro.md:442`); free WebHelpers
-(`docs/target/sidekiq-free.md:1508`).
+web search ([Pro §10.1 Mount — Retry/Scheduled/Dead search box](../target/sidekiq-pro.md#101-mount)); free WebHelpers
+([free §25.7 WebHelpers — `search(jobset, substr)`](../target/sidekiq-free.md#257-sidekiqwebhelpers-included-in-action-via-webapplicationhelpers)).
 
 ## `Stats#expired`/`reset` extend the OSS Stats surface
 
@@ -1556,13 +1565,13 @@ The counter is fed by the expiry middleware, which bumps `stat:expired` and
 (`lib/wurk/middleware/expiry.rb:28-40`).
 
 **Spec:** free's `Stats` surface has no `expired` reader at all
-(`docs/target/sidekiq-free.md:969-985`) and `reset` defaults to
-`["processed", "failed"]` (`docs/target/sidekiq-free.md:984`); no `expired`
+([free §19.1 `Sidekiq::Stats` readers](../target/sidekiq-free.md#191-sidekiqstats)) and `reset` defaults to
+`["processed", "failed"]` ([free §19.1 `Stats#reset` defaults](../target/sidekiq-free.md#191-sidekiqstats)); no `expired`
 reader exists anywhere in the free spec's API surface — its sole use of the
-word, `docs/target/sidekiq-free.md:1594`, is prose about `ProcessSet#cleanup`
+word, [free §31 Implementation notes — Process cleanup](../target/sidekiq-free.md#31-implementation-notes--gotchas-critical-for-compat), is prose about `ProcessSet#cleanup`
 pruning identities whose TTL ran out, not a Stats reader. Pro tracks an expiry
 as a Statsd `jobs.expired` event when the job is skipped
-(`docs/target/sidekiq-pro.md:347`), not as a queryable counter.
+([Pro §7 Job expiration — skipped-job Statsd event](../target/sidekiq-pro.md#7-job-expiration--expires_in)), not as a queryable counter.
 
 **Why:** the server already counted expiry drops, but nothing in the Data API
 could answer "where did my jobs go" without shell access to Redis; the counter
@@ -1574,8 +1583,8 @@ unchanged, and the readers are new methods.
 
 **Anchor:** `lib/wurk/stats.rb:27`, `lib/wurk/stats.rb:104-107`,
 `lib/wurk/stats.rb:190`; `lib/wurk/middleware/expiry.rb:28-40`; free Stats
-(`docs/target/sidekiq-free.md:969-985`, `docs/target/sidekiq-free.md:984`); Pro
-§7 (`docs/target/sidekiq-pro.md:347`).
+([free §19.1 `Sidekiq::Stats` readers](../target/sidekiq-free.md#191-sidekiqstats), [free §19.1 `Stats#reset` defaults](../target/sidekiq-free.md#191-sidekiqstats)); Pro
+§7 ([Pro §7 Job expiration — skipped-job Statsd event](../target/sidekiq-pro.md#7-job-expiration--expires_in)).
 
 ## `Leader#token` exposes a fencing token Ent deliberately omits
 
@@ -1587,7 +1596,7 @@ re-fires `:leader` (`lib/wurk/leader.rb:280`).
 
 **Spec:** Ent §6 — the lock is best-effort coordination, not a strict mutex,
 and "*no fencing tokens exposed to the user*"
-(`docs/target/sidekiq-ent.md:510`).
+([Ent §6 Leader Election — best-effort lock, no user fencing token](../target/sidekiq-ent.md#6-leader-election)).
 
 **Why:** the TTL means a partition can briefly seat two leaders; Ent's answer
 is "don't rely on the lock alone". The token is a strictly-additive out for
@@ -1597,7 +1606,7 @@ transitions only, never on renewals, so behavior that worked before is
 unchanged.
 
 **Anchor:** `lib/wurk/leader.rb:35`, `lib/wurk/leader.rb:101`,
-`lib/wurk/leader.rb:280`; Ent §6 (`docs/target/sidekiq-ent.md:510`).
+`lib/wurk/leader.rb:280`; Ent §6 ([Ent §6 Leader Election — best-effort lock, no user fencing token](../target/sidekiq-ent.md#6-leader-election)).
 
 ## Standalone `Sidekiq::Web.call` routes extensions only
 
@@ -1640,7 +1649,7 @@ Existing routing tests in
 `test_unsafe_method_with_same_origin_header_routes`, and
 `test_unknown_path_is_404`;
 [authorization and read-only tests](../../test/unit/web_rack_app_test.rb#L112-L150)
-pin the outer gates. Spec: `docs/target/sidekiq-free.md:1370-1384,1420-1458`.
+pin the outer gates. Spec: [free §25.1 Entrypoint — Rack call and CSRF](../target/sidekiq-free.md#251-entrypoint) and [§25.4 Routes — built-in dashboard](../target/sidekiq-free.md#254-routes).
 
 ## `Chain#add` honours a class-declared `outer_of` ordering anchor
 
@@ -1660,7 +1669,7 @@ With no anchor registered, `add` behaves exactly as before. Wurk's own
 `insert_after` and `remove` are untouched and still relocate middleware
 deliberately.
 
-**Spec:** free [§10.1](../target/sidekiq-free.md#L637) states
+**Spec:** free [§10.1 `Sidekiq::Middleware::Chain` — `add`](../target/sidekiq-free.md#101-sidekiqmiddlewarechain) states
 `def add(klass, *args) # appends (removes existing first)` — a single
 append-only contract, with no anchor concept.
 
@@ -1685,4 +1694,4 @@ no Redis key, job-JSON field or Lua script is touched.
 **Anchor:** [anchor-aware `add`](../../lib/wurk/middleware/chain.rb#L70-L94),
 [anchor resolution](../../lib/wurk/middleware/chain.rb#L164-L171),
 [batch middleware's `outer_of`](../../lib/wurk/batch/server_middleware.rb#L44-L65),
-free [§10.1](../target/sidekiq-free.md#L637).
+free [§10.1 `Sidekiq::Middleware::Chain` — `add`](../target/sidekiq-free.md#101-sidekiqmiddlewarechain).
