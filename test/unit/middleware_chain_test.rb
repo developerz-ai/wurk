@@ -89,6 +89,23 @@ class MiddlewareChainTest < Wurk::Test::UnitCase
     end
   end
 
+  # A middleware that declares an ordering anchor: it must stay OUTSIDE of
+  # the classes it names. The anchor is read when `add` runs, so the target
+  # may be registered later.
+  class Anchored
+    def self.outer_of = [AnchorTarget]
+
+    def call(*_args)
+      yield
+    end
+  end
+
+  class AnchorTarget
+    def call(*_args)
+      yield
+    end
+  end
+
   # --- shape -------------------------------------------------------------
 
   def test_includes_enumerable
@@ -165,6 +182,105 @@ class MiddlewareChainTest < Wurk::Test::UnitCase
     chain.remove(WithConfig)
 
     assert_equal [NoConfig], chain.entries.map(&:klass)
+  end
+
+  # --- ordering anchors (outer_of) ---------------------------------------
+
+  # A class that declares an anchor is placed BEFORE the first registered
+  # anchor instead of appended at the tail.
+  def test_add_places_an_anchored_middleware_before_its_anchor
+    chain = Wurk::Middleware::Chain.new
+    chain.add(AnchorTarget)
+    chain.add(Anchored)
+
+    assert_equal [Anchored, AnchorTarget], chain.entries.map(&:klass)
+  end
+
+  # Re-registering it keeps the slot it already holds outside the anchor —
+  # the entry is refreshed (new ctor args), not relocated.
+  def test_add_keeps_an_anchored_middleware_at_its_index
+    chain = Wurk::Middleware::Chain.new
+    chain.add(Anchored)
+    chain.add(AnchorTarget)
+    chain.add(Anchored, :second)
+
+    assert_equal [Anchored, AnchorTarget], chain.entries.map(&:klass)
+    assert_equal [:second], chain.entries.first.instance_variable_get(:@args)
+  end
+
+  # An anchored middleware that ended up INSIDE its anchor (a deliberate
+  # `insert_after`) is moved back out by the next `add`.
+  def test_add_moves_an_anchored_middleware_out_of_its_anchor
+    chain = Wurk::Middleware::Chain.new
+    chain.add(AnchorTarget)
+    chain.insert_after(AnchorTarget, Anchored)
+    chain.add(Anchored)
+
+    assert_equal [Anchored, AnchorTarget], chain.entries.map(&:klass)
+  end
+
+  # No anchor declared → the documented Sidekiq behaviour: remove the old
+  # entry, then append the new one at the tail (spec §10.1).
+  def test_add_appends_a_middleware_without_an_anchor
+    chain = Wurk::Middleware::Chain.new
+    chain.add(NoConfig)
+    chain.add(WithConfig)
+    chain.add(NoConfig)
+
+    assert_equal [WithConfig, NoConfig], chain.entries.map(&:klass)
+  end
+
+  # The class DOES declare an anchor, but none of the anchors is registered:
+  # the fallback applies — remove the old entry, append at the tail, not at
+  # the head (docs/middleware.md, "Ordering anchors: `outer_of`").
+  def test_add_appends_an_anchored_middleware_when_no_anchor_is_registered
+    chain = Wurk::Middleware::Chain.new
+    chain.add(NoConfig)
+    chain.add(Anchored)
+
+    assert_equal [NoConfig, Anchored], chain.entries.map(&:klass)
+  end
+
+  # `prepend` is a deliberate relocation — the anchor does not override it.
+  def test_prepend_relocates_an_anchored_middleware_to_the_head
+    chain = Wurk::Middleware::Chain.new
+    chain.add(AnchorTarget)
+    chain.add(Anchored)
+    chain.prepend(WithConfig)
+    chain.prepend(Anchored)
+
+    assert_equal [Anchored, WithConfig, AnchorTarget], chain.entries.map(&:klass)
+  end
+
+  # `insert_before` is a deliberate relocation too: a host that wants its
+  # middleware inside the anchored one still can.
+  def test_insert_before_relocates_an_anchored_middleware
+    chain = Wurk::Middleware::Chain.new
+    chain.add(AnchorTarget)
+    chain.add(WithConfig)
+    chain.insert_before(WithConfig, Anchored)
+
+    assert_equal [AnchorTarget, Anchored, WithConfig], chain.entries.map(&:klass)
+  end
+
+  # `insert_after` likewise.
+  def test_insert_after_relocates_an_anchored_middleware
+    chain = Wurk::Middleware::Chain.new
+    chain.add(AnchorTarget)
+    chain.add(WithConfig)
+    chain.insert_after(AnchorTarget, Anchored)
+
+    assert_equal [AnchorTarget, Anchored, WithConfig], chain.entries.map(&:klass)
+  end
+
+  # `remove` deletes it outright.
+  def test_remove_deletes_an_anchored_middleware
+    chain = Wurk::Middleware::Chain.new
+    chain.add(AnchorTarget)
+    chain.add(Anchored)
+    chain.remove(Anchored)
+
+    assert_equal [AnchorTarget], chain.entries.map(&:klass)
   end
 
   # --- insert_before / insert_after --------------------------------------

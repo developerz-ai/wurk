@@ -41,6 +41,29 @@ module Wurk
 
       CALLBACK_JOB = 'Wurk::Batch::CallbackJob'
 
+      # The middleware this one must stay OUTSIDE of — the ordering anchor
+      # `Chain#add` consults before appending.
+      #
+      # Expiry SKIPS an expired job by returning without yielding: inside the
+      # batch onion the batch's `ack_success` never runs, the batch's pending
+      # never drops and the batch never completes. The Limiter turns an
+      # over-limit job into a `Limiter::Rescheduled` (a JobRetry::Skip): inside
+      # the batch onion the batch's generic `rescue StandardError` books a
+      # spurious failure for a job that never ran.
+      #
+      # A plain `add` appends, so re-registering this middleware (a
+      # `configure_server` block, a test helper) would move it inside both and
+      # break the batch's accounting. The anchor keeps it outside.
+      #
+      # Resolved at call time, not at load time: Expiry is loaded after this
+      # file (lib/wurk.rb), so naming the constant here would raise NameError.
+      def self.outer_of
+        anchors = []
+        anchors << Wurk::Middleware::Expiry if defined?(Wurk::Middleware::Expiry)
+        anchors << Wurk::Limiter::ServerMiddleware if defined?(Wurk::Limiter::ServerMiddleware)
+        anchors
+      end
+
       def call(_worker, job, _queue, &)
         bid = job['bid']
         return yield unless bid
@@ -108,4 +131,8 @@ module Wurk
   end
 end
 
+# Auto-registered on the global server chain. The `outer_of` anchor above
+# keeps this middleware outside Expiry and the Limiter wherever it is
+# registered again later; this registration itself appends as usual, because
+# neither anchor is registered in the chain yet.
 Wurk.configuration.server_middleware.add(Wurk::Batch::ServerMiddleware)

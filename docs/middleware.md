@@ -184,7 +184,7 @@ Every method is available on both chains:
 
 | Method | Effect |
 |---|---|
-| `add(klass, *args)` | Remove any existing entry for `klass`, then **append**. Appended = innermost. |
+| `add(klass, *args)` | Remove any existing entry for `klass`, then **append**. Appended = innermost. Exception: a class that declares an `outer_of` anchor is placed **before** the first registered anchor instead of at the tail. |
 | `prepend(klass, *args)` | Remove any existing entry, then insert at index 0 = **outermost**. |
 | `insert_before(oldklass, newklass, *args)` | Move/insert `newklass` immediately before `oldklass`. If `oldklass` isn't registered, falls back to index 0. |
 | `insert_after(oldklass, newklass, *args)` | Move/insert `newklass` immediately after `oldklass`. If `oldklass` isn't registered, falls back to the end. |
@@ -206,10 +206,51 @@ chain.add MyMiddleware, threshold: 500
 # → MyMiddleware.new(threshold: 500) per job
 ```
 
-**Ordering:** entry 0 is outermost. `add` appends, so a later `add` sits
-*inside* an earlier one and runs closer to `perform`. `prepend` puts you
-outermost — use it when you must see exceptions that inner middleware would
-otherwise swallow (that's why `InterruptHandler` prepends).
+**Ordering:** entry 0 is outermost. `add` appends (unless the class declares
+an `outer_of` anchor — see below), so a later `add` sits *inside* an earlier
+one and runs closer to `perform`. `prepend` puts you outermost — use it when
+you must see exceptions that inner middleware would otherwise swallow (that's
+why `InterruptHandler` prepends).
+
+#### Ordering anchors: `outer_of`
+
+A middleware class MAY declare an **ordering anchor**: a class method
+`outer_of` returning the Array of the classes that middleware must stay
+**outside** of.
+
+```ruby
+class MyServerMiddleware
+  include Wurk::Middleware::ServerMiddleware
+
+  def self.outer_of
+    [Wurk::Middleware::Expiry]
+  end
+end
+```
+
+`Chain#add` consults it:
+
+- If one of the named anchors is **registered**, the entry is placed **before
+  the first registered anchor** instead of at the tail.
+- If the class is **already registered** at an index before that anchor, it
+  **keeps that index** — only its constructor args are refreshed. Moving it
+  would be a relocation the caller did not ask for.
+- With **no anchor registered**, `add` behaves exactly as before: remove the
+  old entry, append the new one at the tail.
+
+A class that declares no `outer_of` **always** appends. That is Sidekiq's
+documented behaviour — "`add(klass, *args)` appends (removes existing first)"
+(spec §10.1) — and it is unchanged. The anchor is an opt-in *for the class that
+declares it*: it constrains that class's own registration and nothing else.
+
+`prepend`, `insert_before`, `insert_after` and `remove` are untouched: they
+still relocate middleware deliberately, exactly as before. A host that wants a
+middleware outside an anchored one still gets there with `prepend` or
+`insert_before`.
+
+The anchors are resolved when `add` runs, not when the declaring class is
+loaded — so an anchor may name a constant that is loaded later. Wurk's own
+batch middleware names `Wurk::Middleware::Expiry`, which is loaded after it.
 
 `invoke` raises `ArgumentError` without a block, and short-circuits to a plain
 `yield` when the chain is empty.
@@ -514,11 +555,26 @@ inner. That is why:
   rescues `JobRetry::Handled` and `Job::Interrupted` and re-raises them
   untouched — acking neither success nor failure.
 
-If you insert middleware **outside** `Batch::ServerMiddleware` (via `prepend` or
-`insert_before`), a skip-by-return in your middleware will bypass batch
-accounting entirely and the batch will never complete. Register inside it
-(`add`, or `insert_after Wurk::Batch::ServerMiddleware`) unless you specifically
-need the outer position.
+That position is load-bearing, so it is **anchored**.
+`Wurk::Batch::ServerMiddleware` declares
+`outer_of` → `[Wurk::Middleware::Expiry, Wurk::Limiter::ServerMiddleware]`, and
+`Chain#add` honours it: re-registering the batch middleware — a
+`configure_server` block, a test helper, any later
+`add Wurk::Batch::ServerMiddleware` — can no longer move it **inside** `Expiry`
+or the Limiter. The anchor puts it back before the first of them. (A plain
+`add` appends, so before the anchor existed the same re-registration silently
+relocated batch inside both, and the accounting broke with it: an expired job
+never unwound through the batch's `ack_success`, so the batch's `pending` never
+dropped, the batch never completed, and its callbacks never fired; a
+rate-limited job booked a failure for a job that never ran.)
+
+The anchor names **only** those two. Middleware you place outside the batch
+middleware on purpose still skips batch accounting: if you insert middleware
+**outside** `Batch::ServerMiddleware` (via `prepend` or `insert_before`), a
+skip-by-return in your middleware will bypass batch accounting entirely and the
+batch will never complete. Register inside it (`add`, or
+`insert_after Wurk::Batch::ServerMiddleware`) unless you specifically need the
+outer position.
 
 Unique jobs are a two-chain protocol: `Unique::ClientMiddleware` does
 `SET NX EX` on the lock key and returns `nil` (halting the push) when another
@@ -565,9 +621,14 @@ need. The built-ins are all written this way.
 - **`add` removes before appending.** Calling `add(X)` on an already-registered
   `X` moves it to the end of the chain. Use `exists?` if you mean "register
   once, keep position" — that's what `Wurk::Unique` and `Wurk::Encryption` do.
-- **`insert_before`/`insert_after` with an unregistered anchor silently fall
+  The one exception is a class that declares an
+  [ordering anchor](#ordering-anchors-outer_of): `add` places it before the
+  first registered anchor instead of at the tail.
+- **`insert_before`/`insert_after` with an unregistered `oldklass` silently fall
   back** to index 0 and the end of the chain respectively. They don't raise, so
-  a typo'd class name produces a wrong-position middleware, not an error.
+  a typo'd class name produces a wrong-position middleware, not an error. (That
+  `oldklass` is Sidekiq's own "anchor" for the insertion — not the `outer_of`
+  ordering anchor above.)
 - **`chain.clear` removes the built-ins too** — including `InterruptHandler`,
   batch accounting, and metrics. Prefer `remove(klass)`.
 - **`Wurk::Testing` uses a separate chain.** Inline test mode
