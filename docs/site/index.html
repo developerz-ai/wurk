@@ -403,7 +403,7 @@ gem <span class="add">"wurk"</span></pre>
             <span class="edge-light" aria-hidden="true"></span>
             <span class="feature__ic"><i class="fa-solid fa-gauge-high" aria-hidden="true"></i></span>
             <h3>A dashboard you'll keep open</h3>
-            <p>A precompiled SolidJS SPA ships inside the gem — consumers never touch Node. Live queues, retries, busy workers, batches, limiters, cron, and metrics, with click-through job detail.</p>
+            <p>A precompiled SolidJS SPA ships inside the gem — consumers never touch Node. Built-in panes: <span id="feature-panes">Dashboard, Queues, Retries, Scheduled, Dead, Busy, Batches, Flows, Limiters, Cron, Metrics, Profiles, Search</span>, with click-through job detail.</p>
             <span class="feature__tier"><i class="fa-solid fa-check free" aria-hidden="true"></i> Sidekiq OSS + Pro/Ent</span>
           </div>
         </div>
@@ -432,7 +432,7 @@ gem <span class="add">"wurk"</span></pre>
             <span class="edge-light" aria-hidden="true"></span>
             <span class="feature__ic"><i class="fa-solid fa-diagram-project" aria-hidden="true"></i></span>
             <h3>HTTP producer + observe API</h3>
-            <p>A bearer-token-scoped <code>/v1</code> JSON API to enqueue, bulk-enqueue, and inspect queues, jobs, and the swarm &mdash; standalone, engine-nested, or via the <code>wurk api</code> CLI.</p>
+            <p>A bearer-token-scoped JSON API to enqueue, bulk-enqueue, and inspect queues, jobs, and the swarm. Enabled when an API token is configured: engine-nested at <code>&lt;mount&gt;/api/v1</code> (inheriting the engine's middleware), standalone at <code>/v1</code> via <code>run Wurk::API</code>, or separately mounted, e.g. <code>/wurk-api/v1</code> via <code>mount Wurk::API =&gt; '/wurk-api'</code>. Separate mounts do not inherit the engine's middleware. The <code>wurk api</code> CLI is a client of this API.</p>
             <span class="feature__tier"><i class="fa-solid fa-star extra" aria-hidden="true"></i> Wurk-only</span>
           </div>
           <div class="feature feature--extra">
@@ -474,7 +474,7 @@ gem <span class="add">"wurk"</span></pre>
             <span class="edge-light" aria-hidden="true"></span>
             <span class="feature__ic"><i class="fa-solid fa-heart-pulse" aria-hidden="true"></i></span>
             <h3>Kubernetes probes</h3>
-            <p><code>config.health_check</code> opens a thin <code>/live</code>/<code>/ready</code> HTTP listener that self-elects across a swarm's children.</p>
+            <p>Optional, off by default: <code>config.health_check(port: 7433)</code> opens a dedicated-port HTTP listener for <code>/live</code> and <code>/ready</code> probes that self-elects across a swarm's children. These are not engine or <code>/v1</code> API routes.</p>
             <span class="feature__tier"><i class="fa-solid fa-star extra" aria-hidden="true"></i> Wurk-only</span>
           </div>
           <div class="feature feature--extra">
@@ -491,8 +491,8 @@ gem <span class="add">"wurk"</span></pre>
         <h2>A dashboard you'll actually want open</h2>
         <p class="section-lede">
           Dark, fast, and mobile-first — a precompiled SolidJS SPA that ships inside the gem (consumers
-          never run Node). Live queues, retries, scheduled, dead, busy workers, batches, limiters, cron,
-          and throughput/failure metrics. Click any job for its full args, error, and backtrace.
+          never run Node). Built-in panes: <span id="dashboard-panes">Dashboard, Queues, Retries, Scheduled, Dead, Busy, Batches, Flows, Limiters, Cron, Metrics, Profiles, Search</span>.
+          Click any job for its full args, error, and backtrace.
         </p>
         <p style="margin-top:18px">
           <a class="btn primary" href="https://wurk.demo.developerz.ai/wurk"><i class="fa-solid fa-gauge-high" aria-hidden="true"></i> Open the live demo</a>

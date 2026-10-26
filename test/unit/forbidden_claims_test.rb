@@ -1,6 +1,7 @@
 # frozen_string_literal: true
 
 require 'minitest/autorun'
+require 'json'
 require_relative '../../tasks/llms_full'
 
 # The public surfaces outside docs/wiki/ (which wiki_pages_test.rb gates) that
@@ -10,8 +11,10 @@ require_relative '../../tasks/llms_full'
 # docs/benchmarks.md supports it; the shipped dashboard has no per-job progress
 # surface (status is machine-only, read through Wurk::Status and the /v1 jobs
 # endpoint), so that claim is pinned out here too — a rule nothing reads only
-# holds until the next copy edit. Reads files and touches no Redis or shared
-# state.
+# holds until the next copy edit. The docs site also advertises the dashboard's
+# panes, so the inventory it lists is checked against the frontend's own pane
+# inventory and the two cannot drift. Reads files and touches no Redis or
+# shared state.
 class ForbiddenClaimsTest < Minitest::Test
   parallelize_me!
 
@@ -77,7 +80,156 @@ class ForbiddenClaimsTest < Minitest::Test
                  'the dashboard per-job-progress phrasing must stay guarded'
   end
 
+  PANE_INVENTORIES = %w[feature-panes dashboard-panes].freeze
+
+  # Where the frontend declares its shipped panes. main keeps the inventory in
+  # navPanes.json ("the one inventory in the repo", read by Nav.tsx and by the
+  # frontend's own drift check); the tree this guard was cut on still declared
+  # the same panes inline in Nav.tsx.
+  PANE_INVENTORY_JSON = 'frontend/src/navPanes.json'
+  PANE_INVENTORY_INLINE = 'frontend/src/components/Nav.tsx'
+
+  def test_both_site_inventories_match_shipped_dashboard_panes
+    panes = shipped_panes
+    site = File.read(File.join(ROOT, 'docs/site/index.html'))
+
+    PANE_INVENTORIES.each { |id| assert_inventory(site, id, panes) }
+  end
+
+  def test_inventory_guard_rejects_every_omission_including_flows_profiles_and_search
+    panes = shipped_panes
+    panes.each do |pane|
+      PANE_INVENTORIES.each do |id|
+        incomplete = inventory_markup(id, panes - [pane])
+        assert_raises(Minitest::Assertion, "#{id} must reject missing #{pane}") do
+          assert_inventory(incomplete, id, panes)
+        end
+      end
+    end
+  end
+
+  def test_inventory_guard_rejects_extras_duplicates_empty_and_missing_markers
+    panes = shipped_panes
+    PANE_INVENTORIES.each do |id|
+      [panes + ['Unshipped pane'], panes + [panes.first], []].each do |invalid|
+        assert_raises(Minitest::Assertion) { assert_inventory(inventory_markup(id, invalid), id, panes) }
+      end
+      ['', panes.join(', '), "<span>#{panes.join(', ')}</span>"].each do |unmarked|
+        assert_raises(Minitest::Assertion) { assert_inventory(unmarked, id, panes) }
+      end
+      duplicate = inventory_markup(id, panes) * 2
+      assert_raises(Minitest::Assertion) { assert_inventory(duplicate, id, panes) }
+      assert_raises(Minitest::Assertion) { assert_inventory(inventory_markup(id, panes), id, []) }
+    end
+  end
+
+  def test_shipped_pane_extraction_rejects_empty_or_unrecognized_navigation
+    labels = { 'dashboard' => 'Dashboard' }
+    routes = '<Route path="/" />'
+
+    ['', 'const LINKS = [];', 'const LINKS = [{ destination: "/" }];'].each do |nav|
+      assert_raises(Minitest::Assertion) { extract_panes(inline_panes(nav), labels, routes) }
+    end
+    ['[]', '{}', '[{ "destination": "/" }]'].each do |inventory|
+      assert_raises(Minitest::Assertion) { extract_panes(json_panes(inventory), labels, routes) }
+    end
+
+    panes = inline_panes("const LINKS = [{ to: '/', label: t('nav.dashboard') }];")
+
+    assert_raises(Minitest::Assertion) { extract_panes(panes, labels, '') }
+    assert_raises(Minitest::Assertion) { extract_panes(panes, {}, routes) }
+  end
+
   private
+
+  def shipped_panes
+    labels = JSON.parse(File.read(File.join(ROOT, 'frontend/src/i18n/en.json'))).fetch('nav')
+    routes = File.read(File.join(ROOT, 'frontend/src/App.tsx'))
+    extract_panes(pane_inventory, labels, routes)
+  end
+
+  # [path, nav label key] per shipped pane, in rail order. The panes live in
+  # one inventory, but that inventory moved: main keeps it in navPanes.json and
+  # derives Nav.tsx's LINKS from it, while the tree this guard was cut on
+  # declared the same panes inline in Nav.tsx. Read whichever the tree ships,
+  # and fail loudly when neither declares a pane — a guard that stops reading
+  # its source stops guarding.
+  def pane_inventory
+    json = File.join(ROOT, PANE_INVENTORY_JSON)
+
+    return json_panes(File.read(json)) if File.exist?(json)
+
+    inline_panes(File.read(File.join(ROOT, PANE_INVENTORY_INLINE)))
+  end
+
+  # main's inventory: [{ "to": "/queues", "labelKey": "nav.queues", ... }].
+  def json_panes(source)
+    panes = JSON.parse(source)
+
+    assert_kind_of Array, panes, "#{PANE_INVENTORY_JSON} must hold an array of panes"
+    refute_empty panes, "#{PANE_INVENTORY_JSON} must contain built-in panes"
+    panes.map { |pane| json_pane(pane) }
+  end
+
+  def json_pane(pane)
+    assert_kind_of Hash, pane, "unrecognized pane: #{pane.inspect}"
+    to = pane['to']
+    key = pane['labelKey']
+
+    assert(to.is_a?(String) && key.is_a?(String), "unrecognized pane: #{pane.inspect}")
+    [to, key.delete_prefix('nav.')]
+  end
+
+  # The inline shape: Nav.tsx's `const LINKS = [...]` array of panes.
+  def inline_panes(source)
+    links = source[/\bconst LINKS\s*=\s*\[(.*?)\];/m, 1]
+
+    refute_nil links, "#{PANE_INVENTORY_INLINE} LINKS must be extractable"
+    entries = links.scan(/\{[^{}]*\}/)
+
+    refute_empty entries, "#{PANE_INVENTORY_INLINE} LINKS must contain built-in panes"
+    entries.map { |entry| inline_pane(entry) }
+  end
+
+  def inline_pane(entry)
+    match = entry.match(/to:\s*'([^']+)',\s*label:\s*t\('nav\.([^']+)'\)/)
+
+    refute_nil match, "unrecognized LINKS entry: #{entry}"
+    match.captures
+  end
+
+  def extract_panes(inventory, labels, app)
+    routes = app.scan(/<Route\s+path="([^"]+)"/).flatten
+
+    refute_empty routes, 'App.tsx routes must be extractable'
+    panes = inventory.map do |path, key|
+      assert_includes routes, path, "built-in pane #{key} must have an App route"
+      label = labels[key]
+
+      assert_kind_of String, label, "missing English nav label: #{key}"
+      refute_empty label.strip, "empty English nav label: #{key}"
+      label
+    end
+
+    assert_equal panes.uniq, panes, 'built-in pane labels must be unique'
+    panes
+  end
+
+  def inventory_markup(marker, panes)
+    "<span id=\"#{marker}\">#{panes.join(', ')}</span>"
+  end
+
+  def assert_inventory(site, marker, panes)
+    refute_empty panes, 'expected panes must not be empty'
+    inventories = site.scan(%r{<span\s+id="#{Regexp.escape(marker)}"\s*>([^<]*)</span>}m).flatten
+
+    assert_equal 1, inventories.length, "expected exactly one marked inventory: #{marker}"
+    actual = inventories.first.split(',').map(&:strip)
+
+    refute_empty actual, "#{marker} must not be empty"
+    assert_equal actual.uniq, actual, "#{marker} must not duplicate panes"
+    assert_equal panes.sort, actual.sort, "#{marker} must list exactly the shipped pane names"
+  end
 
   def surfaces
     @surfaces ||= FILES.to_h { |rel| [rel, File.read(File.join(ROOT, rel))] }.merge(
