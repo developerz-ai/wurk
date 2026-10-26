@@ -245,10 +245,10 @@ Per private-list owner, and the answer now turns on nonce, not just host:
   nonce is minted once per process image and inherited unchanged across
   `fork` (`component.rb:19-21`), this group is every process forked from the
   same swarm boot — the pid was minted in *our* pid namespace, so the OS is
-  authoritative: `Process.kill(0, pid)`. Instant. It ignores a stale
-  `processes` SET entry whose 60s TTL hasn't lapsed yet, so a `kill -9`ed
-  sibling is reclaimed the moment the supervisor reaps it, not up to 60s
-  later. (`EPERM` is treated as alive.)
+  authoritative: `Process.kill(0, pid)`. Instant. It ignores a stale `processes`
+  SET member — the SET has no TTL; the member lingers after its heartbeat hash
+  expires (60s) until `ProcessSet#cleanup` prunes it — so a `kill -9`ed sibling
+  is reclaimed once the supervisor reaps it. (`EPERM` is treated as alive.)
 - **Any other incarnation** — different nonce (a different boot generation),
   a pre-nonce key, or a different host — its pid means nothing in our
   namespace, so we trust the heartbeat instead: the owner is alive iff its

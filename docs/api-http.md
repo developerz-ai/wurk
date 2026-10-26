@@ -410,11 +410,14 @@ adds zero write traffic.
 | `GET /limiters` | `read` | Paged; supports `?filter=` (substring). |
 | `GET /cron` | `read` | Paged registered cron loops with `next_fire_at`. |
 
-Heartbeat staleness: a process that died between beats is still in
-`processes` until its TTL lapses. Every row and the roll-up both carry
-`beat_age_seconds` and a derived `stale` boolean (age past three missed beats,
-`30s` at the default heartbeat cadence) so a client never has to compare its
-own clock against a `beat` timestamp.
+Heartbeat staleness: `processes` is a membership SET and carries no TTL of
+its own — the 60s TTL belongs to the per-identity heartbeat hash `<identity>`.
+A process that died between beats keeps its SET membership until a cleanup
+pass prunes it, but its heartbeat hash expires on its own and its row stops
+being served. Every row and the roll-up both carry `beat_age_seconds` and a
+derived `stale` boolean (age past three missed beats, `30s` at the default
+heartbeat cadence) so a client never has to compare its own clock against a
+`beat` timestamp.
 
 Signalling an **embedded** process (one running inside the host web process,
 not a forked swarm child) is refused with `409 process_not_signalable` — a
