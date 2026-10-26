@@ -34,7 +34,7 @@ The implementation specs for each Sidekiq feature live in `../target/sidekiq-fre
 
 | Ent feature | Wurk module |
 |---|---|
-| Rate limiters (concurrent, window, bucket, unlimited) | Wurk::Limiter |
+| Rate limiters (concurrent, window, bucket, leaky, points, unlimited) | Wurk::Limiter |
 | Periodic jobs | Wurk::Cron |
 | Leader election | Wurk::Leader (Redis SETNX + fencing token) |
 | Unique jobs | Wurk::Unique (until_executed / until_executing / until_and_while_executing) |
