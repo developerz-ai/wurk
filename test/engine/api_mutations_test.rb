@@ -270,6 +270,23 @@ class ApiMutationsTest < Wurk::Test::EngineCase
     assert_empty fetch_set('schedule')
   end
 
+  # clear_set UNLINKs the whole target zset (wire-compat), so "unrelated
+  # entries survive" can only hold across OTHER zsets: the retry and dead
+  # entries seeded here must be untouched by a scheduled-set clear.
+  def test_scheduled_all_delete_clears_only_the_schedule_set
+    push_to_zset('schedule')
+    push_to_zset('schedule')
+    _retry_score, retry_jid = push_to_zset('retry')
+    _dead_score, dead_jid = push_to_zset('dead')
+    post '/wurk/api/scheduled/all/delete'
+
+    assert_ok
+    assert_equal 2, json_body[:count]
+    assert_empty fetch_set('schedule')
+    assert_equal [retry_jid], fetch_set('retry').map { |j| j['jid'] }, 'retry set must survive a scheduled clear'
+    assert_equal [dead_jid], fetch_set('dead').map { |j| j['jid'] }, 'dead set must survive a scheduled clear'
+  end
+
   def test_scheduled_kill_is_rejected
     score, jid = push_to_zset('schedule')
     post "/wurk/api/scheduled/#{ekey(score, jid)}", { cmd: 'kill' }
@@ -340,6 +357,35 @@ class ApiMutationsTest < Wurk::Test::EngineCase
 
     assert_ok
     assert_empty fetch_set('dead')
+  end
+
+  # clear_set UNLINKs the whole target zset (wire-compat), so "unrelated
+  # entries survive" can only hold across OTHER zsets: the retry and
+  # scheduled entries seeded here must be untouched by a dead-set clear.
+  def test_dead_all_delete_clears_only_the_dead_set
+    push_to_zset('dead')
+    push_to_zset('dead')
+    _retry_score, retry_jid = push_to_zset('retry')
+    _sched_score, sched_jid = push_to_zset('schedule')
+    post '/wurk/api/dead/all/delete'
+
+    assert_ok
+    assert_equal 2, json_body[:count]
+    assert_empty fetch_set('dead')
+    assert_equal [retry_jid], fetch_set('retry').map { |j| j['jid'] }, 'retry set must survive a dead clear'
+    assert_equal [sched_jid], fetch_set('schedule').map { |j| j['jid'] }, 'schedule set must survive a dead clear'
+  end
+
+  def test_dead_delete_single_removes_only_the_selected_job
+    _score, keep_jid = push_to_zset('dead')
+    score, jid = push_to_zset('dead')
+    post "/wurk/api/dead/#{ekey(score, jid)}", { cmd: 'delete' }
+
+    assert_ok
+    assert json_body[:ok]
+    assert_equal 1, json_body[:count]
+    assert_equal [keep_jid], fetch_set('dead').map { |j| j['jid'] }, 'the sibling dead job must survive'
+    refute queue_has_jid?(jid), 'delete must not re-enqueue'
   end
 
   # --- Dead: bulk (POST /wurk/api/dead) ------------------------------------
