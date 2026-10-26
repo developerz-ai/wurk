@@ -206,16 +206,92 @@ class IterableJobStateParityTest < Wurk::Test::UnitCase
     end
   end
 
+  def test_scripted_monotonic_clock_is_thread_local_and_restored_after_return
+    original = Process.method(:clock_gettime)
+    clock = ScriptedClock.new(-1_000.0)
+    ready = Queue.new
+    worker = Thread.new do
+      ready.pop
+      before = original.call(Process::CLOCK_MONOTONIC)
+      reading = Process.clock_gettime(Process::CLOCK_MONOTONIC)
+      after = original.call(Process::CLOCK_MONOTONIC)
+      [before, reading, after]
+    end
+
+    begin
+      with_monotonic_clock(clock) do
+        assert_in_delta(-1_000.0, Process.clock_gettime(Process::CLOCK_MONOTONIC), RT_DELTA)
+        clock.advance(ITERATION_SECONDS)
+        ready << true
+        before, reading, after = worker.value
+
+        assert_operator reading, :>=, before
+        assert_operator reading, :<=, after
+        2.times do
+          assert_in_delta(-999.5, Process.clock_gettime(Process::CLOCK_MONOTONIC), RT_DELTA)
+        end
+        clock.advance(2.0)
+
+        assert_in_delta(-997.5, Process.clock_gettime(Process::CLOCK_MONOTONIC), RT_DELTA)
+      end
+
+      assert_equal original, Process.method(:clock_gettime)
+      before = original.call(Process::CLOCK_MONOTONIC)
+      reading = Process.clock_gettime(Process::CLOCK_MONOTONIC)
+
+      assert_operator reading, :>=, before
+      assert_operator reading, :<=, original.call(Process::CLOCK_MONOTONIC)
+    ensure
+      worker.kill
+      worker.join
+    end
+  end
+
+  def test_scripted_monotonic_clock_delegates_other_clocks_and_units
+    original = Process.method(:clock_gettime)
+
+    with_monotonic_clock(ScriptedClock.new(-1_000.0)) do
+      [[Process::CLOCK_MONOTONIC, :nanosecond],
+       [Process::CLOCK_REALTIME],
+       [Process::CLOCK_REALTIME, :nanosecond]].each do |args|
+        before = original.call(*args)
+        reading = Process.clock_gettime(*args)
+        after = original.call(*args)
+
+        assert_equal before.class, reading.class
+        assert_operator reading, :>=, before
+        assert_operator reading, :<=, after
+      end
+    end
+  end
+
+  def test_scripted_monotonic_clock_is_restored_after_exception
+    original = Process.method(:clock_gettime)
+    error = RuntimeError.new('scripted block failed')
+
+    raised = assert_raises(RuntimeError) do
+      with_monotonic_clock(ScriptedClock.new(-1_000.0)) { raise error }
+    end
+
+    assert_same error, raised
+    assert_equal original, Process.method(:clock_gettime)
+    before = original.call(Process::CLOCK_MONOTONIC)
+    reading = Process.clock_gettime(Process::CLOCK_MONOTONIC)
+
+    assert_operator reading, :>=, before
+    assert_operator reading, :<=, original.call(Process::CLOCK_MONOTONIC)
+  end
+
   private
 
-  # Route the run loop's bare CLOCK_MONOTONIC reads (iterable_job.rb's
-  # reset_run_state / flush_state) to `clock` for the block's duration.
-  # Every other call passes through — the unit-arg and REALTIME reads behind
-  # the 5s flush gate and the cancellation poll keep their real cadence.
+  # Route only the invoking thread's bare CLOCK_MONOTONIC reads to `clock`
+  # (iterable_job.rb's reset_run_state / flush_state). Other threads and the
+  # unit-arg / REALTIME reads behind flush and cancellation keep real cadence.
   def with_monotonic_clock(clock)
     original = Process.method(:clock_gettime)
+    owner = Thread.current
     Process.define_singleton_method(:clock_gettime) do |clock_id, unit = nil|
-      if clock_id == Process::CLOCK_MONOTONIC && unit.nil?
+      if Thread.current.equal?(owner) && clock_id == Process::CLOCK_MONOTONIC && unit.nil?
         clock.now
       elsif unit.nil?
         original.call(clock_id)

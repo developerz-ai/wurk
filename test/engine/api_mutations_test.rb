@@ -215,6 +215,46 @@ class ApiMutationsTest < Wurk::Test::EngineCase
     assert_equal(["#{bad[0]}|#{bad[1]}"], json_body[:failed].map { |f| f[:key] })
     assert_equal([bad[1]], fetch_set('retry').map { |j| j['jid'] }, 'the rejected entry must stay in its set')
     assert queue_has_jid?(good[1])
+
+    body = json_body
+
+    assert_equal %i[count failed ok], body.keys.sort
+    assert_same false, body[:ok]
+    assert_kind_of Array, body[:failed]
+    body[:failed].each do |failure|
+      assert_equal %i[error key], failure.keys.sort
+      assert_equal "#{bad[0]}|#{bad[1]}", failure[:key]
+      assert_kind_of String, failure[:error]
+      refute_empty failure[:error]
+    end
+
+    # Derive the prose notation from the response, independently pinning keys above.
+    fields = body.map do |key, value|
+      case key
+      when :ok then "#{key}: #{value}"
+      when :failed then "#{key}: [{#{value.first.keys.join(', ')}}]"
+      else key.to_s
+      end
+    end
+    shape = "{#{fields.join(', ')}}"
+    routes = File.read(File.expand_path('../../config/routes.rb', __dir__))
+    job_set_comment = routes[/^\s*# Job-set mutations.*?(?=^\s*# Listings)/m]
+
+    refute_nil job_set_comment, 'missing job-set response comment'
+    responses = job_set_comment[/# Responses:.*\z/m]
+
+    refute_nil responses, 'missing job-set Responses excerpt'
+    ledger = File.read(File.expand_path('../../docs/idea/parity-divergences.md', __dir__))
+    section_pattern = /^## Dashboard bulk actions report per-entry failures with HTTP 422\s*\n.*?(?=^## |\z)/m
+    section = ledger[section_pattern]
+
+    refute_nil section, 'missing Dashboard bulk actions HTTP 422 section'
+
+    [[responses, shape], [section, "422 #{shape}"]].each do |excerpt, expected|
+      documented_shapes = excerpt.scan(/`([^`]+)`/).flatten.map { |text| text.gsub(/\s+/, '') }
+
+      assert_includes documented_shapes, expected.gsub(/\s+/, '')
+    end
   end
 
   def test_single_retry_of_a_rejected_entry_is_422_and_keeps_it

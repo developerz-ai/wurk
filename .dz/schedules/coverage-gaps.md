@@ -3,7 +3,8 @@
 Weekly scout, fired by `schedules: coverage-gaps` in `.dz/maintainer/maintainer.yml`. The coverage
 gate is a floor, not a map. `lib/` is tracked in full, so a file no test requires counts as 0%
 instead of dropping out of the denominator — but a file at 91% whose failure branch no test reaches
-still passes the gate. This brief finds the code the global number hides.
+still passes the gate. This brief finds the code the global number hides. It also permits
+inspection and filing of frontend contract/error-path coverage gaps under `frontend/src/`.
 
 ## What a finding is
 
@@ -20,6 +21,8 @@ A finding missing any of the three is not reportable: report it as "thin coverag
 and say which one is missing.
 
 ## How to look
+
+### Ruby coverage
 
 - The gate is configured at test/test_helper.rb:3-19 — branch coverage on (:10), line coverage
   primary (:11), `lib/**/*.rb` tracked (:16), `minimum_coverage line: 90, branch: 90` (:17). Both
@@ -44,6 +47,23 @@ Two shapes of gap, in the order they are worth reporting:
    arm, a fallback, a flag only ever exercised at its default. The branch minimum is global, so a
    file can sit at 91% branch with its failure path never run.
 
+### Frontend contract/error-path coverage
+
+Inspect frontend source and existing tests, and file concrete contract/error-path gaps. Every
+frontend finding must include:
+
+- A source `path:line` anchor under `frontend/src/`.
+- Concrete behavioral evidence: the input or failure condition, the expected contract, and the
+  behavior or error path that existing tests do not assert. Missing tests alone are insufficient.
+- Relevant existing or proposed repository test paths (`frontend/src/**/*.test.{ts,tsx}`),
+  identifying which test to extend or where to add an oracle.
+- A specific closing assertion: state exactly what the test must assert for that condition.
+
+Frontend findings are not measured by Ruby SimpleCov or Cobertura. Do not infer frontend
+percentages or coverage gates from Ruby reports; use frontend contract/test evidence instead.
+The Ruby global 90% line/branch floors do not apply to frontend findings. Inspect only: do not
+run tests or generate coverage in this read-only lane.
+
 ## Read-only
 
 This lane reads and reports. It never edits a file, commits, pushes, opens a pull request, or runs
@@ -61,10 +81,17 @@ A gap in any of those is not this lane's finding: do not report it, and do not e
 
 ## Reporting
 
-One ask per file, never one per gap — the gaps of one `lib/` file travel together, so the title is
-the file's path without the line number (`Coverage gap: lib/wurk/<file>.rb`) and the body carries
-each gap's `path:line` anchor, what is wrong, and how to tell it is fixed. The title must not
-change between runs: the dedupe below is an exact title match.
+One ask per file, never one per gap — the gaps of one source file travel together. Use the
+file's path without the line number as the title, for example:
+
+- `Coverage gap: lib/wurk/<file>.rb`
+- `Coverage gap: frontend/src/<file>.ts`
+- `Coverage gap: frontend/src/components/<file>.tsx`
+
+The body carries each gap's `path:line` anchor, what is wrong, and how to tell it is fixed.
+For frontend gaps include the required behavioral evidence, test paths and closing assertion;
+for Ruby gaps retain the per-file Cobertura evidence above. The title must not change between
+runs: the dedupe below is an exact title match.
 
 Before filing, run exactly:
 
