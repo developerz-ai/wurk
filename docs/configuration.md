@@ -5,7 +5,7 @@ authoritative source for each row is `lib/wurk/configuration.rb`,
 `lib/wurk/capsule.rb`, `lib/wurk/cli.rb`, `lib/wurk/redis_pool.rb`, and
 `lib/wurk/logger.rb`.
 
-Configuration arrives from four places:
+Configuration arrives from five places:
 
 | # | Source | Applies to | Where |
 |---|--------|-----------|-------|
