@@ -25,7 +25,10 @@ Ship parity incrementally. Every milestone produces a usable gem.
 
 - Engine mounted at `/wurk`.
 - Precompiled SolidJS SPA bundle baked into the gem.
-- Parity panes: dashboard, queues, retries, scheduled, dead, busy.
+- Parity panes as scoped at M2 design time: dashboard, queues, retries,
+  scheduled, dead, busy — a design-era milestone target, not an enumeration
+  of the shipped dashboard. The fuller design pane list is in
+  `docs/idea/08-dashboard.md`.
 - SSE live updates.
 
 ## M3 — Pro parity

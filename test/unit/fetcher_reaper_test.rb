@@ -541,6 +541,56 @@ class FetcherReaperTest < Wurk::Test::UnitCase
     assert_equal 1, llen(foreign_q), 'reclaimed onto the correctly-parsed public queue'
   end
 
+  # The one input the wide reading can swallow: a four-part (pre-nonce) key
+  # behind a pipe-bearing queue name and an all-digit host. Read wide, the
+  # queue truncates at its first pipe, the queue name's tail reads as the
+  # host and the real pid lands in the nonce slot — and a pid is never
+  # PROCESS_NONCE's 12-hex shape, which is what the wide_tail guard keys on.
+  def test_parse_full_and_parse_owner_agree_on_a_pre_nonce_key_behind_a_pipe_bearing_queue
+    key = 'queue:eu|jobs|123456789012|4242|0'
+
+    parsed = Wurk::Fetcher::PrivateListKey.parse_full(key)
+
+    assert_equal ['queue:eu|jobs', '123456789012', 4242, nil], parsed,
+                 'both queue segments kept, host/pid read from the narrow tail'
+    assert_equal parsed[1..3], Wurk::Fetcher::PrivateListKey.parse_owner('queue:eu|jobs', key),
+                 'both parsers must resolve the same [host, pid, nonce]'
+  end
+
+  # The misread end to end, dead owner: before the guard the job drained
+  # onto the queue truncated at the first pipe — a queue nobody serves —
+  # instead of the list's own public queue.
+  def test_reclaim_full_reclaims_a_pre_nonce_orphan_behind_a_pipe_bearing_queue
+    foreign_q = Wurk::Keys.queue("#{@ns}|legacy")
+    truncated_q = "#{Wurk::Keys::QUEUE_PREFIX}#{@ns}"
+    key = "#{foreign_q}|123456789012|#{DEAD_PID}|0"
+    @extra_keys.push(foreign_q, truncated_q, key)
+    @pool.with { |c| c.call('RPUSH', key, payload('legacy')) }
+
+    assert_equal 1, @reaper.reclaim_full!
+    assert_equal 1, llen(foreign_q), 'the job lands on the FULL queue name'
+    assert_equal 0, llen(truncated_q), 'the queue truncated at the first pipe stays empty'
+    assert_equal 0, llen(key), 'private list drained'
+  end
+
+  # Same shape, live owner: a pre-nonce heartbeat registered under the
+  # all-digit host. Read wide, that heartbeat is looked up under an identity
+  # nobody wrote ("<queue tail>:<host as pid>:<pid as nonce>") and the list
+  # is drained out from under the job still in flight.
+  def test_reclaim_full_leaves_a_live_pre_nonce_owner_behind_a_pipe_bearing_queue
+    host = '123456789012'
+    register_process(host, unowned_pid, info: true, nonce: nil)
+    foreign_q = Wurk::Keys.queue("#{@ns}|live")
+    key = "#{foreign_q}|#{host}|#{unowned_pid}|0"
+    @extra_keys.push(foreign_q, key)
+    @pool.with { |c| c.call('RPUSH', key, payload('in-flight')) }
+
+    assert_equal 0, @reaper.reclaim_full!, 'a beating pre-nonce owner keeps its jobs'
+    assert_equal 1, llen(key), 'in-flight job left alone'
+  ensure
+    unregister_process(host, unowned_pid)
+  end
+
   # --- thread lifecycle --------------------------------------------------
 
   def test_start_is_idempotent_and_stop_joins
