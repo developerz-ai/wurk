@@ -8,11 +8,13 @@ class WebConfigTest < Wurk::Test::UnitCase
 
   def setup
     super
+    @previous_theme_env = ENV.delete('WURK_WEB_DEFAULT_THEME')
     Wurk::Web.reset_config!
   end
 
   def teardown
     Wurk::Web.reset_config!
+    ENV['WURK_WEB_DEFAULT_THEME'] = @previous_theme_env
     super
   end
 
@@ -669,6 +671,68 @@ class WebConfigTest < Wurk::Test::UnitCase
 
   def test_default_theme_starts_unset_so_the_spa_follows_the_visitor
     assert_nil Wurk::Web.config.default_theme
+  end
+
+  def test_default_theme_seeds_from_env_without_server_configuration
+    %w[light dark system].each do |theme|
+      with_env('WURK_WEB_DEFAULT_THEME', theme) do
+        Wurk::Web.reset_config!
+
+        assert_equal theme, Wurk::Web.config.default_theme
+      end
+    end
+  end
+
+  def test_default_theme_env_rejects_unsupported_strings
+    ['', 'Dark', 'DARK', ' dark', 'dark ', ' ', 'obsidian'].each do |theme|
+      with_env('WURK_WEB_DEFAULT_THEME', theme) do
+        Wurk::Web.reset_config!
+        error = assert_raises(ArgumentError, theme.inspect) { Wurk::Web.config }
+
+        assert_match(/default_theme/, error.message)
+        assert_includes error.message, theme.inspect
+      end
+    end
+  end
+
+  def test_explicit_default_theme_overrides_env_and_nil_clears_it
+    with_env('WURK_WEB_DEFAULT_THEME', 'dark') do
+      cfg = Wurk::Web.config
+
+      assert_equal 'dark', cfg.default_theme
+
+      cfg.default_theme = 'light'
+
+      assert_equal 'light', cfg.default_theme
+
+      cfg.default_theme = nil
+
+      assert_nil cfg.default_theme
+    end
+  end
+
+  def test_reset_samples_the_theme_env_again
+    with_env('WURK_WEB_DEFAULT_THEME', 'dark') do
+      cfg = Wurk::Web.config
+      cfg.default_theme = 'light'
+      with_env('WURK_WEB_DEFAULT_THEME', 'system') do
+        assert_equal 'light', cfg.default_theme
+
+        cfg.reset!
+
+        assert_equal 'system', cfg.default_theme
+      end
+
+      cfg.reset!
+
+      assert_equal 'dark', cfg.default_theme
+
+      with_env('WURK_WEB_DEFAULT_THEME', nil) do
+        cfg.reset!
+
+        assert_nil cfg.default_theme
+      end
+    end
   end
 
   def test_default_theme_accepts_every_preference_the_spa_resolves

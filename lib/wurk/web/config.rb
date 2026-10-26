@@ -129,7 +129,9 @@ module Wurk
       # (the default) out of localStorage; this is what it falls back to for a
       # visitor who has never picked one. Injected ahead of the shell's
       # pre-paint script so a host default paints with everything else instead
-      # of flashing the other palette. nil emits nothing.
+      # of flashing the other palette. nil emits nothing. Initialization and
+      # reset! sample WURK_WEB_DEFAULT_THEME through the validating writer;
+      # later explicit assignments (including nil) override that seed.
       attr_reader :default_theme
 
       def default_theme=(value)
@@ -307,7 +309,7 @@ module Wurk
         @authorization = nil
         @read_only = env_read_only?
         @read_only_message = nil
-        @default_theme = nil
+        self.default_theme = ENV.fetch('WURK_WEB_DEFAULT_THEME', nil)
         @max_streams = nil
         @middlewares = []
         @rack_apps = {}.compare_by_identity
