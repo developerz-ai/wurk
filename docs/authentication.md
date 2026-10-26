@@ -238,6 +238,14 @@ end
   whatever they set.
 - Registered once, globally. There's no per-mount variant.
 
+> **Engine-nested machine API.** The host authorization hook also gates requests
+> to `/wurk/api/v1` when the engine is mounted at `/wurk`; the hook sees the
+> engine-relative path `/api/v1`. It runs before the handoff to `Wurk::API` and
+> its bearer authentication. A hook that requires a logged-in session can
+> therefore return `403 Forbidden` even when the request carries a valid bearer
+> token. This inheritance does not apply to separately mounted or standalone
+> `Wurk::API`.
+
 Path-scoped example — everyone with access may view, but the retry/kill
 endpoints need an explicit role:
 
