@@ -1668,7 +1668,15 @@ After this guidance, the contract requirements remain:
   - `launcher.rb`, `manager.rb`, `processor.rb`, `fetch.rb`, `scheduled.rb`
   - `job_retry.rb`, `job_logger.rb`, `job_util.rb`, `component.rb`
   - `middleware/chain.rb`, `middleware/modules.rb`
-  - `web.rb`, `web/application.rb`, `web/router.rb`, `web/action.rb`, `web/helpers.rb`, `web/config.rb`
-  - `metrics/query.rb`, `metrics/tracking.rb`
+  - `web.rb`, `web/config.rb`: supported public dashboard entrypoint: `require 'sidekiq/web'`.
+  - `sidekiq/web/application.rb` — unsupported upstream internal, intentionally unshimmed; not a Wurk require path.
+  - `sidekiq/web/router.rb` — unsupported upstream internal, intentionally unshimmed; not a Wurk require path.
+  - `sidekiq/web/action.rb` — unsupported upstream internal, intentionally unshimmed; not a Wurk require path.
+  - `sidekiq/web/helpers.rb` — unsupported upstream internal, intentionally unshimmed; not a Wurk require path.
+  - `metrics/query.rb`: supported public query entrypoint: `require 'sidekiq/metrics/query'`.
+  - `sidekiq/metrics/tracking.rb` — unsupported upstream internal, intentionally unshimmed; not a Wurk require path.
+  - Wurk's SPA dashboard has no drop-in replacement for the upstream Web internals,
+    and Wurk has no `ExecutionTracker` replacement. The supported entrypoints above
+    expose public dashboard/query surfaces, not equivalent internal implementations.
   - `iterable_job.rb`, `job/iterable.rb`, `job/interrupt_handler.rb`
   - `cli.rb`, `embedded.rb`, `deploy.rb`, `test_api.rb`, `transaction_aware_client.rb`

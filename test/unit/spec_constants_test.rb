@@ -82,14 +82,17 @@ class SpecConstantsTest < Wurk::Test::UnitCase
       { 'BUNDLE_GEMFILE' => File.join(ROOT, 'Gemfile') },
       RbConfig.ruby, '-rbundler/setup', *Wurk::Test::SUBPROCESS_COVERAGE,
       '-rjson', '-I', File.join(ROOT, 'lib'), '-e', PROBE,
-      *(CONSTANTS - NOT_PROVIDED.keys)
+      *(CONSTANTS | NOT_PROVIDED.keys)
     )
 
     assert_predicate status, :success?, err
     report = JSON.parse(out)
-    missing = report.reject { |_, r| r['resolved'] }.keys
-    split = report.select { |_, r| r['resolved'] && !r['same'] }.map { |name, r| "#{name} != #{r['twin']}" }
+    waived, required = report.partition { |name, _| NOT_PROVIDED.key?(name) }.map(&:to_h)
+    unexpected = waived.select { |_, r| r['resolved'] }.keys
+    missing = required.reject { |_, r| r['resolved'] }.keys
+    split = required.select { |_, r| r['resolved'] && !r['same'] }.map { |name, r| "#{name} != #{r['twin']}" }
 
+    assert_empty unexpected, 'deliberately absent constants that unexpectedly resolve'
     assert_empty missing, 'spec constants that do not resolve'
     assert_empty split, 'Sidekiq aliases that are a different object than their Wurk class'
   end
