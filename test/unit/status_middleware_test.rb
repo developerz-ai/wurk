@@ -410,8 +410,9 @@ class StatusMiddlewareTest < Wurk::Test::UnitCase
 
   # Last of the built-ins, so the stored result is `perform`'s own return value
   # and nothing wraps or replaces it first. Asserted relatively, not as
-  # `entries.last`: a host (or another test file requiring an optional
-  # middleware) may `add` after boot and land further in still.
+  # `entries.last`: this reads the mutable global configuration chain, where a
+  # host or optional middleware may add entries after the built-ins. Such additions
+  # do not update a running worker's prepared capsule chain.
   def test_status_is_the_innermost_built_in_middleware
     entries = Wurk.configuration.server_middleware.entries.map(&:klass)
     mine = entries.index(Wurk::Middleware::Status)

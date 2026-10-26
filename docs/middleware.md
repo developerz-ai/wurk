@@ -107,19 +107,30 @@ the mixin is the supported way to get it.
 
 ### Where to register
 
-Register at **boot**, from an initializer, before the swarm forks. The boot
-order is:
+Register at **boot**, from an initializer, before swarm preparation and fork.
+The boot order is:
 
 1. Host app boots; `config/initializers/*` run — this is where you register.
 2. The railtie's `after_initialize` fires.
 3. The swarm closes parent-side Redis/DB sockets.
-4. The swarm forks N children.
-5. Each child reconnects and starts fetching.
+4. In the parent, `Configuration#prepare_for_fork!` calls each capsule's
+   `prepare_shared!`, materializing its middleware chains and refreshing its
+   server copy with newly registered global classes.
+5. The swarm forks N children, which inherit those prepared chains.
+6. Each child reconnects, completes capsule preparation, and starts fetching.
 
-Chains registered in step 1 are inherited by every fork, because the entries
-are plain Ruby objects copied by `fork`. **Registering after the fork only
-affects the process that did it** — a call from inside a job body mutates that
-one child's chain and nothing else.
+**Late global server registration does not update a running worker's server
+chain.** The processor uses its capsule's prepared copy, not the mutable global
+`config.server_middleware`. Registering on the global chain from inside a job
+body therefore does not add middleware to that worker's execution chain, let
+alone to its siblings.
+
+Client middleware differs: by default, `Wurk::Client.new` keeps a reference to
+`config.client_middleware`, not a snapshot. Mutating that live chain can affect
+subsequent enqueues using it in the same process, including clients already
+constructed with it. It does not propagate across forks or update already-copied
+capsule chains or independent custom client chains. Register both kinds of
+middleware at boot rather than relying on runtime mutation.
 
 The fork-safety rule follows from the same place: the chain stores a **klass
 plus constructor args**, not a live instance, and `Chain#retrieve` builds a
@@ -257,13 +268,26 @@ batch middleware names `Wurk::Middleware::Expiry`, which is loaded after it.
 
 ### Capsules
 
-Capsules get their own chain via `copy_for`, which duplicates the entries array
+Capsules get their own chains via `copy_for`, which duplicates the entries array
 and rebinds `@config` to the capsule — so `redis_pool` / `logger` inside
-middleware resolve against that capsule, not the global config. Mutating a
-capsule's chain does not affect the global one, and vice versa, **after** the
-copy is taken. The copy is taken lazily on first access (and forced by
-`Capsule#prepare!` at launcher boot), so global registrations made in an
-initializer are picked up.
+middleware resolve against that capsule, not the global config. Each copy is
+memoized lazily on first access; it is not a live view of the global chain.
+Capsule-local changes do not mutate the global chain.
+
+An early server-chain copy is not necessarily final: during preparation,
+`Capsule#prepare_shared!` refreshes it with global middleware classes not seen
+by that capsule before, preserving capsule-local removals. This is not a full
+resynchronization of global ordering, removals, or constructor arguments. The
+client copy is not refreshed this way.
+
+For a swarm, shared preparation happens **in the parent before fork** through
+`Configuration#prepare_for_fork!`. The child launcher completes `Capsule#prepare!`
+and freezes configuration before processing. Without a swarm (standalone or
+embedded launcher), `Capsule#prepare!` performs shared preparation in that
+process before configuration freezes. Once running, the capsule's server chain
+is a separate prepared snapshot: later global mutations do not update it.
+Complete global registration and ordering in initializers before preparation;
+configure capsule-specific middleware there too.
 
 ```ruby
 # config/initializers/wurk.rb
@@ -558,10 +582,11 @@ inner. That is why:
 That position is load-bearing, so it is **anchored**.
 `Wurk::Batch::ServerMiddleware` declares
 `outer_of` → `[Wurk::Middleware::Expiry, Wurk::Limiter::ServerMiddleware]`, and
-`Chain#add` honours it: re-registering the batch middleware — a
-`configure_server` block, a test helper, any later
-`add Wurk::Batch::ServerMiddleware` — can no longer move it **inside** `Expiry`
-or the Limiter. The anchor puts it back before the first of them. (A plain
+`Chain#add` honours it: re-registering the batch middleware on a chain — in a
+boot-time `configure_server` block or a test helper, for example — cannot move
+it **inside** `Expiry` or the Limiter on that chain. The anchor puts it back
+before the first of them. This ordering rule does not make a late mutation of
+the global configuration chain update a running worker's server snapshot. (A plain
 `add` appends, so before the anchor existed the same re-registration silently
 relocated batch inside both, and the accounting broke with it: an expired job
 never unwound through the batch's `ack_success`, so the batch's `pending` never
