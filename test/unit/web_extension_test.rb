@@ -8,7 +8,8 @@ require 'wurk/web/extension'
 # Pins the Web-extension renderer (#187): Sinatra-style route capture from
 # `Ext.registered(app)`, the Action context (params/erb/redirect + the
 # WebHelpers subset), and Renderer dispatch (render / redirect rewrite / 404 /
-# unknown-ext nil / asset lookup with traversal guard).
+# unknown-ext nil / failing-registration 500 / asset lookup with traversal
+# guard).
 #
 # Registers into the process-global Wurk::Web.config under a per-test unique
 # name and removes it in teardown, so parallel test classes never collide.
@@ -260,6 +261,70 @@ class WebExtensionTest < Wurk::Test::UnitCase
     refute_includes body, 'kaboom', 'exception messages must stay server-side'
   end
 
+  # A raising `registered(app)` used to re-run on every request (`||=` never
+  # assigns past the raise) and its exception escaped Renderer into the host
+  # Rack server.
+  def test_failing_registration_is_a_500_on_every_request_and_runs_once
+    calls = 0
+    broken = Module.new do
+      define_singleton_method(:registered) do |app|
+        calls += 1
+        app.get('/listed') { 'should never render' }
+        raise 'registration detonated'
+      end
+    end
+    name = "broken-#{::Process.pid}-#{object_id}"
+    begin
+      Wurk::Web.config.register_extension(broken, name: name, tab: ["Broken #{name}"], index: ["#{name}/"])
+
+      first_status, _headers, first_body = render_call('GET', '/listed', name: name)
+
+      assert_equal 500, first_status
+      assert_equal 'Extension render error (see server logs)', first_body
+      refute_includes first_body, 'registration detonated', 'exception messages must stay server-side'
+
+      second_status, _headers, second_body = render_call('GET', '/listed', name: name)
+
+      assert_equal 500, second_status
+      assert_equal 'Extension render error (see server logs)', second_body
+      refute_includes second_body, 'registration detonated'
+
+      assert_equal 1, calls, 'registered(app) must run exactly once despite raising'
+    ensure
+      Wurk::Web.config.extensions.reject! { |e| e[:name] == name }
+      Wurk::Web.config.tabs.delete("Broken #{name}")
+    end
+  end
+
+  def test_successful_registration_runs_exactly_once_across_requests
+    calls = 0
+    ext = Module.new do
+      define_singleton_method(:registered) do |app|
+        calls += 1
+        app.get('/once') { 'rendered ok' }
+      end
+    end
+    name = "once-#{::Process.pid}-#{object_id}"
+    begin
+      Wurk::Web.config.register_extension(ext, name: name, tab: ["Once #{name}"], index: ["#{name}/"])
+
+      first_status, _headers, first_body = render_call('GET', '/once', name: name)
+
+      assert_equal 200, first_status
+      assert_equal 'rendered ok', first_body
+
+      second_status, _headers, second_body = render_call('GET', '/once', name: name)
+
+      assert_equal 200, second_status
+      assert_equal 'rendered ok', second_body
+
+      assert_equal 1, calls
+    ensure
+      Wurk::Web.config.extensions.reject! { |e| e[:name] == name }
+      Wurk::Web.config.tabs.delete("Once #{name}")
+    end
+  end
+
   # --- assets ----------------------------------------------------------------
 
   def test_asset_file_resolves_with_cache_for
@@ -313,9 +378,9 @@ class WebExtensionTest < Wurk::Test::UnitCase
 
   private
 
-  def render_call(method, subpath, query: '', embed: true, env: env_for(method, query))
+  def render_call(method, subpath, query: '', embed: true, env: env_for(method, query), name: @name)
     Wurk::Web::Extension::Renderer.call(
-      name: @name, method: method, subpath: subpath, env: env, mount: '/wurk', embed: embed
+      name: name, method: method, subpath: subpath, env: env, mount: '/wurk', embed: embed
     )
   end
 
