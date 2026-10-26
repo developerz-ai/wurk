@@ -121,16 +121,66 @@ describe('useJobSetActions', () => {
     expect(await screen.findByText(t('toast.unavailable'))).toBeInTheDocument();
   });
 
-  it.each(['single', 'bulk', 'all'])('a 422 partial failure from %s toasts the counts and still refreshes the list', async (btn) => {
+  it.each(['single', 'bulk', 'all'])('a 422 partial failure from %s toasts the counts and every diagnostic, and still refreshes the list', async (btn) => {
     const { invalidateSpy } = renderHarness('retries', 422, {
       ok: false,
       count: 3,
-      failed: [{ key: '1|j1', error: 'RuntimeError: boom' }, { key: '2|j2', error: 'RuntimeError: boom' }],
+      failed: [{ key: '1|j1', error: 'RuntimeError: boom' }, { key: '2|j2', error: 'TypeError: invalid job' }],
     });
     fireEvent.click(screen.getByText(btn));
 
-    expect(await screen.findByText(t('toast.partial', { count: 3, failed: 2 }))).toBeInTheDocument();
+    const alert = await screen.findByRole('alert');
+    expect(alert).toHaveTextContent(t('toast.partial', { count: 3, failed: 2 }));
+    expect(alert).toHaveTextContent('1|j1: RuntimeError: boom');
+    expect(alert).toHaveTextContent('2|j2: TypeError: invalid job');
+    expect(screen.getAllByRole('alert')).toHaveLength(1);
     expect(invalidateSpy).toHaveBeenCalledWith({ queryKey: ['retries'] });
+    expect(invalidateSpy).toHaveBeenCalledWith({ queryKey: ['stats'] });
+  });
+
+  it.each(['single', 'bulk', 'all'])('keeps counts, valid fields and invalidations despite malformed diagnostics from %s', async (btn) => {
+    const failed = [
+      null, 'not an entry', 42, false, [], {},
+      { key: null, error: null },
+      { key: 'key-only' },
+      { error: 'error-only' },
+      { key: 'valid-key', error: { message: 'do not stringify' } },
+      { key: { jid: 'do not stringify' }, error: 'valid-error' },
+      { key: 123, error: false },
+      { key: 'complete-key', error: 'complete-error' },
+    ];
+    const { invalidateSpy } = renderHarness('scheduled', 422, { count: 4, failed });
+    fireEvent.click(screen.getByText(btn));
+
+    const alert = await screen.findByRole('alert');
+    expect(alert).toHaveTextContent(t('toast.partial', { count: 4, failed: failed.length }));
+    for (const diagnostic of ['key-only', 'error-only', 'valid-key', 'valid-error', 'complete-key: complete-error']) {
+      expect(alert).toHaveTextContent(diagnostic);
+    }
+    for (const invalid of ['[object Object]', 'do not stringify', 'undefined', 'null', 'not an entry', '123', 'false']) {
+      expect(alert).not.toHaveTextContent(invalid);
+    }
+    expect(screen.getAllByRole('alert')).toHaveLength(1);
+    expect(invalidateSpy).toHaveBeenCalledWith({ queryKey: ['scheduled'] });
+    expect(invalidateSpy).toHaveBeenCalledWith({ queryKey: ['stats'] });
+  });
+
+  it('keeps more than five failure diagnostics in one plain-text toast', async () => {
+    const failed = Array.from({ length: 7 }, (_, index) => ({
+      key: `${index}|job-${index}`,
+      error: `<strong>failure-${index}</strong>`,
+    }));
+    const { invalidateSpy } = renderHarness('dead', 422, { count: 2, failed });
+    fireEvent.click(screen.getByText('bulk'));
+
+    const alert = await screen.findByRole('alert');
+    expect(alert).toHaveTextContent(t('toast.partial', { count: 2, failed: 7 }));
+    for (const entry of failed) {
+      expect(alert).toHaveTextContent(`${entry.key}: ${entry.error}`);
+    }
+    expect(alert.querySelector('strong')).toBeNull();
+    expect(screen.getAllByRole('alert')).toHaveLength(1);
+    expect(invalidateSpy).toHaveBeenCalledWith({ queryKey: ['dead'] });
     expect(invalidateSpy).toHaveBeenCalledWith({ queryKey: ['stats'] });
   });
 
