@@ -37,7 +37,7 @@ own, so this lane never re-reports a claim a gate already covers:
 | `test/unit/wiki_pages_test.rb:13` | the docs/wiki/ pages: shape, links, duplication |
 | `test/unit/llms_txt_test.rb:9` | docs/site/llms.txt: the format and the links it lists |
 | `test/unit/site_code_blocks_test.rb:17` | keyboard reachability of the code snippets on the site |
-| `test/unit/release_doc_claims_test.rb:14` | RELEASE.md's step table against release.yml |
+| `test/unit/release_doc_claims_test.rb:19` | RELEASE.md's step table against release.yml |
 | `test/unit/contributing_line_refs_test.rb:13` | CONTRIBUTING.md's `bin/check:<line>` references |
 | `test/unit/spec_constants_test.rb:17` | the `Sidekiq::*` constants the specs name |
 
