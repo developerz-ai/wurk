@@ -2,7 +2,7 @@
 
 # Wiring for the public demo.
 
-# Public dashboard is read-only: every mutating request (retry/kill/requeue/
+# Public dashboard is read-only: every mutating request (retry/kill/add_to_queue/
 # pause/clear) returns 403 at the middleware layer, and the SPA hides the
 # destructive actions. WURK_WEB_READ_ONLY=1 in the image sets this too; doing it
 # here as well makes the demo read-only even if someone runs it without the env.

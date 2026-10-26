@@ -16,7 +16,7 @@ Wurk::Engine.routes.draw do
     post 'queues/:name/pause',   to: 'api#pause_queue',   as: :api_pause_queue,   constraints: { name: %r{[^/]+} }
     post 'queues/:name/unpause', to: 'api#unpause_queue', as: :api_unpause_queue, constraints: { name: %r{[^/]+} }
 
-    # Job-set mutations (retry/delete/kill/requeue/clear). The SPA posts to
+    # Job-set mutations (retry/delete/kill/add_to_queue/clear). The SPA posts to
     # these; the Authorization middleware 403s every non-GET in read-only mode,
     # so they need no extra guard. `:key` is "<score>|<jid>" (Wurk::SortedEntry#id);
     # `all/:cmd` operates over the whole set; the bare collection POST is a bulk

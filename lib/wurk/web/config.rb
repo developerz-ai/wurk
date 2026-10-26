@@ -279,7 +279,7 @@ module Wurk
       end
 
       # Read-only mode. When on, the Authorization middleware blocks every
-      # non-GET request (retry/kill/requeue/delete/pause/resume/clear) with
+      # non-GET request (retry/kill/add_to_queue/delete/pause/unpause/clear) with
       # 403, and the SPA hides destructive actions via the /api/meta flag.
       # Defaults from WURK_WEB_READ_ONLY=1 so a viewer-only deploy (e.g. the
       # public demo) needs no Ruby config.
