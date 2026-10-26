@@ -108,6 +108,21 @@ current lock.
 - A dead owner's list that is still there several minutes after the heartbeat
   expired: check the worker logs for reaper errors, and check the name parses as one
   of the two shapes above. Names in any other shape are skipped by the reaper.
+- A list in neither shape — a name another tool wrote under the `queue:`
+  prefix, or one whose tail is not `<host>|<pid>|<index>` — is reported by the
+  reaper's WARN and skipped: the warning names the key and how many jobs it
+  holds, and the list is **never reclaimed automatically**. Its jobs stay where
+  they are until you move them back by hand, with the `LMOVE` loop below. (Pro's
+  own four-part name *is* one of the two shapes above: it is parsed and
+  reclaimed like Wurk's own, not skipped.)
+- Expect **one identical WARN per worker pid that serves the key's queue** for
+  such a key. The reaper's "already reported" set is in-memory and per process,
+  and the boot sweep runs unguarded, so every booting child that serves that
+  queue reports the key for itself; a later sweep reports it again only in a
+  process that has not reported it yet, and any restart starts over. The
+  repeated lines are the expected shape of this warning — they are **not**
+  evidence that the fleet is suppressing it. See
+  [the reaper](reliability.md#the-unparseable-key-warning).
 - To move a list back by hand, first be **certain the owner is dead** (no heartbeat,
   and no process with that pid on that host). Moving a live process's list runs its
   in-flight jobs twice.

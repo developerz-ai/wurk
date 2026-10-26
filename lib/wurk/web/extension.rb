@@ -41,8 +41,29 @@ module Wurk
 
         HTTP_METHODS.each do |verb|
           define_method(verb) do |path, &block|
-            @routes << [verb.to_s.upcase, Route.new(path), block]
+            route(verb, path, &block)
           end
+        end
+
+        def route(*methods, path, &block)
+          matcher = Route.new(path)
+          methods.each { |method| @routes << [method.to_s.upcase, matcher, block] }
+        end
+
+        def match(env)
+          require 'cgi'
+          @routes.each do |method, route, block|
+            next unless method == env['REQUEST_METHOD']
+
+            params = route.match(env['PATH_INFO'])
+            next unless params
+
+            context = env.fetch('wurk.ext.context', {})
+            ext = context.fetch(:ext, {}).merge(helpers: { modules: helper_modules, blocks: helper_blocks })
+            return Action.new(env: env, route_params: params, block: block, ext: ext,
+                              mount: context[:mount], embed: context.fetch(:embed, true))
+          end
+          nil
         end
 
         # Sidekiq extensions add helpers via `app.helpers(Mod)` and/or a block.
@@ -171,21 +192,20 @@ module Wurk
         JSON_HEADERS = { 'Content-Type' => 'application/json', 'Cache-Control' => 'private, no-store' }.freeze
         TEXT_HEADERS = { 'Content-Type' => 'text/plain' }.freeze
 
-        def initialize(env:, route_params:, ext:, mount:, embed: true)
+        def initialize(env:, route_params:, ext:, mount:, embed: true, block: nil)
+          @block = block
           @env = env
           @request = ::Rack::Request.new(env)
           @route_params = route_params
-          @ext_name = ext[:name].to_s
-          @ext_index = Array(ext[:index]).first.to_s
-          @root_dir = ext[:root_dir]
-          @ext_strings = ext[:strings]
           @mount = mount.to_s
           @embed = embed
           @subpath = env['wurk.ext.subpath']
+          assign_ext(ext)
           extend_helpers(ext[:helpers])
         end
 
-        attr_reader :env, :request
+        attr_accessor :env, :block
+        attr_reader :request
 
         def params = @params ||= symbolize(@request.params).merge(@route_params)
         def url_params(key) = @request.params[key.to_s]
@@ -226,11 +246,19 @@ module Wurk
 
         # Run the route block in this context. Returns the rendered String, a
         # Redirect, or a Rack triple from `halt`/`json`/the block itself.
-        def run(block)
+        def run(block = @block)
           catch(:halt) { instance_exec(&block) }
         end
 
         private
+
+        # Split from `initialize` so the constructor stays inside the ABC budget.
+        def assign_ext(ext)
+          @ext_name = ext[:name].to_s
+          @ext_index = Array(ext[:index]).first.to_s
+          @root_dir = ext[:root_dir]
+          @ext_strings = ext[:strings]
+        end
 
         def reload_location
           return @ext_index if @embed
@@ -283,22 +311,17 @@ module Wurk
             require 'erb'
             require 'cgi'
 
-            # Force the capture here, outside `render`'s rescue: match_route
-            # and action_for reach captured_app on paths with no rescue, so a
-            # raising `registered(app)` would otherwise escape into the host
-            # Rack server. Reported per request, like the render-error path.
+            # Registration failures are cached and reported per request, without
+            # serving any routes captured before the failure.
             captured_app(ext)
             if (registration_error = ext[:_registration_error])
               ::Wurk.configuration.handle_exception(registration_error, context: 'web-extension-registration')
               return [500, html_headers, 'Extension render error (see server logs)']
             end
 
-            verb = method.to_s.upcase
-            route, block, route_params = match_route(ext, verb, subpath)
-            return [404, html_headers, "No #{verb} route #{subpath} in extension #{name}"] unless route
-
             env['wurk.ext.subpath'] = subpath
-            render(ext, route_params, block, env, { mount: mount, embed: embed })
+            render(ext, env.merge('REQUEST_METHOD' => method.to_s.upcase, 'PATH_INFO' => subpath),
+                   { mount: mount, embed: embed })
           end
 
           # `[absolute_path, cache_for_seconds]` of an asset under the
@@ -325,9 +348,15 @@ module Wurk
 
           # `ctx` is `{ mount:, embed: }` — the URL-space the response renders
           # into (engine embed vs standalone root).
-          def render(ext, route_params, block, env, ctx)
-            action = action_for(ext, route_params, env, ctx)
-            respond(action.run(block), action, ext, ctx)
+          def render(ext, env, ctx)
+            context = ctx.merge(ext: ext.merge(strings: strings_for(ext)))
+            action = captured_app(ext).match(env.merge('wurk.ext.context' => context))
+            unless action
+              return [404, html_headers,
+                      "No #{env['REQUEST_METHOD']} route #{env['PATH_INFO']} in extension #{ext[:name]}"]
+            end
+
+            respond(action.run, action, ext, ctx)
           rescue ::StandardError => e
             ::Wurk.configuration.handle_exception(e, context: 'web-extension-render')
             # Message stays server-side (handle_exception logs it): exception
@@ -352,25 +381,6 @@ module Wurk
             return body.to_s unless body.respond_to?(:each)
 
             (+'').tap { |out| body.each { |chunk| out << chunk.to_s } }
-          end
-
-          def action_for(ext, route_params, env, ctx)
-            app = captured_app(ext)
-            Action.new(
-              env: env, route_params: route_params, mount: ctx[:mount], embed: ctx[:embed],
-              ext: ext.merge(helpers: { modules: app.helper_modules, blocks: app.helper_blocks },
-                             strings: strings_for(ext))
-            )
-          end
-
-          def match_route(ext, verb, subpath)
-            captured_app(ext).routes.each do |meth, route, block|
-              next unless meth == verb
-
-              params = route.match(subpath)
-              return [route, block, params] if params
-            end
-            [nil, nil, nil]
           end
 
           # Capture the ext's routes/helpers once; memoize on the config entry.

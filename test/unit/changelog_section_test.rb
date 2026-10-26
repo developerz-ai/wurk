@@ -22,6 +22,17 @@ class ChangelogSectionTest < Wurk::Test::UnitCase
     refute_includes out, '## [0.0.4]', 'must stop at the next version header'
   end
 
+  # The 0.0.1 body is the one the release notes extract for the first public
+  # release; it was rewritten in place, so pin that it still prints.
+  def test_prints_the_first_release_section_body
+    out = IO.popen([SCRIPT, '0.0.1'], &:read)
+
+    assert_equal 0, $CHILD_STATUS.exitstatus
+    assert_includes out, '### Dashboard'
+    assert_includes out, '### Compat'
+    refute_includes out, '## [0.0.1]', 'should print the body, not the header'
+  end
+
   def test_fails_on_missing_version
     out = IO.popen([SCRIPT, '99.99.99'], err: %i[child out], &:read)
 

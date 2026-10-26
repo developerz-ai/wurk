@@ -26,6 +26,8 @@ All notable changes to Wurk are recorded here. Format: [Keep a Changelog](https:
 
 - **The Pro §3.2 spec no longer says the `processes` membership SET expires.** The bullet read "Process death: heartbeat key `processes` expires after 60s", but `processes` is a TTL-less membership SET: the 60s TTL belongs to the per-identity heartbeat hash `<identity>`, and liveness is judged by existence — an identity is alive only while its heartbeat hash still exists, so a SET member whose hash has expired is dead even though it is still listed. `docs/target/sidekiq-pro.md` now says so, and every place that repeated the claim was aligned to match it: the operator doc (`docs/reliability.md`), the HTTP API doc (`docs/api-http.md`), the reaper's liveness comment (`lib/wurk/fetcher/reaper.rb`), the launcher's heartbeat comment (`lib/wurk/launcher.rb`) and the launcher test's comment (`test/unit/launcher_test.rb`). Documentation-only: no runtime behaviour changed.
 
+- **The reaper's unparseable-key warning now states its scope.** The WARN a worker logs for a `queue:*|*` key that is not a private list it can read the owner of — a list whose owner tail does not parse, `queue:<queue>|<host>|not-a-pid|<index>`, say — said what to do about the list, but not how often the warning repeats, and the dedup behind it is not what an operator would assume: the already-reported keys are an in-memory `Set` held by the reaper, one instance per worker process and built after the fork, so there is no Redis key, no TTL, and nothing shared with the other workers. The message now ends with "Reported once per process: every worker that sees the key logs it for itself, and it is reported again after a restart.", and the reliability page and the incident runbook describe the repetition it implies: one identical line per booting worker pid (the boot sweep is unguarded), the same key reported again by a later sweep's lock winner only when that process has not reported it yet (each process's own set is the only memory), or after any restart, and the cluster-wide sweep lock deciding who sweeps, not who has already reported the key. No fleet-wide deduplication and no Redis key were added, and nothing changed beyond the message — the same keys are reported, by the same processes, at the same times.
+
 ## [1.8.1] - 2026-10-16
 
 ### Fixed
@@ -565,7 +567,7 @@ Writing the feature documentation against the implementation — rather than aga
 
 First stable release. Wurk is a 100% drop-in replacement for Sidekiq, Sidekiq
 Pro, and Sidekiq Enterprise — same Redis schema, same job JSON, same Ruby DSL —
-with fork-based parallelism and a precompiled React dashboard, all free in one
+with fork-based parallelism and a precompiled dashboard SPA, all free in one
 gem. This release completes OSS + Pro + Ent feature parity (roadmap #147) and
 adds a `require "sidekiq"` compatibility entrypoint so existing apps and
 third-party gems swap in with a one-line `gem "sidekiq"` → `gem "wurk"` change.
@@ -607,7 +609,7 @@ third-party gems swap in with a one-line `gem "sidekiq"` → `gem "wurk"` change
 - `docs/compatibility.md` — compatibility & legal basis: Wurk reimplements the Sidekiq API (clean-room, original implementation), the *Google v. Oracle* rationale, and trademark/nominative-use notes. Linked from the README.
 
 ### Changed
-- Dependency refresh. GitHub Actions bumped to current majors (`checkout@v6`, `setup-node@v6`, `upload-artifact@v7`) on Node 24, clearing the Node 20 deprecation. Dashboard frontend upgraded to React 19, React Router 7, Recharts 3, Vite 8, and TypeScript 6. Ruby dev/test gems refreshed to latest.
+- Dependency refresh. GitHub Actions bumped to current majors (`checkout@v6`, `setup-node@v6`, `upload-artifact@v7`) on Node 24, clearing the Node 20 deprecation. Dashboard frontend upgraded to React 19, React Router 7, Recharts 3, Vite 8, and TypeScript 6. Ruby dev/test gems refreshed to latest. That React-era dashboard stack was later replaced wholesale by the SolidJS rewrite in 1.1.0.
 
 ## [0.0.3] - 2026-06-01
 
@@ -624,7 +626,7 @@ third-party gems swap in with a one-line `gem "sidekiq"` → `gem "wurk"` change
 
 ## [0.0.1] - 2026-06-01
 
-First public (pre-1.0) release. Wurk is a 100% API-compatible drop-in replacement for Sidekiq + Sidekiq Pro + Sidekiq Enterprise — same Redis key schema, same job JSON, same Ruby DSL — with fork-based real parallelism, the full Pro + Enterprise feature set in one free gem (no license check), and a precompiled React dashboard.
+First public (pre-1.0) release. Wurk is a 100% API-compatible drop-in replacement for Sidekiq + Sidekiq Pro + Sidekiq Enterprise — same Redis key schema, same job JSON, same Ruby DSL — with fork-based real parallelism, the full Pro + Enterprise feature set in one free gem (no license check), and a precompiled dashboard SPA.
 
 ### Runtime
 - Fork-based Swarm: parent forks N children with PID supervision, rolling restart (SIGUSR1), graceful drain (SIGTERM/SIGINT) to `shutdown_timeout`, and global pause/resume (SIGTSTP/SIGCONT).
@@ -647,7 +649,7 @@ First public (pre-1.0) release. Wurk is a 100% API-compatible drop-in replacemen
 - Transparent job-payload encryption with key rotation and graceful failure modes (a decryption failure degrades rather than crashing the worker).
 
 ### Dashboard
-- Precompiled React + TypeScript SPA mounted under the engine — consumers never run Node. Tabs: queues, retries, scheduled, dead, busy, processes, batches (+ per-batch detail), limiters, periodic, metrics, and search. SSE live updates, read-only mode, pagination, i18n with host-app override, and a dark default theme.
+- **Dashboard as it ships today** — this release predates the 1.1.0 SolidJS rewrite and the 1.6.0 Flows pane, so what follows describes the dashboard as it ships now, not what 0.0.1 shipped. Precompiled SolidJS + TypeScript SPA mounted under the engine — consumers never run Node. Panes: dashboard, queues, retries, scheduled, dead, busy, batches (+ per-batch detail), flows (+ per-flow detail), limiters, cron, metrics, profiles, and search — there is no separate processes pane; live worker/process state is surfaced on the Dashboard and Busy panes. SSE live updates, read-only mode, pagination, i18n with host-app override, and a dark default theme.
 
 ### Compat
 - `Sidekiq::*` aliases for every public `Wurk::*` class (`Sidekiq::Worker`, `Sidekiq::Batch`, `Sidekiq::Limiter`, `Sidekiq.configure_server`, …) — the drop-in contract.

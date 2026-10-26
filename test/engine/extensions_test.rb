@@ -6,13 +6,27 @@ require_relative '../engine_test_helper'
 # `GET/POST /wurk/ext/:name/*` renders the registered extension's route and
 # `GET /wurk/ext-assets/:name/*` serves its asset_paths. Registers a synthetic
 # extension under a per-test unique name and removes it in teardown.
+#
+# Mutates the process-wide `Wurk::Web.config`, so — like
+# web_authorization_test.rb — this class does not declare `parallelize_me!`.
+# Minitest would run the methods in threads, and a concurrent
+# `register_extension` inserts into the shared `tabs` Hash while a sibling
+# request iterates it (`/api/meta` → `custom_tabs`), which raises "can't add
+# a new key into hash during iteration" inside a test. — editor:router[bot]
 class ExtensionsTest < Wurk::Test::EngineCase
-  parallelize_me!
-
   FIXTURE_DIR = File.expand_path('../fixtures/demo_ext', __dir__)
+
+  # Serializes against the other classes that mutate the same singletons
+  # (api_read_only_test.rb's pattern). — editor:router[bot]
+  def run(*)
+    Wurk::Test::GLOBAL_STATE_MUTEX.synchronize { super }
+  end
 
   module EngineExt
     def self.registered(app)
+      app.route('GET', 'POST', '/routed/:id') do
+        erb '<p>routed <%= h(route_params(:id)) %> / <%= h(params[:id]) %></p>'
+      end
       app.get '/list' do
         erb '<table class="ext-table"><tr><td><%= h(url_params("q") || "all") %></td></tr></table>'
       end
@@ -61,6 +75,55 @@ class ExtensionsTest < Wurk::Test::EngineCase
     assert_ok
     assert_includes last_response.body, '<td>needle</td>'
     assert_includes last_response.content_type, 'text/html'
+  end
+
+  def test_route_dsl_dispatches_first_and_repeated_get_requests
+    %w[first second].each do |id|
+      get "/wurk/ext/#{@name}/routed/#{id}"
+
+      assert_ok
+      assert_equal "<p>routed #{id} / #{id}</p>", last_response.body
+    end
+  end
+
+  def test_route_dsl_dispatches_first_and_repeated_same_origin_posts
+    %w[first second].each do |id|
+      post "/wurk/ext/#{@name}/routed/#{id}", {}, { 'HTTP_SEC_FETCH_SITE' => 'same-origin' }
+
+      assert_ok
+      assert_equal "<p>routed #{id} / #{id}</p>", last_response.body
+    end
+  end
+
+  def test_raising_registration_is_cached_and_never_executes_partial_routes
+    calls = 0
+    executions = 0
+    broken = Module.new do
+      define_singleton_method(:registered) do |app|
+        calls += 1
+        app.route('GET', 'POST', '/partial/:id') do
+          executions += 1
+          'partial route'
+        end
+        raise 'private registration details'
+      end
+    end
+    name = "broken-engext-#{::Process.pid}-#{object_id}"
+    begin
+      Wurk::Web.config.register_extension(broken, name: name, tab: ["Broken #{name}"], index: ["#{name}/"])
+      2.times do
+        get "/wurk/ext/#{name}/partial/42"
+
+        assert_equal 500, last_response.status
+        assert_equal 'Extension render error (see server logs)', last_response.body
+        refute_includes last_response.body, 'private registration details'
+      end
+      assert_equal 1, calls
+      assert_equal 0, executions
+    ensure
+      Wurk::Web.config.extensions.reject! { |ext| ext[:name] == name }
+      Wurk::Web.config.tabs.delete("Broken #{name}")
+    end
   end
 
   def test_extension_redirect_stays_under_the_embed_base
