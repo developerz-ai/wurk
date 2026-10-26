@@ -182,6 +182,103 @@ class ForbiddenClaimsTest < Minitest::Test
     assert_raises(Minitest::Assertion) { extract_panes(panes, {}, routes) }
   end
 
+  MEASUREMENTS = 'docs/plans/2026/08/06/101-faster-than-sidekiq/08-measurements.md'
+  HEADLINES = %w[
+    README.md docs/site/llms.txt docs/wiki/Home.md docs/wiki/Performance.md CLAUDE.md
+    docs/idea/00-seed.md docs/idea/01-overview.md docs/idea/06-performance.md docs/idea/13-roadmap.md
+  ].freeze
+  RATIO_RANGE = /(?<![\d.])(\d+\.\d+)[x×]\s*[–-]\s*(\d+\.\d+)[x×]/
+  RELEASE_COMPARISON = /(?:every release[^.!?]*(?:benchmark|Sidekiq)|(?:benchmark|Sidekiq)[^.!?]*every release)/i
+  RANGE_CANDIDATE = /(?:\d+\.\d+[x×]\s*[–-]\s*\S+|\S+\s*[–-]\s*\d+\.\d+[x×])/
+
+  def test_published_tables_and_engine_labels_match_raw_paired_evidence
+    evidence = measurement_evidence(read_doc(MEASUREMENTS))
+    %w[docs/benchmarks.md docs/wiki/Performance.md].each do |path|
+      text = read_doc(path)
+
+      assert_equal evidence.fetch(:rows).map { |row| row.drop(1) }, published_rows(text), path
+    end
+    %w[README.md docs/benchmarks.md docs/wiki/Performance.md].each do |path|
+      assert_engine_labels(read_doc(path), evidence)
+    end
+    assert_operator read_doc('docs/wiki/Performance.md').lines.size, :<=, 70
+  end
+
+  def test_headline_ranges_follow_paired_medians_not_pooled_ratios
+    evidence = measurement_evidence(read_doc(MEASUREMENTS))
+
+    HEADLINES.each { |path| assert_headline_range(read_doc(path), evidence, path) }
+    assert_headline_range(WurkDocs::LlmsFull.build(ROOT), evidence, 'llms-full build output')
+  end
+
+  def test_guide_headline_and_summary_remain_dated
+    text = read_doc('docs/benchmarks.md')
+
+    assert_guide_summary(text)
+    ['currently faster', 'current-release guarantee'].each do |phrase|
+      bad = text.sub('historical measurements', phrase)
+      assert_raises(Minitest::Assertion) { assert_guide_summary(bad) }
+    end
+  end
+
+  def test_command_builder_measurement_is_attributed_to_release_notes
+    guide = read_doc('docs/benchmarks.md')
+
+    assert_command_builder_attribution(guide)
+    ['~2.1µs', '~0.48µs', 'historical measurement', '../CHANGELOG.md#170---2026-08-10'].each do |token|
+      assert_raises(Minitest::Assertion) { assert_command_builder_attribution(guide.gsub(token, 'drift')) }
+    end
+  end
+
+  def test_no_every_release_comparison_promise
+    surfaces.each do |name, text|
+      refute_match(RELEASE_COMPARISON, text,
+                   "#{name}: must not promise comparison benchmarking every release")
+    end
+  end
+
+  def test_range_guard_rejects_drift_and_malformed_claims_even_beside_correct_range
+    evidence = measurement_evidence(read_doc(MEASUREMENTS))
+    %w[x ×].each do |sign|
+      good = "Wurk vs stock Sidekiq: 0.87#{sign}–1.02#{sign}."
+
+      assert_headline_range(good, evidence, 'synthetic')
+      [good.sub('0.87', '0.86'), good.sub('1.02', '1.03'), 'No numerical claim.',
+       good.sub('1.02', 'unknown')].each do |bad|
+        assert_raises(Minitest::Assertion) { assert_headline_range(bad, evidence, 'synthetic') }
+        next if bad == 'No numerical claim.'
+
+        assert_raises(Minitest::Assertion) { assert_headline_range("#{good}\n\n#{bad}", evidence, 'mixed') }
+      end
+      historical = "Historically Wurk vs Sidekiq: 0.45#{sign}–0.86#{sign}.\n\n#{good}"
+
+      assert_headline_range(historical, evidence, 'historical figures are allowed')
+    end
+  end
+
+  def test_measurement_guards_reject_drift_missing_and_malformed_evidence
+    raw = read_doc(MEASUREMENTS)
+    evidence = measurement_evidence(raw)
+    good = 'wurk 1.4.0 vs sidekiq 8.1.6, measured 2026-08-07'
+
+    assert_engine_labels(good, evidence)
+    [good.sub('1.4.0', '1.5.0'), good.sub('8.1.6', '8.1.7'), '', good.sub('2026-08-07', 'today')].each do |bad|
+      assert_raises(Minitest::Assertion) { assert_engine_labels(bad, evidence) }
+    end
+    ['', raw.sub('**0.87×**', '**unknown**'), raw.sub('wurk 1.4.0 vs', 'wurk unknown vs'),
+     raw.sub('| Date | 2026-08-07 |', ''),
+     raw.sub('| 4p × 5t | io | **0.97×** | 0.60× | 1.26× |', '')].each do |bad|
+      assert_raises(Minitest::Assertion) { measurement_evidence(bad) }
+    end
+    ['Every release benchmarked against stock Sidekiq', 'against stock Sidekiq every release'].each do |bad|
+      assert_match RELEASE_COMPARISON, bad
+    end
+    rows = published_rows(read_doc('docs/benchmarks.md'))
+    drifted = rows.map { |row| row.map { |value| value == '0.87' ? '0.86' : value } }
+
+    refute_equal evidence.fetch(:rows).map { |row| row.drop(1) }, drifted
+  end
+
   private
 
   def assert_no_dashboard_reader_claims(pitch_surfaces = surfaces)
@@ -193,6 +290,106 @@ class ForbiddenClaimsTest < Minitest::Test
     assert_empty offenders,
                  'the shipped dashboard has no per-job progress or status/results reader; name the machine readers ' \
                  "(Wurk::Status, /v1 GET /jobs/:jid) instead: #{offenders.join(', ')}"
+  end
+
+  def read_doc(path)
+    File.read(File.join(ROOT, path))
+  end
+
+  def measurement_evidence(raw)
+    engines = raw.match(/^\| Engines \| wurk (\d+\.\d+\.\d+) vs sidekiq (\d+\.\d+\.\d+) \|$/)
+    date = raw[/^\| Date \| (\d{4}-\d{2}-\d{2}) \|$/, 1]
+
+    refute_nil engines, 'raw measurement engine versions must be extractable'
+    refute_nil date, 'raw measurement date must be extractable'
+    paired = raw[/^### Paired per-run ratios[^\n]*\n(.*?)(?=^Boot to first job)/m, 1]
+
+    refute_nil paired, 'raw paired estimator section must exist (not the pooled table)'
+    rows = paired.lines.grep(/^\| [14]p /).map do |line|
+      cells = line.delete('*').split('|').map(&:strip)[1...-1]
+
+      assert_equal 5, cells.size, "malformed paired row: #{line}"
+      assert_includes ['1p × 5t', '4p × 5t'], cells[0]
+      assert_includes %w[noop cpu io], cells[1]
+      cells.drop(2).each { |value| assert_match(/\A\d+\.\d+[x×]\z/, value) }
+      cells.map { |value| value.sub(/[x×]\z/, '') }
+    end
+
+    assert_equal ['1p × 5t', '4p × 5t'].product(%w[noop cpu io]), rows.map { |row| row.take(2) },
+                 'raw paired table must contain all six topology/workload rows in publication order'
+    medians = rows.map { |row| Float(row[2]) }
+    { engines: engines.captures, date: date, rows: rows, range: medians.minmax }
+  end
+
+  def published_rows(text)
+    text.lines.grep(/^\| (?:noop|cpu|io) \|/).map do |line|
+      cells = line.split('|').map(&:strip)[1...-1]
+
+      assert_equal 4, cells.size, "malformed published row: #{line}"
+      cells.drop(1).each { |value| assert_match(/\A\d+\.\d+[x×]\z/, value) }
+      cells.map { |value| value.sub(/[x×]\z/, '') }
+    end
+  end
+
+  def assert_engine_labels(text, evidence)
+    versions = text.scan(/\b(wurk|sidekiq) (\d+\.\d+\.\d+)/i).map { |engine, version| [engine.downcase, version] }
+
+    %w[wurk sidekiq].zip(evidence.fetch(:engines)).each do |engine, version|
+      assert_equal [version], versions.select { |name, _| name == engine }.map(&:last).uniq,
+                   "published #{engine} label must match the raw measurement, not today's gem"
+    end
+    assert_includes text, evidence.fetch(:date)
+    dates = text.scan(/\bmeasured (\d{4}-\d{2}-\d{2})/i).flatten.uniq
+
+    assert_equal [evidence.fetch(:date)], dates
+  end
+
+  def assert_headline_range(text, evidence, name)
+    prose = text.gsub(/\]\([^)]*\)/, ']')
+    claims = prose.split(/\n\s*\n/).select do |paragraph|
+      paragraph.match?(/Sidekiq/i) && !paragraph.match?(/\A\s*(?:Historically|Previously)\b/i) &&
+        paragraph.match?(RANGE_CANDIDATE)
+    end
+
+    refute_empty claims, "#{name}: missing or malformed paired headline range"
+    claims.each do |claim|
+      candidates = claim.scan(RANGE_CANDIDATE)
+      ranges = claim.scan(RATIO_RANGE)
+
+      assert_equal candidates.size, ranges.size, "#{name}: malformed paired headline range"
+      ranges.each do |low, high|
+        assert_equal evidence.fetch(:range), [Float(low), Float(high)], "#{name}: drifted paired headline range"
+      end
+    end
+  end
+
+  def assert_guide_summary(text)
+    headline = text.lines[2]
+
+    assert_includes headline, 'latest published paired comparison (2026-08-07)'
+    assert_includes headline, 'historical measurements, not a current-release guarantee'
+    refute_match(/currently|today/i, headline)
+    summary = text.lines.find { |line| line.start_with?('**Published result') }
+
+    refute_nil summary
+    assert_includes summary, '(2026-08-07)'
+    assert_includes summary, 'was at parity'
+    assert_includes summary, 'still behind on `noop` and on boot'
+  end
+
+  def assert_command_builder_attribution(text)
+    notes = read_doc('CHANGELOG.md').lines.find { |line| line.start_with?('- **`Wurk::CommandBuilder`') }
+
+    refute_nil notes
+    timing = notes[/~[\d.]+µs → ~[\d.]+µs per command/]
+
+    refute_nil timing
+    paragraph = text[/The \[1\.7\.0 release notes\].*?timing run here\./m]
+
+    refute_nil paragraph
+    assert_includes paragraph, '../CHANGELOG.md#170---2026-08-10'
+    assert_includes paragraph, timing
+    assert_includes paragraph, 'historical measurement, not a new'
   end
 
   def shipped_panes

@@ -114,8 +114,19 @@ A registered tab whose path isn't one Wurk already renders natively surfaces in
 the left-nav (read from `GET /api/meta`). Clicking it opens an in-dashboard
 **Extension** page that renders the extension's view **natively**: the
 extension's Sinatra-style routes and ERB views are executed server-side and the
-resulting HTML is embedded in the page. `custom_job_info_rows` render as extra
-rows in the job-detail modal.
+resulting static HTML is embedded in an open **ShadowRoot**. Extension styles
+(including stylesheet links) stay in that tree instead of selecting dashboard
+headings, buttons or navigation; dashboard element/class rules do not enter it.
+A local baseline styles tables, links and forms, resets inherited presentation,
+and intentionally uses the dashboard's theme tokens for typography and colors.
+It does not import dashboard utility/component CSS. This is style isolation,
+not a security sandbox for untrusted HTML.
+
+HTML is inserted with `innerHTML`: inline and external `<script>` tags remain
+inert, and rendering never recreates executable scripts. Extension-internal
+links and GET/POST forms still use SPA interception; modified clicks and links
+opening a new tab retain browser behavior. `custom_job_info_rows` render as
+extra rows in the job-detail modal.
 
 **How native rendering works.** Sidekiq extensions declare routes in
 `registered(app)` (`app.get "/locks" do … erb :index end`) and ship ERB
@@ -171,6 +182,9 @@ constants. Rendering and security constraints remain the same:
 - Tabs added by bare `tabs["Label"] = "path"` mutation have no extension to
   render; those fall back to an Extension page that iframes the tab's own path
   (if the host mounts something reachable there, it renders in the frame).
+  This existing bare-tab path remains available for host-mounted views needing
+  client-side code, with an open-in-new-tab link; there is no new registration
+  flag or change to the server API.
 - Calling `register`/`register_extension` (or mutating `tabs`) does not eagerly
   execute `registered(app)`. If that callback raises a `StandardError` during
   first-request capture, Wurk caches the failure and does not retry the callback
