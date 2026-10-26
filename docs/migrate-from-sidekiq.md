@@ -645,6 +645,20 @@ migrations are what this guide is checked against.
    `require "sidekiq"` loads a broken hybrid. Wurk ships its own integration:
    `require "wurk/sentry"` + `Wurk::Sentry.install!(config)`. See
    [`docs/sentry.md`](sentry.md).
+10. **Upstream Web and metrics internals are intentionally unshimmed.** These
+    paths are not Wurk require paths:
+    - `sidekiq/web/application.rb` — unsupported upstream internal.
+    - `sidekiq/web/router.rb` — unsupported upstream internal.
+    - `sidekiq/web/action.rb` — unsupported upstream internal.
+    - `sidekiq/web/helpers.rb` — unsupported upstream internal.
+    - `sidekiq/metrics/tracking.rb` — unsupported upstream internal.
+
+    Wurk's SPA dashboard has no drop-in replacement for Sidekiq's Web internals;
+    extensions that patch those internals must be adapted, not just re-required.
+    Wurk also has no `Sidekiq::Metrics::ExecutionTracker` replacement. For public
+    dashboard usage, `require 'sidekiq/web'` is supported; for public metrics
+    queries, `require 'sidekiq/metrics/query'` is supported. Neither entrypoint
+    provides an equivalent implementation of the unsupported internals.
 
 ---
 
