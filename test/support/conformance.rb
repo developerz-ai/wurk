@@ -10,6 +10,10 @@ module Conformance
   LEDGER = 'docs/idea/parity-divergences.md'
   class Invalid < StandardError; end
 
+  ORACLE_CLASS_EXEMPTIONS = {
+    'IterableJobStateParityTest' => 'State-schema oracle not yet mapped to behavior cases.'
+  }.freeze
+
   class Inventory
     attr_reader :cases
 
@@ -42,10 +46,32 @@ module Conformance
           raise Invalid, "#{entry['id']}: missing runnable oracle #{reference}" unless available.include?(reference)
         end
       end
+      require_registered_oracle_classes!(runnables)
       true
     end
 
     private
+
+    def require_registered_oracle_classes!(runnables)
+      registered = covered.flat_map { |entry| entry.fetch('oracles') }.map { |reference| reference.split('#').first }
+      uncited = runnables.select { |klass| parity_oracle?(klass) }.map(&:name).uniq -
+                registered - ORACLE_CLASS_EXEMPTIONS.keys
+      return if uncited.empty?
+
+      raise Invalid, "unregistered parity oracle classes: #{uncited.sort.join(', ')}; " \
+                     'register each class in a cases.yml oracles entry or add its class name with a reason to ' \
+                     'Conformance::ORACLE_CLASS_EXEMPTIONS'
+    end
+
+    def parity_oracle?(klass)
+      return false unless klass.name && klass < Minitest::Runnable
+      return false unless klass.public_instance_methods(true).any? { |method| method.to_s.start_with?('test_') }
+
+      # Method locations would misclassify helpers or reopened unit classes;
+      # the constant's definition identifies the suite that owns the oracle.
+      location = Object.const_source_location(klass.name)&.first
+      location && File.expand_path(location).start_with?(File.join(@root, 'test/parity/'))
+    end
 
     def text?(value) = value.is_a?(String) && !value.strip.empty?
 

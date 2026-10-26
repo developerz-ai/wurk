@@ -705,7 +705,26 @@ module Wurk
     # (200 only when Redis is reachable AND heartbeat fired within
     # `ready_window` seconds).
     #
-    # Off by default — call this in a `configure_server` block to enable.
+    # Off by default. Put this in Rails `config/initializers/wurk.rb` loaded
+    # by the worker boot, or in the Ruby boot file loaded via `-r` by `wurk`,
+    # `wurkswarm`, or `sidekiqswarm`:
+    #
+    #   Wurk.configure_server do |config|
+    #     config.health_check(port: 7433)
+    #   end
+    #
+    # `configure_server` executes its block only when the current process is
+    # already in server mode. Configuration is process-local: configuring a
+    # separate web/client process cannot enable the worker's probes.
+    #
+    # For explicit embedding, configure the embedded worker directly before
+    # calling `run`; `configure_embed` does not enter server mode:
+    #
+    #   embedded = Wurk.configure_embed do |config|
+    #     config.health_check(port: 7433)
+    #   end
+    #   embedded.run
+    #
     # Spec: docs/target/sidekiq-ent.md §7.1.2.
     #
     # `metrics:` serves the Prometheus scrape on the same listener (on by

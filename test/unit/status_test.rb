@@ -295,6 +295,10 @@ class StatusTest < Wurk::Test::UnitCase
 
   # --- progress coalescing -------------------------------------------
 
+  def test_progress_interval_matches_iterable_job_state_flush_interval
+    assert_equal Wurk::IterableJob::STATE_FLUSH_INTERVAL, Wurk::Status::Progress::INTERVAL
+  end
+
   def test_progress_first_report_is_written_immediately
     id = jid
     Wurk::Status.write(id, state: 'running')

@@ -90,7 +90,7 @@ last_updated: <YYYY-MM-DD>
 - No checkboxes (`[ ]`). Plain bullets. The plan is a reference map, not a tracker.
 - Multiple files always: `overview.md` + `<NN>-<aspect>.md` slices. Never a single `plan.md`.
 - Self-contained: executor reads only `overview.md`, the slice it's on, and the files those cite.
-- Respect `CLAUDE.md` + `docs/idea/principles.md`: thin orchestrator (coding happens in the user's agent, not ours), BYOK only (never resell tokens), audit-first (if it isn't logged, it didn't happen), bot always discloses, no bot-on-bot loops, auto-merge default-on (only through machine gates: CI green + review + branch protections). No hardcoded state machines for policy — policy = prompt + tools. No abstractions before consumers; default to deletion.
+- Respect the root [`CLAUDE.md`](../../CLAUDE.md), particularly Wurk architecture, compatibility, and testing conventions.
 - Stack rules: TS strict, no `any`, no `as` without a why-comment. Biome (no ESLint/Prettier). Zod at every boundary (webhook, env, yml, API request). Drizzle for SQL — all of it in `@developerz/db`. Path alias `@developerz/<pkg>`. `apps/*` import packages, never each other; packages never import apps. `domain` imports nothing internal.
 - Parallel execution in the plan obeys the same cap: any slice that splits work across agents names **≤4 agents per wave**, each with a disjoint file set (one checkout, no worktrees — the file set is the lock).
 - Big work → multiple waves and multiple PRs, executed **one PR at a time** (build → PR → merged → pull → clean tree → next). Size each PR ≤100 changed files; when a slice is bigger, the slice lists its PR sequence (shared piece first). Never split a compile unit.

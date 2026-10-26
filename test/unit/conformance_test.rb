@@ -185,6 +185,82 @@ class ConformanceTest < Minitest::Test
     assert_raises(Conformance::Invalid) { inventory(covered).validate_references!([oracle]) }
   end
 
+  def test_registered_parity_class_does_not_require_every_method_to_be_cited
+    output, status = validate_fixture_oracles([covered('registered', ['SchemaOracle#test_guard'])])
+
+    assert_predicate status, :success?, output
+  end
+
+  def test_unregistered_parity_class_without_a_naming_suffix_is_rejected
+    output, status = validate_fixture_oracles([pending])
+
+    refute_predicate status, :success?, output
+    assert_includes output, 'Conformance::Invalid'
+    assert_includes output, 'unregistered parity oracle classes: SchemaOracle'
+    assert_includes output, 'cases.yml oracles entry'
+    assert_includes output, 'class name with a reason'
+    assert_includes output, 'Conformance::ORACLE_CLASS_EXEMPTIONS'
+  end
+
+  def test_explicitly_exempt_parity_class_passes_without_registration
+    output, status = validate_fixture_oracles([pending], name: 'IterableJobStateParityTest')
+
+    assert_predicate status, :success?, output
+    reason = Conformance::ORACLE_CLASS_EXEMPTIONS.fetch('IterableJobStateParityTest')
+
+    refute_empty reason.strip
+  end
+
+  def test_exemption_cannot_bypass_a_dangling_method_reference
+    reference = 'IterableJobStateParityTest#test_missing'
+    output, status = validate_fixture_oracles([covered('dangling', [reference])], name: 'IterableJobStateParityTest')
+
+    refute_predicate status, :success?, output
+    assert_includes output, "missing runnable oracle #{reference}"
+  end
+
+  def test_unrelated_runnables_and_parity_helpers_are_not_oracles
+    output, status = validate_fixture_oracles([pending], name: nil)
+
+    assert_predicate status, :success?, output
+  end
+
+  # Constants and Minitest's runnable registry live only in the child. Synthetic
+  # filenames exercise definition-location discovery without adding test files.
+  def validate_fixture_oracles(entries, name: 'SchemaOracle')
+    script = <<~RUBY
+      require_relative 'test/support/conformance'
+      require 'minitest/test'
+      Object.class_eval(<<~'FIXTURES', File.join(Conformance::ROOT, 'test/parity/fixture_test.rb'), 1)
+        class ParityJobHelper
+          def test_helper; end
+        end
+        class EmptyParityHelper < Minitest::Test; end
+        #{fixture_oracle_class(name) if name}
+      FIXTURES
+      Object.class_eval(<<~'FIXTURES', File.join(Conformance::ROOT, 'test/unit/fixture_test.rb'), 1)
+        class UnrelatedParityTest < Minitest::Test
+          def test_unrelated; end
+        end
+      FIXTURES
+      # A method added from parity does not move a unit class into that suite.
+      UnrelatedParityTest.class_eval('def test_added; end',
+                                   File.join(Conformance::ROOT, 'test/parity/fixture_test.rb'), 1)
+      runnables = Minitest::Runnable.runnables + [ParityJobHelper]
+      Conformance::Inventory.new(#{entries.inspect}).validate_references!(runnables)
+    RUBY
+    Open3.capture2e({ 'COVERAGE' => nil }, RbConfig.ruby, '-e', script, chdir: Conformance::ROOT)
+  end
+
+  def fixture_oracle_class(name)
+    <<~RUBY
+      class #{name} < Minitest::Test
+        def test_guard; end
+        def test_uncited_method; end
+      end
+    RUBY
+  end
+
   def test_pending_requires_reason_and_unique_future_work
     %w[reason future_work].each do |field|
       [nil, '', ' '].each do |value|

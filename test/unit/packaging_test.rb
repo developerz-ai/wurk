@@ -24,6 +24,10 @@ class PackagingTest < Wurk::Test::UnitCase
     GEMSPEC.runtime_dependencies.map(&:name)
   end
 
+  def test_concurrent_ruby_is_not_a_direct_runtime_dependency
+    refute_includes runtime_dep_names, 'concurrent-ruby'
+  end
+
   def test_extracted_stdlib_requires_are_declared_runtime_deps
     libdir = File.expand_path('../../lib', __dir__)
     required = Dir[File.join(libdir, '**', '*.rb')].flat_map do |f|
