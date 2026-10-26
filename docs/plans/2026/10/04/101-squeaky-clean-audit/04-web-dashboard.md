@@ -1,6 +1,8 @@
 # 04 — Web layer + dashboard
 
-> Part of [`overview.md`](overview.md). Depends on: none. Source: web audit 2026-10-04 (read-only). Baseline: `bun run lint` clean, `bun run test` 282/282 green, 8 locales × 259 keys in sync, `vendor/assets/` built by `release.yml` (in sync).
+> Part of [`overview.md`](overview.md). Depends on: none. Source: web audit 2026-10-04 (read-only). Historical audit baseline (2026-10-04): `bun run lint` clean, `bun run test` 282/282 green, 8 locales × 259 keys in sync, `vendor/assets/` built by `release.yml` (in sync).
+
+**Current source recount (separate from the historical baseline):** 8 locales registered in `LOCALES` in `frontend/src/i18n/index.ts`: `en`, `es`, `fr`, `de`, `pt-BR`, `ja`, `zh-CN`, and `ar`, imported from their corresponding JSON bundles in `frontend/src/i18n/`. `frontend/src/i18n/en.json` contains **260 English leaf strings**. Counting method: recursively traverse object values, count each string-valued leaf once by its key path (including nested `search.kind` and `flows.state` leaves), and exclude object branches themselves. Manual subtotals: nav 25, dashboard 27, table 34, summaries 13, busy 18, cron 5, job 10, search 13, extension 3, actions 28, readonly 1, toast 7, common 12, limiters 2, queues 2, batches 8, flows 20, metrics 21, timezone 5, theme 3, notfound 3 = 260. This source recount does not revalidate the historical count or locale-parity claim; tests, lint, and build were not rerun.
 
 Ordered by customer impact. W1–W2 are prod blockers.
 
