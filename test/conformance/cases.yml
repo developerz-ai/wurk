@@ -917,19 +917,29 @@
   future_work: oracle-module-server-flag
 - id: module.pro-flag
   area: module
-  behavior: pro? reports whether Sidekiq::Pro is defined.
+  behavior: Upstream pro? is true when Sidekiq::Pro is defined; Wurk intentionally always returns false even though that namespace exists.
   source: docs/target/sidekiq-free.md#L220
   promise: >-
     def self.pro?        # true if Sidekiq::Pro defined
-  reason: No isolated parity oracle checks pro? against presence of the Pro constant.
+  reason: >-
+    Intentional divergence per docs/target/sidekiq-free.md#L1617: Wurk ships Pro features
+    in free OSS and returns false to avoid third-party paid-only branches.
+    CompatAliasesTest#test_pro_predicate_false (test/unit/compat_aliases_test.rb)
+    covers the false return, not the upstream namespace-presence promise; this case
+    remains pending without a faithful upstream oracle.
   future_work: oracle-module-pro-flag
 - id: module.ent-flag
   area: module
-  behavior: ent? reports whether Sidekiq::Enterprise is defined.
+  behavior: Upstream ent? is true when Sidekiq::Enterprise is defined; Wurk intentionally always returns false even though that namespace exists.
   source: docs/target/sidekiq-free.md#L221
   promise: >-
     def self.ent?        # true if Sidekiq::Enterprise defined
-  reason: No isolated parity oracle checks ent? against presence of the Enterprise constant.
+  reason: >-
+    Intentional divergence per docs/target/sidekiq-free.md#L1617: Wurk ships Enterprise
+    features in free OSS and returns false to avoid third-party paid-only branches.
+    CompatAliasesTest#test_ent_predicate_false (test/unit/compat_aliases_test.rb)
+    covers the false return, not the upstream namespace-presence promise; this case
+    remains pending without a faithful upstream oracle.
   future_work: oracle-module-ent-flag
 - id: module.load-json
   area: module
