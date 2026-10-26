@@ -52,6 +52,7 @@ class WebAuthorizationTest < Wurk::Test::EngineCase
 
     refute_nil captured
     assert_equal 'GET', captured[0]
+    assert_equal '/api/queues', captured[1]
   end
 
   def test_method_specific_authorization
