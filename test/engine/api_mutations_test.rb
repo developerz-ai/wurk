@@ -3,7 +3,7 @@
 require_relative '../engine_test_helper'
 
 # Drives the Web UI mutation endpoints (issue #102, spec §25.4) against the
-# booted dummy app and real Redis: retry/delete/kill/requeue/clear across the
+# booted dummy app and real Redis: retry/delete/kill/add_to_queue/clear across the
 # retry, scheduled, and dead sets plus per-queue clear/delete.
 #
 # Like ApiEndpointsTest we talk to the engine via Rack::Test and read
@@ -44,7 +44,7 @@ class ApiMutationsTest < Wurk::Test::EngineCase
 
   # --- Retries: single ----------------------------------------------------
 
-  def test_retry_single_requeues_job
+  def test_retry_single_reenqueues_job
     score, jid = push_to_zset('retry')
     post "/wurk/api/retries/#{ekey(score, jid)}", { cmd: 'retry' }
 
@@ -342,7 +342,7 @@ class ApiMutationsTest < Wurk::Test::EngineCase
 
   # --- Dead (morgue) ------------------------------------------------------
 
-  def test_dead_retry_single_requeues
+  def test_dead_retry_single_reenqueues
     score, jid = push_to_zset('dead')
     post "/wurk/api/dead/#{ekey(score, jid)}", { cmd: 'retry' }
 

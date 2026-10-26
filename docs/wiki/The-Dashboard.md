@@ -46,6 +46,6 @@ Ship a viewer-only board (e.g. a public demo) with no auth code at all:
 WURK_WEB_READ_ONLY=1
 ```
 
-Every mutating request (retry/kill/requeue/pause/clear) returns **403** at the middleware layer, and the SPA hides the destructive actions.
+Every mutating request (retry/kill/add_to_queue/pause/clear) returns **403** at the middleware layer, and the SPA hides the destructive actions.
 
 > The dashboard runs in your **web** process (Puma), not the worker — configure it there.
