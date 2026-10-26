@@ -51,7 +51,7 @@
 - id: redis.queues
   area: redis
   behavior: Immediate enqueue writes only the queues SET and queue LIST.
-  source: docs/target/sidekiq-free.md#L19-L20
+  source: docs/target/sidekiq-free.md#L15-L20
   promise: >-
     | `queues` | SET | set of all known queue names (without `queue:` prefix) |
   oracles: [ClientPushParityTest#test_immediate_push_touches_only_queues_set_and_queue_list]
@@ -72,7 +72,7 @@
 - id: client.middleware-halt
   area: client
   behavior: Halting client middleware returns nil without writing a job.
-  source: docs/target/sidekiq-free.md#L654-L689
+  source: docs/target/sidekiq-free.md#L656-L689
   promise: >-
     # returning falsy/nil halts the push
   oracles: [ClientPushParityTest#test_middleware_halt_returns_nil_and_writes_nothing]
@@ -114,7 +114,7 @@
 - id: worker.active-job
   area: worker
   behavior: ActiveJob payloads use the Sidekiq wrapper class.
-  source: docs/target/sidekiq-free.md#L1548-L1557
+  source: docs/target/sidekiq-free.md#L1549-L1557
   promise: >-
     - `class` = `"Sidekiq::ActiveJob::Wrapper"` (pre-8 payloads carry `"ActiveJob::QueueAdapters::SidekiqAdapter::JobWrapper"`; readers accept both)
   oracles: [ClientPushParityTest#test_active_job_payload_uses_the_sidekiq_wrapper_class]
@@ -149,7 +149,7 @@
 - id: schedule.reliable-atomic
   area: scheduling
   behavior: Reliable scheduler promotion atomically removes and enqueues due jobs.
-  source: docs/target/sidekiq-pro.md#L289-L292
+  source: docs/target/sidekiq-pro.md#L283-L292
   promise: >-
     Uses one Lua script that **atomically** `ZRANGEBYSCORE` + `ZREM` + `LPUSH` the due jobs into their queue.
   reason: Existing scheduling oracles do not exercise atomic promotion across a crash.
@@ -157,49 +157,49 @@
 - id: retry.first
   area: retries
   behavior: The first failure stamps failed_at and retry_count zero.
-  source: docs/target/sidekiq-free.md#L932-L944
+  source: docs/target/sidekiq-free.md#L933-L944
   promise: >-
     failed_at         : ms epoch (set on first failure only)
   oracles: [JobRetryParityTest#test_first_failure_sets_failed_at_and_retry_count_zero]
 - id: retry.next
   area: retries
   behavior: Later failures increment retry_count and stamp retried_at.
-  source: docs/target/sidekiq-free.md#L932-L944
+  source: docs/target/sidekiq-free.md#L933-L944
   promise: >-
     retried_at        : ms epoch (set on retries)
   oracles: [JobRetryParityTest#test_subsequent_failure_increments_and_stamps_retried_at]
 - id: retry.backtrace
   area: retries
   behavior: Error backtraces are base64-encoded zlib-compressed JSON.
-  source: docs/target/sidekiq-free.md#L932-L944
+  source: docs/target/sidekiq-free.md#L933-L944
   promise: >-
     error_backtrace   : if msg["backtrace"]: base64(Zlib.deflate(JSON.dump(lines)))
   oracles: [JobRetryParityTest#test_error_backtrace_is_base64_zlib_json]
 - id: retry.disabled
   area: retries
   behavior: retry false skips both retry and morgue.
-  source: docs/target/sidekiq-free.md#L891-L905
+  source: docs/target/sidekiq-free.md#L892-L905
   promise: >-
     def local(jobinst, jobstr, queue) { yield }  # rescues Exception → process_retry; raises Handled
   oracles: [JobRetryParityTest#test_retry_false_skips_retry_and_morgue]
 - id: retry.exhausted
   area: retries
   behavior: Reaching the configured attempt count promotes to the morgue.
-  source: docs/target/sidekiq-free.md#L923-L930
+  source: docs/target/sidekiq-free.md#L924-L930
   promise: >-
     Triggered when `retry_count >= retry_attempts_from(msg["retry"], max_retries)`, or `retry_for` time exceeded.
   oracles: [JobRetryParityTest#test_retry_count_at_attempts_promotes_to_morgue]
 - id: dead.trim-age
   area: dead-set
   behavior: Dead-set trimming removes entries exceeding the configured age.
-  source: docs/target/sidekiq-free.md#L1060-L1095
+  source: docs/target/sidekiq-free.md#L1061-L1095
   promise: >-
     def trim                                  # within dead_max_jobs & dead_timeout
   oracles: [DataApiParityTest#test_dead_set_trim_by_age]
 - id: dead.trim-count
   area: dead-set
   behavior: Dead-set count trimming follows ZREMRANGEBYRANK 0 minus max.
-  source: docs/target/sidekiq-free.md#L1060-L1095
+  source: docs/target/sidekiq-free.md#L1061-L1095
   promise: >-
     def kill(message, opts = {})              # ZADD dead + trim + death_handlers
   oracles: [DataApiParityTest#test_dead_set_trim_by_max_jobs_matches_zremrangebyrank_0_minus_max]
@@ -375,7 +375,7 @@
 - id: limiter.cap-divergence
   area: limiters
   behavior: Wurk sends reschedule-cap exhaustion directly to dead rather than ordinary retries.
-  source: docs/idea/parity-divergences.md#L111-L114
+  source: docs/idea/parity-divergences.md#L109-L114
   promise: >-
     once the cap is hit, the job goes straight
     to the dead set tagged `rate_limited` instead of re-raising into the normal
@@ -384,14 +384,14 @@
 - id: fetch.private
   area: reliable-fetch
   behavior: Fetch parks the exact payload outside the public queue until acknowledged.
-  source: docs/target/sidekiq-pro.md#L254-L255
+  source: docs/target/sidekiq-pro.md#L251-L255
   promise: >-
     - Job remains in the private queue until the worker explicitly `LREM`s it after success or retry handling.
   oracles: [ReliableFetchParityTest#test_fetch_returns_the_exact_payload_and_parks_it_out_of_the_public_queue]
 - id: fetch.isolated
   area: reliable-fetch
   behavior: A fetched job is invisible to another fetcher.
-  source: docs/target/sidekiq-pro.md#L254-L255
+  source: docs/target/sidekiq-pro.md#L251-L255
   promise: >-
     atomic move from public list tail to private list head.
   oracles: [ReliableFetchParityTest#test_fetched_job_is_invisible_to_other_fetchers]
@@ -419,7 +419,7 @@
 - id: fetch.deferred-ack
   area: reliable-fetch
   behavior: Successful acknowledgements are removed on the next fetch.
-  source: docs/idea/parity-divergences.md#L390-L392
+  source: docs/idea/parity-divergences.md#L388-L392
   promise: >-
     the `LREM
     <private list> 1 <job JSON>` that retires it is held in the fetcher and sent in
@@ -428,7 +428,7 @@
 - id: fetch.terminate-ack
   area: reliable-fetch
   behavior: Termination flushes deferred acknowledgements.
-  source: docs/idea/parity-divergences.md#L393-L396
+  source: docs/idea/parity-divergences.md#L388-L396
   promise: >-
     Any pending ACK is flushed — as its own round
     trip — before the fetcher blocks in `BLMOVE`, before the all-paused/no-queues
@@ -603,35 +603,35 @@
 - id: error-handlers.retry-disabled
   area: error-handlers
   behavior: A failing job with retries disabled reports its own exception once.
-  source: docs/target/sidekiq-free.md#L820-L824
+  source: docs/target/sidekiq-free.md#L808-L824
   promise: >-
     6. On `Handled` (not `Skip`): `handle_exception(h.cause || h, context: "Job raised exception", job: job_hash)`
   oracles: [ErrorHandlersParityTest#test_a_job_without_retries_is_reported_once]
 - id: error-handlers.retry-exhausted
   area: error-handlers
   behavior: A failing job at retry exhaustion is reported once.
-  source: docs/target/sidekiq-free.md#L820-L824
+  source: docs/target/sidekiq-free.md#L808-L824
   promise: >-
     then return cleanly; nothing re-raises: the retry subsystem has already dealt with the failure, so the ack in step 5 is the exit.
   oracles: [ErrorHandlersParityTest#test_an_exhausted_job_is_reported_once]
 - id: error-handlers.success-silent
   area: error-handlers
   behavior: A successful job does not call error handlers.
-  source: docs/target/sidekiq-free.md#L821-L824
+  source: docs/target/sidekiq-free.md#L808-L824
   promise: >-
     5. `uow.acknowledge` on success (or `Skip`/`Handled`); on `Shutdown` do NOT ack (job will be requeued).
   oracles: [ErrorHandlersParityTest#test_a_successful_job_reports_nothing]
 - id: error-handlers.skip-silent
   area: error-handlers
   behavior: JobRetry::Skip does not call error handlers.
-  source: docs/target/sidekiq-free.md#L822-L824
+  source: docs/target/sidekiq-free.md#L808-L824
   promise: >-
     4. Server middleware chain → `execute_job(instance, args)` → `instance.perform(*args)`
   oracles: [ErrorHandlersParityTest#test_a_skip_reports_nothing]
 - id: error-handlers.raising-handler
   area: error-handlers
   behavior: A raising error handler does not prevent the next handler from being called once.
-  source: docs/target/sidekiq-free.md#L334-L342
+  source: docs/target/sidekiq-free.md#L291-L342
   promise: >-
     def handle_exception(ex, ctx = {})  # internal: dispatches to error_handlers
   oracles: [ErrorHandlersParityTest#test_a_raising_handler_does_not_stop_the_next]
@@ -675,7 +675,7 @@
 - id: expiry.timely-execution
   area: expiration
   behavior: A job still within its expiration time performs normally.
-  source: docs/target/sidekiq-pro.md#L342-L343
+  source: docs/target/sidekiq-pro.md#L328-L343
   promise: >-
     - Job server middleware checks `expiry` immediately before `perform`; if `Time.now.to_f > expiry`, job is skipped (Statsd `jobs.expired`), counts as **success** for batch purposes, and is not retried.
   oracles: [ExpiringParityTest#test_job_in_time_runs]
@@ -708,7 +708,7 @@
 - id: metrics.minute-totals
   area: metrics
   behavior: Minute-window queries sum p, f and ms within the window and expose ms totals as seconds.
-  source: docs/target/sidekiq-free.md#L1182-L1202
+  source: docs/target/sidekiq-free.md#L1183-L1202
   promise: >-
     ## 20. Metrics API — `Sidekiq::Metrics::Query`
   oracles: [MetricsQueryParityTest#test_minutely_buckets_feed_top_jobs_totals]
@@ -761,7 +761,7 @@
   behavior: >-
     Queries read labels from the day-marks hash into MarkResult objects with
     the recorded time and bucket.
-  source: docs/target/sidekiq-free.md#L115-L1205
+  source: docs/target/sidekiq-free.md#L106-L1205
   promise: >-
     | `<YYYYMMDD>-marks` | HASH | deploy marks for day, field=iso8601 ts, value=label, TTL = 90 days |
   oracles: [MetricsQueryParityTest#test_marks_come_from_the_day_marks_hash]
@@ -795,7 +795,7 @@
   behavior: >-
     SortedEntry kill notifies death handlers with a RuntimeError whose message
     is Job killed by API.
-  source: docs/target/sidekiq-free.md#L1056-L1094
+  source: docs/target/sidekiq-free.md#L1043-L1094
   promise: >-
     def kill(message, opts = {})              # ZADD dead + trim + death_handlers
   oracles: [SortedEntryApiParityTest#test_kill_fires_death_handlers_with_api_exception]
