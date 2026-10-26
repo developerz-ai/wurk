@@ -32,8 +32,9 @@ module Wurk
         @reported.clear if @reported.size >= MEMORY
         @reported << key
         @config.logger.warn do
-          "reaper: #{key.inspect} looks like a reliable-fetch private list but does not match " \
-            "queue:<queue>|<host>|<pid>|<nonce>|<index>; its #{size} job(s) will not be recovered " \
+          "reaper: #{key.inspect} looks like a reliable-fetch private list but matches neither " \
+            'queue:<queue>|<host>|<pid>|<nonce>|<index> nor the pre-nonce ' \
+            "queue:<queue>|<host>|<pid>|<index>; its #{size} job(s) will not be recovered " \
             'automatically. Inspect it and LMOVE them back onto their queue by hand if they belong to a dead process.'
         end
       rescue StandardError => e

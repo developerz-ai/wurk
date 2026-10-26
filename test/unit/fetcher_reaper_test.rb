@@ -719,6 +719,8 @@ class FetcherReaperTest < Wurk::Test::UnitCase
     assert_equal 1, log.string.scan(key).size, 'one WARN per key, not one per sweep'
     assert_includes log.string, 'WARN'
     assert_includes log.string, 'its 1 job(s) will not be recovered'
+    assert_includes log.string, 'queue:<queue>|<host>|<pid>|<nonce>|<index>'
+    assert_includes log.string, 'queue:<queue>|<host>|<pid>|<index>'
     assert_equal 1, llen(key), 'the list is reported, never touched'
   end
 
