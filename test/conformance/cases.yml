@@ -473,6 +473,16 @@
     In Redis the job's last arg becomes a JSON Hash envelope (not a base64 blob of a
     binary envelope — the args array stays valid JSON for inspectors):
   oracles: [EncryptionParityTest#test_envelope_fields_and_gcm_round_trip]
+- id: crypto.decrypt-failure
+  area: encryption
+  behavior: A decrypt failure dead-sets the job tagged with Wurk::Encryption::DecryptionError and never retries it.
+  source: docs/idea/parity-divergences.md#L1172-L1180
+  promise: >-
+    a decrypt failure (unknown key version, a key resolver that returns nil or
+    raises, a corrupt envelope) raises `Wurk::Encryption::DecryptionError`,
+    increments `jobs.encryption_error`, and moves the job to the dead set
+    without retries.
+  oracles: [EncryptionParityTest#test_forged_tag_dead_sets_as_encryption_error_without_retry]
 - id: web.dashboard-auth
   area: dashboard
   behavior: A falsey authorization hook denies dashboard requests with 403.
