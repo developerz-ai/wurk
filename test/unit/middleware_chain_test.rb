@@ -658,6 +658,178 @@ class MiddlewareChainTest < Wurk::Test::UnitCase
     assert_equal [NoConfig, WithConfig], b.entries.map(&:klass)
   end
 
+  # --- registration diagnostics ------------------------------------------
+
+  %i[add prepend insert_before insert_after].each do |operation|
+    define_method("test_late_global_#{operation}_warns_without_changing_worker_snapshots") do
+      assert_late_registration_preserves_snapshots(operation)
+    end
+  end
+
+  def assert_late_registration_preserves_snapshots(operation)
+    output = StringIO.new
+    config = Wurk::Configuration.new
+    config.logger = Logger.new(output)
+    chain = config.server_middleware
+    chain.add(NoConfig)
+    missing = %w[critical bulk].map { |name| config.capsule(name) }
+    missing.each(&:prepare_shared!)
+    present = config.capsule('present')
+    present.server_middleware.add(Recorder, 'local', [])
+    present.prepare_shared!
+    early = config.capsule('early')
+    early.server_middleware
+    untouched = config.capsule('untouched')
+    calls = []
+    args = [Recorder, 'late', calls]
+    args.unshift(NoConfig) if %i[insert_before insert_after].include?(operation)
+
+    result = chain.public_send(operation, *args)
+
+    assert_same chain.entries, result
+    assert chain.exists?(Recorder)
+    assert_nil chain.config
+    assert_nil chain.entries.find { |entry| entry.klass == Recorder }.config
+    assert_equal 1, output.string.lines.size
+    assert_includes output.string, 'WARN'
+    assert_includes output.string, Recorder.name
+    assert_includes output.string, 'critical, bulk'
+    refute_includes output.string, 'present'
+    refute_includes output.string, 'early'
+    refute_includes output.string, 'untouched'
+    assert_includes output.string, 'existing worker snapshots remain unchanged'
+    assert_includes output.string, 'before worker boot'
+    assert_includes output.string, 'restart'
+    missing.each do |cap|
+      assert_equal(:done, cap.server_middleware.invoke { :done })
+    end
+    assert_empty calls
+    assert_nil untouched.instance_variable_get(:@server_chain)
+    chain.invoke { :done }
+
+    assert_equal %w[late-pre late-post], calls
+  end
+
+  def test_early_global_registration_refreshes_an_early_copy_without_warning
+    output = StringIO.new
+    config = Wurk::Configuration.new
+    config.logger = Logger.new(output)
+    chain = config.server_middleware
+    chain.add(NoConfig)
+    cap = config.capsule('early')
+    worker_chain = cap.server_middleware
+    worker_chain.remove(NoConfig)
+    calls = []
+
+    chain.add(Recorder, 'early', calls)
+    cap.prepare_shared!
+
+    assert_same worker_chain, cap.server_middleware
+    refute worker_chain.exists?(NoConfig)
+    assert_equal(:done, worker_chain.invoke { :done })
+    assert_equal %w[early-pre early-post], calls
+    assert_empty output.string
+  end
+
+  def test_client_and_capsule_local_live_registration_do_not_warn
+    output = StringIO.new
+    config = Wurk::Configuration.new
+    config.logger = Logger.new(output)
+    cap = config.capsule('live')
+    cap.prepare_shared!
+    calls = []
+
+    [config.client_middleware, cap.client_middleware, cap.server_middleware].each do |chain|
+      chain.add(Recorder, 'live', calls)
+
+      assert_equal(:done, chain.invoke { :done })
+    end
+    config.server_middleware.add(Recorder, 'global', calls)
+
+    assert_empty output.string
+    assert_equal %w[live-pre live-post] * 3, calls
+  end
+
+  def test_existing_global_insertions_warn_and_preserve_entry_arguments
+    %i[insert_before insert_after].each do |operation|
+      output = StringIO.new
+      config = Wurk::Configuration.new
+      config.logger = Logger.new(output)
+      chain = config.server_middleware
+      calls = []
+      chain.add(NoConfig)
+      chain.add(Recorder, 'original', calls)
+      entry = chain.entries.last
+      cap = config.capsule('removed')
+      cap.server_middleware.remove(Recorder)
+      cap.prepare_shared!
+
+      result = chain.public_send(operation, NoConfig, Recorder, 'ignored', [])
+
+      assert_same chain.entries, result
+      assert_same(entry, chain.entries.find { |candidate| candidate.klass == Recorder })
+      expected = operation == :insert_before ? [Recorder, NoConfig] : [NoConfig, Recorder]
+
+      assert_equal expected, chain.entries.map(&:klass)
+      assert_equal 1, output.string.lines.size
+      assert_includes output.string, 'removed'
+      cap.server_middleware.invoke { :done }
+
+      assert_empty calls
+      chain.invoke { :done }
+
+      assert_equal %w[original-pre original-post], calls
+    end
+  end
+
+  def test_registration_callback_preserves_config_block_returns_and_all_add_paths
+    seen = []
+    config = Object.new
+    chain = Wurk::Middleware::Chain.new(config, on_registration: seen.method(:<<)) do |middleware|
+      middleware.add(AnchorTarget)
+    end
+
+    assert_same config, chain.config
+    assert_equal [AnchorTarget], seen
+    [
+      [:add, Anchored],
+      [:add, Anchored],
+      [:insert_after, AnchorTarget, Anchored],
+      [:add, Anchored],
+      [:prepend, NoConfig],
+      [:insert_before, AnchorTarget, NoConfig],
+      [:insert_after, AnchorTarget, NoConfig]
+    ].each do |operation, *args|
+      seen.clear
+
+      assert_same chain.entries, chain.public_send(operation, *args)
+      registered = %i[insert_before insert_after].include?(operation) ? args[1] : args[0]
+
+      assert_equal [registered], seen
+    end
+    assert_same config, chain.entries.first.config
+  end
+
+  def test_registration_callback_is_not_inherited_by_dup_or_copy_for
+    seen = []
+    chain = Wurk::Middleware::Chain.new(on_registration: seen.method(:<<))
+    chain.add(NoConfig)
+    seen.clear
+
+    [chain.dup, chain.copy_for(Object.new)].each do |copy|
+      copy.add(WithConfig)
+      copy.prepend(Recorder, 'copy', [])
+      copy.insert_before(NoConfig, Identity, [])
+      copy.insert_after(NoConfig, Halter, [])
+    end
+
+    assert_empty seen
+    assert_equal [NoConfig], chain.entries.map(&:klass)
+    chain.add(WithConfig)
+
+    assert_equal [WithConfig], seen
+  end
+
   # --- enumerable --------------------------------------------------------
 
   def test_each_iterates_entries

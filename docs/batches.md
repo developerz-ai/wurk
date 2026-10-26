@@ -513,7 +513,7 @@ whole feature is Lua-script atomicity.
 
 ## Divergences from Sidekiq Pro
 
-Wurk implements the batch surface in `docs/target/sidekiq-pro.md` §2. Three
+Wurk implements the batch surface in `docs/target/sidekiq-pro.md` §2. Five
 deliberate differences:
 
 - **`Status#failure_info` always returns `[]`.** The Pro 8 data model drops the
@@ -523,6 +523,15 @@ deliberate differences:
 - **`#autoflush` accepts `true` as well as a positive Integer.** `true` buffers
   the whole `#jobs` block and flushes once at exit; an Integer flushes every N.
   Values Pro would silently accept (`0`, `"5"`) raise `ArgumentError`.
+- **Wurk does not write Pro's `b-<bid>-tags` set.** First flush stores tags as
+  JSON in the `tags` field of the `b-<bid>` hash and adds the bid to each
+  `tags:<tag>` reverse-index set instead. Legacy per-batch tag sets are neither
+  imported nor fallback-read; this is not full Pro batch-schema compatibility
+  ([divergence](idea/parity-divergences.md#batch-tags-use-a-json-field-and-reverse-indexes-not-b-bid-tags)).
+- **The legacy global `BID` counter is unused.** New IDs are URL-safe base64
+  of 10 random bytes, without consuming or advancing that counter. Reopening
+  with an explicit bid bypasses generation
+  ([divergence](idea/parity-divergences.md#batch-ids-are-random-the-legacy-global-bid-counter-is-unused)).
 - **The "already fired" markers are Wurk's own.** Wurk writes
   `b-<bid>-success`, `b-<bid>-complete` and `b-<bid>-death` as Redis strings
   holding `"1"`, meaning "already fired". Pro §2.8 types `b-<bid>-success` and

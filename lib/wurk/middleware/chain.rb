@@ -25,8 +25,9 @@ module Wurk
       attr_reader :entries
       attr_accessor :config
 
-      def initialize(config = nil)
+      def initialize(config = nil, on_registration: nil)
         @config = config
+        @on_registration = on_registration
         @entries = []
         yield self if block_given?
       end
@@ -68,6 +69,7 @@ module Wurk
       # its ctor args are refreshed): moving it would be a relocation the
       # caller did not ask for.
       def add(klass, *)
+        @on_registration&.call(klass)
         entry = make_entry(klass, *)
         anchors = anchor_classes(klass)
         existing = @entries.index { |e| e.klass == klass }
@@ -94,11 +96,13 @@ module Wurk
       end
 
       def prepend(klass, *)
+        @on_registration&.call(klass)
         remove(klass)
         @entries.unshift(make_entry(klass, *))
       end
 
       def insert_before(oldklass, newklass, *)
+        @on_registration&.call(newklass)
         i = @entries.index { |entry| entry.klass == newklass }
         new_entry = i.nil? ? make_entry(newklass, *) : @entries.delete_at(i)
         i = @entries.index { |entry| entry.klass == oldklass } || 0
@@ -106,6 +110,7 @@ module Wurk
       end
 
       def insert_after(oldklass, newklass, *)
+        @on_registration&.call(newklass)
         i = @entries.index { |entry| entry.klass == newklass }
         new_entry = i.nil? ? make_entry(newklass, *) : @entries.delete_at(i)
         i = @entries.index { |entry| entry.klass == oldklass } || (@entries.size - 1)
@@ -159,6 +164,7 @@ module Wurk
       def initialize_copy(orig)
         super
         @entries = orig.entries.dup
+        @on_registration = nil
       end
 
       # The ordering anchors a middleware class declares, if any: a class-level
