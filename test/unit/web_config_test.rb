@@ -84,7 +84,112 @@ class WebConfigTest < Wurk::Test::UnitCase
     refute Wurk::Web.config.authorized?({}, 'GET', '/api/stats')
   end
 
+  class ResponseMiddleware
+    attr_reader :args, :block
+
+    def initialize(app, *args, &block)
+      @app = app
+      @args = args
+      @block = block
+      @label = args.join(':')
+      @label = block.call(@label) if block
+    end
+
+    def call(env)
+      status, headers, body = @app.call(env)
+      [status, headers, [*body, @label]]
+    end
+  end
+
   # --- rack_app memoization -----------------------------------------------
+
+  def test_rack_app_rebuilds_after_middleware_class_slot_edit
+    cfg = Wurk::Web.config
+    cfg.use(ResponseMiddleware)
+    inner = ->(_env) { [200, {}, ['ok']] }
+    triple = cfg.middlewares.first
+    first = cfg.rack_app(inner)
+
+    assert_equal ['ok', ''], first.call({}).last
+    triple[0] = Wurk::Web::Authorization
+    cfg.authorization { false }
+    rebuilt = cfg.rack_app(inner)
+
+    refute_same first, rebuilt
+    assert_equal [403, { 'Content-Type' => 'text/plain' }, ['Forbidden']], rebuilt.call({})
+    assert_same triple, cfg.middlewares.first
+  end
+
+  def test_rack_app_rebuilds_after_middleware_args_slot_edit
+    cfg = Wurk::Web.config
+    cfg.use(ResponseMiddleware, 'before')
+    inner = ->(_env) { [200, {}, ['ok']] }
+    triple = cfg.middlewares.first
+    first = cfg.rack_app(inner)
+
+    assert_equal ['ok', 'before'], first.call({}).last
+    triple[1] = ['after']
+    rebuilt = cfg.rack_app(inner)
+
+    refute_same first, rebuilt
+    assert_equal ['ok', 'after'], rebuilt.call({}).last
+    assert_same triple, cfg.middlewares.first
+  end
+
+  def test_rack_app_rebuilds_after_middleware_block_slot_edit
+    cfg = Wurk::Web.config
+    cfg.use(ResponseMiddleware, 'label') { |label| "before #{label}" }
+    inner = ->(_env) { [200, {}, ['ok']] }
+    triple = cfg.middlewares.first
+    first = cfg.rack_app(inner)
+
+    assert_equal ['ok', 'before label'], first.call({}).last
+    triple[2] = ->(label) { "after #{label}" }
+    rebuilt = cfg.rack_app(inner)
+
+    refute_same first, rebuilt
+    assert_equal ['ok', 'after label'], rebuilt.call({}).last
+    assert_same triple[2], rebuilt.block
+    assert_same triple, cfg.middlewares.first
+  end
+
+  def test_rack_app_rebuilds_each_inner_after_args_list_edits
+    cfg = Wurk::Web.config
+    cfg.use(ResponseMiddleware, 'before')
+    inners = %w[engine standalone].map { |name| ->(_env) { [200, {}, [name]] } }
+    apps = inners.map { |inner| cfg.rack_app(inner) }
+    args = cfg.middlewares.first[1]
+    edits = [-> { args[0] = 'after' }, -> { args << 'extra' }, -> { args.clear }]
+    labels = ['after', 'after:extra', '']
+
+    assert_equal ['engine', 'before'], apps[0].call({}).last
+    assert_equal ['standalone', 'before'], apps[1].call({}).last
+    edits.zip(labels).each do |edit, label|
+      edit.call
+      rebuilt = inners.map { |inner| cfg.rack_app(inner) }
+      rebuilt.each_with_index do |app, index|
+        refute_same apps[index], app
+        assert_equal [index.zero? ? 'engine' : 'standalone', label], app.call({}).last
+        assert_same app, cfg.rack_app(inners[index])
+      end
+      assert_same args, cfg.middlewares.first[1]
+      apps = rebuilt
+    end
+  end
+
+  def test_rack_app_preserves_argument_and_block_identities
+    cfg = Wurk::Web.config
+    argument = Object.new
+    block = ->(_label) { 'label' }
+    cfg.use(ResponseMiddleware, argument, &block)
+    inner = ->(_env) { [200, {}, ['ok']] }
+    app = cfg.rack_app(inner)
+
+    assert_same argument, app.args.first
+    assert_same block, app.block
+    assert_same app, cfg.rack_app(inner)
+    assert_equal ['ok', 'label'], app.call({}).last
+  end
 
   def test_rack_app_caches_for_the_same_inner_and_middlewares
     inner = ->(_env) { [200, {}, ['ok']] }
@@ -125,6 +230,7 @@ class WebConfigTest < Wurk::Test::UnitCase
   # pass their own inner app; with one cache slot every alternating request
   # rebuilt the other's chain.
   def test_rack_app_caches_each_inner_side_by_side
+    Wurk::Web.config.use(ResponseMiddleware, 'cached')
     engine_inner = ->(_env) { [200, {}, ['engine']] }
     standalone_inner = ->(_env) { [200, {}, ['standalone']] }
 
