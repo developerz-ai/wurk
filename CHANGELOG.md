@@ -19,6 +19,8 @@ All notable changes to Wurk are recorded here. Format: [Keep a Changelog](https:
 
 - **The `Wurk::Queue` pause/unpause docs no longer promise an unconditional `true`.** The "Pausing a queue" section of `docs/api.md` claimed that both calls "return `true` whether or not they changed anything", but `Wurk::Queue#pause!` and `#unpause!` return `true` only when the call changed the queue's paused state — `pause!` when it added the queue to the `paused` SET, `unpause!` when it removed it — and `false` when there was no transition. That is the Sidekiq Pro behaviour, and it is what the method table in the same file already described. Documentation-only: no runtime behaviour changed, and the return values are still the `SADD`/`SREM` state-change booleans the unit and parity suites assert.
 
+- **The migration guide's `b-<bid>*` compatibility row no longer promises unqualified Pro batch-schema compatibility.** The `b-<bid>*`, `batches` row in §4 of `docs/migrate-from-sidekiq.md` read "✅ Pro batch schema", contradicting the guide's own §9 cutover warning: Wurk's `b-<bid>-success`/`b-<bid>-complete` markers mean "already fired" (callbacks enqueued, not necessarily executed), while Sidekiq Pro §2.8 describes the same keys as "callbacks pending", so a Pro batch in flight at the swap may miss its callbacks. The row now names that limitation and points at the §9 cutover warning, and §4's prose says the same in its own words. Documentation-only: no runtime behaviour changed.
+
 ## [1.8.1] - 2026-10-16
 
 ### Fixed

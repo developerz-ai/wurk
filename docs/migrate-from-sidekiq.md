@@ -334,7 +334,7 @@ with **no global namespace/prefix** (matching Sidekiq OSS). Job payloads are **J
 | `schedule`, `retry`, `dead` | ZSET (score = float Unix seconds) | ✅ identical |
 | `processes` + per-process HASH | SET/HASH | ✅ identical |
 | `stat:processed[:<date>]`, `stat:failed[:<date>]` | STRING | ✅ identical |
-| `b-<bid>*`, `batches` | HASH/SET/ZSET | ✅ Pro batch schema |
+| `b-<bid>*`, `batches` | HASH/SET/ZSET | ⚠️ Pro batch schema, but the marker semantics differ: Wurk's `b-<bid>-success`/`b-<bid>-complete` mean "already fired" (callbacks enqueued), Pro §2.8 describes the same keys as "callbacks pending" — a batch in flight at the swap may miss callbacks; see [§9](#behaviour-differences-to-know-before-cutover) |
 | `loops:<lid>`, `periodic` | HASH/SET | ✅ Enterprise periodic schema |
 
 Job JSON fields are the Sidekiq set: `class, args, queue, jid, created_at,
@@ -355,7 +355,12 @@ Pro/Enterprise key formats (batches, `lmtr*` limiters, `unique:<digest>` locks,
 `dear-leader`, `loops:<lid>`) are implemented against the documented spec in
 [`docs/target/`](target/sidekiq-ent.md), not yet validated against a dump taken from a
 real Pro/Enterprise deployment. The staging dry run in [§9](#9-production-cutover) is
-how you close that gap for your own data before production.
+how you close that gap for your own data before production. A batch in flight at the
+swap is not covered by the batch-schema claim above: Wurk's `b-<bid>-success` and
+`b-<bid>-complete` markers mean "already fired" (callbacks enqueued, not necessarily
+executed), while Pro §2.8 describes the same keys as "callbacks pending", so its
+callbacks may not fire — let critical batches finish before the cutover, or prove it in
+the dry run (see [§9](#behaviour-differences-to-know-before-cutover)).
 
 ---
 
