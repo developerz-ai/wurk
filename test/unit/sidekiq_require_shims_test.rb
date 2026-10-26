@@ -50,9 +50,71 @@ class SidekiqRequireShimsTest < Wurk::Test::UnitCase
     'sidekiq/worker_compatibility_alias' => 'Sidekiq::Worker'
   }.freeze
 
-  # Documented paths, generated from the specs so a newly documented one
-  # fails here until it has a shim, plus the upstream files above.
-  PATHS = (SPECS.flat_map { |f| File.read(f).scan(REQUIRE).flatten } + UPSTREAM.keys).uniq.sort.freeze
+  # Keep the probe inventory independent of filesystem discovery: adding a shim
+  # must fail completeness until its isolated require probe is registered here.
+  OTHER_PATHS = %w[
+    sidekiq
+    sidekiq-pro
+    sidekiq-ent
+    sidekiq-ent/periodic/testing
+    sidekiq-ent/web
+    sidekiq/api
+    sidekiq/cli
+    sidekiq/client
+    sidekiq/job
+    sidekiq/job_retry
+    sidekiq/launcher
+    sidekiq/manager
+    sidekiq/middleware/chain
+    sidekiq/middleware/current_attributes
+    sidekiq/middleware/i18n
+    sidekiq/middleware/server/statsd
+    sidekiq/pro/web
+    sidekiq/processor
+    sidekiq/rails
+    sidekiq/redis_connection
+    sidekiq/scheduled
+    sidekiq/testing
+    sidekiq/version
+    sidekiq/web
+    sidekiq/worker
+  ].freeze
+
+  # Newly documented requires must also resolve, even before a shim exists.
+  PATHS = (SPECS.flat_map { |f| File.read(f).scan(REQUIRE).flatten } + UPSTREAM.keys + OTHER_PATHS).uniq.sort.freeze
+
+  # sidekiq/pro is included recursively under sidekiq.
+  SHIM_PATHS = (Dir[File.join(LIB, 'sidekiq/**/*.rb'), File.join(LIB, 'sidekiq-ent/**/*.rb')] +
+    %w[sidekiq.rb sidekiq-pro.rb sidekiq-ent.rb].map { |file| File.join(LIB, file) })
+               .map { |file| file.delete_prefix("#{LIB}/").delete_suffix('.rb') }.uniq.sort.freeze
+
+  SHIM_PATHS.each do |path|
+    define_method(:"test_probe_inventory_covers_lib/#{path}.rb") do
+      assert_shims_have_probes([path], PATHS)
+    end
+  end
+
+  def test_complete_probe_inventory_is_accepted
+    assert_shims_have_probes(SHIM_PATHS, PATHS)
+  end
+
+  def test_unlisted_new_shim_is_rejected
+    path = 'sidekiq/unlisted_synthetic_shim'
+    error = assert_raises(Minitest::Assertion) do
+      assert_shims_have_probes(SHIM_PATHS + [path], PATHS)
+    end
+
+    assert_includes error.message, "lib/#{path}.rb"
+  end
+
+  def test_removed_existing_probe_is_rejected
+    path = 'sidekiq/client'
+    error = assert_raises(Minitest::Assertion) do
+      assert_shims_have_probes(SHIM_PATHS, PATHS - [path])
+    end
+
+    assert_includes error.message, "lib/#{path}.rb"
+  end
 
   # What each path has to leave defined beyond the alias layer itself.
   EXPECTED = UPSTREAM.merge(
@@ -110,6 +172,12 @@ class SidekiqRequireShimsTest < Wurk::Test::UnitCase
   end
 
   private
+
+  def assert_shims_have_probes(shim_paths, probe_paths)
+    shim_paths.each do |path|
+      assert_includes probe_paths, path, "lib/#{path}.rb must have an isolated require probe"
+    end
+  end
 
   def probe(path, constant) = probe_script(PROBE, path, constant)
 
