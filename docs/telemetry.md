@@ -54,11 +54,32 @@ even resolves the `opentelemetry-api` require.
 
 ## Enabling it
 
+Enable telemetry in every process that enqueues traced jobs — web processes,
+consoles, and runners/scripts — and in every worker process that consumes them.
+Put the ungated setting in shared boot code, such as a Rails initializer loaded
+by both producers and workers:
+
+```ruby
+Wurk.configuration.telemetry = true
+```
+
+Enabling it only in workers leaves enqueueing processes without producer spans
+or injected trace context, so the workers cannot correlate those jobs back to
+the enqueue that caused them.
+
+For **server-only** configuration, the existing recipe is:
+
 ```ruby
 Wurk.configure_server do |config|
   config.telemetry = true
 end
 ```
+
+`configure_server` yields only in server mode. It does not run its block in
+ordinary client-only web processes, Rails consoles, or Rails processes with
+`WURK_DISABLED=1`. Web processes co-hosting workers can enter server mode, so
+not every web process is client-only; use the shared, ungated setting above to
+cover all enqueueing contexts as well as workers.
 
 Add `opentelemetry-api` (and an SDK/exporter of your choice) to the host
 app's Gemfile:
