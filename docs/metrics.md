@@ -36,7 +36,7 @@ same keys Sidekiq 8.1's `ExecutionTracker` writes (see
 | Key | Type | Fields | TTL |
 |-----|------|--------|-----|
 | `j\|<YYMMDD>\|<H>:<MM>` (minute, e.g. `j\|261004\|9:05`) | HASH | `<klass>\|p`, `<klass>\|f`, `<klass>\|ms` | 8 hours (`SHORT_TERM`) |
-| `j\|<YYMMDD>\|<H>:<M>` (10 minutes: the minute's tens digit, e.g. `j\|261004\|9:0`) | HASH | same fields | 3 days (`MID_TERM`) |
+| `j\|<YYMMDD>\|<H>:<M>` (10 minutes: the minute's tens digit, e.g. `j\|261004\|9:0`) | HASH | same fields | 30 days (`MID_TERM`; upstream TTLs it at 3 days — Wurk's 7d/30d tabs need it longer) |
 | `h\|<klass>-<D>-<H>:<M>` | BITFIELD | 26 `u16` runtime-histogram counters | 8 hours |
 
 - `p` counts **every** execution, failures included; `f` counts the ones that
@@ -46,7 +46,7 @@ same keys Sidekiq 8.1's `ExecutionTracker` writes (see
 - ActiveJob payloads are recorded under the wrapped class (`job["wrapped"]`),
   not `Sidekiq::ActiveJob::Wrapper`, as upstream.
 - Timestamps are UTC. The TTL is re-set on every write, so a class that keeps
-  running keeps its buckets for 8 hours / 3 days measured from the *last* write.
+  running keeps its buckets for 8 hours / 30 days measured from the *last* write.
 - The key format is Sidekiq 8.1's, so metrics written by Sidekiq before the swap
   keep resolving afterwards, and Sidekiq's own Web UI reads what Wurk writes.
   The minute key always has a two-digit minute and the 10-minute key a single
@@ -164,14 +164,20 @@ Window caps (`WindowTooWide < ArgumentError` when exceeded):
 
 | Call | Cap | Reads |
 |------|-----|-------|
-| `top_jobs(minutes:)` | `MAX_MINUTES` = 480 (8h), matching the per-minute bucket retention | per-minute `j\|…` buckets |
-| `top_jobs(hours:)` | `MAX_HOURS` = 72 (3d), matching the 10-minute bucket retention | 10-minute `j\|…` buckets |
-| `for_job(minutes:)` | 480 | per-minute buckets |
-| `for_job(hours:)` | 72 (3d) | 10-minute buckets |
+| `top_jobs(minutes:)` | 480 on the per-minute path; larger windows up to 43200 (30d) promote onto the 10-minute buckets | per-minute `j\|…` buckets, then 10-minute |
+| `top_jobs(hours:)` | `MAX_HOURS` = 720 (30d), matching the 10-minute bucket retention | 10-minute `j\|…` buckets |
+| `for_job(minutes:)` | 480 on the per-minute path; larger windows up to 43200 (30d) promote onto the 10-minute buckets | per-minute buckets, then 10-minute |
+| `for_job(hours:)` | 720 (30d) | 10-minute buckets |
 | `history` / `queue_history` | window clamped to the bucket's TTL (24h / 7d / 30d) | `jr\|…` / `qm\|…` |
 
-A wider window has no data to read anyway — the source buckets are TTL'd out —
-so `top_jobs` and `for_job` raise rather than return silently sparse results.
+The class-level `top_jobs` / `for_job` never serve a silently clamped window:
+a `minutes:` value past `MAX_MINUTES` (480) is promoted onto the 10-minute
+buckets (whose 30-day retention covers it) rather than raising, and only a
+window past `MAX_HOURS` × 60 minutes (43200) raises `WindowTooWide`. The
+promotion counts 10-minute buckets directly — 490 minutes reads 49 of them,
+not a rounded-up 9 hours' 54 — so the served data never reaches past the
+requested window by more than the trailing partial bucket. Beyond that there
+is no data to read anyway — the source buckets are TTL'd out.
 `history` and `queue_history` clamp instead of raising; an unknown bucket name
 or a non-positive window raises `ArgumentError`. `queue_history` returns at
 most `MAX_QUEUE_SERIES` (25) queues, taken in sorted order, to bound the
@@ -411,8 +417,8 @@ chart. All paths are relative to your engine mount (`/wurk/api/…` for a
 
 | Endpoint | Parameters |
 |----------|------------|
-| `GET /api/metrics` | `minutes` (1–480, default 60), `substr` prefix filter on class name |
-| `GET /api/metrics/:klass` | `minutes` (1–480, default 60) **or** `hours` (1–72, default 24) |
+| `GET /api/metrics` | `minutes` (1–43200, default 60; >480 served from the 10-minute buckets) **or** `hours` (1–720, default 24), `substr` prefix filter on class name; past 30 days answers `400` |
+| `GET /api/metrics/:klass` | `minutes` (1–43200, default 60) **or** `hours` (1–720, default 24) |
 | `GET /api/history/:bucket` | `:bucket` and `window` — contract and response shape in [Metrics history § API](metrics-history.md#api) |
 | `GET /api/queue-history/:bucket` | same, plus `queue=<name>` to narrow to one queue |
 | `GET /api/history/snapshots` | `limit` (1–10000, default 1000) |
@@ -448,7 +454,7 @@ without limit.
 | Key | Written by | Retention | Steady-state size |
 |-----|-----------|-----------|-------------------|
 | `j\|<YYMMDD>\|<H>:<MM>` | every worker, ≤5s | 8 hours from last write | ≤ 480 keys; 3 fields × active job classes each |
-| `j\|<YYMMDD>\|<H>:<M>` | every worker, ≤5s | 3 days from last write | ≤ 432 keys; 3 fields × active job classes each |
+| `j\|<YYMMDD>\|<H>:<M>` | every worker, ≤5s | 30 days from last write (`MID_TERM`) | ≤ 4320 keys; 3 fields × active job classes each |
 | `h\|<klass>-<D>-<H>:<M>` | every worker, ≤5s | 8 hours from last write | ≤ 480 keys × active job classes; 52 bytes each |
 | `jr\|{1m,5m,1h}\|<epoch>` | rollup leader | 24h / 7d / 30d | ≈ 4 176 keys total — see [Metrics history](metrics-history.md) |
 | `qm\|{1m,5m,1h}\|<epoch>` | queue-rollup leader | 24h / 7d / 30d | ≈ 4 176 keys; 2 fields × live queues each |
