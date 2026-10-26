@@ -168,7 +168,7 @@ The on-the-wire job is a JSON hash with **string keys** (symbols forbidden — `
 | `enqueued_at` | Integer | epoch ms; set on push to immediate queue (not when scheduled). For old format may be Float (epoch secs) |
 | `at` | Float | epoch seconds; if present at push → scheduled, removed before enqueue |
 | `retry_queue` | String | queue to put retries in (default: same as `queue`) |
-| `retry_for` | Numeric | relative seconds; mutually exclusive with retry-count logic. Must be `< 1_000_000_000` |
+| `retry_for` | Numeric | relative seconds; mutually exclusive with retry-count logic. On push: Integer kept, other Numeric truncated (`to_i`), String coerced only if all digits (`/\A-?\d+\z/`, base 10); anything else → ArgumentError, nothing written. Values over 1_000_000_000 *after* coercion rejected — exactly 1_000_000_000 is valid. Stored as Integer |
 | `retry_count` | Integer | incremented on each retry |
 | `failed_at` | Integer | epoch ms of first failure |
 | `retried_at` | Integer | epoch ms of last retry |
@@ -596,7 +596,8 @@ module Sidekiq::JobUtil
     #  - class not Class|String
     #  - at present and not Numeric
     #  - tags present and not Array
-    #  - retry_for > 1_000_000_000
+    #  - retry_for present and not coercible to an Integer (other Numerics truncate via to_i, digit Strings coerce base-10)
+    #  - retry_for over 1_000_000_000 after coercion — the boundary value itself is valid
   end
 
   def verify_json(item)
@@ -612,7 +613,7 @@ module Sidekiq::JobUtil
     # 4. require non-empty "queue"
     # 5. strip TRANSIENT_ATTRIBUTES
     # 6. assign jid (SecureRandom.hex(12)), stringify class & queue
-    # 7. coerce retry_for to int if present
+    # 7. coerce retry_for to Integer if present (digit Strings base-10, other accepted Numerics via to_i — non-coercible already raised by validate)
     # 8. created_at = now_in_millis
   end
 

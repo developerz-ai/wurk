@@ -514,12 +514,12 @@
 - id: metrics.minute-cap
   area: metrics
   behavior: An oversized minute window starts no earlier than 480 minutes before now.
-  source: docs/target/sidekiq-free.md#L1207
+  source: docs/target/sidekiq-free.md#L1208
   oracles: [MetricsQueryParityTest#test_window_caps]
 - id: metrics.hour-cap
   area: metrics
   behavior: An oversized hour window starts no earlier than 72 hours before now.
-  source: docs/target/sidekiq-free.md#L1207
+  source: docs/target/sidekiq-free.md#L1208
   oracles: [MetricsQueryParityTest#test_window_caps]
 - id: metrics.day-marks
   area: metrics
