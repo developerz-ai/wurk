@@ -37,10 +37,16 @@ class ForbiddenClaimsTest < Minitest::Test
   # update this guard in the same change.
   SCALE_CLAIM = /millions of jobs|jobs an hour/i
 
-  # The shipped dashboard has no per-job progress surface: status is read
-  # through Wurk::Status / record.to_h and the bearer-scoped /v1 jobs endpoint.
-  # A dashboard progress claim is always wrong; name the machine reader instead.
-  DASHBOARD_PROGRESS_CLAIM = /per-job progress/i
+  # Status readers are machine-only. Match reader promises locally, not mere
+  # dashboard/status co-occurrence: the full docs legitimately discuss both.
+  DASHBOARD_READER_CLAIM = /
+    per-job\s+progress |
+    read\s+back\s+from\s+Ruby\s+or\s+(?:the\s+)?dashboard |
+    \bdashboard\s+(?:shows?|displays?|reads?|provides?)\s+(?:the\s+)?
+      (?:job[-\s]+)?(?:status|results?)\b |
+    \bjob[-\s]+(?:status|results?)(?:\s+and\s+results?)?\s+
+      (?:in|on|through|from|via)\s+(?:the\s+)?dashboard\b
+  /ix
 
   def test_no_public_surface_claims_wurk_is_faster
     offenders = surfaces.flat_map do |name, text|
@@ -62,12 +68,50 @@ class ForbiddenClaimsTest < Minitest::Test
                  "the numbers in docs/benchmarks.md first: #{offenders.join(', ')}"
   end
 
-  def test_no_public_surface_claims_a_per_job_progress_dashboard
-    offenders = surfaces.filter_map { |name, text| name if text.match?(DASHBOARD_PROGRESS_CLAIM) }
+  def test_no_public_surface_claims_a_job_status_reader_dashboard
+    assert_no_dashboard_reader_claims
+  end
 
-    assert_empty offenders,
-                 'the shipped dashboard has no per-job progress surface; name the machine readers ' \
-                 "(Wurk::Status, /v1 GET /jobs/:jid) instead: #{offenders.join(', ')}"
+  def test_dashboard_guard_rejects_reader_promises_in_each_pitch_surface
+    claims = [
+      'the dashboard shows a per-job progress bar',
+      'read back from Ruby or the dashboard',
+      'The dashboard shows job status.',
+      'The dashboard displays job results.',
+      'The dashboard provides status and results.',
+      'Read job-status through the dashboard.',
+      'Read job results in the dashboard.',
+      '<p>Read job <strong>results</strong> from the dashboard.</p>',
+      "Read back from Ruby or\n the dashboard."
+    ]
+
+    FILES.each do |path|
+      claims.each do |claim|
+        injected = surfaces.merge(path => "#{surfaces.fetch(path)}\n#{claim}")
+
+        assert_raises(Minitest::Assertion, "#{path} must reject #{claim.inspect}") do
+          assert_no_dashboard_reader_claims(injected)
+        end
+      end
+    end
+  end
+
+  def test_dashboard_guard_accepts_machine_readers_in_each_pitch_surface
+    accurate = [
+      'Read job status and results from Ruby through Wurk::Status / record.to_h.',
+      'Read job status over the bearer-scoped /v1 HTTP API (GET /jobs/:jid).',
+      'Opt-in <code>track: true</code> persists state, coalesced progress writes, and the return value ' \
+      '&mdash; read back from Ruby or over the bearer-scoped <code>/v1</code> HTTP API ' \
+      '(<code>GET /jobs/:jid</code>).',
+      'The dashboard shows queues. Read job status and results through Wurk::Status.',
+      'Job status and results use the HTTP API. The dashboard has click-through job detail.'
+    ]
+
+    FILES.each do |path|
+      accurate.each do |copy|
+        assert_no_dashboard_reader_claims(surfaces.merge(path => "#{surfaces.fetch(path)}\n#{copy}"))
+      end
+    end
   end
 
   def test_the_guard_still_catches_a_bare_claim
@@ -76,8 +120,6 @@ class ForbiddenClaimsTest < Minitest::Test
     refute speed_claim?('Wurk is not currently faster than stock Sidekiq')
     assert speed_claim?('Wurk is not only free but faster than Sidekiq')
     assert speed_claim?('Wurk is not faster than Sidekiq, but it is faster than Resque')
-    assert_match DASHBOARD_PROGRESS_CLAIM, 'the dashboard shows a per-job progress bar',
-                 'the dashboard per-job-progress phrasing must stay guarded'
   end
 
   PANE_INVENTORIES = %w[feature-panes dashboard-panes].freeze
@@ -141,6 +183,17 @@ class ForbiddenClaimsTest < Minitest::Test
   end
 
   private
+
+  def assert_no_dashboard_reader_claims(pitch_surfaces = surfaces)
+    offenders = pitch_surfaces.filter_map do |name, text|
+      prose = text.gsub(/<[^>]+>/, ' ').gsub(/\s+/, ' ')
+      name if prose.match?(DASHBOARD_READER_CLAIM)
+    end
+
+    assert_empty offenders,
+                 'the shipped dashboard has no per-job progress or status/results reader; name the machine readers ' \
+                 "(Wurk::Status, /v1 GET /jobs/:jid) instead: #{offenders.join(', ')}"
+  end
 
   def shipped_panes
     labels = JSON.parse(File.read(File.join(ROOT, 'frontend/src/i18n/en.json'))).fetch('nav')
