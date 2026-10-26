@@ -33,7 +33,15 @@ export function useJobSetActions(set: JobSetName) {
   const onError = (err: unknown) => {
     const partial = partialFailure(err);
     if (!partial) return notifyError(err);
-    pushToast(t('toast.partial', { count: partial.count, failed: partial.failed.length }), 'error');
+    const summary = t('toast.partial', { count: partial.count, failed: partial.failed.length });
+    // The response guard validates the array, not the individual diagnostics.
+    const diagnostics = partial.failed.flatMap((entry: unknown) => {
+      if (!entry || typeof entry !== 'object' || Array.isArray(entry)) return [];
+      const { key, error } = entry as Record<string, unknown>;
+      const fields = [key, error].filter((field): field is string => typeof field === 'string');
+      return fields.length ? [fields.join(': ')] : [];
+    });
+    pushToast([summary, ...diagnostics].join('\n'), 'error');
     invalidate();
   };
 

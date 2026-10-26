@@ -179,6 +179,55 @@ class ScheduledBriefsTest < Minitest::Test
     end
   end
 
+  def test_coverage_brief_permits_frontend_inspection_and_filing_with_stable_titles
+    text = File.read(File.join(ROOT, SCOUTS.fetch('coverage-gaps').fetch('brief_file'))).split.join(' ')
+
+    assert_includes text, 'inspection and filing of frontend contract/error-path coverage gaps under `frontend/src/`'
+    assert_includes text, 'Inspect frontend source and existing tests, and file concrete contract/error-path gaps'
+    assert_includes text, 'One ask per file, never one per gap'
+    assert_includes text, "file's path without the line number as the title"
+    assert_includes text, 'Coverage gap: lib/wurk/<file>.rb'
+    assert_includes text, 'Coverage gap: frontend/src/<file>.ts'
+    assert_includes text, 'Coverage gap: frontend/src/components/<file>.tsx'
+    assert_includes text, 'The title must not change between runs'
+    assert_includes text, 'the dedupe below is an exact title match'
+  end
+
+  def test_coverage_brief_requires_actionable_frontend_contract_evidence
+    text = File.read(File.join(ROOT, SCOUTS.fetch('coverage-gaps').fetch('brief_file'))).split.join(' ')
+    frontend = text.split('### Frontend contract/error-path coverage', 2).fetch(1).split('## Read-only', 2).first
+
+    assert_includes frontend, 'Every frontend finding must include:'
+    assert_includes frontend, 'A source `path:line` anchor under `frontend/src/`'
+    assert_includes frontend, 'Concrete behavioral evidence: the input or failure condition, the expected contract'
+    assert_includes frontend, 'behavior or error path that existing tests do not assert'
+    assert_includes frontend, 'Missing tests alone are insufficient'
+    assert_includes frontend, 'Relevant existing or proposed repository test paths (`frontend/src/**/*.test.{ts,tsx}`)'
+    assert_includes frontend, 'identifying which test to extend or where to add an oracle'
+    assert_includes frontend, 'A specific closing assertion: state exactly what the test must assert for that condition'
+  end
+
+  def test_coverage_brief_separates_frontend_evidence_from_ruby_measurements
+    text = File.read(File.join(ROOT, SCOUTS.fetch('coverage-gaps').fetch('brief_file'))).split.join(' ')
+
+    assert_includes text, 'Frontend findings are not measured by Ruby SimpleCov or Cobertura'
+    assert_includes text, 'Do not infer frontend percentages or coverage gates from Ruby reports'
+    assert_includes text, 'use frontend contract/test evidence instead'
+    assert_includes text, 'The Ruby global 90% line/branch floors do not apply to frontend findings'
+    assert_includes text, 'do not run tests or generate coverage in this read-only lane'
+    assert_includes text, '`lib/**/*.rb` tracked'
+    assert_includes text, '`minimum_coverage line: 90, branch: 90`'
+    assert_includes text, 'Both numbers are blocking, and both are global'
+    assert_includes text, '`coverage/coverage.xml`'
+    assert_includes text, "Read a file's own row, never the total"
+    assert_includes text, 'Nothing may be quoted from it — read the report a complete run produced'
+    assert_includes text, '`bin/rake test:coverage`'
+    assert_includes text, 'This lane does not run it: a coverage run flushes the test Redis DBs'
+    assert_includes text, 'Read the report a run already produced'
+    assert_includes text, 'A `lib/` file that no test requires'
+    assert_includes text, 'High line coverage, low branch coverage on the same file'
+  end
+
   def test_every_brief_declares_the_lane_read_only
     each_brief_text do |name, text|
       READ_ONLY_CLAUSES.each do |clause|

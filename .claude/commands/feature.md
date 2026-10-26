@@ -6,7 +6,7 @@ allowed-tools: Read, Write, Edit, Glob, Grep, Bash, Task, Skill, WebFetch, mcp__
 
 # /feature
 
-You are a **senior engineer on the developerz.ai team**. Take a feature from plain-language idea to merged-and-healthy-in-prod. We're a **thin orchestrator maintainer agent** — read [`docs/idea/principles.md`](../../docs/idea/principles.md) before designing anything.
+You are a **senior engineer on the developerz.ai team**. Take a feature from plain-language idea to merged-and-healthy-in-prod. Read the root [`CLAUDE.md`](../../CLAUDE.md) for Wurk architecture and conventions before designing anything.
 
 ## Request
 $ARGUMENTS
@@ -56,7 +56,7 @@ $ARGUMENTS
 
 1. **Understand.** Restate the goal in a line. If the ask cites URLs (article, prior art), `WebFetch` them and extract the *pattern* (the mechanism), then translate it onto our stack — SolidJS signals/stores (dashboard SPA), SolidStart SSR (marketing), Hono HTTP, BullMQ-on-Dragonfly jobs, the Vercel AI SDK agent loop (BYOK), audit-first everything (`docs/idea/`).
 
-2. **Explore (parallel).** Fan out ≤4 `Task` Explore agents (hive rules above; very thorough; `codegraph_explore` for structure) to map every affected surface, the right app(s) (`apps/api|dashboard|ingest|marketing|runner|worker`) and package(s) (`packages/agent|audit|billing|config|db|domain|email|github|i18n|policy|queue|storage|tools|ui`), the `@developerz/*` contracts, `@developerz/db` SQL/migrations, patterns to mirror (`file:line`), tests, and constraints. Respect package boundaries and dep rules (`docs/idea/monorepo.md`) — `apps/api` is HTTP only and delegates to services/packages. A cross-cutting sweep may span the sibling repo `../infrastructure`. Produce a worklist grouped into PR-sized batches; log anything the survey couldn't cover.
+2. **Explore (parallel).** Fan out ≤4 `Task` Explore agents (hive rules above; very thorough; `codegraph_explore` for structure) to map every affected surface, the right app(s) (`apps/api|dashboard|ingest|marketing|runner|worker`) and package(s) (`packages/agent|audit|billing|config|db|domain|email|github|i18n|policy|queue|storage|tools|ui`), the `@developerz/*` contracts, `@developerz/db` SQL/migrations, patterns to mirror (`file:line`), tests, and constraints. A cross-cutting sweep may span the sibling repo `../infrastructure`. Produce a worklist grouped into PR-sized batches; log anything the survey couldn't cover.
 
 3. **Track in GitHub (issues).** Find the existing issue or open one with `gh issue create`, wired to the right milestone/board. One sub-issue (or task) per PR-sized slice; each PR references its issue with a `Fixes #NNN` magic word so it auto-closes on merge. Keep a checklist on the parent issue; don't close the parent until every PR is merged and deployed. A single self-contained slice can be handed straight to a `Task` agent that takes it from branch → build → verify → PR → merge — working in this checkout, never a worktree.
 
@@ -70,7 +70,7 @@ $ARGUMENTS
 
 8. **Watch + close.** Deploy green, audit log clean in the feature area, DB shows the expected writes/reads (read-only), jobs processing on the queue. The `Fixes #NNN` magic word auto-closes each child issue when its PR merges — verify each actually flipped and close any straggler by hand with a comment linking the merged PR. Once every child is closed and deployed, close the **parent issue** yourself. Broken → forward-fix on a branch; data corruption / auth bypass / outage → stop and tell the user.
 
-## Hard rules (from CLAUDE.md / principles.md — non-negotiable)
+## Hard rules
 
 Bot **always** discloses — no human impersonation. **Thin orchestrator** — coding happens in the user's agent, not ours. **BYOK only** — never resell tokens. **Auto-merge by default** — fires when `auto_merge: true` (the default) + CI green + gates (review + branch protections); opt out `auto_merge: false` / HUMAN-MERGE lane. **No bot-on-bot loops** — detect CodeRabbit/Copilot/Dependabot → defer. **Audit is trust** — if it isn't logged, it didn't happen. No hardcoded state machines for policy (policy = prompt + tools). No abstractions before consumers; default to deletion. Bun + TypeScript only (no Node, no npm). All SQL in `@developerz/db` (regenerate after schema edits); tests with the code; i18n both locales. Prod DB read-only unless told otherwise; destructive prod actions need approval — autonomy removes questions, not judgment.
 

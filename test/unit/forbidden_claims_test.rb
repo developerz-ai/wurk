@@ -114,6 +114,15 @@ class ForbiddenClaimsTest < Minitest::Test
     end
   end
 
+  def test_site_attributes_parity_to_independently_written_oracles
+    site = read_doc('docs/site/index.html').gsub(/\s+/, ' ')
+    why = site[%r{<section id="why".*?</section>}]
+
+    refute_nil why, 'the site must retain its Why section'
+    assert_includes why, 'independently written oracles for documented Sidekiq behavior'
+    refute_match(/Sidekiq['’]s own tests/i, site)
+  end
+
   def test_the_guard_still_catches_a_bare_claim
     assert speed_claim?('Faster.'), 'the wiki once shipped "Free forever. Faster."'
     assert speed_claim?('Faster than stock Sidekiq')

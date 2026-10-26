@@ -563,9 +563,9 @@ mount Wurk::Engine =&gt; <span class="add">"/wurk"</span></pre>
           are shipped by humans and AI together. A fix, a doc
           update, or a version bump no longer costs somebody a week, which is what makes it practical
           to ship the whole Pro + Enterprise surface for free, to verify parity mechanically on every
-          push (Sidekiq's own tests as an oracle, third-party gems' upstream suites run against
-          Wurk), and to keep adding surface Sidekiq doesn't have. It also means the claims stay
-          measured:
+          push (independently written oracles for documented Sidekiq behavior,
+          third-party gems' upstream suites run against Wurk), and to keep adding surface
+          Sidekiq doesn't have. It also means the claims stay measured:
           <a href="https://github.com/developerz-ai/wurk/blob/main/docs/benchmarks.md">the latest published paired comparison</a>
           against stock Sidekiq is dated 2026-08-07, including the unflattering results.
           It is a historical measurement, not a comparison run for each release.
