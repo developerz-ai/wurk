@@ -33,6 +33,34 @@ internet ──►│                                                     ├─
             └── worker (swarm) ──► drains jobs ───────────────────┘
 ```
 
+### Health probes and Prometheus
+
+**This checkout does not configure a demo health listener on port 7433 or a
+Prometheus `/metrics` endpoint.** The [Dockerfile](../Dockerfile) does declare
+`EXPOSE 3000 7433`, but `EXPOSE` is image metadata: it does not start a listener.
+The optional [worker health listener](../lib/wurk/health.rb) serves `/live`,
+`/ready`, and Prometheus `/metrics` on a separate port only when configured;
+there is no `health_check` configuration in `demo/`.
+
+The [entrypoint](../bin/demo-entrypoint) sets `WURK_DISABLED=1` for both roles.
+That makes [RailsBoot](../lib/wurk/rails_boot.rb) skip the railtie's server-mode
+entry before application initializers run, leaving `server?` false.
+Consequently, [`configure_server` blocks](../lib/wurk/configuration.rb) in
+initializers are skipped. The worker subsequently boots and supervises the
+swarm manually via `rails runner`; this does not rerun those initializers.
+The [demo initializer](../demo/config/initializers/wurk.rb) documents the same
+constraint and installs dashboard Metrics history middleware directly.
+The generic [health-probe guidance](deployment.md#health-probes) shows the
+opt-in API, not configuration enabled by this demo; copying its
+`configure_server` snippet into a demo initializer would therefore be skipped.
+
+Dashboard Metrics charts and JSON endpoints are not the Prometheus scrape
+endpoint. Likewise, the existing [served-version check](#the-served-version-check-read-only)
+uses `/wurk/api/meta` to compare versions, not to establish worker liveness or
+readiness. These findings describe the inspected repository configuration,
+not a live-cluster verification: external infrastructure manifests, Kubernetes
+Services/probes, ingress behavior, and public reachability were not checked.
+
 ## Optional soak operation
 
 Soak is separate from the ordinary `DemoProducer` showcase described above.
