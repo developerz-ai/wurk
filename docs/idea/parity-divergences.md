@@ -842,7 +842,7 @@ particular content type.
 
 **Spec:** Pro §2.8 lists `-success`/`-complete` as "callbacks pending" and `-notify`/`-cbsucc` for queued/dedup — contents unspecified.
 
-**Why:** unverifiable without a real Pro dump (plan 101, U8 → R2). Risk: a Pro batch in flight at the swap may skip its callbacks. Revisit with a dump.
+**Why:** unverifiable without a real Pro dump: R2 — Pro/Ent Redis formats never validated vs real Pro/Ent; the fix is a real Pro+Ent Redis dump (`docs/plans/2026/10/04/101-squeaky-clean-audit/09-production-readiness.md:12`); E13 — `b-<bid>-success`/`-complete` used as "fired" markers vs Pro §2.8 "callbacks pending", and Pro batches lack Wurk's `callbacks` field, so validate with a real Pro dump (`docs/plans/2026/10/04/101-squeaky-clean-audit/03-pro-ent-api.md:23`); U8 — the human-only action that obtains that dump (`docs/plans/2026/10/04/101-squeaky-clean-audit/11-human-actions.md:14`). Risk: a Pro batch in flight at the swap may skip its callbacks. Revisit with a dump.
 
 **Anchor:** `lib/wurk/batch/callbacks.rb`.
 
