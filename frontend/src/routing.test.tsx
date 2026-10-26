@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
-import { render, screen, fireEvent, cleanup, waitFor } from '@solidjs/testing-library';
+import { render, screen, fireEvent, cleanup, waitFor, within } from '@solidjs/testing-library';
 import appSource from './App.tsx?raw';
 import { QueryClient, QueryClientProvider } from '@tanstack/solid-query';
 import { A, MemoryRouter, Route, createMemoryHistory } from '@solidjs/router';
@@ -212,7 +212,18 @@ describe('routed page heading coverage', () => {
         } as Response);
       }));
       renderAt(entry.url);
-      await screen.findByText(entry.settled, { exact: true }, { timeout: 5000 });
+      if (entry.page === 'Extension') {
+        await waitFor(() => {
+          const root = document.querySelector('[data-extension-view]')?.shadowRoot;
+          expect(root).toBeTruthy();
+          const content = root!.querySelector<HTMLElement>('.ext-view');
+          expect(content).not.toBeNull();
+          expect(within(content!).getByText(entry.settled, { exact: true })).toBeInTheDocument();
+          expect(screen.queryByText(entry.settled, { exact: true })).not.toBeInTheDocument();
+        }, { timeout: 5000 });
+      } else {
+        await screen.findByText(entry.settled, { exact: true }, { timeout: 5000 });
+      }
       await waitFor(() => {
         expect(clients.every((client) => client.isFetching() === 0)).toBe(true);
         expect(screen.getAllByRole('heading', { level: 1 })).toHaveLength(1);
