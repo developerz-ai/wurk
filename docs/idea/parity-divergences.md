@@ -1641,3 +1641,48 @@ Existing routing tests in
 `test_unknown_path_is_404`;
 [authorization and read-only tests](../../test/unit/web_rack_app_test.rb#L112-L150)
 pin the outer gates. Spec: `docs/target/sidekiq-free.md:1370-1384,1420-1458`.
+
+## `Chain#add` honours a class-declared `outer_of` ordering anchor
+
+**Wurk:** `Wurk::Middleware::Chain#add` still appends by default — any existing
+entry for the class is removed and the new one lands at the tail (innermost),
+exactly as free §10.1 specifies. One opt-in exception, declared per
+middleware class: a class MAY define a class-level `outer_of` returning the
+classes it must stay **outside** of, and `Chain#add` then places the entry
+**before the first registered anchor** instead of at the tail. A class already
+registered *before* that anchor keeps its slot — only its constructor args are
+refreshed, because moving it would be a relocation the caller did not ask for.
+With no anchor registered, `add` behaves exactly as before. Wurk's own
+`Wurk::Batch::ServerMiddleware` declares
+`outer_of` → `[Wurk::Middleware::Expiry, Wurk::Limiter::ServerMiddleware]`
+(`lib/wurk/batch/server_middleware.rb`), resolved lazily at call time because
+`Expiry` is loaded after that file. `prepend`, `insert_before`,
+`insert_after` and `remove` are untouched and still relocate middleware
+deliberately.
+
+**Spec:** free [§10.1](../target/sidekiq-free.md#L637) states
+`def add(klass, *args) # appends (removes existing first)` — a single
+append-only contract, with no anchor concept.
+
+**Why:** the batch middleware's slot in the onion is load-bearing, and a plain
+append cannot express "keep this middleware where it is". `Expiry` skips an
+expired job by returning without yielding, so a batch middleware *inside* it
+never reaches `ack_success`: the batch's `pending` never drops, the batch
+never completes, and its `:complete`/`:success` callbacks never fire. The
+Limiter turns an over-limit job into a `Limiter::Rescheduled` (a
+`JobRetry::Skip`) *after* re-enqueueing it; with the batch middleware inside
+the Limiter, the `OverLimit` passes through the batch's generic
+`rescue StandardError` first and books a spurious failure for a job that never
+ran. Before the anchor, any re-registration of the batch middleware — a
+`configure_server` block, a test helper — silently relocated it inside both
+and broke the accounting. The anchor is declared per class and constrains only
+that class's own registration: a class that declares no `outer_of` keeps the
+documented append, and a host that *wants* middleware outside an anchored one
+still gets there with `prepend`/`insert_before`. The default server chain
+order is unchanged (Batch → Expiry → Limiter), and nothing on the wire moves:
+no Redis key, job-JSON field or Lua script is touched.
+
+**Anchor:** [anchor-aware `add`](../../lib/wurk/middleware/chain.rb#L70-L94),
+[anchor resolution](../../lib/wurk/middleware/chain.rb#L164-L171),
+[batch middleware's `outer_of`](../../lib/wurk/batch/server_middleware.rb#L44-L65),
+free [§10.1](../target/sidekiq-free.md#L637).
