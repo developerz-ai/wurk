@@ -78,6 +78,20 @@ function placeholders(s: string): string[] {
   return Array.from(s.matchAll(/\{(\w+)\}/g), (m) => m[1]).sort();
 }
 
+// Paths of leaves in a raw bundle whose runtime value is not a string. Plain
+// objects (non-null, non-array) recurse as branches; arrays, null, numbers,
+// and booleans are all non-string leaves — an array is never walked. Deliberately
+// does not go through flatten(), which String()-coerces every leaf and would
+// silently bless a non-string planted in a JSON bundle.
+function nonStringLeaves(value: unknown, path = ''): string[] {
+  if (value !== null && typeof value === 'object' && !Array.isArray(value)) {
+    return Object.entries(value as Record<string, unknown>).flatMap(([k, v]) =>
+      nonStringLeaves(v, path ? `${path}.${k}` : k),
+    );
+  }
+  return typeof value === 'string' ? [] : [path || '<root>'];
+}
+
 // Locale-parity guard: every bundle must translate exactly the keys en.json
 // defines (no missing coverage, no orphaned keys left over from a rename) and
 // preserve the same {var} placeholders so interpolation never breaks for a
@@ -111,6 +125,41 @@ describe('locale parity', () => {
       });
     });
   }
+
+  // Leaf-type guard over the raw imported values, one assertion per bundle so
+  // a failure names the offending locale.
+  const bundles: Record<string, unknown> = { en, ...locales };
+  for (const [name, bundle] of Object.entries(bundles)) {
+    it(`${name} contains only string leaves`, () => {
+      expect(nonStringLeaves(bundle)).toEqual([]);
+    });
+  }
+});
+
+// The per-bundle assertions above stay green even if nonStringLeaves() were
+// gutted to `return []`, because every leaf in the shipped bundles is a string
+// today. These synthetic inputs pin the rejection path itself: non-strings must
+// be reported, arrays never walked into, plain objects recursed as branches.
+describe('nonStringLeaves()', () => {
+  it('reports an array leaf without walking into it', () => {
+    expect(nonStringLeaves({ nav: ['Dashboard'] })).toEqual(['nav']);
+  });
+
+  it('reports null, number, and boolean leaves', () => {
+    expect(nonStringLeaves({ none: null, n: 0, ok: false })).toEqual(['none', 'n', 'ok']);
+  });
+
+  it('recurses plain objects as branches, keeping the dotted path', () => {
+    expect(nonStringLeaves({ nav: { deep: { n: 0 } } })).toEqual(['nav.deep.n']);
+  });
+
+  it('accepts string leaves, including empty ones', () => {
+    expect(nonStringLeaves({ nav: { dashboard: '' } })).toEqual([]);
+  });
+
+  it('names a non-string root <root>', () => {
+    expect(nonStringLeaves(0)).toEqual(['<root>']);
+  });
 });
 
 describe('bundleFor()', () => {

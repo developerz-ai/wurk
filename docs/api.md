@@ -29,6 +29,8 @@ Sidekiq::Stats.equal?(Wurk::Stats)   # => true
 | `Sidekiq::Queue` | `Wurk::Queue` |
 | `Sidekiq::JobRecord` | `Wurk::JobRecord` |
 | `Sidekiq::SortedEntry` | `Wurk::SortedEntry` |
+| `Sidekiq::SortedSet` | `Wurk::SortedSet` |
+| `Sidekiq::JobSet` | `Wurk::JobSet` |
 | `Sidekiq::ScheduledSet` | `Wurk::ScheduledSet` |
 | `Sidekiq::RetrySet` | `Wurk::RetrySet` |
 | `Sidekiq::DeadSet` | `Wurk::DeadSet` |
@@ -36,9 +38,6 @@ Sidekiq::Stats.equal?(Wurk::Stats)   # => true
 | `Sidekiq::WorkSet` (`Sidekiq::Workers`) / `Sidekiq::Work` | `Wurk::WorkSet` (`Wurk::Workers`) / `Wurk::Work` |
 | `Sidekiq::Deploy` | `Wurk::Deploy` |
 | `Sidekiq::Web` (so `Sidekiq::Web::Search`) | `Wurk::Web` |
-
-`Wurk::SortedSet` and `Wurk::JobSet` have **no** `Sidekiq::*` alias — see
-[§ Divergences](#divergences-from-the-sidekiq-spec).
 
 Examples use the `Wurk::` names throughout; substitute `Sidekiq::` freely.
 

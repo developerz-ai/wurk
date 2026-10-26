@@ -841,11 +841,11 @@ class Sidekiq::BasicFetch
   def initialize(capsule)
   def retrieve_work → UnitOfWork|nil   # BRPOP queues_cmd
   def bulk_requeue(inprogress)         # pipelined RPUSH grouped by queue
-  def queues_cmd                       # strict: @queues; else shuffle.uniq
+  def terminate                        # Manager#quiet/terminate calls it unconditionally
 end
 ```
 
-Pluggable via `config[:fetch_class]` + `config[:fetch_setup]`.
+Pluggable via `config[:fetch_class]` + `config[:fetch_setup]`. A plug-in fetcher must respond to `initialize(capsule)`, `retrieve_work`, `bulk_requeue(inprogress)` and `terminate` — Wurk's runtime calls all four unconditionally (capsule.rb, processor.rb, manager.rb). `flush_pending_acks` is optional: `Wurk::Processor` calls it only behind `respond_to?` and the abstract `Wurk::Fetcher` base no-ops it. `queues_cmd` (strict: `@queues`; else `shuffle.uniq`) is private to the shipped fetch implementation (`Fetcher::Reliable`) — internal, never called from outside the fetcher, and not part of the plug-in contract.
 
 ---
 

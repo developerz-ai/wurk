@@ -1,13 +1,13 @@
 # frozen_string_literal: true
 
 # Builds docs/site/llms-full.txt — the single-fetch, full-content companion to
-# llms.txt for AI agents that would rather inline everything than follow links.
-# Generated (never hand-edited) from the canonical guides so it cannot drift:
-# the llms.txt map up top, then each user-facing guide inlined verbatim.
+# llms.txt for AI agents that want selected guides in one fetch.
+# Generation keeps the selected source bodies verbatim; inventory validation
+# requires every docs/*.md path to be included or explicitly excluded, so new
+# guides cannot silently escape review. Nested docs remain outside that inventory.
 #
 # `rake docs:llms_full` writes the file; the pages workflow regenerates it on
-# every publish; llms_full_test.rb exercises this builder so a removed/renamed
-# source doc fails CI instead of silently dropping out of the dump.
+# every publish to keep the generated content fresh.
 module WurkDocs
   module LlmsFull
     # The concise map (already published at /wurk/llms.txt). Inlined first so a
@@ -44,16 +44,50 @@ module WurkDocs
       docs/profiling.md
       docs/dashboard.md
       docs/authentication.md
+      docs/secrets.md
       docs/metrics-history.md
       docs/benchmarks.md
     ].freeze
 
+    EXCLUSIONS = {
+      'docs/compatibility.md' => 'Legal and background context, not a user-facing guide.',
+      'docs/conformance.md' => 'Contributor guidance for maintaining parity oracles.',
+      'docs/demo-deploy.md' => 'Project-specific demo operations, not host-app deployment guidance.'
+    }.freeze
+
+    def self.validate_inventory(root, docs: DOCS, exclusions: EXCLUSIONS)
+      errors = inventory_errors(root, docs, exclusions).filter_map do |diagnostic, paths|
+        "#{diagnostic}: #{paths.join(', ')}" unless paths.empty?
+      end
+      raise ArgumentError, "llms-full inventory invalid: #{errors.join('; ')}" unless errors.empty?
+    end
+
+    def self.inventory_errors(root, docs, exclusions)
+      discovered = Dir.glob('docs/*.md', base: root)
+      accounted = docs + exclusions.keys
+      entry_errors(docs, exclusions).merge(
+        'unaccounted docs (add to DOCS or EXCLUSIONS)' => discovered - accounted,
+        'missing/stale inventory entries' => accounted - discovered
+      )
+    end
+    private_class_method :inventory_errors
+
+    def self.entry_errors(docs, exclusions)
+      {
+        'duplicate inclusions' => docs.tally.select { |_, count| count > 1 }.keys,
+        'included and excluded' => docs & exclusions.keys,
+        'blank exclusion reasons' => exclusions.select { |_, reason| reason.to_s.strip.empty? }.keys
+      }
+    end
+    private_class_method :entry_errors
+
     def self.build(root)
+      validate_inventory(root)
       sections = [File.read(File.join(root, MAP)).rstrip]
-      intro = 'The complete text of each guide linked above, inlined for single-fetch reading.'
+      intro = 'Selected guides follow verbatim for single-fetch reading; other documents remain linked in the map.'
       sections << "---\n\n# Full documents\n\n#{intro}"
       DOCS.each do |rel|
-        body = File.read(File.join(root, rel)).rstrip
+        body = File.read(File.join(root, rel))
         sections << "---\n\n<!-- source: #{rel} -->\n\n#{body}"
       end
       "#{sections.join("\n\n")}\n"
