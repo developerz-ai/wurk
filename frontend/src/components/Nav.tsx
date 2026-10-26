@@ -1,6 +1,7 @@
 import { A } from '@solidjs/router';
 import { For, Show } from 'solid-js';
 import { t } from '../i18n';
+import { NAV_PANES, paneLabel } from '../navPanes';
 import { useMeta } from '../hooks/useMeta';
 import { useSSE } from '../hooks/useSSE';
 import LocalePicker from './LocalePicker';
@@ -17,21 +18,9 @@ interface NavProps {
   onToggleCollapse: () => void;
 }
 
-const LINKS = [
-  { to: '/', label: t('nav.dashboard'), icon: 'fa-gauge-high', end: true },
-  { to: '/queues', label: t('nav.queues'), icon: 'fa-layer-group', end: false },
-  { to: '/retries', label: t('nav.retries'), icon: 'fa-rotate-right', end: false },
-  { to: '/scheduled', label: t('nav.scheduled'), icon: 'fa-clock', end: false },
-  { to: '/dead', label: t('nav.dead'), icon: 'fa-skull', end: false },
-  { to: '/busy', label: t('nav.busy'), icon: 'fa-gears', end: false },
-  { to: '/batches', label: t('nav.batches'), icon: 'fa-table-cells-large', end: false },
-  { to: '/flows', label: t('nav.flows'), icon: 'fa-diagram-project', end: false },
-  { to: '/limiters', label: t('nav.limiters'), icon: 'fa-gauge', end: false },
-  { to: '/cron', label: t('nav.cron'), icon: 'fa-stopwatch', end: false },
-  { to: '/metrics', label: t('nav.metrics'), icon: 'fa-chart-line', end: false },
-  { to: '/profiles', label: t('nav.profiles'), icon: 'fa-fire', end: false },
-  { to: '/search', label: t('nav.search'), icon: 'fa-magnifying-glass', end: false },
-];
+// Labels resolve once at module load: a locale change reloads the page (see
+// components/LocalePicker.tsx), so the rail never needs a reactive label.
+const LINKS = NAV_PANES.map((pane) => ({ ...pane, label: paneLabel(pane) }));
 
 export default function Nav(props: NavProps) {
   // Tabs registered by third-party gems (sidekiq-cron, sidekiq-unique-jobs, …)
