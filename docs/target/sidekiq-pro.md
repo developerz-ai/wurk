@@ -257,7 +257,7 @@ end
 - On boot, process registers a **private queue** per public queue it consumes. Naming: `queue:<public>|<hostname>|<pid>|<index>` (pipe separators; underscores caused parsing bugs historically).
 - Fetch loop uses Redis `LMOVE public_queue private_queue RIGHT LEFT` (formerly `RPOPLPUSH`/`BRPOPLPUSH`) — atomic move from public list tail to private list head.
 - Job remains in the private queue until the worker explicitly `LREM`s it after success or retry handling.
-- Process death: heartbeat key `processes` expires after 60s. Orphan sweeper (1/min within process group, full SCAN 1/hr) finds private queues for dead processes and `RPOPLPUSH`es items back to their public queue.
+- Process death: the 60s TTL belongs to the per-identity heartbeat hash `<identity>`; the `processes` membership SET carries no TTL of its own. Liveness is judged by existence — an identity is alive only while its heartbeat hash still exists, so a SET member whose hash has expired is dead even though it is still listed. Orphan sweeper (1/min within process group, full SCAN 1/hr) finds private queues for dead processes and `RPOPLPUSH`es items back to their public queue.
 - **Poison pill**: an orphan recovered ≥ 3 times within 72h is killed → pushed to dead set + Statsd `jobs.poison`. Callback receives `pill` object: `{ jid:, klass:, count:, queue: }`.
 
 ### 3.3 Polling vs blocking

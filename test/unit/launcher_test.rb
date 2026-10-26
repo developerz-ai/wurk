@@ -571,7 +571,7 @@ class LauncherTest < Wurk::Test::UnitCase
 
   # The reason the ordering exists: a beat that lands mid-shutdown must finish
   # before clear_heartbeat SREMs us, or the SADD wins and the dead process haunts
-  # the `processes` SET until its 60s TTL expires.
+  # the `processes` SET until its heartbeat hash expires (60s) and `ProcessSet#cleanup` prunes it.
   def test_stop_does_not_let_an_in_flight_beat_resurrect_the_identity
     @config[:timeout] = 0
     launcher, _thread, gate = boot_with_a_beat_in_flight

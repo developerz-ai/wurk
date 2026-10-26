@@ -407,7 +407,7 @@
   behavior: A killed process's in-flight job is recovered exactly once.
   source: docs/target/sidekiq-pro.md#L260
   promise: >-
-    - Process death: heartbeat key `processes` expires after 60s.
+    - Process death: the 60s TTL belongs to the per-identity heartbeat hash `<identity>`; the `processes` membership SET carries no TTL of its own. Liveness is judged by existence — an identity is alive only while its heartbeat hash still exists, so a SET member whose hash has expired is dead even though it is still listed. Orphan sweeper (1/min within process group, full SCAN 1/hr) finds private queues for dead processes and `RPOPLPUSH`es items back to their public queue.
   oracles: [ReliableFetchParityTest#test_killed_process_in_flight_job_is_recovered_exactly_once]
 - id: fetch.poison
   area: reliable-fetch
