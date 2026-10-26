@@ -440,6 +440,70 @@ class WebConfigTest < Wurk::Test::UnitCase
     assert_equal 'Pipelines', cfg.translations.dig('en', 'nav', 'queues')
   end
 
+  def test_translations_accept_nested_strings_and_empty_hashes_without_changing_keys
+    cfg = Wurk::Web.config
+    translations = {
+      'en' => { 'nav' => { 'queues' => 'Pipelines', 'empty' => '' }, 'unused' => {} },
+      fr: { nav: { queues: 'Files' } },
+      'de' => {}
+    }
+    cfg.translations = translations
+
+    assert_same translations, cfg.translations
+    assert_equal 'Pipelines', cfg.translations.dig('en', 'nav', 'queues')
+    assert_empty cfg.translations.dig('en', 'nav', 'empty')
+    assert_equal 'Files', cfg.translations.dig(:fr, :nav, :queues)
+    assert_empty cfg.translations.dig('en', 'unused')
+    assert_empty cfg.translations['de']
+
+    cfg.translations = {}
+
+    assert_empty cfg.translations
+  end
+
+  def test_translations_reject_non_string_leaves_without_replacing_previous_copy
+    cfg = Wurk::Web.config
+    previous = { 'en' => { 'nav' => { 'queues' => 'Original' } } }
+    cfg.translations = previous
+
+    [42, 1.5, true, false, nil, [], ['text'], :text].each do |leaf|
+      invalid = {
+        'en' => { 'nav' => { 'queues' => 'Replacement' } },
+        'fr' => { 'nav' => { 'queues' => leaf } }
+      }
+      error = assert_raises(ArgumentError, leaf.inspect) { cfg.translations = invalid }
+
+      assert_includes error.message, 'translations["fr"]["nav"]["queues"]'
+      assert_includes error.message, 'String or Hash'
+      assert_includes error.message, leaf.class.to_s
+      assert_same previous, cfg.translations
+      assert_equal({ 'en' => { 'nav' => { 'queues' => 'Original' } } }, cfg.translations)
+    end
+  end
+
+  def test_translations_reject_malformed_root_and_locale_containers
+    cfg = Wurk::Web.config
+    previous = { 'en' => { 'nav' => { 'queues' => 'Original' } } }
+    cfg.translations = previous
+
+    [nil, [], 'text', 42, true, false, :text].each do |value|
+      error = assert_raises(ArgumentError, value.inspect) { cfg.translations = value }
+
+      assert_includes error.message, 'translations must be a Hash'
+      assert_includes error.message, value.class.to_s
+      assert_same previous, cfg.translations
+
+      error = assert_raises(ArgumentError, value.inspect) do
+        cfg.translations = { 'en' => {}, fr: value }
+      end
+
+      assert_includes error.message, 'translations[:fr] must be a Hash'
+      assert_includes error.message, value.class.to_s
+      assert_same previous, cfg.translations
+      assert_equal({ 'en' => { 'nav' => { 'queues' => 'Original' } } }, cfg.translations)
+    end
+  end
+
   def test_reset_clears_locale_settings
     cfg = Wurk::Web.config
     cfg.offered_locales = %w[fr]
