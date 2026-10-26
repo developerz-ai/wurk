@@ -88,6 +88,44 @@ class ReliableFetchParityTest < Wurk::Test::UnitCase
     assert_equal low, f.retrieve_work.queue_name
   end
 
+  # Three queues with the first EMPTY, so walk's leading LMOVE misses and the
+  # fetch_first Lua script (claim_rest over queues 2..n) does the claiming.
+  def test_multi_queue_fetch_moves_fifo_walks_queues_in_order_and_parks_on_the_matching_private_list
+    empty = "#{@q}-a"
+    mid = "#{@q}-b"
+    last = "#{@q}-c"
+    push(mid, 'b1')
+    push(mid, 'b2')
+    push(last, 'c1')
+
+    assert_equal 0, redis('LLEN', "queue:#{empty}"), 'the first queue stays empty: the script path must claim'
+    f = fetcher(empty, mid, last)
+
+    first = f.retrieve_work
+    second = f.retrieve_work
+    third = f.retrieve_work
+
+    # Move direction: LPUSH would serve b2 first; the public tail must come out
+    # first (LMOVE RIGHT->LEFT), so the pushed order is the fetched order.
+    assert_equal [mid, mid], [first.queue_name, second.queue_name]
+    assert_equal [['b1'], ['b2']], [first, second].map { |u| Wurk.load_json(u.job)['args'] },
+                 'a multi-job queue drains in FIFO push order'
+
+    # Traversal order: the later queue drains only after the earlier
+    # script-walked queue is empty.
+    assert_equal last, third.queue_name
+    assert_nil f.retrieve_work, 'a queue earlier in the walk is not revisited once drained'
+
+    # Destination: each claimed job is parked on the private list derived from
+    # the public queue it was claimed from, and nowhere else.
+    [first, second].each do |uow|
+      assert_equal Wurk::Fetcher::Reliable.private_queue_name("queue:#{mid}"), uow.private_queue
+      assert_equal [uow.private_queue], copies(uow.job)
+    end
+    assert_equal Wurk::Fetcher::Reliable.private_queue_name("queue:#{last}"), third.private_queue
+    assert_equal [third.private_queue], copies(third.job)
+  end
+
   def test_paused_queue_is_skipped_until_unpaused
     other = "#{@q}-other"
     push(@q, 'paused')
