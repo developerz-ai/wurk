@@ -32,13 +32,28 @@ for the design rationale.
 Wurk.configuration.api_token ENV.fetch('WURK_API_TOKEN'), scopes: %i[enqueue read]
 ```
 
-Register the token **unconditionally** — not inside `configure_server` /
-`configure_client`. Neither block runs in every process type; in particular a
-Puma-cluster web process never enters "server mode", so a token set only in
-`configure_server` would be absent from exactly the process serving the
-engine-nested mount (mode 1 below). Registering the first token is what
-brings the API into existence at all; call it again to replace a token's
-scopes.
+Register the token **unconditionally** in every process that should serve the
+API — not inside `configure_server` / `configure_client`. Neither block runs
+in every process type. Eligible Rails/Puma single-mode boots (`workers = 0`)
+enter server mode before initializers and run both `configure_server` and
+`configure_client` blocks: the web process also enqueues jobs, so the railtie
+sets `client_in_server` to keep client configuration enabled even in server
+mode. In contrast, Puma cluster mode (a detected positive worker count),
+Unicorn and Passenger refuse worker boot by default, so the railtie does not
+enter server mode unless
+`config.wurk.embed_in_web = true` in `config/application.rb` opts them into
+embedded workers (threads only, no fork). Set this opt-in before initializers
+load, not in `config/initializers/wurk.rb`, because server mode is decided
+before then. Puma worker detection is best-effort: it uses its parsed CLI
+configuration first, then falls back to `WEB_CONCURRENCY`; a missed cluster
+falls through to the default swarm-fork path. See the
+[boot policy](../lib/wurk/rails_boot.rb). So token registration does not need
+to depend on worker boot mode. Suppressed boots (for example,
+`WURK_DISABLED=1`, console or test environment) skip the railtie's server-mode
+entry even with that opt-in. A token set only in `configure_server` can
+therefore be absent from the process serving the engine-nested mount
+(mode 1 below). Registering the first token is what brings the API into
+existence at all; call it again to replace a token's scopes.
 
 `scopes:` is any non-empty subset of `%i[enqueue read admin]` — see
 [Authentication & scopes](#authentication--scopes).

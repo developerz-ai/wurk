@@ -50,8 +50,12 @@ Needs `opentelemetry-api` loaded; it is deliberately not a gemspec dependency, a
 A polyglot producer surface over the same Redis: a Python, Go or Node service `POST`s a job and a Ruby — or stock Sidekiq — worker runs it. Same keys, same JSON, nothing invented at the boundary.
 
 ```ruby
-# not inside configure_server: a Puma web process never enters server mode
+# Register unconditionally, outside configure_server / configure_client.
 Wurk.configuration.api_token ENV.fetch("WURK_API_TOKEN"), scopes: %i[enqueue read]
 ```
+
+Register the token unconditionally in every process that should serve the API: registration configures API access independently of worker boot, so it is safe across these modes.
+
+Eligible Rails/Puma single-mode boots (`workers = 0`) enter server mode before initializers and run both `configure_server` and `configure_client` blocks. The railtie sets `client_in_server` to keep client configuration enabled even in server mode, because the web process also enqueues jobs. In contrast, Puma cluster (a detected positive worker count), Unicorn and Passenger refuse worker boot by default, so the railtie does not enter server mode; setting `config.wurk.embed_in_web = true` in `config/application.rb`, before initializers load (not in an initializer), opts them into embedded workers (threads only, no fork) and server mode. Suppressed boots (for example, `WURK_DISABLED=1`, console or test environment) skip the railtie's server-mode entry even with that opt-in. See the [main guide's enabling section](https://github.com/developerz-ai/wurk/blob/main/docs/api-http.md#enabling-it) for details of best-effort Puma worker detection.
 
 **Off unless a token is registered** — with none, no route is mounted and `/wurk/api/v1` 404s like any unmounted path rather than issuing a bearer challenge for a surface that isn't there. Scopes are `enqueue` (`POST /jobs`, `/jobs/bulk`), `read` (every `GET`) and `admin` (everything — implies `enqueue` and `read`, plus the destructive routes: `DELETE /jobs/:jid`, pause/unpause a queue, quiet/stop a process). Note `GET /jobs/:jid` answers from `Wurk::Status`, so it needs `track: true` — untracked, unknown and expired all read as `404 job_not_found`, because Redis holds nothing that tells them apart. `GET /health` is for monitoring, not for a Kubernetes probe: a probe must never carry a bearer token — use `config.health_check(port:)`. **[docs/api-http.md](https://github.com/developerz-ai/wurk/blob/main/docs/api-http.md)**
