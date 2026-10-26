@@ -49,10 +49,10 @@ function renderMetrics(path = '/metrics') {
 // dropped query parameter lands on an unmapped URL instead of quietly
 // matching a substring — the panel it feeds stays empty and the test fails.
 const RANGE_URLS = [
-  { bucket: '1m', window: '24h', windowSeconds: 86_400, minutes: 60 },
-  { bucket: '1m', window: '24h', windowSeconds: 86_400, minutes: 1_440 },
-  { bucket: '5m', window: '7d', windowSeconds: 604_800, minutes: 10_080 },
-  { bucket: '1h', window: '30d', windowSeconds: 2_592_000, minutes: 43_200 },
+  { bucket: '1m', window: '24h', windowSeconds: 86_400, hours: 1 },
+  { bucket: '1m', window: '24h', windowSeconds: 86_400, hours: 24 },
+  { bucket: '5m', window: '7d', windowSeconds: 604_800, hours: 168 },
+  { bucket: '1h', window: '30d', windowSeconds: 2_592_000, hours: 720 },
 ];
 
 // Route the component's fetches by their exact URL. Defaults render an
@@ -76,7 +76,7 @@ function mockFetch(
   ]);
   for (const r of RANGE_URLS) {
     bodies.set(`/wurk/api/history/${r.bucket}?window=${r.window}`, { bucket: r.bucket, window: r.windowSeconds, series });
-    bodies.set(`/wurk/api/metrics?minutes=${r.minutes}`, { minutes: r.minutes, top_jobs: topJobs });
+    bodies.set(`/wurk/api/metrics?hours=${r.hours}`, { minutes: r.hours * 60, top_jobs: topJobs });
     bodies.set(`/wurk/api/queue-history/${r.bucket}?window=${r.window}`, queueHistory);
   }
 
@@ -253,7 +253,7 @@ describe('Metrics — requested API URLs', () => {
     expect([...new Set(urls)].sort()).toEqual([
       '/wurk/api/history/5m?window=7d',
       '/wurk/api/history/snapshots?limit=1000',
-      '/wurk/api/metrics?minutes=10080',
+      '/wurk/api/metrics?hours=168',
       '/wurk/api/queue-history/5m?window=7d',
       '/wurk/api/stats',
     ]);

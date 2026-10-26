@@ -234,6 +234,29 @@ class WebEnterpriseTest < Wurk::Test::UnitCase
     assert_kind_of Array, rows
   end
 
+  def test_historical_top_accepts_hours
+    klass = "EntTopJob@#{@ns}"
+    Wurk::Metrics::History.record(klass, 10, success: true)
+    Wurk::Metrics::History.flush
+
+    rows = Wurk::Web::Enterprise::Historical.top(hours: 2)
+
+    assert_includes rows.map(&:first), klass
+  ensure
+    now = Time.now.utc
+    Wurk.redis do |c|
+      [Wurk::Metrics::History.minute_key(now), Wurk::Metrics::History.ten_minute_key(now)].uniq.each do |key|
+        c.call('HDEL', key, "#{klass}|p", "#{klass}|f", "#{klass}|ms")
+      end
+    end
+  end
+
+  def test_historical_top_hours_past_the_ceiling_raises
+    assert_raises(Wurk::Metrics::Query::WindowTooWide) do
+      Wurk::Web::Enterprise::Historical.top(hours: 721)
+    end
+  end
+
   def test_historical_for_job_requires_klass
     assert_raises(ArgumentError) do
       Wurk::Web::Enterprise::Historical.for_job(nil, minutes: 5)
