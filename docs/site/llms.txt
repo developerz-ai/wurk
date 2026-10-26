@@ -90,5 +90,5 @@ Job failures reach `config.error_handlers` once each, with `context: "Job raised
 ## Authoritative API specs
 
 - [Sidekiq OSS surface](https://github.com/developerz-ai/wurk/blob/main/docs/target/sidekiq-free.md): the exact free API Wurk matches.
-- [Sidekiq Pro surface](https://github.com/developerz-ai/wurk/blob/main/docs/target/sidekiq-pro.md): batches and reliability.
+- [Sidekiq Pro surface (upstream behavior)](https://github.com/developerz-ai/wurk/blob/main/docs/target/sidekiq-pro.md): batches and reliability.
 - [Sidekiq Enterprise surface](https://github.com/developerz-ai/wurk/blob/main/docs/target/sidekiq-ent.md): rate limiters, unique jobs, periodic, encryption.
