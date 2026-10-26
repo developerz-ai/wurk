@@ -272,6 +272,50 @@ class of weakness Sidekiq Pro's `super_fetch` has never closed — see
 deliberate rather than fixed, since eliminating it would mean tracking pid
 generation numbers the OS doesn't expose.
 
+### The unparseable-key warning
+
+A `queue:*|*` key whose owner Wurk cannot read — a name whose tail is neither
+`<host>|<pid>|<nonce>|<index>` nor `<host>|<pid>|<index>`, say a list another
+tool wrote under the `queue:` prefix — is one the reaper can never reclaim. It
+does not skip it in silence: it logs a WARN naming the key and how many jobs it
+holds, and moves on. The jobs in such a list stay where they are until you move
+them back by hand.
+
+Sidekiq Pro's own four-part list (`queue:<public>|<host>|<pid>|<index>`) **is**
+read — it is the pre-nonce shape — so it is reclaimed like any other, not
+skipped.
+
+**That warning is per process, and it repeats.** The set of already-reported
+keys is an in-memory `Set` held by the reaper — one instance per worker
+process, built after the fork. There is no Redis key behind it, no TTL, and
+nothing shared with the other workers:
+
+- Every booting child runs an **unguarded** scoped boot sweep (see above), so
+  every child that **serves the key's queue** reports the key for itself: one
+  identical WARN per such worker pid, and the pid in the log line tells them
+  apart. A child serving other queues does not see the key in its boot sweep.
+- A later sweep re-reports the key only in a process that has not reported it
+  yet: the scoped sweep (one process wins the `super_fetch:reaper` lock)
+  reaches the key only in a winner that serves its queue, and the hourly full
+  sweep (its own lock) reaches every `queue:*|*` key. A winner that already
+  holds the key in its set stays quiet.
+- The **cluster-wide sweep lock does not suppress the warning.** It decides who
+  sweeps, not who has already said it.
+- A restart starts over: the memory does not survive the process, so the key is
+  reported again after every restart.
+
+The message says so itself:
+
+> Reported once per process: every worker that sees the key logs it for itself,
+> and it is reported again after a restart.
+
+So "one identical line per worker pid" — one per worker serving that queue — is
+the expected shape of this warning, not evidence that the fleet is suppressing
+it. The set is also bounded (1000 keys); past that it is cleared, and keys can
+be reported again inside the same process. The step-by-step recovery is in the
+incident runbook's
+[orphaned private lists](runbook.md#orphaned-private-lists) entry.
+
 ### What reclaim actually does
 
 Job by job, tail-to-tail:
