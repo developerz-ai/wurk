@@ -89,6 +89,19 @@ class ApiReadOnlyTest < Wurk::Test::UnitCase
     assert_equal 'read_only', body['type']
   end
 
+  # The detail names the verbs the refusal allows; interpolating it from
+  # SAFE_METHODS is what keeps that wording from drifting off the allowed set
+  # (it once said "GET and HEAD only" after OPTIONS shipped).
+  def test_the_refusal_detail_names_every_safe_method
+    frozen!
+    status, _headers, body = call('POST', '/v1/jobs')
+
+    assert_equal 403, status
+    Wurk::API::ReadOnly::SAFE_METHODS.each do |verb|
+      assert_includes body['detail'], verb, body['detail']
+    end
+  end
+
   # Nothing reaches Client, so nothing lands — the assertion the status code
   # alone would not make.
   def test_a_refused_enqueue_writes_nothing

@@ -52,7 +52,7 @@ module Wurk
         Problem.render(
           Problem::READ_ONLY,
           status: 403,
-          detail: 'This Wurk deployment is read-only; it answers GET and HEAD only.',
+          detail: "This Wurk deployment is read-only; it answers #{SAFE_METHODS.join(', ')} only.",
           instance: request.path
         )
       end
