@@ -444,7 +444,7 @@ HardJob.build_client                    # → Sidekiq::Client
 HardJob.delay / delay_for / delay_until # raises ArgumentError (removed)
 ```
 
-`interval` semantics: if `< 1_000_000_000` treated as seconds-from-now; else absolute timestamp. Past timestamps enqueued immediately (no `at` field).
+`interval` semantics: if `< 1_000_000_000` treated as seconds-from-now; else absolute timestamp. For the `perform_in`/`perform_at` DSL only: Past timestamps enqueued immediately (no `at` field). In contrast, raw `Client#push` with a past `at` still writes to the `schedule` ZSET using that timestamp as the score (§7.1); the poller promotes the job to its queue within seconds under normal polling, rather than immediately. This is normal poller latency, not a hard deadline (see §16 for initial wait and randomized polling).
 
 ### 6.3 `Sidekiq::Job::Setter`
 
