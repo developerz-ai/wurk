@@ -854,14 +854,18 @@ ttl) and the success-callback dedup marker.
 **Why:** the two colliding keys are the *same* Redis type on both sides — a
 string — with *opposite* meanings: Wurk's `"1"` says "already fired", Pro's
 says "callbacks pending". Redis raises no `WRONGTYPE`, so the collision is
-invisible to Redis and to the operator. Wurk's `EXISTS` gate on
-`b-<bid>-success` sees Pro's "callbacks pending" marker, returns before
-`enqueue_callbacks`, and the `:success`/`:complete` callbacks of an in-flight
-Pro batch are **lost silently** — no exception, no log line, `success_at` never
-stamped. A second, independent path loses the same callbacks: Pro's §2.8 hash
-lists no `callbacks` field, so even a fired event finds no callback specs to
-enqueue. Whether Pro's marker really is a plain string, and where Pro keeps
-its callback specs, stays unverifiable without a real Pro dump: R2 — Pro/Ent
+invisible to Redis and to the operator. The loss is event-specific: the
+`EXISTS` gate reads `b-<bid>-<event>` per event, so a Pro-shaped string on
+`b-<bid>-success` makes the gate return before `enqueue_callbacks` and the
+`:success` callback of an in-flight Pro batch is **lost silently** — no
+exception, no log line, `success_at` never stamped — while the `:complete`
+callback still fires and `complete_at` still stamps, because `-complete`
+carries no marker (the oracle below pins exactly this). A second, unverified
+path could lose the callbacks of *every* event: Pro's §2.8 hash lists no
+`callbacks` field, so a genuinely Pro-written batch (the oracle seeds its
+callbacks through Wurk's API) may offer no callback specs to enqueue. Whether
+Pro's marker really is a plain string, and where Pro keeps its callback specs,
+stays unverifiable without a real Pro dump: R2 — Pro/Ent
 Redis formats never validated vs real Pro/Ent; the fix is a real Pro+Ent Redis
 dump (`docs/plans/2026/10/04/101-squeaky-clean-audit/09-production-readiness.md:12`);
 E13 — `b-<bid>-success`/`-complete` used as "fired" markers vs Pro §2.8
@@ -869,7 +873,8 @@ E13 — `b-<bid>-success`/`-complete` used as "fired" markers vs Pro §2.8
 with a real Pro dump (`docs/plans/2026/10/04/101-squeaky-clean-audit/03-pro-ent-api.md:23`);
 U8 — the human-only action that obtains that dump
 (`docs/plans/2026/10/04/101-squeaky-clean-audit/11-human-actions.md:14`). Risk:
-a Pro batch in flight at the swap may skip its callbacks. Revisit with a dump.
+a Pro batch in flight at the swap may skip its `:success` callback. Revisit
+with a dump.
 
 **Anchor:** `lib/wurk/batch/callbacks.rb` — [marker gate and writer](../../lib/wurk/batch/callbacks.rb#L202-L219),
 [callback spec reader](../../lib/wurk/batch/callbacks.rb#L325-L339),

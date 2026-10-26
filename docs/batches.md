@@ -508,10 +508,13 @@ deliberate differences:
   holding `"1"`, meaning "already fired". Pro §2.8 types `b-<bid>-success` and
   `b-<bid>-complete` as string markers too, but there they mean "callbacks
   pending", and Pro keeps its callback state in the `b-<bid>-notify` and
-  `b-<bid>-cbsucc` sets Wurk never writes. A Pro batch in flight at the gem
-  swap therefore matches on type, collides on meaning, and loses its
-  `:success`/`:complete` callbacks silently — no Redis type error, no log
+  `b-<bid>-cbsucc` sets Wurk never writes. The markers are per-event, so a
+  Pro-shaped string on `b-<bid>-success` loses the batch's `:success`
+  callback silently — no Redis type error, no log, no `success_at` — while
+  `:complete` still fires
   ([divergence](idea/parity-divergences.md#batch-fired-markers-use-b-bid-success-complete)).
+  Whether Pro's own batches also lose `:complete` (Pro's hash carries no
+  `callbacks` field Wurk reads) is unverified without a real Pro dump.
 
 ---
 

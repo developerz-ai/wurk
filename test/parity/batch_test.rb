@@ -307,7 +307,12 @@ class BatchParityTest < Wurk::Test::UnitCase
   # means ":success callbacks pending"; Wurk writes the same key as a string
   # that means "already fired". The Redis types match, so nothing raises
   # WRONGTYPE — the meanings collide, and the `:success` callback of a Pro
-  # batch in flight at the swap is skipped silently.
+  # batch in flight at the swap is skipped silently. The gate is per-event
+  # (`b-<bid>-<event>`), so this suppression is `:success`-specific: with only
+  # the `-success` marker seeded, `:complete` must still fire and stamp
+  # `complete_at`. Whether Pro's own batches also lose `:complete` (Pro's hash
+  # carries no `callbacks` field; this test registers its callbacks through
+  # Wurk's API) is unverified without a real Pro dump.
   def test_a_pro_shaped_success_marker_suppresses_the_success_callback
     batch = new_batch
     batch.on(:success, Recorder, 'token' => @token)
