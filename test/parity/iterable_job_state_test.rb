@@ -44,6 +44,39 @@ class IterableJobStateParityTest < Wurk::Test::UnitCase
     end
   end
 
+  # Elapsed time this oracle controls: every TimedIterable iteration charges
+  # ITERATION_SECONDS to a scripted CLOCK_MONOTONIC, so an execution's runtime
+  # is a known constant and the stored `rt` can be asserted against an exact
+  # sum (§1.5: runtime accumulated) rather than a `>= 0` bound that a
+  # reset-per-execution or always-zero writer would also pass.
+  ITERATION_SECONDS = 0.5
+  RT_DELTA = 1e-9
+
+  # Monotonic stand-in whose #advance is the only way time moves.
+  class ScriptedClock
+    def initialize(start = 0.0)
+      @now = start.to_f
+    end
+
+    attr_reader :now
+
+    def advance(seconds)
+      @now += seconds
+    end
+  end
+
+  # ResumableIterable whose iterations consume scripted monotonic time.
+  class TimedIterable < ResumableIterable
+    class << self
+      attr_accessor :clock
+    end
+
+    def each_iteration(item, *)
+      self.class.clock.advance(ITERATION_SECONDS)
+      super
+    end
+  end
+
   # --- iteration_key (§6.4) --------------------------------------------
 
   def test_iteration_key_is_it_prefixed_jid
@@ -122,21 +155,33 @@ class IterableJobStateParityTest < Wurk::Test::UnitCase
     end
   end
 
-  # --- resumed run continues from the persisted cursor (§1.5 c field) ----
+  # --- resumed run continues from the persisted cursor (§1.5 c / rt) ------
 
   def test_resumed_run_continues_from_persisted_cursor
     jid = random_jid
-    first = ResumableIterable.new
+    clock = ScriptedClock.new(1_000.0)
+    TimedIterable.clock = clock
+    first = TimedIterable.new
     first.jid = jid
     first.interrupt_at = 2
 
     begin
-      assert_raises(Sidekiq::Job::Interrupted) { first.perform }
+      with_monotonic_clock(clock) do
+        assert_raises(Sidekiq::Job::Interrupted) { first.perform }
+      end
 
-      resumed = ResumableIterable.new
+      # rt: the first execution charged exactly its 3 iterations (§1.5 rt is
+      # runtime accumulated in float seconds).
+      assert_in_delta 3 * ITERATION_SECONDS, Float(state_hash(jid)['rt']), RT_DELTA,
+                      'first execution stores its own controlled runtime'
+
+      resumed = TimedIterable.new
       resumed.jid = jid
       resumed.interrupt_at = 3
-      assert_raises(Sidekiq::Job::Interrupted) { resumed.perform }
+
+      with_monotonic_clock(clock) do
+        assert_raises(Sidekiq::Job::Interrupted) { resumed.perform }
+      end
 
       # The resumed run picked up at the persisted cursor (2), not from 0.
       assert_equal [2, 3], resumed.seen
@@ -150,14 +195,38 @@ class IterableJobStateParityTest < Wurk::Test::UnitCase
       # the interrupt at item 3.
       assert_equal 3, JSON.parse(hash['c'])
 
-      # rt: runtime accumulated (float seconds) across executions.
-      assert_operator Float(hash['rt']), :>=, 0.0
+      # rt: accumulated ACROSS executions — exactly first (3 iterations) +
+      # second (2 iterations). Elapsed time is controlled by the scripted
+      # clock, so a writer that reset `rt` per execution (would store 1.0)
+      # or always wrote 0.0 cannot pass here.
+      assert_in_delta 5 * ITERATION_SECONDS, Float(hash['rt']), RT_DELTA,
+                      'rt must accumulate across executions'
     ensure
       cleanup_iteration_key(jid)
     end
   end
 
   private
+
+  # Route the run loop's bare CLOCK_MONOTONIC reads (iterable_job.rb's
+  # reset_run_state / flush_state) to `clock` for the block's duration.
+  # Every other call passes through — the unit-arg and REALTIME reads behind
+  # the 5s flush gate and the cancellation poll keep their real cadence.
+  def with_monotonic_clock(clock)
+    original = Process.method(:clock_gettime)
+    Process.define_singleton_method(:clock_gettime) do |clock_id, unit = nil|
+      if clock_id == Process::CLOCK_MONOTONIC && unit.nil?
+        clock.now
+      elsif unit.nil?
+        original.call(clock_id)
+      else
+        original.call(clock_id, unit)
+      end
+    end
+    yield
+  ensure
+    Process.define_singleton_method(:clock_gettime, original)
+  end
 
   def random_jid
     @_jid_counter ||= 0
