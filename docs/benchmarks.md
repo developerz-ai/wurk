@@ -1,6 +1,6 @@
 # Benchmarks
 
-Wurk is **not** currently faster than stock Sidekiq. Measured, published, and tracked here rather than claimed.
+The latest published paired comparison (2026-08-07) does **not** show Wurk ahead of stock Sidekiq. These are historical measurements, not a current-release guarantee.
 
 Two different benchmark suites live in `bench/`. They answer different questions and only one of them compares against Sidekiq.
 
@@ -13,7 +13,7 @@ The regression check can be fully green while wurk is slower than Sidekiq. It me
 
 ## Throughput vs stock Sidekiq
 
-wurk 1.5.0 · sidekiq 8.1.6 · ruby 3.4.7 (x86_64-linux) · local Redis 7.4.10 · 5000 jobs/run · 12 runs per topology (4 invocations × 3 runs), paired per-run ratio (`wurk_i / sidekiq_i` within the same run, which cancels drift a median-of-medians would carry). Measured 2026-08-07; reproduce with `bin/rake bench:vs_sidekiq`.
+wurk 1.4.0 · sidekiq 8.1.6 · ruby 3.4.7 (x86_64-linux) · local Redis 7.4.10 · 5000 jobs/run · 12 runs per topology (4 invocations × 3 runs), paired per-run ratio (`wurk_i / sidekiq_i` within the same run, which cancels drift a median-of-medians would carry). Measured 2026-08-07, the latest published paired comparison; these results describe those engine versions and that environment, not a current-release guarantee. Reproduce with `bin/rake bench:vs_sidekiq`.
 
 Ratios below 1.00 mean wurk is slower.
 
@@ -40,7 +40,7 @@ Boot to first job, median over all runs per side:
 | 1p × 5t | 0.56s | 0.72s |
 | 4p × 5t | 0.60s | 0.78s |
 
-Wurk is at parity with stock Sidekiq on `cpu` and `io` at both topologies. It is still behind on `noop` — pure framework overhead, where the extra Redis commands below cost the most — and on boot. This is a large move from the numbers this doc previously published (noop 0.45×/0.49×, cpu 0.81×/0.86×, io 0.74×/0.66×), but it is not a "faster than Sidekiq" result; see [Status](#status).
+In that published comparison, Wurk was at parity with stock Sidekiq on `cpu` and `io` at both topologies. It was still behind on `noop` — pure framework overhead, where the extra Redis commands below cost the most — and on boot. This is a large move from the numbers this doc previously published (noop 0.45×/0.49×, cpu 0.81×/0.86×, io 0.74×/0.66×), but it is not a "faster than Sidekiq" result; see [Status](#status).
 
 Forking does not close the gap. A stock Sidekiq user reaches multi-core by running N processes — that is the second table. The swarm's advantage is copy-on-write memory and a single supervisor, not throughput.
 
@@ -151,8 +151,9 @@ therefore unchanged and still the number to quote.
   commands per job are. [`Wurk::CommandBuilder`](../lib/wurk/command_builder.rb)
   short-circuits that case and hands anything else (a Hash to splice, a Symbol
   or number to stringify, kwargs) straight to redis-client's own builder, so the
-  semantics have exactly one implementation. Measured with
-  `bin/rake bench:command_builder`: **~2.2µs → ~0.45µs per command**. The ACK's
+  semantics have exactly one implementation. The [1.7.0 release notes](../CHANGELOG.md#170---2026-08-10)
+  report **~2.1µs → ~0.48µs per command**, a historical measurement, not a new
+  timing run here. Reproduce with `bin/rake bench:command_builder`. The ACK's
   `LREM` count is a pre-stringified `'1'` for the same reason — one Integer
   argument would send the whole command back through the slow path.
   The shortcut has one trap worth naming: redis-client splats `**kwargs` before
@@ -188,9 +189,9 @@ requires and Wurk cannot avoid.
 
 None of these change a Redis key, a command sequence, or a job-JSON field —
 they are the same wire traffic with less Ruby in front of it.
-`bench/command_builder.rb` is in the regression gate so a fast path that stops
-firing shows up as a merge-blocking delta rather than a slow drift nobody
-notices.
+`bench/command_builder.rb` is in the advisory regression check so a fast path
+that stops firing can be flagged in the PR comment. The benchmark job is not a
+required check and does not block merges.
 
 ## Running it
 
@@ -266,4 +267,4 @@ The claim "faster than Sidekiq" has been removed from the README and the site, a
 
 The `Metrics::History` batching and the ack piggyback that closed the round-trip gap have both landed and are reflected in the numbers above — **four round trips per job down to one**, and ~10 commands down to 3 — at the cost of dashboard counters lagging by the flush interval, a hard crash dropping the unflushed window, and a wider window in which a hard kill re-runs an already-finished job. The throughput and command-count tables above are re-measured post-landing, not carried over from before that work.
 
-**Net result: wurk is at parity with stock Sidekiq on `cpu` and `io` at both topologies measured, and still behind on `noop` and on boot to first job.** Not a "faster than Sidekiq" result. Full per-invocation record and the verdict against the plan's "done when" criteria: [`docs/plans/2026/08/06/101-faster-than-sidekiq/08-measurements.md`](plans/2026/08/06/101-faster-than-sidekiq/08-measurements.md).
+**Published result (2026-08-07): wurk was at parity with stock Sidekiq on `cpu` and `io` at both topologies measured, and still behind on `noop` and on boot to first job.** Not a "faster than Sidekiq" result. Full per-invocation record and the verdict against the plan's "done when" criteria: [`docs/plans/2026/08/06/101-faster-than-sidekiq/08-measurements.md`](plans/2026/08/06/101-faster-than-sidekiq/08-measurements.md).

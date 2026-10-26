@@ -30,7 +30,7 @@ Wurk is wire-compatible with Sidekiq — same Redis keys, same job JSON, same Ru
 
 **On Sidekiq:** Wurk implements Sidekiq's API because it is a genuinely good API. Sidekiq is human-maintained and funds that work through its paid tiers; Wurk is AI-maintained, which is what lets the same surface be free software. Wurk is independent and not affiliated with or endorsed by Sidekiq or its maintainers — see [Why Wurk exists](#why-wurk-exists).
 
-**On speed:** Wurk is not currently faster than stock Sidekiq — it runs at roughly 0.87×–1.02× depending on workload shape, with parity on CPU and I/O but still behind on framework overhead (noop) and boot time. Numbers, method, and the reproduction command are in [docs/benchmarks.md](docs/benchmarks.md); run them yourself with `rake bench:vs_sidekiq`.
+**On speed:** The latest published paired measurement (2026-08-07) put Wurk at roughly 0.87×–1.02× of stock Sidekiq depending on workload shape: parity on CPU and I/O, behind on framework overhead (noop) and boot time. This is dated evidence, not a throughput guarantee for today's gem. Numbers, method, and the reproduction command are in [docs/benchmarks.md](docs/benchmarks.md); run them yourself with `rake bench:vs_sidekiq`.
 
 **Also from us:** [Ultimate](https://github.com/developerz-ai/ultimate) — the AI-first full-stack framework, for a weekend pet project or the system a company runs on. What a whole stack looks like when the one writing the code is an agent, not a human: [`bunx create-ultimate myapp`](#also-from-developerzai-ultimate).
 
@@ -113,7 +113,7 @@ AI dashboard panes — anomaly detection, natural-language queries, error triage
 
 ## Benchmarks
 
-**Wurk is not faster than stock Sidekiq today.** Here is where it actually stands, measured rather than claimed — wurk 1.5.0 vs sidekiq 8.1.6, ruby 3.4.7, local Redis 7.4.10, 5000 jobs/run, 12 runs per topology, paired per-run ratios.
+**The latest published comparison does not show Wurk ahead of stock Sidekiq.** Measured 2026-08-07 — wurk 1.4.0 vs sidekiq 8.1.6, ruby 3.4.7, local Redis 7.4.10, 5000 jobs/run, 12 runs per topology, paired per-run ratios. These are historical results, not a fresh measurement of today's gem.
 
 <picture>
   <source media="(prefers-color-scheme: dark)" srcset="docs/assets/bench-throughput-dark.svg">
