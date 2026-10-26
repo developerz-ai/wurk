@@ -454,6 +454,71 @@
     early return, on `terminate` (quiet), on processor stop, and before
     `bulk_requeue` at shutdown.
   oracles: [ReliableFetchParityTest#test_acknowledged_job_is_gone_after_terminate]
+# Free §31 gotchas: scope each claim to the existing assertions, including divergences.
+- id: gotcha.fetch-fifo
+  area: reliable-fetch
+  behavior: Immediate jobs are fetched oldest first from the public queue tail; Wurk uses reliable fetch rather than OSS BRPOP.
+  source: docs/target/sidekiq-free.md#L1582
+  promise: >-
+    **Immediate jobs** go to `queue:<name>` (LPUSH, BRPOP fetch — so FIFO from tail).
+  oracles: [ReliableFetchParityTest#test_fetch_is_fifo]
+- id: gotcha.reliable-ack-divergence
+  area: reliable-fetch
+  behavior: Unlike OSS no-op acknowledgement, Wurk's reliable-only fetch removes acknowledged jobs after the next fetch or termination flush.
+  source: docs/target/sidekiq-free.md#L1588
+  promise: >-
+    **`UnitOfWork#acknowledge`** is a no-op in OSS (reliable fetch is Pro-only).
+  oracles: [ReliableFetchParityTest#test_acknowledged_job_is_gone_after_the_next_fetch, ReliableFetchParityTest#test_acknowledged_job_is_gone_after_terminate]
+- id: gotcha.shutdown-bulk-requeue
+  area: reliable-fetch
+  behavior: Shutdown bulk_requeue returns in-progress jobs to their own public queues exactly once at the fetch end, excluding acknowledged jobs after flushing Wurk's deferred ACKs.
+  source: docs/target/sidekiq-free.md#L1589
+  promise: >-
+    **`bulk_requeue` on hard shutdown** uses `RPUSH` (head of queue, FIFO preserved).
+  oracles: [ReliableFetchParityTest#test_bulk_requeue_returns_every_in_progress_job_once, ReliableFetchParityTest#test_bulk_requeue_puts_jobs_at_the_fetch_end, ReliableFetchParityTest#test_bulk_requeue_never_resurrects_an_acknowledged_job]
+- id: gotcha.dead-trim-on-kill
+  area: dead-set
+  behavior: DeadSet kill trims by default but explicit trim false bypasses trimming; separate trim oracles establish age and rank removal semantics.
+  source: docs/target/sidekiq-free.md#L1586
+  promise: >-
+    **Dead set trim** happens on every kill: `ZREMRANGEBYSCORE dead -inf (now - dead_timeout)` + `ZREMRANGEBYRANK dead 0 -dead_max_jobs`.
+  oracles: [DataApiParityTest#test_dead_set_kill_trims_unless_told_not_to, DataApiParityTest#test_dead_set_trim_by_age, DataApiParityTest#test_dead_set_trim_by_max_jobs_matches_zremrangebyrank_0_minus_max]
+- id: gotcha.stats-heartbeat-busy-count
+  area: data-api
+  behavior: Stats workers_size reads the sum of process heartbeat busy fields, not the number of processes.
+  source: docs/target/sidekiq-free.md#L1591
+  promise: >-
+    **`workers` count** = sum of `busy` HASH field across processes
+  oracles: [DataApiParityTest#test_stats_reads_counters_set_sizes_and_slow_aggregates]
+- id: gotcha.work-set-heartbeat-busy-count
+  area: data-api
+  behavior: WorkSet size reads the sum of process heartbeat busy fields rather than the work-hash entry count.
+  source: docs/target/sidekiq-free.md#L1591
+  promise: >-
+    **`workers` count** = sum of `busy` HASH field across processes
+  oracles: [DataApiParityTest#test_work_set_size_sums_busy_and_find_work]
+- id: gotcha.queue-pause-divergence
+  area: data-api
+  behavior: Unlike OSS always-false paused?, Wurk supports Pro pausing; pause and unpause update the paused set and paused? reflects membership.
+  source: docs/target/sidekiq-free.md#L1592
+  promise: >-
+    **`paused` set** is read but never written in OSS — `Queue#paused?` always returns `false`.
+  oracles: [DataApiParityTest#test_queue_pause_and_unpause_use_the_paused_set]
+- id: gotcha.heartbeat-work-hash-refresh
+  area: heartbeat
+  behavior: Each heartbeat clears the identity work hash with UNLINK and repopulates it with current work.
+  source: docs/target/sidekiq-free.md#L1594
+  promise: >-
+    **Heartbeat clears `<identity>:work`** on each beat: `UNLINK` + repopulate.
+  reason: DataApiParityTest seeds work hashes directly in Redis and tests readers; it never invokes the heartbeat writer or observes clearing and repopulation across beats.
+  future_work: oracle-gotcha-heartbeat-work-hash-refresh
+- id: gotcha.process-cleanup
+  area: data-api
+  behavior: ProcessSet cleanup prunes identities without heartbeat info and rate-limits subsequent cleanup using process_cleanup with a TTL of at most 60 seconds.
+  source: docs/target/sidekiq-free.md#L1595
+  promise: >-
+    **Process cleanup** in `ProcessSet#cleanup`: rate-limited via `SET process_cleanup "1" NX EX 60`. Prunes identities whose `info` field is gone (TTL expired).
+  oracles: [DataApiParityTest#test_process_set_cleanup_prunes_dead_identities_once_a_minute]
 - id: cron.payload
   area: cron
   behavior: A periodic tick enqueues the same payload as perform_async.

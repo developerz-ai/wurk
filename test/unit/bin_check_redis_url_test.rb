@@ -81,9 +81,82 @@ class BinCheckRedisUrlTest < Minitest::Test
     end
   end
 
-  # Bites under COVERAGE=1 (CI), which is the only time the script deletes: a
-  # file standing in the live coverage dir must outlive a gate run that gets
-  # past the guards.
+  def run_isolated_check(mode, coverage: nil, suite_exit: 0)
+    Dir.mktmpdir do |dir|
+      FileUtils.mkdir_p(File.join(dir, 'bin'))
+      FileUtils.mkdir_p(File.join(dir, 'frontend'))
+      FileUtils.mkdir_p(File.join(dir, 'coverage'))
+      FileUtils.cp(CHECK, File.join(dir, 'bin/check'))
+      File.write(File.join(dir, 'coverage/stale'), 'old resultset')
+      write_isolated_stubs(dir)
+      server = TCPServer.new('127.0.0.1', 0)
+      env = check_env(File.join(dir, 'bin'), "redis://127.0.0.1:#{server.addr[1]}/3").merge(
+        'COVERAGE' => coverage, 'CHECK_ROOT' => dir, 'CHECK_LOG' => File.join(dir, 'commands.log'),
+        'SUITE_EXIT' => suite_exit.to_s,
+        'SKIP_LINT' => nil, 'SKIP_FRONTEND' => nil, 'SKIP_PARITY' => nil
+      )
+      out, err, status = Open3.capture3(env, File.join(dir, 'bin/check'), *Array(mode))
+      [out, err, status, File.readlines(env.fetch('CHECK_LOG'), chomp: true)]
+    ensure
+      server&.close
+    end
+  end
+
+  def write_isolated_stubs(dir)
+    %w[bundle bun python3].each do |command|
+      stub = File.join(dir, 'bin', command)
+      File.write(stub, <<~'BASH')
+        #!/usr/bin/env bash
+        stale=absent
+        [ ! -e "$CHECK_ROOT/coverage/stale" ] || stale=present
+        printf '%s|%s|%s\n' "${0##*/} $*" "${COVERAGE-unset}" "$stale" >> "$CHECK_LOG"
+        if [ "${0##*/} $*" = 'bundle exec rake test' ] && [ "${COVERAGE-unset}" = 1 ]; then
+          exit "$SUITE_EXIT"
+        fi
+        exit 0
+      BASH
+      File.chmod(0o755, stub)
+    end
+  end
+
+  def test_default_pr_and_full_require_fresh_suite_coverage_only
+    [nil, 'pr', 'full'].each do |mode|
+      out, err, status, commands = run_isolated_check(mode)
+
+      assert_equal 0, status.exitstatus, "#{mode.inspect}: #{out}\n#{err}"
+      assert_includes commands, 'bundle exec rake test|1|absent'
+      assert_includes commands, 'bundle exec rake test:parity|unset|absent'
+      assert_includes commands, 'bundle exec rubocop --parallel|unset|present'
+      assert_includes commands, 'bun run test|unset|present'
+      other_stages = commands.reject { |line| line.start_with?('bundle exec rake test|') }
+
+      assert_equal ['unset'], other_stages.map { |line| line.split('|')[1] }.uniq, commands.inspect
+      assert_includes commands, 'bundle exec rake test:ecosystem|unset|absent' if mode == 'full'
+    end
+  end
+
+  def test_coverage_enabled_suite_failure_fails_the_gate
+    out, err, status, commands = run_isolated_check('pr', suite_exit: 23)
+
+    assert_equal 1, status.exitstatus, "#{out}\n#{err}"
+    assert_includes commands, 'bundle exec rake test|1|absent'
+    assert_includes out, '✗ test suite (unit + integration + engine)'
+    assert_includes err, 'bin/check ✗ failed: test suite (unit + integration + engine)'
+    assert_includes commands, 'bundle exec rake test:parity|unset|absent'
+  end
+
+  def test_fast_coverage_remains_opt_in
+    { nil => 'unset|present', '1' => '1|absent' }.each do |coverage, expected|
+      out, err, status, commands = run_isolated_check('fast', coverage: coverage)
+
+      assert_equal 0, status.exitstatus, "#{out}\n#{err}"
+      assert_includes commands, "bundle exec rake test:unit|#{expected}"
+      refute_includes commands.map { |line| line.split('|').first }, 'bundle exec rake test:parity'
+    end
+  end
+
+  # Both real fast-mode and isolated mandatory-coverage children must leave the
+  # parent's live resultsets alone, including when this test runs under coverage.
   def test_driving_the_gate_leaves_the_live_coverage_dir_alone
     coverage = File.expand_path('../../coverage', __dir__)
     created = !File.directory?(coverage)
@@ -93,6 +166,9 @@ class BinCheckRedisUrlTest < Minitest::Test
     server = TCPServer.new('127.0.0.1', 0)
 
     _out, err, status = run_check("redis://127.0.0.1:#{server.addr[1]}/3")
+
+    assert_equal 0, status.exitstatus, err
+    _out, err, status, = run_isolated_check('pr')
 
     assert_equal 0, status.exitstatus, err
     assert_path_exists sentinel, "bin/check deleted the repo's coverage/ while the suite was writing to it"

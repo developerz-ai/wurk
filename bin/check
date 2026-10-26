@@ -156,12 +156,12 @@ fi
 
 # Subprocess coverage entries are keyed by pid, so a coverage/ left by earlier
 # runs keeps growing; once it reaches hundreds of MB the forked workers miss
-# test_helper's 10s reap deadline. Each gate starts its coverage from zero.
-[ -n "${COVERAGE:-}" ] && rm -rf coverage
+# test_helper's 10s reap deadline. Reset after frontend, before the coverage-enabled suite.
+if [ "$MODE" != fast ] || [ -n "${COVERAGE:-}" ]; then rm -rf coverage; fi
 
 case "$MODE" in
   fast) stage "unit tests" bundle exec rake test:unit ;;
-  *)    stage "test suite (unit + integration + engine)" bundle exec rake test ;;
+  *)    stage "test suite (unit + integration + engine)" env COVERAGE=1 bundle exec rake test ;;
 esac
 
 if [ "$MODE" != fast ] && [ -z "${SKIP_PARITY:-}" ]; then
