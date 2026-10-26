@@ -122,6 +122,15 @@ class ReliableFetchParityTest < Wurk::Test::UnitCase
       assert_equal Wurk::Fetcher::Reliable.private_queue_name("queue:#{mid}"), uow.private_queue
       assert_equal [uow.private_queue], copies(uow.job)
     end
+
+    # Park order: each claim is public tail -> private HEAD (spec §3.2's
+    # RPOPLPUSH shape), so the private list reads newest-first and the reaper's
+    # tail-first drain replays the original order after a crash. copies()
+    # ignores position, so this is the check that fails if the claim's push end
+    # ever regresses from LEFT to RIGHT.
+    assert_equal [second.job, first.job],
+                 redis('LRANGE', Wurk::Fetcher::Reliable.private_queue_name("queue:#{mid}"), 0, -1),
+                 'each claim parks on the private head (LMOVE RIGHT->LEFT), not the tail'
     assert_equal Wurk::Fetcher::Reliable.private_queue_name("queue:#{last}"), third.private_queue
     assert_equal [third.private_queue], copies(third.job)
   end
