@@ -161,7 +161,7 @@ remains unchanged.
 [nonce lifetime](../../lib/wurk/component.rb#L20-L22),
 [current and legacy parsing](../../lib/wurk/fetcher/private_list_key.rb#L18-L29)
 and [tail shapes](../../lib/wurk/fetcher/private_list_key.rb#L59-L68),
-Pro §3.2 (`docs/target/sidekiq-pro.md:253`).
+Pro §3.2 (`docs/target/sidekiq-pro.md:257`).
 
 ## Orphan reclaim uses `LMOVE private public RIGHT RIGHT`, not `RPOPLPUSH`
 
@@ -996,6 +996,25 @@ not resolve the callback-marker/`notify`/`cbsucc` accounting above.
 
 **Anchor:** `lib/wurk/compat.rb`, `test/unit/spec_constants_test.rb`.
 
+## Sidekiq Pro version and license constants not provided
+
+**Wurk:** `Sidekiq::Pro::VERSION` and `Sidekiq::Pro::LICENSE` are undefined.
+Wurk's `Sidekiq::Pro` provides the Statsd accessor pair (`dogstatsd`,
+`dogstatsd=`) as its module-level API, and never runs upstream's boot-time
+license check.
+
+**Spec:** Pro §1 lists `Sidekiq::Pro::VERSION` and `Sidekiq::Pro::LICENSE` in
+the upstream module surface, and upstream raises at boot when the license is
+missing or invalid (`docs/target/sidekiq-pro.md:9-28`).
+
+**Why:** there is no upstream Pro version or license value to mirror — Wurk
+ships the Pro features free and never runs a license check — and advertising a
+stamp would push gems onto Pro-only paths. The version-gating consequence: a
+gem that reads `Sidekiq::Pro::VERSION` raises `NameError` and must gate on
+`Sidekiq::VERSION` instead.
+
+**Anchor:** `lib/wurk/compat.rb`, `test/unit/spec_constants_test.rb`.
+
 ## Old Wurk metrics keys are not read after the format restore
 
 **Wurk:** per-class metrics written by earlier Wurk versions (`j|YYYYMMDD|…`, `<klass>-YYYYMMDD-H`) are not read; they expire within 3 days.
@@ -1208,7 +1227,7 @@ engine tests pin form params (`test/engine/api_mutations_test.rb:401-414`,
 repository: no code or test reads it.
 
 **Why:** the Ruby-level contract is parity — `Queue#delete_job(jid)` is Pro
-§11's exact surface (`docs/api.md:157,453`; `docs/target/sidekiq-pro.md:492`),
+§11's exact surface (`docs/api.md:157,453`; `docs/target/sidekiq-pro.md:496`),
 so Ruby consumers drop in on the gem swap. Only clients scripted against
 upstream's web form, POSTing `key_val`, hit the gap: a key_val-only request
 leaves `params[:jid]` blank, so `delete_job('')` raises
@@ -1429,10 +1448,10 @@ the deleted payload's JSON or nil and raises `ArgumentError` on a blank jid
 
 **Spec:** Pro §11 replaces the O(N)-in-Ruby methods with server-side Lua —
 `q.delete_job(jid)`, `q.delete_by_class(MyJob)`
-(`docs/target/sidekiq-pro.md:492-493`), `scan` over every Pro SortedSet
-subclass (`docs/target/sidekiq-pro.md:501`) — loaded at boot and cached via
-`EVALSHA` (`docs/target/sidekiq-pro.md:503`), with the implementation map
-assigning the surface to `Wurk::API::Fast` (`docs/target/sidekiq-pro.md:535`).
+(`docs/target/sidekiq-pro.md:496-497`), `scan` over every Pro SortedSet
+subclass (`docs/target/sidekiq-pro.md:505`) — loaded at boot and cached via
+`EVALSHA` (`docs/target/sidekiq-pro.md:507`), with the implementation map
+assigning the surface to `Wurk::API::Fast` (`docs/target/sidekiq-pro.md:539`).
 
 **Why:** the divergence is inclusion, not behavior: names, arities, and return
 contracts match Pro §11 exactly, so Pro-gated consumer code drops in. Giving it
@@ -1442,8 +1461,8 @@ script's `LRANGE` blocking Redis for its duration, which is why it is an admin
 action, not a loop primitive.
 
 **Anchor:** `lib/wurk/api/fast.rb:21`, `lib/wurk/api/fast.rb:53`;
-`lib/wurk/api.rb:5`; Pro §11 (`docs/target/sidekiq-pro.md:486-503`) and the
-implementation map (`docs/target/sidekiq-pro.md:535`).
+`lib/wurk/api.rb:5`; Pro §11 (`docs/target/sidekiq-pro.md:490-507`) and the
+implementation map (`docs/target/sidekiq-pro.md:539`).
 
 ## Search covers queue LISTs too, with explicit scan bounds
 
@@ -1456,7 +1475,7 @@ bound stops the scan with elements unexamined (`lib/wurk/web/search.rb:52`).
 
 **Spec:** Pro's search is the dashboard search box on the Retry / Scheduled /
 Dead pages, substring over job payloads via `ZSCAN`
-(`docs/target/sidekiq-pro.md:438`); the free WebHelper of the same name serves
+(`docs/target/sidekiq-pro.md:442`); the free WebHelper of the same name serves
 that box (`search(jobset, substr)`, `docs/target/sidekiq-free.md:1508`). Neither
 spec defines queue-LIST coverage, a standalone Ruby class, or scan bounds.
 
@@ -1468,7 +1487,7 @@ wrong. The result shape is a sorted-set row plus a `:kind` discriminator and
 additive.
 
 **Anchor:** `lib/wurk/web/search.rb:24-35`, `lib/wurk/web/search.rb:52`; Pro
-web search (`docs/target/sidekiq-pro.md:438`); free WebHelpers
+web search (`docs/target/sidekiq-pro.md:442`); free WebHelpers
 (`docs/target/sidekiq-free.md:1508`).
 
 ## `Stats#expired`/`reset` extend the OSS Stats surface
@@ -1488,7 +1507,7 @@ reader exists anywhere in the free spec's API surface — its sole use of the
 word, `docs/target/sidekiq-free.md:1594`, is prose about `ProcessSet#cleanup`
 pruning identities whose TTL ran out, not a Stats reader. Pro tracks an expiry
 as a Statsd `jobs.expired` event when the job is skipped
-(`docs/target/sidekiq-pro.md:342`), not as a queryable counter.
+(`docs/target/sidekiq-pro.md:347`), not as a queryable counter.
 
 **Why:** the server already counted expiry drops, but nothing in the Data API
 could answer "where did my jobs go" without shell access to Redis; the counter
@@ -1501,7 +1520,7 @@ unchanged, and the readers are new methods.
 **Anchor:** `lib/wurk/stats.rb:27`, `lib/wurk/stats.rb:104-107`,
 `lib/wurk/stats.rb:190`; `lib/wurk/middleware/expiry.rb:28-40`; free Stats
 (`docs/target/sidekiq-free.md:969-985`, `docs/target/sidekiq-free.md:984`); Pro
-§7 (`docs/target/sidekiq-pro.md:342`).
+§7 (`docs/target/sidekiq-pro.md:347`).
 
 ## `Leader#token` exposes a fencing token Ent deliberately omits
 

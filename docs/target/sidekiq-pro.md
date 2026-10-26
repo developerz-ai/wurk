@@ -8,6 +8,8 @@ Loaded via `require 'sidekiq-pro'`. Web extensions via `require 'sidekiq/pro/web
 
 ## 1. Top-level constants & module
 
+Upstream `sidekiq-pro` module surface:
+
 ```ruby
 module Sidekiq
   module Pro
@@ -21,7 +23,9 @@ module Sidekiq
 end
 ```
 
-Boot-time license check raises if `SIDEKIQ_PRO_LICENSE` env var (or gem source token) is missing/invalid. Wurk should no-op this gate (open source).
+Upstream only: the boot-time license check raises if `SIDEKIQ_PRO_LICENSE` env var (or gem source token) is missing/invalid. Wurk should no-op this gate (open source).
+
+**Wurk's `Sidekiq::Pro` provides only the Statsd accessor pair** — `dogstatsd` and `dogstatsd=` (see §9.1) — as its module-level API; the nested `Sidekiq::Pro::Web` is covered in §10. The upstream constants `Sidekiq::Pro::VERSION` and `Sidekiq::Pro::LICENSE` are **not provided**: there is no upstream Pro version or license value to mirror, Wurk ships the Pro features free and never runs a license check, and a stamp would only push gems onto Pro-only paths. A gem that reads `Sidekiq::Pro::VERSION` raises `NameError` — gate on `Sidekiq::VERSION` instead.
 
 ---
 

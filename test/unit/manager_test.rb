@@ -7,6 +7,9 @@ require_relative '../test_helper'
 # collide on either Redis state or worker constants. Where possible we avoid
 # spawning processor threads — the public surface (workers Set, stopped?,
 # processor_result, hard_shutdown wiring) is exercised directly.
+# The config[:fetch_class] contract section swaps in a non-subclass stub
+# fetcher (PlugInFetcher, no Wurk::Fetcher superclass, no Redis I/O) to pin
+# Manager's quiet/hard_shutdown lifecycle against the shape contract alone.
 class ManagerTest < Wurk::Test::UnitCase
   parallelize_me!
 
@@ -385,6 +388,130 @@ class ManagerTest < Wurk::Test::UnitCase
     mgr.hard_shutdown
 
     refute called
+  end
+
+  # --- plug-in fetcher contract (config[:fetch_class]) ------------------
+
+  # The runtime contract (docs/target/sidekiq-free.md:848): a config[:fetch_class]
+  # fetcher must respond to initialize(capsule), retrieve_work, bulk_requeue and
+  # terminate — Manager drives quiet/hard_shutdown through the capsule's fetcher
+  # with no respond_to? guard and no Wurk::Fetcher superclass required.
+  # flush_pending_acks is optional: only Processor calls it, behind respond_to?
+  # (processor.rb:224). Pinned against a fetcher satisfying the contract by
+  # shape, so Manager can't quietly grow a dependency on the base class.
+  PlugInFetcher = Class.new do
+    attr_reader :capsule, :calls
+
+    def initialize(capsule)
+      @capsule = capsule
+      @calls = []
+    end
+
+    def retrieve_work
+      @calls << [:retrieve_work]
+      nil
+    end
+
+    def bulk_requeue(inprogress)
+      @calls << [:bulk_requeue, inprogress]
+    end
+
+    def terminate
+      @calls << [:terminate]
+    end
+    # Deliberately no flush_pending_acks: its absence must be invisible to both
+    # lifecycle paths (test_plug_in_fetcher_needs_no_flush_pending_acks).
+  end
+
+  # The required-method pins: each variant drops one contract method, so a
+  # lifecycle driven against it must raise rather than skip the call.
+  WithoutTerminateFetcher = Class.new(PlugInFetcher) { undef_method(:terminate) }
+  WithoutBulkRequeueFetcher = Class.new(PlugInFetcher) { undef_method(:bulk_requeue) }
+
+  # quiet runs fetcher.terminate then every processor terminate on this thread
+  # (manager.rb:73-75), so one shared call stream pins both the exactly-once and
+  # the halt-fetch-first order deterministically.
+  def test_quiet_terminates_a_plug_in_fetcher_once_before_the_processors
+    fetcher = PlugInFetcher.new(@capsule)
+    @capsule.fetcher = fetcher
+    mgr = Wurk::Manager.new(@capsule)
+    mgr.workers.each do |w|
+      w.define_singleton_method(:terminate) { fetcher.calls << :processor_terminate }
+    end
+
+    mgr.quiet
+
+    refute_kind_of Wurk::Fetcher, fetcher, 'the stub must satisfy the contract by shape, not inheritance'
+    assert_same @capsule, fetcher.capsule
+    assert_equal [[:terminate]] + Array.new(3, :processor_terminate), fetcher.calls,
+                 'fetcher terminate must run exactly once, ahead of every processor'
+    assert_predicate mgr, :stopped?
+  end
+
+  def test_hard_shutdown_requeues_inflight_jobs_through_a_plug_in_fetcher
+    fetcher = PlugInFetcher.new(@capsule)
+    @capsule.fetcher = fetcher
+    mgr = Wurk::Manager.new(@capsule)
+    uow_a = make_uow('payload-a')
+    uow_b = make_uow('payload-b')
+    workers = mgr.workers.to_a
+    workers[0].define_singleton_method(:job) { uow_a }
+    workers[1].define_singleton_method(:job) { uow_b }
+    workers[2].define_singleton_method(:job) { nil }
+    killed = []
+    workers.each { |w| w.define_singleton_method(:kill) { killed << self } }
+
+    mgr.hard_shutdown
+
+    assert_equal [[:bulk_requeue, [uow_a, uow_b]]], fetcher.calls,
+                 'nil jobs must be compacted out before the plug-in requeue'
+    assert_equal workers.sort_by(&:object_id), killed.sort_by(&:object_id)
+  end
+
+  # No respond_to? guard: a plug-in fetcher missing a required method fails
+  # loudly, mid-lifecycle, instead of the call being skipped into silence.
+  def test_quiet_requires_terminate_on_a_plug_in_fetcher
+    @capsule.fetcher = WithoutTerminateFetcher.new(@capsule)
+    mgr = Wurk::Manager.new(@capsule)
+    silence_processors(mgr)
+
+    error = assert_raises(NoMethodError) { mgr.quiet }
+
+    assert_match(/terminate/, error.message)
+  end
+
+  # Same pin on the hard_shutdown leg — and its ensure must still kill the
+  # processors despite the raise (the bulk_requeue-raises contract above).
+  def test_hard_shutdown_requires_bulk_requeue_on_a_plug_in_fetcher
+    @capsule.fetcher = WithoutBulkRequeueFetcher.new(@capsule)
+    mgr = Wurk::Manager.new(@capsule)
+    workers = mgr.workers.to_a
+    killed = []
+    workers.each { |w| w.define_singleton_method(:kill) { killed << self } }
+
+    error = assert_raises(NoMethodError) { mgr.hard_shutdown }
+
+    assert_match(/bulk_requeue/, error.message)
+    assert_equal workers.sort_by(&:object_id), killed.sort_by(&:object_id),
+                 'the ensure must kill every processor despite the raise'
+  end
+
+  # flush_pending_acks stays optional (processor.rb:224's respond_to? guard):
+  # a contract fetcher that never defers ACKs defines none, and both lifecycle
+  # paths still drive it — terminate on quiet, bulk_requeue([]) on hard_shutdown.
+  def test_plug_in_fetcher_needs_no_flush_pending_acks
+    fetcher = PlugInFetcher.new(@capsule)
+    @capsule.fetcher = fetcher
+    mgr = Wurk::Manager.new(@capsule)
+    silence_processors(mgr)
+
+    refute_respond_to fetcher, :flush_pending_acks
+
+    mgr.quiet
+    mgr.hard_shutdown
+
+    assert_includes fetcher.calls, [:terminate]
+    assert_includes fetcher.calls, [:bulk_requeue, []]
   end
 
   # --- watchdog lifecycle ----------------------------------------------

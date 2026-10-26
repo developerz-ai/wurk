@@ -265,9 +265,11 @@ module Wurk
       class Renderer
         class << self
           # @return [Array(Integer, Hash, String)] Rack-ish [status, headers,
-          #   body] — 200 HTML, 302 redirect, 404, or whatever triple the route
-          #   built with `halt`/`json` — or nil when no extension
-          #   with `name` is registered (so the engine can fall through).
+          #   body] — 200 HTML, 302 redirect, 404, whatever triple the route
+          #   built with `halt`/`json`, or the render-error 500 when the
+          #   extension's `registered(app)` itself raised — or nil when no
+          #   extension with `name` is registered (so the engine can fall
+          #   through).
           # `embed: true` (the engine's ext/:name/* endpoint) rewrites links
           # and redirects into the embed URL space; `embed: false` (the
           # standalone `run Sidekiq::Web` Rack app, #204) leaves the
@@ -280,6 +282,16 @@ module Wurk
 
             require 'erb'
             require 'cgi'
+
+            # Force the capture here, outside `render`'s rescue: match_route
+            # and action_for reach captured_app on paths with no rescue, so a
+            # raising `registered(app)` would otherwise escape into the host
+            # Rack server. Reported per request, like the render-error path.
+            captured_app(ext)
+            if (registration_error = ext[:_registration_error])
+              ::Wurk.configuration.handle_exception(registration_error, context: 'web-extension-registration')
+              return [500, html_headers, 'Extension render error (see server logs)']
+            end
 
             verb = method.to_s.upcase
             route, block, route_params = match_route(ext, verb, subpath)
@@ -362,10 +374,23 @@ module Wurk
           end
 
           # Capture the ext's routes/helpers once; memoize on the config entry.
+          # `registered(app)` raising must neither repeat nor escape: the App is
+          # assigned unconditionally (`||=` aborts on a raise, leaving nothing
+          # cached), and the failure is parked on the ext for Renderer.call to
+          # report as the controlled 500.
           def captured_app(ext)
-            ext[:_app] ||= App.new.tap do |app|
-              ext[:extension].registered(app) if ext[:extension].respond_to?(:registered)
-            end
+            app = ext[:_app]
+            return app if app
+
+            app = App.new
+            run_registered(ext, app)
+            ext[:_app] = app
+          end
+
+          def run_registered(ext, app)
+            ext[:extension].registered(app) if ext[:extension].respond_to?(:registered)
+          rescue ::StandardError => e
+            ext[:_registration_error] = e
           end
 
           # An ext's redirect target is relative to its mount ("locks" → the

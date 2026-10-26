@@ -9,6 +9,9 @@ module Wurk
     # Reliable.private_queue_name) for the Reaper's liveness check. Pure string
     # work, no Redis.
     module PrivateListKey
+      # The nonce shape Component::PROCESS_NONCE writes (`SecureRandom.hex(6)`).
+      NONCE_PATTERN = /\A[0-9a-f]{12}\z/
+
       module_function
 
       # `queue:<public>|<host>|<pid>|<nonce>|<idx>` → [public_q, host, pid,
@@ -19,7 +22,11 @@ module Wurk
       # preference order and the first one leaving a real public queue behind
       # wins. The narrow reading is what saves a pre-nonce key from an all-digit
       # host (`queue:q|123456789012|<pid>|<idx>` — a bare Docker hostname is 12
-      # hex chars): read wide, its host segment eats the whole queue name.
+      # hex chars): read wide, its host segment either eats the whole queue
+      # name (plain queue — nothing left over) or truncates it at the first
+      # pipe and puts the real pid in the nonce slot (pipe-bearing queue).
+      # Both misreads are refused: the leftover must be a real queue name and
+      # the pseudo-nonce must be nonce-shaped (see wide_tail).
       def parse_full(key)
         parts = key.split('|')
         owner_tails(parts).each do |host, pid, nonce, width|
@@ -57,8 +64,14 @@ module Wurk
       end
 
       # `<host>|<pid>|<nonce>|<idx>` — the shape every current process writes.
+      # The nonce slot must carry PROCESS_NONCE's exact shape (NONCE_PATTERN):
+      # on a pre-nonce key read wide it holds the real pid, which is never 12
+      # hex, so the guard is what falls such a key through to narrow_tail
+      # instead of misreading it. Guarded here rather than in parse_full
+      # because parse_owner reads through owner_tails too — one guard, and the
+      # two parsers agree on every input.
       def wide_tail(parts)
-        [parts[-4], parts[-3].to_i, parts[-2], 4] if parts.size >= 4 && integer?(parts[-3])
+        [parts[-4], parts[-3].to_i, parts[-2], 4] if parts.size >= 4 && integer?(parts[-3]) && nonce?(parts[-2])
       end
 
       # `<host>|<pid>|<idx>` — written before the nonce existed. Such a list can
@@ -70,6 +83,10 @@ module Wurk
 
       def integer?(str)
         str.is_a?(String) && str.match?(/\A\d+\z/)
+      end
+
+      def nonce?(str)
+        str.is_a?(String) && str.match?(NONCE_PATTERN)
       end
     end
   end
