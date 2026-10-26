@@ -93,6 +93,35 @@ class CapsuleTest < Wurk::Test::UnitCase
     assert @capsule.server_middleware.exists?(ProbeMiddleware)
   end
 
+  def test_prepare_shared_preserves_capsule_local_removals
+    @config.server_middleware.add(ProbeMiddleware)
+    @capsule.server_middleware { |chain| chain.remove(ProbeMiddleware) }
+    late_middleware = Class.new(ProbeMiddleware)
+    @config.server_middleware.add(late_middleware)
+
+    2.times { @capsule.prepare_shared! }
+
+    refute @capsule.server_middleware.exists?(ProbeMiddleware)
+    assert @config.server_middleware.exists?(ProbeMiddleware)
+    instance = @capsule.server_middleware.retrieve.find { |m| m.is_a?(late_middleware) }
+
+    assert_same @capsule, instance.config
+
+    @capsule.server_middleware { |chain| chain.remove(late_middleware) }
+    @capsule.prepare_shared!
+
+    refute @capsule.server_middleware.exists?(late_middleware)
+  end
+
+  def test_prepare_shared_preserves_a_locally_cleared_chain
+    @config.server_middleware.add(ProbeMiddleware)
+    @capsule.server_middleware(&:clear)
+
+    2.times { @capsule.prepare_shared! }
+
+    assert_empty @capsule.server_middleware.entries
+  end
+
   # What the host added to the capsule's own chain stays: the copy is the
   # Configuration's chain plus the host's additions, never the other way
   # round.

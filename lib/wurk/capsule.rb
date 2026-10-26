@@ -40,6 +40,7 @@ module Wurk
       @pools = {}
       @client_chain = nil
       @server_chain = nil
+      @server_middleware_seen = []
       @prepared = false
       @watchdog = nil
     end
@@ -145,7 +146,11 @@ module Wurk
       # copy_for(self) — not dup — binds the chain's `@config` to this capsule,
       # so middleware that reach for `redis_pool`/`redis`/`logger` resolve them
       # instead of hitting `nil` (a plain dup leaves @config nil).
-      chain = (@server_chain ||= @config.server_middleware.copy_for(self))
+      chain = (@server_chain ||= begin
+        config_chain = @config.server_middleware
+        @server_middleware_seen = config_chain.entries.map(&:klass)
+        config_chain.copy_for(self)
+      end)
       yield chain if block_given?
       chain
     end
@@ -218,18 +223,17 @@ module Wurk
 
     # The Configuration's chain may have grown since this capsule copied it —
     # a middleware registered after the copy was taken would otherwise be
-    # missing from the chain the workers run. The copy is not replaced: what
-    # the host added to it stays, and only what the Configuration gained is
-    # added, so the chain the workers run is the Configuration's chain plus
-    # the host's own additions.
+    # missing from the chain the workers run. Track classes already seen rather
+    # than just those still present, so capsule-local removals stay removed.
     def refresh_server_middleware!
-      config_chain = @config.server_middleware
-      copy = (@server_chain ||= config_chain.copy_for(self))
+      copy = server_middleware
       return copy if frozen?
 
-      present = copy.entries.map(&:klass)
-      config_chain.entries.each do |entry|
-        next if present.include?(entry.klass)
+      @config.server_middleware.entries.each do |entry|
+        next if @server_middleware_seen.include?(entry.klass)
+
+        @server_middleware_seen << entry.klass
+        next if copy.exists?(entry.klass)
 
         rebound = entry.dup
         rebound.config = self
