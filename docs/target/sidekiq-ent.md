@@ -821,19 +821,35 @@ There is no monolithic `Sidekiq::Enterprise.configure` — each subsystem has it
 
 To claim "Enterprise drop-in", Wurk must expose, identically signed and Redis-key-compatible where users would observe:
 
-- [ ] `Sidekiq::Limiter.{concurrent, bucket, window, leaky, points, unlimited}` constructors with the kwargs of §1.1
+Status legend: checked = shipped API/behavior supported by the linked implementation and test source, or the explicitly permitted documented equivalent; unchecked = partial or unverified contract. A checked API is not a claim of universal upstream wire compatibility: documented divergences still apply. Evidence below is a source survey, not a test-run result; no tests were executed for this reconciliation. Requirements in §§0–11 remain unchanged.
+
+- [x] `Sidekiq::Limiter.{concurrent, bucket, window, leaky, points, unlimited}` constructors with the kwargs of §1.1
+  - **Implemented surface:** [constructors](../../lib/wurk/limiter.rb#L169-L221); [constructor/options coverage](../../test/parity/limiter_test.rb#L102-L128). Concurrent acquisition uses [polling, not XREAD waiter signalling](../idea/parity-divergences.md#concurrent-limiter-polls-instead-of-using-xread-waiter-signalling); see §1.3 and migration scope below.
 - [ ] `Sidekiq::Limiter::OverLimit` exception and `job["overrated"]` middleware contract
-- [ ] `Sidekiq::Limiter.configure` (`backoff`, `redis`, `errors`)
-- [ ] `Sidekiq.configure_server { |c| c.periodic { |mgr| mgr.register(...); mgr.tz = ... } }`
-- [ ] `Sidekiq::Periodic::LoopSet`, `Sidekiq::Periodic::ConfigTester`
-- [ ] `Sidekiq::Enterprise.unique!`; `sidekiq_options unique_for:, unique_until:`; `sidekiq_unique_context`
-- [ ] `Sidekiq::Enterprise::Unique.locked?`
-- [ ] `Sidekiq::Enterprise::Crypto.enable(active_version:) { |v| key }`; `sidekiq_options encrypt: true`; AES-256-GCM envelope on last arg only
-- [ ] `config.retain_history(seconds_or_block)` statsd emitter
-- [ ] `Sidekiq::Component#leader?`; `:leader` event; `SIDEKIQ_LEADER=false` opt-out
-- [ ] `sidekiqswarm` binary honoring `SIDEKIQ_COUNT`, `SIDEKIQ_MAXMEM_MB`, `SIDEKIQ_PRELOAD`, `SIDEKIQ_PRELOAD_APP`; `on(:fork)` hook
-- [ ] Rolling-restart compatibility with einhorn (or document Wurk-native equivalent in `docs/idea/`)
-- [ ] `require "sidekiq-ent/web"` → Limits, Periodic, Historical tabs + authorization block
+  - **Partial:** [middleware](../../lib/wurk/limiter/server_middleware.rb#L52-L89) increments `overrated`, applies backoff and pushes to the same queue; [rescheduling/backoff coverage](../../test/parity/limiter_test.rb#L343-L377). Cap exhaustion [routes directly to dead, not the §1.4 re-raise](../idea/parity-divergences.md#limiter-reschedule-cap-routes-to-the-dead-set-not-re-raise), pinned by [cap coverage](../../test/parity/limiter_test.rb#L386-L400); exact upstream middleware parity remains incomplete.
+- [x] `Sidekiq::Limiter.configure` (`backoff`, `redis`, `errors`)
+  - **Implemented:** [configuration and configure](../../lib/wurk/limiter.rb#L76-L141); [defaults, registered errors and dedicated Redis coverage](../../test/parity/limiter_test.rb#L416-L436).
+- [x] `Sidekiq.configure_server { |c| c.periodic { |mgr| mgr.register(...); mgr.tz = ... } }`
+  - **Implemented:** [configuration entry](../../lib/wurk/configuration.rb#L454) and [Manager DSL](../../lib/wurk/cron.rb#L440-L453); [server block coverage](../../test/unit/cron_test.rb#L937), [default/per-call timezone coverage](../../test/unit/cron_test.rb#L268-L283), and [periodic enqueue coverage](../../test/parity/periodic_test.rb#L63-L89).
+- [x] `Sidekiq::Periodic::LoopSet`, `Sidekiq::Periodic::ConfigTester`
+  - **Implemented:** [LoopSet and ConfigTester](../../lib/wurk/cron.rb#L483-L545); [iteration/lookup and valid/invalid configuration coverage](../../test/unit/cron_test.rb#L417-L490).
+- [x] `Sidekiq::Enterprise.unique!`; `sidekiq_options unique_for:, unique_until:`; `sidekiq_unique_context`
+  - **Implemented:** [Enterprise delegate](../../lib/wurk/compat.rb#L74) and [uniqueness implementation](../../lib/wurk/unique.rb); [enablement](../../test/unit/unique_test.rb#L253-L271), [custom context](../../test/unit/unique_test.rb#L94), and [TTL, scheduling, retry and release-policy coverage](../../test/parity/unique_test.rb#L159-L239).
+- [x] `Sidekiq::Enterprise::Unique.locked?`
+  - **Implemented:** [uniqueness implementation](../../lib/wurk/unique.rb); [present/absent, default queue and custom-context coverage](../../test/unit/unique_test.rb#L812-L856).
+- [x] `Sidekiq::Enterprise::Crypto.enable(active_version:) { |v| key }`; `sidekiq_options encrypt: true`; AES-256-GCM envelope on last arg only
+  - **Implemented API and Wurk envelope, not Ent wire parity:** [Crypto delegate](../../lib/wurk/compat.rb#L95) and [encryption](../../lib/wurk/encryption.rb); [enablement](../../test/unit/encryption_test.rb#L43), [envelope/round-trip/rotation](../../test/unit/encryption_test.rb#L367-L469), and [last-argument middleware coverage](../../test/unit/encryption_test.rb#L533-L595). As §4.4 documents, Wurk's `__wurk_enc__` JSON envelope is incompatible with Ent's base64 binary envelope; encrypted payloads do not round-trip Ent ↔ Wurk.
+- [x] `config.retain_history(seconds_or_block)` statsd emitter
+  - **Implemented:** [retain_history](../../lib/wurk/configuration.rb#L473) and [history collector/emitter](../../lib/wurk/history.rb); [DSL, default/tagged gauges, custom collector, Redis stream and leader-gating coverage](../../test/unit/history_test.rb#L62-L159).
+- [x] `Sidekiq::Component#leader?`; `:leader` event; `SIDEKIQ_LEADER=false` opt-out
+  - **Implemented:** [Component predicate](../../lib/wurk/component.rb#L126) and [leader election/events](../../lib/wurk/leader.rb); [opt-out and event coverage](../../test/unit/leader_test.rb#L407-L458), [predicate coverage](../../test/unit/leader_test.rb#L492-L524).
+- [x] `sidekiqswarm` binary honoring `SIDEKIQ_COUNT`, `SIDEKIQ_MAXMEM_MB`, `SIDEKIQ_PRELOAD`, `SIDEKIQ_PRELOAD_APP`; `on(:fork)` hook
+  - **Implemented with documented recycling divergence:** [binary](../../exe/sidekiqswarm), [count](../../lib/wurk/configuration.rb#L930), [maxmem](../../lib/wurk/configuration.rb#L991), [preload](../../lib/wurk/cli.rb#L506) and [preload_app](../../lib/wurk/cli.rb#L534); [binary/fork/parent-preload coverage](../../test/integration/swarm_cli_test.rb#L51-L153), [preload_app alias](../../test/unit/cli_test.rb#L781-L795), [count](../../test/unit/configuration_test.rb#L1128-L1140) and [maxmem alias coverage](../../test/unit/configuration_test.rb#L136-L150). RSS recycling uses the native rolling machine, not upstream USR2 (§7.5).
+- [x] Rolling-restart compatibility with einhorn (or document Wurk-native equivalent in `docs/idea/`)
+  - **Documented native equivalent:** [no-einhorn divergence](../idea/parity-divergences.md#rolling-restart-drives-itself-from-the-supervise-loop-no-einhorn), [restart machine](../../lib/wurk/swarm/restart.rb), [USR1 child-cycle and replacement-work coverage](../../test/integration/rolling_restart_test.rb#L49-L72). Requires signal-enabled parent boot (`wurkswarm` or `boot(install_signals: true)`), not Rails auto-boot; heartbeat-or-timeout replacement and bounded drain/KILL are not einhorn's unlimited-drain behavior.
+- [x] `require "sidekiq-ent/web"` → Limits, Periodic, Historical tabs + authorization block
+  - **Implemented:** [require shim](../../lib/sidekiq-ent/web.rb), [Enterprise dashboard helpers](../../lib/wurk/web/enterprise.rb) and [authorization configuration](../../lib/wurk/web/config.rb#L179); [Limits/Periodic/Historical coverage](../../test/unit/web_enterprise_test.rb#L43-L266), [engine endpoint coverage](../../test/engine/web_extensions_test.rb#L73-L152), [authorization allow/deny coverage](../../test/engine/web_authorization_test.rb#L25-L69).
 - [ ] Same Redis key prefixes (`lmtr:`, `loops:`, `periodic`, `unique:`, `dear-leader`, `history:metrics`) for migration parity
+  - **Prefixes implemented; migration interoperability unverified:** [limiter](../../lib/wurk/limiter.rb), [periodic/loops](../../lib/wurk/cron.rb#L41-L43), [unique](../../lib/wurk/unique.rb#L48), [leader](../../lib/wurk/leader.rb#L34), [history](../../lib/wurk/keys.rb#L35); coverage for [limiter metadata](../../test/parity/limiter_test.rb#L128), [periodic keys](../../test/unit/cron_test.rb#L965), [unique digest](../../test/unit/unique_test.rb#L37), [leader key](../../test/unit/leader_test.rb#L80) and [history stream](../../test/unit/history_test.rb#L130-L135). Shared prefixes alone do not establish real Ent migration parity. Concurrent `lmtr-cw:{name}` waiter streams are left untouched, including existing expiry (if any), rather than consumed or refreshed (§1.7; [polling divergence](../idea/parity-divergences.md#concurrent-limiter-polls-instead-of-using-xread-waiter-signalling)); encrypted payloads remain incompatible (§4.4). No universal Ent ↔ Wurk migration claim is verified here.
 
 End of public API surface.
