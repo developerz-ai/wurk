@@ -854,6 +854,7 @@ module Wurk
       prepare_for_fork!
       @capsules.each_value(&:freeze)
       @capsules.freeze
+      warn_on_missing_server_middleware
       warn_on_small_db_pool
       self
     end
@@ -867,6 +868,34 @@ module Wurk
     end
 
     private
+
+    # Registrations run against the singleton when wurk is loaded, not when a
+    # host constructs a Configuration. Resolve classes here to avoid making
+    # configuration.rb depend on middleware load order or mutable global chains.
+    def warn_on_missing_server_middleware
+      built_ins = %w[
+        Middleware::InterruptHandler Middleware::Expiry Middleware::Timeout
+        Middleware::Status Middleware::I18n::Server Batch::ServerMiddleware
+        Limiter::ServerMiddleware Metrics::Statsd Metrics::History
+      ].filter_map { |name| loaded_middleware_class(name) }
+      return if @server_chain.entries.any? { |entry| built_ins.include?(entry.klass) }
+
+      logger.warn do
+        'Wurk configuration has no built-in server middleware; batch callbacks, limiter handling, ' \
+          'job expiry, timeouts, status tracking, locale propagation, interrupt handling and metrics ' \
+          'may be unavailable. Fresh Configuration.new instances do not inherit load-time registrations. ' \
+          'Use Wurk.default_configuration or explicitly install the middleware your jobs need. ' \
+          'Custom-only chains are allowed; this warning does not change the chain.'
+      end
+    end
+
+    def loaded_middleware_class(name)
+      name.split('::').reduce(Wurk) do |namespace, part|
+        break unless namespace.const_defined?(part, false)
+
+        namespace.const_get(part, false)
+      end
+    end
 
     def validate_constructor_options!
       @options[:global_concurrency] = normalize_global_concurrency(@options[:global_concurrency])

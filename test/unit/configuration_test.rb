@@ -248,6 +248,110 @@ class ConfigurationTest < Wurk::Test::UnitCase
     assert_same @config.server_middleware, yielded
   end
 
+  def test_freeze_warns_about_missing_built_in_server_middleware
+    log = StringIO.new
+    @config.logger = ::Logger.new(log)
+
+    assert_same @config, @config.freeze!
+
+    assert_includes log.string, 'WARN'
+    assert_includes log.string, 'no built-in server middleware'
+    assert_includes log.string, 'Configuration.new'
+    assert_includes log.string, 'load-time registrations'
+    assert_includes log.string, 'Wurk.default_configuration'
+    assert_includes log.string, 'explicitly install'
+    assert_includes log.string, 'batch'
+    assert_includes log.string, 'limiter'
+    assert_includes log.string, 'metrics'
+    assert_empty @config.server_middleware.entries
+    assert_empty @config.client_middleware.entries
+  end
+
+  def test_freeze_warns_for_custom_only_chain_without_changing_entries_or_arguments
+    log = StringIO.new
+    @config.logger = ::Logger.new(log)
+    custom = Class.new do
+      attr_reader :arguments
+
+      def initialize(*arguments)
+        @arguments = arguments
+      end
+    end
+    other = Class.new(custom)
+    argument = Object.new
+    chain = @config.server_middleware
+    chain.add(custom, argument, :first)
+    chain.add(other, :second)
+    entries = chain.entries.dup
+
+    @config.freeze!
+
+    assert_includes log.string, 'no built-in server middleware'
+    assert_same chain, @config.server_middleware
+    entries.zip(chain.entries).each { |before, after| assert_same before, after }
+    assert_equal [custom, other], chain.entries.map(&:klass)
+    instances = chain.retrieve
+
+    assert_equal [argument, :first], instances.first.arguments
+    assert_same argument, instances.first.arguments.first
+    assert_equal [:second], instances.last.arguments
+    assert_equal [custom, other], @config.default_capsule.server_middleware.entries.map(&:klass)
+  end
+
+  def test_freeze_does_not_warn_for_normally_populated_server_chain
+    log = StringIO.new
+    @config.logger = ::Logger.new(log)
+    Wurk.default_configuration.server_middleware.entries.each do |entry|
+      @config.server_middleware.add(entry.klass)
+    end
+
+    @config.freeze!
+
+    refute_includes log.string, 'no built-in server middleware'
+  end
+
+  def test_freeze_does_not_warn_when_any_built_in_is_retained
+    built_ins = [Wurk::Middleware::InterruptHandler, Wurk::Middleware::Expiry,
+                 Wurk::Middleware::Timeout, Wurk::Middleware::Status, Wurk::Middleware::I18n::Server,
+                 Wurk::Batch::ServerMiddleware, Wurk::Limiter::ServerMiddleware,
+                 Wurk::Metrics::Statsd, Wurk::Metrics::History]
+    built_ins.each do |retained|
+      config = Wurk::Configuration.new
+      log = StringIO.new
+      config.logger = ::Logger.new(log)
+      built_ins.each { |klass| config.server_middleware.add(klass) }
+      (built_ins - [retained]).each { |klass| config.server_middleware.remove(klass) }
+
+      config.freeze!
+
+      refute_includes log.string, 'no built-in server middleware', retained.name
+      assert_equal [retained], config.server_middleware.entries.map(&:klass)
+    end
+  end
+
+  def test_missing_built_ins_warning_is_emitted_only_once
+    log = StringIO.new
+    @config.logger = ::Logger.new(log)
+
+    2.times { assert_same @config, @config.freeze! }
+
+    assert_equal 1, log.string.scan('no built-in server middleware').size
+  end
+
+  def test_missing_built_ins_warning_still_runs_after_prepare_for_fork
+    log = StringIO.new
+    @config.logger = ::Logger.new(log)
+
+    @config.prepare_for_fork!
+
+    refute_includes log.string, 'no built-in server middleware'
+
+    @config.freeze!
+    @config.freeze!
+
+    assert_equal 1, log.string.scan('no built-in server middleware').size
+  end
+
   # --- redis -------------------------------------------------------------
 
   def test_redis_setter_merges_url
