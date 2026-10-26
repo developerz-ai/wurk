@@ -64,6 +64,20 @@ Sidekiq::Enterprise::Crypto.enable(active_version: 1) do |version|
 end
 ```
 
+**Enable before the worker boots.** Initializers run before the swarm forks,
+so the decryptor is part of the server middleware chain the workers run. That
+chain is a *snapshot*: the copy a worker runs is taken when its capsule is
+prepared to run jobs, and a middleware registered after that can never reach
+it. Enabling crypto from then on would seal arguments the workers cannot open
+— `perform` would receive the raw `{v, iv, ct, tag}` envelope as its last
+argument — so Wurk refuses the enablement with
+`Wurk::Encryption::UnsafeEnablementError` rather than let it fail silently at
+job time.
+
+So the call belongs in a `config/initializers` file, **not** in an
+`after_initialize` hook and not in a lazy call from a controller. If the
+enablement is refused, move it into the initializer and restart the workers.
+
 `Wurk::Encryption.enable(active_version: 1) { |v| … }` is the same call under
 its native name. Both are idempotent: calling `enable` again rebinds the
 resolver, clears the key cache, and installs the middleware at most once per
@@ -319,6 +333,12 @@ end
 
 ## Operational gotchas
 
+- **Enable before the worker boots.** The worker's server middleware chain is
+  a snapshot, so a decryptor registered after the workers booted can never
+  reach them — the job would run with the raw envelope as its last argument.
+  `enable` refuses that with `Wurk::Encryption::UnsafeEnablementError`: put
+  the call in a `config/initializers` file, not an `after_initialize` hook, and
+  restart the workers.
 - **`encrypt: true` without `enable` is a silent no-op.** The client middleware
   returns early when crypto is disabled, and the argument goes to Redis in
   cleartext. Assert on it at boot:

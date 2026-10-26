@@ -72,6 +72,110 @@ class EncryptionTest < Wurk::Test::UnitCase
     end
   end
 
+  # ---- late enablement: the boot-order guard ----------------------------
+
+  # The client middleware chain is live — a middleware registered on the
+  # Configuration is picked up by the very next push. The server chain is a
+  # snapshot: a capsule that already holds the chain its workers run can never
+  # receive ServerMiddleware again. Enabling crypto then would seal arguments
+  # the workers cannot open, so the enablement is refused whole.
+  def test_enable_refuses_a_worker_that_can_never_receive_the_decryptor
+    capsule = nil
+    ENABLE_MUTEX.synchronize do
+      capsule = prepared_capsule
+
+      err = assert_raises(Wurk::Encryption::UnsafeEnablementError) do
+        Wurk::Encryption.enable(active_version: 1) { |_v| KEY_V1 }
+      end
+
+      assert_match(/before the worker boots/, err.message)
+      assert_match(%r{config/initializers}, err.message)
+      assert_match(/after_initialize/, err.message)
+    end
+  ensure
+    release_capsule(capsule)
+  end
+
+  # A refused enablement leaves nothing behind: crypto stays off, so the
+  # client middleware keeps the last argument in cleartext and no envelope is
+  # ever enqueued from this process.
+  def test_a_refused_enablement_leaves_the_last_argument_in_cleartext
+    capsule = nil
+    ENABLE_MUTEX.synchronize do
+      capsule = prepared_capsule
+
+      assert_raises(Wurk::Encryption::UnsafeEnablementError) do
+        Wurk::Encryption.enable(active_version: 1) { |_v| KEY_V1 }
+      end
+
+      refute_predicate Wurk::Encryption, :enabled?
+      job = { 'class' => 'X', 'args' => [1, 'secret'], 'encrypt' => true }
+      invoke_client(job)
+
+      assert_equal 'secret', job['args'].last, 'no envelope may be enqueued'
+    end
+  ensure
+    release_capsule(capsule)
+  end
+
+  # Enabling before the snapshot is the supported order: the chain the
+  # workers run carries the decryptor, and a client→server round trip hands
+  # `perform` the decrypted argument.
+  def test_enabling_before_the_snapshot_installs_the_decryptor_in_the_capsule_chain
+    capsule = nil
+    ENABLE_MUTEX.synchronize do
+      Wurk::Encryption.enable(active_version: 1) { |_v| KEY_V1 }
+      capsule = prepared_capsule
+
+      assert capsule.server_middleware.exists?(Wurk::Encryption::ServerMiddleware),
+             'the chain the workers run must carry the decryptor'
+
+      secret = { 'card' => '4111' }
+      job = { 'class' => 'X', 'jid' => jid, 'args' => [42, secret], 'encrypt' => true }
+      invoke_client(job)
+      seen = capsule.server_middleware.invoke(nil, job, 'default') { job['args'] }
+
+      assert_equal [42, secret], seen, 'perform must see the decrypted argument'
+    end
+  ensure
+    release_capsule(capsule)
+  end
+
+  # A rotation re-enables crypto after the snapshot — and the snapshot
+  # already carries the decryptor, so there is nothing to refuse.
+  def test_re_enabling_for_rotation_after_the_snapshot_does_not_raise
+    capsule = nil
+    ENABLE_MUTEX.synchronize do
+      Wurk::Encryption.enable(active_version: 1) { |_v| KEY_V1 }
+      capsule = prepared_capsule
+
+      Wurk::Encryption.enable(active_version: 2) { |_v| KEY_V2 }
+
+      assert_equal 2, Wurk::Encryption.active_version
+      assert_predicate Wurk::Encryption, :enabled?
+    end
+  ensure
+    release_capsule(capsule)
+  end
+
+  # A chain that was only read is not the chain the workers run: the capsule
+  # takes what the Configuration gained when it is prepared. So it must not
+  # refuse the enablement — that would turn every reader of a chain into a
+  # boot failure.
+  def test_enable_is_not_refused_by_a_chain_that_was_only_read
+    capsule = nil
+    ENABLE_MUTEX.synchronize do
+      capsule = Wurk.configuration.capsule("enc-read-#{Process.pid}-#{object_id}")
+      capsule.server_middleware
+
+      Wurk::Encryption.enable(active_version: 1) { |_v| KEY_V1 }
+
+      assert_predicate Wurk::Encryption, :enabled?
+    end
+  ensure
+    release_capsule(capsule)
+  end
+
   # ---- key validation --------------------------------------------------
 
   def test_key_for_raises_when_resolver_returns_nil
@@ -722,6 +826,26 @@ class EncryptionTest < Wurk::Test::UnitCase
   # ---- helpers ---------------------------------------------------------
 
   private
+
+  # A capsule of the global configuration, prepared the way a worker prepares
+  # it: the server middleware chain it runs is copied from the Configuration
+  # and frozen there — a middleware registered afterwards cannot reach it.
+  # The guard reads the capsules of the configuration the middleware is
+  # registered on, so the scenario has to be built on the global one.
+  def prepared_capsule
+    capsule = Wurk.configuration.capsule("enc-guard-#{Process.pid}-#{object_id}")
+    capsule.prepare_shared!
+    capsule
+  end
+
+  # The capsule the test added has to leave the process the way it found it:
+  # a prepared capsule without the decryptor would refuse every later
+  # enablement in this worker.
+  def release_capsule(capsule)
+    return if capsule.nil?
+
+    Wurk.configuration.capsules.delete(capsule.name)
+  end
 
   def invoke_client(job, &)
     block = block_given? ? proc(&) : proc { true }

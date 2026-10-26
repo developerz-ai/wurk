@@ -40,6 +40,8 @@ module Wurk
       @pools = {}
       @client_chain = nil
       @server_chain = nil
+      @server_middleware_seen = []
+      @prepared = false
       @watchdog = nil
     end
 
@@ -102,8 +104,36 @@ module Wurk
     # hook opened across the fork. Idempotent.
     def prepare_shared!
       client_middleware
-      server_middleware
+      refresh_server_middleware!
+      # A second boot (a launcher run twice) finds the capsule frozen — the
+      # flag is already set, so it is not written again.
+      @prepared ||= true
       self
+    end
+
+    # True once this capsule has been prepared to run jobs — `prepare_shared!`
+    # in the swarm parent before the fork, `prepare!` in the child at boot.
+    # Only then is the memoized chain the one the workers run, and only then
+    # is it final: a middleware registered on the Configuration afterwards can
+    # never reach it.
+    def prepared?
+      @prepared
+    end
+
+    # True when this capsule's server middleware chain has already been
+    # snapshotted and that snapshot does not carry `klass`.
+    #
+    # The snapshot is the copy `server_middleware` memoized; a middleware
+    # registered on the Configuration after that copy was taken can never
+    # reach this capsule — which is what Wurk::Encryption.enable has to
+    # detect before it seals arguments the workers could not open.
+    #
+    # Pure read: it never materializes the chain and has no side effects.
+    def server_middleware_missing?(klass)
+      chain = @server_chain
+      return false unless chain
+
+      !chain.exists?(klass)
     end
 
     def client_middleware
@@ -116,7 +146,11 @@ module Wurk
       # copy_for(self) — not dup — binds the chain's `@config` to this capsule,
       # so middleware that reach for `redis_pool`/`redis`/`logger` resolve them
       # instead of hitting `nil` (a plain dup leaves @config nil).
-      chain = (@server_chain ||= @config.server_middleware.copy_for(self))
+      chain = (@server_chain ||= begin
+        config_chain = @config.server_middleware
+        @server_middleware_seen = config_chain.entries.map(&:klass)
+        config_chain.copy_for(self)
+      end)
       yield chain if block_given?
       chain
     end
@@ -186,6 +220,27 @@ module Wurk
     def stop; end
 
     private
+
+    # The Configuration's chain may have grown since this capsule copied it —
+    # a middleware registered after the copy was taken would otherwise be
+    # missing from the chain the workers run. Track classes already seen rather
+    # than just those still present, so capsule-local removals stay removed.
+    def refresh_server_middleware!
+      copy = server_middleware
+      return copy if frozen?
+
+      @config.server_middleware.entries.each do |entry|
+        next if @server_middleware_seen.include?(entry.klass)
+
+        @server_middleware_seen << entry.klass
+        next if copy.exists?(entry.klass)
+
+        rebound = entry.dup
+        rebound.config = self
+        copy.entries << rebound
+      end
+      copy
+    end
 
     # Drop-in fetch pluggability (spec §5 / §4.1): instantiate
     # `config[:fetch_class]` when the host set one — a custom or Pro fetcher —

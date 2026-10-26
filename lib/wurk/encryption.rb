@@ -70,6 +70,13 @@ module Wurk
     class Error < StandardError; end
     class KeyMissingError < Error; end
 
+    # Raised when crypto is enabled too late to reach the workers. A capsule
+    # that already holds the server middleware chain its workers run can never
+    # receive ServerMiddleware again, so enabling now would seal arguments the
+    # workers cannot open — `perform` would receive the raw envelope. The
+    # enablement is refused whole: nothing is enabled, nothing is sealed.
+    class UnsafeEnablementError < Error; end
+
     # Marker for a terminal, non-retryable decryption failure (missing or
     # rotated-away key, tampered ciphertext). The server middleware raises
     # JobRetry::Skip after routing the job to the dead set, so this class
@@ -92,6 +99,8 @@ module Wurk
       def enable(active_version:, &resolver)
         raise ArgumentError, 'active_version is required' unless active_version
         raise ArgumentError, 'block returning the key bytes is required' unless resolver
+
+        refuse_unreachable_enablement!
 
         @active_version = Integer(active_version)
         @resolver = resolver
@@ -222,6 +231,34 @@ module Wurk
       end
 
       private
+
+      # The client middleware chain is live: a middleware registered on the
+      # Configuration is picked up by the very next push. The server chain is
+      # a snapshot — a capsule that has been prepared to run jobs holds the
+      # copy its workers run, and a middleware registered after that copy was
+      # taken can never reach it. Enabling crypto then would seal arguments
+      # the workers cannot open, so the enablement is refused before any
+      # state changes: `enabled?` stays false and the client middleware keeps
+      # the last argument in cleartext.
+      #
+      # The guard is per-process: it sees this process's capsules only. A
+      # producer in another process that enabled crypto while some worker
+      # never enabled it at all is a different misconfiguration — enable
+      # everywhere, not just on workers.
+      def refuse_unreachable_enablement!
+        unreachable = Wurk.configuration.capsules.values.select do |capsule|
+          capsule.prepared? && capsule.server_middleware_missing?(ServerMiddleware)
+        end
+        return if unreachable.empty?
+
+        raise UnsafeEnablementError, <<~MSG
+          Wurk::Encryption.enable was called too late to reach the workers: the #{unreachable.map(&:name).join(', ')} \
+          capsule(s) already hold the server middleware chain their workers run, and that chain cannot \
+          receive Wurk::Encryption::ServerMiddleware — the workers would execute encrypted jobs without the \
+          decryptor and hand `perform` the raw envelope. Enable crypto before the worker boots — in a \
+          config/initializers file, not an after_initialize hook — then restart the workers.
+        MSG
+      end
 
       def build_decrypt_cipher(envelope, key)
         cipher = ::OpenSSL::Cipher.new(CIPHER_NAME).decrypt
