@@ -158,6 +158,17 @@ class WebAuthorizationTest < Wurk::Test::EngineCase
     assert_same true, JSON.parse(last_response.body)['read_only']
   end
 
+  def test_mutation_probe_path_recognizes_the_bulk_retry_post_route
+    path = Wurk::ApiController.const_get(:MUTATION_PROBE_PATH)
+
+    assert_equal '/api/retries', path
+
+    route = Wurk::Engine.routes.recognize_path(path, method: :post)
+
+    assert_equal 'wurk/api', route[:controller]
+    assert_equal 'retries_bulk', route[:action]
+  end
+
   def test_meta_includes_read_only_message_when_set
     Wurk::Web.configure do |c|
       c.read_only = true
