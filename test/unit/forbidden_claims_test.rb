@@ -11,8 +11,10 @@ require_relative '../../tasks/llms_full'
 # docs/benchmarks.md supports it; the shipped dashboard has no per-job progress
 # surface (status is machine-only, read through Wurk::Status and the /v1 jobs
 # endpoint), so that claim is pinned out here too — a rule nothing reads only
-# holds until the next copy edit. Reads files and touches no Redis or shared
-# state.
+# holds until the next copy edit. The docs site also advertises the dashboard's
+# panes, so the inventory it lists is checked against the frontend's own pane
+# inventory and the two cannot drift. Reads files and touches no Redis or
+# shared state.
 class ForbiddenClaimsTest < Minitest::Test
   parallelize_me!
 
@@ -80,6 +82,13 @@ class ForbiddenClaimsTest < Minitest::Test
 
   PANE_INVENTORIES = %w[feature-panes dashboard-panes].freeze
 
+  # Where the frontend declares its shipped panes. main keeps the inventory in
+  # navPanes.json ("the one inventory in the repo", read by Nav.tsx and by the
+  # frontend's own drift check); the tree this guard was cut on still declared
+  # the same panes inline in Nav.tsx.
+  PANE_INVENTORY_JSON = 'frontend/src/navPanes.json'
+  PANE_INVENTORY_INLINE = 'frontend/src/components/Nav.tsx'
+
   def test_both_site_inventories_match_shipped_dashboard_panes
     panes = shipped_panes
     site = File.read(File.join(ROOT, 'docs/site/index.html'))
@@ -116,40 +125,84 @@ class ForbiddenClaimsTest < Minitest::Test
 
   def test_shipped_pane_extraction_rejects_empty_or_unrecognized_navigation
     labels = { 'dashboard' => 'Dashboard' }
+    routes = '<Route path="/" />'
 
     ['', 'const LINKS = [];', 'const LINKS = [{ destination: "/" }];'].each do |nav|
-      assert_raises(Minitest::Assertion) { extract_panes(nav, labels, '<Route path="/" />') }
+      assert_raises(Minitest::Assertion) { extract_panes(inline_panes(nav), labels, routes) }
     end
-    nav = "const LINKS = [{ to: '/', label: t('nav.dashboard') }];"
-    assert_raises(Minitest::Assertion) { extract_panes(nav, labels, '') }
-    assert_raises(Minitest::Assertion) { extract_panes(nav, {}, '<Route path="/" />') }
+    ['[]', '{}', '[{ "destination": "/" }]'].each do |inventory|
+      assert_raises(Minitest::Assertion) { extract_panes(json_panes(inventory), labels, routes) }
+    end
+
+    panes = inline_panes("const LINKS = [{ to: '/', label: t('nav.dashboard') }];")
+
+    assert_raises(Minitest::Assertion) { extract_panes(panes, labels, '') }
+    assert_raises(Minitest::Assertion) { extract_panes(panes, {}, routes) }
   end
 
   private
 
   def shipped_panes
-    nav = File.read(File.join(ROOT, 'frontend/src/components/Nav.tsx'))
     labels = JSON.parse(File.read(File.join(ROOT, 'frontend/src/i18n/en.json'))).fetch('nav')
     routes = File.read(File.join(ROOT, 'frontend/src/App.tsx'))
-    extract_panes(nav, labels, routes)
+    extract_panes(pane_inventory, labels, routes)
   end
 
-  def extract_panes(nav, labels, app)
-    links = nav[/\bconst LINKS\s*=\s*\[(.*?)\];/m, 1]
+  # [path, nav label key] per shipped pane, in rail order. The panes live in
+  # one inventory, but that inventory moved: main keeps it in navPanes.json and
+  # derives Nav.tsx's LINKS from it, while the tree this guard was cut on
+  # declared the same panes inline in Nav.tsx. Read whichever the tree ships,
+  # and fail loudly when neither declares a pane — a guard that stops reading
+  # its source stops guarding.
+  def pane_inventory
+    json = File.join(ROOT, PANE_INVENTORY_JSON)
 
-    refute_nil links, 'Nav.tsx LINKS must be extractable'
+    return json_panes(File.read(json)) if File.exist?(json)
+
+    inline_panes(File.read(File.join(ROOT, PANE_INVENTORY_INLINE)))
+  end
+
+  # main's inventory: [{ "to": "/queues", "labelKey": "nav.queues", ... }].
+  def json_panes(source)
+    panes = JSON.parse(source)
+
+    assert_kind_of Array, panes, "#{PANE_INVENTORY_JSON} must hold an array of panes"
+    refute_empty panes, "#{PANE_INVENTORY_JSON} must contain built-in panes"
+    panes.map { |pane| json_pane(pane) }
+  end
+
+  def json_pane(pane)
+    assert_kind_of Hash, pane, "unrecognized pane: #{pane.inspect}"
+    to = pane['to']
+    key = pane['labelKey']
+
+    assert(to.is_a?(String) && key.is_a?(String), "unrecognized pane: #{pane.inspect}")
+    [to, key.delete_prefix('nav.')]
+  end
+
+  # The inline shape: Nav.tsx's `const LINKS = [...]` array of panes.
+  def inline_panes(source)
+    links = source[/\bconst LINKS\s*=\s*\[(.*?)\];/m, 1]
+
+    refute_nil links, "#{PANE_INVENTORY_INLINE} LINKS must be extractable"
     entries = links.scan(/\{[^{}]*\}/)
 
-    refute_empty entries, 'Nav.tsx LINKS must contain built-in panes'
+    refute_empty entries, "#{PANE_INVENTORY_INLINE} LINKS must contain built-in panes"
+    entries.map { |entry| inline_pane(entry) }
+  end
+
+  def inline_pane(entry)
+    match = entry.match(/to:\s*'([^']+)',\s*label:\s*t\('nav\.([^']+)'\)/)
+
+    refute_nil match, "unrecognized LINKS entry: #{entry}"
+    match.captures
+  end
+
+  def extract_panes(inventory, labels, app)
     routes = app.scan(/<Route\s+path="([^"]+)"/).flatten
 
     refute_empty routes, 'App.tsx routes must be extractable'
-    panes = entries.map do |entry|
-      match = entry.match(/to:\s*'([^']+)',\s*label:\s*t\('nav\.([^']+)'\)/)
-
-      refute_nil match, "unrecognized LINKS entry: #{entry}"
-      path, key = match.captures
-
+    panes = inventory.map do |path, key|
       assert_includes routes, path, "built-in pane #{key} must have an App route"
       label = labels[key]
 
