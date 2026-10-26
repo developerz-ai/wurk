@@ -558,7 +558,7 @@ Writing the feature documentation against the implementation — rather than aga
 
 First stable release. Wurk is a 100% drop-in replacement for Sidekiq, Sidekiq
 Pro, and Sidekiq Enterprise — same Redis schema, same job JSON, same Ruby DSL —
-with fork-based parallelism and a precompiled React dashboard, all free in one
+with fork-based parallelism and a precompiled dashboard SPA, all free in one
 gem. This release completes OSS + Pro + Ent feature parity (roadmap #147) and
 adds a `require "sidekiq"` compatibility entrypoint so existing apps and
 third-party gems swap in with a one-line `gem "sidekiq"` → `gem "wurk"` change.
@@ -600,7 +600,7 @@ third-party gems swap in with a one-line `gem "sidekiq"` → `gem "wurk"` change
 - `docs/compatibility.md` — compatibility & legal basis: Wurk reimplements the Sidekiq API (clean-room, original implementation), the *Google v. Oracle* rationale, and trademark/nominative-use notes. Linked from the README.
 
 ### Changed
-- Dependency refresh. GitHub Actions bumped to current majors (`checkout@v6`, `setup-node@v6`, `upload-artifact@v7`) on Node 24, clearing the Node 20 deprecation. Dashboard frontend upgraded to React 19, React Router 7, Recharts 3, Vite 8, and TypeScript 6. Ruby dev/test gems refreshed to latest.
+- Dependency refresh. GitHub Actions bumped to current majors (`checkout@v6`, `setup-node@v6`, `upload-artifact@v7`) on Node 24, clearing the Node 20 deprecation. Dashboard frontend upgraded to React 19, React Router 7, Recharts 3, Vite 8, and TypeScript 6. Ruby dev/test gems refreshed to latest. That React-era dashboard stack was later replaced wholesale by the SolidJS rewrite in 1.1.0.
 
 ## [0.0.3] - 2026-06-01
 
@@ -617,7 +617,7 @@ third-party gems swap in with a one-line `gem "sidekiq"` → `gem "wurk"` change
 
 ## [0.0.1] - 2026-06-01
 
-First public (pre-1.0) release. Wurk is a 100% API-compatible drop-in replacement for Sidekiq + Sidekiq Pro + Sidekiq Enterprise — same Redis key schema, same job JSON, same Ruby DSL — with fork-based real parallelism, the full Pro + Enterprise feature set in one free gem (no license check), and a precompiled React dashboard.
+First public (pre-1.0) release. Wurk is a 100% API-compatible drop-in replacement for Sidekiq + Sidekiq Pro + Sidekiq Enterprise — same Redis key schema, same job JSON, same Ruby DSL — with fork-based real parallelism, the full Pro + Enterprise feature set in one free gem (no license check), and a precompiled dashboard SPA.
 
 ### Runtime
 - Fork-based Swarm: parent forks N children with PID supervision, rolling restart (SIGUSR1), graceful drain (SIGTERM/SIGINT) to `shutdown_timeout`, and global pause/resume (SIGTSTP/SIGCONT).
@@ -640,7 +640,7 @@ First public (pre-1.0) release. Wurk is a 100% API-compatible drop-in replacemen
 - Transparent job-payload encryption with key rotation and graceful failure modes (a decryption failure degrades rather than crashing the worker).
 
 ### Dashboard
-- Precompiled React + TypeScript SPA mounted under the engine — consumers never run Node. Tabs: queues, retries, scheduled, dead, busy, processes, batches (+ per-batch detail), limiters, periodic, metrics, and search. SSE live updates, read-only mode, pagination, i18n with host-app override, and a dark default theme.
+- **Dashboard as it ships today** — this release predates the 1.1.0 SolidJS rewrite and the 1.6.0 Flows pane, so what follows describes the dashboard as it ships now, not what 0.0.1 shipped. Precompiled SolidJS + TypeScript SPA mounted under the engine — consumers never run Node. Panes: dashboard, queues, retries, scheduled, dead, busy, batches (+ per-batch detail), flows (+ per-flow detail), limiters, cron, metrics, profiles, and search — there is no separate processes pane; live worker/process state is surfaced on the Dashboard and Busy panes. SSE live updates, read-only mode, pagination, i18n with host-app override, and a dark default theme.
 
 ### Compat
 - `Sidekiq::*` aliases for every public `Wurk::*` class (`Sidekiq::Worker`, `Sidekiq::Batch`, `Sidekiq::Limiter`, `Sidekiq.configure_server`, …) — the drop-in contract.
