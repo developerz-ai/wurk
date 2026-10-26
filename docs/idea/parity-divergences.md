@@ -239,7 +239,7 @@ a short `ttl` (legal in Sidekiq Ent) booting after the gem swap.
 `Swarm#rolling_restart`, a state machine (`spawn_replacement → await
 heartbeat → SIGTERM old slot → await exit → next`) driven entirely by the
 existing non-blocking supervise loop (`lib/wurk/swarm.rb:238-240`, the
-`:usr1` case at `lib/wurk/swarm.rb:454`, and the state machine in
+`:usr1` case at `lib/wurk/swarm.rb:447-461`, and the state machine in
 `lib/wurk/swarm/restart.rb`).
 
 **Spec:** Ent §8 describes rolling restarts via integration with
@@ -259,8 +259,8 @@ cycling, which the in-process state machine does (verified by
 `test/integration/rolling_restart_test.rb` and
 `test/integration/swarm_supervision_test.rb`, PR3).
 
-**Anchor:** `lib/wurk/swarm.rb:238-240`, `lib/wurk/swarm/restart.rb`, PR3 (`fix/swarm-supervision`), Ent
-§8.
+**Anchor:** `lib/wurk/swarm.rb:238-240`, `lib/wurk/swarm.rb:447-461`,
+`lib/wurk/swarm/restart.rb`, PR3 (`fix/swarm-supervision`), Ent §8.
 
 ## USR2 reopens logs; RSS recycling uses the rolling-restart machine
 
