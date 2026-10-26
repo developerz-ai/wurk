@@ -44,7 +44,7 @@ Layers and ownership — one reason to change per class. Don't blur these.
 | Railtie | `after_initialize` hook that starts the swarm | `lib/wurk/railtie.rb` |
 | Swarm | Parent process; forks N children, PID supervision, rolling restart | `lib/wurk/swarm.rb` |
 | Manager | Inside each child: thread pool, lifecycle, heartbeat | `lib/wurk/manager.rb` |
-| Fetcher | BLMOVE reliable fetch: main queue → per-process private list | `lib/wurk/fetcher.rb` |
+| Fetcher | Abstract base in `lib/wurk/fetcher.rb`; `Fetcher::Reliable` is the shipped implementation: BLMOVE reliable fetch, main queue → per-process private list. Supporting: `capped.rb` (global concurrency caps), `many_queues.rb` (one-round-trip multi-queue claim), `unit_of_work.rb` (ACK/requeue), `reaper.rb` + `private_list_key.rb` + `orphan_grace.rb` + `unparseable_keys.rb` (orphan reclamation) | `lib/wurk/fetcher.rb` (base), `lib/wurk/fetcher/reliable.rb` (impl), `lib/wurk/fetcher/` (support) |
 | Processor | Pops private list, runs middleware chain, invokes perform | `lib/wurk/processor.rb` |
 | Client | Enqueue, Lua bulk path, Redis-outage local buffer | `lib/wurk/client.rb` |
 | Middleware | Client + server chains (Sidekiq contract) | `lib/wurk/middleware/` |
