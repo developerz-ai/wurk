@@ -5,8 +5,8 @@ require 'json'
 require 'open3'
 require 'rbconfig'
 
-# E12: every `require "sidekiq…"` path the specs document must resolve to a
-# Wurk shim once the real sidekiq gems are gone. Each path is required first
+# E12: every supported `require "sidekiq…"` path the specs document must resolve
+# to a Wurk shim once the real sidekiq gems are gone. Each path is required first
 # thing in a fresh process under this bundle, which keeps the globally installed
 # sidekiq / sidekiq-pro / sidekiq-ent gems off the load path — on a dev box
 # with them installed, an in-process require would quietly load the real gem
@@ -20,7 +20,8 @@ class SidekiqRequireShimsTest < Wurk::Test::UnitCase
   REQUIRE = %r{require\s*\(?\s*["'](sidekiq[\w\-/]*)["']}
 
   # Upstream sidekiq 8.1 files apps and gems require directly, each with the
-  # constant it defines. Upstream files whose constant Wurk does not implement
+  # constant it defines, or nil for an intentional unsupported exclusion.
+  # Upstream files whose constant Wurk does not implement
   # (sidekiq/monitor, paginator, ring_buffer, sd_notify, systemd,
   # metrics/shared, metrics/tracking, job/iterable/enumerators) stay unshimmed:
   # a shim there would turn a clear LoadError into a later NameError.
@@ -41,21 +42,30 @@ class SidekiqRequireShimsTest < Wurk::Test::UnitCase
     'sidekiq/loader' => 'Sidekiq::Loader',
     'sidekiq/logger' => 'Sidekiq::Logger',
     'sidekiq/metrics/query' => 'Sidekiq::Metrics::Query',
+    'sidekiq/metrics/tracking' => nil,
     'sidekiq/middleware/modules' => 'Sidekiq::ServerMiddleware',
     'sidekiq/profiler' => 'Sidekiq::Profiler',
     'sidekiq/redis_client_adapter' => 'Sidekiq::RedisClientAdapter',
     'sidekiq/test_api' => 'Sidekiq::Testing',
     'sidekiq/testing/inline' => 'Sidekiq::Testing',
     'sidekiq/transaction_aware_client' => 'Sidekiq::TransactionAwareClient',
+    'sidekiq/web/application' => nil,
+    'sidekiq/web/router' => nil,
+    'sidekiq/web/action' => nil,
+    'sidekiq/web/helpers' => nil,
     'sidekiq/worker_compatibility_alias' => 'Sidekiq::Worker'
   }.freeze
 
-  # Documented paths, generated from the specs so a newly documented one
-  # fails here until it has a shim, plus the upstream files above.
-  PATHS = (SPECS.flat_map { |f| File.read(f).scan(REQUIRE).flatten } + UPSTREAM.keys).uniq.sort.freeze
+  UNSUPPORTED = UPSTREAM.select { |_, constant| constant.nil? }.keys.freeze
+  SUPPORTED = UPSTREAM.compact.freeze
+  DOCUMENTED = SPECS.flat_map { |f| File.read(f).scan(REQUIRE).flatten }.uniq.freeze
 
-  # What each path has to leave defined beyond the alias layer itself.
-  EXPECTED = UPSTREAM.merge(
+  # Only explicit exclusions are removed: unknown newly documented paths must
+  # still fail here until they have a shim.
+  PATHS = ((DOCUMENTED + UPSTREAM.keys).uniq - UNSUPPORTED).sort.freeze
+
+  # What each supported path has to leave defined beyond the alias layer itself.
+  EXPECTED = SUPPORTED.merge(
     'sidekiq/api' => 'Sidekiq::WorkSet',
     'sidekiq/cli' => 'Sidekiq::CLI',
     'sidekiq/middleware/i18n' => 'Sidekiq::Middleware::I18n::Client',
@@ -79,6 +89,43 @@ class SidekiqRequireShimsTest < Wurk::Test::UnitCase
     assert_includes PATHS, 'sidekiq-ent/periodic/testing'
     assert_includes PATHS, 'sidekiq/middleware/current_attributes'
     assert_operator PATHS.size, :>=, 34
+  end
+
+  def test_only_the_five_documented_internals_are_excluded
+    assert_equal %w[
+      sidekiq/metrics/tracking
+      sidekiq/web/action
+      sidekiq/web/application
+      sidekiq/web/helpers
+      sidekiq/web/router
+    ], UNSUPPORTED.sort
+    assert_empty UNSUPPORTED & PATHS
+    assert_empty (DOCUMENTED - UNSUPPORTED) - PATHS
+    assert_empty SUPPORTED.keys - PATHS
+    refute_includes EXPECTED.values, nil
+
+    ['docs/target/sidekiq-free.md', 'docs/migrate-from-sidekiq.md'].each do |file|
+      text = File.read(File.join(ROOT, file))
+      UNSUPPORTED.each do |path|
+        message = "#{file} must explicitly classify #{path}.rb as unsupported"
+
+        assert_match(/^.*`#{Regexp.escape(path)}\.rb`.*unsupported.*$/, text, message)
+      end
+      assert_includes text, 'intentionally unshimmed'
+      assert_includes text, "require 'sidekiq/web'"
+      assert_includes text, "require 'sidekiq/metrics/query'"
+    end
+  end
+
+  UNSUPPORTED.each do |path|
+    define_method(:"test_require_#{path.tr('/-', '__')}_is_intentionally_unshimmed") do
+      refute_path_exists File.join(LIB, "#{path}.rb")
+      _out, err, status = probe(path, 'Object')
+
+      refute_predicate status, :success?, "#{path} is an unsupported upstream internal"
+      assert_match(/LoadError/, err)
+      assert_match(/cannot load such file -- #{Regexp.escape(path)}(?:\s|$)/, err)
+    end
   end
 
   def test_the_real_gems_are_off_the_load_path

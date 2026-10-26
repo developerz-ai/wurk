@@ -4,13 +4,13 @@
 
 **Current source recount (separate from the historical baseline):** 8 locales registered in `LOCALES` in `frontend/src/i18n/index.ts`: `en`, `es`, `fr`, `de`, `pt-BR`, `ja`, `zh-CN`, and `ar`, imported from their corresponding JSON bundles in `frontend/src/i18n/`. `frontend/src/i18n/en.json` contains **260 English leaf strings**. Counting method: recursively traverse object values, count each string-valued leaf once by its key path (including nested `search.kind` and `flows.state` leaves), and exclude object branches themselves. Manual subtotals: nav 25, dashboard 27, table 34, summaries 13, busy 18, cron 5, job 10, search 13, extension 3, actions 28, readonly 1, toast 7, common 12, limiters 2, queues 2, batches 8, flows 20, metrics 21, timezone 5, theme 3, notfound 3 = 260. This source recount does not revalidate the historical count or locale-parity claim; tests, lint, and build were not rerun.
 
-Ordered by customer impact. W1–W2 are prod blockers.
+Ordered by customer impact. W1–W2 were identified as prod blockers in the historical audit; W1 has landed as recorded below, while W2 remains open.
 
 ## Findings
 
 | ID | Sev | Where | Defect | Fix direction |
 |---|---|---|---|---|
-| W1 | P1 sec | `lib/wurk/web/rack_app.rb:31` (`Wurk::Web.call`) | `mount Sidekiq::Web` path skips `config.authorization` + `read_only`; extension routes served unauthenticated (curl w/ forged `Sec-Fetch-Site`). `docs/authentication.md:331` rationale wrong for Ent. | Wrap `dispatch` in `Authorization` + read-only gate; better: `Sidekiq::Web.call` serves/redirects to full engine dashboard. Fix the doc. |
+| W1 | P1 sec | `lib/wurk/web/rack_app.rb:27–36` (`Wurk::Web.call`), `lib/wurk/web/config.rb:474–494` | Historical defect: `mount Sidekiq::Web` skipped `config.authorization` + `read_only`; extension routes were served unauthenticated (curl w/ forged `Sec-Fetch-Site`), and the authentication rationale was wrong for Ent. | **Landed (source inspection):** standalone dispatch is wrapped in `Authorization` with `api_handoff: false`, inside host middleware; authorization runs before the read-only gate. Corrected standalone-gate and CSRF documentation: `docs/authentication.md:357–379`. Existing regression coverage: `test/unit/web_rack_app_test.rb:112–174` (see Tests). |
 | W2 | P1 avail | `app/controllers/concerns/wurk/stream_concurrency_guard.rb:21`, `api_controller.rb:321` | SSE cap 10 > Puma threads (Rails default 3; `demo/config/puma.rb` 5). 3–5 tabs pin every request thread for 120s → host app hangs. | Cap = `max(1, server_threads/2)` (read `RAILS_MAX_THREADS`/Puma config), configurable `config.web.max_streams`; document. Consider shorter stream lifetime. |
 | W3 | P1 | `frontend/src/pages/Busy.tsx:101,227`, `Cron.tsx:51`, `Metrics.tsx:166-190,423,484,533`, `Profiles.tsx:34` | raw `fetch().then(r=>r.json())`, no `r.ok`; 503 body crashes page; `components/ErrorBoundary.tsx` never resets → whole SPA dead until reload. | Use shared `getJSON` everywhere; key/reset ErrorBoundary on route path. Grep `fetch(` in `frontend/src` — zero raw calls left. |
 | W4 | P1 UX | `frontend/src/pages/Retries.tsx:94-115` (+ `Dead.tsx`, `Scheduled.tsx`) | New query key → `isPending` → FilterBox unmounted, focus + keystrokes lost. | `placeholderData: keepPreviousData`, or render header/FilterBox outside `<Switch>`. |
@@ -29,14 +29,14 @@ Ordered by customer impact. W1–W2 are prod blockers.
 | W17 | P3 | `lib/wurk/web/search.rb:67,153`; 11 hardcoded `aria-label`s; `config.rb:262` single-stack cache; 32 possibly-unused `en.json` keys | Misc. | `truncated?` at limit + dedupe ZSCAN; i18n aria labels; cache both stacks; verify dynamic keys before deleting. |
 
 ## Steps
-1. W1 first (security). Add `Authorization` + read-only wrap in `Wurk::Web.call`; rewrite `docs/authentication.md:331` section.
+1. **W1 landed (source inspection):** `Wurk::Web.call` wraps standalone dispatch in `Authorization` with `api_handoff: false` (`lib/wurk/web/rack_app.rb:27–36`); authorization and read-only enforcement are in `lib/wurk/web/config.rb:474–494`. The corrected standalone authentication documentation is at `docs/authentication.md:357–379`; existing regression coverage is at `test/unit/web_rack_app_test.rb:112–174`. This status records inspected implementation and coverage, not a claim that tests were rerun.
 2. W2 + W11 together (SSE server cap + client reconnect).
 3. W7 (health server) — standalone, no engine dependency (standalone mode must not load engine).
 4. W3/W4/W5/W10/W12/W13 frontend batch; then `bin/rake frontend:build` locally to sanity-check.
 5. W6, W8, W9, W14–W17.
 
 ## Tests
-- W1: rack-test against `Sidekiq::Web` w/ `authorization { false }` → 403 on GET + POST extension route; read-only → 403 on POST.
+- W1 — **existing coverage inspected**, `test/unit/web_rack_app_test.rb:112–174`: `Sidekiq::Web` with denied authorization → 403 on GET and forged-same-origin POST; authorization receives the mount-relative path; read-only → 403 on POST, including API-shaped extension paths, while GET remains available; host middleware runs before authorization. These are existing test assertions, not a test-execution result.
 - W2: cap N-1 → N streams open → plain GET still answered (engine test).
 - W3: vitest Busy with `/api/processes` 503 → error state, no throw; navigate → recovers.
 - W4: vitest type filter, advance timers → input still mounted + focused.
