@@ -1,9 +1,11 @@
 # frozen_string_literal: true
 
 require_relative '../test_helper'
+require 'fileutils'
 require 'json'
 require 'open3'
 require 'rbconfig'
+require 'tmpdir'
 
 # E12: every supported `require "sidekiq…"` path the specs document must resolve
 # to a Wurk shim once the real sidekiq gems are gone. Each path is required first
@@ -56,14 +58,93 @@ class SidekiqRequireShimsTest < Wurk::Test::UnitCase
     'sidekiq/worker_compatibility_alias' => 'Sidekiq::Worker'
   }.freeze
 
+  # Keep the probe inventory independent of filesystem discovery: adding a shim
+  # must fail completeness until its isolated require probe is registered here.
+  OTHER_PATHS = %w[
+    sidekiq
+    sidekiq-pro
+    sidekiq-ent
+    sidekiq-ent/periodic/testing
+    sidekiq-ent/web
+    sidekiq/api
+    sidekiq/cli
+    sidekiq/client
+    sidekiq/job
+    sidekiq/job_retry
+    sidekiq/launcher
+    sidekiq/manager
+    sidekiq/middleware/chain
+    sidekiq/middleware/current_attributes
+    sidekiq/middleware/i18n
+    sidekiq/middleware/server/statsd
+    sidekiq/pro/web
+    sidekiq/processor
+    sidekiq/rails
+    sidekiq/redis_connection
+    sidekiq/scheduled
+    sidekiq/testing
+    sidekiq/version
+    sidekiq/web
+    sidekiq/worker
+  ].freeze
+
   UNSUPPORTED = UPSTREAM.select { |_, constant| constant.nil? }.keys.freeze
   SUPPORTED = UPSTREAM.compact.freeze
   DOCUMENTED = SPECS.flat_map { |f| File.read(f).scan(REQUIRE).flatten }.uniq.freeze
 
   # Only explicit exclusions are removed: unknown newly documented paths must
-  # still fail here until they have a shim.
-  PATHS = ((DOCUMENTED + UPSTREAM.keys).uniq - UNSUPPORTED).sort.freeze
+  # still fail here until they have a shim. Discovery must not register probes.
+  PATHS = ((DOCUMENTED + UPSTREAM.keys + OTHER_PATHS).uniq - UNSUPPORTED).sort.freeze
 
+  def self.discover_shim_paths(lib)
+    # sidekiq/pro is included recursively under sidekiq.
+    patterns = %w[sidekiq/**/*.rb sidekiq-ent/**/*.rb sidekiq.rb sidekiq-pro.rb sidekiq-ent.rb]
+    Dir[*patterns.map { |pattern| File.join(lib, pattern) }]
+      .map { |file| file.delete_prefix("#{lib}/").delete_suffix('.rb') }.uniq.sort
+  end
+
+  SHIM_PATHS = discover_shim_paths(LIB).freeze
+
+  SHIM_PATHS.each do |path|
+    define_method(:"test_probe_inventory_covers_lib/#{path}.rb") do
+      assert_shims_have_probes([path], PATHS)
+    end
+  end
+
+  def test_complete_probe_inventory_is_accepted
+    assert_shims_have_probes(SHIM_PATHS, PATHS)
+  end
+
+  %w[sidekiq/unlisted_shim sidekiq/pro/nested/unlisted_shim sidekiq-ent/nested/unlisted_shim].each do |path|
+    define_method(:"test_discovered_unregistered_lib/#{path}.rb_is_rejected") do
+      Dir.mktmpdir('sidekiq-shims') do |lib|
+        registered = %w[sidekiq sidekiq-pro sidekiq-ent sidekiq/client]
+        (registered + [path]).each do |shim|
+          file = File.join(lib, "#{shim}.rb")
+          FileUtils.mkdir_p(File.dirname(file))
+          File.write(file, "# fixture shim\n")
+        end
+
+        discovered = self.class.discover_shim_paths(lib)
+
+        assert_equal (registered + [path]).sort, discovered
+        error = assert_raises(Minitest::Assertion) do
+          assert_shims_have_probes(discovered, registered)
+        end
+
+        assert_includes error.message, "lib/#{path}.rb"
+      end
+    end
+  end
+
+  def test_removed_existing_probe_is_rejected
+    path = 'sidekiq/client'
+    error = assert_raises(Minitest::Assertion) do
+      assert_shims_have_probes(SHIM_PATHS, PATHS - [path])
+    end
+
+    assert_includes error.message, "lib/#{path}.rb"
+  end
   # What each supported path has to leave defined beyond the alias layer itself.
   EXPECTED = SUPPORTED.merge(
     'sidekiq/api' => 'Sidekiq::WorkSet',
@@ -135,6 +216,24 @@ class SidekiqRequireShimsTest < Wurk::Test::UnitCase
     assert_match(/LoadError|cannot load such file/, err)
   end
 
+  def test_cold_rails_require_loads_only_the_railtie
+    out, err, status = probe_script(<<~RUBY)
+      require 'sidekiq/rails'
+      print JSON.dump(
+        'railtie' => !!defined?(Wurk::Railtie),
+        'engine' => !!defined?(Wurk::Engine),
+        'action_dispatch' => !!defined?(ActionDispatch)
+      )
+    RUBY
+
+    assert_predicate status, :success?, err
+    result = JSON.parse(out)
+
+    assert result['railtie'], 'sidekiq/rails must define Wurk::Railtie without preloading ActiveJob'
+    refute result['engine'], 'sidekiq/rails must not load the dashboard engine'
+    refute result['action_dispatch'], 'sidekiq/rails must not load ActionDispatch'
+  end
+
   # Sidekiq 8.1's side-effect-free testing API must not flip the test mode
   # the way the deprecated sidekiq/testing does.
   def test_test_api_leaves_the_test_mode_alone
@@ -157,6 +256,12 @@ class SidekiqRequireShimsTest < Wurk::Test::UnitCase
   end
 
   private
+
+  def assert_shims_have_probes(shim_paths, probe_paths)
+    shim_paths.each do |path|
+      assert_includes probe_paths, path, "lib/#{path}.rb must have an isolated require probe"
+    end
+  end
 
   def probe(path, constant) = probe_script(PROBE, path, constant)
 
