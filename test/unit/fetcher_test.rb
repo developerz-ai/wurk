@@ -3,10 +3,13 @@
 require_relative '../test_helper'
 
 # The abstract Wurk::Fetcher base class defines the drop-in fetcher contract
-# (retrieve_work / bulk_requeue / terminate / flush_pending_acks) as callable
-# no-ops, not recovery guarantees. A custom config[:fetch_class] inherits these,
-# so Manager and Processor can call the hooks without raising, but requeue and
-# recovery policy belong to the subclass.
+# (retrieve_work / bulk_requeue / terminate / flush_pending_acks). Retrieval is
+# required: an un-overridden retrieve_work returning instant nil would spin
+# Processor#run's process_one loop, so the base raises NotImplementedError and
+# concrete fetchers must block or back off when empty. The lifecycle hooks stay
+# callable no-ops a custom config[:fetch_class] inherits, so Manager and
+# Processor can call them without raising; requeue and recovery policy belong
+# to the subclass.
 class FetcherTest < Wurk::Test::UnitCase
   parallelize_me!
 
@@ -31,8 +34,74 @@ class FetcherTest < Wurk::Test::UnitCase
     @fetcher = Wurk::Fetcher.new
   end
 
-  def test_retrieve_work_defaults_to_nil
-    assert_nil @fetcher.retrieve_work
+  class DelegatingFetcher < Wurk::Fetcher
+    attr_reader :calls
+
+    def initialize
+      super
+      @calls = 0
+    end
+
+    def retrieve_work
+      @calls += 1
+      # Bound the old instant-nil loop without threads, timers, or a fetch retry.
+      raise ScriptError, 'Processor repeated unimplemented retrieval' if @calls > 1
+
+      super
+    end
+  end
+
+  def test_base_retrieval_requires_an_override
+    error = assert_raises(NotImplementedError) { @fetcher.retrieve_work }
+
+    assert_match(/override #retrieve_work/, error.message)
+    assert_match(/block or back off/, error.message)
+  end
+
+  def test_inherited_retrieval_requires_an_override
+    fetcher = Class.new(Wurk::Fetcher).new
+
+    error = assert_raises(NotImplementedError) { fetcher.retrieve_work }
+
+    assert_match(/override #retrieve_work/, error.message)
+  end
+
+  def test_custom_retrieval_preserves_results_and_inherits_optional_hooks
+    work = Object.new
+    fetcher = Class.new(Wurk::Fetcher) do
+      attr_accessor :result
+
+      def retrieve_work
+        result
+      end
+    end.new
+    fetcher.result = work
+
+    assert_same work, fetcher.retrieve_work
+    fetcher.result = nil
+
+    assert_nil fetcher.retrieve_work
+    assert_nil fetcher.bulk_requeue([work])
+    assert_nil fetcher.terminate
+    assert_nil fetcher.flush_pending_acks
+  end
+
+  def test_processor_reports_and_propagates_unimplemented_retrieval_without_looping
+    errors = []
+    callbacks = []
+    config = Wurk::Configuration.new
+    config.logger = Logger.new(IO::NULL)
+    config.error_handlers.replace([->(error, context, _config) { errors << [error, context] }])
+    capsule = Wurk::Capsule.new('unimplemented-fetcher', config)
+    capsule.fetcher = DelegatingFetcher.new
+    processor = Wurk::Processor.new(capsule) { |stopped| callbacks << stopped }
+
+    error = assert_raises(NotImplementedError) { processor.send(:run) }
+
+    assert_match(/override #retrieve_work/, error.message)
+    assert_equal 1, capsule.fetcher.calls
+    assert_equal [[error, { context: '!shutdown' }]], errors
+    assert_equal [processor], callbacks
   end
 
   def test_bulk_requeue_defaults_to_noop
