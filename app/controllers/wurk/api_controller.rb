@@ -238,11 +238,19 @@ module Wurk
       render json: { lid: params[:lid].to_s, history: ::Wurk::Web::Enterprise::Periodic.history(params[:lid].to_s) }
     end
 
+    # `?minutes=` (default 60) is served raw — the Query layer routes ≤480 to
+    # per-minute buckets and >480 onto the 10-minute buckets, raising
+    # WindowTooWide (400 below) past the 30-day ceiling; a non-positive window
+    # raises ArgumentError there and 400s the same way. `?hours=` is clamped
+    # to MAX_HOURS (default 24 when present) and always takes the 10-minute
+    # path. The response echoes the REQUESTED window so the SPA's label
+    # matches the served period.
     def metrics
-      minutes = ::Wurk::Api::Pagination.clamp_int(params[:minutes], 1, ::Wurk::Metrics::Query::MAX_MINUTES, 60)
-      rows = ::Wurk::Web::Enterprise::Historical.top(minutes: minutes, class_filter: params[:substr])
-      render json: { minutes: minutes, top_jobs: rows.map { |(klass, totals)| ::Wurk::Api::Serializers.metric_row(klass, totals) } }
-    rescue ::Wurk::Metrics::Query::WindowTooWide => e
+      minutes, hours = metrics_window_raw(params)
+      rows = ::Wurk::Web::Enterprise::Historical.top(minutes: minutes, hours: hours, class_filter: params[:substr])
+      render json: { minutes: hours ? hours * 60 : minutes, hours: hours,
+                     top_jobs: rows.map { |(klass, totals)| ::Wurk::Api::Serializers.metric_row(klass, totals) } }
+    rescue ::ArgumentError, ::Wurk::Metrics::Query::WindowTooWide => e
       render json: { error: e.message }, status: :bad_request
     end
 
@@ -517,12 +525,37 @@ module Wurk
       Integer(match[1]) * HISTORY_WINDOW_UNITS.fetch(match[2].empty? ? 's' : match[2])
     end
 
+    # `?hours=` wins over `?minutes=`; minutes > MAX_MINUTES (480) promote onto
+    # the 10-minute buckets in the Query layer, so the clamp ceiling is the
+    # 30-day equivalent (MAX_HOURS * 60 minutes), not 480. Absent both, the
+    # window defaults to 60 minutes.
     def metrics_window(params)
       pagination = ::Wurk::Api::Pagination
-      minutes = pagination.clamp_int(params[:minutes], 1, ::Wurk::Metrics::Query::MAX_MINUTES, 60) if params[:minutes]
-      hours   = pagination.clamp_int(params[:hours],   1, ::Wurk::Metrics::Query::MAX_HOURS,   24) if params[:hours]
-      minutes ||= 60 if hours.nil?
-      [minutes, hours]
+      max_hours = ::Wurk::Metrics::Query::MAX_HOURS
+      if params[:hours]
+        [nil, pagination.clamp_int(params[:hours], 1, max_hours, 24)]
+      else
+        [pagination.clamp_int(params[:minutes], 1, max_hours * 60, 60), nil]
+      end
+    end
+
+    # #metrics variant: `?minutes=` goes through raw so a window past the
+    # 30-day ceiling (MAX_HOURS * 60) reaches the Query layer and raises
+    # WindowTooWide — the endpoint answers 400 rather than silently serving
+    # a shorter window than the SPA's label claims. Unparseable values fall
+    # back to the 60-minute default; `?hours=` is clamped as above.
+    def metrics_window_raw(params)
+      pagination = ::Wurk::Api::Pagination
+      max_hours = ::Wurk::Metrics::Query::MAX_HOURS
+      if params[:hours]
+        [nil, pagination.clamp_int(params[:hours], 1, max_hours, 24)]
+      elsif params[:minutes]
+        [Integer(params[:minutes], 10), nil]
+      else
+        [60, nil]
+      end
+    rescue ::ArgumentError, ::TypeError
+      [60, nil]
     end
   end
 end

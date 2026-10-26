@@ -464,11 +464,60 @@ class ApiEndpointsTest < Wurk::Test::EngineCase
     assert_kind_of Array, payload[:top_jobs]
   end
 
-  def test_metrics_clamps_oversize_window
+  # Past the 30-day ceiling (43200 minutes) the answer is 400, not a
+  # silently clamped window.
+  def test_metrics_rejects_window_past_thirty_days
     get '/wurk/api/metrics?minutes=99999'
 
+    assert_equal 400, last_response.status
+    assert_match(/minutes/, json_body[:error])
+  end
+
+  # The dashboard's 7d/30d tabs: the requested window is served (promoted
+  # onto the 10-minute buckets) and echoed back, not clamped to 8 hours.
+  def test_metrics_serves_seven_and_thirty_day_windows
+    get '/wurk/api/metrics?minutes=10080'
+
     assert_ok
-    assert_equal ::Wurk::Metrics::Query::MAX_MINUTES, json_body[:minutes]
+    assert_equal 10_080, json_body[:minutes]
+
+    get '/wurk/api/metrics?minutes=43200'
+
+    assert_ok
+    assert_equal 43_200, json_body[:minutes]
+  end
+
+  # A non-numeric `?minutes=` is not a client error: the endpoint serves the
+  # 60-minute default (metrics_window_raw's rescue), same as no param at all.
+  def test_metrics_falls_back_to_default_window_on_unparseable_minutes
+    get '/wurk/api/metrics?minutes=abc'
+
+    assert_ok
+    assert_equal 60, json_body[:minutes]
+  end
+
+  # docs/metrics.md promises a non-positive window answers 400, not a 500
+  # from the Query layer's "minutes must be positive" guard.
+  def test_metrics_rejects_non_positive_window
+    get '/wurk/api/metrics?minutes=0'
+
+    assert_equal 400, last_response.status
+    assert_match(/positive/, json_body[:error])
+
+    get '/wurk/api/metrics?minutes=-5'
+
+    assert_equal 400, last_response.status
+    assert_match(/positive/, json_body[:error])
+  end
+
+  # `?hours=` is the window parameter the SPA's Metrics page sends; the
+  # response echoes the requested hours and their minutes equivalent.
+  def test_metrics_serves_hours_window
+    get '/wurk/api/metrics?hours=24'
+
+    assert_ok
+    assert_equal 1440, json_body[:minutes]
+    assert_equal 24, json_body[:hours]
   end
 
   def test_history_returns_recharts_series

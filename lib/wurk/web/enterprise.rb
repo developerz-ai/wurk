@@ -198,9 +198,10 @@ module Wurk
         end
 
         # Global top-N rollup. Wraps `Query.top_jobs` and keeps the wire
-        # shape of `[[class_name, {p:, f:, ms:}], ...]`.
-        def top(minutes: 60, class_filter: nil)
-          Wurk::Metrics::Query.top_jobs(minutes: minutes, class_filter: class_filter)
+        # shape of `[[class_name, {p:, f:, ms:}], ...]`. `hours:` reads the
+        # 10-minute buckets instead of the per-minute ones.
+        def top(minutes: 60, hours: nil, class_filter: nil)
+          Wurk::Metrics::Query.top_jobs(minutes: minutes, hours: hours, class_filter: class_filter)
         end
 
         # Cluster-total time-series for the dashboard charts. `bucket` is

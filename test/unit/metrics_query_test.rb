@@ -52,13 +52,36 @@ class MetricsQueryTest < Wurk::Test::UnitCase
 
   def test_top_jobs_caps_minutes
     assert_raises(Wurk::Metrics::Query::WindowTooWide) do
-      Wurk::Metrics::Query.top_jobs(minutes: 481)
+      Wurk::Metrics::Query.top_jobs(minutes: 43_201)
+    end
+  end
+
+  # MAX_MINUTES stays the per-minute path: 480 minutes reads minute buckets.
+  def test_top_jobs_minutes_at_the_per_minute_ceiling_stays_minutely
+    Wurk::Metrics::History.record(@klass_a, 5, success: true, at: @now)
+    Wurk::Metrics::History.flush
+
+    rows = Wurk::Metrics::Query.top_jobs(minutes: 480, now: @now)
+
+    assert_includes rows.map(&:first), @klass_a
+  end
+
+  # Past 480 minutes the window promotes onto the 10-minute buckets instead
+  # of raising — this is what serves the dashboard's 7d/30d tabs.
+  def test_top_jobs_minutes_past_max_minutes_promotes_to_ten_minute_buckets
+    Wurk::Metrics::History.record(@klass_a, 5, success: true, at: @now)
+    Wurk::Metrics::History.flush
+
+    [481, 10_080].each do |minutes|
+      rows = Wurk::Metrics::Query.top_jobs(minutes: minutes, now: @now)
+
+      assert_includes rows.map(&:first), @klass_a, "minutes: #{minutes}"
     end
   end
 
   def test_top_jobs_caps_hours
     assert_raises(Wurk::Metrics::Query::WindowTooWide) do
-      Wurk::Metrics::Query.top_jobs(hours: 73)
+      Wurk::Metrics::Query.top_jobs(hours: 721)
     end
   end
 
@@ -86,15 +109,17 @@ class MetricsQueryTest < Wurk::Test::UnitCase
     end
   end
 
+  # Past 480 minutes, for_job promotes onto the 10-minute buckets too; the
+  # 30-day ceiling (43200 minutes) is the outer bound.
   def test_for_job_caps_minutes
     assert_raises(Wurk::Metrics::Query::WindowTooWide) do
-      Wurk::Metrics::Query.for_job('X', minutes: 999)
+      Wurk::Metrics::Query.for_job('X', minutes: 43_201)
     end
   end
 
   def test_for_job_caps_hours
     assert_raises(Wurk::Metrics::Query::WindowTooWide) do
-      Wurk::Metrics::Query.for_job('X', hours: 999)
+      Wurk::Metrics::Query.for_job('X', hours: 721)
     end
   end
 
@@ -153,8 +178,8 @@ class MetricsQueryTest < Wurk::Test::UnitCase
 
   # Regression: `hours:` used to be re-validated against MAX_MINUTES after the
   # ×60 conversion, so anything above 8h raised WindowTooWide and the
-  # documented 72h ceiling was unreachable. The minute buckets it reads live
-  # for MID_TERM (3 days), so the whole range is backed by data.
+  # documented ceiling was unreachable. The 10-minute buckets it reads live
+  # for MID_TERM (30 days), so the whole range is backed by data.
   def test_top_jobs_hours_reaches_the_documented_ceiling
     Wurk::Metrics::History.record(@klass_a, 5, success: true, at: @now)
     Wurk::Metrics::History.flush
