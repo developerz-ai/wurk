@@ -777,8 +777,11 @@ Do this days ahead, not on the night.
       interval raises `ArgumentError` in Wurk instead of silently meaning "now".
 - [ ] Nothing branches on `Sidekiq.pro?` / `Sidekiq.ent?` (both `false`) or reads
       `Sidekiq::Enterprise::VERSION` (undefined).
-- [ ] No custom fetcher subclassing `Sidekiq::BasicFetch`, and no Sidekiq Web
-      extension that depends on the ERB helpers (`Sidekiq::WebHelpers`).
+- [ ] Any custom fetcher subclassing `Sidekiq::BasicFetch` reviewed against the
+      [behaviour table and custom-fetcher contract below](#behaviour-differences-to-know-before-cutover),
+      including shutdown recovery for unfinished jobs; the alias is Reliable, not
+      stock BRPOP BasicFetch.
+- [ ] No Sidekiq Web extension that depends on the ERB helpers (`Sidekiq::WebHelpers`).
 
 **Operations**
 
@@ -940,6 +943,7 @@ production. Each one links to its full rationale in
 | Difference | What you see | What to do |
 |---|---|---|
 | Reliable fetch is always on, and recovered or requeued jobs go to the **front** of their queue (Pro: the back) | A job interrupted by a crash or deploy runs before the backlog | Nothing |
+| Custom `Sidekiq::BasicFetch` subclasses inherit `Wurk::Fetcher::Reliable`, not stock BRPOP BasicFetch | Inherited shutdown `bulk_requeue` requires the payload in Reliable's expected private list; a BRPOP fetch or different ownership scheme can silently skip requeue | Implement recovery for your fetcher's ownership model; see the custom-fetcher contract below |
 | The ACK rides the next fetch | A hard kill (`SIGKILL`, OOM) can re-run a job that had just finished | Keep jobs idempotent, as at-least-once already requires |
 | Paused queues are read from a 2s cache | A pause takes up to 2s to stop fetching | Nothing |
 | Limiter reschedule cap goes to the dead set, tagged `rate_limited`, instead of the retry cycle; limiter `ttl` below 24h is raised to 24h | Over-limit jobs land in **Dead** after `reschedule` attempts | Alert on dead-set growth; retry from the dashboard |
@@ -952,6 +956,32 @@ production. Each one links to its full rationale in
 | `SortedEntry#reschedule` returns nil for a job that is already gone | No resurrection of a promoted or deleted job | Nothing |
 | A scheduled job's `expires_in` counts from its scheduled time | Follows the spec's worked example | Nothing |
 | `Sidekiq.pro?` / `.ent?` are false; `Sidekiq::Enterprise::VERSION` and the ERB Web internals don't exist | Code gated on them takes the OSS branch | Remove the gates |
+
+**Custom-fetcher contract.** `Sidekiq::BasicFetch` is an alias for
+`Wurk::Fetcher::Reliable`. On shutdown timeout, Manager passes unfinished units of
+work to `bulk_requeue(inprogress)` before killing their processor threads. The
+inherited implementation flushes pending ACKs, derives Reliable's expected private
+list from each unit's `queue`, and attempts to `LREM` its raw `job` payload there.
+It only `RPUSH`es the payload to the public queue if `LREM` removed it. This ownership
+guard prevents duplicate recovery; it is **not** a generic RPUSH fallback. A custom
+BRPOP fetch leaves no private copy, and a fetcher using a different private list
+leaves no copy in the expected list: the inherited method can silently skip requeue.
+Implement `bulk_requeue` and unit-of-work ACK/requeue semantics for your own ownership
+model rather than inheriting Reliable's recovery blindly. Reliable's unit of work
+also assumes its own private copy and fetcher.
+
+The plug-in contract is documented in
+[Sidekiq OSS §15](target/sidekiq-free.md#15-sidekiqbasicfetch):
+
+- Fetcher: `initialize(capsule)`, `retrieve_work`, `bulk_requeue(inprogress)`, and
+  `terminate`. `retrieve_work` returns a unit of work or `nil`; block or back off
+  when no work is available rather than busy-spinning.
+- Optional: `flush_pending_acks` (called only when supported). `queues_cmd` is an
+  implementation detail, **not** a plug-in requirement.
+- Unit of work: `queue` is the public Redis key (`queue:<name>`), `job` is the raw
+  JSON string, and `queue_name` is the unprefixed name. Provide `acknowledge` and
+  `requeue` with ownership-aware semantics consistent with your fetcher and its
+  shutdown recovery.
 
 ---
 
