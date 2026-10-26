@@ -46,6 +46,89 @@ class CapsuleTest < Wurk::Test::UnitCase
     assert_same @capsule, instance.config
   end
 
+  # --- server_middleware_missing? ----------------------------------------
+
+  # The snapshot a capsule runs is the copy `server_middleware` memoized. A
+  # middleware registered on the Configuration after that copy was taken can
+  # never reach the capsule — which is what Wurk::Encryption.enable refuses
+  # on.
+  def test_server_middleware_missing_is_false_before_the_chain_is_snapshotted
+    refute @capsule.server_middleware_missing?(ProbeMiddleware)
+    assert_nil @capsule.instance_variable_get(:@server_chain),
+               'the predicate must not materialize the chain'
+  end
+
+  def test_server_middleware_missing_is_true_for_a_snapshot_without_the_class
+    @capsule.server_middleware
+
+    assert @capsule.server_middleware_missing?(ProbeMiddleware)
+  end
+
+  def test_server_middleware_missing_is_false_for_a_snapshot_carrying_the_class
+    @config.server_middleware.add(ProbeMiddleware)
+    @capsule.server_middleware
+
+    refute @capsule.server_middleware_missing?(ProbeMiddleware)
+  end
+
+  # --- preparation: the chain a worker runs ------------------------------
+
+  def test_a_capsule_is_not_prepared_until_it_is_prepared_to_run_jobs
+    refute_predicate @capsule, :prepared?
+
+    @capsule.prepare_shared!
+
+    assert_predicate @capsule, :prepared?
+  end
+
+  # A copy taken before the Configuration's chain grew a middleware would
+  # silently drop it, so a capsule that is about to run jobs takes what the
+  # Configuration gained since.
+  def test_prepare_shared_adds_what_the_configuration_gained
+    @capsule.server_middleware
+    @config.server_middleware.add(ProbeMiddleware)
+
+    @capsule.prepare_shared!
+
+    assert @capsule.server_middleware.exists?(ProbeMiddleware)
+  end
+
+  # What the host added to the capsule's own chain stays: the copy is the
+  # Configuration's chain plus the host's additions, never the other way
+  # round.
+  def test_prepare_shared_keeps_what_the_host_added_to_the_chain
+    @capsule.server_middleware { |chain| chain.add(ProbeMiddleware) }
+
+    @capsule.prepare_shared!
+
+    assert @capsule.server_middleware.exists?(ProbeMiddleware)
+  end
+
+  # ...and keeps the copy it already holds when they agree: the entries are
+  # allocated once in the swarm parent and inherited copy-on-write by every
+  # child.
+  def test_prepare_shared_keeps_the_chain_it_already_holds
+    @capsule.server_middleware
+    before = @capsule.server_middleware
+
+    @capsule.prepare_shared!
+
+    assert_same before, @capsule.server_middleware
+  end
+
+  # A frozen capsule keeps the chain it holds — its chain is final by then,
+  # and a second boot must not write to a frozen object.
+  def test_prepare_shared_keeps_the_chain_of_a_frozen_capsule
+    @capsule.prepare_shared!
+    @capsule.freeze
+    @config.server_middleware.add(ProbeMiddleware)
+
+    @capsule.prepare_shared!
+
+    refute @capsule.server_middleware.exists?(ProbeMiddleware),
+           'a frozen capsule keeps the chain it holds'
+  end
+
   # --- defaults ----------------------------------------------------------
 
   def test_default_name_is_string
