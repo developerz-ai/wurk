@@ -605,7 +605,7 @@ jobs:
         if: env.RUN == 'true'
         run: bun run lint
         working-directory: frontend
-      - name: vitest
+      - name: vitest (with coverage gate)
         if: env.RUN == 'true'
-        run: bun run test
+        run: bun run test:coverage
         working-directory: frontend

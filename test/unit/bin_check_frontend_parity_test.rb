@@ -1,6 +1,8 @@
 # frozen_string_literal: true
 
 require 'minitest/autorun'
+require 'json'
+require 'yaml'
 
 # bin/check's frontend stage exists to mirror test.yml's `frontend (vitest)`
 # job, and the header of bin/check promises that a green local run is "the
@@ -75,6 +77,58 @@ class BinCheckFrontendParityTest < Minitest::Test
                  "bin/check's frontend stage must run the same bun commands, in the same order, " \
                  "as test.yml's `frontend (vitest)` job — otherwise a green bin/check is not the " \
                  'answer the PR will get'
+  end
+
+  def test_coverage_command_is_required_even_if_both_sides_drift
+    assert_equal ['bun install --frozen-lockfile', 'bun run typecheck', 'bun run lint', 'bun run test:coverage'],
+                 ci_bun_commands
+  end
+
+  def test_frontend_job_keeps_its_run_expression_and_per_step_guards
+    job = YAML.safe_load(File.read(WORKFLOW)).fetch('jobs').fetch('frontend')
+
+    assert_equal 'frontend (vitest)', job.fetch('name')
+    refute job.key?('if'), 'required frontend job must report even for filtered changes'
+    assert_equal "${{ needs.detect.outputs.dup != 'true' && (github.event_name != 'pull_request' || needs.detect.outputs.frontend == 'true') }}",
+                 job.fetch('env').fetch('RUN')
+    steps = job.fetch('steps')
+
+    refute_empty steps
+    steps.each do |step|
+      assert_equal "env.RUN == 'true'", step.fetch('if'), step.inspect
+      assert_equal 'frontend', step.fetch('working-directory') if step.fetch('run', '').start_with?('bun ')
+    end
+  end
+
+  def test_coverage_script_and_provider_versions_are_pinned_together
+    package = JSON.parse(File.read(File.join(ROOT, 'frontend/package.json')))
+
+    assert_equal 'vitest run', package.fetch('scripts').fetch('test')
+    assert_equal 'vitest run --coverage', package.fetch('scripts').fetch('test:coverage')
+    lock = File.read(File.join(ROOT, 'frontend/bun.lock'))
+    workspace = lock.split('"packages":', 2).first
+    %w[vitest @vitest/coverage-v8].each do |name|
+      assert_equal '5.0.5', package.fetch('devDependencies').fetch(name)
+      assert_match(/"#{Regexp.escape(name)}":\s*"5\.0\.5"/, workspace)
+      assert_match(/"#{Regexp.escape(name)}":\s*\["#{Regexp.escape(name)}@5\.0\.5"/, lock)
+    end
+  end
+
+  def test_v8_coverage_counts_all_source_with_global_floors
+    config = File.read(File.join(ROOT, 'frontend/vitest.config.ts'))
+    coverage = config[/coverage:\s*\{(.*?)\n    \},/m, 1]
+
+    refute_nil coverage, 'Vitest must configure coverage'
+    assert_match(/provider:\s*'v8'/, coverage)
+    assert_match(/include:\s*\['src\/\*\*\/\*\.\{ts,tsx\}'\]/, coverage)
+    assert_match(/exclude:\s*\['src\/\*\*\/\*\.\{test,spec\}\.\{ts,tsx\}', 'src\/test-setup\.ts'\]/, coverage)
+    thresholds = coverage[/thresholds:\s*\{([^}]+)\}/, 1]
+
+    refute_nil thresholds, 'coverage must enforce thresholds'
+    assert_match(/perFile:\s*false\s*,/, thresholds)
+    assert_match(/lines:\s*83\s*,/, thresholds)
+    assert_match(/branches:\s*66\s*,/, thresholds)
+    refute_match(/(?:enabled|reportOnFailure):\s*false|ignoreEmptyLines:\s*true/, coverage)
   end
 
   def test_both_sides_run_in_the_frontend_directory

@@ -18,6 +18,17 @@ export default defineConfig({
     globals: true,
     setupFiles: ['./src/test-setup.ts'],
     include: ['src/**/*.test.{ts,tsx}'],
+    coverage: {
+      provider: 'v8',
+      // An explicit include also counts unimported source files in Vitest 5.
+      include: ['src/**/*.{ts,tsx}'],
+      exclude: ['src/**/*.{test,spec}.{ts,tsx}', 'src/test-setup.ts'],
+      thresholds: {
+        perFile: false,
+        lines: 83,
+        branches: 66,
+      },
+    },
     // Fast + parallel: files run concurrently across a worker-thread pool and
     // each file is isolated (fresh module registry + DOM) so component/route
     // tests never leak signals or the document between suites.
