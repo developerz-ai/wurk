@@ -774,14 +774,26 @@ module Wurk
     # --- Configure blocks (Sidekiq.configure_server / _client) -----------
 
     def configure_server(&block)
-      yield self if block && server?
+      return unless block
+      return yield self if server?
+      return if @configure_server_skip_warned
+
+      @configure_server_skip_warned = true
+      logger.warn { 'configure_server block skipped: server? is false' }
+      nil
     end
 
     # A web process that also boots the swarm (Wurk::RailsBoot) is flagged
     # server, yet every enqueue it makes from a request is client work, so
     # `client_in_server` lets its configure_client blocks run too.
     def configure_client(&block)
-      yield self if block && (!server? || @options[:client_in_server])
+      return unless block
+      return yield self if !server? || @options[:client_in_server]
+      return if @configure_client_skip_warned
+
+      @configure_client_skip_warned = true
+      logger.warn { 'configure_client block skipped: server? is true and client_in_server is false or nil' }
+      nil
     end
 
     def server?
