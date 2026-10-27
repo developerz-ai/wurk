@@ -92,6 +92,10 @@ Sidekiq.configure_client { |config| config.redis = { url: ENV["REDIS_URL"] } }
 - `configure_server` runs its block only when `config[:server] == true`;
   `configure_client` runs when the process is not a server **or**
   `config[:client_in_server]` is set.
+- A block the gate skips is never yielded and never replayed. The skip logs one
+  WARN naming the gate and the condition that failed, once per gate per
+  configuration instance; further skips of the same gate stay quiet, and a block
+  the gate allows logs nothing.
 - Server mode is entered **before** initializers load — by the
   `wurk.server_mode` railtie initializer in a Rails host, and by
   `Wurk.enter_server_mode` in `Wurk::CLI#run` / `#run_swarm` before the app is

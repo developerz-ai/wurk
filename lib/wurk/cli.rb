@@ -138,8 +138,10 @@ module Wurk
       # Mark server mode BEFORE the app loads so `configure_server` blocks in
       # the required initializer actually fire (they gate on `config.server?`).
       # Matches Sidekiq, which sets `Sidekiq.server = true` before requiring
-      # the app in its CLI. Skipping this silently drops server middleware,
-      # error handlers, and lifecycle hooks registered via configure_server.
+      # the app in its CLI. Skipping this drops server middleware, error
+      # handlers, and lifecycle hooks registered via configure_server, and each
+      # skip logs one WARN naming the gate (`configure_server` / `server? is
+      # false`).
       enter_server_mode
       boot_application if boot_app
       self_read, self_write = ::IO.pipe

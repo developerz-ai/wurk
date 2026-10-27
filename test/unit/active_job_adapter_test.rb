@@ -1,6 +1,7 @@
 # frozen_string_literal: true
 
 require_relative '../test_helper'
+require 'English'
 require 'active_job'
 require 'wurk/active_job/wrapper'
 require 'active_job/queue_adapters/wurk_adapter'
@@ -19,6 +20,37 @@ class ActiveJobAdapterTest < Wurk::Test::UnitCase
 
   JID_PATTERN = /\A[0-9a-f]{24}\z/
   WRAPPER_CLASS = 'Sidekiq::ActiveJob::Wrapper'
+  LIB = File.expand_path('../../lib', __dir__)
+
+  # A cold process that loads the adapter file exactly as lib/wurk/engine.rb
+  # does at require time — before the railtie has entered server mode — with
+  # the global configuration's logger pointed at a StringIO so the load-time
+  # output can be read back. ARGV[0] == "server" enters server mode first, so
+  # the probe can play the worker process as well as the web one.
+  LOAD_TIME_PROBE = <<~'RUBY'
+    require "wurk"
+    require "stringio"
+
+    config = Wurk.configuration
+    log = StringIO.new
+    config.logger = Logger.new(log)
+    Wurk.enter_server_mode if ARGV[0] == "server"
+
+    # What lib/wurk/engine.rb does at require time.
+    require "active_job/queue_adapters/wurk_adapter"
+
+    at_load = log.string.dup
+    log.truncate(0)
+    log.rewind
+
+    # The host's own initializer: the gate this role skips must still warn.
+    Wurk.configure_server { }
+    Wurk.configure_client { }
+
+    print "AT_LOAD_LOG=#{at_load.inspect}\n"
+    print "QUIET_HOOKS=#{config[:lifecycle_events][:quiet].size}\n"
+    print "HOST_LOG=#{log.string.inspect}\n"
+  RUBY
 
   def setup
     super
@@ -42,6 +74,29 @@ class ActiveJobAdapterTest < Wurk::Test::UnitCase
 
   def test_lookup_resolves_wurk_symbol_to_adapter
     assert_same ActiveJob::QueueAdapters::WurkAdapter, ActiveJob::QueueAdapters.lookup(:wurk)
+  end
+
+  # The adapter registers its :quiet hook on the configuration directly. The
+  # file is loaded eagerly by lib/wurk/engine.rb — before the railtie enters
+  # server mode — so a gated registration (Wurk.configure_client /
+  # Wurk.configure_server) would log the skip WARN and spend the one-time
+  # warning the host's own skipped initializer needs.
+  #
+  # Probed in cold subprocesses: the load-time side effect is process-global
+  # and one-way, so asserting it in-process would leak into sibling suites.
+  # Both process roles are covered — a web process skips the host's
+  # configure_server block, a worker skips its configure_client block.
+  def test_the_adapter_registers_the_quiet_hook_without_consuming_a_skip_warning
+    web, web_status = load_time_probe
+    worker, worker_status = load_time_probe('server')
+
+    assert_equal 0, web_status, "the web-role probe failed:\n#{web}"
+    assert_equal 0, worker_status, "the worker-role probe failed:\n#{worker}"
+    [['web', web, 'configure_server'], ['worker', worker, 'configure_client']].each do |role, out, gate|
+      assert_includes out, 'AT_LOAD_LOG=""', "skip WARN logged at load time (#{role}):\n#{out}"
+      assert_includes out, 'QUIET_HOOKS=1', "no :quiet hook registered (#{role}):\n#{out}"
+      assert_includes out, "#{gate} block skipped", "the host's initializer lost its WARN (#{role}):\n#{out}"
+    end
   end
 
   # --- enqueue: shape & wire-compat --------------------------------------
@@ -169,6 +224,16 @@ class ActiveJobAdapterTest < Wurk::Test::UnitCase
   # --- helpers -----------------------------------------------------------
 
   private
+
+  # Runs LOAD_TIME_PROBE in a cold process and returns its output plus the
+  # exit status. `role` names the process the probe plays.
+  def load_time_probe(role = nil)
+    args = [RbConfig.ruby, *Wurk::Test::SUBPROCESS_COVERAGE, '-I', LIB, '-e', LOAD_TIME_PROBE]
+    args << role if role
+    out = IO.popen(args, err: %i[child out], &:read)
+
+    [out, $CHILD_STATUS.exitstatus]
+  end
 
   def build_job_class(queue)
     klass = Class.new(::ActiveJob::Base) do

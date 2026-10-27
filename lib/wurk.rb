@@ -218,7 +218,8 @@ module Wurk
     # `Sidekiq.server?`) AND the per-config `server?` predicate that gates
     # `configure_server`. Both must be set before the app's initializers run,
     # or `configure_server` blocks (server middleware, error handlers,
-    # lifecycle hooks) are silently skipped. Defaults to the global config; the
+    # lifecycle hooks) are skipped, each skip logging one WARN naming the gate
+    # (`configure_server` / `server? is false`). Defaults to the global config; the
     # CLI passes its own (possibly test-injected) Configuration instance.
     def enter_server_mode(config = configuration)
       @server = true
