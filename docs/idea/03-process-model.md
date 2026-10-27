@@ -12,7 +12,7 @@ This is the same model as Sidekiq Enterprise's swarm, except it's built in and t
 - **concurrency** — threads per process
 - **queues** — ordered list of queue names to consume from
 - **swarm topology** — optional advanced mode where each forked slot has its own queues and concurrency (Wurk extension on top of Ent's flat swarm)
-- **memory_limit** — RSS threshold past which the parent gracefully recycles a child
+- **memory_limit_mb** — RSS recycle threshold in MB (set via `config.memory_limit_mb =` or the `WURK_MAXMEM_MB` / `SIDEKIQ_MAXMEM_MB` env vars; `nil`/`0` disables recycling); the swarm enforces the derived KB threshold `memory_limit_kb`
 - **shutdown_timeout** — seconds to let in-flight jobs finish on SIGTERM
 
 ## Boot ordering (must be exact)
