@@ -164,9 +164,33 @@ Both blocks yield the same global `Wurk::Configuration`; the difference is a
 gate on `config.server?`:
 
 ```ruby
-def configure_server(&block) = yield self if block && server?
-def configure_client(&block) = yield self if block && (!server? || @options[:client_in_server])
+def configure_server
+  return unless block_given?
+  return yield self if server?
+  return if @configure_server_skip_warned
+
+  @configure_server_skip_warned = true
+  logger.warn { 'configure_server block skipped: server? is false' }
+  nil
+end
+
+def configure_client
+  return unless block_given?
+  return yield self if !server? || @options[:client_in_server]
+  return if @configure_client_skip_warned
+
+  @configure_client_skip_warned = true
+  logger.warn { 'configure_client block skipped: server? is true and client_in_server is false or nil' }
+  nil
+end
 ```
+
+A block the gate skips is never yielded, and it is never replayed later — a
+role change does not resurrect it. The skip logs one WARN naming the gate and
+the condition that failed (`server? is false`, or `server? is true and
+client_in_server is false or nil`), once per gate per `Wurk::Configuration`
+instance; further skips of the same gate stay quiet. A call the gate allows
+logs nothing and returns whatever the block returned.
 
 `client_in_server` covers a process that is both server and client: the railtie
 sets it whenever a Rails web process boots the swarm
@@ -202,7 +226,8 @@ Server mode is entered *before* `config/initializers` load — the railtie's
 `wurk.server_mode` initializer calls `Wurk.enter_server_mode`, and the
 standalone CLI does the same before booting the app. That ordering is
 load-bearing: if it were reversed, every `configure_server` block would be
-silently skipped and your server middleware would never register.
+skipped — each skip logging one WARN naming the gate (`configure_server` /
+`server? is false`) — and your server middleware would never register.
 
 Both chain readers accept a block *or* return the chain, so
 `config.server_middleware.add(X)` and `config.server_middleware { |c| c.add X }`

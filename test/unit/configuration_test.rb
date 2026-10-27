@@ -2,6 +2,7 @@
 
 require_relative '../test_helper'
 require 'etc'
+require 'wurk/middleware/i18n'
 
 class ConfigurationTest < Wurk::Test::UnitCase
   parallelize_me!
@@ -1020,6 +1021,233 @@ class ConfigurationTest < Wurk::Test::UnitCase
     @config.configure_client { |c| yielded = c }
 
     assert_same @config, yielded
+  end
+
+  def test_skipped_configure_blocks_warn_once_per_gate_and_instance
+    2.times do
+      config = Wurk::Configuration.new
+      log = StringIO.new
+      config.logger = ::Logger.new(log)
+
+      2.times { assert_nil(config.configure_server { flunk 'skipped server block ran' }) }
+
+      assert_equal 1, log.string.lines.size
+      assert_includes log.string, 'WARN'
+      assert_includes log.string, 'configure_server'
+      assert_includes log.string, 'server? is false'
+      config[:server] = true
+      [nil, false].each do |client_in_server|
+        config[:client_in_server] = client_in_server
+
+        assert_nil(config.configure_client { flunk 'skipped client block ran' })
+      end
+
+      assert_equal 2, log.string.lines.size
+      assert_equal 1, log.string.scan('configure_server').size
+      assert_equal 1, log.string.scan('configure_client').size
+      assert_includes log.string.lines.last, 'WARN'
+      assert_includes log.string.lines.last, 'server? is true'
+      assert_includes log.string.lines.last, 'client_in_server is false or nil'
+    end
+  end
+
+  def test_blockless_configure_calls_are_silent_and_do_not_consume_warnings
+    log = StringIO.new
+    @config.logger = ::Logger.new(log)
+    [false, true].each do |server|
+      @config[:server] = server
+
+      assert_nil @config.configure_server
+      assert_nil @config.configure_client
+    end
+
+    assert_empty log.string
+    @config.configure_client { flunk 'skipped client block ran' }
+    @config[:server] = false
+
+    @config.configure_server { flunk 'skipped server block ran' }
+
+    assert_equal 2, log.string.lines.size
+    assert_includes log.string, 'configure_server'
+    assert_includes log.string, 'configure_client'
+  end
+
+  def test_allowed_configure_blocks_are_silent_and_preserve_return_values
+    log = StringIO.new
+    @config.logger = ::Logger.new(log)
+    result = Object.new
+
+    returned = @config.configure_client do |config|
+      assert_same @config, config
+      result
+    end
+
+    assert_same result, returned
+    @config[:server] = true
+    returned = @config.configure_server do |config|
+      assert_same @config, config
+      result
+    end
+
+    assert_same result, returned
+    @config[:client_in_server] = true
+    returned = @config.configure_client do |config|
+      assert_same @config, config
+      result
+    end
+
+    assert_same result, returned
+    assert_nil(@config.configure_server { nil })
+    returned = @config.configure_client { false }
+
+    refute returned
+    refute_nil returned
+    assert_empty log.string
+  end
+
+  def test_allowed_configure_exceptions_propagate_without_consuming_skip_warnings
+    [[:configure_server, true, nil],
+     [:configure_client, false, nil],
+     [:configure_client, true, :enabled]].each do |gate, server, client_in_server|
+      config = Wurk::Configuration.new(server: server, client_in_server: client_in_server)
+      log = StringIO.new
+      config.logger = ::Logger.new(log)
+      error = StandardError.new('configure block failed')
+
+      raised = assert_raises(StandardError) do
+        config.public_send(gate) do |yielded|
+          assert_same config, yielded
+          raise error
+        end
+      end
+
+      assert_same error, raised
+      assert_empty log.string
+      config[:server] = gate == :configure_client
+      config[:client_in_server] = false
+
+      2.times { assert_nil(config.public_send(gate) { flunk 'skipped block ran' }) }
+
+      assert_equal 1, log.string.lines.size
+      assert_includes log.string, 'WARN'
+      assert_includes log.string, "#{gate} block skipped"
+    end
+  end
+
+  def test_successful_configure_calls_do_not_consume_later_skip_warnings
+    %i[configure_server configure_client].each do |gate|
+      config = Wurk::Configuration.new(server: gate == :configure_server)
+      log = StringIO.new
+      config.logger = ::Logger.new(log)
+
+      assert_same config, config.public_send(gate) { |yielded| yielded }
+      assert_empty log.string
+      config[:server] = !config[:server]
+
+      assert_nil(config.public_send(gate) { flunk 'skipped block ran' })
+      assert_equal 1, log.string.lines.size
+      assert_includes log.string, 'WARN'
+      assert_includes log.string, "#{gate} block skipped"
+    end
+  end
+
+  def test_successful_configure_calls_after_a_skip_are_silent_and_execute_normally
+    %i[configure_server configure_client].each do |gate|
+      config = Wurk::Configuration.new(server: gate == :configure_client)
+      log = StringIO.new
+      config.logger = ::Logger.new(log)
+
+      assert_nil(config.public_send(gate) { flunk 'skipped block ran' })
+      assert_equal 1, log.string.lines.size
+      warning = log.string.dup
+      config[:server] = !config[:server]
+
+      assert_same config, config.public_send(gate) { |yielded| yielded }
+      assert_nil(config.public_send(gate) { nil })
+      returned = config.public_send(gate) { false }
+
+      refute returned
+      refute_nil returned
+      assert_equal warning, log.string
+    end
+  end
+
+  def test_configure_client_accepts_truthy_non_boolean_client_in_server_without_warning
+    log = StringIO.new
+    @config.logger = ::Logger.new(log)
+    @config[:server] = true
+    @config[:client_in_server] = :enabled
+    result = Object.new
+
+    returned = @config.configure_client do |config|
+      assert_same @config, config
+      result
+    end
+
+    assert_same result, returned
+    assert_empty log.string
+  end
+
+  def test_truthy_non_boolean_server_skips_server_blocks_but_allows_client_blocks
+    config = Wurk::Configuration.new(server: :enabled)
+    log = StringIO.new
+    config.logger = ::Logger.new(log)
+
+    refute_predicate config, :server?
+    assert_nil(config.configure_server { flunk 'non-server block ran' })
+    assert_equal 1, log.string.lines.size
+    assert_includes log.string, 'WARN'
+    assert_includes log.string, 'configure_server block skipped: server? is false'
+    log.truncate(0)
+    log.rewind
+    result = Object.new
+    returned = config.configure_client do |yielded|
+      assert_same config, yielded
+      result
+    end
+
+    assert_same result, returned
+    assert_empty log.string
+  end
+
+  def test_skipped_configure_blocks_are_not_replayed_after_role_changes
+    log = StringIO.new
+    @config.logger = ::Logger.new(log)
+
+    @config.configure_server { flunk 'skipped server block replayed' }
+    @config[:server] = true
+
+    assert_nil @config.configure_server
+    assert_equal(:server, @config.configure_server { :server })
+    @config.configure_client { flunk 'skipped client block replayed' }
+    @config[:server] = false
+
+    assert_nil @config.configure_client
+    assert_equal(:client, @config.configure_client { :client })
+    @config.configure_server { flunk 'skipped server block ran after role change' }
+    @config[:server] = true
+
+    @config.configure_client { flunk 'skipped client block ran after role change' }
+
+    assert_equal 2, log.string.lines.size
+  end
+
+  def test_skipped_configure_blocks_warn_after_options_are_frozen
+    [false, true].each do |server|
+      config = Wurk::Configuration.new(server: server)
+      log = StringIO.new
+      config.logger = ::Logger.new(log)
+      config.prepare_for_fork!
+      gate = server ? :configure_client : :configure_server
+
+      assert_predicate config.instance_variable_get(:@options), :frozen?
+      assert_nil config.public_send(gate)
+      2.times { assert_nil(config.public_send(gate) { flunk 'skipped frozen block ran' }) }
+
+      assert_equal 1, log.string.lines.size
+      assert_includes log.string, 'WARN'
+      assert_includes log.string, gate.to_s
+    end
   end
 
   # --- freeze! -----------------------------------------------------------

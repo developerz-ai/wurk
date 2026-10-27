@@ -7,8 +7,10 @@ require 'fileutils'
 # Spawns the REAL exe/wurk binary against real Redis to prove that
 # `Sidekiq.configure_server` blocks fire in a booted worker (#191). Server mode
 # must be entered before the `-r` initializer loads, or the block — and the
-# server middleware / error handlers / lifecycle hooks inside it — is silently
-# dropped. Also asserts `configure_client` does NOT fire in the server.
+# server middleware / error handlers / lifecycle hooks inside it — is dropped,
+# with the skip logging one WARN naming the gate (`configure_server` /
+# `server? is false`). Also asserts `configure_client` does NOT fire in the
+# server.
 class ConfigureServerBootTest < Wurk::Test::UnitCase
   parallelize_me!
 

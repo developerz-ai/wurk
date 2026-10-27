@@ -32,8 +32,14 @@ begin
 
         callback = -> { @@stopping = true } # rubocop:disable Style/ClassVars
 
-        Wurk.configure_client { |config| config.on(:quiet, &callback) }
-        Wurk.configure_server { |config| config.on(:quiet, &callback) }
+        # Registered on the configuration directly, not through
+        # Wurk.configure_client / Wurk.configure_server: one of the two gates
+        # always passes (configure_client while server? is false,
+        # configure_server once it is true), so the hook registered either way.
+        # Going through a gate would spend the one-time skip warning on Wurk's
+        # own internal call and log a spurious WARN — the warning the host's
+        # own skipped initializer needs.
+        Wurk.configuration.on(:quiet, &callback)
 
         # Defer enqueue until the surrounding DB transaction commits so we
         # never push a job whose row hasn't landed. Matches Sidekiq.

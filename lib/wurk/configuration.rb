@@ -792,15 +792,33 @@ module Wurk
 
     # --- Configure blocks (Sidekiq.configure_server / _client) -----------
 
-    def configure_server(&block)
-      yield self if block && server?
+    # The gate is evaluated per call: a skipped block is never yielded and
+    # never replayed, and an allowed one yields the configuration and returns
+    # the block's value. A skip reports itself once per gate per instance —
+    # the flags below decide only whether the skip is reported again, and
+    # they live outside @options so a frozen configuration can still warn.
+    def configure_server
+      return unless block_given?
+      return yield self if server?
+      return if @configure_server_skip_warned
+
+      @configure_server_skip_warned = true
+      logger.warn { 'configure_server block skipped: server? is false' }
+      nil
     end
 
     # A web process that also boots the swarm (Wurk::RailsBoot) is flagged
     # server, yet every enqueue it makes from a request is client work, so
-    # `client_in_server` lets its configure_client blocks run too.
-    def configure_client(&block)
-      yield self if block && (!server? || @options[:client_in_server])
+    # `client_in_server` lets its configure_client blocks run too. Same
+    # one-warning-per-gate contract as configure_server.
+    def configure_client
+      return unless block_given?
+      return yield self if !server? || @options[:client_in_server]
+      return if @configure_client_skip_warned
+
+      @configure_client_skip_warned = true
+      logger.warn { 'configure_client block skipped: server? is true and client_in_server is false or nil' }
+      nil
     end
 
     def server?
