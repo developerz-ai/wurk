@@ -599,10 +599,10 @@ as unknown and verify it in staging before production.
 ## 7. Known incompatibilities — what *not* to expect
 
 Wurk aims for 100% drop-in, but accepted no-ops and aliases do not imply full
-support for every upstream API. Item 1 explains the reliability configuration;
-item 2 identifies unsupported pool-bound multi-shard Web mounts. The remaining
-items cover other migration differences. The complete, maintained list of every place Wurk deliberately behaves
-differently from the spec is
+support for every upstream API. In particular, aliasing Sidekiq's Web classes to
+Wurk's dashboard does not add class-level Redis pool accessors or a pool-bound
+multi-shard mount factory (see item 2). The complete, maintained list of every
+place Wurk deliberately behaves differently from the spec is
 [`docs/idea/parity-divergences.md`](idea/parity-divergences.md); the ones that matter
 on cutover day are summarized in [§9](#behaviour-differences-to-know-before-cutover).
 Hit something on a real migration that isn't listed? **Please open an issue** — real
@@ -619,10 +619,20 @@ migrations are what this guide is checked against.
    promoter that closes it. See [`docs/reliability.md`](reliability.md).
    (`Wurk::Client.reliable_push!` also exists for client-side buffering during a
    Redis outage.)
-2. **`Sidekiq::Pro::Web` aliases the Wurk dashboard, with a limitation** — like
-   `Sidekiq::Web`, it aliases `Wurk::Web`. Pool-bound multi-shard mounts using
-   `.with(redis_pool:)` are **unsupported in Wurk**; the alias does not provide
-   that factory. See [Pro §10.2](target/sidekiq-pro.md#102-multi-shard).
+2. **Web aliases do not support pool assignment or per-mount shards.** Both
+   `Sidekiq::Web` and `Sidekiq::Pro::Web` alias `Wurk::Web`. The class-level
+   `Sidekiq::Web.redis_pool` reader and `Sidekiq::Web.redis_pool=` setter are
+   **unsupported in Wurk**; both raise `NoMethodError`. The dashboard configuration
+   reader is `config.web_redis_pool` on `Wurk::Configuration` (for example,
+   `Wurk.configuration.web_redis_pool`), not `Web::Config`. It is read-only: there
+   is no `web_redis_pool=` setter for assigning an arbitrary pool. To change the
+   dashboard pool's size instead, set `config.web_pool_size = n`; see
+   [Redis connection and pool sizing](configuration.md#redis-connection-and-pool-sizing).
+
+   Pool-bound multi-shard mounts using `.with(redis_pool:)` remain **unsupported
+   in Wurk**; the alias does not provide that factory. Neither reading
+   `config.web_redis_pool` nor setting `config.web_pool_size` selects a per-mount
+   shard. See [Pro §10.2](target/sidekiq-pro.md#102-multi-shard).
 3. **`config.workers` / `config.shutdown_timeout` are not Configuration setters.**
    Use `config.concurrency` for threads-per-process and `config[:timeout]` for the
    shutdown grace; process/fork count is governed by `WURK_COUNT` and the swarm

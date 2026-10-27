@@ -1696,3 +1696,66 @@ no Redis key, job-JSON field or Lua script is touched.
 [anchor resolution](../../lib/wurk/middleware/chain.rb#L164-L171),
 [batch middleware's `outer_of`](../../lib/wurk/batch/server_middleware.rb#L44-L65),
 free [§10.1 `Sidekiq::Middleware::Chain` — `add`](../target/sidekiq-free.md#101-sidekiqmiddlewarechain).
+
+## Web pool is configuration-owned; the class-level accessor and pool-bound mounts are unsupported
+
+**Wurk:** `Sidekiq::Web` is an alias of `Wurk::Web` (`lib/wurk/compat.rb:186`),
+and `Sidekiq::Pro::Web` is that same class (`lib/wurk/compat.rb:47`). `Wurk::Web`
+exposes no class-level `redis_pool` reader and no `redis_pool=` setter — both
+raise `NoMethodError` — and no `.with` factory, so
+`mount Sidekiq::Pro::Web.with(redis_pool: POOL)` cannot be expressed. The
+class-level surface is the config/extension surface
+(`lib/wurk/web/config.rb:390-456`); `Wurk::Web`'s own class body is empty
+(`lib/wurk/web.rb:27-28`). The only `redis_pool` under `lib/wurk/web` is
+`Wurk::Web::PoolScope::Handle#redis_pool` (`lib/wurk/web/pool_scope.rb:39-43`),
+an instance method on a duck-type handle that returns
+`Wurk.configuration.web_redis_pool` — not the class-level accessor. The
+dashboard pool is the configuration-owned `config.web_redis_pool` reader
+(`lib/wurk/configuration.rb:312-314`): read-only, with no `web_redis_pool=`
+setter, so Wurk builds the pool itself from the same `config.redis` options the
+worker pools use (`lib/wurk/configuration.rb:1097-1101`) and sizes it with
+`config.web_pool_size` (`lib/wurk/configuration.rb:295-302`, default 5). Every
+dashboard request runs on that pool.
+
+**Spec:** free §25.1 lists `Sidekiq::Web.redis_pool = my_pool` in the entrypoint
+surface and marks it "Upstream Sidekiq only; unsupported in Wurk
+(NoMethodError)", naming `config.web_redis_pool` as the reader and
+`config.web_pool_size` as the sizing knob
+([free §25.1 Entrypoint](../target/sidekiq-free.md#251-entrypoint)). Pro §10.2
+documents `Sidekiq::Pro::Web.with(redis_pool:)` returning a Rack app bound to
+that pool, so one process can monitor several shards
+([Pro §10.2 Multi-shard](../target/sidekiq-pro.md#102-multi-shard)).
+
+**Why:** the dashboard pool is configuration-owned because Wurk keeps three
+disjoint pools per process (main, fetch, web — see
+[Pool sizing](#pool-sizing-three-disjoint-pools-per-process)): the dedicated
+web pool and its short checkout timeout are what keep an API burst or a
+long-lived SSE stream from draining the connections a co-located worker needs
+to fetch and heartbeat (#101). A class-level pool handle would let any gem swap
+that pool out from under every request path, and it is global mutable state
+set before boot: the parent closes its sockets before forking
+(`lib/wurk/swarm.rb:329-333`) and each child drops the inherited pools and
+builds fresh ones (`lib/wurk/swarm/child_boot.rb:125-126`), so a
+caller-assigned pool could not survive the fork boundary — it would be an
+inherited socket, not a fresh pool.
+Per-mount shards would need a pool and a teardown per mount, which the
+engine's single dashboard mount does not have. The cost of the choice is real
+and the migration guide states it: the dashboard cannot be pointed at a
+different Redis than the workers use — only its size is configurable — and a
+shard-per-mount deployment has no Wurk equivalent.
+
+**Anchor:** [`Sidekiq::Web` alias](../../lib/wurk/compat.rb#L186) and
+[`Sidekiq::Pro::Web` alias](../../lib/wurk/compat.rb#L47); the
+[class-level Web surface](../../lib/wurk/web/config.rb#L390-L456) and the
+[empty `Wurk::Web` class body](../../lib/wurk/web.rb#L27-L28);
+[`PoolScope::Handle#redis_pool`](../../lib/wurk/web/pool_scope.rb#L39-L43);
+[`config.web_pool_size`](../../lib/wurk/configuration.rb#L295-L302),
+[`config.web_redis_pool`](../../lib/wurk/configuration.rb#L312-L314) and
+[`build_redis_pool`](../../lib/wurk/configuration.rb#L1097-L1101);
+[parent sockets closed before fork](../../lib/wurk/swarm.rb#L329-L333) and
+[child pools rebuilt after fork](../../lib/wurk/swarm/child_boot.rb#L125-L126);
+free §25.1 ([free §25.1 Entrypoint](../target/sidekiq-free.md#251-entrypoint))
+and Pro §10.2 ([Pro §10.2 Multi-shard](../target/sidekiq-pro.md#102-multi-shard));
+the user-facing statement is [migration guide §7](../migrate-from-sidekiq.md#7-known-incompatibilities--what-not-to-expect);
+the unsupported accessors are pinned by
+[`test_sidekiq_web_class_level_redis_pool_accessors_are_unsupported`](../../test/unit/web_config_test.rb#L531-L542).

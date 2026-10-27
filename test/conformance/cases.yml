@@ -114,7 +114,7 @@
 - id: worker.active-job
   area: worker
   behavior: ActiveJob payloads use the Sidekiq wrapper class.
-  source: docs/target/sidekiq-free.md#L1549-L1557
+  source: docs/target/sidekiq-free.md#L1563-L1571
   promise: >-
     - `class` = `"Sidekiq::ActiveJob::Wrapper"` (pre-8 payloads carry `"ActiveJob::QueueAdapters::SidekiqAdapter::JobWrapper"`; readers accept both)
   oracles: [ClientPushParityTest#test_active_job_payload_uses_the_sidekiq_wrapper_class]
@@ -458,56 +458,56 @@
 - id: gotcha.fetch-fifo
   area: reliable-fetch
   behavior: Immediate jobs are fetched oldest first from the public queue tail; Wurk uses reliable fetch rather than OSS BRPOP.
-  source: docs/target/sidekiq-free.md#L1582
+  source: docs/target/sidekiq-free.md#L1596
   promise: >-
     **Immediate jobs** go to `queue:<name>` (LPUSH, BRPOP fetch — so FIFO from tail).
   oracles: [ReliableFetchParityTest#test_fetch_is_fifo]
 - id: gotcha.reliable-ack-divergence
   area: reliable-fetch
   behavior: Unlike OSS no-op acknowledgement, Wurk's reliable-only fetch removes acknowledged jobs after the next fetch or termination flush.
-  source: docs/target/sidekiq-free.md#L1588
+  source: docs/target/sidekiq-free.md#L1602
   promise: >-
     **`UnitOfWork#acknowledge`** is a no-op in OSS (reliable fetch is Pro-only).
   oracles: [ReliableFetchParityTest#test_acknowledged_job_is_gone_after_the_next_fetch, ReliableFetchParityTest#test_acknowledged_job_is_gone_after_terminate]
 - id: gotcha.shutdown-bulk-requeue
   area: reliable-fetch
   behavior: Shutdown bulk_requeue returns in-progress jobs to their own public queues exactly once at the fetch end, excluding acknowledged jobs after flushing Wurk's deferred ACKs.
-  source: docs/target/sidekiq-free.md#L1589
+  source: docs/target/sidekiq-free.md#L1603
   promise: >-
     **`bulk_requeue` on hard shutdown** uses `RPUSH` (head of queue, FIFO preserved).
   oracles: [ReliableFetchParityTest#test_bulk_requeue_returns_every_in_progress_job_once, ReliableFetchParityTest#test_bulk_requeue_puts_jobs_at_the_fetch_end, ReliableFetchParityTest#test_bulk_requeue_never_resurrects_an_acknowledged_job]
 - id: gotcha.dead-trim-on-kill
   area: dead-set
   behavior: DeadSet kill trims by default but explicit trim false bypasses trimming; separate trim oracles establish age and rank removal semantics.
-  source: docs/target/sidekiq-free.md#L1586
+  source: docs/target/sidekiq-free.md#L1600
   promise: >-
     **Dead set trim** happens on every kill: `ZREMRANGEBYSCORE dead -inf (now - dead_timeout)` + `ZREMRANGEBYRANK dead 0 -dead_max_jobs`.
   oracles: [DataApiParityTest#test_dead_set_kill_trims_unless_told_not_to, DataApiParityTest#test_dead_set_trim_by_age, DataApiParityTest#test_dead_set_trim_by_max_jobs_matches_zremrangebyrank_0_minus_max]
 - id: gotcha.stats-heartbeat-busy-count
   area: data-api
   behavior: Stats workers_size reads the sum of process heartbeat busy fields, not the number of processes.
-  source: docs/target/sidekiq-free.md#L1591
+  source: docs/target/sidekiq-free.md#L1605
   promise: >-
     **`workers` count** = sum of `busy` HASH field across processes
   oracles: [DataApiParityTest#test_stats_reads_counters_set_sizes_and_slow_aggregates]
 - id: gotcha.work-set-heartbeat-busy-count
   area: data-api
   behavior: WorkSet size reads the sum of process heartbeat busy fields rather than the work-hash entry count.
-  source: docs/target/sidekiq-free.md#L1591
+  source: docs/target/sidekiq-free.md#L1605
   promise: >-
     **`workers` count** = sum of `busy` HASH field across processes
   oracles: [DataApiParityTest#test_work_set_size_sums_busy_and_find_work]
 - id: gotcha.queue-pause-divergence
   area: data-api
   behavior: Unlike OSS always-false paused?, Wurk supports Pro pausing; pause and unpause update the paused set and paused? reflects membership.
-  source: docs/target/sidekiq-free.md#L1592
+  source: docs/target/sidekiq-free.md#L1606
   promise: >-
     **`paused` set** is read but never written in OSS — `Queue#paused?` always returns `false`.
   oracles: [DataApiParityTest#test_queue_pause_and_unpause_use_the_paused_set]
 - id: gotcha.heartbeat-work-hash-refresh
   area: heartbeat
   behavior: Each heartbeat clears the identity work hash with UNLINK and repopulates it with current work.
-  source: docs/target/sidekiq-free.md#L1594
+  source: docs/target/sidekiq-free.md#L1608
   promise: >-
     **Heartbeat clears `<identity>:work`** on each beat: `UNLINK` + repopulate.
   reason: DataApiParityTest seeds work hashes directly in Redis and tests readers; it never invokes the heartbeat writer or observes clearing and repopulation across beats.
@@ -515,7 +515,7 @@
 - id: gotcha.process-cleanup
   area: data-api
   behavior: ProcessSet cleanup prunes identities without heartbeat info and rate-limits subsequent cleanup using process_cleanup with a TTL of at most 60 seconds.
-  source: docs/target/sidekiq-free.md#L1595
+  source: docs/target/sidekiq-free.md#L1609
   promise: >-
     **Process cleanup** in `ProcessSet#cleanup`: rate-limited via `SET process_cleanup "1" NX EX 60`. Prunes identities whose `info` field is gone (TTL expired).
   oracles: [DataApiParityTest#test_process_set_cleanup_prunes_dead_identities_once_a_minute]
@@ -922,7 +922,7 @@
   promise: >-
     def self.pro?        # true if Sidekiq::Pro defined
   reason: >-
-    Intentional divergence per docs/target/sidekiq-free.md#L1617: Wurk ships Pro features
+    Intentional divergence per docs/target/sidekiq-free.md#L1631: Wurk ships Pro features
     in free OSS and returns false to avoid third-party paid-only branches.
     CompatAliasesTest#test_pro_predicate_false (test/unit/compat_aliases_test.rb)
     covers the false return, not the upstream namespace-presence promise; this case
@@ -935,7 +935,7 @@
   promise: >-
     def self.ent?        # true if Sidekiq::Enterprise defined
   reason: >-
-    Intentional divergence per docs/target/sidekiq-free.md#L1617: Wurk ships Enterprise
+    Intentional divergence per docs/target/sidekiq-free.md#L1631: Wurk ships Enterprise
     features in free OSS and returns false to avoid third-party paid-only branches.
     CompatAliasesTest#test_ent_predicate_false (test/unit/compat_aliases_test.rb)
     covers the false return, not the upstream namespace-presence promise; this case
@@ -1691,7 +1691,7 @@
 - id: logger.inheritance
   area: logging
   behavior: Sidekiq::Logger inherits from Ruby Logger.
-  source: docs/target/sidekiq-free.md#L1562
+  source: docs/target/sidekiq-free.md#L1576
   promise: >-
     `Sidekiq::Logger` — `Logger` subclass.
   reason: No parity oracle asserts Sidekiq::Logger ancestry.
@@ -1699,7 +1699,7 @@
 - id: logger.default-level
   area: logging
   behavior: Sidekiq::Logger defaults to INFO level.
-  source: docs/target/sidekiq-free.md#L1562
+  source: docs/target/sidekiq-free.md#L1576
   promise: >-
     Default level INFO.
   reason: No parity oracle checks the level of a newly constructed Sidekiq::Logger.
@@ -1707,7 +1707,7 @@
 - id: logger.pretty-tty
   area: logging
   behavior: Pretty is the default formatter for TTY logging.
-  source: docs/target/sidekiq-free.md#L1563
+  source: docs/target/sidekiq-free.md#L1577
   promise: >-
     - `Sidekiq::Logger::Formatters::Pretty` (TTY default)
   reason: No parity oracle observes default formatter selection with a TTY log destination.
@@ -1715,7 +1715,7 @@
 - id: logger.dyno-formatter
   area: logging
   behavior: WithoutTimestamp is selected when DYNO is set.
-  source: docs/target/sidekiq-free.md#L1564
+  source: docs/target/sidekiq-free.md#L1578
   promise: >-
     - `Sidekiq::Logger::Formatters::WithoutTimestamp` (when `ENV["DYNO"]` set)
   reason: No isolated parity oracle sets DYNO and checks formatter selection.
@@ -1723,7 +1723,7 @@
 - id: logger.json-opt-in
   area: logging
   behavior: The JSON formatter can be explicitly selected.
-  source: docs/target/sidekiq-free.md#L1565
+  source: docs/target/sidekiq-free.md#L1579
   promise: >-
     - `Sidekiq::Logger::Formatters::JSON` (opt-in)
   reason: No parity oracle selects the JSON formatter and parses its emitted log record.
@@ -1731,7 +1731,7 @@
 - id: logger.context-with
   area: logging
   behavior: Context.with exposes the supplied logging context within its block.
-  source: docs/target/sidekiq-free.md#L1567
+  source: docs/target/sidekiq-free.md#L1581
   promise: >-
     `Sidekiq::Context.with(hash) { ... }`
   reason: No parity oracle checks the logging context visible inside Context.with.
@@ -1739,7 +1739,7 @@
 - id: logger.context-add
   area: logging
   behavior: Context.add adds a key and value to logging context.
-  source: docs/target/sidekiq-free.md#L1567
+  source: docs/target/sidekiq-free.md#L1581
   promise: >-
     `Sidekiq::Context.add(k, v)`
   reason: No parity oracle calls Context.add and observes the added logging context value.
@@ -1747,7 +1747,7 @@
 - id: logger.context-thread-local
   area: logging
   behavior: Logging context is thread-local in Thread.current[:sidekiq_context].
-  source: docs/target/sidekiq-free.md#L1567
+  source: docs/target/sidekiq-free.md#L1581
   promise: >-
     Thread-local logging context (`Thread.current[:sidekiq_context]`).
   reason: No parity oracle compares logging context in two threads to prove isolation at the documented thread-local key.

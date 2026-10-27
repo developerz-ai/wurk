@@ -522,6 +522,25 @@ class WebConfigTest < Wurk::Test::UnitCase
     assert_includes paths, 'expiry'
   end
 
+  # The class-level `Sidekiq::Web.redis_pool` reader and `redis_pool=` setter
+  # are unsupported in Wurk — both raise NoMethodError
+  # (docs/target/sidekiq-free.md §25.1, docs/migrate-from-sidekiq.md §7).
+  # Pinned so adding either accessor breaks this test: the documented
+  # alternative is `config.web_redis_pool` / `config.web_pool_size` on
+  # Wurk::Configuration, not a Web class-level pool handle.
+  def test_sidekiq_web_class_level_redis_pool_accessors_are_unsupported
+    assert_same Wurk::Web, Sidekiq::Web
+
+    refute_respond_to Sidekiq::Web, :redis_pool
+    refute_respond_to Sidekiq::Web, :redis_pool=
+
+    reader = assert_raises(NoMethodError) { Sidekiq::Web.redis_pool }
+    setter = assert_raises(NoMethodError) { Sidekiq::Web.redis_pool = Object.new }
+
+    assert_match(/redis_pool/, reader.message)
+    assert_match(/redis_pool/, setter.message)
+  end
+
   # Gems call these straight off `Sidekiq::Web` at boot (upstream class
   # methods); they must be the live config collections, not copies.
   def test_sidekiq_web_locales_views_middlewares_delegate_to_config
