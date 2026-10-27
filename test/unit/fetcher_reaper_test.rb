@@ -646,6 +646,38 @@ class FetcherReaperTest < Wurk::Test::UnitCase
     assert_nil reaper.instance_variable_get(:@thread)
   end
 
+  # A stop landing inside a sweep used to leave the loop working to the end of
+  # the keyspace: stop() bounds its join at TimerLoop::JOIN_TIMEOUT and a
+  # straggler sweep is deliberately left alive (still referenced, so a restart
+  # cannot spawn a second loop alongside it) — but alive must not mean still
+  # sweeping. A sweep that outlasts the bound keeps requeueing orphans and
+  # holding the sweep locks into whatever runs next; in the suite a stray
+  # `wurk-reaper` is exactly the leak ThreadLeakGuard waits out its 2s grace
+  # for and then kills. The CI red that motivated this fix (run 40473764820,
+  # job "compat (ruby 4.0, rails 8.1, valkey)") failed inside `rake test` with
+  # its log admin-gated, so this case pins the mechanism itself, not that
+  # run's recorded failure. stop is therefore honoured at the sweep's
+  # own boundaries: the list already in flight finishes (its LMOVEs stay
+  # applied — at-least-once), the next queue/list/page waits for the next
+  # sweep or the next boot's reclaim.
+  def test_stop_stops_the_sweep_at_the_next_list_boundary
+    key_a = seed_private_list(DEAD_PID, %w[orphan-a], host: 'other-host.example', nonce: SecureRandom.hex(6))
+    key_b = seed_private_list(DEAD_PID, %w[orphan-b], host: 'other-host.example', nonce: SecureRandom.hex(6))
+    age(key_a, 120)
+    age(key_b, 120)
+    reaper = graced_reaper
+    probed = slow_round_trips
+    reaper.start
+    wait_until { probed.call >= 1 } # inside the first orphan's grace check
+    reaper.stop
+
+    refute_predicate reaper, :running?
+    assert_equal 1, llen(key_a) + llen(key_b),
+                 'stop bounds the sweep to the list it had already begun draining'
+  ensure
+    reaper&.stop
+  end
+
   # A short interval lets wait_next time out while @done is still false, so the
   # loop falls through to tick_once (run_loop's `break if done?` ELSE side, plus
   # wait_next's `unless @done` THEN side: it actually waited).
@@ -894,6 +926,30 @@ class FetcherReaperTest < Wurk::Test::UnitCase
         blk.call(proxy)
       end
     end
+  end
+
+  # Delays every round trip the reaper's config makes, wide enough that a stop
+  # issued once the first per-orphan OBJECT IDLETIME probe has begun lands
+  # mid-list deterministically. Returns a callable reporting how many OBJECT
+  # probes have started.
+  def slow_round_trips(delay = 0.3)
+    config = @config
+    real = config.method(:redis)
+    probed = 0
+    reporter = proc { probed }
+    config.define_singleton_method(:redis) do |**kw, &blk|
+      real.call(**kw) do |conn|
+        proxy = Object.new
+        proxy.define_singleton_method(:call) do |*args|
+          probed += 1 if args.first == 'OBJECT'
+          sleep delay
+          conn.call(*args)
+        end
+        proxy.define_singleton_method(:pipelined) { |&b| conn.pipelined(&b) }
+        blk.call(proxy)
+      end
+    end
+    reporter
   end
 
   def graced_reaper

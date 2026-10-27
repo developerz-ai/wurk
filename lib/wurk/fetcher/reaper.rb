@@ -128,7 +128,10 @@ module Wurk
       # this component exists to recover from. A straggler is left running
       # instead — and still referenced, like every other periodic component, so
       # a restart after a timed-out stop can't spawn a second sweep loop
-      # alongside it. Its own tick_once rescues and reports.
+      # alongside it. The sweep honours @done at its queue/list/page
+      # boundaries, so a straggler runs at most one more Redis round trip past
+      # the stop, not the rest of the keyspace. Its own tick_once rescues and
+      # reports.
       def stop
         @mutex.synchronize do
           @done = true
@@ -153,9 +156,21 @@ module Wurk
       # One unguarded sweep over every served queue. Returns the number of
       # jobs reclaimed (re-queued or killed). Public so boot paths and tests
       # can drive a deterministic pass without the cluster lock.
+      #
+      # Honours #stop at each boundary: a stop bounding its join leaves the
+      # sweep a straggler by design, and the straggler finishes the list it is
+      # already draining (its LMOVEs stay applied) but starts nothing new —
+      # otherwise it keeps requeueing orphans and holding the sweep locks
+      # past the stop, into whatever runs next.
       def reclaim!
         owners = live_owners
-        served_queues.sum { |public_q| reclaim_queue(public_q, owners) }
+        reclaimed = 0
+        served_queues.each do |public_q|
+          break if done?
+
+          reclaimed += reclaim_queue(public_q, owners)
+        end
+        reclaimed
       end
 
       # One unguarded full-keyspace sweep: every `queue:*|*` private list, even
@@ -166,6 +181,7 @@ module Wurk
         owners = live_owners
         reclaimed = 0
         each_full_private_list do |key, public_q, host, pid, nonce|
+          break if done?
           next unless orphaned?(key, host, pid, nonce, owners)
 
           reclaimed += drain(key, public_q)
@@ -189,6 +205,7 @@ module Wurk
       def reclaim_queue(public_q, owners)
         reclaimed = 0
         each_private_list(public_q) do |key, host, pid, nonce|
+          break if done?
           next unless orphaned?(key, host, pid, nonce, owners)
 
           reclaimed += drain(key, public_q)
@@ -202,6 +219,8 @@ module Wurk
       def each_private_list(public_q)
         cursor = '0'
         loop do
+          break if done?
+
           cursor, keys = redis(idempotent: true) do |c|
             c.call('SCAN', cursor, 'MATCH', "#{public_q}|*", 'COUNT', SCAN_COUNT)
           end
@@ -220,6 +239,8 @@ module Wurk
       def each_full_private_list
         cursor = '0'
         loop do
+          break if done?
+
           cursor, keys = redis(idempotent: true) do |c|
             c.call('SCAN', cursor, 'MATCH', "#{Keys::QUEUE_PREFIX}*|*", 'COUNT', FULL_SCAN_COUNT)
           end
