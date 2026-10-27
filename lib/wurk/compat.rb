@@ -1,7 +1,10 @@
 # frozen_string_literal: true
 
 # Sidekiq aliases. This is the drop-in contract — every public Wurk::*
-# class is exposed under its Sidekiq::* name. Never break.
+# class is exposed under its Sidekiq::* name except two deliberate
+# exclusions, `Sidekiq::Cron` and `Sidekiq::Status` (#204): those namespaces
+# belong to the third-party sidekiq-cron / sidekiq-status gems, not to
+# Sidekiq itself. Never break the rest.
 #
 # Spec: docs/target/sidekiq-{free,pro,ent}.md.
 
@@ -14,7 +17,14 @@ require_relative 'loader'
 # {Wurk.configure_server}; `Sidekiq::Batch`, `Sidekiq::Limiter`,
 # `Sidekiq::Client`, `Sidekiq::Pro::Web`, `Sidekiq::Enterprise` all resolve to
 # their Wurk implementations. This alias surface is the drop-in contract and is
-# never broken.
+# never broken. Two names are deliberately NOT aliased (#204): `Sidekiq::Cron`
+# and `Sidekiq::Status` — those namespaces belong to the third-party
+# sidekiq-cron / sidekiq-status gems. `sidekiq-cron` owns `Sidekiq::Cron`, and
+# squatting it made the gem's own Poller/Job classes collide at load;
+# `sidekiq-status` opens `module Sidekiq::Status`, which resolves the constant
+# instead of defining it, so the alias would hand the gem {Wurk::Status} to
+# reopen and clobber. The guard comments at `CronParser` and `Status` below
+# carry the full rationale.
 #
 # @example The same code targets Sidekiq or Wurk unchanged
 #   class MyJob
