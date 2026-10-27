@@ -651,9 +651,12 @@ class FetcherReaperTest < Wurk::Test::UnitCase
   # straggler sweep is deliberately left alive (still referenced, so a restart
   # cannot spawn a second loop alongside it) — but alive must not mean still
   # sweeping. A sweep that outlasts the bound keeps requeueing orphans and
-  # holding the sweep locks into whatever runs next; in the suite that is the
-  # stray `wurk-reaper` ThreadLeakGuard kills, rendered as the thread
-  # exception the job log shows. stop is therefore honoured at the sweep's
+  # holding the sweep locks into whatever runs next; in the suite a stray
+  # `wurk-reaper` is exactly the leak ThreadLeakGuard waits out its 2s grace
+  # for and then kills. The CI red that motivated this fix (run 40473764820,
+  # job "compat (ruby 4.0, rails 8.1, valkey)") failed inside `rake test` with
+  # its log admin-gated, so this case pins the mechanism itself, not that
+  # run's recorded failure. stop is therefore honoured at the sweep's
   # own boundaries: the list already in flight finishes (its LMOVEs stay
   # applied — at-least-once), the next queue/list/page waits for the next
   # sweep or the next boot's reclaim.
