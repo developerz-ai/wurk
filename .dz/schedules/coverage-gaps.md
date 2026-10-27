@@ -102,3 +102,15 @@ gh api --paginate "repos/developerz-ai/wurk/issues?state=open" | jq -r '.[] | se
 the same lookup the filing rule in `.dz/briefs/health.md` runs — `gh issue list` truncates at 30
 and cannot paginate. If a returned title equals the ask's title exactly, the ask already exists:
 do not file a second one.
+
+## Rows
+
+The three checks this lane reports against, one row each, mirroring the check names above. A new
+check is a change to this brief, never a row invented at reporting time.
+
+- `ruby-no-test-at-all` — the "No test at all" shape: a `lib/` file no test requires, 0% by
+  `track_files`, dragging the total while never appearing in a test run.
+- `ruby-branch-never-taken` — the "A branch never taken" shape: high line coverage, low branch
+  coverage on the same file — a `rescue` arm, a fallback, a flag only ever at its default.
+- `frontend-contract-error-path` — a contract/error-path gap under `frontend/src/`, filed with
+  the behavioral evidence, test paths and closing assertion the frontend lane requires.
