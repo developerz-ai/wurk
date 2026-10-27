@@ -1376,10 +1376,24 @@ run Sidekiq::Web         # class with self.call(env)
 
 Sidekiq::Web.app_url = "https://myapp.com"
 Sidekiq::Web.assets_path = "/path/to/assets"
-Sidekiq::Web.redis_pool = my_pool
+Sidekiq::Web.redis_pool = my_pool # Upstream Sidekiq only; unsupported in Wurk (NoMethodError)
 Sidekiq::Web.use(Rack::Auth::Basic) { |u,p| ... }
 Sidekiq::Web.configure do |cfg| cfg.register(ext, ...) end
 ```
+
+**Wurk limitation:** The class-level `Sidekiq::Web.redis_pool` reader and
+`Sidekiq::Web.redis_pool=` setter are **unsupported in Wurk**; both raise
+`NoMethodError`. The setter above documents upstream Sidekiq, not supported Wurk
+usage.
+
+For Wurk, `config.web_redis_pool` on `Wurk::Configuration` (for example,
+`Wurk.configuration.web_redis_pool`) is the supported reader for the dedicated
+dashboard pool, not a `Web::Config` option. There is no `web_redis_pool=` setter;
+this reader neither assigns an arbitrary pool nor selects a shard per mount.
+To control the dashboard pool's **size**, set `config.web_pool_size = n`.
+Sizing does not assign an arbitrary pool or enable the unsupported class-level
+accessors. See
+[Redis connection and pool sizing](../configuration.md#redis-connection-and-pool-sizing). See the migration guide for per-mount limitations.
 
 CSRF: same-site requests only (`HTTP_SEC_FETCH_SITE == "same-origin"`); unsafe methods denied → 403. Heartbeat: `HEAD /` calls `LLEN queue:default`.
 
