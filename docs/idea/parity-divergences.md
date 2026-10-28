@@ -55,7 +55,7 @@ and
 
 **Wurk:** `Wurk::Fetcher::Reliable` (BLMOVE-based, private-list-per-process)
 is the sole and default fetcher. `Sidekiq::BasicFetch` is aliased straight to
-it (`lib/wurk/compat.rb:106`).
+it (`lib/wurk/compat.rb:116`).
 
 **Spec:** Free Sidekiq's default `BasicFetch` uses plain `BRPOP` — a job
 popped off the queue and lost mid-execution (crash, `SIGKILL`) is gone.
@@ -70,7 +70,7 @@ depends on BasicFetch's at-most-once gap, so there is no compat reason to
 offer a lossy mode. Third-party gems that special-case `Sidekiq::BasicFetch`
 by class identity still work since the alias resolves to a real class.
 
-**Anchor:** `lib/wurk/compat.rb:106`, `lib/wurk/fetcher/reliable.rb`.
+**Anchor:** `lib/wurk/compat.rb:116`, `lib/wurk/fetcher/reliable.rb`.
 
 ## Concurrent limiter polls instead of using XREAD waiter signalling
 
@@ -1699,8 +1699,8 @@ free [§10.1 `Sidekiq::Middleware::Chain` — `add`](../target/sidekiq-free.md#1
 
 ## Web pool is configuration-owned; the class-level accessor and pool-bound mounts are unsupported
 
-**Wurk:** `Sidekiq::Web` is an alias of `Wurk::Web` (`lib/wurk/compat.rb:186`),
-and `Sidekiq::Pro::Web` is that same class (`lib/wurk/compat.rb:47`). `Wurk::Web`
+**Wurk:** `Sidekiq::Web` is an alias of `Wurk::Web` (`lib/wurk/compat.rb:196`),
+and `Sidekiq::Pro::Web` is that same class (`lib/wurk/compat.rb:57`). `Wurk::Web`
 exposes no class-level `redis_pool` reader and no `redis_pool=` setter — both
 raise `NoMethodError` — and no `.with` factory, so
 `mount Sidekiq::Pro::Web.with(redis_pool: POOL)` cannot be expressed. The
@@ -1744,8 +1744,8 @@ and the migration guide states it: the dashboard cannot be pointed at a
 different Redis than the workers use — only its size is configurable — and a
 shard-per-mount deployment has no Wurk equivalent.
 
-**Anchor:** [`Sidekiq::Web` alias](../../lib/wurk/compat.rb#L186) and
-[`Sidekiq::Pro::Web` alias](../../lib/wurk/compat.rb#L47); the
+**Anchor:** [`Sidekiq::Web` alias](../../lib/wurk/compat.rb#L196) and
+[`Sidekiq::Pro::Web` alias](../../lib/wurk/compat.rb#L57); the
 [class-level Web surface](../../lib/wurk/web/config.rb#L390-L456) and the
 [empty `Wurk::Web` class body](../../lib/wurk/web.rb#L27-L28);
 [`PoolScope::Handle#redis_pool`](../../lib/wurk/web/pool_scope.rb#L39-L43);
