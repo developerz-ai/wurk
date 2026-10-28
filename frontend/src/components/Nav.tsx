@@ -23,9 +23,9 @@ interface NavProps {
 const LINKS = NAV_PANES.map((pane) => ({ ...pane, label: paneLabel(pane) }));
 
 export default function Nav(props: NavProps) {
-  // Tabs registered by third-party gems (sidekiq-cron, sidekiq-unique-jobs, …)
-  // via Sidekiq::Web.register_extension. They link out to the extension's own
-  // path — wurk surfaces the tab but doesn't render the gem's view in the SPA.
+  // Custom tabs navigate within the SPA via /ext/:tab: registered server-rendered
+  // views are embedded natively; bare tabs[]= tabs embed their own paths in an
+  // iframe.
   const meta = useMeta();
   const customTabs = () => meta.data?.custom_tabs ?? [];
   // Live SSE connection state (#29): the status chip previously always read
