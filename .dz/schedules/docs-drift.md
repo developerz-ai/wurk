@@ -38,7 +38,6 @@ own, so this lane never re-reports a claim a gate already covers:
 | `test/unit/llms_txt_test.rb:9` | docs/site/llms.txt: the format and the links it lists |
 | `test/unit/site_code_blocks_test.rb:17` | keyboard reachability of the code snippets on the site |
 | `test/unit/release_doc_claims_test.rb:19` | RELEASE.md's step table against release.yml |
-| `test/unit/contributing_line_refs_test.rb:13` | CONTRIBUTING.md's `bin/check:<line>` references |
 | `test/unit/spec_constants_test.rb:17` | the `Sidekiq::*` constants the specs name |
 
 `RELEASE.md` is release tooling (see *Out of scope*), so the `release_doc_claims_test.rb` row is
@@ -85,7 +84,7 @@ do not file a second one.
 
 ## Rows
 
-The thirteen checks the guard table above already owns, one row each, mirroring that table. A new
+The twelve checks the guard table above already owns, one row each, mirroring that table. A new
 check is a change to this brief, never a row invented at reporting time.
 
 - `readme-third-party-ci-claims` — README claims about a third-party gem's suite running in CI
@@ -111,7 +110,5 @@ check is a change to this brief, never a row invented at reporting time.
 - `release-doc-steps` — RELEASE.md's step table against release.yml
   (`test/unit/release_doc_claims_test.rb:19`): an owned guard, not a reporting surface — this lane
   reports nothing there.
-- `contributing-line-refs` — CONTRIBUTING.md's `bin/check:<line>` references
-  (`test/unit/contributing_line_refs_test.rb:13`).
 - `spec-named-constants` — the `Sidekiq::*` constants the specs name
   (`test/unit/spec_constants_test.rb:17`).
