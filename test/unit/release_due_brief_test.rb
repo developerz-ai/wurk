@@ -766,6 +766,133 @@ class ReleaseDueBriefTest < Minitest::Test
     end
   end
 
+  # --- Release-ask contract (Window/Do rows + "The ask, when due") --------
+  #
+  # These pins cover the FILING half of the brief: which table row files a
+  # `Release <next>` ask, which row must never file one, and the open-title
+  # guard that keeps a second ask from being filed while one is open. Every
+  # assertion matches the brief's CURRENT text — the brief itself is not
+  # edited here, and health_brief_test.rb cross-pins its issues lookup
+  # byte-for-byte.
+
+  # The 'otherwise' row is the ONLY filing row: when no earlier row applies,
+  # the lane files ONE ask titled `Release <next>` listing the window's
+  # commits. Dropping the row, renaming the title, or weakening "one ask"
+  # silently retires the release-ask contract.
+  def test_otherwise_row_files_one_release_next_ask
+    otherwise = parse_table_rows.find { |row| row[:window] == 'otherwise' }
+
+    refute_nil otherwise,
+               'the Window/Do table must keep its catch-all "otherwise" row — ' \
+               'it is the only row that files a release ask'
+
+    assert_includes otherwise[:do], '**Release `<next>`**',
+                    'the otherwise row must file the ask under the `Release <next>` title; ' \
+                    'dropping or renaming that title breaks the title-match guard, which ' \
+                    "dedupes on `^Release|^release:`: #{otherwise[:do].inspect}"
+
+    assert_match(/\bone ask\b/, otherwise[:do],
+                 'the otherwise row must file ONE ask, not several')
+
+    refute_match(/no release ask/, otherwise[:do],
+                 'the "no release ask, ever" verdict belongs to the breaking-change row, ' \
+                 'not to the otherwise row')
+  end
+
+  # The breaking-change row is the standing exception: a major is a
+  # maintainer's call, so the lane files a maintainer issue with NO release
+  # steps — and never a `Release <next>` ask. This test pins that shape
+  # WITHOUT requiring the row to file a release ask.
+  def test_breaking_change_row_files_maintainer_issue_not_a_release_ask
+    breaking = parse_table_rows.find { |row| row[:window].include?('**Breaking**') }
+
+    refute_nil breaking,
+               'the Window/Do table must keep its breaking-change row'
+
+    assert_match(/\Ano release ask, ever/, breaking[:do],
+                 'a breaking change must NEVER produce a release ask: a major is a ' \
+                 "maintainer's decision: #{breaking[:do].inspect}")
+
+    assert_includes breaking[:do], 'file one, for a maintainer, with no release steps',
+                    'the breaking-change row must file a maintainer issue carrying no ' \
+                    'release steps'
+
+    refute_includes breaking[:do], 'Release `<next>`',
+                    'the breaking-change row must not file a `Release <next>` ask — ' \
+                    'that title belongs to the otherwise row only'
+  end
+
+  # The two rows are distinct contracts on the same table: only the
+  # otherwise row may carry the `Release <next>` title.
+  def test_release_next_title_lives_on_the_otherwise_row_alone
+    title_rows = parse_table_rows.select { |row| row[:do].include?('Release `<next>`') }
+
+    assert_equal ['otherwise'], title_rows.map { |row| row[:window] },
+                 'exactly one table row — the otherwise row — may file the ' \
+                 '`Release <next>` ask; the breaking-change row files a maintainer issue instead'
+  end
+
+  # The pre-flight guard dedupes against BOTH open-title lists, and each
+  # listing keeps its own contract: the issues endpoint must exclude pull
+  # requests (`.pull_request == null`, matching what `gh issue list`
+  # returned), the pulls endpoint lists open PRs, and BOTH feed the
+  # `^Release|^release:` title match that skips the ask.
+  def test_title_guard_reads_both_listings_with_the_release_match_exclusion
+    ask = ask_section
+
+    issues_listing = 'gh api --paginate "repos/developerz-ai/wurk/issues?state=open" ' \
+                     "| jq -r '.[] | select(.pull_request == null) | .title'"
+    pulls_listing = 'gh api --paginate "repos/developerz-ai/wurk/pulls?state=open" ' \
+                    "| jq -r '.[].title'"
+
+    assert_includes ask, issues_listing,
+                    'the pre-flight guard must page through every open ISSUE title via ' \
+                    '`gh api --paginate .../issues?state=open` with the ' \
+                    '`.pull_request == null` filter (the /issues route returns PRs too)'
+    assert_includes ask, pulls_listing,
+                    'the pre-flight guard must page through every open PR title via ' \
+                    '`gh api --paginate .../pulls?state=open`'
+
+    match_clause = 'if any title matches `^Release|^release:`, MUST skip the Release ask'
+
+    assert_includes ask, match_clause,
+                    'the title guard must skip the ask when any open title matches ' \
+                    '`^Release|^release:` — dropping the exclusion lets a second ' \
+                    '`Release <next>` ask be filed over an open one'
+
+    issues_idx = ask.index(issues_listing)
+    pulls_idx = ask.index(pulls_listing)
+    match_idx = ask.index(match_clause)
+
+    assert_operator issues_idx, :<, match_idx,
+                    'the issues listing must feed the title match (it must come before ' \
+                    'the `^Release|^release:` clause)'
+    assert_operator pulls_idx, :<, match_idx,
+                    'the pulls listing must feed the title match (it must come before ' \
+                    'the `^Release|^release:` clause)'
+  end
+
+  # The standing prohibition, stated twice: the guard's MUST-skip in the
+  # pre-flight step and the bare rule that closes the ask section. A brief
+  # that loses either half can file duplicate release asks.
+  def test_no_second_ask_rule_is_standing_and_closes_the_ask_section
+    ask = ask_section
+
+    assert_match(/MUST skip the Release ask/, ask,
+                 'the pre-flight guard must MUST-skip the Release ask when an open ' \
+                 'title matches `^Release|^release:`')
+
+    standing = 'Never file a second ask while one titled `Release …` is open.'
+
+    assert_includes ask, standing,
+                    'the ask section must keep its standing prohibition: never file a ' \
+                    'second ask while one titled `Release …` is open'
+
+    assert_equal standing, @text.lines.last.to_s.strip,
+                 'the no-second-ask rule is the brief\'s closing line — the pre-flight ' \
+                 'guard names it "the standing prohibition, last line of this section"'
+  end
+
   private
 
   # Stub `gh` whose Compare `gh api .../compare/<last>...main` call always
@@ -1794,6 +1921,15 @@ class ReleaseDueBriefTest < Minitest::Test
       else
         []
       end
+  end
+
+  # The `## The ask, when due` section through the end of the brief: the
+  # filing steps, the pre-flight title guard, and the closing standing
+  # prohibition.
+  def ask_section
+    lines = @text.lines
+    idx = lines.index { |l| l.strip == '## The ask, when due' }
+    idx ? lines[idx..].join : ''
   end
 
   def unknown_rows_in_table
