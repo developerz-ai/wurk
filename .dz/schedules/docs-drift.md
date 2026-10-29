@@ -82,3 +82,36 @@ gh api --paginate "repos/developerz-ai/wurk/issues?state=open" | jq -r '.[] | se
 the same lookup the filing rule in `.dz/briefs/health.md` runs — `gh issue list` truncates at 30
 and cannot paginate. If a returned title equals the ask's title exactly, the ask already exists:
 do not file a second one.
+
+## Rows
+
+The thirteen checks the guard table above already owns, one row each, mirroring that table. A new
+check is a change to this brief, never a row invented at reporting time.
+
+- `readme-third-party-ci-claims` — README claims about a third-party gem's suite running in CI
+  (`test/unit/readme_claims_test.rb:9`).
+- `docs-links-anchors` — anchors and links between the reference docs
+  (`test/unit/docs_links_test.rb:15`).
+- `docs-env-table-complete` — docs/configuration.md's "Every `ENV` read in `lib/`" claim: the env
+  table staying complete (`test/unit/docs_links_test.rb:140`).
+- `deployment-bun-docker-pin` — docs/deployment.md's `oven/bun` example Dockerfile pin, present and
+  identical to the other pin sites (`test/unit/toolchain_pins_test.rb:13`).
+- `claude-md-claims` — the same claims as the README, in CLAUDE.md
+  (`test/unit/claude_md_claims_test.rb:13`).
+- `forbidden-pitch-claims` — the pitch surfaces: README, docs site, llms.txt, the gem summary
+  (`test/unit/forbidden_claims_test.rb:12`).
+- `cutover-shared-redis-claims` — promises about running Sidekiq and Wurk against one Redis
+  (`test/unit/cutover_claims_test.rb:12`).
+- `wiki-pages-shape` — the docs/wiki/ pages: shape, links, duplication
+  (`test/unit/wiki_pages_test.rb:13`).
+- `llms-txt-format-links` — docs/site/llms.txt: the format and the links it lists
+  (`test/unit/llms_txt_test.rb:9`).
+- `site-code-block-keyboard` — keyboard reachability of the code snippets on the site
+  (`test/unit/site_code_blocks_test.rb:17`).
+- `release-doc-steps` — RELEASE.md's step table against release.yml
+  (`test/unit/release_doc_claims_test.rb:19`): an owned guard, not a reporting surface — this lane
+  reports nothing there.
+- `contributing-line-refs` — CONTRIBUTING.md's `bin/check:<line>` references
+  (`test/unit/contributing_line_refs_test.rb:13`).
+- `spec-named-constants` — the `Sidekiq::*` constants the specs name
+  (`test/unit/spec_constants_test.rb:17`).
