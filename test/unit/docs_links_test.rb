@@ -1,10 +1,11 @@
 # frozen_string_literal: true
 
+require 'fileutils'
 require 'minitest/autorun'
 require 'ripper'
 require 'tmpdir'
 
-# The gate on links between the reference docs in docs/*.md.
+# The gate on links between the reference docs.
 #
 # Headings in these files are numbered (`## 7. What it does not guarantee`), so
 # their GitHub slugs carry the number (`#7-what-it-does-not-guarantee`) while
@@ -13,6 +14,15 @@ require 'tmpdir'
 # scrolls nowhere instead of 404ing. Renumbering the headings would break any
 # external deep link already pointing at the numbered slug, so the links are
 # what gets fixed, and this is what keeps them fixed.
+#
+# The scan covers docs/*.md and the nested trees under docs/idea, docs/target,
+# docs/wiki and docs/site: a broken link in a nested doc breaks exactly as
+# silently as one at the top level, and a tree nobody scans is a tree nobody
+# checks. A relative link resolves against the directory of the document that
+# holds it — `../benchmarks.md` under docs/idea/ is docs/benchmarks.md — and a
+# `#L<n>` anchor names a line in the file it points at, so the range is
+# checked against that file's length. docs/plans is out of scope: a plan is a
+# point-in-time record, not documentation anyone keeps current.
 class DocsLinksTest < Minitest::Test
   # Reads files and touches no Redis or shared state.
   parallelize_me!
@@ -20,11 +30,23 @@ class DocsLinksTest < Minitest::Test
   ROOT = File.expand_path('../..', __dir__)
   DOCS = File.join(ROOT, 'docs')
 
+  # The nested trees scanned alongside docs/*.md.
+  NESTED_TREES = %w[idea target wiki site].freeze
+
+  # The trees the scan must cover, spelled out here instead of read back from
+  # NESTED_TREES: a test that iterates the constant it is checking cannot fail
+  # when a name is dropped from it.
+  EXPECTED_TREES = %w[idea target wiki site].freeze
+
   # Inline links only: [text](target). Reference-style links and bare URLs are
   # not used in these docs.
   LINK = /\[[^\]]*\]\(([^)\s]+)\)/
   HEADING = /^\#{1,6}\s+(.+?)\s*$/
   FENCE = /^\s*(?:```|~~~)/
+
+  # A GitHub line anchor: `#L10` or `#L10-L20`. The leading L is what tells it
+  # apart from a heading slug, which never carries one.
+  LINE_RANGE = /\AL(\d+)(?:-L?(\d+))?\z/
 
   # GitHub's heading-anchor algorithm: strip inline markdown, downcase, drop
   # everything that is not a word character, a space or a hyphen, then turn
@@ -54,72 +76,303 @@ class DocsLinksTest < Minitest::Test
   # Every anchor a heading in this file answers to. GitHub disambiguates
   # repeated headings by appending -1, -2, … in document order.
   def self.anchors(path)
-    seen = Hash.new(0)
-    prose_lines(path).filter_map do |(_line_no, text)|
-      m = text.match(HEADING)
-      next unless m
+    @anchors ||= {}
+    @anchors[path] ||= begin
+      seen = Hash.new(0)
+      prose_lines(path).filter_map do |(_line_no, text)|
+        m = text.match(HEADING)
+        next unless m
 
-      base = slug(m[1])
-      n = seen[base]
-      seen[base] += 1
-      n.zero? ? base : "#{base}-#{n}"
-    end.to_set
+        base = slug(m[1])
+        n = seen[base]
+        seen[base] += 1
+        n.zero? ? base : "#{base}-#{n}"
+      end.to_set
+    end
   end
 
-  def docs
-    @docs ||= Dir.children(DOCS).select { |f| f.end_with?('.md') }.sort
+  # The [first, last] line a GitHub line anchor names, or nil when the anchor
+  # is a heading slug instead.
+  def self.line_range(anchor)
+    m = LINE_RANGE.match(anchor.to_s)
+    return nil unless m
+
+    [m[1].to_i, (m[2] || m[1]).to_i]
   end
 
-  def anchors_for(path)
-    (@anchors ||= {})[path] ||= self.class.anchors(path)
+  # Every markdown file the gate scans under a docs root: the top level plus
+  # the nested trees.
+  def self.scanned_paths(docs)
+    top = Dir.glob(File.join(docs, '*.md'))
+    nested = NESTED_TREES.flat_map { |tree| Dir.glob(File.join(docs, tree, '**', '*.md')) }
+    (top + nested).sort
   end
 
-  # target, anchor and source location for every intra-repo link in docs/*.md.
-  def links
-    docs.flat_map do |doc|
-      path = File.join(DOCS, doc)
-      self.class.prose_lines(path).flat_map do |(line_no, text)|
+  # Every intra-repo link in the scanned documents, with the source it came
+  # from — a link's meaning depends on the file it sits in.
+  def self.links(paths)
+    paths.flat_map do |path|
+      prose_lines(path).flat_map do |(line_no, text)|
         # A table cell reading `[](name)` is a code span, not a link.
         text.gsub(/`[^`]*`/, '``').scan(LINK).flatten.filter_map do |href|
           next if href.start_with?('http://', 'https://', 'mailto:', '<')
 
           target, anchor = href.split('#', 2)
-          { doc: doc, line: line_no, href: href, target: target, anchor: anchor }
+          { path: path, line: line_no, href: href, target: target, anchor: anchor }
         end
       end
     end
   end
 
-  def test_every_intra_doc_anchor_names_a_heading
-    broken = links.select { |l| l[:target].to_s.empty? }.reject do |l|
-      anchors_for(File.join(DOCS, l[:doc])).include?(l[:anchor])
-    end
+  # Where a link points. A relative link resolves against the directory of the
+  # document that holds it, so `../benchmarks.md` under docs/idea/ is
+  # docs/benchmarks.md and not docs/idea/benchmarks.md.
+  def self.resolve(link)
+    target = link[:target].to_s
+    return link[:path] if target.empty?
 
-    assert_empty broken.map { |l| "#{l[:doc]}:#{l[:line]} -> ##{l[:anchor]}" },
+    File.expand_path(target, File.dirname(link[:path]))
+  end
+
+  # A path as the docs tree names it: relative to the directory holding the
+  # docs root, so a finding reads `docs/idea/notes.md:12`.
+  def self.display(path, docs)
+    path.delete_prefix("#{File.dirname(docs)}/")
+  end
+
+  # A same-file #anchor must name a heading in that file.
+  def self.same_file_anchor_errors(paths, docs)
+    links(paths).filter_map do |link|
+      next unless link[:target].to_s.empty?
+      next if line_range(link[:anchor])
+      next if anchors(link[:path]).include?(link[:anchor])
+
+      "#{display(link[:path], docs)}:#{link[:line]} -> ##{link[:anchor]}"
+    end
+  end
+
+  # A relative link must resolve to a file in the repo.
+  def self.missing_target_errors(paths, docs)
+    links(paths).filter_map do |link|
+      next if link[:target].to_s.empty?
+      next if File.exist?(resolve(link))
+
+      "#{display(link[:path], docs)}:#{link[:line]} -> #{link[:target]}"
+    end
+  end
+
+  # A link into another doc must name a heading that exists there.
+  def self.cross_doc_anchor_errors(paths, docs)
+    links(paths).filter_map do |link|
+      next if link[:target].to_s.empty? || link[:anchor].nil?
+      next unless link[:target].end_with?('.md')
+      next if line_range(link[:anchor])
+
+      path = resolve(link)
+      next if File.exist?(path) && anchors(path).include?(link[:anchor])
+
+      "#{display(link[:path], docs)}:#{link[:line]} -> #{link[:href]}"
+    end
+  end
+
+  # A #L<n> / #L<n>-L<m> anchor must fall inside the file it points at.
+  def self.line_range_errors(paths, docs)
+    links(paths).filter_map do |link|
+      range = line_range(link[:anchor])
+      next unless range
+
+      path = resolve(link)
+      next unless File.file?(path)
+
+      count = File.readlines(path).size
+      next if range[0].between?(1, range[1]) && range[1] <= count
+
+      "#{display(link[:path], docs)}:#{link[:line]} -> #{link[:href]} (the target has #{count} lines)"
+    end
+  end
+
+  def paths
+    @paths ||= self.class.scanned_paths(DOCS)
+  end
+
+  def test_every_intra_doc_anchor_names_a_heading
+    assert_empty self.class.same_file_anchor_errors(paths, DOCS),
                  'an #anchor must match a heading in the same file — headings here are ' \
                  'numbered, so the slug is (e.g.) #7-what-it-does-not-guarantee'
   end
 
   def test_every_relative_link_resolves_to_a_file
-    broken = links.reject { |l| l[:target].to_s.empty? }.reject do |l|
-      File.exist?(File.expand_path(l[:target], DOCS))
-    end
-
-    assert_empty broken.map { |l| "#{l[:doc]}:#{l[:line]} -> #{l[:target]}" },
+    assert_empty self.class.missing_target_errors(paths, DOCS),
                  'a relative link must resolve to a file in the repo'
   end
 
   def test_every_cross_doc_anchor_names_a_heading_in_that_doc
-    candidates = links.reject { |l| l[:target].to_s.empty? || l[:anchor].nil? }
-                      .select { |l| l[:target].end_with?('.md') }
-
-    broken = candidates.reject do |l|
-      path = File.expand_path(l[:target], DOCS)
-      File.exist?(path) && anchors_for(path).include?(l[:anchor])
-    end
-
-    assert_empty broken.map { |l| "#{l[:doc]}:#{l[:line]} -> #{l[:href]}" },
+    assert_empty self.class.cross_doc_anchor_errors(paths, DOCS),
                  'a link into another doc must name a heading that exists there'
+  end
+
+  def test_every_line_range_anchor_is_inside_its_target_file
+    assert_empty self.class.line_range_errors(paths, DOCS),
+                 'a #L<n> / #L<n>-L<m> anchor must fall inside the file it points at'
+  end
+
+  # The gate's findings on a tmpdir docs tree, keyed by the check that made
+  # them. The real tree is clean, so a broken nested doc has to be built to
+  # prove the gate would report one. `scanned` counts the links the gate read,
+  # which is what proves the nested doc was read at all — an unsanned tree
+  # reports nothing, and nothing would look like a pass.
+  def fixture_errors(files)
+    Dir.mktmpdir('docs-links') do |dir|
+      files.each do |name, content|
+        path = File.join(dir, name)
+        FileUtils.mkdir_p(File.dirname(path))
+        File.write(path, content)
+      end
+
+      docs = File.join(dir, 'docs')
+      paths = self.class.scanned_paths(docs)
+      {
+        scanned: self.class.links(paths).size,
+        missing: self.class.missing_target_errors(paths, docs),
+        cross_doc: self.class.cross_doc_anchor_errors(paths, docs),
+        same_file: self.class.same_file_anchor_errors(paths, docs),
+        line_range: self.class.line_range_errors(paths, docs)
+      }
+    end
+  end
+
+  # Every name in the scanned trees is a tree the gate actually reads, not just
+  # the ones the other fixtures happen to use: dropping one from NESTED_TREES
+  # would leave that tree unchecked and the suite green, which is what this
+  # pins.
+  def test_every_nested_tree_is_scanned
+    assert_equal EXPECTED_TREES.sort, NESTED_TREES.sort,
+                 'a tree added to NESTED_TREES needs a fixture here too'
+
+    EXPECTED_TREES.each do |tree|
+      errors = fixture_errors("docs/#{tree}/nested.md" => "[gone](../../lib/wurk/missing.rb)\n")
+
+      assert_equal 1, errors[:scanned], tree
+      assert_equal 1, errors[:missing].size, tree
+      assert_match(%r{docs/#{tree}/nested\.md:1 -> \.\./\.\./lib/wurk/missing\.rb}, errors[:missing].first, tree)
+    end
+  end
+
+  def test_a_nested_doc_link_to_a_missing_file_is_reported
+    errors = fixture_errors('docs/idea/nested.md' => "[gone](../../lib/wurk/missing.rb)\n")
+
+    assert_equal 1, errors[:scanned]
+    assert_equal 1, errors[:missing].size
+    assert_match(%r{docs/idea/nested\.md:1 -> \.\./\.\./lib/wurk/missing\.rb}, errors[:missing].first)
+  end
+
+  # The scan recurses: a doc two levels down a tree is read like any other, so
+  # a tree that grows a subdirectory later is covered without a code change.
+  def test_a_doc_deeper_in_a_nested_tree_is_scanned
+    errors = fixture_errors('docs/idea/sub/deep.md' => "[gone](../../../lib/wurk/missing.rb)\n")
+
+    assert_equal 1, errors[:scanned]
+    assert_equal 1, errors[:missing].size
+    assert_match(%r{docs/idea/sub/deep\.md:1 -> \.\./\.\./\.\./lib/wurk/missing\.rb}, errors[:missing].first)
+  end
+
+  def test_a_nested_doc_anchor_to_a_missing_heading_is_reported
+    errors = fixture_errors('docs/idea/nested.md' => "[gone](#no-such-heading)\n")
+
+    assert_equal 1, errors[:scanned]
+    assert_equal 1, errors[:same_file].size
+    assert_match(%r{docs/idea/nested\.md:1 -> #no-such-heading}, errors[:same_file].first)
+  end
+
+  def test_a_cross_doc_anchor_to_a_missing_heading_is_reported
+    errors = fixture_errors(
+      'docs/idea/nested.md' => "[gone](../target/spec.md#no-such-heading)\n",
+      'docs/target/spec.md' => "# Spec\n\nBody\n"
+    )
+
+    assert_equal 1, errors[:scanned]
+    assert_equal 1, errors[:cross_doc].size
+    assert_match(%r{docs/idea/nested\.md:1 -> .*#no-such-heading}, errors[:cross_doc].first)
+  end
+
+  def test_a_cross_doc_anchor_to_a_real_heading_passes
+    errors = fixture_errors(
+      'docs/idea/nested.md' => "[here](../target/spec.md#spec)\n",
+      'docs/target/spec.md' => "# Spec\n\nBody\n"
+    )
+
+    assert_equal 1, errors[:scanned]
+    assert_empty errors[:missing]
+    assert_empty errors[:cross_doc]
+  end
+
+  def test_a_line_range_outside_the_target_file_is_reported
+    errors = fixture_errors(
+      'docs/idea/nested.md' => "[a](../../lib/wurk/client.rb#L100-L200)\n[b](../../lib/wurk/client.rb#L31)\n",
+      'lib/wurk/client.rb' => "line\n" * 30
+    )
+
+    assert_equal 2, errors[:scanned]
+    assert_equal 2, errors[:line_range].size
+    assert_match(%r{docs/idea/nested\.md:1 -> .*#L100-L200}, errors[:line_range].first)
+    assert_match(%r{docs/idea/nested\.md:2 -> .*#L31}, errors[:line_range].last)
+  end
+
+  def test_a_line_range_inside_the_target_file_passes
+    errors = fixture_errors(
+      'docs/idea/nested.md' => "[a](../../lib/wurk/client.rb#L10-L20)\n[b](../../lib/wurk/client.rb#L30)\n",
+      'lib/wurk/client.rb' => "line\n" * 30
+    )
+
+    # An empty missing list is what proves the target was found and read: a
+    # link that resolved nowhere is skipped, not passed.
+    assert_equal 2, errors[:scanned]
+    assert_empty errors[:missing]
+    assert_empty errors[:line_range]
+  end
+
+  def test_a_line_range_into_a_doc_is_not_read_as_a_heading_anchor
+    errors = fixture_errors(
+      'docs/idea/nested.md' => "[a](../target/spec.md#L5)\n",
+      'docs/target/spec.md' => "# Spec\n\n#{"Body\n" * 8}"
+    )
+
+    assert_equal 1, errors[:scanned]
+    assert_empty errors[:missing]
+    assert_empty errors[:cross_doc]
+    assert_empty errors[:line_range]
+  end
+
+  # A same-file #L<n> resolves to the document that holds it, so its range is
+  # measured against that document's own length — the branch resolve takes for
+  # an empty target.
+  def test_a_same_file_line_range_outside_the_file_is_reported
+    errors = fixture_errors('docs/idea/nested.md' => "[a](#L99)\n\nbody\n")
+
+    assert_equal 1, errors[:scanned]
+    assert_equal 1, errors[:line_range].size
+    assert_match(%r{docs/idea/nested\.md:1 -> #L99}, errors[:line_range].first)
+    assert_empty errors[:same_file]
+  end
+
+  def test_a_same_file_line_range_inside_the_file_passes
+    errors = fixture_errors('docs/idea/nested.md' => "[a](#L2)\n\nbody\n")
+
+    assert_equal 1, errors[:scanned]
+    assert_empty errors[:missing]
+    assert_empty errors[:line_range]
+  end
+
+  # A directory target has no lines to read: File.exist? is true for one, so
+  # reading it as a file raised Errno::EISDIR instead of checking the range.
+  def test_a_line_range_into_a_directory_is_skipped
+    errors = fixture_errors(
+      'docs/idea/nested.md' => "[a](../target#L5)\n",
+      'docs/target/spec.md' => "# Spec\n"
+    )
+
+    assert_equal 1, errors[:scanned]
+    assert_empty errors[:line_range]
   end
 end
 
