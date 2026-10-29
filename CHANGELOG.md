@@ -4,8 +4,11 @@ All notable changes to Wurk are recorded here. Format: [Keep a Changelog](https:
 
 ## [Unreleased]
 
+## [1.9.0] - 2026-10-29
+
 ### Changed
 
+- **`concurrent-ruby` is no longer a runtime dependency.** `wurk.gemspec` dropped `spec.add_dependency 'concurrent-ruby', '~> 1.2'`: Wurk never required it directly. An app that pulls it in through Rails or another gem keeps it; nothing else in the dependency set moved (#792).
 - **Dashboard metrics history is 30 days, not 3.** `Wurk::Metrics::History::MID_TERM` moved from 3 days to 30 days, so every 10-minute `j|…` bucket now lives ten times longer — up to 4320 keys per 30-day window instead of 432 per 3 days — and the dashboard's 7d/30d tabs are backed by data end-to-end. Sidekiq's `ExecutionTracker` keeps the 3-day TTL upstream; this is a deliberate divergence, and retention alone changes no key, field, or score, so a mixed Sidekiq/Wurk fleet still reads the same buckets. With it, the class-level `Wurk::Metrics::Query.top_jobs`/`for_job` cap moved from `MAX_HOURS = 72` to `MAX_HOURS = 720`, and a `minutes:` window past 480 promotes onto the 10-minute buckets instead of raising — only a window past 43200 minutes raises `WindowTooWide`. The Sidekiq-compatible instance API (`Sidekiq::Metrics::Query#top_jobs`/`#for_job`) is unchanged: it still clamps silently at 480 minutes / 72 hours, exactly as upstream, and the parity oracle pins it. `GET /api/metrics?minutes=…` now serves the requested window out to 30 days and answers 400 past it (it used to clamp silently to 480 minutes), and the SPA requests the 7d/30d tabs as `?hours=168`/`?hours=720` with the response echoing both `hours` and `minutes` so the label matches the served period.
 - **The demo's error reporting is opt-in and sanitized.** Sentry turns on only when `WURK_DEMO_REPORT_ERRORS=1` *and* `SENTRY_DSN` are both set; with either one missing the demo never loads the SDK, never initialises Sentry and never installs `Wurk::Sentry`, so Wurk's server middleware and error handlers stay exactly as they were. Events from the demo's two deliberately-failing jobs (`BrokenJob`, `FlakyWebhookJob`) and soak-tagged events are dropped, and request headers, cookies and job arguments are scrubbed of credential- and personal-data-shaped material before an event leaves the demo. The rules live in the demo app (`demo/lib/demo_sentry_policy.rb`), not in the gem: the gem ships the integration, the demo decides what it may send.
 
@@ -660,7 +663,8 @@ First public (pre-1.0) release. Wurk is a 100% API-compatible drop-in replacemen
 - ActiveJob adapter, `IterableJob`, embedded mode, and a standalone `exe/wurk` runner.
 - Sidekiq client/server middleware contract; third-party ecosystem suites (sidekiq-cron, sidekiq-unique-jobs, sidekiq-scheduler, sidekiq-status, sidekiq-failures, sidekiq-throttled) pass against Wurk.
 
-[Unreleased]: https://github.com/developerz-ai/wurk/compare/v1.8.1...HEAD
+[Unreleased]: https://github.com/developerz-ai/wurk/compare/v1.9.0...HEAD
+[1.9.0]: https://github.com/developerz-ai/wurk/compare/v1.8.1...v1.9.0
 [1.8.1]: https://github.com/developerz-ai/wurk/compare/v1.8.0...v1.8.1
 [1.8.0]: https://github.com/developerz-ai/wurk/compare/v1.7.6...v1.8.0
 [1.7.6]: https://github.com/developerz-ai/wurk/compare/v1.7.5...v1.7.6
