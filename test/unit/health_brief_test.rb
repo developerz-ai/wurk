@@ -5,6 +5,7 @@ require 'json'
 require 'open3'
 require 'tmpdir'
 require 'fileutils'
+require 'yaml'
 
 # Gates the seven graded rows of .dz/briefs/health.md (`main` is green, `the
 # last release published`, `the GitHub Release carries the gem`, `the demo
@@ -227,6 +228,29 @@ class HealthBriefTest < Minitest::Test
 
   def setup
     @text = File.read(BRIEF)
+  end
+
+  # The runtime rows select jobs by their DISPLAY name: rows 8 and 14 filter
+  # the jobs list on `.name == "detect changed paths"` / `.name != ...`, and
+  # row 15's pins discriminator plus this file's own fixtures name
+  # `test + coverage (latest ruby/rails)` and `lint (rubocop)`. Each of those
+  # strings is the `name:` of a job in test.yml — rename one there without
+  # updating the selector and the jq filter silently matches nothing, turning
+  # a real gate's absence into `evidence unavailable`. The check is
+  # membership, not equality: unrelated jobs may come and go.
+  def test_the_job_name_selectors_match_a_test_yml_job_display_name
+    names = YAML.load_file(File.join(ROOT, '.github', 'workflows', 'test.yml'))
+                .fetch('jobs', {}).values.map { |spec| spec['name'] }
+
+    ['detect changed paths',
+     'test + coverage (latest ruby/rails)',
+     'lint (rubocop)'].each do |selector|
+      assert_includes names, selector,
+                      "health.md and this file's fixtures select jobs by the display name " \
+                      "`#{selector}`, but no job in .github/workflows/test.yml carries that " \
+                      '`name:` — rename the selector with the job (names present: ' \
+                      "#{names.inspect})"
+    end
   end
 
   def test_dup_push_run_with_every_gated_step_skipped_is_duplicate_skipped
