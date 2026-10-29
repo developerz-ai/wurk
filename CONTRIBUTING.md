@@ -46,17 +46,33 @@ Frontend unit + integration tests (Vitest, SolidJS Testing Library) run with
 
 ## Running the tests
 
-**`bin/check` is the one to remember.** It runs the same gates CI does, in the
-order that fails fastest, and prints a per-stage wall clock:
+**`bin/check` is the one to remember.** It runs the stages in the order that
+fails fastest and prints a per-stage wall clock:
 
 ```sh
 bin/check fast     # rubocop + unit tests              — the inner loop
 bin/check          # rubocop + frontend + full suite + parity  — run this before opening a PR
-bin/check full     # ...plus the ecosystem suites
+bin/check full     # ...plus the ecosystem suites and the two python-client
+                   # stages: the unittest suite, then the build in an isolated
+                   # venv. Both are skipped with a notice when python3 is not on
+                   # PATH, and the venv build is skipped with a notice of its own
+                   # when the venv cannot bootstrap pip
 ```
 
 It refuses to start without a local Redis and tells you how to get one. A green
-`bin/check` is the answer CI will give you.
+`bin/check` is close to the answer CI will give you — the equivalence is not
+total, so here is exactly where it stops. CI's `python-client` job in
+`.github/workflows/test.yml` and the ecosystem suites are matched only by
+`bin/check full`, and the python stages only on a box where python3 is on PATH.
+CI's `spec-docs` job does have a local equivalent: the suite stage runs
+`test/unit/spec_docs_test.rb`, which asserts the same three spec docs exist
+and are non-empty. These CI jobs have no local equivalent: `actionlint`
+(workflow lint), the `compat` matrix (gemspec Ruby floor, oldest supported
+Rails, Valkey backend), the `topology` leg in `.github/workflows/topology.yml`
+(Valkey 8, TLS, ACL, Sentinel) and the `bench vs base` job in
+`.github/workflows/bench.yml` (the head-vs-base benchmark comparison —
+`bin/rake bench` runs the benchmarks, not the comparison). They report on the
+PR next to the gate; a green `bin/check` says nothing about them.
 
 ### Exit codes
 
@@ -98,6 +114,8 @@ The individual tasks, when you want one:
 | A single test by name | `bin/rake test TEST=test/foo_test.rb TESTOPTS="--name=/pattern/"` |
 | Parity suite (independently written oracles) | `bin/rake test:parity` |
 | Ecosystem compatibility | `bin/rake test:ecosystem` |
+| Python client tests | `python3 -m unittest discover -s clients/python/tests -v` |
+| Python client build | `venv="$(mktemp -d)" && python3 -m venv "$venv/v" && "$venv/v/bin/python" -m pip install ./clients/python` — always a throwaway venv, never a bare `pip install` into the active interpreter (`bin/check` builds the same venv, with `--quiet`) |
 | Coverage gate | `COVERAGE=1 bin/rake test` |
 | Benchmarks | `bin/rake bench` |
 | Lint | `bundle exec rubocop --parallel` |
@@ -223,7 +241,8 @@ Open an issue before a large feature PR so the direction is agreed first.
    auto-merging. See `.dz/maintainer/maintainer.yml` for the ruleset citation.
 2. Branch off `main`.
 3. Keep the change focused; add tests at the right layer.
-4. Run `bin/check` (or `bin/check full` if you touched the compat surface).
+4. Run `bin/check` (or `bin/check full` if you touched the compat surface or
+   anything under `clients/python/`).
 5. Open the PR — the required suite is one Ruby run on the newest Ruby +
    Rails with the coverage gate folded in, plus the parity oracles, rubocop,
    and the frontend suite. Alongside it, non-required compat legs
