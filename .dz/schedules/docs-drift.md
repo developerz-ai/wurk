@@ -28,15 +28,15 @@ own, so this lane never re-reports a claim a gate already covers:
 | Guard | What it owns |
 |---|---|
 | `test/unit/readme_claims_test.rb:9` | README claims about a third-party gem's suite running in CI |
-| `test/unit/docs_links_test.rb:15` | anchors and links between the reference docs |
-| `test/unit/docs_links_test.rb:140` | `DocsEnvTableTest`: docs/configuration.md's "Every `ENV` read in `lib/`" claim — the env table staying complete |
+| `test/unit/docs_links_test.rb:26` | anchors and links between the reference docs |
+| `test/unit/docs_links_test.rb:568` | `DocsEnvTableTest`: docs/configuration.md's "Every `ENV` read in `lib/`" claim — the env table staying complete |
 | `test/unit/toolchain_pins_test.rb:13` | `ToolchainPinsTest`: docs/deployment.md's `oven/bun` example Dockerfile pin — present and identical to the other pin sites |
 | `test/unit/claude_md_claims_test.rb:13` | the same claims as the README, in CLAUDE.md |
-| `test/unit/forbidden_claims_test.rb:12` | the pitch surfaces: README, docs site, llms.txt, the gem summary |
+| `test/unit/forbidden_claims_test.rb:18` | the pitch surfaces: README, docs site, llms.txt, the gem summary |
 | `test/unit/cutover_claims_test.rb:12` | promises about running Sidekiq and Wurk against one Redis |
 | `test/unit/wiki_pages_test.rb:13` | the docs/wiki/ pages: shape, links, duplication |
 | `test/unit/llms_txt_test.rb:9` | docs/site/llms.txt: the format and the links it lists |
-| `test/unit/site_code_blocks_test.rb:17` | keyboard reachability of the code snippets on the site |
+| `test/unit/site_code_blocks_test.rb:21` | keyboard reachability of the code snippets on the site |
 | `test/unit/release_doc_claims_test.rb:19` | RELEASE.md's step table against release.yml |
 | `test/unit/contributing_line_refs_test.rb:13` | CONTRIBUTING.md's `bin/check:<line>` references |
 | `test/unit/spec_constants_test.rb:17` | the `Sidekiq::*` constants the specs name |
@@ -91,15 +91,15 @@ check is a change to this brief, never a row invented at reporting time.
 - `readme-third-party-ci-claims` — README claims about a third-party gem's suite running in CI
   (`test/unit/readme_claims_test.rb:9`).
 - `docs-links-anchors` — anchors and links between the reference docs
-  (`test/unit/docs_links_test.rb:15`).
+  (`test/unit/docs_links_test.rb:26`).
 - `docs-env-table-complete` — docs/configuration.md's "Every `ENV` read in `lib/`" claim: the env
-  table staying complete (`test/unit/docs_links_test.rb:140`).
+  table staying complete (`test/unit/docs_links_test.rb:568`).
 - `deployment-bun-docker-pin` — docs/deployment.md's `oven/bun` example Dockerfile pin, present and
   identical to the other pin sites (`test/unit/toolchain_pins_test.rb:13`).
 - `claude-md-claims` — the same claims as the README, in CLAUDE.md
   (`test/unit/claude_md_claims_test.rb:13`).
 - `forbidden-pitch-claims` — the pitch surfaces: README, docs site, llms.txt, the gem summary
-  (`test/unit/forbidden_claims_test.rb:12`).
+  (`test/unit/forbidden_claims_test.rb:18`).
 - `cutover-shared-redis-claims` — promises about running Sidekiq and Wurk against one Redis
   (`test/unit/cutover_claims_test.rb:12`).
 - `wiki-pages-shape` — the docs/wiki/ pages: shape, links, duplication
@@ -107,7 +107,7 @@ check is a change to this brief, never a row invented at reporting time.
 - `llms-txt-format-links` — docs/site/llms.txt: the format and the links it lists
   (`test/unit/llms_txt_test.rb:9`).
 - `site-code-block-keyboard` — keyboard reachability of the code snippets on the site
-  (`test/unit/site_code_blocks_test.rb:17`).
+  (`test/unit/site_code_blocks_test.rb:21`).
 - `release-doc-steps` — RELEASE.md's step table against release.yml
   (`test/unit/release_doc_claims_test.rb:19`): an owned guard, not a reporting surface — this lane
   reports nothing there.
