@@ -53,3 +53,8 @@ test/ecosystem/*/Gemfile.lock
 
 # CodeGraph index — local per-machine SQLite DB (.codegraph/); never committed
 .codegraph/
+
+# Local secrets — keep environment files and encryption keys out of version control.
+.env*
+*.key
+/config/master.key
