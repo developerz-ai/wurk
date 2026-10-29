@@ -278,6 +278,19 @@ class ScheduledBriefsTest < Minitest::Test
     end
   end
 
+  def test_each_checkup_has_a_schedule_entry_with_the_expected_keys
+    CHECKUP_BRIEFS.each_key do |name|
+      entry = schedule_for(name)
+
+      refute_nil entry,
+                 "the policy must carry a schedule entry named #{name.inspect}"
+
+      assert_equal SCHEDULE_KEYS.sort, entry.keys.sort,
+                   "the #{name.inspect} schedule entry must use only the keys the " \
+                   "platform reads (#{SCHEDULE_KEYS.join(', ')}); got #{entry.keys.inspect}"
+    end
+  end
+
   private
 
   def schedule_for(name)
