@@ -1398,6 +1398,34 @@ class HealthBriefTest < Minitest::Test
                     'a readable jobs list is a verdict, not an unknown'
   end
 
+  def test_failed_demo_deploy_with_a_resolved_tag_still_files_a_failed_deploy_ask
+    out, err, status = run_row12(jobs: demo_jobs_json,
+                                 log: resolve_log(short: DEMO_TAG),
+                                 conclusion: 'failure', sha: SHA_DEMO)
+
+    assert_predicate status, :success?,
+                     "row 12's command must run cleanly (stdout=#{out.inspect}, stderr=#{err.inspect})"
+
+    assert_equal ["failure #{SHA_DEMO} #{URL_DEMO} tagged #{DEMO_TAG}"], out.lines.map(&:chomp),
+                 'a failed deploy-demo run prints its own conclusion beside the sha, the ' \
+                 'run url and the tag it pushed; the tag never rewrites the conclusion'
+
+    refute_includes out, 'success', 'a resolved image tag cannot turn a failed run green'
+
+    para = filing_paragraph.gsub(/\s+/, ' ')
+
+    assert_includes para,
+                    'row 12 files `demo deploy failed` for a failed deploy-demo conclusion line, ' \
+                    'even when it includes `tagged sha-<7>`; the tag cannot override failure',
+                    'the filing paragraph must give the failed deploy-demo conclusion line its ' \
+                    'own stable title, tag or no tag'
+
+    assert_includes para,
+                    '`demo frozen: no sha-<7> image tag` only for the missing-tag verdict',
+                    'the missing-tag title belongs to the missing-tag verdict alone, so a ' \
+                    'failed deploy that pushed a tag files the failed-deploy title'
+  end
+
   def test_green_demo_deploy_without_a_resolvable_tag_is_unhealthy
     # deploy-demo.yml:7-11 only BUILDS and PUSHES. Infra's Image Updater selects
     # the newest tag matching ^sha-[0-9a-f]{7}$; a green run that wrote no such
@@ -3770,7 +3798,7 @@ class HealthBriefTest < Minitest::Test
   def test_ask_titles_are_stable_per_signal
     para = filing_paragraph
 
-    ['`main is red`', '`release did not publish`'].each do |title|
+    ['`main is red`', '`release did not publish`', '`demo deploy failed`'].each do |title|
       assert_includes para, title,
                       'the dedupe match is exact equality on the title, so every title the ' \
                       'brief gives must be the signal\'s stable name, identical on every ' \
@@ -3802,7 +3830,7 @@ class HealthBriefTest < Minitest::Test
     end
   end
 
-  # A failed run is graded on its own conclusion — rows 8, 9 and 14 print that
+  # A failed run is graded on its own conclusion — rows 8, 9, 12 and 14 print that
   # conclusion beside the headSha and the run URL, with no `Unhealthy:` prefix
   # on it — so a filing rule keyed to `Unhealthy:` lines alone never files the
   # red-main, red-release or red-lane ask its own stable titles name. The rule
@@ -3813,14 +3841,14 @@ class HealthBriefTest < Minitest::Test
 
     assert_includes para, "a failed run's own conclusion line",
                     'the filing paragraph must name the failed-run conclusion line as a filing ' \
-                    'trigger: rows 8, 9 and 14 grade a genuinely red run on its own conclusion, ' \
+                    'trigger: rows 8, 9, 12 and 14 grade a genuinely red run on its own conclusion, ' \
                     'which prints no `Unhealthy:` prefix, so a rule keyed to `Unhealthy:` ' \
                     'verdicts alone would file no ask for a red main, release or lane; ' \
                     "got #{para.inspect}"
 
     assert_includes para,
                     'that line is the trigger `main is red`, `release did not publish`, ' \
-                    '`topology.yml is red` and `ecosystem.yml is red` are filed from',
+                    '`demo deploy failed`, `topology.yml is red` and `ecosystem.yml is red` are filed from',
                     'the failed-run conclusion line must be tied to the red-run ask titles it is ' \
                     "the trigger for; got #{para.inspect}"
 
@@ -3828,6 +3856,11 @@ class HealthBriefTest < Minitest::Test
                  'the rule must keep every non-defect outcome unfiled beside the new trigger: ' \
                  'a readable success, a reused tree, unreadable evidence and an in-flight or ' \
                  "no-op run name no defect; got #{para.inspect}")
+
+    assert_match(/`verdict unknown \.\.\. not readable`[^.]*files no ask/i, para,
+                 'a row that could not read its list establishes nothing, so its ' \
+                 '`verdict unknown ... not readable` line files no ask either; ' \
+                 "got #{para.inspect}")
   end
 
   def test_a_reused_tree_files_no_ask
