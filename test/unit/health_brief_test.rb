@@ -3750,6 +3750,32 @@ class HealthBriefTest < Minitest::Test
                  "a row's Unhealthy titles; got #{para.inspect}")
   end
 
+  # The filing rule's last sentence is the ask-body contract: six named
+  # evidence elements the body carries. This pins the BRIEF TEXT only — the
+  # platform that generates ask bodies lives outside this checkout, so each
+  # assertion requires the brief's filing paragraph to name the element, and
+  # says nothing about what a generated body contains. The sentence is
+  # extracted first (it cannot span a full stop), so a `headSha` mention in
+  # the trigger sentence cannot stand in for a deleted body element.
+  def test_filed_ask_body_carries_the_six_evidence_elements
+    sentence = filing_paragraph[/[^.]*body carries[^.]*/]
+    raise "health.md's filing paragraph has no sentence saying what the body carries" if sentence.nil?
+
+    {
+      'the command' => 'the command that produced the verdict',
+      'its output' => 'the output that command printed',
+      'the run URL' => 'the run URL the ask links',
+      'the headSha' => 'the headSha the run graded',
+      'the version' => 'the version the run carried',
+      'the PR age' => 'the PR age the verdict weighed'
+    }.each do |element, description|
+      assert_includes sentence, element,
+                      "the filing rule's body sentence must name #{element} (#{description}) as " \
+                      'part of the evidence a filed ask\'s body carries; the brief no longer ' \
+                      "requires it; got #{sentence.inspect}"
+    end
+  end
+
   def test_filing_paragraph_carries_the_release_due_issues_lookup
     para = filing_paragraph
 
