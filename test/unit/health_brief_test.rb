@@ -5,6 +5,7 @@ require 'json'
 require 'open3'
 require 'tmpdir'
 require 'fileutils'
+require 'yaml'
 
 # Gates the seven graded rows of .dz/briefs/health.md (`main` is green, `the
 # last release published`, `the GitHub Release carries the gem`, `the demo
@@ -211,6 +212,15 @@ class HealthBriefTest < Minitest::Test
   # nothing at all.
   CLASSIFICATIONS = ['executed', 'duplicate-skipped', 'evidence unavailable'].freeze
 
+  # The job DISPLAY names the brief's runtime rows select on: rows 8 and 14
+  # filter the jobs list on `.name == "detect changed paths"`, and row 15's
+  # pins discriminator plus this file's own fixtures name
+  # `test + coverage (latest ruby/rails)` and `lint (rubocop)`. Each of them
+  # is the `name:` of a job in test.yml.
+  JOB_NAME_SELECTORS = ['detect changed paths',
+                        'test + coverage (latest ruby/rails)',
+                        'lint (rubocop)'].freeze
+
   # deploy-demo.yml's step names. `gh run view --log` carries one in field 2 of
   # every line it prints, and row 12 keeps only the first one's lines.
   RESOLVE_STEP = 'resolve built commit'
@@ -227,6 +237,66 @@ class HealthBriefTest < Minitest::Test
 
   def setup
     @text = File.read(BRIEF)
+  end
+
+  # The runtime rows select jobs by their DISPLAY name: rows 8 and 14 filter
+  # the jobs list on `.name == "detect changed paths"` / `.name != ...`, and
+  # row 15's pins discriminator plus this file's own fixtures name
+  # `test + coverage (latest ruby/rails)` and `lint (rubocop)`. Each of those
+  # strings is the `name:` of a job in test.yml — rename one there without
+  # updating the selector and the jq filter silently matches nothing, turning
+  # a real gate's absence into `evidence unavailable`. The check is
+  # membership, not equality: unrelated jobs may come and go.
+  def test_the_job_name_selectors_match_a_test_yml_job_display_name
+    assert_job_name_selectors_present(workflow_jobs)
+  end
+
+  # A guard that cannot fail is not a guard: the membership check has to
+  # REJECT a renamed job. Rename a job in test.yml without updating the
+  # selector and the jq filter matches nothing in CI — every gated job
+  # grades as absent, and a real gate's absence becomes `evidence
+  # unavailable`.
+  def test_the_job_name_selector_guard_rejects_a_renamed_workflow_job
+    jobs = workflow_jobs
+    job = jobs.values.find { |spec| spec['name'] == 'lint (rubocop)' }
+
+    flunk 'test.yml declares no job named `lint (rubocop)` to rename' if job.nil?
+
+    job['name'] = 'lint (rubo)'
+
+    refute_includes workflow_job_names(jobs), 'lint (rubocop)',
+                    'the rename must have landed before the guard is exercised'
+
+    violations = job_name_selector_violations(jobs)
+
+    refute_empty violations,
+                 'renaming a job in test.yml without updating the selector must ' \
+                 "fail the guard (violations: #{violations.inspect})"
+
+    error = assert_raises(Minitest::Assertion) { assert_job_name_selectors_present(jobs) }
+
+    assert_includes error.message, 'lint (rubocop)',
+                    'the guard must fail BECAUSE the renamed selector lost its job'
+  end
+
+  # ... and the check is MEMBERSHIP, not equality: test.yml's job list may
+  # grow — an unrelated job must not fail the guard.
+  def test_the_job_name_selector_guard_accepts_an_unrelated_added_job
+    jobs = workflow_jobs
+    before = jobs.size
+
+    jobs['brand-new-job'] = { 'name' => 'brand new job' }
+
+    assert_equal before + 1, jobs.size,
+                 'the added job must have landed before the guard is exercised'
+
+    violations = job_name_selector_violations(jobs)
+
+    assert_empty violations,
+                 'the selector check is membership, not equality: an unrelated ' \
+                 "job may come and go (violations: #{violations.inspect})"
+
+    assert_job_name_selectors_present(jobs)
   end
 
   def test_dup_push_run_with_every_gated_step_skipped_is_duplicate_skipped
@@ -3932,6 +4002,47 @@ class HealthBriefTest < Minitest::Test
   end
 
   private
+
+  # The jobs declared in .github/workflows/test.yml, keyed by job id. Read with
+  # `safe_load_file(..., aliases: true)`: Psych 4/5 make `load_file` a safe
+  # load with aliases DISABLED, so a workflow that grows a YAML anchor would
+  # raise Psych::AliasesNotEnabled instead of failing the guard cleanly.
+  # test.yml carries no date or time scalars, so no class has to be permitted.
+  def workflow_jobs
+    workflow = YAML.safe_load_file(File.join(ROOT, '.github', 'workflows', 'test.yml'), aliases: true)
+    jobs = workflow.is_a?(Hash) ? workflow['jobs'] : nil
+    raise '.github/workflows/test.yml declares no jobs' unless jobs.is_a?(Hash)
+
+    jobs
+  end
+
+  # The display names a parsed workflow's jobs carry.
+  def workflow_job_names(jobs)
+    jobs.values.filter_map { |spec| spec.is_a?(Hash) ? spec['name'] : nil }
+  end
+
+  # The selectors no job in the parsed workflow carries. Empty when every
+  # selector names a job — the guard passes.
+  def job_name_selector_violations(jobs)
+    names = workflow_job_names(jobs)
+
+    JOB_NAME_SELECTORS.reject { |selector| names.include?(selector) }
+  end
+
+  # The guard itself: every selector the brief's rows (and this file's own
+  # fixtures) use must be the display name of a job in test.yml. Membership,
+  # not equality — unrelated jobs may come and go.
+  def assert_job_name_selectors_present(jobs)
+    names = workflow_job_names(jobs)
+
+    JOB_NAME_SELECTORS.each do |selector|
+      assert_includes names, selector,
+                      "health.md and this file's fixtures select jobs by the display name " \
+                      "`#{selector}`, but no job in .github/workflows/test.yml carries that " \
+                      '`name:` — rename the selector with the job (names present: ' \
+                      "#{names.inspect})"
+    end
+  end
 
   # The "Grading a demo deploy" prose block — row 12's graded convention, from
   # its heading up to the filing convention that follows it. Bounded on that
