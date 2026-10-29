@@ -4001,6 +4001,204 @@ class HealthBriefTest < Minitest::Test
     end
   end
 
+  # The dedupe match is EXACT EQUALITY on a title, so a title carrying a value
+  # that changes run to run can never match an open ask: the same ask is
+  # re-filed on every checkup. Row 10's title names the CONSTANT; its VALUE is
+  # what changes, so the constant's name is what the title carries.
+  def test_the_rubygems_ask_title_names_the_constant_and_never_its_value
+    assert_filing_ask_title(@text, '`RubyGems does not serve Wurk::VERSION`',
+                            resolved: /`RubyGems does not serve [^`]*\d/)
+  end
+
+  # A gem-less Latest Release is a release-lane defect with its own ask, and
+  # its title carries nothing that changes run to run — one stable name is all
+  # the exact-match dedupe needs.
+  def test_the_gem_less_release_ask_title_is_stable
+    assert_filing_ask_title(@text, '`GitHub Release is gem-less`')
+  end
+
+  # The missing-tag verdict is a DIFFERENT defect from a failed deploy and
+  # files its own ask, so the two never collapse into one title. The image tag
+  # is the run-specific part, so it stays a placeholder in the title.
+  def test_the_frozen_demo_ask_title_keeps_the_sha_placeholder
+    assert_filing_ask_title(@text, '`demo frozen: no sha-<7> image tag`',
+                            resolved: /`demo frozen: no sha-[0-9a-f]/)
+  end
+
+  # The served-version row is a second demo defect with its own ask. The
+  # version it compares changes run to run, so the title names the comparison
+  # and never the version.
+  def test_the_served_version_demo_ask_title_is_stable
+    assert_filing_ask_title(@text, '`demo serves a different version than the checkout`',
+                            resolved: /`demo serves a different version [^`]*\d/)
+  end
+
+  # One ask per stuck PR: the PR number is stable for that PR's lifetime and
+  # keeps two stuck PRs distinguishable, so it belongs IN the title — as the
+  # placeholder, never as the resolved number.
+  def test_the_stuck_dependabot_ask_title_keeps_the_pr_number_placeholder
+    assert_filing_ask_title(@text, '`Dependabot is stuck on #<n>`',
+                            resolved: /`Dependabot is stuck on #\d/)
+  end
+
+  # A waiting-on-us docker bump is a DIFFERENT defect from a stuck PR: the
+  # owner can act on it, so it files its own ask and never the stuck one. Its
+  # PR number is the same stable part, and it stays a placeholder.
+  def test_the_waiting_docker_bump_ask_title_keeps_the_pr_number_placeholder
+    assert_filing_ask_title(@text, '`Docker bump #<n> is waiting on us`',
+                            resolved: /`Docker bump #\d/)
+  end
+
+  # A guard that cannot fail is not a guard: the six assertions above pass on a
+  # brief that never carried the title at all, so every form needs a mutation
+  # that renames or removes its title in a COPY of the brief and shows the
+  # guard rejecting it. The mutation is proved first, so a copy that never
+  # changed cannot pass the test vacuously.
+  def test_the_rubygems_ask_title_guard_rejects_a_renamed_title
+    title = '`RubyGems does not serve Wurk::VERSION`'
+    text = @text.sub(title, '`RubyGems does not serve the checkout version`')
+
+    refute_equal @text, text,
+                 'the mutation must have landed before the guard is exercised'
+
+    refute_includes text, title,
+                    'the renamed title must be gone before the guard is exercised'
+
+    error = assert_raises(Minitest::Assertion) do
+      assert_filing_ask_title(text, title, resolved: /`RubyGems does not serve [^`]*\d/)
+    end
+
+    assert_includes error.message, 'the filing paragraph is missing',
+                    'the guard must fail BECAUSE the filing paragraph lost the title'
+  end
+
+  def test_the_gem_less_release_ask_title_guard_rejects_a_removed_title
+    title = '`GitHub Release is gem-less`'
+    text = @text.sub(title, '')
+
+    refute_equal @text, text,
+                 'the mutation must have landed before the guard is exercised'
+
+    refute_includes text, title,
+                    'the removed title must be gone before the guard is exercised'
+
+    error = assert_raises(Minitest::Assertion) do
+      assert_filing_ask_title(text, title)
+    end
+
+    assert_includes error.message, 'the filing paragraph is missing',
+                    'the guard must fail BECAUSE the filing paragraph lost the title'
+  end
+
+  def test_the_frozen_demo_ask_title_guard_rejects_a_renamed_title
+    title = '`demo frozen: no sha-<7> image tag`'
+    text = @text.sub(title, '`demo frozen: no image tag`')
+
+    refute_equal @text, text,
+                 'the mutation must have landed before the guard is exercised'
+
+    refute_includes text, title,
+                    'the renamed title must be gone before the guard is exercised'
+
+    error = assert_raises(Minitest::Assertion) do
+      assert_filing_ask_title(text, title, resolved: /`demo frozen: no sha-[0-9a-f]/)
+    end
+
+    assert_includes error.message, 'the filing paragraph is missing',
+                    'the guard must fail BECAUSE the filing paragraph lost the title'
+  end
+
+  def test_the_served_version_demo_ask_title_guard_rejects_a_removed_title
+    title = '`demo serves a different version than the checkout`'
+    text = @text.sub(title, '')
+
+    refute_equal @text, text,
+                 'the mutation must have landed before the guard is exercised'
+
+    refute_includes text, title,
+                    'the removed title must be gone before the guard is exercised'
+
+    error = assert_raises(Minitest::Assertion) do
+      assert_filing_ask_title(text, title, resolved: /`demo serves a different version [^`]*\d/)
+    end
+
+    assert_includes error.message, 'the filing paragraph is missing',
+                    'the guard must fail BECAUSE the filing paragraph lost the title'
+  end
+
+  def test_the_stuck_dependabot_ask_title_guard_rejects_a_renamed_title
+    title = '`Dependabot is stuck on #<n>`'
+    text = @text.sub(title, '`Dependabot is stuck on a pull request`')
+
+    refute_equal @text, text,
+                 'the mutation must have landed before the guard is exercised'
+
+    refute_includes text, title,
+                    'the renamed title must be gone before the guard is exercised'
+
+    error = assert_raises(Minitest::Assertion) do
+      assert_filing_ask_title(text, title, resolved: /`Dependabot is stuck on #\d/)
+    end
+
+    assert_includes error.message, 'the filing paragraph is missing',
+                    'the guard must fail BECAUSE the filing paragraph lost the title'
+  end
+
+  def test_the_waiting_docker_bump_ask_title_guard_rejects_a_removed_title
+    title = '`Docker bump #<n> is waiting on us`'
+    text = @text.sub(title, '')
+
+    refute_equal @text, text,
+                 'the mutation must have landed before the guard is exercised'
+
+    refute_includes text, title,
+                    'the removed title must be gone before the guard is exercised'
+
+    error = assert_raises(Minitest::Assertion) do
+      assert_filing_ask_title(text, title, resolved: /`Docker bump #\d/)
+    end
+
+    assert_includes error.message, 'the filing paragraph is missing',
+                    'the guard must fail BECAUSE the filing paragraph lost the title'
+  end
+
+  # The resolved-value refusal is a guard of its own, and the six mutation
+  # tests above cannot prove it: each of them renames or removes the title,
+  # so the guard fails on the MISSING title and never reaches the refusal. A
+  # brief whose title carried a resolved sha, version or PR number would pass
+  # every one of them. Each copy below keeps the placeholder title AND adds
+  # the resolved variant, so the resolved value is the only thing left for the
+  # guard to refuse.
+  def test_the_rubygems_ask_title_guard_rejects_a_resolved_value
+    assert_resolved_ask_title_rejected('`RubyGems does not serve Wurk::VERSION`',
+                                       resolved: /`RubyGems does not serve [^`]*\d/,
+                                       resolved_title: '`RubyGems does not serve 1.2.3`')
+  end
+
+  def test_the_frozen_demo_ask_title_guard_rejects_a_resolved_value
+    assert_resolved_ask_title_rejected('`demo frozen: no sha-<7> image tag`',
+                                       resolved: /`demo frozen: no sha-[0-9a-f]/,
+                                       resolved_title: '`demo frozen: no sha-7a7a7a7 image tag`')
+  end
+
+  def test_the_served_version_demo_ask_title_guard_rejects_a_resolved_value
+    assert_resolved_ask_title_rejected('`demo serves a different version than the checkout`',
+                                       resolved: /`demo serves a different version [^`]*\d/,
+                                       resolved_title: '`demo serves a different version 9.9.9`')
+  end
+
+  def test_the_stuck_dependabot_ask_title_guard_rejects_a_resolved_value
+    assert_resolved_ask_title_rejected('`Dependabot is stuck on #<n>`',
+                                       resolved: /`Dependabot is stuck on #\d/,
+                                       resolved_title: '`Dependabot is stuck on #123`')
+  end
+
+  def test_the_waiting_docker_bump_ask_title_guard_rejects_a_resolved_value
+    assert_resolved_ask_title_rejected('`Docker bump #<n> is waiting on us`',
+                                       resolved: /`Docker bump #\d/,
+                                       resolved_title: '`Docker bump #456 is waiting on us`')
+  end
+
   private
 
   # The jobs declared in .github/workflows/test.yml, keyed by job id. Read with
@@ -4383,12 +4581,63 @@ class HealthBriefTest < Minitest::Test
 
   # The brief's filing paragraph — the one saying when a signal files an ask
   # and how the open-issue dedupe runs. One paragraph, so a title assertion
-  # cannot be satisfied by a mention somewhere else in the file.
-  def filing_paragraph
-    para = @text.split(/\n\s*\n/).find { |candidate| candidate.include?('file one ask') }
+  # cannot be satisfied by a mention somewhere else in the file. It reads a
+  # GIVEN brief text, so a mutation test can feed the guard a broken copy.
+  def filing_paragraph(text = @text)
+    para = text.split(/\n\s*\n/).find { |candidate| candidate.include?('file one ask') }
     raise 'health.md has no filing paragraph saying when to file one ask' if para.nil?
 
     para
+  end
+
+  # ONE guard for the six per-form ask titles: the filing paragraph must carry
+  # the title EXACTLY as its row files it, and no title may carry a resolved
+  # run-to-run value — the dedupe match is exact equality, so such a title can
+  # never hit an open ask and the same ask is re-filed on every checkup. It
+  # reads the brief TEXT, so the six positive assertions and the six mutation
+  # tests exercise the SAME rule: a mutation test written against a second
+  # spelling of it would prove nothing about the guard.
+  def assert_filing_ask_title(text, title, resolved: nil)
+    para = filing_paragraph(text)
+
+    assert_includes para, title,
+                    'the dedupe match is exact equality on the title, so every signal must ' \
+                    "file under one stable name; the filing paragraph is missing #{title}"
+
+    return if resolved.nil?
+
+    refute_match(resolved, para,
+                 "a resolved value inside #{title} can never match an open ask, so the ask " \
+                 'is re-filed on every checkup')
+  end
+
+  # The resolved-value half of the ask-title guard: a title carrying a value
+  # that changes run to run can never match an open ask, so the same ask is
+  # re-filed on every checkup. The copy keeps the PLACEHOLDER title and adds
+  # the RESOLVED variant, so the guard cannot pass by failing earlier on the
+  # missing title — the resolved value is all that is left to refuse.
+  def assert_resolved_ask_title_rejected(title, resolved:, resolved_title:)
+    text = @text.sub(title, "#{title} #{resolved_title}")
+
+    refute_equal @text, text,
+                 'the mutation must have landed before the guard is exercised'
+
+    para = filing_paragraph(text)
+
+    assert_includes para, title,
+                    'the copy must keep the placeholder title, so the guard fails on the ' \
+                    'resolved value and not on the missing title'
+
+    assert_includes para, resolved_title,
+                    'the copy must carry the resolved variant, so the guard has a resolved ' \
+                    'value to refuse'
+
+    error = assert_raises(Minitest::Assertion) do
+      assert_filing_ask_title(text, title, resolved: resolved)
+    end
+
+    assert_includes error.message, 'a resolved value inside',
+                    'the guard must fail BECAUSE the title carries a resolved value'
   end
 
   # The backticked issues lookup the filing paragraph requires before any ask
