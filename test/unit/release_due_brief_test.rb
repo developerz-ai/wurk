@@ -819,6 +819,165 @@ class ReleaseDueBriefTest < Minitest::Test
                  'ruled-out items')
   end
 
+  # The ask's title is a contract with the platform that files it: the title
+  # is matched byte-for-byte when the platform dedupes against open asks, so
+  # a renamed title (or a title that loses its bold) is filed as a DIFFERENT
+  # ask and the guard never sees the first one.
+  RELEASE_ASK_TITLE = '**Release `<next>`**'
+
+  # The pre-flight guard's two title lists, byte-for-byte out of the brief.
+  # `gh issue list` and `gh pr list` reject `--paginate` outright, so these
+  # `gh api --paginate` calls are the only complete listing of open titles;
+  # a retyped variant (another endpoint, another jq filter) would guard a
+  # different list than the one the platform filed against.
+  ISSUES_LOOKUP = 'gh api --paginate "repos/developerz-ai/wurk/issues?state=open" | ' \
+                  "jq -r '.[] | select(.pull_request == null) | .title'"
+  PULLS_LOOKUP = 'gh api --paginate "repos/developerz-ai/wurk/pulls?state=open" | ' \
+                 "jq -r '.[].title'"
+
+  # The shared exclusion: an open title that already says "Release" (or
+  # "release:") means an ask is out there, and this lane must skip filing.
+  RELEASE_TITLE_EXCLUSION = '^Release|^release:'
+
+  # The otherwise row files exactly ONE ask, and the ask carries the release
+  # title. This is the row the whole table turns on: every other row is a
+  # "nothing" verdict, and this one is the release.
+  def test_otherwise_row_files_one_release_ask_titled_release_next
+    row = table_row_matching(/\Aotherwise\z/)
+
+    refute_nil row,
+               '.dz/briefs/release-due.md Window/Do table must keep its "otherwise" row: ' \
+               'without it a due release has no verdict at all'
+
+    do_cell = row[:do]
+
+    assert_match(/\bone ask\b/, do_cell,
+                 'the otherwise row must file exactly one ask: the ask is what releases the ' \
+                 "shipped work, so a row that says nothing loses the release: #{do_cell.inspect}")
+
+    assert_includes do_cell, RELEASE_ASK_TITLE,
+                    'the otherwise row must carry the ask title exactly as ' \
+                    '**Release `<next>`**; the title is matched byte-for-byte, so a renamed ' \
+                    "or unbolded title is filed as a different ask: #{do_cell.inspect}"
+
+    assert_equal 1, do_cell.scan(RELEASE_ASK_TITLE).size,
+                 'the otherwise row must name the ask title once — "one ask" means one ' \
+                 "title, not two: #{do_cell.inspect}"
+  end
+
+  # The Breaking row is the NO-ASK branch: a major is a maintainer's call, so
+  # this lane never files a release ask for it. The row's own wording (filing
+  # an issue FOR a maintainer) is a different ask and out of scope here; what
+  # is pinned is that the row never carries the release-ask title, and that
+  # the otherwise row is the only row that does.
+  def test_breaking_row_files_no_release_ask
+    row = table_row_matching(/Breaking/)
+
+    refute_nil row,
+               '.dz/briefs/release-due.md Window/Do table must keep its Breaking row: ' \
+               'a major release is a maintainer\'s decision and the lane has to say so'
+
+    do_cell = row[:do]
+
+    assert_match(/no release ask/i, do_cell,
+                 'the Breaking row must say "no release ask": a major is a maintainer\'s ' \
+                 "call, so this lane files no release ask: #{do_cell.inspect}")
+
+    refute_includes do_cell, RELEASE_ASK_TITLE,
+                    'the Breaking row must never carry the release-ask title ' \
+                    '**Release `<next>`**; a breaking change owes a maintainer, not an ask: ' \
+                    "#{do_cell.inspect}"
+
+    no_ask_rows = parse_table_rows.select { |r| r[:do].match?(/no release ask/i) }
+
+    assert_equal [row[:raw]], no_ask_rows.map { |r| r[:raw] },
+                 'the Breaking row must be the only row of the Window/Do table that declines ' \
+                 'a release ask; another row saying so would silently drop a release'
+
+    otherwise_row = table_row_matching(/\Aotherwise\z/)
+
+    refute_nil otherwise_row,
+               '.dz/briefs/release-due.md Window/Do table must keep its "otherwise" row'
+
+    titled_rows = parse_table_rows.select { |r| r[:do].include?(RELEASE_ASK_TITLE) }
+
+    assert_equal [otherwise_row[:raw]], titled_rows.map { |r| r[:raw] },
+                 'the otherwise row must be the ONLY row of the Window/Do table that carries ' \
+                 'the release-ask title; the Breaking row never files one'
+  end
+
+  # The pre-flight guard is the only thing that stops a SECOND release ask
+  # being filed for the same window: it reads every open title from BOTH
+  # lists (issues AND pulls, each paginated to the last page) and skips the
+  # ask when one already says "Release". Pattern, both lookups and the
+  # MUST-skip directive are asserted inside the SAME step, so neither list
+  # can drop the shared exclusion on its own.
+  def test_pre_flight_guard_reads_both_open_title_lists_and_skips_on_an_open_release
+    step = extract_pre_flight_guard
+
+    refute_empty step,
+                 '.dz/briefs/release-due.md ask section must keep its "Pre-flight guard" ' \
+                 'step: it is the only thing that stops a second release ask being filed'
+
+    assert_match(/\A1\.\s/, step,
+                 'the pre-flight guard must be step 1 of the ask section: it runs BEFORE the ' \
+                 'ask is filed, so a later step leaves the ask unguarded')
+
+    assert_includes step, ISSUES_LOOKUP,
+                    'the pre-flight guard must read every open ISSUE title through the ' \
+                    "paginated issues lookup, byte-for-byte: #{step.inspect}"
+
+    assert_includes step, PULLS_LOOKUP,
+                    'the pre-flight guard must read every open PULL title through the ' \
+                    "paginated pulls lookup, byte-for-byte: #{step.inspect}"
+
+    assert_includes step, RELEASE_TITLE_EXCLUSION,
+                    'the pre-flight guard must apply the shared `^Release|^release:` ' \
+                    "exclusion to the titles it read: #{step.inspect}"
+
+    assert_includes step, 'MUST skip the Release ask',
+                    'the pre-flight guard must turn a matching title into a MUST-skip ' \
+                    "directive, not a suggestion: #{step.inspect}"
+  end
+
+  # The standing prohibition is the brief's last word: never file a second
+  # ask while one titled `Release …` is open. It closes the ask section, so
+  # it is read LAST by whoever acts on the brief; a dropped or reworded
+  # closing line loses the one rule that keeps a duplicate ask from being
+  # filed.
+  def test_ask_section_ends_with_the_standing_no_second_ask_prohibition
+    ask_section = extract_ask_section
+
+    refute_empty ask_section,
+                 '.dz/briefs/release-due.md must keep its "## The ask, when due" section'
+
+    last_line = ask_section.lines.map(&:strip).reject(&:empty?).last
+
+    assert_equal 'Never file a second ask while one titled `Release …` is open.', last_line,
+                 'the ask section must end with the standing no-second-ask prohibition, ' \
+                 'verbatim: it is the rule that keeps one open `Release …` ask from being ' \
+                 'filed twice'
+  end
+
+  # The table row whose Window cell matches the pattern (nil when the row is
+  # gone, so the caller can say which row the brief lost).
+  def table_row_matching(pattern)
+    parse_table_rows.find { |row| row[:window].match?(pattern) }
+  end
+
+  # The pre-flight guard step: the numbered ask step labelled "Pre-flight
+  # guard", from its own line to the next numbered step.
+  def extract_pre_flight_guard
+    lines = extract_ask_section.lines
+    idx = lines.index { |l| l.include?('**Pre-flight guard') }
+    return '' unless idx
+
+    rest = lines[(idx + 1)..].to_a
+    stop = rest.index { |l| l.match?(/^\s*\d+\.\s/) }
+
+    ([lines[idx]] + (stop ? rest[0...stop] : rest)).join
+  end
+
   def test_window_scan_with_real_repo_filters_shipping_paths_excludes_docs_keeps_revert_pair
     Dir.mktmpdir('wurk-window-repo-') do |tmpdir|
       build_window_repo(tmpdir)
