@@ -450,9 +450,9 @@ jobs:
             echo "✓ $file exists and is non-empty ($(wc -l < "$file") lines)"
           done
 
-  # Workflow lint via actionlint. Closes the gap left by CodeRabbit's advisory
-  # actionlint pass (.coderabbit.yml + .dz/maintainer/maintainer.yml setting
-  # `request_changes: false` for the review lane), which never blocks a merge.
+  # Both .coderabbit.yml and .dz/maintainer/maintainer.yml enable review change
+  # requests. This required actionlint check provides deterministic workflow lint
+  # enforcement alongside those reviews. — editor:comment[bot]
   # actionlint does NOT embed shellcheck: it shells out to the external
   # `shellcheck` executable for `run:` blocks. ubuntu-latest preinstalls it,
   # and the `run actionlint` step below refuses to run without it.
