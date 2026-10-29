@@ -40,18 +40,56 @@ class ReleaseDocClaimsTest < Minitest::Test
     workflow_tail = publish_tail_step_names
     md_steps = table_step_names
 
-    refute_empty workflow_tail,
-                 "release.yml's `release` job has no `- name:` steps after `build & verify gem`; " \
-                 'the publish tail should have at least one step'
-
-    matches = md_steps.each_cons(workflow_tail.length).any? do |window|
-      window == workflow_tail
-    end
-
-    assert matches,
+    assert publish_tail_listed_consecutively?(workflow_tail, md_steps),
            'RELEASE.md\'s step table must list release.yml\'s publish-tail `- name:` values ' \
            'as consecutive rows in workflow order; ' \
            "workflow=#{workflow_tail.inspect}, table=#{md_steps.inspect}"
+  end
+
+  # Mutation-proof for the gate above, in the style of
+  # test_row10_each_primary_filter_prevents_a_false_404_alarm: every drift
+  # shape the gate exists to catch must flip publish_tail_listed_consecutively?
+  # from the real pair's true to false, and an empty tail must raise rather
+  # than pass - so a comparison disabled to always-true fails here instead of
+  # waving the gate through. Mutations are cut from the files' current tail
+  # and table, so a legitimate step rename or table edit keeps the proof valid.
+  def test_publish_tail_comparison_refutes_each_drift_shape_and_raises_on_an_empty_tail
+    tail = publish_tail_step_names
+    table = table_step_names
+
+    assert publish_tail_listed_consecutively?(tail, table),
+           'the real release.yml tail and RELEASE.md table must match, the baseline ' \
+           'every mutation below must break'
+
+    start = table.index(tail.first)
+
+    refute publish_tail_listed_consecutively?(
+      tail.dup.tap { |t| t[0] = "#{t[0]} (renamed)" }, table
+    ), 'renaming a tail entry on the workflow side must break the match'
+
+    refute publish_tail_listed_consecutively?(
+      tail.dup.tap { |t| t[0], t[1] = t[1], t[0] }, table
+    ), 'swapping the workflow side out of order must break the match'
+
+    refute publish_tail_listed_consecutively?(
+      tail, table.dup.tap { |t| t[start + 1] = "#{t[start + 1]} (reworded)" }
+    ), 'rewording a tail row in the table must break the match'
+
+    refute publish_tail_listed_consecutively?(
+      tail, table.dup.tap { |t| t[start + 1], t[start + 2] = t[start + 2], t[start + 1] }
+    ), 'swapping the table side out of order must break the match'
+
+    refute publish_tail_listed_consecutively?(
+      tail, table.dup.tap { |t| t[start + 1, 2] = t[start + 1, 2].join(' ') }
+    ), 'merging two consecutive tail rows into one must break the match'
+
+    refute publish_tail_listed_consecutively?(
+      tail, table.dup.insert(start + 1, 'decoy row spliced between tail rows')
+    ), 'a decoy row between consecutive tail rows must break the match'
+
+    assert_raises(RuntimeError) do
+      publish_tail_listed_consecutively?([], table)
+    end
   end
 
   # Catches drift between the brief's `RELEASE.md:<a>-<b>` cite and the
@@ -119,6 +157,20 @@ class ReleaseDocClaimsTest < Minitest::Test
 
       cells[1].sub(/\A\*\*(.*?)\*\*\z/, '\1').delete('`').strip
     end.compact
+  end
+
+  # The tail-vs-table comparison the guard above and its mutation proof share -
+  # the window match lives only here, so the proof refutes through the same
+  # code the guard asserts through. Raises on an empty tail, matching the
+  # parsers' raise-on-structural-absence convention: an empty publish tail is
+  # structural absence in release.yml, not a comparison that could pass.
+  def publish_tail_listed_consecutively?(workflow_tail, md_steps)
+    if workflow_tail.empty?
+      raise "release.yml's `release` job has no `- name:` steps after `build & verify gem`; " \
+            'the publish tail should have at least one step'
+    end
+
+    md_steps.each_cons(workflow_tail.length).any? { |window| window == workflow_tail }
   end
 
   # Pins the availability probe so RELEASE.md and the health checkup brief
