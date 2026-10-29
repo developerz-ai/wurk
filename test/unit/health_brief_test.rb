@@ -206,6 +206,13 @@ class HealthBriefTest < Minitest::Test
   DEMO_TAG       = 'sha-7777777'
   API_CONTROLLER = File.join(ROOT, 'app', 'controllers', 'wurk', 'api_controller.rb')
 
+  # Where the brief's filing rule ENDS. The trailing recovery prose that
+  # follows the rule continues it inside the SAME markdown block — no blank
+  # line separates them — and opens with this sentence. The rule is
+  # everything before it; the prose names no row's stable title, so it must
+  # stay outside the filing-rule surface.
+  RECOVERY_PROSE_OPENER = /A red `main`\s+comes\s+first:/
+
   # The three classes a successful push run grades into, read off the job
   # list. A verdict names EXACTLY ONE of them: the run's conclusion alone
   # cannot tell them apart — a reused tree concludes `success` having run
@@ -3972,6 +3979,68 @@ class HealthBriefTest < Minitest::Test
     end
   end
 
+  # The filing rule and the trailing recovery prose share ONE markdown block:
+  # the prose that says a red `main` comes first continues the filing
+  # paragraph with no blank line between them, so a helper that returns the
+  # whole block carries that prose's words too — and a title named only there
+  # is no row's stable title, yet it would satisfy a filing-rule title
+  # assertion. The backticked `main` of the prose is the tell: the rule
+  # names no `main` of its own.
+  def test_the_filing_rule_excludes_the_trailing_recovery_prose
+    para = filing_paragraph
+
+    refute_includes para, '`main`',
+                    'the backticked `main` of the trailing recovery prose must not be part of ' \
+                    'the filing rule: the rule names no `main` of its own, so a filing-rule ' \
+                    "title assertion must not be satisfiable from that prose; got #{para.inspect}"
+
+    ['`main is red`', '`release did not publish`', '`demo deploy failed`',
+     '`topology.yml is red`', '`ecosystem.yml is red`'].each do |title|
+      assert_includes para, title,
+                      "#{title} is a row's stable filing title, so bounding the filing rule at " \
+                      'the trailing recovery prose must not cut it away; ' \
+                      "got #{para.inspect}"
+    end
+  end
+
+  # The same boundary, fed a brief whose trailing recovery prose carries a
+  # title the filing rule does not have: a title named only in that prose
+  # belongs to no row, and the filing-rule surface must not carry it.
+  def test_a_title_only_in_the_trailing_recovery_prose_is_not_a_filing_rule_title
+    prose_title = '`recovery lane is stuck`'
+    brief = @text.sub(RECOVERY_PROSE_OPENER) do |opener|
+      "#{opener} the recovery prose's own title is #{prose_title}.\n"
+    end
+
+    assert_includes brief, prose_title,
+                    'the fixture must land the prose title in the brief, or the refutation ' \
+                    'below passes vacuously against an unbounded helper'
+
+    para = filing_paragraph(brief)
+
+    refute_includes para, prose_title,
+                    'a title carried only by the trailing recovery prose is no filing-rule ' \
+                    'title: the filing-rule surface must stop at that prose, or a title ' \
+                    "assertion over it could be satisfied from it; got #{para.inspect}"
+
+    assert_includes para, '`main is red`',
+                    "the rule's own stable titles must survive the boundary; got #{para.inspect}"
+  end
+
+  # The boundary's guard is load-bearing: a brief whose filing rule carries no
+  # trailing recovery prose has nothing to cut the rule at, and the helper must
+  # say so by name. Handing back the whole block unbounded would carry the
+  # prose's words back into the filing-rule surface.
+  def test_a_filing_rule_without_the_recovery_prose_raises_the_named_error
+    opener = RECOVERY_PROSE_OPENER.match(@text)
+
+    refute_nil opener, 'health.md carries no trailing recovery prose to bound the filing rule at'
+
+    error = assert_raises(RuntimeError) { filing_paragraph(@text[0...opener.begin(0)]) }
+    assert_equal 'health.md has no trailing recovery prose to bound the filing rule',
+                 error.message
+  end
+
   # The classification is only as good as the evidence the brief says it
   # reads: the job list, the `detect changed paths` job's conclusion, every
   # gated job's conclusion and every gated job's step conclusions. A reader who
@@ -4381,14 +4450,19 @@ class HealthBriefTest < Minitest::Test
     row[(open_at + 1)...close_at].gsub('\\|', '|')
   end
 
-  # The brief's filing paragraph — the one saying when a signal files an ask
-  # and how the open-issue dedupe runs. One paragraph, so a title assertion
-  # cannot be satisfied by a mention somewhere else in the file.
-  def filing_paragraph
-    para = @text.split(/\n\s*\n/).find { |candidate| candidate.include?('file one ask') }
+  # The brief's filing RULE — the block saying when a signal files an ask, how
+  # the open-issue dedupe runs and what the ask body carries. Bounded at the
+  # trailing recovery prose that continues it inside the SAME markdown block:
+  # that prose names no row's stable title, so a filing-rule title assertion
+  # must not be satisfiable from it.
+  def filing_paragraph(text = @text)
+    para = text.split(/\n\s*\n/).find { |candidate| candidate.include?('file one ask') }
     raise 'health.md has no filing paragraph saying when to file one ask' if para.nil?
 
-    para
+    boundary = para.match(RECOVERY_PROSE_OPENER)
+    raise 'health.md has no trailing recovery prose to bound the filing rule' if boundary.nil?
+
+    para[0...boundary.begin(0)].rstrip
   end
 
   # The backticked issues lookup the filing paragraph requires before any ask
