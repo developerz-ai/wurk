@@ -23,26 +23,36 @@ say which one is missing.
 The surfaces: `README.md`, `CLAUDE.md`, `docs/**`, `docs/wiki/**`, `docs/site/llms.txt`.
 
 The guard tests already policing claims on those surfaces — read them first and skip what they
-own, so this lane never re-reports a claim a gate already covers:
+own, so this lane never re-reports a claim a gate already covers. The registry below is that list:
+one row per guard, the anchor it lives at, and the claim it owns. The ask slug is the stable title
+that claim carries. A new guard is a change to this brief, never a row invented at reporting time.
 
-| Guard | What it owns |
-|---|---|
-| `test/unit/readme_claims_test.rb:9` | README claims about a third-party gem's suite running in CI |
-| `test/unit/docs_links_test.rb:15` | anchors and links between the reference docs |
-| `test/unit/docs_links_test.rb:140` | `DocsEnvTableTest`: docs/configuration.md's "Every `ENV` read in `lib/`" claim — the env table staying complete |
-| `test/unit/toolchain_pins_test.rb:13` | `ToolchainPinsTest`: docs/deployment.md's `oven/bun` example Dockerfile pin — present and identical to the other pin sites |
-| `test/unit/claude_md_claims_test.rb:13` | the same claims as the README, in CLAUDE.md |
-| `test/unit/forbidden_claims_test.rb:12` | the pitch surfaces: README, docs site, llms.txt, the gem summary |
-| `test/unit/cutover_claims_test.rb:12` | promises about running Sidekiq and Wurk against one Redis |
-| `test/unit/wiki_pages_test.rb:13` | the docs/wiki/ pages: shape, links, duplication |
-| `test/unit/llms_txt_test.rb:9` | docs/site/llms.txt: the format and the links it lists |
-| `test/unit/site_code_blocks_test.rb:17` | keyboard reachability of the code snippets on the site |
-| `test/unit/release_doc_claims_test.rb:19` | RELEASE.md's step table against release.yml |
-| `test/unit/contributing_line_refs_test.rb:13` | CONTRIBUTING.md's `bin/check:<line>` references |
-| `test/unit/spec_constants_test.rb:17` | the `Sidekiq::*` constants the specs name |
+## Guard registry
 
-`RELEASE.md` is release tooling (see *Out of scope*), so the `release_doc_claims_test.rb` row is
-listed to mark what that guard owns — this lane reports nothing there.
+A guard qualifies for this registry when it is a test class under `test/unit/` that reads a documentation surface — `README.md`, `CLAUDE.md`, `CONTRIBUTING.md`, `RELEASE.md`, or a file under `docs/`. Ownership is per claim: a guard that owns one claim on a surface owns no other claim on it, and this lane keeps reporting the claims no guard owns.
+
+| Ask slug | Guard anchor | Guard class | Claim it owns |
+|---|---|---|---|
+| `readme-third-party-ci-claims` | `test/unit/readme_claims_test.rb:9` | `ReadmeClaimsTest` | README.md's claim that a `sidekiq-*` gem's suite runs in CI |
+| `docs-links-anchors` | `test/unit/docs_links_test.rb:16` | `DocsLinksTest` | the anchors between the reference docs: every intra-doc link must resolve to a heading that exists |
+| `docs-divergence-table` | `test/unit/docs_links_test.rb:126` | `DocsDivergenceTableTest` | the `## Divergences from the Sidekiq spec` table against the ledger in docs/idea/parity-divergences.md |
+| `docs-env-table-complete` | `test/unit/docs_links_test.rb:315` | `DocsEnvTableTest` | docs/configuration.md's "Every `ENV` read in `lib/`" claim — the env table staying complete |
+| `deployment-bun-docker-pin` | `test/unit/toolchain_pins_test.rb:13` | `ToolchainPinsTest` | docs/deployment.md's `oven/bun` example Dockerfile pin — present and identical to the other pin sites |
+| `claude-md-claims` | `test/unit/claude_md_claims_test.rb:13` | `ClaudeMdClaimsTest` | CLAUDE.md's claim that a `sidekiq-*` gem's suite passes against Wurk |
+| `forbidden-pitch-claims` | `test/unit/forbidden_claims_test.rb:18` | `ForbiddenClaimsTest` | the pitch claims on README.md, the docs site and llms.txt: "faster", published scale figures, a per-job progress surface |
+| `cutover-shared-redis-claims` | `test/unit/cutover_claims_test.rb:12` | `CutoverClaimsTest` | promises about running Sidekiq and Wurk against one Redis |
+| `wiki-pages-shape` | `test/unit/wiki_pages_test.rb:13` | `WikiPagesTest` | the docs/wiki/ pages: shape, links, duplication |
+| `llms-txt-format-links` | `test/unit/llms_txt_test.rb:9` | `LlmsTxtTest` | docs/site/llms.txt: the format and the links it lists |
+| `site-code-block-keyboard` | `test/unit/site_code_blocks_test.rb:21` | `SiteCodeBlocksTest` | keyboard reachability of the code snippets on the site |
+| `release-doc-steps` | `test/unit/release_doc_claims_test.rb:19` | `ReleaseDocClaimsTest` | RELEASE.md's step table against release.yml |
+| `release-states-table` | `test/unit/release_states_doc_test.rb:19` | `ReleaseStatesDocTest` | RELEASE.md's `### Release states` table — one row per release state |
+| `contributing-line-refs` | `test/unit/contributing_line_refs_test.rb:13` | `ContributingLineRefsTest` | CONTRIBUTING.md's `bin/check:<line>` references |
+| `spec-named-constants` | `test/unit/spec_constants_test.rb:17` | `SpecConstantsTest` | the `Sidekiq::*` constants the specs name |
+| `spec-require-shims` | `test/unit/sidekiq_require_shims_test.rb:16` | `SidekiqRequireShimsTest` | the `require "sidekiq…"` paths the specs document — each must resolve to a Wurk shim |
+| `llms-full-dump` | `test/unit/llms_full_test.rb:12` | `LlmsFullTest` | the generated llms-full dump: every top-level doc inlined verbatim, none unaccounted for |
+
+The two `RELEASE.md` rows are release tooling (see *Out of scope*), so they are listed to mark what
+those guards own — this lane reports nothing there.
 
 What the guards do not cover — the shapes of a drift no gate can see:
 
@@ -82,36 +92,3 @@ gh api --paginate "repos/developerz-ai/wurk/issues?state=open" | jq -r '.[] | se
 the same lookup the filing rule in `.dz/briefs/health.md` runs — `gh issue list` truncates at 30
 and cannot paginate. If a returned title equals the ask's title exactly, the ask already exists:
 do not file a second one.
-
-## Rows
-
-The thirteen checks the guard table above already owns, one row each, mirroring that table. A new
-check is a change to this brief, never a row invented at reporting time.
-
-- `readme-third-party-ci-claims` — README claims about a third-party gem's suite running in CI
-  (`test/unit/readme_claims_test.rb:9`).
-- `docs-links-anchors` — anchors and links between the reference docs
-  (`test/unit/docs_links_test.rb:15`).
-- `docs-env-table-complete` — docs/configuration.md's "Every `ENV` read in `lib/`" claim: the env
-  table staying complete (`test/unit/docs_links_test.rb:140`).
-- `deployment-bun-docker-pin` — docs/deployment.md's `oven/bun` example Dockerfile pin, present and
-  identical to the other pin sites (`test/unit/toolchain_pins_test.rb:13`).
-- `claude-md-claims` — the same claims as the README, in CLAUDE.md
-  (`test/unit/claude_md_claims_test.rb:13`).
-- `forbidden-pitch-claims` — the pitch surfaces: README, docs site, llms.txt, the gem summary
-  (`test/unit/forbidden_claims_test.rb:12`).
-- `cutover-shared-redis-claims` — promises about running Sidekiq and Wurk against one Redis
-  (`test/unit/cutover_claims_test.rb:12`).
-- `wiki-pages-shape` — the docs/wiki/ pages: shape, links, duplication
-  (`test/unit/wiki_pages_test.rb:13`).
-- `llms-txt-format-links` — docs/site/llms.txt: the format and the links it lists
-  (`test/unit/llms_txt_test.rb:9`).
-- `site-code-block-keyboard` — keyboard reachability of the code snippets on the site
-  (`test/unit/site_code_blocks_test.rb:17`).
-- `release-doc-steps` — RELEASE.md's step table against release.yml
-  (`test/unit/release_doc_claims_test.rb:19`): an owned guard, not a reporting surface — this lane
-  reports nothing there.
-- `contributing-line-refs` — CONTRIBUTING.md's `bin/check:<line>` references
-  (`test/unit/contributing_line_refs_test.rb:13`).
-- `spec-named-constants` — the `Sidekiq::*` constants the specs name
-  (`test/unit/spec_constants_test.rb:17`).
