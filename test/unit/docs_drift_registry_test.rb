@@ -170,6 +170,41 @@ class DocsDriftRegistryTest < Minitest::Test
     end
   end
 
+  # A nested helper class defined before the parent's documentation-reading
+  # method must not slice the parent at its own definition line. Slicing at
+  # the next class line handed the parent's trailing method to the helper:
+  # discovery then omitted the qualifying parent and demanded a registry row
+  # for the helper instead. The read sits after the helper's end, exactly
+  # where that mis-slice loses it. The constants are quoted lines,
+  # unresolvable in THIS file, for the reason the fixture above gives: a
+  # resolvable surface path in a fixture string would read as THIS gate's
+  # own evidence.
+  def test_a_nested_helper_before_the_read_does_not_steal_its_parents_method
+    fixture = [
+      'class FixtureOuterTest < Minitest::Test',
+      "  BOOKS = File.join(SHELF, 'docs')",
+      "  OVERVIEW = File.join(BOOKS, 'overview.md')",
+      '  class FixtureHelper < FixtureBase',
+      '    def call',
+      '      File.readlines(CACHE)',
+      '    end',
+      '  end',
+      '',
+      '  def test_it',
+      '    File.readlines(OVERVIEW)',
+      '  end',
+      'end'
+    ].join("\n")
+
+    Dir.mktmpdir('docs-drift-registry') do |dir|
+      path = File.join(dir, 'fixture_nested_test.rb')
+      File.write(path, fixture)
+
+      assert_equal [['FixtureOuterTest', 1]], class_guards(path),
+                   'a parent class keeps the methods its nested helper ends before'
+    end
+  end
+
   def test_the_registry_has_no_duplicate_slug_class_or_anchor
     assert_empty duplicate_errors(registry_rows),
                  'a duplicate slug, guard class or anchor is a second copy of the same guard'
@@ -425,18 +460,39 @@ class DocsDriftRegistryTest < Minitest::Test
   end
 
   # Each class definition in the file, in order: its name, its definition
-  # line, and its raw body — the class's own lines through the line before the
-  # next class definition. Sequential slicing also keeps a nested class's code
-  # out of its parent's body.
+  # line, and its raw body — the class's own lines through the line before
+  # the `end` that closes it. Bodies are bounded by class and end, never by
+  # the next `class` line: a nested helper class defined before its parent's
+  # documentation-reading method must not slice the parent at its own
+  # definition line, which would hand the parent's method to the helper,
+  # omit the qualifying parent, and demand a registry row for the helper.
   def class_bodies(lines)
-    starts = lines.each_with_index.filter_map do |line, index|
+    lines.each_with_index.filter_map do |line, index|
       match = line.match(/^\s*class\s+([A-Za-z_][A-Za-z0-9_]*)\s</)
-      match && [match[1], index]
+      next unless match
+
+      stop = self_closing?(line) ? index + 1 : class_end(lines, index, line[/\A */].length)
+      [match[1], index + 1, lines[index...stop].join]
     end
-    starts.each_with_index.map do |(name, index), at|
-      stop = starts[at + 1]&.last || lines.size
-      [name, index + 1, lines[index...stop].join]
+  end
+
+  # The line index of the `end` closing the class that opens at `start`: the
+  # first bare `end` at the class's own indentation. A nested class's `end`
+  # is deeper, so the nested lines stay inside the parent's body and the
+  # parent keeps the methods it holds after the nested class ends.
+  def class_end(lines, start, indent)
+    closed = ((start + 1)...lines.size).find do |index|
+      line = lines[index]
+      line.strip == 'end' && line[/\A */].length == indent
     end
+    closed || lines.size
+  end
+
+  # Whether the class closes on its own line — `class X < Y; end` — and so
+  # has no body lines to bound. The `; end` must sit before any trailing
+  # comment, the way `class FatalBoom < Exception; end # rubocop:disable` does.
+  def self_closing?(line)
+    line.split('#', 2).first.match?(/;\s*end\s*\z/)
   end
 
   # Whether one class's own code reads a documentation surface: a content read
