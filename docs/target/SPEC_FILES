@@ -1,0 +1,15 @@
+# The authoritative spec-file set: one filename per line, relative to docs/target/.
+#
+# Both readers of this manifest must implement it identically:
+# - strip surrounding whitespace from each line;
+# - skip blank lines;
+# - skip lines whose first non-whitespace character is '#';
+# - every remaining line is a filename that must exist as docs/target/<name>.
+#
+# docs/target/ holds EXACTLY the spec docs listed here - no other .md file may
+# live there; this manifest is the only non-.md file allowed there. Both
+# readers compare the manifest's set against the docs/target/*.md files on
+# disk, so a stray .md file in docs/target/ is a failure, not noise.
+sidekiq-free.md
+sidekiq-pro.md
+sidekiq-ent.md

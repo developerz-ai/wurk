@@ -117,6 +117,7 @@ Skip step 3 → leaked sockets in children. Skip step 5 → children corrupt eac
 - **EVALSHA-cache Lua scripts.** Loaded once per pool, never re-uploaded.
 - **Default fetcher is reliable.** BLMOVE atomic move from main queue to per-process private list. No "basic fetch" mode.
 - **Authoritative spec** for any Sidekiq surface lives in `docs/target/sidekiq-{free,pro,ent}.md`. Match it exactly when implementing or modifying public API.
+- **Authoritative spec SET.** The set of spec docs is `docs/target/SPEC_FILES` — one filename per line, relative to `docs/target/`; readers skip blank lines and `#` comments, and every listed doc must exist and be non-empty. The CI `spec-docs` step and `test/unit/spec_docs_test.rb` both compare that manifest against the `docs/target/*.md` files on disk, so adding or removing a spec doc means editing the manifest. `docs/target/` holds exactly those `.md` files and `docs/target/SPEC_FILES` is the only non-`.md` file allowed there — but that half is convention, not machine-enforced: a stray non-`.md` file there passes both readers.
 - **No comments that restate code.** Only document non-obvious *why*: a hidden constraint, a workaround for a specific bug, behavior that would surprise a reader.
 
 ## Testing

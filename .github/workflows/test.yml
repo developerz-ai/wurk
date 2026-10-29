@@ -429,7 +429,7 @@ jobs:
       # Per-step gate — see the `test` job (#469).
       RUN: ${{ needs.detect.outputs.dup != 'true' && (github.event_name != 'pull_request' || needs.detect.outputs.specdocs == 'true') }}
     steps:
-      # Sparse: this job reads three files, not the repo.
+      # Sparse: this job reads docs/target/ only, not the repo.
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         if: env.RUN == 'true'
         with:
@@ -438,17 +438,65 @@ jobs:
       - name: check spec docs
         if: env.RUN == 'true'
         run: |
-          for file in docs/target/sidekiq-free.md docs/target/sidekiq-pro.md docs/target/sidekiq-ent.md; do
+          # The authoritative SET of spec docs is docs/target/SPEC_FILES (one
+          # filename per line, relative to docs/target/); docs/target/ holds
+          # exactly those .md files. The manifest and the docs/target/*.md files
+          # on disk must be the same set, so a spec doc added to (or removed
+          # from) the directory without a matching manifest edit fails here.
+          manifest="docs/target/SPEC_FILES"
+          if [ ! -f "$manifest" ]; then
+            echo "ERROR: $manifest does not exist" >&2
+            exit 1
+          fi
+
+          # The manifest format: one filename per line; blank lines and lines
+          # whose first non-whitespace character is '#' are skipped.
+          trim() {
+            local value="$1"
+            value="${value#"${value%%[![:space:]]*}"}"
+            value="${value%"${value##*[![:space:]]}"}"
+            printf '%s' "$value"
+          }
+
+          listed=()
+          while IFS= read -r line || [ -n "$line" ]; do
+            entry="$(trim "$line")"
+            case "$entry" in
+              ''|'#'*) continue ;;
+            esac
+            listed+=("$entry")
+          done < "$manifest"
+
+          if [ "${#listed[@]}" -eq 0 ]; then
+            echo "ERROR: $manifest lists no spec docs" >&2
+            exit 1
+          fi
+
+          # The per-file check runs BEFORE the set comparison: a doc the
+          # manifest lists but that is gone from disk is a missing file, not a
+          # set disagreement, and must be named as such.
+          while IFS= read -r filename; do
+            file="docs/target/$filename"
             if [ ! -f "$file" ]; then
-              echo "ERROR: $file does not exist"
+              echo "ERROR: $file does not exist" >&2
               exit 1
             fi
             if [ ! -s "$file" ]; then
-              echo "ERROR: $file is empty"
+              echo "ERROR: $file is empty" >&2
               exit 1
             fi
             echo "✓ $file exists and is non-empty ($(wc -l < "$file") lines)"
-          done
+          done < <(printf '%s\n' "${listed[@]}")
+
+          on_disk=()
+          while IFS= read -r filename; do
+            on_disk+=("$filename")
+          done < <(find docs/target -maxdepth 1 -type f -name '*.md' -printf '%f\n')
+
+          if ! diff -u <(printf '%s\n' "${on_disk[@]}" | sort) <(printf '%s\n' "${listed[@]}" | sort); then
+            echo "ERROR: $manifest and the docs/target/*.md files on disk disagree" >&2
+            exit 1
+          fi
 
   # Workflow lint via actionlint. Closes the gap left by CodeRabbit's advisory
   # actionlint pass (.coderabbit.yml + .dz/maintainer/maintainer.yml setting
