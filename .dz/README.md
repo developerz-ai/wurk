@@ -5,6 +5,11 @@ under the namespace each config belongs to:
 
 - `pipeline/`: the agent pipeline definition (`agent-pipeline.json`).
 - `maintainer/`: the maintainer policy (`maintainer.yml`).
+- `briefs/`: the [health](briefs/health.md) and
+  [release-due](briefs/release-due.md) checkup briefs.
+- `schedules/`: the read-only [coverage-gaps](schedules/coverage-gaps.md),
+  [docs-drift](schedules/docs-drift.md) and
+  [sidekiq-parity](schedules/sidekiq-parity.md) scout briefs.
 - `ui-debugger/`: the UI debugger MCP config. Setup mode writes the example
   here whenever the box hosts that service, and the live config when this
   repo declares it. The config migration writes neither.
