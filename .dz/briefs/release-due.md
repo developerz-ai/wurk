@@ -69,6 +69,15 @@ git log --format='%h %cI %s' "$last"..origin/main -- ':(glob)lib/**/*.rb' ':(glo
 
 `<next>` (only ever reached without a breaking change): `### Added` under `[Unreleased]`, or a `feat` subject → minor; anything else → patch.
 
+## Rows
+
+- `tag-listing` — resolves `$last`, the highest tag, through the paginated matching-refs listing whose completeness comes from pagination.
+- `tag-peel` — peels the tag ref to its release commit and aborts when the ref does not resolve to a commit.
+- `release-state` — classifies the Release at `$last` from `author` and `assets`; zero assets aborts as gem-less, with the deletion runbook gated behind the RubyGems per-version probe.
+- `baseline` — the peeled commit carries the version's dated CHANGELOG heading, dated with that commit's own committer date and absent at its first parent.
+- `window` — scans `$last..main` for shipping commits through the gemspec pathspec and grades the Window/Do table's verdict.
+- `pre-flight-guard` — only a lane where `gh auth status` exits 0 files the ask, only when no open issue or PR title matches `^Release|^release:`, and never a second ask while one titled `Release …` is open.
+
 ## The ask, when due
 
 1. **Pre-flight guard.** Only a lane where `gh auth status` exits 0 files the ask. Authentication is `gh`'s standard credential interface, `GH_TOKEN`: a non-Actions executor MUST have `GH_TOKEN` securely injected at its point of use. This brief names it only, never a token value, a storage location or a provisioning mechanism. Skip if any open title from `gh api --paginate "repos/developerz-ai/wurk/issues?state=open" | jq -r '.[] | select(.pull_request == null) | .title'` or `gh api --paginate "repos/developerz-ai/wurk/pulls?state=open" | jq -r '.[].title'` matches `^Release|^release:`.
