@@ -819,6 +819,74 @@ class ReleaseDueBriefTest < Minitest::Test
                  'ruled-out items')
   end
 
+  # The pre-flight guard (ask step 1) carries the lane's credential
+  # contract, and this file machine-gates brief contracts the way it
+  # gates the --unshallow flag (test_brief_unshallows_when_checkout_is_shallow),
+  # the --paginate listing (test_brief_resolves_last_through_a_paginated_tag_listing)
+  # and the forbidden tag operations
+  # (test_brief_adds_no_tag_deletion_or_remote_tag_operation): deleting
+  # the credential sentence — or growing it into a credential fixture —
+  # must fail here. Positive pins run against the pre-flight step ALONE:
+  # the ask section and the Decide block mention `gh` for other reasons,
+  # so a section-wide match would survive the sentence's deletion. The
+  # negative pins scan the whole brief, because a leaked value anywhere
+  # in it is a leak.
+  def test_pre_flight_guard_names_gh_token_interface_and_stays_credential_free
+    pre_flight = extract_pre_flight_guard
+
+    refute_empty pre_flight,
+                 '.dz/briefs/release-due.md must keep its "Pre-flight guard" ask step'
+
+    # The surface check stays: eligibility is verified with
+    # `gh auth status` before the ask is filed at all.
+    assert_includes pre_flight, 'gh auth status',
+                    'the pre-flight guard must still verify capability with `gh auth status`'
+
+    # GH_TOKEN is the named credential interface.
+    assert_match(/credential interface[^.\n]{0,80}GH_TOKEN/i, pre_flight,
+                 'the pre-flight guard must name `GH_TOKEN` as `gh`\'s standard credential interface')
+
+    # ...and the non-Actions executor must have it injected SECURELY,
+    # at the point of use — not read from a file, a dotfile or a
+    # provisioning step the brief might otherwise grow.
+    assert_match(/non-Actions executor[^.\n]*GH_TOKEN[^.\n]*securely injected[^.\n]*point of use/i,
+                 pre_flight,
+                 'the pre-flight guard must require a non-Actions executor to have `GH_TOKEN` ' \
+                 'securely injected at its point of use')
+
+    # The paragraph keeps its own scope statement: the variable name
+    # only, never a token value, a storage location, or a provisioning
+    # mechanism.
+    assert_match(/never a token value[^.\n]*storage[^.\n]*provisioning/i, pre_flight,
+                 'the pre-flight guard must keep its scope statement: it documents the ' \
+                 'variable name only')
+
+    # No token value: a GitHub token literal — classic `ghp_`/`gho_`/
+    # `ghu_`/`ghs_`/`ghr_` or fine-grained `github_pat_` — anywhere in
+    # the brief is a leaked credential, whatever sentence carries it.
+    refute_match(/gh[posur]_[0-9a-zA-Z]{16,}/, @text,
+                 'the brief must not carry a classic GitHub token literal (ghp_/gho_/ghu_/ghs_/ghr_)')
+    refute_match(/github_pat_[0-9a-zA-Z_]{20,}/, @text,
+                 'the brief must not carry a fine-grained GitHub token literal (github_pat_)')
+
+    # No credential-dumping command: a line that prints the token would
+    # make the brief the exfiltration step.
+    refute_match(/(?:echo|printf|printenv)[^;`\n]*\bGH_TOKEN\b/, @text,
+                 'the brief must not carry a command that echoes or prints GH_TOKEN')
+    refute_match(/gh auth token\b/, @text,
+                 'the brief must not carry `gh auth token`, which prints the stored credential')
+    refute_match(/\b(?:env|set)\b[^;`\n]*\|\s*(?:grep|rg|awk)\b[^;`\n]*GH_TOKEN/i, @text,
+                 'the brief must not filter the environment through a command that prints GH_TOKEN')
+
+    # No storage or commit instruction: the credential stays the
+    # executor's to supply, at the point of use.
+    refute_match(/(?:store|save|persist|write|commit)[^.;\n]*(?:token|credential|GH_TOKEN)s?\s+(?:in|to|into)\b/i,
+                 @text,
+                 'the brief must not instruct a reader to store, persist, or commit a credential')
+    refute_match(/\.env\b|\.netrc\b|keychain|secrets?\s+file/i, @text,
+                 'the brief must not name a storage location for the credential')
+  end
+
   def test_window_scan_with_real_repo_filters_shipping_paths_excludes_docs_keeps_revert_pair
     Dir.mktmpdir('wurk-window-repo-') do |tmpdir|
       build_window_repo(tmpdir)
@@ -1857,6 +1925,20 @@ class ReleaseDueBriefTest < Minitest::Test
     idx = contract.index('Health-checkup')
 
     idx ? contract[idx..] : ''
+  end
+
+  # The ask section's first numbered step: from the "**Pre-flight guard"
+  # paragraph to the next numbered ask step (or EOF). Credential
+  # assertions run against this step alone — later ask steps and the
+  # Decide block mention `gh` for other reasons, so a section-wide match
+  # would survive the credential sentence's deletion.
+  def extract_pre_flight_guard
+    section = extract_ask_section
+    start_idx = section.index('**Pre-flight guard')
+    return '' unless start_idx
+
+    next_step_idx = section.index(/\n2\. /, start_idx)
+    next_step_idx ? section[start_idx...next_step_idx] : section[start_idx..]
   end
 
   def extract_decide_block
