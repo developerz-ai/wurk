@@ -14,11 +14,14 @@ require 'tmpdir'
 #      guard class the row names. An anchor that points at a method, or at a
 #      different class, sends the lane to the wrong guard.
 #   2. The rows are exactly the guard classes the discovery rule finds: a test
-#      class under test/unit/ whose file READS a documentation surface
+#      class under test/unit/ whose OWN CODE reads a documentation surface
 #      (README.md, CLAUDE.md, CONTRIBUTING.md, RELEASE.md, or a file under
-#      docs/). A guard that only NAMES a surface in an assertion message owns
-#      no claim on it; a guard that reads one does, and the registry must say
-#      so or the lane re-reports a claim a gate already covers.
+#      docs/) — directly, or through a method of its file while its own code
+#      builds a surface path. A guard that only NAMES a surface in an
+#      assertion message owns no claim on it; a guard that reads one does, and
+#      the registry must say so or the lane re-reports a claim a gate already
+#      covers. Sibling classes in one file are judged separately: a class that
+#      reads fixtures next to a class that reads docs owns no claim on docs.
 #   3. The brief carries the criterion the registry is held to, and carries it
 #      once: the old `| Guard | What it owns |` table and the `## Rows` bullet
 #      list are merged into the one registry table.
@@ -53,6 +56,11 @@ class DocsDriftRegistryTest < Minitest::Test
   # The documentation surfaces a guard can own a claim on.
   SURFACE_FILES = %w[README.md CLAUDE.md CONTRIBUTING.md RELEASE.md].freeze
   DOCS_PREFIX = 'docs/'
+
+  # A path segment only known at runtime: `File.join(DOCS, doc)` builds
+  # docs/<something>, so the join's prefix decides — a `docs/` prefix
+  # qualifies, any other prefix does not.
+  WILDCARD = "\u0000"
 
   # The calls that read a file's content. `File.size`/`File.exist?` are not
   # reads: they see that a file is there, not what it says. The argument
@@ -125,8 +133,40 @@ class DocsDriftRegistryTest < Minitest::Test
       path = File.join(dir, 'fixture_guard_test.rb')
       File.write(path, fixture)
 
-      assert reads_documentation_surface?(path),
-             'a guard that reads a doc surface through a docs-directory constant reads a doc surface'
+      assert_equal [['FixtureGuardTest', 1]], class_guards(path),
+                   'a guard that reads a doc surface through a docs-directory constant reads a doc surface'
+    end
+  end
+
+  # Sibling classes in one file are judged separately. Discovery read the
+  # whole FILE, so one reading class registered its non-reading siblings too,
+  # and the gate demanded rows for classes that own no claim on any
+  # documentation surface. Both siblings here read a file; only the one whose
+  # own code builds a docs path qualifies. The constants are quoted lines,
+  # unresolvable in THIS file, for the reason the fixture above gives.
+  def test_only_the_qualifying_sibling_in_a_file_is_discovered
+    fixture = [
+      'class FixtureSurfaceGuardTest < Minitest::Test',
+      "  BOOKS = File.join(SHELF, 'docs')",
+      "  OVERVIEW = File.join(BOOKS, 'overview.md')",
+      '  def test_it',
+      '    File.readlines(OVERVIEW)',
+      '  end',
+      'end',
+      'class FixtureOfflineTest < Minitest::Test',
+      "  CACHE = File.join(SHELF, 'tmp', 'cache.db')",
+      '  def test_it',
+      '    File.readlines(CACHE)',
+      '  end',
+      'end'
+    ].join("\n")
+
+    Dir.mktmpdir('docs-drift-registry') do |dir|
+      path = File.join(dir, 'fixture_siblings_test.rb')
+      File.write(path, fixture)
+
+      assert_equal [['FixtureSurfaceGuardTest', 1]], class_guards(path),
+                   'only the sibling whose own code reads a documentation surface is a guard'
     end
   end
 
@@ -360,36 +400,96 @@ class DocsDriftRegistryTest < Minitest::Test
     errors
   end
 
-  # The discovery rule: every guard class in a test file under test/unit/ whose
-  # file reads a documentation surface.
+  # The discovery rule: every test class under test/unit/ whose own code reads
+  # a documentation surface. Sibling classes in one file are judged on their
+  # own bodies, so a file where one class reads docs does not turn the others
+  # into guards.
   def discovered_guards
     @discovered_guards ||= Dir.glob(UNIT_GLOB).flat_map do |path|
       relative = path.delete_prefix("#{ROOT}/")
-      next [] unless reads_documentation_surface?(path)
-
-      guard_classes(path).map { |name, line| { path: relative, name: name, line: line } }
+      class_guards(path).map { |name, line| { path: relative, name: name, line: line } }
     end
   end
 
-  def guard_classes(path)
-    File.readlines(path).each_with_index.filter_map do |line, index|
-      match = line.match(/^\s*class\s+([A-Za-z_][A-Za-z0-9_]*)\s*</)
-      match && [match[1], index + 1]
+  # The qualifying guard classes of one file, in file order, each with its
+  # 1-based definition line — the line a registry row anchors to.
+  def class_guards(path)
+    lines = File.readlines(path)
+    file_code = without_comments(lines)
+    readers = reading_helpers(file_code)
+    class_bodies(lines).filter_map do |name, number, body|
+      next unless class_reads_surface?(without_comments(body.lines), file_code, readers)
+
+      [name, number]
     end
   end
 
-  # Whether the file reads a documentation surface: one of its content-read
+  # Each class definition in the file, in order: its name, its definition
+  # line, and its raw body — the class's own lines through the line before the
+  # next class definition. Sequential slicing also keeps a nested class's code
+  # out of its parent's body.
+  def class_bodies(lines)
+    starts = lines.each_with_index.filter_map do |line, index|
+      match = line.match(/^\s*class\s+([A-Za-z_][A-Za-z0-9_]*)\s</)
+      match && [match[1], index]
+    end
+    starts.each_with_index.map do |(name, index), at|
+      stop = starts[at + 1]&.last || lines.size
+      [name, index + 1, lines[index...stop].join]
+    end
+  end
+
+  # Whether one class's own code reads a documentation surface: a content read
+  # whose argument names a surface, or — when the class reads files through a
+  # method of its file, the way DocsDivergenceTableTest reads the ledger
+  # through DocsLinksTest.prose_lines — a surface path its own code builds.
+  # The surface evidence keeps a helper that reads NON-docs files from
+  # qualifying every class that calls one.
+  def class_reads_surface?(body, file_code, readers)
+    reads_documentation_surface?(body, file_code) ||
+      (invokes_reading_helper?(body, readers) && builds_surface_path?(body, file_code))
+  end
+
+  # Whether the code reads a documentation surface: one of its content-read
   # calls consumes a path under `docs/`, or one of the four named files.
-  def reads_documentation_surface?(path)
-    code = code_without_comments(path)
-
+  # Constants resolve against the whole file's code, since a class may name a
+  # constant a sibling class holds (`DocsLinksTest::DOCS`).
+  def reads_documentation_surface?(code, file_code)
     read_arguments(code).any? do |argument|
-      names_surface?(argument + resolved_constants(code, argument), code)
+      names_surface?(argument + resolved_constants(file_code, argument), file_code)
     end
   end
 
-  def code_without_comments(path)
-    File.readlines(path).reject { |line| line.strip.start_with?('#') }.join
+  # The file's methods whose own slice — the `def` line through the line
+  # before the next `def`, at any indentation, in any class of the file —
+  # holds a content-read call.
+  def reading_helpers(code)
+    lines = code.lines
+    starts = lines.each_with_index.filter_map do |line, index|
+      match = line.match(/^\s*def\s+(?:self\.)?([a-z_][a-z0-9_]*)\b/)
+      match && [match[1], index]
+    end
+    starts.filter_map.with_index do |(name, index), at|
+      stop = starts[at + 1]&.last || lines.size
+      next unless READ_CALLS.values.any? { |pattern| lines[index...stop].join.match?(pattern) }
+
+      name
+    end
+  end
+
+  def invokes_reading_helper?(body, readers)
+    readers.any? { |name| body.match?(/\b#{Regexp.escape(name)}\s*\(/) }
+  end
+
+  # Whether the code BUILDS a documentation-surface path with `File.join` —
+  # the evidence that a class reading files through a shared helper reads
+  # documentation and not fixtures or caches.
+  def builds_surface_path?(body, file_code)
+    joined_paths(body, file_code).any? { |path| surface_path?(path) }
+  end
+
+  def without_comments(lines)
+    lines.reject { |line| line.strip.start_with?('#') }.join
   end
 
   # The argument text of every content-read call in the code.
@@ -430,10 +530,18 @@ class DocsDriftRegistryTest < Minitest::Test
   end
 
   # The path segments a `File.join`'s arguments hold, in order: each string
-  # literal, or the segments of the constant it names.
+  # literal, the segments of the constant it names, or a WILDCARD for a
+  # segment only known at runtime (`doc`, a block variable).
   def join_segments(arguments, code)
-    arguments.scan(/'[^'\n]*'|"[^"\n]*"|\b[A-Z][A-Z0-9_]*(?:::[A-Z][A-Z0-9_]*)*\b/).flat_map do |item|
-      item.start_with?("'", '"') ? [item[1..-2]] : constant_segments(item.split('::').last, code)
+    scan = /'[^'\n]*'|"[^"\n]*"|\b[A-Z][A-Z0-9_]*(?:::[A-Z][A-Z0-9_]*)*\b|\b[a-z_][a-z0-9_]*\b/
+    arguments.scan(scan).flat_map do |item|
+      if item.start_with?("'", '"')
+        [item[1..-2]]
+      elsif item.match?(/\A[A-Z]/)
+        constant_segments(item.split('::').last, code)
+      else
+        [WILDCARD]
+      end
     end
   end
 
