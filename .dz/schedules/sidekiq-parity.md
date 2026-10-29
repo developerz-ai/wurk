@@ -42,6 +42,47 @@ and say which one is missing.
 This lane does not run the parity suite: it uses the test Redis DBs, and this lane must not mutate
 Redis data. Name the oracle that has to go green; the lane that owns the suite runs it.
 
+## Guards already policing these claims
+
+Check these before reporting: a claim a guard owns is not a finding.
+
+- **Behavior oracles** — `test/parity/**/*_test.rb`, run by `bin/rake test:parity`
+  (Rakefile:69-76); the oracle rule is test/parity/README.md:11. Within the cases.yml
+  entries that cite them, these are the only guards whose green proves Wurk behaves
+  as the documented surface does; documented-surface behaviour no case cites is owned
+  by other guards or stays reportable (e.g. test/unit/compat_aliases_test.rb:41-44).
+- **Conformance gate** — `test/conformance/**` in the same `test:parity` run
+  (Rakefile:69-76), inventory `test/conformance/cases.yml`. Static quotation, not
+  behaviour: green proves the case's verbatim `promise` still exists, normalized, at
+  its source anchor (test/support/conformance.rb:164-171), that the anchor resolves
+  to non-blank doc lines (:128-147), and that a ledger range spans its entry's `##`
+  heading (:173-183). Registration (test/support/conformance.rb:37-51) additionally
+  requires every cited oracle to be runnable and every `test/parity/` oracle class
+  to be cited by some case or exempted (:13-15; only `IterableJobStateParityTest`).
+  It asserts no behaviour itself: a covered case passes only by replaying the parity
+  oracles its `oracles:` cites (test/support/conformance.rb:260-262). Pending
+  entries (reason + future_work, no oracles) run only as skipped
+  ConformancePendingTest stubs (test/support/conformance.rb:283-289) — they prove
+  nothing and stay reportable. cases.yml:1: one sourced guarantee per entry, never
+  complete coverage, so spec behaviour with no cases.yml entry stays reportable.
+- **Require shim** — test/unit/compat_aliases_test.rb:5-8 owns the `Sidekiq::*`
+  drop-in surface (spec §3); Pro/Ent sentinels at :34-37 and :77-80. It partially
+  owns cases.yml:918-943 (module.pro-flag, module.ent-flag): the false `pro?`/`ent?`
+  return is guarded (:85-91); the upstream namespace-presence promise stays pending
+  (oracle-module-pro-flag, oracle-module-ent-flag) and reportable.
+- **Spec docs** — test/unit/spec_docs_test.rb:18 checks only that
+  docs/target/sidekiq-{free,pro,ent}.md exist and are non-empty: no line wording is
+  pinned, so spec drift stays reportable.
+
+Ledger anchors are the narrowest coverage of all: only the six
+docs/idea/parity-divergences.md ranges cases.yml quotes (cases.yml:269, :397, :441,
+:450, :563, :654) are quotation-guarded. Every other ledger entry's anchor has at
+most a link-shape guard: DocsLinksTest checks that a ledger link's target file exists
+and its `#L` range falls inside it (test/unit/docs_links_test.rb:204-217; link form
+at docs/idea/parity-divergences.md:108-110); whether the anchored code has moved is
+guarded by nothing, so a moved anchor there is a finding. A plain backticked
+`path:line` anchor, not a markdown link, is guarded by nothing at all.
+
 ## Read-only
 
 This lane reads and reports. It never edits a file, commits, pushes, opens a pull request, or runs
