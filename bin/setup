@@ -32,6 +32,80 @@ if [ -d frontend ]; then
   fi
 fi
 
+# Workflow linters: actionlint + shellcheck, provisioned into ~/.local/bin.
+# actionlint shells out to the external `shellcheck` for `run:` blocks and
+# silently lints less (exit 0, no diagnostics) when it is absent, so a
+# workflow edit needs both locally.
+#
+# The actionlint pins live in ONE place — the env block of the `actionlint`
+# job in .github/workflows/test.yml (release version + download-script commit
+# SHA + binary SHA256) — and are grepped out of it here, the same technique
+# bin/check uses for the bun pin. Duplicating them here would be a second
+# copy to drift. shellcheck has no CI pin (ubuntu-latest preinstalls it), so
+# its version + tarball SHA256 are pinned here instead. Deliberately NOT mise
+# [tools] entries: a registry install is version-pin-only, with none of the
+# integrity guarantees above (see mise.toml's header).
+#
+# Fail loudly, not gracefully: a failed download or checksum aborts setup
+# with a nonzero exit (set -e), because an unverified binary is worse than
+# none.
+LOCAL_BIN="$HOME/.local/bin"
+mkdir -p "$LOCAL_BIN"
+case ":$PATH:" in *":$LOCAL_BIN:"*) ;; *)
+  echo "==> note: $LOCAL_BIN is not on PATH — add it to use actionlint/shellcheck"
+  ;;
+esac
+
+echo "==> workflow linters (actionlint + shellcheck)"
+
+# Both pinned artifacts are linux/amd64: the ACTIONLINT_BINARY_SHA256 in
+# test.yml is the linux/amd64 binary and the shellcheck tarball below is
+# hardcoded linux.x86_64. On another platform with GNU coreutils installed
+# the sha256 checks can pass against a binary that cannot execute, and the
+# idempotence check would then report it "verified" forever — refuse loudly.
+if [ "$(uname -s)" != "Linux" ] || [ "$(uname -m)" != "x86_64" ]; then
+  echo "==> workflow linters: the pinned actionlint/shellcheck binaries are linux/amd64 only; this machine is $(uname -s)/$(uname -m)" >&2
+  exit 1
+fi
+
+ACTIONLINT_WORKFLOW=.github/workflows/test.yml
+ACTIONLINT_VERSION=$(grep -m1 -oE 'ACTIONLINT_VERSION: *"[^"]+"' "$ACTIONLINT_WORKFLOW" | grep -oE '[0-9][^"]*')
+ACTIONLINT_SHA=$(grep -m1 -oE 'ACTIONLINT_SHA: *"[^"]+"' "$ACTIONLINT_WORKFLOW" | grep -oE '[0-9a-f]{40}')
+ACTIONLINT_BINARY_SHA256=$(grep -m1 -oE 'ACTIONLINT_BINARY_SHA256: *"[^"]+"' "$ACTIONLINT_WORKFLOW" | grep -oE '[0-9a-f]{64}')
+
+if [ -x "$LOCAL_BIN/actionlint" ] && echo "$ACTIONLINT_BINARY_SHA256  $LOCAL_BIN/actionlint" | sha256sum -c - >/dev/null 2>&1; then
+  echo "    actionlint $ACTIONLINT_VERSION already installed (sha256 verified)"
+else
+  echo "    installing actionlint $ACTIONLINT_VERSION"
+  actionlint_tmp=$(mktemp -d)
+  # The upstream download script refuses a target dir that does not already
+  # exist — create it before piping the script to bash (same as CI).
+  mkdir -p "$actionlint_tmp/bin"
+  curl -fsSL \
+    "https://raw.githubusercontent.com/rhysd/actionlint/${ACTIONLINT_SHA}/scripts/download-actionlint.bash" \
+    | bash -s -- "$ACTIONLINT_VERSION" "$actionlint_tmp/bin"
+  echo "$ACTIONLINT_BINARY_SHA256  $actionlint_tmp/bin/actionlint" | sha256sum -c -
+  mv "$actionlint_tmp/bin/actionlint" "$LOCAL_BIN/actionlint"
+  rm -rf "$actionlint_tmp"
+fi
+
+SHELLCHECK_VERSION="0.10.0"
+SHELLCHECK_SHA256="6c881ab0698e4e6ea235245f22832860544f17ba386442fe7e9d629f8cbedf87"
+SHELLCHECK_TARBALL="shellcheck-v${SHELLCHECK_VERSION}.linux.x86_64.tar.xz"
+
+if [ -x "$LOCAL_BIN/shellcheck" ] && [ "$("$LOCAL_BIN/shellcheck" --version | grep -m1 -oE '^version: *\S+' | grep -oE '[0-9][^ ]*')" = "$SHELLCHECK_VERSION" ]; then
+  echo "    shellcheck $SHELLCHECK_VERSION already installed"
+else
+  echo "    installing shellcheck $SHELLCHECK_VERSION"
+  shellcheck_tmp=$(mktemp -d)
+  curl -fsSL -o "$shellcheck_tmp/$SHELLCHECK_TARBALL" \
+    "https://github.com/koalaman/shellcheck/releases/download/v${SHELLCHECK_VERSION}/$SHELLCHECK_TARBALL"
+  echo "$SHELLCHECK_SHA256  $shellcheck_tmp/$SHELLCHECK_TARBALL" | sha256sum -c -
+  tar -xJf "$shellcheck_tmp/$SHELLCHECK_TARBALL" -C "$shellcheck_tmp"
+  mv "$shellcheck_tmp/shellcheck-v${SHELLCHECK_VERSION}/shellcheck" "$LOCAL_BIN/shellcheck"
+  rm -rf "$shellcheck_tmp"
+fi
+
 echo "==> dummy app setup"
 (
   cd test/dummy

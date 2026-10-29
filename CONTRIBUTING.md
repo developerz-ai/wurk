@@ -8,7 +8,7 @@ layers, and the conventions a change has to follow to merge.
 ```sh
 git clone https://github.com/developerz-ai/wurk
 cd wurk
-bin/setup          # gem + frontend (bun) deps + dummy app db:prepare
+bin/setup          # gem + frontend (bun) deps + dummy app db:prepare + pinned workflow linters
 ```
 
 You'll need a local **Redis ≥ 7.0** running (tests use real Redis, never a mock)
@@ -23,7 +23,10 @@ into `vendor/assets/` at release time and ships inside the gem.
 
 `bin/setup` installs the dummy app's gems into a **project-local** path
 (`test/dummy/vendor/bundle`) so a read-only or permission-locked global gem home
-never blocks setup with `Bundler::PermissionError`.
+never blocks setup with `Bundler::PermissionError`. It also provisions the
+workflow linters (actionlint + shellcheck, sha256-verified at pinned versions)
+into `~/.local/bin` — actionlint silently skips every `run:` block without
+shellcheck, so a workflow edit needs both locally.
 
 ## Dashboard development (live reload)
 

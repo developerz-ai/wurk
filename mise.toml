@@ -9,6 +9,14 @@
 # Dockerfile's `oven/bun` base tag. Bumping one without the others leaves the
 # fleet and CI on different runtimes and silently re-introduces the
 # unpinned-toolchain failure this file exists to prevent.
+#
+# actionlint and shellcheck are deliberately NOT [tools] entries here: a mise
+# registry install is at most version-pinned (plus a registry checksum), which
+# is not equivalent to CI's triple pin for actionlint (release version +
+# download-script commit SHA + binary SHA256, all in .github/workflows/test.yml)
+# or bin/setup's pinned sha256-verified shellcheck tarball. The local
+# provisioning that preserves those guarantees lives in bin/setup — moving
+# these tools into mise would silently downgrade the integrity guarantee.
 [tools]
 ruby = "3.4"
 bun = "1.4.3"
