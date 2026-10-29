@@ -21,8 +21,9 @@ require 'yaml'
 #   5. Every brief states what a finding must carry (the anchor, what is
 #      wrong, how to tell it is fixed), declares the lane read-only, and names
 #      the areas it must not touch.
-#   6. Every brief dedupes its ask against the open issues, with the same
-#      paginated lookup .dz/briefs/health.md uses.
+#   6. Every brief dedupes its ask against the open issues, with the full
+#      command (paginated lookup plus the PR-exclusion filter)
+#      .dz/briefs/health.md uses.
 #
 # The two committed checkups stay where their own tests pin them
 # (test/unit/health_brief_test.rb:69-70, test/unit/release_due_brief_test.rb:18,
@@ -95,8 +96,11 @@ class ScheduledBriefsTest < Minitest::Test
     '.github/workflows/release.yml'
   ].freeze
 
-  # The ask dedupe: the paginated issues lookup, not `gh issue list`.
-  DEDUPE_CLAUSE = 'gh api --paginate "repos/developerz-ai/wurk/issues?state=open"'
+  # The ask dedupe, byte-identical on one line in each scout brief: the
+  # paginated issues lookup piped through the PR-exclusion filter — the full
+  # command, not `gh issue list` and not the lookup without the filter.
+  DEDUPE_CLAUSE = 'gh api --paginate "repos/developerz-ai/wurk/issues?state=open" ' \
+                  "| jq -r '.[] | select(.pull_request == null) | .title'"
 
   def setup
     @policy = YAML.safe_load_file(POLICY, permitted_classes: [Date, Time], aliases: true)
@@ -257,8 +261,8 @@ class ScheduledBriefsTest < Minitest::Test
   def test_every_brief_dedupes_its_ask_against_the_open_issues
     each_brief_text do |name, text|
       assert_includes text, DEDUPE_CLAUSE,
-                      "the #{name.inspect} brief must dedupe its ask with the paginated " \
-                      'issues lookup'
+                      "the #{name.inspect} brief must dedupe its ask with the full " \
+                      'paginated issues lookup, including the PR-exclusion filter'
     end
   end
 
