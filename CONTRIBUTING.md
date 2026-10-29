@@ -190,12 +190,15 @@ every comment it posts is marked as coming from a bot. What that means for you:
   issues quiet for 30 days are swept: the agent posts a comment before closing,
   never closes first. As the reporter, reply to keep your issue open.
   <!-- Updated by editor:policy[bot]. -->
-- **Pull requests.** A PR merges when the six required checks are green and the
+- **Pull requests.** A PR merges when the required checks are green and the
   review has nothing left open; nobody has to click, provided every commit is
   attributed to a GitHub account (step 1 under [Pull requests](#pull-requests)).
-  When the next move is yours (a red required check, an open review thread, a
-  conflict), the agent pings at 7 and 14 days and closes the PR at 21 (28 for a
-  draft). Push or reply and it picks the PR back up.
+  The `main-protection` ruleset is the single authority for which checks a merge
+  requires — read the live list with `gh api repos/developerz-ai/wurk/rulesets`
+  rather than trusting any copy in the docs. When the next move is yours (a red
+  required check, an open review thread, a conflict), the agent pings at 7 and
+  14 days and closes the PR at 21 (28 for a draft). Push or reply and it picks
+  the PR back up.
 - **A "no" comes early and with a reason.** A change the project will not take
   (see [Conventions](#conventions) and the `non_goals` list in
   `.dz/maintainer/maintainer.yml`) is closed with the rule it ran into, not left
@@ -223,7 +226,7 @@ Open an issue before a large feature PR so the direction is agreed first.
 4. Run `bin/check` (or `bin/check full` if you touched the compat surface).
 5. Open the PR — the required suite is one Ruby run on the newest Ruby +
    Rails with the coverage gate folded in, plus the parity oracles, rubocop,
-   the frontend suite, and benchmarks. Alongside it, non-required compat legs
+   and the frontend suite. Alongside it, non-required compat legs
    (gemspec Ruby floor, oldest supported Rails 7.1, and a Valkey backend) run
    the same suite and report without gating merges. The bench bot comments per-benchmark deltas. A
    regression past the noise-adjusted 5% threshold (or a baseline benchmark
