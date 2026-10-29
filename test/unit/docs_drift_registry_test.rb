@@ -16,8 +16,9 @@ require 'tmpdir'
 #   2. The rows are exactly the guard classes the discovery rule finds: a test
 #      class under test/unit/ whose OWN CODE reads a documentation surface
 #      (README.md, CLAUDE.md, CONTRIBUTING.md, RELEASE.md, or a file under
-#      docs/) — directly, or through a method of its file while its own code
-#      builds a surface path. A guard that only NAMES a surface in an
+#      docs/) — directly, through a method of its file while its own code
+#      builds a surface path, or by handing that method the docs root itself.
+#      A guard that only NAMES a surface in an
 #      assertion message owns no claim on it; a guard that reads one does, and
 #      the registry must say so or the lane re-reports a claim a gate already
 #      covers. Sibling classes in one file are judged separately: a class that
@@ -135,6 +136,44 @@ class DocsDriftRegistryTest < Minitest::Test
 
       assert_equal [['FixtureGuardTest', 1]], class_guards(path),
                    'a guard that reads a doc surface through a docs-directory constant reads a doc surface'
+    end
+  end
+
+  # A guard whose reads sit in a `def self.` helper with a parameter, and
+  # which qualifies by handing that helper the docs root itself: the real
+  # shape of DocsLinksTest once its file-reading grew helpers —
+  # `scanned_paths(DOCS)` feeds the file's Dir.glob reader the very directory
+  # the docs live under. A root is not a path under docs/, so no built path
+  # names a surface; the passing of the root is the read's evidence. Sibling
+  # FixtureTmpRootTest hands the same helper a non-docs root and stays
+  # unlisted: the constant's resolution decides. The constants are quoted
+  # lines, unresolvable in THIS file, for the reason the fixture above gives.
+  def test_a_guard_feeding_a_docs_root_to_a_reading_helper_is_discovered
+    fixture = [
+      'class FixtureDocsRootTest < Minitest::Test',
+      "  ROOT = File.expand_path('../..', __dir__)",
+      "  DOCS = File.join(ROOT, 'docs')",
+      '  def self.scanned(docs)',
+      "    Dir.glob(File.join(docs, '*.md'))",
+      '  end',
+      '  def test_it',
+      '    self.class.scanned(DOCS)',
+      '  end',
+      'end',
+      'class FixtureTmpRootTest < Minitest::Test',
+      "  CACHE = File.join(SHELF, 'tmp')",
+      '  def test_it',
+      '    self.class.scanned(CACHE)',
+      '  end',
+      'end'
+    ].join("\n")
+
+    Dir.mktmpdir('docs-drift-registry') do |dir|
+      path = File.join(dir, 'fixture_docs_root_test.rb')
+      File.write(path, fixture)
+
+      assert_equal [['FixtureDocsRootTest', 1]], class_guards(path),
+                   'a guard that feeds the docs root to its file\'s reading helper reads a doc surface'
     end
   end
 
@@ -496,14 +535,16 @@ class DocsDriftRegistryTest < Minitest::Test
   end
 
   # Whether one class's own code reads a documentation surface: a content read
-  # whose argument names a surface, or — when the class reads files through a
-  # method of its file, the way DocsDivergenceTableTest reads the ledger
-  # through DocsLinksTest.prose_lines — a surface path its own code builds.
-  # The surface evidence keeps a helper that reads NON-docs files from
-  # qualifying every class that calls one.
+  # whose argument names a surface; or — when the class reads files through a
+  # method of its file — a surface path its own code builds (the way
+  # DocsDivergenceTableTest reads the ledger through DocsLinksTest.prose_lines),
+  # or the docs root itself handed to that method (the way DocsLinksTest feeds
+  # DOCS to scanned_paths). The surface evidence keeps a helper that reads
+  # NON-docs files from qualifying every class that calls one.
   def class_reads_surface?(body, file_code, readers)
     reads_documentation_surface?(body, file_code) ||
-      (invokes_reading_helper?(body, readers) && builds_surface_path?(body, file_code))
+      (invokes_reading_helper?(body, readers) &&
+       (builds_surface_path?(body, file_code) || feeds_a_reader_the_docs_root?(body, file_code, readers)))
   end
 
   # Whether the code reads a documentation surface: one of its content-read
@@ -542,6 +583,32 @@ class DocsDriftRegistryTest < Minitest::Test
   # documentation and not fixtures or caches.
   def builds_surface_path?(body, file_code)
     joined_paths(body, file_code).any? { |path| surface_path?(path) }
+  end
+
+  # Whether the code hands a reading helper of its file the docs root itself —
+  # `scanned_paths(DOCS)` feeding the Dir.glob reader the directory the docs
+  # live under. The root is not a path under `docs/`, so builds_surface_path?
+  # does not see it, but a reader invoked with it reads the files under it.
+  def feeds_a_reader_the_docs_root?(body, file_code, readers)
+    readers.any? do |name|
+      body.scan(/\b#{Regexp.escape(name)}\s*\(([^)]*)\)/).any? do |(arguments)|
+        call_arguments(arguments).any? { |argument| docs_root?(argument, file_code) }
+      end
+    end
+  end
+
+  # A call's arguments, split at the top level: a nested call's parens keep
+  # its text whole, the way READ_CALLS' patterns hold one level of nesting.
+  def call_arguments(arguments)
+    arguments.scan(/(?:[^(),]|\([^()]*\))+/).map(&:strip).reject(&:empty?)
+  end
+
+  # Whether one argument IS the documentation root: its resolved segments are
+  # exactly `docs` — the `DOCS = File.join(ROOT, 'docs')` constant, the bare
+  # literal, or a File.join that builds it. A wildcard segment (an argument
+  # known only at runtime) decides nothing, the same rule join_segments uses.
+  def docs_root?(argument, file_code)
+    join_segments(argument, file_code) == ['docs']
   end
 
   def without_comments(lines)

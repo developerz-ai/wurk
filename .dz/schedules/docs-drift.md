@@ -34,9 +34,9 @@ A guard qualifies for this registry when it is a test class under `test/unit/` t
 | Ask slug | Guard anchor | Guard class | Claim it owns |
 |---|---|---|---|
 | `readme-third-party-ci-claims` | `test/unit/readme_claims_test.rb:9` | `ReadmeClaimsTest` | README.md's claim that a `sidekiq-*` gem's suite runs in CI |
-| `docs-links-anchors` | `test/unit/docs_links_test.rb:16` | `DocsLinksTest` | the anchors between the reference docs: every intra-doc link must resolve to a heading that exists |
-| `docs-divergence-table` | `test/unit/docs_links_test.rb:126` | `DocsDivergenceTableTest` | the `## Divergences from the Sidekiq spec` table against the ledger in docs/idea/parity-divergences.md |
-| `docs-env-table-complete` | `test/unit/docs_links_test.rb:315` | `DocsEnvTableTest` | docs/configuration.md's "Every `ENV` read in `lib/`" claim — the env table staying complete |
+| `docs-links-anchors` | `test/unit/docs_links_test.rb:26` | `DocsLinksTest` | the anchors between the reference docs: every intra-doc link must resolve to a heading that exists |
+| `docs-divergence-table` | `test/unit/docs_links_test.rb:379` | `DocsDivergenceTableTest` | the `## Divergences from the Sidekiq spec` table against the ledger in docs/idea/parity-divergences.md |
+| `docs-env-table-complete` | `test/unit/docs_links_test.rb:568` | `DocsEnvTableTest` | docs/configuration.md's "Every `ENV` read in `lib/`" claim — the env table staying complete |
 | `deployment-bun-docker-pin` | `test/unit/toolchain_pins_test.rb:13` | `ToolchainPinsTest` | docs/deployment.md's `oven/bun` example Dockerfile pin — present and identical to the other pin sites |
 | `claude-md-claims` | `test/unit/claude_md_claims_test.rb:13` | `ClaudeMdClaimsTest` | CLAUDE.md's claim that a `sidekiq-*` gem's suite passes against Wurk |
 | `forbidden-pitch-claims` | `test/unit/forbidden_claims_test.rb:18` | `ForbiddenClaimsTest` | the pitch claims on README.md, the docs site and llms.txt: "faster", published scale figures, a per-job progress surface |
