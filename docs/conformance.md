@@ -4,7 +4,10 @@ The [conformance inventory](../test/conformance/) maps individual documented
 behaviors to the [independently written parity oracles](../test/parity/README.md).
 It extends the existing `bin/rake test:parity` command, not a second test
 mechanism. All existing oracles and the [upstream pin](../test/parity/.sidekiq_sha)
-remain in place. The required CI check remains `parity (oracle)`.
+remain in place. The inventory validation runs as part of that same parity
+suite — `bin/rake test:parity` runs the oracles together with the inventory
+validation. Whether the resulting check gates a merge is decided by the
+`main-protection` branch ruleset, not by this document.
 
 ## Add a case, source first
 

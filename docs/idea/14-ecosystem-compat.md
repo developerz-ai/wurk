@@ -41,7 +41,7 @@ A dedicated CI job runs each ecosystem gem's own test suite **against Wurk** ins
 
 If a gem's suite fails, the failure is the spec — we either fix Wurk to match Sidekiq's behavior the gem relies on, or document the divergence as an intentional incompatibility (rare and a last resort).
 
-A harness is added to `test/ecosystem/` only when it is green. `test:ecosystem` is not one of the six required merge checks (test+coverage, lint/rubocop, parity, spec docs, frontend/vitest, actionlint) — it runs on PRs that touch a filtered path and reports there, but it never gates a merge. A permanently red suite would still train everyone to ignore the signal, so until the gap is closed the pin and the exact blocker live here instead.
+A harness is added to `test/ecosystem/` only when it is green. `test:ecosystem` is not a required merge check (the live required set belongs to the `main-protection` ruleset) — it runs on PRs that touch a filtered path and reports there, but it never gates a merge. A permanently red suite would still train everyone to ignore the signal, so until the gap is closed the pin and the exact blocker live here instead.
 
 ## Not yet in the matrix — pin researched, blocker known
 
