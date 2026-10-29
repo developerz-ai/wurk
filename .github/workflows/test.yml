@@ -84,7 +84,8 @@ jobs:
               - 'frontend/**'
               # The sidekiq shim gem: linted by rubocop, run by the ecosystem lane.
               - 'ecosystem/**'
-              # The policy and briefs are read by test/unit/scheduled_briefs_test.rb.
+              # The policy and briefs are read by test/unit/health_brief_test.rb,
+              # release_due_brief_test.rb and maintainer_policy_contract_test.rb.
               - '.dz/**'
               # Rubocop's own config moves the lint verdict without touching Ruby.
               - '.rubocop.yml'
