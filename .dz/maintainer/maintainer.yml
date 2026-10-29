@@ -113,15 +113,16 @@ handoff:
   # WebhookRefNotFoundError — the org account has zero registered webhooks, so
   # the ingest graded the WHOLE file INVALID and served defaultPolicy instead
   # (wurk#432). Every declared value below only takes effect once this is gone.
-  # This key is also the opt-in for the autonomous scout backlog-drain. That
-  # drain is LIVE, not inert (wurk#488): as of developerz.ai `b4cfe94d76e9`
-  # (2026-09-14) it is an attached lane, registered at
-  # apps/worker/src/wiring/lanes.generated.ts:121, and it fired 814 times
-  # fleet-wide in the 30 days to 2026-09-14, 8 of them on this repo. A previous
-  # version of this comment said it "stays inert until dz#1249 and dz#1530
-  # close"; that was false. Re-check against developerz.ai main before relying
-  # on either the date or the counts. Enrolling wurk was authorized by Ivan
-  # (ivndev001) 2026-08-21 on wurk#445.
+  # Historical assertions, unverified by this checkout: this key was recorded
+  # as the opt-in for the autonomous scout backlog-drain (wurk#488), with a
+  # registered lane at developerz.ai revision `b4cfe94d76e9` (2026-09-14),
+  # apps/worker/src/wiring/lanes.generated.ts:121. Recorded execution counts
+  # were 814 fleet-wide in the 30 days to 2026-09-14, 8 on this repo; enrollment
+  # authorization was attributed to Ivan (ivndev001) on wurk#445, 2026-08-21.
+  # These are historical pointers, not a current guarantee that the drain is
+  # live or inert. Require current platform evidence of lane registration,
+  # enrollment authorization and execution before relying on any such claim;
+  # no fresh platform check is established here. — editor[bot]
   mode: fleet
   ask_reporter_first: false
 
