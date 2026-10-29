@@ -117,6 +117,7 @@ Skip step 3 → leaked sockets in children. Skip step 5 → children corrupt eac
 - **EVALSHA-cache Lua scripts.** Loaded once per pool, never re-uploaded.
 - **Default fetcher is reliable.** BLMOVE atomic move from main queue to per-process private list. No "basic fetch" mode.
 - **Authoritative spec** for any Sidekiq surface lives in `docs/target/sidekiq-{free,pro,ent}.md`. Match it exactly when implementing or modifying public API.
+- **Authoritative spec SET.** The set of spec docs is `docs/target/SPEC_FILES` (one filename per line) and `docs/target/` holds exactly those files, so adding or removing a spec doc means editing that manifest.
 - **No comments that restate code.** Only document non-obvious *why*: a hidden constraint, a workaround for a specific bug, behavior that would surprise a reader.
 
 ## Testing
