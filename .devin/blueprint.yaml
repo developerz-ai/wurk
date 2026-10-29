@@ -40,7 +40,12 @@ knowledge:
         env -u DATABASE_URL -u REDIS_URL bin/check
   - name: check
     contents: |
-      bin/check  # pre-PR gate: rubocop + full suite + parity oracles, ~3 min
+      bin/check        # pre-PR gate: rubocop + frontend (bun install --frozen-lockfile,
+                       # bun run typecheck, bun run lint, bun run test) + full suite
+                       # (COVERAGE=1) + parity oracles, ~3 min
+      bin/check full   # + ecosystem suites, python-client unittest suite and
+                       # python-client build (isolated venv); python stages skip
+                       # when python3 is absent
   - name: test
     contents: |
       bin/rake test TEST=test/unit/foo_test.rb
