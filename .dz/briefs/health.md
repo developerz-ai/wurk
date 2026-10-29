@@ -358,7 +358,9 @@ nothing that changes run to run (sha, run URL, version, PR age) may appear in it
 live in the body. The stable titles are: row 8 files `main is red`; row 9 files
 `release did not publish`; row 10 files
 `RubyGems does not serve Wurk::VERSION` (the constant's name, never its value); row 11 files
-`GitHub Release is gem-less`; row 12 files `demo frozen: no sha-<7> image tag`; the demo
+`GitHub Release is gem-less`; row 12 files `demo deploy failed` for a failed deploy-demo
+conclusion line, even when it includes `tagged sha-<7>`; the tag cannot override failure.
+Row 12 files `demo frozen: no sha-<7> image tag` only for the missing-tag verdict; the demo
 served-version row files `demo serves a different version than the checkout`; row 14 files per
 workflow so the two lanes stay
 distinguishable — `topology.yml is red` and `ecosystem.yml is red`; row 15 files
@@ -380,10 +382,10 @@ files NO ask: it is never filed under a row's Unhealthy titles (`main is red`, `
 `verdict unknown ... not readable` lines: a row that could not read its list establishes nothing, so
 it files no ask either and the next checkup re-reads it. Only a line that names a defect files one
 ask, under the stable title its row owns: an `Unhealthy:` verdict, or a failed run's own conclusion
-line — rows 8, 9 and 14 grade a run that genuinely went red on its `conclusion` and print that
+line — rows 8, 9, 12 and 14 grade a run that genuinely went red on its `conclusion` and print that
 conclusion beside the headSha and the run URL, no `Unhealthy:` prefix on it, and that line is the
-trigger `main is red`, `release did not publish`, `topology.yml is red` and `ecosystem.yml is red`
-are filed from. Everything else a row can print — a readable `success`, `duplicate-skipped`,
+trigger `main is red`, `release did not publish`, `demo deploy failed`, `topology.yml is red` and
+`ecosystem.yml is red` are filed from. Everything else a row can print — a readable `success`, `duplicate-skipped`,
 `evidence unavailable`, `in flight`, `no-op` — is not a defect and files nothing. The body carries
 the command, its output, the run URL, the headSha, the version and the PR age.
 A red `main` comes first: nothing releases from it. The checkup lane's ONLY admissible
