@@ -158,8 +158,24 @@ subject → minor; anything else → patch.
 
 4. `RELEASE.md` → *Cutting a release*: bump `lib/wurk/version.rb`, `bundle exec rake
    release:relock_demo`, move `[Unreleased]` under `## [<next>] - <today>`, `bin/check`.
-5. One PR, `release: <next>`, nothing else in it. It merges on green like any PR.
-6. Merging it is the release: `release.yml` publishes the gem, then tags. Never tag, never
-   `gem push` by hand.
+ 5. One PR, `release: <next>`, nothing else in it. It merges on green like any PR.
+ 6. Merging it is the release: `release.yml` publishes the gem, then tags. Never tag, never
+    `gem push` by hand.
+
+The ask's body carries the Decide block's own evidence, so the release actor can re-grade
+the decision without re-running anything:
+
+- the resolved `$last` tag and its peeled, baseline-verified release commit;
+- the window's commit list exactly as the Decide block's local fast path prints it, with
+  the oldest shipping commit's timestamp — the figure the 24 h row grades;
+- the `[Unreleased]` CHANGELOG contents the `<next>` derivation read;
+- `<next>` itself and which rule derived it: `### Added` under `[Unreleased]`, or a `feat`
+  subject → minor; anything else → patch;
+- any in-window merged Dependabot PR that touched `wurk.gemspec`, with the `### Changed`
+  line it owes.
+
+Health-checkup evidence is not ask evidence: CI verdicts on main, a RubyGems per-version
+probe of the current version, and demo state belong to other briefs and never substitute
+for the baseline, the window, or the derivation above.
 
 Never file a second ask while one titled `Release …` is open.

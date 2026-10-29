@@ -11,7 +11,11 @@ require 'tmpdir'
 # missing window to "empty -> nothing". The Day loop runs the brief on
 # worktree-only checkouts too; if the git commands cannot run there, the
 # verdict is "unknown", and that hidden absence is the regression this gate
-# pins. Reads files and touches no Redis or shared state.
+# pins. It also pins the ask section's evidence contract: a `Release <next>`
+# ask's body must carry the Decide block's own evidence (verified baseline,
+# window list with the oldest commit's date, [Unreleased] contents, <next>
+# derivation), never health-checkup items. Reads files and touches no Redis
+# or shared state.
 class ReleaseDueBriefTest < Minitest::Test
   parallelize_me!
 
@@ -742,6 +746,79 @@ class ReleaseDueBriefTest < Minitest::Test
   # tests above catch the brief's bash shape; this one catches the
   # git-command shape itself, which the stubs cannot (review thread
   # PRRT_kwDOSi_O686uoG3r).
+  # The ask section ('## The ask, when due') must state what a
+  # `Release <next>` ask's BODY carries: the Decide block's own evidence, so
+  # the release actor re-grades the decision without re-running it — the
+  # verified baseline (the resolved tag and its peeled commit), the window
+  # commit list with the oldest shipping commit's date (the figure the 24 h
+  # row grades), the [Unreleased] contents the derivation read, and <next>
+  # with the rule that derived it (### Added / feat -> minor, else patch).
+  # Health-checkup items (CI verdicts, a RubyGems probe of the current
+  # version, demo state) are other briefs' evidence and must be ruled out.
+  def test_ask_section_pins_the_release_ask_body_evidence_contract
+    ask_section = extract_ask_section
+
+    refute_empty ask_section,
+                 '.dz/briefs/release-due.md must keep its "## The ask, when due" section'
+
+    assert_match(/body/i, ask_section,
+                 'the ask section must state what the Release <next> ask\'s body carries')
+
+    assert_match(/\$last.*peeled|peeled.*\$last|\$last.*baseline|baseline.*\$last/im,
+                 ask_section,
+                 'the body must carry the verified baseline: the resolved $last tag and ' \
+                 'its peeled release commit')
+
+    assert_match(/oldest[^.]*(?:commit)[^.]*(?:timestamp|date)|(?:timestamp|date)[^.]*oldest/i,
+                 ask_section,
+                 'the body must carry the window commit list with the oldest shipping ' \
+                 'commit\'s date — the figure the 24 h row grades')
+
+    contract = extract_ask_body_contract
+
+    refute_empty contract,
+                 '.dz/briefs/release-due.md must keep its "The ask\'s body carries" ' \
+                 'evidence contract paragraph'
+
+    # Tied to CHANGELOG and scoped to the contract bullets: step 3 and the
+    # <next> derivation rule mention [Unreleased] too, so a section-wide
+    # /\[Unreleased\]/ match would survive the bullet being deleted.
+    assert_match(/\[Unreleased\][^.\n]*CHANGELOG|CHANGELOG[^.\n]*\[Unreleased\]/im, contract,
+                 'the body must carry the [Unreleased] CHANGELOG contents the <next> ' \
+                 'derivation read')
+
+    assert_match(/### Added.*(?:feat|minor)|(?:feat|minor).*### Added/im, ask_section,
+                 'the body must carry <next> with its derivation rule: ### Added or a ' \
+                 'feat subject -> minor, anything else -> patch')
+
+    # Scoped to the contract bullets: step 3 already says "`wurk.gemspec` IS
+    # one of the seven paths, so a Dependabot PR", so a section-wide match
+    # would survive the bullet being deleted.
+    assert_match(/dependabot[^.]*wurk\.gemspec|wurk\.gemspec[^.]*dependabot/im,
+                 contract,
+                 'the body must carry any in-window merged Dependabot PR that touched ' \
+                 'wurk.gemspec, with the ### Changed line it owes')
+
+    assert_match(/not ask evidence|never substitute|do not belong|ruled? out/i,
+                 ask_section,
+                 'the ask section must rule out health-checkup items as ask evidence')
+
+    assert_match(/CI|main[^.]*green|green[^.]*main/i, ask_section,
+                 'CI verdicts on main are health-checkup evidence and must be named ' \
+                 'among the ruled-out items')
+
+    assert_match(/rubygems/i, ask_section,
+                 'a RubyGems probe of the current version is health-checkup evidence ' \
+                 'and must be named among the ruled-out items')
+
+    # Scoped to the health-checkup ruling paragraph: step 4's
+    # `release:relock_demo` would satisfy a section-wide /demo/i match even
+    # with demo state dropped from the ruled-out items.
+    assert_match(/demo/i, extract_health_checkup_ruling,
+                 'demo state is health-checkup evidence and must be named among the ' \
+                 'ruled-out items')
+  end
+
   def test_window_scan_with_real_repo_filters_shipping_paths_excludes_docs_keeps_revert_pair
     Dir.mktmpdir('wurk-window-repo-') do |tmpdir|
       build_window_repo(tmpdir)
@@ -1748,6 +1825,38 @@ class ReleaseDueBriefTest < Minitest::Test
 
   def window_scan_reached?(marker)
     File.exist?(marker) && File.read(marker).include?('WINDOW_SCAN_REACHED')
+  end
+
+  # Everything from the '## The ask, when due' heading to the end of the
+  # file: the numbered ask steps, the evidence contract, and the closing
+  # prohibition. Empty when the heading is gone.
+  def extract_ask_section
+    ask_idx = @text.index('## The ask, when due')
+
+    ask_idx ? @text[ask_idx..] : ''
+  end
+
+  # The evidence contract proper: from the "The ask's body carries" paragraph
+  # through the closing prohibition, with the numbered ask steps excluded.
+  # Contract assertions must run against this, not the whole ask section —
+  # the steps already mention [Unreleased], Dependabot/wurk.gemspec and the
+  # demo, so a section-wide match cannot fail when the bullet it pins is
+  # deleted.
+  def extract_ask_body_contract
+    section = extract_ask_section
+    idx = section.index("The ask's body carries")
+
+    idx ? section[idx..] : ''
+  end
+
+  # The health-checkup ruling paragraph (from "Health-checkup" to EOF). Only
+  # this paragraph names demo state as ruled-out evidence; the ask steps'
+  # `release:relock_demo` mentions the demo for another reason entirely.
+  def extract_health_checkup_ruling
+    contract = extract_ask_body_contract
+    idx = contract.index('Health-checkup')
+
+    idx ? contract[idx..] : ''
   end
 
   def extract_decide_block
