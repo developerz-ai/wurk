@@ -221,6 +221,15 @@ jobs:
   # reviewers), so it records the deployment and gates nothing.
   demo:
     needs: [preflight, release]
+    # A called workflow can never hold more than its caller grants, and GitHub
+    # checks that before the run starts: deploy-demo's `build` job asks for
+    # `deployments: write` (the demo Deployment record, #617), which the
+    # workflow-level block above does not grant, so without this the whole
+    # release run failed at startup (v1.9.0, run 40953684436) and published
+    # nothing. Least privilege: no `id-token`, no `contents: write`.
+    permissions:
+      contents: read
+      deployments: write
     uses: ./.github/workflows/deploy-demo.yml
     with:
       ref: ${{ needs.preflight.outputs.tag }}
