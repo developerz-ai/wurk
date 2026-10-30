@@ -282,6 +282,45 @@ class ConformanceTest < Minitest::Test
     end
   end
 
+  # A repo-root file has no `/`, which used to discard the span entirely:
+  # deleting the target left the gate green.
+  def test_ledger_missing_repo_root_file_anchor_fails
+    doc = LEDGER_ANCHOR_DOC.sub('`lib/wurk/limiter.rb`', '`wurk.gemspec`')
+
+    Dir.mktmpdir do |root|
+      write_ledger_fixture(root, doc: doc, path_only: false)
+
+      error = assert_raises(Conformance::Invalid) { ledger_gate(root).validate! }
+
+      assert_includes error.message, 'First divergence'
+      assert_includes error.message, 'wurk.gemspec'
+      assert_match(/missing target file/, error.message)
+    end
+  end
+
+  def test_ledger_repo_root_file_anchor_passes_when_the_target_exists
+    doc = LEDGER_ANCHOR_DOC.sub('`lib/wurk/limiter.rb`', '`wurk.gemspec`')
+
+    Dir.mktmpdir do |root|
+      write_ledger_fixture(root, doc: doc, path_only: false)
+      File.write(File.join(root, 'wurk.gemspec'), "# frozen_string_literal: true\n")
+
+      assert ledger_gate(root).validate!
+    end
+  end
+
+  # Root recognition rides the extension alone; an undotted root span stays
+  # prose (a branch name, a version) and is never existence-checked.
+  def test_ledger_undotted_root_span_is_not_an_anchor
+    doc = LEDGER_ANCHOR_DOC.sub('`lib/wurk/limiter.rb`', '`main`')
+
+    Dir.mktmpdir do |root|
+      write_ledger_fixture(root, doc: doc, path_only: false)
+
+      assert ledger_gate(root).validate!
+    end
+  end
+
   def test_ledger_missing_line_anchor_target_fails
     doc = LEDGER_ANCHOR_DOC.sub('`lib/wurk/limiter.rb`', '`lib/wurk/absent.rb:3`')
     records = matching_records + [{ 'entry' => 'First divergence', 'anchor' => 'lib/wurk/absent.rb#L3',

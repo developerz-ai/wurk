@@ -153,7 +153,8 @@ anchors too (`Conformance::Ledger`, beside the inventory). Every anchor that
 names lines must be pinned by a record in `test/conformance/ledger_anchors/*.yml`
 whose `fragment` still appears — whitespace-normalized (strip each line, drop
 blanks, join with one space, the same rule as the `promise` check) — within
-exactly the anchored lines. A path-only anchor (a bare path with no line) gets
+exactly the anchored lines. A path-only anchor (a bare path with no line — under
+a directory or at the repo root, e.g. `wurk.gemspec`) gets
 no record; the gate existence-checks it straight from the ledger.
 
 The records are data: one YAML array per file, each element an

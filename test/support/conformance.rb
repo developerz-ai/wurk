@@ -310,10 +310,15 @@ module Conformance
 
     # Branch names (`fix/shutdown-requeue`) ride the same backticks as file
     # paths; a real repo path carries a file extension or sits under an
-    # existing top-level directory. Both markers are required alongside the
-    # directory separator.
+    # existing top-level directory. Below the root the separator is a third
+    # marker; at the root there is none, so the extension alone decides
+    # (`wurk.gemspec`). Recognition must stay structural — keying it on
+    # File.file? would drop a deleted target from the anchors entirely and
+    # turn the gate green exactly when it should fail.
     def path_span?(span)
-      return false unless span.match?(PATH_SPAN) && span.include?('/')
+      return false unless span.match?(PATH_SPAN)
+
+      return span.include?('.') unless span.include?('/')
 
       span.include?('.') || File.directory?(File.join(@root, span.split('/').first))
     end
