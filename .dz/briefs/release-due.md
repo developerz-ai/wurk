@@ -50,13 +50,13 @@ if [ "$(git rev-parse --is-shallow-repository 2>/dev/null)" = "true" ]; then
 fi
 git fetch --quiet origin tag "$last" '+refs/heads/main:refs/remotes/origin/main' || { echo "::error::git fetch of tag $last / origin main failed"; exit 1; }
 local_last=$(git describe --tags --abbrev=0 --match 'v[0-9]*' origin/main)
-git log --format='%h %cI %s' "$last"..origin/main -- ':(glob)lib/**/*.rb' ':(glob)lib/**/*.lua' ':(glob)app/**/*.rb' 'config/**' 'exe/*' 'frontend/src/**' wurk.gemspec
+git log --format='%h %cI %s' "$last"..origin/main -- ':(glob)lib/**/*.rb' ':(glob)lib/**/*.lua' ':(glob)app/**/*.rb' 'config/**' 'exe/*' 'frontend/src/**' 'frontend/index.html' 'frontend/public/**' wurk.gemspec
 ```
 
 - **Tag listing.** Its completeness comes from pagination (`--paginate`), never a page size.
 - **Baseline.** A tag alone proves little. The peeled commit must carry the version's dated `## [<version>] - <date>` heading, dated with that commit's own committer date, and absent at its first parent: the release commit introduced it.
 - **Release state.** Zero assets is the gem-less marker, but not proof nothing shipped: `release.yml` pushes the gem before it uploads the asset. The release-deletion runbook in RELEASE.md applies only once the RubyGems per-version probe confirms the version was never published. A Release carrying the `.gem` is real, whoever authored it.
-- **Window.** The pathspec is `wurk.gemspec`'s `spec.files` (`frontend/src` for the built dashboard, plus `wurk.gemspec` for dependency bumps). Prose, tests, CI, the demo and benchmarks ship nothing.
+- **Window.** The pathspec names the sources whose change reaches the gem: `lib/**`, `app/**`, `config/**`, `exe/*` and `wurk.gemspec`, plus the dashboard sources behind the shipped `vendor/assets/dashboard/**/*` — `frontend/src/**`, `frontend/index.html` (Vite builds it into the bundle's `index.html`) and `frontend/public/**` (copied verbatim). The gem ships the built dashboard, not the sources, so the scan names the sources. Prose, tests, CI, the demo and benchmarks ship nothing.
 
 | Window | Do |
 |---|---|
@@ -75,7 +75,7 @@ git log --format='%h %cI %s' "$last"..origin/main -- ':(glob)lib/**/*.rb' ':(glo
 - `tag-peel` — peels the tag ref to its release commit and aborts when the ref does not resolve to a commit.
 - `release-state` — classifies the Release at `$last` from `author` and `assets`; zero assets aborts as gem-less, with the deletion runbook gated behind the RubyGems per-version probe.
 - `baseline` — the peeled commit carries the version's dated CHANGELOG heading, dated with that commit's own committer date and absent at its first parent.
-- `window` — scans `$last..main` for shipping commits through the gemspec pathspec and grades the Window/Do table's verdict.
+- `window` — scans `$last..main` for shipping commits through the shipping pathspec and grades the Window/Do table's verdict.
 - `pre-flight-guard` — only a lane where `gh auth status` exits 0 files the ask, only when no open issue or PR title matches `^Release|^release:`, and never a second ask while one titled `Release …` is open.
 
 ## The ask, when due

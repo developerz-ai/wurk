@@ -911,6 +911,50 @@ class ReleaseDueBriefTest < Minitest::Test
     end
   end
 
+  # The brief's window pathspec (.dz/briefs/release-due.md:53) must cover
+  # every source path whose change reaches the gem. The dashboard is the
+  # trap: `frontend/index.html` (Vite turns it into
+  # vendor/assets/dashboard/index.html) and `frontend/public/**` (copied
+  # verbatim: favicon, og-image, apple-touch-icon, wurk-logo) both ship in
+  # the gem (wurk.gemspec ships vendor/assets/dashboard/**/*), and neither
+  # sits under `frontend/src/**`. While the pathspec named only
+  # `frontend/src/**`, a window whose only shipping commit was one of them
+  # scanned EMPTY, and the Window/Do table grades an empty window "nothing"
+  # — no release ask for a gem that changed. Both windows below are
+  # checked: one where the frontend commits share the window with lib/
+  # changes, one where they are all the window holds.
+  #
+  # This gate holds that pathspec in place: drop `frontend/index.html` or
+  # `frontend/public/**` from it and the test goes red again, because the
+  # brief's OWN `git log` command is what runs here — a test-owned
+  # pathspec would prove nothing about the brief.
+  def test_window_scan_includes_the_frontend_paths_that_reach_the_gem
+    problems = []
+
+    Dir.mktmpdir('wurk-window-repo-') do |tmpdir|
+      build_window_repo(tmpdir)
+      window = query_brief_window_log(hermetic_git_env(tmpdir))
+
+      assert_predicate window[:status], :success?, window[:message]
+      problems.concat(window_listing_problems(window[:stdout], 'the full window'))
+    end
+
+    Dir.mktmpdir('wurk-frontend-window-repo-') do |tmpdir|
+      build_window_repo(tmpdir, frontend_only: true)
+      window = query_brief_window_log(hermetic_git_env(tmpdir))
+
+      assert_predicate window[:status], :success?, window[:message]
+      problems.concat(window_listing_problems(window[:stdout], 'the frontend-only window'))
+    end
+
+    assert_empty problems,
+                 'the brief\'s window pathspec (.dz/briefs/release-due.md:53) must list every ' \
+                 'commit whose change reaches the gem: `frontend/index.html` and ' \
+                 '`frontend/public/**` reach it (Vite builds them into vendor/assets/dashboard/**, ' \
+                 'which wurk.gemspec ships), so a frontend-only window must not scan empty — the ' \
+                 "Window/Do table grades it \"nothing\":\n- #{problems.join("\n- ")}"
+  end
+
   private
 
   # Stub `gh` whose Compare `gh api .../compare/<last>...main` call always
@@ -2020,6 +2064,25 @@ class ReleaseDueBriefTest < Minitest::Test
     }
   end
 
+  # A window listing that omits a shipping commit is as wrong as an
+  # empty one: the brief reads that listing twice — the "empty | nothing"
+  # row and the "otherwise | one ask" row — and an empty listing files
+  # no release ask at all. Returns the problems found so one test can
+  # report every window it built.
+  def window_listing_problems(stdout, label)
+    problems = []
+    empty_message = "#{label}: the listing is empty, so the brief's \"empty | nothing\" row fires"
+    problems << empty_message if stdout.strip.empty?
+
+    FRONTEND_WINDOW_SUBJECTS.each do |subject|
+      next if stdout.include?(subject)
+
+      problems << "#{label}: the commit #{subject.inspect} is missing from the listing"
+    end
+
+    problems
+  end
+
   # `refs/remotes/origin/main` points to whatever the local-checkout
   # brief calls `origin/main`. The real-repo test below synthesizes
   # this ref from HEAD so the brief's
@@ -2029,11 +2092,25 @@ class ReleaseDueBriefTest < Minitest::Test
   REMOTE_MAIN_REF = 'refs/remotes/origin/main'
   private_constant :REMOTE_MAIN_REF
 
-  # End-to-end window-scan repo. Materializes a fresh git repo with
-  # four commits after the v1.0.0 tag: a shipping commit (lib/foo.rb
-  # change), a docs-only commit (README.md change), and a
-  # change-then-revert pair on lib/bar.rb. Together they exercise
-  # the three shapes the brief's pathspec filter must handle.
+  # The frontend paths that reach the gem and that the brief's window
+  # pathspec must therefore cover: `frontend/index.html` becomes the
+  # built dashboard shell, `frontend/public/**` is copied verbatim into
+  # the bundle. Neither sits under `frontend/src/**`.
+  FRONTEND_INDEX_SUBJECT = 'frontend index commit on frontend/index.html'
+  FRONTEND_FAVICON_SUBJECT = 'frontend favicon commit on frontend/public/favicon.png'
+  FRONTEND_WINDOW_SUBJECTS = [FRONTEND_INDEX_SUBJECT, FRONTEND_FAVICON_SUBJECT].freeze
+  private_constant :FRONTEND_INDEX_SUBJECT, :FRONTEND_FAVICON_SUBJECT, :FRONTEND_WINDOW_SUBJECTS
+
+  # End-to-end window-scan repo. Materializes a fresh git repo whose
+  # window holds a shipping commit (lib/foo.rb change), a docs-only
+  # commit (README.md change), a change-then-revert pair on lib/bar.rb,
+  # and the two frontend commits that reach the gem
+  # (frontend/index.html, frontend/public/favicon.png). Together they
+  # exercise the shapes the brief's pathspec filter must handle.
+  #
+  # `frontend_only: true` drops the lib-shaped commits, so the window's
+  # only shipping commit is a frontend one — the window the brief grades
+  # "empty" when its pathspec misses the frontend paths.
   #
   # Uses an isolated env (HOME = tmpdir, GIT_CONFIG_NOSYSTEM = 1,
   # no shared work tree) so no inherited user's git config, hooks,
@@ -2042,7 +2119,7 @@ class ReleaseDueBriefTest < Minitest::Test
   # pointing at global hooks. Tags v1.0.0 at the initial commit, then
   # creates `REMOTE_MAIN_REF` pointing at HEAD so the brief-style
   # `git log v1.0.0..origin/main` resolves both bounds.
-  def build_window_repo(tmpdir)
+  def build_window_repo(tmpdir, frontend_only: false)
     env = hermetic_git_env(tmpdir)
 
     run_git(env, 'init', '--quiet', '--initial-branch=main', tmpdir)
@@ -2058,6 +2135,52 @@ class ReleaseDueBriefTest < Minitest::Test
     run_git(env, 'commit', '--quiet', '-m', 'initial commit, tagged as v1.0.0')
     run_git(env, 'tag', 'v1.0.0')
 
+    build_lib_window_commits(env, tmpdir) unless frontend_only
+
+    # Frontend commits: the dashboard shell and a copied public asset.
+    # Both reach the gem — Vite builds frontend/index.html into
+    # vendor/assets/dashboard/index.html and copies frontend/public/**
+    # verbatim, and wurk.gemspec ships vendor/assets/dashboard/**/* — so
+    # the brief's pathspec must name both.
+    FileUtils.mkdir_p(File.join(tmpdir, 'frontend', 'public'))
+    File.write(File.join(tmpdir, 'frontend', 'index.html'), "<!doctype html>\n")
+    run_git(env, 'add', 'frontend/index.html')
+    run_git(env, 'commit', '--quiet', '-m', FRONTEND_INDEX_SUBJECT)
+    verify_frontend_commit_touches_only(env, FRONTEND_INDEX_SUBJECT, 'frontend/index.html')
+
+    File.write(File.join(tmpdir, 'frontend', 'public', 'favicon.png'), "favicon bytes\n")
+    run_git(env, 'add', 'frontend/public/favicon.png')
+    run_git(env, 'commit', '--quiet', '-m', FRONTEND_FAVICON_SUBJECT)
+    verify_frontend_commit_touches_only(env, FRONTEND_FAVICON_SUBJECT, 'frontend/public/favicon.png')
+
+    head_sha = Open3.capture2(env, 'git', 'rev-parse', 'HEAD').first.to_s.strip
+    raise 'build_window_repo: empty HEAD SHA' if head_sha.empty?
+
+    run_git(env, 'update-ref', REMOTE_MAIN_REF, head_sha)
+  end
+
+  # The frontend commits' premise: each changes exactly ONE frontend file
+  # and nothing else — no lib/, app/, config/, exe/ or wurk.gemspec path.
+  # The defect this gate pins is "a commit whose only shipping change is
+  # a frontend file is invisible to the brief's pathspec", so a frontend
+  # commit that also touched a lib/ file would turn the empty
+  # frontend-only window into a fixture artifact instead of a pathspec
+  # defect. Checked, not assumed.
+  def verify_frontend_commit_touches_only(env, subject, expected_path)
+    sha = run_git(env, 'rev-parse', 'HEAD').strip
+    touched = run_git(env, 'show', '--pretty=format:', '--name-only', sha).lines.map(&:strip).reject(&:empty?)
+
+    return if touched == [expected_path]
+
+    raise "#{subject.inspect} must touch only #{expected_path.inspect} (no lib/, app/, " \
+          "config/, exe/ or wurk.gemspec path), but it touched #{touched.inspect}"
+  end
+
+  # The lib-shaped window commits: a shipping commit on lib/foo.rb, a
+  # docs-only commit on README.md, and a change+revert pair on
+  # lib/bar.rb. Together they exercise the three shapes the brief's
+  # pathspec filter must handle.
+  def build_lib_window_commits(env, tmpdir)
     # Shipping commit: lib/foo.rb change (matches the brief's
     # `lib/**/*.rb` pathspec).
     File.write(File.join(tmpdir, 'lib', 'foo.rb'), "puts 'shipping'\n")
@@ -2081,11 +2204,6 @@ class ReleaseDueBriefTest < Minitest::Test
     run_git(env, 'commit', '--quiet', '-m', 'bar add commit')
     run_git(env, 'rm', '--quiet', 'lib/bar.rb')
     run_git(env, 'commit', '--quiet', '-m', 'bar revert commit')
-
-    head_sha = Open3.capture2(env, 'git', 'rev-parse', 'HEAD').first.to_s.strip
-    raise 'build_window_repo: empty HEAD SHA' if head_sha.empty?
-
-    run_git(env, 'update-ref', REMOTE_MAIN_REF, head_sha)
   end
 
   # Env used by every `git` invocation in the real-repo tests.
@@ -2110,7 +2228,7 @@ class ReleaseDueBriefTest < Minitest::Test
     stdout, stderr, status = Open3.capture3(env, 'git', *args)
     return stdout if status.success?
 
-    raise "git #{args.inspect} failed in build_window_repo: status=#{status.exitstatus} " \
+    raise "git #{args.inspect} failed in the window fixture: status=#{status.exitstatus} " \
           "stdout=#{stdout.inspect} stderr=#{stderr.inspect}"
   end
 end
