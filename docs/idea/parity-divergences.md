@@ -487,7 +487,7 @@ Chain order verified in `test/unit/metrics_history_test.rb` and
 `lib/wurk/metrics/statsd.rb:161-180`, `lib/wurk/metrics/statsd.rb:213-218`,
 `lib/wurk/middleware/interrupt_handler.rb:35-37,50`,
 `lib/wurk/middleware/expiry.rb:62-64,111`,
-`lib/wurk.rb:335`, `lib/wurk.rb:351`, `lib/wurk.rb:358`,
+`lib/wurk.rb:338`, `lib/wurk.rb:354`, `lib/wurk.rb:361`,
 `docs/plans/2026/08/07/101-beyond-sidekiq/00-semantics-signoff.md` §1.
 
 ## OpenTelemetry adds `traceparent`/`tracestate` as top-level job-JSON keys, opt-in only
@@ -1185,7 +1185,7 @@ entry records the unsupported contract, not a claim that the gap is safe.
 [root route](../../config/routes.rb#L4);
 [SPA root controller](../../app/controllers/wurk/dashboard_controller.rb#L39-L41);
 [opt-in configuration](../../lib/wurk/configuration.rb#L702-L726);
-[dedicated listener bind](../../lib/wurk/health.rb#L119-L123);
+[dedicated listener bind](../../lib/wurk/health.rb#L123-L135);
 [GET-only dispatch](../../lib/wurk/health.rb#L258-L266);
 [liveness and local readiness](../../lib/wurk/health.rb#L277-L305); and
 [swarm readiness](../../lib/wurk/health.rb#L354-L367).
@@ -1305,7 +1305,7 @@ to add `key_val` support.
 `lib/wurk/api/fast.rb:20-31`;
 `app/controllers/wurk/application_controller.rb:22`;
 `lib/wurk/configuration.rb:114`; `frontend/src/pages/Queues.tsx:77-84`;
-`test/engine/api_mutations_test.rb:447-460`.
+`test/engine/api_mutations_test.rb:487-500`.
 
 ## `Config#redis_info` and `Config#to_json` are not implemented
 
@@ -1328,7 +1328,7 @@ reads `INFO` off the config object — the heartbeat and health probe consume
 is additive (two delegating methods); until then, a ported caller that touched
 either method needs a one-line shim of its own.
 
-**Anchor:** `lib/wurk/cli.rb:353`; `lib/wurk/redis_pool.rb:188-190`; free
+**Anchor:** `lib/wurk/cli.rb:356`; `lib/wurk/redis_pool.rb:188-190`; free
 Config surface ([free §4.2 Public methods — `Config#to_json`](../target/sidekiq-free.md#42-public-methods),
 [free §4.2 Public methods — `Config#redis_info`](../target/sidekiq-free.md#42-public-methods)).
 
@@ -1353,7 +1353,7 @@ legitimate iterations mid-run. An `IterableJob` that must be bounded today
 needs an explicit deadline check in `each_iteration` (or `:timeout`); the gap
 should close only when upstream pins what the key promises.
 
-**Anchor:** `lib/wurk/configuration.rb:31`; `docs/configuration.md:143`; free
+**Anchor:** `lib/wurk/configuration.rb:31`; `docs/configuration.md:148`; free
 DEFAULTS ([free §4.1 DEFAULTS — `max_iteration_runtime`](../target/sidekiq-free.md#41-defaults)) and §6.4
 ([free §6.4 `Sidekiq::IterableJob`](../target/sidekiq-free.md#64-sidekiqiterablejob)).
 
@@ -1404,7 +1404,7 @@ is not modeled separately — the spec itself names `on(:fork)` as its API
 ([Ent §7.2 Environment variables — `SIDEKIQ_FORK_PER_PROCESS_HOOK`](../target/sidekiq-ent.md#72-environment-variables)).
 
 **Anchor:** `lib/wurk/configuration.rb:106`,
-`lib/wurk/configuration.rb:733-734`; free `on()`
+`lib/wurk/configuration.rb:750-754`; free `on()`
 ([free §4.2 Public methods — `on(event)`](../target/sidekiq-free.md#42-public-methods)) and DEFAULTS
 ([free §4.1 DEFAULTS — lifecycle events](../target/sidekiq-free.md#41-defaults)); Ent §7.4
 ([Ent §7.4 Fork callback](../target/sidekiq-ent.md#74-fork-callback)) and §6.3
@@ -1432,7 +1432,7 @@ mirrored Sidekiq prefix of `@options` stays byte-for-byte intact, so gems
 introspecting the config hash see no change.
 
 **Anchor:** `lib/wurk/configuration.rb:50`, `lib/wurk/configuration.rb:348`,
-`lib/wurk/configuration.rb:1046`; free DEFAULTS
+`lib/wurk/configuration.rb:1124-1125`; free DEFAULTS
 ([free §4.1 DEFAULTS — handler keys](../target/sidekiq-free.md#41-defaults)).
 
 ## Pool sizing: three disjoint pools per process
@@ -1693,7 +1693,7 @@ order is unchanged (Batch → Expiry → Limiter), and nothing on the wire moves
 no Redis key, job-JSON field or Lua script is touched.
 
 **Anchor:** [anchor-aware `add`](../../lib/wurk/middleware/chain.rb#L70-L94),
-[anchor resolution](../../lib/wurk/middleware/chain.rb#L164-L171),
+[anchor resolution](../../lib/wurk/middleware/chain.rb#L173-L177),
 [batch middleware's `outer_of`](../../lib/wurk/batch/server_middleware.rb#L44-L65),
 free [§10.1 `Sidekiq::Middleware::Chain` — `add`](../target/sidekiq-free.md#101-sidekiqmiddlewarechain).
 
@@ -1751,7 +1751,7 @@ shard-per-mount deployment has no Wurk equivalent.
 [`PoolScope::Handle#redis_pool`](../../lib/wurk/web/pool_scope.rb#L39-L43);
 [`config.web_pool_size`](../../lib/wurk/configuration.rb#L295-L302),
 [`config.web_redis_pool`](../../lib/wurk/configuration.rb#L312-L314) and
-[`build_redis_pool`](../../lib/wurk/configuration.rb#L1097-L1101);
+[`build_redis_pool`](../../lib/wurk/configuration.rb#L1115-L1119);
 [parent sockets closed before fork](../../lib/wurk/swarm.rb#L329-L333) and
 [child pools rebuilt after fork](../../lib/wurk/swarm/child_boot.rb#L125-L126);
 free §25.1 ([free §25.1 Entrypoint](../target/sidekiq-free.md#251-entrypoint))

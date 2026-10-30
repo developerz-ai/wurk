@@ -183,6 +183,266 @@ module Conformance
     end
   end
 
+  # Ledger-anchor gate: every line-bearing anchor in a divergence entry's
+  # **Anchor:** paragraph must be pinned by a record in
+  # test/conformance/ledger_anchors/*.yml quoting a fragment that still
+  # appears, whitespace-normalized, at exactly those lines; path-only anchors
+  # are existence-checked straight from the ledger. When the anchored code
+  # moves, the ledger's path:line and the record's fragment move together — a
+  # record quoting whatever now sits at the old lines is the exact drift this
+  # gate exists to reject (docs/conformance.md, "Pin the ledger anchors").
+  class Ledger
+    Record = Struct.new(:file, :entry, :anchor, :fragment)
+    Entry = Struct.new(:heading, :paragraph)
+    Anchor = Struct.new(:path, :from, :to) do
+      def line_bearing? = !from.nil?
+
+      def canonical
+        return path unless line_bearing?
+
+        to > from ? "#{path}#L#{from}-L#{to}" : "#{path}#L#{from}"
+      end
+    end
+
+    RECORD_KEYS = %w[entry anchor fragment].freeze
+    PATH_SPAN = %r{\A[\w./-]+\z}
+    # `path:56-59,81-89` — one backtick span, one anchor per comma range.
+    PATH_WITH_RANGES = %r{\A(?<path>[\w./-]+):(?<ranges>\d+(?:-\d+)?(?:,\d+(?:-\d+)?)*)\z}
+    # Backticked spans and inline links share one scan so a span inside a link
+    # label is consumed by the link, never re-read as a path.
+    SPAN_OR_LINK = /`([^`]+)`|\[[^\]]*\]\(([^)\s]+)\)/
+    LINE_FRAGMENT = /\AL(?<first>[1-9]\d*)(?:-L(?<last>[1-9]\d*))?\z/
+
+    attr_reader :records
+
+    def self.load(ledger:, dir:, root: ROOT)
+      path = File.expand_path(ledger, root)
+      new(File.read(path), File.expand_path(dir, root), ledger_path: path, root: root)
+    end
+
+    def initialize(text, dir, ledger_path:, root: ROOT)
+      @text = text
+      @dir = dir
+      @root = root
+      @records_glob = File.join(@dir, '*.yml')
+      @link_base = File.dirname(ledger_path)
+      @records = load_records
+    end
+
+    # Bang contract as in Inventory: raises on the first unpinned or unquotable
+    # anchor, true otherwise — a gate, not a query.
+    def validate! # rubocop:disable Naming/PredicateMethod
+      by_entry = records.group_by(&:entry)
+      validate_record_entries!(by_entry)
+      entries.each do |heading, paragraph|
+        raise Invalid, "#{heading}: entry has no **Anchor:** paragraph" unless paragraph
+
+        pinned = []
+        anchors(heading, paragraph).each do |anchor|
+          if anchor.line_bearing?
+            validate_line_anchor!(heading, anchor, by_entry[heading])
+            pinned << anchor.canonical
+          else
+            validate_path_anchor!(heading, anchor)
+          end
+        end
+        validate_entry_records!(heading, by_entry[heading], pinned)
+      end
+      true
+    end
+
+    private
+
+    # One '##' entry per heading. Its **Anchor:** paragraph is that line until
+    # the next blank line — nothing else in the entry is in scope, and '###'
+    # blocks are body prose, not entries.
+    def entries
+      @entries ||= scan_entries
+    end
+
+    def scan_entries
+      found = []
+      entry = nil
+      collecting = false
+      @text.each_line do |line|
+        if line.start_with?('## ')
+          found << close_entry(entry) if entry
+          entry = Entry.new(line[3..].strip)
+          collecting = false
+        elsif entry && collecting
+          collecting = absorb_anchor_line(entry, line)
+        elsif entry&.paragraph.nil? && line.start_with?('**Anchor:**')
+          entry.paragraph = [line]
+          collecting = true
+        end
+      end
+      found << close_entry(entry) if entry
+      found
+    end
+
+    def close_entry(entry)
+      [entry.heading, entry.paragraph&.join]
+    end
+
+    # Returns the still-open paragraph, or nil once a blank line closes it —
+    # a state, not a boolean, so the name carries no `?`.
+    def absorb_anchor_line(entry, line)
+      return if line.strip.empty?
+
+      entry.paragraph << line
+    end
+
+    def anchors(heading, paragraph)
+      list = []
+      paragraph.scan(SPAN_OR_LINK) do |span, target|
+        list.concat(span ? span_anchors(heading, span) : link_anchors(heading, target))
+      end
+      list
+    end
+
+    def span_anchors(heading, span)
+      ranges = PATH_WITH_RANGES.match(span)
+      return ranges[:ranges].split(',').map { |range| line_anchor(heading, ranges[:path], range) } if ranges
+      return [build_anchor(heading, span, nil, nil)] if path_span?(span)
+
+      []
+    end
+
+    # Branch names (`fix/shutdown-requeue`) ride the same backticks as file
+    # paths; a real repo path carries a file extension or sits under an
+    # existing top-level directory. Both markers are required alongside the
+    # directory separator.
+    def path_span?(span)
+      return false unless span.match?(PATH_SPAN) && span.include?('/')
+
+      span.include?('.') || File.directory?(File.join(@root, span.split('/').first))
+    end
+
+    def line_anchor(heading, path, range)
+      first, last = range.split('-')
+      build_anchor(heading, path, first.to_i, (last || first).to_i)
+    end
+
+    def link_anchors(heading, target)
+      return [] if target.match?(/\A[a-z][a-z0-9+.-]*:/i) || target.start_with?('#', '//')
+
+      file, fragment = target.split('#', 2)
+      resolved = File.expand_path(file, @link_base)
+      unless resolved.start_with?("#{@root}/")
+        raise Invalid, "#{heading}: link anchor escapes the repository: #{target}"
+      end
+
+      path = resolved.delete_prefix("#{@root}/")
+      match = LINE_FRAGMENT.match(fragment.to_s)
+      return [build_anchor(heading, path, nil, nil)] unless match
+
+      [build_anchor(heading, path, match[:first].to_i, (match[:last] || match[:first]).to_i)]
+    end
+
+    def build_anchor(heading, path, first, last)
+      raise Invalid, "#{heading}: anchor path must be repo-relative: #{path}" if path.start_with?('/')
+      raise Invalid, "#{heading}: anchor path escapes the repository: #{path}" if path.split('/').include?('..')
+      raise Invalid, "#{heading}: anchor range descends: #{path}#L#{first}-L#{last}" if first && last < first
+      raise Invalid, "#{heading}: anchor range starts at line zero: #{path}#L#{first}-L#{last}" if first && first < 1
+
+      Anchor.new(path, first, last)
+    end
+
+    def validate_line_anchor!(heading, anchor, candidates)
+      # nil group = no record names this entry: the same missing-pin as an
+      # empty one, while validate_entry_records! keeps nil as the valid
+      # path-only shape.
+      pinned = (candidates || []).select { |record| record.anchor == anchor.canonical }
+      if pinned.empty?
+        raise Invalid, "#{heading}: line-bearing anchor #{anchor.canonical} has no record in #{@records_glob}"
+      end
+
+      record = pinned.first
+      path = File.expand_path(anchor.path, @root)
+      unless File.file?(path)
+        raise Invalid, "#{heading}: anchor #{anchor.canonical}: missing target file #{anchor.path} (#{record.file})"
+      end
+
+      lines = File.readlines(path)
+      if anchor.to > lines.size
+        raise Invalid, "#{heading}: anchor #{anchor.canonical}: range past end of #{anchor.path} " \
+                       "(#{lines.size} lines) — the code moved; re-pin the anchor and fragment (#{record.file})"
+      end
+
+      anchored = normalize_whitespace(lines[(anchor.from - 1)..(anchor.to - 1)].join)
+      return if anchored.include?(normalize_whitespace(record.fragment))
+
+      raise Invalid, "#{heading}: anchor #{anchor.canonical}: fragment not found at the anchored lines " \
+                     "(#{record.file})"
+    end
+
+    def validate_path_anchor!(heading, anchor)
+      return if File.file?(File.expand_path(anchor.path, @root))
+
+      raise Invalid, "#{heading}: path-only anchor #{anchor.path}: missing target file"
+    end
+
+    def validate_entry_records!(heading, entry_records, pinned)
+      # An entry whose anchors are all path-only pins nothing and ships no
+      # records: by_entry carries no key for it, and that is the valid shape.
+      return if entry_records.nil?
+
+      entry_records.each do |record|
+        next if pinned.include?(record.anchor)
+
+        raise Invalid, "#{record.file}: record anchor #{record.anchor.inspect} does not pin a line-bearing " \
+                       "anchor of the entry #{heading.inspect}"
+      end
+      entry_records.group_by(&:anchor).each do |anchor, group|
+        next unless group.size > 1
+
+        raise Invalid, "#{heading}: anchor #{anchor} pinned #{group.size} times " \
+                       "(#{group.map(&:file).uniq.sort.join(', ')})"
+      end
+    end
+
+    def validate_record_entries!(by_entry)
+      unknown = by_entry.keys - entries.map(&:first)
+      return if unknown.empty?
+
+      record = by_entry[unknown.first].first
+      raise Invalid, "#{record.file}: record names unknown ledger entry #{unknown.first.inspect}"
+    end
+
+    def load_records
+      Dir[@records_glob].flat_map do |file|
+        begin
+          data = YAML.safe_load_file(file, permitted_classes: [], permitted_symbols: [], aliases: false)
+        rescue Psych::Exception => e
+          raise Invalid, "#{file}: #{e.message}"
+        end
+        raise Invalid, "#{file}: anchor records must be an array" unless data.is_a?(Array)
+
+        data.map { |raw| build_record(file, raw) }
+      end
+    end
+
+    def build_record(file, raw)
+      raise Invalid, "#{file}: record must be a mapping: #{raw.inspect}" unless raw.is_a?(Hash)
+      unless raw.keys.sort == RECORD_KEYS.sort
+        raise Invalid, "#{file}: record keys must be exactly #{RECORD_KEYS.join('/')} — got #{raw.keys.inspect}"
+      end
+
+      entry, anchor, fragment = raw.values_at(*RECORD_KEYS)
+      if [entry, anchor, fragment].any? { |value| !value.is_a?(String) || value.strip.empty? }
+        raise Invalid, "#{file}: entry, anchor and fragment must be nonempty strings"
+      end
+
+      Record.new(file, entry, anchor, fragment)
+    end
+
+    # Same normalization as the Inventory promise check, which stays private
+    # to it — the rule is shared, the implementation deliberately duplicated.
+    def normalize_whitespace(value)
+      value.lines.map(&:strip).reject(&:empty?).join(' ').squeeze(' ')
+    end
+  end
+
   # Full-retention stat reporter. minitest-parallel_fork marshals each worker's
   # [count, assertions, results] from the FIRST stat-shaped reporter, and
   # minitest >= 6 prunes passing results from its own stat reporters — first

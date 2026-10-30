@@ -162,6 +162,274 @@ class ConformanceTest < Minitest::Test
     File.write(path, content)
   end
 
+  LEDGER_ANCHOR_DOC = <<~MARKDOWN
+    # Divergence ledger
+
+    ## First divergence
+
+    First divergence body: reliable fetch moves jobs atomically.
+
+    **Anchor:** `lib/wurk/sample.rb:56-59,81-89`,
+    [poll interval](../../lib/wurk/sample.rb#L3), and
+    `lib/wurk/limiter.rb`.
+
+    ## Second divergence
+
+    Second divergence body.
+
+    **Anchor:** [retry loop](../../lib/wurk/sample.rb#L4) and
+    `lib/wurk/sample.rb:1`.
+  MARKDOWN
+
+  def ledger_sample_code
+    lines = ['# frozen_string_literal: true', 'module Sample', '  POLL_INTERVAL = 0.05',
+             '  RETRY_LABEL = "retry loop and immediate ignore"']
+    lines.concat(Array.new(51) { |i| "  # filler #{i}" })
+    lines.push('  def acquire', '    sleep(POLL_INTERVAL)', '    trim_expired_slots', '  end', '')
+    lines.concat(Array.new(20) { |i| "  # gap #{i}" })
+    lines.push('  def release', '    zrem_slot', '  end', 'end', '',
+               '  # tail 0', '  # tail 1', '  # tail 2', '  # tail 3')
+    lines.join("\n") << "\n"
+  end
+
+  def matching_records
+    [
+      { 'entry' => 'First divergence', 'anchor' => 'lib/wurk/sample.rb#L56-L59',
+        'fragment' => "def acquire\n    sleep(POLL_INTERVAL)\n    trim_expired_slots\n  end" },
+      { 'entry' => 'First divergence', 'anchor' => 'lib/wurk/sample.rb#L81-L89',
+        'fragment' => 'def release zrem_slot' },
+      { 'entry' => 'First divergence', 'anchor' => 'lib/wurk/sample.rb#L3', 'fragment' => 'POLL_INTERVAL = 0.05' },
+      { 'entry' => 'Second divergence', 'anchor' => 'lib/wurk/sample.rb#L4',
+        'fragment' => 'retry loop and immediate ignore' },
+      { 'entry' => 'Second divergence', 'anchor' => 'lib/wurk/sample.rb#L1', 'fragment' => 'frozen_string_literal' }
+    ]
+  end
+
+  def write_lib(root, relative, content)
+    path = File.join(root, 'lib', relative)
+    FileUtils.mkdir_p(File.dirname(path))
+    File.write(path, content)
+  end
+
+  def write_ledger_records(root, records)
+    dir = File.join(root, 'ledger_anchors')
+    FileUtils.mkdir_p(dir)
+    File.write(File.join(dir, 'anchors.yml'), YAML.dump(records))
+    dir
+  end
+
+  def write_ledger_fixture(root, records: matching_records, doc: LEDGER_ANCHOR_DOC, sample: ledger_sample_code,
+                           path_only: true)
+    write_doc(root, 'idea/parity-divergences.md', doc)
+    write_lib(root, 'wurk/sample.rb', sample) if sample
+    write_lib(root, 'wurk/limiter.rb', "# placeholder limiter\n") if path_only
+    write_ledger_records(root, records)
+  end
+
+  def ledger_gate(root)
+    Conformance::Ledger.load(ledger: File.join(root, 'docs/idea/parity-divergences.md'),
+                             dir: File.join(root, 'ledger_anchors'), root: root)
+  end
+
+  def test_ledger_matching_fragment_pins_pass
+    Dir.mktmpdir do |root|
+      write_ledger_fixture(root)
+
+      assert ledger_gate(root).validate!
+    end
+  end
+
+  def test_ledger_path_only_anchor_needs_no_record
+    Dir.mktmpdir do |root|
+      write_ledger_fixture(root)
+      gate = ledger_gate(root)
+
+      refute(gate.records.any? { |record| record.anchor == 'lib/wurk/limiter.rb' })
+
+      assert gate.validate!
+    end
+  end
+
+  # An entry whose Anchor paragraph holds only path-only anchors ships no
+  # records at all — by_entry has no key for it, which used to crash the
+  # record sweep on nil.
+  def test_ledger_entry_with_only_path_only_anchors_needs_no_records
+    doc = LEDGER_ANCHOR_DOC + <<~MARKDOWN
+
+      ## Third divergence
+
+      Third divergence body.
+
+      **Anchor:** `lib/wurk/limiter.rb`.
+    MARKDOWN
+
+    Dir.mktmpdir do |root|
+      write_ledger_fixture(root, doc: doc)
+
+      assert ledger_gate(root).validate!
+    end
+  end
+
+  def test_ledger_missing_path_only_anchor_target_fails
+    Dir.mktmpdir do |root|
+      write_ledger_fixture(root, path_only: false)
+
+      error = assert_raises(Conformance::Invalid) { ledger_gate(root).validate! }
+
+      assert_includes error.message, 'First divergence'
+      assert_includes error.message, 'lib/wurk/limiter.rb'
+      assert_match(/missing target file/, error.message)
+    end
+  end
+
+  def test_ledger_missing_line_anchor_target_fails
+    doc = LEDGER_ANCHOR_DOC.sub('`lib/wurk/limiter.rb`', '`lib/wurk/absent.rb:3`')
+    records = matching_records + [{ 'entry' => 'First divergence', 'anchor' => 'lib/wurk/absent.rb#L3',
+                                    'fragment' => 'absent placeholder' }]
+
+    Dir.mktmpdir do |root|
+      write_ledger_fixture(root, records: records, doc: doc, path_only: false)
+
+      error = assert_raises(Conformance::Invalid) { ledger_gate(root).validate! }
+
+      assert_includes error.message, 'First divergence'
+      assert_includes error.message, 'lib/wurk/absent.rb#L3'
+      assert_match(/missing target file/, error.message)
+    end
+  end
+
+  def test_ledger_range_past_end_of_file_fails_for_moved_anchor
+    Dir.mktmpdir do |root|
+      write_ledger_fixture(root, sample: "short = true\nstill_short = true\nlast_line = true\n")
+
+      error = assert_raises(Conformance::Invalid) { ledger_gate(root).validate! }
+
+      assert_includes error.message, 'First divergence'
+      assert_includes error.message, 'lib/wurk/sample.rb#L56-L59'
+      assert_match(%r{past end of lib/wurk/sample\.rb \(3 lines\)}, error.message)
+    end
+  end
+
+  def test_ledger_fragment_outside_named_range_fails
+    records = matching_records.map do |record|
+      record.merge(record['anchor'] == 'lib/wurk/sample.rb#L56-L59' ? { 'fragment' => 'def release zrem_slot' } : {})
+    end
+
+    Dir.mktmpdir do |root|
+      write_ledger_fixture(root, records: records)
+
+      error = assert_raises(Conformance::Invalid) { ledger_gate(root).validate! }
+
+      assert_includes error.message, 'First divergence'
+      assert_includes error.message, 'lib/wurk/sample.rb#L56-L59'
+      assert_match(/fragment not found/, error.message)
+    end
+  end
+
+  def test_ledger_line_bearing_anchor_without_record_fails
+    records = matching_records.reject { |record| record['anchor'] == 'lib/wurk/sample.rb#L3' }
+
+    Dir.mktmpdir do |root|
+      write_ledger_fixture(root, records: records)
+
+      error = assert_raises(Conformance::Invalid) { ledger_gate(root).validate! }
+
+      assert_includes error.message, 'First divergence'
+      assert_includes error.message, 'lib/wurk/sample.rb#L3'
+      assert_match(/no record/, error.message)
+    end
+  end
+
+  # Zero records for an entry with line-bearing anchors used to crash on the
+  # nil group (NoMethodError) instead of naming the first unpinned anchor.
+  def test_ledger_line_bearing_anchor_with_zero_records_fails
+    Dir.mktmpdir do |root|
+      write_ledger_fixture(root, records: [])
+
+      error = assert_raises(Conformance::Invalid) { ledger_gate(root).validate! }
+
+      assert_includes error.message, 'First divergence'
+      assert_includes error.message, 'lib/wurk/sample.rb#L56-L59'
+      assert_match(/no record/, error.message)
+    end
+  end
+
+  # Lines are 1-based: a `:0` range used to pass validation by pinning the
+  # file's last line through lines[-1..-1]. The record below quotes exactly
+  # that last line, so only the line-zero guard can reject the anchor.
+  def test_ledger_zero_line_anchor_fails
+    doc = LEDGER_ANCHOR_DOC.sub('`lib/wurk/limiter.rb`',
+                                "`lib/wurk/limiter.rb`,\n`lib/wurk/sample.rb:0`")
+    records = matching_records + [{ 'entry' => 'First divergence', 'anchor' => 'lib/wurk/sample.rb#L0',
+                                    'fragment' => 'tail 3' }]
+
+    Dir.mktmpdir do |root|
+      write_ledger_fixture(root, records: records, doc: doc)
+
+      error = assert_raises(Conformance::Invalid) { ledger_gate(root).validate! }
+
+      assert_includes error.message, 'First divergence'
+      assert_includes error.message, 'lib/wurk/sample.rb#L0'
+      assert_match(/line zero/, error.message)
+    end
+  end
+
+  def test_ledger_comma_range_expands_to_two_required_records
+    records = matching_records.reject { |record| record['anchor'] == 'lib/wurk/sample.rb#L81-L89' }
+
+    Dir.mktmpdir do |root|
+      write_ledger_fixture(root, records: records)
+
+      error = assert_raises(Conformance::Invalid) { ledger_gate(root).validate! }
+
+      assert_includes error.message, 'lib/wurk/sample.rb#L81-L89'
+      assert_match(/no record/, error.message)
+    end
+  end
+
+  def test_ledger_record_for_unknown_entry_fails
+    records = matching_records + [{ 'entry' => 'Third divergence', 'anchor' => 'lib/wurk/sample.rb#L56-L59',
+                                    'fragment' => 'def acquire' }]
+
+    Dir.mktmpdir do |root|
+      write_ledger_fixture(root, records: records)
+
+      error = assert_raises(Conformance::Invalid) { ledger_gate(root).validate! }
+
+      assert_includes error.message, 'anchors.yml'
+      assert_includes error.message, 'Third divergence'
+      assert_match(/unknown ledger entry/, error.message)
+    end
+  end
+
+  def test_ledger_record_anchor_outside_entry_paragraph_fails
+    records = matching_records + [{ 'entry' => 'Second divergence', 'anchor' => 'lib/wurk/sample.rb#L81-L89',
+                                    'fragment' => 'def release zrem_slot' }]
+
+    Dir.mktmpdir do |root|
+      write_ledger_fixture(root, records: records)
+
+      error = assert_raises(Conformance::Invalid) { ledger_gate(root).validate! }
+
+      assert_includes error.message, 'Second divergence'
+      assert_includes error.message, 'lib/wurk/sample.rb#L81-L89'
+      assert_match(/does not pin a line-bearing anchor/, error.message)
+    end
+  end
+
+  def test_ledger_duplicate_record_pins_fail
+    records = matching_records + [matching_records.fetch(2)]
+
+    Dir.mktmpdir do |root|
+      write_ledger_fixture(root, records: records)
+
+      error = assert_raises(Conformance::Invalid) { ledger_gate(root).validate! }
+
+      assert_includes error.message, 'lib/wurk/sample.rb#L3'
+      assert_match(/pinned 2 times/, error.message)
+    end
+  end
+
   def test_oracles_must_be_nonempty_method_references
     [nil, [], ['test_guard'], ['Example#helper'], ['Example#test_guard', 'Example#test_guard']].each do |refs|
       assert_raises(Conformance::Invalid) { inventory(covered('sample', refs)) }

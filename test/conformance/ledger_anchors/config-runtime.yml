@@ -1,0 +1,132 @@
+---
+- entry: 'Quiet does not step the leader down; full shutdown does'
+  anchor: lib/wurk/launcher.rb#L115-L125
+  fragment: |-
+    @managers.each(&:quiet)
+    @poller&.terminate
+    # The cron poller is intentionally NOT terminated here: a TSTP-quieted
+
+- entry: 'Quiet does not step the leader down; full shutdown does'
+  anchor: lib/wurk/launcher.rb#L289-L294
+  fragment: |-
+    teardown_step('reaper') { @reaper&.stop }
+    teardown_step('leader') { @leader&.stop }
+
+- entry: 'Quiet does not step the leader down; full shutdown does'
+  anchor: lib/wurk/leader.rb#L166-L176
+  fragment: |-
+    return unless thread.nil? || thread.join(TimerLoop::JOIN_TIMEOUT)
+    @mutex.synchronize { @thread = nil }
+    release
+
+- entry: '`WURK_PRELOAD_APP` toggles eager-load only; the parent always loads the app'
+  anchor: lib/wurk/cli.rb#L511-L535
+  fragment: |-
+    def eager_load_application
+    return unless preload_app?
+
+- entry: "`:fork` and `:leader` extend the free spec's lifecycle events"
+  anchor: lib/wurk/configuration.rb#L106
+  fragment: |-
+    LIFECYCLE_EVENTS = %i[startup fork quiet shutdown exit heartbeat beat leader].freeze
+
+- entry: "`:fork` and `:leader` extend the free spec's lifecycle events"
+  anchor: lib/wurk/configuration.rb#L750-L754
+  fragment: |-
+    unless LIFECYCLE_EVENTS.include?(event)
+    raise ArgumentError, "invalid event #{event.inspect}, must be one of #{LIFECYCLE_EVENTS.inspect}"
+    end
+
+- entry: 'DEFAULTS adds `:redis_error_handlers`'
+  anchor: lib/wurk/configuration.rb#L50
+  fragment: |-
+    redis_error_handlers: [],
+
+- entry: 'DEFAULTS adds `:redis_error_handlers`'
+  anchor: lib/wurk/configuration.rb#L348
+  fragment: |-
+    @options[:redis_error_handlers] << block
+
+- entry: 'DEFAULTS adds `:redis_error_handlers`'
+  anchor: lib/wurk/configuration.rb#L1124-L1125
+  fragment: |-
+    def dispatch_redis_error(info)
+    redis_error_handlers.each do |handler|
+
+- entry: 'Pool sizing: three disjoint pools per process'
+  anchor: lib/wurk/capsule.rb#L166-L171
+  fragment: |-
+    POOL_HEADROOM = 5
+    MIN_POOL_SIZE = 10
+
+- entry: 'Pool sizing: three disjoint pools per process'
+  anchor: lib/wurk/capsule.rb#L177-L179
+  fragment: |-
+    def fetch_redis_pool
+    @pools[:fetch] ||= build_pool(size: @concurrency, name: "#{@name}-fetch")
+    end
+
+- entry: 'Pool sizing: three disjoint pools per process'
+  anchor: lib/wurk/capsule.rb#L303-L305
+  fragment: |-
+    def main_pool_size
+    @config.redis_config[:size] || [@concurrency + POOL_HEADROOM, MIN_POOL_SIZE].max
+    end
+
+- entry: 'Pool sizing: three disjoint pools per process'
+  anchor: lib/wurk/configuration.rb#L286
+  fragment: |-
+    WEB_POOL_DEFAULT_SIZE = 5
+
+- entry: 'Pool sizing: three disjoint pools per process'
+  anchor: lib/wurk/configuration.rb#L296
+  fragment: |-
+    @options[:web_pool_size] || WEB_POOL_DEFAULT_SIZE
+
+- entry: 'Pool sizing: three disjoint pools per process'
+  anchor: lib/wurk/configuration.rb#L313
+  fragment: |-
+    @web_redis_pool ||= build_redis_pool(size: web_pool_size, name: 'web', pool_timeout: WEB_POOL_TIMEOUT)
+
+- entry: '`reap_idle_redis_connections` sweeps from a per-pool reaper thread, not the heartbeat'
+  anchor: lib/wurk/configuration.rb#L258-L259
+  fragment: |-
+    def reap_idle_redis_connections(timeout = 60)
+    self[:redis_idle_timeout] = timeout
+
+- entry: '`reap_idle_redis_connections` sweeps from a per-pool reaper thread, not the heartbeat'
+  anchor: lib/wurk/redis_pool.rb#L111-L114
+  fragment: |-
+    # connection is closed within 1.5x of going idle, but never less often than
+    # this — Sidekiq reaps on its 10s heartbeat.
+    REAP_MAX_INTERVAL = 10.0
+
+- entry: '`reap_idle_redis_connections` sweeps from a per-pool reaper thread, not the heartbeat'
+  anchor: lib/wurk/redis_pool.rb#L256-L265
+  fragment: |-
+    def ensure_reaper
+    return if @reaper&.alive?
+
+- entry: '`reap_idle_redis_connections` sweeps from a per-pool reaper thread, not the heartbeat'
+  anchor: lib/wurk/redis_pool.rb#L284-L286
+  fragment: |-
+    def reap_loop(stop)
+    interval = [@redis_idle_timeout / 2.0, REAP_MAX_INTERVAL].min
+    @pool.reap(idle_seconds: @redis_idle_timeout) { |conn| safe_close(conn) } until stop.pop(timeout: interval)
+
+- entry: '`Leader#token` exposes a fencing token Ent deliberately omits'
+  anchor: lib/wurk/leader.rb#L35
+  fragment: |-
+    TOKEN_KEY = 'leader-token'
+
+- entry: '`Leader#token` exposes a fencing token Ent deliberately omits'
+  anchor: lib/wurk/leader.rb#L101
+  fragment: |-
+    @token = redis_call { |c| c.call('INCR', TOKEN_KEY) }
+
+- entry: '`Leader#token` exposes a fencing token Ent deliberately omits'
+  anchor: lib/wurk/leader.rb#L281-L286
+  fragment: |-
+    acquire
+    rescue StandardError => e
+    step_down
