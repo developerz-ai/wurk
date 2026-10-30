@@ -1,0 +1,93 @@
+- entry: 'Batch "fired" markers use `b-<bid>-success`/`-complete`'
+  anchor: 'lib/wurk/batch/callbacks.rb#L202-L219'
+  fragment: |-
+    ok = conn.call('SET', "b-#{bid}-#{event}", '1', 'NX', 'EX', Batch::CALLBACK_NOTIFY_TTL)
+    ok == 'OK'
+- entry: 'Batch "fired" markers use `b-<bid>-success`/`-complete`'
+  anchor: 'lib/wurk/batch/callbacks.rb#L325-L339'
+  fragment: |-
+    callbacks_json, queue, parent_bid = Wurk.redis do |conn|
+    conn.call('HMGET', "b-#{bid}", 'callbacks', 'callback_queue', 'parent_bid')
+    end
+- entry: 'Batch `b-<bid>-failinfo` is not written or imported'
+  anchor: 'lib/wurk/batch/status.rb#L55-L66'
+  fragment: |-
+    def failure_info
+    []
+    end
+- entry: 'Batch `b-<bid>-failinfo` is not written or imported'
+  anchor: 'lib/wurk/batch/server_middleware.rb#L120-L129'
+  fragment: |-
+    keys: ["b-#{bid}", "b-#{bid}-failed"],
+    argv: [jid, Batch::DEFAULT_EXPIRY_SECONDS]
+- entry: 'Batch `b-<bid>-failinfo` is not written or imported'
+  anchor: 'lib/wurk/lua/batch_ack_failed.lua#L10-L17'
+  fragment: |-
+    if redis.call("sadd", KEYS[2], ARGV[1]) == 1 then
+    redis.call("hincrby", KEYS[1], "failures", 1)
+    end
+- entry: 'Batch `b-<bid>-failinfo` is not written or imported'
+  anchor: 'lib/wurk/batch/death_handler.rb#L31-L38'
+  fragment: |-
+    keys: ["b-#{bid}", "b-#{bid}-jids", "b-#{bid}-died", "b-#{bid}-failed", "b-#{bid}-pkids"],
+    argv: [jid, Batch::DEFAULT_EXPIRY_SECONDS]
+- entry: 'Batch `b-<bid>-failinfo` is not written or imported'
+  anchor: 'lib/wurk/batch.rb#L70-L109'
+  fragment: |-
+    KEY_SUFFIXES = %w[jids failed died complete success death notify cbsucc kids pkids tags].freeze
+- entry: 'Batch tags use a JSON field and reverse indexes, not `b-<bid>-tags`'
+  anchor: 'lib/wurk/batch.rb#L469-L496'
+  fragment: |-
+    @tags.each { |t| index_tag(pipe, "tags:#{t}") }
+- entry: 'Batch tags use a JSON field and reverse indexes, not `b-<bid>-tags`'
+  anchor: 'lib/wurk/batch.rb#L557-L560'
+  fragment: |-
+    data = fetch_hash
+    load_meta(data)
+    @tags      = parse_json_array(data['tags'])
+- entry: 'Batch tags use a JSON field and reverse indexes, not `b-<bid>-tags`'
+  anchor: 'lib/wurk/batch/status.rb#L76-L82'
+  fragment: |-
+    def tags
+    raw = @data['tags']
+    return [] if raw.nil? || raw.empty?
+- entry: 'Batch tags use a JSON field and reverse indexes, not `b-<bid>-tags`'
+  anchor: 'lib/wurk/batch_set.rb#L41-L53'
+  fragment: |-
+    Wurk.redis do |conn|
+    loop do
+    cursor, members = conn.call('SSCAN', "tags:#{tag}", cursor, 'COUNT', PAGE_SIZE)
+- entry: 'Batch tags use a JSON field and reverse indexes, not `b-<bid>-tags`'
+  anchor: 'lib/wurk/batch.rb#L77-L84'
+  fragment: |-
+    # tags at `tags:<tag>`. They stay listed so a Redis dataset carried over
+    # from Sidekiq Pro on the gem swap gets swept too; EXPIRE/UNLINK of a
+    # missing key is a no-op for batches Wurk created itself.
+- entry: 'Batch tags use a JSON field and reverse indexes, not `b-<bid>-tags`'
+  anchor: 'lib/wurk/batch/status.rb#L129-L135'
+  fragment: |-
+    own    = Batch.keys_for(@bid)
+    pending, live, kids = Wurk.redis do |conn|
+    Wurk::Lua::Loader.eval_cached(conn, :batch_delete, keys: delete_keys(own, parent),
+- entry: 'Batch tags use a JSON field and reverse indexes, not `b-<bid>-tags`'
+  anchor: 'lib/wurk/batch/callbacks.rb#L191-L195'
+  fragment: |-
+    Wurk.redis do |conn|
+    conn.pipelined { |pipe| Batch.keys_for(bid).each { |key| pipe.call('EXPIRE', key, seconds) } }
+- entry: 'Batch tags use a JSON field and reverse indexes, not `b-<bid>-tags`'
+  anchor: 'lib/wurk/batch/death_handler.rb#L58-L61'
+  fragment: |-
+    Wurk.redis do |conn|
+    conn.pipelined do |pipe|
+    Batch.keys_for(bid).each { |key| pipe.call('EXPIRE', key, Batch::DEFAULT_EXPIRY_SECONDS, 'NX') }
+- entry: 'Batch IDs are random; the legacy global `BID` counter is unused'
+  anchor: 'lib/wurk/batch.rb#L63-L66'
+  fragment: |-
+    # (sharded batches in Pro 8) inspect the first character.
+    BID_BYTES = 10
+- entry: 'Batch IDs are random; the legacy global `BID` counter is unused'
+  anchor: 'lib/wurk/batch.rb#L171-L173'
+  fragment: |-
+    def initialize(bid = nil)
+    @bid              = bid || SecureRandom.urlsafe_base64(BID_BYTES)
+    @existing         = !bid.nil?

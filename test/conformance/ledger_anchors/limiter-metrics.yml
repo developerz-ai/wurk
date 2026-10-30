@@ -1,0 +1,146 @@
+- entry: 'Concurrent limiter polls instead of using XREAD waiter signalling'
+  anchor: lib/wurk/limiter/concurrent.rb#L16
+  fragment: |-
+    WAIT_SLEEP = 0.05
+
+- entry: 'Concurrent limiter polls instead of using XREAD waiter signalling'
+  anchor: lib/wurk/limiter/concurrent.rb#L94-L103
+  fragment: |-
+    loop do
+      return monotime if acquire(slot)[0].to_i == 1
+      return if @options[:policy] == :ignore
+
+- entry: 'Concurrent limiter polls instead of using XREAD waiter signalling'
+  anchor: lib/wurk/limiter/concurrent.rb#L106-L114
+  fragment: |-
+    def acquire(slot)
+      lua(:limiter_concurrent_acquire,
+          keys: [state_key, stats_key],
+
+- entry: 'Concurrent limiter polls instead of using XREAD waiter signalling'
+  anchor: lib/wurk/lua/limiter_concurrent_acquire.lua#L15-L33
+  fragment: |-
+    local held = redis.call('ZCARD', cs_key)
+    if held < limit then
+      redis.call('ZADD', cs_key, now + lock_to, slot_id)
+
+- entry: 'Concurrent limiter polls instead of using XREAD waiter signalling'
+  anchor: lib/wurk/lua/limiter_concurrent_release.lua#L7
+  fragment: |-
+    return redis.call('ZREM', KEYS[1], ARGV[1])
+
+- entry: 'Concurrent limiter polls instead of using XREAD waiter signalling'
+  anchor: lib/wurk/limiter/concurrent.rb#L55-L57
+  fragment: |-
+    def state_keys
+      [state_key, stats_key]
+    end
+
+- entry: 'Concurrent limiter polls instead of using XREAD waiter signalling'
+  anchor: lib/wurk/limiter/base.rb#L42-L53
+  fragment: |-
+    Wurk::Limiter.redis do |c|
+      (state_keys + [meta_key]).each { |k| c.call('DEL', k) }
+      c.call('SREM', LIST_KEY, @name)
+
+- entry: 'Limiter reschedule cap routes to the dead set, not re-raise'
+  anchor: lib/wurk/limiter/server_middleware.rb#L56-L59
+  fragment: |-
+    raise exc if cap.zero? # rescheduling disabled → normal retry/dead pipeline
+    return route_to_dead(job, exc) if job['overrated'] >= cap
+
+- entry: 'Limiter reschedule cap routes to the dead set, not re-raise'
+  anchor: lib/wurk/limiter/server_middleware.rb#L81-L89
+  fragment: |-
+    Wurk::Metrics::Statsd.increment('jobs.rate_limited', tags: ["worker:#{job['class']}"])
+    Wurk::DeadSet.new.kill(Wurk.dump_json(Wurk::Encryption.seal(record)), ex: exc)
+    nil
+
+- entry: 'An interrupted `IterableJob` run books `p` + `ms`, never `f` (#394, resolved in PR1)'
+  anchor: lib/wurk/metrics/history.rb#L60-L90
+  fragment: |-
+    success = true
+    raise
+
+- entry: 'An interrupted `IterableJob` run books `p` + `ms`, never `f` (#394, resolved in PR1)'
+  anchor: lib/wurk/metrics/statsd.rb#L161-L180
+  fragment: |-
+    success = true
+    raise
+
+- entry: 'An interrupted `IterableJob` run books `p` + `ms`, never `f` (#394, resolved in PR1)'
+  anchor: lib/wurk/metrics/statsd.rb#L213-L218
+  fragment: |-
+    def finalize(success, duration, tags:, sample_rate:)
+      metric = success ? 'jobs.success' : 'jobs.failure'
+      emit(:increment, metric, tags: tags, sample_rate: sample_rate)
+
+- entry: 'An interrupted `IterableJob` run books `p` + `ms`, never `f` (#394, resolved in PR1)'
+  anchor: lib/wurk/middleware/interrupt_handler.rb#L35-L37
+  fragment: |-
+    rescue Wurk::Job::Interrupted
+      repush(job, queue)
+      raise Wurk::JobRetry::Skip
+
+- entry: 'An interrupted `IterableJob` run books `p` + `ms`, never `f` (#394, resolved in PR1)'
+  anchor: lib/wurk/middleware/interrupt_handler.rb#L50
+  fragment: |-
+    Wurk.configuration.server_middleware.prepend(Wurk::Middleware::InterruptHandler)
+
+- entry: 'An interrupted `IterableJob` run books `p` + `ms`, never `f` (#394, resolved in PR1)'
+  anchor: lib/wurk/middleware/expiry.rb#L62-L64
+  fragment: |-
+    rescue ::Wurk::Job::DeadlineExceeded
+      drop(job)
+    end
+
+- entry: 'An interrupted `IterableJob` run books `p` + `ms`, never `f` (#394, resolved in PR1)'
+  anchor: lib/wurk/middleware/expiry.rb#L111
+  fragment: |-
+    Wurk.configuration.server_middleware.add(Wurk::Middleware::Expiry)
+
+- entry: 'An interrupted `IterableJob` run books `p` + `ms`, never `f` (#394, resolved in PR1)'
+  anchor: lib/wurk.rb#L338
+  fragment: |-
+    Wurk.configuration.server_middleware.add(Wurk::Limiter::ServerMiddleware)
+
+- entry: 'An interrupted `IterableJob` run books `p` + `ms`, never `f` (#394, resolved in PR1)'
+  anchor: lib/wurk.rb#L354
+  fragment: |-
+    Wurk.configuration.server_middleware.add(Wurk::Metrics::Statsd)
+
+- entry: 'An interrupted `IterableJob` run books `p` + `ms`, never `f` (#394, resolved in PR1)'
+  anchor: lib/wurk.rb#L361
+  fragment: |-
+    Wurk.configuration.server_middleware.add(Wurk::Metrics::History)
+
+- entry: '`timeout:`/`deadline:` add `timeout`, `deadline`, and `deadline_at` as top-level job-JSON keys, opt-in only'
+  anchor: lib/wurk/job_util.rb#L240-L245
+  fragment: |-
+    return unless JobUtil.positive_seconds?(d)
+
+    item['deadline_at'] ||= clock_origin(item) + d.to_f
+
+- entry: 'Flow nodes with `at:` carry an `at` field and show `enqueued` once released'
+  anchor: lib/wurk/flow/creation.rb#L209-L218
+  fragment: |-
+    { 'i' => node.index.to_s, 'name' => node.name.to_s, 'class' => payload['class'],
+      'queue' => payload['queue'], 'jid' => payload['jid'], 'bid' => payload['bid'],
+      'state' => node.root? ? ENQUEUED : WAITING, 'payload' => json, 'at' => payload['at'].to_s,
+
+- entry: 'Flow nodes with `at:` carry an `at` field and show `enqueued` once released'
+  anchor: lib/wurk/lua/flow_advance.lua#L126-L143
+  fragment: |-
+    if dep[7] and dep[7] ~= '' then
+      redis.call('ZADD', schedule, dep[7], payload)
+      return
+
+- entry: '`:max_iteration_runtime` is accepted but not consumed'
+  anchor: lib/wurk/configuration.rb#L31
+  fragment: |-
+    max_iteration_runtime: nil,
+
+- entry: '`:max_iteration_runtime` is accepted but not consumed'
+  anchor: docs/configuration.md#L148
+  fragment: |-
+    | `:max_iteration_runtime` | Integer / nil | `nil` | Accepted for drop-in compatibility; **not consumed by Wurk** |

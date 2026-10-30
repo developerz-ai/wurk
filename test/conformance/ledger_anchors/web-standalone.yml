@@ -1,0 +1,157 @@
+---
+- entry: 'Fast Lua API ships free and loads by default'
+  anchor: 'lib/wurk/api/fast.rb#L21'
+  fragment: |-
+    raise ArgumentError, 'jid required' if jid.nil? || jid.to_s.empty?
+- entry: 'Fast Lua API ships free and loads by default'
+  anchor: 'lib/wurk/api/fast.rb#L53'
+  fragment: |-
+    Wurk::Queue.include(Wurk::API::Fast::QueueExt)
+- entry: 'Fast Lua API ships free and loads by default'
+  anchor: 'lib/wurk.rb#L371'
+  fragment: |-
+    # Pro Fast API: Lua-backed Queue#delete_job / #delete_by_class, mixed into
+- entry: 'Search covers queue LISTs too, with explicit scan bounds'
+  anchor: 'lib/wurk/web/search.rb#L24-L35'
+  fragment: |-
+    SCAN_LIMIT_PER_QUEUE = 5_000
+    SCAN_BUDGET = 20_000
+- entry: 'Search covers queue LISTs too, with explicit scan bounds'
+  anchor: 'lib/wurk/web/search.rb#L52'
+  fragment: |-
+    def truncated? = @truncated
+- entry: '`Stats#expired`/`reset` extend the OSS Stats surface'
+  anchor: 'lib/wurk/stats.rb#L27'
+  fragment: |-
+    def expired         = @stats.fetch(:expired)
+- entry: '`Stats#expired`/`reset` extend the OSS Stats surface'
+  anchor: 'lib/wurk/stats.rb#L104-L107'
+  fragment: |-
+    def reset(*stats)
+      all      = %w[failed processed expired]
+      to_clear = stats.empty? ? all : all & stats.flatten.map(&:to_s)
+- entry: '`Stats#expired`/`reset` extend the OSS Stats surface'
+  anchor: 'lib/wurk/stats.rb#L190'
+  fragment: |-
+    def expired   = date_stat_hash('expired')
+- entry: '`Stats#expired`/`reset` extend the OSS Stats surface'
+  anchor: 'lib/wurk/middleware/expiry.rb#L102-L105'
+  fragment: |-
+    def drop(job)
+      Wurk::Processor::EXPIRED.incr
+      Wurk::Metrics::Statsd.increment('jobs.expired', tags: ["class:#{job['class']}"])
+- entry: 'Standalone `Sidekiq::Web.call` routes extensions only'
+  anchor: 'lib/wurk/web/rack_app.rb#L8-L18'
+  fragment: |-
+    # §25.1): unsafe methods must carry `Sec-Fetch-Site: same-origin`.
+    SAFE_METHODS = %w[GET HEAD OPTIONS TRACE].freeze
+- entry: 'Standalone `Sidekiq::Web.call` routes extensions only'
+  anchor: 'lib/wurk/web/rack_app.rb#L27-L36'
+  fragment: |-
+    @standalone_app ||= Authorization.new(method(:dispatch), api_handoff: false)
+- entry: 'Standalone `Sidekiq::Web.call` routes extensions only'
+  anchor: 'lib/wurk/web/rack_app.rb#L39-L48'
+  fragment: |-
+    def safe_request?(env)
+      SAFE_METHODS.include?(env['REQUEST_METHOD']) ||
+        env['HTTP_SEC_FETCH_SITE'] == 'same-origin'
+- entry: 'Standalone `Sidekiq::Web.call` routes extensions only'
+  anchor: 'lib/wurk/web/rack_app.rb#L53-L70'
+  fragment: |-
+    result = extension_result(ext, env)
+      next unless result
+      return rackify(result) unless result[0] == 404
+- entry: 'Standalone `Sidekiq::Web.call` routes extensions only'
+  anchor: 'config/routes.rb#L4-L11'
+  fragment: |-
+    scope :api, defaults: { format: :json } do
+      get  'meta',             to: 'api#meta'
+- entry: 'Standalone `Sidekiq::Web.call` routes extensions only'
+  anchor: 'config/routes.rb#L124-L142'
+  fragment: |-
+    match 'ext/:name(/*subpath)', to: 'extensions#show', via: %i[get post put patch delete], as: :extension,
+                                  format: false, defaults: { subpath: '' }, constraints: { name: %r{[^/]+} }
+- entry: 'Standalone `Sidekiq::Web.call` routes extensions only'
+  anchor: 'test/unit/web_rack_app_test.rb#L74-L107'
+  fragment: |-
+    def test_get_serves_extension_route_at_its_own_path
+      status, _headers, body = Wurk::Web.call(env_for('GET', '/standalone'))
+- entry: 'Standalone `Sidekiq::Web.call` routes extensions only'
+  anchor: 'test/unit/web_rack_app_test.rb#L112-L150'
+  fragment: |-
+    def test_authorization_denial_is_403_on_get_through_sidekiq_web
+      Sidekiq::Web.configure { |c| c.authorization { |_env, _method, _path| false } }
+- entry: '`Chain#add` honours a class-declared `outer_of` ordering anchor'
+  anchor: 'lib/wurk/middleware/chain.rb#L70-L94'
+  fragment: |-
+    anchors = anchor_classes(klass)
+    existing = @entries.index { |e| e.klass == klass }
+    anchor = @entries.index { |e| anchors.include?(e.klass) }
+- entry: '`Chain#add` honours a class-declared `outer_of` ordering anchor'
+  anchor: 'lib/wurk/middleware/chain.rb#L173-L177'
+  fragment: |-
+    def anchor_classes(klass)
+      return [] unless klass.respond_to?(:outer_of)
+
+      Array(klass.outer_of)
+- entry: '`Chain#add` honours a class-declared `outer_of` ordering anchor'
+  anchor: 'lib/wurk/batch/server_middleware.rb#L44-L65'
+  fragment: |-
+    anchors << Wurk::Middleware::Expiry if defined?(Wurk::Middleware::Expiry)
+    anchors << Wurk::Limiter::ServerMiddleware if defined?(Wurk::Limiter::ServerMiddleware)
+- entry: 'Web pool is configuration-owned; the class-level accessor and pool-bound mounts are unsupported'
+  anchor: 'lib/wurk/compat.rb#L196'
+  fragment: |-
+    Web              = Wurk::Web
+- entry: 'Web pool is configuration-owned; the class-level accessor and pool-bound mounts are unsupported'
+  anchor: 'lib/wurk/compat.rb#L57'
+  fragment: |-
+    Web = Wurk::Web
+- entry: 'Web pool is configuration-owned; the class-level accessor and pool-bound mounts are unsupported'
+  anchor: 'lib/wurk/web/config.rb#L390-L456'
+  fragment: |-
+    class << self
+      def config
+        @config ||= Config.new
+- entry: 'Web pool is configuration-owned; the class-level accessor and pool-bound mounts are unsupported'
+  anchor: 'lib/wurk/web.rb#L27-L28'
+  fragment: |-
+    class Web # rubocop:disable Lint/EmptyClass
+    end
+- entry: 'Web pool is configuration-owned; the class-level accessor and pool-bound mounts are unsupported'
+  anchor: 'lib/wurk/web/pool_scope.rb#L39-L43'
+  fragment: |-
+    class Handle
+      def redis_pool
+        Wurk.configuration.web_redis_pool
+- entry: 'Web pool is configuration-owned; the class-level accessor and pool-bound mounts are unsupported'
+  anchor: 'lib/wurk/configuration.rb#L295-L302'
+  fragment: |-
+    def web_pool_size
+      @options[:web_pool_size] || WEB_POOL_DEFAULT_SIZE
+- entry: 'Web pool is configuration-owned; the class-level accessor and pool-bound mounts are unsupported'
+  anchor: 'lib/wurk/configuration.rb#L312-L314'
+  fragment: |-
+    def web_redis_pool
+      @web_redis_pool ||= build_redis_pool(size: web_pool_size, name: 'web', pool_timeout: WEB_POOL_TIMEOUT)
+- entry: 'Web pool is configuration-owned; the class-level accessor and pool-bound mounts are unsupported'
+  anchor: 'lib/wurk/configuration.rb#L1115-L1119'
+  fragment: |-
+    def build_redis_pool(size:, name:, **overrides)
+      RedisPool.new(size: size, name: name, on_error: method(:dispatch_redis_error),
+- entry: 'Web pool is configuration-owned; the class-level accessor and pool-bound mounts are unsupported'
+  anchor: 'lib/wurk/swarm.rb#L329-L333'
+  fragment: |-
+    # Step 3.
+    def close_parent_sockets
+      @config.reset_redis_pools!
+- entry: 'Web pool is configuration-owned; the class-level accessor and pool-bound mounts are unsupported'
+  anchor: 'lib/wurk/swarm/child_boot.rb#L125-L126'
+  fragment: |-
+    def reconnect_after_fork
+      @config.reset_redis_pools!
+- entry: 'Web pool is configuration-owned; the class-level accessor and pool-bound mounts are unsupported'
+  anchor: 'test/unit/web_config_test.rb#L531-L542'
+  fragment: |-
+    refute_respond_to Sidekiq::Web, :redis_pool
+    refute_respond_to Sidekiq::Web, :redis_pool=

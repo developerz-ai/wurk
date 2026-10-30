@@ -1,0 +1,158 @@
+- entry: "Immediate plain multi-queue pushes register queues per group"
+  anchor: "lib/wurk/client.rb#L426-L439"
+  fragment: |-
+    # One pipeline per queue, marked delivered the moment its reply is in.
+    # A push can die between groups — or land its whole plain phase and then
+    # lose the connection in the batched phase above — and whatever Redis
+
+- entry: "Immediate plain multi-queue pushes register queues per group"
+  anchor: "lib/wurk/client.rb#L552-L554"
+  fragment: |-
+    def mark_delivered(payloads)
+      Thread.current[DELIVERED_KEY]&.concat(payloads)
+      Thread.current[WRITE_STATE_KEY] &&= :applied
+
+- entry: "Immediate plain multi-queue pushes register queues per group"
+  anchor: "lib/wurk/client.rb#L445-L470"
+  fragment: |-
+    conn.pipelined do |pipe|
+      pipe.call('SADD', 'queues', queue)
+      pipe.call('LPUSH', "queue:#{queue}", *serialized)
+
+- entry: "Immediate plain multi-queue pushes register queues per group"
+  anchor: "test/parity/client_push_test.rb#L386"
+  fragment: |-
+    def test_push_bulk_registers_exactly_the_routed_queues_and_delivers_each_payload
+
+- entry: "Immediate plain multi-queue pushes register queues per group"
+  anchor: "test/parity/client_push_test.rb#L416"
+  fragment: |-
+    def test_push_bulk_failure_before_second_group_leaves_only_first_queue_registered
+
+- entry: "Reliable fetch is the only mode; no BRPOP"
+  anchor: "lib/wurk/compat.rb#L116"
+  fragment: |-
+    BasicFetch       = Wurk::Fetcher::Reliable
+
+- entry: "Private-list names include a process-image nonce"
+  anchor: "lib/wurk/fetcher/reliable.rb#L76-L84"
+  fragment: |-
+    def self.private_queue_name(public_queue, index = 0)
+      host = ENV['DYNO'] || Socket.gethostname
+      "#{public_queue}|#{host}|#{::Process.pid}|#{Component::PROCESS_NONCE}|#{index}"
+
+- entry: "Private-list names include a process-image nonce"
+  anchor: "lib/wurk/component.rb#L20-L22"
+  fragment: |-
+    # Stable for the life of the process — survives fork (children inherit
+    # the same nonce). Identity differs across forks because Process.pid does.
+    PROCESS_NONCE = SecureRandom.hex(6)
+
+- entry: "Private-list names include a process-image nonce"
+  anchor: "lib/wurk/fetcher/private_list_key.rb#L30-L52"
+  fragment: |-
+    # inside the queue name itself, and leaves the tail unambiguous: exactly
+    # 4 segments for the current shape, exactly 3 for the pre-nonce one.
+
+- entry: "Private-list names include a process-image nonce"
+  anchor: "lib/wurk/fetcher/private_list_key.rb#L60-L82"
+  fragment: |-
+    def wide_tail(parts)
+      [parts[-4], parts[-3].to_i, parts[-2], 4] if parts.size >= 4 && integer?(parts[-3]) && nonce?(parts[-2])
+    end
+
+- entry: "Rolling restart drives itself from the supervise loop; no einhorn"
+  anchor: "lib/wurk/swarm.rb#L238-L240"
+  fragment: |-
+    def rolling_restart
+      @lock.synchronize { @restart.enqueue(@children.keys) }
+    end
+
+- entry: "Rolling restart drives itself from the supervise loop; no einhorn"
+  anchor: "lib/wurk/swarm.rb#L447-L461"
+  fragment: |-
+    when :usr1 then rolling_restart
+
+- entry: "USR2 reopens logs; RSS recycling uses the rolling-restart machine"
+  anchor: "lib/wurk/swarm/child_boot.rb#L29"
+  fragment: |-
+    CHILD_SIGNALS = { 'TERM' => :term, 'INT' => :term, 'TSTP' => :tstp, 'USR2' => :usr2, 'TTIN' => :ttin }.freeze
+
+- entry: "USR2 reopens logs; RSS recycling uses the rolling-restart machine"
+  anchor: "lib/wurk/swarm/child_boot.rb#L223-L244"
+  fragment: |-
+    when :tstp then launcher.quiet
+    when :usr2 then reopen_logs
+
+- entry: "USR2 reopens logs; RSS recycling uses the rolling-restart machine"
+  anchor: "lib/wurk/swarm.rb#L447-L461"
+  fragment: |-
+    when :usr2
+      reopen_logs
+      relay_signal('USR2')
+
+- entry: "USR2 reopens logs; RSS recycling uses the rolling-restart machine"
+  anchor: "lib/wurk/swarm.rb#L474-L478"
+  fragment: |-
+    def reopen_logs
+      log = @config.logger
+      log.reopen if log.respond_to?(:reopen)
+
+- entry: "USR2 reopens logs; RSS recycling uses the rolling-restart machine"
+  anchor: "lib/wurk/swarm.rb#L599-L601"
+  fragment: |-
+    def relay_signal(sig)
+      child_pids.each { |pid| safe_kill(pid, sig) }
+    end
+
+- entry: "USR2 reopens logs; RSS recycling uses the rolling-restart machine"
+  anchor: "lib/wurk/swarm.rb#L569-L588"
+  fragment: |-
+    logger.warn { "swarm: child #{pid} RSS #{rss}KB >= #{@memory_limit}KB; recycling" }
+    @lock.synchronize { @restart.enqueue([pid]) }
+
+- entry: "USR2 reopens logs; RSS recycling uses the rolling-restart machine"
+  anchor: "lib/wurk/swarm.rb#L238-L240"
+  fragment: |-
+    @lock.synchronize { @restart.enqueue(@children.keys) }
+
+- entry: "USR2 reopens logs; RSS recycling uses the rolling-restart machine"
+  anchor: "lib/wurk/swarm/restart.rb#L48-L54"
+  fragment: |-
+    def enqueue(pids)
+      pids.each do |pid|
+        next if in_flight?(pid) || @queue.include?(pid)
+
+- entry: "USR2 reopens logs; RSS recycling uses the rolling-restart machine"
+  anchor: "lib/wurk/swarm/restart.rb#L99-L109"
+  fragment: |-
+    meta = @describe.call(pid)
+    replacement = spawn_replacement(pid, meta)
+
+- entry: "USR2 reopens logs; RSS recycling uses the rolling-restart machine"
+  anchor: "lib/wurk/swarm/restart.rb#L145-L170"
+  fragment: |-
+    warn_heartbeat_timeout(cur) if timed_out && !seen
+    @kill.call(cur[:old_pid], 'TERM')
+    cur[:phase] = :await_exit
+
+- entry: "Reaper liveness has a residual local pid-reuse blind spot — shared with `super_fetch`, not fixed"
+  anchor: "lib/wurk/fetcher/reaper.rb#L253-L282"
+  fragment: |-
+    def orphaned?(key, host, pid, nonce, owners)
+      return !local_pid_alive?(pid) if nonce == process_nonce && host == hostname
+      return false if owners.include?(owner_key(host, pid, nonce))
+
+- entry: "Reaper liveness has a residual local pid-reuse blind spot — shared with `super_fetch`, not fixed"
+  anchor: "lib/wurk/fetcher/reaper.rb#L291-L301"
+  fragment: |-
+    def local_pid_alive?(pid)
+      ::Process.kill(0, pid)
+      true
+
+- entry: "Reaper liveness has a residual local pid-reuse blind spot — shared with `super_fetch`, not fixed"
+  anchor: "lib/wurk/component.rb#L20-L22"
+  fragment: |-
+    # Stable for the life of the process — survives fork (children inherit
+    # the same nonce). Identity differs across forks because Process.pid does.
+    PROCESS_NONCE = SecureRandom.hex(6)

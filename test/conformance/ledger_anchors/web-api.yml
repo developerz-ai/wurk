@@ -1,0 +1,215 @@
+- entry: "Dashboard job-set HTTP request shapes differ from Sidekiq Web"
+  anchor: "config/routes.rb#L7"
+  fragment: |-
+    scope :api, defaults: { format: :json } do
+- entry: "Dashboard job-set HTTP request shapes differ from Sidekiq Web"
+  anchor: "config/routes.rb#L39-L50"
+  fragment: |-
+    get  'retries',          to: 'api#retries'
+    post 'retries',          to: 'api#retries_bulk',   as: :api_retries_bulk
+    post 'retries/all/:cmd', to: 'api#retries_all',    as: :api_retries_all
+- entry: "Dashboard job-set HTTP request shapes differ from Sidekiq Web"
+  anchor: "app/controllers/wurk/api_controller.rb#L40-L45"
+  fragment: |-
+    RETRY_ACTIONS     = { 'retry' => :retry, 'delete' => :delete, 'kill' => :kill }.freeze
+    SCHEDULED_ACTIONS = { 'delete' => :delete, 'add_to_queue' => :add_to_queue }.freeze
+    DEAD_ACTIONS      = { 'retry' => :retry, 'delete' => :delete }.freeze
+- entry: "Dashboard job-set HTTP request shapes differ from Sidekiq Web"
+  anchor: "app/controllers/wurk/api_controller.rb#L110-L148"
+  fragment: |-
+    def retry_job    = single_entry_action(::Wurk::RetrySet.new, RETRY_ACTIONS, params[:cmd])
+    def retries_bulk = bulk_entry_action(::Wurk::RetrySet.new, RETRY_ACTIONS)
+- entry: "Dashboard job-set HTTP request shapes differ from Sidekiq Web"
+  anchor: "app/controllers/wurk/api_controller.rb#L395-L410"
+  fragment: |-
+    method = actions[params[:cmd].to_s]
+    return render(json: { error: 'unknown action' }, status: :bad_request) unless method
+- entry: "Dashboard job-set HTTP request shapes differ from Sidekiq Web"
+  anchor: "frontend/src/hooks/useJobSetActions.ts#L11-L16"
+  fragment: |-
+    export function entryKey(e: { score: number; jid: string }): string {
+      return `${e.score}|${e.jid}`;
+    }
+- entry: "Dashboard job-set HTTP request shapes differ from Sidekiq Web"
+  anchor: "frontend/src/hooks/useJobSetActions.ts#L40-L56"
+  fragment: |-
+    const single = useMutation(() => ({
+      mutationFn: ({ key, cmd }: { key: string; cmd: string }) =>
+        post(`${basePath()}/api/${set}/${encodeURIComponent(key)}`, { cmd }),
+- entry: "Dashboard job-set HTTP request shapes differ from Sidekiq Web"
+  anchor: "frontend/src/http.ts#L33-L41"
+  fragment: |-
+    headers: body === undefined ? {} : { 'Content-Type': 'application/json' },
+    body: body === undefined ? undefined : JSON.stringify(body),
+- entry: "Stats HTTP routes and payload parity are unsupported"
+  anchor: "config/routes.rb#L6-L10"
+  fragment: |-
+    get  'stats',            to: 'api#stats'
+    get  'queues',           to: 'api#queues'
+- entry: "Stats HTTP routes and payload parity are unsupported"
+  anchor: "config/routes.rb#L140-L142"
+  fragment: |-
+    get '*path', to: 'dashboard#index', format: false,
+                 constraints: ->(req) { req.format == :html && !req.path.match?(static_file) }
+- entry: "Stats HTTP routes and payload parity are unsupported"
+  anchor: "app/controllers/wurk/api_controller.rb#L60-L66"
+  fragment: |-
+    def stats
+      render json: ::Wurk::Api::Serializers.stats_payload(::Wurk::Stats.new)
+    end
+- entry: "Stats HTTP routes and payload parity are unsupported"
+  anchor: "app/controllers/wurk/api/serializers.rb#L12-L35"
+  fragment: |-
+    def queue_summary(summary)
+      { name: summary.name, size: summary.size, latency: summary.latency, paused: summary.paused? }
+- entry: "Busy-control HTTP request-shape parity is unsupported"
+  anchor: "config/routes.rb#L7"
+  fragment: |-
+    scope :api, defaults: { format: :json } do
+- entry: "Busy-control HTTP request-shape parity is unsupported"
+  anchor: "config/routes.rb#L53-L58"
+  fragment: |-
+    post 'busy/quiet', to: 'api#quiet_process', as: :api_quiet_process
+    post 'busy/stop',  to: 'api#stop_process',  as: :api_stop_process
+- entry: "Busy-control HTTP request-shape parity is unsupported"
+  anchor: "app/controllers/wurk/api_controller.rb#L167-L168"
+  fragment: |-
+    def quiet_process = signal_processes(:quiet!)
+    def stop_process  = signal_processes(:stop!)
+- entry: "Busy-control HTTP request-shape parity is unsupported"
+  anchor: "app/controllers/wurk/api_controller.rb#L442-L453"
+  fragment: |-
+    identity = params[:identity].to_s
+    if identity.empty? || identity == 'all'
+      count = ::Wurk::ProcessSet.new.reject(&:embedded?).each { |p| p.public_send(method) }.size
+- entry: "`HEAD /` does not implement the Redis health probe"
+  anchor: "config/routes.rb#L4"
+  fragment: |-
+    root to: 'dashboard#index'
+- entry: "`HEAD /` does not implement the Redis health probe"
+  anchor: "app/controllers/wurk/dashboard_controller.rb#L39-L41"
+  fragment: |-
+    def index
+      render layout: false, html: decorate_shell(spa_html).html_safe
+- entry: "`HEAD /` does not implement the Redis health probe"
+  anchor: "lib/wurk/configuration.rb#L702-L726"
+  fragment: |-
+    # Opt-in thin HTTP listener inside the worker process for k8s probes.
+    # When called, the Launcher will start a TCP server on `port` bound to
+    # `bind` exposing `GET /live` (200 while not stopping) and `GET /ready`
+- entry: "`HEAD /` does not implement the Redis health probe"
+  anchor: "lib/wurk/health.rb#L123-L135"
+  fragment: |-
+    def bind_and_serve
+      @server = ::TCPServer.new(@bind, @port)
+- entry: "`HEAD /` does not implement the Redis health probe"
+  anchor: "lib/wurk/health.rb#L258-L266"
+  fragment: |-
+    def response_for(method, path)
+      return [json('error', message: 'method not allowed'), 405] unless method == 'GET'
+- entry: "`HEAD /` does not implement the Redis health probe"
+  anchor: "lib/wurk/health.rb#L277-L305"
+  fragment: |-
+    def ready_response
+      return [json('down', check: 'ready', reason: 'redis unreachable'), 503] unless ping_redis
+      return [json('down', check: 'ready', reason: 'heartbeat stale'), 503] unless heartbeat_fresh?
+- entry: "`HEAD /` does not implement the Redis health probe"
+  anchor: "lib/wurk/health.rb#L354-L367"
+  fragment: |-
+    needed = min_ready(expected)
+    fresh = collector.fresh_local(collector.snapshot, @ready_window).size
+    if fresh >= needed
+- entry: "Queue `?direction=asc` is unimplemented"
+  anchor: "app/controllers/wurk/api_controller.rb#L68-L76"
+  fragment: |-
+    q = ::Wurk::Queue.new(params[:name].to_s)
+    page = ::Wurk::Api::Pagination.window(params)
+    jobs = ::Wurk::Api::Pagination.slice(q, page) { |rec| ::Wurk::Api::Serializers.job_record(rec) }
+- entry: "Queue `?direction=asc` is unimplemented"
+  anchor: "app/controllers/wurk/api/pagination.rb#L29-L35"
+  fragment: |-
+    page: clamp_int(params[:page], 0, MAX_PAGE, 0),
+    count: clamp_int(params[:count], 1, MAX_PAGE_SIZE, DEFAULT_PAGE_SIZE),
+    substr: params[:substr].to_s
+- entry: "Queue `?direction=asc` is unimplemented"
+  anchor: "app/controllers/wurk/api/pagination.rb#L70-L95"
+  fragment: |-
+    def slice_raw(enumerable, offset, count)
+      results = []
+      seen = 0
+      enumerable.each do |member|
+- entry: "Queue `?direction=asc` is unimplemented"
+  anchor: "frontend/src/pages/Queues.tsx#L59-L72"
+  fragment: |-
+    getJSON<QueueDetail>(
+      `${basePath()}/api/queues/${encodeURIComponent(props.name)}?page=${page() - 1}&count=${PAGE_SIZE}`,
+    ),
+- entry: "Queue `?direction=asc` is unimplemented"
+  anchor: "frontend/src/pages/Queues.tsx#L90"
+  fragment: |-
+    const { sorted, sort, toggle } = useSort(() => query.data?.jobs ?? [], JOB_SORT);
+- entry: "Dashboard `?days=N` is unimplemented"
+  anchor: "frontend/src/pages/Dashboard.tsx#L60-L65"
+  fragment: |-
+    const RANGES = [
+      { key: '1h', bucket: '1m', window: '24h', slice: 60, desc_key: 'dashboard.range_1h_desc' },
+      { key: '24h', bucket: '1m', window: '24h', desc_key: 'dashboard.range_24h_desc' },
+- entry: "Dashboard `?days=N` is unimplemented"
+  anchor: "frontend/src/pages/Dashboard.tsx#L86-L109"
+  fragment: |-
+    queryFn: () =>
+      getJSON<HistoryResponse>(`${basePath()}/api/history/${range().bucket}?window=${range().window}`),
+- entry: "Dashboard `?days=N` is unimplemented"
+  anchor: "frontend/src/pages/Dashboard.tsx#L213-L219"
+  fragment: |-
+    <For each={RANGES}>
+      {(r, i) => (
+        <button
+- entry: "Queue job-delete takes `jid`, not the spec's `key_val`"
+  anchor: "config/routes.rb#L7"
+  fragment: |-
+    scope :api, defaults: { format: :json } do
+- entry: "Queue job-delete takes `jid`, not the spec's `key_val`"
+  anchor: "config/routes.rb#L13"
+  fragment: |-
+    post 'queues/:name/delete', to: 'api#delete_queue_job', as: :api_delete_queue_job, constraints: { name: %r{[^/]+} }
+- entry: "Queue job-delete takes `jid`, not the spec's `key_val`"
+  anchor: "app/controllers/wurk/api_controller.rb#L86-L91"
+  fragment: |-
+    def delete_queue_job
+      removed = ::Wurk::Queue.new(params[:name].to_s).delete_job(params[:jid].to_s)
+      return render(json: { error: 'unknown job' }, status: :not_found) if removed.nil?
+- entry: "Queue job-delete takes `jid`, not the spec's `key_val`"
+  anchor: "lib/wurk/api/fast.rb#L20-L31"
+  fragment: |-
+    def delete_job(jid)
+      raise ArgumentError, 'jid required' if jid.nil? || jid.to_s.empty?
+- entry: "Queue job-delete takes `jid`, not the spec's `key_val`"
+  anchor: "app/controllers/wurk/application_controller.rb#L22"
+  fragment: |-
+    rescue_from(*::Wurk::Configuration::REDIS_ERROR_CLASSES) { |ex| render_redis_unavailable(ex) }
+- entry: "Queue job-delete takes `jid`, not the spec's `key_val`"
+  anchor: "lib/wurk/configuration.rb#L114"
+  fragment: |-
+    REDIS_ERROR_CLASSES = [RedisClient::Error, ConnectionPool::TimeoutError].freeze
+- entry: "Queue job-delete takes `jid`, not the spec's `key_val`"
+  anchor: "frontend/src/pages/Queues.tsx#L77-L84"
+  fragment: |-
+    mutationFn: (jid: string) =>
+      post(`${basePath()}/api/queues/${encodeURIComponent(props.name)}/delete`, { jid }),
+- entry: "Queue job-delete takes `jid`, not the spec's `key_val`"
+  anchor: "test/engine/api_mutations_test.rb#L487-L500"
+  fragment: |-
+    def test_delete_queue_job_by_jid
+      jid = push_to_queue
+      post "/wurk/api/queues/#{@queue}/delete", { jid: jid }
+- entry: "`Config#redis_info` and `Config#to_json` are not implemented"
+  anchor: "lib/wurk/cli.rb#L356"
+  fragment: |-
+    @config.redis_pool.info
+- entry: "`Config#redis_info` and `Config#to_json` are not implemented"
+  anchor: "lib/wurk/redis_pool.rb#L188-L190"
+  fragment: |-
+    def info
+      with(idempotent: true) { |conn| parse_info(conn.call('INFO')) }
+        .merge('size' => @size, 'available' => available)

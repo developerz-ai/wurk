@@ -144,3 +144,34 @@ reconcile the case instead of weakening the check:
 Never edit a `promise` to match drift in the source document without deciding
 which of the three paths applies — silently re-quoting weaker wording is how a
 withdrawn promise stays "covered."
+
+## Pin the ledger anchors
+
+Every [parity-divergences](idea/parity-divergences.md) entry ends in an
+**Anchor:** paragraph, and the same `bin/rake test:parity` run validates those
+anchors too (`Conformance::Ledger`, beside the inventory). Every anchor that
+names lines must be pinned by a record in `test/conformance/ledger_anchors/*.yml`
+whose `fragment` still appears — whitespace-normalized (strip each line, drop
+blanks, join with one space, the same rule as the `promise` check) — within
+exactly the anchored lines. A path-only anchor (a bare path with no line — under
+a directory or at the repo root, e.g. `wurk.gemspec`) gets
+no record; the gate existence-checks it straight from the ledger.
+
+The records are data: one YAML array per file, each element an
+`{entry, anchor, fragment}` mapping. `entry` repeats the ledger's `##` heading
+verbatim; `anchor` uses the canonical `path#L<first>` or `path#L<first>-L<last>`
+spelling. A backticked `path:56-59,81-89` is two anchors and needs two records;
+a markdown link `[label](../../lib/wurk/client.rb#L426-L439)` resolves relative
+to `docs/idea/`. The gate fails — naming the entry, the anchor, and the owning
+YAML file — when a target file is missing, a range runs past the end of its
+file, a fragment no longer appears at the named lines, a line-bearing anchor
+has no record, a record names an unknown entry, or a record's anchor is not one
+of its entry's line-bearing anchors.
+
+Reconcile, never weaken: when the anchored code moves, correct the ledger's
+`path:line` anchor and the record's `anchor`/`fragment` together, in the same
+change, so the pair keeps describing the code the entry documents. Never
+re-quote whatever now sits at the old lines to keep a stale anchor green, and
+never drop a record to silence the gate. A failing anchor check means the
+ledger or the record no longer describes the code; make the description true
+again — updating the entry first if the divergence itself changed.
