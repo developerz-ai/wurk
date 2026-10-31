@@ -4,6 +4,11 @@ All notable changes to Wurk are recorded here. Format: [Keep a Changelog](https:
 
 ## [Unreleased]
 
+### Fixed
+
+- **A failed USR2 log reopen is reported instead of swallowed.** `Wurk::CLI`, the swarm parent and each forked child reopened their logger on USR2 (logrotate) and discarded any exception, so a reopen that failed (permissions, full disk, a closed stream) left the process writing to the rotated, possibly deleted, file with no sign of it. The failure now goes to stderr — not to the logger, which is what just failed — naming the exception; signal handling carries on as before.
+- **A malformed dashboard-extension locale file is logged, not silently dropped.** An extension's `locales/en.yml` that failed to parse was replaced by an empty Hash, so its strings fell back to their keys with no clue why. The file is still skipped (the dashboard keeps serving), and `Wurk.logger` now warns once with the file path and the parse error.
+
 ## [1.9.0] - 2026-10-29
 
 ### Changed

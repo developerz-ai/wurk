@@ -113,6 +113,16 @@ class ChildBootTest < Wurk::Test::UnitCase
     assert_equal [:stop], launcher.events
   end
 
+  def test_a_failed_usr2_reopen_is_reported_and_the_loop_keeps_going
+    @config.logger.define_singleton_method(:reopen) { raise ::IOError, 'closed stream' }
+
+    launcher = nil
+    _, err = capture_io { launcher = drive_dispatch('USR2', 'TERM') }
+
+    assert_match(/USR2 log reopen failed.*IOError: closed stream/, err)
+    assert_equal [:stop], launcher.events
+  end
+
   def test_dispatch_signals_dumps_threads_on_ttin_then_stops
     launcher = drive_dispatch('TTIN', 'TERM')
 

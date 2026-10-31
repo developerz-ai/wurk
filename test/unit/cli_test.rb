@@ -512,6 +512,18 @@ class CLITest < Wurk::Test::UnitCase
     assert reopened, 'USR2 must reopen the logs despite reopen_logs being private'
   end
 
+  # A reopen that raises leaves the process on the rotated file: it must say so
+  # on stderr (the logger is what failed), not return as if it had worked.
+  def test_handle_signal_usr2_reports_a_failed_reopen_on_stderr
+    logger = ::Logger.new(IO::NULL)
+    logger.define_singleton_method(:reopen) { raise ::Errno::EACCES, 'wurk.log' }
+    @cli.config.logger = logger
+
+    _, err = capture_io { @cli.handle_signal('USR2') }
+
+    assert_match(/USR2 log reopen failed.*Errno::EACCES/, err)
+  end
+
   # --- run plumbing (without booting Redis/launcher) -----------------
 
   def test_run_short_circuits_when_redis_too_old

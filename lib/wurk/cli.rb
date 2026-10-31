@@ -329,8 +329,8 @@ module Wurk
     def reopen_logs
       log = logger
       log.reopen if log.respond_to?(:reopen)
-    rescue StandardError
-      nil
+    rescue StandardError => e
+      warn "wurk: USR2 log reopen failed, still writing to the previous log: #{e.class}: #{e.message}"
     end
 
     def validate_redis!

@@ -80,6 +80,17 @@ class SwarmTest < Wurk::Test::UnitCase
     super
   end
 
+  # USR2 in the parent: a reopen that raises is reported on stderr (the logger
+  # is what failed), never swallowed.
+  def test_a_failed_parent_log_reopen_is_reported_on_stderr
+    @config.logger.define_singleton_method(:reopen) { raise ::Errno::ENOSPC, 'wurk.log' }
+    swarm = Wurk::Swarm.new(topology: Wurk::Topology.new, config: @config)
+
+    _, err = capture_io { swarm.send(:reopen_logs) }
+
+    assert_match(/USR2 log reopen failed.*Errno::ENOSPC/, err)
+  end
+
   # --- initialization --------------------------------------------------
 
   def test_initialize_with_empty_topology

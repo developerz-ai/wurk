@@ -285,8 +285,9 @@ escalate:
   ask_before_acting: []
 
 # The checkups nothing else triggers (owner, 2026-10-14: maintained so nobody has to watch it). Is a
-# release owed, and is the project healthy. Bot-authored alarm issues never pass intake, so a red
-# `main` or a release run that did not publish reaches the bot only through `health`.
+# release owed, is the project healthy, and (monthly) what is worth improving. Bot-authored alarm
+# issues never pass intake, so a red `main` or a release run that did not publish reaches the bot
+# only through `health`.
 schedules:
   - name: release-due
     days: [mon, tue, wed, thu, fri]
@@ -296,3 +297,10 @@ schedules:
     days: [mon, tue, wed, thu, fri, sat, sun]
     hours_utc: [7]
     brief_file: .dz/briefs/health.md
+  # Monthly improvement pass (owner, 2026-10-31: improved by AI monthly). The schema has weekdays,
+  # not days of the month, so this fires every Monday and the brief acts only on the first Monday
+  # of the month (UTC day 1-7); on the other Mondays it stops at its first line.
+  - name: improve
+    days: [mon]
+    hours_utc: [8]
+    brief_file: .dz/briefs/improve.md

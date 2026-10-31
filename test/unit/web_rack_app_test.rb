@@ -221,6 +221,26 @@ class WebRackAppTest < Wurk::Test::UnitCase
     FileUtils.remove_entry(dir) if dir
   end
 
+  # A malformed locale file must not 500 the dashboard, and must not vanish
+  # silently either: it is skipped with a warning naming the file.
+  def test_a_malformed_extension_locale_file_is_skipped_with_a_warning
+    dir = Dir.mktmpdir
+    file = File.join(dir, 'en.yml')
+    File.write(file, "en:\n  Greeting: [unclosed\n")
+    Wurk::Web.configure.locales << dir
+    log = StringIO.new
+    previous = Wurk.logger
+    Wurk.logger = ::Logger.new(log)
+
+    status, = Wurk::Web.call(env_for('GET', '/standalone'))
+
+    assert_equal 200, status
+    assert_match(/skipping locale file #{Regexp.escape(file)}: Psych::SyntaxError/, log.string)
+  ensure
+    Wurk.logger = previous if previous
+    FileUtils.remove_entry(dir) if dir
+  end
+
   private
 
   def env_for(method, path)

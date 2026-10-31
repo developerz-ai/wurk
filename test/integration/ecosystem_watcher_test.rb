@@ -10,9 +10,10 @@ require 'tmpdir'
 #   1. fresh empty marker.txt → POST path (the diff DROPS the no-POST fresh
 #      carveout, so every release goes through curl)
 #   2. DRY_RUN=true prints "[dry-run] would file:" and POSTs none
-#   3. API_KEY unset prints 'DEVELOPERZ_API_KEY missing' and exits 0; the
-#      dedup+POST step (step 240 in ecosystem.yml) must not run — the
-#      per-step `if: env.API_KEY != ''` gate is what short-circuits it
+#   3. API_KEY unset prints 'DEVELOPERZ_API_KEY missing': a manual dispatch
+#      exits 0 and a scheduled run exits 1; the dedup+POST step (step 240 in
+#      ecosystem.yml) must not run — the per-step `if: env.API_KEY != ''`
+#      gate is what short-circuits it
 #   4. Two consecutive runs against the same releases: first files N,
 #      second files 0 (every version is already in the marker)
 #
@@ -213,14 +214,15 @@ class EcosystemWatcherTest < Wurk::Test::UnitCase
     }
   end
 
-  # Drives the API_KEY check step. The step exits 0 (skip) when API_KEY is
-  # unset; the dedup+POST step (which would call `gh`) must NOT run.
+  # Drives the API_KEY check step. With API_KEY unset it exits 0 (skip) on a
+  # manual dispatch and 1 on a schedule; either way the dedup+POST step
+  # (which would call `gh`) must NOT run.
   # The gh stub writes a sentinel file the test asserts does not exist.
   # Captures `File.exist?(sentinel)` INSIDE the block — `Dir.mktmpdir` deletes
   # its directory the moment the block returns, so any File.exist? call after
   # the block would silently report `false` regardless of what the script did,
   # turning the assertion into a tautology that cannot fail.
-  def run_api_key_check(env_value)
+  def run_api_key_check(env_value, event: 'workflow_dispatch')
     Dir.mktmpdir('wurk-watcher-') do |tmpdir|
       bin_dir = File.join(tmpdir, 'bin')
       Dir.mkdir(bin_dir)
@@ -231,13 +233,14 @@ class EcosystemWatcherTest < Wurk::Test::UnitCase
       File.chmod(0o755, gh)
 
       script = File.join(tmpdir, 'check.sh')
-      check_body = "#!/usr/bin/env bash\n#{extract_run_body('exit 0 if DEVELOPERZ_API_KEY is missing')}"
+      check_body = "#!/usr/bin/env bash\n#{extract_run_body('require DEVELOPERZ_API_KEY on schedule')}"
       File.write(script, check_body)
       File.chmod(0o755, script)
 
       env = {
         'PATH' => "#{bin_dir}:#{ENV.fetch('PATH', '')}",
         'API_KEY' => env_value,
+        'EVENT' => event,
         'COVERAGE' => nil
       }
 
@@ -317,10 +320,19 @@ class EcosystemWatcherTest < Wurk::Test::UnitCase
                  "dry-run must NOT write to marker.txt (marker=#{marker.inspect})"
   end
 
-  # Branch 3: API_KEY unset → 'DEVELOPERZ_API_KEY missing' and exits 0; the
-  # dedup+POST step (step 240) must NOT run. The per-step `if: env.API_KEY
-  # != ''` gate is what short-circuits it; the step body itself exits 0
-  # unconditionally on missing key.
+  # A scheduled run is the watcher's only real trigger: without the secret it
+  # must go red, never pass green having watched nothing.
+  def test_missing_api_key_fails_a_scheduled_run
+    out, _err, status, gh_called = run_api_key_check('', event: 'schedule')
+
+    assert_equal 1, status.exitstatus, "a scheduled run must fail: stdout=#{out.inspect}"
+    assert_includes out, '::error::DEVELOPERZ_API_KEY missing'
+    refute gh_called, 'the check step itself never calls gh'
+  end
+
+  # Branch 3: API_KEY unset on a manual dispatch → 'DEVELOPERZ_API_KEY
+  # missing' and exits 0; the dedup+POST step (step 240) must NOT run. The
+  # per-step `if: env.API_KEY != ''` gate is what short-circuits it.
   def test_missing_api_key_exits_zero_without_running_dedup_post
     out, _err, status, gh_called = run_api_key_check('')
 
