@@ -2,8 +2,8 @@
 
 This file is the brief a `docs-drift` lane would read (`.dz/schedules/docs-drift.md`). No
 `docs-drift` schedule is registered today: `.dz/maintainer/maintainer.yml` registers only
-`release-due` and `health`, so nothing fires this brief until one is registered there with
-`brief_file: .dz/schedules/docs-drift.md`. A schedule's registration — its `brief_file` among
+`release-due`, `health` and `improve`, so nothing fires this brief until one is registered there
+with `brief_file: .dz/schedules/docs-drift.md`. A schedule's registration — its `brief_file` among
 it — lives in that policy file.
 
 This lane is read-only. It reads the tree and reports; it never edits a file, never deletes one,
