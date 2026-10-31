@@ -198,7 +198,18 @@ jobs:
             exit 0
           fi
 
-          tagged="$(gh api "repos/${GITHUB_REPOSITORY}/git/ref/tags/${TAG}" -q .object.sha 2>/dev/null || true)"
+          # Only a 404 means "no tag yet" (a draft). Any other failure must stop
+          # here: reading it as "no tag" would skip the guard below and publish
+          # the release without knowing where its tag points.
+          if tagged="$(gh api "repos/${GITHUB_REPOSITORY}/git/ref/tags/${TAG}" -q .object.sha 2>"${RUNNER_TEMP}/tag-ref.err")"; then
+            :
+          elif grep -q 'HTTP 404' "${RUNNER_TEMP}/tag-ref.err"; then
+            tagged=""
+          else
+            cat "${RUNNER_TEMP}/tag-ref.err" >&2
+            echo "::error::could not read the ${TAG} ref; refusing to complete the existing release blind."
+            exit 1
+          fi
           if [ -n "$tagged" ] && [ "$tagged" != "$GITHUB_SHA" ]; then
             echo "::error::${TAG} already exists and points at ${tagged}, not ${GITHUB_SHA} — refusing to move it."
             exit 1

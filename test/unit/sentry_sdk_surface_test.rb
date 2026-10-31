@@ -16,11 +16,15 @@ class SentrySdkSurfaceTest < Wurk::Test::UnitCase
   # would define `::Sentry` for every other worker — including the suites that
   # install a double under that name, and the ones asserting its absence.
   # sentry-ruby is a development-only dependency; skip if it isn't installed.
+  # CI always bundles the Gemfile, so a LoadError there is a broken install,
+  # not a missing optional gem: fail instead of skipping the whole surface.
   def setup
     super
     require 'sentry-ruby'
-  rescue LoadError
-    skip 'sentry-ruby not installed'
+  rescue LoadError => e
+    raise if ENV['CI']
+
+    skip "sentry-ruby not installed (#{e.message})"
   end
 
   def teardown

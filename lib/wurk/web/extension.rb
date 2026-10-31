@@ -454,11 +454,16 @@ module Wurk
             dirs.uniq
           end
 
+          # A broken locale file must not take the dashboard down, but it must
+          # not vanish either: the extension's strings fall back to their keys,
+          # so say which file was skipped and why. `strings_for` memoizes, so
+          # this logs once per extension.
           def load_yaml(file)
             require 'yaml'
             data = ::YAML.safe_load_file(file)
             data.is_a?(::Hash) ? (data.values.first || data) : {}
-          rescue ::StandardError
+          rescue ::StandardError => e
+            ::Wurk.logger.warn { "web extension: skipping locale file #{file}: #{e.class}: #{e.message}" }
             {}
           end
 

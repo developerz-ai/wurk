@@ -135,7 +135,7 @@ directly, and its cheapest exit is a run that publishes nothing and still report
    whole proceed signal in one contiguous range: preflight curls RubyGems for `Wurk::VERSION` and
    emits `proceed=false` when it is already there, and the `release` job is gated on
    `needs.preflight.outputs.proceed == 'true'`. `demo` needs `[preflight, release]`
-   (release.yml:222-228). So a proceed=false run is `preflight` `success`, `release` skipped, `demo`
+   (release.yml:233-239). So a proceed=false run is `preflight` `success`, `release` skipped, `demo`
    skipped — and the run still concludes `success`, because a skipped job does not fail a run. Print
    `no-op <sha>`. Grading this row on `--json conclusion` alone reports that green as the last
    release published, which it is not.

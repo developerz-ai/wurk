@@ -54,7 +54,8 @@ jobs:
           # Delete-then-copy, so a page removed from docs/wiki/ is removed from
           # the wiki too. `git rm` rather than `rm` keeps .git untouched.
           cd wiki
-          git rm -rqf . 2>/dev/null || true
+          # --ignore-unmatch: an empty wiki is not an error; anything else is.
+          git rm -rqf --ignore-unmatch .
           cd ..
           cp docs/wiki/*.md wiki/
 

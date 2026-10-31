@@ -172,17 +172,22 @@ jobs:
 
       # Belt-and-braces for the "secret unset" case. GitHub resolves an
       # absent secret to literal empty text in ${{ secrets.X }}, not to
-      # '***', so a plain -z test is the only honest check. Exit 0 with an
-      # explicit message rather than failing — a schedule that's missing a
-      # secret should surface as a red job, but a manually-dispatched one
-      # should be a clean skip. Either way the next schedule fires and
-      # retries the check.
-      - name: exit 0 if DEVELOPERZ_API_KEY is missing
+      # '***', so a plain -z test is the only honest check. A SCHEDULED run
+      # without the secret fails: it is the watcher's only trigger, and a green
+      # no-op every week is a watcher nobody notices is off (the 2026-10-12,
+      # -19 and -26 schedules were exactly that). A manual dispatch without it is a clean,
+      # announced skip, so a dry run can still check the rest of the job.
+      - name: require DEVELOPERZ_API_KEY on schedule
         env:
           API_KEY: ${{ secrets.DEVELOPERZ_API_KEY }}
+          EVENT: ${{ github.event_name }}
         run: |
           if [ -z "${API_KEY:-}" ]; then
-            echo "DEVELOPERZ_API_KEY missing — watcher skipped (exit 0; schedule/dispatch will rerun once the secret is added)."
+            if [ "${EVENT:-}" = "schedule" ]; then
+              echo "::error::DEVELOPERZ_API_KEY missing — the scheduled sidekiq release watcher cannot file asks. Add the secret (and confirm DEVELOPERZ_API_URL), or remove the watcher."
+              exit 1
+            fi
+            echo "DEVELOPERZ_API_KEY missing — watcher skipped (manual dispatch; a scheduled run fails instead)."
             exit 0
           fi
 

@@ -237,11 +237,14 @@ module Wurk
         end
       end
 
+      # USR2 (logrotate). A failed reopen leaves the process writing to the rotated,
+      # possibly deleted file, so it must not pass silently; stderr, because the
+      # logger is the thing that just failed.
       def reopen_logs
         log = @config.logger
         log.reopen if log.respond_to?(:reopen)
-      rescue StandardError
-        nil
+      rescue StandardError => e
+        warn "wurk: USR2 log reopen failed, still writing to the previous log: #{e.class}: #{e.message}"
       end
     end
   end

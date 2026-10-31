@@ -1052,7 +1052,7 @@ class HealthBriefTest < Minitest::Test
   def test_release_run_that_published_nothing_is_a_named_no_op
     # release.yml:80-90 emits proceed=false when the version is already on
     # RubyGems and gates `release` on it; `demo` needs both
-    # (release.yml:222-228). A skipped job does not fail a run, so this run
+    # (release.yml:233-239). A skipped job does not fail a run, so this run
     # concludes `success` having published nothing — and `--json conclusion`
     # alone reports exactly that green as the last release published.
     out, err, status = run_row9(jobs: release_jobs_json(preflight: 'success', release: 'skipped', demo: 'skipped'),
@@ -3656,26 +3656,26 @@ class HealthBriefTest < Minitest::Test
     # the slice.
     step = no_op_step
 
-    assert_includes step, 'release.yml:222-228',
+    assert_includes step, 'release.yml:233-239',
                     'the no-op step must cite the demo call by one contiguous ' \
                     "range; got the step as #{step.inspect}"
 
     workflow = File.readlines(RELEASE_WORKFLOW)
 
-    assert_operator workflow.size, :>=, 228,
+    assert_operator workflow.size, :>=, 239,
                     'release.yml no longer has the lines the brief anchor cites'
 
-    cited = workflow[221..227].join
+    cited = workflow[232..238].join
 
-    assert_equal 'demo:', workflow[221].strip,
-                 'release.yml:222-228 must LAND on the demo caller itself — a comment or ' \
+    assert_equal 'demo:', workflow[232].strip,
+                 'release.yml:233-239 must LAND on the demo caller itself — a comment or ' \
                  'blank line inserted above the cite shifts the slice but `demo:` and its ' \
                  '`needs:` line still match inside it, so the top edge must be pinned to ' \
                  'the job header, not a comment one above it'
     assert_includes cited, 'demo:',
-                    'release.yml:222-228 must begin on the demo caller job'
+                    'release.yml:233-239 must begin on the demo caller job'
     assert_includes cited, 'needs: [preflight, release]',
-                    "release.yml:222-228 must hold the demo caller's needs list — " \
+                    "release.yml:233-239 must hold the demo caller's needs list — " \
                     'that is what makes its slot quiet when preflight returns proceed=false'
   end
 
@@ -4299,7 +4299,7 @@ class HealthBriefTest < Minitest::Test
 
   # release.yml's job list, not the detect/lint shape: the `preflight` cheap
   # gate, the `release` job gated on `needs.preflight.outputs.proceed`, and the
-  # `demo` job that needs both (release.yml:222). The names are the ones the
+  # `demo` job that needs both (release.yml:233). The names are the ones the
   # workflow declares — `demo` is the caller job's own key, a reusable-workflow
   # call, not a slash-joined "demo / deploy-demo". A `nil` conclusion is a job
   # that exists and has not concluded yet — what a run still executing looks

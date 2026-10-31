@@ -18,7 +18,7 @@ require 'yaml'
 #                            runs, and the watcher reads its own prior
 #                            `wurk-watcher-state` artifact through
 #                            `gh api .../actions/artifacts`
-#                            (.github/workflows/ecosystem.yml:189-194).
+#                            (.github/workflows/ecosystem.yml:194-199).
 #
 # A job-level `permissions:` block REPLACES the workflow-level set — GitHub
 # does not merge the two — so an override that grants `write`, or a scope
@@ -99,7 +99,7 @@ class EcosystemWorkflowPermissionsTest < Wurk::Test::UnitCase
 
   # A DROPPED scope is as much a regression as an added one: `actions: read`
   # is what the watcher reads its own prior artifact through (`gh api
-  # .../actions/artifacts`, ecosystem.yml:189-194), so a workflow that
+  # .../actions/artifacts`, ecosystem.yml:194-199), so a workflow that
   # quietly loses it breaks the watcher's dedup. `extra` and `wrong_level`
   # both stay empty when a scope disappears — only `missing` sees it, so
   # this case is the one that proves that branch fires.
