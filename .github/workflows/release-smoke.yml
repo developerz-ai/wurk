@@ -59,7 +59,7 @@ jobs:
           --health-retries 10
           --health-start-period 1s
     steps:
-      - uses: ruby/setup-ruby@b1da4809b005e0178fe08a1d57317bffc00b7b4c # v1
+      - uses: ruby/setup-ruby@7f797815d8adceb1c412e7abefdd1ab4abc47a5f # v1
         with:
           ruby-version: "3.4"
           # No repo checkout and no Gemfile yet — the consumer app is built below.
