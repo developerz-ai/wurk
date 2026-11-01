@@ -259,8 +259,10 @@ module Wurk
       @reaper_lock.synchronize do
         return if @reaper_closed || @reaper&.alive?
 
-        @reaper_stop = Thread::Queue.new
-        @reaper      = Thread.new(@reaper_stop) { |stop| reap_loop(stop) }
+        @reaper_mutex   = Thread::Mutex.new
+        @reaper_wake    = Thread::ConditionVariable.new
+        @reaper_stopped = false
+        @reaper         = Thread.new { reap_loop }
         @reaper.name = "wurk-redis-reaper-#{@name}"
       end
     end
@@ -270,7 +272,10 @@ module Wurk
         @reaper_closed = true
         next unless @reaper&.alive?
 
-        @reaper_stop << true
+        @reaper_mutex.synchronize do
+          @reaper_stopped = true
+          @reaper_wake.broadcast
+        end
         @reaper
       end
       reaper&.join
@@ -281,9 +286,24 @@ module Wurk
     # a checked-out connection is not on that stack to be found. #disconnect!
     # joins this thread before shutting the pool down, so a sweep never meets a
     # pool mid-shutdown.
-    def reap_loop(stop)
+    def reap_loop
       interval = [@redis_idle_timeout / 2.0, REAP_MAX_INTERVAL].min
-      @pool.reap(idle_seconds: @redis_idle_timeout) { |conn| safe_close(conn) } until stop.pop(timeout: interval)
+      loop do
+        break if wait_for_stop(interval)
+
+        @pool.reap(idle_seconds: @redis_idle_timeout) { |conn| safe_close(conn) }
+      end
+    end
+
+    # The sweep's wait: a Mutex+ConditionVariable, the timed wait the tree's
+    # periodic, stop-signalled loops use (Wurk::Client::Buffered's drainer,
+    # Wurk::TimerLoop). `stop` wakes the sweep at once instead of leaving it
+    # parked until the interval is up.
+    def wait_for_stop(interval)
+      @reaper_mutex.synchronize do
+        @reaper_wake.wait(@reaper_mutex, interval) unless @reaper_stopped
+        @reaper_stopped
+      end
     end
 
     # Runs the block on the checked-out `conn`, retrying transient RedisClient

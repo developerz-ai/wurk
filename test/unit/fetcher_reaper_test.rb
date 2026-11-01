@@ -17,6 +17,38 @@ class FetcherReaperTest < Wurk::Test::UnitCase
 
   DEAD_PID = 999_999 # never a running pid in CI/dev
 
+  # A queue of ticks a test can wait on: a Mutex+ConditionVariable pair, the
+  # repo's own wait idiom (lib/wurk/client/buffered.rb), not a timed
+  # Thread::Queue pop.
+  class Mailbox
+    def initialize
+      @lock = ::Mutex.new
+      @wake = ::ConditionVariable.new
+      @items = []
+    end
+
+    def <<(item)
+      @lock.synchronize do
+        @items << item
+        @wake.broadcast
+      end
+    end
+
+    # The oldest item, or nil when none arrives within `timeout` seconds.
+    def take(timeout: 0)
+      deadline = ::Process.clock_gettime(::Process::CLOCK_MONOTONIC) + timeout
+      @lock.synchronize do
+        while @items.empty?
+          remaining = deadline - ::Process.clock_gettime(::Process::CLOCK_MONOTONIC)
+          break if remaining <= 0
+
+          @wake.wait(@lock, remaining)
+        end
+        @items.shift
+      end
+    end
+  end
+
   # Linear fixture wiring, no branching.
   def setup
     super
@@ -696,9 +728,18 @@ class FetcherReaperTest < Wurk::Test::UnitCase
 
   # K1 pattern: a Redis error in one sweep must not end the loop thread, or
   # orphans are never reclaimed again for the life of the process.
+  #
+  # CI run 41303800609, job "compat (ruby 3.2.11, rails 8.1, redis)", failed
+  # this case on the Ruby 3.2 floor at the assertion "the sweep after the
+  # failing one still ran": the tick was waited for with a timed
+  # `Thread::Queue#pop(timeout:)` — the one timed wait in `lib/` that does
+  # not use the repo's Mutex+ConditionVariable idiom (lib/wurk/client/buffered.rb,
+  # lib/wurk/timer_loop.rb) — and the same wait, inside a raw thread, is where
+  # that log's thread exceptions came from. The mailbox above is that idiom
+  # now; the assertion, its 5s bound and its meaning are unchanged.
   def test_loop_survives_a_redis_error_and_sweeps_again
     reaper = Wurk::Fetcher::Reaper.new(@config, interval: 0.02, lock_key: "#{Wurk::Fetcher::Reaper::LOCK_KEY}:#{@ns}-err")
-    ticks = Queue.new
+    ticks = Mailbox.new
     calls = 0
     reaper.define_singleton_method(:reap) do
       calls += 1
@@ -709,7 +750,7 @@ class FetcherReaperTest < Wurk::Test::UnitCase
 
     reaper.start
 
-    assert_equal 2, ticks.pop(timeout: 5), 'the sweep after the failing one still ran'
+    assert_equal 2, ticks.take(timeout: 5), 'the sweep after the failing one still ran'
     assert_predicate reaper, :running?
   ensure
     reaper.stop
