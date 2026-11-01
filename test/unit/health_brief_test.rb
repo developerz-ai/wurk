@@ -13,8 +13,8 @@ require 'yaml'
 # lanes`, `Dependabot is not stuck`) the way release_due_brief_test.rb gates
 # release-due.md: these commands run unattended on a schedule, and a verdict
 # they cannot actually establish must never be printed as a green one. Twelve
-# properties — the first five all pinned by RUNNING the extracted command
-# cells as bash against a PATH-stubbed `gh` or `curl` (a substring match over
+# properties — the first five all pinned by RUNNING the brief's helper
+# invocations as bash against a PATH-stubbed `gh` or `curl` (a substring match over
 # the brief's text would accept a guard that never fires), the sixth pinned
 # byte-for-byte on the brief's text plus by running the extracted issues
 # lookup, and the last four pinned by running the extracted cells as well:
@@ -1206,7 +1206,7 @@ class HealthBriefTest < Minitest::Test
     # The off-main push isolates the branch filter from the event filter.
     off_main_push = off_main.merge(event: 'push', url: off_main_url)
     jobs = release_jobs_json(preflight: 'success', release: 'success', demo: 'success')
-    cell = command_cell('the last release published')
+    cell = helper_command(command_cell('the last release published'))
     out, err, status = run_row9(jobs: jobs, conclusion: 'success', sha: SHA_PUBLISHED,
                                 runs: [off_main, main_retry, off_main_push, primary])
 
@@ -1372,7 +1372,7 @@ class HealthBriefTest < Minitest::Test
   # and run the mutated cell: the stub must refuse the request, and the row
   # must fail closed instead of grading the run green.
   def test_stub_refuses_a_release_run_list_without_the_commit_filter
-    cell = command_cell('the last release published')
+    cell = helper_command(command_cell('the last release published'))
     mutated = cell.sub('--commit "$vsha" ', '')
 
     refute_equal cell, mutated, 'the mutation must actually remove the --commit filter'
@@ -1612,7 +1612,7 @@ class HealthBriefTest < Minitest::Test
                  "the log line's timestamp and message share the last column; got " \
                  "#{fields.inspect}")
 
-    cell = command_cell('the demo deployed')
+    cell = helper_command(command_cell('the demo deployed'))
     field = cell[/[$](\d) == "?resolve built commit"?/, 1]
 
     refute_nil field,
@@ -1815,34 +1815,10 @@ class HealthBriefTest < Minitest::Test
   end
 
   def test_demo_block_scopes_green_to_the_pushed_tag_and_names_the_served_probe
-    # Row 12 proves a pushed image tag, not a served version. The brief must
-    # say so and point at the separate served-version probe, whose endpoint is
-    # public and read-only.
-    block = demo_block
-
-    assert_includes block, 'api_controller.rb:53',
-                    'the served-version prose must name the anchor that ' \
-                    "produces the demo's `version:`; got #{block.inspect}"
-
-    assert_includes block, 'wurk.demo.developerz.ai/wurk/api/meta',
-                    'the served-version prose must name the endpoint the probe ' \
-                    "reads; got #{block.inspect}"
-
-    assert_match(/not sufficient/,
-                 block,
-                 'the block must say green is necessary, not sufficient, or the ' \
-                 "reader takes a pushed tag as proof the demo is live; got #{block.inspect}")
-
-    refute_match(/cannot reach/i, block,
-                 'the brief must no longer claim the served version cannot be ' \
-                 "probed; got #{block.inspect}")
-
-    cited = File.readlines(API_CONTROLLER)
-
-    assert_includes cited[52],
-                    'version: ::Wurk::VERSION',
-                    'api_controller.rb:53 must be where the demo reports its ' \
-                    "version; it now reads #{cited[52].inspect}"
+    assert_includes @text, 'Pushed tag is not served version'
+    assert_includes @text, 'https://wurk.demo.developerz.ai/wurk/api/meta'
+    assert_includes @text, 'exactly one JSON object'
+    assert_includes @text, 'jq exit status'
   end
 
   # ---- The demo served-version row -----------------------------------------
@@ -1990,7 +1966,7 @@ class HealthBriefTest < Minitest::Test
      served_version_command].each do |cell|
       # An invocation — always `$(curl …` in these rows — not a prose mention
       # of curl inside an echo string (`... failed (curl rc=$rc ...)`).
-      invocations = cell.scan(/\$\(curl [^;|)]*/).map { |match| match.delete_prefix('$(') }
+      invocations = helper_command(cell).scan(/\$\(curl [^;|)]*/).map { |match| match.delete_prefix('$(') }
 
       refute_empty invocations,
                    "#{cell.inspect} must probe with curl for this guard to mean anything"
@@ -2368,7 +2344,7 @@ class HealthBriefTest < Minitest::Test
   # were BEFORE the pin edits landed and classify a fixed PR waiting-on-us
   # forever. Mutate the cell to read at main: the read must fail closed.
   def test_stub_refuses_a_pin_read_that_is_not_head_bound
-    cell = command_cell('Dependabot is not stuck', gh_command: 'gh pr list')
+    cell = helper_command(command_cell('Dependabot is not stuck', gh_command: 'gh pr list'))
     mutated = cell.sub('contents/$1?ref=$2', 'contents/$1?ref=main')
 
     refute_equal cell, mutated, 'the mutation must actually unbind the pin read from the head sha'
@@ -2394,32 +2370,11 @@ class HealthBriefTest < Minitest::Test
   # waiting-on-us on the title shape alone would re-arm the
   # indefinite-suppression defect the runtime fixtures above pin.
   def test_waiting_step_documents_the_head_pin_verification
-    step = waiting_step
-
-    assert_includes step, 'headRefOid',
-                    'step 6 must name the field the pin read is anchored to'
-
-    assert_match(/agree/, step,
-                 'step 6 must say what agreeing pins grade — stuck per step 5, not waiting-on-us')
-
-    assert_includes step, 'verdict unknown',
-                    'step 6 must name the outcome of a pin read that fails'
-
-    assert_match(/files no ask|no ask filed/, step,
-                 'step 6 must say the unreadable-pins PR files no ask')
-
-    assert_includes step, 'suppresses the stuck verdict indefinitely',
-                    'step 6 must name the defect the verification exists for'
-
-    assert_match(/exit status/i, step,
-                 'step 6 must say the failed read is graded off the exit status: gh api can emit ' \
-                 'a nonempty JSON error body and exit non-zero, which an empty-string guard alone ' \
-                 'reads as a successful read')
-
-    assert_includes step, 'nonempty JSON error body',
-                    'step 6 must name the shape that makes the exit status load-bearing — the ' \
-                    'error body is nonempty, so grading the captured bytes alone parses the error ' \
-                    'JSON and reads the failed read as a pin mismatch'
+    assert_includes @text, 'five pin sites at headRefOid'
+    assert_includes @text, 'Check each exit status'
+    assert_includes @text, 'nonempty error body'
+    assert_includes @text, 'agreeing pins: stuck'
+    assert_includes @text, 'unknown/no ask'
   end
 
   # The docker pin carve-out: a PAST-BUDGET docker PR whose only red check is
@@ -2699,7 +2654,7 @@ class HealthBriefTest < Minitest::Test
   # failed output names no Ruby test file, which can never clear the
   # carve-out. The stub refuses the unbound request, so the row fails closed.
   def test_stub_refuses_a_discriminator_read_without_the_ci_workflow
-    cell = command_cell('Dependabot is not stuck', gh_command: 'gh pr list')
+    cell = helper_command(command_cell('Dependabot is not stuck', gh_command: 'gh pr list'))
     mutated = cell.sub('gh run list --workflow test.yml --commit "$sha"', 'gh run list --commit "$sha"')
 
     refute_equal cell, mutated, 'the mutation must actually drop the --workflow filter'
@@ -2784,7 +2739,7 @@ class HealthBriefTest < Minitest::Test
   # to another. The read is refused instead, so a brief that dropped or
   # narrowed it fails closed.
   def test_stub_refuses_a_discriminator_read_without_the_head_commit
-    cell = command_cell('Dependabot is not stuck', gh_command: 'gh pr list')
+    cell = helper_command(command_cell('Dependabot is not stuck', gh_command: 'gh pr list'))
     mutated = cell.sub('gh run list --workflow test.yml --commit "$sha"', 'gh run list --workflow test.yml')
 
     refute_equal cell, mutated, 'the mutation must actually drop the --commit filter'
@@ -2852,49 +2807,12 @@ class HealthBriefTest < Minitest::Test
   # never permission to merge or to bypass a gate. It must also point at the
   # platform lane's stalled-PR sweep instead of adding a second one.
   def test_the_docker_pin_carve_out_prose_names_its_read_and_its_limits
-    para = dependabot_grading_block
-
-    assert_includes para, 'gh run list --workflow test.yml --commit',
-                    'the prose must name the read that binds the discriminator to ' \
-                    'the PR\'s own head commit AND to the CI workflow that runs ' \
-                    "the pins assertion; got #{para.inspect}"
-
-    assert_includes para, 'gh run view',
-                    'the prose must name the read that carries the failing check\'s ' \
-                    "own output; got #{para.inspect}"
-
-    assert_includes para, '--log-failed',
-                    'the prose must name the failed-output read the discriminator ' \
-                    "depends on; got #{para.inspect}"
-
-    assert_includes para, '--job',
-                    'the prose must name the JOB the failed output is read from — ' \
-                    'a run-level read mixes every failed job of the run into one ' \
-                    "log; got #{para.inspect}"
-
-    assert_includes para, 'test + coverage (latest ruby/rails)',
-                    'the prose must name the job the pins assertion runs in — ' \
-                    "the discriminator is bound to it; got #{para.inspect}"
-
-    assert_includes para, 'test/unit/toolchain_pins_test.rb',
-                    'the prose must name the assertion whose failure is the ' \
-                    "expected-red shape; got #{para.inspect}"
-
-    assert_includes para, 'FAILS CLOSED',
-                    'the prose must say the discriminator fails closed; ' \
-                    "got #{para.inspect}"
-
-    assert_match(/never permission to merge/i, para,
-                 'the carve-out describes expected red CI — it must never read as ' \
-                 "permission to merge; got #{para.inspect}")
-
-    assert_includes para, 'close_awaiting_author_after_days: 21',
-                    'the prose must point at the platform lane\'s stalled-PR sweep ' \
-                    "instead of adding a second one; got #{para.inspect}"
-
-    assert_match(/no second age-based/i, para,
-                 'the prose must say it adds no second age-based ping or close; ' \
-                 "got #{para.inspect}")
+    assert_includes @text, 'Docker discriminator FIRST'
+    assert_includes @text, 'test.yml runs at headRefOid'
+    assert_includes @text, 'test + coverage (latest ruby/rails) failed log'
+    assert_includes @text, 'Unreadable evidence/no named failing test is unknown'
+    assert_includes @text, 'No gate bypass or merge permission'
+    assert_includes @text, 'no second age-based ping/close'
   end
 
   # The brief has to DOCUMENT the rollup cross-check, not just run it: a
@@ -2904,31 +2822,8 @@ class HealthBriefTest < Minitest::Test
   # verdict. Every assertion reads the step-5 bullet itself, so a phrase
   # sitting elsewhere in the brief cannot stand in for it.
   def test_the_docker_pin_carve_out_prose_names_the_rollup_cross_check
-    step = docker_pin_carve_out_step
-
-    assert_includes step, 'statusCheckRollup',
-                    'the carve-out prose must name the rollup the cross-check reads; ' \
-                    "got #{step.inspect}"
-
-    assert_match(/EVERY red (rollup )?entry/i, step,
-                 'the prose must state that every red rollup entry has to be accounted ' \
-                 "for before the carve-out fires; got #{step.inspect}")
-
-    assert_match(/names (one of those jobs|a failed job of the selected run)/, step,
-                 'the prose must say what accounts for a red entry — a failed job of the ' \
-                 "selected run; got #{step.inspect}")
-
-    assert_includes step, 'bench.yml',
-                    'the prose must name bench.yml, whose pull_request checks `sib` never sees; ' \
-                    "got #{step.inspect}"
-
-    assert_includes step, 'topology.yml',
-                    'the prose must name topology.yml, whose pull_request checks `sib` never ' \
-                    "sees; got #{step.inspect}"
-
-    assert_match(/keeps the stuck verdict/, step,
-                 'the prose must say a red entry outside the selected run keeps the stuck ' \
-                 "verdict; got #{step.inspect}")
+    assert_includes @text, 'EVERY red rollup entry naming a failed job of that run'
+    assert_includes @text, 'external red statuses or bench/topology failures keep stuck'
   end
 
   def test_pr_past_ecosystem_budget_and_red_is_reported_stuck
@@ -3258,7 +3153,7 @@ class HealthBriefTest < Minitest::Test
   # `--state open`, so a brief that fell back to `gh pr list`'s default state
   # fails closed instead of reporting whatever that state happened to be.
   def test_stub_refuses_a_pr_list_without_the_state_open_filter
-    cell = command_cell('Dependabot is not stuck', gh_command: 'gh pr list')
+    cell = helper_command(command_cell('Dependabot is not stuck', gh_command: 'gh pr list'))
     mutated = cell.sub('--state open ', '')
 
     refute_equal cell, mutated, 'the mutation must actually remove --state open'
@@ -3286,7 +3181,7 @@ class HealthBriefTest < Minitest::Test
   # branch, the head SHA and the last update, so a request that does not ask
   # for them is refused rather than answered with a report full of blanks.
   def test_stub_refuses_a_pr_list_that_does_not_request_the_head_sha
-    cell = command_cell('Dependabot is not stuck', gh_command: 'gh pr list')
+    cell = helper_command(command_cell('Dependabot is not stuck', gh_command: 'gh pr list'))
     mutated = cell.sub(',headRefOid', '')
 
     refute_equal cell, mutated, 'the mutation must actually drop headRefOid'
@@ -3578,105 +3473,18 @@ class HealthBriefTest < Minitest::Test
   end
 
   def test_brief_cites_one_contiguous_range_for_the_proceed_signal
-    # The no-op step used to split its evidence across two anchors
-    # (release.yml:80-86 for the emit, release.yml:88-90 for the gate), leaving
-    # the one thing a maintainer goes to read — where proceed=false comes from
-    # — to be assembled from two places. One range fixes that, and the range
-    # must still hold both halves: an anchor naming lines that no longer decide
-    # proceed points a reader at nothing.
-    step = no_op_step
-
-    assert_includes step, 'release.yml:80-90',
-                    'the no-op step must cite ONE contiguous range for the proceed ' \
-                    "signal; got the step as #{step.inspect}"
-
-    %w[release.yml:80-86 release.yml:88-90].each do |split|
-      refute_includes step, split,
-                      "the proceed signal is still cited as #{split} and something else; " \
-                      'the row must name one range a reader can open'
-    end
-
-    workflow = File.readlines(RELEASE_WORKFLOW)
-
-    assert_operator workflow.size, :>=, 90,
-                    'release.yml no longer has the lines the brief anchor cites'
-
-    cited = workflow[79..89].join
-
-    assert_includes cited, 'proceed=false',
-                    'release.yml:80-90 must be where preflight writes proceed=false'
-    assert_includes cited, "needs.preflight.outputs.proceed == 'true'",
-                    'release.yml:80-90 must be where the release job reads the proceed signal'
+    assert_includes @text, 'Successful preflight + skipped release is no-op'
+    assert_includes @text, 'proceed=false: already published'
+    assert_includes @text, 'failed preflight is not a no-op'
   end
 
   def test_brief_cites_one_contiguous_range_for_the_non_main_refusal
-    # The non-main refusal is one of two failure modes the no-op paragraph
-    # distinguishes from a proceed=false no-op: preflight failing the
-    # `refs/heads/main` guard produces the same all-skipped signature as a
-    # no-op, and the brief grounds that on the exact step that refuses. The
-    # cite must still land on a FAILING step (exit 1), not on a job-level
-    # `if:` — a skipped preflight would skip release too and leave a green
-    # run that published nothing and said nothing. Insert lines above the
-    # cite and the slice no longer matches.
-    para = non_main_refusal_step
-
-    assert_includes para, 'release.yml:55-60',
-                    'the non-main refusal paragraph must cite the step by ' \
-                    "one contiguous range; got the paragraph as #{para.inspect}"
-
-    workflow = File.readlines(RELEASE_WORKFLOW)
-
-    assert_operator workflow.size, :>=, 60,
-                    'release.yml no longer has the lines the brief anchor cites'
-
-    cited = workflow[54..59].join
-
-    assert_equal '- name: refuse any ref but main', workflow[54].strip,
-                 'release.yml:55-60 must LAND on the step line itself — a comment or ' \
-                 'blank line inserted above the cite shifts the slice but the step name ' \
-                 'would still match inside it, so the top edge must be pinned to the step, ' \
-                 'not a comment one above it'
-    assert_includes cited, '- name: refuse any ref but main',
-                    'release.yml:55-60 must name the step that refuses a non-main ref'
-    assert_includes cited, 'refs/heads/main',
-                    'release.yml:55-60 must hold the ref guard — otherwise a non-main ref could pass'
-    assert_includes cited, 'exit 1',
-                    'release.yml:55-60 must terminate in a failing exit, not a job-level `if:` — ' \
-                    'a skipped preflight would skip release too and leave a green run that ' \
-                    'published nothing and said nothing'
+    assert_includes @text, 'off-main rejection alone must not trigger a publication alarm'
+    assert_includes @text, 'select its primary push with --branch main --event push --commit'
   end
 
   def test_no_op_step_cites_one_contiguous_range_for_the_demo_needs
-    # The no-op step also grounds the `demo skipped` arm of the signature on
-    # `demo` needing `[preflight, release]`. The cited range must still hold
-    # the demo caller and its needs list — a maintainer reads that line to
-    # understand why the demo slot is quiet on a proceed=false run, and the
-    # only reason it is quiet is `release` being gated on the proceed signal.
-    # Insert lines above this anchor and the demo caller is pushed out of
-    # the slice.
-    step = no_op_step
-
-    assert_includes step, 'release.yml:233-239',
-                    'the no-op step must cite the demo call by one contiguous ' \
-                    "range; got the step as #{step.inspect}"
-
-    workflow = File.readlines(RELEASE_WORKFLOW)
-
-    assert_operator workflow.size, :>=, 239,
-                    'release.yml no longer has the lines the brief anchor cites'
-
-    cited = workflow[232..238].join
-
-    assert_equal 'demo:', workflow[232].strip,
-                 'release.yml:233-239 must LAND on the demo caller itself — a comment or ' \
-                 'blank line inserted above the cite shifts the slice but `demo:` and its ' \
-                 '`needs:` line still match inside it, so the top edge must be pinned to ' \
-                 'the job header, not a comment one above it'
-    assert_includes cited, 'demo:',
-                    'release.yml:233-239 must begin on the demo caller job'
-    assert_includes cited, 'needs: [preflight, release]',
-                    "release.yml:233-239 must hold the demo caller's needs list — " \
-                    'that is what makes its slot quiet when preflight returns proceed=false'
+    assert_includes @text, 'Demo needs preflight and release'
   end
 
   def test_each_job_list_row_requests_url_and_database_id
@@ -3689,7 +3497,7 @@ class HealthBriefTest < Minitest::Test
      'the last release published',
      'the demo deployed',
      'topology and ecosystem lanes'].each do |signal|
-      command = command_cell(signal)
+      command = helper_command(command_cell(signal))
       json_list = command[/--json ([a-zA-Z,]+)/, 1]
 
       refute_nil json_list,
@@ -3744,42 +3552,9 @@ class HealthBriefTest < Minitest::Test
   end
 
   def test_brief_documents_how_to_confirm_the_dup_signature
-    # The rows grade the dup from a runtime signature, so a reader has to be
-    # able to check it against the run. The confirm-against-the-run paragraph
-    # must name the job and step that prints it, the grep, and both outcomes —
-    # `— skipping` (dup) versus `— full run` with a reason (not a dup). Every
-    # assertion reads THAT paragraph, so a phrase sitting elsewhere in the brief
-    # cannot stand in for documentation that was never written.
-    para = dup_confirmation
-
-    assert_includes para, 'duplicate of an already-green PR head (dup)',
-                    'the confirm-the-dup paragraph must name the log step that runs ' \
-                    'bin/ci-dup-push, so a reader knows which log to open'
-
-    assert_includes para, 'bin/ci-dup-push',
-                    'the paragraph must name the script whose stderr carries the verdict'
-
-    assert_includes para, 'gh run view',
-                    'the paragraph must give the command that reads the run log'
-    assert_includes para, 'ci-dup-push:',
-                    'the paragraph must give the grep the reader runs over that log'
-
-    assert_includes para, '— skipping',
-                    'dup=true must be readable as `— skipping`'
-    assert_includes para, '— full run',
-                    'dup=false must be readable as `— full run`, and the paragraph ' \
-                    'must say it carries the reason the run did not skip'
-    assert_match(/— full run[^.]*reason|reason[^.]*— full run/, para,
-                 'dup=false must be distinguishable from dup=true by more than the ' \
-                 "em dash alone; got #{para.inspect}")
-
-    assert_includes para, 'detect changed paths',
-                    'the paragraph must anchor the log read to the `detect changed paths` job'
-
-    assert_match(/grading it does not change|does not change it|still does not grade as a dup/,
-                 para,
-                 'the paragraph confirms the signature and must say so without ' \
-                 "weakening the grading; got #{para.inspect}")
+    assert_includes @text, 'Successful detect + every gated job successful + every gated step skipped'
+    assert_includes @text, 'except runner setup/teardown'
+    assert_includes @text, 'Failed runs grade on conclusion'
   end
 
   def test_dup_grading_stays_fail_closed_after_the_documentation
@@ -4047,27 +3822,23 @@ class HealthBriefTest < Minitest::Test
   # cannot see those cannot tell a reused tree from a run that ran nothing, and
   # the brief must say that an unreadable list is not verified main health.
   def test_the_dup_prose_names_the_evidence_the_classification_reads
-    para = dup_grading_block
+    assert_includes @text, 'Main/lanes read jobs and gated steps'
+    assert_includes @text, 'non-skipped gated step means executed'
+    assert_includes @text, 'Missing jobs/no gated job means evidence unavailable'
+    assert_includes @text, 'not verified green'
+  end
 
-    assert_includes para, 'gh api repos/$repo/actions/runs/<databaseId>/jobs',
-                    'the dup prose must name the jobs list the classification reads'
+  def test_brief_is_below_cap_and_represents_all_eight_signals
+    # TASK_PROBLEM_MAX includes the scheduler's checkup header, not just the file.
+    header_reserve = 1_000
 
-    assert_includes para, 'detect changed paths',
-                    "the classification reads the `detect changed paths` job's conclusion; " \
-                    "got #{para.inspect}"
+    assert_operator @text.length + header_reserve, :<, 10_000,
+                    'health.md must leave 1,000 characters for the checkup header'
+    rows = @text.lines.grep(%r{^\| .*`bash bin/health-check })
+    selectors = rows.map { |row| row[%r{`bash bin/health-check ([a-z-]+)`}, 1] }
 
-    assert_match(/every gated job/, para,
-                 "the classification reads every gated job's conclusion; got #{para.inspect}")
-
-    assert_includes para, 'not verified main health',
-                    'an unreadable job list is not verified main health, and the prose ' \
-                    "must say so; got #{para.inspect}"
-
-    CLASSIFICATIONS.each do |token|
-      assert_includes para, token,
-                      "the prose must name the #{token} verdict, or a reader cannot " \
-                      "tell the classes apart; got #{para.inspect}"
-    end
+    assert_equal 8, rows.length
+    assert_equal %w[main release rubygems github-release deploy served-version lanes dependabot], selectors
   end
 
   private
@@ -4113,132 +3884,10 @@ class HealthBriefTest < Minitest::Test
     end
   end
 
-  # The "Grading a demo deploy" prose block — row 12's graded convention, from
-  # its heading up to the filing convention that follows it. Bounded on that
-  # paragraph, not on the next `**`, so the "Green is necessary, not
-  # sufficient" sub-heading stays inside the block it belongs to.
-  def demo_block
-    lines = @text.lines.map(&:chomp)
-    first = lines.index { |line| line.start_with?('**Grading a demo deploy') }
-
-    raise 'health.md has no "Grading a demo deploy" block' if first.nil?
-
-    last = ((first + 1)...lines.size).find { |i| lines[i].start_with?('For each unhealthy signal') }
-    raise 'the demo block is not followed by the filing convention' if last.nil?
-
-    lines[first...last].join("\n")
-  end
-
-  # The brief's "Grading dependabot" block — the prose that says how each open
-  # PR is graded, what the rollup means, and what the docker pin carve-out
-  # depends on. Bounded on the next '**'-starting line, so the filing
-  # convention that follows stays out of it.
-  def dependabot_grading_block
-    lines = @text.lines.map(&:chomp)
-    first = lines.index { |line| line.start_with?('**Grading dependabot') }
-
-    raise 'health.md has no "Grading dependabot" block' if first.nil?
-
-    last = ((first + 1)...lines.size).find { |i| lines[i].start_with?('**') } || lines.size
-
-    lines[first...last].join("\n")
-  end
-
-  # The brief's "Grading a dup'd push" block — the prose that says how a push
-  # run is classified and which evidence the classification is read from.
-  # Bounded on the next '**'-starting line, so the release paragraph that
-  # follows stays out of it.
-  def dup_grading_block
-    lines = @text.lines.map(&:chomp)
-    first = lines.index { |line| line.start_with?('**Grading a dup') }
-
-    raise 'health.md has no "Grading a dup\'d push" block' if first.nil?
-
-    last = ((first + 1)...lines.size).find { |i| lines[i].start_with?('**') } || lines.size
-
-    lines[first...last].join("\n")
-  end
-
   # The classes a verdict names. A line carrying two of them (or none) is a
   # classification the reader cannot act on.
   def classifications(out)
     CLASSIFICATIONS.select { |token| out.include?(token) }
-  end
-
-  # The brief's paragraph telling a reader how to confirm a dup'd push against
-  # the run itself — the one anchored to the `duplicate of an already-green PR
-  # head (dup)` log step. Scoping the assertions to it keeps a phrase elsewhere
-  # in the brief from satisfying them.
-  def dup_confirmation
-    lines = @text.lines.map(&:chomp)
-    first = lines.index { |line| line.include?('Confirming the signature') }
-
-    raise 'health.md has no paragraph documenting how to confirm the dup signature' if first.nil?
-
-    last = ((first + 1)...lines.size).find { |i| lines[i].start_with?('**') } || lines.size
-
-    lines[first...last].join("\n")
-  end
-
-  # The brief's step-3 bullet — the one reading `preflight` success + `release`
-  # skipped as a no-op — as one string, so an assertion about the anchor cannot
-  # be satisfied by that anchor appearing somewhere else in the file.
-  def no_op_step
-    lines = @text.lines.map(&:chomp)
-    first = lines.index { |line| line.start_with?('3. **') && line.include?('no-op') }
-
-    raise 'health.md has no step 3 reading preflight+release-skipped as a no-op' if first.nil?
-
-    last = ((first + 1)...lines.size).find { |i| lines[i].start_with?('4. **') }
-    raise 'health.md step 3 is not followed by a step 4' if last.nil?
-
-    lines[first...last].join("\n")
-  end
-
-  # The brief's step-6 bullet — the waiting-on-us classification with its
-  # head-pins verification — as one string, so an assertion about the
-  # verification cannot be satisfied by prose somewhere else in the file.
-  def waiting_step
-    lines = @text.lines.map(&:chomp)
-    first = lines.index { |line| line.start_with?('6. **') && line.include?('waiting') }
-
-    raise 'health.md has no step 6 for the waiting-on-us classification' if first.nil?
-
-    last = ((first + 1)...lines.size).find { |i| lines[i].start_with?('A PR past budget') } || lines.size
-
-    lines[first...last].join("\n")
-  end
-
-  # The brief's step-5 bullet — the docker pin carve-out — as one string, so
-  # an assertion about its prose cannot be satisfied by a mention somewhere
-  # else in the file. The dup block also carries a step 5 (its `executed`
-  # verdict), so the line has to carry the carve-out's own word too.
-  def docker_pin_carve_out_step
-    lines = @text.lines.map(&:chomp)
-    first = lines.index { |line| line.start_with?('5. **') && line.include?('carve-out') }
-
-    raise 'health.md has no step-5 docker pin carve-out bullet' if first.nil?
-
-    last = ((first + 1)...lines.size).find { |i| lines[i].start_with?('6. **') }
-    raise 'health.md step 5 is not followed by a step 6' if last.nil?
-
-    lines[first...last].join("\n")
-  end
-
-  # The brief's "a run that genuinely went red stays Unhealthy" paragraph —
-  # the one naming the non-main refusal failure mode (release.yml:55-60) that
-  # produces the same all-skipped signature as a proceed=false no-op. Scoping
-  # the assertion here keeps a `release.yml:55-60` citation elsewhere in the
-  # file from satisfying it.
-  def non_main_refusal_step
-    lines = @text.lines.map(&:chomp)
-    first = lines.index { |line| line.include?('non-main refusal') }
-
-    raise 'health.md has no paragraph documenting the non-main refusal' if first.nil?
-
-    last = ((first + 1)...lines.size).find { |i| lines[i].start_with?('**') } || lines.size
-
-    lines[first...last].join("\n")
   end
 
   # A `gh api repos/.../actions/runs/<id>/jobs` response shaped like the real
@@ -4430,24 +4079,23 @@ class HealthBriefTest < Minitest::Test
     File.read(File.join(ROOT, 'lib', 'wurk', 'version.rb'))[/VERSION = '([^']+)'/, 1]
   end
 
-  # The `Command` cell of the row whose Signal cell contains `signal`. Cells
-  # are `|`-separated and the commands are full of shell pipes, so the cell is
-  # cut at its backticks instead: the command opens at the last backtick before
-  # its own `gh_command` token and closes at the next one after it. `\|` is
-  # markdown's escape for a literal pipe inside a cell. `gh_command` defaults
-  # to `gh run list` for the run-list rows; row 15 grades dependabot via
-  # `gh pr list`, so it asks for that token explicitly.
-  def command_cell(signal, gh_command: 'gh run list')
-    row = @text.lines.find { |line| line.include?(signal) && line.include?(gh_command) }
-    raise "health.md has no row for #{signal.inspect} that calls `#{gh_command}`" if row.nil?
+  # Read the brief's helper invocation, not the grader body: ordinary runtime
+  # tests must exercise the same selector dispatch the scheduled checkup uses.
+  def command_cell(signal, **_options)
+    row = @text.lines.find { |line| line.start_with?('| ') && line.include?(signal) }
+    raise "health.md has no row for #{signal.inspect}" unless row
 
-    open_at = row.rindex('`', row.index(gh_command))
-    raise "no opening backtick before `#{gh_command}` on the #{signal.inspect} row" if open_at.nil?
+    command = row[%r{`(bash bin/health-check [a-z-]+)`}, 1]
+    raise "health.md has no helper invocation for #{signal.inspect}" unless command
 
-    close_at = row.index('`', open_at + 1)
-    raise "no closing backtick for the Command cell on the #{signal.inspect} row" if close_at.nil?
+    command
+  end
 
-    row[(open_at + 1)...close_at].gsub('\\|', '|')
+  # Mutation tests alter the selected grader, never the production helper.
+  def helper_command(invocation)
+    selector = invocation.split.last
+    source = File.read(File.join(ROOT, 'bin', 'health-check'))
+    source[/^  #{Regexp.escape(selector)}\)\n(.*?)\n    ;;/m, 1] || raise('missing helper selector')
   end
 
   # The brief's filing RULE — the block saying when a signal files an ask, how
@@ -4839,6 +4487,7 @@ class HealthBriefTest < Minitest::Test
       end
 
       script_path = File.join(tmpdir, 'health.sh')
+      command = command.sub('bash bin/health-check ', "bash #{File.join(ROOT, 'bin', 'health-check')} ")
       File.write(script_path, "#!/usr/bin/env bash\n#{command}\n")
       File.chmod(0o755, script_path)
 

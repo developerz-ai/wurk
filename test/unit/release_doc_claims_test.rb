@@ -152,6 +152,8 @@ class ReleaseDocClaimsTest < Minitest::Test
     assert_match(/probe failed|PROBE failed/, section,
                  'the section must state a failed probe is not evidence the version is absent')
 
+    assert_includes row10_source, endpoint
+
     row = health_rubygems_row
 
     refute_includes row, 'gem list wurk --remote',
@@ -347,9 +349,9 @@ class ReleaseDocClaimsTest < Minitest::Test
     refute_includes out, 'Unhealthy'
 
     ['--branch main ', '--event push '].each do |filter|
-      command = row10_command.sub(filter, '')
+      command = row10_source.sub(filter, '')
 
-      refute_equal row10_command, command
+      refute_equal row10_source, command
       out, err, status = run_row10(http_status: 404, release_run: runs, command: command)
 
       assert_predicate status, :success?, err
@@ -362,10 +364,9 @@ class ReleaseDocClaimsTest < Minitest::Test
   # gh succeeded and answered `[]` — a READABLE empty run list, not a failed
   # read. No release.yml run exists for the version's own sha, so a 404
   # beside it is neither a failed release (Unhealthy) nor a served one
-  # (success): the cell's existing `if type == "array" and length > 0` guard
-  # fails it closed. Row 10's command cell is untouched by this task (rows 8,
-  # 12 and 13 are the unguarded ones); this pin exists so the existing empty
-  # outcome cannot silently regress while its neighbouring rows are edited.
+  # (success): the helper's `if type == "array" and length > 0` guard
+  # fails it closed. Keep that outcome distinct from the named `no run`
+  # verdict used by the main, deploy and lanes selectors.
   def test_row10_http_404_with_a_readable_empty_run_list_grades_unknown
     out, err, status = run_row10(http_status: 404, release_run: '[]')
 
@@ -443,7 +444,7 @@ class ReleaseDocClaimsTest < Minitest::Test
   end
 
   def test_row10_captures_the_status_instead_of_letting_curl_fail_on_http_errors
-    command = row10_command
+    command = row10_source
 
     assert_match(/-w '%\{http_code\}'/, command,
                  'row 10 must capture the HTTP status: grading curl\'s exit code alone ' \
@@ -455,10 +456,13 @@ class ReleaseDocClaimsTest < Minitest::Test
                  'the exact defect this block exists to keep out')
   end
 
-  # The `Command` cell of the 'RubyGems serves' row: the second backtick span
-  # on the row (the first is the `Wurk::VERSION` in its Signal cell). `\|` is
-  # markdown's escape for a literal pipe inside a table cell, unescaped here
-  # exactly as health_brief_test.rb's command_cell does.
+  # Source assertions and mutations target only the RubyGems grader body.
+  # Normal runtime tests use row10_command to exercise the brief's invocation.
+  def row10_source
+    source = File.read(File.join(ROOT, 'bin', 'health-check'))
+    source[/^  rubygems\)\n(.*?)\n    ;;/m, 1] || raise('missing rubygems helper selector')
+  end
+
   def row10_command
     row = health_rubygems_row
 
