@@ -40,25 +40,14 @@ ONLY a readable list with NO failed run allows waiting-on-us fallback for a past
 
 For each unhealthy signal, file one ask unless an open issue already names it. Filing an ask
 requires FIRST running, exactly, `gh api --paginate "repos/developerz-ai/wurk/issues?state=open" | jq -r '.[] | select(.pull_request == null) | .title'`
-If any returned title equals the signal's title exactly, the ask already
-exists — never file a second ask while one with this title is open. Titles are stable, matched by exact equality;
-nothing that changes run to run (sha, run URL, version, PR age) may appear in it — those
-live in the body. The stable titles are: row 8 files `main is red`; row 9 files
+If a returned title equals the signal's title exactly, the ask exists — never file a second ask while one with this title is open. Titles are stable, matched by exact equality; nothing run-specific (sha, run URL, version, PR age) may appear in one — those live in the body. The stable titles are: row 8 files `main is red`; row 9 files
 `release did not publish`; row 10 files
-`RubyGems does not serve Wurk::VERSION` (the constant's name, never its value); row 11 files
-`GitHub Release is gem-less`; row 12 files `demo deploy failed` for a failed deploy-demo
-conclusion line, even when it includes `tagged sha-<7>`; the tag cannot override failure.
+`RubyGems does not serve Wurk::VERSION`; row 11 files
+`GitHub Release is gem-less`; row 12 files `demo deploy failed` for a failed deploy-demo conclusion line, even when it includes `tagged sha-<7>`; the tag cannot override failure.
 Row 12 files `demo frozen: no sha-<7> image tag` only for the missing-tag verdict; the demo
-served-version row files `demo serves a different version than the checkout`; row 14 files per
-workflow so the two lanes stay
-distinguishable — `topology.yml is red` and `ecosystem.yml is red`; row 15 files
+served-version row files `demo serves a different version than the checkout`; row 14 files per workflow — `topology.yml is red` and `ecosystem.yml is red`; row 15 files
 one ask per stuck PR titled `Dependabot is stuck on #<n>`, and one ask per
-waiting-on-us docker bump titled `Docker bump #<n> is waiting on us` — filed only when the head-pins read has verified the mismatch still outstanding: the owner is the maintainer agent
-and the next action is pushing the matching bun pin edits to the dependabot branch. A waiting-shaped PR
-whose pin-site reads fail grades `verdict unknown` and files no ask, and one whose pins already
-agree takes the stuck ask instead. A `duplicate-skipped`
-push files no ask
-and an `evidence unavailable` verdict files no ask either.
+waiting-on-us docker bump titled `Docker bump #<n> is waiting on us` — filed only when the head-pins read has verified the mismatch outstanding: the owner is the maintainer agent, next action pushing the matching bun pin edits to the dependabot branch. A waiting-shaped PR whose pin-site reads fail grades `verdict unknown`, files no ask; one whose pins agree takes the stuck ask. A `duplicate-skipped` push files no ask, as does an `evidence unavailable` verdict.
 A `no run: <workflow> has no matching run` line files NO ask: it is never filed under a row's Unhealthy titles (`main is red`, `demo frozen: ...`,
 `topology.yml is red`, …), and it is not `verdict unknown` either. The same holds for the
 `verdict unknown ... not readable` lines: an unreadable list files no ask. Only a line that names a defect files one
