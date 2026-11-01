@@ -4,6 +4,15 @@ Daily `schedules: health` checkup; failures no issue or PR announces.
 
 ## Rows
 
+- `main`
+- `release`
+- `rubygems`
+- `github-release`
+- `deploy`
+- `served-version`
+- `lanes`
+- `dependabot`
+
 | Signal | Command | Healthy |
 |---|---|---|
 | `main` is green | `bash bin/health-check main` | `executed`; `duplicate-skipped` and `evidence unavailable` file no ask |
