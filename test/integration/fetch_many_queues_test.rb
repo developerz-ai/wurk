@@ -5,7 +5,43 @@ require_relative '../test_helper'
 class FetchManyQueuesJob
   include Wurk::Job
 
-  RAN = Queue.new
+  # The tag each run records. A Mutex+ConditionVariable pair, not a
+  # Thread::Queue: the take below is the repo's own wait idiom
+  # (lib/wurk/client/buffered.rb), the same one the reaper's sweep uses.
+  class Mailbox
+    def initialize
+      @lock = ::Mutex.new
+      @wake = ::ConditionVariable.new
+      @tags = []
+    end
+
+    def <<(tag)
+      @lock.synchronize do
+        @tags << tag
+        @wake.broadcast
+      end
+    end
+
+    # The oldest tag, or nil when none arrives within `timeout` seconds.
+    def take(timeout: 0)
+      deadline = ::Process.clock_gettime(::Process::CLOCK_MONOTONIC) + timeout
+      @lock.synchronize do
+        while @tags.empty?
+          remaining = deadline - ::Process.clock_gettime(::Process::CLOCK_MONOTONIC)
+          break if remaining <= 0
+
+          @wake.wait(@lock, remaining)
+        end
+        @tags.shift
+      end
+    end
+
+    def clear
+      @lock.synchronize { @tags.clear }
+    end
+  end
+
+  RAN = Mailbox.new
 
   def perform(tag)
     RAN << tag
@@ -35,6 +71,15 @@ class FetchManyQueuesTest < Wurk::Test::UnitCase
     FetchManyQueuesJob::RAN.clear
   end
 
+  # CI run 41303800609, job "compat (ruby 3.2.11, rails 8.1, redis)", failed
+  # this case on the Ruby 3.2 floor at the assertion that reads the tag back.
+  # That read was a timed `Thread::Queue#pop(timeout:)` — the one timed wait in
+  # `lib/` that does not use the repo's Mutex+ConditionVariable idiom
+  # (lib/wurk/client/buffered.rb, lib/wurk/timer_loop.rb). The reaper's sweep
+  # waits the same way, inside its raw thread, so a wait that raised there took
+  # the sweep thread down with it (the thread exceptions in that log). The
+  # mailbox above is that idiom now: the assertion, its bound and the
+  # one-fetch-cycle meaning are unchanged.
   def test_a_job_on_the_hundredth_queue_runs_within_one_fetch_cycle
     assert_equal :strict, @capsule.mode
 
@@ -44,7 +89,7 @@ class FetchManyQueuesTest < Wurk::Test::UnitCase
     @processor.process_one
     elapsed = ::Process.clock_gettime(::Process::CLOCK_MONOTONIC) - started
 
-    assert_equal 'q100', FetchManyQueuesJob::RAN.pop(timeout: 0)
+    assert_equal 'q100', FetchManyQueuesJob::RAN.take(timeout: 0)
     assert_operator elapsed, :<, Wurk::Fetcher::Reliable::TIMEOUT / 2.0,
                     'the job must come from the non-blocking pass, not after a BLMOVE block'
     @capsule.fetcher.flush_pending_acks

@@ -108,11 +108,13 @@
     return if @reaper&.alive?
 
 - entry: '`reap_idle_redis_connections` sweeps from a per-pool reaper thread, not the heartbeat'
-  anchor: lib/wurk/redis_pool.rb#L284-L286
+  anchor: lib/wurk/redis_pool.rb#L289-L294
   fragment: |-
-    def reap_loop(stop)
+    def reap_loop
     interval = [@redis_idle_timeout / 2.0, REAP_MAX_INTERVAL].min
-    @pool.reap(idle_seconds: @redis_idle_timeout) { |conn| safe_close(conn) } until stop.pop(timeout: interval)
+    loop do
+    break if wait_for_stop(interval)
+    @pool.reap(idle_seconds: @redis_idle_timeout) { |conn| safe_close(conn) }
 
 - entry: '`Leader#token` exposes a fencing token Ent deliberately omits'
   anchor: lib/wurk/leader.rb#L35

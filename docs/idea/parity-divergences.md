@@ -1477,7 +1477,7 @@ the +5 headroom names the background loops it covers. Sizes stay overridable
 (`lib/wurk/configuration.rb:258-259`), and every pool built from the
 configuration starts its own reaper thread on first checkout
 (`lib/wurk/redis_pool.rb:256-265`), sweeping every `min(timeout / 2, 10)`
-seconds through connection_pool's `#reap` (`lib/wurk/redis_pool.rb:284-286`).
+seconds through connection_pool's `#reap` (`lib/wurk/redis_pool.rb:289-294`).
 Pools outside the launcher — web, swarm supervisor — are reaped too, because
 the sweep is not tied to any heartbeat.
 
@@ -1496,7 +1496,7 @@ idle; the 10s floor keeps a short timeout from becoming a hot loop. Requires
 connection_pool >= 3.0 for `#reap` (`wurk.gemspec:52`), as Sidekiq 8.1 does.
 
 **Anchor:** `lib/wurk/configuration.rb:258-259`; `lib/wurk/redis_pool.rb:111-114`,
-`lib/wurk/redis_pool.rb:256-265`, `lib/wurk/redis_pool.rb:284-286`; free Config
+`lib/wurk/redis_pool.rb:256-265`, `lib/wurk/redis_pool.rb:289-294`; free Config
 surface ([free §4.2 Public methods — `reap_idle_redis_connections`](../target/sidekiq-free.md#42-public-methods)) and DEFAULTS
 ([free §4.1 DEFAULTS — `redis_idle_timeout`](../target/sidekiq-free.md#41-defaults)).
 
