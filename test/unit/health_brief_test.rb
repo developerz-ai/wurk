@@ -3829,7 +3829,11 @@ class HealthBriefTest < Minitest::Test
   end
 
   def test_brief_is_below_cap_and_represents_all_eight_signals
-    assert_operator @text.length, :<, 10_000
+    # TASK_PROBLEM_MAX includes the scheduler's checkup header, not just the file.
+    header_reserve = 1_000
+
+    assert_operator @text.length + header_reserve, :<, 10_000,
+                    'health.md must leave 1,000 characters for the checkup header'
     rows = @text.lines.grep(%r{^\| .*`bash bin/health-check })
     selectors = rows.map { |row| row[%r{`bash bin/health-check ([a-z-]+)`}, 1] }
 
