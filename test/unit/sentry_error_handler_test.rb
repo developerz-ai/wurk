@@ -225,6 +225,19 @@ class SentryErrorHandlerTest < Wurk::Test::UnitCase
     assert_equal 1, FakeSentry.captured.size, 'attempt 3 is neither the asked attempt nor terminal'
   end
 
+  # The default lets through what the server answered with. A list the host wrote
+  # means what it says, by ancestry, the contract `filtered_error_classes:` has.
+  def test_an_explicit_list_filters_read_only_and_master_down_by_ancestry
+    explicit = handler(filtered_error_classes: [RedisClient::ConnectionError])
+    explicit.call(RedisClient::ReadOnlyError.new('READONLY no'), {})
+    explicit.call(RedisClient::MasterDownError.new('MASTERDOWN no'), {})
+
+    assert_empty FakeSentry.captured
+    h_shared.call(RedisClient::ReadOnlyError.new('READONLY no'), {})
+
+    assert_equal 1, FakeSentry.captured.size, 'the default still reports it'
+  end
+
   def test_exposes_its_filter_list
     assert_equal [Boom], handler(filtered_error_classes: [Boom]).filtered_error_classes
   end

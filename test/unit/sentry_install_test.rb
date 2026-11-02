@@ -161,7 +161,7 @@ class SentryInstallTest < Wurk::Test::UnitCase
   def test_reporting_a_command_error_does_not_need_redis_client_has_code
     script = <<~RUBY
       require 'wurk/sentry'
-      RedisClient.send(:remove_const, :HasCode)
+      RedisClient.send(:remove_const, :HasCode) if RedisClient.const_defined?(:HasCode, false)
       module Sentry
         def self.initialized? = true
         def self.capture_exception(ex, **) = print(ex.class)

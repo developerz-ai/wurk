@@ -332,4 +332,32 @@ class TestingModesTest < Wurk::Test::UnitCase
       refute found.key?('stranded-queue')
     end
   end
+
+  def test_unconsumed_job_queues_reads_weights_the_way_worker_config_does
+    [['listened-queue,2'], [['listened-queue', 2]], ['listened-queue, 2']].each do |listened|
+      refute Wurk::Testing.unconsumed_job_queues(listened: listened).key?('listened-queue'), listened.inspect
+    end
+  end
+
+  def test_unconsumed_job_queues_reads_comma_weights_from_a_config_file
+    Tempfile.create(['wurk', '.yml']) do |file|
+      file.write(":queues:\n  - listened-queue,2\n")
+      file.close
+
+      refute Wurk::Testing.unconsumed_job_queues(config_file: file.path).key?('listened-queue')
+    end
+  end
+
+  # A valid declaration must not crash the guard, and what it cannot check it says.
+  def test_unconsumed_job_queues_skips_and_names_an_argument_dependent_queue_block
+    require 'active_job'
+    Object.const_set(:ArgumentQueuedJob, Class.new(ActiveJob::Base) { queue_as { arguments.fetch(0) } })
+    found = nil
+    _, err = capture_io { found = Wurk::Testing.unconsumed_job_queues(listened: %w[listened-queue]) }
+
+    refute_includes found.values.flatten, 'ArgumentQueuedJob'
+    assert_match(/ArgumentQueuedJob/, err)
+  ensure
+    Object.send(:remove_const, :ArgumentQueuedJob)
+  end
 end

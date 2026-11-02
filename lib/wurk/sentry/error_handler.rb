@@ -60,6 +60,7 @@ module Wurk
       def initialize(filter_transport_errors: true, filtered_error_classes: nil, report_after_attempts: nil,
                      coalescer: ErrorCoalescer.new)
         @filter_transport_errors = filter_transport_errors
+        @default_filter = filtered_error_classes.nil?
         @filtered_error_classes = (filtered_error_classes || DEFAULT_FILTERED_ERROR_CLASSES).to_a.freeze
         @report_after_attempts = report_after_attempts
         @coalescer = coalescer
@@ -87,10 +88,11 @@ module Wurk
       def filtered?(exception)
         return false unless @filter_transport_errors
 
-        # READONLY and MASTERDOWN subclass ConnectionError, but the server did answer.
-        @filtered_error_classes.any? do |klass|
-          exception.is_a?(klass) && !(klass == RedisClient::ConnectionError && exception.is_a?(RedisClient::HasCommand))
-        end
+        # READONLY and MASTERDOWN subclass ConnectionError, but the server did answer,
+        # so the default passes them. A list the host wrote is taken at its word.
+        return false if @default_filter && exception.is_a?(RedisClient::HasCommand)
+
+        @filtered_error_classes.any? { |klass| exception.is_a?(klass) }
       end
 
       private

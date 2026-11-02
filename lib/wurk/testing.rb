@@ -119,14 +119,16 @@ module Wurk
 
       # Guard test for a queue nothing listens to: `{ queue => [job classes] }`
       # for every loaded job whose queue is outside `listened`, so a worker would
-      # never fetch it. Eager-load the app first; only loaded classes are seen.
+      # never fetch it. Eager-load the app first; only loaded classes are seen. An
+      # ActiveJob whose `queue_as` block needs arguments cannot be resolved here: it
+      # is left out, with a warning naming it. `listened` takes what worker config
+      # takes (`'critical,2'`, `['critical', 2]`).
       #
       #   Rails.application.eager_load!
       #   assert_empty Wurk::Testing.unconsumed_job_queues(config_file: 'config/wurk.yml')
       def unconsumed_job_queues(listened: nil, config_file: nil)
-        listening = Array(listened || (config_file ? queues_in_config(config_file) : ::Wurk.configuration.queues))
-                    .map { |queue| Array(queue).first.to_s }
-        job_queues.except(*listening)
+        listening = listened || (config_file ? queues_in_config(config_file) : ::Wurk.configuration.queues)
+        job_queues.except(*queue_names(listening))
       end
 
       # Run every fake job across all classes until the store is empty.
@@ -140,6 +142,15 @@ module Wurk
       end
 
       private
+
+      # Through the capsule, so an entry here means what it means to a worker.
+      def queue_names(entries)
+        return [] if Array(entries).empty?
+
+        capsule = ::Wurk::Configuration.new.default_capsule
+        capsule.queues = entries
+        capsule.weights.keys
+      end
 
       def job_queues
         (native_job_queues + active_job_queues).group_by(&:first).transform_values { |pairs| pairs.map(&:last).sort }
@@ -159,10 +170,18 @@ module Wurk
         ::ActiveJob::Base.descendants.filter_map do |job|
           next unless job.name
 
-          # `queue_as` with a block resolves per instance.
-          queue = job.queue_name.respond_to?(:call) ? job.new.queue_name : job.queue_name
-          [queue.to_s, job.name]
+          queue = active_job_queue(job)
+          [queue.to_s, job.name] if queue
         end
+      end
+
+      # `queue_as` with a block resolves per instance, and may read the arguments
+      # an instance built here does not have.
+      def active_job_queue(job)
+        job.queue_name.respond_to?(:call) ? job.new.queue_name : job.queue_name
+      rescue StandardError => e
+        ::Kernel.warn "Wurk::Testing: not checking #{job.name}: its queue_as block raised #{e.class} without arguments"
+        nil
       end
 
       def queues_in_config(path)

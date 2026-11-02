@@ -228,7 +228,9 @@ machinery's own signals and are never reported. `install!` also adds them to
 `Sentry.configuration.excluded_exceptions`, because a `Rails.error` subscriber such
 as sentry-rails sees what crosses the reloader without going through this handler.
 
-Turn it off, or change the list:
+Turn it off, or change the list. A list you pass is matched by ancestry and taken at
+its word, so one containing `RedisClient::ConnectionError` (including
+`DEFAULT_FILTERED_ERROR_CLASSES + [MyError]`) also filters `READONLY` and `MASTERDOWN`:
 
 ```ruby
 Wurk.configure_server do |config|
