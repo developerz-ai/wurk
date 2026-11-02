@@ -145,7 +145,7 @@
       `${basePath()}/api/queues/${encodeURIComponent(props.name)}?page=${page() - 1}&count=${PAGE_SIZE}`,
     ),
 - entry: "Queue `?direction=asc` is unimplemented"
-  anchor: "frontend/src/pages/Queues.tsx#L91"
+  anchor: "frontend/src/pages/Queues.tsx#L90"
   fragment: |-
     const { sorted, sort, toggle } = useSort(() => query.data?.jobs ?? [], JOB_SORT);
 - entry: "Dashboard `?days=N` is unimplemented"

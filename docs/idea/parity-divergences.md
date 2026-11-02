@@ -1214,7 +1214,7 @@ that the gap is safe.
 [accepted pagination parameters](../../app/controllers/wurk/api/pagination.rb#L29-L35);
 [enumeration-order slicing](../../app/controllers/wurk/api/pagination.rb#L70-L95);
 [SPA queue request](../../frontend/src/pages/Queues.tsx#L59-L72); and
-[page-local sorting](../../frontend/src/pages/Queues.tsx#L91).
+[page-local sorting](../../frontend/src/pages/Queues.tsx#L90).
 
 ## Dashboard `?days=N` is unimplemented
 
