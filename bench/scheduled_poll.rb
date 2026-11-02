@@ -8,9 +8,9 @@ require_relative 'support'
 # Gate: >5% regression vs main blocks merge.
 #
 # Idle scheduler overhead (#13 done-when: poller adds <1% at idle). Each poll
-# sweep runs one atomic zpopbyscore per set (retry + schedule); when both are
-# empty the sweep is two EVALSHA round-trips that return nil and re-push
-# nothing. This measures that idle sweep — the work the per-process Poller
+# sweep runs one atomic claim per set (retry + schedule); when both are empty
+# the sweep is two EVALSHA round-trips that claim nothing and re-push nothing. This measures that idle
+# sweep — the work the per-process Poller
 # repeats on every wake when there's nothing due.
 #
 # Runs on a dedicated Redis logical DB (default 12) so this bench's DEL of

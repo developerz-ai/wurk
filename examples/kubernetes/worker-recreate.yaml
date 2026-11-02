@@ -1,0 +1,59 @@
+# One worker pod at a time, the old one fully gone before the new one starts.
+# Right for a small fleet, for long jobs that take the whole grace period, and
+# for a process that must not overlap its successor. Deploys pause processing
+# for the drain plus the boot.
+#
+# Long jobs: raise the shutdown timeout and the grace period together. A host
+# shutdown is a different budget: the kubelet's shutdownGracePeriod caps it when
+# set, often far below this value. Jobs still running then are killed and
+# reclaimed, so size long jobs to survive being re-run. See docs/deployment.md.
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: wurk-worker
+  labels: { app: wurk-worker }
+spec:
+  replicas: 1
+  strategy:
+    type: Recreate
+  selector:
+    matchLabels: { app: wurk-worker }
+  template:
+    metadata:
+      labels: { app: wurk-worker }
+    spec:
+      # 300 (-t) + 5 (swarm grace) + 5 (preStop) + slack.
+      terminationGracePeriodSeconds: 330
+      containers:
+        - name: worker
+          image: registry.example.com/myapp:1.4.2
+          command: ["bundle", "exec", "wurkswarm", "-r", "./config/environment.rb", "-t", "300"]
+          env:
+            - { name: RAILS_ENV, value: production }
+            - { name: WURK_COUNT, value: "2" }
+            - { name: WURK_DISABLED, value: "1" }
+            - { name: WURK_HEALTH_PORT, value: "7433" }
+            - name: REDIS_URL
+              valueFrom:
+                secretKeyRef: { name: wurk, key: redis-url }
+          ports:
+            - { name: health, containerPort: 7433 }
+          startupProbe:
+            httpGet: { path: /live, port: health }
+            periodSeconds: 2
+            failureThreshold: 30
+          livenessProbe:
+            httpGet: { path: /live, port: health }
+            periodSeconds: 10
+            failureThreshold: 3
+          readinessProbe:
+            httpGet: { path: /ready, port: health }
+            periodSeconds: 15
+            failureThreshold: 2
+          lifecycle:
+            preStop:
+              exec:
+                command: ["/bin/sh", "-c", "kill -TSTP 1 && sleep 5"]
+          resources:
+            requests: { cpu: "1", memory: 1Gi }
+            limits: { memory: 3Gi }

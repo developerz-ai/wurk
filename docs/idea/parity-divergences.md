@@ -1214,7 +1214,7 @@ that the gap is safe.
 [accepted pagination parameters](../../app/controllers/wurk/api/pagination.rb#L29-L35);
 [enumeration-order slicing](../../app/controllers/wurk/api/pagination.rb#L70-L95);
 [SPA queue request](../../frontend/src/pages/Queues.tsx#L59-L72); and
-[page-local sorting](../../frontend/src/pages/Queues.tsx#L90).
+[page-local sorting](../../frontend/src/pages/Queues.tsx#L91).
 
 ## Dashboard `?days=N` is unimplemented
 
@@ -1868,3 +1868,13 @@ deploy, where accepting it would quietly change how often a queue is served.
 **Why:** a lease on a local clock lets a host running behind cut another host's lease short, and one running ahead hold a released member out for as long as its skew. Cost: mocking the process clock forward no longer promotes a job (`Timecop.mock_process_clock = true` moved +2h). `travel_to` and plain Timecop don't touch that clock and are unaffected. Tests that need promotion should make the member due.
 
 **Anchor:** `lib/wurk/lua.rb`, `lib/wurk/scheduled.rb`.
+
+## `Wurk::Sentry` `report_after_attempts` differs from `report_after_job_retries`
+
+**Wurk:** reports attempt N and the terminal attempt, at most two events, rather than every attempt from N on.
+
+**Spec:** sentry-sidekiq is a separate gem; listed because the migration table compares them.
+
+**Why:** the point is an early first alert, without the volume of reporting each later attempt.
+
+**Anchor:** `lib/wurk/sentry.rb`.

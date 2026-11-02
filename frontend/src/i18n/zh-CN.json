@@ -228,6 +228,8 @@
     "available": "可用"
   },
   "queues": {
+    "no_consumer": "无消费者",
+    "no_consumer_hint": "没有存活的工作进程订阅此队列，因此其作业不会被执行。",
     "job_count": "{n} 个任务",
     "latency_label": "延迟"
   },

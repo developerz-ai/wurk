@@ -2,6 +2,7 @@
 
 require_relative '../wurk'
 require_relative 'sentry/error_handler'
+require_relative 'sentry/death_handler'
 require_relative 'sentry/middleware'
 
 module Wurk
@@ -27,6 +28,8 @@ module Wurk
   #
   # See docs/sentry.md.
   module Sentry
+    CONTROL_FLOW_ERRORS = %w[Wurk::JobRetry::Handled Wurk::Shutdown].freeze
+
     class << self
       # Registers the server middleware and the error handler. Idempotent:
       # `Chain#add` dedupes by class, and a previously-installed
@@ -41,10 +44,17 @@ module Wurk
       # @param filtered_error_classes [Array<Class>, nil] replaces the default
       #   filter list. Extend it with
       #   `Wurk::Sentry::ErrorHandler::DEFAULT_FILTERED_ERROR_CLASSES + [MyError]`.
+      # @param report_after_attempts [Integer, nil] also report the failure of
+      #   this attempt (1 is the first run), on top of the terminal one. By
+      #   default a job on the 25-retry schedule first alerts ~21 days in.
       # @return [Wurk::Configuration] the config, for chaining.
-      def install!(config = Wurk.configuration, filter_transport_errors: true, filtered_error_classes: nil)
-        config.server_middleware.add(Middleware)
-        install_error_handler(config, filter_transport_errors, filtered_error_classes)
+      def install!(config = Wurk.configuration, filter_transport_errors: true, filtered_error_classes: nil,
+                   report_after_attempts: nil)
+        validate_attempts!(report_after_attempts)
+        config.server_middleware.add(Middleware, report_after_attempts)
+        install_error_handler(config, filter_transport_errors, filtered_error_classes, report_after_attempts)
+        install_death_handler(config)
+        exclude_control_flow_errors
         config
       end
 
@@ -56,13 +66,40 @@ module Wurk
 
       private
 
-      def install_error_handler(config, filter, classes)
+      def validate_attempts!(attempts)
+        return if attempts.nil? || (attempts.is_a?(::Integer) && attempts.positive?)
+
+        raise ::ArgumentError, "report_after_attempts must be nil or a positive Integer (got #{attempts.inspect})"
+      end
+
+      def install_error_handler(config, filter, classes, attempts)
         handlers = config.error_handlers
         handlers.reject! { |handler| handler.is_a?(ErrorHandler) }
         handlers << ErrorHandler.new(
           filter_transport_errors: filter,
-          filtered_error_classes: classes
+          filtered_error_classes: classes,
+          report_after_attempts: attempts
         )
+      end
+
+      def install_death_handler(config)
+        handlers = config.death_handlers
+        handlers.reject! { |handler| handler.is_a?(DeathHandler) }
+        handlers << DeathHandler.new
+      end
+
+      # A subscriber on `Rails.error` (sentry-rails) captures whatever crosses
+      # the reloader, including the retry machinery's signals, without passing
+      # through the handler above. `Sentry.init` builds a new Configuration, so
+      # before it has run the only place to reach that one is its init hook.
+      def exclude_control_flow_errors
+        names = CONTROL_FLOW_ERRORS
+        if enabled? && ::Sentry.respond_to?(:configuration)
+          sdk_config = ::Sentry.configuration
+          sdk_config.excluded_exceptions |= names
+        elsif defined?(::Sentry::Configuration) && ::Sentry::Configuration.respond_to?(:after)
+          ::Sentry::Configuration.after(:initialize) { self.excluded_exceptions |= names }
+        end
       end
     end
   end

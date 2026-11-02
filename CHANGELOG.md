@@ -6,6 +6,13 @@ All notable changes to Wurk are recorded here. Format: [Keep a Changelog](https:
 
 ### Added
 
+- **Queues nothing listens to are now visible.** The leader logs one WARN an hour per non-empty queue with no live subscriber, after 5 minutes in that state, so a rolling restart stays quiet. New metric `wurk_queue_consumers{queue=}`, a "No consumer" badge on the dashboard Queues page, and `Wurk::Testing.unconsumed_job_queues(listened:|config_file:)` for a guard test. `GET /api/queues` gains a `consumers` field. No new Redis keys.
+- **`Wurk::Sentry.install!(config, report_after_attempts: N)`** also reports attempt N, on top of the terminal failure.
+- Dragonfly >= 1.34 moves to "works in production; tested in CI" in `docs/deployment.md`, with configuration requirements and durability limits (RPO is the snapshot cadence). New non-required `compat` CI leg on v1.34.0 with stock Lua settings.
+- New `examples/kubernetes/`: rolling and Recreate workers, Service + ServiceMonitor + NetworkPolicy, PrometheusRule with an `absent()` alert. A unit test keeps every metric in them in step with the exporter.
+- `docs/deployment.md`: `WURK_HEALTH_PORT`, Recreate variant, scraping and alerting, fiber servers, host-shutdown grace, corrected reclaim timing after `SIGKILL`.
+- The demo turns on the health listener by default.
+- **`mgr.load_hash`, `mgr.load_file` and `mgr.authoritative!` on `config.periodic`.** The loaders take sidekiq-cron's shape (`cron`, `class`, `queue`, `args`, `retry`, `tz`, `status`). `authoritative!` is opt-in and deletes every loop the block did not declare.
 - **`wurk health`: an exec-style liveness probe.** It boots no app and exits 0 when a process on this host has a heartbeat within `--window` seconds (default 60; `--min COUNT`). It reads `REDIS_URL` or `--redis-url`. A Redis it cannot reach passes unless `--strict`. `wurk --help` now lists it.
 - **`WURK_HEALTH_PORT` turns on the health listener from the environment**, so a deployment manifest can add a probe with no app change. Off by default. `config.health_check` wins when both are set. A non-numeric value raises at boot.
 - **Metrics `wurk_leader`, `wurk_fetch_errors_total`, `wurk_reaper_reclaimed_total`.** The two counters are per process, so under a swarm they sample the child that owns the port.
@@ -14,6 +21,8 @@ All notable changes to Wurk are recorded here. Format: [Keep a Changelog](https:
 
 ### Changed
 
+- **`Wurk::Sentry` now reports what the server answered with.** The default filter narrowed from `RedisClient::Error` to `RedisClient::ConnectionError` + `ConnectionPool::TimeoutError`. `MISCONF`, `OOM`, `READONLY`, `MASTERDOWN`, `NOPERM`, `WRONGPASS` and other `CommandError`s are reported, rate-limited per code per process (first, then one a minute, with `extra[:suppressed]`). **Upgrade note:** expect new Sentry events for these. Passing `filtered_error_classes:` still replaces the list.
+- **`Wurk::Sentry` reports deaths it could not predict.** `install!` adds a deduped death handler for poison-pill kills and `sidekiq_retry_in` answering `:kill` / `:discard`. Those were silent before. It also adds `Wurk::JobRetry::Handled` and `Wurk::Shutdown` to Sentry's `excluded_exceptions`, including a later `Sentry.init`.
 - **`wurkswarm` exits 1 when every slot has crash-looped for 10 minutes (`config.swarm_crash_exit_after`, default 600; `nil` disables).** A slot's streak is unbroken crashes within 60s of boot. It reports `Wurk::Swarm::CrashLoop` through `error_handlers` first. **Upgrade note:** a release that cannot boot now ends the container instead of leaving a Running pod that processes nothing. A crash from an unreachable store or one that cannot serve yet (`RedisClient::ConnectionError`, pool timeout, `LOADING`, `BUSY`, `CLUSTERDOWN`, `MASTERDOWN`, `READONLY`, `OOM` / `ERR Out of memory`, `MISCONF`) does not count, so an outage alone never ends the swarm. A bad `WURK_HEALTH_PORT` now fails the parent's boot. A swarm co-hosted in a web process only reports, once per window, and keeps running.
 - **Fetch-loop errors reach `error_handlers` at most once a minute per exception class per process**, with `context[:suppressed]`. Any handler benefits. The default handler's log volume for this path drops too. `wurk_fetch_errors_total` still counts every error.
 - **The swarm child no longer calls `ActiveRecord::Base.establish_connection`.** Rails' fork hook already rebuilds the pools from the parent's config. The bare call re-derived config from `DATABASE_URL`, silently switching a host's custom database or pool. **Upgrade note:** a host relying on the child reading `DATABASE_URL` afresh, which differs from what the parent established, now gets the parent's config.
@@ -28,6 +37,7 @@ All notable changes to Wurk are recorded here. Format: [Keep a Changelog](https:
 
 ### Fixed
 
+- **A limiter built at class load no longer exits the process when Redis is down, LOADING or OOM.** Registration is deferred to its next operation, with a WARN.
 - **A failed requeue can no longer lose a job on Dragonfly.** Dragonfly at `maxmemory` does not abort a `MULTI` or a script on a refused write, so `UnitOfWork#requeue`, `bulk_requeue` and the self-reconcile applied the `LREM`, were refused the `RPUSH`, and the job was in no list. The moves now push first. A failing job on a full Dragonfly stays in the private list. Affects 1.9.0 and earlier on Dragonfly; Redis and Valkey were safe.
 - **The reaper no longer loses jobs on a full Dragonfly.** Its `LMOVE` between shards could pop the job and drop the push: 5-6 of 24 orphans gone in one sweep on 1.34.0 and 2.0.2. It moves through a push-first script, with the same effect as `LMOVE RIGHT RIGHT`.
 - **The scheduler's burial of an unpromotable job, and a debounce replacement, no longer drop the job on a refused write.** Add first, then remove.

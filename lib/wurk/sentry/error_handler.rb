@@ -31,41 +31,82 @@ module Wurk
         Thread.current[SEEN_BY_MIDDLEWARE] = exception
       end
 
+      # The exception this thread last captured, for {DeathHandler}'s dedupe.
+      REPORTED_ON_THREAD = :wurk_sentry_reported_on_thread
+
+      def self.reported!(exception)
+        Thread.current[REPORTED_ON_THREAD] = exception
+      end
+
+      def self.reported?(exception)
+        Thread.current[REPORTED_ON_THREAD].equal?(exception)
+      end
+
       # Transport blips the pool already retried before re-raising. Wurk's
       # default handler logs these at WARN precisely because they are
-      # self-healing (`Configuration::REDIS_ERROR_CLASSES`), and the fetch loop
-      # runs them in a tight `sleep(1)` cycle: on one production Dragonfly
-      # backend a single Sentry issue accumulated ~136,000 events from fetch
-      # blips while the job pipeline was completely healthy. They stay in the
-      # logs; they just stop paging anyone.
-      DEFAULT_FILTERED_ERROR_CLASSES = Wurk::Configuration::REDIS_ERROR_CLASSES
+      # self-healing, and the fetch loop runs them in a tight `sleep(1)` cycle:
+      # on one production Dragonfly backend a single Sentry issue accumulated
+      # ~136,000 events from fetch blips while the job pipeline was completely
+      # healthy. They stay in the logs; they just stop paging anyone.
+      #
+      # Deliberately not `RedisClient::Error`: the server answering MISCONF, OOM,
+      # READONLY, NOPERM or WRONGPASS is not a blip. It heals only when someone
+      # acts, and every write fails until then, so those are reported
+      # (rate-limited below).
+      DEFAULT_FILTERED_ERROR_CLASSES = [RedisClient::ConnectionError, ConnectionPool::TimeoutError].freeze
 
       attr_reader :filtered_error_classes
 
-      def initialize(filter_transport_errors: true, filtered_error_classes: nil)
+      def initialize(filter_transport_errors: true, filtered_error_classes: nil, report_after_attempts: nil,
+                     coalescer: ErrorCoalescer.new)
         @filter_transport_errors = filter_transport_errors
+        @default_filter = filtered_error_classes.nil?
         @filtered_error_classes = (filtered_error_classes || DEFAULT_FILTERED_ERROR_CLASSES).to_a.freeze
+        @report_after_attempts = report_after_attempts
+        @coalescer = coalescer
       end
 
       def call(exception, context = {}, config = nil)
         return nil unless Wurk::Sentry.enabled?
-        return nil if exception.is_a?(Wurk::Shutdown)
+        return nil if control_flow?(exception)
         # Ahead of the transport filter: that filter quiets the infrastructure
         # loop, and a job that died on a Redis error is still a dead job.
         return capture_job_failure(exception, context, config) if job_failure?(context)
         return nil if filtered?(exception)
 
-        ::Sentry.capture_exception(exception, extra: extra_for(context), tags: tags_for(context))
+        extra = extra_for(context)
+        if exception.is_a?(RedisClient::HasCommand)
+          suppressed = @coalescer.admit(command_error_key(exception))
+          return nil unless suppressed
+
+          extra[:suppressed] = suppressed if suppressed.positive?
+        end
+        ::Sentry.capture_exception(exception, extra: extra, tags: tags_for(context))
         nil
       end
 
       def filtered?(exception)
         return false unless @filter_transport_errors
 
+        # READONLY and MASTERDOWN subclass ConnectionError, but the server did answer,
+        # so the default passes them. A list the host wrote is taken at its word.
+        return false if @default_filter && exception.is_a?(RedisClient::HasCommand)
+
         @filtered_error_classes.any? { |klass| exception.is_a?(klass) }
       end
 
       private
+
+      # The retry machinery's own signals. Rails.error subscribers can see them
+      # now that jobs run inside the reloader.
+      def control_flow?(exception)
+        exception.is_a?(Wurk::Shutdown) || exception.is_a?(Wurk::JobRetry::Handled)
+      end
+
+      # The class alone is too coarse: MISCONF and LOADING share CommandError.
+      def command_error_key(exception)
+        "#{exception.class}:#{exception.message[/\A\S+/]}"
+      end
 
       def job_failure?(context)
         context.is_a?(::Hash) && context[:context] == JOB_FAILURE && context[:job].is_a?(::Hash)
@@ -75,12 +116,13 @@ module Wurk
         return nil if claimed_by_middleware?(exception)
 
         job = context[:job]
-        return nil unless RetryPolicy.terminal?(job, nil, config)
+        return nil unless RetryPolicy.report?(job, nil, config, @report_after_attempts)
 
         ::Sentry.with_scope do |scope|
           JobContext.apply(scope, job, job['queue'])
           ::Sentry.capture_exception(exception, extra: extra_for(context), tags: tags_for(context))
         end
+        self.class.reported!(exception)
         nil
       end
 

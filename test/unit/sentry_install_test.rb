@@ -3,6 +3,7 @@
 require_relative '../test_helper'
 require_relative '../support/fake_sentry'
 require 'wurk/sentry'
+require 'open3'
 
 # Wurk::Sentry.install! — the one call a consumer makes, plus the guard that
 # keeps the whole integration inert when sentry-ruby is absent.
@@ -29,6 +30,32 @@ class SentryInstallTest < Wurk::Test::UnitCase
     Wurk::Sentry.install!(config)
 
     assert config.server_middleware.exists?(Wurk::Sentry::Middleware)
+  end
+
+  def test_registers_one_death_handler_however_often_it_is_called
+    2.times { Wurk::Sentry.install!(config) }
+
+    assert_equal 1, config.death_handlers.grep(Wurk::Sentry::DeathHandler).size
+  end
+
+  def test_rejects_a_bad_report_after_attempts
+    assert_raises(ArgumentError) { Wurk::Sentry.install!(config, report_after_attempts: 0) }
+  end
+
+  # The real SDK, in its own process: `Sentry.init` builds a new Configuration,
+  # so the exclusion has to survive an install! that ran first.
+  def test_excludes_control_flow_errors_from_a_later_sentry_init
+    script = <<~RUBY
+      require 'sentry-ruby'
+      require 'wurk/sentry'
+      Wurk::Sentry.install!(Wurk::Configuration.new)
+      Sentry.init { |c| c.dsn = 'http://k@localhost/1' }
+      print Wurk::Sentry::CONTROL_FLOW_ERRORS.all? { |n| Sentry.configuration.excluded_exceptions.include?(n) }
+    RUBY
+    out, status = Open3.capture2e({ 'COVERAGE' => nil }, 'bundle', 'exec', 'ruby', '-Ilib', '-e', script)
+
+    assert_predicate status, :success?, out
+    assert_equal 'true', out
   end
 
   def test_registers_one_error_handler
@@ -128,5 +155,25 @@ class SentryInstallTest < Wurk::Test::UnitCase
   def test_requiring_the_file_installs_nothing
     refute Wurk.configuration.server_middleware.exists?(Wurk::Sentry::Middleware),
            'require "wurk/sentry" must not register anything on its own'
+  end
+
+  # wurk.gemspec allows redis-client 0.22+, and HasCode only arrived later.
+  def test_reporting_a_command_error_does_not_need_redis_client_has_code
+    script = <<~RUBY
+      require 'wurk/sentry'
+      RedisClient.send(:remove_const, :HasCode) if RedisClient.const_defined?(:HasCode, false)
+      module Sentry
+        def self.initialized? = true
+        def self.capture_exception(ex, **) = print(ex.class)
+      end
+      handler = Wurk::Sentry::ErrorHandler.new
+      handler.call(RedisClient::CommandError.parse('MISCONF no'), {})
+      handler.call(RedisClient::ReadOnlyError.new('READONLY no'), {})
+      handler.call(RedisClient::CannotConnectError.new('down'), {})
+    RUBY
+    out, status = Open3.capture2e({ 'COVERAGE' => nil }, 'bundle', 'exec', 'ruby', '-Ilib', '-e', script)
+
+    assert_predicate status, :success?, out
+    assert_equal 'RedisClient::CommandErrorRedisClient::ReadOnlyError', out
   end
 end

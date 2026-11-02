@@ -15,11 +15,38 @@ class SentryErrorHandlerTest < Wurk::Test::UnitCase
   class Boom < StandardError; end
 
   def handler(**) = Wurk::Sentry::ErrorHandler.new(**)
+  def h_shared = (@h_shared ||= handler)
 
   def redis_error
     # RedisClient::Error subclasses carry the same self-healing semantics as
     # the base class; the filter must walk the ancestry, not match exactly.
     RedisClient::ConnectionError.new('Connection reset by peer')
+  end
+
+  # =====================================================================
+  # DeathHandler
+  # =====================================================================
+
+  def test_death_handler_reports_a_death_nothing_captured
+    Wurk::Sentry::DeathHandler.new.call({ 'class' => 'J', 'queue' => 'q' }, Boom.new('poisoned'))
+
+    assert_equal 1, FakeSentry.captured.size
+    assert_equal({ wurk_context: 'dead' }, FakeSentry.captured.first[:options][:tags])
+  end
+
+  def test_death_handler_skips_the_failure_already_captured_on_this_thread
+    error = Boom.new
+    Wurk::Sentry::ErrorHandler.reported!(error)
+
+    Wurk::Sentry::DeathHandler.new.call({ 'class' => 'J' }, error)
+
+    assert_empty FakeSentry.captured
+  end
+
+  def test_death_handler_ignores_an_operator_kill_with_no_exception
+    Wurk::Sentry::DeathHandler.new.call({ 'class' => 'J' }, nil)
+
+    assert_empty FakeSentry.captured
   end
 
   # =====================================================================
@@ -152,9 +179,63 @@ class SentryErrorHandlerTest < Wurk::Test::UnitCase
     assert_empty FakeSentry.captured
   end
 
-  def test_default_filter_list_is_the_configurations_redis_error_classes
-    assert_equal Wurk::Configuration::REDIS_ERROR_CLASSES,
+  def test_default_filter_list_is_the_connection_family_and_pool_timeouts
+    assert_equal [RedisClient::ConnectionError, ConnectionPool::TimeoutError],
                  Wurk::Sentry::ErrorHandler::DEFAULT_FILTERED_ERROR_CLASSES
+  end
+
+  # The server answering with an error is not a blip: MISCONF, OOM, READONLY,
+  # NOPERM and WRONGPASS heal only when someone acts, and every write fails until then.
+  def test_reports_redis_command_errors_rate_limited_per_code
+    %w[MISCONF OOM READONLY NOPERM WRONGPASS].each do |code|
+      2.times { h_shared.call(RedisClient::CommandError.parse("#{code} nope"), { context: 'Error fetching job' }) }
+    end
+
+    assert_equal 5, FakeSentry.captured.size, 'each code once per window'
+  end
+
+  def test_rate_limited_report_says_how_many_it_swallowed
+    now = 0
+    h = handler(coalescer: Wurk::ErrorCoalescer.new(window: 60, clock: -> { now }))
+    3.times { h.call(RedisClient::CommandError.parse('MISCONF no'), {}) }
+    now = 60
+    h.call(RedisClient::CommandError.parse('MISCONF no'), {})
+
+    assert_equal 2, FakeSentry.captured.last[:options][:extra][:suppressed]
+  end
+
+  def test_never_reports_the_retry_machinerys_control_flow
+    h_shared.call(Wurk::JobRetry::Skip.new, {})
+    h_shared.call(Wurk::JobRetry::Handled.new, {})
+
+    assert_empty FakeSentry.captured
+  end
+
+  def test_report_after_attempts_reports_that_attempt_of_a_job_failure
+    h = handler(report_after_attempts: 2)
+    context = { context: 'Job raised exception', job: { 'class' => 'J', 'retry' => 25 } }
+    h.call(Boom.new, context)
+
+    assert_empty FakeSentry.captured, 'attempt 1'
+    h.call(Boom.new, context.merge(job: { 'class' => 'J', 'retry' => 25, 'retry_count' => 0 }))
+
+    assert_equal 1, FakeSentry.captured.size, 'attempt 2'
+    h.call(Boom.new, context.merge(job: { 'class' => 'J', 'retry' => 25, 'retry_count' => 1 }))
+
+    assert_equal 1, FakeSentry.captured.size, 'attempt 3 is neither the asked attempt nor terminal'
+  end
+
+  # The default lets through what the server answered with. A list the host wrote
+  # means what it says, by ancestry, the contract `filtered_error_classes:` has.
+  def test_an_explicit_list_filters_read_only_and_master_down_by_ancestry
+    explicit = handler(filtered_error_classes: [RedisClient::ConnectionError])
+    explicit.call(RedisClient::ReadOnlyError.new('READONLY no'), {})
+    explicit.call(RedisClient::MasterDownError.new('MASTERDOWN no'), {})
+
+    assert_empty FakeSentry.captured
+    h_shared.call(RedisClient::ReadOnlyError.new('READONLY no'), {})
+
+    assert_equal 1, FakeSentry.captured.size, 'the default still reports it'
   end
 
   def test_exposes_its_filter_list

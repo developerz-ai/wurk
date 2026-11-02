@@ -228,6 +228,8 @@
     "available": "利用可能"
   },
   "queues": {
+    "no_consumer": "コンシューマーなし",
+    "no_consumer_hint": "このキューを購読している稼働中のプロセスがないため、ジョブは実行されません。",
     "job_count": "{n} 件のジョブ",
     "latency_label": "レイテンシ"
   },

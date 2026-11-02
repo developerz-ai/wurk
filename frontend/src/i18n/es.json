@@ -228,6 +228,8 @@
     "available": "disponible"
   },
   "queues": {
+    "no_consumer": "Sin consumidor",
+    "no_consumer_hint": "Ningún proceso de trabajo activo está suscrito a esta cola, así que sus trabajos no se ejecutan.",
     "job_count": "{n} trabajos",
     "latency_label": "latencia"
   },

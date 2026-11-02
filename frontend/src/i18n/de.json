@@ -228,6 +228,8 @@
     "available": "verfügbar"
   },
   "queues": {
+    "no_consumer": "Kein Konsument",
+    "no_consumer_hint": "Kein aktiver Worker-Prozess abonniert diese Warteschlange, ihre Jobs werden also nicht ausgeführt.",
     "job_count": "{n} Jobs",
     "latency_label": "Latenz"
   },

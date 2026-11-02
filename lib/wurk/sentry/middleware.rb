@@ -21,6 +21,10 @@ module Wurk
     class Middleware
       include Wurk::Middleware::ServerMiddleware
 
+      def initialize(report_after_attempts = nil)
+        @report_after_attempts = report_after_attempts
+      end
+
       def call(instance, job, queue, &block)
         return yield unless Wurk::Sentry.enabled?
 
@@ -48,7 +52,10 @@ module Wurk
         raise if caused_by_shutdown?(e)
 
         ErrorHandler.seen_by_middleware!(e)
-        ::Sentry.capture_exception(e) if RetryPolicy.terminal?(job, instance, config)
+        if RetryPolicy.report?(job, instance, config, @report_after_attempts)
+          ::Sentry.capture_exception(e)
+          ErrorHandler.reported!(e)
+        end
         raise
       end
 

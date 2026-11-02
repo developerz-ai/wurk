@@ -1,6 +1,7 @@
 # frozen_string_literal: true
 
 require_relative '../test_helper'
+require 'tempfile'
 
 # Wurk::Testing inline/fake/disable modes + the Sidekiq::Testing helper surface.
 # The mode flag and the in-memory Queues store are process-global, but the
@@ -293,5 +294,70 @@ class TestingModesTest < Wurk::Test::UnitCase
     Sidekiq::Testing.fake! { FakeJob.perform_async(5) }
 
     assert_equal 1, FakeJob.jobs.size
+  end
+
+  class ListenedJob
+    include Wurk::Job
+
+    sidekiq_options queue: 'listened-queue'
+  end
+
+  class StrandedJob
+    include Wurk::Job
+
+    sidekiq_options queue: 'stranded-queue'
+  end
+
+  def test_unconsumed_job_queues_names_jobs_on_queues_no_worker_fetches
+    found = Wurk::Testing.unconsumed_job_queues(listened: %w[listened-queue])
+
+    assert_equal ['TestingModesTest::StrandedJob'], found['stranded-queue']
+    refute found.key?('listened-queue')
+  end
+
+  def test_unconsumed_job_queues_reads_a_config_file_with_weights_and_capsules
+    Tempfile.create(['wurk', '.yml']) do |file|
+      file.write(<<~YAML)
+        :queues:
+          - [listened-queue, 2]
+        :capsules:
+          bulk:
+            :queues:
+              - stranded-queue
+      YAML
+      file.close
+      found = Wurk::Testing.unconsumed_job_queues(config_file: file.path)
+
+      refute found.key?('listened-queue')
+      refute found.key?('stranded-queue')
+    end
+  end
+
+  def test_unconsumed_job_queues_reads_weights_the_way_worker_config_does
+    [['listened-queue,2'], [['listened-queue', 2]], ['listened-queue, 2']].each do |listened|
+      refute Wurk::Testing.unconsumed_job_queues(listened: listened).key?('listened-queue'), listened.inspect
+    end
+  end
+
+  def test_unconsumed_job_queues_reads_comma_weights_from_a_config_file
+    Tempfile.create(['wurk', '.yml']) do |file|
+      file.write(":queues:\n  - listened-queue,2\n")
+      file.close
+
+      refute Wurk::Testing.unconsumed_job_queues(config_file: file.path).key?('listened-queue')
+    end
+  end
+
+  # A valid declaration must not crash the guard, and what it cannot check it says.
+  def test_unconsumed_job_queues_skips_and_names_an_argument_dependent_queue_block
+    require 'active_job'
+    Object.const_set(:ArgumentQueuedJob, Class.new(ActiveJob::Base) { queue_as { arguments.fetch(0) } })
+    found = nil
+    _, err = capture_io { found = Wurk::Testing.unconsumed_job_queues(listened: %w[listened-queue]) }
+
+    refute_includes found.values.flatten, 'ArgumentQueuedJob'
+    assert_match(/ArgumentQueuedJob/, err)
+  ensure
+    Object.send(:remove_const, :ArgumentQueuedJob)
   end
 end
