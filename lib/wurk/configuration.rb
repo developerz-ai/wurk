@@ -799,9 +799,8 @@ module Wurk
 
     # --- Configure blocks (Sidekiq.configure_server / _client) -----------
 
-    # The gate is evaluated per call: a skipped block is never yielded and
-    # never replayed, and an allowed one yields the configuration and returns
-    # the block's value. A skip reports itself once per gate per instance —
+    # The gate is evaluated per call: an allowed block yields the configuration
+    # and returns the block's value. A skip reports itself once per gate per instance —
     # the flags below decide only whether the skip is reported again, and
     # they live outside @options so a frozen configuration can still warn.
     #
