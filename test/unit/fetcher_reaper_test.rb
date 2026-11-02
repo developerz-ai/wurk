@@ -678,6 +678,31 @@ class FetcherReaperTest < Wurk::Test::UnitCase
     assert_nil reaper.instance_variable_get(:@thread)
   end
 
+  # A stop whose bounded join timed out leaves its straggler referenced, so a
+  # restart cannot start a second sweep loop alongside it. Once that straggler
+  # has wound down, though, the reference is a dead thread — and `start` used
+  # to hand that reference back and spawn nothing, so the reaper never swept
+  # again for the life of the process. Silently: `start` returned a thread as
+  # if it had worked, and `running?` said no.
+  def test_start_after_a_stop_whose_join_timed_out_spawns_a_fresh_loop
+    reaper = Wurk::Fetcher::Reaper.new(@config, interval: 60, lock_key: "#{Wurk::Fetcher::Reaper::LOCK_KEY}:#{@ns}-restart")
+    straggler = never_joins_thread
+    reaper.instance_variable_set(:@thread, straggler)
+
+    reaper.stop
+
+    assert_same straggler, reaper.instance_variable_get(:@thread), 'a straggler stays referenced'
+
+    straggler.die # it reached its next sweep boundary and wound down
+    thread = reaper.start
+
+    refute_same straggler, thread, 'a dead straggler is not a sweep loop'
+    assert_predicate thread, :alive?, 'the restart must spawn a live sweep loop'
+    assert_predicate reaper, :running?
+  ensure
+    reaper&.stop
+  end
+
   # A stop landing inside a sweep used to leave the loop working to the end of
   # the keyspace: stop() bounds its join at TimerLoop::JOIN_TIMEOUT and a
   # straggler sweep is deliberately left alive (still referenced, so a restart
@@ -747,6 +772,32 @@ class FetcherReaperTest < Wurk::Test::UnitCase
 
       ticks << calls
     end
+
+    reaper.start
+
+    assert_equal 2, ticks.take(timeout: 5), 'the sweep after the failing one still ran'
+    assert_predicate reaper, :running?
+  ensure
+    reaper.stop
+  end
+
+  # K1, one step further: the sweep's error REPORT must not be able to end the
+  # loop either. The report runs inside the tick's rescue, so a reporter that
+  # raises (a logger that cannot write, an error handler that raises) used to
+  # escape the raw loop thread and kill it — silently, since the thread sets
+  # report_on_exception = false — and orphans were then never reclaimed again
+  # for the life of the process.
+  def test_the_sweep_loop_survives_a_raising_error_reporter
+    reaper = Wurk::Fetcher::Reaper.new(@config, interval: 0.02, lock_key: "#{Wurk::Fetcher::Reaper::LOCK_KEY}:#{@ns}-report")
+    ticks = Mailbox.new
+    calls = 0
+    reaper.define_singleton_method(:reap) do
+      calls += 1
+      raise RedisClient::ConnectionError, 'redis went away' if calls == 1
+
+      ticks << calls
+    end
+    @config.define_singleton_method(:handle_exception) { |*| raise IOError, 'the log stream is closed' }
 
     reaper.start
 
@@ -1013,12 +1064,15 @@ class FetcherReaperTest < Wurk::Test::UnitCase
   # Stands in for a sweep still SCANning when the stop lands: `join` records the
   # timeout it was given and reports "not finished" (nil), exactly as a real
   # thread that outlives the bound does. Cheaper and more precise than waiting a
-  # real JOIN_TIMEOUT out.
+  # real JOIN_TIMEOUT out. `die` marks the straggler finished, the way the real
+  # thread ends once it reaches its next sweep boundary.
   def never_joins_thread
     thread = Object.new
     joins = []
+    alive = true
     thread.define_singleton_method(:joins) { joins }
-    thread.define_singleton_method(:alive?) { true }
+    thread.define_singleton_method(:alive?) { alive }
+    thread.define_singleton_method(:die) { alive = false }
     thread.define_singleton_method(:join) { |timeout| joins << timeout and nil }
     thread
   end
