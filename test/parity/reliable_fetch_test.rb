@@ -329,10 +329,8 @@ class ReliableFetchParityTest < Wurk::Test::UnitCase
     assert_equal 4, crashes, 'three recoveries, then the fourth orphaning kills'
   end
 
-  # super_fetch's recover_orphan script INCRs the counter and requeues while
-  # `count <= max_recoveries` (3), killing only when the count reaches 4: three
-  # recoveries, then the fourth orphaning dead-sets the job ("an orphan
-  # recovered ≥ 3 times … is killed").
+  # Three recoveries, then the fourth orphaning dead-sets the job ("an orphan
+  # recovered ≥ 3 times … is killed", Pro §3).
   def test_poison_pill_allows_three_recoveries_and_kills_on_the_fourth_orphaning
     job = push(@q, 'poison')
     3.times do |i|
