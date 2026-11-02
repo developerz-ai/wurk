@@ -452,6 +452,22 @@ class ScheduledPollerTest < Wurk::Test::UnitCase
     end
   end
 
+  # The next claim's window cannot pass the server's time, so a score taken from a
+  # clock running ahead would keep the job out for as long as the clock is ahead.
+  def test_a_released_member_is_due_at_once_even_from_a_host_whose_clock_runs_ahead
+    schedule_job(set: @schedule, at: Time.now.to_f - 5)
+    capture_errors
+    enq = enq_with_push { |_| raise RedisClient::CannotConnectError, 'blip' }
+    enq.singleton_class.prepend(Module.new { def real_time = super + 3600 })
+
+    enq.enqueue_jobs([@schedule])
+
+    pushed = []
+    enq_with_push { |job| pushed << job }.enqueue_jobs([@schedule])
+
+    assert_equal 1, pushed.size
+  end
+
   # A host far behind must not cut a lease short, and one far ahead must not take
   # another host's lease for due.
   def test_the_lease_runs_on_the_server_clock
@@ -463,6 +479,13 @@ class ScheduledPollerTest < Wurk::Test::UnitCase
       assert_empty claim.call(Time.now.to_f + 3600), 'a clock an hour ahead must not see it as due'
       assert_operator c.call('ZSCORE', @schedule, c.call('ZRANGE', @schedule, 0, 0).first).to_f, :>, Time.now.to_f + 30
     end
+  end
+
+  # The spec's signature is `initialize(container)`, and a capsule is one.
+  def test_a_capsule_is_a_valid_container
+    capsule = Wurk::Capsule.new('t', @config)
+
+    assert_equal Wurk::Scheduled::Enq::CLAIM_LEASE, Wurk::Scheduled::Enq.new(capsule).instance_variable_get(:@lease)
   end
 
   # A starved local pool says nothing about the payload.

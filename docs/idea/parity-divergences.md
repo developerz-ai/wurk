@@ -1839,16 +1839,6 @@ deploy, where accepting it would quietly change how often a queue is served.
 
 **Anchor:** `lib/wurk/swarm.rb`.
 
-## `Wurk::Sentry` `report_after_attempts` differs from `report_after_job_retries`
-
-**Wurk:** reports attempt N and the terminal attempt, at most two events, rather than every attempt from N on.
-
-**Spec:** sentry-sidekiq is a separate gem; listed because the migration table compares them.
-
-**Why:** the point is an early first alert, without the volume of reporting each later attempt.
-
-**Anchor:** `lib/wurk/sentry.rb`.
-
 ## One reaper sweep per interval covers every list; there is no hourly full sweep
 
 **Wurk:** every 60s one process, under a lock of 48s, runs one `SCAN` and acts on every private list, whichever queues it serves.
@@ -1868,3 +1858,13 @@ deploy, where accepting it would quietly change how often a queue is served.
 **Why:** `BLMOVE` has no script form, so a client-side fix means polling on the hot path for every server or a backend fork, and a keyspace hash tag would change the key schema. Accepted and documented: keep a Dragonfly job store below `maxmemory`.
 
 **Anchor:** `lib/wurk/fetcher/reliable.rb`, `docs/reliability.md`.
+
+## The scheduler's claim window follows the server clock
+
+**Wurk:** `scheduled_claim` takes the earlier of the caller's `now` and the server's `TIME` as its window, and releases score from the server's clock too.
+
+**Spec:** free §16 passes `now` from the client.
+
+**Why:** a lease on a local clock lets a host running behind cut another host's lease short, and one running ahead hold a released member out for as long as its skew. Cost: mocking the process clock forward no longer promotes a job (`Timecop.mock_process_clock = true` moved +2h). `travel_to` and plain Timecop don't touch that clock and are unaffected. Tests that need promotion should make the member due.
+
+**Anchor:** `lib/wurk/lua.rb`, `lib/wurk/scheduled.rb`.

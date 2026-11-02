@@ -213,8 +213,9 @@ module Wurk
 
       args = work_snapshot.flat_map { |tid, hash| [tid.to_s, Wurk.dump_json(hash)] }
       # In a transaction because UNLINK is allowed at maxmemory and HSET is not: on
-      # its own that erased the mirror of jobs still running. A refused queued
-      # command aborts the EXEC, so the old mirror stays.
+      # its own that erased the mirror of jobs still running. On Redis and Valkey a
+      # refused queued command aborts the EXEC, so the old mirror stays. Dragonfly
+      # does not abort, so there the mirror is still erased, as it always was.
       pipe.call('MULTI')
       pipe.call('UNLINK', work_key)
       pipe.call('HSET', work_key, *args)

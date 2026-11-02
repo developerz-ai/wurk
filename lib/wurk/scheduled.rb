@@ -44,6 +44,7 @@ module Wurk
       # Seconds until a claimed member is due again. Far above a healthy batch,
       # which takes milliseconds, so a second poller does not re-promote it.
       CLAIM_LEASE = 60
+      RELEASE_BACKDATE = 1.0
 
       TRANSIENT_ERRORS = [RedisClient::Error, ConnectionPool::TimeoutError].freeze
       # The whole store is refusing, not this job. A plain CommandError with one of
@@ -55,7 +56,7 @@ module Wurk
         @config = container
         @done = false
         @client = Client.new(config: container)
-        @lease = container[:scheduled_claim_lease] || CLAIM_LEASE
+        @lease = (container[:scheduled_claim_lease] if container.respond_to?(:[])) || CLAIM_LEASE
       end
 
       # `now` is captured once per set so a slow loop on one ZSET can't keep
@@ -154,12 +155,19 @@ module Wurk
 
       # Hands unpushed members straight back to the next poll. Best effort: if this
       # fails too, the lease brings them back.
+      #
+      # Scored from the server's clock and backdated, because the claim's window can
+      # never pass the server's time. A local-clock score would stay undue for as long
+      # as this host runs ahead, and Dragonfly's script clock lags its TIME command by
+      # about a millisecond even with none. Ending the drain is what stops this
+      # process re-claiming them straight away.
       def release(sset, members)
         return if members.empty?
 
-        now = real_time.to_s
         @config.redis(idempotent: true) do |conn|
-          conn.call('ZADD', sset, 'XX', *members.flat_map { |member| [now, member] })
+          seconds, micros = conn.call('TIME')
+          score = (seconds.to_i + (micros.to_i / 1_000_000.0) - RELEASE_BACKDATE).to_s
+          conn.call('ZADD', sset, 'XX', *members.flat_map { |member| [score, member] })
         end
       rescue *TRANSIENT_ERRORS => e
         handle_exception(e, { context: 'scheduler_restore', set: sset })

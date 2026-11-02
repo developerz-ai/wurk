@@ -235,7 +235,7 @@ soon as the replacement boots.
 |---|---|---|
 | A swarm child | A child of the same swarm, same nonce: the OS answers | **1.2s** |
 | A standalone `wurk` (a pod restart) | A new process, new nonce: only the heartbeat can answer, and the boot sweep is too early for it | **about 91s** |
-| A whole host, for good | Nothing, a survivor elsewhere sweeps | **90-141s** (bound: 80-150s) |
+| A whole host, for good | Nothing, a survivor elsewhere sweeps | **90-141s** (bound: 80-150s; a sweeper that dies during its 30s grace restarts the clock, up to about 240s) |
 
 A restart does not shorten the last two: nothing can tell a dead owner from a live one
 until its heartbeat lapses.
