@@ -1,19 +1,18 @@
 ---
 - entry: 'Quiet does not step the leader down; full shutdown does'
-  anchor: lib/wurk/launcher.rb#L119-L129
+  anchor: lib/wurk/launcher.rb#L121-L131
   fragment: |-
     @managers.each(&:quiet)
     @poller&.terminate
     # The cron poller is intentionally NOT terminated here: a TSTP-quieted
 
 - entry: 'Quiet does not step the leader down; full shutdown does'
-  anchor: lib/wurk/launcher.rb#L329-L334
+  anchor: lib/wurk/launcher.rb#L336-L348
   fragment: |-
-    teardown_step('reaper') { @reaper&.stop }
     teardown_step('leader') { @leader&.stop }
 
 - entry: 'Quiet does not step the leader down; full shutdown does'
-  anchor: lib/wurk/leader.rb#L166-L176
+  anchor: lib/wurk/leader.rb#L171-L181
   fragment: |-
     return unless thread.nil? || thread.join(TimerLoop::JOIN_TIMEOUT)
     @mutex.synchronize { @thread = nil }
@@ -48,7 +47,7 @@
     @options[:redis_error_handlers] << block
 
 - entry: 'DEFAULTS adds `:redis_error_handlers`'
-  anchor: lib/wurk/configuration.rb#L1206-L1207
+  anchor: lib/wurk/configuration.rb#L1222-L1223
   fragment: |-
     def dispatch_redis_error(info)
     redis_error_handlers.each do |handler|
@@ -127,7 +126,7 @@
     @token = redis_call { |c| c.call('INCR', TOKEN_KEY) }
 
 - entry: '`Leader#token` exposes a fencing token Ent deliberately omits'
-  anchor: lib/wurk/leader.rb#L281-L286
+  anchor: lib/wurk/leader.rb#L285-L290
   fragment: |-
     acquire
     rescue StandardError => e

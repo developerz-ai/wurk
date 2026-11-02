@@ -640,13 +640,13 @@ resetting it.
 **Wurk:** quiet is cluster-global and one-way, signalled with `TSTP`
 (`lib/wurk/swarm.rb:224-231`, `lib/wurk/api/swarm.rb:37`
 `QUIET_SIGNAL = 'TSTP'`, `lib/wurk/cli.rb:66-68`). `Launcher#quiet`
-(`lib/wurk/launcher.rb:119-129`) quiets every manager and the scheduled
+(`lib/wurk/launcher.rb:121-131`) quiets every manager and the scheduled
 poller, deliberately leaves the cron poller running, and never touches
 `@leader` — the renewal loop keeps renewing the lock every 15s while held
-(`lib/wurk/leader.rb:166-176`) straight through a quiet. Leadership ends only
+(`lib/wurk/leader.rb:171-181`) straight through a quiet. Leadership ends only
 on full shutdown: `Launcher#stop` → `release_components` →
-`stop_periodic_components` (`lib/wurk/launcher.rb:329-334`, `@leader&.stop`)
-→ `Leader#stop` (`lib/wurk/leader.rb:166-176`), which joins the campaign
+`redis_teardown_steps` (`lib/wurk/launcher.rb:336-348`, `@leader&.stop`)
+→ `Leader#stop` (`lib/wurk/leader.rb:171-181`), which joins the campaign
 thread and then CAS-releases `dear-leader`.
 
 **Spec:** Ent §6.2 steps the leader down immediately on USR1 quiet (since
@@ -661,13 +661,13 @@ leader still enqueues), which enqueues only under the single cluster leader —
 keeping the renewal makes `leader?` stay truthful on the quieted process
 instead of evicting and re-campaigning through every quiet. The failure Ent's
 2.2.3 change guards is covered anyway: a leader that cannot renew steps down
-on campaign loss or campaign error (`lib/wurk/leader.rb:166-176,281-286`). Full
+on campaign loss or campaign error (`lib/wurk/leader.rb:171-181,281-286`). Full
 shutdown releases the lock deliberately, periodic loops stopped before the
 CAS release, rather than waiting out the TTL.
 
-**Anchor:** `lib/wurk/launcher.rb:119-129` (`#quiet`),
-`lib/wurk/launcher.rb:329-334` (`#stop_periodic_components`),
-`lib/wurk/leader.rb:166-176` (`#stop` join + release); pinned by
+**Anchor:** `lib/wurk/launcher.rb:121-131` (`#quiet`),
+`lib/wurk/launcher.rb:336-348` (`#redis_teardown_steps`),
+`lib/wurk/leader.rb:171-181` (`#stop` join + release); pinned by
 `test/unit/launcher_test.rb` (`test_quiet_does_not_terminate_periodic_poller`,
 `test_quiet_does_not_stop_the_cluster_leader`,
 `test_stop_stops_the_cluster_leader`).
@@ -1407,7 +1407,7 @@ mirrored Sidekiq prefix of `@options` stays byte-for-byte intact, so gems
 introspecting the config hash see no change.
 
 **Anchor:** `lib/wurk/configuration.rb:52`, `lib/wurk/configuration.rb:369`,
-`lib/wurk/configuration.rb:1206-1207`; free DEFAULTS
+`lib/wurk/configuration.rb:1222-1223`; free DEFAULTS
 ([free §4.1 DEFAULTS — handler keys](../target/sidekiq-free.md#41-defaults)).
 
 ## Pool sizing: three disjoint pools per process
@@ -1568,7 +1568,7 @@ unchanged, and the readers are new methods.
 and stores the result on `#token` (`lib/wurk/leader.rb:101`, key constant at
 `lib/wurk/leader.rb:35`), so a new leader's token is strictly greater than
 every prior leader's; a re-gain after a step-down pulls a fresh token and
-re-fires `:leader` (`lib/wurk/leader.rb:281-286`).
+re-fires `:leader` (`lib/wurk/leader.rb:285-290`).
 
 **Spec:** Ent §6 — the lock is best-effort coordination, not a strict mutex,
 and "*no fencing tokens exposed to the user*"
@@ -1582,7 +1582,7 @@ transitions only, never on renewals, so behavior that worked before is
 unchanged.
 
 **Anchor:** `lib/wurk/leader.rb:35`, `lib/wurk/leader.rb:101`,
-`lib/wurk/leader.rb:281-286`; Ent §6 ([Ent §6 Leader Election — best-effort lock, no user fencing token](../target/sidekiq-ent.md#6-leader-election)).
+`lib/wurk/leader.rb:285-290`; Ent §6 ([Ent §6 Leader Election — best-effort lock, no user fencing token](../target/sidekiq-ent.md#6-leader-election)).
 
 ## Standalone `Sidekiq::Web.call` routes extensions only
 
@@ -1688,7 +1688,7 @@ an instance method on a duck-type handle that returns
 dashboard pool is the configuration-owned `config.web_redis_pool` reader
 (`lib/wurk/configuration.rb:332-334`): read-only, with no `web_redis_pool=`
 setter, so Wurk builds the pool itself from the same `config.redis` options the
-worker pools use (`lib/wurk/configuration.rb:1194-1198`) and sizes it with
+worker pools use (`lib/wurk/configuration.rb:1210-1214`) and sizes it with
 `config.web_pool_size` (`lib/wurk/configuration.rb:310-317`, default 5). Every
 dashboard request runs on that pool.
 
@@ -1726,7 +1726,7 @@ shard-per-mount deployment has no Wurk equivalent.
 [`PoolScope::Handle#redis_pool`](../../lib/wurk/web/pool_scope.rb#L39-L43);
 [`config.web_pool_size`](../../lib/wurk/configuration.rb#L310-L317),
 [`config.web_redis_pool`](../../lib/wurk/configuration.rb#L332-L334) and
-[`build_redis_pool`](../../lib/wurk/configuration.rb#L1194-L1198);
+[`build_redis_pool`](../../lib/wurk/configuration.rb#L1210-L1214);
 [parent sockets closed before fork](../../lib/wurk/swarm.rb#L356-L360) and
 [child pools rebuilt after fork](../../lib/wurk/swarm/child_boot.rb#L155-L156);
 free §25.1 ([free §25.1 Entrypoint](../target/sidekiq-free.md#251-entrypoint))
