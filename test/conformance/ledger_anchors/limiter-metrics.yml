@@ -141,6 +141,6 @@
     max_iteration_runtime: nil,
 
 - entry: '`:max_iteration_runtime` is accepted but not consumed'
-  anchor: docs/configuration.md#L148
+  anchor: docs/configuration.md#L151
   fragment: |-
     | `:max_iteration_runtime` | Integer / nil | `nil` | Accepted for drop-in compatibility; **not consumed by Wurk** |

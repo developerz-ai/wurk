@@ -48,7 +48,7 @@
     @options[:redis_error_handlers] << block
 
 - entry: 'DEFAULTS adds `:redis_error_handlers`'
-  anchor: lib/wurk/configuration.rb#L1153-L1154
+  anchor: lib/wurk/configuration.rb#L1152-L1153
   fragment: |-
     def dispatch_redis_error(info)
     redis_error_handlers.each do |handler|

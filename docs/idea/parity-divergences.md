@@ -1328,7 +1328,7 @@ legitimate iterations mid-run. An `IterableJob` that must be bounded today
 needs an explicit deadline check in `each_iteration` (or `:timeout`); the gap
 should close only when upstream pins what the key promises.
 
-**Anchor:** `lib/wurk/configuration.rb:31`; `docs/configuration.md:148`; free
+**Anchor:** `lib/wurk/configuration.rb:31`; `docs/configuration.md:151`; free
 DEFAULTS ([free §4.1 DEFAULTS — `max_iteration_runtime`](../target/sidekiq-free.md#41-defaults)) and §6.4
 ([free §6.4 `Sidekiq::IterableJob`](../target/sidekiq-free.md#64-sidekiqiterablejob)).
 
@@ -1407,7 +1407,7 @@ mirrored Sidekiq prefix of `@options` stays byte-for-byte intact, so gems
 introspecting the config hash see no change.
 
 **Anchor:** `lib/wurk/configuration.rb:50`, `lib/wurk/configuration.rb:355`,
-`lib/wurk/configuration.rb:1153-1154`; free DEFAULTS
+`lib/wurk/configuration.rb:1152-1153`; free DEFAULTS
 ([free §4.1 DEFAULTS — handler keys](../target/sidekiq-free.md#41-defaults)).
 
 ## Pool sizing: three disjoint pools per process
