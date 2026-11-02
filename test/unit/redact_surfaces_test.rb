@@ -79,7 +79,108 @@ class RedactSurfacesTest < Wurk::Test::UnitCase
     assert_equal Wurk::Redact::FAILED, Wurk::Queue.new(@queue).first.display_args
   end
 
+  # A dashboard retry whose restore is refused leaves the log holding the last
+  # copy of the job, and a host's redaction still applies to it.
+  def test_a_lost_entrys_log_line_redacts_the_args_and_keeps_the_job_identifiable
+    payload = job
+    line = lost_entry_log_line(payload)
+
+    refute_includes line, 's3cret'
+    assert_includes line, payload['jid']
+    assert_includes line, 'RedactJob'
+    assert_includes line, 'user-1'
+  end
+
+  def test_a_lost_entrys_log_line_fails_closed_when_the_hook_raises
+    Wurk.configuration.instance_variable_set(:@options, @original.merge(redact_args: ->(_) { raise 'boom' }))
+
+    refute_includes lost_entry_log_line(job), 's3cret'
+  end
+
+  def test_a_lost_entrys_log_line_is_the_whole_payload_without_a_hook
+    Wurk.configuration.instance_variable_set(:@options, @original)
+    payload = job
+
+    assert_includes lost_entry_log_line(payload), Wurk.dump_json(payload)
+  end
+
+  # An unparseable or failing job reaches the handlers as its raw payload, under
+  # `jobstr`, not `job`: the one path the hook was never applied to.
+  def test_jobstr_context_is_redacted_for_error_handlers_and_the_log
+    seen, log = report(jobstr_for('s3cret'))
+
+    assert_equal ['user-1', '[FILTERED]'], ::JSON.parse(seen[:jobstr])['args']
+    assert_equal %w[abc Secretive], ::JSON.parse(seen[:jobstr]).values_at('jid', 'class'), 'a handler still needs these'
+    refute_includes seen.to_s, 's3cret'
+    refute_includes log, 's3cret'
+  end
+
+  def test_a_raising_hook_fails_closed_on_jobstr
+    seen, log = report(jobstr_for('s3cret'), hook: ->(_job) { raise 'bad hook' })
+
+    assert_equal Wurk::Redact::FAILED, ::JSON.parse(seen[:jobstr])['args']
+    refute_includes seen.to_s + log, 's3cret'
+  end
+
+  def test_an_unparseable_jobstr_cannot_leak
+    ['{"args":["s3cret"', '["s3cret"]', "s3cret\xFF"].each do |raw|
+      seen, log = report(raw)
+
+      refute_includes seen.to_s + log, 's3cret'
+      assert seen.key?(:jobstr), 'a handler still learns there was a payload'
+    end
+  end
+
+  def test_jobstr_is_untouched_without_a_hook
+    raw = jobstr_for('s3cret')
+    seen, = report(raw, hook: nil)
+
+    assert_equal raw, seen[:jobstr]
+  end
+
+  # Host handlers have always received the real `job`; only the two reporters
+  # that print the context redact it.
+  def test_the_job_context_path_is_unchanged
+    job = { 'jid' => 'abc', 'args' => ['s3cret'] }
+    seen, log = report(nil, ctx: { job: job })
+
+    assert_equal job, seen[:job]
+    refute_includes log, 's3cret'
+  end
+
   private
+
+  def jobstr_for(secret)
+    ::JSON.generate('jid' => 'abc', 'class' => 'Secretive', 'queue' => 'q',
+                    'args' => ['user-1', { 'password' => secret }])
+  end
+
+  # What a host handler and the default logging handler each receive.
+  def report(raw, hook: REDACTOR, ctx: { jobstr: raw })
+    out = StringIO.new
+    seen = nil
+    config = Wurk::Configuration.new(redact_args: hook)
+    config.logger = ::Logger.new(out)
+    config.logger.level = ::Logger::DEBUG
+    config.error_handlers << ->(_ex, context, _cfg = nil) { seen = context }
+    config.handle_exception(RuntimeError.new('Internal exception!'), { context: 'Internal exception!' }.merge(ctx))
+    [seen, out.string]
+  end
+
+  # A parent key of the wrong type refuses the restoring ZADD on any server.
+  def lost_entry_log_line(payload)
+    set = "redact-set-#{@queue}"
+    Wurk.redis { |c| c.call('SET', set, 'not a sorted set') }
+    log = StringIO.new
+    original = Wurk.configuration.logger
+    Wurk.configuration.logger = ::Logger.new(log)
+    entry = Wurk::SortedEntry.new(Wurk::RetrySet.new(set), 100, Wurk.dump_json(payload))
+    entry.send(:restore_after_failed_push)
+    log.string
+  ensure
+    Wurk.configuration.logger = original
+    Wurk.redis { |c| c.call('DEL', set) }
+  end
 
   def job(overrides = {})
     { 'class' => 'RedactJob', 'queue' => @queue, 'jid' => SecureRandom.hex(12),

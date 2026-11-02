@@ -125,7 +125,15 @@ module Wurk
         Fetcher::OomDrain.zadd(conn, e, @parent.name, @score, value)
       end
     rescue StandardError => e
-      Wurk.logger.error("#{@parent.name} entry lost, ZADD refused (#{e.class}): #{value}")
+      Wurk.logger.error("#{@parent.name} entry lost, ZADD refused (#{e.class}): #{loggable_payload}")
+    end
+
+    # The last copy of the job, so it is logged whole, short of what the host's
+    # redact_args hides.
+    def loggable_payload
+      return value unless Redact.hook
+
+      Wurk.dump_json(item.merge('args' => display_args))
     end
   end
 end

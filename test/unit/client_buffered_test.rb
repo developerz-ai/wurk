@@ -431,6 +431,7 @@ class ClientBufferedTest < Wurk::Test::UnitCase
     release << :done
 
     assert_includes log, 'could not reach Redis before exit'
+    assert(wait_for { Wurk::Client::Buffered.send(:undelivered_count).zero? }, 'the parked replay never settled')
   ensure
     release&.close
   end
@@ -445,24 +446,74 @@ class ClientBufferedTest < Wurk::Test::UnitCase
   # The regression this exists for: pushes between Redis returning and the next
   # probe, then a normal exit. They were delivered before the circuit existed.
   def test_a_process_exiting_inside_the_probe_window_delivers_its_backlog
-    url = Wurk::Test.redis_url
-    queue = @queue
-    pid = fork do
-      config = Wurk.configuration
-      config.redis = { url: url }
-      config.reset_redis_pools!
-      client = Wurk::Client.new(config: config)
-      Wurk::Client::Buffered.install!
-      Wurk::Client::Buffered.circuit.trip(config.redis_pool)
-      5.times { |i| client.push(base_item('args' => [i], 'queue' => queue)) }
+    script = <<~RUBY
+      require 'wurk'
+      Wurk.configuration.logger = Logger.new(IO::NULL)
+      Wurk::Client.reliable_push!
+      client = Wurk::Client.new
+      Wurk::Client::Buffered.circuit.trip(Wurk.configuration.redis_pool)
+      5.times { |i| client.push('class' => 'ExitJob', 'args' => [i], 'queue' => ARGV.first) }
       exit!(3) unless Wurk::Client::Buffered.buffer_size == 5
-      Wurk::Client::Buffered.flush
-      exit!(Wurk::Client::Buffered.buffer_size.zero? ? 0 : 4)
-    end
-    _, status = Process.wait2(pid)
+    RUBY
+    lib = File.expand_path('../../lib', __dir__)
+    env = { 'REDIS_URL' => Wurk::Test.redis_url, 'COVERAGE' => nil }
 
-    assert_equal 0, status.exitstatus
+    assert system(env, RbConfig.ruby, '-I', lib, '-e', script, @queue), 'the subprocess must exit cleanly'
     assert_equal [[0], [1], [2], [3], [4]], queued_args.reverse
+  end
+
+  # Another thread (the drainer) has taken the last entry and is still waiting on
+  # its connection: the buffer reads empty, but the job is not in Redis yet.
+  def test_flush_waits_for_a_replay_already_in_flight
+    gate = Queue.new
+    _client, drainer = client_with_a_replay_in_flight(gate)
+    Thread.new do
+      sleep 0.1
+      gate << :go
+    end
+
+    assert_equal 0, Wurk::Client::Buffered.flush
+
+    assert_equal [['in-flight']], queued_args
+    drainer.join
+  ensure
+    gate&.close
+  end
+
+  # That in-flight replay failing puts the job back, and flush still has budget.
+  def test_flush_retries_a_job_an_in_flight_replay_handed_back
+    gate = Queue.new
+    client, drainer = client_with_a_replay_in_flight(gate)
+    pool = client.send(:pool)
+    Thread.new do
+      sleep 0.1
+      pool.fail!
+      gate << :go
+      drainer.join
+      pool.recover!
+    end
+
+    assert_equal 0, Wurk::Client::Buffered.flush
+
+    assert_equal [['in-flight']], queued_args
+  ensure
+    gate&.close
+  end
+
+  def test_flush_gives_up_on_an_in_flight_replay_at_its_bound
+    gate = Queue.new
+    _client, drainer = client_with_a_replay_in_flight(gate)
+    started = monotonic
+    log = capture_wurk_log do
+      assert_equal 1, Wurk::Client::Buffered.flush(timeout: 0.05)
+    end
+
+    assert_operator monotonic - started, :<, 1
+    assert_includes log, 'could not reach Redis before exit'
+    gate << :go
+    drainer.join
+  ensure
+    gate&.close
   end
 
   def test_unbuffered_pushes_raise_rather_than_buffer
@@ -940,6 +991,20 @@ class ClientBufferedTest < Wurk::Test::UnitCase
 
   def monotonic = ::Process.clock_gettime(::Process::CLOCK_MONOTONIC)
 
+  # A replay on another thread, parked between taking its entry and reaching Redis
+  # until `gate` opens. Returns the client and that thread.
+  def client_with_a_replay_in_flight(gate)
+    client, pool = outage_client
+    client.push(base_item('args' => ['in-flight']))
+    Wurk::Client.reliable_push_drainer_stop!
+    pool.recover!
+    pool.park_next_on(gate)
+    replaying = Thread.new { Wurk::Client::Buffered.drain!(client, probe: true) }
+
+    assert(wait_for { Wurk::Client::Buffered.buffer_size.zero? }, 'the replay never took its entry')
+    [client, replaying]
+  end
+
   def wait_for(timeout: 5)
     deadline = monotonic + timeout
     until yield
@@ -1030,9 +1095,13 @@ class ClientBufferedTest < Wurk::Test::UnitCase
     def recover! = @mode = :up
     def explode! = @mode = :broken
     def refuse! = @mode = :refusing
+    def park_next_on(gate) = @gate = gate
 
     def with(&)
       @attempts += 1
+      gate = @gate
+      @gate = nil
+      gate&.pop
       case @mode
       when :down then yield FailingConn.new
       when :broken then raise 'not a connection error'

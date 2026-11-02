@@ -800,6 +800,7 @@ module Wurk
     attr_writer :logger
 
     def handle_exception(ex, ctx = {})
+      ctx = redact_jobstr(ctx)
       if error_handlers.empty?
         logger.error("#{redacted_context(ctx)} #{ex.class}: #{ex.message}")
       else
@@ -829,7 +830,8 @@ module Wurk
     # hook, for the two reporters that print or tag the whole context: the
     # fallback log line and the default ERROR_HANDLER (whose Wurk::Context a
     # JSON log formatter emits). Host-registered error handlers still receive
-    # the real ctx — they are the host's own code.
+    # the real `job` — they are the host's own code (`jobstr` is another matter:
+    # see #redact_jobstr).
     def redacted_context(ctx)
       hook = @options[:redact_args]
       job = ctx.is_a?(Hash) ? ctx[:job] : nil
@@ -838,6 +840,20 @@ module Wurk
       require_relative 'redact'
       ctx.merge(job: job.merge('args' => Wurk::Redact.args(job, hook)))
     end
+
+    # The raw payload a job that failed to parse or dispatch is reported with. Unlike
+    # `job`, this reaches host handlers scrubbed too: it is a string nobody expects
+    # to carry the args, so handlers forward it to log aggregators and trackers as
+    # is. What it cannot be parsed from cannot be scrubbed, so that is withheld.
+    def redact_jobstr(ctx)
+      hook = @options[:redact_args]
+      raw = ctx.is_a?(Hash) ? ctx[:jobstr] : nil
+      return ctx unless hook && raw
+
+      require_relative 'redact'
+      ctx.merge(jobstr: Wurk::Redact.jobstr(raw, hook))
+    end
+    private :redact_jobstr
 
     # --- Configure blocks (Sidekiq.configure_server / _client) -----------
 

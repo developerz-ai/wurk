@@ -57,6 +57,7 @@ module Wurk
     # backstop rather than the normal end.
     TEARDOWN_GRACE = 4
     MIN_TEARDOWN_BUDGET = 1
+    KILL_JOIN = 0.25
 
     attr_accessor :managers, :poller, :periodic_poller, :metrics_rollup, :queue_rollup, :metrics_flusher, :history,
                   :queue_consumers
@@ -70,6 +71,7 @@ module Wurk
       # set (#236). Only #stop ends the beat, by terminating @beat_timer.
       @done = false
       @shutdown_gate = ShutdownGate.new
+      @loop_threads = ::ThreadGroup.new
       @beat_timer = TimerLoop.new(BEAT_PAUSE)
       @managers = build_managers
       build_loops
@@ -230,14 +232,16 @@ module Wurk
       @config.freeze!
       if async_beat
         heartbeat
-        @heartbeat_thread = safe_thread('heartbeat', &method(:start_heartbeat))
+        in_loop_group { @heartbeat_thread = safe_thread('heartbeat', &method(:start_heartbeat)) }
       end
       @managers.each(&:start)
-      @reaper.start
-      # Run on a background thread so /ready probe isn't delayed by a large
-      # orphan sweep (the reaper's reclaim is atomic, but can scan many entries).
-      @boot_reclaim_thread = safe_thread('boot-reclaim', &method(:boot_reclaim))
-      start_periodic_components
+      in_loop_group do
+        @reaper.start
+        # Run on a background thread so /ready probe isn't delayed by a large
+        # orphan sweep (the reaper's reclaim is atomic, but can scan many entries).
+        @boot_reclaim_thread = safe_thread('boot-reclaim', &method(:boot_reclaim))
+        start_periodic_components
+      end
       @health_server&.start
     rescue StandardError
       # Boot is not atomic: whatever raised (a health-check port already bound,
@@ -251,12 +255,8 @@ module Wurk
 
     # Teardown tail, driven from #stop's ensure. Every release is guarded on
     # its own because they are independent: a Redis blip in one (leader CAS
-    # release, heartbeat clear) must not strand the ones after it — the process
-    # is exiting either way, so the only thing worse than a failed release is a
-    # skipped one. Order matters twice over: full shutdown stops the periodic
-    # loops (they survived #quiet) before the cluster lock is CAS-released, so
-    # no tick races a follower's promotion, and the release itself happens on a
-    # planned shutdown rather than waiting out the lock TTL.
+    # release, heartbeat clear) must not strand the ones after it — the only
+    # thing worse than a failed release is a skipped one.
     def release_components
       release_redis_components
       # Unguarded: fire_event already reports and skips past a raising hook.
@@ -278,17 +278,51 @@ module Wurk
     end
 
     # Each step here can ride Redis retries, so against a hung server they add up
-    # to minutes while an orchestrator waits on `timeout`. They run on their own
-    # thread under one budget; past it the process moves on and exits, leaving
-    # the heartbeat to expire and the leader lock to time out, exactly as a
-    # SIGKILL would. No job is at stake here: the managers have already drained.
+    # to minutes while an orchestrator waits on `timeout`, and they run under one
+    # budget. No job is at stake here: the managers have already drained.
+    #
+    # Every loop is signalled before anything waits, so a hang in one cannot leave
+    # another running. Past the budget, whatever is left is killed rather than
+    # abandoned: an embedded host outlives this, and a teardown still running would
+    # go on to clear the heartbeat and leader lock of a replacement launcher, which
+    # has this one's identity. The heartbeat then expires and the lock times out,
+    # exactly as after a SIGKILL.
     def release_redis_components
       @teardown_caller = Thread.current
-      worker = Thread.new { redis_teardown_steps }
+      @leader&.signal_stop
+      @beat_timer.terminate
+      stoppers = stop_periodic_components
+      worker = Thread.new { redis_teardown_steps(stoppers) }
       worker.report_on_exception = false
       return if worker.join(teardown_budget)
 
-      logger.warn { "Launcher teardown did not finish within #{TEARDOWN_GRACE}s past the shutdown timeout; exiting" }
+      logger.warn { "Launcher teardown did not finish within #{TEARDOWN_GRACE}s past the shutdown timeout; moving on" }
+      kill_stragglers([worker, *stoppers, *@loop_threads.list])
+    end
+
+    # A kill lands as soon as a thread leaves a blocking read, and from then on it
+    # runs ensure blocks only, so it can issue no further teardown command. The
+    # join just lets the common case finish before the pools are reset.
+    def kill_stragglers(threads)
+      stragglers = threads.uniq - [Thread.current]
+      stragglers.each(&:kill)
+      deadline = ::Process.clock_gettime(::Process::CLOCK_MONOTONIC) + KILL_JOIN
+      stragglers.each { |thread| thread.join([deadline - ::Process.clock_gettime(::Process::CLOCK_MONOTONIC), 0].max) }
+    end
+
+    # Loops started here land in @loop_threads, inherited by whatever they spawn.
+    # The processors stay out: Manager#stop owns their end, and job code spawning a
+    # thread is the host's own.
+    def in_loop_group
+      home = Thread.current.group
+      return yield if home.nil? || home.enclosed?
+
+      @loop_threads.add(Thread.current)
+      begin
+        yield
+      ensure
+        home.add(Thread.current)
+      end
     end
 
     def teardown_budget
@@ -296,7 +330,10 @@ module Wurk
       [remaining, MIN_TEARDOWN_BUDGET].max
     end
 
-    def redis_teardown_steps
+    # The lock goes only after the loops have joined, so no tick races a
+    # follower's promotion, and the heartbeat clears only after its thread has, so
+    # a last beat cannot resurrect the identity.
+    def redis_teardown_steps(stoppers)
       # Joined first, before anything below tears down the Redis pool it's
       # still reading from: it started as a fire-and-forget thread in #run
       # and a shutdown landing right after boot could otherwise race a
@@ -306,7 +343,8 @@ module Wurk
       # its own, so a straggler racing #reset_redis_pools! below just means
       # a noisy log line, not a hang.
       teardown_step('boot-reclaim-join') { @boot_reclaim_thread&.join(BOOT_RECLAIM_JOIN_TIMEOUT) }
-      stop_periodic_components
+      stoppers.each(&:join)
+      teardown_step('leader') { @leader&.stop }
       %i[stop_heartbeat clear_heartbeat].each { |step| teardown_step(step) { send(step) } }
     end
 
@@ -319,19 +357,16 @@ module Wurk
        @queue_rollup, @queue_consumers, @metrics_flusher, @history].compact.each(&:start)
     end
 
-    # Split out of #release_components to keep it under the AbcSize/
-    # CyclomaticComplexity ceilings — these are the "periodic loop" releases,
-    # independently guarded like everything else in the tail.
-    #
-    # The metrics flusher goes first: its #terminate drains the last window of
-    # per-job counters into the `j|…` minute buckets, and Metrics::Rollup reads
-    # exactly those buckets — stopping the rollup first would give its final
-    # tick nothing to roll.
+    # One thread each, because each of these signals its loop first and then waits
+    # for it (the flusher also writes its last window): side by side, every loop
+    # hears the stop whatever another is stuck on. Returns the threads.
     def stop_periodic_components
-      [@metrics_flusher, @periodic_poller, @metrics_rollup, @queue_rollup, @queue_consumers,
-       @history].each { |t| teardown_step(t.class) { t&.terminate } }
-      teardown_step('reaper') { @reaper&.stop }
-      teardown_step('leader') { @leader&.stop }
+      stops = [@metrics_flusher, @periodic_poller, @metrics_rollup, @queue_rollup, @queue_consumers,
+               @history].compact.map { |t| [t.class, -> { t.terminate }] }
+      stops << ['reaper', -> { @reaper.stop }] if @reaper
+      stops.map do |label, stop|
+        Thread.new { teardown_step(label, &stop) }.tap { |thread| thread.report_on_exception = false }
+      end
     end
 
     def teardown_step(label)

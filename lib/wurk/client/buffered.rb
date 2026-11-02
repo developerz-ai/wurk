@@ -28,6 +28,9 @@ module Wurk
       # A clean exit tries to deliver what is still in memory, but never holds the
       # process up for longer than this: a hung Redis would otherwise stall shutdown.
       EXIT_FLUSH_SECONDS = 5
+      # Paces flush's retries as well as its checks, so a server that keeps refusing
+      # gets a few attempts in that window and not hundreds of reports.
+      FLUSH_POLL = 0.25
 
       # Overflow modes. `:drop_oldest` is the spec default (Sidekiq Pro §5
       # ring buffer). `:raise` lets callers decide what to do on backpressure
@@ -155,6 +158,7 @@ module Wurk
       # buys immunity from both.
       @install_mutex = Mutex.new
       @buffer_mutex  = Mutex.new
+      @replaying     = 0
       @circuit       = Circuit.new
 
       # Process that owns the state above; a mismatch means we're running in a
@@ -218,6 +222,7 @@ module Wurk
             @buffer = []
             @buffer_cap = nil
             @overflow_mode = nil
+            @replaying = 0
           end
           @circuit = Circuit.new
           @drops = DropLog.new
@@ -258,6 +263,7 @@ module Wurk
           @install_mutex         = Mutex.new
           @buffer_mutex          = Mutex.new
           @buffer                = []
+          @replaying             = 0
           @circuit               = Circuit.new
           @drops                 = DropLog.new
           interval               = @drainer&.interval unless @implicit_drainer
@@ -366,13 +372,10 @@ module Wurk
         # Launcher or host shutting down earlier can call it too. Forked children
         # inherit the at_exit hook, but start with an empty buffer of their own.
         def flush(timeout: EXIT_FLUSH_SECONDS)
-          return 0 if buffer_size.zero?
+          return 0 if undelivered_count.zero?
 
-          worker = Thread.new { flush_attempt }
-          worker.report_on_exception = false
-          # A worker still running holds one job it took off the buffer.
-          in_flight = worker.join(timeout) ? 0 : 1
-          (buffer_size + in_flight).tap { |left| report_undelivered(left) if left.positive? }
+          retry_until_delivered(flush_clock + timeout)
+          undelivered_count.tap { |left| report_undelivered(left) if left.positive? }
         end
 
         def trip!(pool)
@@ -436,10 +439,30 @@ module Wurk
 
         attr_reader :install_mutex, :buffer_mutex
 
-        def flush_attempt
-          drain_all!
-        rescue StandardError => e
-          Wurk.configuration.handle_exception(e, { context: 'reliable_push flush' })
+        # A replay holds its entry outside the buffer until it lands or goes back, so
+        # an empty buffer alone does not mean every job reached Redis.
+        def undelivered_count
+          buffer_mutex.synchronize { buffer.size + @replaying }
+        end
+
+        def retry_until_delivered(deadline)
+          worker = nil
+          until undelivered_count.zero? || flush_clock >= deadline
+            worker = start_flush_attempt unless worker&.alive? || buffer_size.zero?
+            sleep(FLUSH_POLL)
+          end
+        end
+
+        def flush_clock
+          ::Process.clock_gettime(::Process::CLOCK_MONOTONIC)
+        end
+
+        def start_flush_attempt
+          Thread.new do
+            drain_all!
+          rescue StandardError => e
+            Wurk.configuration.handle_exception(e, { context: 'reliable_push flush' })
+          end
         end
 
         def report_undelivered(left)
@@ -482,8 +505,15 @@ module Wurk
         def take_next(target)
           buffer_mutex.synchronize do
             index = buffer.index { |entry| entry.origin.resolve.equal?(target) }
-            index && buffer.delete_at(index)
+            next unless index
+
+            @replaying += 1
+            buffer.delete_at(index)
           end
+        end
+
+        def replay_settled
+          buffer_mutex.synchronize { @replaying = [@replaying - 1, 0].max }
         end
 
         def buffered_pools
@@ -515,6 +545,8 @@ module Wurk
           client.send(:emit_enqueued, [entry.payload])
           Wurk::Metrics::Statsd.increment('jobs.recovered.push')
           entry
+        ensure
+          replay_settled
         end
 
         def restore(entry)
