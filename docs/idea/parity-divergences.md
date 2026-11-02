@@ -55,7 +55,7 @@ and
 
 **Wurk:** `Wurk::Fetcher::Reliable` (BLMOVE-based, private-list-per-process)
 is the sole and default fetcher. `Sidekiq::BasicFetch` is aliased straight to
-it (`lib/wurk/compat.rb:116`).
+it (`lib/wurk/compat.rb:121`).
 
 **Spec:** Free Sidekiq's default `BasicFetch` uses plain `BRPOP` — a job
 popped off the queue and lost mid-execution (crash, `SIGKILL`) is gone.
@@ -70,7 +70,7 @@ depends on BasicFetch's at-most-once gap, so there is no compat reason to
 offer a lossy mode. Third-party gems that special-case `Sidekiq::BasicFetch`
 by class identity still work since the alias resolves to a real class.
 
-**Anchor:** `lib/wurk/compat.rb:116`, `lib/wurk/fetcher/reliable.rb`.
+**Anchor:** `lib/wurk/compat.rb:121`, `lib/wurk/fetcher/reliable.rb`.
 
 ## Concurrent limiter polls instead of using XREAD waiter signalling
 
@@ -645,7 +645,7 @@ poller, deliberately leaves the cron poller running, and never touches
 `@leader` — the renewal loop keeps renewing the lock every 15s while held
 (`lib/wurk/leader.rb:251-258`) straight through a quiet. Leadership ends only
 on full shutdown: `Launcher#stop` → `release_components` →
-`stop_periodic_components` (`lib/wurk/launcher.rb:289-294`, `@leader&.stop`)
+`stop_periodic_components` (`lib/wurk/launcher.rb:291-296`, `@leader&.stop`)
 → `Leader#stop` (`lib/wurk/leader.rb:166-176`), which joins the campaign
 thread and then CAS-releases `dear-leader`.
 
@@ -666,9 +666,9 @@ shutdown releases the lock deliberately, periodic loops stopped before the
 CAS release, rather than waiting out the TTL.
 
 **Anchor:** `lib/wurk/launcher.rb:115-125` (`#quiet`),
-`lib/wurk/launcher.rb:289-294` (`#stop_periodic_components`),
+`lib/wurk/launcher.rb:291-296` (`#stop_periodic_components`),
 `lib/wurk/leader.rb:166-176` (`#stop` join + release); pinned by
-`test/unit/launcher_test.rb` (`test_quiet_does_not_terminate_cron_poller`,
+`test/unit/launcher_test.rb` (`test_quiet_does_not_terminate_periodic_poller`,
 `test_quiet_does_not_stop_the_cluster_leader`,
 `test_stop_stops_the_cluster_leader`).
 
@@ -1307,31 +1307,6 @@ to add `key_val` support.
 `lib/wurk/configuration.rb:114`; `frontend/src/pages/Queues.tsx:77-84`;
 `test/engine/api_mutations_test.rb:487-500`.
 
-## `Config#redis_info` and `Config#to_json` are not implemented
-
-**Status:** recorded compatibility gap, not an approved safe or deliberate
-exception.
-
-**Wurk:** `Wurk::Configuration` implements neither method. The standalone CLI
-gets Redis health from the pool instead — `Wurk::CLI#redis_info` delegates to
-`@config.redis_pool.info` (`lib/wurk/cli.rb:353`), and `Wurk::RedisPool#info`
-returns parsed `INFO` merged with the pool's `size`/`available`
-(`lib/wurk/redis_pool.rb:188-190`). `Wurk::Configuration` defines no `to_json`.
-
-**Spec:** free defines both on the Config surface: `def to_json(*)`
-([free §4.2 Public methods — `Config#to_json`](../target/sidekiq-free.md#42-public-methods)) and `def redis_info # parses INFO command`
-([free §4.2 Public methods — `Config#redis_info`](../target/sidekiq-free.md#42-public-methods)).
-
-**Why:** no supported flow in this repository serializes the configuration or
-reads `INFO` off the config object — the heartbeat and health probe consume
-`RedisPool#info` directly — so the gap is latent, not a broken path. Closing it
-is additive (two delegating methods); until then, a ported caller that touched
-either method needs a one-line shim of its own.
-
-**Anchor:** `lib/wurk/cli.rb:356`; `lib/wurk/redis_pool.rb:188-190`; free
-Config surface ([free §4.2 Public methods — `Config#to_json`](../target/sidekiq-free.md#42-public-methods),
-[free §4.2 Public methods — `Config#redis_info`](../target/sidekiq-free.md#42-public-methods)).
-
 ## `:max_iteration_runtime` is accepted but not consumed
 
 **Status:** recorded compatibility gap, not an approved safe or deliberate
@@ -1404,7 +1379,7 @@ is not modeled separately — the spec itself names `on(:fork)` as its API
 ([Ent §7.2 Environment variables — `SIDEKIQ_FORK_PER_PROCESS_HOOK`](../target/sidekiq-ent.md#72-environment-variables)).
 
 **Anchor:** `lib/wurk/configuration.rb:106`,
-`lib/wurk/configuration.rb:750-754`; free `on()`
+`lib/wurk/configuration.rb:757-761`; free `on()`
 ([free §4.2 Public methods — `on(event)`](../target/sidekiq-free.md#42-public-methods)) and DEFAULTS
 ([free §4.1 DEFAULTS — lifecycle events](../target/sidekiq-free.md#41-defaults)); Ent §7.4
 ([Ent §7.4 Fork callback](../target/sidekiq-ent.md#74-fork-callback)) and §6.3
@@ -1415,7 +1390,7 @@ is not modeled separately — the spec itself names `on(:fork)` as its API
 **Wurk:** `DEFAULTS` carries `redis_error_handlers: []`
 (`lib/wurk/configuration.rb:50`, inside the "Wurk extras, appended after the
 mirrored keys" block), populated by `config.on_redis_error { |info| … }`
-(`lib/wurk/configuration.rb:348`) and dispatched from `dispatch_redis_error`
+(`lib/wurk/configuration.rb:355`) and dispatched from `dispatch_redis_error`
 (`lib/wurk/configuration.rb:1046`), which logs and skips a raising handler.
 Each handler gets one Hash: `{error:, attempt:, retried:, pool:}`.
 
@@ -1431,17 +1406,17 @@ raise re-enqueues a job. The extra key is additive by construction: the
 mirrored Sidekiq prefix of `@options` stays byte-for-byte intact, so gems
 introspecting the config hash see no change.
 
-**Anchor:** `lib/wurk/configuration.rb:50`, `lib/wurk/configuration.rb:348`,
-`lib/wurk/configuration.rb:1124-1125`; free DEFAULTS
+**Anchor:** `lib/wurk/configuration.rb:50`, `lib/wurk/configuration.rb:355`,
+`lib/wurk/configuration.rb:1153-1154`; free DEFAULTS
 ([free §4.1 DEFAULTS — handler keys](../target/sidekiq-free.md#41-defaults)).
 
 ## Pool sizing: three disjoint pools per process
 
 **Wurk:** each worker process builds three independent pools: the capsule main
 pool at `max(concurrency + 5, 10)` (`lib/wurk/capsule.rb:166-171`, computed in
-`main_pool_size` at `lib/wurk/capsule.rb:303-305`), a dedicated fetch pool of
-exactly `concurrency` (`lib/wurk/capsule.rb:177-179`), and a dedicated web pool of
-`web_pool_size` (default 5; `lib/wurk/configuration.rb:286,296,313`).
+`main_pool_size` at `lib/wurk/capsule.rb:318-320`), a dedicated fetch pool of
+exactly `concurrency` (`lib/wurk/capsule.rb:179-181`), and a dedicated web pool of
+`web_pool_size` (default 5; `lib/wurk/configuration.rb:293,303,320`).
 `config.redis[:size]` still pins the main pool only.
 
 **Spec:** free [§26 `Sidekiq::RedisConnection`](../target/sidekiq-free.md#26-sidekiqredisconnection)
@@ -1465,8 +1440,8 @@ the +5 headroom names the background loops it covers. Sizes stay overridable
 (`config.redis[:size]`, `config.web_pool_size`), so a host can still approach
 §26's stated sizes, without eliminating the dedicated fetch/web topology.
 
-**Anchor:** `lib/wurk/capsule.rb:166-171`, `lib/wurk/capsule.rb:177-179`,
-`lib/wurk/capsule.rb:303-305`; `lib/wurk/configuration.rb:286,296,313`; free
+**Anchor:** `lib/wurk/capsule.rb:166-171`, `lib/wurk/capsule.rb:179-181`,
+`lib/wurk/capsule.rb:318-320`; `lib/wurk/configuration.rb:293,303,320`; free
 [§26 RedisConnection pool defaults](../target/sidekiq-free.md#26-sidekiqredisconnection),
 [§5 Capsule main/fetch pools](../target/sidekiq-free.md#5-sidekiqcapsule), and
 [§21.4 Lifecycle pool-size validation](../target/sidekiq-free.md#214-lifecycle-clirun).
@@ -1474,7 +1449,7 @@ the +5 headroom names the background loops it covers. Sizes stay overridable
 ## `reap_idle_redis_connections` sweeps from a per-pool reaper thread, not the heartbeat
 
 **Wurk:** the setter stores `:redis_idle_timeout`
-(`lib/wurk/configuration.rb:258-259`), and every pool built from the
+(`lib/wurk/configuration.rb:260-261`), and every pool built from the
 configuration starts its own reaper thread on first checkout
 (`lib/wurk/redis_pool.rb:256-265`), sweeping every `min(timeout / 2, 10)`
 seconds through connection_pool's `#reap` (`lib/wurk/redis_pool.rb:289-294`).
@@ -1495,7 +1470,7 @@ runs. Sweeping at half the timeout closes a connection within 1.5x of it going
 idle; the 10s floor keeps a short timeout from becoming a hot loop. Requires
 connection_pool >= 3.0 for `#reap` (`wurk.gemspec:52`), as Sidekiq 8.1 does.
 
-**Anchor:** `lib/wurk/configuration.rb:258-259`; `lib/wurk/redis_pool.rb:111-114`,
+**Anchor:** `lib/wurk/configuration.rb:260-261`; `lib/wurk/redis_pool.rb:111-114`,
 `lib/wurk/redis_pool.rb:256-265`, `lib/wurk/redis_pool.rb:289-294`; free Config
 surface ([free §4.2 Public methods — `reap_idle_redis_connections`](../target/sidekiq-free.md#42-public-methods)) and DEFAULTS
 ([free §4.1 DEFAULTS — `redis_idle_timeout`](../target/sidekiq-free.md#41-defaults)).
@@ -1699,7 +1674,7 @@ free [§10.1 `Sidekiq::Middleware::Chain` — `add`](../target/sidekiq-free.md#1
 
 ## Web pool is configuration-owned; the class-level accessor and pool-bound mounts are unsupported
 
-**Wurk:** `Sidekiq::Web` is an alias of `Wurk::Web` (`lib/wurk/compat.rb:196`),
+**Wurk:** `Sidekiq::Web` is an alias of `Wurk::Web` (`lib/wurk/compat.rb:201`),
 and `Sidekiq::Pro::Web` is that same class (`lib/wurk/compat.rb:57`). `Wurk::Web`
 exposes no class-level `redis_pool` reader and no `redis_pool=` setter — both
 raise `NoMethodError` — and no `.with` factory, so
@@ -1711,10 +1686,10 @@ class-level surface is the config/extension surface
 an instance method on a duck-type handle that returns
 `Wurk.configuration.web_redis_pool` — not the class-level accessor. The
 dashboard pool is the configuration-owned `config.web_redis_pool` reader
-(`lib/wurk/configuration.rb:312-314`): read-only, with no `web_redis_pool=`
+(`lib/wurk/configuration.rb:318-320`): read-only, with no `web_redis_pool=`
 setter, so Wurk builds the pool itself from the same `config.redis` options the
 worker pools use (`lib/wurk/configuration.rb:1097-1101`) and sizes it with
-`config.web_pool_size` (`lib/wurk/configuration.rb:295-302`, default 5). Every
+`config.web_pool_size` (`lib/wurk/configuration.rb:296-303`, default 5). Every
 dashboard request runs on that pool.
 
 **Spec:** free §25.1 lists `Sidekiq::Web.redis_pool = my_pool` in the entrypoint
@@ -1735,7 +1710,7 @@ to fetch and heartbeat (#101). A class-level pool handle would let any gem swap
 that pool out from under every request path, and it is global mutable state
 set before boot: the parent closes its sockets before forking
 (`lib/wurk/swarm.rb:329-333`) and each child drops the inherited pools and
-builds fresh ones (`lib/wurk/swarm/child_boot.rb:125-126`), so a
+builds fresh ones (`lib/wurk/swarm/child_boot.rb:126-127`), so a
 caller-assigned pool could not survive the fork boundary — it would be an
 inherited socket, not a fresh pool.
 Per-mount shards would need a pool and a teardown per mount, which the
@@ -1744,18 +1719,32 @@ and the migration guide states it: the dashboard cannot be pointed at a
 different Redis than the workers use — only its size is configurable — and a
 shard-per-mount deployment has no Wurk equivalent.
 
-**Anchor:** [`Sidekiq::Web` alias](../../lib/wurk/compat.rb#L196) and
+**Anchor:** [`Sidekiq::Web` alias](../../lib/wurk/compat.rb#L201) and
 [`Sidekiq::Pro::Web` alias](../../lib/wurk/compat.rb#L57); the
 [class-level Web surface](../../lib/wurk/web/config.rb#L390-L456) and the
 [empty `Wurk::Web` class body](../../lib/wurk/web.rb#L27-L28);
 [`PoolScope::Handle#redis_pool`](../../lib/wurk/web/pool_scope.rb#L39-L43);
-[`config.web_pool_size`](../../lib/wurk/configuration.rb#L295-L302),
-[`config.web_redis_pool`](../../lib/wurk/configuration.rb#L312-L314) and
-[`build_redis_pool`](../../lib/wurk/configuration.rb#L1115-L1119);
+[`config.web_pool_size`](../../lib/wurk/configuration.rb#L296-L303),
+[`config.web_redis_pool`](../../lib/wurk/configuration.rb#L318-L320) and
+[`build_redis_pool`](../../lib/wurk/configuration.rb#L1141-L1145);
 [parent sockets closed before fork](../../lib/wurk/swarm.rb#L329-L333) and
-[child pools rebuilt after fork](../../lib/wurk/swarm/child_boot.rb#L125-L126);
+[child pools rebuilt after fork](../../lib/wurk/swarm/child_boot.rb#L126-L127);
 free §25.1 ([free §25.1 Entrypoint](../target/sidekiq-free.md#251-entrypoint))
 and Pro §10.2 ([Pro §10.2 Multi-shard](../target/sidekiq-pro.md#102-multi-shard));
 the user-facing statement is [migration guide §7](../migrate-from-sidekiq.md#7-known-incompatibilities--what-not-to-expect);
 the unsupported accessors are pinned by
 [`test_sidekiq_web_class_level_redis_pool_accessors_are_unsupported`](../../test/unit/web_config_test.rb#L531-L542).
+
+## Negative and non-integer queue weights are rejected at boot
+
+**Wurk:** `Capsule#queues=` raises `ArgumentError` for a queue weight that is
+negative or not an integer. A weight of `0`, or none at all, means unweighted.
+
+**Spec:** free §5 documents `"name"` or `"name,weight"` and says nothing about
+invalid weights. Stock Sidekiq accepts them.
+
+**Why:** a nonsense weight is a config typo. Refusing to boot surfaces it at
+deploy, where accepting it would quietly change how often a queue is served.
+
+**Anchor:** `lib/wurk/capsule.rb` (`parse_queue_entry`), free §5,
+`test/unit/capsule_test.rb`.

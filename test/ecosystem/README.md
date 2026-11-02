@@ -24,6 +24,11 @@ The suite flushes its DB; don't point it at data you care about.
 Current matrix:
 - sidekiq-cron (v2.4.0)
 
+`boot_check.rb`, where present, starts the real `sidekiq` executable with the gem
+loaded and asserts the gem did its job: a suite can stay green without a Launcher
+ever booting. Run it under the harness bundle; `bin/test-ecosystem` does not call
+it yet.
+
 A harness lands here only once it is green. A suite that cannot pass yet is a
 red check on every PR in the repo, which buys nothing and hides real
 regressions — so the pin, and what still blocks it, is recorded in

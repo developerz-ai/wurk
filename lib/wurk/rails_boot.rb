@@ -1,5 +1,7 @@
 # frozen_string_literal: true
 
+require_relative 'rails_reloader'
+
 module Wurk
   # Coordinates how Wurk boots inside a Rails host: whether this process should
   # boot at all, whether it may fork the swarm, and the boot itself. The Railtie
@@ -12,6 +14,8 @@ module Wurk
     # drain budget: one supervise tick to notice the request, plus slack for
     # the final reap.
     DRAIN_JOIN_SLACK = 1
+
+    BOOT_INITIALIZER = :wurk_boot
 
     module_function
 
@@ -34,7 +38,27 @@ module Wurk
       Wurk.configuration[:client_in_server] = true
     end
 
-    # Invoked from after_initialize, once the host app has fully initialized.
+    # A host that already replaced the reloader keeps its own. A config already
+    # frozen, by workers embedded from an initializer, can't take it: their
+    # Processors resolved the default themselves (Processor#resolve_reloader).
+    def install_reloader(app = ::Rails.application, config = Wurk.configuration)
+      return if config.frozen?
+      return unless config[:reloader].equal?(Configuration::DEFAULTS[:reloader])
+
+      config[:reloader] = RailsReloader.new(app)
+    end
+
+    # Set by the railtie's first initializer. Rails builds the initializer list
+    # once, so if that one ran the Finisher entry is in the list too. A railtie
+    # required from a host's own initializer missed it, and the after_initialize
+    # hook boots instead.
+    def boot_scheduled? = @boot_scheduled == true
+
+    def boot_scheduled=(value)
+      @boot_scheduled = value
+    end
+
+    # Invoked last of all initializers, once the host app has fully initialized.
     def boot(app = ::Rails.application)
       return if skip_boot?
 

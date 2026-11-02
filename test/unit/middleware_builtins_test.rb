@@ -316,6 +316,67 @@ class MiddlewareBuiltinsTest < Wurk::Test::UnitCase
     assert cfg.server_middleware.exists?(Wurk::Middleware::CurrentAttributes::Load)
   end
 
+  # A class named as a String can't be resolved in an initializer, so it is
+  # looked up per job. Through real chains, the way perform_async reaches them.
+  def test_current_attributes_persist_accepts_a_string_name
+    FakeCurrent.attributes[:user] = 5
+    cfg = Wurk::Configuration.new
+    Wurk::Middleware::CurrentAttributes.persist(FakeCurrent.name.to_s, cfg)
+    job = {}
+
+    cfg.client_middleware.invoke('X', job, 'q', nil) { :pushed }
+
+    assert_equal({ user: 5 }, job['cattr'])
+    seen = nil
+    cfg.server_middleware.invoke(Object.new, { 'cattr' => { user: 9 } }, 'q') { seen = FakeCurrent.attributes[:user] }
+
+    assert_equal 9, seen
+  end
+
+  def test_current_attributes_persist_resolves_a_class_again_after_a_reload
+    const = "ReloadedCurrent#{object_id}"
+    stale = Object.const_set(const, Class.new { def self.attributes = { from: 'stale' } })
+    cfg = Wurk::Configuration.new
+    Wurk::Middleware::CurrentAttributes.persist(stale, cfg)
+    Object.send(:remove_const, const)
+    Object.const_set(const, Class.new do
+      def self.attributes = { from: 'reloaded' }
+      def self.reset = nil
+      def self.from=(_value); end
+    end)
+    job = {}
+
+    cfg.client_middleware.invoke('X', job, 'q', nil) { :pushed }
+
+    assert_equal({ from: 'reloaded' }, job['cattr'])
+  ensure
+    Object.send(:remove_const, const)
+  end
+
+  def test_current_attributes_keeps_an_anonymous_class_as_given
+    anonymous = Class.new
+
+    assert_same anonymous, Wurk::Middleware::CurrentAttributes.reference_for(anonymous)
+  end
+
+  def test_current_attributes_save_adds_no_key_when_nothing_is_set
+    job = {}
+
+    Wurk::Middleware::CurrentAttributes::Save.new([FakeCurrent]).call('X', job, 'q', nil) { :body }
+
+    refute job.key?('cattr')
+  end
+
+  def test_current_attributes_load_is_outermost_on_the_server_chain
+    earlier = Class.new { def call(*) = yield }
+    cfg = Wurk::Configuration.new
+    cfg.server_middleware.add(earlier)
+
+    Wurk::Middleware::CurrentAttributes.persist(FakeCurrent, cfg)
+
+    assert_equal Wurk::Middleware::CurrentAttributes::Load, cfg.server_middleware.entries.first.klass
+  end
+
   def test_current_attributes_persist_rejects_empty
     assert_raises(ArgumentError) do
       Wurk::Middleware::CurrentAttributes.persist([], Wurk::Configuration.new)

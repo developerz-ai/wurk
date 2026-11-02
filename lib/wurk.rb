@@ -225,7 +225,7 @@ module Wurk
     # CLI passes its own (possibly test-injected) Configuration instance.
     def enter_server_mode(config = configuration)
       @server = true
-      config[:server] = true
+      config.enter_server_mode
     end
 
     # True once something in THIS process has taken responsibility for running

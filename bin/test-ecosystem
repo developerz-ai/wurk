@@ -83,7 +83,10 @@ for harness in "$ECOSYSTEM_DIR"/*/; do
            REDIS_URL="$REDIS_URL" \
            TESTOPTS="$testopts" &&
     bundle install --quiet &&
-    bundle exec rake test
+    bundle exec rake test &&
+    # A gem's own suite rarely boots a real worker, so it can stay green while
+    # the gem does nothing in production. boot_check.rb covers that path.
+    { [ ! -f "$ROOT/$harness/boot_check.rb" ] || bundle exec ruby "$ROOT/$harness/boot_check.rb"; }
   ); then
     echo "FAIL: $name"
     failures=$((failures + 1))

@@ -12,6 +12,10 @@ module Wurk
     # Multiple → `"cattr"`, `"cattr_1"`, `"cattr_2"`, … (keys mirror Sidekiq's
     # naming exactly: wire-compat sacred).
     #
+    # Classes are kept by name and resolved per job, as a String registered from
+    # an initializer has to be. It also means a class object passed here doesn't
+    # go stale once development code reloading replaces the constant.
+    #
     # Spec: docs/target/sidekiq-free.md §10.3 and §2.2.
     module CurrentAttributes
       PERSISTENT_KEY = 'cattr'
@@ -21,12 +25,22 @@ module Wurk
         # no-op: `add` already dedupes by klass, so calling `persist` twice
         # with the same set replaces the old entry with the new args.
         def persist(klass_or_array, config = Wurk.configuration)
-          classes = Array(klass_or_array)
+          classes = Array(klass_or_array).map { |klass| reference_for(klass) }
           raise ArgumentError, 'persist requires at least one CurrentAttributes class' if classes.empty?
 
           config.client_middleware.add(Save, classes)
           config.client_middleware.add(Load, classes)
-          config.server_middleware.add(Load, classes)
+          # Outermost, so every other server middleware sees the job's attributes.
+          config.server_middleware.prepend(Load, classes)
+        end
+
+        # An anonymous class has no name to look up again, so it stays as given.
+        def reference_for(klass)
+          klass.is_a?(Module) ? klass.name || klass : klass.to_s
+        end
+
+        def resolve(reference)
+          reference.is_a?(String) ? Object.const_get(reference) : reference
         end
 
         # Composes the wire key for the Nth registered class. Sidekiq numbers
@@ -50,7 +64,8 @@ module Wurk
       end
 
       # Client-side: snapshot each registered CurrentAttributes class into
-      # the job hash. Caller-supplied keys take precedence (`||=`).
+      # the job hash. Caller-supplied keys take precedence (`||=`), and a class
+      # with nothing set adds no key, so the payload doesn't grow an empty one.
       class Save
         include Wurk::Middleware::ClientMiddleware
 
@@ -59,9 +74,9 @@ module Wurk
         end
 
         def call(_job_class, job, _queue, _redis_pool)
-          @classes.each_with_index do |klass, idx|
-            key = CurrentAttributes.key_for(idx)
-            job[key] ||= CurrentAttributes.snapshot(klass)
+          @classes.each_with_index do |reference, idx|
+            attrs = CurrentAttributes.snapshot(CurrentAttributes.resolve(reference))
+            job[CurrentAttributes.key_for(idx)] ||= attrs unless attrs.empty?
           end
           yield
         end
@@ -87,15 +102,16 @@ module Wurk
         end
 
         def call(_job_or_class, job, _queue, _redis_pool = nil)
-          previous = @classes.map { |klass| CurrentAttributes.snapshot(klass) }
-          @classes.each_with_index do |klass, idx|
+          classes = @classes.map { |reference| CurrentAttributes.resolve(reference) }
+          previous = classes.map { |klass| CurrentAttributes.snapshot(klass) }
+          classes.each_with_index do |klass, idx|
             CurrentAttributes.restore(klass, job[CurrentAttributes.key_for(idx)])
           end
           yield
         ensure
           previous&.each_with_index do |attrs, idx|
-            @classes[idx].reset
-            CurrentAttributes.restore(@classes[idx], attrs)
+            classes[idx].reset
+            CurrentAttributes.restore(classes[idx], attrs)
           end
         end
       end

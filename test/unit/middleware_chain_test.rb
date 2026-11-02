@@ -688,8 +688,8 @@ class MiddlewareChainTest < Wurk::Test::UnitCase
 
     assert_same chain.entries, result
     assert chain.exists?(Recorder)
-    assert_nil chain.config
-    assert_nil chain.entries.find { |entry| entry.klass == Recorder }.config
+    assert_same config, chain.config
+    assert_same config, chain.entries.find { |entry| entry.klass == Recorder }.config
     assert_equal 1, output.string.lines.size
     assert_includes output.string, 'WARN'
     assert_includes output.string, Recorder.name

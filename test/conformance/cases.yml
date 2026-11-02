@@ -1163,8 +1163,7 @@
   source: docs/target/sidekiq-free.md#L301
   promise: >-
     def to_json(*)
-  reason: No parity oracle parses Config to_json output to establish JSON serialization.
-  future_work: oracle-config-json
+  oracles: [ConfigIntrospectionParityTest#test_to_json_parses_back_to_the_options]
 - id: config.concurrency-default
   area: configuration
   behavior: Config concurrency defaults to five.
@@ -1203,8 +1202,7 @@
   source: docs/target/sidekiq-free.md#L307
   promise: >-
     def queues=(val)          # array of "name" or "name,weight"
-  reason: No parity oracle configures weighted queue strings through Config queues= and observes capsule weights.
-  future_work: oracle-config-weighted-queues
+  oracles: [CapsuleQueuesParityTest#test_string_form_of_the_same_list_is_fetched]
 - id: config.total-concurrency
   area: configuration
   behavior: total_concurrency sums concurrency across capsules.
@@ -1283,8 +1281,7 @@
   source: docs/target/sidekiq-free.md#L323
   promise: >-
     def redis_info                    # parses INFO command
-  reason: No parity oracle checks Config redis_info against a real Redis INFO response.
-  future_work: oracle-config-redis-info
+  oracles: [ConfigIntrospectionParityTest#test_redis_info_is_parsed_redis_info]
 - id: config.redis-yield
   area: configuration
   behavior: Config redis yields a connection to its block.

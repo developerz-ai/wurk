@@ -100,7 +100,7 @@
     anchors << Wurk::Middleware::Expiry if defined?(Wurk::Middleware::Expiry)
     anchors << Wurk::Limiter::ServerMiddleware if defined?(Wurk::Limiter::ServerMiddleware)
 - entry: 'Web pool is configuration-owned; the class-level accessor and pool-bound mounts are unsupported'
-  anchor: 'lib/wurk/compat.rb#L196'
+  anchor: 'lib/wurk/compat.rb#L201'
   fragment: |-
     Web              = Wurk::Web
 - entry: 'Web pool is configuration-owned; the class-level accessor and pool-bound mounts are unsupported'
@@ -125,17 +125,17 @@
       def redis_pool
         Wurk.configuration.web_redis_pool
 - entry: 'Web pool is configuration-owned; the class-level accessor and pool-bound mounts are unsupported'
-  anchor: 'lib/wurk/configuration.rb#L295-L302'
+  anchor: 'lib/wurk/configuration.rb#L296-L303'
   fragment: |-
     def web_pool_size
       @options[:web_pool_size] || WEB_POOL_DEFAULT_SIZE
 - entry: 'Web pool is configuration-owned; the class-level accessor and pool-bound mounts are unsupported'
-  anchor: 'lib/wurk/configuration.rb#L312-L314'
+  anchor: 'lib/wurk/configuration.rb#L318-L320'
   fragment: |-
     def web_redis_pool
       @web_redis_pool ||= build_redis_pool(size: web_pool_size, name: 'web', pool_timeout: WEB_POOL_TIMEOUT)
 - entry: 'Web pool is configuration-owned; the class-level accessor and pool-bound mounts are unsupported'
-  anchor: 'lib/wurk/configuration.rb#L1115-L1119'
+  anchor: 'lib/wurk/configuration.rb#L1141-L1145'
   fragment: |-
     def build_redis_pool(size:, name:, **overrides)
       RedisPool.new(size: size, name: name, on_error: method(:dispatch_redis_error),
@@ -146,7 +146,7 @@
     def close_parent_sockets
       @config.reset_redis_pools!
 - entry: 'Web pool is configuration-owned; the class-level accessor and pool-bound mounts are unsupported'
-  anchor: 'lib/wurk/swarm/child_boot.rb#L125-L126'
+  anchor: 'lib/wurk/swarm/child_boot.rb#L126-L127'
   fragment: |-
     def reconnect_after_fork
       @config.reset_redis_pools!

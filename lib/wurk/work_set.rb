@@ -98,6 +98,12 @@ module Wurk
     def queue   = @hsh['queue']
     def payload = @hsh['payload']
 
+    # Sidekiq 7's field readers, gone from 8. Unparsed, as they were there:
+    # `work['payload']` is the JSON String.
+    def raw(name) = @hsh[name]
+    def [](key) = @hsh[key]
+    def dig(*keys) = @hsh.dig(*keys)
+
     # Float epoch seconds → Time. Heartbeat writes `run_at` as Float, so
     # we don't have to handle the dual ms/secs format JobRecord does.
     def run_at

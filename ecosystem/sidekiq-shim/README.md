@@ -18,6 +18,9 @@ The shim's version mirrors the Sidekiq release wurk targets
 (`Sidekiq::VERSION` in `lib/wurk/compat.rb`), so ecosystem gems' version
 gates resolve exactly as they would upstream.
 
+It also ships the `sidekiq` executable, so `bundle exec sidekiq -C config/sidekiq.yml`
+keeps working and runs the wurk CLI.
+
 **Never published to rubygems.org** — the `sidekiq` name belongs to Sidekiq.
 Git/path consumption only. This is the standard bundler mechanism for
 substituting a dependency by name.

@@ -41,16 +41,13 @@ module Wurk
 
     def queue = @queue || item['queue']
 
-    # Lazily parsed payload. Memoized; never re-parses. Invalid JSON reads as
-    # an empty hash whose raw bytes become `args`, as upstream does, so one
-    # corrupt payload can't break a dashboard page or a Queue#each walk.
+    # Lazily parsed payload. Memoized; never re-parses. Anything that is not a
+    # JSON object reads as an empty hash whose raw bytes become `args`, as
+    # upstream does for invalid JSON, so one corrupt payload can't break a
+    # dashboard page or a Queue#each walk. Valid JSON counts: `[1,2]` and `123`
+    # would otherwise raise from every reader that indexes it by field name.
     def item
-      @item ||= begin
-        Wurk.load_json(@value)
-      rescue ::JSON::ParserError
-        @invalid_args = [@value]
-        {}
-      end
+      @item ||= parse_payload
     end
 
     # Lazily serialized payload. When constructed from a Hash, we
@@ -154,6 +151,17 @@ module Wurk
     end
 
     private
+
+    def parse_payload
+      parsed = Wurk.load_json(@value)
+      return parsed if parsed.is_a?(::Hash)
+
+      @invalid_args = [@value]
+      {}
+    rescue ::JSON::ParserError, ::EncodingError
+      @invalid_args = [@value]
+      {}
+    end
 
     def active_job_wrapper?
       klass.is_a?(String) && (ACTIVE_JOB_WRAPPER.match?(klass) || klass == 'Sidekiq::ActiveJob::Wrapper')

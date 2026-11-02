@@ -41,6 +41,19 @@ module Wurk
 
       UnitOfWork = Struct.new(:queue, :queue_name, :private_queue, :job, :config, :jid, :fetcher,
                               :slot_key, :slot_token, keyword_init: true) do
+        # The positional form is upstream's documented `UnitOfWork.new(queue,
+        # job, config)`, which gem test suites build directly. No fetcher means
+        # no private list, so #acknowledge has nothing to do. Anonymous `**` is
+        # the cheap spelling for the fetch path, which always passes keywords:
+        # one allocation and ~230ns per job (a named **fields costs two).
+        def initialize(queue = nil, job = nil, config = nil, **)
+          if queue
+            super(queue: queue, queue_name: queue.delete_prefix('queue:'), job: job, config: config, **)
+          else
+            super(**)
+          end
+        end
+
         # Deferred, never skipped: the LREM goes back to the fetcher, which
         # pipelines it in front of the next fetch's LMOVE instead of spending a
         # round trip of its own. Ordering against the job is unchanged — the
@@ -48,7 +61,7 @@ module Wurk
         # so all that moves is the wall clock. Every path that stops fetching
         # flushes first; see #flush_pending_acks.
         def acknowledge
-          fetcher.defer_ack(self)
+          fetcher&.defer_ack(self)
         end
 
         # Queue this unit's ACK into an already-open pipeline. The counter DEL
@@ -114,7 +127,7 @@ module Wurk
         def requeue
           config.redis do |conn|
             conn.multi do |tx|
-              tx.call('LREM', private_queue, LREM_COUNT, job)
+              tx.call('LREM', private_queue, LREM_COUNT, job) if private_queue
               tx.call('RPUSH', queue, job)
             end
           end

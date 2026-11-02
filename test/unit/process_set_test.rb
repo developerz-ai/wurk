@@ -118,6 +118,16 @@ class ProcessSetTest < Wurk::Test::UnitCase
     assert_equal 4, me['busy']
   end
 
+  # A stock Sidekiq process keeps concurrency only in `info`, so HMGET answers
+  # nil for the field and must not clobber the value it holds.
+  def test_each_keeps_info_concurrency_for_a_process_without_the_field
+    register!(info: Wurk.dump_json(Wurk.load_json(base_info).merge('concurrency' => 25)))
+    me = Wurk::ProcessSet.new(false).find { |p| p.identity == @identity }
+
+    assert_equal 25, me['concurrency']
+    assert_equal 25, Wurk::ProcessSet.new(false).total_concurrency
+  end
+
   # --- total_concurrency / total_rss ------------------------------------
 
   def test_total_concurrency_sums_across_processes

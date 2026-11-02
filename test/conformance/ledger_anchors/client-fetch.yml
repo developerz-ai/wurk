@@ -30,7 +30,7 @@
     def test_push_bulk_failure_before_second_group_leaves_only_first_queue_registered
 
 - entry: "Reliable fetch is the only mode; no BRPOP"
-  anchor: "lib/wurk/compat.rb#L116"
+  anchor: "lib/wurk/compat.rb#L121"
   fragment: |-
     BasicFetch       = Wurk::Fetcher::Reliable
 
