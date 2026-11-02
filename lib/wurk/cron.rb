@@ -461,52 +461,7 @@ module Wurk
         loop_obj
       end
 
-      # Registers a sidekiq-cron shaped schedule: `{ name => { cron:, class:,
-      # queue:, args:, retry:, tz:, status: } }`, or a list of those carrying
-      # `name:`. Other keys (`description`, ...) are ignored. Raises ArgumentError
-      # on an entry with no cron or class, and on anything but a 5-field crontab.
-      def load_hash(schedule)
-        entries = schedule
-        entries = schedule.map { |name, entry| { 'name' => name }.merge(entry.to_h) } if schedule.is_a?(::Hash)
-        entries.map { |entry| register_entry(entry.to_h.transform_keys(&:to_s)) }
-      end
-
-      # The same shape from a YAML file (ERB allowed), like a `config/schedule.yml`.
-      def load_file(path)
-        require 'erb'
-        require 'yaml'
-        load_hash(::YAML.safe_load(::ERB.new(::File.read(path)).result, aliases: true) || {})
-      end
-
-      # Call after the last registration to make this block the whole truth:
-      # every other loop in the cluster is deleted. Off unless asked because a
-      # process registering only part of the schedule would delete the rest, and
-      # because during a rolling deploy old and new code then disagree.
-      def authoritative!
-        return self unless @prune
-
-        keep = @loops.map(&:lid)
-        LoopSet.new(@config).each { |existing| Cron.unregister(existing.lid) unless keep.include?(existing.lid) }
-        self
-      end
-
       private
-
-      def register_entry(entry)
-        cron = entry['cron'].to_s.strip
-        klass = (entry['class'] || entry['klass']).to_s
-        if cron.empty? || klass.empty?
-          raise ArgumentError, "schedule entry #{entry['name'].inspect} needs `cron` and `class`"
-        end
-
-        register(cron, klass, **entry_options(entry))
-      end
-
-      def entry_options(entry)
-        opts = { label: entry['name']&.to_s, queue: entry['queue'], args: entry['args'], retry: entry['retry'],
-                 tz: entry['tz'], paused: entry['status'] == 'disabled' ? true : nil }
-        opts.compact
-      end
 
       # Once per class per boot: everything else registered for that class is
       # a leftover from a previous deploy (the lid hashes schedule+options, so

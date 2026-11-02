@@ -36,8 +36,7 @@ module Wurk
 
         @name = name.dup.freeze
         @options = options.merge(ttl: ttl)
-        @register_pending = false
-        register_or_defer if register
+        register! if register
       end
 
       def reset
@@ -97,17 +96,6 @@ module Wurk
             argv: [@name, type.to_s, JSON.dump(serializable_options), fingerprint, ttl])
       end
 
-      # Limiters are commonly built at class load, and a Redis that is LOADING, out
-      # of memory or briefly gone must not turn `require` into a process exit. The
-      # metadata is only what the dashboard lists; the limit itself lives in the
-      # limiter's own keys, so the next operation can finish the job.
-      def register_or_defer
-        register!
-      rescue ::RedisClient::Error, ::ConnectionPool::TimeoutError => e
-        @register_pending = true
-        Wurk.logger.warn { "Wurk limiter #{@name.inspect} not registered yet (#{e.class}: #{e.message}); will retry" }
-      end
-
       def ttl
         @options[:ttl]
       end
@@ -120,10 +108,6 @@ module Wurk
       end
 
       def lua(name, keys:, argv:)
-        if @register_pending
-          @register_pending = false
-          register_or_defer
-        end
         Wurk::Limiter.redis do |c|
           Wurk::Lua::Loader.eval_cached(c, name, keys: keys, argv: argv)
         end
