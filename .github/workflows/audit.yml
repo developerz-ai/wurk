@@ -1,0 +1,59 @@
+name: audit
+
+# Weekly advisory check of the two dependency sets that ship: the lock the public
+# demo image installs frozen, and the dashboard's production packages. Not a
+# required check: an advisory published on a Tuesday says nothing about the PR
+# that happens to be open, so this reports and never gates a merge. It also runs
+# on a PR that moves one of those locks, so a bump can show it cleared the
+# advisory.
+on:
+  schedule:
+    - cron: "23 6 * * 1"
+  workflow_dispatch:
+  pull_request:
+    paths:
+      - "demo/Gemfile.lock"
+      - "frontend/bun.lock"
+      - "frontend/package.json"
+      - ".github/workflows/audit.yml"
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+jobs:
+  audit:
+    name: audit (demo lock + dashboard deps)
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: ruby/setup-ruby@7f797815d8adceb1c412e7abefdd1ab4abc47a5f # v1
+        with:
+          ruby-version: "3.4"
+          bundler-cache: false
+      - name: install bundler-audit
+        run: gem install bundler-audit --version 0.9.3 --no-document
+      - name: bundle-audit on the demo lock
+        working-directory: demo
+        run: bundle-audit check --update --gemfile-lock Gemfile.lock
+      - uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2
+        with:
+          bun-version: "1.4.3"
+      # Reads package.json and bun.lock only, so nothing is installed or run.
+      #
+      # High or worse in production packages fails the job. The wider list is
+      # printed and does not: the moderate seroval advisories are reached only
+      # through solid-js/web/dist/server.js, which the client bundle never imports,
+      # and the rest is the build chain, which does not ship in the gem.
+      - name: bun audit (production packages, high or worse)
+        working-directory: frontend
+        run: bun audit --prod --audit-level=high
+      - name: bun audit (everything, informational)
+        working-directory: frontend
+        run: bun audit || echo "::notice::bun audit lists advisories above; they do not fail this job."

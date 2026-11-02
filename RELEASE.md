@@ -23,7 +23,7 @@ failure this repo actually hit:
 
 - **A tag and a version can never disagree**, because one is computed from the other.
 - **Every tag has a gem behind it**, so GitHub's "Latest" can never contradict RubyGems.
-- **A failed run leaves no tag**, so re-running is clean and no tag is ever force-moved.
+- **A run that fails before the push leaves nothing behind, and one that fails after it can be finished by a re-run.** No tag is ever force-moved. See [What a re-run does](#what-a-re-run-does).
 
 A stray `v*` tag from any source — a bot, a mistake, a fork — is **inert**. It
 triggers nothing. See [If a release fails](#if-a-release-fails) for why that
@@ -81,18 +81,51 @@ publishes and deploys exactly as one merged by a human.
 
 | # | Job / step | Detail |
 |---|---|---|
-| 1 | **`preflight`** | Reads `Wurk::VERSION`, derives the tag, and asks RubyGems whether that version already exists. If it does, the run stops here as a no-op — RubyGems forbids re-pushing a version, so its presence is the one idempotency key that cannot drift. This is what makes the workflow safe to re-run and makes a no-op edit to `version.rb` resolve to "nothing to do" instead of a failure. |
-| 2 | **checkout + Ruby + bun** | Ruby pinned to 3.4 (the `.gem` is pure Ruby and identical whichever interpreter packs it; the compatibility statement is made by the `test` job). Third-party actions pinned to commit SHAs — this job holds `id-token`. |
+| 1 | **`preflight`** | Reads `Wurk::VERSION`, derives the tag, then reads what has already shipped: the gem on RubyGems, the tag, the GitHub Release and whether the `.gem` is attached. It emits `publish` and `finish` separately ([What a re-run does](#what-a-re-run-does)). A probe that answers neither yes nor no fails the run instead of guessing, and a tag already pointing at another commit is refused here, before anything irreversible. |
+| 2 | **`build`** | Runs only when `publish=true`. Everything that executes third-party code lives here: the unlocked dev bundle, `bun install`, the dummy app's bundle and the suite. It holds `contents: read` only, so a compromised dev dependency cannot mint a RubyGems credential. Ruby is pinned to 3.4 (the `.gem` is pure Ruby and identical whichever interpreter packs it; the compatibility statement is made by the `test` job). |
 | 3 | **build dashboard SPA** | Precompiles the Vite SPA into `vendor/assets/` (`rake frontend:build`). |
 | 4 | **dummy app setup** | Installs the dummy application's bundle and prepares its database (`bundle install`, `bin/rails db:prepare`) before the release gate. |
 | 5 | **release gate** | `rake release:check` — see the table below. |
-| 6 | **build & verify gem** | `rake release:package` packages into `pkg/` and asserts the precompiled dashboard is *inside* the `.gem`. |
-| 7 | **configure RubyGems trusted publishing** | Exchanges GitHub's short-lived OIDC token for a scoped RubyGems credential via `rubygems/configure-rubygems-credentials` — the `id-token: write` permission on this job is what makes that possible, no API key anywhere. |
-| 8 | **gem push** | Second `refs/heads/main` belt-and-braces guard (preflight already refused a non-main ref, but this job must not depend on that staying true), then `gem push "pkg/wurk-${VERSION}.gem"` against `pkg/`. Irreversible — once RubyGems accepts the version, that number is burned. |
-| 9 | **await RubyGems propagation** | `gem exec rubygems-await "pkg/wurk-${VERSION}.gem"` blocks until RubyGems serves the version — without the wait, the next step can race the publication and create a tag with no gem behind it. |
-| 10 | **tag & create GitHub Release** | `gh release create <tag> --target <sha>` creates the tag *and* the Release in one call, with the CHANGELOG section as notes (`bin/changelog-section`) and the `.gem` attached (marked pre-release automatically for `Gem::Version#prerelease?`). When a release for the tag already exists (gem push above is irreversible), the reconcile branch (release.yml:194-220) finishes it via `gh release edit` + `upload --clobber` instead of abandoning — the one case that still aborts is a tag already pointing at a different commit. **Last, deliberately** — see [the one rule](#the-one-rule-the-tag-is-an-output-not-an-input). |
-| 11 | **`demo`** | Ships the released tag to `wurk.demo.developerz.ai` via the `demo` environment (a deployment record and URL; it carries no protection rules, so nothing pauses for a reviewer). It passes `trusted: true`, which waives deploy-demo's `DEMO_DEPLOYERS` actor allowlist — that allowlist guards the hand-dispatched door, and has nothing to add once this workflow has already published the commit's gem. Waiving it is also what lets a release merged by the developerz.ai bot deploy the demo, rather than stranding it after the irreversible publish. The waiver is honoured only from the `release` workflow running on `main`; anything else passing `trusted: true` is rejected. |
-| 12 | **`smoke`** | Calls the reusable `release-smoke.yml` workflow with the released version. It installs that version into a throwaway minimal Rails app, asserts the mounted engine serves `/wurk` with HTTP 200, boots `wurkswarm` and requires an enqueued job to land its Redis marker, and checks the demo's `/wurk/api/meta` reports the same version. This is bounded post-publish evidence, not a gate: it runs only after the irreversible `gem push`, so a failure changes nothing — no rollback or compensation is implemented. |
+| 6 | **build & verify gem** | `rake release:package` packages into `pkg/` and asserts the precompiled dashboard is *inside* the `.gem`; the step records the file's SHA-256. |
+| 7 | **upload the packed gem** | The one thing `build` hands on: artifact `wurk-gem`. |
+| 8 | **`publish`** | The only job with `id-token: write`. Pinned actions and shell from the workflow file only: no checkout, no bundle, no bun. Enters the `rubygems` environment ([Binding the publisher](#binding-the-publisher-to-the-environment)). |
+| 9 | **refuse any ref but main** | Second `refs/heads/main` guard: preflight already refused a non-main ref, but this job must not depend on that staying true. |
+| 10 | **download the packed gem** | Fetches the artifact into `pkg/`. |
+| 11 | **verify the packed gem** | Checks it against the SHA-256 `build` recorded. |
+| 12 | **install Ruby** | For `gem push`; no bundle. |
+| 13 | **configure RubyGems trusted publishing** | Exchanges GitHub's short-lived OIDC token for a scoped RubyGems credential via `rubygems/configure-rubygems-credentials` — no API key anywhere. |
+| 14 | **gem push** | `gem push "pkg/wurk-${VERSION}.gem"`. Irreversible — once RubyGems accepts the version, that number is burned. If the version is already live (a re-run after a lost response) it says so and does not push again. |
+| 15 | **await RubyGems propagation** | A bounded curl of the version endpoint. Non-fatal: the gem is already accepted, and `release` waits for it again before relying on it. |
+| 16 | **install Ruby** | First step of **`release`**, the only job with `contents: write`. It runs after a successful push, or alone when preflight found the gem live and the tag or Release still owed. |
+| 17 | **fetch the published gem** | Downloads the `.gem` from RubyGems and checks it against the digest RubyGems publishes. It is what consumers get, and the only copy a finishing run has. This is the wait that keeps a tag from existing without a gem behind it, so it is fatal; a re-run finishes. |
+| 18 | **tag & create GitHub Release** | `gh release create <tag> --target <sha>` creates the tag *and* the Release in one call, with the CHANGELOG section as notes (`bin/changelog-section`) and the `.gem` attached (marked pre-release automatically for `Gem::Version#prerelease?`). When a release for the tag already exists, the reconcile branch finishes it via `gh release edit` + `upload --clobber` instead of abandoning — the one case that still aborts is a tag pointing at a different commit. **Last, deliberately** — see [the one rule](#the-one-rule-the-tag-is-an-output-not-an-input). |
+| 19 | **`demo`** | Ships the released tag to `wurk.demo.developerz.ai` via the `demo` environment (a deployment record and URL; it carries no protection rules, so nothing pauses for a reviewer). It passes `trusted: true`, which waives deploy-demo's `DEMO_DEPLOYERS` actor allowlist — that allowlist guards the hand-dispatched door, and has nothing to add once this workflow has already published the commit's gem. Waiving it is also what lets a release merged by the developerz.ai bot deploy the demo, rather than stranding it after the irreversible publish. The waiver is honoured only from the `release` workflow running on `main`; anything else passing `trusted: true` is rejected. It waits for the demo to serve this exact commit at `/demo/build`, so a frozen rollout goes red. |
+| 20 | **`smoke`** | Calls the reusable `release-smoke.yml` workflow with the released version. It installs that version into a throwaway minimal Rails app, asserts the mounted engine serves `/wurk` with HTTP 200, boots `wurkswarm` and requires an enqueued job to land its Redis marker, and checks the demo's `/wurk/api/meta` reports the same version. This is bounded post-publish evidence, not a gate: it runs only after the irreversible `gem push`, so a failure changes nothing — no rollback or compensation is implemented. |
+
+### What a re-run does
+
+`gem push` cannot be undone, and steps follow it, so "is the gem live?" alone cannot
+decide what a run owes. Preflight reads all of it. "Release complete" below means
+published with `wurk-<version>.gem` attached.
+
+| Gem live? | Tag? | Release complete? | `publish` / `finish` | Jobs that run | Run |
+|---|---|---|---|---|---|
+| no | none | no | true / true | all | green once demo and smoke pass |
+| no | at this commit | any | true / true | all (the tag and any Release are adopted) | green once demo and smoke pass |
+| no | at another commit | any | refused | preflight only | **red**, before the push |
+| yes | none | no | false / true | `release`, `demo`, `smoke` | green, having finished the release |
+| yes | at this commit | no | false / true | `release`, `demo`, `smoke` | green, having finished the release |
+| yes | at another commit | no | refused | preflight only | **red** |
+| yes | any | yes | false / false | preflight only | green no-op, announced by a notice and the job summary |
+| probe failed (not 200 or 404) | any | any | none | preflight only | **red** |
+
+Any failing job goes red and skips what follows: a failed `build` skips `publish` and
+everything after it, so no green run can come from a publish that did not happen.
+
+"Re-run failed jobs" keeps preflight's earlier answer, and `gem push` copes with a
+version that went live meanwhile. "Re-run all jobs" and `workflow_dispatch` read the state
+afresh. A release whose only failure was `demo` or `smoke` is complete, so a fresh read is
+a no-op: use "Re-run failed jobs", or dispatch `deploy-demo` or `release-smoke`.
 
 ### Smoke-checking a published release
 
@@ -105,7 +138,7 @@ nothing back (no rollback is implemented). `release-smoke.yml` also accepts `wor
 with an explicit `version`, so any published release can be smoke-checked ad hoc.
 
 `workflow_dispatch` runs the same lane by hand — use it to retry a release whose
-run failed after the bump was already merged.
+run failed after the bump was already merged. See [What a re-run does](#what-a-re-run-does).
 
 To smoke-check a published release by hand, dispatch `release-smoke.yml` with the
 exact released version as the `version` input (for example `1.7.6`). The workflow
@@ -146,7 +179,7 @@ gate, so a drift between those two would reject a tag CI had just built.)
 
 ## If a release fails
 
-A `startup_failure` publishes nothing: a called workflow wants a permission its caller lacks (`demo` must grant `deployments: write`, wurk#859). Fix the lane, revert the bump, re-land `release: <next>`: a `workflow_dispatch` retry tags a later commit, which fails the baseline check.
+A `startup_failure` publishes nothing: a called workflow wants a permission its caller lacks (`demo` must grant `deployments: write`, wurk#859). Fix the lane, revert the bump, re-land `release: <next>`: a `workflow_dispatch` retry tags a later commit, which fails the baseline check. A run that fails after `gem push` is different: re-run it, see [What a re-run does](#what-a-re-run-does).
 
 ### The failure this lane was built to end
 
@@ -212,7 +245,7 @@ column alone.
 | A Release exists, author `github-actions[bot]`, the `.gem` attached | A CI-published release — `release.yml` created the Release after RubyGems accepted the gem | **None.** A real release; leave it alone |
 | A Release exists, **zero assets**, any author | The gem-less stray release — the 2026-08-11 failure mode, or a Release whose upload never completed | **The only state the [gem-less runbook](#recovering-a-gem-less-release) may touch.** Maintainer-only, and only after the RubyGems probe below shows no gem was published |
 | A Release exists, the `.gem` attached, author `developerz-ai[bot]` (or a human) | A sanctioned manual / break-glass release — the [break-glass publish](#break-glass-manual-publish-maintainers-only) path | **None.** A real release; never delete it. Its author is not the defect |
-| No Release for the tag | **Unclassified** — one of three possibilities, not yet decided: (a) a `release.yml` preflight no-op (the version is already on RubyGems), (b) a break-glass publication (the gem went up by hand and the Release was never created), (c) a failure before the Release was created | **None until corroborated.** Probe RubyGems for the version and read the last `release.yml` run; only the zero-asset row above is ever recoverable |
+| No Release for the tag | **Unclassified** — one of three possibilities, not yet decided: (a) a `release.yml` preflight no-op from before the lane could finish a release (the version was already on RubyGems), (b) a break-glass publication (the gem went up by hand and the Release was never created), (c) a failure before the Release was created | **None until corroborated.** Probe RubyGems for the version and read the last `release.yml` run; only the zero-asset row above is ever recoverable |
 
 Two rules the table encodes, because both have been got wrong:
 
@@ -272,8 +305,8 @@ of the 2026-10-05 release conditions hold: the tag points at the 2026-10-05
 release commit, the release was authored by the release workflow, and the
 gem asset is attached. The 2026-10-05 release lane therefore succeeded — the
 older stray-tag SHA is no longer on the remote and the earlier `release:check`
-refusals are superseded by the legitimate publication. Per `release.yml:80-86`,
-because the gem is on RubyGems the lane's preflight would now treat `1.8.0` as
+refusals are superseded by the legitimate publication. Because the gem, the tag and
+the Release are all in place, the lane's preflight would now treat `1.8.0` as
 already released and no-op on any rerun, so the stray tag has no future effect.
 
 ## Trusted publishing setup (one-time, already configured)
@@ -293,8 +326,31 @@ pointing at:
 | Workflow filename | `release.yml` |
 | Environment | _(leave blank)_ |
 
-The workflow already requests `permissions: id-token: write`, which is what the
-OIDC exchange needs.
+The `publish` job requests `id-token: write`, which is what the OIDC exchange needs.
+
+### Binding the publisher to the environment
+
+The `publish` job already names `environment: rubygems`, and that alone changes nothing:
+GitHub creates the environment on the first run, with no protection rules, and a publisher
+registered with a blank environment accepts a token whose claims name one. RubyGems looks
+publishers up by matching environment *or* blank
+([`for_claims`](https://github.com/rubygems/rubygems.org/blob/master/app/models/oidc/trusted_publisher/github_action.rb)),
+and adds an environment condition to the access policy only when the publisher has one.
+
+While it stays blank, anyone who can push a branch can dispatch an edited `release.yml`
+from that branch and mint a publish credential: RubyGems matches the repository and the
+workflow filename, not the ref. To close that, an owner does both sides, in this order:
+
+1. **GitHub:** Settings → Environments → `rubygems` → Deployment branches and tags →
+   Selected branches and tags → add `main`. Optionally add required reviewers (every
+   release then waits for one). Nothing else changes: the publisher is still blank.
+2. **RubyGems:** the gem's Trusted Publishers → add a second GitHub Actions publisher with
+   the fields above and Environment `rubygems`. A token naming `rubygems` now matches this
+   one first, so it can be verified on the next release while the blank one remains.
+3. **After one release has published through it,** delete the blank publisher. Only then
+   does a run that drops `environment:` lose its credential. If the release fails at
+   `configure RubyGems trusted publishing`, nothing has been pushed; fix it and re-run.
+4. Change the Environment row above to `rubygems`.
 
 ## Break-glass manual publish (maintainers only)
 
@@ -304,10 +360,9 @@ gate CI runs) and only on green pushes with a local API key (`bin/gem-login`
 first; MFA enforced via `rubygems_mfa_required`).
 
 The version must still be bumped on `main` first, exactly as above. Once the gem
-is on RubyGems, the release lane's preflight treats the version as already
-released and no-ops, so it will **not** cut the tag or GitHub Release — create
-them by hand from that `main` commit (`gh release create vX.Y.Z --target <sha>`
-with the CHANGELOG section as notes and the `.gem` attached).
+is on RubyGems, the release lane's preflight skips the push and finishes the rest:
+dispatch `release.yml` on `main` and it cuts the tag and GitHub Release, attaches the
+`.gem` and runs `demo` and `smoke`.
 
 Every step in this section is a maintainer-only manual action. The scheduled
 health checkup only ever points at this runbook via a filed ask — the checkup

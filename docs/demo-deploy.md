@@ -191,8 +191,8 @@ features successfully.
 
 `.github/workflows/deploy-demo.yml` **builds and pushes the image** — it holds
 no cluster credentials — and then **records the deploy as a GitHub Deployment
-object and waits, bounded, for the demo to serve the new version** (see
-[Deployment record and version probe](#deployment-record-and-version-probe)).
+object and waits, bounded, for the demo to serve the built commit** (see
+[Deployment record and commit probe](#deployment-record-and-commit-probe)).
 The in-cluster **ArgoCD Image Updater** selects the
 newest DOCR tag matching `^sha-[0-9a-f]{7}$` and syncs the deployment
 automatically; the pushed digest
@@ -220,7 +220,7 @@ on `main`:
    separate deploy job) because the digest push is what triggers the deploy, so
    approval would have to pause the run *before* the image ships.
 
-### Deployment record and version probe
+### Deployment record and commit probe
 
 The deploy is **indirect**: CI pushes an image and Image Updater syncs the
 newest digest. Nothing in CI observed the result, so a demo could sit on a
@@ -234,55 +234,44 @@ across several releases. After the image push, the `build` job therefore:
    that commit, and the demo environment's deployments tab shows it. The
    pushed digest is what actually deploys, so this object records the intent
    and its outcome — it triggers nothing.
-2. **Waits, bounded, for the demo to serve the image's bundled version**: it
-   polls `https://wurk.demo.developerz.ai/wurk/api/meta` and compares the
-   reported `version` against the version the built image bundles. The loop
-   has an explicit upper bound on attempts (with a sleep between them), so a
-   demo that never catches up fails the run with a recorded status instead of
-   hanging until the job timeout. Every poll is also deadline-bounded
-   (`--connect-timeout` / `--max-time`): a demo that accepts the connection
-   but stalls the response costs its request deadline per attempt instead of
-   blocking until the job timeout — which would leave the Deployment
-   `in_progress` with no failure status and no last-version diagnostic. The
-   window the loop can cover includes request time, so its worst case stays
-   inside the job's timeout alongside the image build and push.
+2. **Waits, bounded, for the demo to serve the built commit**: it polls
+   `https://wurk.demo.developerz.ai/demo/build` and compares the reported `sha`
+   against the commit it just built. The loop has an explicit upper bound on
+   attempts (with a sleep between them), so a demo that never catches up fails
+   the run with a recorded status instead of hanging until the job timeout.
+   Every poll is also deadline-bounded (`--connect-timeout` / `--max-time`): a
+   demo that accepts the connection but stalls the response costs its request
+   deadline per attempt instead of blocking until the job timeout — which would
+   leave the Deployment `in_progress` with no failure status and no last-commit
+   diagnostic. The window the loop can cover includes request time, so its worst
+   case (10 minutes) stays inside the job's timeout alongside the image build
+   and push.
 
-The probe compares **versions, not commit SHAs**. The demo serves the *gem*
-version: `/wurk/api/meta` renders `::Wurk::VERSION`
-([`app/controllers/wurk/api_controller.rb`](../app/controllers/wurk/api_controller.rb)),
-and the image installs the demo app's bundle from
-[`demo/Gemfile.lock`](../demo/Gemfile.lock) frozen. The expected side is read
-from that lock's path-sourced `wurk (...)` version — the version the built
-image actually bundles — rather than from the checkout's
-[`lib/wurk/version.rb`](../lib/wurk/version.rb), which can differ on an
-ordinary push that changes app or lib code without a version bump. Reading
-the expected side from the bundle keeps the probe aligned with what the
-running image serves; a hardcoded version would pass while the demo served
-another one. There is no endpoint on the demo that reports a commit SHA, so
-the Deployment's commit ref and the served-version probe are deliberately
-different checks: the first records what CI built, the second proves what the
-demo is actually running.
+The probe compares **commits, not versions**. On a push without a version bump
+the old pods already report the gem version the new image bundles, so a version
+comparison matches on the first attempt and a frozen Image Updater stays green.
+The image knows its own commit instead: `deploy-demo.yml` passes the
+`WURK_DEMO_BUILD_SHA` build arg, the [Dockerfile](../Dockerfile) bakes it into
+the environment, and [`demo/config/routes.rb`](../demo/config/routes.rb) answers
+`GET /demo/build` with `{"sha": "<commit>"}`. The route belongs to the demo app,
+so the gem's own meta payload stays free of it, and the Deployment's commit ref
+and the probe now name the same thing: what CI built and what the demo runs.
 
-**This is the CI probe's expected side, and it is not the only one.** The
-standalone read-only check in [The served-version check
-(read-only)](#the-served-version-check-read-only) answers a different
-question — "does the demo serve *this checkout's* version?" — and therefore
-reads its expected side from `lib/wurk/version.rb` instead of the lock. The
-two disagree by design: CI asks whether the *image it just built* is the one
-being served, the standalone check asks whether the *checkout* is what the
-demo runs. A push that changes app or lib code without a version bump moves
-the two apart, and that gap is exactly what each one is there to report.
+**This is the CI probe, and it is not the only check.** The standalone read-only
+check in [The served-version check (read-only)](#the-served-version-check-read-only)
+answers a different question — "does the demo serve *this checkout's* version?" —
+through `/wurk/api/meta`, and so does the demo step in `release-smoke.yml`.
 
 The outcome is written back to the Deployment:
 
 | Probe result | Deployment status | Job |
 |---|---|---|
-| the reported version matches | `success` | green |
-| the bound is exhausted | `failure` | red — the run log prints the last version the demo reported, so the reader knows what it was actually serving |
+| the reported commit matches | `success` | green |
+| the bound is exhausted | `failure` | red — the run log prints the last commit the demo reported, so the reader knows what it was serving |
 
-A rollout can answer `/wurk/api/meta` with HTML or an empty body for a
-moment; that reads as "no version yet" and the probe retries rather than
-aborting on a transient blip.
+Before the first image carrying the route rolls out, and for a moment during any
+rollout, the demo can answer with a 404, HTML or an empty body; that reads as "no
+commit yet" and the probe retries rather than aborting on a transient blip.
 
 **Permissions.** The `build` job holds `contents: read` plus
 `deployments: write` — the second is the only growth, and it exists solely to
@@ -293,7 +282,7 @@ create the Deployment and post its statuses. The workflow-level block and the
 ### The served-version check (read-only)
 
 This is a second, independent check — not the CI probe above. The CI probe
-compares the demo against the version the *image it just built* bundles; this
+compares the demo against the commit *it just built*; this
 one compares the demo against the version *this checkout* declares. The demo's
 own endpoint answers both:
 
@@ -315,13 +304,10 @@ release check uses, so the two never drift apart:
 grep -oE "[\"'][0-9][^\"']*[\"']" lib/wurk/version.rb | head -1 | tr -d "\"'"
 ```
 
-That is deliberately **not** the CI probe's expected side. The CI probe reads
-the version out of [`demo/Gemfile.lock`](../demo/Gemfile.lock) — the gem the
-built image actually installs — because it asks whether the image it built is
-the one being served. This check asks whether the *checkout* is what the demo
-runs, so it reads `lib/wurk/version.rb`. A push that changes app or lib code
-without a version bump moves the two apart, and each check reports the gap
-from its own side.
+That is deliberately **not** the CI probe's question. The CI probe compares the
+commit the demo reports at `/demo/build` with the commit it built, because it asks
+whether the image it built is the one being served. This check asks whether the
+*checkout* is what the demo runs, so it reads `lib/wurk/version.rb`.
 
 Comparing the two gives exactly three verdicts:
 

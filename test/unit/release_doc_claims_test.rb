@@ -4,9 +4,10 @@ require 'minitest/autorun'
 require 'json'
 require 'open3'
 require 'tmpdir'
+require 'yaml'
 
-# Gates the alignment between .github/workflows/release.yml's `release` job
-# publish tail (the `- name:` steps that follow `build & verify gem`) and
+# Gates the alignment between .github/workflows/release.yml's publish tail (the
+# `name:` steps of the `publish` and `release` jobs, in order) and
 # the step table in RELEASE.md, and the alignment between the brief's
 # `RELEASE.md:<a>-<b>` anchor and the gem-less-marker block. RELEASE.md is
 # the landing page a maintainer reaches for about a step before any other,
@@ -32,17 +33,15 @@ class ReleaseDocClaimsTest < Minitest::Test
   SHA_VERSION_HEAD = SHA_RELEASE_RUN
   URL_RELEASE_RUN = 'https://github.com/wurk-owner/wurk/actions/runs/201'
 
-  # The publish tail is derived from release.yml by structural position —
-  # inside the `release:` job, every `- name:` step AFTER `build & verify
-  # gem`. Counting them is not hardcoded: if a future step is added at the
-  # tail end, this test picks it up automatically.
+  # The publish tail is derived from release.yml: every named step of `publish`
+  # then `release`. Nothing is hardcoded, so a step added to either job must also
+  # gain its row.
   def test_release_table_steps_match_release_yml_publish_tail_in_order
     workflow_tail = publish_tail_step_names
     md_steps = table_step_names
 
     refute_empty workflow_tail,
-                 "release.yml's `release` job has no `- name:` steps after `build & verify gem`; " \
-                 'the publish tail should have at least one step'
+                 "release.yml's `publish` and `release` jobs have no named steps"
 
     matches = md_steps.each_cons(workflow_tail.length).any? do |window|
       window == workflow_tail
@@ -80,27 +79,9 @@ class ReleaseDocClaimsTest < Minitest::Test
                     "'gem-less release' marker sentence"
   end
 
-  # Each `- name:` step inside the `release` job whose entry comes AFTER
-  # the `build & verify gem` step, in workflow order. Bounded by the next
-  # 2-space-indent job (the `demo` job that follows) — the comment block
-  # above `demo:` sits at the same indent and is excluded.
   def publish_tail_step_names
-    workflow = File.readlines(RELEASE_YML)
-    release_idx = workflow.index { |l| l.match?(/\A  release:\s*(?:#.*)?\z/) }
-    raise 'release.yml: no `release:` job found' unless release_idx
-
-    job_end_offset = workflow[(release_idx + 1)..].index do |l|
-      l.match?(/\A  [a-zA-Z_]/) && !l.lstrip.start_with?('#')
-    end
-    job_end = job_end_offset ? (release_idx + 1 + job_end_offset) : workflow.length
-
-    block = workflow[(release_idx + 1)...job_end]
-    build_offset = block.index { |l| l.include?('build & verify gem') }
-    raise 'release.yml: no `build & verify gem` step inside the `release` job' unless build_offset
-
-    block[(build_offset + 1)..]
-      .grep(/\A\s+- name:\s+/)
-      .map { |l| l.sub(/\A\s+- name:\s+/, '').chomp }
+    jobs = YAML.load_file(RELEASE_YML).fetch('jobs')
+    %w[publish release].flat_map { |job| jobs.fetch(job).fetch('steps').filter_map { |step| step['name'] } }
   end
 
   # The second cell of every row in RELEASE.md's `# | Job / step | Detail`

@@ -6,8 +6,9 @@
 # gem's deps and the dashboard's move weekly; the CI actions and the Dockerfile
 # base images move monthly, because a weekly cadence there was mostly one PR per
 # setup-ruby patch release (#534, #540) for no change in what CI runs.
-# Bundler is scoped to the root Gemfile (the shipped gem via the gemspec);
-# test/dummy, demo, and test/ecosystem Gemfiles are fixtures, not shipped deps.
+# Bundler covers the root Gemfile (the shipped gem via the gemspec) and demo/,
+# whose committed lock is what the public demo image installs frozen;
+# test/dummy and test/ecosystem Gemfiles are fixtures, not shipped deps.
 # Every bump waits 14 days after a version is published (cooldown) so brand-new
 # releases can be yanked/fixed upstream first; security updates are unaffected.
 # The docker ecosystem watches the Dockerfile's pinned base images alongside
@@ -23,6 +24,20 @@ updates:
     # new version. Gemspec runtime requirements are handled separately by
     # dependabot (only touched when they exclude the new version).
     versioning-strategy: increase
+    schedule:
+      interval: weekly
+    open-pull-requests-limit: 5
+    cooldown:
+      default-days: 14
+    groups:
+      minor-and-patch:
+        update-types:
+          - minor
+          - patch
+  - package-ecosystem: bundler
+    directory: "/demo"
+    # A committed lock serving public traffic: move the lock, not the Gemfile.
+    versioning-strategy: lockfile-only
     schedule:
       interval: weekly
     open-pull-requests-limit: 5

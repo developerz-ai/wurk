@@ -12,13 +12,11 @@ name: deploy-demo
 #
 # After the push, the workflow RECORDS the deploy as a GitHub Deployment
 # object (environment `demo`, ref = the built commit) and waits, bounded, for
-# the demo to report the new version at /wurk/api/meta. The served version is
-# the GEM version (::Wurk::VERSION), not a commit SHA — the demo app serves the
-# path-sourced gem bundled by demo/Gemfile.lock, so /wurk/api/meta is the
-# public witness of what is live. The expected version is read from that lock:
-# the image installs the demo bundle frozen, so the checkout's
-# lib/wurk/version.rb is not necessarily the version the image serves. The
-# Deployment object records that wait's outcome; it triggers nothing.
+# the demo to report that same commit at /demo/build. The image carries its own
+# commit (the WURK_DEMO_BUILD_SHA build arg), so a demo still answering with
+# another commit is one Image Updater has not rolled out, even when the gem
+# version has not moved. The Deployment object records that wait's outcome; it
+# triggers nothing.
 #
 # WHO CAN RUN IT — two layers in force, a third available but not configured:
 #   1. workflow_dispatch on a PUBLIC repo can only be triggered by users with
@@ -195,22 +193,6 @@ jobs:
             echo "short=sha-$(printf '%.7s' "$sha")"
           } >> "$GITHUB_OUTPUT"
 
-      # The demo serves the GEM version, not a commit SHA: /wurk/api/meta
-      # renders `::Wurk::VERSION` from the path-sourced Wurk gem bundled by
-      # the image. The Dockerfile installs demo/Gemfile.lock frozen, so the
-      # version the image actually bundles is the lock's `wurk (...)` entry —
-      # not necessarily the checkout's lib/wurk/version.rb, which may differ
-      # on an ordinary push without a version bump.
-      - name: resolve demo version
-        id: demo_version
-        run: |
-          version="$(ruby -e 'lock = File.read("demo/Gemfile.lock"); print lock[/^    wurk \(([^)]+)\)$/, 1]')"
-          if [ -z "$version" ]; then
-            echo "::error::demo/Gemfile.lock has no path-sourced wurk version — cannot resolve the version the built demo image bundles."
-            exit 1
-          fi
-          echo "version=${version}" >> "$GITHUB_OUTPUT"
-
       - uses: docker/setup-buildx-action@f87e5991a6d7451dcb8d9637bfbc97413f497069 # v4.4.1
       - uses: docker/login-action@81c6f93d4bc991e510b342a00b419b3bb4efc5c6 # v4.7.0
         with:
@@ -222,6 +204,10 @@ jobs:
           context: .
           file: Dockerfile
           push: true
+          # Read back at /demo/build (demo/config/routes.rb): the probe below compares
+          # it, so this is what makes a frozen rollout visible.
+          build-args: |
+            WURK_DEMO_BUILD_SHA=${{ steps.built.outputs.sha }}
           tags: |
             ${{ env.IMAGE }}:${{ steps.built.outputs.short }}
             ${{ env.IMAGE }}:${{ steps.built.outputs.sha }}
@@ -275,52 +261,57 @@ jobs:
           set -euo pipefail
           gh api --method POST "repos/${GITHUB_REPOSITORY}/deployments/${DEPLOYMENT_ID}/statuses" \
             -f state=in_progress \
-            -f description="waiting for the demo to report the new version"
+            -f description="waiting for the demo to serve the built commit"
 
-      # The bounded wait. The demo only starts serving the new version once
+      # The bounded wait. The demo only starts serving the new commit once
       # Image Updater has synced the new digest, which is asynchronous — so
-      # the version is polled until it matches, with an explicit upper bound
+      # /demo/build is polled until it matches, with an explicit upper bound
       # on the number of attempts. An unbounded loop would hang the job
       # until the job timeout killed it, with no status recorded.
+      #
+      # It compares the commit, not the gem version: on a push without a version
+      # bump the old pods already report the expected version, so a version check
+      # passes on attempt 1 and a frozen Image Updater stays green forever.
       #
       # Each request is deadline-bounded too. A demo that accepts the TCP
       # connection but stalls the response would otherwise block curl until
       # the JOB timeout killed the step — which runs after `mark deployment
       # in progress`, leaving the Deployment in_progress with no failure
-      # status and no last-version diagnostic. --connect-timeout bounds the
+      # status and no last-commit diagnostic. --connect-timeout bounds the
       # handshake, --max-time the whole request, so an attempt costs at most
       # 5s of request + 10s of sleep and the loop's worst case is
       # 40 × 15s = 10 minutes even when the demo hangs on every try (a
       # responsive demo polls for ~7 minutes).
       #
       # The bound must fit inside the job's `timeout-minutes: 30` alongside
-      # the image build and push, so it is deliberately short: Image Updater
-      # syncs within a couple of minutes, and a demo that has not caught up
-      # in 10 minutes is a real failure worth reporting, not a slow success.
-      - name: wait for the demo to report the new version
+      # the image build and push, so it is deliberately short: a demo that has
+      # not caught up in 10 minutes is a real failure worth reporting, not a
+      # slow success. If real rollouts outgrow it, raise it here and in the tests.
+      - name: wait for the demo to serve the built commit
         env:
           GH_TOKEN: ${{ github.token }}
           DEPLOYMENT_ID: ${{ steps.deployment.outputs.id }}
-          VERSION: ${{ steps.demo_version.outputs.version }}
+          EXPECTED_SHA: ${{ steps.built.outputs.sha }}
         run: |
           set -euo pipefail
-          last_version="(none)"
+          last_sha="(none)"
           matched=""
           for attempt in $(seq 1 40); do
-            body="$(curl -fsS --connect-timeout 2 --max-time 5 https://wurk.demo.developerz.ai/wurk/api/meta 2>/dev/null || true)"
-            # A rollout can answer with HTML or an empty body for a moment, and
-            # a JSON parse error must not abort the probe — it must read as
-            # "no version yet" and retry.
-            seen="$(printf '%s' "$body" | ruby -rjson -e 'begin; print JSON.parse(STDIN.read)["version"]; rescue StandardError; print ""; end' 2>/dev/null || true)"
+            body="$(curl -fsS --connect-timeout 2 --max-time 5 https://wurk.demo.developerz.ai/demo/build 2>/dev/null || true)"
+            # Before the first image carrying the route rolls out this is a 404,
+            # and a rollout can answer with HTML or an empty body for a moment. A
+            # JSON parse error must not abort the probe — it must read as "no
+            # commit yet" and retry.
+            seen="$(printf '%s' "$body" | ruby -rjson -e 'begin; print JSON.parse(STDIN.read)["sha"]; rescue StandardError; print ""; end' 2>/dev/null || true)"
             if [ -n "$seen" ]; then
-              last_version="$seen"
-              echo "attempt ${attempt}: demo reports version ${last_version} (expected ${VERSION})"
-              if [ "$last_version" = "${VERSION}" ]; then
+              last_sha="$seen"
+              echo "attempt ${attempt}: demo serves ${last_sha} (expected ${EXPECTED_SHA})"
+              if [ "$last_sha" = "${EXPECTED_SHA}" ]; then
                 matched=1
                 break
               fi
             else
-              echo "attempt ${attempt}: /wurk/api/meta did not report a version"
+              echo "attempt ${attempt}: /demo/build did not report a commit"
             fi
             sleep 10
           done
@@ -328,13 +319,13 @@ jobs:
           if [ -n "$matched" ]; then
             gh api --method POST "repos/${GITHUB_REPOSITORY}/deployments/${DEPLOYMENT_ID}/statuses" \
               -f state=success \
-              -f description="demo reports version ${VERSION}"
-            echo "Demo reports version ${VERSION} — deployment succeeded."
+              -f description="demo serves ${EXPECTED_SHA}"
+            echo "Demo serves ${EXPECTED_SHA} — deployment succeeded."
             exit 0
           fi
 
           gh api --method POST "repos/${GITHUB_REPOSITORY}/deployments/${DEPLOYMENT_ID}/statuses" \
             -f state=failure \
-            -f description="demo did not report version ${VERSION} within the wait window"
-          echo "::error::demo /wurk/api/meta reports version ${last_version}, expected ${VERSION} — the demo did not pick up the new build in time."
+            -f description="demo did not serve ${EXPECTED_SHA} within the wait window"
+          echo "::error::demo /demo/build reports ${last_sha}, expected ${EXPECTED_SHA} — the demo did not pick up the new build in time."
           exit 1

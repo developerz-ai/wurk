@@ -46,6 +46,12 @@ RUN BUNDLE_FROZEN=1 bundle install --jobs 4 --retry 3 && \
     SECRET_KEY_BASE=build bin/rails db:prepare && \
     chown -R wurk:wurk /wurk
 
+# The commit this image was built from, read back at /demo/build so deploy-demo
+# can tell a rolled-out image from an old pod. After the bundle layers so a new
+# commit does not cost a reinstall.
+ARG WURK_DEMO_BUILD_SHA=unknown
+ENV WURK_DEMO_BUILD_SHA=$WURK_DEMO_BUILD_SHA
+
 USER wurk
 EXPOSE 3000 7433
 ENTRYPOINT ["/wurk/bin/demo-entrypoint"]

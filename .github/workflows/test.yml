@@ -84,6 +84,9 @@ jobs:
               - 'frontend/**'
               # The sidekiq shim gem: linted by rubocop, run by the ecosystem lane.
               - 'ecosystem/**'
+              # demo/ is read by the suite (DemoSoakTest, the demo lock guard), and
+              # Dependabot now moves demo/Gemfile.lock on its own.
+              - 'demo/**'
               # The policy and briefs are read by test/unit/health_brief_test.rb,
               # release_due_brief_test.rb and maintainer_policy_contract_test.rb.
               - '.dz/**'
