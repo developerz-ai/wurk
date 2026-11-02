@@ -1,0 +1,56 @@
+# A worker fleet that rolls: several replicas, new pods Ready before old ones
+# drain. Choose worker-recreate.yaml when two generations must not overlap.
+#
+# terminationGracePeriodSeconds must exceed
+#   preStop + shutdown timeout (-t, default 25s) + 5s swarm grace
+# Full budget and every knob: docs/deployment.md.
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: wurk-worker
+  labels: { app: wurk-worker }
+spec:
+  replicas: 3
+  selector:
+    matchLabels: { app: wurk-worker }
+  template:
+    metadata:
+      labels: { app: wurk-worker }
+    spec:
+      terminationGracePeriodSeconds: 60
+      containers:
+        - name: worker
+          image: registry.example.com/myapp:1.4.2
+          command: ["bundle", "exec", "wurkswarm", "-r", "./config/environment.rb"]
+          env:
+            - { name: RAILS_ENV, value: production }
+            # Pin it: with no CPU limit the default is every core on the node, and
+            # each child opens its own database pool.
+            - { name: WURK_COUNT, value: "4" }
+            - { name: WURK_DISABLED, value: "1" }
+            - { name: WURK_HEALTH_PORT, value: "7433" }
+            - { name: SIDEKIQ_MAXMEM_MB, value: "1500" }
+            - name: REDIS_URL
+              valueFrom:
+                secretKeyRef: { name: wurk, key: redis-url }
+          ports:
+            - { name: health, containerPort: 7433 }
+          startupProbe:
+            httpGet: { path: /live, port: health }
+            periodSeconds: 2
+            failureThreshold: 30
+          livenessProbe:
+            httpGet: { path: /live, port: health }
+            periodSeconds: 10
+            failureThreshold: 3
+          readinessProbe:
+            httpGet: { path: /ready, port: health }
+            periodSeconds: 15
+            failureThreshold: 2
+          lifecycle:
+            preStop:
+              exec:
+                command: ["/bin/sh", "-c", "kill -TSTP 1 && sleep 5"]
+          resources:
+            requests: { cpu: "2", memory: 2Gi }
+            limits: { memory: 7Gi }

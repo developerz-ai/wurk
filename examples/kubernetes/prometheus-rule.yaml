@@ -1,0 +1,72 @@
+# Alerts on Wurk's own exporter. Cluster families come from shared Redis and read
+# the same on every pod, hence `max`. Fetch and reclaim counters and the
+# wurk_process_* / wurk_swarm_* families describe the scraped pod.
+#
+# Scope `namespace` to yours. An alert on a series that stopped existing never
+# fires, so WurkMetricsAbsent is what catches "the exporter is gone": keep one
+# absent() arm per environment you run.
+apiVersion: monitoring.coreos.com/v1
+kind: PrometheusRule
+metadata:
+  name: wurk
+  labels: { app: wurk-worker }
+spec:
+  groups:
+    - name: wurk
+      rules:
+        - alert: WurkMetricsAbsent
+          expr: absent(wurk_build_info{namespace="production"})
+          for: 10m
+          labels: { severity: critical }
+          annotations:
+            summary: No Wurk worker has been scraped for 10m, so every other Wurk alert is blind.
+        - alert: WurkRedisUnreachable
+          expr: max by (namespace, pod) (wurk_redis_up) == 0
+          for: 2m
+          labels: { severity: critical }
+          annotations:
+            summary: "{{ $labels.pod }} cannot read Redis."
+        - alert: WurkChildrenMissing
+          expr: wurk_swarm_children_fresh < wurk_swarm_children_expected
+          for: 10m
+          labels: { severity: warning }
+          annotations:
+            summary: "{{ $labels.pod }} has fewer live children than configured: crash-looping or wedged."
+        - alert: WurkQueueLatencyHigh
+          expr: max by (namespace, queue) (wurk_queue_latency_seconds) > 300
+          for: 5m
+          labels: { severity: warning }
+          annotations:
+            summary: "Queue {{ $labels.queue }} oldest job has waited {{ $value | humanizeDuration }}."
+        - alert: WurkQueueHasNoConsumers
+          expr: >-
+            max by (namespace, queue) (wurk_queue_size) > 0
+            and max by (namespace, queue) (wurk_queue_consumers) == 0
+          for: 10m
+          labels: { severity: critical }
+          annotations:
+            summary: "Queue {{ $labels.queue }} holds jobs and no live process subscribes to it."
+        - alert: WurkNoLeader
+          expr: max by (namespace) (wurk_leader) == 0
+          for: 5m
+          labels: { severity: warning }
+          annotations:
+            summary: No process holds the leader lease, so periodic jobs are not firing.
+        - alert: WurkDeadSetGrowing
+          expr: max by (namespace) (delta(wurk_dead_size[1h])) > 100
+          for: 15m
+          labels: { severity: warning }
+          annotations:
+            summary: "{{ $value | humanize }} jobs died in the last hour."
+        - alert: WurkFetchErrors
+          expr: sum by (namespace, pod) (rate(wurk_fetch_errors_total[5m])) > 1
+          for: 10m
+          labels: { severity: warning }
+          annotations:
+            summary: "{{ $labels.pod }} is failing to fetch: check the path to Redis."
+        - alert: WurkOrphansReclaimed
+          expr: sum by (namespace) (increase(wurk_reaper_reclaimed_total[15m])) > 0
+          for: 0m
+          labels: { severity: info }
+          annotations:
+            summary: "{{ $value | humanize }} jobs were reclaimed from dead workers. OOM kills or forced shutdowns are the usual cause."

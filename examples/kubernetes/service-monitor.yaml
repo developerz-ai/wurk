@@ -1,0 +1,44 @@
+# Scraping a worker pod: a headless Service for discovery, a ServiceMonitor for
+# prometheus-operator, and the NetworkPolicy a default-deny namespace needs. Without
+# the operator, keep the Service and NetworkPolicy and annotate the pod template:
+#   prometheus.io/scrape: "true"
+#   prometheus.io/port: "7433"
+#   prometheus.io/path: /metrics
+apiVersion: v1
+kind: Service
+metadata:
+  name: wurk-worker-metrics
+  labels: { app: wurk-worker }
+spec:
+  clusterIP: None
+  selector: { app: wurk-worker }
+  ports:
+    - { name: health, port: 7433, targetPort: health }
+---
+apiVersion: monitoring.coreos.com/v1
+kind: ServiceMonitor
+metadata:
+  name: wurk-worker
+  labels: { app: wurk-worker }
+spec:
+  selector:
+    matchLabels: { app: wurk-worker }
+  endpoints:
+    - port: health
+      path: /metrics
+      interval: 30s
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: wurk-worker-metrics
+spec:
+  podSelector:
+    matchLabels: { app: wurk-worker }
+  policyTypes: [Ingress]
+  ingress:
+    - from:
+        - namespaceSelector:
+            matchLabels: { kubernetes.io/metadata.name: monitoring }
+      ports:
+        - { protocol: TCP, port: 7433 }

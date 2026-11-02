@@ -154,6 +154,26 @@ else) are skipped too, matching `JobRetry`'s own rule.
 
 ---
 
+### Hearing about it sooner
+
+A job on the default 25-retry schedule reaches its terminal attempt about 21 days
+after it first fails. To also hear about one early attempt:
+
+```ruby
+Wurk::Sentry.install!(config, report_after_attempts: 3)
+```
+
+That reports the failure of attempt 3 (1 is the first run) as well as the terminal
+one, so a job produces at most two reports, not one per attempt.
+
+### Deaths that never raised
+
+`install!` also adds a death handler, for the deaths the terminal-attempt rule
+cannot predict: a job the reaper killed as a poison pill, and a `sidekiq_retry_in`
+block answering `:kill` or `:discard`. A failure already reported on its way to the
+dead set is not reported twice, and an operator's kill carries no exception and is
+not reported.
+
 ## What each event carries
 
 | | |
@@ -183,12 +203,15 @@ jobs do not show up under Performance. Use
 
 ## Noise filtering
 
-By default the error handler drops exceptions whose ancestry includes
-`RedisClient::Error` or `ConnectionPool::TimeoutError` — the same list Wurk's
-default handler logs at WARN instead of INFO
-(`Wurk::Configuration::REDIS_ERROR_CLASSES`), because both are self-healing:
-the pool already retried before re-raising, and the fetch loop retries again a
-second later.
+By default the error handler drops `RedisClient::ConnectionError` and
+`ConnectionPool::TimeoutError`, because both are self-healing: the pool already
+retried before re-raising, and the fetch loop retries again a second later.
+
+An error the server *answered* with is not filtered: `MISCONF`, `OOM`, `READONLY`,
+`NOPERM`, `WRONGPASS` and the rest of `RedisClient::CommandError` heal only when
+someone acts, and every write fails until then. They are reported rate-limited:
+per process, the first of each code and one a minute after that, with the count
+of swallowed reports in `extra[:suppressed]`.
 
 This matters more than it sounds. The fetch loop runs a tight
 `rescue → handle_exception → sleep(1)` cycle across every thread of every forked
@@ -199,6 +222,11 @@ completely healthy — enough to blow through an event quota and bury the real
 issues.
 
 These stay in the logs. They just stop paging anyone.
+
+`Wurk::JobRetry::Handled`, `Wurk::JobRetry::Skip` and `Wurk::Shutdown` are the retry
+machinery's own signals and are never reported. `install!` also adds them to
+`Sentry.configuration.excluded_exceptions`, because a `Rails.error` subscriber such
+as sentry-rails sees what crosses the reloader without going through this handler.
 
 Turn it off, or change the list:
 
@@ -260,7 +288,7 @@ an explicit `install!`, which is the same opt-in shape as
 | `Sentry::Sidekiq::SentryContextServerMiddleware` | `Wurk::Sentry::Middleware` |
 | `Sentry::Sidekiq::ErrorHandler` | `Wurk::Sentry::ErrorHandler` |
 | transaction `Sidekiq/MyJob` | transaction `Wurk/MyJob` |
-| `config.sidekiq.report_after_job_retries` (default `false` — reports every attempt) | always terminal-only; not configurable |
+| `config.sidekiq.report_after_job_retries` (default `false` — reports every attempt) | terminal-only by default; `install!(config, report_after_attempts: N)` also reports attempt N |
 | starts a Sentry transaction (Performance) | scope only; see [`docs/metrics.md`](metrics.md) |
 | job `args` included in the event context | never included |
 

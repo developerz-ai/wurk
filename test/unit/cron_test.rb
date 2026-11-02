@@ -2,6 +2,7 @@
 
 require_relative '../test_helper'
 require 'tzinfo'
+require 'tempfile'
 require 'active_job'
 require 'active_job/queue_adapters/wurk_adapter'
 
@@ -1351,6 +1352,60 @@ class CronTest < Wurk::Test::UnitCase
     nxt = Sidekiq::CronParser.new('* * * * *').next
 
     assert_operator nxt, :>, Time.now - 1
+  end
+
+  def test_load_hash_accepts_sidekiq_cron_shape
+    mgr = Wurk::Cron::Manager.new
+    loops = mgr.load_hash(
+      'nightly' => { 'cron' => '0 3 * * *', 'class' => 'CronTest::FooWorker', 'queue' => 'low', 'args' => [1],
+                     'description' => 'ignored', 'status' => 'disabled' },
+      sym: { cron: '* * * * *', klass: 'CronTest::BarWorker', tz: 'Etc/UTC' }
+    )
+
+    assert_equal %w[CronTest::FooWorker CronTest::BarWorker], loops.map(&:klass)
+    assert_equal({ 'label' => 'nightly', 'queue' => 'low', 'args' => [1], 'paused' => true }, loops.first.options)
+    assert_predicate loops.first, :paused?
+    assert_equal 'Etc/UTC', loops.last.tz_name
+  end
+
+  def test_load_hash_takes_a_list_and_rejects_an_entry_missing_its_cron_or_class
+    mgr = Wurk::Cron::Manager.new
+    loops = mgr.load_hash([{ 'name' => 'a', 'cron' => '* * * * *', 'class' => 'CronTest::FooWorker' }])
+
+    assert_equal 'a', loops.first.options['label']
+    assert_raises(ArgumentError) { mgr.load_hash('b' => { 'cron' => '* * * * *' }) }
+    assert_raises(ArgumentError) { mgr.load_hash('c' => { 'class' => 'CronTest::FooWorker' }) }
+  end
+
+  def test_load_file_reads_yaml_with_erb
+    Tempfile.create(['schedule', '.yml']) do |file|
+      file.write("job:\n  cron: '<%= '0 1 * * *' %>'\n  class: CronTest::FooWorker\n")
+      file.close
+
+      assert_equal ['0 1 * * *'], Wurk::Cron::Manager.new.load_file(file.path).map(&:schedule)
+    end
+  end
+
+  # ConfigTester promises validation never deletes a live loop.
+  def test_authoritative_keeps_live_loops_under_config_tester
+    live = Wurk::Cron::Manager.new.register('* * * * *', 'CronTest::BarWorker')
+
+    Wurk::Cron::ConfigTester.new.verify do |mgr|
+      mgr.register('* * * * *', 'CronTest::FooWorker')
+      mgr.authoritative!
+    end
+
+    assert_includes Wurk::Cron::LoopSet.new.map(&:lid), live.lid
+  end
+
+  def test_authoritative_removes_loops_this_block_did_not_declare
+    Wurk::Cron::Manager.new.register('* * * * *', 'CronTest::BarWorker')
+    mgr = Wurk::Cron::Manager.new
+    kept = mgr.register('* * * * *', 'CronTest::FooWorker')
+
+    mgr.authoritative!
+
+    assert_equal [kept.lid], Wurk::Cron::LoopSet.new.map(&:lid)
   end
 
   private

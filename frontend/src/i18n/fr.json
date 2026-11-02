@@ -228,6 +228,8 @@
     "available": "disponible"
   },
   "queues": {
+    "no_consumer": "Sans consommateur",
+    "no_consumer_hint": "Aucun processus actif n'est abonné à cette file : ses tâches ne s'exécutent pas.",
     "job_count": "{n} tâches",
     "latency_label": "latence"
   },

@@ -228,6 +228,8 @@
     "available": "disponível"
   },
   "queues": {
+    "no_consumer": "Sem consumidor",
+    "no_consumer_hint": "Nenhum processo ativo assina esta fila, então seus jobs não estão sendo executados.",
     "job_count": "{n} jobs",
     "latency_label": "latência"
   },

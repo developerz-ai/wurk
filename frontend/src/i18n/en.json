@@ -228,6 +228,8 @@
     "available": "available"
   },
   "queues": {
+    "no_consumer": "No consumer",
+    "no_consumer_hint": "No live worker process subscribes to this queue, so its jobs are not being run.",
     "job_count": "{n} jobs",
     "latency_label": "latency"
   },

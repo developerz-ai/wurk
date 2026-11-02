@@ -117,6 +117,18 @@ module Wurk
 
       def round_trip(payload) = ::Wurk.load_json(::Wurk.dump_json(payload))
 
+      # Guard test for a queue nothing listens to: `{ queue => [job classes] }`
+      # for every loaded job whose queue is outside `listened`, so a worker would
+      # never fetch it. Eager-load the app first; only loaded classes are seen.
+      #
+      #   Rails.application.eager_load!
+      #   assert_empty Wurk::Testing.unconsumed_job_queues(config_file: 'config/wurk.yml')
+      def unconsumed_job_queues(listened: nil, config_file: nil)
+        listening = Array(listened || (config_file ? queues_in_config(config_file) : ::Wurk.configuration.queues))
+                    .map { |queue| Array(queue).first.to_s }
+        job_queues.except(*listening)
+      end
+
       # Run every fake job across all classes until the store is empty.
       def drain_all
         count = 0
@@ -125,6 +137,41 @@ module Wurk
           count += 1
         end
         count
+      end
+
+      private
+
+      def job_queues
+        (native_job_queues + active_job_queues).group_by(&:first).transform_values { |pairs| pairs.map(&:last).sort }
+      end
+
+      def native_job_queues
+        ::ObjectSpace.each_object(::Class).filter_map do |klass|
+          next unless klass.name && klass < ::Wurk::Worker && !klass.name.start_with?('Wurk::', 'Sidekiq::')
+
+          [klass.get_sidekiq_options['queue'].to_s, klass.name]
+        end
+      end
+
+      def active_job_queues
+        return [] unless defined?(::ActiveJob::Base)
+
+        ::ActiveJob::Base.descendants.filter_map do |job|
+          next unless job.name
+
+          # `queue_as` with a block resolves per instance.
+          queue = job.queue_name.respond_to?(:call) ? job.new.queue_name : job.queue_name
+          [queue.to_s, job.name]
+        end
+      end
+
+      def queues_in_config(path)
+        require 'erb'
+        require 'yaml'
+        source = ::ERB.new(::File.read(path)).result
+        parsed = (::YAML.safe_load(source, permitted_classes: [::Symbol], aliases: true) || {}).transform_keys(&:to_s)
+        capsules = parsed.fetch('capsules', {}).to_h.values
+        [*parsed['queues'], *capsules.flat_map { |cap| cap.transform_keys(&:to_s)['queues'] }].compact
       end
     end
   end

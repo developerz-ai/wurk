@@ -25,6 +25,11 @@ Sidekiq::Enterprise.unique!
 # Metrics stayed empty (see #100). The swarm forks AFTER this initializer, so the
 # children inherit the chain.
 if ENV["WURK_DEMO"] == "1"
+  # The reference deployment runs what docs/deployment.md tells everyone else to:
+  # probes and /metrics on the listener. Only a Launcher binds it, so the web role
+  # and the reset job stay unaffected by this default.
+  ENV["WURK_HEALTH_PORT"] ||= "7433"
+
   require_relative "../../app/jobs/soak_job"
   require_relative "../../app/workloads/demo_soak"
   Wurk.configuration.client_middleware.add(SoakJob::Tagging)

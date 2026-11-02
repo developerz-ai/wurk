@@ -24,11 +24,20 @@ module Wurk
     # `retry_count == max_attempts - 1` (and, for `retry: 0` / `retry: false`,
     # the very first one).
     #
-    # Not predictable from the payload — and therefore reported one attempt
-    # late, or not at all: a `sidekiq_retry_in` block returning `:discard` or
-    # `:kill`. Those are host decisions made after this point.
+    # Not predictable from the payload: a `sidekiq_retry_in` block returning
+    # `:discard` or `:kill`, a host decision made after this point. {DeathHandler}
+    # catches those.
     module RetryPolicy
       module_function
+
+      # Terminal, or the one attempt `report_after_attempts:` asks to hear about
+      # (at most two reports per job, not one per attempt). Attempt 1 is the
+      # first run.
+      def report?(job, instance, config, report_after_attempts)
+        return true if terminal?(job, instance, config)
+
+        !report_after_attempts.nil? && next_retry_count(job) + 1 == report_after_attempts
+      end
 
       def terminal?(job, instance = nil, config = nil)
         retry_option = retry_option_for(job, instance)

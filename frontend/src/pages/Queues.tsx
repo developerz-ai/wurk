@@ -25,6 +25,7 @@ interface QueueSummary {
   size: number;
   latency: number;
   paused: boolean;
+  consumers?: number;
 }
 
 interface QueueJob {
@@ -271,6 +272,11 @@ export default function Queues() {
                           <td>
                             <Show when={q.paused} fallback={<span class="badge badge-success">{t('dashboard.active')}</span>}>
                               <span class="badge badge-warning">{t('dashboard.paused')}</span>
+                            </Show>
+                            <Show when={q.consumers === 0 && q.size > 0}>
+                              <span class="badge badge-error ml-1" title={t('queues.no_consumer_hint')}>
+                                {t('queues.no_consumer')}
+                              </span>
                             </Show>
                           </td>
                           <Show when={!readOnly()}>

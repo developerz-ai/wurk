@@ -1,6 +1,7 @@
 # frozen_string_literal: true
 
 require_relative '../test_helper'
+require 'tempfile'
 
 # Wurk::Testing inline/fake/disable modes + the Sidekiq::Testing helper surface.
 # The mode flag and the in-memory Queues store are process-global, but the
@@ -293,5 +294,42 @@ class TestingModesTest < Wurk::Test::UnitCase
     Sidekiq::Testing.fake! { FakeJob.perform_async(5) }
 
     assert_equal 1, FakeJob.jobs.size
+  end
+
+  class ListenedJob
+    include Wurk::Job
+
+    sidekiq_options queue: 'listened-queue'
+  end
+
+  class StrandedJob
+    include Wurk::Job
+
+    sidekiq_options queue: 'stranded-queue'
+  end
+
+  def test_unconsumed_job_queues_names_jobs_on_queues_no_worker_fetches
+    found = Wurk::Testing.unconsumed_job_queues(listened: %w[listened-queue])
+
+    assert_equal ['TestingModesTest::StrandedJob'], found['stranded-queue']
+    refute found.key?('listened-queue')
+  end
+
+  def test_unconsumed_job_queues_reads_a_config_file_with_weights_and_capsules
+    Tempfile.create(['wurk', '.yml']) do |file|
+      file.write(<<~YAML)
+        :queues:
+          - [listened-queue, 2]
+        :capsules:
+          bulk:
+            :queues:
+              - stranded-queue
+      YAML
+      file.close
+      found = Wurk::Testing.unconsumed_job_queues(config_file: file.path)
+
+      refute found.key?('listened-queue')
+      refute found.key?('stranded-queue')
+    end
   end
 end
