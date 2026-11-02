@@ -74,3 +74,17 @@ issue, explain the trade-off and leave it for the owner.
 
 Before opening anything, check that no open PR or issue already covers it. If nothing is worth
 changing this month, do nothing: no empty PRs, no churn.
+
+## Rows
+
+- `support-window` — Read the nightly compat signals for the Ruby floor, oldest Rails and Valkey.
+- `ecosystem` — Read the weekly ecosystem suites and Sidekiq release watcher signals.
+- `redis-topologies` — Read the Redis topology signals for Valkey 8, TLS, ACL and Sentinel.
+- `parity-pin` — Compare upstream Sidekiq gem releases with the parity pin's date.
+- `upstream-drift` — Review documented Sidekiq behaviour changes and Ruby/Rails compatibility matrix drift.
+- `dependency-majors` — Review dependency majors Dependabot cannot land, including frontend majors needing code changes.
+- `speed` — Identify measured speed improvements using the existing benchmark evidence requirements.
+- `correctness` — Review bugs, parity issues, conformance cases, intentional divergences and missing ecosystem coverage.
+- `hidden-failures` — Find swallowed failures and CI skips; make failures visible while retaining deliberate fallbacks.
+- `docs-drift` — Check the listed documentation against the code and existing docs-drift guards.
+- `simplification` — Identify dead code, duplicated logic and slow or flaky tests while preserving coverage.
