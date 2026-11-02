@@ -25,26 +25,40 @@ class LuaDeclaredKeysTest < Wurk::Test::UnitCase
   VARIADIC = %w[DEL UNLINK EXISTS TOUCH MGET].freeze
 
   # Script => why it still builds a key in Lua. Only with a reason that names
-  # who has to change what; an entry here is a known Cluster/Dragonfly break.
-  ALLOWED = {}.freeze
+  # who has to change what; an entry here breaks Redis Cluster, and breaks
+  # Dragonfly unless the script carries the grant header checked below.
+  ALLOWED = {
+    reliable_schedule_promote: 'its target queue comes from each job payload, unknown before the script reads it'
+  }.freeze
+  DRAGONFLY_GRANT = '--!df flags=allow-undeclared-keys'
 
-  def test_every_lua_file_touches_only_declared_keys
-    offenders = Dir[File.join(Wurk::Lua::LUA_DIR, '*.lua')].flat_map do |path|
-      name = File.basename(path, '.lua').to_sym
+  def test_every_script_touches_only_declared_keys
+    offenders = Wurk::Lua::SCRIPTS.flat_map do |name, source|
       next [] if ALLOWED.key?(name)
 
-      undeclared_keys(File.read(path)).map { |call| "#{File.basename(path)}: #{call}" }
+      undeclared_keys(source).map { |call| "#{name}: #{call}" }
     end
 
     assert_empty offenders, "redis.call with a key not passed via KEYS:\n#{offenders.join("\n")}"
   end
 
   def test_every_allowlisted_script_still_needs_its_entry
-    stale = ALLOWED.keys.reject do |name|
-      undeclared_keys(File.read(File.join(Wurk::Lua::LUA_DIR, "#{name}.lua"))).any?
-    end
+    stale = ALLOWED.keys.reject { |name| undeclared_keys(Wurk::Lua::SCRIPTS.fetch(name)).any? }
 
     assert_empty stale, "allowlisted but clean now — drop the entry: #{stale.inspect}"
+  end
+
+  # A grant must be the script's first line or Dragonfly ignores it, and it has to
+  # sit on exactly the scripts that need it: elsewhere it would quietly serialize
+  # a script that does not touch undeclared keys.
+  def test_only_allowlisted_scripts_carry_the_dragonfly_grant_on_their_first_line
+    granted = Wurk::Lua::SCRIPTS.select { |_, source| source.lines.first.strip == DRAGONFLY_GRANT }.keys
+
+    assert_equal ALLOWED.keys, granted
+  end
+
+  def test_the_scanner_sees_inline_scripts
+    assert_includes undeclared_keys(Wurk::Lua::RELIABLE_SCHEDULE_PROMOTE).join, 'lpush'
   end
 
   def test_the_scanner_flags_a_key_built_inside_lua

@@ -9,6 +9,8 @@ require_relative 'topology'
 require_relative 'cpu_count'
 require_relative 'redis_options'
 require_relative 'keys'
+require_relative 'error_coalescer'
+require_relative 'metrics/process_counters'
 
 module Wurk
   # Owns runtime knobs (concurrency, queues, timeouts, lifecycle events,
@@ -98,7 +100,11 @@ module Wurk
       # the fetch path reads this once at boot, so an app that caps nothing
       # resolves to "no capped queues" before the first fetch and never asks
       # again.
-      global_concurrency: {}
+      global_concurrency: {},
+      # See #swarm_crash_exit_after=. Long enough to outlast a slow rollout or a
+      # dependency coming back, short enough that a bad release does not sit
+      # looking Running for an afternoon.
+      swarm_crash_exit_after: 600
     }.freeze
 
     # :fork fires only inside swarm children, after fork + internal AR/Redis
@@ -151,7 +157,7 @@ module Wurk
       Wurk::Metrics::Statsd.reset!
     end
 
-    def initialize(options = {})
+    def initialize(options = {}) # rubocop:disable Metrics/AbcSize
       @options = deep_dup_defaults.merge(options)
       # Through the same door `global_concurrency=` uses, so a cap passed to
       # `Configuration.new` is validated rather than trusted, and the default
@@ -171,6 +177,7 @@ module Wurk
       @telemetry_installed = false
       @frozen = false
       @deferred_server_blocks = []
+      @fetch_error_coalescer = ErrorCoalescer.new
     end
 
     # --- Hash-like options access -----------------------------------------
@@ -252,6 +259,7 @@ module Wurk
     def redis=(hash)
       guard_frozen!
       RedisOptions.validate!(hash)
+      warn_on_late_redis_assignment
       @redis_config = @redis_config.merge(hash.transform_keys(&:to_sym))
     end
 
@@ -277,6 +285,12 @@ module Wurk
       @capsules.each_value(&:reset_redis_pools!)
       @web_redis_pool&.disconnect!
       @web_redis_pool = nil
+    end
+
+    # Non-terminal counterpart, for a fork in a parent whose threads are live.
+    def reload_redis_pools!
+      @capsules.each_value(&:reload_redis_pools!)
+      @web_redis_pool&.reload!
     end
 
     def new_redis_pool(size, name = 'custom')
@@ -410,6 +424,20 @@ module Wurk
       @options[:swarm_heartbeat_timeout]
     end
 
+    # Seconds every swarm slot may spend crash-looping before the standalone
+    # runner reports it and exits non-zero. nil or false keeps respawning forever.
+    def swarm_crash_exit_after=(seconds)
+      unless seconds.nil? || seconds == false || (seconds.is_a?(Numeric) && seconds.positive?)
+        raise ArgumentError, "swarm_crash_exit_after must be nil, false, or a positive number (got #{seconds.inspect})"
+      end
+
+      @options[:swarm_crash_exit_after] = seconds || nil
+    end
+
+    def swarm_crash_exit_after
+      @options[:swarm_crash_exit_after]
+    end
+
     # --- Reliability (Sidekiq Pro drop-in toggles) -----------------------
 
     # Sidekiq Pro's opt-in toggle for reliable fetch. Already the default in
@@ -418,9 +446,8 @@ module Wurk
     # callback. It exists so a Pro initializer drops in unchanged instead of
     # raising NoMethodError.
     #
-    # NOTE: `reliable_scheduler!` below is NOT a no-op. The default
-    # `scheduled_enq` pops then pushes and has a job-loss window
-    # (Wurk::Scheduled::Enq); only the toggle swaps in the atomic promoter.
+    # NOTE: `reliable_scheduler!` below is NOT a no-op: it swaps in the atomic
+    # promoter, much faster but skipping client middleware on promotion.
     #
     # The optional block is Pro's recovery callback: `|jobstr, pill|`, fired
     # once per orphan recovery (`pill` nil) and once on a poison kill (`pill`
@@ -433,8 +460,9 @@ module Wurk
 
     # Pro reliable scheduler (§4): promote due jobs from retry/schedule onto
     # their target queue in a single atomic Lua (ZRANGEBYSCORE+ZREM+LPUSH),
-    # closing the pop→push job-loss window of the default poller. Swaps the
-    # pluggable `scheduled_enq` for the atomic promoter; idempotent.
+    # much faster than the default poller but skipping client middleware on
+    # promotion. Swaps the pluggable `scheduled_enq` for the atomic promoter;
+    # idempotent.
     def reliable_scheduler!(*)
       self[:scheduled_enq] = Wurk::Scheduled::ReliableEnq
       nil
@@ -772,6 +800,7 @@ module Wurk
     attr_writer :logger
 
     def handle_exception(ex, ctx = {})
+      ctx = redact_jobstr(ctx)
       if error_handlers.empty?
         logger.error("#{redacted_context(ctx)} #{ex.class}: #{ex.message}")
       else
@@ -783,11 +812,26 @@ module Wurk
       end
     end
 
+    # What the fetch loop reports through. It sleeps 1s and retries on every
+    # thread of every worker, so an outage would otherwise call each handler once
+    # per thread per second. The count lands in the metric, the handlers see the
+    # first of each exception class and one per window after that.
+    def report_fetch_error(exception)
+      Metrics::ProcessCounters.increment(:fetch_errors)
+      suppressed = @fetch_error_coalescer.admit(exception.class)
+      return unless suppressed
+
+      context = { context: 'Error fetching job' }
+      context[:suppressed] = suppressed if suppressed.positive?
+      handle_exception(exception, context)
+    end
+
     # The error context with the job's args passed through the `redact_args`
     # hook, for the two reporters that print or tag the whole context: the
     # fallback log line and the default ERROR_HANDLER (whose Wurk::Context a
     # JSON log formatter emits). Host-registered error handlers still receive
-    # the real ctx — they are the host's own code.
+    # the real `job` — they are the host's own code (`jobstr` is another matter:
+    # see #redact_jobstr).
     def redacted_context(ctx)
       hook = @options[:redact_args]
       job = ctx.is_a?(Hash) ? ctx[:job] : nil
@@ -796,6 +840,20 @@ module Wurk
       require_relative 'redact'
       ctx.merge(job: job.merge('args' => Wurk::Redact.args(job, hook)))
     end
+
+    # The raw payload a job that failed to parse or dispatch is reported with. Unlike
+    # `job`, this reaches host handlers scrubbed too: it is a string nobody expects
+    # to carry the args, so handlers forward it to log aggregators and trackers as
+    # is. What it cannot be parsed from cannot be scrubbed, so that is withheld.
+    def redact_jobstr(ctx)
+      hook = @options[:redact_args]
+      raw = ctx.is_a?(Hash) ? ctx[:jobstr] : nil
+      return ctx unless hook && raw
+
+      require_relative 'redact'
+      ctx.merge(jobstr: Wurk::Redact.jobstr(raw, hook))
+    end
+    private :redact_jobstr
 
     # --- Configure blocks (Sidekiq.configure_server / _client) -----------
 
@@ -934,6 +992,18 @@ module Wurk
 
     private
 
+    # Pools read the hash once, when built, so the later assignment silently does
+    # nothing to this process's connections until something rebuilds them.
+    def warn_on_late_redis_assignment
+      return unless @capsules.each_value.any?(&:redis_pools_built?)
+
+      logger.warn do
+        'config.redis= called after a Redis pool was already built; existing connections keep the old ' \
+          'settings until the pools are rebuilt (a swarm child rebuilds them, a single process does not). ' \
+          'Set config.redis before anything uses Redis.'
+      end
+    end
+
     def warn_on_late_server_registration(klass)
       affected = @capsules.each_value.filter_map do |capsule|
         capsule.name if capsule.prepared? && capsule.server_middleware_missing?(klass)
@@ -1051,7 +1121,7 @@ module Wurk
       threads = total_concurrency
       return if size >= threads
 
-      logger.warn do
+      logger.error do
         "ActiveRecord connection pool size (#{size}) is smaller than this process's job concurrency " \
           "(#{threads}); jobs that use the database will wait for connections and may raise " \
           'ActiveRecord::ConnectionTimeoutError. Raise `pool:` in config/database.yml to at least ' \

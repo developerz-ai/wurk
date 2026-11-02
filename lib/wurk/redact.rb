@@ -21,11 +21,23 @@ module Wurk
     # Fail closed: a hook that raises must not fall back to showing the args it
     # was installed to hide.
     FAILED = ['[REDACTED: redact_args raised]'].freeze
+    UNPARSEABLE = '[REDACTED: unparseable job]'
 
     module_function
 
     def hook(config = Wurk.configuration)
       config.redact_args
+    end
+
+    # A raw payload string, with its args replaced. Anything that does not parse to
+    # a job, or to JSON at all, could be holding the args in any shape: it is dropped.
+    def jobstr(raw, hook)
+      job = ::JSON.parse(raw)
+      return UNPARSEABLE unless job.is_a?(::Hash)
+
+      ::JSON.generate(job.merge('args' => args(job, hook)))
+    rescue ::JSON::ParserError, ::EncodingError, ::TypeError
+      UNPARSEABLE
     end
 
     # The args to display for `job` (a parsed payload Hash) under `hook`.

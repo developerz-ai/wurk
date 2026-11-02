@@ -190,6 +190,16 @@ module Wurk
       @pools.clear
     end
 
+    # The fork-path form: closes idle sockets but keeps every pool usable, for a
+    # parent whose own threads may be mid-checkout.
+    def reload_redis_pools!
+      @pools.each_value(&:reload!)
+    end
+
+    def redis_pools_built?
+      !@pools.empty?
+    end
+
     def redis(idempotent: false, &)
       PoolCheckout.with(redis_pool, idempotent, &)
     end

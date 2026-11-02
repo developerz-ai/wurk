@@ -1,6 +1,7 @@
 # frozen_string_literal: true
 
 require_relative '../test_helper'
+require 'tmpdir'
 
 # ChildBoot#reconnect_after_fork runs inside forked swarm children; the real
 # fork path is proven end-to-end by swarm_boot_test. Here we drive its Redis
@@ -231,27 +232,64 @@ class ChildBootTest < Wurk::Test::UnitCase
     @config.reset_redis_pools!
   end
 
-  # #101 boot-audit: `reconnect_active_record` must not itself pay a DB
-  # handshake on the child's boot-critical path — `establish_connection`
-  # only records the spec; AR opens the real socket lazily on first checkout.
-  # Pin that here (not just eyeball it) so a future AR upgrade that changes
-  # this can't silently put a DB round trip ahead of `:startup`. Requires
-  # `active_record` + `sqlite3` directly (unit env doesn't load them) rather
-  # than stubbing, per "never mock" — this is real AR, just an in-memory DB.
-  def test_reconnect_active_record_does_not_eagerly_open_a_connection
+  # A host that establishes its own database or pool size (common behind a
+  # connection pooler) must keep it in the child. A bare `establish_connection`
+  # re-derived the config from the environment and silently switched both.
+  def test_child_keeps_the_parents_custom_active_record_config
     require 'active_record'
     require 'sqlite3'
-    ::ActiveRecord::Base.establish_connection(adapter: 'sqlite3', database: ':memory:')
-    ::ActiveRecord::Base.connection_handler.clear_active_connections!
+    Dir.mktmpdir do |dir|
+      custom = ::File.join(dir, 'custom.db')
+      ::ActiveRecord::Base.establish_connection(adapter: 'sqlite3', database: custom, pool: 7)
+      reader, writer = ::IO.pipe
+      pid = with_database_url("sqlite3:#{::File.join(dir, 'other.db')}") do
+        ::Process.fork do
+          reader.close
+          @boot.send(:reconnect_after_fork)
+          ::ActiveRecord::Base.connection.execute('SELECT 1')
+          base = ::ActiveRecord::Base
+          writer.write(::JSON.generate([base.connection_db_config.database, base.connection_pool.size]))
+          writer.close
+          exit!(0)
+        end
+      end
+      writer.close
+      ::Process.wait(pid)
 
-    @boot.send(:reconnect_active_record)
-
-    assert_equal 0, ::ActiveRecord::Base.connection_pool.stat[:connections]
+      assert_equal [custom, 7], ::JSON.parse(reader.read)
+    end
   ensure
     ::ActiveRecord::Base.connection_handler.clear_all_connections! if defined?(::ActiveRecord::Base)
   end
 
+  # A store that is up but cannot serve yet is an outage, not a broken release.
+  # Dragonfly answers some of these as plain errors, so the class alone won't do.
+  def test_a_store_that_cannot_serve_counts_as_unavailable
+    ['LOADING Redis is loading the dataset in memory', 'LOADING Dragonfly is loading the dataset',
+     'BUSY Redis is busy running a script', 'CLUSTERDOWN The cluster is down', 'MASTERDOWN Link with MASTER is down',
+     'READONLY You can\'t write against a read only replica', "OOM command not allowed when used memory > 'maxmemory'",
+     'ERR Out of memory', 'MISCONF Redis is configured to save RDB snapshots'].each do |message|
+      assert @boot.send(:redis_unavailable?, RedisClient::CommandError.parse(message)), message
+    end
+  end
+
+  def test_a_server_answer_that_says_nothing_about_availability_is_a_crash
+    ['NOPERM this user has no permissions', 'WRONGPASS invalid username-password pair', 'ERR wrong number of arguments',
+     'NOSCRIPT No matching script'].each do |message|
+      refute @boot.send(:redis_unavailable?, RedisClient::CommandError.parse(message)), message
+    end
+    refute @boot.send(:redis_unavailable?, RuntimeError.new('LOADING is just a word here'))
+  end
+
   private
+
+  def with_database_url(url)
+    previous = ENV.fetch('DATABASE_URL', nil)
+    ENV['DATABASE_URL'] = url
+    yield
+  ensure
+    ENV['DATABASE_URL'] = previous
+  end
 
   # Swaps the default capsule's main pool for a command-recording decorator.
   # Restored (and the real pool dropped) on the way out so the next checkout

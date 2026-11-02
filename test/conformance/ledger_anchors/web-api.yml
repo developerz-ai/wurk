@@ -72,7 +72,7 @@
     post 'busy/quiet', to: 'api#quiet_process', as: :api_quiet_process
     post 'busy/stop',  to: 'api#stop_process',  as: :api_stop_process
 - entry: "Busy-control HTTP request-shape parity is unsupported"
-  anchor: "app/controllers/wurk/api_controller.rb#L167-L168"
+  anchor: "app/controllers/wurk/api_controller.rb#L170-L171"
   fragment: |-
     def quiet_process = signal_processes(:quiet!)
     def stop_process  = signal_processes(:stop!)
@@ -92,29 +92,29 @@
     def index
       render layout: false, html: decorate_shell(spa_html).html_safe
 - entry: "`HEAD /` does not implement the Redis health probe"
-  anchor: "lib/wurk/configuration.rb#L702-L726"
+  anchor: "lib/wurk/configuration.rb#L715-L739"
   fragment: |-
     # Opt-in thin HTTP listener inside the worker process for k8s probes.
     # When called, the Launcher will start a TCP server on `port` bound to
     # `bind` exposing `GET /live` (200 while not stopping) and `GET /ready`
 - entry: "`HEAD /` does not implement the Redis health probe"
-  anchor: "lib/wurk/health.rb#L123-L135"
+  anchor: "lib/wurk/health.rb#L128-L140"
   fragment: |-
     def bind_and_serve
       @server = ::TCPServer.new(@bind, @port)
 - entry: "`HEAD /` does not implement the Redis health probe"
-  anchor: "lib/wurk/health.rb#L258-L266"
+  anchor: "lib/wurk/health.rb#L271-L279"
   fragment: |-
     def response_for(method, path)
       return [json('error', message: 'method not allowed'), 405] unless method == 'GET'
 - entry: "`HEAD /` does not implement the Redis health probe"
-  anchor: "lib/wurk/health.rb#L277-L305"
+  anchor: "lib/wurk/health.rb#L282-L310"
   fragment: |-
     def ready_response
       return [json('down', check: 'ready', reason: 'redis unreachable'), 503] unless ping_redis
       return [json('down', check: 'ready', reason: 'heartbeat stale'), 503] unless heartbeat_fresh?
 - entry: "`HEAD /` does not implement the Redis health probe"
-  anchor: "lib/wurk/health.rb#L354-L367"
+  anchor: "lib/wurk/health.rb#L371-L384"
   fragment: |-
     needed = min_ready(expected)
     fresh = collector.fresh_local(collector.snapshot, @ready_window).size
@@ -189,7 +189,7 @@
   fragment: |-
     rescue_from(*::Wurk::Configuration::REDIS_ERROR_CLASSES) { |ex| render_redis_unavailable(ex) }
 - entry: "Queue job-delete takes `jid`, not the spec's `key_val`"
-  anchor: "lib/wurk/configuration.rb#L114"
+  anchor: "lib/wurk/configuration.rb#L120"
   fragment: |-
     REDIS_ERROR_CLASSES = [RedisClient::Error, ConnectionPool::TimeoutError].freeze
 - entry: "Queue job-delete takes `jid`, not the spec's `key_val`"

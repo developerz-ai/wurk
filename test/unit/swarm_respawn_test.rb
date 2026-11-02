@@ -33,6 +33,38 @@ class SwarmRespawnTest < Wurk::Test::UnitCase
     @config.logger = ::Logger.new(IO::NULL)
   end
 
+  def test_co_hosted_swarm_reports_a_crash_loop_and_keeps_running
+    reports = []
+    @config.error_handlers.replace([->(ex, ctx, _cfg = nil) { reports << [ex.class, ctx[:context]] }])
+    swarm = crash_looping_swarm(exit_on_crash_loop: false)
+
+    swarm.send(:check_crash_loop)
+
+    assert_equal [[Wurk::Swarm::CrashLoop, 'swarm-crash-loop']], reports
+    refute_predicate swarm, :crash_looped?
+    swarm.send(:check_crash_loop)
+
+    assert_equal 1, reports.size, 'reported once per window, not once per tick'
+  end
+
+  def test_standalone_swarm_gives_up_on_a_crash_loop
+    swarm = crash_looping_swarm(exit_on_crash_loop: true)
+
+    swarm.send(:check_crash_loop)
+
+    assert_predicate swarm, :crash_looped?
+    assert_empty swarm.children
+  end
+
+  def test_a_redis_unavailable_exit_does_not_count_toward_the_crash_loop
+    swarm = boot_swarm
+    pid, = swarm.children.first
+    swarm.send(:on_child_exit, pid, Status.new(Wurk::Swarm::REDIS_UNAVAILABLE_EXIT_STATUS))
+    watch = swarm.instance_variable_get(:@crash_watch)
+
+    refute watch.due?([0], ::Process.clock_gettime(::Process::CLOCK_MONOTONIC) + 1_000_000)
+  end
+
   def test_crashed_child_is_removed_and_armed_for_respawn
     swarm = boot_swarm
     pid, meta = swarm.children.first
@@ -120,12 +152,19 @@ class SwarmRespawnTest < Wurk::Test::UnitCase
     Wurk::Topology.flat(count: 1, queues: ['default'], concurrency: 1)
   end
 
-  def new_swarm
-    RespawnTestSwarm.new(topology: topology, config: @config)
+  def crash_looping_swarm(exit_on_crash_loop:)
+    swarm = boot_swarm(exit_on_crash_loop: exit_on_crash_loop, crash_exit_after: 0.001, shutdown_timeout: 0)
+    swarm.children.each_key { |pid| swarm.send(:on_child_exit, pid, Status.new(1)) }
+    sleep 0.01
+    swarm
   end
 
-  def boot_swarm
-    swarm = new_swarm
+  def new_swarm(**overrides)
+    RespawnTestSwarm.new(topology: topology, config: @config, **overrides)
+  end
+
+  def boot_swarm(**)
+    swarm = new_swarm(**)
     swarm.boot(install_signals: false)
     swarm
   end

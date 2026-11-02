@@ -180,7 +180,9 @@ module Wurk
       false
     end
 
-    def boot_swarm
+    def boot_swarm # rubocop:disable Metrics/AbcSize
+      warn_on_production_fork
+      Health.options_from_env
       timeout = Wurk.configuration[:timeout] || Swarm::DEFAULT_SHUTDOWN_TIMEOUT
       swarm = Wurk::Swarm.new(topology: Wurk.configuration.topology, shutdown_timeout: timeout)
       supervisor = nil
@@ -202,6 +204,18 @@ module Wurk
         swarm.supervise
       rescue StandardError => e
         logger.error { "wurk supervisor thread died: #{e.class}: #{e.message}" }
+      end
+    end
+
+    # A deliberate default, but a surprise after a gem swap: stock Sidekiq never
+    # runs jobs in the web process, and a separate worker on top of this runs
+    # everything against two pools. WURK_EMBED=1 says it is intended.
+    def warn_on_production_fork
+      return unless ::Rails.env.production? && ENV['WURK_EMBED'] != '1'
+
+      logger.warn do
+        'wurk: this web process is forking a worker swarm. If workers run elsewhere, set WURK_DISABLED=1 here; ' \
+          'if this is intended, set WURK_EMBED=1 to silence this.'
       end
     end
 

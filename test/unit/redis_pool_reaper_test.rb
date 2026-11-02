@@ -149,7 +149,7 @@ class RedisPoolReaperTest < Wurk::Test::UnitCase
   end
 
   def server_has_client?(client_id)
-    !@observer.call('CLIENT', 'LIST', 'ID', client_id.to_s).to_s.strip.empty?
+    @observer.call('CLIENT', 'LIST').to_s.lines.any? { |line| line.match?(/\bid=#{client_id}\b/) }
   end
 
   def reaper_thread

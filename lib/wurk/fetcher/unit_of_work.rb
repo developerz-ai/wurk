@@ -120,17 +120,28 @@ module Wurk
         # both lists and runs twice — once from the public queue, once when the
         # reaper reclaims this process's private list.
         #
-        # LREM then RPUSH in one MULTI, unconditionally: unlike bulk_requeue
+        # RPUSH then LREM in one script, unconditionally: unlike bulk_requeue
         # (which races a Processor ACKing the same UoW and so guards the push on
-        # the LREM), the caller here owns the unit, and a job whose ACK already
-        # went out must still be re-queued rather than dropped.
+        # the private copy), the caller here owns the unit, and a job whose ACK
+        # already went out must still be re-queued rather than dropped. A script
+        # because a MULTI would apply the LREM after a refused RPUSH, losing the
+        # job. Unconditional is also why it goes by call_once: redis-client
+        # re-sends on a dropped socket, and the replay would push the job a second
+        # time. A raise leaves the outcome unknown, and both outcomes are safe:
+        # moved, or still in the private list, where Fetcher::SelfReconcile finds
+        # it.
         def requeue
           config.redis do |conn|
-            conn.multi do |tx|
-              tx.call('LREM', private_queue, LREM_COUNT, job) if private_queue
-              tx.call('RPUSH', queue, job)
-            end
+            next conn.call_once('RPUSH', queue, job) unless private_queue
+
+            Wurk::Lua::Loader.eval_once(conn, :requeue_unit, keys: [private_queue, queue], argv: [job])
           end
+        end
+
+        # The Processor has settled this unit, one way or the other: stop
+        # vouching for its payload. See Fetcher::SelfReconcile.
+        def release_claim
+          ::Thread.current.thread_variable_set(CLAIM_KEY, nil)
         end
       end
     end

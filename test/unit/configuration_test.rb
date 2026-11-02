@@ -764,7 +764,7 @@ class ConfigurationTest < Wurk::Test::UnitCase
 
     @config.send(:warn_on_small_db_pool, FakeRecord.new(5))
 
-    assert_includes log.string, 'WARN'
+    assert_includes log.string, 'ERROR'
     assert_includes log.string, 'pool size (5) is smaller than'
     assert_includes log.string, 'concurrency (10)'
   end
@@ -1605,6 +1605,34 @@ class ConfigurationTest < Wurk::Test::UnitCase
     assert_equal 30, config[:redis_idle_timeout]
     assert_raises(ArgumentError) { Wurk::Configuration.new(redis_idle_timeout: 0) }
     assert_raises(ArgumentError) { config.merge!(redis_idle_timeout: -1) }
+  end
+
+  def test_swarm_crash_exit_after_defaults_on_and_can_be_disabled
+    config = Wurk::Configuration.new
+
+    assert_equal 600, config.swarm_crash_exit_after
+    config.swarm_crash_exit_after = nil
+
+    assert_nil config.swarm_crash_exit_after
+    config.swarm_crash_exit_after = false
+
+    assert_nil config.swarm_crash_exit_after
+    assert_raises(ArgumentError) { config.swarm_crash_exit_after = 0 }
+  end
+
+  def test_warns_on_a_late_redis_assignment_and_not_on_an_early_one
+    out = StringIO.new
+    config = Wurk::Configuration.new
+    config.logger = ::Logger.new(out)
+    config.redis = { url: Wurk::Test.redis_url }
+
+    assert_empty out.string
+    config.redis_pool
+    config.redis = { read_timeout: 9 }
+
+    assert_match(/after a Redis pool was already built/, out.string)
+  ensure
+    config&.reset_redis_pools!
   end
 
   private

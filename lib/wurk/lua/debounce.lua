@@ -43,12 +43,12 @@ local now = tonumber(t[1]) + (tonumber(t[2]) / 1000000)
 local replaced = 0
 local first = now
 local prev = redis.call('HMGET', dkey, 'member', 'first')
--- The ZREM doubles as the liveness test. A recorded member that is no longer
--- in `schedule` has already been promoted by the poller (or deleted from the
--- dashboard): its burst is over, so this enqueue opens a new one. Carrying the
--- old `first` forward instead would cap a fresh burst against a deadline that
--- has already passed and fire it immediately, forever.
-if prev[1] and redis.call('ZREM', zkey, prev[1]) == 1 then
+-- A recorded member no longer in `schedule` has already been promoted by the
+-- poller (or deleted from the dashboard): its burst is over, so this enqueue
+-- opens a new one. Carrying the old `first` forward instead would cap a fresh
+-- burst against a deadline that has already passed and fire it immediately,
+-- forever.
+if prev[1] and redis.call('ZSCORE', zkey, prev[1]) then
   replaced = 1
   first = tonumber(prev[2]) or now
 end
@@ -64,7 +64,12 @@ end
 -- gets back a score it can compare byte-for-byte with what is in the ZSET.
 local score = string.format('%.6f', at)
 local started = string.format('%.6f', first)
+-- Add before remove: a server that refuses the ZADD (Dragonfly at maxmemory)
+-- aborts here with the pending job still scheduled.
 redis.call('ZADD', zkey, score, member)
+if replaced == 1 and prev[1] ~= member then
+  redis.call('ZREM', zkey, prev[1])
+end
 redis.call('HSET', dkey, 'member', member, 'first', started)
 -- Whole seconds, rounded up, floored at 1: the key must outlive the entry it
 -- guards. If it expires first, the next enqueue sees no pending member and

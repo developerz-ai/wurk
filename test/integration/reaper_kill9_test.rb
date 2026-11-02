@@ -24,6 +24,19 @@ class ReaperKill9Worker
   end
 end
 
+# Marks itself started, then parks until its process is killed or drained.
+class ReaperKill9ParkedWorker
+  include Wurk::Job
+
+  def perform(redis_url, started_key)
+    client = RedisClient.config(url: redis_url).new_client
+    client.call('INCR', started_key)
+    client.call('EXPIRE', started_key, 120)
+    client.close
+    sleep 60
+  end
+end
+
 # Real forks, real Redis, real `kill -9`. Boots a swarm, floods it with jobs,
 # repeatedly SIGKILLs random children mid-run, and asserts the reliable-fetch
 # reaper recovers every stranded job: zero loss, zero infinite re-runs.
@@ -66,6 +79,37 @@ class ReaperKill9Test < Wurk::Test::UnitCase
     super
   end
 
+  # A replacement's boot sweep is the fast recovery: with the periodic sweep out of
+  # reach, the job comes back only through it, however soon after boot its worker
+  # died. A lock around boot sweeps turned this from about 1s into a minute.
+  def test_a_child_killed_right_after_boot_is_recovered_by_its_replacements_boot_sweep
+    @config[:super_fetch_reaper_interval] = 3600
+    started = "#{@ns}-started"
+    @observer.call('LPUSH', "queue:#{@queue_name}",
+                   Wurk.dump_json('class' => 'ReaperKill9ParkedWorker', 'args' => [Wurk::Test.redis_url, started],
+                                  'jid' => SecureRandom.hex(12), 'queue' => @queue_name, 'retry' => false))
+    swarm = Wurk::Swarm.new(topology: Wurk::Topology.flat(count: 1, queues: [@queue_name], concurrency: 1),
+                            config: @config, shutdown_timeout: 2)
+    supervisor = nil
+
+    begin
+      swarm.boot(install_signals: false)
+      supervisor = Thread.new { swarm.supervise }
+
+      assert wait_for(15) { @observer.call('GET', started).to_i >= 1 }, 'the job never started'
+
+      ::Process.kill('KILL', swarm.children.keys.first)
+
+      assert wait_for(15) { @observer.call('GET', started).to_i >= 2 },
+             'the replacement did not recover the job within its boot'
+    ensure
+      swarm.request_shutdown
+      supervisor&.join(15)
+      swarm.shutdown unless supervisor&.alive?
+      @observer.call('DEL', started)
+    end
+  end
+
   def test_kill_9_storm_loses_no_jobs_and_never_loops_forever
     enqueue_jobs
     swarm = Wurk::Swarm.new(topology: topology, config: @config, shutdown_timeout: 5)
@@ -98,6 +142,12 @@ class ReaperKill9Test < Wurk::Test::UnitCase
   end
 
   private
+
+  def wait_for(timeout)
+    deadline = Process.clock_gettime(Process::CLOCK_MONOTONIC) + timeout
+    sleep POLL_INTERVAL until yield || Process.clock_gettime(Process::CLOCK_MONOTONIC) > deadline
+    yield
+  end
 
   def topology
     Wurk::Topology.flat(count: CHILDREN, queues: [@queue_name], concurrency: CONCURRENCY)

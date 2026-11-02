@@ -38,19 +38,6 @@ module Wurk
         nil
       end
 
-      # `<public_q>|<host>|<pid>|<nonce>|<idx>` → [host, pid, nonce] (pid as
-      # Integer), or all-nil when the suffix isn't a well-formed owner tail.
-      # Splitting the suffix off the known public-queue prefix tolerates a `|`
-      # inside the queue name itself, and leaves the tail unambiguous: exactly
-      # 4 segments for the current shape, exactly 3 for the pre-nonce one.
-      def parse_owner(public_q, key)
-        suffix = key.delete_prefix("#{public_q}|")
-        return [nil, nil, nil] if suffix == key
-
-        host, pid, nonce = owner_tails(suffix.split('|')).first
-        [host, pid, nonce]
-      end
-
       # Owner segments of a private-list key, taken from the right, as
       # [host, pid, nonce, segment_count] readings in preference order (empty
       # when nothing parses). The wide shape is preferred: an all-digit nonce is
@@ -67,9 +54,7 @@ module Wurk
       # The nonce slot must carry PROCESS_NONCE's exact shape (NONCE_PATTERN):
       # on a pre-nonce key read wide it holds the real pid, which is never 12
       # hex, so the guard is what falls such a key through to narrow_tail
-      # instead of misreading it. Guarded here rather than in parse_full
-      # because parse_owner reads through owner_tails too — one guard, and the
-      # two parsers agree on every input.
+      # instead of misreading it.
       def wide_tail(parts)
         [parts[-4], parts[-3].to_i, parts[-2], 4] if parts.size >= 4 && integer?(parts[-3]) && nonce?(parts[-2])
       end

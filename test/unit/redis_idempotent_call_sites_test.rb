@@ -70,6 +70,11 @@ class RedisIdempotentCallSitesTest < Wurk::Test::UnitCase
       @conn.call(*args, **, &)
     end
 
+    def call_once(*args, **, &)
+      @log << args.first.to_s
+      @conn.call_once(*args, **, &)
+    end
+
     def blocking_call(timeout, *args, **, &)
       @log << args.first.to_s
       @conn.blocking_call(timeout, *args, **, &)
@@ -145,7 +150,7 @@ class RedisIdempotentCallSitesTest < Wurk::Test::UnitCase
     enqueue('{"jid":"b"}')
     fetcher.retrieve_work.requeue
 
-    assert_equal [false], @main.claims_for('RPUSH')
+    assert_equal [false], @main.claims_for('EVALSHA').uniq
   end
 
   # The ACK claims, and had to: it no longer owns a checkout — it rides the
@@ -186,7 +191,8 @@ class RedisIdempotentCallSitesTest < Wurk::Test::UnitCase
 
     assert_equal 2, reaper.reclaim!
 
-    assert_equal [false], @main.claims_for('LMOVE').uniq
+    assert_equal [false], @main.claims_for('EVALSHA').uniq
+    assert_empty @main.claims_for('LMOVE'), 'a bare LMOVE between shards loses the job on a full Dragonfly'
   end
 
   # --- data API (Stats / Queue / ProcessSet) ------------------------------
@@ -355,7 +361,7 @@ class RedisIdempotentCallSitesTest < Wurk::Test::UnitCase
 
   def reaper
     @config.default_capsule.queues = [@queue_name]
-    Wurk::Fetcher::Reaper.new(@config, interval: 1, lock_key: "#{@ns}-lock", full_lock_key: "#{@ns}-full")
+    Wurk::Fetcher::Reaper.new(@config, interval: 1, lock_key: "#{@ns}-lock")
   end
 
   def enqueue(payload)

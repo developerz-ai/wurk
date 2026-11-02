@@ -324,16 +324,16 @@ class SwarmTest < Wurk::Test::UnitCase
     swarm = bare_swarm
     pool = @config.redis_pool
     pool.with { |c| c.call('PING') }
-    pools_at_fork = :never_forked
+    idle_at_fork = :never_forked
     fake_fork = lambda {
-      pools_at_fork = @config.default_capsule.instance_variable_get(:@pools).dup
+      idle_at_fork = pool.idle
       9001
     }
 
     with_stubbed_fork(fake_fork) { swarm.send(:spawn_child, topology.assignments.first, 0) }
 
-    assert_empty pools_at_fork, 'the parent still held capsule pools at fork time'
-    assert_raises(ConnectionPool::PoolShuttingDownError) { pool.with { |c| c.call('PING') } }
+    assert_equal 0, idle_at_fork, 'the parent still held an idle socket at fork time'
+    assert_equal 'PONG', pool.with { |c| c.call('PING') }, 'a host thread holding the pool must keep working'
   end
 
   # K13, wired end to end through the swarm: the restart machine claims both

@@ -103,19 +103,23 @@ class LivenessProbeTest < Wurk::Test::UnitCase
 
   def test_live_returns_503_after_stop
     boot_launcher
-    # Trigger stopping? without invoking the full stop pipeline (which would
+    # Trigger shutting_down? without invoking the full stop pipeline (which would
     # also tear down the health server before we can probe it).
-    @launcher.instance_variable_set(:@done, true)
+    @launcher.instance_variable_set(:@shutting_down, true)
 
     body = probe('/live')
 
     assert_equal 503, body[:status_code]
     assert_equal 'stopping', body[:json]['reason']
-  ensure
-    # `@done` is #quiet's single-shot guard, and #quiet is what terminates the
-    # scheduler poller: left set, teardown's #stop skips it and the poller
-    # outlives the test, promoting due entries under the next class (#522).
-    @launcher&.instance_variable_set(:@done, false)
+  end
+
+  # With the shipped manifests /live is the livenessProbe: a 503 here got a pod
+  # restarted for being quieted, and the replacement fetched again.
+  def test_live_stays_200_on_a_quiet_launcher
+    boot_launcher
+    @launcher.quiet
+
+    assert_equal 200, probe('/live')[:status_code]
   end
 
   private

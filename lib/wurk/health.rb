@@ -6,14 +6,14 @@ require_relative 'metrics/prometheus'
 
 module Wurk
   # Thin HTTP listener for k8s liveness/readiness probes. Optional, off by
-  # default — opt in with `config.health_check(port: 7433)`, then scrape
-  # GET /metrics on that configured port (7433 in this example).
+  # default — opt in with `config.health_check(port: 7433)` or
+  # WURK_HEALTH_PORT=7433, then scrape GET /metrics on that port.
   # Mounting Wurk::Engine does not expose Prometheus metrics: this deliberate
   # separation keeps internal metrics off the host application's HTTP surface
   # so access can be restricted independently on the dedicated listener port.
   #
   # Endpoints:
-  #   * GET /live  → 200 while the Launcher is running (not in quiet/stop).
+  #   * GET /live  → 200 until the Launcher is shutting down; quiet stays 200.
   #   * GET /ready → 200 only when Redis is reachable AND the heartbeat has
   #                  fired within `ready_window` seconds AND, inside a swarm
   #                  child, enough of the swarm's children have (see
@@ -42,6 +42,22 @@ module Wurk
       # nil outside a swarm child — standalone and embedded processes are a
       # fleet of one and /ready judges them on their own heartbeat alone.
       attr_accessor :fleet_size
+
+      # WURK_HEALTH_PORT turns the listener on from the environment, so whoever
+      # owns the deployment manifest can add a probe without an application
+      # change. `config.health_check` wins when both are set. A bad value raises:
+      # a probe silently not listening would restart the pod forever instead.
+      def options_from_env(env = ENV)
+        raw = env['WURK_HEALTH_PORT'].to_s.strip
+        return nil if raw.empty?
+
+        port = Integer(raw, 10)
+        raise ArgumentError unless port.between?(0, 65_535)
+
+        { port: port }
+      rescue ArgumentError
+        raise ArgumentError, "WURK_HEALTH_PORT must be a port number (got #{raw.inspect})"
+      end
 
       def json(status, **extra)
         ::JSON.generate({ status: status }.merge(extra))
@@ -278,8 +294,11 @@ module Wurk
         @fleet ||= Fleet.new(@config, @ready_window)
       end
 
+      # A quiet process is alive and is finishing its jobs. Failing here would have
+      # the orchestrator restart a pod an operator just quieted, and the
+      # replacement would fetch again. /ready is the probe that speaks to traffic.
       def live_response
-        if @launcher.stopping?
+        if @launcher.shutting_down?
           [json('down', check: 'live', reason: 'stopping'), 503]
         else
           [json('ok', check: 'live'), 200]

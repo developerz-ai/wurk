@@ -205,12 +205,12 @@ class LauncherTest < Wurk::Test::UnitCase
     reclaimed = false
     reaper = launcher.instance_variable_get(:@reaper)
     reaper.define_singleton_method(:start) {} # don't spawn the loop thread
-    reaper.define_singleton_method(:reclaim!) { reclaimed = true }
+    reaper.define_singleton_method(:boot_reclaim!) { reclaimed = true }
 
     launch(launcher, async_beat: false)
     # boot_reclaim runs on a background thread; assert the join actually
     # returns (a bare join(1.0) whose result is ignored could time out under a
-    # slow scheduler and check `reclaimed` before reclaim! ran).
+    # slow scheduler and check `reclaimed` before boot_reclaim! ran).
     reclaim_thread = launcher.instance_variable_get(:@boot_reclaim_thread)
 
     assert reclaim_thread.join(5.0), 'boot-reclaim thread did not finish in time'
@@ -220,7 +220,7 @@ class LauncherTest < Wurk::Test::UnitCase
   # boot_reclaim is best-effort: a Redis hiccup at boot must not abort startup.
   def test_boot_reclaim_swallows_reaper_errors
     launcher = Wurk::Launcher.new(@config)
-    launcher.instance_variable_get(:@reaper).define_singleton_method(:reclaim!) { raise 'redis down' }
+    launcher.instance_variable_get(:@reaper).define_singleton_method(:boot_reclaim!) { raise 'redis down' }
 
     launcher.send(:boot_reclaim) # must not raise
   end
@@ -312,8 +312,7 @@ class LauncherTest < Wurk::Test::UnitCase
     err = assert_raises(RuntimeError) { launcher.run(async_beat: false) }
 
     assert_equal 'redis down at boot', err.message, 'the boot failure must still reach the caller'
-    assert_equal %i[metrics_flusher periodic_poller metrics_rollup queue_rollup reaper leader heartbeat exit health],
-                 seen
+    assert_teardown_order %i[leader heartbeat exit health], seen
   end
 
   # The rollback is guarded: a launcher that cannot tear itself down must still
@@ -820,8 +819,7 @@ class LauncherTest < Wurk::Test::UnitCase
 
     launcher.stop
 
-    assert_equal %i[metrics_flusher periodic_poller metrics_rollup queue_rollup reaper leader heartbeat exit health],
-                 seen
+    assert_teardown_order %i[leader heartbeat exit health], seen
   end
 
   def test_stop_reports_a_manager_that_raises_mid_drain
@@ -849,7 +847,7 @@ class LauncherTest < Wurk::Test::UnitCase
 
     launcher.stop
 
-    assert_equal %i[metrics_flusher periodic_poller metrics_rollup queue_rollup reaper heartbeat exit health], seen
+    assert_teardown_order %i[heartbeat exit health], seen
   end
 
   def test_stop_closes_the_health_server_when_clearing_the_heartbeat_raises
@@ -1319,6 +1317,39 @@ class LauncherTest < Wurk::Test::UnitCase
     assert_equal 0, exists
   end
 
+  # A server that accepts and never answers: every teardown step that touches
+  # Redis would ride its timeouts in turn, one after another.
+  def test_stop_is_bounded_when_redis_hangs
+    hung = TCPServer.new('127.0.0.1', 0)
+    config = Wurk::Configuration.new
+    config.logger = ::Logger.new(IO::NULL)
+    config.redis = { url: "redis://127.0.0.1:#{hung.addr[1]}/0", read_timeout: 30, write_timeout: 30 }
+    config[:timeout] = 0
+    launcher = Wurk::Launcher.new(config)
+
+    started = ::Process.clock_gettime(::Process::CLOCK_MONOTONIC)
+    launcher.stop
+    elapsed = ::Process.clock_gettime(::Process::CLOCK_MONOTONIC) - started
+
+    assert_operator elapsed, :<, Wurk::Launcher::TEARDOWN_GRACE + 3
+  ensure
+    hung&.close
+    config&.reset_redis_pools!
+  end
+
+  def test_quiet_is_not_shutting_down_and_stop_is
+    launcher = Wurk::Launcher.new(@config)
+    stub_managers(launcher)
+
+    launcher.quiet
+
+    assert_predicate launcher, :stopping?
+    refute_predicate launcher, :shutting_down?
+    launcher.stop
+
+    assert_predicate launcher, :shutting_down?
+  end
+
   private
 
   # Takes the lock for every test whose outcome depends on the process-global
@@ -1457,14 +1488,14 @@ class LauncherTest < Wurk::Test::UnitCase
 
   # Boot-order mirror of #record_teardown: stubs #start on every collaborator
   # #run spins up and records, in order, the ones that ran. The reaper's
-  # reclaim! is stubbed rather than recorded — it runs on its own thread, so
+  # boot_reclaim! is stubbed rather than recorded — it runs on its own thread, so
   # its position in the sequence would be a race, not an assertion.
   def record_boot_order(launcher)
     seen = []
     launcher.managers.each { |m| record_stop(m, :start, seen, :manager) }
     reaper = launcher.instance_variable_get(:@reaper)
     record_stop(reaper, :start, seen, :reaper)
-    reaper.define_singleton_method(:reclaim!) { nil }
+    reaper.define_singleton_method(:boot_reclaim!) { nil }
     record_stop(launcher.poller, :start, seen, :poller)
     record_stop(launcher.instance_variable_get(:@leader), :start, seen, :leader)
     %i[periodic_poller metrics_rollup queue_rollup metrics_flusher].each do |name|
@@ -1477,6 +1508,15 @@ class LauncherTest < Wurk::Test::UnitCase
   # order, the ones that actually ran — so a test can assert the tail completed
   # end to end under an injected failure. @history stays nil (history is opt-in),
   # which also covers the safe-nav else branch in the timer-loop sweep.
+  # The periodic loops stop side by side, so that one stuck loop can't keep another
+  # from hearing the stop. All that is ordered is what follows them.
+  def assert_teardown_order(rest, seen)
+    loops = %i[metrics_flusher periodic_poller metrics_rollup queue_rollup reaper]
+
+    assert_equal loops.sort, seen.first(loops.size).sort
+    assert_equal rest, seen.drop(loops.size)
+  end
+
   def record_teardown(launcher)
     seen = []
     %i[metrics_flusher periodic_poller metrics_rollup queue_rollup].each do |name|
@@ -1563,7 +1603,7 @@ class LauncherTest < Wurk::Test::UnitCase
     reaper = launcher.instance_variable_get(:@reaper)
     reaper.define_singleton_method(:start) { nil }
     reaper.define_singleton_method(:stop) { nil }
-    reaper.define_singleton_method(:reclaim!) { nil }
+    reaper.define_singleton_method(:boot_reclaim!) { nil }
   end
 
   # Every periodic loop Launcher#build_loops constructs.

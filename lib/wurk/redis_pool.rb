@@ -58,10 +58,9 @@ module Wurk
     # which is what lets every pooled connection survive a Redis restart, a
     # failover or an idle-socket reap without surfacing an error. The price is
     # that a reply lost mid-command (a ReadTimeout included) can apply that
-    # command twice: a duplicate LPUSH, a double INCR, or a ZPOPBYSCORE whose
-    # first pop is lost with its reply (Sidekiq #3303 — same exposure upstream).
-    # 0 would close that window but turn every stale socket into an error the
-    # pool cannot replay for a non-idempotent block, so it stays at parity.
+    # command twice: a duplicate LPUSH or a double INCR. 0 would close that
+    # window but turn every stale socket into an error the pool cannot replay
+    # for a non-idempotent block, so it stays at parity.
     DEFAULT_CONNECT_TIMEOUT    = 1.0
     DEFAULT_READ_TIMEOUT       = 2.5
     DEFAULT_WRITE_TIMEOUT      = 2.5
@@ -180,6 +179,12 @@ module Wurk
     def disconnect!
       stop_reaper
       @pool.shutdown { |conn| safe_close(conn) }
+    end
+
+    # Non-terminal: closes idle sockets before a fork; the pool stays usable, so
+    # host threads holding it never see PoolShuttingDownError.
+    def reload!
+      @pool.reload { |conn| safe_close(conn) }
     end
 
     # Redis INFO parsed to a Hash, with this pool's own `size` / `available`

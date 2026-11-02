@@ -23,6 +23,16 @@ module Wurk
     module ManyQueues
       NO_ARGV = [].freeze
 
+      # How long a script pass that found every queue empty answers for the whole
+      # fetcher. The script sends two keys per queue, per thread, per poll: 120 KB
+      # a pass at 1000 queues, which at concurrency 500 cost a process 70% of a
+      # core and Redis 26% of one while idle. A thread skipping it parks in BLMOVE
+      # on the first queue for the whole poll, unaware of anything that lands on a
+      # later queue meanwhile, so a job can wait out a poll interval (about 2s)
+      # with a thread idle. That is the same bound an empty script pass gives it.
+      # Not a config knob.
+      REST_MISS_BACKOFF = 0.25
+
       private
 
       # Queues 2..n. Two queues is one more LMOVE — a one-key script costs more
@@ -34,11 +44,17 @@ module Wurk
       def claim_rest(queues)
         return lmove(queues[1]) if queues.size == 2
 
+        now = ::Process.clock_gettime(::Process::CLOCK_MONOTONIC)
+        return nil if now < @rest_empty_until
+
         keys = claim_keys(queues)
         index, job = config.redis(idempotent: true) do |conn|
           Wurk::Lua::Loader.eval_cached(conn, :fetch_first, keys: keys, argv: NO_ARGV)
         end
-        return nil unless job
+        unless job
+          @rest_empty_until = now + REST_MISS_BACKOFF
+          return nil
+        end
 
         public_q = queues[index]
         priv, name = queue_keys(public_q)

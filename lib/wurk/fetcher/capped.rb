@@ -210,6 +210,10 @@ module Wurk
         blocked ? [poll_interval, CAPPED_BACKOFF].min : poll_interval
       end
 
+      def fetchable_at_maxmemory(queues)
+        queues.select { |public_q| gate_for(public_q).nil? }
+      end
+
       def gate_for(public_q)
         @gates[queue_keys(public_q)[1]]
       end

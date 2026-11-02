@@ -261,6 +261,7 @@ is the drop-in alias and is checked second (native wins).
 | `WURK_MAXMEM_MB` / `SIDEKIQ_MAXMEM_MB` | `Configuration#memory_limit_mb` | Parent TERMs + respawns any child whose RSS exceeds this. Unset/unparseable → recycling off |
 | `WURK_DISABLED` | `RailsBoot.skip_boot?` | `=1` skips both server mode and the swarm boot in a Rails host |
 | `APPLY` | `rake wurk:import:cron` (`lib/wurk/rake_tasks.rb`) | `=1` writes the imported sidekiq-cron loops to Redis; anything else is a dry run. Read only by that task |
+| `WURK_HEALTH_PORT` | `Launcher#build_health_server` | Turns on the [health listener](#health-checks) on this port. `config.health_check` wins when both are set. A non-numeric value raises at boot |
 | `WURK_EMBED` | `RailsBoot.skip_boot?` | `=1` boots workers in a Rails process that is not a recognised web server (Falcon, Thin, a custom rackup); `rails runner`/`generate`/rake never boot without it |
 | `WURK_LEADER` / `SIDEKIQ_LEADER` | `Leader.opted_out?` | `=false` (case-insensitive) makes this process never campaign for leadership |
 | `WURK_PRELOAD` / `SIDEKIQ_PRELOAD` | `CLI#preload_groups` | Comma-separated Bundler groups `Bundler.require`d in the swarm parent before fork. Default `default`; an explicit empty value disables the preload |
@@ -888,7 +889,8 @@ Wurk.configure_server do |config|
 end
 ```
 
-- `GET /live` → 200 while the process is not stopping.
+- `GET /live` → 200 until the process is shutting down. A quiet (TSTP) process is
+  alive and stays 200, so quieting a pod does not get it restarted.
 - `GET /ready` → 200 only when Redis is reachable **and** a heartbeat fired
   within `ready_window` seconds.
 - Inside a swarm, `/ready` also needs at least `min_ready` local children
@@ -905,6 +907,23 @@ The swarm parent also replaces a child whose heartbeat has not moved for
 `config.swarm_heartbeat_timeout` seconds (default 60, minimum 20, `false`
 disables): TERM, then KILL after `shutdown_timeout + 5s`, then the normal
 respawn. See [deployment](deployment.md).
+
+If every slot has crashed within 60 seconds of booting, without a break, for
+`config.swarm_crash_exit_after` seconds (default 600; `nil` or `false` keeps
+respawning forever), `wurkswarm` reports `Wurk::Swarm::CrashLoop` through
+`error_handlers` and exits 1, so an orchestrator sees the failure: a parent
+respawning forever looks Running to it and to any `ps | grep` probe. A child that
+crashed because the store was unreachable or could not serve yet (`LOADING`, `BUSY`,
+`READONLY`, out of memory and the like) does not count, so an outage alone never
+ends the swarm. A swarm co-hosted in a web process reports the same way but keeps
+running: a broken worker must not take HTTP down.
+
+For a pod with no port to spare, `wurk health` is an exec-style liveness probe. It
+boots no application and passes when a process on this host has beaten within
+`--window` seconds (default 60; `--min COUNT` for more than one). It reads Redis at
+`REDIS_URL` or `--redis-url`. A Redis it cannot reach passes unless `--strict`:
+restarting workers does not bring Redis back. Give it a `startupProbe` or an initial
+delay, since nothing has beaten during boot.
 
 ---
 

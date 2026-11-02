@@ -1,6 +1,7 @@
 # frozen_string_literal: true
 
 require_relative '../test_helper'
+require 'stringio'
 
 # Drives Wurk::Processor against a real Reliable fetcher + real Redis. Each
 # test owns a unique public queue/private list and a fresh job class so
@@ -491,15 +492,216 @@ class ProcessorTest < Wurk::Test::UnitCase
   def test_a_failed_requeue_is_reported_not_raised
     errors = []
     @config.error_handlers.replace([->(_ex, ctx, _cfg) { errors << ctx[:context] }])
-    @processor.instance_variable_get(:@retrier).define_singleton_method(:global) { |*| raise 'retry layer down' }
+    log = StringIO.new
+    @config.logger = ::Logger.new(log)
+    processor = new_processor
+    processor.instance_variable_get(:@retrier).define_singleton_method(:global) { |*| raise RedisClient::ConnectionError, 'down' }
     uow = Struct.new(:job, :queue_name) do
       def requeue = raise(RedisClient::ConnectionError, 'still down')
       def acknowledge = raise('must not ack')
     end.new(json_for(base_worker), @queue_name)
 
-    @processor.send(:process, uow)
+    processor.send(:process, uow)
 
     assert_equal ['Internal exception!', 'Error requeueing a job after an internal exception'], errors
+    assert_match(/ERROR.*Could not requeue/, log.string, 'a parked job has to be visible at ERROR')
+  end
+
+  # #3: the job failed while Redis was down, and neither the retry booking nor
+  # the requeue could be written. Once Redis is back, it is found.
+  def test_a_job_whose_requeue_failed_is_recovered_by_the_reconcile
+    @config.capsules['test'] = @capsule
+    @capsule.queues = [@queue_name]
+    retrier = @processor.instance_variable_get(:@retrier)
+    retrier.define_singleton_method(:schedule_retry) { |*| raise RedisClient::ConnectionError, 'down' }
+    klass = define_worker_raising(JobBoom, 'kaboom')
+    enqueue(class: klass.name, args: [], retry: true)
+    uow = @capsule.fetcher.retrieve_work
+    uow.define_singleton_method(:requeue) { raise RedisClient::ConnectionError, 'still down' }
+
+    @processor.send(:process, uow)
+    settle_acks
+
+    assert_equal 1, llen(private_queue), 'still parked in the private list'
+    reconcile = Wurk::Fetcher::SelfReconcile.new(@config, confirm: 0)
+
+    assert_equal 0, reconcile.sweep
+    assert_equal 1, reconcile.sweep
+    assert_equal 1, llen(@public_queue)
+    assert_equal 0, llen(private_queue)
+  ensure
+    @config.capsules.delete('test')
+  end
+
+  # --- poison payloads ---------------------------------------------------
+  # Each would otherwise go back to the tail of its queue, which is the next
+  # fetch: a hot loop re-running `perform` and starving what is behind it.
+
+  NON_OBJECT_PAYLOADS = ['[1,2,3]', '123', 'true', 'null', '"hello"'].freeze
+
+  NON_OBJECT_PAYLOADS.each do |payload|
+    define_method("test_#{payload.delete('^a-z0-9')}_goes_to_the_morgue_reported_once") do
+      errors = capture_errors
+      member = payload
+      @dead_members << member
+      @pool.with { |c| c.call('LPUSH', @public_queue, member) }
+
+      @processor.process_one
+      settle_acks
+
+      assert_equal 0, llen(@public_queue)
+      assert_equal 0, llen(private_queue)
+      assert_includes @pool.with { |c| c.call('ZRANGE', Wurk::Keys::DEAD, 0, -1) }, member
+      assert_equal [[JSON::ParserError, 'Invalid JSON']], errors
+    end
+  end
+
+  UNBOOKABLE = {
+    'retry_count_string' => { retry: true, retry_count: 'oops' },
+    'retry_for_string' => { retry: true, retry_for: 'soon', failed_at: 123, retry_count: 1 },
+    'failed_at_string' => { retry: true, retry_for: 10, failed_at: 'x', retry_count: 1 }
+  }.freeze
+
+  UNBOOKABLE.each do |name, fields|
+    define_method("test_a_job_with_#{name}_runs_once_and_dies") do
+      assert_dies_once(fields)
+    end
+  end
+
+  def test_args_that_cannot_be_serialized_into_a_retry_run_once_and_die
+    runs = []
+    klass = define_worker_failing_after(runs)
+    jid = SecureRandom.hex(12)
+    raw = %({"jid":"#{jid}","class":"#{klass.name}","args":["a\xFF"],"queue":"#{@queue_name}","retry":true})
+    errors = capture_errors
+    @dead_members << raw
+    @pool.with { |c| c.call('LPUSH', @public_queue, raw) }
+
+    @processor.process_one
+    settle_acks
+
+    assert_equal 1, runs.size
+    assert_equal 0, llen(@public_queue)
+    assert_equal 0, llen(private_queue)
+    assert_equal 1, dead_count_for(jid)
+    assert_equal ['Internal exception!'], errors.map(&:last)
+  end
+
+  # Redis blipping says nothing about the job: it runs again rather than dying.
+  [RedisClient::ConnectionError, RedisClient::OutOfMemoryError, ConnectionPool::TimeoutError,
+   ConnectionPool::PoolShuttingDownError].each do |error|
+    define_method("test_#{error.name.split('::').last.downcase}_booking_a_retry_never_kills_the_job") do
+      retrier = @processor.instance_variable_get(:@retrier)
+      retrier.define_singleton_method(:schedule_retry) { |*| raise error, 'transient' }
+      klass = define_worker_raising(JobBoom, 'kaboom')
+      payload = enqueue(class: klass.name, args: [], retry: true)
+
+      @processor.process_one
+      settle_acks
+
+      assert_equal 1, llen(@public_queue), 'back on its queue'
+      assert_equal 0, dead_count_for(payload['jid'])
+    end
+  end
+
+  # A process-level condition is no verdict on the job either.
+  def test_no_memory_while_booking_a_retry_never_kills_the_job
+    retrier = @processor.instance_variable_get(:@retrier)
+    retrier.define_singleton_method(:schedule_retry) { |*| raise NoMemoryError, 'failed to allocate' }
+    klass = define_worker_raising(JobBoom, 'kaboom')
+    payload = enqueue(class: klass.name, args: [], retry: true)
+
+    @processor.process_one
+    settle_acks
+
+    assert_equal 1, llen(@public_queue)
+    assert_equal 0, dead_count_for(payload['jid'])
+  end
+
+  # A persistent Redis refusal must not re-run `perform` as fast as the thread
+  # can loop.
+  def test_putting_a_job_back_pauses_before_the_next_fetch
+    retrier = @processor.instance_variable_get(:@retrier)
+    retrier.define_singleton_method(:schedule_retry) { |*| raise RedisClient::CommandError, 'WRONGTYPE' }
+    klass = define_worker_raising(JobBoom, 'kaboom')
+    enqueue(class: klass.name, args: [], retry: true)
+    started = Process.clock_gettime(Process::CLOCK_MONOTONIC)
+
+    @processor.process_one
+
+    assert_operator Process.clock_gettime(Process::CLOCK_MONOTONIC) - started, :>=, 0.9
+  end
+
+  # The kill failing leaves the job where it was: no ACK, no loss.
+  def test_a_failed_kill_leaves_the_job_in_the_private_list
+    errors = capture_errors
+    enqueue(class: 'NoSuch', args: [], retry: true, retry_count: 'oops')
+    original = Wurk::DeadSet.instance_method(:kill)
+    Wurk::DeadSet.define_method(:kill) { |*, **| raise RedisClient::ConnectionError, 'down' }
+
+    @processor.process_one
+    settle_acks
+
+    assert_equal 1, llen(private_queue)
+    assert_equal ['Internal exception!', 'Error killing a job after an internal exception'], errors.map(&:last)
+  ensure
+    Wurk::DeadSet.define_method(:kill, original)
+    @pool.with { |c| c.call('DEL', private_queue) }
+  end
+
+  # A job killed here fires death handlers: a batch has to hear about it, or it
+  # never completes.
+  def test_a_killed_job_fires_the_death_handlers
+    deaths = []
+    original = Wurk.configuration.death_handlers.dup
+    Wurk.configuration.death_handlers << ->(job, ex) { deaths << [job['jid'], ex.class] }
+    klass = define_worker_raising(JobBoom, 'kaboom')
+    payload = enqueue(class: klass.name, args: [], retry: true, retry_count: 'oops')
+    @dead_members << Wurk.dump_json(payload)
+
+    @processor.process_one
+
+    assert_equal [[payload['jid'], TypeError]], deaths
+  ensure
+    Wurk.configuration.death_handlers.replace(original)
+  end
+
+  # --- Thread.exit inside a job ------------------------------------------
+
+  def test_thread_exit_in_a_job_tells_the_manager
+    exits = []
+    processor = Wurk::Processor.new(@capsule) { |p| exits << p }
+    @processors << processor
+    klass = base_worker
+    klass.define_method(:perform) { Thread.exit }
+    enqueue(class: klass.name, args: [])
+
+    processor.start
+    processor.thread.join(5)
+
+    assert_equal [processor], exits
+    assert_equal 1, llen(private_queue), 'the job stays for the reconcile to find'
+    assert_nil processor.thread.thread_variable_get(Wurk::Fetcher::Reliable::CLAIM_KEY)
+    @pool.with { |c| c.call('DEL', private_queue) }
+  end
+
+  def test_the_manager_replaces_a_processor_lost_to_thread_exit
+    capsule = @capsule
+    capsule.concurrency = 1
+    manager = Wurk::Manager.new(capsule)
+    klass = base_worker
+    klass.define_method(:perform) { Thread.exit }
+    enqueue(class: klass.name, args: [])
+    first = manager.workers.first
+    manager.start
+    deadline = Process.clock_gettime(Process::CLOCK_MONOTONIC) + 5
+    sleep 0.01 until manager.workers.first != first || Process.clock_gettime(Process::CLOCK_MONOTONIC) > deadline
+
+    refute_same first, manager.workers.first
+    assert_predicate manager.workers.first.thread, :alive?
+  ensure
+    manager&.stop(Process.clock_gettime(Process::CLOCK_MONOTONIC) + 1)
+    @pool.with { |c| c.call('DEL', private_queue) }
   end
 
   def test_a_job_whose_log_level_the_logger_cannot_apply_still_runs
@@ -839,6 +1041,38 @@ class ProcessorTest < Wurk::Test::UnitCase
   end
 
   private
+
+  def capture_errors
+    errors = []
+    @config.error_handlers.replace([->(ex, ctx, _cfg) { errors << [ex.class, ctx[:context]] }])
+    errors
+  end
+
+  def define_worker_failing_after(runs)
+    klass = base_worker
+    klass.define_method(:perform) do |*|
+      runs << :ran
+      raise JobBoom, 'kaboom'
+    end
+    klass
+  end
+
+  def assert_dies_once(fields)
+    errors = capture_errors
+    runs = []
+    klass = define_worker_failing_after(runs)
+    payload = enqueue(class: klass.name, args: [], **fields)
+    @dead_members << Wurk.dump_json(payload)
+
+    @processor.process_one
+    settle_acks
+
+    assert_equal 1, runs.size, 'perform at most once'
+    assert_equal 0, llen(@public_queue)
+    assert_equal 0, llen(private_queue)
+    assert_equal 1, dead_count_for(payload['jid'])
+    assert_equal ['Internal exception!'], errors.map(&:last)
+  end
 
   def new_processor(&block)
     Wurk::Processor.new(@capsule, &block).tap { |p| @processors << p }

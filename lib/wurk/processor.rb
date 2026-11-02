@@ -24,7 +24,7 @@ module Wurk
   #     payload survives in the private list and is reclaimed on next boot.
   #
   # Spec: docs/target/sidekiq-free.md §14.
-  class Processor
+  class Processor # rubocop:disable Metrics/ClassLength
     include Component
 
     # Interrupt masks for the two `Thread.handle_interrupt` scopes every job
@@ -35,6 +35,20 @@ module Wurk
     private_constant :IGNORE_SHUTDOWN_INTERRUPTS
     ALLOW_SHUTDOWN_INTERRUPTS = { Wurk::Shutdown => :immediate }.freeze
     private_constant :ALLOW_SHUTDOWN_INTERRUPTS
+
+    # An internal failure that says something about Redis or the pool and nothing
+    # about the job, so the job goes back to run again. Any other StandardError
+    # escaping the retry layer comes from the payload itself (a `retry_count`
+    # that is not a number, args that cannot be re-serialized into a retry) and
+    # will fail the same way every time.
+    TRANSIENT_FAILURES = [RedisClient::Error, ConnectionPool::Error, ConnectionPool::TimeoutError].freeze
+    private_constant :TRANSIENT_FAILURES
+
+    # Pause after putting a job back on an internal failure. The job goes to the
+    # tail, which is the next fetch, so without one a failure that persists
+    # re-runs `perform` as fast as the thread can loop.
+    REQUEUE_PAUSE = 1
+    private_constant :REQUEUE_PAUSE
 
     # Stand-in for the default reloader, `proc { |&b| b.call }`. That default
     # is an identity wrapper, but a block param (`|&b|`) forces MRI to reify
@@ -166,6 +180,11 @@ module Wurk
       end
     end
 
+    @vm_exiting = false
+    at_exit { @vm_exiting = true }
+
+    def self.vm_exiting? = @vm_exiting
+
     PROCESSED  = Counter.new
     FAILURE    = Counter.new
     EXPIRED    = Counter.new
@@ -198,16 +217,20 @@ module Wurk
         flush_acks
         Thread.current[:wurk_capsule] = outer_capsule
       end
-      @callback&.call(self)
     rescue Wurk::Shutdown
-      @callback&.call(self)
+      nil
     rescue Exception => e # rubocop:disable Lint/RescueException
       # Sidekiq hands the error to the manager (processor.rb `@callback.call(
       # self, ex)`); reporting it here keeps it visible, and the re-raise ends
       # the thread so the Manager's replacement starts clean.
       handle_exception(e, { context: '!shutdown' })
-      @callback&.call(self)
       raise
+    ensure
+      # In an ensure because `Thread.exit` from a job unwinds through here with
+      # no exception at all, and a Manager never told would run one thread short
+      # for the life of the process. The VM unwinds threads the same way as it
+      # exits, and asking for a replacement then only raises ThreadError.
+      @callback&.call(self) unless Processor.vm_exiting?
     end
 
     # The fetcher holds each finished job's LREM until a fetch can pipeline it
@@ -233,7 +256,7 @@ module Wurk
     rescue Wurk::Shutdown
       nil
     rescue StandardError => e
-      handle_exception(e, { context: 'Error fetching job' })
+      @capsule.config.report_fetch_error(e)
       sleep(1)
       nil
     end
@@ -247,6 +270,8 @@ module Wurk
     # outcome is booked.
     def process(uow)
       Thread.handle_interrupt(IGNORE_SHUTDOWN_INTERRUPTS) { process_deferred(uow) }
+    ensure
+      uow.release_claim if uow.respond_to?(:release_claim)
     end
 
     def process_deferred(uow)
@@ -273,12 +298,10 @@ module Wurk
       rescue Wurk::Shutdown
         # Don't ack — UoW stays in private list and is reclaimed on reboot.
       rescue Exception => e # rubocop:disable Lint/RescueException
-        # Escaped the retry layer (its ZADD hit a Redis blip, a logger raised in
-        # JobLogger#prepare): no retry was booked. This owner is alive, so the
-        # reaper will never reclaim its private list — put the job back now or
-        # it sits there until the process restarts.
+        # Escaped the retry layer, so no retry was booked. This owner is alive,
+        # so the reaper will never reclaim its private list.
         handle_exception(e, { context: 'Internal exception!', job: job_hash, jobstr: jobstr })
-        requeue(uow)
+        ack = settle_internal_failure(uow, job_hash, jobstr, e)
       ensure
         # This frame is the one every exit path passes through, which is why a
         # global-concurrency slot is given back from here and nowhere else: a
@@ -308,12 +331,45 @@ module Wurk
       handle_exception(handled.cause || handled, { context: 'Job raised exception', job: job_hash })
     end
 
+    # Whether the job is finished with (ACK it). Redis or the pool failing, or a
+    # process-level condition (NoMemoryError and friends), is no verdict on the
+    # job: it goes back to run again. A job that cannot be booked for any other
+    # reason would loop forever, re-running `perform` every time, so it goes to
+    # the morgue instead.
+    def settle_internal_failure(uow, job_hash, jobstr, error)
+      return kill_unbookable(job_hash, jobstr, error) if unbookable?(error)
+
+      requeue(uow)
+      sleep(REQUEUE_PAUSE) unless @done
+      false
+    end
+
+    def unbookable?(error)
+      error.is_a?(::StandardError) && TRANSIENT_FAILURES.none? { |klass| error.is_a?(klass) }
+    end
+
+    # Death handlers fire when there is a job to tell them about, so a batch
+    # records the death and a unique lock is released, as for any other job that
+    # died on its own. A kill that fails leaves the job in the private list, which
+    # is where it was before this ran; Fetcher::SelfReconcile picks it up.
+    def kill_unbookable(job_hash, jobstr, error)
+      dead = DeadSet.new
+      job_hash.is_a?(::Hash) ? dead.kill(jobstr, ex: error) : dead.kill_raw(jobstr)
+      true
+    rescue StandardError => e
+      handle_exception(e, { context: 'Error killing a job after an internal exception' })
+      false
+    end
+
     # Reported, never raised: we are already handling an internal error, and
     # a Redis that refused the retry ZADD may refuse this too — the job then
-    # stays in the private list, which is where it was before this ran.
+    # stays in the private list, which is where it was before this ran, until
+    # Fetcher::SelfReconcile finds it. ERROR because nothing else will say that a
+    # job is parked out of sight for the next couple of minutes.
     def requeue(uow)
       uow.requeue
     rescue StandardError => e
+      logger.error { "Could not requeue #{uow.queue_name} job after an internal exception: #{e.class}: #{e.message}" }
       handle_exception(e, { context: 'Error requeueing a job after an internal exception' })
     end
 
@@ -348,8 +404,14 @@ module Wurk
     # morgue exactly like send_to_morgue does — spec §31.8/§31.9).
     # Returns nil to signal "no further processing" — the ACK that retires the
     # payload belongs to #process's ensure, which is the one cleanup path.
+    #
+    # JSON that parses to something other than an object (`[1]`, `true`) is the
+    # same thing: there is no job in it to run.
     def parse_or_kill(jobstr)
-      Wurk.load_json(jobstr)
+      job_hash = Wurk.load_json(jobstr)
+      raise ::JSON::ParserError, 'job payload is not a JSON object' unless job_hash.is_a?(::Hash)
+
+      job_hash
     rescue ::JSON::ParserError => e
       handle_exception(e, { context: 'Invalid JSON', jobstr: jobstr })
       DeadSet.new.kill_raw(jobstr)

@@ -8,6 +8,7 @@ require_relative '../lua'
 require_relative '../fetcher'
 require_relative 'capped'
 require_relative 'many_queues'
+require_relative 'at_maxmemory'
 
 module Wurk
   class Fetcher
@@ -45,6 +46,7 @@ module Wurk
       # path is unchanged than a second loop kept in step by hand.
       prepend Capped
       include ManyQueues
+      include AtMaxmemory
 
       # Default BLMOVE block timeout; overridable via config.fetch_poll_interval.
       TIMEOUT = 2
@@ -89,6 +91,12 @@ module Wurk
       # misses a bump by microseconds picks it up on its next pass.
       PAUSED_GENERATION_LOCK = Mutex.new
 
+      # Thread variable holding the unit this thread claimed and has not settled;
+      # what Fetcher::SelfReconcile reads to tell a running job from a stranded
+      # one. A thread variable, not `Thread#[]`: those are per fiber, and a job
+      # running inside a Fiber would read as holding nothing.
+      CLAIM_KEY = :wurk_fetcher_claim
+
       @paused_generation = 0
 
       class << self
@@ -118,6 +126,8 @@ module Wurk
         @prefixed_queues = nil
         @prefixed_source = nil
         @claim_keys = nil
+        @rest_empty_until = 0.0
+        @oom_reported_at = nil
       end
 
       # Take custody of a finished job's LREM instead of sending it now. One
@@ -140,7 +150,7 @@ module Wurk
       # them — and from #bulk_requeue, where it is a correctness requirement
       # rather than an optimization: a finished job whose LREM is still pending
       # is not in Manager#hard_shutdown's in-flight list, so the requeue Lua's
-      # LREM guard would still find its payload, RPUSH it onto the public
+      # guard would still find its payload, RPUSH it onto the public
       # queue, and run it a second time on every graceful shutdown.
       def flush_pending_acks
         pending = claim_pending_acks
@@ -186,11 +196,19 @@ module Wurk
         end
 
         walk(queues)
+      rescue RedisClient::OutOfMemoryError => e
+        claim_at_maxmemory(queues, e)
+      end
+
+      # The units whose ACK is waiting here for a fetch to ride. A snapshot, for
+      # Fetcher::SelfReconcile.
+      def held_acks
+        @pending_lock.synchronize { @pending_acks.values.flatten }
       end
 
       # Called on shutdown for jobs the Processor couldn't finish in time.
       # Atomically moves each still-private UoW back to its public queue via
-      # the RELIABLE_REQUEUE Lua (LREM-guarded RPUSH): the job leaves the
+      # the RELIABLE_REQUEUE Lua (guarded RPUSH, then LREM): the job leaves the
       # per-process private list and reappears on the public queue in one hop,
       # so it's visible immediately after a deploy instead of waiting for the
       # next boot's reaper. The guard makes the move idempotent against the
@@ -208,6 +226,8 @@ module Wurk
         return if in_progress.nil? || in_progress.empty?
 
         config.redis { |conn| requeue_pipelined(conn, in_progress) }
+      rescue RedisClient::OutOfMemoryError => e
+        requeue_past_maxmemory(in_progress, e)
       end
 
       # Prefixed queue keys (`queue:<name>`) in fetch order. Strict mode
@@ -440,8 +460,10 @@ module Wurk
       # Both fetch paths hand the unit every string its Processor and its ACK
       # will need, so neither re-derives one per job.
       def unit_of_work(public_q, priv, name, job)
-        UnitOfWork.new(queue: public_q, queue_name: name, private_queue: priv,
-                       job: job, config: config, fetcher: self)
+        uow = UnitOfWork.new(queue: public_q, queue_name: name, private_queue: priv,
+                             job: job, config: config, fetcher: self)
+        ::Thread.current.thread_variable_set(CLAIM_KEY, uow)
+        uow
       end
 
       # BLMOVE block timeout for an empty poll. `config.fetch_poll_interval`

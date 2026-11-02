@@ -81,8 +81,8 @@ module Wurk
         reject_shorter_cap!(seconds, cap)
 
         argv = [seconds, cap, JobUtil.scheduled_member(job), GRACE]
-        # Replay-safe: a re-run finds the member it just wrote, ZREMs it and
-        # ZADDs it back, so a pool retry after a lost reply converges on one
+        # Replay-safe: a re-run finds the member it just wrote and ZADDs it
+        # over itself, so a pool retry after a lost reply converges on one
         # entry rather than a duplicate — the whole point of doing this in a
         # script rather than a pipeline.
         #

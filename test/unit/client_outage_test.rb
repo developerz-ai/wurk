@@ -50,6 +50,7 @@ class ClientOutageTest < Wurk::Test::UnitCase
     assert_equal 3, Wurk::Client::Buffered.buffer_size, 'all 3 outage pushes must buffer'
 
     pool.recover!
+    Wurk::Client::Buffered.circuit.close(pool)
     client.push(item(tag: '5'))
 
     assert_equal 0, Wurk::Client::Buffered.buffer_size

@@ -140,7 +140,7 @@ module Wurk
     # raising Wurk::Shutdown into the threads, so a job killed mid-perform is
     # re-run once (Sidekiq's at-least-once contract). `job` is read off another
     # thread, so a Processor can ACK between this map and the requeue — but
-    # bulk_requeue's LREM guard skips the RPUSH on a miss, so a job that
+    # bulk_requeue's guard skips the RPUSH on a miss, so a job that
     # finished in that window is not resurrected onto the public queue.
     #
     # The kill sits in an `ensure`: a bulk_requeue that raises (Redis down

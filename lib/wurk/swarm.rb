@@ -9,6 +9,7 @@ require_relative 'fetcher/reliable'
 require_relative 'keys'
 require_relative 'swarm/child_boot'
 require_relative 'swarm/backoff'
+require_relative 'swarm/crash_watch'
 require_relative 'swarm/restart'
 require_relative 'swarm/orphan_guard'
 require_relative 'swarm/liveness'
@@ -17,7 +18,8 @@ module Wurk
   # Parent supervisor. Forks N children per the worker topology, monitors
   # PIDs, relays signals, respawns crashed children with per-slot exponential
   # backoff, handles rolling restart on SIGUSR1, recycles RSS-bloated children,
-  # and replaces children whose heartbeat has stopped moving (Swarm::Liveness).
+  # replaces children whose heartbeat has stopped moving (Swarm::Liveness), and
+  # gives up, loudly, on a fleet that cannot stay up (Swarm::CrashWatch).
   #
   # The supervise loop never sleeps on behalf of a respawn or a restart: crash
   # backoff is tracked as per-slot due-times (Swarm::Backoff) and rolling
@@ -101,13 +103,31 @@ module Wurk
     SWARM_SIGNALS = { 'TERM' => :term, 'INT' => :term, 'TSTP' => :tstp, 'USR1' => :usr1, 'USR2' => :usr2,
                       'TTIN' => :ttin }.freeze
 
+    # What ChildBoot exits with when Redis itself was unreachable. The parent
+    # reads it to tell an outage (keep waiting) from a broken release (give up).
+    # 75 is EX_TEMPFAIL.
+    REDIS_UNAVAILABLE_EXIT_STATUS = 75
+
+    # A crash streak this long logs at ERROR instead of WARN.
+    CRASH_STREAK_ERROR_AT = 3
+
+    # Reported through `handle_exception` when every slot has crashed young for
+    # `swarm_crash_exit_after` seconds. Never raised.
+    class CrashLoop < ::StandardError; end
+
     attr_reader :topology
 
     # `heartbeat_timeout:` — seconds a child's heartbeat may stand still before
     # it is replaced (Swarm::Liveness). Defaults to `config.swarm_heartbeat_timeout`,
     # then 60; false or 0 turns supervision off.
-    def initialize(topology:, config: Wurk.configuration, memory_limit: config.memory_limit_kb,
-                   shutdown_timeout: DEFAULT_SHUTDOWN_TIMEOUT, heartbeat_timeout: config.swarm_heartbeat_timeout)
+    #
+    # `exit_on_crash_loop:` — the standalone runner passes true so a fleet that
+    # cannot stay up drains and lets `crash_looped?` decide the exit status. A
+    # swarm co-hosted in a web process only reports: an orchestrator watches the
+    # web server, and a broken worker must not take HTTP down with it.
+    def initialize(topology:, config: Wurk.configuration, memory_limit: config.memory_limit_kb, # rubocop:disable Metrics/AbcSize
+                   shutdown_timeout: DEFAULT_SHUTDOWN_TIMEOUT, heartbeat_timeout: config.swarm_heartbeat_timeout,
+                   crash_exit_after: config.swarm_crash_exit_after, exit_on_crash_loop: false)
       @topology = topology
       @config = config
       @memory_limit = memory_limit
@@ -129,6 +149,9 @@ module Wurk
       @requiet_at = 0
       @last_memory_check = 0
       @respawn_backoff = Backoff.new(base: RESPAWN_BACKOFF)
+      @crash_watch = CrashWatch.new(exit_after: crash_exit_after, young_within: Backoff::RESET_AFTER)
+      @exit_on_crash_loop = exit_on_crash_loop
+      @crash_looped = false
       @restart = build_restart
       @liveness = build_liveness(heartbeat_timeout)
       init_fork_unsafe_handles
@@ -221,6 +244,11 @@ module Wurk
       ::Process.pid == @owner_pid
     end
 
+    # True once this swarm gave up on a crash loop; the caller owns the exit.
+    def crash_looped?
+      @crash_looped
+    end
+
     # TSTP quiet is one-way and GLOBAL (spec §21.3): it must survive respawns
     # and memory recycles, or a quieted-but-crashed child's replacement would
     # resume fetching mid-maintenance. The flag makes every future fork boot
@@ -264,6 +292,7 @@ module Wurk
       spawn_due_respawns
       advance_restart unless @stopping
       check_liveness unless @stopping
+      check_crash_loop unless @stopping
       requiet_children
       check_memory_pressure
     rescue StandardError => e
@@ -332,6 +361,15 @@ module Wurk
       close_active_record_pool
     end
 
+    # The later-fork form of step 3. Co-hosted, the parent is a live web process
+    # whose threads may already hold these pools: a terminal shutdown here raised
+    # PoolShuttingDownError in their `perform_async`. Idle sockets still close, so
+    # the child inherits none of them.
+    def close_idle_parent_sockets
+      @config.reload_redis_pools!
+      close_active_record_pool
+    end
+
     def close_active_record_pool
       return unless defined?(::ActiveRecord::Base)
 
@@ -376,11 +414,11 @@ module Wurk
     # railtie parent is a live web process whose enqueues reopen the capsule
     # and web pools. A child inheriting those shares the parent's socket (and,
     # over `rediss://`, its TLS session — the child's close sends close_notify
-    # on the parent's live connection). Idempotent at boot, where the pools
-    # were just reset.
+    # on the parent's live connection). A socket a host thread has checked out
+    # at this instant is inherited regardless; the child never uses it.
     def fork_child(slot, idx)
       parent_pid = ::Process.pid
-      close_parent_sockets
+      close_idle_parent_sockets
       close_supervisor_pool
       pid = ::Process.fork
       return pid if pid
@@ -526,10 +564,40 @@ module Wurk
     # the cap.
     def schedule_respawn(pid, status, meta)
       idx = meta[:index]
-      delay = @respawn_backoff.fail(idx, lifetime: monotonic - meta[:spawned_at])
-      logger.warn do
-        "swarm: child #{pid} died (status=#{status&.exitstatus}); respawning slot #{idx} in #{delay}s"
+      lifetime = monotonic - meta[:spawned_at]
+      delay = @respawn_backoff.fail(idx, lifetime: lifetime)
+      streak = @crash_watch.record(idx, lifetime: lifetime, now: monotonic, excused: redis_outage?(status))
+      level = streak >= CRASH_STREAK_ERROR_AT ? :error : :warn
+      logger.public_send(level) do
+        "swarm: child #{pid} died (status=#{status&.exitstatus}); respawning slot #{idx} in #{delay}s " \
+          "(crash streak #{streak})"
       end
+    end
+
+    def redis_outage?(status)
+      status&.exitstatus == REDIS_UNAVAILABLE_EXIT_STATUS
+    end
+
+    # A child still up past the young window ends its slot's streak; a slot
+    # whose child never dies young again must stop counting toward the exit.
+    def check_crash_loop
+      now = monotonic
+      @lock.synchronize { @children.each_value { |meta| @crash_watch.settled(meta[:index], now - meta[:spawned_at]) } }
+      return unless @crash_watch.due?(@assignments.each_index.to_a, now)
+
+      give_up_on_crash_loop
+    end
+
+    def give_up_on_crash_loop
+      message = "every swarm slot has crashed within #{Backoff::RESET_AFTER.to_i}s of boot for " \
+                "#{@crash_watch.exit_after.to_i}s; see the child crash reports above"
+      logger.error { "swarm: #{message}#{'; exiting' if @exit_on_crash_loop}" }
+      handle_exception(CrashLoop.new(message), { context: 'swarm-crash-loop' })
+      @crash_watch.rearm(monotonic)
+      return unless @exit_on_crash_loop
+
+      @crash_looped = true
+      shutdown
     end
 
     # Respawn any slot whose backoff window has elapsed. Runs every tick; a

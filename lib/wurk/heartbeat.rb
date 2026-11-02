@@ -3,6 +3,7 @@
 require 'etc'
 
 require_relative 'component'
+require_relative 'fetcher/oom_drain'
 require_relative 'keys'
 require_relative 'lua'
 require_relative 'processor'
@@ -38,12 +39,30 @@ module Wurk
   # network partition (rearmed when beat! rescues). `:beat` fires every tick.
   #
   # Spec: docs/target/sidekiq-free.md §12 (Launcher#❤️).
-  class Heartbeat
+  class Heartbeat # rubocop:disable Metrics/ClassLength
     include Component
 
     # Cadence in seconds. Key TTL is 60s — a process is dead after ~6 misses.
     BEAT_PAUSE = 10
     TTL_SECONDS = 60
+
+    OOM_REFRESH_SLOTS = "#{Fetcher::OomDrain::HEADER}#{Lua::SCRIPTS.fetch(:refresh_slots)}".freeze
+
+    # KEYS = [processes, identity, work], ARGV = [info_json, beat, ttl_seconds, tid, work_json, ...]
+    OOM_BEAT = <<~LUA.freeze
+      #{Fetcher::OomDrain::HEADER}if redis.call('EXISTS', KEYS[2]) == 0 then
+        redis.call('HSET', KEYS[2], 'info', ARGV[1])
+        redis.call('SADD', KEYS[1], KEYS[2])
+      end
+      redis.call('HSET', KEYS[2], 'beat', ARGV[2])
+      redis.call('EXPIRE', KEYS[2], ARGV[3])
+      redis.call('UNLINK', KEYS[3])
+      for i = 4, #ARGV, 2 do
+        redis.call('HSET', KEYS[3], ARGV[i], ARGV[i + 1])
+      end
+      redis.call('EXPIRE', KEYS[3], ARGV[3])
+      return 1
+    LUA
     FALLBACK_PAGE_SIZE = 4096
 
     # statm counts pages, and a page is not 4 KB everywhere: arm64 kernels
@@ -131,9 +150,36 @@ module Wurk
       t0 = ::Process.clock_gettime(::Process::CLOCK_MONOTONIC, :microsecond)
       redis(idempotent: true) do |conn|
         Wurk::Lua::Loader.pipelined_eval(conn) { |pipe, eval_method| write_beat(pipe, work_snapshot, eval_method) }
+      rescue RedisClient::OutOfMemoryError => e
+        beat_at_maxmemory(conn, e, work_snapshot)
       end
       rtt = ::Process.clock_gettime(::Process::CLOCK_MONOTONIC, :microsecond) - t0
       [drain_signals, rtt]
+    end
+
+    # At maxmemory the beat's HSET and SADD are refused. A worker with every thread
+    # in a long job claims nothing, so nothing else proves it alive: its `beat`
+    # would stand still and Swarm::Liveness would TERM it, just when the fleet has
+    # to stay up. Its global-concurrency holds would lapse the same way, and the
+    # cap then over-admit. Shebang scripts, so by EVAL for the reason
+    # Fetcher::OomDrain gives. A server refusing one raises the original OOM, the
+    # failure without this.
+    def beat_at_maxmemory(conn, error, work_snapshot = {})
+      work = work_snapshot.flat_map { |tid, hash| [tid.to_s, Wurk.dump_json(hash)] }
+      conn.call('EVAL', OOM_BEAT, 3, Keys::PROCESSES, @identity, "#{@identity}:work",
+                Wurk.dump_json(info_hash), Time.now.to_f.to_s, TTL_SECONDS, *work)
+      refresh_holds_at_maxmemory(conn)
+    rescue RedisClient::ConnectionError
+      raise
+    rescue RedisClient::CommandError
+      raise error
+    end
+
+    def refresh_holds_at_maxmemory(conn)
+      held = QueueSlot::HELD.snapshot
+      return if held.empty?
+
+      conn.call('EVAL', OOM_REFRESH_SLOTS, held.size, *held.values, QueueSlot::TTL_SECONDS, *held.keys)
     end
 
     def write_beat(pipe, work_snapshot, eval_method = :eval_cached)
@@ -163,12 +209,18 @@ module Wurk
 
     def write_work_hash(pipe, work_snapshot)
       work_key = "#{@identity}:work"
-      pipe.call('UNLINK', work_key)
-      return if work_snapshot.empty?
+      return pipe.call('UNLINK', work_key) if work_snapshot.empty?
 
       args = work_snapshot.flat_map { |tid, hash| [tid.to_s, Wurk.dump_json(hash)] }
+      # In a transaction because UNLINK is allowed at maxmemory and HSET is not: on
+      # its own that erased the mirror of jobs still running. On Redis and Valkey a
+      # refused queued command aborts the EXEC, so the old mirror stays. Dragonfly
+      # does not abort, so there the mirror is still erased, as it always was.
+      pipe.call('MULTI')
+      pipe.call('UNLINK', work_key)
       pipe.call('HSET', work_key, *args)
       pipe.call('EXPIRE', work_key, TTL_SECONDS)
+      pipe.call('EXEC')
     end
 
     # Its own checkout, and never an idempotent one: RPOP is destructive and

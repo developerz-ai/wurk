@@ -163,12 +163,18 @@ module Wurk
     # covers a straggler that never comes back. A straggler also stays
     # referenced, so a restart after a timed-out stop can't campaign twice in
     # parallel.
-    def stop
-      thread = @mutex.synchronize do
+    # Stops the campaign without releasing the lock or waiting: for a shutdown
+    # that still has loops in flight, which must finish under the lock.
+    def signal_stop
+      @mutex.synchronize do
         @done = true
         @sleeper.signal
-        @thread
       end
+    end
+
+    def stop
+      signal_stop
+      thread = @mutex.synchronize { @thread }
       return unless thread.nil? || thread.join(TimerLoop::JOIN_TIMEOUT)
 
       @mutex.synchronize { @thread = nil }
