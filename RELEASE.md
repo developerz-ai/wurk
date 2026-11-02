@@ -146,6 +146,8 @@ gate, so a drift between those two would reject a tag CI had just built.)
 
 ## If a release fails
 
+A `startup_failure` publishes nothing: a called workflow wants a permission its caller lacks (`demo` must grant `deployments: write`, wurk#859). Fix the lane, revert the bump, re-land `release: <next>`: a `workflow_dispatch` retry tags a later commit, which fails the baseline check.
+
 ### The failure this lane was built to end
 
 Until 2026-08-11 a **tag push** was the trigger. That made the release lane

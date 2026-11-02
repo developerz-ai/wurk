@@ -2,7 +2,7 @@
 
 This file is the brief a `docs-drift` lane would read (`.dz/schedules/docs-drift.md`). No
 `docs-drift` schedule is registered today: `.dz/maintainer/maintainer.yml` registers only
-`release-due`, `health` and `improve`, so nothing fires this brief until one is registered there
+`release-due`, `security-release`, `health` and `improve`, so nothing fires this brief until one is registered there
 with `brief_file: .dz/schedules/docs-drift.md`. A schedule's registration — its `brief_file` among
 it — lives in that policy file.
 
