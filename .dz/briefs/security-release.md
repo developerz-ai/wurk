@@ -4,12 +4,9 @@ Daily checkup on the days `release-due` does not run, fired by `schedules: secur
 
 ## Run
 
-```bash
-last=$(git describe --tags --abbrev=0 --match 'v[0-9]*' origin/main)
-git log --format='%h %cI %s' "$last"..origin/main -- ':(glob)lib/**/*.rb' ':(glob)lib/**/*.lua' ':(glob)app/**/*.rb' 'config/**' 'exe/*' 'frontend/src/**' 'frontend/index.html' 'frontend/public/**' wurk.gemspec
-```
+Run `.dz/briefs/release-due.md` § Decide in full before filtering for security changes. Reuse its paginated tag resolution, tag peeling, Release-state classification, dated CHANGELOG baseline validation and fresh-main shipping-path scan; use the resulting validated `$last` and window, not a separately selected tag. A gem-less tag at `origin/main` must not turn an unvalidated baseline into an empty security scan.
 
-Fetch tags first. Those paths are what reaches the gem; look there for a commit that fixes a security advisory.
+If baseline validation fails or any Decide command cannot run, stop and report `unknown: <failure>` with the evidence. Do not treat an unknown window as empty or report `no release:`. Only after validation succeeds, inspect the shipping-path window for a commit that fixes a security advisory. The weekly cadence and 24-hour waiting rule do not delay a qualifying security fix.
 
 ## What qualifies
 
@@ -27,4 +24,5 @@ File one ask, **Release `<next>`**, opening with the advisory's id and source UR
 
 ## Rows
 
-- `security-fix-unreleased` — A commit since the last tag fixes an advisory a first-tier source confirms, naming something the gem ships, and no release carries it yet.
+- `security-window` — Runs release-due's full Decide block before security filtering; a failed baseline or unavailable scan is unknown, never empty.
+- `security-fix-unreleased` — A commit since the validated `$last` fixes an advisory a first-tier source confirms, naming something the gem ships, and no release carries it yet.
