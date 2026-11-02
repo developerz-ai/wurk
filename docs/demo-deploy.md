@@ -257,6 +257,23 @@ the environment, and [`demo/config/routes.rb`](../demo/config/routes.rb) answers
 so the gem's own meta payload stays free of it, and the Deployment's commit ref
 and the probe now name the same thing: what CI built and what the demo runs.
 
+**A newer commit counts, except on a hand dispatch.** Image Updater picks the newest
+build, so a later deploy can overtake this one, as when `release.yml`'s `demo` job runs
+after another push. On a push or a release call, a served commit GitHub's compare API
+reports `ahead` of the built one is a pass, and if the demo is already past it nothing is
+pushed, because a cache-miss rebuild would roll the demo back. An unreadable compare is
+never a pass: the probe retries and fails naming it. A failure in a release call also says
+the gem and tag are live.
+
+**Rolling back.** Dispatch `deploy-demo` with an older `ref`. It requires that exact commit,
+with two limits:
+
+- A commit from before `/demo/build` existed cannot report itself. The run pushes the image,
+  records the Deployment as unverified and warns; check `/wurk/api/meta` by hand.
+- A rebuild that hits the build cache keeps its digest and `created` time, so Image Updater
+  stays on the newer image and the run goes red, which is accurate: the rollback did not
+  happen. Point the demo at the older image in the infra repo instead.
+
 **This is the CI probe, and it is not the only check.** The standalone read-only
 check in [The served-version check (read-only)](#the-served-version-check-read-only)
 answers a different question — "does the demo serve *this checkout's* version?" —
@@ -266,7 +283,8 @@ The outcome is written back to the Deployment:
 
 | Probe result | Deployment status | Job |
 |---|---|---|
-| the reported commit matches | `success` | green |
+| the reported commit matches, or is a confirmed descendant outside a hand dispatch | `success` | green |
+| the commit predates `/demo/build` | `success`, described as unverified | green, with a warning |
 | the bound is exhausted | `failure` | red — the run log prints the last commit the demo reported, so the reader knows what it was serving |
 
 Before the first image carrying the route rolls out, and for a moment during any
@@ -356,7 +374,7 @@ No `ARGOCD_*` secrets are needed — CI never talks to the cluster.
 
 The image is pushed to `registry.digitalocean.com/developerz-ai/wurk-demo`
 only, tagged `sha-<7>` (what Image Updater selects on), `<sha>`, and `latest`
-(the last two are for humans and rollback). Infra moved the demo off GHCR on
+(the last two are for humans; see [Rolling back](#deployment-record-and-commit-probe)). Infra moved the demo off GHCR on
 2026-07-12 (infra #803); `stacks/apps/wurk-demo/manifests/kustomization.yml`
 rewrites every image ref onto DOCR.
 

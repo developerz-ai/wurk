@@ -154,7 +154,7 @@ class DeployDemoWorkflowTest < Minitest::Test
     assert_match(%r{curl [^\n]*https://wurk\.demo\.developerz\.ai/demo/build}, run,
                  'the probe must read the served commit from /demo/build')
     assert_match(/\["sha"\]/, run, 'the probe must read the `sha` field of /demo/build')
-    refute_match(%r{api/meta|\["version"\]}, run, 'the probe must not fall back to the gem version')
+    refute_match(%r{curl [^\n]*api/meta|\["version"\]}, run, 'the probe must not fall back to the gem version')
     assert_equal '${{ steps.built.outputs.sha }}', step.dig('env', 'EXPECTED_SHA'),
                  'the probe must compare against the commit this run built'
   end
@@ -387,6 +387,101 @@ class DeployDemoWorkflowTest < Minitest::Test
     assert_includes result[:gh_calls].join("\n"), 'state=success'
   end
 
+  # A later deploy can overtake the release's own: a cached rebuild of the older
+  # commit keeps its digest and `created`, so Image Updater stays on the newer one.
+  def test_executed_probe_accepts_a_descendant_github_confirms
+    result = run_probe(expected_sha: NEW_SHA, served_sha: OLD_SHA, compare: 'ahead')
+
+    assert_predicate result[:status], :success?
+    assert_equal 1, result[:curl_calls].length
+    assert_includes result[:gh_calls].join("\n"), "compare/#{NEW_SHA}...#{OLD_SHA}"
+    assert_includes result[:gh_calls].join("\n"), 'state=success'
+  end
+
+  def test_executed_probe_does_not_accept_a_commit_that_is_behind_or_diverged
+    %w[behind diverged identical].each do |relation|
+      result = run_probe(expected_sha: NEW_SHA, served_sha: OLD_SHA, compare: relation)
+
+      refute_predicate result[:status], :success?, "#{relation} must not pass"
+      refute_includes result[:gh_calls].join("\n"), 'state=success'
+    end
+  end
+
+  # An API blip must never read as success, and must not end the wait either.
+  def test_executed_probe_fails_closed_and_says_so_when_the_compare_errors
+    result = run_probe(expected_sha: NEW_SHA, served_sha: OLD_SHA, compare: 'error')
+
+    refute_predicate result[:status], :success?
+    assert_equal probe_loop_bound, result[:curl_calls].length, 'a failed compare must keep polling'
+    refute_includes result[:gh_calls].join("\n"), 'state=success'
+    assert_includes result[:stdout], 'compare'
+    assert_includes result[:stdout], 'could not be proved'
+  end
+
+  def test_executed_probe_retries_a_compare_blip_and_then_passes
+    result = run_probe(expected_sha: NEW_SHA, served_sha: OLD_SHA, compare: 'error-then-ahead')
+
+    assert_predicate result[:status], :success?
+    assert_equal 2, result[:curl_calls].length
+  end
+
+  # A hand dispatch wants exactly its commit: crediting the image it is replacing
+  # would pass a rollback instantly.
+  def test_executed_probe_gives_a_hand_dispatch_no_credit_for_a_newer_commit
+    result = run_probe(expected_sha: NEW_SHA, served_sha: OLD_SHA, compare: 'ahead', allow_newer: 'false')
+
+    refute_predicate result[:status], :success?
+    refute_includes result[:gh_calls].join("\n"), 'compare/'
+  end
+
+  def test_executed_probe_says_the_gem_and_tag_are_live_when_a_release_call_fails
+    result = run_probe(expected_sha: NEW_SHA, served_sha: OLD_SHA, trusted: 'true')
+
+    refute_predicate result[:status], :success?
+    assert_includes result[:stdout], 'the gem and tag are live'
+
+    plain = run_probe(expected_sha: NEW_SHA, served_sha: OLD_SHA)
+
+    refute_includes plain[:stdout], 'the gem and tag are live'
+  end
+
+  def test_executed_probe_does_not_block_a_rollback_it_cannot_verify
+    result = run_probe(expected_sha: NEW_SHA, served_sha: OLD_SHA, has_route: 'false')
+
+    assert_predicate result[:status], :success?
+    assert_empty result[:curl_calls]
+    assert_includes result[:stdout], '::warning::'
+    assert_includes result[:gh_calls].join("\n"), 'unverified'
+  end
+
+  def test_a_push_never_rolls_the_demo_back
+    steps = build_job.fetch('steps')
+    push = steps.find { |step| step['uses'].to_s.start_with?('docker/build-push-action') }
+    check = build_step('skip the push if the demo already serves a newer commit')
+
+    assert_equal "steps.overtaken.outputs.skip != 'true'", push['if']
+    assert_equal "steps.overtaken.outputs.skip != 'true'", build_step('verify pushed tags resolve')['if']
+    assert_equal "${{ github.event_name != 'workflow_dispatch' || inputs.trusted == true }}",
+                 check.dig('env', 'ALLOW_NEWER')
+    assert_operator steps.index(check), :<, steps.index(push)
+  end
+
+  def test_executed_overtaken_check_skips_only_for_a_confirmed_descendant
+    assert_equal 'skip=true', run_overtaken(compare: 'ahead')
+    assert_equal 'skip=false', run_overtaken(compare: 'behind')
+    assert_equal 'skip=false', run_overtaken(compare: 'error'), 'a failed read must build as usual'
+    assert_equal 'skip=false', run_overtaken(compare: 'ahead', allow_newer: 'false'), 'a dispatch may roll back'
+  end
+
+  # .github/ is dockerignored: a build from this file alone differs only in the ENV
+  # layer, with an identical `created`, and Image Updater breaks that tie by tag name.
+  def test_editing_this_workflow_does_not_trigger_a_build
+    paths = deploy_workflow.fetch(true).dig('push', 'paths')
+
+    refute_includes paths, '.github/workflows/deploy-demo.yml'
+    assert_includes File.read(File.join(ROOT, '.dockerignore')), '.github'
+  end
+
   # --- the authorize door is unchanged --------------------------------------
 
   # The allowlist is the only thing between a write-access user and a
@@ -476,7 +571,7 @@ class DeployDemoWorkflowTest < Minitest::Test
   # onto PATH: curl serves the scripted answer and counts its calls, gh logs
   # every invocation, sleep is a no-op so a full retry bound costs nothing —
   # the retry COUNT is asserted, not its pace.
-  def run_probe(expected_sha:, served_sha:, served_body: nil, match_after: nil)
+  def run_probe(expected_sha:, served_sha:, served_body: nil, match_after: nil, **options)
     Dir.mktmpdir('deploy-demo-probe') do |dir|
       stub_dir = File.join(dir, 'bin')
       state_dir = File.join(dir, 'state')
@@ -492,7 +587,8 @@ class DeployDemoWorkflowTest < Minitest::Test
         expected_sha: expected_sha,
         served_sha: served_sha,
         served_body: served_body,
-        match_after: match_after
+        match_after: match_after,
+        **options
       )
       stdout, stderr, status = Open3.capture3(env, 'bash', script_path)
 
@@ -503,6 +599,22 @@ class DeployDemoWorkflowTest < Minitest::Test
         curl_calls: read_stub_lines(File.join(state_dir, 'curl_calls')),
         gh_calls: read_stub_lines(File.join(state_dir, 'gh_calls'))
       }
+    end
+  end
+
+  def run_overtaken(compare:, allow_newer: 'true')
+    Dir.mktmpdir('deploy-demo-overtaken') do |dir|
+      stub_dir = File.join(dir, 'bin')
+      Dir.mkdir(stub_dir)
+      write_probe_stubs(stub_dir)
+      output = File.join(dir, 'output')
+      env = probe_env(stub_dir, dir, expected_sha: NEW_SHA, served_sha: OLD_SHA, served_body: nil, match_after: nil,
+                                     compare: compare, allow_newer: allow_newer).merge('GITHUB_OUTPUT' => output)
+      run = build_step('skip the push if the demo already serves a newer commit').fetch('run')
+      _out, stderr, status = Open3.capture3(env, 'bash', '-c', run)
+      raise stderr unless status.success?
+
+      File.read(output).strip
     end
   end
 
@@ -559,6 +671,16 @@ class DeployDemoWorkflowTest < Minitest::Test
     write_stub(stub_dir, 'gh', <<~BASH)
       #!/usr/bin/env bash
       echo "gh $*" >> "$STUB_STATE_DIR/gh_calls"
+      case "$*" in
+        *compare/*)
+          answer="$STUB_COMPARE"
+          if [ "$answer" = error-then-ahead ]; then
+            if [ -f "$STUB_STATE_DIR/compared" ]; then answer=ahead; else touch "$STUB_STATE_DIR/compared"; answer=error; fi
+          fi
+          if [ "$answer" = error ]; then echo "gh: Server Error (HTTP 502)" >&2; exit 1; fi
+          printf '%s' "$answer"
+          ;;
+      esac
     BASH
     write_stub(stub_dir, 'sleep', <<~BASH)
       #!/usr/bin/env bash
@@ -566,10 +688,15 @@ class DeployDemoWorkflowTest < Minitest::Test
     BASH
   end
 
-  def probe_env(stub_dir, state_dir, expected_sha:, served_sha:, served_body:, match_after:)
+  def probe_env(stub_dir, state_dir, expected_sha:, served_sha:, served_body:, match_after:, compare: 'behind',
+                allow_newer: 'true', trusted: 'false', has_route: 'true')
     {
       'PATH' => "#{stub_dir}:#{ENV.fetch('PATH', nil)}",
       'EXPECTED_SHA' => expected_sha,
+      'ALLOW_NEWER' => allow_newer,
+      'TRUSTED' => trusted,
+      'HAS_ROUTE' => has_route,
+      'STUB_COMPARE' => compare,
       'DEPLOYMENT_ID' => '42',
       'GITHUB_REPOSITORY' => 'developerz-ai/wurk',
       'STUB_STATE_DIR' => state_dir,

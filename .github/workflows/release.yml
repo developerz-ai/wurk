@@ -122,8 +122,10 @@ jobs:
             exit 1
           fi
 
+          # A failed upload leaves a zero-byte `starter` asset under the expected name.
+          # Only a finished one counts, or a re-run would skip the repair.
           has_gem_asset=false
-          if assets="$(gh api "repos/${GITHUB_REPOSITORY}/releases/tags/${TAG}" -q '.assets[].name' 2>"$err")"; then
+          if assets="$(gh api "repos/${GITHUB_REPOSITORY}/releases/tags/${TAG}" -q '.assets[] | select(.state == "uploaded" and .size > 0) | .name' 2>"$err")"; then
             if printf '%s\n' "$assets" | grep -Fxq "wurk-${VERSION}.gem"; then
               has_gem_asset=true
             fi
@@ -143,6 +145,19 @@ jobs:
             if [ -n "$tagged" ] && [ "$tagged" != "$GITHUB_SHA" ]; then
               echo "::error::${TAG} already exists and points at ${tagged}, not ${GITHUB_SHA}, and the release is incomplete. Refusing to move it: see RELEASE.md, If a release fails."
               exit 1
+            fi
+            # A finishing run cuts the tag here, so "here" has to be the commit the gem
+            # came from. A dispatch after main moved would tag code the gem never held.
+            if [ "$gem_live" = true ] && [ -z "$tagged" ]; then
+              if ! bumped="$(gh api "repos/${GITHUB_REPOSITORY}/commits?path=lib/wurk/version.rb&sha=${GITHUB_SHA}&per_page=1" -q '.[0].sha' 2>"$err")" || [ -z "$bumped" ]; then
+                cat "$err" >&2
+                echo "::error::could not read the newest commit touching lib/wurk/version.rb; re-run this workflow."
+                exit 1
+              fi
+              if [ "$bumped" != "$GITHUB_SHA" ]; then
+                echo "::error::wurk ${VERSION} is live with no ${TAG}, but ${GITHUB_SHA} is not its version commit ${bumped}, and tagging here would point ${TAG} at code the gem never held. Open the release run for ${bumped} and use Re-run all jobs: it finishes the release at that commit. If that run is gone, see RELEASE.md, What a re-run does."
+                exit 1
+              fi
             fi
             finish=true
             if [ "$gem_live" = true ]; then
@@ -432,8 +447,10 @@ jobs:
           gh release edit "$TAG" "${flags[@]}" --draft=false
           gh release upload "$TAG" "pkg/wurk-${VERSION}.gem" --clobber
 
-  # Ship the released tag to wurk.demo.developerz.ai. Runs only after the gem is
-  # published, so the demo never advertises a version RubyGems does not have.
+  # Prove the released commit is live on wurk.demo.developerz.ai. The bump's own
+  # push to main has usually deployed it already, because the bump moves
+  # demo/Gemfile.lock, so the demo can serve a version before RubyGems does. A
+  # failure here is a demo failure: the gem and tag are already live.
   #
   # `trusted: true` waives deploy-demo's DEMO_DEPLOYERS actor allowlist. That
   # allowlist exists to stop a hand-dispatched deploy of an arbitrary ref; it has
@@ -471,11 +488,8 @@ jobs:
   smoke:
     needs: [preflight, release, demo]
     if: ${{ !cancelled() && needs.demo.result == 'success' }}
-    # Least privilege for the caller: this job only curls RubyGems and the
-    # live demo. It must not inherit the workflow-level `contents: write` +
-    # `id-token: write` — the id-token permission is what the RubyGems
-    # trusted-publishing exchange in the `release` job needs, and a smoke
-    # check has no business holding it.
+    # Least privilege for the caller: this job only curls RubyGems and the live
+    # demo. `id-token` belongs to `publish` and `contents: write` to `release`.
     permissions:
       contents: read
     uses: ./.github/workflows/release-smoke.yml

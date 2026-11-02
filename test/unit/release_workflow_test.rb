@@ -1,6 +1,8 @@
 # frozen_string_literal: true
 
 require 'minitest/autorun'
+require 'digest'
+require 'json'
 require 'yaml'
 require 'fileutils'
 require 'open3'
@@ -105,6 +107,16 @@ class ReleaseWorkflowTest < Minitest::Test
     assert_state({ 'publish' => 'true', 'finish' => 'true' }, gem: 404, tag: HEAD, assets: [GEM_ASSET])
   end
 
+  # A failed upload leaves this behind under the expected name. It must not read as
+  # complete, or every fresh re-run would no-op over a release with no usable gem.
+  def test_an_unfinished_gem_asset_does_not_complete_the_release
+    finish = { 'publish' => 'false', 'finish' => 'true' }
+
+    assert_state(finish, gem: 200, tag: HEAD, assets: [{ 'name' => GEM_ASSET, 'state' => 'starter', 'size' => 0 }])
+    assert_state(finish, gem: 200, tag: HEAD, assets: [{ 'name' => GEM_ASSET, 'state' => 'starter', 'size' => 512 }])
+    assert_state(finish, gem: 200, tag: HEAD, assets: [{ 'name' => GEM_ASSET, 'state' => 'uploaded', 'size' => 0 }])
+  end
+
   def test_gem_live_with_the_tag_or_release_missing_skips_the_push_and_finishes
     finish = { 'publish' => 'false', 'finish' => 'true' }
 
@@ -112,6 +124,31 @@ class ReleaseWorkflowTest < Minitest::Test
     assert_state(finish, gem: 200, tag: HEAD)
     assert_state(finish, gem: 200, tag: HEAD, assets: [])
     assert_state(finish, gem: 200, tag: HEAD, assets: ['notes.txt'])
+  end
+
+  # A dispatch after main moved would tag code the gem never held.
+  def test_finishing_from_a_later_commit_is_refused_with_the_way_forward
+    result = state(gem: 200, version_commit: ELSEWHERE)
+
+    refute_predicate result[:status], :success?
+    assert_includes result[:stdout], ELSEWHERE
+    assert_includes result[:stdout], 'Re-run all jobs'
+    assert_empty result[:outputs]
+  end
+
+  def test_an_unreadable_version_commit_refuses_to_finish
+    [:error, ''].each do |version_commit|
+      result = state(gem: 200, version_commit: version_commit)
+
+      refute_predicate result[:status], :success?, version_commit.inspect
+      assert_empty result[:outputs]
+    end
+  end
+
+  # Only cutting a tag depends on it: a release with its tag already here does not.
+  def test_a_gem_absent_run_or_an_existing_tag_does_not_read_the_version_commit
+    assert_state({ 'publish' => 'true', 'finish' => 'true' }, gem: 404, version_commit: ELSEWHERE)
+    assert_state({ 'publish' => 'false', 'finish' => 'true' }, gem: 200, tag: HEAD, version_commit: ELSEWHERE)
   end
 
   def test_a_fully_released_version_is_an_announced_no_op
@@ -228,6 +265,47 @@ class ReleaseWorkflowTest < Minitest::Test
     assert_includes out, 're-run'
   end
 
+  def test_a_served_gem_matching_its_published_digest_is_fetched
+    out, status, gem = run_fetch(body: 'gem-bytes', published_sha: Digest::SHA256.hexdigest('gem-bytes'))
+
+    assert_predicate status, :success?, out
+    assert_equal 'gem-bytes', gem, 'the verified gem must land where the tag step attaches it from'
+  end
+
+  def test_a_served_gem_not_matching_its_published_digest_is_refused
+    out, status, = run_fetch(body: 'tampered', published_sha: Digest::SHA256.hexdigest('gem-bytes'))
+
+    refute_predicate status, :success?
+    assert_includes out, '::error::'
+  end
+
+  def test_the_tag_step_completes_an_existing_release
+    out, _err, status, calls = run_tag_step(tag: HEAD, existing_release: '77')
+
+    assert_predicate status, :success?, out
+    assert_includes out, '::warning::'
+    assert_match(/gh release edit #{TAG} .*--target #{HEAD} .*--draft=false/, calls)
+    assert_includes calls, "gh release upload #{TAG} pkg/#{GEM_ASSET} --clobber"
+    refute_includes calls, 'gh release create'
+  end
+
+  # `--clobber` is what replaces a `starter` asset left by a failed upload; without
+  # it `gh release upload` refuses an existing name and the release cannot be repaired.
+  def test_the_repair_replaces_a_stale_asset
+    _out, _err, status, calls = run_tag_step(tag: HEAD, existing_release: '77')
+
+    assert_predicate status, :success?
+    assert_match(/gh release upload #{TAG} \S+ --clobber/, calls)
+  end
+
+  def test_the_tag_step_completes_a_draft_with_no_tag_yet
+    _out, _err, status, calls = run_tag_step(tag: nil, existing_release: '77')
+
+    assert_predicate status, :success?
+    assert_includes calls, 'gh release edit'
+    refute_includes calls, 'gh release create'
+  end
+
   def test_the_tag_step_refuses_a_tag_on_another_commit_even_with_no_release
     out, _err, status, calls = run_tag_step(tag: ELSEWHERE)
 
@@ -261,14 +339,14 @@ class ReleaseWorkflowTest < Minitest::Test
 
   # Runs preflight's state step with curl answering `gem` and gh answering `tag`
   # (a sha, nil for 404, :error) and `assets` (a list, nil for 404, :error).
-  def state(gem:, tag: nil, assets: nil)
+  def state(gem:, tag: nil, assets: nil, version_commit: HEAD)
     Dir.mktmpdir('release-preflight') do |dir|
       output = File.join(dir, 'output')
       summary = File.join(dir, 'summary')
       bin = File.join(dir, 'bin')
       FileUtils.mkdir_p(bin)
       stub(bin, 'curl', %(#!/usr/bin/env bash\nprintf '%s' "#{gem}"\n[ "#{gem}" != 000 ] || exit 7\n))
-      stub(bin, 'gh', state_gh(tag, assets))
+      stub(bin, 'gh', state_gh(tag, assets, version_commit))
       env = base_env(bin).merge('GITHUB_OUTPUT' => output, 'GITHUB_STEP_SUMMARY' => summary,
                                 'TAG' => TAG, 'GH_TOKEN' => 'x')
       stdout, stderr, status = Open3.capture3(env, 'bash', '-c', step_run('preflight', 'read what has already shipped'))
@@ -278,15 +356,23 @@ class ReleaseWorkflowTest < Minitest::Test
     end
   end
 
-  def state_gh(tag, assets)
+  def state_gh(tag, assets, version_commit)
     <<~BASH
       #!/usr/bin/env bash
       case "$2" in
         */git/ref/tags/*) #{gh_answer(tag)} ;;
-        */releases/tags/*) #{gh_answer(assets.is_a?(Array) ? assets.join("\n") : assets)} ;;
+        */releases/tags/*) #{assets.is_a?(Array) ? release_answer(assets) : gh_answer(assets)} ;;
+        */commits*) #{gh_answer(version_commit)} ;;
         *) echo "unexpected gh $*" >&2; exit 1 ;;
       esac
     BASH
+  end
+
+  # Answers through the step's own `-q` filter, so the filter is what gets tested.
+  def release_answer(assets)
+    rows = assets.map { |asset| asset.is_a?(Hash) ? asset : { 'name' => asset, 'state' => 'uploaded', 'size' => 1024 } }
+
+    %(printf '%s' '#{JSON.generate('assets' => rows)}' | jq -r "$4")
   end
 
   def gh_answer(value)
@@ -329,7 +415,7 @@ class ReleaseWorkflowTest < Minitest::Test
     end
   end
 
-  def run_tag_step(tag:)
+  def run_tag_step(tag:, existing_release: nil)
     Dir.mktmpdir('release-tag') do |dir|
       bin = File.join(dir, 'bin')
       calls = File.join(dir, 'calls')
@@ -339,7 +425,7 @@ class ReleaseWorkflowTest < Minitest::Test
         echo "gh $*" >> "#{calls}"
         case "$1 $2" in
           api\\ */git/ref/tags/*) #{gh_answer(tag)} ;;
-          api\\ */releases) exit 0 ;;
+          api\\ */releases) printf '%s' "#{existing_release}" ;;
         esac
       BASH
       FileUtils.mkdir_p(File.join(dir, 'tool'))
@@ -351,6 +437,29 @@ class ReleaseWorkflowTest < Minitest::Test
       stdout, stderr, status = Open3.capture3(env, 'bash', '-c', script, chdir: dir)
 
       [stdout, stderr, status, read(calls)]
+    end
+  end
+
+  # Runs the fetch step against a curl serving the version JSON and the .gem.
+  def run_fetch(body:, published_sha:)
+    Dir.mktmpdir('release-fetch') do |dir|
+      bin = File.join(dir, 'bin')
+      FileUtils.mkdir_p(bin)
+      stub(bin, 'sleep', "#!/usr/bin/env bash\n")
+      stub(bin, 'curl', <<~BASH)
+        #!/usr/bin/env bash
+        out=""
+        prev=""
+        for arg in "$@"; do
+          [ "$prev" = "-o" ] && out="$arg"
+          prev="$arg"
+        done
+        if [ -n "$out" ]; then printf '%s' '#{body}' > "$out"; else printf '{"sha":"#{published_sha}"}'; fi
+      BASH
+      run = step_run('release', 'fetch the published gem')
+      stdout, stderr, status = Open3.capture3(base_env(bin), 'bash', '-c', run, chdir: dir)
+
+      ["#{stdout}#{stderr}", status, read(File.join(dir, 'pkg', GEM_ASSET))]
     end
   end
 

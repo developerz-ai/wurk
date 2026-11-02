@@ -99,21 +99,23 @@ publishes and deploys exactly as one merged by a human.
 | 16 | **install Ruby** | First step of **`release`**, the only job with `contents: write`. It runs after a successful push, or alone when preflight found the gem live and the tag or Release still owed. |
 | 17 | **fetch the published gem** | Downloads the `.gem` from RubyGems and checks it against the digest RubyGems publishes. It is what consumers get, and the only copy a finishing run has. This is the wait that keeps a tag from existing without a gem behind it, so it is fatal; a re-run finishes. |
 | 18 | **tag & create GitHub Release** | `gh release create <tag> --target <sha>` creates the tag *and* the Release in one call, with the CHANGELOG section as notes (`bin/changelog-section`) and the `.gem` attached (marked pre-release automatically for `Gem::Version#prerelease?`). When a release for the tag already exists, the reconcile branch finishes it via `gh release edit` + `upload --clobber` instead of abandoning — the one case that still aborts is a tag pointing at a different commit. **Last, deliberately** — see [the one rule](#the-one-rule-the-tag-is-an-output-not-an-input). |
-| 19 | **`demo`** | Ships the released tag to `wurk.demo.developerz.ai` via the `demo` environment (a deployment record and URL; it carries no protection rules, so nothing pauses for a reviewer). It passes `trusted: true`, which waives deploy-demo's `DEMO_DEPLOYERS` actor allowlist — that allowlist guards the hand-dispatched door, and has nothing to add once this workflow has already published the commit's gem. Waiving it is also what lets a release merged by the developerz.ai bot deploy the demo, rather than stranding it after the irreversible publish. The waiver is honoured only from the `release` workflow running on `main`; anything else passing `trusted: true` is rejected. It waits for the demo to serve this exact commit at `/demo/build`, so a frozen rollout goes red. |
+| 19 | **`demo`** | Ships the released tag to `wurk.demo.developerz.ai` via the `demo` environment (a deployment record and URL; it carries no protection rules, so nothing pauses for a reviewer). It passes `trusted: true`, which waives deploy-demo's `DEMO_DEPLOYERS` actor allowlist — that allowlist guards the hand-dispatched door, and has nothing to add once this workflow has already published the commit's gem. Waiving it is also what lets a release merged by the developerz.ai bot deploy the demo, rather than stranding it after the irreversible publish. The waiver is honoured only from the `release` workflow running on `main`; anything else passing `trusted: true` is rejected. It waits for the demo to serve this commit or a confirmed descendant at `/demo/build`, so a frozen rollout goes red, and it pushes nothing if the demo is already past this commit. |
 | 20 | **`smoke`** | Calls the reusable `release-smoke.yml` workflow with the released version. It installs that version into a throwaway minimal Rails app, asserts the mounted engine serves `/wurk` with HTTP 200, boots `wurkswarm` and requires an enqueued job to land its Redis marker, and checks the demo's `/wurk/api/meta` reports the same version. This is bounded post-publish evidence, not a gate: it runs only after the irreversible `gem push`, so a failure changes nothing — no rollback or compensation is implemented. |
 
 ### What a re-run does
 
 `gem push` cannot be undone, and steps follow it, so "is the gem live?" alone cannot
 decide what a run owes. Preflight reads all of it. "Release complete" below means
-published with `wurk-<version>.gem` attached.
+published with `wurk-<version>.gem` attached and fully uploaded; a zero-byte `starter` asset
+left by a failed upload does not count, and the finishing run replaces it.
 
 | Gem live? | Tag? | Release complete? | `publish` / `finish` | Jobs that run | Run |
 |---|---|---|---|---|---|
 | no | none | no | true / true | all | green once demo and smoke pass |
 | no | at this commit | any | true / true | all (the tag and any Release are adopted) | green once demo and smoke pass |
 | no | at another commit | any | refused | preflight only | **red**, before the push |
-| yes | none | no | false / true | `release`, `demo`, `smoke` | green, having finished the release |
+| yes | none, and this is the newest commit touching `lib/wurk/version.rb` | no | false / true | `release`, `demo`, `smoke` | green, having finished the release |
+| yes | none, and main has moved past that commit | no | refused | preflight only | **red**: tagging here would name code the gem never held |
 | yes | at this commit | no | false / true | `release`, `demo`, `smoke` | green, having finished the release |
 | yes | at another commit | no | refused | preflight only | **red** |
 | yes | any | yes | false / false | preflight only | green no-op, announced by a notice and the job summary |
@@ -126,6 +128,15 @@ everything after it, so no green run can come from a publish that did not happen
 version that went live meanwhile. "Re-run all jobs" and `workflow_dispatch` read the state
 afresh. A release whose only failure was `demo` or `smoke` is complete, so a fresh read is
 a no-op: use "Re-run failed jobs", or dispatch `deploy-demo` or `release-smoke`.
+
+A release is finished from its own commit. A dispatch from a later `main` is refused with
+the commit to use: open that commit's release run and use "Re-run all jobs". If that run is
+gone, a maintainer creates the tag and Release by hand from that commit (`gh release create
+vX.Y.Z --target <sha>` with the CHANGELOG section as notes and the `.gem` attached).
+
+A red `demo` job does not mean a failed publish. The gem and tag are live by then, and the
+job's error says so. It passes when the demo serves the released commit or a descendant
+GitHub's compare API confirms, since a later push can overtake the release's own deploy.
 
 ### Smoke-checking a published release
 
@@ -361,8 +372,9 @@ first; MFA enforced via `rubygems_mfa_required`).
 
 The version must still be bumped on `main` first, exactly as above. Once the gem
 is on RubyGems, the release lane's preflight skips the push and finishes the rest:
-dispatch `release.yml` on `main` and it cuts the tag and GitHub Release, attaches the
-`.gem` and runs `demo` and `smoke`.
+while `main` is still at the version commit, dispatch `release.yml` on `main` and it cuts
+the tag and GitHub Release, attaches the `.gem` and runs `demo` and `smoke`. Past that
+commit, see [What a re-run does](#what-a-re-run-does).
 
 Every step in this section is a maintainer-only manual action. The scheduled
 health checkup only ever points at this runbook via a filed ask — the checkup
