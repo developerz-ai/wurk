@@ -62,7 +62,10 @@ module Wurk
     end
 
     def queues
-      render json: ::Wurk::Stats.new.queue_summaries.map { |q| ::Wurk::Api::Serializers.queue_summary(q) }
+      consumers = ::Wurk.redis(idempotent: true) { |conn| ::Wurk::QueueConsumers.counts(conn) }
+      render json: ::Wurk::Stats.new.queue_summaries.map { |q|
+        ::Wurk::Api::Serializers.queue_summary(q).merge(consumers: consumers.fetch(q.name, 0))
+      }
     end
 
     def queue

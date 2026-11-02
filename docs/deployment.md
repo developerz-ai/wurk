@@ -65,10 +65,8 @@ fetching behind your back during maintenance.
 The standard deploy dance is **quiet, then stop**: send `TSTP` early in the deploy so
 the old worker stops claiming new jobs, then `TERM` once the new release is live. A
 `SIGKILL` at any point is safe — reliable fetch keeps in-flight jobs on a per-process
-private list in Redis and are reclaimed once the owner's 60s heartbeat has expired, by
-whichever worker sweeps next, about 90s after a pod restart and 90-140s for a host lost, at defaults on every supported server (about 1s for a swarm child). A restart does not shorten
-that for a dead pod: the new process cannot tell a dead owner from a live one until the
-heartbeat lapses.
+private list in Redis, and they're reclaimed on the next boot (each booting worker runs
+an orphan sweep immediately, plus a locked cluster sweep every 60s).
 
 ---
 
@@ -370,14 +368,7 @@ drain.
 
 Wurk ships a dependency-free HTTP listener for probes — a raw `TCPServer` and one
 accept thread, no Rack — so it works in a swarm child, the standalone CLI, or embedded
-mode alike. It is **opt-in**, from the manifest with no application change:
-
-```yaml
-env:
-  - { name: WURK_HEALTH_PORT, value: "7433" }
-```
-
-or from code, which wins when both are set and is the only way to reach the other knobs:
+mode alike. It is **opt-in**:
 
 ```ruby
 # config/initializers/wurk.rb
@@ -386,39 +377,9 @@ Wurk.configure_server do |config|
 end
 ```
 
-Where an HTTP listener does not fit, use the exec-style probe:
-
-```yaml
-# Before a worker's first heartbeat the probe would fail, so boot gets its own budget.
-startupProbe:
-  exec:
-    command: ["bundle", "exec", "wurk", "health", "--window", "60"]
-  periodSeconds: 10
-  timeoutSeconds: 10
-  failureThreshold: 30
-livenessProbe:
-  exec:
-    command: ["bundle", "exec", "wurk", "health", "--window", "60"]
-  periodSeconds: 30
-  # Keep this generous. It has to cover `bundle exec` plus the probe's Redis timeouts;
-  # the default of 1s fails on an outage, and restarts the very pods the probe spares.
-  timeoutSeconds: 10
-  failureThreshold: 3
-```
-
-`wurk health` boots no application. It exits 0 when a process on this host has a heartbeat
-within `--window` seconds (default 60), `--min COUNT` raises how many must be beating, and it
-passes when Redis cannot be read, so a store outage does not restart your workers, unless you
-add `--strict`.
-
-Prefer either to a `ps | grep wurk` exec probe. That probe passes as long as the swarm parent
-is alive, including while every child crash-loops and nothing is being processed. `wurkswarm`
-itself gives up too: when every child has been crashing for `swarm_crash_exit_after` seconds
-(default 600), it exits 1, so restartPolicy and CrashLoopBackOff can see the failure.
-
 | Method + path | 200 when | 503 when |
 |---|---|---|
-| `GET /live` | The launcher is running. | The launcher is shutting down, i.e. after `stop` (`TERM`). A quiet process (`TSTP`) stays 200: it is alive. Body: `{"status":"down","check":"live","reason":"stopping"}` |
+| `GET /live` | The launcher is running. | The launcher is stopping — i.e. after `quiet` (`TSTP`) or `stop` (`TERM`). Body: `{"status":"down","check":"live","reason":"stopping"}` |
 | `GET /ready` | Redis answers `PING` **and** the heartbeat fired within `ready_window` (default **30s**). In a swarm: at least `min_ready` children have a heartbeat inside `ready_window` (see [Health and supervision](#health-and-supervision)). | Either check fails. Body carries `"reason":"redis unreachable"` or `"reason":"heartbeat stale"`. |
 | `GET /metrics` | Prometheus text format 0.0.4, served by the same listener unless `health_check(..., metrics: false)`. | — |
 
@@ -457,12 +418,12 @@ accepted until pollers, managers, and the reaper are up.
   and are **identical on every pod**: aggregate them with `max`, not `sum`, or a
   10-pod deployment reports 10× the backlog.
 
-### Deployment manifest
+> ⚠️ **`/live` goes 503 on quiet.** `TSTP` sets `stopping?`. If `/live` is wired to
+> `livenessProbe`, quieting a pod makes the kubelet restart it. That's usually what you
+> want during a rolling update (quiet happens inside `preStop`, right before the pod
+> dies anyway) but never quiet a pod you intend to keep.
 
-Ready-to-adapt manifests live in
-[`examples/kubernetes/`](../examples/kubernetes): this rolling fleet, the
-[Recreate variant](#recreate-variant), the
-[scrape config and alerts](#scraping-and-alerting).
+### Deployment manifest
 
 ```yaml
 # k8s/worker-deployment.yaml
@@ -489,8 +450,6 @@ spec:
               value: production
             - name: WURK_COUNT          # forked children per pod
               value: "4"
-            - name: WURK_HEALTH_PORT    # the listener every probe below reads
-              value: "7433"
             - name: SIDEKIQ_MAXMEM_MB   # graceful child recycle above 1.5GB RSS
               value: "1500"
             - name: REDIS_URL          # secret when it embeds a password — see secrets.md
@@ -538,12 +497,8 @@ terminationGracePeriodSeconds  >  preStop duration
 
 With the defaults that's 5 + 25 + 5 = 35s, so 60s leaves real headroom. If you raise
 `-t`, raise the grace period with it. Getting this wrong isn't data loss — a `SIGKILL`ed
-worker's in-flight jobs stay on its private list and are reclaimed once its heartbeat
-expires — but it does mean retries and duplicate work you didn't need.
-
-A host shutdown runs on a different budget. Where the kubelet's `shutdownGracePeriod` is set,
-it caps a pod's grace during a node reboot however long `terminationGracePeriodSeconds` is. A job that needs longer will be killed there and
-reclaimed, so anything that runs that long has to be safe to re-run.
+worker's in-flight jobs stay on its private list and are reclaimed on the next boot —
+but it does mean retries and duplicate work you didn't need.
 
 **Set memory `limits` above `SIDEKIQ_MAXMEM_MB × WURK_COUNT` plus the parent's
 footprint.** The recycle threshold is per child; the cgroup limit is per pod. If the
@@ -554,65 +509,15 @@ gives you the zero-downtime property that rolling restart gives a long-lived swa
 parent — leave `maxUnavailable` at its default and let the new ReplicaSet come up
 `Ready` (i.e. Redis-reachable and heartbeating) before the old pods drain.
 
-### Recreate variant
-
-[`examples/kubernetes/worker-recreate.yaml`](../examples/kubernetes/worker-recreate.yaml):
-one replica, `strategy: Recreate`. Pick it when:
-
-- the fleet is one pod anyway, so there is nothing to roll;
-- jobs are long, so a rolling overlap would run two generations for many minutes;
-- a process must not overlap its successor, as with a schedule loaded by one pod only.
-
-The cost is a processing gap of the drain plus the boot on every deploy. Queues keep
-accepting jobs throughout, so this delays work and does not lose it. Two things follow:
-
-- **Size the timeouts together.** `-t` for the longest job you will wait for, and
-  `terminationGracePeriodSeconds` above `preStop + -t + 5s`. A 15-minute grace does nothing
-  without a matching `-t`: the worker gives up at `-t` and requeues.
-- **A PodDisruptionBudget of `minAvailable: 1` on one replica blocks every node drain.**
-  Use `minAvailable: 0` or none.
-
-### Scraping and alerting
-
-[`examples/kubernetes/service-monitor.yaml`](../examples/kubernetes/service-monitor.yaml) has
-the Service and ServiceMonitor, plus the NetworkPolicy ingress rule on 7433 that a
-default-deny namespace needs. Without the rule the scrape target just reads as down.
-
-[`examples/kubernetes/prometheus-rule.yaml`](../examples/kubernetes/prometheus-rule.yaml)
-covers the exporter going away (`absent()`, without which every other alert goes quiet
-along with it), Redis unreachable, missing children, queue latency, a queue nobody
-consumes, no leader, dead-set growth, fetch errors and reclaims, using `wurk_leader`,
-`wurk_fetch_errors_total`, `wurk_reaper_reclaimed_total` and `wurk_queue_consumers` among
-others. Every metric and how to aggregate it is in
-[metrics](metrics.md#7-exporting-to-an-external-system). A unit test keeps these manifests
-in step with the exporter.
-
-### Fiber servers
-
-Falcon, or any web server running requests on a fiber scheduler, needs the Ruby driver on
-the **client** side: `driver: :ruby`, which is redis-client's default. A C-level driver such
-as `:hiredis` blocks the whole OS thread on each socket read and the fiber scheduler cannot
-see it, so one slow Redis call freezes every request on that thread, for as long as the
-socket timeout at worst. A forked worker is threaded, so `:hiredis` is fine there:
-
-```ruby
-Wurk.configure_client { |config| config.redis = { url: ENV["REDIS_URL"], driver: :ruby } }
-Wurk.configure_server { |config| config.redis = { url: ENV["REDIS_URL"], driver: :hiredis } }
-```
-
-Do not embed the swarm in a fiber server's worker process. Run workers separately
-(`WURK_DISABLED=1` on web) unless you have read
-[running Wurk](running.md).
-
 ---
 
 ## Supported Redis backends
 
 Wurk needs **one Redis-protocol server, version 7.0 or newer**, with
 `maxmemory-policy noeviction` — the same requirement as Sidekiq. Any eviction policy
-can silently delete queued jobs, and boot logs a warning for any other policy. The reaper
-does not use `OBJECT`, so an LFU policy or a server without that command changes nothing:
-reclaim latency is the same on all of them.
+can silently delete queued jobs; an LFU policy additionally makes Redis refuse
+`OBJECT IDLETIME`, which turns off the reaper's boot-grace re-check (see the
+Dragonfly row).
 
 | Backend | Status | Notes |
 |---|---|---|
@@ -623,46 +528,8 @@ reclaim latency is the same on all of them.
 | ACL users | **Tested in CI** | `redis://user:pass@host` with `~* &* +@all -@dangerous +info` is enough: `INFO` (heartbeat, dashboard) is the only `@dangerous` command anywhere in `lib/`. |
 | AWS ElastiCache (Redis OSS / Valkey), **cluster mode disabled** | Expected compatible, not tested against AWS | Use the primary endpoint. Set `maxmemory-policy` to `noeviction` in the parameter group — the default (`volatile-lru`) is wrong for a job queue. In-transit encryption is the TLS row (`rediss://`); RBAC/AUTH is the ACL row. A failover is a DNS flip: the pool redials on `READONLY` and on dropped connections. |
 | ElastiCache **cluster mode enabled**, ElastiCache Serverless, Amazon MemoryDB | **Not supported** | All three speak the Cluster protocol (Serverless and MemoryDB always do, even with one shard), which rejects multi-key commands across hash slots — see Redis Cluster. |
-| Dragonfly >= 1.34 | **Works in production; tested in CI** | The `compat` workflow leg runs the whole suite against v1.34.0 with stock Lua settings. Requirements and limits are [below](#dragonfly). |
+| Dragonfly | **Not supported for production**; works with flags | Needs `--default_lua_flags=allow-undeclared-keys`: Dragonfly refuses a Lua script that touches a key it was not passed in `KEYS`, and `reliable_scheduler!`'s promote script (`RELIABLE_SCHEDULE_PROMOTE` in `lib/wurk/lua.rb`) pushes to `queue:<name>` read from each job's payload. Dragonfly also has no `OBJECT` command, so the reaper's re-check that skips a private list touched within the grace period is off and a process that claims a job before its first heartbeat can have it reclaimed (one possible double run per boot race). Checked locally against Dragonfly 2.0 with the flag; not in CI. |
 | Redis Cluster | **Not supported** | `config.redis[:nodes]` raises at boot. Wurk, like Sidekiq, runs `MULTI` and multi-key Lua across a job's queue, the `queues` set, `schedule`/`retry`/`dead` and batch keys, which live in different hash slots. `RELIABLE_SCHEDULE_PROMOTE` also builds its target keys from payload data, which Cluster cannot route at all. |
-
-### Dragonfly
-
-Runs in production on 1.34, and the parity suite and a `kill -9` workload (reclaim, retries,
-scheduled promotion, batches, limiters, cron leader, unique) also passed on 2.0. On a job
-store, configure it like this:
-
-- **Version >= 1.34.** Older releases reply differently to the `BITFIELD` the per-minute
-  histograms use.
-- **Keep a Dragonfly job store below `--maxmemory`, and alert well before it.** At the limit, an `LMOVE`/`BLMOVE` between shards can pop a job and drop the push, so the job runs with no private copy and is gone if the process dies or its retry is refused. Measured on 1.34 and 2.0.2: 2 of 16 lost. Redis and Valkey do not do this. See [reliability](reliability.md).
-- **No `--cache_mode`.** That is eviction, and an evicted key is a lost job. Boot logs a
-  warning when it sees it. At `--maxmemory` writes fail instead, as under Redis `noeviction`:
-  enqueues raise, due scheduled jobs wait in their set, and in-flight work keeps draining.
-- **`--proactor_threads` matching the CPU the pod actually gets.** Left unset it takes one
-  thread per host core, and threads throttled by a lower CPU limit stall every client whose
-  key they own. `--maxmemory` needs 256MiB per thread.
-- **`--dbnum` covering your database number**, which only matters above the default 16.
-- **Lua flags: none needed for Wurk.** The one script that derives a key from its payload
-  carries its own grant, so stock Dragonfly runs `reliable_scheduler!`. Third-party Lua may
-  still need `--default_lua_flags=allow-undeclared-keys`; sidekiq-unique-jobs, redlock and
-  BullMQ are common cases. That flag serializes every script on the server. We measured a
-  one-key `EVAL` at about a third of its stock throughput, so turn it on only when something
-  requires it.
-
-**Durability is the snapshot cadence.** There is no append-only log: a crash rewinds the
-store to the last `--snapshot_cron`, so that interval is your RPO for every enqueued job, and
-jobs finished since then run again. Run it often enough to match what losing that window
-costs. SIGTERM writes a final snapshot first, so `terminationGracePeriodSeconds` must cover the
-final save. We measured about 35 MB/s here, so 120s holds roughly 4 GB; re-measure with
-`last_success_save_duration_sec` in `INFO persistence` and give the pod more grace as data
-grows. A SIGKILL mid-save falls back to the previous snapshot.
-
-Clients see `LOADING` while the data loads, as a plain `RedisClient::CommandError`. Workers log
-it and retry. Gate the server's readiness on `INFO persistence` showing `loading:0`: its port
-opens first. `--shard_round_robin_prefix` appears in older tuning guides, and current releases
-list it as deprecated. Wurk doesn't require it.
-
-### Wiring
 
 Wiring each one through `config.redis` (the same hash Sidekiq takes):
 

@@ -75,6 +75,25 @@ class ApiEndpointsTest < Wurk::Test::EngineCase
     assert_equal({ name: @queue, size: 1, paused: false }, row.slice(:name, :size, :paused))
   end
 
+  def test_queues_reports_how_many_live_processes_subscribe
+    push_to_queue
+    identity = "consumers-host:1:#{object_id}"
+    Wurk.redis do |conn|
+      conn.call('SADD', Wurk::Keys::PROCESSES, identity)
+      conn.call('HSET', identity, 'info', ::JSON.generate('queues' => [@queue]))
+    end
+
+    get '/wurk/api/queues'
+
+    assert_equal 1, json_body.find { |q| q[:name] == @queue }[:consumers]
+    Wurk.redis { |conn| conn.call('SREM', Wurk::Keys::PROCESSES, identity) }
+    get '/wurk/api/queues'
+
+    assert_equal 0, json_body.find { |q| q[:name] == @queue }[:consumers]
+  ensure
+    Wurk.redis { |conn| conn.call('DEL', identity) }
+  end
+
   def test_queue_returns_jobs_page_envelope
     push_to_queue
     get "/wurk/api/queues/#{@queue}?count=10&page=0"

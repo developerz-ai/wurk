@@ -446,37 +446,6 @@ upstream; the dashboard does not draw them yet. Read them directly with
 
 ---
 
-## Operational gauges on the health listener
-
-Alongside the families listed in [deployment](deployment.md), the health listener's
-`GET /metrics` exposes:
-
-| Metric | Meaning | Aggregate |
-|---|---|---|
-| `wurk_queue_consumers{queue=}` | Live processes subscribed to the queue, quiet ones included | `max`; alert on `== 0` while `wurk_queue_size > 0` |
-| `wurk_leader` | 1 when this pod's process group holds the leader lease | `sum` should be 1 |
-| `wurk_fetch_errors_total` | Fetch-loop errors in the process serving the scrape | `rate`; a sample of one child under a swarm |
-| `wurk_reaper_reclaimed_total` | Orphaned jobs this process reclaimed | `rate`; a sample of one child under a swarm |
-
-[`examples/kubernetes/prometheus-rule.yaml`](../examples/kubernetes/prometheus-rule.yaml)
-has ready-made alert rules.
-
-The fetch loop reports through `error_handlers` at most once a minute per exception
-class per process, with a `suppressed:` count in the context, so an outage does not
-call each handler once per thread per second. The counter above still counts every
-error.
-
-The elected leader also logs one WARN an hour for each non-empty queue no live
-process subscribes to, after five minutes in that state. A guard test can catch the
-same mistake before deploy:
-
-```ruby
-Rails.application.eager_load!
-assert_empty Wurk::Testing.unconsumed_job_queues(config_file: "config/wurk.yml")
-```
-
----
-
 ## 6. Redis footprint and retention
 
 Everything on this page is bounded by TTL or by a stream cap; nothing grows
