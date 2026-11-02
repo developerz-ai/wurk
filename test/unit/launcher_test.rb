@@ -312,8 +312,7 @@ class LauncherTest < Wurk::Test::UnitCase
     err = assert_raises(RuntimeError) { launcher.run(async_beat: false) }
 
     assert_equal 'redis down at boot', err.message, 'the boot failure must still reach the caller'
-    assert_equal %i[metrics_flusher periodic_poller metrics_rollup queue_rollup reaper leader heartbeat exit health],
-                 seen
+    assert_teardown_order %i[leader heartbeat exit health], seen
   end
 
   # The rollback is guarded: a launcher that cannot tear itself down must still
@@ -820,8 +819,7 @@ class LauncherTest < Wurk::Test::UnitCase
 
     launcher.stop
 
-    assert_equal %i[metrics_flusher periodic_poller metrics_rollup queue_rollup reaper leader heartbeat exit health],
-                 seen
+    assert_teardown_order %i[leader heartbeat exit health], seen
   end
 
   def test_stop_reports_a_manager_that_raises_mid_drain
@@ -849,7 +847,7 @@ class LauncherTest < Wurk::Test::UnitCase
 
     launcher.stop
 
-    assert_equal %i[metrics_flusher periodic_poller metrics_rollup queue_rollup reaper heartbeat exit health], seen
+    assert_teardown_order %i[heartbeat exit health], seen
   end
 
   def test_stop_closes_the_health_server_when_clearing_the_heartbeat_raises
@@ -1510,6 +1508,15 @@ class LauncherTest < Wurk::Test::UnitCase
   # order, the ones that actually ran — so a test can assert the tail completed
   # end to end under an injected failure. @history stays nil (history is opt-in),
   # which also covers the safe-nav else branch in the timer-loop sweep.
+  # The periodic loops stop side by side, so that one stuck loop can't keep another
+  # from hearing the stop. All that is ordered is what follows them.
+  def assert_teardown_order(rest, seen)
+    loops = %i[metrics_flusher periodic_poller metrics_rollup queue_rollup reaper]
+
+    assert_equal loops.sort, seen.first(loops.size).sort
+    assert_equal rest, seen.drop(loops.size)
+  end
+
   def record_teardown(launcher)
     seen = []
     %i[metrics_flusher periodic_poller metrics_rollup queue_rollup].each do |name|

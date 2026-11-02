@@ -53,6 +53,7 @@ class DemoSoakTest < Wurk::Test::UnitCase
     Wurk.redis { |c| c.call('FLUSHDB') }
     Wurk.configuration.reset_redis_pools!
   ensure
+    Wurk::Unique.disable!
     Wurk.instance_variable_set(:@configuration, @previous)
     @env.each { |key, value| value.nil? ? ENV.delete(key) : ENV[key] = value }
     super
