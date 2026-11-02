@@ -13,7 +13,7 @@ A fix for an advisory that a first-tier source confirms (KEV, NVD, GitHub adviso
 ## Decide
 
 ```bash
-# Resolve $last (paginated), peel it to a commit, classify its Release (RELEASE.md:180-194), verify the baseline, then scan the window.
+# Resolve $last (paginated), peel it to a commit, classify its Release (RELEASE.md:213-227), verify the baseline, then scan the window.
 last=$(gh api --paginate repos/developerz-ai/wurk/git/matching-refs/tags/ \
   | jq -r '.[] | select(.ref | startswith("refs/tags/v")) | .ref | sub("^refs/tags/"; "")' \
   | sort -V \

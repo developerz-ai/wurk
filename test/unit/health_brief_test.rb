@@ -69,7 +69,7 @@ require 'yaml'
 #      equality on a title that embeds the run's headSha or version can never
 #      hit, so the ask would be re-filed on every checkup.
 #   7. A release row grades a PUBLICATION, not a workflow run. release.yml
-#      concludes `success` on a proceed=false no-op, and a green run whose
+#      concludes `success` on a finish=false no-op, and a green run whose
 #      version never reached RubyGems is the same false green from the other
 #      side, so the row refuses to print `success` unless the canonical
 #      RubyGems probe serves that version (green + 404 is `Unhealthy: green
@@ -1050,9 +1050,8 @@ class HealthBriefTest < Minitest::Test
   private :assert_recovery_paragraph
 
   def test_release_run_that_published_nothing_is_a_named_no_op
-    # release.yml:80-90 emits proceed=false when the version is already on
-    # RubyGems and gates `release` on it; `demo` needs both
-    # (release.yml:233-239). A skipped job does not fail a run, so this run
+    # preflight emits finish=false when the version is fully released on
+    # RubyGems and GitHub, and gates `release` on it; `demo` needs both. A skipped job does not fail a run, so this run
     # concludes `success` having published nothing — and `--json conclusion`
     # alone reports exactly that green as the last release published.
     out, err, status = run_row9(jobs: release_jobs_json(preflight: 'success', release: 'skipped', demo: 'skipped'),
@@ -1068,7 +1067,7 @@ class HealthBriefTest < Minitest::Test
                  "row 9 must print one line naming the no-op; got #{lines.inspect}"
 
     assert_match(/\Ano-op #{SHA_NOOP}\b/, lines.first,
-                 'a proceed=false run must be named as a no-op carrying its headSha, so ' \
+                 'a finish=false run must be named as a no-op carrying its headSha, so ' \
                  "the ask can link the run; got #{lines.inspect}")
 
     refute_includes out, "success #{SHA_NOOP}",
@@ -1077,7 +1076,7 @@ class HealthBriefTest < Minitest::Test
                     "(stdout=#{out.inspect})"
 
     refute_includes out, 'Unhealthy',
-                    'proceed=false means nothing was owed, so this is not Unhealthy'
+                    'finish=false means nothing was owed, so this is not Unhealthy'
   end
 
   # A green run only counts as a PUBLICATION when RubyGems serves the version:
@@ -1106,7 +1105,7 @@ class HealthBriefTest < Minitest::Test
 
     refute_includes out, "success #{SHA_PUBLISHED}",
                     'the `gh api .../jobs` stub failed, so the row cannot tell a ' \
-                    'publish from a proceed=false no-op and must not print a green; ' \
+                    'publish from a finish=false no-op and must not print a green; ' \
                     "got stdout=#{out.inspect}, stderr=#{err.inspect}"
 
     assert_includes out, 'verdict unknown',
@@ -1138,9 +1137,24 @@ class HealthBriefTest < Minitest::Test
                     'a run that has not concluded cannot be a green publish'
   end
 
+  def test_failed_build_is_not_read_as_a_no_op
+    # A failed `build` skips `publish`, `release` and `demo` with preflight green:
+    # the skipped `release` alone looks like a no-op, and the gem never shipped.
+    jobs = JSON.generate('total_count' => 4, 'jobs' => [
+                           { 'name' => 'preflight', 'conclusion' => 'success' },
+                           { 'name' => 'build', 'conclusion' => 'failure' },
+                           { 'name' => 'release', 'conclusion' => 'skipped' },
+                           { 'name' => 'demo', 'conclusion' => 'skipped' }
+                         ])
+    out, err, status = run_row9(jobs: jobs, conclusion: 'failure', sha: SHA_PUBLISHED)
+
+    assert_predicate status, :success?, err
+    refute_includes out, 'no-op', "a failed build owes a release; got stdout=#{out.inspect}"
+  end
+
   def test_failed_preflight_is_not_read_as_a_no_op
     # A primary main push can fail preflight (for example on a probe error).
-    # Its skipped dependents do not make that failure a proceed=false no-op.
+    # Its skipped dependents do not make that failure a finish=false no-op.
     out, err, status = run_row9(jobs: release_jobs_json(preflight: 'failure', release: 'skipped', demo: 'skipped'),
                                 conclusion: 'failure', sha: SHA_REFUSED)
 
@@ -1153,7 +1167,7 @@ class HealthBriefTest < Minitest::Test
                  "own conclusion, not as a no-op (stdout=#{out.inspect})"
 
     refute_includes out, 'no-op',
-                    'proceed=false requires preflight itself to have succeeded'
+                    'finish=false requires preflight itself to have succeeded'
   end
 
   # Row 9's own rule, unchanged: the release run list is read with the
@@ -1185,12 +1199,12 @@ class HealthBriefTest < Minitest::Test
                     "nothing failed (stdout=#{out.inspect})"
 
     refute_includes out, 'no-op',
-                    'an empty run list is not the proceed=false no-op signature either — ' \
+                    'an empty run list is not the finish=false no-op signature either — ' \
                     "there is no run at all (stdout=#{out.inspect})"
   end
 
   # The release row grades a PUBLICATION, not a workflow run. release.yml
-  # concludes `success` on a proceed=false no-op, and a green run whose
+  # concludes `success` on a finish=false no-op, and a green run whose
   # version never reached RubyGems is the same false green from the other
   # side. The run the row grades is bound to the commit that carries
   # Wurk::VERSION, so a run for another sha is refused rather than graded.
@@ -3476,8 +3490,8 @@ class HealthBriefTest < Minitest::Test
   end
 
   def test_brief_cites_one_contiguous_range_for_the_proceed_signal
-    assert_includes @text, 'Successful preflight + skipped release is no-op'
-    assert_includes @text, 'proceed=false: already published'
+    assert_includes @text, 'Successful preflight + skipped release + nothing failed is no-op'
+    assert_includes @text, 'finish=false: already published'
     assert_includes @text, 'failed preflight is not a no-op'
   end
 
@@ -3950,8 +3964,8 @@ class HealthBriefTest < Minitest::Test
   end
 
   # release.yml's job list, not the detect/lint shape: the `preflight` cheap
-  # gate, the `release` job gated on `needs.preflight.outputs.proceed`, and the
-  # `demo` job that needs both (release.yml:233). The names are the ones the
+  # gate, the `release` job gated on `needs.preflight.outputs.finish`, and the
+  # `demo` job that needs both. The names are the ones the
   # workflow declares — `demo` is the caller job's own key, a reusable-workflow
   # call, not a slash-joined "demo / deploy-demo". A `nil` conclusion is a job
   # that exists and has not concluded yet — what a run still executing looks

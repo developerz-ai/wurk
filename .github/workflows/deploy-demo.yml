@@ -12,13 +12,11 @@ name: deploy-demo
 #
 # After the push, the workflow RECORDS the deploy as a GitHub Deployment
 # object (environment `demo`, ref = the built commit) and waits, bounded, for
-# the demo to report the new version at /wurk/api/meta. The served version is
-# the GEM version (::Wurk::VERSION), not a commit SHA — the demo app serves the
-# path-sourced gem bundled by demo/Gemfile.lock, so /wurk/api/meta is the
-# public witness of what is live. The expected version is read from that lock:
-# the image installs the demo bundle frozen, so the checkout's
-# lib/wurk/version.rb is not necessarily the version the image serves. The
-# Deployment object records that wait's outcome; it triggers nothing.
+# the demo to report that same commit at /demo/build. The image carries its own
+# commit (the WURK_DEMO_BUILD_SHA build arg), so a demo still answering with
+# another commit is one Image Updater has not rolled out, even when the gem
+# version has not moved. The Deployment object records that wait's outcome; it
+# triggers nothing.
 #
 # WHO CAN RUN IT — two layers in force, a third available but not configured:
 #   1. workflow_dispatch on a PUBLIC repo can only be triggered by users with
@@ -38,8 +36,11 @@ name: deploy-demo
 
 on:
   # Main already passed branch protection, so the demo tracks it continuously.
-  # The version file is excluded because release.yml deploys that commit itself
-  # once the gem is published.
+  # version.rb alone wakes the release lane instead; a real bump also moves
+  # demo/Gemfile.lock, so it deploys here too. .github/ is dockerignored, so editing
+  # this file must not trigger a build: it would change only the ENV layer, giving a
+  # new digest with an identical `created`, and Image Updater breaks that tie by tag
+  # name.
   push:
     branches: [main]
     paths:
@@ -54,7 +55,6 @@ on:
       - 'bin/demo-entrypoint'
       - 'wurk.gemspec'
       - 'Gemfile'
-      - '.github/workflows/deploy-demo.yml'
   workflow_dispatch:
     inputs:
       ref:
@@ -190,26 +190,42 @@ jobs:
         id: built
         run: |
           sha="$(git rev-parse HEAD)"
+          has_route=false
+          if grep -qF '/demo/build' demo/config/routes.rb 2>/dev/null; then
+            has_route=true
+          fi
           {
             echo "sha=$sha"
             echo "short=sha-$(printf '%.7s' "$sha")"
+            echo "has_route=$has_route"
           } >> "$GITHUB_OUTPUT"
 
-      # The demo serves the GEM version, not a commit SHA: /wurk/api/meta
-      # renders `::Wurk::VERSION` from the path-sourced Wurk gem bundled by
-      # the image. The Dockerfile installs demo/Gemfile.lock frozen, so the
-      # version the image actually bundles is the lock's `wurk (...)` entry —
-      # not necessarily the checkout's lib/wurk/version.rb, which may differ
-      # on an ordinary push without a version bump.
-      - name: resolve demo version
-        id: demo_version
+      # Image Updater takes the newest build, so re-pushing an older commit either
+      # changes nothing (a cached rebuild keeps its digest and `created`) or, on a cache
+      # miss, rolls the demo BACK. A later deploy may legitimately have overtaken this
+      # one: release.yml's `demo` job runs minutes after its bump merged. So when the
+      # demo already serves a descendant, do not push. A hand dispatch is exempt, since
+      # deploying an older commit is exactly what it may be for. A failed read builds as
+      # usual: the worst outcome is the rollback the next deploy corrects, and the probe
+      # below stays the verdict.
+      - name: skip the push if the demo already serves a newer commit
+        id: overtaken
+        env:
+          GH_TOKEN: ${{ github.token }}
+          EXPECTED_SHA: ${{ steps.built.outputs.sha }}
+          ALLOW_NEWER: ${{ github.event_name != 'workflow_dispatch' || inputs.trusted == true }}
         run: |
-          version="$(ruby -e 'lock = File.read("demo/Gemfile.lock"); print lock[/^    wurk \(([^)]+)\)$/, 1]')"
-          if [ -z "$version" ]; then
-            echo "::error::demo/Gemfile.lock has no path-sourced wurk version — cannot resolve the version the built demo image bundles."
-            exit 1
+          skip=false
+          if [ "$ALLOW_NEWER" = "true" ]; then
+            body="$(curl -fsS --connect-timeout 2 --max-time 5 https://wurk.demo.developerz.ai/demo/build 2>/dev/null || true)"
+            seen="$(printf '%s' "$body" | ruby -rjson -e 'begin; print JSON.parse(STDIN.read)["sha"]; rescue StandardError; print ""; end' 2>/dev/null || true)"
+            if [[ "$seen" =~ ^[0-9a-f]{40}$ ]] && [ "$seen" != "$EXPECTED_SHA" ] \
+              && [ "$(gh api "repos/${GITHUB_REPOSITORY}/compare/${EXPECTED_SHA}...${seen}" -q .status 2>/dev/null || true)" = "ahead" ]; then
+              skip=true
+              echo "::notice::the demo already serves ${seen}, which contains ${EXPECTED_SHA}: not pushing an older image."
+            fi
           fi
-          echo "version=${version}" >> "$GITHUB_OUTPUT"
+          echo "skip=$skip" >> "$GITHUB_OUTPUT"
 
       - uses: docker/setup-buildx-action@f87e5991a6d7451dcb8d9637bfbc97413f497069 # v4.4.1
       - uses: docker/login-action@81c6f93d4bc991e510b342a00b419b3bb4efc5c6 # v4.7.0
@@ -218,10 +234,15 @@ jobs:
           username: ${{ secrets.DOCR_TOKEN }}
           password: ${{ secrets.DOCR_TOKEN }}
       - uses: docker/build-push-action@c3c9e263c25d99ce0380d002d59b67737d91b0dc # v7.4.0
+        if: steps.overtaken.outputs.skip != 'true'
         with:
           context: .
           file: Dockerfile
           push: true
+          # Read back at /demo/build (demo/config/routes.rb): the probe below compares
+          # it, so this is what makes a frozen rollout visible.
+          build-args: |
+            WURK_DEMO_BUILD_SHA=${{ steps.built.outputs.sha }}
           tags: |
             ${{ env.IMAGE }}:${{ steps.built.outputs.short }}
             ${{ env.IMAGE }}:${{ steps.built.outputs.sha }}
@@ -233,6 +254,7 @@ jobs:
       # does not resolve leaves Image Updater without a candidate, and the demo
       # freezes silently on its current digest.
       - name: verify pushed tags resolve
+        if: steps.overtaken.outputs.skip != 'true'
         env:
           SHA: ${{ steps.built.outputs.sha }}
           SHORT: ${{ steps.built.outputs.short }}
@@ -275,52 +297,91 @@ jobs:
           set -euo pipefail
           gh api --method POST "repos/${GITHUB_REPOSITORY}/deployments/${DEPLOYMENT_ID}/statuses" \
             -f state=in_progress \
-            -f description="waiting for the demo to report the new version"
+            -f description="waiting for the demo to serve the built commit"
 
-      # The bounded wait. The demo only starts serving the new version once
+      # The bounded wait. The demo only starts serving the new commit once
       # Image Updater has synced the new digest, which is asynchronous — so
-      # the version is polled until it matches, with an explicit upper bound
+      # /demo/build is polled until it matches, with an explicit upper bound
       # on the number of attempts. An unbounded loop would hang the job
       # until the job timeout killed it, with no status recorded.
+      #
+      # It compares the commit, not the gem version: on a push without a version
+      # bump the old pods already report the expected version, so a version check
+      # passes on attempt 1 and a frozen Image Updater stays green forever.
+      #
+      # A descendant of the built commit also counts, because a later deploy can win
+      # the newest-build race and this commit is then live inside it. It must be
+      # proved by GitHub's compare API, and an unreadable compare is never a pass: it
+      # retries and, if it never answers, fails naming that. A hand dispatch wants
+      # exactly the commit it asked for, so it takes no such credit: otherwise rolling
+      # back would pass instantly against the image it is replacing.
+      #
+      # A commit from before /demo/build existed cannot answer at all, so a rollback to
+      # one records that it is unverified instead of failing a deploy that succeeded.
       #
       # Each request is deadline-bounded too. A demo that accepts the TCP
       # connection but stalls the response would otherwise block curl until
       # the JOB timeout killed the step — which runs after `mark deployment
       # in progress`, leaving the Deployment in_progress with no failure
-      # status and no last-version diagnostic. --connect-timeout bounds the
+      # status and no last-commit diagnostic. --connect-timeout bounds the
       # handshake, --max-time the whole request, so an attempt costs at most
       # 5s of request + 10s of sleep and the loop's worst case is
       # 40 × 15s = 10 minutes even when the demo hangs on every try (a
       # responsive demo polls for ~7 minutes).
       #
       # The bound must fit inside the job's `timeout-minutes: 30` alongside
-      # the image build and push, so it is deliberately short: Image Updater
-      # syncs within a couple of minutes, and a demo that has not caught up
-      # in 10 minutes is a real failure worth reporting, not a slow success.
-      - name: wait for the demo to report the new version
+      # the image build and push, so it is deliberately short: a demo that has
+      # not caught up in 10 minutes is a real failure worth reporting, not a
+      # slow success. If real rollouts outgrow it, raise it here and in the tests.
+      - name: wait for the demo to serve the built commit
         env:
           GH_TOKEN: ${{ github.token }}
           DEPLOYMENT_ID: ${{ steps.deployment.outputs.id }}
-          VERSION: ${{ steps.demo_version.outputs.version }}
+          EXPECTED_SHA: ${{ steps.built.outputs.sha }}
+          HAS_ROUTE: ${{ steps.built.outputs.has_route }}
+          ALLOW_NEWER: ${{ github.event_name != 'workflow_dispatch' || inputs.trusted == true }}
+          TRUSTED: ${{ inputs.trusted == true }}
         run: |
           set -euo pipefail
-          last_version="(none)"
+          if [ "$HAS_ROUTE" != "true" ]; then
+            gh api --method POST "repos/${GITHUB_REPOSITORY}/deployments/${DEPLOYMENT_ID}/statuses" \
+              -f state=success \
+              -f description="image pushed; ${EXPECTED_SHA} predates /demo/build, so the rollout is unverified"
+            echo "::warning::${EXPECTED_SHA} predates /demo/build, so this rollout cannot be verified here. Check https://wurk.demo.developerz.ai/wurk/api/meta by hand."
+            exit 0
+          fi
+
+          last_sha="(none)"
           matched=""
+          compare_error=""
           for attempt in $(seq 1 40); do
-            body="$(curl -fsS --connect-timeout 2 --max-time 5 https://wurk.demo.developerz.ai/wurk/api/meta 2>/dev/null || true)"
-            # A rollout can answer with HTML or an empty body for a moment, and
-            # a JSON parse error must not abort the probe — it must read as
-            # "no version yet" and retry.
-            seen="$(printf '%s' "$body" | ruby -rjson -e 'begin; print JSON.parse(STDIN.read)["version"]; rescue StandardError; print ""; end' 2>/dev/null || true)"
+            body="$(curl -fsS --connect-timeout 2 --max-time 5 https://wurk.demo.developerz.ai/demo/build 2>/dev/null || true)"
+            # Before the first image carrying the route rolls out this is a 404,
+            # and a rollout can answer with HTML or an empty body for a moment. A
+            # JSON parse error must not abort the probe — it must read as "no
+            # commit yet" and retry.
+            seen="$(printf '%s' "$body" | ruby -rjson -e 'begin; print JSON.parse(STDIN.read)["sha"]; rescue StandardError; print ""; end' 2>/dev/null || true)"
             if [ -n "$seen" ]; then
-              last_version="$seen"
-              echo "attempt ${attempt}: demo reports version ${last_version} (expected ${VERSION})"
-              if [ "$last_version" = "${VERSION}" ]; then
-                matched=1
+              last_sha="$seen"
+              echo "attempt ${attempt}: demo serves ${last_sha} (expected ${EXPECTED_SHA})"
+              if [ "$last_sha" = "${EXPECTED_SHA}" ]; then
+                matched="demo serves ${EXPECTED_SHA}"
                 break
               fi
+              if [ "$ALLOW_NEWER" = "true" ] && [[ "$last_sha" =~ ^[0-9a-f]{40}$ ]]; then
+                if relation="$(gh api "repos/${GITHUB_REPOSITORY}/compare/${EXPECTED_SHA}...${last_sha}" -q .status 2>/dev/null)"; then
+                  compare_error=""
+                  if [ "$relation" = "ahead" ]; then
+                    matched="demo serves ${last_sha}, which contains ${EXPECTED_SHA}"
+                    break
+                  fi
+                else
+                  compare_error="the last GitHub compare of ${EXPECTED_SHA}...${last_sha} failed, so a newer commit could not be proved."
+                  echo "attempt ${attempt}: ${compare_error}"
+                fi
+              fi
             else
-              echo "attempt ${attempt}: /wurk/api/meta did not report a version"
+              echo "attempt ${attempt}: /demo/build did not report a commit"
             fi
             sleep 10
           done
@@ -328,13 +389,16 @@ jobs:
           if [ -n "$matched" ]; then
             gh api --method POST "repos/${GITHUB_REPOSITORY}/deployments/${DEPLOYMENT_ID}/statuses" \
               -f state=success \
-              -f description="demo reports version ${VERSION}"
-            echo "Demo reports version ${VERSION} — deployment succeeded."
+              -f description="${matched}"
+            echo "${matched} — deployment succeeded."
             exit 0
           fi
 
           gh api --method POST "repos/${GITHUB_REPOSITORY}/deployments/${DEPLOYMENT_ID}/statuses" \
             -f state=failure \
-            -f description="demo did not report version ${VERSION} within the wait window"
-          echo "::error::demo /wurk/api/meta reports version ${last_version}, expected ${VERSION} — the demo did not pick up the new build in time."
+            -f description="demo did not serve ${EXPECTED_SHA} within the wait window"
+          echo "::error::demo /demo/build reports ${last_sha}, expected ${EXPECTED_SHA} — the demo did not pick up the new build in time. ${compare_error}"
+          if [ "$TRUSTED" = "true" ]; then
+            echo "::error::This is a demo rollout failure only: the gem and tag are live and the release stands. Nothing needs re-publishing; once the demo recovers, dispatch release-smoke for this version."
+          fi
           exit 1

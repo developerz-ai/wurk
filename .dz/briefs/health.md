@@ -16,7 +16,7 @@ Daily `schedules: health` checkup; failures no issue or PR announces.
 | Signal | Command | Healthy |
 |---|---|---|
 | `main` is green | `bash bin/health-check main` | `executed`; `duplicate-skipped` and `evidence unavailable` file no ask |
-| the last release published | `bash bin/health-check release` | `success <sha> <url>` (published and live on RubyGems), or `no-op <sha>` (proceed=false) |
+| the last release published | `bash bin/health-check release` | `success <sha> <url>` (published and live on RubyGems), or `no-op <sha>` (finish=false) |
 | RubyGems serves `Wurk::VERSION` | `bash bin/health-check rubygems` | HTTP 200, or a release run is in flight |
 | the GitHub Release carries the gem | `bash bin/health-check github-release` | Latest carries `.gem`; author is not `developerz-ai[bot]` |
 | the demo deployed | `bash bin/health-check deploy` | `success` with a `sha-<7>` tag from `resolve built commit` (pushed, not served) |
@@ -28,7 +28,7 @@ Run from repository root. Helpers only read and grade.
 
 **Push grading.** Main/lanes read jobs and gated steps. Successful detect + every gated job successful + every gated step skipped (except runner setup/teardown) means duplicate-skipped; a non-skipped gated step means executed. Missing jobs/no gated job means evidence unavailable, not verified green. Exclude ecosystem's sidekiq release watcher. Failed runs grade on conclusion. Failed/non-array run reads are unknown; readable empty arrays print no run, not unknown or Unhealthy.
 
-**Release grading.** Read version AT newest main commit touching lib/wurk/version.rb; select its primary push with --branch main --event push --commit; refuse other headSha. Unreadable version/run/jobs is unknown. Null conclusion is in flight. Successful preflight + skipped release is no-op (proceed=false: already published); failed preflight is not a no-op. Demo needs preflight and release. Grade conclusion; cross-check green with https://rubygems.org/api/v2/rubygems/wurk/versions/<version>.json. HTTP 200 is success; 404 is missing (RubyGems row defers while the bound run is in flight). Unknown/mismatched runs, transport failures, HTTP 000/other statuses are unknown. Curl captures status without -f, with --max-time 5.
+**Release grading.** Read version AT newest main commit touching lib/wurk/version.rb; select its primary push with --branch main --event push --commit; refuse other headSha. Unreadable version/run/jobs is unknown. Null conclusion is in flight. Successful preflight + skipped release + nothing failed is no-op (finish=false: already published); failed preflight is not a no-op. Demo needs preflight and release. Grade conclusion; cross-check green with https://rubygems.org/api/v2/rubygems/wurk/versions/<version>.json. HTTP 200 is success; 404 is missing (RubyGems row defers while the bound run is in flight). Unknown/mismatched runs, transport failures, HTTP 000/other statuses are unknown. Curl captures status without -f, with --max-time 5.
 Supported main-branch workflow_dispatch retries are valid hand-dispatched retries, not primary main-push publication attempts; off-main rejection alone must not trigger a publication alarm; recovery remains filing-only.
 Latest GitHub Release requires readable author/assets: bot author OR zero assets is gem-less.
 

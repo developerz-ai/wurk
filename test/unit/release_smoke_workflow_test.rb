@@ -276,10 +276,12 @@ class ReleaseSmokeWorkflowTest < Minitest::Test
                  'the `smoke` job must need [preflight, release, demo] so it runs after the publish and the deploy'
     assert_equal './.github/workflows/release-smoke.yml', job.fetch('uses')
     assert_equal '${{ needs.preflight.outputs.version }}', job.dig('with', 'version')
+    assert_includes job.fetch('if'), "needs.demo.result == 'success'",
+                    'a finishing run skips `publish`, so smoke must read `demo` rather than the implicit success()'
   end
 
   # Least privilege: the smoke caller only curls RubyGems and the live demo.
-  # It must not inherit the workflow-level `id-token: write` — that
+  # It must not hold `id-token: write` — that
   # permission is what the RubyGems trusted-publishing exchange needs.
   def test_smoke_caller_job_holds_no_id_token_write
     permissions = release_workflow.fetch('jobs').fetch('smoke').fetch('permissions', {})

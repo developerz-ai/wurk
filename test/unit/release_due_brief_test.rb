@@ -144,7 +144,7 @@ class ReleaseDueBriefTest < Minitest::Test
   # (zero assets => gem-less => abort), and the author is read for context
   # only — a `developerz-ai[bot]`-authored Release that CARRIES the .gem is
   # the sanctioned break-glass manual publish, not a defect, so the brief
-  # must NOT treat the author as a gem-less marker (RELEASE.md:180-194).
+  # must NOT treat the author as a gem-less marker (RELEASE.md:213-227).
   # Without this guard, the diff window would be computed against a
   # non-release anchor and the agent would file a `Release <next>` ask on
   # top of work that was never actually shipped.
@@ -1146,7 +1146,7 @@ class ReleaseDueBriefTest < Minitest::Test
         esac
         ;;
       release)
-        # gem-less state: zero assets (RELEASE.md:180-194).
+        # gem-less state: zero assets (RELEASE.md:213-227).
         printf '%s\n' '{"author":{"login":"developerz-ai[bot]"},"assets":[]}'
         ;;
       *)

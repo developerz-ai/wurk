@@ -21,36 +21,42 @@ on:
     paths: ["lib/wurk/version.rb"]
   workflow_dispatch:
 
-# Least privilege: contents:write to cut the tag + GitHub Release; id-token:write
-# for RubyGems trusted publishing (OIDC). No long-lived GEM_HOST_API_KEY anywhere.
+# Least privilege, per job. Only `publish` can mint a RubyGems credential and
+# only `release` can write the tag; everything that runs third-party code (the
+# unlocked dev bundle, bun install, the suite) lives in `build`, which holds
+# neither. No long-lived GEM_HOST_API_KEY anywhere.
 permissions:
-  contents: write
-  id-token: write
+  contents: read
 
 concurrency:
   group: release
   cancel-in-progress: false
 
 jobs:
-  # Cheap gate that decides whether there is anything to release at all. RubyGems
-  # is the authoritative "already shipped" record — it forbids re-pushing a
-  # version, so its presence is the one idempotency key that cannot drift. This
-  # makes the workflow safe to re-run and makes a no-op edit to version.rb (a
-  # comment, a revert) resolve to "nothing to do" instead of a failure.
-  # GitHub-hosted: the RubyGems credential lives only on a VM that is
-  # destroyed after the job.
+  # Reads what has already shipped and decides what is still owed. It emits two
+  # independent answers, `publish` and `finish`, because `gem push` is
+  # irreversible and the steps after it can fail: a run that dies between the
+  # two must be finishable by a re-run, not reported as "already released".
+  #
+  #   publish=true   the gem is not on RubyGems (finish is then always true)
+  #   finish=true    the tag or the GitHub Release with the .gem is still owed
+  #   both false     the version is fully released; a no-op, announced as one
+  #
+  # A probe that answers neither yes nor no fails the run. Reading "could not
+  # tell" as either state would push a burned version or skip a real release.
   preflight:
     runs-on: ubuntu-latest
     timeout-minutes: 10
     outputs:
       version: ${{ steps.resolve.outputs.version }}
       tag: ${{ steps.resolve.outputs.tag }}
-      proceed: ${{ steps.resolve.outputs.proceed }}
+      publish: ${{ steps.state.outputs.publish }}
+      finish: ${{ steps.state.outputs.finish }}
     steps:
       # `workflow_dispatch` accepts any branch or tag, and everything past here
       # ends in an irreversible `gem push` plus a tag cut at $GITHUB_SHA. Only
       # main is releasable. A FAILING step, not a job-level `if:` — a skipped
-      # preflight would skip `release` too and leave a green run that published
+      # preflight would skip the rest too and leave a green run that published
       # nothing and said nothing.
       - name: refuse any ref but main
         run: |
@@ -77,20 +83,114 @@ jobs:
             echo "tag=${tag}"
           } >> "$GITHUB_OUTPUT"
 
-          if curl -fsS -o /dev/null "https://rubygems.org/api/v2/rubygems/wurk/versions/${version}.json"; then
-            echo "proceed=false" >> "$GITHUB_OUTPUT"
-            echo "::notice::wurk ${version} is already on RubyGems — nothing to release."
+      # RubyGems is the authoritative "already shipped" record: it forbids
+      # re-pushing a version, so its presence is the one idempotency key that
+      # cannot drift. The tag and the Release are read beside it so the answer
+      # covers everything the lane owes. The token only reads published releases;
+      # a draft reads as "no release" here and `release` reconciles it.
+      - name: read what has already shipped
+        id: state
+        env:
+          GH_TOKEN: ${{ github.token }}
+          VERSION: ${{ steps.resolve.outputs.version }}
+          TAG: ${{ steps.resolve.outputs.tag }}
+        run: |
+          set -uo pipefail
+          err="$(mktemp)"
+
+          gem_code="$(curl -sS --retry 3 --max-time 20 -o /dev/null -w '%{http_code}' \
+            "https://rubygems.org/api/v2/rubygems/wurk/versions/${VERSION}.json" 2>"$err")" || gem_code=000
+          case "$gem_code" in
+            200) gem_live=true ;;
+            404) gem_live=false ;;
+            *)
+              cat "$err" >&2
+              echo "::error::RubyGems answered HTTP ${gem_code} for wurk ${VERSION}; cannot tell whether it shipped, so nothing runs. Re-run this workflow."
+              exit 1
+              ;;
+          esac
+
+          # Only a 404 means "absent". Any other failure must stop here rather
+          # than read as absent and cut or publish blind.
+          if tagged="$(gh api "repos/${GITHUB_REPOSITORY}/git/ref/tags/${TAG}" -q .object.sha 2>"$err")"; then
+            :
+          elif grep -q 'HTTP 404' "$err"; then
+            tagged=""
           else
-            echo "proceed=true" >> "$GITHUB_OUTPUT"
-            echo "::notice::wurk ${version} is not on RubyGems — releasing as ${tag}."
+            cat "$err" >&2
+            echo "::error::could not read the ${TAG} ref; re-run this workflow."
+            exit 1
           fi
 
-  release:
+          # A failed upload leaves a zero-byte `starter` asset under the expected name.
+          # Only a finished one counts, or a re-run would skip the repair.
+          has_gem_asset=false
+          if assets="$(gh api "repos/${GITHUB_REPOSITORY}/releases/tags/${TAG}" -q '.assets[] | select(.state == "uploaded" and .size > 0) | .name' 2>"$err")"; then
+            if printf '%s\n' "$assets" | grep -Fxq "wurk-${VERSION}.gem"; then
+              has_gem_asset=true
+            fi
+          elif ! grep -q 'HTTP 404' "$err"; then
+            cat "$err" >&2
+            echo "::error::could not read the ${TAG} release; re-run this workflow."
+            exit 1
+          fi
+
+          if [ "$gem_live" = true ] && [ -n "$tagged" ] && [ "$has_gem_asset" = true ]; then
+            publish=false finish=false
+            message="wurk ${VERSION} is fully released (gem, ${TAG}, GitHub Release): nothing to do. To redeploy the demo, dispatch deploy-demo; to re-check the published gem, dispatch release-smoke."
+          else
+            # The tag is about to be cut or completed at this commit, and moving
+            # one is never this lane's call. Refusing here means a misplaced tag
+            # can no longer strand a release after its irreversible push.
+            if [ -n "$tagged" ] && [ "$tagged" != "$GITHUB_SHA" ]; then
+              echo "::error::${TAG} already exists and points at ${tagged}, not ${GITHUB_SHA}, and the release is incomplete. Refusing to move it: see RELEASE.md, If a release fails."
+              exit 1
+            fi
+            # A finishing run cuts the tag here, so "here" has to be the commit the gem
+            # came from. A dispatch after main moved would tag code the gem never held.
+            if [ "$gem_live" = true ] && [ -z "$tagged" ]; then
+              if ! bumped="$(gh api "repos/${GITHUB_REPOSITORY}/commits?path=lib/wurk/version.rb&sha=${GITHUB_SHA}&per_page=1" -q '.[0].sha' 2>"$err")" || [ -z "$bumped" ]; then
+                cat "$err" >&2
+                echo "::error::could not read the newest commit touching lib/wurk/version.rb; re-run this workflow."
+                exit 1
+              fi
+              if [ "$bumped" != "$GITHUB_SHA" ]; then
+                echo "::error::wurk ${VERSION} is live with no ${TAG}, but ${GITHUB_SHA} is not its version commit ${bumped}, and tagging here would point ${TAG} at code the gem never held. Open the release run for ${bumped} and use Re-run all jobs: it finishes the release at that commit. If that run is gone, see RELEASE.md, What a re-run does."
+                exit 1
+              fi
+            fi
+            finish=true
+            if [ "$gem_live" = true ]; then
+              publish=false
+              message="wurk ${VERSION} is on RubyGems but its tag or Release is not complete: skipping the push and finishing the release."
+            else
+              publish=true
+              message="wurk ${VERSION} is not on RubyGems: releasing as ${TAG}."
+            fi
+          fi
+
+          {
+            echo "publish=${publish}"
+            echo "finish=${finish}"
+          } >> "$GITHUB_OUTPUT"
+          echo "::notice::${message}"
+          if [ -n "${GITHUB_STEP_SUMMARY:-}" ]; then
+            echo "${message}" >> "$GITHUB_STEP_SUMMARY"
+          fi
+
+  # Everything that executes code other people wrote happens here: the unlocked
+  # dev bundle, bun install, the dummy app's bundle, the whole suite. So this
+  # job holds no id-token and no write scope, and all it hands on is one
+  # artifact. A compromised dev dependency can fail this job; it cannot mint a
+  # RubyGems credential.
+  build:
     needs: preflight
-    if: needs.preflight.outputs.proceed == 'true'
+    if: needs.preflight.outputs.publish == 'true'
     # One VM per job, so the redis service's fixed 6379 mapping cannot collide.
     runs-on: ubuntu-latest
     timeout-minutes: 30
+    outputs:
+      gem_sha256: ${{ steps.pack.outputs.gem_sha256 }}
     services:
       redis:
         image: redis:7.4
@@ -107,8 +207,6 @@ jobs:
       # Read by ReleaseHelpers.tag_matches_version! inside `rake release:check`.
       WURK_RELEASE_TAG: ${{ needs.preflight.outputs.tag }}
     steps:
-      # Third-party actions pinned to a commit SHA — this job holds id-token and
-      # publishes the gem, so a moved tag must not be able to hijack it.
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
@@ -142,24 +240,155 @@ jobs:
       # Build the gem into pkg/ and assert the precompiled dashboard is *inside*
       # the .gem — consumers never run Node, so a bundle-less gem is broken.
       - name: build & verify gem
-        run: bundle exec rake release:package
+        id: pack
+        run: |
+          bundle exec rake release:package
+          sum="$(sha256sum "pkg/wurk-${VERSION}.gem" | cut -d' ' -f1)"
+          echo "gem_sha256=${sum}" >> "$GITHUB_OUTPUT"
 
-      # Exchange the GitHub OIDC token for a short-lived RubyGems credential.
-      - name: configure RubyGems trusted publishing
-        uses: rubygems/configure-rubygems-credentials@dc5a8d8553e6ee01fc26761a49e99e733d17954a # v2.1.0
+      - name: upload the packed gem
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7
+        with:
+          name: wurk-gem
+          path: pkg/wurk-${{ needs.preflight.outputs.version }}.gem
+          if-no-files-found: error
+          retention-days: 7
 
-      # Belt and braces on the irreversible step: preflight already refused a
+  # The only job that can mint a RubyGems credential, so the only code here is
+  # pinned actions and shell written in this file: no checkout, no bundle, no
+  # bun, nothing from the repo or a dependency executes.
+  #
+  # `environment: rubygems` is what a main-only branch policy hangs on. A trusted
+  # publisher registered with a blank environment still accepts a token carrying
+  # this environment claim, so it changes nothing until the owner binds both
+  # sides: RELEASE.md, Binding the publisher to the environment.
+  publish:
+    needs: [preflight, build]
+    if: needs.preflight.outputs.publish == 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    environment:
+      name: rubygems
+      url: https://rubygems.org/gems/wurk
+    permissions:
+      contents: read
+      id-token: write
+    env:
+      VERSION: ${{ needs.preflight.outputs.version }}
+    steps:
+      # Belt and braces on the irreversible job: preflight already refused a
       # non-main ref, but this job must not depend on that staying true.
-      - name: gem push
+      - name: refuse any ref but main
         run: |
           if [ "$GITHUB_REF" != "refs/heads/main" ]; then
             echo "::error::refusing to publish from ${GITHUB_REF}; only refs/heads/main releases."
             exit 1
           fi
+      - name: download the packed gem
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          name: wurk-gem
+          path: pkg
+      - name: verify the packed gem
+        env:
+          EXPECTED_SHA256: ${{ needs.build.outputs.gem_sha256 }}
+        run: |
+          if [ -z "$EXPECTED_SHA256" ]; then
+            echo "::error::the build job published no checksum for wurk-${VERSION}.gem."
+            exit 1
+          fi
+          echo "${EXPECTED_SHA256}  pkg/wurk-${VERSION}.gem" | sha256sum -c -
+      - name: install Ruby
+        uses: ruby/setup-ruby@7f797815d8adceb1c412e7abefdd1ab4abc47a5f # v1
+        with:
+          ruby-version: "3.4"
+          bundler-cache: false
+
+      # Exchange the GitHub OIDC token for a short-lived RubyGems credential.
+      - name: configure RubyGems trusted publishing
+        uses: rubygems/configure-rubygems-credentials@dc5a8d8553e6ee01fc26761a49e99e733d17954a # v2.1.0
+
+      # A "re-run failed jobs" keeps preflight's old answer, so this job can run
+      # again after a push RubyGems accepted but whose response was lost. Probe
+      # first: pushing again could only fail, and would strand the release.
+      - name: gem push
+        run: |
+          if [ "$(curl -sS --retry 3 --max-time 20 -o /dev/null -w '%{http_code}' \
+            "https://rubygems.org/api/v2/rubygems/wurk/versions/${VERSION}.json")" = "200" ]; then
+            echo "::notice::wurk ${VERSION} is already on RubyGems; not pushing it again."
+            exit 0
+          fi
           gem push "pkg/wurk-${VERSION}.gem"
 
+      # Curl rather than `gem exec rubygems-await`, which downloads and runs an
+      # unpinned gem, in the one job that holds a publish credential. Non-fatal:
+      # the gem is already accepted and `release` waits for it again before
+      # relying on it, so a slow CDN must not turn a shipped gem into a red run.
       - name: await RubyGems propagation
-        run: gem exec rubygems-await "pkg/wurk-${VERSION}.gem"
+        run: |
+          for attempt in $(seq 1 30); do
+            code="$(curl -sS --max-time 10 -o /dev/null -w '%{http_code}' \
+              "https://rubygems.org/api/v2/rubygems/wurk/versions/${VERSION}.json" 2>/dev/null || true)"
+            if [ "$code" = "200" ]; then
+              echo "wurk ${VERSION} is served (attempt ${attempt})."
+              exit 0
+            fi
+            sleep 10
+          done
+          echo "::warning::wurk ${VERSION} was accepted but not served after 30 attempts; continuing."
+
+  # Runs after a successful push, or on its own when preflight found the gem
+  # live and the tag or Release still owed. `!cancelled()` is required: a skipped
+  # `build`/`publish` would otherwise skip this job through the implicit
+  # success(), and the finishing re-run would go green having done nothing. The
+  # publish-output clause is what keeps a FAILED build out: its `publish` reads
+  # `skipped` too, but with publish=true, so this job skips and the run is red.
+  release:
+    needs: [preflight, publish]
+    if: >-
+      ${{ !cancelled()
+      && needs.preflight.result == 'success'
+      && needs.preflight.outputs.finish == 'true'
+      && (needs.publish.result == 'success'
+          || (needs.publish.result == 'skipped' && needs.preflight.outputs.publish == 'false')) }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    permissions:
+      contents: write
+    env:
+      VERSION: ${{ needs.preflight.outputs.version }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: install Ruby
+        uses: ruby/setup-ruby@7f797815d8adceb1c412e7abefdd1ab4abc47a5f # v1
+        with:
+          ruby-version: "3.4"
+          bundler-cache: false
+
+      # The .gem to attach comes from RubyGems, checked against the digest
+      # RubyGems publishes: it is what consumers get, and it is the only copy a
+      # finishing run has. This is also the wait that guarantees a tag always has
+      # a gem behind it, so unlike the wait in `publish` it is fatal; a re-run
+      # finishes the release.
+      - name: fetch the published gem
+        run: |
+          set -uo pipefail
+          mkdir -p pkg
+          for attempt in $(seq 1 30); do
+            if sha="$(curl -fsS --max-time 10 "https://rubygems.org/api/v2/rubygems/wurk/versions/${VERSION}.json" 2>/dev/null \
+                | ruby -rjson -e 'print JSON.parse(STDIN.read).fetch("sha")' 2>/dev/null)" \
+              && [ -n "$sha" ] \
+              && curl -fsSL --max-time 60 -o "pkg/wurk-${VERSION}.gem" "https://rubygems.org/downloads/wurk-${VERSION}.gem" 2>/dev/null \
+              && echo "${sha}  pkg/wurk-${VERSION}.gem" | sha256sum -c - >/dev/null 2>&1; then
+              echo "fetched wurk-${VERSION}.gem (attempt ${attempt}), sha256 ${sha}."
+              exit 0
+            fi
+            sleep 10
+          done
+          echo "::error::RubyGems did not serve a verifiable wurk-${VERSION}.gem after 30 attempts. The gem may still be live: re-run this workflow to finish the release."
+          exit 1
 
       # Tag and GitHub Release in one step, LAST — `gh release create` creates the
       # tag at --target. Cutting it only after the gem is live is what guarantees
@@ -168,14 +397,11 @@ jobs:
       # is attached.
       #
       # It reconciles rather than aborting when a release for the tag is already
-      # there. `gem push` above is irreversible, so anything that fails after it
-      # leaves the version live on RubyGems, the run red, and nothing on GitHub
-      # to show for it — which is exactly what v1.7.3 did when a release for the
-      # tag was hand-cut while this job was running. A release someone else
-      # started is finished here instead: published at this commit, notes reset
-      # from the CHANGELOG, the .gem attached. The one case that still fails is a
-      # tag already pointing at a different commit — moving it is never this
-      # job's call.
+      # there, because `gem push` is irreversible. A release someone else started
+      # is finished here instead: published at this commit, notes reset from the
+      # CHANGELOG, the .gem attached. The one case that still fails is a tag
+      # already pointing at a different commit — moving it is never this job's
+      # call.
       - name: tag & create GitHub Release
         env:
           GH_TOKEN: ${{ github.token }}
@@ -189,6 +415,25 @@ jobs:
             flags+=(--prerelease)
           fi
 
+          # Only a 404 means "no tag yet". Any other failure must stop here:
+          # reading it as "no tag" would skip the guard below and publish the
+          # release without knowing where its tag points. Checked before either
+          # branch, because `gh release create` silently adopts an existing tag
+          # and ignores --target.
+          if tagged="$(gh api "repos/${GITHUB_REPOSITORY}/git/ref/tags/${TAG}" -q .object.sha 2>"${RUNNER_TEMP}/tag-ref.err")"; then
+            :
+          elif grep -q 'HTTP 404' "${RUNNER_TEMP}/tag-ref.err"; then
+            tagged=""
+          else
+            cat "${RUNNER_TEMP}/tag-ref.err" >&2
+            echo "::error::could not read the ${TAG} ref; refusing to touch the release blind."
+            exit 1
+          fi
+          if [ -n "$tagged" ] && [ "$tagged" != "$GITHUB_SHA" ]; then
+            echo "::error::${TAG} already exists and points at ${tagged}, not ${GITHUB_SHA} — refusing to move it."
+            exit 1
+          fi
+
           # A draft has no tag ref, so the releases listing — not `git ls-remote`
           # — is what sees one.
           existing="$(gh api "repos/${GITHUB_REPOSITORY}/releases" --paginate \
@@ -198,29 +443,14 @@ jobs:
             exit 0
           fi
 
-          # Only a 404 means "no tag yet" (a draft). Any other failure must stop
-          # here: reading it as "no tag" would skip the guard below and publish
-          # the release without knowing where its tag points.
-          if tagged="$(gh api "repos/${GITHUB_REPOSITORY}/git/ref/tags/${TAG}" -q .object.sha 2>"${RUNNER_TEMP}/tag-ref.err")"; then
-            :
-          elif grep -q 'HTTP 404' "${RUNNER_TEMP}/tag-ref.err"; then
-            tagged=""
-          else
-            cat "${RUNNER_TEMP}/tag-ref.err" >&2
-            echo "::error::could not read the ${TAG} ref; refusing to complete the existing release blind."
-            exit 1
-          fi
-          if [ -n "$tagged" ] && [ "$tagged" != "$GITHUB_SHA" ]; then
-            echo "::error::${TAG} already exists and points at ${tagged}, not ${GITHUB_SHA} — refusing to move it."
-            exit 1
-          fi
-
           echo "::warning::${TAG} already existed — completing that release instead of creating one."
           gh release edit "$TAG" "${flags[@]}" --draft=false
           gh release upload "$TAG" "pkg/wurk-${VERSION}.gem" --clobber
 
-  # Ship the released tag to wurk.demo.developerz.ai. Runs only after the gem is
-  # published, so the demo never advertises a version RubyGems does not have.
+  # Prove the released commit is live on wurk.demo.developerz.ai. The bump's own
+  # push to main has usually deployed it already, because the bump moves
+  # demo/Gemfile.lock, so the demo can serve a version before RubyGems does. A
+  # failure here is a demo failure: the gem and tag are already live.
   #
   # `trusted: true` waives deploy-demo's DEMO_DEPLOYERS actor allowlist. That
   # allowlist exists to stop a hand-dispatched deploy of an arbitrary ref; it has
@@ -232,6 +462,9 @@ jobs:
   # reviewers), so it records the deployment and gates nothing.
   demo:
     needs: [preflight, release]
+    # Explicit because a finishing run skips `build` and `publish`, and the
+    # implicit success() looks at every ancestor, not only the direct needs.
+    if: ${{ !cancelled() && needs.release.result == 'success' }}
     # A called workflow can never hold more than its caller grants, and GitHub
     # checks that before the run starts: deploy-demo's `build` job asks for
     # `deployments: write` (the demo Deployment record, #617), which the
@@ -249,17 +482,14 @@ jobs:
 
   # Bounded post-publish evidence, not a gate: smoke only runs after the
   # irreversible `gem push`, so a failure here rolls nothing back — no rollback
-  # is implemented anywhere in this lane. No `if:` re-check on
-  # preflight.proceed: `release` already gates on it and `demo` needs `release`,
-  # so a no-op preflight skips smoke transitively (correct — nothing new was
-  # published, so there is nothing new to verify).
+  # is implemented anywhere in this lane. The `if:` reads `demo` directly for the
+  # same reason as `demo`'s own: on a no-op it skips, because nothing new was
+  # published, and on a failed demo the run is already red.
   smoke:
     needs: [preflight, release, demo]
-    # Least privilege for the caller: this job only curls RubyGems and the
-    # live demo. It must not inherit the workflow-level `contents: write` +
-    # `id-token: write` — the id-token permission is what the RubyGems
-    # trusted-publishing exchange in the `release` job needs, and a smoke
-    # check has no business holding it.
+    if: ${{ !cancelled() && needs.demo.result == 'success' }}
+    # Least privilege for the caller: this job only curls RubyGems and the live
+    # demo. `id-token` belongs to `publish` and `contents: write` to `release`.
     permissions:
       contents: read
     uses: ./.github/workflows/release-smoke.yml
