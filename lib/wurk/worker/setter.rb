@@ -1,6 +1,7 @@
 # frozen_string_literal: true
 
 require 'date'
+require_relative '../job/options'
 require_relative '../job_util'
 
 module Wurk
@@ -97,16 +98,20 @@ module Wurk
         seconds < Wurk::Worker::SCHEDULED_THRESHOLD ? now_seconds + seconds : seconds
       end
 
+      # #is_a?, not `case`: ActiveSupport::Duration answers is_a?(Numeric) but
+      # Module#=== reads the real class, so `when Numeric` refuses `5.minutes`.
       def interval_seconds(interval)
-        case interval
-        when Numeric, Time then interval.to_f
-        when Date then interval.to_time.to_f
-        else raise ArgumentError, "interval must be Numeric, Time or DateTime, got #{interval.class}"
-        end
+        return interval.to_f if interval.is_a?(::Numeric) || interval.is_a?(::Time)
+        return interval.to_time.to_f if interval.is_a?(::Date)
+
+        raise ArgumentError, "interval must be Numeric, Time or DateTime, got #{interval.class}"
       end
 
+      # Time.now rather than the raw clock: a host's freeze_time, travel_to or
+      # Timecop has to govern when a scheduled job comes due. ~160ns dearer per
+      # call, on a path that goes on to spend a Redis round trip.
       def now_seconds
-        ::Process.clock_gettime(::Process::CLOCK_REALTIME)
+        ::Time.now.to_f
       end
 
       # Lifts wait/wait_until → at; stringifies keys. Matches Sidekiq's

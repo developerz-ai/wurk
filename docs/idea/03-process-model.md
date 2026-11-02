@@ -18,7 +18,7 @@ This is the same model as Sidekiq Enterprise's swarm, except it's built in and t
 ## Boot ordering (must be exact)
 
 1. Host app boots fully. Initializers run. Eager-loaded constants resolved.
-2. Railtie `after_initialize` fires.
+2. The railtie's boot initializer runs. It is appended to Rails' own Finisher, so it comes after every `after_initialize` hook and after Rails installs its routes and dev-reload hooks.
 3. Swarm closes parent-side connections that should not survive fork (DB, Redis).
 4. Swarm forks N children.
 5. Each child reconnects DB and creates a fresh Redis pool, then starts fetching.
@@ -26,7 +26,7 @@ This is the same model as Sidekiq Enterprise's swarm, except it's built in and t
 
 Skipping step 3 leaves inherited sockets open in children — a classic post-fork bug. Skipping step 5 means children share a socket and corrupt each other's responses. Step 3 repeats before every respawn and rolling-restart fork, not just the first boot.
 
-**When the railtie boots workers.** Wurk boots its workers from `after_initialize` only when it is running inside a web server: `rails server`, Puma, Passenger or Unicorn. One-off commands load the app without starting workers: `rails runner`, `rails generate`, rake tasks, and scripts that require `config/environment`. To boot under another server, set `WURK_EMBED=1`. `WURK_DISABLED=1` always disables boot, and consoles and the test environment never boot.
+**When the railtie boots workers.** Wurk boots its workers from that initializer only when it is running inside a web server: `rails server`, Puma, Passenger or Unicorn. One-off commands load the app without starting workers: `rails runner`, `rails generate`, rake tasks, and scripts that require `config/environment`. To boot under another server, set `WURK_EMBED=1`. `WURK_DISABLED=1` always disables boot, and consoles and the test environment never boot.
 
 ## Worker topology (Wurk extension)
 

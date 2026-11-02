@@ -28,11 +28,30 @@ module Wurk
     # (`configure_server` / `server? is false`). RailsBoot decides whether this
     # process serves.
     initializer 'wurk.server_mode', before: :load_config_initializers do |app|
+      Wurk::RailsBoot.boot_scheduled = true
       Wurk::RailsBoot.enter_server_mode_if_serving(app)
     end
 
+    # Registered at gem load, so it runs ahead of the host's own hooks: one of
+    # them can still replace or wrap the reloader.
     config.after_initialize do |app|
-      Wurk::RailsBoot.boot(app)
+      Wurk::RailsBoot.install_reloader(app)
+      Wurk::RailsBoot.boot(app) unless Wurk::RailsBoot.boot_scheduled?
+    end
+
+    # Appended to Rails' own Finisher so it runs dead last. A boot here sees what
+    # a host's `after_initialize` configured (a Redis URL, say), and a forked
+    # child has the routes and dev-reload hooks Rails installs after those hooks
+    # fire, which it could never pick up later. `after:` can't express this: it
+    # drags the whole Finisher chain ahead of initializers not yet run.
+    #
+    # Deferred to before_configuration because naming Rails::Application at load
+    # would pull ActionDispatch into a host loading only rails/railtie.
+    config.before_configuration do
+      finisher = ::Rails::Application::Finisher
+      unless finisher.initializers.any? { |i| i.name == Wurk::RailsBoot::BOOT_INITIALIZER }
+        finisher.initializer(Wurk::RailsBoot::BOOT_INITIALIZER) { |app| Wurk::RailsBoot.boot(app) }
+      end
     end
   end
 end

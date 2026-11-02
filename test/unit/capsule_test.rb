@@ -405,6 +405,16 @@ class CapsuleTest < Wurk::Test::UnitCase
     assert_equal({ 'high' => 0, 'low' => 0 }, @capsule.weights)
   end
 
+  # An unweighted queue in a weighted list is still fetched, as if weighted 1.
+  def test_queues_setter_keeps_an_unweighted_queue_in_a_weighted_list
+    @capsule.queues = [['high', 2], 'plain', ['low', 1], 'also-plain']
+
+    assert_equal :weighted, @capsule.mode
+    assert_equal %w[high high plain low also-plain], @capsule.queues
+    assert_equal({ 'high' => 2, 'plain' => 0, 'low' => 1, 'also-plain' => 0 }, @capsule.weights)
+    assert_equal %w[high,2 plain low,1 also-plain], @capsule.queue_specs
+  end
+
   # Mixed string + array entries (as a hand-written YAML might combine them).
   def test_queues_setter_accepts_mixed_string_and_array_entries
     @capsule.queues = ['high,3', ['default', 2], 'low,1']
@@ -428,9 +438,42 @@ class CapsuleTest < Wurk::Test::UnitCase
     assert_raises(ArgumentError) { @capsule.queues = [',2'] }
   end
 
-  def test_queues_setter_raises_on_zero_or_negative_explicit_weight
-    assert_raises(ArgumentError) { @capsule.queues = ['high,0'] }
+  def test_queues_setter_raises_on_negative_explicit_weight
     assert_raises(ArgumentError) { @capsule.queues = ['high,-1'] }
+    assert_raises(ArgumentError) { @capsule.queues = [['high', -1]] }
+  end
+
+  # 0 is what an unweighted queue is recorded as, so writing it means the same.
+  def test_queues_setter_treats_an_explicit_zero_weight_as_no_weight
+    @capsule.queues = [['a', 0], ['b', 0]]
+
+    assert_equal :strict, @capsule.mode
+    assert_equal %w[a b], @capsule.queues
+
+    @capsule.queues = ['a,0', 'b,2']
+
+    assert_equal :weighted, @capsule.mode
+    assert_equal %w[a b b], @capsule.queues
+  end
+
+  # A `persist` after the capsule's chain was copied has to stay outermost.
+  def test_a_late_prepend_keeps_its_position_when_the_capsule_chain_refreshes
+    earlier = Class.new { def call(*) = yield }
+    late = Class.new { def call(*) = yield }
+    appended = Class.new { def call(*) = yield }
+    config = Wurk::Configuration.new
+    config.server_middleware.add(earlier)
+    capsule = config.default_capsule
+    copy = capsule.server_middleware
+    config.logger = ::Logger.new(IO::NULL)
+
+    config.server_middleware.prepend(late)
+    config.server_middleware.add(appended)
+    capsule.prepare_shared!
+
+    positions = copy.entries.map(&:klass).select { |klass| [earlier, late, appended].include?(klass) }
+
+    assert_equal [late, earlier, appended], positions
   end
 
   # --- concurrency setter ------------------------------------------------

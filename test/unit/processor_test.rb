@@ -606,7 +606,7 @@ class ProcessorTest < Wurk::Test::UnitCase
     @config[:reloader] = nil
     reloader = reloader_of(new_processor)
 
-    assert_same reloader_of(@processor), reloader
+    assert_equal 'Wurk::Processor::IdentityReloader', reloader.name
     assert_equal(:from_block, reloader.call { :from_block })
   end
 

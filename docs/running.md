@@ -12,7 +12,8 @@ standalone, with no Rails engine at all.
 ## Inside Rails: it auto-starts
 
 In a Rails app you usually start **nothing**. The mountable engine's railtie
-boots the swarm during `after_initialize`, so a normal `rails server` (or a
+boots the swarm as the last step of app initialization, after your own
+`after_initialize` hooks, so a normal `rails server` (or a
 worker dyno that just boots the app) already has workers forking and fetching.
 
 Set `WURK_DISABLED=1` on any process that should *not* fork workers — typically

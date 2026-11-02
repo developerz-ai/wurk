@@ -92,10 +92,13 @@ Sidekiq.configure_client { |config| config.redis = { url: ENV["REDIS_URL"] } }
 - `configure_server` runs its block only when `config[:server] == true`;
   `configure_client` runs when the process is not a server **or**
   `config[:client_in_server]` is set.
-- A block the gate skips is never yielded and never replayed. The skip logs one
-  WARN naming the gate and the condition that failed, once per gate per
-  configuration instance; further skips of the same gate stay quiet, and a block
-  the gate allows logs nothing.
+- A `configure_client` block the gate skips is never yielded and never replayed.
+  A `configure_server` block the gate skips is kept and runs when the process
+  enters server mode, so a gem calling it at load time still takes effect in a
+  process that goes on to run workers; in a process that never does, it never
+  runs. The skip logs one WARN naming the gate and the condition that failed,
+  once per gate per configuration instance; further skips of the same gate stay
+  quiet, and a block the gate allows logs nothing.
 - Server mode is entered **before** initializers load — by the
   `wurk.server_mode` railtie initializer in a Rails host, and by
   `Wurk.enter_server_mode` in `Wurk::CLI#run` / `#run_swarm` before the app is
@@ -916,7 +919,6 @@ differs from `docs/target/sidekiq-free.md`:
 | [Extra default key](idea/parity-divergences.md#defaults-adds-redis_error_handlers) | `:redis_error_handlers` is in `DEFAULTS`; there is no Sidekiq equivalent (`config.on_redis_error`) |
 | [Pool sizing](idea/parity-divergences.md#pool-sizing-three-disjoint-pools-per-process) | Spec: per-capsule pool = `concurrency`, internal = 10. Wurk: main pool = `max(concurrency + 5, 10)`, **plus** a dedicated fetch pool of `concurrency` and a dedicated web pool of `web_pool_size` |
 | [`reap_idle_redis_connections`](idea/parity-divergences.md#reap_idle_redis_connections-sweeps-from-a-per-pool-reaper-thread-not-the-heartbeat) | Same observable behaviour, different driver: Sidekiq reaps on the 10s heartbeat; each Wurk pool runs its own reaper thread, sweeping every `min(timeout / 2, 10)` seconds, so pools outside the launcher (web, supervisor) are reaped too. Requires connection_pool >= 3.0, as Sidekiq 8.1 does |
-| [`Config#redis_info` / `#to_json`](idea/parity-divergences.md#configredis_info-and-configto_json-are-not-implemented) | Not implemented on the configuration object. `Wurk::RedisPool#info` returns parsed `INFO` merged with the pool's `size`/`available` |
 | [`:max_iteration_runtime`](idea/parity-divergences.md#max_iteration_runtime-is-accepted-but-not-consumed) | Accepted for drop-in compatibility; not consumed by `Wurk::IterableJob` |
 | [USR2](idea/parity-divergences.md#usr2-reopens-logs-rss-recycling-uses-the-rolling-restart-machine) | Spec marks it "Pro only". In Wurk it always reopens logs, and the swarm parent relays it to children |
 | [Fetch mode](idea/parity-divergences.md#reliable-fetch-is-the-only-mode-no-brpop) | There is no "basic fetch". The default fetcher is always the reliable `BLMOVE` fetcher, so `config.super_fetch!` exists only so a Pro initializer drops in unchanged. `config.reliable_scheduler!` still does real work — keep it |

@@ -127,7 +127,7 @@ module Wurk
       opts = { notify_failure: notify_failure, ex: ex, trim: false }
       begin
         sweep_once do |entry|
-          entry.send(:remove_job) { |message| dead.kill(Wurk.dump_json(message), opts) }
+          entry.send(:remove_job) { |message| dead.kill(message, opts) }
         end
       ensure
         dead.trim
@@ -155,16 +155,18 @@ module Wurk
 
     # Removes the exact (score, jid)-matching member. Backs SortedEntry#delete
     # when no cached value bytes are present.
+    #
+    # Goes around the public #delete_by_value: sidekiq-unique-jobs prepends it
+    # and answers whether a lock was released, so a member already removed read
+    # as "not removed" and the caller dropped the job without pushing it.
     def remove_job(entry)
-      delete_by_value(@name, entry.value) || delete_by_jid(entry.score, entry.jid)
+      zrem_member(@name, entry.value) || delete_by_jid(entry.score, entry.jid)
     end
 
     # ZREM by exact bytes. Returns true when ≥1 element was removed. Method
     # name is Sidekiq wire-compat — `delete_by_value?` would break the alias.
     def delete_by_value(name, value)
-      gone = Wurk.redis { |conn| conn.call('ZREM', name, value) }.to_i.positive?
-      note_removal if gone && name == @name
-      gone
+      zrem_member(name, value)
     end
 
     # Scan the score bracket for a jid match, ZREM the exact bytes once found.
@@ -198,6 +200,12 @@ module Wurk
     def newest_page(page, baseline)
       start = [(page * PAGE_SIZE) - (removed - baseline), 0].max
       Wurk.redis { |conn| conn.call('ZRANGE', @name, start, start + PAGE_SIZE - 1, 'REV', 'WITHSCORES') }
+    end
+
+    def zrem_member(name, value)
+      gone = Wurk.redis { |conn| conn.call('ZREM', name, value) }.to_i.positive?
+      note_removal if gone && name == @name
+      gone
     end
 
     # Members this instance has removed, the offset #each compensates by.

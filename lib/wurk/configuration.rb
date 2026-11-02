@@ -162,14 +162,15 @@ module Wurk
       @options[:error_handlers] << ERROR_HANDLER if @options[:error_handlers].empty?
       @capsules = {}
       @directory = {}
-      @client_chain = Middleware::Chain.new
-      @server_chain = Middleware::Chain.new(on_registration: method(:warn_on_late_server_registration))
+      @client_chain = Middleware::Chain.new(self)
+      @server_chain = Middleware::Chain.new(self, on_registration: method(:warn_on_late_server_registration))
       @redis_config = { url: ENV.fetch('REDIS_URL', 'redis://localhost:6379/0') }
       @web_redis_pool = nil
       @logger = nil
       @thread_priority = DEFAULT_THREAD_PRIORITY
       @telemetry_installed = false
       @frozen = false
+      @deferred_server_blocks = []
     end
 
     # --- Hash-like options access -----------------------------------------
@@ -192,6 +193,7 @@ module Wurk
     end
 
     def dig(*keys) = @options.dig(*keys)
+    def to_json(*) = Wurk.dump_json(@options)
 
     # --- Default capsule shortcuts ---------------------------------------
 
@@ -261,6 +263,11 @@ module Wurk
 
     def redis_pool
       default_capsule.redis_pool
+    end
+
+    # Parsed INFO, without the pool's own counters RedisPool#info merges in.
+    def redis_info
+      redis_pool.info.except('size', 'available')
     end
 
     # Disconnect and drop every capsule's cached pools (main + fetch) plus the
@@ -792,19 +799,30 @@ module Wurk
 
     # --- Configure blocks (Sidekiq.configure_server / _client) -----------
 
-    # The gate is evaluated per call: a skipped block is never yielded and
-    # never replayed, and an allowed one yields the configuration and returns
-    # the block's value. A skip reports itself once per gate per instance —
+    # The gate is evaluated per call: an allowed block yields the configuration
+    # and returns the block's value. A skip reports itself once per gate per instance —
     # the flags below decide only whether the skip is reported again, and
     # they live outside @options so a frozen configuration can still warn.
-    def configure_server
-      return unless block_given?
+    #
+    # A skipped block is kept for #enter_server_mode. Gems call this at load
+    # time, and under the railtie that is Bundler.require, before the
+    # `wurk.server_mode` initializer: dropping it left sidekiq-cron, sentry-sidekiq
+    # and the like silently absent from a process that does run workers.
+    def configure_server(&block)
+      return unless block
       return yield self if server?
+
+      @deferred_server_blocks << block
       return if @configure_server_skip_warned
 
       @configure_server_skip_warned = true
       logger.warn { 'configure_server block skipped: server? is false' }
       nil
+    end
+
+    def enter_server_mode
+      self[:server] = true
+      @deferred_server_blocks.shift.call(self) until @deferred_server_blocks.empty?
     end
 
     # A web process that also boots the swarm (Wurk::RailsBoot) is flagged
@@ -893,6 +911,16 @@ module Wurk
       @capsules.freeze
       warn_on_missing_server_middleware
       warn_on_small_db_pool
+      self
+    end
+
+    # A swarm child inherits the parent's prepare_for_fork! freeze, but its copy
+    # is its own, and Launcher#run freezes it again. In between it is what a
+    # non-swarm process is: open to `:fork` / `:startup` hooks and to gems that
+    # prepend Launcher#initialize and write an option, as sidekiq-cron does.
+    def reopen_in_forked_child
+      @options = @options.dup
+      @frozen = false
       self
     end
 

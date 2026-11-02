@@ -283,7 +283,7 @@ class CompatAliasesTest < Wurk::Test::UnitCase
   end
 
   def test_worker_alias
-    assert_same Wurk::Worker, Sidekiq::Worker
+    assert_same Wurk::Job, Sidekiq::Worker
   end
 
   def test_workers_deprecated_alias

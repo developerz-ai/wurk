@@ -22,12 +22,16 @@ module Wurk
       super(item)
       @score = score.to_f
       @parent = parent
+      # Parsed now, unlike JobRecord: sidekiq-failures reopens this method and
+      # reads @item straight after it. Measured on a 20k-member walk that reads
+      # no field: 2.5us per entry at 250B, 5us at 2KB, 10us at 8KB, and nothing
+      # at all for the walks that do read one, which is all of them in practice.
+      self.item if @value
     end
 
     # JobRecord resolves the queue eagerly and only from a pre-parsed Hash;
     # a sorted-set entry is almost always built from the raw JSON string, so
-    # read it off the payload instead. Lazy on purpose — a scan over a large
-    # set must not pay JSON cost for entries nobody inspects.
+    # read it off the payload instead.
     def queue = @queue ||= item['queue']
 
     def id = "#{score}|#{jid}"
@@ -59,7 +63,7 @@ module Wurk
     # add_to_queue does not touch `retry_count`.
     def add_to_queue
       remove_job do |message|
-        Client.new.push(message)
+        Client.new.push(Wurk.load_json(message))
       end
     end
 
@@ -69,8 +73,9 @@ module Wurk
     # consume an attempt. Wire-compat with Sidekiq's SortedEntry#retry.
     def retry
       remove_job do |message|
-        message['retry_count'] = message['retry_count'].to_i - 1 if message['retry_count']
-        Client.new.push(message)
+        job = Wurk.load_json(message)
+        job['retry_count'] = job['retry_count'].to_i - 1 if job['retry_count']
+        Client.new.push(job)
       end
     end
 
@@ -80,7 +85,7 @@ module Wurk
     # API/UI kills.
     def kill
       remove_job do |message|
-        DeadSet.new.kill(Wurk.dump_json(message))
+        DeadSet.new.kill(message)
       end
     end
 
@@ -88,9 +93,10 @@ module Wurk
 
     private
 
-    # Pulls the message out of Redis, yields it for the caller's re-enqueue
-    # work, and returns the parsed hash. Done with the cached value when
-    # available so LREM-like ZREM matches the exact bytes.
+    # Pulls the message out of Redis, yields its raw JSON for the caller's
+    # re-enqueue work, and returns the parsed hash. A String because that is the
+    # contract gems wrapping this method parse against; the bytes are also what
+    # the ZREM matched, so a kill stores them unchanged.
     # Returns nil without yielding when the parent removal fails — prevents
     # duplicate side effects (e.g. retry pushing twice) if another caller
     # already removed the entry.
@@ -99,16 +105,15 @@ module Wurk
     # Redis) would otherwise leave the job in neither place. The original
     # bytes go back at the original score before the error propagates.
     def remove_job
-      message = item.dup
       return nil unless @parent.remove_job(self)
 
       begin
-        yield message
+        yield value
       rescue StandardError
         Wurk.redis { |conn| conn.call('ZADD', @parent.name, @score, value) }
         raise
       end
-      message
+      item
     end
   end
 end

@@ -113,6 +113,11 @@ module Sidekiq
     end
   end
 
+  module RailsNamespace
+    Reloader = Wurk::RailsReloader
+  end
+  private_constant :RailsNamespace
+
   BasicFetch       = Wurk::Fetcher::Reliable
   Batch            = Wurk::Batch
   BatchSet         = Wurk::BatchSet
@@ -222,6 +227,12 @@ module Sidekiq
 
     def default_job_options=(hash)
       Wurk.default_job_options = hash
+    end
+
+    # Answered from const_missing rather than defined as a constant, which would
+    # shadow ::Rails for every bare `Rails.logger` written inside `module Sidekiq`.
+    def const_missing(name)
+      name == :Rails ? RailsNamespace : super
     end
 
     def strict_args!(mode = :raise) = Wurk.strict_args!(mode)

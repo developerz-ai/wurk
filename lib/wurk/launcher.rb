@@ -51,7 +51,7 @@ module Wurk
     # shutdown lands right after boot; teardown must not hang on it.
     BOOT_RECLAIM_JOIN_TIMEOUT = 5
 
-    attr_accessor :managers, :poller, :cron_poller, :metrics_rollup, :queue_rollup, :metrics_flusher, :history
+    attr_accessor :managers, :poller, :periodic_poller, :metrics_rollup, :queue_rollup, :metrics_flusher, :history
 
     def initialize(config, embedded: false)
       @config = config
@@ -163,7 +163,7 @@ module Wurk
     # heartbeat thread calls this on `BEAT_PAUSE` cadence.
     def heartbeat
       flush_stats
-      beat
+      ❤ # rubocop:disable Naming/AsciiIdentifiers
     end
 
     # Rolls in-process Processor counters into Redis. Pipelined so a single
@@ -202,6 +202,9 @@ module Wurk
     end
 
     private
+
+    # Upstream's seam for the beat; tracing gems prepend over this exact name.
+    def ❤ = beat # rubocop:disable Naming/AsciiIdentifiers, Naming/MethodName
 
     def boot(async_beat) # rubocop:disable Metrics/AbcSize
       @started_at = Time.now.to_f
@@ -274,7 +277,7 @@ module Wurk
     # history snapshotter is opt-in and an embedded boot may have stripped the
     # rest.
     def start_periodic_components
-      [@poller, @leader, @cron_poller, @metrics_rollup,
+      [@poller, @leader, @periodic_poller, @metrics_rollup,
        @queue_rollup, @metrics_flusher, @history].compact.each(&:start)
     end
 
@@ -287,7 +290,7 @@ module Wurk
     # exactly those buckets — stopping the rollup first would give its final
     # tick nothing to roll.
     def stop_periodic_components
-      [@metrics_flusher, @cron_poller, @metrics_rollup, @queue_rollup,
+      [@metrics_flusher, @periodic_poller, @metrics_rollup, @queue_rollup,
        @history].each { |t| teardown_step(t.class) { t&.terminate } }
       teardown_step('reaper') { @reaper&.stop }
       teardown_step('leader') { @leader&.stop }
@@ -449,7 +452,7 @@ module Wurk
     # runs every one of them; what differs is who does the work inside a tick:
     #
     #   poller / reaper   every process, work shared through Redis
-    #   cron_poller       leader only enqueues — that is the exactly-once guard
+    #   periodic_poller   leader only enqueues — that is the exactly-once guard
     #   metrics_rollup    leader only writes the cluster-total chart buckets
     #                     (cadence: `config.metrics_rollup_interval`)
     #   queue_rollup      leader only writes the `qm|…` per-queue gauges
@@ -459,7 +462,9 @@ module Wurk
     #                     `config.retain_history`
     def build_loops
       @poller = Wurk::Scheduled::Poller.new(@config)
-      @cron_poller = Wurk::Cron::Poller.new(@config)
+      # Not @cron_poller: sidekiq-cron's Launcher prepend assigns that ivar and
+      # owns its lifecycle. Both pollers run, each over its own registrations.
+      @periodic_poller = Wurk::Cron::Poller.new(@config)
       @metrics_rollup = Wurk::Metrics::Rollup.new(@config)
       @queue_rollup = Wurk::Metrics::QueueRollup.new(@config)
       @metrics_flusher = Wurk::Metrics::Flusher.new(@config)

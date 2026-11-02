@@ -6,6 +6,7 @@ require_relative 'dead_set'
 require_relative 'job_logger'
 require_relative 'job_retry'
 require_relative 'profiler'
+require_relative 'rails_reloader'
 
 module Wurk
   # Inside each Manager, N Processors run in parallel. Each owns one thread,
@@ -173,14 +174,15 @@ module Wurk
     private
 
     # Only the untouched framework default is swapped out — a host-supplied
-    # reloader (Rails wraps every job in `Rails.application.reloader`) is used
-    # exactly as given. `equal?` against DEFAULTS is sound because
-    # Configuration's deep-dup copies Hashes/Arrays only, so an unset
-    # `:reloader` is still the very Proc object DEFAULTS holds.
+    # reloader is used exactly as given, and nil opts out of wrapping. `equal?`
+    # against DEFAULTS is sound because Configuration's deep-dup copies
+    # Hashes/Arrays only, so an unset `:reloader` is still the very Proc object
+    # DEFAULTS holds.
     def resolve_reloader(configured)
-      return IdentityReloader if configured.nil? || configured.equal?(Configuration::DEFAULTS[:reloader])
+      return IdentityReloader if configured.nil?
+      return configured unless configured.equal?(Configuration::DEFAULTS[:reloader])
 
-      configured
+      RailsReloader.default || IdentityReloader
     end
 
     def run

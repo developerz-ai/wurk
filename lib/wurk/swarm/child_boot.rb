@@ -56,6 +56,7 @@ module Wurk
       def run
         reset_inherited_signals
         reconnect_after_fork
+        @config.reopen_in_forked_child
         Wurk.server = true
         Wurk::Health.fleet_size = @fleet_size
         # :fork runs in each child after our internal AR/Redis reconnect and

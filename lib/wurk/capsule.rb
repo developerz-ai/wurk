@@ -53,6 +53,8 @@ module Wurk
     #   %w[high default low]        → mode :strict,   weights all 0
     #   %w[high,3 default,2 low,1]  → mode :weighted, weights {q=>w}
     #   %w[a,1 b,1 c,1]             → mode :random,   weights all 1
+    #   %w[a,2 b]                   → mode :weighted, unweighted b fetched as if 1
+    #   %w[a,0 b,0]                 → mode :strict, 0 being the same as no weight
     # `@queues` is expanded by weight so a uniform shuffle gives weighted
     # fairness (e.g. ["high","high","high","default","default","low"]).
     def queues=(val)
@@ -229,17 +231,30 @@ module Wurk
       copy = server_middleware
       return copy if frozen?
 
-      @config.server_middleware.entries.each do |entry|
+      global = @config.server_middleware.entries
+      global.each_with_index do |entry, index|
         next if @server_middleware_seen.include?(entry.klass)
 
         @server_middleware_seen << entry.klass
-        next if copy.exists?(entry.klass)
-
-        rebound = entry.dup
-        rebound.config = self
-        copy.entries << rebound
+        adopt_server_middleware(copy, entry, global.drop(index + 1)) unless copy.exists?(entry.klass)
       end
       copy
+    end
+
+    def adopt_server_middleware(copy, entry, followers)
+      rebound = entry.dup
+      rebound.config = self
+      copy.entries.insert(refresh_position(copy, followers), rebound)
+    end
+
+    # Ahead of the first entry that follows it in the global chain, so a late
+    # `prepend` still wraps what it was prepended to. -1 appends.
+    def refresh_position(copy, followers)
+      followers.each do |follower|
+        position = copy.entries.index { |entry| entry.klass == follower.klass }
+        return position if position
+      end
+      -1
     end
 
     # Drop-in fetch pluggability (spec §5 / §4.1): instantiate
@@ -276,7 +291,7 @@ module Wurk
       return [qname, 0] if weight.nil?
 
       weight = Integer(weight)
-      raise ArgumentError, "queue weight must be > 0: `#{entry}`" if weight <= 0
+      raise ArgumentError, "queue weight must not be negative: `#{entry}`" if weight.negative?
 
       [qname, weight]
     end
@@ -295,7 +310,7 @@ module Wurk
     def expand_by_weight(parsed, mode)
       return parsed.map(&:first) if %i[strict random].include?(mode)
 
-      parsed.flat_map { |q, w| [q] * w }
+      parsed.flat_map { |q, w| [q] * [w, 1].max }
     end
 
     # `config.redis = { size: N }` pins the main pool at N; otherwise

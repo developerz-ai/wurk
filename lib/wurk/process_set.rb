@@ -121,7 +121,9 @@ module Wurk
       # claimed (heartbeat is fresher).
       def build_process(attrs)
         hash = Wurk.load_json(attrs.fetch('info')).merge(beat_overrides(attrs))
-        hash['concurrency'] = attrs['concurrency'].to_i if attrs.key?('concurrency')
+        # HMGET answers nil for a field the process never wrote: a stock Sidekiq
+        # process keeps concurrency only in `info`.
+        hash['concurrency'] = attrs['concurrency'].to_i if attrs['concurrency']
         Process.new(hash)
       end
 

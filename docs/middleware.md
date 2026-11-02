@@ -111,7 +111,7 @@ Register at **boot**, from an initializer, before swarm preparation and fork.
 The boot order is:
 
 1. Host app boots; `config/initializers/*` run — this is where you register.
-2. The railtie's `after_initialize` fires.
+2. The railtie's boot initializer runs, after your `after_initialize` hooks.
 3. The swarm closes parent-side Redis/DB sockets.
 4. In the parent, `Configuration#prepare_for_fork!` calls each capsule's
    `prepare_shared!`, materializing its middleware chains and refreshing its
@@ -164,9 +164,11 @@ Both blocks yield the same global `Wurk::Configuration`; the difference is a
 gate on `config.server?`:
 
 ```ruby
-def configure_server
-  return unless block_given?
+def configure_server(&block)
+  return unless block
   return yield self if server?
+
+  @deferred_server_blocks << block
   return if @configure_server_skip_warned
 
   @configure_server_skip_warned = true
@@ -185,9 +187,10 @@ def configure_client
 end
 ```
 
-A block the gate skips is never yielded, and it is never replayed later — a
-role change does not resurrect it. The skip logs one WARN naming the gate and
-the condition that failed (`server? is false`, or `server? is true and
+A skipped `configure_client` block is never yielded. A skipped `configure_server`
+block is kept and runs if the process later enters server mode: gems call it at
+load time, which under the railtie comes before the server-mode initializer. The
+skip logs one WARN naming the gate and the condition that failed (`server? is false`, or `server? is true and
 client_in_server is false or nil`), once per gate per `Wurk::Configuration`
 instance; further skips of the same gate stay quiet. A call the gate allows
 logs nothing and returns whatever the block returned.

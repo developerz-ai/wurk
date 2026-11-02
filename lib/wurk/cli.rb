@@ -11,6 +11,7 @@ require_relative 'configuration'
 require_relative 'component'
 require_relative 'capsule'
 require_relative 'launcher'
+require_relative 'rails_boot'
 
 module Wurk
   # Standalone CLI. Loads from `exe/wurk` — never loads `wurk/rails` so the
@@ -554,6 +555,9 @@ module Wurk
     def boot_rails_application(require_path)
       require 'rails'
       define_active_job_adapter
+      # No railtie here (see boot_application), and a host's after_initialize hook
+      # may wrap the reloader, so it has to be the Rails one by then.
+      ::ActiveSupport.on_load(:after_initialize, yield: true) { |app| RailsBoot.install_reloader(app) }
       require ::File.expand_path("#{require_path}/config/environment.rb")
       @config[:tag] ||= default_tag(::Rails.root) if defined?(::Rails) && ::Rails.respond_to?(:root)
     end

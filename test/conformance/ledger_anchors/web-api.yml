@@ -203,13 +203,3 @@
     def test_delete_queue_job_by_jid
       jid = push_to_queue
       post "/wurk/api/queues/#{@queue}/delete", { jid: jid }
-- entry: "`Config#redis_info` and `Config#to_json` are not implemented"
-  anchor: "lib/wurk/cli.rb#L356"
-  fragment: |-
-    @config.redis_pool.info
-- entry: "`Config#redis_info` and `Config#to_json` are not implemented"
-  anchor: "lib/wurk/redis_pool.rb#L188-L190"
-  fragment: |-
-    def info
-      with(idempotent: true) { |conn| parse_info(conn.call('INFO')) }
-        .merge('size' => @size, 'available' => available)

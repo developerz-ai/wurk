@@ -41,7 +41,7 @@ Layers and ownership — one reason to change per class. Don't blur these.
 | Layer | Owns | Path |
 |---|---|---|
 | Engine | Dashboard mount, asset path, railtie | `lib/wurk/engine.rb`, `app/` |
-| Railtie | Rails hooks only (config namespace, server_mode initializer, `after_initialize` that starts the swarm); every boot decision is delegated | `lib/wurk/railtie.rb` |
+| Railtie | Rails hooks only (config namespace, server_mode initializer, reloader install, last-Finisher initializer that starts the swarm); every boot decision is delegated | `lib/wurk/railtie.rb` |
 | RailsBoot | Boot policy decisions: whether this process boots, whether it may fork the swarm, server-mode entry | `lib/wurk/rails_boot.rb` |
 | Swarm | Parent process; forks N children, PID supervision, rolling restart | `lib/wurk/swarm.rb` |
 | Topology | Worker-topology slot DSL (count/queues/concurrency per fork kind); Swarm consumes its `assignments` | `lib/wurk/topology.rb` |
@@ -89,7 +89,7 @@ Sidekiq aliases — every public `Wurk::*` class is exposed under its `Sidekiq::
 ## Boot ordering (do not reorder)
 
 1. Host app boots fully; initializers run; eager-loaded constants resolved.
-2. Railtie `after_initialize` fires.
+2. Host `after_initialize` hooks run, then the railtie's `wurk_boot` Finisher initializer fires last.
 3. Swarm closes parent-side connections that must not survive fork (DB, Redis).
 4. Swarm forks N children.
 5. Each child reconnects DB and opens a fresh Redis pool, then starts fetching.

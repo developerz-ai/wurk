@@ -40,7 +40,7 @@ module Wurk
         #   table for the full set)
         # @return [Hash] the merged, string-keyed options hash
         def sidekiq_options(opts = {})
-          stringified = opts.transform_keys(&:to_s)
+          stringified = opts.to_h { |key, val| [key.to_s, val.is_a?(::Hash) ? val.transform_keys(&:to_s) : val] }
           Wurk::JobUtil.validate_track!(stringified['track'], stringified) if stringified.key?('track')
           Wurk::JobUtil.validate_bounds!(stringified)
           merged = get_sidekiq_options.merge(stringified)
@@ -60,6 +60,8 @@ module Wurk
         def sidekiq_options_hash
           get_sidekiq_options
         end
+
+        attr_writer :sidekiq_options_hash
 
         attr_reader :sidekiq_retry_in_block, :sidekiq_retries_exhausted_block
 
@@ -96,4 +98,10 @@ module Wurk
       end
     end
   end
+
+  # One module under both names, as upstream's Sidekiq::Worker and Sidekiq::Job
+  # are, so a prepend, `method_defined?` or constant lookup on either sees the
+  # job methods. Assigned here because worker.rb and worker/setter.rb reopen it
+  # as `module Worker`, and everything that loads them loads this file first.
+  Worker = Job
 end
