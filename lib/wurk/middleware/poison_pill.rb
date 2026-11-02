@@ -12,8 +12,7 @@ module Wurk
     # When a job is recovered out of a dead process's private list, we
     # INCR a per-jid counter at `super_fetch:recovered:<jid>` with a 72h
     # TTL. Recoveries up to RECOVERY_THRESHOLD (3) requeue; the one that takes
-    # the counter past it (the 4th orphaning) is the poison pill, matching
-    # super_fetch's `count <= max_recoveries` recover_orphan script: the payload is moved to the dead set,
+    # the counter past it (the 4th orphaning) is the poison pill: the payload is moved to the dead set,
     # `jobs.poison` is emitted to statsd, and recovery callbacks fire so
     # operators can be paged.
     #

@@ -189,11 +189,9 @@ between the snapshot and the move: the payload is gone → RPUSH is skipped → 
 finished job is never resurrected. `RPUSH` (tail) is deliberate — `LMOVE` pops
 the tail, so the reclaimed job is fetched *next*, ahead of fresh enqueues.
 
-> **Divergence from Sidekiq Pro.** Pro 7.3's `super_fetch` also requeues at
-> shutdown, but it drains the whole private list onto the *back* of the queue.
 > Wurk moves only the jobs still parked, onto the *front*, so work interrupted
 > by a deploy runs next instead of waiting behind the backlog a second time
-> ([parity divergences](idea/parity-divergences.md#bulk_requeue-moves-still-parked-jobs-to-the-queue-head-pro-moves-them-to-the-tail)).
+> ([parity divergences](idea/parity-divergences.md#bulk_requeue-moves-still-parked-jobs-to-the-queue-head)).
 
 ---
 

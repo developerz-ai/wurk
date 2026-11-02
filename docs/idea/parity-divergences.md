@@ -175,8 +175,7 @@ the line), so a recovered job runs before the jobs already waiting.
 
 **Spec:** Pro §3.2 documents `RPOPLPUSH private_list public_q`. `RPOPLPUSH` is
 `LMOVE source dest RIGHT LEFT`: it pushes onto the public queue's *enqueue*
-end, so in Pro a recovered job goes to the back of the line. Pro 7.3's
-`recover_orphan` script does exactly that (`lmove … 'right', 'left'`).
+end, so a job recovered that way goes to the back of the line.
 
 **Why:** a recovered job has already waited its turn once and was interrupted
 by a crash, not by anything it did; sending it to the back of a deep queue
@@ -192,7 +191,7 @@ back in its public queue exactly once.
 
 **Anchor:** `lib/wurk/fetcher/reaper.rb` (`drain`), Pro §3.2.
 
-## `bulk_requeue` moves still-parked jobs to the queue head; Pro moves them to the tail
+## `bulk_requeue` moves still-parked jobs to the queue head
 
 **Wurk:** `Fetcher::Reliable#bulk_requeue` (landed in PR2, shutdown/requeue
 safety fix) does an atomic per-job `LREM private 1 job` +
@@ -202,17 +201,12 @@ in-progress and still parked (not yet acked) are moved, onto the queue's
 fetch end, so interrupted work runs next.
 
 **Spec:** free Sidekiq's `BasicFetch#bulk_requeue` RPUSHes in-progress jobs
-back to the head of their queue (free §15, §31 gotcha 11). Pro 7.3's
-`super_fetch#bulk_requeue` ignores the in-progress argument and drains the
-whole private list with `LMOVE private public RIGHT LEFT` — immediately, at
-shutdown — so its requeued jobs go to the *tail* (back of the line).
-(Earlier revisions of this entry said Pro leaves jobs in the private list for
-next-boot reclaim; Pro 7.3's source does not.)
+back to the head of their queue (free §15, §31 gotcha 11).
 
 **Why:** Wurk exposes this fetcher as `Sidekiq::BasicFetch`, and free
 Sidekiq's head-of-queue requeue is the behaviour that name promises; it also
 keeps a job interrupted by a deploy from waiting behind the whole backlog a
-second time. Like Pro, nothing waits for the next boot. A job is never counted
+second time. Nothing waits for the next boot. A job is never counted
 twice and never dropped if the process dies mid-move: the LREM/RPUSH pair runs
 only for jobs provably still parked, and the worst case is the job staying in
 the private list, where orphan reclaim picks it up.
@@ -226,8 +220,7 @@ the private list, where orphan reclaim picks it up.
 no limiter key lives shorter than a day. A shorter value is accepted, not
 rejected.
 
-**Spec:** Ent §1.7 lists the `ttl` option with "Minimum: 24h". Sidekiq Ent
-7.3's own `Limiter::Base#ttl` applies no floor at all.
+**Spec:** Ent §1.7 lists the `ttl` option with "Minimum: 24h".
 
 **Why:** the floor is what the spec documents — keys that expire mid-job
 orphan concurrent slots. Clamping rather than raising keeps an app that passes
