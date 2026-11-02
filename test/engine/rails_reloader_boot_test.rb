@@ -161,7 +161,7 @@ class RailsReloaderBootTest < Wurk::Test::UnitCase
         capsule = capsule_for(queue)
         push(capsule, queue, "ReloadableProbeJob")
         run_workers(capsule, 1)
-        write.call("v2", Time.now - 30)
+        write.call("v2", Time.now - 1)
         push(capsule, queue, "ReloadableProbeJob")
         run_workers(capsule, 1)
       RUBY
