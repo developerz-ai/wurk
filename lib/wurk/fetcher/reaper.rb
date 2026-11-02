@@ -109,9 +109,18 @@ module Wurk
       # Spawns the sweep loop. Idempotent. The loop waits one interval before
       # its first sweep so booting processes don't dogpile Redis and so an
       # un-stopped launcher in a unit test never touches the keyspace.
+      #
+      # A LIVE loop is the one and only sweep loop and is handed back as-is. A
+      # dead one is not: a stop whose bounded join timed out leaves its
+      # straggler referenced, and once that straggler has wound down the
+      # reference is a thread that will never sweep again — handing it back
+      # would leave the reaper dead for good, silently, since `start` looked
+      # like it had worked. A fresh loop takes its place; while the straggler
+      # is still alive it keeps the sweep to itself, so a restart still cannot
+      # run two loops at once.
       def start
         @mutex.synchronize do
-          return @thread if @thread
+          return @thread if @thread&.alive?
 
           @done = false
           @thread = spawn_loop_thread
@@ -388,7 +397,18 @@ module Wurk
       def tick_once
         reap
       rescue StandardError => e
-        handle_exception(e, context: THREAD_NAME) if @config.respond_to?(:handle_exception)
+        report(e)
+      end
+
+      # The sweep's error report must not be able to end the sweep loop: a
+      # raise in here (a logger that cannot write, an error handler that
+      # raises) escapes the raw loop thread and kills it — silently, since the
+      # thread reports no exception — and orphans are then never reclaimed
+      # again for the life of the process.
+      def report(error)
+        handle_exception(error, context: THREAD_NAME) if @config.respond_to?(:handle_exception)
+      rescue StandardError
+        nil
       end
 
       def wait_next

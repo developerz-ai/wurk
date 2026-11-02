@@ -137,14 +137,14 @@
     cur[:phase] = :await_exit
 
 - entry: "Reaper liveness has a residual local pid-reuse blind spot — shared with `super_fetch`, not fixed"
-  anchor: "lib/wurk/fetcher/reaper.rb#L253-L282"
+  anchor: "lib/wurk/fetcher/reaper.rb#L262-L291"
   fragment: |-
     def orphaned?(key, host, pid, nonce, owners)
       return !local_pid_alive?(pid) if nonce == process_nonce && host == hostname
       return false if owners.include?(owner_key(host, pid, nonce))
 
 - entry: "Reaper liveness has a residual local pid-reuse blind spot — shared with `super_fetch`, not fixed"
-  anchor: "lib/wurk/fetcher/reaper.rb#L291-L301"
+  anchor: "lib/wurk/fetcher/reaper.rb#L300-L310"
   fragment: |-
     def local_pid_alive?(pid)
       ::Process.kill(0, pid)
