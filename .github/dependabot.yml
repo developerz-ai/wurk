@@ -8,10 +8,10 @@
 # setup-ruby patch release (#534, #540) for no change in what CI runs.
 # Bundler is scoped to the root Gemfile (the shipped gem via the gemspec);
 # test/dummy, demo, and test/ecosystem Gemfiles are fixtures, not shipped deps.
-# Gem bumps wait 14 days after a version is published (cooldown) so brand-new
-# releases can be yanked/fixed upstream before we pick them up. The docker
-# ecosystem watches the Dockerfile's pinned base images alongside bundler, bun,
-# and github-actions.
+# Every bump waits 14 days after a version is published (cooldown) so brand-new
+# releases can be yanked/fixed upstream first; security updates are unaffected.
+# The docker ecosystem watches the Dockerfile's pinned base images alongside
+# bundler, bun, and github-actions.
 version: 2
 updates:
   - package-ecosystem: bundler
@@ -43,6 +43,8 @@ updates:
     schedule:
       interval: weekly
     open-pull-requests-limit: 5
+    cooldown:
+      default-days: 14
     groups:
       minor-and-patch:
         update-types:
@@ -56,6 +58,8 @@ updates:
     schedule:
       interval: monthly
     open-pull-requests-limit: 5
+    cooldown:
+      default-days: 14
     groups:
       actions:
         patterns:
@@ -80,6 +84,8 @@ updates:
     schedule:
       interval: monthly
     open-pull-requests-limit: 5
+    cooldown:
+      default-days: 14
     groups:
       minor-and-patch:
         update-types:
