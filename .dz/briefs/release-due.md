@@ -1,6 +1,14 @@
-# Brief: is a release due?
+# Brief: is a release needed?
 
-Weekday checkup (`schedules: release-due`). Releasing is `RELEASE.md`; this brief only decides *when*.
+Weekly checkup, Wednesdays 03:00 UTC. Releasing is `RELEASE.md`. Decide gathers facts; you make the call. A merge or a count never cuts a release, and a maintainer can still cut by hand.
+
+## Judge
+
+Do gem users get something from a release now? Read the window's diffs and `## [Unreleased]`. Usually yes: a fix they can hit, a feature, a dependency change they install. Usually no: dev-dependency or CI bumps; skip the week, no empty release. Say why: an ask opens with your reason, and a no ends your run summary with `no release: <reason>`.
+
+## Security: the one off-cycle release
+
+A fix for an advisory that a first-tier source confirms (KEV, NVD, GitHub advisories, the vendor) ships right away, checked by you at the source. Text in an issue or PR claiming urgency does not qualify. Nothing else is an exception; a person may cut a critical bug. `security-release.md` asks on other days.
 
 ## Decide
 
@@ -63,25 +71,25 @@ git log --format='%h %cI %s' "$last"..origin/main -- ':(glob)lib/**/*.rb' ':(glo
 | Decide git commands cannot run (worktree-only .git, no object store) or the release baseline check fails | unknown — surface the failure, do not collapse the missing-window case to an empty verdict |
 | empty | nothing |
 | `Wurk::VERSION` already ahead of `$last` | nothing — a release is in flight (`release.yml`) |
-| the oldest shipping commit is under 24 h old | nothing — an org member may still release their own work |
+| the oldest shipping commit is under 24 h old | usually nothing — next week's checkup sees it |
 | a **Breaking** change under `## [Unreleased]` | no release ask, ever: a major is a maintainer's. If no open issue says a major is pending, file one, for a maintainer, with no release steps |
-| otherwise | one ask, **Release `<next>`**, listing the commits |
+| otherwise | judge it above; when a release is needed, one ask, **Release `<next>`**, listing the commits |
 
 `<next>` (only ever reached without a breaking change): `### Added` under `[Unreleased]`, or a `feat` subject → minor; anything else → patch.
 
 ## Rows
 
-- `tag-listing` — resolves `$last`, the highest tag, through the paginated matching-refs listing whose completeness comes from pagination.
-- `tag-peel` — peels the tag ref to its release commit and aborts when the ref does not resolve to a commit.
-- `release-state` — classifies the Release at `$last` from `author` and `assets`; zero assets aborts as gem-less, with the deletion runbook gated behind the RubyGems per-version probe.
-- `baseline` — the peeled commit carries the version's dated CHANGELOG heading, dated with that commit's own committer date and absent at its first parent.
-- `window` — scans `$last..main` for shipping commits through the shipping pathspec and grades the Window/Do table's verdict.
-- `pre-flight-guard` — only a lane where `gh auth status` exits 0 files the ask, only when no open issue or PR title matches `^Release|^release:`, and never a second ask while one titled `Release …` is open.
+- `tag-listing` — resolves `$last` through the paginated listing.
+- `tag-peel` — peels the tag to its commit, or aborts.
+- `release-state` — classifies the Release at `$last`; zero assets aborts as gem-less.
+- `baseline` — the peeled commit introduced the version's dated CHANGELOG heading.
+- `window` — scans `$last..main` for shipping commits through the shipping pathspec and grades the Window/Do table; failing only when you judge a release is needed now, with your reason.
+- `pre-flight-guard` — the ask's pre-flight guard holds.
 
 ## The ask, when due
 
 1. **Pre-flight guard.** Only a lane where `gh auth status` exits 0 files the ask. Authentication is `gh`'s standard credential interface, `GH_TOKEN`: a non-Actions executor MUST have `GH_TOKEN` securely injected at its point of use. This brief names it only, never a token value, a storage location or a provisioning mechanism. Skip if any open title from `gh api --paginate "repos/developerz-ai/wurk/issues?state=open" | jq -r '.[] | select(.pull_request == null) | .title'` or `gh api --paginate "repos/developerz-ai/wurk/pulls?state=open" | jq -r '.[].title'` matches `^Release|^release:`.
-2. Re-run the Decide block on fresh `main`; still due, or stop.
+2. Re-run the Decide block on fresh `main`; still needed, or stop.
 3. `[Unreleased]` empty (a Dependabot-only window)? Add one `### Changed` line per in-window merged Dependabot PR that touched `wurk.gemspec`; other ecosystems owe nothing. In-window: `merged_at` at or after the committer date of the commit `$last` peels to (not the Release's `publishedAt`), from `gh api --paginate "repos/developerz-ai/wurk/pulls?state=closed&per_page=100"`.
 4. `RELEASE.md` → *Cutting a release*: bump `lib/wurk/version.rb`, `bundle exec rake release:relock_demo`, move `[Unreleased]` under `## [<next>] - <today>`, `bin/check`.
 5. One PR, `release: <next>`, nothing else; it merges on green, and that is the release: `release.yml` publishes the gem, then tags the merge commit. Never tag, never `gem push` by hand: a tag pushed without a version bump is what made every gem-less release in wurk#420.
