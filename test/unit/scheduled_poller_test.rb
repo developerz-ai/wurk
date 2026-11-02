@@ -8,6 +8,13 @@ require_relative '../test_helper'
 class ScheduledPollerTest < Wurk::Test::UnitCase
   parallelize_me!
 
+  class PromotionStamp
+    def call(_klass, job, _queue, _pool)
+      job['promoted_by_middleware'] = true
+      yield
+    end
+  end
+
   def setup
     super
     @ns       = "sched-#{Process.pid}-#{object_id}"
@@ -218,6 +225,274 @@ class ScheduledPollerTest < Wurk::Test::UnitCase
     assert_equal 'push blew up', captured.first.message
   end
 
+  # --- claim: a failure costs a delay or a duplicate, never the job -----
+
+  def test_a_member_stays_in_its_set_until_its_push_succeeded
+    job = schedule_job(set: @schedule, at: Time.now.to_f - 5)
+    seen = nil
+    pool = @pool
+    set = @schedule
+    enq = enq_with_push { |_| seen = pool.with { |c| c.call('ZRANGE', set, 0, -1) } }
+
+    enq.enqueue_jobs([@schedule])
+
+    assert_equal [Wurk.dump_json(job)], seen
+    assert_equal(0, @pool.with { |c| c.call('ZCARD', @schedule) })
+  end
+
+  def test_client_middleware_runs_on_promotion
+    @config.client_middleware.add(PromotionStamp)
+    schedule_job(set: @schedule, at: Time.now.to_f - 5)
+
+    Wurk::Scheduled::Enq.new(@config).enqueue_jobs([@schedule])
+
+    queued = @pool.with { |c| c.call('LRANGE', @queue_list, 0, -1) }.map { |raw| JSON.parse(raw) }
+
+    assert_equal([true], queued.map { |job| job['promoted_by_middleware'] })
+  end
+
+  def test_a_middleware_halting_the_push_still_consumes_the_member
+    schedule_job(set: @schedule, at: Time.now.to_f - 5)
+
+    enq_with_push { |_| nil }.enqueue_jobs([@schedule])
+
+    assert_equal(0, @pool.with { |c| c.call('ZCARD', @schedule) })
+  end
+
+  # Both the push and the write-back refused, as on a store out of memory: the
+  # destructive pop this replaced lost the job right here.
+  def test_a_refused_push_and_refused_write_back_keep_the_member
+    job = schedule_job(set: @schedule, at: Time.now.to_f - 5)
+    capture_errors
+    enq = enq_with_push { |_| raise RedisClient::OutOfMemoryError, 'OOM' }
+    enq.instance_variable_set(:@config, WriteBackFailingConfig.new(@config))
+
+    enq.enqueue_jobs([@schedule])
+
+    assert_equal([Wurk.dump_json(job)], @pool.with { |c| c.call('ZRANGE', @schedule, 0, -1) })
+  end
+
+  # The server applied the claim and the reply never arrived.
+  def test_a_lost_claim_reply_loses_nothing_and_the_lease_brings_the_job_back
+    job = schedule_job(set: @schedule, at: Time.now.to_f - 5)
+    @config[:scheduled_claim_lease] = 0.05
+    capture_errors
+    enq = Wurk::Scheduled::Enq.new(@config)
+    enq.instance_variable_set(:@config, ReplyLosingConfig.new(@config))
+
+    enq.enqueue_jobs([@schedule])
+
+    assert_equal 0, @pool.with { |c| c.call('LLEN', @queue_list) }, 'nothing was seen, so nothing was pushed'
+    assert_equal(1, @pool.with { |c| c.call('ZCARD', @schedule) })
+
+    sleep_until { @pool.with { |c| c.call('ZCOUNT', @schedule, '-inf', Time.now.to_f.to_s) } == 1 }
+    Wurk::Scheduled::Enq.new(@config).enqueue_jobs([@schedule])
+
+    assert_equal [job['jid']], queued_jids
+  end
+
+  # kill -9 between the claim and the push.
+  def test_a_process_dying_after_its_claim_loses_nothing
+    job = schedule_job(set: @schedule, at: Time.now.to_f - 5)
+    @config[:scheduled_claim_lease] = 0.05
+    pid = fork do
+      Wurk::Scheduled::Enq.new(@config).send(:claim_due, @schedule, Time.now.to_f.to_s)
+      Process.kill('KILL', Process.pid)
+    end
+    Process.wait(pid)
+
+    assert_equal 0, @pool.with { |c|
+      c.call('ZCOUNT', @schedule, '-inf', (Time.now.to_f - 1).to_s)
+    }, 'the claim applied'
+    sleep_until { @pool.with { |c| c.call('ZCOUNT', @schedule, '-inf', Time.now.to_f.to_s) } == 1 }
+    Wurk::Scheduled::Enq.new(@config).enqueue_jobs([@schedule])
+
+    assert_equal [job['jid']], queued_jids
+  end
+
+  # The accepted cost: the job ran, its ZREM did not land, so it runs again.
+  def test_a_failed_settle_duplicates_rather_than_drops
+    schedule_job(set: @schedule, at: Time.now.to_f - 5)
+    @config[:scheduled_claim_lease] = 0.05
+    captured = capture_errors
+    enq = Wurk::Scheduled::Enq.new(@config)
+    enq.instance_variable_set(:@config, SettleFailingConfig.new(@config))
+
+    enq.enqueue_jobs([@schedule])
+
+    assert_equal(%w[scheduler_settle], captured.map { |(_, ctx)| ctx[:context] })
+    assert_equal(1, @pool.with { |c| c.call('LLEN', @queue_list) })
+    assert_equal(1, @pool.with { |c| c.call('ZCARD', @schedule) })
+  end
+
+  def test_concurrent_pollers_promote_each_member_once
+    jobs = Array.new(60) { |i| schedule_job(set: @schedule, at: Time.now.to_f - 60 + i) }
+
+    Array.new(4) { Thread.new { Wurk::Scheduled::Enq.new(@config).enqueue_jobs([@schedule]) } }.each(&:join)
+
+    assert_equal jobs.map { |job| job['jid'] }.sort, queued_jids.sort
+  end
+
+  def test_a_drain_spans_many_claim_batches_in_score_order
+    jobs = Array.new((Wurk::Scheduled::Enq::CLAIM_BATCH * 2) + 3) do |i|
+      schedule_job(set: @schedule, at: Time.now.to_f - 60 + i)
+    end
+
+    Wurk::Scheduled::Enq.new(@config).enqueue_jobs([@schedule])
+
+    assert_equal jobs.map { |job| job['jid'] }, queued_jids.reverse
+  end
+
+  # A claimed batch must not sit out a full lease because shutdown arrived.
+  def test_terminate_hands_the_rest_of_the_batch_straight_back
+    jobs = Array.new(3) { |i| schedule_job(set: @schedule, at: Time.now.to_f - 60 + i) }
+    enq = Wurk::Scheduled::Enq.new(@config)
+    client = Object.new
+    client.define_singleton_method(:push) { |_| enq.terminate }
+    enq.instance_variable_set(:@client, client)
+
+    enq.enqueue_jobs([@schedule])
+
+    now = Time.now.to_f.to_s
+
+    assert_equal(jobs.size - 1, @pool.with { |c| c.call('ZCOUNT', @schedule, '-inf', now) })
+  end
+
+  def test_a_store_refusing_writes_during_the_claim_is_reported_and_the_sibling_set_still_drains
+    sets = [@schedule, @retry]
+    sets.each { |set| schedule_job(set: set, at: Time.now.to_f - 10) }
+    captured = capture_errors
+    enq = Wurk::Scheduled::Enq.new(@config)
+    enq.instance_variable_set(:@config, PopFailingConfig.new(@config, RedisClient::OutOfMemoryError.new('OOM')))
+
+    enq.enqueue_jobs(sets)
+
+    assert_equal(1, @pool.with { |c| c.call('ZCARD', @schedule) })
+    assert_equal(0, @pool.with { |c| c.call('ZCARD', @retry) })
+    assert_equal([@schedule], captured.map { |(_, ctx)| ctx[:set] })
+  end
+
+  # With reliable_push! a promoted job must reach Redis before its member goes, or
+  # a crash loses the only copy.
+  def test_a_tripped_reliable_push_circuit_does_not_take_promoted_jobs_into_memory
+    with_reliable_push do
+      job = schedule_job(set: @schedule, at: Time.now.to_f - 5)
+      Wurk::Client::Buffered.circuit.trip(@pool)
+
+      Wurk::Scheduled::Enq.new(@config).enqueue_jobs([@schedule])
+
+      assert_equal 0, Wurk::Client::Buffered.buffer_size
+      assert_equal [job['jid']], queued_jids
+      assert_equal(0, @pool.with { |c| c.call('ZCARD', @schedule) })
+    end
+  end
+
+  def test_a_failing_promotion_under_reliable_push_raises_into_the_release_path
+    with_reliable_push do
+      job = schedule_job(set: @schedule, at: Time.now.to_f - 5)
+      capture_errors
+      down = Object.new
+      down.define_singleton_method(:with) { |**, &_| raise RedisClient::CannotConnectError, 'down' }
+      enq = Wurk::Scheduled::Enq.new(@config)
+      enq.instance_variable_set(:@client, Wurk::Client.new(pool: down, config: @config))
+
+      enq.enqueue_jobs([@schedule])
+
+      assert_equal 0, Wurk::Client::Buffered.buffer_size
+      assert_equal([Wurk.dump_json(job)], @pool.with { |c| c.call('ZRANGE', @schedule, 0, -1) })
+    end
+  end
+
+  # A deterministic error on one job's key says nothing about the rest of the batch.
+  def test_a_job_failing_on_its_own_key_does_not_hold_back_the_batch
+    broken = "#{@queue}-broken"
+    @pool.with { |c| c.call('SET', "queue:#{broken}", 'not-a-list') }
+    @cleanup_keys << "queue:#{broken}"
+    poison = schedule_job(set: @schedule, at: Time.now.to_f - 60, queue: broken)
+    healthy = Array.new(25) { |i| schedule_job(set: @schedule, at: Time.now.to_f - 50 + i) }
+    captured = capture_errors
+
+    Wurk::Scheduled::Enq.new(@config).enqueue_jobs([@schedule])
+
+    assert_equal healthy.map { |job| job['jid'] }.sort, queued_jids.sort
+    assert_equal([Wurk.dump_json(poison)], @pool.with { |c| c.call('ZRANGE', @schedule, 0, -1) })
+    @pool.with { |c| c.call('SREM', 'queues', broken) }
+
+    assert_equal 1, captured.size, 'reported once per lease, not per poll'
+  end
+
+  def test_a_poison_job_is_left_under_its_lease_rather_than_retried_every_poll
+    broken = "#{@queue}-broken"
+    @pool.with { |c| c.call('SET', "queue:#{broken}", 'not-a-list') }
+    @cleanup_keys << "queue:#{broken}"
+    schedule_job(set: @schedule, at: Time.now.to_f - 60, queue: broken)
+    captured = capture_errors
+    enq = Wurk::Scheduled::Enq.new(@config)
+
+    3.times { enq.enqueue_jobs([@schedule]) }
+
+    @pool.with { |c| c.call('SREM', 'queues', broken) }
+
+    assert_equal 1, captured.size
+  end
+
+  # LOADING and Dragonfly's out-of-memory reply are plain CommandErrors, yet the
+  # whole store is refusing, so another nine attempts would only add noise.
+  def test_a_store_refusing_as_a_plain_command_error_ends_the_batch
+    2.times { |i| schedule_job(set: @schedule, at: Time.now.to_f - 60 + i) }
+    capture_errors
+    ['LOADING Dragonfly is loading the dataset in memory', 'ERR Out of memory'].each do |reply|
+      calls = 0
+      enq_with_push do |_|
+        calls += 1
+        raise RedisClient::CommandError, reply
+      end.enqueue_jobs([@schedule])
+
+      assert_equal 1, calls, reply
+    end
+  end
+
+  # A host far behind must not cut a lease short, and one far ahead must not take
+  # another host's lease for due.
+  def test_the_lease_runs_on_the_server_clock
+    schedule_job(set: @schedule, at: Time.now.to_f - 5)
+    @pool.with do |c|
+      claim = ->(now) { Wurk::Lua::Loader.eval_cached(c, :scheduled_claim, keys: [@schedule], argv: [now, 60, 10]) }
+
+      assert_equal 1, claim.call(Time.now.to_f + 3600).size, 'the first claim takes the job'
+      assert_empty claim.call(Time.now.to_f + 3600), 'a clock an hour ahead must not see it as due'
+      assert_operator c.call('ZSCORE', @schedule, c.call('ZRANGE', @schedule, 0, 0).first).to_f, :>, Time.now.to_f + 30
+    end
+  end
+
+  # A starved local pool says nothing about the payload.
+  def test_a_starved_pool_does_not_bury_the_member
+    job = schedule_job(set: @schedule, at: Time.now.to_f - 5)
+    capture_errors
+    enq = enq_with_push { |_| raise ConnectionPool::TimeoutError, 'starved' }
+
+    enq.enqueue_jobs([@schedule])
+
+    assert_equal([Wurk.dump_json(job)], @pool.with { |c| c.call('ZRANGE', @schedule, 0, -1) })
+    assert_equal(0, @pool.with { |c| c.call('ZCARD', Wurk::Keys::DEAD) })
+  end
+
+  # --- first sweep ------------------------------------------------------
+
+  def test_the_first_sweep_is_jittered_across_a_fleet
+    waits = Array.new(12) { first_sweep_wait(Wurk::Scheduled::Poller.new(@config)) }
+
+    assert_operator waits.min, :>=, Wurk::Scheduled::Poller::INITIAL_WAIT
+    assert_operator waits.max, :<, Wurk::Scheduled::Poller::INITIAL_WAIT + Wurk::Scheduled::Poller::INITIAL_JITTER
+    assert_operator waits.max - waits.min, :>, 1
+  end
+
+  def test_an_explicit_initial_wait_is_taken_exactly
+    @config[:scheduler_initial_wait] = 0.25
+
+    assert_in_delta 0.25, first_sweep_wait(Wurk::Scheduled::Poller.new(@config))
+  end
+
   # K20: a non-Redis push failure is permanent (it fails the same way on every
   # retry), so the popped member lands in dead byte-for-byte instead of vanishing.
   def test_permanently_failing_push_moves_the_member_to_dead
@@ -234,7 +509,28 @@ class ScheduledPollerTest < Wurk::Test::UnitCase
     end
   end
 
-  # A Redis error on the push is transient: the member goes back into its own
+  # A MULTI still applies the ZREM after a refused ZADD: Dragonfly at maxmemory
+  # refuses it that way, a dead set of the wrong type does on any server.
+  def test_a_refused_bury_keeps_the_member_scheduled
+    job = schedule_job(set: @schedule, at: Time.now.to_f - 5)
+    @pool.with { |c| c.call('SET', Wurk::Keys::DEAD, 'not a sorted set') }
+    capture_errors
+    enq = enq_with_push { |_| raise ArgumentError, 'rejected payload' }
+
+    begin
+      enq.enqueue_jobs([@schedule])
+    rescue RedisClient::CommandError
+      nil
+    end
+
+    @pool.with do |c|
+      assert_equal [Wurk.dump_json(job)], c.call('ZRANGE', @schedule, 0, -1)
+    ensure
+      c.call('DEL', Wurk::Keys::DEAD)
+    end
+  end
+
+  # A Redis error on the push is transient: the member is handed back to its own
   # set, past this drain's window, so the next poll retries it.
   def test_push_failing_on_redis_puts_the_member_back_in_its_set
     job = schedule_job(set: @schedule, at: Time.now.to_f - 5)
@@ -247,15 +543,15 @@ class ScheduledPollerTest < Wurk::Test::UnitCase
 
     enq.enqueue_jobs([@schedule])
 
-    assert_equal 1, calls, 'the restored member must not be re-popped within the same drain'
+    assert_equal 1, calls, 'the released member must not be re-claimed within the same drain'
     @pool.with do |c|
       assert_equal [Wurk.dump_json(job)], c.call('ZRANGE', @schedule, 0, -1)
       assert_equal 0, c.call('ZCARD', Wurk::Keys::DEAD)
     end
   end
 
-  # When the write-back itself fails, both failures are reported and the drain
-  # carries on.
+  # When the move to dead itself fails, both failures are reported and the drain
+  # carries on; the member stays in its set under its lease.
   def test_restore_failure_is_reported_not_raised
     schedule_job(set: @schedule, at: Time.now.to_f - 5)
     captured = capture_errors
@@ -301,9 +597,8 @@ class ScheduledPollerTest < Wurk::Test::UnitCase
     enq
   end
 
-  # ZPOPBYSCORE claims no apply-safety, so a read timeout reaches #drain_set
-  # instead of being replayed. The outcome of that pop is unknown, so the set's
-  # drain ends there while its sibling still drains on the same tick.
+  # A read timeout on the claim reaches #drain_set instead of being replayed. The
+  # set's drain ends there while its sibling still drains on the same tick.
   def test_pop_read_timeout_ends_the_set_and_leaves_the_sibling_draining
     drain_with_failing_pop
 
@@ -311,8 +606,7 @@ class ScheduledPollerTest < Wurk::Test::UnitCase
     assert_equal 0, @pool.with { |c| c.call('ZCARD', @retry) }, 'the sibling set must still drain'
   end
 
-  # Unknown outcome, not "nothing due": a pop that may have taken a job down
-  # with it is reported rather than swallowed.
+  # Unknown outcome, not "nothing due", so it is reported rather than swallowed.
   def test_pop_read_timeout_is_reported_with_the_set_it_hit
     captured = drain_with_failing_pop
     sets = captured.map { |(_, ctx)| ctx[:set] }
@@ -340,17 +634,48 @@ class ScheduledPollerTest < Wurk::Test::UnitCase
     captured
   end
 
-  # Fails the first pop, then is the real config — the shape of a read timeout
-  # landing on ZPOPBYSCORE after the pool has refused to replay it.
+  def with_reliable_push
+    Wurk::Client.reliable_push!
+    Wurk::Client::Buffered.reset!
+    yield
+  ensure
+    Wurk::Client::Buffered.reset!
+  end
+
+  def queued_jids
+    @pool.with { |c| c.call('LRANGE', @queue_list, 0, -1) }.map { |raw| JSON.parse(raw)['jid'] }
+  end
+
+  def sleep_until(timeout: 5)
+    deadline = Process.clock_gettime(Process::CLOCK_MONOTONIC) + timeout
+    until yield
+      flunk 'condition never held' if Process.clock_gettime(Process::CLOCK_MONOTONIC) > deadline
+      Thread.pass
+    end
+  end
+
+  # What the poller would ask its condition variable to sleep for.
+  def first_sweep_wait(poller)
+    recorded = nil
+    sleeper = Object.new
+    sleeper.define_singleton_method(:wait) { |_mutex, timeout| recorded = timeout }
+    poller.instance_variable_set(:@sleeper, sleeper)
+    poller.send(:initial_wait)
+    recorded
+  end
+
+  # Fails the first claim, then is the real config: the shape of a read timeout
+  # landing on the claim after the pool has refused to replay it.
   class PopFailingConfig
-    def initialize(real)
+    def initialize(real, error = RedisClient::ReadTimeoutError.new('pop timed out'))
       @real = real
+      @error = error
       @calls = 0
     end
 
     def redis(**, &)
       @calls += 1
-      raise RedisClient::ReadTimeoutError, 'pop timed out' if @calls == 1
+      raise @error if @calls == 1
 
       @real.redis(**, &)
     end
@@ -361,6 +686,36 @@ class ScheduledPollerTest < Wurk::Test::UnitCase
 
     def method_missing(name, ...)
       @real.public_send(name, ...)
+    end
+  end
+
+  # Passes the first checkout (the claim) through and refuses the rest.
+  class WriteBackFailingConfig < PopFailingConfig
+    def redis(**, &)
+      @calls += 1
+      raise RedisClient::OutOfMemoryError, 'OOM' if @calls > 1
+
+      @real.redis(**, &)
+    end
+  end
+
+  # Applies the first checkout on the server, then loses the reply.
+  class ReplyLosingConfig < PopFailingConfig
+    def redis(**, &)
+      @calls += 1
+      reply = @real.redis(**, &)
+      raise RedisClient::ReadTimeoutError, 'reply lost' if @calls == 1
+
+      reply
+    end
+  end
+
+  # Fails only the ZREM that settles a batch.
+  class SettleFailingConfig < PopFailingConfig
+    def redis(idempotent: false, &)
+      raise RedisClient::CannotConnectError, 'down' if idempotent
+
+      @real.redis(&)
     end
   end
 

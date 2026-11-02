@@ -56,6 +56,46 @@ class SwarmForkHygieneTest < Wurk::Test::UnitCase
     end
   end
 
+  # Co-hosted, the parent's web threads hold these pools across a respawn. A
+  # terminal shutdown on the fork path raised PoolShuttingDownError in them.
+  def test_host_threads_keep_working_through_respawns
+    swarm = Wurk::Swarm.new(topology: Wurk::Topology.flat(count: 1, queues: ["#{@ns}-q"], concurrency: 1),
+                            config: @config, shutdown_timeout: SHUTDOWN_TIMEOUT)
+    pid = swarm.boot(install_signals: false).first
+    pool = @config.redis_pool
+    errors = []
+    done = false
+    pushes = 0
+    hosts = Array.new(4) do
+      Thread.new do
+        until done
+          begin
+            pool.with { |conn| conn.call('PING') }
+            pushes += 1
+          rescue StandardError => e
+            errors << e.class
+          end
+        end
+      end
+    end
+    supervisor = Thread.new { swarm.supervise }
+    2.times do
+      ::Process.kill('KILL', pid)
+
+      assert wait_until { (swarm.children.keys - [pid]).any? }, 'the slot was never respawned'
+      pid = swarm.children.keys.first
+    end
+    done = true
+    hosts.each(&:join)
+
+    assert_empty errors.uniq
+    assert_operator pushes, :>, 0
+  ensure
+    done = true
+    swarm.shutdown(timeout: SHUTDOWN_TIMEOUT)
+    stop_supervisor_thread(supervisor, 10)
+  end
+
   private
 
   def socket_inodes

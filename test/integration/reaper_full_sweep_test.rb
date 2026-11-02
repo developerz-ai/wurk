@@ -23,7 +23,7 @@ class ReaperFullSweepTest < Wurk::Test::UnitCase
     @observer  = RedisClient.config(url: Wurk::Test.redis_url).new_client
     # grace: 0 — the legacy case below seeds a heartbeat-judged list and
     # reclaims it at once; the grace has its own cases in FetcherReaperTest.
-    @reaper    = Wurk::Fetcher::Reaper.new(@config, lock_key: "rf:#{@ns}", full_lock_key: "rff:#{@ns}", grace: 0)
+    @reaper    = Wurk::Fetcher::Reaper.new(@config, lock_key: "rf:#{@ns}", grace: 0)
     @child_pid = nil
   end
 
@@ -47,8 +47,7 @@ class ReaperFullSweepTest < Wurk::Test::UnitCase
 
     kill_child # kill -9 + reap, so the OS reports the owner pid as dead
 
-    assert_equal 0, @reaper.reclaim!, 'scoped sweep ignores an unserved queue'
-    assert_equal 1, @reaper.reclaim_full!, 'full sweep recovers the killed owner orphan'
+    assert_equal 1, @reaper.reclaim!, 'a sweep recovers the killed owner orphan'
     assert_equal 0, @observer.call('LLEN', priv), 'private list drained'
     assert_equal 1, @observer.call('LLEN', @orphan_q), 'job re-queued onto its public queue'
   end
@@ -61,8 +60,7 @@ class ReaperFullSweepTest < Wurk::Test::UnitCase
     legacy_priv = "#{@orphan_q}|#{Socket.gethostname}|#{DEAD_PID}|0"
     @observer.call('RPUSH', legacy_priv, payload('job-legacy'))
 
-    assert_equal 0, @reaper.reclaim!, 'scoped sweep ignores an unserved queue'
-    assert_equal 1, @reaper.reclaim_full!, 'full sweep recovers the pre-nonce orphan'
+    assert_equal 1, @reaper.reclaim!, 'a sweep recovers the pre-nonce orphan'
     assert_equal 0, @observer.call('LLEN', legacy_priv), 'private list drained'
     assert_equal 1, @observer.call('LLEN', @orphan_q), 'job re-queued onto its public queue'
   end

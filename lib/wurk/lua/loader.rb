@@ -63,6 +63,18 @@ module Wurk
         # Run a pipeline that contains EVALSHAs, recovering from a flushed script
         # cache the way a pipeline forces us to.
         #
+        # #eval_cached for a script that a re-send would apply twice: redis-client
+        # replays `call` on a dropped socket, never `call_once`. NOSCRIPT proves
+        # nothing ran, so its recovery may send again.
+        def eval_once(redis, name, keys:, argv:)
+          redis.call_once('EVALSHA', SHAS.fetch(name), keys.size, *keys, *argv)
+        rescue RedisClient::CommandError => e
+          raise unless noscript?(e)
+
+          redis.call('SCRIPT', 'LOAD', SCRIPTS.fetch(name))
+          redis.call_once('EVALSHA', SHAS.fetch(name), keys.size, *keys, *argv)
+        end
+
         # A pipelined EVALSHA surfaces NOSCRIPT only when the pipeline finalizes
         # — never to #eval_cached's inline rescue, which has already returned by
         # then. A pipeline is not a transaction: by the time that error is
@@ -74,7 +86,7 @@ module Wurk
         # That is why the block must be replay-safe: it is handed the pipeline
         # and the eval method to route through, and may run twice. Both of
         # Fetcher::Reliable's callers pipeline commands that are (a replayed LREM
-        # removes nothing, a replayed reliable_requeue is LREM-guarded, a
+        # removes nothing, a replayed reliable_requeue is LPOS-guarded, a
         # replayed fetch_slot claims a different job into the same private
         # list), and so is Heartbeat's beat (every write converges).
         def pipelined_eval(redis)

@@ -268,17 +268,17 @@ class ReliableFetchParityTest < Wurk::Test::UnitCase
     assert_equal 0, redis('LLEN', "queue:#{@q}"), 'a SIGKILLed worker leaves its job parked, not lost'
     assert_equal 1, copies(job).size
 
-    assert_equal 1, reaper.reclaim_full!
+    assert_equal 1, reaper.reclaim!
     assert_equal ["queue:#{@q}"], copies(job), 'recovered into its public queue, exactly once'
 
-    assert_equal 0, reaper.reclaim_full!, 'a second sweep finds nothing to recover'
+    assert_equal 0, reaper.reclaim!, 'a second sweep finds nothing to recover'
     assert_equal 1, redis('LLEN', "queue:#{@q}")
   end
 
   def test_recovered_job_is_fetchable_again
     job = push(@q, 'orphan')
     fetch_and_die(@q)
-    reaper.reclaim_full!
+    reaper.reclaim!
 
     assert_equal job, fetcher(@q).retrieve_work&.job
   end
@@ -287,7 +287,7 @@ class ReliableFetchParityTest < Wurk::Test::UnitCase
     job = push(@q, 'mine')
     uow = fetcher(@q).retrieve_work
 
-    assert_equal 0, reaper.reclaim_full!
+    assert_equal 0, reaper.reclaim!
     refute_includes copies(job), "queue:#{@q}", 'a live worker keeps its in-flight job'
     assert_equal job, uow.job
   end
@@ -296,7 +296,7 @@ class ReliableFetchParityTest < Wurk::Test::UnitCase
     job = push(@q, 'orphan')
     jid = Wurk.load_json(job)['jid']
     fetch_and_die(@q)
-    reaper.reclaim_full!
+    reaper.reclaim!
 
     key = "super_fetch:recovered:#{jid}"
 
@@ -317,7 +317,7 @@ class ReliableFetchParityTest < Wurk::Test::UnitCase
 
       fetch_and_die(@q)
       crashes += 1
-      reaper.reclaim_full!
+      reaper.reclaim!
     end
 
     assert_equal 0, redis('LLEN', "queue:#{@q}"), 'a poison pill is not requeued forever'
@@ -337,12 +337,12 @@ class ReliableFetchParityTest < Wurk::Test::UnitCase
     job = push(@q, 'poison')
     3.times do |i|
       fetch_and_die(@q)
-      reaper.reclaim_full!
+      reaper.reclaim!
 
       assert_equal ["queue:#{@q}"], copies(job), "recovery #{i + 1} requeues"
     end
     fetch_and_die(@q)
-    reaper.reclaim_full!
+    reaper.reclaim!
 
     assert_empty copies(job)
     assert_equal 1, redis('ZCARD', 'dead')

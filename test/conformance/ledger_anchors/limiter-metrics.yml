@@ -136,7 +136,7 @@
       return
 
 - entry: '`:max_iteration_runtime` is accepted but not consumed'
-  anchor: lib/wurk/configuration.rb#L31
+  anchor: lib/wurk/configuration.rb#L33
   fragment: |-
     max_iteration_runtime: nil,
 

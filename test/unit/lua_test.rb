@@ -36,7 +36,7 @@ class LuaTest < Wurk::Test::UnitCase
 
   def test_scripts_registry_holds_expected_keys
     assert_equal(
-      %i[zpopbyscore reliable_schedule_promote reliable_requeue
+      %i[zpopbyscore reliable_schedule_promote scheduled_claim reliable_requeue requeue_unit reliable_reclaim
          batch_push batch_schedule batch_ack_success batch_ack_failed batch_ack_complete batch_invalidate
          batch_append_callback batch_hold batch_kid_done batch_remove_jobs batch_delete
          fast_delete_job fast_delete_by_class release_if_owner leader_campaign cron_claim_fire
@@ -76,7 +76,9 @@ class LuaTest < Wurk::Test::UnitCase
 
   # A registered script with no caller under lib/ is a phantom registration:
   # dead Lua shipped in every process and a SHA kept warm for nothing.
-  # lib/wurk/lua.rb is excluded — it declares the 7 inline names as SCRIPTS
+  # :zpopbyscore is exempt: Scheduled::Enq::LUA_ZPOPBYSCORE is public surface per
+  # spec §16, though Enq now claims instead of popping.
+  # lib/wurk/lua.rb is excluded — it declares the inline names as SCRIPTS
   # hash keys — and lib/wurk/lua/** is excluded too: its Loader consumes
   # SCRIPTS generically (SCRIPTS.fetch / SOURCE_LIST / script_load_all /
   # load_missing), so neither can ever prove a caller exists.
@@ -86,9 +88,33 @@ class LuaTest < Wurk::Test::UnitCase
     sources = Dir.glob(File.join(LIB, '**', '*.rb'))
                  .reject { |path| path == registry || path.start_with?(loader) }
                  .map { |path| File.read(path) }
-    orphaned = Wurk::Lua::SCRIPTS.keys.reject { |name| sources.any? { |src| src.match?(/:#{name}\b/) } }
+    orphaned = (Wurk::Lua::SCRIPTS.keys - [:zpopbyscore]).reject { |name| sources.any? { |src| src.match?(/:#{name}\b/) } }
 
     assert_empty orphaned, "no :name caller under lib/ for: #{orphaned.sort.join(', ')}"
+  end
+
+  # --- scheduled_claim ---------------------------------------------------
+
+  def test_scheduled_claim_leases_due_members_without_removing_them
+    set_key = "#{@ns}:sched"
+    Wurk.redis do |c|
+      c.call('ZADD', set_key, 100, 'old', 200, 'mid', 900, 'future')
+      seconds, micros = c.call('TIME')
+      claimed = Wurk::Lua::Loader.eval_cached(c, :scheduled_claim, keys: [set_key], argv: [500, 60, 1])
+
+      assert_equal ['old'], claimed
+      assert_equal %w[mid future old], c.call('ZRANGE', set_key, 0, -1)
+      assert_in_delta seconds.to_f + (micros.to_f / 1_000_000) + 60, c.call('ZSCORE', set_key, 'old').to_f, 5
+    end
+  end
+
+  def test_scheduled_claim_returns_empty_when_nothing_is_due
+    set_key = "#{@ns}:sched-empty"
+    Wurk.redis do |c|
+      c.call('ZADD', set_key, 900, 'future')
+
+      assert_empty Wurk::Lua::Loader.eval_cached(c, :scheduled_claim, keys: [set_key], argv: [500, 60, 10])
+    end
   end
 
   # --- zpopbyscore: verbatim from sidekiq-free.md §1.8 ---------------

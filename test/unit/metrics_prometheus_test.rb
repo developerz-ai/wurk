@@ -110,6 +110,36 @@ class MetricsPrometheusTest < Wurk::Test::UnitCase
     assert_in_delta(0.0, parse(@collector.render)['wurk_queue_latency_seconds'][{ 'queue' => 'broken' }])
   end
 
+  def test_reports_consumers_per_queue_from_process_info
+    @redis.call('SADD', Wurk::Keys::QUEUES_SET, 'watched', 'ghost')
+    id = "#{HOST}:9:#{NONCE}"
+    @redis.call('SADD', Wurk::Keys::PROCESSES, id)
+    @redis.call('HSET', id, 'beat', ::Time.now.to_f.to_s, 'busy', '0', 'info', ::JSON.generate('queues' => %w[watched]))
+    families = parse(@collector.render)
+
+    assert_in_delta(1.0, families['wurk_queue_consumers'][{ 'queue' => 'watched' }])
+    assert_in_delta(0.0, families['wurk_queue_consumers'][{ 'queue' => 'ghost' }])
+  end
+
+  def test_wurk_leader_reflects_whether_this_group_holds_the_lease
+    assert_in_delta(0.0, parse(@collector.render)['wurk_leader'][{}])
+    @redis.call('SET', Wurk::Leader::DEFAULT_KEY, "#{HOST}:9:#{NONCE}")
+    @now += 2
+
+    assert_in_delta(1.0, parse(@collector.render)['wurk_leader'][{}])
+    @redis.call('DEL', Wurk::Leader::DEFAULT_KEY)
+  end
+
+  def test_exposes_the_process_local_counters
+    before = Wurk::Metrics::ProcessCounters.value(:reaper_reclaimed)
+    Wurk::Metrics::ProcessCounters.increment(:reaper_reclaimed, 3)
+    Wurk::Metrics::ProcessCounters.increment(:fetch_errors)
+    families = parse(@collector.render)
+
+    assert_in_delta(before + 3.0, families['wurk_reaper_reclaimed_total'][{}])
+    assert_operator families['wurk_fetch_errors_total'][{}], :>=, 1
+  end
+
   private
 
   def seed

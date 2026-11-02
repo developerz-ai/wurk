@@ -110,10 +110,22 @@ module Wurk
       begin
         yield value
       rescue StandardError
-        Wurk.redis { |conn| conn.call('ZADD', @parent.name, @score, value) }
+        restore_after_failed_push
         raise
       end
       item
+    end
+
+    # Past maxmemory the push is refused, and so is a plain ZADD putting the
+    # entry back. Dragonfly refuses both forms: all that is left is the log.
+    def restore_after_failed_push
+      Wurk.redis do |conn|
+        conn.call('ZADD', @parent.name, @score, value)
+      rescue RedisClient::OutOfMemoryError => e
+        Fetcher::OomDrain.zadd(conn, e, @parent.name, @score, value)
+      end
+    rescue StandardError => e
+      Wurk.logger.error("#{@parent.name} entry lost, ZADD refused (#{e.class}): #{value}")
     end
   end
 end

@@ -3,6 +3,7 @@
 require 'zlib'
 require_relative 'component'
 require_relative 'dead_set'
+require_relative 'fetcher/oom_drain'
 
 module Wurk
   # Owns the retry pipeline. When perform raises, JobRetry decides whether to
@@ -88,8 +89,13 @@ module Wurk
     # Component's `handle_exception` delegates to `config.handle_exception`.
     # When initialized with a Capsule, that's not defined directly; route
     # through the underlying Configuration.
+    #
+    # Reporting a hook's failure from inside the failure path, through a logger or
+    # handler that is itself host code: it can't be allowed to raise from here.
     def handle_exception(ex, ctx = {})
       inner_config.handle_exception(ex, ctx)
+    rescue ::StandardError => e
+      warn "wurk-retry: error reporter raised #{e.class}: #{e.message}"
     end
 
     private
@@ -167,9 +173,19 @@ module Wurk
       return unless msg['backtrace']
       return if exception.backtrace.nil?
 
-      cleaned = (@backtrace_cleaner || ->(bt) { bt }).call(exception.backtrace)
+      cleaned = clean_backtrace(exception.backtrace)
       lines = msg['backtrace'] == true ? cleaned : cleaned[0...msg['backtrace'].to_i]
       msg['error_backtrace'] = compress_backtrace(lines)
+    end
+
+    # Host code, like the other hooks here: a raise out of this path is a job
+    # the Processor could not book, and it kills those.
+    def clean_backtrace(backtrace)
+      cleaned = @backtrace_cleaner ? @backtrace_cleaner.call(backtrace) : backtrace
+      cleaned.is_a?(::Array) ? cleaned : backtrace
+    rescue ::Exception => e # rubocop:disable Lint/RescueException
+      handle_exception(e, context: 'Error calling backtrace_cleaner')
+      backtrace
     end
 
     def retry_for_exceeded?(failed_at, retry_for)
@@ -182,9 +198,7 @@ module Wurk
       jitter = rand(10 * (count + 1))
       retry_at = ::Time.now.to_f + delay + jitter
       payload = Wurk.dump_json(msg)
-      redis do |conn|
-        conn.call('ZADD', Keys::RETRY, retry_at.to_s, payload)
-      end
+      zadd_past_maxmemory(Keys::RETRY, retry_at.to_s, payload)
       Wurk::Metrics::Statsd.increment(
         'jobs.retried',
         tags: ["worker:#{msg['class']}", "queue:#{msg['queue']}"]
@@ -194,6 +208,17 @@ module Wurk
       # class opted into tracking, same as the statsd call above is a no-op
       # without a client.
       Wurk::Middleware::Status.retrying(msg)
+    end
+
+    # A failing job has to be booked even at maxmemory: the fetcher can still
+    # drain a full Redis, and a failure it could not book would sit in the private
+    # list until the next reconcile, then run and fail again.
+    def zadd_past_maxmemory(key, score, member)
+      redis do |conn|
+        conn.call('ZADD', key, score, member)
+      rescue RedisClient::OutOfMemoryError => e
+        Wurk::Fetcher::OomDrain.zadd(conn, e, key, score, member)
+      end
     end
 
     def time_for(item)
@@ -208,9 +233,6 @@ module Wurk
     # Caller branches on strategy; seconds is meaningful only for :default.
     def delay_for(jobinst, count, exception, msg)
       rv = run_retry_in_block(jobinst, count, exception, msg)
-      # `10.minutes * count` (a Duration), `"60"` and `30.0` all mean seconds;
-      # Symbols have no #to_i, so `:kill` / `:discard` pass through intact.
-      rv = rv.to_i if rv.respond_to?(:to_i)
       default_delay = (count**4) + 15
 
       case rv
@@ -227,7 +249,10 @@ module Wurk
 
     def run_retry_in_block(jobinst, count, exception, msg)
       block = msg['wrapped'] ? wrapped_block(msg, :sidekiq_retry_in_block) : jobinst&.class&.sidekiq_retry_in_block
-      block&.call(count, exception, msg)
+      rv = block&.call(count, exception, msg)
+      # `10.minutes * count` (a Duration), `"60"` and `30.0` all mean seconds;
+      # Symbols have no #to_i, so `:kill` / `:discard` pass through intact.
+      rv.respond_to?(:to_i) ? rv.to_i : rv
     rescue ::Exception => e # rubocop:disable Lint/RescueException
       handle_exception(e, context: "Failure scheduling retry via `sidekiq_retry_in` on #{jobinst&.class&.name}")
       nil
@@ -274,13 +299,16 @@ module Wurk
 
     def send_to_morgue(msg)
       logger.info { "Adding dead #{msg['class']} job #{msg['jid']}" }
-      DeadSet.new.kill_raw(Wurk.dump_json(msg))
+      payload = Wurk.dump_json(msg)
+      DeadSet.new.kill_raw(payload)
+    rescue RedisClient::OutOfMemoryError
+      zadd_past_maxmemory(Keys::DEAD, ::Process.clock_gettime(::Process::CLOCK_REALTIME).to_s, payload)
     end
 
     def run_death_handlers(job, exception)
       inner_config.death_handlers.each do |handler|
         handler.call(job, exception)
-      rescue ::StandardError => e
+      rescue ::Exception => e # rubocop:disable Lint/RescueException
         handle_exception(e, context: 'Error calling death handler', job: job)
       end
     end

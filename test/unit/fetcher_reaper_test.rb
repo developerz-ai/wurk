@@ -66,11 +66,10 @@ class FetcherReaperTest < Wurk::Test::UnitCase
     # otherwise-recoverable job over the poison threshold.
     @salt         = SecureRandom.hex(8)
     @lock_key      = "#{Wurk::Fetcher::Reaper::LOCK_KEY}:#{@ns}"
-    @full_lock_key = "#{Wurk::Fetcher::Reaper::FULL_LOCK_KEY}:#{@ns}"
     # grace: 0 — these cases seed a list and reclaim it in the same breath; the
     # idle-time guard has its own cases below.
     @reaper        = Wurk::Fetcher::Reaper.new(@config, interval: 1, lock_key: @lock_key,
-                                                        full_lock_key: @full_lock_key, grace: 0)
+                                                        grace: 0)
     # Keys created outside @public_queue (full-sweep tests use foreign queues);
     # the whole-keyspace scan would see leftovers from prior tests otherwise.
     @extra_keys    = []
@@ -82,7 +81,7 @@ class FetcherReaperTest < Wurk::Test::UnitCase
     @pool.with do |c|
       keys = c.call('KEYS', "#{@public_queue}*")
       c.call('DEL', *keys) unless keys.empty?
-      c.call('DEL', @lock_key, @full_lock_key)
+      c.call('DEL', @lock_key)
       c.call('DEL', *@extra_keys) unless @extra_keys.empty?
     end
     cleanup_dead_set
@@ -130,15 +129,18 @@ class FetcherReaperTest < Wurk::Test::UnitCase
     assert_equal 0, @reaper.reclaim!
   end
 
-  def test_only_scans_served_queues
+  # The sweep lock is shared by the fleet. A sweep scoped to what the winner
+  # serves left a queue served by 1 process of 10 waiting for the lock to land on
+  # that one: about 13 intervals, a quarter of an hour at the default.
+  def test_a_periodic_sweep_reclaims_a_queue_this_process_does_not_serve
     other = Wurk::Keys.queue("#{@ns}-unserved")
     other_priv = "#{other}|#{@host}|#{DEAD_PID}|0"
+    @extra_keys << other
     @pool.with { |c| c.call('RPUSH', other_priv, payload('x')) }
 
-    reclaimed = @reaper.reclaim!
-
-    assert_equal 0, reclaimed, 'queues this process does not serve are left untouched'
-    assert_equal 1, llen(other_priv)
+    assert_equal 1, @reaper.reap
+    assert_equal 0, llen(other_priv)
+    assert_equal 1, llen(other)
   ensure
     @pool.with { |c| c.call('DEL', other_priv) }
   end
@@ -262,18 +264,10 @@ class FetcherReaperTest < Wurk::Test::UnitCase
     assert_equal 1, llen(key)
   end
 
-  def test_a_heartbeat_orphan_idle_past_the_grace_is_reclaimed
-    key = seed_private_list(DEAD_PID, %w[stale], host: 'other-host.example', nonce: SecureRandom.hex(6))
-    age(key, 120)
-
-    assert_equal 1, graced_reaper.reclaim!
-    assert_equal 0, llen(key)
-  end
-
   def test_the_full_sweep_honours_the_grace_too
     key = seed_private_list(DEAD_PID, %w[booting], host: 'other-host.example', nonce: SecureRandom.hex(6))
 
-    assert_equal 0, graced_reaper.reclaim_full!
+    assert_equal 0, graced_reaper.reclaim!
     assert_equal 1, llen(key)
   end
 
@@ -284,13 +278,9 @@ class FetcherReaperTest < Wurk::Test::UnitCase
     assert_equal 1, graced_reaper.reclaim!
   end
 
-  # Under an LFU maxmemory policy OBJECT IDLETIME is refused. The grace must
-  # not vanish with it: a remote worker that claimed before its first beat
-  # would be drained mid-job. The reaper keeps its own clock instead — the
-  # first sweep only starts it, a sweep `grace` seconds later drains.
-  def test_an_idle_time_refusal_keeps_the_grace_on_the_reapers_own_clock
-    key = seed_private_list(DEAD_PID, %w[lfu], host: 'other-host.example', nonce: SecureRandom.hex(6))
-    refuse_object('ERR An LFU maxmemory policy is selected')
+  # The first sweep only starts the clock; a sweep `grace` seconds later drains.
+  def test_a_list_is_drained_once_its_grace_has_run_out
+    key = seed_private_list(DEAD_PID, %w[stale], host: 'other-host.example', nonce: SecureRandom.hex(6))
     reaper = short_grace_reaper
 
     assert_equal 0, reaper.reclaim!, 'a list first seen orphaned this sweep is left alone'
@@ -301,14 +291,55 @@ class FetcherReaperTest < Wurk::Test::UnitCase
     assert_equal 1, reaper.reclaim!
   end
 
+  # A monitor polling LLEN refreshes a key's LRU clock. Reclaim must not care,
+  # or a dead owner's jobs wait for as long as something is watching them.
+  def test_reading_the_list_does_not_hold_off_its_reclaim
+    key = seed_private_list(DEAD_PID, %w[watched], host: 'other-host.example', nonce: SecureRandom.hex(6))
+    reaper = short_grace_reaper
+
+    assert_equal 0, reaper.reclaim!
+    deadline = Process.clock_gettime(Process::CLOCK_MONOTONIC) + SHORT_GRACE + 0.05
+    llen(key) while Process.clock_gettime(Process::CLOCK_MONOTONIC) < deadline
+
+    assert_equal 1, reaper.reclaim!
+  end
+
+  # The sweep lock rotates between processes. A list this process started the
+  # clock on is finished here, with no lock, or a fleet's reclaim would get
+  # slower with its size.
+  def test_a_settled_list_is_drained_without_winning_the_sweep_lock
+    key = seed_private_list(DEAD_PID, %w[rotated], host: 'other-host.example', nonce: SecureRandom.hex(6))
+    reaper = short_grace_reaper
+    reaper.reclaim!
+    @pool.with { |c| c.call('SET', @lock_key, 'someone-else', 'EX', 60) }
+    sleep SHORT_GRACE + 0.05
+
+    assert_equal 1, reaper.drain_settled
+    assert_equal 0, llen(key)
+  end
+
+  def test_the_loop_wakes_for_a_grace_running_out_rather_than_a_whole_interval
+    key = seed_private_list(DEAD_PID, %w[wake], host: 'other-host.example', nonce: SecureRandom.hex(6))
+    reaper = Wurk::Fetcher::Reaper.new(@config, interval: 30, lock_key: @lock_key,
+                                                grace: SHORT_GRACE)
+    reaper.start
+    sleep 0.05 # the loop is parked in its 30s wait when the sweep starts the grace
+    reaper.reclaim!
+
+    wait_until(timeout: 5) { llen(key).zero? }
+
+    assert_equal 0, llen(key)
+  ensure
+    reaper&.stop
+  end
+
   # The booting owner's case: by the time the clock runs out it has beaten,
   # and the heartbeat re-check spares it.
-  def test_without_idle_time_an_owner_that_beats_inside_the_grace_is_spared
+  def test_an_owner_that_beats_inside_the_grace_is_spared
     nonce = SecureRandom.hex(6)
     key = seed_private_list(DEAD_PID, %w[booting], host: 'other-host.example', nonce: nonce)
     identity = "other-host.example:#{DEAD_PID}:#{nonce}"
     @extra_keys << identity
-    refuse_object("ERR unknown command 'OBJECT'")
     reaper = short_grace_reaper
 
     assert_equal 0, reaper.reclaim!
@@ -318,33 +349,93 @@ class FetcherReaperTest < Wurk::Test::UnitCase
     end
     sleep SHORT_GRACE + 0.05
 
+    assert_equal 0, reaper.drain_settled, 'the loop thread re-checks the owner before draining'
     assert_equal 0, reaper.reclaim!
     assert_equal 1, llen(key)
   ensure
     @pool.with { |c| c.call('SREM', Wurk::Keys::PROCESSES, identity) }
   end
 
-  def test_an_idle_time_refusal_warns_once_per_reaper
-    log = capture_reaper_log
-    refuse_object("ERR unknown command 'OBJECT'")
-    reaper = short_grace_reaper
-    2.times { |i| seed_private_list(DEAD_PID + i, %w[x], host: 'other-host.example', nonce: SecureRandom.hex(6)) }
+  def test_the_grace_memory_is_bounded
+    grace = Wurk::Fetcher::OrphanGrace.new(60)
+    Wurk::Fetcher::OrphanGrace::MEMORY.times { |i| grace.recent?("k#{i}", [:owner]) }
 
-    reaper.reclaim!
-    sleep SHORT_GRACE + 0.05
-
-    assert_equal 2, reaper.reclaim!
-    assert_equal 1, log.string.scan('OBJECT IDLETIME is unavailable').size
-    assert_includes log.string, "unknown command 'OBJECT'"
+    assert grace.recent?('one-more', [:owner])
+    assert_equal 1, grace.size
   end
 
-  def test_fallback_clock_memory_is_bounded
-    grace = Wurk::Fetcher::OrphanGrace.new(@config, 60)
-    grace.instance_variable_set(:@idletime, false)
-    Wurk::Fetcher::OrphanGrace::MEMORY.times { |i| grace.recent?("k#{i}") }
+  def test_no_grace_means_no_waiting
+    grace = Wurk::Fetcher::OrphanGrace.new(0)
 
-    assert grace.recent?('one-more')
-    assert_equal 1, grace.instance_variable_get(:@first_seen).size
+    refute grace.recent?('k', [:owner])
+    assert_nil grace.next_due_in
+  end
+
+  def test_a_reclaim_moves_the_prometheus_counter
+    seed_private_list(DEAD_PID, %w[counted])
+    before = Wurk::Metrics::Prometheus.new(@config).render[/^wurk_reaper_reclaimed_total (\S+)/, 1].to_f
+
+    assert_equal 1, @reaper.reclaim!
+
+    after = Wurk::Metrics::Prometheus.new(@config).render[/^wurk_reaper_reclaimed_total (\S+)/, 1].to_f
+
+    assert_in_delta before + 1, after
+  end
+
+  # --- SCAN cost ---------------------------------------------------------
+
+  # One pass per sweep: a SCAN per served queue costs queues x keyspace / COUNT
+  # round trips, which on a big keyspace is minutes of Redis time per sweep.
+  def test_a_sweep_scans_the_keyspace_once_however_many_queues_it_serves
+    @capsule.queues = Array.new(200) { |i| "#{@queue_name}-#{i}" }
+    scans = count_scans
+
+    @reaper.reclaim!
+
+    assert_operator scans.call, :<=, (@pool.with { |c| c.call('DBSIZE') } / Wurk::Fetcher::Reaper::SCAN_COUNT) + 2
+  ensure
+    @capsule.queues = [@queue_name]
+  end
+
+  # A replacement's boot sweep is what recovers the sibling it replaces, however
+  # recently another process booted.
+  def test_every_boot_sweep_runs_with_no_lock_between_them
+    seed_private_list(DEAD_PID, %w[first])
+    other = Wurk::Fetcher::Reaper.new(@config, grace: 0)
+
+    assert_equal 1, @reaper.boot_reclaim!
+    seed_private_list(DEAD_PID, %w[second])
+
+    assert_equal 1, other.boot_reclaim!
+  end
+
+  # `processes` carries no TTL, so a Redis restarted from a snapshot over 60s old
+  # shows every live worker as a member with no hash until its next beat. Its jobs
+  # are running: reading it as dead re-runs them all.
+  def test_a_member_with_no_heartbeat_hash_still_waits_out_the_grace
+    nonce = SecureRandom.hex(6)
+    key = seed_private_list(DEAD_PID, %w[restarted], host: 'other-host.example', nonce: nonce)
+    identity = "other-host.example:#{DEAD_PID}:#{nonce}"
+    @pool.with { |c| c.call('SADD', Wurk::Keys::PROCESSES, identity) }
+
+    assert_equal 0, graced_reaper.reclaim!
+    assert_equal 1, llen(key)
+  ensure
+    @pool.with { |c| c.call('SREM', Wurk::Keys::PROCESSES, identity) }
+  end
+
+  # 25 CPU-bound jobs were measured holding a beat back 17.4s.
+  def test_the_default_grace_outlasts_a_beat_held_back_by_busy_jobs
+    assert_operator Wurk::Fetcher::Reaper::DEFAULT_GRACE, :>=, 30
+  end
+
+  # A swarm child's replacement shares its nonce, and the OS answers for the pid
+  # in no time: this is what a child crash recovers in about a second on.
+  def test_a_dead_sibling_of_this_process_tree_waits_for_no_grace
+    key = seed_private_list(DEAD_PID, %w[sibling])
+
+    assert_equal 1, Wurk::Fetcher::Reaper.new(@config, lock_key: @lock_key).reclaim!
+    assert_equal 0, llen(key)
   end
 
   # --- liveness: same host, foreign PID namespace ------------------------
@@ -455,14 +546,11 @@ class FetcherReaperTest < Wurk::Test::UnitCase
 
   # --- cluster lock ------------------------------------------------------
 
-  def test_reap_is_a_noop_when_both_locks_are_held_elsewhere
+  def test_reap_is_a_noop_when_the_lock_is_held_elsewhere
     seed_private_list(DEAD_PID, %w[a])
-    @pool.with do |c|
-      c.call('SET', @lock_key, 'other', 'EX', 30)
-      c.call('SET', @full_lock_key, 'other', 'EX', 30)
-    end
+    @pool.with { |c| c.call('SET', @lock_key, 'other', 'EX', 30) }
 
-    assert_equal 0, @reaper.reap, 'a process that loses both locks does not sweep'
+    assert_equal 0, @reaper.reap, 'a process that loses the lock does not sweep'
     assert_equal 1, llen(private_list(DEAD_PID))
   end
 
@@ -472,66 +560,73 @@ class FetcherReaperTest < Wurk::Test::UnitCase
     assert_equal 2, @reaper.reap
   end
 
-  # Losing the scoped lock but winning the (separate) hourly lock still runs the
-  # full sweep — the two gates are independent.
-  def test_reap_runs_full_sweep_when_only_scoped_lock_is_held
-    seed_private_list(DEAD_PID, %w[a b])
-    @pool.with { |c| c.call('SET', @lock_key, 'other', 'EX', 30) }
+  # A lock living a whole interval is still there at the winner's next tick, so a
+  # sole survivor swept every second interval: 180s rather than 120s.
+  def test_the_lock_lapses_before_the_winners_next_tick
+    @reaper.reap
 
-    assert_equal 2, @reaper.reap, 'full sweep reclaims even when the scoped lock is lost'
+    assert_operator(@pool.with { |c| c.call('PTTL', @lock_key) }, :<, @reaper.interval * 1000 * 0.9)
   end
 
-  # --- full-keyspace sweep (acceptance #4) -------------------------------
+  # Each move takes one job off the list once, so however many sweeps reach a
+  # list, a job's recovery is counted once.
+  def test_two_sweeps_racing_over_a_list_count_each_recovery_once
+    jobs = Array.new(20) { |i| "#{@ns}-race-#{i}" }
+    payloads = jobs.map { |jid| Wurk.dump_json('class' => 'X', 'args' => [], 'jid' => jid) }
+    @pool.with { |c| c.call('RPUSH', private_list(DEAD_PID), *payloads) }
+    other = Wurk::Fetcher::Reaper.new(@config, lock_key: @lock_key, grace: 0)
 
-  # The headline gap: a private list whose public queue this process does NOT
-  # serve (renamed/decommissioned queue, or a dead host's queue no survivor
-  # consumes) is invisible to the scoped sweep but recovered by the full one.
-  # One scenario: scoped sweep misses it, full sweep recovers it onto the
-  # foreign public queue and drains the private list. Cohesive — keep together.
-  def test_reclaim_full_reclaims_orphan_in_an_unserved_queue
+    [@reaper, other].map { |reaper| Thread.new { reaper.reclaim! } }.each(&:join)
+
+    assert_equal [1], jobs.map { |jid| Wurk::Middleware::PoisonPill.recovery_count(jid) }.uniq
+  ensure
+    @pool.with { |c| jobs&.each { |jid| c.call('DEL', "#{Wurk::Middleware::PoisonPill::KEY_PREFIX}#{jid}") } }
+  end
+
+  # --- lists of queues nobody here serves --------------------------------
+
+  # A renamed or decommissioned queue, or a dead host's queue no survivor consumes.
+  def test_reclaim_reclaims_orphan_in_an_unserved_queue
     foreign_q = Wurk::Keys.queue("#{@ns}-foreign")
     private_key = "#{foreign_q}|#{@host}|#{DEAD_PID}|0"
     @extra_keys.push(foreign_q, private_key)
     @pool.with { |c| c.call('RPUSH', private_key, payload('x'), payload('y')) }
 
-    # Scoped sweep can't see it (foreign_q isn't a served queue)...
-    assert_equal 0, @reaper.reclaim!, 'scoped sweep ignores unserved queues'
-    # ...but the full sweep recovers it to its own public queue.
-    assert_equal 2, @reaper.reclaim_full!
+    assert_equal 2, @reaper.reclaim!
     assert_equal 0, llen(private_key), 'orphan private list drained'
     assert_equal 2, llen(foreign_q), 'jobs re-queued onto the foreign public queue'
   end
 
-  def test_reclaim_full_leaves_a_live_owners_list_untouched
+  def test_reclaim_leaves_a_live_owners_list_untouched
     foreign_q = Wurk::Keys.queue("#{@ns}-live")
     # This very process — same incarnation, alive.
     private_key = "#{foreign_q}|#{@host}|#{Process.pid}|#{Wurk::Component::PROCESS_NONCE}|0"
     @extra_keys.push(foreign_q, private_key)
     @pool.with { |c| c.call('RPUSH', private_key, payload('z')) }
 
-    assert_equal 0, @reaper.reclaim_full!, 'a live owner is never reclaimed'
+    assert_equal 0, @reaper.reclaim!, 'a live owner is never reclaimed'
     assert_equal 1, llen(private_key)
   end
 
-  def test_reclaim_full_ignores_public_queues_and_malformed_keys
+  def test_reclaim_ignores_public_queues_and_malformed_keys
     @pool.with do |c|
       c.call('RPUSH', Wurk::Keys.queue("#{@ns}-plain"), payload('public')) # no pipe → not a private list
       c.call('RPUSH', "#{Wurk::Keys.queue("#{@ns}-bad")}|#{@host}|notapid|0", payload('bad'))
     end
     @extra_keys.push(Wurk::Keys.queue("#{@ns}-plain"), "#{Wurk::Keys.queue("#{@ns}-bad")}|#{@host}|notapid|0")
 
-    assert_equal 0, @reaper.reclaim_full!
+    assert_equal 0, @reaper.reclaim!
   end
 
   # The full sweep has its own parser (no known public-queue prefix to split
   # on), so the nonce shape needs its own case there.
-  def test_reclaim_full_reclaims_a_nonce_keyed_orphan
+  def test_reclaim_reclaims_a_nonce_keyed_orphan
     foreign_q = Wurk::Keys.queue("#{@ns}-nonced")
     private_key = "#{foreign_q}|#{@host}|#{DEAD_PID}|#{Wurk::Component::PROCESS_NONCE}|0"
     @extra_keys.push(foreign_q, private_key)
     @pool.with { |c| c.call('RPUSH', private_key, payload('x')) }
 
-    assert_equal 1, @reaper.reclaim_full!
+    assert_equal 1, @reaper.reclaim!
     assert_equal 1, llen(foreign_q), 'reclaimed onto the correctly-parsed public queue'
   end
 
@@ -539,37 +634,37 @@ class FetcherReaperTest < Wurk::Test::UnitCase
   # pre-nonce shape look like the nonce shape: read wide, `123456789012` is the
   # queue name's last segment and the queue name itself is gone. Such a list
   # holds a pre-upgrade process's in-flight jobs — it has to stay reclaimable.
-  def test_reclaim_full_reclaims_a_pre_nonce_orphan_from_an_all_digit_host
+  def test_reclaim_reclaims_a_pre_nonce_orphan_from_an_all_digit_host
     foreign_q = Wurk::Keys.queue("#{@ns}-legacy")
     private_key = "#{foreign_q}|123456789012|#{DEAD_PID}|0"
     @extra_keys.push(foreign_q, private_key)
     @pool.with { |c| c.call('RPUSH', private_key, payload('legacy')) }
 
-    assert_equal 1, @reaper.reclaim_full!
+    assert_equal 1, @reaper.reclaim!
     assert_equal 1, llen(foreign_q), 'reclaimed onto the queue the narrow reading recovers'
   end
 
   # Same host, current shape: the wide reading is the right one and must stay
   # preferred — read narrow, the job lands on `<queue>|123456789012`.
-  def test_reclaim_full_reclaims_a_nonce_keyed_orphan_from_an_all_digit_host
+  def test_reclaim_reclaims_a_nonce_keyed_orphan_from_an_all_digit_host
     foreign_q = Wurk::Keys.queue("#{@ns}-digits")
     private_key = "#{foreign_q}|123456789012|#{DEAD_PID}|#{Wurk::Component::PROCESS_NONCE}|0"
     @extra_keys.push(foreign_q, private_key, "#{foreign_q}|123456789012")
     @pool.with { |c| c.call('RPUSH', private_key, payload('nonced')) }
 
-    assert_equal 1, @reaper.reclaim_full!
+    assert_equal 1, @reaper.reclaim!
     assert_equal 1, llen(foreign_q), 'reclaimed onto the queue the wide reading recovers'
   end
 
   # A `|` inside the queue name must still parse: the owner segments are taken
   # from the right, so the public queue is everything before host|pid|nonce|idx.
-  def test_reclaim_full_tolerates_a_pipe_in_the_queue_name
+  def test_reclaim_tolerates_a_pipe_in_the_queue_name
     foreign_q = Wurk::Keys.queue("#{@ns}|piped")
     private_key = "#{foreign_q}|#{@host}|#{DEAD_PID}|0"
     @extra_keys.push(foreign_q, private_key)
     @pool.with { |c| c.call('RPUSH', private_key, payload('p')) }
 
-    assert_equal 1, @reaper.reclaim_full!
+    assert_equal 1, @reaper.reclaim!
     assert_equal 1, llen(foreign_q), 'reclaimed onto the correctly-parsed public queue'
   end
 
@@ -578,28 +673,26 @@ class FetcherReaperTest < Wurk::Test::UnitCase
   # queue truncates at its first pipe, the queue name's tail reads as the
   # host and the real pid lands in the nonce slot — and a pid is never
   # PROCESS_NONCE's 12-hex shape, which is what the wide_tail guard keys on.
-  def test_parse_full_and_parse_owner_agree_on_a_pre_nonce_key_behind_a_pipe_bearing_queue
+  def test_parse_full_keeps_the_queue_of_a_pre_nonce_key_behind_a_pipe_bearing_queue
     key = 'queue:eu|jobs|123456789012|4242|0'
 
     parsed = Wurk::Fetcher::PrivateListKey.parse_full(key)
 
     assert_equal ['queue:eu|jobs', '123456789012', 4242, nil], parsed,
                  'both queue segments kept, host/pid read from the narrow tail'
-    assert_equal parsed[1..3], Wurk::Fetcher::PrivateListKey.parse_owner('queue:eu|jobs', key),
-                 'both parsers must resolve the same [host, pid, nonce]'
   end
 
   # The misread end to end, dead owner: before the guard the job drained
   # onto the queue truncated at the first pipe — a queue nobody serves —
   # instead of the list's own public queue.
-  def test_reclaim_full_reclaims_a_pre_nonce_orphan_behind_a_pipe_bearing_queue
+  def test_reclaim_reclaims_a_pre_nonce_orphan_behind_a_pipe_bearing_queue
     foreign_q = Wurk::Keys.queue("#{@ns}|legacy")
     truncated_q = "#{Wurk::Keys::QUEUE_PREFIX}#{@ns}"
     key = "#{foreign_q}|123456789012|#{DEAD_PID}|0"
     @extra_keys.push(foreign_q, truncated_q, key)
     @pool.with { |c| c.call('RPUSH', key, payload('legacy')) }
 
-    assert_equal 1, @reaper.reclaim_full!
+    assert_equal 1, @reaper.reclaim!
     assert_equal 1, llen(foreign_q), 'the job lands on the FULL queue name'
     assert_equal 0, llen(truncated_q), 'the queue truncated at the first pipe stays empty'
     assert_equal 0, llen(key), 'private list drained'
@@ -609,7 +702,7 @@ class FetcherReaperTest < Wurk::Test::UnitCase
   # all-digit host. Read wide, that heartbeat is looked up under an identity
   # nobody wrote ("<queue tail>:<host as pid>:<pid as nonce>") and the list
   # is drained out from under the job still in flight.
-  def test_reclaim_full_leaves_a_live_pre_nonce_owner_behind_a_pipe_bearing_queue
+  def test_reclaim_leaves_a_live_pre_nonce_owner_behind_a_pipe_bearing_queue
     host = '123456789012'
     register_process(host, unowned_pid, info: true, nonce: nil)
     foreign_q = Wurk::Keys.queue("#{@ns}|live")
@@ -617,7 +710,7 @@ class FetcherReaperTest < Wurk::Test::UnitCase
     @extra_keys.push(foreign_q, key)
     @pool.with { |c| c.call('RPUSH', key, payload('in-flight')) }
 
-    assert_equal 0, @reaper.reclaim_full!, 'a beating pre-nonce owner keeps its jobs'
+    assert_equal 0, @reaper.reclaim!, 'a beating pre-nonce owner keeps its jobs'
     assert_equal 1, llen(key), 'in-flight job left alone'
   ensure
     unregister_process(host, unowned_pid)
@@ -720,9 +813,8 @@ class FetcherReaperTest < Wurk::Test::UnitCase
   def test_stop_stops_the_sweep_at_the_next_list_boundary
     key_a = seed_private_list(DEAD_PID, %w[orphan-a], host: 'other-host.example', nonce: SecureRandom.hex(6))
     key_b = seed_private_list(DEAD_PID, %w[orphan-b], host: 'other-host.example', nonce: SecureRandom.hex(6))
-    age(key_a, 120)
-    age(key_b, 120)
-    reaper = graced_reaper
+    reaper = Wurk::Fetcher::Reaper.new(@config, interval: 1, lock_key: @lock_key,
+                                                grace: 0)
     probed = slow_round_trips
     reaper.start
     wait_until { probed.call >= 1 } # inside the first orphan's grace check
@@ -868,19 +960,6 @@ class FetcherReaperTest < Wurk::Test::UnitCase
     delete_many_private_lists
   end
 
-  # --- key parsing edge: prefix mismatch ---------------------------------
-
-  # parse_owner guards against a key that does not carry the public-queue
-  # prefix (delete_prefix returns the string unchanged → suffix == key). This
-  # cannot arise through reclaim! (SCAN MATCHes `<public_q>|*`), so it is
-  # exercised directly: the THEN side of `return [nil, nil] if suffix == key`.
-  def test_parse_owner_rejects_a_key_without_the_public_queue_prefix
-    host, pid = Wurk::Fetcher::PrivateListKey.parse_owner(@public_queue, 'an-unrelated-key')
-
-    assert_nil host
-    assert_nil pid
-  end
-
   # --- R3: unparseable private lists are reported, once ------------------
 
   def test_scoped_sweep_warns_once_per_unparseable_key
@@ -904,7 +983,7 @@ class FetcherReaperTest < Wurk::Test::UnitCase
     @pool.with { |c| c.call('LPUSH', key, payload('stranded')) }
     log = capture_reaper_log
 
-    2.times { @reaper.reclaim_full! }
+    2.times { @reaper.reclaim! }
 
     assert_equal 1, log.string.scan(key).size
   end
@@ -920,7 +999,7 @@ class FetcherReaperTest < Wurk::Test::UnitCase
     end
     log = capture_reaper_log
 
-    @reaper.reclaim_full!
+    @reaper.reclaim!
 
     refute_includes log.string, key
   ensure
@@ -998,32 +1077,33 @@ class FetcherReaperTest < Wurk::Test::UnitCase
   # heartbeat one test registers under it can never make a peer's orphan read
   # as live (the `processes` SET is global to the worker's Redis DB).
   def short_grace_reaper
-    Wurk::Fetcher::Reaper.new(@config, interval: 1, lock_key: @lock_key, full_lock_key: @full_lock_key,
+    Wurk::Fetcher::Reaper.new(@config, interval: 1, lock_key: @lock_key,
                                        grace: SHORT_GRACE)
   end
 
-  # Every checkout from @config refuses OBJECT the way `message` says.
-  def refuse_object(message)
+  # A callable reporting how many SCANs the reaper's config has sent.
+  def count_scans
     config = @config
     real = config.method(:redis)
+    scans = 0
     config.define_singleton_method(:redis) do |**kw, &blk|
       real.call(**kw) do |conn|
         proxy = Object.new
         proxy.define_singleton_method(:call) do |*args|
-          raise RedisClient::CommandError, message if args.first == 'OBJECT'
-
+          scans += 1 if args.first == 'SCAN'
           conn.call(*args)
         end
         proxy.define_singleton_method(:pipelined) { |&b| conn.pipelined(&b) }
         blk.call(proxy)
       end
     end
+    -> { scans }
   end
 
   # Delays every round trip the reaper's config makes, wide enough that a stop
-  # issued once the first per-orphan OBJECT IDLETIME probe has begun lands
-  # mid-list deterministically. Returns a callable reporting how many OBJECT
-  # probes have started.
+  # issued once the first per-orphan owner re-check has begun lands mid-list
+  # deterministically. Returns a callable reporting how many re-checks have
+  # started.
   def slow_round_trips(delay = 0.3)
     config = @config
     real = config.method(:redis)
@@ -1033,7 +1113,7 @@ class FetcherReaperTest < Wurk::Test::UnitCase
       real.call(**kw) do |conn|
         proxy = Object.new
         proxy.define_singleton_method(:call) do |*args|
-          probed += 1 if args.first == 'OBJECT'
+          probed += 1 if args.first == 'HGET'
           sleep delay
           conn.call(*args)
         end
@@ -1045,16 +1125,7 @@ class FetcherReaperTest < Wurk::Test::UnitCase
   end
 
   def graced_reaper
-    Wurk::Fetcher::Reaper.new(@config, interval: 1, lock_key: @lock_key, full_lock_key: @full_lock_key)
-  end
-
-  # RESTORE ... IDLETIME is the one way to give a key an idle time without
-  # waiting it out.
-  def age(key, seconds)
-    @pool.with do |c|
-      dump = c.call('DUMP', key)
-      c.call('RESTORE', key, 0, dump, 'REPLACE', 'IDLETIME', seconds)
-    end
+    Wurk::Fetcher::Reaper.new(@config, interval: 1, lock_key: @lock_key)
   end
 
   def unowned_pid

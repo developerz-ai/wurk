@@ -131,9 +131,14 @@ class DemoSoakTest < Wurk::Test::UnitCase
     assert_includes limited['tags'], 'demo-soak'
     # Redis owns the bucket clock; reset it before promoting the delayed job.
     Wurk::Limiter.bucket('demo-soak', 2, :minute, wait_timeout: 0).reset
-    enq = Wurk::Scheduled::Enq.new(Wurk.configuration)
-    enq.define_singleton_method(:real_time) { Time.now.to_f + 120 }
-    enq.enqueue_jobs
+    # The claim script bounds its window by the server's clock, so time can't be
+    # moved on from the client: the entries are made due instead.
+    Wurk.redis do |c|
+      %w[retry schedule].each do |set|
+        c.call('ZRANGE', set, 0, -1).each { |member| c.call('ZADD', set, 'XX', Time.now.to_f - 1, member) }
+      end
+    end
+    Wurk::Scheduled::Enq.new(Wurk.configuration).enqueue_jobs
 
     payloads.each { |job| assert_includes job['tags'], 'demo-soak' }
     drain

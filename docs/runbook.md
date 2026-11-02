@@ -96,15 +96,19 @@ process key is `<host>:<pid>:<nonce>`. `r EXISTS <host>:<pid>:<nonce>`
 answering `0` means the owner is no longer heartbeating. A Sidekiq Pro list is
 `queue:<q>|<host>|<pid>|<index>`.
 
-The reaper reclaims a dead owner's list within one sweep (every 60s per process,
-plus a full keyspace scan hourly), once the owner's heartbeat (60s TTL) has expired.
-Only one process sweeps at a time: `r TTL super_fetch:reaper` shows the
-current lock.
+The reaper reclaims a dead owner's list once the owner's heartbeat (60s TTL) has
+expired, at the next sweep (every 60s) and after a 30s grace:
+[90-141s for a host lost, about 91s for a pod restart, 1.2s for a swarm child](reliability.md#the-reaper). About
+one process sweeps per interval: `r TTL super_fetch:reaper` shows the current lock.
+Reading a list, as this check does, does not delay its reclaim.
 
 **Fix.**
 
 - A list whose owner is alive is not orphaned. It holds that process's in-flight
-  jobs; leave it alone.
+  jobs; leave it alone. If it is longer than the owner's busy count, it may hold a
+  job whose claim reply was lost. The owner
+  [puts those back itself](reliability.md#a-live-workers-own-private-list) within two
+  reaper intervals.
 - A dead owner's list that is still there several minutes after the heartbeat
   expired: check the worker logs for reaper errors, and check the name parses as one
   of the two shapes above. Names in any other shape are skipped by the reaper.
@@ -115,11 +119,10 @@ current lock.
   they are until you move them back by hand, with the `LMOVE` loop below. (Pro's
   own four-part name *is* one of the two shapes above: it is parsed and
   reclaimed like Wurk's own, not skipped.)
-- Expect **one identical WARN per worker pid that serves the key's queue** for
-  such a key. The reaper's "already reported" set is in-memory and per process,
-  and the boot sweep runs unguarded, so every booting child that serves that
-  queue reports the key for itself; a later sweep reports it again only in a
-  process that has not reported it yet, and any restart starts over. The
+- Expect **one identical WARN per worker pid** for such a key. The reaper's "already
+  reported" set is in-memory and per process, so each child reports the key for
+  itself the first time one of its sweeps sees it; a later sweep reports it again only in a process that has
+  not reported it yet, and any restart starts over. The
   repeated lines are the expected shape of this warning — they are **not**
   evidence that the fleet is suppressing it. See
   [the reaper](reliability.md#the-unparseable-key-warning).
@@ -302,6 +305,10 @@ done
   are past your rollback window ([migration guide](migrate-from-sidekiq.md#6-third-party-gem-mappings)).
 - Keep `maxmemory-policy noeviction`. An evicting policy turns memory pressure into
   silently lost jobs.
+- **A full Redis still drains.** With `maxmemory` reached under `noeviction`, workers
+  [keep claiming through an `allow-oom` script](reliability.md#at-maxmemory) and report
+  `Redis is at maxmemory` once a minute. Enqueues stay refused. If the backlog is not
+  falling, add workers or raise the limit; nothing there is stuck.
 
 ## Batch never completes
 

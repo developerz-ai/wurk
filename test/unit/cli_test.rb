@@ -867,6 +867,63 @@ class CLITest < Wurk::Test::UnitCase
 
   # A11 — a fork failure partway through `boot` leaves live children with no
   # supervisor unless the CLI drains them on the way out.
+  # Only the children read it, so a typo otherwise crash-loops the whole fleet
+  # until the crash-loop exit fires, instead of failing the boot that has it wrong.
+  def test_run_swarm_rejects_a_bad_health_port_before_forking
+    stub_swarm_preamble
+    fake_swarm = swarm_double(boot: ->(**) { flunk('forked') }, supervise: -> {}, shutdown: -> {})
+    ENV['WURK_HEALTH_PORT'] = 'nope'
+
+    with_stub_swarm(fake_swarm) do
+      assert_raises(ArgumentError) { @cli.run_swarm(boot_app: false, warmup: false) }
+    end
+  ensure
+    ENV.delete('WURK_HEALTH_PORT')
+  end
+
+  def test_run_swarm_exits_non_zero_after_a_crash_loop
+    stub_swarm_preamble
+    fake_swarm = swarm_double(boot: ->(**) {}, supervise: -> {}, shutdown: -> {}, crash_looped?: -> { true })
+
+    error = assert_raises(SystemExit) do
+      with_stub_swarm(fake_swarm) { @cli.run_swarm(boot_app: false, warmup: false) }
+    end
+
+    assert_equal 1, error.status
+  end
+
+  # A Rails target loads the framework and its own `Bundler.require` first, the
+  # order the app's gems were written against.
+  def test_load_rails_framework_requires_the_app_before_the_group_preload
+    Dir.mktmpdir do |root|
+      FileUtils.mkdir_p(File.join(root, 'config'))
+      File.write(File.join(root, 'config/application.rb'), '')
+      required = []
+      @cli.define_singleton_method(:require) { |path| required << path }
+      @cli.define_singleton_method(:define_active_job_adapter) { required << :adapter }
+      [root, File.join(root, 'config/environment.rb')].each do |target|
+        required.clear
+        @cli.config[:require] = target
+        @cli.send(:load_rails_framework)
+
+        resolved = required.map { |r| r.is_a?(String) && r.start_with?('/') ? File.realpath(r) : r }
+
+        assert_equal ['rails', :adapter, File.join(File.realpath(root), 'config/application.rb')], resolved
+      end
+    end
+  end
+
+  def test_load_rails_framework_ignores_a_non_rails_target
+    Dir.mktmpdir do |root|
+      required = []
+      @cli.define_singleton_method(:require) { |path| required << path }
+      @cli.config[:require] = File.join(root, 'app.rb')
+      @cli.send(:load_rails_framework)
+
+      assert_empty required
+    end
+  end
+
   def test_run_swarm_drains_the_swarm_when_boot_raises
     called = []
     stub_swarm_preamble
@@ -964,7 +1021,7 @@ class CLITest < Wurk::Test::UnitCase
   # CLI calls on it.
   def swarm_double(**bodies)
     fake = Object.new
-    bodies.each { |name, body| fake.define_singleton_method(name, &body) }
+    { crash_looped?: -> { false } }.merge(bodies).each { |name, body| fake.define_singleton_method(name, &body) }
     fake
   end
 

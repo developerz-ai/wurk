@@ -12,6 +12,7 @@ require_relative 'component'
 require_relative 'capsule'
 require_relative 'launcher'
 require_relative 'rails_boot'
+require_relative 'boot_checks'
 
 module Wurk
   # Standalone CLI. Loads from `exe/wurk` — never loads `wurk/rails` so the
@@ -30,7 +31,7 @@ module Wurk
     # Subcommands. Bare `wurk` runs the worker — the historical shape, and the
     # only one the swarm binaries accept — so a subcommand is never anything
     # but the first argument, and every argument after it is that command's.
-    COMMANDS = %w[api].freeze
+    COMMANDS = %w[api health].freeze
 
     # `wurk api` defaults. 0.0.0.0 because the point of the machine API is for
     # another service to reach it; it is bearer-gated, and answers 404 to
@@ -100,6 +101,15 @@ module Wurk
       ['-s', '--server NAME',  :api_server, 'Rack handler to serve with (default: the first installed)']
     ].freeze
 
+    HEALTH_OPTION_FLAGS = [
+      ['-w', '--window SECONDS', :health_window, 'A heartbeat older than this does not count (default 60)', :to_i],
+      ['-m', '--min COUNT', :health_min, 'Processes on this host that must be beating (default 1)', :to_i],
+      ['-u', '--redis-url URL', :health_redis_url, 'Redis to read (default REDIS_URL)'],
+      ['-s', '--strict', :health_strict, 'Fail when Redis cannot be read, rather than passing']
+    ].freeze
+
+    HELP_COMMANDS = "\nCommands:\n    health    Exit 0 if this host's workers are heartbeating\n\nOptions:"
+
     attr_accessor :launcher, :environment, :config
 
     # The subcommand `parse` pulled off argv, or nil for the worker runner.
@@ -128,6 +138,8 @@ module Wurk
     def parse(args = ARGV.dup)
       @config ||= Wurk.default_configuration
       @command = extract_command!(args)
+      return parse_health_options(args) if @command == 'health'
+
       setup_options(args)
       initialize_logger
       validate!
@@ -135,7 +147,9 @@ module Wurk
     end
 
     # `boot_app:` / `warmup:` are test seams. Production always passes true.
-    def run(boot_app: true, warmup: true)
+    def run(boot_app: true, warmup: true) # rubocop:disable Metrics/AbcSize
+      exit(run_health) if @command == 'health'
+
       # Mark server mode BEFORE the app loads so `configure_server` blocks in
       # the required initializer actually fire (they gate on `config.server?`).
       # Matches Sidekiq, which sets `Sidekiq.server = true` before requiring
@@ -150,6 +164,7 @@ module Wurk
         trap_signals(self_write)
         validate_redis!
         validate_pool_sizes!
+        BootChecks.run(@config, redis_info)
         @config[:identity] = identity
         # Force lazy server-middleware chain so worker threads don't race
         # against each other constructing it. Spec: Sidekiq::CLI line 104.
@@ -176,23 +191,28 @@ module Wurk
     # (`WURK_PRELOAD`/`SIDEKIQ_PRELOAD` Bundler groups, `WURK_PRELOAD_APP`/
     # `SIDEKIQ_PRELOAD_APP` whole-app eager-load) and boots `Process.warmup`
     # before the fork so children share warmed pages (copy-on-write). Spec §7.
-    def run_swarm(boot_app: true, warmup: true)
+    def run_swarm(boot_app: true, warmup: true) # rubocop:disable Metrics/AbcSize
       raise ArgumentError, "the swarm runner takes no subcommand; run `wurk #{@command}` instead" if @command
 
       # Server mode before the app loads — see #run. The flag rides through the
       # fork into every child (the config object is copied), so configure_server
       # blocks registered in the parent take effect in the workers.
       enter_server_mode
+      # Only the children read it. Rejected here, a typo fails this boot instead of
+      # crash-looping the fleet until the crash-loop exit.
+      Health.options_from_env
       if boot_app
+        load_rails_framework
         preload_bundler_groups
         boot_application
         eager_load_application
       end
       validate_redis!
       validate_pool_sizes!
+      BootChecks.run(@config, redis_info)
       @config[:identity] = identity
       warm_up_process if warmup
-      @swarm = Wurk::Swarm.new(topology: @config.topology, config: @config,
+      @swarm = Wurk::Swarm.new(topology: @config.topology, config: @config, exit_on_crash_loop: true,
                                shutdown_timeout: @config[:timeout] || Swarm::DEFAULT_SHUTDOWN_TIMEOUT)
       begin
         @swarm.boot(install_signals: true)
@@ -203,6 +223,16 @@ module Wurk
         # A no-op once the loop already drained (no children, pipe closed).
         @swarm.shutdown
       end
+      exit(1) if @swarm.crash_looped?
+    end
+
+    # `wurk health` — see Wurk::HealthProbe. Boots nothing; returns the exit code.
+    def run_health
+      require_relative 'health_probe'
+      opts = @health_options
+      @config.redis = { url: opts[:health_redis_url] } if opts[:health_redis_url]
+      HealthProbe.new(@config, window: opts[:health_window] || HealthProbe::DEFAULT_WINDOW,
+                               min: opts[:health_min] || 1, strict: opts[:health_strict] == true).call
     end
 
     # `wurk api` — serve the machine-facing HTTP API and nothing else: no
@@ -373,6 +403,14 @@ module Wurk
       COMMANDS.include?(args.first) ? args.shift : nil
     end
 
+    def parse_health_options(args)
+      @health_options = {}
+      parser = option_parser(@health_options)
+      @parser = parser
+      parser.parse!(args)
+      self
+    end
+
     def setup_options(args)
       opts = parse_options(args)
       set_environment(opts[:environment])
@@ -459,8 +497,9 @@ module Wurk
       require 'optparse'
 
       ::OptionParser.new do |o|
-        o.banner = @command ? "wurk #{@command} [options]" : 'wurk [options]'
-        define_value_flags(o, opts, OPTION_FLAGS)
+        o.banner = @command ? "wurk #{@command} [options]" : "wurk [options]\nwurk COMMAND [options]"
+        o.separator HELP_COMMANDS unless @command
+        define_value_flags(o, opts, @command == 'health' ? HEALTH_OPTION_FLAGS : OPTION_FLAGS)
         define_value_flags(o, opts, API_OPTION_FLAGS) if @command == 'api'
         define_meta_flags(o, opts)
       end
@@ -492,6 +531,28 @@ module Wurk
     end
 
     # --- application bootstrap --------------------------------------------
+
+    # A Rails app expects Rails to be loaded before its gems: `config/application.rb`
+    # requires the framework and only then calls `Bundler.require`, and gems read
+    # `defined?(Rails)` or reference ActiveModel while loading. Requiring the groups
+    # first broke those gems in this boot path only. So for a Rails target, run
+    # the app's own first half before the group preload.
+    def load_rails_framework
+      root = rails_app_root(@config[:require])
+      return unless root
+
+      ENV['RACK_ENV'] = ENV['RAILS_ENV'] = @environment
+      require 'rails'
+      define_active_job_adapter
+      require ::File.join(root, 'config/application.rb')
+    end
+
+    # The app root for a `-r` that is the app directory or its environment file.
+    def rails_app_root(require_path)
+      path = ::File.expand_path(require_path.to_s)
+      path = ::File.dirname(path, 2) if ::File.basename(path) == 'environment.rb'
+      path if ::File.directory?(path) && ::File.exist?(::File.join(path, 'config/application.rb'))
+    end
 
     # Spec §7.2/§7.3. Before the swarm parent forks, `Bundler.require` the
     # configured groups so their gems are resident in the parent and paged

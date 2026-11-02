@@ -737,6 +737,69 @@ class JobRetryTest < Wurk::Test::UnitCase
     assert_empty ExhaustedJob.callbacks
   end
 
+  # --- host hooks on the failure path -----------------------------------
+
+  # The failure path running into a host bug raises out of JobRetry, and the
+  # Processor sends a job it could not book to the dead set: on its first failure.
+  def test_a_raising_backtrace_cleaner_still_books_the_retry_with_the_raw_backtrace
+    assert_books_a_retry_with_the_raw_backtrace(->(_bt) { raise 'bug in the host cleaner' })
+  end
+
+  def test_a_cleaner_returning_something_else_still_books_the_retry
+    assert_books_a_retry_with_the_raw_backtrace(->(_bt) {})
+  end
+
+  def test_a_retry_in_result_that_cannot_convert_falls_back_to_the_default_delay
+    klass = Class.new do
+      include Wurk::Job
+
+      sidekiq_retry_in { Class.new { def to_i = raise('bug in the host value') }.new }
+    end
+
+    assert_books_with_a_retry_in_of(klass)
+  end
+
+  def test_a_retry_in_result_of_infinity_falls_back_to_the_default_delay
+    klass = Class.new do
+      include Wurk::Job
+
+      sidekiq_retry_in { Float::INFINITY }
+    end
+
+    assert_books_with_a_retry_in_of(klass)
+  end
+
+  def test_a_death_handler_raising_past_standard_error_does_not_leave_the_failure_path
+    seen = []
+    @config.death_handlers << ->(_job, _ex) { raise NotImplementedError, 'bug in the host handler' }
+    @config.death_handlers << ->(job, _ex) { seen << job['jid'] }
+    job = base_msg(retry: 0)
+
+    assert_raises(Wurk::JobRetry::Handled) do
+      @retrier.global(Wurk.dump_json(job), @queue) { raise 'boom' }
+    end
+
+    assert_equal [job['jid']], seen
+    assert booked(Wurk::Keys::DEAD, job)
+  end
+
+  def test_a_reporter_that_raises_cannot_stop_the_booking
+    logger = ::Logger.new(IO::NULL)
+    def logger.error(*) = raise(IOError, 'closed stream')
+    @config.logger = logger
+    @config.error_handlers.clear
+    @config[:backtrace_cleaner] = ->(_bt) { raise 'bug in the host cleaner' }
+    job = base_msg(retry: true, 'backtrace' => true)
+
+    assert_output(nil, /error reporter raised IOError/) do
+      assert_raises(Wurk::JobRetry::Handled) do
+        Wurk::JobRetry.new(@config).global(Wurk.dump_json(job), @queue) { raise 'boom' }
+      end
+    end
+
+    assert booked(Wurk::Keys::RETRY, job)
+  end
+
   # --- branch coverage: inner_config_get fallback (line 317 else) ------
 
   def test_initialize_uses_default_max_retries_when_config_lacks_bracket
@@ -753,6 +816,36 @@ class JobRetryTest < Wurk::Test::UnitCase
   # --- helpers ---------------------------------------------------------
 
   private
+
+  def assert_books_a_retry_with_the_raw_backtrace(cleaner)
+    @config[:backtrace_cleaner] = cleaner
+    @config.logger = ::Logger.new(IO::NULL)
+    failure = RuntimeError.new('boom')
+    failure.set_backtrace(%w[a.rb:1 b.rb:2])
+    job = base_msg(retry: true, 'backtrace' => true)
+
+    assert_raises(Wurk::JobRetry::Handled) do
+      Wurk::JobRetry.new(@config).global(Wurk.dump_json(job), @queue) { raise failure }
+    end
+
+    stored = Wurk.load_json(booked(Wurk::Keys::RETRY, job))['error_backtrace']
+
+    assert_equal %w[a.rb:1 b.rb:2], Wurk.load_json(Zlib::Inflate.inflate(stored.unpack1('m0')))
+  end
+
+  def assert_books_with_a_retry_in_of(klass)
+    job = base_msg(retry: true)
+
+    assert_raises(Wurk::JobRetry::Handled) do
+      @retrier.local(klass.new, Wurk.dump_json(job), @queue) { raise 'boom' }
+    end
+
+    assert booked(Wurk::Keys::RETRY, job)
+  end
+
+  def booked(key, job)
+    find_payload(key, job['jid']).tap { |payload| @added << payload }
+  end
 
   def base_msg(extra = {})
     {

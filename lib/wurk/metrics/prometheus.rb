@@ -3,7 +3,10 @@
 require 'json'
 require_relative '../component'
 require_relative '../keys'
+require_relative '../leader'
 require_relative '../version'
+require_relative '../queue_consumers'
+require_relative 'process_counters'
 
 module Wurk
   module Metrics
@@ -18,6 +21,11 @@ module Wurk
     #     heartbeat identities sharing this process's nonce (the swarm parent
     #     stamps one nonce that every child inherits), so a scrape of one pod
     #     covers all of its children no matter which child owns the port.
+    #     `wurk_leader` is the same: 1 on every scrape target in the group that
+    #     holds the lease.
+    #   * `wurk_fetch_errors_total` / `wurk_reaper_reclaimed_total` count in the
+    #     memory of the process that owns the port, so under a swarm they are a
+    #     sample of one child. `rate` them; a child restart resets them.
     #
     # One Redis checkout per refresh — two pipelines, because the second needs
     # the queue and process names the first returns — and the snapshot is cached
@@ -29,7 +37,7 @@ module Wurk
       TTL = 1.0
       LABEL_ESCAPES = { '\\' => '\\\\', '"' => '\\"', "\n" => '\\n' }.freeze
       LABEL_ESCAPES_RE = /[\\"\n]/
-      PROCESS_FIELDS = %w[busy concurrency beat rss quiet].freeze
+      PROCESS_FIELDS = %w[busy concurrency beat rss quiet info].freeze
       SCALARS = {
         processed: ['GET', Keys::STAT_PROCESSED],
         failed: ['GET', 'stat:failed'],
@@ -38,11 +46,13 @@ module Wurk
         dead: ['ZCARD', Keys::DEAD]
       }.freeze
       # Names come last: the detail pass is built from them.
-      FIRST_PASS = [*SCALARS.values, ['SMEMBERS', Keys::QUEUES_SET], ['SMEMBERS', Keys::PROCESSES]].freeze
+      FIRST_PASS = [*SCALARS.values, ['GET', Wurk::Leader::DEFAULT_KEY],
+                    ['SMEMBERS', Keys::QUEUES_SET], ['SMEMBERS', Keys::PROCESSES]].freeze
 
       QUEUE_GAUGES = [
         ['wurk_queue_size', 'Jobs enqueued per queue.', :depth.to_proc],
-        ['wurk_queue_latency_seconds', 'Age of the oldest job per queue.', :latency.to_proc]
+        ['wurk_queue_latency_seconds', 'Age of the oldest job per queue.', :latency.to_proc],
+        ['wurk_queue_consumers', 'Live processes subscribed to the queue, quiet ones included.', :consumers.to_proc]
       ].freeze
       CLUSTER_GAUGES = [
         ['wurk_scheduled_size', 'Jobs in the schedule set.', :scheduled.to_proc],
@@ -61,10 +71,10 @@ module Wurk
         ['wurk_process_quiet', '1 when the process is quiet (TSTP).', ->(row, _now) { row.quiet ? 1 : 0 }]
       ].freeze
 
-      QueueRow = Struct.new(:name, :depth, :latency)
-      ProcessRow = Struct.new(:identity, :pid, :busy, :concurrency, :beat, :rss_kb, :quiet)
+      QueueRow = Struct.new(:name, :depth, :latency, :consumers)
+      ProcessRow = Struct.new(:identity, :pid, :busy, :concurrency, :beat, :rss_kb, :quiet, :queues)
       Snapshot = Struct.new(:ok, :taken_at, :processed, :failed, :scheduled, :retries, :dead, :queues, :processes,
-                            keyword_init: true)
+                            :leader, keyword_init: true)
 
       def initialize(config, ttl: TTL, nonce: Component::PROCESS_NONCE, hostname: Component.hostname,
                      clock: -> { ::Process.clock_gettime(::Process::CLOCK_MONOTONIC) })
@@ -101,6 +111,10 @@ module Wurk
         out = +''
         build_info(out)
         gauge(out, 'wurk_redis_up', 'Whether the last metrics refresh could read Redis.', [[nil, snap.ok ? 1 : 0]])
+        counter(out, 'wurk_fetch_errors_total', 'Fetch-loop errors in the process serving this scrape.',
+                ProcessCounters.value(:fetch_errors))
+        counter(out, 'wurk_reaper_reclaimed_total', 'Orphaned jobs reclaimed by the process serving this scrape.',
+                ProcessCounters.value(:reaper_reclaimed))
         if snap.ok
           cluster(out, snap)
           local(out, snap, expected_children, fresh_window)
@@ -114,12 +128,12 @@ module Wurk
         identity.end_with?(@local_suffix) && identity.start_with?(@local_prefix)
       end
 
-      def fetch(now)
+      def fetch(now) # rubocop:disable Metrics/AbcSize
         first, detail = read_redis
         queues, processes = names(first)
-        Snapshot.new(ok: true, taken_at: now, **scalars(first),
-                     queues: queue_rows(queues, detail),
-                     processes: process_rows(processes, detail.drop(queues.size * 2)))
+        rows = process_rows(processes, detail.drop(queues.size * 2))
+        Snapshot.new(ok: true, taken_at: now, **scalars(first), leader: first[SCALARS.size],
+                     queues: queue_rows(queues, detail, rows), processes: rows)
       rescue StandardError => e
         @config.logger&.warn { "Wurk::Metrics::Prometheus refresh failed: #{e.class}: #{e.message}" }
         Snapshot.new(ok: false, taken_at: now, queues: [], processes: [])
@@ -148,20 +162,21 @@ module Wurk
         processes.each { |id| pipe.call('HMGET', id, *PROCESS_FIELDS) }
       end
 
-      def queue_rows(queues, detail)
+      def queue_rows(queues, detail, processes)
+        consumers = processes.flat_map(&:queues).tally
         queues.each_with_index.map do |name, i|
-          QueueRow.new(name, detail[i * 2].to_i, latency(detail[(i * 2) + 1]))
+          QueueRow.new(name, detail[i * 2].to_i, latency(detail[(i * 2) + 1]), consumers.fetch(name, 0))
         end
       end
 
       # An expired identity (dead process not yet pruned from `processes`)
       # answers HMGET with all nils; it is not a process, so it is dropped.
       def process_rows(processes, fields)
-        processes.zip(fields).filter_map do |identity, (busy, concurrency, beat, rss, quiet)|
+        processes.zip(fields).filter_map do |identity, (busy, concurrency, beat, rss, quiet, info)|
           next if beat.nil? && busy.nil?
 
           ProcessRow.new(identity, identity.split(':')[-2].to_i, busy.to_i, concurrency.to_i,
-                         beat&.to_f, rss.to_i, quiet == 'true')
+                         beat&.to_f, rss.to_i, quiet == 'true', QueueConsumers.subscribed(info))
         end
       end
 
@@ -190,6 +205,7 @@ module Wurk
 
       def local(out, snap, expected, window)
         now = ::Time.now.to_f
+        leader_gauge(out, snap)
         if expected
           gauge(out, 'wurk_swarm_children_expected', 'Children this swarm is configured to run.', [[nil, expected]])
         end
@@ -199,6 +215,11 @@ module Wurk
         PROCESS_GAUGES.each do |name, help, value|
           gauge(out, name, help, rows.map { |row| [{ 'pid' => row.pid.to_s }, value.call(row, now)] })
         end
+      end
+
+      def leader_gauge(out, snap)
+        gauge(out, 'wurk_leader', '1 when this process group holds the leader lease.',
+              [[nil, snap.leader && local?(snap.leader) ? 1 : 0]])
       end
 
       def counter(out, name, help, value)

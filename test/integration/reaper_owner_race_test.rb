@@ -57,7 +57,7 @@ class ReaperOwnerRaceTest < Wurk::Test::UnitCase
     priv = seed_private_list('remote-host.example', nonce)
     reaper = beat_after_snapshot(grace: 0) { register('remote-host.example', nonce) }
 
-    assert_equal 0, reaper.reclaim_full!
+    assert_equal 0, reaper.reclaim!
     assert_equal 1, @observer.call('LLEN', priv)
   end
 
@@ -75,7 +75,7 @@ class ReaperOwnerRaceTest < Wurk::Test::UnitCase
   # beaten at all, and the default grace keeps its freshly-touched list safe.
   def test_a_claim_ahead_of_the_first_heartbeat_survives_the_default_grace
     priv = seed_private_list('booting-host.example', SecureRandom.hex(6))
-    reaper = Wurk::Fetcher::Reaper.new(@config, lock_key: "rr:#{@ns}", full_lock_key: "rrf:#{@ns}")
+    reaper = Wurk::Fetcher::Reaper.new(@config, lock_key: "rr:#{@ns}")
 
     assert_equal 0, reaper.reclaim!
     assert_equal 1, @observer.call('LLEN', priv)
@@ -86,7 +86,7 @@ class ReaperOwnerRaceTest < Wurk::Test::UnitCase
   # A Reaper whose liveness snapshot runs the block right after it is taken —
   # the moment a long SCAN leaves open.
   def beat_after_snapshot(grace:, &after)
-    reaper = Wurk::Fetcher::Reaper.new(@config, lock_key: "rr:#{@ns}", full_lock_key: "rrf:#{@ns}", grace: grace)
+    reaper = Wurk::Fetcher::Reaper.new(@config, lock_key: "rr:#{@ns}", grace: grace)
     snapshot = reaper.method(:live_owners)
     reaper.define_singleton_method(:live_owners) do
       owners = snapshot.call

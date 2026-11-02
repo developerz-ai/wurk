@@ -70,7 +70,13 @@ module Wurk
     # Redis, so an unbatched promote of a post-outage backlog (100k+ due
     # members) would block every client for the whole sweep. The Ruby caller
     # loops until a short batch comes back.
+    # The first line is a Lua comment to Redis and Valkey. Dragonfly reads it as
+    # a per-script grant, because this script alone derives its target key from
+    # the payload (`ARGV[2] .. q`) and that server refuses undeclared keys by
+    # default. It spares operators the server-wide allow-undeclared-keys flag,
+    # which serializes every script and cost about 3x script throughput.
     RELIABLE_SCHEDULE_PROMOTE = <<~LUA
+      --!df flags=allow-undeclared-keys
       local jobs = redis.call("zrangebyscore", KEYS[1], "-inf", ARGV[1], "LIMIT", 0, tonumber(ARGV[4]))
       for i = 1, #jobs do
         local job = jobs[i]
@@ -89,24 +95,78 @@ module Wurk
       return #jobs
     LUA
 
+    # Default scheduler claim: lease up to ARGV[3] due members instead of popping
+    # them. Each stays in its set, rescored past any due window, so a lost reply, a
+    # failed push or a crash costs a later re-promotion and never the job. The
+    # caller ZREMs a member only once it has been pushed.
+    #
+    # Redis's clock decides both ends, so a host with a skewed clock can neither
+    # cut a lease short nor see another host's lease as due: the window is the
+    # earlier of the caller's and the server's time, and the expiry counts from the
+    # server's. tostring() would round a 10-digit epoch, hence the format.
+    # KEYS = [sorted_set]
+    # ARGV = [now, lease_seconds, limit]
+    # Returns the claimed members, lowest score first.
+    SCHEDULED_CLAIM = <<~LUA
+      local t = redis.call("TIME")
+      local server_now = tonumber(t[1]) + (tonumber(t[2]) / 1000000)
+      local window = math.min(tonumber(ARGV[1]), server_now)
+      local jobs = redis.call("zrange", KEYS[1], "-inf", string.format("%.6f", window), "byscore", "limit", 0, tonumber(ARGV[3]))
+      local expiry = string.format("%.6f", server_now + tonumber(ARGV[2]))
+      for i = 1, #jobs do
+        redis.call("zadd", KEYS[1], "XX", expiry, jobs[i])
+      end
+      return jobs
+    LUA
+
     # Reliable fetch (Pro super_fetch §3) shutdown requeue: atomically move
     # one in-flight job from a per-process private list back to its public
-    # queue. The LREM guard is the whole point — RPUSH runs only when the job
-    # was still in the private list (LREM removed exactly 1). A job the
-    # Processor ACKed in the window between hard_shutdown's cross-thread `job`
-    # read and this move (LREM removes 0) is NOT re-pushed, so the job lands in
-    # exactly one place and can't double-execute. RPUSH (public tail) not LPUSH
-    # so the reclaimed job is fetched next — LMOVE pops the tail — ahead of
-    # fresh LPUSH'd enqueues.
+    # queue. The LPOS guard is the whole point — RPUSH runs only when the job
+    # is still in the private list. A job the Processor ACKed in the window
+    # between hard_shutdown's cross-thread `job` read and this move is NOT
+    # re-pushed, so the job lands in exactly one place and can't double-execute.
+    # RPUSH (public tail) not LPUSH so the reclaimed job is fetched next — LMOVE
+    # pops the tail — ahead of fresh LPUSH'd enqueues.
+    #
+    # Push before remove, in this script and the two below. Nothing rolls a
+    # script back, and a server can refuse the write mid-script (Dragonfly at
+    # maxmemory refuses the RPUSH after applying an LREM): the raise has to leave
+    # the job where it was, never in neither place.
     # KEYS = [private_list, public_queue]
     # ARGV = [job_json]
     # Returns 1 when the job was moved, 0 when it was already acked.
     RELIABLE_REQUEUE = <<~LUA
-      if redis.call("lrem", KEYS[1], 1, ARGV[1]) == 1 then
+      if redis.call("lpos", KEYS[1], ARGV[1]) then
         redis.call("rpush", KEYS[2], ARGV[1])
+        redis.call("lrem", KEYS[1], 1, ARGV[1])
         return 1
       end
       return 0
+    LUA
+
+    # UnitOfWork#requeue: unguarded, as the caller owns the unit and a job whose
+    # ACK already went out must still go back. Not replay-safe, so it is only
+    # ever sent once (Loader.eval_once).
+    # KEYS = [private_list, public_queue]
+    # ARGV = [job_json]
+    REQUEUE_UNIT = <<~LUA
+      redis.call("rpush", KEYS[2], ARGV[1])
+      return redis.call("lrem", KEYS[1], 1, ARGV[1])
+    LUA
+
+    # The reaper's move off a dead worker's private list: LMOVE private public
+    # RIGHT RIGHT, spelled out because Dragonfly at maxmemory answers an LMOVE
+    # between shards with the job having popped it and dropped the push. The
+    # reply would be the only copy left, and the reaper has no use for it.
+    # KEYS = [private_list, public_queue]
+    # Returns the job moved, nil when the list is empty.
+    RELIABLE_RECLAIM = <<~LUA
+      local job = redis.call("lindex", KEYS[1], -1)
+      if job then
+        redis.call("rpush", KEYS[2], job)
+        redis.call("rpop", KEYS[1])
+      end
+      return job
     LUA
 
     # Ent Unique (§3): atomic compare-and-delete of a lock key. Replaces the
@@ -213,7 +273,10 @@ module Wurk
     SCRIPTS = {
       zpopbyscore: ZPOPBYSCORE,
       reliable_schedule_promote: RELIABLE_SCHEDULE_PROMOTE,
+      scheduled_claim: SCHEDULED_CLAIM,
       reliable_requeue: RELIABLE_REQUEUE,
+      requeue_unit: REQUEUE_UNIT,
+      reliable_reclaim: RELIABLE_RECLAIM,
       fast_delete_job: FAST_DELETE_JOB,
       fast_delete_by_class: FAST_DELETE_BY_CLASS,
       release_if_owner: RELEASE_IF_OWNER,

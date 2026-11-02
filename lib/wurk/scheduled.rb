@@ -11,34 +11,55 @@ require_relative 'timer_loop'
 module Wurk
   # Promotes due jobs from the `retry` and `schedule` sorted sets back onto
   # their target queues. One Poller thread per process; collectively they
-  # drain both SETS via an atomic Lua pop-by-score (loaded via the EVALSHA
-  # cache, retried once on NOSCRIPT). Polling cadence scales with cluster
+  # drain both SETS through a Lua claim (loaded via the EVALSHA cache, retried
+  # once on NOSCRIPT). Polling cadence scales with cluster
   # size so total scheduler traffic stays constant as processes are added.
   #
   # Spec: docs/target/sidekiq-free.md §16. Pluggable via `config[:scheduled_enq]`.
   module Scheduled
     SETS = %w[retry schedule].freeze
 
-    # Atomic pop-by-score for retry/schedule. Source must match
-    # Wurk::Lua::ZPOPBYSCORE byte-for-byte — they share the same SHA.
+    # Source must match Wurk::Lua::ZPOPBYSCORE byte-for-byte: they share a SHA.
     LUA_ZPOPBYSCORE = Wurk::Lua::ZPOPBYSCORE
 
-    # Drains both SETS each call. Iterates per-set inside a single pooled
-    # checkout so the EVALSHA + LPUSH loop avoids re-checkout per job.
+    # Drains both SETS each call, running every promoted job through the client
+    # middleware chain.
+    #
+    # Claims rather than pops: `scheduled_claim` rescores due members to a lease
+    # expiry, the job is pushed, and only then is the member ZREMed. Between any
+    # two of those steps the job exists in its set, so a lost reply (the re-sent
+    # claim just leases a further batch), an out-of-memory push or a kill -9 ends
+    # in a re-promotion once the lease lapses. The failure mode is therefore a
+    # duplicate and a delay of up to CLAIM_LEASE, never a lost job. Other pollers
+    # skip a claimed member because its score has left their due window.
     class Enq
       include Component
 
+      # Public per spec §16; the claim replaced it here.
       LUA_ZPOPBYSCORE = Wurk::Lua::ZPOPBYSCORE
+
+      # Bounds what one crash can duplicate. The ZREMs share one round trip per
+      # batch, which is what makes this cheaper than a pop per job.
+      CLAIM_BATCH = 10
+      # Seconds until a claimed member is due again. Far above a healthy batch,
+      # which takes milliseconds, so a second poller does not re-promote it.
+      CLAIM_LEASE = 60
+
+      TRANSIENT_ERRORS = [RedisClient::Error, ConnectionPool::TimeoutError].freeze
+      # The whole store is refusing, not this job. A plain CommandError with one of
+      # these prefixes says the same as OutOfMemoryError (Dragonfly's reply at
+      # maxmemory is `ERR Out of memory`).
+      STORE_REFUSAL = /\A(?:LOADING|ERR Out of memory|OOM|MASTERDOWN|MISCONF|BUSY)/
 
       def initialize(container)
         @config = container
         @done = false
         @client = Client.new(config: container)
+        @lease = container[:scheduled_claim_lease] || CLAIM_LEASE
       end
 
-      # Pops every due job from each sorted set and re-pushes through the
-      # client. `now` is captured once per set so a slow loop on one ZSET
-      # can't keep grabbing newly-scheduled jobs from a moving window.
+      # `now` is captured once per set so a slow loop on one ZSET can't keep
+      # grabbing newly-scheduled jobs from a moving window.
       def enqueue_jobs(sorted_sets = SETS)
         sorted_sets.each { |sset| drain_set(sset) }
       end
@@ -49,68 +70,115 @@ module Wurk
 
       private
 
-      # Pop under one checkout (the pooled EVALSHA loop), push outside it —
-      # `@client.push` checks out its own connection, so nesting it inside
-      # `@config.redis` would hold two checkouts from the same pool at once
-      # per job, halving effective pool concurrency under load.
+      # Claim and ZREM under their own checkouts, push outside them: `@client.push`
+      # checks out its own connection, so nesting it would hold two per job and
+      # halve the pool's effective concurrency under load.
       def drain_set(sset)
         now = real_time.to_s
-        loop do
-          break if @done
-
-          jobstr = pop_due(sset, now)
-          break unless jobstr
-
-          push_promoted(jobstr, sset)
+        until @done
+          claimed = claim_due(sset, now)
+          break unless promote_batch(sset, claimed) && claimed.size == CLAIM_BATCH
         end
       end
 
-      # ZPOPBYSCORE is destructive and carries its result in the reply, so this
-      # block never claims apply-safety: a replay discards whatever the lost
-      # reply already removed. That bounds block replay only — redis-client
-      # itself re-sends the one in-flight EVALSHA once on a dropped socket
-      # (RedisPool::DEFAULT_RECONNECT_ATTEMPTS, Sidekiq's setting too), so a
-      # reply lost mid-pop can still pop a second job while the first is lost
-      # with its reply (Sidekiq #3303). An error that outlasts that re-send
-      # reaches here and leaves the outcome of *this* pop unknown — a due job
-      # may or may not have come off the ZSET. Report it and end this set's drain (the nil makes
-      # #drain_set break) rather than pop again blind; a job caught in that window
-      # falls into the same pop→push loss the default scheduler already documents
-      # on #push_promoted, and `reliable_scheduler!` (ReliableEnq) is the loss-free
-      # fix. Rescuing here rather than around #drain_set keeps the sibling set
-      # draining on this tick.
-      def pop_due(sset, now)
-        @config.redis { |conn| Wurk::Lua::Loader.eval_cached(conn, :zpopbyscore, keys: [sset], argv: [now]) }
-      rescue RedisClient::ConnectionError => e
+      # An error here leaves this claim's outcome unknown, which is harmless: every
+      # member is still in the set. Reporting and ending this set's drain keeps the
+      # sibling set draining on this tick. A store refusing writes (out of memory)
+      # lands here too and simply waits, with every due job left in place.
+      def claim_due(sset, now)
+        @config.redis do |conn|
+          Wurk::Lua::Loader.eval_cached(conn, :scheduled_claim, keys: [sset],
+                                                                argv: [now, @lease.to_s, CLAIM_BATCH.to_s])
+        end
+      rescue *TRANSIENT_ERRORS => e
         handle_exception(e, { context: 'scheduler_pop', set: sset })
-        nil
+        []
       end
 
-      # A raising `@client.push` must not abort the drain and strand the
-      # remaining due jobs until the next poll — rescue per-job, report,
-      # continue. ZPOPBYSCORE already removed the member, so it is written back
-      # rather than dropped (see #restore_promoted). A crash between the pop and
-      # the push still loses the job: that window is the default scheduler's
-      # known tradeoff, and `reliable_scheduler!` (ReliableEnq) is the loss-free fix.
-      def push_promoted(jobstr, sset)
+      # True when the whole batch was handled, so the drain may claim another.
+      #
+      # Unbuffered, because the ZREM below is only safe once Redis holds the job. With
+      # `reliable_push!` a push could otherwise land in memory and return, and a crash
+      # would lose the only copy.
+      def promote_batch(sset, claimed)
+        deadline = mono_ms + (@lease * 500)
+        pushed = []
+        Client::Buffered.unbuffered do
+          claimed.each_with_index do |jobstr, index|
+            if @done || mono_ms > deadline || !push_promoted(jobstr, sset, pushed)
+              release(sset, claimed.drop(index))
+              return false
+            end
+          end
+        end
+        true
+      ensure
+        settle(sset, pushed)
+      end
+
+      # False when the store is failing, so the rest of the batch is not attempted:
+      # each further push would wait out the same outage, past the lease, and race
+      # the poller that re-claims it.
+      #
+      # An error from this one job's push (WRONGTYPE on its queue key, a Lua error
+      # from a middleware) must not hold back the others. It stays in its set under
+      # the lease, so it is retried and reported about once a lease, not once a poll.
+      def push_promoted(jobstr, sset, pushed)
         @client.push(Wurk.load_json(jobstr))
+        pushed << jobstr
+        true
+      rescue *TRANSIENT_ERRORS => e
+        handle_exception(e, { context: 'scheduler_promote', set: sset })
+        !store_refusing?(e)
       rescue StandardError => e
         handle_exception(e, { context: 'scheduler_promote', set: sset })
-        restore_promoted(jobstr, sset, e)
+        bury(jobstr, sset)
+        true
       end
 
-      # A Redis error is transient: the member goes back into its own set,
-      # scored `now` — past this drain's captured window, so it waits for the
-      # next poll instead of spinning here. Anything else (undecodable JSON, a
-      # payload the client rejects, a raising middleware) fails the same way on
-      # every retry, so it goes to the dead set, scored `now` like a kill and
-      # byte-identical to what was popped — the same place ReliableEnq's script
-      # puts a member it cannot promote.
-      def restore_promoted(jobstr, sset, error)
-        target = error.is_a?(RedisClient::Error) ? sset : Keys::DEAD
-        @config.redis { |conn| conn.call('ZADD', target, real_time.to_s, jobstr) }
-      rescue StandardError => e
+      # An undecodable payload, a payload the client rejects or a raising middleware
+      # fails the same way on every retry, so the member moves to the dead set,
+      # scored `now` like a kill and byte-identical to what was claimed: the same
+      # place ReliableEnq's script puts a member it cannot promote.
+      def bury(jobstr, sset)
+        # Two commands, no MULTI: a server that refuses the ZADD mid-transaction
+        # (Dragonfly at maxmemory) still applies the ZREM, and the member is gone.
+        # A crash between them costs one more trip through here.
+        @config.redis(idempotent: true) do |conn|
+          conn.call('ZADD', Keys::DEAD, real_time.to_s, jobstr)
+          conn.call('ZREM', sset, jobstr)
+        end
+      rescue *TRANSIENT_ERRORS => e
         handle_exception(e, { context: 'scheduler_restore', set: sset })
+      end
+
+      # Hands unpushed members straight back to the next poll. Best effort: if this
+      # fails too, the lease brings them back.
+      def release(sset, members)
+        return if members.empty?
+
+        now = real_time.to_s
+        @config.redis(idempotent: true) do |conn|
+          conn.call('ZADD', sset, 'XX', *members.flat_map { |member| [now, member] })
+        end
+      rescue *TRANSIENT_ERRORS => e
+        handle_exception(e, { context: 'scheduler_restore', set: sset })
+      end
+
+      # A failure here means these jobs run again when the lease lapses. That is the
+      # accepted duplicate; dropping the member before the push is the loss it avoids.
+      def settle(sset, pushed)
+        return if pushed.empty?
+
+        @config.redis(idempotent: true) { |conn| conn.call('ZREM', sset, *pushed) }
+      rescue *TRANSIENT_ERRORS => e
+        handle_exception(e, { context: 'scheduler_settle', set: sset })
+      end
+
+      def store_refusing?(error)
+        return true unless error.is_a?(RedisClient::CommandError)
+
+        error.is_a?(RedisClient::OutOfMemoryError) || error.message.match?(STORE_REFUSAL)
       end
 
       def real_time
@@ -118,9 +186,8 @@ module Wurk
       end
     end
 
-    # Reliable variant of Enq (Pro §4). The default Enq pops then pushes —
-    # a crash between the ZPOPBYSCORE and the client push loses the job.
-    # ReliableEnq instead promotes every due job from each set onto its target
+    # Reliable variant of Enq (Pro §4): faster, but it skips client middleware
+    # on promotion. ReliableEnq promotes every due job from each set onto its target
     # queue in a single atomic Lua (ZRANGEBYSCORE → LPUSH queue:<q> → ZREM),
     # so there is no window where a job exists in neither place. Swapped in by
     # `config.reliable_scheduler!` via the `scheduled_enq` seam.
@@ -176,6 +243,8 @@ module Wurk
       include Component
 
       INITIAL_WAIT = 10
+      # Without this, a fleet booted together sends its first sweeps as one burst.
+      INITIAL_JITTER = 5.0
 
       attr_accessor :rnd
 
@@ -190,9 +259,8 @@ module Wurk
         @last_cleanup_ms = 0
       end
 
-      # Spawns the scheduler thread. INITIAL_WAIT delays the first sweep so
-      # a fleet-wide deploy doesn't have every freshly-booted process hit
-      # Redis simultaneously.
+      # Spawns the scheduler thread. The initial wait delays and spreads the first
+      # sweep so a fleet-wide deploy doesn't have every process hit Redis at once.
       def start
         @thread ||= safe_thread('scheduler') do # rubocop:disable Naming/MemoizedInstanceVariableName
           initial_wait
@@ -235,11 +303,10 @@ module Wurk
 
       private
 
-      # INITIAL_WAIT (10s) staggers the fleet's first sweep after a deploy so
-      # freshly-booted processes don't hit Redis in unison. Overridable via
-      # `config[:scheduler_initial_wait]` (tests want a near-zero first sweep).
+      # Overridable via `config[:scheduler_initial_wait]`, taken exactly as given
+      # (tests want a near-zero first sweep).
       def initial_wait
-        wait = @config[:scheduler_initial_wait] || INITIAL_WAIT
+        wait = @config[:scheduler_initial_wait] || (INITIAL_WAIT + (@rnd.rand * INITIAL_JITTER))
         @mutex.synchronize do
           @sleeper.wait(@mutex, wait) unless @done
         end

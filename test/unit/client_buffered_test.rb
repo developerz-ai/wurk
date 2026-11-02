@@ -2,6 +2,7 @@
 
 require_relative '../test_helper'
 require 'json'
+require 'socket'
 
 # Drives Wurk::Client::Buffered against real Redis. Simulates Redis-outage
 # behavior by routing pushes through a fake pool that raises
@@ -98,7 +99,7 @@ class ClientBufferedTest < Wurk::Test::UnitCase
 
     assert_equal 3, Wurk::Client::Buffered.buffer_size
 
-    pool.recover!
+    recover(pool)
     client.push(base_item('args' => [99]))
 
     assert_equal 0, Wurk::Client::Buffered.buffer_size
@@ -112,7 +113,7 @@ class ClientBufferedTest < Wurk::Test::UnitCase
     client.push(base_item('args' => ['second']))
     client.push(base_item('args' => ['third']))
 
-    pool.recover!
+    recover(pool)
     client.push(base_item('args' => ['fourth']))
 
     # LPUSH puts newest at head → reversing gives push order:
@@ -124,7 +125,7 @@ class ClientBufferedTest < Wurk::Test::UnitCase
       client, pool = outage_client
       client.push(base_item)
       client.push(base_item)
-      pool.recover!
+      recover(pool)
       client.push(base_item)
     end
 
@@ -157,7 +158,7 @@ class ClientBufferedTest < Wurk::Test::UnitCase
       client, pool = outage_client
       client.push(base_item('args' => [1]))
       client.push(base_item('args' => [2]))
-      pool.recover!
+      recover(pool)
       client.push(base_item('args' => [3]))
     end
 
@@ -173,7 +174,7 @@ class ClientBufferedTest < Wurk::Test::UnitCase
       client, pool = outage_client
       client.push(base_item('args' => ['evicted']))
       client.push(base_item('args' => ['kept']))
-      pool.recover!
+      recover(pool)
       client.push(base_item('args' => ['live']))
     end
 
@@ -221,7 +222,7 @@ class ClientBufferedTest < Wurk::Test::UnitCase
     assert_equal [['for-a']], buffered_args, 'a push through another pool must not take shard A\'s backlog'
     assert_equal 0, shard_a.writes
 
-    shard_a.recover!
+    recover(shard_a)
     Wurk::Client.via(shard_a) { Wurk::Client.new.push(base_item('args' => ['a-live'])) }
 
     assert_equal 0, Wurk::Client::Buffered.buffer_size
@@ -235,7 +236,7 @@ class ClientBufferedTest < Wurk::Test::UnitCase
     build_client(down).push(base_item('args' => ['stuck']))
     up, = outage_client
     up.push(base_item('args' => ['queued']))
-    up.instance_variable_get(:@redis_pool).recover!
+    recover(up.instance_variable_get(:@redis_pool))
 
     up.push(base_item('args' => ['live']))
 
@@ -276,7 +277,7 @@ class ClientBufferedTest < Wurk::Test::UnitCase
     client.push(base_item('args' => ['middle']))
     client.push(base_item('args' => ['newest']))
 
-    pool.recover!
+    recover(pool)
     client.push(base_item('args' => ['fresh']))
 
     queued = queued_args
@@ -285,6 +286,220 @@ class ClientBufferedTest < Wurk::Test::UnitCase
     assert_includes queued, ['middle']
     assert_includes queued, ['newest']
     assert_includes queued, ['fresh']
+  end
+
+  # --- circuit: a dead Redis costs one caller, not every caller -----------
+
+  def test_second_push_during_an_outage_does_not_touch_redis
+    client, pool = outage_client
+    client.push(base_item('args' => [1]))
+    attempts = pool.attempts
+
+    latencies = Array.new(5) do |i|
+      started = monotonic
+      client.push(base_item('args' => [i + 2]))
+      monotonic - started
+    end
+
+    assert_equal attempts, pool.attempts, 'an open circuit must not reach for a connection'
+    assert_equal 6, Wurk::Client::Buffered.buffer_size
+    assert_operator latencies.max, :<, 0.05
+  end
+
+  # The real thing rather than a stand-in: a port nothing listens on, with the
+  # pool's own connection backoff.
+  def test_push_against_a_closed_port_blocks_only_the_first_caller
+    pool = Wurk::RedisPool.new(url: "redis://127.0.0.1:#{unused_port}/0", size: 1, name: 'closed-port')
+    client = Wurk::Client.new(pool: pool)
+    client.push(base_item('args' => [1]))
+
+    started = monotonic
+    3.times { |i| client.push(base_item('args' => [i + 2])) }
+
+    assert_operator monotonic - started, :<, 0.15
+    assert_equal 4, Wurk::Client::Buffered.buffer_size
+  ensure
+    Wurk::Client.reliable_push_drainer_stop!
+    pool&.disconnect!
+  end
+
+  def test_a_failed_push_starts_a_drainer_that_replays_in_order_and_closes_the_circuit
+    client, pool = outage_client
+
+    refute_predicate Wurk::Client, :reliable_push_drainer_running?
+
+    %w[a b c].each { |tag| client.push(base_item('args' => [tag])) }
+
+    assert_predicate Wurk::Client, :reliable_push_drainer_running?
+    Wurk::Client.reliable_push_drainer(interval: 0.02)
+    pool.recover!
+
+    assert(wait_for { Wurk::Client::Buffered.buffer_size.zero? }, 'the drainer never replayed the backlog')
+    assert(wait_for { !Wurk::Client::Buffered.circuit.open?(pool) }, 'a full replay must close the circuit')
+    client.push(base_item('args' => ['d']))
+
+    assert_equal [['a'], ['b'], ['c'], ['d']], queued_args.reverse
+  end
+
+  def test_a_still_failing_probe_keeps_the_circuit_open
+    client, pool = outage_client
+    client.push(base_item)
+
+    Wurk::Client::Buffered.drain_all!
+
+    assert Wurk::Client::Buffered.circuit.open?(pool)
+    assert_equal 1, Wurk::Client::Buffered.buffer_size
+  end
+
+  def test_a_circuit_with_nothing_buffered_is_closed_by_a_ping
+    _client, pool = outage_client
+    Wurk::Client::Buffered.trip!(pool)
+    Wurk::Client::Buffered.drain_all!
+
+    assert Wurk::Client::Buffered.circuit.open?(pool), 'a failing PING must leave it open'
+
+    pool.recover!
+    Wurk::Client::Buffered.drain_all!
+
+    refute Wurk::Client::Buffered.circuit.open?(pool)
+  end
+
+  def test_a_refusing_server_closes_the_circuit_so_callers_see_the_refusal
+    _client, pool = outage_client
+    Wurk::Client::Buffered.trip!(pool)
+    pool.refuse!
+    Wurk::Client::Buffered.drain_all!
+
+    refute Wurk::Client::Buffered.circuit.open?(pool)
+  end
+
+  def test_a_replay_the_server_refuses_closes_the_circuit
+    client, pool = outage_client
+    client.push(base_item)
+    pool.refuse!
+
+    assert_raises(RedisClient::CommandError) { Wurk::Client::Buffered.drain_all! }
+
+    refute Wurk::Client::Buffered.circuit.open?(pool)
+    assert_equal 1, Wurk::Client::Buffered.buffer_size, 'the refused payload must stay buffered'
+  end
+
+  # Lets a process whose drainer died fall back to a real attempt per window.
+  def test_a_circuit_lapses_on_its_own
+    _client, pool = outage_client
+    circuit = Wurk::Client::Buffered.circuit
+    circuit.trip(pool)
+    circuit.instance_variable_get(:@open_until)[pool] = monotonic - 1
+
+    refute circuit.open?(pool)
+  end
+
+  def test_a_batched_push_still_attempts_and_raises_while_the_circuit_is_open
+    client, pool = outage_client
+    client.push(base_item)
+    attempts = pool.attempts
+
+    assert_raises(RedisClient::ConnectionError) { client.push(base_item('bid' => 'B-open')) }
+    assert_operator pool.attempts, :>, attempts
+  end
+
+  # --- flush: nothing stays in memory past a clean exit -------------------
+
+  def test_flush_delivers_a_backlog_behind_an_open_circuit
+    client, pool = outage_client
+    %w[a b].each { |tag| client.push(base_item('args' => [tag])) }
+    pool.recover!
+
+    assert_equal 0, Wurk::Client::Buffered.flush
+
+    assert_equal [['a'], ['b']], queued_args.reverse
+  end
+
+  def test_flush_is_bounded_and_reports_what_it_could_not_deliver
+    client, pool = outage_client
+    client.push(base_item)
+    Wurk::Client.reliable_push_drainer_stop!
+    release = Queue.new
+    hanging = pool
+    hanging.define_singleton_method(:with) { |&_| release.pop }
+    log = capture_wurk_log do
+      started = monotonic
+
+      assert_equal 1, Wurk::Client::Buffered.flush(timeout: 0.05)
+      assert_operator monotonic - started, :<, 1
+    end
+    release << :done
+
+    assert_includes log, 'could not reach Redis before exit'
+  ensure
+    release&.close
+  end
+
+  def test_flush_with_nothing_buffered_starts_no_thread
+    before = Thread.list.size
+
+    assert_equal 0, Wurk::Client::Buffered.flush
+    assert_equal before, Thread.list.size
+  end
+
+  # The regression this exists for: pushes between Redis returning and the next
+  # probe, then a normal exit. They were delivered before the circuit existed.
+  def test_a_process_exiting_inside_the_probe_window_delivers_its_backlog
+    url = Wurk::Test.redis_url
+    queue = @queue
+    pid = fork do
+      config = Wurk.configuration
+      config.redis = { url: url }
+      config.reset_redis_pools!
+      client = Wurk::Client.new(config: config)
+      Wurk::Client::Buffered.install!
+      Wurk::Client::Buffered.circuit.trip(config.redis_pool)
+      5.times { |i| client.push(base_item('args' => [i], 'queue' => queue)) }
+      exit!(3) unless Wurk::Client::Buffered.buffer_size == 5
+      Wurk::Client::Buffered.flush
+      exit!(Wurk::Client::Buffered.buffer_size.zero? ? 0 : 4)
+    end
+    _, status = Process.wait2(pid)
+
+    assert_equal 0, status.exitstatus
+    assert_equal [[0], [1], [2], [3], [4]], queued_args.reverse
+  end
+
+  def test_unbuffered_pushes_raise_rather_than_buffer
+    client, pool = outage_client
+
+    assert_raises(RedisClient::ConnectionError) do
+      Wurk::Client::Buffered.unbuffered { client.push(base_item) }
+    end
+    assert_equal 0, Wurk::Client::Buffered.buffer_size
+    refute Wurk::Client::Buffered.circuit.open?(pool)
+    refute_predicate Wurk::Client::Buffered, :unbuffered?
+  end
+
+  # While the circuit is open everything new sits in memory, so recovery has to be
+  # noticed quickly whatever interval the app asked for.
+  def test_an_open_circuit_shortens_the_drainers_pause
+    drainer = Wurk::Client::Buffered::Drainer.new(interval: 77)
+    pause = nil
+    wake = Object.new
+    wake.define_singleton_method(:wait) { |_lock, seconds| pause = seconds }
+    drainer.instance_variable_set(:@wake, wake)
+    _client, pool = outage_client
+    Wurk::Client::Buffered.circuit.trip(pool)
+
+    drainer.send(:wait_interval)
+
+    assert_equal Wurk::Client::Buffered::Drainer::PROBE_PAUSE, pause
+  end
+
+  # A drainer the app configured keeps its interval across a trip; only an
+  # implicit one is left out of a forked child.
+  def test_an_app_drainer_keeps_its_interval_through_a_trip
+    Wurk::Client.reliable_push_drainer(interval: 77)
+    client, = outage_client
+    client.push(base_item)
+
+    assert_equal 77, Wurk::Client::Buffered.instance_variable_get(:@drainer).interval
   end
 
   # --- R12: drops are never silent ----------------------------------------
@@ -308,7 +523,7 @@ class ClientBufferedTest < Wurk::Test::UnitCase
     client, pool = outage_client
     log = capture_wurk_log do
       2.times { client.push(base_item) }
-      pool.recover!
+      recover(pool)
       client.push(base_item)
       pool.fail!
       2.times { client.push(base_item) }
@@ -723,6 +938,31 @@ class ClientBufferedTest < Wurk::Test::UnitCase
     Wurk::Metrics::Statsd.singleton_class.send(:remove_method, :__increment_real)
   end
 
+  def monotonic = ::Process.clock_gettime(::Process::CLOCK_MONOTONIC)
+
+  def wait_for(timeout: 5)
+    deadline = monotonic + timeout
+    until yield
+      return false if monotonic > deadline
+
+      Thread.pass
+    end
+    true
+  end
+
+  def unused_port
+    server = TCPServer.new('127.0.0.1', 0)
+    server.addr[1]
+  ensure
+    server&.close
+  end
+
+  # Redis is back and the circuit has closed, whichever way that happened.
+  def recover(pool)
+    pool.recover!
+    Wurk::Client::Buffered.circuit.close(pool)
+  end
+
   def base_item(overrides = {})
     { 'class' => @class_name, 'args' => [], 'queue' => @queue }.merge(overrides)
   end
@@ -777,22 +1017,26 @@ class ClientBufferedTest < Wurk::Test::UnitCase
   # non-connection error while `explode!`d, and counts the blocks it let
   # through to Redis.
   class TogglablePool
-    attr_reader :writes
+    attr_reader :writes, :attempts
 
     def initialize(real_pool)
       @real_pool = real_pool
       @mode = :up
       @writes = 0
+      @attempts = 0
     end
 
     def fail! = @mode = :down
     def recover! = @mode = :up
     def explode! = @mode = :broken
+    def refuse! = @mode = :refusing
 
     def with(&)
+      @attempts += 1
       case @mode
       when :down then yield FailingConn.new
       when :broken then raise 'not a connection error'
+      when :refusing then raise RedisClient::CommandError, 'LOADING Redis is loading the dataset in memory'
       else
         @writes += 1
         @real_pool.with(&)

@@ -51,14 +51,19 @@ class HealthTest < Wurk::Test::UnitCase
   end
 
   class FakeLauncher
-    def initialize(config:, heartbeat: nil, stopping: false)
+    def initialize(config:, heartbeat: nil, stopping: false, quiet: false)
       @config = config
       @heartbeat = heartbeat
       @stopping = stopping
+      @quiet = quiet
+    end
+
+    def shutting_down?
+      @stopping
     end
 
     def stopping?
-      @stopping
+      @stopping || @quiet
     end
   end
 
@@ -77,6 +82,14 @@ class HealthTest < Wurk::Test::UnitCase
     assert_equal 200, body[:status_code]
     assert_equal 'ok', body[:json]['status']
     assert_equal 'live', body[:json]['check']
+  end
+
+  # A quiet process is alive. Answering 503 had the kubelet restart a pod an
+  # operator had just quieted, and the replacement resumed fetching.
+  def test_live_stays_200_when_the_process_is_quiet
+    launcher = FakeLauncher.new(config: FakeConfig.new, quiet: true)
+
+    assert_equal 200, get(launcher, '/live')[:status_code]
   end
 
   def test_live_returns_503_when_launcher_stopping
@@ -455,6 +468,16 @@ class HealthTest < Wurk::Test::UnitCase
 
     assert_predicate client, :closed?
     assert_equal 0, server.instance_variable_get(:@connections)
+  end
+
+  def test_port_comes_from_the_environment_only_when_set_and_valid
+    assert_nil Wurk::Health.options_from_env({})
+    assert_nil Wurk::Health.options_from_env('WURK_HEALTH_PORT' => ' ')
+    assert_equal({ port: 7433 }, Wurk::Health.options_from_env('WURK_HEALTH_PORT' => '7433'))
+    %w[nope 70000].each do |bad|
+      error = assert_raises(ArgumentError) { Wurk::Health.options_from_env('WURK_HEALTH_PORT' => bad) }
+      assert_includes error.message, bad
+    end
   end
 
   private

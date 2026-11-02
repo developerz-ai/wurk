@@ -97,6 +97,7 @@ class ClientPartialDeliveryTest < Wurk::Test::UnitCase
 
     # The drop has passed, so the same pool — the one these payloads were
     # headed for — now delivers, and the push replays the backlog first.
+    Wurk::Client::Buffered.circuit.close(client.send(:pool))
     client.push(item(args: ['c'], jid: 'j-c'))
 
     assert_equal 0, Wurk::Client::Buffered.buffer_size

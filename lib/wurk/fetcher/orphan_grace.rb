@@ -2,65 +2,81 @@
 
 module Wurk
   class Fetcher
-    # The Reaper's boot-grace check: has this heartbeat-judged orphan been
-    # left alone for at least `grace` seconds? A booting worker can claim a job
-    # a moment before its first heartbeat lands, and draining its list in that
-    # window runs the job twice, concurrently.
+    # The Reaper's wait between judging a list orphaned by its heartbeat and
+    # draining it.
     #
-    # The answer comes from OBJECT IDLETIME, which a live owner resets on every
-    # claim and ACK. Some servers refuse it — Redis under an LFU maxmemory
-    # policy, Dragonfly with no OBJECT at all — and the grace must not quietly
-    # vanish with it. Without IDLETIME the clock is this reaper's own: a list
-    # is drained only once it has been judged orphaned for `grace` seconds
-    # across sweeps, by which time a booting owner has beaten and the
-    # heartbeat re-check spares it. The switch is logged once.
+    # A live owner can read as having no heartbeat hash: its first beat failed on
+    # a Redis blip, CPU-bound jobs held the beat back, or Redis restarted from an
+    # older snapshot. Its next beat lands within the wait, and that spares it.
+    #
+    # The clock is this process's own and it is shared by nothing else, so it
+    # costs the same on every server and at every fleet size. That is the
+    # difference from what it replaces, OBJECT IDLETIME: any read of the list
+    # (a monitor's LLEN) reset that clock, some servers do not have the command,
+    # and a clock kept per sweep only advanced in a process that won the sweep
+    # lock twice. The loop thread therefore finishes what any sweep here started,
+    # with or without the lock (Reaper#drain_settled).
     class OrphanGrace
-      NO_IDLETIME_WARNING = 'reaper: OBJECT IDLETIME is unavailable on this Redis (%s); the boot grace ' \
-                            'before reclaiming a private list now runs on this process\'s own clock, so an ' \
-                            'orphan is drained one sweep later than it would be. Expected under an LFU ' \
-                            'maxmemory policy or on servers without OBJECT (e.g. Dragonfly).'
-
-      # Lists remembered for the fallback clock. A list leaves on the pass
-      # that clears it; one judged orphaned and then found alive can linger,
-      # so the memory is bounded and simply restarts when full — every clock
-      # restarting is the conservative direction.
+      # Lists remembered at once. Past it the memory restarts, and every clock
+      # restarting is the conservative direction: the next sweep judges them anew.
       MEMORY = 10_000
 
-      def initialize(config, grace)
-        @config = config
+      Entry = Struct.new(:since, :owner)
+
+      def initialize(grace)
         @grace = grace
-        @idletime = true
-        @first_seen = {}
+        @lock = ::Mutex.new
+        @entries = {}
       end
 
-      # true while the list must be left alone.
-      def recent?(key)
+      # true while the list must be left alone. `owner` is what #take_settled
+      # hands back when the wait is over.
+      def recent?(key, owner)
         return false unless @grace.positive?
-        return local_recent?(key) unless @idletime
 
-        idle = @config.redis(idempotent: true) { |c| c.call('OBJECT', 'IDLETIME', key) }
-        # nil: the list is already gone, nothing to drain.
-        idle.nil? || idle < @grace
-      rescue RedisClient::CommandError => e
-        idletime_unavailable!(e)
-        local_recent?(key)
+        now = monotonic
+        @lock.synchronize do
+          @entries.clear if @entries.size >= MEMORY && !@entries.key?(key)
+          entry = (@entries[key] ||= Entry.new(now, owner))
+          next true if now - entry.since < @grace
+
+          @entries.delete(key)
+          false
+        end
+      end
+
+      # The owner came back: its next judgement starts a new wait.
+      def forget(key)
+        @lock.synchronize { @entries.delete(key) }
+      end
+
+      # [[key, owner], ...] whose wait is over, removed from memory.
+      def take_settled
+        now = monotonic
+        @lock.synchronize do
+          settled = @entries.select { |_, entry| now - entry.since >= @grace }
+          settled.each_key { |key| @entries.delete(key) }
+          settled.map { |key, entry| [key, entry.owner] }
+        end
+      end
+
+      # Seconds until the next wait ends, nil with nothing waiting.
+      def next_due_in
+        now = monotonic
+        @lock.synchronize do
+          oldest = @entries.each_value.map(&:since).min
+          oldest && [(oldest + @grace) - now, 0].max
+        end
+      end
+
+      def size
+        @lock.synchronize { @entries.size }
       end
 
       private
 
-      def local_recent?(key)
-        now = ::Process.clock_gettime(::Process::CLOCK_MONOTONIC)
-        @first_seen.clear if @first_seen.size >= MEMORY && !@first_seen.key?(key)
-        seen = (@first_seen[key] ||= now)
-        return true if now - seen < @grace
-
-        @first_seen.delete(key)
-        false
-      end
-
-      def idletime_unavailable!(error)
-        @idletime = false
-        @config.logger.warn { format(NO_IDLETIME_WARNING, error.message.lines.first&.strip) }
+      def monotonic
+        ::Process.clock_gettime(::Process::CLOCK_MONOTONIC)
       end
     end
   end

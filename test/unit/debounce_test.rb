@@ -28,6 +28,23 @@ class DebounceTest < Wurk::Test::UnitCase
     @pool.with { |conn| Wurk::Lua::Loader.script_load_all(conn) }
   end
 
+  # The pending job goes only once its replacement is in. A wait the server's ZADD
+  # refuses stands in for Dragonfly at maxmemory, which refuses the write mid-script.
+  def test_a_refused_zadd_keeps_the_pending_job_scheduled
+    pending = job
+    Wurk::Debounce.schedule(pending, wait: WAIT)
+    before = @pool.with { |c| c.call('ZRANGE', 'schedule', 0, -1) }
+
+    assert_raises(RedisClient::CommandError) do
+      @pool.with do |c|
+        Wurk::Lua::Loader.eval_cached(c, :debounce, keys: [Wurk::Debounce.key_for(pending), 'schedule'],
+                                                    argv: ['nan', 0, 'replacement', 30])
+      end
+    end
+
+    assert_equal(before, @pool.with { |c| c.call('ZRANGE', 'schedule', 0, -1) })
+  end
+
   # --- keys ------------------------------------------------------------
 
   def test_key_is_namespaced_under_debounce_prefix

@@ -12,7 +12,7 @@ module Wurk
   class Swarm
     # Step 5 of the boot ordering. Runs inside each forked child:
     #   * reset signal traps inherited from the parent,
-    #   * reconnect ActiveRecord (if loaded) + open a fresh Redis pool,
+    #   * open a fresh Redis pool (ActiveRecord reconnects by its own fork hook),
     #   * apply the slot's queues + concurrency to the default capsule,
     #   * install child signal handlers (TERM/INT drain, TSTP quiet,
     #     USR2 reopen logs),
@@ -26,6 +26,8 @@ module Wurk
       # TTIN is trapped because its default disposition STOPS the process: an
       # operator's `kill -TTIN <child>` asking for a thread dump would suspend
       # the worker instead.
+      STORE_NOT_SERVING = /\A(?:(?:LOADING|BUSY|CLUSTERDOWN|MASTERDOWN|READONLY|OOM|MISCONF)\b|ERR Out of memory)/
+
       CHILD_SIGNALS = { 'TERM' => :term, 'INT' => :term, 'TSTP' => :tstp, 'USR2' => :usr2, 'TTIN' => :ttin }.freeze
 
       # `parent_pid` is captured by the swarm before it forks (race-free) and
@@ -53,7 +55,7 @@ module Wurk
         @pending_tstp = false
       end
 
-      def run
+      def run # rubocop:disable Metrics/AbcSize
         reset_inherited_signals
         reconnect_after_fork
         @config.reopen_in_forked_child
@@ -64,22 +66,49 @@ module Wurk
         # reconnect non-fork-safe libs (Ent §7.4). It never fires in the parent
         # (which only forks + supervises). Like :startup, the child's forked
         # copy of the bucket is cleared after dispatch, so siblings fire theirs.
-        fire_event(:fork)
+        fire_boot_event(:fork)
         apply_slot_to_config
         # :startup must fire in each worker child before its managers spin up
         # (Sidekiq contract, reraise: true). The parent supervisor never runs
         # jobs, so the non-swarm CLI path fires it once per process — for the
         # swarm, each child fires it here. Its own forked copy of the bucket is
         # cleared after, so siblings still fire their own.
-        fire_event(:startup, reraise: true)
+        fire_boot_event(:startup, reraise: true)
         run_launcher
         exit 0
       rescue StandardError, ::Wurk::Shutdown => e
         @config.logger.error { "swarm child ##{@index} (#{::Process.pid}) crashed: #{e.class}: #{e.message}" }
-        exit 1
+        report_crash(e)
+        exit(redis_unavailable?(e) ? Swarm::REDIS_UNAVAILABLE_EXIT_STATUS : 1)
       end
 
       private
+
+      # A lifecycle hook's failure was already reported by `fire_event`, and a
+      # Shutdown is not a fault. Everything else (a Launcher that would not boot,
+      # a bad slot, the Redis probe) would otherwise only ever reach the log.
+      def fire_boot_event(event, **)
+        fire_event(event, **)
+      rescue StandardError
+        @reported_by_lifecycle_event = true
+        raise
+      end
+
+      def report_crash(error)
+        return if error.is_a?(::Wurk::Shutdown) || @reported_by_lifecycle_event
+
+        @config.handle_exception(error, { context: 'swarm-child-boot', slot: @index })
+      end
+
+      # Unreachable, or up and unable to serve yet. Both pass without a new
+      # release, so neither may count toward the crash-loop exit. Matched on the
+      # message as well as the class: Dragonfly answers some of these as a plain
+      # error (`ERR Out of memory`, `LOADING Dragonfly is loading...`).
+      def redis_unavailable?(error)
+        return true if error.is_a?(::RedisClient::ConnectionError) || error.is_a?(::ConnectionPool::TimeoutError)
+
+        error.is_a?(::RedisClient::CommandError) && error.message.match?(STORE_NOT_SERVING)
+      end
 
       # Boot the launcher and block until shutdown. Joining the signal-dispatch
       # thread means the child can't fall through to `exit 0` mid-drain. Orphan
@@ -133,7 +162,11 @@ module Wurk
         # child's own pool.
         Wurk::Client::Buffered.reset_after_fork!
         validate_redis!
-        reconnect_active_record
+        # No ActiveRecord call here. Rails' own fork hook discards the inherited
+        # pools and rebuilds them on first use from the config the parent set; a
+        # bare `establish_connection` instead re-derived the config from the
+        # environment and silently switched a host's custom database or pool.
+        #
         # The dogstatsd client is memoized at the class level (Statsd.client),
         # so without a reset every child would share the parent's UDP socket
         # and thread-locals instead of building its own after fork.
@@ -158,29 +191,6 @@ module Wurk
       # overlaps; the parent's would have been serial, ahead of every fork.
       def validate_redis!
         @config.redis_pool.with(idempotent: true) { |conn| Wurk::Lua::Loader.load_missing(conn) }
-      end
-
-      # AR reconnect is best-effort — a Redis-only worker with no database still
-      # runs — but the silent `rescue nil` here hid a real misconfiguration
-      # during the #101 audit, so warn loudly instead of swallowing.
-      #
-      # #101 boot-audit: measured, not assumed. `establish_connection` only
-      # records the connection spec on the pool manager (~0.3ms warm, on top
-      # of a one-time adapter-load cost already paid pre-fork in the parent);
-      # it does not itself open a socket. `ConnectionPool#stat[:connections]`
-      # stays 0 immediately after — AR opens the real handshake lazily, on
-      # the job thread's first `ActiveRecord::Base.connection` checkout, same
-      # as it always has. So `:startup` (fired right after this in `#run`)
-      # never waits on a DB round trip. Pinned by
-      # `test_reconnect_active_record_does_not_eagerly_open_a_connection`.
-      def reconnect_active_record
-        return unless defined?(::ActiveRecord::Base)
-
-        ::ActiveRecord::Base.establish_connection
-      rescue StandardError => e
-        @config.logger.warn do
-          "swarm child ##{@index} (#{::Process.pid}) ActiveRecord reconnect failed: #{e.class}: #{e.message}"
-        end
       end
 
       def apply_slot_to_config

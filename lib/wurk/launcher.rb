@@ -11,6 +11,7 @@ require_relative 'leader'
 require_relative 'cron'
 require_relative 'metrics/rollup'
 require_relative 'metrics/queue_rollup'
+require_relative 'queue_consumers'
 require_relative 'metrics/flusher'
 require_relative 'history'
 require_relative 'fetcher/reaper'
@@ -51,7 +52,14 @@ module Wurk
     # shutdown lands right after boot; teardown must not hang on it.
     BOOT_RECLAIM_JOIN_TIMEOUT = 5
 
-    attr_accessor :managers, :poller, :periodic_poller, :metrics_rollup, :queue_rollup, :metrics_flusher, :history
+    # How far past `timeout` the Redis-touching teardown may run, and the least it
+    # always gets. Below Swarm::SHUTDOWN_GRACE so the parent's SIGKILL stays the
+    # backstop rather than the normal end.
+    TEARDOWN_GRACE = 4
+    MIN_TEARDOWN_BUDGET = 1
+
+    attr_accessor :managers, :poller, :periodic_poller, :metrics_rollup, :queue_rollup, :metrics_flusher, :history,
+                  :queue_consumers
 
     def initialize(config, embedded: false)
       @config = config
@@ -146,6 +154,8 @@ module Wurk
     def stop
       @shutdown_gate.run do
         deadline = ::Process.clock_gettime(::Process::CLOCK_MONOTONIC) + (@config[:timeout] || 25)
+        @teardown_deadline = deadline + TEARDOWN_GRACE
+        @shutting_down = true
         quiet
         stoppers = @managers.map { |m| Thread.new { teardown_step('manager') { m.stop(deadline) } } }
         fire_event(:shutdown, reverse: true)
@@ -157,6 +167,11 @@ module Wurk
 
     def stopping?
       @done
+    end
+
+    # Past quiet: #stop has been called and this process is on its way out.
+    def shutting_down?
+      @shutting_down == true
     end
 
     # One-shot beat. Public for embedded mode (and for tests) — the
@@ -220,7 +235,7 @@ module Wurk
       @managers.each(&:start)
       @reaper.start
       # Run on a background thread so /ready probe isn't delayed by a large
-      # orphan sweep (reaper.reclaim! is atomic, but can scan many entries).
+      # orphan sweep (the reaper's reclaim is atomic, but can scan many entries).
       @boot_reclaim_thread = safe_thread('boot-reclaim', &method(:boot_reclaim))
       start_periodic_components
       @health_server&.start
@@ -243,17 +258,7 @@ module Wurk
     # no tick races a follower's promotion, and the release itself happens on a
     # planned shutdown rather than waiting out the lock TTL.
     def release_components
-      # Joined first, before anything below tears down the Redis pool it's
-      # still reading from: it started as a fire-and-forget thread in #run
-      # and a shutdown landing right after boot could otherwise race a
-      # pool disconnect mid-scan. Bounded: a full-keyspace scan can outlast
-      # the timeout, in which case the thread is left running rather than
-      # blocking shutdown on it — #boot_reclaim already rescues and logs on
-      # its own, so a straggler racing #reset_redis_pools! below just means
-      # a noisy log line, not a hang.
-      teardown_step('boot-reclaim-join') { @boot_reclaim_thread&.join(BOOT_RECLAIM_JOIN_TIMEOUT) }
-      stop_periodic_components
-      %i[stop_heartbeat clear_heartbeat].each { |step| teardown_step(step) { send(step) } }
+      release_redis_components
       # Unguarded: fire_event already reports and skips past a raising hook.
       fire_event(:exit, reverse: true)
       # Unconditional. A swarm child or standalone process exits right after
@@ -272,13 +277,46 @@ module Wurk
       teardown_step('health-server') { @health_server&.stop }
     end
 
+    # Each step here can ride Redis retries, so against a hung server they add up
+    # to minutes while an orchestrator waits on `timeout`. They run on their own
+    # thread under one budget; past it the process moves on and exits, leaving
+    # the heartbeat to expire and the leader lock to time out, exactly as a
+    # SIGKILL would. No job is at stake here: the managers have already drained.
+    def release_redis_components
+      @teardown_caller = Thread.current
+      worker = Thread.new { redis_teardown_steps }
+      worker.report_on_exception = false
+      return if worker.join(teardown_budget)
+
+      logger.warn { "Launcher teardown did not finish within #{TEARDOWN_GRACE}s past the shutdown timeout; exiting" }
+    end
+
+    def teardown_budget
+      remaining = (@teardown_deadline || 0) - ::Process.clock_gettime(::Process::CLOCK_MONOTONIC)
+      [remaining, MIN_TEARDOWN_BUDGET].max
+    end
+
+    def redis_teardown_steps
+      # Joined first, before anything below tears down the Redis pool it's
+      # still reading from: it started as a fire-and-forget thread in #run
+      # and a shutdown landing right after boot could otherwise race a
+      # pool disconnect mid-scan. Bounded: a full-keyspace scan can outlast
+      # the timeout, in which case the thread is left running rather than
+      # blocking shutdown on it — #boot_reclaim already rescues and logs on
+      # its own, so a straggler racing #reset_redis_pools! below just means
+      # a noisy log line, not a hang.
+      teardown_step('boot-reclaim-join') { @boot_reclaim_thread&.join(BOOT_RECLAIM_JOIN_TIMEOUT) }
+      stop_periodic_components
+      %i[stop_heartbeat clear_heartbeat].each { |step| teardown_step(step) { send(step) } }
+    end
+
     # Mirror of #stop_periodic_components: every loop this process runs on a
     # timer, started in one place at the tail of #run. `compact` because the
     # history snapshotter is opt-in and an embedded boot may have stripped the
     # rest.
     def start_periodic_components
       [@poller, @leader, @periodic_poller, @metrics_rollup,
-       @queue_rollup, @metrics_flusher, @history].compact.each(&:start)
+       @queue_rollup, @queue_consumers, @metrics_flusher, @history].compact.each(&:start)
     end
 
     # Split out of #release_components to keep it under the AbcSize/
@@ -290,7 +328,7 @@ module Wurk
     # exactly those buckets — stopping the rollup first would give its final
     # tick nothing to roll.
     def stop_periodic_components
-      [@metrics_flusher, @periodic_poller, @metrics_rollup, @queue_rollup,
+      [@metrics_flusher, @periodic_poller, @metrics_rollup, @queue_rollup, @queue_consumers,
        @history].each { |t| teardown_step(t.class) { t&.terminate } }
       teardown_step('reaper') { @reaper&.stop }
       teardown_step('leader') { @leader&.stop }
@@ -370,9 +408,10 @@ module Wurk
       @beat_timer.terminate
       thread = @heartbeat_thread
       return unless thread
-      # Embedded dashboard-TERM can run `stop` from the beat itself; a self-join
-      # raises ThreadError. The timer is terminated, so the loop exits after this beat.
-      return if thread == Thread.current
+      # Embedded dashboard-TERM can run `stop` from the beat itself, and the beat
+      # is then parked on this teardown: joining it could only wait out the
+      # budget. The timer is terminated, so the loop exits after this beat.
+      return if [Thread.current, @teardown_caller].include?(thread)
 
       thread.join
     end
@@ -456,6 +495,7 @@ module Wurk
     #   metrics_rollup    leader only writes the cluster-total chart buckets
     #                     (cadence: `config.metrics_rollup_interval`)
     #   queue_rollup      leader only writes the `qm|…` per-queue gauges
+    #   queue_consumers   leader only warns about queues nothing subscribes to
     #   metrics_flusher   NOT leader-gated: the counters it drains exist only in
     #                     this process's memory, so every process flushes its own
     #   history           Ent §5 snapshotter, leader-gated, opt-in via
@@ -467,6 +507,7 @@ module Wurk
       @periodic_poller = Wurk::Cron::Poller.new(@config)
       @metrics_rollup = Wurk::Metrics::Rollup.new(@config)
       @queue_rollup = Wurk::Metrics::QueueRollup.new(@config)
+      @queue_consumers = Wurk::QueueConsumers::Watch.new(@config)
       @metrics_flusher = Wurk::Metrics::Flusher.new(@config)
       @history = Wurk::History.new(@config) if @config.history_enabled?
     end
@@ -493,12 +534,12 @@ module Wurk
     end
 
     # Deterministic boot-time orphan sweep: a SIGKILLed sibling's in-flight jobs
-    # would otherwise wait a full reaper interval before recovery. One unguarded
-    # scoped reclaim at start (no cluster lock — every booting worker helps) gets
-    # them re-queued immediately. Best-effort: a Redis hiccup here must not abort
-    # boot. Spec: docs/target/sidekiq-pro.md §3.2.
+    # would otherwise wait a full reaper interval before recovery. The reaper's
+    # boot sweep (Reaper#boot_reclaim!) gets them
+    # re-queued immediately. Best-effort: a Redis hiccup here must not abort boot.
+    # Spec: docs/target/sidekiq-pro.md §3.2.
     def boot_reclaim
-      @reaper.reclaim!
+      @reaper.boot_reclaim!
     rescue StandardError => e
       handle_exception(e, context: 'launcher-boot-reclaim') if respond_to?(:handle_exception)
     end
@@ -515,10 +556,11 @@ module Wurk
     end
 
     # Returns a Health::Server when `config.health_check(...)` has set
-    # `:health_check_options`; nil otherwise. Off by default — the listener
-    # is opt-in to keep the worker's port surface minimal.
+    # `:health_check_options` or WURK_HEALTH_PORT names a port; nil otherwise.
+    # Off by default — the listener is opt-in to keep the worker's port surface
+    # minimal.
     def build_health_server
-      opts = @config[:health_check_options]
+      opts = @config[:health_check_options] || Health.options_from_env
       return nil unless opts
 
       Health::Server.new(

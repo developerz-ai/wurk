@@ -84,6 +84,7 @@ class ClientBufferForkTest < Wurk::Test::UnitCase
     Wurk::Client.reliable_push_drainer_stop!
 
     @outage_pool.recover!
+    Wurk::Client::Buffered.circuit.close(@outage_pool)
     @outage_client.push(item('parent-drain')) # drains the parent's buffer on the way through
 
     assert_equal (BUFFERED + CHILDREN + ['parent-drain']).sort, queued_args.sort

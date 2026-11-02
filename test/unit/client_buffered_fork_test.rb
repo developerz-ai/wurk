@@ -73,10 +73,37 @@ class ClientBufferedForkTest < Wurk::Test::UnitCase
   # a child that replayed too would enqueue each buffered job once per fork.
   def test_reset_drops_the_inherited_buffer
     buffer_payloads(3)
+    Wurk::Client.reliable_push_drainer_stop!
     simulate_fork!
     Wurk::Client::Buffered.reset_after_fork!
 
     assert_equal 0, Wurk::Client::Buffered.buffer_size
+  end
+
+  # The parent's outage is not the child's verdict: a child that inherited an open
+  # circuit tries Redis for itself.
+  def test_a_child_does_not_inherit_an_open_circuit
+    pool = buffer_payloads(1)
+    Wurk::Client.reliable_push_drainer_stop!
+
+    assert Wurk::Client::Buffered.circuit.open?(pool)
+    simulate_fork!
+    Wurk::Client::Buffered.reset_after_fork!
+
+    refute Wurk::Client::Buffered.circuit.open?(pool)
+  end
+
+  # The drainer a failed push started for itself is not the app's opt-in, so a
+  # child that never pushes gets no thread.
+  def test_an_implicit_drainer_is_not_re_armed_in_a_child
+    buffer_payloads(1)
+
+    assert_predicate Wurk::Client, :reliable_push_drainer_running?
+    kill_drainer_thread(drainer)
+    simulate_fork!
+    Wurk::Client::Buffered.reset_after_fork!
+
+    refute_predicate Wurk::Client, :reliable_push_drainer_running?
   end
 
   # --- inherited mutexes -------------------------------------------------
@@ -141,6 +168,7 @@ class ClientBufferedForkTest < Wurk::Test::UnitCase
     Wurk::Client::Buffered.start_drainer!(interval: 0.02)
     kill_drainer_thread(drainer)
     buffer_payloads(1, args: ['pre-fork'])
+    kill_drainer_thread(drainer) # the failed push restarted it; a fork would not carry it over
     simulate_fork!
     Wurk::Client::Buffered.reset_after_fork!
 

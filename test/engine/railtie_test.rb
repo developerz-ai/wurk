@@ -419,6 +419,24 @@ class RailtieTest < Wurk::Test::EngineCase
     assert_equal 1, instance.stops, 'a partial boot must not outlive the boot attempt'
   end
 
+  def test_warn_on_production_fork_only_in_production_and_silenced_by_embed_opt_in
+    log = StringIO.new
+    with_logger(::Logger.new(log)) do
+      Wurk::RailsBoot.warn_on_production_fork
+
+      assert_empty log.string
+      with_rails_env('production') do
+        Wurk::RailsBoot.warn_on_production_fork
+
+        assert_match(/forking a worker swarm/, log.string)
+        lines = log.string.lines.size
+        with_env('WURK_EMBED' => '1') { Wurk::RailsBoot.warn_on_production_fork }
+
+        assert_equal lines, log.string.lines.size
+      end
+    end
+  end
+
   def test_refuse_logs_actionable_guidance
     io = StringIO.new
     with_logger(::Logger.new(io)) { Wurk::RailsBoot.refuse_preforking_boot }

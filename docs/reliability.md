@@ -10,8 +10,8 @@ The path a job takes:
 | Hop | Mechanism | Loss window |
 |---|---|---|
 | `perform_async` → Redis | Client push (optional [outage buffer](#client-side-redis-outage-buffering)) | Redis unreachable and buffering off → the call raises |
-| `schedule` / `retry` ZSET → queue | Scheduler poller | Pop-then-push window, unless [`reliable_scheduler!`](#the-reliable-scheduler) |
-| queue → worker | [Reliable fetch](#reliable-fetch) (BLMOVE + private list) | None — that's the point |
+| `schedule` / `retry` ZSET → queue | Scheduler poller | Claim, push, remove: a crash re-promotes after a 60s lease, so a duplicate is possible and loss is not |
+| queue → worker | [Reliable fetch](#reliable-fetch) (BLMOVE + private list) | Nothing lost, but a claim whose reply was lost is delayed: [up to two reaper intervals](#a-live-workers-own-private-list) |
 | worker → done | [ACK](#the-ack-rides-the-next-fetch) on the next fetch, [reaper](#the-reaper) on death | None, but **duplicate execution is possible** |
 
 ---
@@ -38,8 +38,6 @@ What it does **not** buy you:
   [caveat](#the-durability-caveat).
 - **Jobs killed as poison pills.** A job recovered `3` times inside 72h is moved
   to the dead set instead of re-queued. It's preserved, but it stops running.
-- **Due jobs promoted by the default scheduler.** See
-  [the reliable scheduler](#the-reliable-scheduler).
 
 ---
 
@@ -76,7 +74,7 @@ queue:<public queue name>|<host>|<pid>|<nonce>|<index>
 
 > **Migration window.** Keys written before the nonce existed have the
 > 3-segment tail `<host>|<pid>|<index>` (no nonce). The reaper's parser
-> (`Fetcher::Reaper#parse_owner`/`#parse_full_key`, right-anchored via
+> (`Fetcher::PrivateListKey.parse_full`, right-anchored via
 > `owner_tails`) accepts both the 4-segment and 3-segment tail shapes, trying
 > the wider (nonce-bearing) reading first and falling back to the narrow one.
 > A pre-nonce key stays reclaimable indefinitely — nothing writes that shape
@@ -102,6 +100,9 @@ sitting in the private list.
 **That is why `SIGKILL` is safe.** There is no in-memory-only state to lose: at
 every instant, the payload exists in Redis, in exactly one of the public queue
 or one private list.
+
+In the private list is not the same as running, though. See
+[a live worker's own private list](#a-live-workers-own-private-list).
 
 ### The ACK rides the next fetch
 
@@ -175,7 +176,7 @@ are never served from this cache.
 On `SIGTERM`, in-flight jobs get until `shutdown_timeout` (default **25s**,
 `config[:timeout]`) to finish. Pending ACKs are flushed first, then whatever is
 still running at the deadline is moved private-list → public queue by
-`bulk_requeue`, using an LREM-guarded `RPUSH` in one Lua hop, before the threads
+`bulk_requeue`, using a guarded `RPUSH` then `LREM` in one Lua hop, before the threads
 are killed.
 
 That ordering is load-bearing. A job that finished moments before the deadline
@@ -183,8 +184,8 @@ has an ACK still pending; requeuing before flushing it would find the payload
 still in the private list, pass the guard, and re-run completed work on every
 graceful shutdown.
 
-The LREM guard is what makes this safe against the race where a Processor ACKs
-between the snapshot and the move: LREM removes 0 → RPUSH is skipped → a
+The `LPOS` guard is what makes this safe against the race where a Processor ACKs
+between the snapshot and the move: the payload is gone → RPUSH is skipped → a
 finished job is never resurrected. `RPUSH` (tail) is deliberate — `LMOVE` pops
 the tail, so the reclaimed job is fetched *next*, ahead of fresh enqueues.
 
@@ -202,32 +203,42 @@ the tail, so the reclaimed job is fetched *next*, ahead of fresh enqueues.
 else: a `kill -9`, a segfault, an OOM kill, a vanished host. Those leave private
 lists nobody will ever ACK.
 
-Before draining a list judged orphaned, the reaper re-checks its owner: the
-owner's heartbeat must still be missing, and the list must have been idle for a
-grace period (30s by default, via `OBJECT IDLETIME`) — a live owner touches its
-list on every claim and ACK, so a worker that started fetching just before its
-first heartbeat is never reclaimed from under it.
+Before draining a list judged orphaned by its heartbeat, the reaper waits out a
+grace period (30s) on its own clock, then re-checks: the heartbeat must still be
+missing. A missing hash does not prove a process dead. CPU-bound jobs can hold a
+beat back (25 of them held one back 17.4s), its first beat can fail on a Redis blip,
+and a Redis restarted from an older snapshot brings back `processes` with every hash
+lapsed. In each case the next beat ends the wait, and the running jobs are left
+alone. The reaper thread finishes what any of its sweeps started, with or without the
+sweep lock, so the wait costs the same on every server and at every fleet size, and
+reading a private list does not delay it.
 
-Every worker process runs a reaper thread (`wurk-reaper`). It does two passes:
+Every worker process runs a reaper thread (`wurk-reaper`). Every 60s
+(`Reaper::DEFAULT_INTERVAL`) it tries for the cluster-wide lock, `super_fetch:reaper`,
+with a `SET NX` living 48s, so about one process sweeps per interval however many are
+running, and one left alone still sweeps every time. The lock is deliberately
+**leader-independent**: it keeps working if the leader election is down.
 
-| Pass | Scope | Cadence | Redis lock key |
-|---|---|---|---|
-| Scoped | `SCAN MATCH queue:<served queue>\|*` for queues this process serves | every `60s` (`Reaper::DEFAULT_INTERVAL`) | `super_fetch:reaper` |
-| Full | `SCAN MATCH queue:*\|*` — the entire keyspace | at most every `3600s` (`Reaper::FULL_INTERVAL`) | `super_fetch:reaper:full` |
+A sweep is one `SCAN MATCH queue:*\|*` acting on **every** list, not only those of
+the queues the winner serves: with the lock shared across the fleet, a queue served
+by one process in ten would wait about 13 intervals for its turn. It also covers a
+decommissioned or renamed queue. The jobs go back to the list's own queue, whichever
+process moves them.
 
-Both passes are gated by a cluster-wide `SET <key> 1 NX EX <interval>`, so
-exactly one process in the fleet actually sweeps per interval no matter how many
-are running. This is deliberately **leader-independent** — it keeps working if
-the leader election is down.
+There's also a **boot-time sweep**: every process runs one sweep on a background
+thread at startup, with no cluster lock. A SIGKILLed sibling's jobs are recovered as
+soon as the replacement boots.
 
-The full pass exists because the scoped pass only looks at queues *someone
-currently serves*. A private list belonging to a decommissioned or renamed queue
-would otherwise be stranded forever.
+**How long reclaim takes**, measured at the defaults on Redis 7:
 
-There's also a **boot-time sweep**: every process runs one unguarded scoped
-`reclaim!` on a background thread at startup, with no cluster lock. A SIGKILLed
-sibling's jobs are recovered as soon as the replacement boots, not up to a
-minute later.
+| What died | Replaced by | Back on the queue after |
+|---|---|---|
+| A swarm child | A child of the same swarm, same nonce: the OS answers | **1.2s** |
+| A standalone `wurk` (a pod restart) | A new process, new nonce: only the heartbeat can answer, and the boot sweep is too early for it | **about 91s** |
+| A whole host, for good | Nothing, a survivor elsewhere sweeps | **90-141s** (bound: 80-150s) |
+
+A restart does not shorten the last two: nothing can tell a dead owner from a live one
+until its heartbeat lapses.
 
 ```ruby
 # config/initializers/wurk.rb
@@ -256,9 +267,10 @@ Per private-list owner, and the answer now turns on nonce, not just host:
   exists). Match is on the full `<host>:<pid>:<nonce>` for a nonce-bearing
   key, or just the `<host>:<pid>` prefix for a pre-nonce one — see the
   [migration window](#reliable-fetch) note above. The heartbeat hash has a
-  **60s TTL**, so **this path can lag reclaim up to ~60 seconds.** Bare set
-  membership isn't enough — a member lingers after its hash expires, and that
-  window must count as dead.
+  **60s TTL**, so **this path lags reclaim by that TTL, a sweep interval and the
+  30s grace** ([measured above](#the-reaper)). Bare set membership isn't
+  enough — a member lingers after its hash expires, and that window must count
+  as dead.
 
 **The remaining blind spot, unchanged by the nonce:** pid reuse *within* the
 same boot generation. If the swarm respawns a replacement and the OS hands it
@@ -290,15 +302,12 @@ keys is an in-memory `Set` held by the reaper — one instance per worker
 process, built after the fork. There is no Redis key behind it, no TTL, and
 nothing shared with the other workers:
 
-- Every booting child runs an **unguarded** scoped boot sweep (see above), so
-  every child that **serves the key's queue** reports the key for itself: one
-  identical WARN per such worker pid, and the pid in the log line tells them
-  apart. A child serving other queues does not see the key in its boot sweep.
-- A later sweep re-reports the key only in a process that has not reported it
-  yet: the scoped sweep (one process wins the `super_fetch:reaper` lock)
-  reaches the key only in a winner that serves its queue, and the hourly full
-  sweep (its own lock) reaches every `queue:*|*` key. A winner that already
-  holds the key in its set stays quiet.
+- A sweep reports the key in the process running it, so over time **every worker**
+  reports the key for itself: one identical WARN per worker pid, and the pid in the
+  log line tells them apart.
+- A later sweep re-reports the key only in a process that has not reported it yet.
+  A winner of the `super_fetch:reaper` lock that already holds the key in its set
+  stays quiet.
 - The **cluster-wide sweep lock does not suppress the warning.** It decides who
   sweeps, not who has already said it.
 - A restart starts over: the memory does not survive the process, so the key is
@@ -321,11 +330,41 @@ incident runbook's
 Job by job, tail-to-tail:
 
 ```
-LMOVE  queue:default|dead-host|9182|b2c3d4e5f6a1|0  queue:default  RIGHT RIGHT
+LINDEX  queue:default|dead-host|9182|b2c3d4e5f6a1|0  -1
+RPUSH   queue:default  <job>
+RPOP    queue:default|dead-host|9182|b2c3d4e5f6a1|0
 ```
+
+That is one script, with the effect of `LMOVE ... RIGHT RIGHT`, and it pushes first:
+Dragonfly near `maxmemory` answers an `LMOVE` between shards having popped the job and
+dropped the push, and a refused write must leave the job where it was.
 
 The move happens **before** the poison-pill check, so a crash mid-drain leaves
 the job safely on the public queue — at-least-once, never lost.
+
+### A live worker's own private list
+
+The reaper never touches a live owner's list, and a live owner only settles the
+jobs its threads know about. Two things leave a payload there that no thread
+knows about:
+
+- **A claim whose reply was lost.** Redis applied the `LMOVE`, then the
+  connection went: a Redis restart, a stall past the 2.5s read timeout, a reset
+  socket. The client re-sends and claims another job. That is up to one job per
+  processor thread per incident, and nothing reports it.
+- **A job that failed while Redis was down**, where the retry booking and the
+  requeue both raised. The requeue failure is logged at ERROR.
+
+So every worker checks its own lists on every reaper tick. A payload in the list
+that no thread's claim and no pending ACK accounts for is suspect. Seen stranded
+again at least 30s later, it goes back to its public queue through the same
+guarded script as a shutdown requeue, and through the same
+[poison-pill](#poison-pills) count as a reclaim. **Such a job runs up to two
+reaper intervals late (2 minutes at the defaults), and nothing is lost.**
+
+A running job is never touched, however long it runs: its thread holds a claim
+for the whole of `perform`. The check costs one `LLEN` per served queue per tick;
+it reads payloads only when a list is longer than what its holders account for.
 
 ### Duplicate execution — be honest about this
 
@@ -392,22 +431,59 @@ bumping it; `.clear!(jid)` resets one by hand.
 
 ---
 
+## At `maxmemory`
+
+`LMOVE` is a command Redis refuses when full, and Wurk requires `noeviction`. With
+nothing else, a backlog that fills Redis would stop every worker from fetching,
+and the memory could never come back.
+
+So on an OOM refusal the fetcher claims through a script flagged `allow-oom`, and
+the workers keep draining with the limit in place. Still through the private list,
+still at-least-once. An error report fires once a minute per fetcher while it
+lasts, so watch for `Redis is at maxmemory`.
+
+| While Redis is full | Behaviour |
+|---|---|
+| Fetch, ACK | Work. Moving a job between lists grows nothing but a small key |
+| Retry and dead-set booking from a failing job | Work, through the same flag |
+| Reclaiming a dead worker's list | Works, every job on the list. The sweep lock goes through the same flag. The poison-pill count can't be taken: a job moved while Redis is full is not counted |
+| Requeue at shutdown, a stranded job put back | Work, through the same flag |
+| Dashboard retry or kill | The push is refused and the job goes back to its set, through the same flag |
+| Heartbeat | Its write is refused, so a claim also writes the identity hash and moves `beat`: a worker still fetching is not read as dead. A worker with every thread in a long job has no claim to write it with until a thread frees up. Stats and metrics writes are dropped |
+| Queues under `global_concurrency` | Not claimed through this path, since it skips the slot ledger |
+| Enqueues, scheduling | Still refused: that pressure is what you want producers to feel |
+
+Valkey behaves as Redis does.
+
+Dragonfly compiles no `#!lua` header and reports OOM with a different error, so none
+of this path runs there: a full Dragonfly refuses what the table says works. It also
+doesn't abort a `MULTI` or a script on the refusal, so every move between two keys
+adds before it removes and a refused write leaves the job where it was: requeue,
+reclaim, scheduler burial, debounce replacement.
+
+> [!WARNING]
+> **Keep a Dragonfly well below `maxmemory`.** Two things stay exposed on a full one
+> (seen on 1.34 and 2.0.2). `LMOVE` and `BLMOVE` between shards can pop the job and
+> drop the push, returning it to the worker with no private copy. The job still runs,
+> but if it then fails with its retry refused, or the process dies, it is lost. And a
+> dashboard retry whose push is refused cannot put the entry back.
+
+---
+
 ## The reliable scheduler
 
-**This one is not the default, and the difference matters.**
+The default poller (`Wurk::Scheduled::Enq`) claims a batch of due members from the
+`retry` and `schedule` sorted sets by rescoring them to a 60s lease, pushes each
+through the client, and only then removes it. A crash, an out-of-memory push or a
+`kill -9` at any point leaves the member in its set, and it is promoted again once
+the lease lapses. The failure mode is a duplicate and a delay of up to 60s, never a
+lost job.
 
-The default poller (`Wurk::Scheduled::Enq`) drains the `retry` and `schedule`
-sorted sets with an atomic Lua pop-by-score, then pushes each popped job through
-the client. Between the pop and the push, the job exists **only in the poller's
-memory**. A crash, or a raise inside the push, loses it. The loss is reported
-through your error handler (`context: "scheduler_promote"`) — but the job is
-gone.
-
-`reliable_scheduler!` closes that window by swapping in
-`Wurk::Scheduled::ReliableEnq`, which promotes due jobs in a single atomic Lua
-script: `ZRANGEBYSCORE` → `SADD queues` → `LPUSH queue:<name>` → `ZREM`. Push
-before remove, so the worst case is a crash between them — an at-least-once
-redelivery, never a loss.
+`reliable_scheduler!` swaps in `Wurk::Scheduled::ReliableEnq`, which promotes due
+jobs in a single atomic Lua script: `ZRANGEBYSCORE` → `SADD queues` →
+`LPUSH queue:<name>` → `ZREM`. It is worth having for throughput, about 25x on
+Redis, on a large backlog of due jobs. It **skips client middleware**, because the
+script writes the queue directly.
 
 ```ruby
 # config/initializers/wurk.rb
@@ -427,11 +503,6 @@ randomized interval of `process_count * average_scheduled_poll_interval`
 (default `5`), with a `10s` initial wait so a fleet-wide deploy doesn't dogpile
 Redis. Total scheduler traffic therefore stays roughly constant as you add
 processes.
-
-> **Divergence from the "it's already the default" claim.** Reliable *fetch* is
-> the default. The reliable *scheduler* is not — you must call
-> `reliable_scheduler!` to get it. If job loss on scheduler promotion is
-> unacceptable to you, turn it on.
 
 ---
 
@@ -466,20 +537,28 @@ once a queue group is acknowledged the pool stops replaying the block whatever
 the error, so a push that dies partway can never double the group it already
 delivered.
 
+**During an outage.** The first failed push pays the connection backoff and opens
+a circuit for that Redis. Later pushes buffer without touching the socket, so they
+do not block. A drainer thread, started on that first failure if none is running,
+probes the server, replays the buffer and closes the circuit. A circuit closes by
+itself after 30s if nothing has renewed it.
+
+**The buffer is process memory.** A clean exit flushes it, bounded at 5s, and logs an ERROR for anything it could not deliver. A SIGKILL or an OOM kill loses whatever is still buffered, and a full buffer drops the oldest job by default. Producers no longer wait out the outage, so the default 1000 entries fill quickly: raise `reliable_push_buffer`, or set `reliable_push_overflow = :raise`, if an outage must not drop work.
+
 **Flush behavior.** Every buffered payload remembers the Redis pool it was
-headed for. Every subsequent `push` / `push_bulk` drains the entries bound for
-its own pool oldest-first *before* pushing the new job, so a sharded
-`Client.via(pool)` backlog never replays into another shard; the background
-drainer drains each origin in turn. Draining stops at the first transient
+headed for, so a sharded `Client.via(pool)` backlog never replays into another
+shard; the drainer drains each origin in turn. With the circuit closed, a `push` /
+`push_bulk` also drains the entries bound for its own pool oldest-first before
+pushing the new job; while it is open, pushes do not drain. Draining stops at the first transient
 failure and un-shifts the payload back to the head, so order is preserved and
 the same job is retried next time. Non-transient errors (OOM, LOADING, READONLY)
 also restore the payload before propagating, so a recovering-but-not-ready Redis
 can't silently eat one buffered job per tick. Each drained payload increments
 statsd `sidekiq.jobs.recovered.push`.
 
-That passive path only fires if something pushes. If your producer goes quiet
-mid-outage, the buffer sits there. Wurk adds an opt-in background drainer
-(a Wurk extension beyond the Pro spec):
+A producer that goes quiet mid-outage is covered too, because the drainer replays
+on its own. You can start it up front or set its interval (a Wurk extension beyond
+the Pro spec):
 
 ```ruby
 Wurk::Client.reliable_push_drainer(interval: 2.0)   # implies reliable_push!
@@ -629,7 +708,7 @@ here:
 | Pro call | Wurk behavior |
 |---|---|
 | `config.super_fetch!` | **Effectively a no-op** — reliable fetch is already the only fetcher. The optional block *is* honored: it's stored as the recovery callback and fired per orphan recovery (`pill` nil) and per poison kill (`pill` set). |
-| `config.reliable_scheduler!` | **A real call.** Swaps `scheduled_enq` to the atomic promoter. Idempotent. |
+| `config.reliable_scheduler!` | **A real call.** Swaps `scheduled_enq` to the atomic promoter, which promotes more per round trip and skips client middleware. Idempotent. |
 | `Sidekiq::Client.reliable_push!` | **A real call.** Installs the outage buffer. Idempotent. |
 | `config.fetch_poll_interval =` | **A real call.** Overrides the 2s `BLMOVE` block timeout. |
 | `retry: :reliable` | Accepted; the private-list-until-ack behavior it names is already how every job runs. |
@@ -695,8 +774,8 @@ redis-cli --scan --pattern 'queue:*|*' | head -50
 ```
 
 Anything whose `<host>|<pid>` doesn't correspond to a live process should
-disappear within one reaper interval (60s same-host) or one heartbeat TTL
-(~60s cross-host). If it doesn't, check that reaper threads are actually
+disappear within one reaper interval (60s same-host) or the 60-135s of a
+cross-host reclaim. If it doesn't, check that reaper threads are actually
 running and that no process is holding the `super_fetch:reaper` lock without
 sweeping. The step-by-step version, including how to move a list back by hand
 safely, is the [orphaned private lists](runbook.md#orphaned-private-lists)
