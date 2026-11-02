@@ -217,7 +217,7 @@ pr:
   # the matching pins land: the `bun-version:` inputs in
   # .github/workflows/test.yml and .github/workflows/release.yml, `bun` in
   # mise.toml, and the `oven/bun` FROM in docs/deployment.md
-  # (dependabot.yml:63-74). Dependabot cannot edit those files; the agent owns
+  # (dependabot.yml:67-78). Dependabot cannot edit those files; the agent owns
   # the pin edits and pushes them to the dependabot branch itself. Until they
   # land the PR is waiting on us, never author inactivity — the sweep must not
   # count it toward close_awaiting_author_after_days.

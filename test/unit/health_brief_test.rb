@@ -125,7 +125,7 @@ require 'yaml'
 #  11. A past-budget red DOCKER bump whose title matches a bun-pin shape
 #      (`^Bump <dep>/<name> from` or ` group with .* updates$`) is WAITING ON
 #      US, not stuck: dependabot cannot edit the four matching bun pin sites
-#      (dependabot.yml:63-74 — the bun-version inputs in test.yml and
+#      (dependabot.yml:67-78 — the bun-version inputs in test.yml and
 #      release.yml, bun in mise.toml, the oven/bun FROM in docs/deployment.md),
 #      so the row prints `Unhealthy: Docker bump #<n> is waiting on us: ...`
 #      and suppresses the stuck line for that PR — the ask names the owner
@@ -1988,11 +1988,14 @@ class HealthBriefTest < Minitest::Test
   # derives each budget from dependabot.yml's own `schedule.interval` and
   # bundler's `cooldown.default-days`, plus a 7-day margin: 28d bundler
   # (7 weekly + 14 cooldown + 7), 14d bun (7+0+7), 37d github-actions
-  # (30+0+7), 37d docker (30+0+7). A PR whose statusCheckRollup — the LIST of
+  # (30+0+7), 37d docker (30+0+7). Every ecosystem now has the same cooldown,
+  # but only bundler's enters the sum: a cooldown delays when a PR opens, and
+  # age counts from createdAt, so it does not change how long a red PR may sit.
+  # A PR whose statusCheckRollup — the LIST of
   # CheckRun/StatusContext entries `gh` emits, rolled up as health.md's step 3
   # reads it — grades FAILURE, and whose age in days is strictly greater than
   # its budget, IS stuck; a red rollup younger than its budget is not (the
-  # docker case in dependabot.yml:63-72 is the headline example); SUCCESS or
+  # docker case in dependabot.yml:67-76 is the headline example); SUCCESS or
   # PENDING is never stuck. The fixtures are CLI-shaped on purpose: shaped
   # `{"state": ...}` they agreed with a rollup read off the PR that `gh` never
   # sends, so these tests passed while the row reported nothing at all.
@@ -2014,7 +2017,7 @@ class HealthBriefTest < Minitest::Test
 
     refute_includes out, 'Dependabot is stuck on #7001',
                     'a github-actions PR aged 30d is under its 37d budget ' \
-                    '(dependabot.yml:54-61) even when FAILURE — the row must not ' \
+                    '(dependabot.yml:56-65) even when FAILURE — the row must not ' \
                     "name it stuck (stdout=#{out.inspect})"
     refute_includes out, 'Dependabot is stuck',
                     'no PR was past budget AND FAILURE — nothing is stuck ' \
@@ -2025,7 +2028,7 @@ class HealthBriefTest < Minitest::Test
   end
 
   def test_red_docker_pr_under_budget_waiting_on_bun_pins_is_not_stuck
-    # dependabot.yml:63-72: docker bumps the Dockerfile's oven/bun tag but
+    # dependabot.yml:67-76: docker bumps the Dockerfile's oven/bun tag but
     # cannot edit the bun-version: inputs in test.yml/release.yml nor bun in
     # mise.toml, so test/unit/toolchain_pins_test.rb (lines 11, 84-90) keeps
     # the PR red until a human (or the maintainer agent) pushes matching pin
@@ -2046,9 +2049,9 @@ class HealthBriefTest < Minitest::Test
 
     refute_includes out, 'Dependabot is stuck on #7102',
                     'a red docker PR aged 5d is exactly the expected-red shape of ' \
-                    "dependabot.yml:63-72; it must NOT print the PR number (stdout=#{out.inspect})"
+                    "dependabot.yml:67-76; it must NOT print the PR number (stdout=#{out.inspect})"
     refute_includes out, 'Unhealthy',
-                    'an expected-red PR is the headline of dependabot.yml:63-72, not a ' \
+                    'an expected-red PR is the headline of dependabot.yml:67-76, not a ' \
                     "regression the row should file (stdout=#{out.inspect})"
 
     refute_includes out, 'is waiting on us',
@@ -2058,7 +2061,7 @@ class HealthBriefTest < Minitest::Test
   end
 
   def test_past_budget_red_docker_bump_with_a_bun_pin_title_is_waiting_on_us
-    # dependabot.yml:63-74: the docker bump moves the Dockerfile's oven/bun
+    # dependabot.yml:67-78: the docker bump moves the Dockerfile's oven/bun
     # FROM, but the four matching bun pins (bun-version: in test.yml and
     # release.yml, bun in mise.toml, the oven/bun FROM in docs/deployment.md)
     # are sites dependabot cannot edit, so toolchain_pins_test.rb keeps the PR
@@ -2122,7 +2125,7 @@ class HealthBriefTest < Minitest::Test
   end
 
   def test_a_grouped_docker_bump_is_waiting_on_us
-    # The docker ecosystem is grouped (dependabot.yml:83-87), and dependabot
+    # The docker ecosystem is grouped (dependabot.yml:89-93), and dependabot
     # titles the group PR after the ecosystem: `Bump the docker group with N
     # updates`. That title matches the ` group with .* updates$` waiting
     # shape, so a 40d red grouped docker bump classifies waiting-on-us exactly
@@ -2875,7 +2878,7 @@ class HealthBriefTest < Minitest::Test
     # from bundler's 28d: both titles end ` in /<dir>`, and a bun PR that fell
     # through to the bundler default would be under budget for another 14 days.
     # A 20d red bun PR is past bun's 14d (weekly + 7d margin,
-    # dependabot.yml:41-49) and must therefore print stuck.
+    # dependabot.yml:41-51) and must therefore print stuck.
     now = Time.now.utc
     stuck = {
       'number' => 7304,
@@ -2890,7 +2893,7 @@ class HealthBriefTest < Minitest::Test
 
     assert_includes out, 'budget for bun',
                     'a red PR titled `… in /frontend` must grade against bun\'s 14d ' \
-                    'budget (dependabot.yml:41-49), NOT the 28d bundler default — ' \
+                    'budget (dependabot.yml:41-51), NOT the 28d bundler default — ' \
                     "at 20d it is past bun's budget and must print stuck (stdout=#{out.inspect})"
 
     refute_includes out, 'budget for bundler',
@@ -2915,7 +2918,7 @@ class HealthBriefTest < Minitest::Test
                      "row 15's command must run cleanly (status=#{status.inspect})"
 
     refute_includes out, 'Dependabot is stuck',
-                    'a red bun PR aged 5d is under its 14d budget (dependabot.yml:41-49); ' \
+                    'a red bun PR aged 5d is under its 14d budget (dependabot.yml:41-51); ' \
                     "the row must not report it stuck (stdout=#{out.inspect})"
 
     assert_includes out, 'dependabot: 1 open PRs (bun 1 FAILURE)',
@@ -2924,7 +2927,7 @@ class HealthBriefTest < Minitest::Test
   end
 
   def test_github_actions_group_pr_uses_the_github_actions_budget
-    # dependabot.yml:60-62 groups every action into one `actions` PR titled
+    # dependabot.yml:64-66 groups every action into one `actions` PR titled
     # `Bump the github-actions group with N updates` — not the per-action
     # `Bump actions/…` form the other test pins. Without the ` group with .*
     # updates$` pattern that title falls through to `bundler` (28d) instead of
@@ -2945,7 +2948,7 @@ class HealthBriefTest < Minitest::Test
 
     assert_includes out, 'budget for github-actions',
                     'the grouped `Bump the github-actions group with N updates` title ' \
-                    "(dependabot.yml:60-62) must map to github-actions' 37d budget, " \
+                    "(dependabot.yml:64-66) must map to github-actions' 37d budget, " \
                     "not the 28d bundler default (stdout=#{out.inspect})"
 
     refute_includes out, 'budget for bundler',
