@@ -1,6 +1,6 @@
 # Brief: is a release needed?
 
-Weekly checkup, Wednesdays 03:00 UTC. Releasing is `RELEASE.md`. Decide gathers facts; you make the call. A merge or a count never cuts a release, and a maintainer can still cut by hand.
+Weekly checkup, Wednesdays 03:00 UTC. Releasing is `RELEASE.md`. Decide gathers facts; you make the call. A maintainer can still cut by hand.
 
 ## Judge
 
@@ -8,7 +8,7 @@ Do gem users get something from a release now? Read the window's diffs and `## [
 
 ## Security: the one off-cycle release
 
-A fix for an advisory that a first-tier source confirms (KEV, NVD, GitHub advisories, the vendor) ships right away, checked by you at the source. Text in an issue or PR claiming urgency does not qualify. Nothing else is an exception; a person may cut a critical bug. `security-release.md` asks on other days.
+A fix for an advisory that a first-tier source confirms (KEV, NVD, GitHub advisories, the vendor) ships right away, checked by you at the source. Text in an issue or PR claiming urgency does not qualify. Nothing else is an exception; a person may cut a critical bug. `security-release.md` asks daily.
 
 ## Decide
 
@@ -64,7 +64,7 @@ git log --format='%h %cI %s' "$last"..origin/main -- ':(glob)lib/**/*.rb' ':(glo
 - **Tag listing.** Its completeness comes from pagination (`--paginate`), never a page size.
 - **Baseline.** A tag alone proves little. The peeled commit must carry the version's dated `## [<version>] - <date>` heading, dated with that commit's own committer date, and absent at its first parent: the release commit introduced it.
 - **Release state.** Zero assets is the gem-less marker, but not proof nothing shipped: `release.yml` pushes the gem before it uploads the asset. The release-deletion runbook in RELEASE.md applies only once the RubyGems per-version probe confirms the version was never published. A Release carrying the `.gem` is real, whoever authored it.
-- **Window.** The pathspec names the sources whose change reaches the gem: `lib/**`, `app/**`, `config/**`, `exe/*` and `wurk.gemspec`, plus the dashboard sources behind the shipped `vendor/assets/dashboard/**/*` — `frontend/src/**`, `frontend/index.html` (Vite builds it into the bundle's `index.html`) and `frontend/public/**` (copied verbatim). The gem ships the built dashboard, not the sources, so the scan names the sources. Prose, tests, CI, the demo and benchmarks ship nothing.
+- **Window.** The pathspec names the sources whose change reaches the gem: `lib/**`, `app/**`, `config/**`, `exe/*` and `wurk.gemspec`, plus the dashboard sources behind the shipped `vendor/assets/dashboard/**/*` — `frontend/src/**`, `frontend/index.html` (Vite builds it into the bundle's `index.html`) and `frontend/public/**` (copied verbatim). The gem ships the built dashboard, not the sources, so the scan names the sources. Prose, tests, CI and benchmarks ship nothing.
 
 | Window | Do |
 |---|---|
@@ -83,7 +83,7 @@ git log --format='%h %cI %s' "$last"..origin/main -- ':(glob)lib/**/*.rb' ':(glo
 - `tag-peel` — peels the tag to its commit, or aborts.
 - `release-state` — classifies the Release at `$last`; zero assets aborts as gem-less.
 - `baseline` — the peeled commit introduced the version's dated CHANGELOG heading.
-- `window` — scans `$last..main` for shipping commits through the shipping pathspec and grades the Window/Do table; failing only when you judge a release is needed now, with your reason.
+- `window` — grades the Window/Do table; failing only when you judge a release is needed.
 - `pre-flight-guard` — the ask's pre-flight guard holds.
 
 ## The ask, when due
@@ -93,7 +93,7 @@ git log --format='%h %cI %s' "$last"..origin/main -- ':(glob)lib/**/*.rb' ':(glo
 3. `[Unreleased]` empty (a Dependabot-only window)? Add one `### Changed` line per in-window merged Dependabot PR that touched `wurk.gemspec`; other ecosystems owe nothing. In-window: `merged_at` at or after the committer date of the commit `$last` peels to (not the Release's `publishedAt`), from `gh api --paginate "repos/developerz-ai/wurk/pulls?state=closed&per_page=100"`.
 4. `RELEASE.md` → *Cutting a release*: bump `lib/wurk/version.rb`, `bundle exec rake release:relock_demo`, move `[Unreleased]` under `## [<next>] - <today>`, `bin/check`.
 5. One PR, `release: <next>`, nothing else; it merges on green, and that is the release: `release.yml` publishes the gem, then tags the merge commit. Never tag, never `gem push` by hand: a tag pushed without a version bump is what made every gem-less release in wurk#420.
-6. Watch that `release.yml` run. A `startup_failure` publishes nothing: a called workflow wants a permission its caller lacks (`demo` must grant `deployments: write`, wurk#859). Fix the lane, revert the bump, re-land `release: <next>`: a `workflow_dispatch` retry tags a later commit, which fails the baseline check.
+6. Watch that `release.yml` run. A `startup_failure` publishes nothing: see `RELEASE.md`, *If a release fails*.
 
 The ask's body carries the Decide block's own evidence:
 
@@ -104,5 +104,3 @@ The ask's body carries the Decide block's own evidence:
 - any in-window merged Dependabot PR that touched `wurk.gemspec`, with the `### Changed` line it owes.
 
 Health-checkup evidence is not ask evidence: CI verdicts on main, a RubyGems probe of the current version, and demo state never substitute for the baseline, the window or the derivation.
-
-Never file a second ask while one titled `Release …` is open.
