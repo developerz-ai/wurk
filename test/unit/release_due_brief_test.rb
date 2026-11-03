@@ -16,6 +16,19 @@ require 'tmpdir'
 # window list with the oldest commit's date, [Unreleased] contents, <next>
 # derivation), never health-checkup items. Reads files and touches no Redis
 # or shared state.
+#
+# The brief is trimmed to fit the scheduler's cap: the checkup header is
+# prepended to it and the MERGED text must stay under TASK_PROBLEM_MAX
+# (10,000 characters), so an over-cap brief is refused `brief_too_large` on
+# every tick and never runs (the cap guard below). The brief keeps its rules;
+# the FINDINGS and the HISTORY behind them live here, next to the guard that
+# enforces each one — the release-state rationale (release.yml pushes the gem
+# before it creates the Release and uploads the `.gem` asset, so a zero-asset
+# Release is not proof that no gem shipped), the window's shipping-path
+# rationale (the gem ships the built dashboard, not its sources, so the scan
+# names `frontend/index.html` and `frontend/public/**`), and the incident
+# behind "never tag or `gem push` by hand" (a tag pushed without a version
+# bump is what made every gem-less release in wurk#420).
 class ReleaseDueBriefTest < Minitest::Test
   parallelize_me!
 
@@ -29,6 +42,44 @@ class ReleaseDueBriefTest < Minitest::Test
 
   def setup
     @text = File.read(BRIEF)
+  end
+
+  # The scheduled brief fires under TASK_PROBLEM_MAX: the scheduler prepends
+  # its checkup header to the brief and the MERGED text must stay under
+  # 10,000 characters. A brief over the cap is refused `brief_too_large` on
+  # every tick — the checkup never runs at all, so the lane is silently dead
+  # rather than red. The header is not a fixed size (the repository name and
+  # the schedule name ride in it), so the brief leaves the same
+  # 1,000-character reserve health.md leaves for it.
+  def test_brief_is_below_the_scheduled_brief_cap
+    header_reserve = 1_000
+
+    assert_operator @text.length + header_reserve, :<, 10_000,
+                    'release-due.md must leave 1,000 characters for the checkup header: ' \
+                    "it is #{@text.length} characters, so the merged brief would exceed " \
+                    'the 10,000-character cap and the checkup would be refused ' \
+                    '`brief_too_large` on every tick'
+  end
+
+  # The brief's contract with the platform is its named checks: the `## Rows`
+  # section lists the rows the checkup reports, the Window/Do table grades
+  # them, and the ask section says what to file. The table and the steps are
+  # pinned by the tests below; the Rows section is not, so a trim that drops
+  # a row name would pass every other gate here.
+  def test_brief_keeps_its_rows_section
+    rows_idx = @text.index("\n## Rows\n")
+
+    refute_nil rows_idx, 'release-due.md must keep its "## Rows" section'
+
+    section = @text[rows_idx..]
+    next_heading = section.index("\n## ", 1)
+    section = section[0...next_heading] if next_heading
+
+    %w[tag-listing tag-peel release-state baseline window pre-flight-guard].each do |row|
+      assert_includes section, "`#{row}`",
+                      "the Rows section must keep the `#{row}` row — the platform grades " \
+                      'the brief by these names'
+    end
   end
 
   def test_unknown_row_present_for_unreadable_window
