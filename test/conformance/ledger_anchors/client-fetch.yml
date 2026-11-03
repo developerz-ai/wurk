@@ -74,12 +74,12 @@
     when :usr1 then rolling_restart
 
 - entry: "USR2 reopens logs; RSS recycling uses the rolling-restart machine"
-  anchor: "lib/wurk/swarm/child_boot.rb#L31"
+  anchor: "lib/wurk/swarm/child_boot.rb#L32"
   fragment: |-
     CHILD_SIGNALS = { 'TERM' => :term, 'INT' => :term, 'TSTP' => :tstp, 'USR2' => :usr2, 'TTIN' => :ttin }.freeze
 
 - entry: "USR2 reopens logs; RSS recycling uses the rolling-restart machine"
-  anchor: "lib/wurk/swarm/child_boot.rb#L224-L245"
+  anchor: "lib/wurk/swarm/child_boot.rb#L226-L247"
   fragment: |-
     when :tstp then launcher.quiet
     when :usr2 then reopen_logs

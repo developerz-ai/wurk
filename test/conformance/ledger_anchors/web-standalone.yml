@@ -40,43 +40,43 @@
     def drop(job)
       Wurk::Processor::EXPIRED.incr
       Wurk::Metrics::Statsd.increment('jobs.expired', tags: ["class:#{job['class']}"])
-- entry: 'Standalone `Sidekiq::Web.call` routes extensions only'
-  anchor: 'lib/wurk/web/rack_app.rb#L8-L18'
+- entry: '`Sidekiq::Web` outside a Rails app routes extensions only'
+  anchor: 'lib/wurk/web/rack_app.rb#L9-L19'
   fragment: |-
     # §25.1): unsafe methods must carry `Sec-Fetch-Site: same-origin`.
     SAFE_METHODS = %w[GET HEAD OPTIONS TRACE].freeze
-- entry: 'Standalone `Sidekiq::Web.call` routes extensions only'
-  anchor: 'lib/wurk/web/rack_app.rb#L27-L36'
+- entry: '`Sidekiq::Web` outside a Rails app routes extensions only'
+  anchor: 'lib/wurk/web/rack_app.rb#L42-L51'
   fragment: |-
     @standalone_app ||= Authorization.new(method(:dispatch), api_handoff: false)
-- entry: 'Standalone `Sidekiq::Web.call` routes extensions only'
-  anchor: 'lib/wurk/web/rack_app.rb#L39-L48'
+- entry: '`Sidekiq::Web` outside a Rails app routes extensions only'
+  anchor: 'lib/wurk/web/rack_app.rb#L53-L62'
   fragment: |-
     def safe_request?(env)
       SAFE_METHODS.include?(env['REQUEST_METHOD']) ||
         env['HTTP_SEC_FETCH_SITE'] == 'same-origin'
-- entry: 'Standalone `Sidekiq::Web.call` routes extensions only'
-  anchor: 'lib/wurk/web/rack_app.rb#L53-L70'
+- entry: '`Sidekiq::Web` outside a Rails app routes extensions only'
+  anchor: 'lib/wurk/web/rack_app.rb#L56-L73'
   fragment: |-
     result = extension_result(ext, env)
       next unless result
       return rackify(result) unless result[0] == 404
-- entry: 'Standalone `Sidekiq::Web.call` routes extensions only'
+- entry: '`Sidekiq::Web` outside a Rails app routes extensions only'
   anchor: 'config/routes.rb#L4-L11'
   fragment: |-
     scope :api, defaults: { format: :json } do
       get  'meta',             to: 'api#meta'
-- entry: 'Standalone `Sidekiq::Web.call` routes extensions only'
+- entry: '`Sidekiq::Web` outside a Rails app routes extensions only'
   anchor: 'config/routes.rb#L124-L142'
   fragment: |-
     match 'ext/:name(/*subpath)', to: 'extensions#show', via: %i[get post put patch delete], as: :extension,
                                   format: false, defaults: { subpath: '' }, constraints: { name: %r{[^/]+} }
-- entry: 'Standalone `Sidekiq::Web.call` routes extensions only'
+- entry: '`Sidekiq::Web` outside a Rails app routes extensions only'
   anchor: 'test/unit/web_rack_app_test.rb#L74-L107'
   fragment: |-
     def test_get_serves_extension_route_at_its_own_path
       status, _headers, body = Wurk::Web.call(env_for('GET', '/standalone'))
-- entry: 'Standalone `Sidekiq::Web.call` routes extensions only'
+- entry: '`Sidekiq::Web` outside a Rails app routes extensions only'
   anchor: 'test/unit/web_rack_app_test.rb#L112-L150'
   fragment: |-
     def test_authorization_denial_is_403_on_get_through_sidekiq_web
@@ -100,7 +100,7 @@
     anchors << Wurk::Middleware::Expiry if defined?(Wurk::Middleware::Expiry)
     anchors << Wurk::Limiter::ServerMiddleware if defined?(Wurk::Limiter::ServerMiddleware)
 - entry: 'Web pool is configuration-owned; the class-level accessor and pool-bound mounts are unsupported'
-  anchor: 'lib/wurk/compat.rb#L201'
+  anchor: 'lib/wurk/compat.rb#L203'
   fragment: |-
     Web              = Wurk::Web
 - entry: 'Web pool is configuration-owned; the class-level accessor and pool-bound mounts are unsupported'
@@ -146,7 +146,7 @@
     def close_parent_sockets
       @config.reset_redis_pools!
 - entry: 'Web pool is configuration-owned; the class-level accessor and pool-bound mounts are unsupported'
-  anchor: 'lib/wurk/swarm/child_boot.rb#L155-L156'
+  anchor: 'lib/wurk/swarm/child_boot.rb#L157-L158'
   fragment: |-
     def reconnect_after_fork
       @config.reset_redis_pools!

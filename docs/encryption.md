@@ -255,6 +255,18 @@ bubble into the normal retry pipeline) and instead:
    `worker:<JobClass>` — alert on this.
 3. Raises `Wurk::JobRetry::Skip`, which ACKs the job so it isn't re-fetched.
 
+A job with `encrypt` set whose last argument is not a Wurk envelope also goes to
+the dead set unrun: `error_class` `Wurk::Encryption::DecryptionError`, message
+prefix `encryption_error: Wurk::Encryption::NotSealedError`. It came from a
+producer without crypto enabled, or another implementation. Enable crypto on
+producers before they push `encrypt: true` jobs. A retry goes through the client
+chain, which seals the argument as it stands: right for plaintext, wrong for
+foreign ciphertext, which `perform` would then receive.
+
+None of these kills trim the dead set, so a backlog failing at once is kept past
+`dead_max_jobs`, and each one logs an ERROR naming its class and jid. A later
+ordinary death applies the cap as usual, so fix the cause and retry promptly.
+
 The dead record carries:
 
 | Field | Value |

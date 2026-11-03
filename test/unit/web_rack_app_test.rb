@@ -4,6 +4,8 @@ require_relative '../test_helper'
 require 'rack'
 require 'tmpdir'
 require 'fileutils'
+require 'open3'
+require 'rbconfig'
 require 'wurk/web/extension'
 
 # #204: `Sidekiq::Web` as an upstream-compatible standalone Rack app —
@@ -100,11 +102,44 @@ class WebRackAppTest < Wurk::Test::UnitCase
     assert_equal '/standalone', headers['Location']
   end
 
-  def test_unknown_path_is_404
-    status, _headers, body = Wurk::Web.call(env_for('GET', '/nope'))
+  # A process of its own: elsewhere in the suite Rails may have booted in this one,
+  # and then these paths belong to the engine.
+  def test_outside_rails_a_dashboard_path_is_a_404_naming_the_fix_once
+    script = <<~RUBY
+      require 'wurk'
+      require 'rack'
+      log = StringIO.new
+      Wurk.logger = Logger.new(log)
+      module OneRoute
+        def self.registered(app) = app.get('/one') { 'one' }
+      end
+      Wurk::Web.register(OneRoute, name: 'one', tab: 'One', index: 'one')
+      responses = %w[/nope /retries].map do |path|
+        status, _headers, body = Wurk::Web.call(Rack::MockRequest.env_for(path))
+        [status, body.join.include?('Wurk::Engine')]
+      end
+      print JSON.generate(responses: responses, warnings: log.string.scan('Mount Sidekiq::Web or Wurk::Engine').size)
+    RUBY
+    env = { 'REDIS_URL' => Wurk::Test.redis_url, 'COVERAGE' => nil }
+    out, status = Open3.capture2e(env, ::RbConfig.ruby, '-I', File.expand_path('../../lib', __dir__), '-e', script)
 
-    assert_equal 404, status
-    refute_empty body.join
+    assert_predicate status, :success?, out
+    result = JSON.parse(out.lines.last)
+
+    assert_equal [[404, true], [404, true]], result['responses']
+    assert_equal 1, result['warnings']
+  end
+
+  # Upstream 8.1.5 denies these too, whatever c[:csrf] says. A gem's test posture
+  # is not a reason to weaken the check: a browser on plain HTTP sends no header.
+  def test_csrf_false_does_not_open_the_same_origin_gate
+    Wurk::Web.configure { |c| c[:csrf] = false }
+
+    [{}, { 'HTTP_SEC_FETCH_SITE' => 'cross-site' }, { 'HTTP_ORIGIN' => 'http://evil.example' }].each do |headers|
+      status, = Wurk::Web.call(env_for('POST', '/standalone/poke').merge(headers))
+
+      assert_equal 403, status, headers.inspect
+    end
   end
 
   # --- W1: the standalone mount runs the same gates as the engine ---------

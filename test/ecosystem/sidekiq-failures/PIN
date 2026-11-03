@@ -1,0 +1,5 @@
+# Upstream checkout this suite runs from. No v1.1.0 tag upstream: this is the commit
+# "Release 1.1.0". Bump sha only after re-running `bin/rake test:ecosystem` green.
+repo: https://github.com/mhfs/sidekiq-failures
+ref: 1.1.0
+sha: 44fc51571571795c330c32dfa3b85d5cce961bd9

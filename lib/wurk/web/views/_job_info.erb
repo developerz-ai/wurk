@@ -1,0 +1,16 @@
+<% extras = job.item.reject { |key, _| RETRY_JOB_KEYS.include?(key) } %>
+<header><h2><%= t('Job') %></h2></header>
+<div class="table_container">
+  <table class="table">
+    <tbody>
+      <tr><th><%= t('Queue') %></th><td><%= h(job.queue) %></td></tr>
+      <tr><th><%= t('Job') %></th><td><code><%= h(job.display_class) %></code></td></tr>
+      <tr><th><%= t('Arguments') %></th><td><code class="code-wrap"><%= display_args(job.display_args) %></code></td></tr>
+      <tr><th><%= t('JID') %></th><td><code><%= h(job.jid) %></code></td></tr>
+      <% if job.created_at %><tr><th><%= t('CreatedAt') %></th><td><%= relative_time(job.created_at) %></td></tr><% end %>
+      <% if job.enqueued_at %><tr><th><%= t('Enqueued') %></th><td><%= relative_time(job.enqueued_at) %></td></tr><% end %>
+      <% if job['retry_count'] %><tr><th><%= t('RetryCount') %></th><td><%= h(job['retry_count']) %></td></tr><% end %>
+      <% extras.each do |key, value| %><tr><th><%= h(key) %></th><td><code><%= h(truncate(value.inspect)) %></code></td></tr><% end %>
+    </tbody>
+  </table>
+</div>

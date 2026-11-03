@@ -175,3 +175,8 @@ re-quote whatever now sits at the old lines to keep a stale anchor green, and
 never drop a record to silence the gate. A failing anchor check means the
 ledger or the record no longer describes the code; make the description true
 again — updating the entry first if the divergence itself changed.
+
+When lines move, run `bin/repin-anchors`. It re-pins the records, syncs the ledger's
+`path#L1-L2` and `path:1-2` references and the line ranges in `cases.yml`, moving each
+pin only to where its quoted text still is. A quote that is gone is reported as
+unresolved, for you to decide about; `--check` reports without writing.

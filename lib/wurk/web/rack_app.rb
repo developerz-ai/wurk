@@ -7,16 +7,20 @@ module Wurk
   class Web
     # Upstream-compatible class-level Rack surface (#204): Sidekiq apps do
     # `run Sidekiq::Web`, `mount Sidekiq::Web => "/sidekiq"`, and rack-test
-    # ecosystem suites call `Sidekiq::Web.call(env)` directly. Wurk's full
-    # dashboard is the engine-mounted SPA; this standalone entry serves the
-    # registered third-party Web extensions (#187's renderer) under their own
-    # route paths — the surface ecosystem gems exercise. Non-extension paths
-    # 404 rather than half-serving the SPA without its engine.
+    # ecosystem suites call `Sidekiq::Web.call(env)` directly. This entry serves
+    # the registered third-party Web extensions (#187's renderer) under their own
+    # route paths. Everything else is the dashboard, which is the engine's: in a
+    # booted Rails app the request goes there, through the engine's own copy of
+    # the gates below, so the stock install line shows the dashboard. Without an
+    # engine those paths 404 rather than half-serve the SPA.
     #
     # Same CSRF model as upstream Sidekiq 8 and ExtensionsController (spec
     # §25.1): unsafe methods must carry `Sec-Fetch-Site: same-origin`.
     SAFE_METHODS = %w[GET HEAD OPTIONS TRACE].freeze
     NOT_FOUND_HEADERS = { 'Content-Type' => 'text/plain' }.freeze
+    NO_ENGINE_FIX = 'Wurk serves its dashboard from its Rails engine, so this Rack app answers only ' \
+                    'routes of registered Web extensions. Mount Sidekiq::Web or Wurk::Engine in a ' \
+                    'Rails app to get the dashboard.'
 
     class << self
       # Class-level Rack entry: host middleware (`Wurk::Web.use`), then the
@@ -25,10 +29,21 @@ module Wurk
       # with exactly these, and Wurk ships Ent, so an app that swapped the gem
       # keeps its authorization on this mount too.
       def call(env)
+        return ::Wurk::Engine.call(env) if engine_page?(env)
+
         PoolScope.scope { config.rack_app(standalone_app).call(env) }
       end
 
       private
+
+      # `defined?` so this never loads the engine: one loaded this late would have
+      # no routes, and a plain Rack process has no Rails to load it into.
+      def engine_page?(env)
+        return false unless defined?(::Wurk::Engine) && ::Rails.application&.initialized?
+
+        path = env['PATH_INFO'].to_s
+        !::Wurk::API.engine_serves?(path) && !Extension::Renderer.route?(env['REQUEST_METHOD'], path)
+      end
 
       # Memoized so `Config#rack_app`'s per-inner cache keeps hitting. No
       # machine-API hand-off: Wurk::API is never served under this mount.
@@ -59,7 +74,16 @@ module Wurk
 
           not_found ||= result
         end
-        rackify(not_found || [404, NOT_FOUND_HEADERS.dup, 'Not Found'])
+        routed = not_found && Extension::Renderer.route?(env['REQUEST_METHOD'], env['PATH_INFO'].to_s)
+        rackify(routed ? not_found : no_dashboard_here)
+      end
+
+      def no_dashboard_here
+        unless @no_engine_warned
+          @no_engine_warned = true
+          ::Wurk.logger.warn { NO_ENGINE_FIX }
+        end
+        [404, NOT_FOUND_HEADERS.dup, NO_ENGINE_FIX]
       end
 
       def extension_result(ext, env)

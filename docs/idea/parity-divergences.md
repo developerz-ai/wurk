@@ -296,8 +296,8 @@ queued or in flight (including the replacement), so repeated RSS checks and
 manual rolling restarts cannot double-enqueue the same work. This deliberately
 changes the signal and hand-off ordering, not the purpose of RSS recycling.
 
-**Anchor:** [ChildBoot signal table](../../lib/wurk/swarm/child_boot.rb#L31),
-[child dispatch and reopen](../../lib/wurk/swarm/child_boot.rb#L224-L245),
+**Anchor:** [ChildBoot signal table](../../lib/wurk/swarm/child_boot.rb#L32),
+[child dispatch and reopen](../../lib/wurk/swarm/child_boot.rb#L226-L247),
 [parent drain_signals](../../lib/wurk/swarm.rb#L481-L495),
 [parent reopen](../../lib/wurk/swarm.rb#L510-L514),
 [parent relay](../../lib/wurk/swarm.rb#L667-L669),
@@ -1033,7 +1033,7 @@ documents the silent skip; it does not resolve the callback-marker/`notify`/
 
 ## Sidekiq Enterprise / web internals not provided
 
-**Wurk:** `Sidekiq::Enterprise::VERSION` is undefined (Wurk advertises as OSS: `Sidekiq.pro?`/`ent?` are false), and upstream's ERB dashboard internals (`Sidekiq::Web::Action`, `Route`, `Router`, `WebHelpers`) and `Sidekiq::TestingClient` are not provided as upstream constants.
+**Wurk:** `Sidekiq::Enterprise::VERSION` is undefined (Wurk advertises as OSS: `Sidekiq.pro?`/`ent?` are false), and upstream's ERB dashboard internals (`Sidekiq::Web::Action`, `Route`, `Router`) and `Sidekiq::TestingClient` are not provided as upstream constants. `Sidekiq::WebHelpers` is provided as `Wurk::Web::Extension::Helpers`, a working subset of free §25.7 grown from what extensions call; helpers it lacks raise `NoMethodError`. `Sidekiq::Paginator` is provided as `Wurk::Web::Paginator`.
 This is distinct from the supported `Wurk::Web::Extension::App` router DSL,
 which Wurk does ship: `route(*methods, path, &block)` registers one route per
 method, the verb helpers (`head`, `get`, `post`, `put`, `patch`, `delete`)
@@ -1070,7 +1070,7 @@ gem that reads `Sidekiq::Pro::VERSION` raises `NameError` and must gate on
 
 **Wurk:** per-class metrics written by earlier Wurk versions (`j|YYYYMMDD|…`, `<klass>-YYYYMMDD-H`) are not read; they expire within 3 days.
 
-**Why:** no backwards-compat shims (CLAUDE.md); the restore makes Wurk read Sidekiq's own history, which is what a migration needs.
+**Why:** no backwards-compat shims (CLAUDE.md); the restore makes Wurk read Sidekiq's own history, which is what a migration needs. True for 8.x's format only: Sidekiq 7.3 writes `j|YYYYMMDD|H:M` and `<Class>-DD-H:M`, which Wurk does not read, and 7.3 does not read Wurk's; observed by hand on 7.3.10. History starts empty on a 7.x migration. No key change: the 8.x format is the target.
 
 **Anchor:** `lib/wurk/metrics/history.rb`.
 
@@ -1241,13 +1241,13 @@ and [range controls](../../frontend/src/pages/Dashboard.tsx#L213-L219).
 
 ## A job whose encrypted argument cannot be decrypted goes straight to the dead set
 
-**Wurk:** a decrypt failure (unknown key version, a key resolver that returns nil or raises, a corrupt envelope) raises `Wurk::Encryption::DecryptionError`, increments `jobs.encryption_error`, and moves the job to the dead set without retries. The envelope is kept, so the job can be retried from the dashboard once the key is restored.
+**Wurk:** a decrypt failure (unknown key version, a key resolver that returns nil or raises, a corrupt envelope) raises `Wurk::Encryption::DecryptionError`, increments `jobs.encryption_error`, and moves the job to the dead set without retries. The envelope is kept, so the job can be retried from the dashboard once the key is restored. The same happens when `encrypt` is set and the last argument is not a Wurk envelope (`Wurk::Encryption::NotSealedError`, `error_class` `Wurk::Encryption::DecryptionError`). A job with empty `args` still runs, since nothing was sealed.
 
-**Spec:** Ent §4.6 routes a failed decrypt through the normal retry pipeline with `OpenSSL::Cipher::CipherError`.
+**Spec:** Ent §4.6 routes a failed decrypt through the normal retry pipeline with `OpenSSL::Cipher::CipherError`. It covers a missing version or bad tag, not a last argument in no recognised envelope. Ent §4.4 says Wurk's and Enterprise's formats do not round-trip, so Enterprise ciphertext reaches this path.
 
-**Why:** 25 retries over ~21 days cannot bring a missing key back, and each one re-logs the same failure; the dead set is where an operator looks, and a manual retry works the moment the key is back. Documented for users in `docs/encryption.md`.
+**Why:** 25 retries over ~21 days cannot bring a missing key back, and each one re-logs the same failure; the dead set is where an operator looks, and a manual retry works the moment the key is back. For a last argument that is no envelope, the alternative hands ciphertext to `perform` as the decrypted value, and the job runs on garbage with no error; a plain value cannot be told from foreign ciphertext, so both stop. Documented for users in `docs/encryption.md`.
 
-**Anchor:** `lib/wurk/encryption.rb`, `test/parity/encryption_test.rb` (`test_forged_tag_dead_sets_as_encryption_error_without_retry` pins the dead record tagged `encryption_error` and the absent retry entry).
+**Anchor:** `lib/wurk/encryption.rb` (`ServerMiddleware#decrypt_last_arg!`), `test/parity/encryption_test.rb` (`test_forged_tag_dead_sets_as_encryption_error_without_retry` pins the dead record tagged `encryption_error` and the absent retry entry), `test/unit/encryption_test.rb` (`test_server_middleware_dead_sets_a_last_arg_that_is_not_an_envelope`).
 
 ## Scheduled job expiry counts from the scheduled time
 
@@ -1329,9 +1329,9 @@ DEFAULTS ([free §4.1 DEFAULTS — `max_iteration_runtime`](../target/sidekiq-fr
 
 **Wurk:** the swarm parent always requires the `-r` entrypoint — children
 inherit the loaded app rather than re-requiring it — so the flag governs only
-the extra Rails `eager_load!` (`lib/wurk/cli.rb:562-586`, deliberate-divergence
-comment at `lib/wurk/cli.rb:562-586`); `preload_app?` reads
-`WURK_PRELOAD_APP`/`SIDEKIQ_PRELOAD_APP` at `lib/wurk/cli.rb:562-586`.
+the extra Rails `eager_load!` (`lib/wurk/cli.rb:565-589`, deliberate-divergence
+comment at `lib/wurk/cli.rb:565-589`); `preload_app?` reads
+`WURK_PRELOAD_APP`/`SIDEKIQ_PRELOAD_APP` at `lib/wurk/cli.rb:565-589`.
 
 **Spec:** Ent §7.2 — `SIDEKIQ_PRELOAD_APP=1` means "require whole app in parent
 before fork" ([Ent §7.2 Environment variables — `SIDEKIQ_PRELOAD_APP`](../target/sidekiq-ent.md#72-environment-variables)), and the process-model notes
@@ -1346,7 +1346,7 @@ and multiplying boot cost by the child count. The flag keeps its documented
 trade (more CoW sharing against slower parent boot); what changed is only that
 the floor is "entrypoint loaded", not "nothing loaded".
 
-**Anchor:** `lib/wurk/cli.rb:562-586`; Ent §7.2 env table
+**Anchor:** `lib/wurk/cli.rb:565-589`; Ent §7.2 env table
 ([Ent §7.2 Environment variables — `SIDEKIQ_PRELOAD_APP`](../target/sidekiq-ent.md#72-environment-variables)) and §7.3 process model
 ([Ent §7.3 Process model — conditional parent app load](../target/sidekiq-ent.md#73-process-model)).
 
@@ -1577,17 +1577,20 @@ unchanged.
 **Anchor:** `lib/wurk/leader.rb:35`, `lib/wurk/leader.rb:101`,
 `lib/wurk/leader.rb:285-290`; Ent §6 ([Ent §6 Leader Election — best-effort lock, no user fencing token](../target/sidekiq-ent.md#6-leader-election)).
 
-## Standalone `Sidekiq::Web.call` routes extensions only
+## `Sidekiq::Web` outside a Rails app routes extensions only
 
-**Wurk:** the standalone Rack entrypoint `Sidekiq::Web.call(env)` (including
-`run Sidekiq::Web`) dispatches only registered Web extensions at their own
-route paths. It does not provide the built-in dashboard routes such as
-`GET /`, `/busy`, `/queues`, or `/retries`. After host middleware,
-authorization, and read-only gates allow a request through, an unmatched
-safe-method path returns 404 from the extension dispatcher. Safe methods are
-`GET`, `HEAD`, `OPTIONS`, and `TRACE`; unsafe requests reaching the dispatcher
-without `Sec-Fetch-Site: same-origin` return 403. Supplying that header permits
-routing, not automatic success or a bypass of the outer gates.
+**Wurk:** inside a booted Rails app, `Sidekiq::Web.call(env)` serves registered
+extension routes at their own paths, as a bare page without upstream's layout, and
+hands every other path to `Wurk::Engine`, which runs its own `Wurk::Web.use` chain,
+authorization hook and read-only gate. `mount Sidekiq::Web` therefore shows the
+dashboard. Outside Rails there is no engine: `run Sidekiq::Web` dispatches only
+registered Web extensions, and does not provide built-in routes such as `GET /`,
+`/busy`, `/queues`, or `/retries`. After host middleware, authorization, and
+read-only gates allow a request through, an unmatched safe-method path returns 404
+with a body naming the fix, and logs one WARN per process. Safe methods are `GET`,
+`HEAD`, `OPTIONS`, and `TRACE`; unsafe requests reaching the dispatcher without
+`Sec-Fetch-Site: same-origin` return 403. Supplying that header permits routing, not
+automatic success or a bypass of the outer gates.
 
 **Spec:** free [§25.1](../target/sidekiq-free.md#251-entrypoint) exposes
 `run Sidekiq::Web` through the class-level `call(env)` and specifies the CSRF
@@ -1595,20 +1598,18 @@ check. Free [§25.4](../target/sidekiq-free.md#254-routes) lists the built-in
 routes, including the dashboard, busy, queues, and retries pages, as part of
 that Web surface.
 
-**Why:** Wurk deliberately separates the engine-mounted dashboard SPA from the
-standalone extension renderer rather than half-serving the SPA without its
-engine. The engine supplies the dashboard root, dashboard JSON endpoints,
-`/ext/:name` embedding, and SPA catch-all; standalone extension routes instead
-use their own paths. This is a compatibility limitation: `run Sidekiq::Web`
-is not a drop-in replacement for the specified built-in Web routes. The
-separate [`HEAD /` health-probe divergence](#head--does-not-implement-the-redis-health-probe)
-describes the engine dashboard and worker health listener, not standalone
-route-miss behavior.
+**Why:** the dashboard is the engine's SPA and JSON API, and half-serving them
+without Rails would be worse than a clear 404. A gem suite that asserts upstream's
+ERB home page through a bare Rack `Sidekiq::Web` (sidekiq-failures' `can display
+home`) cannot pass. The separate
+[`HEAD /` health-probe divergence](#head--does-not-implement-the-redis-health-probe)
+describes the engine dashboard and worker health listener, not standalone route-miss
+behavior.
 
-**Anchor:** [standalone scope and safe methods](../../lib/wurk/web/rack_app.rb#L8-L18),
-[outer gates](../../lib/wurk/web/rack_app.rb#L27-L36),
-[CSRF check](../../lib/wurk/web/rack_app.rb#L39-L48), and
-[extension dispatch](../../lib/wurk/web/rack_app.rb#L53-L70);
+**Anchor:** [standalone scope and safe methods](../../lib/wurk/web/rack_app.rb#L9-L19),
+[outer gates](../../lib/wurk/web/rack_app.rb#L42-L51),
+[CSRF check](../../lib/wurk/web/rack_app.rb#L53-L62), and
+[extension dispatch](../../lib/wurk/web/rack_app.rb#L56-L73);
 [engine root and JSON routes](../../config/routes.rb#L4-L11) and
 [extension embedding and SPA catch-all](../../config/routes.rb#L124-L142).
 Existing routing tests in
@@ -1667,7 +1668,7 @@ free [§10.1 `Sidekiq::Middleware::Chain` — `add`](../target/sidekiq-free.md#1
 
 ## Web pool is configuration-owned; the class-level accessor and pool-bound mounts are unsupported
 
-**Wurk:** `Sidekiq::Web` is an alias of `Wurk::Web` (`lib/wurk/compat.rb:201`),
+**Wurk:** `Sidekiq::Web` is an alias of `Wurk::Web` (`lib/wurk/compat.rb:203`),
 and `Sidekiq::Pro::Web` is that same class (`lib/wurk/compat.rb:57`). `Wurk::Web`
 exposes no class-level `redis_pool` reader and no `redis_pool=` setter — both
 raise `NoMethodError` — and no `.with` factory, so
@@ -1703,7 +1704,7 @@ to fetch and heartbeat (#101). A class-level pool handle would let any gem swap
 that pool out from under every request path, and it is global mutable state
 set before boot: the parent closes its sockets before forking
 (`lib/wurk/swarm.rb:356-360`) and each child drops the inherited pools and
-builds fresh ones (`lib/wurk/swarm/child_boot.rb:155-156`), so a
+builds fresh ones (`lib/wurk/swarm/child_boot.rb:157-158`), so a
 caller-assigned pool could not survive the fork boundary — it would be an
 inherited socket, not a fresh pool.
 Per-mount shards would need a pool and a teardown per mount, which the
@@ -1712,7 +1713,7 @@ and the migration guide states it: the dashboard cannot be pointed at a
 different Redis than the workers use — only its size is configurable — and a
 shard-per-mount deployment has no Wurk equivalent.
 
-**Anchor:** [`Sidekiq::Web` alias](../../lib/wurk/compat.rb#L201) and
+**Anchor:** [`Sidekiq::Web` alias](../../lib/wurk/compat.rb#L203) and
 [`Sidekiq::Pro::Web` alias](../../lib/wurk/compat.rb#L57); the
 [class-level Web surface](../../lib/wurk/web/config.rb#L390-L456) and the
 [empty `Wurk::Web` class body](../../lib/wurk/web.rb#L27-L28);
@@ -1721,7 +1722,7 @@ shard-per-mount deployment has no Wurk equivalent.
 [`config.web_redis_pool`](../../lib/wurk/configuration.rb#L332-L334) and
 [`build_redis_pool`](../../lib/wurk/configuration.rb#L1210-L1214);
 [parent sockets closed before fork](../../lib/wurk/swarm.rb#L356-L360) and
-[child pools rebuilt after fork](../../lib/wurk/swarm/child_boot.rb#L155-L156);
+[child pools rebuilt after fork](../../lib/wurk/swarm/child_boot.rb#L157-L158);
 free §25.1 ([free §25.1 Entrypoint](../target/sidekiq-free.md#251-entrypoint))
 and Pro §10.2 ([Pro §10.2 Multi-shard](../target/sidekiq-pro.md#102-multi-shard));
 the user-facing statement is [migration guide §7](../migrate-from-sidekiq.md#7-known-incompatibilities--what-not-to-expect);
@@ -1871,3 +1872,13 @@ deploy, where accepting it would quietly change how often a queue is served.
 **Why:** the point is an early first alert, without the volume of reporting each later attempt.
 
 **Anchor:** `lib/wurk/sentry.rb`.
+
+## A worker refuses `Sidekiq::Testing` modes
+
+**Wurk:** `Wurk::CLI#run` after booting the app, `Swarm::ChildBoot#run` before the `:fork` and `:startup` hooks, and `Wurk::Embedded#run` call `Swarm::TestModeGuard.enforce!`: with fake or inline mode on, they log an ERROR naming the likely cause and call `Testing.disable!`.
+
+**Upstream:** Sidekiq 8.1.5's `sidekiq` CLI, observed from outside with `Sidekiq.testing!(:fake)` at load, starts normally, logs nothing about it, and every enqueue returns a jid and never reaches Redis.
+
+**Why:** a worker that drops every job without a word is never what anyone wants, and `rspec-sidekiq` outside a test group causes exactly that because the swarm preloads the default group. The divergence only changes a state that loses jobs. A Rails web process enqueuing in fake mode is not covered, and the guard stands down under `RAILS_ENV=test` or `RACK_ENV=test`, where `disable!` would take fake mode from a whole suite that boots a worker in-process.
+
+**Anchor:** `lib/wurk/swarm/test_mode_guard.rb`, `lib/wurk/cli.rb`, `lib/wurk/swarm/child_boot.rb`, `lib/wurk/embedded.rb`, `test/integration/worker_test_mode_guard_test.rb`.

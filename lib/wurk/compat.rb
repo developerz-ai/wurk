@@ -119,6 +119,8 @@ module Sidekiq
   private_constant :RailsNamespace
 
   BasicFetch       = Wurk::Fetcher::Reliable
+  WebHelpers       = Wurk::Web::Extension::Helpers
+  Paginator        = Wurk::Web::Paginator
   Batch            = Wurk::Batch
   BatchSet         = Wurk::BatchSet
   Capsule          = Wurk::Capsule
@@ -235,6 +237,8 @@ module Sidekiq
       name == :Rails ? RailsNamespace : super
     end
 
+    def gem_version = Gem::Version.new(VERSION)
+    def freeze! = Wurk.default_configuration.freeze!
     def strict_args!(mode = :raise) = Wurk.strict_args!(mode)
     def transactional_push! = Wurk.transactional_push!
     def testing!(mode = :fake, &) = Wurk.testing!(mode, &)

@@ -1,0 +1,2 @@
+# test_helper's literal is a fallback behind ENV['REDIS_URL'], which the harness always sets.
+test/test_helper.rb

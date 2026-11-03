@@ -1,0 +1,8 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+# The suite hardcodes localhost:6379, DB 0, and flushes it before every example. Point
+# all of it at the DB the harness may flush.
+sed -i -E 's#redis_url = "redis://\#\{redis_host\}/\#\{redis_db\}"#redis_url = ENV.fetch("REDIS_URL")#' spec/support/sidekiq_meta.rb
+sed -i -E 's/config\.redis = \{ port: 6379 \}/config.redis = { url: ENV.fetch("REDIS_URL") }/; s/conf\.redis = \{ port: 6379 \}/conf.redis = { url: ENV.fetch("REDIS_URL") }/' spec/spec_helper.rb
+sed -i -E 's/CompatClient\.new\(port: 6379\)/CompatClient.new(url: ENV.fetch("REDIS_URL"))/' spec/sidekiq_unique_jobs/script/caller_spec.rb

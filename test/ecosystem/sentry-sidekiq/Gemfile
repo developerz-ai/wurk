@@ -1,0 +1,18 @@
+# frozen_string_literal: true
+
+# Overlay Gemfile for the pinned checkout (see PIN): the monorepo's gems by path, plus
+# what its Gemfile.dev gives the suite.
+
+source 'https://rubygems.org'
+
+checkout = ENV.fetch('ECOSYSTEM_CHECKOUT')
+%w[sentry-ruby sentry-rails sentry-sidekiq].each { |name| gem name, path: File.join(checkout, name) }
+
+wurk_root = File.expand_path('../../..', __dir__)
+gem 'sidekiq', path: File.join(wurk_root, 'ecosystem/sidekiq-shim')
+gem 'wurk', path: wurk_root
+
+gem 'rails', ENV.fetch('RAILS_VERSION', '~> 8.0')
+gem 'sidekiq-cron'
+gem 'sidekiq-scheduler', '>= 6.0.0.beta'
+%w[debug rake rexml rspec simplecov simplecov-cobertura stackprof timecop vernier webmock].each { |name| gem name }

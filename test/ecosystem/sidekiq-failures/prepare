@@ -1,0 +1,9 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+# The hardcoded Redis, and the adapter (see adapter.rb) right after the gem under test
+# loads. The header: the suite is written for 7.x's token CSRF, while the Sidekiq 8
+# model Wurk matches denies a POST without Sec-Fetch-Site whatever the session holds.
+sed -i -E 's#url: "redis://127\.0\.0\.1:6379/15"#url: ENV.fetch("REDIS_URL")#' test/test_helper.rb
+sed -i '/^require "sidekiq"$/a require ENV.fetch("ECOSYSTEM_ADAPTER")' test/test_helper.rb
+sed -i "/env 'HTTP_X_CSRF_TOKEN', TOKEN/a \      env 'HTTP_SEC_FETCH_SITE', 'same-origin'" test/web_extension_test.rb
