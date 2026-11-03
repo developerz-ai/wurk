@@ -35,7 +35,11 @@ require 'tmpdir'
 #     which would mark a frozen rollout successful;
 #   * the `authorize` job's DEMO_DEPLOYERS allowlist and its `trusted` waiver
 #     are UNCHANGED — they are the door this workflow hangs, and a silent
-#     loosening of them would not be caught by any other test here.
+#     loosening of them would not be caught by any other test here;
+#   * the registry login uses TWO distinct credentials — DOCR authenticates the
+#     username against the account and the password against a DO API token, so
+#     passing one secret as both is not a usable credential pair — and a
+#     fail-closed check for the missing credential runs BEFORE the login.
 #
 # Reads files; touches no Redis, no network and no shared state.
 class DeployDemoWorkflowTest < Minitest::Test
@@ -482,6 +486,109 @@ class DeployDemoWorkflowTest < Minitest::Test
     assert_includes File.read(File.join(ROOT, '.dockerignore')), '.github'
   end
 
+  # --- the registry credential ---------------------------------------------
+
+  # DOCR authenticates the username against the DigitalOcean ACCOUNT and the
+  # password against a DO API TOKEN. Passing the token as both is not a
+  # usable pair — the registry rejects it — so the username must come from a
+  # separate, non-secret source and the token must be the password alone.
+  def test_the_registry_login_uses_the_token_as_the_password_only
+    login = login_step
+
+    assert_equal 'registry.digitalocean.com', login.dig('with', 'registry'),
+                 'the demo image is pushed to the DOCR registry'
+    assert_equal '${{ secrets.DOCR_TOKEN }}', login.dig('with', 'password'),
+                 'the registry password must be the DO API token'
+    refute_equal '${{ secrets.DOCR_TOKEN }}', login.dig('with', 'username'),
+                 'the registry username must NOT be the API token — DOCR authenticates the ' \
+                 'username against the account and the password against the token'
+    # The default is pinned EXACTLY: any other namespace would push the image
+    # somewhere the registry namespace does not own, while the docs promise
+    # the developerz-ai one.
+    assert_equal "${{ vars.DOCR_USERNAME || 'developerz-ai' }}", login.dig('with', 'username'),
+                 'the registry username must come from the DOCR_USERNAME repo variable, defaulting ' \
+                 'to the developerz-ai registry namespace'
+  end
+
+  # An unset secret resolves to literal empty text, so a missing token reaches
+  # docker/login-action as an empty password. The workflow must fail closed
+  # BEFORE the login, naming what is missing.
+  def test_the_registry_credentials_are_checked_before_the_login
+    steps = build_job.fetch('steps')
+    check = steps.find { |step| step['name'] == 'require the registry credentials' }
+
+    refute_nil check, 'the build job must check the registry credentials before logging in'
+    assert_operator steps.index(check), :<, steps.index(login_step),
+                    'the credential check must run BEFORE the registry login'
+
+    run = check.fetch('run')
+
+    assert_match(/::error::/, run, 'the check must fail with a named error')
+    assert_match(/DOCR_TOKEN/, run, 'the check must name the missing token')
+    assert_match(/exit 1/, run, 'the check must fail the job')
+  end
+
+  # The check itself must be honest: it reads the token from the environment
+  # (never a literal) and refuses an empty value.
+  def test_the_credential_check_reads_the_token_from_the_environment
+    check = build_job.fetch('steps').find { |step| step['name'] == 'require the registry credentials' }
+
+    assert_equal '${{ secrets.DOCR_TOKEN }}', check.dig('env', 'DOCR_TOKEN'),
+                 'the check must read the token from the environment, not inline it'
+    assert_match(/\[ -z "\$\{DOCR_TOKEN:-\}" \]/, check.fetch('run'),
+                 'the check must refuse an empty (unset) token')
+  end
+
+  # The username is NOT a secret and the login defaults it to the registry
+  # namespace, so the check must not reject an unset username — a check that
+  # failed on it would refuse a configuration the login itself supports.
+  def test_the_credential_check_does_not_reject_an_unset_username
+    check = build_job.fetch('steps').find { |step| step['name'] == 'require the registry credentials' }
+    run = check.fetch('run')
+    username_branch = run[/if \[ -z "\$\{DOCR_USERNAME:-\}" \]; then(.*?)fi/m, 1]
+
+    refute_nil username_branch, 'the check must consider the username'
+    refute_match(/exit 1/, username_branch,
+                 'an unset username must not fail the job — the login defaults it to the namespace')
+  end
+
+  # The check is EXECUTED, because its shape alone cannot carry the
+  # contract: a script whose `exit 1` sits OUTSIDE the username branch still
+  # passes the assertion above while failing every deploy whose username is
+  # unset. GitHub resolves an unset secret to literal empty text, so an empty
+  # string is the faithful stand-in for a missing credential.
+  def test_the_executed_credential_check_fails_closed_on_an_empty_token
+    result = run_credential_check(token: '', username: 'developerz-ai')
+
+    refute_predicate result[:status], :success?,
+                     'an empty token must fail the job — the registry would get an empty password'
+    assert_includes result[:stdout], '::error::',
+                    'the failure must be a named error, not a bare exit'
+    assert_includes result[:stdout], 'DOCR_TOKEN',
+                    'the failure must name the missing credential'
+  end
+
+  # The mirror case: the token is present and the username is not. The
+  # username is not a secret and the login defaults it, so this must pass.
+  def test_the_executed_credential_check_tolerates_an_unset_username
+    result = run_credential_check(token: 'a-token', username: '')
+
+    assert_predicate result[:status], :success?,
+                     "an unset username must not fail the job: #{result[:stdout]}"
+    refute_includes result[:stdout], '::error::',
+                    'an unset username must not raise an error'
+  end
+
+  # Both present: the check must pass and say nothing.
+  def test_the_executed_credential_check_passes_with_both_credentials_present
+    result = run_credential_check(token: 'a-token', username: 'developerz-ai')
+
+    assert_predicate result[:status], :success?,
+                     "a fully provisioned environment must pass the check: #{result[:stdout]}"
+    refute_includes result[:stdout], '::error::',
+                    'a fully provisioned environment must not raise an error'
+  end
+
   # --- the authorize door is unchanged --------------------------------------
 
   # The allowlist is the only thing between a write-access user and a
@@ -557,6 +664,14 @@ class DeployDemoWorkflowTest < Minitest::Test
 
   def deployment_step
     build_step('create deployment')
+  end
+
+  def credential_check_step
+    build_step('require the registry credentials')
+  end
+
+  def login_step
+    build_job.fetch('steps').find { |step| step['uses'].to_s.start_with?('docker/login-action') }
   end
 
   def probe_step
@@ -649,6 +764,23 @@ class DeployDemoWorkflowTest < Minitest::Test
         gh_stdin: File.file?(File.join(dir, 'gh_stdin')) ? File.read(File.join(dir, 'gh_stdin')) : '',
         github_output: File.file?(output_path) ? File.read(output_path) : ''
       }
+    end
+  end
+
+  # Runs the credential check's run block with the two credentials in the
+  # environment it reads them from. No stubs are needed — the check only
+  # reads its own env and echoes.
+  def run_credential_check(token:, username:)
+    Dir.mktmpdir('deploy-demo-credentials') do |dir|
+      script_path = File.join(dir, 'credentials.sh')
+      File.write(script_path, credential_check_step.fetch('run'))
+      env = {
+        'DOCR_TOKEN' => token,
+        'DOCR_USERNAME' => username
+      }
+      stdout, stderr, status = Open3.capture3(env, 'bash', script_path)
+
+      { status: status, stdout: stdout, stderr: stderr }
     end
   end
 

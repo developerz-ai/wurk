@@ -175,6 +175,21 @@ jobs:
           ref: ${{ inputs.ref }}
           persist-credentials: false
 
+      # DOCR authenticates the username against the ACCOUNT and the password
+      # against a DigitalOcean API token: the two are different values and one
+      # cannot serve as both. The username is not a secret, so it comes from a
+      # repo variable (the registry namespace), falling back to the namespace
+      # the image is pushed under; the token is the password.
+      #
+      # GitHub resolves an unset secret to literal empty text, so a missing
+      # token reaches docker/login-action as an empty password — an
+      # unauthenticated push attempt instead of a diagnosable failure. Fail
+      # closed HERE, before the login, naming what is missing.
+      #
+      # The commit resolution below shares this step: the credential gate has
+      # to run before the login, and this is the step the login's inputs
+      # depend on (`steps.built.outputs.*`).
+      #
       # github.sha is the SHA of the ref the WORKFLOW was loaded from (the
       # default branch on a dispatch), not of `inputs.ref` — tagging with it
       # mislabels the image whenever the two differ, e.g. deploying a tag.
@@ -186,9 +201,19 @@ jobs:
       # Image Updater had no candidate and the demo sat on an old digest across
       # several releases. Keep this format in lockstep with
       # stacks/apps/wurk-demo/application.yml in the infrastructure repo.
-      - name: resolve built commit
+      - name: require the registry credentials
         id: built
+        env:
+          DOCR_TOKEN: ${{ secrets.DOCR_TOKEN }}
+          DOCR_USERNAME: ${{ vars.DOCR_USERNAME }}
         run: |
+          if [ -z "${DOCR_TOKEN:-}" ]; then
+            echo "::error::DOCR_TOKEN is missing or empty — refusing to log in to registry.digitalocean.com. Add a DigitalOcean registry-write token as the DOCR_TOKEN environment secret on the `demo` environment."
+            exit 1
+          fi
+          if [ -z "${DOCR_USERNAME:-}" ]; then
+            echo "::notice::DOCR_USERNAME repo variable is not set — using the default registry namespace."
+          fi
           sha="$(git rev-parse HEAD)"
           has_route=false
           if grep -qF '/demo/build' demo/config/routes.rb 2>/dev/null; then
@@ -198,7 +223,7 @@ jobs:
             echo "sha=$sha"
             echo "short=sha-$(printf '%.7s' "$sha")"
             echo "has_route=$has_route"
-          } >> "$GITHUB_OUTPUT"
+          } >> "${GITHUB_OUTPUT:-/dev/null}"
 
       # Image Updater takes the newest build, so re-pushing an older commit either
       # changes nothing (a cached rebuild keeps its digest and `created`) or, on a cache
@@ -231,7 +256,7 @@ jobs:
       - uses: docker/login-action@81c6f93d4bc991e510b342a00b419b3bb4efc5c6 # v4.7.0
         with:
           registry: registry.digitalocean.com
-          username: ${{ secrets.DOCR_TOKEN }}
+          username: ${{ vars.DOCR_USERNAME || 'developerz-ai' }}
           password: ${{ secrets.DOCR_TOKEN }}
       - uses: docker/build-push-action@c3c9e263c25d99ce0380d002d59b67737d91b0dc # v7.4.0
         if: steps.overtaken.outputs.skip != 'true'

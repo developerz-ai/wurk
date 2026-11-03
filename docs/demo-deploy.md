@@ -364,11 +364,33 @@ refused. The health checkup that runs this probe sends a GET and nothing else.
   the deployment branch to `main`.
 
 - **Settings → Environments → `demo` → Environment secrets:** add `DOCR_TOKEN`
-  (a DigitalOcean token with registry write). It lives on the environment, not
-  the repo, so only the `build` job, which enters that environment, can read it —
-  this repo is public.
+  (a DigitalOcean API token with registry write). It lives on the environment,
+  not the repo, so only the `build` job, which enters that environment, can read
+  it — this repo is public.
+
+- **Settings → Secrets and variables → Actions → Variables:** add
+  `DOCR_USERNAME` = the DigitalOcean account (or team) name that owns the
+  registry namespace, e.g. `developerz-ai`. It is **not** a secret — it is the
+  username half of the credential pair, and it only has to be readable. Left
+  unset, the workflow falls back to the `developerz-ai` namespace.
 
 No `ARGOCD_*` secrets are needed — CI never talks to the cluster.
+
+**Two required credentials, not one.** DOCR authenticates the *username*
+against the account and the *password* against a DigitalOcean API token, so a
+single token cannot be both. `DOCR_USERNAME` (repo variable, the account or
+team name, defaulting to `developerz-ai`) and `DOCR_TOKEN` (environment secret
+on `demo`, the registry-write API token) are separate credentials; both are
+required for a registry push. The workflow refuses to log in — with a named
+error — when the token is missing or empty, so a half-provisioned environment
+fails loudly instead of attempting an empty-credential push. The username is not
+secret and its absence must never fail the job: the login defaults it.
+
+**Provisioning is a repo-admin action.** This repository cannot mint a
+DigitalOcean credential: the registry-write token and the account username are
+created in the DigitalOcean account and added to this repo's `demo` environment
+/ repository variables by a repo admin. Until the token exists, the registry
+login cannot authenticate and the demo deploy cannot push an image.
 
 ### Registry
 
@@ -377,6 +399,13 @@ only, tagged `sha-<7>` (what Image Updater selects on), `<sha>`, and `latest`
 (the last two are for humans; see [Rolling back](#deployment-record-and-commit-probe)). Infra moved the demo off GHCR on
 2026-07-12 (infra #803); `stacks/apps/wurk-demo/manifests/kustomization.yml`
 rewrites every image ref onto DOCR.
+
+The push authenticates with the credential pair described above: the username
+(`vars.DOCR_USERNAME`, defaulting to the `developerz-ai` registry namespace) and
+the password (`secrets.DOCR_TOKEN`, the DO API token with registry write). The
+workflow checks the token before the login and fails closed with a named error
+when it is absent — an unset secret resolves to literal empty text, which would
+otherwise reach the registry as an empty password.
 
 ### Error reporting
 
