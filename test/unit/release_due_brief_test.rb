@@ -914,20 +914,25 @@ class ReleaseDueBriefTest < Minitest::Test
   # The brief's window pathspec (.dz/briefs/release-due.md:53) must cover
   # every source path whose change reaches the gem. The dashboard is the
   # trap: `frontend/index.html` (Vite turns it into
-  # vendor/assets/dashboard/index.html) and `frontend/public/**` (copied
-  # verbatim: favicon, og-image, apple-touch-icon, wurk-logo) both ship in
-  # the gem (wurk.gemspec ships vendor/assets/dashboard/**/*), and neither
+  # vendor/assets/dashboard/index.html), `frontend/public/**` (copied
+  # verbatim: favicon, og-image, apple-touch-icon, wurk-logo) and the
+  # dependency set in `frontend/package.json` / `frontend/bun.lock` (which
+  # Vite bundles into vendor/assets/dashboard/**) all ship in the gem
+  # (wurk.gemspec ships vendor/assets/dashboard/**/*), and none of them
   # sits under `frontend/src/**`. While the pathspec named only
   # `frontend/src/**`, a window whose only shipping commit was one of them
   # scanned EMPTY, and the Window/Do table grades an empty window "nothing"
-  # — no release ask for a gem that changed. Both windows below are
-  # checked: one where the frontend commits share the window with lib/
-  # changes, one where they are all the window holds.
+  # — no release ask for a gem that changed. A dependency-only bump is the
+  # same trap with no other shipping path: it touches frontend/package.json
+  # or frontend/bun.lock alone and changes the shipped bundle. Both windows
+  # below are checked: one where the frontend commits share the window with
+  # lib/ changes, one where they are all the window holds.
   #
-  # This gate holds that pathspec in place: drop `frontend/index.html` or
-  # `frontend/public/**` from it and the test goes red again, because the
-  # brief's OWN `git log` command is what runs here — a test-owned
-  # pathspec would prove nothing about the brief.
+  # This gate holds that pathspec in place: drop `frontend/index.html`,
+  # `frontend/public/**`, `frontend/package.json` or `frontend/bun.lock`
+  # from it and the test goes red again, because the brief's OWN `git log`
+  # command is what runs here — a test-owned pathspec would prove nothing
+  # about the brief.
   def test_window_scan_includes_the_frontend_paths_that_reach_the_gem
     problems = []
 
@@ -936,23 +941,65 @@ class ReleaseDueBriefTest < Minitest::Test
       window = query_brief_window_log(hermetic_git_env(tmpdir))
 
       assert_predicate window[:status], :success?, window[:message]
-      problems.concat(window_listing_problems(window[:stdout], 'the full window'))
+      problems.concat(window_listing_problems(window[:stdout], 'the full window',
+                                              subjects: FULL_WINDOW_SUBJECTS))
     end
 
     Dir.mktmpdir('wurk-frontend-window-repo-') do |tmpdir|
-      build_window_repo(tmpdir, frontend_only: true)
+      build_window_repo(tmpdir, only: :frontend)
       window = query_brief_window_log(hermetic_git_env(tmpdir))
 
       assert_predicate window[:status], :success?, window[:message]
-      problems.concat(window_listing_problems(window[:stdout], 'the frontend-only window'))
+      problems.concat(window_listing_problems(window[:stdout], 'the frontend-only window',
+                                              subjects: FRONTEND_WINDOW_SUBJECTS))
     end
 
     assert_empty problems,
                  'the brief\'s window pathspec (.dz/briefs/release-due.md:53) must list every ' \
-                 'commit whose change reaches the gem: `frontend/index.html` and ' \
-                 '`frontend/public/**` reach it (Vite builds them into vendor/assets/dashboard/**, ' \
-                 'which wurk.gemspec ships), so a frontend-only window must not scan empty — the ' \
+                 'commit whose change reaches the gem: `frontend/index.html`, ' \
+                 '`frontend/public/**`, `frontend/package.json` and `frontend/bun.lock` reach it ' \
+                 '(Vite builds them into vendor/assets/dashboard/**, which wurk.gemspec ships), ' \
+                 'so a frontend-only window must not scan empty — the ' \
                  "Window/Do table grades it \"nothing\":\n- #{problems.join("\n- ")}"
+  end
+
+  # The built-in extension partials under `lib/wurk/web/views/` are ERB
+  # templates `Wurk::Web::Extension#read_view` resolves by name at
+  # runtime, so a change to one of them changes what the dashboard
+  # renders. `:(glob)lib/**/*.rb` does not match an `.erb` file, so a
+  # pathspec that names only the Ruby sources misses them: a window whose
+  # only shipping commit is a partial scans EMPTY and the Window/Do table
+  # grades it "nothing".
+  #
+  # The brief's OWN `git log` command is what runs here — a test-owned
+  # pathspec would prove nothing about the brief.
+  def test_window_scan_includes_the_builtin_erb_partials_rendered_at_runtime
+    problems = []
+
+    Dir.mktmpdir('wurk-window-repo-') do |tmpdir|
+      build_window_repo(tmpdir)
+      window = query_brief_window_log(hermetic_git_env(tmpdir))
+
+      assert_predicate window[:status], :success?, window[:message]
+      problems.concat(window_listing_problems(window[:stdout], 'the full window',
+                                              subjects: [BUILTIN_ERB_SUBJECT]))
+    end
+
+    Dir.mktmpdir('wurk-erb-window-repo-') do |tmpdir|
+      build_window_repo(tmpdir, only: :erb)
+      window = query_brief_window_log(hermetic_git_env(tmpdir))
+
+      assert_predicate window[:status], :success?, window[:message]
+      problems.concat(window_listing_problems(window[:stdout], 'the erb-only window',
+                                              subjects: [BUILTIN_ERB_SUBJECT]))
+    end
+
+    assert_empty problems,
+                 'the brief\'s window pathspec (.dz/briefs/release-due.md:53) must list a ' \
+                 'commit that touches only a built-in ERB partial: `lib/wurk/web/views/**` is ' \
+                 'rendered at runtime by `Wurk::Web::Extension#read_view`, and ' \
+                 '`:(glob)lib/**/*.rb` does not match an .erb file, so such a window must not ' \
+                 "scan empty — the Window/Do table grades it \"nothing\":\n- #{problems.join("\n- ")}"
   end
 
   private
@@ -2069,12 +2116,12 @@ class ReleaseDueBriefTest < Minitest::Test
   # row and the "otherwise | one ask" row — and an empty listing files
   # no release ask at all. Returns the problems found so one test can
   # report every window it built.
-  def window_listing_problems(stdout, label)
+  def window_listing_problems(stdout, label, subjects: FRONTEND_WINDOW_SUBJECTS)
     problems = []
     empty_message = "#{label}: the listing is empty, so the brief's \"empty | nothing\" row fires"
     problems << empty_message if stdout.strip.empty?
 
-    FRONTEND_WINDOW_SUBJECTS.each do |subject|
+    subjects.each do |subject|
       next if stdout.include?(subject)
 
       problems << "#{label}: the commit #{subject.inspect} is missing from the listing"
@@ -2095,22 +2142,51 @@ class ReleaseDueBriefTest < Minitest::Test
   # The frontend paths that reach the gem and that the brief's window
   # pathspec must therefore cover: `frontend/index.html` becomes the
   # built dashboard shell, `frontend/public/**` is copied verbatim into
-  # the bundle. Neither sits under `frontend/src/**`.
+  # the bundle, and `frontend/package.json` / `frontend/bun.lock` declare
+  # the dependency set Vite bundles into `vendor/assets/dashboard/**`.
+  # None of them sits under `frontend/src/**`, so a pathspec naming only
+  # that directory misses every one of them.
   FRONTEND_INDEX_SUBJECT = 'frontend index commit on frontend/index.html'
   FRONTEND_FAVICON_SUBJECT = 'frontend favicon commit on frontend/public/favicon.png'
-  FRONTEND_WINDOW_SUBJECTS = [FRONTEND_INDEX_SUBJECT, FRONTEND_FAVICON_SUBJECT].freeze
-  private_constant :FRONTEND_INDEX_SUBJECT, :FRONTEND_FAVICON_SUBJECT, :FRONTEND_WINDOW_SUBJECTS
+  FRONTEND_PACKAGE_JSON_SUBJECT = 'frontend dependency commit on frontend/package.json'
+  FRONTEND_BUN_LOCK_SUBJECT = 'frontend lockfile commit on frontend/bun.lock'
+  FRONTEND_WINDOW_SUBJECTS = [
+    FRONTEND_INDEX_SUBJECT,
+    FRONTEND_FAVICON_SUBJECT,
+    FRONTEND_PACKAGE_JSON_SUBJECT,
+    FRONTEND_BUN_LOCK_SUBJECT
+  ].freeze
+
+  # The built-in extension partials under `lib/wurk/web/views/` are ERB
+  # templates `Wurk::Web::Extension#read_view` resolves by name at
+  # runtime, so a change to one of them changes what the dashboard
+  # renders — and `:(glob)lib/**/*.rb` does not match an `.erb` file.
+  BUILTIN_ERB_SUBJECT = 'builtin erb partial commit on lib/wurk/web/views/_paging.erb'
+
+  # Every shipping commit the full window must list.
+  FULL_WINDOW_SUBJECTS = (FRONTEND_WINDOW_SUBJECTS + [BUILTIN_ERB_SUBJECT]).freeze
+
+  private_constant :FRONTEND_INDEX_SUBJECT, :FRONTEND_FAVICON_SUBJECT,
+                   :FRONTEND_PACKAGE_JSON_SUBJECT, :FRONTEND_BUN_LOCK_SUBJECT,
+                   :FRONTEND_WINDOW_SUBJECTS, :BUILTIN_ERB_SUBJECT, :FULL_WINDOW_SUBJECTS
 
   # End-to-end window-scan repo. Materializes a fresh git repo whose
   # window holds a shipping commit (lib/foo.rb change), a docs-only
   # commit (README.md change), a change-then-revert pair on lib/bar.rb,
-  # and the two frontend commits that reach the gem
-  # (frontend/index.html, frontend/public/favicon.png). Together they
-  # exercise the shapes the brief's pathspec filter must handle.
+  # a built-in ERB partial (lib/wurk/web/views/_paging.erb) and the
+  # four frontend commits that reach the gem (frontend/index.html,
+  # frontend/public/favicon.png, frontend/package.json,
+  # frontend/bun.lock). Together they exercise the shapes the brief's
+  # pathspec filter must handle.
   #
-  # `frontend_only: true` drops the lib-shaped commits, so the window's
-  # only shipping commit is a frontend one — the window the brief grades
-  # "empty" when its pathspec misses the frontend paths.
+  # `only:` narrows the fixture to ONE group of shipping commits, so a
+  # window can hold that group's commits and nothing else:
+  #   nil         — every group (the full window)
+  #   :frontend   — only the dashboard sources
+  #   :erb        — only the built-in ERB partial
+  # A window whose only shipping commit comes from one group is the case
+  # that scans EMPTY when the pathspec misses that group — and the
+  # Window/Do table grades an empty window "nothing".
   #
   # Uses an isolated env (HOME = tmpdir, GIT_CONFIG_NOSYSTEM = 1,
   # no shared work tree) so no inherited user's git config, hooks,
@@ -2119,7 +2195,7 @@ class ReleaseDueBriefTest < Minitest::Test
   # pointing at global hooks. Tags v1.0.0 at the initial commit, then
   # creates `REMOTE_MAIN_REF` pointing at HEAD so the brief-style
   # `git log v1.0.0..origin/main` resolves both bounds.
-  def build_window_repo(tmpdir, frontend_only: false)
+  def build_window_repo(tmpdir, only: nil)
     env = hermetic_git_env(tmpdir)
 
     run_git(env, 'init', '--quiet', '--initial-branch=main', tmpdir)
@@ -2135,23 +2211,9 @@ class ReleaseDueBriefTest < Minitest::Test
     run_git(env, 'commit', '--quiet', '-m', 'initial commit, tagged as v1.0.0')
     run_git(env, 'tag', 'v1.0.0')
 
-    build_lib_window_commits(env, tmpdir) unless frontend_only
-
-    # Frontend commits: the dashboard shell and a copied public asset.
-    # Both reach the gem — Vite builds frontend/index.html into
-    # vendor/assets/dashboard/index.html and copies frontend/public/**
-    # verbatim, and wurk.gemspec ships vendor/assets/dashboard/**/* — so
-    # the brief's pathspec must name both.
-    FileUtils.mkdir_p(File.join(tmpdir, 'frontend', 'public'))
-    File.write(File.join(tmpdir, 'frontend', 'index.html'), "<!doctype html>\n")
-    run_git(env, 'add', 'frontend/index.html')
-    run_git(env, 'commit', '--quiet', '-m', FRONTEND_INDEX_SUBJECT)
-    verify_frontend_commit_touches_only(env, FRONTEND_INDEX_SUBJECT, 'frontend/index.html')
-
-    File.write(File.join(tmpdir, 'frontend', 'public', 'favicon.png'), "favicon bytes\n")
-    run_git(env, 'add', 'frontend/public/favicon.png')
-    run_git(env, 'commit', '--quiet', '-m', FRONTEND_FAVICON_SUBJECT)
-    verify_frontend_commit_touches_only(env, FRONTEND_FAVICON_SUBJECT, 'frontend/public/favicon.png')
+    build_lib_window_commits(env, tmpdir) unless only
+    build_erb_window_commits(env, tmpdir) unless only == :frontend
+    build_frontend_window_commits(env, tmpdir) unless only == :erb
 
     head_sha = Open3.capture2(env, 'git', 'rev-parse', 'HEAD').first.to_s.strip
     raise 'build_window_repo: empty HEAD SHA' if head_sha.empty?
@@ -2159,21 +2221,65 @@ class ReleaseDueBriefTest < Minitest::Test
     run_git(env, 'update-ref', REMOTE_MAIN_REF, head_sha)
   end
 
-  # The frontend commits' premise: each changes exactly ONE frontend file
-  # and nothing else — no lib/, app/, config/, exe/ or wurk.gemspec path.
-  # The defect this gate pins is "a commit whose only shipping change is
-  # a frontend file is invisible to the brief's pathspec", so a frontend
-  # commit that also touched a lib/ file would turn the empty
-  # frontend-only window into a fixture artifact instead of a pathspec
-  # defect. Checked, not assumed.
-  def verify_frontend_commit_touches_only(env, subject, expected_path)
+  # The frontend commits: the dashboard shell, a copied public asset, the
+  # dependency manifest and the lockfile. All four reach the gem — Vite
+  # builds frontend/index.html into vendor/assets/dashboard/index.html,
+  # copies frontend/public/** verbatim, and bundles the dependency set
+  # declared in frontend/package.json / frontend/bun.lock into
+  # vendor/assets/dashboard/** (which wurk.gemspec ships) — so the
+  # brief's pathspec must name all four. A dependency-only bump changes
+  # the shipped bundle while touching no other tracked path.
+  def build_frontend_window_commits(env, tmpdir)
+    FileUtils.mkdir_p(File.join(tmpdir, 'frontend', 'public'))
+    File.write(File.join(tmpdir, 'frontend', 'index.html'), "<!doctype html>\n")
+    run_git(env, 'add', 'frontend/index.html')
+    run_git(env, 'commit', '--quiet', '-m', FRONTEND_INDEX_SUBJECT)
+    verify_commit_touches_only(env, FRONTEND_INDEX_SUBJECT, 'frontend/index.html')
+
+    File.write(File.join(tmpdir, 'frontend', 'public', 'favicon.png'), "favicon bytes\n")
+    run_git(env, 'add', 'frontend/public/favicon.png')
+    run_git(env, 'commit', '--quiet', '-m', FRONTEND_FAVICON_SUBJECT)
+    verify_commit_touches_only(env, FRONTEND_FAVICON_SUBJECT, 'frontend/public/favicon.png')
+
+    File.write(File.join(tmpdir, 'frontend', 'package.json'), "{\n  \"name\": \"wurk-dashboard\"\n}\n")
+    run_git(env, 'add', 'frontend/package.json')
+    run_git(env, 'commit', '--quiet', '-m', FRONTEND_PACKAGE_JSON_SUBJECT)
+    verify_commit_touches_only(env, FRONTEND_PACKAGE_JSON_SUBJECT, 'frontend/package.json')
+
+    File.write(File.join(tmpdir, 'frontend', 'bun.lock'), "lockfile bytes\n")
+    run_git(env, 'add', 'frontend/bun.lock')
+    run_git(env, 'commit', '--quiet', '-m', FRONTEND_BUN_LOCK_SUBJECT)
+    verify_commit_touches_only(env, FRONTEND_BUN_LOCK_SUBJECT, 'frontend/bun.lock')
+  end
+
+  # The built-in extension partials under lib/wurk/web/views/: ERB
+  # templates Wurk::Web::Extension#read_view resolves by name at
+  # runtime. `:(glob)lib/**/*.rb` does not match an .erb file, so a
+  # pathspec that names only the Ruby sources misses this commit and a
+  # window whose only shipping change is a partial scans EMPTY.
+  def build_erb_window_commits(env, tmpdir)
+    views_dir = File.join(tmpdir, 'lib', 'wurk', 'web', 'views')
+    FileUtils.mkdir_p(views_dir)
+    File.write(File.join(views_dir, '_paging.erb'), "<%= url %>\n")
+    run_git(env, 'add', 'lib/wurk/web/views/_paging.erb')
+    run_git(env, 'commit', '--quiet', '-m', BUILTIN_ERB_SUBJECT)
+    verify_commit_touches_only(env, BUILTIN_ERB_SUBJECT, 'lib/wurk/web/views/_paging.erb')
+  end
+
+  # The shipping commits' premise: each changes exactly ONE file and
+  # nothing else — no other shipping path. The defect this gate pins is
+  # "a commit whose only shipping change is one file is invisible to the
+  # brief's pathspec", so a commit that also touched a second shipping
+  # path would turn the single-group window into a fixture artifact
+  # instead of a pathspec defect. Checked, not assumed.
+  def verify_commit_touches_only(env, subject, expected_path)
     sha = run_git(env, 'rev-parse', 'HEAD').strip
     touched = run_git(env, 'show', '--pretty=format:', '--name-only', sha).lines.map(&:strip).reject(&:empty?)
 
     return if touched == [expected_path]
 
-    raise "#{subject.inspect} must touch only #{expected_path.inspect} (no lib/, app/, " \
-          "config/, exe/ or wurk.gemspec path), but it touched #{touched.inspect}"
+    raise "#{subject.inspect} must touch only #{expected_path.inspect}, " \
+          "but it touched #{touched.inspect}"
   end
 
   # The lib-shaped window commits: a shipping commit on lib/foo.rb, a
