@@ -28,6 +28,8 @@ require 'stringio'
 #   challenge.
 # - docs/api-http.md L162 — a valid credential without the route's scope is a
 #   403 naming the scope, never a 404 hiding the route.
+# - docs/api-http.md L265-L266 — the window a key is remembered for is
+#   `config.api_idempotency_ttl` seconds, 3600 by default.
 # - docs/idea/parity-divergences.md L745-L747 — an unknown write outcome keeps
 #   the `Idempotency-Key` pending until its TTL, so a client retry is told
 #   "in progress" instead of enqueueing a second copy.
@@ -121,6 +123,18 @@ class WebApiParityTest < Wurk::Test::UnitCase
     end
   end
 
+  # The recorder that counts the comparisons is a process-global swap on
+  # OpenSSL, so it must not count a comparison made by another thread: the
+  # count is the evidence that the lookup walked the whole table, and a
+  # credential presented on a sibling thread would inflate it.
+  def test_the_comparison_recorder_ignores_other_threads
+    recording_comparisons do |comparisons|
+      Thread.new { OpenSSL.fixed_length_secure_compare('a' * 32, 'b' * 32) }.join
+
+      assert_empty comparisons, 'a comparison from another thread was counted'
+    end
+  end
+
   # --- Scopes --------------------------------------------------------------
 
   # A valid credential that lacks the route's scope is told which scope it
@@ -185,6 +199,7 @@ class WebApiParityTest < Wurk::Test::UnitCase
   # so the claim stays pending until its TTL and the retry is told "in
   # progress" instead.
   def test_a_lost_reply_keeps_the_idempotency_key_pending_until_its_ttl
+    started = monotonic_now
     status, = Wurk::Client.via(LostReplyPool.new(pool)) do
       request('POST', '/v1/jobs', token: ADMIN_TOKEN, body: job_body, key: 'lost-reply')
     end
@@ -197,8 +212,17 @@ class WebApiParityTest < Wurk::Test::UnitCase
     assert_equal 1, claims.size, 'the claim was released on an unknown outcome'
     ttl = ttl_of(claims.first)
 
+    # The claim is written with the documented window (3600s by default) and
+    # the TTL is what is left of it, so the only slack the assertion may give
+    # is the time that passed since the claim was taken. A claim given a
+    # one-second life — or released early — fails here instead of passing the
+    # retry below.
+    elapsed = monotonic_now - started
+
     assert_operator ttl, :>, 0, 'the pending claim has no lifetime left'
-    assert_operator ttl, :<=, IDEMPOTENCY_TTL
+    assert_operator ttl, :<=, IDEMPOTENCY_TTL, 'the pending claim outlives the documented window'
+    assert_operator ttl, :>=, IDEMPOTENCY_TTL - elapsed.ceil,
+                    "the pending claim had #{ttl}s left, not the documented #{IDEMPOTENCY_TTL}s window"
 
     status, headers, body = request('POST', '/v1/jobs', token: ADMIN_TOKEN, body: job_body, key: 'lost-reply')
 
@@ -247,11 +271,16 @@ class WebApiParityTest < Wurk::Test::UnitCase
   # Counts the constant-time comparisons a lookup makes and keeps the operands
   # it saw. Minitest 6 dropped minitest/mock, so the compare is swapped for a
   # recorder on OpenSSL's singleton and restored afterwards.
+  #
+  # The swap is process-global, so the recorder keeps only the comparisons
+  # made by the thread that installed it: a credential presented on another
+  # thread while the recorder is live cannot inflate the count.
   def recording_comparisons
     comparisons = []
     original = OpenSSL.method(:fixed_length_secure_compare)
+    owner = Thread.current
     OpenSSL.define_singleton_method(:fixed_length_secure_compare) do |left, right|
-      comparisons << [left, right]
+      comparisons << [left, right] if Thread.current.equal?(owner)
       original.call(left, right)
     end
     yield comparisons
@@ -285,6 +314,8 @@ class WebApiParityTest < Wurk::Test::UnitCase
   end
 
   def ttl_of(key) = pool.with { |conn| conn.call('TTL', key) }
+
+  def monotonic_now = ::Process.clock_gettime(::Process::CLOCK_MONOTONIC)
 
   def request(method, path, token: READ_TOKEN, body: '', script_name: '', key: nil)
     dispatch(app, env_for(method, path, token: token, body: body, script_name: script_name, key: key))
