@@ -58,13 +58,13 @@ if [ "$(git rev-parse --is-shallow-repository 2>/dev/null)" = "true" ]; then
 fi
 git fetch --quiet origin tag "$last" '+refs/heads/main:refs/remotes/origin/main' || { echo "::error::git fetch of tag $last / origin main failed"; exit 1; }
 local_last=$(git describe --tags --abbrev=0 --match 'v[0-9]*' origin/main)
-git log --format='%h %cI %s' "$last"..origin/main -- ':(glob)lib/**/*.rb' ':(glob)lib/**/*.lua' ':(glob)app/**/*.rb' 'config/**' 'exe/*' 'frontend/src/**' 'frontend/index.html' 'frontend/public/**' wurk.gemspec
+git log --format='%h %cI %s' "$last"..origin/main -- ':(glob)lib/**/*.rb' ':(glob)lib/**/*.lua' ':(glob)lib/**/*.erb' ':(glob)app/**/*.rb' 'config/**' 'exe/*' 'frontend/src/**' 'frontend/index.html' 'frontend/public/**' wurk.gemspec
 ```
 
 - **Tag listing.** Its completeness comes from pagination (`--paginate`), never a page size.
 - **Baseline.** A tag alone proves little. The peeled commit must carry the version's dated `## [<version>] - <date>` heading, dated with that commit's own committer date, and absent at its first parent: the release commit introduced it.
 - **Release state.** Zero assets is the gem-less marker, but not proof nothing shipped: `release.yml` pushes the gem before it uploads the asset. The release-deletion runbook in RELEASE.md applies only once the RubyGems per-version probe confirms the version was never published. A Release carrying the `.gem` is real, whoever authored it.
-- **Window.** The pathspec names the sources whose change reaches the gem: `lib/**`, `app/**`, `config/**`, `exe/*` and `wurk.gemspec`, plus the dashboard sources behind the shipped `vendor/assets/dashboard/**/*` — `frontend/src/**`, `frontend/index.html` (Vite builds it into the bundle's `index.html`) and `frontend/public/**` (copied verbatim). The gem ships the built dashboard, not the sources, so the scan names the sources. Prose, tests, CI and benchmarks ship nothing.
+- **Window.** The pathspec names the sources whose change reaches the gem: `lib/**` (Ruby, Lua and the ERB view partials the dashboard renders), `app/**`, `config/**`, `exe/*` and `wurk.gemspec`, plus the dashboard sources behind the shipped `vendor/assets/dashboard/**/*` — `frontend/src/**`, `frontend/index.html` (Vite builds it into the bundle's `index.html`) and `frontend/public/**` (copied verbatim). The gem ships the built dashboard, not the sources, so the scan names the sources. Prose, tests, CI and benchmarks ship nothing.
 
 | Window | Do |
 |---|---|
