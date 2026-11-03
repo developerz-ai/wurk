@@ -7,7 +7,8 @@
 # process — which loads this file because `wurk.rb` loads the web layer — never
 # renders anything. `require` is idempotent, so this is a $LOADED_FEATURES
 # lookup per request after the first.
-require 'securerandom'
+require_relative 'helpers'
+require_relative 'paginator'
 
 module Wurk
   class Web
@@ -64,6 +65,10 @@ module Wurk
                               mount: context[:mount], embed: context.fetch(:embed, true))
           end
           nil
+        end
+
+        def route?(method, path)
+          @routes.any? { |verb, route, _block| verb == method && route.match(path) }
         end
 
         # Sidekiq extensions add helpers via `app.helpers(Mod)` and/or a block.
@@ -124,65 +129,11 @@ module Wurk
         end
       end
 
-      # The `WebHelpers` subset real extension views/routes call. Mixed into
-      # every `Action`. Anything an exotic gem needs beyond this can be added
-      # incrementally; the common surface (escaping, paths, time, i18n) is here.
-      module Helpers
-        def h(text) = ::CGI.escapeHTML(text.to_s)
-
-        # Truncate long text (display safety) — mirrors Sidekiq's default cap.
-        def truncate(text, max = 2000)
-          str = text.to_s
-          str.size > max ? "#{str[0, max]}…" : str
-        end
-
-        # Best-effort arg display, matching Sidekiq's `to_display`.
-        def to_display(arg)
-          str = arg.inspect
-          str.size > 100 ? "#{str[0, 100]}…" : str
-        end
-
-        # i18n: look up the extension's own locale strings if present, else the
-        # humanized key (so a missing translation degrades, never raises).
-        def t(key, options = {})
-          val = (@ext_strings || {}).dig(*key.to_s.split('.'))
-          str = val.is_a?(::String) ? val : key.to_s.tr('_', ' ').capitalize
-          options.each { |k, v| str = str.gsub("%{#{k}}", v.to_s) }
-          str
-        end
-
-        # Base path for this extension, trailing slash. Embedded in the
-        # engine, ext links must land back on the embed endpoint
-        # (`/wurk/ext/<name>/…`); standalone (`run Sidekiq::Web`, #204) the
-        # ext's routes ARE the URL space, so it's the app root — upstream's
-        # `"#{env['SCRIPT_NAME']}/"` semantics.
-        def root_path = @embed ? "#{@mount}/ext/#{@ext_name}/" : "#{@mount}/"
-        def current_path = @subpath.to_s.sub(%r{\A/}, '')
-
-        def asset_path(file)
-          @embed ? "#{@mount}/ext-assets/#{@ext_name}/#{file}" : "#{@mount}/#{@ext_name}/#{file}"
-        end
-
-        # GET-form embeds don't need CSRF; return an empty, benign tag.
-        def csrf_tag = ''
-        def csp_nonce = (@csp_nonce ||= ::SecureRandom.hex(8))
-
-        # `<time>` element like Sidekiq's relative_time; JS upgrades it client-side.
-        def relative_time(time)
-          t = time.is_a?(::Time) ? time : ::Time.at(time.to_f)
-          iso = t.utc.iso8601
-          %(<time class="ltr" dir="ltr" title="#{iso}" datetime="#{iso}">#{iso}</time>)
-        end
-
-        def redis(idempotent: false, &) = ::Wurk.redis(idempotent:, &)
-        def product_version = ::Wurk::VERSION
-        def number_with_delimiter(num) = num.to_s.reverse.gsub(/(\d{3})(?=\d)/, '\\1,').reverse
-      end
-
       # Per-request render context: instance-evals a matched route block, then
       # renders ERB with the block's ivars + helpers in scope.
       class Action
         include Helpers
+        include Paginator
 
         # Redirect signal carried out of a route block via throw/catch.
         # `external` marks `redirect_to` (upstream's off-site redirect), which
@@ -204,6 +155,9 @@ module Wurk
           extend_helpers(ext[:helpers])
         end
 
+        # The built-in partials extension views render by name.
+        BUILTIN_VIEWS = ::File.expand_path('views', __dir__)
+
         attr_accessor :env, :block
         attr_reader :request
 
@@ -212,6 +166,7 @@ module Wurk
         def route_params(key = nil) = key ? @route_params[key.to_sym] : @route_params
         def session = (@env['rack.session'] ||= {})
         def logger = ::Wurk.logger
+        def config = ::Wurk::Web.config
         def redirect(location) = throw(:halt, Redirect.new(location, false))
         def redirect_to(url) = throw(:halt, Redirect.new(url, true))
         def header(key, value) = (response_headers[key.to_s] = value.to_s)
@@ -232,10 +187,10 @@ module Wurk
 
         # Render an ERB template. `content` is either the template String (the
         # common path — the ext's own helper reads the file) or a Symbol naming
-        # a `*.erb` under the ext's root_dir/views.
-        def erb(content, _options = {})
+        # a `*.erb` under the ext's root_dir/views, or a built-in partial.
+        def erb(content, options = {})
           template = content.is_a?(::Symbol) ? read_view(content) : content.to_s
-          ::ERB.new(template, trim_mode: '-').result(binding)
+          ::ERB.new(template, trim_mode: '-').result(view_binding(options[:locals]))
         end
 
         def render(engine, content, options = {})
@@ -269,9 +224,18 @@ module Wurk
         end
 
         def read_view(name)
-          raise ::ArgumentError, "extension #{@ext_name} has no root_dir" unless @root_dir
+          dirs = [@root_dir && ::File.join(@root_dir, 'views'), BUILTIN_VIEWS].compact
+          path = dirs.map { |dir| ::File.join(dir, "#{name}.erb") }.find { |file| ::File.file?(file) }
+          raise ::ArgumentError, "extension #{@ext_name} has no view #{name}" unless path
 
-          ::File.read(::File.join(@root_dir, 'views', "#{name}.erb"))
+          ::File.read(path)
+        end
+
+        # A binding of its own, so a view sees its locals and not this method's.
+        def view_binding(locals)
+          scope = binding
+          locals&.each { |name, value| scope.local_variable_set(name, value) }
+          scope
         end
 
         def extend_helpers(helpers)
@@ -322,6 +286,16 @@ module Wurk
             env['wurk.ext.subpath'] = subpath
             render(ext, env.merge('REQUEST_METHOD' => method.to_s.upcase, 'PATH_INFO' => subpath),
                    { mount: mount, embed: embed })
+          end
+
+          # Whether a registered extension answers this verb and path. Pure routing:
+          # nothing runs, so it is safe ahead of the authorization gates.
+          def route?(method, path)
+            require 'cgi'
+            ::Wurk::Web.config.extensions.any? do |ext|
+              app = captured_app(ext)
+              !ext[:_registration_error] && app.route?(method, path)
+            end
           end
 
           # `[absolute_path, cache_for_seconds]` of an asset under the

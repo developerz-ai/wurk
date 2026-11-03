@@ -13,6 +13,27 @@ class CompatAliasesTest < Wurk::Test::UnitCase
 
   # --- version stamps ----------------------------------------------------
 
+  def test_web_extension_surface_aliases
+    assert_same Wurk::Web::Extension::Helpers, Sidekiq::WebHelpers
+    assert_same Wurk::Web::Paginator, Sidekiq::Paginator
+    assert_equal %w[page direction], Sidekiq::WebHelpers::SAFE_QPARAMS
+    assert_includes Sidekiq::WebHelpers::RETRY_JOB_KEYS, 'error_backtrace'
+    refute_predicate Sidekiq::WebHelpers::SAFE_QPARAMS, :frozen?
+  end
+
+  def test_gem_version_is_the_reported_version
+    assert_equal Gem::Version.new(Sidekiq::VERSION), Sidekiq.gem_version
+  end
+
+  def test_freeze_locks_the_default_configuration
+    target = Wurk.default_configuration
+    def target.freeze! = :frozen
+
+    assert_equal :frozen, Sidekiq.freeze!
+  ensure
+    target.singleton_class.remove_method(:freeze!)
+  end
+
   def test_name
     assert_equal 'Sidekiq', Sidekiq::NAME
   end

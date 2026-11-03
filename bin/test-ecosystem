@@ -4,32 +4,74 @@ set -euo pipefail
 # Run third-party Sidekiq ecosystem gem test suites against Wurk (#204).
 #
 # Each test/ecosystem/<gem>/ directory is a thin harness:
-#   PIN     — upstream repo + SHA the suite runs from
+#   PIN     — upstream repo + SHA the suite runs from (and `subdir:`, for a monorepo)
 #   Gemfile — overlay mirroring the gem's own Gemfile, with `sidekiq`
 #             resolved to wurk's shim gem (ecosystem/sidekiq-shim) so the
 #             suite installs NO real sidekiq and runs entirely on wurk.
+#   COMMAND — optional: what runs the suite, when `rake test` is not it
+#   prepare — optional: edits the fresh checkout (hardcoded Redis, mostly)
+#   adapter.rb — optional: test-only shim, exported as ECOSYSTEM_ADAPTER
+#   boot_check.rb — optional: the gem in real workers, after its suite
 #
 # Checkouts are cloned (cached) into test/ecosystem/.checkouts/ (gitignored).
-# The gem's suite hits real Redis; DB 15 of REDIS_URL's server — override with
-# ECOSYSTEM_REDIS_URL. The DB is the suite's to trash; don't point it at
-# data you care about.
+#
+# These suites flush the DB they connect to, before and after every example, so
+# they never get a Redis that could hold anything else. Locally each run boots a
+# throwaway redis-server on a free port. CI passes its service as
+# ECOSYSTEM_REDIS_URL, which must name DB 15 and not the local default port.
+# REDIS_URL is ignored. test/ecosystem/redis_guard.rb enforces this, and scans each
+# prepared checkout for anything left pointing at DB 0; a harness's REDIS_SCAN_ALLOW
+# lists the files that only look that way, each with its reason.
 
 cd "$(dirname "$0")/.."
 ROOT=$(pwd)
 
-ECOSYSTEM_DIR="test/ecosystem"
-CHECKOUTS="$ROOT/$ECOSYSTEM_DIR/.checkouts"
-# DB 15 on the same server the rest of the gate uses (REDIS_URL), not a pinned port.
-redis_base="${REDIS_URL:-redis://localhost:6379/0}"
-REDIS_URL="${ECOSYSTEM_REDIS_URL:-$(printf '%s' "$redis_base" | sed -E 's#/[0-9]*$##')/15}"
+# Overridable so a test can drive this script over fixture harnesses.
+ECOSYSTEM_DIR="${ECOSYSTEM_HARNESS_DIR:-$ROOT/test/ecosystem}"
+CHECKOUTS="$ECOSYSTEM_DIR/.checkouts"
+
+guard() {
+  env -u RUBYOPT -u RUBYLIB -u BUNDLE_GEMFILE ruby "$ROOT/test/ecosystem/redis_guard.rb" "$@"
+}
+
+boot_throwaway_redis() {
+  redis_dir=$(mktemp -d)
+  port=$(env -u RUBYOPT -u RUBYLIB -u BUNDLE_GEMFILE ruby -rsocket \
+    -e 'server = TCPServer.new("127.0.0.1", 0); puts server.addr[1]; server.close')
+  redis-server --port "$port" --bind 127.0.0.1 --save '' --appendonly no --dir "$redis_dir" >"$redis_dir/log" 2>&1 &
+  redis_pid=$!
+  trap 'kill "$redis_pid" 2>/dev/null || true; rm -rf "$redis_dir"' EXIT
+  # Bash skips the EXIT trap on a fatal signal, which would leave the server behind.
+  trap 'kill "${suite_pid:-}" 2>/dev/null || true; exit 143' TERM
+  trap 'kill "${suite_pid:-}" 2>/dev/null || true; exit 130' INT
+  for _ in $(seq 1 50); do
+    if [ "$(redis-cli -p "$port" ping 2>/dev/null)" = "PONG" ]; then
+      REDIS_URL="redis://127.0.0.1:$port/15"
+      return 0
+    fi
+    sleep 0.1
+  done
+  echo "bin/test-ecosystem: throwaway redis-server did not come up:" >&2
+  cat "$redis_dir/log" >&2
+  exit 1
+}
+
+if [ -n "${ECOSYSTEM_REDIS_URL:-}" ]; then
+  REDIS_URL="$ECOSYSTEM_REDIS_URL"
+else
+  boot_throwaway_redis
+fi
+guard url "$REDIS_URL"
 
 ran=0
 failures=0
 for harness in "$ECOSYSTEM_DIR"/*/; do
   [ -f "$harness/PIN" ] || continue
   name=$(basename "$harness")
-  repo=$(awk '/^repo:/ {print $2}' "$harness/PIN")
-  sha=$(awk '/^sha:/ {print $2}' "$harness/PIN")
+  harness_dir="$ECOSYSTEM_DIR/$name"
+  repo=$(awk '/^repo:/ {print $2}' "$harness_dir/PIN")
+  sha=$(awk '/^sha:/ {print $2}' "$harness_dir/PIN")
+  subdir=$(awk '/^subdir:/ {print $2}' "$harness_dir/PIN")
   checkout="$CHECKOUTS/$name"
 
   if [ ! -d "$checkout/.git" ]; then
@@ -39,18 +81,32 @@ for harness in "$ECOSYSTEM_DIR"/*/; do
     git -C "$checkout" fetch --quiet origin
   fi
   git -C "$checkout" checkout --quiet --force "$sha"
+  if [ -e "$harness_dir/prepare" ]; then
+    if [ ! -x "$harness_dir/prepare" ]; then
+      echo "bin/test-ecosystem: $harness_dir/prepare is not executable, and its suite would run unprepared" >&2
+      exit 1
+    fi
+    (cd "$checkout" && "$harness_dir/prepare")
+  fi
+  # A sed in `prepare` that stopped matching still exits 0.
+  guard scan "$checkout/$subdir" "$harness_dir/REDIS_SCAN_ALLOW"
+
+  command="bundle exec rake test"
+  if [ -f "$harness_dir/COMMAND" ]; then
+    command=$(grep -v '^#' "$harness_dir/COMMAND")
+  fi
 
   # Optional per-harness EXCLUDE: minitest --exclude patterns (one per line,
   # comments allowed). Each exclusion documents WHY next to the pattern —
   # e.g. a hardware-bound perf budget that fails identically on real sidekiq.
   testopts=""
-  if [ -f "$harness/EXCLUDE" ]; then
+  if [ -f "$harness_dir/EXCLUDE" ]; then
     while IFS= read -r pattern; do
       case "$pattern" in ''|'#'*) continue ;; esac
       # --exclude=… (one arg, leading dash) so rake_test_loader skips it
       # instead of treating the pattern value as a test file.
       testopts="$testopts --exclude=\"$pattern\""
-    done < "$harness/EXCLUDE"
+    done < "$harness_dir/EXCLUDE"
   fi
 
   echo "==> $name @ $sha"
@@ -72,22 +128,26 @@ for harness in "$ECOSYSTEM_DIR"/*/; do
   #    gitignored .checkouts/) and BUNDLE_IGNORE_CONFIG (drops inherited config
   #    files) keep the parent's gems out of scope, so each harness
   #    resolves+installs fresh against rubygems.
-  if ! (
-    cd "$checkout" &&
+  # In the background because a trap waits for a foreground child, but not for `wait`.
+  (
+    cd "$checkout/$subdir" &&
     unset RUBYOPT RUBYLIB BUNDLER_SETUP BUNDLER_VERSION BUNDLE_BIN_PATH \
           GEM_HOME GEM_PATH BUNDLE_GEMFILE BUNDLE_PATH &&
-    export BUNDLE_GEMFILE="$ROOT/$harness/Gemfile" \
+    export BUNDLE_GEMFILE="$harness_dir/Gemfile" \
            BUNDLE_IGNORE_CONFIG=true \
            BUNDLE_PATH="$checkout/.bundle/gems" \
            ECOSYSTEM_CHECKOUT="$checkout" \
+           ECOSYSTEM_ADAPTER="$harness_dir/adapter.rb" \
            REDIS_URL="$REDIS_URL" \
            TESTOPTS="$testopts" &&
     bundle install --quiet &&
-    bundle exec rake test &&
+    eval "$command" &&
     # A gem's own suite rarely boots a real worker, so it can stay green while
     # the gem does nothing in production. boot_check.rb covers that path.
-    { [ ! -f "$ROOT/$harness/boot_check.rb" ] || bundle exec ruby "$ROOT/$harness/boot_check.rb"; }
-  ); then
+    { [ ! -f "$harness_dir/boot_check.rb" ] || bundle exec ruby "$harness_dir/boot_check.rb"; }
+  ) &
+  suite_pid=$!
+  if ! wait "$suite_pid"; then
     echo "FAIL: $name"
     failures=$((failures + 1))
   fi

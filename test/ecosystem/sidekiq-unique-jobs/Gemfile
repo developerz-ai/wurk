@@ -1,0 +1,15 @@
+# frozen_string_literal: true
+
+# Overlay Gemfile for the pinned checkout (see PIN). The gemspec declares no
+# development dependencies, so this mirrors what the upstream Gemfile's suite needs.
+
+source 'https://rubygems.org'
+
+gemspec path: ENV.fetch('ECOSYSTEM_CHECKOUT')
+
+wurk_root = File.expand_path('../../..', __dir__)
+gem 'sidekiq', path: File.join(wurk_root, 'ecosystem/sidekiq-shim')
+gem 'wurk', path: wurk_root
+
+%w[base64 benchmark bigdecimal mutex_m ostruct rack-session rack-test rake rspec rspec-its timecop toxiproxy
+   rspec-html-matchers rspec-benchmark sinatra].each { |name| gem name }

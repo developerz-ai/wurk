@@ -1,0 +1,11 @@
+<% last_page = @count.to_i.positive? ? (@total_size.to_f / @count).ceil : 1 %>
+<% current = @current_page.to_i %>
+<% if last_page > 1 %>
+<ul class="pagination">
+  <li class="<%= 'disabled' if current <= 1 %>"><a href="<%= h(url) %>?<%= h(qparams(page: 1)) %>">&laquo;</a></li>
+  <% if current > 1 %><li><a href="<%= h(url) %>?<%= h(qparams(page: current - 1)) %>"><%= current - 1 %></a></li><% end %>
+  <li class="disabled"><a href="<%= h(url) %>?<%= h(qparams(page: current)) %>"><%= current %></a></li>
+  <% if current < last_page %><li><a href="<%= h(url) %>?<%= h(qparams(page: current + 1)) %>"><%= current + 1 %></a></li><% end %>
+  <li class="<%= 'disabled' if current >= last_page %>"><a href="<%= h(url) %>?<%= h(qparams(page: last_page)) %>">&raquo;</a></li>
+</ul>
+<% end %>

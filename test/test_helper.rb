@@ -22,6 +22,7 @@ end
 $LOAD_PATH.unshift(File.expand_path('../lib', __dir__))
 
 require 'etc'
+require 'uri'
 
 # --- Per-worker Redis DB isolation -----------------------------------------
 # Tests must never touch the base Redis DB (0): teardown runs FLUSHDB, which
@@ -72,9 +73,27 @@ module Wurk
     class << self
       attr_accessor :redis_url
 
+      # Every path to a flush goes through here or #flush!. A DB in the query would
+      # win over the path, and a scheme with no DB path (unix://) can't be rewritten,
+      # so neither survives.
       def redis_url_for_db(database)
-        base = ENV['REDIS_URL'] || 'redis://localhost:6379/0'
-        base.match?(%r{/\d+\z}) ? base.sub(%r{/\d+\z}, "/#{database}") : "#{base}/#{database}"
+        raise "refusing test Redis DB #{database}: DB 0 is never the suite's" unless database.positive?
+
+        uri = URI.parse(ENV['REDIS_URL'] || 'redis://localhost:6379')
+        raise "tests need a redis:// or rediss:// REDIS_URL, got #{uri}" unless %w[redis rediss].include?(uri.scheme)
+
+        uri.path = "/#{database}"
+        kept = URI.decode_www_form(uri.query.to_s).to_h.except('db')
+        uri.query = kept.empty? ? nil : URI.encode_www_form(kept)
+        uri.to_s
+      end
+
+      # The connection's word on what it's about to wipe, whatever config got it here.
+      def flush!(conn)
+        db = conn.call('CLIENT', 'INFO')[/\bdb=(\d+)/, 1]
+        raise "refusing FLUSHDB on Redis DB 0 (#{redis_url})" if db == '0'
+
+        conn.call('FLUSHDB')
       end
 
       # Point this process at its own DB. Updates ENV so fresh Configurations and
@@ -197,7 +216,7 @@ if Minitest.respond_to?(:after_parallel_fork)
     Wurk::Test.assign_redis_db(worker)
     Wurk.configuration.redis = { url: Wurk::Test.redis_url }
     Wurk.configuration.reset_redis_pools!
-    Wurk.redis { |c| c.call('FLUSHDB') }
+    Wurk.redis { |c| Wurk::Test.flush!(c) }
     # engine_test_helper boots the dummy app (opening test/dummy/db/test.sqlite3)
     # in the parent before this fork; each worker inherits that connection and
     # must drop it, mirroring Swarm#close_parent_sockets, or workers corrupt

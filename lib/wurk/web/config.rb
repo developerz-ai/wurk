@@ -60,8 +60,9 @@ module Wurk
 
       # Tab paths the SPA already renders natively (Sidekiq DEFAULT_TABS plus
       # wurk's Pro/Ent extras). A gem re-registering one of these — e.g.
-      # sidekiq-cron's "cron" — must not produce a duplicate nav item, so
-      # `custom_tabs` filters them out.
+      # a bare `tabs['Cron'] = 'cron'` — must not produce a duplicate nav item, so
+      # `custom_tabs` filters them out. One an extension answers stays: sidekiq-cron's
+      # tab shows that gem's jobs, which the native page knows nothing about.
       NATIVE_TAB_PATHS = %w[
         busy queues retries scheduled dead morgue metrics profiles
         batches limiters cron search
@@ -233,9 +234,12 @@ module Wurk
         @tabs.filter_map do |name, path|
           # Same trailing-slash normalization as extension_for_index, so a
           # native path registered as "cron/" doesn't duplicate the native tab.
-          next if DEFAULT_TABS.key?(name) || NATIVE_TAB_PATHS.include?(path.to_s.delete_suffix('/'))
+          next if DEFAULT_TABS.key?(name)
 
-          { name: name, path: path.to_s, ext_name: extension_for_index(path)&.dig(:name)&.to_s }
+          owner = extension_for_index(path)
+          next if owner.nil? && NATIVE_TAB_PATHS.include?(path.to_s.delete_suffix('/'))
+
+          { name: name, path: path.to_s, ext_name: owner&.dig(:name)&.to_s }
         end
       end
 

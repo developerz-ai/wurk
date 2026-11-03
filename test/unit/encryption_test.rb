@@ -654,13 +654,89 @@ class EncryptionTest < Wurk::Test::UnitCase
     end
   end
 
-  def test_server_middleware_no_op_when_last_arg_is_plain
+  def test_server_middleware_dead_sets_a_last_arg_that_is_not_an_envelope
     ENABLE_MUTEX.synchronize do
       Wurk::Encryption.enable(active_version: 1) { |_v| KEY_V1 }
-      job = { 'class' => 'X', 'args' => [1, 'already plain'], 'encrypt' => true }
-      invoke_server(job) { :ok }
+      ['Zm9yZWlnbiBjaXBoZXJ0ZXh0', { 'plain' => 'hash' }, nil, 7].each do |last|
+        ran = false
+        job = { 'class' => 'X', 'jid' => "jid-#{last.class}", 'args' => [1, last], 'encrypt' => true }
 
-      assert_equal 'already plain', job['args'].last
+        assert_raises(Wurk::JobRetry::Skip) { invoke_server(job) { ran = true } }
+        refute ran, "#{last.inspect} must not reach perform"
+        entry = Wurk::DeadSet.new.find_job(job['jid'])
+
+        refute_nil entry
+        assert_equal Wurk::Encryption::DECRYPTION_ERROR_CLASS, entry.item['error_class']
+        assert entry.item['error_message'].start_with?('encryption_error: Wurk::Encryption::NotSealedError')
+        refute_includes entry.item['error_message'], 'Zm9yZWlnbiBjaXBoZXJ0ZXh0'
+        assert_equal [last], entry.item['args'].last(1)
+      end
+    end
+  end
+
+  def test_unsealed_jobs_past_the_dead_cap_are_all_kept_and_logged
+    ENABLE_MUTEX.synchronize do
+      Wurk::Encryption.enable(active_version: 1) { |_v| KEY_V1 }
+      was_cap = Wurk.configuration[:dead_max_jobs]
+      was_logger = Wurk.logger
+      Wurk.configuration[:dead_max_jobs] = 3
+      log = StringIO.new
+      Wurk.logger = ::Logger.new(log)
+      jids = Array.new(6) { |i| "capped-#{i}" }
+      jids.each do |jid|
+        job = { 'class' => 'CappedJob', 'jid' => jid, 'args' => ['secret-arg'], 'encrypt' => true }
+        assert_raises(Wurk::JobRetry::Skip) { invoke_server(job) { flunk 'must not run' } }
+      end
+
+      assert_equal 6, Wurk::DeadSet.new.size
+      jids.each { |jid| assert_match(/ERROR.*CappedJob jid=#{jid} .*not a Wurk envelope/, log.string) }
+      refute_includes log.string, 'secret-arg'
+    ensure
+      Wurk.configuration[:dead_max_jobs] = was_cap
+      Wurk.logger = was_logger
+    end
+  end
+
+  def test_an_unsealed_job_still_fires_death_handlers_and_batch_death
+    ENABLE_MUTEX.synchronize do
+      Wurk::Encryption.enable(active_version: 1) { |_v| KEY_V1 }
+      seen = []
+      handler = ->(job, ex) { seen << [job['jid'], ex.class] }
+      Wurk.configuration.death_handlers << handler
+      Wurk.redis do |c|
+        c.call('HSET', 'b-encbatch', 'total', '1', 'pending', '1', 'failures', '0', 'callbacks', '[]')
+        c.call('SADD', 'b-encbatch-jids', 'in-batch')
+      end
+      job = { 'class' => 'X', 'jid' => 'in-batch', 'bid' => 'encbatch', 'args' => ['plain'], 'encrypt' => true }
+
+      assert_raises(Wurk::JobRetry::Skip) { invoke_server(job) { flunk 'must not run' } }
+
+      assert_includes seen, ['in-batch', Wurk::Encryption::NotSealedError]
+      assert_equal(1, Wurk.redis { |c| c.call('SISMEMBER', 'b-encbatch-died', 'in-batch') })
+    ensure
+      Wurk.configuration.death_handlers.delete(handler)
+    end
+  end
+
+  def test_server_middleware_runs_an_opted_in_job_with_no_args
+    ENABLE_MUTEX.synchronize do
+      Wurk::Encryption.enable(active_version: 1) { |_v| KEY_V1 }
+
+      assert_equal :ok, invoke_server({ 'class' => 'X', 'args' => [], 'encrypt' => true }) { :ok }
+    end
+  end
+
+  def test_retrying_a_dead_set_plaintext_job_seals_and_runs_it
+    ENABLE_MUTEX.synchronize do
+      Wurk::Encryption.enable(active_version: 1) { |_v| KEY_V1 }
+      job = { 'class' => 'X', 'jid' => 'plain-retry', 'queue' => 'enc-retry', 'args' => ['plain'], 'encrypt' => true,
+              'retry' => true, 'created_at' => 1 }
+      assert_raises(Wurk::JobRetry::Skip) { invoke_server(job) { :never } }
+      Wurk::DeadSet.new.find_job('plain-retry').retry
+      pushed = Wurk.load_json(Wurk.redis { |c| c.call('LINDEX', 'queue:enc-retry', 0) })
+
+      assert Wurk::Encryption.envelope?(pushed['args'].last), 'retry goes through the client chain, which seals'
+      assert_equal 'plain', Wurk::Encryption.decrypt(pushed['args'].last)
     end
   end
 

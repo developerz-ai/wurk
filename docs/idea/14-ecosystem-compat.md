@@ -9,9 +9,12 @@ This is testable, and it's the strongest possible proof of compat.
 | Gem | Upstream suite runs against Wurk in CI? |
 |---|---|
 | sidekiq-cron | **Yes** — on PRs that change a filtered path (the workflow is path-gated), in the [`ecosystem` job](../../.github/workflows/ecosystem.yml), pinned in [`test/ecosystem/sidekiq-cron/PIN`](../../test/ecosystem/sidekiq-cron/PIN) |
-| every other gem below | **No** — untested on Wurk. Pins and blockers for sidekiq-status and sidekiq-unique-jobs are recorded [further down](#not-yet-in-the-matrix--pin-researched-blocker-known); the rest have not been attempted |
+| sidekiq-unique-jobs | **Yes**, same job, pinned in [`PIN`](../../test/ecosystem/sidekiq-unique-jobs/PIN). Leaves out the one spec file that needs a Toxiproxy service. |
+| sidekiq-failures | **Yes**, same job, pinned in [`PIN`](../../test/ecosystem/sidekiq-failures/PIN). Leaves out the test for upstream's ERB home page under a bare Rack `Sidekiq::Web`, adds `Sec-Fetch-Site` to the suite's requests, and uses a [test-only adapter](../../test/ecosystem/sidekiq-failures/adapter.rb) for one assertion on Processor internals. |
+| sentry-sidekiq | **Yes**, same job, pinned in [`PIN`](../../test/ecosystem/sentry-sidekiq/PIN). A [test-only adapter](../../test/ecosystem/sentry-sidekiq/adapter.rb) covers the suite's reach into a private ivar. |
+| every other gem below | **No**, untested on Wurk in CI. The pin and blocker for sidekiq-status are recorded [further down](#not-yet-in-the-matrix--pin-researched-blocker-known). opentelemetry-instrumentation-sidekiq and rspec-sidekiq were measured by hand and are not in the job: the first needs a password-protected Redis and asserts `BRPOP`, the second's failing matchers assume stock's Enterprise and ActiveJob internals. |
 
-A gem's suite passing does not prove the gem runs. sidekiq-cron's suite stayed green while Wurk's Launcher overwrote the `@cron_poller` the gem's prepend had just set, so no cron job ever fired in a real server: the suite never boots a Launcher. `test/ecosystem/sidekiq-cron/boot_check.rb` starts the real `sidekiq` executable with the gem loaded and asserts ticks. Any gem that hooks process lifecycle needs a check like it.
+Each gem in the job also runs a [`boot_check.rb`](../../test/ecosystem/boot_check_support.rb): the gem loaded into the real `sidekiq` and `wurkswarm` executables, with the swarm preload on and off and with fake testing mode switched on at load. A gem's suite passing does not prove the gem runs. sidekiq-cron's suite stayed green while Wurk's Launcher overwrote the `@cron_poller` the gem's prepend had just set, so no cron job ever fired in a real server: the suite never boots a Launcher. `test/ecosystem/sidekiq-cron/boot_check.rb` starts the real `sidekiq` executable with the gem loaded and asserts ticks. Any gem that hooks process lifecycle needs a check like it.
 
 Keeping any add-on gem needs the git-only [`sidekiq` shim gem](../../ecosystem/sidekiq-shim/README.md), because every one of them declares `add_dependency "sidekiq"`. A user keeping an untested gem should prove it in staging before production. The native replacements Wurk ships (periodic loops, `unique_for:`, `track:`, rate limiters) are the supported path, and the migration guide documents how to move live sidekiq-cron schedules and sidekiq-unique-jobs locks across a cutover ([`docs/migrate-from-sidekiq.md` §6](../migrate-from-sidekiq.md#6-third-party-gem-mappings)).
 
@@ -55,18 +58,13 @@ A harness is added to `test/ecosystem/` only when it is green. `test:ecosystem` 
 
 Already closed by this work: `require "sidekiq/processor"`, `"sidekiq/manager"` and `"sidekiq/job_retry"` — all three are real upstream files this suite requires, and all three now resolve (`lib/sidekiq/`, pinned by `test/unit/sidekiq_entrypoint_test.rb`).
 
-### sidekiq-unique-jobs
+## sidekiq-unique-jobs
 
-**Pin:** `mhenrixon/sidekiq-unique-jobs` v8.1.0 (`4e57de89f3ac817b876c6b5d57050e05accad2d6`).
+In the job since this harness landed, pinned at v8.1.0. The suite hardcodes `localhost:6379`, DB 0, and flushes it before every example, so [`prepare`](../../test/ecosystem/sidekiq-unique-jobs/prepare) points every connection at the harness's DB. Its `rake rspec` task names darwin-only formatters, so [`COMMAND`](../../test/ecosystem/sidekiq-unique-jobs/COMMAND) runs upstream CI's own command. Leaves out `spec/integration/until_and_while_executing_spec.rb`, which needs a Toxiproxy service. `lib/wurk/job_set.rb` and `lib/wurk/sorted_entry.rb` carry the two behaviours this gem depends on and that used to lose jobs.
 
-**Measured by hand against the suite at this pin** (`rspec --tag ~perf`, Toxiproxy up, spec_helper's port edited): the Wurk failures left are all Web extension surface — `Sidekiq::WebHelpers` and `erb(locals:)` — which the compat doc's Web decision owns. `lib/wurk/job_set.rb` and `lib/wurk/sorted_entry.rb` carry the two behaviours this gem depends on and that used to lose jobs: `remove_job` does not route through the public `delete_by_value` the gem prepends, and it yields the raw JSON string the gem parses.
+## Behaviour a gem's suite can't pin
 
-**Blockers**, all in the harness contract rather than in Wurk:
-
-- The suite needs a **Toxiproxy service container** (`ghcr.io/shopify/toxiproxy`, ports 8474/21212) alongside Redis; `spec/spec_helper.rb` requires `toxiproxy` at load. `.github/workflows/ecosystem.yml` declares only Redis.
-- `spec_helper.rb` hardcodes `config.redis = { port: 6379 }` (DB 0), ignoring `ECOSYSTEM_REDIS_URL` — it would trash whatever lives in DB 0 rather than the harness's DB 15.
-- Its `rake rspec` task hardcodes `--format Fuubar --format Nc`, formatters upstream installs only on darwin. Upstream CI never runs that task; it runs `bin/rspec --require spec_helper --tag ~perf`. So the harness needs a **command** escape hatch, not the rake-task name one — the `TASK` file this repo briefly carried would not have run this suite either.
-- The gemspec declares no development dependencies, so an overlay `gemspec path:` alone leaves `rake`, `rspec`, `rspec-its`, `timecop` and `toxiproxy` out of the bundle; the overlay has to mirror the upstream Gemfile's test deps explicitly.
+sidekiq-cron 2.3.1's web suite sets `c[:csrf] = false` and POSTs with no `Sec-Fetch-Site`, and 9 of its tests fail on Wurk for that. Stock 8.1.5 answers those same requests with 403 when probed from outside, so Wurk keeps the gate: the pinned 2.4.0 is green, and a browser on plain HTTP sends no such header, so that posture would open real CSRF.
 
 ## Why this matters
 

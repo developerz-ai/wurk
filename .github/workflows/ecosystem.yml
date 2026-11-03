@@ -88,7 +88,8 @@ jobs:
   ecosystem:
     needs: detect
     runs-on: ubuntu-latest
-    # Measured: ~1 min on a PR, 3-4 min on the cold weekly run.
+    # Four harnesses, each cloning and installing its own bundle: ~2.5 min on a warm
+    # developer box. Their suites take seconds; the installs are what a cold run pays.
     timeout-minutes: 15
     services:
       redis:

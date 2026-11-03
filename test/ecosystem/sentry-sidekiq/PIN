@@ -1,0 +1,6 @@
+# Upstream checkout this suite runs from: the sentry-sidekiq directory of the monorepo.
+# Bump sha only after re-running `bin/rake test:ecosystem` green against the new tag.
+repo: https://github.com/getsentry/sentry-ruby
+ref: 6.5.0
+sha: a34b047d67ffac7b4d8b9c853120823db394deab
+subdir: sentry-sidekiq

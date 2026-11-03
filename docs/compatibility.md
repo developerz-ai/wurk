@@ -29,7 +29,7 @@ OSS, Pro, and Enterprise surfaces — and the behaviour was reconstructed from:
 
 - the public wiki's documented API for OSS, Pro, and Enterprise,
 - the open-source Sidekiq API surface,
-- the observable wire protocol (Redis keys, payloads, scores), and
+- the observable wire protocol of open-source Sidekiq (Redis keys, payloads, scores), and
 - the public test suites of the third-party ecosystem gems.
 
 Nothing was derived from, decompiled from, or pasted out of the source of
@@ -73,7 +73,17 @@ surface a given assertion targets. It does not indicate that any file was
 copied from that commit.
 
 When Wurk diverges from a parity test, Wurk is wrong unless the divergence is
-explicitly documented in `docs/target/sidekiq-{free,pro,ent}.md`.
+explicitly documented as intentional in the canonical ledger,
+[`docs/idea/parity-divergences.md`](idea/parity-divergences.md).
+
+## What "drop-in" does not yet cover
+
+Interface reimplementation is not proof of interoperability with closed software.
+No real Sidekiq Pro or Enterprise dump has been compared with Wurk's reading of those
+formats; they are implemented from [`docs/target/`](target/sidekiq-pro.md). On a Sidekiq
+7.x app, Wurk's job timestamps also differ, as Sidekiq 8's do from 7.x. See
+[the migration guide](migrate-from-sidekiq.md#10-sidekiq-7x-proenterprise-apps-keeping-the-add-on-gems)
+for what has and has not been verified.
 
 ## Why reimplementing an API is defensible
 

@@ -7,7 +7,7 @@
 # clean slate without affecting any other worker. Workers never touch DB 0.
 module RedisNamespace
   def teardown
-    Wurk.redis { |conn| conn.call('FLUSHDB') }
+    Wurk.redis { |conn| Wurk::Test.flush!(conn) }
   rescue StandardError
     # A test may have torn down or swapped the global pool; isolation for the
     # *next* test is still covered by the worker-start flush + its own teardown.

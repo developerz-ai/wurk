@@ -91,6 +91,41 @@ class EmbeddedTest < Wurk::Test::UnitCase
     assert embedded.launcher.instance_variable_get(:@embedded)
   end
 
+  def run_embedded_in(env, log)
+    saved = ENV.to_h.slice('RAILS_ENV', 'RACK_ENV')
+    %w[RAILS_ENV RACK_ENV].each { |key| ENV[key] = env }
+    @config.logger = ::Logger.new(log)
+    Wurk::Embedded.new(@config).tap do |embedded|
+      embedded.define_singleton_method(:housekeeping) { nil }
+      embedded.define_singleton_method(:build_launcher) { Struct.new(:run).new }
+      embedded.run
+    end
+  ensure
+    %w[RAILS_ENV RACK_ENV].each { |key| ENV[key] = saved[key] }
+  end
+
+  def test_run_turns_a_test_mode_off_and_says_so
+    Wurk::Testing.fake!
+    log = StringIO.new
+    run_embedded_in('production', log)
+
+    assert_predicate Wurk::Testing, :disabled?
+    assert_includes log.string, 'silently drop every enqueue'
+  ensure
+    Wurk::Testing.disable!
+  end
+
+  def test_run_leaves_a_test_suites_test_mode_alone
+    Wurk::Testing.fake!
+    log = StringIO.new
+    run_embedded_in('test', log)
+
+    assert_predicate Wurk::Testing, :fake?
+    refute_includes log.string, 'silently drop every enqueue'
+  ensure
+    Wurk::Testing.disable!
+  end
+
   def test_run_invokes_launcher_run
     embedded = Wurk::Embedded.new(@config)
     stub_redis!(embedded)

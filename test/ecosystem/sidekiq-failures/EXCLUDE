@@ -1,0 +1,6 @@
+# Minitest --exclude pattern(s), one per line, applied via TESTOPTS.
+#
+# GET / expects upstream's ERB home page out of `Sidekiq::Web` as a bare Rack app.
+# Outside a Rails app Wurk has no dashboard to serve there; see
+# docs/idea/parity-divergences.md. The gem's own pages all run.
+/can display home with failures tab/

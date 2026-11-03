@@ -38,10 +38,12 @@ gem "sidekiq", github: "developerz-ai/wurk", glob: "ecosystem/sidekiq-shim/*.gem
 gem "sentry-sidekiq"
 ```
 
-That works, but it buys you an integration written against Sidekiq's internals
-to solve a problem Wurk has natively. Prefer `Wurk::Sentry` — and note that
-`sentry-sidekiq`'s error reporting would be **wrong** on Wurk anyway, for the
-reason in [What gets reported](#what-gets-reported) below.
+That works: against a dummy transport, not a real Sentry, it reported the right
+exception on each attempt, and once with `report_after_job_retries`. Its own suite
+and a real-worker boot check run against Wurk in CI. But it buys you an integration
+written against Sidekiq's internals to solve a problem Wurk has natively, and it
+sees none of the worker-process errors in
+[What gets reported](#what-gets-reported) below. Prefer `Wurk::Sentry`.
 
 ---
 

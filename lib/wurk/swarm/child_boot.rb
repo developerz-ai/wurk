@@ -7,6 +7,7 @@ require_relative '../fetcher/reliable'
 require_relative '../lua'
 require_relative '../health'
 require_relative 'orphan_guard'
+require_relative 'test_mode_guard'
 
 module Wurk
   class Swarm
@@ -60,6 +61,7 @@ module Wurk
         reconnect_after_fork
         @config.reopen_in_forked_child
         Wurk.server = true
+        TestModeGuard.enforce!(@config.logger)
         Wurk::Health.fleet_size = @fleet_size
         # :fork runs in each child after our internal AR/Redis reconnect and
         # before fetching, so apps can reopen sockets / restart threads /

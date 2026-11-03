@@ -1,0 +1,1 @@
+bundle exec rspec --require "$ECOSYSTEM_ADAPTER" spec

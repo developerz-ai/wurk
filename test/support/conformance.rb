@@ -154,7 +154,7 @@ module Conformance
       return if first == 1 || opening.start_with?('#') ||
                 (!opening.strip.empty? && lines[first - 2].strip.empty?)
 
-      raise Invalid, "source range not at a heading or paragraph start #{source}"
+      raise Invalid, "source range not at a heading or paragraph start #{source}; if lines moved, run bin/repin-anchors"
     end
 
     def normalize_whitespace(value)
@@ -165,9 +165,9 @@ module Conformance
       range = validate_source!(entry['source'])
       promise = normalize_whitespace(entry['promise'])
       anchored = normalize_whitespace(range.join)
-      raise Invalid, "#{entry['id']}: promise withdrawn from #{entry['source']}" unless anchored.include?(promise)
+      return validate_ledger_heading!(entry, range, promise) if anchored.include?(promise)
 
-      validate_ledger_heading!(entry, range, promise)
+      raise Invalid, "#{entry['id']}: promise withdrawn from #{entry['source']}; if lines moved, run bin/repin-anchors"
     end
 
     # A ledger range quoting one entry's body must also span that entry's own
@@ -359,7 +359,8 @@ module Conformance
       # path-only shape.
       pinned = (candidates || []).select { |record| record.anchor == anchor.canonical }
       if pinned.empty?
-        raise Invalid, "#{heading}: line-bearing anchor #{anchor.canonical} has no record in #{@records_glob}"
+        raise Invalid, "#{heading}: line-bearing anchor #{anchor.canonical} has no record in #{@records_glob}; " \
+                       'if lines moved, run bin/repin-anchors'
       end
 
       record = pinned.first
@@ -371,14 +372,14 @@ module Conformance
       lines = File.readlines(path)
       if anchor.to > lines.size
         raise Invalid, "#{heading}: anchor #{anchor.canonical}: range past end of #{anchor.path} " \
-                       "(#{lines.size} lines) — the code moved; re-pin the anchor and fragment (#{record.file})"
+                       "(#{lines.size} lines) — the code moved; run bin/repin-anchors (#{record.file})"
       end
 
       anchored = normalize_whitespace(lines[(anchor.from - 1)..(anchor.to - 1)].join)
       return if anchored.include?(normalize_whitespace(record.fragment))
 
       raise Invalid, "#{heading}: anchor #{anchor.canonical}: fragment not found at the anchored lines " \
-                     "(#{record.file})"
+                     "(#{record.file}); if the code moved, run bin/repin-anchors"
     end
 
     def validate_path_anchor!(heading, anchor)

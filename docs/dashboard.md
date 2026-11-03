@@ -163,7 +163,9 @@ end
 
 This supports the extension App DSL, not the upstream
 `Sidekiq::Web::Router`, `Sidekiq::Web::Route`, or `Sidekiq::Web::Action`
-constants. Rendering and security constraints remain the same:
+constants. `Sidekiq::WebHelpers` and `Sidekiq::Paginator` are the helpers extension
+views render with, a working subset of §25.7 rather than all of it. Rendering and
+security constraints remain the same:
 
 - `GET/POST /<mount>/ext/<name>/<subpath>` matches the extension's route
   (route params like `/locks/:digest` included), runs the block in a
@@ -176,7 +178,9 @@ constants. Rendering and security constraints remain the same:
   `asset_paths` (with `Cache-Control` from `cache_for`, path-traversal
   rejected), so a view's `<link href="<%= asset_path('app.css') %>">` works.
 - Locale strings load from `root_dir/locales/en.yml` and resolve through the
-  `t` helper; missing keys degrade to the humanized key, never raise.
+  `t` helper; missing keys degrade to the humanized key (`DeleteAll` reads
+  `Delete All`), never raise.
+- `erb :_paging` and `erb :_job_info` are built in, and `erb` honours `locals:`.
 - CSRF matches Sidekiq's model: non-`GET` extension requests must be
   same-origin per `Sec-Fetch-Site`; cross-site requests are denied.
 - Tabs added by bare `tabs["Label"] = "path"` mutation have no extension to
@@ -215,3 +219,16 @@ flashing the wrong one. Timezone has no server-side hint at all — it's resolve
 entirely client-side from the browser's own zone, or a visitor's own override.
 Full reference, including precedence order
 and every option: [Configuration → Dashboard configuration](configuration.md#dashboard-configuration).
+
+## `mount Sidekiq::Web`
+
+The stock install line works in a Rails app. `mount Sidekiq::Web => "/sidekiq"` serves
+registered extension routes at their own paths, as a bare page, and hands every other
+path to the engine. So it shows the same dashboard as `mount Wurk::Engine`, with the
+same gates: `Sidekiq::Web.use` middleware, the authorization hook and read-only mode
+run on both sides, and anything a host wraps around `Sidekiq::Web` runs first. The
+machine API is not served under this mount; `mount Wurk::Engine` or `mount Wurk::API`
+serves it.
+
+`run Sidekiq::Web` outside Rails serves extension routes only. Anything else is a 404
+whose body names the fix, plus one WARN in the log.

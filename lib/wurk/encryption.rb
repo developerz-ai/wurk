@@ -83,6 +83,12 @@ module Wurk
     # is what callers see as the dead record's `error_class`.
     class DecryptionError < Error; end
 
+    # The job says `encrypt: true` but its last argument is not a Wurk envelope:
+    # another implementation's ciphertext, or a producer that never enabled
+    # crypto. Neither can be told from a plain value, and either way `perform`
+    # must not take it for the decrypted argument.
+    class NotSealedError < Error; end
+
     class << self
       attr_reader :active_version
 
@@ -228,7 +234,10 @@ module Wurk
           'failed_at' => ::Process.clock_gettime(::Process::CLOCK_REALTIME, :millisecond)
         )
         Wurk::Metrics::Statsd.increment('jobs.encryption_error', tags: ["worker:#{job['class']}"])
-        Wurk::DeadSet.new.kill(Wurk.dump_json(record), ex: cause)
+        Wurk.logger.error { "#{DEAD_REASON}: #{job['class']} jid=#{job['jid']} sent to the dead set: #{cause.message}" }
+        # No trim: a misconfigured producer or a lost key can fail a whole backlog at
+        # once, and the cap would destroy jobs that are recoverable once it is fixed.
+        Wurk::DeadSet.new.kill(Wurk.dump_json(record), ex: cause, trim: false)
         nil
       end
 
@@ -318,13 +327,18 @@ module Wurk
     # with every outer middleware and the processor; leaving plaintext in it
     # let any of them write the secret back to Redis (InterruptHandler's
     # re-push, limiter dead-routing) or hand it to an error reporter. A decrypt
-    # failure (missing/rotated key, bad tag) is terminal and non-retryable,
-    # so rather than let it bubble into the 25× retry pipeline we route the
+    # failure (missing/rotated key, bad tag, a last argument that is no envelope)
+    # is terminal and non-retryable, so rather than let it bubble into the 25× retry pipeline we route the
     # job straight to the dead set tagged `encryption_error` and ACK it via
     # JobRetry::Skip — see Wurk::Encryption.route_to_dead. Plaintext args
     # remain visible for triage per §4.6.
     class ServerMiddleware
       include Wurk::Middleware::ServerMiddleware
+
+      # Never quotes the argument: it may be a secret in the clear.
+      NOT_SEALED_MESSAGE = 'job has encrypt: true but its last argument is not a Wurk envelope, so it was not run. ' \
+                           'A producer without crypto enabled pushed it, or another implementation encrypted it. ' \
+                           'A retry re-seals the argument as it stands: retry only a job known to hold plaintext'
 
       def call(_worker, job, _queue)
         return yield unless Wurk::Encryption.enabled? && job['encrypt']
@@ -342,7 +356,8 @@ module Wurk
 
       def decrypt_last_arg!(job)
         args = job['args']
-        return unless args.is_a?(::Array) && !args.empty? && Wurk::Encryption.envelope?(args.last)
+        return unless args.is_a?(::Array) && !args.empty?
+        raise NotSealedError, NOT_SEALED_MESSAGE unless Wurk::Encryption.envelope?(args.last)
 
         job['args'] = args[0..-2] + [Wurk::Encryption.decrypt(args.last)]
       rescue Wurk::Encryption::Error,
@@ -350,7 +365,7 @@ module Wurk
              ::ArgumentError,
              ::TypeError,
              ::JSON::ParserError => e
-        # Wurk::Encryption::Error covers KeyMissingError / DecryptionError.
+        # Wurk::Encryption::Error covers KeyMissingError / DecryptionError / NotSealedError.
         # OpenSSL::Cipher::CipherError → tampered ciphertext / bad key (tag mismatch).
         # ArgumentError → Base64.strict_decode64 / Integer() on a malformed envelope.
         # TypeError    → Integer(nil) on a missing 'v' field.

@@ -108,7 +108,9 @@ module Wurk
       ['-s', '--strict', :health_strict, 'Fail when Redis cannot be read, rather than passing']
     ].freeze
 
-    HELP_COMMANDS = "\nCommands:\n    health    Exit 0 if this host's workers are heartbeating\n\nOptions:"
+    HELP_COMMANDS = "\nCommands:\n    health    Exit 0 if this host's workers are heartbeating\n    " \
+                    "preflight Read a live Redis: what will carry over to Wurk (read-only)\n    " \
+                    "verify    Post-cutover check of a live fleet (read-only)\n\nOptions:"
 
     attr_accessor :launcher, :environment, :config
 
@@ -159,6 +161,7 @@ module Wurk
       # false`).
       enter_server_mode
       boot_application if boot_app
+      Swarm::TestModeGuard.enforce!(@config.logger)
       self_read, self_write = ::IO.pipe
       begin
         trap_signals(self_write)

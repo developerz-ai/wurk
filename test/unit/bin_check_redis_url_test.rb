@@ -63,11 +63,9 @@ class BinCheckRedisUrlTest < Minitest::Test
     ]
 
     refute_nil suite_default, 'RedisPool::DEFAULT_URL must still read REDIS_URL with a literal fallback'
-    %w[bin/check bin/test-ecosystem].each do |script|
-      fallback = File.read(File.expand_path("../../#{script}", __dir__))[/\$\{REDIS_URL:-([^}]+)\}/, 1]
+    fallback = File.read(File.expand_path('../../bin/check', __dir__))[/\$\{REDIS_URL:-([^}]+)\}/, 1]
 
-      assert_equal suite_default, fallback, "#{script} must fall back to the suite's own default"
-    end
+    assert_equal suite_default, fallback, "bin/check must fall back to the suite's own default"
   end
 
   def test_runs_the_gate_when_the_redis_url_server_answers

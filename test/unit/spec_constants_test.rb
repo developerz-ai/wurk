@@ -29,7 +29,6 @@ class SpecConstantsTest < Wurk::Test::UnitCase
     'Sidekiq::Web::Action' => :erb_dashboard,
     'Sidekiq::Web::Route' => :erb_dashboard,
     'Sidekiq::Web::Router' => :erb_dashboard,
-    'Sidekiq::WebHelpers' => :erb_dashboard,
     # Upstream's private prepend onto Client; Wurk's Client#raw_push hands off
     # to Testing.dispatch_push instead. Not a public surface.
     'Sidekiq::TestingClient' => :private_upstream_module,

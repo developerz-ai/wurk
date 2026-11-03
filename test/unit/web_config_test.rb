@@ -451,12 +451,19 @@ class WebConfigTest < Wurk::Test::UnitCase
 
   def test_custom_tabs_excludes_native_and_default_paths
     cfg = Wurk::Web.config
-    cfg.register_extension(Object, name: 'cron', tab: 'Cron', index: 'cron')         # wurk-native path
+    cfg.tabs['Limits'] = 'limiters'                                                  # wurk-native path
     cfg.register_extension(Object, name: 'queues', tab: 'Queues', index: 'queues')   # Sidekiq default
     cfg.register_extension(Object, name: 'locks', tab: 'Locks', index: 'locks')      # genuinely new
     paths = cfg.custom_tabs.map { |t| t[:path] }
 
     assert_equal ['locks'], paths
+  end
+
+  # sidekiq-cron's page lists that gem's jobs. The native one can't show them.
+  def test_custom_tabs_keeps_a_native_path_an_extension_answers
+    Wurk::Web.config.register_extension(Object, name: 'cron', tab: 'Cron', index: 'cron/')
+
+    assert_equal [{ name: 'Cron', path: 'cron/', ext_name: 'cron' }], Wurk::Web.config.custom_tabs
   end
 
   def test_tabs_hash_is_directly_mutable

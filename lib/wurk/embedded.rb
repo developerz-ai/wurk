@@ -2,6 +2,7 @@
 
 require_relative 'component'
 require_relative 'launcher'
+require_relative 'swarm/test_mode_guard'
 
 module Wurk
   # Embeds Wurk inside an arbitrary Ruby process (Puma, rake task, custom
@@ -34,13 +35,13 @@ module Wurk
     # the worker threads have time to spin up before the host goes back to
     # serving traffic. Mirrors Sidekiq::Embedded#run.
     def run
+      Swarm::TestModeGuard.enforce!(logger)
       housekeeping
       fire_event(:startup, reverse: false, reraise: true)
       @launcher = build_launcher
       @launcher.run
       sleep 0.2
-      logger.info { "Wurk running embedded, total process thread count: #{Thread.list.size}" }
-      logger.debug { Thread.list.map(&:name).to_s }
+      log_running
     rescue StandardError
       # The host is left believing Wurk never started, so anything the launcher
       # did get up would keep fetching, beating and campaigning for the leader
@@ -61,6 +62,11 @@ module Wurk
     end
 
     private
+
+    def log_running
+      logger.info { "Wurk running embedded, total process thread count: #{Thread.list.size}" }
+      logger.debug { Thread.list.map(&:name).to_s }
+    end
 
     # Guarded so the caller sees why the boot failed, not why the rollback did.
     def roll_back_partial_boot

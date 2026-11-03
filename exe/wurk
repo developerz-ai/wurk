@@ -4,11 +4,17 @@
 # Standalone runner. Does NOT load the Rails engine.
 # Usage: `exe/wurk -C config/wurk.yml`     — worker: one process, thread pool
 #        `exe/wurk api --port 7433`        — machine HTTP API, runs no jobs
+#        `exe/wurk preflight` / `verify`   — read-only cutover checks, run no jobs
 
 $stdout.sync = true
 $LOAD_PATH.unshift(File.expand_path('../lib', __dir__))
 
 require 'wurk'
+
+if %w[preflight verify].include?(ARGV.first)
+  require 'wurk/preflight/command'
+  exit Wurk::Preflight::Command.run(ARGV.dup)
+end
 
 begin
   cli = Wurk::CLI.instance

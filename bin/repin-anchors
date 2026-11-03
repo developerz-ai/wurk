@@ -1,0 +1,28 @@
+#!/usr/bin/env ruby
+# frozen_string_literal: true
+
+# Moves the line numbers the conformance gates pin, after the lines moved: anchor
+# records in test/conformance/ledger_anchors/, both reference styles in the ledger,
+# and the line ranges in test/conformance/cases.yml. Each pin moves only to where its
+# quoted text still is; a quote that is gone is reported for a person to look at.
+#
+#   bin/repin-anchors           rewrite the files and report
+#   bin/repin-anchors --check   report, write nothing, exit 1 if anything is off
+#
+# Exit 1 also when something could not be resolved, in either mode.
+
+require_relative '../test/support/anchor_repin'
+
+check = ARGV.delete('--check')
+abort 'usage: bin/repin-anchors [--check]' unless ARGV.empty?
+
+repin = Conformance::AnchorRepin.new(ENV.fetch('REPIN_ROOT') { File.expand_path('..', __dir__) })
+report = repin.run
+repin.write unless check
+
+report.records.each { |from, to| puts "record  #{from} -> #{to}" }
+report.sources.each { |id, from, to| puts "case    #{id}: #{from} -> #{to}" }
+report.unresolved.each { |line| puts "UNRESOLVED #{line}" }
+puts "#{check ? 'would change' : 'changed'}: #{report.records.size} records, #{report.references} ledger references, " \
+     "#{report.sources.size} case sources; #{report.unresolved.size} unresolved"
+exit 1 unless report.unresolved.empty? && (!check || report.clean?)

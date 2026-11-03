@@ -1,0 +1,14 @@
+# frozen_string_literal: true
+
+# Overlay Gemfile for the pinned checkout (see PIN).
+
+source 'https://rubygems.org'
+
+gemspec path: ENV.fetch('ECOSYSTEM_CHECKOUT')
+
+wurk_root = File.expand_path('../../..', __dir__)
+gem 'sidekiq', path: File.join(wurk_root, 'ecosystem/sidekiq-shim')
+gem 'wurk', path: wurk_root
+
+gem 'minitest', '~> 5.0'
+%w[mocha rack-session rack-test rake sinatra sprockets].each { |name| gem name }

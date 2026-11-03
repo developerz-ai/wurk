@@ -1,0 +1,5 @@
+# Upstream CI's own command: the gem's `rake rspec` hardcodes darwin-only formatters.
+# Left out, spec/integration/until_and_while_executing_spec.rb: it needs a Toxiproxy
+# service, which this non-required job does not run. The lock type stays covered by
+# the rest of the suite.
+bundle exec rspec --require spec_helper --tag ~perf --exclude-pattern "**/integration/until_and_while_executing_spec.rb"
