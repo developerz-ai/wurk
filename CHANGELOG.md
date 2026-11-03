@@ -15,6 +15,7 @@ All notable changes to Wurk are recorded here. Format: [Keep a Changelog](https:
 - `Sidekiq.gem_version`, `Sidekiq.freeze!`.
 - sidekiq-unique-jobs, sidekiq-failures and sentry-sidekiq in `test:ecosystem`, and a real-worker boot check for all four harnesses, covering `sidekiq` and `wurkswarm` with preload on, off, and fake mode at load.
 - `bin/repin-anchors`: re-pins the ledger's anchor records, syncs both of the ledger's reference styles and `test/conformance/cases.yml` after lines move, with `--check` to report without writing.
+- **`mgr.grace = 300` in `config.periodic`** lets a slot fire later than the default 90s, for a cut-over from `sidekiq-cron`. Process-wide, default unchanged.
 
 ### Changed
 
@@ -25,11 +26,34 @@ All notable changes to Wurk are recorded here. Format: [Keep a Changelog](https:
 - Extension `truncate` cuts like upstream: `text[0..n]` followed by `...`, not `…`.
 - An extension's tab on a path the SPA also renders natively (sidekiq-cron's Cron) is no longer hidden. With sidekiq-cron, the nav shows the native Cron entry and the gem's Cron tab.
 - An extension view that names a view that doesn't exist now raises `extension <name> has no view <view>`, instead of `has no root_dir`.
+- **`push_bulk` is cheaper: 15.0µs to 9.4µs per job (stock Sidekiq 6.8µs, 10 paired rounds).** It normalizes once per slice instead of once per job. Payload key order is unchanged. **Upgrade note:** jobs in one bulk slice now share a `created_at`; they used to differ by the milliseconds the loop took. Stock Sidekiq shares one across the whole bulk. A per-job `at` keeps the old walk, since expiry and deadline are measured from it.
+- `--help` differs per binary and names environment variables and the docs.
+- `bin/rails g wurk:install` prints next steps, including that the dashboard has no login of its own.
+- Each release gets a CycloneDX SBOM asset and an SBOM attestation, from a separate `attest.yml` that can't reach publishing.
 
 ### Fixed
 
 - `docs/migrate-from-sidekiq.md` no longer claims: `:while_executing` maps to `unique_until: :start`; "worst case one extra run" on dropping sidekiq-unique-jobs; leftover gem locks "do nothing" (they silently block enqueues after a rollback; UNLINK them); same encryption keys carry Enterprise jobs over; the default scheduler has a job-loss window; `reliable_scheduler!` must stay on; the Sidekiq web UI "keeps working" unqualified. `docs/compatibility.md` pointed the parity-divergence rule at `docs/target`; it is the ledger.
 - `docs/sentry.md` no longer says `sentry-sidekiq` reports the wrong errors on Wurk. Against a dummy transport it reported the right exception per attempt; it has not been tested with a real Sentry.
+- **`wurkswarm` no longer crashes apps whose `config/application.rb` relies on the swarm's preload.** Since 1.10.0, an app that skips `Bundler.require` because the swarm already ran it, then uses a preloaded gem, died at boot with `wurkswarm: uninitialized constant Dotenv` (or whichever gem) and exit 1. It now restarts itself once with the preload first, under `bundle exec`, a binstub or `load Gem.bin_path`, keeping its pid, and logs a warning naming the first error. Gems that need Rails at require time keep working. Such an app does start twice per boot; a `Bundler.require` in `config/application.rb` avoids that.
+- **Boot's `lock:` check no longer dies on a class that redefines `self.name`.** With a gem like Faker loaded (`Faker::Travel::Airport`), `ArgumentError: missing keywords` skipped the whole check, so jobs setting a `lock:` that did nothing got no warning. `Sidekiq::Testing`'s queue check had the same flaw.
+- **Native periodics survive a leader's death.** A follower rechecked the lock on a flat 60s, so a killed leader left up to 90s with no lease; it now rechecks when the lease it read runs out, about a second after a lapse (31s at most after a `SIGKILL`). The lock and its TTL are unchanged. A new leader ticks the moment it wins rather than at its poller's next minute. Under repeated leader kills, periodics fired 8-9 of 10 slots, up from 0-1.
+- **A leader's first tick is no longer spent on a stale slot.** A slot over the grace is still skipped and logged, and the occurrence due now fires in its place, under the same claim, so nothing fires twice.
+- **The leader lease survives `maxmemory`.** Renewal and a new leader's token go through `allow-oom` scripts, as the heartbeat does. Dragonfly refuses those, and falls back to what it did: the lease lapses until memory returns.
+- **A leader that fails one renewal retries in 15s**, not 60s, while it may still hold its lease.
+- `wurk` and `wurkswarm` print one line for failures they fully understand: a bad flag, a bad config path, an unreachable Redis. Those traces now need `-v`. Any other error, including anything raised by the app, still prints its backtrace. Exit codes are unchanged.
+- A stray word on the command line (`wurk foo`) now warns. It still boots as before.
+- A missing `-r` path is logged at ERROR and named. It was a generic INFO message.
+- No more `Signal INFO not supported` warning at every Linux boot.
+- `docs/migrate-from-sidekiq.md`, the wiki and `llms.txt` no longer say the railtie starts a swarm in every Rails process or that each clustered Puma worker forks its own. It boots only inside a running web server or with `WURK_EMBED=1`, and a preforking server refuses with a warning.
+- The same docs no longer promise a threads-only fallback on JRuby, TruffleRuby and Windows. `wurkswarm` and the railtie's swarm call `Process.fork` with no fallback, and no CI leg runs those platforms.
+
+### Upgrade notes
+
+- A minutely loop that had been skipped on recovery now fires once on the first tick after an outage. Loops with no occurrence inside the grace behave as before.
+- A process that wins the lock ticks at once instead of after up to 60s, including just after boot.
+- Followers send about 2 commands per 15-30s (`EVALSHA`, `PTTL`) instead of 1 per 60s.
+- A Redis restored from a snapshot older than the last fire rewinds `nf`, and the occurrence inside the grace can fire a second time. Before this change that held only for a slot within 90s; now also for a slot over it, if an occurrence is due.
 
 ## [1.10.0] - 2026-11-02
 

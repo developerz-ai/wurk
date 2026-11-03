@@ -93,6 +93,26 @@ class ReleaseWorkflowTest < Minitest::Test
     end)
   end
 
+  # RubyGems trusts release.yml with no environment, so any id-token in that file could
+  # publish. The SBOM lives in its own file, whose OIDC workflow claim cannot match.
+  def test_the_sbom_workflow_has_no_reach_into_publishing
+    attest = YAML.load_file(File.join(ROOT, '.github', 'workflows', 'attest.yml'))
+    triggers = attest.fetch('on', attest[true])
+
+    assert_equal ['release'], triggers.dig('workflow_run', 'workflows')
+    assert_equal({ 'contents' => 'read' }, attest.fetch('permissions'))
+
+    upload = attest.dig('jobs', 'sbom')
+    sign = attest.dig('jobs', 'attest')
+
+    assert_equal 'write', upload.dig('permissions', 'contents')
+    refute upload.fetch('permissions').key?('id-token')
+    assert_equal 'write', sign.dig('permissions', 'id-token')
+    refute_equal 'write', sign.dig('permissions', 'contents')
+    refute(sign.fetch('steps').any? { |step| step['run'] || step['uses'].to_s.start_with?('actions/checkout') })
+    refute_match(/gem push|release-gem/, File.read(File.join(ROOT, '.github', 'workflows', 'attest.yml')))
+  end
+
   # A blank-environment publisher accepts this claim; RELEASE.md has the steps
   # that turn it into a real gate.
   def test_publish_names_the_rubygems_environment

@@ -3,6 +3,7 @@
 require 'securerandom'
 require 'socket'
 require_relative 'component'
+require_relative 'fetcher/oom_drain'
 require_relative 'lua'
 require_relative 'pool_checkout'
 require_relative 'timer_loop'
@@ -21,8 +22,12 @@ module Wurk
   # *can* benefit from a guard has one available; the token is best-effort
   # too — it is never re-read on subsequent acquires, only on transitions.
   #
-  # Cadence per spec: renew every 15s while leader, recheck every 60s as
-  # follower, lock TTL 30s. The campaign itself starts `initial_wait` seconds
+  # Cadence per spec: renew every 15s while leader, lock TTL 30s. A follower
+  # rechecks when the lease it last read runs out, at most 60s later, and that
+  # is what bounds the leaderless time after a SIGKILL: the lease's remaining
+  # 15-30s and about a second. Waiting out a flat 60s added up to 60s more. The
+  # lock itself is untouched, so a follower still cannot win before the lease
+  # has lapsed. The campaign itself starts `initial_wait` seconds
   # after `#start` — the spec fixes the renew/follower/TTL cadence but says
   # nothing about when the first campaign runs, and holding it back keeps a
   # booting process's opening Redis round trips on the job path. Opt out a
@@ -43,6 +48,17 @@ module Wurk
     # nothing observes the gap. Tune with `config[:leader_initial_wait]`;
     # 0 campaigns immediately.
     DEFAULT_INITIAL_WAIT = 1
+    # Followers spread out over this many seconds past the lease's end, so a
+    # large fleet doesn't campaign in one instant.
+    LEASE_EXPIRY_JITTER = 1.0
+    # Keeps a lease read as about to lapse from turning into a busy loop.
+    MIN_FOLLOWER_WAIT = 0.05
+    # The renewal has to survive a full Redis: a lapsed lease stops every
+    # leader-gated consumer, and nothing would renew it until memory came back.
+    # Shebang scripts, so by EVAL for the reason Fetcher::OomDrain gives. A server
+    # refusing one raises the original OOM, the failure without this.
+    OOM_CAMPAIGN = "#{Fetcher::OomDrain::HEADER}#{Lua::SCRIPTS.fetch(:leader_campaign)}".freeze
+    OOM_TOKEN = "#{Fetcher::OomDrain::HEADER}return redis.call('INCR', KEYS[1])\n".freeze
     OPT_OUT_ENV = 'WURK_LEADER'            # native opt-out env
     SIDEKIQ_OPT_OUT_ENV = 'SIDEKIQ_LEADER' # Sidekiq Ent drop-in alias (§6.2/§7.2)
     THREAD_NAME = 'wurk-leader'
@@ -71,6 +87,8 @@ module Wurk
       @owner = owner || cluster_identity
       @held = false
       @token = nil
+      @lease_remaining = nil
+      @campaign_failed = false
       @thread = nil
       @done = false
       @mutex = ::Mutex.new
@@ -98,7 +116,7 @@ module Wurk
       return false unless transition
 
       if transition == :gained
-        @token = redis_call { |c| c.call('INCR', TOKEN_KEY) }
+        @token = redis_call { |c| next_token(c) }
         dispatch_leader_event
       end
       true
@@ -191,9 +209,7 @@ module Wurk
     # if another process currently holds the key. Sets `@held` accordingly
     # so `leader?` reflects the latest state regardless of branch.
     def run_set_or_refresh
-      won = redis_call do |c|
-        Wurk::Lua::Loader.eval_cached(c, :leader_campaign, keys: [@key], argv: [@owner, @ttl])
-      end
+      won = redis_call { |c| campaign(c) }
       if won.to_i == 1
         outcome = @held ? :held : :gained
         @held = true
@@ -201,7 +217,35 @@ module Wurk
       end
 
       step_down
+      read_lease_remaining
       nil
+    end
+
+    def campaign(conn)
+      Wurk::Lua::Loader.eval_cached(conn, :leader_campaign, keys: [@key], argv: [@owner, @ttl])
+    rescue RedisClient::OutOfMemoryError => e
+      past_maxmemory(e) { conn.call('EVAL', OOM_CAMPAIGN, 1, @key, @owner, @ttl) }
+    end
+
+    def next_token(conn)
+      conn.call('INCR', TOKEN_KEY)
+    rescue RedisClient::OutOfMemoryError => e
+      past_maxmemory(e) { conn.call('EVAL', OOM_TOKEN, 1, TOKEN_KEY) }
+    end
+
+    def past_maxmemory(error)
+      yield
+    rescue RedisClient::ConnectionError
+      raise
+    rescue RedisClient::CommandError
+      raise error
+    end
+
+    # Seconds until the holder's lease runs out; nil for a lock with no TTL, which
+    # only expiry cannot free. A lock gone again already is a zero wait.
+    def read_lease_remaining
+      pttl = redis_call(idempotent: true) { |c| c.call('PTTL', @key) }
+      @lease_remaining = pttl == -1 ? nil : [pttl, 0].max / 1000.0
     end
 
     def step_down
@@ -283,10 +327,14 @@ module Wurk
     # would leave every leader-gated consumer acting as leader through an
     # outage long enough for a follower to take over, and would keep this loop
     # on the short renew cadence. Stepping down makes the next success a fresh
-    # gain — a new fencing token and a re-fired `:leader` event.
+    # gain — a new fencing token and a re-fired `:leader` event. It says nothing
+    # about the lease, so the retry is on the renew cadence, not the follower's:
+    # a leader that failed one renewal still has time to keep its lease.
     def tick_once
+      @campaign_failed = false
       acquire
     rescue StandardError => e
+      @campaign_failed = true
       step_down
       report(e)
     end
@@ -296,7 +344,13 @@ module Wurk
     end
 
     def wait_next
-      wait_for(@held ? @renew_interval : @follower_interval)
+      wait_for(@held || @campaign_failed ? @renew_interval : follower_wait)
+    end
+
+    def follower_wait
+      return @follower_interval unless @lease_remaining
+
+      [@lease_remaining + (rand * LEASE_EXPIRY_JITTER), @follower_interval].min.clamp(MIN_FOLLOWER_WAIT, nil)
     end
 
     def wait_for(interval)

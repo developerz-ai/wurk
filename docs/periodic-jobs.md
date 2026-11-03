@@ -167,14 +167,23 @@ the LoopSet. That single-leader invariant is what gives you one enqueue per
 (loop, tick) across the whole swarm.
 
 The lock lives at the `dear-leader` Redis key with a 30s TTL (see
-`lib/wurk/leader.rb`): the leader renews every 15s, followers re-check every
-60s. `Component#leader?` caches the answer for ~5s so a one-minute tick doesn't
-double Redis traffic.
+`lib/wurk/leader.rb`): the leader renews every 15s, and a follower re-checks when
+the lease it last read runs out, at most 60s later. `Component#leader?` caches the
+answer for ~5s so a one-minute tick doesn't double Redis traffic.
 
 Consequences worth internalizing:
 
-- **Leader death costs up to ~60s** of leaderless time. Ticks in that gap are
-  not backfilled.
+- **Leader death costs up to about 31s** of leaderless time: what is left of the
+  lease (15-30s after a `SIGKILL`) and about a second. The lock itself is untouched,
+  so nobody can win it earlier. A graceful shutdown releases it at once.
+- **A new leader ticks the moment it wins**, not at its poller's next minute, so a
+  gap costs at most the occurrences that were more than 90s late by then, and those
+  are not backfilled.
+- **A full Redis does not cost the lease.** The renewal goes through an `allow-oom`
+  script, like the heartbeat. Occurrences due meanwhile are refused like any other
+  enqueue and fire when memory returns, if still inside the grace. Dragonfly compiles no such
+  script: there the renewal is refused, the lease lapses, and a leader is elected
+  once memory returns.
 - **A quieted leader keeps firing.** `SIGTSTP` stops that process *fetching*;
   the cron poller is intentionally left running. Only a full shutdown
   (`SIGTERM`) terminates it. That matches Sidekiq Enterprise.
@@ -189,20 +198,38 @@ Consequences worth internalizing:
 
 ## Ticks, downtime, and missed windows
 
-The poller sleeps one interval (60s) *before* its first tick, so a short-lived
-process exits without ticking and a freshly-elected leader isn't hit by a burst
-at boot.
+The poller sleeps one interval (60s) *before* its first tick, unless its process wins
+the lock first, so a process that never leads exits without ticking.
 
 On each tick, for each unpaused loop the poller reads the `nf` mark, fires if
 `nf <= now`, then computes the following fire from **now** — not from the missed
 slot. So after downtime:
 
 - Each due loop fires **once**, immediately, on the first leader tick after
-  recovery.
+  recovery, if an occurrence falls inside the grace (90s by default).
 - The ticks you missed in between are **not** backfilled, however long you were
-  down.
-- If the fire is more than 90s late, the poller logs a warning:
-  `[cron] missed tick lid=… klass=… expected_at=… fired_at=… drift=…s`.
+  down. A slot past the grace is logged and dropped:
+  `[cron] missed tick lid=… klass=… expected_at=… now=… drift=…s — skipped, not backfilled`.
+  An occurrence still inside the grace fires in its place, so a minutely loop never
+  loses the tick. A daily loop whose time passed outside the grace waits for tomorrow.
+- **Exactly one fire per claim.** `loops:<lid>`'s `nf` is claimed by compare-and-swap,
+  so two leaders co-existing for a few seconds cannot both fire. A Redis restored from
+  a snapshot older than the last fire rewinds `nf` too, and the occurrence inside the
+  grace can then fire a second time: that is the one case the claim cannot see.
+
+To let a slot fire later than 90s, set a grace for the whole cluster's pollers, for a
+cut-over from `sidekiq-cron` (`reschedule_grace_period`, 300s by default there) or a
+slow deploy:
+
+```ruby
+config.periodic do |mgr|
+  mgr.grace = 300
+  mgr.register('0 4 * * *', 'NightlyJob')
+end
+```
+
+It never goes below 1.5 ticks: a raised tick interval must not turn every on-time fire
+into a missed one.
 
 A loop with no `nf` yet (just registered) computes its first fire from
 `now - tick_interval`, so a schedule that matched in the preceding minute can

@@ -58,7 +58,7 @@ Everything below is in the one free gem. The "Sidekiq tier" column shows what yo
 
 ## Requirements
 
-Ruby `>= 3.2.0`, Redis `>= 7.0.0`. JRuby/TruffleRuby/Windows fall back to threads-only mode (no fork), behaviorally equivalent to stock Sidekiq.
+Ruby `>= 3.2.0`, Redis `>= 7.0.0`. Without `fork` (JRuby, TruffleRuby, Windows; untested in CI) only the single-process `wurk` runner and `config.wurk.embed_in_web` apply: `wurkswarm` and the railtie's swarm have no fallback.
 
 - **Live demo:** [wurk.demo.developerz.ai](https://wurk.demo.developerz.ai)
 - **Docs site:** [developerz-ai.github.io/wurk](https://developerz-ai.github.io/wurk/) · [API reference](https://developerz-ai.github.io/wurk/api/)

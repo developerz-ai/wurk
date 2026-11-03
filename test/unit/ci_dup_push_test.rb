@@ -66,6 +66,7 @@ class CiDupPushTest < Minitest::Test
       */commits/"$WURK_TEST_PR_HEAD_SHA") printf '%s\n' "$WURK_TEST_PR_TREE" ;;
       */commits/"$WURK_TEST_HEAD_SHA") printf '%s\n' "$WURK_TEST_PARENT_SHA" ;;
       *"actions/runs?head_sha=$WURK_TEST_PR_HEAD_SHA&"*) printf '%s\n' "$WURK_TEST_RUN_ID" ;;
+      *"actions/runs/$WURK_TEST_RUN_ID/jobs"*) printf '%s\n' "$WURK_TEST_SUITE_STEPS" ;;
       *"actions/runs?head_sha=$WURK_TEST_PARENT_SHA&"*) printf '%s\n' 1 ;;
       *) printf 'stub gh: unexpected endpoint: %s\n' "$endpoint" >&2; exit 1 ;;
     esac
@@ -142,6 +143,33 @@ class CiDupPushTest < Minitest::Test
     end
   end
 
+  def test_a_named_step_the_pr_really_ran_still_counts
+    Dir.mktmpdir('wurk-ci-dup-push-') do |dir|
+      stub_git(dir)
+      stub_gh(dir)
+      stub_jq(dir)
+
+      out, err, = Open3.capture3(script_env(dir), BASH, SCRIPT, '.github/workflows/test.yml', 'rake test')
+
+      assert_equal "true\n", out, err
+    end
+  end
+
+  # A docs-only PR is green on the guards alone: not the suite main would be skipping.
+  def test_a_pr_run_that_skipped_the_suite_step_is_not_a_duplicate
+    Dir.mktmpdir('wurk-ci-dup-push-') do |dir|
+      stub_git(dir)
+      stub_gh(dir)
+      stub_jq(dir)
+
+      out, err, status = Open3.capture3(script_env(dir).merge('WURK_TEST_SUITE_STEPS' => '0'),
+                                        BASH, SCRIPT, '.github/workflows/test.yml', 'rake test')
+
+      assert_full_run(out, err, status)
+      assert_includes err, 'did not run'
+    end
+  end
+
   # The dup is a claim about THIS tree: a PR head whose tree moved on must
   # still fall open to a full run.
   def test_the_happy_path_still_requires_the_pr_head_tree
@@ -208,7 +236,8 @@ class CiDupPushTest < Minitest::Test
       'WURK_TEST_PR_TREE' => PR_TREE,
       'WURK_TEST_RUN_ID' => RUN_ID,
       'WURK_TEST_PR' => PR_NUMBER,
-      'WURK_TEST_SUBJECT' => SUBJECT
+      'WURK_TEST_SUBJECT' => SUBJECT,
+      'WURK_TEST_SUITE_STEPS' => '1'
     }
   end
 

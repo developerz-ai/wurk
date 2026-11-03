@@ -1,5 +1,6 @@
 # frozen_string_literal: true
 
+require 'json'
 require 'rubygems/package'
 
 # Release-time assertions shared by the Rakefile and its tests. Each raising
@@ -7,6 +8,29 @@ require 'rubygems/package'
 # release gate fails loudly in CI and locally. Lives under tasks/, not lib/, so
 # it is never packaged into the published gem.
 module ReleaseHelpers
+  # The checked-in guard list, one test file per line. A line naming a missing file
+  # raises: Rake::TestTask would otherwise drop it and guard less, silently.
+  def self.guard_manifest(path)
+    root = File.dirname(path, 2)
+    File.readlines(path, chomp: true).reject { |line| line.empty? || line.start_with?('#') }.each do |line|
+      raise "#{path} lists #{line}, which does not exist" unless File.exist?(File.join(root, line))
+    end
+  end
+
+  # nil when the built dashboard matches `version`, otherwise what to do about it.
+  def self.dashboard_bundle_stale(bundle_dir, version)
+    manifest = File.join(bundle_dir, 'wurk-manifest.json')
+    missing = "the built dashboard has no #{File.basename(manifest)}: run `bin/rake frontend:build`."
+    return missing unless File.exist?(manifest)
+
+    built = JSON.parse(File.read(manifest))['version']
+    return if built == version
+
+    "the built dashboard is #{built.inspect} and Wurk::VERSION is #{version.inspect}: run `bin/rake frontend:build`."
+  rescue JSON::ParserError
+    "the built dashboard's #{File.basename(manifest)} is unreadable: run `bin/rake frontend:build`."
+  end
+
   module_function
 
   CI_ONLY_MESSAGE = <<~MSG

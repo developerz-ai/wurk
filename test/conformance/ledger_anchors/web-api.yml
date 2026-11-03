@@ -87,7 +87,7 @@
   fragment: |-
     root to: 'dashboard#index'
 - entry: "`HEAD /` does not implement the Redis health probe"
-  anchor: "app/controllers/wurk/dashboard_controller.rb#L39-L41"
+  anchor: "app/controllers/wurk/dashboard_controller.rb#L42-L44"
   fragment: |-
     def index
       render layout: false, html: decorate_shell(spa_html).html_safe

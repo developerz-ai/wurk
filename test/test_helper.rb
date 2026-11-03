@@ -27,7 +27,7 @@ require 'uri'
 # --- Per-worker Redis DB isolation -----------------------------------------
 # Tests must never touch the base Redis DB (0): teardown runs FLUSHDB, which
 # would wipe a developer's real data. Each minitest-parallel_fork worker instead
-# gets its own logical DB (Redis ships 16; we use 1..15) so concurrent test
+# gets its own logical DB (Redis ships 16; workers use 1..14, 15 is reserved) so concurrent test
 # classes never see each other's keys. The baseline below (DB 1) covers the
 # parent / serial (un-forked) run; after_parallel_fork bumps each worker to its
 # own DB. Tests that build a pool explicitly should use `Wurk::Test.redis_url`.
@@ -152,6 +152,8 @@ COVERAGE_PARENT_PID = Process.pid
 COVERAGE_STARTED_AT = Time.now.to_i
 
 require_relative 'support/coverage_merge'
+require_relative 'support/redis_db_lock'
+require_relative 'support/suite_balance'
 
 if ENV['COVERAGE'] && defined?(SimpleCov)
   require 'fileutils'
@@ -203,6 +205,58 @@ end
 # mid-test (the root cause of the #84 and #73 flakes).
 ENV['NCPU'] = (ENV['NCPU'] || Wurk::Test::DEFAULT_NCPU).to_i.clamp(1, Wurk::Test::WORKER_DATABASES).to_s
 
+module Wurk
+  module Test
+    # Exit code 75 is the preconditions-unmet contract bin/check uses: nothing about
+    # the code under test has been judged yet.
+    def self.preflight!
+      nested = ENV.key?(RedisDbLock::OWNER_ENV)
+      require_redis! unless nested
+      databases = (1..ENV['NCPU'].to_i).map { |worker| worker + DB_OFFSET }
+      if databases.max > WORKER_DATABASES
+        abort_preconditions("NCPU=#{ENV.fetch('NCPU')} with WURK_TEST_DB_OFFSET=#{DB_OFFSET} needs Redis DB " \
+                            "#{databases.max}; keep NCPU + WURK_TEST_DB_OFFSET <= #{WORKER_DATABASES}.")
+      end
+      RedisDbLock.acquire!(databases)
+    rescue RedisDbLock::Held => e
+      abort_preconditions(e.message)
+    end
+
+    # Without this a suite with no server dies inside the forked workers, as a
+    # connection backtrace followed by `Marshal.load: marshal data too short`.
+    def self.require_redis!
+      uri = URI.parse(ENV.fetch('REDIS_URL'))
+      Socket.tcp(uri.host, uri.port, connect_timeout: 2).close
+    rescue SystemCallError, SocketError, IOError => e
+      abort_preconditions("no Redis at #{uri.host}:#{uri.port} (#{e.class}). The suite needs a real server: " \
+                          'start one with `docker run --rm -p 6379:6379 redis:7.4`, or set REDIS_URL.')
+    end
+
+    # Rake::TestTask turns any failing child into exit 1, so the 75 alone does not reach
+    # bin/check, which leaves this file to read.
+    def self.abort_preconditions(message)
+      warn message
+      marker = ENV.fetch('WURK_TEST_PRECONDITIONS_FILE', nil)
+      File.write(marker, message) if marker
+      exit!(75)
+    end
+
+    # rake test already refuses this. A test file run directly does not go through rake.
+    def self.warn_if_dashboard_stale
+      bundle = File.expand_path('../vendor/assets/dashboard', __dir__)
+      return unless File.exist?(File.join(bundle, 'index.html'))
+
+      stale = ReleaseHelpers.dashboard_bundle_stale(bundle, ::Wurk::VERSION)
+      warn "note: #{stale} Dashboard tests read that bundle." if stale
+    end
+  end
+end
+
+require 'socket'
+require_relative '../tasks/release_helpers'
+Wurk::Test.preflight!
+Wurk::Test.warn_if_dashboard_stale
+
 begin
   require 'minitest/parallel_fork'
 rescue StandardError
@@ -219,6 +273,22 @@ end
 # Each forked worker gets its own Redis DB (isolation) and, under COVERAGE, its
 # own SimpleCov resultset. parallel_fork keeps a single after_parallel_fork
 # block, so both concerns share one hook.
+if Minitest.respond_to?(:parallel_fork_suites)
+  Minitest.singleton_class.prepend(Module.new do
+    def parallel_fork_suites = Wurk::Test::SuiteBalance.order(super, parallel_fork_number)
+  end)
+end
+
+if ENV.fetch(Wurk::Test::RedisDbLock::OWNER_ENV, nil) == Process.pid.to_s
+  neighbours_at_start = Wurk::Test::RedisNeighbours.count
+  Minitest.after_run do
+    next unless Process.pid == COVERAGE_PARENT_PID
+
+    note = Wurk::Test::RedisNeighbours.note(neighbours_at_start, Wurk::Test::RedisNeighbours.count)
+    warn note if note
+  end
+end
+
 if Minitest.respond_to?(:after_parallel_fork)
   Minitest.after_parallel_fork do |worker|
     Wurk::Test.assign_redis_db(worker)
@@ -312,7 +382,7 @@ module Wurk
       include SwarmTeardown
 
       def self.parallelize_me!
-        # Hook for Minitest's parallel runner.
+        # No-op. minitest-parallel_fork deals whole classes to forked workers and runs them serially in each.
       end
     end
   end

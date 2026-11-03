@@ -54,21 +54,33 @@ namespace :test do
   Rake::TestTask.new(:unit) do |t|
     t.libs << 'test' << 'lib'
     t.test_files = FileList['test/unit/**/*_test.rb']
+    t.warning = false
   end
 
   Rake::TestTask.new(:integration) do |t|
     t.libs << 'test' << 'lib'
     t.test_files = FileList['test/integration/**/*_test.rb']
+    t.warning = false
   end
 
   Rake::TestTask.new(:engine) do |t|
     t.libs << 'test' << 'lib'
     t.test_files = FileList['test/engine/**/*_test.rb']
+    t.warning = false
+  end
+
+  # The tests a docs-only change can break, and the fast answer on any change.
+  Rake::TestTask.new(:guards) do |t|
+    t.libs << 'test' << 'lib'
+    t.test_files = ReleaseHelpers.guard_manifest(File.join(GEM_ROOT, 'test', 'guards.txt'))
+    t.warning = false
+    t.description = 'Run the tests in test/guards.txt: everything that reads docs, policy or workflow files'
   end
 
   Rake::TestTask.new(:parity) do |t|
     t.libs << 'test' << 'lib'
     t.test_files = FileList['test/parity/**/*_test.rb', 'test/conformance/**/*_test.rb']
+    t.warning = false
     t.description = 'Run Sidekiq parity tests ' \
                     '(independently written oracles ' \
                     'for the documented Sidekiq behaviour, ' \
@@ -180,12 +192,12 @@ end
 
 namespace :frontend do
   desc 'Install JS deps for the dashboard'
-  task :install do
+  task install: :require_bun do
     sh 'bun', 'install', '--frozen-lockfile', chdir: FRONTEND_DIR
   end
 
   desc 'Build the SolidJS SPA into vendor/assets/'
-  task :build do
+  task build: :require_bun do
     sh 'bun', 'install', '--frozen-lockfile', chdir: FRONTEND_DIR
     sh 'bun', 'run', 'build', chdir: FRONTEND_DIR
     # Vite's --emptyOutDir wipes the tracked .keep; restore it so the dir stays
@@ -214,10 +226,23 @@ namespace :frontend do
   # rebuilds explicitly with `rake frontend:build`; this only rescues the
   # "there is nothing at all" case.
   task :ensure_build do # rubocop:disable Rake/Desc
-    next if File.exist?(File.join(DASHBOARD_BUNDLE_DIR, 'index.html'))
+    if File.exist?(File.join(DASHBOARD_BUNDLE_DIR, 'index.html'))
+      # Minutes of suite are not the place to learn this: a version bump leaves the
+      # built bundle stamped with the old version until it is rebuilt.
+      stale = ReleaseHelpers.dashboard_bundle_stale(DASHBOARD_BUNDLE_DIR, Wurk::VERSION)
+      abort stale if stale
+      next
+    end
 
     puts 'frontend: precompiled SPA missing — building it once (rake frontend:build)'
     Rake::Task['frontend:build'].invoke
+  end
+
+  task :require_bun do # rubocop:disable Rake/Desc
+    next if system('command -v bun >/dev/null 2>&1')
+
+    abort 'frontend: bun is not on PATH, and the dashboard is built with it. ' \
+          'Install it with `curl -fsSL https://bun.sh/install | bash`; `bin/setup` covers the rest.'
   end
 end
 

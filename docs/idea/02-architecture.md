@@ -7,12 +7,12 @@
 | Engine | Rails mountable engine. Owns the dashboard, registers the railtie, exposes the mount point |
 | Railtie | Hooks into Rails boot to trigger the swarm after `after_initialize` |
 | Swarm | Parent process. Forks N worker processes, monitors PIDs, relays signals, restarts crashed children, handles rolling restart |
-| Manager | Inside each forked child. Owns the thread pool, the lifecycle, the heartbeat |
-| Fetcher | BLMOVE-based reliable fetch from queue list → per-process private list |
-| Processor | Pops from private list, runs middleware chain, invokes the user's perform |
+| Manager | One per Capsule. Owns the thread pool and lifecycle |
+| Fetcher | LMOVE/BLMOVE reliable fetch from queue list → per-process private list |
+| Processor | Takes a unit of work from the Fetcher, runs middleware chain, invokes the user's perform, ACKs |
 | Client | Enqueue interface. Bulk enqueue via Lua. Redis-outage local buffer |
 | Middleware | Server and client chains, same contract as Sidekiq |
-| Web | Rack app mounted under the engine. Serves the SolidJS SPA (precompiled) and JSON APIs |
+| Web | Engine-mounted. Serves the SolidJS SPA (precompiled) and JSON APIs |
 | RedisPool | Per-process connection pool using redis-client |
 
 ## Process tree at runtime

@@ -20,7 +20,7 @@ initialize: |
   echo 'export PATH="/opt/hostedtoolcache/Ruby/3.4.5/x64/bin:$PATH"' >> ~/.bashrc
 
   docker pull redis:7.4
-  curl -fsSL https://bun.sh/install | bash
+  curl -fsSL https://bun.sh/install | bash -s "bun-v1.4.3"
 
   cd ~/repos/wurk && bundle install && (cd frontend && ~/.bun/bin/bun install)
 

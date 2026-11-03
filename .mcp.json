@@ -4,7 +4,7 @@
       "command": "npx",
       "args": [
         "-y",
-        "@developerz.ai/ui-debugger-mcp@latest"
+        "@developerz.ai/ui-debugger-mcp@1.9.0"
       ],
       "env": {
         "OPENAI_API_KEY": "${UI_DEBUGGER_API_KEY}",
@@ -30,7 +30,7 @@
       "type": "stdio",
       "command": "bunx",
       "args": [
-        "@sentry/mcp-server"
+        "@sentry/mcp-server@0.42.0"
       ],
       "env": {
         "SENTRY_ACCESS_TOKEN": "${SENTRY_ACCESS_TOKEN}",

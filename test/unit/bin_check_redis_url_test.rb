@@ -45,6 +45,45 @@ class BinCheckRedisUrlTest < Minitest::Test
     port
   end
 
+  # Rake turns test_helper's exit 75 into 1, so a held DB lock read as a failed suite.
+  def test_a_suite_that_refused_to_start_reports_the_environment_not_the_diff
+    Dir.mktmpdir do |dir|
+      stub = File.join(dir, 'bundle')
+      File.write(stub, <<~BASH)
+        #!/usr/bin/env bash
+        [ "$*" = 'exec rake test:unit' ] || exit 0
+        echo 'DB 5 is held' > "$WURK_TEST_PRECONDITIONS_FILE"
+        exit 1
+      BASH
+      File.chmod(0o755, stub)
+      server = TCPServer.new('127.0.0.1', 0)
+      url = "redis://127.0.0.1:#{server.addr[1]}/0"
+      _out, err, status = Open3.capture3(check_env(dir, url), CHECK, 'fast')
+      server.close
+
+      assert_equal 75, status.exitstatus, err
+    end
+  end
+
+  def test_a_real_failure_alongside_a_refusal_keeps_its_verdict
+    Dir.mktmpdir do |dir|
+      stub = File.join(dir, 'bundle')
+      File.write(stub, <<~'BASH')
+        #!/usr/bin/env bash
+        case "$*" in
+          exec\ rubocop*) exit 1 ;;
+          'exec rake test:unit') echo held > "$WURK_TEST_PRECONDITIONS_FILE"; exit 1 ;;
+        esac
+      BASH
+      File.chmod(0o755, stub)
+      server = TCPServer.new('127.0.0.1', 0)
+      _out, err, status = Open3.capture3(check_env(dir, "redis://127.0.0.1:#{server.addr[1]}/0"), CHECK, 'fast')
+      server.close
+
+      assert_equal 1, status.exitstatus, err
+    end
+  end
+
   def test_refuses_when_the_redis_url_server_is_down_and_names_it
     port = closed_port
     _out, err, status = run_check("redis://127.0.0.1:#{port}/0")

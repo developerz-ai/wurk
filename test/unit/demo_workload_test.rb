@@ -23,8 +23,13 @@ class DemoWorkloadTest < Wurk::Test::UnitCase
   # capped to DBs 1..14 (see test_helper), so no worker is ever assigned this DB.
   # For that reason it does NOT call `parallelize_me!`: FLUSHDB-based isolation is
   # only safe with the tests run sequentially, which the per-class fork runner
-  # already guarantees.
+  # already guarantees. Every suite run shares that DB, whatever its offset, so runs
+  # take turns across processes too (see #run).
   DB = ENV.fetch('WURK_DEMO_TEST_DB', Wurk::Test::DEDICATED_DB.to_s)
+
+  def run
+    Wurk::Test::RedisDbLock.with_dedicated(DB) { super }
+  end
 
   def setup
     super

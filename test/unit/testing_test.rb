@@ -308,6 +308,23 @@ class TestingModesTest < Wurk::Test::UnitCase
     sidekiq_options queue: 'stranded-queue'
   end
 
+  class ClassWithHostileName
+    def self.name(size:) = size
+  end
+
+  class HostileNameJob
+    include Wurk::Job
+
+    sidekiq_options queue: 'hostile-name-queue'
+    def self.name(required:) = required
+  end
+
+  def test_a_class_with_its_own_name_method_does_not_break_the_queue_walk
+    found = Wurk::Testing.unconsumed_job_queues(listened: %w[default])
+
+    assert_equal ['TestingModesTest::HostileNameJob'], found['hostile-name-queue']
+  end
+
   def test_unconsumed_job_queues_names_jobs_on_queues_no_worker_fetches
     found = Wurk::Testing.unconsumed_job_queues(listened: %w[listened-queue])
 

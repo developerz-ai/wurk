@@ -250,4 +250,25 @@ class ReleaseHelpersTest < Wurk::Test::UnitCase
     Gem::DefaultUserInteraction.ui = orig
     silent&.close
   end
+
+  # A version bump leaves the built bundle stamped with the old version, which then
+  # fails or skips dashboard tests with no hint at the cause.
+  def test_a_stale_dashboard_bundle_names_the_command_that_fixes_it
+    Dir.mktmpdir('bundle') do |dir|
+      manifest = File.join(dir, 'wurk-manifest.json')
+      File.write(manifest, JSON.generate('version' => '1.0.0'))
+
+      assert_nil ReleaseHelpers.dashboard_bundle_stale(dir, '1.0.0')
+      assert_includes ReleaseHelpers.dashboard_bundle_stale(dir, '2.0.0'), 'bin/rake frontend:build'
+      assert_includes ReleaseHelpers.dashboard_bundle_stale(dir, '2.0.0'), '1.0.0'
+
+      File.write(manifest, 'not json')
+
+      assert_includes ReleaseHelpers.dashboard_bundle_stale(dir, '2.0.0'), 'bin/rake frontend:build'
+
+      File.delete(manifest)
+
+      assert_includes ReleaseHelpers.dashboard_bundle_stale(dir, '2.0.0'), 'bin/rake frontend:build'
+    end
+  end
 end

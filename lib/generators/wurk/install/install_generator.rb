@@ -17,6 +17,18 @@ module Wurk
       def insert_mount_line
         route(%(# mount Wurk::Engine => "/wurk"  # uncomment to expose the Wurk dashboard))
       end
+
+      def show_next_steps
+        say <<~STEPS
+
+          Next steps:
+            1. Set the queue adapter if you use Active Job: config.active_job.queue_adapter = :wurk
+            2. Start workers: bundle exec wurkswarm (or bundle exec wurk for one process)
+            3. To use the dashboard, uncomment the mount line in config/routes.rb.
+               It has no login of its own, so put it behind authentication first:
+               docs/authentication.md in the wurk gem's repository
+        STEPS
+      end
     end
   end
 end

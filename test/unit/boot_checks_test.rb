@@ -27,6 +27,26 @@ class BootChecksTest < Wurk::Test::UnitCase
     super
   end
 
+  # The shape of Faker::Travel::Airport, which took the whole check down.
+  class ClassWithHostileName
+    def self.name(size:, region:) = "#{size}#{region}"
+    def self.<(_other) = raise(ArgumentError, 'not this one')
+  end
+
+  class HostileJob
+    include Wurk::Job
+
+    sidekiq_options lock: :until_executed
+    def self.name(required:) = required
+  end
+
+  def test_a_class_with_its_own_name_method_does_not_cost_the_check
+    listed = Wurk::BootChecks.locked_job_classes
+
+    assert_includes listed, 'BootChecksTest::LockedJob'
+    assert_includes listed, 'BootChecksTest::HostileJob'
+  end
+
   def test_logs_the_backend_and_version
     Wurk::BootChecks.run(@config, 'redis_version' => '7.4.0')
 

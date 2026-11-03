@@ -12,14 +12,14 @@
     teardown_step('leader') { @leader&.stop }
 
 - entry: 'Quiet does not step the leader down; full shutdown does'
-  anchor: lib/wurk/leader.rb#L171-L181
+  anchor: lib/wurk/leader.rb#L189-L199
   fragment: |-
     return unless thread.nil? || thread.join(TimerLoop::JOIN_TIMEOUT)
     @mutex.synchronize { @thread = nil }
     release
 
 - entry: '`WURK_PRELOAD_APP` toggles eager-load only; the parent always loads the app'
-  anchor: lib/wurk/cli.rb#L565-L589
+  anchor: lib/wurk/cli.rb#L665-L689
   fragment: |-
     def eager_load_application
     return unless preload_app?
@@ -116,18 +116,19 @@
     @pool.reap(idle_seconds: @redis_idle_timeout) { |conn| safe_close(conn) }
 
 - entry: '`Leader#token` exposes a fencing token Ent deliberately omits'
-  anchor: lib/wurk/leader.rb#L35
+  anchor: lib/wurk/leader.rb#L40
   fragment: |-
     TOKEN_KEY = 'leader-token'
 
 - entry: '`Leader#token` exposes a fencing token Ent deliberately omits'
-  anchor: lib/wurk/leader.rb#L101
+  anchor: lib/wurk/leader.rb#L119
   fragment: |-
-    @token = redis_call { |c| c.call('INCR', TOKEN_KEY) }
+    @token = redis_call { |c| next_token(c) }
 
 - entry: '`Leader#token` exposes a fencing token Ent deliberately omits'
-  anchor: lib/wurk/leader.rb#L285-L290
+  anchor: lib/wurk/leader.rb#L335-L338
   fragment: |-
     acquire
     rescue StandardError => e
+    @campaign_failed = true
     step_down

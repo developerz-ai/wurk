@@ -33,7 +33,7 @@ Wurk also ships its own equivalents of several of these (unique jobs, periodic j
 
 ## Platforms
 
-Ruby `>= 3.2.0`, Redis `>= 7.0.0`. JRuby, TruffleRuby, and Windows have no `fork`, so they fall back to threads-only mode — behaviourally equivalent to stock Sidekiq, without the multi-core swarm.
+Ruby `>= 3.2.0`, Redis `>= 7.0.0`. Without `fork` (JRuby, TruffleRuby, Windows; untested in CI) only the single-process `wurk` runner and `config.wurk.embed_in_web` apply: `wurkswarm` and the railtie's swarm have no fallback.
 
 ## Parity testing
 

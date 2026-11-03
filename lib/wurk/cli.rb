@@ -6,6 +6,7 @@
 # a Rails app that enqueues and processes jobs pays that on every boot for a
 # command-line parser it never runs. `require` is idempotent, so the lazy call
 # is a $LOADED_FEATURES hash lookup on every invocation after the first.
+require 'rbconfig'
 require_relative 'version'
 require_relative 'configuration'
 require_relative 'component'
@@ -32,6 +33,14 @@ module Wurk
     # only one the swarm binaries accept — so a subcommand is never anything
     # but the first argument, and every argument after it is that command's.
     COMMANDS = %w[api health].freeze
+    # Set only across the one re-exec of #load_rails_framework, and removed on arrival.
+    PRELOAD_FIRST_ENV = 'WURK_BOOT_PRELOAD_FIRST'
+    # `bundle exec` loads the binstub in-process, so argv0 is Bundler's executable, and
+    # `ruby -e "load Gem.bin_path(...)"` has `-e` there: the running program can't name it.
+    SWARM_EXECUTABLE = ::File.expand_path('../../exe/wurkswarm', __dir__)
+
+    # A refusal this file raises itself, with nothing a trace would add.
+    class StartupError < ArgumentError; end
 
     # `wurk api` defaults. 0.0.0.0 because the point of the machine API is for
     # another service to reach it; it is bearer-gated, and answers 404 to
@@ -108,9 +117,15 @@ module Wurk
       ['-s', '--strict', :health_strict, 'Fail when Redis cannot be read, rather than passing']
     ].freeze
 
-    HELP_COMMANDS = "\nCommands:\n    health    Exit 0 if this host's workers are heartbeating\n    " \
+    HELP_COMMANDS = "\nCommands:\n    " \
+                    "health    Exit 0 if this host's workers are heartbeating\n    " \
                     "preflight Read a live Redis: what will carry over to Wurk (read-only)\n    " \
                     "verify    Post-cutover check of a live fleet (read-only)\n\nOptions:"
+    HELP_API_NOTE = "\nThe worker flags -c, -g, -q and -t are accepted here and have no effect.\n\nOptions:"
+    HELP_SWARM_NOTE = "\nForks WURK_COUNT worker processes from a preloaded parent and supervises them.\n\nOptions:"
+    HELP_FOOTER = "\nEnvironment:\n    REDIS_URL         Redis to use (default redis://localhost:6379/0)\n    " \
+                  "WURK_COUNT        Worker processes for wurkswarm\n\n" \
+                  'Docs: https://github.com/developerz-ai/wurk#readme'
 
     attr_accessor :launcher, :environment, :config
 
@@ -147,6 +162,32 @@ module Wurk
       validate!
       self
     end
+
+    # What the binaries print for a failed start. Only errors this file fully
+    # understands drop the trace. Anything else may be a bug in the host app, whose
+    # file and line are the point, and asking for -v means changing a deployed command.
+    def self.report_failure(program, error, argv: ARGV)
+      warn "#{program}: #{error.message}"
+      hint = failure_hint(error)
+      warn "#{program}: #{hint}" if hint
+      return unless error.backtrace
+      return unless failure_trace_wanted?(error, hint) || argv.intersect?(%w[-v --verbose])
+
+      warn error.backtrace.join("\n")
+    end
+
+    def self.failure_trace_wanted?(error, hint) = hint.nil? && !error.is_a?(StartupError)
+    private_class_method :failure_trace_wanted?
+
+    def self.failure_hint(error)
+      case error
+      when ::RedisClient::ConnectionError
+        'could not reach Redis; check REDIS_URL'
+      when ->(e) { defined?(::OptionParser::ParseError) && e.is_a?(::OptionParser::ParseError) }
+        'see --help'
+      end
+    end
+    private_class_method :failure_hint
 
     # `boot_app:` / `warmup:` are test seams. Production always passes true.
     def run(boot_app: true, warmup: true) # rubocop:disable Metrics/AbcSize
@@ -195,7 +236,7 @@ module Wurk
     # `SIDEKIQ_PRELOAD_APP` whole-app eager-load) and boots `Process.warmup`
     # before the fork so children share warmed pages (copy-on-write). Spec §7.
     def run_swarm(boot_app: true, warmup: true) # rubocop:disable Metrics/AbcSize
-      raise ArgumentError, "the swarm runner takes no subcommand; run `wurk #{@command}` instead" if @command
+      raise StartupError, "the swarm runner takes no subcommand; run `wurk #{@command}` instead" if @command
 
       # Server mode before the app loads — see #run. The flag rides through the
       # fork into every child (the config object is copied), so configure_server
@@ -257,7 +298,7 @@ module Wurk
       # Load the app here, not on the first request: a broken load should fail
       # the boot an operator is watching, not the first client to call.
       require_relative 'api/app'
-      raise ArgumentError, NO_API_TOKEN_MESSAGE unless @config.api_enabled?
+      raise StartupError, NO_API_TOKEN_MESSAGE unless @config.api_enabled?
 
       handler ||= api_handler(@config[:api_server])
       logger.info { "Wurk API listening on http://#{api_bind}:#{api_port}#{Wurk::API::VERSION_PREFIX}" }
@@ -304,8 +345,8 @@ module Wurk
       registry = handler_registry
       name ? registry.get(name) : registry.default
     rescue ::LoadError, ::NameError, ::ArgumentError => e
-      raise ArgumentError, "wurk api could not start a web server (#{e.message}). Add one to your Gemfile " \
-                           '— puma, falcon, or rackup + webrick — or name an installed one with --server.'
+      raise StartupError, "wurk api could not start a web server (#{e.message}). Add one to your Gemfile " \
+                          '— puma, falcon, or rackup + webrick — or name an installed one with --server.'
     end
 
     def handler_registry
@@ -357,7 +398,8 @@ module Wurk
     end
 
     def signal_names
-      %w[INT TERM TSTP TTIN INFO USR2]
+      # INFO exists on BSD and macOS only; asking for it on Linux just warned at every boot.
+      %w[INT TERM TSTP TTIN INFO USR2].select { |name| ::Signal.list.key?(name) }
     end
 
     def reopen_logs
@@ -392,7 +434,7 @@ module Wurk
 
     def validate_pool_sizes!
       @config.capsules.each_pair do |name, cap|
-        raise ArgumentError, "Pool size too small for #{name}" if cap.redis_pool.size < cap.concurrency
+        raise StartupError, "Pool size too small for #{name}" if cap.redis_pool.size < cap.concurrency
       end
     end
 
@@ -458,7 +500,7 @@ module Wurk
     end
 
     def parse_config(path)
-      raise ArgumentError, "No such file #{path}" unless ::File.exist?(path)
+      raise StartupError, "No such file #{path}" unless ::File.exist?(path)
 
       require 'erb'
       require 'yaml'
@@ -493,6 +535,7 @@ module Wurk
       parser = option_parser(opts)
       @parser = parser
       parser.parse!(argv)
+      warn "wurk: ignoring #{argv.join(' ')}: not a command or a flag (see --help)" unless argv.empty?
       opts
     end
 
@@ -500,17 +543,37 @@ module Wurk
       require 'optparse'
 
       ::OptionParser.new do |o|
-        o.banner = @command ? "wurk #{@command} [options]" : "wurk [options]\nwurk COMMAND [options]"
-        o.separator HELP_COMMANDS unless @command
+        o.banner = help_banner
+        o.separator help_intro if help_intro
         define_value_flags(o, opts, @command == 'health' ? HEALTH_OPTION_FLAGS : OPTION_FLAGS)
         define_value_flags(o, opts, API_OPTION_FLAGS) if @command == 'api'
         define_meta_flags(o, opts)
       end
     end
 
+    def swarm_binary? = ::File.basename($PROGRAM_NAME).include?('swarm')
+
+    def help_banner
+      return "wurk #{@command} [options]" if @command
+      return "#{::File.basename($PROGRAM_NAME)} [options]" if swarm_binary?
+
+      "wurk [options]\nwurk COMMAND [options]"
+    end
+
+    def help_intro
+      return HELP_API_NOTE if @command == 'api'
+      return if @command
+
+      swarm_binary? ? HELP_SWARM_NOTE : HELP_COMMANDS
+    end
+
     def define_value_flags(parser, opts, flags)
       flags.each do |short, long, key, desc, transform|
-        parser.on(short, long, desc) { |arg| assign_flag(opts, key, arg, transform) }
+        parser.on(short, long, desc) do |arg|
+          assign_flag(opts, key, arg, transform)
+        rescue ArgumentError
+          raise StartupError, "#{long.split.first}: #{arg.inspect} is not a number"
+        end
       end
     end
 
@@ -528,26 +591,62 @@ module Wurk
         exit(0)
       end
       parser.on_tail('-h', '--help', 'Show help') do
-        puts parser
+        puts parser, HELP_FOOTER
         exit(0)
       end
     end
 
     # --- application bootstrap --------------------------------------------
 
-    # A Rails app expects Rails to be loaded before its gems: `config/application.rb`
-    # requires the framework and only then calls `Bundler.require`, and gems read
-    # `defined?(Rails)` or reference ActiveModel while loading. Requiring the groups
-    # first broke those gems in this boot path only. So for a Rails target, run
-    # the app's own first half before the group preload.
+    # A Rails target has two shapes that need opposite orders. A gem may need Rails
+    # loaded while it requires: `config/application.rb` requires the framework and
+    # only then calls `Bundler.require`, so running the app's first half before the
+    # group preload suits it. An app may instead use a gem it expects the swarm to have
+    # preloaded, as stock sidekiqswarm's order (spec §7.3) gives it, and then that
+    # file raises NameError here. Only the file can tell us which it is, and by then
+    # its class body may have half-run, registering initializers and middleware that a
+    # second load in this process would register again. So the retry is a fresh process:
+    # same pid, same environment as before the attempt, preload first. Once only, so a
+    # genuine bug surfaces with its own message.
     def load_rails_framework
       root = rails_app_root(@config[:require])
       return unless root
 
+      restart = restart_state
+      first_error = ENV.delete(PRELOAD_FIRST_ENV)
       ENV['RACK_ENV'] = ENV['RAILS_ENV'] = @environment
       require 'rails'
       define_active_job_adapter
-      require ::File.join(root, 'config/application.rb')
+      return note_preload_first(first_error) if first_error
+
+      begin
+        require ::File.join(root, 'config/application.rb')
+      rescue ::NameError => e
+        restart_with_preload_first(restart, e)
+      end
+    end
+
+    def restart_state
+      { env: ::ENV.to_h, argv: ::ARGV.dup, dir: ::Dir.pwd }
+    end
+
+    def note_preload_first(first_error)
+      logger.warn do
+        "config/application.rb raised before the preload (#{first_error}), so this boot preloads first. " \
+          'If it fails too, that first error may be the one to fix.'
+      end
+    end
+
+    # Bundler may have arrived only inside the failed attempt (`config/boot.rb`), and the
+    # snapshot predates it, so the fresh process is told about it explicitly. If the
+    # exec itself fails, the app's error is still the one worth reporting.
+    def restart_with_preload_first(state, error)
+      env = state[:env].merge(PRELOAD_FIRST_ENV => error.message.lines.first.to_s.strip[0, 300])
+      env['BUNDLE_GEMFILE'] ||= ::Bundler.default_gemfile.to_s if defined?(::Bundler)
+      ruby = [::RbConfig.ruby, *('-rbundler/setup' if defined?(::Bundler))]
+      ::Process.exec(env, *ruby, SWARM_EXECUTABLE, *state[:argv], unsetenv_others: true, chdir: state[:dir])
+    rescue ::SystemCallError
+      raise error
     end
 
     # The app root for a `-r` that is the app directory or its environment file.
@@ -562,7 +661,8 @@ module Wurk
     # copy-on-write into every child. Comma-separated group list; the native
     # `WURK_PRELOAD` wins over the `SIDEKIQ_PRELOAD` drop-in alias. Defaults to
     # the `default` group; an explicit empty value (`WURK_PRELOAD=`) disables
-    # the preload. Runs before `boot_application` so groups load before the app.
+    # the preload. Runs before `boot_application`, so before the initializers; see
+    # #load_rails_framework for where `config/application.rb` falls.
     def preload_bundler_groups
       return unless defined?(::Bundler)
 
@@ -644,23 +744,29 @@ module Wurk
     end
 
     def validate!
-      require_path = @config[:require]
-      bad_path = !::File.exist?(require_path.to_s)
-      bad_rails = ::File.directory?(require_path.to_s) &&
-                  !::File.exist?(::File.join(require_path, 'config/application.rb'))
-      return print_help_and_die if bad_path || bad_rails
+      reason = require_path_problem(@config[:require].to_s)
+      return print_help_and_die(reason) if reason
 
       %i[concurrency timeout].each do |opt|
-        raise ArgumentError, "#{opt}: #{@config[opt]} is not a valid value" if @config[opt].to_i <= 0
+        raise StartupError, "#{opt}: #{@config[opt]} is not a valid value" if @config[opt].to_i <= 0
       end
     end
 
-    def print_help_and_die
-      logger.info '=================================================================='
-      logger.info '  Please point Wurk to a Rails application or a Ruby file'
-      logger.info '  to load your job classes with -r [DIR|FILE].'
-      logger.info '=================================================================='
-      logger.info @parser
+    def require_path_problem(path)
+      return 'no such file or directory' unless ::File.exist?(path)
+
+      return unless ::File.directory?(path) && !::File.exist?(::File.join(path, 'config/application.rb'))
+
+      'it has no config/application.rb'
+    end
+
+    def print_help_and_die(reason)
+      logger.error '=================================================================='
+      logger.error "  Wurk cannot load job classes from #{@config[:require]}: #{reason}."
+      logger.error '  Please point Wurk to a Rails application or a Ruby file'
+      logger.error '  to load your job classes with -r [DIR|FILE].'
+      logger.error '=================================================================='
+      logger.error @parser.to_s
       exit(1)
     end
   end

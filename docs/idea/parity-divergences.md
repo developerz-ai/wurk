@@ -42,8 +42,8 @@ exactly-once delivery is guaranteed in that case. Existing queue membership is
 not removed when a group fails.
 
 **Anchor:** [delivery tracking and round-trip rationale](../../lib/wurk/client.rb#L426-L439),
-[delivery marking](../../lib/wurk/client.rb#L552-L554),
-[plain grouping and per-group SADD/LPUSH](../../lib/wurk/client.rb#L445-L470),
+[delivery marking](../../lib/wurk/client.rb#L563-L565),
+[plain grouping and per-group SADD/LPUSH](../../lib/wurk/client.rb#L452-L477),
 free [§7.1 `atomic_push` semantics](../target/sidekiq-free.md#71-atomic_push-semantics-critical-for-wire-compat),
 and the public `push_bulk`
 parity cases using routing middleware and real Redis:
@@ -636,10 +636,10 @@ resetting it.
 (`lib/wurk/launcher.rb:121-131`) quiets every manager and the scheduled
 poller, deliberately leaves the cron poller running, and never touches
 `@leader` — the renewal loop keeps renewing the lock every 15s while held
-(`lib/wurk/leader.rb:171-181`) straight through a quiet. Leadership ends only
+(`lib/wurk/leader.rb:189-199`) straight through a quiet. Leadership ends only
 on full shutdown: `Launcher#stop` → `release_components` →
 `redis_teardown_steps` (`lib/wurk/launcher.rb:336-348`, `@leader&.stop`)
-→ `Leader#stop` (`lib/wurk/leader.rb:171-181`), which joins the campaign
+→ `Leader#stop` (`lib/wurk/leader.rb:189-199`), which joins the campaign
 thread and then CAS-releases `dear-leader`.
 
 **Spec:** Ent §6.2 steps the leader down immediately on USR1 quiet (since
@@ -654,13 +654,13 @@ leader still enqueues), which enqueues only under the single cluster leader —
 keeping the renewal makes `leader?` stay truthful on the quieted process
 instead of evicting and re-campaigning through every quiet. The failure Ent's
 2.2.3 change guards is covered anyway: a leader that cannot renew steps down
-on campaign loss or campaign error (`lib/wurk/leader.rb:171-181,281-286`). Full
+on campaign loss or campaign error (`lib/wurk/leader.rb:189-199,281-286`). Full
 shutdown releases the lock deliberately, periodic loops stopped before the
 CAS release, rather than waiting out the TTL.
 
 **Anchor:** `lib/wurk/launcher.rb:121-131` (`#quiet`),
 `lib/wurk/launcher.rb:336-348` (`#redis_teardown_steps`),
-`lib/wurk/leader.rb:171-181` (`#stop` join + release); pinned by
+`lib/wurk/leader.rb:189-199` (`#stop` join + release); pinned by
 `test/unit/launcher_test.rb` (`test_quiet_does_not_terminate_periodic_poller`,
 `test_quiet_does_not_stop_the_cluster_leader`,
 `test_stop_stops_the_cluster_leader`).
@@ -1003,13 +1003,23 @@ documents the silent skip; it does not resolve the callback-marker/`notify`/
 
 ## Periodic: late slots skipped, bare-hash `args` is one argument
 
-**Wurk:** a periodic slot more than max(90s, 1.5× tick) late is claimed, logged as missed and not enqueued; a non-Array `args:` is passed as a single argument; `Loop#queue` reports the worker's queue when the loop sets none.
+**Wurk:** a periodic slot more than max(grace, 1.5× tick) late is claimed, logged as missed and not enqueued, where the grace is `mgr.grace` or 90s. The occurrence still inside that window, if any, is enqueued in its place under the same claim. A non-Array `args:` is passed as a single argument; `Loop#queue` reports the worker's queue when the loop sets none.
 
 **Spec:** Ent §2.6 says no backfill (threshold unspecified); Ent splats `args`.
 
-**Why:** a hash splatted into keyword-ish positional args silently changes the call.
+**Why:** spending the tick on the stale slot cost one more occurrence at every leader change, and a leader living under two ticks fired nothing. The occurrence due now is not a backfill. A hash splatted into keyword-ish positional args silently changes the call.
 
 **Anchor:** `lib/wurk/cron.rb`.
+
+## A follower rechecks the leader lock when its lease runs out, and a new leader ticks at once
+
+**Wurk:** a follower campaigns about a second after the lease it last read expires, at most `leader_follower_interval` (60s) later. A failed campaign retries on the renew cadence. Winning the lock wakes the cron poller for an immediate tick. Lease renewal and token are `allow-oom`.
+
+**Spec:** Ent §2.6 and §6.2: followers re-check every 60s, and on leader death a follower assumes leadership within 60s or less.
+
+**Why:** inside the documented bound: a flat 60s left up to 90s with no lease, enough to miss every slot under churn. TTL and `SET NX` are unchanged, so a follower cannot win earlier than before. The cost is about 2 commands per 15-30s per follower.
+
+**Anchor:** `lib/wurk/leader.rb`, `lib/wurk/cron.rb`.
 
 ## Throttle admission costs two round trips
 
@@ -1176,7 +1186,7 @@ entry records the unsupported contract, not a claim that the gap is safe.
 
 **Anchor:** free §25.1/§25.4 ([free §25.1 Entrypoint — `HEAD /` probe](../target/sidekiq-free.md#251-entrypoint) and [§25.4 Routes — `HEAD /`](../target/sidekiq-free.md#254-routes));
 [root route](../../config/routes.rb#L4);
-[SPA root controller](../../app/controllers/wurk/dashboard_controller.rb#L39-L41);
+[SPA root controller](../../app/controllers/wurk/dashboard_controller.rb#L42-L44);
 [opt-in configuration](../../lib/wurk/configuration.rb#L715-L739);
 [dedicated listener bind](../../lib/wurk/health.rb#L128-L140);
 [GET-only dispatch](../../lib/wurk/health.rb#L271-L279);
@@ -1329,9 +1339,9 @@ DEFAULTS ([free §4.1 DEFAULTS — `max_iteration_runtime`](../target/sidekiq-fr
 
 **Wurk:** the swarm parent always requires the `-r` entrypoint — children
 inherit the loaded app rather than re-requiring it — so the flag governs only
-the extra Rails `eager_load!` (`lib/wurk/cli.rb:565-589`, deliberate-divergence
-comment at `lib/wurk/cli.rb:565-589`); `preload_app?` reads
-`WURK_PRELOAD_APP`/`SIDEKIQ_PRELOAD_APP` at `lib/wurk/cli.rb:565-589`.
+the extra Rails `eager_load!` (`lib/wurk/cli.rb:665-689`, deliberate-divergence
+comment at `lib/wurk/cli.rb:665-689`); `preload_app?` reads
+`WURK_PRELOAD_APP`/`SIDEKIQ_PRELOAD_APP` at `lib/wurk/cli.rb:665-689`.
 
 **Spec:** Ent §7.2 — `SIDEKIQ_PRELOAD_APP=1` means "require whole app in parent
 before fork" ([Ent §7.2 Environment variables — `SIDEKIQ_PRELOAD_APP`](../target/sidekiq-ent.md#72-environment-variables)), and the process-model notes
@@ -1346,7 +1356,7 @@ and multiplying boot cost by the child count. The flag keeps its documented
 trade (more CoW sharing against slower parent boot); what changed is only that
 the floor is "entrypoint loaded", not "nothing loaded".
 
-**Anchor:** `lib/wurk/cli.rb:565-589`; Ent §7.2 env table
+**Anchor:** `lib/wurk/cli.rb:665-689`; Ent §7.2 env table
 ([Ent §7.2 Environment variables — `SIDEKIQ_PRELOAD_APP`](../target/sidekiq-ent.md#72-environment-variables)) and §7.3 process model
 ([Ent §7.3 Process model — conditional parent app load](../target/sidekiq-ent.md#73-process-model)).
 
@@ -1558,10 +1568,10 @@ unchanged, and the readers are new methods.
 ## `Leader#token` exposes a fencing token Ent deliberately omits
 
 **Wurk:** every follower→leader transition INCRs the global `leader-token` key
-and stores the result on `#token` (`lib/wurk/leader.rb:101`, key constant at
-`lib/wurk/leader.rb:35`), so a new leader's token is strictly greater than
+and stores the result on `#token` (`lib/wurk/leader.rb:119`, key constant at
+`lib/wurk/leader.rb:40`), so a new leader's token is strictly greater than
 every prior leader's; a re-gain after a step-down pulls a fresh token and
-re-fires `:leader` (`lib/wurk/leader.rb:285-290`).
+re-fires `:leader` (`lib/wurk/leader.rb:335-338`).
 
 **Spec:** Ent §6 — the lock is best-effort coordination, not a strict mutex,
 and "*no fencing tokens exposed to the user*"
@@ -1574,8 +1584,8 @@ token — without tightening what the lock itself promises. It is read on
 transitions only, never on renewals, so behavior that worked before is
 unchanged.
 
-**Anchor:** `lib/wurk/leader.rb:35`, `lib/wurk/leader.rb:101`,
-`lib/wurk/leader.rb:285-290`; Ent §6 ([Ent §6 Leader Election — best-effort lock, no user fencing token](../target/sidekiq-ent.md#6-leader-election)).
+**Anchor:** `lib/wurk/leader.rb:40`, `lib/wurk/leader.rb:119`,
+`lib/wurk/leader.rb:335-338`; Ent §6 ([Ent §6 Leader Election — best-effort lock, no user fencing token](../target/sidekiq-ent.md#6-leader-election)).
 
 ## `Sidekiq::Web` outside a Rails app routes extensions only
 
@@ -1882,3 +1892,13 @@ deploy, where accepting it would quietly change how often a queue is served.
 **Why:** a worker that drops every job without a word is never what anyone wants, and `rspec-sidekiq` outside a test group causes exactly that because the swarm preloads the default group. The divergence only changes a state that loses jobs. A Rails web process enqueuing in fake mode is not covered, and the guard stands down under `RAILS_ENV=test` or `RACK_ENV=test`, where `disable!` would take fake mode from a whole suite that boots a worker in-process.
 
 **Anchor:** `lib/wurk/swarm/test_mode_guard.rb`, `lib/wurk/cli.rb`, `lib/wurk/swarm/child_boot.rb`, `lib/wurk/embedded.rb`, `test/integration/worker_test_mode_guard_test.rb`.
+
+## `wurkswarm` loads a Rails target's `config/application.rb` before the group preload
+
+**Wurk:** loads `config/application.rb` first, then the Bundler groups. If that file raises `NameError`, the process re-executes itself once with the preload first, keeping its pid, ENV, argv and cwd.
+
+**Spec:** Ent §7.3: `sidekiqswarm` preloads the Bundler groups, then requires the app.
+
+**Why:** gems that need Rails at require time fail under the stock order, and apps written for the stock order fail under the other. Only attempting tells them apart, and a fresh process leaves no half-run class body behind.
+
+**Anchor:** `lib/wurk/cli.rb` `load_rails_framework`.

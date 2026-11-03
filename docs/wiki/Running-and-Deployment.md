@@ -2,7 +2,7 @@
 
 ## Inside Rails, you start nothing
 
-The engine's railtie boots the swarm during `after_initialize`, so a process that boots your app already has workers forking and fetching. Set `WURK_DISABLED=1` on any process that should *not*:
+The engine's railtie boots the swarm last of all initializers, and only inside a running web server or with `WURK_EMBED=1`; a preforking server refuses and logs a warning. Set `WURK_DISABLED=1` on any process that should *not*:
 
 ```bash
 WURK_DISABLED=1 bundle exec rails server   # web only, no workers

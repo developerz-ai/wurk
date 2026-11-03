@@ -193,6 +193,88 @@ class ClientTest < Wurk::Test::UnitCase
     @pool.with { |c| c.call('DEL', "queue:#{@queue}") }
   end
 
+  # --- push_bulk normalizes once per slice ------------------------------
+
+  def counting_client
+    Class.new(Wurk::Client) do
+      attr_reader :normalized
+
+      def normalize_item(item)
+        @normalized = @normalized.to_i + 1
+        super
+      end
+    end.new(pool: @pool)
+  end
+
+  def test_push_bulk_normalizes_once_per_slice
+    client = counting_client
+    client.push_bulk('class' => @class_name, 'args' => [[1], [2], [3], [4], [5]], 'batch_size' => 2)
+
+    assert_equal 3, client.normalized
+  end
+
+  def test_push_bulk_with_an_at_array_normalizes_each_job
+    client = counting_client
+    now = Time.now.to_f + 60
+    client.push_bulk('class' => @class_name, 'args' => [[1], [2]], 'at' => [now, now + 1])
+
+    assert_equal 2, client.normalized
+  end
+
+  # A per-job `at` moves what an expiry is measured from, which is why that path
+  # keeps the full walk.
+  def test_push_bulk_stamps_expiry_from_each_jobs_own_at
+    now = Time.now.to_f + 60
+    @client.push_bulk('class' => @class_name, 'args' => [[1], [2]], 'at' => [now, now + 100], 'expires_in' => 10)
+
+    expiries = @pool.with { |c| c.call('ZRANGE', 'schedule', 0, -1) }.map { |j| Wurk.load_json(j)['expiry'] }
+
+    assert_in_delta 100, expiries.max - expiries.min, 0.001
+  end
+
+  # The bytes on the wire must not depend on which path built the payload: same
+  # keys in the same order as a job that went through normalize_item by itself.
+  def test_push_bulk_payloads_have_the_shape_of_a_single_push
+    queue = "bulk-shape-#{SecureRandom.hex(4)}"
+    job = { 'class' => @class_name, 'queue' => queue, 'retry' => 3, 'tags' => ['t'], 'expires_in' => 60 }
+    @client.push(job.merge('args' => [0]))
+    @client.push_bulk(job.merge('args' => [[1], [2]]))
+
+    payloads = @pool.with { |c| c.call('LRANGE', "queue:#{queue}", 0, -1) }.map { |j| Wurk.load_json(j) }
+
+    assert_equal 1, payloads.map(&:keys).uniq.size
+    assert_equal 3, payloads.map { |p| p['jid'] }.uniq.size
+    bulk = payloads.first(2)
+
+    assert_equal 1, bulk.map { |p| p['created_at'] }.uniq.size, 'one normalize, one created_at'
+    assert_equal([[2], [1]], bulk.map { |p| p['args'] })
+  end
+
+  def test_push_bulk_keeps_an_explicit_jid_on_a_single_job
+    queue = "bulk-jid-#{SecureRandom.hex(4)}"
+    jids = @client.push_bulk('class' => @class_name, 'queue' => queue, 'args' => [[1]], 'jid' => 'a' * 24)
+
+    assert_equal ['a' * 24], jids
+    assert_equal 'a' * 24, Wurk.load_json(@pool.with { |c| c.call('LPOP', "queue:#{queue}") })['jid']
+  end
+
+  def test_push_bulk_gives_middleware_a_separate_hash_per_job
+    seen = []
+    middleware = Class.new do
+      define_method(:call) do |_klass, job, _queue, _pool, &block|
+        seen << job
+        job['touched'] = job['args'].first
+        block.call
+      end
+    end
+    client = Wurk::Client.new(pool: @pool, chain: Wurk::Middleware::Chain.new { |chain| chain.add(middleware) })
+    queue = "bulk-mw-#{SecureRandom.hex(4)}"
+    client.push_bulk('class' => @class_name, 'queue' => queue, 'args' => [[1], [2]])
+
+    assert_equal([1, 2], seen.map { |j| j['touched'] })
+    assert_equal 2, seen.map(&:object_id).uniq.size
+  end
+
   def test_push_bulk_rejects_non_positive_spread_interval
     err = assert_raises(ArgumentError) do
       @client.push_bulk('class' => @class_name, 'args' => [[1]],

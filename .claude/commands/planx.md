@@ -15,9 +15,9 @@ $ARGUMENTS
 
 1. **Resolve path.** Run `date +%Y`, `date +%m`, `date +%d`. Dir = `docs/plans/<YYYY>/<MM>/<DD>/`. `Glob docs/plans/<YYYY>/<MM>/<DD>/1*` → next number = highest existing `1NN-*` + 1, else `101`. Slug = kebab-case title, max 5 words. Final plan dir: `docs/plans/<YYYY>/<MM>/<DD>/<1NN>-<slug>/`.
 
-2. **Explore.** At most 4 `Task` agents at once, spawned only by you; tell each it may not spawn its own (no `fork`). More ground to cover → fatter briefs or a second wave, never a fifth agent. `Task` (subagent_type=Explore, thoroughness="very thorough"): existing patterns + files to touch (`file:line`), the right workspace(s) under `apps/*` / `packages/*`, tests (unit vs integration), shared contracts in `@developerz/domain`, SQL in `@developerz/db`, policy schema in `@developerz/policy`, audit hooks in `@developerz/audit`, gotchas. Prefer `codegraph_*` for structural lookups. Skip only for trivial asks.
+2. **Explore.** At most 4 `Task` agents at once, spawned only by you; tell each it may not spawn its own (no `fork`). More ground to cover → fatter briefs or a second wave, never a fifth agent. `Task` (subagent_type=Explore, thoroughness="very thorough"): existing patterns + files to touch (`file:line`), the right layer (`lib/CLAUDE.md` is the map), the Sidekiq surface in `docs/target/sidekiq-{free,pro,ent}.md`, anything touching a Redis key, job JSON field or score format, tests by layer (`test/CLAUDE.md`), Lua under `lib/wurk/lua/`, dashboard surface under `app/` + `frontend/src/`, gotchas. Prefer `codegraph_*` where this machine has a `.codegraph/` index. Skip only for trivial asks.
 
-3. **Write the plan as multiple files** in the plan dir — never one big `plan.md`. Always produce an `overview.md` index plus one `<NN>-<aspect>.md` per separable area (e.g. `01-data-model.md`, `02-policy-schema.md`, `03-tool.md`, `04-api-routes.md`, `05-dashboard.md`, `06-tests.md`). Split by area of work so each file is independently executable and stays short. Match the existing house style in `docs/idea/` — terse fragments, `file:line` refs, tables.
+3. **Write the plan as multiple files** in the plan dir — never one big `plan.md`. Always produce an `overview.md` index plus one `<NN>-<aspect>.md` per separable area (e.g. `01-redis-schema.md`, `02-lua.md`, `03-runtime.md`, `04-http-api.md`, `05-dashboard.md`, `06-parity-tests.md`). Split by area of work so each file is independently executable and stays short. Match the existing house style in `docs/idea/` — terse fragments, `file:line` refs, tables.
 
    **`overview.md`** — the map. Sections:
 
@@ -28,8 +28,8 @@ $ARGUMENTS
 1-2 sentences: what + why.
 
 ## Context
-- Stack facts the executor needs (Bun + TS, Hono HTTP, Vercel AI SDK BYOK agent loop in `@developerz/agent`, Drizzle→Postgres 18, BullMQ on Dragonfly, SolidJS dashboard / SolidStart marketing — only what's relevant).
-- Reference patterns: `packages/<pkg>/src/<area>/<thing>.ts:12` — follow this for Z.
+- Stack facts the executor needs (Ruby ≥ 3.2, Redis ≥ 7 with Lua, the Rails engine, SolidJS + bun dashboard, Minitest — only what's relevant).
+- Reference patterns: `lib/wurk/<area>/<thing>.rb:12` — follow this for Z.
 
 ## Plan files (execute in order)
 1. [`01-<aspect>.md`](01-<aspect>.md) — one line: what it covers.
@@ -56,7 +56,7 @@ $ARGUMENTS
 1. Ordered, concrete actions. Reference `Class#method` / `file:line`, don't restate.
 
 ## Tests
-- What to add/run. Tests written with the code. Command: `bun run test` (not bare `bun test`), `bun typecheck`, `bun lint`.
+- What to add/run. Tests written with the code, against real Redis. Commands: `bin/rake test TEST=<file>`, `bin/rake test:parity`, `bin/check`; dashboard, in `frontend/`: `bun run test` (not bare `bun test`), `bun run typecheck`, `bun run lint`.
 
 ## Done when
 - Verifiable acceptance criteria for this slice.
@@ -91,10 +91,10 @@ last_updated: <YYYY-MM-DD>
 - Multiple files always: `overview.md` + `<NN>-<aspect>.md` slices. Never a single `plan.md`.
 - Self-contained: executor reads only `overview.md`, the slice it's on, and the files those cite.
 - Respect the root [`CLAUDE.md`](../../CLAUDE.md), particularly Wurk architecture, compatibility, and testing conventions.
-- Stack rules: TS strict, no `any`, no `as` without a why-comment. Biome (no ESLint/Prettier). Zod at every boundary (webhook, env, yml, API request). Drizzle for SQL — all of it in `@developerz/db`. Path alias `@developerz/<pkg>`. `apps/*` import packages, never each other; packages never import apps. `domain` imports nothing internal.
+- Stack rules: wire compatibility is not a design degree of freedom (a Redis key, job JSON field or score format never moves). One reason to change per class. Any Sidekiq surface matches `docs/target/` exactly, and an intentional divergence names its `docs/idea/parity-divergences.md` entry. A performance claim names its bench. Dashboard: TS strict, oxlint, `to-rem()` lengths.
 - Parallel execution in the plan obeys the same cap: any slice that splits work across agents names **≤4 agents per wave**, each with a disjoint file set (one checkout, no worktrees — the file set is the lock).
 - Big work → multiple waves and multiple PRs, executed **one PR at a time** (build → PR → merged → pull → clean tree → next). Size each PR ≤100 changed files; when a slice is bigger, the slice lists its PR sequence (shared piece first). Never split a compile unit.
-- Cross-app or cross-repo work (`../infrastructure`, `sebyx07/infrastructure/stacks/`) → one `<NN>-<aspect>.md` per repo/app; note `../infrastructure` is edited from its own repo, not here.
+- Cross-repo work → one `<NN>-<aspect>.md` per repo; `../infrastructure` is edited from its own repo, not here.
 
 ## Output
 ```

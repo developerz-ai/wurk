@@ -1,9 +1,11 @@
 #!/usr/bin/env bash
-# Usage: bin/ci-dup-push [workflow path, default .github/workflows/test.yml]
+# Usage: bin/ci-dup-push [workflow path, default .github/workflows/test.yml] [step name]
 # Prints `true` only when this push to main re-tests a tree that a green
 # run of that workflow already covered on the merged PR's head; otherwise `false`.
 # A squash merge of an up-to-date PR lands a byte-identical tree, so the
-# push run would repeat the PR run exactly — the gated jobs skip instead.
+# push run would repeat the PR run exactly — the gated jobs skip instead. With a step
+# name, the PR run must have actually run that step: a docs-only PR is green on the
+# guards alone, so it repeats nothing and main runs the suite.
 #
 # Every failure path prints `false` (run everything): a wrong `true` would
 # skip the only gate a direct push to main ever gets. `set -e` is deliberately
@@ -12,6 +14,7 @@
 set -uo pipefail
 
 workflow="${1:-.github/workflows/test.yml}"
+required_step="${2:-}"
 
 no() { echo "ci-dup-push: $1 — full run" >&2; echo false; exit 0; }
 
@@ -40,6 +43,13 @@ run_id="$(gh api "repos/$repo/actions/runs?head_sha=$pr_head&per_page=100" \
   --jq "[.workflow_runs[] | select((.path | split(\"@\")[0]) == \"$workflow\" and .conclusion == \"success\")][0].id // empty" 2>/dev/null)" \
   || no "run list for $pr_head unreadable"
 [ -n "$run_id" ] || no "no green $workflow run on PR #$pr head $pr_head"
+
+if [ -n "$required_step" ]; then
+  ran="$(gh api "repos/$repo/actions/runs/$run_id/jobs?per_page=100" \
+    --jq "[.jobs[].steps[]? | select(.name == \"$required_step\" and .conclusion == \"success\")] | length" 2>/dev/null)" \
+    || no "jobs of run $run_id unreadable"
+  [ "${ran:-0}" -gt 0 ] 2>/dev/null || no "PR #$pr's green run did not run '$required_step'"
+fi
 
 # The PR run skipped the gates its diff didn't touch. That diff is exactly
 # main's diff here (same tree, and the squash's parent is the PR's base), so

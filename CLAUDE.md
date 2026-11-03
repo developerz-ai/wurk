@@ -1,6 +1,15 @@
 # CLAUDE.md
 
-This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository.
+Guidance for agents in this repository. **Budget: under 12,000 chars** — the developerz.ai in-cluster loader keeps only the first 12,000 (`test/unit/ai_config_test.rb` holds the line). Move detail down, never raise the cap:
+
+| Touching | Also read (auto-loads there) |
+|---|---|
+| `lib/`, `app/`, `exe/` | [`lib/CLAUDE.md`](lib/CLAUDE.md): who owns what, layer by layer |
+| `test/` | [`test/CLAUDE.md`](test/CLAUDE.md): runner, Redis isolation, layers, coverage |
+| `.github/`, `RELEASE.md`, `lib/wurk/version.rb` | [`.github/CLAUDE.md`](.github/CLAUDE.md): CI standard, bench, release lane |
+| `frontend/` | [`frontend/CLAUDE.md`](frontend/CLAUDE.md): dashboard stack and styles |
+
+`AGENTS.md` is a symlink to this file.
 
 ## Wurk
 
@@ -8,138 +17,9 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 Three pillars, all must stay true:
 
-1. **100% drop-in.** Same Redis key schema, same job JSON, same Ruby DSL. Existing Sidekiq jobs and Redis data keep working on a one-line gem swap. sidekiq-cron passes its own test suite against Wurk; the rest (sidekiq-unique-jobs, sidekiq-scheduler, sidekiq-status, sidekiq-failures, sidekiq-throttled) are tracked in `docs/idea/14-ecosystem-compat.md`.
+1. **100% drop-in.** Same Redis key schema, same job JSON, same Ruby DSL. Existing Sidekiq jobs and Redis data keep working on a one-line gem swap. sidekiq-cron, sidekiq-unique-jobs, sidekiq-failures and sentry-sidekiq pass their own test suite against Wurk (exclusions per `test/ecosystem/README.md`); the rest (sidekiq-scheduler, sidekiq-status, sidekiq-throttled) are tracked in `docs/idea/14-ecosystem-compat.md`.
 2. **Free.** Pro + Ent feature parity in the same gem. No tiers, no flags gating Ent behavior, no license checks.
-3. **Measured.** Two suites, different jobs. `rake bench` is the REGRESSION check (wurk vs its own past self; a regression on enqueue / fetch+execute / bulk enqueue / swarm boot / memory beyond both runs' error bounds plus 5% is flagged by the bench bot's PR comment — advisory, not a required check, because hosted-runner noise would make a hard gate flaky). `rake bench:vs_sidekiq` is the COMPARISON vs stock Sidekiq. A green bench says nothing about Sidekiq. Wurk is currently SLOWER than stock Sidekiq (0.87x–1.02x depending on workload, with parity on CPU/IO but still behind on noop and boot, see `docs/benchmarks.md`) — do not add a "faster" claim to the README, site, or llms.txt until that doc's numbers support it.
-
-## Commands
-
-| Task | Command |
-|---|---|
-| Install | `bundle install` |
-| Pre-PR gate (lint + suite + parity) | `bin/check` (`fast` = lint + unit, `full` = + ecosystem; `SKIP_LINT=1` / `SKIP_PARITY=1` skip a stage, `NCPU=<n>` sets parallel test workers) |
-| Full test suite (parallel) | `bin/rake test` |
-| Single file | `bin/rake test TEST=test/path/to/file_test.rb` |
-| Single test by name | `bin/rake test TEST=test/foo_test.rb TESTOPTS="--name=/pattern/"` |
-| Parity tests (independently written oracles) | `bin/rake test:parity` |
-| Ecosystem compat | `bin/rake test:ecosystem` |
-| Benchmarks | `bin/rake bench` |
-| Dummy app | `cd test/dummy && bin/rails s` |
-| Standalone runner | `exe/wurk` |
-| Dashboard build | `bin/rake frontend:build` (`bun install` + `vite build` → `vendor/assets/`) |
-| Dashboard tests | `bun run test` in `frontend/` (vitest) |
-| Dashboard lint | `bun run lint` in `frontend/` (oxlint, not eslint — typescript-eslint can't parse TS 7) |
-| Dashboard HMR dev | `WURK_VITE_DEV=1` then boot dummy |
-| Release | Merge a `lib/wurk/version.rb` bump to `main` → `release.yml` publishes the gem, then tags (see `RELEASE.md`; `bin/rake release` aborts) |
-
-`WURK_DISABLED=1`, Rails console, and Rails test env all skip the railtie's auto-fork.
-
-## Architecture
-
-Layers and ownership — one reason to change per class. Don't blur these.
-
-| Layer | Owns | Path |
-|---|---|---|
-| Engine | Dashboard mount, asset path, railtie | `lib/wurk/engine.rb`, `app/` |
-| Railtie | Rails hooks only (config namespace, server_mode initializer, reloader install, last-Finisher initializer that starts the swarm); every boot decision is delegated | `lib/wurk/railtie.rb` |
-| RailsBoot | Boot policy decisions: whether this process boots, whether it may fork the swarm, server-mode entry | `lib/wurk/rails_boot.rb` |
-| Swarm | Parent process; forks N children, PID supervision, rolling restart | `lib/wurk/swarm.rb` |
-| Topology | Worker-topology slot DSL (count/queues/concurrency per fork kind); Swarm consumes its `assignments` | `lib/wurk/topology.rb` |
-| Launcher | Top-level supervisor inside each worker process: Manager pool (one per Capsule), scheduler poller, heartbeat thread | `lib/wurk/launcher.rb` |
-| Capsule | One processing unit: a set of threads + queues sharing a fetcher and a Redis pool | `lib/wurk/capsule.rb` |
-| Manager | Runs one Capsule: thread pool, lifecycle, heartbeat | `lib/wurk/manager.rb` |
-| Fetcher | Abstract base in `lib/wurk/fetcher.rb`; `Fetcher::Reliable` is the shipped implementation: BLMOVE reliable fetch, main queue → per-process private list. Supporting: `capped.rb` (global concurrency caps), `many_queues.rb` (one-round-trip multi-queue claim), `unit_of_work.rb` (ACK/requeue), `reaper.rb` + `private_list_key.rb` + `orphan_grace.rb` + `unparseable_keys.rb` (orphan reclamation) | `lib/wurk/fetcher.rb` (base), `lib/wurk/fetcher/reliable.rb` (impl), `lib/wurk/fetcher/` (support) |
-| Processor | Pops private list, runs middleware chain, invokes perform | `lib/wurk/processor.rb` |
-| Client | Enqueue, Lua bulk path, Redis-outage local buffer | `lib/wurk/client.rb` |
-| Middleware | Client + server chains (Sidekiq contract) | `lib/wurk/middleware/` |
-| Web | Rack app serving the precompiled SolidJS SPA + the dashboard JSON endpoints (`app/controllers/wurk/api_controller.rb` via `Wurk::Api::Serializers`). Distinct from the machine-facing `Wurk::API` plane below | `lib/wurk/web.rb`, `app/` |
-| API | Machine-facing HTTP API, versioned `/v1`, plain Rack with no Rails reference — one implementation serves all three mounts: engine-nested `<mount>/api/v1`, separately mounted `mount Wurk::API => '/wurk-api'`, standalone `run Wurk::API`. The namespace also holds API::Fast, the Pro data-API Lua extensions | `lib/wurk/api.rb`, `lib/wurk/api/` |
-| Compat | Sidekiq-alias layer (`Sidekiq::*` namespace — the drop-in contract) and the `require "sidekiq"` entrypoint | `lib/wurk/compat.rb`, `lib/sidekiq.rb` |
-| RedisPool | Per-process pool over redis-client | `lib/wurk/redis_pool.rb` |
-| Configuration | Runtime knobs, lifecycle/error/death handler registries and Capsule registry; supplies boot settings, not process supervision | `lib/wurk/configuration.rb` |
-| Worker / Job DSL | Job options, enqueue methods, retry hooks and instance helpers; delegates enqueue to Client and execution to Processor | `lib/wurk/worker.rb` |
-| IterableJob | Resumable iteration loop, cursor checkpoints and cooperative interruption; owns `perform`, while user jobs implement `each_iteration`, not processor lifecycle | `lib/wurk/iterable_job.rb` |
-| CLI / Embedded | Standalone argument/config loading and boot entrypoint; Embedded starts the Launcher stack inside a host Ruby process without swarm supervision. Neither requires the Rails engine | `lib/wurk/cli.rb`, `lib/wurk/embedded.rb` |
-| Scheduled | Polling and promotion of due `retry` / `schedule` entries through Client; not retry policy or periodic cron registration | `lib/wurk/scheduled.rb` |
-| Cron | Periodic registration, cron parsing and leader-gated enqueue ticks; creates periodic work rather than promoting delayed jobs | `lib/wurk/cron.rb` |
-| Leader | Best-effort Redis lease election and fencing token; not strict mutual exclusion, so consumers needing it must guard their writes | `lib/wurk/leader.rb` |
-| Heartbeat | Redis process/work heartbeat schema, slot refresh and queued-signal reads; returns signals to Launcher, which retains lifecycle and signal dispatch | `lib/wurk/heartbeat.rb` |
-| JobRetry | Failure policy, backoff, retry metadata, exhaustion hooks and dead-set routing; Scheduled later promotes retries, Processor still owns execution | `lib/wurk/job_retry.rb` |
-| Redis data views | Ruby inspection and mutation of queues and job sets, plus stats, live processes and work snapshots; not the machine-facing HTTP API or dashboard Web transport | `lib/wurk/queue.rb`, `lib/wurk/job_set.rb`, `lib/wurk/stats.rb`, `lib/wurk/process_set.rb`, `lib/wurk/work_set.rb` |
-| Batch | Job-group progress, nested completion tracking and success/complete/death callbacks; integrates with enqueue and execution middleware rather than owning dispatch | `lib/wurk/batch.rb`, `lib/wurk/batch/` |
-| Flow | DAG dependency composition with one Batch per node; reuses Batch completion tracking, not a second completion ledger | `lib/wurk/flow.rb` |
-| Limiter | Lua-backed resource/rate acquisition, waiting and OverLimit rescheduling middleware; not enqueue deduplication or per-queue fetch caps | `lib/wurk/limiter.rb`, `lib/wurk/limiter/` |
-| Unique | Best-effort enqueue deduplication locks and their success/start/death release policy; rejects duplicates rather than replacing pending work or rate-limiting execution | `lib/wurk/unique.rb` |
-| Collapse / Debounce / Throttle | Collapse validates/routes worker policies; Debounce replaces a pending scheduled payload until quiet, Throttle drops extras per fixed time slot. Distinct from Unique locks and Limiter resource budgets | `lib/wurk/collapse.rb`, `lib/wurk/debounce.rb`, `lib/wurk/throttle.rb` |
-| QueueSlot | Global per-queue holder ledger, expiry, refresh and release accounting; Fetcher owns cap-aware claims, not this model | `lib/wurk/queue_slot.rb` |
-| Encryption | Client/server middleware envelope for the last positional argument; transforms opted-in payloads, not Client transport or Processor dispatch | `lib/wurk/encryption.rb` |
-| Status | Opt-in per-job state, progress and result records with TTL/retention; not Batch completion accounting or cluster stats | `lib/wurk/status.rb`, `lib/wurk/status/` |
-| Metrics | Metrics::History aggregates per-class executions through an accumulator/flusher; Query reads execution buckets, Statsd exports to a host-supplied client, Prometheus provides scrape exposition. Not History's cluster snapshots or an HTTP listener | `lib/wurk/metrics/history.rb`, `lib/wurk/metrics/query.rb`, `lib/wurk/metrics/statsd.rb`, `lib/wurk/metrics/prometheus.rb`, `lib/wurk/metrics/` |
-| History | Leader-gated cluster snapshots to a capped Redis stream and optional statsd client; separate from Metrics::History per-job execution aggregation | `lib/wurk/history.rb` |
-| Health | Optional dedicated TCP probe listener for liveness, readiness and Prometheus metrics; no Rack/Rails dependency, separate from Web and API | `lib/wurk/health.rb` |
-| Telemetry | Opt-in OpenTelemetry producer/consumer tracing across enqueue and execution; requires host-provided OTel API, not a mandatory dependency or a `Sidekiq::Telemetry` surface | `lib/wurk/telemetry.rb` |
-| Sentry | Opt-in error handler and job-context middleware for host-configured Sentry; no mandatory sentry-ruby dependency and no ownership of retry policy | `lib/wurk/sentry.rb`, `lib/wurk/sentry/` |
-| Logging / Profiling / Deploy markers | Logger formats context; JobLogger scopes execution logs/context; Profiler optionally captures with host-loaded Vernier; Deploy records chart markers, not deployment orchestration. Processor retains execution ownership | `lib/wurk/logger.rb`, `lib/wurk/job_logger.rb`, `lib/wurk/profiler.rb`, `lib/wurk/deploy.rb` |
-| Testing | Fake in-memory, synchronous inline and real-Redis enqueue modes, with block-local overrides; test harness for Client/Worker, not a production scheduler | `lib/wurk/testing.rb` |
-
-User-facing code (mount, controllers, views, generators, assets) lives in the engine. Non-user-facing (swarm, fetcher, processor, client, middleware) lives in plain Ruby under `lib/`. **Standalone mode must run without loading the engine.**
-
-Sidekiq aliases — every public `Wurk::*` class is exposed under its `Sidekiq::*` name (`Sidekiq::Worker`, `Sidekiq::Batch`, `Sidekiq.configure_server`, `Sidekiq::Limiter`, …). The alias is the drop-in contract. Never break it.
-
-## Boot ordering (do not reorder)
-
-1. Host app boots fully; initializers run; eager-loaded constants resolved.
-2. Host `after_initialize` hooks run, then the railtie's `wurk_boot` Finisher initializer fires last.
-3. Swarm closes parent-side connections that must not survive fork (DB, Redis).
-4. Swarm forks N children.
-5. Each child opens a fresh Redis pool (Active Record reconnects through its own fork hook), then starts fetching.
-6. Parent enters supervision loop.
-
-Skip step 3 → leaked sockets in children. Skip step 5 → children corrupt each other's responses on a shared socket.
-
-## Signals
-
-| Signal | Target | Effect |
-|---|---|---|
-| SIGTERM / SIGINT | parent | Graceful drain. Relayed to children; in-flight finishes to `shutdown_timeout`; exit |
-| SIGTSTP | parent | Quiet globally: relayed to children, each stops fetching; in-flight continues. One-way (matches Sidekiq TSTP, spec §21.3) — no resume; TERM to shut down |
-| SIGUSR1 | parent | Rolling restart: fork replacement → wait for heartbeat → SIGTERM old slot → next |
-| SIGUSR2 | child | Reopen log files (logrotate) |
-| SIGKILL | any | Safe — private-list entries stay in Redis and are reclaimed by a reaper sweep: fast when the killed process's slot boots a replacement, about 90s for a restarted standalone pod, 90-140s when a host is lost |
-
-## Conventions
-
-- **SOLID, especially SRP.** Manager owns lifecycle; Fetcher owns Redis pop; Processor owns middleware+perform; Client owns enqueue.
-- **Wire-compat is sacred.** Never change a Redis key, JSON field, or sorted-set score format. If a perf optimization would break compat, drop the optimization.
-- **Frozen string literals everywhere.** Hot-loop allocations matter.
-- **Per-fork Redis pool.** Never share a socket across forks. Close parent sockets before fork, reconnect inside the child.
-- **Parse the payload once, carry the raw string.** `Processor` parses the job JSON a single time, then threads the original string through the retry and stats layers so nothing re-dumps it; the retriers re-parse only on the failure path.
-- **EVALSHA-cache Lua scripts.** Loaded once per pool, never re-uploaded.
-- **Default fetcher is reliable.** BLMOVE atomic move from main queue to per-process private list. No "basic fetch" mode.
-- **Authoritative spec** for any Sidekiq surface lives in `docs/target/sidekiq-{free,pro,ent}.md`. Match it exactly when implementing or modifying public API.
-- **No comments that restate code.** Only document non-obvious *why*: a hidden constraint, a workaround for a specific bug, behavior that would surprise a reader.
-
-## Testing
-
-- **Minitest**, parallel runner. Each class opts in via `parallelize_me!`.
-- **Per-worker Redis DB isolation.** Each `minitest-parallel_fork` worker runs against its own Redis logical DB (1–14, with 15 reserved for fixed-DB tests; never DB 0), assigned in `test_helper`'s `after_parallel_fork` hook; `teardown` runs `FLUSHDB` so each test gets a clean slate. Tests that build a pool explicitly use `Wurk::Test.redis_url`. Required for parallel safety — concurrent test classes never see each other's keys. Concurrent suite runs on one Redis (several agents or terminals) each set `WURK_TEST_DB_OFFSET=<k>` so their workers don't share DBs.
-- **Layers:** unit · engine (boots `test/dummy/`) · integration (real forks + real Redis) · parity (`test/parity/`, independently written oracles for the documented Sidekiq behaviour, pinned to the upstream revision in test/parity/.sidekiq_sha) · ecosystem (third-party gem suites run against Wurk) · benchmarks.
-- **Parity tests are oracles.** When Wurk diverges from a parity test, Wurk is wrong unless the divergence is explicitly documented as intentional in the canonical ledger, [docs/idea/parity-divergences.md](docs/idea/parity-divergences.md).
-- **Never mock Redis** in integration or parity tests. Real Redis, unique namespace.
-- **Coverage gate.** SimpleCov **line** and **branch** coverage on `lib/` must both stay ≥90% (blocking; `minimum_coverage line: 90, branch: 90`). Branch was ratcheted from ~78% to ≥90% in #67 — keep new code at parity. The Cobertura report is still uploaded for per-file inspection. Coverage runs merge across the `minitest-parallel_fork` workers via `SimpleCov.at_fork`; a merge that lacks any forked worker's resultset fails the run as `coverage merge incomplete: missing worker-N` and reports no percentage (`test/support/coverage_merge.rb`). A test that spawns a repo script must unset `COVERAGE` for it — `bin/check` runs `rm -rf coverage`, which is the live run's data.
-- **CI** on GitHub Actions. Benchmark bot comments deltas on PRs that touch Ruby or bench inputs (`bench.yml`'s path filter: `lib/**`, `exe/**`, `bench/**`, `bin/bench-compare`, `Rakefile`, `Gemfile`, `*.gemspec`, the workflow itself); a regression past the noise-adjusted 5% threshold is flagged in the comment and fails the `bench vs base` job, which is not a required check and so never blocks a merge. The `main-protection` ruleset gates the merge and its live required-check list is the single authority — read it with `gh api repos/developerz-ai/wurk/rulesets`; never re-declare the list here or in any doc. The gated jobs gate per-step, never per-job, so they always run and report — GitHub counts a skipped required job as passing.
-- **CI standard.** Cheap by construction: **one** full Ruby suite run per PR is the required check, on the newest Ruby + newest Rails, with the coverage gate folded in (`COVERAGE=1` on the same invocation). The floor is also proven by the non-required `compat` matrix in test.yml — legs for the gemspec Ruby floor (`3.2`) × newest Rails, newest Ruby × oldest supported Rails (`7.1`), newest Ruby × newest Rails on Valkey instead of Redis, and the same on Dragonfly v1.34.0 with stock Lua settings — each running the full suite without `COVERAGE=1`; they report alongside but never gate a merge. Every job runs on GitHub-hosted `ubuntu-latest` (free for a public repo); there are no self-hosted runners and no runner variables, so a fork PR never reaches persistent hardware, and outside contributors' runs still wait on the repo's approval policy (`all_external_contributors`). Suite workers follow the machine: `test_helper` defaults to half the cores, floored at 1 and capped at 4 (`Wurk::Test::DEFAULT_NCPU`), because the integration layer boots real swarms and one worker per core oversubscribes into wall-clock failures; `NCPU=<n>` overrides. Bench on `ubuntu-latest` is noisy, which is one more reason it stays advisory. In test.yml, ecosystem.yml and topology.yml, `detect` runs `bin/ci-dup-push`: a push to `main` whose tree byte-equals a PR head that already passed that workflow skips the gated jobs, and any doubt falls open to a full run. Every workflow declares a `concurrency` group and every job sets `timeout-minutes`; PR runs cancel in progress, `main` runs never do, and deploy/publish workflows (deploy-demo, pages, release) never auto-cancel. The `actionlint` job (pinned v1.7.12 by SHA, gated per-step on a `workflows` paths-filter) and `spec-docs` always report. Rubocop's `TargetRubyVersion: 3.2` still holds the gemspec floor statically.
-- **The release tag is an output, never an input.** `release.yml` fires on a `lib/wurk/version.rb` bump landing on `main` — *not* on a tag push — derives the tag from `Wurk::VERSION` (`ReleaseHelpers.git_tag_for`), publishes the gem, and only then cuts the tag + GitHub Release, which then calls `deploy-demo` so the public demo tracks the released version. `release.yml` pushes from `publish` (id-token only), tags from `release` (contents: write), and preflight's `publish`/`finish` outputs let a re-run finish a partly done release. Never re-add a `tags:` trigger: a tag as input let anything that could push one (the `developerz-ai[bot]` maintainer agent did, seven times) turn the release lane red and leave a gem-less GitHub Release marked "Latest". Full rationale in `RELEASE.md`.
-
-## Platforms
-
-Ruby `>= 3.2.0`, Redis `>= 7.0.0`. JRuby / TruffleRuby / Windows fall back to threads-only mode (no fork), behaviorally equivalent to stock Sidekiq. Test env disables forking — everything runs inline.
-
-## Dashboard
-
-SolidJS + TypeScript + Vite SPA mounted under the engine, built with **bun** (`bun install` + `vite build`; contributors need bun, consumers never run Node or bun). **Precompiled bundle ships in the gem** (`vendor/assets/`). SSE for live updates, TanStack Query (`@tanstack/solid-query`) for state, `@solidjs/router` for routing, and a hand-rolled dependency-free SolidJS SVG chart module for charts. Pages are **lazy-loaded behind a route-level `<Suspense>`** (code-split chunks) with **skeleton loaders** (`components/Skeleton.tsx`) as the fallback. Left-rail nav (drawer on mobile), `light`/`dark`/`system` themes (`config.web.default_theme`, no light-toggle performance cost), mobile-first, i18n with host-app override. With neither a visitor choice nor a configured host default, the effective theme follows the visitor's system preference; dark bare-`:root` styling is only a CSS fallback, not the effective application default. AI panes (anomaly detection, NL queries, error triage, capacity advisor) are planned (roadmap M5), not shipped.
-
-**Styles** are a SOLID/SRP **SCSS** architecture under `frontend/src/styles/` — `abstracts/` (Sass maps, `to-rem()`/`breakpoint()`/`z()` functions, `respond-down()`/`transition()`/`surface()` mixins, CSS-var `:root` tokens, keyframes) → `base/` (reset, typography, scrollbar, reduced-motion policy) → `components/` (one file per atom: button, badge, card, table, modal, skeleton…) → `layout/` (shell, nav, page-header) → `pages/` (Obsidian system, search, extension), composed by `main.scss`. Tailwind + daisyUI directives stay in the sibling `tailwind.css`; the SCSS `:root` tokens (unlayered) override daisyUI's theme. All lengths are `to-rem()`; motion runs off a shared duration/easing scale (`--dur-*` / `--ease-*`). `rem` is a reserved Sass calc name — the px→rem helper is `to-rem()`, not `rem()`.
+3. **Measured.** Two suites, different jobs. `rake bench` is the REGRESSION check (wurk vs its own past self; a regression beyond both runs' error bounds plus 5% is flagged on the PR — advisory, see `.github/CLAUDE.md`). `rake bench:vs_sidekiq` is the COMPARISON vs stock Sidekiq. A green bench says nothing about Sidekiq. The latest published comparison has Wurk SLOWER than stock Sidekiq (0.87x–1.02x depending on workload, parity on CPU/IO, behind on noop and boot; `docs/benchmarks.md`) — do not add a "faster" claim to the README, site, or llms.txt until that doc's numbers support it.
 
 ## Never
 
@@ -151,7 +31,94 @@ SolidJS + TypeScript + Vite SPA mounted under the engine, built with **bun** (`b
 - `--no-verify` on commits when hooks fail — fix the hook.
 - Share a Redis socket across forks.
 - Force-push to `main`.
+- Use git worktrees. Work in this checkout; parallel agents split into disjoint file sets.
+- Touch Redis DB 0, or run `FLUSHALL` or `SCRIPT FLUSH`, from a test or harness. Local DB 0 is someone's data, and those two cross logical DBs. Use `WURK_TEST_DB_OFFSET` or a private port.
+- Merge a breaking change without a human decision.
 
-## Note
+## Commands
 
-Do not use git worktrees — work directly in this checkout. If a task is big enough to need subagents, run them as a team in this same checkout: split the work into disjoint pieces so no two agents touch the same files.
+| Task | Command |
+|---|---|
+| Install | `bin/setup` (gems, frontend, dummy app). Tests need Redis ≥ 7 and bun |
+| Pre-PR gate | `bin/check`: rubocop + frontend + suite with coverage + parity. `fast` = rubocop + unit. `full` = + ecosystem + Python client. `SKIP_LINT=1` / `SKIP_PARITY=1` / `SKIP_FRONTEND=1` drop a stage, `NCPU=<n>` sets workers. **Exit 75 = environment missing (bundler, gems, Redis, bun), not a verdict on the diff** |
+| Suite (unit + integration + engine) | `bin/rake test` |
+| Single file | `bin/rake test TEST=test/path/to/file_test.rb` |
+| Single test by name | `bin/rake test TEST=test/foo_test.rb TESTOPTS="--name=/pattern/"` |
+| Parity + conformance oracles | `bin/rake test:parity` |
+| Ecosystem compat | `bin/rake test:ecosystem` (own throwaway `redis-server`) |
+| Re-pin ledger anchors | `bin/repin-anchors` (`--check` reports only) |
+| Benchmarks | `bin/rake bench`, `bin/rake bench:vs_sidekiq` |
+| Dashboard + dummy app | `bin/dev`, then http://localhost:3000/wurk (Redis + Vite HMR + `test/dummy`; `NO_VITE=1` serves the prebuilt bundle) |
+| Runners | `exe/wurk` (one process), `exe/wurkswarm` (forks `WURK_COUNT`), `exe/wurk api` (HTTP API, runs no jobs) |
+| Ops, read-only | `wurk preflight` (before a cutover), `wurk verify` (after one), `wurk health` (exec liveness probe) |
+| Dashboard build | `bin/rake frontend:build` |
+| Dashboard checks, in `frontend/` | `bun run test`, `bun run lint`, `bun run typecheck` |
+| Release | Merge a `lib/wurk/version.rb` bump to `main` (`RELEASE.md`; `bin/rake release` aborts) |
+
+The railtie boots workers only inside a running web server or with `WURK_EMBED=1`. `WURK_DISABLED=1`, Rails console, Rails test env, rake tasks and `SECRET_KEY_BASE_DUMMY` all skip it; a preforking server (Puma cluster, Unicorn, Passenger) refuses unless `config.wurk.embed_in_web` (`lib/wurk/rails_boot.rb`).
+
+## Architecture
+
+Layers and ownership — one reason to change per class. Don't blur these. Hot path, full table in `lib/CLAUDE.md`:
+
+Swarm (parent; forks, supervises) → Launcher (per worker process) → Manager (one per Capsule; thread pool, lifecycle) → Processor (takes a UnitOfWork from the Fetcher, parses, runs middleware + perform, ACKs). Fetcher owns the Redis pop. Client owns enqueue. Heartbeat is Launcher's, not Manager's.
+
+User-facing code (mount, controllers, views, generators, assets) lives in the engine. Non-user-facing (swarm, fetcher, processor, client, middleware) lives in plain Ruby under `lib/`. **Standalone mode must run without loading the engine.**
+
+Sidekiq aliases — every `Wurk::*` class with an upstream Sidekiq counterpart is exposed under its `Sidekiq::*` name (`Sidekiq::Worker`, `Sidekiq::Batch`, `Sidekiq.configure_server`, `Sidekiq::Limiter`, …; `lib/wurk/compat.rb` is the list). The alias is the drop-in contract. Never break it. Deliberately not aliased: `Sidekiq::Cron` and `Sidekiq::Status`, namespaces third-party gems own (#204). Wurk-only extras and internals (`Wurk::API`, `Wurk::Swarm`, `Wurk::Topology`) get no alias unless nothing else claims the name; check before adding one.
+
+## Boot ordering (do not reorder)
+
+1. Host app boots fully; initializers run; eager-loaded constants resolved.
+2. Host `after_initialize` hooks run, then the railtie's `wurk_boot` Finisher initializer fires last (`wurkswarm`: `CLI#run_swarm` boots the app itself).
+3. Swarm closes parent-side connections that must not survive fork (DB, Redis).
+4. Swarm forks N children.
+5. Each child opens a fresh Redis pool (Active Record reconnects through its own fork hook), then starts fetching.
+6. Parent enters supervision loop (on a background thread when co-hosted in a Rails server).
+
+Skip step 3 → leaked sockets in children. Skip step 5 → children corrupt each other's responses on a shared socket.
+
+## Signals
+
+For a swarm that owns its traps (`wurkswarm`). A swarm co-hosted in a Rails server boots with `install_signals: false`: the host keeps every signal and the swarm drains from `at_exit`, so TSTP and USR1 do not reach it.
+
+| Signal | Target | Effect |
+|---|---|---|
+| SIGTERM / SIGINT | parent | Graceful drain. Relayed to children; in-flight finishes to `shutdown_timeout`; exit |
+| SIGTSTP | parent | Quiet globally: relayed to children, each stops fetching; in-flight continues. One-way (matches Sidekiq TSTP, spec §21.3) — no resume; TERM to shut down |
+| SIGUSR1 | parent | Rolling restart: fork replacement → wait for heartbeat → SIGTERM old slot → next |
+| SIGUSR2 | parent, child | Reopen log files (logrotate); the parent relays |
+| SIGTTIN | parent, child | Dump thread backtraces; the parent relays |
+| SIGKILL | any | Safe — private-list entries stay in Redis and are reclaimed once the owner's heartbeat expires: about 1s for a swarm child, 90s after a pod restart, 90-140s for a lost host (`docs/deployment.md`) |
+
+## Conventions
+
+- **SOLID, especially SRP.** Manager owns lifecycle; Fetcher owns Redis pop; Processor owns middleware+perform; Client owns enqueue.
+- **Wire-compat is sacred.** Never change a Redis key, JSON field, or sorted-set score format. If a perf optimization would break compat, drop the optimization.
+- **Frozen string literals everywhere.** Hot-loop allocations matter.
+- **Per-fork Redis pool.** Never share a socket across forks. Close parent sockets before fork, reconnect inside the child.
+- **Parse the payload once, carry the raw string.** `Processor` parses the job JSON a single time, then threads the original string through the retry and stats layers so nothing re-dumps it; the retriers re-parse only on the failure path.
+- **EVALSHA-cache Lua scripts.** Loaded once per pool; re-uploaded only on `NOSCRIPT` recovery.
+- **Default fetcher is reliable.** Atomic move from main queue to per-process private list: `LMOVE` while there is work, `BLMOVE` to park on an empty poll. No "basic fetch" mode.
+- **Authoritative spec** for any Sidekiq surface lives in `docs/target/sidekiq-{free,pro,ent}.md`. Match it exactly when implementing or modifying public API.
+- **No comments that restate code.** Only document non-obvious *why*: a hidden constraint, a workaround for a specific bug, behavior that would surprise a reader.
+
+## Testing
+
+Minitest, real Redis. Parity tests are oracles: when Wurk diverges from one, Wurk is wrong unless the divergence is documented as intentional in [`docs/idea/parity-divergences.md`](docs/idea/parity-divergences.md). SimpleCov line and branch coverage on `lib/` must both stay ≥90%. The `main-protection` ruleset's live required checks are the single authority: `gh api repos/developerz-ai/wurk/rulesets`; never re-declare the list.
+
+## Rules from incidents
+
+- **The merge bot merges on green.** Soak and review come before the push, not after.
+- **A merge does not deploy.** Only a merged `lib/wurk/version.rb` bump publishes. `release: x.y.z` and nothing else, with `bundle exec rake release:relock_demo`. Never tag, never `gem push` (#420, #858). Then verify directly: the gem on RubyGems, the tag, the demo's `/demo/build`.
+- **A red `compat` leg on `main` is yours to fix**, though it never blocks a merge. Rubocop's `TargetRubyVersion` catches syntax, not runtime behavior, and local runs use a newer Ruby than the 3.2 floor (#823, #869).
+- **`lib/` edits move line anchors.** The ledger and `test/conformance/` pin `lib/` line ranges; `bin/check fast` does not check them. Run `bin/repin-anchors`, on the tree the PR actually contains: anchors re-pinned on a wider tree go red once the PR is split.
+- **Stage by path.** Never `git add -A`: the tree may hold someone else's work. A split PR is tested on its own tree.
+- **A PR body claims only what the diff does.** Evidence you could not get is stated as missing (#823).
+- **Never write live state into prose or config comments.** Cite the command that reads it (#388, #445).
+- **Commit with a GitHub-linked email.** The ruleset parks a PR with unattributed commits for human approval, silently.
+- **A hook refused something legitimate?** See `.claude/README.md`; never work around it.
+
+## Platforms
+
+Ruby `>= 3.2.0`, Redis `>= 7.0.0` (`CLI` and `Embedded` refuse older). Valkey 8 and Dragonfly >= 1.34 are `compat` legs; a Dragonfly job store must stay below `maxmemory` (`docs/deployment.md`). No CI leg runs JRuby, TruffleRuby or Windows. Without `fork`, only `exe/wurk` and `config.wurk.embed_in_web` can work; `wurkswarm` and the railtie's swarm call `Process.fork` with no fallback. The Rails test env skips the railtie's boot and changes nothing else: jobs push to real Redis unless `Sidekiq::Testing` says otherwise, and integration tests fork real swarms.

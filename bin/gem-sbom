@@ -1,0 +1,50 @@
+#!/usr/bin/env ruby
+# frozen_string_literal: true
+
+# Usage: bin/gem-sbom path/to/wurk-X.Y.Z.gem > wurk-X.Y.Z.cdx.json
+# A CycloneDX SBOM for a built gem: the runtime requirements it declares, and the
+# npm packages the dashboard bundle inside it was built from, at their locked
+# versions. Stdlib only, because it runs in a job that holds an OIDC token.
+require 'json'
+require 'rubygems/package'
+require 'securerandom'
+require 'time'
+
+def lockfile_versions(path)
+  File.read(path).scan(/^\s*"([^"]+)": \["\1@([^"]+)"/).to_h
+end
+
+def dashboard_components(root)
+  frontend = File.join(root, 'frontend')
+  direct = JSON.parse(File.read(File.join(frontend, 'package.json'))).fetch('dependencies', {}).keys
+  locked = lockfile_versions(File.join(frontend, 'bun.lock'))
+
+  direct.filter_map do |name|
+    version = locked[name] or next
+    { type: 'library', name: name, version: version, purl: "pkg:npm/#{name.sub('@', '%40')}@#{version}" }
+  end
+end
+
+def gem_components(spec)
+  spec.runtime_dependencies.map do |dependency|
+    { type: 'library', name: dependency.name, version: dependency.requirement.to_s, purl: "pkg:gem/#{dependency.name}",
+      scope: 'required' }
+  end
+end
+
+abort 'usage: bin/gem-sbom path/to/wurk-X.Y.Z.gem' unless ARGV.size == 1
+
+spec = Gem::Package.new(ARGV.fetch(0)).spec
+root = File.expand_path('..', __dir__)
+puts JSON.pretty_generate(
+  bomFormat: 'CycloneDX',
+  specVersion: '1.5',
+  serialNumber: "urn:uuid:#{SecureRandom.uuid}",
+  version: 1,
+  metadata: {
+    timestamp: Time.now.utc.iso8601,
+    component: { type: 'library', name: spec.name, version: spec.version.to_s,
+                 purl: "pkg:gem/#{spec.name}@#{spec.version}" }
+  },
+  components: gem_components(spec) + dashboard_components(root)
+)

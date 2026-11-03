@@ -18,9 +18,10 @@ permissions:
   actions: read
 
 concurrency:
-  group: ${{ github.workflow }}-${{ github.ref }}
-  # Supersede stale PR runs, but never cancel main's own runs: back-to-back
-  # merges would otherwise leave "is main green?" without an answer.
+  group: ${{ github.workflow }}-${{ github.event_name == 'push' && github.sha || github.ref }}
+  # Supersede stale PR runs, never main's. A group keeps one PENDING run and replaces
+  # it whatever cancel-in-progress says, which dropped 47 of 299 main runs to back-to-back
+  # merges, so each main commit gets a group of its own and with it a verdict.
   cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 jobs:
@@ -39,6 +40,8 @@ jobs:
     timeout-minutes: 5
     outputs:
       ruby: ${{ steps.filter.outputs.ruby }}
+      # `ruby` minus the paths only the guard manifest reads: false on a docs-only change.
+      code: ${{ steps.filter.outputs.code }}
       frontend: ${{ steps.filter.outputs.frontend }}
       python: ${{ steps.filter.outputs.python }}
       specdocs: ${{ steps.filter.outputs.specdocs }}
@@ -55,7 +58,7 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
-          dup="$(bin/ci-dup-push)"
+          dup="$(bin/ci-dup-push .github/workflows/test.yml 'rake test (with coverage gate)')"
           [ "$dup" = "true" ] || dup=false
           echo "dup=$dup" >> "$GITHUB_OUTPUT"
       - uses: dorny/paths-filter@ceb8a2b8f2d89434be7ff52d3de7ec3738c5cc9d # v4.0.3
@@ -90,6 +93,9 @@ jobs:
               # The policy and briefs are read by test/unit/health_brief_test.rb,
               # release_due_brief_test.rb and maintainer_policy_contract_test.rb.
               - '.dz/**'
+              # Agent config: test/unit/ai_config_test.rb pins the hooks and these rule files.
+              - '.claude/**'
+              - '.github/*.md'
               # Rubocop's own config moves the lint verdict without touching Ruby.
               - '.rubocop.yml'
               # Gemfile.lock is deliberately absent from the filter — it is
@@ -104,6 +110,29 @@ jobs:
               # Ruby suite and merged green with the pins disagreeing. The
               # workflows glob also covers this file (a filter change must
               # re-run the suite it gates).
+              - 'Dockerfile'
+              - 'mise.toml'
+              - '.github/workflows/*.yml'
+            # Everything in `ruby` that can change what code does. A change outside this but
+            # inside `ruby` is docs-only: it can only break a test in test/guards.txt, so it
+            # runs those instead of the whole suite. Keep in step with `ruby`;
+            # test/unit/guard_manifest_test.rb fails if a `ruby` path is neither here nor docs.
+            code:
+              - 'bench/**'
+              - 'lib/**'
+              - 'app/**'
+              - 'exe/**'
+              - 'bin/**'
+              - 'test/**'
+              - 'tasks/**'
+              - 'config/**'
+              - 'frontend/**'
+              - 'ecosystem/**'
+              - 'demo/**'
+              - '.rubocop.yml'
+              - 'Gemfile'
+              - 'Rakefile'
+              - '*.gemspec'
               - 'Dockerfile'
               - 'mise.toml'
               - '.github/workflows/*.yml'
@@ -128,13 +157,14 @@ jobs:
   # questions, and the version matrix was pinned to Rails lines (7.2, 8.0) that
   # are no longer the newest anyway. Wurk targets current Ruby and current
   # Rails; the floor in the gemspec (>= 3.2) is held by rubocop's
-  # `TargetRubyVersion: 3.2`, which rejects syntax and APIs newer than it.
+  # `TargetRubyVersion: 3.2`, which rejects newer syntax. It does not see runtime APIs; the compat matrix does.
   #
   # Workers: test_helper's Wurk::Test::DEFAULT_NCPU (half the cores, 1..4), so
   # 2 on ubuntu-latest's 4 vCPU. NCPU overrides it.
   test:
     name: test + coverage (latest ruby/rails)
     needs: detect
+    if: ${{ !cancelled() }}
     runs-on: ubuntu-latest
     timeout-minutes: 25
     services:
@@ -155,6 +185,9 @@ jobs:
       RAILS_VERSION: "8.1"
       COVERAGE: "1"
       WURK_REQUIRE_REDIS_SERVER: "1"
+      # A failed `detect` has no outputs to gate on, and would skip this job, which
+      # satisfies the ruleset. So `!cancelled()` above keeps it running, and RUN then runs
+      # everything: that failure must never read as nothing to test.
       # Gated per STEP, not per job (#469). A job-level `if:` that evaluates
       # false reports the check as "skipped", and GitHub counts a skipped
       # required check as SATISFIED — so a PR outside the filter would merge
@@ -162,25 +195,32 @@ jobs:
       # report a real success; on an irrelevant change it just does nothing.
       # Every path-gated job in this file (parity, spec-docs, actionlint, lint,
       # frontend, python-client) uses this same RUN pattern; keep it that way.
-      RUN: ${{ needs.detect.outputs.dup != 'true' && (github.event_name != 'pull_request' || needs.detect.outputs.ruby == 'true') }}
+      RUN: ${{ needs.detect.result != 'success' || (needs.detect.outputs.dup != 'true' && (github.event_name != 'pull_request' || (needs.detect.outputs.ruby == 'true' && needs.detect.outputs.code == 'true'))) }}
+      # A docs-only PR still gets a verdict from this required job: the guard manifest,
+      # the only tests a docs edit can break. It leaves lib/ untouched, so the coverage
+      # gate has nothing new to measure.
+      GUARDS_ONLY: ${{ needs.detect.outputs.dup != 'true' && github.event_name == 'pull_request' && needs.detect.outputs.ruby == 'true' && needs.detect.outputs.code != 'true' }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-        if: env.RUN == 'true'
+        if: env.RUN == 'true' || env.GUARDS_ONLY == 'true'
         with:
           persist-credentials: false
       # Must be a STEP: the `job` context is available in
       # `jobs.<id>.steps.env` but NOT in `jobs.<id>.env`, so the host port
       # Docker assigned above cannot be read from the job-level `env:` block.
       - name: resolve redis port
-        if: env.RUN == 'true'
+        if: env.RUN == 'true' || env.GUARDS_ONLY == 'true'
         run: echo "REDIS_URL=redis://localhost:${{ job.services.redis.ports['6379'] }}/0" >> "$GITHUB_ENV"
-      - uses: ruby/setup-ruby@7f797815d8adceb1c412e7abefdd1ab4abc47a5f # v1
-        if: env.RUN == 'true'
+      - uses: ruby/setup-ruby@7f797815d8adceb1c412e7abefdd1ab4abc47a5f # v1.335.0
+        if: env.RUN == 'true' || env.GUARDS_ONLY == 'true'
         with:
           ruby-version: ${{ env.RUBY_VERSION }}
           bundler-cache: true
           cache-version: rails-${{ env.RAILS_VERSION }}
-      - uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2
+      - name: guard manifest (docs-only change)
+        if: env.GUARDS_ONLY == 'true'
+        run: env -u COVERAGE bundle exec rake test:guards
+      - uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2.2.0
         if: env.RUN == 'true'
         with:
           bun-version: "1.4.3"
@@ -240,13 +280,56 @@ jobs:
         run: bundle exec rake test
       - name: upload coverage report
         if: always() && env.RUN == 'true'
-        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: coverage
           path: coverage/coverage.xml
           if-no-files-found: warn
           # For per-file inspection of a recent run, not an archive.
           retention-days: 7
+
+  # Most red runs on a real change are a guard that fails the same way on every leg,
+  # after minutes of suite. This answers first, and the compat legs wait on it, so a
+  # guard failure costs one job and not four. `test` deliberately does not wait: it is
+  # the required check, and it must run and report whatever happens here. Not required
+  # itself, because `test` runs these same tests.
+  guards:
+    name: guards (docs + workflow contracts)
+    needs: detect
+    if: ${{ !cancelled() }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    services:
+      redis:
+        image: ${{ (needs.detect.result != 'success' || (needs.detect.outputs.dup != 'true' && (github.event_name != 'pull_request' || (needs.detect.outputs.ruby == 'true' && needs.detect.outputs.code == 'true')))) && 'redis:7.4' || '' }}
+        ports: ["6379"]
+        options: >-
+          --health-cmd "redis-cli ping"
+          --health-interval 2s
+          --health-timeout 2s
+          --health-retries 10
+          --health-start-period 1s
+    env:
+      BUNDLE_GEMFILE: ${{ github.workspace }}/Gemfile
+      RAILS_VERSION: "8.1"
+      RUN: ${{ needs.detect.result != 'success' || (needs.detect.outputs.dup != 'true' && (github.event_name != 'pull_request' || (needs.detect.outputs.ruby == 'true' && needs.detect.outputs.code == 'true'))) }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        if: env.RUN == 'true'
+        with:
+          persist-credentials: false
+      - name: resolve redis port
+        if: env.RUN == 'true'
+        run: echo "REDIS_URL=redis://localhost:${{ job.services.redis.ports['6379'] }}/0" >> "$GITHUB_ENV"
+      - uses: ruby/setup-ruby@7f797815d8adceb1c412e7abefdd1ab4abc47a5f # v1.335.0
+        if: env.RUN == 'true'
+        with:
+          ruby-version: "4.0"
+          bundler-cache: true
+          cache-version: rails-${{ env.RAILS_VERSION }}
+      - name: rake test:guards
+        if: env.RUN == 'true'
+        run: bundle exec rake test:guards
 
   # Support-window legs the single `test` job cannot answer: the gemspec floor
   # (Ruby 3.2.x, pinned to a full patch so the leg doesn't silently move
@@ -284,7 +367,10 @@ jobs:
   # the same RAILS_VERSION this job exports.
   compat:
     name: compat (ruby ${{ matrix.ruby }}, rails ${{ matrix.rails }}, ${{ matrix.backend }})
-    needs: detect
+    needs: [detect, guards]
+    # Runs whatever `guards` did, so it reports instead of showing as skipped; RUN is
+    # what stops the suite when a guard failed.
+    if: ${{ !cancelled() }}
     runs-on: ubuntu-latest
     timeout-minutes: 25
     strategy:
@@ -320,7 +406,8 @@ jobs:
             store_options: --ulimit memlock=-1
     services:
       store:
-        image: ${{ matrix.image }}
+        # An empty image starts no service, so a no-op leg skips the pull.
+        image: ${{ (needs.detect.result != 'success' || (needs.detect.outputs.dup != 'true' && (github.event_name != 'pull_request' || (needs.detect.outputs.ruby == 'true' && needs.detect.outputs.code == 'true')))) && matrix.image || '' }}
         ports: ["6379"]
         # DFLY_* configure Dragonfly (a service container takes no args) and mean
         # nothing to the other images. Two threads for the runner's cores.
@@ -340,7 +427,7 @@ jobs:
       # Per-step gate, not a job-level `if:` (#469) — see the `test` job.
       # Matrix expression, so the job-level `env:` block below CAN read it
       # (unlike `job.services.*`, which is only visible in steps).
-      RUN: ${{ needs.detect.outputs.dup != 'true' && (github.event_name != 'pull_request' || needs.detect.outputs.ruby == 'true') }}
+      RUN: ${{ needs.guards.result == 'success' && (needs.detect.result != 'success' || (needs.detect.outputs.dup != 'true' && (github.event_name != 'pull_request' || (needs.detect.outputs.ruby == 'true' && needs.detect.outputs.code == 'true')))) }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         if: env.RUN == 'true'
@@ -351,13 +438,13 @@ jobs:
       - name: resolve store port
         if: env.RUN == 'true'
         run: echo "REDIS_URL=redis://localhost:${{ job.services.store.ports['6379'] }}/0" >> "$GITHUB_ENV"
-      - uses: ruby/setup-ruby@7f797815d8adceb1c412e7abefdd1ab4abc47a5f # v1
+      - uses: ruby/setup-ruby@7f797815d8adceb1c412e7abefdd1ab4abc47a5f # v1.335.0
         if: env.RUN == 'true'
         with:
           ruby-version: ${{ matrix.ruby }}
           bundler-cache: true
           cache-version: rails-${{ matrix.rails }}
-      - uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2
+      - uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2.2.0
         if: env.RUN == 'true'
         with:
           bun-version: "1.4.3"
@@ -383,13 +470,14 @@ jobs:
   python-client:
     name: python-client (${{ matrix.python-version }})
     needs: detect
+    if: ${{ !cancelled() }}
     runs-on: ubuntu-latest
     timeout-minutes: 5
     strategy:
       matrix:
         python-version: ["3.9", "3.13"]
     env:
-      RUN: ${{ needs.detect.outputs.dup != 'true' && (github.event_name != 'pull_request' || needs.detect.outputs.python == 'true') }}
+      RUN: ${{ needs.detect.result != 'success' || (needs.detect.outputs.dup != 'true' && (github.event_name != 'pull_request' || needs.detect.outputs.python == 'true')) }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         if: env.RUN == 'true'
@@ -414,6 +502,7 @@ jobs:
   parity:
     name: parity (oracle)
     needs: detect
+    if: ${{ !cancelled() }}
     runs-on: ubuntu-latest
     timeout-minutes: 10
     services:
@@ -430,7 +519,7 @@ jobs:
       BUNDLE_GEMFILE: ${{ github.workspace }}/Gemfile
       RAILS_VERSION: "8.1"
       # Per-step gate — see the `test` job (#469).
-      RUN: ${{ needs.detect.outputs.dup != 'true' && (github.event_name != 'pull_request' || needs.detect.outputs.ruby == 'true') }}
+      RUN: ${{ needs.detect.result != 'success' || (needs.detect.outputs.dup != 'true' && (github.event_name != 'pull_request' || needs.detect.outputs.ruby == 'true')) }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         if: env.RUN == 'true'
@@ -440,7 +529,7 @@ jobs:
       - name: resolve redis port
         if: env.RUN == 'true'
         run: echo "REDIS_URL=redis://localhost:${{ job.services.redis.ports['6379'] }}/0" >> "$GITHUB_ENV"
-      - uses: ruby/setup-ruby@7f797815d8adceb1c412e7abefdd1ab4abc47a5f # v1
+      - uses: ruby/setup-ruby@7f797815d8adceb1c412e7abefdd1ab4abc47a5f # v1.335.0
         if: env.RUN == 'true'
         with:
           ruby-version: "4.0"
@@ -456,11 +545,12 @@ jobs:
   spec-docs:
     name: spec docs (exist + non-empty)
     needs: detect
+    if: ${{ !cancelled() }}
     runs-on: ubuntu-latest
     timeout-minutes: 2
     env:
       # Per-step gate — see the `test` job (#469).
-      RUN: ${{ needs.detect.outputs.dup != 'true' && (github.event_name != 'pull_request' || needs.detect.outputs.specdocs == 'true') }}
+      RUN: ${{ needs.detect.result != 'success' || (needs.detect.outputs.dup != 'true' && (github.event_name != 'pull_request' || needs.detect.outputs.specdocs == 'true')) }}
     steps:
       # Sparse: this job reads three files, not the repo.
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -493,12 +583,13 @@ jobs:
   actionlint:
     name: actionlint (workflow lint)
     needs: detect
+    if: ${{ !cancelled() }}
     runs-on: ubuntu-latest
     timeout-minutes: 3
     env:
       # Per-step gate so this job always reports a status even on a PR whose
       # diff doesn't touch a workflow (see `test` job for the same pattern).
-      RUN: ${{ needs.detect.outputs.dup != 'true' && (github.event_name != 'pull_request' || needs.detect.outputs.workflows == 'true') }}
+      RUN: ${{ needs.detect.result != 'success' || (needs.detect.outputs.dup != 'true' && (github.event_name != 'pull_request' || needs.detect.outputs.workflows == 'true')) }}
       # Triple pin: release version, download-script commit SHA, and the
       # linux/amd64 binary's own SHA256. A silent upstream rewrite, a script
       # change, or a tag repoint cannot reach main unobserved.
@@ -538,23 +629,101 @@ jobs:
           }
           /tmp/actionlint-bin/actionlint -color
 
+  # Security audit of the workflows themselves: excessive permissions, template
+  # injection, unpinned actions. High severity only, offline, and not required: it
+  # reports next to actionlint on a PR that touches a workflow.
+  zizmor:
+    name: zizmor (workflow audit)
+    needs: detect
+    if: ${{ !cancelled() }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    env:
+      RUN: ${{ needs.detect.result != 'success' || (needs.detect.outputs.dup != 'true' && (github.event_name != 'pull_request' || needs.detect.outputs.workflows == 'true')) }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        if: env.RUN == 'true'
+        with:
+          persist-credentials: false
+      - name: run zizmor
+        if: env.RUN == 'true'
+        run: pipx run --spec zizmor==1.31.1 zizmor --offline --no-progress --min-severity=high .github/workflows
+
+  # The nightly's own question: did a Ruby move under us? `head` warns early and never
+  # turns the run red. 3.4 is what the release gate and the toolchain run, and no other
+  # lane runs the suite on it, so a 3.4-only break would otherwise first show during a
+  # release. Schedule only, so it costs no PR anything.
+  canary:
+    name: canary (ruby ${{ matrix.ruby }})
+    if: github.event_name == 'schedule'
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    continue-on-error: ${{ matrix.ruby == 'head' }}
+    strategy:
+      fail-fast: false
+      matrix:
+        ruby: ["head", "3.4"]
+    services:
+      redis:
+        image: redis:7.4
+        ports: ["6379"]
+        options: >-
+          --health-cmd "redis-cli ping"
+          --health-interval 2s
+          --health-timeout 2s
+          --health-retries 10
+          --health-start-period 1s
+    env:
+      BUNDLE_GEMFILE: ${{ github.workspace }}/Gemfile
+      RAILS_VERSION: "8.1"
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: resolve redis port
+        run: echo "REDIS_URL=redis://localhost:${{ job.services.redis.ports['6379'] }}/0" >> "$GITHUB_ENV"
+      - uses: ruby/setup-ruby@7f797815d8adceb1c412e7abefdd1ab4abc47a5f # v1.335.0
+        with:
+          ruby-version: ${{ matrix.ruby }}
+          bundler-cache: true
+          cache-version: rails-${{ env.RAILS_VERSION }}
+      - uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2.2.0
+        with:
+          bun-version: "1.4.3"
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: "24"
+      - name: build dashboard SPA
+        run: bundle exec rake frontend:build
+      - name: dummy app setup
+        run: |
+          cd test/dummy
+          bundle install
+          bin/rails db:prepare
+      - name: rake test
+        run: bundle exec rake test
+
   # Ruby linting — bin/check already runs it; surfaced here so every PR that
   # touches Ruby paths carries a visible verdict. Paired with the `frontend`
   # and `spec-docs` jobs as quick, parallel checks.
   lint:
     name: lint (rubocop)
     needs: detect
+    if: ${{ !cancelled() }}
     runs-on: ubuntu-latest
     timeout-minutes: 10
     env:
+      # The same two settings as `test`, so this job restores its bundle cache.
+      BUNDLE_GEMFILE: ${{ github.workspace }}/Gemfile
+      RAILS_VERSION: "8.1"
       # Per-step gate — see the `test` job (#469).
-      RUN: ${{ needs.detect.outputs.dup != 'true' && (github.event_name != 'pull_request' || needs.detect.outputs.ruby == 'true') }}
+      RUN: ${{ needs.detect.result != 'success' || (needs.detect.outputs.dup != 'true' && (github.event_name != 'pull_request' || needs.detect.outputs.ruby == 'true')) }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         if: env.RUN == 'true'
         with:
           persist-credentials: false
-      - uses: ruby/setup-ruby@7f797815d8adceb1c412e7abefdd1ab4abc47a5f # v1
+      - uses: ruby/setup-ruby@7f797815d8adceb1c412e7abefdd1ab4abc47a5f # v1.335.0
         if: env.RUN == 'true'
         with:
           ruby-version: "4.0"
@@ -585,17 +754,18 @@ jobs:
   frontend:
     name: frontend (vitest)
     needs: detect
+    if: ${{ !cancelled() }}
     runs-on: ubuntu-latest
     timeout-minutes: 10
     env:
       # Per-step gate — see the `test` job (#469).
-      RUN: ${{ needs.detect.outputs.dup != 'true' && (github.event_name != 'pull_request' || needs.detect.outputs.frontend == 'true') }}
+      RUN: ${{ needs.detect.result != 'success' || (needs.detect.outputs.dup != 'true' && (github.event_name != 'pull_request' || needs.detect.outputs.frontend == 'true')) }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         if: env.RUN == 'true'
         with:
           persist-credentials: false
-      - uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2
+      - uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2.2.0
         if: env.RUN == 'true'
         with:
           bun-version: "1.4.3"
