@@ -478,8 +478,10 @@ jobs:
     with:
       ref: ${{ needs.preflight.outputs.tag }}
       trusted: true
-    # DOCR_TOKEN is a secret of the `demo` environment, which deploy-demo's `build` job
-    # enters itself, so nothing needs passing from here.
+    # DOCR_TOKEN is a `demo` environment secret, and deploy-demo's `build` job enters
+    # that environment, yet a called workflow still saw it empty without `inherit`:
+    # v1.11.0's demo build failed "Username and password required" until this was put back.
+    secrets: inherit # zizmor: ignore[secrets-inherit] same-repo callee; its build job needs the demo environment's DOCR_TOKEN
 
   # Bounded post-publish evidence, not a gate: smoke only runs after the
   # irreversible `gem push`, so a failure here rolls nothing back — no rollback
