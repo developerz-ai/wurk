@@ -4,6 +4,10 @@ All notable changes to Wurk are recorded here. Format: [Keep a Changelog](https:
 
 ## [Unreleased]
 
+## [1.11.0] - 2026-11-03
+
+Fixes a 1.10.0 boot regression under `wurkswarm`: upgrade if your `config/application.rb` relies on the swarm's preload. Native periodics now keep firing through leader deaths, and `push_bulk` is cheaper.
+
 ### Added
 
 - **`wurk preflight`: what a live Redis holds and what carries over, before a cutover.** Read-only: `SCAN` and bounded sampling through a client that refuses every other command, never `LLEN`. Reports Redis version, eviction, topology and Dragonfly; live processes by version; every `queue:*|*` key as owner-alive, reclaimable or unparseable; timestamp shapes and `retry_for` jobs; in-flight batches with no `callbacks`; `encrypt` payloads without an envelope; `uniquejobs:*` and `unique:*` counts including SHA1-length digests. `--app PATH` boots the app to list `lock:` classes with no gem and known-broken add-ons, and runs your initializers. `--json`, `--limit` (a truncated scan is a finding), `--sample`, `--pause-ms`. Exit 0 clean, 1 findings, 2 could not run. About 10s at 1M keys with Redis latency under 5ms in a local test.
@@ -805,7 +809,8 @@ First public (pre-1.0) release. Wurk is a 100% API-compatible drop-in replacemen
 - ActiveJob adapter, `IterableJob`, embedded mode, and a standalone `exe/wurk` runner.
 - Sidekiq client/server middleware contract; third-party ecosystem suites (sidekiq-cron, sidekiq-unique-jobs, sidekiq-scheduler, sidekiq-status, sidekiq-failures, sidekiq-throttled) pass against Wurk.
 
-[Unreleased]: https://github.com/developerz-ai/wurk/compare/v1.10.0...HEAD
+[Unreleased]: https://github.com/developerz-ai/wurk/compare/v1.11.0...HEAD
+[1.11.0]: https://github.com/developerz-ai/wurk/compare/v1.10.0...v1.11.0
 [1.10.0]: https://github.com/developerz-ai/wurk/compare/v1.9.0...v1.10.0
 [1.9.0]: https://github.com/developerz-ai/wurk/compare/v1.8.1...v1.9.0
 [1.8.1]: https://github.com/developerz-ai/wurk/compare/v1.8.0...v1.8.1
