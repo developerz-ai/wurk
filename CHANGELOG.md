@@ -4,6 +4,33 @@ All notable changes to Wurk are recorded here. Format: [Keep a Changelog](https:
 
 ## [Unreleased]
 
+### Added
+
+- **`wurk preflight`: what a live Redis holds and what carries over, before a cutover.** Read-only: `SCAN` and bounded sampling through a client that refuses every other command, never `LLEN`. Reports Redis version, eviction, topology and Dragonfly; live processes by version; every `queue:*|*` key as owner-alive, reclaimable or unparseable; timestamp shapes and `retry_for` jobs; in-flight batches with no `callbacks`; `encrypt` payloads without an envelope; `uniquejobs:*` and `unique:*` counts including SHA1-length digests. `--app PATH` boots the app to list `lock:` classes with no gem and known-broken add-ons, and runs your initializers. `--json`, `--limit` (a truncated scan is a finding), `--sample`, `--pause-ms`. Exit 0 clean, 1 findings, 2 could not run. About 10s at 1M keys with Redis latency under 5ms in a local test.
+- **`wurk verify`: the post-cutover check.** Queues with jobs have a subscriber, no non-Wurk process is live, private-list count is sane, a live Wurk process holds the leader lock, every unpaused loop has a next fire. Read-only; `--canary CLASS` explicitly pushes one job per subscribed queue.
+- `docs/migrate-from-sidekiq.md` §10: a path for Sidekiq 7.x Pro/Enterprise apps that keep their add-on gems, with what was verified per gem, and what a 7.x rollback shows.
+- `Sidekiq::WebHelpers` (alias of `Wurk::Web::Extension::Helpers`) with `job_params`, `parse_key`, `parse_params`, `qparams`, `to_query_string`, `display_args`, `filtering`, `redirect_with_query`, `text_direction`, `rtl?`, `locale`, `stats`, `workset`, `processes`, `sorted_processes`, `SAFE_QPARAMS`, `RETRY_JOB_KEYS`. A subset of free §25.7, not all of it.
+- `Sidekiq::Paginator` (`page`, `page_items`), and `page` on the extension Action. Action also gains `config`.
+- `erb` in extensions honours `locals:`; built-in `_paging` and `_job_info` partials; upstream string keys read as English (`DeleteAll` → `Delete All`).
+- `Sidekiq.gem_version`, `Sidekiq.freeze!`.
+- sidekiq-unique-jobs, sidekiq-failures and sentry-sidekiq in `test:ecosystem`, and a real-worker boot check for all four harnesses, covering `sidekiq` and `wurkswarm` with preload on, off, and fake mode at load.
+- `bin/repin-anchors`: re-pins the ledger's anchor records, syncs both of the ledger's reference styles and `test/conformance/cases.yml` after lines move, with `--check` to report without writing.
+
+### Changed
+
+- **`mount Sidekiq::Web` in a Rails app now shows the dashboard.** Extension routes still serve at their own paths; every other path goes to the engine, through the engine's own `Wurk::Web.use` middleware, authorization hook and read-only gate. The machine API is not served under this mount. **Upgrade note:** a host that kept this mount as a 404 (so it only exposed extension pages) now exposes the whole dashboard. Gate it as you would `mount Wurk::Engine`. As with stock Sidekiq, a mount with no auth is open.
+- **A worker started by `wurk`, `sidekiq`, a swarm child or `Wurk::Embedded` now refuses `Sidekiq::Testing` fake or inline mode:** it logs an ERROR and disables the mode for that process. Previously, as on stock Sidekiq, every enqueue went to an in-memory array and was lost. **Upgrade note:** enqueues that were being dropped start reaching Redis. Move `rspec-sidekiq` to your Gemfile's test group. A Rails web process enqueuing in fake mode is not covered, and the guard stands down under `RAILS_ENV=test` or `RACK_ENV=test`.
+- **A job with `encrypt` set and a last argument that is not a Wurk envelope no longer reaches `perform`.** It goes to the dead set with `encryption_error: Wurk::Encryption::NotSealedError`, without retries, and death handlers fire. That kill, like every decrypt failure's, no longer trims the dead set, and logs an ERROR with class and jid, so a misconfigured producer cannot destroy a backlog through `dead_max_jobs`. Before, another implementation's ciphertext was passed to `perform` as if decrypted. **Upgrade note:** this also catches a plaintext job from a producer that has `encrypt: true` on the class but crypto not enabled, which used to run in the clear. Enable crypto on producers first. A dead-set retry seals the argument as it stands, which recovers plaintext jobs; do not retry foreign ciphertext. Only applies with crypto enabled on the worker.
+- `Sidekiq::Web` as a bare Rack app answers a non-extension path with a 404 whose body names the fix, and logs one WARN.
+- Extension `truncate` cuts like upstream: `text[0..n]` followed by `...`, not `…`.
+- An extension's tab on a path the SPA also renders natively (sidekiq-cron's Cron) is no longer hidden. With sidekiq-cron, the nav shows the native Cron entry and the gem's Cron tab.
+- An extension view that names a view that doesn't exist now raises `extension <name> has no view <view>`, instead of `has no root_dir`.
+
+### Fixed
+
+- `docs/migrate-from-sidekiq.md` no longer claims: `:while_executing` maps to `unique_until: :start`; "worst case one extra run" on dropping sidekiq-unique-jobs; leftover gem locks "do nothing" (they silently block enqueues after a rollback; UNLINK them); same encryption keys carry Enterprise jobs over; the default scheduler has a job-loss window; `reliable_scheduler!` must stay on; the Sidekiq web UI "keeps working" unqualified. `docs/compatibility.md` pointed the parity-divergence rule at `docs/target`; it is the ledger.
+- `docs/sentry.md` no longer says `sentry-sidekiq` reports the wrong errors on Wurk. Against a dummy transport it reported the right exception per attempt; it has not been tested with a real Sentry.
+
 ## [1.10.0] - 2026-11-02
 
 **Upgrade if you run on Dragonfly.** 1.9.0 and earlier could lose jobs on a Dragonfly at `maxmemory`, on Redis-compatible paths that are safe on Redis and Valkey. This release also closes several other ways to lose or double-run jobs, wraps every job in the Rails reloader, and makes more of the Sidekiq gem ecosystem work. **Read Changed before upgrading:** jobs now run with the query cache on, a connection pool smaller than concurrency can raise under contention, Sentry gets store errors it used to filter, and `wurkswarm` exits after sustained crash-looping. No Redis key, job JSON field or score format changed.
