@@ -31,6 +31,18 @@ class ReleaseDueBriefTest < Minitest::Test
     @text = File.read(BRIEF)
   end
 
+  # The scheduler fires this brief under TASK_PROBLEM_MAX (10,000 characters)
+  # counting the checkup header it prepends, not just this file: over the cap
+  # the checkup is refused `brief_too_large` on every tick and the release lane
+  # stops running. Same reserve the health brief's guard uses
+  # (health_brief_test.rb): leave 1,000 characters for the header.
+  def test_brief_is_below_the_checkup_size_cap
+    header_reserve = 1_000
+
+    assert_operator @text.length + header_reserve, :<, 10_000,
+                    '.dz/briefs/release-due.md must leave 1,000 characters for the checkup header'
+  end
+
   def test_unknown_row_present_for_unreadable_window
     unknown_rows = unknown_rows_in_table
 
