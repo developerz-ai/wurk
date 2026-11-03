@@ -4,6 +4,10 @@ All notable changes to Wurk are recorded here. Format: [Keep a Changelog](https:
 
 ## [Unreleased]
 
+## [1.10.0] - 2026-11-02
+
+**Upgrade if you run on Dragonfly.** 1.9.0 and earlier could lose jobs on a Dragonfly at `maxmemory`, on Redis-compatible paths that are safe on Redis and Valkey. This release also closes several other ways to lose or double-run jobs, wraps every job in the Rails reloader, and makes more of the Sidekiq gem ecosystem work. **Read Changed before upgrading:** jobs now run with the query cache on, a connection pool smaller than concurrency can raise under contention, Sentry gets store errors it used to filter, and `wurkswarm` exits after sustained crash-looping. No Redis key, job JSON field or score format changed.
+
 ### Added
 
 - **Queues nothing listens to are now visible.** The leader logs one WARN an hour per non-empty queue with no live subscriber, after 5 minutes in that state, so a rolling restart stays quiet. New metric `wurk_queue_consumers{queue=}`, a "No consumer" badge on the dashboard Queues page, and `Wurk::Testing.unconsumed_job_queues(listened:|config_file:)` for a guard test. `GET /api/queues` gains a `consumers` field. No new Redis keys.
@@ -750,7 +754,8 @@ First public (pre-1.0) release. Wurk is a 100% API-compatible drop-in replacemen
 - ActiveJob adapter, `IterableJob`, embedded mode, and a standalone `exe/wurk` runner.
 - Sidekiq client/server middleware contract; third-party ecosystem suites (sidekiq-cron, sidekiq-unique-jobs, sidekiq-scheduler, sidekiq-status, sidekiq-failures, sidekiq-throttled) pass against Wurk.
 
-[Unreleased]: https://github.com/developerz-ai/wurk/compare/v1.9.0...HEAD
+[Unreleased]: https://github.com/developerz-ai/wurk/compare/v1.10.0...HEAD
+[1.10.0]: https://github.com/developerz-ai/wurk/compare/v1.9.0...v1.10.0
 [1.9.0]: https://github.com/developerz-ai/wurk/compare/v1.8.1...v1.9.0
 [1.8.1]: https://github.com/developerz-ai/wurk/compare/v1.8.0...v1.8.1
 [1.8.0]: https://github.com/developerz-ai/wurk/compare/v1.7.6...v1.8.0
