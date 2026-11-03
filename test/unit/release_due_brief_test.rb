@@ -16,6 +16,19 @@ require 'tmpdir'
 # window list with the oldest commit's date, [Unreleased] contents, <next>
 # derivation), never health-checkup items. Reads files and touches no Redis
 # or shared state.
+#
+# The brief is trimmed to fit the scheduler's cap: the checkup header is
+# prepended to it and the MERGED text must stay under TASK_PROBLEM_MAX
+# (10,000 characters), so an over-cap brief is refused `brief_too_large` on
+# every tick and never runs (the cap guard below). The brief keeps its rules;
+# the FINDINGS and the HISTORY behind them live here, next to the guard that
+# enforces each one — the release-state rationale (release.yml pushes the gem
+# before it creates the Release and uploads the `.gem` asset, so a zero-asset
+# Release is not proof that no gem shipped), the window's shipping-path
+# rationale (the gem ships the built dashboard, not its sources, so the scan
+# names `frontend/index.html` and `frontend/public/**`), and the incident
+# behind "never tag or `gem push` by hand" (a tag pushed without a version
+# bump is what made every gem-less release in wurk#420).
 class ReleaseDueBriefTest < Minitest::Test
   parallelize_me!
 
@@ -40,7 +53,31 @@ class ReleaseDueBriefTest < Minitest::Test
     header_reserve = 1_000
 
     assert_operator @text.length + header_reserve, :<, 10_000,
-                    '.dz/briefs/release-due.md must leave 1,000 characters for the checkup header'
+                    '.dz/briefs/release-due.md must leave 1,000 characters for the checkup header: ' \
+                    "it is #{@text.length} characters, so the merged brief would exceed " \
+                    'the 10,000-character cap and the checkup would be refused ' \
+                    '`brief_too_large` on every tick'
+  end
+
+  # The brief's contract with the platform is its named checks: the `## Rows`
+  # section lists the rows the checkup reports, the Window/Do table grades
+  # them, and the ask section says what to file. The table and the steps are
+  # pinned by the tests below; the Rows section is not, so a trim that drops
+  # a row name would pass every other gate here.
+  def test_brief_keeps_its_rows_section
+    rows_idx = @text.index("\n## Rows\n")
+
+    refute_nil rows_idx, 'release-due.md must keep its "## Rows" section'
+
+    section = @text[rows_idx..]
+    next_heading = section.index("\n## ", 1)
+    section = section[0...next_heading] if next_heading
+
+    %w[tag-listing tag-peel release-state baseline window pre-flight-guard].each do |row|
+      assert_includes section, "`#{row}`",
+                      "the Rows section must keep the `#{row}` row — the platform grades " \
+                      'the brief by these names'
+    end
   end
 
   def test_unknown_row_present_for_unreadable_window
@@ -909,6 +946,9 @@ class ReleaseDueBriefTest < Minitest::Test
       assert_predicate window[:status], :success?, window[:message]
       assert_match(/shipping commit on lib/, window[:stdout],
                    "shipping commit (lib/foo.rb) must be in the window: #{window[:stdout].inspect}")
+      assert_match(%r{shipping commit on lib/wurk/web/views/_paging\.erb}, window[:stdout],
+                   'shipping commit (an ERB view partial under lib/) must be in the window — ' \
+                   "the gem ships lib/**/*.erb: #{window[:stdout].inspect}")
       refute_match(/docs-only commit/, window[:stdout],
                    'docs-only commit (README.md) must NOT be in the window when the brief\'s ' \
                    "shipping pathspecs are applied: #{window[:stdout].inspect}")
@@ -1012,6 +1052,37 @@ class ReleaseDueBriefTest < Minitest::Test
                  'rendered at runtime by `Wurk::Web::Extension#read_view`, and ' \
                  '`:(glob)lib/**/*.rb` does not match an .erb file, so such a window must not ' \
                  "scan empty — the Window/Do table grades it \"nothing\":\n- #{problems.join("\n- ")}"
+  end
+
+  # The dashboard's built-in view partials — lib/wurk/web/views/_paging.erb
+  # and _job_info.erb — ship in the gem (wurk.gemspec ships lib/**/*.erb),
+  # so a commit that only changes one of them is a shipping commit and must
+  # open a release window. While the brief's pathspec named only
+  # `lib/**/*.rb` and `lib/**/*.lua`, such a commit scanned EMPTY and the
+  # Window/Do table graded the empty window "nothing" — no release ask for a
+  # gem whose shipped partial changed.
+  #
+  # The window below holds the ERB commit and nothing else that reaches the
+  # gem, so the listing is empty without `:(glob)lib/**/*.erb` in the
+  # brief's OWN pathspec. The brief's `git log` command is what runs here —
+  # a test-owned pathspec would prove nothing about the brief.
+  def test_window_scan_includes_the_erb_view_partials_that_reach_the_gem
+    Dir.mktmpdir('wurk-erb-window-repo-') do |tmpdir|
+      build_window_repo(tmpdir, only: :erb)
+      window = query_brief_window_log(hermetic_git_env(tmpdir))
+
+      assert_predicate window[:status], :success?, window[:message]
+
+      refute_match(%r{shipping commit on lib/foo\.rb}, window[:stdout],
+                   'the erb-only fixture must hold no other lib/ commit, or the ' \
+                   "listing would not prove the ERB pathspec: #{window[:stdout].inspect}")
+      assert_match(%r{lib/wurk/web/views/_paging\.erb}, window[:stdout],
+                   'the brief\'s window pathspec must name lib/**/*.erb: the dashboard\'s ' \
+                   'built-in view partials (lib/wurk/web/views/_paging.erb, _job_info.erb) ' \
+                   'ship in the gem, so a commit that only changes one of them must appear ' \
+                   'in the window — otherwise it scans empty and the Window/Do table ' \
+                   "grades it \"nothing\": #{window[:stdout].inspect}")
+    end
   end
 
   private
@@ -2182,6 +2253,15 @@ class ReleaseDueBriefTest < Minitest::Test
                    :FRONTEND_PACKAGE_JSON_SUBJECT, :FRONTEND_BUN_LOCK_SUBJECT,
                    :FRONTEND_WINDOW_SUBJECTS, :BUILTIN_ERB_SUBJECT, :FULL_WINDOW_SUBJECTS
 
+  # The ERB view partials under lib/ are shipped in the gem (wurk.gemspec
+  # ships lib/**/*.erb), so a commit that only changes one of them is a
+  # shipping commit: it must open a release window. The brief's pathspec
+  # must therefore name lib/**/*.erb, or the window scans a partial
+  # change as empty and the Window/Do table grades it "nothing" — no
+  # release ask for a gem whose shipped partial changed.
+  ERB_PARTIAL_SUBJECT = 'shipping commit on lib/wurk/web/views/_paging.erb'
+  private_constant :ERB_PARTIAL_SUBJECT
+
   # End-to-end window-scan repo. Materializes a fresh git repo whose
   # window holds a shipping commit (lib/foo.rb change), a docs-only
   # commit (README.md change), a change-then-revert pair on lib/bar.rb,
@@ -2199,6 +2279,11 @@ class ReleaseDueBriefTest < Minitest::Test
   # A window whose only shipping commit comes from one group is the case
   # that scans EMPTY when the pathspec misses that group — and the
   # Window/Do table grades an empty window "nothing".
+  #
+  # `only: :erb` drops the other lib-shaped commits AND the frontend
+  # commits, so the window's only shipping commit is the ERB view
+  # partial — the window the brief grades "empty" when its pathspec
+  # misses lib/**/*.erb.
   #
   # Uses an isolated env (HOME = tmpdir, GIT_CONFIG_NOSYSTEM = 1,
   # no shared work tree) so no inherited user's git config, hooks,
@@ -2295,15 +2380,18 @@ class ReleaseDueBriefTest < Minitest::Test
   end
 
   # The lib-shaped window commits: a shipping commit on lib/foo.rb, a
-  # docs-only commit on README.md, and a change+revert pair on
-  # lib/bar.rb. Together they exercise the three shapes the brief's
-  # pathspec filter must handle.
+  # shipping commit on an ERB view partial under lib/, a docs-only
+  # commit on README.md, and a change+revert pair on lib/bar.rb.
+  # Together they exercise the four shapes the brief's pathspec filter
+  # must handle.
   def build_lib_window_commits(env, tmpdir)
     # Shipping commit: lib/foo.rb change (matches the brief's
     # `lib/**/*.rb` pathspec).
     File.write(File.join(tmpdir, 'lib', 'foo.rb'), "puts 'shipping'\n")
     run_git(env, 'add', 'lib/foo.rb')
     run_git(env, 'commit', '--quiet', '-m', 'shipping commit on lib/foo.rb')
+
+    build_erb_window_commit(env, tmpdir)
 
     # Docs-only commit: README.md only (does NOT match the brief's
     # pathspec list).
@@ -2322,6 +2410,19 @@ class ReleaseDueBriefTest < Minitest::Test
     run_git(env, 'commit', '--quiet', '-m', 'bar add commit')
     run_git(env, 'rm', '--quiet', 'lib/bar.rb')
     run_git(env, 'commit', '--quiet', '-m', 'bar revert commit')
+  end
+
+  # The ERB view partials under lib/ ship in the gem (wurk.gemspec ships
+  # lib/**/*.erb), so a commit that only changes one of them is a
+  # shipping commit. The path is nested on purpose: the dashboard's
+  # built-in partials live at lib/wurk/web/views/_paging.erb and
+  # _job_info.erb, so a pathspec that only matched a top-level lib/ file
+  # would still miss them.
+  def build_erb_window_commit(env, tmpdir)
+    FileUtils.mkdir_p(File.join(tmpdir, 'lib', 'wurk', 'web', 'views'))
+    File.write(File.join(tmpdir, 'lib', 'wurk', 'web', 'views', '_paging.erb'), "<%= page %>\n")
+    run_git(env, 'add', 'lib/wurk/web/views/_paging.erb')
+    run_git(env, 'commit', '--quiet', '-m', ERB_PARTIAL_SUBJECT)
   end
 
   # Env used by every `git` invocation in the real-repo tests.

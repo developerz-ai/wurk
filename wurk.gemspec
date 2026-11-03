@@ -30,9 +30,14 @@ Gem::Specification.new do |spec|
   # lib/**/*.lua is not optional: Wurk::Lua::FILE_SCRIPTS globs that directory
   # at load, so a gem built without them registers no limiter/status script and
   # every EVALSHA of one raises "unknown Lua script" in the consumer's app.
+  # lib/**/*.erb is not optional either: Wurk::Web::Extension::Action::BUILTIN_VIEWS
+  # resolves the built-in partials (_paging, _job_info) from lib/wurk/web/views
+  # at render time, so a gem built without them raises "extension <name> has no
+  # view _paging" in the consumer's app.
   spec.files = Dir[
     'lib/**/*.rb',
     'lib/**/*.lua',
+    'lib/**/*.erb',
     'app/**/*.rb',
     'config/**/*',
     'exe/*',
