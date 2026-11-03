@@ -208,7 +208,7 @@ jobs:
           DOCR_USERNAME: ${{ vars.DOCR_USERNAME }}
         run: |
           if [ -z "${DOCR_TOKEN:-}" ]; then
-            echo "::error::DOCR_TOKEN is missing or empty — refusing to log in to registry.digitalocean.com. Add a DigitalOcean registry-write token as the DOCR_TOKEN environment secret on the `demo` environment."
+            echo "::error::DOCR_TOKEN is missing or empty — refusing to log in to registry.digitalocean.com. Add a DigitalOcean registry-write token as the DOCR_TOKEN environment secret on the 'demo' environment."
             exit 1
           fi
           if [ -z "${DOCR_USERNAME:-}" ]; then

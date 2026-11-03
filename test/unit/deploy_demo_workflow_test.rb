@@ -589,6 +589,30 @@ class DeployDemoWorkflowTest < Minitest::Test
                     'a fully provisioned environment must not raise an error'
   end
 
+  # A backtick inside a double-quoted message is a COMMAND SUBSTITUTION, not
+  # punctuation: the missing-token path ran `demo` as a command, printed
+  # "demo: command not found" and dropped the environment name from the very
+  # message it was supposed to print. The message must reach the log verbatim.
+  def test_the_credential_check_error_message_is_printed_verbatim
+    result = run_credential_check(token: '', username: 'developerz-ai')
+
+    refute_includes result[:stderr], 'command not found',
+                    'the failure path must not shell out to a word inside its own message'
+    assert_match(/demo'? environment/, result[:stdout],
+                 'the message must name the demo environment it asks the operator for')
+  end
+
+  # The class of that defect: a legacy backtick in a step script is a command
+  # substitution — shellcheck SC2006, which actionlint reports and CI fails on.
+  # A backtick inside single quotes is literal, so only the others count.
+  def test_no_step_script_carries_a_legacy_backtick
+    offenders = step_scripts.filter_map do |label, script|
+      label if script.gsub(/'[^']*'/, '').include?('`')
+    end
+
+    assert_empty offenders, "these scripts shell out through a backtick: #{offenders.join(', ')}"
+  end
+
   # --- the authorize door is unchanged --------------------------------------
 
   # The allowlist is the only thing between a write-access user and a
@@ -644,6 +668,17 @@ class DeployDemoWorkflowTest < Minitest::Test
 
   def release_workflow
     @release_workflow ||= YAML.load_file(RELEASE_YML)
+  end
+
+  # Every step script in the workflow, labelled by job and step.
+  def step_scripts
+    deploy_workflow.fetch('jobs').flat_map do |job_name, job|
+      (job['steps'] || []).filter_map do |step|
+        next unless step['run']
+
+        ["#{job_name} / #{step['name'] || step['uses']}", step['run']]
+      end
+    end
   end
 
   def build_job
