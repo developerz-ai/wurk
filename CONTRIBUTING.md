@@ -8,7 +8,7 @@ layers, and the conventions a change has to follow to merge.
 ```sh
 git clone https://github.com/developerz-ai/wurk
 cd wurk
-bin/setup          # gem + frontend (bun) deps + dummy app db:prepare
+bin/setup          # gem + frontend (bun) deps + dashboard bundle + dummy app db:prepare
 ```
 
 You'll need a local **Redis ≥ 7.0** running (tests use real Redis, never a mock)
@@ -16,7 +16,8 @@ and [**bun**](https://bun.sh). Bun is not only for frontend work: the engine
 tests render the dashboard shell, so the SolidJS SPA under `frontend/` has to be
 built before they can run. `vendor/assets/dashboard/` is gitignored rather than
 committed, so a fresh clone has no bundle — `bin/setup` installs the frontend
-deps, and the first `bin/rake test` builds the bundle itself.
+deps and builds the bundle whenever bun is on PATH, re-stamping it after a
+version bump; only when bun was absent does the first `bin/rake test` build it.
 
 Consumers of the published gem run neither Node nor bun: the bundle is baked
 into `vendor/assets/` at release time and ships inside the gem.
@@ -41,7 +42,8 @@ updates instantly — no rebuild, no gem repackage.
   `bin/rake frontend:build` first) — useful to sanity-check the shipped artifact.
 - `PORT` / `VITE_PORT` override the defaults (3000 / 5173).
 - A version bump leaves the built bundle stamped with the old version. `bin/rake test`
-  stops and says so, and `NO_VITE=1 bin/dev` warns: run `bin/rake frontend:build`.
+  stops and says so, and `NO_VITE=1 bin/dev` warns: run `bin/rake frontend:build`
+  (re-running `bin/setup` heals a stale bundle too).
 
 Frontend unit + integration tests (Vitest, SolidJS Testing Library) run with
 `bun run test` in `frontend/`.
@@ -162,10 +164,11 @@ now resolves to 2 there; `NCPU=1` lowers it further, and that belongs in the hos
 environment rather than in this repo, which cannot see it.
 
 The engine tests render the dashboard shell, which needs the precompiled SPA.
-That bundle is built rather than committed, so a fresh clone has none — the
-first `bin/rake test` builds it once (roughly 4s) and says so. Later runs skip
-it. If you change anything under `frontend/src`, rebuild explicitly with
-`bin/rake frontend:build`; the automatic build only covers "no bundle at all".
+That bundle is built rather than committed, so a fresh clone has none — `bin/setup`
+builds it, and only when bun was absent does the first `bin/rake test` build it
+once (roughly 4s) and say so. Later runs skip it. If you change anything under
+`frontend/src`, rebuild explicitly with `bin/rake frontend:build`; the automatic
+rake build still covers only "no bundle at all" — `bin/setup` covers staleness.
 
 ## Profiling a slow path
 
