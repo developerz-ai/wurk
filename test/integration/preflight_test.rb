@@ -375,7 +375,7 @@ class PreflightTest < Wurk::Test::UnitCase
   def test_server_section_reports_the_backend
     redis = run_doc('preflight').dig('sections', 'redis')
 
-    assert_equal 'redis', redis['backend']
+    assert_includes %w[redis valkey dragonfly], redis['backend']
     assert_match(/\A\d+\./, redis['version'])
   end
 

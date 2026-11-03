@@ -90,10 +90,18 @@ module Wurk
 
       # The connection's word on what it's about to wipe, whatever config got it here.
       def flush!(conn)
-        db = conn.call('CLIENT', 'INFO')[/\bdb=(\d+)/, 1]
-        raise "refusing FLUSHDB on Redis DB 0 (#{redis_url})" if db == '0'
+        raise "refusing FLUSHDB on Redis DB 0 (#{redis_url})" if selected_db(conn) == '0'
 
         conn.call('FLUSHDB')
+      end
+
+      # CLIENT INFO arrived in Redis 6.2 and Dragonfly 1.34 refuses it; CLIENT LIST
+      # names the same connection everywhere. An answer we can't read must not pass
+      # as "not DB 0", so it raises.
+      def selected_db(conn)
+        id = conn.call('CLIENT', 'ID')
+        line = conn.call('CLIENT', 'LIST').to_s.lines.find { |l| l.match?(/\bid=#{id}\b/) }
+        line.to_s[/\bdb=(\d+)/, 1] || raise("cannot tell which Redis DB this connection is on (#{redis_url})")
       end
 
       # Point this process at its own DB. Updates ENV so fresh Configurations and

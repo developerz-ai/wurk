@@ -46,11 +46,13 @@ class TestHelperRedisGuardTest < Wurk::Test::UnitCase
   end
 
   def test_flush_refuses_a_connection_on_db_zero
-    conn = Object.new
-    def conn.call(*args) = args.first == 'CLIENT' ? 'id=1 db=0 sub=0' : raise('flushed DB 0')
-
-    error = assert_raises(RuntimeError) { Wurk::Test.flush!(conn) }
+    error = assert_raises(RuntimeError) { Wurk::Test.flush!(client_listing("id=7 db=0 sub=0\nid=8 db=5 sub=0\n")) }
     assert_includes error.message, 'refusing FLUSHDB'
+  end
+
+  def test_flush_refuses_when_it_cannot_read_the_db
+    error = assert_raises(RuntimeError) { Wurk::Test.flush!(client_listing("id=8 db=5 sub=0\n")) }
+    assert_includes error.message, 'cannot tell'
   end
 
   def test_flush_wipes_the_workers_own_db
@@ -60,5 +62,20 @@ class TestHelperRedisGuardTest < Wurk::Test::UnitCase
 
       assert_nil conn.call('GET', 'flush-me')
     end
+  end
+
+  private
+
+  # A stub on purpose: this suite must never hold a real connection on DB 0.
+  def client_listing(listing)
+    conn = Object.new
+    conn.define_singleton_method(:call) do |*args|
+      case args
+      when %w[CLIENT ID] then 7
+      when %w[CLIENT LIST] then listing
+      else raise "flushed: #{args.inspect}"
+      end
+    end
+    conn
   end
 end
