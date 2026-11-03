@@ -20,6 +20,8 @@ file are identical.
 | `bundle exec wurk` | Single worker process, thread pool | `sidekiq` |
 | `bundle exec wurkswarm` | Forks N worker children from one preloaded parent (real parallelism) | `sidekiqswarm` |
 
+`wurkswarm` on a Rails target loads `config/application.rb` before the `WURK_PRELOAD` groups, so gems that need Rails at require time load. If that file raises `NameError`, because it uses a gem it expects the swarm to have preloaded, the process re-executes itself once (same pid, same environment) with the preload first, which is stock `sidekiqswarm`'s order, and logs a warning naming the first error. Such an app starts its boot twice, so a `Bundler.require` of your own in `config/application.rb` avoids that. An app needing both orders in one boot has no order that works: it fails, and shows both errors.
+
 `sidekiqswarm` ships as an alias for `wurkswarm`, so an existing Enterprise
 `sidekiqswarm` invocation keeps working unchanged.
 

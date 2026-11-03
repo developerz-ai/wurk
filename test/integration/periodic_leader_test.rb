@@ -87,7 +87,49 @@ class PeriodicLeaderTest < Wurk::Test::UnitCase
     end
   end
 
+  # Neither the follower's recheck nor the poller's tick is near: both are a
+  # minute away. The kill has to be answered by the lease lapsing and the win.
+  def test_killing_the_leader_fires_the_due_slot_promptly_and_once
+    @config[:cron_tick_interval] = 60
+    @config[:leader_ttl] = 2
+    @config[:leader_follower_interval] = 60
+    swarm = Wurk::Swarm.new(topology: topology_n(2), config: @config, shutdown_timeout: 5)
+    supervisor = nil
+
+    begin
+      swarm.boot(install_signals: false)
+      supervisor = Thread.new { swarm.supervise }
+      first = wait_for_leader
+
+      refute_nil first, 'a leader must settle'
+      @lid = register_loop
+
+      Process.kill('KILL', first[/:(\d+):/, 1].to_i)
+
+      assert wait_for_history, 'a new leader must fire the due slot, not wait a minute'
+      assert_equal 1, history_len
+    ensure
+      begin
+        swarm.shutdown(timeout: 5)
+      rescue StandardError
+        nil
+      end
+      stop_supervisor_thread(supervisor, 10)
+    end
+  end
+
   private
+
+  def wait_for_leader
+    deadline = monotonic_now + POLL_TIMEOUT
+    while monotonic_now < deadline
+      leader = @observer.call('GET', Wurk::Leader::DEFAULT_KEY)
+      return leader if leader
+
+      sleep POLL_INTERVAL
+    end
+    nil
+  end
 
   def topology_n(count)
     Wurk::Topology.flat(count: count, queues: [@queue], concurrency: 1)

@@ -24,6 +24,15 @@ on:
         required: true
         type: string
         description: Published wurk version to smoke-test (must already exist on RubyGems)
+  # A weekly run on the latest gem finds a moved consumer stack (rails new, a new
+  # Rails) before a release does, and a PR changing this file finds out it works here
+  # rather than after an irreversible push. Neither has a version input, so the first
+  # step resolves the latest.
+  schedule:
+    - cron: "41 6 * * 2"
+  pull_request:
+    paths:
+      - ".github/workflows/release-smoke.yml"
 
 permissions:
   contents: read
@@ -59,7 +68,13 @@ jobs:
           --health-retries 10
           --health-start-period 1s
     steps:
-      - uses: ruby/setup-ruby@7f797815d8adceb1c412e7abefdd1ab4abc47a5f # v1
+      - name: resolve the latest version when none was given
+        run: |
+          if [ -z "$VERSION" ]; then
+            latest="$(curl -fsS https://rubygems.org/api/v1/versions/wurk/latest.json | ruby -rjson -e 'print JSON.parse(STDIN.read).fetch("version")')"
+            echo "VERSION=${latest}" >> "$GITHUB_ENV"
+          fi
+      - uses: ruby/setup-ruby@7f797815d8adceb1c412e7abefdd1ab4abc47a5f # v1.335.0
         with:
           ruby-version: "3.4"
           # No repo checkout and no Gemfile yet — the consumer app is built below.

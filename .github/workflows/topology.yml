@@ -11,8 +11,8 @@ permissions:
   actions: read
 
 concurrency:
-  group: ${{ github.workflow }}-${{ github.ref }}
-  # Never cancel main's own runs (see test.yml).
+  group: ${{ github.workflow }}-${{ github.event_name == 'push' && github.sha || github.ref }}
+  # A group per main commit, because a shared one replaces queued runs (see test.yml).
   cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 jobs:
@@ -64,11 +64,13 @@ jobs:
   # the client dials. Not a required check.
   topology:
     needs: detect
+    if: ${{ !cancelled() }}
     runs-on: ubuntu-latest
     timeout-minutes: 20
     services:
       valkey:
-        image: valkey/valkey:8
+        # An empty image starts no service, so a no-op run skips the pull.
+        image: ${{ (needs.detect.result != 'success' || (needs.detect.outputs.dup != 'true' && (github.event_name != 'pull_request' || needs.detect.outputs.ruby == 'true'))) && 'valkey/valkey:8' || '' }}
         ports: ["6379"]
         options: >-
           --health-cmd "valkey-cli ping"
@@ -76,10 +78,12 @@ jobs:
           --health-timeout 2s
           --health-retries 10
     env:
+      # The same key as test.yml's jobs, so this job restores their bundle cache.
+      BUNDLE_GEMFILE: ${{ github.workspace }}/Gemfile
       RUBY_VERSION: "4.0"
       RAILS_VERSION: "8.1"
       # Per-step gate, not a job-level `if:` (#469, see test.yml).
-      RUN: ${{ needs.detect.outputs.dup != 'true' && (github.event_name != 'pull_request' || needs.detect.outputs.ruby == 'true') }}
+      RUN: ${{ needs.detect.result != 'success' || (needs.detect.outputs.dup != 'true' && (github.event_name != 'pull_request' || needs.detect.outputs.ruby == 'true')) }}
       WURK_TEST_TLS_URL: rediss://localhost:16380/0
       WURK_TEST_ACL_URL: redis://wurk:s3cret@localhost:16381/0
       WURK_TEST_SENTINEL_HOSTS: 127.0.0.1:26382
@@ -126,7 +130,7 @@ jobs:
           docker ps -a
           for c in tls acl primary replica sentinel; do docker logs "$c" 2>&1 | tail -20; done
           exit 1
-      - uses: ruby/setup-ruby@7f797815d8adceb1c412e7abefdd1ab4abc47a5f # v1
+      - uses: ruby/setup-ruby@7f797815d8adceb1c412e7abefdd1ab4abc47a5f # v1.335.0
         if: env.RUN == 'true'
         with:
           ruby-version: ${{ env.RUBY_VERSION }}

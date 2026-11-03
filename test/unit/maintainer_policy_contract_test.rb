@@ -62,7 +62,7 @@ class MaintainerPolicyContractTest < Minitest::Test
       'frontend (vitest)',
       'actionlint (workflow lint)'
     ],
-    'escalate.ask_before_acting' => [],
+    'escalate.ask_before_acting' => ['breaking_change'],
     'services' => ['redis']
   }.freeze
 

@@ -6,14 +6,14 @@
     # lose the connection in the batched phase above — and whatever Redis
 
 - entry: "Immediate plain multi-queue pushes register queues per group"
-  anchor: "lib/wurk/client.rb#L552-L554"
+  anchor: "lib/wurk/client.rb#L563-L565"
   fragment: |-
     def mark_delivered(payloads)
       Thread.current[DELIVERED_KEY]&.concat(payloads)
       Thread.current[WRITE_STATE_KEY] &&= :applied
 
 - entry: "Immediate plain multi-queue pushes register queues per group"
-  anchor: "lib/wurk/client.rb#L445-L470"
+  anchor: "lib/wurk/client.rb#L452-L477"
   fragment: |-
     conn.pipelined do |pipe|
       pipe.call('SADD', 'queues', queue)

@@ -4,6 +4,7 @@ require_relative '../test_helper'
 require 'wurk/api/app'
 require 'json'
 require 'securerandom'
+require 'socket'
 require 'stringio'
 
 # Slice 07 — the HTTP API's swarm plane: GET /swarm, /processes,
@@ -785,10 +786,14 @@ class ApiSwarmTest < Wurk::Test::UnitCase
   def row_for(rows, label) = rows.find { |row| row['identity'].include?(":#{label}#{@ns}") }
 
   # Wurk.redis_pool honours a per-thread capsule override, so a pool aimed at a
-  # closed port reaches only this test's own calls.
+  # closed port reaches only this test's own calls. The port is asked of the kernel:
+  # a fixed one fails this test whenever something happens to be listening there.
   def with_unreachable_redis
+    listener = TCPServer.new('127.0.0.1', 0)
+    port = listener.addr[1]
+    listener.close
     capsule = Struct.new(:redis_pool).new(
-      Wurk::RedisPool.new(size: 1, url: 'redis://127.0.0.1:6399/0', name: 'unreachable')
+      Wurk::RedisPool.new(size: 1, url: "redis://127.0.0.1:#{port}/0", name: 'unreachable')
     )
     Thread.current[:wurk_capsule] = capsule
     yield

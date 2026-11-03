@@ -1,0 +1,29 @@
+#!/usr/bin/env bash
+# Installs test/dummy's gems and prepares its database (bin/setup, bin/dev).
+#
+# It reuses wherever the root bundle already lives, so a fresh setup does not
+# download and compile Rails twice. Only when that place can't be written does it
+# fall back to a project-local path, so a read-only or permission-locked gem home
+# never blocks setup with Bundler::PermissionError.
+set -euo pipefail
+
+cd "$(dirname "$0")/.."
+root="$PWD"
+root_path="$(bundle config get path --parseable 2>/dev/null | sed -n 's/^path=//p' | head -1)"
+
+cd test/dummy
+if [ -n "$root_path" ]; then
+  case "$root_path" in
+    /*) ;;
+    *) root_path="$root/$root_path" ;;
+  esac
+  bundle config set --local path "$root_path"
+else
+  bundle config unset --local path
+fi
+if ! bundle check >/dev/null 2>&1 && ! bundle install; then
+  echo "==> the shared gem home can't take these gems; using test/dummy/vendor/bundle"
+  bundle config set --local path vendor/bundle
+  bundle install
+fi
+bin/rails db:prepare >/dev/null

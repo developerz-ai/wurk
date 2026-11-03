@@ -57,6 +57,9 @@ module Wurk
     # costs one lookup per write phase.
     WRITE_STATE_KEY = :wurk_client_write_state
 
+    NO_ARGS = [].freeze
+    private_constant :NO_ARGS
+
     attr_accessor :redis_pool
 
     def initialize(pool: nil, config: nil, chain: nil)
@@ -241,12 +244,20 @@ module Wurk
       jids
     end
 
+    # Only `args` and `jid` differ between the jobs of a slice, so normalizing
+    # runs once and each job is a merge over the result. A per-job `at` keeps
+    # the full walk: the expiry and deadline stamps are measured from it.
     def build_bulk_payloads(slice, base, ats)
-      slice.each_with_index.map do |job_args, idx|
-        item = base.merge('args' => job_args)
-        item['at'] = ats[idx] if ats
-        normed = normalize_item(item)
-        invoke_chain_verified(normed)
+      if ats
+        return slice.each_with_index.map do |job_args, idx|
+          invoke_chain_verified(normalize_item(base.merge('args' => job_args, 'at' => ats[idx])))
+        end
+      end
+
+      template = normalize_item(base.merge('args' => NO_ARGS))
+      explicit_jid = base['jid']
+      slice.map do |job_args|
+        invoke_chain_verified(template.merge('args' => job_args, 'jid' => explicit_jid || SecureRandom.hex(12)))
       end
     end
 

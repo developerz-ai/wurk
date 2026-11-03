@@ -16,6 +16,10 @@ module Wurk
   #
   # Spec: docs/target/sidekiq-free.md §24.
   module Testing
+    # Walking every class meets classes that redefine these with other arguments.
+    SUBCLASS = ::Module.instance_method(:<)
+    CLASS_NAME = ::Module.instance_method(:name)
+
     class TestModeAlreadySetError < ::RuntimeError; end
     # Raised by `Worker.perform_one` / `drain` when no fake job is available.
     class EmptyQueueError < ::RuntimeError; end
@@ -158,9 +162,12 @@ module Wurk
 
       def native_job_queues
         ::ObjectSpace.each_object(::Class).filter_map do |klass|
-          next unless klass.name && klass < ::Wurk::Worker && !klass.name.start_with?('Wurk::', 'Sidekiq::')
+          next unless SUBCLASS.bind_call(klass, ::Wurk::Worker)
 
-          [klass.get_sidekiq_options['queue'].to_s, klass.name]
+          name = CLASS_NAME.bind_call(klass)
+          next if name.nil? || name.start_with?('Wurk::', 'Sidekiq::')
+
+          [klass.get_sidekiq_options['queue'].to_s, name]
         end
       end
 
@@ -168,10 +175,11 @@ module Wurk
         return [] unless defined?(::ActiveJob::Base)
 
         ::ActiveJob::Base.descendants.filter_map do |job|
-          next unless job.name
+          name = CLASS_NAME.bind_call(job)
+          next unless name
 
           queue = active_job_queue(job)
-          [queue.to_s, job.name] if queue
+          [queue.to_s, name] if queue
         end
       end
 

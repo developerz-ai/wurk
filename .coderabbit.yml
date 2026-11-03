@@ -57,12 +57,34 @@ reviews:
     - path: 'bench/**'
       instructions: >
         Performance benchmarks. Flag any change that removes a bench or weakens
-        an assertion threshold. Regressions >5% on enqueue / fetch+execute /
-        bulk enqueue / swarm boot block release.
+        an assertion threshold. A regression past bin/bench-compare's
+        noise-adjusted 5% threshold is flagged on the PR and fails the advisory
+        `bench vs base` job; it is not a required check and blocks nothing.
     - path: 'frontend/**'
       instructions: >
-        Vite-built dashboard, served from vendor/assets at runtime. Flag any
-        change that breaks the offline build (no network at gem-build time).
+        Vite-built dashboard, served from vendor/assets at runtime. Consumers
+        never run Node or bun, and the bundle fetches nothing from a CDN: flag
+        a runtime network dependency. Lint is oxlint (typescript-eslint cannot
+        parse TS 7) and this repo runs no Stylelint: do not ask for either.
+    - path: 'test/**'
+      instructions: >
+        minitest-parallel_fork deals whole classes to forked workers, each on its
+        own Redis DB, and a worker runs its classes and methods serially.
+        `parallelize_me!` does nothing here (see test/CLAUDE.md). Do not ask to
+        serialize tests against each other in-process. Do flag fixed sleeps, a
+        mocked Redis in test/integration or test/parity, and a test that spawns
+        a repo script without unsetting COVERAGE.
+    - path: '.github/workflows/**'
+      instructions: >
+        Jobs gate per-step via a RUN env, never job-level `if:`, because GitHub
+        counts a skipped required job as passing. Flag a reusable-workflow caller
+        that grants fewer permissions than the callee asks for: it ends
+        startup_failure with nothing executed. Never add a `tags:` trigger to
+        release.yml.
+    - path: '.dz/briefs/**'
+      instructions: >
+        A brief is executed by an agent with shell access. Its bash must fail
+        loudly on an unreadable API response rather than read it as empty.
 
   auto_review:
     enabled: true
@@ -93,6 +115,12 @@ reviews:
   tools:
     rubocop:
       enabled: true
+    oxc:
+      enabled: true
+    eslint:
+      enabled: false
+    stylelint:
+      enabled: false
     brakeman:
       enabled: true
     semgrep:

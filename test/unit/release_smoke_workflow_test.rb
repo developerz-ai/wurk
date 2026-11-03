@@ -40,6 +40,16 @@ class ReleaseSmokeWorkflowTest < Minitest::Test
 
   # --- triggers and inputs ------------------------------------------------
 
+  # A moved consumer stack should show up on a schedule, not during an irreversible
+  # release, and a change to this workflow should be proven on its own PR.
+  def test_the_smoke_also_runs_on_a_schedule_and_on_its_own_changes
+    triggers = smoke_triggers
+
+    assert triggers.fetch('schedule')
+    assert_equal ['.github/workflows/release-smoke.yml'], triggers.dig('pull_request', 'paths')
+    assert_match(/latest\.json/, File.read(SMOKE_YML))
+  end
+
   def test_declares_both_workflow_call_and_workflow_dispatch
     triggers = smoke_triggers
 
@@ -52,7 +62,8 @@ class ReleaseSmokeWorkflowTest < Minitest::Test
   # A smoke run without a version has nothing to verify, so the input is
   # required on BOTH triggers — not optional with a default.
   def test_every_trigger_requires_a_version_input
-    smoke_triggers.each do |name, trigger|
+    # The two automatic triggers carry no input; they run on the latest published gem.
+    smoke_triggers.except('schedule', 'pull_request').each do |name, trigger|
       inputs = trigger.fetch('inputs', {})
 
       assert_includes inputs.keys, 'version', "#{name} must accept a `version` input"

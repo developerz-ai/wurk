@@ -24,7 +24,7 @@ Daily `schedules: health` checkup; failures no issue or PR announces.
 | topology and ecosystem lanes | `bash bin/health-check lanes` | Both `executed`; `duplicate-skipped` and `evidence unavailable` file no ask |
 | Dependabot is not stuck | `bash bin/health-check dependabot` | Red past budget is stuck except Docker cases below; unknown/awaiting-pin files no ask |
 
-Run from repository root. Helpers only read and grade.
+Run from repository root. Helpers only read and grade. Rows number from 8 (`main`), in table order.
 
 **Push grading.** Main/lanes read jobs and gated steps. Successful detect + every gated job successful + every gated step skipped (except runner setup/teardown) means duplicate-skipped; a non-skipped gated step means executed. Missing jobs/no gated job means evidence unavailable, not verified green. Exclude ecosystem's sidekiq release watcher. Failed runs grade on conclusion. Failed/non-array run reads are unknown; readable empty arrays print no run, not unknown or Unhealthy.
 

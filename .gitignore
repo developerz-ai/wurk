@@ -58,3 +58,4 @@ test/ecosystem/*/Gemfile.lock
 .env*
 *.key
 /config/master.key
+.claude/settings.local.json

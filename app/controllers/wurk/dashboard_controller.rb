@@ -18,14 +18,18 @@ module Wurk
   # Vite dev server (default :5173) so contributors get HMR without
   # rebuilding the bundle on every change.
   class DashboardController < ApplicationController
+    # bin/dev exports VITE_PORT and vite.config.ts binds it, with strictPort, so this
+    # has to read the same variable or an overridden port answers every page with a 500.
+    def self.vite_dev_url
+      "http://localhost:#{ENV.fetch('VITE_PORT', '5173')}#{VITE_ASSET_BASE}"
+    end
+
     # Vite serves the dev shell under its `base` (vite.config.ts), which is the
     # same path the engine mounts assets at — so derive these from
     # AssetMount::PREFIX to keep the Ruby side in lockstep. Fetching the server
     # root instead returns Vite's "did you mean /wurk-assets/" hint page, not the
     # shell (issue #181).
-    VITE_DEV_HOST = 'http://localhost:5173'
     VITE_ASSET_BASE = "#{::Wurk::Engine::AssetMount::PREFIX}/".freeze # "/wurk-assets/"
-    VITE_DEV_URL = "#{VITE_DEV_HOST}#{VITE_ASSET_BASE}".freeze
     INDEX_REL_PATH = ['vendor', 'assets', 'dashboard', 'index.html'].freeze
     # The SPA mount point, matched without its closing `>` so the locale hint
     # appends to whatever attributes the shell already carries.
@@ -115,11 +119,12 @@ module Wurk
     end
 
     def fetch_vite_dev_shell
-      uri = ::URI.parse(VITE_DEV_URL)
+      uri = ::URI.parse(self.class.vite_dev_url)
       rewrite_dev_asset_urls(::Net::HTTP.get(uri))
     rescue ::StandardError => e
-      raise "Wurk dashboard: cannot reach Vite dev server at #{VITE_DEV_URL} " \
-            "(#{e.class}: #{e.message}). Run `bin/rake frontend:dev` from the gem root."
+      raise "Wurk dashboard: cannot reach Vite dev server at #{self.class.vite_dev_url} " \
+            "(#{e.class}: #{e.message}). Run `bin/rake frontend:dev` from the gem root, or `bin/dev`, " \
+            'with the same VITE_PORT.'
     end
 
     # The shell's entry URLs (`src="/wurk-assets/@vite/client"`,
@@ -130,7 +135,7 @@ module Wurk
     # `server.origin` covers runtime-generated asset URLs but not these entry
     # tags, so rewrite them here.
     def rewrite_dev_asset_urls(html)
-      html.gsub(/(["'])#{::Regexp.escape(VITE_ASSET_BASE)}/, "\\1#{VITE_DEV_URL}")
+      html.gsub(/(["'])#{::Regexp.escape(VITE_ASSET_BASE)}/, "\\1#{self.class.vite_dev_url}")
     end
 
     def read_built_index

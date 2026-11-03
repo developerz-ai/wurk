@@ -67,7 +67,7 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
-      - uses: ruby/setup-ruby@7f797815d8adceb1c412e7abefdd1ab4abc47a5f # v1
+      - uses: ruby/setup-ruby@7f797815d8adceb1c412e7abefdd1ab4abc47a5f # v1.335.0
         with:
           ruby-version: "3.4"
           # No bundle needed: version.rb and release_helpers.rb are dependency-free.
@@ -210,7 +210,7 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
-      - uses: ruby/setup-ruby@7f797815d8adceb1c412e7abefdd1ab4abc47a5f # v1
+      - uses: ruby/setup-ruby@7f797815d8adceb1c412e7abefdd1ab4abc47a5f # v1.335.0
         with:
           # Pinned below the newest Ruby on purpose: the built .gem is pure Ruby
           # and identical whichever interpreter packs it, so this job carries the
@@ -218,7 +218,7 @@ jobs:
           # The compatibility statement is made by the `test` job, not here.
           ruby-version: "3.4"
           bundler-cache: true
-      - uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2
+      - uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2.2.0
         with:
           bun-version: "1.4.3"
 
@@ -247,7 +247,7 @@ jobs:
           echo "gem_sha256=${sum}" >> "$GITHUB_OUTPUT"
 
       - name: upload the packed gem
-        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: wurk-gem
           path: pkg/wurk-${{ needs.preflight.outputs.version }}.gem
@@ -299,7 +299,7 @@ jobs:
           fi
           echo "${EXPECTED_SHA256}  pkg/wurk-${VERSION}.gem" | sha256sum -c -
       - name: install Ruby
-        uses: ruby/setup-ruby@7f797815d8adceb1c412e7abefdd1ab4abc47a5f # v1
+        uses: ruby/setup-ruby@7f797815d8adceb1c412e7abefdd1ab4abc47a5f # v1.335.0
         with:
           ruby-version: "3.4"
           bundler-cache: false
@@ -362,7 +362,7 @@ jobs:
         with:
           persist-credentials: false
       - name: install Ruby
-        uses: ruby/setup-ruby@7f797815d8adceb1c412e7abefdd1ab4abc47a5f # v1
+        uses: ruby/setup-ruby@7f797815d8adceb1c412e7abefdd1ab4abc47a5f # v1.335.0
         with:
           ruby-version: "3.4"
           bundler-cache: false
@@ -478,7 +478,8 @@ jobs:
     with:
       ref: ${{ needs.preflight.outputs.tag }}
       trusted: true
-    secrets: inherit
+    # DOCR_TOKEN is a secret of the `demo` environment, which deploy-demo's `build` job
+    # enters itself, so nothing needs passing from here.
 
   # Bounded post-publish evidence, not a gate: smoke only runs after the
   # irreversible `gem push`, so a failure here rolls nothing back — no rollback

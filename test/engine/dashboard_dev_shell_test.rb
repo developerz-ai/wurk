@@ -12,7 +12,20 @@ class DashboardDevShellTest < Wurk::Test::EngineCase
 
   def test_vite_dev_url_targets_the_asset_base_not_root
     assert_equal "#{Wurk::Engine::AssetMount::PREFIX}/", Wurk::DashboardController::VITE_ASSET_BASE
-    assert_equal 'http://localhost:5173/wurk-assets/', Wurk::DashboardController::VITE_DEV_URL
+    assert_equal 'http://localhost:5173/wurk-assets/', with_vite_port(nil) { Wurk::DashboardController.vite_dev_url }
+  end
+
+  # bin/dev documents VITE_PORT and Vite binds it, so the shell fetch must follow it.
+  def test_vite_dev_url_follows_vite_port
+    assert_equal 'http://localhost:5199/wurk-assets/', with_vite_port('5199') { Wurk::DashboardController.vite_dev_url }
+  end
+
+  def with_vite_port(port)
+    saved = ENV.fetch('VITE_PORT', nil)
+    ENV['VITE_PORT'] = port
+    yield
+  ensure
+    ENV['VITE_PORT'] = saved
   end
 
   def test_dev_shell_asset_urls_rewritten_to_vite_origin

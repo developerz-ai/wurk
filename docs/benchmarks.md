@@ -1,6 +1,6 @@
 # Benchmarks
 
-The latest published paired comparison (2026-08-07) does **not** show Wurk ahead of stock Sidekiq. These are historical measurements, not a current-release guarantee.
+The latest published paired comparison (2026-08-07) does **not** show Wurk ahead of stock Sidekiq. These are historical measurements, not a current-release guarantee. A [re-run on 2026-11-03](#re-run-2026-11-03) at a later commit does not either.
 
 Two different benchmark suites live in `bench/`. They answer different questions and only one of them compares against Sidekiq.
 
@@ -45,6 +45,32 @@ In that published comparison, Wurk was at parity with stock Sidekiq on `cpu` and
 Forking does not close the gap. A stock Sidekiq user reaches multi-core by running N processes — that is the second table. The swarm's advantage is copy-on-write memory and a single supervisor, not throughput.
 
 The run carried unrelated background load on the host for part of the session, which is why the per-invocation spread (min/max above) is wide — the paired-ratio median is the number to trust, not any single run. Full per-invocation record: [`docs/plans/2026/08/06/101-faster-than-sidekiq/08-measurements.md`](plans/2026/08/06/101-faster-than-sidekiq/08-measurements.md).
+
+## Re-run 2026-11-03
+
+The same harness at a later commit: the 1.10.0 code plus the change [below](#what-earned-its-place-and-what-did-not), stock Sidekiq 8.1.6, ruby 3.4.7 without YJIT, local Redis 7.0.15, 5000 jobs/run, 12 paired runs per topology. Ratios below 1.00 mean Wurk is slower. Q1 and Q3 are the quartiles of the 12 paired ratios. The host carried light unrelated load (load average 2 to 4). The tables above stay the published headline until this is republished with its raw record.
+
+| Topology and workload | Median | Q1 | Q3 | Min | Max |
+|---|---|---|---|---|---|
+| 1p × 5t noop | 0.87× | 0.86× | 0.90× | 0.82× | 0.93× |
+| 1p × 5t cpu | 0.97× | 0.96× | 0.98× | 0.93× | 1.00× |
+| 1p × 5t io | 0.99× | 0.98× | 1.01× | 0.96× | 1.06× |
+| 4p × 5t noop | 0.89× | 0.85× | 0.91× | 0.83× | 0.99× |
+| 4p × 5t cpu | 1.00× | 0.96× | 1.03× | 0.95× | 1.43× |
+| 4p × 5t io | 0.98× | 0.97× | 0.98× | 0.94× | 1.01× |
+
+Boot to first job, median: Sidekiq 0.54s and Wurk 0.70s at 1 process, Sidekiq 0.54s and Wurk 0.73s at 4. Wurk is the slower one. `cpu` and `io` are within about 3% of Sidekiq, `noop` and boot are still behind, and this is not a "faster than Sidekiq" result. The harness hand-builds its payloads, so the change below is not on its clock: a difference from the published tables is a difference of host and commit.
+
+### Enqueue
+
+Same args, single thread, Redis on loopback, 10 paired rounds, wall time per job. `1.10.0` is an identical copy of the code before the change below; the A/A column compares a second such copy to it.
+
+| Path | Sidekiq | 1.10.0 | Now | Now vs 1.10.0, median [Q1, Q3] | A/A control | Allocations per job, 1.10.0 → now (Sidekiq) |
+|---|---:|---:|---:|---|---|---|
+| `push_bulk` of 1000 | 6.8µs | 15.0µs | 9.4µs | 0.62 [0.60, 0.64] | 1.03 [0.93, 1.07] | 12 → 9 (7) |
+| `perform_async` | 153µs | 171µs | 171µs | 1.00 [0.97, 1.04] | 1.05 [0.98, 1.07] | 66 → 66 (67) |
+
+`push_bulk` was 2.2× slower than Sidekiq and is now 1.4× slower. `perform_async` did not change and is still behind.
 
 ## Workload shapes
 
@@ -193,6 +219,21 @@ they are the same wire traffic with less Ruby in front of it.
 that stops firing can be flagged in the PR comment. The benchmark job is not a
 required check and does not block merges.
 
+### What earned its place, and what did not
+
+Each candidate ran against an identical copy of the code, next to an A/A control that compares a second copy to it. That control is the noise floor.
+
+| Change | Measured, median [Q1, Q3] | A/A in the same run | Verdict |
+|---|---|---|---|
+| Normalize `push_bulk` once per slice | `push_bulk` wall 0.62 [0.60, 0.64] | 1.03 [0.93, 1.07] | **Shipped** |
+| Skip Wurk's own no-op client middleware (Batch, Collapse) | `push_bulk` wall, on top of the above, 0.93 [0.89, 0.98] | 1.03 [1.00, 1.07] | **Dropped.** Real but small, and a skip decided ahead of the call has to stay correct against a `prepend` at any time; stock Sidekiq would run it |
+| Skip no-op server middleware | worker CPU per noop job 1.00 [0.97, 1.04] | 1.00 [0.97, 1.02] | **Dropped.** Inside the noise |
+| Allocation-free logger context | `format_context` 2.4µs to 2.6µs, in isolation | | **Dropped.** 6 fewer allocations per job, no time |
+| `call_v` on the ACK pipeline | ACK build 7.0µs to 6.0µs, in isolation | | **Dropped.** About 1µs of a job, and the fetch path stays untouched |
+| RESP writer as a redis-client driver | one fetch pipeline encodes in 7.7µs instead of 22.8µs, in isolation | | **Dropped.** Whole-job gain stayed close to the noise, against a new default driver for every adopter that subclasses redis-client internals and costs about 1.4MB per process. The option if a later measurement justifies it, on an opt-in basis |
+
+What shipped touches `push_bulk` only: no code on the path a worker runs changed.
+
 ## Running it
 
 ```bash
@@ -267,4 +308,4 @@ The claim "faster than Sidekiq" has been removed from the README and the site, a
 
 The `Metrics::History` batching and the ack piggyback that closed the round-trip gap have both landed and are reflected in the numbers above — **four round trips per job down to one**, and ~10 commands down to 3 — at the cost of dashboard counters lagging by the flush interval, a hard crash dropping the unflushed window, and a wider window in which a hard kill re-runs an already-finished job. The throughput and command-count tables above are re-measured post-landing, not carried over from before that work.
 
-**Published result (2026-08-07): wurk was at parity with stock Sidekiq on `cpu` and `io` at both topologies measured, and still behind on `noop` and on boot to first job.** Not a "faster than Sidekiq" result. Full per-invocation record and the verdict against the plan's "done when" criteria: [`docs/plans/2026/08/06/101-faster-than-sidekiq/08-measurements.md`](plans/2026/08/06/101-faster-than-sidekiq/08-measurements.md).
+**Published result (2026-08-07): wurk was at parity with stock Sidekiq on `cpu` and `io` at both topologies measured, and still behind on `noop` and on boot to first job.** Not a "faster than Sidekiq" result. Full per-invocation record and the verdict against the plan's "done when" criteria: [`docs/plans/2026/08/06/101-faster-than-sidekiq/08-measurements.md`](plans/2026/08/06/101-faster-than-sidekiq/08-measurements.md). The [2026-11-03 re-run](#re-run-2026-11-03) changes the ratios, not the conclusion.

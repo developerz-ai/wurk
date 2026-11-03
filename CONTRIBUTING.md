@@ -40,6 +40,8 @@ updates instantly — no rebuild, no gem repackage.
 - `NO_VITE=1 bin/dev` serves the prebuilt bundle instead (run
   `bin/rake frontend:build` first) — useful to sanity-check the shipped artifact.
 - `PORT` / `VITE_PORT` override the defaults (3000 / 5173).
+- A version bump leaves the built bundle stamped with the old version. `bin/rake test`
+  stops and says so, and `NO_VITE=1 bin/dev` warns: run `bin/rake frontend:build`.
 
 Frontend unit + integration tests (Vitest, SolidJS Testing Library) run with
 `bun run test` in `frontend/`.
@@ -67,12 +69,30 @@ total, so here is exactly where it stops. CI's `python-client` job in
 CI's `spec-docs` job does have a local equivalent: the suite stage runs
 `test/unit/spec_docs_test.rb`, which asserts the same three spec docs exist
 and are non-empty. These CI jobs have no local equivalent: `actionlint`
-(workflow lint), the `compat` matrix (gemspec Ruby floor, oldest supported
+(workflow lint), `zizmor` (workflow security audit), the `compat` matrix (gemspec Ruby floor, oldest supported
 Rails, Valkey backend), the `topology` leg in `.github/workflows/topology.yml`
 (Valkey 8, TLS, ACL, Sentinel) and the `bench vs base` job in
 `.github/workflows/bench.yml` (the head-vs-base benchmark comparison —
 `bin/rake bench` runs the benchmarks, not the comparison). They report on the
 PR next to the gate; a green `bin/check` says nothing about them.
+
+### Guards and docs-only changes
+
+`test/guards.txt` lists every test that reads docs, policy or workflow files.
+`bin/rake test:guards` runs just those, in about a minute, and it is the first thing
+worth running after editing a doc or a workflow. A pull request that touches only
+`*.md`, `docs/` or `.dz/` runs those instead of the full suite; on a code change a
+`guards` job answers first and the `compat` legs wait for it.
+`test/unit/guard_manifest_test.rb` fails if a test that reads docs is missing from
+the list.
+
+### Two runs on one machine
+
+Each run holds a lock on the Redis DBs it uses, `WURK_TEST_DB_OFFSET + 1` up to
+`WURK_TEST_DB_OFFSET + NCPU`. A second run that overlaps stops with exit 75 and names
+the holder. Keeping keys apart does not keep CPU apart, so a run that shared the
+server also says so when it ends: re-run a wall-clock failure from such a run on an
+idle box before debugging it.
 
 ### Exit codes
 
@@ -178,6 +198,11 @@ each other's keys.
 
 ## Conventions
 
+Agent rules live in `CLAUDE.md` (`AGENTS.md` is a symlink), with detail in `lib/CLAUDE.md`,
+`test/CLAUDE.md`, `.github/CLAUDE.md` and `frontend/CLAUDE.md`. Keep the root under 12,000
+chars. `.claude/README.md` covers the hooks, and what to do when one refuses something
+legitimate.
+
 These are non-negotiable — they're what keep Wurk a true drop-in:
 
 - **Wire-compat is sacred.** Never change a Redis key, JSON field, or
@@ -222,7 +247,7 @@ every comment it posts is marked as coming from a bot. What that means for you:
   `.dz/maintainer/maintainer.yml`) is closed with the rule it ran into, not left
   open.
 - **Not every comment gets a reply.** A "+1" or a thanks is read and left alone.
-- **A human is asked** for security reports and license questions. Report a
+- **A human is asked** for security reports, license questions and breaking changes. Report a
   vulnerability privately through the repository's Security tab, not in an
   issue.
 

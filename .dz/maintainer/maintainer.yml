@@ -5,9 +5,9 @@
 # "wurk and ultimate should be full ai maintained"). For everyone, org members and collaborators
 # included, and for the dependency bots, the agent handles issues, pull requests and updates end to
 # end: it triages, answers or stays silent, reviews, declines with a reason, merges on green, and
-# closes what has stalled on its reporter or author. `escalate` names nothing, so a human is asked
-# only for the platform's hardcoded categories (security, license, CLA). Each week the `release-due`
-# checkup judges whether a release is needed and files the bump when so, and release.yml publishes;
+# closes what has stalled on its reporter or author. `escalate` names only `breaking_change`, so a human
+# is asked for a breaking change (owner, 2026-11-02) and for the platform's hardcoded categories
+# (security, license, CLA). Each week the `release-due` checkup judges whether a release is needed and files the bump when so, and release.yml publishes;
 # `release.manager` stays `none`.
 #
 # Dogfood pass with coding handoff live. The bot triages (qualifies, labels,
@@ -184,7 +184,7 @@ pr:
   # GitHub Actions workflow that armed GitHub's native auto-merge on them
   # (dependabot-automerge.yml, wurk#347) was removed 2026-10-11, because a second
   # merger beside the agent is one that skips its review. A major bump is not
-  # held for a human (`escalate.ask_before_acting` below is empty); the six
+  # held for a human (`escalate.ask_before_acting` below names only `breaking_change`); the six
   # required checks and the agent's review are what gate it.
   auto_merge: true
   # WHOSE pull requests the bot merges and babysits: every author's (owner ruling 2026-10-23: "wurk
@@ -264,7 +264,7 @@ release:
   manager: none
   # EMPTIED 2026-08-11 (wurk#420). `manager: none` did NOT stop the agent from
   # cutting releases — `channels: [github-release]` did that independently, and
-  # it fired on feature merges with Wurk::VERSION unbumped. Six times (v1.2.1,
+  # it fired on feature merges with Wurk::VERSION unbumped. Seven times (v1.2.1,
   # v1.5.0, v1.6.0, v1.7.0, v1.8.0, v1.7.1, v1.7.2) that produced a tag and a
   # GitHub Release marked "Latest" with no gem behind it, while `gem install
   # wurk` kept serving the previous version — and a red release run each time.
@@ -275,14 +275,12 @@ release:
   channels: []
 
 escalate:
-  # Narrowed 2026-10-10 from the schema's four to `breaking_change`, emptied
-  # 2026-10-23 (owner ruling: "wurk and ultimate should be full ai maintained").
-  # A breaking change, a major dependency bump, a first-time contributor's pull
-  # request and a large pull request are all the agent's to judge: the drop-in
-  # contract is its to keep, and a change that breaks it is declined by the
-  # `non_goals` above, not parked for a human. The platform's hardcoded asks
-  # (security, license, CLA) still apply; this list cannot remove them.
-  ask_before_acting: []
+  # Narrowed 2026-10-10 from the schema's four to `breaking_change`, emptied 2026-10-23, and
+  # restored 2026-11-02 (owner ruling: a human decides a breaking change). A major dependency bump,
+  # a first-time contributor's pull request and a large pull request stay the agent's to judge. A
+  # change that breaks the drop-in contract is still declined by the `non_goals` above. The platform's
+  # hardcoded asks (security, license, CLA) still apply; this list cannot remove them.
+  ask_before_acting: [breaking_change]
 
 # The checkups nothing else triggers (owner, 2026-10-14: maintained so nobody has to watch it). Is a
 # release needed, is the project healthy, and (monthly) what is worth improving. Bot-authored alarm

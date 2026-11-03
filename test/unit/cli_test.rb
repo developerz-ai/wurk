@@ -950,6 +950,156 @@ class CLITest < Wurk::Test::UnitCase
     assert_empty called
   end
 
+  # A start that fails on a bad flag or a missing Redis is an operator's problem: one
+  # line and a pointer, not 20 lines of trace.
+  # The real boots are in swarm_rails_preload_order_test; these are their exec seam,
+  # which a subprocess's coverage cannot see.
+  def test_the_retry_restores_the_environment_from_before_the_attempt
+    captured = nil
+    state = { env: { 'KEPT' => '1', 'BUNDLE_GEMFILE' => '/app/Gemfile' }, argv: ['-r', '.'], dir: '/app' }
+    original = ::Process.method(:exec)
+    ::Process.define_singleton_method(:exec) { |*args, **opts| captured = [args, opts] }
+    begin
+      @cli.send(:restart_with_preload_first, state, NameError.new("uninitialized constant Dotenv\nmore"))
+    ensure
+      ::Process.define_singleton_method(:exec, original)
+    end
+
+    args, opts = captured
+
+    expected_env = { 'KEPT' => '1', 'BUNDLE_GEMFILE' => '/app/Gemfile',
+                     Wurk::CLI::PRELOAD_FIRST_ENV => 'uninitialized constant Dotenv' }
+
+    assert_equal expected_env, args.first
+    assert_equal [RbConfig.ruby, '-rbundler/setup', Wurk::CLI::SWARM_EXECUTABLE, '-r', '.'], args.drop(1)
+    assert_path_exists Wurk::CLI::SWARM_EXECUTABLE
+    assert_equal({ unsetenv_others: true, chdir: '/app' }, opts)
+  end
+
+  def test_a_preload_first_boot_says_what_the_first_attempt_raised
+    log = StringIO.new
+    @cli.config.logger = Logger.new(log)
+    @cli.send(:note_preload_first, 'uninitialized constant Dotenv')
+
+    assert_includes log.string, 'uninitialized constant Dotenv'
+  end
+
+  def test_a_failed_start_we_understand_prints_the_message_without_a_trace
+    error = begin
+      raise Wurk::CLI::StartupError, 'nope'
+    rescue ArgumentError => e
+      e
+    end
+    _, err = capture_io { Wurk::CLI.report_failure('wurk', error, argv: []) }
+
+    assert_includes err, 'wurk: nope'
+    refute_includes err, __FILE__
+  end
+
+  # A bug in the host app is not ours to summarize: its file and line are the whole point.
+  def test_an_error_from_the_app_keeps_its_trace
+    error = begin
+      nil.frobnicate
+    rescue NoMethodError => e
+      e
+    end
+    _, err = capture_io { Wurk::CLI.report_failure('wurkswarm', error, argv: []) }
+
+    assert_includes err, "#{__FILE__}:"
+  end
+
+  def test_a_plain_argument_error_from_the_app_keeps_its_trace_too
+    error = begin
+      raise ArgumentError, 'from an initializer'
+    rescue ArgumentError => e
+      e
+    end
+    _, err = capture_io { Wurk::CLI.report_failure('wurk', error, argv: []) }
+
+    assert_includes err, "#{__FILE__}:"
+  end
+
+  def test_verbose_keeps_the_trace
+    error = begin
+      raise ArgumentError, 'nope'
+    rescue ArgumentError => e
+      e
+    end
+    _, err = capture_io { Wurk::CLI.report_failure('wurk', error, argv: ['-v']) }
+
+    assert_includes err, __FILE__
+  end
+
+  def test_an_unreachable_redis_points_at_redis_url
+    _, err = capture_io { Wurk::CLI.report_failure('wurk', RedisClient::CannotConnectError.new('refused'), argv: []) }
+
+    assert_includes err, 'REDIS_URL'
+  end
+
+  def test_a_bad_flag_points_at_help
+    error = assert_raises(OptionParser::InvalidOption) { @cli.parse(['--bogus']) }
+    _, err = capture_io { Wurk::CLI.report_failure('wurk', error, argv: []) }
+
+    assert_includes err, 'see --help'
+  end
+
+  def test_a_non_numeric_flag_names_the_flag
+    error = assert_raises(ArgumentError) { @cli.parse(['-c', 'abc']) }
+
+    assert_includes error.message, '--concurrency'
+    assert_includes error.message, '"abc"'
+  end
+
+  def test_a_stray_word_is_reported_and_still_boots_as_before
+    cli = Wurk::CLI.new
+    _, err = capture_io { cli.send(:parse_options, ['foo', '-c', '3']) }
+
+    assert_includes err, 'ignoring foo'
+  end
+
+  def test_only_signals_this_platform_has_are_trapped
+    assert_empty @cli.send(:signal_names) - Signal.list.keys
+    assert_includes @cli.send(:signal_names), 'TERM'
+  end
+
+  def test_help_lists_the_public_commands_and_ends_with_the_docs_link
+    out, = capture_io { assert_raises(SystemExit) { @cli.parse(['-h']) } }
+
+    %w[health preflight verify].each { |command| assert_match(/^\s+#{command}\s/, out) }
+    assert_includes out, 'REDIS_URL'
+    assert_includes out, 'github.com/developerz-ai/wurk'
+  end
+
+  def test_api_help_says_the_worker_flags_do_nothing
+    out, = capture_io { assert_raises(SystemExit) { @cli.parse(['api', '-h']) } }
+
+    assert_includes out, 'wurk api [options]'
+    assert_includes out, 'have no effect'
+  end
+
+  def test_the_swarm_binary_says_what_it_is
+    saved = $PROGRAM_NAME
+    $PROGRAM_NAME = 'wurkswarm'
+    out, = capture_io { assert_raises(SystemExit) { @cli.parse(['-h']) } }
+
+    assert_includes out, 'wurkswarm [options]'
+    assert_includes out, 'Forks WURK_COUNT'
+    refute_includes out, 'Commands:'
+  ensure
+    $PROGRAM_NAME = saved
+  end
+
+  def test_a_missing_require_path_is_named_at_error_level
+    log = StringIO.new
+    @cli.config.logger = Logger.new(log)
+    @cli.config[:require] = '/nope/missing.rb'
+    @cli.instance_variable_set(:@parser, OptionParser.new)
+
+    assert_raises(SystemExit) { @cli.send(:validate!) }
+    assert_includes log.string, '/nope/missing.rb: no such file or directory'
+    assert_includes log.string, 'ERROR'
+  end
+
   private
 
   # `validate!` requires `:require` to point at a real file (or a Rails dir

@@ -859,6 +859,52 @@ class LeaderTest < Wurk::Test::UnitCase
     stop_quietly(ldr) # release() also hits the raising pool — ignore it
   end
 
+  # A SIGKILLed leader cannot release. A follower waiting out a flat 60s added up
+  # to 60s of leaderless time to the lease it had left.
+  def test_a_follower_takes_over_when_the_lease_runs_out_not_at_its_next_recheck
+    Wurk.redis { |c| c.call('SET', @key, 'a-killed-leader', 'PX', 800) }
+    ldr = build_leader(follower_interval: 60)
+
+    ldr.start
+
+    assert(wait_until { ldr.leader? }, 'the follower must win within about a second of the lease lapsing')
+    assert_equal(ldr.owner, Wurk.redis { |c| c.call('GET', @key) })
+  end
+
+  def test_a_follower_never_wins_before_the_lease_has_lapsed
+    Wurk.redis { |c| c.call('SET', @key, 'a-live-leader', 'EX', 30) }
+    ldr = build_leader(follower_interval: 60)
+
+    refute ldr.acquire
+
+    assert_equal('a-live-leader', Wurk.redis { |c| c.call('GET', @key) })
+    assert_operator waits_after_tick(ldr), :>=, 29
+  end
+
+  def test_a_follower_recheck_stays_capped_at_the_follower_interval
+    Wurk.redis { |c| c.call('SET', @key, 'a-live-leader', 'EX', 30) }
+    ldr = build_leader(follower_interval: 5)
+    ldr.acquire
+
+    assert_equal 5, waits_after_tick(ldr)
+  end
+
+  def test_a_lock_with_no_ttl_waits_the_full_follower_interval
+    Wurk.redis { |c| c.call('SET', @key, 'set-by-hand') }
+    ldr = build_leader(follower_interval: 7)
+    ldr.acquire
+
+    assert_equal 7, waits_after_tick(ldr)
+  end
+
+  def test_a_failed_campaign_retries_on_the_renew_cadence
+    ldr = build_leader(renew_interval: 3, follower_interval: 60)
+    ldr.define_singleton_method(:acquire) { raise RedisClient::ConnectionError, 'gone' }
+    ldr.send(:tick_once)
+
+    assert_equal 3, waits_after_tick(ldr)
+  end
+
   private
 
   # `initial_wait: 0` by default: the pre-campaign delay is a boot-path
@@ -868,6 +914,23 @@ class LeaderTest < Wurk::Test::UnitCase
     ldr = Wurk::Leader.new(key: @key, initial_wait: 0, **)
     @leaders << ldr
     ldr
+  end
+
+  def waits_after_tick(ldr)
+    seen = nil
+    ldr.define_singleton_method(:wait_for) { |interval| seen = interval }
+    ldr.send(:wait_next)
+    seen
+  end
+
+  def wait_until(timeout: 5)
+    deadline = ::Process.clock_gettime(::Process::CLOCK_MONOTONIC) + timeout
+    until yield
+      return false if ::Process.clock_gettime(::Process::CLOCK_MONOTONIC) > deadline
+
+      sleep 0.02
+    end
+    true
   end
 
   # Stands in for a campaign tick still parked on Redis when the stop lands:

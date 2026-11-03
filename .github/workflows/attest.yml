@@ -1,0 +1,100 @@
+name: attest
+
+# An SBOM for each published gem: attached to the GitHub Release and attested. This is its
+# own file on purpose: RubyGems' trusted publisher names release.yml with no environment,
+# so an id-token minted in that file could publish, and one minted here cannot.
+#
+# It says "this SBOM describes this gem", signed by this repo's workflow. It is not build
+# provenance: this job never built the gem, and claiming so would be false.
+#
+# Reads only the release's own gem, after checking it matches what RubyGems serves. Nothing
+# here runs anything from the triggering run. Nothing else needs this workflow, so a failure
+# can't touch a release.
+on:
+  workflow_run: # zizmor: ignore[dangerous-triggers] checks out only main's own commit, runs no artifact
+    workflows: [release]
+    types: [completed]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: attest-${{ github.event.workflow_run.head_sha }}
+  cancel-in-progress: false
+
+jobs:
+  sbom:
+    if: >-
+      github.event.workflow_run.conclusion == 'success' &&
+      github.event.workflow_run.head_branch == 'main' &&
+      github.event.workflow_run.repository.full_name == github.repository
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: write
+    outputs:
+      version: ${{ steps.resolve.outputs.version }}
+    env:
+      GH_TOKEN: ${{ github.token }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ github.event.workflow_run.head_sha }}
+          persist-credentials: false
+      - uses: ruby/setup-ruby@7f797815d8adceb1c412e7abefdd1ab4abc47a5f # v1.335.0
+        with:
+          ruby-version: "3.4"
+          bundler-cache: false
+      # A green release run can have published nothing new, so no matching Release is a no-op.
+      - name: resolve the release
+        id: resolve
+        run: |
+          version="$(ruby -Ilib -e 'require "wurk/version"; print Wurk::VERSION')"
+          tag="$(ruby -Itasks -e 'require "release_helpers"; print ReleaseHelpers.git_tag_for(ARGV[0])' "$version")"
+          echo "tag=$tag" >> "$GITHUB_OUTPUT"
+          if gh release view "$tag" >/dev/null 2>&1; then
+            echo "version=$version" >> "$GITHUB_OUTPUT"
+          fi
+      - name: fetch the gem and check it against RubyGems
+        if: steps.resolve.outputs.version != ''
+        env:
+          VERSION: ${{ steps.resolve.outputs.version }}
+          TAG: ${{ steps.resolve.outputs.tag }}
+        run: |
+          mkdir -p pkg
+          gh release download "$TAG" --pattern "wurk-${VERSION}.gem" --dir pkg
+          curl -fsSL --retry 5 --max-time 60 -o /tmp/published.gem "https://rubygems.org/downloads/wurk-${VERSION}.gem"
+          cmp "pkg/wurk-${VERSION}.gem" /tmp/published.gem
+      - name: write and attach the SBOM
+        if: steps.resolve.outputs.version != ''
+        env:
+          VERSION: ${{ steps.resolve.outputs.version }}
+          TAG: ${{ steps.resolve.outputs.tag }}
+        run: |
+          bin/gem-sbom "pkg/wurk-${VERSION}.gem" > "pkg/wurk-${VERSION}.cdx.json"
+          gh release upload "$TAG" "pkg/wurk-${VERSION}.cdx.json" --clobber
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        if: steps.resolve.outputs.version != ''
+        with:
+          name: sbom
+          path: pkg/
+          retention-days: 1
+
+  attest:
+    needs: sbom
+    if: needs.sbom.outputs.version != ''
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: read
+      id-token: write
+      attestations: write
+    steps:
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          name: sbom
+          path: pkg
+      - uses: actions/attest-sbom@c604332985a26aa8cf1bdc465b92731239ec6b9e # v4.1.0
+        with:
+          subject-path: pkg/wurk-${{ needs.sbom.outputs.version }}.gem
+          sbom-path: pkg/wurk-${{ needs.sbom.outputs.version }}.cdx.json

@@ -17,10 +17,12 @@ class InstallGeneratorTest < Wurk::Test::UnitCase
       FileUtils.mkdir_p(File.join(root, 'config'))
       File.write(File.join(root, 'config/routes.rb'), "Rails.application.routes.draw do\nend\n")
 
-      capture_io { Wurk::Generators::InstallGenerator.start([], destination_root: root) }
+      out, = capture_io { Wurk::Generators::InstallGenerator.start([], destination_root: root) }
 
       assert_equal File.read(TEMPLATE), File.read(File.join(root, 'config/initializers/wurk.rb'))
       assert_match(%r{^\s*# mount Wurk::Engine => "/wurk"}, File.read(File.join(root, 'config/routes.rb')))
+      assert_match(/put it behind authentication/, out)
+      assert_match(/bundle exec wurkswarm/, out)
     end
   end
 end

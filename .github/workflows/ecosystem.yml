@@ -34,7 +34,8 @@ permissions:
 
 concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}
-  # Never cancel main's own runs (see test.yml).
+  # A running main run is never cancelled. One group, unlike test.yml, because the
+  # watcher relies on it: a queued run can be replaced, and the next one covers it.
   cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 jobs:
@@ -87,13 +88,15 @@ jobs:
 
   ecosystem:
     needs: detect
+    if: ${{ !cancelled() }}
     runs-on: ubuntu-latest
     # Four harnesses, each cloning and installing its own bundle: ~2.5 min on a warm
     # developer box. Their suites take seconds; the installs are what a cold run pays.
     timeout-minutes: 15
     services:
       redis:
-        image: redis:7.4
+        # An empty image starts no service, so a no-op run skips the pull.
+        image: ${{ (needs.detect.result != 'success' || (needs.detect.outputs.dup != 'true' && (github.event_name != 'pull_request' || needs.detect.outputs.ruby == 'true'))) && 'redis:7.4' || '' }}
         # Container port only — Docker binds a free host port. See test.yml.
         ports: ["6379"]
         options: >-
@@ -102,7 +105,7 @@ jobs:
     env:
       # Per-step gate, not a job-level `if:` — a skipped job reports as a
       # satisfied check. See test.yml's `test` job (#469).
-      RUN: ${{ needs.detect.outputs.dup != 'true' && (github.event_name != 'pull_request' || needs.detect.outputs.ruby == 'true') }}
+      RUN: ${{ needs.detect.result != 'success' || (needs.detect.outputs.dup != 'true' && (github.event_name != 'pull_request' || needs.detect.outputs.ruby == 'true')) }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         if: env.RUN == 'true'

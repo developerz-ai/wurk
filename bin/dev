@@ -20,7 +20,6 @@
 set -euo pipefail
 
 cd "$(dirname "$0")/.."
-ROOT="$PWD"
 PORT="${PORT:-3000}"
 # Exported so the Vite subprocess (vite.config.ts) reads the same port bin/dev
 # logs — otherwise the log line and the real server could disagree.
@@ -55,16 +54,17 @@ else
   exit 1
 fi
 
+if ! command -v bun >/dev/null 2>&1; then
+  echo "    ERROR: bun is not on PATH, and the dashboard is built with it." >&2
+  echo "    Install it (curl -fsSL https://bun.sh/install | bash) and retry." >&2
+  exit 1
+fi
+
 echo "==> frontend deps (bun)"
 (cd frontend && bun install >/dev/null)
 
-echo "==> dummy app (gems → project-local path, then db:prepare)"
-(
-  cd test/dummy
-  bundle config set --local path vendor/bundle
-  bundle check >/dev/null 2>&1 || bundle install
-  bin/rails db:prepare >/dev/null
-)
+echo "==> dummy app (gems, then db:prepare)"
+bin/dummy-bundle
 
 vite_dev=0
 if [ "${NO_VITE:-0}" != "1" ]; then
@@ -73,7 +73,12 @@ if [ "${NO_VITE:-0}" != "1" ]; then
   pids+=("$!")
   vite_dev=1
 else
-  echo "==> NO_VITE=1 — serving the prebuilt bundle (run bin/rake frontend:build if stale)"
+  echo "==> NO_VITE=1 — serving the prebuilt bundle"
+  built="$(grep -oE '"version": *"[^"]+"' vendor/assets/dashboard/wurk-manifest.json 2>/dev/null | grep -oE '"[^"]+"$' | tr -d '"' || true)"
+  wanted="$(grep -oE "[\"'][0-9][^\"']*[\"']" lib/wurk/version.rb | head -1 | tr -d "\"'")"
+  if [ "$built" != "$wanted" ]; then
+    echo "    the bundle is ${built:-missing}, not ${wanted}: run bin/rake frontend:build first" >&2
+  fi
 fi
 
 echo
@@ -83,5 +88,8 @@ cd test/dummy
 if [ "$vite_dev" = "1" ]; then export WURK_VITE_DEV=1; fi
 # Not `exec`: the shell must stay alive so the EXIT trap runs cleanup() on
 # Ctrl-C — exec would replace this process and leak the Vite job + Redis
-# container.
-bin/rails server -p "$PORT"
+# container. In the background, because bash defers a trap until a foreground child
+# exits, so a plain TERM to this script would otherwise change nothing.
+bin/rails server -p "$PORT" &
+pids+=("$!")
+wait "$!"

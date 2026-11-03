@@ -11,6 +11,8 @@ module Wurk
     # Oldest version each non-Redis backend has been run against.
     TESTED_FLOORS = { 'dragonfly' => '1.34.0', 'valkey' => '8.0.0' }.freeze
     MAX_LISTED = 20
+    SUBCLASS = ::Module.instance_method(:<)
+    NAME = ::Module.instance_method(:name)
 
     module_function
 
@@ -71,11 +73,15 @@ module Wurk
       end
     end
 
+    # A walk over every class meets classes that redefine these with other arguments
+    # (Faker::Travel::Airport.name takes required keywords), and one such class must
+    # not cost the app this check.
     def locked_job_classes
       ::ObjectSpace.each_object(::Class).filter_map do |klass|
-        next unless klass.name && klass < Wurk::Worker
+        next unless SUBCLASS.bind_call(klass, Wurk::Worker)
 
-        klass.name if klass.get_sidekiq_options.key?('lock')
+        name = NAME.bind_call(klass)
+        name if name && klass.get_sidekiq_options.key?('lock')
       end.sort
     end
 

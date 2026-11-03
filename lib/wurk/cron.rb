@@ -450,6 +450,21 @@ module Wurk
         @pruned_klasses = {}
       end
 
+      # How late a slot may fire, in seconds, instead of being skipped, for every
+      # loop of this cluster's pollers. Default MISSED_TICK_THRESHOLD. A process-wide
+      # setting and not a loop option, which would enter the loop's identity.
+      #
+      # Coerced here, because the poller rescues per loop: a value it could not
+      # compare would stop every loop on every tick with nothing failing at boot.
+      def grace=(seconds)
+        grace = Float(seconds, exception: false)
+        unless grace&.finite? && grace.positive?
+          raise ArgumentError, "periodic grace must be a positive, finite number of seconds: #{seconds.inspect}"
+        end
+
+        (@config || Wurk.configuration)[:cron_grace] = grace
+      end
+
       def register(cron, klass, **opts)
         klass_name = klass.is_a?(String) ? klass : klass.to_s
         tz = opts.delete(:tz) || @tz
@@ -611,10 +626,12 @@ module Wurk
       end
     end
 
-    # Once-per-minute tick driver. Only the cluster leader iterates the LoopSet
-    # and enqueues; non-leaders return early. A slot that wall-clock has passed
-    # by more than `MISSED_TICK_THRESHOLD` seconds is skipped with a warning,
-    # never backfilled.
+    # Once-per-minute tick driver, plus one tick the moment this process wins the
+    # lock: at a tick's phase, a leader that lives under a minute would never tick.
+    # Only the cluster leader iterates the LoopSet and enqueues; non-leaders return
+    # early. A slot that wall-clock has passed by more than `MISSED_TICK_THRESHOLD`
+    # seconds is skipped with a warning, never backfilled, and the occurrence due
+    # now, if any, fires in its place.
     class Poller
       include Component
 
@@ -625,17 +642,22 @@ module Wurk
         # Operators never need to touch this; integration tests shrink it so a
         # due loop fires within the test window instead of waiting a full minute.
         @tick_interval = config[:cron_tick_interval] || DEFAULT_TICK_SECONDS
-        @timer = TimerLoop.new(@tick_interval)
+        @done = false
+        @woken = false
+        @mutex = ::Mutex.new
+        @sleeper = ::ConditionVariable.new
+        @on_leader = method(:wake_for_leadership)
       end
 
-      # TimerLoop waits one interval before the first tick: don't fire a
-      # catch-up burst the instant we boot (the leader is barely settled), and
-      # let a short-lived process exit without ticking at all.
+      # The loop waits one interval before its first tick unless this process
+      # wins the lock first: let a process that never leads, or exits at once,
+      # exit without ticking at all.
       def start
         return @thread if @thread
 
-        @timer.reset
-        @thread = safe_thread('cron-poller') { @timer.run { tick } }
+        @mutex.synchronize { @done = false }
+        leader_hooks << @on_leader
+        @thread = safe_thread('cron-poller') { run_loop }
       end
 
       # Blocks until the thread is really gone: the launcher releases the
@@ -644,10 +666,14 @@ module Wurk
       #
       # Cleared only on a confirmed join (Thread#join returns nil on timeout):
       # a wedged thread must stay tracked so #start's guard returns it instead
-      # of calling @timer.reset, which would un-terminate the loop it is still
-      # inside and leave two tick threads double-enqueuing the same loops.
+      # of clearing @done, which would un-terminate the loop it is still inside
+      # and leave two tick threads double-enqueuing the same loops.
       def terminate
-        @timer.terminate
+        leader_hooks.delete(@on_leader)
+        @mutex.synchronize do
+          @done = true
+          @sleeper.signal
+        end
         @thread = nil if @thread&.join(TimerLoop::JOIN_TIMEOUT)
       end
 
@@ -679,6 +705,10 @@ module Wurk
       # A slot older than the missed-tick threshold is not backfilled (ent §2.6:
       # no backfill on restart, missed ticks across a leader gap are dropped):
       # the marks still advance past it, but nothing is pushed.
+      #
+      # One claim, one push at most, whichever slot it pushes for: the occurrence
+      # due now stands in for a stale one under the stale one's mark, so a poller
+      # that read the same mark loses the CAS for both.
       def enqueue_if_due(loop_obj)
         return if loop_obj.paused?
 
@@ -686,9 +716,12 @@ module Wurk
         slot, mark = due_slot(loop_obj, now)
         return if slot.nil?
 
-        future = loop_obj.next_fire_after(slot, now)
+        firing = slot_to_fire(loop_obj, slot, now)
+        future = loop_obj.next_fire_after(firing || slot, now)
         return unless claim_fire?(loop_obj, mark, now, future)
-        return skip_missed(loop_obj, slot, now) if now - slot > missed_threshold
+
+        skip_missed(loop_obj, slot, now) unless firing == slot
+        return if firing.nil?
 
         jid = enqueue_claimed!(loop_obj)
         record_history(loop_obj, jid, now)
@@ -708,6 +741,53 @@ module Wurk
 
       private
 
+      def run_loop
+        wait_for_tick
+        until done?
+          tick
+          wait_for_tick
+        end
+      end
+
+      def wait_for_tick
+        @mutex.synchronize do
+          @sleeper.wait(@mutex, @tick_interval) unless @done || @woken
+          @woken = false
+        end
+      end
+
+      def done?
+        @mutex.synchronize { @done }
+      end
+
+      # Runs on the campaign thread. The gate's cached answer predates the win.
+      def wake_for_leadership
+        @leader_checked_at = nil
+        @mutex.synchronize do
+          @woken = true
+          @sleeper.signal
+        end
+      end
+
+      def leader_hooks
+        @config[:lifecycle_events].fetch(:leader)
+      end
+
+      def slot_to_fire(loop_obj, slot, now)
+        now - slot > missed_threshold ? latest_due(loop_obj, now) : slot
+      end
+
+      # The newest occurrence still inside the window a late slot may fire in.
+      def latest_due(loop_obj, now)
+        latest = nil
+        occurrence = loop_obj.next_fire_at(now - missed_threshold - 1)
+        while occurrence && occurrence <= now
+          latest = occurrence
+          occurrence = loop_obj.next_fire_at(occurrence)
+        end
+        latest
+      end
+
       # The slot this tick would fire and the token that claims it, or nil when
       # the loop has no resolvable occurrence or none is due yet. The token is
       # the stored `nf` when there is one, otherwise the slot we derived — see
@@ -723,7 +803,7 @@ module Wurk
       # Never tighter than a tick and a half: a raised tick interval must not
       # turn every on-time fire into a "missed" one.
       def missed_threshold
-        [MISSED_TICK_THRESHOLD, @tick_interval * 1.5].max
+        [@config[:cron_grace] || MISSED_TICK_THRESHOLD, @tick_interval * 1.5].max
       end
 
       def skip_missed(loop_obj, expected, now)

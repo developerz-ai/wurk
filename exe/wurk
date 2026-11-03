@@ -26,7 +26,6 @@ begin
 rescue StandardError => e
   raise e if $DEBUG
 
-  warn "wurk: #{e.message}"
-  warn e.backtrace.join("\n")
+  Wurk::CLI.report_failure('wurk', e)
   exit 1
 end

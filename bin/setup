@@ -33,16 +33,17 @@ if [ -d frontend ]; then
 fi
 
 echo "==> dummy app setup"
-(
-  cd test/dummy
-  # Install the dummy app's gems into a project-local path (test/dummy/.bundle
-  # points bundler at vendor/bundle). A read-only or permission-locked global
-  # gem home would otherwise fail the install with Bundler::PermissionError;
-  # a local path keeps `bin/setup` working on any machine. Both dirs are
-  # gitignored.
-  bundle config set --local path vendor/bundle
-  bundle check >/dev/null 2>&1 || bundle install
-  bin/rails db:prepare
-)
+bin/dummy-bundle
+
+redis_url="${REDIS_URL:-redis://localhost:6379/0}"
+redis_addr="${redis_url#*://}"
+redis_addr="${redis_addr##*@}"
+redis_addr="${redis_addr%%/*}"
+redis_host="${redis_addr%:*}"
+redis_port="${redis_addr##*:}"
+[ "$redis_host" != "$redis_addr" ] || redis_port=6379
+if ! (exec 3<>"/dev/tcp/${redis_host}/${redis_port}") 2>/dev/null; then
+  echo "==> no Redis on ${redis_host}:${redis_port} yet. The suite needs one: docker run --rm -p 6379:6379 redis:7.4"
+fi
 
 echo "==> ready. try: bin/rake test   (or bin/dev for the live dashboard)"

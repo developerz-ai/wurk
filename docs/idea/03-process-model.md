@@ -44,4 +44,4 @@ The parent waits on child PIDs. If a child exits unexpectedly, the parent respaw
 ## When forking is disabled
 
 - Test environment: everything runs inline in the test process.
-- Platforms without fork (JRuby, TruffleRuby, Windows): threads-only fallback, behaviorally equivalent to stock Sidekiq.
+- Platforms without fork (JRuby, TruffleRuby, Windows): only the single-process runner and `embed_in_web` apply. `Swarm#fork_child` calls `Process.fork` with no fallback, and no CI leg runs these platforms.

@@ -34,9 +34,8 @@ compared. Treat unverified items as open until your staging dry run closes them.
 
 > Verified against Wurk's Sidekiq-compat layer (`lib/wurk/compat.rb`), which mirrors
 > Sidekiq **8.1.x**, including its millisecond job timestamps. Coming from 7.x, read
-> [the timestamp warning](#millisecond-timestamps-on-a-7x-app). Requires **Ruby ≥ 3.2** and **Redis ≥ 7.0**. On JRuby /
-> TruffleRuby / Windows, Wurk falls back to threads-only mode (no fork),
-> behaviorally equivalent to stock Sidekiq.
+> [the timestamp warning](#millisecond-timestamps-on-a-7x-app). Requires **Ruby ≥ 3.2** and **Redis ≥ 7.0**. Without `fork` (JRuby,
+> TruffleRuby, Windows; untested in CI) only `wurk` and `config.wurk.embed_in_web` apply.
 
 ---
 
@@ -314,11 +313,11 @@ worker: bundle exec wurkswarm -e production
 
 ### Clustered Puma + the embedded swarm (important)
 
-When you mount the engine, the railtie **auto-starts an embedded swarm inside every
-non-console Rails process** (unless `WURK_DISABLED=1`, Rails console, or the Rails
-test env). Under **clustered Puma** (`workers > 0`) that means **every Puma worker
-forks its own Wurk swarm** — N Puma workers × `WURK_COUNT` children = a lot of
-duplicate worker processes you didn't intend, all fetching the same queues.
+When you mount the engine, the railtie forks a swarm **only inside a running web
+server** (or with `WURK_EMBED=1`). `WURK_DISABLED=1`, `rails runner`, rake tasks, the
+console and the test env all skip it. Under a **preforking server** (Puma with
+`workers > 0`, Unicorn, Passenger) the railtie **refuses to fork and logs a warning**,
+so that process runs no jobs until you start workers yourself.
 
 **The fix: run workers in a dedicated process and disable the embedded swarm on the
 web role.**
@@ -700,8 +699,8 @@ migrations are what this guide is checked against.
 6. **Ruby ≥ 3.2, Redis ≥ 7.0** required (Sidekiq 8 allows slightly older Ruby).
 7. **Fork-based by default.** On MRI, Wurk forks worker processes for real
    parallelism (load your app *before* the fork; the swarm closes parent
-   connections pre-fork and children reconnect). On JRuby / TruffleRuby / Windows it
-   falls back to threads-only, behaviorally equivalent to stock Sidekiq.
+   connections pre-fork and children reconnect). Without `fork`, only `wurk` and
+   `config.wurk.embed_in_web` apply; `wurkswarm` has no fallback.
 8. **`Sidekiq.pro?` and `Sidekiq.ent?` return `false`** — Wurk is free and reports
    itself as OSS, even though the Pro/Ent features are present. Don't gate behavior on
    these predicates.

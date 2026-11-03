@@ -6,8 +6,8 @@
 #   bin/check fast         lint + unit tests only                  (the inner loop)
 #   bin/check full         everything above + ecosystem            (third-party suites)
 #
-# Anything it runs, CI runs too — so a green `bin/check` is the same answer the
-# PR will get.
+# Anything it runs, CI runs too. CONTRIBUTING.md lists what CI runs that this does
+# not, so a green run is close to the PR's answer, not identical to it.
 #
 # Env knobs:
 #   NCPU=<n>   parallel test workers (default half the cores, 1..4; ceiling 14 — test_helper.rb)
@@ -36,18 +36,28 @@ failed=()
 # Each stage reports its own wall clock: the point of this script is to make the
 # slow stage obvious, so someone can reach for `bin/check fast` on the inner
 # loop instead of paying for the whole gate on every save.
+WURK_TEST_PRECONDITIONS_FILE="$(mktemp)"
+export WURK_TEST_PRECONDITIONS_FILE
+trap 'rm -f "$WURK_TEST_PRECONDITIONS_FILE"' EXIT
+
 stage() {
   local name="$1"
   shift
   local t0
   t0=$(date +%s)
+  : > "$WURK_TEST_PRECONDITIONS_FILE"
   echo
   echo "==> ${name}"
   if "$@"; then
     echo "    ✓ ${name} ($(($(date +%s) - t0))s)"
   else
     echo "    ✗ ${name} ($(($(date +%s) - t0))s)"
-    failed+=("$name")
+    # test_helper refused before running a test: no verdict, so it can't be a failure.
+    if [ -s "$WURK_TEST_PRECONDITIONS_FILE" ]; then
+      refused="$name"
+    else
+      failed+=("$name")
+    fi
   fi
 }
 
@@ -212,6 +222,11 @@ if [ "$MODE" = full ]; then
 fi
 
 echo
+if [ ${#failed[@]} -eq 0 ] && [ -n "${refused:-}" ]; then
+  echo "bin/check: '$refused' could not start; see above. That says nothing about this change." >&2
+  exit 75
+fi
+
 if [ ${#failed[@]} -eq 0 ]; then
   echo "bin/check ✓ all green in $(($(date +%s) - start))s"
   exit 0
