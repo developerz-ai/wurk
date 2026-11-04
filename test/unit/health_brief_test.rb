@@ -2990,8 +2990,8 @@ class HealthBriefTest < Minitest::Test
 
     refute_includes out, 'Dependabot is stuck',
                     'a past-budget PR whose checks all concluded SUCCESS is an old green ' \
-                    'pending merge, not stuck (health.md:103); the row must not report ' \
-                    "it stuck (stdout=#{out.inspect})"
+                    "pending merge, not stuck (#{dependabot_grading_cite}); the row must not " \
+                    "report it stuck (stdout=#{out.inspect})"
 
     assert_includes out, 'dependabot: 1 open PRs (bundler 1 SUCCESS)',
                     'the row still reports what it read — an old green is a line in the ' \
@@ -3019,7 +3019,8 @@ class HealthBriefTest < Minitest::Test
 
     refute_includes out, 'Dependabot is stuck',
                     'a past-budget PR with a check still running is in flight, not ' \
-                    "stuck (health.md:103); the row must not report it stuck (stdout=#{out.inspect})"
+                    "stuck (#{dependabot_grading_cite}); the row must not report it stuck " \
+                    "(stdout=#{out.inspect})"
 
     assert_includes out, 'dependabot: 1 open PRs (bundler 1 PENDING)',
                     'the row still reports what it read — a PR still in flight is a line ' \
@@ -4073,6 +4074,17 @@ class HealthBriefTest < Minitest::Test
     pr['headRefName'] = branch if branch
     pr['headRefOid'] = sha if sha
     pr
+  end
+
+  # The brief's row-15 grading rule, cited by the line that carries it. The
+  # line number is resolved from the brief at runtime: a pinned number goes
+  # stale on the brief's next edit and then points at a rule that is no longer
+  # there. A renamed heading falls back to naming the rule without a line
+  # number — a missing heading must not turn a passing test red.
+  def dependabot_grading_cite
+    index = @text.lines.index { |line| line.strip.start_with?('**Dependabot grading.**') }
+
+    index ? ".dz/briefs/health.md:#{index + 1}" : '.dz/briefs/health.md § Dependabot grading'
   end
 
   def write_fixture(dir, name, body)
