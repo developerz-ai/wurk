@@ -99,7 +99,7 @@ module Wurk
           gate = @gates[keys[1]]
           next if gate&.blocked?(now)
 
-          uow = gate ? claim(public_q, keys, gate, ack, now) : lmove(public_q, ack)
+          uow = gate ? claim(public_q, keys, gate, ack) : lmove(public_q, ack)
           ack = nil
           return uow if uow
         end
@@ -124,7 +124,7 @@ module Wurk
       # is deferred: an ACK handed back by a failed flush must not be able to
       # take the hold of whatever this thread is running by then. See
       # QueueSlot.claim_token.
-      def claim(public_q, keys, gate, ack, now)
+      def claim(public_q, keys, gate, ack)
         priv, name = keys
         token = QueueSlot.claim_token
         script_keys = [gate.slot_key, public_q, priv]
@@ -137,7 +137,12 @@ module Wurk
         # faster than a job finishes somewhere in the cluster, so re-asking on
         # every pass is how a full queue turns into a spin. An empty queue is
         # remembered by nobody, exactly as on the uncapped path.
-        gate.block!(now) if status == AT_CAPACITY
+        #
+        # Stamped with the time the refusal ARRIVED, not the time the question
+        # was sent: a slow Redis would otherwise eat the backoff window and
+        # the gate would already be expired when the refusal lands — which is
+        # the spin this remembers it to avoid.
+        gate.block!(::Process.clock_gettime(::Process::CLOCK_MONOTONIC)) if status == AT_CAPACITY
         nil
       rescue StandardError
         # The window #lmove guards: the ACK left its slot but never reached

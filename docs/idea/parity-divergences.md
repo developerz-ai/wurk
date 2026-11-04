@@ -1902,3 +1902,23 @@ deploy, where accepting it would quietly change how often a queue is served.
 **Why:** gems that need Rails at require time fail under the stock order, and apps written for the stock order fail under the other. Only attempting tells them apart, and a fresh process leaves no half-run class body behind.
 
 **Anchor:** `lib/wurk/cli.rb` `load_rails_framework`.
+
+## `Sidekiq.server?` is a runtime worker flag, not a namespace probe
+
+**Wurk:** `Sidekiq.server?` reports whether this process is running workers. It is false in a client process and true in a worker process.
+
+**Spec:** the free spec describes `server?` as "true if Sidekiq::CLI defined" — a namespace probe rather than a runtime flag.
+
+**Why:** Wurk aliases `Sidekiq::CLI` unconditionally, so the upstream namespace probe would answer true in every Wurk process, including a web process that only enqueues jobs. Wurk's flag preserves the observable outcome the probe is used for: false in a client process, true in a worker. The implementation of the probe is not observable; the runtime answer is.
+
+**Anchor:** `lib/wurk/compat.rb`, `lib/wurk.rb`.
+
+## The logging context lives under `:wurk_context`, not `:sidekiq_context`
+
+**Wurk:** `Sidekiq::Context` stores its thread-local logging context under `Thread.current[:wurk_context]`. A context added on one thread is not visible on another.
+
+**Spec:** the free spec names the thread-local key `Thread.current[:sidekiq_context]`.
+
+**Why:** the key is an internal storage detail of the logging context, not part of the public `Sidekiq::Context.with` / `.add` surface. The observable behaviour — a thread-local context that the public API reads and writes — is unchanged; Wurk keeps its own key so the two implementations cannot collide on a shared thread-local slot.
+
+**Anchor:** `lib/wurk/context.rb`.

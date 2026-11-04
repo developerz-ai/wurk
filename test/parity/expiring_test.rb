@@ -15,7 +15,8 @@ require 'securerandom'
 # - §7 a scheduled job expires `delay + expires_in` after perform_in (the
 #   section's worked example).
 # - §7 a job past `expiry` is skipped before perform and never retried; one
-#   still in time runs normally.
+#   still in time runs normally, and one that started in time finishes even
+#   when it ends past its expiry.
 # - §12 an expired job counts as success within a batch.
 #
 # `created_at` is epoch milliseconds (Sidekiq 8.1, see client_push_test.rb),
@@ -46,6 +47,17 @@ class ExpiringParityTest < Wurk::Test::UnitCase
 
     def perform(token)
       Log.record(token)
+    end
+  end
+
+  # Runs past its own expiry window: the job starts in time and finishes
+  # after the window closed.
+  class SlowJob
+    include Sidekiq::Job
+
+    def perform(token)
+      sleep 0.4
+      Log.record(token: token, finished_at: Time.now.to_f)
     end
   end
 
@@ -144,12 +156,30 @@ class ExpiringParityTest < Wurk::Test::UnitCase
     assert_predicate status, :complete?
   end
 
+  # §7: once `perform` starts, expiry does not preempt — a job that started
+  # in time runs to completion even when it finishes past its expiry. It is
+  # not retried and never reaches the dead set.
+  def test_expiry_does_not_preempt_a_started_perform
+    expiry = Time.now.to_f + 0.25
+    jid = push_raw({ 'expiry' => expiry }, SlowJob)
+
+    run_one
+
+    entry = Log.entries.first
+
+    refute_nil entry, 'the job performed'
+    assert_equal @token, entry[:token]
+    assert_operator entry[:finished_at], :>, expiry, 'the job finished past its expiry'
+    assert_nil Sidekiq::RetrySet.new.find_job(jid), 'the job was not retried'
+    assert_nil Sidekiq::DeadSet.new.find_job(jid), 'the job never reached the dead set'
+  end
+
   private
 
   def queued = Sidekiq.redis { |c| c.call('LRANGE', "queue:#{@queue}", 0, -1) }.map { |p| JSON.parse(p) }
 
-  def push_raw(extra)
-    Sidekiq::Client.push({ 'class' => PlainJob, 'queue' => @queue, 'args' => [@token] }.merge(extra))
+  def push_raw(extra, klass = PlainJob)
+    Sidekiq::Client.push({ 'class' => klass, 'queue' => @queue, 'args' => [@token] }.merge(extra))
   end
 
   def run_one

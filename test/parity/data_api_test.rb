@@ -2,6 +2,7 @@
 
 require_relative '../test_helper'
 require 'date'
+require 'logger'
 require 'zlib'
 require 'base64'
 
@@ -53,6 +54,9 @@ class DataApiParityTest < Wurk::Test::UnitCase
     assert_equal 5, stats.workers_size
   end
 
+  # §19.1: `Sidekiq::Stats` reads the global counters (`processed`,
+  # `failed`), the sorted-set sizes, the queue totals and the worker count.
+  # On an untouched Redis every one of them reads zero.
   def test_stats_on_an_empty_redis_are_zero
     stats = Sidekiq::Stats.new
 
@@ -60,6 +64,10 @@ class DataApiParityTest < Wurk::Test::UnitCase
     assert_equal 0, stats.failed
     assert_equal 0, stats.enqueued
     assert_equal 0, stats.workers_size
+    assert_equal 0, stats.scheduled_size
+    assert_equal 0, stats.retry_size
+    assert_equal 0, stats.dead_size
+    assert_equal 0, stats.processes_size
     assert_in_delta(0.0, stats.default_queue_latency)
     assert_kind_of Float, stats.default_queue_latency
   end
@@ -139,13 +147,17 @@ class DataApiParityTest < Wurk::Test::UnitCase
 
   # --- Queue (§19.2, Pro §6 / §11) ----------------------------------------------
 
+  # §19.2: `Sidekiq::Queue.all` returns a `Queue` for every name in the
+  # `queues` SET (free §1.1: "`queues` | SET | set of all known queue names
+  # (without `queue:` prefix)"), ordered by name.
   def test_queue_all_is_every_known_queue_sorted
     redis('SADD', 'queues', 'zeta', 'alpha', 'mid')
 
     all = Sidekiq::Queue.all
 
-    assert_equal %w[alpha mid zeta], all.map(&:name)
     assert(all.all?(Sidekiq::Queue))
+    assert_equal %w[alpha mid zeta], all.map(&:name),
+                 'every known queue is returned, by its bare name, ordered by name'
   end
 
   def test_queue_identity_and_size
@@ -637,15 +649,21 @@ class DataApiParityTest < Wurk::Test::UnitCase
 
   # --- ProcessSet / Process (§19.6, §1.4, §31 gotcha 17) ------------------------
 
+  # §19.6: `ProcessSet#each` yields a `Process` per live identity, and §1.4
+  # names the heartbeat hash fields a `Process` exposes (`busy`, `beat`,
+  # `quiet`, `rss`, `rtt_us`) alongside the `info` JSON's static metadata
+  # (`hostname`, `pid`, `tag`, `version`).
   def test_process_set_each_merges_heartbeat_fields_sorted_by_identity
     add_process('b-host:2:bbb', busy: 1, concurrency: 10, rss: 2048, quiet: 'true')
     add_process('a-host:1:aaa', busy: 0, concurrency: 5, rss: 1024)
 
     procs = Sidekiq::ProcessSet.new(false).to_a
 
-    assert_equal %w[a-host:1:aaa b-host:2:bbb], procs.map(&:identity)
-    b = procs.last
+    assert_equal %w[a-host:1:aaa b-host:2:bbb], procs.map(&:identity),
+                 'every live identity is yielded, ordered by identity'
+    b = procs.find { |p| p.identity == 'b-host:2:bbb' }
 
+    refute_nil b
     assert_equal 10, b['concurrency']
     assert_equal 1, b['busy']
     assert_kind_of Float, b['beat']
@@ -655,7 +673,7 @@ class DataApiParityTest < Wurk::Test::UnitCase
     assert_equal 'b-host', b['hostname']
     assert_equal 2, b['pid']
     assert_predicate b, :stopping?
-    refute_predicate procs.first, :stopping?
+    refute_predicate procs.find { |p| p.identity == 'a-host:1:aaa' }, :stopping?
   end
 
   def test_process_set_skips_identities_without_a_heartbeat
@@ -802,6 +820,35 @@ class DataApiParityTest < Wurk::Test::UnitCase
   def test_work_set_is_empty_without_processes
     assert_equal 0, Sidekiq::WorkSet.new.size
     assert_empty Sidekiq::WorkSet.new.to_a
+  end
+
+  # §31 gotcha 16: every heartbeat clears `<identity>:work` (UNLINK) and
+  # repopulates it with the work in flight — a stale field is gone after the
+  # beat, the live one is there.
+  def test_heartbeat_refreshes_the_work_hash
+    identity = "heartbeat-parity-#{Process.pid}-#{object_id}"
+    config = Sidekiq::Config.new
+    config.logger = ::Logger.new(IO::NULL)
+
+    redis('HSET', "#{identity}:work", 'stale-tid', '{"queue":"stale"}')
+    redis('HSET', "#{identity}:work", 'other-tid', '{}')
+
+    tid = "live-tid-#{object_id}"
+    Wurk::Processor::WORK_STATE.set(tid, { queue: 'live-queue', payload: '{"class":"LiveJob"}', run_at: now })
+
+    Wurk::Heartbeat.new(identity: identity, config: config).beat!
+
+    fields = redis('HGETALL', "#{identity}:work")
+    fields = fields.each_slice(2).to_h if fields.is_a?(Array)
+
+    refute fields.key?('stale-tid'), 'the stale work field is gone after the beat'
+    refute fields.key?('other-tid'), 'the work hash is rebuilt, not merged into'
+    assert fields.key?(tid), 'the work in flight is published'
+    assert_equal 'live-queue', Wurk.load_json(fields[tid])['queue']
+  ensure
+    Wurk::Processor::WORK_STATE.delete(tid) if tid
+    redis('DEL', "#{identity}:work", identity) if identity
+    redis('SREM', 'processes', identity) if identity
   end
 
   private

@@ -16,6 +16,17 @@ if ENV['COVERAGE']
     track_files 'lib/**/*.rb'
     minimum_coverage line: 90, branch: 90
     formatter SimpleCov::Formatter::CoberturaFormatter
+    # SimpleCov drops a resultset entry older than merge_timeout (600s by
+    # default) when it merges, and this suite runs longer than that: the
+    # workers store their results as they finish, so the first one to finish
+    # was already stale by the time the last one did, and the merged
+    # percentage described only part of the suite.
+    #
+    # A worker that stored its result during THIS run is not a stale leftover
+    # from an earlier one — test/support/coverage_merge.rb already tells those
+    # apart by the run's start time — and its coverage has to count. The
+    # window therefore has to outlast a whole run.
+    merge_timeout 24 * 3600
   end
 end
 

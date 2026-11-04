@@ -15,6 +15,8 @@ require 'securerandom'
 #   block synthesises a `Sidekiq::Batch::Empty` no-op so callbacks still fire.
 # - §2.4 `:success`/`:complete`/`:death` semantics, each firing once, with the
 #   JSON options handed to `on_<event>(status, options)` intact.
+# - §2.4 callbacks run as ordinary jobs on the callback queue and retry on
+#   failure like any job.
 # - §2.4 child `:success` before parent `:success`; §2.9 a step workflow whose
 #   callback reopens the parent and adds the next step keeps the parent open
 #   until that step and its callback are done.
@@ -67,6 +69,14 @@ class BatchParityTest < Wurk::Test::UnitCase
     def on_success(status, options) = Log.record(options['token'], ['success', status.bid, options])
     def on_complete(status, options) = Log.record(options['token'], ['complete', status.bid, options])
     def on_death(status, options) = Log.record(options['token'], ['death', status.bid, options])
+  end
+
+  # A callback whose target raises: the callback JOB must then be retried
+  # like any other job.
+  class FailingCallback
+    def on_success(_status, _options)
+      raise 'callback failed'
+    end
   end
 
   # §2.9, verbatim in shape: a job opens its own batch; a callback opens its
@@ -188,6 +198,9 @@ class BatchParityTest < Wurk::Test::UnitCase
 
     assert_equal 0, Sidekiq::Queue.new(@queue).size
     assert_empty Log.events(@token)
+    # §2.5: `total` counts the jobs added to the batch. A `jobs` block that
+    # raises adds none.
+    assert_equal %w[0], batch_counters(batch, 'total')
   end
 
   def test_an_empty_jobs_block_synthesises_an_empty_job_and_fires
@@ -234,6 +247,10 @@ class BatchParityTest < Wurk::Test::UnitCase
     assert_equal 1, log.count('shipped'), log.inspect
     assert_equal 'shipped', log.last, "the overall batch fired before its last step: #{log.inspect}"
     assert_operator log.index('step1_done'), :<, log.index('B')
+    # §2.9: "Child success cascades into parent pending-count decrement, so
+    # parent `:success` waits on full subtree." The parent's documented
+    # `pending` counter has drained to zero by the time `:success` fires.
+    assert_equal %w[0 1], batch_counters(overall, 'pending', 'success')
   end
 
   # --- §2.2 -------------------------------------------------------------------
@@ -249,8 +266,13 @@ class BatchParityTest < Wurk::Test::UnitCase
     drain
 
     assert_empty events_named('success'), 'the scheduled job is still pending'
+    # §2.8: the batch's live-jid set holds the removed job until it is dropped.
+    assert_includes Sidekiq.redis { |c| c.call('SMEMBERS', "b-#{batch.bid}-jids") }, later
+    # §2.2: `#remove_jobs(*jids)` returns the number of jobs dropped.
     assert_equal 1, batch.remove_jobs(later)
     refute_includes batch, later
+    # §2.8: the dropped job left the batch's live-jid set.
+    refute_includes Sidekiq.redis { |c| c.call('SMEMBERS', "b-#{batch.bid}-jids") }, later
 
     drain
 
@@ -361,7 +383,49 @@ class BatchParityTest < Wurk::Test::UnitCase
     Sidekiq.redis { |c| c.call('DEL', pro_marker) } if pro_marker
   end
 
+  # §2.4: callbacks run as ordinary jobs on the callback queue — "retry on
+  # failure like any job". A callback whose target raises must land in the
+  # retry set, not the dead set, until its attempts run out.
+  def test_a_failing_callback_job_retries
+    batch = new_batch
+    batch.on(:success, FailingCallback, 'token' => @token)
+    batch.jobs { ok(1) }
+
+    @processor.process_one # the batch's own job; the :success callback is enqueued next
+
+    payload = callback_payload
+
+    refute_nil payload, 'the :success callback was enqueued on the callback queue'
+    assert_same(true, payload['retry'], 'a callback job carries retry: true')
+    assert_equal 'Wurk::Batch::CallbackJob', payload['class']
+    assert_equal [batch.bid, 'BatchParityTest::FailingCallback', 'success', { 'token' => @token }],
+                 payload['args']
+
+    jid = payload['jid']
+    @processor.process_one # the callback job runs, and its target raises
+
+    entry = Sidekiq::RetrySet.new.find_job(jid)
+
+    refute_nil entry, 'the failed callback is scheduled for a retry'
+    assert_equal 0, entry.item['retry_count'], 'the first failure stamps retry_count zero'
+    assert entry.item['failed_at'], 'the failed callback records when it failed'
+    assert_nil Sidekiq::DeadSet.new.find_job(jid), 'the failed callback is not dead'
+  end
+
   private
+
+  # §2.8: the batch's counters live in the `b-<bid>` hash. A missing hash
+  # reads as nil, so the reader reports the documented zero rather than
+  # blowing up on a batch that never flushed.
+  def batch_counters(batch, *fields)
+    values = Sidekiq.redis { |c| c.call('HMGET', "b-#{batch.bid}", *fields) }
+    values.map { |value| value.nil? ? '0' : value }
+  end
+
+  def callback_payload
+    raw = Sidekiq.redis { |c| c.call('LRANGE', "queue:#{@cbq}", 0, -1) }.first
+    raw && JSON.parse(raw)
+  end
 
   def new_batch
     batch = Sidekiq::Batch.new
