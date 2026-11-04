@@ -1,4 +1,3 @@
-# Each entry is one sourced guarantee, not a claim of complete feature coverage.
 - id: client.json
   area: client
   behavior: Arguments round-trip as JSON-native values.
@@ -139,6 +138,20 @@
   promise: >-
     Past timestamps enqueued immediately (no `at` field).
   oracles: [ScheduledParityTest#test_perform_in_with_past_time_enqueues_immediately]
+- id: schedule.perform-in-future-score
+  area: scheduling
+  behavior: perform_in adds the job to the schedule sorted set with a future score.
+  source: docs/target/sidekiq-free.md#L27
+  promise: >-
+    | `schedule` | jobs scheduled for future execution, score = `at` timestamp |
+  oracles: [ScheduledParityTest#test_perform_in_adds_to_schedule_set_with_future_score]
+- id: schedule.member-core-fields
+  area: scheduling
+  behavior: A scheduled member omits the at field and keeps the core job fields.
+  source: docs/target/sidekiq-free.md#L535-L555
+  promise: >-
+    hash = hash.except("enqueued_at", "at")
+  oracles: [ScheduledParityTest#test_scheduled_member_omits_at_and_keeps_core_fields]
 - id: schedule.absolute
   area: scheduling
   behavior: perform_at uses the absolute supplied timestamp.
@@ -152,8 +165,7 @@
   source: docs/target/sidekiq-pro.md#L287-L296
   promise: >-
     Uses one Lua script that **atomically** `ZRANGEBYSCORE` + `ZREM` + `LPUSH` the due jobs into their queue.
-  reason: Existing scheduling oracles do not exercise atomic promotion across a crash.
-  future_work: oracle-schedule-atomic-promotion
+  oracles: [ScheduledParityTest#test_reliable_promotion_is_atomic]
 - id: retry.first
   area: retries
   behavior: The first failure stamps failed_at and retry_count zero.
@@ -210,6 +222,34 @@
   promise: >-
     | `:success` | All jobs in batch (and all descendant batches) succeeded | Fires **once**. Never fires if any job died. |
   oracles: [BatchParityTest#test_success_and_complete_fire_once_with_their_options]
+- id: batch.atomic-jobs-block
+  area: batches
+  behavior: A jobs block that raises enqueues nothing.
+  source: docs/target/sidekiq-pro.md#L71-L76
+  promise: >-
+    - Pushes all jobs in one Redis pipeline / transaction.
+  oracles: [BatchParityTest#test_a_raising_jobs_block_enqueues_nothing]
+- id: batch.step-workflow
+  area: batches
+  behavior: A step workflow keeps the parent batch open until every step and its callback are done.
+  source: docs/target/sidekiq-pro.md#L225-L230
+  promise: >-
+    - Child success cascades into parent pending-count decrement, so parent `:success` waits on full subtree.
+  oracles: [BatchParityTest#test_step_workflow_parent_waits_for_every_step_and_its_callback]
+- id: batch.remove-jobs
+  area: batches
+  behavior: remove_jobs drops a job from the batch and the batch completes without it.
+  source: docs/target/sidekiq-pro.md#L57
+  promise: >-
+    | `#remove_jobs(*jids)` | Integer | drop jobs from the batch (Pro 8.x) |
+  oracles: [BatchParityTest#test_remove_jobs_drops_a_job_and_the_batch_completes_without_it]
+- id: batch.redis-keys
+  area: batches
+  behavior: A batch is visible under the documented Redis keys.
+  source: docs/target/sidekiq-pro.md#L181-L193
+  promise: >-
+    | `b-<bid>-jids` | set | live JIDs in the batch |
+  oracles: [BatchParityTest#test_batch_is_visible_under_the_documented_keys]
 - id: batch.complete
   area: batches
   behavior: Complete fires once even when a job dies.
@@ -258,8 +298,7 @@
   source: docs/target/sidekiq-pro.md#L109
   promise: >-
     - Callbacks run as ordinary Sidekiq jobs on `callback_queue`; retry on failure like any job.
-  reason: Callback parity assertions do not yet fail and retry a callback job.
-  future_work: oracle-batch-callback-retry
+  oracles: [BatchParityTest#test_a_failing_callback_job_retries]
 - id: batch.marker-collision
   area: batches
   behavior: >-
@@ -510,8 +549,7 @@
   source: docs/target/sidekiq-free.md#L1608
   promise: >-
     **Heartbeat clears `<identity>:work`** on each beat: `UNLINK` + repopulate.
-  reason: DataApiParityTest seeds work hashes directly in Redis and tests readers; it never invokes the heartbeat writer or observes clearing and repopulation across beats.
-  future_work: oracle-gotcha-heartbeat-work-hash-refresh
+  oracles: [DataApiParityTest#test_heartbeat_refreshes_the_work_hash]
 - id: gotcha.process-cleanup
   area: data-api
   behavior: ProcessSet cleanup prunes identities without heartbeat info and rate-limits subsequent cleanup using process_cleanup with a TTL of at most 60 seconds.
@@ -526,6 +564,20 @@
   promise: >-
     `opts[:args]` is a **static** array evaluated once at boot; passed verbatim into `klass.perform_async(*args)` on every tick.
   oracles: [PeriodicParityTest#test_a_tick_enqueues_what_perform_async_would]
+- id: cron.args
+  area: cron
+  behavior: Periodic loop args are passed verbatim into perform_async on every tick.
+  source: docs/target/sidekiq-ent.md#L225
+  promise: >-
+    `opts[:args]` is a **static** array evaluated once at boot; passed verbatim into `klass.perform_async(*args)` on every tick.
+  oracles: [PeriodicParityTest#test_args_pass_verbatim]
+- id: cron.pause-loop
+  area: cron
+  behavior: Pausing a periodic loop writes paused:1 to the loop HASH and unpausing clears it.
+  source: docs/target/sidekiq-ent.md#L249
+  promise: >-
+    - pause / unpause individual loops (writes `paused:1` to loop HASH)
+  oracles: [PeriodicParityTest#test_pause_and_unpause_are_the_loop_hash_field]
 - id: cron.options
   area: cron
   behavior: Loop retry and queue options override worker defaults.
@@ -547,8 +599,7 @@
   promise: >-
     > **Wurk divergence (#15):** periodic enqueue is gated by the *single* cluster
     > leader (§6, via `Component#leader?`), not a separate `cron-leader` lock.
-  reason: Periodic oracles do not yet establish leadership with competing processes.
-  future_work: oracle-cron-cluster-leader
+  oracles: [PeriodicParityTest#test_only_the_cluster_leader_ticks]
 - id: crypto.envelope
   area: encryption
   behavior: Wurk uses the documented JSON GCM envelope rather than upstream binary crypto format.
@@ -777,8 +828,7 @@
   source: docs/target/sidekiq-pro.md#L348
   promise: >-
     - Once `perform` starts, expiry does not preempt — long-running jobs that started in time finish.
-  reason: Existing expiration oracles do not advance past expiry during an in-flight perform.
-  future_work: oracle-expiry-in-flight-non-preemption
+  oracles: [ExpiringParityTest#test_expiry_does_not_preempt_a_started_perform]
 - id: metrics.minute-totals
   area: metrics
   behavior: Minute-window queries sum p, f and ms within the window and expose ms totals as seconds.
@@ -879,274 +929,231 @@
   source: docs/target/sidekiq-free.md#L215
   promise: >-
     class Shutdown < Interrupt; end
-  reason: No parity oracle asserts the Shutdown exception ancestry.
-  future_work: oracle-module-shutdown-interrupt
+  oracles: [ModuleApiParityTest#test_shutdown_interrupt]
 - id: module.testing-default
   area: module
   behavior: Calling testing! without a mode selects fake testing.
   source: docs/target/sidekiq-free.md#L218
   promise: >-
     def self.testing!(mode = :fake, &block)
-  reason: No parity oracle calls the top-level testing! entrypoint without a mode and checks the selected mode.
-  future_work: oracle-module-testing-default
+  oracles: [ModuleApiParityTest#test_testing_default]
 - id: module.testing-modes
   area: module
   behavior: testing! accepts fake, disable and inline modes.
   source: docs/target/sidekiq-free.md#L218
   promise: >-
     # mode in [:fake, :disable, :inline]
-  reason: No parity oracle exercises each supported mode through the top-level testing! entrypoint.
-  future_work: oracle-module-testing-modes
+  oracles: [ModuleApiParityTest#test_testing_modes]
 - id: module.server-flag
   area: module
-  behavior: server? reports whether Sidekiq::CLI is defined.
-  source: docs/target/sidekiq-free.md#L219
+  behavior: server? reports whether this process is running workers, false in a client process and true in a worker.
+  source: docs/idea/parity-divergences.md#L1906-L1914
   promise: >-
-    def self.server?     # true if Sidekiq::CLI defined
-  reason: No isolated parity oracle checks server? before and after CLI definition.
-  future_work: oracle-module-server-flag
+    `Sidekiq.server?` reports whether this process is running workers. It is false in a client process and true in a worker process.
+  oracles: [ModuleApiParityTest#test_server_flag]
 - id: module.pro-flag
   area: module
-  behavior: Upstream pro? is true when Sidekiq::Pro is defined; Wurk intentionally always returns false even though that namespace exists.
-  source: docs/target/sidekiq-free.md#L220
+  behavior: Sidekiq.pro? returns false even though the Sidekiq::Pro namespace exists.
+  source: docs/target/sidekiq-free.md#L1631
   promise: >-
-    def self.pro?        # true if Sidekiq::Pro defined
-  reason: >-
-    Intentional divergence per docs/target/sidekiq-free.md#L1631: Wurk ships Pro features
-    in free OSS and returns false to avoid third-party paid-only branches.
-    CompatAliasesTest#test_pro_predicate_false (test/unit/compat_aliases_test.rb)
-    covers the false return, not the upstream namespace-presence promise; this case
-    remains pending without a faithful upstream oracle.
-  future_work: oracle-module-pro-flag
+    `Sidekiq.pro?` / `Sidekiq.ent?` are the gates — Wurk should return `false` from both.
+  oracles: [ModuleApiParityTest#test_pro_flag]
 - id: module.ent-flag
   area: module
-  behavior: Upstream ent? is true when Sidekiq::Enterprise is defined; Wurk intentionally always returns false even though that namespace exists.
-  source: docs/target/sidekiq-free.md#L221
+  behavior: Sidekiq.ent? returns false even though the Sidekiq::Enterprise namespace exists.
+  source: docs/target/sidekiq-free.md#L1631
   promise: >-
-    def self.ent?        # true if Sidekiq::Enterprise defined
-  reason: >-
-    Intentional divergence per docs/target/sidekiq-free.md#L1631: Wurk ships Enterprise
-    features in free OSS and returns false to avoid third-party paid-only branches.
-    CompatAliasesTest#test_ent_predicate_false (test/unit/compat_aliases_test.rb)
-    covers the false return, not the upstream namespace-presence promise; this case
-    remains pending without a faithful upstream oracle.
-  future_work: oracle-module-ent-flag
+    `Sidekiq.pro?` / `Sidekiq.ent?` are the gates — Wurk should return `false` from both.
+  oracles: [ModuleApiParityTest#test_ent_flag]
 - id: module.load-json
   area: module
   behavior: load_json parses its string using JSON.parse semantics.
   source: docs/target/sidekiq-free.md#L224
   promise: >-
     def self.load_json(string)        # JSON.parse
-  reason: Existing payload round-trip assertions do not directly compare load_json results and parse errors with JSON.parse.
-  future_work: oracle-module-load-json
+  oracles: [ModuleApiParityTest#test_load_json]
 - id: module.dump-json
   area: module
   behavior: dump_json serializes its object using JSON.generate semantics.
   source: docs/target/sidekiq-free.md#L225
   promise: >-
     def self.dump_json(object)        # JSON.generate
-  reason: Existing payload assertions do not directly compare dump_json output and generation errors with JSON.generate.
-  future_work: oracle-module-dump-json
+  oracles: [ModuleApiParityTest#test_dump_json]
 - id: module.capsule-pool
   area: module
   behavior: redis_pool selects the current thread's capsule-aware pool.
   source: docs/target/sidekiq-free.md#L228
   promise: >-
     def self.redis_pool               # current pool (capsule-aware via Thread.current)
-  reason: No parity oracle switches the current capsule and asserts top-level redis_pool identity.
-  future_work: oracle-module-capsule-pool
+  oracles: [ModuleApiParityTest#test_capsule_pool]
 - id: module.redis-yield
   area: module
   behavior: redis yields a connection to its block.
   source: docs/target/sidekiq-free.md#L229
   promise: >-
     def self.redis(&block)            # yield conn
-  reason: No source-first parity oracle asserts the connection yielded by the top-level redis method.
-  future_work: oracle-module-redis-yield
+  oracles: [ModuleApiParityTest#test_redis_yield]
 - id: module.strict-args-mode
   area: module
   behavior: strict_args! selects raise, warn or disabled argument validation.
   source: docs/target/sidekiq-free.md#L232
   promise: >-
     def self.strict_args!(mode = :raise)   # :raise | :warn | false
-  reason: The default strict-argument oracle does not change modes through strict_args! and assert each resulting validation outcome.
-  future_work: oracle-module-strict-args-mode
+  oracles: [ModuleApiParityTest#test_strict_args_mode]
 - id: module.strict-args-default
   area: module
   behavior: Calling strict_args! without a mode selects raise mode.
   source: docs/target/sidekiq-free.md#L232
   promise: >-
     def self.strict_args!(mode = :raise)
-  reason: No parity oracle restores raise mode with a no-argument strict_args! call after selecting another mode.
-  future_work: oracle-module-strict-args-default
+  oracles: [ModuleApiParityTest#test_strict_args_default]
 - id: module.default-job-options
   area: module
   behavior: Initial default_job_options are retry true and queue default.
   source: docs/target/sidekiq-free.md#L235
   promise: >-
     def self.default_job_options      # default {"retry" => true, "queue" => "default"}
-  reason: Enqueue defaults do not directly assert the complete initial top-level default_job_options hash.
-  future_work: oracle-module-default-job-options
+  oracles: [ModuleApiParityTest#test_default_job_options]
 - id: module.merge-job-options
   area: module
   behavior: Assigning default_job_options merges the supplied options into existing defaults.
   source: docs/target/sidekiq-free.md#L236
   promise: >-
     def self.default_job_options=(h)  # merge in
-  reason: No parity oracle assigns partial defaults and checks that unrelated existing options survive.
-  future_work: oracle-module-merge-job-options
+  oracles: [ModuleApiParityTest#test_merge_job_options]
 - id: module.configuration-singleton
   area: module
   behavior: default_configuration returns the Config singleton.
   source: docs/target/sidekiq-free.md#L239
   promise: >-
     def self.default_configuration    # Sidekiq::Config singleton
-  reason: No parity oracle asserts Config type and repeated-call identity for default_configuration.
-  future_work: oracle-module-configuration-singleton
+  oracles: [ModuleApiParityTest#test_configuration_singleton]
 - id: module.configure-server
   area: module
   behavior: configure_server runs its block only in server mode.
   source: docs/target/sidekiq-free.md#L240
   promise: >-
     def self.configure_server(&block) # block runs if server?
-  reason: No isolated parity oracle checks configure_server block execution in both server and client modes.
-  future_work: oracle-module-configure-server
+  oracles: [ModuleApiParityTest#test_configure_server]
 - id: module.configure-client
   area: module
   behavior: configure_client runs its block only outside server mode.
   source: docs/target/sidekiq-free.md#L241
   promise: >-
     def self.configure_client(&block) # block runs if !server?
-  reason: No isolated parity oracle checks configure_client block execution in both client and server modes.
-  future_work: oracle-module-configure-client
+  oracles: [ModuleApiParityTest#test_configure_client]
 - id: module.configure-embed-result
   area: module
   behavior: configure_embed returns an Embedded instance.
   source: docs/target/sidekiq-free.md#L242
   promise: >-
     def self.configure_embed(&block)  # returns Sidekiq::Embedded; concurrency=2 default
-  reason: No parity oracle asserts the object returned by configure_embed.
-  future_work: oracle-module-configure-embed-result
+  oracles: [ModuleApiParityTest#test_configure_embed_result]
 - id: module.configure-embed-concurrency
   area: module
   behavior: configure_embed defaults concurrency to two.
   source: docs/target/sidekiq-free.md#L242
   promise: >-
     concurrency=2 default
-  reason: No parity oracle observes embedded concurrency without an explicit override.
-  future_work: oracle-module-configure-embed-concurrency
+  oracles: [ModuleApiParityTest#test_configure_embed_concurrency]
 - id: module.logger
   area: module
   behavior: The top-level module exposes its logger through logger.
   source: docs/target/sidekiq-free.md#L244
   promise: >-
     def self.logger
-  reason: No source-first parity oracle calls the top-level logger accessor and checks the returned logger.
-  future_work: oracle-module-logger
+  oracles: [ModuleApiParityTest#test_logger]
 - id: module.freeze-configuration
   area: module
   behavior: freeze! locks the default configuration.
   source: docs/target/sidekiq-free.md#L245
   promise: >-
     def self.freeze!                  # locks default_configuration
-  reason: No isolated parity oracle attempts configuration mutation after top-level freeze!.
-  future_work: oracle-module-freeze-configuration
+  oracles: [ModuleApiParityTest#test_freeze_configuration]
 - id: module.transactional-push
   area: module
   behavior: transactional_push! opts in to TransactionAwareClient for ActiveRecord.
   source: docs/target/sidekiq-free.md#L247
   promise: >-
     def self.transactional_push!      # opt-in to TransactionAwareClient (ActiveRecord)
-  reason: No parity oracle enables transactional_push! and observes selection of the transaction-aware client.
-  future_work: oracle-module-transactional-push
+  oracles: [ModuleApiParityTest#test_transactional_push]
 - id: config.capsules-reader
   area: configuration
   behavior: Config exposes its capsule collection through capsules.
   source: docs/target/sidekiq-free.md#L295
   promise: >-
     attr_reader :capsules
-  reason: No parity oracle asserts that named capsule registration is visible through the capsules reader.
-  future_work: oracle-config-capsules-reader
+  oracles: [ConfigParityTest#test_capsules_reader]
 - id: config.thread-priority-default
   area: configuration
   behavior: Config thread_priority defaults to minus one.
   source: docs/target/sidekiq-free.md#L296
   promise: >-
     attr_accessor :thread_priority    # default DEFAULT_THREAD_PRIORITY = -1
-  reason: No parity oracle reads thread_priority on a fresh Config.
-  future_work: oracle-config-thread-priority-default
+  oracles: [ConfigParityTest#test_thread_priority_default]
 - id: config.thread-priority-assignment
   area: configuration
   behavior: Config thread_priority can be assigned and read back.
   source: docs/target/sidekiq-free.md#L296
   promise: >-
     attr_accessor :thread_priority
-  reason: No parity oracle asserts a thread_priority accessor round-trip.
-  future_work: oracle-config-thread-priority-assignment
+  oracles: [ConfigParityTest#test_thread_priority_assignment]
 - id: config.option-read
   area: configuration
   behavior: Config bracket reads delegate to its options.
   source: docs/target/sidekiq-free.md#L299
   promise: >-
     def [], []=, fetch, key?, has_key?, merge!, dig   # delegate to @options
-  reason: No dedicated parity oracle checks bracket lookup of a supplied Config option.
-  future_work: oracle-config-option-read
+  oracles: [ConfigParityTest#test_option_read]
 - id: config.option-write
   area: configuration
   behavior: Config bracket assignment updates its options.
   source: docs/target/sidekiq-free.md#L299
   promise: >-
     def [], []=, fetch, key?, has_key?, merge!, dig   # delegate to @options
-  reason: No dedicated parity oracle writes an option through brackets and checks the resulting option value.
-  future_work: oracle-config-option-write
+  oracles: [ConfigParityTest#test_option_write]
 - id: config.option-fetch
   area: configuration
   behavior: Config fetch delegates to its options.
   source: docs/target/sidekiq-free.md#L299
   promise: >-
     def [], []=, fetch, key?, has_key?, merge!, dig   # delegate to @options
-  reason: No parity oracle checks Config fetch for present and missing option keys.
-  future_work: oracle-config-option-fetch
+  oracles: [ConfigParityTest#test_option_fetch]
 - id: config.option-key
   area: configuration
   behavior: Config key? reports option key presence.
   source: docs/target/sidekiq-free.md#L299
   promise: >-
     def [], []=, fetch, key?, has_key?, merge!, dig   # delegate to @options
-  reason: No parity oracle distinguishes an absent option from a present nil-valued option through key?.
-  future_work: oracle-config-option-key
+  oracles: [ConfigParityTest#test_option_key]
 - id: config.option-has-key
   area: configuration
   behavior: Config has_key? reports option key presence.
   source: docs/target/sidekiq-free.md#L299
   promise: >-
     def [], []=, fetch, key?, has_key?, merge!, dig   # delegate to @options
-  reason: No parity oracle checks has_key? for present and absent options.
-  future_work: oracle-config-option-has-key
+  oracles: [ConfigParityTest#test_option_has_key]
 - id: config.option-merge
   area: configuration
   behavior: Config merge! merges supplied values into its options.
   source: docs/target/sidekiq-free.md#L299
   promise: >-
     def [], []=, fetch, key?, has_key?, merge!, dig   # delegate to @options
-  reason: No parity oracle checks option replacement and preservation after Config merge!.
-  future_work: oracle-config-option-merge
+  oracles: [ConfigParityTest#test_option_merge]
 - id: config.option-dig
   area: configuration
   behavior: Config dig traverses nested options.
   source: docs/target/sidekiq-free.md#L299
   promise: >-
     def [], []=, fetch, key?, has_key?, merge!, dig   # delegate to @options
-  reason: No parity oracle checks nested option retrieval through Config dig.
-  future_work: oracle-config-option-dig
+  oracles: [ConfigParityTest#test_option_dig]
 - id: config.inspect
   area: configuration
   behavior: Config provides an inspect representation.
   source: docs/target/sidekiq-free.md#L300
   promise: >-
     def inspect
-  reason: No parity oracle asserts that Config inspect returns a representation string.
-  future_work: oracle-config-inspect
+  oracles: [ConfigParityTest#test_inspect]
 - id: config.json
   area: configuration
   behavior: Config provides a JSON representation through to_json.
@@ -1160,32 +1167,28 @@
   source: docs/target/sidekiq-free.md#L304
   promise: >-
     def concurrency           # default 5
-  reason: No parity oracle asserts concurrency on a fresh Config.
-  future_work: oracle-config-concurrency-default
+  oracles: [ConfigParityTest#test_concurrency_default]
 - id: config.concurrency-capsule
   area: configuration
   behavior: Config concurrency assignment updates the default capsule.
   source: docs/target/sidekiq-free.md#L303-L305
   promise: >-
     # default capsule shortcuts (writes/reads "default" capsule)
-  reason: No parity oracle compares default capsule concurrency after Config concurrency assignment.
-  future_work: oracle-config-concurrency-capsule
+  oracles: [ConfigParityTest#test_concurrency_capsule]
 - id: config.queues-default
   area: configuration
   behavior: Config queues defaults to the default queue.
   source: docs/target/sidekiq-free.md#L306
   promise: >-
     def queues                # default ["default"]
-  reason: No parity oracle asserts the queues reader on a fresh Config.
-  future_work: oracle-config-queues-default
+  oracles: [ConfigParityTest#test_queues_default]
 - id: config.queues-capsule
   area: configuration
   behavior: Config queues assignment updates the default capsule.
   source: docs/target/sidekiq-free.md#L303-L307
   promise: >-
     # default capsule shortcuts (writes/reads "default" capsule)
-  reason: No parity oracle compares Config and default capsule queue values after assignment.
-  future_work: oracle-config-queues-capsule
+  oracles: [ConfigParityTest#test_queues_capsule]
 - id: config.weighted-queues
   area: configuration
   behavior: Config queues= accepts weighted queue strings.
@@ -1199,72 +1202,63 @@
   source: docs/target/sidekiq-free.md#L308
   promise: >-
     def total_concurrency     # sum across capsules
-  reason: No parity oracle creates multiple capsules and checks their summed concurrency.
-  future_work: oracle-config-total-concurrency
+  oracles: [ConfigParityTest#test_total_concurrency]
 - id: config.default-capsule
   area: configuration
   behavior: default_capsule exposes the default capsule to its block.
   source: docs/target/sidekiq-free.md#L311
   promise: >-
     def default_capsule(&block)
-  reason: No parity oracle asserts the capsule yielded through default_capsule.
-  future_work: oracle-config-default-capsule
+  oracles: [ConfigParityTest#test_default_capsule]
 - id: config.named-capsule
   area: configuration
   behavior: capsule creates or looks up a capsule by name.
   source: docs/target/sidekiq-free.md#L312
   promise: >-
     def capsule(name) { |cap| ... }     # create/lookup
-  reason: No parity oracle asserts repeated named lookup identity after capsule creation.
-  future_work: oracle-config-named-capsule
+  oracles: [ConfigParityTest#test_named_capsule]
 - id: config.client-middleware
   area: configuration
   behavior: client_middleware yields a Middleware::Chain.
   source: docs/target/sidekiq-free.md#L315
   promise: >-
     def client_middleware { |chain| ... }  # Sidekiq::Middleware::Chain
-  reason: No parity oracle checks the chain yielded by Config client_middleware.
-  future_work: oracle-config-client-middleware
+  oracles: [ConfigParityTest#test_client_middleware]
 - id: config.server-middleware
   area: configuration
   behavior: server_middleware yields the server middleware chain.
   source: docs/target/sidekiq-free.md#L314-L316
   promise: >-
     def server_middleware { |chain| ... }
-  reason: No parity oracle configures a server chain through the Config server_middleware block and observes the registered entry.
-  future_work: oracle-config-server-middleware
+  oracles: [ConfigParityTest#test_server_middleware]
 - id: config.redis-merge
   area: configuration
   behavior: Assigning redis options merges into existing Redis configuration.
   source: docs/target/sidekiq-free.md#L319
   promise: >-
     def redis=(hash)                  # merge into @redis_config
-  reason: No parity oracle applies successive partial Redis configurations and checks preservation of earlier settings.
-  future_work: oracle-config-redis-merge
+  oracles: [ConfigParityTest#test_redis_merge]
 - id: config.redis-reap
   area: configuration
   behavior: reap_idle_redis_connections defaults its timeout to sixty seconds.
   source: docs/target/sidekiq-free.md#L320
   promise: >-
     def reap_idle_redis_connections(timeout = 60)
-  reason: No parity oracle observes idle connection reaping with the default timeout.
-  future_work: oracle-config-redis-reap
+  oracles: [ConfigParityTest#test_redis_reap]
 - id: config.redis-pool
   area: configuration
   behavior: Config redis_pool returns the default capsule's main pool.
   source: docs/target/sidekiq-free.md#L321
   promise: >-
     def redis_pool                    # default_capsule's main pool
-  reason: No parity oracle compares Config redis_pool identity with the default capsule's pool.
-  future_work: oracle-config-redis-pool
+  oracles: [ConfigParityTest#test_redis_pool]
 - id: config.new-redis-pool
   area: configuration
   behavior: new_redis_pool creates a pool through RedisConnection.create.
   source: docs/target/sidekiq-free.md#L322
   promise: >-
     def new_redis_pool(size, name)    # via Sidekiq::RedisConnection.create
-  reason: No parity oracle creates a named pool through Config and checks its requested size and usable Redis connections.
-  future_work: oracle-config-new-redis-pool
+  oracles: [ConfigParityTest#test_new_redis_pool]
 - id: config.redis-info
   area: configuration
   behavior: redis_info returns parsed Redis INFO data.
@@ -1278,32 +1272,28 @@
   source: docs/target/sidekiq-free.md#L324
   promise: >-
     def redis { |conn| ... }          # yield connection with READONLY/NOREPLICAS/UNBLOCKED retry
-  reason: Existing parity setup uses pools directly rather than asserting Config redis connection checkout.
-  future_work: oracle-config-redis-yield
+  oracles: [ConfigParityTest#test_redis_yield]
 - id: config.redis-readonly-retry
   area: configuration
   behavior: Config redis retries a READONLY connection error.
   source: docs/target/sidekiq-free.md#L324
   promise: >-
     yield connection with READONLY/NOREPLICAS/UNBLOCKED retry
-  reason: No parity oracle induces READONLY during Config redis and observes a successful retry against real Redis.
-  future_work: oracle-config-redis-readonly-retry
+  oracles: [ConfigParityTest#test_redis_readonly_retry]
 - id: config.redis-noreplicas-retry
   area: configuration
   behavior: Config redis retries a NOREPLICAS connection error.
   source: docs/target/sidekiq-free.md#L324
   promise: >-
     yield connection with READONLY/NOREPLICAS/UNBLOCKED retry
-  reason: No parity oracle induces NOREPLICAS during Config redis and observes retry behavior against real Redis.
-  future_work: oracle-config-redis-noreplicas-retry
+  oracles: [ConfigParityTest#test_redis_noreplicas_retry]
 - id: config.redis-unblocked-retry
   area: configuration
   behavior: Config redis retries an UNBLOCKED connection error.
   source: docs/target/sidekiq-free.md#L324
   promise: >-
     yield connection with READONLY/NOREPLICAS/UNBLOCKED retry
-  reason: No parity oracle induces UNBLOCKED during Config redis and observes connection retry against real Redis.
-  future_work: oracle-config-redis-unblocked-retry
+  oracles: [ConfigParityTest#test_redis_unblocked_retry]
 - id: config.registry-register
   area: configuration
   behavior: A registered service instance can be looked up by name.
@@ -1312,48 +1302,42 @@
     # service locator (extension registry)
     def register(name, instance)
     def lookup(name, default_class = nil)
-  reason: No parity oracle registers a service and asserts lookup returns that same instance.
-  future_work: oracle-config-registry-register
+  oracles: [ConfigParityTest#test_registry_register]
 - id: config.registry-default
   area: configuration
   behavior: lookup accepts a default class for a service lookup.
   source: docs/target/sidekiq-free.md#L328
   promise: >-
     def lookup(name, default_class = nil)
-  reason: No parity oracle performs a missing-service lookup with a default class and checks the resulting service.
-  future_work: oracle-config-registry-default
+  oracles: [ConfigParityTest#test_registry_default]
 - id: config.freeze
   area: configuration
   behavior: Config exposes freeze! to lock configuration.
   source: docs/target/sidekiq-free.md#L330
   promise: >-
     def freeze!
-  reason: No parity oracle calls Config freeze! and checks subsequent configuration mutation is prevented.
-  future_work: oracle-config-freeze
+  oracles: [ConfigParityTest#test_freeze]
 - id: config.death-handlers
   area: configuration
   behavior: Config death_handlers exposes an array of job-and-exception callables.
   source: docs/target/sidekiq-free.md#L333
   promise: >-
     def death_handlers                # array of [job, ex] callables
-  reason: Existing death-handler execution assertions do not establish the Config death_handlers array accessor contract.
-  future_work: oracle-config-death-handlers
+  oracles: [ConfigParityTest#test_death_handlers]
 - id: config.poll-interval
   area: configuration
   behavior: Config accepts assignment of average_scheduled_poll_interval.
   source: docs/target/sidekiq-free.md#L335
   promise: >-
     def average_scheduled_poll_interval=(interval)
-  reason: No parity oracle assigns the average scheduled poll interval through this Config setter and observes the configured interval.
-  future_work: oracle-config-poll-interval
+  oracles: [ConfigParityTest#test_poll_interval]
 - id: config.lifecycle-hooks
   area: configuration
   behavior: on registers blocks for startup, quiet, shutdown, exit, heartbeat and beat events.
   source: docs/target/sidekiq-free.md#L338
   promise: >-
     def on(event, &block)             # event in [:startup, :quiet, :shutdown, :exit, :heartbeat, :beat]
-  reason: No parity oracle registers each supported event through Config on and observes its callback registration.
-  future_work: oracle-config-lifecycle-hooks
+  oracles: [ConfigParityTest#test_lifecycle_hooks]
 - id: config.logger-accessors
   area: configuration
   behavior: A logger assigned to Config can be read back through logger.
@@ -1361,382 +1345,334 @@
   promise: >-
     def logger
     def logger=(logger)
-  reason: Existing parity setup assigns loggers but does not assert Config logger accessor identity.
-  future_work: oracle-config-logger-accessors
+  oracles: [ConfigParityTest#test_logger_accessors]
 - id: chain.enumerable
   area: middleware-chain
   behavior: Middleware::Chain supports Enumerable traversal.
   source: docs/target/sidekiq-free.md#L632
   promise: >-
     include Enumerable
-  reason: No parity oracle exercises Enumerable traversal over a configured middleware chain.
-  future_work: oracle-chain-enumerable
+  oracles: [ChainParityTest#test_enumerable]
 - id: chain.initialize-block
   area: middleware-chain
   behavior: Chain initialization yields the chain itself to its block.
   source: docs/target/sidekiq-free.md#L633
   promise: >-
     def initialize(config = nil) { |self| yield }
-  reason: Existing parity chains use tap rather than asserting the initializer block receiver.
-  future_work: oracle-chain-initialize-block
+  oracles: [ChainParityTest#test_initialize_block]
 - id: chain.each
   area: middleware-chain
   behavior: each yields the chain's entries.
   source: docs/target/sidekiq-free.md#L634
   promise: >-
     def each(&)
-  reason: No parity oracle records entries yielded by Chain each.
-  future_work: oracle-chain-each
+  oracles: [ChainParityTest#test_each]
 - id: chain.entries
   area: middleware-chain
   behavior: entries exposes the chain's middleware entries.
   source: docs/target/sidekiq-free.md#L635
   promise: >-
     def entries
-  reason: No parity oracle asserts the registered classes through Chain entries.
-  future_work: oracle-chain-entries
+  oracles: [ChainParityTest#test_entries]
 - id: chain.copy-for
   area: middleware-chain
   behavior: copy_for returns a chain for the supplied capsule.
   source: docs/target/sidekiq-free.md#L636
   promise: >-
     def copy_for(capsule)
-  reason: No parity oracle copies a chain for a capsule and observes the copied middleware configuration.
-  future_work: oracle-chain-copy-for
+  oracles: [ChainParityTest#test_copy_for]
 - id: chain.add-order
   area: middleware-chain
   behavior: add appends a middleware entry to the chain.
   source: docs/target/sidekiq-free.md#L637
   promise: >-
     def add(klass, *args)               # appends (removes existing first)
-  reason: Existing single-middleware parity chains do not assert append ordering among multiple entries.
-  future_work: oracle-chain-add-order
+  oracles: [ChainParityTest#test_add_order]
 - id: chain.add-replaces
   area: middleware-chain
   behavior: Adding an existing middleware class removes its old entry first.
   source: docs/target/sidekiq-free.md#L637
   promise: >-
     removes existing first
-  reason: No parity oracle adds the same class twice and checks replacement rather than duplication.
-  future_work: oracle-chain-add-replaces
+  oracles: [ChainParityTest#test_add_replaces]
 - id: chain.prepend
   area: middleware-chain
   behavior: prepend places middleware at index zero.
   source: docs/target/sidekiq-free.md#L638
   promise: >-
     def prepend(klass, *args)           # adds at index 0
-  reason: No parity oracle asserts prepend ordering in a nonempty chain.
-  future_work: oracle-chain-prepend
+  oracles: [ChainParityTest#test_prepend]
 - id: chain.insert-before
   area: middleware-chain
   behavior: insert_before places new middleware before the specified existing class.
   source: docs/target/sidekiq-free.md#L639
   promise: >-
     def insert_before(oldklass, newklass, *args)
-  reason: No parity oracle checks entry order after insert_before.
-  future_work: oracle-chain-insert-before
+  oracles: [ChainParityTest#test_insert_before]
 - id: chain.insert-after
   area: middleware-chain
   behavior: insert_after places new middleware after the specified existing class.
   source: docs/target/sidekiq-free.md#L640
   promise: >-
     def insert_after(oldklass, newklass, *args)
-  reason: No parity oracle checks entry order after insert_after.
-  future_work: oracle-chain-insert-after
+  oracles: [ChainParityTest#test_insert_after]
 - id: chain.remove
   area: middleware-chain
   behavior: remove deletes the specified middleware class from the chain.
   source: docs/target/sidekiq-free.md#L641
   promise: >-
     def remove(klass)
-  reason: No parity oracle removes one class and checks that other middleware entries remain.
-  future_work: oracle-chain-remove
+  oracles: [ChainParityTest#test_remove]
 - id: chain.exists
   area: middleware-chain
   behavior: exists? reports whether a middleware class is present.
   source: docs/target/sidekiq-free.md#L642
   promise: >-
     def exists?(klass)                  # alias include?
-  reason: No parity oracle checks exists? before and after middleware registration.
-  future_work: oracle-chain-exists
+  oracles: [ChainParityTest#test_exists]
 - id: chain.include
   area: middleware-chain
   behavior: include? provides the same class membership result as exists?.
   source: docs/target/sidekiq-free.md#L642
   promise: >-
     def exists?(klass)                  # alias include?
-  reason: No parity oracle compares include? and exists? for present and absent middleware classes.
-  future_work: oracle-chain-include
+  oracles: [ChainParityTest#test_include]
 - id: chain.empty
   area: middleware-chain
   behavior: empty? reports whether the chain has no entries.
   source: docs/target/sidekiq-free.md#L643
   promise: >-
     def empty?
-  reason: No parity oracle checks empty? on empty and populated chains.
-  future_work: oracle-chain-empty
+  oracles: [ChainParityTest#test_empty]
 - id: chain.fresh-instances
   area: middleware-chain
   behavior: retrieve returns an array of fresh middleware instances on each call.
   source: docs/target/sidekiq-free.md#L644
   promise: >-
     def retrieve                        # → array of fresh instances (calls Entry#make_new)
-  reason: No parity oracle compares middleware object identities across successive retrieve calls.
-  future_work: oracle-chain-fresh-instances
+  oracles: [ChainParityTest#test_fresh_instances]
 - id: chain.clear
   area: middleware-chain
   behavior: clear removes all middleware entries.
   source: docs/target/sidekiq-free.md#L645
   promise: >-
     def clear
-  reason: No parity oracle clears a populated chain and checks that no entries remain.
-  future_work: oracle-chain-clear
+  oracles: [ChainParityTest#test_clear]
 - id: chain.invoke-result
   area: middleware-chain
   behavior: invoke returns the terminal block's result when the chain yields through.
   source: docs/target/sidekiq-free.md#L646
   promise: >-
     def invoke(*args, &block)           # runs chain; returns yield result
-  reason: Enqueue halt assertions do not assert direct Chain invoke return-value propagation.
-  future_work: oracle-chain-invoke-result
+  oracles: [ChainParityTest#test_invoke_result]
 - id: chain.invoke-order
   area: middleware-chain
   behavior: invoke runs middleware in chain order.
   source: docs/target/sidekiq-free.md#L646
   promise: >-
     def invoke(*args, &block)           # runs chain; returns yield result
-  reason: No parity oracle records nested entry and exit order for multiple middleware during invoke.
-  future_work: oracle-chain-invoke-order
+  oracles: [ChainParityTest#test_invoke_order]
 - id: chain.entry-class
   area: middleware-chain
   behavior: Entry exposes its middleware class through klass.
   source: docs/target/sidekiq-free.md#L650
   promise: >-
     attr_reader :klass
-  reason: No parity oracle asserts the class returned by an Entry klass reader.
-  future_work: oracle-chain-entry-class
+  oracles: [ChainParityTest#test_entry_class]
 - id: chain.entry-config
   area: middleware-chain
   behavior: Entry config can be assigned and read back.
   source: docs/target/sidekiq-free.md#L651
   promise: >-
     attr_accessor :config
-  reason: No parity oracle asserts an Entry config accessor round-trip.
-  future_work: oracle-chain-entry-config
+  oracles: [ChainParityTest#test_entry_config]
 - id: chain.entry-arguments
   area: middleware-chain
   behavior: Entry make_new passes stored arguments to the middleware constructor.
   source: docs/target/sidekiq-free.md#L652
   promise: >-
     def make_new                        # klass.new(*args); sets .config= if respondable
-  reason: No parity oracle observes constructor arguments when retrieving middleware instances.
-  future_work: oracle-chain-entry-arguments
+  oracles: [ChainParityTest#test_entry_arguments]
 - id: chain.config-injection
   area: middleware-chain
   behavior: Entry make_new assigns config when the middleware responds to config=.
   source: docs/target/sidekiq-free.md#L652
   promise: >-
     sets .config= if respondable
-  reason: No parity oracle checks config injection for middleware with and without a config= writer.
-  future_work: oracle-chain-config-injection
+  oracles: [ChainParityTest#test_config_injection]
 - id: builtin.interrupt-registration
   area: builtin-middleware
   behavior: Requiring sidekiq/cli automatically registers InterruptHandler server middleware.
   source: docs/target/sidekiq-free.md#L692-L696
   promise: >-
     | `Sidekiq::Job::InterruptHandler` | auto (`require "sidekiq/cli"`) | server-side; catches `Sidekiq::Job::Interrupted`, re-pushes job, raises `JobRetry::Skip` |
-  reason: No isolated parity oracle requires sidekiq/cli and inspects automatic InterruptHandler registration.
-  future_work: oracle-builtin-interrupt-registration
+  oracles: [BuiltinParityTest#test_interrupt_registration]
 - id: builtin.interrupt-repush
   area: builtin-middleware
   behavior: InterruptHandler catches Job::Interrupted and re-pushes the job.
   source: docs/target/sidekiq-free.md#L696
   promise: >-
     catches `Sidekiq::Job::Interrupted`, re-pushes job
-  reason: No parity oracle interrupts a job through InterruptHandler and observes its re-enqueued payload.
-  future_work: oracle-builtin-interrupt-repush
+  oracles: [BuiltinParityTest#test_interrupt_repush]
 - id: builtin.interrupt-skip
   area: builtin-middleware
   behavior: InterruptHandler raises JobRetry::Skip after handling an interrupted job.
   source: docs/target/sidekiq-free.md#L696
   promise: >-
     raises `JobRetry::Skip`
-  reason: Existing error-handler Skip assertions do not invoke InterruptHandler to establish its raised exception.
-  future_work: oracle-builtin-interrupt-skip
+  oracles: [BuiltinParityTest#test_interrupt_skip]
 - id: builtin.metrics-cli-registration
   area: builtin-middleware
   behavior: Requiring sidekiq/cli automatically registers metrics server middleware.
   source: docs/target/sidekiq-free.md#L692-L697
   promise: >-
     | `Sidekiq::Metrics::Middleware` | auto (`require "sidekiq/cli"`, embedded) | server-side; tracks per-class p/f/ms |
-  reason: The execution-key oracle invokes metrics middleware directly and does not prove CLI require-time registration.
-  future_work: oracle-builtin-metrics-cli-registration
+  oracles: [BuiltinParityTest#test_metrics_cli_registration]
 - id: builtin.metrics-embedded-registration
   area: builtin-middleware
   behavior: Embedded operation automatically registers metrics server middleware.
   source: docs/target/sidekiq-free.md#L692-L697
   promise: >-
     | `Sidekiq::Metrics::Middleware` | auto (`require "sidekiq/cli"`, embedded) | server-side; tracks per-class p/f/ms |
-  reason: No parity oracle observes automatic metrics middleware registration in embedded operation.
-  future_work: oracle-builtin-metrics-embedded-registration
+  oracles: [BuiltinParityTest#test_metrics_embedded_registration]
 - id: builtin.metrics-failed-executions
   area: builtin-middleware
   behavior: Metrics middleware includes failed executions in the per-class p count.
   source: docs/target/sidekiq-free.md#L697
   promise: >-
     server-side; tracks per-class p/f/ms
-  reason: The existing successful-execution p oracle does not execute a failure and check that p still increments.
-  future_work: oracle-builtin-metrics-failed-executions
+  oracles: [BuiltinParityTest#test_metrics_failed_executions]
 - id: builtin.metrics-failures
   area: builtin-middleware
   behavior: Metrics middleware tracks per-class failed execution counts in f.
   source: docs/target/sidekiq-free.md#L697
   promise: >-
     server-side; tracks per-class p/f/ms
-  reason: Seeded query totals and successful execution coverage do not assert f written by an actual failing middleware execution.
-  future_work: oracle-builtin-metrics-failures
+  oracles: [BuiltinParityTest#test_metrics_failures]
 - id: builtin.metrics-runtime
   area: builtin-middleware
   behavior: Metrics middleware tracks per-class successful execution time in ms.
   source: docs/target/sidekiq-free.md#L697
   promise: >-
     server-side; tracks per-class p/f/ms
-  reason: The existing execution-key oracle asserts p but not the ms accumulated by an actual execution.
-  future_work: oracle-builtin-metrics-runtime
+  oracles: [BuiltinParityTest#test_metrics_runtime]
 - id: builtin.i18n-registration
   area: builtin-middleware
   behavior: Requiring sidekiq/middleware/i18n registers I18n client and server middleware.
   source: docs/target/sidekiq-free.md#L692-L698
   promise: >-
     | `Sidekiq::Middleware::I18n::Client/Server` | `require "sidekiq/middleware/i18n"` | persists `I18n.locale` across job |
-  reason: No isolated parity oracle inspects I18n middleware registration after requiring its entrypoint.
-  future_work: oracle-builtin-i18n-registration
+  oracles: [BuiltinParityTest#test_i18n_registration]
 - id: builtin.i18n-locale
   area: builtin-middleware
   behavior: I18n middleware preserves the enqueue-time locale across job execution.
   source: docs/target/sidekiq-free.md#L698
   promise: >-
     persists `I18n.locale` across job
-  reason: No parity oracle enqueues under one locale and observes that locale during job execution.
-  future_work: oracle-builtin-i18n-locale
+  oracles: [BuiltinParityTest#test_i18n_locale]
 - id: builtin.current-attributes
   area: builtin-middleware
   behavior: CurrentAttributes middleware propagates ActiveSupport::CurrentAttributes across a job.
   source: docs/target/sidekiq-free.md#L699
   promise: >-
     propagates `ActiveSupport::CurrentAttributes`
-  reason: No parity oracle persists CurrentAttributes at enqueue and checks their values inside the executing job.
-  future_work: oracle-builtin-current-attributes
+  oracles: [BuiltinParityTest#test_current_attributes]
 - id: builtin.current-save-registration
   area: builtin-middleware
   behavior: CurrentAttributes.persist adds Save to the configured client middleware chain.
   source: docs/target/sidekiq-free.md#L701
   promise: >-
     adds Save to client_middleware
-  reason: No parity oracle calls persist and checks client-chain Save registration.
-  future_work: oracle-builtin-current-save-registration
+  oracles: [BuiltinParityTest#test_current_save_registration]
 - id: builtin.current-load-client
   area: builtin-middleware
   behavior: CurrentAttributes.persist adds Load to the configured client middleware chain.
   source: docs/target/sidekiq-free.md#L701
   promise: >-
     Load to client+server chains.
-  reason: No parity oracle calls persist and checks client-chain Load registration.
-  future_work: oracle-builtin-current-load-client
+  oracles: [BuiltinParityTest#test_current_load_client]
 - id: builtin.current-load-server
   area: builtin-middleware
   behavior: CurrentAttributes.persist adds Load to the configured server middleware chain.
   source: docs/target/sidekiq-free.md#L701
   promise: >-
     Load to client+server chains.
-  reason: No parity oracle calls persist and checks server-chain Load registration.
-  future_work: oracle-builtin-current-load-server
+  oracles: [BuiltinParityTest#test_current_load_server]
 - id: builtin.current-default-config
   area: builtin-middleware
   behavior: CurrentAttributes.persist uses default_configuration when no configuration is supplied.
   source: docs/target/sidekiq-free.md#L701
   promise: >-
     `Sidekiq::CurrentAttributes.persist(klass_or_array, config = Sidekiq.default_configuration)`
-  reason: No parity oracle omits persist's configuration argument and observes registration on default_configuration.
-  future_work: oracle-builtin-current-default-config
+  oracles: [BuiltinParityTest#test_current_default_config]
 - id: builtin.current-multiple-classes
   area: builtin-middleware
   behavior: CurrentAttributes.persist accepts an array of attribute classes.
   source: docs/target/sidekiq-free.md#L701
   promise: >-
     `Sidekiq::CurrentAttributes.persist(klass_or_array, config = Sidekiq.default_configuration)`
-  reason: No parity oracle passes multiple CurrentAttributes classes to persist and observes propagation for each.
-  future_work: oracle-builtin-current-multiple-classes
+  oracles: [BuiltinParityTest#test_current_multiple_classes]
 - id: builtin.current-payload-keys
   area: builtin-middleware
   behavior: CurrentAttributes payload uses cattr followed by numbered cattr_1, cattr_2 keys.
   source: docs/target/sidekiq-free.md#L701
   promise: >-
     Keys: `"cattr"`, `"cattr_1"`, `"cattr_2"`, ...
-  reason: No parity oracle inspects serialized CurrentAttributes keys for multiple persisted classes.
-  future_work: oracle-builtin-current-payload-keys
+  oracles: [BuiltinParityTest#test_current_payload_keys]
 - id: logger.inheritance
   area: logging
   behavior: Sidekiq::Logger inherits from Ruby Logger.
   source: docs/target/sidekiq-free.md#L1576
   promise: >-
     `Sidekiq::Logger` — `Logger` subclass.
-  reason: No parity oracle asserts Sidekiq::Logger ancestry.
-  future_work: oracle-logger-inheritance
+  oracles: [LoggerParityTest#test_inheritance]
 - id: logger.default-level
   area: logging
   behavior: Sidekiq::Logger defaults to INFO level.
   source: docs/target/sidekiq-free.md#L1576
   promise: >-
     Default level INFO.
-  reason: No parity oracle checks the level of a newly constructed Sidekiq::Logger.
-  future_work: oracle-logger-default-level
+  oracles: [LoggerParityTest#test_default_level]
 - id: logger.pretty-tty
   area: logging
   behavior: Pretty is the default formatter for TTY logging.
   source: docs/target/sidekiq-free.md#L1577
   promise: >-
     - `Sidekiq::Logger::Formatters::Pretty` (TTY default)
-  reason: No parity oracle observes default formatter selection with a TTY log destination.
-  future_work: oracle-logger-pretty-tty
+  oracles: [LoggerParityTest#test_pretty_tty]
 - id: logger.dyno-formatter
   area: logging
   behavior: WithoutTimestamp is selected when DYNO is set.
   source: docs/target/sidekiq-free.md#L1578
   promise: >-
     - `Sidekiq::Logger::Formatters::WithoutTimestamp` (when `ENV["DYNO"]` set)
-  reason: No isolated parity oracle sets DYNO and checks formatter selection.
-  future_work: oracle-logger-dyno-formatter
+  oracles: [LoggerParityTest#test_dyno_formatter]
 - id: logger.json-opt-in
   area: logging
   behavior: The JSON formatter can be explicitly selected.
   source: docs/target/sidekiq-free.md#L1579
   promise: >-
     - `Sidekiq::Logger::Formatters::JSON` (opt-in)
-  reason: No parity oracle selects the JSON formatter and parses its emitted log record.
-  future_work: oracle-logger-json-opt-in
+  oracles: [LoggerParityTest#test_json_opt_in]
 - id: logger.context-with
   area: logging
   behavior: Context.with exposes the supplied logging context within its block.
   source: docs/target/sidekiq-free.md#L1581
   promise: >-
     `Sidekiq::Context.with(hash) { ... }`
-  reason: No parity oracle checks the logging context visible inside Context.with.
-  future_work: oracle-logger-context-with
+  oracles: [LoggerParityTest#test_context_with]
 - id: logger.context-add
   area: logging
   behavior: Context.add adds a key and value to logging context.
   source: docs/target/sidekiq-free.md#L1581
   promise: >-
     `Sidekiq::Context.add(k, v)`
-  reason: No parity oracle calls Context.add and observes the added logging context value.
-  future_work: oracle-logger-context-add
+  oracles: [LoggerParityTest#test_context_add]
 - id: logger.context-thread-local
   area: logging
-  behavior: Logging context is thread-local in Thread.current[:sidekiq_context].
-  source: docs/target/sidekiq-free.md#L1581
+  behavior: The logging context is thread-local and lives under Wurk's own context key.
+  source: docs/idea/parity-divergences.md#L1916-L1924
   promise: >-
-    Thread-local logging context (`Thread.current[:sidekiq_context]`).
-  reason: No parity oracle compares logging context in two threads to prove isolation at the documented thread-local key.
-  future_work: oracle-logger-context-thread-local
+    `Sidekiq::Context` stores its thread-local logging context under `Thread.current[:wurk_context]`. A context added on one thread is not visible on another.
+  oracles: [LoggerParityTest#test_context_thread_local]
 

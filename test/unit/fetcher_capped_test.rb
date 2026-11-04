@@ -22,6 +22,11 @@ require_relative '../test_helper'
 class FetcherCappedTest < Wurk::Test::UnitCase
   parallelize_me!
 
+  # How long the refusal's reply is held back. Longer than CAPPED_BACKOFF
+  # (0.25s) on purpose: that is the point of the case. A reply slower than
+  # the backoff is what separates the two stampings — sent versus arrived.
+  SLOW_REFUSAL_DELAY = 0.4
+
   # Counts pool checkouts alongside commands: the headline claim of this slice
   # is about *round trips*, and a gate that spent an extra one while keeping the
   # command count flat would read as free here without it.
@@ -36,6 +41,54 @@ class FetcherCappedTest < Wurk::Test::UnitCase
     def with(&)
       @trips += 1
       super
+    end
+  end
+
+  # A Redis whose reply to the gated claim arrives late.
+  #
+  # The refusal's backoff is stamped when the refusal ARRIVES, so a Redis slow
+  # enough to outlast CAPPED_BACKOFF must not leave the gate already expired:
+  # a gate closed from the moment the question was sent is spent by the time
+  # the refusal lands, and the next pass re-asks the capped queue — the spin
+  # the backoff exists to prevent.
+  #
+  # Only the reply is held back, never the command: the script runs on the
+  # real server and the delay sits between its answer and the caller, which
+  # is exactly what a slow round trip looks like from the fetch path.
+  class SlowClaimPool
+    # The clock reading taken when the held-back reply was handed over — the
+    # moment the refusal ARRIVED, as far as the fetch path is concerned.
+    attr_reader :reply_at
+
+    def initialize(pool, delay)
+      @pool = pool
+      @delay = delay
+      @reply_at = nil
+    end
+
+    def with(&block)
+      @pool.with { |conn| block.call(LateConn.new(conn, self)) }
+    end
+
+    # The connection the fetch path sees. Only the claim's EVALSHA is held
+    # back; every other command answers at once, so the delay lands exactly
+    # where the production change is.
+    class LateConn < SimpleDelegator
+      def initialize(conn, spy)
+        super(conn)
+        @spy = spy
+      end
+
+      def call(*args, &)
+        result = __getobj__.call(*args, &)
+        @spy.hold_back! if args.first.to_s.casecmp?('EVALSHA')
+        result
+      end
+    end
+
+    def hold_back!
+      sleep(@delay)
+      @reply_at = ::Process.clock_gettime(::Process::CLOCK_MONOTONIC)
     end
   end
 
@@ -298,6 +351,46 @@ class FetcherCappedTest < Wurk::Test::UnitCase
     assert_equal 0, spy.count, 'a queue known to be at capacity must be skipped locally'
   end
 
+  # The backoff a refusal leaves behind is measured from the moment the
+  # refusal ARRIVED, not from the moment the question was sent. A Redis slow
+  # enough to outlast CAPPED_BACKOFF must not spend the window before the
+  # fetcher even knows it was refused: stamped from the send, the gate is
+  # already expired when the refusal lands, and the next pass re-asks the
+  # capped queue — the spin this backoff exists to prevent.
+  #
+  # The refusal is a real one against a real server (another host holds the
+  # only slot); only the reply is held back, so the delay falls exactly
+  # between the clock reading #walk takes and the gate #claim closes.
+  def test_a_refusal_that_arrives_late_is_backed_off_from_its_arrival
+    build_fetcher
+    hold_slot('another-host:1')
+    enqueue(@public_queue, 'p1')
+    slow = SlowClaimPool.new(@pool, SLOW_REFUSAL_DELAY)
+    @capsule.define_singleton_method(:redis_pool) { slow }
+
+    assert_nil @fetcher.retrieve_work, 'the capped queue is at capacity, so the claim is refused'
+
+    gate = @fetcher.send(:gate_for, @public_queue)
+
+    assert_operator gate.blocked_until, :>=, slow.reply_at + Wurk::Fetcher::Capped::CAPPED_BACKOFF,
+                    'the backoff window starts when the refusal lands, not when the question was sent'
+  end
+
+  # And the consequence of that: the next pass must skip the capped queue
+  # locally, without spending a round trip on it.
+  def test_a_refusal_that_arrives_late_is_not_re_asked_on_the_next_pass
+    build_fetcher
+    hold_slot('another-host:1')
+    enqueue(@public_queue, 'p1')
+    slow = SlowClaimPool.new(@pool, SLOW_REFUSAL_DELAY)
+    @capsule.define_singleton_method(:redis_pool) { slow }
+    @fetcher.retrieve_work
+    spy = install_command_spy
+
+    assert_nil @fetcher.retrieve_work
+    assert_equal 0, spy.count, 'a queue refused late is still known to be at capacity on the next pass'
+  end
+
   # And the skip has to be local *and* free: the pass carries on to the queues
   # behind it without having spent anything on the one it stepped over.
   def test_a_skipped_queue_costs_nothing_and_the_pass_still_serves_the_rest
@@ -305,6 +398,14 @@ class FetcherCappedTest < Wurk::Test::UnitCase
     hold_slot('another-host:1')
     @fetcher.retrieve_work
     enqueue(@open_queue, 'open-1')
+    # The capped queue's refusal is remembered for CAPPED_BACKOFF (0.25s), and
+    # while it lasts the queue is skipped locally — no round trip. That window
+    # is wall clock, so a pass that takes longer than it (a loaded box, a slow
+    # Redis) re-asks the capped queue and spends a round trip on it — a cost
+    # this case is not about. Hold both fetch-path TTLs open across the
+    # counted pass, the way #prime_paused_cache! already does for the other
+    # one, so the count is about the skip and not about the clock.
+    hold_capped_refusal!
     spy = install_command_spy
 
     assert_equal 'open-1', @fetcher.retrieve_work.job
@@ -455,6 +556,17 @@ class FetcherCappedTest < Wurk::Test::UnitCase
   # are about the fetch itself.
   def prime_paused_cache!
     @fetcher.queues_cmd
+  end
+
+  # A capped queue's refusal is remembered for CAPPED_BACKOFF, and while it
+  # lasts the queue is skipped locally. That window is wall clock, so a case
+  # that counts round trips has to hold it open itself — the same move
+  # #prime_paused_cache! makes for the other TTL in this fetch path, and for
+  # the same reason: the count is about the skip, not about the clock.
+  def hold_capped_refusal!
+    prime_paused_cache!
+    gate = @fetcher.instance_variable_get(:@gates)[@queue_name]
+    gate.block!(::Process.clock_gettime(::Process::CLOCK_MONOTONIC))
   end
 
   def install_command_spy

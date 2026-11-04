@@ -13,6 +13,12 @@ class ConformanceTest < Minitest::Test
 
   SOURCE = 'docs/target/sidekiq-free.md#L19'
   PROMISE = 'set of all known queue names'
+  # Cases that may ship pending, mapped to the concrete reason they cannot yet
+  # be covered. Empty on purpose: every shipped case carries an oracle, and a
+  # new pending case must be added here with its own reason before it can
+  # ship. A stale entry here (a case that has since been promoted) fails the
+  # guard below, so the allowlist cannot silently outlive its exception.
+  PENDING_ALLOWLIST = {}.freeze
   # `skipped`, not `skip`: a member named skip shadows Minitest's raising #skip.
   Result = Struct.new(:klass, :name, :assertions, :success, :skipped) do
     def passed? = success
@@ -630,11 +636,64 @@ class ConformanceTest < Minitest::Test
     loaded = Conformance::Inventory.load(File.expand_path('../conformance/cases.yml', __dir__))
 
     assert_operator loaded.covered.size, :>, 40
-    assert_operator loaded.pending.size, :>, 0
     assert_includes loaded.covered.flat_map { |entry| entry['oracles'] },
                     'ClientPushParityTest#test_args_round_trip_through_json'
     assert_includes loaded.covered.flat_map { |entry| entry['oracles'] },
                     'ClientPushParityTest#test_immediate_push_touches_only_queues_set_and_queue_list'
+  end
+
+  # A pending case may only ship when this file names it and says why. The
+  # allowlist is empty today, so any pending case is a failure rather than a
+  # silent gap; when one is unavoidable, add it here with its concrete reason.
+  def test_every_pending_case_has_a_named_reasoned_exception
+    loaded = Conformance::Inventory.load(File.expand_path('../conformance/cases.yml', __dir__))
+    pending_ids = loaded.pending.map { |entry| entry.fetch('id') }
+
+    assert_empty pending_ids - PENDING_ALLOWLIST.keys,
+                 "pending cases without a named exception: #{(pending_ids - PENDING_ALLOWLIST.keys).join(', ')}"
+    assert_empty PENDING_ALLOWLIST.keys - pending_ids,
+                 "stale pending exceptions: #{(PENDING_ALLOWLIST.keys - pending_ids).join(', ')}"
+    PENDING_ALLOWLIST.each do |id, reason|
+      assert_match(/\S/, reason, "#{id} needs a concrete reason")
+    end
+  end
+
+  # Every oracle the inventory cites must resolve to a runnable method in a
+  # registered parity class. A dangling reference would otherwise let a case
+  # look covered while nothing proved it. The parity oracles live in their own
+  # suite, so the check runs where they are loaded — the same way the parity
+  # task itself loads them — and reports what it found.
+  def test_every_inventory_oracle_resolves_to_a_runnable_method
+    output, status = inventory_oracle_discovery
+
+    assert_predicate status, :success?, output
+    assert_includes output, 'REFERENCES OK'
+    assert_includes output, "cited=#{inventory_oracle_count}"
+  end
+
+  def inventory_oracle_count
+    loaded = Conformance::Inventory.load(File.expand_path('../conformance/cases.yml', __dir__))
+    loaded.covered.flat_map { |entry| entry.fetch('oracles') }.uniq.size
+  end
+
+  # Loads the real parity oracles (the files, not a fixture) and asks the
+  # inventory to resolve every reference it cites, plus to check that every
+  # runnable parity class is registered. The child only inspects the loaded
+  # classes; it exits before Minitest's autorun hook, so an unrelated failure
+  # elsewhere in the parity suite cannot decide this guard's verdict.
+  def inventory_oracle_discovery
+    script = <<~RUBY
+      require 'minitest/test'
+      require_relative 'test/support/conformance'
+      Dir[File.join(Conformance::ROOT, 'test/parity/**/*_test.rb')].each { |path| require path }
+      inventory = Conformance::Inventory.load(File.join(Conformance::ROOT, 'test/conformance/cases.yml'))
+      inventory.validate_references!(Minitest::Runnable.runnables)
+      cited = inventory.covered.flat_map { |entry| entry.fetch('oracles') }.uniq.size
+      puts "REFERENCES OK cited=\#{cited}"
+      $stdout.flush
+      exit!(0)
+    RUBY
+    Open3.capture2e({ 'COVERAGE' => nil }, RbConfig.ruby, '-e', script, chdir: Conformance::ROOT)
   end
 
   def test_real_inventory_references_all_error_expiry_metrics_and_sorted_entry_oracles
@@ -645,14 +704,16 @@ class ConformanceTest < Minitest::Test
     required_inventory_references.each { |reference| assert_includes references, reference }
   end
 
-  def test_in_flight_expiration_remains_pending
+  # The expiry non-preemption case is no longer a gap: it carries the oracle
+  # that proves a perform started in time runs to completion.
+  def test_in_flight_expiration_is_covered_by_its_oracle
     loaded = Conformance::Inventory.load(File.expand_path('../conformance/cases.yml', __dir__))
-    entry = loaded.pending.find { |candidate| candidate.fetch('id') == 'expiry.non-preemption' }
+    entry = loaded.covered.find { |candidate| candidate.fetch('id') == 'expiry.non-preemption' }
 
-    refute_nil entry
-    assert_equal 'oracle-expiry-in-flight-non-preemption', entry.fetch('future_work')
-    refute_empty entry.fetch('reason')
-    refute_includes entry, 'oracles'
+    refute_nil entry, 'expiry.non-preemption is a covered case'
+    assert_includes entry.fetch('oracles'), 'ExpiringParityTest#test_expiry_does_not_preempt_a_started_perform'
+    refute entry.key?('reason'), 'a covered case carries no pending reason'
+    refute entry.key?('future_work'), 'a covered case carries no future-work id'
   end
 
   def test_real_inventory_accounts_for_successful_and_pending_results_exactly

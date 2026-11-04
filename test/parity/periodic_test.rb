@@ -23,6 +23,7 @@ end
 #     `queue` laid over the worker's own options; `args` passes verbatim.
 #   * §2.4 — pause / unpause is the `paused` field of the `loops:{lid}` HASH.
 #   * §2.6 — missed ticks are not backfilled (leader gap, restart).
+#   * §6 — periodic enqueue is gated by the single cluster leader.
 #
 # Driving a tick needs the leader poller; spec §2 defines no public tick API,
 # so the oracle claims leadership on Wurk's poller and observes only the
@@ -88,11 +89,19 @@ class PeriodicParityTest < Wurk::Test::UnitCase
   # §2.2: `opts[:args]` passed verbatim into perform_async(*args).
   def test_args_pass_verbatim
     queue = queue_named('args')
-    register('* * * * *', 'PeriodicParityPlainJob', queue: queue, args: [{ 'k' => [1, 'two'] }, nil])
+    args = [{ 'k' => [1, 'two'] }, nil]
+    lid = register('* * * * *', 'PeriodicParityPlainJob', queue: queue, args: args)
 
     @poller.tick
 
-    assert_equal [{ 'k' => [1, 'two'] }, nil], pop(queue)['args']
+    job = pop(queue)
+
+    refute_nil job, 'the tick enqueued the loop'
+    assert_equal args, job['args'], 'the tick enqueues the loop\'s args verbatim'
+    # §2.3: the loop records the options it was registered with, and §2.2
+    # calls them a static array evaluated once at boot — the same array every
+    # tick, not a re-evaluated one.
+    assert_equal args, Sidekiq::Periodic::LoopSet.new.fetch(lid).options['args']
   end
 
   # §2.4: pause writes paused:1 to the loop HASH; unpause clears it and the
@@ -129,6 +138,34 @@ class PeriodicParityTest < Wurk::Test::UnitCase
     at(start + 5400) { @poller.tick }
 
     assert_equal 1, llen(queue), 'the slot missed during the gap is not backfilled'
+  end
+
+  # §6: periodic enqueue is gated by the single cluster leader — a follower
+  # that ticks enqueues nothing.
+  def test_only_the_cluster_leader_ticks
+    queue = queue_named('leader')
+    register('* * * * *', 'PeriodicParityPlainJob', queue: queue)
+
+    leader = Wurk::Cron::Poller.new(Wurk.configuration)
+    follower = Wurk::Cron::Poller.new(Wurk.configuration)
+    # The cluster lock names the leader's identity: a poller whose identity is
+    # not the one in `dear-leader` reads as a follower.
+    Wurk.redis { |c| c.call('SET', 'dear-leader', leader.identity, 'EX', 30) }
+    follower.define_singleton_method(:identity) { 'follower-identity' }
+
+    follower.tick
+
+    assert_equal 0, llen(queue), 'a follower enqueues nothing'
+
+    leader.tick
+
+    assert_equal 1, llen(queue), 'the leader enqueues the loop'
+
+    follower.tick
+
+    assert_equal 1, llen(queue), 'the follower still enqueues nothing'
+  ensure
+    Wurk.redis { |c| c.call('DEL', 'dear-leader') }
   end
 
   private
