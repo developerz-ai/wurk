@@ -186,17 +186,24 @@ class ToolchainPinsTest < Minitest::Test
   # fail: that is the shape of a real drift — every site moved together to a
   # runtime the dashboard does not support. Drop the floor comparison and
   # this fixture stops mattering: the check passes and this test fails.
+  # The release index is a fixture holding exactly that release, so the
+  # resolution cannot reach nodejs.org: an unreachable index skips, and
+  # the assert_raises below would catch the skip (Skip < Assertion) and
+  # fail the message checks instead of letting the test skip.
   def test_node_pins_below_the_declared_engine_floor_fail_the_check
     below = version_below_floor(parse_floor(declared_node_floor))
 
-    with_node_pins('mise.toml' => below, 'test.yml:build#1' => below) do
-      assert_one_version('node', node_pins)
+    with_release_index([parse_version_spec(below)]) do
+      with_node_pins('mise.toml' => below, 'test.yml:build#1' => below) do
+        assert_one_version('node', node_pins)
 
-      error = assert_raises(Minitest::Assertion) { assert_node_pins_satisfy_floor }
+        error = assert_raises(Minitest::Assertion) { assert_node_pins_satisfy_floor }
 
-      assert_includes error.message, 'mise.toml'
-      assert_includes error.message, below
-      assert_includes error.message, declared_node_floor
+        assert_includes error.message, 'mise.toml'
+        assert_includes error.message, below
+        assert_includes error.message, declared_node_floor
+        assert_match(/resolves to #{Regexp.escape(below)} \(/, error.message)
+      end
     end
   end
 
@@ -214,17 +221,23 @@ class ToolchainPinsTest < Minitest::Test
 
   # A floor above every published release in the pin's line used to pass:
   # the spec compared as unbounded above, so nothing anchored the pin to a
-  # release that exists. With frontend/package.json naming >=24.99.0 — above
-  # every 24.x that will ever ship — the pin "24" resolves to a real release
-  # below the floor, and the check has to fail naming it.
+  # release that exists. With frontend/package.json naming >=24.99.0 and a
+  # release index whose newest 24.x is 24.13.0 — above every release the
+  # fixture publishes — the pin "24" resolves to a real release below the
+  # floor, and the check has to fail naming it. The index is a fixture, not
+  # nodejs.org, so the resolution here cannot reach the network: an
+  # unreachable index skips, and assert_raises would catch the skip
+  # (Skip < Assertion) and fail these message checks instead of skipping.
   def test_a_floor_above_every_published_release_in_the_pins_line_fails_the_check
-    with_node_pins('mise.toml' => '24') do
-      with_frontend_package_json('>=24.99.0') do
-        error = assert_raises(Minitest::Assertion) { assert_node_pins_satisfy_floor }
+    with_release_index([[24, 13, 0]]) do
+      with_node_pins('mise.toml' => '24') do
+        with_frontend_package_json('>=24.99.0') do
+          error = assert_raises(Minitest::Assertion) { assert_node_pins_satisfy_floor }
 
-        assert_includes error.message, 'mise.toml'
-        assert_includes error.message, '>=24.99.0'
-        assert_match(/resolves to 24\.\d+\.\d+ \(/, error.message)
+          assert_includes error.message, 'mise.toml'
+          assert_includes error.message, '>=24.99.0'
+          assert_match(/resolves to 24\.13\.0 \(/, error.message)
+        end
       end
     end
   end
@@ -350,6 +363,19 @@ class ToolchainPinsTest < Minitest::Test
     ensure
       singleton_class.send(:remove_method, :frontend_package_json_path)
     end
+  end
+
+  # Serve `releases` (concrete version triples) as the published Node
+  # release index for the block's duration, by pointing this instance's
+  # index read at a fixture. The network is never touched, and the override
+  # lives on this test instance, so the other tests of this class — which
+  # run concurrently in this process — still read the real index, and skip
+  # on their own when nodejs.org is unreachable.
+  def with_release_index(releases)
+    singleton_class.send(:define_method, :published_node_releases) { releases }
+    yield
+  ensure
+    singleton_class.send(:remove_method, :published_node_releases)
   end
 
   # The one place the node pins are compared with the declared engine floor.
