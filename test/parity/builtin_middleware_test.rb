@@ -201,6 +201,12 @@ class BuiltinParityTest < Wurk::Test::UnitCase
   # payload; the server middleware restores it around the perform, so the job
   # observes the enqueueing process's locale.
   #
+  # The worker's own locale is switched to English between the push and the
+  # execution, so the locale the job sees can only come from the payload: a
+  # server middleware that did nothing would leave the job on the worker's
+  # locale and the round-trip assertions would fail. The locale the worker
+  # had before the job is what the middleware restores afterwards.
+  #
   # The stand-in for the i18n gem is installed for the duration of the block
   # and taken back down afterwards, and the middleware's own registration on
   # the process-global chains is taken back down with it: a `::I18n` or a
@@ -221,16 +227,19 @@ class BuiltinParityTest < Wurk::Test::UnitCase
       with_fake_i18n(:fr) do
         push_probe
         payload = queued_payload
+
+        # The worker runs under its own locale from here on.
+        FakeI18n.locale = :en
         @processor.process_one
 
-        assert_equal :fr, FakeI18n.locale,
-                     'the server middleware restores the locale it found'
+        assert_equal 'fr', Probe.entries.last[:locale],
+                     'the job runs under the locale the payload carried'
+        assert_equal :en, FakeI18n.locale,
+                     'the server middleware restores the locale the worker had'
       end
 
       assert_equal 'fr', payload['locale'],
                    'the client middleware writes the locale into the payload'
-      assert_equal 'fr', Probe.entries.last[:locale],
-                   'the job runs under the locale the payload carried'
     end
 
     assert_equal global_before.map { |chain, klass| [chain.object_id, klass] },
@@ -240,12 +249,17 @@ class BuiltinParityTest < Wurk::Test::UnitCase
 
   # --- §10.3 Sidekiq::CurrentAttributes --------------------------------------
 
+  # The attributes change between the push and the execution: the job must
+  # observe the values the payload carried, not the ones this thread holds
+  # when it runs. A Load middleware that did nothing would leave the job on
+  # the worker's own value.
   def test_current_attributes
     Sidekiq::CurrentAttributes.persist(ProbeAttributes, @config)
     build_capsule
     ProbeAttributes.probe_value = 'enqueued-value'
 
     push_probe
+    ProbeAttributes.probe_value = 'worker-value'
     @processor.process_one
 
     assert_equal 'enqueued-value', Probe.entries.last[:first]['probe_value']
@@ -279,6 +293,9 @@ class BuiltinParityTest < Wurk::Test::UnitCase
     assert default.server_middleware.exists?(Sidekiq::CurrentAttributes::Load)
   end
 
+  # Same shape as the single-class case: both attribute classes change
+  # between the push and the execution, so the job can only report the
+  # serialized values if the Load middleware put them back.
   def test_current_multiple_classes
     Sidekiq::CurrentAttributes.persist([ProbeAttributes, SecondAttributes], @config)
     build_capsule
@@ -286,6 +303,8 @@ class BuiltinParityTest < Wurk::Test::UnitCase
     SecondAttributes.second_value = 'two'
 
     push_probe
+    ProbeAttributes.probe_value = 'one-after-push'
+    SecondAttributes.second_value = 'two-after-push'
     @processor.process_one
 
     entry = Probe.entries.last

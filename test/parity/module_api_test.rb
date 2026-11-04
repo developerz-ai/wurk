@@ -34,7 +34,10 @@ require 'stringio'
 # changed: every configuration-level assertion runs against a fresh
 # `Sidekiq::Config`, and the one module-level call that touches the default
 # configuration (`configure_server` in a client-mode process) only defers its
-# block — it changes no option and runs nothing.
+# block — it changes no option and runs nothing. The freeze case is the
+# exception, and it is the reason for the exception: freezing the default
+# configuration is process-global, so `freeze!` runs in a subprocess and this
+# process never sees a frozen configuration.
 class ModuleApiParityTest < Wurk::Test::UnitCase
   parallelize_me!
 
@@ -297,14 +300,25 @@ class ModuleApiParityTest < Wurk::Test::UnitCase
     assert_same Sidekiq.default_configuration.logger, Sidekiq.logger
   end
 
+  # §3 `freeze!` — "locks default_configuration".
+  #
+  # The default configuration is process-global, and freezing it here would
+  # lock every other test in this worker: the freeze therefore runs in a
+  # subprocess, where the only thing that matters is the promise itself — a
+  # mutation of the default configuration has to fail.
   def test_freeze_configuration
     assert_respond_to Sidekiq, :freeze!
 
-    config = fresh_config
-    config.freeze!
-
-    assert_predicate config, :frozen?
-    assert_raises(FrozenError) { config[:concurrency] = 9 }
+    assert_subprocess(<<~RUBY)
+      require "sidekiq"
+      Sidekiq.freeze!
+      begin
+        Sidekiq.default_configuration[:concurrency] = 9
+      rescue FrozenError
+        exit(0)
+      end
+      exit(1)
+    RUBY
   end
 
   def test_transactional_push
@@ -321,6 +335,15 @@ class ModuleApiParityTest < Wurk::Test::UnitCase
   end
 
   private
+
+  # A cold process: the default configuration is process-global, and this
+  # oracle must never freeze the one this worker shares.
+  def assert_subprocess(script)
+    lib = File.expand_path('../../lib', __dir__)
+    ok = system(RbConfig.ruby, *Wurk::Test::SUBPROCESS_COVERAGE, '-I', lib, '-e', script)
+
+    assert ok, "subprocess failed:\n#{script}"
+  end
 
   # A configuration of its own: the default one is never frozen and never
   # mutated by this oracle.

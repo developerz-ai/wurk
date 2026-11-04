@@ -254,13 +254,26 @@ class ConfigParityTest < Wurk::Test::UnitCase
   # message Redis uses, so the pool classifies it the way it classifies the
   # server's own reply: close the connection, report the retry, run the block
   # again on a fresh socket.
+  #
+  # The block issues a real command before the error, so the connection is
+  # open when the reply comes back: the pool has to close it and dial a new
+  # one, and the server-side connection id (CLIENT ID) is what proves it did.
+  # A pool that kept the failed connection would hand the retry the same
+  # socket, and the two ids would match.
+  #
+  # `idempotent: true` is what makes that replay legal: the block already
+  # completed a round trip, and the pool refuses to replay a block it cannot
+  # prove applied nothing (Wurk::RedisPool#replayable?). Both commands here
+  # are reads, so running the block again changes nothing.
   def test_redis_unblocked_retry
     attempts = 0
     reports = []
+    connections = []
     @config.on_redis_error { |info| reports << info }
 
-    value = @config.redis do |conn|
+    value = @config.redis(idempotent: true) do |conn|
       attempts += 1
+      connections << conn.call('CLIENT', 'ID')
       raise RedisClient::CommandError, 'UNBLOCKED The client has been unblocked via CLIENT UNBLOCK' if attempts == 1
 
       conn.call('PING')
@@ -271,6 +284,8 @@ class ConfigParityTest < Wurk::Test::UnitCase
     assert_equal 1, reports.size
     assert reports.first[:retried]
     assert_match(/\AUNBLOCKED/, reports.first[:error].message)
+    refute_equal connections.first, connections.last,
+                 'the retry ran on a new server-side connection: the failed one was closed'
   end
 
   # §4.2 `def redis { |conn| ... }` — "yield connection with
@@ -285,7 +300,68 @@ class ConfigParityTest < Wurk::Test::UnitCase
   # the block carries the exact message Redis uses, so the pool classifies it
   # the way it classifies the server's own reply: close the connection,
   # report the retry, run the block again on a fresh socket.
+  #
+  # The command before the error puts a real round trip on the wire, so the
+  # connection is open when the reply comes back and the retry has to dial a
+  # new one: the server-side connection ids are what prove it. See the
+  # UNBLOCKED case above for why the block claims idempotency.
   def test_redis_readonly_retry
+    attempts = 0
+    reports = []
+    connections = []
+    @config.on_redis_error { |info| reports << info }
+
+    value = @config.redis(idempotent: true) do |conn|
+      attempts += 1
+      connections << conn.call('CLIENT', 'ID')
+      raise RedisClient::CommandError, 'READONLY You can\'t write against a read only replica.' if attempts == 1
+
+      conn.call('PING')
+    end
+
+    assert_equal 'PONG', value
+    assert_equal 2, attempts
+    assert_equal 1, reports.size
+    assert reports.first[:retried]
+    assert_match(/\AREADONLY/, reports.first[:error].message)
+    refute_equal connections.first, connections.last,
+                 'the retry ran on a new server-side connection: the failed one was closed'
+  end
+
+  # §4.2 `def redis { |conn| ... }` — "yield connection with
+  # READONLY/NOREPLICAS/UNBLOCKED retry".
+  #
+  # NOREPLICAS is what a cluster member answers when it no longer has a
+  # replica to serve from. Staged exactly like the READONLY case above: the
+  # real pooled connection and the successful ping are real, and only the
+  # server's own message is raised inside the block.
+  def test_redis_noreplicas_retry
+    attempts = 0
+    reports = []
+    connections = []
+    @config.on_redis_error { |info| reports << info }
+
+    value = @config.redis(idempotent: true) do |conn|
+      attempts += 1
+      connections << conn.call('CLIENT', 'ID')
+      raise RedisClient::CommandError, 'NOREPLICAS Not enough good replicas to respond.' if attempts == 1
+
+      conn.call('PING')
+    end
+
+    assert_equal 'PONG', value
+    assert_equal 2, attempts
+    assert_equal 1, reports.size
+    assert reports.first[:retried]
+    assert_match(/\ANOREPLICAS/, reports.first[:error].message)
+    refute_equal connections.first, connections.last,
+                 'the retry ran on a new server-side connection: the failed one was closed'
+  end
+
+  # The same retry on the default path: a failover reply raised before the
+  # block issued anything is proof that nothing applied, so the pool replays
+  # the block without the caller claiming it idempotent.
+  def test_redis_failover_retry_replays_a_clean_block
     attempts = 0
     reports = []
     @config.on_redis_error { |info| reports << info }
@@ -301,33 +377,6 @@ class ConfigParityTest < Wurk::Test::UnitCase
     assert_equal 2, attempts
     assert_equal 1, reports.size
     assert reports.first[:retried]
-    assert_match(/\AREADONLY/, reports.first[:error].message)
-  end
-
-  # §4.2 `def redis { |conn| ... }` — "yield connection with
-  # READONLY/NOREPLICAS/UNBLOCKED retry".
-  #
-  # NOREPLICAS is what a cluster member answers when it no longer has a
-  # replica to serve from. Staged exactly like the READONLY case above: the
-  # real pooled connection and the successful ping are real, and only the
-  # server's own message is raised inside the block.
-  def test_redis_noreplicas_retry
-    attempts = 0
-    reports = []
-    @config.on_redis_error { |info| reports << info }
-
-    value = @config.redis do |conn|
-      attempts += 1
-      raise RedisClient::CommandError, 'NOREPLICAS Not enough good replicas to respond.' if attempts == 1
-
-      conn.call('PING')
-    end
-
-    assert_equal 'PONG', value
-    assert_equal 2, attempts
-    assert_equal 1, reports.size
-    assert reports.first[:retried]
-    assert_match(/\ANOREPLICAS/, reports.first[:error].message)
   end
 
   # --- §4.2 service locator -------------------------------------------------

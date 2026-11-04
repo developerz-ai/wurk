@@ -165,7 +165,7 @@
   source: docs/target/sidekiq-pro.md#L287-L296
   promise: >-
     Uses one Lua script that **atomically** `ZRANGEBYSCORE` + `ZREM` + `LPUSH` the due jobs into their queue.
-  oracles: [ScheduledParityTest#test_reliable_promotion_is_atomic]
+  oracles: [ScheduledParityTest#test_reliable_promotion_is_atomic, ScheduledParityTest#test_reliable_promotion_keeps_the_job_when_the_push_fails]
 - id: retry.first
   area: retries
   behavior: The first failure stamps failed_at and retry_count zero.
@@ -1279,7 +1279,7 @@
   source: docs/target/sidekiq-free.md#L324
   promise: >-
     yield connection with READONLY/NOREPLICAS/UNBLOCKED retry
-  oracles: [ConfigParityTest#test_redis_readonly_retry]
+  oracles: [ConfigParityTest#test_redis_readonly_retry, ConfigParityTest#test_redis_failover_retry_replays_a_clean_block]
 - id: config.redis-noreplicas-retry
   area: configuration
   behavior: Config redis retries a NOREPLICAS connection error.
