@@ -2,7 +2,9 @@
 
 require 'json'
 require 'minitest/autorun'
+require 'net/http'
 require 'tmpdir'
+require 'uri'
 require 'yaml'
 
 # bun is pinned in several places nobody edits together: the `bun-version:`
@@ -10,16 +12,33 @@ require 'yaml'
 # `oven/bun` base (the demo image, the one dependabot bumps), and the example
 # Dockerfile in docs/deployment.md that readers copy. They drifted to three
 # different versions once already, so a bump that misses a site fails here
-# instead of surfacing as "green locally, red in CI". Reads files only.
+# instead of surfacing as "green locally, red in CI".
 #
 # The node pins get the same treatment and one more: the dashboard declares
 # the lowest Node it supports in frontend/package.json ("engines.node"), and
 # a pin that resolves below that floor installs a runtime the dashboard does
-# not support — nothing else in the repo notices.
+# not support — nothing else in the repo notices. A node pin is a spec, not
+# a version: "24" installs the newest 24.x.y PUBLISHED when the pin is
+# installed, so the floor check resolves each pin against nodejs.org's
+# release index instead of trusting the spec to float high enough forever.
 class ToolchainPinsTest < Minitest::Test
   parallelize_me!
 
   ROOT = File.expand_path('../..', __dir__)
+
+  # The floor check resolves a pin spec against the releases nodejs.org has
+  # actually published. Connection trouble is the one failure it tolerates —
+  # the comparison skips, so an offline box does not go red over the guard.
+  # A response that is not the index at all fails the test: the endpoint
+  # moving must not masquerade as "no published release matches".
+  NODE_RELEASE_INDEX_URL = 'https://nodejs.org/dist/index.json'
+  UNREACHABLE_ERRORS = [SocketError, Errno::ECONNREFUSED, Errno::EHOSTUNREACH,
+                        Errno::ENETUNREACH, Errno::ETIMEDOUT, Net::OpenTimeout,
+                        Net::ReadTimeout, OpenSSL::SSL::SSLError, EOFError].freeze
+  RELEASE_INDEX_LOCK = Mutex.new
+
+  # The only failure the comparison tolerates: nodejs.org unreachable.
+  class NodeReleaseIndexUnreachable < StandardError; end
 
   # Parsed per step, so a pin left in a comment or on another step can't stand
   # in for a step that lost its own `with:` input.
@@ -145,8 +164,10 @@ class ToolchainPinsTest < Minitest::Test
   end
 
   # The node pins must not resolve below the engine floor the dashboard
-  # declares: setup-node and mise install the newest release matching the
-  # pin, so "24" is fine and "24.14.0" is not.
+  # declares. A pin names a spec: setup-node and mise install the newest
+  # PUBLISHED release matching it, so "24" is only fine while a 24.x.y at or
+  # above the floor exists — the check resolves every pin against
+  # nodejs.org's index and compares that release with the floor.
   def test_every_node_pin_satisfies_the_declared_engine_floor
     assert_node_pins_satisfy_floor
   end
@@ -188,6 +209,23 @@ class ToolchainPinsTest < Minitest::Test
       assert_one_version('node', node_pins)
 
       assert_node_pins_satisfy_floor
+    end
+  end
+
+  # A floor above every published release in the pin's line used to pass:
+  # the spec compared as unbounded above, so nothing anchored the pin to a
+  # release that exists. With frontend/package.json naming >=24.99.0 — above
+  # every 24.x that will ever ship — the pin "24" resolves to a real release
+  # below the floor, and the check has to fail naming it.
+  def test_a_floor_above_every_published_release_in_the_pins_line_fails_the_check
+    with_node_pins('mise.toml' => '24') do
+      with_frontend_package_json('>=24.99.0') do
+        error = assert_raises(Minitest::Assertion) { assert_node_pins_satisfy_floor }
+
+        assert_includes error.message, 'mise.toml'
+        assert_includes error.message, '>=24.99.0'
+        assert_match(/resolves to 24\.\d+\.\d+ \(/, error.message)
+      end
     end
   end
 
@@ -322,10 +360,12 @@ class ToolchainPinsTest < Minitest::Test
     floor_version = parse_floor(floor)
 
     node_pins.each do |site, pin|
-      version = parse_version_spec(pin)
-      next if version_at_least?(version, floor_version)
+      spec = parse_version_spec(pin)
+      resolved = spec && newest_published_release_matching(spec)
 
-      flunk node_pin_failure_message(site, pin, floor, version)
+      next if resolved && version_at_least?(resolved, floor_version)
+
+      flunk node_pin_failure_message(site, pin, floor, spec, resolved)
     end
   end
 
@@ -337,59 +377,129 @@ class ToolchainPinsTest < Minitest::Test
     !comparison.nil? && comparison >= 0
   end
 
-  # Why one pin does not satisfy the floor. The three failures are named
-  # apart on purpose: an unpinned step, a version this check cannot compare
-  # and a version below the floor each need a different fix.
-  def node_pin_failure_message(site, pin, floor, version)
+  # Why one pin does not satisfy the floor. The failures are named apart on
+  # purpose: an unpinned step, a version this check cannot compare, a spec
+  # nothing published matches and a spec whose newest published release sits
+  # below the floor each need a different fix.
+  def node_pin_failure_message(site, pin, floor, spec, resolved)
     return "node pin #{site} has no version; it cannot satisfy the declared floor #{floor}" if pin.nil?
 
     subject = "node pin #{site}=#{pin.inspect}"
-    return "#{subject} is not a version; it cannot satisfy the declared floor #{floor}" if version.nil?
+    return "#{subject} is not a version; it cannot satisfy the declared floor #{floor}" if spec.nil?
+    return "#{subject} matches no published release; it cannot satisfy the declared floor #{floor}" if resolved.nil?
 
-    "#{subject} resolves below the declared floor #{floor} (frontend/package.json engines.node)"
+    "#{subject} resolves to #{resolved.join('.')} (the newest published release matching it), " \
+      "below the declared floor #{floor} (frontend/package.json engines.node)"
+  end
+
+  # The release a pin spec installs: the newest PUBLISHED release whose
+  # version starts with the components the spec names — not "the newest
+  # there ever will be". A floor above every published release in the
+  # spec's line has to fail here, because that release is what the
+  # installed runtime would be. nil when nothing published matches: a pin
+  # naming one installs nothing.
+  def newest_published_release_matching(spec)
+    major, minor, patch = spec
+
+    published_node_releases.select do |version|
+      version[0] == major &&
+        (minor.nil? || version[1] == minor) &&
+        (patch.nil? || version[2] == patch)
+    end.max
+  end
+
+  # The published Node releases, as concrete (major, minor, patch) triples:
+  # nodejs.org's index, fetched once per process and shared by every pin
+  # this class compares. The memo is a class ivar (instances are per test),
+  # the lock keeps concurrent tests to one fetch, and a memoized failure
+  # skips every later caller without refetching.
+  def published_node_releases
+    releases, unreachable = RELEASE_INDEX_LOCK.synchronize do
+      memo = ToolchainPinsTest.instance_variable_get(:@published_node_releases)
+      next memo if memo
+
+      begin
+        memo = [fetch_published_node_releases, nil]
+      rescue *UNREACHABLE_ERRORS => e
+        memo = [nil, NodeReleaseIndexUnreachable.new(
+          "could not read the published Node release index (#{NODE_RELEASE_INDEX_URL}): #{e.class}: #{e.message}"
+        )]
+      end
+      ToolchainPinsTest.instance_variable_set(:@published_node_releases, memo)
+      memo
+    end
+
+    skip unreachable.message if unreachable
+    releases
+  end
+
+  # Read nodejs.org's index and parse it to concrete triples.
+  def fetch_published_node_releases
+    uri = URI(NODE_RELEASE_INDEX_URL)
+    response = Net::HTTP.start(uri.host, uri.port, use_ssl: true, open_timeout: 5, read_timeout: 15) do |http|
+      http.get(uri.request_uri)
+    end
+    unless response.is_a?(Net::HTTPSuccess)
+      flunk "the Node release index at #{NODE_RELEASE_INDEX_URL} answered HTTP #{response.code}, not 200"
+    end
+
+    releases = JSON.parse(response.body).filter_map { |entry| parse_release_tag(entry['version'].to_s) }
+    flunk "the Node release index at #{NODE_RELEASE_INDEX_URL} holds no readable release" if releases.empty?
+
+    releases
+  rescue JSON::ParserError => e
+    flunk "the Node release index at #{NODE_RELEASE_INDEX_URL} is not JSON (#{e.message})"
+  end
+
+  # "v24.13.0" → [24, 13, 0]; nil for anything else — the index also lists
+  # prereleases ("v27.0.0-alpha.0.0.0") that no stable version pin selects.
+  def parse_release_tag(tag)
+    match = /\Av(\d+)\.(\d+)\.(\d+)\z/.match(tag)
+    return unless match
+
+    match.captures.map(&:to_i)
   end
 
   # A pin is a version SPEC: setup-node and mise both install the newest
-  # release matching it, so "24" selects the newest 24.x.y. The newest
-  # version a spec can select is the components it names and unbounded above,
-  # so "24" is (24, inf, inf) and "24.15.0" is (24, 15, 0).
+  # published release matching it, so "24" selects the newest 24.x.y that
+  # exists and "24.15" the newest 24.15.y. The components the spec names
+  # select; the ones it omits float — nil here, resolved against the
+  # published index by newest_published_release_matching. "24" is
+  # (24, nil, nil) and "24.15.0" is (24, 15, 0).
   def parse_version_spec(spec)
     match = /\A(\d+)(?:\.(\d+))?(?:\.(\d+))?\z/.match(spec.to_s.strip)
     return nil unless match
 
-    major, minor, patch = match.captures.map { |part| part&.to_i }
-
-    [major, minor || Float::INFINITY, patch || Float::INFINITY]
+    match.captures.map { |part| part&.to_i }
   end
 
   # The floor is a ">= range": ">=24.15.0" names the lowest Node the
   # dashboard supports. A declaration in another shape cannot be compared
-  # with a pin, and guessing would pass it silently.
+  # with a pin, and guessing would pass it silently. Omitted components mean
+  # zeros (">=24.15" ≡ ">=24.15.0"), so the floor is always a concrete
+  # triple a pin's resolution can be compared with.
   def parse_floor(range)
     match = /\A>=\s*(\d+(?:\.\d+){0,2})\z/.match(range.to_s.strip)
     flunk "frontend/package.json engines.node must declare a '>=' range, got #{range.inspect}" unless match
 
-    parse_version_spec(match[1])
+    major, minor, patch = parse_version_spec(match[1])
+    [major, minor || 0, patch || 0]
   end
 
   # The version the declared floor names, as a spec: ">=24.15.0" names
   # "24.15.0". Derived from the parsed floor so the fixtures above keep
   # their meaning when the floor moves.
   def floor_version_spec(floor)
-    major, minor, patch = floor
-
-    return major.to_s if minor == Float::INFINITY
-    return "#{major}.#{minor}" if patch == Float::INFINITY
-
-    "#{major}.#{minor}.#{patch}"
+    floor.join('.')
   end
 
-  # A version spec that resolves below the declared floor: the floor's minor
-  # minus one, so the fixture stays below the floor when the floor moves.
+  # A version spec one below the declared floor: the floor's patch minus
+  # one, borrowing from the component above it, so the fixture stays below
+  # the floor when the floor moves.
   def version_below_floor(floor)
     major, minor, patch = floor
-    return "#{major - 1}.0.0" unless minor.is_a?(Integer) && minor.positive?
-    return "#{major}.#{minor - 1}.0" if patch == Float::INFINITY || patch.zero?
+    return "#{major - 1}.0.0" if minor.zero?
+    return "#{major}.#{minor - 1}.0" if patch.zero?
 
     "#{major}.#{minor}.#{patch - 1}"
   end
