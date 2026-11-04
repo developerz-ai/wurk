@@ -1,5 +1,6 @@
 # frozen_string_literal: true
 
+require 'json'
 require 'minitest/autorun'
 require 'tmpdir'
 require 'yaml'
@@ -10,6 +11,11 @@ require 'yaml'
 # Dockerfile in docs/deployment.md that readers copy. They drifted to three
 # different versions once already, so a bump that misses a site fails here
 # instead of surfacing as "green locally, red in CI". Reads files only.
+#
+# The node pins get the same treatment and one more: the dashboard declares
+# the lowest Node it supports in frontend/package.json ("engines.node"), and
+# a pin that resolves below that floor installs a runtime the dashboard does
+# not support — nothing else in the repo notices.
 class ToolchainPinsTest < Minitest::Test
   parallelize_me!
 
@@ -52,7 +58,33 @@ class ToolchainPinsTest < Minitest::Test
     File.read(deployment_doc_path)[%r{^FROM oven/bun:([\d.]+)}, 1]
   end
 
-  def assert_one_version(tool, workflow, others)
+  # The setup-node steps' pins, on their own. The agreement check has to be
+  # able to see that the workflows lost their setup-node steps, which a
+  # merged hash (mise.toml always contributes one pin) would hide.
+  def setup_node_pins
+    workflow_pins('actions/setup-node', 'node-version')
+  end
+
+  # Every node pin: the mise pin and each actions/setup-node step's pin. The
+  # method is a seam so a test can point the read at a fixture instead of
+  # the tracked files: parallelize_me! runs the tests of this class
+  # concurrently in one process, so patching ::File would leak into them.
+  def node_pins
+    setup_node_pins.merge('mise.toml' => mise_pin('node'))
+  end
+
+  # The dashboard's declared Node floor. The path is a seam for the same
+  # reason as the deployment doc's: the tracked file is the source of truth
+  # for the floor, so the check never hardcodes a version.
+  def frontend_package_json_path
+    File.join(ROOT, 'frontend', 'package.json')
+  end
+
+  def declared_node_floor
+    JSON.parse(File.read(frontend_package_json_path)).dig('engines', 'node')
+  end
+
+  def assert_one_version(tool, workflow, others = {})
     refute_empty workflow, "expected at least one #{tool} pin in .github/workflows"
     pins = workflow.merge(others)
 
@@ -109,7 +141,92 @@ class ToolchainPinsTest < Minitest::Test
   end
 
   def test_every_node_pin_names_the_same_version
-    assert_one_version('node', workflow_pins('actions/setup-node', 'node-version'), 'mise.toml' => mise_pin('node'))
+    assert_one_version('node', setup_node_pins, 'mise.toml' => mise_pin('node'))
+  end
+
+  # The node pins must not resolve below the engine floor the dashboard
+  # declares: setup-node and mise install the newest release matching the
+  # pin, so "24" is fine and "24.14.0" is not.
+  def test_every_node_pin_satisfies_the_declared_engine_floor
+    assert_node_pins_satisfy_floor
+  end
+
+  # The floor must come from the tracked frontend/package.json: a reader
+  # that returned a hardcoded version would keep this check green after the
+  # floor moved.
+  def test_the_declared_node_floor_is_read_from_frontend_package_json
+    pkg = JSON.parse(File.read(File.join(ROOT, 'frontend', 'package.json')))
+
+    assert_equal File.join(ROOT, 'frontend', 'package.json'), frontend_package_json_path
+    assert_equal pkg.dig('engines', 'node'), declared_node_floor
+  end
+
+  # A pin set that agrees with itself but resolves below the floor must
+  # fail: that is the shape of a real drift — every site moved together to a
+  # runtime the dashboard does not support. Drop the floor comparison and
+  # this fixture stops mattering: the check passes and this test fails.
+  def test_node_pins_below_the_declared_engine_floor_fail_the_check
+    below = version_below_floor(parse_floor(declared_node_floor))
+
+    with_node_pins('mise.toml' => below, 'test.yml:build#1' => below) do
+      assert_one_version('node', node_pins)
+
+      error = assert_raises(Minitest::Assertion) { assert_node_pins_satisfy_floor }
+
+      assert_includes error.message, 'mise.toml'
+      assert_includes error.message, below
+      assert_includes error.message, declared_node_floor
+    end
+  end
+
+  # The same check must pass for pins that satisfy the floor, or it would
+  # reject every pin set.
+  def test_node_pins_satisfying_the_declared_engine_floor_pass_the_check
+    satisfying = floor_version_spec(parse_floor(declared_node_floor))
+
+    with_node_pins('mise.toml' => satisfying, 'test.yml:build#1' => satisfying) do
+      assert_one_version('node', node_pins)
+
+      assert_node_pins_satisfy_floor
+    end
+  end
+
+  # A setup-node step that lost its `node-version:` input installs whatever
+  # setup-node defaults to: there is no version to compare with the floor,
+  # and the check has to say so instead of reading it as one.
+  def test_a_node_pin_without_a_version_fails_the_check
+    with_node_pins('test.yml:build#1' => nil) do
+      error = assert_raises(Minitest::Assertion) { assert_node_pins_satisfy_floor }
+
+      assert_includes error.message, 'has no version'
+      assert_includes error.message, 'test.yml:build#1'
+      assert_includes error.message, declared_node_floor
+    end
+  end
+
+  # A pin that is not a version at all (a tag, a range) cannot be compared
+  # with the floor: the check has to refuse it rather than pass it silently.
+  def test_a_node_pin_that_is_not_a_version_fails_the_check
+    with_node_pins('test.yml:build#1' => 'lts/*') do
+      error = assert_raises(Minitest::Assertion) { assert_node_pins_satisfy_floor }
+
+      assert_includes error.message, 'is not a version'
+      assert_includes error.message, 'test.yml:build#1'
+      assert_includes error.message, 'lts/*'
+      assert_includes error.message, declared_node_floor
+    end
+  end
+
+  # A floor the dashboard declares in another shape than a ">= range" cannot
+  # be compared with a pin: the check has to refuse it, or it would pass
+  # every pin against a floor it never read.
+  def test_a_declared_node_floor_that_is_not_a_range_fails_the_check
+    with_frontend_package_json('24.15.0') do
+      error = assert_raises(Minitest::Assertion) { assert_node_pins_satisfy_floor }
+
+      assert_includes error.message, '24.15.0'
+      assert_includes error.message, "must declare a '>=' range"
+    end
   end
 
   # The patterns that decide whether a pull request runs this suite at all.
@@ -119,11 +236,12 @@ class ToolchainPinsTest < Minitest::Test
     YAML.safe_load(filters).fetch('ruby')
   end
 
-  # Every file a pin is read from, repo-relative.
+  # Every file a pin — or the declared node floor — is read from,
+  # repo-relative.
   def pin_sites
     workflows = (setup_steps('oven-sh/setup-bun') + setup_steps('actions/setup-node'))
                 .map { |site, _| ".github/workflows/#{site.split(':').first}" }
-    (%w[Dockerfile mise.toml docs/deployment.md] + workflows).uniq
+    (%w[Dockerfile mise.toml docs/deployment.md frontend/package.json] + workflows).uniq
   end
 
   # The agreement checks above only gate a PR that runs them. A pin site
@@ -178,5 +296,113 @@ class ToolchainPinsTest < Minitest::Test
     ensure
       singleton_class.send(:remove_method, :deployment_doc_path)
     end
+  end
+
+  # Serve a package.json declaring `node_range` as the dashboard's package
+  # for the block's duration, by pointing this instance's package path at a
+  # fixture in a temp dir. The tracked file is never written, and the
+  # override lives on this test instance, so the other tests of this class —
+  # which run concurrently in this process — still read the real package.
+  def with_frontend_package_json(node_range)
+    Dir.mktmpdir('wurk-pins') do |dir|
+      path = File.join(dir, 'package.json')
+      File.write(path, JSON.generate('engines' => { 'node' => node_range }))
+      singleton_class.send(:define_method, :frontend_package_json_path) { path }
+      yield
+    ensure
+      singleton_class.send(:remove_method, :frontend_package_json_path)
+    end
+  end
+
+  # The one place the node pins are compared with the declared engine floor.
+  # The real test AND the fixtures that prove the comparison is load-bearing
+  # both call THIS, so dropping it fails the fixtures.
+  def assert_node_pins_satisfy_floor
+    floor = declared_node_floor
+    floor_version = parse_floor(floor)
+
+    node_pins.each do |site, pin|
+      version = parse_version_spec(pin)
+      next if version_at_least?(version, floor_version)
+
+      flunk node_pin_failure_message(site, pin, floor, version)
+    end
+  end
+
+  # Component-wise comparison of two (major, minor, patch) triples. Array has
+  # no comparison operators, so the spaceship result decides.
+  def version_at_least?(version, floor)
+    comparison = version <=> floor
+
+    !comparison.nil? && comparison >= 0
+  end
+
+  # Why one pin does not satisfy the floor. The three failures are named
+  # apart on purpose: an unpinned step, a version this check cannot compare
+  # and a version below the floor each need a different fix.
+  def node_pin_failure_message(site, pin, floor, version)
+    return "node pin #{site} has no version; it cannot satisfy the declared floor #{floor}" if pin.nil?
+
+    subject = "node pin #{site}=#{pin.inspect}"
+    return "#{subject} is not a version; it cannot satisfy the declared floor #{floor}" if version.nil?
+
+    "#{subject} resolves below the declared floor #{floor} (frontend/package.json engines.node)"
+  end
+
+  # A pin is a version SPEC: setup-node and mise both install the newest
+  # release matching it, so "24" selects the newest 24.x.y. The newest
+  # version a spec can select is the components it names and unbounded above,
+  # so "24" is (24, inf, inf) and "24.15.0" is (24, 15, 0).
+  def parse_version_spec(spec)
+    match = /\A(\d+)(?:\.(\d+))?(?:\.(\d+))?\z/.match(spec.to_s.strip)
+    return nil unless match
+
+    major, minor, patch = match.captures.map { |part| part&.to_i }
+
+    [major, minor || Float::INFINITY, patch || Float::INFINITY]
+  end
+
+  # The floor is a ">= range": ">=24.15.0" names the lowest Node the
+  # dashboard supports. A declaration in another shape cannot be compared
+  # with a pin, and guessing would pass it silently.
+  def parse_floor(range)
+    match = /\A>=\s*(\d+(?:\.\d+){0,2})\z/.match(range.to_s.strip)
+    flunk "frontend/package.json engines.node must declare a '>=' range, got #{range.inspect}" unless match
+
+    parse_version_spec(match[1])
+  end
+
+  # The version the declared floor names, as a spec: ">=24.15.0" names
+  # "24.15.0". Derived from the parsed floor so the fixtures above keep
+  # their meaning when the floor moves.
+  def floor_version_spec(floor)
+    major, minor, patch = floor
+
+    return major.to_s if minor == Float::INFINITY
+    return "#{major}.#{minor}" if patch == Float::INFINITY
+
+    "#{major}.#{minor}.#{patch}"
+  end
+
+  # A version spec that resolves below the declared floor: the floor's minor
+  # minus one, so the fixture stays below the floor when the floor moves.
+  def version_below_floor(floor)
+    major, minor, patch = floor
+    return "#{major - 1}.0.0" unless minor.is_a?(Integer) && minor.positive?
+    return "#{major}.#{minor - 1}.0" if patch == Float::INFINITY || patch.zero?
+
+    "#{major}.#{minor}.#{patch - 1}"
+  end
+
+  # Serve `pins` as the node pins for the block's duration, by pointing this
+  # instance's pin source at a fixture hash. The tracked files are never
+  # written, and the override lives on this test instance, so the other
+  # tests of this class — which run concurrently in this process — still
+  # read the real pins.
+  def with_node_pins(pins)
+    singleton_class.send(:define_method, :node_pins) { pins }
+    yield
+  ensure
+    singleton_class.send(:remove_method, :node_pins)
   end
 end
