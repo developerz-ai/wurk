@@ -1,7 +1,7 @@
 PATH
   remote: ..
   specs:
-    wurk (1.11.0)
+    wurk (1.11.1)
       base64 (>= 0.1, < 1)
       connection_pool (>= 3.0, < 4)
       fiddle (>= 1.0, < 2)
@@ -257,4 +257,4 @@ DEPENDENCIES
   wurk!
 
 BUNDLED WITH
-   2.6.9
+  4.0.23
