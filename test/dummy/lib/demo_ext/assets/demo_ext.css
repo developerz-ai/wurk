@@ -1,5 +1,0 @@
-.demo-locks-subtitle { color: var(--muted, #9aa4b2); }
-.demo-locks { width: 100%; border-collapse: collapse; }
-.demo-locks th, .demo-locks td { padding: 0.5rem 0.75rem; text-align: start; border-bottom: 1px solid var(--border, #2a3140); }
-.demo-locks-release { cursor: pointer; padding: 0.25rem 0.75rem; border-radius: 0.375rem; border: 1px solid var(--danger, #e5484d); background: transparent; color: var(--danger, #e5484d); }
-.demo-locks-release:hover { background: var(--danger, #e5484d); color: #fff; }
