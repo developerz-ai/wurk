@@ -29,11 +29,13 @@ class CronTest < Wurk::Test::UnitCase
     @suffix = "cron#{Process.pid}#{object_id}"
     @lids = []
     @configs = []
+    @workers = []
   end
 
   def teardown
     @lids.each { |lid| Wurk::Cron.unregister(lid) }
     @configs.each(&:reset_redis_pools!)
+    @workers.each { |name| CronTest.send(:remove_const, name) }
   ensure
     super
   end
@@ -621,7 +623,7 @@ class CronTest < Wurk::Test::UnitCase
 
   def test_racing_pollers_fire_a_due_slot_exactly_once
     queue = "cron-race-#{@suffix}"
-    lp = register_loop("CronTest::Race#{@suffix}", queue: queue)
+    lp = register_loop(loadable("CronTest::Race#{@suffix}"), queue: queue)
     pollers = Array.new(3) { build_leader_poller }
     rounds = 8
     claims = 0
@@ -639,7 +641,7 @@ class CronTest < Wurk::Test::UnitCase
 
   def test_enqueue_if_due_loses_the_slot_once_the_mark_moved
     queue = "cron-cas-#{@suffix}"
-    lp = register_loop("CronTest::Cas#{@suffix}", queue: queue)
+    lp = register_loop(loadable("CronTest::Cas#{@suffix}"), queue: queue)
     poller = build_leader_poller
     arm_due_mark(lp.lid)
 
@@ -704,7 +706,7 @@ class CronTest < Wurk::Test::UnitCase
   # advances before the push, so a failed push drops this occurrence instead of
   # leaving the next tick to fire it a second time.
   def test_enqueue_if_due_advances_the_mark_before_the_push
-    lp = register_loop("CronTest::Lost#{@suffix}", queue: "cron-lo-#{@suffix}")
+    lp = register_loop(loadable("CronTest::Lost#{@suffix}"), queue: "cron-lo-#{@suffix}")
     arm_due_mark(lp.lid)
     poller = poller_whose_push_fails(StringIO.new)
 
@@ -715,12 +717,50 @@ class CronTest < Wurk::Test::UnitCase
 
   def test_enqueue_if_due_logs_the_occurrence_lost_to_a_failed_push
     io = StringIO.new
-    lp = register_loop("CronTest::LostLog#{@suffix}", queue: "cron-ll-#{@suffix}")
+    lp = register_loop(loadable("CronTest::LostLog#{@suffix}"), queue: "cron-ll-#{@suffix}")
     arm_due_mark(lp.lid)
     poller = poller_whose_push_fails(io)
 
     assert_raises(IOError) { poller.send(:enqueue_if_due, lp) }
     assert_match(/fire lost/, io.string)
+  end
+
+  # A loop whose class is gone from the code (a rollback, a deleted job) used to
+  # push a bare-string payload with none of the worker's sidekiq_options, so a
+  # `retry: 0` job NameError'd under the default 25 retries every tick. Ent's
+  # tick is `klass.perform_async`, which needs the class: skip the occurrence.
+  def test_tick_skips_a_loop_whose_class_is_not_defined_in_this_process
+    io = StringIO.new
+    queue = "cron-gone-#{@suffix}"
+    lp = register_loop("CronTest::Gone#{@suffix}", queue: queue)
+    arm_due_mark(lp.lid)
+
+    leader_poller_logging_to(io).tick
+
+    assert_equal 0, queue_len(queue), 'nothing may be pushed for a class this process cannot load'
+    assert_empty history_entries(lp.lid)
+    assert_operator marks(lp.lid)[1].to_i, :>, ::Time.now.to_i, 'the occurrence is claimed, so it is not retried'
+    assert_match(/class CronTest::Gone#{@suffix} is not defined.*skipped/, io.string)
+  ensure
+    cleanup_queue(queue)
+  end
+
+  def test_an_undefined_class_reaches_the_error_handlers_once_per_loop
+    reports = []
+    lp = register_loop("CronTest::GoneTwice#{@suffix}", queue: "cron-gone2-#{@suffix}")
+    poller = leader_poller_logging_to(StringIO.new)
+    poller.config.error_handlers.replace([->(error, context, _config) { reports << [error, context] }])
+
+    2.times do
+      arm_due_mark(lp.lid)
+      poller.tick
+    end
+
+    assert_equal 1, reports.size
+    error, context = reports.first
+
+    assert_kind_of Wurk::Cron::UnknownWorkerClass, error
+    assert_equal lp.lid, context[:lid]
   end
 
   # The manual `Cron.fire!` path deliberately bypasses the CAS: an operator
@@ -947,6 +987,72 @@ class CronTest < Wurk::Test::UnitCase
     cfg = Wurk::Configuration.new
 
     assert_kind_of Wurk::Cron::Manager, cfg.periodic
+  end
+
+  # Ent registers loops on server startup. Writing them while the initializer
+  # ran built a Redis pool before a later `config.redis=` could take effect,
+  # and let a process that never boots a server rewrite and prune the registry.
+  def test_config_periodic_writes_nothing_until_the_server_boots
+    cfg = Wurk::Configuration.new
+    @configs << cfg
+    lp = cfg.periodic { |mgr| mgr.register('0 4 * * *', "CronTest::Deferred#{@suffix}") }.loops.first
+    @lids << lp.lid
+
+    refute_includes Wurk::Cron::LoopSet.new.map(&:lid), lp.lid
+    refute cfg.capsules.each_value.any?(&:redis_pools_built?), 'registration must not build a Redis pool'
+
+    cfg.apply_periodic!
+
+    assert_includes Wurk::Cron::LoopSet.new.map(&:lid), lp.lid
+  end
+
+  def test_applied_periodic_registration_prunes_the_superseded_loop
+    klass = "CronTest::DeferredPrune#{@suffix}"
+    old = Wurk::Cron::Manager.new.register('0 4 * * *', klass)
+    cfg = Wurk::Configuration.new
+    @configs << cfg
+    fresh = cfg.periodic { |mgr| mgr.register('0 5 * * *', klass) }.loops.first
+    @lids.push(old.lid, fresh.lid)
+
+    assert_includes Wurk::Cron::LoopSet.new.map(&:lid), old.lid, 'nothing is pruned before the server boots'
+
+    cfg.apply_periodic!
+    lids = Wurk::Cron::LoopSet.new.map(&:lid)
+
+    assert_includes lids, fresh.lid
+    refute_includes lids, old.lid
+  end
+
+  def test_deferred_authoritative_runs_when_the_registration_is_applied
+    stray = Wurk::Cron::Manager.new.register('* * * * *', 'CronTest::BarWorker')
+    cfg = Wurk::Configuration.new
+    @configs << cfg
+    kept = cfg.periodic do |mgr|
+      mgr.register('* * * * *', 'CronTest::FooWorker')
+      mgr.authoritative!
+    end.loops.first
+    @lids.push(stray.lid, kept.lid)
+
+    assert_includes Wurk::Cron::LoopSet.new.map(&:lid), stray.lid
+
+    cfg.apply_periodic!
+
+    assert_equal [kept.lid], Wurk::Cron::LoopSet.new.map(&:lid)
+  end
+
+  def test_registering_after_the_server_booted_persists_at_once
+    cfg = Wurk::Configuration.new
+    @configs << cfg
+    cfg.periodic
+    cfg.apply_periodic!
+    lp = cfg.periodic.register('0 4 * * *', "CronTest::Late#{@suffix}")
+    @lids << lp.lid
+
+    assert_includes Wurk::Cron::LoopSet.new.map(&:lid), lp.lid
+  end
+
+  def test_apply_periodic_without_a_periodic_block_is_a_no_op
+    assert_nil Wurk::Configuration.new.apply_periodic!
   end
 
   # ---- Sidekiq aliases ------------------------------------------------
@@ -1536,6 +1642,26 @@ class CronTest < Wurk::Test::UnitCase
     threads.map(&:value)
   end
 
+  # The poller pushes only a class it can load. Each test names its own worker:
+  # registration prunes by class, across tests running at the same time.
+  def loadable(klass)
+    name = klass.delete_prefix('CronTest::')
+    return klass if name == klass || CronTest.const_defined?(name, false)
+
+    CronTest.const_set(name, Class.new)
+    @workers << name
+    klass
+  end
+
+  def leader_poller_logging_to(log_io)
+    cfg = Wurk::Configuration.new
+    cfg.logger = Logger.new(log_io)
+    @configs << cfg
+    poller = Wurk::Cron::Poller.new(cfg)
+    poller.define_singleton_method(:leader?) { true }
+    poller
+  end
+
   def build_leader_poller
     poller = Wurk::Cron::Poller.new(Wurk.configuration)
     # Pretend this process holds the cluster lock.
@@ -1559,7 +1685,7 @@ class CronTest < Wurk::Test::UnitCase
 
   def enqueue_via_leader_tick(klass:, queue:, args:)
     mgr = Wurk::Cron::Manager.new
-    lp = mgr.register('* * * * *', klass, queue: queue, args: args)
+    lp = mgr.register('* * * * *', loadable(klass), queue: queue, args: args)
     @lids << lp.lid
     build_leader_poller.tick
     raw = Wurk.redis { |c| c.call('RPOP', "queue:#{queue}") }
@@ -1572,7 +1698,7 @@ class CronTest < Wurk::Test::UnitCase
   def history_after_leader_tick
     mgr = Wurk::Cron::Manager.new
     queue = "cron-q-hist-#{@suffix}"
-    lp = mgr.register('* * * * *', "CronTest::Hist#{@suffix}", queue: queue)
+    lp = mgr.register('* * * * *', loadable("CronTest::Hist#{@suffix}"), queue: queue)
     @lids << lp.lid
     build_leader_poller.tick
     history = Wurk.redis { |c| c.call('LRANGE', "#{Wurk::Cron::HISTORY_PREFIX}#{lp.lid}", 0, -1) }

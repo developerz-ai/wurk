@@ -25,7 +25,8 @@ module Wurk
   #     so a re-registration of the same loop is idempotent.
   #   * `Cron::Manager` — registration DSL. `mgr.register(cron, klass, **opts)`
   #     with `tz=` mass-setter. Writes to Redis (`periodic` SET + `loops:{lid}`
-  #     HASH) and prunes superseded loops for the classes it registers.
+  #     HASH) and prunes superseded loops for the classes it registers; the
+  #     `config.periodic` one defers both until the server boots.
   #   * `Cron::LoopSet` — Enumerable view (`each`/`size`/`fetch(lid)`).
   #   * `Cron::ConfigTester` — boot-time validator. Verifies cron syntax and
   #     that every worker class constant resolves.
@@ -45,6 +46,10 @@ module Wurk
     HISTORY_CAP = 25
     DEFAULT_TICK_SECONDS = 60
     MISSED_TICK_THRESHOLD = 90
+
+    # Handed to the error handlers when a due loop names a class this process
+    # cannot load, so the occurrence was skipped.
+    class UnknownWorkerClass < Wurk::Error; end
 
     # 5-field crontab + `@aliases`. No seconds field, no DOW name aliases
     # (sidekiq-ent §2.2 uses numeric DOW only).
@@ -441,12 +446,17 @@ module Wurk
       attr_reader :loops
 
       # `prune: false` registers without superseding — ConfigTester uses it so
-      # validating a config never deletes a live loop.
-      def initialize(config = nil, prune: true)
+      # validating a config never deletes a live loop. `deferred: true` holds
+      # every write until #apply!: `config.periodic` runs while the initializers
+      # load, before the app has finished configuring Redis, and in processes
+      # that never boot a server (Ent registers on startup).
+      def initialize(config = nil, prune: true, deferred: false)
         @config = config
         @loops = []
         @tz = nil
         @prune = prune
+        @deferred = deferred
+        @authoritative = false
         @pruned_klasses = {}
       end
 
@@ -471,9 +481,20 @@ module Wurk
         normalized = opts.transform_keys(&:to_s)
         loop_obj = Loop.new(schedule: cron, klass: klass_name, options: normalized, tz: tz)
         @loops << loop_obj
-        Cron.persist(loop_obj)
-        prune_superseded(klass_name)
+        persist(loop_obj) unless @deferred
         loop_obj
+      end
+
+      # Writes the registrations held back since `config.periodic` ran, then
+      # prunes as #register and #authoritative! would have. Launcher#boot calls
+      # it; once applied, later registrations are written as they come.
+      def apply!
+        return self unless @deferred
+
+        @deferred = false
+        @loops.each { |loop_obj| persist(loop_obj) }
+        prune_unregistered if @authoritative
+        self
       end
 
       # Registers a sidekiq-cron shaped schedule: `{ name => { cron:, class:,
@@ -500,12 +521,22 @@ module Wurk
       def authoritative!
         return self unless @prune
 
-        keep = @loops.map(&:lid)
-        LoopSet.new(@config).each { |existing| Cron.unregister(existing.lid) unless keep.include?(existing.lid) }
+        @authoritative = true
+        prune_unregistered unless @deferred
         self
       end
 
       private
+
+      def persist(loop_obj)
+        Cron.persist(loop_obj)
+        prune_superseded(loop_obj.klass)
+      end
+
+      def prune_unregistered
+        keep = @loops.map(&:lid)
+        LoopSet.new(@config).each { |existing| Cron.unregister(existing.lid) unless keep.include?(existing.lid) }
+      end
 
       def register_entry(entry)
         cron = entry['cron'].to_s.strip
@@ -647,6 +678,7 @@ module Wurk
         @mutex = ::Mutex.new
         @sleeper = ::ConditionVariable.new
         @on_leader = method(:wake_for_leadership)
+        @unknown_reported = ::Set.new
       end
 
       # The loop waits one interval before its first tick unless this process
@@ -723,9 +755,7 @@ module Wurk
         skip_missed(loop_obj, slot, now) unless firing == slot
         return if firing.nil?
 
-        jid = enqueue_claimed!(loop_obj)
-        record_history(loop_obj, jid, now)
-        jid
+        fire_claimed(loop_obj, now)
       end
 
       # Fire one loop right now, bypassing both the leader gate and the
@@ -811,6 +841,32 @@ module Wurk
           "[cron] missed tick lid=#{loop_obj.lid} klass=#{loop_obj.klass} " \
           "expected_at=#{expected} now=#{now} drift=#{now - expected}s — skipped, not backfilled"
         )
+        nil
+      end
+
+      def fire_claimed(loop_obj, now)
+        return skip_unknown_class(loop_obj) unless loop_obj.worker_class
+
+        jid = enqueue_claimed!(loop_obj)
+        record_history(loop_obj, jid, now)
+        jid
+      end
+
+      # Ent's tick is `klass.perform_async`, which needs the class. Pushing the
+      # bare name instead drops the worker's sidekiq_options, so a job that
+      # declares `retry: 0` failed with NameError under the default retries on
+      # every tick. The leader boots the app's code, so a class it cannot load
+      # is one that was deleted, renamed or rolled back; its loop stays in Redis
+      # until `Cron.unregister(lid)` or `authoritative!`. Logged on every
+      # occurrence, reported once per loop per process.
+      def skip_unknown_class(loop_obj)
+        message = "[cron] class #{loop_obj.klass} is not defined in this process lid=#{loop_obj.lid} — " \
+                  'occurrence skipped; Wurk::Cron.unregister(lid) retires the loop'
+        logger.warn(message)
+        return unless @unknown_reported.add?(loop_obj.lid)
+
+        handle_exception(UnknownWorkerClass.new(message),
+                         { context: 'cron-poller', lid: loop_obj.lid, klass: loop_obj.klass })
         nil
       end
 

@@ -92,7 +92,7 @@
     def index
       render layout: false, html: decorate_shell(spa_html).html_safe
 - entry: "`HEAD /` does not implement the Redis health probe"
-  anchor: "lib/wurk/configuration.rb#L715-L739"
+  anchor: "lib/wurk/configuration.rb#L724-L748"
   fragment: |-
     # Opt-in thin HTTP listener inside the worker process for k8s probes.
     # When called, the Launcher will start a TCP server on `port` bound to

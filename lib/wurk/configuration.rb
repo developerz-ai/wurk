@@ -473,7 +473,8 @@ module Wurk
     # Yields a Wurk::Cron::Manager so the host app can register periodic
     # jobs at boot. Manager state is shared per-process so multiple
     # `config.periodic` blocks accumulate (matches Sidekiq Ent §2.1). This is
-    # the native replacement for the `sidekiq-cron` gem.
+    # the native replacement for the `sidekiq-cron` gem. Nothing reaches
+    # Redis until the server boots (#apply_periodic!).
     #
     # @example Register cron jobs at boot
     #   Wurk.configure_server do |config|
@@ -488,9 +489,17 @@ module Wurk
     # Spec: docs/target/sidekiq-ent.md §2.
     def periodic
       require_relative 'cron'
-      @periodic_manager ||= Wurk::Cron::Manager.new(self)
+      @periodic_manager ||= Wurk::Cron::Manager.new(self, deferred: true)
       yield @periodic_manager if block_given?
       @periodic_manager
+    end
+
+    # Writes the `config.periodic` registrations to Redis. Launcher#boot calls
+    # it, so the loops are registered by a booting server, against the Redis
+    # settings the app ended up with.
+    def apply_periodic!
+      @periodic_manager&.apply!
+      nil
     end
 
     # --- Historical metrics snapshotter (Ent §5) -------------------------
