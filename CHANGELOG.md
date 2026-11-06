@@ -4,13 +4,20 @@ All notable changes to Wurk are recorded here. Format: [Keep a Changelog](https:
 
 ## [Unreleased]
 
+## [1.11.1] - 2026-11-06
+
+Periodic fixes from a production rollback: a loop whose class is gone no longer becomes a retry storm, and `config.periodic` registers when the server boots instead of while initializers load.
+
 ### Changed
 
-- **`config.periodic` registrations reach Redis when the server boots, not when the initializer runs.** The launcher writes them, and prunes superseded loops, just before the cron poller starts, as Sidekiq Enterprise registers on startup. A periodic block no longer builds a Redis pool before a later `config.redis =` (which logged "config.redis= called after a Redis pool was already built" and, in a single process, kept the old settings), and a process that never boots a server (console, rake, a skipped embed) no longer rewrites or prunes the registry. `mgr.authoritative!` inside the block runs at that point too. A standalone `Wurk::Cron::Manager.new.register` still writes at once. **Upgrade note:** code that read `Wurk::Cron::LoopSet` right after `config.periodic`, without booting a server, now finds the loops missing; call `config.apply_periodic!`.
+- **`config.periodic` registrations reach Redis when the server boots, not when the initializer runs.** The launcher writes them, and prunes superseded loops, just before the cron poller starts, as Sidekiq Enterprise registers on startup. A periodic block no longer builds a Redis pool before a later `config.redis =` (which logged "config.redis= called after a Redis pool was already built" and, in a single process, kept the old settings), and a process that never boots a server (console, rake, a skipped embed) no longer rewrites or prunes the registry. `mgr.authoritative!` inside the block runs at that point too. A standalone `Wurk::Cron::Manager.new.register` still writes at once. **Upgrade note:** code that read `Wurk::Cron::LoopSet` right after `config.periodic`, without booting a server, now finds the loops missing; call `config.apply_periodic!`. (#898)
 
 ### Fixed
 
-- **A periodic loop whose class no longer exists no longer turns into a retry storm.** The leader pushed a loop whose class it could not load as a bare class name, without the worker's `sidekiq_options`, so a job declaring `retry: 0` failed with `NameError` under the default 25 retries on every tick (seen in production after a rollback left a newer deploy's `*/10` loop in Redis: 16 errors from 3 ticks). The occurrence is now claimed and skipped, nothing is pushed, a WARN names the class and `lid`, and the error handlers get one `Wurk::Cron::UnknownWorkerClass` per loop per process. The loop stays registered until `Wurk::Cron.unregister(lid)` or `mgr.authoritative!`. During a rolling deploy, a loop for a newly added class is skipped while the leader still runs the old code. The dashboard's Enqueue action is unchanged.
+- **A periodic loop whose class no longer exists no longer turns into a retry storm.** The leader pushed a loop whose class it could not load as a bare class name, without the worker's `sidekiq_options`, so a job declaring `retry: 0` failed with `NameError` under the default 25 retries on every tick (seen in production after a rollback left a newer deploy's `*/10` loop in Redis: 16 errors from 3 ticks). The occurrence is now claimed and skipped, nothing is pushed, a WARN names the class and `lid`, and the error handlers get one `Wurk::Cron::UnknownWorkerClass` per loop per process. The loop stays registered until `Wurk::Cron.unregister(lid)` or `mgr.authoritative!`. During a rolling deploy, a loop for a newly added class is skipped while the leader still runs the old code. The dashboard's Enqueue action is unchanged (#898).
+- The built-in extension partials (`_paging`, `_job_info`) ship inside the gem; an installed 1.11.0 raised `extension <name> has no view _paging` (#890).
+- A capped queue refused at capacity backs off from when the refusal arrived, not when the claim was sent, so a slow Redis no longer turns a full capped queue into a spin (#894).
+- **The demo lock is off the Rails 8.1.4 advisories.** `demo/Gemfile.lock` moves to Rails 8.1.4.1 (actionpack, actionview, activestorage, actionmailbox, activesupport): IP spoofing in `ActionDispatch::RemoteIp`, a Strong Parameters bypass, restoration of destroyed sessions in CacheStore, missing SameSite on session cookies, content-negotiation cache poisoning, a session leak and a DoS in Live streaming, XSS in the Action View text/tag/`strip_tags`/`highlight` helpers, a signature replay in the Action Mailbox Mailgun ingress, arbitrary file read, write and RCE plus size-limit circumvention in Active Storage, and a `MessagePack` XSS and a `safe_constantize` DoS in Active Support. The demo image installs the lock frozen, so this is what it ships; nothing outside the Rails family moves.
 
 ## [1.11.0] - 2026-11-03
 
@@ -817,7 +824,8 @@ First public (pre-1.0) release. Wurk is a 100% API-compatible drop-in replacemen
 - ActiveJob adapter, `IterableJob`, embedded mode, and a standalone `exe/wurk` runner.
 - Sidekiq client/server middleware contract; third-party ecosystem suites (sidekiq-cron, sidekiq-unique-jobs, sidekiq-scheduler, sidekiq-status, sidekiq-failures, sidekiq-throttled) pass against Wurk.
 
-[Unreleased]: https://github.com/developerz-ai/wurk/compare/v1.11.0...HEAD
+[Unreleased]: https://github.com/developerz-ai/wurk/compare/v1.11.1...HEAD
+[1.11.1]: https://github.com/developerz-ai/wurk/compare/v1.11.0...v1.11.1
 [1.11.0]: https://github.com/developerz-ai/wurk/compare/v1.10.0...v1.11.0
 [1.10.0]: https://github.com/developerz-ai/wurk/compare/v1.9.0...v1.10.0
 [1.9.0]: https://github.com/developerz-ai/wurk/compare/v1.8.1...v1.9.0
