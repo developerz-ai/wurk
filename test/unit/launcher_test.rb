@@ -177,6 +177,24 @@ class LauncherTest < Wurk::Test::UnitCase
     assert started, 'run should start the periodic (cron) poller'
   end
 
+  # Ent registers periodic loops on startup, not when `config.periodic` runs.
+  def test_run_registers_the_periodic_loops_before_the_poller_starts
+    lp = @config.periodic { |mgr| mgr.register('0 4 * * *', "LauncherTest::Periodic#{@ns}") }.loops.first
+    @cleanup_keys.push("#{Wurk::Cron::LOOP_PREFIX}#{lp.lid}")
+    launcher = Wurk::Launcher.new(@config)
+    stub_managers(launcher)
+    registered_at_start = nil
+    launcher.periodic_poller.define_singleton_method(:start) do
+      registered_at_start = Wurk::Cron::LoopSet.new.map(&:lid).include?(lp.lid)
+    end
+
+    launch(launcher, async_beat: false)
+
+    assert registered_at_start, 'the loop must be in Redis by the time the poller starts'
+  ensure
+    Wurk::Cron.unregister(lp.lid) if lp
+  end
+
   def test_run_starts_the_metrics_rollup
     launcher = Wurk::Launcher.new(@config)
     stub_managers(launcher)

@@ -99,10 +99,12 @@ module Wurk
     #   4. start the reaper and the boot-time reclaim sweep — kill-9 recovery,
     #      not decoration: a SIGKILLed sibling's in-flight jobs wait on this,
     #      so it stays ahead of the periodic loops.
-    #   5. start the periodic loops. None of them ticks at zero — TimerLoop#run
-    #      waits an interval before its first yield, Scheduled::Poller waits
-    #      INITIAL_WAIT, and Leader waits DEFAULT_INITIAL_WAIT — so starting
-    #      them last costs a few thread spawns and nothing else. Both leader-
+    #   5. write the `config.periodic` registrations (Ent registers loops on
+    #      startup), then start the periodic loops. None of them ticks at
+    #      zero — TimerLoop#run waits an interval before its first yield,
+    #      Scheduled::Poller waits INITIAL_WAIT, and Leader waits
+    #      DEFAULT_INITIAL_WAIT — so starting them last costs a few thread
+    #      spawns and nothing else. Both leader-
     #      gated pollers are also safe to start before leadership settles: a
     #      non-leader tick just returns early.
     #   6. start the health probe server LAST so the listener doesn't
@@ -240,6 +242,7 @@ module Wurk
         # Run on a background thread so /ready probe isn't delayed by a large
         # orphan sweep (the reaper's reclaim is atomic, but can scan many entries).
         @boot_reclaim_thread = safe_thread('boot-reclaim', &method(:boot_reclaim))
+        @config.apply_periodic!
         start_periodic_components
       end
       @health_server&.start

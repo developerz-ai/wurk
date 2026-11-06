@@ -4,6 +4,14 @@ All notable changes to Wurk are recorded here. Format: [Keep a Changelog](https:
 
 ## [Unreleased]
 
+### Changed
+
+- **`config.periodic` registrations reach Redis when the server boots, not when the initializer runs.** The launcher writes them, and prunes superseded loops, just before the cron poller starts, as Sidekiq Enterprise registers on startup. A periodic block no longer builds a Redis pool before a later `config.redis =` (which logged "config.redis= called after a Redis pool was already built" and, in a single process, kept the old settings), and a process that never boots a server (console, rake, a skipped embed) no longer rewrites or prunes the registry. `mgr.authoritative!` inside the block runs at that point too. A standalone `Wurk::Cron::Manager.new.register` still writes at once. **Upgrade note:** code that read `Wurk::Cron::LoopSet` right after `config.periodic`, without booting a server, now finds the loops missing; call `config.apply_periodic!`.
+
+### Fixed
+
+- **A periodic loop whose class no longer exists no longer turns into a retry storm.** The leader pushed a loop whose class it could not load as a bare class name, without the worker's `sidekiq_options`, so a job declaring `retry: 0` failed with `NameError` under the default 25 retries on every tick (seen in production after a rollback left a newer deploy's `*/10` loop in Redis: 16 errors from 3 ticks). The occurrence is now claimed and skipped, nothing is pushed, a WARN names the class and `lid`, and the error handlers get one `Wurk::Cron::UnknownWorkerClass` per loop per process. The loop stays registered until `Wurk::Cron.unregister(lid)` or `mgr.authoritative!`. During a rolling deploy, a loop for a newly added class is skipped while the leader still runs the old code. The dashboard's Enqueue action is unchanged.
+
 ## [1.11.0] - 2026-11-03
 
 Fixes a 1.10.0 boot regression under `wurkswarm`: upgrade if your `config/application.rb` relies on the swarm's preload. Native periodics now keep firing through leader deaths, and `push_bulk` is cheaper.

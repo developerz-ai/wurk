@@ -35,9 +35,12 @@ Wurk.configure_server do |config|
 end
 ```
 
-`configure_server` only yields in server processes, so registration writes to
-Redis when a worker boots — not from your web dynos or a `rails console`.
-Multiple `config.periodic` blocks accumulate onto one shared Manager.
+`configure_server` only yields in server processes, and the block's registrations
+are written to Redis when that server boots (the launcher, before the cron poller
+starts) — not while your initializers load, and not from a process that never
+boots a server. So a periodic block may sit in any initializer, ahead of or after
+`config.redis =`. Multiple `config.periodic` blocks accumulate onto one shared
+Manager.
 
 ### `mgr.register(cron, klass, **opts)`
 
@@ -55,9 +58,10 @@ Any other key you pass is stored in the loop's options hash and — because it
 feeds the loop identity — changes the loop's `lid`. It is *not* copied into the
 job payload; only `class`, `args`, `queue`, and `retry` are pushed.
 
-`register` returns the `Wurk::Cron::Loop` and persists it to Redis immediately.
-An invalid cron string or an empty/non-String class name raises `ArgumentError`
-right there at boot.
+`register` returns the `Wurk::Cron::Loop`. Inside `config.periodic` it is
+persisted when the server boots; a standalone `Wurk::Cron::Manager.new` persists
+it immediately. An invalid cron string or an empty/non-String class name raises
+`ArgumentError` right there, from the `register` call.
 
 There is also a convenience module method, `Wurk::Cron.register(name, cron,
 worker_class, args = [], **opts)`, which stores `name` as a `label` option. The
@@ -244,7 +248,9 @@ is cleared, and the loop stops firing silently.
 ## Job payloads and ActiveJob
 
 A plain Sidekiq/Wurk job is pushed as `{"class", "args", "queue", "retry"}` with
-the loop's configured values.
+the loop's configured values laid over the worker's own `sidekiq_options`, as
+`perform_async` would. That needs the class, so the leader skips a loop whose
+class it cannot load (see [Deploys](#deploys-what-happens-when-a-schedule-changes)).
 
 If the class name resolves to an `ActiveJob::Base` subclass, the poller enqueues
 through the AJ adapter with `perform_later(*args)` instead, so callbacks and
@@ -296,8 +302,14 @@ isn't one it just wrote. So:
   on the next worker boot. Only the new schedule fires.
 - **Changed `args`/`queue`/`retry`?** Same — superseded, pruned.
 - **Deleted the `register` line entirely?** **Not** pruned. Nothing in the
-  surviving code mentions that class, so no scope can see it. It keeps firing.
-  Remove it explicitly.
+  surviving code mentions that class, so no scope can see it. While the class
+  still exists, it keeps firing. Once the class is gone too (deleted, renamed, or
+  a rollback to code that predates it), the leader skips each occurrence: it
+  logs `[cron] class … is not defined in this process … occurrence skipped` and
+  hands a `Wurk::Cron::UnknownWorkerClass` to your error handlers once per loop
+  per process. Nothing is pushed, so a vanished class cannot turn into a retry
+  storm. Remove the loop explicitly, or end your periodic block with
+  `mgr.authoritative!`, which deletes every loop that block did not register.
 
 Pruning is scoped by class precisely so it stays safe: a process that registers
 only some of your loops never touches the others, and a process that registers

@@ -633,12 +633,12 @@ resetting it.
 **Wurk:** quiet is cluster-global and one-way, signalled with `TSTP`
 (`lib/wurk/swarm.rb:224-231`, `lib/wurk/api/swarm.rb:37`
 `QUIET_SIGNAL = 'TSTP'`, `lib/wurk/cli.rb:66-68`). `Launcher#quiet`
-(`lib/wurk/launcher.rb:121-131`) quiets every manager and the scheduled
+(`lib/wurk/launcher.rb:123-133`) quiets every manager and the scheduled
 poller, deliberately leaves the cron poller running, and never touches
 `@leader` — the renewal loop keeps renewing the lock every 15s while held
 (`lib/wurk/leader.rb:189-199`) straight through a quiet. Leadership ends only
 on full shutdown: `Launcher#stop` → `release_components` →
-`redis_teardown_steps` (`lib/wurk/launcher.rb:336-348`, `@leader&.stop`)
+`redis_teardown_steps` (`lib/wurk/launcher.rb:338-350`, `@leader&.stop`)
 → `Leader#stop` (`lib/wurk/leader.rb:189-199`), which joins the campaign
 thread and then CAS-releases `dear-leader`.
 
@@ -658,8 +658,8 @@ on campaign loss or campaign error (`lib/wurk/leader.rb:189-199,281-286`). Full
 shutdown releases the lock deliberately, periodic loops stopped before the
 CAS release, rather than waiting out the TTL.
 
-**Anchor:** `lib/wurk/launcher.rb:121-131` (`#quiet`),
-`lib/wurk/launcher.rb:336-348` (`#redis_teardown_steps`),
+**Anchor:** `lib/wurk/launcher.rb:123-133` (`#quiet`),
+`lib/wurk/launcher.rb:338-350` (`#redis_teardown_steps`),
 `lib/wurk/leader.rb:189-199` (`#stop` join + release); pinned by
 `test/unit/launcher_test.rb` (`test_quiet_does_not_terminate_periodic_poller`,
 `test_quiet_does_not_stop_the_cluster_leader`,
@@ -1187,7 +1187,7 @@ entry records the unsupported contract, not a claim that the gap is safe.
 **Anchor:** free §25.1/§25.4 ([free §25.1 Entrypoint — `HEAD /` probe](../target/sidekiq-free.md#251-entrypoint) and [§25.4 Routes — `HEAD /`](../target/sidekiq-free.md#254-routes));
 [root route](../../config/routes.rb#L4);
 [SPA root controller](../../app/controllers/wurk/dashboard_controller.rb#L42-L44);
-[opt-in configuration](../../lib/wurk/configuration.rb#L715-L739);
+[opt-in configuration](../../lib/wurk/configuration.rb#L724-L748);
 [dedicated listener bind](../../lib/wurk/health.rb#L128-L140);
 [GET-only dispatch](../../lib/wurk/health.rb#L271-L279);
 [liveness and local readiness](../../lib/wurk/health.rb#L282-L310); and
@@ -1382,7 +1382,7 @@ is not modeled separately — the spec itself names `on(:fork)` as its API
 ([Ent §7.2 Environment variables — `SIDEKIQ_FORK_PER_PROCESS_HOOK`](../target/sidekiq-ent.md#72-environment-variables)).
 
 **Anchor:** `lib/wurk/configuration.rb:112`,
-`lib/wurk/configuration.rb:785-789`; free `on()`
+`lib/wurk/configuration.rb:794-798`; free `on()`
 ([free §4.2 Public methods — `on(event)`](../target/sidekiq-free.md#42-public-methods)) and DEFAULTS
 ([free §4.1 DEFAULTS — lifecycle events](../target/sidekiq-free.md#41-defaults)); Ent §7.4
 ([Ent §7.4 Fork callback](../target/sidekiq-ent.md#74-fork-callback)) and §6.3
@@ -1410,7 +1410,7 @@ mirrored Sidekiq prefix of `@options` stays byte-for-byte intact, so gems
 introspecting the config hash see no change.
 
 **Anchor:** `lib/wurk/configuration.rb:52`, `lib/wurk/configuration.rb:369`,
-`lib/wurk/configuration.rb:1222-1223`; free DEFAULTS
+`lib/wurk/configuration.rb:1231-1232`; free DEFAULTS
 ([free §4.1 DEFAULTS — handler keys](../target/sidekiq-free.md#41-defaults)).
 
 ## Pool sizing: three disjoint pools per process
@@ -1692,7 +1692,7 @@ an instance method on a duck-type handle that returns
 dashboard pool is the configuration-owned `config.web_redis_pool` reader
 (`lib/wurk/configuration.rb:332-334`): read-only, with no `web_redis_pool=`
 setter, so Wurk builds the pool itself from the same `config.redis` options the
-worker pools use (`lib/wurk/configuration.rb:1210-1214`) and sizes it with
+worker pools use (`lib/wurk/configuration.rb:1219-1223`) and sizes it with
 `config.web_pool_size` (`lib/wurk/configuration.rb:310-317`, default 5). Every
 dashboard request runs on that pool.
 
@@ -1730,7 +1730,7 @@ shard-per-mount deployment has no Wurk equivalent.
 [`PoolScope::Handle#redis_pool`](../../lib/wurk/web/pool_scope.rb#L39-L43);
 [`config.web_pool_size`](../../lib/wurk/configuration.rb#L310-L317),
 [`config.web_redis_pool`](../../lib/wurk/configuration.rb#L332-L334) and
-[`build_redis_pool`](../../lib/wurk/configuration.rb#L1210-L1214);
+[`build_redis_pool`](../../lib/wurk/configuration.rb#L1219-L1223);
 [parent sockets closed before fork](../../lib/wurk/swarm.rb#L356-L360) and
 [child pools rebuilt after fork](../../lib/wurk/swarm/child_boot.rb#L157-L158);
 free §25.1 ([free §25.1 Entrypoint](../target/sidekiq-free.md#251-entrypoint))
