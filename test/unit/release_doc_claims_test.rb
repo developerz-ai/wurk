@@ -152,6 +152,8 @@ class ReleaseDocClaimsTest < Minitest::Test
     assert_match(/probe failed|PROBE failed/, section,
                  'the section must state a failed probe is not evidence the version is absent')
 
+    assert_includes row10_source, endpoint
+
     row = health_rubygems_row
 
     refute_includes row, 'gem list wurk --remote',
@@ -347,9 +349,9 @@ class ReleaseDocClaimsTest < Minitest::Test
     refute_includes out, 'Unhealthy'
 
     ['--branch main ', '--event push '].each do |filter|
-      command = row10_command.sub(filter, '')
+      command = row10_source.sub(filter, '')
 
-      refute_equal row10_command, command
+      refute_equal row10_source, command
       out, err, status = run_row10(http_status: 404, release_run: runs, command: command)
 
       assert_predicate status, :success?, err
@@ -443,7 +445,7 @@ class ReleaseDocClaimsTest < Minitest::Test
   end
 
   def test_row10_captures_the_status_instead_of_letting_curl_fail_on_http_errors
-    command = row10_command
+    command = row10_source
 
     assert_match(/-w '%\{http_code\}'/, command,
                  'row 10 must capture the HTTP status: grading curl\'s exit code alone ' \
@@ -459,6 +461,11 @@ class ReleaseDocClaimsTest < Minitest::Test
   # on the row (the first is the `Wurk::VERSION` in its Signal cell). `\|` is
   # markdown's escape for a literal pipe inside a table cell, unescaped here
   # exactly as health_brief_test.rb's command_cell does.
+  def row10_source
+    source = File.read(File.join(ROOT, 'bin', 'health-check'))
+    source[/^  rubygems\)\n(.*?)\n    ;;/m, 1] || raise('missing rubygems helper selector')
+  end
+
   def row10_command
     row = health_rubygems_row
 
