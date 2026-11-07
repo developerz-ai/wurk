@@ -298,8 +298,9 @@ schedules:
     days: [mon, tue, thu, fri, sat, sun]
     hours_utc: [5]
     brief_file: .dz/briefs/security-release.md
+  # Weekly (owner, 2026-11-06: routine maintenance weekly, CVE daily). Security has its own lanes.
   - name: health
-    days: [mon, tue, wed, thu, fri, sat, sun]
+    days: [mon]
     hours_utc: [7]
     brief_file: .dz/briefs/health.md
   # Monthly improvement pass (owner, 2026-10-31: improved by AI monthly). The schema has weekdays,

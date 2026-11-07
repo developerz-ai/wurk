@@ -1,6 +1,6 @@
 # Brief: is the project healthy?
 
-Daily `schedules: health` checkup; failures no issue or PR announces.
+Weekly `schedules: health` checkup; failures no issue or PR announces.
 
 ## Rows
 
