@@ -20,7 +20,7 @@
 - Includes a dummy Rails app at `test/dummy/` for engine integration testing.
 - Modern dashboard: left-rail navigation, mobile-friendly, dark + light themes, i18n with extensible locales.
 - Minitest with multi-CPU parallel runner.
-- GitHub Actions on GitHub-hosted `ubuntu-latest` (free for a public repo; no self-hosted runners).
+- GitHub Actions on GitHub-hosted Ubuntu runners (free for a public repo; no self-hosted runners) — `ubuntu-latest` for every job except `python-client`, pinned to `ubuntu-24.04`, the newest image actions/python-versions still publishes a Python 3.9 build for, which setup-python downloads (`ubuntu-latest` now resolves to 26.04, which has none).
 - Public docs site on GitHub Pages.
 
 ## Doc index

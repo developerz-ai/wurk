@@ -32,8 +32,9 @@ jobs:
   # regardless of paths — main is what `release:check` trusts — unless `dup`
   # proves the pushed tree already passed this workflow on the PR head.
   #
-  # Every job runs on GitHub-hosted `ubuntu-latest`: wurk is public, so hosted
-  # minutes are free, and no self-hosted machine ever runs fork-PR code.
+  # Jobs run on GitHub-hosted runners: `ubuntu-latest` everywhere except the
+  # `python-client` job's `ubuntu-24.04` pin. wurk is public, so hosted minutes
+  # are free, and no self-hosted machine ever runs fork-PR code.
   detect:
     name: detect changed paths
     runs-on: ubuntu-latest
@@ -471,7 +472,15 @@ jobs:
     name: python-client (${{ matrix.python-version }})
     needs: detect
     if: ${{ !cancelled() }}
-    runs-on: ubuntu-latest
+    # Pinned, never `ubuntu-latest`: that now resolves to Ubuntu 26.04, and
+    # actions/python-versions publishes no linux-26.04 build for Python 3.9 —
+    # run 42348193660 failed here with "The version '3.9' with architecture
+    # 'x64' was not found for Ubuntu 26.04." 24.04 is the newest image that
+    # actions/python-versions still publishes a 3.9 build for (3.9.25); the
+    # image's own toolcache carries 3.11-3.15 only, so setup-python downloads
+    # that build on a miss, and the matrix keeps both versions.
+    # test/unit/python_client_workflow_test.rb fails if this moves back.
+    runs-on: ubuntu-24.04
     timeout-minutes: 5
     strategy:
       matrix:

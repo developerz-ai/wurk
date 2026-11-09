@@ -22,6 +22,7 @@ test/unit/llms_txt_test.rb
 test/unit/maintainer_policy_contract_test.rb
 test/unit/migration_guide_claims_test.rb
 test/unit/packaging_test.rb
+test/unit/python_client_workflow_test.rb
 test/unit/rakefile_release_test.rb
 test/unit/readme_claims_test.rb
 test/unit/release_doc_claims_test.rb
