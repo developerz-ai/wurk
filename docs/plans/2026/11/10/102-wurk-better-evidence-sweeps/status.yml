@@ -1,0 +1,48 @@
+plan: 102-wurk-better-evidence-sweeps
+title: Make Wurk better — adopter evidence + perf / memory / algorithm / structure sweeps
+status: not_started        # not_started | in_progress | blocked | complete | superseded
+created_by: sebi
+worked_by: ""              # executor fills with their git user.name
+owner: sebi
+percent: 0
+current_focus: "Wave 0: C1 (red main), S1 (SCRIPT FLUSH in tests), notify tesote.com owner of unique_for no-op, baselines (T3, G1/G2, P1)"
+slices:
+  - file: 01-correctness.md
+    status: not_started
+    percent: 0
+  - file: 02-boot-and-adoption-dx.md
+    status: not_started
+    percent: 0
+  - file: 03-algorithms-scaling.md
+    status: not_started
+    percent: 0
+  - file: 04-perf-hot-path-boot.md
+    status: not_started
+    percent: 0
+  - file: 05-memory.md
+    status: not_started
+    percent: 0
+  - file: 06-dashboard-api.md
+    status: not_started
+    percent: 0
+  - file: 07-ecosystem-and-migration.md
+    status: not_started
+    percent: 0
+  - file: 08-observability.md
+    status: not_started
+    percent: 0
+  - file: 09-proof-harness.md
+    status: not_started
+    percent: 0
+  - file: 10-code-structure.md
+    status: not_started
+    percent: 0
+  - file: 11-ci-docs-truth.md
+    status: not_started
+    percent: 0
+  - file: 12-human-decisions.md
+    status: not_started
+    percent: 0
+evidence: []
+notes: "OVERLAPS ../101-evidence-driven-improvement-sweep (same sweeps, parallel session) - owner to pick one plan of record; unique here: slice 10, 11 C3, 05 G1-G2. Planned 2026-11-10 @ f6f509e (v1.11.1) from 7 read-only sweeps: adopters+logs+Sentry, treasury gap analysis, core runtime, dashboard/API/docs/CI, memory, algorithms, code structure. Plan author re-read only R1, S1 and the cited lines for A1, A3, A4, A5, M1, M2, R3, C1; all other rows are sweep findings to re-verify before editing. Open human rows H1-H11 in 12-human-decisions.md (H7 Redis dump carried over from the 2026-10-04 audit U8). Execution cap: <=4 agents per wave, one PR in flight."
+last_updated: 2026-11-10
