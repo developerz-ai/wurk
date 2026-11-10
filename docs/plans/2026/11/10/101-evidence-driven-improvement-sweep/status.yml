@@ -1,0 +1,72 @@
+plan: 101-evidence-driven-improvement-sweep
+title: Evidence-driven improvement sweep (adopters · drop-in · perf · algorithms · memory)
+status: not_started        # not_started | in_progress | blocked | complete | superseded
+created_by: sebi
+worked_by: ""
+owner: sebi
+percent: 0
+current_focus: "wave 0: 01 C1 (red main) + 14 S1 (tesote.com unique! live bug)"
+slices:
+  - file: 01-ci-green-doc-truth.md
+    status: not_started
+    percent: 0
+  - file: 02-reclaim-correctness.md
+    status: not_started
+    percent: 0
+  - file: 03-boot-guards-preflight.md
+    status: not_started
+    percent: 0
+  - file: 04-drop-in-surface.md
+    status: not_started
+    percent: 0
+  - file: 05-errors-and-test-mode.md
+    status: not_started
+    percent: 0
+  - file: 06-perf-hot-path-boot.md
+    status: not_started
+    percent: 0
+  - file: 07-algorithms.md
+    status: not_started
+    percent: 0
+  - file: 08-memory.md
+    status: not_started
+    percent: 0
+  - file: 09-dashboard.md
+    status: not_started
+    percent: 0
+  - file: 10-http-api-clients.md
+    status: not_started
+    percent: 0
+  - file: 11-observability-ops.md
+    status: not_started
+    percent: 0
+  - file: 12-proof-harness.md
+    status: not_started
+    percent: 0
+  - file: 13-human-decisions.md
+    status: not_started
+    percent: 0
+  - file: 14-adopter-tesote-com.md
+    status: not_started
+    percent: 0
+  - file: 15-adopter-sales.md
+    status: not_started
+    percent: 0
+  - file: 16-adopter-gringotts.md
+    status: not_started
+    percent: 0
+  - file: 17-adopter-hiscore.md
+    status: not_started
+    percent: 0
+  - file: 18-adopter-legald.md
+    status: not_started
+    percent: 0
+  - file: 19-infra-tesote.md
+    status: not_started
+    percent: 0
+  - file: 20-infra-developerz.md
+    status: not_started
+    percent: 0
+evidence: []
+notes: "Written 2026-11-10 from 5 read-only sweeps at v1.11.1 @ f6f509e. Sweeps 3-5 ran no tests, benches or Redis; rows marked inferred/suspect need a reproducing test first. Wave-4 cost cuts proceed only where wave-2 measurements justify them. Treasury is read-only. Human decisions U1-U11 in 13."
+last_updated: 2026-11-10
