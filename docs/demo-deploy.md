@@ -24,8 +24,8 @@ a Redis flush) keeps the demo from ever looking dead — a flush of the demo Red
 is enough; the generator re-seeds within one tick. To stop queue latency from
 creeping up over hours (the single worker can't drain everything the producer
 tops up), an hourly `CronJob` flushes the demo Redis by running the
-`demo:reset` rake task. Its manifest lives in the infrastructure repo:
-[`stacks/apps/wurk-demo/manifests/cronjob-reset.yml`](https://github.com/developerz-ai/infrastructure/blob/main/stacks/apps/wurk-demo/manifests/cronjob-reset.yml).
+`demo:reset` rake task. Its manifest lives in the maintainer-internal
+infrastructure repo at `stacks/apps/wurk-demo/manifests/cronjob-reset.yml`.
 
 ```text
             ┌── web (puma)  ──► read-only dashboard + generator ──┐
@@ -440,7 +440,7 @@ also the rebuild recipe. Items marked **(app)** live in this repo.
 - [x] **DNS** — `wurk.demo.developerz.ai` → the cluster ingress / Traefik.
 - [x] **Ingress (Traefik) + TLS** — route the host to the `web` Service, Let's Encrypt cert.
 - [x] **Public rate-limit** — a Traefik rate-limit middleware on the ingress to discourage abuse.
-- [x] **Hourly reset `CronJob`** — [`cronjob-reset.yml`](https://github.com/developerz-ai/infrastructure/blob/main/stacks/apps/wurk-demo/manifests/cronjob-reset.yml) in the infrastructure repo (`demo:reset` → FLUSHDB) so queue latency doesn't creep up over hours. Without it the demo stays alive but the `high`/`low` queues accumulate a multi-hour backlog.
+- [x] **Hourly reset `CronJob`** — maintainer-internal infrastructure manifest `stacks/apps/wurk-demo/manifests/cronjob-reset.yml` (`demo:reset` → FLUSHDB) so queue latency doesn't creep up over hours. Without it the demo stays alive but the `high`/`low` queues accumulate a multi-hour backlog.
 - [x] **Resource limits + restart policy** — modest CPU/mem requests; pods must recover on restart with no manual step (the generator self-heals; no persistent state outside Redis).
 
 ### Settled decisions
