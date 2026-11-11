@@ -1,0 +1,451 @@
+# require profile — ruby 3.4.2 (2025-02-15 revision d2930f8e7a) +YJIT +PRISM [x86_64-linux]
+git 8a4eda4, 2026-11-11T03:29:01Z, loadavg 1.02 1.06 1.17, 10 runs/entry
+
+| entry | wall ms | require ms | GC ms | features | own files | allocations | RSS delta MB |
+|---|--:|--:|--:|--:|--:|--:|--:|
+| wurk:client | 132 | 151 | 8 | 248 | 159 | 60605–60609 | 16.4 |
+| wurk:server | 183 | 156 | 35 | 250 | 159 | 80976–82844 | 18.3 |
+| wurk:rails | 87 | 92 | 10 | 192 | 165 | 40710–40712 | 6.5 |
+| sidekiq:client | 60 | 62 | 0 | 100 | 20 | 27877–27879 | 10.4 |
+| sidekiq:server | 110 | 87 | 19 | 129 | 35 | 49698–51570 | 12.9 |
+
+## wurk:client: groups by exclusive time
+
+| group | files | excl ms | excl allocs |
+|---|--:|--:|--:|
+| wurk | 159 | 73.3 | 36920 |
+| stdlib/openssl | 14 | 16.3 | 4879 |
+| gem:uri | 15 | 12.3 | 8654 |
+| gem:redis-client | 16 | 8.8 | 3644 |
+| gem:json | 6 | 4.3 | 965 |
+| stdlib/socket | 2 | 3.4 | 1800 |
+| stdlib/digest | 5 | 2.7 | 273 |
+| gem:logger | 7 | 2.3 | 823 |
+| stdlib/ipaddr | 1 | 1.6 | 655 |
+| stdlib/time | 1 | 1.3 | 284 |
+| stdlib/set | 1 | 1.3 | 388 |
+| gem:connection_pool | 5 | 1.2 | 517 |
+| stdlib/forwardable | 2 | 1.1 | 239 |
+| gem:rack | 3 | 1.0 | 385 |
+| gem:date | 2 | 0.9 | 348 |
+
+## wurk:client: top 30 files by exclusive time
+
+| file | excl ms | GC ms | incl ms | excl allocs | required by |
+|---|--:|--:|--:|--:|---|
+| stdlib/openssl/ssl.rb | 9.21 | 0.00 | 16.14 | 573 | stdlib/openssl.rb |
+| uri-1.1.2/lib/uri/common.rb | 4.20 | 0.00 | 6.93 | 6543 | uri-1.1.2/lib/uri.rb |
+| lib/wurk/cli.rb | 3.26 | 0.12 | 5.49 | 1074 | lib/wurk.rb |
+| lib/wurk/batch.rb | 3.02 | 0.42 | 4.85 | 623 | lib/wurk.rb |
+| lib/wurk/swarm.rb | 2.90 | 0.00 | 6.04 | 825 | lib/wurk.rb |
+| stdlib/openssl.so | 2.83 | 0.14 | 4.72 | 2178 | stdlib/openssl.rb |
+| stdlib/socket.rb | 2.38 | 0.00 | 3.78 | 1032 | stdlib/ipaddr.rb |
+| lib/wurk/cron.rb | 2.36 | 4.53 | 6.88 | 1101 | lib/wurk/launcher.rb |
+| lib/wurk/configuration.rb | 1.96 | 0.00 | 3.54 | 984 | lib/wurk.rb |
+| uri-1.1.2/lib/uri/generic.rb | 1.95 | 0.00 | 1.95 | 503 | uri-1.1.2/lib/uri.rb |
+| lib/wurk.rb | 1.93 | 0.00 | 150.79 | 891 | (entry) |
+| redis-client-0.31.0/lib/redis_client.rb | 1.90 | 0.00 | 49.92 | 1111 | redis-client-0.31.0/lib/redis-client.rb |
+| redis-client-0.31.0/lib/redis_client/ruby_connection.rb | 1.84 | 0.00 | 3.14 | 273 | redis-client-0.31.0/lib/redis_client.rb |
+| uri-1.1.2/lib/uri/rfc2396_parser.rb | 1.84 | 0.00 | 1.84 | 503 | uri-1.1.2/lib/uri/common.rb |
+| stdlib/ipaddr.rb | 1.61 | 0.00 | 5.41 | 655 | stdlib/openssl/ssl.rb |
+| lib/wurk/boot_checks.rb | 1.40 | 0.00 | 1.40 | 462 | lib/wurk/rails_boot.rb |
+| lib/wurk/client/buffered.rb | 1.39 | 0.00 | 1.39 | 1020 | lib/wurk.rb |
+| stdlib/time.rb | 1.35 | 0.00 | 2.26 | 284 | lib/wurk/logger.rb |
+| stdlib/set.rb | 1.26 | 0.00 | 1.26 | 388 | lib/wurk/redis_client_adapter.rb |
+| json-3.1.0/lib/json/common.rb | 1.24 | 3.47 | 5.17 | 499 | json-3.1.0/lib/json.rb |
+| lib/wurk/lua.rb | 1.19 | 0.21 | 2.67 | 665 | lib/wurk/fetcher/reliable.rb |
+| logger-1.7.0/lib/logger.rb | 1.17 | 0.00 | 2.32 | 231 | lib/wurk/logger.rb |
+| lib/wurk/web/config.rb | 1.17 | 0.00 | 3.25 | 1089 | lib/wurk/web.rb |
+| lib/wurk/embedded.rb | 1.14 | 0.00 | 1.65 | 131 | lib/wurk.rb |
+| lib/wurk/web/extension.rb | 1.13 | 0.00 | 1.78 | 652 | lib/wurk/web/rack_app.rb |
+| lib/wurk/swarm/restart.rb | 1.11 | 0.00 | 1.11 | 229 | lib/wurk/swarm.rb |
+| lib/wurk/job_retry.rb | 1.08 | 0.00 | 1.08 | 346 | lib/wurk.rb |
+| stdlib/socket.so | 1.07 | 0.32 | 1.38 | 768 | stdlib/socket.rb |
+| lib/wurk/heartbeat.rb | 1.05 | 0.00 | 2.08 | 480 | lib/wurk.rb |
+| lib/wurk/launcher.rb | 1.04 | 0.00 | 14.95 | 725 | lib/wurk.rb |
+
+## wurk:server: groups by exclusive time
+
+| group | files | excl ms | excl allocs |
+|---|--:|--:|--:|
+| wurk | 159 | 73.3 | 36912 |
+| stdlib/openssl | 14 | 16.2 | 4879 |
+| gem:uri | 15 | 12.2 | 8653 |
+| gem:redis-client | 16 | 8.8 | 3644 |
+| stdlib/optparse | 1 | 4.9 | 2099 |
+| gem:json | 6 | 4.3 | 965 |
+| stdlib/socket | 2 | 3.4 | 1800 |
+| stdlib/digest | 5 | 2.7 | 273 |
+| gem:logger | 7 | 2.3 | 823 |
+| stdlib/ipaddr | 1 | 1.6 | 655 |
+| stdlib/time | 1 | 1.4 | 284 |
+| stdlib/set | 1 | 1.3 | 386 |
+| gem:connection_pool | 5 | 1.2 | 517 |
+| stdlib/forwardable | 2 | 1.1 | 239 |
+| gem:rack | 3 | 1.0 | 385 |
+
+## wurk:server: top 30 files by exclusive time
+
+| file | excl ms | GC ms | incl ms | excl allocs | required by |
+|---|--:|--:|--:|--:|---|
+| stdlib/openssl/ssl.rb | 9.18 | 0.00 | 16.03 | 573 | stdlib/openssl.rb |
+| stdlib/optparse.rb | 4.94 | 0.00 | 4.94 | 2099 | (entry) |
+| uri-1.1.2/lib/uri/common.rb | 4.15 | 0.00 | 6.88 | 6543 | uri-1.1.2/lib/uri.rb |
+| lib/wurk/batch.rb | 3.87 | 0.00 | 6.66 | 623 | lib/wurk.rb |
+| lib/wurk/swarm.rb | 2.81 | 0.00 | 6.79 | 825 | lib/wurk.rb |
+| stdlib/openssl.so | 2.79 | 0.14 | 4.68 | 2178 | stdlib/openssl.rb |
+| lib/wurk/cli.rb | 2.46 | 0.11 | 3.77 | 1068 | lib/wurk.rb |
+| stdlib/socket.rb | 2.35 | 0.00 | 3.72 | 1032 | stdlib/ipaddr.rb |
+| lib/wurk/cron.rb | 2.34 | 4.51 | 6.84 | 1101 | lib/wurk/launcher.rb |
+| lib/wurk/swarm/restart.rb | 2.01 | 0.00 | 2.01 | 229 | lib/wurk/swarm.rb |
+| lib/wurk/configuration.rb | 1.91 | 0.00 | 3.46 | 984 | lib/wurk.rb |
+| lib/wurk.rb | 1.89 | 0.00 | 150.69 | 889 | (entry) |
+| redis-client-0.31.0/lib/redis_client.rb | 1.88 | 0.00 | 49.77 | 1111 | redis-client-0.31.0/lib/redis-client.rb |
+| uri-1.1.2/lib/uri/generic.rb | 1.87 | 0.00 | 1.87 | 503 | uri-1.1.2/lib/uri.rb |
+| redis-client-0.31.0/lib/redis_client/ruby_connection.rb | 1.86 | 0.00 | 3.15 | 273 | redis-client-0.31.0/lib/redis_client.rb |
+| uri-1.1.2/lib/uri/rfc2396_parser.rb | 1.84 | 0.00 | 1.84 | 503 | uri-1.1.2/lib/uri/common.rb |
+| lib/wurk/batch/callbacks.rb | 1.65 | 0.46 | 2.10 | 415 | lib/wurk/batch.rb |
+| stdlib/ipaddr.rb | 1.61 | 0.00 | 5.33 | 655 | stdlib/openssl/ssl.rb |
+| lib/wurk/client/buffered.rb | 1.37 | 0.00 | 1.37 | 1020 | lib/wurk.rb |
+| stdlib/time.rb | 1.36 | 0.00 | 2.24 | 284 | lib/wurk/logger.rb |
+| stdlib/set.rb | 1.26 | 0.00 | 1.26 | 386 | lib/wurk/redis_client_adapter.rb |
+| json-3.1.0/lib/json/common.rb | 1.25 | 3.42 | 5.14 | 499 | json-3.1.0/lib/json.rb |
+| lib/wurk/lua.rb | 1.19 | 0.25 | 2.73 | 665 | lib/wurk/fetcher/reliable.rb |
+| logger-1.7.0/lib/logger.rb | 1.18 | 0.00 | 2.31 | 231 | lib/wurk/logger.rb |
+| lib/wurk/web/config.rb | 1.17 | 0.00 | 3.24 | 1089 | lib/wurk/web.rb |
+| lib/wurk/web/extension.rb | 1.14 | 0.00 | 1.77 | 652 | lib/wurk/web/rack_app.rb |
+| lib/wurk/job_retry.rb | 1.07 | 0.00 | 1.07 | 346 | lib/wurk.rb |
+| lib/wurk/embedded.rb | 1.05 | 0.00 | 1.18 | 131 | lib/wurk.rb |
+| stdlib/socket.so | 1.05 | 0.31 | 1.36 | 768 | stdlib/socket.rb |
+| lib/wurk/launcher.rb | 1.05 | 0.00 | 14.91 | 725 | lib/wurk.rb |
+
+## wurk:rails: groups by exclusive time
+
+| group | files | excl ms | excl allocs |
+|---|--:|--:|--:|
+| wurk | 165 | 68.3 | 37213 |
+| gem:redis-client | 16 | 8.1 | 3597 |
+| gem:connection_pool | 5 | 1.2 | 511 |
+| stdlib/digest | 1 | 1.0 | 36 |
+| gem:rack | 2 | 1.0 | 256 |
+| stdlib/zlib | 1 | 0.9 | 295 |
+| gem:activejob | 2 | 0.6 | 304 |
+
+## wurk:rails: top 30 files by exclusive time
+
+| file | excl ms | GC ms | incl ms | excl allocs | required by |
+|---|--:|--:|--:|--:|---|
+| lib/wurk/cron.rb | 2.06 | 0.00 | 2.06 | 1089 | lib/wurk/launcher.rb |
+| lib/wurk/configuration.rb | 1.83 | 0.00 | 2.87 | 972 | lib/wurk.rb |
+| lib/wurk/cli.rb | 1.76 | 0.00 | 2.96 | 1057 | lib/wurk.rb |
+| redis-client-0.31.0/lib/redis_client.rb | 1.60 | 0.00 | 8.66 | 1087 | redis-client-0.31.0/lib/redis-client.rb |
+| lib/active_job/queue_adapters/wurk_adapter.rb | 1.48 | 0.00 | 2.26 | 275 | lib/wurk/engine.rb |
+| lib/wurk/client/buffered.rb | 1.38 | 0.00 | 1.38 | 1017 | lib/wurk.rb |
+| lib/wurk/redis_client_adapter.rb | 1.31 | 0.00 | 1.84 | 530 | lib/wurk/redis_pool.rb |
+| lib/wurk/web/config.rb | 1.28 | 0.49 | 2.73 | 940 | lib/wurk/web.rb |
+| lib/wurk/swarm.rb | 1.21 | 0.00 | 3.00 | 820 | lib/wurk.rb |
+| lib/wurk/web/extension.rb | 1.16 | 0.00 | 1.85 | 630 | lib/wurk/web/rack_app.rb |
+| lib/wurk/job_retry.rb | 1.09 | 0.00 | 1.09 | 342 | lib/wurk.rb |
+| lib/wurk/batch.rb | 1.07 | 0.00 | 2.24 | 620 | lib/wurk.rb |
+| lib/wurk/heartbeat.rb | 1.04 | 0.00 | 2.09 | 476 | lib/wurk.rb |
+| lib/wurk/launcher.rb | 1.03 | 0.00 | 9.96 | 723 | lib/wurk.rb |
+| lib/wurk/lua.rb | 1.03 | 0.00 | 2.31 | 665 | lib/wurk/fetcher/reliable.rb |
+| lib/wurk/client.rb | 1.01 | 0.00 | 2.53 | 577 | lib/wurk.rb |
+| redis-client-0.31.0/lib/redis_client/sentinel_config.rb | 1.00 | 0.00 | 1.00 | 271 | redis-client-0.31.0/lib/redis_client.rb |
+| stdlib/digest/sha1.so | 0.97 | 0.00 | 0.97 | 36 | lib/wurk/lua.rb |
+| redis-client-0.31.0/lib/redis_client/ruby_connection.rb | 0.94 | 0.00 | 2.27 | 271 | redis-client-0.31.0/lib/redis_client.rb |
+| lib/wurk/profiler.rb | 0.90 | 0.00 | 0.90 | 163 | lib/wurk.rb |
+| lib/wurk/metrics/prometheus.rb | 0.89 | 0.00 | 1.88 | 621 | lib/wurk/health.rb |
+| stdlib/zlib.so | 0.86 | 0.00 | 0.86 | 295 | lib/wurk/job_record.rb |
+| lib/wurk.rb | 0.83 | 0.00 | 88.19 | 651 | lib/wurk/rails.rb |
+| lib/wurk/processor.rb | 0.83 | 0.00 | 1.06 | 547 | lib/wurk/heartbeat.rb |
+| lib/wurk/health.rb | 0.79 | 0.00 | 2.66 | 449 | lib/wurk/launcher.rb |
+| lib/wurk/flow/status.rb | 0.78 | 9.16 | 9.96 | 246 | lib/wurk/flow.rb |
+| lib/wurk/scheduled.rb | 0.73 | 0.00 | 0.73 | 459 | lib/wurk.rb |
+| lib/wurk/redis_pool.rb | 0.72 | 0.00 | 2.86 | 372 | lib/wurk.rb |
+| lib/wurk/encryption.rb | 0.70 | 0.00 | 0.70 | 345 | lib/wurk/limiter/server_middleware.rb |
+| lib/wurk/unique.rb | 0.69 | 0.00 | 0.69 | 306 | lib/wurk/debounce.rb |
+
+## sidekiq:client: groups by exclusive time
+
+| group | files | excl ms | excl allocs |
+|---|--:|--:|--:|
+| stdlib/openssl | 14 | 15.7 | 4874 |
+| stdlib/uri | 15 | 13.7 | 8583 |
+| sidekiq | 20 | 8.3 | 4214 |
+| gem:redis-client | 15 | 7.1 | 3616 |
+| stdlib/socket | 2 | 3.5 | 1796 |
+| gem:connection_pool | 5 | 2.2 | 535 |
+| gem:json | 6 | 2.1 | 964 |
+| gem:logger | 7 | 1.8 | 822 |
+| stdlib/ipaddr | 1 | 1.4 | 654 |
+| stdlib/time | 1 | 1.1 | 285 |
+| stdlib/set | 1 | 1.0 | 390 |
+| stdlib/timeout | 1 | 0.8 | 240 |
+| stdlib/digest | 4 | 0.8 | 237 |
+| stdlib/forwardable | 2 | 0.6 | 241 |
+| stdlib/random | 1 | 0.4 | 184 |
+
+## sidekiq:client: top 30 files by exclusive time
+
+| file | excl ms | GC ms | incl ms | excl allocs | required by |
+|---|--:|--:|--:|--:|---|
+| stdlib/openssl/ssl.rb | 9.40 | 0.00 | 15.06 | 571 | stdlib/openssl.rb |
+| stdlib/uri/common.rb | 4.57 | 0.00 | 9.64 | 6509 | stdlib/uri.rb |
+| stdlib/uri/rfc2396_parser.rb | 3.16 | 0.00 | 3.16 | 495 | stdlib/uri/common.rb |
+| stdlib/openssl.so | 2.60 | 0.00 | 3.41 | 2175 | stdlib/openssl.rb |
+| stdlib/socket.rb | 2.14 | 0.00 | 3.49 | 1029 | stdlib/ipaddr.rb |
+| stdlib/uri/generic.rb | 1.84 | 0.00 | 1.84 | 493 | stdlib/uri.rb |
+| stdlib/uri/rfc3986_parser.rb | 1.72 | 0.00 | 1.72 | 283 | stdlib/uri/common.rb |
+| redis-client-0.31.0/lib/redis_client.rb | 1.67 | 0.00 | 28.17 | 1102 | sidekiq-8.1.6/lib/sidekiq/redis_client_adapter.rb |
+| sidekiq-8.1.6/lib/sidekiq/config.rb | 1.65 | 0.00 | 50.38 | 991 | sidekiq-8.1.6/lib/sidekiq.rb |
+| stdlib/ipaddr.rb | 1.38 | 0.00 | 4.88 | 654 | stdlib/openssl/ssl.rb |
+| stdlib/socket.so | 1.36 | 0.00 | 1.36 | 767 | stdlib/socket.rb |
+| sidekiq-8.1.6/lib/sidekiq.rb | 1.26 | 0.00 | 62.38 | 339 | (entry) |
+| stdlib/time.rb | 1.14 | 0.00 | 1.66 | 285 | sidekiq-8.1.6/lib/sidekiq/logger.rb |
+| stdlib/set.rb | 1.03 | 0.00 | 1.03 | 390 | sidekiq-8.1.6/lib/sidekiq/redis_client_adapter.rb |
+| stdlib/openssl/x509.rb | 0.99 | 0.00 | 0.99 | 610 | stdlib/openssl.rb |
+| connection_pool-3.0.2/lib/connection_pool.rb | 0.96 | 0.00 | 3.05 | 207 | sidekiq-8.1.6/lib/sidekiq/redis_connection.rb |
+| json-3.1.0/lib/json/common.rb | 0.94 | 0.00 | 1.03 | 499 | json-3.1.0/lib/json.rb |
+| stdlib/timeout.rb | 0.85 | 0.00 | 0.85 | 240 | connection_pool-3.0.2/lib/connection_pool.rb |
+| connection_pool-3.0.2/lib/connection_pool/timed_stack.rb | 0.84 | 0.00 | 0.84 | 161 | connection_pool-3.0.2/lib/connection_pool.rb |
+| redis-client-0.31.0/lib/redis_client/pid_cache.rb | 0.81 | 0.00 | 0.81 | 70 | redis-client-0.31.0/lib/redis_client.rb |
+| logger-1.7.0/lib/logger.rb | 0.70 | 0.00 | 1.85 | 230 | sidekiq-8.1.6/lib/sidekiq/logger.rb |
+| sidekiq-8.1.6/lib/sidekiq/job.rb | 0.69 | 0.00 | 0.69 | 357 | sidekiq-8.1.6/lib/sidekiq.rb |
+| sidekiq-8.1.6/lib/sidekiq/redis_client_adapter.rb | 0.65 | 0.00 | 30.30 | 491 | sidekiq-8.1.6/lib/sidekiq/redis_connection.rb |
+| stdlib/uri/ldap.rb | 0.62 | 0.00 | 0.62 | 113 | stdlib/uri.rb |
+| logger-1.7.0/lib/logger/log_device.rb | 0.60 | 0.00 | 0.81 | 358 | logger-1.7.0/lib/logger.rb |
+| sidekiq-8.1.6/lib/sidekiq/client.rb | 0.60 | 0.00 | 1.98 | 271 | sidekiq-8.1.6/lib/sidekiq.rb |
+| stdlib/openssl/buffering.rb | 0.60 | 0.00 | 0.60 | 242 | stdlib/openssl/ssl.rb |
+| redis-client-0.31.0/lib/redis_client/sentinel_config.rb | 0.54 | 0.00 | 0.54 | 268 | redis-client-0.31.0/lib/redis_client.rb |
+| sidekiq-8.1.6/lib/sidekiq/job/iterable.rb | 0.53 | 0.00 | 0.98 | 317 | sidekiq-8.1.6/lib/sidekiq/iterable_job.rb |
+| redis-client-0.31.0/lib/redis_client/ruby_connection.rb | 0.52 | 0.00 | 1.68 | 273 | redis-client-0.31.0/lib/redis_client.rb |
+
+## sidekiq:server: groups by exclusive time
+
+| group | files | excl ms | excl allocs |
+|---|--:|--:|--:|
+| stdlib/openssl | 14 | 15.4 | 4870 |
+| sidekiq | 35 | 15.2 | 8343 |
+| stdlib/uri | 15 | 11.0 | 8583 |
+| stdlib/optparse | 1 | 7.9 | 2161 |
+| gem:redis-client | 15 | 7.7 | 3612 |
+| stdlib/fileutils | 1 | 5.3 | 2722 |
+| stdlib/erb | 6 | 3.0 | 936 |
+| stdlib/socket | 2 | 2.9 | 1795 |
+| gem:json | 6 | 2.1 | 961 |
+| gem:logger | 7 | 1.9 | 822 |
+| stdlib/ipaddr | 1 | 1.4 | 652 |
+| stdlib/time | 1 | 1.1 | 284 |
+| stdlib/set | 1 | 1.0 | 388 |
+| gem:connection_pool | 5 | 0.9 | 527 |
+| stdlib/cgi | 2 | 0.9 | 345 |
+
+## sidekiq:server: top 30 files by exclusive time
+
+| file | excl ms | GC ms | incl ms | excl allocs | required by |
+|---|--:|--:|--:|--:|---|
+| stdlib/openssl/ssl.rb | 9.34 | 0.00 | 14.44 | 571 | stdlib/openssl.rb |
+| stdlib/optparse.rb | 7.93 | 0.00 | 7.93 | 2161 | sidekiq-8.1.6/lib/sidekiq/cli.rb |
+| stdlib/fileutils.rb | 5.29 | 0.00 | 5.29 | 2722 | sidekiq-8.1.6/lib/sidekiq/cli.rb |
+| stdlib/uri/common.rb | 4.35 | 0.00 | 7.10 | 6509 | stdlib/uri.rb |
+| stdlib/openssl.so | 2.51 | 0.00 | 3.37 | 2172 | stdlib/openssl.rb |
+| stdlib/socket.rb | 2.17 | 0.00 | 2.94 | 1029 | stdlib/ipaddr.rb |
+| stdlib/uri/rfc2396_parser.rb | 1.85 | 0.00 | 1.85 | 495 | stdlib/uri/common.rb |
+| stdlib/uri/generic.rb | 1.85 | 0.00 | 1.85 | 493 | stdlib/uri.rb |
+| redis-client-0.31.0/lib/redis_client.rb | 1.78 | 0.00 | 28.06 | 1102 | sidekiq-8.1.6/lib/sidekiq/redis_client_adapter.rb |
+| sidekiq-8.1.6/lib/sidekiq/cli.rb | 1.78 | 0.00 | 86.83 | 677 | (entry) |
+| sidekiq-8.1.6/lib/sidekiq.rb | 1.52 | 0.00 | 61.56 | 287 | sidekiq-8.1.6/lib/sidekiq/cli.rb |
+| stdlib/ipaddr.rb | 1.40 | 0.00 | 4.31 | 652 | stdlib/openssl/ssl.rb |
+| stdlib/erb.rb | 1.35 | 0.00 | 4.24 | 192 | sidekiq-8.1.6/lib/sidekiq/cli.rb |
+| sidekiq-8.1.6/lib/sidekiq/config.rb | 1.23 | 4.18 | 48.90 | 974 | sidekiq-8.1.6/lib/sidekiq.rb |
+| stdlib/time.rb | 1.08 | 0.00 | 1.62 | 284 | sidekiq-8.1.6/lib/sidekiq/logger.rb |
+| redis-client-0.31.0/lib/redis_client/config.rb | 1.07 | 0.00 | 21.88 | 261 | redis-client-0.31.0/lib/redis_client.rb |
+| stdlib/set.rb | 0.99 | 0.00 | 0.99 | 388 | sidekiq-8.1.6/lib/sidekiq/redis_client_adapter.rb |
+| stdlib/erb/compiler.rb | 0.98 | 0.00 | 1.34 | 572 | stdlib/erb.rb |
+| stdlib/openssl/x509.rb | 0.98 | 0.00 | 0.98 | 610 | stdlib/openssl.rb |
+| json-3.1.0/lib/json/common.rb | 0.94 | 0.00 | 1.03 | 498 | json-3.1.0/lib/json.rb |
+| stdlib/uri/rfc3986_parser.rb | 0.92 | 0.00 | 0.92 | 283 | stdlib/uri/common.rb |
+| redis-client-0.31.0/lib/redis_client/url_config.rb | 0.81 | 0.00 | 0.81 | 89 | redis-client-0.31.0/lib/redis_client.rb |
+| logger-1.7.0/lib/logger.rb | 0.78 | 0.00 | 1.94 | 230 | sidekiq-8.1.6/lib/sidekiq/logger.rb |
+| stdlib/socket.so | 0.76 | 0.00 | 0.76 | 766 | stdlib/socket.rb |
+| sidekiq-8.1.6/lib/sidekiq/launcher.rb | 0.75 | 0.33 | 4.58 | 461 | sidekiq-8.1.6/lib/sidekiq/cli.rb |
+| stdlib/cgi/util.rb | 0.70 | 0.00 | 0.92 | 303 | stdlib/erb.rb |
+| sidekiq-8.1.6/lib/sidekiq/job.rb | 0.67 | 0.00 | 0.67 | 357 | sidekiq-8.1.6/lib/sidekiq.rb |
+| sidekiq-8.1.6/lib/sidekiq/capsule.rb | 0.66 | 0.00 | 0.66 | 655 | sidekiq-8.1.6/lib/sidekiq/cli.rb |
+| sidekiq-8.1.6/lib/sidekiq/redis_client_adapter.rb | 0.63 | 0.00 | 30.17 | 490 | sidekiq-8.1.6/lib/sidekiq/redis_connection.rb |
+| logger-1.7.0/lib/logger/log_device.rb | 0.62 | 0.00 | 0.82 | 358 | logger-1.7.0/lib/logger.rb |
+
+## wurk files loaded by `require "wurk"`, by observed use
+
+client: a method ran during enqueue. server: ran only by the time a server had processed one job. unused: neither. Load-time calls do not count; constants-only files (errors, keys) land in unused but may still be referenced.
+
+| tier | files | excl ms | excl allocs |
+|---|--:|--:|--:|
+| client | 17 | 11.0 | 5835 |
+| server | 48 | 24.5 | 12163 |
+| unused | 94 | 37.8 | 18922 |
+
+| file | tier | excl ms | excl allocs |
+|---|---|--:|--:|
+| lib/wurk/configuration.rb | client | 1.96 | 984 |
+| lib/wurk.rb | client | 1.93 | 891 |
+| lib/wurk/client.rb | client | 1.01 | 579 |
+| lib/wurk/job_util.rb | client | 0.65 | 330 |
+| lib/wurk/redis_pool.rb | client | 0.65 | 377 |
+| lib/wurk/batch/client_middleware.rb | client | 0.63 | 176 |
+| lib/wurk/collapse.rb | client | 0.58 | 338 |
+| lib/wurk/redis_client_adapter.rb | client | 0.58 | 549 |
+| lib/wurk/capsule.rb | client | 0.52 | 285 |
+| lib/wurk/metrics/statsd.rb | client | 0.45 | 239 |
+| lib/wurk/testing.rb | client | 0.44 | 252 |
+| lib/wurk/worker.rb | client | 0.40 | 241 |
+| lib/wurk/middleware/chain.rb | client | 0.34 | 190 |
+| lib/wurk/worker/setter.rb | client | 0.30 | 115 |
+| lib/wurk/redis_options.rb | client | 0.29 | 143 |
+| lib/wurk/job/options.rb | client | 0.20 | 109 |
+| lib/wurk/command_builder.rb | client | 0.08 | 37 |
+| lib/wurk/cli.rb | server | 3.26 | 1074 |
+| lib/wurk/cron.rb | server | 2.36 | 1101 |
+| lib/wurk/boot_checks.rb | server | 1.40 | 462 |
+| lib/wurk/job_retry.rb | server | 1.08 | 346 |
+| lib/wurk/heartbeat.rb | server | 1.05 | 480 |
+| lib/wurk/launcher.rb | server | 1.04 | 725 |
+| lib/wurk/processor.rb | server | 0.80 | 550 |
+| lib/wurk/health.rb | server | 0.76 | 459 |
+| lib/wurk/fetcher/reliable.rb | server | 0.71 | 425 |
+| lib/wurk/scheduled.rb | server | 0.70 | 460 |
+| lib/wurk/profiler.rb | server | 0.67 | 159 |
+| lib/wurk/fetcher/reaper.rb | server | 0.67 | 405 |
+| lib/wurk/unique.rb | server | 0.66 | 309 |
+| lib/wurk/leader.rb | server | 0.61 | 392 |
+| lib/wurk/metrics/rollup.rb | server | 0.56 | 220 |
+| lib/wurk/middleware/status.rb | server | 0.50 | 251 |
+| lib/wurk/metrics/history.rb | server | 0.43 | 216 |
+| lib/wurk/fetcher/self_reconcile.rb | server | 0.40 | 231 |
+| lib/wurk/queue_slot.rb | server | 0.37 | 211 |
+| lib/wurk/fetcher/capped.rb | server | 0.36 | 202 |
+| lib/wurk/queue_consumers.rb | server | 0.36 | 236 |
+| lib/wurk/metrics/queue_rollup.rb | server | 0.34 | 191 |
+| lib/wurk/watchdog.rb | server | 0.34 | 212 |
+| lib/wurk/lua/loader.rb | server | 0.33 | 173 |
+| lib/wurk/component.rb | server | 0.33 | 199 |
+| lib/wurk/manager.rb | server | 0.33 | 216 |
+| lib/wurk/batch/server_middleware.rb | server | 0.32 | 197 |
+| lib/wurk/status.rb | server | 0.28 | 139 |
+| lib/wurk/limiter/server_middleware.rb | server | 0.24 | 112 |
+| lib/wurk/metrics/accumulator.rb | server | 0.24 | 115 |
+| lib/wurk/logger.rb | server | 0.24 | 156 |
+| lib/wurk/rails_reloader.rb | server | 0.22 | 68 |
+| lib/wurk/job_logger.rb | server | 0.22 | 107 |
+| lib/wurk/fetcher/unit_of_work.rb | server | 0.22 | 142 |
+| lib/wurk/middleware/timeout.rb | server | 0.21 | 103 |
+| lib/wurk/fetcher/orphan_reclaim.rb | server | 0.20 | 107 |
+| lib/wurk/fetcher/orphan_grace.rb | server | 0.19 | 117 |
+| lib/wurk/middleware/expiry.rb | server | 0.19 | 100 |
+| lib/wurk/swarm/test_mode_guard.rb | server | 0.18 | 59 |
+| lib/wurk/shutdown_gate.rb | server | 0.18 | 106 |
+| lib/wurk/fetcher/unparseable_keys.rb | server | 0.16 | 93 |
+| lib/wurk/metrics/histogram.rb | server | 0.16 | 145 |
+| lib/wurk/metrics/flusher.rb | server | 0.15 | 90 |
+| lib/wurk/middleware/interrupt_handler.rb | server | 0.15 | 95 |
+| lib/wurk/timer_loop.rb | server | 0.09 | 60 |
+| lib/wurk/context.rb | server | 0.09 | 53 |
+| lib/wurk/pool_checkout.rb | server | 0.09 | 44 |
+| lib/wurk/middleware.rb | server | 0.07 | 50 |
+| lib/wurk/batch.rb | unused | 3.02 | 623 |
+| lib/wurk/swarm.rb | unused | 2.90 | 825 |
+| lib/wurk/client/buffered.rb | unused | 1.39 | 1020 |
+| lib/wurk/lua.rb | unused | 1.19 | 665 |
+| lib/wurk/web/config.rb | unused | 1.17 | 1089 |
+| lib/wurk/embedded.rb | unused | 1.14 | 131 |
+| lib/wurk/web/extension.rb | unused | 1.13 | 652 |
+| lib/wurk/swarm/restart.rb | unused | 1.11 | 229 |
+| lib/wurk/metrics/prometheus.rb | unused | 0.85 | 623 |
+| lib/wurk/swarm/orphan_guard.rb | unused | 0.82 | 150 |
+| lib/wurk/batch/callbacks.rb | unused | 0.81 | 415 |
+| lib/wurk/rails_boot.rb | unused | 0.71 | 345 |
+| lib/wurk/metrics/query.rb | unused | 0.69 | 433 |
+| lib/wurk/encryption.rb | unused | 0.67 | 348 |
+| lib/wurk/swarm/child_boot.rb | unused | 0.60 | 285 |
+| lib/wurk/stats.rb | unused | 0.59 | 392 |
+| lib/wurk/metrics/dashboard_series.rb | unused | 0.57 | 301 |
+| lib/wurk/iterable_job.rb | unused | 0.57 | 318 |
+| lib/wurk/limiter.rb | unused | 0.55 | 338 |
+| lib/wurk/job_set.rb | unused | 0.55 | 328 |
+| lib/wurk/flow/builder.rb | unused | 0.52 | 266 |
+| lib/wurk/flow/creation.rb | unused | 0.52 | 253 |
+| lib/wurk/web/enterprise.rb | unused | 0.51 | 327 |
+| lib/wurk/process_set.rb | unused | 0.50 | 308 |
+| lib/wurk/job_record.rb | unused | 0.49 | 215 |
+| lib/wurk/web/helpers.rb | unused | 0.45 | 234 |
+| lib/wurk/flow/status.rb | unused | 0.45 | 250 |
+| lib/wurk/batch/status.rb | unused | 0.44 | 235 |
+| lib/wurk/web/search.rb | unused | 0.44 | 222 |
+| lib/wurk/compat.rb | unused | 0.42 | 325 |
+| lib/wurk/middleware/poison_pill.rb | unused | 0.42 | 282 |
+| lib/wurk/swarm/liveness.rb | unused | 0.39 | 199 |
+| lib/wurk/flow.rb | unused | 0.37 | 252 |
+| lib/wurk/history.rb | unused | 0.35 | 208 |
+| lib/wurk/limiter/concurrent.rb | unused | 0.32 | 161 |
+| lib/wurk/limiter/base.rb | unused | 0.31 | 189 |
+| lib/wurk/queue.rb | unused | 0.31 | 212 |
+| lib/wurk/flow/completion.rb | unused | 0.30 | 168 |
+| lib/wurk/work_set.rb | unused | 0.28 | 181 |
+| lib/wurk/dead_set.rb | unused | 0.27 | 146 |
+| lib/wurk/throttle.rb | unused | 0.26 | 149 |
+| lib/wurk/limiter/bucket.rb | unused | 0.25 | 118 |
+| lib/wurk/deploy.rb | unused | 0.25 | 119 |
+| lib/wurk/sorted_entry.rb | unused | 0.25 | 145 |
+| lib/wurk/debounce.rb | unused | 0.25 | 139 |
+| lib/wurk/cpu_count.rb | unused | 0.24 | 150 |
+| lib/wurk/web/rack_app.rb | unused | 0.24 | 124 |
+| lib/wurk/limiter/points.rb | unused | 0.23 | 103 |
+| lib/wurk/batch/callback_job.rb | unused | 0.23 | 179 |
+| lib/wurk/limiter/leaky.rb | unused | 0.23 | 109 |
+| lib/wurk/topology.rb | unused | 0.22 | 111 |
+| lib/wurk/queues.rb | unused | 0.22 | 189 |
+| lib/wurk/profile_set.rb | unused | 0.22 | 139 |
+| lib/wurk/batch/death_handler.rb | unused | 0.22 | 115 |
+| lib/wurk/web/locale_negotiator.rb | unused | 0.21 | 91 |
+| lib/wurk/limiter/window.rb | unused | 0.20 | 94 |
+| lib/wurk/fetcher/private_list_key.rb | unused | 0.20 | 80 |
+| lib/wurk/batch_set.rb | unused | 0.20 | 117 |
+| lib/wurk/iterable_job_query.rb | unused | 0.20 | 117 |
+| lib/wurk/fetcher/at_maxmemory.rb | unused | 0.20 | 105 |
+| lib/wurk/batch/buffer.rb | unused | 0.20 | 59 |
+| lib/wurk/iterable_job/csv_enumerator.rb | unused | 0.19 | 109 |
+| lib/wurk/swarm/backoff.rb | unused | 0.19 | 66 |
+| lib/wurk/status/record.rb | unused | 0.19 | 93 |
+| lib/wurk/web/paginator.rb | unused | 0.18 | 64 |
+| lib/wurk/flow/node.rb | unused | 0.18 | 112 |
+| lib/wurk/fetcher/oom_drain.rb | unused | 0.18 | 117 |
+| lib/wurk/iterable_job/active_record_enumerator.rb | unused | 0.17 | 98 |
+| lib/wurk/fetcher/many_queues.rb | unused | 0.17 | 69 |
+| lib/wurk/keys.rb | unused | 0.17 | 100 |
+| lib/wurk/transaction_aware_client.rb | unused | 0.16 | 76 |
+| lib/wurk/loader.rb | unused | 0.15 | 88 |
+| lib/wurk/status/progress.rb | unused | 0.15 | 64 |
+| lib/wurk/api/fast.rb | unused | 0.14 | 85 |
+| lib/wurk/api.rb | unused | 0.14 | 65 |
+| lib/wurk/swarm/crash_watch.rb | unused | 0.14 | 66 |
+| lib/wurk/flow_set.rb | unused | 0.14 | 76 |
+| lib/wurk/web/batch_status.rb | unused | 0.13 | 57 |
+| lib/wurk/batch/empty.rb | unused | 0.13 | 124 |
+| lib/wurk/error_coalescer.rb | unused | 0.13 | 52 |
+| lib/wurk/redact.rb | unused | 0.13 | 71 |
+| lib/wurk/limiter/unlimited.rb | unused | 0.12 | 62 |
+| lib/wurk/pid_cache.rb | unused | 0.11 | 65 |
+| lib/wurk/metrics/process_counters.rb | unused | 0.10 | 60 |
+| lib/wurk/web/pool_scope.rb | unused | 0.09 | 58 |
+| lib/wurk/fetcher.rb | unused | 0.08 | 36 |
+| lib/wurk/redis_connection.rb | unused | 0.08 | 39 |
+| lib/wurk/flow/chain.rb | unused | 0.07 | 34 |
+| lib/wurk/web.rb | unused | 0.07 | 33 |
+| lib/wurk/retry_set.rb | unused | 0.07 | 36 |
+| lib/wurk/errors.rb | unused | 0.06 | 39 |
+| lib/wurk/scheduled_set.rb | unused | 0.06 | 36 |
+| lib/wurk/metrics.rb | unused | 0.05 | 20 |
+| lib/wurk/job.rb | unused | -0.13 | 57 |
+
+wrote docs/benchmarks/2026-11-11/require_profile.json

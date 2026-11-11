@@ -72,6 +72,93 @@ Same args, single thread, Redis on loopback, 10 paired rounds, wall time per job
 
 `push_bulk` was 2.2× slower than Sidekiq and is now 1.4× slower. `perform_async` did not change and is still behind.
 
+## Re-run 2026-11-11 @ 8a4eda4 (release 1.12.0)
+
+One serial pass on one host: Wurk at release 1.12.0 against stock Sidekiq (release 8.1.6), ruby 3.4.2 +YJIT, a private local Redis per bench, load average about 1.0 (the host's idle baseline). The comparison is 5 runs of 5000 jobs, 1 process × 5 threads, median. Raw output is in [`docs/benchmarks/2026-11-11/`](benchmarks/2026-11-11/). The published headline above stays until it is republished with paired ratios; these numbers agree with it.
+
+| workload | Sidekiq | Wurk | ratio |
+|---|---|---|---|
+| `noop` | 6747 jobs/s (±1%) | 5782 jobs/s (±4%) | 0.86× |
+| `cpu` | 402 jobs/s (±2%) | 393 jobs/s (±2%) | 0.98× |
+| `io` | 792 jobs/s (±2%) | 795 jobs/s (±4%) | 1.00× |
+
+Boot to first job: Sidekiq 0.35s, Wurk 0.49s. Wurk is slower on `noop` and boot, and at parity on `cpu` and `io`.
+
+### Where the noop gap goes
+
+CPU per job (`CLOCK_PROCESS_CPUTIME_ID`, all threads, over the drain window) tracks wall time per job on both sides: the `noop` gap is CPU work, not waiting on Redis. Sidekiq 145.0 µs/job (user 79.8, sys 65.2, 113 allocations); Wurk 170.1 µs/job (user 96.9, sys 72.1, 129 allocations).
+
+`bin/profile vs_sidekiq` profiles the same noop job through the real `wurk` and `sidekiq` CLIs with StackProf (3 profiled runs per side, 50,000 jobs; samples cover 91–92% of measured CPU) and charges each sample to the innermost framework stage; a Redis round trip counts toward the stage that issued it.
+
+| stage | Sidekiq µs/job | Wurk µs/job | Δ | share of gap |
+|---|---|---|---|---|
+| fetch (Wurk: + pipelined ACK) | 42.2 | 54.8 | +12.6 | 58% |
+| job logger + log write | 30.3 | 34.1 | +3.8 | 17% |
+| ACK bookkeeping | 0.0 | 3.2 | +3.2 | 14% |
+| other built-in middleware | 0.0 | 1.8 | +1.8 | 8% |
+| middleware chain walk | 2.4 | 4.0 | +1.6 | 8% |
+| job body | 41.0 | 41.9 | +0.9 | 4% |
+| metrics middleware | 4.9 | 5.5 | +0.7 | 3% |
+| GC | 4.6 | 5.2 | +0.6 | 3% |
+| payload parse, retry wrappers, heartbeat | — | — | ≈0 | 0% |
+| stats + work state | 3.9 | 3.5 | −0.4 | −2% |
+| processor dispatch | 6.8 | 4.4 | −2.5 | −11% |
+| **total** | 139.5 | 161.3 | +21.9 | 100% |
+
+A cost cut proceeds only for a stage that is at least 5% of this gap. Full per-frame tables: [`vs_profile.txt`](benchmarks/2026-11-11/vs_profile.txt).
+
+### Boot and require cost
+
+`bin/rake bench:require_profile` (bench/require_profile.rb) loads each entry point in a fresh interpreter: feature and allocation counts are deterministic, times are the median of 10 runs.
+
+| entry | ms | features | Wurk/Sidekiq files | allocations | RSS added |
+|---|---|---|---|---|---|
+| `require "wurk"` | 132 | 248 | 159 | 60.6k | 16.4 MB |
+| `exe/wurk` to first fetch | 183 | 250 | 159 | 81–83k | 18.3 MB |
+| `require "wurk/rails"` (on top of Rails) | 87 | 192 | 165 | 40.7k | 6.5 MB |
+| `require "sidekiq"` | 60 | 100 | 20 | 27.9k | 10.4 MB |
+| `sidekiq` to first fetch | 110 | 129 | 35 | 50–52k | 12.9 MB |
+
+Shared dependencies (openssl, uri, redis-client) cost about the same on both sides; the gap is Wurk's own files. Per-file tables: [`require_profile.txt`](benchmarks/2026-11-11/require_profile.txt).
+
+### Memory per process
+
+`bin/rake bench:rss_soak` boots `wurkswarm` with 4 children × 5 threads on `test/dummy` and pushes 100k plain jobs, reading `/proc/<pid>/smaps_rollup` per child.
+
+| jobs | Rss | Pss | Private_Dirty | shared ratio |
+|---|---|---|---|---|
+| 0 | 81 MB | 33 MB | 22 MB | 0.73 |
+| 10k | 96 MB | 53 MB | 43 MB | 0.55 |
+| 100k | 98 MB | 55 MB | 45 MB | 0.54 |
+
+After warmup (the first 10k jobs) Pss grows 160–220 kB per 10k jobs per child. Redis: 25 keys and 1.95 MB at 100k jobs. A slope over 100k jobs is not a leak verdict; that is the long soak's job.
+
+### Soak
+
+`bin/rake bench:soak` (bench/soak/) runs a mixed workload (plain, scheduled, retry, unique, limiter, iterable, status, nested batches, cron) against a 4-child swarm and its own AOF-backed Redis, injects faults, and checks a jid ledger: every pushed jid completed or dead, every extra run attributed to a window [`reliability.md`](reliability.md) documents. Short mode, 150s of load:
+
+| pushed | completed | lost | duplicates | unattributed | batch callbacks | faults |
+|---|---|---|---|---|---|---|
+| 19,435 | 19,435 | 0 | 1 deferred ACK, 1 Redis outage | 0 | 3434/3434 | 3 SIGKILL (1 child, 2 parent), 1 SIGTERM, 5 rolling restarts, 2 Redis restarts, 1 pause |
+
+The 24h run is pending (`SOAK_MODE=long SOAK_DURATION=86400`). Report: [`soak_short.json`](benchmarks/2026-11-11/soak_short.json).
+
+### Feature and dashboard costs
+
+Seven benches count Redis round trips client-side (`bench/algo/support.rb`) and exit 1 over a recorded budget; `bin/rake bench:algo_counts` runs the counts in CI, `bin/rake bench:algo` adds rates. These are the "before" values for the cost cuts in plan 101 slices 07 and 21.
+
+| bench | measures | before |
+|---|---|---|
+| `dashboard_paging.rb` | page 0 vs page 999, 25 rows | queue 5 vs 1003 round trips; batches 52 vs 25,276; SSE tick 9 round trips (3Q+P+12 commands) |
+| `feature_commands.rb` | extra round trips per job | concurrent limiter 7 per job (plain: 1) |
+| `cron_tick.rb` | 500 loops | tick 1001 round trips; 50 never-fired yearly loops: 1.2s per tick |
+| `metrics_query.rb` | top jobs over 720h, 200 classes | 4320 HGETALL, 2.59M field pairs, 13M objects per query |
+| `fast_delete.rb` | delete by class on a 100k queue | Redis blocked 315 ms per call |
+| `reaper_sweep.rb` | 1M unrelated keys | 1001 round trips per sweep |
+| `sorted_set_bulk.rb` | retry all, 10k entries | 2.02 round trips per entry |
+
+Rates: [`algo.txt`](benchmarks/2026-11-11/algo.txt).
+
 ## Workload shapes
 
 "Faster" is meaningless without naming the work. Three shapes, all in `bench/vs_sidekiq/job.rb`:

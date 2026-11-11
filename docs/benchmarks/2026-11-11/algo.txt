@@ -1,0 +1,173 @@
+=== dashboard_paging.rb ===
+seeded 25000 rows x 5 lists in 2.4s
+
+== paging: page 0 vs page 999, ?count=25, 25000 rows per list
+  queue page 0                                                  5 round trips          5 commands  [llen=2 lrange=2 sismember=1]
+  budget queue page 0 (round trips)                             5 <= 5          ok
+  budget queue page 0 (commands)                                5 <= 5          ok
+  queue page 999                                             1003 round trips       1003 commands  [llen=501 lrange=501 sismember=1]
+  budget queue page 999 (round trips)                        1003 <= 1003       ok
+  budget queue page 999 (commands)                           1003 <= 1003       ok
+  dead page 0                                                   2 round trips          2 commands  [zcard=1 zrange=1]
+  budget dead page 0 (round trips)                              2 <= 2          ok
+  budget dead page 0 (commands)                                 2 <= 2          ok
+  dead page 999                                               501 round trips        501 commands  [zrange=500 zcard=1]
+  budget dead page 999 (round trips)                          501 <= 501        ok
+  budget dead page 999 (commands)                             501 <= 501        ok
+  batches page 0                                               52 round trips        127 commands  [scard=50 smembers=50 hgetall=25 zcard=1]
+  budget batches page 0 (round trips)                          52 <= 52         ok
+  budget batches page 0 (commands)                            127 <= 127        ok
+  batches page 999                                          25276 round trips      25351 commands  [hgetall=25000 zrange=250 scard=50 smembers=50]
+  budget batches page 999 (round trips)                     25276 <= 25276      ok
+  budget batches page 999 (commands)                        25351 <= 25351      ok
+  flows page 0                                                 27 round trips         27 commands  [hgetall=25 zcard=1 zrange=1]
+  budget flows page 0 (round trips)                            27 <= 27         ok
+  budget flows page 0 (commands)                               27 <= 27         ok
+  flows page 999                                            25251 round trips      25251 commands  [hgetall=25000 zrange=250 zcard=1]
+  budget flows page 999 (round trips)                       25251 <= 25251      ok
+  budget flows page 999 (commands)                          25251 <= 25251      ok
+  limits page 0                                               150 round trips      25102 commands  [exists=25001 hgetall=50 zcard=25 zrange=25]
+  budget limits page 0 (round trips)                          150 <= 150        ok
+  budget limits page 0 (commands)                           25102 <= 25102      ok
+  limits page 999                                             150 round trips      25102 commands  [exists=25001 hgetall=50 zcard=25 zrange=25]
+  budget limits page 999 (round trips)                        150 <= 150        ok
+  budget limits page 999 (commands)                         25102 <= 25102      ok
+
+== list payloads (07-A2, A16)
+  batches page 0 failed_jids                                25000 jids, 681888 bytes
+  budget batches page 0 failed_jids in payload              25000 <= 25000      ok
+  dead page 0 rows inflating error_backtrace                   25 of 25 rows
+  budget dead page 0 rows inflating error_backtrace            25 <= 25         ok
+
+== paging rates (advisory)
+                   dashboard queue page 0 (count 25) 769.5 (± 17.8%) i/s
+                 dashboard queue page 999 (count 25) 13.004 (± 4.1%) i/s
+                    dashboard dead page 0 (count 25) 605.9 (± 19.1%) i/s
+                  dashboard dead page 999 (count 25) 7.081 (± 2.3%) i/s
+                 dashboard batches page 0 (count 25) 55.427 (± 8.3%) i/s
+               dashboard batches page 999 (count 25) 0.713 (± 1.7%) i/s
+                   dashboard flows page 0 (count 25) 376.7 (± 15.6%) i/s
+                 dashboard flows page 999 (count 25) 0.701 (± 2.6%) i/s
+                  dashboard limits page 0 (count 25) 5.995 (± 5.1%) i/s
+                dashboard limits page 999 (count 25) 5.743 (± 7.0%) i/s
+
+== polled reads (21-K1..K5, 07-A14)
+  GET /api/stats (SSE tick), 10 queues 5 processes              9 round trips         47 commands  [llen=20 lrange=11 hget=5 smembers=4]
+  budget GET /api/stats (SSE tick), 10 queues 5 processes (round trips)          9 <= 9          ok
+  budget GET /api/stats (SSE tick), 10 queues 5 processes (commands)         47 <= 47         ok
+  GET /api/queues, 10 queues 5 processes                        6 round trips         35 commands  [llen=10 lrange=10 hget=5 get=3]
+  budget GET /api/queues, 10 queues 5 processes (round trips)          6 <= 6          ok
+  budget GET /api/queues, 10 queues 5 processes (commands)         35 <= 35         ok
+  GET /api/processes, 5 processes                               6 round trips         14 commands  [hget=5 hmget=5 smembers=2 get=1]
+  budget GET /api/processes, 5 processes (round trips)          6 <= 6          ok
+  budget GET /api/processes, 5 processes (commands)            14 <= 14         ok
+  GET /api/stats (SSE tick), 20 queues 10 processes             9 round trips         82 commands  [llen=40 lrange=21 hget=10 smembers=4]
+  budget GET /api/stats (SSE tick), 20 queues 10 processes (round trips)          9 <= 9          ok
+  budget GET /api/stats (SSE tick), 20 queues 10 processes (commands)         82 <= 82         ok
+  GET /api/queues, 20 queues 10 processes                       6 round trips         60 commands  [llen=20 lrange=20 hget=10 get=3]
+  budget GET /api/queues, 20 queues 10 processes (round trips)          6 <= 6          ok
+  budget GET /api/queues, 20 queues 10 processes (commands)         60 <= 60         ok
+  GET /api/processes, 10 processes                              6 round trips         24 commands  [hget=10 hmget=10 smembers=2 get=1]
+  budget GET /api/processes, 10 processes (round trips)          6 <= 6          ok
+  budget GET /api/processes, 10 processes (commands)           24 <= 24         ok
+  GET /api/queues/:name, page 0                                 5 round trips          5 commands  [llen=2 lrange=2 sismember=1]
+  budget GET /api/queues/:name, page 0 (round trips)            5 <= 5          ok
+  budget GET /api/queues/:name, page 0 (commands)               5 <= 5          ok
+✓ every count within budget
+=== feature_commands.rb ===
+wurk — 200 jobs per feature, client-side round trips and commands per job
+
+  plain: enqueue                                                1 round trips          2 commands  [sadd=200 lpush=200]
+  plain: execute                                                1 round trips          3 commands  [lmove=200 lrem=200 del=200]
+  unique: enqueue                                               2 round trips          3 commands  [sadd=200 lpush=200 set=200]
+  unique: execute                                               2 round trips          4 commands  [evalsha=200 lmove=200 lrem=200 del=200]
+  batch: enqueue                                             0.02 round trips       1.04 commands  [evalsha=202 hset=1 expire=1 zadd=1]
+  batch: execute                                             3.07 round trips       5.14 commands  [hget=204 evalsha=200 lmove=200 lrem=200]
+  concurrent limiter (constant): enqueue                        1 round trips          2 commands  [sadd=200 lpush=200]
+  concurrent limiter (constant): execute                        7 round trips          9 commands  [evalsha=400 expire=400 hincrby=400 lmove=200]
+  concurrent limiter (built per job): enqueue                   1 round trips          2 commands  [sadd=200 lpush=200]
+  concurrent limiter (built per job): execute                   8 round trips         10 commands  [evalsha=600 expire=400 hincrby=400 lmove=200]
+  status: enqueue                                               1 round trips          4 commands  [sadd=200 lpush=200 hset=200 expire=200]
+  status: execute                                               3 round trips          5 commands  [evalsha=400 lmove=200 lrem=200 del=200]
+
+over the plain job (enqueue + execute):
+  unique                                                        2 round trips          2 commands
+  budget unique (round trips/job)                               2 <= 2          ok
+  budget unique (commands/job)                                  2 <= 2          ok
+  batch                                                      1.10 round trips       1.18 commands
+  budget batch (round trips/job)                             1.10 <= 1.10       ok
+  budget batch (commands/job)                                1.18 <= 1.18       ok
+  concurrent limiter (constant)                                 6 round trips          6 commands
+  budget concurrent limiter (constant) (round trips/job)          6 <= 6          ok
+  budget concurrent limiter (constant) (commands/job)           6 <= 6          ok
+  concurrent limiter (built per job)                            7 round trips          7 commands
+  budget concurrent limiter (built per job) (round trips/job)          7 <= 7          ok
+  budget concurrent limiter (built per job) (commands/job)          7 <= 7          ok
+  status                                                        2 round trips          4 commands
+  budget status (round trips/job)                               2 <= 2          ok
+  budget status (commands/job)                                  4 <= 4          ok
+✓ every count within budget
+=== cron_tick.rb ===
+wurk cron — 500 loops over 50 classes, 500 foreign loops
+
+  tick, nothing due                                          1001 round trips       1001 commands  [hgetall=500 hmget=500 smembers=1]
+  budget tick, nothing due (round trips)                     1001 <= 1001       ok
+  budget tick, nothing due (commands)                        1001 <= 1001       ok
+  tick parsers                                                500
+  budget tick parsers                                         500 <= 500        ok
+  apply!                                                     1550 round trips       1550 commands  [sadd=500 hset=500 hsetnx=500 smembers=50]
+  budget apply! (round trips)                                1550 <= 1550       ok
+  budget apply! (commands)                                   1550 <= 1550       ok
+  apply! + foreign                                          26550 round trips      26550 commands  [hget=25000 sadd=500 hset=500 hsetnx=500]
+  budget apply! + foreign (round trips)                     26550 <= 26550      ok
+  budget apply! + foreign (commands)                        26550 <= 26550      ok
+
+                  cron tick (500 loops, nothing due) 15.029 (± 8.2%) i/s
+  cron apply! (500 loops, 50 classes, + 500 foreign) 0.865 (± 1.2%) i/s
+             cron tick (50 never-fired yearly loops) 0.817 (± 0.6%) i/s
+✓ every count within budget
+=== metrics_query.rb ===
+wurk metrics — 200 classes x 4320 ten-minute buckets; 500 queues x 1440 minute buckets
+
+  top-jobs 720h                                                 1 round trips       4320 commands  [hgetall=4320]
+                                                          2592000 field pairs returned
+  budget top-jobs 720h (round trips)                            1 <= 1          ok
+  budget top-jobs 720h (commands)                            4320 <= 4320       ok
+  budget top-jobs 720h (field pairs)                      2592000 <= 2592000    ok
+                                   top-jobs 720h q/s 0.349 (± 2.1%) i/s
+                    top-jobs 720h (queries/1M-alloc) 0.077 (± 0.0%) i/s
+                                                         13060504 objects allocated per query
+  queue history 1m/24h, one queue                               1 round trips       1440 commands  [hgetall=1440]
+                                                          1440000 field pairs returned
+  budget queue history 1m/24h, one queue (round trips)          1 <= 1          ok
+  budget queue history 1m/24h, one queue (commands)          1440 <= 1440       ok
+  budget queue history 1m/24h, one queue (field pairs)    1440000 <= 1440000    ok
+                 queue history 1m/24h, one queue q/s 1.418 (± 13.8%) i/s
+  queue history 1m/24h, one queue (queries/1M-alloc) 0.343 (± 0.0%) i/s
+                                                          2913439 objects allocated per query
+✓ every count within budget
+=== fast_delete.rb ===
+wurk fast delete — queue of 100000, victims at the tail
+
+                fast delete_by_class (100 of 100000) 3.254 (± 2.6%) i/s
+  fast delete_by_class (100 of 100000), inside Redis 3.261 (± 0.0%) i/s
+                                                           306671 usec_per_call (evalsha)
+                       fast delete_job (1 of 100000) 10.528 (± 7.9%) i/s
+         fast delete_job (1 of 100000), inside Redis 10.494 (± 0.0%) i/s
+                                                            95292 usec_per_call (evalsha)
+=== reaper_sweep.rb ===
+wurk reaper — one sweep over 1000010 keys (10 live private lists)
+
+  reaper sweep                                               1001 round trips       1001 commands  [scan=1000 smembers=1]
+  budget reaper sweep (round trips)                          1001 <= 1001       ok
+  budget reaper sweep (commands)                             1001 <= 1001       ok
+               reaper sweep (1000000 unrelated keys) 3.130 (± 1.3%) i/s
+✓ every count within budget
+=== sorted_set_bulk.rb ===
+wurk RetrySet#retry_all — 10000 entries
+
+  retry_all, per entry                                       2.02 round trips       3.02 commands  [zrem=10000 sadd=10000 lpush=10000 zrange=202]
+  budget retry_all (round trips/entry)                       2.02 <= 2.02       ok
+  budget retry_all (commands/entry)                          3.02 <= 3.02       ok
+                    retry_all (10000 entries) jobs/s 7.13k (± 3.2%) i/s
+✓ every count within budget

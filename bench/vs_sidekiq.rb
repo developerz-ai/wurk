@@ -8,6 +8,7 @@ require 'securerandom'
 require 'redis-client'
 require_relative 'support'
 require_relative 'vs_sidekiq/child_env'
+require_relative 'vs_sidekiq/cost'
 
 # Wurk vs stock Sidekiq — end-to-end job throughput.
 #
@@ -41,6 +42,23 @@ require_relative 'vs_sidekiq/child_env'
 #
 # Knobs (all optional): WURK_BENCH_VS_JOBS, _CONCURRENCY, _PROCESSES, _RUNS,
 # _SHAPES, _CPU_ITERS, _IO_SECONDS, _TIMEOUT, _VERBOSE, and WURK_BENCH_DB.
+#
+# Per-job cost. With one process, every run also reports what a job cost the
+# worker over the drain window: process CPU (CLOCK_PROCESS_CPUTIME_ID, every
+# thread), its user/system split, and allocations — read by the job itself at
+# the first and last completion (bench/vs_sidekiq/job.rb). Throughput says
+# which engine is behind; CPU per job says whether the gap is work the worker
+# does or time it spends waiting.
+#
+# Frame attribution. WURK_BENCH_VS_PROFILE=1 adds StackProf-sampled runs per
+# side of WURK_BENCH_VS_PROFILE_SHAPE (default noop) after the timed runs,
+# through the same CLIs and job file, and prints where each side's CPU per job
+# goes, bucketed into framework stages (bench/vs_sidekiq/cost.rb owns the
+# buckets). WURK_BENCH_VS_PROFILE_RUNS profiled runs per side (3), sampled
+# every WURK_BENCH_VS_PROFILE_INTERVAL µs of CPU (1000: the kernel fires
+# ITIMER_PROF on scheduler ticks, so a shorter interval is not finer, only
+# under-counted — the table prints sampled/measured CPU to show it).
+# WURK_BENCH_VS_JSON=<path> writes every raw number for the record.
 # With _PROCESSES > 1 the Sidekiq side runs that many independent worker
 # processes (what a stock-Sidekiq user actually does — sidekiqswarm is an
 # Enterprise feature) and the wurk side runs one wurkswarm forking that many
@@ -61,9 +79,20 @@ TIMEOUT     = Float(ENV.fetch('WURK_BENCH_VS_TIMEOUT', '180'))
 VERBOSE     = !ENV['WURK_BENCH_VS_VERBOSE'].nil?
 DONE_KEY    = 'wurk-bench:vs:done'
 SIDES       = %i[sidekiq wurk].freeze
+CPU_KEY     = "#{DONE_KEY}:cpu".freeze
+PROFILE     = !ENV['WURK_BENCH_VS_PROFILE'].nil?
+PROFILE_RUNS  = Integer(ENV.fetch('WURK_BENCH_VS_PROFILE_RUNS', '3'))
+PROFILE_SHAPE = ENV.fetch('WURK_BENCH_VS_PROFILE_SHAPE', 'noop')
+JSON_OUT = ENV.fetch('WURK_BENCH_VS_JSON', nil)
 
 unless (unknown_shapes = SHAPES - %w[noop cpu io]).empty?
   raise "bench/vs_sidekiq: unknown shape(s): #{unknown_shapes.join(', ')} (valid: noop, cpu, io)"
+end
+
+raise 'bench/vs_sidekiq: WURK_BENCH_VS_JOBS must be at least 2' if JOBS < 2
+if PROFILE && PROCESSES != 1
+  raise 'bench/vs_sidekiq: WURK_BENCH_VS_PROFILE needs WURK_BENCH_VS_PROCESSES=1 ' \
+        '(the profile is one worker process)'
 end
 
 def monotonic = Process.clock_gettime(Process::CLOCK_MONOTONIC)
@@ -76,7 +105,8 @@ REDIS_URL = bench_redis_url('12')
 # which variables `bundle exec` leaks and why each one has to go.
 def child_env(gemfile, shape, extra = {})
   BenchVsSidekiq::ChildEnv.build(
-    gemfile: gemfile, redis_url: REDIS_URL, shape: shape, done_key: DONE_KEY, extra: extra
+    gemfile: gemfile, redis_url: REDIS_URL, shape: shape, done_key: DONE_KEY,
+    extra: { 'WURK_BENCH_VS_JOBS' => JOBS.to_s }.merge(extra)
   )
 end
 
@@ -132,9 +162,11 @@ end
 
 # Sidekiq gets PROCESSES independent workers; wurk gets one swarm parent that
 # forks PROCESSES children (WURK_COUNT). Same process count, same threads each.
-def spawn_workers(side, shape, log)
+def spawn_workers(side, shape, log, profile: nil)
   gemfile = side == :sidekiq ? SIDEKIQ_GEMFILE : WURK_GEMFILE
   extra = side == :wurk && PROCESSES > 1 ? { 'WURK_COUNT' => PROCESSES.to_s } : {}
+  # Always set: nil unsets it, so a timed run never inherits a dump path.
+  extra['WURK_BENCH_VS_PROFILE_OUT'] = profile
   env = child_env(gemfile, shape, extra)
   args = ['-r', JOB_FILE, '-c', CONCURRENCY.to_s, '-q', 'default', '-t', '2']
   redirect = VERBOSE ? {} : { out: log, err: log }
@@ -180,14 +212,26 @@ def raise_timeout(log, done)
   raise "bench/vs_sidekiq: only #{done}/#{JOBS} jobs finished in #{TIMEOUT}s.\n#{tail}"
 end
 
-def one_run(redis, side, shape)
+# The last job writes its snapshot after the INCR the driver saw, and only
+# once the first one's is in, so wait for both, and longer than the last job
+# waits for the first. Multi-process runs have no single window: nil.
+def cost_window(redis)
+  return nil unless PROCESSES == 1
+
+  timeout = BenchVsSidekiq::Cost::EDGE_TIMEOUT * 2
+  edges = BenchVsSidekiq::Cost.await_edges(%w[first last], timeout: timeout) { redis.call('HGETALL', CPU_KEY) }
+  BenchVsSidekiq::Cost.per_job(edges.fetch('first'), edges.fetch('last'), JOBS)
+end
+
+# Returns [boot_seconds, jobs_per_second, per_job_cost_or_nil].
+def one_run(redis, side, shape, profile: nil)
   redis.call('FLUSHDB')
   enqueue(redis, JOBS)
   log = File.join(LOG_DIR, "vs_sidekiq-#{side}-#{shape}.log")
   start = monotonic
-  pids = spawn_workers(side, shape, log)
+  pids = spawn_workers(side, shape, log, profile: profile)
   boot, drain = measure(redis, log, start: start)
-  [boot, JOBS / drain]
+  [boot, JOBS / drain, cost_window(redis)]
 ensure
   stop_workers(pids) if pids
 end
@@ -223,6 +267,53 @@ def report(throughput, boots, versions)
   end
 end
 
+def cost_medians(costs)
+  costs.transform_values { |runs| BenchVsSidekiq::Cost.median_of(runs.compact) }
+end
+
+def report_costs(medians)
+  return unless PROCESSES == 1
+
+  puts
+  puts '| workload | engine | CPU µs/job | user µs | sys µs | allocs/job | GC/1k jobs |'
+  puts '|---|---|---|---|---|---|---|'
+  SHAPES.each do |shape|
+    SIDES.each do |side|
+      cost = medians[[shape, side]] or next
+      puts format('| %-4s | %-7s | %.1f | %.1f | %.1f | %.1f | %.2f |', shape, side, cost[:cpu_us],
+                  cost[:utime_us], cost[:stime_us], cost[:allocs], cost[:gc_per_1k])
+    end
+  end
+end
+
+# Sides interleave run by run, like the timed runs, so drift hits both. Each
+# profiled run is paired with its own CPU window: the shares are scaled by the
+# CPU of the run they were sampled from.
+def profile_pass(redis)
+  runs = Hash.new { |h, k| h[k] = [] }
+  PROFILE_RUNS.times do |run|
+    SIDES.each do |side|
+      dump = File.join(LOG_DIR, "vs_sidekiq-#{side}-#{PROFILE_SHAPE}-#{run + 1}.stackprof")
+      FileUtils.rm_f(dump)
+      _, rate, cost = one_run(redis, side, PROFILE_SHAPE, profile: dump)
+      raise "bench/vs_sidekiq: #{side} wrote no profile to #{dump}" unless File.exist?(dump)
+
+      warn format('  profiled %d/%d %s %-7s %8.0f jobs/s, %.1f CPU µs/job -> %s',
+                  run + 1, PROFILE_RUNS, PROFILE_SHAPE, side, rate, cost[:cpu_us], dump)
+      runs[side] << [BenchVsSidekiq::Cost.load_profile(dump), cost]
+    end
+  end
+  runs
+end
+
+def report_frames(attribution)
+  puts
+  puts "Where a #{PROFILE_SHAPE} job's CPU goes (µs/job = a run's sample share x that run's CPU/job, " \
+       'median of the profiled runs; stage = innermost classified frame of each sample):'
+  puts
+  puts BenchVsSidekiq::Cost.frame_table(attribution)
+end
+
 def preamble(versions)
   cores = Etc.nprocessors
   puts "wurk #{versions[:wurk]} vs sidekiq #{versions[:sidekiq]} — ruby #{RUBY_VERSION} " \
@@ -243,18 +334,38 @@ preamble(versions)
 redis = RedisClient.config(url: REDIS_URL).new_client
 throughput = Hash.new { |h, k| h[k] = [] }
 boots = Hash.new { |h, k| h[k] = [] }
+costs = Hash.new { |h, k| h[k] = [] }
 
 RUNS.times do |run|
   SHAPES.each do |shape|
     SIDES.each do |side|
-      boot, rate = one_run(redis, side, shape)
+      boot, rate, cost = one_run(redis, side, shape)
       throughput[[shape, side]] << rate
       boots[[shape, side]] << boot
-      warn format('  run %d/%d %-4s %-7s %8.0f jobs/s (boot %.2fs)', run + 1, RUNS, shape, side, rate, boot)
+      costs[[shape, side]] << cost
+      cpu = cost ? format(', %.1f CPU µs/job', cost[:cpu_us]) : ''
+      warn format('  run %d/%d %-4s %-7s %8.0f jobs/s (boot %.2fs%s)', run + 1, RUNS, shape, side, rate, boot, cpu)
     end
   end
 end
 
+medians = cost_medians(costs)
+attribution = BenchVsSidekiq::Cost.attribute(profile_pass(redis), JOBS) if PROFILE
+
 redis.call('FLUSHDB')
 redis.close
 report(throughput, boots, versions)
+report_costs(medians)
+report_frames(attribution) if attribution
+
+if JSON_OUT
+  File.write(JSON_OUT, JSON.pretty_generate(
+                         versions: versions, ruby: RUBY_DESCRIPTION, cores: Etc.nprocessors,
+                         jobs: JOBS, processes: PROCESSES, concurrency: CONCURRENCY,
+                         throughput: throughput.transform_keys { |k| k.join(':') },
+                         boots: boots.transform_keys { |k| k.join(':') },
+                         costs: costs.transform_keys { |k| k.join(':') },
+                         frames: attribution
+                       ))
+  warn "raw numbers -> #{JSON_OUT}"
+end

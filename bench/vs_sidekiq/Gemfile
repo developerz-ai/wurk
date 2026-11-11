@@ -15,3 +15,8 @@
 source 'https://rubygems.org'
 
 gem 'sidekiq', '>= 8.0'
+
+# Loaded only by a profiled run (WURK_BENCH_VS_PROFILE=1; bench/vs_sidekiq/job.rb),
+# the same version line the repo bundle's :development group resolves, so both
+# sides are sampled by the same profiler.
+gem 'stackprof', '~> 0.2'

@@ -114,6 +114,13 @@ jobs:
         if: env.RUN == 'true'
         run: bundle exec rake bench:command_count
 
+      # Same deterministic contract for feature and dashboard costs: each
+      # bench/<algo>.rb counts round trips client-side and exits 1 over its
+      # recorded budget (plan 101 slices 07/21). No rates, ~30s of seeding.
+      - name: feature and dashboard round-trip budgets
+        if: env.RUN == 'true'
+        run: bundle exec rake bench:algo_counts
+
   compare:
     name: bench vs base
     needs: detect

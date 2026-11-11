@@ -7,6 +7,13 @@
 #   bin/profile enqueue         # client push
 #   bin/profile fetch --alloc   # allocation counts instead of CPU samples
 #   bin/profile fetch --dump    # keep the raw dump for `stackprof tmp/profile.dump --method ...`
+#   bin/profile vs_sidekiq      # the same noop job under the real `wurk` and stock `sidekiq` CLIs,
+#                               # CPU per job and a per-stage µs/job table of the gap
+#
+# `vs_sidekiq` is bench/vs_sidekiq.rb with WURK_BENCH_VS_PROFILE=1 and the noop
+# shape preset; every WURK_BENCH_VS_* knob still applies. It profiles whole
+# worker processes because the in-process loop below cannot run stock Sidekiq:
+# inside this bundle `require "sidekiq"` is wurk's shim (bench/vs_sidekiq/Gemfile).
 #
 # CPU mode answers "where does a job's time go"; allocation mode answers "what
 # is feeding the GC". Both drive the real code — real fetcher, real processor,
@@ -16,6 +23,12 @@
 # bench/fetch_execute.rb.
 
 require 'bundler/setup'
+
+if ARGV.first == 'vs_sidekiq'
+  defaults = { 'WURK_BENCH_VS_PROFILE' => '1', 'WURK_BENCH_VS_SHAPES' => 'noop' }
+  env = defaults.reject { |key, _| ENV.key?(key) }
+  exec(env, RbConfig.ruby, File.expand_path('../bench/vs_sidekiq.rb', __dir__))
+end
 
 begin
   require 'stackprof'
@@ -64,7 +77,7 @@ work =
   when 'enqueue', 'push'
     -> { client.push('class' => 'ProfileJob', 'args' => [], 'queue' => 'default') }
   else
-    abort "bin/profile: unknown path #{path.inspect} (want: fetch | enqueue)"
+    abort "bin/profile: unknown path #{path.inspect} (want: fetch | enqueue | vs_sidekiq)"
   end
 
 2_000.times { work.call } # warm the JIT, the pool, and the EVALSHA cache

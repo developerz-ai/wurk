@@ -185,7 +185,10 @@ Multiple callbacks per event are fine; they run as independent jobs.
   loses its chance at `:success` until the subtree recovers.
 - At-most-once is enforced with `SET NX` marker keys (`b-<bid>-success`,
   `-complete`, `-death`) — Redis strings holding `"1"` — so racing workers
-  acking the last job can't double-fire.
+  acking the last job can't double-fire. That bounds the *enqueue* of each
+  callback; the callback job itself is an ordinary job and runs at least once,
+  so a worker killed mid-callback runs its body again. Make callbacks
+  idempotent.
 
 ### How callbacks run
 

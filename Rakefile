@@ -151,10 +151,29 @@ end
 #                      against — a whole extra round trip is the policy's
 #                      point, not a regression — so it is read, not diffed.
 #                      `rake bench:debounce_enqueue`.
+#   rss_soak.rb      — boots a 4-child swarm on its own redis-server and pushes
+#                      100k jobs: per-child Rss/Pss/Private_Dirty + slopes, no
+#                      i/s. `rake bench:rss_soak`; the chaos soak with its jid
+#                      ledger is `rake bench:soak` (bench/soak/run.rb).
+#   require_profile.rb — per-file require time and allocations for three entry
+#                      points plus stock Sidekiq; Markdown + JSON, no i/s.
+#                      `rake bench:require_profile`.
+#   dashboard_paging.rb, feature_commands.rb, cron_tick.rb, metrics_query.rb,
+#   fast_delete.rb, reaper_sweep.rb, sorted_set_bulk.rb — the algorithmic
+#                      costs of plan 101 slices 07/21: deterministic round-trip
+#                      budgets (exit 1 over budget) plus advisory rates, with
+#                      minutes of seeding. `rake bench:algo`;
+#                      `rake bench:algo_counts` runs the counts only.
 BENCH_SCRIPTS = Dir.glob(File.join(GEM_ROOT, 'bench', '*.rb'))
                    .grep_v(%r{/support\.rb\z})
                    .freeze
-UNGATED_SCRIPTS = %w[vs_sidekiq.rb command_count.rb fetch_capped.rb debounce_enqueue.rb].freeze
+ALGO_SCRIPTS = %w[
+  dashboard_paging.rb feature_commands.rb cron_tick.rb metrics_query.rb
+  fast_delete.rb reaper_sweep.rb sorted_set_bulk.rb
+].freeze
+UNGATED_SCRIPTS = (%w[
+  vs_sidekiq.rb command_count.rb fetch_capped.rb debounce_enqueue.rb require_profile.rb rss_soak.rb
+] + ALGO_SCRIPTS).freeze
 GATE_SCRIPTS = BENCH_SCRIPTS.reject { |s| UNGATED_SCRIPTS.include?(File.basename(s)) }.freeze
 
 desc 'Run the benchmark gate (enqueue, fetch+execute, bulk enqueue, swarm boot, memory)'
@@ -171,6 +190,23 @@ namespace :bench do
     desc "Run bench/#{name}.rb"
     task name do
       sh 'ruby', '-Ilib', script
+    end
+  end
+
+  desc 'Chaos soak with jid ledger (bench/soak/run.rb); SOAK_MODE=long, SOAK_DURATION=<seconds>'
+  task :soak do
+    sh 'ruby', '-Ilib', File.join(GEM_ROOT, 'bench', 'soak', 'run.rb')
+  end
+
+  desc 'Run the algorithmic-cost benches (plan 101 slices 07/21): round-trip budgets + rates'
+  task :algo do
+    ALGO_SCRIPTS.each { |script| sh 'ruby', '-Ilib', File.join(GEM_ROOT, 'bench', script) }
+  end
+
+  desc 'Run the algorithmic-cost benches, round-trip budgets only (deterministic)'
+  task :algo_counts do
+    ALGO_SCRIPTS.each do |script|
+      sh({ 'WURK_BENCH_COUNTS_ONLY' => '1' }, 'ruby', '-Ilib', File.join(GEM_ROOT, 'bench', script))
     end
   end
 

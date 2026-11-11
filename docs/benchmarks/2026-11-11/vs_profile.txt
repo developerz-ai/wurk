@@ -1,0 +1,117 @@
+wurk 1.12.0 vs sidekiq 8.1.6 — ruby 3.4.2 (x86_64-linux), 16 cores
+50000 jobs/run · 1 process(es) x 5 threads · 5 runs (median) · redis://127.0.0.1:28351/12
+shapes: noop (cpu=20000 iters, io=0.005s sleep)
+  run 1/5 noop sidekiq     7149 jobs/s (boot 0.34s, 136.4 CPU µs/job)
+  run 1/5 noop wurk        6302 jobs/s (boot 0.49s, 155.9 CPU µs/job)
+  run 2/5 noop sidekiq     7264 jobs/s (boot 0.35s, 134.3 CPU µs/job)
+  run 2/5 noop wurk        6296 jobs/s (boot 0.49s, 156.1 CPU µs/job)
+  run 3/5 noop sidekiq     7222 jobs/s (boot 0.35s, 135.1 CPU µs/job)
+  run 3/5 noop wurk        6311 jobs/s (boot 0.49s, 155.7 CPU µs/job)
+  run 4/5 noop sidekiq     7173 jobs/s (boot 0.35s, 136.3 CPU µs/job)
+  run 4/5 noop wurk        6294 jobs/s (boot 0.49s, 156.3 CPU µs/job)
+  run 5/5 noop sidekiq     7216 jobs/s (boot 0.35s, 135.2 CPU µs/job)
+  run 5/5 noop wurk        6322 jobs/s (boot 0.48s, 155.8 CPU µs/job)
+  profiled 1/3 noop sidekiq     7016 jobs/s, 139.5 CPU µs/job -> ./tmp/vs_sidekiq-sidekiq-noop-1.stackprof
+  profiled 1/3 noop wurk        6012 jobs/s, 164.1 CPU µs/job -> ./tmp/vs_sidekiq-wurk-noop-1.stackprof
+  profiled 2/3 noop sidekiq     6966 jobs/s, 140.7 CPU µs/job -> ./tmp/vs_sidekiq-sidekiq-noop-2.stackprof
+  profiled 2/3 noop wurk        6112 jobs/s, 161.3 CPU µs/job -> ./tmp/vs_sidekiq-wurk-noop-2.stackprof
+  profiled 3/3 noop sidekiq     7036 jobs/s, 138.9 CPU µs/job -> ./tmp/vs_sidekiq-sidekiq-noop-3.stackprof
+  profiled 3/3 noop wurk        6162 jobs/s, 159.9 CPU µs/job -> ./tmp/vs_sidekiq-wurk-noop-3.stackprof
+raw numbers -> docs/benchmarks/2026-11-11/vs_profile.json
+
+| workload | Sidekiq 8.1.6 | Wurk 1.12.0 | speedup |
+|---|---|---|---|
+| noop | 7216 (±2%) jobs/s | 6302 (±0%) jobs/s | **0.87x** |
+
+boot to first job — sidekiq 0.35s
+boot to first job — wurk    0.49s
+
+| workload | engine | CPU µs/job | user µs | sys µs | allocs/job | GC/1k jobs |
+|---|---|---|---|---|---|---|
+| noop | sidekiq | 135.2 | 72.0 | 63.3 | 113.0 | 4.76 |
+| noop | wurk    | 155.9 | 89.0 | 66.8 | 129.0 | 4.12 |
+
+Where a noop job's CPU goes (µs/job = a run's sample share x that run's CPU/job, median of the profiled runs; stage = innermost classified frame of each sample):
+
+| stage | Sidekiq µs/job | Wurk µs/job | Δ µs/job | Δ range over runs | share of gap |
+|---|---|---|---|---|---|
+| job body (perform + INCR) | 41.0 | 41.9 | +0.9 | -0.1 … +2.1 | +4% |
+| GC | 4.6 | 5.2 | +0.6 | -0.3 … +1.0 | +3% |
+| job logger + log write | 30.3 | 34.1 | +3.8 | +2.8 … +4.7 | +17% |
+| payload parse | 3.2 | 3.2 | +0.1 | -0.5 … +0.4 | +0% |
+| metrics middleware | 4.9 | 5.5 | +0.7 | +0.6 … +1.0 | +3% |
+| other built-in middleware | 0.0 | 1.8 | +1.8 | +1.4 … +1.8 | +8% |
+| middleware chain walk | 2.4 | 4.0 | +1.6 | +1.4 … +1.6 | +8% |
+| retry wrappers | 0.0 | 0.0 | -0.0 | -0.1 … +0.0 | -0% |
+| stats + work state | 3.9 | 3.5 | -0.4 | -0.7 … -0.0 | -2% |
+| ack bookkeeping | 0.0 | 3.2 | +3.2 | +3.0 … +3.8 | +14% |
+| fetch (wurk: + pipelined ACK) | 42.2 | 54.8 | +12.6 | +11.6 … +13.4 | +58% |
+| heartbeat + background threads | 0.0 | 0.1 | +0.0 | +0.0 … +0.1 | +0% |
+| processor dispatch | 6.8 | 4.4 | -2.5 | -2.9 … -2.4 | -11% |
+| **total CPU** | 139.5 | 161.3 | +21.9 | | 100% |
+
+3 profiled run(s) per side; samples: sidekiq 19082, wurk 22348; sampled/measured CPU 91% / 92%
+
+Largest self-frame differences (leaf frame, engine prefix dropped), top 20 by |Δ|:
+
+| self frame | Sidekiq µs/job | Wurk µs/job | Δ µs/job | share of gap |
+|---|---|---|---|---|
+| `Processor#dispatch` | 3.7 | 0.3 | -3.4 | -16% |
+| `Process.clock_gettime` | 16.4 | 19.2 | +2.8 | +13% |
+| `RedisClient::RESP3.dump_string` | 0.6 | 2.7 | +2.1 | +9% |
+| `Middleware::Chain#traverse` | 0.2 | 1.7 | +1.5 | +7% |
+| `BasicSocket#__write_nonblock` | 23.3 | 24.7 | +1.4 | +6% |
+| `Middleware::Chain::Entry#make_new` | 0.0 | 1.4 | +1.4 | +6% |
+| `Class#new` | 0.5 | 1.9 | +1.3 | +6% |
+| `Enumerable#flat_map` | 2.6 | 3.8 | +1.3 | +6% |
+| `RedisClient::Decorator::CommandsMixin#call` | 0.4 | 1.6 | +1.2 | +6% |
+| `Fetcher::Reliable::UnitOfWork.new` | 0.0 | 1.2 | +1.2 | +6% |
+| `Monitor#synchronize` | 5.4 | 6.6 | +1.2 | +6% |
+| `Time.now` | 3.9 | 2.9 | -1.1 | -5% |
+| `BasicFetch#retrieve_work` | 1.0 | 0.0 | -1.0 | -5% |
+| `Logger::Formatters::Pretty#call` | 0.9 | 1.8 | +0.9 | +4% |
+| `Enumerable#map` | 1.8 | 0.9 | -0.8 | -4% |
+| `RedisClient::ConnectionMixin#call_pipelined` | 0.0 | 0.8 | +0.8 | +4% |
+| `Thread#[]` | 1.4 | 0.5 | -0.8 | -4% |
+| `Float#to_s` | 0.6 | 1.4 | +0.8 | +4% |
+| `Metrics::ExecutionTracker#track_time` | 0.8 | 0.0 | -0.8 | -4% |
+| `Array#initialize_copy` | 0.0 | 0.7 | +0.7 | +3% |
+
+Inside "fetch (wurk: + pipelined ACK)", top 8 self frames by |Δ|:
+
+| self frame | Sidekiq µs/job | Wurk µs/job | Δ µs/job | share of gap |
+|---|---|---|---|---|
+| `RedisClient::RESP3.dump_string` | 0.5 | 2.3 | +1.8 | +8% |
+| `Enumerable#flat_map` | 1.3 | 3.0 | +1.7 | +8% |
+| `BasicSocket#__write_nonblock` | 10.9 | 12.3 | +1.5 | +7% |
+| `Fetcher::Reliable::UnitOfWork.new` | 0.0 | 1.2 | +1.2 | +6% |
+| `BasicFetch#retrieve_work` | 1.0 | 0.0 | -1.0 | -5% |
+| `RedisClient::ConnectionMixin#call_pipelined` | 0.0 | 0.8 | +0.8 | +4% |
+| `Process.clock_gettime` | 5.4 | 6.1 | +0.7 | +3% |
+| `Struct#initialize` | 0.1 | 0.8 | +0.7 | +3% |
+
+Inside "job logger + log write", top 8 self frames by |Δ|:
+
+| self frame | Sidekiq µs/job | Wurk µs/job | Δ µs/job | share of gap |
+|---|---|---|---|---|
+| `Monitor#synchronize` | 5.4 | 6.6 | +1.2 | +6% |
+| `Logger::Formatters::Pretty#call` | 0.9 | 1.8 | +0.9 | +4% |
+| `Float#to_s` | 0.6 | 1.4 | +0.8 | +4% |
+| `IO#write` | 9.5 | 10.0 | +0.5 | +2% |
+| `JobLogger#prepare` | 0.5 | 0.1 | -0.4 | -2% |
+| `Thread#thread_variable_get` | 0.0 | 0.3 | +0.3 | +1% |
+| `Time.now` | 2.5 | 2.9 | +0.3 | +1% |
+| `Time#xmlschema` | 1.1 | 1.3 | +0.3 | +1% |
+
+Inside "ack bookkeeping", top 8 self frames by |Δ|:
+
+| self frame | Sidekiq µs/job | Wurk µs/job | Δ µs/job | share of gap |
+|---|---|---|---|---|
+| `RedisClient::Decorator::CommandsMixin#call` | 0.0 | 0.6 | +0.6 | +3% |
+| `Fetcher::Reliable#defer_ack` | 0.0 | 0.6 | +0.6 | +3% |
+| `Thread#thread_variable_set` | 0.0 | 0.3 | +0.3 | +1% |
+| `Array#initialize_copy` | 0.0 | 0.3 | +0.3 | +1% |
+| `Thread::Mutex#synchronize` | 0.0 | 0.3 | +0.3 | +1% |
+| `Kernel#dup` | 0.0 | 0.2 | +0.2 | +1% |
+| `Array#all?` | 0.0 | 0.2 | +0.2 | +1% |
+| `Fetcher::Reliable::UnitOfWork#write_ack` | 0.0 | 0.2 | +0.2 | +1% |
